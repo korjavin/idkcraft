@@ -93,7 +93,7 @@ function createOrders(box) {
           }
         }
       } catch (_) { keepAt = {} }
-      ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = keepSkip; ctx.buildSkipAt = keepAt; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+      ctx.home = home || null; ctx.inShelter = false; ctx.buildSkip = keepSkip; ctx.buildSkipAt = keepAt; if (!keepSkip.length) ctx.buildSkipRetry = null; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1; try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
       try { taskMod.resetTask(ctx) } catch (_) { /* task reset best-effort */ }
     },
     // Castle project (g0z.3): a new order or 'castle forget' (null). The
@@ -513,7 +513,7 @@ function createOrders(box) {
       clearStuck()
       resetNightStep()
       if (home !== ctx.home) {
-        ctx.home = home; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
+        ctx.home = home; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildSkipRetry = null; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
         try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
       }
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }

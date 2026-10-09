@@ -583,7 +583,7 @@ function retrySkipsOnce(ctx) {
     const s = ctx.home && ctx.home.site
     if (!s || !Array.isArray(ctx.buildSkip)) return false
     const at = ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object' ? ctx.buildSkipAt : {}
-    const key = `${s.x},${s.y},${s.z}`
+    const key = `${s.x},${s.y},${s.z},v${ctx.home.v === 2 ? 2 : 1}`
     if (!ctx.buildSkipRetry || ctx.buildSkipRetry.key !== key) ctx.buildSkipRetry = { key, done: [] }
     const done = ctx.buildSkipRetry.done
     const again = ctx.buildSkip.filter((i) => typeof at[i] === 'number' && !done.includes(i))
@@ -658,6 +658,7 @@ function build(bot, ctx, target, state) {
     }
     ctx.buildSkip = []
     ctx.buildSkipAt = {}
+    ctx.buildSkipRetry = null
     ctx.buildFails = 0
     ctx.buildFailIdx = -1
     ctx.buildFarIdx = -1
