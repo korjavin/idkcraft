@@ -191,6 +191,7 @@ function bestMemoryCell(bot, ctx, bp) {
   let capped = false
   try { capped = !!require('./stockpile').woodCapped(bot, ctx) } catch (_) { capped = false }
   const quest = questPlankWoods(bot, ctx)
+  const floor = resources.surfaceFloor(ctx, bp) // atl.23: deep cells are the smith's leg
   let best = null
   let bestRank = Infinity
   let bestDist = Infinity
@@ -200,6 +201,7 @@ function bestMemoryCell(bot, ctx, bp) {
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number') continue
     if (parkedCellSkipped(ctx, item)) continue
+    if (typeof item.y === 'number' && item.y < floor) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     const rank = valueRank(item.name)
     if (rank > 3) continue
