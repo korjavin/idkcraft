@@ -20,7 +20,8 @@ const FIGHT_RANGE_PLAYER = 6
 // player makes it explode next to the player. Fleeing is a tick-level reflex
 // instead (fleeReflex in index.js), never a brain action or an attack.
 // guardians (5iap): chasing them into monument water never gives up; they
-// still count as hostiles (nearby_hostiles, death line, retreat).
+// still count as hostiles (nearby_hostiles, death line, retreat release); like
+// creeper/enderman they set no hostile fact, so they cannot start a retreat.
 const NO_CHASE = new Set(['creeper', 'enderman', 'guardian', 'elder_guardian'])
 function isFightTarget(entity, botPos, playerPos) {
   if (!entity || entity.type === 'player' || !entity.position) return false
