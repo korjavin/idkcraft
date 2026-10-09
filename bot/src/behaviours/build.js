@@ -628,11 +628,11 @@ function walkToSite(bot, ctx, p) {
 function build(bot, ctx, target, state) {
   if (!ctx.buildSkip) ctx.buildSkip = []
   // First build step without a home: default the site to world spawn
-  // (goal.js siteFor; the owner moves it with 'build here').
+  // (site.js siteFor; the owner moves it with 'build here').
   if (!ctx.home) {
-    const goal = require('../goal')
+    const site = require('../site')
     try {
-      ctx.home = goal.siteFor(bot, bot.spawnPoint)
+      ctx.home = site.siteFor(bot, bot.spawnPoint)
     } catch (_) {
       ctx.home = null
     }

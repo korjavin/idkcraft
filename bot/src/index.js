@@ -501,6 +501,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // Castle guard (idkcraft-g0z.2): laid castle blocks are never break
     // candidates for ANY executor; re-installs after a Movements swap.
     castleMod.guardCastle(bot, ctx)
+    // Residence (g0z.29): a completed castle / a forget switches the home
+    // here, at the tick top, once no async home op is in flight.
+    try { orders.selectResidence() } catch (_) { /* residence best-effort */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
   }
 
@@ -1185,6 +1188,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     set autonomousOverride(v) { autonomousOverride = v },
     clearStuck, resetNightStep, startWork, stopOnce, doSetBrain,
   }
+  const orders = createOrders(ordersBox)
 
   return {
     tick,
@@ -1210,7 +1214,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     setMovements: (m) => { if (m) { doors.banDoorBreaks(m); doors.addDoorPassages(m); addSwimExits(m); addSwimPrune(m); addNoCornerCut(m); addSnowGround(m); addJumpUpCost(m) } ctx.movements = m; bot.pathfinder.setMovements(m); try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ } },
     destroy,
     rearm,
-    ...createOrders(ordersBox),
+    ...orders,
   }
 }
 
@@ -1381,6 +1385,9 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // home (e.g. an unfinished new site) wins over re-adopting the old
       // door near spawn. Adopt only when memory holds no home.
       if (tickCtx && ticker && typeof ticker.loadMemory === 'function') ticker.loadMemory()
+      // A complete castle in memory is the home before adoptHome scans for
+      // a hut door (g0z.29 migration of a castle an earlier image finished).
+      if (tickCtx && ticker && typeof ticker.selectResidence === 'function') ticker.selectResidence()
       // idkcraft-p4s: follow survives the deploy — adopt the remembered (or
       // sole) target before the first decision, so work mode never starts.
       if (tickCtx && ticker && !followName && typeof ticker.setFollow === 'function') {

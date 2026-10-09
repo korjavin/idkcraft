@@ -225,4 +225,59 @@ function of(home) {
   return home && home.v === 2 ? HOUSE : HUT
 }
 
-module.exports = { of, HUT, HOUSE, CASTLE, LIGHT_SPOTS, LIGHT_SPOTS_V2, CHEST_SPOTS, CHEST_SPOTS_V2 }
+// --- selection (g0z.29) -------------------------------------------------
+//
+// The active residence is ctx.home; a castle home is
+//   { kind: 'castle', site, rot, castle: { site, rot, blueprintVersion }, built, door }
+// (site/rot mirror the castle ref so the descriptor reads it like the castle
+// state). The last hut home rides as ctx.hutHome (memory restores it from
+// the homes history) and comes back when the castle is forgotten.
+// ponytail: off until g0z.30 teaches gohome/stay/beds the castle shape;
+// g0z.30 flips it (tests flip module.exports.RESIDENCE_CASTLE).
+const RESIDENCE_CASTLE = false
+
+function castleHome(st) {
+  const site = new Vec3(st.site.x, st.site.y, st.site.z)
+  const home = {
+    kind: 'castle',
+    site,
+    rot: st.rot | 0,
+    castle: { site: { x: site.x, y: site.y, z: site.z }, rot: st.rot | 0, blueprintVersion: st.blueprintVersion },
+    interior: null,
+    door: null,
+    table: null,
+    built: true,
+    v: 1,
+  }
+  home.door = CASTLE.entrance(home).door
+  return home
+}
+
+function sameCastle(home, st) {
+  const a = home && home.castle && home.castle.site
+  const b = st && st.site
+  return !!a && !!b && a.x === b.x && a.y === b.y && a.z === b.z && (home.castle.rot | 0) === (st.rot | 0)
+}
+
+// The home the bot should live in: undefined = no change (idempotent), else
+// the home to switch to (null = none). Only a complete v2 castle is a
+// residence, adopted once per castle; a park, an unloaded site or a demolished entrance never
+// un-selects it (no flapping) and a new order keeps the old castle until the
+// new one completes. Only a forget (no castle at all) or the flag off falls
+// back to the hut.
+function wanted(ctx) {
+  if (!ctx) return undefined
+  const h = ctx.home
+  const st = ctx.castle
+  const on = module.exports.RESIDENCE_CASTLE === true
+  const isCastle = !!h && h.kind === 'castle'
+  if (on && st && st.site && st.phase === 'complete' && st.blueprintVersion === 2) {
+    // Edge, not level (01-review): adopted once (st.residence, persisted),
+    // a later 'build here' stands until a new castle completes.
+    return (isCastle && sameCastle(h, st)) || st.residence ? undefined : castleHome(st)
+  }
+  if (!isCastle || (on && st && st.site)) return undefined
+  return ctx.hutHome || null
+}
+
+module.exports = { of, HUT, HOUSE, CASTLE, LIGHT_SPOTS, LIGHT_SPOTS_V2, CHEST_SPOTS, CHEST_SPOTS_V2, RESIDENCE_CASTLE, castleHome, wanted }

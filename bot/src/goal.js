@@ -15,7 +15,6 @@
 const { countItems, wornItems, HOSTILE_NAMES } = require('./perception')
 const Vec3 = require('vec3')
 const buildMod = require('./behaviours/build')
-const { CLEAR_FLORA } = require('./behaviours/util')
 const forageMod = require('./behaviours/forage')
 const deliverMod = require('./behaviours/deliver')
 const stockpileMod = require('./behaviours/stockpile')
@@ -27,10 +26,10 @@ const { failReason, isFinished, nextStepGen } = require('./step')
 // House budget and bounded-hold windows live in the leaf budget.js
 // (oqul.3) so behaviours read them without loading goal; re-exported here.
 const { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS } = require('./budget')
-function needPlanks(home) {
-  if (home && home.site && home.v !== 2) return NEED_PLANKS_V1
-  return NEED_PLANKS
-}
+// Home/site geometry and the gather retry policy live in the leaves site.js
+// and holds.js (oqul.4); the exported names are re-exported here.
+const { needPlanks, makeHome, siteFor, isV2House, timeWord } = require('./site')
+const { REFAIL_DIST, gatherFailedHolds } = require('./holds')
 
 // Night-hurt hold (ck3): low health (the goalText 'health=low' bucket) at
 // night keeps the bot off the outdoor work — prod died twice at the site
@@ -1027,120 +1026,17 @@ function shelterFits(facts, bot, ctx) {
 // (explore), rest last. The return-to-site walk (vmzq.50) heads the
 // chain: displaced, walking back beats fetching at spawn.
 // goalFsm is pure priority over the feasible names it is given.
+// An async window op (craft/equip/stockpile click) is running: the FSM
+// holds its step and the residence switch (g0z.29, orders.js) waits.
+function opInFlight(ctx) {
+  return !!ctx && !!(ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight || ctx.lightCraftInFlight || ctx.gearInFlight || ctx.furnaceInFlight)
+}
+
 const STEP_ORDER = ['stay', 'gohome', 'shelter', 'gocastle', 'castlefetch', 'castle', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
 const AUTONOMOUS_EXPLORE_RADIUS = 256
-
-// Home site shape (bead .4, two blueprints since jr2.1): site is the
-// SW-corner origin at ground level, interior the standable box inside,
-// door the LOWER door cell, table the workbench cell — null until the
-// workbench is really placed. rw4.3 treats ctx.home.table as a PLACED
-// station (craft walks to it and crafts the door at it), so claiming the
-// coords early would deadlock craft at an empty cell; build claims them
-// the tick the table cell lands. v marks the blueprint (1: 4x4 hut with
-// the table outside; 2: 7x6 house with the rooms inside); new sites are
-// always founded v2, v1 comes only from adopting an old house.
-function makeHome(ox, oy, oz, v) {
-  if (v === 1) {
-    return {
-      site: { x: ox, y: oy, z: oz },
-      interior: { min: { x: ox + 1, y: oy, z: oz + 1 }, max: { x: ox + 2, y: oy + 1, z: oz + 2 } },
-      door: { x: ox + 1, y: oy, z: oz },
-      table: null,
-      built: false,
-      v: 1,
-    }
-  }
-  return {
-    site: { x: ox, y: oy, z: oz },
-    interior: { min: { x: ox + 1, y: oy, z: oz + 1 }, max: { x: ox + 5, y: oy + 1, z: oz + 4 } },
-    door: { x: ox + 3, y: oy, z: oz },
-    table: null,
-    built: false,
-    v: 2,
-  }
-}
-
-// Feet level of the ground column: first non-air block from topY down, plus
-// one. Null when the column never resolves (unloaded chunk) or when the
-// first hit is surface liquid — water is not ground (idkcraft-vmzq.12):
-// the prod shore site read the water surface as ground and founded over
-// dips. The liquid set mirrors flat.isLiquidName; name-based rather than
-// boundingBox so fakes and mineflayer agree (real water reports 'empty').
-// Built surfaces read the same null (idkcraft-vmzq.14): a house roof is
-// 42 flat columns and the site would found on top (rig: FRESH roofed at
-// y=75 and stalled). Mirrors castle FOREIGN — somebody's structure, not
-// terrain. Cobble/stone huts are not in the set (accepted tail: a stone
-// roof still founds; the bead covers plank roofs and own-house cells).
-const BUILT_GROUND = /(planks|_door$|_bed$|fence|glass|crafting_table|chest|furnace|brick|wool|stairs|_slab$|_sign$|barrel|ladder|torch|(?<!moss_)carpet|concrete|bookshelf|_wall$)/
-function groundY(bot, x, z, topY) {
-  for (let y = topY; y > topY - 32; y--) {
-    let b = null
-    try {
-      b = bot.blockAt(new Vec3(x, y, z))
-    } catch (_) {
-      return null
-    }
-    if (!b || !b.name || b.name === 'air') continue
-    if (b.name === 'water' || b.name === 'lava' || b.name === 'bubble_column') return null
-    if (BUILT_GROUND.test(b.name)) return null
-    // Clearable flora reads through to the dirt below (revmux 02 major):
-    // one- and two-tall flowers would add relief 2 and refuse a flat
-    // meadow, but the build digs them. CLEAR_FLORA is exactly the
-    // build-clearable set minus the torch (which rejects above). Leaves
-    // and logs still count — reading past a canopy would found a
-    // forest-floor site whose wall cells bury in logs, which nothing
-    // clears, so the overhang deflects to the next footprint instead.
-    if (CLEAR_FLORA.has(b.name)) continue
-    return y + 1
-  }
-  return null
-}
-
-// 8 candidate origins around `around` at radius 6 (bead .4).
-const SITE_DIRS = [[6, 0], [4, 4], [0, 6], [-4, 4], [-6, 0], [-4, -4], [0, -6], [4, -4]]
-
-// Pick a flat 7x6 site (jr2.1 blueprint): all 42 columns resolve and lie
-// within one block. First fit wins; anything else refuses (null) —
-// uneven, wet or unloaded footprints are never founded (idkcraft-vmzq.12:
-// the prod shore site came from the old blind fallback, and the build
-// clears only flora, so relief would bury wall cells and fill buildSkip).
-// The caller waits (chunks load, the next attempt validates) or refuses
-// honestly. The JR-BUILD slope rig is safe: its skip-0 baseline proves
-// the footprint wins this loop, the fallback never fired there.
-function siteFor(bot, around) {
-  if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return null
-  const cx = Math.floor(around.x)
-  const cz = Math.floor(around.z)
-  const cy = typeof around.y === 'number' ? Math.floor(around.y) : 64
-  for (const [dx, dz] of SITE_DIRS) {
-    const ox = cx + dx
-    const oz = cz + dz
-    const ys = []
-    let ok = true
-    for (let ix = 0; ix < 7 && ok; ix++) {
-      for (let iz = 0; iz < 6 && ok; iz++) {
-        const gy = groundY(bot, ox + ix, oz + iz, cy + 8)
-        if (gy == null) { ok = false; break }
-        ys.push(gy)
-      }
-    }
-    if (!ok || ys.length !== 42) continue
-    const y0 = Math.min(...ys)
-    if (!ys.every((y) => y === y0 || y === y0 + 1)) continue
-    // The door hangs at y0 and the build clears only flora
-    // (idkcraft-vmzq.36): a relief-1 bump under the door column buries
-    // the door cell in solid terrain — place refuses, 3 strikes skip
-    // it, and the step fails failed:skipped-cells (JR-BUILD TIMEOUT on
-    // the R3 meadow fit, whose door sat on pristine grass_block). Flora
-    // over flat dirt still reads y0, so the R3 meadow keeps accepting.
-    if (groundY(bot, ox + 3, oz + 0, cy + 8) !== y0) continue
-    return makeHome(ox, y0, oz, 2)
-  }
-  return null
-}
 
 // Adopt a house built by an earlier run: a door within 32 of spawn means
 // home; findBlocks may return the UPPER half, so step down when the block
@@ -1253,58 +1149,6 @@ function tryAdoptDoor(bot, at) {
   } catch (_) { /* unverifiable: leave unclaimed */ }
   home.built = buildMod.nextCellIdx(bot, home, []) === -1
   return home
-}
-
-// True when planks stand at the v2 corner columns around the door at
-// (dx,dy,dz); false for a v1 hut; null when any probe cell is unreadable.
-// Shape: EITHER front corner column plus EITHER back corner column. One
-// column reads planks at either wall level (a skipped ground cell still
-// carries its upper ring — unless the upper skipped as no-ref too, which
-// the single-skip cascade in the lay order does cause). A single missing
-// column must never flip the version: with both fronts required, one
-// refused corner (mob in the cell, terrain jut) plus its no-ref upper
-// would read a v2 house as v1 and run the v1 repair plan at the wrong
-// origin. A lone v1 hut still reads air at all four columns. Accepted
-// residual: a house with a whole side (both fronts or both backs) empty
-// reads v1 — a catastrophic build no corner probe can save.
-function isV2House(bot, dx, dy, dz) {
-  try {
-    const ox = dx - 3
-    const oz = dz
-    const colPlanks = (cx, cz) => {
-      let lo = null
-      let hi = null
-      try {
-        lo = bot.blockAt(new Vec3(ox + cx, dy, oz + cz))
-        hi = bot.blockAt(new Vec3(ox + cx, dy + 1, oz + cz))
-      } catch (_) {
-        return null
-      }
-      if (!lo || !hi) return null
-      const planks = (b) => !!b && typeof b.name === 'string' && b.name.endsWith('_planks')
-      return planks(lo) || planks(hi)
-    }
-    const frontW = colPlanks(0, 0)
-    const frontE = colPlanks(6, 0)
-    const backW = colPlanks(0, 5)
-    const backE = colPlanks(6, 5)
-    if (frontW == null || frontE == null || backW == null || backE == null) return null
-    return (frontW || frontE) && (backW || backE)
-  } catch (_) {
-    return null
-  }
-}
-
-// MC clock word (rw4.15): null when the clock is unreadable — call sites
-// choose their own unknown (goalFacts reads day, the day-shelter divert
-// needs positive day, the gohome arrival line chats).
-function timeWord(bot) {
-  let timeOfDay = NaN
-  try {
-    timeOfDay = bot && bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : NaN
-  } catch (_) { /* unknown below */ }
-  if (!(timeOfDay >= 0)) return null
-  return timeOfDay < 12000 ? 'day' : timeOfDay <= 13000 ? 'dusk' : 'night'
 }
 
 function goalFacts(bot, ctx) {
@@ -1570,7 +1414,6 @@ function goalText(facts, home) {
 // is unchanged and the body stays within REFAIL_DIST of the failure point.
 // New facts or relocation release the step for a fresh try. Per-step map:
 // alternating failures must not release each other.
-const REFAIL_DIST = 32
 // Steps whose failure advances their own situation never hold: explore
 // consumes the failed point (the next pick is a new target by
 // construction), gohome/stay retry from a fresh record through door
@@ -1677,26 +1520,6 @@ function failHolds(ctx, name, text, bot) {
       } catch (_) { /* unverifiable: hold stands */ }
     }
     return true
-  } catch (_) {
-    return false
-  }
-}
-// Shared gather-failure hold (idkcraft-gyw): the behaviour latch and the
-// menu gate above read one rule. A failed gather holds while the log count
-// stands AND the body stays within REFAIL_DIST of the failure point;
-// relocation past it releases for a fresh try at new ground (nearer trees,
-// other wood). Same distance rule as failHolds, one place. An unknown
-// failure point (legacy ctx, missing body) holds: the atl.4 livelock guard
-// stays for everything that never recorded where it failed.
-function gatherFailedHolds(g, logs, bot) {
-  try {
-    if (!g || failReason(g.final) === null) return false
-    if (g.atLogs !== logs) return false
-    const fp = g.failPos
-    if (!fp || typeof fp.x !== 'number') return true
-    const bp = bot && bot.entity && bot.entity.position
-    if (!bp || typeof bp.x !== 'number') return true
-    return Math.hypot(bp.x - fp.x, bp.z - fp.z) <= REFAIL_DIST
   } catch (_) {
     return false
   }
@@ -2256,15 +2079,15 @@ function textForce(prev, facts, bot, ctx, status, text) {
   return false
 }
 
-// Decision point: re-decide when there is no step, the step finished
-// (done/failed:*), or a force fires (FORCES, textForce). The model picks through chooseStep
-// at those points only (same dedup as lastStateKey); the return shape stays
-// { action, sprint, source: 'goal-fsm' } — the choice source (laya, only-
-// option, fsm-fallback) rides the step log line, the next: chat and the
-// goal_* metrics, never the decision source. Logs and chats only on a step
-// CHANGE, so a running step with steady facts stays silent.
-async function decide(bot, ctx) {
-  const facts = goalFacts(bot, ctx)
+// decide() blocks (idkcraft-oqul.10): the contiguous blocks of decide(),
+// extracted in place and called in the original order — the order of the
+// branches IS the logic (safety holds before the short paths, a finished
+// commit before the next menu, the castle re-arm over plan and commit).
+// Each block names what it reads and what it may write.
+
+// Day reset. Reads facts.time/inside, ctx.inShelter; writes ctx.inShelter,
+// ctx.gohomeLatch (+ the wall guard through build.guardOwnWalls).
+function dayReset(bot, ctx, facts) {
   // Shelter is a night concept: a sticky gohome that finishes after sunrise
   // leaves inShelter true with no stay step to clear it, suppressing fight
   // all day (revmux 01-review loop+goal-3).
@@ -2281,7 +2104,11 @@ async function decide(bot, ctx) {
     ctx.inShelter = false
     ctx.gohomeLatch = null // the latch lasts one night (xhqv)
   }
-  const text = goalText(facts, ctx && ctx.home)
+}
+
+// Low-hp gate clock. Reads the pack (lowHpNoFood), ctx.lowHpGate*; writes
+// ctx.lowHpGateSince, ctx.lowHpGateLast.
+function lowHpClock(bot, ctx, facts) {
   // Low-hp gate clock (idkcraft-vmzq.51): arms on the raw pack check while
   // gated, clears on food or healing — the gates above read it, probes
   // never arm it (the write lives on the decide path only). A silence past
@@ -2303,65 +2130,66 @@ async function decide(bot, ctx) {
       }
     }
   } catch (_) { /* clock best-effort */ }
-  const prev = (ctx && ctx.step) || null
-  let status = (ctx && ctx.stepStatus) || null
-  let finished = isFinished(status)
-  // Force probe (vmzq.62): reads status at call time (the gear translation
-  // below rewrites it).
-  const fires = (name) => FORCE[name].fires(prev, facts, ctx, status, bot, text)
+}
+
+// Async gear/furnace translation, for a finished gear step. Reads
+// ctx.furnace; writes ctx.furnace.result, ctx.stepStatus, ctx.stepFail.gear,
+// ctx.gear.saidNeed (+ chat). Returns null (no leg outcome), the decision
+// to return (leg done: keep working the rung), or the translated status.
+function gearOutcome(bot, ctx) {
   // Async gear/furnace translation BEFORE the hold bookkeeping (revmux
   // 02-review): the hold must record the translated status - and no hold at
   // all for a yield - or the rename is dead and its test passes without
   // this branch. The locals rewrite from the translation, so no-fuel takes
   // the done branch (which deletes the hold) and stalls record gear-named.
-  if (finished && prev === 'gear') {
-    let result = null
-    try {
-      const f = ctx && ctx.furnace
-      if (f && f.settled) result = f.result || null
-    } catch (_) { /* no leg outcome */ }
-    if (result) {
-      try {
-        ctx.furnace.result = null
-      } catch (_) { /* consume best-effort */ }
-      if (result === 'done') {
-        // The furnace leg finished between ticks: keep working the rung
-        // without a re-decide (a facts-changed re-pick here could strand
-        // the rung on an earlier step). The bookkeeping below never runs
-        // for this path, so retire any stale hold explicitly instead of
-        // letting it linger into a later failure.
-        ctx.stepStatus = 'running'
-        try { if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.gear } catch (_) { /* retire best-effort */ }
-        return { action: 'gear', sprint: false, source: 'goal-fsm' }
-      } else {
-        const reason = failReason(result) ?? result
-        if (reason === 'no-cobble' || reason === 'no-fuel') {
-          const key = reason === 'no-cobble' ? 'want-cobble' : 'want-coal'
-          let line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal or planks, going to dig'
-          // ipn.9: same honest rule as gear's sync announce (the coal
-          // promise needs a diggable remembered cell); cobble keeps its
-          // line — stone is not a memory resource.
-          try {
-            const gearMod = require('./behaviours/gear')
-            line = gearMod.honestLine(bot, ctx, bot && bot.entity && bot.entity.position, key, line)
-          } catch (_) { /* announce best-effort: keep the line */ }
-          try {
-            if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
-            if (ctx.gear.saidNeed !== key) {
-              ctx.gear.saidNeed = key
-              bot.chat(line)
-              console.log(`gear yield key=${key} line=${line}`) // ipn.15: gear's announceYield twin
-            }
-          } catch (_) { /* announce best-effort */ }
-          ctx.stepStatus = 'done' // yield: fetchers run, gear latched out
-          status = 'done'
-        } else {
-          ctx.stepStatus = `failed:gear-furnace-${reason}`
-          status = ctx.stepStatus
-        }
-      }
-    }
+  let result = null
+  try {
+    const f = ctx && ctx.furnace
+    if (f && f.settled) result = f.result || null
+  } catch (_) { /* no leg outcome */ }
+  if (!result) return null
+  try {
+    ctx.furnace.result = null
+  } catch (_) { /* consume best-effort */ }
+  if (result === 'done') {
+    // The furnace leg finished between ticks: keep working the rung
+    // without a re-decide (a facts-changed re-pick here could strand
+    // the rung on an earlier step). The bookkeeping below never runs
+    // for this path, so retire any stale hold explicitly instead of
+    // letting it linger into a later failure.
+    ctx.stepStatus = 'running'
+    try { if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.gear } catch (_) { /* retire best-effort */ }
+    return { action: 'gear', sprint: false, source: 'goal-fsm' }
   }
+  const reason = failReason(result) ?? result
+  if (reason === 'no-cobble' || reason === 'no-fuel') {
+    const key = reason === 'no-cobble' ? 'want-cobble' : 'want-coal'
+    let line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal or planks, going to dig'
+    // ipn.9: same honest rule as gear's sync announce (the coal
+    // promise needs a diggable remembered cell); cobble keeps its
+    // line — stone is not a memory resource.
+    try {
+      const gearMod = require('./behaviours/gear')
+      line = gearMod.honestLine(bot, ctx, bot && bot.entity && bot.entity.position, key, line)
+    } catch (_) { /* announce best-effort: keep the line */ }
+    try {
+      if (!ctx.gear || typeof ctx.gear !== 'object') ctx.gear = {}
+      if (ctx.gear.saidNeed !== key) {
+        ctx.gear.saidNeed = key
+        bot.chat(line)
+        console.log(`gear yield key=${key} line=${line}`) // ipn.15: gear's announceYield twin
+      }
+    } catch (_) { /* announce best-effort */ }
+    ctx.stepStatus = 'done' // yield: fetchers run, gear latched out
+    return 'done'
+  }
+  ctx.stepStatus = `failed:gear-furnace-${reason}`
+  return ctx.stepStatus
+}
+
+// Outcome bookkeeping for a finished step. Reads status, facts, ctx.goalText;
+// writes ctx.stepFail (holds), the gohome fail note, ctx.stockpilePierced.
+function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
   if (finished && prev && failReason(status) !== null) {
     try {
       if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
@@ -2403,25 +2231,12 @@ async function decide(bot, ctx) {
   if (finished && prev === 'stockpile' && ctx) {
     try { ctx.stockpilePierced = false } catch (_) { /* latch best-effort */ }
   }
-  // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
-  // (walk->open->enter->close). A facts-changed re-decision must not preempt
-  // them mid-phase: stepping inside flips inside, which would hand stay the
-  // step before gohome shuts the door, chats and shelters — and stepping out
-  // flips it back before stay says good morning. The phase machine fails
-  // itself on real trouble (no-home, cannot-reach), which re-arms choice.
-  // In-flight craft windows (craft/equip/stockpile) must not be preempted mid-click:
-  // re-deciding on changed facts while the async op runs corrupts the window
-  // cursor (live 26.1 lesson: a table placement flips the facts before the
-  // sword craft lands). The flags reset on completion, so this holds for a
-  // few ticks at most.
-  if (!finished && prev && ctx && (ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight || ctx.lightCraftInFlight || ctx.gearInFlight || ctx.furnaceInFlight)) {
-    return { action: prev, sprint: false, source: 'goal-fsm' }
-  }
-  // Night forces (ipn.12, table above): they cut through the stickiness.
-  let nightFarWalk = false
-  let nightNearShelter = false
-  try { nightFarWalk = fires('night-far') } catch (_) { nightFarWalk = false }
-  try { nightNearShelter = fires('night-near') } catch (_) { nightNearShelter = false }
+}
+
+// Night stickiness and retreat hysteresis. Reads ctx.gohome/stay phase,
+// the retreat latch; writes ctx.retreatLatch, ctx.stepStatus. Returns the
+// held decision, or null to fall through to the forces and the menu.
+function stickyHold(bot, ctx, facts, prev, status, finished, nightFarWalk) {
   // Shelter sticks at night (revmux 01 body-2): a laya re-pick to a day
   // step would walk off the pillar and work the dark with inShelter still
   // armed (no fight, no retreat, till dawn). Day exits through the menu —
@@ -2450,6 +2265,12 @@ async function decide(bot, ctx) {
       }
     } catch (_) { /* hold best-effort: the menu below decides */ }
   }
+  return null
+}
+
+// Gate forces past the night ones, in their original firing order (a gate
+// fire may carry its own side effects — FORCES owns those writes).
+function gateForces(fires) {
   // A chain-owned step is never held: re-issuing it here
   // would bypass feasibility and the model ask (the stale hold in another
   // coat). Force a real re-decide instead; the menu never contains
@@ -2501,6 +2322,12 @@ async function decide(bot, ctx) {
   // is spawn-anchored, never the bot).
   let siteRetry = false
   try { siteRetry = fires('site-retry') } catch (_) { /* retry best-effort */ }
+  return { chainOwns, fetchRetry, gateOpened, buildRetry, siteRetry }
+}
+
+// Plan and commitment pins. Reads ctx.taskPlanStep, ctx.goal.commit;
+// writes nothing.
+function readPins(ctx) {
   // Stall-point plan (idkcraft-vmzq.5): a forced one-shot step from the
   // L2 planner. Forces a real re-decide past the commitment below (but
   // waits out the in-flight and stickiness holds above — never preempts
@@ -2527,6 +2354,11 @@ async function decide(bot, ctx) {
     commitStep = null
     commitActive = false
   }
+  return { planStep, commitStep, commitActive }
+}
+
+// Commit force gate. Reads facts, the menu, ctx.step; writes nothing.
+function commitForceFor(bot, ctx, facts, text, commitActive, commitStep) {
   // Force gate (revmux 01 core-3): a live window forces a re-decide past
   // the commitment ONLY when the pin would apply right now — feasible +
   // registered, the safety choice from the ordinary menu not a night
@@ -2545,6 +2377,12 @@ async function decide(bot, ctx) {
       commitForce = false
     }
   }
+  return commitForce
+}
+
+// Return-to-site force. Reads ctx.castleFetch, gocastle feasibility;
+// writes nothing.
+function siteFarFor(bot, ctx, facts, prev, status, finished, commitStep) {
   // Return-to-site force (idkcraft-vmzq.50): a displacement moves no
   // bucket (the castle word reads the last word off-site), so without
   // the force the castle leg keeps running off-site and the walk back
@@ -2564,6 +2402,218 @@ async function decide(bot, ctx) {
       !farLeg && commitStep !== prev &&
       !!MENU.gocastle.feasible(facts, bot, ctx)
   } catch (_) { siteFarWalk = false }
+  return siteFarWalk
+}
+
+// Menu pins for a re-decide. Reads the plan/commit pins and the castle
+// re-arm; writes ctx.taskPlanStep (consumed). Returns the menu and which
+// pin applied.
+function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
+  // Stall-point plan (vmzq.5): the one-shot forced re-pick — the planned
+  // step as the only menu entry. Consumed always (one-shot); applied only
+  // while still feasible and registered (a stale answer degrades to the
+  // normal menu, never to a broken step). failHolds is bypassed: retrying
+  // a held step is the planner's job.
+  // vmzq.37: a pickless castle rearm outranks a plan/commit pin like the
+  // night steps do — a pinned castle leg cannot dig and wedges again.
+  let rearm = false
+  try { rearm = picklessCastle(facts, names) } catch (_) { rearm = false }
+  let planApplied = false
+  if (planStep) {
+    try { ctx.taskPlanStep = null } catch (_) { /* consume best-effort */ }
+  }
+  if (planStep && !rearm) {
+    let ok = false
+    try {
+      ok = !!(MENU[planStep] && MENU[planStep].feasible(facts, bot, ctx) && registered(planStep))
+    } catch (_) {
+      ok = false
+    }
+    if (ok) {
+      names = [planStep]
+      planApplied = true
+    }
+  }
+  // Watchdog commitment (vmzq.21): pin the window's step for the whole
+  // window (same-step holds included). Safety first (peer Q2): the
+  // safety choice is computed from the ORDINARY menu, and when it is a
+  // night step the normal menu runs (chooseStep's night rule picks it)
+  // while the window pauses — the commit pins only the work choice.
+  let commitApplied = false
+  if (!planApplied && commitActive && !rearm) {
+    let safety = null
+    try {
+      safety = goalFsm(facts, names)
+    } catch (_) {
+      safety = null
+    }
+    if (safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter') {
+      let ok = false
+      try {
+        ok = !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
+      } catch (_) {
+        ok = false
+      }
+      if (ok) {
+        names = [commitStep]
+        commitApplied = true
+      }
+    }
+  }
+  return { names, planApplied, commitApplied }
+}
+
+// Force name for the step line (vmzq.62): the first gate force that
+// fired, else the first word force; pure here (the gate side effects
+// already ran at their sites above). Read before ctx.goalText moves.
+// Writes nothing.
+function forceName(bot, ctx, facts, prev, status, text, gateFired) {
+  let force = null
+  for (const f of FORCES) {
+    let hit = false
+    try { hit = f.kind === 'gate' ? !!gateFired[f.name] : !!f.fires(prev, facts, ctx, status, bot, text) } catch (_) { hit = false }
+    if (hit) { force = f.name; break }
+  }
+  return force
+}
+
+// Apply a choice. Writes ctx.step, the step generation, the fresh-pick
+// run resets (ctx.equip, gearRun, castleFetch, gosite, forage, shelter,
+// gohome), ctx.stepStatus, ctx.stepPick, ctx.stockpilePierced,
+// ctx.goalText, ctx.heldText.
+function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
+  ctx.step = choice.step
+  // oqul.7: a new step instance (another step, or a re-pick after the
+  // last one finished) drops late completions of the old one's async ops.
+  if (choice.step !== prev || finished) nextStepGen(ctx)
+  // A fresh equip pick starts with fresh run counters (revmux round-1):
+  // stall patience spent by an earlier run must not fail the new one on
+  // its first tick. Station claims (claimedTable) live outside ctx.equip
+  // and survive. Same-name re-picks were already reset by done/failed.
+  if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
+  if (choice.step === 'gear' && choice.step !== prev) ctx.gearRun = {}
+  if (choice.step === 'castlefetch' && choice.step !== prev) ctx.castleFetch = null
+  // A fresh return leg restarts its walk (vmzq.50): stall patience spent
+  // by an interrupted leg must not fail the new one on arrival day.
+  if (choice.step === 'gocastle' && choice.step !== prev) ctx.gosite = null
+  // A fresh forage pick restarts the hunt (4dse): a resumed stale
+  // find/walk chases the old target id while explore heads elsewhere.
+  // The interrupted run's partial haul banks first (sqg2), so the reset
+  // drops only the stale target, never the accounting.
+  if (choice.step === 'forage' && choice.step !== prev) {
+    try { forageMod.bankPartial(bot, ctx) } catch (_) { /* haul best-effort */ }
+    ctx.forage = null
+  }
+  // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
+  // an order-interrupted night would otherwise hold on open ground. The
+  // interrupted gohome walk resets too, so the next march starts from the
+  // current body with a fresh stall record (and drops the walk's no-dig
+  // borrow at the next lease refresh) instead of resuming stale legs.
+  if (choice.step === 'shelter' && choice.step !== prev) {
+    ctx.shelter = {}
+    ctx.gohome = null
+  }
+  ctx.stepStatus = 'running'
+  // gwvg: status() reads who picked this step and why from the stamp.
+  // The step rides along (01 core-2): orders and retreat move ctx.step
+  // without re-stamping, and must not inherit the age/source.
+  ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
+  // A banking trip picked under the pierce latches for the trip (R4):
+  // set on a pick only, and only stockpile's own finish releases it above. A site
+  // pick is not a pierce (the site is near by definition), so only a
+  // home-branch pick arms it (revmux 02-after-fix major 3).
+  if (choice.step === 'stockpile') {
+    try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx, 'stockpile') && !stockpileSiteBranch(facts, bot, ctx) } catch (_) { /* latch best-effort */ }
+  }
+  ctx.goalText = text
+  ctx.heldText = null
+}
+
+// Report a choice: metrics, rest reasons, the step log line and chat.
+// Writes ctx.restWhy (+ chatStep's own dedup fields).
+function noteChoice(bot, ctx, facts, names, choice, prev, status, why, force, text, ms) {
+  metrics.goalSteps.inc({ step: choice.step, source: choice.source })
+  for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)
+  if (choice.model) metrics.goalChoiceDuration.observe({ source: choice.model }, ms / 1000)
+  // atl.7: rest explains itself — reasons stored on every rest choice
+  // (even repeats, so status stays fresh), chatted only on a step change.
+  if (choice.step === 'rest') {
+    try {
+      ctx.restWhy = restWhy(facts, bot, ctx, names)
+    } catch (_) {
+      ctx.restWhy = 'unknown'
+    }
+  } else if (choice.step !== prev) {
+    ctx.restWhy = null
+  }
+  // An order that landed mid-await ('stop' parks, 'follow me' switches
+  // work off) discards the step the tick then drops: announcing it would
+  // lie, so only an actually-working bot chats. !== false keeps unit-test
+  // {} ctx objects (work undefined) chatting.
+  if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
+    const menu = STEP_ORDER.filter((n) => names.includes(n)).join(',')
+    console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why}${why === 'step-failed' ? ` fail=${status}` : ''}${force ? ` force=${force}` : ''} menu=${menu} facts=${text}`)
+    if (choice.step === 'rest') {
+      chatStep(bot, ctx, `resting: ${ctx.restWhy} (${choice.source})`)
+    } else {
+      const entry = MENU[choice.step]
+      const verb = (entry && entry.verb) || choice.step
+      chatStep(bot, ctx, `next: ${verb} (${choice.source})`)
+    }
+  }
+}
+
+// Decision point: re-decide when there is no step, the step finished
+// (done/failed:*), or a force fires (FORCES, textForce). The model picks through chooseStep
+// at those points only (same dedup as lastStateKey); the return shape stays
+// { action, sprint, source: 'goal-fsm' } — the choice source (laya, only-
+// option, fsm-fallback) rides the step log line, the next: chat and the
+// goal_* metrics, never the decision source. Logs and chats only on a step
+// CHANGE, so a running step with steady facts stays silent.
+async function decide(bot, ctx) {
+  const facts = goalFacts(bot, ctx)
+  dayReset(bot, ctx, facts)
+  const text = goalText(facts, ctx && ctx.home)
+  lowHpClock(bot, ctx, facts)
+  const prev = (ctx && ctx.step) || null
+  let status = (ctx && ctx.stepStatus) || null
+  let finished = isFinished(status)
+  // Force probe (vmzq.62): reads status at call time (the gear translation
+  // below rewrites it).
+  const fires = (name) => FORCE[name].fires(prev, facts, ctx, status, bot, text)
+  if (finished && prev === 'gear') {
+    const g = gearOutcome(bot, ctx)
+    if (g && typeof g === 'object') return g
+    if (g) status = g
+  }
+  recordOutcome(bot, ctx, facts, prev, status, finished, text)
+  // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
+  // (walk->open->enter->close). A facts-changed re-decision must not preempt
+  // them mid-phase: stepping inside flips inside, which would hand stay the
+  // step before gohome shuts the door, chats and shelters — and stepping out
+  // flips it back before stay says good morning. The phase machine fails
+  // itself on real trouble (no-home, cannot-reach), which re-arms choice.
+  // In-flight craft windows (craft/equip/stockpile) must not be preempted mid-click:
+  // re-deciding on changed facts while the async op runs corrupts the window
+  // cursor (live 26.1 lesson: a table placement flips the facts before the
+  // sword craft lands). The flags reset on completion, so this holds for a
+  // few ticks at most.
+  if (!finished && prev && opInFlight(ctx)) {
+    return { action: prev, sprint: false, source: 'goal-fsm' }
+  }
+  // Night forces (ipn.12, table above): they cut through the stickiness.
+  let nightFarWalk = false
+  let nightNearShelter = false
+  try { nightFarWalk = fires('night-far') } catch (_) { nightFarWalk = false }
+  try { nightNearShelter = fires('night-near') } catch (_) { nightNearShelter = false }
+  const held = stickyHold(bot, ctx, facts, prev, status, finished, nightFarWalk)
+  if (held) return held
+  const { chainOwns, fetchRetry, gateOpened, buildRetry, siteRetry } = gateForces(fires)
+  const pins = readPins(ctx)
+  const planStep = pins.planStep
+  let { commitStep, commitActive } = pins
+  const commitForce = commitForceFor(bot, ctx, facts, text, commitActive, commitStep)
+  const siteFarWalk = siteFarFor(bot, ctx, facts, prev, status, finished, commitStep)
   // A finished window step ends the window early (before any re-pick, so
   // the ended choice is never re-pinned below): failed names its reason,
   // done re-measures against the dispatch snapshot.
@@ -2583,149 +2633,18 @@ async function decide(bot, ctx) {
       commitActive = false
       commitStep = null
     }
-    let names = menuNames(facts, bot, ctx, text)
-    // Stall-point plan (vmzq.5): the one-shot forced re-pick — the planned
-    // step as the only menu entry. Consumed always (one-shot); applied only
-    // while still feasible and registered (a stale answer degrades to the
-    // normal menu, never to a broken step). failHolds is bypassed: retrying
-    // a held step is the planner's job.
-    // vmzq.37: a pickless castle rearm outranks a plan/commit pin like the
-    // night steps do — a pinned castle leg cannot dig and wedges again.
-    let rearm = false
-    try { rearm = picklessCastle(facts, names) } catch (_) { rearm = false }
-    let planApplied = false
-    if (planStep) {
-      try { ctx.taskPlanStep = null } catch (_) { /* consume best-effort */ }
-    }
-    if (planStep && !rearm) {
-      let ok = false
-      try {
-        ok = !!(MENU[planStep] && MENU[planStep].feasible(facts, bot, ctx) && registered(planStep))
-      } catch (_) {
-        ok = false
-      }
-      if (ok) {
-        names = [planStep]
-        planApplied = true
-      }
-    }
-    // Watchdog commitment (vmzq.21): pin the window's step for the whole
-    // window (same-step holds included). Safety first (peer Q2): the
-    // safety choice is computed from the ORDINARY menu, and when it is a
-    // night step the normal menu runs (chooseStep's night rule picks it)
-    // while the window pauses — the commit pins only the work choice.
-    let commitApplied = false
-    if (!planApplied && commitActive && !rearm) {
-      let safety = null
-      try {
-        safety = goalFsm(facts, names)
-      } catch (_) {
-        safety = null
-      }
-      if (safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter') {
-        let ok = false
-        try {
-          ok = !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
-        } catch (_) {
-          ok = false
-        }
-        if (ok) {
-          names = [commitStep]
-          commitApplied = true
-        }
-      }
-    }
+    const { names, planApplied, commitApplied } = pinMenu(bot, ctx, facts, menuNames(facts, bot, ctx, text), planStep, commitActive, commitStep)
     const why = planApplied || commitApplied ? 'task-plan' : !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : siteFarWalk ? 'site-far' : 'facts-changed'
-    // Force name for the step line (vmzq.62): the first gate force that
-    // fired, else the first word force; pure here (the gate side effects
-    // already ran at their sites above). Read before ctx.goalText moves.
     const gateFired = { chain: chainOwns, 'fetch-retry': fetchRetry, 'gate-opened': gateOpened, 'build-retry': buildRetry, 'site-retry': siteRetry, 'night-far': nightFarWalk, 'night-near': nightNearShelter }
-    let force = null
-    for (const f of FORCES) {
-      let hit = false
-      try { hit = f.kind === 'gate' ? !!gateFired[f.name] : !!f.fires(prev, facts, ctx, status, bot, text) } catch (_) { hit = false }
-      if (hit) { force = f.name; break }
-    }
+    const force = forceName(bot, ctx, facts, prev, status, text, gateFired)
     const t0 = Date.now()
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
     if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
-    ctx.step = choice.step
-    // oqul.7: a new step instance (another step, or a re-pick after the
-    // last one finished) drops late completions of the old one's async ops.
-    if (choice.step !== prev || finished) nextStepGen(ctx)
-    // A fresh equip pick starts with fresh run counters (revmux round-1):
-    // stall patience spent by an earlier run must not fail the new one on
-    // its first tick. Station claims (claimedTable) live outside ctx.equip
-    // and survive. Same-name re-picks were already reset by done/failed.
-    if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
-    if (choice.step === 'gear' && choice.step !== prev) ctx.gearRun = {}
-    if (choice.step === 'castlefetch' && choice.step !== prev) ctx.castleFetch = null
-    // A fresh return leg restarts its walk (vmzq.50): stall patience spent
-    // by an interrupted leg must not fail the new one on arrival day.
-    if (choice.step === 'gocastle' && choice.step !== prev) ctx.gosite = null
-    // A fresh forage pick restarts the hunt (4dse): a resumed stale
-    // find/walk chases the old target id while explore heads elsewhere.
-    // The interrupted run's partial haul banks first (sqg2), so the reset
-    // drops only the stale target, never the accounting.
-    if (choice.step === 'forage' && choice.step !== prev) {
-      try { forageMod.bankPartial(bot, ctx) } catch (_) { /* haul best-effort */ }
-      ctx.forage = null
-    }
-    // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
-    // an order-interrupted night would otherwise hold on open ground. The
-    // interrupted gohome walk resets too, so the next march starts from the
-    // current body with a fresh stall record (and drops the walk's no-dig
-    // borrow at the next lease refresh) instead of resuming stale legs.
-    if (choice.step === 'shelter' && choice.step !== prev) {
-      ctx.shelter = {}
-      ctx.gohome = null
-    }
-    ctx.stepStatus = 'running'
-    // gwvg: status() reads who picked this step and why from the stamp.
-    // The step rides along (01 core-2): orders and retreat move ctx.step
-    // without re-stamping, and must not inherit the age/source.
-    ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
-    // A banking trip picked under the pierce latches for the trip (R4):
-    // set on a pick only, and only stockpile's own finish releases it above. A site
-    // pick is not a pierce (the site is near by definition), so only a
-    // home-branch pick arms it (revmux 02-after-fix major 3).
-    if (choice.step === 'stockpile') {
-      try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx, 'stockpile') && !stockpileSiteBranch(facts, bot, ctx) } catch (_) { /* latch best-effort */ }
-    }
-    ctx.goalText = text
-    ctx.heldText = null
-    metrics.goalSteps.inc({ step: choice.step, source: choice.source })
-    for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)
-    if (choice.model) metrics.goalChoiceDuration.observe({ source: choice.model }, ms / 1000)
-    // atl.7: rest explains itself — reasons stored on every rest choice
-    // (even repeats, so status stays fresh), chatted only on a step change.
-    if (choice.step === 'rest') {
-      try {
-        ctx.restWhy = restWhy(facts, bot, ctx, names)
-      } catch (_) {
-        ctx.restWhy = 'unknown'
-      }
-    } else if (choice.step !== prev) {
-      ctx.restWhy = null
-    }
-    // An order that landed mid-await ('stop' parks, 'follow me' switches
-    // work off) discards the step the tick then drops: announcing it would
-    // lie, so only an actually-working bot chats. !== false keeps unit-test
-    // {} ctx objects (work undefined) chatting.
-    if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
-      const menu = STEP_ORDER.filter((n) => names.includes(n)).join(',')
-      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why}${why === 'step-failed' ? ` fail=${status}` : ''}${force ? ` force=${force}` : ''} menu=${menu} facts=${text}`)
-      if (choice.step === 'rest') {
-        chatStep(bot, ctx, `resting: ${ctx.restWhy} (${choice.source})`)
-      } else {
-        const entry = MENU[choice.step]
-        const verb = (entry && entry.verb) || choice.step
-        chatStep(bot, ctx, `next: ${verb} (${choice.source})`)
-      }
-    }
+    applyChoice(bot, ctx, facts, choice, prev, finished, why, text)
+    noteChoice(bot, ctx, facts, names, choice, prev, status, why, force, text, ms)
   }
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle }
+module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle }
