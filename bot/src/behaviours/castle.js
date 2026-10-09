@@ -188,6 +188,7 @@ function blockCell(ctx, st, c, why, now) {
   ctx.castleFails = null
   ctx.castleCell = null
   ctx.castleFar = null
+  ctx.castleSelfOcc = null // each retry gets fresh stances (vmzq.53 revmux 01)
   ctx.castleGoalIdx = -1
   console.log(`castle blocked ${c.x} ${c.y} ${c.z} ${c.kind} (${why}) try ${e.tries}${e.retired ? ', retired' : `, retry in ${Math.round(backoffMs(e.tries) / 1000)}s`}`)
 }
@@ -876,20 +877,52 @@ function overBudget(bot, ctx, idx) {
   return null
 }
 
+// Standable stances off the cell's column (vmzq.53): feet + head air on a
+// solid, dry floor, within 2 columns and 1 level of the body, nearest
+// first. On a dug moat row the blind 4-way rotation only offered holes
+// and walls, so the body never left the cell it stood on.
+function sidestepStances(bot, c, bp) {
+  const fx = Math.floor(bp.x), fy = Math.floor(bp.y), fz = Math.floor(bp.z)
+  const out = []
+  for (let dx = -2; dx <= 2; dx++) {
+    for (let dz = -2; dz <= 2; dz++) {
+      const x = fx + dx, z = fz + dz
+      if ((dx === 0 && dz === 0) || (x === c.x && z === c.z)) continue
+      for (const dy of [0, -1, 1]) {
+        const y = fy + dy
+        if (!AIR.has(nameAt(bot, { x, y, z })) || !AIR.has(nameAt(bot, { x, y: y + 1, z }))) continue
+        let below = null
+        try { below = bot.blockAt(new Vec3(x, y - 1, z)) } catch (_) { below = null }
+        if (!below || below.boundingBox !== 'block' || flat.isLiquidName(below.name)) continue
+        out.push({ x, y, z, d: dx * dx + dz * dz + Math.abs(dy) * 0.5 })
+      }
+    }
+  }
+  return out.sort((a, b) => a.d - b.d)
+}
+
 // Self-occupancy (flat SELF_OCC_LIMIT): standing in our own target steps
-// aside; a body that cannot get out blocks the cell instead of orbiting.
-function sidestep(bot, ctx, st, c, now, why = 'occupied') {
+// aside; a body that cannot get out blocks the cell instead of orbiting,
+// as 'self-stance' (vmzq.53: it logged as a player 'occupied').
+function sidestep(bot, ctx, st, c, now, why = 'self-stance') {
   const so = ctx.castleSelfOcc && ctx.castleSelfOcc.idx === c.idx ? ctx.castleSelfOcc : { idx: c.idx, n: 0 }
   so.n++
   ctx.castleSelfOcc = so
-  if (so.n > flat.SELF_OCC_LIMIT) { blockCell(ctx, st, c, why, now); return }
   const bp = bodyPos(bot)
-  const s = SIDESTEPS[so.n % SIDESTEPS.length]
+  if (so.n > flat.SELF_OCC_LIMIT) {
+    if (bp) console.log(`castle ${why} at ${c.x} ${c.y} ${c.z}: body ${bp.x.toFixed(1)} ${bp.y.toFixed(1)} ${bp.z.toFixed(1)}`)
+    blockCell(ctx, st, c, why, now)
+    return
+  }
   // GoalBlock, not GoalNear(.., 1): a range-1 goal one step away is already
   // satisfied where we stand, so the pathfinder never moves (rig).
   try {
     if (bp) {
-      ctx.castleGoal = new goals.GoalBlock(Math.floor(bp.x) + s[0], Math.floor(bp.y), Math.floor(bp.z) + s[1])
+      // Retries rotate through the stances; none readable keeps the blind step.
+      const ok = sidestepStances(bot, c, bp)
+      const s = SIDESTEPS[so.n % SIDESTEPS.length]
+      const t = ok.length ? ok[(so.n - 1) % ok.length] : { x: Math.floor(bp.x) + s[0], y: Math.floor(bp.y), z: Math.floor(bp.z) + s[1] }
+      ctx.castleGoal = new goals.GoalBlock(t.x, t.y, t.z)
       bot.pathfinder.setGoal(ctx.castleGoal)
     }
   } catch (_) { /* retry next tick */ }

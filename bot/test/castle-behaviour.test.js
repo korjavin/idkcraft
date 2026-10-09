@@ -308,6 +308,62 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.castle.blocked['1:0'].why, 'kept-red_bed')
   })
 
+  // vmzq.53 (prod 35,64,11; 19..21,64,11): the body stands on the last
+  // moat cell, the dug row around it. The pathfinder mock only lands on a
+  // standable GoalBlock (feet + head air, solid floor), like A* would.
+  function moatStance() {
+    const v2 = blueprint.absPlan(SITE, 0, 2)
+    const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', chest: 'chest', torch: 'torch', door: 'oak_door', fence: 'oak_fence' }
+    const m = v2.cells.find((c) => c.kind === 'dig' && c.dy === -1 && ['1,0', '-1,0', '0,1'].every((d) => {
+      const [dx, dz] = d.split(',').map(Number)
+      return (v2.at.get(`${c.x + dx},${c.y},${c.z + dz}`) || {}).kind === 'dig'
+    }))
+    const world = makeWorld()
+    for (const c of v2.cells) world.set(c.x, c.y, c.z, NAME[c.kind] || 'air')
+    world.set(m.x, m.y, m.z, 'dirt')
+    world.set(m.x, m.y + 1, m.z - 1, 'stone') // the fourth blind step is walled
+    const bot = mockBot(world)
+    const air = (x, y, z) => EMPTY.has(world.get(x, y, z))
+    bot.pathfinder.setGoal = (g) => {
+      bot.calls.goals.push(g)
+      if (g.constructor.name !== 'GoalBlock') bot.entity.position = { x: m.x + 0.5, y: m.y + 1, z: m.z + 0.5 } // parks on the cell
+      else if (air(g.x, g.y, g.z) && air(g.x, g.y + 1, g.z) && !air(g.x, g.y - 1, g.z)) bot.entity.position = { x: g.x + 0.5, y: g.y, z: g.z + 0.5 }
+    }
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'body' } }
+    return { m, world, bot, ctx }
+  }
+
+  it('vmzq.53: standing on a moat dig cell, the dug row around it, steps to a standable stance and digs it', async () => {
+    const { m, world, bot, ctx } = moatStance()
+    await run(bot, ctx, 12)
+    assert.equal(world.get(m.x, m.y, m.z), 'air', 'the moat cell is dug')
+    assert.deepEqual(ctx.castle.blocked, {}, 'never struck')
+    const s = bot.calls.goals.find((g) => g.constructor.name === 'GoalBlock')
+    assert.ok(s && !(s.x === m.x && s.z === m.z), 'the sidestep leaves the column')
+  })
+
+  it('vmzq.53: a body that cannot leave the cell blocks it as self-stance, logged with its position', async () => {
+    const { m, bot, ctx } = moatStance()
+    bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g); bot.entity.position = { x: m.x + 0.5, y: m.y + 1, z: m.z + 0.5 } }
+    const logs = []
+    const log = console.log
+    console.log = (s) => logs.push(String(s))
+    try { await run(bot, ctx, 12) } finally { console.log = log }
+    assert.equal(ctx.castle.blocked[`2:${m.idx}`].why, 'self-stance')
+    assert.equal(ctx.castleSelfOcc, null, 'the retry after the backoff gets fresh stances')
+    assert.ok(logs.some((l) => l === `castle self-stance at ${m.x} ${m.y} ${m.z}: body ${m.x + 0.5} ${m.y + 1}.0 ${m.z + 0.5}`), logs.join('\n'))
+  })
+
+  it('vmzq.53: the normal dig path (body beside the cell) digs without a sidestep', async () => {
+    const { m, world, bot, ctx } = moatStance()
+    bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g); bot.entity.position = { x: m.x + 0.5, y: m.y + 2, z: m.z - 1.5 } }
+    await run(bot, ctx, 6)
+    assert.equal(world.get(m.x, m.y, m.z), 'air')
+    assert.deepEqual(ctx.castle.blocked, {})
+    assert.ok(bot.calls.goals.every((g) => g.constructor.name !== 'GoalBlock'), 'no sidestep goal')
+    assert.equal(ctx.castleSelfOcc, undefined)
+  })
+
   it('g0z.14: own scaffold off the plan inside the site clears before complete; plan cells untouched', async () => {
     const world = makeWorld()
     const plan = cells()
@@ -487,7 +543,7 @@ describe('g0z.2 castle executor', () => {
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 12)
     assert.ok(bot.calls.goals.length >= 3, 'sidestep goals issued')
-    assert.equal(ctx.castle.blocked[`${1}:0`].why, 'occupied')
+    assert.equal(ctx.castle.blocked[`${1}:0`].why, 'self-stance')
     assert.ok(!bot.calls.places.some((p) => p.x === c.x && p.y === c.y && p.z === c.z), 'never placed into its own body')
   })
 
