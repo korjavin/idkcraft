@@ -77,7 +77,7 @@ function mockBot(world, { items = [], at = pos(0, 65, 0) } = {}) {
 function paintHouse(world, home, leaveOut = []) {
   const skip = new Set(leaveOut)
   build.blueprintFor(home).forEach((cell, i) => {
-    if (skip.has(i)) return
+    if (skip.has(i) || cell.kind === 'clear') return // clear cells: air is done
     const name = cell.kind === 'table' ? 'crafting_table' : cell.kind === 'door' ? 'oak_door' : 'oak_planks'
     world.set(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz, name)
   })

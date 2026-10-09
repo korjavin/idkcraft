@@ -1242,8 +1242,9 @@ function tryAdoptDoor(bot, at) {
     try {
       // Fill cells carry no authorship evidence (revmux 01 body-2): dirt
       // under a foreign door reads done, so counting them spends 5 of the
-      // 10 quorum points on mere terrain.
-      if (cell.kind !== 'fill' && buildMod.cellDone(bot, home, cell)) kindred++
+      // 10 quorum points on mere terrain. Clear cells (rw4.19) likewise:
+      // any air interior reads done.
+      if (cell.kind !== 'fill' && cell.kind !== 'clear' && buildMod.cellDone(bot, home, cell)) kindred++
     } catch (_) { /* unscannable reads as mismatch */ }
   }
   if (kindred < ADOPT_QUORUM) return null // foreign door: keep looking

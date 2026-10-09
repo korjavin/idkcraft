@@ -1116,7 +1116,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         if (ctx.home && ctx.home.site && !ctx.home.built) {
           let complete = false
           try {
-            complete = buildMod.isComplete(bot, ctx.home)
+            // A live clear cell (rw4.19) holds the flip: else the re-open
+            // below and this flip would alternate every tick.
+            complete = buildMod.isComplete(bot, ctx.home) && !buildMod.clearOwed(bot, ctx.home, ctx.buildSkip)
           } catch (_) { complete = false }
           if (complete) {
             try {
@@ -1130,6 +1132,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
             const s = ctx.home.site
             try { bot.chat(`home done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
           }
+        } else if (ctx.home && ctx.home.site && ctx.home.built && buildMod.clearOwed(bot, ctx.home, ctx.buildSkip)) {
+          // rw4.19: a house finished over a relief-1 bump (doorway 1 high,
+          // bed foot blocked) re-opens so build digs the interior out.
+          ctx.home.built = false
+          console.log('home: natural ground inside the house, re-opening the build (rw4.19)')
+          try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
         }
         // The chain owns ctx.retreat only across its own dispatches: any other
         // step taking the tick ends the episode, so the next veto re-chains

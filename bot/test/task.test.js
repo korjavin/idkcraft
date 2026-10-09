@@ -388,10 +388,11 @@ describe('task stall clock (vmzq.2)', () => {
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
     assert.equal(ctx.task.active, 'house')
-    assert.equal(taskMod.taskLine(ctx), 'task house 0/99 stall=0s')
+    // 31 interior clear cells (rw4.19) read done on air.
+    assert.equal(taskMod.taskLine(ctx), 'task house 31/130 stall=0s')
     for (let s = 1; s <= 15 * 60; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
     assert.equal(taskLogs().length, 1)
-    assert.match(bot.chats[0], /^house: no progress for 15 min at 0\/99/)
+    assert.match(bot.chats[0], /^house: no progress for 15 min at 31\/130/)
   })
 
   it('unloaded house holds the baseline (core-1)', () => {
@@ -414,12 +415,13 @@ describe('task stall clock (vmzq.2)', () => {
     const ctx = bot._tickerCtx
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
-    // Table (plan[0]) and door (plan[27]) are not planks: 28 of 30 read placed.
-    assert.equal(ctx.task.house.done, 28)
+    // Table (plan[0]) and door (plan[27]) are not planks: 28 of 30 read
+    // placed, plus 31 interior clear cells on air (rw4.19).
+    assert.equal(ctx.task.house.done, 59)
     // Walk out of range: the reading would be 0/99, held instead.
     loaded = false
     for (let s = 1; s <= 61; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000) // past the 60 s cache
-    assert.equal(ctx.task.house.done, 28, 'unloaded read does not sink the baseline')
+    assert.equal(ctx.task.house.done, 59, 'unloaded read does not sink the baseline')
     assert.equal(ctx.task.house.stallMs, 61000)
     // Back on site, same 28: no false progress.
     loaded = true
@@ -485,7 +487,7 @@ describe('task stall clock (vmzq.2)', () => {
     // First loaded reading baselines without resetting the clock.
     bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' })
     taskMod.taskTick(bot, ctx, t0 + (15 * 60 + 1) * 1000)
-    assert.equal(ctx.task.house.done, 0)
+    assert.equal(ctx.task.house.done, 31) // rw4.19 clear cells on air
     assert.ok((ctx.task.house.stallMs || 0) >= 900000, 'first reading does not reset')
   })
 

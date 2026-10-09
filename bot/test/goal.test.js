@@ -177,9 +177,10 @@ describe('MENU feasibility gates', () => {
     assert.equal(F('build', { ...base, ...kit, planks: 15, home: 'site' }, bot, siteCtx), false)
     // item gate: only the NEXT cell gates (xoj) — a held table starts the
     // fresh site while the door is still uncrafted; a missing table for the
-    // next table cell still yields (no livelock)
-    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 0, home: 'site' }, bot, siteCtx), true)
-    assert.equal(F('build', { ...base, planks: 48, table: 0, door: 1, home: 'site' }, bot, siteCtx), false)
+    // next table cell still yields (no livelock). A readable flat site: the
+    // interior clear cells (rw4.19) read done on air, so the table is next.
+    assert.equal(F('build', { ...base, planks: 48, table: 1, door: 0, home: 'site' }, flatBot(), siteCtx), true)
+    assert.equal(F('build', { ...base, planks: 48, table: 0, door: 1, home: 'site' }, flatBot(), siteCtx), false)
   })
 })
 
