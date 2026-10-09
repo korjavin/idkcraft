@@ -179,7 +179,7 @@ const MENU = {
       // reads the holes as given up and never re-picks build, so the
       // build-side retry alone never runs (rig: TIMEOUT over one skip).
       try {
-        if (home && home.site && buildMod.nextCellIdx(bot, home, ctx.buildSkip) < 0 && !buildMod.isComplete(bot, home)) buildMod.retrySkipsOnce(ctx)
+        if (home && home.site && buildMod.nextCellIdx(bot, home, ctx.buildSkip, ctx) < 0 && !buildMod.isComplete(bot, home)) buildMod.retrySkipsOnce(ctx)
       } catch (_) { /* retry best-effort */ }
       // No scannable origin (no home yet, or a home without site): nothing
       // is verifiable, so the whole wall+roof count counts.
