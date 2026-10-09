@@ -1041,13 +1041,19 @@ function placeCell(bot, ctx, st, c, item, now) {
 // Re-dig guard (vmzq.54): a plan dig cell that keeps coming back (our
 // scaffold, a player) blocks with the usual backoff instead of looping —
 // each dig succeeds and the body moves, so no strike or budget fires.
-// Session-only counts; blockCell's MAX_HOLE_TRIES retire bounds it.
+// After REDIG_MAX digs every further refill blocks again (one dig per
+// retry). pick() prunes the entry once the retry dig lands, so the try
+// count lives here and is carried into the entry: the MAX_HOLE_TRIES-th
+// refill retires the cell (revmux 01). Session-only; rebuild resets it.
 const REDIG_MAX = 3
 function digCell(bot, ctx, st, c, now) {
   const name = nameAt(bot, c)
   const rk = c.kind === 'dig' ? bkey(st, c.idx) : null
-  if (rk && !AIR.has(name) && ctx.castleRedig && (ctx.castleRedig[rk] || 0) >= REDIG_MAX) {
-    delete ctx.castleRedig[rk]
+  const r = rk && ctx.castleRedig ? ctx.castleRedig[rk] : null
+  if (r && !AIR.has(name) && r.digs >= REDIG_MAX + r.blocks) {
+    r.blocks++
+    const e = st.blocked[rk] || (st.blocked[rk] = { tries: 0, until: 0 })
+    e.tries = Math.max(e.tries, r.blocks - 1)
     blockCell(ctx, st, c, 'refilled', now)
     return
   }
@@ -1115,7 +1121,11 @@ function digCell(bot, ctx, st, c, now) {
       await bot.dig(b)
       if (live(ctx, token)) {
         ctx.castleFails = null
-        if (rk) { ctx.castleRedig = ctx.castleRedig || {}; ctx.castleRedig[rk] = (ctx.castleRedig[rk] || 0) + 1 }
+        if (rk) {
+          ctx.castleRedig = ctx.castleRedig || {}
+          const n = ctx.castleRedig[rk] || (ctx.castleRedig[rk] = { digs: 0, blocks: 0 })
+          n.digs++
+        }
         if (spoilWalk(st, c)) ctx.castlePickup = { x: c.x, y: c.y, z: c.z, ticks: 0 }
       }
     } catch (_) {

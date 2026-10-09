@@ -389,7 +389,7 @@ describe('g0z.2 castle executor', () => {
     const ground = blueprint.absPlan(SITE, 0, 2).cells.find((c) => c.kind !== 'dig' && c.dy === 0)
     assert.equal(place({ position: { x: ground.x, y: SITE.y - 1, z: ground.z } }), 0, 'terrain under a non-dig cell stays free')
     assert.equal(bot.calls.digs.length, 1)
-    assert.equal(ctx.castleRedig[`2:${m.idx}`], 1, 'normal dig path counts one dig')
+    assert.deepEqual(ctx.castleRedig[`2:${m.idx}`], { digs: 1, blocks: 0 }, 'normal dig path counts one dig')
     assert.deepEqual(ctx.castle.blocked, {})
   })
 
@@ -408,8 +408,29 @@ describe('g0z.2 castle executor', () => {
     } finally { console.log = log }
     assert.equal(ctx.castle.blocked[`2:${m.idx}`].why, 'refilled')
     assert.equal(bot.calls.digs.filter((p) => p.x === m.x && p.y === m.y && p.z === m.z).length, 3)
-    assert.equal(ctx.castleRedig[`2:${m.idx}`], undefined, 'the retry after the backoff counts afresh')
     assert.ok(logs.some((l) => l.startsWith(`castle blocked ${m.x} ${m.y} ${m.z} dig (refilled) try 1`)), logs.join('\n'))
+    // Bounded (revmux 01): each expired backoff gets one dig; the retry dig
+    // lands (pick prunes the entry), the refill blocks again with the
+    // carried try count, and the MAX_HOLE_TRIES-th refill retires the cell.
+    const k = `2:${m.idx}`
+    // The refill lands after the spoil walk (the climb out), so pick sees
+    // the dug cell first and prunes its blocked entry, as in prod.
+    let dug = 0
+    let pruned = false
+    for (let i = 0; i < 300 && !ctx.castle.blocked[k]?.retired; i++) {
+      if (dug >= 3) world.set(m.x, m.y, m.z, 'dirt')
+      if (ctx.castle.blocked[k]) ctx.castle.blocked[k].until = 0
+      ctx.castleScanAt = 0 // the full rescan re-finds the refilled cell
+      ctx.castle.phase = 'body' // prod: 222 moat cells left, never complete
+      castle(bot, ctx)
+      await settle()
+      dug = world.get(m.x, m.y, m.z) === 'air' ? dug + 1 : 0
+      if (!ctx.castle.blocked[k]) pruned = true
+    }
+    assert.ok(pruned, 'the entry was pruned between refills')
+    assert.equal(ctx.castle.blocked[k].retired, true)
+    assert.equal(ctx.castle.blocked[k].tries, castle.MAX_HOLE_TRIES)
+    assert.equal(bot.calls.digs.filter((p) => p.x === m.x && p.y === m.y && p.z === m.z).length, 3 + castle.MAX_HOLE_TRIES - 1)
   })
 
   it('g0z.14: own scaffold off the plan inside the site clears before complete; plan cells untouched', async () => {
