@@ -218,6 +218,16 @@ describe('castle decor behaviour (g0z.31)', () => {
     })
   }
 
+  it('a sub-batch remainder (4 panes, empty chest) is a batch and is laid (revmux 01)', async () => {
+    const items = [{ name: 'glass_pane', count: 4 }]
+    const bot = castleBot({ items })
+    const ctx = { castle: completeState() }
+    assert.equal(castleMod.menuFact(bot, ctx), 'pane-batch')
+    for (let i = 0; i < 60 && bot.calls.places.length < 4; i++) { castleMod(bot, ctx); await settle(); await settle() }
+    assert.equal(bot.calls.places.length, 4)
+    assert.equal(castleMod.menuFact(bot, ctx), 'pane-none')
+  })
+
   it('off site a complete castle reads done (no yank-back for cosmetics)', () => {
     const bot = castleBot({ items: [{ name: 'glass_pane', count: 16 }], loaded: false })
     assert.equal(castleMod.menuFact(bot, { castle: completeState() }), 'done')
