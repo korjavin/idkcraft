@@ -21,7 +21,7 @@ const stockpileMod = require('./behaviours/stockpile')
 const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
 const residence = require('./residence')
-const { failReason, isFinished, nextStepGen } = require('./step')
+const { failReason, isFinished, nextStepGen, chatStep, STEP_CHAT_SAME_MS } = require('./step')
 
 // House budget and bounded-hold windows live in the leaf budget.js
 // (oqul.3) so behaviours read them without loading goal; re-exported here.
@@ -30,6 +30,7 @@ const { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, FORAGE_RET
 // and holds.js (oqul.4); the exported names are re-exported here.
 const { needPlanks, makeHome, siteFor, isV2House, timeWord } = require('./site')
 const { REFAIL_DIST, gatherFailedHolds } = require('./holds')
+const { PARK_FORAGE_RADIUS, castleFirst, homeLegVetoed, packFull, taskParked } = require('./vetoes') // oqul.11: moved out for forage/stockpile
 
 // Night-hurt hold (ck3): low health (the goalText 'health=low' bucket) at
 // night keeps the bot off the outdoor work — prod died twice at the site
@@ -667,37 +668,6 @@ function castleBlocked(facts) {
   return registered('castle')
 }
 
-// Task park (idkcraft-vmzq.3, supersedes g0z.24): ANY parked task — owner
-// castle stop or the L2 episode — vetoes the built-home explore. The veto
-// is a property of the parked task, never of a castle word (g0z.24's
-// design is rejected: it would strand a tool-less bot). Forage stays as
-// side work (owner Q2) but only near finds: the pickers in forage.js skip
-// cells past PARK_FORAGE_RADIUS of home/castle while parked, so a parked
-// bot cannot chain to a 300-block remembered diamond. 64 is the epic's
-// own bound (stage-2: ends at home/site, not >64 away).
-const PARK_FORAGE_RADIUS = 64
-// Castle-first veto (idkcraft-vmzq.19): while an unfinished, unparked
-// castle stands, the house-side steps (beds, build) yield — run3 picked
-// equip then beds over a feasible castle, walked 500 blocks to the house,
-// and never laid a cell. Equip is only outranked (STEP_ORDER), never
-// vetoed: the castle chain needs its kit. Parked/complete releases (the
-// L2 park's side work IS house work). Deferred require (the beds
-// precedent — goal.js loads inside the behaviour chain).
-// (.22) a house-<step> unlock lifts the veto for that step only — never
-// wholesale (peer Q3). Pass the step name; omitted keeps the veto.
-function castleFirst(ctx, step = null) {
-  try {
-    if (step) {
-      try {
-        const { goalUnlock } = require('./goal-unlock')
-        if (goalUnlock(ctx, 'houseStep') === step) return false
-      } catch (_) { /* no unlock */ }
-    }
-    return !!require('./behaviours/explore').castleActive(ctx)
-  } catch (_) {
-    return false
-  }
-}
 // Pickless castle (idkcraft-vmzq.37): facts.rearm (equip.pickRearmDue —
 // no pickaxe, active castle, body underground, pack funds one) makes equip
 // feasible without a station and goalFsm/chooseStep rank it ahead of the
@@ -707,31 +677,6 @@ function castleFirst(ctx, step = null) {
 function picklessCastle(facts, names) {
   return !!(facts && facts.rearm) && names.includes('equip') &&
     (names.includes('castle') || names.includes('castlefetch'))
-}
-// Home-leg leash (vmzq.19 R2, major 2): the home-anchored steps (light,
-// stockpile, gear) with an active castle run only near home — past the
-// task radius the legs cross the map, and laya (which the castle-rule
-// below only skips for a runnable castle) would pick them over the
-// chain's gather/craft/equip. Unreadable position reads near (fail open,
-// the nightFarFromHome rule).
-// (.22) same per-step unlock seam as castleFirst (houseStep is build or
-// beds, so light/stockpile/gear never lift — they stay vetoed by shape).
-function homeLegVetoed(bot, ctx, step = null) {
-  try {
-    if (step) {
-      try {
-        const { goalUnlock } = require('./goal-unlock')
-        if (goalUnlock(ctx, 'houseStep') === step) return false
-      } catch (_) { /* no unlock */ }
-    }
-    if (!castleFirst(ctx)) return false
-    const h = ctx && ctx.home && ctx.home.site
-    const bp = bot && bot.entity && bot.entity.position
-    if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
-    return Math.hypot(bp.x - h.x, bp.z - h.z) > require('./behaviours/explore').TASK_SEARCH_RADIUS
-  } catch (_) {
-    return false
-  }
 }
 // Site half of the stockpile feasible (vmzq.39, extracted R3): an active
 // far castle banks at the site instead of home. Shared with the pierce
@@ -768,27 +713,6 @@ function castleParkLeash(ctx) {
   } catch (_) {
     return false
   }
-}
-// Pack-full pierce (vmzq.19 R3, round-2 major A): stockpile is the only
-// pack drain. The dig has no room exactly when castlefetch's own
-// roomForDrop says so (36 stacks with no cobble/dirt room, or the
-// chestless reserve corner) — then the banking trip is the unblock, not
-// drift. Deferred require (the demand precedent in castleFetchGo).
-function packFull(bot, ctx) {
-  try {
-    return !require('./behaviours/castlefetch').roomForDrop(bot, ctx)
-  } catch (_) {
-    return false
-  }
-}
-function taskParked(ctx) {
-  try {
-    if (ctx && ctx.castle && ctx.castle.parked) return true
-  } catch (_) { /* unparked */ }
-  try {
-    if (ctx && ctx.home && ctx.home.parked) return true
-  } catch (_) { /* unparked */ }
-  return false
 }
 
 // Which missing tool can actually complete now (atl.6 + revmux round-1):
@@ -1646,24 +1570,6 @@ async function chooseStep(brain, facts, feasible, home) {
 // the switch does not know (atl.6) falls back to 'not feasible'. The
 // 'model choice' line below is unreachable-but-safe (STEP_ORDER always
 // holds other steps).
-// f3s: repeat step-change chats throttled (Paper kicks past ~10 rapid lines,
-// and a flip-flopping menu re-decides every tick: the assayed kick shape is
-// 2-3 steps alternating, so each line is rate-limited independently — comparing
-// only to the last line would still let A,B,A,B through). The same line chats
-// at most every 10 s; a line never chatted (or silent >10 s) always passes.
-// The console keeps every transition. First chat per ctx always passes. Same
-// timestamp style as explore's departure throttle.
-const STEP_CHAT_SAME_MS = 10000
-function chatStep(bot, ctx, line) {
-  const now = Date.now()
-  let seen = null
-  try { seen = ctx && ctx.stepChat } catch (_) { seen = null }
-  const prev = seen ? seen[line] : undefined
-  if (typeof prev === 'number' && now - prev < STEP_CHAT_SAME_MS) return false
-  try { if (ctx) { (ctx.stepChat = ctx.stepChat || {})[line] = now } } catch (_) { /* stamp best-effort */ }
-  try { bot.chat(line) } catch (_) { /* chat best-effort */ }
-  return true
-}
 
 function stepWhy(name, facts, bot, ctx, text) {
   try {

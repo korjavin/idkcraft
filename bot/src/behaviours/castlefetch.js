@@ -60,7 +60,6 @@ const DIG_TIMEOUT_MS = 10000
 const CHEST_REACH = stockpileMod.INTERACT_REACH
 const CHEST_WAITS = 30 // ticks without closing in on the chest
 const CHEST_TIMEOUT_MS = 15000
-const SITE_TOP = 16
 // Quarry (g0z.15, owner 2026-10-02): no exposed stone by the site -> an
 // open trench next to it, a staircase down QUARRY_DEPTH below the site's
 // ground, then level, QUARRY_W wide, cut top-down (dirt included).
@@ -214,15 +213,9 @@ function blocksOnHand(bot) {
   } catch (_) { return null }
 }
 
-// Site box with a one-block margin, foundation layers included: never dig
-// the castle's own ground or walls for its stone.
-function onSite(st, p, margin = 1, below = 3) {
-  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-  const dx = Math.floor(p.x) - st.site.x
-  const dy = Math.floor(p.y) - st.site.y
-  const dz = Math.floor(p.z) - st.site.z
-  return dx >= -margin && dx < w + margin && dz >= -margin && dz < d + margin && dy >= -below && dy <= SITE_TOP
-}
+// Site box with a one-block margin: lives in ../castle.js (oqul.11, the
+// equip<->castlefetch cycle); same function, re-exported below.
+const onSite = blueprint.onSite
 
 // The castle chest: a chest standing on the castle site.
 // ponytail: any chest in the footprint; g0z.11's storeroom 'chest' cell is

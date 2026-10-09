@@ -10,30 +10,9 @@
 // Runs at the every-tick seam in index.js regardless of the brain decision,
 // so it keeps working while the bot is following, fighting, or idle.
 
-const ORE_NAMES = [
-  'diamond_ore',
-  'deepslate_diamond_ore',
-  'emerald_ore',
-  'deepslate_emerald_ore',
-  'ancient_debris',
-  'gold_ore',
-  'deepslate_gold_ore',
-  'iron_ore',
-  'deepslate_iron_ore',
-  'lapis_ore',
-  'deepslate_lapis_ore',
-  'redstone_ore',
-  'deepslate_redstone_ore',
-]
-
-// ipn.14: coal goes to finds memory (gear's want-coal, forage) but never to
-// chat. Its own findBlocks with a small count, so plentiful surface coal
-// can neither crowd the valuable ores out of the ore scan's 64 nor flood
-// the 256-cell memory.
-// ponytail: memory is oldest-out (resources MAX_ITEMS); if coal still
-// evicts iron in prod, a per-kind eviction priority is its own bead.
-const COAL_NAMES = ['coal_ore', 'deepslate_coal_ore']
-const COAL_COUNT = 16
+// Ore/coal names, block-id resolution and exposure live in blockids.js
+// (idkcraft-oqul.11), so resources.js needs no scout require; re-exported.
+const { ORE_NAMES, COAL_NAMES, COAL_COUNT, keyOf, resolveIds, resolveBlockIds, resolveFindIds, isExposed } = require('../blockids')
 
 function baseName(name) {
   return name.startsWith('deepslate_') ? name.slice('deepslate_'.length) : name
@@ -51,10 +30,6 @@ function rankOf(name) {
 
 const { performance } = require('node:perf_hooks')
 const metrics = require('../metrics')
-
-function keyOf(p) {
-  return `${p.x},${p.y},${p.z}`
-}
 
 // Staged search radii (amb): 48 first (the old cheap scan), 96 next, then
 // the loaded-chunks boundary. Later stages run only when earlier ones are
@@ -133,85 +108,6 @@ function dist(a, b) {
   if (a && typeof a.distanceTo === 'function') return a.distanceTo(b)
   if (b && typeof b.distanceTo === 'function') return b.distanceTo(a)
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
-}
-
-function resolveIds(bot, names) {
-  const byName = (bot.registry && bot.registry.blocksByName) || {}
-  const ids = []
-  for (const name of names) {
-    const entry = byName[name]
-    // Names missing from the registry are skipped, not fatal.
-    if (entry && typeof entry.id === 'number') ids.push(entry.id)
-  }
-  return ids
-}
-
-// Name -> ore ids for the 'find me <block>' chat command: the exact
-// name, plus every registry block containing <base>_ore (covers
-// deepslate_* and nether_* variants). Registry names that are missing
-// are skipped, not fatal.
-function resolveBlockIds(bot, blockName) {
-  const byName = (bot.registry && bot.registry.blocksByName) || {}
-  const base = blockName.endsWith('_ore') ? blockName.slice(0, -'_ore'.length) : blockName
-  const ids = []
-  const exact = byName[blockName]
-  if (exact && typeof exact.id === 'number') ids.push(exact.id)
-  const pattern = `${base}_ore`
-  for (const name of Object.keys(byName)) {
-    if (name.includes(pattern)) {
-      const entry = byName[name]
-      if (entry && typeof entry.id === 'number' && !ids.includes(entry.id)) ids.push(entry.id)
-    }
-  }
-  return ids
-}
-
-// 'find me' name resolution: 'ore' means any scout-listed ore, a trailing
-// 's' falls back to the singular (diamonds -> diamond); everything else goes
-// through resolveBlockIds (exact + <base>_ore variants). No fuzzy search:
-// anything still unmatched resolves to no ids ('unknown' downstream).
-// Dynamic *_log ids for 'bring me logs' (gather.js logIds, shared): exact
-// names vary by wood type, so enumerate the registry like the matcher does.
-function resolveLogIds(bot) {
-  const byName = (bot.registry && bot.registry.blocksByName) || {}
-  const ids = []
-  for (const name of Object.keys(byName)) {
-    if (!name.endsWith('_log')) continue
-    const entry = byName[name]
-    if (entry && typeof entry.id === 'number' && !ids.includes(entry.id)) ids.push(entry.id)
-  }
-  return ids
-}
-
-function resolveFindIds(bot, name) {
-  if (name === 'ore' || name === 'ores') return resolveIds(bot, ORE_NAMES)
-  if (name === 'log' || name === 'logs') return resolveLogIds(bot)
-  let ids = resolveBlockIds(bot, name)
-  if (ids.length === 0 && name.length > 1 && name.endsWith('s')) {
-    const singular = name.slice(0, -1)
-    ids = singular === 'ore' ? resolveIds(bot, ORE_NAMES) : resolveBlockIds(bot, singular)
-  }
-  return ids
-}
-
-// A position counts as exposed when a confirmed air block touches it on one
-// of the six sides (visible from a cave or the surface). Unloaded (null) or
-// unreadable does not count: only confirmed air.
-function isExposed(bot, p) {
-  if (!bot.blockAt) return false
-  const offs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
-  try {
-    for (const [dx, dy, dz] of offs) {
-      const q = (p && typeof p.offset === 'function')
-        ? p.offset(dx, dy, dz)
-        : { x: Math.floor(p.x) + dx, y: Math.floor(p.y) + dy, z: Math.floor(p.z) + dz }
-      const b = bot.blockAt(q)
-      if (b && (b.name === 'air' || b.name === 'cave_air')) return true
-    }
-  } catch {
-    return false
-  }
-  return false
 }
 
 // Scan helper, exported for the 'find me <block>' chat command:
@@ -637,8 +533,8 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
       }
     }
     if (ctx && spots.length > 0) {
-      // Lazy require: resources.js already requires this file at the top,
-      // so a top-level require back would catch its half-built exports.
+      // Call-time require kept from before oqul.11 (resources.js no longer
+      // requires scout, so the cycle is gone; the late load is harmless).
       try {
         require('../resources').noteSpots(ctx, spots, t)
       } catch {

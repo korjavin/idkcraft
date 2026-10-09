@@ -2,8 +2,8 @@
 
 // idkcraft-oqul.1: forbidden require directions, held by an allowlist that
 // may only shrink. Rules: a behaviour never requires the arbiter/task/
-// ticker/orders/chat modules; nothing requires index.js; goal.js, task.js
-// and goal-options.js do not require each other. Every current violation
+// ticker/orders/chat modules; nothing requires index.js; task.js ->
+// goal-options.js -> goal.js is layered, never upward (oqul.11). Every current violation
 // is listed in deps-allowlist.json with a reason — a new edge fails, and so
 // does a listed edge that is gone (delete its line: the list only shrinks).
 // Lazy in-function requires count the same as top-level ones.
@@ -40,13 +40,16 @@ function graph() {
 }
 
 const BEHAVIOUR_BANNED = new Set(['src/goal.js', 'src/task.js', 'src/index.js', 'src/orders.js', 'src/chat.js'])
-const TRIANGLE = new Set(['src/goal.js', 'src/task.js', 'src/goal-options.js'])
+// The goal/task/goal-options triangle is layered (oqul.11, the oqul.5
+// residual): task.js sits on goal-options.js, which sits on goal.js. The
+// downward edges are the design; only an upward one would close a cycle.
+const UPWARD = new Set(['src/goal.js -> src/task.js', 'src/goal.js -> src/goal-options.js', 'src/goal-options.js -> src/task.js'])
 
 function forbidden(from, to) {
   if (from === to) return false
   if (to === 'src/index.js') return true
   if (from.startsWith('src/behaviours/') && BEHAVIOUR_BANNED.has(to)) return true
-  return TRIANGLE.has(from) && TRIANGLE.has(to)
+  return UPWARD.has(`${from} -> ${to}`)
 }
 
 function violations(g) {
@@ -84,6 +87,10 @@ describe('structure: forbidden require directions (oqul.1)', () => {
     assert.equal(forbidden('src/behaviours/x.js', 'src/perception.js'), false)
     assert.equal(forbidden('src/metrics.js', 'src/index.js'), true)
     assert.equal(forbidden('src/goal.js', 'src/task.js'), true)
+    assert.equal(forbidden('src/goal-options.js', 'src/task.js'), true)
+    assert.equal(forbidden('src/goal.js', 'src/goal-options.js'), true)
+    assert.equal(forbidden('src/task.js', 'src/goal.js'), false)
+    assert.equal(forbidden('src/goal-options.js', 'src/goal.js'), false)
     assert.equal(forbidden('src/goal.js', 'src/behaviours/x.js'), false)
     assert.equal(forbidden('src/index.js', 'src/goal.js'), false)
   })

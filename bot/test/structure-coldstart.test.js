@@ -7,7 +7,8 @@
 // `const { a, b } = require('./x')` in src must see a and b already on x's
 // exports at that moment — a cycle that hands back a partial export would
 // freeze undefined into the destructured binding (craft.js NEED_LOGS,
-// gather.js NEED_LOGS/gatherFailedHolds, home.js goalFacts/timeWord).
+// gather.js NEED_LOGS/gatherFailedHolds, home.js goalFacts/timeWord — home.js now
+// reads carryOrderStamp/timeWord, oqul.11).
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -72,7 +73,7 @@ describe('structure: cold start per entry point (oqul.1)', () => {
 
   it('finds the known load-time destructures (the scan is live)', () => {
     const keys = sites.map((s) => `${path.basename(s.from)}<-${path.basename(s.to)}:${s.names.join(',')}`)
-    for (const k of ['craft.js<-budget.js:NEED_LOGS', 'gather.js<-budget.js:NEED_LOGS', 'gather.js<-holds.js:gatherFailedHolds', 'home.js<-goal.js:goalFacts', 'home.js<-site.js:timeWord']) {
+    for (const k of ['craft.js<-budget.js:NEED_LOGS', 'gather.js<-budget.js:NEED_LOGS', 'gather.js<-holds.js:gatherFailedHolds', 'home.js<-step.js:carryOrderStamp', 'home.js<-site.js:timeWord']) {
       assert.ok(keys.includes(k), `${k} not found in ${keys.length} sites`)
     }
   })
