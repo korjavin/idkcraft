@@ -19,10 +19,14 @@ const FIGHT_RANGE_PLAYER = 6
 // ponytail: creepers are excluded from fight targets — hitting one near the
 // player makes it explode next to the player. Fleeing is a tick-level reflex
 // instead (fleeReflex in index.js), never a brain action or an attack.
+// guardians (5iap): chasing them into monument water never gives up; they
+// still count as hostiles (nearby_hostiles, death line, retreat release); like
+// creeper/enderman they set no hostile fact, so they cannot start a retreat.
+const NO_CHASE = new Set(['creeper', 'enderman', 'guardian', 'elder_guardian'])
 function isFightTarget(entity, botPos, playerPos) {
   if (!entity || entity.type === 'player' || !entity.position) return false
   const name = entity.name || ''
-  if (!HOSTILE_NAMES.has(name) || name === 'creeper' || name === 'enderman') return false
+  if (!HOSTILE_NAMES.has(name) || NO_CHASE.has(name)) return false
   if (entity.position.distanceTo(botPos) <= FIGHT_RANGE_BOT) return true
   return !!playerPos && entity.position.distanceTo(playerPos) <= FIGHT_RANGE_PLAYER
 }
