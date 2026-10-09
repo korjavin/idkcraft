@@ -160,10 +160,19 @@ function questExempt(bot, ctx, target) {
 // (parkedHuntOk): near animals only — a 48-block hop chain re-centers
 // every replan and would walk the bot home-away (R3/R5).
 // Deferred goal require (questBatch precedent — goal.js loads forage).
-function parkedCellSkipped(ctx, item) {
+// Idle alone (vmzq.59: nobody online, no active task, no owner bring)
+// reads as parked here — prod drowned forage legs at y50 overnight.
+function parkBound(ctx, bot) {
+  if (require('../goal').taskParked(ctx)) return true
+  try {
+    const ex = require('./explore')
+    return !!bot && ex.aloneIdle(bot, ctx) && !ex.taskActive(ctx)
+  } catch (_) { return false }
+}
+function parkedCellSkipped(ctx, item, bot) {
   try {
     const g = require('../goal')
-    if (!g.taskParked(ctx)) return false
+    if (!parkBound(ctx, bot)) return false
     if (!item || typeof item.x !== 'number' || typeof item.z !== 'number') return true
     let radius = g.PARK_FORAGE_RADIUS || 64
     try {
@@ -174,7 +183,7 @@ function parkedCellSkipped(ctx, item) {
     const anchors = []
     if (ctx && ctx.home && ctx.home.site) anchors.push(ctx.home.site)
     if (ctx && ctx.castle && ctx.castle.site) anchors.push(ctx.castle.site)
-    if (anchors.length === 0) return true // parked with no anchor: no far walk
+    if (anchors.length === 0) return g.taskParked(ctx) // parked with no anchor: no far walk; alone pre-home: unbound
     return !anchors.some((a) => Math.hypot(item.x - a.x, item.z - a.z) <= radius)
   } catch (_) {
     return false
@@ -200,7 +209,7 @@ function bestMemoryCell(bot, ctx, bp) {
   let bestLogDist = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number') continue
-    if (parkedCellSkipped(ctx, item)) continue
+    if (parkedCellSkipped(ctx, item, bot)) continue
     if (typeof item.y === 'number' && item.y < floor) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     const rank = valueRank(item.name)
@@ -266,7 +275,7 @@ function gearWantCell(bot, ctx, bp, key) {
   let bestD = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number' || typeof item.name !== 'string') continue
-    if (parkedCellSkipped(ctx, item)) continue
+    if (parkedCellSkipped(ctx, item, bot)) continue
     if (!re.test(item.name)) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     if (!bring.hasPickaxe(bot, item.name)) continue
@@ -296,7 +305,7 @@ function bestDiamondCell(bot, ctx, bp) {
   let bestDist = Infinity
   for (const item of mem.items.values()) {
     if (!item || typeof item.x !== 'number') continue
-    if (parkedCellSkipped(ctx, item)) continue
+    if (parkedCellSkipped(ctx, item, bot)) continue
     if (typeof item.name !== 'string' || !item.name.includes('diamond')) continue
     if (skip && typeof skip.has === 'function' && skip.has(cellKey(item))) continue
     if (!bring.hasPickaxe(bot, item.name)) continue
@@ -356,11 +365,10 @@ function huntAllowed(bot, ctx, drop) {
 // major): a hungry bot would chain-hunt outward, pure drift, third raising
 // of park drift. Near hunts do feed now (vmzq.34: eatReflex takes safe raw
 // as a fallback), so the bound feeds without walking home-away.
-function parkedHuntOk(ctx, found) {
+function parkedHuntOk(ctx, found, bot) {
   try {
-    const g = require('../goal')
-    if (!g.taskParked(ctx)) return true
-    return !!(found && found.position && !parkedCellSkipped(ctx, found.position))
+    if (!parkBound(ctx, bot)) return true
+    return !!(found && found.position && !parkedCellSkipped(ctx, found.position, bot))
   } catch (_) {
     return true
   }
@@ -415,7 +423,7 @@ function planForage(bot, ctx) {
   try { found = bring.findAnimal(bot, null) } catch (_) { found = null }
   if (found) {
     const drop = bring.PREY_DROPS[found.name] || null
-    if (drop && huntAllowed(bot, ctx, drop) && parkedHuntOk(ctx, found)) {
+    if (drop && huntAllowed(bot, ctx, drop) && parkedHuntOk(ctx, found, bot)) {
       // Under the reserve a hunt is one kill: a full batch would overflow
       // the checked stack room onto new slots.
       let reserved = false
@@ -701,7 +709,7 @@ function forage(bot, ctx, target, state) {
         // Parked re-target (vmzq.3 R4): the in-leg find must pass the
         // same gate as planForage, or each kill re-centers a 48-block
         // hop away from home (03 major). replan already applies it.
-        if (!found || found.name !== t.name || !parkedHuntOk(ctx, found)) {
+        if (!found || found.name !== t.name || !parkedHuntOk(ctx, found, bot)) {
           if (!replan(bot, ctx, f, bp)) return
           return
         }

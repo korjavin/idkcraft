@@ -23,7 +23,7 @@ function mockBot() {
   const chats = []
   const bot = {
     calls, chats,
-    username: 'IdkBot', players: {}, entities: {},
+    username: 'IdkBot', players: { Owner: { username: 'Owner' } }, entities: {},
     spawnPoint: pos(0, 64, 0),
     entity: { position: pos(0, 64, 0) },
     _moving: false,
@@ -455,5 +455,115 @@ describe('explore depth floor (atl.23)', () => {
     } finally { console.log = origLog }
     assert.equal(bot.calls.goals[bot.calls.goals.length - 1].constructor.name, 'GoalXZ')
     assert.ok(!ctx.stuck || ctx.stuck.key !== 'explore:climb:48', 'no second climb escape at the same spot')
+  })
+})
+
+describe('explore idle alone (vmzq.59)', () => {
+  function quiet(fn) {
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => { logs.push(String(m)) }
+    try { fn() } finally { console.log = origLog }
+    return logs
+  }
+  // Rings 16/32/64 fully visited: the next pick is ring 128 unless capped.
+  function ringsVisited(ctx) {
+    ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0 }
+    for (const r of [16, 32, 64]) {
+      for (let a = 0; a < 8; a++) {
+        const x = Math.round(r * Math.sin(a * Math.PI / 4))
+        const z = Math.round(-r * Math.cos(a * Math.PI / 4))
+        ctx.explore.visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
+      }
+    }
+  }
+
+  it('nobody online, no task: no target beyond 64; with a player online ring 128 is picked', () => {
+    const online = mockBot()
+    const c1 = homeCtx()
+    ringsVisited(c1)
+    explore(online, c1, null, null)
+    assert.deepEqual(c1.explore.target, { x: 0, z: -128 })
+
+    const alone = mockBot()
+    alone.players = { IdkBot: { username: 'IdkBot' } }
+    const c2 = homeCtx()
+    ringsVisited(c2)
+    const logs = quiet(() => explore(alone, c2, null, null))
+    assert.equal(c2.explore.target, null)
+    assert.equal(c2.stepStatus, 'done')
+    assert.deepEqual(logs, ['explore done: all chunks within 64 blocks visited'])
+  })
+
+  it('an owner bring order alone keeps the full spiral', () => {
+    const bot = mockBot()
+    bot.players = {}
+    const ctx = homeCtx()
+    ctx.bring = { item: 'white_wool' }
+    ringsVisited(ctx)
+    explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.explore.target, { x: 0, z: -128 })
+  })
+
+  it('a far leg pending when the roster empties is cancelled and re-picked within 64', () => {
+    const bot = mockBot()
+    const ctx = homeCtx()
+    ringsVisited(ctx)
+    explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.explore.target, { x: 0, z: -128 })
+    bot.players = {}
+    quiet(() => explore(bot, ctx, null, null))
+    assert.equal(ctx.explore.target, null)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.pathfinder.goal, null, 'the far GoalXZ is cleared')
+  })
+
+  it('roofed 10 under the anchor surface alone: the leg drops, the bot climbs to anchor-8; not re-picked', () => {
+    const bot = mockBot() // blockAt: stone everywhere = roofed
+    const ctx = homeCtx() // home y 64 -> alone floor 56 (atl.23 floor 48)
+    explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.explore.target, { x: 0, z: -16 })
+    bot.players = {}
+    bot.entity.position = pos(5, 54, -5)
+    const logs = quiet(() => { explore(bot, ctx, null, null); explore(bot, ctx, null, null) })
+    assert.deepEqual(logs, ['explore too deep y=54 floor=56'])
+    const last = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(last.constructor.name, 'GoalY')
+    assert.equal(last.y, 56)
+    assert.ok(ctx.explore.visited.has('0,-1'), 'the dropped leg chunk is consumed')
+    for (let i = 0; i < 10; i++) quiet(() => explore(bot, ctx, null, null))
+    assert.equal(ctx.stepStatus, 'failed:too-deep')
+    assert.equal(ctx.stuck.key, 'explore:climb:56')
+    bot.entity.position = pos(5, 56, -5)
+    explore(bot, ctx, null, null)
+    assert.notDeepEqual(ctx.explore.target, { x: 0, z: -16 })
+  })
+
+  it('forage picker skips cells beyond 64 when idle alone; online, or alone pre-home, it does not', () => {
+    const forage = require('../src/behaviours/forage')
+    const far = { x: 100, z: 0 }
+    const near = { x: 40, z: 0 }
+    const alone = mockBot()
+    alone.players = {}
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true } }
+    assert.equal(forage.parkedCellSkipped(ctx, far, alone), true)
+    assert.equal(forage.parkedCellSkipped(ctx, near, alone), false)
+    assert.equal(forage.parkedCellSkipped(ctx, far, mockBot()), false, 'someone online: unbound')
+    assert.equal(forage.parkedCellSkipped({}, far, alone), false, 'alone with no anchor: unbound (parked keeps its no-anchor skip)')
+    assert.equal(forage.parkedCellSkipped({ home: { site: { x: 0, y: 64, z: 0 }, built: false } }, far, alone), false, 'active task: not idle')
+  })
+
+  it('same depth with a player online, or under open sky alone: no climb (normal path)', () => {
+    const online = mockBot()
+    online.entity.position = pos(5, 54, -5)
+    explore(online, homeCtx(), null, null)
+    assert.equal(online.calls.goals[0].constructor.name, 'GoalXZ')
+
+    const sky = mockBot()
+    sky.players = {}
+    sky.blockAt = (p) => (p.y > 54 ? { name: 'air', boundingBox: 'empty' } : { name: 'stone', boundingBox: 'block' })
+    sky.entity.position = pos(5, 54, -5)
+    explore(sky, homeCtx(), null, null)
+    assert.equal(sky.calls.goals[0].constructor.name, 'GoalXZ')
   })
 })
