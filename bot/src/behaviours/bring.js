@@ -73,8 +73,9 @@ function dropFor(blockName) {
 // Only ores and logs are fetchable (the bead's resources): anything else
 // (stone->cobble, grass->dirt, ...) drops a different item, so the drop
 // count would never grow and the order would mine the area forever.
+// Sand drops itself (g0z.37: castle glass); gravel stays out (junk).
 function isBringable(blockName) {
-  return blockName.endsWith('_ore') || blockName.endsWith('_log')
+  return blockName.endsWith('_ore') || blockName.endsWith('_log') || blockName === 'sand' || blockName === 'red_sand'
 }
 
 // The share keep-list and plan live in bringitem.js (did.4 split); the

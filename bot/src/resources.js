@@ -143,6 +143,16 @@ function scan(bot, ctx, opts) {
   } catch (_) {
     // coal is best-effort
   }
+  // g0z.37: sand (castle glass) in its own small scan, same COAL_COUNT cap,
+  // so a beach cannot crowd ores/logs out.
+  try {
+    const sandIds = scout.resolveBlockIds(bot, 'sand').concat(scout.resolveBlockIds(bot, 'red_sand'))
+    if (sandIds.length > 0) {
+      found = found.concat(bot.findBlocks({ matching: sandIds, maxDistance: radius, count: scout.COAL_COUNT }) || [])
+    }
+  } catch (_) {
+    // sand is best-effort
+  }
   const spots = []
   for (const p of found) {
     let name = null
