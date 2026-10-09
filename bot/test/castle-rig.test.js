@@ -535,6 +535,12 @@ describe('castle-replay.js time resync (idkcraft-vmzq.45)', () => {
     r.onPacket(bot, full(36500), 400) // a forward set from day to night: silent
     r.onPacket(bot, full(30000), 500) // a backward set from night to day: silent
     assert.equal(events.length, 2)
+    // Asleep by ~12600 the skip often lands while still dusk: a dawn too.
+    const d = []
+    const k = createTimeResync({ write: false, onEvent: (ev) => d.push(ev) })
+    k.onPacket(bot, full(12590), 0)
+    k.onPacket(bot, full(24000), 100)
+    assert.deepEqual(d.map((e) => [e.event, !!e.skip]), [['dawn', true]])
     // Write mode queues it for the live tick like any crossing.
     const w = createTimeResync({ onEvent: (ev) => events.push(ev) })
     w.onPacket(bot, full(13500), 0)
