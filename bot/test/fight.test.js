@@ -71,6 +71,22 @@ describe('perception hostile facts', () => {
     assert.equal(state.hostile_near_player, false) // zombie->player is 8 blocks
   })
 
+  it('counts zombie_villager/guardian/etc as hostile; a villager is not (vmzq.56)', () => {
+    for (const name of ['zombie_villager', 'guardian', 'elder_guardian', 'wither_skeleton', 'magma_cube']) {
+      const bot = mockBot()
+      const mob = mobEntity(1, name, 3)
+      bot.entities = { 1: mob }
+      const state = buildState(bot, playerEntity(10), null)
+      assert.equal(state.nearby_hostiles, 1, name)
+      assert.equal(state.hostile, mob, name)
+    }
+    const bot = mockBot()
+    bot.entities = { 1: mobEntity(1, 'villager', 3) }
+    const state = buildState(bot, playerEntity(10), null)
+    assert.equal(state.nearby_hostiles, 0)
+    assert.equal(state.hostile, null)
+  })
+
   it('marks hostile_near_player when the mob is close to the player', () => {
     const bot = mockBot()
     bot.entities = { 1: mobEntity(1, 'zombie', 8) }
