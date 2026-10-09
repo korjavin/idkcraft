@@ -425,7 +425,10 @@ CASTLE-RIG residence night <n>: entered=yes@<s>s|no, slept=yes|no, shelter=<epis
 at dawn, `dawn-exit=<s>s` when the bot first stands off the residence
 floors after it, and the same lines with `, PASS|FAIL` at the window end
 (pass = entered + slept + 0 shelter + 0 deaths + a dawn exit; a night cut
-by the window is `(partial)` and fails). The verdict line gains
+by the window is `(partial)` and fails). The bot sleeps alone, so the
+server skips the night: that forward clock jump out of the night is a
+dawn (`CASTLE-RIG time: dawn ... (sleep skip)`, for `--night` too), and
+the 3 nights finish well before 68 min. The verdict line gains
 `, seeded=1722/1722, residence=<pass>/<nights>`, the record `seed` and
 `residence`. The 3-night acceptance (night 3's dawn lands at 60 min, the
 8 extra minutes leave room for the dawn exit):

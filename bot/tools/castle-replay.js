@@ -289,7 +289,16 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
         st.anchor = tot; st.rate = Number(hit.rate) || 0; st.empties = 0; st.dim = cur
         st.pending = null // a new anchor invalidates any queued crossing
         if (prev != null && Math.abs(tot - prev) > RESYNC_JUMP_TICKS) {
+          const was = st.word
           st.word = resyncWord(daytime()) // time-set jump (a night->day set is not a dawn)
+          // g0z.33 revmux 01: a FORWARD jump out of dusk/night into day is
+          // the server's sleep skip (the bot alone in bed) — a dawn, or the
+          // night it slept through never closes. Backward sets stay silent.
+          if (onEvent && tot > prev && (was === 'dusk' || was === 'night') && st.word === 'day') {
+            const ev = { event: 'dawn', server: daytime(), at: now, skip: true }
+            if (write) st.pending = ev
+            else onEvent({ ...ev, bot: bot && bot.time ? bot.time.timeOfDay : null })
+          }
           return
         }
         crossed(bot, now) // full packet: mineflayer already wrote server truth
@@ -562,7 +571,7 @@ async function main() {
     onEvent: (ev) => {
       const plusS = Math.round((ev.at - timeT0) / 1000)
       seen.timeEvents.push({ event: ev.event, server: ev.server, bot: ev.bot, plusS })
-      origLog(`CASTLE-RIG time: ${ev.event} server=${ev.server} bot=${ev.bot} +${plusS}s`)
+      origLog(`CASTLE-RIG time: ${ev.event} server=${ev.server} bot=${ev.bot} +${plusS}s${ev.skip ? ' (sleep skip)' : ''}`)
       if (night) night.onEvent(ev)
       if (resNights) resNights.onEvent(ev, Math.round((ev.at - winT0) / 1000))
     },

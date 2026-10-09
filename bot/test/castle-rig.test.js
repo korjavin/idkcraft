@@ -524,6 +524,27 @@ describe('castle-replay.js time resync (idkcraft-vmzq.45)', () => {
     assert.equal(events[0].bot, 10)
   })
 
+  it('a forward jump out of the night is the sleep skip: one dawn (g0z.33 revmux 01)', () => {
+    const bot = mkBot()
+    const events = []
+    const r = createTimeResync({ write: false, onEvent: (ev) => events.push(ev) })
+    r.onPacket(bot, full(12990), 0)
+    r.onPacket(bot, empty(), 200) // 13010: nightfall
+    r.onPacket(bot, full(24000), 300) // everyone asleep: the server skips to morning
+    assert.deepEqual(events.map((e) => [e.event, e.server, !!e.skip]), [['nightfall', 13010, false], ['dawn', 0, true]])
+    r.onPacket(bot, full(36500), 400) // a forward set from day to night: silent
+    r.onPacket(bot, full(30000), 500) // a backward set from night to day: silent
+    assert.equal(events.length, 2)
+    // Write mode queues it for the live tick like any crossing.
+    const w = createTimeResync({ onEvent: (ev) => events.push(ev) })
+    w.onPacket(bot, full(13500), 0)
+    w.onPacket(bot, empty(), 100) // word = night
+    w.onPacket(bot, full(48000), 200)
+    w.apply(bot)
+    w.onTick(bot)
+    assert.deepEqual([events[2].event, events[2].skip], ['dawn', true])
+  })
+
   it('track mode reports crossings immediately with the live clock', () => {
     const bot = mkBot('overworld', 11995) // mineflayer's own value, untouched by us
     const events = []
