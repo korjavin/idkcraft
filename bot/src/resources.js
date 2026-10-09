@@ -13,6 +13,7 @@
 
 const Vec3 = require('vec3')
 const scout = require('./behaviours/scout')
+const castle = require('./castle')
 
 const MAX_ITEMS = 256
 const SCAN_RADIUS = 48 // same reach as gather's FIND_RADIUS
@@ -39,6 +40,11 @@ function noteSpots(ctx, spots, now) {
   for (const s of spots) {
     if (!s || typeof s.x !== 'number' || typeof s.name !== 'string') continue
     const k = scout.keyOf(s)
+    // g0z.34: a laid castle block (frame log) is never a find — every
+    // reader (forage, castlefetch, goal options) walked to it and only the
+    // dig guard refused, after the climb onto the castle. A re-note drops
+    // a stale entry; restore runs after the castle (memory.js order).
+    if (ctx.castle && castle.protects(ctx.castle, s, s.name)) { mem.items.delete(k); continue }
     if (mem.items.has(k)) mem.items.delete(k)
     else added++
     const at = typeof s.at === 'number' && Number.isFinite(s.at) ? s.at : t
