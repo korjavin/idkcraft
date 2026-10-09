@@ -78,10 +78,13 @@ function castleWoodOpen(ctx) {
 // at/above NEED_LOGS must still convert — conversion is what frees the log
 // slot, and the depositPlan/surplusWood banking below still caps logs at
 // LOG_KEEP. Fail-open: an unreadable inventory reads empty, the old
-// behaviour.
+// behaviour. Built home only, castle phase ignored (ipn.17): a complete
+// castle used to lift the ceiling and craft converted logs into a 13-stack
+// plank pile, tossing sticks for room. Pre-house the budget needs every
+// plank packed.
 function woodCapped(bot, ctx) {
   try {
-    if (!castleWoodOpen(ctx)) return false
+    if (!(ctx && ctx.home && ctx.home.built)) return false
     return countItems(bot, (n) => n.endsWith('_planks')) >= PLANK_KEEP
   } catch (_) {
     return false
