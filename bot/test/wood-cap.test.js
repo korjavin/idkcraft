@@ -66,7 +66,10 @@ describe('wood ceiling: pack keeps (idkcraft-g0z.26)', () => {
     assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_log', count: 14 }]), openCtx()), false)
     assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_log', count: 64 }]), openCtx()), false)
     assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 700 }]), {}), false, 'no castle: no ceiling')
-    assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 700 }]), openCtx({ castle: { phase: 'complete' } })), false, 'done castle: no ceiling')
+    assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 700 }]), openCtx({ castle: { phase: 'complete' } })), true, 'done castle: the ceiling stays (ipn.17)')
+    assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 64 }]), openCtx({ castle: { phase: 'complete' } })), true)
+    assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 63 }]), openCtx({ castle: { phase: 'complete' } })), false)
+    assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 200 }]), openCtx({ castle: { phase: 'complete' }, home: { built: false } })), false, 'done castle, pre-house: no ceiling')
     assert.equal(stockpile.woodCapped(packBot([{ name: 'oak_planks', count: 700 }]), openCtx({ home: { built: false } })), false, 'pre-house: the budget needs it')
     assert.equal(stockpile.woodCapped(null, openCtx()), false)
     assert.equal(stockpile.woodCapped(packBot([]), null), false)
@@ -127,6 +130,14 @@ describe('wood ceiling: menu gates (idkcraft-g0z.26)', () => {
     const bot = packBot([{ name: 'oak_planks', count: 70 }, { name: 'oak_log', count: 14 }])
     assert.equal(F('craft', facts, bot, openCtx()), false)
     assert.equal(goal.stepWhy('craft', facts, bot, openCtx(), ''), 'craft: wood store full, banking the surplus')
+  })
+
+  it('a complete castle keeps the craft gate shut (ipn.17)', () => {
+    const facts = { logs: 14, maxPlanks: 64, table: 1, door: 0, tablePlaced: false, castle: 'done' }
+    const bot = packBot([{ name: 'oak_planks', count: 64 }, { name: 'oak_log', count: 14 }])
+    const done = openCtx({ castle: { phase: 'complete' } })
+    assert.equal(F('craft', facts, bot, done), false)
+    assert.equal(goal.stepWhy('craft', facts, bot, done, ''), 'craft: wood store full, banking the surplus')
   })
 
   it('planForage skips remembered logs past the ceiling, still digs ore', () => {
@@ -200,6 +211,20 @@ describe('wood ceiling: craft conversion guard (idkcraft-g0z.26)', () => {
     assert.equal(ctx.stepStatus, 'done')
     assert.deepEqual(bot.calls.craft, [])
     assert.deepEqual(bot.lines, [])
+  })
+
+  it('a complete castle: 36/36 with a plank pile converts nothing, tosses no sticks (ipn.17)', () => {
+    const items = [{ name: 'oak_log', count: 27 }, { name: 'stick', count: 4 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 }]
+    while (items.length < 36) items.push({ name: 'oak_planks', count: 64 })
+    const bot = craftBot({ items, recipes: { oak_planks: recipeFor('oak_planks', 4) } })
+    const tossed = []
+    bot.tossStack = async (i) => { tossed.push(i.name) }
+    bot.toss = async (_t, _m, _c) => { tossed.push('toss') }
+    const ctx = { ...openCtx({ castle: { phase: 'complete' } }), lastGoalKey: '', stepStatus: 'running', home: { ...openCtx().home, table: { x: 9, y: 64, z: 9 } } }
+    craft(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(bot.calls.craft, [], 'no planks batch')
+    assert.deepEqual(tossed, [], 'no junk toss')
   })
 
   it('the table still crafts past the ceiling (logs untouched)', async () => {
