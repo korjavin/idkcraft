@@ -24,6 +24,10 @@
 #   the bot adopts it as its residence (memory home kind=castle) and the
 #   verdict reports per night entered/slept/shelter/deaths/dawn-exit; run
 #   with --night 68 for the 3-night acceptance),
+#   CASTLE_IDLE (1 = 6x7.24 idle-alone oracle: implies CASTLE_SEED=complete,
+#   no order, nobody online; the verdict adds idle-maxdist/idle-miny/
+#   idle-underground-s and a `CASTLE-RIG idle: PASS|FAIL` line — FAIL on
+#   maxdist > 80, miny < the surface floor, any death or a FAIL night),
 #   CASTLE_SAND (1 = g0z.38: a sand patch beside the pad; with
 #   CASTLE_SEED=complete the verdict adds panes=<laid>/44),
 #   CASTLE_BLOCKED (0 = none; N > 0 seeds N blocked plan cells after the
@@ -47,7 +51,7 @@
 #   printed), GOAL_WATCHDOG_MS / GOAL_COMMIT_MS (pass through when set),
 #   CASTLE_INIT_MEMORY/CASTLE_MAX_MEMORY (JVM heap, default 512M/768M),
 #   CASTLE_VIEW_DISTANCE/CASTLE_SIM_DISTANCE (default 6/4).
-# Exit: 0 = measured (even 0 laid — the line says so),
+# Exit: 0 = measured (even 0 laid — the line says so), 1 = CASTLE_IDLE FAIL,
 #   2 = environment/setup failure, 130 = interrupted (never a pass).
 # INT/TERM/EXIT (idkcraft-ek69) kill every descendant (server client, node,
 # tee), docker rm -f this slot's container and drop the lock: the next run
@@ -118,6 +122,8 @@ KIT="${CASTLE_KIT:-empty}"
 case "$KIT" in empty|seeded|junk|valuables) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables, got '$KIT'"; exit 2 ;; esac
 SEED="${CASTLE_SEED:-}"
 case "$SEED" in ''|complete) ;; *) echo "CASTLE_SEED: want ''|complete, got '$SEED'"; exit 2 ;; esac
+IDLE="${CASTLE_IDLE:-}"
+case "$IDLE" in ''|0) IDLE= ;; 1) SEED=complete ;; *) echo "CASTLE_IDLE: want ''|0|1, got '$IDLE'"; exit 2 ;; esac
 BLOCKED="${CASTLE_BLOCKED:-0}"
 case "$BLOCKED" in ''|*[!0-9]*) echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2 ;; esac
 { [ "$BLOCKED" -ge 0 ] && [ "$BLOCKED" -le 16 ]; } || { echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2; }
@@ -300,7 +306,7 @@ boot() {
 }
 boot
 export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
+export CASTLE_IDLE="$IDLE" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in
