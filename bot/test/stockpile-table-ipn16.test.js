@@ -160,7 +160,7 @@ describe('stockpile chest without a standing table (idkcraft-ipn.16)', () => {
     } finally { console.log = orig }
     assert.equal(ctx.stepStatus, 'failed:no-chest')
     assert.deepEqual(bot.calls.craft, [])
-    assert.ok(logs.some((l) => l.startsWith('stockpile failed no-chest') && l.includes('no-table')), `logs: ${logs}`)
+    assert.ok(logs.some((l) => l.startsWith('stockpile failed no-chest no-table: ') && l.includes("can't make chest")), `logs: ${logs}`)
   })
 
   it('a standing home table keeps the old path: no table placed, chest crafted there', async () => {
@@ -168,9 +168,20 @@ describe('stockpile chest without a standing table (idkcraft-ipn.16)', () => {
     bot.cells['4,64,2'] = 'crafting_table'
     const ctx = homeCtx()
     ctx.home.table = { x: 4, y: 64, z: 2 }
+    ctx.craftany = { key: 'chestx1' } // a run left over from the table leg
     await drive(bot, ctx, () => !!ctx.home.chest)
     assert.deepEqual(bot.calls.craft, ['chest'])
     assert.deepEqual(bot.calls.place, ['chest'])
-    assert.equal(ctx.craftany, undefined, 'craftany never ran')
+    assert.equal(ctx.craftany, null, 'the standing table drops the stale run')
+  })
+
+  it('far from the chest spot: walks there before craftany places a table', () => {
+    const bot = fakeBot([{ name: 'oak_planks', count: 16 }])
+    bot.entity.position = pos(40, 64, 40)
+    const ctx = homeCtx()
+    stockpile(bot, ctx, null, {})
+    assert.equal(bot.pathfinder.goal && bot.pathfinder.goal.constructor.name, 'GoalNear')
+    assert.deepEqual(bot.calls.craft, [])
+    assert.equal(ctx.craftany, undefined)
   })
 })
