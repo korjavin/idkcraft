@@ -60,7 +60,7 @@ describe('residence castle: all 4 rotations', () => {
   // The NW tower (x7..11, z7..11, rot 0): its doorway hole into the body
   // (keep-clear air at feet level) and a cell of its stairwell shaft.
   const towerDoor = bp.PLAN.find((c) => c.kind === 'air' && c.dx === 11 && c.dy === 0 && c.dz === 9)
-  const shaft = { dx: 9, dy: 4, dz: 9 }
+  const shaft = { dx: 9, dy: 4, dz: 8 } // the open z8 row: no floor at dy 3
   const toWorld = (home, c) => {
     const r = castle.rotatePlan([{ ...c, kind: 'air' }], home.rot, 2)[0]
     return { x: site.x + r.dx, y: site.y + r.dy, z: site.z + r.dz }
