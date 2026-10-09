@@ -690,7 +690,9 @@ describe('self-trap rule (idkcraft-drq)', () => {
     } finally { console.log = orig }
   })
 
-  it('forage strikes (keeps memory of) a below-feet ore in a pit instead of digging down', () => {
+  it('forage strikes (keeps memory of) a below-feet ore in a pit over air instead of digging down', () => {
+    // ipn.18: over PROVEN solid the dig goes ahead (forage.test.js); air
+    // under the ore keeps the strike.
     const forage = require('../src/behaviours/forage')
     let digs = 0
     const bot = {
@@ -698,7 +700,8 @@ describe('self-trap rule (idkcraft-drq)', () => {
       inventory: { items: () => [] },
       blockAt: (p) => {
         const fx = Math.floor(p.x) === 0 && Math.floor(p.z) === 0
-        const n = (Math.floor(p.y) === 63 && !fx) ? 'dirt' : 'coal_ore'
+        const under = Math.floor(p.x) === 2 && Math.floor(p.y) === 61 && Math.floor(p.z) === 0
+        const n = under ? 'air' : (Math.floor(p.y) === 63 && !fx) ? 'dirt' : 'coal_ore'
         return { name: n, position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
       },
       dig: async () => { digs++ },

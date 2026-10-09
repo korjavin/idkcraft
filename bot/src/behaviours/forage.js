@@ -25,7 +25,7 @@ const resources = require('../resources')
 const bring = require('./bring')
 const fightMod = require('./fight')
 const detour = require('../detour')
-const { say, clearGoal, botPos, denyReason, logDeny } = require('./util')
+const { say, clearGoal, botPos, denyReason, logDeny, solidBelow, protectedReason } = require('./util')
 
 const FORAGE_WANT = 8 // new drops per step, then deliver
 const WALK_STALL_TICKS = 10
@@ -925,7 +925,18 @@ function forage(bot, ctx, target, state) {
       if (!replan(bot, ctx, f, bp)) return
       return
     }
-    const fDeny = denyReason(bot, block, ctx) // idkcraft-drq: never strip owner structures
+    let fDeny = denyReason(bot, block, ctx) // idkcraft-drq: never strip owner structures
+    if (fDeny === 'below-feet' && solidBelow(bot, t.pos)) {
+      // ipn.18: bring's atl.20 exemption — ore under the feet over PROVEN
+      // solid is a safe 1-block drop, so dig it instead of striking the
+      // vein cell by cell (prod: 19 selftrap refusals on iron_ore in 4 h).
+      // The trap rule masks protection, so unmask it first (bring revmux
+      // 01 core-1). Air/water/unknown below keeps the strike.
+      fDeny = protectedReason(bot, block, ctx) !== null ? 'protected' : null
+      if (!fDeny) {
+        try { console.log(`below-feet ${t.name} at ${Math.floor(t.pos.x)} ${Math.floor(t.pos.y)} ${Math.floor(t.pos.z)} onto solid — digging (atl.20)`) } catch (_) { /* logging never breaks a dig */ }
+      }
+    }
     if (fDeny) {
       logDeny(block, fDeny)
       try {
