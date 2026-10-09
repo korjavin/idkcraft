@@ -203,10 +203,10 @@ boot() {
   exec 9<> "$FIFO"
   sh "$RIGDIR/START.sh" "$VARIANT" >>"$LOG" 2>&1 <&9 &
   SRVPID=$!
-  echo -n "wait: rcon"
+  printf "wait: rcon"
   for _ in $(seq 1 36); do
     if docker exec "$CONTAINER" rcon-cli "list" >/dev/null 2>&1; then echo " up"; break; fi
-    echo -n "."; sleep 5
+    printf "."; sleep 5
   done
   docker exec "$CONTAINER" rcon-cli "list" >/dev/null 2>&1 || { echo " rig never came up (see $LOG)"; exit 2; }
   # Night and mobs are the measurement: normal difficulty, the clock runs.

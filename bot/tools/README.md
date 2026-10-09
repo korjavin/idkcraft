@@ -498,8 +498,9 @@ work nights=<n> slept=<n> inside=<n> dugin=<n> deaths=<n> banked=<items>/h broug
 ```
 
 Counters parse the bot's own lines only (`verdict(lines, mins)` in
-`work-replay.js`, pure): `nights` = server nightfalls (the castle-replay
-time resync, server truth), `slept` = `sleeping in my bed` chats,
+`work-replay.js`, pure): `nights` = server dusks (the castle-replay
+time resync, server truth; a bed at dusk skips the night before
+nightfall ever crosses), `slept` = `sleeping in my bed` chats,
 `inside` = `home for the night` chats, `dugin` = `shelter dig-in done`,
 `deaths` = `death health=` lines, `banked` = items in `forage done:
 banked …` per hour of window, `brought` = `brought …`/`stockpiled …`

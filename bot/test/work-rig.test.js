@@ -112,10 +112,11 @@ describe('work-replay.js verdict', () => {
 
   it('counts the synthetic 40-min log into one line', () => {
     const lines = [
+      'WORK-RIG time: dusk server=12001 bot=12001 +380s',
       'WORK-RIG time: nightfall server=13001 bot=13001 +400s',
       'say: home for the night',
       'say: sleeping in my bed',
-      'WORK-RIG time: nightfall server=13002 bot=13000 +800s',
+      'WORK-RIG time: dusk server=12000 bot=12000 +780s',
       'shelter dig-in done',
       'shelter dig-in failed:protected',
       'death health=0 hostiles=2 at 1 64 2 nearest=zombie 1.2',

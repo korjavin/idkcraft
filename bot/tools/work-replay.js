@@ -11,7 +11,8 @@
 // verdict line plus a JSON record (WORK_OUT):
 //   work nights=<n> slept=<n> inside=<n> dugin=<n> deaths=<n> banked=<items>/h brought=<n> steps=<top-4> fail=<top-3>
 // Counters come from the bot's own log/chat lines only (verdict(), pure):
-//   nights  — server nightfalls (castle-replay time resync, server truth)
+//   nights  — server dusks (castle-replay time resync, server truth; a bed
+//             at dusk skips the night before nightfall ever crosses)
 //   slept   — 'sleeping in my bed' chats
 //   inside  — 'home for the night' chats (inside the shut house at night)
 //   dugin   — 'shelter dig-in done' (dug in instead of going home)
@@ -56,7 +57,7 @@ function verdict(lines, mins) {
   const bump = (o, k) => { o[k] = (o[k] || 0) + 1 }
   for (const line of lines) {
     let m
-    if (/^WORK-RIG time: nightfall\b/.test(line)) c.nights++
+    if (/^WORK-RIG time: dusk\b/.test(line)) c.nights++
     else if (/^say: sleeping in my bed\b/.test(line)) c.slept++
     else if (/^say: home for the night\b/.test(line)) c.inside++
     else if (/^say: (brought|stockpiled) /.test(line)) c.brought++
@@ -264,6 +265,7 @@ async function main() {
   if (!kept.some((l) => /^say: autonomous on\b/.test(l))) fail('order', 'no autonomous ack')
   try { guide.quit('ordered') } catch (_) { /* quit best-effort */ }
 
+  const winStart = kept.length // setup chats (ore finds, the ack) stay out of the verdict
   const t0 = Date.now()
   const endAt = t0 + MINS * 60000
   origLog(`WORK-RIG window: ${MINS} min, ends ${new Date(endAt).toISOString()}`)
@@ -275,10 +277,10 @@ async function main() {
       let pos = '?'
       try { const p = follower.entity.position; pos = `${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}` } catch (_) { /* pos best-effort */ }
       const c = tickCtx() || {}
-      origLog(`WORK-RIG sample t=${Math.round((Date.now() - t0) / 60000)}min pos=${pos} step=${c.step} hp=${follower.health} food=${follower.food} day=${timeResync.daytime()} ${verdict(kept, MINS).line}`)
+      origLog(`WORK-RIG sample t=${Math.round((Date.now() - t0) / 60000)}min pos=${pos} step=${c.step} hp=${follower.health} food=${follower.food} day=${timeResync.daytime()} ${verdict(kept.slice(winStart), MINS).line}`)
     }
   }
-  const v = verdict(kept, MINS)
+  const v = verdict(kept.slice(winStart), MINS)
   try {
     fs.writeFileSync(OUT, JSON.stringify({
       date: new Date().toISOString(), mins: MINS, tag: TAG, gitsha: process.env.WORK_GITSHA || '?',
