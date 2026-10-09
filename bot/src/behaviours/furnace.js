@@ -26,9 +26,17 @@ const residence = require('../residence')
 const FURNACE_SPOTS = residence.FURNACE_SPOTS
 
 // Default smelt job (g0z.36): raw iron -> ingots. A caller sets
-// ctx.furnaceJob = { input, output } before the first tick of a run
-// (castle glass: sand -> glass); freshRun copies it.
+// ctx.furnaceJob = { input, output } before EVERY furnace tick of its leg
+// (castle glass: sand -> glass); each tick consumes it, so a job never
+// leaks into gear's iron leg, and a run of another job restarts fresh.
 const IRON_JOB = { input: 'raw_iron', output: 'iron_ingot' }
+
+// The job this tick asks for (consumed), else iron.
+function takeJob(ctx) {
+  const j = ctx.furnaceJob
+  if (j !== undefined) ctx.furnaceJob = null
+  return j && typeof j.input === 'string' && typeof j.output === 'string' ? { input: j.input, output: j.output } : IRON_JOB
+}
 
 const FURNACE_REACH = craftMod.TABLE_REACH // window ops need table-like proximity
 const ORE_PER_FUEL = 8 // one coal smelts eight ore
@@ -60,9 +68,7 @@ function fail(ctx, reason) {
   } catch (_) { /* flag best-effort */ }
 }
 
-function freshRun(ctx) {
-  const j = ctx && ctx.furnaceJob
-  const job = j && typeof j.input === 'string' && typeof j.output === 'string' ? { input: j.input, output: j.output } : IRON_JOB
+function freshRun(job) {
   return { job, phase: 'ensure', smelted: 0, idleTicks: 0, winErrs: 0, walkTicks: 0, tookOnce: false, win: null, settled: false, result: null }
 }
 
@@ -342,16 +348,26 @@ function doSmelt(bot, ctx, f, spot) {
     try {
       if (!f.win) f.win = await bot.openFurnace(fblock)
       const win = f.win
+      const job = f.job || IRON_JOB
       const outNow = slotCount(win.outputItem())
-      const inN = slotCount(win.inputItem())
+      let inN = slotCount(win.inputItem())
+      // A shared station (castle kitchen): another job's leftover input
+      // jams putInput (destination full) — hand it back to the bag first.
+      if (inN > 0 && win.inputItem().name !== job.input) {
+        await win.takeInput()
+        inN = 0
+      }
       const fuelN = slotCount(win.fuelItem())
       // Burn state comes from output growth, not properties (see below).
       let took = false
       if (outNow > 0) {
+        const mine = win.outputItem().name === job.output // another job's leftover is cleared, never counted
         const got = await win.takeOutput()
-        f.smelted = (f.smelted || 0) + (got && typeof got.count === 'number' ? got.count : outNow)
-        f.idleTicks = 0
-        f.tookOnce = true
+        if (mine) {
+          f.smelted = (f.smelted || 0) + (got && typeof got.count === 'number' ? got.count : outNow)
+          f.idleTicks = 0
+          f.tookOnce = true
+        }
         took = true
       } else if (inN > 0) {
         // Slots only: property packets (progress/fuel) never arrive on
@@ -361,7 +377,7 @@ function doSmelt(bot, ctx, f, spot) {
       } else {
         f.idleTicks = 0
       }
-      const input = (f.job || IRON_JOB).input
+      const input = job.input
       const invOre = invCount(bot, input)
       const invCoal = invCount(bot, 'coal')
       const invChar = invCount(bot, 'charcoal')
@@ -449,13 +465,18 @@ function doSmelt(bot, ctx, f, spot) {
 }
 
 function furnace(bot, ctx, target, state) {
+  const job = takeJob(ctx)
   if (ctx.furnaceInFlight) return // exactly one op at a time
   if (ctx.stepStatus === 'done' || (ctx.stepStatus && String(ctx.stepStatus).startsWith('failed:'))) return // terminal: no second smelted line
   const bp = botPos(bot)
   if (!bp) return
   // A settled run never resumes spent: the next pick starts fresh
   // counters (core-4: equip's resetRunCounters shape).
-  if (!ctx.furnace || ctx.furnace.settled) ctx.furnace = freshRun(ctx)
+  if (ctx.furnace && !ctx.furnace.settled && ctx.furnace.job && ctx.furnace.job.input !== job.input) {
+    void shut(bot, ctx.furnace) // another job's run: drop it, its window too
+    ctx.furnace = null
+  }
+  if (!ctx.furnace || ctx.furnace.settled) ctx.furnace = freshRun(job)
   const f = ctx.furnace
   const spot = furnaceSpot(bot, ctx)
   if (!spot) {

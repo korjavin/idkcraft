@@ -25,6 +25,13 @@ function mockWindow(slots, log) {
       log.push(['takeOutput', it.count])
       return { ...it }
     },
+    async takeInput() {
+      const it = this.slots[0]
+      if (!it) throw new Error('empty input')
+      this.slots[0] = null
+      log.push(['takeInput', it.name, it.count])
+      return { ...it }
+    },
     async putInput(type, meta, count) {
       log.push(['putInput', type, count])
       const cur = this.slots[0]
@@ -583,13 +590,17 @@ describe('furnace smelt job (g0z.36: sand -> glass)', () => {
     const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, inv, blocks: { ...floorBlocks(), ...SPOT }, window: win })
     return { bot, log, win }
   }
-  const sandCtx = () => ({ home: { furnace: { x: 0, y: 64, z: 1 } }, furnaceJob: { input: 'sand', output: 'glass' } })
+  const SAND = { input: 'sand', output: 'glass' }
+  const sandCtx = () => ({ home: { furnace: { x: 0, y: 64, z: 1 } } })
+  // The caller's contract: set the job before every tick of its leg.
+  const tick = async (bot, ctx) => { ctx.furnaceJob = SAND; furnace(bot, ctx); await settle() }
   const sum = (log, op, id) => log.filter((e) => e[0] === op && e[1] === id).reduce((a, e) => a + e[2], 0)
 
   it('the default job stays iron', async () => {
     const { bot } = jobBot([{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 1 }])
     const ctx = { home: { furnace: { x: 0, y: 64, z: 1 } } }
-    await tick(bot, ctx)
+    furnace(bot, ctx) // no job set: iron
+    await settle()
     assert.deepEqual(ctx.furnace.job, { input: 'raw_iron', output: 'iron_ingot' })
   })
 
@@ -696,5 +707,75 @@ describe('furnace at a castle home (g0z.36: kitchen corner)', () => {
     const c = rel(home, { dx: 13, dy: 0, dz: 18 })
     const got = furnace.furnaceReady(mockBot({ blocks: { [k(c)]: 'furnace' } }), { home })
     assert.deepEqual(k(got), k(c))
+  })
+})
+
+describe('furnace job hygiene (g0z.36 01-review)', () => {
+  const SPOT = { '0,64,1': 'furnace' }
+  const SAND = { input: 'sand', output: 'glass' }
+  function jobBot(inv, slots) {
+    const log = []
+    const win = mockWindow(slots, log)
+    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, inv, blocks: { ...floorBlocks(), ...SPOT }, window: win })
+    return { bot, log, win }
+  }
+  const ctx0 = () => ({ home: { furnace: { x: 0, y: 64, z: 1 } } })
+
+  it('the job is consumed per tick: it never leaks into the next (iron) tick', async () => {
+    const { bot } = jobBot([{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 1 }], [null, null, null])
+    const ctx = ctx0()
+    ctx.furnaceJob = SAND
+    furnace(bot, ctx)
+    assert.equal(ctx.furnaceJob, null)
+    await settle()
+    assert.equal(ctx.stepStatus, 'done', 'no sand: the sand run is done')
+    ctx.stepStatus = 'running'
+    await tick(bot, ctx)
+    assert.deepEqual(ctx.furnace.job, { input: 'raw_iron', output: 'iron_ingot' })
+  })
+
+  it('an unsettled run of another job restarts fresh', async () => {
+    const { bot } = jobBot([{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 3 }], [null, null, null])
+    const ctx = ctx0()
+    await tick(bot, ctx) // iron run, unsettled
+    assert.equal(ctx.furnace.job.input, 'raw_iron')
+    ctx.furnaceJob = SAND
+    furnace(bot, ctx)
+    await settle()
+    assert.equal(ctx.furnace.job.input, 'sand')
+  })
+
+  it('another job\'s input is handed back before loading', async () => {
+    const { bot, log } = jobBot([{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 1 }], [{ name: 'sand', count: 18 }, null, null])
+    const ctx = ctx0()
+    await tick(bot, ctx)
+    assert.deepEqual(log[0], ['takeInput', 'sand', 18])
+    assert.ok(log.some(([op, id, n]) => op === 'putInput' && id === IDS.raw_iron && n === 8), JSON.stringify(log))
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
+  it('another job\'s output is cleared, never counted', async () => {
+    const { bot, log } = jobBot([], [null, null, { name: 'iron_ingot', count: 4 }])
+    const ctx = ctx0()
+    const lines = []
+    const orig = console.log
+    console.log = (l) => lines.push(l)
+    try { ctx.furnaceJob = SAND; furnace(bot, ctx); await settle() } finally { console.log = orig }
+    assert.ok(log.some(([op]) => op === 'takeOutput'))
+    assert.equal(ctx.furnace.smelted, 0)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(!lines.some((l) => String(l).startsWith('smelted ')), JSON.stringify(lines))
+  })
+
+  it('gear.tableBlock sees the castle storeroom table (no claim)', () => {
+    const residence = require('../src/residence')
+    const gear = require('../src/behaviours/gear')
+    const home = residence.castleHome({ site: { x: 100, y: 64, z: -50 }, rot: 3, blueprintVersion: 2 })
+    const t = residence.CASTLE.table(home)
+    const bot = mockBot({ blocks: { [`${t.x},${t.y},${t.z}`]: 'crafting_table' } })
+    const st = gear.tableBlock(bot, { home })
+    assert.ok(st, 'castle table found')
+    assert.deepEqual([st.pos.x, st.pos.y, st.pos.z], [t.x, t.y, t.z])
+    assert.equal(gear.tableBlock(mockBot({}), { home }), null, 'nothing standing: null')
   })
 })

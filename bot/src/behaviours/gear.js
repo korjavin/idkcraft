@@ -589,21 +589,10 @@ function stopSteering(bot, ctx) {
   } catch (_) { /* best-effort */ }
 }
 
-// Verified crafting table (craft pattern): the claim plus a live block read,
-// else null. Never trust the claim alone (mined table).
+// Verified crafting table: one reader with the furnace step (g0z.36), so
+// a castle home's storeroom table counts for every gear/craftany craft.
 function tableBlock(bot, ctx) {
-  try {
-    // First verified-standing (h9z): a ghost home claim must not shadow
-    // the standing roadside table (craft.js pattern).
-    for (const tablePos of [(ctx.home && ctx.home.table), (ctx && ctx.claimedTable)]) {
-      if (!tablePos || typeof tablePos.x !== 'number') continue
-      const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
-      if (block && block.name === 'crafting_table') return { block, pos: tablePos }
-    }
-    return null
-  } catch (_) {
-    return null
-  }
+  return require('./furnace').tableBlock(bot, ctx)
 }
 
 // ---- bucket fill (jsf.5) ----
