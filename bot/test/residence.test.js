@@ -101,6 +101,15 @@ describe('residence castle: all 4 rotations', () => {
       assert.ok(towerDoor, 'the NW tower doorway is a keep-clear cell')
       assert.equal(d.interior(home, toWorld(home, towerDoor)), false)
       assert.equal(d.interior(home, toWorld(home, shaft)), false)
+      // g0z.30: the ground stair steps are floor (a bot climbing to its
+      // bed never reads outside); the sleep cell is a floor beside the head.
+      for (const s of [{ dx: 8, dy: 1, dz: 12 }, { dx: 9, dy: 2, dz: 12 }, { dx: 10, dy: 3, dz: 12 }]) {
+        assert.equal(d.interior(home, toWorld(home, s)), true, `stair ${s.dx},${s.dy},${s.dz}`)
+      }
+      for (const b of beds) {
+        assert.ok(!plan.at.has(key(b.sleep)) && d.interior(home, b.sleep), `sleep cell ${key(b.sleep)}`)
+        assert.ok(Math.hypot(b.sleep.x - b.head.x, b.sleep.y - b.head.y, b.sleep.z - b.head.z) <= 1, 'sleep beside the head')
+      }
       assert.equal(d.interior(home, e.outside), false)
       // Plan cells: the chest and the torches.
       const rel = (c) => ({ x: site.x + c.dx, y: site.y + c.dy, z: site.z + c.dz })
