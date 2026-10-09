@@ -86,6 +86,8 @@ const IDLE_LOG_MS = 60000
 // long. Arrows land ~1/s and poison ticks every 1.25 s, so 5 s bridges a
 // few quiet ticks without fleeing stale shadows.
 const HURT_FRESH_MS = 5000
+const SHELTER_RELEASE_R = 3 // vmzq.58: melee range that releases an open shelter hold to fight
+const SHELTER_HURT_MS = 2000 // vmzq.58: ... or a hit this fresh with a hostile in the fight radius
 // Server-ping cadence while off the server (owner: rejoin ~5 s after the
 // first player appears), and the nobody-online grace before the bot quits
 // (one night-tick so a relogging player never sees it leave).
@@ -865,6 +867,25 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       try { dayNow = goal.timeWord(bot) === 'day' } catch (_) { dayNow = false }
       const dayDivert = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle &&
         ctx.inShelter && decision.action === 'fight' && !intruder && dayNow
+      // vmzq.58: an armed shelter that never enclosed (ground hold after a
+      // failed pillar and dig-in) idled next to a zombie until it died —
+      // one reflex swing does not kill it. A reachable hostile at melee
+      // range (or one within the fight radius right after a hit) releases
+      // the hold to fight; when it is gone the work tick re-runs the
+      // shelter step. Perched, dug-in and committed-dig holds keep the
+      // no-fight hold (shelterOpen).
+      if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) {
+        const hd = state.hostile_distance
+        const hurtNow = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < SHELTER_HURT_MS
+        const near = typeof hd === 'number' && state.hostile_reachable !== false &&
+          (hd <= SHELTER_RELEASE_R || (hurtNow && hd <= 8))
+        let open = false
+        try { open = near && homeMod.shelterOpen(ctx) } catch (_) { open = false }
+        if (open) {
+          console.log(`shelter release: hostile at ${hd.toFixed(1)}, hold not enclosed, fighting`)
+          ctx.inShelter = false
+        }
+      }
       if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) {
         // rw4.18: an exiting comehome doorway keeps its legs on day fight
         // ticks without an intruder — otherwise the exit stalls all day
