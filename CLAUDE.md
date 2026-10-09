@@ -137,6 +137,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - Never commit API keys or credentials to the repository.
   - The JEV API key is stored in stash at `secrets/jev-api-key` and passed to Portainer as `TYPESAFE_API_KEY`.
   - The bot must run with the stub brain whenever the key is absent.
+- **Step status:** new writes/parses of `ctx.stepStatus` (`done` / `failed:<reason>`) go through `bot/src/step.js` (`stepDone`/`stepFailed`/`failReason`/`isFinished`); convert existing ones in files a PR already touches.
 - **Simplicity (Ponytail rules):**
   - Smallest diff that meets acceptance criteria, no speculative abstractions beyond the single brain interface.
   - Server runs `ONLINE_MODE=false` + `ENFORCE_WHITELIST=TRUE` in iteration 1 so the bot does not need a Microsoft account.
