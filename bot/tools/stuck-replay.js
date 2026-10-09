@@ -738,7 +738,7 @@ async function main() {
       // canDig too: a timed-out meet walk leaks its
       // borrowed no-dig onto the shared Movements (resetNightStep precedent).
       c.home = null; c.comehome = null
-      c.buildSkip = []; c.buildFails = 0; c.buildFailIdx = -1; c.buildGoalIdx = -1; c.buildFarIdx = -1; c.buildFarFails = 0
+      c.buildSkip = []; c.buildSkipAt = {}; c.buildSkipRetry = null; c.buildFails = 0; c.buildFailIdx = -1; c.buildGoalIdx = -1; c.buildFarIdx = -1; c.buildFarFails = 0
       c.step = ''; c.stepStatus = null; c.stepFail = {}
       c.gather = null; c.forage = null; c.forageSkip = null; c.forageFinal = null
       c.gohome = null; c.stay = null; c.shelter = null; c.inShelter = false

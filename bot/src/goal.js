@@ -175,6 +175,12 @@ const MENU = {
       // window — a restored stale skip drops on the first decide, so a
       // deploy heals stale holes like the pre-persistence code did.
       try { buildMod.pruneBuildSkips(ctx) } catch (_) { /* prune best-effort */ }
+      // Last-pass retry (6x7.20): with every other cell standing this gate
+      // reads the holes as given up and never re-picks build, so the
+      // build-side retry alone never runs (rig: TIMEOUT over one skip).
+      try {
+        if (home && home.site && buildMod.nextCellIdx(bot, home, ctx.buildSkip, ctx) < 0 && !buildMod.isComplete(bot, home)) buildMod.retrySkipsOnce(ctx)
+      } catch (_) { /* retry best-effort */ }
       // No scannable origin (no home yet, or a home without site): nothing
       // is verifiable, so the whole wall+roof count counts.
       if (!home || !home.site) return facts.planks >= Math.min(PLANK_COUNT, 16)
