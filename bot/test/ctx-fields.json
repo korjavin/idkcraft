@@ -23,12 +23,6 @@
     ],
     "owner": "src/index.js"
   },
-  "askedKey": {
-    "writers": [
-      "src/goal.js"
-    ],
-    "owner": "src/goal.js"
-  },
   "autonomous": {
     "writers": [
       "src/index.js",
@@ -971,6 +965,12 @@
     ],
     "owner": "src/behaviours/deliver.js"
   },
+  "heldText": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
   "home": {
     "writers": [
       "src/behaviours/beds.js",
@@ -1430,6 +1430,7 @@
   },
   "retreatLatch": {
     "writers": [
+      "src/behaviours/home.js",
       "src/behaviours/retreat.js",
       "src/goal.js"
     ],
