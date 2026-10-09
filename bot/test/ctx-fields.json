@@ -1488,6 +1488,12 @@
     ],
     "owner": "src/behaviours/home.js"
   },
+  "shelterReleased": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
   "shelterRun": {
     "writers": [
       "src/behaviours/home.js"

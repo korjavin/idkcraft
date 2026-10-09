@@ -969,6 +969,30 @@ function offCastleSpot(bot, ctx) {
     return best
   } catch (_) { return null }
 }
+// vmzq.58: one line per shelter phase change — prod spent 40 s in a
+// pre-pillar phase with a zombie adjacent and nothing in the log said which.
+function logShelterPhase(bot, ctx, st, phase, state) {
+  if (!st || st.phaseLogged === phase) return
+  st.phaseLogged = phase
+  try {
+    const bp = botPos(bot)
+    const p = bp ? `${Math.floor(bp.x)} ${Math.floor(bp.y)} ${Math.floor(bp.z)}` : 'none'
+    const hd = state && typeof state.hostile_distance === 'number' ? state.hostile_distance.toFixed(1) : 'none'
+    console.log(`shelter phase=${phase} pos=${p} hostile=${hd}`)
+  } catch (_) { /* log best-effort */ }
+}
+// vmzq.58: the shelter step is not enclosed — no pillar under the feet, no
+// closed pit, no committed descent. The index.js gate releases fight here
+// for a hostile at melee range instead of idling next to it; an enclosed
+// (dugIn), perched or committed-dig hold keeps the no-fight hold.
+const SHELTER_PREPILLAR_MS = 8000
+function shelterOpen(ctx) {
+  const st = ctx && ctx.shelter
+  if (!st || ctx.step !== 'shelter') return false
+  if (st.dugIn || st.perched || st.pit) return false
+  if (st.dig && ((st.dig.digs | 0) > 0 || st.descended)) return false
+  return true
+}
 function shelter(bot, ctx, target, state) {
   // Homeless is fine (vmzq.32: goal's castleSiteNight picks it for a
   // homeless castle): home only answers "already inside" and the swim aim.
@@ -1025,6 +1049,9 @@ function shelter(bot, ctx, target, state) {
       st.descended = false
       st.exposed = false // vmzq.48: a fresh episode re-arms the verdict below
       st.offCastle = false // ... and re-earns its one off-footprint walk
+      st.wetDeadline = false // vmzq.58: the new spot earns its own swim
+      st.wetSince = null
+      st.pit = false
       if (ctx.recovery && ctx.recovery.action === 'pillar_up') {
         try { ctx.recovery = null } catch (_) { /* release best-effort */ }
       }
@@ -1040,7 +1067,26 @@ function shelter(bot, ctx, target, state) {
       wet = !!(b && typeof b.name === 'string' && b.name.includes('water')) ||
         !!(bot.entity && bot.entity.isInWater === true)
     } catch (_) { /* dry on doubt */ }
+    // Pre-pillar deadline (vmzq.58): a wet phase that has not reached a
+    // pillar in SHELTER_PREPILLAR_MS while the feet stand on a floor
+    // (shallow water, a reached swim goal that still reads wet) pillars
+    // where it stands instead of standing still. Floating (no floor) keeps
+    // swimming: a pillar there never stands (yrtx).
     if (wet) {
+      const now0 = Date.now()
+      if (typeof st.wetSince !== 'number') st.wetSince = now0
+      let grounded = false
+      try { grounded = !!(bot.entity && bot.entity.onGround === true) } catch (_) { grounded = false }
+      if (st.wetDeadline || (grounded && now0 - st.wetSince >= SHELTER_PREPILLAR_MS)) {
+        if (!st.wetDeadline) {
+          try { console.log('shelter pre-pillar deadline, pillaring where it stands') } catch (_) { /* log best-effort */ }
+        }
+        st.wetDeadline = true
+        wet = false
+      }
+    } else st.wetSince = null
+    if (wet) {
+      logShelterPhase(bot, ctx, st, 'swim', state)
       ctx.inShelter = false
       const now = Date.now()
       const bp = botPos(bot)
@@ -1109,7 +1155,10 @@ function shelter(bot, ctx, target, state) {
         try { recover.run(bot, ctx) } catch (_) { /* prim best-effort */ }
       }
       const rec = ctx.recovery && ctx.recovery.status
-      if (rec === 'running' || rec === 'starting' || rec == null) return // still climbing
+      if (rec === 'running' || rec === 'starting' || rec == null) { // still climbing
+        logShelterPhase(bot, ctx, st, 'pillar', state)
+        return
+      }
       // Terminal verdict (pillar-wrapper mirror): pillared or not, the hold
       // starts — even a failed pillar beats the march. Release the episode
       // so a later stuck flow never adopts this stale record.
@@ -1156,6 +1205,7 @@ function shelter(bot, ctx, target, state) {
       // (digs 0) still fights — exposed and nothing to abandon.
       if (r === 'running') {
         try { if (st.dig.digs > 0) ctx.inShelter = true } catch (_) { /* gate best-effort */ }
+        logShelterPhase(bot, ctx, st, st.dig && st.dig.walk ? 'walk' : 'dig-in', state)
         return
       }
       // Committed pits keep the armed hold below: measured descent once
@@ -1195,6 +1245,9 @@ function shelter(bot, ctx, target, state) {
       // The walk reuses digInRun's walk (arrival digs, the anchor
       // follows); walked is set so arrival refuses into the hold instead
       // of walking again.
+      // vmzq.58 (revmux 01): a failed dig that left the body down a pit is
+      // still a committed descent — the fight release never climbs out.
+      st.pit = dugDown > 0
       if (r !== 'done') {
         if (r === 'failed:protected' && !st.offCastle && castleGroundHere(bot, ctx)) {
           let spot = null
@@ -1267,6 +1320,7 @@ function shelter(bot, ctx, target, state) {
   // vmzq.48: a shelter that never enclosed on castle ground holds exposed
   // (st.exposed above) so fight preempts; every other hold arms as before.
   ctx.inShelter = !st.exposed
+  logShelterPhase(bot, ctx, st, st.exposed ? 'exposed' : st.dugIn ? 'dug-in' : st.perched ? 'perched' : 'hold', state)
   holdStill(bot, ctx)
 }
 
@@ -1686,4 +1740,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R }
+module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R }
