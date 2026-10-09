@@ -10,6 +10,7 @@
 // The watchdog choice is the optionId; applyCommit maps it to step+unlock.
 
 const { OUTER_DISK } = require('./goal-unlock')
+const { failReason } = require('./step')
 
 function taskActive(ctx) {
   try {
@@ -298,8 +299,8 @@ function plainSteps(bot, ctx, kind = null) {
     // Held steps ride as retry with their failure named (bead FIX 2).
     try {
       const sf = ctx && ctx.stepFail && ctx.stepFail[n]
-      if (sf && typeof sf.status === 'string' && sf.status.startsWith('failed:')) {
-        const reason = sf.status.slice('failed:'.length) || 'unknown'
+      if (sf && failReason(sf.status) !== null) {
+        const reason = failReason(sf.status) || 'unknown'
         criterion = `${criterion} — retry now although it failed (${reason})`
       }
     } catch (_) { /* plain criterion */ }
@@ -520,7 +521,7 @@ function flatSummary(ctx, kind) {
     if (hist.length === 0) return null
     const last = hist[hist.length - 1]
     if (!last || typeof last.choice !== 'string') return null
-    const isFlat = (o) => o === 'flat' || (typeof o === 'string' && o.startsWith('failed:'))
+    const isFlat = (o) => o === 'flat' || failReason(o) !== null
     if (!isFlat(last.outcome)) return null
     let n = 1
     for (let i = hist.length - 2; i >= 0; i--) {
@@ -529,7 +530,7 @@ function flatSummary(ctx, kind) {
       n++
     }
     if (last.outcome === 'flat') return `${last.choice} flat ${n} round${n > 1 ? 's' : ''}`
-    let reason = String(last.outcome.slice('failed:'.length) || 'unknown')
+    let reason = String(failReason(last.outcome) || 'unknown')
     const prefix = `${last.choice}-`
     if (reason.startsWith(prefix)) reason = reason.slice(prefix.length)
     return n > 1 ? `${last.choice} failed ${reason} ${n} rounds` : `${last.choice} failed ${reason}`

@@ -345,11 +345,10 @@ describe('gxk: stranded grid converts fully instead of hanging the craft', () =>
   })
 
   // oqul.2 characterization: an interruption lands while craft awaits
-  // bot.craft, then the old op settles. Pinned AS IS — today the late
-  // completion still writes the old step's outcome (craft.js run():
-  // craftInFlight + fail()), whatever the interruption reset. The step
-  // token that drops stale completions is design bead idkcraft-oqul.7;
-  // when it lands these expectations flip on purpose.
+  // bot.craft, then the old op settles. idkcraft-oqul.7 flipped stop and
+  // 'go work': both bump ctx.stepGen (resetNightStep), so the late failure
+  // of the op craft started under the old gen drops. destroy bumps nothing
+  // (a dead ctx) and a late success writes no stepStatus, so those stand.
   async function interrupted(interrupt, settleWith) {
     const bot = craftBot({ invLogs: 14 })
     let release = null
@@ -385,19 +384,19 @@ describe('gxk: stranded grid converts fully instead of hanging the craft', () =>
     await settle()
   }
 
-  it('stop mid-craft: the late failure still writes failed:craft-* (pinned, oqul.7)', async () => {
+  it('stop mid-craft: the late failure drops (oqul.7)', async () => {
     const { after, late } = await interrupted((bot, ticker) => ticker.stop(), 'reject')
     assert.equal(after.craftInFlight, true, 'stop leaves the op in flight')
-    assert.equal(late.stepStatus, 'failed:craft-oak_planks', 'stale completion writes the old step outcome')
+    assert.equal(late.stepStatus, after.stepStatus, 'stale completion drops: the stopped episode keeps its status')
     assert.equal(late.craftInFlight, false)
   })
 
-  it("a new order ('go work') mid-craft: reset step, then the late failure lands on it (pinned, oqul.7)", async () => {
+  it("a new order ('go work') mid-craft: reset step, the late failure drops (oqul.7)", async () => {
     const { after, late } = await interrupted((bot, ticker) => ticker.work(), 'reject')
     assert.equal(after.step, null, 'the order reset the step')
     assert.equal(after.stepStatus, null)
     assert.equal(late.step, null, 'no new step picked between')
-    assert.equal(late.stepStatus, 'failed:craft-oak_planks', 'the old craft writes into the fresh episode')
+    assert.equal(late.stepStatus, null, 'the old craft no longer writes into the fresh episode')
   })
 
   it('death + respawn mid-craft: the late success still chats and frees the latch (pinned, oqul.7)', async () => {

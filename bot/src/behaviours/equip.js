@@ -5,6 +5,7 @@ const Vec3 = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
 const { isStone } = require('../castle')
+const { stepDone, stepFailed, stepGen, stale } = require('../step')
 const fightMod = require('./fight')
 const { canBreak, denyReason, logDeny, protectedReason, isOwnPlaced, inHouseFootprint } = require('./util')
 
@@ -169,14 +170,15 @@ function equipLatched(ctx, bot) {
   } catch (_) { return false }
 }
 
-function fail(bot, ctx, item, err) {
+function fail(bot, ctx, item, err, gen) {
   // Stale async settlement (revmux dj3 round-1): equipDigInFlight is not in
   // decide's preemption guard, so a facts-changed re-decide can switch
   // steps mid-dig — a late fail must not mark the NEW step failed (the
   // hold would poison it). Drop the report, but still spend the run
   // counters so a later re-pick starts fresh. An unset step (unit tests,
-  // direct dispatch) fails loudly as before.
-  if (ctx.step && ctx.step !== 'equip') {
+  // direct dispatch) fails loudly as before. A captured gen (oqul.7) also
+  // drops a same-name re-pick's stale report (stop/order/death, then equip).
+  if (stale(ctx, gen) || (ctx.step && ctx.step !== 'equip')) {
     resetRunCounters(ctx)
     return
   }
@@ -185,7 +187,7 @@ function fail(bot, ctx, item, err) {
   // pack-full never latches (g0z.26 R2): transient capacity, cleared by the
   // next banking — not a broken plan.
   if (item === 'pack-full') {
-    ctx.stepStatus = 'failed:equip-pack-full'
+    stepFailed(ctx, 'equip-pack-full')
     resetRunCounters(ctx)
     try {
       console.error(`equip failed item=${item} error=${err && err.message ? err.message : err}`)
@@ -201,7 +203,7 @@ function fail(bot, ctx, item, err) {
   try {
     const tmsg = err && err.message ? String(err.message) : ''
     if (tmsg === 'no-table-ref' || tmsg === 'no-table-pos') {
-      ctx.stepStatus = `failed:equip-${item}`
+      stepFailed(ctx, `equip-${item}`)
       resetRunCounters(ctx)
       try {
         console.error(`equip failed item=${item} error=${tmsg}`)
@@ -213,7 +215,7 @@ function fail(bot, ctx, item, err) {
     const msg = err && err.message ? String(err.message) : String(err)
     noteEquipFail(ctx, dayOf(bot), `${item}:${msg}`)
   } catch (_) { /* latch best-effort */ }
-  ctx.stepStatus = `failed:equip-${item}`
+  stepFailed(ctx, `equip-${item}`)
   resetRunCounters(ctx)
   try {
     console.error(`equip failed item=${item} error=${err && err.message ? err.message : err}`)
@@ -600,7 +602,7 @@ function equip(bot, ctx) {
   const kind = !hasPickaxe(bot) || upgradePick ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
   if (!kind) {
     if (scaffoldCount(bot) >= SCAFFOLD_FULL) {
-      ctx.stepStatus = 'done'
+      stepDone(ctx)
       resetRunCounters(ctx)
       return
     }
@@ -621,20 +623,21 @@ function equip(bot, ctx) {
       return
     }
     ctx.equipInFlight = true
+    const gen = stepGen(ctx)
     void tableFor(bot, ctx).then(
       (t) => {
         ctx.equipInFlight = false
         if (!t) return // walking into reach: stay silent, retry next tick
         const found = craftMod.recipes(bot, op.item, t.block)
         if (found.length === 0) {
-          fail(bot, ctx, op.item, new Error('no-recipe'))
+          fail(bot, ctx, op.item, new Error('no-recipe'), gen)
           return
         }
-        craftOne(bot, ctx, { item: op.item, recipe: found[0], count: 1, table: t.block })
+        craftOne(bot, ctx, { item: op.item, recipe: found[0], count: 1, table: t.block }, gen)
       },
       (err) => {
         ctx.equipInFlight = false
-        fail(bot, ctx, op.item, err)
+        fail(bot, ctx, op.item, err, gen)
       },
     )
     return
@@ -682,7 +685,7 @@ function pickRearm(bot, ctx) {
     try { console.log('equip rearm: pickless underground castle, crafting a pick here') } catch (_) { /* log best-effort */ }
   }
   if (r === 'running' || (r && r.done)) return true
-  ctx.stepStatus = 'failed:equip-pickaxe'
+  stepFailed(ctx, 'equip-pickaxe')
   resetRunCounters(ctx)
   try { console.error(`equip rearm failed: ${(r && r.line) || 'craft-failed'}`) } catch (_) { /* log best-effort */ }
   return true
@@ -694,9 +697,9 @@ function pickRearm(bot, ctx) {
 // lags the op there) and lag-stretched heals.
 const VERIFY_SETTLE_MS = 500
 
-function craftOne(bot, ctx, op) {
+function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
   if (typeof bot.craft !== 'function') {
-    fail(bot, ctx, op.item, new Error('bot.craft missing'))
+    fail(bot, ctx, op.item, new Error('bot.craft missing'), gen)
     return
   }
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
@@ -722,7 +725,7 @@ function craftOne(bot, ctx, op) {
     try {
       await craftMod.safeCraft(bot, op.recipe, op.count, op.table, { ctx, item: op.item })
     } catch (err) {
-      finish(() => fail(bot, ctx, op.item, err))
+      finish(() => fail(bot, ctx, op.item, err, gen))
       return
     }
     // g0z.25 escalating verify: the immediate post-craft model lies
@@ -750,7 +753,7 @@ function craftOne(bot, ctx, op) {
       st.made[op.item] = strikes + 1
       if (st.made[op.item] >= CRAFT_STALL_STRIKES) {
         try { console.error(`equip craft-stall item=${op.item} slots: ${craftMod.slotSummary(bot)}`) } catch (_) { /* logging best-effort */ }
-        fail(bot, ctx, op.item, new Error('craft-stall'))
+        fail(bot, ctx, op.item, new Error('craft-stall'), gen)
       }
       return
     }
@@ -773,7 +776,7 @@ function craftOne(bot, ctx, op) {
   })
   void Promise.race([run(), timeout]).catch((err) => {
     timedOut = true
-    finish(() => fail(bot, ctx, op.item, err))
+    finish(() => fail(bot, ctx, op.item, err, gen))
   })
 }
 
@@ -906,6 +909,7 @@ function digTick(bot, ctx, st, bp) {
   }
   st.lastScaffold = kit
   ctx.equipDigInFlight = true
+  const gen = stepGen(ctx)
   st.digs++
   try {
     console.log(`equip digging ${pick.name} at ${Math.floor(block.x)} ${Math.floor(block.y)} ${Math.floor(block.z)} scaffold=${kit}`)
@@ -931,7 +935,7 @@ function digTick(bot, ctx, st, bp) {
       }
       await bot.dig(target)
     } catch (err) {
-      finish(() => fail(bot, ctx, 'blocks', err))
+      finish(() => fail(bot, ctx, 'blocks', err, gen))
       return
     }
     finish()
@@ -941,7 +945,7 @@ function digTick(bot, ctx, st, bp) {
     if (t && typeof t.unref === 'function') t.unref()
   })
   void Promise.race([run(), timeout]).catch((err) => {
-    finish(() => fail(bot, ctx, 'blocks', err))
+    finish(() => fail(bot, ctx, 'blocks', err, gen))
   })
 }
 

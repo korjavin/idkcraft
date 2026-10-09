@@ -12,6 +12,7 @@ const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
 const { denyReason } = require('./behaviours/util')
 const blueprint = require('./castle')
+const stepMod = require('./step')
 const castleMod = require('./behaviours/castle')
 const taskMod = require('./task')
 const Vec3 = require('vec3')
@@ -172,6 +173,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
         // survive, and a body asleep from the pending wait must wake.
         ctx.step = null
         ctx.stepStatus = null
+        stepMod.nextStepGen(ctx)
         ctx.gohome = null
         ctx.stay = null
         ctx.shelter = null
@@ -205,6 +207,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
       // clearing the walk above ends the borrow; the lease re-applies it.
       ctx.step = null
       ctx.stepStatus = null
+      stepMod.nextStepGen(ctx)
       ctx.gohome = null
       ctx.stay = null
       ctx.shelter = null
@@ -248,6 +251,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
       // from the pending wait must wake.
       ctx.step = null
       ctx.stepStatus = null
+      stepMod.nextStepGen(ctx)
       ctx.gohome = null
       ctx.stay = null
       ctx.shelter = null
@@ -262,6 +266,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
     // clearing the walk above ends the borrow; the lease re-applies it.
     ctx.step = null
     ctx.stepStatus = null
+    stepMod.nextStepGen(ctx)
     ctx.gohome = null
     ctx.stay = null
     ctx.shelter = null
