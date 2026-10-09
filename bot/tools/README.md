@@ -331,6 +331,22 @@ S6-LEAD by the lost order (`reached`).
   trips stuck resets), past the stand-and-dig budget, so the spot carries
   `closeSecs: 35`. On pre-#293 code the dig-in fails `airborne` and the
   window stays OPEN.
+- Night spots (`mode: "night"`, idkcraft-6x7.17) are the house-at-night
+  family: the shelter setup (`time set 18000`, `home` injected as
+  `ctx.home`, guide parked out of entity range on `goal`, `go work`) at a
+  rig-raised house — `home` must equal `house` (one site) — judged by
+  order markers (`expect`/`fail`, no `order`; the window ends on the first
+  hit, `time set 1000` after). `after` (optional, `fill`/`setblock` only,
+  ≤32, needs a `house`) runs AFTER `raiseHouse`, whose air fill would
+  erase a `prep` bed or bump. Markers are chat lines only (`shelter dig-in
+  done` and `failed:cannot-reach-home` are a log line and a step status —
+  a yard dig-in reads as TIMEOUT). HOUSE-NIGHT: the clean house with bed A
+  set by `after`, expects `sleeping in my bed`. HOUSE-BUMP (idkcraft-rw4.19
+  prod repro): dirt behind the door (`ox+3 oy oz+1`) and on bed A's foot
+  (`ox+1 oy oz+4`, so no bed stands — the kit carries `red_bed 1`, as in
+  prod). Both `prep` a flat approach in front of the HOME-* house site
+  (filling HOME-PIT-DEEP's pit in-corpus) and stay last (`go work` revokes
+  follow).
 
 ## `REPLAY_BRAIN=laya`
 
