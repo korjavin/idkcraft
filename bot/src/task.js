@@ -90,11 +90,7 @@ function goalMaxRounds() {
 function goalGraceMs() { return envMs('GOAL_TRAVEL_GRACE_MS', GOAL_TRAVEL_GRACE_MS_DEFAULT) }
 function goalPlanbMs() { return envMs('GOAL_PLANB_SWITCH_MS', GOAL_PLANB_SWITCH_MS_DEFAULT) }
 function watchdogOn() { return goalWatchdogMs() > 0 }
-// Watchdog question language (NOT the tick path: ASK_INSTRUCTIONS and
-// goalText() stay untouched — the facts-text diff IS the decision
-// cadence). Short clauses in the STEP_CRITERIA style.
-const PLAN_INSTRUCTIONS = 'The goal is stalled: pick the step most likely to move its progress metric now; park only if no step can help'
-const PLAN_PARK_CRITERION = 'no step can move the goal now: stop the task and rest at home'
+const { PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, STEP_ORDER } = require('./plan-consts') // oqul.5: leaf
 
 function taskKind(ctx) {
   try {
@@ -120,7 +116,7 @@ function taskKind(ctx) {
 
 function timeDay(bot) {
   try {
-    return require('./goal').timeWord(bot) === 'day'
+    return require('./site').timeWord(bot) === 'day'
   } catch (_) {
     return false
   }
@@ -1141,7 +1137,7 @@ function fallbackRank(kind, offered, history = null, currentStep = null, held = 
     if (progress.length === 0) return null
     let stepOrder = []
     try {
-      stepOrder = require('./goal').STEP_ORDER || []
+      stepOrder = STEP_ORDER || []
     } catch (_) { /* FSM order best-effort */ }
     const flat = new Set()
     try {
@@ -3014,5 +3010,7 @@ function taskTick(bot, ctx, now = Date.now()) {
     maybeL1(bot, ctx, kind, cur.done, cur.total, state, now)
   } catch (_) { /* task clock never breaks the tick */ }
 }
+
+require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
 module.exports = { castleCurrent, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank }
