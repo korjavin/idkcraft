@@ -716,7 +716,7 @@ function holdStill(bot, ctx) {
 // monsters near) back off; server-side refusals (occupied, obstructed,
 // timeout) give up tonight and retry tomorrow. A dawn that finds the body
 // still asleep wakes it (missed wake event).
-const SLEEP_REACH = 2 // from the head: inside mineflayer's click box on every facing
+const SLEEP_REACH = 2 // from the head's centre (g0z.30: the corner read lost a castle bed's diagonal arrival)
 const SLEEP_STALL_TICKS = 30
 const SLEEP_RETRY_TICKS = 30 // transient backoff: covers dusk (~27 ticks), re-tries mobs nightly
 // Night bed (rw4.20): a carried bed with bedroom A empty is laid before the
@@ -790,7 +790,7 @@ function sleepTick(bot, ctx, home, st) {
     const bp = botPos(bot)
     if (!bp) return false
     const head = cells.a.head
-    if (Math.hypot(bp.x - head.x, bp.y - head.y, bp.z - head.z) > SLEEP_REACH) {
+    if (Math.hypot(bp.x - (head.x + 0.5), bp.y - head.y, bp.z - (head.z + 0.5)) > SLEEP_REACH) {
       const open = cells.a.sleep // residence sleep cell (house: the common room; castle: beside the head)
       setGoal(bot, ctx, 'stay-bed', new goals.GoalNear(open.x, open.y, open.z, 1))
       const last = st.sleepAnchor
@@ -836,6 +836,14 @@ function sleepTick(bot, ctx, home, st) {
   } catch (_) {
     return false
   }
+}
+
+// Off the inside stance's storey or 4+ away (a castle bedroom/kitchen; the
+// house rooms are all within 3.6 of it, so they keep the direct legs).
+function farFromInside(bot, inn) {
+  const bp = botPos(bot)
+  if (!bp) return false
+  return Math.abs(bp.y - inn.y) > 1 || Math.hypot(bp.x - (inn.x + 0.5), bp.z - (inn.z + 0.5)) >= 4
 }
 
 function stay(bot, ctx, target, state) {
@@ -897,7 +905,16 @@ function stay(bot, ctx, target, state) {
     }
     return
   }
-  if (st.phase === 'hold') st.phase = 'open'
+  if (st.phase === 'hold') st.phase = farFromInside(bot, inn) ? 'down' : 'open'
+  if (st.phase === 'down') {
+    // g0z.30: woken upstairs (a castle bedroom), the gate is out of click
+    // reach and the sneak legs run straight lines — walk to the inside
+    // stance first (walkTo caps the stall), then open and exit. No-dig, as
+    // the gohome walk (the walk borrow).
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work', { walk: true }) } catch (_) { /* lease best-effort */ }
+    if (!walkTo(bot, ctx, st, 'stay-down', new goals.GoalNear(inn.x, inn.y, inn.z, 1), nearOut(inn, 1))) return
+    st.phase = 'open'
+  }
   if (st.phase === 'open') {
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) st.phase = 'exit'

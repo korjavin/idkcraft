@@ -249,6 +249,9 @@ function isPlanCell(home, x, y, z) {
   try {
     if (!home || !home.site) return false
     const s = home.site
+    // g0z.30: a castle residence keeps its own plan clear — walls, keep-clear
+    // doorways/stairwells, torches (a station there cuts the path to a bed).
+    if (home.kind === 'castle') return require('../castle').absPlan(s, home.rot | 0, 2).at.has(`${x},${y},${z}`)
     return blueprintFor(home).some((c) => c.kind !== 'table' && c.kind !== 'fill' && c.kind !== 'clear' &&
       s.x + c.dx === x && s.y + c.dy === y && s.z + c.dz === z)
   } catch (_) { return false }

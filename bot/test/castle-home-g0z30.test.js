@@ -57,6 +57,24 @@ function castleWorld(st) {
   }
 }
 
+// A GoalNear ends on the first cell within its range, not on the goal cell:
+// the free same-storey cell in range nearest the body (the A* stop).
+function arrival(world, from, g) {
+  const r = Math.floor(g.rangeSq != null ? Math.sqrt(g.rangeSq) : (g.range || 0))
+  let best = null
+  for (let dx = -r; dx <= r; dx++) {
+    for (let dz = -r; dz <= r; dz++) {
+      if (dx * dx + dz * dz > r * r) continue
+      const x = g.x + dx
+      const z = g.z + dz
+      if (world.name(x, g.y, z) !== 'air' || world.name(x, g.y + 1, z) !== 'air' || world.name(x, g.y - 1, z) === 'air') continue
+      const p = new Vec3(x + 0.5, g.y, z + 0.5)
+      if (!best || p.distanceTo(from) < best.distanceTo(from)) best = p
+    }
+  }
+  return best || new Vec3(g.x + 0.5, g.y, g.z + 0.5)
+}
+
 // A body that walks perfectly: a pathfinder goal teleports onto its cell
 // centre, a forward control steps onto the last look point.
 function mockBot(world, at, items) {
@@ -80,7 +98,7 @@ function mockBot(world, at, items) {
         bot.pathfinder.goal = g
         if (!g) return
         calls.goals.push(g)
-        if (typeof g.x === 'number') bot.entity.position = new Vec3(g.x + 0.5, g.y, g.z + 0.5)
+        if (typeof g.x === 'number') bot.entity.position = arrival(world, bot.entity.position, g)
       },
       stop: () => {},
     },
@@ -200,19 +218,20 @@ describe('g0z.30 live in the castle (4 rotations)', () => {
       assert.equal(bot.calls.sleeps.length, 1, `slept (stay ${ctx.stay && ctx.stay.phase} ${ctx.stepStatus})`)
       assert.deepEqual(xyz(bot.calls.sleeps[0]), xyz(a.foot))
 
-      // Dawn: wake, walk down to the gate, out past the outside stance
+      // Dawn: wake in the bedroom, walk down to the inside stance (the
+      // gate is out of click reach upstairs), out past the outside stance
       // along the gate's own axis (not a z-only read), shut it.
       bot.time.timeOfDay = 1000
       bot.wake = async () => { bot.isSleeping = false }
       homeMod.stay(bot, ctx)
       await settle()
-      bot.entity.position = new Vec3(e.inside.x + 0.5, e.inside.y, e.inside.z + 0.5)
       for (let i = 0; i < 12 && ctx.stepStatus !== 'done'; i++) {
         homeMod.stay(bot, ctx)
         await settle()
         if (ctx.stay) ctx.stay.lastToggle = 0
       }
       assert.equal(ctx.stepStatus, 'done', `stay exit done (phase ${ctx.stay && ctx.stay.phase})`)
+      assert.ok(bot.calls.goals.some((g) => g.x === e.inside.x && g.y === e.inside.y && g.z === e.inside.z), 'walked down to the inside stance')
       assert.equal(homeMod.isInside(bot, home), false)
       const bp = bot.entity.position
       assert.ok(Math.hypot(bp.x - (e.outside.x + 0.5), bp.z - (e.outside.z + 0.5)) < 0.01, 'out at the outside stance')
