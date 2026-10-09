@@ -188,6 +188,7 @@ function blockCell(ctx, st, c, why, now) {
   ctx.castleFails = null
   ctx.castleCell = null
   ctx.castleFar = null
+  ctx.castleSelfOcc = null // each retry gets fresh stances (vmzq.53 revmux 01)
   ctx.castleGoalIdx = -1
   console.log(`castle blocked ${c.x} ${c.y} ${c.z} ${c.kind} (${why}) try ${e.tries}${e.retired ? ', retired' : `, retry in ${Math.round(backoffMs(e.tries) / 1000)}s`}`)
 }

@@ -350,6 +350,7 @@ describe('g0z.2 castle executor', () => {
     console.log = (s) => logs.push(String(s))
     try { await run(bot, ctx, 12) } finally { console.log = log }
     assert.equal(ctx.castle.blocked[`2:${m.idx}`].why, 'self-stance')
+    assert.equal(ctx.castleSelfOcc, null, 'the retry after the backoff gets fresh stances')
     assert.ok(logs.some((l) => l === `castle self-stance at ${m.x} ${m.y} ${m.z}: body ${m.x + 0.5} ${m.y + 1}.0 ${m.z + 0.5}`), logs.join('\n'))
   })
 
