@@ -1038,7 +1038,7 @@ function opInFlight(ctx) {
   return !!ctx && !!(ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight || ctx.lightCraftInFlight || ctx.gearInFlight || ctx.furnaceInFlight)
 }
 
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'gocastle', 'castlefetch', 'castle', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'explore', 'rest']
+const { STEP_ORDER } = require('./plan-consts') // oqul.5: leaf, re-exported below
 // Alone-explore cap (idkcraft-dxl): without players the bot must not wander
 // past this many blocks from home — new chunks bloat the host disk. Read by
 // atl.1 explore.js when it lands; until then no behaviour consumes it.
@@ -2634,7 +2634,7 @@ async function decide(bot, ctx) {
   if (!prev || finished || factsForce || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
     if (commitEnded) {
       try {
-        require('./task').commitFinished(bot, ctx, status)
+        require('./commitment').commitFinished(bot, ctx, status) // oqul.5: task.js registers it
       } catch (_) { /* window best-effort */ }
       commitActive = false
       commitStep = null
