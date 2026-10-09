@@ -12,6 +12,7 @@ const body = require('../body')
 const retreatMod = require('./retreat')
 const recover = require('./recover')
 const buildMod = require('./build')
+const residence = require('../residence')
 
 // Night behaviours (bead rw4.5): gohome walks to the door, opens it, steps
 // inside and closes it; stay holds the night, then leaves in the morning.
@@ -94,38 +95,28 @@ function nightLine(bot, ctx, home) {
   return `night: survived, ${dText}, ${bText}, ${pText}; back to work`
 }
 
-function doorDx(home) {
-  return home && home.v === 2 ? 3 : 1
-}
-
+// Entrance stances by residence (g0z.28): residence.js owns the geometry.
 function doorPos(home) {
-  return new Vec3(home.site.x + doorDx(home), home.site.y, home.site.z)
+  return residence.of(home).entrance(home).door
 }
 
 function outsidePos(home) {
-  return new Vec3(home.site.x + doorDx(home), home.site.y, home.site.z - 1)
+  return residence.of(home).entrance(home).outside
 }
 
 function insidePos(home) {
-  return new Vec3(home.site.x + doorDx(home), home.site.y, home.site.z + 1)
+  return residence.of(home).entrance(home).inside
 }
 
-
+// Residence floors (residence.js interior): for hut/house the floored
+// home.interior box — raw float compares put the back row and east column
+// outside (live jr2.3: a bedroom order at z=4.5 read as outside and walked
+// A* at the shut door).
 function isInside(bot, home) {
   try {
     const bp = botPos(bot)
-    const box = home && home.interior
-    if (!bp || !box || !box.min || !box.max) return false
-    // The box holds inclusive BLOCK coords; the entity carries a float.
-    // Comparing raw puts the back row and east column outside (live jr2.3:
-    // a bedroom order at z=4.5 read as outside and walked A* at the shut
-    // door). Floor to the standing block first.
-    const fx = Math.floor(bp.x)
-    const fy = Math.floor(bp.y)
-    const fz = Math.floor(bp.z)
-    return fx >= box.min.x && fx <= box.max.x &&
-      fy >= box.min.y && fy <= box.max.y &&
-      fz >= box.min.z && fz <= box.max.z
+    if (!bp || !home) return false
+    return residence.of(home).interior(home, bp)
   } catch (_) {
     return false
   }
@@ -691,7 +682,7 @@ const SLEEP_STALL_TICKS = 30
 const SLEEP_RETRY_TICKS = 30 // transient backoff: covers dusk (~27 ticks), re-tries mobs nightly
 function sleepTick(bot, ctx, home, st) {
   try {
-    if (!home || home.v !== 2 || !home.site) return false
+    if (!home || !home.site || residence.of(home).beds(home).length === 0) return false
     if (typeof bot.sleep !== 'function') return false
     if (bot.isSleeping) return true
     if (ctx.sleepInFlight) return true
