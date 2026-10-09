@@ -817,6 +817,21 @@ describe('jr2.2 stay sleeps in the own bed, never the owner\'s', () => {
     assert.ok(bot.chats.includes('sleeping in my bed'))
   })
 
+  it('rw4.20: a bed that never takes gives up after three tries, then holds', async () => {
+    const bot = mockBot({
+      items: [{ name: 'red_bed', count: 1 }], at: { x: 12, y: 64, z: 23 }, timeOfDay: 15000,
+      placeImpl: async () => {}, // the server swallows the place: cells stay air
+    })
+    const ctx = stayCtx()
+    for (let i = 0; i < 5; i++) {
+      homeMod.stay(bot, ctx)
+      await rest(550)
+    }
+    assert.equal(bot.calls.places.length, 3, 'capped at NIGHT_BED_FAILS')
+    assert.equal(ctx.sleepInFlight, false)
+    assert.ok(!bot.chats.includes('my bed is in'))
+  })
+
   it('rw4.20: an occupied or groundless bedroom A holds as before, bed kept', () => {
     for (const cells of [
       { [cellKey(A_FOOT)]: 'dirt' },

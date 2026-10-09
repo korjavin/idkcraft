@@ -548,6 +548,9 @@ function gohomeTick(bot, ctx, target, state) {
     ctx.gohome = null
     ctx.shelterLeg = null
     ctx.stepStatus = 'done'
+    // A retreat latch on gohome would re-dispatch this instant done under a
+    // hostile (revmux 01 minor): drop it so the chain re-asks retreat/pillar.
+    if (ctx.retreatLatch && ctx.retreatLatch.action === 'gohome') ctx.retreatLatch = null
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
     return
   }

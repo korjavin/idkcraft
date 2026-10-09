@@ -1070,4 +1070,14 @@ describe('rw4.20 gohome yields to build when the house re-opens', () => {
     assert.equal(ctx.gohome, null)
     assert.equal(bot.calls.goals.length, goals, 'no new walk')
   })
+
+  it('drops a retreat latch on gohome (no instant-done re-dispatch under a hostile)', () => {
+    const bot = mockBot({ at: { x: 16, y: 64, z: 14 } })
+    const ctx = { home: { ...ctxHome(), built: false }, retreatLatch: { action: 'gohome', until: Date.now() + 5000 } }
+    home.gohome(bot, ctx)
+    assert.equal(ctx.retreatLatch, null)
+    const ctx2 = { home: { ...ctxHome(), built: false }, retreatLatch: { action: 'pillar', until: Date.now() + 5000 } }
+    home.gohome(bot, ctx2)
+    assert.equal(ctx2.retreatLatch.action, 'pillar', 'other latches untouched')
+  })
 })
