@@ -24,6 +24,8 @@
 #   the bot adopts it as its residence (memory home kind=castle) and the
 #   verdict reports per night entered/slept/shelter/deaths/dawn-exit; run
 #   with --night 68 for the 3-night acceptance),
+#   CASTLE_SAND (1 = g0z.38: a sand patch beside the pad; with
+#   CASTLE_SEED=complete the verdict adds panes=<laid>/44),
 #   CASTLE_BLOCKED (0 = none; N > 0 seeds N blocked plan cells after the
 #   order — protected oak logs + a foreign chest, vmzq.27's stall mix),
 #   CASTLE_BURY / CASTLE_BURY_AFTER (vmzq.37: N > 0 buries the bot pickless
@@ -298,7 +300,7 @@ boot() {
 }
 boot
 export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_SEED="$SEED" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
+export CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in

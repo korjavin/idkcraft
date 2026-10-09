@@ -688,8 +688,9 @@ const BATCH = 16
 // torch-some word with no coal would hold the moat, fence and door; the
 // castle lays what it holds and the 0-torch cells step aside (torchOwed).
 // pane (g0z.31, revmux 01): any pane is a batch, like torch — the source
-// is the chest only, so a sub-batch remainder could never grow and would
-// never be laid; castlefetch runs on pane-none only. banner (g0z.32): same.
+// was the chest only, so a sub-batch remainder could never grow and would
+// never be laid; castlefetch runs on pane-none only (chest, then the
+// sand ladder, g0z.38). banner (g0z.32): same.
 const BATCH_OF = { frame: 14, torch: 1, pane: 1, banner: 1 }
 function batchOf(kind) { return BATCH_OF[kind] || BATCH }
 

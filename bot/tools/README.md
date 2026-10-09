@@ -445,6 +445,14 @@ the 3 nights finish well before 68 min. The verdict line gains
 CASTLE_SEED=complete CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh --night 68
 ```
 
+Pane ladder (g0z.38): `CASTLE_SAND=1` lays a 6x3x6 sand patch just east
+of the pad; with the seeded castle the verdict adds `, panes=<laid>/44`
+(the bot digs sand, smelts it in the kitchen furnace, crafts and lays):
+
+```sh
+CASTLE_SEED=complete CASTLE_KIT=empty CASTLE_SAND=1 CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh 60
+```
+
 Interrupts clean up after themselves: `kill -INT`/`-TERM` (or Ctrl-C)
 kills every descendant (server client, node, tee), `docker rm -f`s this
 slot's container and drops the lock, exit 130 — the next run on the slot

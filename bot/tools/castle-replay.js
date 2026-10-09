@@ -30,6 +30,9 @@
 //   CASTLE_SEED (complete = g0z.33: rcon-place the whole v2 castle + beds
 //   + table on the pad, no order; the bot adopts it as its residence and
 //   createResidenceNights reports entered/slept/shelter/deaths/dawn-exit).
+//   CASTLE_SAND (1 = g0z.38: a 6x3x6 sand patch on a dirt base just east
+//   of the pad, top flush with it — the pad has no sand of its own; with
+//   CASTLE_SEED=complete the verdict adds panes=<laid>/44).
 // Exit: 0 = measured (even at 0 laid — the line says so),
 //   2 = environment/setup failure (spawn, pad, order, dropped follower,
 //   jev without a key).
@@ -58,6 +61,7 @@ const BLOCKED = Math.max(0, parseInt(process.env.CASTLE_BLOCKED || '0', 10) || 0
 const PLANNER = process.env.RIG_PLANNER || 'jev'
 const NIGHT = process.env.CASTLE_NIGHT === '1'
 const SEED = process.env.CASTLE_SEED || ''
+const SAND = process.env.CASTLE_SAND === '1'
 // Far respawn (vmzq.29, prod run6): after CASTLE_FAR_AFTER min of the
 // window the follower lands CASTLE_FAR blocks off the half-built site in a
 // 3x3 pit 7 deep, dirt cleared, 64 cobble given — the walk back must pillar
@@ -668,6 +672,18 @@ async function main() {
   ]) {
     await rcon(cmd).catch((e) => fail('pad-fill', e.message))
   }
+  // Sand patch (g0z.38): east of the pad edge (x1 = bx + 24), ~11 off the
+  // seeded castle's east wall, dry (dirt base) and walkable from the pad.
+  if (SAND) {
+    for (const cmd of [
+      `fill ${bx + 25} ${gy - 5} ${bz - 4} ${bx + 32} ${gy} ${bz + 3} dirt`,
+      `fill ${bx + 25} ${gy + 1} ${bz - 4} ${bx + 32} ${gy + 7} ${bz + 3} air`,
+      `fill ${bx + 26} ${gy - 2} ${bz - 3} ${bx + 31} ${gy} ${bz + 2} sand`,
+    ]) {
+      await rcon(cmd).catch((e) => fail('sand-fill', e.message))
+    }
+    origLog(`CASTLE-RIG sand patch ${bx + 26}..${bx + 31} ${gy - 2}..${gy} ${bz - 3}..${bz + 2} (108 sand)`)
+  }
   // Seeded castle (g0z.33): the castle covers the pad centre, so both
   // land north of its fence line (site.z = bz - 13) instead.
   const standZ = SEED ? bz - 17 : bz
@@ -1270,7 +1286,22 @@ async function main() {
   if (night) night.finish()
   if (resTimer) clearInterval(resTimer)
   if (resNights) resNights.finish(Math.round((Date.now() - t0) / 1000))
-  const nightTag = (night ? night.tag() : '') + seedTag + (resNights ? resNights.tag() : '')
+  // Panes (g0z.38): decor pane cells of the seeded castle reading
+  // *glass_pane on the follower (unloaded cells are counted apart).
+  let paneTag = ''
+  if (SEED === 'complete') {
+    const cells = require('../src/castle').decorPlan({ x: bx - 15, y: gy + 1, z: bz - 13 }, 0, 2).cells.filter((c) => c.kind === 'pane')
+    let laid = 0
+    let unread = 0
+    for (const c of cells) {
+      let b = null
+      try { b = follower.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
+      if (!b) unread++
+      else if (/glass_pane$/.test(b.name)) laid++
+    }
+    paneTag = `, panes=${laid}/${cells.length}${unread ? `(${unread} unread)` : ''}`
+  }
+  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + (resNights ? resNights.tag() : '')
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
