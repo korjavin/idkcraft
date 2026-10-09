@@ -668,7 +668,7 @@ describe('gear round-2: collision, async legs, latch', () => {
     const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, step: 'gear', stepStatus: 'failed:no-fuel', brain: {}, furnace: { settled: true, result: 'failed:no-fuel' } }
     const r = await goal.decide(bot, ctx)
     assert.equal(ctx.gear.saidNeed, 'want-coal')
-    assert.ok(bot.lines.some((l) => l.includes('coal above the reserve')))
+    assert.ok(bot.lines.some((l) => l.includes('need coal or planks')))
     assert.ok(!(ctx.stepFail && ctx.stepFail.gear), 'yield records no hold')
     assert.equal(r.action, 'explore', 'gear latched out, fetchers run')
   })
@@ -1300,8 +1300,8 @@ describe('honest want lines (idkcraft-ipn.9)', () => {
     const bot = mockBot({ items: oreKit('stone_pickaxe') })
     const ctx = { home: home(), stepStatus: 'running' }
     resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'coal_ore' }], 1000)
-    assert.equal(gear.honestLine(bot, ctx, bp(), 'want-coal', 'need coal above the reserve, going to dig'), 'need coal above the reserve, going to dig')
-    assert.equal(gear.honestLine(bot, { home: home() }, bp(), 'want-coal', 'need coal above the reserve to smelt 2 ore, going to dig'), 'need coal above the reserve, none known')
+    assert.equal(gear.honestLine(bot, ctx, bp(), 'want-coal', 'need coal or planks, going to dig'), 'need coal or planks, going to dig')
+    assert.equal(gear.honestLine(bot, { home: home() }, bp(), 'want-coal', 'need coal or planks to smelt 2 ore, going to dig'), 'need coal or planks, none known')
     assert.equal(gear.honestLine(bot, ctx, bp(), 'want-cobble', 'need 8 cobble for the furnace, going to dig'), 'need 8 cobble for the furnace, going to dig')
     assert.equal(gear.honestLine(bot, ctx, bp(), 'want-logs', 'need logs for sticks, going to chop'), 'need logs for sticks, going to chop')
     assert.equal(gear.honestLine(bot, ctx, bp(), 'want-water', 'need water for the bucket'), 'need water for the bucket')

@@ -1327,7 +1327,7 @@ describe('async furnace translation honesty (idkcraft-ipn.9)', () => {
     const ctx = settled('failed:no-fuel')
     await decide(bot, ctx)
     assert.equal(ctx.gear.saidNeed, 'want-coal')
-    assert.ok(bot.chats.includes('need coal above the reserve, none known'), `chats: ${JSON.stringify(bot.chats)}`)
+    assert.ok(bot.chats.includes('need coal or planks, none known'), `chats: ${JSON.stringify(bot.chats)}`)
     assert.equal(ctx.furnace.result, null)
   })
 
@@ -1337,7 +1337,7 @@ describe('async furnace translation honesty (idkcraft-ipn.9)', () => {
     resources.noteSpots(ctx, [{ x: 60, y: 60, z: 0, name: 'coal_ore' }], 1000)
     await decide(bot, ctx)
     assert.equal(ctx.gear.saidNeed, 'want-coal')
-    assert.ok(bot.chats.includes('need coal above the reserve, going to dig'), `chats: ${JSON.stringify(bot.chats)}`)
+    assert.ok(bot.chats.includes('need coal or planks, going to dig'), `chats: ${JSON.stringify(bot.chats)}`)
   })
 
   it('no-cobble keeps its line: stone is not a memory resource', async () => {

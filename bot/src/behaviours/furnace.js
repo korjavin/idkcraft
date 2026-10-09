@@ -370,7 +370,7 @@ function doSmelt(bot, ctx, f, spot) {
       const oreLoad = Math.min(invOre, 64 - inN)
       const inFlight = f.tookOnce && (f.idleTicks || 0) < FUEL_GRACE_TICKS ? 1 : 0
       const fuelLoad = plankName
-        ? Math.max(0, fuelPieces(invOre + inN, invPlanks, ORE_PER_PLANK) - fuelN - inFlight)
+        ? Math.max(0, Math.min(64 - fuelN, fuelPieces(invOre + inN, invPlanks, ORE_PER_PLANK) - fuelN - inFlight)) // one 64 slot: 97+ ore outgrows it
         : Math.max(0, fuelPieces(invOre + inN, invCoal + invChar) - fuelN - inFlight)
       if (oreLoad > 0) {
         const id = craftMod.itemId(bot, 'raw_iron')

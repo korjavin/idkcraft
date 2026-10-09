@@ -268,6 +268,17 @@ describe('furnace smelt (load coal or planks, take, settle)', () => {
     assert.ok(lines.includes('smelted 3 iron'), JSON.stringify(lines))
   })
 
+  it('plank load never overfills the 64 fuel slot (01 minor)', async () => {
+    const { bot, log } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 100 }, { name: 'oak_planks', count: 800 }],
+      slots: [null, { name: 'oak_planks', count: 10 }, null],
+    })
+    const ctx = smeltCtx()
+    await tick(bot, ctx)
+    assert.deepEqual(log.filter(([op]) => op === 'putFuel'), [['putFuel', IDS.oak_planks, 54]])
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
   it('coal on hand beats planks (coal first)', async () => {
     const { bot, log } = smeltBot({
       inv: [{ name: 'raw_iron', count: 3 }, { name: 'coal', count: 1 }, { name: 'oak_planks', count: 64 }],

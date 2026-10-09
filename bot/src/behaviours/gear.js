@@ -1149,7 +1149,7 @@ function announceYield(ctx, g, bot, key, line) {
 // separate bead. Fail-open: a broken check keeps the old line, never gags.
 const HONEST_WANT = {
   'want-ore': 'need raw iron, none known',
-  'want-coal': 'need coal above the reserve, none known',
+  'want-coal': 'need coal or planks, none known',
 }
 
 function honestLine(bot, ctx, bp, key, line) {
@@ -1248,7 +1248,7 @@ function gear(bot, ctx, target, state) {
       return
     }
     if (reason === 'no-fuel') {
-      announceYield(ctx, g, bot, 'want-coal', honestLine(bot, ctx, bp, 'want-coal', 'need coal above the reserve, going to dig'))
+      announceYield(ctx, g, bot, 'want-coal', honestLine(bot, ctx, bp, 'want-coal', 'need coal or planks, going to dig'))
       return
     }
     fail(ctx, `furnace-${reason}`)
