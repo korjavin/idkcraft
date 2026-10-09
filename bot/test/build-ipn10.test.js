@@ -480,10 +480,37 @@ describe('ipn.10 revmux 01: hard cap and skip retry', () => {
     const feasible = goal.MENU.build.feasible(facts, bot, ctx)
     assert.deepEqual(ctx.buildSkip, [], 'stale skip dropped before the scan')
     assert.equal(feasible, true, 'cell 10 re-probes as unfinished work')
-    // Control: a fresh verdict stays skipped.
-    const ctx2 = { home, buildSkip: [10], buildSkipAt: { 10: Date.now() } }
+    // Control: a fresh verdict stays skipped (its 6x7.20 last-pass retry spent).
+    const ctx2 = { home, buildSkip: [10], buildSkipAt: { 10: Date.now() }, buildSkipRetry: { key: '0,64,0,v2', done: [10] } }
     goal.MENU.build.feasible(facts, bot, ctx2)
     assert.deepEqual(ctx2.buildSkip, [10], 'fresh skip survives the gate')
+  })
+
+  it('6x7.20: the gate gives a fresh skip its one last-pass retry once the rest stands', () => {
+    // Rig: one 'unreachable' skip, every other cell placed — the gate read
+    // the hole as given up and never re-picked build (TIMEOUT at 1800 s).
+    const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
+    const world = makeWorld()
+    paintHouse(world, home, [10])
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 64 }] })
+    const ctx = { home, buildSkip: [10], buildSkipAt: { 10: Date.now() } }
+    const facts = { planks: 16, table: 1, door: 1 }
+    const q = quiet()
+    let feasible
+    try { feasible = goal.MENU.build.feasible(facts, bot, ctx) } finally { q.restore() }
+    assert.deepEqual(ctx.buildSkip, [], 'skip retried')
+    assert.equal(feasible, true, 'build re-picked for the hole')
+    // Re-skipped after the retry: the gate holds it out until the 1h re-probe.
+    ctx.buildSkip = [10]
+    ctx.buildSkipAt = { 10: Date.now() }
+    assert.equal(goal.MENU.build.feasible(facts, bot, ctx), false)
+    assert.deepEqual(ctx.buildSkip, [10])
+    // Still skipped while other cells are owed: the retry waits for the last pass.
+    const world2 = makeWorld()
+    paintHouse(world2, home, [10, 11])
+    const ctx3 = { home, buildSkip: [10], buildSkipAt: { 10: Date.now() } }
+    goal.MENU.build.feasible(facts, mockBot(world2, { items: [{ name: 'oak_planks', count: 64 }] }), ctx3)
+    assert.deepEqual(ctx3.buildSkip, [10])
   })
 
   it('verdict stamps round-trip through the home record, garbage sanitizes', () => {

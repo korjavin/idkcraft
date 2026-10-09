@@ -1016,6 +1016,7 @@ module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
 module.exports.cellLoaded = cellLoaded
 module.exports.pruneBuildSkips = pruneBuildSkips
+module.exports.retrySkipsOnce = retrySkipsOnce
 module.exports.BUILD_SKIP_RETRY_MS = BUILD_SKIP_RETRY_MS
 module.exports.PLACE_RANGE = PLACE_RANGE
 module.exports.PLACE_REACH = PLACE_REACH
