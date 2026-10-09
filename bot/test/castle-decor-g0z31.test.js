@@ -489,6 +489,15 @@ describe('castle banners self-source (g0z.35)', () => {
     assert.equal(ctx.castleFetchDry, 'banner')
   })
 
+  it('3 white wool held: the hunt wants the absolute 12, have counts the 3 (revmux 01)', async () => {
+    const { bot, ctx } = selfBot({ items: [{ name: 'white_wool', count: 3 }] })
+    fetch.deps.craftItem = () => ({ done: false })
+    await run(bot, ctx, () => ctx.bring)
+    assert.equal(ctx.bring.want, 12)
+    assert.equal(ctx.bring.have, 3)
+    assert.equal(ctx.bring.drop, 'white_wool')
+  })
+
   it('a hunt that came back with 6 wool crafts next tick', async () => {
     const { bot, ctx } = selfBot()
     fetch.deps.craftItem = () => ({ done: false })

@@ -410,7 +410,9 @@ function bannerTick(bot, ctx, f, d) {
   if (typeof t === 'number' && t >= 12000) { dry('no-wool'); return } // day-only: bring would cancel at once
   if (bedsMod.sheepLatched(ctx, bot)) { dry('no-wool'); return }
   const bringMod = require('./bring')
-  const want = Math.max(1, BANNER_WOOL * Math.ceil(d.short) - held) // tops up the top colour (did.3)
+  // Absolute pack target: bring's have already counts the held top colour,
+  // so the hunt tops it up (did.3) — never subtract it here (revmux 01).
+  const want = BANNER_WOOL * Math.max(1, Math.ceil(d.short))
   const base = { kind: 'item', name: 'wool', names: bedsMod.WOOL16.slice(), want, by: null, drop: null, have: 0 }
   let o = null
   try {
