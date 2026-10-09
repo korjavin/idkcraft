@@ -1549,6 +1549,12 @@
     ],
     "owner": "src/goal.js"
   },
+  "stepGen": {
+    "writers": [
+      "src/step.js"
+    ],
+    "owner": "src/step.js"
+  },
   "stepPick": {
     "writers": [
       "src/goal.js"
@@ -1562,11 +1568,9 @@
       "src/behaviours/build.js",
       "src/behaviours/castle.js",
       "src/behaviours/castlefetch.js",
-      "src/behaviours/craft.js",
       "src/behaviours/craftany.js",
       "src/behaviours/deep.js",
       "src/behaviours/deliver.js",
-      "src/behaviours/equip.js",
       "src/behaviours/explore.js",
       "src/behaviours/forage.js",
       "src/behaviours/furnace.js",
@@ -1582,7 +1586,8 @@
       "src/chat.js",
       "src/goal.js",
       "src/index.js",
-      "src/orders.js"
+      "src/orders.js",
+      "src/step.js"
     ],
     "owner": "src/behaviours/home.js"
   },
