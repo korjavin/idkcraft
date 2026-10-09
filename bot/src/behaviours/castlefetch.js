@@ -32,7 +32,8 @@ const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('.
 // target could never be met from the world (castle BATCH_OF.frame matches).
 // pane (g0z.31): CHEST-ONLY — panes, else glass crafted 6 -> 16; no sand
 // hunt, no smelt: an empty chest fails the leg into the retry hold.
-const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16 }
+// banner (g0z.32): CHEST-ONLY, never crafted (the wool belongs to the beds).
+const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16, banner: 2 }
 // Batch yield (idkcraft-vmzq.20): a fetch leg hands a layable batch to the
 // castle after this long instead of running to its full target. Five
 // minutes ≈ one stone batch at the measured quarry rate, and bounds the
@@ -126,6 +127,7 @@ function chestNames(bot, kind) {
   if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'chest') return [['chest']]
   if (kind === 'pane') return [itemNames(bot, (n) => blueprint.matches('pane', n)), ['glass']]
+  if (kind === 'banner') return [itemNames(bot, (n) => blueprint.matches('banner', n))]
   return []
 }
 
@@ -229,6 +231,7 @@ function castleChest(bot, st) {
 
 function finish(bot, ctx, status) {
   const f = ctx.castleFetch
+  if (status === 'done') ctx.castleFetchDry = null // a leg that got stock retires the dry mark
   if (f && f.spend) {
     let delta = '?'
     try {
@@ -1082,7 +1085,8 @@ function castlefetch(bot, ctx, target, state) {
     if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
     return
   }
-  finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, pane without chest stock
+  ctx.castleFetchDry = d.kind // the decor word tries the next open kind (castle menuFact)
+  finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, pane/banner without chest stock
 }
 
 module.exports = castlefetch

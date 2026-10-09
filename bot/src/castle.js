@@ -411,6 +411,7 @@ function matches(kind, name) {
   if (kind === 'fence') return name.endsWith('_fence')
   if (kind === 'chest') return name === 'chest'
   if (kind === 'pane') return name === 'glass_pane' || name.endsWith('_stained_glass_pane')
+  if (kind === 'banner') return name.endsWith('_banner') // item, standing and wall block (g0z.32)
   if (kind === 'air') return AIR_NAMES.has(name) || name.endsWith('_door')
   if (kind === 'dig') return AIR_NAMES.has(name)
   return false
@@ -439,11 +440,15 @@ function absPlan(site, rot, version) {
 // except the gate's upper doorway (tower doorways and the stairwells sit
 // off the outer line). Off-plan idx DECOR_BASE+ (prep 1000000+, litter
 // 2000000+) so the blocked map and strikes reuse their keys.
+// 'banner' (g0z.32): two wall banners flanking the gate, in the air cell
+// outside the gate wall above the low windows; appended so the pane idx
+// stay put. `wall` is the block clicked (its outward face hangs it).
 const DECOR_BASE = 3000000
 const DECOR = {
   2: BLUEPRINTS[2].PLAN
     .filter((c) => c.kind === 'air' && outerLine(c.dx, c.dz) && !(c.dx === FULL_DOOR.dx && c.dz === FULL_DOOR.dz))
-    .map((c) => ({ dx: c.dx, dy: c.dy, dz: c.dz, kind: 'pane' })),
+    .map((c) => ({ dx: c.dx, dy: c.dy, dz: c.dz, kind: 'pane' }))
+    .concat([13, 17].map((dx) => ({ dx, dy: 2, dz: 6, kind: 'banner', wall: { dx, dy: 2, dz: 7 } }))),
 }
 
 let decorCache = null
@@ -451,9 +456,15 @@ function decorPlan(site, rot, version) {
   const bp = blueprintOf(version)
   const key = `${site.x},${site.y},${site.z},${rot | 0},v${bp.version}`
   if (decorCache && decorCache.key === key) return decorCache
-  const cells = rotatePlan(DECOR[bp.version] || [], rot | 0, bp.version).map((c, i) => ({
-    x: site.x + c.dx, y: site.y + c.dy, z: site.z + c.dz, kind: c.kind, dy: c.dy, idx: DECOR_BASE + i,
-  }))
+  const local = DECOR[bp.version] || []
+  const cells = rotatePlan(local, rot | 0, bp.version).map((c, i) => {
+    const o = { x: site.x + c.dx, y: site.y + c.dy, z: site.z + c.dz, kind: c.kind, dy: c.dy, idx: DECOR_BASE + i }
+    if (local[i].wall) {
+      const w = rotatePlan([{ ...local[i].wall, kind: 'stone' }], rot | 0, bp.version)[0]
+      o.wall = { x: site.x + w.dx, y: site.y + w.dy, z: site.z + w.dz }
+    }
+    return o
+  })
   const at = new Map()
   for (const c of cells) at.set(`${c.x},${c.y},${c.z}`, c)
   decorCache = { key, cells, at }
