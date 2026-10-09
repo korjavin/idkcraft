@@ -5,6 +5,7 @@ const Vec3 = require('vec3')
 const { NEED_LOGS } = require('../goal')
 const { countItems } = require('../perception')
 const { isStone } = require('../castle')
+const { stepDone, stepFailed } = require('../step')
 
 // craft: logs -> planks -> crafting table -> door, one op per tick, async
 // with ctx.craftInFlight (same shape as eatInFlight). Registered in
@@ -58,7 +59,7 @@ function totals(bot) {
 }
 
 function fail(ctx, item, err) {
-  ctx.stepStatus = `failed:craft-${item}`
+  stepFailed(ctx, `craft-${item}`)
   try {
     console.error(`craft failed item=${item} error=${err && err.message ? err.message : err}`)
   } catch (_) { /* logging best-effort */ }
@@ -1252,7 +1253,7 @@ function craft(bot, ctx, target, state) {
       fail(ctx, `${first}_planks`, new Error('no planks recipe for this wood'))
       return
     }
-    ctx.stepStatus = 'done'
+    stepDone(ctx)
     return
   }
   if (typeof bot.craft !== 'function') {

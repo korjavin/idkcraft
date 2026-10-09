@@ -5,6 +5,7 @@ const Vec3 = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
 const { isStone } = require('../castle')
+const { stepDone, stepFailed } = require('../step')
 const fightMod = require('./fight')
 const { canBreak, denyReason, logDeny, protectedReason, isOwnPlaced, inHouseFootprint } = require('./util')
 
@@ -185,7 +186,7 @@ function fail(bot, ctx, item, err) {
   // pack-full never latches (g0z.26 R2): transient capacity, cleared by the
   // next banking — not a broken plan.
   if (item === 'pack-full') {
-    ctx.stepStatus = 'failed:equip-pack-full'
+    stepFailed(ctx, 'equip-pack-full')
     resetRunCounters(ctx)
     try {
       console.error(`equip failed item=${item} error=${err && err.message ? err.message : err}`)
@@ -201,7 +202,7 @@ function fail(bot, ctx, item, err) {
   try {
     const tmsg = err && err.message ? String(err.message) : ''
     if (tmsg === 'no-table-ref' || tmsg === 'no-table-pos') {
-      ctx.stepStatus = `failed:equip-${item}`
+      stepFailed(ctx, `equip-${item}`)
       resetRunCounters(ctx)
       try {
         console.error(`equip failed item=${item} error=${tmsg}`)
@@ -213,7 +214,7 @@ function fail(bot, ctx, item, err) {
     const msg = err && err.message ? String(err.message) : String(err)
     noteEquipFail(ctx, dayOf(bot), `${item}:${msg}`)
   } catch (_) { /* latch best-effort */ }
-  ctx.stepStatus = `failed:equip-${item}`
+  stepFailed(ctx, `equip-${item}`)
   resetRunCounters(ctx)
   try {
     console.error(`equip failed item=${item} error=${err && err.message ? err.message : err}`)
@@ -600,7 +601,7 @@ function equip(bot, ctx) {
   const kind = !hasPickaxe(bot) || upgradePick ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
   if (!kind) {
     if (scaffoldCount(bot) >= SCAFFOLD_FULL) {
-      ctx.stepStatus = 'done'
+      stepDone(ctx)
       resetRunCounters(ctx)
       return
     }
@@ -682,7 +683,7 @@ function pickRearm(bot, ctx) {
     try { console.log('equip rearm: pickless underground castle, crafting a pick here') } catch (_) { /* log best-effort */ }
   }
   if (r === 'running' || (r && r.done)) return true
-  ctx.stepStatus = 'failed:equip-pickaxe'
+  stepFailed(ctx, 'equip-pickaxe')
   resetRunCounters(ctx)
   try { console.error(`equip rearm failed: ${(r && r.line) || 'craft-failed'}`) } catch (_) { /* log best-effort */ }
   return true
