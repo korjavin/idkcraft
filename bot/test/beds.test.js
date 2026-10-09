@@ -787,6 +787,18 @@ describe('jr2.2 stay sleeps in the own bed, never the owner\'s', () => {
     assert.equal(ctx.inShelter, true)
   })
 
+  it('6x7.22: the far-row arrival of the sleep walk is in reach (rig HOUSE-NIGHT/BUMP)', async () => {
+    // GoalNear(sleep 12,64,23, 1) is met in cell 12,22: 2.1 from the head's
+    // centre, 1.6 from its face — the centre read stalled here all night.
+    const cells = { [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed' }
+    const bot = mockBot({ cells, at: { x: 12.5, y: 64, z: 22.4 }, timeOfDay: 15000 })
+    const ctx = stayCtx()
+    homeMod.stay(bot, ctx)
+    await flush()
+    assert.deepEqual(bot.calls.goals, [], 'no walk: already in reach')
+    assert.deepEqual(bot.calls.sleeps, ['white_bed'])
+  })
+
   it('without its own bed the bot holds as before (regression)', () => {
     for (const cells of [
       {},
