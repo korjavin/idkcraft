@@ -1,0 +1,9 @@
+{
+ "g0z build castle in range -> stop -> go": [
+  {"tick":0,"kind":"step","value":null},
+  {"tick":0,"kind":"owner","owner":"idle"},
+  {"tick":0,"kind":"chat","text":"castle at 90 64 195, ~1722 blocks, this will take many hours; I work while someone is online (or autonomous on)"},
+  {"tick":0,"kind":"chat","text":"castle parked — say castle go to resume"},
+  {"tick":0,"kind":"chat","text":"castle resumed"}
+ ]
+}

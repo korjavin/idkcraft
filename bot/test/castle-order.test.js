@@ -14,6 +14,7 @@ const goal = require('../src/goal')
 const memory = require('../src/memory')
 const stockpile = require('../src/behaviours/stockpile')
 const { createTicker, handleChat } = require('../src/index')
+const { record, golden } = require('./characterize-util')
 const { castleSite } = require('../src/chat')
 
 const SITE = { x: 100, y: 64, z: 200 }
@@ -74,6 +75,7 @@ describe('castle order chat (g0z.3)', () => {
   it('in range: sets the castle, starts work, answers with coords and size', () => {
     const bot = makeBot()
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    const journal = record(bot, bot._tickerCtx, { ticker }) // oqul.2: order transition journal
     ticker.setFollow('Steve')
     handleChat(bot, ticker, 'Steve', 'build castle')
     const ctx = bot._tickerCtx
@@ -85,6 +87,9 @@ describe('castle order chat (g0z.3)', () => {
     assert.equal(ticker.getFollowName(), '')
     const s = ctx.castle.site
     assert.match(bot.chats[bot.chats.length - 1], new RegExp(`^castle at ${s.x} ${s.y} ${s.z}, ~\\d+ blocks, this will take many hours`))
+    handleChat(bot, ticker, 'Steve', 'castle stop')
+    handleChat(bot, ticker, 'Steve', 'castle go')
+    golden('castle-order', 'g0z build castle in range -> stop -> go', journal.events)
   })
 
   it("out of range: 'I can't see you, come closer' and no castle", () => {

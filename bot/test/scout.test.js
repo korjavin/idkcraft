@@ -200,6 +200,42 @@ describe('scout robustness', () => {
   })
 })
 
+describe('scout coal goes to memory, not chat (ipn.14)', () => {
+  const CREG = { ...REG, coal_ore: 16, deepslate_coal_ore: 17 }
+
+  it('notes coal_ore in finds memory, says only the iron', () => {
+    const coal = pos(3, 64, 0)
+    const iron = pos(5, 60, 0)
+    const bot = mockBot({ registry: CREG, spots: [coal, iron], names: { '3,64,0': 'coal_ore', '5,60,0': 'iron_ore' } })
+    const ctx = {}
+    makeScout(bot, { everyMs: 0, ctx }).tick()
+    const names = [...ctx.resources.items.values()].map((c) => c.name).sort()
+    assert.deepEqual(names, ['coal_ore', 'iron_ore'])
+    assert.equal(bot.lines.length, 1)
+    assert.match(bot.lines[0], /^iron_ore/)
+    assert.ok(!bot.lines.some((l) => l.includes('coal')))
+    assert.ok(!ORE_NAMES.includes('coal_ore'))
+  })
+
+  it('the ore scan never asks for coal, so coal cannot crowd its 64 (normal path)', () => {
+    const calls = []
+    const bot = mockBot({ registry: CREG, findImpl(opts) { calls.push(opts); return [] } })
+    makeScout(bot, { everyMs: 0, ctx: {} }).tick()
+    assert.equal(calls.length, 2)
+    assert.ok(!calls[0].matching.includes(16) && !calls[0].matching.includes(17))
+    assert.equal(calls[0].count, 64)
+    assert.deepEqual(calls[1].matching, [16, 17])
+    assert.equal(calls[1].count, 16)
+  })
+
+  it('without ctx no coal scan runs (chat-only call sites unchanged)', () => {
+    const bot = mockBot({ registry: CREG, spots: [pos(3, 64, 0)], names: { '3,64,0': 'coal_ore' } })
+    makeScout(bot, { everyMs: 0 }).tick()
+    assert.equal(bot.findCalls, 1)
+    assert.deepEqual(bot.lines, [])
+  })
+})
+
 describe('findNearestBlock', () => {
   const NAMES = { coal_ore: 10, deepslate_coal_ore: 11, diamond_ore: 179, deepslate_diamond_ore: 180, iron_ore: 15 }
 

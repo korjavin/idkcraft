@@ -1,0 +1,33 @@
+{
+ "b2o follow -> build here -> work ticks": [
+  {"tick":1,"kind":"setGoal","goal":{"type":"GoalFollow","entity":"Steve","rangeSq":9,"x":10,"y":64,"z":0},"dynamic":true,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":1,"kind":"lastGoalKey","value":"follow:Steve"},
+  {"tick":1,"kind":"lastGoalKey","value":""},
+  {"tick":1,"kind":"chat","text":"building a home at 14 64 4"},
+  {"tick":2,"kind":"owner","owner":"work"},
+  {"tick":2,"kind":"setGoal","goal":null,"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":2,"kind":"step","value":"gather"},
+  {"tick":2,"kind":"stepStatus","value":"running"},
+  {"tick":2,"kind":"chat","text":"next: chopping wood (goal-fsm)"},
+  {"tick":2,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":4,"x":20,"y":64,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":2,"kind":"lastGoalKey","value":"gather:20,64,0"},
+  {"tick":4,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":4,"x":20,"y":65,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":4,"kind":"lastGoalKey","value":"gather:20,65,0"},
+  {"tick":7,"kind":"stepStatus","value":"failed:unreachable"},
+  {"tick":7,"kind":"chat","text":"cannot reach the trees"},
+  {"tick":7,"kind":"setGoal","goal":null,"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":7,"kind":"lastGoalKey","value":""},
+  {"tick":8,"kind":"step","value":"rest"},
+  {"tick":8,"kind":"stepStatus","value":"running"},
+  {"tick":8,"kind":"chat","text":"resting: stay: daytime, gohome: daytime, shelter: daytime, gocastle: no active castle, sitebed: not feasible, craft: need 4 planks for the table, have 0, equip: no materials, build: need table/door item, beds: house not built yet, light: home not built, gather holds after failure, deliver: nothing waiting, stockpile: house not built yet, gear: house not built yet, forage: nothing known nearby, explore: house not built yet (only-option)"},
+  {"tick":8,"kind":"setGoal","goal":{"type":"GoalFollow","entity":"Steve","rangeSq":9,"x":10,"y":64,"z":0},"dynamic":true,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":8,"kind":"lastGoalKey","value":"roam-back:Steve"}
+ ],
+ "3nt.23 hostile dies mid-fight -> follow": [
+  {"tick":1,"kind":"owner","owner":"idle"},
+  {"tick":1,"kind":"setGoal","goal":{"type":"GoalFollow","entity":"zombie","rangeSq":4,"x":5,"y":64,"z":0},"dynamic":true,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":1,"kind":"lastGoalKey","value":"fight:1"},
+  {"tick":2,"kind":"setGoal","goal":{"type":"GoalFollow","entity":"Steve","rangeSq":9,"x":10,"y":64,"z":0},"dynamic":true,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":2,"kind":"lastGoalKey","value":"follow:Steve"}
+ ]
+}

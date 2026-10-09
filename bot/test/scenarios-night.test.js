@@ -7,6 +7,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { createTicker } = require('../src/index')
+const { fakeClock, record, golden } = require('./characterize-util')
 
 const SITE = { x: 10, y: 64, z: 20 }
 const DOOR = { x: 11, y: 64, z: 20 }
@@ -75,6 +76,7 @@ describe('rw4.14: one dawn line tells the night', () => {
       autonomous: true,
     })
     const ctx = bot._tickerCtx
+    const journal = record(bot, ctx, { ticker })
     ctx.work = true
     ctx.home = ctxHome()
     ctx.deaths = 5 // previous days: the tally must snapshot, not lifetime-sum
@@ -112,6 +114,7 @@ describe('rw4.14: one dawn line tells the night', () => {
         ['night: survived, 2 deaths, banked 14 coal, at home; back to work'],
         `exactly one dawn line: ${bot.chats.join(' | ')}`)
       assert.equal(ctx.night.reported, true, 'tally closed')
+      golden('scenarios-night', 'rw4.14 dusk hold -> deaths -> dawn report', journal.events)
     } finally {
       Date.now = realNow
       ticker.destroy()
