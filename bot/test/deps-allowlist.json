@@ -1,8 +1,6 @@
 {
-  "src/behaviours/build.js -> src/goal.js": "lazy: goal.siteFor picks the house site when ctx.home is unset (geometry -> site.js, oqul.4)",
   "src/behaviours/forage.js -> src/goal.js": "lazy: taskParked, PARK_FORAGE_RADIUS, chatStep and goal helpers (constants already in budget.js)",
-  "src/behaviours/gather.js -> src/goal.js": "load-time destructure of gatherFailedHolds (-> holds.js, oqul.4)",
-  "src/behaviours/home.js -> src/goal.js": "load-time destructure of goalFacts and timeWord",
+  "src/behaviours/home.js -> src/goal.js": "load-time destructure of goalFacts (timeWord -> site.js, oqul.4)",
   "src/behaviours/home.js -> src/task.js": "lazy: task.carryOrderStamp for the comehome order stamp",
   "src/behaviours/stockpile.js -> src/goal.js": "lazy: goal.packFull and homeLegVetoed in the stockpile feasibility leash",
   "src/goal-options.js -> src/goal.js": "lazy: packFull, goalFacts and goal helpers for options and feasibility (triangle, oqul.5)",
