@@ -8,7 +8,9 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "test:slow": "node --test \"test/slow/*.test.js\"",
+    "golden:update": "GOLDEN_UPDATE=1 node --test \"test/*.test.js\""
   },
   "dependencies": {
     "mineflayer": "4.39.0",

@@ -11,6 +11,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { goals } = require('mineflayer-pathfinder')
 const { createTicker, handleChat } = require('../src/index')
+const { fakeClock, record, golden } = require('./characterize-util')
 
 function pos(x, y, z) {
   const p = {
@@ -214,6 +215,8 @@ describe('b2o: build here starts work in ticks, not just in the reply', () => {
     // inventory, then rest with reasons when the only column skips.
     const bot = orderBot({ '20,64,0': 'oak_log', '20,65,0': 'oak_log', '20,66,0': 'oak_leaves' }, { oak_log: { id: 17 } })
     bot.players = { Steve: visiblePlayer('Steve', 10) }
+    const clock = fakeClock() // oqul.2: controlled clock + seeded random for the journal
+    bot.pathfinder.movements = { canDig: true, allowSprinting: false, allowParkour: true } // journal: flags at goal issue
     const ticker = createTicker({
       bot,
       brain: { async decide() { return { action: 'follow', sprint: false, source: 'stub' } } },
@@ -222,6 +225,7 @@ describe('b2o: build here starts work in ticks, not just in the reply', () => {
     })
     ticker.setFollow('Steve')
     const ctx = bot._tickerCtx
+    const journal = record(bot, ctx, { ticker, clock })
     const cap = capture()
     const actions = []
     try {
@@ -244,7 +248,9 @@ describe('b2o: build here starts work in ticks, not just in the reply', () => {
       }
       assert.ok(actions.includes('rest'), `nothing to chop -> rest: ${actions.join(',')}`)
       assert.ok(!actions.slice(1).includes('follow'), `never trails again: ${actions.join(',')}`)
+      golden('scenarios-orders', 'b2o follow -> build here -> work ticks', journal.events)
     } finally {
+      clock.restore()
       cap.release()
       ticker.destroy()
     }
@@ -260,6 +266,8 @@ describe('3nt.23: fight without a hostile follows, never stops', () => {
     const bot = orderBot()
     bot.players = { Steve: visiblePlayer('Steve', 10) }
     bot.entities = { 1: { id: 1, name: 'zombie', type: 'mob', position: pos(5, 64, 0), height: 1.95 } }
+    const clock = fakeClock() // oqul.2: controlled clock + seeded random for the journal
+    bot.pathfinder.movements = { canDig: true, allowSprinting: false, allowParkour: true } // journal: flags at goal issue
     const ticker = createTicker({
       bot,
       brain: { async decide() { return { action: 'fight', sprint: false, source: 'stub' } } },
@@ -267,6 +275,7 @@ describe('3nt.23: fight without a hostile follows, never stops', () => {
       idleTickMs: 10,
     })
     const ctx = bot._tickerCtx
+    const journal = record(bot, ctx, { ticker, clock })
     const cap = capture()
     try {
       const r1 = await ticker.tick()
@@ -284,7 +293,9 @@ describe('3nt.23: fight without a hostile follows, never stops', () => {
       assert.equal(r3.decision.action, 'fight')
       assert.equal(bot._goals.length, goalsBefore + 1, 'follow spaces re-issues')
       assert.equal(bot._stops, 0, 'still never stopped')
+      golden('scenarios-orders', '3nt.23 hostile dies mid-fight -> follow', journal.events)
     } finally {
+      clock.restore()
       cap.release()
       ticker.destroy()
     }
