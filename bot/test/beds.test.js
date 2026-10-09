@@ -802,6 +802,49 @@ describe('jr2.2 stay sleeps in the own bed, never the owner\'s', () => {
     }
   })
 
+  it('rw4.20: a carried bed is laid in empty bedroom A at night, then slept in', async () => {
+    const bot = mockBot({ items: [{ name: 'red_bed', count: 1 }], at: { x: 12, y: 64, z: 23 }, timeOfDay: 15000 })
+    const ctx = stayCtx()
+    homeMod.stay(bot, ctx)
+    await rest(600)
+    assert.equal(bot.world.get(cellKey(A_FOOT)), 'red_bed')
+    assert.equal(bot.world.get(cellKey(A_HEAD)), 'red_bed')
+    assert.deepEqual(bot.calls.looks[0], [-Math.PI / 2, 0], 'forced east yaw: head lands +x')
+    assert.ok(bot.chats.includes('my bed is in'))
+    homeMod.stay(bot, ctx)
+    await flush()
+    assert.deepEqual(bot.calls.sleeps, ['red_bed'])
+    assert.ok(bot.chats.includes('sleeping in my bed'))
+  })
+
+  it('rw4.20: a bed that never takes gives up after three tries, then holds', async () => {
+    const bot = mockBot({
+      items: [{ name: 'red_bed', count: 1 }], at: { x: 12, y: 64, z: 23 }, timeOfDay: 15000,
+      placeImpl: async () => {}, // the server swallows the place: cells stay air
+    })
+    const ctx = stayCtx()
+    for (let i = 0; i < 5; i++) {
+      homeMod.stay(bot, ctx)
+      await rest(550)
+    }
+    assert.equal(bot.calls.places.length, 3, 'capped at NIGHT_BED_FAILS')
+    assert.equal(ctx.sleepInFlight, false)
+    assert.ok(!bot.chats.includes('my bed is in'))
+  })
+
+  it('rw4.20: an occupied or groundless bedroom A holds as before, bed kept', () => {
+    for (const cells of [
+      { [cellKey(A_FOOT)]: 'dirt' },
+      { [`${A_HEAD.x},${A_HEAD.y - 1},${A_HEAD.z}`]: 'air' },
+    ]) {
+      const bot = mockBot({ items: [{ name: 'red_bed', count: 1 }], cells, at: { x: 12, y: 64, z: 23 }, timeOfDay: 15000 })
+      const ctx = stayCtx()
+      homeMod.stay(bot, ctx)
+      assert.deepEqual(bot.calls.places, [], `no place, cells: ${JSON.stringify(cells)}`)
+      assert.deepEqual(bot.calls.goals, [], 'holds instead of walking')
+    }
+  })
+
   it('v1 homes never sleep even with the API present (regression)', () => {
     const bot = mockBot({ at: { x: 11, y: 64, z: 21 }, timeOfDay: 15000 })
     const ctx = { home: { site: { ...SITE }, built: true, interior: { min: { x: 11, y: 64, z: 21 }, max: { x: 12, y: 65, z: 22 } } } }

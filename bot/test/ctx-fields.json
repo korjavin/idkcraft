@@ -1449,6 +1449,7 @@
   },
   "retreatLatch": {
     "writers": [
+      "src/behaviours/home.js",
       "src/behaviours/retreat.js",
       "src/goal.js"
     ],
