@@ -26,6 +26,15 @@ const ORE_NAMES = [
   'deepslate_redstone_ore',
 ]
 
+// ipn.14: coal goes to finds memory (gear's want-coal, forage) but never to
+// chat. Its own findBlocks with a small count, so plentiful surface coal
+// can neither crowd the valuable ores out of the ore scan's 64 nor flood
+// the 256-cell memory.
+// ponytail: memory is oldest-out (resources MAX_ITEMS); if coal still
+// evicts iron in prod, a per-kind eviction priority is its own bead.
+const COAL_NAMES = ['coal_ore', 'deepslate_coal_ore']
+const COAL_COUNT = 16
+
 function baseName(name) {
   return name.startsWith('deepslate_') ? name.slice('deepslate_'.length) : name
 }
@@ -555,6 +564,7 @@ function findNearest(bot, blockName, refY = null, exclude = null) {
 
 function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () => Date.now(), maxSeen = 5000, ctx = null } = {}) {
   const oreIds = resolveIds(bot, ORE_NAMES)
+  const coalIds = resolveIds(bot, COAL_NAMES)
   const seen = new Set()
   let lastScan = 0
 
@@ -600,6 +610,32 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
       if (!fresh.has(base)) fresh.set(base, [])
       fresh.get(base).push(p)
     }
+    // Memory-only coal (ipn.14): never seen-marked, never reported.
+    if (ctx && coalIds.length > 0) {
+      let coal = []
+      try {
+        coal = bot.findBlocks({ matching: coalIds, maxDistance: radius, count: COAL_COUNT }) || []
+      } catch {
+        coal = []
+      }
+      for (const p of coal) {
+        let name = null
+        try {
+          const block = bot.blockAt(p)
+          name = block && block.name
+        } catch {
+          name = null
+        }
+        if (!name || !COAL_NAMES.includes(name)) continue
+        let exposed = false
+        try {
+          exposed = isExposed(bot, p)
+        } catch {
+          exposed = false
+        }
+        spots.push({ x: p.x, y: p.y, z: p.z, name, exposed })
+      }
+    }
     if (ctx && spots.length > 0) {
       // Lazy require: resources.js already requires this file at the top,
       // so a top-level require back would catch its half-built exports.
@@ -630,4 +666,4 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () 
   return { tick }
 }
 
-module.exports = { makeScout, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES, keyOf, MAX_DIG_DEPTH, MAX_DIG_DISTH }
+module.exports = { makeScout, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES, COAL_NAMES, COAL_COUNT, keyOf, MAX_DIG_DEPTH, MAX_DIG_DISTH }

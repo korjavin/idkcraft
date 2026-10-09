@@ -3,9 +3,9 @@
 // Manual live assay for idkcraft-ipn.1 (not run by npm test): against a
 // running flat server (idk-mc up), drive behaviours/furnace.js directly
 // with an embedded bot — craft the furnace from 8 cobble at a placed
-// table, place it, load 8 ore + coal above the reserve, smelt, take.
+// table, place it, load 8 ore + coal, smelt, take.
 // Asserts: the claim stands verified, `smelted 8 iron` logs, 8 ingots
-// land in inventory, >=4 coal stays banked (reserve). Cleans its site.
+// land in inventory, only the needed coal burns (1 of 6). Cleans its site.
 // Exit 0/1. Budget ~8 min (8 ore x 10 s smelt + window flaps).
 
 const mineflayer = require('mineflayer')
@@ -128,8 +128,8 @@ async function main() {
     if (!stood || stood.name !== 'furnace') throw new Error('claimed furnace is not standing')
     if (!lines.some((l) => l === 'smelted 8 iron')) throw new Error('missing `smelted 8 iron` line')
     if (invCount(bot, 'iron_ingot') < 8) throw new Error('ingots never landed')
-    if (invCount(bot, 'coal') < 4) throw new Error('reserve burned: coal below 4')
-    console.log('PASS: furnace stands, 8 ore -> 8 ingots, reserve intact')
+    if (invCount(bot, 'coal') < 5) throw new Error('overfuelled: more than one coal burned')
+    console.log('PASS: furnace stands, 8 ore -> 8 ingots, one coal burned')
   } finally {
     try {
       if (site) await rcon(`fill ${site.cx - 1} ${site.surf} ${site.cz - 1} ${site.cx + 1} ${site.surf + 1} ${site.cz + 1} air`)
