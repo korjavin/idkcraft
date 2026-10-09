@@ -412,7 +412,10 @@ describe('vmzq.48 exposed hold releases fight (tick level)', () => {
       // suppresses fight — the dispatch, not the every-tick melee
       // reflex, tells the exposed hold apart. (attackCalls is not
       // asserted: the reflex swings regardless of inShelter.)
+      // vmzq.58: an armed hold that never enclosed now releases fight at
+      // melee range too — the control is an enclosed (dug-in) hold.
       ctx.inShelter = true
+      ctx.shelter = { ...ctx.shelter, exposed: false, dugIn: true }
       fightRan = 0
       const held = await ticker.tick()
       assert.equal(held.decision.action, 'idle', 'armed hold still suppresses')
