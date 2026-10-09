@@ -138,8 +138,8 @@ describe('rw4.4 (b) blueprint: table first, ring-door-ring-roof', () => {
     assert.equal(roof.length, 16)
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
   })
-  it('v2 lays 99 cells: table, 5 floor, 21+door+21, 42 roof, 8 partition', () => {
-    assert.equal(BLUEPRINT_V2.length, 99)
+  it('v2 lays 130 cells: table, 5 floor, 21+door+21, 42 roof, 8 partition, 31 clear', () => {
+    assert.equal(BLUEPRINT_V2.length, 130)
     assert.equal(PLANK_COUNT_V2, 92)
     assert.deepEqual(BLUEPRINT_V2[0], { dx: 5, dy: 0, dz: 1, kind: 'table' })
     const floor = BLUEPRINT_V2.slice(1, 6)
@@ -158,8 +158,9 @@ describe('rw4.4 (b) blueprint: table first, ring-door-ring-roof', () => {
     const roof = BLUEPRINT_V2.slice(doorIdx + 22, doorIdx + 64)
     assert.equal(roof.length, 42)
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
-    const part = BLUEPRINT_V2.slice(doorIdx + 64)
+    const part = BLUEPRINT_V2.slice(doorIdx + 64, doorIdx + 72)
     assert.equal(part.length, 8)
+    assert.equal(BLUEPRINT_V2.slice(doorIdx + 72).length, 31) // rw4.19 clear cells, appended
     assert.deepEqual(part.map((c) => [c.dx, c.dy, c.dz]).sort((a, b) => a[0] - b[0] || a[2] - b[2] || a[1] - b[1]), [
       [1, 0, 3], [1, 1, 3], [3, 0, 3], [3, 1, 3], [3, 0, 4], [3, 1, 4], [5, 0, 3], [5, 1, 3],
     ])
@@ -257,7 +258,7 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
     bot.entity.position = pos(11, 64, 2) // next to the table cell (placements are in-reach only)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
     build(bot, ctx, null, null) // tick 1: progress chat + approach goal
-    assert.ok(bot.chats.some((m) => m === 'building 5/99')) // the dirt floor reads done from the start
+    assert.ok(bot.chats.some((m) => m === 'building 36/130')) // the dirt floor and the air interior read done from the start
     assert.equal(bot.calls.goals.length, 1)
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalPlaceBlock')
     assert.equal(bot.calls.places.length, 0)
@@ -1121,5 +1122,138 @@ describe('idkcraft-jr2.4 build approach livelock on a slope', () => {
     build(bot, ctx, null, null)
     assert.ok(ctx.home && ctx.home.site, 'home founded from spawn')
     assert.equal(ctx.buildFarIdx, -1)
+  })
+})
+
+// rw4.19: a relief-1 site left a dirt bump at feet level inside the house —
+// the doorway 1 high (gohome never got in), the bed foot 'blocked by dirt'.
+describe('rw4.19 interior clear cells', () => {
+  const interior = (c) => c.dx >= 1 && c.dx <= 5 && c.dy >= 0 && c.dy <= 1 && c.dz >= 1 && c.dz <= 4
+  const ctxFor = (home) => ({ home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() })
+  let origLog
+  beforeEach(() => { origLog = console.log; console.log = () => {} })
+  afterEach(() => { console.log = origLog })
+
+  it('(a) clear cells cover the interior box (bar partition and table) and nothing outside', () => {
+    const clear = BLUEPRINT_V2.filter((c) => c.kind === 'clear')
+    assert.ok(clear.every(interior))
+    const keys = new Set(BLUEPRINT_V2.filter((c) => c.kind !== 'fill').map((c) => `${c.dx},${c.dy},${c.dz}`))
+    for (let dx = 1; dx <= 5; dx++) for (let dy = 0; dy <= 1; dy++) for (let dz = 1; dz <= 4; dz++) {
+      assert.ok(keys.has(`${dx},${dy},${dz}`), `interior ${dx},${dy},${dz} has a plan cell`)
+    }
+    assert.equal(keys.size, BLUEPRINT_V2.filter((c) => c.kind !== 'fill').length, 'no cell twice')
+    assert.ok(!BLUEPRINT.some((c) => c.kind === 'clear'), 'v1 frozen')
+    assert.equal(build.isPlanCell({ site: { x: 0, y: 64, z: 0 }, v: 2 }, 2, 64, 1), false, 'equip may still stand there')
+  })
+
+  it('(a) clear cells are visited first, before the table and the walls', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    world.set(home.site.x + 3, home.site.y, home.site.z + 1, 'dirt')
+    const i = build.nextCellIdx(bot, home, [])
+    assert.deepEqual(BLUEPRINT_V2[i], { dx: 3, dy: 0, dz: 1, kind: 'clear' })
+  })
+
+  it('(b) dirt bumps in the doorway and the bedroom are dug, then home done', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }] })
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    paintHouse(world, home)
+    for (const c of BLUEPRINT_V2) if (c.kind === 'clear') world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    assert.equal(build.isComplete(bot, home), true, 'air interior is a whole house (not worse than master)')
+    assert.equal(build.nextCellIdx(bot, home, []), -1)
+    assert.equal(build.clearOwed(bot, home, []), false)
+    world.set(s.x + 3, s.y, s.z + 1, 'dirt')
+    world.set(s.x + 1, s.y, s.z + 4, 'grass_block')
+    assert.notEqual(build.nextCellIdx(bot, home, []), -1)
+    assert.equal(build.clearOwed(bot, home, []), true)
+    bot.entity.position = pos(s.x + 3.5, s.y, s.z + 2.5)
+    const ctx = ctxFor(home)
+    for (let t = 0; t < 12 && !home.built; t++) {
+      build(bot, ctx, null, null)
+      await settle()
+    }
+    assert.deepEqual(bot.calls.digs, ['dirt', 'grass_block'])
+    assert.equal(bot.calls.places.length, 0)
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear')
+    assert.equal(build.clearOwed(bot, home, []), false)
+    assert.equal(home.built, true)
+    assert.ok(bot.chats.some((m) => m === `home done at ${s.x} ${s.y} ${s.z}`))
+  })
+
+  it('(c) air, flora and furnishings in clear cells are done without a dig', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    const cell = (dx, dy, dz) => BLUEPRINT_V2.find((c) => c.kind === 'clear' && c.dx === dx && c.dy === dy && c.dz === dz)
+    world.set(s.x + 1, s.y, s.z + 4, 'red_bed')
+    world.set(s.x + 2, s.y, s.z + 1, 'chest')
+    world.set(s.x + 4, s.y, s.z + 1, 'furnace')
+    assert.equal(build.cellDone(bot, home, cell(1, 0, 4)), true, 'a bed is never dug')
+    assert.equal(build.cellDone(bot, home, cell(2, 0, 1)), true)
+    assert.equal(build.cellDone(bot, home, cell(4, 0, 1)), true)
+    assert.equal(build.cellDone(bot, home, cell(3, 1, 1)), true, 'air')
+    const grassy = { blockAt: (p) => ({ name: 'short_grass', boundingBox: 'empty', position: p }) }
+    assert.equal(build.cellDone(grassy, home, cell(3, 0, 1)), true, 'flora')
+    world.set(s.x + 3, s.y, s.z + 1, 'dirt')
+    assert.equal(build.cellDone(bot, home, cell(3, 0, 1)), false)
+  })
+
+  it('(d) a refused clear dig skips after 3, never an endless dig', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    world.set(s.x + 3, s.y, s.z + 1, 'dirt')
+    bot.dig = async () => { bot.calls.digs.push('refused'); throw new Error('refused') }
+    bot.entity.position = pos(s.x + 3.5, s.y, s.z - 0.5)
+    const ctx = ctxFor(home)
+    world.set(s.x + 5, s.y, s.z + 1, 'crafting_table')
+    for (let t = 0; t < 10; t++) {
+      build(bot, ctx, null, null)
+      await settle()
+    }
+    const idx = BLUEPRINT_V2.findIndex((c) => c.kind === 'clear' && c.dx === 3 && c.dy === 0 && c.dz === 1)
+    assert.deepEqual(ctx.buildSkip, [idx])
+    assert.equal(bot.calls.digs.length, 3)
+    assert.equal(build.clearOwed(bot, home, ctx.buildSkip), false, 'a skipped clear never re-opens')
+  })
+
+  it('(d) a skipped clear cell never holds a finished house back from done', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    paintHouse(world, home)
+    for (const c of BLUEPRINT_V2) if (c.kind === 'clear') world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    world.set(s.x + 3, s.y, s.z + 1, 'dirt')
+    const idx = BLUEPRINT_V2.findIndex((c) => c.kind === 'clear' && c.dx === 3 && c.dy === 0 && c.dz === 1)
+    const ctx = ctxFor(home)
+    ctx.buildSkip = [idx]
+    build(bot, ctx, null, null)
+    assert.equal(home.built, true)
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('(d) a deny-guarded clear cell (water above: breath rule) skips without a dig', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    world.set(s.x + 5, s.y, s.z + 1, 'crafting_table')
+    world.set(s.x + 3, s.y, s.z + 1, 'dirt')
+    world.set(s.x + 3, s.y + 1, s.z + 1, 'water')
+    bot.entity.position = pos(s.x + 3.5, s.y, s.z - 0.5)
+    const ctx = ctxFor(home)
+    for (let t = 0; t < 10; t++) {
+      build(bot, ctx, null, null)
+      await settle()
+    }
+    const idx = BLUEPRINT_V2.findIndex((c) => c.kind === 'clear' && c.dx === 3 && c.dy === 0 && c.dz === 1)
+    assert.deepEqual(ctx.buildSkip, [idx])
+    assert.equal(bot.calls.digs.length, 0)
   })
 })
