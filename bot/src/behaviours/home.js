@@ -531,6 +531,21 @@ function gohomeTick(bot, ctx, target, state) {
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }
     return
   }
+  if (!home.built) {
+    // rw4.20: the clear-cell re-open (index.js, rw4.19) flipped the house
+    // mid-walk — natural ground behind the door wedged the enter leg 60
+    // ticks into cannot-reach-home (rig HOUSE-BUMP). Yield, not fail (no
+    // night latch, no hold): build owns the night now and digs it out.
+    if (ctx.gohome && ctx.gohome.phase !== 'done') console.log('gohome: home re-opened, yielding to build')
+    ctx.gohome = null
+    ctx.shelterLeg = null
+    ctx.stepStatus = 'done'
+    // A retreat latch on gohome would re-dispatch this instant done under a
+    // hostile (revmux 01 minor): drop it so the chain re-asks retreat/pillar.
+    if (ctx.retreatLatch && ctx.retreatLatch.action === 'gohome') ctx.retreatLatch = null
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
+    return
+  }
   if (!ctx.gohome || ctx.gohome.phase === 'done' || ctx.gohome.phase === 'failed') {
     // Already inside (re-picked step, lagged first tick): skip the walk-out.
     // Restore 'running': with a stale failed status decide would otherwise
@@ -681,6 +696,52 @@ function holdStill(bot, ctx) {
 const SLEEP_REACH = 2 // from the head: inside mineflayer's click box on every facing
 const SLEEP_STALL_TICKS = 30
 const SLEEP_RETRY_TICKS = 30 // transient backoff: covers dusk (~27 ticks), re-tries mobs nightly
+// Night bed (rw4.20): a carried bed with bedroom A empty is laid before the
+// sleep — the beds step is day-only, and a bump that ate bed A's foot (prod,
+// rig HOUSE-BUMP) left the bot holding a red_bed all night. Plain case only:
+// both cells air (build's clear cells dug the bump) on solid ground; a dip
+// or occupier holds as before and the day beds step patches it. Same forced
+// east yaw as beds.js placeTick. Three refusals give up tonight.
+const NIGHT_BED_FAILS = 3
+const AIR_CELLS = new Set(['air', 'cave_air', 'void_air'])
+const YAW_EAST = -Math.PI / 2
+function nightBedItem(bot, a, st) {
+  if ((st.bedLayFails || 0) >= NIGHT_BED_FAILS) return null
+  const bedsMod = require('./beds') // deferred, as cellsOf above
+  const name = (p) => { try { const b = bot.blockAt(p); return b ? b.name : null } catch (_) { return null } }
+  if (!AIR_CELLS.has(name(a.foot)) || !AIR_CELLS.has(name(a.head))) return null
+  for (const end of [a.foot, a.head]) {
+    const g = name(new Vec3(end.x, end.y - 1, end.z))
+    if (!g || bedsMod.needsFillGround(g)) return null
+  }
+  return bedsMod.findBedItem(bot, null)
+}
+function layNightBed(bot, ctx, home, a, st, item) {
+  ctx.sleepInFlight = true
+  void (async () => {
+    try {
+      const ground = bot.blockAt(new Vec3(a.foot.x, a.foot.y - 1, a.foot.z))
+      await bot.equip(item, 'hand')
+      if (typeof bot.look === 'function') await bot.look(YAW_EAST, 0)
+      if (typeof bot._placeBlockWithOptions === 'function') {
+        await bot._placeBlockWithOptions(ground, new Vec3(0, 1, 0), { forceLook: 'ignore' })
+      } else {
+        await bot.placeBlock(ground, new Vec3(0, 1, 0))
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500)) // the head acks a tick after the foot
+      if (!require('./beds').bedAt(bot, a.foot)) throw new Error('bed did not take')
+      try { home.bedA = new Vec3(a.foot.x, a.foot.y, a.foot.z); delete home.sleptA } catch (_) { /* claim best-effort */ }
+      try { bot.chat('my bed is in') } catch (_) { /* chat best-effort */ }
+    } catch (err) {
+      st.bedLayFails = (st.bedLayFails || 0) + 1
+      if (st.bedLayFails === 1) {
+        try { console.log(`night bed refused: ${err && err.message ? err.message : err}`) } catch (_) { /* logging best-effort */ }
+      }
+    } finally {
+      ctx.sleepInFlight = false
+    }
+  })()
+}
 function sleepTick(bot, ctx, home, st) {
   try {
     if (!home || !home.site || residence.of(home).beds(home).length === 0) return false
@@ -696,11 +757,14 @@ function sleepTick(bot, ctx, home, st) {
     if (!cells) return false
     let bed = null
     try { bed = require('./beds').bedroomBed(bot, home, 'a') } catch (_) { bed = null }
+    let carried = null
     if (!bed) {
       try { if (home.bedA) { delete home.bedA; delete home.sleptA } } catch (_) { /* retract best-effort */ }
-      return false // no whole bed in A: hold as before, never take B
+      carried = nightBedItem(bot, cells.a, st)
+      if (!carried) return false // no whole bed in A and none to lay: hold as before, never take B
+    } else {
+      try { home.bedA = new Vec3(cells.a.foot.x, cells.a.foot.y, cells.a.foot.z) } catch (_) { /* claim best-effort */ }
     }
-    try { home.bedA = new Vec3(cells.a.foot.x, cells.a.foot.y, cells.a.foot.z) } catch (_) { /* claim best-effort */ }
     const bp = botPos(bot)
     if (!bp) return false
     const head = cells.a.head
@@ -717,6 +781,7 @@ function sleepTick(bot, ctx, home, st) {
       }
       return true
     }
+    if (carried) { layNightBed(bot, ctx, home, cells.a, st, carried); return true }
     ctx.sleepInFlight = true
     void (async () => {
       try {
