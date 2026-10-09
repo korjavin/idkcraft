@@ -1,9 +1,1 @@
-{
-  "src/behaviours/forage.js -> src/goal.js": "lazy: taskParked, PARK_FORAGE_RADIUS, chatStep and goal helpers (constants already in budget.js)",
-  "src/behaviours/home.js -> src/goal.js": "load-time destructure of goalFacts (timeWord -> site.js, oqul.4)",
-  "src/behaviours/home.js -> src/task.js": "lazy: task.carryOrderStamp for the comehome order stamp",
-  "src/behaviours/stockpile.js -> src/goal.js": "lazy: goal.packFull and homeLegVetoed in the stockpile feasibility leash",
-  "src/goal-options.js -> src/goal.js": "lazy: MENU feasibility, goalFacts, STEP_CRITERIA and packFull for the plan options — downward edge, the cycle is gone (oqul.5); MENU/goalFacts live in goal.js",
-  "src/task.js -> src/goal-options.js": "lazy: goalOptions and planInstructions for the plan prompt — downward edge, goal-options never requires task (oqul.5)",
-  "src/task.js -> src/goal.js": "lazy: MENU, goalFacts, registered, commit, failHolds and STEP_CRITERIA across the task loop — downward edge, goal.js never requires task (oqul.5)"
-}
+{}

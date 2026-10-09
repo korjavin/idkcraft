@@ -139,6 +139,7 @@
     "writers": [
       "src/behaviours/beds.js",
       "src/behaviours/bring.js",
+      "src/behaviours/bringbase.js",
       "src/behaviours/castlefetch.js",
       "src/chat.js",
       "src/index.js",
@@ -1582,9 +1583,9 @@
   },
   "stepChat": {
     "writers": [
-      "src/goal.js"
+      "src/step.js"
     ],
-    "owner": "src/goal.js"
+    "owner": "src/step.js"
   },
   "stepFail": {
     "writers": [

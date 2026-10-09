@@ -9,7 +9,7 @@ const { findCreeper, snapHostiles } = require('./perception')
 const body = require('./body')
 const metrics = require('./metrics')
 const fightMod = require('./behaviours/fight')
-const { issueGoal } = require('./behaviours/util')
+const { issueGoal, isInside } = require('./behaviours/util')
 
 const origEquipGear = fightMod.equipGear
 fightMod.equipGear = function(bot) {
@@ -509,7 +509,7 @@ function fleeReflex(bot, ctx) {
   // rqdj: a creeper outside a closed house cannot reach us; running out is the danger.
   // inShelter alone is not enough (home.js sets it on the open-air night pillar
   // too), so require the body to be inside the home box.
-  if (ctx.inShelter && ctx.home && require('./behaviours/home').isInside(bot, ctx.home)) return false // deferred: home loads reflexes
+  if (ctx.inShelter && ctx.home && isInside(bot, ctx.home)) return false // util.isInside (oqul.11: was a deferred home.js require)
   // vmzq.30: a capped pit or a pillar top is shelter too — fleeing
   // pathfinds out through the cap (canDig) or off the top and abandons
   // it (rig: dug in, fled a creeper, zombie kill 2 min later). A creeper

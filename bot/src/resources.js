@@ -1,8 +1,8 @@
 'use strict'
 
 // Resource memory (idkcraft-atl.1): the shared find store for the forage
-// step. explore.js fills it from arrival scans (ores + trees via scout's
-// exported resolvers — scout.js itself is untouched for amb); forage
+// step. explore.js fills it from arrival scans (ores + trees via the
+// blockids.js resolvers scout re-exports, oqul.11); forage
 // (atl.2) reads it. Dumb by design: position, type, time; forage
 // re-validates on arrival. Bounded (oldest out), never throws.
 //
@@ -12,7 +12,7 @@
 // (old disk files, hand notes without the field) — never defaulted.
 
 const Vec3 = require('vec3')
-const scout = require('./behaviours/scout')
+const blockids = require('./blockids') // oqul.11: was behaviours/scout (the scout-resources cycle)
 const castle = require('./castle')
 
 const MAX_ITEMS = 256
@@ -39,7 +39,7 @@ function noteSpots(ctx, spots, now) {
   let added = 0
   for (const s of spots) {
     if (!s || typeof s.x !== 'number' || typeof s.name !== 'string') continue
-    const k = scout.keyOf(s)
+    const k = blockids.keyOf(s)
     // g0z.34: a laid castle block (frame log) is never a find — every
     // reader (forage, castlefetch, goal options) walked to it and only the
     // dig guard refused, after the climb onto the castle. A re-note drops
@@ -121,8 +121,8 @@ function scan(bot, ctx, opts) {
   const now = typeof o.now === 'number' ? o.now : Date.now()
   let ids = []
   try {
-    ids = ids.concat(scout.resolveFindIds(bot, 'ore') || [])
-    ids = ids.concat(scout.resolveFindIds(bot, 'logs') || [])
+    ids = ids.concat(blockids.resolveFindIds(bot, 'ore') || [])
+    ids = ids.concat(blockids.resolveFindIds(bot, 'logs') || [])
   } catch (_) {
     return { added: 0, total: count(ctx) }
   }
@@ -136,9 +136,9 @@ function scan(bot, ctx, opts) {
   // ipn.14: coal in its own small scan (see scout COAL_NAMES) so it can't
   // crowd ores/logs out of maxCount; a throw here keeps the ore results.
   try {
-    const coalIds = scout.resolveFindIds(bot, 'coal') || []
+    const coalIds = blockids.resolveFindIds(bot, 'coal') || []
     if (coalIds.length > 0) {
-      found = found.concat(bot.findBlocks({ matching: coalIds, maxDistance: radius, count: scout.COAL_COUNT }) || [])
+      found = found.concat(bot.findBlocks({ matching: coalIds, maxDistance: radius, count: blockids.COAL_COUNT }) || [])
     }
   } catch (_) {
     // coal is best-effort
@@ -146,9 +146,9 @@ function scan(bot, ctx, opts) {
   // g0z.37: sand (castle glass) in its own small scan, same COAL_COUNT cap,
   // so a beach cannot crowd ores/logs out.
   try {
-    const sandIds = scout.resolveBlockIds(bot, 'sand').concat(scout.resolveBlockIds(bot, 'red_sand'))
+    const sandIds = blockids.resolveBlockIds(bot, 'sand').concat(blockids.resolveBlockIds(bot, 'red_sand'))
     if (sandIds.length > 0) {
-      found = found.concat(bot.findBlocks({ matching: sandIds, maxDistance: radius, count: scout.COAL_COUNT }) || [])
+      found = found.concat(bot.findBlocks({ matching: sandIds, maxDistance: radius, count: blockids.COAL_COUNT }) || [])
     }
   } catch (_) {
     // sand is best-effort
@@ -167,7 +167,7 @@ function scan(bot, ctx, opts) {
     // null and the flag is the only record left.
     let exposed = false
     try {
-      exposed = scout.isExposed(bot, p)
+      exposed = blockids.isExposed(bot, p)
     } catch (_) {
       exposed = false
     }
@@ -193,7 +193,7 @@ function exposedOf(bot, item) {
     const live = bot.blockAt(v)
     if (!live) return remembered // chunk unloaded: trust the flag
     if (typeof item.name === 'string' && live.name !== item.name) return undefined
-    return scout.isExposed(bot, v)
+    return blockids.isExposed(bot, v)
   } catch (_) {
     return remembered
   }

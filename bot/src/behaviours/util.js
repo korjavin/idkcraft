@@ -4,11 +4,12 @@
 // lived in six behaviour files, botPos in three (plus a home.js variant
 // without the try). One copy, so a latch fix lands everywhere at once.
 // Requires only the external vec3 leaf (real bot.blockAt calls pos.floored,
-// so plain {x,y,z} would throw) and the pure castle data module (no
-// requires of its own) — still no repo import cycles.
+// so plain {x,y,z} would throw), the pure castle data module (no
+// requires of its own) and residence (vec3 + castle) — still no repo import cycles.
 const { Vec3 } = require('vec3')
 const castle = require('../castle')
 const metrics = require('../metrics')
+const residence = require('../residence') // isInside; requires only vec3 + castle
 
 function say(bot, line) {
   try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
@@ -44,7 +45,29 @@ function botPos(bot) {
   return null
 }
 
-module.exports = { say, clearGoal, issueGoal, botPos }
+// Residence floors (residence.js interior): for hut/house the floored
+// home.interior box — raw float compares put the back row and east column
+// outside (live jr2.3: a bedroom order at z=4.5 read as outside and walked
+// A* at the shut door). Moved from home.js (idkcraft-oqul.11) so the
+// reflexes read it without loading home; home.js re-exports it.
+function isInside(bot, home) {
+  try {
+    const bp = botPos(bot)
+    if (!bp || !home) return false
+    return residence.of(home).interior(home, bp)
+  } catch (_) {
+    return false
+  }
+}
+
+// "x y z" for the honest can't-see-you lines (bring, deliver); moved from
+// bring.js (idkcraft-oqul.11).
+function atPos(bot) {
+  const bp = bot.entity && bot.entity.position
+  return bp ? `${Math.round(bp.x)} ${Math.round(bp.y)} ${Math.round(bp.z)}` : 'unknown'
+}
+
+module.exports = { say, clearGoal, issueGoal, botPos, isInside, atPos }
 
 // Owner-build protection (idkcraft-drq): the single break guard every
 // direct dig site calls. Breakable = natural terrain or blocks the bot
@@ -663,4 +686,4 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { say, clearGoal, issueGoal, botPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef }
+module.exports = { say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef }

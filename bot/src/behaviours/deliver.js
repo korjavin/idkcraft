@@ -14,10 +14,9 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const follow = require('./follow')
-const bring = require('./bring')
 const stuck = require('../stuck')
 const { countItems } = require('../perception')
-const { say, clearGoal, issueGoal, botPos } = require('./util')
+const { say, clearGoal, issueGoal, botPos, atPos } = require('./util') // atPos: oqul.11, was bring.atPos
 
 const DELIVER_RANGE = 3
 const TOSS_RANGE = DELIVER_RANGE + 0.5
@@ -257,7 +256,7 @@ function deliver(bot, ctx, target, state) {
   if (!f.saidWaiting) {
     f.saidWaiting = true
     const what = Object.keys(live.items).map((n) => `${live.items[n]} ${n}`).join(', ')
-    say(bot, `I can't see you — I'm at ${bring.atPos(bot)} with your ${what}; come closer`)
+    say(bot, `I can't see you — I'm at ${atPos(bot)} with your ${what}; come closer`)
   }
 }
 

@@ -1501,10 +1501,10 @@ function homeFallbackViable(bot, ctx) {
     if (!home.chest && !fundedForChest(bot)) {
       try { if (!questShedDue(bot, ctx)) return false } catch (_) { return false }
     }
-    const goal = require('../goal') // deferred: goal requires this module at load
-    try { if (goal.packFull(bot, ctx)) return true } catch (_) { /* leash below */ }
+    const vetoes = require('../vetoes') // oqul.11: the veto helpers left goal.js
+    try { if (vetoes.packFull(bot, ctx)) return true } catch (_) { /* leash below */ }
     if (ctx && ctx.stockpilePierced) return true
-    try { return !goal.homeLegVetoed(bot, ctx, 'stockpile') } catch (_) { return false }
+    try { return !vetoes.homeLegVetoed(bot, ctx, 'stockpile') } catch (_) { return false }
   } catch (_) {
     return false
   }
