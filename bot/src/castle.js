@@ -517,6 +517,19 @@ function inFootprint(state, pos) {
   } catch (_) { return false }
 }
 
+// Site box with a one-block margin, foundation layers included: never dig
+// the castle's own ground or walls for its stone. Moved verbatim from
+// behaviours/castlefetch.js (idkcraft-oqul.11) so equip.js reads it without
+// the equip<->castlefetch cycle; castlefetch re-exports it.
+const FETCH_SITE_TOP = 16
+function onSite(st, p, margin = 1, below = 3) {
+  const { w, d } = siteDimensions(st.rot | 0, st.blueprintVersion)
+  const dx = Math.floor(p.x) - st.site.x
+  const dy = Math.floor(p.y) - st.site.y
+  const dz = Math.floor(p.z) - st.site.z
+  return dx >= -margin && dx < w + margin && dz >= -margin && dz < d + margin && dy >= -below && dy <= FETCH_SITE_TOP
+}
+
 function billOfMaterials(plan) {
   const bom = {}
   for (const c of plan) bom[c.kind] = (bom[c.kind] || 0) + 1
@@ -551,4 +564,5 @@ module.exports = {
   protects,
   groundCell,
   inFootprint,
+  onSite,
 }
