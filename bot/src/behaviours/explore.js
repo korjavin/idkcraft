@@ -389,6 +389,7 @@ module.exports.TASK_SEARCH_RADIUS = TASK_SEARCH_RADIUS
 module.exports.taskActive = taskActive
 module.exports.castleActive = castleActive
 module.exports.ownerBring = ownerBring
+module.exports.aloneIdle = aloneIdle // vmzq.59: forage reads idle alone as parked
 module.exports.nextTarget = nextTarget
 module.exports.anchorOf = anchorOf // atl.8: bring search legs need the anchor check without walking
 module.exports.dropDeadLeg = dropDeadLeg // 9kd: death path consumes the killer leg's target

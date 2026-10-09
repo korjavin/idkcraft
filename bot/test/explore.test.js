@@ -539,6 +539,20 @@ describe('explore idle alone (vmzq.59)', () => {
     assert.notDeepEqual(ctx.explore.target, { x: 0, z: -16 })
   })
 
+  it('forage picker skips cells beyond 64 when idle alone; online, or alone pre-home, it does not', () => {
+    const forage = require('../src/behaviours/forage')
+    const far = { x: 100, z: 0 }
+    const near = { x: 40, z: 0 }
+    const alone = mockBot()
+    alone.players = {}
+    const ctx = { home: { site: { x: 0, y: 64, z: 0 }, built: true } }
+    assert.equal(forage.parkedCellSkipped(ctx, far, alone), true)
+    assert.equal(forage.parkedCellSkipped(ctx, near, alone), false)
+    assert.equal(forage.parkedCellSkipped(ctx, far, mockBot()), false, 'someone online: unbound')
+    assert.equal(forage.parkedCellSkipped({}, far, alone), false, 'alone with no anchor: unbound (parked keeps its no-anchor skip)')
+    assert.equal(forage.parkedCellSkipped({ home: { site: { x: 0, y: 64, z: 0 }, built: false } }, far, alone), false, 'active task: not idle')
+  })
+
   it('same depth with a player online, or under open sky alone: no climb (normal path)', () => {
     const online = mockBot()
     online.entity.position = pos(5, 54, -5)
