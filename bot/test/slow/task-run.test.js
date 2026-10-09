@@ -13,7 +13,7 @@ const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
 
-const TOOLS = path.join(__dirname, '..', 'tools')
+const TOOLS = path.join(__dirname, '..', '..', 'tools')
 const SCRIPT = path.join(TOOLS, 'task-run.sh')
 const MC_SENTINEL = 'mc-host-sentinel-xyz'
 const TOKEN_SENTINEL = 'grafana-token-sentinel-xyz'
@@ -999,14 +999,14 @@ esac
 
   it('order markers match the shipped chat lines', () => {
     const sh = fs.readFileSync(SCRIPT, 'utf8')
-    const chat = fs.readFileSync(path.join(__dirname, '..', 'src', 'chat.js'), 'utf8')
+    const chat = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'chat.js'), 'utf8')
     for (const m of ['building a home at ', 'castle at ', 'looking for a castle spot', 'I found no castle spot', 'found a castle spot ', 'I already have a castle at ', 'castle resumed', 'castle forget', 'forgotten']) {
       assert.ok(sh.includes(m), `script lost marker ${m}`)
       assert.ok(chat.includes(m), `chat.js lost line ${m}`)
     }
-    const build = fs.readFileSync(path.join(__dirname, '..', 'src', 'behaviours', 'build.js'), 'utf8')
+    const build = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'behaviours', 'build.js'), 'utf8')
     assert.ok(sh.includes('home done at ') && build.includes('home done at '))
-    const castle = fs.readFileSync(path.join(__dirname, '..', 'src', 'behaviours', 'castle.js'), 'utf8')
+    const castle = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'behaviours', 'castle.js'), 'utf8')
     assert.ok(sh.includes('castle done at ') && castle.includes('castle done at '))
     assert.ok(castle.includes('castle ${n}/${total}'), 'castle progress line')
   })

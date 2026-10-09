@@ -10,7 +10,9 @@
     "start": "node src/index.js",
     "test": "node --test \"test/*.test.js\"",
     "lint": "eslint .",
-    "pretest": "npm run lint"
+    "pretest": "npm run lint",
+    "test:slow": "node --test \"test/slow/*.test.js\"",
+    "golden:update": "GOLDEN_UPDATE=1 node --test \"test/*.test.js\""
   },
   "dependencies": {
     "minecraft-protocol": "1.68.0",

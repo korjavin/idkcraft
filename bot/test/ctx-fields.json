@@ -360,6 +360,12 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleDug": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleFails": {
     "writers": [
       "src/behaviours/castle.js",
