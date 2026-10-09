@@ -14,6 +14,9 @@ const util = require('../src/behaviours/util')
 const goal = require('../src/goal')
 const reach = require('./castle-reach')
 const build = require('../src/behaviours/build')
+const residence = require('../src/residence')
+const bedsMod = require('../src/behaviours/beds')
+const bedMod = require('../src/behaviours/bed')
 require('../src/index') // BEHAVIOURS registration (goal.registered)
 
 const V2 = blueprint.BLUEPRINTS[2]
@@ -181,6 +184,11 @@ function castleBot({ rot = 0, items = [], chest = [], loaded = true } = {}) {
 
 function completeState(rot = 0) {
   return { site: { ...SITE }, rot, blueprintVersion: 2, phase: 'complete', blocked: {}, parked: false }
+}
+
+// g0z.35: the first n residence beds standing (foot + head).
+function paintBeds(bot, home, n) {
+  for (const b of residence.of(home).beds(home).slice(0, n)) for (const p of [b.foot, b.head]) bot.set.set(k3(p.x, p.y, p.z), 'red_bed')
 }
 
 describe('castle decor behaviour (g0z.31)', () => {
@@ -381,18 +389,26 @@ describe('castle gate banners (g0z.32)', () => {
     })
   }
 
-  it('no banner, empty chest: banner-none, the leg fails no-banner (no craft, no gather)', async () => {
-    const bot = castleBot({ items: [], chest: [] })
-    paintPanes(bot, 0)
-    const ctx = { castle: completeState() }
-    assert.equal(castleMod.menuFact(bot, ctx), 'banner-none')
-    let crafted = 0
-    fetch.deps.gather = () => { bot.calls.gather++ }
-    fetch.deps.craftItem = () => { crafted++; return { done: false } }
-    for (let i = 0; i < 40 && ctx.stepStatus !== 'failed:castlefetch-no-banner'; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-banner')
-    assert.equal(bot.calls.gather + crafted, 0)
-  })
+  // g0z.35: chest-only while the castle residence still owes a bed.
+  for (const n of [0, 1]) {
+    it(`no banner, empty chest, beds ${n ? 'one' : 'none'}: banner-none, fails no-banner (no craft, no hunt, no gather)`, async () => {
+      const bot = castleBot({ items: [{ name: 'white_wool', count: 6 }], chest: [{ name: 'white_wool', count: 6 }] })
+      paintPanes(bot, 0)
+      const ctx = { castle: completeState(), home: residence.castleHome(completeState()) }
+      paintBeds(bot, ctx.home, n)
+      assert.equal(bedsMod.bedsFact(bot, ctx.home), n ? 'one' : 'none')
+      assert.equal(castleMod.menuFact(bot, ctx), 'banner-none')
+      let crafted = 0
+      fetch.deps.gather = () => { bot.calls.gather++ }
+      fetch.deps.craftItem = () => { crafted++; return { done: false } }
+      for (let i = 0; i < 40 && ctx.stepStatus !== 'failed:castlefetch-no-banner'; i++) { fetch(bot, ctx); await settle(); await settle() }
+      assert.equal(ctx.stepStatus, 'failed:castlefetch-no-banner')
+      assert.equal(bot.calls.gather + crafted, 0)
+      assert.equal(ctx.bring, undefined)
+      assert.deepEqual(bot.calls.withdraw, []) // the chest wool stays for the beds
+      assert.equal(ctx.castleFetchDry, 'banner')
+    })
+  }
 
   it('no panes anywhere, banners in the chest: the dry pane leg hands the word to banner (revmux 01)', async () => {
     const bot = castleBot({ items: [], chest: [{ name: 'white_banner', count: 2 }] })
@@ -420,5 +436,140 @@ describe('castle gate banners (g0z.32)', () => {
     assert.equal(castleMod.menuFact(bot, ctx), 'banner-batch')
     const plan = require('../src/behaviours/stockpile').depositPlan(bot, { castle: completeState(), home: null })
     assert.ok(!plan.some((p) => p.name === 'white_banner'), JSON.stringify(plan))
+  })
+})
+
+// idkcraft-g0z.35: the banners self-source once the beds stand — a castle
+// self wool hunt (the beds woolTick order shape), then a table craft.
+describe('castle banners self-source (g0z.35)', () => {
+  const realCraft = fetch.deps.craftItem
+  afterEach(() => { fetch.deps.craftItem = realCraft })
+  const BANNERS = bedMod.BED_COLORS.map((c) => `${c}_banner`).sort()
+  function selfBot({ items = [], chest = [], night = false } = {}) {
+    const bot = castleBot({ items, chest })
+    for (const c of bedMod.BED_COLORS) for (const s of ['banner', 'wall_banner', 'wool']) bot.registry.itemsByName[`${c}_${s}`] = {}
+    if (night) bot.time.timeOfDay = 13000
+    for (const c of blueprint.decorPlan(SITE, 0, 2).cells) if (c.kind === 'pane') bot.set.set(k3(c.x, c.y, c.z), 'glass_pane')
+    const ctx = { castle: completeState(), home: residence.castleHome(completeState()) }
+    paintBeds(bot, ctx.home, 2)
+    assert.equal(bedsMod.bedsFact(bot, ctx.home), 'both')
+    return { bot, ctx }
+  }
+  const run = async (bot, ctx, until, n = 40) => {
+    for (let i = 0; i < n && !until(); i++) { fetch(bot, ctx); await settle(); await settle() }
+  }
+
+  it('beds both, empty chest, no wool: a castle self wool hunt for 12; the refuse fails no-wool and arms the shared latch', async () => {
+    const { bot, ctx } = selfBot()
+    const crafts = []
+    fetch.deps.craftItem = (b, c, names, count) => { crafts.push([names.slice().sort(), count]); return { done: false } }
+    await run(bot, ctx, () => ctx.bring)
+    assert.deepEqual(crafts, [[BANNERS, 1]])
+    const o = ctx.bring
+    assert.equal(o.kind, 'item')
+    assert.equal(o.name, 'wool')
+    assert.equal(o.self, 'castle')
+    assert.equal(o.want, 12)
+    assert.equal(ctx.castleFetch.hunt, o)
+    // While the hunt runs the leg holds: no status, the order untouched.
+    for (let i = 0; i < 5; i++) fetch(bot, ctx)
+    assert.equal(ctx.bring, o)
+    assert.equal(ctx.stepStatus, undefined)
+    ctx.step = 'castlefetch'
+    ctx.stepStatus = 'running'
+    const facts = { castle: castleMod.menuFact(bot, ctx), time: 'day' }
+    assert.equal(facts.castle, 'banner-none')
+    assert.equal(goal.MENU.castlefetch.feasible(facts, bot, ctx), true) // no re-pick churn
+    // bring refuses an exhausted search (refuseExhausted shape).
+    o.searchLegs = { legs: 24, timedOut: false, capped: false }
+    ctx.bring = null
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-wool')
+    assert.equal(ctx.beds.noWool.fails, 1)
+    assert.equal(ctx.castleFetchDry, 'banner')
+  })
+
+  it('a hunt that came back with 6 wool crafts next tick', async () => {
+    const { bot, ctx } = selfBot()
+    fetch.deps.craftItem = () => ({ done: false })
+    await run(bot, ctx, () => ctx.bring)
+    bot.inventory.items().push({ name: 'red_wool', count: 6 })
+    ctx.bring = null
+    let crafted = 0
+    fetch.deps.craftItem = () => { crafted++; return 'running' }
+    fetch(bot, ctx)
+    fetch(bot, ctx)
+    assert.equal(crafted, 1)
+    assert.equal(ctx.castleFetch.hunt, null)
+    assert.equal(ctx.beds, undefined) // not exhausted: no latch touch
+  })
+
+  it('sheep latched: no hunt, fails no-wool at once', async () => {
+    const { bot, ctx } = selfBot()
+    ctx.beds = { noWool: { fails: bedsMod.NOWOOL_LATCH, at: Date.now() } }
+    fetch.deps.craftItem = () => ({ done: false })
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-wool')
+    assert.equal(ctx.bring, undefined)
+  })
+
+  it('night: no hunt opened', async () => {
+    const { bot, ctx } = selfBot({ night: true })
+    fetch.deps.craftItem = () => ({ done: false })
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-wool')
+    assert.equal(ctx.bring, undefined)
+  })
+
+  it('6 white wool + 1 stick: craft with the 16 banner names, count 1; the crafted banner is a batch', async () => {
+    const items = [{ name: 'white_wool', count: 6 }, { name: 'stick', count: 1 }]
+    const { bot, ctx } = selfBot({ items })
+    const crafts = []
+    fetch.deps.craftItem = (b, c, names, count) => {
+      crafts.push([names.slice().sort(), count])
+      items.splice(0, items.length, { name: 'white_banner', count: 1 })
+      return { done: true }
+    }
+    await run(bot, ctx, () => crafts.length)
+    assert.deepEqual(crafts, [[BANNERS, 1]])
+    assert.equal(castleMod.menuFact(bot, ctx), 'banner-batch')
+    assert.equal(ctx.bring, undefined)
+  })
+
+  it('6 wool on hand, the craft fails: failed:castlefetch-craft-banner, no hunt', async () => {
+    const { bot, ctx } = selfBot({ items: [{ name: 'white_wool', count: 6 }] })
+    fetch.deps.craftItem = () => ({ done: false })
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-banner')
+    assert.equal(ctx.bring, undefined)
+    assert.equal(ctx.castleFetchDry, 'banner')
+  })
+
+  it('chest with 6 wool: withdrawn, then the craft path', async () => {
+    const { bot, ctx } = selfBot({ chest: [{ name: 'white_wool', count: 6 }] })
+    let crafted = 0
+    fetch.deps.craftItem = () => { crafted++; return 'running' }
+    await run(bot, ctx, () => crafted)
+    assert.deepEqual(bot.calls.withdraw, [['white_wool', 6]])
+    assert.equal(crafted, 1)
+  })
+
+  it('beds none on a complete castle: the beds option stays feasible', () => {
+    const bot = castleBot()
+    const ctx = { castle: completeState(), home: residence.castleHome(completeState()) }
+    assert.equal(goal.MENU.beds.feasible({ time: 'day', home: 'built', beds: bedsMod.bedsFact(bot, ctx.home) }, bot, ctx), true)
+  })
+
+  it('selfOrderBack: null without an order; exhausted on budget, timeout or cap', () => {
+    assert.equal(fetch.selfOrderBack({}), null)
+    for (const s of [{ legs: 24 }, { timedOut: true }, { capped: true }]) {
+      const f = {}
+      fetch.selfOrder({}, f, { searchLegs: s })
+      assert.deepEqual(fetch.selfOrderBack(f), { exhausted: true })
+      assert.equal(f.hunt, null)
+    }
+    const f = {}
+    fetch.selfOrder({}, f, { searchLegs: { legs: 3 } })
+    assert.deepEqual(fetch.selfOrderBack(f), { exhausted: false })
   })
 })
