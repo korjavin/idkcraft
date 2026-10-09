@@ -491,6 +491,9 @@ forage leg, so the ladder effectively progresses with nobody online.
 | `next gear: <name> for you\|me` + `gear rung <tier:kind:self\|give>` | ladder advanced to a rung |
 | `need N more raw iron, going to dig` / `need logs for sticks, going to chop` | latched want — the fetchers own the next move |
 | `need raw iron, none known` / `need coal above the reserve, none known` | honest want: nothing remembered and diggable |
+| `gear yield key=<want-ore\|want-coal\|want-cobble\|want-water\|wait-table\|...> line=<chat line>` | console twin of every latched want/wait (once per latch) — tells the idle cause apart |
+| `gear hand <name>` | a finished owner piece waits for deliver/stockpile (once per piece) |
+| `goal step=... why=step-failed fail=<status> menu=...` | the previous step's failure status (e.g. `failed:no-chest`) |
 | `forged <name> for you\|me` + `gear forged <name> for owner\|self` | craft (or bucket fill) completed |
 | `brought ...` | deliver tossed the haul to an online player |
 | `stockpiled ...` + `handed ... to the home chest` | banked; finished owner pieces handed to the chest |

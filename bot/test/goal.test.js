@@ -530,6 +530,22 @@ describe('decide decision point', () => {
     assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
   })
 
+  it('a failed previous step logs its status (ipn.15)', async () => {
+    const bot = goalBot()
+    const ctx = { step: 'stockpile', stepStatus: 'failed:no-chest' }
+    await decide(bot, ctx)
+    const line = goalLines().pop() || ''
+    assert.match(line, / prev=stockpile .*why=step-failed fail=failed:no-chest menu=/)
+  })
+
+  it('a done previous step logs no fail= (ipn.15)', async () => {
+    const bot = goalBot()
+    const ctx = { step: 'stockpile', stepStatus: 'done' }
+    await decide(bot, ctx)
+    const line = goalLines().pop() || ''
+    assert.match(line, /why=step-done menu=/)
+  })
+
   it('step flip back within 10s chats once (f3s call-site pin)', async () => {
     // A->B->A on one ctx: the repeat next: line must be throttled. Reverting
     // the decide() call sites to plain bot.chat fails this test.

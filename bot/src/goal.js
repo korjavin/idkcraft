@@ -2225,6 +2225,7 @@ async function decide(bot, ctx) {
             if (ctx.gear.saidNeed !== key) {
               ctx.gear.saidNeed = key
               bot.chat(line)
+              console.log(`gear yield key=${key} line=${line}`) // ipn.15: gear's announceYield twin
             }
           } catch (_) { /* announce best-effort */ }
           ctx.stepStatus = 'done' // yield: fetchers run, gear latched out
@@ -2660,7 +2661,7 @@ async function decide(bot, ctx) {
     // {} ctx objects (work undefined) chatting.
     if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
       const menu = STEP_ORDER.filter((n) => names.includes(n)).join(',')
-      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why} menu=${menu} facts=${text}`)
+      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why}${why === 'step-failed' ? ` fail=${status}` : ''} menu=${menu} facts=${text}`)
       if (choice.step === 'rest') {
         chatStep(bot, ctx, `resting: ${ctx.restWhy} (${choice.source})`)
       } else {

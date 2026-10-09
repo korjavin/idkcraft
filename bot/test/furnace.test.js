@@ -1,13 +1,13 @@
 'use strict'
 
 // Furnace station (idkcraft-ipn.1): craft at the home table, place by the
-// body, smelt raw iron on fuel above the light.js reserve, take ingots.
+// body, smelt raw iron on coal down to zero then planks (ipn.13), take ingots.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const furnace = require('../src/behaviours/furnace')
 
-const IDS = { furnace: 61, raw_iron: 100, coal: 101, charcoal: 102, cobblestone: 103 }
+const IDS = { furnace: 61, raw_iron: 100, coal: 101, charcoal: 102, cobblestone: 103, oak_planks: 104 }
 
 function mockWindow(slots, log) {
   return {
@@ -30,7 +30,7 @@ function mockWindow(slots, log) {
       this.slots[0] = { name: 'raw_iron', count: (cur ? cur.count : 0) + count }
     },
     async putFuel(type, meta, count) {
-      const name = type === IDS.charcoal ? 'charcoal' : 'coal'
+      const name = type === IDS.charcoal ? 'charcoal' : type === IDS.oak_planks ? 'oak_planks' : 'coal'
       const cur = this.slots[1]
       // transfer fidelity: one fuel kind per slot, else destination-full.
       if (cur && cur.name !== name) throw new Error('destination full')
@@ -88,23 +88,24 @@ function floorBlocks(x0 = -2, x1 = 2, y = 63, z0 = -2, z1 = 2) {
 const settle = async (n = 10) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)) }
 const tick = async (bot, ctx) => { furnace(bot, ctx); await settle() }
 
-describe('furnace fuel math (reserve never burns)', () => {
-  it('loads ceil(ore/8) capped by spendable above the reserve', () => {
+describe('furnace fuel math (coal burns to zero, ipn.13)', () => {
+  // light.js COAL_RESERVE is smelting's share: it keeps torches off the
+  // last coal, so the furnace itself spends every piece (prod 10-09:
+  // 32 ore + 3 coal smelted nothing while the reserve gated both).
+  it('loads ceil(ore/8) capped by the coal on hand', () => {
     assert.equal(furnace.fuelPieces(8, 6), 1)
     assert.equal(furnace.fuelPieces(9, 6), 2)
-    assert.equal(furnace.fuelPieces(16, 6), 2)
-    assert.equal(furnace.fuelPieces(17, 6), 2) // spendable caps, not need
-    assert.equal(furnace.fuelPieces(64, 5), 1) // nearly all reserved
-    assert.equal(furnace.fuelPieces(8, 4), 0) // reserve intact
-    assert.equal(furnace.fuelPieces(8, 3), 0)
+    assert.equal(furnace.fuelPieces(64, 5), 5) // hand caps, not need
+    assert.equal(furnace.fuelPieces(8, 4), 1)
+    assert.equal(furnace.fuelPieces(8, 3), 1)
     assert.equal(furnace.fuelPieces(8, 0), 0)
     assert.equal(furnace.fuelPieces(0, 10), 0) // no ore, no fuel
   })
 
-  it('imports the light.js reserve, never a local copy', () => {
-    const light = require('../src/behaviours/light')
-    assert.equal(furnace.COAL_RESERVE, light.COAL_RESERVE)
-    assert.equal(furnace.COAL_RESERVE, 4)
+  it('planks burn 1.5 ore each', () => {
+    assert.equal(furnace.fuelPieces(3, 64, furnace.ORE_PER_PLANK), 2)
+    assert.equal(furnace.fuelPieces(32, 64, furnace.ORE_PER_PLANK), 22)
+    assert.equal(furnace.fuelPieces(32, 5, furnace.ORE_PER_PLANK), 5)
   })
 })
 
@@ -202,7 +203,7 @@ describe('furnace place + claim', () => {
   })
 })
 
-describe('furnace smelt (load above reserve, take, settle)', () => {
+describe('furnace smelt (load coal or planks, take, settle)', () => {
   const SPOT = { '0,64,1': 'furnace' }
   function smeltBot({ inv, slots, progress = 0, fuel = 0 }) {
     const log = []
@@ -214,7 +215,7 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
   }
   const smeltCtx = () => ({ home: { furnace: { x: 0, y: 64, z: 1 } } })
 
-  it('loads ore plus one coal for 8 ore, reserve untouched', async () => {
+  it('loads ore plus one coal for 8 ore', async () => {
     const { bot, log } = smeltBot({
       inv: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 6 }],
       slots: [null, null, null],
@@ -223,7 +224,7 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
     assert.ok(log.some(([op, , n]) => op === 'putInput' && n === 8), JSON.stringify(log))
     const fuels = log.filter(([op]) => op === 'putFuel')
     assert.equal(fuels.length, 1)
-    assert.equal(fuels[0][2], 1, 'one piece above the reserve of 4')
+    assert.equal(fuels[0][2], 1, 'one coal for 8 ore')
   })
 
   it('charcoal tops up when coal runs out', async () => {
@@ -238,11 +239,60 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
     assert.equal(fuels[0][2], 1)
   })
 
-  it('ore without spendable fuel fails no-fuel after the grace', async () => {
+  it('three coal (the old reserve) smelt now', async () => {
+    const { bot, log } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 3 }],
+      slots: [null, null, null],
+    })
+    await tick(bot, smeltCtx())
+    assert.deepEqual(log.filter(([op]) => op === 'putFuel'), [['putFuel', IDS.coal, 1]])
+  })
+
+  it('planks fuel the furnace once coal and charcoal are gone', async () => {
+    const { bot, log, win } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 3 }, { name: 'oak_planks', count: 64 }],
+      slots: [null, null, null],
+    })
+    const ctx = smeltCtx()
+    await tick(bot, ctx)
+    assert.ok(log.some(([op, id, n]) => op === 'putFuel' && id === IDS.oak_planks && n === 2), JSON.stringify(log))
+    assert.ok(log.some(([op, id, n]) => op === 'putInput' && id === IDS.raw_iron && n === 3), JSON.stringify(log))
+    // The burn completes: ore leaves the hands, ingots land in the output.
+    bot.inventory.items = () => [{ name: 'oak_planks', count: 62 }]
+    win.slots = [null, null, { name: 'iron_ingot', count: 3 }]
+    const lines = []
+    const orig = console.log
+    console.log = (l) => lines.push(l)
+    try { await tick(bot, ctx) } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(lines.includes('smelted 3 iron'), JSON.stringify(lines))
+  })
+
+  it('coal on hand beats planks (coal first)', async () => {
+    const { bot, log } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 3 }, { name: 'coal', count: 1 }, { name: 'oak_planks', count: 64 }],
+      slots: [null, null, null],
+    })
+    await tick(bot, smeltCtx())
+    assert.deepEqual(log.filter(([op]) => op === 'putFuel'), [['putFuel', IDS.coal, 1]])
+  })
+
+  it('a coal-held slot waits out planks (one kind per cycle)', async () => {
+    const { bot, log } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 32 }, { name: 'oak_planks', count: 64 }],
+      slots: [null, { name: 'coal', count: 1 }, null],
+    })
+    const ctx = smeltCtx()
+    await tick(bot, ctx)
+    assert.ok(!log.some(([op]) => op === 'putFuel'), JSON.stringify(log))
+    assert.equal(ctx.stepStatus, undefined, 'still running, no throw')
+  })
+
+  it('ore without any fuel fails no-fuel after the grace', async () => {
     // Slots-only hunger: a drained slot with ore standing could still be
     // a burn in flight, so the verdict waits out one cook time.
     const { bot, log } = smeltBot({
-      inv: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 3 }],
+      inv: [{ name: 'raw_iron', count: 8 }, { name: 'oak_planks', count: 0 }],
       slots: [null, null, null],
     })
     const ctx = smeltCtx()
@@ -405,9 +455,9 @@ describe('furnace smelt (load above reserve, take, settle)', () => {
 
   it('a cold drained slot fails hungry, never stalled', async () => {
     // Stall needs fuel standing in the slot doing nothing; an empty
-    // slot with unspendable hands is hunger whatever the idle count.
+    // slot with fuelless hands is hunger whatever the idle count.
     const { bot } = smeltBot({
-      inv: [{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 3 }],
+      inv: [{ name: 'raw_iron', count: 8 }],
       slots: [{ name: 'raw_iron', count: 8 }, null, null],
     })
     const ctx = smeltCtx()

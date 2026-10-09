@@ -3,7 +3,8 @@
 // Furnace station (idkcraft-ipn.1): craft an 8-cobble furnace at the home
 // table, place it (v1: by the body, roadside pattern; v2: at a fixed spot
 // inside the common room, jr2.1), smelt raw iron on coal/charcoal above
-// the light.js reserve, take the ingots. BEHAVIOURS-shaped for the slice-C
+// planks (ipn.13: the coal reserve is smelting's share, so the furnace
+// burns coal down to zero; planks are the third fuel kind), take the ingots. BEHAVIOURS-shaped for the slice-C
 // gear step; until then the live assay drives it directly.
 //
 // Station contract (chest precedent): ctx.home.furnace is plain { x, y, z },
@@ -17,7 +18,6 @@ const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
-const { COAL_RESERVE } = require('./light')
 
 // Fixed furnace cells inside the v2 common room (jr2.1): (4,0,1) first,
 // then fallbacks clear of the door path and bedroom approaches. Placed from
@@ -33,6 +33,7 @@ const FURNACE_SPOTS = [
 
 const FURNACE_REACH = craftMod.TABLE_REACH // window ops need table-like proximity
 const ORE_PER_FUEL = 8 // one coal smelts eight ore
+const ORE_PER_PLANK = 1.5 // one plank burns 300 ticks = 1.5 items
 const STALL_TICKS = 120 // output-idle ticks with input+fuel before failed:smelt-stalled
 const FUEL_GRACE_TICKS = 15 // output-idle ticks before failed:no-fuel (one cook + slop)
 
@@ -118,12 +119,20 @@ function invCount(bot, name) {
   try { return countItems(bot, (n) => n === name) } catch (_) { return 0 }
 }
 
-// Fuel pieces to load for oreTotal ore with fuelTotal fuel on hand: the
-// reserve never burns. Pure, so the mutant (reserve ignored) dies here.
-function fuelPieces(oreTotal, fuelTotal) {
+// Fuel pieces to load for oreTotal ore with fuelTotal coal/charcoal on
+// hand (ipn.13): light.js COAL_RESERVE is smelting's share — it keeps
+// torches off the last coal, so the furnace itself spends it to zero.
+function fuelPieces(oreTotal, fuelTotal, perPiece = ORE_PER_FUEL) {
   if (!(oreTotal > 0)) return 0
-  const spendable = Math.max(0, (fuelTotal || 0) - COAL_RESERVE)
-  return Math.min(spendable, Math.ceil(oreTotal / ORE_PER_FUEL))
+  return Math.min(Math.max(0, fuelTotal || 0), Math.ceil(oreTotal / perPiece))
+}
+
+// Biggest single planks stack (gear counts planks the same way), or null.
+function plankStack(bot) {
+  try {
+    const woods = craftMod.sortedWoods(craftMod.tally(bot, '_planks'))
+    return woods.length > 0 && woods[0][1] > 0 ? `${woods[0][0]}_planks` : null
+  } catch (_) { return null }
 }
 
 // Walk one leg with a give-up: an unreachable table/furnace fails the
@@ -345,27 +354,39 @@ function doSmelt(bot, ctx, f, spot) {
       const invOre = invCount(bot, 'raw_iron')
       const invCoal = invCount(bot, 'coal')
       const invChar = invCount(bot, 'charcoal')
-      // Top up input (room in the slot) and fuel (reserve-capped). A
+      // Planks are the third fuel kind (ipn.13): a slot already holding
+      // planks keeps its wood; an empty slot takes planks only once coal
+      // and charcoal are gone (one kind per cycle, core-1 below).
+      const fuelSlot = typeof win.fuelItem === 'function' ? win.fuelItem() : null
+      const fuelName = fuelSlot && fuelSlot.name
+      const slotPlanks = typeof fuelName === 'string' && fuelName.endsWith('_planks')
+      const plankName = slotPlanks ? fuelName : (!fuelName && invCoal + invChar === 0 ? plankStack(bot) : null)
+      const invPlanks = plankName ? invCount(bot, plankName) : 0
+      // Top up input (room in the slot) and fuel (coal to zero). A
       // recent take means a burn is likely in flight (core-5): the piece
       // left the slot but still cooks, so it counts or every ignition
       // parks one extra coal. Past the grace the discount lapses and a
       // cold furnace reloads.
       const oreLoad = Math.min(invOre, 64 - inN)
       const inFlight = f.tookOnce && (f.idleTicks || 0) < FUEL_GRACE_TICKS ? 1 : 0
-      const fuelLoad = Math.max(0, fuelPieces(invOre + inN, invCoal + invChar) - fuelN - inFlight)
+      const fuelLoad = plankName
+        ? Math.max(0, fuelPieces(invOre + inN, invPlanks, ORE_PER_PLANK) - fuelN - inFlight)
+        : Math.max(0, fuelPieces(invOre + inN, invCoal + invChar) - fuelN - inFlight)
       if (oreLoad > 0) {
         const id = craftMod.itemId(bot, 'raw_iron')
         if (id == null) throw new Error('no-ore-id')
         await win.putInput(id, null, oreLoad)
       }
-      if (fuelLoad > 0) {
+      if (fuelLoad > 0 && plankName) {
+        const id = craftMod.itemId(bot, plankName)
+        if (id == null) throw new Error('no-plank-id')
+        await win.putFuel(id, null, Math.min(invPlanks, fuelLoad))
+      } else if (fuelLoad > 0) {
         // One fuel kind per cycle (core-1): coal and charcoal share the
         // single fuel slot, and transfer throws destination-full into a
         // slot holding the other kind. A holding slot tops up its own
         // kind only; an empty slot takes whichever single kind covers
         // the need (coal first), and a short kind waits for burn-down.
-        const fuelSlot = typeof win.fuelItem === 'function' ? win.fuelItem() : null
-        const fuelName = fuelSlot && fuelSlot.name
         if (!fuelName) {
           if (invCoal >= fuelLoad) {
             const id = craftMod.itemId(bot, 'coal')
@@ -456,4 +477,4 @@ module.exports.tableBlock = tableBlock
 module.exports.fuelPieces = fuelPieces
 module.exports.FURNACE_REACH = FURNACE_REACH
 module.exports.ORE_PER_FUEL = ORE_PER_FUEL
-module.exports.COAL_RESERVE = COAL_RESERVE
+module.exports.ORE_PER_PLANK = ORE_PER_PLANK
