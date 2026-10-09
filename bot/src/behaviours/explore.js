@@ -13,6 +13,7 @@
 // A no-displacement stall fails the target; body wedges are stuck.js's.
 
 const { goals } = require('mineflayer-pathfinder')
+const { Vec3 } = require('vec3')
 const stuck = require('../stuck')
 const resources = require('../resources')
 const danger = require('../danger')
@@ -142,7 +143,25 @@ function pickTarget(visited, anchor, maxRadius, banned) {
   return null
 }
 
-
+// Target height for the stuck escape (atl.23): the first standable cell
+// from the top of a 32-block window above the bot down, in the target's
+// column. A window that reads solid at its top (surface higher) or no
+// solid at all (unloaded) falls back to the bot's y.
+const COLUMN_WINDOW = 32
+function columnTop(bot, t, fallback) {
+  try {
+    const top = Math.floor(fallback) + COLUMN_WINDOW
+    let sawAir = false
+    for (let y = top; y >= top - 2 * COLUMN_WINDOW; y--) {
+      const b = bot.blockAt(new Vec3(t.x, y, t.z))
+      if (!b) return fallback
+      const air = b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air'
+      if (air) sawAir = true
+      else return sawAir ? y + 1 : fallback
+    }
+  } catch (_) { /* unreadable: fallback */ }
+  return fallback
+}
 
 // Shared arrival: scan the new chunks into memory, consume the point,
 // report done with the one wedge line.
@@ -171,6 +190,23 @@ function explore(bot, ctx, target, state) {
     return
   }
   e.visited.add(chunkOf(bp.x, bp.z))
+
+  // Depth floor (atl.23): GoalXZ has no height, so the cheapest XZ path
+  // ran into caves (prod: 3 deaths at y -50 in 7 min). Under the floor the
+  // leg drops and the bot climbs; the spiral resumes at bp.y >= floor.
+  // ponytail: GoalY(floor) may stop in a cave at floor height; the
+  // underground abort is vmzq.59's.
+  const floor = resources.surfaceFloor(ctx, bp)
+  if (bp.y < floor) {
+    dropDeadLeg(ctx)
+    const climbKey = `explore:climb:${floor}`
+    if (climbKey !== ctx.lastGoalKey) {
+      bot.pathfinder.setGoal(new goals.GoalY(floor), false)
+      ctx.lastGoalKey = climbKey
+      console.log(`explore too deep y=${Math.floor(bp.y)} floor=${floor}`)
+    }
+    return
+  }
 
   if (!e.target) {
     if (typeof e.maxRadius !== 'number') e.maxRadius = MAX_RADIUS
@@ -247,7 +283,7 @@ function explore(bot, ctx, target, state) {
     // The target is the goal: without it dig_through has no direction and
     // goalDy/goalDist describe a bystander player (revmux round 1). One
     // escape per failed leg (core-1: else a pit cycles targets forever).
-    stuck.request(bot, ctx, 'explore', { x: t.x, y: bp.y, z: t.z }, key)
+    stuck.request(bot, ctx, 'explore', { x: t.x, y: columnTop(bot, t, bp.y), z: t.z }, key)
   }
 }
 

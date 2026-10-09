@@ -365,3 +365,39 @@ describe('explore pit escape through the ticker (core-1)', () => {
     }
   })
 })
+
+describe('explore depth floor (atl.23)', () => {
+  it('under the floor: drops the leg, climbs with GoalY, not done; above: GoalXZ resumes', () => {
+    const bot = mockBot()
+    const ctx = homeCtx() // home y 64 -> floor 48
+    explore(bot, ctx, null, null) // leg to (0,-16) issued at the surface
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalXZ')
+    bot.entity.position = pos(5, -40, -5)
+    const logs = []
+    const origLog = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      explore(bot, ctx, null, null)
+      explore(bot, ctx, null, null) // same climb: no re-issue
+    } finally { console.log = origLog }
+    assert.equal(bot.calls.goals.length, 2)
+    assert.equal(bot.calls.goals[1].constructor.name, 'GoalY')
+    assert.equal(bot.calls.goals[1].y, 48)
+    assert.equal(ctx.explore.target, null)
+    assert.notEqual(ctx.stepStatus, 'done')
+    assert.deepEqual(logs, ['explore too deep y=-40 floor=48'])
+    bot.entity.position = pos(5, 48, -5)
+    explore(bot, ctx, null, null)
+    assert.equal(bot.calls.goals[2].constructor.name, 'GoalXZ')
+    assert.ok(ctx.explore.target)
+  })
+
+  it('stall escape carries the target column height, not the bot y', () => {
+    const bot = mockBot()
+    bot.blockAt = (p) => ({ name: p.y > 70 ? 'air' : 'stone' })
+    const ctx = homeCtx()
+    explore(bot, ctx, null, null)
+    for (let i = 0; i < 12 && !ctx.stuck; i++) explore(bot, ctx, null, null)
+    assert.deepEqual(ctx.stuck.goal, { x: 0, y: 71, z: -16 })
+  })
+})

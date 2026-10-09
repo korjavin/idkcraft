@@ -74,6 +74,22 @@ function nearest(ctx, p, kinds, exclude) {
   return best
 }
 
+// Depth floor (atl.23): the lowest y the surface miner works at — home
+// height minus SURFACE_DEPTH, never under SURFACE_MIN_Y. No home: the
+// bot's own y anchors it. Explore climbs back above it, forage memory
+// skips cells under it (the deep leg, bestDiamondCell, is the smith's).
+const SURFACE_MIN_Y = 48
+const SURFACE_DEPTH = 16
+function surfaceFloor(ctx, bp) {
+  let y = null
+  try {
+    const s = ctx && ctx.home && ctx.home.site
+    if (s && typeof s.y === 'number') y = s.y
+  } catch (_) { y = null }
+  if (y === null && bp && typeof bp.y === 'number') y = bp.y
+  return y === null ? SURFACE_MIN_Y : Math.max(SURFACE_MIN_Y, Math.floor(y) - SURFACE_DEPTH)
+}
+
 function count(ctx) {
   const mem = ctx && ctx.resources
   return mem && mem.items instanceof Map ? mem.items.size : 0
@@ -157,4 +173,4 @@ function exposedOf(bot, item) {
   }
 }
 
-module.exports = { noteSpots, nearest, count, clear, forget, scan, exposedOf, MAX_ITEMS, SCAN_RADIUS }
+module.exports = { noteSpots, nearest, surfaceFloor, count, clear, forget, scan, exposedOf, MAX_ITEMS, SCAN_RADIUS }

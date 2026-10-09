@@ -1521,3 +1521,20 @@ describe('gear latch preference (idkcraft-ipn.9)', () => {
     assert.equal(forage.gearWantCell(bot, ctx, bp, 'want-ore').name, 'iron_ore')
   })
 })
+
+describe('memory depth floor (atl.23)', () => {
+  it('deep diamond skipped for near-surface iron; only deep cells plan nothing; deep leg keeps its diamond', () => {
+    const bot = mockBot()
+    bot.inv.push({ name: 'iron_pickaxe', count: 1 })
+    const ctx = memCtx([
+      { x: 3, y: -50, z: 0, name: 'diamond_ore' },
+      { x: 40, y: 60, z: 0, name: 'iron_ore' },
+    ])
+    ctx.home = { site: { x: 0, y: 64, z: 0 } } // floor 48
+    assert.equal(forage.planForage(bot, ctx).name, 'iron_ore')
+    const deep = memCtx([{ x: 3, y: -50, z: 0, name: 'diamond_ore' }])
+    deep.home = ctx.home
+    assert.equal(forage.planForage(bot, deep), null)
+    assert.equal(forage.bestDiamondCell(bot, deep, pos(0, 64, 0)).name, 'diamond_ore')
+  })
+})
