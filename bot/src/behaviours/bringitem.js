@@ -10,21 +10,15 @@
 // and resumes the craft when the gap is filled.
 //
 // Load direction is one-way: bring.js requires this module at the top, and
-// the terminal actions (refuse/done/countDrop) come back through a deferred
-// require (the stockpile.js craftMod / bring.js craftany precedent) — every
-// call happens on a tick or a chat line, long after load.
+// the terminal actions (refuse/done/countDrop) and the WANT amounts live in
+// bringbase.js (idkcraft-oqul.11) — no require back into bring.js.
 
 const stockpileMod = require('./stockpile')
 const woolMod = require('./wool')
 const bedMod = require('./bed')
 const { countItems } = require('../perception')
 const { say } = require('./util')
-
-let bringCore = null
-function bring() {
-  if (!bringCore) bringCore = require('./bring')
-  return bringCore
-}
+const { WANT_ORE, WANT_MAX, refuse, done, countDrop } = require('./bringbase')
 
 // Deferred require, same cycle as bring.js had: craftany->craft->goal
 // closes the loop back through forage/deliver->bring, so a top-level
@@ -41,18 +35,6 @@ let gearMod = null
 function gear() {
   if (!gearMod) gearMod = require('./gear')
   return gearMod
-}
-
-function refuse(bot, ctx, line) {
-  return bring().refuse(bot, ctx, line)
-}
-
-function done(bot, ctx) {
-  return bring().done(bot, ctx)
-}
-
-function countDrop(bot, drop) {
-  return bring().countDrop(bot, drop)
 }
 
 // Share keep-list (idkcraft-ah9): tools, weapons, armour, plus a 32-block
@@ -215,7 +197,7 @@ function tierOf(name) {
 // no axe gives the fetched one instead of keeping it.
 function planItemGive(bot, resolved, want, base) {
   const names = (resolved && resolved.names) || []
-  const target = want > 0 ? Math.min(want, bring().WANT_MAX) : bring().WANT_ORE
+  const target = want > 0 ? Math.min(want, WANT_MAX) : WANT_ORE
   const live = packCounts(bot)
   const bc = (base && typeof base === 'object') ? base : live
   const dirt = bc.dirt || 0

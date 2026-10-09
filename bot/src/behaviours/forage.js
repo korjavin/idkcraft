@@ -25,6 +25,8 @@ const resources = require('../resources')
 const bring = require('./bring')
 const fightMod = require('./fight')
 const detour = require('../detour')
+const vetoes = require('../vetoes') // oqul.11: was a deferred goal.js require
+const { chatStep } = require('../step')
 const { say, clearGoal, issueGoal, botPos, denyReason, logDeny, solidBelow, protectedReason } = require('./util')
 
 const FORAGE_WANT = 8 // new drops per step, then deliver
@@ -159,11 +161,11 @@ function questExempt(bot, ctx, target) {
 // chaining to a far cell. The food fallback is gated separately below
 // (parkedHuntOk): near animals only — a 48-block hop chain re-centers
 // every replan and would walk the bot home-away (R3/R5).
-// Deferred goal require (questBatch precedent — goal.js loads forage).
+// Park helpers live in vetoes.js (oqul.11), no arbiter load.
 // Idle alone (vmzq.59: nobody online, no active task, no owner bring)
 // reads as parked here — prod drowned forage legs at y50 overnight.
 function parkBound(ctx, bot) {
-  if (require('../goal').taskParked(ctx)) return true
+  if (vetoes.taskParked(ctx)) return true
   try {
     const ex = require('./explore')
     return !!bot && ex.aloneIdle(bot, ctx) && !ex.taskActive(ctx)
@@ -171,7 +173,7 @@ function parkBound(ctx, bot) {
 }
 function parkedCellSkipped(ctx, item, bot) {
   try {
-    const g = require('../goal')
+    const g = vetoes
     if (!parkBound(ctx, bot)) return false
     if (!item || typeof item.x !== 'number' || typeof item.z !== 'number') return true
     let radius = g.PARK_FORAGE_RADIUS || 64
@@ -688,8 +690,8 @@ function forage(bot, ctx, target, state) {
       f.announced = true
       const t0 = f.target
       const line = t0.kind === 'food' ? `foraging: hunting ${t0.name}` : `foraging: ${t0.name} nearby`
-      // f3s: same per-line throttle as step chats (deferred require: goal.js loads forage)
-      require('../goal').chatStep(bot, ctx, line)
+      // f3s: same per-line throttle as step chats (step.js, oqul.11)
+      chatStep(bot, ctx, line)
     }
   }
 

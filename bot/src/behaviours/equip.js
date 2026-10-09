@@ -4,7 +4,7 @@ const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
-const { isStone } = require('../castle')
+const { isStone, onSite } = require('../castle')
 const { stepDone, stepFailed, stepGen, stale } = require('../step')
 const fightMod = require('./fight')
 const { canBreak, issueGoal, denyReason, logDeny, protectedReason, isOwnPlaced, inHouseFootprint } = require('./util')
@@ -26,8 +26,8 @@ const DIG_REACH = 4
 // every drop on the ground and the kit never fills (live lesson — the stall
 // below fired with a full field of uncollected dirt). Walk closer first.
 const PICKUP_REACH = 2
-// Below this the bot digs more scaffold nearby; digging stops here.
-const SCAFFOLD_LOW = 16
+// Below this the bot digs more scaffold nearby; digging stops here (budget.js, oqul.11).
+const { SCAFFOLD_LOW } = require('../budget')
 const SCAFFOLD_FULL = 32
 // Same craft succeeding this often without the item landing means the result
 // never reaches the inventory (lag/full): fail loudly, the atl.4 hold keeps
@@ -882,7 +882,7 @@ function digTick(bot, ctx, st, bp) {
     if (Math.floor(v.x) === feetX && Math.floor(v.y) === feetY && Math.floor(v.z) === feetZ) continue
     // Never the castle's ground (g0z.4 rig: scaffold dirt dug out of the
     // castle floor). Deferred require: castlefetch -> castle -> build chain.
-    if (ctx && ctx.castle && ctx.castle.site && require('./castlefetch').onSite(ctx.castle, v)) continue
+    if (ctx && ctx.castle && ctx.castle.site && onSite(ctx.castle, v)) continue // oqul.11: was castlefetch.onSite
     let name = typeof v.name === 'string' ? v.name : null
     let blk = null
     if (!name && bot.blockAt) {

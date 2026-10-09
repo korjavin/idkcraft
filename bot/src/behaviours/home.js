@@ -4,11 +4,13 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const castleData = require('../castle')
 const { HOSTILE_NAMES } = require('../perception')
-const { goalFacts } = require('../goal')
+const { carryOrderStamp } = require('../step') // oqul.11: was a deferred task.js require
 const { timeWord } = require('../site')
+// goalFacts(bot, ctx).time without the arbiter (oqul.11): the same word.
+const factsTime = (bot) => timeWord(bot) || 'day'
 const detour = require('../detour')
 const stuck = require('../stuck')
-const { botPos, doorOpen, doorLaneDX: blockLaneDX, issueGoal } = require('./util')
+const { botPos, isInside, doorOpen, doorLaneDX: blockLaneDX, issueGoal } = require('./util')
 const body = require('../body')
 const retreatMod = require('./retreat')
 const recover = require('./recover')
@@ -128,20 +130,6 @@ function inPast(home, bp, inn) {
 }
 function outPast(home, bp, out) {
   return beyond(bp, out, facingOf(home), 0.3)
-}
-
-// Residence floors (residence.js interior): for hut/house the floored
-// home.interior box — raw float compares put the back row and east column
-// outside (live jr2.3: a bedroom order at z=4.5 read as outside and walked
-// A* at the shut door).
-function isInside(bot, home) {
-  try {
-    const bp = botPos(bot)
-    if (!bp || !home) return false
-    return residence.of(home).interior(home, bp)
-  } catch (_) {
-    return false
-  }
 }
 
 function doorBlock(bot, home) {
@@ -634,7 +622,7 @@ function gohomeTick(bot, ctx, target, state) {
       // (atl.12) — gait-independent: rough legs walk but still count.
       // (rw4.10 sprint runs in movementsFor off the stash above.)
       try {
-        if (goalFacts(bot, ctx).time === 'night') ctx.shelterRun = Date.now()
+        if (factsTime(bot) === 'night') ctx.shelterRun = Date.now()
       } catch (_) { /* unknown time: no stamp (fail closed) */ }
       return
     }
@@ -880,7 +868,7 @@ function stay(bot, ctx, target, state) {
   ctx.inShelter = true
   let time = 'night'
   try {
-    time = goalFacts(bot, ctx).time || 'night'
+    time = factsTime(bot) || 'night'
   } catch (_) { /* hold on unknown time */ }
   if (time !== 'day') {
     st.phase = 'hold'
@@ -1110,7 +1098,7 @@ function shelter(bot, ctx, target, state) {
   }
   let time = 'night'
   try {
-    time = goalFacts(bot, ctx).time || 'night'
+    time = factsTime(bot) || 'night'
   } catch (_) { /* hold on unknown time */ }
   if (time === 'day') {
     ctx.stepStatus = 'done'
@@ -1490,7 +1478,7 @@ function releaseMeet(bot, ctx) {
     return
   }
   ctx.comehome = { ...freshGo(), by: order.by, exiting: true, phase: 'open', lastToggle: order.lastToggle || 0, home: order.home || ctx.home }
-  try { require('../task').carryOrderStamp(order, ctx.comehome) } catch (_) { /* stamp best-effort */ }
+  try { carryOrderStamp(order, ctx.comehome) } catch (_) { /* stamp best-effort */ }
   ctx.lastGoalKey = ''
   ctx.inShelter = true
   // rw4.17 (#311 reuse): the exit may yet release unsheltered-while-inside
@@ -1628,7 +1616,7 @@ function exitMeet(bot, ctx, home, order) {
       // drove — even through a gap or a pre-open door that never needed a
       // toggle — so dusk/night finishes instead of freezing behind it.
       ctx.comehome = { ...freshGo(), by: keepBy, exiting: true, phase: 'open', home: order.home, reseek: order.reseek || false, committed: true }
-      try { require('../task').carryOrderStamp(order, ctx.comehome) } catch (_) { /* stamp best-effort */ }
+      try { carryOrderStamp(order, ctx.comehome) } catch (_) { /* stamp best-effort */ }
       ctx.stepStatus = 'running'
       ctx.lastGoalKey = ''
       return
@@ -1689,7 +1677,7 @@ function comehome(bot, ctx, target, state) {
     if (!held) ctx.inShelter = false
     else {
       let nightish = false
-      try { nightish = goalFacts(bot, ctx).time !== 'day' } catch (_) { nightish = false }
+      try { nightish = factsTime(bot) !== 'day' } catch (_) { nightish = false }
       if (nightish && doorOpen(held) && !playerAtDoor(bot, home)) tryToggle(bot, ctx, order, held)
     }
     holdStill(bot, ctx)

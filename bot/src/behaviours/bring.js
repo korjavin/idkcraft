@@ -9,8 +9,9 @@ const exploreMod = require('./explore')
 const stuck = require('../stuck')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
-const { say, clearGoal, issueGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason } = require('./util')
+const { say, clearGoal, issueGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason, atPos } = require('./util')
 const itemMod = require('./bringitem')
+const { WANT_ORE, WANT_MAX, countDrop, refuse, done } = require('./bringbase') // oqul.11: shared with bringitem
 const Vec3 = require('vec3')
 
 const woolMod = require('./wool')
@@ -36,10 +37,8 @@ const woolMod = require('./wool')
 // place_error/no-displacement backstops still catch a bring that loops
 // without refusing, and release() resumes ctx.bring untouched.
 const FIND_RADIUS = 48
-const WANT_ORE = 3
 const WANT_LOGS = 4
 const WANT_FOOD = 3
-const WANT_MAX = 16
 const WALK_STALL_TICKS = 10 // stationary ticks before skipping an unreachable target
 const CHEST_STALL_TICKS = 5 // far+standing ticks before the chest fetch falls back (a single
   // far reading is often a recovering pathfinder, not an unreachable chest)
@@ -133,41 +132,8 @@ function tierRefusal(bot, blockName) {
   return `${base} (my ${held} can't break it)`
 }
 
-
-function countDrop(bot, drop) {
-  try {
-    return countItems(bot, (n) => n === drop)
-  } catch (_) {
-    return 0
-  }
-}
-
-
-function bringKind(ctx) {
-  return (ctx.bring && ctx.bring.kind) || 'block'
-}
-
 function skipKey(p) {
   return `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
-}
-
-function refuse(bot, ctx, line) {
-  // A failed sub-order (did.4) reads as the parent's honest line: the gap
-  // that never filled, not the leg that failed it.
-  const o = ctx && ctx.bring
-  const sub = o && o.subFor && o.subWant && o.subWord
-    ? `could not get ${o.subWant} ${o.subWord} for the ${o.subFor} in time`
-    : null
-  say(bot, sub || line)
-  metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
-  ctx.bring = null
-  clearGoal(bot, ctx)
-}
-
-function done(bot, ctx) {
-  metrics.bring.inc({ outcome: 'done', kind: bringKind(ctx) })
-  ctx.bring = null
-  clearGoal(bot, ctx)
 }
 
 // Food hunt prey (idkcraft-n7k): the order seed (isFoodRequest/findEdible)
@@ -282,11 +248,6 @@ function progressed(bp, last, grounded) {
   if (!last) return true
   if (Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) return true
   return !!grounded && Math.floor(bp.y) !== Math.floor(last.y)
-}
-
-function atPos(bot) {
-  const bp = bot.entity && bot.entity.position
-  return bp ? `${Math.round(bp.x)} ${Math.round(bp.y)} ${Math.round(bp.z)}` : 'unknown'
 }
 
 // Per-leg model choice (ef3/rw4.6 shape): exactly two labels — laya answers

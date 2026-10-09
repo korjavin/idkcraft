@@ -25,6 +25,7 @@
 
 const metrics = require('./metrics')
 const { CHAT_LIMIT } = require('./commands')
+const { orderStamp, carryOrderStamp } = require('./step') // oqul.11: moved for home.js
 
 const TASK_STALL_L1_MS = 15 * 60 * 1000
 const TASK_STALL_L2_MS = 45 * 60 * 1000
@@ -271,34 +272,6 @@ function orderObj(ctx, kind) {
     if (kind === 'flat') return ctx.flat || null
   } catch (_) { /* no order */ }
   return null
-}
-
-// Stable order identity (R2 core-1): re-arms replace the order object
-// mid-order (home.js exit start/reseek/fail), so object identity alone
-// would read every re-arm as a replaced order and reset the stall clock.
-// The stamp is allocated per object, carried across re-arms, and stored
-// as orderRef at baseline; a genuinely new order object gets a fresh one.
-const orderStamps = new WeakMap()
-let orderStampSeq = 0
-function orderStamp(o) {
-  try {
-    if (!o || typeof o !== 'object') return null
-    let s = orderStamps.get(o)
-    if (typeof s !== 'number') {
-      s = ++orderStampSeq
-      orderStamps.set(o, s)
-    }
-    return s
-  } catch (_) {
-    return null
-  }
-}
-function carryOrderStamp(from, to) {
-  try {
-    if (!from || typeof from !== 'object' || !to || typeof to !== 'object' || from === to) return
-    const s = orderStamp(from)
-    if (typeof s === 'number') orderStamps.set(to, s)
-  } catch (_) { /* carry best-effort */ }
 }
 
 function dist3(a, b) {

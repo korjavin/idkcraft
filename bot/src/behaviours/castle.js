@@ -28,6 +28,7 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const blueprint = require('../castle')
+const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.js read
 const build = require('./build')
 const flat = require('./flat')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef } = require('./util')
@@ -60,12 +61,12 @@ const ITEM = {
 // Walk buffer (idkcraft-vmzq.31, revmux 02 core-1): the stone reserve is
 // one shelter pillar over the equip trigger — past the dirt shield (dirt
 // at zero) the walks spend the buffer before the kit reads empty, and
-// below-16 equip refills. Deferred require: equip loads inside the
-// craft->goal chain (SHELTER_RESERVE below is module-local, read at call
+// below-16 equip refills. SCAFFOLD_LOW comes from budget.js (oqul.11)
+// (SHELTER_RESERVE below is module-local, read at call
 // time, so the forward reference is safe).
 function reserveOf(kind) {
   if (kind === 'stone') {
-    try { return require('./equip').SCAFFOLD_LOW + SHELTER_RESERVE } catch (_) { return 24 }
+    try { return SCAFFOLD_LOW + SHELTER_RESERVE } catch (_) { return 24 }
   }
   return kind === 'planks' ? 2 : 0
 }
