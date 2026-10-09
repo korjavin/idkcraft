@@ -706,6 +706,40 @@ describe('castle pane ladder (g0z.38)', () => {
     })
   }
 
+  it('the real furnace settles async (revmux 01): the settled sand run is read back, then crafted', async () => {
+    const { bot, ctx, calls, items } = ladderBot({ items: [{ name: 'sand', count: 18 }, { name: 'coal', count: 3 }] })
+    // gear.driveFurnace shape: null while the window op is in flight; the
+    // outcome lands on ctx.furnace after the call returned.
+    fetch.deps.driveFurnace = (b, c) => {
+      calls.furnace.push(c.furnaceJob)
+      c.furnaceJob = null
+      c.furnace = { job: { input: 'sand', output: 'glass' }, settled: false, result: null }
+      if (calls.furnace.length === 2) {
+        setImmediate(() => {
+          items.splice(items.findIndex((i) => i.name === 'sand'), 1)
+          items.push({ name: 'glass', count: 18 })
+          c.furnace.settled = true
+          c.furnace.result = 'done'
+        })
+      }
+      return null
+    }
+    fetch.deps.craftItem = (b, c, names, n) => { calls.crafts.push([names, n]); return items.some((i) => i.name === 'glass') ? 'running' : { done: false } }
+    await run(bot, ctx, () => items.some((i) => i.name === 'glass') && calls.crafts.length > 1)
+    assert.equal(calls.furnace.length, 2, 'the settled run is consumed, never re-driven')
+    assert.equal(ctx.furnace.result, null)
+    assert.equal(ctx.stepStatus, undefined)
+    assert.deepEqual(calls.crafts.at(-1), [['glass_pane'], 16])
+  })
+
+  it('a preempted smelt resumes on the next leg instead of reordering sand (revmux 01)', async () => {
+    const { bot, ctx, calls } = ladderBot()
+    ctx.furnace = { job: { input: 'sand', output: 'glass' }, settled: false, result: null }
+    await run(bot, ctx, () => calls.furnace.length)
+    assert.equal(ctx.bring, undefined)
+    assert.deepEqual(calls.furnace[0], { input: 'sand', output: 'glass' })
+  })
+
   it('6 glass on hand, the craft fails: failed:castlefetch-craft-pane, no sand order', async () => {
     const { bot, ctx } = ladderBot({ items: [{ name: 'glass', count: 6 }] })
     await run(bot, ctx, () => ctx.stepStatus)

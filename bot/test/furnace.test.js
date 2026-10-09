@@ -620,7 +620,7 @@ describe('furnace smelt job (g0z.36: sand -> glass)', () => {
     console.log = (l) => lines.push(l)
     try { await tick(bot, ctx) } finally { console.log = orig }
     assert.ok(log.some(([op, n]) => op === 'takeOutput' && n === 18))
-    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.stepStatus, undefined, 'a caller job reports on the result only (g0z.38)')
     assert.equal(ctx.furnace.result, 'done')
     assert.ok(lines.includes('smelted 18 glass'), JSON.stringify(lines))
   })
@@ -638,7 +638,8 @@ describe('furnace smelt job (g0z.36: sand -> glass)', () => {
     await tick(bot, ctx)
     assert.equal(ctx.stepStatus, undefined)
     for (let i = 0; i < 15; i++) await tick(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:no-fuel')
+    assert.equal(ctx.furnace.result, 'failed:no-fuel')
+    assert.equal(ctx.stepStatus, undefined)
     assert.ok(!log.some(([op]) => op === 'putFuel'))
   })
 
@@ -646,7 +647,26 @@ describe('furnace smelt job (g0z.36: sand -> glass)', () => {
     const { bot } = jobBot([{ name: 'raw_iron', count: 8 }, { name: 'coal', count: 3 }])
     const ctx = sandCtx()
     await tick(bot, ctx)
-    assert.equal(ctx.stepStatus, 'done', 'iron in the bag is not this job')
+    assert.equal(ctx.furnace.result, 'done', 'iron in the bag is not this job')
+  })
+
+  // g0z.38 (revmux 01): the window cycle settles after driveLeg returned
+  // and restored the caller's status — the caller's step must not end.
+  it('through gear.driveFurnace: the async settle never writes the caller stepStatus', async () => {
+    const gear = require('../src/behaviours/gear')
+    const { bot, win } = jobBot([{ name: 'sand', count: 18 }, { name: 'coal', count: 3 }])
+    const ctx = { ...sandCtx(), stepStatus: 'running' }
+    ctx.furnaceJob = SAND
+    assert.equal(gear.driveFurnace(bot, ctx, furnace), null)
+    await settle()
+    bot.inventory.items = () => []
+    win.slots = [null, null, { name: 'glass', count: 18 }]
+    ctx.furnaceJob = SAND
+    assert.equal(gear.driveFurnace(bot, ctx, furnace), null, 'the window op is in flight')
+    await settle()
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.furnace.result, 'done')
+    assert.equal(ctx.furnace.settled, true)
   })
 })
 
@@ -728,8 +748,7 @@ describe('furnace job hygiene (g0z.36 01-review)', () => {
     furnace(bot, ctx)
     assert.equal(ctx.furnaceJob, null)
     await settle()
-    assert.equal(ctx.stepStatus, 'done', 'no sand: the sand run is done')
-    ctx.stepStatus = 'running'
+    assert.equal(ctx.furnace.result, 'done', 'no sand: the sand run is done')
     await tick(bot, ctx)
     assert.deepEqual(ctx.furnace.job, { input: 'raw_iron', output: 'iron_ingot' })
   })
@@ -763,7 +782,7 @@ describe('furnace job hygiene (g0z.36 01-review)', () => {
     try { ctx.furnaceJob = SAND; furnace(bot, ctx); await settle() } finally { console.log = orig }
     assert.ok(log.some(([op]) => op === 'takeOutput'))
     assert.equal(ctx.furnace.smelted, 0)
-    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.furnace.result, 'done')
     assert.ok(!lines.some((l) => String(l).startsWith('smelted ')), JSON.stringify(lines))
   })
 

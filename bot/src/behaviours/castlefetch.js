@@ -455,6 +455,10 @@ function paneNeed(bot, ctx, d) {
 function paneTick(bot, ctx, f, d, target, state) {
   if (ctx.bring) return // the ticker runs the sand order (ours or foreign)
   const dry = (why) => { ctx.castleFetchDry = 'pane'; finish(bot, ctx, `failed:castlefetch-${why}`) }
+  // A preempted smelt (dusk, another step) resumes on the next leg instead
+  // of reordering sand that sits in the furnace (revmux 01).
+  const fr = ctx.furnace
+  if (fr && !fr.settled && fr.job && fr.job.input === 'sand') f.smelting = true
   if (f.smelting) { smeltTick(bot, ctx, f, dry); return } // sand sits in the furnace: never reorder it
   const n = paneNeed(bot, ctx, d)
   const back = selfOrderBack(f)
@@ -495,16 +499,26 @@ function paneTick(bot, ctx, f, d, target, state) {
     return
   }
   f.smelting = true
+  if (fr && fr.settled) fr.result = null // a stale outcome never ends the new run
   smeltTick(bot, ctx, f, dry)
 }
 
 // One furnace tick per castlefetch tick (g0z.36 contract: the job is set
 // before EVERY driveFurnace call — the furnace consumes it each tick).
+// The window cycle settles async (revmux 01): a sand run's outcome lands on
+// ctx.furnace.result after driveFurnace returned, so a settled run is read
+// back here first (furnace.js keeps a non-iron job off ctx.stepStatus).
 function smeltTick(bot, ctx, f, dry) {
   ctx.castle.status = 'fetching pane (smelting)'
-  ctx.furnaceJob = { input: 'sand', output: 'glass' }
   let out = null
-  try { out = deps.driveFurnace(bot, ctx) } catch (e) { out = 'failed:leg-threw' }
+  const fr = ctx.furnace
+  if (fr && fr.settled && fr.result && fr.job && fr.job.input === 'sand') {
+    out = fr.result
+    fr.result = null
+  } else {
+    ctx.furnaceJob = { input: 'sand', output: 'glass' }
+    try { out = deps.driveFurnace(bot, ctx) } catch (e) { out = 'failed:leg-threw' }
+  }
   if (!out) return // running; the furnace walks itself
   f.smelting = false
   ctx.furnaceJob = null
