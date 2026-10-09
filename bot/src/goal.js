@@ -879,7 +879,7 @@ function tableYieldToBuild(facts, bot, ctx) {
 // At night the bot only walks home when close; far from home it shelters in
 // place till dawn. Dusk still marches at any distance (the going-home
 // window) — nightfall forces a still-far march into shelter past the
-// gohome stickiness (nightFarWalk in decide). Range is the retreat chain's
+// gohome stickiness (the night-far force). Range is the retreat chain's
 // (single source: beyond it a walk through mobs is a death march).
 // Unreadable position reads near: the old march, never a new hold.
 function nightFarFromHome(bot, ctx) {
@@ -1572,12 +1572,6 @@ function goalText(facts, home) {
     (blocksLow ? ' blocks=low' : '')
 }
 
-// goalText without the known token (4dse): equal stripped texts mean the
-// situation moved only on known — the forage/explore hold in decide().
-function stripKnown(text) {
-  return typeof text === 'string' ? text.replace(/known=\S+\s?/, '') : text
-}
-
 // atl.4 livelock guard: a recorded step failure holds while the facts text
 // is unchanged and the body stays within REFAIL_DIST of the failure point.
 // New facts or relocation release the step for a fresh try. Per-step map:
@@ -2119,22 +2113,18 @@ function registered(name) {
   }
 }
 
-// Re-decide forces (idkcraft-vmzq.62): every reason decide() re-picks a
-// running step besides start/step-done/step-failed, in one list —
-// characterization only, no behaviour change. kind 'gate': a force decide()
-// evaluates at its existing site, in the existing order (fetch-retry,
-// build-retry and site-retry retire or void their hold as they fire, and
-// gate-opened writes its edge latch, exactly as the inline code did).
-// kind 'word': a facts-text word whose flip opens the gate through
-// ctx.goalText !== text — evaluated only to name the force on the step
-// line, never to decide. fires(prev, facts, ctx, status, bot, text).
-// NOT here (they stay exactly as they are; vmzq.4 retires them against
-// this list): the suppressors (in-flight and night stickiness holds, the
-// stripKnown forage/explore hold, the inside day-mask, the askedKey
-// shortcut) and the prev-specific night/site forces (nightFarWalk,
-// nightNearShelter, siteFarWalk) and the vmzq.5/.21 pins, which name
-// themselves in why=. A death moves no word (keepInventory) — its
-// re-decide rides the night forces and the health word.
+// Re-decide forces (idkcraft-vmzq.62, vmzq.4): every reason decide()
+// re-picks a running step besides start/step-done/step-failed, in one list.
+// kind 'gate': evaluated every tick at its existing site, in the existing
+// order (fetch-retry, build-retry and site-retry retire or void their hold
+// as they fire, and gate-opened writes its edge latch). kind 'word': a
+// facts-text word whose flip since the pick re-decides on its own. Every
+// other text move re-decides only through the commitment rule in decide()
+// (the running step left the menu, or the FSM answer moved). Kept outside
+// (vmzq.4 Codex objection 2, they protect multi-tick operations, not text
+// diffs): the in-flight craft holds, the rw4.5 night/door stickiness, the
+// retreat latch; and the vmzq.5/.21/.50 pins, which name themselves in why=.
+// fires(prev, facts, ctx, status, bot, text).
 function textWord(text, key) {
   const m = typeof text === 'string' ? text.match(new RegExp(`(?:^| )${key}=(\\S+)`)) : null
   return m ? m[1] : null
@@ -2143,7 +2133,7 @@ const wordFlipped = (keys) => (prev, facts, ctx, status, bot, text) =>
   !!ctx && typeof ctx.goalText === 'string' && keys.some((k) => textWord(ctx.goalText, k) !== textWord(text, k))
 const FORCES = [
   // A chain-owned step (retreat/pillar, index.js sets ctx.step outside
-  // decide) never rides the goal shortcuts.
+  // decide) is never held: it re-decides into a goal step.
   { name: 'chain', bead: 'idkcraft-1tj', kind: 'gate', fires: (prev, facts, ctx) => !!(ctx && ctx.retreat && ctx.retreat.action === prev) },
   // Bounded castlefetch hold: an expired hold retires and forces one pick.
   {
@@ -2197,9 +2187,21 @@ const FORCES = [
       return false
     },
   },
-  // Gear yield (done to hand off to the fetchers) never rides the askedKey
-  // shortcut — evaluated at the shortcut only.
-  { name: 'gear-yield', bead: 'idkcraft-ipn.7', kind: 'gate', fires: (prev, facts, ctx, status) => prev === 'gear' && status === 'done' },
+  // Night-far gohome (ipn.12): a night march still far from home — or a
+  // respawn far away — hands the night to shelter, even with steady facts
+  // (a keepInventory death moves no bucket). Door phases run near home, so
+  // the walk-phase check never breaks a doorway.
+  {
+    name: 'night-far', bead: 'idkcraft-ipn.12', kind: 'gate',
+    fires: (prev, facts, ctx, status, bot) => !isFinished(status) && prev === 'gohome' && !!ctx && !!ctx.gohome &&
+      ctx.gohome.phase === 'walk' && facts.time === 'night' && nightFarFromHome(bot, ctx),
+  },
+  // Night-near shelter (ipn.12 revmux 03): the mirror — a respawn by the
+  // house walks in instead of pillaring outside all night.
+  {
+    name: 'night-near', bead: 'idkcraft-ipn.12', kind: 'gate',
+    fires: (prev, facts, ctx, status, bot) => !isFinished(status) && prev === 'shelter' && facts.time !== 'day' && !shelterFits(facts, bot, ctx),
+  },
   // Orders/stop/follow handover/bring clear ctx.step outside decide
   // (resetNightStep): the next decide starts from no step with a text
   // already standing (a first boot has none).
@@ -2214,8 +2216,54 @@ const FORCES = [
 ]
 const FORCE = Object.fromEntries(FORCES.map((f) => [f.name, f]))
 
+// The step menu: feasible, registered and not held on this text.
+function menuNames(facts, bot, ctx, text) {
+  return Object.keys(MENU).filter((n) => {
+    try {
+      if (!MENU[n].feasible(facts, bot, ctx) || !registered(n)) return false
+    } catch (_) {
+      return false
+    }
+    return !failHolds(ctx, n, text, bot)
+  })
+}
+
+// Step commitment (idkcraft-vmzq.4): a running step is re-decided on a
+// facts-text move only when the move matters to it — a word force from
+// the table, the step left the menu (its own feasible() turned false, or
+// a hold), or the FSM answer moved since the pick. With the FSM brain
+// that is exactly the old facts-changed re-pick (a re-decide that keeps
+// the step is a no-op); with a model it stops the re-ask flaps (beds <->
+// explore, forage <-> rest) on moves that change nothing for the step.
+// Known belongs to the running forage/explore leg (4dse: an animal at the
+// find edge flips near/none every 1-3 s, 347 switches/h): the leg reads
+// the text with its pick-time known word, so a known-only flip is no move
+// at all — the leg runs to done/failed and re-picks honestly. A pick this
+// rule cannot vouch for (an order/retreat moved ctx.step, a task-plan pin
+// whose bound must still release it on a text move, a legacy ctx) keeps
+// the old rule: any move re-decides. One evaluation per move: the last
+// held text is the reference until the next pick (old: one re-decide per move).
+function textForce(prev, facts, bot, ctx, status, text) {
+  let seen = text
+  if (prev === 'forage' || prev === 'explore') {
+    const k = textWord(ctx.goalText, 'known')
+    if (k) seen = goalText({ ...facts, known: k }, ctx.home)
+  }
+  if (seen === (typeof ctx.heldText === 'string' ? ctx.heldText : ctx.goalText)) return false
+  if (FORCES.some((f) => f.kind === 'word' && f.fires(prev, facts, ctx, status, bot, text))) return true
+  const pick = ctx.stepPick
+  if (!pick || pick.step !== prev || pick.source === 'task-plan' || typeof pick.fsm !== 'string') return true
+  const names = menuNames(facts, bot, ctx, text)
+  if (!names.includes(prev) || goalFsm(facts, names) !== pick.fsm) return true
+  // rest never finishes (rest.js roams, no done/failed): a model rest over
+  // a work answer is re-asked on every move, the old rule (revmux 01).
+  if (prev === 'rest' && pick.fsm !== 'rest') return true
+  ctx.heldText = seen
+  return false
+}
+
 // Decision point: re-decide when there is no step, the step finished
-// (done/failed:*), or the facts changed. The model picks through chooseStep
+// (done/failed:*), or a force fires (FORCES, textForce). The model picks through chooseStep
 // at those points only (same dedup as lastStateKey); the return shape stays
 // { action, sprint, source: 'goal-fsm' } — the choice source (laya, only-
 // option, fsm-fallback) rides the step log line, the next: chat and the
@@ -2375,19 +2423,11 @@ async function decide(bot, ctx) {
   if (!finished && prev && opInFlight(ctx)) {
     return { action: prev, sprint: false, source: 'goal-fsm' }
   }
-  // Night-far gohome does not stick (ipn.12): a dusk march that is still far
-  // at nightfall — or a respawn far from home — must re-decide into shelter
-  // instead of marching the dark, even with unchanged facts (a keepInventory
-  // death moves no bucket). Door phases only run near home, so the far check
-  // never breaks a doorway. Like a chain handoff it forces a real re-decide
-  // past the askedKey shortcut, not just a release.
-  const nightFarWalk = !finished && prev === 'gohome' && ctx.gohome && ctx.gohome.phase === 'walk' &&
-    facts.time === 'night' && nightFarFromHome(bot, ctx)
-  // Night-near shelter does not hold (revmux 03): the mirror force — a
-  // keepInventory respawn by the house moves no bucket, so without the
-  // force the askedKey shortcut below would re-issue shelter all night.
-  const nightNearShelter = !finished && prev === 'shelter' &&
-    facts.time !== 'day' && !shelterFits(facts, bot, ctx)
+  // Night forces (ipn.12, table above): they cut through the stickiness.
+  let nightFarWalk = false
+  let nightNearShelter = false
+  try { nightFarWalk = fires('night-far') } catch (_) { nightFarWalk = false }
+  try { nightNearShelter = fires('night-near') } catch (_) { nightNearShelter = false }
   // Shelter sticks at night (revmux 01 body-2): a laya re-pick to a day
   // step would walk off the pillar and work the dark with inShelter still
   // armed (no fight, no retreat, till dawn). Day exits through the menu —
@@ -2416,7 +2456,7 @@ async function decide(bot, ctx) {
       }
     } catch (_) { /* hold best-effort: the menu below decides */ }
   }
-  // A chain-owned step never rides the goal shortcuts: re-issuing it here
+  // A chain-owned step is never held: re-issuing it here
   // would bypass feasibility and the model ask (the stale hold in another
   // coat). Force a real re-decide instead; the menu never contains
   // retreat/pillar, so ownership transfers to a goal step.
@@ -2432,7 +2472,7 @@ async function decide(bot, ctx) {
   // replay paths would keep the running step and the bound would never
   // fire in exactly the no-food scenario it bounds. A gated->open edge
   // forces one fresh pick, like the retries. One-shot by construction
-  // (the edge flips); closing needs no force (the shortcut re-checks
+  // (the edge flips); closing needs no force (every re-pick re-checks
   // feasibility, and the closed gate fails it).
   let gateOpened = false
   try { gateOpened = fires('gate-opened') } catch (_) { gateOpened = false }
@@ -2443,8 +2483,7 @@ async function decide(bot, ctx) {
   // kept counter holds the very next identical failure (n+1) — one pick
   // per window. The fire voids the text/pos key instead: a matching text
   // would let the text-keyed failHolds veto the forced pick in the menu
-  // AND block the shortcut re-issue on the next tick (deletion used to do
-  // both implicitly). retryFired makes the force one-shot; any later
+  // (deletion used to do that implicitly). retryFired makes the force one-shot; any later
   // verdict overwrites the record and re-arms. no-site records are
   // excluded: their steady-text retry is siteRetry's per-tick probe (a
   // forced blind retry adds no information), and the record is the
@@ -2468,20 +2507,8 @@ async function decide(bot, ctx) {
   // is spawn-anchored, never the bot).
   let siteRetry = false
   try { siteRetry = fires('site-retry') } catch (_) { /* retry best-effort */ }
-  // Known-flicker hold (4dse): a running forage/explore leg is never
-  // preempted when the ONLY changed fact is known — an animal at the
-  // 48-block find edge flips near/none every 1-3 s (prod: 347
-  // forage<->explore switches/hour, the body standing still). Like the
-  // night-step stickiness above: the leg runs to step-done/failed, which
-  // re-picks honestly. Forced re-decides (chain handoff, fetch retry)
-  // still cut through; the night forces are prev-specific and cannot
-  // fire here.
-  if (!finished && (prev === 'forage' || prev === 'explore') && ctx && ctx.goalText !== text &&
-    stripKnown(ctx.goalText) === stripKnown(text) && !chainOwns && !fetchRetry && !siteRetry && !gateOpened && !buildRetry) {
-    return { action: prev, sprint: false, source: 'goal-fsm' }
-  }
   // Stall-point plan (idkcraft-vmzq.5): a forced one-shot step from the
-  // L2 planner. Forces a real re-decide past every shortcut below (but
+  // L2 planner. Forces a real re-decide past the commitment below (but
   // waits out the in-flight and stickiness holds above — never preempts
   // a craft click or a door phase).
   let planStep = null
@@ -2507,7 +2534,7 @@ async function decide(bot, ctx) {
     commitActive = false
   }
   // Force gate (revmux 01 core-3): a live window forces a re-decide past
-  // the shortcut ONLY when the pin would apply right now — feasible +
+  // the commitment ONLY when the pin would apply right now — feasible +
   // registered, the safety choice from the ordinary menu not a night
   // step — and the body is not already on it. Forcing past a degraded
   // pin (or a safety win) would re-decide every tick for the whole
@@ -2517,14 +2544,7 @@ async function decide(bot, ctx) {
     try {
       const pinable = !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
       if (pinable) {
-        const earlyNames = Object.keys(MENU).filter((n) => {
-          try {
-            return MENU[n].feasible(facts, bot, ctx) && registered(n) && !failHolds(ctx, n, text, bot)
-          } catch (_) {
-            return false
-          }
-        })
-        const safety = goalFsm(facts, earlyNames)
+        const safety = goalFsm(facts, menuNames(facts, bot, ctx, text))
         commitForce = safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter'
       }
     } catch (_) {
@@ -2533,10 +2553,9 @@ async function decide(bot, ctx) {
   }
   // Return-to-site force (idkcraft-vmzq.50): a displacement moves no
   // bucket (the castle word reads the last word off-site), so without
-  // the force the shortcut re-issues the castle leg every tick and the
-  // walk back runs the cave-diving far leg (run8). Like nightFarWalk it
-  // forces a real re-decide past the askedKey shortcut — one tick, the
-  // menu then holds gocastle to arrival. R1: a running far-fetch leg is
+  // the force the castle leg keeps running off-site and the walk back
+  // runs the cave-diving far leg (run8). Like night-far it forces a real
+  // re-decide — one tick, the menu then holds gocastle to arrival. R1: a running far-fetch leg is
   // exempt (its candidate lies past 64 by design — pre-empting it on
   // commit expiry would loop out-and-back), and a pin on the current
   // step is exempt (the force would re-decide every tick of the window
@@ -2555,7 +2574,14 @@ async function decide(bot, ctx) {
   // the ended choice is never re-pinned below): failed names its reason,
   // done re-measures against the dispatch snapshot.
   const commitEnded = commitActive && finished && prev && prev === commitStep
-  if (!prev || finished || ctx.goalText !== text || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
+  // Step commitment (idkcraft-vmzq.4): a text move re-decides a running
+  // step only through textForce (a word force, the step left the menu, or
+  // the FSM answer moved) — no per-suppressor holds.
+  let factsForce = false
+  if (prev && !finished && ctx) {
+    try { factsForce = textForce(prev, facts, bot, ctx, status, text) } catch (_) { factsForce = ctx.goalText !== text }
+  }
+  if (!prev || finished || factsForce || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
     if (commitEnded) {
       try {
         require('./task').commitFinished(bot, ctx, status)
@@ -2563,40 +2589,7 @@ async function decide(bot, ctx) {
       commitActive = false
       commitStep = null
     }
-    const askKey = `${text}\n${status || ''}`
-    // rw4.16: a finished step that can no longer progress is never
-    // re-issued — self-advancing steps are never held, so the shortcut
-    // re-ran a day-infeasible gohome done+chat every tick (prod: 434
-    // 'home for the night' lines in 7 min). Running steps keep the
-    // shortcut untouched (stickiness and the forces own their handoffs).
-    let prevFeasible = true
-    if (finished && prev) {
-      try {
-        prevFeasible = !!(MENU[prev] && MENU[prev].feasible(facts, bot, ctx))
-      } catch (_) {
-        prevFeasible = false
-      }
-    }
-    // The shortcut must respect holds (h9z): it returns the finished step
-    // without choosing, so a held step would bypass its own hold and
-    // re-pick forever. A gear yield never rides it either (ipn.7): gear
-    // ends done to hand off to the fetchers (latched announce), and the
-    // same text plus the same 'done' status re-issues it every tick —
-    // prod stood 8-10 min with 'going to dig' until the facts moved. The
-    // fresh menu pick below keeps gear out via the said-latch until a new
-    // need arrives; no hold is recorded (gear yields are never holds).
-    // A latched gohome never rides it either (xhqv): the same text and the
-    // same failure re-issue the gohome the latch just retired.
-    if (prev && ctx.askedKey === askKey && !(prev === 'gohome' && gohomeLatched(ctx, bot)) && !chainOwns && !nightFarWalk && !nightNearShelter && !siteFarWalk && !fetchRetry && !siteRetry && !gateOpened && !buildRetry && !planStep && !commitForce && !fires('gear-yield') && prevFeasible && !failHolds(ctx, prev, text, bot)) return { action: ctx.step, sprint: false, source: 'goal-fsm' }
-    ctx.askedKey = askKey
-    let names = Object.keys(MENU).filter((n) => {
-      try {
-        if (!MENU[n].feasible(facts, bot, ctx) || !registered(n)) return false
-      } catch (_) {
-        return false
-      }
-      return !failHolds(ctx, n, text, bot)
-    })
+    let names = menuNames(facts, bot, ctx, text)
     // Stall-point plan (vmzq.5): the one-shot forced re-pick — the planned
     // step as the only menu entry. Consumed always (one-shot); applied only
     // while still feasible and registered (a stale answer degrades to the
@@ -2652,7 +2645,7 @@ async function decide(bot, ctx) {
     // Force name for the step line (vmzq.62): the first gate force that
     // fired, else the first word force; pure here (the gate side effects
     // already ran at their sites above). Read before ctx.goalText moves.
-    const gateFired = { chain: chainOwns, 'fetch-retry': fetchRetry, 'gate-opened': gateOpened, 'build-retry': buildRetry, 'site-retry': siteRetry, 'gear-yield': prev === 'gear' && status === 'done' }
+    const gateFired = { chain: chainOwns, 'fetch-retry': fetchRetry, 'gate-opened': gateOpened, 'build-retry': buildRetry, 'site-retry': siteRetry, 'night-far': nightFarWalk, 'night-near': nightNearShelter }
     let force = null
     for (const f of FORCES) {
       let hit = false
@@ -2700,14 +2693,14 @@ async function decide(bot, ctx) {
     // without re-stamping, and must not inherit the age/source.
     ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
     // A banking trip picked under the pierce latches for the trip (R4):
-    // set on the fresh pick only, so the shortcut re-issue below never
-    // arms it and only stockpile's own finish releases it above. A site
+    // set on a pick only, and only stockpile's own finish releases it above. A site
     // pick is not a pierce (the site is near by definition), so only a
     // home-branch pick arms it (revmux 02-after-fix major 3).
     if (choice.step === 'stockpile') {
       try { ctx.stockpilePierced = !!homeLegVetoed(bot, ctx, 'stockpile') && !stockpileSiteBranch(facts, bot, ctx) } catch (_) { /* latch best-effort */ }
     }
     ctx.goalText = text
+    ctx.heldText = null
     metrics.goalSteps.inc({ step: choice.step, source: choice.source })
     for (const n of Object.keys(MENU)) metrics.goalStep.set({ step: n }, n === choice.step ? 1 : 0)
     if (choice.model) metrics.goalChoiceDuration.observe({ source: choice.model }, ms / 1000)

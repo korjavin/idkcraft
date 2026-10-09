@@ -73,10 +73,20 @@ describe('FORCES table (vmzq.62)', () => {
     assert.ok(moved.stepFail.build)
   })
 
-  it('gear-yield: gear done fires; gear running or another done does not', () => {
-    assert.equal(fire('gear-yield', { prev: 'gear', status: 'done' }), true)
-    assert.equal(fire('gear-yield', { prev: 'gear', status: 'running' }), false)
-    assert.equal(fire('gear-yield', { prev: 'craft', status: 'done' }), false)
+  it('night-far: a night gohome walk far from home fires; a door phase or a finished walk does not', () => {
+    const far = { home: { site: pos(500, 64, 0), door: pos(500, 64, 0) }, gohome: { phase: 'walk' } }
+    const night = { time: 'night' }
+    assert.equal(fire('night-far', { prev: 'gohome', facts: night, ctx: far }), true)
+    assert.equal(fire('night-far', { prev: 'gohome', facts: night, ctx: { ...far, gohome: { phase: 'open' } } }), false)
+    assert.equal(fire('night-far', { prev: 'gohome', facts: night, ctx: far, status: 'done' }), false)
+    assert.equal(fire('night-far', { prev: 'gohome', facts: { time: 'dusk' }, ctx: far }), false)
+  })
+
+  it('night-near: a night shelter that no longer fits fires; day or another step does not', () => {
+    const near = { home: { site: pos(2, 64, 0), door: pos(2, 64, 0), built: true } }
+    assert.equal(fire('night-near', { prev: 'shelter', facts: { time: 'night' }, ctx: near }), true)
+    assert.equal(fire('night-near', { prev: 'shelter', facts: { time: 'day' }, ctx: near }), false)
+    assert.equal(fire('night-near', { prev: 'gohome', facts: { time: 'night' }, ctx: near }), false)
   })
 
   it('order: no step with a standing text fires; first boot does not', () => {
