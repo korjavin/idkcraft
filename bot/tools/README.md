@@ -408,6 +408,32 @@ night cut by the window end is `(partial)`). The verdict line gains
 `nights` array. Crossings are the replay's resynced clock, so it works at
 any `CASTLE_TICKRATE`.
 
+`CASTLE_SEED=complete` (idkcraft-g0z.33, the g0z.30 "lives in the castle"
+acceptance): instead of ordering a castle, setblocks the whole v2 castle
+centred on the pad (site = pad centre - 15,-13, rot 0; all 1722 plan
+blocks in the bot's paint, keep-clear and moat cells cleared, the gate's
+upper half, both bedroom beds and the table on the residence cells), reads
+every cell back (one ordered retry, then `SETUP-FAIL seed-castle`), sets
+the castle state `complete` and waits for the live adopt
+(`residence ... -> castle@...`) plus a memory home `kind=castle` on disk.
+No `build castle` order is sent. Every night (dusk to dawn) then logs
+
+```
+CASTLE-RIG residence night <n>: entered=yes@<s>s|no, slept=yes|no, shelter=<episodes>, deaths=<d>, dawn-exit=<s>s|pending|n/a
+```
+
+at dawn, `dawn-exit=<s>s` when the bot first stands off the residence
+floors after it, and the same lines with `, PASS|FAIL` at the window end
+(pass = entered + slept + 0 shelter + 0 deaths + a dawn exit; a night cut
+by the window is `(partial)` and fails). The verdict line gains
+`, seeded=1722/1722, residence=<pass>/<nights>`, the record `seed` and
+`residence`. The 3-night acceptance (night 3's dawn lands at 60 min, the
+8 extra minutes leave room for the dawn exit):
+
+```sh
+CASTLE_SEED=complete CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh --night 68
+```
+
 Interrupts clean up after themselves: `kill -INT`/`-TERM` (or Ctrl-C)
 kills every descendant (server client, node, tee), `docker rm -f`s this
 slot's container and drops the lock, exit 130 — the next run on the slot

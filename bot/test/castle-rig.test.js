@@ -686,3 +686,70 @@ describe('castle-replay.js watchdog classify', () => {
     assert.equal(seen.wdFirstAt, 0)
   })
 })
+
+describe('castle-replay.js seeded castle (idkcraft-g0z.33)', () => {
+  const { seedCastleCells, seedMatches, createResidenceNights, classify, resetSeen } = require('../tools/castle-replay')
+  const castle = require('../src/castle')
+
+  it('seeds every v2 plan cell, the gate upper half, both beds and the table', () => {
+    const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, blueprintVersion: 2 }
+    const cells = seedCastleCells(st)
+    const plan = castle.absPlan(st.site, 0, 2).cells
+    const placed = cells.filter((c) => castle.isPlaceTarget(c.kind) && c.kind !== 'extra')
+    assert.equal(placed.length, 1722)
+    assert.equal(cells.length, plan.length + 6)
+    // Clear cells first, so no air setblock lands on a placed block.
+    const firstPlace = cells.findIndex((c) => c.kind !== 'air' && c.kind !== 'dig')
+    assert.ok(cells.slice(firstPlace).every((c) => c.kind !== 'air' && c.kind !== 'dig'))
+    // Every painted block reads back as its plan kind.
+    for (const c of placed) assert.ok(seedMatches(c, c.block.split('[')[0]), `${c.kind} ${c.block}`)
+    const extra = cells.filter((c) => c.kind === 'extra').map((c) => c.block)
+    assert.deepEqual(extra.map((b) => b.split('[')[0]), ['oak_door', 'red_bed', 'red_bed', 'red_bed', 'red_bed', 'crafting_table'])
+    assert.ok(seedMatches({ kind: 'extra', block: 'red_bed[part=foot,facing=south]' }, 'red_bed'))
+    assert.ok(!seedMatches({ kind: 'extra', block: 'crafting_table' }, 'air'))
+  })
+
+  it('judges each night: entered, slept, 0 shelter, 0 deaths, dawn exit', () => {
+    resetSeen()
+    const lines = []
+    let deaths = 0
+    const r = createResidenceNights({ deaths: () => deaths, log: (l) => lines.push(l) })
+    r.onEvent({ event: 'dusk' }, 5) // before open: ignored
+    r.open()
+    r.onSample(10, false, false)
+    r.onEvent({ event: 'dusk' }, 600)
+    r.onSample(620, false, false)
+    r.onSample(641, true, false)
+    r.onSample(700, true, true)
+    r.onEvent({ event: 'dawn' }, 1200)
+    assert.ok(lines.includes('CASTLE-RIG residence night 1: entered=yes@41s, slept=yes, shelter=0, deaths=0, dawn-exit=pending'))
+    r.onSample(1210, true, false)
+    r.onSample(1233, false, false)
+    assert.equal(r.nights[0].dawnExitS, 33)
+    // Night 2: a shelter episode and a death, never inside.
+    r.onEvent({ event: 'dusk' }, 1800)
+    classify('goal step=shelter prev=gather source=x')
+    classify('goal step=shelter prev=shelter source=x')
+    deaths = 1
+    r.onEvent({ event: 'dawn' }, 2400)
+    // Night 3 cut by the window end.
+    r.onEvent({ event: 'nightfall' }, 3000)
+    r.finish(3100)
+    assert.deepEqual(r.nights.map((n) => n.pass), [true, false, false])
+    assert.equal(r.nights[1].shelter, 1)
+    assert.equal(r.nights[1].deaths, 1)
+    assert.equal(r.nights[2].partial, true)
+    assert.ok(lines.includes('CASTLE-RIG residence night 1: entered=yes@41s, slept=yes, shelter=0, deaths=0, dawn-exit=33s, PASS'))
+    assert.ok(lines.includes('CASTLE-RIG residence night 2: entered=no, slept=no, shelter=1, deaths=1, dawn-exit=n/a, FAIL'))
+    assert.equal(r.tag(), ', residence=1/3')
+  })
+
+  it('castle-rig.sh rejects a bad CASTLE_SEED before any world work', () => {
+    const { spawnSync } = require('node:child_process')
+    const os = require('node:os')
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-seed-'))
+    const r = spawnSync('sh', [path.join(__dirname, '..', 'tools', 'castle-rig.sh')], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), RIG_PLANNER: 'stub', CASTLE_SEED: 'half' } })
+    assert.equal(r.status, 2)
+    assert.match(r.stdout, /CASTLE_SEED: want ''\|complete/)
+  })
+})
