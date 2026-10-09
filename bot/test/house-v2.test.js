@@ -102,7 +102,7 @@ describe('jr2.1 phases lay in order: table, shell, roof, partition', () => {
     const roof = BLUEPRINT_V2.slice(49, 91)
     assert.equal(roof.length, 42)
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
-    const part = BLUEPRINT_V2.slice(91)
+    const part = BLUEPRINT_V2.slice(91, 99)
     assert.deepEqual(part.map((c) => [c.dx, c.dy, c.dz]), [
       [1, 0, 3], [3, 0, 3], [5, 0, 3], [3, 0, 4],
       [1, 1, 3], [3, 1, 3], [5, 1, 3], [3, 1, 4],

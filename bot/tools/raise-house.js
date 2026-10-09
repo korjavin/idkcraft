@@ -37,6 +37,7 @@ function houseCommands(site) {
   let table = null
   for (const c of plan) {
     if (c.kind === 'fill') continue // the slab reads solid: done
+    if (c.kind === 'clear') continue // the air fill above reads empty: done
     if (c.kind === 'door') { door = c; continue }
     if (c.kind === 'table') { table = c; continue }
     if (c.kind !== 'planks') throw new Error(`houseCommands: unknown kind ${JSON.stringify(c.kind)}`)
