@@ -27,6 +27,9 @@
 //   RIG_PLANNER (jev|stub, default jev), TYPESAFE_API_KEY (jev bearer).
 //   CASTLE_NIGHT (1 = night mode, set by castle-rig.sh --night: the
 //   wrapper skips the day lock, createNightDriver runs the nights).
+//   CASTLE_SEED (complete = g0z.33: rcon-place the whole v2 castle + beds
+//   + table on the pad, no order; the bot adopts it as its residence and
+//   createResidenceNights reports entered/slept/shelter/deaths/dawn-exit).
 // Exit: 0 = measured (even at 0 laid — the line says so),
 //   2 = environment/setup failure (spawn, pad, order, dropped follower,
 //   jev without a key).
@@ -54,6 +57,7 @@ const TICKRATE = process.env.CASTLE_TICKRATE || '1'
 const BLOCKED = Math.max(0, parseInt(process.env.CASTLE_BLOCKED || '0', 10) || 0)
 const PLANNER = process.env.RIG_PLANNER || 'jev'
 const NIGHT = process.env.CASTLE_NIGHT === '1'
+const SEED = process.env.CASTLE_SEED || ''
 // Far respawn (vmzq.29, prod run6): after CASTLE_FAR_AFTER min of the
 // window the follower lands CASTLE_FAR blocks off the half-built site in a
 // 3x3 pit 7 deep, dirt cleared, 64 cobble given — the walk back must pillar
@@ -118,11 +122,12 @@ const logStream = fs.createWriteStream(LOGFILE, { flags: 'w' })
 const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^castle relocate /,
   /^castle \d+\/\d+$/, /death/, /^castle-sample /, /^castle \d+\/\d+ in /,
   /^CASTLE-RIG /, /^task castle /, /no progress for/,
-  /^goal watchdog /, /^goal outcome /]
+  /^goal watchdog /, /^goal outcome /, /^residence /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0 }
 function resetSeen() {
+  seen.shelterEps = 0
   seen.flips = 0
   seen.steps = {}
   seen.fails = {}
@@ -159,6 +164,7 @@ function classify(line, now = Date.now()) {
   if (m) {
     seen.step = m[1]
     if (seen.nightSteps) seen.nightSteps.add(m[1])
+    if (m[1] === 'shelter' && m[2] !== 'shelter') seen.shelterEps++
     const pair = [m[1], m[2]].sort().join('<>')
     if (pair === 'castle<>castlefetch') seen.flips++
     return
@@ -283,7 +289,16 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
         st.anchor = tot; st.rate = Number(hit.rate) || 0; st.empties = 0; st.dim = cur
         st.pending = null // a new anchor invalidates any queued crossing
         if (prev != null && Math.abs(tot - prev) > RESYNC_JUMP_TICKS) {
+          const was = st.word
           st.word = resyncWord(daytime()) // time-set jump (a night->day set is not a dawn)
+          // g0z.33 revmux 01: a FORWARD jump out of dusk/night into day is
+          // the server's sleep skip (the bot alone in bed) — a dawn, or the
+          // night it slept through never closes. Backward sets stay silent.
+          if (onEvent && tot > prev && (was === 'dusk' || was === 'night') && st.word === 'day') {
+            const ev = { event: 'dawn', server: daytime(), at: now, skip: true }
+            if (write) st.pending = ev
+            else onEvent({ ...ev, bot: bot && bot.time ? bot.time.timeOfDay : null })
+          }
           return
         }
         crossed(bot, now) // full packet: mineflayer already wrote server truth
@@ -354,6 +369,98 @@ function createNightDriver({ cmd, who, deaths, log, phantoms = 2 }) {
       return `, nights=${nights.length}, sheltered=${nights.filter((n) => n.sheltered).length}/${nights.length}, night-deaths=${nights.reduce((a, n) => a + n.deaths, 0)}`
     },
   }
+}
+
+// Residence nights (idkcraft-g0z.33, the g0z.30 acceptance): one record per
+// night of a seeded complete castle, dusk to dawn — entered (inside a
+// residence floor, seconds after dusk), slept (bot.isSleeping or a 'sleep'
+// event), shelter episodes (goal step entries into shelter), deaths, and
+// dawn-exit (seconds from dawn to the first sample off the floors; only
+// owed when the bot was inside at dawn). A night passes on entered +
+// slept + 0 shelter + 0 deaths + a dawn exit. t = window seconds.
+function createResidenceNights({ deaths, log }) {
+  const nights = []
+  let armed = false
+  let cur = null
+  let exitWait = null
+  const fmt = (n) => `CASTLE-RIG residence night ${n.night}: entered=${n.enteredS != null ? `yes@${n.enteredS}s` : 'no'}, slept=${n.slept ? 'yes' : 'no'}, ` +
+    `shelter=${n.shelter}, deaths=${n.deaths}, dawn-exit=${n.dawnExitS != null ? `${n.dawnExitS}s` : n.insideAtDawn ? 'pending' : 'n/a'}` +
+    `${n.partial ? ' (partial)' : ''}${n.pass != null ? (n.pass ? ', PASS' : ', FAIL') : ''}`
+  const close = (t, partial) => {
+    const n = {
+      night: cur.night, enteredS: cur.enteredS, slept: cur.slept, shelter: seen.shelterEps - cur.sh0,
+      deaths: deaths() - cur.d0, insideAtDawn: cur.inside === true, dawnExitS: null, partial, pass: null,
+    }
+    nights.push(n)
+    cur = null
+    if (!partial && n.insideAtDawn) exitWait = { n, dawnS: t }
+    log(fmt(n))
+  }
+  const judge = (n) => { n.pass = !n.partial && n.enteredS != null && n.slept && n.shelter === 0 && n.deaths === 0 && n.dawnExitS != null }
+  return {
+    nights,
+    open() { armed = true },
+    onEvent(ev, t) {
+      if (!armed) return
+      if ((ev.event === 'dusk' || ev.event === 'nightfall') && !cur) {
+        exitWait = null // never left all day: the dawn exit stays unset
+        cur = { night: nights.length + 1, duskS: t, enteredS: null, slept: false, sh0: seen.shelterEps, d0: deaths(), inside: null }
+      } else if (ev.event === 'dawn' && cur) close(t, false)
+    },
+    onSample(t, inside, sleeping) {
+      if (cur) {
+        if (inside && cur.enteredS == null) cur.enteredS = t - cur.duskS
+        if (sleeping) cur.slept = true
+        cur.inside = !!inside
+      } else if (exitWait && !inside) {
+        exitWait.n.dawnExitS = t - exitWait.dawnS
+        log(`CASTLE-RIG residence night ${exitWait.n.night}: dawn-exit=${exitWait.n.dawnExitS}s`)
+        exitWait = null
+      }
+    },
+    finish(t) {
+      if (cur) close(t, true)
+      for (const n of nights) { judge(n); log(fmt(n)) }
+    },
+    tag() {
+      return `, residence=${nights.filter((n) => n.pass).length}/${nights.length}`
+    },
+  }
+}
+
+// Seeded complete castle (idkcraft-g0z.33): every setblock for a finished
+// v2 castle at st — keep-clear/moat cells to air first, then the plan
+// cells in lay order (the bot's own paint: cobble, oak planks/fence,
+// spruce frame), the gate's upper half, both bedroom beds and the table
+// on the residence cells. kind = plan kind (read back with
+// castle.matches) or 'extra' (read back by block name). Pure.
+const SEED_PAINT = { stone: 'cobblestone', planks: 'oak_planks', frame: 'spruce_log', fence: 'oak_fence', chest: 'chest', torch: 'torch', air: 'air', dig: 'air' }
+const FACING = ['north', 'east', 'south', 'west']
+function seedCastleCells(st) {
+  const blueprint = require('../src/castle')
+  const residence = require('../src/residence')
+  const cells = blueprint.absPlan(st.site, st.rot, 2).cells
+  const f = FACING[(st.rot | 0) % 4]
+  const out = []
+  for (const c of cells) if (!blueprint.isPlaceTarget(c.kind)) out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, block: 'air' })
+  for (const c of cells) {
+    if (!blueprint.isPlaceTarget(c.kind)) continue
+    out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, block: c.kind === 'door' ? `oak_door[half=lower,facing=${f}]` : SEED_PAINT[c.kind] })
+  }
+  const door = cells.find((c) => c.kind === 'door')
+  out.push({ x: door.x, y: door.y + 1, z: door.z, kind: 'extra', block: `oak_door[half=upper,facing=${f}]` })
+  const home = residence.castleHome(st)
+  for (const b of residence.CASTLE.beds(home)) {
+    out.push({ x: b.foot.x, y: b.foot.y, z: b.foot.z, kind: 'extra', block: `red_bed[part=foot,facing=${FACING[b.facing]}]` })
+    out.push({ x: b.head.x, y: b.head.y, z: b.head.z, kind: 'extra', block: `red_bed[part=head,facing=${FACING[b.facing]}]` })
+  }
+  const t = residence.CASTLE.table(home)
+  out.push({ x: t.x, y: t.y, z: t.z, kind: 'extra', block: 'crafting_table' })
+  return out
+}
+function seedMatches(cell, name) {
+  if (cell.kind === 'extra') return name === cell.block.split('[')[0]
+  return require('../src/castle').matches(cell.kind, name)
 }
 
 async function rcon(cmd) {
@@ -436,6 +543,7 @@ async function main() {
   const brainMod = require('../src/brain')
   let brain = brainMod.stubBrain
   let brainEngine = ''
+  if (SEED && SEED !== 'complete') fail('seed', `CASTLE_SEED: want ''|complete, got ${JSON.stringify(SEED)}`)
   if (PLANNER === 'jev') {
     const key = process.env.TYPESAFE_API_KEY
     // Loud, never silent: a jev run without a key would measure the stub
@@ -456,13 +564,16 @@ async function main() {
   const timeT0 = Date.now()
   // deaths is declared below; the driver reads it only once armed (window open).
   const night = NIGHT ? createNightDriver({ cmd: rcon, who: FOLLOWER, deaths: () => deaths, log: origLog }) : null
+  const resNights = SEED ? createResidenceNights({ deaths: () => deaths, log: origLog }) : null
+  let winT0 = 0 // window start; residence nights count seconds from it
   const timeResync = createTimeResync({
     write: RESYNC_WRITE,
     onEvent: (ev) => {
       const plusS = Math.round((ev.at - timeT0) / 1000)
       seen.timeEvents.push({ event: ev.event, server: ev.server, bot: ev.bot, plusS })
-      origLog(`CASTLE-RIG time: ${ev.event} server=${ev.server} bot=${ev.bot} +${plusS}s`)
+      origLog(`CASTLE-RIG time: ${ev.event} server=${ev.server} bot=${ev.bot} +${plusS}s${ev.skip ? ' (sleep skip)' : ''}`)
       if (night) night.onEvent(ev)
+      if (resNights) resNights.onEvent(ev, Math.round((ev.at - winT0) / 1000))
     },
   })
   origLog(`CASTLE-RIG time-resync: tickrate=${TICKRATE} mode=${RESYNC_WRITE ? 'correct' : 'track'}`)
@@ -557,8 +668,11 @@ async function main() {
   ]) {
     await rcon(cmd).catch((e) => fail('pad-fill', e.message))
   }
-  await rcon(`tp ${GUIDE} ${bx + 0.5} ${gy + 1} ${bz + 0.5}`).catch((e) => fail('pad-tp', e.message))
-  await rcon(`tp ${FOLLOWER} ${bx + 2.5} ${gy + 1} ${bz + 0.5}`).catch((e) => fail('pad-tp', e.message))
+  // Seeded castle (g0z.33): the castle covers the pad centre, so both
+  // land north of its fence line (site.z = bz - 13) instead.
+  const standZ = SEED ? bz - 17 : bz
+  await rcon(`tp ${GUIDE} ${bx + 0.5} ${gy + 1} ${standZ + 0.5}`).catch((e) => fail('pad-tp', e.message))
+  await rcon(`tp ${FOLLOWER} ${bx + 2.5} ${gy + 1} ${standZ + 0.5}`).catch((e) => fail('pad-tp', e.message))
   await rcon(`clear ${FOLLOWER}`).catch((e) => fail('clear', e.message))
   // Seeded kit (pace split: laying measured independent of fetching): a
   // complete castle-opening kit — batch stone, planks, scaffold dirt and a
@@ -600,24 +714,74 @@ async function main() {
     origLog('CASTLE-RIG kit=valuables (36/36 ores + tools + wood, no stone/dirt)')
   }
   await sleep(3000) // chunks in, both landed
+  // Seeded complete castle (g0z.33): site SW corner so the 31x27 castle
+  // centres on the pad, floor on the pad top + 1 (siteEval's median + 1).
+  // setblock 8 wide, read back from the guide; misses get one ordered
+  // retry, then a setup fail. The castle state lands complete (memory
+  // shape), so the live g0z.30 path adopts it: residence -> castle,
+  // setHome saves the memory home kind=castle — both checked.
+  let seedTag = ''
+  if (SEED === 'complete') {
+    const st = { site: { x: bx - 15, y: gy + 1, z: bz - 13 }, rot: 0, blueprintVersion: 2 }
+    const cells = seedCastleCells(st)
+    const set = (c) => rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${c.block}`).catch((e) => fail('seed-castle', e.message))
+    let next = 0
+    await Promise.all(Array.from({ length: 8 }, async () => { while (next < cells.length) await set(cells[next++]) }))
+    const misses = async () => {
+      await sleep(2000) // block updates reach the guide
+      return cells.filter((c) => {
+        let name = null
+        try { const b = guide.blockAt(new Vec3(c.x, c.y, c.z)); name = b && b.name } catch (_) { name = null }
+        return !seedMatches(c, name)
+      })
+    }
+    let miss = await misses()
+    for (const c of miss) await set(c)
+    if (miss.length) miss = await misses()
+    if (miss.length) fail('seed-castle', `${miss.length} cells wrong after retry: ${miss.slice(0, 5).map((c) => `${c.x} ${c.y} ${c.z} ${c.block}`).join('; ')}`)
+    const placed = cells.filter((c) => c.kind !== 'extra' && c.kind !== 'air' && c.kind !== 'dig').length
+    seedTag = `, seeded=${placed}/${placed}`
+    origLog(`CASTLE-RIG seeded castle site ${st.site.x} ${st.site.y} ${st.site.z} rot 0: ${cells.length} setblocks, ${placed} plan blocks + gate + 2 beds + table read back`)
+    if (!tickCtx()) fail('seed-castle', 'no follower ctx')
+    tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
+  }
   if (tickCtx()) tickCtx().paused = false
+  if (SEED === 'complete') {
+    let adopted = false
+    for (let i = 0; i < 60 && !adopted; i++) {
+      const h = tickCtx() && tickCtx().home
+      adopted = !!h && h.kind === 'castle'
+      if (!adopted) await sleep(500)
+    }
+    if (!adopted) fail('seed-castle', 'the bot never adopted the castle as its residence')
+    let memHome = null
+    try {
+      const doc = JSON.parse(fs.readFileSync(process.env.BOT_MEMORY_FILE, 'utf8'))
+      memHome = doc.homes[doc.homes.length - 1]
+    } catch (e) { fail('seed-castle', `memory file unreadable: ${e.message}`) }
+    if (!memHome || memHome.kind !== 'castle') fail('seed-castle', `memory home is not kind=castle: ${JSON.stringify(memHome).slice(0, 160)}`)
+    origLog('CASTLE-RIG residence: castle adopted, memory home kind=castle')
+  }
 
   // The order needs the speaker's entity loaded on the follower, else the
-  // bot answers "I can't see you" and nothing starts.
-  let sees = false
+  // bot answers "I can't see you" and nothing starts. A seeded castle
+  // needs no order (autonomous rides runOnce).
+  let ordered = SEED ? 'seeded' : null
+  let sees = !!SEED
   for (let i = 0; i < 40 && !sees; i++) {
     try { sees = !!(follower.players && follower.players[GUIDE] && follower.players[GUIDE].entity) } catch (_) { sees = false }
     if (!sees) await sleep(500)
   }
   if (!sees) fail('order', `follower never saw ${GUIDE}`)
-  try { guide.chat('autonomous on') } catch (e) { fail('order', `autonomous chat: ${e.message}`) }
-  await sleep(1000)
-  try { guide.chat('build castle') } catch (e) { fail('order', `castle chat: ${e.message}`) }
+  if (!SEED) {
+    try { guide.chat('autonomous on') } catch (e) { fail('order', `autonomous chat: ${e.message}`) }
+    await sleep(1000)
+    try { guide.chat('build castle') } catch (e) { fail('order', `castle chat: ${e.message}`) }
+  }
   // Order ack: the direct site ('castle at …, ~1722 blocks') or the search
   // ('found a castle spot …', which carries the same startCastle tail).
   // The asker leaving cancels the search, so the guide stays till the ack.
   const tOrder = Date.now()
-  let ordered = null
   let scanned = 0
   while (Date.now() - tOrder < 300000) {
     for (; scanned < chats.length; scanned++) {
@@ -634,7 +798,7 @@ async function main() {
   // before the guide quits — its presence loads the site chunks, and the
   // readback below fails the run instead of measuring an unseeded castle.
   let blockedSeeds = []
-  if (BLOCKED > 0) {
+  if (BLOCKED > 0 && !SEED) {
     const st = follower._tickerCtx && follower._tickerCtx.castle
     if (!st || !st.site || typeof st.site.x !== 'number') fail('seed-blocked', 'no castle site after order')
     blockedSeeds = pickBlockedSeeds(st.site, st.rot, st.blueprintVersion, BLOCKED)
@@ -766,6 +930,21 @@ async function main() {
   }
   origLog(`CASTLE-RIG window: ${MINS} min, ends ${new Date(endAt).toISOString()}`)
   if (night) await night.open()
+  winT0 = t0
+  let resTimer = null
+  if (resNights) {
+    resNights.open()
+    const resSample = () => {
+      let inside = false
+      try {
+        const h = follower._tickerCtx && follower._tickerCtx.home
+        inside = !!h && h.kind === 'castle' && require('../src/residence').of(h).interior(h, follower.entity.position)
+      } catch (_) { inside = false }
+      resNights.onSample(Math.round((Date.now() - t0) / 1000), inside, !!follower.isSleeping)
+    }
+    resTimer = setInterval(resSample, 1000)
+    follower.on('sleep', resSample)
+  }
   let farAt = 0
   let farPre = null
   let buryAt = 0
@@ -1089,7 +1268,9 @@ async function main() {
   const buryTag = buryAt ? `, bury=surfaced@${surfacedS ?? 'never'}s,resumed@${resumedS ?? 'never'}s` : ''
   const pitTag = pitAt ? `, pit=escaped@${escapedS ?? 'never'}s,resumed@${pitResumedS ?? 'never'}s` : ''
   if (night) night.finish()
-  const nightTag = night ? night.tag() : ''
+  if (resTimer) clearInterval(resTimer)
+  if (resNights) resNights.finish(Math.round((Date.now() - t0) / 1000))
+  const nightTag = (night ? night.tag() : '') + seedTag + (resNights ? resNights.tag() : '')
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
@@ -1099,6 +1280,7 @@ async function main() {
     wdCalls: seen.wdCalls, wdFirstS: first, wdChoices: seen.wdChoices, outcomes: seen.outcomes,
     series, timeEvents: seen.timeEvents, timeMaxDrift: seen.timeMaxDrift,
     nights: night ? night.nights : undefined,
+    seed: SEED || undefined, residence: resNights ? resNights.nights : undefined,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
@@ -1115,4 +1297,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { classify, seen, resetSeen, pickBlockedSeeds, pickPadSpot, createTimeResync, timeDrift, createNightDriver }
+module.exports = { classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver }
