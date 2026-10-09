@@ -8,12 +8,19 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test:slow": "node --test \"test/slow/*.test.js\"",
+    "golden:update": "GOLDEN_UPDATE=1 node --test \"test/*.test.js\""
   },
   "dependencies": {
-    "mineflayer": "4.39.0",
     "minecraft-protocol": "1.68.0",
+    "mineflayer": "4.39.0",
     "mineflayer-pathfinder": "https://codeload.github.com/PrismarineJS/mineflayer-pathfinder/tar.gz/6f5c26bf79e7861d20e0fbc735059db51e4d8f77",
     "prom-client": "15.1.3"
+  },
+  "devDependencies": {
+    "eslint": "9.39.5"
   }
 }

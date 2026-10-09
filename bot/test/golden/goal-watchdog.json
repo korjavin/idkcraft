@@ -1,0 +1,12 @@
+{
+ "vmzq watchdog round 1 pins, flat window, round 2 with history": [
+  {"tick":0,"kind":"step","value":"castle"},
+  {"tick":0,"kind":"stepPick","value":"{\"at\":1000000010000,\"source\":\"goal-fsm\",\"step\":\"castle\",\"why\":\"flip\"}"},
+  {"tick":0,"kind":"step","value":"castlefetch"},
+  {"tick":0,"kind":"stepPick","value":"{\"at\":1000000020000,\"source\":\"goal-fsm\",\"step\":\"castlefetch\",\"why\":\"flip\"}"},
+  {"tick":0,"kind":"step","value":"castle"},
+  {"tick":0,"kind":"stepPick","value":"{\"at\":1000000030000,\"source\":\"goal-fsm\",\"step\":\"castle\",\"why\":\"flip\"}"},
+  {"tick":0,"kind":"step","value":"castlefetch"},
+  {"tick":0,"kind":"stepPick","value":"{\"at\":1700000000000,\"fsm\":\"castlefetch\",\"source\":\"task-plan\",\"step\":\"castlefetch\",\"why\":\"task-plan\"}"}
+ ]
+}

@@ -11,6 +11,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const { createTicker } = require('../src/index')
+const { fakeClock, record, golden } = require('./characterize-util')
 
 function pos(x, y, z) {
   return {
@@ -94,7 +95,10 @@ describe('fja: pit-floor shuffle pages the player, never reports done', () => {
       async decide() { this.decides++; return { action: 'follow', sprint: false, source: 'stub' } },
       async ask() { this.asks++; return 'sidestep' },
     }
+    bot.pathfinder.movements = { canDig: true, allowSprinting: false, allowParkour: true } // journal: flags at goal issue
+    const clock = fakeClock() // oqul.2: controlled clock + seeded random for the journal
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
+    const journal = record(bot, bot._tickerCtx, { ticker, clock })
     bot._tickerCtx.stuck = { by: 'no-displacement', goal: null, key: 'pit' }
     const stepBody = () => {
       const g = bot.pathfinder.goal
@@ -129,7 +133,9 @@ describe('fja: pit-floor shuffle pages the player, never reports done', () => {
       assert.equal(bot._tickerCtx.recovery, null, 'episode cleared')
       assert.equal(brain.decides, 0, 'stuck ticks never call the brain')
       assert.ok(brain.asks >= 1, 'menu asked the model at the decision point')
+      golden('scenarios-recover', 'fja goal-less backstop -> call_player once', journal.events)
     } finally {
+      clock.restore()
       cap.release()
       ticker.destroy()
     }

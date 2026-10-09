@@ -5,7 +5,8 @@ const HOSTILE_NAMES = new Set([
   'slime', 'husk', 'stray', 'drowned', 'pillager', 'phantom', 'blaze',
   'ghast', 'piglin_brute', 'hoglin', 'zoglin', 'cave_spider', 'silverfish',
   'endermite', 'vex', 'vindicator', 'evoker', 'ravager', 'warden', 'breeze',
-  'bogged', 'creaking'
+  'bogged', 'creaking', 'zombie_villager', 'guardian', 'elder_guardian',
+  'wither_skeleton', 'magma_cube'
 ])
 
 // Fight-candidate ranges: same numbers the brain criteria state (3nt.2) —

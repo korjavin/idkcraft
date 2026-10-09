@@ -21,6 +21,7 @@ const deliverMod = require('./behaviours/deliver')
 const stockpileMod = require('./behaviours/stockpile')
 const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
+const { failReason, isFinished, nextStepGen } = require('./step')
 
 // House budget (epic rw4, two blueprints since jr2.1): NEED_PLANKS is the
 // loose-plank target for a NEW (v2) house — 92 walls+roof+partition plus 5
@@ -1723,7 +1724,7 @@ function failHolds(ctx, name, text, bot) {
 // stays for everything that never recorded where it failed.
 function gatherFailedHolds(g, logs, bot) {
   try {
-    if (!g || typeof g.final !== 'string' || !g.final.startsWith('failed:')) return false
+    if (!g || failReason(g.final) === null) return false
     if (g.atLogs !== logs) return false
     const fp = g.failPos
     if (!fp || typeof fp.x !== 'number') return true
@@ -2184,7 +2185,7 @@ async function decide(bot, ctx) {
   } catch (_) { /* clock best-effort */ }
   const prev = (ctx && ctx.step) || null
   let status = (ctx && ctx.stepStatus) || null
-  let finished = status === 'done' || (typeof status === 'string' && status.startsWith('failed:'))
+  let finished = isFinished(status)
   // Async gear/furnace translation BEFORE the hold bookkeeping (revmux
   // 02-review): the hold must record the translated status - and no hold at
   // all for a yield - or the rename is dead and its test passes without
@@ -2210,10 +2211,10 @@ async function decide(bot, ctx) {
         try { if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.gear } catch (_) { /* retire best-effort */ }
         return { action: 'gear', sprint: false, source: 'goal-fsm' }
       } else {
-        const reason = result.startsWith('failed:') ? result.slice('failed:'.length) : result
+        const reason = failReason(result) ?? result
         if (reason === 'no-cobble' || reason === 'no-fuel') {
           const key = reason === 'no-cobble' ? 'want-cobble' : 'want-coal'
-          let line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal above the reserve, going to dig'
+          let line = reason === 'no-cobble' ? 'need 8 cobble for the furnace, going to dig' : 'need coal or planks, going to dig'
           // ipn.9: same honest rule as gear's sync announce (the coal
           // promise needs a diggable remembered cell); cobble keeps its
           // line — stone is not a memory resource.
@@ -2226,6 +2227,7 @@ async function decide(bot, ctx) {
             if (ctx.gear.saidNeed !== key) {
               ctx.gear.saidNeed = key
               bot.chat(line)
+              console.log(`gear yield key=${key} line=${line}`) // ipn.15: gear's announceYield twin
             }
           } catch (_) { /* announce best-effort */ }
           ctx.stepStatus = 'done' // yield: fetchers run, gear latched out
@@ -2237,7 +2239,7 @@ async function decide(bot, ctx) {
       }
     }
   }
-  if (finished && prev && typeof status === 'string' && status.startsWith('failed:')) {
+  if (finished && prev && failReason(status) !== null) {
     try {
       if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
       const old = ctx.stepFail[prev]
@@ -2323,7 +2325,7 @@ async function decide(bot, ctx) {
   // truly clear tick (bands) clears the latch and falls through.
   if (prev === 'retreat' || prev === 'pillar') {
     try {
-      const failed = typeof status === 'string' && status.startsWith('failed:')
+      const failed = failReason(status) !== null
       const rm = require('./behaviours/retreat')
       if (failed || rm.retreatClear(bot, { bot_health: facts.health })) {
         if (ctx) ctx.retreatLatch = null
@@ -2600,6 +2602,9 @@ async function decide(bot, ctx) {
     if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     ctx.step = choice.step
+    // oqul.7: a new step instance (another step, or a re-pick after the
+    // last one finished) drops late completions of the old one's async ops.
+    if (choice.step !== prev || finished) nextStepGen(ctx)
     // A fresh equip pick starts with fresh run counters (revmux round-1):
     // stall patience spent by an earlier run must not fail the new one on
     // its first tick. Station claims (claimedTable) live outside ctx.equip
@@ -2661,7 +2666,7 @@ async function decide(bot, ctx) {
     // {} ctx objects (work undefined) chatting.
     if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
       const menu = STEP_ORDER.filter((n) => names.includes(n)).join(',')
-      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why} menu=${menu} facts=${text}`)
+      console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why}${why === 'step-failed' ? ` fail=${status}` : ''} menu=${menu} facts=${text}`)
       if (choice.step === 'rest') {
         chatStep(bot, ctx, `resting: ${ctx.restWhy} (${choice.source})`)
       } else {

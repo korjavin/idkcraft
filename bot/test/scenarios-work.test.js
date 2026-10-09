@@ -9,7 +9,8 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { createTicker } = require('../src/index')
+const { createTicker, createLifecycle } = require('../src/index')
+const { fakeClock, record, golden } = require('./characterize-util')
 
 function pos(x, y, z) {
   const p = {
@@ -117,8 +118,11 @@ describe('atl.4: failed gather holds instead of livelocking the arbiter', () => 
       names[`${cx},66,0`] = 'oak_leaves' // a crown: trees, not decor (m7ke selection guard)
     }
     const bot = gatherBot(spots, names)
+    const clock = fakeClock() // oqul.2: controlled clock + seeded random for the journal
+    bot.pathfinder.movements = { canDig: true, allowSprinting: false, allowParkour: true } // journal: flags at goal issue
     const ticker = createTicker({ bot, brain: workBrain(), tickMs: 10, idleTickMs: 10 })
     const ctx = bot._tickerCtx
+    const journal = record(bot, ctx, { ticker, clock })
     ctx.work = true // work mode: the goal arbiter dispatches gather
     const cap = capture()
     const actions = []
@@ -190,8 +194,10 @@ describe('atl.4: failed gather holds instead of livelocking the arbiter', () => 
       const g = await ticker.tick()
       assert.equal(g.decision.action, 'gather', 'fresh facts retry gather')
       assert.match(ctx.lastGoalKey, /^gather:/, 'walking again')
+      golden('scenarios-work', 'atl.4 unreachable final -> escape -> rest -> release', journal.events)
     } finally {
       cap.release()
+      clock.restore()
       ticker.destroy()
     }
   })
@@ -336,6 +342,79 @@ describe('gxk: stranded grid converts fully instead of hanging the craft', () =>
       cap.release()
       ticker.destroy()
     }
+  })
+
+  // oqul.2 characterization: an interruption lands while craft awaits
+  // bot.craft, then the old op settles. idkcraft-oqul.7 flipped stop and
+  // 'go work': both bump ctx.stepGen (resetNightStep), so the late failure
+  // of the op craft started under the old gen drops. destroy bumps nothing
+  // (a dead ctx) and a late success writes no stepStatus, so those stand.
+  async function interrupted(interrupt, settleWith) {
+    const bot = craftBot({ invLogs: 14 })
+    let release = null
+    const realCraft = bot.craft
+    bot.craft = async (...args) => {
+      if (!release) await new Promise((resolve, reject) => { release = { resolve, reject } })
+      return realCraft(...args)
+    }
+    const ticker = createTicker({ bot, brain: workBrain(), tickMs: 10, idleTickMs: 10 })
+    const ctx = bot._tickerCtx
+    ctx.work = true
+    const cap = capture()
+    try {
+      const r1 = await ticker.tick()
+      assert.equal(r1.decision.action, 'craft')
+      for (let i = 0; i < 200 && !release; i++) await new Promise((r) => setTimeout(r, 5))
+      assert.ok(release, 'craft parked inside bot.craft')
+      assert.equal(ctx.craftInFlight, true)
+      interrupt(bot, ticker, ctx)
+      const after = { step: ctx.step, stepStatus: ctx.stepStatus, craftInFlight: ctx.craftInFlight }
+      if (settleWith === 'reject') release.reject(new Error(TIMEOUT_MSG))
+      else release.resolve()
+      await untilSettled(ctx)
+      return { after, late: { step: ctx.step, stepStatus: ctx.stepStatus, craftInFlight: ctx.craftInFlight }, lines: bot.lines.slice() }
+    } finally {
+      cap.release()
+      ticker.destroy()
+    }
+  }
+
+  async function untilSettled(ctx) {
+    for (let i = 0; i < 400 && ctx.craftInFlight; i++) await new Promise((r) => setTimeout(r, 5))
+    await settle()
+  }
+
+  it('stop mid-craft: the late failure drops (oqul.7)', async () => {
+    const { after, late } = await interrupted((bot, ticker) => ticker.stop(), 'reject')
+    assert.equal(after.craftInFlight, true, 'stop leaves the op in flight')
+    assert.equal(late.stepStatus, after.stepStatus, 'stale completion drops: the stopped episode keeps its status')
+    assert.equal(late.craftInFlight, false)
+  })
+
+  it("a new order ('go work') mid-craft: reset step, the late failure drops (oqul.7)", async () => {
+    const { after, late } = await interrupted((bot, ticker) => ticker.work(), 'reject')
+    assert.equal(after.step, null, 'the order reset the step')
+    assert.equal(after.stepStatus, null)
+    assert.equal(late.step, null, 'no new step picked between')
+    assert.equal(late.stepStatus, null, 'the old craft no longer writes into the fresh episode')
+  })
+
+  it('death + respawn mid-craft: the late success still chats and frees the latch (pinned, oqul.7)', async () => {
+    const { after, late, lines } = await interrupted((bot, ticker) => {
+      const life = createLifecycle(ticker)
+      life.onDeath(bot)
+      life.onRespawn(bot)
+    }, 'resolve')
+    assert.equal(after.craftInFlight, true, 'the respawn does not cancel the op')
+    assert.equal(late.craftInFlight, false)
+    assert.equal(late.stepStatus, after.stepStatus, 'a successful late op writes no stepStatus')
+    assert.ok(lines.some((l) => /^crafted \d+ oak_planks/.test(l)), `the dead body's op still chats: ${lines.join(' | ')}`)
+  })
+
+  it('destroy mid-craft: the late failure still writes into the dead ticker ctx (pinned, oqul.7)', async () => {
+    const { late } = await interrupted((bot, ticker) => ticker.destroy(), 'reject')
+    assert.equal(late.stepStatus, 'failed:craft-oak_planks')
+    assert.equal(late.craftInFlight, false)
   })
 })
 
