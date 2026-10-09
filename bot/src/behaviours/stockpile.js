@@ -16,6 +16,8 @@ const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const metrics = require('../metrics')
+const residence = require('../residence')
+const { CHEST_SPOTS, CHEST_SPOTS_V2 } = residence
 
 // Candidate chest cells, site-relative. v1 (frozen): table is BLUEPRINT[0]
 // at (4,0,1), so (5,0,1) is table+1 east; all sit beside the east wall,
@@ -24,28 +26,13 @@ const metrics = require('../metrics')
 // (3,1)-(3,2) and the bedroom approaches (2,2),(4,2). The day steps use the
 // indoor chest from outside through the wall (live-verified on the rig:
 // open, deposit and withdraw all work within reach).
-const CHEST_SPOTS = [
-  { dx: 5, dy: 0, dz: 1 },
-  { dx: 4, dy: 0, dz: 0 },
-  { dx: 4, dy: 0, dz: 2 },
-  { dx: 5, dy: 0, dz: 0 },
-  { dx: 5, dy: 0, dz: 2 },
-  { dx: 6, dy: 0, dz: 1 },
-]
-
-const CHEST_SPOTS_V2 = [
-  { dx: 5, dy: 0, dz: 2 },
-  { dx: 1, dy: 0, dz: 2 },
-  { dx: 2, dy: 0, dz: 1 },
-  { dx: 1, dy: 0, dz: 1 },
-  { dx: 4, dy: 0, dz: 1 },
-]
+// Both lists live in residence.js (g0z.28) — the hut/house descriptors.
 
 // Candidate cells by home version: v2 homes bank inside the common room,
 // anything else (v1, or a home that predates the version mark) beside the
 // east wall as before.
 function spotsFor(home) {
-  return home && home.v === 2 ? CHEST_SPOTS_V2 : CHEST_SPOTS
+  return residence.of(home).chest(home)
 }
 
 // Wood ceiling (idkcraft-g0z.26): while the castle is open the pack keeps
