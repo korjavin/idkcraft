@@ -24,6 +24,7 @@ const decontact = require('./decontact')
 const dangerMod = require('./danger')
 const exploreMod = require('./behaviours/explore')
 const metrics = require('./metrics')
+const stepMod = require('./step')
 
 const fightMod = require('./behaviours/fight')
 const retreatMod = require('./behaviours/retreat')
@@ -242,6 +243,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   function resetNightStep() {
     ctx.step = null
     ctx.stepStatus = null
+    stepMod.nextStepGen(ctx) // oqul.7: the old step's late async completions drop
     ctx.gohome = null
     ctx.stay = null
     ctx.shelter = null
@@ -1019,6 +1021,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
               ctx.underFireLogged = true
             }
             const rd = { action: retreat.action, sprint: false, source: retreat.source }
+            if (ctx.step !== retreat.action) stepMod.nextStepGen(ctx) // oqul.7
             ctx.step = retreat.action
             applyDecision(rd, target, state)
             return { decision: rd, calledBrain }
@@ -1517,6 +1520,7 @@ function handleDeath(bot, ticker) {
   try {
     const ctx = bot && bot._tickerCtx
     if (ctx) {
+      stepMod.nextStepGen(ctx) // oqul.7: an op cut by the death drops its late completion
       ctx.gohome = null
       ctx.stay = null
       ctx.shelter = null

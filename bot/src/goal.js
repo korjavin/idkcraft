@@ -21,7 +21,7 @@ const deliverMod = require('./behaviours/deliver')
 const stockpileMod = require('./behaviours/stockpile')
 const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
-const { failReason, isFinished } = require('./step')
+const { failReason, isFinished, nextStepGen } = require('./step')
 
 // House budget (epic rw4, two blueprints since jr2.1): NEED_PLANKS is the
 // loose-plank target for a NEW (v2) house — 92 walls+roof+partition plus 5
@@ -2601,6 +2601,9 @@ async function decide(bot, ctx) {
     if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     ctx.step = choice.step
+    // oqul.7: a new step instance (another step, or a re-pick after the
+    // last one finished) drops late completions of the old one's async ops.
+    if (choice.step !== prev || finished) nextStepGen(ctx)
     // A fresh equip pick starts with fresh run counters (revmux round-1):
     // stall patience spent by an earlier run must not fail the new one on
     // its first tick. Station claims (claimedTable) live outside ctx.equip
