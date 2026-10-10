@@ -45,7 +45,8 @@
 //   CASTLE_SAND (1 = g0z.38: a 6x3x6 sand patch on a dirt base just east
 //   of the pad, top flush with it — the pad has no sand of its own; with
 //   CASTLE_SEED=complete the verdict adds panes=<laid>/44 and
-//   upper-fence=<laid>/109 (g0z.45)).
+//   upper-fence=<laid>/109 (g0z.45)) and attic=<laid>/6 (g0z.49, the
+//   seeded kit carries the 5 shelves + table).
 // Exit: 0 = measured (even at 0 laid — the line says so),
 //   1 = CASTLE_IDLE verdict FAIL,
 //   2 = environment/setup failure (spawn, pad, order, dropped follower,
@@ -847,10 +848,10 @@ async function main() {
   // word is a batch. One give carries many stacks (stuck precedent).
   if (KIT === 'seeded') {
     for (const [item, count] of [['cobblestone', 128], ['oak_planks', 64], ['dirt', 64],
-      ['stone_pickaxe', 1], ['stone_sword', 1]]) {
+      ['stone_pickaxe', 1], ['stone_sword', 1], ['bookshelf', 5], ['enchanting_table', 1]]) {
       await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
     }
-    origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword)')
+    origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword, 5 shelves + table)')
   }
   // Junk kit (vmzq.38): the prod 2026-10-06 pack — 36/36 stone variants,
   // sand and mob junk, wooden sword only: no pickaxe, no table, no cobble.
@@ -911,9 +912,9 @@ async function main() {
     origLog(`CASTLE-RIG seeded castle site ${st.site.x} ${st.site.y} ${st.site.z} rot 0: ${cells.length} setblocks, ${placed} plan blocks + gate + 2 beds + table read back`)
     if (IDLE_DEATH > 0) {
       // 6x7.25: decor too (44 panes + 2 gate banners + the g0z.45 upper
-      // fence row), so castlefetch has nothing left to fetch: its
-      // sand/wool legs walked 85+ out on both builds and drowned the
-      // gather drift this scenario measures.
+      // fence row + the g0z.49 attic nook), so castlefetch has nothing
+      // left to fetch: its sand/wool legs walked 85+ out on both builds
+      // and drowned the gather drift this scenario measures.
       const decor = require('../src/castle').decorPlan(st.site, 0, 2).cells
       for (const c of decor) {
         let block = 'glass_pane'
@@ -922,10 +923,14 @@ async function main() {
           block = `white_wall_banner[facing=${f}]`
         } else if (c.kind === 'fence') {
           block = 'oak_fence'
+        } else if (c.kind === 'bookshelf') {
+          block = 'bookshelf'
+        } else if (c.kind === 'enchanting_table') {
+          block = 'enchanting_table'
         }
         await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${block}`).catch((e) => fail('seed-decor', e.message))
       }
-      origLog(`CASTLE-RIG seeded decor: ${decor.length} cells (panes + banners + upper fence)`)
+      origLog(`CASTLE-RIG seeded decor: ${decor.length} cells (panes + banners + upper fence + attic)`)
     }
     if (!tickCtx()) fail('seed-castle', 'no follower ctx')
     tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
@@ -1508,12 +1513,15 @@ async function main() {
   // Panes (g0z.38): decor pane cells of the seeded castle reading
   // *glass_pane on the follower (unloaded cells are counted apart).
   // Upper fence (g0z.45): the same for the second fence row.
+  // Attic (g0z.49): the same for the table + 5 shelves, read back via
+  // castle.matches like the seeded plan cells.
   // Recall (g0z.45): the window's side work can end the follower far off
   // site (a 60-min seed run read 153/153 unread) — tp it over the site and
   // wait for the chunks before counting. Verdict phase only: the idle
   // extremes below accumulate during the window, a centre sample moves none.
   let paneTag = ''
   let fenceTag = ''
+  let atticTag = ''
   if (SEED === 'complete') {
     const site = { x: bx - 15, y: gy + 1, z: bz - 13 }
     await rcon(`tp ${FOLLOWER} ${site.x + 15.5} ${site.y + 12} ${site.z + 13.5}`).catch(() => {})
@@ -1526,23 +1534,25 @@ async function main() {
       if (loaded) break
       await sleep(1000)
     }
-    const dp = require('../src/castle').decorPlan(site, 0, 2).cells
-    for (const [kind, re, tag] of [['pane', /glass_pane$/, 'panes'], ['fence', /_fence$/, 'upper-fence']]) {
-      const cells = dp.filter((c) => c.kind === kind)
+    const castle = require('../src/castle')
+    const dp = castle.decorPlan(site, 0, 2).cells
+    for (const [kinds, tag] of [[['pane'], 'panes'], [['fence'], 'upper-fence'], [['bookshelf', 'enchanting_table'], 'attic']]) {
+      const cells = dp.filter((c) => kinds.includes(c.kind))
       let laid = 0
       let unread = 0
       for (const c of cells) {
         let b = null
         try { b = follower.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
         if (!b) unread++
-        else if (re.test(b.name)) laid++
+        else if (castle.matches(c.kind, b.name)) laid++
       }
       const t = `, ${tag}=${laid}/${cells.length}${unread ? `(${unread} unread)` : ''}`
-      if (kind === 'pane') paneTag = t
-      else fenceTag = t
+      if (tag === 'panes') paneTag = t
+      else if (tag === 'upper-fence') fenceTag = t
+      else atticTag = t
     }
   }
-  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
+  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + atticTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
