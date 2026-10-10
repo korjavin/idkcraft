@@ -432,6 +432,9 @@ function craftItem(bot, ctx, name, count) {
     clearRun(ctx)
     return { done: true, target: plan.target }
   }
+  // g0z.40 rig: the run outlives the leg, so a table latched earlier is
+  // re-checked; the body walked away (19 blocks) -> unlatch and walk back.
+  if (st.table && st.table.position && !craftMod.tableUsable(bot, st.table, st.table.position)) st.table = null
   if (plan.requiresTable && !st.table) {
     let tb = null
     try {

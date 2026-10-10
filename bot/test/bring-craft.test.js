@@ -646,6 +646,21 @@ describe('bring craft handover and give-ups (idkcraft-did.2 revmux 01)', () => {
     assert.equal(ctx.gearInFlight, undefined, 'no craft fired')
   })
 
+  it('g0z.40 rig: a latched table the body walked away from unlatches and walks back', () => {
+    const bot = mockBot({
+      items: [{ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }],
+      cells: { '20,64,0': 'crafting_table' },
+    })
+    const ctx = { home: { table: { x: 20, y: 64, z: 0 } } }
+    assert.equal(craftany(bot, ctx, ['stone_axe'], 1), 'running') // opens the run, walking
+    ctx.craftany.table = { name: 'crafting_table', position: pos(20, 64, 0) } // latched on an earlier leg
+    ctx.lastGoalKey = ''
+    assert.equal(craftany(bot, ctx, ['stone_axe'], 1), 'running')
+    assert.equal(ctx.craftany.table, null, 'stale latch dropped')
+    assert.equal(ctx.lastGoalKey, 'craftany-table:20,64,0', 'walks back')
+    assert.equal(ctx.gearInFlight, undefined, 'no craft from 20 blocks')
+  })
+
   it('three failed placements end with need-a-table', async () => {
     const bot = mockBot({
       items: [

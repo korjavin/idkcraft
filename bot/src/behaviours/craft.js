@@ -1216,7 +1216,10 @@ async function safeCraft(bot, recipe, count, table, opts) {
   // GoalNear range is 3 — steers the head off the table, the server ignores
   // the use: 20 s windowOpen timeouts (castle panes, pick upgrades).
   if (table) clearGoal(bot, (opts && opts.ctx) || {})
-  // Out of sight fails at once with its own reason, never the 20 s wait.
+  // Out of reach / sight fails at once with its own reason, never the 20 s
+  // wait (rig: a latched craftany table used from 19 blocks away).
+  const bp = bot.entity && bot.entity.position
+  if (table && bp && table.position && dist3(bp, table.position) > TABLE_REACH) throw new Error('table-out-of-reach')
   if (table && !tableInSight(bot, table)) throw new Error('table-out-of-sight')
   try {
     await pacedCraft(bot, recipe, count, table)

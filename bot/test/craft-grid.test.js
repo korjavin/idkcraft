@@ -305,6 +305,10 @@ describe('gxk 2x2 grid hang', () => {
     assert.equal(craft.tableUsable(bot, table, table.position), true)
     await craft.safeCraft(bot, {}, 1, table, { ctx: {} })
     assert.equal(n, 1)
+    // A table 19 blocks off (rig: a stale latch) fails at once too.
+    const far = { name: 'crafting_table', position: new Vec3(33, 70, 18) }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, far, { ctx: {} }), /table-out-of-reach/)
+    assert.equal(n, 1)
     bot.restoreError()
   })
 
