@@ -354,6 +354,12 @@ function craftTick(bot, ctx, f, d) {
   try { r = deps.craftItem(bot, ctx, names, CRAFT_COUNT[d.kind] || 1) } catch (_) { r = { done: false } }
   if (r === 'running') return true
   if (r && r.done) return true // re-check the target next tick
+  // idkcraft-pdjx: the failure line used to die here — a craft leg failed
+  // with materials on hand and the reason was invisible in the logs.
+  // Classified by kind; once per latch (craftOut), so no spam.
+  if (r && typeof r.line === 'string' && r.line) {
+    try { console.log(`castlefetch ${d.kind}: craft failed: ${r.line}`) } catch (_) { /* log best-effort */ }
+  }
   f.craftOut = true // the pack cannot fund it: fall through to the world
   return false
 }
