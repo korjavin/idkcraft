@@ -19,6 +19,7 @@ const { issueGoal, clearGoal } = require('./util')
 // A placed table appears only via ctx.home.table (the build step places
 // it): a table sitting in the inventory does not unlock the door.
 const TABLE_REACH = 4
+const DOOR_WALK_GIVE_UP = 20 // still ticks before the door's table walk fails (craftany's WALK_GIVE_UP)
 
 function tally(bot, suffix) {
   const m = new Map()
@@ -1300,6 +1301,7 @@ function craft(bot, ctx, target, state) {
     const doorCount = countItems(bot, (n) => n.endsWith('_door'))
     if (doorCount === 0 && tableBlock) {
       if (tableUsable(bot, tableBlock, tablePos)) {
+        ctx.craftDoorWalk = null
         for (const [wood, n] of sortedWoods(planks)) {
           if (n < 6) break
           const name = `${wood}_door`
@@ -1310,6 +1312,22 @@ function craft(bot, ctx, target, state) {
         const key = `craft-table:${tablePos.x},${tablePos.y},${tablePos.z}`
         if (key !== ctx.lastGoalKey) {
           issueGoal(bot, ctx, tableGoal(bot, tablePos), key, false)
+        }
+        // g0z.40 verify: a table no reachable cell sees (boxed nook, behind
+        // glass) never ends the sight walk. Progress-based give-up, the
+        // craftany shape: only standing still counts.
+        const d = dist3(bp, tablePos)
+        let w = ctx.craftDoorWalk
+        const g = stepGen(ctx) // a later craft step starts a fresh budget
+        if (!w || w.key !== key || w.gen !== g) w = ctx.craftDoorWalk = { key, gen: g, ticks: 0, lastDist: null }
+        if (w.lastDist != null && d < w.lastDist - 1) w.ticks = 0
+        else w.ticks += 1
+        w.lastDist = d
+        if (w.ticks > DOOR_WALK_GIVE_UP) {
+          ctx.craftDoorWalk = null
+          clearGoal(bot, ctx)
+          stepFailed(ctx, 'table-unseeable')
+          try { console.error(`craft failed item=door error=table-unseeable at ${tablePos.x},${tablePos.y},${tablePos.z}`) } catch (_) { /* log best-effort */ }
         }
         return // walk into reach, then craft on a later tick
       }
