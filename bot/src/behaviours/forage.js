@@ -332,9 +332,12 @@ function bestDiamondCell(bot, ctx, bp) {
 // (the M3 plan gate's null explores), the peckish corner hunts only onto a
 // same-drop stack, and the starving corner hunts anyway (survival beats the
 // reserve; the quest shed drains after). Fail-open outside the corner,
-// fail-closed on unreadable hunger.
+// fail-closed on unreadable hunger. Low health counts as starving
+// (vmzq.64): below food 18 regen stalls, so a hurt bot with a reserved
+// pack never healed; unreadable health keeps the hunger rule.
 const HUNT_PECKISH = 18 // eatReflex eats below this; a hunt must beat it
 const HUNT_STARVING = 6 // goal.js 'hungry' line: survival over slots
+const HUNT_LOW_HP = 6 // goal.js lowHpNoFood line: survival over slots
 function dropRoom(bot, drop) {
   try {
     const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
@@ -357,7 +360,8 @@ function huntAllowed(bot, ctx, drop) {
     if (!reserved) return true
     const food = bot && typeof bot.food === 'number' ? bot.food : NaN
     if (!(food < HUNT_PECKISH)) return false
-    return dropRoom(bot, drop) || food <= HUNT_STARVING
+    const hp = bot && typeof bot.health === 'number' ? bot.health : NaN
+    return dropRoom(bot, drop) || food <= HUNT_STARVING || hp < HUNT_LOW_HP
   } catch (_) {
     return true
   }
