@@ -1136,6 +1136,40 @@ async function pacedCraft(bot, recipe, count, table) {
   }
 }
 
+// g0z.40: a table use is a block use, honoured only with the table in sight
+// - the castle kitchen sits within reach 4 of the storeroom table through
+// the x=15 partition, the use went through the wall and the server ignored
+// it (20 s windowOpen timeouts, rig panes 16/44). The ray mirrors
+// activateBlock: eye to the block centre (the point it aims at).
+function tableInSight(bot, table) {
+  try {
+    const p = table.position
+    const e = bot.entity
+    const eye = e.position.offset(0, e.eyeHeight || 1.62, 0)
+    const dir = p.offset(0.5, 0.5, 0.5).minus(eye)
+    const hit = bot.world.raycast(eye, dir.normalize(), dir.norm() + 1)
+    return !hit || hit.position.equals(p)
+  } catch (_) {
+    return true // unreadable (mocks, unloaded column): the craft decides
+  }
+}
+
+// Reach + sight: the one usable-table predicate for the walking callers.
+function tableUsable(bot, table, pos) {
+  const bp = bot.entity && bot.entity.position
+  return !!bp && dist3(bp, pos) <= TABLE_REACH && tableInSight(bot, table)
+}
+
+// The walk into a usable spot: a cell the table is seen from (the
+// pathfinder's own face raycast), within the old GoalNear 3 range.
+function tableGoal(bot, pos) {
+  try {
+    return new goals.GoalLookAtBlock(new Vec3(pos.x, pos.y, pos.z), bot.world, { reach: 3 })
+  } catch (_) {
+    return new goals.GoalNear(pos.x, pos.y, pos.z, 3)
+  }
+}
+
 async function safeCraft(bot, recipe, count, table, opts) {
   const room = { ...opts, recipe } // the free slot never takes an ingredient
   // The reserved last slot frees a junk slot too (vmzq.38): otherwise the
@@ -1160,9 +1194,19 @@ async function safeCraft(bot, recipe, count, table, opts) {
   // GoalNear range is 3 — steers the head off the table, the server ignores
   // the use: 20 s windowOpen timeouts (castle panes, pick upgrades).
   if (table) clearGoal(bot, (opts && opts.ctx) || {})
+  // Out of sight fails at once with its own reason, never the 20 s wait.
+  if (table && !tableInSight(bot, table)) throw new Error('table-out-of-sight')
   try {
     await pacedCraft(bot, recipe, count, table)
   } catch (err) {
+    if (table) {
+      // g0z.40: where a table use died (a seen table that still times out
+      // names the next cause: reach, a held window).
+      try {
+        const bp = bot.entity.position
+        console.error(`table craft failed item=${opts && opts.item} bot=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} table=${table.position} window=${bot.currentWindow ? bot.currentWindow.type : 'none'}`)
+      } catch (_) { /* log best-effort */ }
+    }
     if (!table) {
       await clearGrid(bot)
       if (isSlotTimeout(err)) {
@@ -1234,7 +1278,7 @@ function craft(bot, ctx, target, state) {
   if (!op) {
     const doorCount = countItems(bot, (n) => n.endsWith('_door'))
     if (doorCount === 0 && tableBlock) {
-      if (dist3(bp, tablePos) <= TABLE_REACH) {
+      if (tableUsable(bot, tableBlock, tablePos)) {
         for (const [wood, n] of sortedWoods(planks)) {
           if (n < 6) break
           const name = `${wood}_door`
@@ -1244,7 +1288,7 @@ function craft(bot, ctx, target, state) {
       } else {
         const key = `craft-table:${tablePos.x},${tablePos.y},${tablePos.z}`
         if (key !== ctx.lastGoalKey) {
-          issueGoal(bot, ctx, new goals.GoalNear(tablePos.x, tablePos.y, tablePos.z, 3), key, false)
+          issueGoal(bot, ctx, tableGoal(bot, tablePos), key, false)
         }
         return // walk into reach, then craft on a later tick
       }
@@ -1318,3 +1362,6 @@ module.exports.shedForQuest = shedForQuest
 module.exports.syncInventory = syncInventory
 module.exports.slotSummary = slotSummary
 module.exports.WINDOW_OP_GAP_MS = WINDOW_OP_GAP_MS
+module.exports.tableInSight = tableInSight
+module.exports.tableUsable = tableUsable
+module.exports.tableGoal = tableGoal

@@ -285,6 +285,29 @@ describe('gxk 2x2 grid hang', () => {
     bot.restoreError()
   })
 
+  it('g0z.40: a table behind a wall fails at once (table-out-of-sight), never the 20 s windowOpen wait', async () => {
+    // Castle rig: the kitchen stands within reach 4 of the storeroom table
+    // through the x=15 partition; the use went through the wall and the
+    // server ignored it. The eye->centre ray must hit the table itself.
+    const Vec3 = require('vec3')
+    const bot = fakeBot({ invLogs: 14 })
+    bot.entity = { position: new Vec3(14.5, 70, 18.5), eyeHeight: 1.62 } // kitchen
+    const table = { name: 'crafting_table', position: new Vec3(16, 70, 18) }
+    const wall = new Vec3(15, 71, 18)
+    let blocker = wall
+    bot.world = { raycast: () => ({ position: blocker }) }
+    let n = 0
+    bot.craft = async () => { n++ }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, table, { ctx: {} }), /table-out-of-sight/)
+    assert.equal(n, 0, 'no use fired through the wall')
+    assert.equal(craft.tableUsable(bot, table, table.position), false, 'walking callers read it as not usable')
+    blocker = table.position // seen (the storeroom side)
+    assert.equal(craft.tableUsable(bot, table, table.position), true)
+    await craft.safeCraft(bot, {}, 1, table, { ctx: {} })
+    assert.equal(n, 1)
+    bot.restoreError()
+  })
+
   it('a cursor-held stack is returned to the inventory (pre- and catch-clear)', async () => {
     // A timed-out craft leaves the picked-up stack on the cursor with its
     // origin slot empty: both clearings must put it back, never toss it.

@@ -438,11 +438,11 @@ function craftItem(bot, ctx, name, count) {
       tb = standingTable(bot, ctx)
     } catch (_) { tb = null }
     if (tb) {
-      if (dist3(bp, tb.pos) > TABLE_REACH) {
+      if (!craftMod.tableUsable(bot, tb.block, tb.pos)) { // g0z.40: reach + sight
         const tkey = `craftany-table:${tb.pos.x},${tb.pos.y},${tb.pos.z}`
         if (tkey !== ctx.lastGoalKey) {
           try {
-            bot.pathfinder.setGoal(new goals.GoalNear(tb.pos.x, tb.pos.y, tb.pos.z, 3), false)
+            bot.pathfinder.setGoal(craftMod.tableGoal(bot, tb.pos), false)
           } catch (_) { /* retry next tick */ }
           ctx.lastGoalKey = tkey
         }

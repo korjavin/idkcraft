@@ -558,10 +558,10 @@ function dist3(a, b) {
 
 // Walk one leg with a give-up (furnace shape): an unreachable station fails
 // the step instead of idling here forever.
-function walkTo(bot, ctx, key, p, reason) {
+function walkTo(bot, ctx, key, p, reason, goal) {
   if (key !== ctx.lastGoalKey) {
     try {
-      bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, 3), false)
+      bot.pathfinder.setGoal(goal || new goals.GoalNear(p.x, p.y, p.z, 3), false)
     } catch (_) { /* retry next tick */ }
     ctx.lastGoalKey = key
   }
@@ -1289,8 +1289,8 @@ function gear(bot, ctx, target, state) {
       fail(ctx, 'no-table')
       return
     }
-    if (dist3(bp, st.pos) > craftMod.TABLE_REACH) {
-      walkTo(bot, ctx, `gear-table:${st.pos.x},${st.pos.y},${st.pos.z}`, st.pos, 'table-far')
+    if (!craftMod.tableUsable(bot, st.block, st.pos)) { // g0z.40: reach + sight
+      walkTo(bot, ctx, `gear-table:${st.pos.x},${st.pos.y},${st.pos.z}`, st.pos, 'table-far', craftMod.tableGoal(bot, st.pos))
       return
     }
     runCtx(ctx).walkTicks = 0

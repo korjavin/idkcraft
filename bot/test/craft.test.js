@@ -140,7 +140,7 @@ describe('craft step', () => {
     bot.restoreError()
   })
 
-  it('(c) door crafts only at a table block in reach, else GoalNear', async () => {
+  it('(c) door crafts only at a table block in reach, else a sight walk', async () => {
     const tablePos = pos(2, 64, 0)
     const mk = (at) => {
       const bot = mockBot({
@@ -168,7 +168,7 @@ describe('craft step', () => {
     await flush()
     assert.equal(far.calls.craft.length, 0)
     assert.equal(far.calls.setGoal, 1)
-    assert.equal(far.calls.goals[0].constructor.name, 'GoalNear')
+    assert.equal(far.calls.goals[0].constructor.name, 'GoalLookAtBlock') // g0z.40: walk to a cell the table is seen from
     assert.match(farCtx.lastGoalKey, /^craft-table:2,64,0$/)
     far.restoreError()
   })
