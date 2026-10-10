@@ -143,6 +143,26 @@ describe('castle order chat (g0z.3)', () => {
     handleChat(bot, ticker, 'Steve', 'castle dance')
     assert.match(bot.chats.pop(), /^try: castle/)
   })
+
+  it("'castle' on a complete castle reports the yard litter count (g0z.44)", () => {
+    const set = new Map()
+    for (const c of blueprint.absPlan(SITE, 0, 2).cells) {
+      if (blueprint.isPlaceTarget(c.kind)) {
+        set.set(`${c.x},${c.y},${c.z}`, { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', fence: 'oak_fence', door: 'oak_door', torch: 'torch', chest: 'chest' }[c.kind])
+      } else if (c.kind === 'dig') {
+        set.set(`${c.x},${c.y},${c.z}`, 'air') // the moat, dug
+      }
+    }
+    set.set(`${SITE.x - 1},${SITE.y},${SITE.z}`, 'dirt') // own band litter
+    const bot = makeBot({ set })
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.castle = castleState({ blueprintVersion: 2, phase: 'complete' })
+    bot._tickerCtx.placedByBot = new Set([`${SITE.x - 1},${SITE.y},${SITE.z}`])
+    handleChat(bot, ticker, 'Steve', 'castle')
+    const line = bot.chats.pop()
+    assert.match(line, /^castle at 100 64 200: 100% \(.*\); now: waiting for its turn; blocked 0; yard litter 1$/)
+    assert.ok(line.length <= 256)
+  })
 })
 
 describe('castle persistence (g0z.3)', () => {

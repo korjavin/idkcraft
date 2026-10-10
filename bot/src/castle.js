@@ -517,6 +517,73 @@ function inFootprint(state, pos) {
   } catch (_) { return false }
 }
 
+// Yard ring (idkcraft-g0z.44): the site box grown by 1 in x and z,
+// site.y <= y <= site.y + YARD_TOP. A 1-high block beside the fence is a
+// mob foothold over it (vanilla step 0.6), so A* scaffolding, recover
+// pillars and dig-in caps stay out of it; the post-complete sweep bands
+// inside it. Every yard rule uses this predicate, nothing else grows the
+// box. Pure.
+const YARD_TOP = 16 // == behaviours/castle.js SITE_TOP (crenellation dy 13 + headroom)
+function yardRing(state, pos) {
+  try {
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number' || !pos) return false
+    const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
+    const { w, d } = siteDimensions(state.rot | 0, state.blueprintVersion)
+    return x >= site.x - 1 && x <= site.x + w && z >= site.z - 1 && z <= site.z + d &&
+      y >= site.y && y <= site.y + YARD_TOP
+  } catch (_) { return false }
+}
+
+// Fence band (idkcraft-g0z.44): cells within 1 of the fence ring line (the
+// box edges), both sides, dy 0..3 — the post-complete sweep band. Absolute
+// {x,y,z} cells, deduped; rot-free (the ring line is the box edge). Pure.
+function fenceBandCells(state) {
+  try {
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number') return []
+    const { w, d } = siteDimensions(state.rot | 0, state.blueprintVersion)
+    const x0 = site.x, x1 = site.x + w - 1, z0 = site.z, z1 = site.z + d - 1
+    const seen = new Set()
+    const out = []
+    const push = (x, y, z) => {
+      const k = `${x},${y},${z}`
+      if (seen.has(k)) return
+      seen.add(k)
+      out.push({ x, y, z })
+    }
+    for (let dy = 0; dy <= 3; dy++) {
+      const y = site.y + dy
+      for (let x = x0 - 1; x <= x1 + 1; x++) {
+        for (const z of [z0 - 1, z0, z0 + 1, z1 - 1, z1, z1 + 1]) push(x, y, z)
+      }
+      for (let z = z0 - 1; z <= z1 + 1; z++) {
+        for (const x of [x0 - 1, x0, x0 + 1, x1 - 1, x1, x1 + 1]) push(x, y, z)
+      }
+    }
+    return out
+  } catch (_) { return [] }
+}
+
+// Own band cells (idkcraft-g0z.44): the fence-band subset the bot placed
+// itself (the ctx.placedByBot key set) that no plan or decor cell covers —
+// the rig's yard-litter candidates (read back via rcon). Pure.
+function ownBandCells(placed, state) {
+  try {
+    if (!(placed instanceof Set) || !placed.size) return []
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number') return []
+    const at = absPlan(site, state.rot, state.blueprintVersion).at
+    const dt = decorPlan(site, state.rot, state.blueprintVersion).at
+    const out = []
+    for (const c of fenceBandCells(state)) {
+      const k = `${c.x},${c.y},${c.z}`
+      if (placed.has(k) && !at.has(k) && !dt.has(k)) out.push(c)
+    }
+    return out
+  } catch (_) { return [] }
+}
+
 // Site box with a one-block margin, foundation layers included: never dig
 // the castle's own ground or walls for its stone. Moved verbatim from
 // behaviours/castlefetch.js (idkcraft-oqul.11) so equip.js reads it without
@@ -564,5 +631,8 @@ module.exports = {
   protects,
   groundCell,
   inFootprint,
+  yardRing,
+  fenceBandCells,
+  ownBandCells,
   onSite,
 }

@@ -990,11 +990,47 @@ describe('g0z.2 castle protection', () => {
     assert.equal(place.length, 1)
     assert.equal(place[0]({ position: { x: SITE.x + 5, y: SITE.y, z: SITE.z + 3 } }), 100) // doorway
     assert.equal(place[0]({ position: { x: SITE.x + 5, y: SITE.y - 1, z: SITE.z + 3 } }), 0) // terrain below
-    assert.equal(place[0]({ position: { x: SITE.x - 1, y: SITE.y, z: SITE.z } }), 0) // off site
+    // Yard ring (g0z.44): the cell just outside the fence vetoes too (was 0).
+    assert.equal(place[0]({ position: { x: SITE.x - 1, y: SITE.y, z: SITE.z } }), 100) // on the ring
+    assert.equal(place[0]({ position: { x: SITE.x - 2, y: SITE.y, z: SITE.z } }), 0) // one further out
     // Movements replaced: re-installed on the new object.
     bot.pathfinder.movements = { exclusionAreasBreak: [], exclusionAreasPlace: [] }
     castle.guardCastle(bot, ctx)
     assert.equal(bot.pathfinder.movements.exclusionAreasBreak.length, 1)
     assert.equal(bot.pathfinder.movements.exclusionAreasPlace.length, 1)
+  })
+})
+
+describe('g0z.44 post-complete band sweep', () => {
+  const LAID2 = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', fence: 'oak_fence', door: 'oak_door', torch: 'torch', chest: 'chest' }
+  it('the tail works a band litter cell on a complete castle before decor', async () => {
+    const world = makeWorld()
+    for (const c of blueprint.absPlan(SITE, 0, 2).cells) {
+      if (blueprint.isPlaceTarget(c.kind)) world.set(c.x, c.y, c.z, LAID2[c.kind])
+    }
+    const decor = blueprint.decorPlan(SITE, 0, 2).cells
+    for (const c of decor.slice(1)) world.set(c.x, c.y, c.z, c.kind === 'pane' ? 'glass_pane' : 'white_wall_banner')
+    const pane = decor[0] // one open window
+    world.set(SITE.x - 1, SITE.y, SITE.z, 'dirt') // own band litter, dx -1
+    const items = KIT.concat([{ name: 'glass_pane', count: 8 }])
+    const bot = mockBot(world, { items })
+    const seq = []
+    const rawDig = bot.dig
+    const rawPlace = bot.placeBlock
+    bot.dig = async (b) => { seq.push(`dig ${b.position.x},${b.position.y},${b.position.z}`); return rawDig(b) }
+    bot.placeBlock = async (ref, face) => {
+      seq.push(`place ${ref.position.x + face.x},${ref.position.y + face.y},${ref.position.z + face.z}`)
+      return rawPlace(ref, face)
+    }
+    const ctx = {
+      castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'complete', blocked: {} },
+      placedByBot: new Set([`${SITE.x - 1},${SITE.y},${SITE.z}`]),
+    }
+    await run(bot, ctx, 20)
+    assert.equal(world.get(SITE.x - 1, SITE.y, SITE.z), 'air', 'the band litter clears')
+    assert.equal(world.get(pane.x, pane.y, pane.z), 'glass_pane', 'then the pane lays')
+    const dugAt = seq.indexOf(`dig ${SITE.x - 1},${SITE.y},${SITE.z}`)
+    const laidAt = seq.indexOf(`place ${pane.x},${pane.y},${pane.z}`)
+    assert.ok(dugAt >= 0 && laidAt >= 0 && dugAt < laidAt, `sweep before decor: ${JSON.stringify(seq)}`)
   })
 })

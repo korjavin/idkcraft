@@ -31,8 +31,9 @@
 //   + table on the pad, no order; the bot adopts it as its residence and
 //   createResidenceNights reports entered/slept/shelter/deaths/dawn-exit).
 //   CASTLE_IDLE (1 = 6x7.24, needs CASTLE_SEED=complete: the verdict adds
-//   idle-maxdist/idle-miny/idle-underground-s and a CASTLE-RIG idle:
-//   PASS|FAIL line; FAIL exits 1).
+//   idle-maxdist/idle-miny/idle-underground-s, yard-litter=N (g0z.44: own
+//   blocks left in the fence band, placedByBot + rcon readback) and a
+//   CASTLE-RIG idle: PASS|FAIL line; FAIL exits 1).
 //   CASTLE_IDLE_DEATH (N > 0 = 6x7.25, with CASTLE_IDLE: after N min the
 //   follower is cleared and killed once, respawning with an empty kit
 //   IDLE_RESPAWN_DIST blocks from home on the line to the world spawn —
@@ -468,10 +469,14 @@ function idleRespawnPoint(home, spawn) {
 function createIdleTrack(home) {
   const h = home.site
   const floor = require('../src/resources').surfaceFloor({ home })
-  const st = { maxdist: 0, miny: null, undergroundS: 0, lastT: null, lastUnder: false, diedS: null, rehomeS: null, paused: false }
+  const st = { maxdist: 0, miny: null, undergroundS: 0, lastT: null, lastUnder: false, diedS: null, rehomeS: null, paused: false, yardLitter: null }
   return {
     st,
     floor,
+    // Yard litter (idkcraft-g0z.44): own blocks left in the fence band,
+    // counted once after the window (placedByBot candidates, rcon
+    // readback). Unset = unjudged, like an empty night list.
+    setYardLitter(n) { st.yardLitter = n },
     // Forced death (6x7.25): the respawn walk from world spawn is not
     // judged; tracking resumes at the first sample back inside the leash.
     // pause() spans the kill until the body stands at the respawn point
@@ -494,7 +499,8 @@ function createIdleTrack(home) {
     },
     tag() {
       const death = st.diedS == null ? '' : `, idle-death=${Math.round(st.diedS)}s, idle-rehome=${st.rehomeS == null ? 'never' : `${Math.round(st.rehomeS)}s`}`
-      return `, idle-maxdist=${Math.round(st.maxdist)}, idle-miny=${st.miny == null ? '?' : Math.floor(st.miny)}, idle-underground-s=${Math.round(st.undergroundS)}${death}`
+      const yard = st.yardLitter == null ? '' : `, yard-litter=${st.yardLitter}`
+      return `, idle-maxdist=${Math.round(st.maxdist)}, idle-miny=${st.miny == null ? '?' : Math.floor(st.miny)}, idle-underground-s=${Math.round(st.undergroundS)}${death}${yard}`
     },
     // nights: residence night records (partial ones are not judged).
     verdict(deaths, nights = []) {
@@ -503,6 +509,7 @@ function createIdleTrack(home) {
       if (st.miny == null) why.push('no position samples')
       else if (Math.floor(st.miny) < floor) why.push(`miny ${Math.floor(st.miny)}<${floor}`)
       if (st.diedS != null && st.rehomeS == null) why.push('never back within the leash after the forced death')
+      if (st.yardLitter != null && st.yardLitter > 0) why.push(`yard-litter ${st.yardLitter}>0`)
       if (deaths > 0) why.push(`deaths ${deaths}>0`)
       for (const n of nights) if (!n.partial && !n.pass) why.push(`residence night ${n.night} FAIL`)
       return { pass: why.length === 0, line: `CASTLE-RIG idle: ${why.length ? `FAIL (${why.join(', ')})` : 'PASS'} floor=${floor}` }
@@ -1415,6 +1422,23 @@ async function main() {
   if (night) night.finish()
   if (resTimer) clearInterval(resTimer)
   if (resNights) resNights.finish(Math.round((Date.now() - t0) / 1000))
+  // Yard litter (idkcraft-g0z.44): own blocks left in the fence band —
+  // placedByBot candidates from the in-process ctx, read back via rcon
+  // (the follower may end far away, its site chunks unloaded). `execute
+  // if block` answers 'Test passed' for air, 'Test failed' for a block.
+  if (idle) {
+    const c = tickCtx()
+    const cands = require('../src/castle').ownBandCells(c && c.placedByBot, c && c.castle)
+    let n = 0
+    for (const cell of cands) {
+      const out = await rcon(`execute if block ${cell.x} ${cell.y} ${cell.z} air`).catch((e) => fail('yard-litter', e.message))
+      if (/Test passed/.test(out)) continue
+      if (/Test failed/.test(out)) { n++; continue }
+      fail('yard-litter', `unreadable cell ${cell.x} ${cell.y} ${cell.z}: ${String(out).slice(0, 120)}`)
+    }
+    if (n > 0) origLog(`CASTLE-RIG yard-litter: ${n} own blocks left in the fence band`)
+    idle.setYardLitter(n)
+  }
   // Panes (g0z.38): decor pane cells of the seeded castle reading
   // *glass_pane on the follower (unloaded cells are counted apart).
   let paneTag = ''

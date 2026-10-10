@@ -31,7 +31,7 @@ const blueprint = require('../castle')
 const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.js read
 const build = require('./build')
 const flat = require('./flat')
-const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef } = require('./util')
+const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
 
 const STRIKES = 3
 const BACKOFF_BASE_MS = 30000
@@ -652,14 +652,36 @@ function prepTargets(bot, ctx, st, now) {
 // castle completes without it. Cached 30 s (a full-box scan).
 // ponytail: a pillar top out of reach blocks after three strikes; the reach
 // invariant keeps tall pillars off the site.
+// Band sweep (g0z.44): after 'complete', only the fence band (within 1 of
+// the ring line, dy 0..3) — ~1.3k reads, not the 14k box scan — and
+// ownership there is isOwnPlaced only: cobblestone by name outside the box
+// may be the owner's path. Panes sit on plan air cells, so the plan skip
+// covers laid decor too. The band idx strides over the grown box
+// ((dx+1)*(d+2)+(dz+1), dy < 40), unique across the band.
 function litterTargets(bot, ctx, st, now) {
-  const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
+  const complete = st.phase === 'complete'
+  const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0},v${ver(st)},${complete ? 'band' : 'box'}`
   const c0 = ctx.castleLitter
   if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) return c0.list.filter((c) => !done(bot, c))
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
   const placed = ctx.placedByBot instanceof Set ? ctx.placedByBot : new Set()
   const list = []
+  if (complete) {
+    for (const cell of blueprint.fenceBandCells(st)) {
+      const k = `${cell.x},${cell.y},${cell.z}`
+      if (at.has(k)) continue
+      const n = nameAt(bot, cell)
+      if (n == null || AIR.has(n) || n === 'water') continue
+      if (!isOwnPlaced(ctx, { position: cell, name: n })) continue
+      const dx = cell.x - st.site.x
+      const dy = cell.y - st.site.y
+      const dz = cell.z - st.site.z
+      list.push({ x: cell.x, y: cell.y, z: cell.z, kind: 'air', dy, idx: 2000000 + ((dx + 1) * (d + 2) + (dz + 1)) * 40 + dy })
+    }
+    ctx.castleLitter = { key, at: now, list }
+    return list
+  }
   for (let dy = 0; dy <= SITE_TOP; dy++) {
     for (let dx = 0; dx < w; dx++) {
       for (let dz = 0; dz < d; dz++) {
@@ -677,6 +699,12 @@ function litterTargets(bot, ctx, st, now) {
   }
   ctx.castleLitter = { key, at: now, list }
   return list
+}
+
+// Next workable litter cell (not backing off): the menu and the tail share it.
+function nextLitter(st, list, now) {
+  const bl = st.blocked || {}
+  return list.find((o) => !(bl[bkey(st, o.idx)] && bl[bkey(st, o.idx)].until > now))
 }
 
 // Batch gate (build precedent): a castle leg starts with BATCH of the next
@@ -803,10 +831,24 @@ function menuFact(bot, ctx, now = Date.now()) {
         // kind words first (g0z.32), else the first open cell's (panes) —
         // skipping the kind whose chest fetch last came up dry, so an empty
         // pane stock never locks the chest banners out (revmux 01).
+        // Band sweep (g0z.44): between the two — held decor still wins, but
+        // a dry decor word never hides workable band litter (and litter
+        // never hides decor).
         const open = decorOpen(bot, st, now)
+        const heldCell = open.find((c) => usable(bot, c.kind, ctx) > 0)
+        if (heldCell) {
+          const kind = heldCell.kind
+          const left = open.filter((c) => c.kind === kind).length
+          ctx.castleWord = { kind, left }
+          return stockWord(bot, kind, left)
+        }
+        if (nextLitter(st, litterTargets(bot, ctx, st, now), now)) {
+          ctx.castleWord = { word: 'clear' }
+          return 'clear'
+        }
         if (open.length > 0) {
           const dry = ctx && ctx.castleFetchDry
-          const kind = (open.find((c) => usable(bot, c.kind, ctx) > 0) || open.find((c) => c.kind !== dry) || open[0]).kind
+          const kind = (open.find((c) => c.kind !== dry) || open[0]).kind
           const left = open.filter((c) => c.kind === kind).length
           ctx.castleWord = { kind, left }
           return stockWord(bot, kind, left)
@@ -1447,7 +1489,9 @@ function guardCastle(bot, ctx) {
     }
     const fn = (block) => {
       try {
-        return ctx.castle && block && castleProtects(ctx.castle, block.position, block.name) ? 100 : 0
+        if (!ctx.castle || !block) return 0
+        if (castleProtects(ctx.castle, block.position, block.name)) return 100
+        return yardDigBan(ctx.castle, block.position, block.name) ? 100 : 0 // g0z.44: the yard, like protectedReason
       } catch (_) { return 0 }
     }
     const placeFn = (block) => {
@@ -1459,7 +1503,10 @@ function guardCastle(bot, ctx) {
         const dx = q.x - st.site.x
         const dy = q.y - st.site.y
         const dz = q.z - st.site.z
-        if (!(dx >= 0 && dx < w && dz >= 0 && dz < d)) return 0
+        // Fence ring (g0z.44): the fence sits on the box edge, so the cell
+        // just outside it took scaffolding at cost 0 — a foothold over the
+        // fence. The yard ring (the box grown by 1) vetoes too.
+        if (!(dx >= 0 && dx < w && dz >= 0 && dz < d)) return blueprint.yardRing(st, q) ? 100 : 0
         if (dy >= 0 && dy <= SITE_TOP) return 100
         // Moat pits (vmzq.54): dig cells sit below the site level, so the
         // band above missed them and A* towered dirt back into the pit it
@@ -1607,10 +1654,10 @@ function castle(bot, ctx) {
       ctx.stepStatus = 'failed:blocked'
       return
     }
-    if (st.phase !== 'complete') {
-      const lit = litterTargets(bot, ctx, st, now).find((o) => !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
-      if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
-    }
+    // Litter (g0z.14 box scan, g0z.44 band scan on a complete castle):
+    // the sweep runs before decor.
+    const lit = nextLitter(st, litterTargets(bot, ctx, st, now), now)
+    if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
     // Decor (g0z.31): a complete castle lays its panes (g0z.32: and
     // banners) through the same placeCell; phase stays 'complete'
     // (residence/stockpile read it). First open cell whose kind is held.
@@ -1645,6 +1692,7 @@ module.exports.isMaterial = (name, st) => typeof name === 'string' && Object.ent
   want(name) && (!st || kind in blueprint.billOfMaterials(blueprint.blueprintOf(st.blueprintVersion).PLAN) ||
     (blueprint.DECOR[blueprint.blueprintOf(st.blueprintVersion).version] || []).some((c) => c.kind === kind)))
 module.exports.menuFact = menuFact
+module.exports.litterTargets = litterTargets
 module.exports.decorOpen = decorOpen
 module.exports.rank = rank
 module.exports.siteCheck = siteCheck

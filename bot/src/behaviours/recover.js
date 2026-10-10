@@ -23,6 +23,7 @@ const danger = require('../danger')
 const doors = require('../doors')
 const { botPos, denyReason, logDeny, protectedReason } = require('./util')
 const { waterUpRun, countBuckets, wall2At, findCombo } = require('./waterup')
+const castle = require('../castle') // yardRing only (pure, no requires of its own)
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
 const REPEATS = 4 // max chained dones of one progress primitive, no re-ask
@@ -1011,7 +1012,7 @@ function pillarUpRun(bot, ctx) {
     st.phase = 'jump'; st.waited = 0; st.timerArmed = false; st.jumpAt = null; st.armedAt = null
     return 'running'
   }
-  const reason = issuePillarPlace(bot, st)
+  const reason = issuePillarPlace(bot, ctx, st)
   if (reason) return 'failed:' + reason
   return 'running'
 }
@@ -1042,7 +1043,7 @@ function firePillarTimer(bot, ctx, st) {
     if (bp.y >= st.startFloor + pillarTriggerDy(bot) && risingWindow(bot)) {
       st.phase = 'place'
       setJump(bot, false)
-      const reason = issuePillarPlace(bot, st)
+      const reason = issuePillarPlace(bot, ctx, st)
       if (reason) st.syncFail = reason
       return
     }
@@ -1063,7 +1064,7 @@ function firePillarTimer(bot, ctx, st) {
 // the tick path: finds the reference, equips scaffold, starts the async
 // placement. Returns a fail reason, or null once the async issue is in
 // flight (or an already-solid cell verified instead). Never throws.
-function issuePillarPlace(bot, st) {
+function issuePillarPlace(bot, ctx, st) {
   const bp = botPos(bot)
   if (!bp) return 'no-pos'
   // Already solid (a twin call, an earlier cycle): verify instead of
@@ -1087,6 +1088,12 @@ function issuePillarPlace(bot, st) {
     if (solid(c)) { ref = c; face = new Vec3(r.f[0], r.f[1], r.f[2]); break }
   }
   if (!ref || typeof bot.placeBlock !== 'function') return 'no-reference'
+  // Yard ring (idkcraft-g0z.44): no pillar beside the castle fence — a
+  // 1-high block there is a mob foothold over it. An honest fail like
+  // place-error: the menu falls through, shelter digs in, the spot bans
+  // (noteRecoverFail); not episode-latched, so walking out of the yard
+  // re-enables the pillar. A moat pit (y < site.y) is below the ring.
+  if (ctx && ctx.castle && castle.yardRing(ctx.castle, { x: fx, y: fy, z: fz })) return 'place-protected'
   // Equip first: mineflayer throws 'must be holding an item to place' on
   // an empty hand and the server refuses a held tool (prod 2026-09-27: 67
   // pillar_ups, 0 placed). Prefer the held stack: the fast trigger
@@ -1319,6 +1326,14 @@ function digInRun(bot, ctx, st) {
   st.capping = true
   setForward(bot, false)
   if (solid(cellAt(bot, 0, 2, 0))) return 'done'
+  // Yard ring (idkcraft-g0z.44): a cap above ground level beside the fence
+  // is a foothold like a pillar; a flush cap (at/below site.y) is none.
+  {
+    const site = ctx && ctx.castle && ctx.castle.site
+    const cy = Math.floor(bp.y) + 2
+    if (site && typeof site.y === 'number' && cy > site.y &&
+      castle.yardRing(ctx.castle, { x: Math.floor(bp.x), y: cy, z: Math.floor(bp.z) })) return 'failed:place-protected'
+  }
   const item = findScaffoldItem(bot)
   if (!item) return ++st.capWait > DIG_IN_CAP_WAIT_TICKS ? 'failed:no-cap' : 'running'
   let ref = null
@@ -2084,7 +2099,9 @@ function noteRecoverFail(ctx, bp, action, outcome) {
   const prev = (st.fails[action] && st.fails[action].n) || 0
   // A refused placement fast-forwards to the ban: the pillar is known
   // broken at this spot, the next pick digs instead of re-jumping.
-  const n = (action === 'pillar_up' && outcome === 'failed:place-error') ? RECOVER_BAN_FAILS : prev + 1
+  // place-protected (g0z.44) bans like place-error: the yard refuses too.
+  const n = (action === 'pillar_up' && (outcome === 'failed:place-error' || outcome === 'failed:place-protected'))
+    ? RECOVER_BAN_FAILS : prev + 1
   st.fails[action] = { n, at: Date.now() }
   if (prev < RECOVER_BAN_FAILS && n >= RECOVER_BAN_FAILS) {
     try { console.log(`recover ban action=${action} fails=${n} outcome=${outcome} pos=${fmtPos(bp)}`) } catch (_) { /* log best-effort */ }
@@ -2506,7 +2523,7 @@ async function decide(bot, ctx, state, target) {
       // vmzq.43 r2: a placement refusal breaks the SPOT, not the kind — a
       // dig_pillar refusal retires pillar_up there too (its head is dug,
       // so pillar_up would otherwise retry the same refused cell next).
-      if (prev === 'dig_pillar' && outcome === 'failed:place-error') {
+      if (prev === 'dig_pillar' && (outcome === 'failed:place-error' || outcome === 'failed:place-protected')) {
         try { noteRecoverFail(ctx, botPos(bot), 'pillar_up', outcome) } catch (_) { /* bans best-effort */ }
       }
     }

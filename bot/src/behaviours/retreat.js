@@ -335,7 +335,8 @@ function pillar(bot, ctx) {
     ctx.retreatFailed = 'pillar'
     // A refused retreat pillar bans the recover pillar here too (vmzq.47):
     // the same server says no to the same feet cell one tick later.
-    if (st === 'failed:place-error') {
+    // place-protected (g0z.44) bans like place-error: the yard refuses too.
+    if (st === 'failed:place-error' || st === 'failed:place-protected') {
       try { recover.noteRecoverFail(ctx, botPos(bot), 'pillar_up', st) } catch (_) { /* bans best-effort */ }
     }
   } else {
