@@ -347,7 +347,10 @@ function chestTick(bot, ctx, f, d) {
         if (sn > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, sn, at)
         break
       }
-      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? BOOKS_PER_SHELF * Math.ceil(need) : need, at)
+      // Books already packed cover shelves too (revmux 01 minor): never
+      // withdraw what the pack holds.
+      const bookWant = book ? Math.max(0, BOOKS_PER_SHELF * Math.ceil(need) - countItems(bot, (n) => n === 'book')) : need
+      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
       need -= (r && r.got ? r.got : 0) * (logs ? 4 : glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1)
     }
   }, CHEST_TIMEOUT_MS)

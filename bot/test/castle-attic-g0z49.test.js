@@ -317,6 +317,34 @@ describe('castle attic decor behaviour (g0z.49)', () => {
     assert.deepEqual(asked[0], [['bookshelf'], 1])
   })
 
+  it('books already packed are not withdrawn again (revmux 01 minor)', async () => {
+    const items = [{ name: 'book', count: 6 }]
+    const bot = castleBot({ items, chest: [{ name: 'book', count: 15 }] })
+    closeDecor(bot, 0)
+    for (const c of blueprint.decorPlan(SITE, 0, 2).cells) {
+      if (c.kind === 'bookshelf') bot.set.delete(k3(c.x, c.y, c.z))
+    }
+    const ctx = { castle: completeState() }
+    const asked = []
+    fetch.deps.craftItem = (b, c, names, n) => { asked.push([names, n]); return 'running' }
+    for (let i = 0; i < 40 && !asked.length; i++) { fetch(bot, ctx); await settle(); await settle() }
+    assert.deepEqual(bot.calls.withdraw, [['book', 9]])
+  })
+
+  it('stockpile keeps 3 books per open shelf, banks them once laid (revmux 01 minor)', () => {
+    const stockpile = require('../src/behaviours/stockpile')
+    const banked = (plan, name) => plan.filter((p) => p.name === name).reduce((a, p) => a + p.count, 0)
+    const bot = castleBot({ items: [{ name: 'book', count: 16 }] })
+    closeDecor(bot, 0)
+    for (const c of blueprint.decorPlan(SITE, 0, 2).cells) {
+      if (c.kind === 'bookshelf') bot.set.delete(k3(c.x, c.y, c.z))
+    }
+    assert.equal(banked(stockpile.depositPlan(bot, { castle: completeState(), home: null }), 'book'), 1)
+    closeDecor(bot, 0)
+    assert.equal(banked(stockpile.depositPlan(bot, { castle: completeState(), home: null }), 'book'), 16)
+    assert.equal(banked(stockpile.depositPlan(bot, { home: null }), 'book'), 16)
+  })
+
   it('a chest table is withdrawn; the stockpile keeps the nook packed', async () => {
     const bot = castleBot({ items: [], chest: [{ name: 'enchanting_table', count: 1 }] })
     closeDecor(bot, 0)

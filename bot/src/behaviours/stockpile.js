@@ -50,6 +50,9 @@ const STONE_KEEP = 88
 // Pane ladder (g0z.37): 18 sand -> 18 glass -> 3 crafts x 16 panes >= 44.
 const PANE_SAND_KEEP = 18
 const PANE_GLASS_KEEP = 18
+// Attic shelves (g0z.49): books per open shelf cell (the table recipe;
+// mirrors castlefetch BOOKS_PER_SHELF).
+const SHELF_BOOK_KEEP = 3
 // Pack room for a dig drop (moved from castlefetch, oqul.12; castlefetch
 // re-exports it). Pack-full yield (g0z.26): digging into a full pack drops
 // the cobble on the ground and counts no-gain strikes — castlefetch fails
@@ -348,6 +351,7 @@ function depositPlan(bot, ctx) {
   // too (revmux 01): an unloaded cell reads open and a backing-off cell
   // counts (now=Infinity) — else a far fetch leg banks the ladder's sand.
   let paneKeep = null
+  let shelfBookKeep = 0
   let decorKeep = null // g0z.45: open decor demand per kind (pane/banner/fence), the pack keep bound
   try {
     const far = { blockAt: (p) => bot.blockAt(p) || { name: 'air' } }
@@ -356,10 +360,14 @@ function depositPlan(bot, ctx) {
       if (open.some((c) => c.kind === 'pane')) {
         paneKeep = { sand: PANE_SAND_KEEP, glass: PANE_GLASS_KEEP }
       }
+      // Shelf-books keep (g0z.49): books stay packed while a shelf cell
+      // is open, 3 per open shelf — else they shuttle chest<->pack
+      // across failed legs (the paneKeep shape).
+      shelfBookKeep = SHELF_BOOK_KEEP * open.filter((c) => c.kind === 'bookshelf').length
       decorKeep = {}
       for (const c of open) decorKeep[c.kind] = (decorKeep[c.kind] || 0) + 1
     }
-  } catch (_) { paneKeep = null; decorKeep = null }
+  } catch (_) { paneKeep = null; decorKeep = null; shelfBookKeep = 0 }
   // Keep-first counters for bankable keeps (vmzq.39): name -> kept so far.
   const kept = {}
   let li = 0
@@ -412,6 +420,12 @@ function depositPlan(bot, ctx) {
       const key = i.name === 'glass' ? 'glass' : 'sand'
       const k = Math.min(paneKeep[key], n)
       paneKeep[key] -= k
+      n -= k
+      if (n <= 0) continue
+    }
+    if (shelfBookKeep > 0 && i.name === 'book') {
+      const k = Math.min(shelfBookKeep, n)
+      shelfBookKeep -= k
       n -= k
       if (n <= 0) continue
     }
