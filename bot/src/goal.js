@@ -1249,7 +1249,19 @@ function goalFacts(bot, ctx) {
   // both: beds yields, nothing churns.
   let beds = 'both'
   try {
-    beds = require('./behaviours/beds').bedsFact(bot, ctx && ctx.home) || 'both'
+    const bedsMod = require('./behaviours/beds')
+    // Adopt-on-sight (g0z.52): claim visible whole beds at the canonical
+    // cells, so a later dark read trusts the claims instead of opening a
+    // spurious wool quest (rig-proven: seeded castle beds read 'both' by
+    // scan while home, 'none' after a 225-block death-respawn, because the
+    // beds step — the only claim writer — never ran). Only while a claim
+    // is missing (steady-state: two property reads); verified ghosts still
+    // retract on the next beds tick.
+    try {
+      const home = ctx && ctx.home
+      if (home && (!home.bedA || !home.bedB)) bedsMod.adoptBeds(bot, home)
+    } catch (_) { /* adopt best-effort */ }
+    beds = bedsMod.bedsFact(bot, ctx && ctx.home) || 'both'
   } catch (_) { /* unreadable beds */ }
   // Ladder state (ipn.3): done/ready/want/wait from the behaviour's plan.
   // Unreadable reads done (light precedent): gear yields, nothing churns.
