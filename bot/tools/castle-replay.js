@@ -34,8 +34,10 @@
 //   idle-maxdist/idle-miny/idle-underground-s and a CASTLE-RIG idle:
 //   PASS|FAIL line; FAIL exits 1).
 //   CASTLE_IDLE_DEATH (N > 0 = 6x7.25, with CASTLE_IDLE: after N min the
-//   follower is cleared and killed once, respawning at the world spawn
-//   with an empty kit — the prod 10-09 drift path. That death is not
+//   follower is cleared and killed once, respawning with an empty kit
+//   IDLE_RESPAWN_DIST blocks from home on the line to the world spawn —
+//   the prod 10-09 drift path (home 23,65,7, world spawn ~225 off; the
+//   rig pad is ~600 from it, a walk that eats the day). That death is not
 //   counted against the verdict; tracking pauses until the bot is back
 //   within the leash (idle-rehome) and a never-back run FAILs).
 //   CASTLE_SAND (1 = g0z.38: a 6x3x6 sand patch on a dirt base just east
@@ -452,6 +454,16 @@ function createResidenceNights({ deaths, log }) {
 // residence night PASS. Pure (unit-tested): t = window seconds.
 const IDLE_MAXDIST = 64 + 16
 const IDLE_UNDERGROUND_DY = 20
+const IDLE_RESPAWN_DIST = 225
+// Respawn point for the forced death: IDLE_RESPAWN_DIST from home toward
+// the world spawn (the spawn itself when closer), y 150 — fall damage is
+// off in the rig, the bot drops onto whatever surface is there.
+function idleRespawnPoint(home, spawn) {
+  const dx = spawn.x - home.x
+  const dz = spawn.z - home.z
+  const k = Math.min(1, IDLE_RESPAWN_DIST / (Math.hypot(dx, dz) || 1))
+  return { x: Math.round(home.x + dx * k), y: 150, z: Math.round(home.z + dz * k) }
+}
 function createIdleTrack(home) {
   const h = home.site
   const floor = require('../src/resources').surfaceFloor({ home })
@@ -1049,17 +1061,18 @@ async function main() {
     if (IDLE_DEATH > 0 && !idleDeathAt && Date.now() - t0 >= IDLE_DEATH * 60000) {
       idleDeathAt = Date.now()
       if (!worldSpawn) fail('idle-death', 'world spawn never read')
+      const rp = idleRespawnPoint(tickCtx().home.site, worldSpawn)
       // keep_inventory is on: clear first, so the respawn kit is empty. The
       // spawnpoint overrides a castle bed the bot may have slept in.
       await rcon(`clear ${FOLLOWER}`).catch((e) => fail('idle-death', e.message))
-      await rcon(`spawnpoint ${FOLLOWER} ${worldSpawn.x} ${worldSpawn.y} ${worldSpawn.z}`).catch((e) => fail('idle-death', e.message))
+      await rcon(`spawnpoint ${FOLLOWER} ${rp.x} ${rp.y} ${rp.z}`).catch((e) => fail('idle-death', e.message))
       const d0 = deaths
       await rcon(`kill ${FOLLOWER}`).catch((e) => fail('idle-death', e.message))
       for (let i = 0; i < 20 && deaths === d0; i++) await sleep(500)
       if (deaths === d0) fail('idle-death', 'kill never reached the follower')
       idleForced = deaths - d0
       if (idle) idle.died((idleDeathAt - t0) / 1000)
-      origLog(`CASTLE-RIG idle-death: at ${(idleDeathAt - t0) / 1000 | 0}s, cleared + killed, respawn at world spawn ${worldSpawn.x} ${worldSpawn.y} ${worldSpawn.z}`)
+      origLog(`CASTLE-RIG idle-death: at ${(idleDeathAt - t0) / 1000 | 0}s, cleared + killed, respawn ${rp.x} ${rp.y} ${rp.z} (world spawn ${worldSpawn.x} ${worldSpawn.y} ${worldSpawn.z})`)
     }
     if (idleDeathAt && Date.now() - idlePosAt >= 60000) {
       idlePosAt = Date.now()
@@ -1422,4 +1435,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { createIdleTrack, IDLE_MAXDIST, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver }
+module.exports = { createIdleTrack, IDLE_MAXDIST, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver }

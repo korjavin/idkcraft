@@ -29,9 +29,10 @@
 #   idle-underground-s and a `CASTLE-RIG idle: PASS|FAIL` line — FAIL on
 #   maxdist > 80, miny < the surface floor, any death or a FAIL night),
 #   CASTLE_IDLE_DEATH (N > 0 = 6x7.25, needs CASTLE_IDLE=1: clear + kill the
-#   bot once after N min, respawn at world spawn with an empty kit; that
-#   death is not judged, tracking resumes back inside the leash and a
-#   never-back run FAILs; keep N before the first dusk, ~10 min),
+#   bot once after N min, respawn with an empty kit 225 blocks from home
+#   toward world spawn (prod 10-09 geometry); that death is not judged,
+#   tracking resumes back inside the leash and a never-back run FAILs;
+#   keep N early in day 1 — dusk is ~10 min in),
 #   CASTLE_SAND (1 = g0z.38: a sand patch beside the pad; with
 #   CASTLE_SEED=complete the verdict adds panes=<laid>/44),
 #   CASTLE_BLOCKED (0 = none; N > 0 seeds N blocked plan cells after the
@@ -331,6 +332,6 @@ cd "$HERE/.."
 # trapped INT until node exits; wait returns at once and the trap reaps.
 RIGOUT="/tmp/castle-rig-out-${RIG_ID:-0}.log"
 : > "$RIGOUT"
-{ node tools/castle-replay.js 2>&1; echo $? > "$RCFILE"; } | tee -a "$RIGOUT" &
+{ _rc=0; node tools/castle-replay.js 2>&1 || _rc=$?; echo "$_rc" > "$RCFILE"; } | tee -a "$RIGOUT" &
 wait $! || true
 exit "$(cat "$RCFILE" 2>/dev/null || echo 2)"
