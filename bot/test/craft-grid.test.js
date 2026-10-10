@@ -263,6 +263,66 @@ describe('gxk 2x2 grid hang', () => {
     bot.restoreError()
   })
 
+  it('g0z.40: a live walk goal clears before a table craft, and windowOpen still fails honest', async () => {
+    // craftany/equip/light/stockpile start table crafts at reach 4 while
+    // their GoalNear walk (range 3) is still live: the steer turns the head
+    // off the table and the use is ignored. safeCraft stops it for all.
+    const bot = fakeBot({ invLogs: 14 })
+    const goals = []
+    bot.pathfinder = { goal: { x: 3, y: 64, z: 0 }, setGoal: (g) => { goals.push(g); bot.pathfinder.goal = g } }
+    let goalAtCraft = 'unset'
+    bot.craft = async () => { goalAtCraft = bot.pathfinder.goal; throw new Error('Event windowOpen did not fire within timeout of 20000ms') }
+    const ctx = { lastGoalKey: 'craftany-table:0,64,0' }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, { name: 'crafting_table' }, { ctx }), /windowOpen/)
+    assert.equal(goalAtCraft, null, 'no goal steering during the table use')
+    assert.deepEqual(goals, [null])
+    assert.equal(ctx.lastGoalKey, '', 'the next walk re-issues')
+    // 2x2 crafts are no block use: a live goal is left alone.
+    bot.pathfinder.goal = { x: 3, y: 64, z: 0 }
+    bot.craft = async () => {}
+    await craft.safeCraft(bot, {}, 1, null, { ctx: {} })
+    assert.deepEqual(goals, [null])
+    bot.restoreError()
+  })
+
+  it('g0z.40: a table behind a wall fails at once (table-out-of-sight), never the 20 s windowOpen wait', async () => {
+    // Castle rig: the kitchen stands within reach 4 of the storeroom table
+    // through the x=15 partition; the use went through the wall and the
+    // server ignored it. The eye->centre ray must hit the table itself.
+    const Vec3 = require('vec3')
+    const bot = fakeBot({ invLogs: 14 })
+    bot.entity = { position: new Vec3(14.5, 70, 18.5), eyeHeight: 1.62 } // kitchen
+    const table = { name: 'crafting_table', position: new Vec3(16, 70, 18) }
+    const wall = new Vec3(15, 71, 18)
+    let blocker = wall
+    bot.world = { raycast: () => ({ position: blocker }) }
+    let n = 0
+    bot.craft = async () => { n++ }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, table, { ctx: {} }), /table-out-of-sight/)
+    assert.equal(n, 0, 'no use fired through the wall')
+    assert.equal(craft.tableUsable(bot, table, table.position), false, 'walking callers read it as not usable')
+    blocker = table.position // seen (the storeroom side)
+    assert.equal(craft.tableUsable(bot, table, table.position), true)
+    await craft.safeCraft(bot, {}, 1, table, { ctx: {} })
+    assert.equal(n, 1)
+    // A table 19 blocks off (rig: a stale latch) fails at once too.
+    const far = { name: 'crafting_table', position: new Vec3(33, 70, 18) }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, far, { ctx: {} }), /table-out-of-reach/)
+    assert.equal(n, 1)
+    bot.restoreError()
+  })
+
+  it('g0z.40: the table walk ends only on a seen cell within 3', () => {
+    const Vec3 = require('vec3')
+    const tpos = new Vec3(16, 70, 18)
+    // Occluded from the kitchen side (x < 15.5 eye), seen from the storeroom.
+    const world = { raycast: (from) => ({ position: from.x < 15.5 ? new Vec3(15, 71, 18) : tpos }) }
+    const goal = craft.tableGoal({ world }, tpos)
+    assert.equal(goal.isEnd({ x: 14, y: 70, z: 18 }), false, 'kitchen: behind the partition')
+    assert.equal(goal.isEnd({ x: 17, y: 70, z: 17 }), true, 'storeroom: seen')
+    assert.equal(goal.isEnd({ x: 17, y: 70, z: 22 }), false, 'seen but past range 3')
+  })
+
   it('a cursor-held stack is returned to the inventory (pre- and catch-clear)', async () => {
     // A timed-out craft leaves the picked-up stack on the cursor with its
     // origin slot empty: both clearings must put it back, never toss it.

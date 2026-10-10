@@ -140,7 +140,7 @@ describe('craft step', () => {
     bot.restoreError()
   })
 
-  it('(c) door crafts only at a table block in reach, else GoalNear', async () => {
+  it('(c) door crafts only at a table block in reach, else a sight walk', async () => {
     const tablePos = pos(2, 64, 0)
     const mk = (at) => {
       const bot = mockBot({
@@ -168,9 +168,37 @@ describe('craft step', () => {
     await flush()
     assert.equal(far.calls.craft.length, 0)
     assert.equal(far.calls.setGoal, 1)
-    assert.equal(far.calls.goals[0].constructor.name, 'GoalNear')
+    assert.equal(far.calls.goals[0].constructor.name, 'GoalSeeTable') // g0z.40: walk to a cell the table is seen from
     assert.match(farCtx.lastGoalKey, /^craft-table:2,64,0$/)
     far.restoreError()
+  })
+
+  it('g0z.40: a door table no cell sees fails table-unseeable after 21 still ticks; progress keeps walking', async () => {
+    const tablePos = pos(2, 64, 0)
+    const bot = mockBot({ items: [{ name: 'oak_planks', count: 6 }], ids: IDS, recipes: { oak_door: recipeFor('oak_door') } })
+    bot.entity.position = pos(10, 64, 0)
+    bot.blockAt = () => ({ name: 'crafting_table' })
+    const ctx = freshCtx({ table: tablePos })
+    let at = -1
+    for (let i = 0; i < 25 && !(typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:')); i++) {
+      craft(bot, ctx, null, {})
+      at = i
+    }
+    assert.equal(at, 20, 'gives up on the 21st still tick')
+    assert.equal(ctx.stepStatus, 'failed:table-unseeable')
+    assert.equal(bot.calls.craft.length, 0)
+    bot.restoreError()
+    // closing in resets the budget
+    const moving = mockBot({ items: [{ name: 'oak_planks', count: 6 }], ids: IDS, recipes: { oak_door: recipeFor('oak_door') } })
+    moving.entity.position = pos(100, 64, 0)
+    moving.blockAt = () => ({ name: 'crafting_table' })
+    const mctx = freshCtx({ table: tablePos })
+    for (let i = 0; i < 25; i++) {
+      craft(moving, mctx, null, {})
+      if (i % 3 === 2) moving.entity.position = pos(moving.entity.position.x - 3, 64, 0)
+    }
+    assert.ok(!(typeof mctx.stepStatus === 'string' && mctx.stepStatus.startsWith('failed:')), 'still walking while closing in')
+    moving.restoreError()
   })
 
   it('(c2) claimed station crafts the door; ghost claim rebuilds', async () => {
