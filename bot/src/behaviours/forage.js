@@ -6,11 +6,12 @@
 //
 // Value rank (bead): diamonds > gold/iron > coal/lapis/copper/etc >
 // logs > food animals (live fallback when memory is empty of diggables).
-// Ore needs a pickaxe of the right tier (bring.js check, shared); logs
+// Ore needs a pickaxe of the right tier (shared tier check); logs
 // need no tools. Batch: FORAGE_WANT new drops, then done.
 //
-// Shared with bring.js, not copied: dropFor/isBringable/needsPickaxe/
-// hasPickaxe/findAnimal/progressed/entityById/PREY_* (pure helpers). The
+// Shared from bringbase.js (oqul.14), not copied: dropFor/isBringable/
+// needsPickaxe/hasPickaxe/findAnimal/progressed/entityById/PREY_* (pure
+// helpers). The
 // phase machine itself is forage-shaped (memory target, batch haul, no
 // return leg — deliver owns that), so walk/dig/pickup run here on the
 // same patterns. Like bring, forage raises NO stuck facts: a stalled or
@@ -22,7 +23,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const resources = require('../resources')
-const bring = require('./bring')
+const bring = require('./bringbase') // oqul.14: the shared bring helpers live in the leaf now
 const fightMod = require('./fight')
 const detour = require('../detour')
 const vetoes = require('../vetoes') // oqul.11: was a deferred goal.js require
@@ -108,9 +109,9 @@ function woodOfLog(name) {
 // require (goal.js loads forage at top).
 function questPlankWoods(bot, ctx) {
   try {
-    const stockpile = require('./stockpile')
-    if (!stockpile || typeof stockpile.reserveCorner !== 'function') return null
-    if (!stockpile.reserveCorner(bot, ctx)) return null
+    const packroom = require('./packroom')
+    if (!packroom || typeof packroom.reserveCorner !== 'function') return null
+    if (!packroom.reserveCorner(bot, ctx)) return null
     const pw = packWood(bot)
     let max = 0
     for (const n of pw.plankCount.values()) if (n > max) max = n
@@ -200,7 +201,7 @@ function bestMemoryCell(bot, ctx, bp) {
   // ore and the food fallback still plan, so a capped pack digs stone instead
   // of chopping. Deferred require (goal.js loads forage at top).
   let capped = false
-  try { capped = !!require('./stockpile').woodCapped(bot, ctx) } catch (_) { capped = false }
+  try { capped = !!require('./packroom').woodCapped(bot, ctx) } catch (_) { capped = false }
   const quest = questPlankWoods(bot, ctx)
   const floor = resources.surfaceFloor(ctx, bp) // atl.23: deep cells are the smith's leg
   let best = null
@@ -243,7 +244,7 @@ function bestMemoryCell(bot, ctx, bp) {
     // food fallback stays shut under the reserve unless hungry-safe (R4)).
     // The same-wood preference above already picks the most exemptable log.
     let reserved = false
-    try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+    try { reserved = !!require('./packroom').slotReserved(bot, ctx) } catch (_) { reserved = false }
     if (reserved && !questExempt(bot, ctx, { kind: 'log', name: bestLog.name })) return null
     return bestLog
   }
@@ -356,7 +357,7 @@ function dropRoom(bot, drop) {
 function huntAllowed(bot, ctx, drop) {
   try {
     let reserved = false
-    try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+    try { reserved = !!require('./packroom').slotReserved(bot, ctx) } catch (_) { reserved = false }
     if (!reserved) return true
     const food = bot && typeof bot.food === 'number' ? bot.food : NaN
     if (!(food < HUNT_PECKISH)) return false
@@ -397,7 +398,7 @@ function planForage(bot, ctx) {
       // the chest quest behind a dig that cannot run. (want-log is never a
       // GEAR_WANT key, so the latched want is always ore here.)
       let reserved = false
-      try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+      try { reserved = !!require('./packroom').slotReserved(bot, ctx) } catch (_) { reserved = false }
       if (!reserved) {
         const kind = want.name.endsWith('_log') ? 'log' : 'ore'
         // Stone drops cobblestone, not stone: dropFor would pin the batch
@@ -433,7 +434,7 @@ function planForage(bot, ctx) {
       // Under the reserve a hunt is one kill: a full batch would overflow
       // the checked stack room onto new slots.
       let reserved = false
-      try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+      try { reserved = !!require('./packroom').slotReserved(bot, ctx) } catch (_) { reserved = false }
       return { kind: 'food', name: found.name, id: found.id, pos: null, drop, want: reserved ? 1 : FORAGE_WANT }
     }
   }
@@ -924,7 +925,7 @@ function forage(bot, ctx, target, state) {
     // food hunts never reach this phase (survival: the kill self-drains).
     // Fails (time-held) so the stockpile step banks instead of spinning.
     let reserved = false
-    try { reserved = !!require('./stockpile').slotReserved(bot, ctx) } catch (_) { reserved = false }
+    try { reserved = !!require('./packroom').slotReserved(bot, ctx) } catch (_) { reserved = false }
     if (reserved && !questExempt(bot, ctx, t)) {
       finish(bot, ctx, f, false, 'pack-full', true)
       return

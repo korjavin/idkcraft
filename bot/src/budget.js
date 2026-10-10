@@ -42,5 +42,9 @@ const BUILD_RETRY_MS = 5 * 60 * 1000
 // equip.js, idkcraft-oqul.11 — the castle->equip edge closed
 // craft->castle->equip->craft). equip.js re-exports it.
 const SCAFFOLD_LOW = 16
+// Crafting-table reach (moved from craft.js, idkcraft-oqul.14 — the
+// tablespot leaf reads it without an edge into craft): a table past this
+// many blocks is walked to, not used in place.
+const TABLE_REACH = 4
 
-module.exports = { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, SCAFFOLD_LOW }
+module.exports = { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, SCAFFOLD_LOW, TABLE_REACH }

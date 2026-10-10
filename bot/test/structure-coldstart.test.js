@@ -73,7 +73,7 @@ describe('structure: cold start per entry point (oqul.1)', () => {
 
   it('finds the known load-time destructures (the scan is live)', () => {
     const keys = sites.map((s) => `${path.basename(s.from)}<-${path.basename(s.to)}:${s.names.join(',')}`)
-    for (const k of ['craft.js<-budget.js:NEED_LOGS', 'gather.js<-budget.js:NEED_LOGS', 'gather.js<-holds.js:gatherFailedHolds', 'home.js<-step.js:carryOrderStamp', 'home.js<-site.js:timeWord']) {
+    for (const k of ['craft.js<-budget.js:NEED_LOGS,TABLE_REACH', 'gather.js<-budget.js:NEED_LOGS', 'gather.js<-holds.js:gatherFailedHolds', 'home.js<-step.js:carryOrderStamp', 'home.js<-site.js:timeWord']) {
       assert.ok(keys.includes(k), `${k} not found in ${keys.length} sites`)
     }
   })

@@ -11,7 +11,11 @@ const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, issueGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason, atPos } = require('./util')
 const itemMod = require('./bringitem')
-const { WANT_ORE, WANT_MAX, countDrop, refuse, done, releaseSmelt } = require('./bringbase') // oqul.11: shared with bringitem
+const {
+  WANT_ORE, WANT_MAX, countDrop, refuse, done, releaseSmelt, dropFor, requiredTier,
+  bestPickRank, hasPickaxe, tierArticle, tierRefusal, PREY_NAMES, PREY_DROPS,
+  animalDist, findAnimal, entityById, progressed,
+} = require('./bringbase') // oqul.11: shared with bringitem; oqul.14: the tiers/hunt/progress home is bringbase
 const Vec3 = require('vec3')
 
 const woolMod = require('./wool')
@@ -36,13 +40,11 @@ const woolMod = require('./wool')
 // menu, and gather, which reports at its final). The ticker
 // place_error/no-displacement backstops still catch a bring that loops
 // without refusing, and release() resumes ctx.bring untouched.
-const FIND_RADIUS = 48
 const WANT_LOGS = 4
 const WANT_FOOD = 3
 const WALK_STALL_TICKS = 10 // stationary ticks before skipping an unreachable target
 const CHEST_STALL_TICKS = 5 // far+standing ticks before the chest fetch falls back (a single
   // far reading is often a recovering pathfinder, not an unreachable chest)
-const MOVE_TOLERANCE = stuck.MOVE_TOLERANCE
 const RETURN_RANGE = 2
 
 // Search budget (idkcraft-atl.9): K=24 legs or 5 minutes, whichever binds
@@ -60,16 +62,6 @@ function searchMinutes() {
   return SEARCH_BUDGET.minutes
 }
 
-function dropFor(blockName) {
-  if (blockName.endsWith('_log')) return blockName
-  if (blockName === 'stone') return 'cobblestone' // ipn.20: the smelt rung's furnace stone sub
-  const base = blockName.endsWith('_ore') ? blockName.slice(0, -'_ore'.length) : blockName
-  const raw = base.match(/(iron|copper|gold)$/)
-  if (raw) return `raw_${raw[1]}`
-  if (base === 'lapis' || base.endsWith('_lapis')) return 'lapis_lazuli'
-  return base // coal, diamond, emerald, redstone, quartz, dirt, ...
-}
-
 // Only ores and logs are fetchable (the bead's resources): anything else
 // (stone->cobble, grass->dirt, ...) drops a different item, so the drop
 // count would never grow and the order would mine the area forever.
@@ -85,75 +77,13 @@ function needsPickaxe(blockName) {
   return blockName.endsWith('_ore')
 }
 
-// Harvest tiers (vanilla): coal/iron/copper/lapis/quartz need stone or
-// better; gold/diamond/redstone/emerald need iron or better. Wooden and
-// golden are refused for everything. The refusal names the required tier.
-const PICKAXE_RANK = { wooden: 0, golden: 0, stone: 1, iron: 2, diamond: 3, netherite: 4 }
-function requiredTier(blockName) {
-  const base = blockName.endsWith('_ore') ? blockName.slice(0, -'_ore'.length) : blockName
-  if (/(gold|diamond|redstone|emerald)$/.test(base)) return 'iron'
-  return 'stone'
-}
-function bestPickRank(bot) {
-  let best = -1
-  try {
-    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
-    for (const i of items) {
-      const m = typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
-      if (m) best = Math.max(best, PICKAXE_RANK[m[1]])
-    }
-  } catch (_) { return -1 }
-  return best
-}
-function hasPickaxe(bot, blockName) {
-  const need = blockName && blockName.endsWith('_ore') ? (requiredTier(blockName) === 'iron' ? 2 : 1) : 0
-  return bestPickRank(bot) >= need
-}
-function tierArticle(tier) {
-  return tier === 'iron' ? 'an' : 'a'
-}
-
-// Honest tier refusal (idkcraft-x15): the legacy line names the required
-// tier; when the bot HOLDS a weaker pickaxe it says so — prod refused 'need
-// a stone pickaxe' with kit pickaxe=yes and read as a contradiction (the
-// held one was wooden). No pickaxe at all keeps the bare line.
-function tierRefusal(bot, blockName) {
-  const tier = requiredTier(blockName)
-  const base = `need ${tierArticle(tier)} ${tier} pickaxe for ${blockName}`
-  let held = null
-  try {
-    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
-    let rank = -1
-    for (const i of items) {
-      const m = typeof i.name === 'string' && i.name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
-      if (m && PICKAXE_RANK[m[1]] > rank) { rank = PICKAXE_RANK[m[1]]; held = i.name }
-    }
-  } catch (_) { held = null }
-  if (!held) return base
-  return `${base} (my ${held} can't break it)`
-}
-
 function skipKey(p) {
   return `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
 }
 
-// Food hunt prey (idkcraft-n7k): the order seed (isFoodRequest/findEdible)
-// lives in bringitem.js with the other order-creation rungs; the dispatcher
-// keeps only what the shared prey phases read.
-const PREY_NAMES = new Set(['cow', 'pig', 'sheep', 'chicken', 'rabbit'])
-const PREY_DROPS = { cow: 'beef', pig: 'porkchop', sheep: 'mutton', chicken: 'chicken', rabbit: 'rabbit' }
-
 // The item order rungs (did.1 normalisation, resolver, pack plan, honest
 // stub) live in bringitem.js (did.4 split); the dispatcher reaches them as
 // itemMod.*.
-
-function animalDist(bp, epos) {
-  try {
-    return typeof bp.distanceTo === 'function'
-      ? bp.distanceTo(epos)
-      : Math.hypot(bp.x - epos.x, bp.y - epos.y, bp.z - epos.z)
-  } catch (_) { return null }
-}
 
 // Same-block test (8gc): the pickup counts only once the body stands in
 // the death-spot block — the GoalBlock arrival cell (the pathfinder
@@ -166,52 +96,6 @@ function sameCell(bp, dp) {
       Math.floor(bp.y) === Math.floor(dp.y) &&
       Math.floor(bp.z) === Math.floor(dp.z)
   } catch (_) { return false }
-}
-
-// Nearest passive animal within 48; when drop is set (second+ kill of one
-// order) only animals dropping it, so one order tosses one food kind.
-// opts (did.3 wool) narrows the hunt: { prey, skipSheared, color,
-// skipIds, skipColors }. Without opts the food shape is byte-identical
-// (forage.js relies on it). A color filter is strict — it only ever
-// carries an explicitly ordered color, which is a promise (bare families
-// pass none and hunt any sheep). skipIds (8gc stall skips) applies to
-// every prey kind, sheep filters only to sheep.
-function findAnimal(bot, drop, opts) {
-  const bp = bot && bot.entity && bot.entity.position
-  if (!bp) return null
-  const o = opts && typeof opts === 'object' ? opts : null
-  const prey = o && o.prey ? new Set(o.prey) : PREY_NAMES
-  let best = null
-  let bestDist = Infinity
-  for (const e of Object.values(bot.entities || {})) {
-    if (!e || !e.position || e.isValid === false) continue
-    if (!prey.has(e.name)) continue
-    if (drop && PREY_DROPS[e.name] !== drop) continue
-    if (o && o.skipIds && typeof o.skipIds.has === 'function' && o.skipIds.has(e.id)) continue
-    if (o && e.name === 'sheep') {
-      const skipColors = o.skipColors && typeof o.skipColors.has === 'function' && o.skipColors.size ? o.skipColors : null
-      if (o.skipSheared || o.color || skipColors) {
-        const w = woolMod.sheepWool(bot, e)
-        if (o.skipSheared && w.sheared) continue
-        if (o.color && w.color !== o.color) continue
-        // Dead colours (did.4 lock release): stranded, never hunted again
-        // this sub-order. Unreadable metadata hunts fail-open.
-        if (skipColors && w.color && skipColors.has(w.color)) continue
-      }
-    }
-    const d = animalDist(bp, e.position)
-    if (typeof d !== 'number' || d > FIND_RADIUS) continue
-    if (d < bestDist) { bestDist = d; best = e }
-  }
-  if (!best) return null
-  return { name: best.name, id: best.id, position: best.position, distance: Math.round(bestDist) }
-}
-
-function entityById(bot, id) {
-  for (const e of Object.values(bot.entities || {})) {
-    if (e && e.id === id && e.isValid !== false && e.position) return e
-  }
-  return null
 }
 
 // Union of the wool id skips (8gc): shorn sheep plus stall-struck ones.
@@ -241,14 +125,6 @@ function fenceFact(bot, animal) {
       }
     }
   } catch (_) { /* fact best-effort */ }
-}
-
-// Progress is horizontal displacement or a new standing level — the same
-// rule as gather.js: tower jumps in place are standing still.
-function progressed(bp, last, grounded) {
-  if (!last) return true
-  if (Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) return true
-  return !!grounded && Math.floor(bp.y) !== Math.floor(last.y)
 }
 
 // Per-leg model choice (ef3/rw4.6 shape): exactly two labels — laya answers
