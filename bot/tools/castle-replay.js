@@ -37,7 +37,8 @@
 //   follower is cleared and killed once, respawning with an empty kit
 //   IDLE_RESPAWN_DIST blocks from home on the line to the world spawn —
 //   the prod 10-09 drift path (home 23,65,7, world spawn ~225 off; the
-//   rig pad is ~600 from it, a walk that eats the day). That death is not
+//   rig pad is ~600 from it, a walk that eats the day). The seed adds the
+//   decor (panes + banners) so castlefetch stays idle. That death is not
 //   counted against the verdict; tracking pauses until the bot is back
 //   within the leash (idle-rehome) and a never-back run FAILs).
 //   CASTLE_SAND (1 = g0z.38: a 6x3x6 sand patch on a dirt base just east
@@ -838,6 +839,21 @@ async function main() {
     const placed = cells.filter((c) => c.kind !== 'extra' && c.kind !== 'air' && c.kind !== 'dig').length
     seedTag = `, seeded=${placed}/${placed}`
     origLog(`CASTLE-RIG seeded castle site ${st.site.x} ${st.site.y} ${st.site.z} rot 0: ${cells.length} setblocks, ${placed} plan blocks + gate + 2 beds + table read back`)
+    if (IDLE_DEATH > 0) {
+      // 6x7.25: decor too (44 panes + 2 gate banners), so castlefetch has
+      // nothing left to fetch: its sand/wool legs walked 85+ out on both
+      // builds and drowned the gather drift this scenario measures.
+      const decor = require('../src/castle').decorPlan(st.site, 0, 2).cells
+      for (const c of decor) {
+        let block = 'glass_pane'
+        if (c.kind === 'banner') {
+          const f = c.wall.z > c.z ? 'north' : c.wall.z < c.z ? 'south' : c.wall.x > c.x ? 'west' : 'east'
+          block = `white_wall_banner[facing=${f}]`
+        }
+        await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${block}`).catch((e) => fail('seed-decor', e.message))
+      }
+      origLog(`CASTLE-RIG seeded decor: ${decor.length} cells (panes + banners)`)
+    }
     if (!tickCtx()) fail('seed-castle', 'no follower ctx')
     tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
   }

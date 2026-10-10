@@ -30,7 +30,7 @@
 #   maxdist > 80, miny < the surface floor, any death or a FAIL night),
 #   CASTLE_IDLE_DEATH (N > 0 = 6x7.25, needs CASTLE_IDLE=1: clear + kill the
 #   bot once after N min, respawn with an empty kit 225 blocks from home
-#   toward world spawn (prod 10-09 geometry); that death is not judged,
+#   toward world spawn (prod 10-09 geometry), decor seeded too; that death is not judged,
 #   tracking resumes back inside the leash and a never-back run FAILs;
 #   keep N early in day 1 — dusk is ~10 min in),
 #   CASTLE_SAND (1 = g0z.38: a sand patch beside the pad; with
