@@ -6,7 +6,7 @@ const { NEED_LOGS } = require('../budget')
 const { countItems } = require('../perception')
 const { isStone } = require('../castle')
 const { stepDone, stepFailed, stepGen } = require('../step')
-const { issueGoal } = require('./util')
+const { issueGoal, clearGoal } = require('./util')
 
 // craft: logs -> planks -> crafting table -> door, one op per tick, async
 // with ctx.craftInFlight (same shape as eatInFlight). Registered in
@@ -19,6 +19,7 @@ const { issueGoal } = require('./util')
 // A placed table appears only via ctx.home.table (the build step places
 // it): a table sitting in the inventory does not unlock the door.
 const TABLE_REACH = 4
+const DOOR_WALK_GIVE_UP = 20 // still ticks before the door's table walk fails (craftany's WALK_GIVE_UP)
 
 function tally(bot, suffix) {
   const m = new Map()
@@ -1136,6 +1137,61 @@ async function pacedCraft(bot, recipe, count, table) {
   }
 }
 
+// g0z.40: a table use is a block use, honoured only with the table in sight
+// - the castle kitchen sits within reach 4 of the storeroom table through
+// the x=15 partition, the use went through the wall and the server ignored
+// it (20 s windowOpen timeouts, rig panes 16/44). The ray mirrors
+// activateBlock: eye to the block centre (the point it aims at).
+function seenFrom(world, eye, p) {
+  try {
+    const dir = new Vec3(p.x + 0.5, p.y + 0.5, p.z + 0.5).minus(eye)
+    const hit = world.raycast(eye, dir.normalize(), dir.norm() + 1)
+    return !hit || (hit.position.x === p.x && hit.position.y === p.y && hit.position.z === p.z)
+  } catch (_) {
+    return true // unreadable (mocks, unloaded column): the craft decides
+  }
+}
+
+// The body eye, or the eye over its cell centre — the point GoalSeeTable
+// ended the walk on (the pathfinder stops up to 0.35 off centre; revmux 03).
+function tableInSight(bot, table) {
+  try {
+    const e = bot.entity
+    const h = e.eyeHeight || 1.62
+    if (seenFrom(bot.world, e.position.offset(0, h, 0), table.position)) return true
+    const c = e.position.floored()
+    return seenFrom(bot.world, new Vec3(c.x + 0.5, c.y + h, c.z + 0.5), table.position)
+  } catch (_) {
+    return true
+  }
+}
+
+// Reach + sight: the one usable-table predicate for the walking callers.
+function tableUsable(bot, table, pos) {
+  const bp = bot.entity && bot.entity.position
+  return !!bp && dist3(bp, pos) <= TABLE_REACH && tableInSight(bot, table)
+}
+
+// The walk into a usable spot: the old GoalNear 3 range, ending only on a
+// cell the same eye-to-centre ray sees the table from (revmux 02: a face
+// ray would end where the predicate refuses — v2 house, furnace beside the
+// table). Range 3 on node ints keeps the body within TABLE_REACH.
+class GoalSeeTable extends goals.GoalNear {
+  constructor(world, pos) {
+    super(pos.x, pos.y, pos.z, 3)
+    this.world = world
+    this.pos = { x: pos.x, y: pos.y, z: pos.z }
+  }
+
+  isEnd(node) {
+    return super.isEnd(node) && seenFrom(this.world, new Vec3(node.x + 0.5, node.y + 1.62, node.z + 0.5), this.pos)
+  }
+}
+
+function tableGoal(bot, pos) {
+  return new GoalSeeTable(bot.world, pos)
+}
+
 async function safeCraft(bot, recipe, count, table, opts) {
   const room = { ...opts, recipe } // the free slot never takes an ingredient
   // The reserved last slot frees a junk slot too (vmzq.38): otherwise the
@@ -1154,9 +1210,28 @@ async function safeCraft(bot, recipe, count, table, opts) {
     if (!err || err.message !== 'inventory-full' || !(await freeSlot(bot, room))) throw err
     await ensureRoom(bot, recipe, count, opts)
   }
+  // g0z.40 (the z80 race, gear.stopSteering, for every table caller): a
+  // table craft is a block use (lookAt + use packet), and a walk goal still
+  // live here — craftany/equip/light/stockpile start at reach 4 while their
+  // GoalNear range is 3 — steers the head off the table, the server ignores
+  // the use: 20 s windowOpen timeouts (castle panes, pick upgrades).
+  if (table) clearGoal(bot, (opts && opts.ctx) || {})
+  // Out of reach / sight fails at once with its own reason, never the 20 s
+  // wait (rig: a latched craftany table used from 19 blocks away).
+  const bp = bot.entity && bot.entity.position
+  if (table && bp && table.position && dist3(bp, table.position) > TABLE_REACH) throw new Error('table-out-of-reach')
+  if (table && !tableInSight(bot, table)) throw new Error('table-out-of-sight')
   try {
     await pacedCraft(bot, recipe, count, table)
   } catch (err) {
+    if (table) {
+      // g0z.40: where a table use died (a seen table that still times out
+      // names the next cause: reach, a held window).
+      try {
+        const bp = bot.entity.position
+        console.error(`table craft failed item=${opts && opts.item} bot=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} table=${table.position} window=${bot.currentWindow ? bot.currentWindow.type : 'none'}`)
+      } catch (_) { /* log best-effort */ }
+    }
     if (!table) {
       await clearGrid(bot)
       if (isSlotTimeout(err)) {
@@ -1228,7 +1303,8 @@ function craft(bot, ctx, target, state) {
   if (!op) {
     const doorCount = countItems(bot, (n) => n.endsWith('_door'))
     if (doorCount === 0 && tableBlock) {
-      if (dist3(bp, tablePos) <= TABLE_REACH) {
+      if (tableUsable(bot, tableBlock, tablePos)) {
+        ctx.craftDoorWalk = null
         for (const [wood, n] of sortedWoods(planks)) {
           if (n < 6) break
           const name = `${wood}_door`
@@ -1238,7 +1314,23 @@ function craft(bot, ctx, target, state) {
       } else {
         const key = `craft-table:${tablePos.x},${tablePos.y},${tablePos.z}`
         if (key !== ctx.lastGoalKey) {
-          issueGoal(bot, ctx, new goals.GoalNear(tablePos.x, tablePos.y, tablePos.z, 3), key, false)
+          issueGoal(bot, ctx, tableGoal(bot, tablePos), key, false)
+        }
+        // g0z.40 verify: a table no reachable cell sees (boxed nook, behind
+        // glass) never ends the sight walk. Progress-based give-up, the
+        // craftany shape: only standing still counts.
+        const d = dist3(bp, tablePos)
+        let w = ctx.craftDoorWalk
+        const g = stepGen(ctx) // a later craft step starts a fresh budget
+        if (!w || w.key !== key || w.gen !== g) w = ctx.craftDoorWalk = { key, gen: g, ticks: 0, lastDist: null }
+        if (w.lastDist != null && d < w.lastDist - 1) w.ticks = 0
+        else w.ticks += 1
+        w.lastDist = d
+        if (w.ticks > DOOR_WALK_GIVE_UP) {
+          ctx.craftDoorWalk = null
+          clearGoal(bot, ctx)
+          stepFailed(ctx, 'table-unseeable')
+          try { console.error(`craft failed item=door error=table-unseeable at ${tablePos.x},${tablePos.y},${tablePos.z}`) } catch (_) { /* log best-effort */ }
         }
         return // walk into reach, then craft on a later tick
       }
@@ -1312,3 +1404,6 @@ module.exports.shedForQuest = shedForQuest
 module.exports.syncInventory = syncInventory
 module.exports.slotSummary = slotSummary
 module.exports.WINDOW_OP_GAP_MS = WINDOW_OP_GAP_MS
+module.exports.tableInSight = tableInSight
+module.exports.tableUsable = tableUsable
+module.exports.tableGoal = tableGoal

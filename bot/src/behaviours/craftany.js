@@ -432,17 +432,20 @@ function craftItem(bot, ctx, name, count) {
     clearRun(ctx)
     return { done: true, target: plan.target }
   }
+  // g0z.40 rig: the run outlives the leg, so a table latched earlier is
+  // re-checked; the body walked away (19 blocks) -> unlatch and walk back.
+  if (st.table && st.table.position && !craftMod.tableUsable(bot, st.table, st.table.position)) st.table = null
   if (plan.requiresTable && !st.table) {
     let tb = null
     try {
       tb = standingTable(bot, ctx)
     } catch (_) { tb = null }
     if (tb) {
-      if (dist3(bp, tb.pos) > TABLE_REACH) {
+      if (!craftMod.tableUsable(bot, tb.block, tb.pos)) { // g0z.40: reach + sight
         const tkey = `craftany-table:${tb.pos.x},${tb.pos.y},${tb.pos.z}`
         if (tkey !== ctx.lastGoalKey) {
           try {
-            bot.pathfinder.setGoal(new goals.GoalNear(tb.pos.x, tb.pos.y, tb.pos.z, 3), false)
+            bot.pathfinder.setGoal(craftMod.tableGoal(bot, tb.pos), false)
           } catch (_) { /* retry next tick */ }
           ctx.lastGoalKey = tkey
         }
