@@ -860,6 +860,8 @@
   },
   "furnaceJob": {
     "writers": [
+      "src/behaviours/bringbase.js",
+      "src/behaviours/bringitem.js",
       "src/behaviours/castlefetch.js",
       "src/behaviours/furnace.js"
     ],

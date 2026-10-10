@@ -424,16 +424,17 @@ describe('bring me torch/shears/bucket (idkcraft-did.2)', () => {
     assert.ok(!bot._tickerCtx.bring, 'order completed')
     assert.deepEqual(bot.tossCalls, [[ITEMS.bucket, null, 1]])
 
+    // ipn.20: no iron and no pickaxe for the ore: the smelt rung's tier line.
     const poor = mockBot({ playerPos: pos(30, 64, 0) })
     handleChat(poor, tickerFor(poor), 'P', 'bring me bucket')
-    assert.deepEqual(poor.lines, ['need iron_ingot (smelting not part of bring)'])
+    assert.deepEqual(poor.lines, ['need a stone pickaxe for iron_ore'])
     assert.ok(!poor._tickerCtx.bring, 'no order created')
   })
 
-  it('a smelting gap refuses before any ladder gap gathers (body-4)', () => {
+  it('a smelting gap resolves before any ladder gap gathers (body-4, ipn.20)', () => {
     const bot = mockBot({ playerPos: pos(30, 64, 0) })
     handleChat(bot, tickerFor(bot), 'P', 'bring me iron axe')
-    assert.deepEqual(bot.lines, ['need iron_ingot (smelting not part of bring)'])
+    assert.deepEqual(bot.lines, ['need a stone pickaxe for iron_ore'])
     assert.ok(!bot._tickerCtx.bring, 'no stick sub opened for an unsmeltable axe')
   })
 
