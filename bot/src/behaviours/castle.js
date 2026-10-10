@@ -55,6 +55,7 @@ const ITEM = {
   banner: (n) => blueprint.matches('banner', n), // g0z.32 decor: gate banners (chest-only, never crafted)
   bookshelf: (n) => blueprint.matches('bookshelf', n), // g0z.49 decor: attic shelves (chest books, crafted)
   enchanting_table: (n) => blueprint.matches('enchanting_table', n), // g0z.49 decor: attic table (chest-only, never crafted)
+  blast_furnace: (n) => blueprint.matches('blast_furnace', n), // g0z.50 decor: kitchen blast furnace (chest, else crafted)
 }
 
 // Project-material reservation (g0z.3 design): the castle never lays the
@@ -764,7 +765,8 @@ const BATCH = 16
 // never be laid; castlefetch runs on pane-none only (chest, then the
 // sand ladder, g0z.38). banner (g0z.32): same. bookshelf and
 // enchanting_table (g0z.49): same — chest-supplied attic decor.
-const BATCH_OF = { frame: 14, torch: 1, pane: 1, banner: 1, bookshelf: 1, enchanting_table: 1 }
+// blast_furnace (g0z.50): same — one kitchen cell.
+const BATCH_OF = { frame: 14, torch: 1, pane: 1, banner: 1, bookshelf: 1, enchanting_table: 1, blast_furnace: 1 }
 function batchOf(kind) { return BATCH_OF[kind] || BATCH }
 
 // The castle word for the goal facts text (g0z.3): 'none' | 'parked' |
@@ -1132,12 +1134,24 @@ function flight(ctx, kind, c, run) {
 
 function live(ctx, token) { return ctx.castleFlight && ctx.castleFlight.token === token }
 
+// Faced placement (g0z.50: the kitchen blast furnace; the g0z.47 stairs
+// reuse it): the server faces the block away from the placer's look, so
+// look at the cell first and place with the look frozen (the beds
+// look-then-_placeBlockWithOptions shape).
+async function placeFaced(bot, ref, c) {
+  if (typeof bot.lookAt === 'function') await bot.lookAt(new Vec3(c.x + 0.5, c.y + 0.5, c.z + 0.5), true)
+  if (typeof bot._placeBlockWithOptions === 'function') return bot._placeBlockWithOptions(ref.ref, ref.face, { forceLook: 'ignore' })
+  return bot.placeBlock(ref.ref, ref.face)
+}
+
 function placeCell(bot, ctx, st, c, item, now) {
   const p = new Vec3(c.x, c.y, c.z)
   // The door is placed from the entrance apron, so the bot ends OUTSIDE
   // the closed tower instead of sealing itself in. Gate banners (g0z.32)
-  // hang on the gate's outer face: placed from the apron too.
-  const ent = c.kind === 'door' || c.kind === 'banner' ? entrance(st) : null
+  // hang on the gate's outer face: placed from the apron too. The blast
+  // furnace (g0z.50) places from its stance north of the cell, looking
+  // south-into-kitchen, so its front faces into the room.
+  const ent = c.kind === 'door' || c.kind === 'banner' ? entrance(st) : c.kind === 'blast_furnace' ? c.stance || null : null
   if (approach(bot, ctx, c, () => ent
     ? new goals.GoalBlock(ent.x, ent.y, ent.z)
     // Decor (g0z.31): 10 of 44 v2 windows hide every neighbour face from
@@ -1149,8 +1163,10 @@ function placeCell(bot, ctx, st, c, item, now) {
   if (moving) return
   if (ent) {
     // Door only from the apron itself (revmux 02): reach alone would let a
-    // body inside the ground floor close the tower on itself. y rounds, not
-    // floors: on a soul sand/mud/path apron the feet sit ~0.1 low (revmux 03).
+    // body inside the ground floor close the tower on itself. The blast
+    // stance (g0z.50) is exact for the same reason: the facing comes from
+    // the stance. y rounds, not floors: on a soul sand/mud/path apron the
+    // feet sit ~0.1 low (revmux 03).
     const bp = bodyPos(bot)
     if (!bp || Math.floor(bp.x) !== ent.x || Math.floor(bp.z) !== ent.z || Math.round(bp.y) !== ent.y) {
       ctx.castleGoalIdx = -1
@@ -1185,7 +1201,8 @@ function placeCell(bot, ctx, st, c, item, now) {
   flight(ctx, 'placeInFlight', c, async (token) => {
     try {
       await bot.equip(item, 'hand')
-      await bot.placeBlock(ref.ref, ref.face)
+      if (c.kind === 'blast_furnace' && c.stance) await placeFaced(bot, ref, c)
+      else await bot.placeBlock(ref.ref, ref.face)
       if (live(ctx, token)) ctx.castleFails = null
     } catch (_) {
       if (!live(ctx, token)) return
@@ -1789,6 +1806,7 @@ module.exports.progress = progress
 module.exports.usable = usable
 module.exports.kindOf = kindOf
 module.exports.noteDry = noteDry
+module.exports.placeFaced = placeFaced // g0z.50: the g0z.47 stairs reuse the faced placement
 module.exports.findItem = findItem
 module.exports.fillItem = fillItem
 module.exports.dirtOnHand = dirtOnHand
