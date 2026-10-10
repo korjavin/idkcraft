@@ -987,3 +987,51 @@ describe('gather walk re-issue (idkcraft-6x7.14)', () => {
     assert.equal(ctx.gather.streak, 0, 'no strike spent')
   })
 })
+
+describe('gather far/memory gate (idkcraft-atl.24)', () => {
+  // Prod 10-09: alone with a home at y=65, the far search walked to
+  // underground non-tree logs and trees 190 blocks out. Home at the origin;
+  // a bare oak_log column 70 out at y=5 (home-60, inside the 96 pool) and a real tree 120 out.
+  // Every far scan sees every spot; stone at the probes loads to 160.
+  function world(extra = {}) {
+    const names = {
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+      '70,5,0': 'oak_log', '70,6,0': 'oak_log',
+      '120,64,0': 'oak_log', '120,65,0': 'oak_log', '120,66,0': 'oak_leaves',
+      ...extra,
+    }
+    const spots = Object.keys(names).filter((k) => names[k] === 'oak_log').map((k) => pos(...k.split(',').map(Number)))
+    const bot = mockBot({ spots, names, bare: true })
+    const rawFind = bot.findBlocks.bind(bot)
+    bot.findBlocks = (opts) => (opts && opts.point ? rawFind(opts) : []) // sync 48 empty
+    const ctx = { ...freshCtx(), home: { site: { x: 0, y: 65, z: 0 } } }
+    return { bot, ctx }
+  }
+  const run = (bot, ctx) => {
+    for (let i = 0; i < 10 && !ctx.lastGoalKey.startsWith('gather:') && !String(ctx.stepStatus).startsWith('failed'); i++) gather(bot, ctx, null, {})
+  }
+
+  it('alone: never commits past the 64 leash nor to the deep column, ends failed:no-trees', () => {
+    const { bot, ctx } = world()
+    run(bot, ctx)
+    assert.equal(bot.calls.setGoal, 0, `goal: ${ctx.lastGoalKey}`)
+    assert.equal(ctx.stepStatus, 'failed:no-trees')
+  })
+
+  it('player online, no task: the 120 tree is still taken, the deep column is not', () => {
+    const { bot, ctx } = world()
+    bot.players = { Steve: { username: 'Steve' } }
+    run(bot, ctx)
+    assert.match(ctx.lastGoalKey, /^gather:120,64,0$/)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('a protected far hit lands in gskip and the search takes the next ring hit', () => {
+    // Bare column at the surface: above the floor, but no crown (decor).
+    const { bot, ctx } = world({ '80,64,0': 'oak_log', '80,65,0': 'oak_log' })
+    bot.players = { Steve: { username: 'Steve' } }
+    run(bot, ctx)
+    assert.ok(ctx.gather.gskip.has('80,64,0'), `gskip: ${[...ctx.gather.gskip]}`)
+    assert.match(ctx.lastGoalKey, /^gather:120,64,0$/)
+  })
+})

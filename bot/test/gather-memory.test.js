@@ -126,3 +126,13 @@ describe('gather from memory (idkcraft-t9u)', () => {
     assert.ok(!bot.lines.some((l) => /cannot reach|no trees/.test(l)), `lines: ${bot.lines}`)
   })
 })
+
+describe('gather memory gate (idkcraft-atl.24)', () => {
+  it('a remembered log under the surface floor is skipped for a surface one', () => {
+    const bot = mockBot({ names: {} }) // nothing loaded
+    const ctx = { ...freshCtx(), home: { site: { x: 0, y: 65, z: 0 } } }
+    resources.noteSpots(ctx, [{ x: 10, y: 30, z: 0, name: 'oak_log' }, { x: 50, y: 64, z: 0, name: 'oak_log' }], Date.now())
+    gather(bot, ctx, null, {})
+    assert.match(ctx.lastGoalKey, /^gather:50,64,0$/)
+  })
+})
