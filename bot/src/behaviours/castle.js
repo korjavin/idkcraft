@@ -95,6 +95,16 @@ function usable(bot, kind, ctx) {
   return Math.max(0, held(bot, kind) - reserveOf(kind) - carried(ctx, kind))
 }
 
+// Item -> material kind (g0z.45: the stockpile's generic decor keep): the
+// first ITEM matcher that takes the name, or null.
+function kindOf(name) {
+  if (typeof name !== 'string') return null
+  for (const kind of Object.keys(ITEM)) {
+    try { if (ITEM[kind](name)) return kind } catch (_) { /* next */ }
+  }
+  return null
+}
+
 // Birch first (g0z.4: the Fachwerk infill prefers light wood), else any.
 function findItem(bot, kind, ctx) {
   const want = ITEM[kind]
@@ -658,7 +668,9 @@ function prepTargets(bot, ctx, st, now) {
 // the ring line, dy 0..3) — ~1.3k reads, not the 14k box scan — and
 // ownership there is isOwnPlaced only: cobblestone by name outside the box
 // may be the owner's path. Panes sit on plan air cells, so the plan skip
-// covers laid decor too. The band idx strides over the grown box
+// covers them; the g0z.45 upper fence row sits off-plan, so laid decor
+// skips by a decor match instead (own scaffold in an OPEN row cell still
+// clears — it is in the decor's way). The band idx strides over the grown box
 // ((dx+1)*(d+2)+(dz+1), dy < 40), unique across the band, on its own base:
 // band blocked entries live until swept (pick, below), so refusals escalate
 // to retired instead of re-chasing every 30 s — box-litter entries still
@@ -671,6 +683,7 @@ function litterTargets(bot, ctx, st, now) {
   if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) return c0.list.filter((c) => !done(bot, c))
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
+  const dt = blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).at
   const placed = ctx.placedByBot instanceof Set ? ctx.placedByBot : new Set()
   const list = []
   if (complete) {
@@ -679,6 +692,8 @@ function litterTargets(bot, ctx, st, now) {
       if (at.has(k)) continue
       const n = nameAt(bot, cell)
       if (n == null || AIR.has(n) || n === 'water') continue
+      const dc = dt.get(k)
+      if (dc && blueprint.matches(dc.kind, n)) continue // laid decor (g0z.45): never litter
       if (!isOwnPlaced(ctx, { position: cell, name: n })) continue
       const dx = cell.x - st.site.x
       const dy = cell.y - st.site.y
@@ -1743,6 +1758,7 @@ module.exports.EARTH_BUDGET = EARTH_BUDGET
 module.exports.progressByKind = progressByKind
 module.exports.progress = progress
 module.exports.usable = usable
+module.exports.kindOf = kindOf
 module.exports.findItem = findItem
 module.exports.fillItem = fillItem
 module.exports.dirtOnHand = dirtOnHand

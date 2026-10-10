@@ -36,7 +36,8 @@
 #   tracking resumes back inside the leash and a never-back run FAILs;
 #   keep N early in day 1 — dusk is ~10 min in),
 #   CASTLE_SAND (1 = g0z.38: a sand patch beside the pad; with
-#   CASTLE_SEED=complete the verdict adds panes=<laid>/44),
+#   CASTLE_SEED=complete the verdict adds panes=<laid>/44 and
+#   upper-fence=<laid>/109 (g0z.45)),
 #   CASTLE_BLOCKED (0 = none; N > 0 seeds N blocked plan cells after the
 #   order — protected oak logs + a foreign chest, vmzq.27's stall mix),
 #   CASTLE_BURY / CASTLE_BURY_AFTER (vmzq.37: N > 0 buries the bot pickless

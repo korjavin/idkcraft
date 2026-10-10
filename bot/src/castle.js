@@ -443,12 +443,20 @@ function absPlan(site, rot, version) {
 // 'banner' (g0z.32): two wall banners flanking the gate, in the air cell
 // outside the gate wall above the low windows; appended so the pane idx
 // stay put. `wall` is the block clicked (its outward face hangs it).
+// 'fence' (g0z.45): the second fence row — one fence cell at dy 1 over every
+// v2 fence ring cell, closing the 1-high foothold crossing (a mob on an
+// adjacent 1-high block steps over a plain fence; a carpet on the post does
+// not stop it — the bead's research verdict). Placed on the lower post's top
+// face through the usual findRef (below first); appended so the pane and
+// banner idx stay put.
 const DECOR_BASE = 3000000
 const DECOR = {
   2: BLUEPRINTS[2].PLAN
     .filter((c) => c.kind === 'air' && outerLine(c.dx, c.dz) && !(c.dx === FULL_DOOR.dx && c.dz === FULL_DOOR.dz))
     .map((c) => ({ dx: c.dx, dy: c.dy, dz: c.dz, kind: 'pane' }))
-    .concat([13, 17].map((dx) => ({ dx, dy: 2, dz: 6, kind: 'banner', wall: { dx, dy: 2, dz: 7 } }))),
+    .concat([13, 17].map((dx) => ({ dx, dy: 2, dz: 6, kind: 'banner', wall: { dx, dy: 2, dz: 7 } })))
+    .concat(BLUEPRINTS[2].PLAN.filter((c) => c.kind === 'fence')
+      .map((c) => ({ dx: c.dx, dy: c.dy + 1, dz: c.dz, kind: 'fence' }))),
 }
 
 let decorCache = null
