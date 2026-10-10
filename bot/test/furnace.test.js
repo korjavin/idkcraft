@@ -542,6 +542,17 @@ describe('furnace smelt (load coal or planks, take, settle)', () => {
     assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
   })
 
+  it('a resumed run walking back from far gets progress credit again', async () => {
+    const bot = mockBot({ at: { x: 97, y: 64, z: 0 }, blocks: { '100,64,0': 'furnace' } })
+    const ctx = { home: { furnace: { x: 100, y: 64, z: 0 } } }
+    await tick(bot, ctx) // arrives (no window: smelt fails, run stays for the resume)
+    ctx.furnace.settled = false
+    ctx.stepStatus = undefined
+    bot.entity.position.x = 40 // body taken away mid-run
+    for (let i = 0; i < 50; i++) { await tick(bot, ctx); bot.entity.position.x += 1 }
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
   it('a creeping walk hits the hard cap', async () => {
     const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, blocks: { '1000,64,0': 'furnace' } })
     const ctx = { home: { furnace: { x: 1000, y: 64, z: 0 } } }

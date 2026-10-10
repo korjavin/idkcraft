@@ -189,7 +189,7 @@ function doCraft(bot, ctx, f) {
     walkTo(bot, ctx, f, `furnace-table:${st.pos.x},${st.pos.y},${st.pos.z}`, st.pos, 'table-unreachable')
     return // walk into reach, craft on a later tick
   }
-  f.walkTicks = 0
+  f.walkTicks = 0; f.walkKey = null // arrival ends the leg: a later walk back starts fresh
   const found = craftMod.recipes(bot, 'furnace', st.block)
   if (!found || found.length === 0) { fail(ctx, 'no-furnace-recipe'); return }
   if (typeof bot.craft !== 'function') { fail(ctx, 'no-craft-api'); return }
@@ -247,7 +247,7 @@ function doPlaceV2(bot, ctx, f) {
     walkTo(bot, ctx, f, `furnace-place:${spot.x},${spot.y},${spot.z}`, spot, 'furnace-unreachable')
     return // walk into reach, place on a later tick
   }
-  f.walkTicks = 0
+  f.walkTicks = 0; f.walkKey = null // arrival ends the leg: a later walk back starts fresh
   let ref = null
   try {
     ref = bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z))
@@ -507,7 +507,7 @@ function furnace(bot, ctx, target, state) {
     walkTo(bot, ctx, f, `furnace-walk:${spot.x},${spot.y},${spot.z}`, spot, 'furnace-unreachable')
     return // walk into reach, smelt on a later tick
   }
-  f.walkTicks = 0
+  f.walkTicks = 0; f.walkKey = null // arrival ends the leg: a later walk back starts fresh
   f.phase = 'smelt'
   doSmelt(bot, ctx, f, spot)
 }
