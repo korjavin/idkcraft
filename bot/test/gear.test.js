@@ -354,12 +354,48 @@ describe('gear tick', () => {
       cells: { '100,64,0': 'crafting_table' },
     })
     const fctx = { home: home({ table: { x: 100, y: 64, z: 0 } }), stepStatus: 'running' }
-    for (let i = 0; i < 21; i++) {
-      fctx.stepStatus = 'running'
-      gear(far, fctx)
-    }
+    for (let i = 0; i < 21; i++) gear(far, fctx)
+    assert.equal(fctx.stepStatus, 'running', 'first leg tick counts as progress')
+    gear(far, fctx)
     assert.equal(fctx.stepStatus, 'failed:gear-table-far')
     assert.equal(far.calls.goals.length, 1, 'one goal issue, then patience')
+  })
+  // g0z.42: from forage the table walk outlasts 20 ticks while closing in.
+  it('a long table walk that keeps closing distance is not abandoned', () => {
+    const bot = mockBot({
+      items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }],
+      cells: { '100,64,0': 'crafting_table' },
+    })
+    const ctx = { home: home({ table: { x: 100, y: 64, z: 0 } }), stepStatus: 'running' }
+    for (let i = 0; i < 60; i++) {
+      gear(bot, ctx)
+      assert.equal(ctx.stepStatus, 'running', `tick ${i}`)
+      bot.entity.position.x += 1
+    }
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.calls.goals.length, 1, 'one goal issue, then patience')
+  })
+  it('a table walk that stalls partway still fails honestly', () => {
+    const bot = mockBot({
+      items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }],
+      cells: { '100,64,0': 'crafting_table' },
+    })
+    const ctx = { home: home({ table: { x: 100, y: 64, z: 0 } }), stepStatus: 'running' }
+    for (let i = 0; i < 10; i++) { gear(bot, ctx); bot.entity.position.x += 1 }
+    assert.equal(ctx.stepStatus, 'running')
+    for (let i = 0; i < 22; i++) gear(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:gear-table-far')
+  })
+  it('a creeping table walk hits the hard cap (revmux 01 core-1)', () => {
+    const bot = mockBot({
+      items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }],
+      cells: { '1000,64,0': 'crafting_table' },
+    })
+    const ctx = { home: home({ table: { x: 1000, y: 64, z: 0 } }), stepStatus: 'running' }
+    for (let i = 0; i < 300; i++) { gear(bot, ctx); bot.entity.position.x += 2 }
+    assert.equal(ctx.stepStatus, 'running')
+    gear(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:gear-table-far')
   })
   it('furnace leg: in-progress drives on, done continues, status preserved', () => {
     const mk = (leg) => {

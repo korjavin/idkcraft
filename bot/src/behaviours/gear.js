@@ -46,6 +46,7 @@ const { Vec3 } = require('vec3')
 const craftMod = require('./craft')
 const { countItems, wornItems } = require('../perception')
 const { say } = require('./util')
+const { stepDone, stepFailed, failReason } = require('../step')
 const metrics = require('../metrics')
 
 // Ladder data: tiers in order, pieces in order. kind+owner name the want;
@@ -155,7 +156,9 @@ function tossed(name, haveCount, ctx) {
     return false
   }
 }
-const WALK_GIVE_UP = 20
+const WALK_GAIN = 1 // blocks closer than the leg's best that count as progress (furnace g0z.41 shape)
+const WALK_STALL_TICKS = 20 // walk ticks without progress before failed:gear-*-far
+const WALK_CAP_TICKS = 300 // hard cap per leg, progress or not (5 min at the 1 s tick)
 
 function have(bot, name) {
   try {
@@ -543,9 +546,11 @@ function legImpl(ctx, name) {
 }
 
 function fail(ctx, item, err) {
-  ctx.stepStatus = `failed:gear-${item}`
+  stepFailed(ctx, `gear-${item}`)
   try {
-    runCtx(ctx).walkTicks = 0
+    const r = runCtx(ctx)
+    r.walkTicks = 0
+    r.walkKey = null
   } catch (_) { /* reset best-effort */ }
   try {
     console.error(`gear failed item=${item} error=${err && err.message ? err.message : err}`)
@@ -556,8 +561,11 @@ function dist3(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
-// Walk one leg with a give-up (furnace shape): an unreachable station fails
-// the step instead of idling here forever.
+// Walk one leg with a progress-based give-up (furnace g0z.41 shape):
+// walkTicks counts ticks without a WALK_GAIN closer than the leg's best,
+// so a long walk from forage to the storeroom keeps going while it closes
+// in; a stalled walk fails after WALK_STALL_TICKS, any walk after
+// WALK_CAP_TICKS.
 function walkTo(bot, ctx, key, p, reason, goal) {
   if (key !== ctx.lastGoalKey) {
     try {
@@ -566,8 +574,15 @@ function walkTo(bot, ctx, key, p, reason, goal) {
     ctx.lastGoalKey = key
   }
   const r = runCtx(ctx)
-  r.walkTicks = (r.walkTicks || 0) + 1
-  if (r.walkTicks > WALK_GIVE_UP) fail(ctx, reason)
+  if (r.walkKey !== key) { r.walkKey = key; r.walkBest = Infinity; r.walkTotal = 0; r.walkTicks = 0 }
+  let d = Infinity
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (bp && typeof bp.x === 'number') d = dist3(bp, p)
+  } catch (_) { /* unscannable: counts as no progress */ }
+  if (d <= r.walkBest - WALK_GAIN) { r.walkBest = d; r.walkTicks = 0 } else r.walkTicks = (r.walkTicks || 0) + 1
+  r.walkTotal = (r.walkTotal || 0) + 1
+  if (r.walkTicks > WALK_STALL_TICKS || r.walkTotal > WALK_CAP_TICKS) fail(ctx, reason)
 }
 
 // Stop a stale walk before a look-dependent op (z80): a walk goal left
@@ -1124,7 +1139,7 @@ function announceYield(ctx, g, bot, key, line) {
       console.log(`gear yield key=${key} line=${line}`) // ipn.15: the chat alone never reaches the logs
     } catch (_) { /* logging best-effort */ }
   }
-  ctx.stepStatus = 'done'
+  stepDone(ctx)
 }
 
 // Honest want lines (idkcraft-ipn.9): 'going to dig' is a promise forage
@@ -1174,7 +1189,7 @@ function gear(bot, ctx, target, state) {
     try {
       console.log('gear ladder complete')
     } catch (_) { /* logging best-effort */ }
-    ctx.stepStatus = 'done'
+    stepDone(ctx)
     return
   }
   const key = `${next.tier}:${next.kind}:${next.owner ? 'give' : 'self'}`
@@ -1193,7 +1208,7 @@ function gear(bot, ctx, target, state) {
         console.log(`gear hand ${plan.name}`)
       } catch (_) { /* logging best-effort */ }
     }
-    ctx.stepStatus = 'done' // handover steps own it; silent in chat
+    stepDone(ctx) // handover steps own it; silent in chat
     return
   }
   if (plan.state === 'want' || plan.state === 'wait') {
@@ -1201,7 +1216,7 @@ function gear(bot, ctx, target, state) {
     return
   }
   if (plan.state !== 'ready') {
-    ctx.stepStatus = 'done' // unknown state: safe yield, never a hold
+    stepDone(ctx) // unknown state: safe yield, never a hold
     return
   }
   if (plan.action === 'sticks') {
@@ -1225,13 +1240,14 @@ function gear(bot, ctx, target, state) {
   if (plan.action === 'smelt') {
     const impl = legImpl(ctx, 'furnace')
     if (!impl) {
-      ctx.stepStatus = 'done' // raced the slice: re-plan next tick
+      stepDone(ctx) // raced the slice: re-plan next tick
       return
     }
     const out = driveFurnace(bot, ctx, impl)
     if (!out) return // leg in progress
     if (out === 'done') return // ingots landed; re-plan next tick
-    const reason = out.startsWith('failed:') ? out.slice('failed:'.length) : out
+    const fr = failReason(out)
+    const reason = fr !== null ? fr : out
     if (reason === 'no-cobble') {
       announceYield(ctx, g, bot, 'want-cobble', honestLine(bot, ctx, bp, 'want-cobble', 'need 8 cobble for the furnace, going to dig'))
       return
@@ -1246,35 +1262,37 @@ function gear(bot, ctx, target, state) {
   if (plan.action === 'deep') {
     const impl = legImpl(ctx, 'deep')
     if (!impl) {
-      ctx.stepStatus = 'done' // raced the slice: re-plan next tick
+      stepDone(ctx) // raced the slice: re-plan next tick
       return
     }
     const out = driveDeep(bot, ctx, impl)
     if (!out) return // leg in progress
     if (out === 'done') return // diamonds landed; re-plan next tick
-    const reason = out.startsWith('failed:') ? out.slice('failed:'.length) : out
+    const dr = failReason(out)
+    const reason = dr !== null ? dr : out
     fail(ctx, `deep-${reason}`)
     return
   }
   if (plan.action === 'withdraw') {
     const cpos = ctx.home && ctx.home.chest
     if (!cpos || typeof cpos.x !== 'number') {
-      ctx.stepStatus = 'done' // raced the adoption: re-plan next tick
+      stepDone(ctx) // raced the adoption: re-plan next tick
       return
     }
     if (dist3(bp, cpos) > craftMod.TABLE_REACH) {
-      // Latch on the give-up tick (revmux 01 body-3): walkTo fails below
-      // without recording, and an unlatched plan re-offers the same
-      // unreachable walk every pick instead of degrading to want/deep.
-      if ((runCtx(ctx).walkTicks || 0) >= WALK_GIVE_UP) {
+      walkTo(bot, ctx, `gear-chest:${cpos.x},${cpos.y},${cpos.z}`, cpos, 'chest-far')
+      // Latch on the give-up tick (revmux 01 body-3): an unlatched plan
+      // re-offers the same unreachable walk every pick instead of degrading
+      // to want/deep. Post-walk: progress resets stall, so only an actual
+      // fail latches.
+      if (failReason(ctx.stepStatus) === 'gear-chest-far') {
         try {
           gearCtx(ctx).pantrySeen = ctx.gearPantryBanked || 0
         } catch (_) { /* latch best-effort */ }
       }
-      walkTo(bot, ctx, `gear-chest:${cpos.x},${cpos.y},${cpos.z}`, cpos, 'chest-far')
       return
     }
-    runCtx(ctx).walkTicks = 0
+    { const r = runCtx(ctx); r.walkTicks = 0; r.walkKey = null } // arrival ends the leg: a later walk back starts fresh
     stopSteering(bot, ctx) // z80: the chest open is look-dependent too
     runWithdraw(bot, ctx, next)
     return
@@ -1293,7 +1311,7 @@ function gear(bot, ctx, target, state) {
       walkTo(bot, ctx, `gear-table:${st.pos.x},${st.pos.y},${st.pos.z}`, st.pos, 'table-far', craftMod.tableGoal(bot, st.pos))
       return
     }
-    runCtx(ctx).walkTicks = 0
+    { const r = runCtx(ctx); r.walkTicks = 0; r.walkKey = null } // arrival ends the leg: a later walk back starts fresh
     const op = opTool(bot, next.craft || next.name, st.block)
     if (op.fail) {
       fail(ctx, op.fail)
@@ -1310,7 +1328,7 @@ function gear(bot, ctx, target, state) {
     })
     return
   }
-  ctx.stepStatus = 'done' // unknown action: safe yield, never a hold
+  stepDone(ctx) // unknown action: safe yield, never a hold
 }
 
 module.exports = gear

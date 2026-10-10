@@ -598,7 +598,8 @@ describe('ipn.6 pantry tick', () => {
   it('an unreachable chest latches on give-up, then degrades to want (body-3)', () => {
     const stacks = chestOf([['iron_ingot', 8]])
     const bot = mockBot({ items: [...TOOLS], cells: CELLS, chestStacks: stacks, at: pos(30, 64, 30) })
-    const ctx = { home: homeChest(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN }, gearPantryBanked: 1, gearRun: { walkTicks: 20 } }
+    const atBest = Math.hypot(30 - 1, 0, 30 - 0) // stalled at the same spot: no progress next tick
+    const ctx = { home: homeChest(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN }, gearPantryBanked: 1, gearRun: { walkKey: 'gear-chest:1,64,0', walkBest: atBest, walkTicks: 20, walkTotal: 20 } }
     gear(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:gear-chest-far')
     assert.equal(ctx.gear.pantrySeen, 1, 'give-up latches the pantry')
