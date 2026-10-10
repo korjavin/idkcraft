@@ -506,6 +506,40 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-door')
   })
 
+  it('a dropped craft line surfaces as a classified log line (idkcraft-pdjx)', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'door', left: 1 }; return 'door-none' }
+    fetch.deps.craftItem = () => ({ done: false, line: 'need a crafting table' })
+    const bot = makeBot({ items: [{ name: 'oak_log', count: 14 }] })
+    const ctx = { castle: castleState() }
+    const lines = []
+    const origLog = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      fetch(bot, ctx)
+    } finally {
+      console.log = origLog
+    }
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-door')
+    assert.ok(lines.some((l) => l === 'castlefetch door: craft failed: need a crafting table'), JSON.stringify(lines))
+  })
+
+  it('a craft failure without a line stays quiet (idkcraft-pdjx)', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'door', left: 1 }; return 'door-none' }
+    fetch.deps.craftItem = () => ({ done: false })
+    const bot = makeBot({ items: [{ name: 'oak_log', count: 14 }] })
+    const ctx = { castle: castleState() }
+    const lines = []
+    const origLog = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      fetch(bot, ctx)
+    } finally {
+      console.log = origLog
+    }
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-door')
+    assert.ok(!lines.some((l) => l.includes('craft failed')), JSON.stringify(lines))
+  })
+
   // Buried / deep stone is never an exposed-stone target: the trench (g0z.15)
   // is the only way down.
   const quarrying = (ctx) => ctx.stepStatus === undefined && ctx.castleFetch.target && ctx.castleFetch.target.quarry === true
