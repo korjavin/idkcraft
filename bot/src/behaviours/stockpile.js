@@ -614,7 +614,7 @@ function chestSpotFor(bot, ctx) {
     // Bedroom cells never take a new chest (idkcraft-4nx, the equip roadside
     // precedent): the bed step fails loud on blocked cells by design, so the
     // placer avoids them. The adopt scan above still claims a standing chest
-    // wherever it is. Deferred require (beds->stockpile cycle).
+    // wherever it is. Reads the bedfacts leaf (oqul.13), not the beds step.
     try {
       if (require('./bedfacts').isBedroomCell(ctx.home, c.x, c.y, c.z)) continue
     } catch (_) { /* untestable home: place as before */ }

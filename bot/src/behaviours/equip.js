@@ -458,8 +458,8 @@ function tableFor(bot, ctx) {
     if (cell && cell.name && cell.name !== 'air' && cell.name !== 'cave_air' && cell.name !== 'void_air' &&
         !PLACE_OVER.has(cell.name)) continue
     // Bedroom cells are never table spots (idkcraft-4nx: a roadside table on
-    // B-foot blocked the bed, which fails loud by design). Deferred require
-    // (beds->craftany->equip cycle); unreadable reads as placeable.
+    // B-foot blocked the bed, which fails loud by design). Reads the
+    // bedfacts leaf (oqul.13); unreadable reads as placeable.
     try {
       if (require('./bedfacts').isBedroomCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
       // Nor any wall/door cell of the plan (idkcraft-d7i: a station in the
