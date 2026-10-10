@@ -701,9 +701,11 @@ function holdStill(bot, ctx) {
 // A failed attempt must not own the tick (revmux 01-review): only a
 // sleeping body skips the rw4.8 door check — an awake one re-closes the
 // door and re-evaluates shelter between tries. Transient failures (dusk,
-// monsters near) back off; server-side refusals (occupied, obstructed,
-// timeout) give up tonight and retry tomorrow. A dawn that finds the body
-// still asleep wakes it (missed wake event).
+// monsters near, a silent server refusal while the bot clock runs ahead)
+// back off; the silent refusal is capped (a permanently refused bed gives
+// up after a few tries); hard refusals (occupied, too far) give up tonight
+// and retry tomorrow. A dawn that finds the body still asleep wakes it
+// (missed wake event).
 const SLEEP_REACH = 2 // from the head block (its nearest face), see headGap
 // Body to the head block's nearest x/z face (idkcraft-6x7.22). The old
 // corner read lost a castle bed's diagonal arrival (g0z.30); g0z.30's
@@ -717,6 +719,7 @@ function headGap(bp, head) {
 }
 const SLEEP_STALL_TICKS = 30
 const SLEEP_RETRY_TICKS = 30 // transient backoff: covers dusk (~27 ticks), re-tries mobs nightly
+const SLEEP_REFUSAL_TRIES = 3 // g0z.43: silent server refusals retry this often, then give up tonight
 // Night bed (rw4.20): a carried bed with bedroom A empty is laid before the
 // sleep — the beds step is day-only, and a bump that ate bed A's foot (prod,
 // rig HOUSE-BUMP) left the bot holding a red_bed all night. Plain case only:
@@ -821,7 +824,15 @@ function sleepTick(bot, ctx, home, st) {
       } catch (err) {
         const msg = err && err.message ? String(err.message) : ''
         if (/monsters nearby|not night/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
-        else st.sleepGiveUp = true // occupied/obstructed/timeout: hold tonight, retry tomorrow
+        else if (/not sleeping/i.test(msg)) {
+          // Silent server refusal (clock skew under lag): back off and retry
+          // a few times, then give up — a permanently refused bed must not
+          // click all night, and each timed-out try leaks mineflayer's
+          // once('sleep') listener (revmux 01-review).
+          st.sleepRefusals = (st.sleepRefusals || 0) + 1
+          if (st.sleepRefusals < SLEEP_REFUSAL_TRIES) st.sleepCooldown = SLEEP_RETRY_TICKS
+          else st.sleepGiveUp = true
+        } else st.sleepGiveUp = true // occupied/too-far: hold tonight, retry tomorrow
         if (!st.sleepErrSaid) {
           st.sleepErrSaid = true
           try { console.log(`sleep failed: ${msg || err}`) } catch (_) { /* logging best-effort */ }
