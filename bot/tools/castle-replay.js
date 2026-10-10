@@ -467,15 +467,19 @@ function idleRespawnPoint(home, spawn) {
 function createIdleTrack(home) {
   const h = home.site
   const floor = require('../src/resources').surfaceFloor({ home })
-  const st = { maxdist: 0, miny: null, undergroundS: 0, lastT: null, lastUnder: false, diedS: null, rehomeS: null }
+  const st = { maxdist: 0, miny: null, undergroundS: 0, lastT: null, lastUnder: false, diedS: null, rehomeS: null, paused: false }
   return {
     st,
     floor,
     // Forced death (6x7.25): the respawn walk from world spawn is not
     // judged; tracking resumes at the first sample back inside the leash.
-    died(t) { st.diedS = t; st.rehomeS = null; st.lastT = null; st.lastUnder = false },
+    // pause() spans the kill until the body stands at the respawn point
+    // (the sampler timer runs on its own: a stale or fresh position read in
+    // between must not count).
+    pause() { st.paused = true },
+    died(t) { st.paused = false; st.diedS = t; st.rehomeS = null; st.lastT = null; st.lastUnder = false },
     onSample(t, p) {
-      if (!p || typeof p.y !== 'number') return
+      if (st.paused || !p || typeof p.y !== 'number') return
       const d = Math.hypot(p.x - h.x, p.z - h.z)
       if (st.diedS != null && st.rehomeS == null) {
         if (d > IDLE_MAXDIST) return
@@ -1067,10 +1071,14 @@ async function main() {
       await rcon(`clear ${FOLLOWER}`).catch((e) => fail('idle-death', e.message))
       await rcon(`spawnpoint ${FOLLOWER} ${rp.x} ${rp.y} ${rp.z}`).catch((e) => fail('idle-death', e.message))
       const d0 = deaths
+      if (idle) idle.pause()
       await rcon(`kill ${FOLLOWER}`).catch((e) => fail('idle-death', e.message))
       for (let i = 0; i < 20 && deaths === d0; i++) await sleep(500)
       if (deaths === d0) fail('idle-death', 'kill never reached the follower')
       idleForced = deaths - d0
+      const atRp = () => { try { const p = follower.entity.position; return Math.hypot(p.x - rp.x - 0.5, p.z - rp.z - 0.5) <= 4 } catch (_) { return false } }
+      for (let i = 0; i < 60 && !atRp(); i++) await sleep(500)
+      if (!atRp()) fail('idle-death', `never respawned at ${rp.x} ${rp.z}`)
       if (idle) idle.died((idleDeathAt - t0) / 1000)
       origLog(`CASTLE-RIG idle-death: at ${(idleDeathAt - t0) / 1000 | 0}s, cleared + killed, respawn ${rp.x} ${rp.y} ${rp.z} (world spawn ${worldSpawn.x} ${worldSpawn.y} ${worldSpawn.z})`)
     }

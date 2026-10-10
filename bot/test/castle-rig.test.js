@@ -815,6 +815,8 @@ describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
   it('forced death (6x7.25): the respawn walk is not judged, tracking resumes inside the leash, never-back FAILs', () => {
     const t = createIdleTrack(home)
     t.onSample(0, { x: 100, y: 70, z: 200 })
+    t.pause()
+    t.onSample(179, { x: 325, y: 150, z: 200 }) // respawn read before died(): not judged
     t.died(180)
     t.onSample(181, { x: 700, y: 30, z: 800 }) // world spawn: not judged
     t.onSample(300, { x: 100 + IDLE_MAXDIST + 1, y: 70, z: 200 })
@@ -824,6 +826,13 @@ describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
     t.onSample(500, { x: 100, y: 45, z: 200 }) // back home, then a dive: judged
     assert.equal(t.tag(), ', idle-maxdist=80, idle-miny=45, idle-underground-s=0, idle-death=180s, idle-rehome=400s')
     assert.equal(t.verdict(0).line, 'CASTLE-RIG idle: FAIL (miny 45<54) floor=54')
+  })
+
+  it('idleRespawnPoint: 225 from home toward the world spawn, the spawn itself when closer', () => {
+    const { idleRespawnPoint } = require('../tools/castle-replay')
+    assert.deepEqual(idleRespawnPoint({ x: 0, z: 0 }, { x: 600, z: 0 }), { x: 225, y: 150, z: 0 })
+    assert.deepEqual(idleRespawnPoint({ x: 0, z: 0 }, { x: -60, z: 80 }), { x: -60, y: 150, z: 80 })
+    assert.deepEqual(idleRespawnPoint({ x: 5, z: 7 }, { x: 5, z: 7 }), { x: 5, y: 150, z: 7 })
   })
 
   it('castle-rig.sh validates CASTLE_IDLE and only exports it (default output untouched)', () => {
