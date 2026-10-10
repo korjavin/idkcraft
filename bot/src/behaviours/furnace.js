@@ -43,6 +43,9 @@ const ORE_PER_FUEL = 8 // one coal smelts eight ore
 const ORE_PER_PLANK = 1.5 // one plank burns 300 ticks = 1.5 items
 const STALL_TICKS = 120 // output-idle ticks with input+fuel before failed:smelt-stalled
 const FUEL_GRACE_TICKS = 15 // output-idle ticks before failed:no-fuel (one cook + slop)
+const WALK_GAIN = 1 // blocks closer than the leg's best that count as progress
+const WALK_STALL_TICKS = 20 // walk ticks without progress before failed:*-unreachable
+const WALK_CAP_TICKS = 300 // hard cap per leg, progress or not (5 min at the 1 s tick)
 
 function botPos(bot) {
   try {
@@ -158,14 +161,20 @@ function plankStack(bot) {
   } catch (_) { return null }
 }
 
-// Walk one leg with a give-up: an unreachable table/furnace fails the
-// step instead of idling here forever (equip walkWaits shape).
+// Walk one leg with a progress-based give-up (g0z.41, craftany lastDist
+// shape): walkTicks counts ticks without a WALK_GAIN closer than the leg's
+// best, so a long walk from the quarry keeps going while it closes in; a
+// stalled walk fails after WALK_STALL_TICKS, any walk after WALK_CAP_TICKS.
 function walkTo(bot, ctx, f, key, p, reason) {
   if (key !== ctx.lastGoalKey) {
     issueGoal(bot, ctx, new goals.GoalNear(p.x, p.y, p.z, 3), key, false)
   }
-  f.walkTicks = (f.walkTicks || 0) + 1
-  if (f.walkTicks > 20) fail(ctx, reason)
+  if (f.walkKey !== key) { f.walkKey = key; f.walkBest = Infinity; f.walkTotal = 0; f.walkTicks = 0 }
+  const bp = botPos(bot)
+  const d = bp ? dist3(bp, p) : Infinity
+  if (d <= f.walkBest - WALK_GAIN) { f.walkBest = d; f.walkTicks = 0 } else f.walkTicks = (f.walkTicks || 0) + 1
+  f.walkTotal += 1
+  if (f.walkTicks > WALK_STALL_TICKS || f.walkTotal > WALK_CAP_TICKS) fail(ctx, reason)
 }
 
 // Craft one furnace at the verified table (table block always passed:
@@ -180,7 +189,7 @@ function doCraft(bot, ctx, f) {
     walkTo(bot, ctx, f, `furnace-table:${st.pos.x},${st.pos.y},${st.pos.z}`, st.pos, 'table-unreachable')
     return // walk into reach, craft on a later tick
   }
-  f.walkTicks = 0
+  f.walkTicks = 0; f.walkKey = null // arrival ends the leg: a later walk back starts fresh
   const found = craftMod.recipes(bot, 'furnace', st.block)
   if (!found || found.length === 0) { fail(ctx, 'no-furnace-recipe'); return }
   if (typeof bot.craft !== 'function') { fail(ctx, 'no-craft-api'); return }
@@ -238,7 +247,7 @@ function doPlaceV2(bot, ctx, f) {
     walkTo(bot, ctx, f, `furnace-place:${spot.x},${spot.y},${spot.z}`, spot, 'furnace-unreachable')
     return // walk into reach, place on a later tick
   }
-  f.walkTicks = 0
+  f.walkTicks = 0; f.walkKey = null // arrival ends the leg: a later walk back starts fresh
   let ref = null
   try {
     ref = bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z))
@@ -498,7 +507,7 @@ function furnace(bot, ctx, target, state) {
     walkTo(bot, ctx, f, `furnace-walk:${spot.x},${spot.y},${spot.z}`, spot, 'furnace-unreachable')
     return // walk into reach, smelt on a later tick
   }
-  f.walkTicks = 0
+  f.walkTicks = 0; f.walkKey = null // arrival ends the leg: a later walk back starts fresh
   f.phase = 'smelt'
   doSmelt(bot, ctx, f, spot)
 }
