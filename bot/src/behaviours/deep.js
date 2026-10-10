@@ -43,7 +43,7 @@ const body = require('../body')
 const { Vec3 } = require('vec3')
 const resources = require('../resources')
 const danger = require('../danger')
-const bring = require('./bring')
+const bring = require('./bringbase') // oqul.14: the shared bring helpers (countDrop/progressed/hasPickaxe) live here now
 const stuck = require('../stuck')
 const exploreMod = require('./explore')
 const forageMod = require('./forage')
@@ -484,8 +484,8 @@ function digOne(bot, ctx, d, cell, name, nextPhase) {
   // target diamond still mines when the free slot fits it (a roomless
   // digcell leaves the diamond and climbs out instead of burning the drop).
   try {
-    const stockpile = require('./stockpile')
-    if (stockpile && typeof stockpile.slotReserved === 'function' && stockpile.slotReserved(bot, ctx)) {
+    const packroom = require('./packroom')
+    if (packroom && typeof packroom.slotReserved === 'function' && packroom.slotReserved(bot, ctx)) {
       if (!(d.phase === 'digcell' && dropFits(bot))) {
         guardTrip(bot, ctx, d, 'pack-full', null, null)
         return

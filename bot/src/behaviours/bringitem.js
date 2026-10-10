@@ -10,15 +10,16 @@
 // and resumes the craft when the gap is filled.
 //
 // Load direction is one-way: bring.js requires this module at the top, and
-// the terminal actions (refuse/done/countDrop) and the WANT amounts live in
-// bringbase.js (idkcraft-oqul.11) — no require back into bring.js.
+// the terminal actions (refuse/done/countDrop), the WANT amounts and the
+// pickaxe tier gate (oqul.14) live in bringbase.js — no require back into
+// bring.js.
 
 const stockpileMod = require('./stockpile')
 const woolMod = require('./wool')
 const bedMod = require('./bed')
 const { countItems } = require('../perception')
 const { say } = require('./util')
-const { WANT_ORE, WANT_MAX, refuse, done, countDrop } = require('./bringbase')
+const { WANT_ORE, WANT_MAX, refuse, done, countDrop, hasPickaxe, tierRefusal } = require('./bringbase')
 
 // Deferred require, same cycle as bring.js had: craftany->craft->goal
 // closes the loop back through forage/deliver->bring, so a top-level
@@ -35,12 +36,6 @@ let gearMod = null
 function gear() {
   if (!gearMod) gearMod = require('./gear')
   return gearMod
-}
-
-// Call-time only (ipn.20): the ore sub's tier gate reads bring.js's
-// pickaxe helpers; by the time a tick or chat order runs, bring is loaded.
-function bringTier() {
-  return require('./bring')
 }
 
 // Seams for unit tests (castlefetch deps shape): one furnace tick through
@@ -363,8 +358,7 @@ function smeltRung(bot, ctx, o, sg, target) {
   }
   if (o.subFor) return { open: false, line: `need ${n} ${sg.out}` }
   if (m.ore.endsWith('_ore')) {
-    const b = bringTier()
-    if (!b.hasPickaxe(bot, m.ore)) return { open: false, line: b.tierRefusal(bot, m.ore) }
+    if (!hasPickaxe(bot, m.ore)) return { open: false, line: tierRefusal(bot, m.ore) }
   }
   // Charcoal digs the pack wood, or any log when woodless (the find
   // re-points the drop at the concrete species).

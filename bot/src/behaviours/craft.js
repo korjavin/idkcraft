@@ -2,7 +2,7 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
-const { NEED_LOGS } = require('../budget')
+const { NEED_LOGS, TABLE_REACH } = require('../budget')
 const { countItems } = require('../perception')
 const { isStone } = require('../castle')
 const { stepDone, stepFailed, stepGen } = require('../step')
@@ -18,7 +18,6 @@ const { issueGoal, clearGoal } = require('./util')
 // table only when missing everywhere; door only at a placed table.
 // A placed table appears only via ctx.home.table (the build step places
 // it): a table sitting in the inventory does not unlock the door.
-const TABLE_REACH = 4
 const DOOR_WALK_GIVE_UP = 20 // still ticks before the door's table walk fails (craftany's WALK_GIVE_UP)
 
 function tally(bot, suffix) {
@@ -801,10 +800,10 @@ async function freeSlot(bot, opts) {
 // exit. True iff a slot freed.
 async function shedForQuest(bot, ctx) {
   try {
-    let stockpile = null
-    try { stockpile = require('./stockpile') } catch (_) { stockpile = null }
-    if (!stockpile || typeof stockpile.reserveCorner !== 'function') return false
-    if (!stockpile.reserveCorner(bot, ctx)) return false
+    let packroom = null
+    try { packroom = require('./packroom') } catch (_) { packroom = null }
+    if (!packroom || typeof packroom.reserveCorner !== 'function') return false
+    if (!packroom.reserveCorner(bot, ctx)) return false
     if (ctx && ctx._shedInFlight) return false
     let width = -1
     try {
@@ -830,9 +829,9 @@ function reserveBlocks(bot, recipe, count, opts) {
   try {
     const item = opts && opts.item
     if (typeof item !== 'string' || RESERVE_EXEMPT.has(item)) return false
-    const stockpile = require('./stockpile')
-    if (!stockpile || typeof stockpile.slotReserved !== 'function') return false
-    if (!stockpile.slotReserved(bot, opts && opts.ctx)) return false
+    const packroom = require('./packroom')
+    if (!packroom || typeof packroom.slotReserved !== 'function') return false
+    if (!packroom.slotReserved(bot, opts && opts.ctx)) return false
     return consumesLastSlot(roomDetail(bot, resultOf(bot, recipe, item), count, recipe))
   } catch (_) {
     return false
@@ -924,10 +923,10 @@ function stackCount(s) {
 
 // Bankable total for the before/after log line: junk plus above-ceiling
 // wood (g0z.26).
-function bankableTotal(bot, ctx, stockpile) {
+function bankableTotal(bot, ctx, packroom) {
   let n = junkTotal(bot, ctx)
   try {
-    const mod = stockpile || require('./stockpile')
+    const mod = packroom || require('./packroom')
     if (mod && typeof mod.surplusWood === 'function') {
       for (const w of mod.surplusWood(bot, ctx)) n += w.count
     }
@@ -939,10 +938,10 @@ function bankableTotal(bot, ctx, stockpile) {
 // chest when in reach, then ANY chest block in reach (owner 2026-10-06 —
 // a roadside craft banks into whatever chest stands nearby; the bot never
 // throws anything away). withChest verifies each candidate is still a chest.
-function chestCandidates(bot, ctx, stockpile) {
+function chestCandidates(bot, ctx, packroom) {
   const out = []
   try {
-    const reach = (stockpile && stockpile.INTERACT_REACH) || 4
+    const reach = (packroom && packroom.INTERACT_REACH) || 4
     const bp = bot && bot.entity && bot.entity.position
     if (!bp || typeof bp.x !== 'number') return out
     const c = ctx && ctx.home && ctx.home.chest
@@ -982,17 +981,17 @@ async function ensureRoom(bot, recipe, count, opts) {
   // path. A far or unreadable chest skips silently — a mid-craft walk would
   // stall the op on the window timeout.
   if (ctx) {
-    let stockpile = null
-    try { stockpile = require('./stockpile') } catch (_) { stockpile = null }
+    let packroom = null
+    try { packroom = require('./packroom') } catch (_) { packroom = null }
     const spares = spareStacks(bot, ctx)
     let wood = []
-    try { wood = (stockpile && stockpile.surplusWood(bot, ctx)) || [] } catch (_) { wood = [] }
-    if ((spares.length > 0 || wood.length > 0) && stockpile && typeof stockpile.withChest === 'function') {
-      for (const at of chestCandidates(bot, ctx, stockpile)) {
+    try { wood = (packroom && packroom.surplusWood(bot, ctx)) || [] } catch (_) { wood = [] }
+    if ((spares.length > 0 || wood.length > 0) && packroom && typeof packroom.withChest === 'function') {
+      for (const at of chestCandidates(bot, ctx, packroom)) {
         if (cursorOccupied(bot)) break // never swap-misdrop onto a live cursor
         try {
-          const before = bankableTotal(bot, ctx, stockpile)
-          await stockpile.withChest(bot, ctx, async (window) => {
+          const before = bankableTotal(bot, ctx, packroom)
+          await packroom.withChest(bot, ctx, async (window) => {
             try {
               // Fungible junk by type (stacks identical: first-match harmless).
               const fung = new Map()
@@ -1060,7 +1059,7 @@ async function ensureRoom(bot, recipe, count, opts) {
           try {
             await syncInventory(bot)
           } catch (_) { /* unverified: the recount below still decides */ }
-          const put = Math.max(0, before - bankableTotal(bot, ctx, stockpile))
+          const put = Math.max(0, before - bankableTotal(bot, ctx, packroom))
           if (put > 0) {
             try { console.log(`craft banked ${put} surplus to a chest to make room`) } catch (_) { /* logging best-effort */ }
           }
@@ -1280,7 +1279,7 @@ function craft(bot, ctx, target, state) {
   // the table/door still runs those branches below, the logs stay for the
   // stockpile banking. Deferred require (the ensureRoom precedent).
   let capped = false
-  try { capped = !!(ctx && require('./stockpile').woodCapped(bot, ctx)) } catch (_) { capped = false }
+  try { capped = !!(ctx && require('./packroom').woodCapped(bot, ctx)) } catch (_) { capped = false }
   const ops = []
   if (!capped) {
     for (const [wood, n] of sortedWoods(logs)) {

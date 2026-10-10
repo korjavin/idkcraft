@@ -1068,12 +1068,12 @@ function wearSelf(bot, ctx, name, kind) {
 // rung; any future bank re-arms. Next tick re-plans (smelt/craft on stock,
 // the latched want/deep otherwise) — no fallback lines here.
 function runWithdraw(bot, ctx, next) {
-  let stockpileMod = null
+  let packroomMod = null
   try {
-    stockpileMod = require('./stockpile')
-  } catch (_) { stockpileMod = null }
+    packroomMod = require('./packroom')
+  } catch (_) { packroomMod = null }
   const g = gearCtx(ctx)
-  if (!stockpileMod || typeof stockpileMod.withdrawFromChest !== 'function') {
+  if (!packroomMod || typeof packroomMod.withdrawFromChest !== 'function') {
     try {
       g.pantrySeen = ctx.gearPantryBanked || 0
     } catch (_) { /* latch best-effort */ }
@@ -1085,7 +1085,7 @@ function runWithdraw(bot, ctx, next) {
     try {
       const draw = async (name, want) => {
         if (!(want > 0)) return
-        await stockpileMod.withdrawFromChest(bot, ctx, name, want)
+        await packroomMod.withdrawFromChest(bot, ctx, name, want)
       }
       if (next.tier === 'iron') {
         await draw('iron_ingot', Math.max(0, (next.needMat || 0) - have(bot, 'iron_ingot')))
