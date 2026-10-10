@@ -11,7 +11,7 @@ const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, issueGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason, atPos } = require('./util')
 const itemMod = require('./bringitem')
-const { WANT_ORE, WANT_MAX, countDrop, refuse, done } = require('./bringbase') // oqul.11: shared with bringitem
+const { WANT_ORE, WANT_MAX, countDrop, refuse, done, releaseSmelt } = require('./bringbase') // oqul.11: shared with bringitem
 const Vec3 = require('vec3')
 
 const woolMod = require('./wool')
@@ -62,6 +62,7 @@ function searchMinutes() {
 
 function dropFor(blockName) {
   if (blockName.endsWith('_log')) return blockName
+  if (blockName === 'stone') return 'cobblestone' // ipn.20: the smelt rung's furnace stone sub
   const base = blockName.endsWith('_ore') ? blockName.slice(0, -'_ore'.length) : blockName
   const raw = base.match(/(iron|copper|gold)$/)
   if (raw) return `raw_${raw[1]}`
@@ -802,6 +803,7 @@ function refuseExhausted(bot, ctx, o) {
 // visited memory stays (shared exploration), the stale target must not leak
 // into the next owner's walk.
 function clearSearchLeg(ctx) {
+  try { releaseSmelt(ctx) } catch (_) { /* cleanup best-effort */ } // ipn.20: a cancelled smelt drops its job
   try {
     if (ctx && ctx.explore && typeof ctx.explore === 'object') {
       ctx.explore.target = null
@@ -1305,6 +1307,8 @@ async function bring(bot, ctx, target, state) {
 
   if (o.phase === 'craft') { itemMod.craftTick(bot, ctx, o); return }
 
+  if (o.phase === 'smelt') { itemMod.smeltTick(bot, ctx, o); return }
+
   if (o.phase === 'find') {
     if (food) { await findFood(bot, ctx, o); return }
     if ((o.kind || 'block') === 'item') { // no diggable world form: wool hunts, else the item reason
@@ -1779,3 +1783,4 @@ module.exports.bedGap = itemMod.bedGap
 module.exports.pickSubGap = itemMod.pickSubGap
 module.exports.subWordFor = itemMod.subWordFor
 module.exports.smeltingGap = itemMod.smeltingGap
+module.exports.planGap = itemMod.planGap

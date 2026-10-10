@@ -23,6 +23,19 @@ function bringKind(ctx) {
   return (ctx.bring && ctx.bring.kind) || 'block'
 }
 
+// A bring smelt (ipn.20) never outlives its order: the job drops and a
+// settled outcome is consumed, so goal.js gearOutcome never translates it
+// into gear's status (castlefetch finish() shape). Called from every end:
+// refuse/done here, bring.clearSearchLeg for stop/park/new-owner cancels.
+// ponytail: a window cycle still in flight settles after this unread.
+function releaseSmelt(ctx) {
+  const f = ctx && ctx.furnace
+  if (!f || !f.bring) return
+  ctx.furnaceJob = null
+  f.bring = false
+  if (f.settled) f.result = null
+}
+
 function refuse(bot, ctx, line) {
   // A failed sub-order (did.4) reads as the parent's honest line: the gap
   // that never filled, not the leg that failed it.
@@ -33,13 +46,15 @@ function refuse(bot, ctx, line) {
   say(bot, sub || line)
   metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
   ctx.bring = null
+  releaseSmelt(ctx)
   clearGoal(bot, ctx)
 }
 
 function done(bot, ctx) {
   metrics.bring.inc({ outcome: 'done', kind: bringKind(ctx) })
   ctx.bring = null
+  releaseSmelt(ctx)
   clearGoal(bot, ctx)
 }
 
-module.exports = { WANT_ORE, WANT_MAX, countDrop, bringKind, refuse, done }
+module.exports = { WANT_ORE, WANT_MAX, countDrop, bringKind, refuse, done, releaseSmelt }
