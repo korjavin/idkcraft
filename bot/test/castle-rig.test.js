@@ -780,3 +780,52 @@ describe('castle-replay.js seeded castle (idkcraft-g0z.33)', () => {
     assert.match(r.stdout, /CASTLE_SEED: want ''\|complete/)
   })
 })
+
+describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
+  const { createIdleTrack, IDLE_MAXDIST } = require('../tools/castle-replay')
+  const { surfaceFloor } = require('../src/resources')
+  const home = { kind: 'castle', site: { x: 100, y: 70, z: 200 } }
+
+  it('tracks max XZ distance, min y and seconds under home.y-20', () => {
+    const t = createIdleTrack(home)
+    assert.equal(t.floor, surfaceFloor({ home }))
+    t.onSample(0, { x: 100, y: 70, z: 200 })
+    t.onSample(10, { x: 130, y: 49, z: 240 }) // dist 50, y 49 < 50: under from here
+    t.onSample(25, { x: 100, y: 45, z: 200 }) // +15 s under
+    t.onSample(30, { x: 100, y: 70, z: 200 }) // +5 s under, back up
+    t.onSample(40, { x: 100, y: 70, z: 200 })
+    assert.equal(t.tag(), ', idle-maxdist=50, idle-miny=45, idle-underground-s=20')
+    const v = t.verdict(0)
+    assert.equal(v.pass, false)
+    assert.match(v.line, /^CASTLE-RIG idle: FAIL \(miny 45<54\) floor=54$/)
+  })
+
+  it('passes inside the leash and floor with no deaths; names every failure', () => {
+    const ok = createIdleTrack(home)
+    ok.onSample(0, { x: 100 + IDLE_MAXDIST, y: 60, z: 200 })
+    assert.deepEqual(ok.verdict(0, [{ night: 1, partial: false, pass: true }, { night: 2, partial: true, pass: false }]),
+      { pass: true, line: 'CASTLE-RIG idle: PASS floor=54' })
+    const bad = createIdleTrack(home)
+    bad.onSample(0, { x: 100 + IDLE_MAXDIST + 1, y: 60, z: 200 })
+    assert.equal(bad.verdict(2, [{ night: 1, partial: false, pass: false }]).line,
+      'CASTLE-RIG idle: FAIL (maxdist 81>80, deaths 2>0, residence night 1 FAIL) floor=54')
+    assert.match(createIdleTrack(home).verdict(0).line, /no position samples/)
+  })
+
+  it('castle-rig.sh validates CASTLE_IDLE and only exports it (default output untouched)', () => {
+    const { spawnSync } = require('node:child_process')
+    const os = require('node:os')
+    const sh = path.join(__dirname, '..', 'tools', 'castle-rig.sh')
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-idle-'))
+    const run = (env = {}) => spawnSync('sh', [sh], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), RIG_PLANNER: 'stub', ...env } })
+    const bad = run({ CASTLE_IDLE: 'yes' })
+    assert.equal(bad.status, 2)
+    assert.match(bad.stdout, /CASTLE_IDLE: want ''\|0\|1/)
+    assert.match(run({ CASTLE_IDLE: '1' }).stdout, /no START.sh/)
+    const src = fs.readFileSync(sh, 'utf8')
+    assert.ok(src.includes('1) SEED=complete ;;'), 'CASTLE_IDLE no longer implies the seeded castle')
+    const rsrc = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8')
+    assert.ok(rsrc.includes("+ (idle ? idle.tag() : '')"), 'idle tail not on the verdict line')
+    assert.ok(rsrc.includes('process.exit(idleV && !idleV.pass ? 1 : 0)'), 'idle FAIL no longer exits 1')
+  })
+})

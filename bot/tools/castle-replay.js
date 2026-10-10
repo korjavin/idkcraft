@@ -30,10 +30,14 @@
 //   CASTLE_SEED (complete = g0z.33: rcon-place the whole v2 castle + beds
 //   + table on the pad, no order; the bot adopts it as its residence and
 //   createResidenceNights reports entered/slept/shelter/deaths/dawn-exit).
+//   CASTLE_IDLE (1 = 6x7.24, needs CASTLE_SEED=complete: the verdict adds
+//   idle-maxdist/idle-miny/idle-underground-s and a CASTLE-RIG idle:
+//   PASS|FAIL line; FAIL exits 1).
 //   CASTLE_SAND (1 = g0z.38: a 6x3x6 sand patch on a dirt base just east
 //   of the pad, top flush with it — the pad has no sand of its own; with
 //   CASTLE_SEED=complete the verdict adds panes=<laid>/44).
 // Exit: 0 = measured (even at 0 laid — the line says so),
+//   1 = CASTLE_IDLE verdict FAIL,
 //   2 = environment/setup failure (spawn, pad, order, dropped follower,
 //   jev without a key).
 
@@ -62,6 +66,7 @@ const PLANNER = process.env.RIG_PLANNER || 'jev'
 const NIGHT = process.env.CASTLE_NIGHT === '1'
 const SEED = process.env.CASTLE_SEED || ''
 const SAND = process.env.CASTLE_SAND === '1'
+const IDLE = process.env.CASTLE_IDLE === '1'
 // Far respawn (vmzq.29, prod run6): after CASTLE_FAR_AFTER min of the
 // window the follower lands CASTLE_FAR blocks off the half-built site in a
 // 3x3 pit 7 deep, dirt cleared, 64 cobble given — the walk back must pillar
@@ -432,6 +437,47 @@ function createResidenceNights({ deaths, log }) {
   }
 }
 
+// Idle-alone oracle (idkcraft-6x7.24, for atl.24/vmzq.63/vmzq.64): where the
+// bot goes with a complete castle, nobody online, no order. Tracks max XZ
+// distance from home.site (explore.anchorOf's home anchor), min feet y and
+// seconds spent below home.y - 20. Pass: maxdist <= 64 + 16 (the alone
+// leash plus a margin), miny >= resources.surfaceFloor (the gather/explore
+// depth floor, read from the bot's own code), 0 deaths, every closed
+// residence night PASS. Pure (unit-tested): t = window seconds.
+const IDLE_MAXDIST = 64 + 16
+const IDLE_UNDERGROUND_DY = 20
+function createIdleTrack(home) {
+  const h = home.site
+  const floor = require('../src/resources').surfaceFloor({ home })
+  const st = { maxdist: 0, miny: null, undergroundS: 0, lastT: null, lastUnder: false }
+  return {
+    st,
+    floor,
+    onSample(t, p) {
+      if (!p || typeof p.y !== 'number') return
+      const d = Math.hypot(p.x - h.x, p.z - h.z)
+      if (d > st.maxdist) st.maxdist = d
+      if (st.miny == null || p.y < st.miny) st.miny = p.y
+      if (st.lastUnder && st.lastT != null) st.undergroundS += t - st.lastT
+      st.lastUnder = p.y < h.y - IDLE_UNDERGROUND_DY
+      st.lastT = t
+    },
+    tag() {
+      return `, idle-maxdist=${Math.round(st.maxdist)}, idle-miny=${st.miny == null ? '?' : Math.floor(st.miny)}, idle-underground-s=${Math.round(st.undergroundS)}`
+    },
+    // nights: residence night records (partial ones are not judged).
+    verdict(deaths, nights = []) {
+      const why = []
+      if (st.maxdist > IDLE_MAXDIST) why.push(`maxdist ${Math.round(st.maxdist)}>${IDLE_MAXDIST}`)
+      if (st.miny == null) why.push('no position samples')
+      else if (Math.floor(st.miny) < floor) why.push(`miny ${Math.floor(st.miny)}<${floor}`)
+      if (deaths > 0) why.push(`deaths ${deaths}>0`)
+      for (const n of nights) if (!n.partial && !n.pass) why.push(`residence night ${n.night} FAIL`)
+      return { pass: why.length === 0, line: `CASTLE-RIG idle: ${why.length ? `FAIL (${why.join(', ')})` : 'PASS'} floor=${floor}` }
+    },
+  }
+}
+
 // Seeded complete castle (idkcraft-g0z.33): every setblock for a finished
 // v2 castle at st — keep-clear/moat cells to air first, then the plan
 // cells in lay order (the bot's own paint: cobble, oak planks/fence,
@@ -548,6 +594,7 @@ async function main() {
   let brain = brainMod.stubBrain
   let brainEngine = ''
   if (SEED && SEED !== 'complete') fail('seed', `CASTLE_SEED: want ''|complete, got ${JSON.stringify(SEED)}`)
+  if (IDLE && SEED !== 'complete') fail('idle', 'CASTLE_IDLE=1 needs CASTLE_SEED=complete (castle-rig.sh sets it)')
   if (PLANNER === 'jev') {
     const key = process.env.TYPESAFE_API_KEY
     // Loud, never silent: a jev run without a key would measure the stub
@@ -948,6 +995,7 @@ async function main() {
   if (night) await night.open()
   winT0 = t0
   let resTimer = null
+  const idle = IDLE ? createIdleTrack(tickCtx().home) : null
   if (resNights) {
     resNights.open()
     const resSample = () => {
@@ -957,6 +1005,7 @@ async function main() {
         inside = !!h && h.kind === 'castle' && require('../src/residence').of(h).interior(h, follower.entity.position)
       } catch (_) { inside = false }
       resNights.onSample(Math.round((Date.now() - t0) / 1000), inside, !!follower.isSleeping)
+      if (idle) { try { idle.onSample((Date.now() - t0) / 1000, follower.entity.position) } catch (_) { /* idle best-effort */ } }
     }
     resTimer = setInterval(resSample, 1000)
     follower.on('sleep', resSample)
@@ -1301,7 +1350,7 @@ async function main() {
     }
     paneTag = `, panes=${laid}/${cells.length}${unread ? `(${unread} unread)` : ''}`
   }
-  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + (resNights ? resNights.tag() : '')
+  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
@@ -1317,8 +1366,10 @@ async function main() {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
   }
   origLog(line)
+  const idleV = idle ? idle.verdict(deaths, resNights ? resNights.nights : []) : null
+  if (idleV) origLog(idleV.line)
   try { logStream.end() } catch (_) { /* close best-effort */ }
-  process.exit(0)
+  process.exit(idleV && !idleV.pass ? 1 : 0)
 }
 
 if (require.main === module) {
@@ -1328,4 +1379,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver }
+module.exports = { createIdleTrack, IDLE_MAXDIST, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver }
