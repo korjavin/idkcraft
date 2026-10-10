@@ -322,6 +322,55 @@ describe('furnace smelt (load coal or planks, take, settle)', () => {
     assert.ok(!log.some(([op]) => op === 'putFuel'), JSON.stringify(log))
   })
 
+  it('a caller-set iron job never writes stepStatus; gear adopting the run does (ipn.19)', async () => {
+    const mk = () => smeltBot({
+      inv: [{ name: 'raw_iron', count: 8 }, { name: 'oak_planks', count: 0 }],
+      slots: [null, null, null],
+    })
+    const job = () => ({ input: 'raw_iron', output: 'iron_ingot' })
+    const { bot } = mk()
+    const ctx = smeltCtx()
+    ctx.stepStatus = 'running'
+    for (let i = 0; i < 16; i++) { ctx.furnaceJob = job(); await tick(bot, ctx) }
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.furnace.result, 'failed:no-fuel')
+    assert.equal(ctx.furnace.settled, true)
+    // gear adopts a live caller run (no ctx.furnaceJob): status is its own again
+    const b2 = mk().bot
+    const c2 = smeltCtx()
+    c2.furnaceJob = job()
+    await tick(b2, c2)
+    for (let i = 0; i < 16; i++) await tick(b2, c2)
+    assert.equal(c2.stepStatus, 'failed:no-fuel')
+    // reverse: a caller joins gear's live untagged run, status stays the caller's
+    const b3 = mk().bot
+    const c3 = smeltCtx()
+    c3.stepStatus = 'running'
+    await tick(b3, c3)
+    for (let i = 0; i < 15; i++) { c3.furnaceJob = job(); await tick(b3, c3) }
+    assert.equal(c3.stepStatus, 'running')
+    assert.equal(c3.furnace.result, 'failed:no-fuel')
+  })
+
+  it('a caller-set iron job settles done on result only (ipn.19)', async () => {
+    const { bot, win } = smeltBot({
+      inv: [{ name: 'raw_iron', count: 3 }, { name: 'oak_planks', count: 64 }],
+      slots: [null, null, null],
+    })
+    const ctx = smeltCtx()
+    ctx.stepStatus = 'running'
+    const job = () => ({ input: 'raw_iron', output: 'iron_ingot' })
+    ctx.furnaceJob = job()
+    await tick(bot, ctx)
+    bot.inventory.items = () => [{ name: 'oak_planks', count: 62 }]
+    win.slots = [null, null, { name: 'iron_ingot', count: 3 }]
+    ctx.furnaceJob = job()
+    await tick(bot, ctx)
+    assert.equal(ctx.furnace.result, 'done')
+    assert.equal(ctx.furnace.settled, true)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
   it('output flow resets the hunger clock', async () => {
     // A take mid-grace proves the burn: idle restarts instead of failing.
     const { bot, win } = smeltBot({
