@@ -7,6 +7,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const gather = require('../src/behaviours/gather')
 const { MENU, goalFacts, decide } = require('../src/goal')
+const { goalOptions } = require('../src/goal-options')
 
 function pos(x, y, z) {
   const p = {
@@ -273,5 +274,70 @@ describe('gyw arbiter: the relocated bot re-picks gather', () => {
     }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'rest')
+  })
+})
+
+describe('vmzq.65 stranded walk-out for a build order', () => {
+  // Owner online (roster-only: player reads far), day, a holding no-trees
+  // gather at the current log count.
+  function onlineBot() {
+    return {
+      username: 'IdkBot',
+      chats: [],
+      entity: { position: pos(0, 64, 0), onGround: true, isInWater: false },
+      inventory: { items: () => [] },
+      time: { timeOfDay: 6000 },
+      health: 20,
+      food: 20,
+      oxygenLevel: 20,
+      spawnPoint: pos(0, 64, 0),
+      players: { Steve: {} },
+      entities: {},
+      registry: { blocksByName: { oak_log: { id: 17 } } },
+      blockAt: () => ({ name: 'air', boundingBox: 'empty' }),
+      pathfinder: { isMoving: () => false, setGoal() {}, stop() {}, goal: null },
+      clearControlStates() {},
+      chat(m) { this.chats.push(String(m)) },
+    }
+  }
+  function holdingGather() {
+    return { final: 'failed:no-trees', atLogs: 0, failPos: { x: 0, y: 64, z: 0 }, skip: new Set(), streak: 0 }
+  }
+
+  it('a build order opens stranded explore with the owner online', () => {
+    const bot = goalBot({ at: pos(0, 64, 0) })
+    const ctx = { home: { site: pos(0, 64, 0), built: false, v: 2 }, gather: holdingGather() }
+    assert.equal(MENU.explore.feasible({ time: 'day', logs: 0, home: 'site', player: 'near' }, bot, ctx), true)
+    assert.equal(MENU.explore.feasible({ time: 'day', logs: 0, home: 'site', player: 'far' }, bot, ctx), true)
+  })
+
+  it('no site, owner online: the stay-with-the-player veto holds (p4s)', () => {
+    const bot = goalBot({ at: pos(0, 64, 0) })
+    const ctx = { gather: holdingGather() }
+    assert.equal(MENU.explore.feasible({ time: 'day', logs: 0, home: 'none', player: 'near' }, bot, ctx), false)
+    assert.equal(MENU.explore.feasible({ time: 'day', logs: 0, home: 'none', player: 'far' }, bot, ctx), false)
+    // Anchor-only fixtures (built undefined) stay unbound too.
+    const anchorOnly = { home: { site: pos(0, 64, 0) }, gather: holdingGather() }
+    assert.equal(MENU.explore.feasible({ time: 'day', logs: 0, home: 'site', player: 'near' }, bot, anchorOnly), false)
+  })
+
+  it('the house table offers explore-far for the build order, skips it with no site', () => {
+    const bot = onlineBot()
+    const ctx = {
+      home: { site: pos(0, 64, 0), built: false, v: 2 },
+      gather: holdingGather(),
+      lastGoalKey: '',
+      stepStatus: 'running',
+    }
+    const skips = []
+    const ids = goalOptions(bot, ctx, 'house', skips).map((o) => o.id)
+    assert.ok(ids.includes('explore-far'), `explore-far offered: ${ids}`)
+    assert.ok(!skips.some((s) => s.id === 'explore-far'), `no explore-far skip: ${JSON.stringify(skips)}`)
+
+    const nosite = { gather: holdingGather(), lastGoalKey: '', stepStatus: 'running' }
+    const skips2 = []
+    const ids2 = goalOptions(bot, nosite, 'house', skips2).map((o) => o.id)
+    assert.ok(!ids2.includes('explore-far'), `explore-far withheld: ${ids2}`)
+    assert.ok(skips2.some((s) => s.id === 'explore-far' && /explore not feasible/.test(s.why)), JSON.stringify(skips2))
   })
 })

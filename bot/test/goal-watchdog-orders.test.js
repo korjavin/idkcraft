@@ -994,3 +994,54 @@ describe('vmzq.28 option labels (goal effect + pickaxe gate + flat summary)', ()
     )
   })
 })
+
+describe('woodless far dig trails the spiral (vmzq.65)', () => {
+  it('fallbackRank: forage-far(ore) loses to explore-far; gather-far still leads', () => {
+    const { fallbackRank } = taskMod
+    const o = (id, step = null, wood = undefined) => ({ id, step, unlock: null, wood })
+    // The incident table: an ore dig must not beat the blind wood search.
+    assert.equal(
+      fallbackRank('house', [o('forage-far', 'forage', false), o('explore-far', 'explore'), o('park'), o('ask-owner')]).id,
+      'explore-far',
+    )
+    // A remembered tree still walks first.
+    assert.equal(
+      fallbackRank('house', [o('forage-far', 'forage', false), o('explore-far', 'explore'), o('gather-far', 'gather'), o('park')]).id,
+      'gather-far',
+    )
+    // A wood far dig keeps its old rank ahead of the spiral...
+    assert.equal(
+      fallbackRank('house', [o('forage-far', 'forage', true), o('explore-far', 'explore')]).id,
+      'forage-far',
+    )
+    // ...as do pre-flag options without the field (fail open).
+    assert.equal(
+      fallbackRank('house', [o('forage-far', 'forage'), o('explore-far', 'explore')]).id,
+      'forage-far',
+    )
+    // Castle kind behaves the same: an ore dig is no castle unblock.
+    assert.equal(
+      fallbackRank('castle', [o('forage-far', 'forage', false), o('explore-far', 'explore')]).id,
+      'explore-far',
+    )
+  })
+
+  it('the house table flags forage-far wood from its candidate', () => {
+    // A pick on hand (the planForage ore gate), day, a house site anchor.
+    const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.resources = { items: new Map([['100,64,0', { x: 100, y: 64, z: 0, name: 'iron_ore', at: 1, exposed: true }]]) }
+    const ore = goalOptions(bot, ctx, 'house').find((x) => x.id === 'forage-far')
+    assert.ok(ore, 'forage-far offered for the remembered ore')
+    assert.equal(ore.wood, false)
+    assert.match(ore.criterion, /\(unlikely \+home now\)/)
+    ctx.resources = { items: new Map([['100,64,0', { x: 100, y: 64, z: 0, name: 'oak_log', at: 1, exposed: true }]]) }
+    const wood = goalOptions(bot, ctx, 'house').find((x) => x.id === 'forage-far')
+    assert.ok(wood, 'forage-far offered for the remembered log')
+    assert.equal(wood.wood, true)
+    assert.match(wood.criterion, /\(\+home wood\)/)
+  })
+})

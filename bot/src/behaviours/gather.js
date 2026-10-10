@@ -152,6 +152,13 @@ function taskFar(ctx, it, bot) {
     const a = exploreMod.anchorOf(bot, ctx)
     if (!a || typeof a.x !== 'number' || !it || typeof it.x !== 'number') return false
     let radius = exploreMod.TASK_SEARCH_RADIUS || 64
+    // Stranded-wood walk-out (vmzq.65): the same lift as explore's cap —
+    // while the staged far search reads empty the task leash is the outer
+    // disk, no unlock window needed. The alone leash (vmzq.59) stays.
+    try {
+      const { OUTER_DISK } = require('../goal-unlock')
+      if (OUTER_DISK > radius && exploreMod.woodStranded(ctx) && exploreMod.taskActive(ctx) && !exploreMod.aloneIdle(bot, ctx)) radius = OUTER_DISK
+    } catch (_) { /* default radius */ }
     try {
       const { goalUnlock } = require('../goal-unlock')
       const r = goalUnlock(ctx, 'radius')
@@ -187,6 +194,10 @@ function farReject(bot, ctx, g, bp, q) {
 function failFinal(bot, ctx, g, logs, final) {
   g.final = final
   g.atLogs = logs
+  // Stranded-wood record (vmzq.65): no-trees means the staged far search
+  // came back with nothing walkable — the task leash lifts until the log
+  // count moves. Any other final is not an empty search.
+  g.farEmpty = (final === 'failed:no-trees')
   g.failPos = bodyPos(bot)
   ctx.stepStatus = g.final
   say(bot, g.final === 'failed:no-trees' ? 'no trees within 48 blocks' : g.final === 'failed:pack-full' ? 'pack full, banking first' : 'cannot reach the trees')
@@ -227,6 +238,10 @@ function gather(bot, ctx, target, state) {
     }
     g.final = null
     if (!keepSkip) g.skip.clear()
+    // The stranded record clears with the world change (vmzq.65) — but
+    // survives the gyw relocation release (keepSkip): the retry at new
+    // ground still needs the lifted leash until wood actually lands.
+    if (!keepSkip) g.farEmpty = false
     g.streak = 0
   }
   if (logs >= NEED_LOGS) {
@@ -266,7 +281,11 @@ function gather(bot, ctx, target, state) {
         commitTarget(g, bp, hit.position, hit.name, true)
         say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
       } else {
-        failFinal(bot, ctx, g, logs, g.farUnreachable ? 'failed:unreachable' : 'failed:no-trees')
+        // Honest word (vmzq.65): unreachable only when a trunk was walked
+        // to and struck — the streak counts stall strikes (banned sync
+        // hits and stale read-backs never strike, so they read no-trees).
+        // (Chat wording is the sibling narration bead's.)
+        failFinal(bot, ctx, g, logs, g.streak > 0 ? 'failed:unreachable' : 'failed:no-trees')
       }
       return
     }
@@ -320,10 +339,9 @@ function gather(bot, ctx, target, state) {
         if (search && search !== 'unknown') {
           g.search = search
           g.phase = 'searchfar'
-          g.farUnreachable = found.length > 0
           return
         }
-        failFinal(bot, ctx, g, logs, found.length === 0 ? 'failed:no-trees' : 'failed:unreachable')
+        failFinal(bot, ctx, g, logs, g.streak > 0 ? 'failed:unreachable' : 'failed:no-trees')
         return
       }
     }

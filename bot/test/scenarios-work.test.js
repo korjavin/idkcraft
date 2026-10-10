@@ -882,3 +882,227 @@ describe('8si: the house drive keeps the door and the doorway', () => {
     }
   })
 })
+
+describe('vmzq.65: stranded-wood walk-out for a build order', () => {
+  const taskMod = require('../src/task')
+  const goal = require('../src/goal')
+  const { goalOptions } = require('../src/goal-options')
+  const { goalUnlock } = require('../src/goal-unlock')
+  const resources = require('../src/resources')
+  const gather = require('../src/behaviours/gather')
+  const explore = require('../src/behaviours/explore')
+
+  // Mountain site (0,64,0), no trees within 160; one oak stand 200 north.
+  // Flat stone plain under air: loaded everywhere, honest distances.
+  const OAKS = [[0, 64, -200], [0, 65, -200], [0, 66, -200]]
+  const LEAVES = [[0, 67, -200], [1, 66, -200], [-1, 66, -200], [1, 67, -200], [-1, 67, -200]]
+  const WATCHDOG_ENV = ['GOAL_WATCHDOG_MS', 'GOAL_COMMIT_MS', 'GOAL_WATCHDOG_MAX_ROUNDS', 'GOAL_TRAVEL_GRACE_MS', 'GOAL_PLANB_SWITCH_MS']
+
+  function worldBot() {
+    const names = {}
+    for (const [x, y, z] of OAKS) names[`${x},${y},${z}`] = 'oak_log'
+    for (const [x, y, z] of LEAVES) names[`${x},${y},${z}`] = 'oak_leaves'
+    const spots = OAKS.map(([x, y, z]) => pos(x, y, z))
+    const blocksByName = { oak_log: { id: 17 }, birch_log: { id: 18 }, stone: { id: 1 }, iron_ore: { id: 2 }, coal_ore: { id: 3 } }
+    const lines = []
+    const calls = { setGoal: 0, goals: [] }
+    const bot = {
+      lines,
+      calls,
+      username: 'IdkBot',
+      players: { Steve: {} }, // roster online, entity unseen: player reads far
+      entities: {},
+      entity: { position: pos(0, 64, 0), onGround: true, isInWater: false },
+      registry: { blocksByName },
+      _moving: false,
+      _items: [{ name: 'stone_pickaxe', count: 1 }], // the planForage ore gate
+      spawnPoint: pos(0, 64, 0),
+      time: { timeOfDay: 6000, day: 1 }, // stays day for the whole walk
+      health: 20,
+      food: 20,
+      oxygenLevel: 20,
+      pathfinder: {
+        goal: null,
+        setGoal: (g) => { calls.setGoal++; calls.goals.push(g); bot.pathfinder.goal = g },
+        stop() {},
+        isMoving: () => bot._moving,
+        isMining: () => false,
+        isBuilding: () => false,
+      },
+      inventory: { items: () => bot._items },
+      findBlocks(opts) {
+        const want = new Set(Array.isArray(opts.matching) ? opts.matching : [opts.matching])
+        const origin = opts.point || bot.entity.position
+        const maxD = typeof opts.maxDistance === 'number' ? opts.maxDistance : Infinity
+        const out = []
+        for (const q of spots) {
+          const n = names[`${q.x},${q.y},${q.z}`]
+          const id = n && blocksByName[n] ? blocksByName[n].id : undefined
+          if (!want.has(id)) continue
+          if (Math.hypot(q.x - origin.x, q.y - origin.y, q.z - origin.z) > maxD) continue
+          out.push(q)
+        }
+        return typeof opts.count === 'number' ? out.slice(0, opts.count) : out
+      },
+      blockAt(p) {
+        const x = Math.floor(p.x)
+        const y = Math.floor(p.y)
+        const z = Math.floor(p.z)
+        const name = names[`${x},${y},${z}`] || (y <= 64 ? 'stone' : 'air')
+        return { name, position: pos(x, y, z), boundingBox: name === 'air' ? 'empty' : 'block' }
+      },
+      canDigBlock: () => true,
+      dig: async () => {},
+      setControlState() {},
+      getControlState: () => false,
+      clearControlStates() {},
+      chat(line) { lines.push(String(line)) },
+    }
+    return bot
+  }
+
+  it('watchdog commits explore-far, the bot relocates, gather takes the 200-block log with no unlock', async () => {
+    const bot = worldBot()
+    const clock = fakeClock(1000000000000)
+    const cap = capture()
+    const transitions = []
+    const mark = (line) => { transitions.push(line); console.log(line) } // one console line per transition
+    const statuses = [] // every stepStatus seen across the behaviour ticks
+    const savedEnv = {}
+    for (const k of WATCHDOG_ENV) {
+      savedEnv[k] = process.env[k]
+      delete process.env[k]
+    }
+    const ticker = createTicker({ bot, brain: workBrain(), tickMs: 10, idleTickMs: 10 })
+    let t = 1000000000000
+    try {
+      ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+      ticker.work()
+      const ctx = bot._tickerCtx
+      ctx.step = 'gather'
+      ctx.stepStatus = 'running'
+      taskMod.taskTick(bot, ctx, t)
+      assert.equal(ctx.task.active, 'house')
+
+      // Phase A: gather runs the staged search, finds nothing, fails honest.
+      for (let i = 0; i < 200 && !(ctx.gather && ctx.gather.final); i++) {
+        t += 1000
+        clock.advance(1000)
+        gather(bot, ctx, null, {})
+        statuses.push(ctx.stepStatus)
+      }
+      assert.equal(ctx.stepStatus, 'failed:no-trees')
+      assert.equal(ctx.gather.farEmpty, true, 'stranded record set')
+      mark(`T1 gather failed:no-trees at t+${Math.round((t - 1000000000000) / 1000)}s, farEmpty set`)
+      // The stranded menu opens with the owner online (fix 1, menu side).
+      assert.equal((await goal.decide(bot, ctx)).action, 'explore')
+      ctx.step = 'gather' // the stall stays on gather for the watchdog rounds
+      ctx.stepStatus = 'failed:no-trees'
+
+      // Phase B: a remembered ore past 64 joins the table; two undecided
+      // rounds fall back to explore-far (fixes 1+3, table side).
+      resources.noteSpots(ctx, [{ x: 100, y: 64, z: 0, name: 'iron_ore', exposed: true }], t)
+      const skips = []
+      const ids = goalOptions(bot, ctx, 'house', skips).map((o) => o.id)
+      assert.ok(ids.includes('explore-far'), `explore-far offered: ${ids}`)
+      assert.ok(!skips.some((s) => s.id === 'explore-far'), `no explore-far skip: ${JSON.stringify(skips)}`)
+      assert.equal(goalOptions(bot, ctx, 'house').find((o) => o.id === 'forage-far').wood, false)
+      const lowConf = { step: 'gather', confidence: 0.2, probabilities: { gather: 0.3 }, source: 'jev' }
+      for (const round of [1, 2]) {
+        ctx.brain = { plan: async () => lowConf }
+        let guard = 0
+        while (!(ctx.task.house.wd && ctx.task.house.wd.pending) && guard++ < 60) {
+          t += 10000
+          clock.advance(10000)
+          taskMod.taskTick(bot, ctx, t)
+        }
+        assert.ok(ctx.task.house.wd.pending, `round ${round} fired`)
+        await settle()
+        t += 10000
+        clock.advance(10000)
+        taskMod.taskTick(bot, ctx, t) // consume
+      }
+      const commit = ctx.goal && ctx.goal.commit
+      assert.ok(commit, 'fallback applied')
+      assert.equal(commit.optionId, 'explore-far')
+      assert.equal(commit.unlock && commit.unlock.radius, 256)
+      mark(`T2 watchdog fallback committed explore-far at t+${Math.round((t - 1000000000000) / 1000)}s`)
+
+      // Phase C: the walk outlasts the 120 s window — run it out, then
+      // relocate north with no unlock live (fix 4 needs no window).
+      let guard = 0
+      while (ctx.goal && ctx.goal.commit && guard++ < 40) {
+        t += 10000
+        clock.advance(10000)
+        taskMod.taskTick(bot, ctx, t)
+      }
+      assert.equal((ctx.goal && ctx.goal.commit) || null, null, 'window ended')
+      assert.equal(goalUnlock(ctx, 'radius'), null, 'no unlock live for the walk')
+      // Home ground already walked: rings 16-64 visited, so the relocation
+      // leg leaves at ring 128 — past the 64 leash, only on the lift.
+      ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0 }
+      for (const r of [16, 32, 64]) {
+        for (let a = 0; a < 8; a++) {
+          const x = Math.round(r * Math.sin(a * Math.PI / 4))
+          const z = Math.round(-r * Math.cos(a * Math.PI / 4))
+          ctx.explore.visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
+        }
+      }
+      const failPos = ctx.gather.failPos
+      for (let i = 0; i < 60; i++) {
+        t += 1000
+        clock.advance(1000)
+        explore(bot, ctx, null, null)
+        statuses.push(ctx.stepStatus)
+        const target = ctx.explore && ctx.explore.target
+        if (target) {
+          const bp = bot.entity.position
+          const dx = target.x - bp.x
+          const dz = target.z - bp.z
+          const d = Math.hypot(dx, dz)
+          if (d > 0.01) {
+            const step = Math.min(16, d)
+            bot.entity.position = pos(bp.x + (dx / d) * step, 64, bp.z + (dz / d) * step)
+          }
+        }
+        const bp = bot.entity.position
+        if (Math.hypot(bp.x - failPos.x, bp.z - failPos.z) > 32 && Math.hypot(bp.x, bp.z + 200) <= 160) break
+      }
+      const relocated = bot.entity.position
+      assert.ok(Math.hypot(relocated.x - failPos.x, relocated.z - failPos.z) > 32, 'relocated past the failure point')
+      mark(`T3 relocated to ${Math.round(relocated.x)} ${Math.round(relocated.z)}, oaks ${Math.round(Math.hypot(relocated.x, relocated.z + 200))} away`)
+
+      // Phase D: gather retries at new ground and takes the far log.
+      ctx.step = 'gather'
+      ctx.stepStatus = 'running' // decide() marks running on every pick
+      for (let i = 0; i < 200 && !/^gather:/.test(ctx.lastGoalKey || ''); i++) {
+        t += 1000
+        clock.advance(1000)
+        gather(bot, ctx, null, {})
+        statuses.push(ctx.stepStatus)
+      }
+      assert.match(ctx.lastGoalKey, /^gather:0,6[456],-200$/, 'a trunk cell of the 200-block stand')
+      assert.equal(goalUnlock(ctx, 'radius'), null, 'the far pick rode the stranded lift, not a window')
+      assert.equal(ctx.stepStatus, 'running')
+      mark(`T4 ${ctx.lastGoalKey} committed with no unlock live`)
+
+      // failed:unreachable never surfaces — on the status channel the
+      // behaviours report through, and in chat (revmux 01 minor).
+      assert.ok(!statuses.includes('failed:unreachable'), `statuses: ${[...new Set(statuses)].join(',')}`)
+      assert.ok(!bot.lines.some((l) => l === 'cannot reach the trees'), `chat: ${bot.lines.join(' | ')}`)
+      // Bot-own evidence per transition, not the mark lines themselves.
+      assert.ok(bot.lines.includes('no trees within 48 blocks'), `give-up chat: ${bot.lines.join(' | ')}`)
+      assert.ok(cap.lines.some((l) => l.includes('choice=explore-far') && l.includes('source=fallback')), 'fallback watchdog line')
+      assert.ok(bot.lines.some((l) => /^going for oak_log, \d+ blocks away$/.test(l)), `far commit chat: ${bot.lines.join(' | ')}`)
+    } finally {
+      for (const k of WATCHDOG_ENV) {
+        if (savedEnv[k] === undefined) delete process.env[k]
+        else process.env[k] = savedEnv[k]
+      }
+      cap.release()
+      clock.restore()
+      ticker.destroy()
+      for (const line of transitions) console.log(line)
+    }
+  })
+})
