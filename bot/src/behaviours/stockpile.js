@@ -121,6 +121,46 @@ function slotReserved(bot, ctx) {
     return false
   }
 }
+// Pack room for a dig drop (moved from castlefetch, oqul.12; castlefetch
+// re-exports it). Pack-full yield (g0z.26): digging into a full pack drops
+// the cobble on the ground and counts no-gain strikes — castlefetch fails
+// fast instead, so the hold parks the leg while the stockpile step banks
+// the surplus. An empty slot or room on a cobble/dirt stack reads as room;
+// an unreadable inventory digs as before. R2 (revmux 01 major): with no
+// adopted chest and nobody online the reserve binds one slot earlier — the
+// last slot is the bootstrap chest craft's room, and a 36/36 chestless
+// pack has no drain.
+function roomForDrop(bot, ctx) {
+  try {
+    if (slotReserved(bot, ctx)) return false
+  } catch (_) { /* reserve unreadable: the room check below decides */ }
+  try {
+    const isStone = require('../castle').isStone
+    const items = (bot && bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()) || []
+    if (!Array.isArray(items)) return true
+    if (items.length < 36) return true
+    for (const s of items) {
+      if (!s || (!isStone(s.name) && s.name !== 'dirt')) continue
+      const cap = s && typeof s.stackSize === 'number' && s.stackSize > 0 ? s.stackSize : 64
+      if ((typeof s.count === 'number' ? s.count : 1) < cap) return true
+    }
+  } catch (_) {
+    return true
+  }
+  return false
+}
+// Pack-full pierce (vmzq.19 R3, round-2 major A; moved from vetoes,
+// oqul.12): stockpile is the only pack drain. The dig has no room exactly
+// when roomForDrop says so (36 stacks with no cobble/dirt room, or the
+// chestless reserve corner) — then the banking trip is the unblock, not
+// drift.
+function packFull(bot, ctx) {
+  try {
+    return !roomForDrop(bot, ctx)
+  } catch (_) {
+    return false
+  }
+}
 // Above-ceiling wood in inventory order, keep-first (the ensureRoom bank
 // list, craft.js). Empty when the ceiling is off.
 function surplusWood(bot, ctx) {
@@ -1502,7 +1542,7 @@ function homeFallbackViable(bot, ctx) {
       try { if (!questShedDue(bot, ctx)) return false } catch (_) { return false }
     }
     const vetoes = require('../vetoes') // oqul.11: the veto helpers left goal.js
-    try { if (vetoes.packFull(bot, ctx)) return true } catch (_) { /* leash below */ }
+    try { if (packFull(bot, ctx)) return true } catch (_) { /* leash below */ }
     if (ctx && ctx.stockpilePierced) return true
     try { return !vetoes.homeLegVetoed(bot, ctx, 'stockpile') } catch (_) { return false }
   } catch (_) {
@@ -2010,6 +2050,8 @@ module.exports.woodCapped = woodCapped
 module.exports.surplusWood = surplusWood
 module.exports.offerHaul = offerHaul
 module.exports.slotReserved = slotReserved
+module.exports.roomForDrop = roomForDrop
+module.exports.packFull = packFull
 module.exports.reserveCorner = reserveCorner
 module.exports.packStacks = packStacks
 module.exports.PLANK_KEEP = PLANK_KEEP

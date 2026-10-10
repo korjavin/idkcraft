@@ -60,18 +60,8 @@ function homeLegVetoed(bot, ctx, step = null) {
     return false
   }
 }
-// Pack-full pierce (vmzq.19 R3, round-2 major A): stockpile is the only
-// pack drain. The dig has no room exactly when castlefetch's own
-// roomForDrop says so (36 stacks with no cobble/dirt room, or the
-// chestless reserve corner) — then the banking trip is the unblock, not
-// drift. Deferred require (the demand precedent in castleFetchGo).
-function packFull(bot, ctx) {
-  try {
-    return !require('./behaviours/castlefetch').roomForDrop(bot, ctx)
-  } catch (_) {
-    return false
-  }
-}
+// packFull moved to behaviours/stockpile (oqul.12: the vetoes->castlefetch
+// edge closed 19 require cycles through stockpile).
 function taskParked(ctx) {
   try {
     if (ctx && ctx.castle && ctx.castle.parked) return true
@@ -82,4 +72,4 @@ function taskParked(ctx) {
   return false
 }
 
-module.exports = { PARK_FORAGE_RADIUS, castleFirst, homeLegVetoed, packFull, taskParked }
+module.exports = { PARK_FORAGE_RADIUS, castleFirst, homeLegVetoed, taskParked }
