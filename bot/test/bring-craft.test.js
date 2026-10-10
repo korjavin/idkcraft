@@ -627,6 +627,24 @@ describe('bring craft handover and give-ups (idkcraft-did.2 revmux 01)', () => {
     }
   })
 
+  it('g0z.40: a table in reach but behind a wall walks to a seen cell, never crafts', () => {
+    const Vec3 = require('vec3')
+    const bot = mockBot({
+      items: [{ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }],
+      cells: { '2,64,0': 'crafting_table' },
+    })
+    bot.entity.position = new Vec3(0.5, 64, 0.5) // reach 2, the wall at x=1
+    bot.entity.eyeHeight = 1.62
+    bot.world = { raycast: () => ({ position: new Vec3(1, 65, 0) }) }
+    const ctx = { home: { table: { x: 2, y: 64, z: 0 } } }
+    const res = craftany(bot, ctx, ['stone_axe'], 1)
+    assert.equal(res, 'running')
+    assert.equal(bot.calls.goals[0].constructor.name, 'GoalSeeTable')
+    assert.equal(ctx.lastGoalKey, 'craftany-table:2,64,0')
+    assert.equal(ctx.craftany.table, null, 'no table latched through the wall')
+    assert.equal(ctx.gearInFlight, undefined, 'no craft fired')
+  })
+
   it('three failed placements end with need-a-table', async () => {
     const bot = mockBot({
       items: [

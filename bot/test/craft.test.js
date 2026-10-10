@@ -168,7 +168,7 @@ describe('craft step', () => {
     await flush()
     assert.equal(far.calls.craft.length, 0)
     assert.equal(far.calls.setGoal, 1)
-    assert.equal(far.calls.goals[0].constructor.name, 'GoalLookAtBlock') // g0z.40: walk to a cell the table is seen from
+    assert.equal(far.calls.goals[0].constructor.name, 'GoalSeeTable') // g0z.40: walk to a cell the table is seen from
     assert.match(farCtx.lastGoalKey, /^craft-table:2,64,0$/)
     far.restoreError()
   })

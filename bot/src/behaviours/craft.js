@@ -1141,16 +1141,22 @@ async function pacedCraft(bot, recipe, count, table) {
 // the x=15 partition, the use went through the wall and the server ignored
 // it (20 s windowOpen timeouts, rig panes 16/44). The ray mirrors
 // activateBlock: eye to the block centre (the point it aims at).
-function tableInSight(bot, table) {
+function seenFrom(world, eye, p) {
   try {
-    const p = table.position
-    const e = bot.entity
-    const eye = e.position.offset(0, e.eyeHeight || 1.62, 0)
-    const dir = p.offset(0.5, 0.5, 0.5).minus(eye)
-    const hit = bot.world.raycast(eye, dir.normalize(), dir.norm() + 1)
-    return !hit || hit.position.equals(p)
+    const dir = new Vec3(p.x + 0.5, p.y + 0.5, p.z + 0.5).minus(eye)
+    const hit = world.raycast(eye, dir.normalize(), dir.norm() + 1)
+    return !hit || (hit.position.x === p.x && hit.position.y === p.y && hit.position.z === p.z)
   } catch (_) {
     return true // unreadable (mocks, unloaded column): the craft decides
+  }
+}
+
+function tableInSight(bot, table) {
+  try {
+    const e = bot.entity
+    return seenFrom(bot.world, e.position.offset(0, e.eyeHeight || 1.62, 0), table.position)
+  } catch (_) {
+    return true
   }
 }
 
@@ -1160,14 +1166,24 @@ function tableUsable(bot, table, pos) {
   return !!bp && dist3(bp, pos) <= TABLE_REACH && tableInSight(bot, table)
 }
 
-// The walk into a usable spot: a cell the table is seen from (the
-// pathfinder's own face raycast), within the old GoalNear 3 range.
-function tableGoal(bot, pos) {
-  try {
-    return new goals.GoalLookAtBlock(new Vec3(pos.x, pos.y, pos.z), bot.world, { reach: 3 })
-  } catch (_) {
-    return new goals.GoalNear(pos.x, pos.y, pos.z, 3)
+// The walk into a usable spot: the old GoalNear 3 range, ending only on a
+// cell the same eye-to-centre ray sees the table from (revmux 02: a face
+// ray would end where the predicate refuses — v2 house, furnace beside the
+// table). Range 3 on node ints keeps the body within TABLE_REACH.
+class GoalSeeTable extends goals.GoalNear {
+  constructor(world, pos) {
+    super(pos.x, pos.y, pos.z, 3)
+    this.world = world
+    this.pos = { x: pos.x, y: pos.y, z: pos.z }
   }
+
+  isEnd(node) {
+    return super.isEnd(node) && seenFrom(this.world, new Vec3(node.x + 0.5, node.y + 1.62, node.z + 0.5), this.pos)
+  }
+}
+
+function tableGoal(bot, pos) {
+  return new GoalSeeTable(bot.world, pos)
 }
 
 async function safeCraft(bot, recipe, count, table, opts) {
