@@ -35,7 +35,7 @@ const IRON_JOB = { input: 'raw_iron', output: 'iron_ingot' }
 function takeJob(ctx) {
   const j = ctx.furnaceJob
   if (j !== undefined) ctx.furnaceJob = null
-  return j && typeof j.input === 'string' && typeof j.output === 'string' ? { input: j.input, output: j.output } : IRON_JOB
+  return j && typeof j.input === 'string' && typeof j.output === 'string' ? { input: j.input, output: j.output, caller: true } : IRON_JOB
 }
 
 const FURNACE_REACH = craftMod.TABLE_REACH // window ops need table-like proximity
@@ -59,12 +59,12 @@ function dist3(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
-// A caller's job (castle glass, g0z.38) reports on ctx.furnace.result only:
+// A caller's job (castle glass g0z.38, bring's iron smelt ipn.19) reports on ctx.furnace.result only:
 // its window cycle settles async, after the caller's driveLeg restored the
 // caller's own stepStatus — a write there would end the caller's step.
 function ownStatus(ctx) {
   const f = ctx && ctx.furnace
-  return !f || !f.job || f.job.input === IRON_JOB.input
+  return !f || !f.job || !f.job.caller
 }
 
 function fail(ctx, reason) {
@@ -494,6 +494,7 @@ function furnace(bot, ctx, target, state) {
     ctx.furnace = null
   }
   if (!ctx.furnace || ctx.furnace.settled) ctx.furnace = freshRun(job)
+  else if (job === IRON_JOB && ctx.furnace.job && ctx.furnace.job.caller &&ctx.furnace.job.input === job.input) ctx.furnace.job.caller = false // gear adopts a caller's iron run
   const f = ctx.furnace
   const spot = furnaceSpot(bot, ctx)
   if (!spot) {
