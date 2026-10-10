@@ -1257,11 +1257,15 @@ function castlefetch(bot, ctx, target, state) {
     // reason (table, reach): chopping more would finish 'done' at once
     // and re-pick forever (revmux 01) — fail so the hold parks it.
     if (countItems(bot, (n) => n.endsWith('_log')) >= require('../budget').NEED_LOGS) {
+      if (d.kind === 'fence') ctx.castleFetchDry = 'fence' // the decor word rotates (dry() shape)
       finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
       return
     }
     deps.gather(bot, ctx, target, state)
-    if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
+    if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') {
+      if (d.kind === 'fence' && ctx.stepStatus.startsWith('failed:')) ctx.castleFetchDry = 'fence'
+      ctx.castleFetch = null
+    }
     return
   }
   if (d.kind === 'banner' && bannerSelf(bot, ctx)) { bannerTick(bot, ctx, f, d); return }

@@ -300,6 +300,36 @@ describe('castle second fence row behaviour (g0z.45)', () => {
     assert.ok(got.includes(key(open.x, open.y, open.z)), 'own scaffold in an open row cell still clears')
   })
 
+  it('a failing fence leg marks dry, so the word rotates back to pane (revmux 02)', async () => {
+    // Full log load, the craft fails (table, reach): craft-fence marks dry.
+    const bot = castleBot({ items: [{ name: 'oak_log', count: 14 }] })
+    closeDecor(bot, 0)
+    for (const c of blueprint.decorPlan(SITE, 0, 2).cells) {
+      if (c.kind === 'fence') bot.set.delete(k3(c.x, c.y, c.z))
+    }
+    fetch.deps.craftItem = () => ({ done: false })
+    const ctx = { castle: completeState() }
+    assert.equal(castleMod.menuFact(bot, ctx), 'fence-none')
+    for (let i = 0; i < 10 && !ctx.stepStatus; i++) { fetch(bot, ctx); await settle(); await settle() }
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-fence')
+    assert.equal(ctx.castleFetchDry, 'fence')
+    // A gather failure marks dry too.
+    const bot2 = castleBot()
+    closeDecor(bot2, 0)
+    for (const c of blueprint.decorPlan(SITE, 0, 2).cells) {
+      if (c.kind === 'fence') bot2.set.delete(k3(c.x, c.y, c.z))
+    }
+    fetch.deps.gather = (b, c) => { c.stepStatus = 'failed:gather-no-tree' }
+    const ctx2 = { castle: completeState() }
+    for (let i = 0; i < 10 && !ctx2.stepStatus; i++) { fetch(bot2, ctx2); await settle(); await settle() }
+    assert.equal(ctx2.stepStatus, 'failed:gather-no-tree')
+    assert.equal(ctx2.castleFetchDry, 'fence')
+    // Either way the next word is the pane leg's again.
+    const pane = blueprint.decorPlan(SITE, 0, 2).cells[0]
+    bot.set.delete(k3(pane.x, pane.y, pane.z))
+    assert.equal(castleMod.menuFact(bot, ctx), 'pane-none')
+  })
+
   it('fence words run the existing chest -> craft -> gather fetch (no new leg)', async () => {
     const items = []
     const bot = castleBot({ items, chest: [{ name: 'oak_fence', count: 40 }] })
