@@ -414,6 +414,7 @@ function matches(kind, name) {
   if (kind === 'banner') return name.endsWith('_banner') // item, standing and wall block (g0z.32)
   if (kind === 'bookshelf') return name === 'bookshelf' // attic decor (g0z.49): never the chiseled variant
   if (kind === 'enchanting_table') return name === 'enchanting_table' // attic decor (g0z.49)
+  if (kind === 'blast_furnace') return name === 'blast_furnace' // kitchen decor (g0z.50)
   if (kind === 'air') return AIR_NAMES.has(name) || name.endsWith('_door')
   if (kind === 'dig') return AIR_NAMES.has(name)
   return false
@@ -458,6 +459,12 @@ function absPlan(site, rot, version) {
 // between; x12 would be 3 away, x18 is the stair column). The stair well
 // (x18 z8..11, dy8..10 jump headroom) stays free. Appended after the fence
 // row so every earlier idx stays put.
+// 'blast_furnace' (g0z.50): the kitchen blast furnace — one cell at
+// (14,0,18), the south-east kitchen corner: off-plan, off the C_FURNACE
+// candidates and the kitchen torch (13,0,17), off the door path. `stance`
+// is the free floor north of it (14,0,17): the bot stands there and
+// looks south-into-kitchen at placement, so the front faces into the
+// room. Appended after the attic nook so every earlier idx stays put.
 const DECOR_BASE = 3000000
 const DECOR = {
   2: BLUEPRINTS[2].PLAN
@@ -467,7 +474,8 @@ const DECOR = {
     .concat(BLUEPRINTS[2].PLAN.filter((c) => c.kind === 'fence')
       .map((c) => ({ dx: c.dx, dy: c.dy + 1, dz: c.dz, kind: 'fence' })))
     .concat([{ dx: 15, dy: 8, dz: 12, kind: 'enchanting_table' }]
-      .concat([13, 14, 15, 16, 17].map((dx) => ({ dx, dy: 8, dz: 10, kind: 'bookshelf' })))),
+      .concat([13, 14, 15, 16, 17].map((dx) => ({ dx, dy: 8, dz: 10, kind: 'bookshelf' }))))
+    .concat([{ dx: 14, dy: 0, dz: 18, kind: 'blast_furnace', stance: { dx: 14, dy: 0, dz: 17 } }]),
 }
 
 let decorCache = null
@@ -481,6 +489,10 @@ function decorPlan(site, rot, version) {
     if (local[i].wall) {
       const w = rotatePlan([{ ...local[i].wall, kind: 'stone' }], rot | 0, bp.version)[0]
       o.wall = { x: site.x + w.dx, y: site.y + w.dy, z: site.z + w.dz }
+    }
+    if (local[i].stance) {
+      const s = rotatePlan([{ ...local[i].stance, kind: 'stone' }], rot | 0, bp.version)[0]
+      o.stance = { x: site.x + s.dx, y: site.y + s.dy, z: site.z + s.dz }
     }
     return o
   })
