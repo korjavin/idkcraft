@@ -348,12 +348,18 @@ function depositPlan(bot, ctx) {
   // too (revmux 01): an unloaded cell reads open and a backing-off cell
   // counts (now=Infinity) — else a far fetch leg banks the ladder's sand.
   let paneKeep = null
+  let decorKeep = null // g0z.45: open decor demand per kind (pane/banner/fence), the pack keep bound
   try {
     const far = { blockAt: (p) => bot.blockAt(p) || { name: 'air' } }
-    if (ctx && ctx.castle && ctx.castle.site && require('./castle').decorOpen(far, ctx.castle, Infinity).some((c) => c.kind === 'pane')) {
-      paneKeep = { sand: PANE_SAND_KEEP, glass: PANE_GLASS_KEEP }
+    if (ctx && ctx.castle && ctx.castle.site) {
+      const open = require('./castle').decorOpen(far, ctx.castle, Infinity)
+      if (open.some((c) => c.kind === 'pane')) {
+        paneKeep = { sand: PANE_SAND_KEEP, glass: PANE_GLASS_KEEP }
+      }
+      decorKeep = {}
+      for (const c of open) decorKeep[c.kind] = (decorKeep[c.kind] || 0) + 1
     }
-  } catch (_) { paneKeep = null }
+  } catch (_) { paneKeep = null; decorKeep = null }
   // Keep-first counters for bankable keeps (vmzq.39): name -> kept so far.
   const kept = {}
   let li = 0
@@ -388,9 +394,20 @@ function depositPlan(bot, ctx) {
     // Wood is capped (g0z.26) and stone is capped (vmzq.39): the first KEEP
     // stays, the rest banks through the keeps below (bed/gear only keep
     // more, never less — bounded).
-    // Decor panes (g0z.31) and banners (g0z.32) are castle stock even past 'complete': banking
-    // them into the castle chest would loop with castlefetch's withdraw.
-    if (ctx && ctx.castle && castleMaterial(i.name) && (i.name.endsWith('glass_pane') || i.name.endsWith('_banner'))) continue
+    // Decor stock (g0z.31 panes, g0z.32 banners, g0z.45 second fence row)
+    // is castle stock even past 'complete': banking it into the castle
+    // chest would loop with castlefetch's withdraw. Bounded by the open
+    // decor demand per kind — the surplus banks like the g0z.27 BOM.
+    if (decorKeep && ctx && ctx.castle && castleMaterial(i.name)) {
+      let kind = null
+      try { kind = require('./castle').kindOf(i.name) } catch (_) { kind = null }
+      if (kind && (decorKeep[kind] || 0) > 0) {
+        const k = Math.min(decorKeep[kind], n)
+        decorKeep[kind] -= k
+        n -= k
+        if (n <= 0) continue
+      }
+    }
     if (paneKeep && (i.name === 'sand' || i.name === 'red_sand' || i.name === 'glass')) {
       const key = i.name === 'glass' ? 'glass' : 'sand'
       const k = Math.min(paneKeep[key], n)

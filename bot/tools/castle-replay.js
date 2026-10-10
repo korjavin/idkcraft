@@ -44,7 +44,8 @@
 //   within the leash (idle-rehome) and a never-back run FAILs).
 //   CASTLE_SAND (1 = g0z.38: a 6x3x6 sand patch on a dirt base just east
 //   of the pad, top flush with it — the pad has no sand of its own; with
-//   CASTLE_SEED=complete the verdict adds panes=<laid>/44).
+//   CASTLE_SEED=complete the verdict adds panes=<laid>/44 and
+//   upper-fence=<laid>/109 (g0z.45)).
 // Exit: 0 = measured (even at 0 laid — the line says so),
 //   1 = CASTLE_IDLE verdict FAIL,
 //   2 = environment/setup failure (spawn, pad, order, dropped follower,
@@ -847,19 +848,22 @@ async function main() {
     seedTag = `, seeded=${placed}/${placed}`
     origLog(`CASTLE-RIG seeded castle site ${st.site.x} ${st.site.y} ${st.site.z} rot 0: ${cells.length} setblocks, ${placed} plan blocks + gate + 2 beds + table read back`)
     if (IDLE_DEATH > 0) {
-      // 6x7.25: decor too (44 panes + 2 gate banners), so castlefetch has
-      // nothing left to fetch: its sand/wool legs walked 85+ out on both
-      // builds and drowned the gather drift this scenario measures.
+      // 6x7.25: decor too (44 panes + 2 gate banners + the g0z.45 upper
+      // fence row), so castlefetch has nothing left to fetch: its
+      // sand/wool legs walked 85+ out on both builds and drowned the
+      // gather drift this scenario measures.
       const decor = require('../src/castle').decorPlan(st.site, 0, 2).cells
       for (const c of decor) {
         let block = 'glass_pane'
         if (c.kind === 'banner') {
           const f = c.wall.z > c.z ? 'north' : c.wall.z < c.z ? 'south' : c.wall.x > c.x ? 'west' : 'east'
           block = `white_wall_banner[facing=${f}]`
+        } else if (c.kind === 'fence') {
+          block = 'oak_fence'
         }
         await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${block}`).catch((e) => fail('seed-decor', e.message))
       }
-      origLog(`CASTLE-RIG seeded decor: ${decor.length} cells (panes + banners)`)
+      origLog(`CASTLE-RIG seeded decor: ${decor.length} cells (panes + banners + upper fence)`)
     }
     if (!tickCtx()) fail('seed-castle', 'no follower ctx')
     tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
@@ -1441,20 +1445,42 @@ async function main() {
   }
   // Panes (g0z.38): decor pane cells of the seeded castle reading
   // *glass_pane on the follower (unloaded cells are counted apart).
+  // Upper fence (g0z.45): the same for the second fence row.
+  // Recall (g0z.45): the window's side work can end the follower far off
+  // site (a 60-min seed run read 153/153 unread) — tp it over the site and
+  // wait for the chunks before counting. Verdict phase only: the idle
+  // extremes below accumulate during the window, a centre sample moves none.
   let paneTag = ''
+  let fenceTag = ''
   if (SEED === 'complete') {
-    const cells = require('../src/castle').decorPlan({ x: bx - 15, y: gy + 1, z: bz - 13 }, 0, 2).cells.filter((c) => c.kind === 'pane')
-    let laid = 0
-    let unread = 0
-    for (const c of cells) {
-      let b = null
-      try { b = follower.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
-      if (!b) unread++
-      else if (/glass_pane$/.test(b.name)) laid++
+    const site = { x: bx - 15, y: gy + 1, z: bz - 13 }
+    await rcon(`tp ${FOLLOWER} ${site.x + 15.5} ${site.y + 12} ${site.z + 13.5}`).catch(() => {})
+    for (let i = 0; i < 30; i++) {
+      let loaded = false
+      try {
+        loaded = [[0, 0], [30, 0], [0, 26], [30, 26]]
+          .every(([dx, dz]) => !!follower.blockAt(new Vec3(site.x + dx, site.y, site.z + dz)))
+      } catch (_) { loaded = false }
+      if (loaded) break
+      await sleep(1000)
     }
-    paneTag = `, panes=${laid}/${cells.length}${unread ? `(${unread} unread)` : ''}`
+    const dp = require('../src/castle').decorPlan(site, 0, 2).cells
+    for (const [kind, re, tag] of [['pane', /glass_pane$/, 'panes'], ['fence', /_fence$/, 'upper-fence']]) {
+      const cells = dp.filter((c) => c.kind === kind)
+      let laid = 0
+      let unread = 0
+      for (const c of cells) {
+        let b = null
+        try { b = follower.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
+        if (!b) unread++
+        else if (re.test(b.name)) laid++
+      }
+      const t = `, ${tag}=${laid}/${cells.length}${unread ? `(${unread} unread)` : ''}`
+      if (kind === 'pane') paneTag = t
+      else fenceTag = t
+    }
   }
-  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
+  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
