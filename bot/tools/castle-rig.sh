@@ -28,6 +28,10 @@
 #   no order, nobody online; the verdict adds idle-maxdist/idle-miny/
 #   idle-underground-s and a `CASTLE-RIG idle: PASS|FAIL` line — FAIL on
 #   maxdist > 80, miny < the surface floor, any death or a FAIL night),
+#   CASTLE_IDLE_DEATH (N > 0 = 6x7.25, needs CASTLE_IDLE=1: clear + kill the
+#   bot once after N min, respawn at world spawn with an empty kit; that
+#   death is not judged, tracking resumes back inside the leash and a
+#   never-back run FAILs; keep N before the first dusk, ~10 min),
 #   CASTLE_SAND (1 = g0z.38: a sand patch beside the pad; with
 #   CASTLE_SEED=complete the verdict adds panes=<laid>/44),
 #   CASTLE_BLOCKED (0 = none; N > 0 seeds N blocked plan cells after the
@@ -124,6 +128,9 @@ SEED="${CASTLE_SEED:-}"
 case "$SEED" in ''|complete) ;; *) echo "CASTLE_SEED: want ''|complete, got '$SEED'"; exit 2 ;; esac
 IDLE="${CASTLE_IDLE:-}"
 case "$IDLE" in ''|0) IDLE= ;; 1) SEED=complete ;; *) echo "CASTLE_IDLE: want ''|0|1, got '$IDLE'"; exit 2 ;; esac
+IDLE_DEATH="${CASTLE_IDLE_DEATH:-0}"
+case "$IDLE_DEATH" in ''|*[!0-9]*) echo "CASTLE_IDLE_DEATH: want minutes >= 0, got '$IDLE_DEATH'"; exit 2 ;; esac
+[ "$IDLE_DEATH" = 0 ] || [ -n "$IDLE" ] || { echo "CASTLE_IDLE_DEATH needs CASTLE_IDLE=1"; exit 2; }
 BLOCKED="${CASTLE_BLOCKED:-0}"
 case "$BLOCKED" in ''|*[!0-9]*) echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2 ;; esac
 { [ "$BLOCKED" -ge 0 ] && [ "$BLOCKED" -le 16 ]; } || { echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2; }
@@ -306,7 +313,7 @@ boot() {
 }
 boot
 export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_IDLE="$IDLE" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
+export CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in
