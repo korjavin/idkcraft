@@ -82,6 +82,25 @@ describe('structure: forbidden require directions (oqul.1)', () => {
     assert.ok(!added.length && !gone.length, msg)
   })
 
+  // oqul.13: the layer order goal < goal-options < task holds through third
+  // modules too (goal.js -> X -> task.js would close the cycle the direct
+  // UPWARD rule cannot see). Lazy requires count, as above.
+  it('the goal/goal-options/task layering holds transitively', () => {
+    const g = graph()
+    const reach = (from) => {
+      const seen = new Set([from])
+      const todo = [from]
+      while (todo.length) for (const t of g[todo.pop()] || []) if (!seen.has(t)) { seen.add(t); todo.push(t) }
+      return seen
+    }
+    const up = []
+    for (const e of UPWARD) {
+      const [from, to] = e.split(' -> ')
+      if (reach(from).has(to)) up.push(e)
+    }
+    assert.deepEqual(up, [])
+  })
+
   it('forbidden() rules: sanity', () => {
     assert.equal(forbidden('src/behaviours/x.js', 'src/goal.js'), true)
     assert.equal(forbidden('src/behaviours/x.js', 'src/perception.js'), false)

@@ -366,7 +366,7 @@ function depositPlan(bot, ctx) {
   // leftovers bank normally.
   let bedOwed = false
   try {
-    const fact = require('./beds').bedsFact(bot, ctx && ctx.home)
+    const fact = require('./bedfacts').bedsFact(bot, ctx && ctx.home)
     bedOwed = fact === 'none' || fact === 'one'
   } catch (_) { bedOwed = false }
   // Partial wool banks (9qt0): only a craft-ready colour (3+ of one) keeps;
@@ -383,7 +383,7 @@ function depositPlan(bot, ctx) {
   // + ground patches under unplaced beds (floorless-house terrain dips eat
   // a plank each — banking them strands the place between picks).
   let keepBedPlanks = 6
-  try { keepBedPlanks += require('./beds').fillNeed(bot, ctx && ctx.home) || 0 } catch (_) { /* no patches */ }
+  try { keepBedPlanks += require('./bedfacts').fillNeed(bot, ctx && ctx.home) || 0 } catch (_) { /* no patches */ }
   // The keep fills the top single wood first (gather-gate mirror, revmux
   // 01-review): the bed top-up measures maxPlanks of ONE wood, so keeping
   // 6 mixed in inventory order would farm logs forever while beds are held
@@ -616,7 +616,7 @@ function chestSpotFor(bot, ctx) {
     // placer avoids them. The adopt scan above still claims a standing chest
     // wherever it is. Deferred require (beds->stockpile cycle).
     try {
-      if (require('./beds').isBedroomCell(ctx.home, c.x, c.y, c.z)) continue
+      if (require('./bedfacts').isBedroomCell(ctx.home, c.x, c.y, c.z)) continue
     } catch (_) { /* untestable home: place as before */ }
     const below = blockNameAt(bot, c.x, c.y - 1, c.z)
     if (below === null) { sawUnknown = true; continue }

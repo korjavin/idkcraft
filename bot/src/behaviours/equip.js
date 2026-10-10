@@ -461,7 +461,7 @@ function tableFor(bot, ctx) {
     // B-foot blocked the bed, which fails loud by design). Deferred require
     // (beds->craftany->equip cycle); unreadable reads as placeable.
     try {
-      if (require('./beds').isBedroomCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
+      if (require('./bedfacts').isBedroomCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
       // Nor any wall/door cell of the plan (idkcraft-d7i: a station in the
       // doorway left the house doorless).
       if (require('./build').isPlanCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
