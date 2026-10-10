@@ -134,9 +134,16 @@ describe('g0z.44 guardCastle: the ring vetoes places and yard digs', () => {
     const { bot, ctx } = guarded()
     ctx.step = 'castle'
     const fn = bot.pathfinder.movements.exclusionAreasBreak[0]
-    assert.equal(fn({ name: 'grass_block', position: { x: 115, y: 65, z: 213 } }), 0, 'prep cuts and approaches dig')
+    const yard = { name: 'grass_block', position: { x: 115, y: 65, z: 213 } }
+    assert.equal(fn(yard), 0, 'prep cuts and approaches dig')
     assert.equal(fn({ name: 'cobblestone', position: { x: 111, y: 64, z: 207 } }), 100, 'laid wall still vetoed')
     assert.equal(fn({ name: 'dirt', position: { x: 111, y: 63, z: 207 } }), 100, 'castle ground still vetoed')
+    // A borrower mid-step (revmux 02 core-1): fight's live goal is foreign.
+    ctx.castleGoal = { own: true }
+    bot.pathfinder.goal = ctx.castleGoal
+    assert.equal(fn(yard), 0, 'own goal still exempt')
+    bot.pathfinder.goal = { foreign: true }
+    assert.equal(fn(yard), 100, 'a borrowed goal digs nothing')
   })
 })
 

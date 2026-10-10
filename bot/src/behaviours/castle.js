@@ -1052,11 +1052,17 @@ function far(bot, ctx, st, c, reach, now) {
   return true
 }
 
+// A borrower (fight, lead, a reflex) replaced the castle step's goal while
+// its cell stayed the same. Shared by approach() and the break guard;
+// fails closed (borrowed) for the guard, open for the approach latch.
+function borrowedGoal(bot, ctx) {
+  try { return bot.pathfinder.goal != null && bot.pathfinder.goal !== ctx.castleGoal } catch (_) { return true }
+}
+
 // (Re)issue the approach for this cell: a new cell, or a borrower (fight,
 // lead, a reflex) replaced our goal while the cell stayed the same.
 function approach(bot, ctx, c, make) {
-  let foreign = false
-  try { foreign = bot.pathfinder.goal != null && bot.pathfinder.goal !== ctx.castleGoal } catch (_) { foreign = false }
+  const foreign = borrowedGoal(bot, ctx)
   if (ctx.castleGoalIdx === c.idx && !foreign) return false
   ctx.castleGoalIdx = c.idx
   try {
@@ -1517,10 +1523,11 @@ function guardCastle(bot, ctx) {
       try {
         if (!ctx.castle || !block) return 0
         if (castleProtects(ctx.castle, block.position, block.name)) return 100
-        // The castle step's own walks (g0z.44 revmux 01 body-2): prep cuts
-        // and cell approaches dig as before — the ban is for A* outside
-        // castle walks, mirroring the castleClears exemption.
-        if (ctx.step === 'castle') return 0
+        // The castle step's own walks (g0z.44 revmux 01 body-2, 02 core-1):
+        // prep cuts and cell approaches dig as before — but not a borrower
+        // (fight, lead, a reflex), whose A* stays out of the yard like
+        // every other executor's.
+        if (ctx.step === 'castle' && !borrowedGoal(bot, ctx)) return 0
         return yardDigBan(ctx.castle, block.position, block.name) ? 100 : 0
       } catch (_) { return 0 }
     }
