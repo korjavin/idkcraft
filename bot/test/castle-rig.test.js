@@ -812,6 +812,29 @@ describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
     assert.match(createIdleTrack(home).verdict(0).line, /no position samples/)
   })
 
+  it('forced death (6x7.25): the respawn walk is not judged, tracking resumes inside the leash, never-back FAILs', () => {
+    const t = createIdleTrack(home)
+    t.onSample(0, { x: 100, y: 70, z: 200 })
+    t.pause()
+    t.onSample(179, { x: 325, y: 150, z: 200 }) // respawn read before died(): not judged
+    t.died(180)
+    t.onSample(181, { x: 700, y: 30, z: 800 }) // world spawn: not judged
+    t.onSample(300, { x: 100 + IDLE_MAXDIST + 1, y: 70, z: 200 })
+    assert.equal(t.tag(), ', idle-maxdist=0, idle-miny=70, idle-underground-s=0, idle-death=180s, idle-rehome=never')
+    assert.equal(t.verdict(0).line, 'CASTLE-RIG idle: FAIL (never back within the leash after the forced death) floor=54')
+    t.onSample(400, { x: 100 + IDLE_MAXDIST, y: 60, z: 200 })
+    t.onSample(500, { x: 100, y: 45, z: 200 }) // back home, then a dive: judged
+    assert.equal(t.tag(), ', idle-maxdist=80, idle-miny=45, idle-underground-s=0, idle-death=180s, idle-rehome=400s')
+    assert.equal(t.verdict(0).line, 'CASTLE-RIG idle: FAIL (miny 45<54) floor=54')
+  })
+
+  it('idleRespawnPoint: 225 from home toward the world spawn, the spawn itself when closer', () => {
+    const { idleRespawnPoint } = require('../tools/castle-replay')
+    assert.deepEqual(idleRespawnPoint({ x: 0, z: 0 }, { x: 600, z: 0 }), { x: 225, y: 150, z: 0 })
+    assert.deepEqual(idleRespawnPoint({ x: 0, z: 0 }, { x: -60, z: 80 }), { x: -60, y: 150, z: 80 })
+    assert.deepEqual(idleRespawnPoint({ x: 5, z: 7 }, { x: 5, z: 7 }), { x: 5, y: 150, z: 7 })
+  })
+
   it('castle-rig.sh validates CASTLE_IDLE and only exports it (default output untouched)', () => {
     const { spawnSync } = require('node:child_process')
     const os = require('node:os')
@@ -822,10 +845,15 @@ describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
     assert.equal(bad.status, 2)
     assert.match(bad.stdout, /CASTLE_IDLE: want ''\|0\|1/)
     assert.match(run({ CASTLE_IDLE: '1' }).stdout, /no START.sh/)
+    assert.match(run({ CASTLE_IDLE_DEATH: 'x' }).stdout, /CASTLE_IDLE_DEATH: want minutes/)
+    assert.match(run({ CASTLE_IDLE_DEATH: '3' }).stdout, /CASTLE_IDLE_DEATH needs CASTLE_IDLE=1/)
+    assert.match(run({ CASTLE_IDLE: '1', CASTLE_IDLE_DEATH: '3' }).stdout, /no START.sh/)
     const src = fs.readFileSync(sh, 'utf8')
     assert.ok(src.includes('1) SEED=complete ;;'), 'CASTLE_IDLE no longer implies the seeded castle')
     const rsrc = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8')
     assert.ok(rsrc.includes("+ (idle ? idle.tag() : '')"), 'idle tail not on the verdict line')
     assert.ok(rsrc.includes('process.exit(idleV && !idleV.pass ? 1 : 0)'), 'idle FAIL no longer exits 1')
+    // 6x7.25: under set -e a bare `node ...; echo $?` never wrote the rc — a FAIL exited 2.
+    assert.ok(src.includes('node tools/castle-replay.js 2>&1 || _rc=$?'), 'replay rc capture is not set -e safe')
   })
 })

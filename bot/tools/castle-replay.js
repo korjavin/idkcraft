@@ -33,6 +33,14 @@
 //   CASTLE_IDLE (1 = 6x7.24, needs CASTLE_SEED=complete: the verdict adds
 //   idle-maxdist/idle-miny/idle-underground-s and a CASTLE-RIG idle:
 //   PASS|FAIL line; FAIL exits 1).
+//   CASTLE_IDLE_DEATH (N > 0 = 6x7.25, with CASTLE_IDLE: after N min the
+//   follower is cleared and killed once, respawning with an empty kit
+//   IDLE_RESPAWN_DIST blocks from home on the line to the world spawn —
+//   the prod 10-09 drift path (home 23,65,7, world spawn ~225 off; the
+//   rig pad is ~600 from it, a walk that eats the day). The seed adds the
+//   decor (panes + banners) so castlefetch stays idle. That death is not
+//   counted against the verdict; tracking pauses until the bot is back
+//   within the leash (idle-rehome) and a never-back run FAILs).
 //   CASTLE_SAND (1 = g0z.38: a 6x3x6 sand patch on a dirt base just east
 //   of the pad, top flush with it — the pad has no sand of its own; with
 //   CASTLE_SEED=complete the verdict adds panes=<laid>/44).
@@ -67,6 +75,7 @@ const NIGHT = process.env.CASTLE_NIGHT === '1'
 const SEED = process.env.CASTLE_SEED || ''
 const SAND = process.env.CASTLE_SAND === '1'
 const IDLE = process.env.CASTLE_IDLE === '1'
+const IDLE_DEATH = IDLE ? Math.max(0, parseInt(process.env.CASTLE_IDLE_DEATH || '0', 10) || 0) : 0
 // Far respawn (vmzq.29, prod run6): after CASTLE_FAR_AFTER min of the
 // window the follower lands CASTLE_FAR blocks off the half-built site in a
 // 3x3 pit 7 deep, dirt cleared, 64 cobble given — the walk back must pillar
@@ -446,16 +455,37 @@ function createResidenceNights({ deaths, log }) {
 // residence night PASS. Pure (unit-tested): t = window seconds.
 const IDLE_MAXDIST = 64 + 16
 const IDLE_UNDERGROUND_DY = 20
+const IDLE_RESPAWN_DIST = 225
+// Respawn point for the forced death: IDLE_RESPAWN_DIST from home toward
+// the world spawn (the spawn itself when closer), y 150 — fall damage is
+// off in the rig, the bot drops onto whatever surface is there.
+function idleRespawnPoint(home, spawn) {
+  const dx = spawn.x - home.x
+  const dz = spawn.z - home.z
+  const k = Math.min(1, IDLE_RESPAWN_DIST / (Math.hypot(dx, dz) || 1))
+  return { x: Math.round(home.x + dx * k), y: 150, z: Math.round(home.z + dz * k) }
+}
 function createIdleTrack(home) {
   const h = home.site
   const floor = require('../src/resources').surfaceFloor({ home })
-  const st = { maxdist: 0, miny: null, undergroundS: 0, lastT: null, lastUnder: false }
+  const st = { maxdist: 0, miny: null, undergroundS: 0, lastT: null, lastUnder: false, diedS: null, rehomeS: null, paused: false }
   return {
     st,
     floor,
+    // Forced death (6x7.25): the respawn walk from world spawn is not
+    // judged; tracking resumes at the first sample back inside the leash.
+    // pause() spans the kill until the body stands at the respawn point
+    // (the sampler timer runs on its own: a stale or fresh position read in
+    // between must not count).
+    pause() { st.paused = true },
+    died(t) { st.paused = false; st.diedS = t; st.rehomeS = null; st.lastT = null; st.lastUnder = false },
     onSample(t, p) {
-      if (!p || typeof p.y !== 'number') return
+      if (st.paused || !p || typeof p.y !== 'number') return
       const d = Math.hypot(p.x - h.x, p.z - h.z)
+      if (st.diedS != null && st.rehomeS == null) {
+        if (d > IDLE_MAXDIST) return
+        st.rehomeS = t
+      }
       if (d > st.maxdist) st.maxdist = d
       if (st.miny == null || p.y < st.miny) st.miny = p.y
       if (st.lastUnder && st.lastT != null) st.undergroundS += t - st.lastT
@@ -463,7 +493,8 @@ function createIdleTrack(home) {
       st.lastT = t
     },
     tag() {
-      return `, idle-maxdist=${Math.round(st.maxdist)}, idle-miny=${st.miny == null ? '?' : Math.floor(st.miny)}, idle-underground-s=${Math.round(st.undergroundS)}`
+      const death = st.diedS == null ? '' : `, idle-death=${Math.round(st.diedS)}s, idle-rehome=${st.rehomeS == null ? 'never' : `${Math.round(st.rehomeS)}s`}`
+      return `, idle-maxdist=${Math.round(st.maxdist)}, idle-miny=${st.miny == null ? '?' : Math.floor(st.miny)}, idle-underground-s=${Math.round(st.undergroundS)}${death}`
     },
     // nights: residence night records (partial ones are not judged).
     verdict(deaths, nights = []) {
@@ -471,6 +502,7 @@ function createIdleTrack(home) {
       if (st.maxdist > IDLE_MAXDIST) why.push(`maxdist ${Math.round(st.maxdist)}>${IDLE_MAXDIST}`)
       if (st.miny == null) why.push('no position samples')
       else if (Math.floor(st.miny) < floor) why.push(`miny ${Math.floor(st.miny)}<${floor}`)
+      if (st.diedS != null && st.rehomeS == null) why.push('never back within the leash after the forced death')
       if (deaths > 0) why.push(`deaths ${deaths}>0`)
       for (const n of nights) if (!n.partial && !n.pass) why.push(`residence night ${n.night} FAIL`)
       return { pass: why.length === 0, line: `CASTLE-RIG idle: ${why.length ? `FAIL (${why.join(', ')})` : 'PASS'} floor=${floor}` }
@@ -656,6 +688,8 @@ async function main() {
   if (!follower) throw new Error('follower never created')
   await waitFor(follower, 'spawn', 60000, 'follower spawn').catch((e) => fail('follower-spawn', e.message))
   follower.on('death', () => { deaths++ })
+  let worldSpawn = null // 6x7.25: the first spawn, before any tp, is the world spawn
+  try { worldSpawn = follower.entity.position.floored() } catch (_) { worldSpawn = null }
   follower.on('end', () => fail('follower-dropped', 'connection ended mid-run'))
   await sleep(3000)
   await rcon(`op ${GUIDE}`).catch((e) => fail('op', e.message))
@@ -805,6 +839,21 @@ async function main() {
     const placed = cells.filter((c) => c.kind !== 'extra' && c.kind !== 'air' && c.kind !== 'dig').length
     seedTag = `, seeded=${placed}/${placed}`
     origLog(`CASTLE-RIG seeded castle site ${st.site.x} ${st.site.y} ${st.site.z} rot 0: ${cells.length} setblocks, ${placed} plan blocks + gate + 2 beds + table read back`)
+    if (IDLE_DEATH > 0) {
+      // 6x7.25: decor too (44 panes + 2 gate banners), so castlefetch has
+      // nothing left to fetch: its sand/wool legs walked 85+ out on both
+      // builds and drowned the gather drift this scenario measures.
+      const decor = require('../src/castle').decorPlan(st.site, 0, 2).cells
+      for (const c of decor) {
+        let block = 'glass_pane'
+        if (c.kind === 'banner') {
+          const f = c.wall.z > c.z ? 'north' : c.wall.z < c.z ? 'south' : c.wall.x > c.x ? 'west' : 'east'
+          block = `white_wall_banner[facing=${f}]`
+        }
+        await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${block}`).catch((e) => fail('seed-decor', e.message))
+      }
+      origLog(`CASTLE-RIG seeded decor: ${decor.length} cells (panes + banners)`)
+    }
     if (!tickCtx()) fail('seed-castle', 'no follower ctx')
     tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
   }
@@ -1024,8 +1073,39 @@ async function main() {
   let escapedS = null
   let pitResumedS = null
   let pitEsc = null
+  let idleDeathAt = 0
+  let idleForced = 0
+  let idlePosAt = 0
   while (Date.now() < endAt) {
     await sleep(15000)
+    if (IDLE_DEATH > 0 && !idleDeathAt && Date.now() - t0 >= IDLE_DEATH * 60000) {
+      idleDeathAt = Date.now()
+      if (!worldSpawn) fail('idle-death', 'world spawn never read')
+      const rp = idleRespawnPoint(tickCtx().home.site, worldSpawn)
+      // keep_inventory is on: clear first, so the respawn kit is empty. The
+      // spawnpoint overrides a castle bed the bot may have slept in.
+      await rcon(`clear ${FOLLOWER}`).catch((e) => fail('idle-death', e.message))
+      await rcon(`spawnpoint ${FOLLOWER} ${rp.x} ${rp.y} ${rp.z}`).catch((e) => fail('idle-death', e.message))
+      const d0 = deaths
+      if (idle) idle.pause()
+      await rcon(`kill ${FOLLOWER}`).catch((e) => fail('idle-death', e.message))
+      for (let i = 0; i < 20 && deaths === d0; i++) await sleep(500)
+      if (deaths === d0) fail('idle-death', 'kill never reached the follower')
+      idleForced = deaths - d0
+      const atRp = () => { try { const p = follower.entity.position; return Math.hypot(p.x - rp.x - 0.5, p.z - rp.z - 0.5) <= 4 } catch (_) { return false } }
+      for (let i = 0; i < 60 && !atRp(); i++) await sleep(500)
+      if (!atRp()) fail('idle-death', `never respawned at ${rp.x} ${rp.z}`)
+      if (idle) idle.died((idleDeathAt - t0) / 1000)
+      origLog(`CASTLE-RIG idle-death: at ${(idleDeathAt - t0) / 1000 | 0}s, cleared + killed, respawn ${rp.x} ${rp.y} ${rp.z} (world spawn ${worldSpawn.x} ${worldSpawn.y} ${worldSpawn.z})`)
+    }
+    if (idleDeathAt && Date.now() - idlePosAt >= 60000) {
+      idlePosAt = Date.now()
+      try {
+        const p = follower.entity.position
+        const h = tickCtx().home.site
+        origLog(`CASTLE-RIG idle-pos t=${(Date.now() - t0) / 1000 | 0}s dist=${Math.round(Math.hypot(p.x - h.x, p.z - h.z))} y=${Math.floor(p.y)} step=${seen.step}`)
+      } catch (_) { /* diagnostic best-effort */ }
+    }
     if (FAR > 0 && !farAt && Date.now() - t0 >= FAR_AFTER * 60000) {
       farAt = Date.now()
       const st = follower._tickerCtx && follower._tickerCtx.castle
@@ -1366,7 +1446,7 @@ async function main() {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
   }
   origLog(line)
-  const idleV = idle ? idle.verdict(deaths, resNights ? resNights.nights : []) : null
+  const idleV = idle ? idle.verdict(deaths - idleForced, resNights ? resNights.nights : []) : null
   if (idleV) origLog(idleV.line)
   try { logStream.end() } catch (_) { /* close best-effort */ }
   process.exit(idleV && !idleV.pass ? 1 : 0)
@@ -1379,4 +1459,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { createIdleTrack, IDLE_MAXDIST, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver }
+module.exports = { createIdleTrack, IDLE_MAXDIST, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver }
