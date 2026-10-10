@@ -842,11 +842,13 @@ describe('castle ground (idkcraft-g0z.14)', () => {
     assert.equal(d('dirt', site.x + 15, site.y - 1, site.z + 13), 'protected') // hall floor
     assert.equal(d('deepslate', wall.x, site.y - 20, wall.z), 'protected')
   })
-  it('moat dig cells, ground off the box, at site level and non-natural stay as before', () => {
+  it('moat dig cells, ground off the box and non-natural stay as before; site-level yard ground bans (g0z.44)', () => {
     assert.equal(d('stone', moat.x, moat.y, moat.z), null)
     assert.equal(d('coal_ore', moat.x, moat.y, moat.z), null)
     assert.equal(d('stone', site.x - 1, site.y - 1, site.z), null)
-    assert.equal(d('dirt', site.x + 15, site.y, site.z + 13), null)
+    // g0z.44 yard dig ban: natural ground at/above site.y inside the box,
+    // off-plan, refuses for every executor but the castle step (was null).
+    assert.equal(d('dirt', site.x + 15, site.y, site.z + 13), 'protected')
     assert.equal(d('coal_ore', wall.x, site.y - 3, wall.z), null)
     assert.equal(d('snow', wall.x, site.y - 1, wall.z), null)
     assert.equal(denyReason(bot, blk('stone', wall.x, site.y - 1, wall.z), {}), null, 'no castle')

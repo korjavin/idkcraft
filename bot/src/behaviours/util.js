@@ -366,6 +366,24 @@ function castleProtects(state, pos, name) {
     (name !== 'snow' && NATURAL_SOLID.has(name) && castle.groundCell(state, pos))
 }
 
+// Castle yard dig ban (idkcraft-g0z.44): natural ground at/above site.y
+// inside the footprint that no plan cell covers — the yard the owner
+// walks. Plan cells (a wrong wall occupant, moat 'dig' cells, keep-clear
+// 'air') stay diggable, below site.y is groundCell already, and flora /
+// leaves / logs / ores are not NATURAL_SOLID. Shared by protectedReason
+// and guardCastle's break fn.
+function yardDigBan(state, pos, name) {
+  try {
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number' || !pos || typeof pos.y !== 'number') return false
+    if (name === 'snow' || !NATURAL_SOLID.has(name)) return false
+    if (Math.floor(pos.y) < site.y) return false
+    if (!castle.inFootprint(state, pos)) return false
+    const k = `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`
+    return !castle.absPlan(site, state.rot, state.blueprintVersion).at.has(k)
+  } catch (_) { return false }
+}
+
 const KEEP_OWN = /(chest|furnace|_door)$/
 
 // Castle footprint is ours (idkcraft-vmzq.40): for the castle step only
@@ -414,6 +432,10 @@ function protectedReason(bot, block, ctx) {
     // a recover/gather dig through the castle wall.
     if (ctx && ctx.castle && castleProtects(ctx.castle, pos, name)) return 'protected'
     if (castleClears(ctx, pos, name)) return null // vmzq.40: castle step, footprint blocker
+    // Castle yard (idkcraft-g0z.44): after the castle step's own clears
+    // (prep cuts, litter, foreign-clear keep working), before the own
+    // exemption — own scaffold in the yard is the sweep's, not recover's.
+    if (yardDigBan(ctx && ctx.castle, pos, name)) return 'protected'
     // House footprint (idkcraft-e5ba): natural ground under/around our own
     // house is its floor and door support, never scaffold. Solid ground only:
     // build's own clears (flora, snow) stay legal.
@@ -686,4 +708,4 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef }
+module.exports = { say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan }

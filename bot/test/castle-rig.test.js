@@ -835,6 +835,18 @@ describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
     assert.deepEqual(idleRespawnPoint({ x: 5, z: 7 }, { x: 5, z: 7 }), { x: 5, y: 150, z: 7 })
   })
 
+  it('yard litter (g0z.44): the count tags the verdict, PASS requires 0', () => {
+    const t = createIdleTrack(home)
+    t.onSample(0, { x: 100, y: 60, z: 200 })
+    assert.equal(t.tag(), ', idle-maxdist=0, idle-miny=60, idle-underground-s=0', 'unset: the old shape')
+    assert.equal(t.verdict(0).pass, true, 'unset: unjudged')
+    t.setYardLitter(0)
+    assert.equal(t.tag(), ', idle-maxdist=0, idle-miny=60, idle-underground-s=0, yard-litter=0')
+    assert.deepEqual(t.verdict(0), { pass: true, line: 'CASTLE-RIG idle: PASS floor=54' })
+    t.setYardLitter(2)
+    assert.equal(t.verdict(0).line, 'CASTLE-RIG idle: FAIL (yard-litter 2>0) floor=54')
+  })
+
   it('castle-rig.sh validates CASTLE_IDLE and only exports it (default output untouched)', () => {
     const { spawnSync } = require('node:child_process')
     const os = require('node:os')

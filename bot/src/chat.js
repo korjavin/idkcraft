@@ -600,7 +600,15 @@ function castleChat(bot, ticker, playerName, cmd) {
       loaded = [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
     } catch (_) { loaded = false }
     const blocked = Object.values(st.blocked || {}).filter((e) => e && e.until > now).length
-    const tail = `now: ${st.parked ? 'parked — say castle go' : (st.status || 'waiting for its turn')}; blocked ${blocked}`
+    // Yard litter (g0z.44): own blocks left in the fence band of a complete
+    // castle — reported, not chased when out of reach.
+    let yard = ''
+    if (loaded && st.phase === 'complete') {
+      try {
+        yard = `; yard litter ${castleMod.litterTargets(bot, ctx, st, now).length}`
+      } catch (_) { /* count best-effort */ }
+    }
+    const tail = `now: ${st.parked ? 'parked — say castle go' : (st.status || 'waiting for its turn')}; blocked ${blocked}${yard}`
     if (!loaded) return `castle at ${at(st.site)}: too far to count; ${tail}`
     const by = castleMod.progressByKind(bot, st)
     let done = 0
