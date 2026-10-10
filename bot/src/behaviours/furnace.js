@@ -494,7 +494,8 @@ function furnace(bot, ctx, target, state) {
     ctx.furnace = null
   }
   if (!ctx.furnace || ctx.furnace.settled) ctx.furnace = freshRun(job)
-  else if (job === IRON_JOB && ctx.furnace.job && ctx.furnace.job.caller &&ctx.furnace.job.input === job.input) ctx.furnace.job.caller = false // gear adopts a caller's iron run
+  // The tag follows the ticking owner (IRON_JOB is never mutated): gear and a caller share one same-input run.
+  else if (ctx.furnace.job && ctx.furnace.job.input === job.input && !!ctx.furnace.job.caller !== !!job.caller) ctx.furnace.job = job
   const f = ctx.furnace
   const spot = furnaceSpot(bot, ctx)
   if (!spot) {
