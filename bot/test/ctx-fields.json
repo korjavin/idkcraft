@@ -570,7 +570,7 @@
   },
   "claimedTable": {
     "writers": [
-      "src/behaviours/equip.js"
+      "src/behaviours/tablespot.js"
     ],
     "owner": "src/behaviours/equip.js"
   },
@@ -679,6 +679,7 @@
   "equip": {
     "writers": [
       "src/behaviours/equip.js",
+      "src/behaviours/tablespot.js",
       "src/goal.js"
     ],
     "owner": "src/behaviours/equip.js"
@@ -709,13 +710,13 @@
   },
   "equipTableSkip": {
     "writers": [
-      "src/behaviours/equip.js"
+      "src/behaviours/tablespot.js"
     ],
     "owner": "src/behaviours/equip.js"
   },
   "equipTableUnreachable": {
     "writers": [
-      "src/behaviours/equip.js"
+      "src/behaviours/tablespot.js"
     ],
     "owner": "src/behaviours/equip.js"
   },

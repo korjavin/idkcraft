@@ -101,6 +101,32 @@ describe('structure: forbidden require directions (oqul.1)', () => {
     assert.deepEqual(up, [])
   })
 
+  // oqul.14: the require graph is acyclic — the last cycles (craft/
+  // craftany/gear via stockpile, bring and equip) were cut by moving the
+  // shared helpers into packroom.js/bringbase.js/tablespot.js leaves (and
+  // TABLE_REACH into budget.js). Zero back-edges in any DFS order means no
+  // directed cycle exists, so a new require that closes a loop fails here.
+  it('the require graph has no cycles', () => {
+    const g = graph()
+    const color = {}
+    for (const f of Object.keys(g)) color[f] = 0
+    const stack = []
+    const back = []
+    const dfs = (u) => {
+      color[u] = 1
+      stack.push(u)
+      for (const v of g[u] || []) {
+        if (!(v in color)) continue
+        if (color[v] === 1) back.push([...stack.slice(stack.indexOf(v)), v].join(' -> '))
+        else if (color[v] === 0) dfs(v)
+      }
+      stack.pop()
+      color[u] = 2
+    }
+    for (const f of Object.keys(g)) if (color[f] === 0) dfs(f)
+    assert.deepEqual(back, [])
+  })
+
   it('forbidden() rules: sanity', () => {
     assert.equal(forbidden('src/behaviours/x.js', 'src/goal.js'), true)
     assert.equal(forbidden('src/behaviours/x.js', 'src/perception.js'), false)

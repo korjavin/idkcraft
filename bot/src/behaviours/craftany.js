@@ -17,10 +17,9 @@ const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const craftMod = require('./craft')
 const gearMod = require('./gear')
-const equipMod = require('./equip')
+const { tableFor } = require('./tablespot') // oqul.14: the pack-table placement lives in the leaf, not equip
 const { countItems } = require('../perception')
-
-const TABLE_REACH = craftMod.TABLE_REACH
+const { TABLE_REACH } = require('../budget')
 const WALK_GIVE_UP = 20 // table-walk ticks before the honest no-table line
 const TABLE_TRIES = 3 // place attempts before a crafted table gives up
 
@@ -480,7 +479,7 @@ function craftItem(bot, ctx, name, count) {
           if ((pack.crafting_table || 0) > 0) {
             st.tableP = true
             st.tableTries += 1
-            void equipMod.tableFor(bot, ctx).then(
+            void tableFor(bot, ctx).then(
               (t) => { st.tableP = false; if (t) st.table = t.block },
               () => { st.tableP = false },
             )
