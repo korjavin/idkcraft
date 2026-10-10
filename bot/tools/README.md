@@ -493,8 +493,9 @@ window start to the first real intervention (`-` when none;
 way). Day is locked (`CASTLE_DAYLOCK=0` runs the natural cycle),
 difficulty peaceful, fall damage off, keepInventory on — the window
 measures build throughput, not survival. `CASTLE_KIT=seeded` pre-fills
-128 cobble, 64 planks, 64 dirt, a stone pick+sword and the attic nook
-(5 bookshelves + 1 enchanting table) after the clear, so
+128 cobble, 64 planks, 64 dirt, a stone pick+sword, the attic nook
+(5 bookshelves + 1 enchanting table) and the kitchen blast furnace
+after the clear, so
 a 6-min window measures laying (equip is kit-complete, the first word is
 a batch) independent of the fetch chain; `empty` (default) runs the full
 chain from nothing. `CASTLE_TICKRATE=N` runs `/tick rate N` for fast

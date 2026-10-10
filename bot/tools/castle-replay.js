@@ -46,7 +46,8 @@
 //   of the pad, top flush with it — the pad has no sand of its own; with
 //   CASTLE_SEED=complete the verdict adds panes=<laid>/44 and
 //   upper-fence=<laid>/109 (g0z.45)) and attic=<laid>/6 (g0z.49, the
-//   seeded kit carries the 5 shelves + table).
+//   seeded kit carries the 5 shelves + table) and blast=<laid>/1 plus
+//   furnace-spot=<3 C_FURNACE cells> (g0z.50, the kit carries the blast).
 // Exit: 0 = measured (even at 0 laid — the line says so),
 //   1 = CASTLE_IDLE verdict FAIL,
 //   2 = environment/setup failure (spawn, pad, order, dropped follower,
@@ -848,10 +849,10 @@ async function main() {
   // word is a batch. One give carries many stacks (stuck precedent).
   if (KIT === 'seeded') {
     for (const [item, count] of [['cobblestone', 128], ['oak_planks', 64], ['dirt', 64],
-      ['stone_pickaxe', 1], ['stone_sword', 1], ['bookshelf', 5], ['enchanting_table', 1]]) {
+      ['stone_pickaxe', 1], ['stone_sword', 1], ['bookshelf', 5], ['enchanting_table', 1], ['blast_furnace', 1]]) {
       await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
     }
-    origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword, 5 shelves + table)')
+    origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword, 5 shelves + table, blast furnace)')
   }
   // Junk kit (vmzq.38): the prod 2026-10-06 pack — 36/36 stone variants,
   // sand and mob junk, wooden sword only: no pickaxe, no table, no cobble.
@@ -912,9 +913,10 @@ async function main() {
     origLog(`CASTLE-RIG seeded castle site ${st.site.x} ${st.site.y} ${st.site.z} rot 0: ${cells.length} setblocks, ${placed} plan blocks + gate + 2 beds + table read back`)
     if (IDLE_DEATH > 0) {
       // 6x7.25: decor too (44 panes + 2 gate banners + the g0z.45 upper
-      // fence row + the g0z.49 attic nook), so castlefetch has nothing
-      // left to fetch: its sand/wool legs walked 85+ out on both builds
-      // and drowned the gather drift this scenario measures.
+      // fence row + the g0z.49 attic nook + the g0z.50 blast furnace), so
+      // castlefetch has nothing left to fetch: its sand/wool legs walked
+      // 85+ out on both builds and drowned the gather drift this scenario
+      // measures.
       const decor = require('../src/castle').decorPlan(st.site, 0, 2).cells
       for (const c of decor) {
         let block = 'glass_pane'
@@ -927,10 +929,12 @@ async function main() {
           block = 'bookshelf'
         } else if (c.kind === 'enchanting_table') {
           block = 'enchanting_table'
+        } else if (c.kind === 'blast_furnace') {
+          block = 'blast_furnace'
         }
         await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${block}`).catch((e) => fail('seed-decor', e.message))
       }
-      origLog(`CASTLE-RIG seeded decor: ${decor.length} cells (panes + banners + upper fence + attic)`)
+      origLog(`CASTLE-RIG seeded decor: ${decor.length} cells (panes + banners + upper fence + attic + blast)`)
     }
     if (!tickCtx()) fail('seed-castle', 'no follower ctx')
     tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
@@ -1515,6 +1519,9 @@ async function main() {
   // Upper fence (g0z.45): the same for the second fence row.
   // Attic (g0z.49): the same for the table + 5 shelves, read back via
   // castle.matches like the seeded plan cells.
+  // Blast (g0z.50): the same for the kitchen blast furnace; furnace-spot
+  // reads the 3 C_FURNACE cells — the pane ladder smelts in the plain
+  // furnace and must never adopt or replace the decor blast.
   // Recall (g0z.45): the window's side work can end the follower far off
   // site (a 60-min seed run read 153/153 unread) — tp it over the site and
   // wait for the chunks before counting. Verdict phase only: the idle
@@ -1522,6 +1529,8 @@ async function main() {
   let paneTag = ''
   let fenceTag = ''
   let atticTag = ''
+  let blastTag = ''
+  let furnaceTag = ''
   if (SEED === 'complete') {
     const site = { x: bx - 15, y: gy + 1, z: bz - 13 }
     await rcon(`tp ${FOLLOWER} ${site.x + 15.5} ${site.y + 12} ${site.z + 13.5}`).catch(() => {})
@@ -1536,7 +1545,7 @@ async function main() {
     }
     const castle = require('../src/castle')
     const dp = castle.decorPlan(site, 0, 2).cells
-    for (const [kinds, tag] of [[['pane'], 'panes'], [['fence'], 'upper-fence'], [['bookshelf', 'enchanting_table'], 'attic']]) {
+    for (const [kinds, tag] of [[['pane'], 'panes'], [['fence'], 'upper-fence'], [['bookshelf', 'enchanting_table'], 'attic'], [['blast_furnace'], 'blast']]) {
       const cells = dp.filter((c) => kinds.includes(c.kind))
       let laid = 0
       let unread = 0
@@ -1549,10 +1558,19 @@ async function main() {
       const t = `, ${tag}=${laid}/${cells.length}${unread ? `(${unread} unread)` : ''}`
       if (tag === 'panes') paneTag = t
       else if (tag === 'upper-fence') fenceTag = t
-      else atticTag = t
+      else if (tag === 'attic') atticTag = t
+      else blastTag = t
     }
+    const spots = require('../src/residence').CASTLE.furnace({ site, rot: 0, blueprintVersion: 2 })
+    const at = []
+    for (const sp of spots) {
+      let b = null
+      try { b = follower.blockAt(new Vec3(site.x + sp.dx, site.y + sp.dy, site.z + sp.dz)) } catch (_) { b = null }
+      at.push(b ? b.name : 'unread')
+    }
+    furnaceTag = `, furnace-spot=${at.join('/')}`
   }
-  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + atticTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
+  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,

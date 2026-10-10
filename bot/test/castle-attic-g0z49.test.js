@@ -28,7 +28,7 @@ const k3 = (x, y, z) => `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`
 const settle = () => new Promise((r) => setImmediate(r))
 const TABLE = { dx: 15, dy: 8, dz: 12 }
 const SHELVES = [13, 14, 15, 16, 17].map((dx) => ({ dx, dy: 8, dz: 10 }))
-const NOOK = blueprint.DECOR[2].slice(-6)
+const NOOK = blueprint.DECOR[2].filter((c) => c.kind === 'bookshelf' || c.kind === 'enchanting_table') // g0z.50: kind, not tail — the blast furnace appends after
 // The stair well (bead): column x18 z8..11 at dy8..10 stays free (jump
 // headroom of the stairU climb).
 const WELL = []
@@ -45,9 +45,9 @@ describe('castle attic decor plan (g0z.49)', () => {
       ...SHELVES.map((c) => `bookshelf@${k3(c.dx, c.dy, c.dz)}`),
     ])
     const dp = blueprint.decorPlan(SITE, 0, 2)
-    assert.equal(dp.cells.length, 44 + 2 + V2.PLAN.filter((c) => c.kind === 'fence').length + 6)
+    assert.equal(dp.cells.length, 44 + 2 + V2.PLAN.filter((c) => c.kind === 'fence').length + 6 + 1) // +1: the g0z.50 blast furnace after the nook
     NOOK.forEach((c, i) => {
-      assert.equal(dp.cells[dp.cells.length - 6 + i].idx, blueprint.DECOR_BASE + dp.cells.length - 6 + i)
+      assert.equal(dp.cells[dp.cells.length - 7 + i].idx, blueprint.DECOR_BASE + dp.cells.length - 7 + i)
     })
   })
 
@@ -60,7 +60,7 @@ describe('castle attic decor plan (g0z.49)', () => {
     const wellKeys = (rot) => new Set(blueprint.rotatePlan(WELL, rot, 2).map((c) => k3(SITE.x + c.dx, SITE.y + c.dy, SITE.z + c.dz)))
     for (let rot = 0; rot < 4; rot++) {
       const plan = blueprint.absPlan(SITE, rot, 2)
-      const nook = blueprint.decorPlan(SITE, rot, 2).cells.slice(-6)
+      const nook = blueprint.decorPlan(SITE, rot, 2).cells.filter((c) => c.kind === 'bookshelf' || c.kind === 'enchanting_table')
       assert.equal(nook.filter((c) => c.kind === 'bookshelf').length, 5)
       assert.equal(nook.filter((c) => c.kind === 'enchanting_table').length, 1)
       const well = wellKeys(rot)
@@ -107,7 +107,7 @@ describe('castle attic decor plan (g0z.49)', () => {
 
   it('protects a laid shelf/table at a decor cell, not another occupant; every dig path refuses it', () => {
     const st = { site: SITE, rot: 1, blueprintVersion: 2, phase: 'complete' }
-    const nook = blueprint.decorPlan(SITE, 1, 2).cells.slice(-6)
+    const nook = blueprint.decorPlan(SITE, 1, 2).cells.filter((c) => c.kind === 'bookshelf' || c.kind === 'enchanting_table')
     for (const c of nook) {
       const laid = c.kind === 'bookshelf' ? 'bookshelf' : 'enchanting_table'
       assert.equal(blueprint.protects(st, c, laid), true)
