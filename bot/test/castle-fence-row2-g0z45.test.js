@@ -253,6 +253,11 @@ describe('castle second fence row behaviour (g0z.45)', () => {
     assert.equal(fetch.demand(bot, dry).kind, 'pane')
     const dryPane = { castle: completeState(), castleFetchDry: 'pane' }
     assert.equal(castleMod.menuFact(bot, dryPane), 'banner-none')
+    // Revmux 01 core-1: the rotation reaches the third kind — a dry banner
+    // words the fence row, never swings back to pane.
+    const dryBanner = { castle: completeState(), castleFetchDry: 'banner' }
+    assert.equal(castleMod.menuFact(bot, dryBanner), 'fence-none')
+    assert.equal(fetch.demand(bot, dryBanner).kind, 'fence')
   })
 
   it('stockpile keeps held fences while the row is open and banks them once laid', () => {

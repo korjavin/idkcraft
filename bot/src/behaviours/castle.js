@@ -870,8 +870,11 @@ function menuFact(bot, ctx, now = Date.now()) {
         // Decor (g0z.31): on site, open decor cells ask for their kind; the
         // castle stays 'complete' (off site it reads 'done', above). A held
         // kind words first (g0z.32), else the first open cell's (panes) —
-        // skipping the kind whose chest fetch last came up dry, so an empty
-        // pane stock never locks the chest banners out (revmux 01).
+        // rotating past the kind whose fetch last came up dry, so an empty
+        // pane stock never locks the chest banners out (revmux 01) and the
+        // dry pane/banner legs never ping-pong past the fence row (revmux
+        // 01 core-1: a skip-first fallback swings between the first two
+        // kinds and the third never words).
         // Band sweep (g0z.44): between the two — held decor still wins, but
         // a dry decor word never hides workable band litter (and litter
         // never hides decor).
@@ -889,7 +892,8 @@ function menuFact(bot, ctx, now = Date.now()) {
         }
         if (open.length > 0) {
           const dry = ctx && ctx.castleFetchDry
-          const kind = (open.find((c) => c.kind !== dry) || open[0]).kind
+          const kinds = [...new Set(open.map((c) => c.kind))]
+          const kind = kinds[(kinds.indexOf(dry) + 1) % kinds.length]
           const left = open.filter((c) => c.kind === kind).length
           ctx.castleWord = { kind, left }
           return stockWord(bot, kind, left)
