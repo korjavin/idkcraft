@@ -335,6 +335,9 @@ function smeltGapOf(bot, o, plan) {
   if (direct && SMELT[direct]) return { out: direct, need: o.want || WANT_ORE, have: pack[direct] || 0 }
   if (direct) return null
   const miss = plan && plan.fail === 'missing' && Array.isArray(plan.missing) ? plan.missing : []
+  // Body-4: every gap must land (smelt or ladder) or the dig is wasted —
+  // compass (iron + redstone) refuses up front with the plan line.
+  if (!miss.every((e) => e && (SMELT[e.name] || pickSubGap([e])))) return null
   for (const e of miss) {
     if (e && SMELT[e.name]) return { out: e.name, need: e.need || 0, have: pack[e.name] || 0 }
   }

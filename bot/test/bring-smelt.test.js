@@ -26,11 +26,10 @@ const ITEMS = {
   iron_axe: 102, cobblestone: 113, stick: 115, coal: 116, iron_ingot: 117,
   oak_log: 118, oak_planks: 119, crafting_table: 120, raw_iron: 130,
   stone_pickaxe: 131, wooden_pickaxe: 132, sand: 133, glass: 134,
-  charcoal: 135, brick: 136, cooked_beef: 137, iron_nugget: 138,
+  charcoal: 135, brick: 136, cooked_beef: 137, iron_nugget: 138, compass: 139, redstone: 140,
 }
 const BLOCKS = { iron_ore: 31, sand: 33, oak_log: 12, stone: 1, crafting_table: 40 }
 const DROPS = { iron_ore: 'raw_iron', sand: 'sand', oak_log: 'oak_log', stone: 'cobblestone' }
-const SMELTS = { raw_iron: 'iron_ingot', sand: 'glass', oak_log: 'charcoal' }
 
 function R(product, takes, resCount, reqTable) {
   const delta = takes.map(([n, c]) => ({ id: ITEMS[n], count: -c }))
@@ -44,6 +43,7 @@ const RECIPES = {
   stick: [R('stick', [['oak_planks', 2]], 4, false)],
   oak_planks: [R('oak_planks', [['oak_log', 1]], 4, false)],
   wooden_pickaxe: [R('wooden_pickaxe', [['oak_planks', 3], ['stick', 2]], 1, true)],
+  compass: [R('compass', [['iron_ingot', 4], ['redstone', 1]], 1, true)],
 }
 
 function mockBot({ items = [], chest = [], cells = {} } = {}) {
@@ -146,8 +146,10 @@ function mockBot({ items = [], chest = [], cells = {} } = {}) {
 }
 
 // Fake furnace: script entries per call — null (running), 'done' (every
-// input in the pack becomes output), or a failed:<r> string. Records the
-// job it was handed (set before EVERY call) and consumes it like furnace.js.
+// input in the pack becomes output), 'async-done' (the real finishSmelt
+// shape: returns null, the run settles 'done' on ctx.furnace for the next
+// tick's read-back), or a failed:<r> string. Records the job it was handed
+// (set before EVERY call) and consumes it like furnace.js.
 function fakeFurnace(bot, script) {
   const jobs = []
   const fn = (b, ctx) => {
@@ -156,7 +158,10 @@ function fakeFurnace(bot, script) {
     ctx.furnaceJob = null
     ctx.furnace = ctx.furnace || { job, settled: false, result: null }
     ctx.furnace.job = job
-    const step = script.length > 0 ? script.shift() : 'done'
+    ctx.furnace.settled = false
+    let step = script.length > 0 ? script.shift() : 'done'
+    const async = step === 'async-done'
+    if (async) step = 'done'
     if (step === 'done' && job) {
       const s = bot._items.find((i) => i.name === job.input)
       if (s && s.count > 0) {
@@ -166,6 +171,7 @@ function fakeFurnace(bot, script) {
         bot.add(job.output, n)
       }
     }
+    if (async) { ctx.furnace.settled = true; ctx.furnace.result = 'done'; return null }
     if (step) { ctx.furnace.settled = true; ctx.furnace.result = null }
     return step
   }
@@ -247,7 +253,7 @@ describe('bring smelt rung (idkcraft-ipn.20)', () => {
     const ticker = tickerFor(bot)
     const ctx = bot._tickerCtx
     home(ctx)
-    const f = fakeFurnace(bot, [null, 'done'])
+    const f = fakeFurnace(bot, [null, null, 'async-done', 'failed:extra-call'])
     await withFurnace(f, async () => {
       handleChat(bot, ticker, 'P', 'bring me iron axe')
       assert.deepEqual(bot.lines, ['smelting 3 raw_iron for your iron_axe'])
@@ -261,6 +267,7 @@ describe('bring smelt rung (idkcraft-ipn.20)', () => {
       assert.equal(ctx.bring.have, 1, 'the watchdog metric sees the ingot')
       await drive(bot, ctx)
       assert.deepEqual(bot.tossCalls, [['iron_axe', 1]])
+      assert.equal(f.jobs.length, 3, 'the async settle is read back, never a second run')
     })
   })
 
@@ -393,6 +400,13 @@ describe('bring smelt rung (idkcraft-ipn.20)', () => {
     })
     assert.deepEqual(g.jobs, [{ input: 'oak_log', output: 'charcoal' }], `lines: ${wood.lines}`)
     assert.deepEqual(wood.tossCalls, [['charcoal', 3]])
+  })
+
+  it('a smelt gap beside an off-ladder gap refuses up front (body-4: compass needs redstone)', () => {
+    const bot = mockBot({ items: [{ name: 'stone_pickaxe', count: 1 }], cells: IRON_CELLS() })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me compass')
+    assert.deepEqual(bot.lines, ["can't make compass: need 4 iron_ingot (have 0), 1 redstone (have 0)"])
+    assert.ok(!bot._tickerCtx.bring)
   })
 
   it('brick and cooked beef refuse with one honest line, no order', () => {
