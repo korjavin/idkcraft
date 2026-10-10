@@ -683,6 +683,29 @@ describe('castle-replay.js pad-spot pick', () => {
   })
 })
 
+describe('castle-replay.js pad landing (g0z.54)', () => {
+  const { landingY, padFloats } = require('../tools/castle-replay')
+
+  it('landingY: a mid-fall read never lands, five stable reads do', () => {
+    assert.equal(landingY([150, 147.2, 144.1, 141.3, 139.2]), null, 'falling: the 0/44 misread shape')
+    assert.equal(landingY([150, 149.1, 148.2, 147.4, 146.5]), null, 'laggy fall still moves')
+    assert.equal(landingY([63, 63, 63, 63, 63]), 63, 'landed: exact stand')
+    assert.equal(landingY([62.1, 62.5, 62.9, 62.3, 62.7]), 62, 'landed: jitter inside one block')
+    assert.equal(landingY([63, 63, 63, 63]), null, 'four reads are not enough')
+    assert.equal(landingY([63, 63, null, 63, 63]), null, 'an unreadable read vetoes')
+  })
+
+  it('padFloats: air/void/unreadable below fails, solid or liquid passes', () => {
+    assert.equal(padFloats(null), true, 'unreadable')
+    assert.equal(padFloats({ name: 'air' }), true, 'floating')
+    assert.equal(padFloats({ name: 'cave_air' }), true)
+    assert.equal(padFloats({ name: 'void_air' }), true)
+    assert.equal(padFloats({ name: 'dirt' }), false, 'on terrain')
+    assert.equal(padFloats({ name: 'stone' }), false)
+    assert.equal(padFloats({ name: 'water' }), false, 'an ocean pad sits on water')
+  })
+})
+
 describe('castle-replay.js watchdog classify', () => {
   const { classify, seen, resetSeen } = require('../tools/castle-replay')
 

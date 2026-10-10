@@ -622,6 +622,29 @@ function waitFor(em, ev, ms, what) {
   })
 }
 
+// Landing read (idkcraft-g0z.54): the guide's Y once it stops falling —
+// five stable floored reads (2.5 s), so a laggy mid-fall read (the 0/44
+// "regression": y=139 on a fixed 4 s sleep, pad floating 77 above the
+// terrain) never becomes the pad top. reads is Y floats or nulls
+// (unreadable); the floored Y or null. Pure.
+const LANDING_STABLE_READS = 5
+function landingY(reads) {
+  if (!Array.isArray(reads) || reads.length < LANDING_STABLE_READS) return null
+  const tail = reads.slice(-LANDING_STABLE_READS)
+  if (tail.some((y) => typeof y !== 'number' || !Number.isFinite(y))) return null
+  const f = Math.floor(tail[0])
+  return tail.every((y) => Math.floor(y) === f) ? f : null
+}
+
+// Grounded check (idkcraft-g0z.54): the block just below the pad dirt —
+// air/void/unreadable means the pad floats (a sky-platform landing) and
+// the setup fails loud instead of stranding a 60 min run. Solid or
+// liquid passes (an ocean pad sits on water). Pure.
+function padFloats(below) {
+  if (!below || typeof below.name !== 'string') return true
+  return below.name === 'air' || below.name === 'cave_air' || below.name === 'void_air'
+}
+
 async function main() {
   if (GUIDE.length > 16 || FOLLOWER.length > 16) {
     throw new Error(`bot names exceed 16 chars (TAG=${JSON.stringify(TAG)}); set a shorter CASTLE_TAG`)
@@ -748,10 +771,22 @@ async function main() {
     origLog(`CASTLE-RIG padspot ${bx},${bz} span=${brel ? brel.span : '?'} liquid=${brel ? brel.liquid : '?'}${tag}`)
   }
   await rcon(`tp ${GUIDE} ${bx} 150 ${bz}`).catch((e) => fail('pad-probe', e.message))
-  await sleep(4000)
+  // Wait for the landing (g0z.54): poll Y to 30 s, accept on five stable
+  // reads — a fixed 4 s sleep misread y=139 mid-fall under lag and the
+  // pad floated 77 above the terrain (the 0/44 "regression").
   let gy = null
-  try { gy = Math.floor(guide.entity.position.y) } catch (_) { gy = null }
-  if (gy == null || gy < 40 || gy > 140) fail('pad-probe', `no landing at ${bx},150,${bz} (y=${gy})`)
+  {
+    const reads = []
+    for (let i = 0; i < 60 && gy == null; i++) {
+      await sleep(500)
+      let y = null
+      try { y = guide.entity.position.y } catch (_) { y = null }
+      reads.push(typeof y === 'number' ? y : null)
+      gy = landingY(reads)
+    }
+  }
+  if (gy == null) fail('pad-probe', `guide never landed at ${bx},150,${bz}`)
+  if (gy < 40 || gy > 140) fail('pad-probe', `no landing at ${bx},150,${bz} (y=${gy})`)
   const x0 = bx - 24; const x1 = bx + 24; const z0 = bz - 24; const z1 = bz + 24
   origLog(`CASTLE-RIG pad ${x0}..${x1} top ${gy} ${z0}..${z1}`)
   for (const cmd of [
@@ -760,6 +795,13 @@ async function main() {
     `fill ${x0} ${gy + 8} ${z0} ${x1} ${gy + 14} ${z1} air`,
   ]) {
     await rcon(cmd).catch((e) => fail('pad-fill', e.message))
+  }
+  // Grounded (g0z.54): the pad dirt must sit on something — air below is
+  // a floating pad (a sky-platform landing) that would strand the run.
+  {
+    let below = null
+    try { below = guide.blockAt(new Vec3(bx, gy - 6, bz)) } catch (_) { below = null }
+    if (padFloats(below)) fail('pad-float', `pad top ${gy} floats (below ${bx} ${gy - 6} ${bz} is ${below && below.name ? below.name : 'unreadable'})`)
   }
   // Sand patch (g0z.38): east of the pad edge (x1 = bx + 24), ~11 off the
   // seeded castle's east wall, dry (dirt base) and walkable from the pad.
@@ -1509,4 +1551,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { createIdleTrack, IDLE_MAXDIST, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver }
+module.exports = { createIdleTrack, IDLE_MAXDIST, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats }
