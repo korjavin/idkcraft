@@ -1446,10 +1446,25 @@ async function main() {
   // Panes (g0z.38): decor pane cells of the seeded castle reading
   // *glass_pane on the follower (unloaded cells are counted apart).
   // Upper fence (g0z.45): the same for the second fence row.
+  // Recall (g0z.45): the window's side work can end the follower far off
+  // site (a 60-min seed run read 153/153 unread) — tp it over the site and
+  // wait for the chunks before counting. Verdict phase only: the idle
+  // extremes below accumulate during the window, a centre sample moves none.
   let paneTag = ''
   let fenceTag = ''
   if (SEED === 'complete') {
-    const dp = require('../src/castle').decorPlan({ x: bx - 15, y: gy + 1, z: bz - 13 }, 0, 2).cells
+    const site = { x: bx - 15, y: gy + 1, z: bz - 13 }
+    await rcon(`tp ${FOLLOWER} ${site.x + 15.5} ${site.y + 12} ${site.z + 13.5}`).catch(() => {})
+    for (let i = 0; i < 30; i++) {
+      let loaded = false
+      try {
+        loaded = [[0, 0], [30, 0], [0, 26], [30, 26]]
+          .every(([dx, dz]) => !!follower.blockAt(new Vec3(site.x + dx, site.y, site.z + dz)))
+      } catch (_) { loaded = false }
+      if (loaded) break
+      await sleep(1000)
+    }
+    const dp = require('../src/castle').decorPlan(site, 0, 2).cells
     for (const [kind, re, tag] of [['pane', /glass_pane$/, 'panes'], ['fence', /_fence$/, 'upper-fence']]) {
       const cells = dp.filter((c) => c.kind === kind)
       let laid = 0
