@@ -407,7 +407,7 @@ describe('castle gate banners (g0z.32)', () => {
       assert.equal(bot.calls.gather + crafted, 0)
       assert.equal(ctx.bring, undefined)
       assert.deepEqual(bot.calls.withdraw, []) // the chest wool stays for the beds
-      assert.equal(ctx.castleFetchDry, 'banner')
+      assert.deepEqual([...ctx.castleFetchDry], ['banner'])
     })
   }
 
@@ -490,7 +490,7 @@ describe('castle banners self-source (g0z.35)', () => {
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-wool')
     assert.equal(ctx.beds.noWool.fails, 1)
-    assert.equal(ctx.castleFetchDry, 'banner')
+    assert.deepEqual([...ctx.castleFetchDry], ['banner'])
   })
 
   it('3 white wool held: the hunt wants the absolute 12, have counts the 3 (revmux 01)', async () => {
@@ -555,7 +555,7 @@ describe('castle banners self-source (g0z.35)', () => {
     await run(bot, ctx, () => ctx.stepStatus)
     assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-banner')
     assert.equal(ctx.bring, undefined)
-    assert.equal(ctx.castleFetchDry, 'banner')
+    assert.deepEqual([...ctx.castleFetchDry], ['banner'])
   })
 
   it('chest with 6 wool: withdrawn, then the craft path', async () => {
@@ -630,7 +630,7 @@ describe('castle pane ladder (g0z.38)', () => {
     ctx.bring = null // bring refused (search exhausted), nothing dug
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-sand')
-    assert.equal(ctx.castleFetchDry, 'pane')
+    assert.deepEqual([...ctx.castleFetchDry], ['pane'])
     assert.equal(calls.gather, 0)
     assert.equal(calls.furnace.length, 0)
   })
@@ -702,7 +702,7 @@ describe('castle pane ladder (g0z.38)', () => {
       await run(bot, ctx, () => ctx.stepStatus)
       assert.equal(ctx.stepStatus, `failed:castlefetch-smelt-${why}`)
       assert.equal(ctx.furnaceJob, null)
-      assert.equal(ctx.castleFetchDry, 'pane')
+      assert.deepEqual([...ctx.castleFetchDry], ['pane'])
     })
   }
 
@@ -752,7 +752,7 @@ describe('castle pane ladder (g0z.38)', () => {
     fetch.deps.driveFurnace = (b, c) => 'failed:no-cobble'
     await run(t.bot, t.ctx, () => t.ctx.stepStatus)
     assert.equal(t.ctx.stepStatus, 'failed:castlefetch-no-pickaxe')
-    assert.equal(t.ctx.castleFetchDry, 'pane')
+    assert.deepEqual([...t.ctx.castleFetchDry], ['pane'])
   })
 
   it('the real furnace settles async (revmux 01): the settled sand run is read back, then crafted', async () => {

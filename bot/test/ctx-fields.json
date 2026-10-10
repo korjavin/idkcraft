@@ -404,6 +404,14 @@
     ],
     "owner": "src/behaviours/castlefetch.js"
   },
+  "castleFetchDry": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js",
+    "note": "dry decor kinds (g0z.49): a Set of kinds whose fetch leg came up dry, or null when clean. castlefetch adds via castle.noteDry and clears on a leg that got stock; castle.menuFact reads it for the decor word and clears it when every open kind is dry (retry the first, restart the cycle)."
+  },
   "castleFetchFlight": {
     "writers": [
       "src/behaviours/castlefetch.js"

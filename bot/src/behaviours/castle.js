@@ -53,6 +53,8 @@ const ITEM = {
   chest: (n) => n === 'chest', // v2 storeroom chest
   pane: (n) => blueprint.matches('pane', n), // g0z.31 decor: window panes (chest-supplied)
   banner: (n) => blueprint.matches('banner', n), // g0z.32 decor: gate banners (chest-only, never crafted)
+  bookshelf: (n) => blueprint.matches('bookshelf', n), // g0z.49 decor: attic shelves (chest books, crafted)
+  enchanting_table: (n) => blueprint.matches('enchanting_table', n), // g0z.49 decor: attic table (chest-only, never crafted)
 }
 
 // Project-material reservation (g0z.3 design): the castle never lays the
@@ -760,8 +762,9 @@ const BATCH = 16
 // pane (g0z.31, revmux 01): any pane is a batch, like torch — the source
 // was the chest only, so a sub-batch remainder could never grow and would
 // never be laid; castlefetch runs on pane-none only (chest, then the
-// sand ladder, g0z.38). banner (g0z.32): same.
-const BATCH_OF = { frame: 14, torch: 1, pane: 1, banner: 1 }
+// sand ladder, g0z.38). banner (g0z.32): same. bookshelf and
+// enchanting_table (g0z.49): same — chest-supplied attic decor.
+const BATCH_OF = { frame: 14, torch: 1, pane: 1, banner: 1, bookshelf: 1, enchanting_table: 1 }
 function batchOf(kind) { return BATCH_OF[kind] || BATCH }
 
 // The castle word for the goal facts text (g0z.3): 'none' | 'parked' |
@@ -791,6 +794,24 @@ function siteLoaded(bot, st) {
     const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
     return [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]].every(([dx, dz]) => !!bot.blockAt(new Vec3(st.site.x + dx, st.site.y, st.site.z + dz)))
   } catch (_) { return false }
+}
+
+// Dry decor kinds (g0z.49): every castlefetch leg that comes up dry adds
+// its kind (noteDry), so the decor word below skips every dry kind at
+// once — with five decor kinds now, one mark per kind. A leg that got
+// stock clears the set (castlefetch.finish); when every open kind is dry
+// the word retries the first and restarts the cycle. A legacy
+// single-kind string still reads as a one-kind set.
+function dryKinds(ctx) {
+  const v = ctx && ctx.castleFetchDry
+  if (v instanceof Set) return v
+  return new Set(typeof v === 'string' && v ? [v] : [])
+}
+function noteDry(ctx, kind) {
+  if (!ctx || typeof kind !== 'string' || !kind) return
+  const s = dryKinds(ctx)
+  s.add(kind)
+  ctx.castleFetchDry = s
 }
 
 function menuFact(bot, ctx, now = Date.now()) {
@@ -869,12 +890,10 @@ function menuFact(bot, ctx, now = Date.now()) {
       if (st.phase === 'complete') {
         // Decor (g0z.31): on site, open decor cells ask for their kind; the
         // castle stays 'complete' (off site it reads 'done', above). A held
-        // kind words first (g0z.32), else the first open cell's (panes) —
-        // rotating past the kind whose fetch last came up dry, so an empty
-        // pane stock never locks the chest banners out (revmux 01) and the
-        // dry pane/banner legs never ping-pong past the fence row (revmux
-        // 01 core-1: a skip-first fallback swings between the first two
-        // kinds and the third never words).
+        // kind words first (g0z.32), else the first open kind no leg found
+        // dry (g0z.49: the whole dry set is skipped, so an empty pane
+        // stock never locks the chest banners — or the attic shelves —
+        // out, and dry legs never ping-pong past the fence row).
         // Band sweep (g0z.44): between the two — held decor still wins, but
         // a dry decor word never hides workable band litter (and litter
         // never hides decor).
@@ -891,9 +910,15 @@ function menuFact(bot, ctx, now = Date.now()) {
           return 'clear'
         }
         if (open.length > 0) {
-          const dry = ctx && ctx.castleFetchDry
+          const dry = dryKinds(ctx)
           const kinds = [...new Set(open.map((c) => c.kind))]
-          const kind = kinds[(kinds.indexOf(dry) + 1) % kinds.length]
+          let kind = kinds.find((k) => !dry.has(k))
+          if (!kind) {
+            // Every open kind dry: retry the first and restart the cycle,
+            // so each kind is retried once per cycle, never starved.
+            kind = kinds[0]
+            if (ctx) ctx.castleFetchDry = null
+          }
           const left = open.filter((c) => c.kind === kind).length
           ctx.castleWord = { kind, left }
           return stockWord(bot, kind, left)
@@ -1763,6 +1788,7 @@ module.exports.progressByKind = progressByKind
 module.exports.progress = progress
 module.exports.usable = usable
 module.exports.kindOf = kindOf
+module.exports.noteDry = noteDry
 module.exports.findItem = findItem
 module.exports.fillItem = fillItem
 module.exports.dirtOnHand = dirtOnHand

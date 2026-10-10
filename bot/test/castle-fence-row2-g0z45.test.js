@@ -253,11 +253,12 @@ describe('castle second fence row behaviour (g0z.45)', () => {
     assert.equal(fetch.demand(bot, dry).kind, 'pane')
     const dryPane = { castle: completeState(), castleFetchDry: 'pane' }
     assert.equal(castleMod.menuFact(bot, dryPane), 'banner-none')
-    // Revmux 01 core-1: the rotation reaches the third kind — a dry banner
-    // words the fence row, never swings back to pane.
+    // g0z.49: the whole dry set is skipped — a dry banner words the first
+    // untried kind (pane), and each failure adds its kind, so every kind
+    // still words once per cycle and none starves.
     const dryBanner = { castle: completeState(), castleFetchDry: 'banner' }
-    assert.equal(castleMod.menuFact(bot, dryBanner), 'fence-none')
-    assert.equal(fetch.demand(bot, dryBanner).kind, 'fence')
+    assert.equal(castleMod.menuFact(bot, dryBanner), 'pane-none')
+    assert.equal(fetch.demand(bot, dryBanner).kind, 'pane')
   })
 
   it('stockpile keeps held fences while the row is open and banks them once laid', () => {
@@ -312,7 +313,7 @@ describe('castle second fence row behaviour (g0z.45)', () => {
     assert.equal(castleMod.menuFact(bot, ctx), 'fence-none')
     for (let i = 0; i < 10 && !ctx.stepStatus; i++) { fetch(bot, ctx); await settle(); await settle() }
     assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-fence')
-    assert.equal(ctx.castleFetchDry, 'fence')
+    assert.deepEqual([...ctx.castleFetchDry], ['fence'])
     // A gather failure marks dry too.
     const bot2 = castleBot()
     closeDecor(bot2, 0)
@@ -323,7 +324,7 @@ describe('castle second fence row behaviour (g0z.45)', () => {
     const ctx2 = { castle: completeState() }
     for (let i = 0; i < 10 && !ctx2.stepStatus; i++) { fetch(bot2, ctx2); await settle(); await settle() }
     assert.equal(ctx2.stepStatus, 'failed:gather-no-tree')
-    assert.equal(ctx2.castleFetchDry, 'fence')
+    assert.deepEqual([...ctx2.castleFetchDry], ['fence'])
     // Either way the next word is the pane leg's again.
     const pane = blueprint.decorPlan(SITE, 0, 2).cells[0]
     bot.set.delete(k3(pane.x, pane.y, pane.z))
