@@ -6,7 +6,7 @@ const { NEED_LOGS } = require('../budget')
 const { countItems } = require('../perception')
 const { isStone } = require('../castle')
 const { stepDone, stepFailed, stepGen } = require('../step')
-const { issueGoal } = require('./util')
+const { issueGoal, clearGoal } = require('./util')
 
 // craft: logs -> planks -> crafting table -> door, one op per tick, async
 // with ctx.craftInFlight (same shape as eatInFlight). Registered in
@@ -1154,6 +1154,12 @@ async function safeCraft(bot, recipe, count, table, opts) {
     if (!err || err.message !== 'inventory-full' || !(await freeSlot(bot, room))) throw err
     await ensureRoom(bot, recipe, count, opts)
   }
+  // g0z.40 (the z80 race, gear.stopSteering, for every table caller): a
+  // table craft is a block use (lookAt + use packet), and a walk goal still
+  // live here — craftany/equip/light/stockpile start at reach 4 while their
+  // GoalNear range is 3 — steers the head off the table, the server ignores
+  // the use: 20 s windowOpen timeouts (castle panes, pick upgrades).
+  if (table) clearGoal(bot, (opts && opts.ctx) || {})
   try {
     await pacedCraft(bot, recipe, count, table)
   } catch (err) {

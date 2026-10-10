@@ -263,6 +263,28 @@ describe('gxk 2x2 grid hang', () => {
     bot.restoreError()
   })
 
+  it('g0z.40: a live walk goal clears before a table craft, and windowOpen still fails honest', async () => {
+    // craftany/equip/light/stockpile start table crafts at reach 4 while
+    // their GoalNear walk (range 3) is still live: the steer turns the head
+    // off the table and the use is ignored. safeCraft stops it for all.
+    const bot = fakeBot({ invLogs: 14 })
+    const goals = []
+    bot.pathfinder = { goal: { x: 3, y: 64, z: 0 }, setGoal: (g) => { goals.push(g); bot.pathfinder.goal = g } }
+    let goalAtCraft = 'unset'
+    bot.craft = async () => { goalAtCraft = bot.pathfinder.goal; throw new Error('Event windowOpen did not fire within timeout of 20000ms') }
+    const ctx = { lastGoalKey: 'craftany-table:0,64,0' }
+    await assert.rejects(craft.safeCraft(bot, {}, 1, { name: 'crafting_table' }, { ctx }), /windowOpen/)
+    assert.equal(goalAtCraft, null, 'no goal steering during the table use')
+    assert.deepEqual(goals, [null])
+    assert.equal(ctx.lastGoalKey, '', 'the next walk re-issues')
+    // 2x2 crafts are no block use: a live goal is left alone.
+    bot.pathfinder.goal = { x: 3, y: 64, z: 0 }
+    bot.craft = async () => {}
+    await craft.safeCraft(bot, {}, 1, null, { ctx: {} })
+    assert.deepEqual(goals, [null])
+    bot.restoreError()
+  })
+
   it('a cursor-held stack is returned to the inventory (pre- and catch-clear)', async () => {
     // A timed-out craft leaves the picked-up stack on the cursor with its
     // origin slot empty: both clearings must put it back, never toss it.
