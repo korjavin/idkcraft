@@ -145,8 +145,12 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
     const logs = []
     await pillarTicks(bot, ctx, logs)
-    assert.ok(logs.some((m) => m.includes('shelter pillar failed:place-error')), JSON.stringify(logs))
-    assert.ok(logs.some((m) => m.includes('recover ban action=pillar_up')), 'the #356 refusal ban, reused')
+    // g0z.44: the client-side yard guard refuses before the mock server's
+    // 'still air' refusal is reached (was failed:place-error).
+    assert.ok(logs.some((m) => m.includes('shelter pillar failed:place-protected')), JSON.stringify(logs))
+    // The shelter-path cross-ban stays place-error-only: its mirror lives
+    // in home.js, owned by in-flight g0z.52 (follow-up, not this bead).
+    // The stuck-path place-protected ban is pinned in castle-g0z44.test.js.
     const walk = ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk
     assert.ok(walk, `relocation walk issued, not an open hold: ${JSON.stringify(logs)}`)
     assert.ok(boxDist(walk.x, walk.z) >= 6, `6+ blocks from the castle: ${JSON.stringify(walk)}`)
@@ -331,11 +335,12 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     assert.equal(home.shelterOpen(ctx), false)
   })
 
-  it('normal pad: a working pillar at the castle perches armed, no relocation', async () => {
+  it('normal pad: a working pillar past the ring perches armed, no relocation', async () => {
     // By-construction pin: the relocation path only runs after a
-    // protected dig failure — a site that pillars (or digs) keeps the
-    // exact old shape.
-    const bot = castleBot(BOT_AT, {
+    // protected dig failure — a pillar that works keeps the exact old
+    // shape. Past the ring (g0z.44 refuses every yard pillar now, so the
+    // old castle-centre stance pillars no more).
+    const bot = castleBot({ x: 35.5, y: 64, z: 5.5 }, {
       items: [{ name: 'cobblestone', count: 16 }],
       refuseSite: false,
       groundAt: () => 'dirt',
