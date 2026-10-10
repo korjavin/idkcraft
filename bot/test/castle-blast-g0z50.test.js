@@ -284,7 +284,7 @@ describe('castle kitchen blast furnace behaviour (g0z.50)', () => {
       // frozen through the place.
       assert.ok(bot.calls.goals.some((g) => g && g.x === cell.stance.x && g.y === cell.stance.y && g.z === cell.stance.z),
         `a stance goal at ${k3(cell.stance.x, cell.stance.y, cell.stance.z)}: ${JSON.stringify(bot.calls.goals)}`)
-      assert.deepEqual(bot.calls.looks, [[cell.x + 0.5, cell.y + 0.5, cell.z + 0.5, true]])
+      assert.deepEqual(bot.calls.looks, [[cell.x + 0.5, cell.y + 0.5, cell.z + 0.5, false]], 'non-forced: the rotation reaches the server before the place (revmux 01)')
       assert.deepEqual(bot.calls.faced, [{ forceLook: 'ignore' }])
       const face = [Math.sign(cell.stance.x - cell.x), Math.sign(cell.stance.z - cell.z)]
       const rl = blueprint.rotatePlan([{ ...CELL, kind: 'stone' }], rot, 2)[0]

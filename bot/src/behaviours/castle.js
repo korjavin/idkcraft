@@ -1137,9 +1137,12 @@ function live(ctx, token) { return ctx.castleFlight && ctx.castleFlight.token ==
 // Faced placement (g0z.50: the kitchen blast furnace; the g0z.47 stairs
 // reuse it): the server faces the block away from the placer's look, so
 // look at the cell first and place with the look frozen (the beds
-// look-then-_placeBlockWithOptions shape).
+// look-then-_placeBlockWithOptions shape). Non-forced (revmux 01): a
+// forced look returns with the rotation still unsent, and the frozen
+// place would land on the stale yaw — the awaited look resolves once
+// the physics tick has sent the rotation.
 async function placeFaced(bot, ref, c) {
-  if (typeof bot.lookAt === 'function') await bot.lookAt(new Vec3(c.x + 0.5, c.y + 0.5, c.z + 0.5), true)
+  if (typeof bot.lookAt === 'function') await bot.lookAt(new Vec3(c.x + 0.5, c.y + 0.5, c.z + 0.5))
   if (typeof bot._placeBlockWithOptions === 'function') return bot._placeBlockWithOptions(ref.ref, ref.face, { forceLook: 'ignore' })
   return bot.placeBlock(ref.ref, ref.face)
 }
