@@ -308,6 +308,17 @@ describe('gxk 2x2 grid hang', () => {
     bot.restoreError()
   })
 
+  it('g0z.40: the table walk ends only on a seen cell within 3', () => {
+    const Vec3 = require('vec3')
+    const tpos = new Vec3(16, 70, 18)
+    // Occluded from the kitchen side (x < 15.5 eye), seen from the storeroom.
+    const world = { raycast: (from) => ({ position: from.x < 15.5 ? new Vec3(15, 71, 18) : tpos }) }
+    const goal = craft.tableGoal({ world }, tpos)
+    assert.equal(goal.isEnd({ x: 14, y: 70, z: 18 }), false, 'kitchen: behind the partition')
+    assert.equal(goal.isEnd({ x: 17, y: 70, z: 17 }), true, 'storeroom: seen')
+    assert.equal(goal.isEnd({ x: 17, y: 70, z: 22 }), false, 'seen but past range 3')
+  })
+
   it('a cursor-held stack is returned to the inventory (pre- and catch-clear)', async () => {
     // A timed-out craft leaves the picked-up stack on the cursor with its
     // origin slot empty: both clearings must put it back, never toss it.

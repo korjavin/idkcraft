@@ -1151,10 +1151,15 @@ function seenFrom(world, eye, p) {
   }
 }
 
+// The body eye, or the eye over its cell centre — the point GoalSeeTable
+// ended the walk on (the pathfinder stops up to 0.35 off centre; revmux 03).
 function tableInSight(bot, table) {
   try {
     const e = bot.entity
-    return seenFrom(bot.world, e.position.offset(0, e.eyeHeight || 1.62, 0), table.position)
+    const h = e.eyeHeight || 1.62
+    if (seenFrom(bot.world, e.position.offset(0, h, 0), table.position)) return true
+    const c = e.position.floored()
+    return seenFrom(bot.world, new Vec3(c.x + 0.5, c.y + h, c.z + 0.5), table.position)
   } catch (_) {
     return true
   }
