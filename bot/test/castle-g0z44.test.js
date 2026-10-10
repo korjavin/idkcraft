@@ -130,6 +130,14 @@ describe('g0z.44 guardCastle: the ring vetoes places and yard digs', () => {
     assert.equal(fn({ name: 'oak_leaves', position: { x: 115, y: 65, z: 213 } }), 0, 'leaves')
     assert.equal(fn({ name: 'dirt', position: { x: 90, y: 64, z: 200 } }), 0, 'off the box')
   })
+  it("breakFn exempts the castle step's own walks, never laid blocks (revmux 01 body-2)", () => {
+    const { bot, ctx } = guarded()
+    ctx.step = 'castle'
+    const fn = bot.pathfinder.movements.exclusionAreasBreak[0]
+    assert.equal(fn({ name: 'grass_block', position: { x: 115, y: 65, z: 213 } }), 0, 'prep cuts and approaches dig')
+    assert.equal(fn({ name: 'cobblestone', position: { x: 111, y: 64, z: 207 } }), 100, 'laid wall still vetoed')
+    assert.equal(fn({ name: 'dirt', position: { x: 111, y: 63, z: 207 } }), 100, 'castle ground still vetoed')
+  })
 })
 
 describe('g0z.44 yard dig ban in protectedReason', () => {
@@ -269,7 +277,7 @@ describe('g0z.44 post-complete band sweep', () => {
     const { d } = blueprint.siteDimensions(0, 2)
     for (const c of list) {
       const dx = c.x - SITE.x; const dy = c.y - SITE.y; const dz = c.z - SITE.z
-      assert.equal(c.idx, 2000000 + ((dx + 1) * (d + 2) + (dz + 1)) * 40 + dy, 'the band idx shape')
+      assert.equal(c.idx, 2100000 + ((dx + 1) * (d + 2) + (dz + 1)) * 40 + dy, 'the band idx shape')
     }
     assert.ok(ctx.castleLitter.key.includes('v2'), `blueprint in the cache key: ${ctx.castleLitter.key}`)
   })
@@ -305,6 +313,33 @@ describe('g0z.44 post-complete band sweep', () => {
     cells.set(key(99, 64, 200), 'air')
     ctx.placedByBot.delete(key(99, 64, 200))
     assert.equal(castle.menuFact(bot, ctx), 'done')
+  })
+  it('band blocked entries live until swept, box entries still prune on expiry (revmux 01 core-1)', () => {
+    const cells = painted()
+    closeDecor(cells)
+    cells.set(key(99, 64, 200), 'dirt')
+    const bot = worldBot(cells)
+    const ctx = { castle: st2(), placedByBot: new Set([key(99, 64, 200)]) }
+    const idx = castle.litterTargets(bot, ctx, ctx.castle, Date.now()).find((c) => c.x === 99).idx
+    ctx.castle.blocked = { [`2:${idx}`]: { tries: 3, until: 0, why: 'protected' }, '2:2000000': { tries: 2, until: 0, why: 'dig-refused' } }
+    castle(bot, ctx) // pick() prunes at its head; the far walk below never blocks
+    assert.equal(ctx.castle.blocked[`2:${idx}`].tries, 3, 'expired band entry kept, tries escalate')
+    assert.equal(ctx.castle.blocked['2:2000000'], undefined, 'expired box entry pruned as before')
+    cells.set(key(99, 64, 200), 'air') // swept
+    castle(bot, ctx)
+    assert.equal(ctx.castle.blocked[`2:${idx}`], undefined, 'swept band entry pruned')
+  })
+  it("a retired band cell reads 'done', stays reported, never holes (revmux 01 core-1)", () => {
+    const cells = painted()
+    closeDecor(cells)
+    cells.set(key(99, 64, 200), 'dirt')
+    const bot = worldBot(cells)
+    const ctx = { castle: st2(), placedByBot: new Set([key(99, 64, 200)]) }
+    const idx = castle.litterTargets(bot, ctx, ctx.castle, Date.now()).find((c) => c.x === 99).idx
+    ctx.castle.blocked = { [`2:${idx}`]: { tries: 8, until: 0, why: 'protected', retired: true } }
+    assert.equal(castle.menuFact(bot, ctx), 'done', 'reported, not chased')
+    assert.equal(castle.litterTargets(bot, ctx, ctx.castle, Date.now()).length, 1, 'still counted')
+    assert.deepEqual(castle.holesOf(bot, ctx.castle, blueprint.absPlan(SITE, 0, 2).cells), [], 'never a hole')
   })
   it('menuFact: held decor wins, a dry decor word never hides litter', () => {
     const pane = blueprint.decorPlan(SITE, 0, 2).cells[0]

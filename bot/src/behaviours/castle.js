@@ -305,9 +305,11 @@ function pick(bot, ctx, st, cells, key, now) {
   // lays while holes wait out their backoff.
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
-    const c = cells[Number(i)] || decorOf(st, Number(i))
-    // Off-plan entries (prep, litter) live until they expire (g0z.14);
-    // decor entries (g0z.31) live until laid, so a bad pane cell retires.
+    const c = cells[Number(i)] || decorOf(st, Number(i)) || bandOf(st, Number(i))
+    // Off-plan entries (prep, box litter) live until they expire (g0z.14);
+    // decor entries (g0z.31) live until laid, so a bad pane cell retires;
+    // band entries (g0z.44) live until swept, so refusals escalate to
+    // retired instead of re-chasing every 30 s.
     if (Number(v) !== ver(st) || (c ? done(bot, c) : st.blocked[k].until <= now)) { delete st.blocked[k]; continue }
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
@@ -657,7 +659,11 @@ function prepTargets(bot, ctx, st, now) {
 // ownership there is isOwnPlaced only: cobblestone by name outside the box
 // may be the owner's path. Panes sit on plan air cells, so the plan skip
 // covers laid decor too. The band idx strides over the grown box
-// ((dx+1)*(d+2)+(dz+1), dy < 40), unique across the band.
+// ((dx+1)*(d+2)+(dz+1), dy < 40), unique across the band, on its own base:
+// band blocked entries live until swept (pick, below), so refusals escalate
+// to retired instead of re-chasing every 30 s — box-litter entries still
+// prune on expiry, so the two modes must not share idx space.
+const LITTER_BAND_BASE = 2100000
 function litterTargets(bot, ctx, st, now) {
   const complete = st.phase === 'complete'
   const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0},v${ver(st)},${complete ? 'band' : 'box'}`
@@ -677,7 +683,7 @@ function litterTargets(bot, ctx, st, now) {
       const dx = cell.x - st.site.x
       const dy = cell.y - st.site.y
       const dz = cell.z - st.site.z
-      list.push({ x: cell.x, y: cell.y, z: cell.z, kind: 'air', dy, idx: 2000000 + ((dx + 1) * (d + 2) + (dz + 1)) * 40 + dy })
+      list.push({ x: cell.x, y: cell.y, z: cell.z, kind: 'air', dy, idx: LITTER_BAND_BASE + ((dx + 1) * (d + 2) + (dz + 1)) * 40 + dy })
     }
     ctx.castleLitter = { key, at: now, list }
     return list
@@ -701,10 +707,30 @@ function litterTargets(bot, ctx, st, now) {
   return list
 }
 
-// Next workable litter cell (not backing off): the menu and the tail share it.
+// Next workable litter cell (not backing off, never retired): the menu and
+// the tail share it. Retired band cells stay listed by litterTargets (the
+// status line reports them) but are never re-worded or re-worked.
 function nextLitter(st, list, now) {
   const bl = st.blocked || {}
-  return list.find((o) => !(bl[bkey(st, o.idx)] && bl[bkey(st, o.idx)].until > now))
+  return list.find((o) => {
+    const b = bl[bkey(st, o.idx)]
+    return !(b && (b.retired || b.until > now))
+  })
+}
+
+// A band idx back to its cell (g0z.44, the litterTargets formula inverted),
+// or null. Only the range checks can fail: dy = t mod 40 and the strides
+// divide by construction.
+function bandOf(st, idx) {
+  if (!(idx >= LITTER_BAND_BASE)) return null
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const t = idx - LITTER_BAND_BASE
+  const dy = t % 40
+  const q = (t - dy) / 40
+  const dz = (q % (d + 2)) - 1
+  const dx = (q - (dz + 1)) / (d + 2) - 1
+  if (dy < 0 || dy > 3 || dx < -1 || dx > w || dz < -1 || dz > d) return null
+  return { x: st.site.x + dx, y: st.site.y + dy, z: st.site.z + dz, kind: 'air', dy, idx }
 }
 
 // Batch gate (build precedent): a castle leg starts with BATCH of the next
@@ -1491,7 +1517,11 @@ function guardCastle(bot, ctx) {
       try {
         if (!ctx.castle || !block) return 0
         if (castleProtects(ctx.castle, block.position, block.name)) return 100
-        return yardDigBan(ctx.castle, block.position, block.name) ? 100 : 0 // g0z.44: the yard, like protectedReason
+        // The castle step's own walks (g0z.44 revmux 01 body-2): prep cuts
+        // and cell approaches dig as before — the ban is for A* outside
+        // castle walks, mirroring the castleClears exemption.
+        if (ctx.step === 'castle') return 0
+        return yardDigBan(ctx.castle, block.position, block.name) ? 100 : 0
       } catch (_) { return 0 }
     }
     const placeFn = (block) => {
