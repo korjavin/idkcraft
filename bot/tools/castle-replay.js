@@ -636,6 +636,16 @@ function landingY(reads) {
   return tail.every((y) => Math.floor(y) === f) ? f : null
 }
 
+// Accepted landing (revmux core-2): a stable read above the ceiling is a
+// hover over an unloaded chunk (physics never runs, Y frozen at the tp
+// height), not a landing — the poll keeps waiting for chunks to load
+// instead of failing fast. Pure.
+const LANDING_CEIL = 140
+function acceptLanding(reads) {
+  const y = landingY(reads)
+  return y != null && y > LANDING_CEIL ? null : y
+}
+
 // Grounded check (idkcraft-g0z.54): the block just below the pad dirt —
 // air/void/unreadable means the pad floats (a sky-platform landing) and
 // the setup fails loud instead of stranding a 60 min run. Solid or
@@ -643,6 +653,13 @@ function landingY(reads) {
 function padFloats(below) {
   if (!below || typeof below.name !== 'string') return true
   return below.name === 'air' || below.name === 'cave_air' || below.name === 'void_air'
+}
+
+// Floating pad (revmux core-3): air at BOTH depths — a lone cave under
+// the centre column must not fail a grounded pad, but a 77-deep sky
+// column fails. Pure.
+function floatingPad(shallow, deep) {
+  return padFloats(shallow) && padFloats(deep)
 }
 
 async function main() {
@@ -782,11 +799,11 @@ async function main() {
       let y = null
       try { y = guide.entity.position.y } catch (_) { y = null }
       reads.push(typeof y === 'number' ? y : null)
-      gy = landingY(reads)
+      gy = acceptLanding(reads)
     }
   }
   if (gy == null) fail('pad-probe', `guide never landed at ${bx},150,${bz}`)
-  if (gy < 40 || gy > 140) fail('pad-probe', `no landing at ${bx},150,${bz} (y=${gy})`)
+  if (gy < 40 || gy > LANDING_CEIL) fail('pad-probe', `no landing at ${bx},150,${bz} (y=${gy})`)
   const x0 = bx - 24; const x1 = bx + 24; const z0 = bz - 24; const z1 = bz + 24
   origLog(`CASTLE-RIG pad ${x0}..${x1} top ${gy} ${z0}..${z1}`)
   for (const cmd of [
@@ -796,12 +813,15 @@ async function main() {
   ]) {
     await rcon(cmd).catch((e) => fail('pad-fill', e.message))
   }
-  // Grounded (g0z.54): the pad dirt must sit on something — air below is
-  // a floating pad (a sky-platform landing) that would strand the run.
+  // Grounded (g0z.54): the pad dirt must sit on something — air at both
+  // depths is a floating pad (a sky-platform landing) that would strand
+  // the run. One air column alone is a cave, not a failure (core-3).
   {
-    let below = null
-    try { below = guide.blockAt(new Vec3(bx, gy - 6, bz)) } catch (_) { below = null }
-    if (padFloats(below)) fail('pad-float', `pad top ${gy} floats (below ${bx} ${gy - 6} ${bz} is ${below && below.name ? below.name : 'unreadable'})`)
+    let shallow = null
+    let deep = null
+    try { shallow = guide.blockAt(new Vec3(bx, gy - 6, bz)) } catch (_) { shallow = null }
+    try { deep = guide.blockAt(new Vec3(bx, gy - 20, bz)) } catch (_) { deep = null }
+    if (floatingPad(shallow, deep)) fail('pad-float', `pad top ${gy} floats (below ${bx} ${gy - 6}/${gy - 20} ${bz} is ${shallow && shallow.name ? shallow.name : 'unreadable'}/${deep && deep.name ? deep.name : 'unreadable'})`)
   }
   // Sand patch (g0z.38): east of the pad edge (x1 = bx + 24), ~11 off the
   // seeded castle's east wall, dry (dirt base) and walkable from the pad.
@@ -1551,4 +1571,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { createIdleTrack, IDLE_MAXDIST, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats }
+module.exports = { createIdleTrack, IDLE_MAXDIST, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }

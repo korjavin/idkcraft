@@ -684,7 +684,7 @@ describe('castle-replay.js pad-spot pick', () => {
 })
 
 describe('castle-replay.js pad landing (g0z.54)', () => {
-  const { landingY, padFloats } = require('../tools/castle-replay')
+  const { landingY, padFloats, acceptLanding, floatingPad } = require('../tools/castle-replay')
 
   it('landingY: a mid-fall read never lands, five stable reads do', () => {
     assert.equal(landingY([150, 147.2, 144.1, 141.3, 139.2]), null, 'falling: the 0/44 misread shape')
@@ -695,6 +695,13 @@ describe('castle-replay.js pad landing (g0z.54)', () => {
     assert.equal(landingY([63, 63, null, 63, 63]), null, 'an unreadable read vetoes')
   })
 
+  it('acceptLanding: a hover at the tp height keeps polling (revmux core-2)', () => {
+    assert.equal(acceptLanding([150, 150, 150, 150, 150]), null, 'frozen at tp height: unloaded chunk')
+    assert.equal(acceptLanding([141, 141, 141, 141, 141]), null, 'above the ceiling: keep waiting')
+    assert.equal(acceptLanding([140, 140, 140, 140, 140]), 140, 'at the ceiling: a high mountain lands')
+    assert.equal(acceptLanding([63, 63, 63, 63, 63]), 63, 'normal landing passes through')
+  })
+
   it('padFloats: air/void/unreadable below fails, solid or liquid passes', () => {
     assert.equal(padFloats(null), true, 'unreadable')
     assert.equal(padFloats({ name: 'air' }), true, 'floating')
@@ -703,6 +710,17 @@ describe('castle-replay.js pad landing (g0z.54)', () => {
     assert.equal(padFloats({ name: 'dirt' }), false, 'on terrain')
     assert.equal(padFloats({ name: 'stone' }), false)
     assert.equal(padFloats({ name: 'water' }), false, 'an ocean pad sits on water')
+  })
+
+  it('floatingPad: one air column is a cave, two is sky (revmux core-3)', () => {
+    const air = { name: 'air' }
+    const cave = { name: 'cave_air' }
+    const dirt = { name: 'dirt' }
+    assert.equal(floatingPad(air, air), true, '77-deep sky column')
+    assert.equal(floatingPad(null, null), true, 'unreadable at both')
+    assert.equal(floatingPad(cave, dirt), false, 'a cave under the pad is grounded')
+    assert.equal(floatingPad(dirt, cave), false)
+    assert.equal(floatingPad(dirt, dirt), false, 'on terrain')
   })
 })
 
