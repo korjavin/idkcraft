@@ -143,10 +143,13 @@ function bodyPos(bot) {
 // owner gather order), so no owner exemption applies.
 // (.22) a gather-far unlock lifts the radius for the window only (clamped
 // to the outer disk around the stable anchor).
-function taskFar(ctx, it) {
+// (atl.24) idle alone (nobody online, no owner bring) takes the same
+// bound, as explore's spiral does (vmzq.59); farReject applies it to the
+// far search too: prod walked the 96/160 shells 190 blocks into caves.
+function taskFar(ctx, it, bot) {
   try {
-    if (!exploreMod.taskActive(ctx)) return false
-    const a = exploreMod.anchorOf(null, ctx)
+    if (!exploreMod.taskActive(ctx) && !exploreMod.aloneIdle(bot, ctx)) return false
+    const a = exploreMod.anchorOf(bot, ctx)
     if (!a || typeof a.x !== 'number' || !it || typeof it.x !== 'number') return false
     let radius = exploreMod.TASK_SEARCH_RADIUS || 64
     try {
@@ -158,6 +161,27 @@ function taskFar(ctx, it) {
   } catch (_) {
     return false
   }
+}
+
+// Far/memory candidate gate (atl.24): a hit under the surface floor (only
+// with a home: no home, no floor), past the task/alone leash, or a log
+// the dig guard refuses is never walked to. A protected hit joins the
+// sticky gskip like the sync-48 path, so it is checked once and the far
+// search moves on to the next ring hit. Unloaded (blockAt null) passes.
+function farReject(bot, ctx, g, bp, q) {
+  if (g.gskip && g.gskip.has(keyOf(q))) return true
+  if (ctx.home && q.y < resources.surfaceFloor(ctx, bp)) return true
+  if (taskFar(ctx, q, bot)) return true
+  let b = null
+  try { b = bot.blockAt(asVec3(q)) } catch (_) { b = null }
+  // Logs only: a stale memory cell (air) keeps its walk-and-skip path.
+  if (b && typeof b.name === 'string' && b.name.endsWith('_log') && protectedReason(bot, b, ctx) === 'protected') {
+    logDeny(b, 'protected')
+    if (!g.gskip) g.gskip = new Set()
+    g.gskip.add(keyOf(q))
+    return true
+  }
+  return false
 }
 
 function failFinal(bot, ctx, g, logs, final) {
@@ -233,7 +257,7 @@ function gather(bot, ctx, target, state) {
     if (g.phase === 'searchfar') {
       // Skipped trunks and the sync-48 shell must neither stop the search
       // nor win it: the point of going far is trees the sync scan rejected.
-      const exclude = (q) => g.skip.has(keyOf(q)) || (g.gskip && g.gskip.has(keyOf(q))) || dist(q, bp) <= FIND_RADIUS || banned(q)
+      const exclude = (q) => g.skip.has(keyOf(q)) || dist(q, bp) <= FIND_RADIUS || banned(q) || farReject(bot, ctx, g, bp, q)
       const r = stepFarSearch(bot, g.search, { exclude })
       if (!r.done) return
       g.search = null
@@ -285,7 +309,7 @@ function gather(bot, ctx, target, state) {
       // rest (the bead's unreachable case: trunk at 40 skipped, log at 200
       // remembered).
       const mem = names.length > 0
-        ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || (g.gskip && g.gskip.has(keyOf(it))) || banned(it) || taskFar(ctx, it))
+        ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || banned(it) || farReject(bot, ctx, g, bp, it))
         : null
       if (mem) {
         commitTarget(g, bp, { x: mem.x, y: mem.y, z: mem.z }, mem.name, true)

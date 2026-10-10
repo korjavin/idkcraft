@@ -1017,32 +1017,8 @@ function pickQuarry(bot, ctx, f) {
 
 // Source 3a: dig stone near the bot (equip digTick shape: walk into
 // pickup reach, pickaxe in hand, one dig at a time with a deadline).
-// Pack-full yield (g0z.26): digging into a full pack drops the cobble on
-// the ground and counts no-gain strikes — fail fast instead, so the hold
-// parks the leg while the stockpile step banks the surplus. An empty slot
-// or room on a cobble/dirt stack reads as room; an unreadable inventory
-// digs as before. R2 (revmux 01 major): with no adopted chest and nobody
-// online the reserve binds one slot earlier — the last slot is the
-// bootstrap chest craft's room, and a 36/36 chestless pack has no drain.
-function roomForDrop(bot, ctx) {
-  try {
-    const stockpile = require('./stockpile')
-    if (stockpile && typeof stockpile.slotReserved === 'function' && stockpile.slotReserved(bot, ctx)) return false
-  } catch (_) { /* reserve unreadable: the room check below decides */ }
-  try {
-    const items = (bot && bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()) || []
-    if (!Array.isArray(items)) return true
-    if (items.length < 36) return true
-    for (const s of items) {
-      if (!s || (!blueprint.isStone(s.name) && s.name !== 'dirt')) continue
-      const cap = s && typeof s.stackSize === 'number' && s.stackSize > 0 ? s.stackSize : 64
-      if ((typeof s.count === 'number' ? s.count : 1) < cap) return true
-    }
-  } catch (_) {
-    return true
-  }
-  return false
-}
+// Pack-full yield (g0z.26): roomForDrop lives in stockpile (oqul.12).
+const roomForDrop = (bot, ctx) => stockpileMod.roomForDrop(bot, ctx)
 function digTick(bot, ctx, f) {
   const bp = bodyPos(bot)
   if (!bp) { spend(f, 'other'); return }

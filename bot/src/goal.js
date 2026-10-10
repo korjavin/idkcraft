@@ -30,7 +30,8 @@ const { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, FORAGE_RET
 // and holds.js (oqul.4); the exported names are re-exported here.
 const { needPlanks, makeHome, siteFor, isV2House, timeWord } = require('./site')
 const { REFAIL_DIST, gatherFailedHolds } = require('./holds')
-const { PARK_FORAGE_RADIUS, castleFirst, homeLegVetoed, packFull, taskParked } = require('./vetoes') // oqul.11: moved out for forage/stockpile
+const { PARK_FORAGE_RADIUS, castleFirst, homeLegVetoed, taskParked } = require('./vetoes') // oqul.11: moved out for forage/stockpile
+const packFull = (bot, ctx) => stockpileMod.packFull(bot, ctx) // oqul.12: lives with roomForDrop in stockpile
 
 // Night-hurt hold (ck3): low health (the goalText 'health=low' bucket) at
 // night keeps the bot off the outdoor work — prod died twice at the site

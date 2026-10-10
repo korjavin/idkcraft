@@ -502,17 +502,64 @@ describe('furnace smelt (load coal or planks, take, settle)', () => {
     assert.equal(ctx.stepStatus, undefined)
   })
 
-  it('unreachable table fails after 20 walk ticks', async () => {
+  it('unreachable table fails after 20 walk ticks without progress', async () => {
     const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, inv: [{ name: 'cobblestone', count: 8 }], blocks: { '10,64,10': 'crafting_table' } })
     const ctx = { home: { table: { x: 10, y: 64, z: 10 } } }
     for (let i = 0; i < 21; i++) await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, undefined)
+    await tick(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:table-unreachable')
   })
 
-  it('unreachable furnace fails after 20 walk ticks', async () => {
+  it('unreachable furnace fails after 20 walk ticks without progress', async () => {
     const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, blocks: { '50,64,0': 'furnace' } })
     const ctx = { home: { furnace: { x: 50, y: 64, z: 0 } } }
-    for (let i = 0; i < 21; i++) await tick(bot, ctx)
+    for (let i = 0; i < 22; i++) await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
+  })
+
+  // g0z.41: from the quarry the walk outlasts 20 ticks while closing in.
+  it('a long walk that keeps closing distance reaches the furnace', async () => {
+    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, blocks: { '100,64,0': 'furnace' } })
+    const ctx = { home: { furnace: { x: 100, y: 64, z: 0 } } }
+    for (let i = 0; i < 95; i++) {
+      await tick(bot, ctx)
+      assert.equal(ctx.stepStatus, undefined, `tick ${i}`)
+      bot.entity.position.x += 1
+    }
+    bot.entity.position.x = 97
+    await tick(bot, ctx) // in reach now (no window in this mock: smelt then fails on it)
+    assert.equal(ctx.furnace.phase, 'smelt')
+    assert.notEqual(ctx.stepStatus, 'failed:furnace-unreachable')
+  })
+
+  it('a walk that stalls partway still fails honestly', async () => {
+    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, blocks: { '100,64,0': 'furnace' } })
+    const ctx = { home: { furnace: { x: 100, y: 64, z: 0 } } }
+    for (let i = 0; i < 40; i++) { await tick(bot, ctx); bot.entity.position.x += 1 }
+    assert.equal(ctx.stepStatus, undefined)
+    for (let i = 0; i < 22; i++) await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
+  })
+
+  it('a resumed run walking back from far gets progress credit again', async () => {
+    const bot = mockBot({ at: { x: 90, y: 64, z: 0 }, blocks: { '100,64,0': 'furnace' } })
+    const ctx = { home: { furnace: { x: 100, y: 64, z: 0 } } }
+    for (let i = 0; i < 7; i++) { await tick(bot, ctx); bot.entity.position.x += 1 }
+    assert.equal(ctx.furnace.phase, 'smelt') // walked a leg, then arrived (no window in this mock)
+    ctx.furnace.settled = false
+    ctx.stepStatus = undefined
+    bot.entity.position.x = 40 // body taken away mid-run
+    for (let i = 0; i < 50; i++) { await tick(bot, ctx); bot.entity.position.x += 1 }
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
+  it('a creeping walk hits the hard cap', async () => {
+    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, blocks: { '1000,64,0': 'furnace' } })
+    const ctx = { home: { furnace: { x: 1000, y: 64, z: 0 } } }
+    for (let i = 0; i < 300; i++) { await tick(bot, ctx); bot.entity.position.x += 2 }
+    assert.equal(ctx.stepStatus, undefined)
+    await tick(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
   })
 
