@@ -902,6 +902,65 @@ describe('jr2.2 stay sleeps in the own bed, never the owner\'s', () => {
     assert.equal(ctx.stay.sleepGiveUp, true)
   })
 
+  it('g0z.43: a silent server refusal backs off and retries instead of giving up the night', async () => {
+    // Under lag the bot clock runs ahead of the server: the local night
+    // check passes, the server silently refuses the bed, and mineflayer's
+    // 3 s wait fails 'bot is not sleeping'. That is transient, not a stop.
+    let tries = 0
+    const cells = { [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed' }
+    const bot = mockBot({
+      cells, at: { x: 12, y: 64, z: 23 }, timeOfDay: 15000,
+      sleepImpl: async (block) => {
+        tries++
+        if (tries === 1) throw new Error('bot is not sleeping')
+        bot.calls.sleeps.push(block && block.name)
+        bot.isSleeping = true
+      },
+    })
+    const ctx = stayCtx()
+    homeMod.stay(bot, ctx)
+    await flush()
+    assert.equal(tries, 1)
+    assert.equal(ctx.stay.sleepGiveUp, undefined, 'silent refusal backs off, never gives up')
+    assert.equal(ctx.stay.sleepCooldown, 30, 'bounded backoff, not a tight loop')
+    for (let i = 0; i < 30; i++) {
+      homeMod.stay(bot, ctx)
+      await flush()
+    }
+    assert.equal(tries, 1, 'no retry during backoff')
+    homeMod.stay(bot, ctx)
+    await flush()
+    assert.equal(tries, 2, 'retry after backoff')
+    assert.deepEqual(bot.calls.sleeps, ['white_bed'])
+    assert.ok(bot.chats.includes('sleeping in my bed'))
+    assert.equal(ctx.stay.sleepGiveUp, undefined)
+  })
+
+  it('g0z.43: a permanently refused bed gives up after three silent refusals', async () => {
+    // The timeout is mineflayer's generic refusal: a bed the server never
+    // accepts must not click all night (each try leaks a 'sleep' listener).
+    let tries = 0
+    const cells = { [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed' }
+    const bot = mockBot({
+      cells, at: { x: 12, y: 64, z: 23 }, timeOfDay: 15000,
+      sleepImpl: async () => { tries++; throw new Error('bot is not sleeping') },
+    })
+    const ctx = stayCtx()
+    const round = async () => { homeMod.stay(bot, ctx); await flush() }
+    await round() // try 1 -> backoff
+    assert.equal(ctx.stay.sleepGiveUp, undefined)
+    for (let i = 0; i < 30; i++) await round()
+    await round() // try 2 -> backoff
+    assert.equal(tries, 2)
+    assert.equal(ctx.stay.sleepGiveUp, undefined)
+    for (let i = 0; i < 30; i++) await round()
+    await round() // try 3 -> give up
+    assert.equal(tries, 3)
+    assert.equal(ctx.stay.sleepGiveUp, true)
+    for (let i = 0; i < 40; i++) await round()
+    assert.equal(tries, 3, 'no more clicks tonight')
+  })
+
   it('an order mid-flight wakes the body at once (spawn kept, chat skipped)', async () => {
     let release = null
     const gate = new Promise((r) => { release = r })
