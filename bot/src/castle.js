@@ -412,6 +412,8 @@ function matches(kind, name) {
   if (kind === 'chest') return name === 'chest'
   if (kind === 'pane') return name === 'glass_pane' || name.endsWith('_stained_glass_pane')
   if (kind === 'banner') return name.endsWith('_banner') // item, standing and wall block (g0z.32)
+  if (kind === 'bookshelf') return name === 'bookshelf' // attic decor (g0z.49): never the chiseled variant
+  if (kind === 'enchanting_table') return name === 'enchanting_table' // attic decor (g0z.49)
   if (kind === 'air') return AIR_NAMES.has(name) || name.endsWith('_door')
   if (kind === 'dig') return AIR_NAMES.has(name)
   return false
@@ -449,6 +451,13 @@ function absPlan(site, rot, version) {
 // not stop it — the bead's research verdict). Placed on the lower post's top
 // face through the usual findRef (below first); appended so the pane and
 // banner idx stay put.
+// 'enchanting_table' + 'bookshelf' (g0z.49): the attic nook — a table at
+// (15,8,12) on the dy7 slab and five shelves (13..17,8,10) along the north
+// attic wall, the z11 air row between them (the real level-30 bonus row: a
+// shelf counts within the radius-2 ring at the table's level or +1 with air
+// between; x12 would be 3 away, x18 is the stair column). The stair well
+// (x18 z8..11, dy8..10 jump headroom) stays free. Appended after the fence
+// row so every earlier idx stays put.
 const DECOR_BASE = 3000000
 const DECOR = {
   2: BLUEPRINTS[2].PLAN
@@ -456,7 +465,9 @@ const DECOR = {
     .map((c) => ({ dx: c.dx, dy: c.dy, dz: c.dz, kind: 'pane' }))
     .concat([13, 17].map((dx) => ({ dx, dy: 2, dz: 6, kind: 'banner', wall: { dx, dy: 2, dz: 7 } })))
     .concat(BLUEPRINTS[2].PLAN.filter((c) => c.kind === 'fence')
-      .map((c) => ({ dx: c.dx, dy: c.dy + 1, dz: c.dz, kind: 'fence' }))),
+      .map((c) => ({ dx: c.dx, dy: c.dy + 1, dz: c.dz, kind: 'fence' })))
+    .concat([{ dx: 15, dy: 8, dz: 12, kind: 'enchanting_table' }]
+      .concat([13, 14, 15, 16, 17].map((dx) => ({ dx, dy: 8, dz: 10, kind: 'bookshelf' })))),
 }
 
 let decorCache = null

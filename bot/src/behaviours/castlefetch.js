@@ -37,15 +37,20 @@ const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('.
 // banner (g0z.32, g0z.35): chest first, then self-sourced (owner
 // 2026-10-09) — 6 wool + 1 stick per banner, the wool through a self bring
 // order (bannerTick), but only once the beds stand (beds first).
-const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16, banner: 2 }
+// bookshelf (g0z.49, phase 1: chest-supplied) — shelves else books from
+// the chest, 3 books + 6 planks crafted at a table; enchanting_table —
+// chest only (no bot chain for obsidian/diamonds). Both fail honestly
+// into the hold, like banners before g0z.35.
+const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16, banner: 2, bookshelf: 5, enchanting_table: 1 }
 // Batch yield (idkcraft-vmzq.20): a fetch leg hands a layable batch to the
 // castle after this long instead of running to its full target. Five
 // minutes ≈ one stone batch at the measured quarry rate, and bounds the
 // castle<->castlefetch switch rate from below no matter how the words flap.
 const LEG_MAX_MS = 5 * 60 * 1000
 // One craft op per call; the next tick re-checks the target.
-const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1 }
+const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1 }
 const BANNER_WOOL = 6 // one colour per banner (table recipe)
+const BOOKS_PER_SHELF = 3 // table recipe: 6 planks + 3 books (g0z.49)
 const DIG_RADIUS = 32
 const FIND_COUNT = 4096
 const STONE_BELOW = 2 // target y window around the site's ground (no shafts, no pillars)
@@ -135,6 +140,8 @@ function chestNames(bot, kind) {
   if (kind === 'chest') return [['chest']]
   if (kind === 'pane') return [itemNames(bot, (n) => blueprint.matches('pane', n)), ['glass'], ['sand']]
   if (kind === 'banner') return [itemNames(bot, (n) => blueprint.matches('banner', n)), itemNames(bot, (n) => n.endsWith('_wool'))]
+  if (kind === 'bookshelf') return [['bookshelf'], ['book']]
+  if (kind === 'enchanting_table') return [['enchanting_table']]
   return []
 }
 
@@ -146,6 +153,7 @@ function craftNames(bot, kind) {
   if (kind === 'chest') return ['chest'] // 8 planks at a table (craftany crafts planks from logs)
   if (kind === 'pane') return ['glass_pane'] // 6 glass -> 16 at a table
   if (kind === 'banner') return itemNames(bot, isBanner) // 6 wool of one colour + 1 stick at a table
+  if (kind === 'bookshelf') return ['bookshelf'] // 6 planks + 3 books at a table (craftany does the planks layer from logs)
   return []
 }
 
@@ -170,7 +178,7 @@ function demand(bot, ctx) {
     if (!kind || !(kind in FETCH)) return null
     word = 'blocked'
   } else {
-    const m = /^([a-z]+)-(none|some|batch)$/.exec(w)
+    const m = /^([a-z_]+)-(none|some|batch)$/.exec(w) // g0z.49: kinds like enchanting_table carry an underscore
     if (!m || !(m[1] in FETCH)) return null
     kind = m[1]
     word = m[2]
@@ -331,14 +339,19 @@ function chestTick(bot, ctx, f, d) {
       // Banners' is wool (g0z.35): six per banner, only once the beds stand.
       const wool = d.kind === 'banner' && names[0].endsWith('_wool')
       if (wool && !bannerSelf(bot, ctx)) break
+      // Shelves' is books (g0z.49): three per shelf, the wool shape.
+      const book = d.kind === 'bookshelf' && names[0] === 'book'
       // Panes' third is sand (g0z.38): the ladder's whole sand need, at once.
       if (d.kind === 'pane' && names[0] === 'sand') {
         const sn = paneNeed(bot, ctx, d).sandNeed
         if (sn > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, sn, at)
         break
       }
-      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : need, at)
-      need -= (r && r.got ? r.got : 0) * (logs ? 4 : glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : 1)
+      // Books already packed cover shelves too (revmux 01 minor): never
+      // withdraw what the pack holds.
+      const bookWant = book ? Math.max(0, BOOKS_PER_SHELF * Math.ceil(need) - countItems(bot, (n) => n === 'book')) : need
+      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
+      need -= (r && r.got ? r.got : 0) * (logs ? 4 : glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1)
     }
   }, CHEST_TIMEOUT_MS)
   return true
@@ -405,7 +418,7 @@ function selfOrderBack(f) {
 function bannerTick(bot, ctx, f, d) {
   if (ctx.bring) return // the ticker runs the hunt (ours or foreign)
   const bedsMod = require('./beds')
-  const dry = (why) => { ctx.castleFetchDry = 'banner'; finish(bot, ctx, `failed:castlefetch-${why}`) }
+  const dry = (why) => { castleMod.noteDry(ctx, 'banner'); finish(bot, ctx, `failed:castlefetch-${why}`) }
   const top = require('./wool').topWoolColor(bot)
   const held = top ? top.count : 0
   const back = selfOrderBack(f)
@@ -454,7 +467,7 @@ function paneNeed(bot, ctx, d) {
 // tick. ponytail: no reopen counter — the 5-min failed-leg hold is the retry.
 function paneTick(bot, ctx, f, d, target, state) {
   if (ctx.bring) return // the ticker runs the sand order (ours or foreign)
-  const dry = (why) => { ctx.castleFetchDry = 'pane'; finish(bot, ctx, `failed:castlefetch-${why}`) }
+  const dry = (why) => { castleMod.noteDry(ctx, 'pane'); finish(bot, ctx, `failed:castlefetch-${why}`) }
   // A preempted smelt (dusk, another step) resumes on the next leg instead
   // of reordering sand that sits in the furnace (revmux 01).
   const fr = ctx.furnace
@@ -523,7 +536,7 @@ function cobbleTick(bot, ctx, f, target, state, dry) {
     return
   }
   digTick(bot, ctx, f)
-  if (typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:')) ctx.castleFetchDry = 'pane' // the decor word rotates (dry() shape)
+  if (typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:')) castleMod.noteDry(ctx, 'pane') // the decor word skips it (dry() shape)
 }
 
 // One furnace tick per castlefetch tick (g0z.36 contract: the job is set
@@ -1263,20 +1276,20 @@ function castlefetch(bot, ctx, target, state) {
     // reason (table, reach): chopping more would finish 'done' at once
     // and re-pick forever (revmux 01) — fail so the hold parks it.
     if (countItems(bot, (n) => n.endsWith('_log')) >= require('../budget').NEED_LOGS) {
-      if (d.kind === 'fence') ctx.castleFetchDry = 'fence' // the decor word rotates (dry() shape)
+      if (d.kind === 'fence') castleMod.noteDry(ctx, 'fence') // the decor word skips it (dry() shape)
       finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
       return
     }
     deps.gather(bot, ctx, target, state)
     if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') {
-      if (d.kind === 'fence' && ctx.stepStatus.startsWith('failed:')) ctx.castleFetchDry = 'fence'
+      if (d.kind === 'fence' && ctx.stepStatus.startsWith('failed:')) castleMod.noteDry(ctx, 'fence')
       ctx.castleFetch = null
     }
     return
   }
   if (d.kind === 'banner' && bannerSelf(bot, ctx)) { bannerTick(bot, ctx, f, d); return }
   if (d.kind === 'pane') { paneTick(bot, ctx, f, d, target, state); return }
-  ctx.castleFetchDry = d.kind // the decor word tries the next open kind (castle menuFact)
+  castleMod.noteDry(ctx, d.kind) // the decor word tries the next open kind (castle menuFact)
   finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, banner without chest stock (beds first)
 }
 
