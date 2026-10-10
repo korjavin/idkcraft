@@ -37,6 +37,19 @@ function gear() {
   return gearMod
 }
 
+// Call-time only (ipn.20): the ore sub's tier gate reads bring.js's
+// pickaxe helpers; by the time a tick or chat order runs, bring is loaded.
+function bringTier() {
+  return require('./bring')
+}
+
+// Seams for unit tests (castlefetch deps shape): one furnace tick through
+// gear's driveLeg wrapper, and craftany for the fuel planks / wooden pick.
+const deps = {
+  driveFurnace: (bot, ctx) => gear().driveFurnace(bot, ctx, require('./furnace')),
+  craftItem: (...a) => craftany()(...a),
+}
+
 // Share keep-list (idkcraft-ah9): tools, weapons, armour, plus a 32-block
 // dirt/cobblestone reserve — without it the bot cannot pillar out (ef3
 // pillar_up). Dirt fills the reserve first, cobblestone the remainder.
@@ -269,21 +282,123 @@ function itemRefusal(bot, name, resolved, keptName) {
   return `can't get ${name}: no recipe, no source`
 }
 
-// Furnace-gated ingredients (did.4): the bring ladder has no smelting, so a
-// craft gap naming one refuses with the smelting line instead of opening a
-// sub-order. Anything else off-ladder (cobble, coal, diamond, …) keeps
-// planCraft's own line — no general planner down to ore.
-const SMELTING = new Set([
-  'iron_ingot', 'gold_ingot', 'copper_ingot',
-  'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton', 'cooked_rabbit',
-  'glass', 'brick', 'charcoal',
-])
+// Furnace-gated ingredients (did.4). ipn.20: the SMELT ones ride a smelt
+// rung (ore sub -> furnace job -> craft); raw is the furnace input, ore the
+// block the sub digs (charcoal: any log — raw null means the pack's wood).
+// The rest stay off the ladder with a cheap reason: clay is not bringable
+// (clay drops clay_ball), raw meat needs a named-species hunt.
+const SMELT = {
+  iron_ingot: { raw: 'raw_iron', ore: 'iron_ore' },
+  gold_ingot: { raw: 'raw_gold', ore: 'gold_ore' },
+  copper_ingot: { raw: 'raw_copper', ore: 'copper_ore' },
+  glass: { raw: 'sand', ore: 'sand' },
+  charcoal: { raw: null, ore: 'logs' },
+}
+const SMELT_OFF = {
+  brick: 'clay not part of bring',
+  cooked_beef: 'cooking not part of bring',
+  cooked_porkchop: 'cooking not part of bring',
+  cooked_chicken: 'cooking not part of bring',
+  cooked_mutton: 'cooking not part of bring',
+  cooked_rabbit: 'cooking not part of bring',
+}
+const SMELT_RUNS = 2 // furnace runs per order before a short smelt refuses
 function smeltingGap(missing) {
   const list = Array.isArray(missing) ? missing : []
   for (const e of list) {
-    if (e && typeof e.name === 'string' && SMELTING.has(e.name)) return e.name
+    if (e && typeof e.name === 'string' && (SMELT[e.name] || SMELT_OFF[e.name])) return e.name
   }
   return null
+}
+
+// A direct order for a furnace output ('bring me iron ingot'): the single
+// resolved name, else null. Families never are (no *_iron_ingot).
+function smeltDirect(o) {
+  const names = (o && Array.isArray(o.names)) ? o.names : []
+  return names.length === 1 && (SMELT[names[0]] || SMELT_OFF[names[0]]) ? names[0] : null
+}
+
+// The most-held log in the pack (charcoal's input), null when woodless.
+function topLog(pack) {
+  let best = null
+  for (const [n, c] of Object.entries(pack || {})) {
+    if (n.endsWith('_log') && c > 0 && (!best || c > pack[best])) best = n
+  }
+  return best
+}
+
+// The smelt gap this order faces: a direct order's own output (want vs the
+// pack), else the first SMELT name in the failed plan. Null when none.
+function smeltGapOf(bot, o, plan) {
+  const pack = packCounts(bot)
+  const direct = smeltDirect(o)
+  if (direct && SMELT[direct]) return { out: direct, need: o.want || WANT_ORE, have: pack[direct] || 0 }
+  if (direct) return null
+  const miss = plan && plan.fail === 'missing' && Array.isArray(plan.missing) ? plan.missing : []
+  for (const e of miss) {
+    if (e && SMELT[e.name]) return { out: e.name, need: e.need || 0, have: pack[e.name] || 0 }
+  }
+  return null
+}
+
+// Smelt rung (ipn.20): the pack holds the raw -> phase 'smelt'; else a
+// kind 'block' sub digs it (tier gated HERE: bringbase.refuse would mask a
+// tier refusal as 'could not get N raw_iron ... in time'). Returns
+// { open, line }: open = the order is morphed and line announces it.
+function smeltRung(bot, ctx, o, sg, target) {
+  const m = SMELT[sg.out]
+  const n = Math.max(1, sg.need - sg.have)
+  const pack = packCounts(bot)
+  const raw = m.raw || topLog(pack)
+  if ((o.smeltRuns || 0) >= SMELT_RUNS) return { open: false, line: `could not smelt enough ${raw || 'logs'} for the ${target}` }
+  if (raw && (pack[raw] || 0) >= n) {
+    o.phase = 'smelt'
+    o.smelt = { input: raw, output: sg.out, n, target, started: false }
+    o.drop = sg.out
+    o.have = pack[sg.out] || 0
+    return { open: true, line: `smelting ${n} ${raw} for your ${target}` }
+  }
+  if (o.subFor) return { open: false, line: `need ${n} ${sg.out}` }
+  if (m.ore.endsWith('_ore')) {
+    const b = bringTier()
+    if (!b.hasPickaxe(bot, m.ore)) return { open: false, line: b.tierRefusal(bot, m.ore) }
+  }
+  // Charcoal digs the pack wood, or any log when woodless (the find
+  // re-points the drop at the concrete species).
+  const fetch = m.ore === 'logs' ? (raw || 'logs') : m.ore
+  const drop = m.raw || raw
+  toBlockSub(bot, o, fetch, drop, n, target, n, m.raw || 'logs')
+  return { open: true, line: subLine(o, `${n} ${o.subWord}`, m.ore === 'logs' ? 'logs' : m.ore) }
+}
+
+// Gap resolution shared by the chat preflight (orders.js) and the tick
+// (enterCraftOrRefuse), so the two did.4 copies cannot diverge: smelt gaps
+// first (body-4), then a ladder sub (beds: the fresh recipe). Returns
+// { open, line } — open: o is morphed (sub or smelt), line announces it;
+// else line is the refusal. Null when the plan is neither missing nor a
+// furnace output (the caller keeps its own line).
+function planGap(bot, ctx, o, plan) {
+  const direct = smeltDirect(o)
+  if (direct && SMELT_OFF[direct]) return { open: false, line: `can't make ${direct}: ${SMELT_OFF[direct]}` }
+  const sg = smeltGapOf(bot, o, plan)
+  if (sg) return smeltRung(bot, ctx, o, sg, (plan && plan.fail === 'missing' && plan.target) || sg.out)
+  if (!plan || plan.fail !== 'missing') return null
+  const miss = Array.isArray(plan.missing) ? plan.missing : []
+  if (!o.subFor && !smeltingGap(miss)) {
+    if (bedMod.isBedFamily(o)) {
+      // Beds are immune to the mixed-gap trap below: the fresh recipe is
+      // wool plus planks only, and the gap comes from it directly.
+      const b = bedGap(bot, o)
+      const line = b && openSubOrder(bot, ctx, o, b.gap, b.target, b.color)
+      if (line) return { open: true, line }
+    } else if (miss.every((e) => e && pickSubGap([e]))) {
+      // Every gap rides the ladder, or the gather is wasted (body-4).
+      const gap = pickSubGap(miss)
+      const line = gap && openSubOrder(bot, ctx, o, gap, plan.target, woolMod.dropColor(gap.name))
+      if (line) return { open: true, line }
+    }
+  }
+  return { open: false, line: plan.line }
 }
 
 // Gap word for the sub chat lines ('3 wool', '3 planks'): the bead's words,
@@ -468,32 +583,41 @@ function openSubOrder(bot, ctx, o, gap, target, color) {
       const short = Math.max(1, gap.need - (pack.stick || 0))
       want = Math.max(1, Math.ceil((2 * Math.ceil(short / 4) + infl) / 4))
     }
-    o.parent = { kind: o.kind, name: o.name, names: o.names, want: o.want }
-    o.kind = 'block'
-    o.name = fetch
-    o.block = null
-    o.pos = null
-    o.exposed = null
-    o.drop = fetch === 'logs' ? null : fetch // the find re-points generic hunts
-    o.have = o.drop ? countDrop(bot, o.drop) : 0
-    o.want = want
-    o.phase = 'find'
-    o.announced = false
-    o.skip = null
-    o.search = null
-    o.searchSkipFar = false
-    o.chestTried = false
-    o.subFor = target
-    o.subWant = gap.need
-    o.subWord = word
+    toBlockSub(bot, o, fetch, fetch === 'logs' ? null : fetch, want, target, gap.need, word)
   } else {
     return null
   }
-  const where = (o.kind === 'wool') ? 'sheep' : 'logs'
-  const need = `${gap.need} ${word}`
+  return subLine(o, `${gap.need} ${word}`, (o.kind === 'wool') ? 'sheep' : 'logs')
+}
+
+// Morph into a kind 'block' gather sub (the log dig; ipn.20: ore, sand,
+// stone too). drop null: the find re-points a generic hunt ('logs').
+function toBlockSub(bot, o, fetch, drop, want, target, subWant, word) {
+  o.parent = { kind: o.kind, name: o.name, names: o.names, want: o.want }
+  o.kind = 'block'
+  o.name = fetch
+  o.block = null
+  o.pos = null
+  o.exposed = null
+  o.drop = drop
+  o.have = o.drop ? countDrop(bot, o.drop) : 0
+  o.want = want
+  o.phase = 'find'
+  o.announced = false
+  o.skip = null
+  o.search = null
+  o.searchSkipFar = false
+  o.chestTried = false
+  o.subFor = target
+  o.subWant = subWant
+  o.subWord = word
+}
+
+// The sub announce: the first names the target, later ones just the gap.
+function subLine(o, need, where) {
   const first = !(o.subCount > 0)
   o.subCount = (o.subCount || 0) + 1
-  return first ? `making you a ${target}: need ${need}, going for ${where}` : `need ${need}, going for ${where}`
+  return first ? `making you a ${o.subFor}: need ${need}, going for ${where}` : `need ${need}, going for ${where}`
 }
 
 // Sub-order complete (did.4): the gather leg hit its want — restore the
@@ -580,8 +704,11 @@ function orderCraftNames(names) {
 // gap opens a sub-order (beds pick their colour first), a furnace-gated
 // gap refuses with the smelting line, anything else keeps planCraft's line.
 function enterCraftOrRefuse(bot, ctx, o) {
+  const direct = smeltDirect(o)
+  // A direct smelt order gives what the furnace landed: no second lap.
+  if (direct && (o.smeltRuns || 0) > 0) { giveOrRefuse(bot, ctx, o, `could not smelt ${direct}`); return }
   const plan = craftany().planCraft(bot, ctx, orderCraftNames(o.names || []), 1)
-  if (plan.ok) {
+  if (plan.ok && !direct) {
     o.phase = 'craft'
     o.craftTarget = plan.target
     try {
@@ -590,70 +717,134 @@ function enterCraftOrRefuse(bot, ctx, o) {
     say(bot, `making you a ${plan.target}`)
     return
   }
-  if (plan.fail === 'no-table') {
+  if (plan.fail === 'no-table' && !direct) {
     refuse(bot, ctx, plan.line)
     return
   }
-  if (plan.fail === 'missing') {
-    const miss = Array.isArray(plan.missing) ? plan.missing : []
-    // Smelting first (body-4): a furnace-gated gap refuses up front, before
-    // any ladder gap sends the bot gathering for a craft that cannot land.
-    const smelt = smeltingGap(miss)
-    if (smelt) {
-      refuse(bot, ctx, `need ${smelt} (smelting not part of bring)`)
-      return
-    }
-    if (!o.subFor) {
-      if (bedMod.isBedFamily(o)) {
-        // Beds are immune to the mixed-gap trap below: the fresh recipe is
-        // wool plus planks only, and the gap comes from it directly.
-        const b = bedGap(bot, o)
-        if (b) {
-          const line = openSubOrder(bot, ctx, o, b.gap, b.target, b.color)
-          if (line) {
-            say(bot, line)
-            return
-          }
-        }
-      } else if (miss.every((e) => e && pickSubGap([e]))) {
-        // Every gap rides the ladder, or the gather is wasted (body-4).
-        const gap = pickSubGap(miss)
-        if (gap) {
-          const line = openSubOrder(bot, ctx, o, gap, plan.target, woolMod.dropColor(gap.name))
-          if (line) {
-            say(bot, line)
-            return
-          }
-        }
-      }
-    }
-    refuse(bot, ctx, plan.line)
-    return
-  }
+  const g = planGap(bot, ctx, o, plan)
+  if (g && g.open) { say(bot, g.line); return }
+  if (g) { refuse(bot, ctx, g.line); return }
   refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
+}
+
+// Pack plan after a craft or a direct smelt: full or partial give, else
+// the honest line.
+function giveOrRefuse(bot, ctx, o, failLine) {
+  const plan = planItemGive(bot, { names: o.names || [] }, o.want, o.packBase)
+  o.items = plan.items
+  o.have = plan.have
+  o.drop = plan.items.length > 0 ? plan.items[0].name : null
+  if (plan.have >= o.want) {
+    o.phase = 'return'
+    o.saidWaiting = false
+  } else if (plan.have > 0) {
+    say(bot, `only ${plan.items.map((i) => `${i.count} ${i.name}`).join(', ')}, coming`)
+    o.phase = 'return'
+    o.saidWaiting = false
+  } else {
+    refuse(bot, ctx, failLine)
+  }
 }
 
 function craftTick(bot, ctx, o) {
   const res = craftany()(bot, ctx, orderCraftNames(o.names || []), 1)
   if (res === 'running') return
   if (res && res.done) {
-    const plan = planItemGive(bot, { names: o.names || [] }, o.want, o.packBase)
-    o.items = plan.items
-    o.have = plan.have
-    o.drop = plan.items.length > 0 ? plan.items[0].name : null
-    if (plan.have >= o.want) {
-      o.phase = 'return'
-      o.saidWaiting = false
-    } else if (plan.have > 0) {
-      say(bot, `only ${plan.items.map((i) => `${i.count} ${i.name}`).join(', ')}, coming`)
-      o.phase = 'return'
-      o.saidWaiting = false
-    } else {
-      refuse(bot, ctx, `could not craft ${res.target || o.name}`)
-    }
+    giveOrRefuse(bot, ctx, o, `could not craft ${res.target || o.name}`)
     return
   }
   refuse(bot, ctx, (res && res.line) || `can't make ${o.name}: crafting failed`)
+}
+
+// Phase 'smelt' (ipn.20), castlefetch smeltTick's shape: a settled result
+// for our job is read back first (the window cycle settles async), else
+// the job is set before EVERY driveFurnace call (the furnace consumes it
+// each tick). o.have tracks the output so the goal watchdog's bring metric
+// sees each piece land. Fuel and cobble each get one rung per order, then
+// the honest line — no loop.
+function smeltTick(bot, ctx, o) {
+  const s = o.smelt
+  if (!s) { enterCraftOrRefuse(bot, ctx, o); return }
+  if (o.needFuel || o.needCobble) { materialTick(bot, ctx, o, s); return }
+  o.drop = s.output
+  o.have = countDrop(bot, s.output)
+  let out = null
+  const fr = ctx.furnace
+  if (s.started && fr && fr.settled && fr.result && fr.job && fr.job.input === s.input && fr.job.output === s.output) {
+    out = fr.result
+    fr.result = null
+  } else {
+    if (!s.started && fr && fr.settled) fr.result = null // a stale outcome never ends the new run
+    s.started = true
+    ctx.furnaceJob = { input: s.input, output: s.output }
+    try { out = deps.driveFurnace(bot, ctx) } catch (_) { out = 'failed:leg-threw' }
+    if (ctx.furnace) ctx.furnace.bring = true // ours: the order's end consumes its outcome
+  }
+  if (!out) return // running; the furnace walks itself
+  ctx.furnaceJob = null
+  s.started = false
+  if (out === 'done') {
+    o.smelt = null
+    o.smeltRuns = (o.smeltRuns || 0) + 1
+    enterCraftOrRefuse(bot, ctx, o)
+    return
+  }
+  if (out === 'failed:no-fuel' && !o.fuelTried) { o.fuelTried = true; o.needFuel = true; return }
+  if (out === 'failed:no-cobble' && !o.cobbleTried) { o.cobbleTried = true; o.needCobble = true; return }
+  if (out === 'failed:no-cobble') {
+    refuse(bot, ctx, `need a furnace: 8 cobblestone (have ${countDrop(bot, 'cobblestone')})`)
+    return
+  }
+  if (out === 'failed:no-table') { refuse(bot, ctx, 'need a crafting table'); return }
+  refuse(bot, ctx, `could not smelt ${s.input}: ${String(out).replace(/^failed:/, '')}`)
+}
+
+// The fuel / cobble rungs (one each per order). Fuel: pack logs become
+// planks (2x2, no table; furnace.js burns planks after coal), else a logs
+// sub sized for the load. Cobble (g0z.39 shape, owner: the bot gets its
+// own materials): a wooden pickaxe from the pack if none, then a stone
+// sub for the furnace's 8. A sub resumes through enterCraftOrRefuse, which
+// re-enters phase 'smelt'.
+// ponytail: charcoal's fuel planks burn the same logs it smelts — the
+// shortfall gives partial (direct orders never lap).
+function materialTick(bot, ctx, o, s) {
+  const furnaceMod = require('./furnace')
+  const pack = packCounts(bot)
+  if (o.needFuel) {
+    const log = topLog(pack)
+    if (log) {
+      const planks = Math.min(4 * pack[log], Math.ceil(s.n / furnaceMod.ORE_PER_PLANK))
+      let r = null
+      try { r = deps.craftItem(bot, ctx, [`${log.slice(0, -'_log'.length)}_planks`], planks) } catch (_) { r = { done: false } }
+      if (r === 'running') return
+      o.needFuel = false
+      if (!(r && r.done)) refuse(bot, ctx, `could not smelt ${s.input}: no fuel`)
+      return
+    }
+    if (o.fuelSub) { refuse(bot, ctx, `could not smelt ${s.input}: no fuel`); return }
+    o.fuelSub = true
+    const want = Math.ceil(Math.ceil(s.n / furnaceMod.ORE_PER_PLANK) / 4)
+    o.smelt = null
+    toBlockSub(bot, o, 'logs', null, want, s.target, want, 'logs')
+    say(bot, subLine(o, `${want} logs for fuel`, 'logs'))
+    return
+  }
+  const cobble = pack.cobblestone || 0
+  if (cobble >= 8) { o.needCobble = false; return }
+  const pick = Object.keys(pack).some((n) => n.endsWith('_pickaxe'))
+  if (!pick) {
+    let r = null
+    try { r = deps.craftItem(bot, ctx, ['wooden_pickaxe'], 1) } catch (_) { r = { done: false } }
+    if (r === 'running' || (r && r.done)) return // done: next tick sees the pick
+    refuse(bot, ctx, `need a furnace: 8 cobblestone (have ${cobble})`)
+    return
+  }
+  // ponytail: a pick that breaks mid-dig stalls the sub (stone drops
+  // nothing bare-handed); the goal watchdog parks a flat bring.
+  o.needCobble = false
+  o.smelt = null
+  toBlockSub(bot, o, 'stone', 'cobblestone', 8, s.target, 8, 'cobblestone')
+  say(bot, subLine(o, '8 cobblestone for a furnace', 'stone'))
 }
 
 // Chest mats for the craft rung (did.4 colour rule): the product withdraw
@@ -669,6 +860,21 @@ async function withdrawCraftMats(bot, ctx, o) {
   try {
     plan = craftany().planCraft(bot, ctx, orderCraftNames(o.names || []), 1)
   } catch (_) { plan = null }
+  // Smelt gap (ipn.20, gear runWithdraw order): the output first, then its
+  // raw for the rest. A direct order's own output was the product withdraw.
+  // Charcoal's logs stay for the dig leg, like the ladder's.
+  const sg = smeltGapOf(bot, o, plan)
+  if (sg) {
+    let short = sg.need - sg.have
+    const draws = smeltDirect(o) ? [SMELT[sg.out].raw] : [sg.out, SMELT[sg.out].raw]
+    for (const name of draws) {
+      if (!name || short <= 0) continue
+      try {
+        const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [name], short)
+        if (res && res.got > 0) short -= res.got
+      } catch (_) { /* next draw */ }
+    }
+  }
   if (!plan || plan.fail !== 'missing' || !Array.isArray(plan.missing)) return
   const pack = packCounts(bot)
   if (bedMod.isBedFamily(o)) {
@@ -904,3 +1110,6 @@ module.exports.bedGap = bedGap
 module.exports.pickSubGap = pickSubGap
 module.exports.subWordFor = subWordFor
 module.exports.smeltingGap = smeltingGap
+module.exports.planGap = planGap
+module.exports.smeltTick = smeltTick
+module.exports.deps = deps

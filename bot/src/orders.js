@@ -286,7 +286,10 @@ function createOrders(box) {
       // did.4: a ladder-bringable gap opens a sub-order instead of refusing.
       if (resolved && !worldFallback) {
         const cPlan = craftanyMod.planCraft(bot, ctx, bringMod.orderCraftNames(resolved.names), 1)
-        if (cPlan.ok) {
+        // ipn.20: a furnace output ('bring me iron ingot') never crafts
+        // (nugget/block recipes): the smelt rung or its honest line.
+        const smeltOut = resolved.names.length === 1 && bringMod.smeltingGap([{ name: resolved.names[0] }])
+        if (cPlan.ok && !smeltOut) {
           if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
           ctx.unseenTicks = 0
           ctx.resumeWork = false
@@ -300,40 +303,28 @@ function createOrders(box) {
           ctx.paused = false
           return `making you a ${cPlan.target}`
         }
-        if (cPlan.fail === 'missing') {
-          const miss = Array.isArray(cPlan.missing) ? cPlan.missing : []
-          // Smelting first (body-4): a furnace-gated gap refuses up front,
-          // before any ladder gap sends the bot gathering for a craft that
-          // cannot land.
-          const smelt = bringMod.smeltingGap(miss)
-          if (smelt) return `need ${smelt} (smelting not part of bring)`
-          let sub = null
-          if (bedMod.isBedFamily(resolved)) {
-            sub = bringMod.bedGap(bot, { names: resolved.names })
-          } else if (miss.every((e) => e && bringMod.pickSubGap([e]))) {
-            // Every gap rides the ladder, or the gather is wasted (body-4).
-            const gap = bringMod.pickSubGap(miss)
-            if (gap) sub = { gap, target: cPlan.target, color: woolMod.dropColor(gap.name) }
+        if (cPlan.fail === 'missing' || smeltOut) {
+          // One gap resolver with the tick (bringitem.planGap, ipn.20):
+          // smelt gaps first (body-4), then a ladder sub. The order object
+          // is built off ctx and only lands when the gap opens, so a
+          // refusal never leaves a half order behind.
+          const o = {
+            kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
+            items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
+            phase: 'craft', announced: true, keptName,
           }
-          if (sub) {
+          const g = bringMod.planGap(bot, ctx, o, cPlan)
+          if (g && g.open) {
             if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
             ctx.unseenTicks = 0
             ctx.resumeWork = false
             clearStuck()
             ctx.craftany = null
-            ctx.bring = {
-              kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
-              items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
-              phase: 'craft', announced: true, keptName,
-            }
-            const line = bringMod.openSubOrder(bot, ctx, ctx.bring, sub.gap, sub.target, sub.color)
-            if (line) {
-              ctx.paused = false
-              return line
-            }
-            ctx.bring = null // a refused open never leaves a half order behind
+            ctx.bring = o
+            ctx.paused = false
+            return g.line
           }
-          return cPlan.line
+          if (g) return g.line
         }
         if (cPlan.fail === 'no-table') return cPlan.line
       }
