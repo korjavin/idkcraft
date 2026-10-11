@@ -1289,7 +1289,7 @@ function shelter(bot, ctx, target, state) {
         // A refused shelter pillar bans the recover pillar at this spot too
         // (vmzq.47): the dig-in below inherits the same refusal, and the
         // morning episodes must dig out instead of re-pillaring.
-        if (rec === 'failed:place-error') {
+        if (rec === 'failed:place-error' || rec === 'failed:place-protected') {
           try { recover.noteRecoverFail(ctx, botPos(bot), 'pillar_up', rec) } catch (_) { /* bans best-effort */ }
         }
         st.dig = {}

@@ -678,7 +678,7 @@ function fenceBandCells(state) {
 // Own band cells (idkcraft-g0z.44): the fence-band subset the bot placed
 // itself (the ctx.placedByBot key set) that no plan or decor cell covers —
 // the rig's yard-litter candidates (read back via rcon). Pure.
-function ownBandCells(placed, state) {
+function ownBandCells(placed, state, names) {
   try {
     if (!(placed instanceof Set) || !placed.size) return []
     const site = state && state.site
@@ -688,7 +688,13 @@ function ownBandCells(placed, state) {
     const out = []
     for (const c of fenceBandCells(state)) {
       const k = `${c.x},${c.y},${c.z}`
-      if (placed.has(k) && !at.has(k) && !dt.has(k)) out.push(c)
+      if (!placed.has(k) || at.has(k)) continue
+      // A decor cell hides only the laid decor itself (g0z.53): scaffold
+      // left there carries another laid name. No recorded name = trust.
+      const dc = dt.get(k)
+      const nm = names instanceof Map ? names.get(k) : undefined
+      if (dc && (nm === undefined || matches(dc.kind, nm))) continue
+      out.push(c)
     }
     return out
   } catch (_) { return [] }

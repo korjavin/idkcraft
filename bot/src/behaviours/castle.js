@@ -701,7 +701,11 @@ function litterTargets(bot, ctx, st, now) {
   const complete = st.phase === 'complete'
   const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0},v${ver(st)},${complete ? 'band' : 'box'}`
   const c0 = ctx.castleLitter
-  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) return c0.list.filter((c) => !done(bot, c))
+  // Band entries re-check ownership at read time (g0z.53): a block a player
+  // replaced inside the 30 s window is theirs, never dug.
+  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) {
+    return c0.list.filter((c) => !done(bot, c) && (c.idx < LITTER_BAND_BASE || isOwnPlaced(ctx, { position: c, name: nameAt(bot, c) })))
+  }
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
   const dt = blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).at
