@@ -1347,6 +1347,14 @@ describe('watchdog commit narration (vmzq.66)', () => {
     assert.match(bot.chats[1], /^build home: no wood within 160 — walk the visited boundary \(unlikely \+home now\)$/)
   })
 
+  it('the bank option narrates whole: a colon after a paren is not a trigger cut', () => {
+    const { bot, ctx } = strandedHouse()
+    taskMod.taskTick(bot, ctx, 1000000000000)
+    const crit = 'bank the full pack at home before fetching more (+home chain: frees room)'
+    assert.equal(taskMod.applyCommit(bot, ctx, 'house', 'bank', 'stockpile', 1000000000000, null, crit), true)
+    assert.match(bot.chats[bot.chats.length - 1], / — bank the full pack at home before fetching more \(\+home chain: frees room\)$/)
+  })
+
   it('the commit reason echoes the radius gather actually searched', async () => {
     const { bot, ctx } = strandedHouse()
     ctx.gather.farRadius = 96
