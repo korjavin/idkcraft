@@ -239,7 +239,7 @@ describe('castle v3 stairs (g0z.47)', () => {
 
   it('rotations rotate faces with the same quarter-turn; absPlan passes them through', () => {
     const g0 = V3.PLAN.find((c) => c.dx === 8 && c.dy === 0 && c.dz === 12)
-    assert.deepEqual(g0, { dx: 8, dy: 0, dz: 12, kind: 'stairs', face: { dx: 1, dz: 0 } })
+    assert.deepEqual(g0, { dx: 8, dy: 0, dz: 12, kind: 'stairs', face: { dx: 0, dz: -1 } })
     for (const rot of [1, 2, 3]) {
       const rp = castle.rotatePlan(V3.PLAN, rot, 3)
       assert.equal(rp.filter((c) => c.kind === 'stairs').length, 60, `rot ${rot} stairs`)
@@ -251,11 +251,11 @@ describe('castle v3 stairs (g0z.47)', () => {
     }
     const r1 = castle.rotatePlan([g0], 1, 3)[0]
     assert.deepEqual([r1.dx, r1.dz], [V3.D - 1 - 12, 8])
-    assert.deepEqual(r1.face, { dx: 0, dz: 1 })
+    assert.deepEqual(r1.face, { dx: 1, dz: 0 })
     const site = { x: 100, y: 64, z: 200 }
     const abs = castle.absPlan(site, 1, 3).at.get(`${site.x + r1.dx},${site.y},${site.z + r1.dz}`)
     assert.equal(abs.kind, 'stairs')
-    assert.deepEqual(abs.face, { dx: 0, dz: 1 })
+    assert.deepEqual(abs.face, { dx: 1, dz: 0 })
   })
 
   it('no landing-edge stair sits on a jump-ceiling skip', () => {
@@ -298,10 +298,10 @@ describe('castle v3 stairs (g0z.47)', () => {
     const turn5 = (rot, x, z) => rot === 1 ? [4 - z, x] : rot === 2 ? [4 - x, 4 - z] : rot === 3 ? [z, 4 - x] : [x, z]
     const runs = []
     const flights = [
-      { steps: [[1, 0, 1], [1, 1, 2], [1, 2, 3]], face: { dx: 0, dz: 1 }, edge: [2, 3, 3], edgeFace: { dx: 1, dz: 0 } },
-      { steps: [[3, 4, 3], [3, 5, 2], [3, 6, 1]], face: { dx: 0, dz: -1 }, edge: [2, 6, 1], edgeFace: { dx: -1, dz: 0 } },
-      { steps: [[1, 7, 1], [1, 8, 2], [1, 9, 3]], face: { dx: 0, dz: 1 }, edge: [2, 9, 3], edgeFace: { dx: 1, dz: 0 } },
-      { steps: [[3, 10, 3], [3, 11, 2], [3, 12, 1]], face: { dx: 0, dz: -1 }, edge: [2, 12, 1], edgeFace: { dx: -1, dz: 0 } },
+      { steps: [[1, 0, 1], [1, 1, 2], [1, 2, 3]], first: { dx: -1, dz: 0 }, face: { dx: 0, dz: 1 }, edge: [2, 3, 3], edgeFace: { dx: 1, dz: 0 } },
+      { steps: [[3, 4, 3], [3, 5, 2], [3, 6, 1]], first: { dx: 1, dz: 0 }, face: { dx: 0, dz: -1 }, edge: [2, 6, 1], edgeFace: { dx: -1, dz: 0 } },
+      { steps: [[1, 7, 1], [1, 8, 2], [1, 9, 3]], first: { dx: -1, dz: 0 }, face: { dx: 0, dz: 1 }, edge: [2, 9, 3], edgeFace: { dx: 1, dz: 0 } },
+      { steps: [[3, 10, 3], [3, 11, 2], [3, 12, 1]], first: { dx: 1, dz: 0 }, face: { dx: 0, dz: -1 }, edge: [2, 12, 1], edgeFace: { dx: -1, dz: 0 } },
     ]
     for (const [tx, tz, rot] of [[7, 7, 1], [19, 7, 3], [7, 15, 1], [19, 15, 3]]) {
       for (const f of flights) {
@@ -315,38 +315,46 @@ describe('castle v3 stairs (g0z.47)', () => {
         if (ey !== 3) { // L2-L4: the flight tops out level with the slab, no edge stair
           assert.equal(edge.kind, 'planks', JSON.stringify(edge))
           assert.equal(cells[2].dy, ey, 'top step level with its landing')
-          runs.push({ cells, face: castle.rotFace(rot, f.face), edgeFace: null })
+          runs.push({ cells, face: castle.rotFace(rot, f.face), first: castle.rotFace(rot, f.first), edgeFace: null })
           continue
         }
         cells.push(edge)
         const face = castle.rotFace(rot, f.face)
         const edgeFace = castle.rotFace(rot, f.edgeFace)
-        runs.push({ cells, face, edgeFace })
+        runs.push({ cells, face, first: castle.rotFace(rot, f.first), edgeFace })
       }
     }
     runs.push({
       cells: [[8, 0, 12], [9, 1, 12], [10, 2, 12], [11, 3, 12]].map(([x, y, z]) => at.get(`${x},${y},${z}`)),
-      face: { dx: 1, dz: 0 }, edgeFace: { dx: 1, dz: 0 },
+      face: { dx: 1, dz: 0 }, first: { dx: 0, dz: -1 }, edgeFace: { dx: 1, dz: 0 },
     })
     runs.push({
       cells: [[18, 4, 8], [18, 5, 9], [18, 6, 10], [18, 7, 11]].map(([x, y, z]) => at.get(`${x},${y},${z}`)),
-      face: { dx: 0, dz: 1 }, edgeFace: { dx: 0, dz: 1 },
+      face: { dx: 0, dz: 1 }, first: { dx: 1, dz: 0 }, edgeFace: { dx: 0, dz: 1 },
     })
     assert.equal(runs.length, 18)
-    for (const { cells, face, edgeFace } of runs) {
+    const solidAt = (x, y, z) => { const k = (at.get(`${x},${y},${z}`) || {}).kind; return !!k && k !== 'air' && k !== 'dig' }
+    for (const { cells, face, first, edgeFace } of runs) {
       for (const c of cells) assert.equal(c.kind, 'stairs', JSON.stringify(c))
-      assert.deepEqual(cells[0].face, face)
+      // Step 1 is entered head-on (idkcraft-s575): its face is the walk-in
+      // direction from the approach cell, which is open air at step 1's own
+      // level over a walkable floor; step 2 is a quarter-turn onto its low half.
+      assert.deepEqual(cells[0].face, first)
+      assert.ok(first.dx * face.dx + first.dz * face.dz === 0, 'quarter-turn into the run')
+      const a = { x: cells[0].dx - first.dx, y: cells[0].dy, z: cells[0].dz - first.dz }
+      assert.equal(solidAt(a.x, a.y, a.z), false, `approach cell open ${JSON.stringify(a)}`)
+      assert.equal(solidAt(a.x, a.y + 1, a.z), false, 'approach headroom')
+      assert.ok(a.y === 0 || solidAt(a.x, a.y - 1, a.z), `approach floor ${JSON.stringify(a)}`)
+      const behind = { x: cells[0].dx + first.dx, y: cells[0].dy, z: cells[0].dz + first.dz }
+      assert.equal(solidAt(behind.x, behind.y, behind.z), true, 'step 1 high half backs onto a wall')
+      assert.deepEqual([cells[1].dx - cells[0].dx, cells[1].dz - cells[0].dz], [face.dx, face.dz])
       assert.deepEqual(cells[1].face, face)
       assert.deepEqual(cells[2].face, face)
-      assert.ok(stepOk(cells[0], cells[1], face), `run ${JSON.stringify(cells[0])}`)
       assert.ok(stepOk(cells[1], cells[2], face), `run ${JSON.stringify(cells[1])}`)
       if (!edgeFace) continue
       assert.deepEqual(cells[3].face, edgeFace)
       assert.ok(edgeOk(cells[2], cells[3], edgeFace), `edge ${JSON.stringify(cells[2])} -> ${JSON.stringify(cells[3])}`)
     }
-    // Known limit (revmux 01 core-2, idkcraft-s575): step 1's low half backs
-    // onto a wall, so a player enters it from the side and jumps once per run
-    // (18 per full climb); the bot jumps regardless.
   })
 
   it('reach invariant green for every v3 prefix with the stairs ref restriction', () => {

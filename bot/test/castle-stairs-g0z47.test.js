@@ -174,7 +174,7 @@ describe('stairs dig/relay loop (g0z.47)', () => {
         calls.faced.push(true)
         const p = ref.position.offset(face.x, face.y, face.z)
         const want = blueprint.faceName(c.face)
-        paint('cobblestone_stairs', lay === 'right' ? { facing: want, half: 'bottom' } : { facing: 'north', half: 'bottom' })
+        paint('cobblestone_stairs', { facing: lay === 'right' ? want : want === 'north' ? 'south' : 'north', half: 'bottom' })
         world.set(k3(p.x, p.y, p.z), world.get(k3(c.x, c.y, c.z)))
       },
       placeBlock: async () => { throw new Error('stairs must use the faced path') },
@@ -216,9 +216,7 @@ describe('stairs dig/relay loop (g0z.47)', () => {
 
   it('a placement bug that keeps laying wrong blocks after STRIKES, never loops', async () => {
     const { bot, ctx, c } = loopBot({ lay: 'wrong-always' })
-    // The fake lays facing north regardless; the first stairs cell wants
-    // another facing, so every lay is wrong.
-    assert.notEqual(blueprint.faceName(c.face), 'north')
+    // The fake always lays the opposite facing, so every lay is wrong.
     bot.paint('air', {})
     for (let i = 0; i < 30; i++) { castleMod(bot, ctx); await settle() }
     const entry = ctx.castle.blocked[`3:${c.idx}`]
@@ -285,6 +283,16 @@ describe('stairs sourcing (g0z.47)', () => {
 })
 
 describe('stairs residence + rig paint (g0z.47)', () => {
+  it('standing on any ground-stair step (low half feet at y+0.5) reads inside (codex P2)', () => {
+    const home = { kind: 'castle', site: { ...SITE }, rot: 0 }
+    const c = residence.CASTLE
+    for (const [x, y, z] of [[8, 0, 12], [9, 1, 12], [10, 2, 12]]) {
+      for (const dy of [0.5, 1.0]) {
+        assert.equal(c.interior(home, { x: SITE.x + x + 0.5, y: SITE.y + y + dy, z: SITE.z + z + 0.5 }), true, `step ${x},${y},${z} feet +${dy}`)
+      }
+    }
+  })
+
   it('a complete v3 castle is adopted; v1 still is not', () => {
     const v3 = { site: { ...SITE }, rot: 0, blueprintVersion: 3, phase: 'complete' }
     const home = residence.wanted({ castle: v3, home: null })

@@ -237,7 +237,9 @@ const CASTLE = {
     const y = Math.floor(pos.y)
     const z = Math.floor(pos.z)
     const set = floorSet(home)
-    return set.has(`${x},${y},${z}`) || set.has(`${x},${y - 1},${z}`)
+    // y + 1: feet inside a v3 stair step (low half stands at dy + 0.5); a
+    // floor sits at y + 1 only over a solid cell, so no other column matches.
+    return set.has(`${x},${y},${z}`) || set.has(`${x},${y - 1},${z}`) || set.has(`${x},${y + 1},${z}`)
   },
   box: (home) => {
     const cells = castle.absPlan(home.site, rot(home), CV).cells

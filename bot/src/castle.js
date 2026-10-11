@@ -68,6 +68,12 @@ const FLIGHTS = [
 ]
 // Ascent direction per flight (tower-local, rot 0): F1/F3 climb +z,
 // F2/F4 climb -z. A v3 stairs cell carries its face {dx,dz}.
+// Step 1 of each flight faces the direction the player walks in from the
+// stairwell's open side (its approach cell, perpendicular to the run), so
+// the low half is entered head-on and step 2 is a quarter-turn onto its low
+// half: no jump at the bottom of any run (revmux 01 core-2, idkcraft-s575).
+// F1 enters from (2,0,1); F2-F4 from the landing slab cell beside step 1.
+const FLIGHT_FIRST_FACE = [{ dx: -1, dz: 0 }, { dx: 1, dz: 0 }, { dx: -1, dz: 0 }, { dx: 1, dz: 0 }]
 const FLIGHT_FACE = [{ dx: 0, dz: 1 }, { dx: 0, dz: -1 }, { dx: 0, dz: 1 }, { dx: 0, dz: -1 }]
 // Landing-edge stairs (v3): L1's cell beside each F1 top step becomes a stair
 // too, so the last rise onto the slab is 0.5, not a jump. L2-L4 get none: the
@@ -143,7 +149,7 @@ function towerPlan(top, door, windowAt, opts) {
     for (const [x, dy, z] of flight) {
       if (!flightByDy.has(dy)) flightByDy.set(dy, [])
       flightByDy.get(dy).push([x, z])
-      flightFaceByDy.set(dy, FLIGHT_FACE[fi])
+      flightFaceByDy.set(dy, dy === flight[0][1] ? FLIGHT_FIRST_FACE[fi] : FLIGHT_FACE[fi])
     }
   })
   const landingByDy = new Map(LANDINGS.map((l) => [l.dy, l]))
@@ -328,8 +334,8 @@ function buildFullPlan(opts) {
   const wellU = new Set(['18,8', '18,9', '18,10']) // over the attic stair
   const stairG = [{ x: 8, y: 0, z: 12 }, { x: 9, y: 1, z: 12 }, { x: 10, y: 2, z: 12 }] // leans on the NW tower
   const stairU = [{ x: 18, y: 4, z: 8 }, { x: 18, y: 5, z: 9 }, { x: 18, y: 6, z: 10 }] // leans on the NE tower
-  const stairGKind = (i) => wantStairs ? { ...stairG[i], kind: 'stairs', face: { dx: 1, dz: 0 } } : { ...stairG[i], kind: 'stone' }
-  const stairUKind = (i) => wantStairs ? { ...stairU[i], kind: 'stairs', face: { dx: 0, dz: 1 } } : { ...stairU[i], kind: 'planks' }
+  const stairGKind = (i) => wantStairs ? { ...stairG[i], kind: 'stairs', face: i === 0 ? { dx: 0, dz: -1 } : { dx: 1, dz: 0 } } : { ...stairG[i], kind: 'stone' }
+  const stairUKind = (i) => wantStairs ? { ...stairU[i], kind: 'stairs', face: i === 0 ? { dx: 1, dz: 0 } : { dx: 0, dz: 1 } } : { ...stairU[i], kind: 'planks' }
   const torches = (y, list) => list.map(([x, z]) => ({ x, y, z, kind: 'torch' }))
 
   // Ground storey (feet 0): dy0, then 3 and 2 hanging, then 1.
