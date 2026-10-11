@@ -27,7 +27,9 @@ fi
 
 mkdir "$LOCK" 2>/dev/null || { echo "rig z busy ($LOCK)"; exit 2; }
 echo $$ > "$LOCK/pid"
+STATS=
 cleanup() {
+  [ -n "$STATS" ] && kill "$STATS" 2>/dev/null
   docker stop -t 5 "$CLIENT" "$RIG" >/dev/null 2>&1 || true
   exec 8<&- 9<&- || true
   rm -f "$SRVFIFO" "$CHAT_FIFO"; rm -rf "$LOCK"
@@ -73,6 +75,6 @@ echo " $BOT"
 export BOT RIG_CONTAINER="$RIG"
 # Cost of the second bot while it paths, not one idle sample after the run.
 docker stats --format '{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}' "$CLIENT" "$RIG" > "$LOG.stats" 2>&1 &
+STATS=$!
 node "$HERE/ab.js"
-kill $! 2>/dev/null || true
 echo "client/rig cpu+mem samples: $LOG.stats (take max/mean per container)"

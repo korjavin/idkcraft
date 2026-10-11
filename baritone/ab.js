@@ -26,9 +26,12 @@ function dist(a, b) { // b = [x, y, z], or an [x, z] goal (y ignored)
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
 }
 // A spawn inside the goal shell (S7: 1.9 from its goal) would read reached on
-// the first sample; there Baritone must arrive at the goal block itself.
-function reachRadius(s) {
-  return s.goal.length === 3 && dist(s.spawn, s.goal) < 4 ? 1 : REACH_DIST
+// the first sample; there Baritone must arrive at the goal block itself
+// (within 1 of its centre — integer goal coords are the block's corner).
+function reachedAt(s, p) {
+  const g = s.goal
+  if (g.length === 3 && dist(s.spawn, g) < 4) return dist(p, [g[0] + 0.5, g[1], g[2] + 0.5]) <= 1
+  return dist(p, g) <= REACH_DIST
 }
 function command(s) { // the Baritone chat command for a spot
   if (s.mode === 'mine') return `#mine ${s.count} ${s.blocks.join(' ')}`
@@ -84,7 +87,7 @@ function main() {
         if (n >= s.count) { reached = true; break }
       } else {
         minDist = Math.min(minDist, dist(p, s.goal))
-        if (minDist <= reachRadius(s)) { reached = true; break }
+        if (reachedAt(s, p)) { reached = true; break }
       }
     }
     const secs = +((Date.now() - t0) / 1000).toFixed(0)
@@ -99,5 +102,5 @@ function main() {
   console.log(`baritone: ${ok}/${rows.length} reached, ${rows.reduce((a, r) => a + r.secs, 0)} s total -> ${out}`)
 }
 
-module.exports = { parsePos, parseCount, dist, reachRadius, command, loadSpots }
+module.exports = { parsePos, parseCount, dist, reachedAt, command, loadSpots }
 if (require.main === module) main()
