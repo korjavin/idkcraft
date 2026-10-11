@@ -1593,7 +1593,7 @@ function commitHead(bot, ctx, kind, optionId, step) {
       // narrate the action, not the internal predicate. Far/bank
       // criteria are plain prose without a colon and ride whole.
       const cut = text.indexOf(': ')
-      if (cut !== -1) text = text.slice(cut + 2)
+      if (cut !== -1 && cut < (text.indexOf('(') + 1 || Infinity)) text = text.slice(cut + 2)
       return text.split(';')[0].trim()
     }
   } catch (_) { /* head best-effort */ }
