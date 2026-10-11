@@ -400,7 +400,9 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     }
   }
 
-  // forage-far: a remembered find past the park/task radius.
+  // forage-far: a remembered find past the park/task radius. The wood
+  // flag mirrors the criterion's log branch for the fallback rank
+  // (vmzq.65): a non-wood far dig trails the blind spiral.
   if (isWork) {
     const cand = rememberedPast(bot, ctx, 64, isForageName)
     if (!registered('forage')) {
@@ -414,7 +416,7 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
         ? (isLogName(cand.name) ? ' (+castle wood when wood short)' : ' (unlikely +castle now)')
         : kind === 'house' ? (isLogName(cand.name) ? ' (+home wood)' : ' (unlikely +home now)') : ''
       out.push({
-        id: 'forage-far', step: 'forage', unlock: { radius: OUTER_DISK },
+        id: 'forage-far', step: 'forage', unlock: { radius: OUTER_DISK }, wood: isLogName(cand.name),
         criterion: `dig the remembered ${cand.name} ${Math.round(cand.dist)} blocks out${eff}; costs a long walk and a night out`,
       })
     }

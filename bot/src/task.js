@@ -1083,8 +1083,9 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
 // decide (low-confidence/none twice for the same flat goal), take the
 // top-ranked PROGRESS option — never park/ask-owner (they stall by
 // design). Tiers: targeted far/unblock first (bank, demand-matched far),
-// then the goal chain in FSM order, then the blind work spiral, then
-// side plain steps, then house side work, then the order hold retry.
+// then the goal chain in FSM order, then the blind work spiral, then a
+// non-wood far dig (vmzq.65), then side plain steps, then house side
+// work, then the order hold retry.
 // Options that already went flat or failed in the passed history and
 // held (failed) steps sort last within their tier — but one is still
 // picked when everything went flat, so there is no dead end. The
@@ -1140,10 +1141,16 @@ function fallbackRank(kind, offered, history = null, currentStep = null, held = 
     const score = (o) => {
       let s = 0
       const far = FALLBACK_FAR_ORDER.indexOf(o.id)
-      if (far !== -1 && !(isWork && o.id === 'explore-far')) {
+      // A far dig that is not wood trails the blind spiral for work kinds
+      // (vmzq.65: the fallback dug iron for a wood-short house). Options
+      // without the wood flag keep the old rank.
+      const woodlessForageFar = isWork && o.id === 'forage-far' && o.wood === false
+      if (far !== -1 && !(isWork && o.id === 'explore-far') && !woodlessForageFar) {
         s = far
       } else if (isWork && o.id === 'explore-far') {
         s = 200
+      } else if (woodlessForageFar) {
+        s = 250
       } else if (o.id === 'house-build' || o.id === 'house-beds') {
         s = 400
       } else if (typeof o.id === 'string' && o.id.startsWith('hold-')) {

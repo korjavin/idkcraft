@@ -348,8 +348,8 @@ describe('gather step', () => {
     assert.match(ctx.lastGoalKey, /^gather:100,64,0$/)
     assert.equal(ctx.stepStatus, 'running')
     // The 100-log stalls too (wedged body): the next far search excludes
-    // both skipped hits, finds nothing, and the final stays unreachable —
-    // not no-trees, since the sync scan still sees the trees.
+    // both struck hits, finds nothing, and the final stays unreachable —
+    // walked-and-struck trunks (vmzq.65), not no-trees.
     for (let i = 0; i < 40 && !String(ctx.stepStatus).startsWith('failed'); i++) gather(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:unreachable')
     assert.equal(bot.lines[bot.lines.length - 1], 'cannot reach the trees')
@@ -364,6 +364,29 @@ describe('gather step', () => {
     gather(bot, ctx, null, {})
     gather(bot, ctx, null, {})
     assert.deepEqual(bot.lines, ['no trees within 48 blocks']) // once, not per tick
+  })
+
+  it('(vmzq.65) banned sync logs plus empty shells end failed:no-trees, never walked', () => {
+    // The prod shape: the 48-shell sees only gave-up logs, the staged
+    // shells find nothing walkable, and the bot never approaches a trunk —
+    // failed:no-trees (not unreachable) with the stranded record set.
+    const bot = mockBot({
+      spots: [pos(40, 64, 0)],
+      names: { '40,64,0': 'oak_log', '96,64,0': 'stone' }, // stone: loaded probe, the search starts
+    })
+    const rawFind = bot.findBlocks.bind(bot)
+    bot.findBlocks = (opts) => {
+      const origin = opts.point || bot.entity.position
+      const maxD = typeof opts.maxDistance === 'number' ? opts.maxDistance : Infinity
+      return rawFind(opts).filter((q) => Math.hypot(q.x - origin.x, q.y - origin.y, q.z - origin.z) <= maxD)
+    }
+    const ctx = freshCtx()
+    danger.mark(ctx, { x: 40, y: 64, z: 0 })
+    for (let i = 0; i < 120 && !(ctx.gather && ctx.gather.final); i++) gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-trees')
+    assert.equal(ctx.gather.farEmpty, true)
+    assert.equal(ctx.gather.streak, 0)
+    assert.equal(bot.calls.setGoal, 0, 'nothing walked to')
   })
 
   it('(f) no displacement for N ticks: tree skipped, next tree searched', () => {
@@ -1033,5 +1056,69 @@ describe('gather far/memory gate (idkcraft-atl.24)', () => {
     run(bot, ctx)
     assert.ok(ctx.gather.gskip.has('80,64,0'), `gskip: ${[...ctx.gather.gskip]}`)
     assert.match(ctx.lastGoalKey, /^gather:120,64,0$/)
+  })
+})
+
+describe('stranded-wood leash lift (vmzq.65)', () => {
+  const taskFar = gather.taskFar
+  function sited() {
+    const bot = mockBot({ spots: [], names: {} })
+    bot.players = { Steve: { username: 'Steve' } }
+    bot.spawnPoint = pos(0, 64, 0)
+    const ctx = { ...freshCtx(), home: { site: { x: 0, y: 64, z: 0 }, built: false, v: 2 } }
+    return { bot, ctx }
+  }
+
+  it('taskFar accepts a 200-block log while stranded, no unlock', () => {
+    const { bot, ctx } = sited()
+    ctx.gather = { farEmpty: true }
+    assert.equal(ctx.goal, undefined, 'no watchdog window armed')
+    assert.equal(taskFar(ctx, { x: 200, y: 64, z: 0 }, bot), false)
+    assert.equal(taskFar(ctx, { x: 300, y: 64, z: 0 }, bot), true, 'past the outer disk still rejected')
+  })
+
+  it('taskFar rejects past 64 once the record clears', () => {
+    const { bot, ctx } = sited()
+    ctx.gather = { farEmpty: false }
+    assert.equal(taskFar(ctx, { x: 200, y: 64, z: 0 }, bot), true)
+    assert.equal(taskFar(ctx, { x: 40, y: 64, z: 0 }, bot), false)
+  })
+
+  it('taskFar stays leashed alone even while stranded (vmzq.59)', () => {
+    const { bot, ctx } = sited()
+    bot.players = {}
+    ctx.gather = { farEmpty: true }
+    assert.equal(taskFar(ctx, { x: 200, y: 64, z: 0 }, bot), true)
+  })
+
+  it('a moved log count clears the record through a real tick: back to 64', () => {
+    const bot = mockBot({ spots: [pos(10, 64, 0)], names: { '10,64,0': 'oak_log' }, items: [{ name: 'oak_log', count: 1 }] })
+    bot.players = { Steve: { username: 'Steve' } }
+    bot.spawnPoint = pos(0, 64, 0)
+    const ctx = {
+      ...freshCtx(),
+      home: { site: { x: 0, y: 64, z: 0 }, built: false, v: 2 },
+      gather: { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: 'failed:no-trees', atLogs: 0, farEmpty: true, failPos: { x: 0, y: 64, z: 0 }, lastProgressAt: Date.now() },
+    }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.gather.final, null, 'world-changed reset ran')
+    assert.equal(ctx.gather.farEmpty, false)
+    assert.equal(taskFar(ctx, { x: 200, y: 64, z: 0 }, bot), true, 'leash back to 64')
+  })
+
+  it('the relocation release keeps the record for the retry at new ground', () => {
+    const bot = mockBot({ spots: [pos(102, 64, 0)], names: { '102,64,0': 'oak_log' } })
+    bot.players = { Steve: { username: 'Steve' } }
+    bot.spawnPoint = pos(0, 64, 0)
+    bot.entity.position = pos(100, 64, 0)
+    const ctx = {
+      ...freshCtx(),
+      home: { site: { x: 0, y: 64, z: 0 }, built: false, v: 2 },
+      gather: { pos: null, name: 'log', phase: 'searchfar', search: null, skip: new Set(), gskip: new Set(), streak: 0, final: 'failed:no-trees', atLogs: 0, farEmpty: true, failPos: { x: 0, y: 64, z: 0 }, lastProgressAt: Date.now() },
+    }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.gather.final, null, 'relocation released the latch')
+    assert.equal(ctx.gather.farEmpty, true, 'the retry keeps the lifted leash')
+    assert.match(ctx.lastGoalKey, /^gather:102,64,0$/)
   })
 })
