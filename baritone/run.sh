@@ -17,9 +17,10 @@ RIGDIR="$PRODWORLD/rigs/z"; D="$RIGDIR/replay-data/paper-base"
 SRVFIFO="/tmp/baritone-srv-$$.fifo"; export CHAT_FIFO="/tmp/baritone-chat-$$.fifo"
 LOG=/tmp/baritone-run.log
 
+BOT="${BOT:-BaritoneBot}" # with a stored account: the profile name (pre-opped below)
 HMC_PROPS=; HMC_OFFLINE=
 if [ "${BARITONE_OFFLINE:-}" = 1 ]; then
-  HMC_PROPS="-Dhmc.offline.username=${BOT:-BaritoneBot}"; HMC_OFFLINE=-offline
+  HMC_PROPS="-Dhmc.offline.username=$BOT"; HMC_OFFLINE=-offline
 elif ! docker run --rm -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth --entrypoint test "$IMAGE" -s /headlessmc/HeadlessMC/auth/.accounts.json; then
   echo "no stored account: run the one-time login (baritone/README.md) or opt in with BARITONE_OFFLINE=1"; exit 2
 fi
@@ -51,22 +52,27 @@ echo " up"
 for c in "difficulty peaceful" "gamerule fall_damage false" "gamerule advance_weather false" "weather clear"; do
   docker exec "$RIG" rcon-cli "$c"
 done
+# Pre-op before login: Paper's spawn protection (15 of 16 spots sit inside it)
+# is decided at login, a later op does not lift it (stuck-run.sh, 3ro).
+docker exec "$RIG" rcon-cli "op $BOT"
 
 # Client: HMC console on stdin (the FIFO ab.js writes to); hmc-specifics `connect`.
 docker run --rm -i --name "$CLIENT" -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth \
   --entrypoint java "$IMAGE" $HMC_PROPS -jar headlessmc-launcher-wrapper.jar \
   --command launch fabric-loader-0.19.5-26.1.2 -lwjgl -commands $HMC_OFFLINE >>"$LOG.client" 2>&1 <&8 &
 echo -n "wait: client joins"
-BOT=
+JOINED=
 for _ in $(seq 1 60); do
   sleep 5
-  echo "connect host.docker.internal $PORT" > "$CHAT_FIFO" # retried until the game is up; ignored once in-game
-  BOT="$(docker exec "$RIG" rcon-cli list | sed -n 's/.*online: *//p' | cut -d, -f1 | tr -d ' ')"
-  [ -n "$BOT" ] && break; echo -n .
+  echo "connect host.docker.internal $PORT" > "$CHAT_FIFO" # retried only until the join
+  docker exec "$RIG" rcon-cli list | grep -qw "$BOT" && { JOINED=1; break; }
+  echo -n .
 done
-[ -n "$BOT" ] || { echo " client never joined ($LOG.client)"; exit 2; }
+[ -n "$JOINED" ] || { echo " $BOT never joined ($LOG.client; with a stored account set BOT=<profile name>)"; exit 2; }
 echo " $BOT"
-docker exec "$RIG" rcon-cli "op $BOT"
 export BOT RIG_CONTAINER="$RIG"
+# Cost of the second bot while it paths, not one idle sample after the run.
+docker stats --format '{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}' "$CLIENT" "$RIG" > "$LOG.stats" 2>&1 &
 node "$HERE/ab.js"
-docker stats --no-stream --format '{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}' "$CLIENT" "$RIG"
+kill $! 2>/dev/null || true
+echo "client/rig cpu+mem samples: $LOG.stats (take max/mean per container)"

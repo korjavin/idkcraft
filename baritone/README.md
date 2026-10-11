@@ -24,7 +24,8 @@ licence decision. `run.sh` refuses (exit 2) until one of:
 1. **Owner account (cheapest, ~5 min once):** device-code login, stored in a
    local docker volume (never in the repo):
    `docker run --rm -it -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth idkcraft-baritone:spike --command login`
-   The server is `ONLINE_MODE=false`, so any owned profile joins.
+   The server is `ONLINE_MODE=false`, so any owned profile joins; run with
+   `BOT=<profile name>` so it is pre-opped (spawn protection) before login.
 2. **Owner opt-in to offline** for this local test rig: `BARITONE_OFFLINE=1 sh baritone/run.sh`.
 
 Then: `docker build -t idkcraft-baritone:spike baritone && sh baritone/run.sh`

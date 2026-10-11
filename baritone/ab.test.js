@@ -2,7 +2,7 @@
 const test = require('node:test')
 const assert = require('node:assert')
 const path = require('node:path')
-const { parsePos, parseCount, dist, command, loadSpots } = require('./ab.js')
+const { parsePos, parseCount, dist, reachRadius, command, loadSpots } = require('./ab.js')
 
 test('parses rcon replies', () => {
   assert.deepStrictEqual(parsePos('BaritoneBot has the following entity data: [-61.3d, 66.0d, -210.5d]'), [-61.3, 66, -210.5])
@@ -24,4 +24,6 @@ test('corpus filter = the 16 vhlb.1 follow spots + tasks', () => {
   assert.strictEqual(command(spots.find((s) => s.name === 'BED-60')), '#goto 0 -210')
   assert.strictEqual(command(spots.find((s) => s.name === 'MINE-10')), '#mine 10 iron_ore deepslate_iron_ore')
   assert.strictEqual(command(follow[0]), '#goto -72 65 -218')
+  assert.strictEqual(reachRadius(follow.find((s) => s.name === 'S7')), 1) // spawn 1.9 from goal
+  assert.strictEqual(reachRadius(follow[0]), 2.5)
 })
