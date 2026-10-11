@@ -443,14 +443,14 @@ describe('castle arbiter step (g0z.3)', () => {
   })
 })
 
-describe('castle v2 default for new orders (g0z.12)', () => {
-  it('a new order is v2: the 31x27 footprint is site-checked and the reply counts the v2 plan', () => {
+describe('castle v3 default for new orders (g0z.47)', () => {
+  it('a new order is v3: the 31x27 footprint is site-checked and the reply counts the v3 plan', () => {
     const bot = makeBot()
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     handleChat(bot, ticker, 'Steve', 'build castle')
     const st = bot._tickerCtx.castle
-    assert.equal(st.blueprintVersion, 2)
-    const n = blueprint.BLUEPRINTS[2].PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
+    assert.equal(st.blueprintVersion, blueprint.BLUEPRINT_VERSION)
+    const n = blueprint.BLUEPRINTS[blueprint.BLUEPRINT_VERSION].PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
     assert.match(bot.chats.pop(), new RegExp(`~${n} blocks`))
     // Water in a v2 hall column (outside any v1 11x11 box) refuses the
     // same spot (g0z.20: water in the ring is filled, in the core never).

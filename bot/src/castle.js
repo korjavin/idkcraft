@@ -28,16 +28,17 @@
 //
 // Kinds (material ROLES): 'stone' (cobblestone), 'planks' (landings, floors,
 // infill, roof), 'frame' (any *_log: Fachwerk beams), 'fence', 'door',
-// 'chest', 'torch', 'air' (keep clear: doorways/windows/stairwells — never a
-// target), 'dig' (must end as air: the moat).
+// 'chest', 'torch', 'stairs' (v3 only: any *_stairs, one per step cell,
+// each carrying a face {dx,dz}), 'air' (keep clear: doorways/windows/
+// stairwells — never a target), 'dig' (must end as air: the moat).
 // Lay order: every place cell has a solid neighbour placed earlier or
 // terrain below (same rule as the build.js header); the reach invariant
 // (test/castle-reach.js) holds for every plan prefix.
 
-// What a NEW order gets (g0z.12: v2, its frame/chest now sourced). Castles
-// already ordered keep their stored version.
-const BLUEPRINT_VERSION = 2
-const FULL_VERSION = 2
+// What a NEW order gets (g0z.47: v3, stairs for the 60 step cells).
+// Castles already ordered keep their stored version (v1 and v2 frozen).
+const BLUEPRINT_VERSION = 3
+const FULL_VERSION = 3
 
 const SITE_W = 11
 const SITE_D = 11
@@ -65,6 +66,42 @@ const FLIGHTS = [
   [[1, 7, 1], [1, 8, 2], [1, 9, 3]], // F3 west, L2 -> L3
   [[3, 10, 3], [3, 11, 2], [3, 12, 1]], // F4 east, L3 -> L4
 ]
+// Ascent direction per flight (tower-local, rot 0): F1/F3 climb +z,
+// F2/F4 climb -z. A v3 stairs cell carries its face {dx,dz}.
+// Step 1 of each flight faces the direction the player walks in from the
+// stairwell's open side (its approach cell, perpendicular to the run), so
+// the low half is entered head-on and step 2 is a quarter-turn onto its low
+// half: no jump at the bottom of any run (revmux 01 core-2, idkcraft-s575).
+// F1 enters from (2,0,1); F2-F4 from the landing slab cell beside step 1.
+const FLIGHT_FIRST_FACE = [{ dx: -1, dz: 0 }, { dx: 1, dz: 0 }, { dx: -1, dz: 0 }, { dx: 1, dz: 0 }]
+const FLIGHT_FACE = [{ dx: 0, dz: 1 }, { dx: 0, dz: -1 }, { dx: 0, dz: 1 }, { dx: 0, dz: -1 }]
+// Landing-edge stairs (v3): L1's cell beside each F1 top step becomes a stair
+// too, so the last rise onto the slab is 0.5, not a jump. L2-L4 get none: the
+// flight tops out level with the landing (revmux 01 core-3). Key 'x,dy,z'
+// tower-local; planks today, not a LANDINGS skip.
+const STAIR_EDGES = new Map([
+  ['2,3,3', { dx: 1, dz: 0 }], // L1, from F1 top (1,2,3)
+])
+
+// Quarter-turn a face vector, same clockwise sense as rotatePlan/turn5.
+function rotFace(r, face) {
+  const n = ((r % 4) + 4) % 4
+  if (!face || n === 0) return face ? { dx: face.dx, dz: face.dz } : face
+  const { dx, dz } = face
+  const o = n === 1 ? { dx: -dz, dz: dx } : n === 2 ? { dx: -dx, dz: -dz } : { dx: dz, dz: -dx }
+  if (o.dx === 0) o.dx = 0 // -0 deep-equals 0 nowhere: normalize
+  if (o.dz === 0) o.dz = 0
+  return o
+}
+// Face vector -> Minecraft stairs facing name.
+function faceName(face) {
+  if (!face) return null
+  if (face.dx === 1 && face.dz === 0) return 'east'
+  if (face.dx === -1 && face.dz === 0) return 'west'
+  if (face.dx === 0 && face.dz === 1) return 'south'
+  if (face.dx === 0 && face.dz === -1) return 'north'
+  return null
+}
 
 // Landing slabs (planks): full 3x3 interior minus the stairwell column
 // (headroom for the flight below; the flight's top step fills one hole)
@@ -97,19 +134,24 @@ function towerRing() {
 // and the keep-clear markers (doorway/windows) separately.
 //   top: last wall layer; door: 'door' (a door block) or 'air' (a doorway);
 //   windowAt(x, dy, z): true where a WINDOWS opening stays open.
-function towerPlan(top, door, windowAt) {
+//   opts.stairs (g0z.47): flight steps and the L1 landing-edge cell are
+//   kind 'stairs' with a face; otherwise stone/planks as frozen in v1/v2.
+function towerPlan(top, door, windowAt, opts) {
   const plan = []
   const air = []
-  const push = (dx, dy, dz, kind) => plan.push({ dx, dy, dz, kind })
+  const wantStairs = !!(opts && opts.stairs)
+  const push = (dx, dy, dz, kind, face) => plan.push(face ? { dx, dy, dz, kind, face: { ...face } } : { dx, dy, dz, kind })
   const hole = (dx, dy, dz) => air.push({ dx, dy, dz, kind: 'air' })
   const windowSet = new Set(WINDOWS.filter(([x, dy, z]) => windowAt(x, dy, z)).map(([x, dy, z]) => x + ',' + dy + ',' + z))
   const flightByDy = new Map() // dy -> [[x,z],...] in flight order
-  for (const flight of FLIGHTS) {
+  const flightFaceByDy = new Map() // dy -> face (each dy belongs to one flight)
+  FLIGHTS.forEach((flight, fi) => {
     for (const [x, dy, z] of flight) {
       if (!flightByDy.has(dy)) flightByDy.set(dy, [])
       flightByDy.get(dy).push([x, z])
+      flightFaceByDy.set(dy, dy === flight[0][1] ? FLIGHT_FIRST_FACE[fi] : FLIGHT_FACE[fi])
     }
-  }
+  })
   const landingByDy = new Map(LANDINGS.map((l) => [l.dy, l]))
 
   for (let dy = 0; dy <= top; dy++) {
@@ -125,7 +167,10 @@ function towerPlan(top, door, windowAt) {
       push(x, dy, z, 'stone')
     }
     // Flight steps at this layer.
-    for (const [x, z] of flightByDy.get(dy) || []) push(x, dy, z, 'stone')
+    for (const [x, z] of flightByDy.get(dy) || []) {
+      if (wantStairs) push(x, dy, z, 'stairs', flightFaceByDy.get(dy))
+      else push(x, dy, z, 'stone')
+    }
     // Landing slab at this layer, east-first row-major: the first cell of
     // each slab leans on the north wall ring, the rest on laid neighbours
     // (west-first strands cells east of the stairwell skips).
@@ -134,7 +179,9 @@ function towerPlan(top, door, windowAt) {
       for (let z = 1; z <= 3; z++) {
         for (let x = 3; x >= 1; x--) {
           if (landing.skip.has(x + ',' + z)) continue
-          push(x, dy, z, 'planks')
+          const edge = wantStairs ? STAIR_EDGES.get(`${x},${dy},${z}`) : null
+          if (edge) push(x, dy, z, 'stairs', edge)
+          else push(x, dy, z, 'planks')
         }
       }
     }
@@ -191,7 +238,7 @@ const FULL_D = 27
 const FULL_ENTRANCE = { dx: 15, dy: 0, dz: 5 }
 const FULL_DOOR = { dx: 15, dy: 0, dz: 7 }
 const TOWERS = [[7, 7, 1], [19, 7, 3], [7, 15, 1], [19, 15, 3]] // [x0, z0, rot]: doorway faces the body
-const COLLIDES = new Set(['stone', 'planks', 'frame', 'fence', 'chest'])
+const COLLIDES = new Set(['stone', 'planks', 'frame', 'fence', 'chest', 'stairs'])
 const NEIGH6 = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]]
 
 function k3(x, y, z) { return x + ',' + y + ',' + z }
@@ -205,12 +252,15 @@ function turn5(rot, x, z) {
   return [x, z]
 }
 
-function buildFullPlan() {
+function buildFullPlan(opts) {
+  const wantStairs = !!(opts && opts.stairs)
   const plan = []
   const air = []
   const solid = new Set()
   const add = (c) => {
-    plan.push({ dx: c.x, dy: c.y, dz: c.z, kind: c.kind })
+    plan.push(c.face
+      ? { dx: c.x, dy: c.y, dz: c.z, kind: c.kind, face: { ...c.face } }
+      : { dx: c.x, dy: c.y, dz: c.z, kind: c.kind })
     if (COLLIDES.has(c.kind)) solid.add(k3(c.x, c.y, c.z))
   }
   const hole = (x, y, z) => air.push({ dx: x, dy: y, dz: z, kind: 'air' })
@@ -225,15 +275,20 @@ function buildFullPlan() {
     }
     while (left.length > 0) {
       const i = left.findIndex((c) => c.y <= 0 || NEIGH6.some(([a, b, d]) => solid.has(k3(c.x + a, c.y + b, c.z + d))))
-      if (i < 0) throw new Error(`castle v2: unsupported cell ${JSON.stringify(left[0])}`)
+      if (i < 0) throw new Error(`castle: unsupported cell ${JSON.stringify(left[0])}`)
       add(left.splice(i, 1)[0])
     }
   }
 
   // Towers first, complete: the body's hanging layers lean on them.
   for (const [tx, tz, rot] of TOWERS) {
-    const w = (c) => { const [x, z] = turn5(rot, c.dx, c.dz); return { x: tx + x, y: c.dy, z: tz + z, kind: c.kind } }
-    const t = towerPlan(13, 'air', (x, dy, z) => { const p = w({ dx: x, dy, dz: z }); return outerLine(p.x, p.z) })
+    const w = (c) => {
+      const [x, z] = turn5(rot, c.dx, c.dz)
+      const o = { x: tx + x, y: c.dy, z: tz + z, kind: c.kind }
+      if (c.face) o.face = rotFace(rot, c.face)
+      return o
+    }
+    const t = towerPlan(13, 'air', (x, dy, z) => { const p = w({ dx: x, dy, dz: z }); return outerLine(p.x, p.z) }, wantStairs ? { stairs: true } : undefined)
     for (const c of t.plan) add(w(c))
     for (const c of t.air) { const p = w(c); hole(p.x, p.y, p.z) }
   }
@@ -269,24 +324,31 @@ function buildFullPlan() {
   for (let z = 8; z <= 18; z++) {
     for (let x = 8; x <= 22; x++) if (!inTower(x, z)) interior.push([x, z])
   }
-  const slab = (y, well) => interior.map(([x, z]) => ({ x, y, z, kind: well.has(x + ',' + z) ? 'air' : 'planks' }))
+  const slabStair = wantStairs ? new Map([['11,3,12', { dx: 1, dz: 0 }], ['18,7,11', { dx: 0, dz: 1 }]]) : null
+  const slab = (y, well) => interior.map(([x, z]) => {
+    if (well.has(x + ',' + z)) return { x, y, z, kind: 'air' }
+    const edge = slabStair ? slabStair.get(`${x},${y},${z}`) : null
+    return edge ? { x, y, z, kind: 'stairs', face: { ...edge } } : { x, y, z, kind: 'planks' }
+  })
   const wellG = new Set(['8,12', '9,12', '10,12']) // over the ground stair
   const wellU = new Set(['18,8', '18,9', '18,10']) // over the attic stair
   const stairG = [{ x: 8, y: 0, z: 12 }, { x: 9, y: 1, z: 12 }, { x: 10, y: 2, z: 12 }] // leans on the NW tower
   const stairU = [{ x: 18, y: 4, z: 8 }, { x: 18, y: 5, z: 9 }, { x: 18, y: 6, z: 10 }] // leans on the NE tower
+  const stairGKind = (i) => wantStairs ? { ...stairG[i], kind: 'stairs', face: i === 0 ? { dx: 0, dz: -1 } : { dx: 1, dz: 0 } } : { ...stairG[i], kind: 'stone' }
+  const stairUKind = (i) => wantStairs ? { ...stairU[i], kind: 'stairs', face: i === 0 ? { dx: 1, dz: 0 } : { dx: 0, dz: 1 } } : { ...stairU[i], kind: 'planks' }
   const torches = (y, list) => list.map(([x, z]) => ({ x, y, z, kind: 'torch' }))
 
   // Ground storey (feet 0): dy0, then 3 and 2 hanging, then 1.
-  lay([...walls(0), ...parts(0, 0, partG, doorG, 'stone'), { ...stairG[0], kind: 'stone' }])
+  lay([...walls(0), ...parts(0, 0, partG, doorG, 'stone'), stairGKind(0)])
   lay([...walls(3), ...slab(3, wellG)])
-  lay([...walls(2), ...parts(2, 0, partG, doorG, 'stone'), { ...stairG[2], kind: 'stone' }])
-  lay([...walls(1), ...parts(1, 0, partG, doorG, 'stone'), { ...stairG[1], kind: 'stone' }])
+  lay([...walls(2), ...parts(2, 0, partG, doorG, 'stone'), stairGKind(2)])
+  lay([...walls(1), ...parts(1, 0, partG, doorG, 'stone'), stairGKind(1)])
   lay(torches(0, [[15, 10], [10, 14], [21, 13], [13, 17], [16, 16]]))
   // Upper storey (feet 4): dy4, then 7 and 6 hanging, then 5.
-  lay([...walls(4), ...parts(4, 4, partU, doorU, 'planks'), { ...stairU[0], kind: 'planks' }])
+  lay([...walls(4), ...parts(4, 4, partU, doorU, 'planks'), stairUKind(0)])
   lay([...walls(7), ...slab(7, wellU)])
-  lay([...walls(6), ...parts(6, 4, partU, doorU, 'planks'), { ...stairU[2], kind: 'planks' }])
-  lay([...walls(5), ...parts(5, 4, partU, doorU, 'planks'), { ...stairU[1], kind: 'planks' }])
+  lay([...walls(6), ...parts(6, 4, partU, doorU, 'planks'), stairUKind(2)])
+  lay([...walls(5), ...parts(5, 4, partU, doorU, 'planks'), stairUKind(1)])
   lay(torches(4, [[15, 10], [9, 14], [13, 17], [17, 17], [21, 13]]))
 
   // Attic (feet 8): eaves and gable foot, the gable top hanging off the
@@ -346,6 +408,7 @@ const PLAN = buildPlan()
 const BLUEPRINTS = {
   1: { version: 1, W: SITE_W, D: SITE_D, ENTRANCE, DOOR, PLAN },
   2: { version: 2, W: FULL_W, D: FULL_D, ENTRANCE: FULL_ENTRANCE, DOOR: FULL_DOOR, PLAN: buildFullPlan() },
+  3: { version: 3, W: FULL_W, D: FULL_D, ENTRANCE: FULL_ENTRANCE, DOOR: FULL_DOOR, PLAN: buildFullPlan({ stairs: true }) },
 }
 
 // The blueprint of a castle version; unknown/missing -> v1 (every castle
@@ -365,14 +428,16 @@ function siteDimensions(rot, version) {
 function rotatePlan(plan, rot, version) {
   const { W, D } = blueprintOf(version)
   const r = ((rot % 4) + 4) % 4
-  if (r === 0) return plan.map((c) => ({ ...c }))
+  if (r === 0) return plan.map((c) => (c.face ? { ...c, face: { ...c.face } } : { ...c }))
   return plan.map((c) => {
     let dx = c.dx
     let dz = c.dz
     if (r === 1) { dx = D - 1 - c.dz; dz = c.dx }
     else if (r === 2) { dx = W - 1 - c.dx; dz = D - 1 - c.dz }
     else { dx = c.dz; dz = W - 1 - c.dx }
-    return { dx, dy: c.dy, dz, kind: c.kind }
+    const o = { dx, dy: c.dy, dz, kind: c.kind }
+    if (c.face) o.face = rotFace(r, c.face)
+    return o
   })
 }
 
@@ -415,6 +480,7 @@ function matches(kind, name) {
   if (kind === 'bookshelf') return name === 'bookshelf' // attic decor (g0z.49): never the chiseled variant
   if (kind === 'enchanting_table') return name === 'enchanting_table' // attic decor (g0z.49)
   if (kind === 'blast_furnace') return name === 'blast_furnace' // kitchen decor (g0z.50)
+  if (kind === 'stairs') return name.endsWith('_stairs') // v3 steps (g0z.47)
   if (kind === 'air') return AIR_NAMES.has(name) || name.endsWith('_door')
   if (kind === 'dig') return AIR_NAMES.has(name)
   return false
@@ -422,14 +488,17 @@ function matches(kind, name) {
 
 // Absolute plan for a site+rot+version, cached by key: cells carry
 // {x,y,z,kind,idx} plus a coord -> cell map for the protection guard. Pure.
+// Stairs cells (v3) also carry the rotated face {dx,dz}.
 let absCache = null
 function absPlan(site, rot, version) {
   const bp = blueprintOf(version)
   const key = `${site.x},${site.y},${site.z},${rot | 0},v${bp.version}`
   if (absCache && absCache.key === key) return absCache
-  const cells = rotatePlan(bp.PLAN, rot | 0, bp.version).map((c, idx) => ({
-    x: site.x + c.dx, y: site.y + c.dy, z: site.z + c.dz, kind: c.kind, dy: c.dy, idx,
-  }))
+  const cells = rotatePlan(bp.PLAN, rot | 0, bp.version).map((c, idx) => {
+    const o = { x: site.x + c.dx, y: site.y + c.dy, z: site.z + c.dz, kind: c.kind, dy: c.dy, idx }
+    if (c.face) o.face = { ...c.face }
+    return o
+  })
   const at = new Map()
   for (const c of cells) at.set(`${c.x},${c.y},${c.z}`, c)
   absCache = { key, cells, at }
@@ -477,6 +546,8 @@ const DECOR = {
       .concat([13, 14, 15, 16, 17].map((dx) => ({ dx, dy: 8, dz: 10, kind: 'bookshelf' }))))
     .concat([{ dx: 14, dy: 0, dz: 18, kind: 'blast_furnace', stance: { dx: 14, dy: 0, dz: 17 } }]),
 }
+// v3 shares v2's decor (same object): the full-castle cosmetics apply to both.
+DECOR[3] = DECOR[2]
 
 let decorCache = null
 function decorPlan(site, rot, version) {
@@ -506,13 +577,21 @@ function decorPlan(site, rot, version) {
 // world block matches its kind — is never dug by any executor. Planned
 // air/dig cells and wrong occupants (grass in a wall cell) stay open.
 // A laid decor cell (g0z.31: a pane in a window) is protected the same way.
-function protects(state, pos, name) {
+// Stairs (g0z.47): a stair with the wrong facing/half is NOT protected —
+// but only when the caller passes the block state (props {facing, half});
+// a name-only call still reads it as laid (gather, resources).
+function protects(state, pos, name, props) {
   try {
     const site = state && state.site
     if (!site || typeof site.x !== 'number' || !pos) return false
     const k = `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`
     const c = absPlan(site, state.rot, state.blueprintVersion).at.get(k)
-    if (!!c && isPlaceTarget(c.kind) && matches(c.kind, name)) return true
+    if (!!c && isPlaceTarget(c.kind) && matches(c.kind, name)) {
+      if (c.kind === 'stairs' && c.face && props && typeof props.facing === 'string') {
+        if (props.facing !== faceName(c.face) || props.half !== 'bottom') return false
+      }
+      return true
+    }
     const d = decorPlan(site, state.rot, state.blueprintVersion).at.get(k)
     return !!d && matches(d.kind, name)
   } catch (_) { return false }
@@ -649,6 +728,8 @@ module.exports = {
   buildPlan,
   buildFullPlan,
   rotatePlan,
+  rotFace,
+  faceName,
   siteDimensions,
   isPlaceTarget,
   billOfMaterials,

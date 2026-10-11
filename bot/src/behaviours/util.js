@@ -361,8 +361,8 @@ function apronEscape(bot, home, pos) {
 // Castle guard (shared with behaviours/castle.js guardCastle): a laid plan
 // block, or natural ground under the site (idkcraft-g0z.14). Solid ground
 // only, like the house footprint: snow layers stay build's clears.
-function castleProtects(state, pos, name) {
-  return castle.protects(state, pos, name) ||
+function castleProtects(state, pos, name, props) {
+  return castle.protects(state, pos, name, props) ||
     (name !== 'snow' && NATURAL_SOLID.has(name) && castle.groundCell(state, pos))
 }
 
@@ -429,8 +429,13 @@ function protectedReason(bot, block, ctx) {
     if (name.endsWith('_bed')) return 'protected'
     // Castle blocks (idkcraft-g0z.2): guarded for every executor BEFORE the
     // placedByBot exemption — the bot laid them, and that must not license
-    // a recover/gather dig through the castle wall.
-    if (ctx && ctx.castle && castleProtects(ctx.castle, pos, name)) return 'protected'
+    // a recover/gather dig through the castle wall. Stairs (g0z.47) pass
+    // the block state, so a mis-faced stair falls through to the castle
+    // step's own footprint clear below (narrowly: only castleClear digs it;
+    // every other executor still hits default-deny).
+    let props = null
+    try { props = block && typeof block.getProperties === 'function' ? block.getProperties() : null } catch (_) { props = null }
+    if (ctx && ctx.castle && castleProtects(ctx.castle, pos, name, props)) return 'protected'
     if (castleClears(ctx, pos, name)) return null // vmzq.40: castle step, footprint blocker
     // Castle yard (idkcraft-g0z.44): after the castle step's own clears
     // (prep cuts, litter, foreign-clear keep working), before the own

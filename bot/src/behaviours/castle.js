@@ -51,6 +51,7 @@ const ITEM = {
   fence: (n) => n.endsWith('_fence') && n !== 'nether_brick_fence', // g0z.4 sourcing; g0z.11 plans it
   frame: (n) => n.endsWith('_log'), // v2 Fachwerk beams (castle.matches)
   chest: (n) => n === 'chest', // v2 storeroom chest
+  stairs: (n) => n.endsWith('_stairs'), // v3 steps (g0z.47): one material, cobble stairs
   pane: (n) => blueprint.matches('pane', n), // g0z.31 decor: window panes (chest-supplied)
   banner: (n) => blueprint.matches('banner', n), // g0z.32 decor: gate banners (chest-only, never crafted)
   bookshelf: (n) => blueprint.matches('bookshelf', n), // g0z.49 decor: attic shelves (chest books, crafted)
@@ -163,6 +164,18 @@ function nameAt(bot, c) {
   } catch (_) { return null }
 }
 
+// Block state sibling of nameAt (g0z.47 stairs): name plus the facing/half
+// the stair verification needs. Null when the cell is unreadable.
+function stateAt(bot, c) {
+  try {
+    const b = bot.blockAt(new Vec3(c.x, c.y, c.z))
+    if (!b || typeof b.name !== 'string') return null
+    let props = null
+    try { props = typeof b.getProperties === 'function' ? b.getProperties() : null } catch (_) { props = null }
+    return { name: b.name, facing: props && props.facing, half: props && props.half }
+  } catch (_) { return null }
+}
+
 // Entrance apron stance (blueprint ENTRANCE) in world coords for the site.
 function entrance(st) {
   const bp = blueprint.blueprintOf(st.blueprintVersion)
@@ -172,6 +185,11 @@ function entrance(st) {
 
 function done(bot, c) {
   if (c.prep) return prepDone(bot, c)
+  if (c.kind === 'stairs' && c.face) {
+    const st = stateAt(bot, c)
+    if (!st || !blueprint.matches('stairs', st.name)) return false
+    return st.facing === blueprint.faceName(c.face) && st.half === 'bottom'
+  }
   return blueprint.matches(c.kind, nameAt(bot, c))
 }
 function clearing(c) { return !blueprint.isPlaceTarget(c.kind) }
@@ -1147,6 +1165,20 @@ async function placeFaced(bot, ref, c) {
   return bot.placeBlock(ref.ref, ref.face)
 }
 
+// Stair placement (g0z.47): the server faces the stair along the placer's
+// horizontal look and halves it by the clicked face/cursor, so look along
+// the plan face first (mineflayer yaw convention, non-forced like
+// placeFaced) and place with the look frozen, the cursor low (half
+// 'bottom'). findRef already excluded the top ref for stairs.
+async function placeStairs(bot, ref, c) {
+  const yaw = Math.atan2(-c.face.dx, -c.face.dz)
+  if (typeof bot.look === 'function') await bot.look(yaw, 0)
+  if (typeof bot._placeBlockWithOptions === 'function') {
+    return bot._placeBlockWithOptions(ref.ref, ref.face, { forceLook: 'ignore', half: 'bottom', swingArm: 'right' })
+  }
+  return bot.placeBlock(ref.ref, ref.face)
+}
+
 function placeCell(bot, ctx, st, c, item, now) {
   const p = new Vec3(c.x, c.y, c.z)
   // The door is placed from the entrance apron, so the bot ends OUTSIDE
@@ -1194,7 +1226,7 @@ function placeCell(bot, ctx, st, c, item, now) {
       if (w && w.position && w.boundingBox !== 'empty') ref = { ref: w, face: new Vec3(c.x - c.wall.x, c.y - c.wall.y, c.z - c.wall.z) }
     } catch (_) { ref = null }
   } else {
-    ref = build.findRef(bot, p)
+    ref = build.findRef(bot, p, c.kind === 'stairs' ? { excludeTop: true } : undefined)
   }
   if (!ref) {
     ctx.castleGoalIdx = -1
@@ -1205,8 +1237,15 @@ function placeCell(bot, ctx, st, c, item, now) {
     try {
       await bot.equip(item, 'hand')
       if (c.kind === 'blast_furnace' && c.stance) await placeFaced(bot, ref, c)
+      else if (c.kind === 'stairs' && c.face) await placeStairs(bot, ref, c)
       else await bot.placeBlock(ref.ref, ref.face)
-      if (live(ctx, token)) ctx.castleFails = null
+      if (live(ctx, token)) {
+        // A stair that lands facing wrong is not done: strike it now so a
+        // placement bug blocks after STRIKES instead of digging/relaying
+        // forever (the dig-then-place path relays it next tick).
+        if (c.kind === 'stairs' && c.face && !done(bot, c)) strike(ctx, st, c, 'wrong-facing', Date.now())
+        else ctx.castleFails = null
+      }
     } catch (_) {
       if (!live(ctx, token)) return
       const occ = nameAt(bot, c)
@@ -1303,7 +1342,11 @@ function digCell(bot, ctx, st, c, now) {
       if (tool) await bot.equip(tool, 'hand')
       await bot.dig(b)
       if (live(ctx, token)) {
-        ctx.castleFails = null
+        // Stairs relay (g0z.47): digging a mis-faced stair keeps the
+        // wrong-facing strikes, so a placement bug blocks after STRIKES
+        // instead of digging/relaying forever. Any other dig resets.
+        const relay = c.kind === 'stairs' && c.face && blueprint.matches('stairs', name)
+        if (!relay) ctx.castleFails = null
         if (rk) {
           ctx.castleRedig = ctx.castleRedig || {}
           const n = ctx.castleRedig[rk] || (ctx.castleRedig[rk] = { digs: 0, blocks: 0 })
@@ -1810,6 +1853,9 @@ module.exports.usable = usable
 module.exports.kindOf = kindOf
 module.exports.noteDry = noteDry
 module.exports.placeFaced = placeFaced // g0z.50: the g0z.47 stairs reuse the faced placement
+module.exports.placeStairs = placeStairs
+module.exports.done = done
+module.exports.stateAt = stateAt
 module.exports.findItem = findItem
 module.exports.fillItem = fillItem
 module.exports.dirtOnHand = dirtOnHand

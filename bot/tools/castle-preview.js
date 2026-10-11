@@ -22,6 +22,7 @@ const BLOCKS = {
   door: 'oak_door',
   chest: 'chest',
   torch: 'torch',
+  stairs: 'cobblestone_stairs',
   air: 'air',
   dig: 'air',
 }
@@ -34,6 +35,7 @@ const GLYPHS = {
   door: 'D',
   chest: 'C',
   torch: 't',
+  stairs: 'S',
   air: '.',
   dig: '~',
 }

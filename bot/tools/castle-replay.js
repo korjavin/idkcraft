@@ -521,9 +521,10 @@ function createIdleTrack(home) {
 }
 
 // Seeded complete castle (idkcraft-g0z.33): every setblock for a finished
-// v2 castle at st — keep-clear/moat cells to air first, then the plan
-// cells in lay order (the bot's own paint: cobble, oak planks/fence,
-// spruce frame), the gate's upper half, both bedroom beds and the table
+// castle at st (st.blueprintVersion, v3 since g0z.47) — keep-clear/moat
+// cells to air first, then the plan cells in lay order (the bot's own
+// paint: cobble, oak planks/fence, spruce frame, cobble stairs with the
+// plan facing), the gate's upper half, both bedroom beds and the table
 // on the residence cells. kind = plan kind (read back with
 // castle.matches) or 'extra' (read back by block name). Pure.
 const SEED_PAINT = { stone: 'cobblestone', planks: 'oak_planks', frame: 'spruce_log', fence: 'oak_fence', chest: 'chest', torch: 'torch', air: 'air', dig: 'air' }
@@ -531,13 +532,16 @@ const FACING = ['north', 'east', 'south', 'west']
 function seedCastleCells(st) {
   const blueprint = require('../src/castle')
   const residence = require('../src/residence')
-  const cells = blueprint.absPlan(st.site, st.rot, 2).cells
+  const cells = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells
   const f = FACING[(st.rot | 0) % 4]
   const out = []
   for (const c of cells) if (!blueprint.isPlaceTarget(c.kind)) out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, block: 'air' })
   for (const c of cells) {
     if (!blueprint.isPlaceTarget(c.kind)) continue
-    out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, block: c.kind === 'door' ? `oak_door[half=lower,facing=${f}]` : SEED_PAINT[c.kind] })
+    const block = c.kind === 'door' ? `oak_door[half=lower,facing=${f}]`
+      : c.kind === 'stairs' ? `cobblestone_stairs[facing=${blueprint.faceName(c.face)},half=bottom]`
+      : SEED_PAINT[c.kind]
+    out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, block })
   }
   const door = cells.find((c) => c.kind === 'door')
   out.push({ x: door.x, y: door.y + 1, z: door.z, kind: 'extra', block: `oak_door[half=upper,facing=${f}]` })
@@ -550,9 +554,16 @@ function seedCastleCells(st) {
   out.push({ x: t.x, y: t.y, z: t.z, kind: 'extra', block: 'crafting_table' })
   return out
 }
-function seedMatches(cell, name) {
+function seedMatches(cell, name, props) {
   if (cell.kind === 'extra') return name === cell.block.split('[')[0]
-  return require('../src/castle').matches(cell.kind, name)
+  if (!require('../src/castle').matches(cell.kind, name)) return false
+  if (cell.kind === 'stairs' && props && typeof props.facing === 'string') {
+    const want = /facing=([a-z]+)/.exec(cell.block)
+    const half = /half=([a-z]+)/.exec(cell.block)
+    if (!want || props.facing !== want[1]) return false
+    if (half && props.half !== half[1]) return false
+  }
+  return true
 }
 
 async function rcon(cmd) {
@@ -891,7 +902,7 @@ async function main() {
   // setHome saves the memory home kind=castle — both checked.
   let seedTag = ''
   if (SEED === 'complete') {
-    const st = { site: { x: bx - 15, y: gy + 1, z: bz - 13 }, rot: 0, blueprintVersion: 2 }
+    const st = { site: { x: bx - 15, y: gy + 1, z: bz - 13 }, rot: 0, blueprintVersion: require('../src/castle').BLUEPRINT_VERSION }
     const cells = seedCastleCells(st)
     const set = (c) => rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${c.block}`).catch((e) => fail('seed-castle', e.message))
     let next = 0
@@ -900,8 +911,13 @@ async function main() {
       await sleep(2000) // block updates reach the guide
       return cells.filter((c) => {
         let name = null
-        try { const b = guide.blockAt(new Vec3(c.x, c.y, c.z)); name = b && b.name } catch (_) { name = null }
-        return !seedMatches(c, name)
+        let props = null
+        try {
+          const b = guide.blockAt(new Vec3(c.x, c.y, c.z))
+          name = b && b.name
+          props = b && typeof b.getProperties === 'function' ? b.getProperties() : null
+        } catch (_) { name = null }
+        return !seedMatches(c, name, props)
       })
     }
     let miss = await misses()
@@ -917,7 +933,7 @@ async function main() {
       // castlefetch has nothing left to fetch: its sand/wool legs walked
       // 85+ out on both builds and drowned the gather drift this scenario
       // measures.
-      const decor = require('../src/castle').decorPlan(st.site, 0, 2).cells
+      const decor = require('../src/castle').decorPlan(st.site, 0, st.blueprintVersion).cells
       for (const c of decor) {
         let block = 'glass_pane'
         if (c.kind === 'banner') {
@@ -1513,6 +1529,26 @@ async function main() {
     }
     if (n > 0) origLog(`CASTLE-RIG yard-litter: ${n} own blocks left in the fence band`)
     idle.setYardLitter(n)
+  }
+  // Stairs facing (g0z.47): every v3 stairs cell read back via rcon — laid
+  // (any stair) vs laid with the plan facing, half bottom. Build runs only.
+  if (!SEED && !idle) {
+    const c = tickCtx()
+    const st = c && c.castle
+    if (st && st.site && st.blueprintVersion === 3) {
+      const blueprint = require('../src/castle')
+      let laid = 0
+      let ok = 0
+      for (const cell of blueprint.absPlan(st.site, st.rot, 3).cells.filter((o) => o.kind === 'stairs')) {
+        const at = `${cell.x} ${cell.y} ${cell.z}`
+        const any = await rcon(`execute if block ${at} #minecraft:stairs`).catch((e) => `error ${e.message}`)
+        if (!/Test passed/.test(any)) continue
+        laid++
+        const right = await rcon(`execute if block ${at} minecraft:cobblestone_stairs[facing=${blueprint.faceName(cell.face)},half=bottom]`).catch((e) => `error ${e.message}`)
+        if (/Test passed/.test(right)) ok++
+      }
+      origLog(`CASTLE-RIG stairs: laid=${laid} facing-ok=${ok}`)
+    }
   }
   // Panes (g0z.38): decor pane cells of the seeded castle reading
   // *glass_pane on the follower (unloaded cells are counted apart).
