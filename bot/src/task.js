@@ -1253,7 +1253,7 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
         clearLowConf()
         wd.backoffMs = 0
         wd.backoffUntil = 0
-        applyCommit(bot, ctx, kind, fb.id, fb.step || null, now, fb.unlock || null)
+        applyCommit(bot, ctx, kind, fb.id, fb.step || null, now, fb.unlock || null, fb.criterion)
         return
       }
       // Nothing but the stalling step (or park) left (vmzq.35): re-running
@@ -1365,7 +1365,7 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   wd.backoffMs = 0
   wd.backoffUntil = 0
   clearLowConf()
-  applyCommit(bot, ctx, kind, opt.id, opt.step || null, now, opt.unlock || null)
+  applyCommit(bot, ctx, kind, opt.id, opt.step || null, now, opt.unlock || null, opt.criterion)
 }
 
 // One tick of the fast watchdog: consume-first (the maybeL2 precedent),
@@ -1582,12 +1582,10 @@ function commitReason(ctx) {
   return `${step} ${status || 'running'}, no progress`
 }
 
-function commitHead(bot, ctx, kind, optionId, step) {
+function commitHead(optionId, step, criterion) {
   if (optionId === 'planb-relocate') return 'step aside, then re-ask'
   try {
-    const { goalOptions } = require('./goal-options')
-    const opt = goalOptions(bot, ctx, kind).find((o) => o && o.id === optionId)
-    let text = opt && typeof opt.criterion === 'string' ? opt.criterion : ''
+    let text = typeof criterion === 'string' ? criterion : ''
     if (text) {
       // Plain steps carry the STEP_CRITERIA 'trigger: action' shape —
       // narrate the action, not the internal predicate. Far/bank
@@ -1600,10 +1598,10 @@ function commitHead(bot, ctx, kind, optionId, step) {
   return step ? `retry ${step}` : String(optionId || 'unknown')
 }
 
-function commitChatLine(bot, ctx, kind, optionId, step) {
+function commitChatLine(ctx, kind, optionId, step, criterion) {
   const word = commitGoalWord(kind, ctx)
   const reason = commitReason(ctx)
-  const head = commitHead(bot, ctx, kind, optionId, step)
+  const head = commitHead(optionId, step, criterion)
   return chatClipped(`${word}: `, '', `${reason} — ${head}`)
 }
 
@@ -1613,7 +1611,7 @@ function commitChatLine(bot, ctx, kind, optionId, step) {
 // expires and ends it. optionId is the table label (hold-<order>, *-far,
 // house-<step>, bank, plain step); step is the executor step or null for
 // order holds; unlock rides for the window only.
-function applyCommit(bot, ctx, kind, optionId, step, now, unlock = null) {
+function applyCommit(bot, ctx, kind, optionId, step, now, unlock = null, criterion = null) {
   try {
     const g = ctx && ctx.goal
     if (!g || g.kind !== kind) return false
@@ -1625,7 +1623,7 @@ function applyCommit(bot, ctx, kind, optionId, step, now, unlock = null) {
       unlock: unlock && typeof unlock === 'object' ? { ...unlock } : null,
     }
     try {
-      const line = commitChatLine(bot, ctx, kind, optionId, step)
+      const line = commitChatLine(ctx, kind, optionId, step, criterion)
       if (line) chatStep(bot, ctx, line)
     } catch (_) { /* narration never breaks the commit */ }
     return true
@@ -3094,4 +3092,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { castleCurrent, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank }
+module.exports = { castleCurrent, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank }
