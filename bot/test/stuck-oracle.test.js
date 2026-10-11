@@ -158,9 +158,9 @@ describe('pickBrain (idkcraft-6x7.4)', () => {
   })
 
   it('unknown brain fails loud', () => {
-    process.env.REPLAY_BRAIN = 'jev'
+    process.env.REPLAY_BRAIN = 'bogus'
     try {
-      assert.throws(() => pickBrain(), /REPLAY_BRAIN: want stub\|laya/)
+      assert.throws(() => pickBrain(), /REPLAY_BRAIN: want stub\|laya\|jev/)
     } finally {
       delete process.env.REPLAY_BRAIN
     }

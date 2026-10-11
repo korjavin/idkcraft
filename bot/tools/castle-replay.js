@@ -702,8 +702,12 @@ async function main() {
     if (!key) fail('planner-key', 'RIG_PLANNER=jev needs TYPESAFE_API_KEY (stash secrets/jev-api-key)')
     brain = brainMod.hybridBrain(brainMod.jevBrain(key, undefined, brainMod.brainTimeoutMs(process.env), brainMod.JEV_ENDPOINT))
     brainEngine = 'jev'
+  } else if (PLANNER === 'laya') { // idkcraft-vhlb.1: laya sidecar, tick asks only (no key = no JEV planner), prod's 3 s deadline
+    const url = process.env.REPLAY_BRAIN_URL || 'http://localhost:8000/v1/systemone'
+    brain = brainMod.hybridBrain(brainMod.jevBrain(undefined, undefined, parseInt(process.env.REPLAY_BRAIN_TIMEOUT_MS || '3000', 10), url))
+    brainEngine = 'laya'
   } else if (PLANNER !== 'stub') {
-    fail('planner', `RIG_PLANNER: want jev|stub, got ${JSON.stringify(PLANNER)}`)
+    fail('planner', `RIG_PLANNER: want jev|laya|stub, got ${JSON.stringify(PLANNER)}`)
   }
   origLog(`CASTLE-RIG planner=${PLANNER}`)
 
