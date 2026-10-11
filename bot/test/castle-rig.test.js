@@ -823,7 +823,7 @@ describe('castle-replay.js seeded castle (idkcraft-g0z.33)', () => {
 })
 
 describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
-  const { createIdleTrack, IDLE_MAXDIST } = require('../tools/castle-replay')
+  const { createIdleTrack, IDLE_MAXDIST, IDLE_HOME } = require('../tools/castle-replay')
   const { surfaceFloor } = require('../src/resources')
   const home = { kind: 'castle', site: { x: 100, y: 70, z: 200 } }
 
@@ -844,13 +844,28 @@ describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
   it('passes inside the leash and floor with no deaths; names every failure', () => {
     const ok = createIdleTrack(home)
     ok.onSample(0, { x: 100 + IDLE_MAXDIST, y: 60, z: 200 })
+    ok.onSample(1, { x: 100 + IDLE_HOME, y: 60, z: 200 }) // far excursion, back home at the end
     assert.deepEqual(ok.verdict(0, [{ night: 1, partial: false, pass: true }, { night: 2, partial: true, pass: false }]),
       { pass: true, line: 'CASTLE-RIG idle: PASS floor=54' })
     const bad = createIdleTrack(home)
     bad.onSample(0, { x: 100 + IDLE_MAXDIST + 1, y: 60, z: 200 })
     assert.equal(bad.verdict(2, [{ night: 1, partial: false, pass: false }]).line,
-      'CASTLE-RIG idle: FAIL (maxdist 81>80, deaths 2>0, residence night 1 FAIL) floor=54')
+      'CASTLE-RIG idle: FAIL (maxdist 201>200, not home at the end, deaths 2>0, residence night 1 FAIL) floor=54')
     assert.match(createIdleTrack(home).verdict(0).line, /no position samples/)
+  })
+
+  it('return home: mid-trip at the cutoff but home <5 min before passes; away the whole last 5 min fails', () => {
+    const away = { x: 100 + 150, y: 60, z: 200 }
+    const trip = createIdleTrack(home)
+    trip.onSample(0, { x: 100, y: 60, z: 200 })
+    trip.onSample(100, away)
+    trip.onSample(280, away)
+    assert.equal(trip.verdict(0).pass, true)
+    const gone = createIdleTrack(home)
+    gone.onSample(0, { x: 100, y: 60, z: 200 })
+    gone.onSample(100, away)
+    gone.onSample(401, away)
+    assert.match(gone.verdict(0).line, /not home at the end/)
   })
 
   it('forced death (6x7.25): the respawn walk is not judged, tracking resumes inside the leash, never-back FAILs', () => {
@@ -860,10 +875,10 @@ describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
     t.onSample(179, { x: 325, y: 150, z: 200 }) // respawn read before died(): not judged
     t.died(180)
     t.onSample(181, { x: 700, y: 30, z: 800 }) // world spawn: not judged
-    t.onSample(300, { x: 100 + IDLE_MAXDIST + 1, y: 70, z: 200 })
+    t.onSample(300, { x: 100 + IDLE_HOME + 1, y: 70, z: 200 })
     assert.equal(t.tag(), ', idle-maxdist=0, idle-miny=70, idle-underground-s=0, idle-death=180s, idle-rehome=never')
     assert.equal(t.verdict(0).line, 'CASTLE-RIG idle: FAIL (never back within the leash after the forced death) floor=54')
-    t.onSample(400, { x: 100 + IDLE_MAXDIST, y: 60, z: 200 })
+    t.onSample(400, { x: 100 + IDLE_HOME, y: 60, z: 200 })
     t.onSample(500, { x: 100, y: 45, z: 200 }) // back home, then a dive: judged
     assert.equal(t.tag(), ', idle-maxdist=80, idle-miny=45, idle-underground-s=0, idle-death=180s, idle-rehome=400s')
     assert.equal(t.verdict(0).line, 'CASTLE-RIG idle: FAIL (miny 45<54) floor=54')
