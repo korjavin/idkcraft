@@ -28,7 +28,7 @@
 #   no order, nobody online; the verdict adds idle-maxdist/idle-miny/
 #   idle-underground-s, yard-litter=N (g0z.44: own blocks in the fence band,
 #   placedByBot + rcon readback) and a `CASTLE-RIG idle: PASS|FAIL` line —
-#   FAIL on maxdist > 80, miny < the surface floor, yard-litter > 0, any
+#   FAIL on maxdist > 200, not home (no sample within 80 in the last 5 min), miny < the surface floor, yard-litter > 0, any
 #   death or a FAIL night),
 #   CASTLE_IDLE_DEATH (N > 0 = 6x7.25, needs CASTLE_IDLE=1: clear + kill the
 #   bot once after N min, respawn with an empty kit 225 blocks from home
