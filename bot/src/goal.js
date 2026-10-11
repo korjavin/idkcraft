@@ -641,6 +641,13 @@ function gocastleGo(facts, bot, ctx) {
   }
 }
 
+// The leg would dig (stone, or stairs short on cobble: g0z.47) with no
+// pickaxe — digTick ends 'done' at once, so castlefetch is re-picked every tick.
+function needsDigNoPick(kind, facts, bot) {
+  if ((facts.pickaxe || 0) > 0) return false
+  if (kind === 'stone') return true
+  try { return kind === 'stairs' && require('./behaviours/castlefetch').stairsCobbleShort(bot) } catch (_) { return false }
+}
 // Castle fetch can progress now (g0z.4): day, a material word (or blocked
 // with its gated kind, g0z.23), the batch still short (castlefetch.demand
 // — the behaviour's own done test), and the castle unable to lay now
@@ -664,7 +671,7 @@ function castleFetchGo(facts, bot, ctx) {
     kind = w.slice(0, w.lastIndexOf('-'))
   }
   if (!registered('castlefetch') || !registered('castle')) return false
-  if (kind === 'stone' && !((facts.pickaxe || 0) > 0)) return false
+  if (needsDigNoPick(kind, facts, bot)) return false
   if (castleGo(facts, ctx, bot) && !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running')) return false
   try {
     const d = require('./behaviours/castlefetch').demand(bot, ctx)
@@ -1747,7 +1754,7 @@ function stepWhy(name, facts, bot, ctx, text) {
         if (!/-(none|some|batch)$/.test(w)) return 'castlefetch: no material owed'
         kind = w.slice(0, w.lastIndexOf('-'))
       }
-      if (kind === 'stone' && !((facts.pickaxe || 0) > 0)) return 'castlefetch: no pickaxe'
+      if (needsDigNoPick(kind, facts, bot)) return 'castlefetch: no pickaxe'
       return 'castlefetch: batch on hand'
     }
     case 'gather':

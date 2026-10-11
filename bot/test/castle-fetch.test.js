@@ -138,6 +138,22 @@ describe('castlefetch arbiter step (g0z.4)', () => {
   })
 })
 
+describe('castlefetch stairs without a pickaxe (g0z.47 revmux 02)', () => {
+  const realFact = castleMod.menuFact
+  afterEach(() => { castleMod.menuFact = realFact })
+  it('a pickless surface bot on stairs-none with 10 cobble picks equip, not castlefetch', async () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 60 }; return 'stairs-none' }
+    const items = [{ name: 'cobblestone', count: 10 }, { name: 'stick', count: 4 }, { name: 'crafting_table', count: 1 }, { name: 'stone_sword', count: 1 }]
+    const ctx = { castle: castleState() }
+    const r = await goal.decide(makeBot({ items }), ctx)
+    assert.notEqual(r.action, 'castlefetch')
+    assert.match(goal.stepWhy('castlefetch', goal.goalFacts(makeBot({ items }), ctx), makeBot({ items }), ctx, ''), /no pickaxe/)
+    // with the pick back it digs the cobble itself
+    const withPick = [...items, { name: 'stone_pickaxe', count: 1 }]
+    assert.equal((await goal.decide(makeBot({ items: withPick }), { castle: castleState() })).action, 'castlefetch')
+  })
+})
+
 describe('castlefetch sources (g0z.4)', () => {
   const realCraft = fetch.deps.craftItem
   const realGather = fetch.deps.gather

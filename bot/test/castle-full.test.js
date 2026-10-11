@@ -344,7 +344,7 @@ describe('castle v3 stairs (g0z.47)', () => {
       assert.deepEqual(cells[3].face, edgeFace)
       assert.ok(edgeOk(cells[2], cells[3], edgeFace), `edge ${JSON.stringify(cells[2])} -> ${JSON.stringify(cells[3])}`)
     }
-    // Known limit (revmux 01 core-2, follow-up bead): step 1's low half backs
+    // Known limit (revmux 01 core-2, idkcraft-s575): step 1's low half backs
     // onto a wall, so a player enters it from the side and jumps once per run
     // (18 per full climb); the bot jumps regardless.
   })
