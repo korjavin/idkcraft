@@ -109,6 +109,20 @@ describe("brain switch (idkcraft-d75)", () => {
     assert.deepEqual(bot.chats, ['brain: off', 'brain: laya', 'brain: laya'])
   })
 
+  it("'brain' names the planner once ANTHROPIC_API_KEY is set (vhlb.2)", () => {
+    process.env.ANTHROPIC_API_KEY = 'a'
+    try {
+      const bot = hardBot()
+      const ticker = followedTicker(bot)
+      handleChat(bot, ticker, 'Owner', 'brain off') // a switch re-attaches the llm planner
+      handleChat(bot, ticker, 'Owner', 'brain')
+      assert.deepEqual(bot.chats, ['brain: off', 'brain: off planner=llm'])
+      assert.equal(typeof bot._tickerCtx.brain.plan, 'function')
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY
+    }
+  })
+
   it("'brain jev' without a key changes nothing", async () => {
     delete process.env.TYPESAFE_API_KEY
     const bot = hardBot()

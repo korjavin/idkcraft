@@ -61,7 +61,7 @@ describe('castle-rig.sh anti-noise', () => {
     assert.match(over.stdout, /blocked: want an integer/)
   })
 
-  it('defaults RIG_PLANNER to jev, rejects anything but jev|stub', () => {
+  it('defaults RIG_PLANNER to jev, rejects anything but jev|llm|stub', () => {
     const { spawnSync } = require('node:child_process')
     const os = require('node:os')
     const sh = path.join(__dirname, '..', 'tools', 'castle-rig.sh')
@@ -71,7 +71,7 @@ describe('castle-rig.sh anti-noise', () => {
     const run = (env = {}) => spawnSync('sh', [sh], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), ...env } })
     const bad = run({ RIG_PLANNER: 'laya' })
     assert.equal(bad.status, 2)
-    assert.match(bad.stdout, /RIG_PLANNER: want jev\|stub/)
+    assert.match(bad.stdout, /RIG_PLANNER: want jev\|llm\|stub/)
     // A valid planner sails past validation to the world check (stub: no
     // secret-store touch, hermetic).
     const ok = run({ RIG_PLANNER: 'stub' })

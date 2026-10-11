@@ -206,6 +206,101 @@ function planner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS) {
   return { plan }
 }
 
+// LLM stall-point planner (idkcraft-vhlb.2): the same plan() contract as
+// planner() above, answered by a text LLM (Anthropic Messages API, plain
+// fetch — no SDK) that reasons over the state instead of classifying it.
+// Never on the tick path: only plan() callers (the goal watchdog / task
+// plan) reach it. The answer carries no probabilities; confidence is null,
+// which the TASK_PLAN_MIN_CONF gates pass (they only check numbers).
+// Errors keep the planner outcome vocabulary (timeout/http/invalid/error)
+// with an `llm` prefix that task.js planErrReason reads like `jev`.
+const LLM_ENDPOINT = 'https://api.anthropic.com/v1/messages'
+const LLM_MODEL = 'claude-haiku-5-5'
+const LLM_SYSTEM = 'You are the stall-point planner of a Minecraft companion bot. ' +
+  'The bot is working on a goal and its progress has stalled. Read the state and pick the ONE option ' +
+  'most likely to get progress moving again. Answer with JSON only, no prose: ' +
+  '{"choice": "<one of the option ids>", "reason": "<one short sentence>"}'
+
+function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MODEL) {
+  const doFetch = fetchFn || fetch
+  async function plan({ state, instructions, criteria }) {
+    const keys = Object.keys(criteria || {})
+    if (keys.length === 0) throw new Error('llm missing plan answer')
+    if (keys.length === 1) return { step: keys[0], confidence: 1, probabilities: { [keys[0]]: 1 }, source: 'single' }
+    const endTimer = metrics.brainDuration.startTimer({ source: 'llm' })
+    try {
+      const ac = new AbortController()
+      const timer = setTimeout(() => ac.abort(new DOMException('brain timeout', 'TimeoutError')), timeoutMs)
+      const user = `${instructions || 'Pick the next option.'}\n\nState:\n${JSON.stringify(state)}\n\nOptions (id: criterion):\n` +
+        keys.map((k) => `${k}: ${criteria[k]}`).join('\n')
+      let data
+      try {
+        const res = await doFetch(LLM_ENDPOINT, {
+          method: 'POST',
+          signal: ac.signal,
+          headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model,
+            max_tokens: 300,
+            // A one-line menu pick: no thinking keeps it inside the 10 s deadline.
+            thinking: { type: 'disabled' },
+            system: LLM_SYSTEM,
+            messages: [{ role: 'user', content: user }],
+          }),
+        })
+        if (!res.ok) throw new Error(`llm http ${res.status}`)
+        data = await res.json()
+      } finally {
+        clearTimeout(timer)
+      }
+      const text = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+      let ans = null
+      try {
+        ans = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
+      } catch (_) {
+        ans = null
+      }
+      const choice = ans && ans.choice
+      if (typeof choice !== 'string' || !keys.includes(choice)) throw new Error('llm missing plan answer')
+      const reason = typeof ans.reason === 'string' ? ans.reason.replace(/\s+/g, ' ').trim().slice(0, 160) : ''
+      endTimer()
+      metrics.brainRequests.inc({ source: 'llm', outcome: 'ok' })
+      return { step: choice, confidence: null, probabilities: null, source: 'llm', reason }
+    } catch (err) {
+      endTimer()
+      const msg = String(err && err.message ? err.message : err)
+      const outcome = err && err.name === 'TimeoutError' ? 'timeout'
+        : msg.startsWith('llm http') ? 'http'
+        : msg.startsWith('llm missing') ? 'invalid'
+        : 'error'
+      metrics.brainRequests.inc({ source: 'llm', outcome })
+      throw err
+    }
+  }
+  return { plan }
+}
+
+// Planner selection (vhlb.2): PLANNER=llm|jev; default llm when
+// ANTHROPIC_API_KEY exists, else jev (which already rides every
+// TYPESAFE-keyed brain). Only the llm choice changes a brain: no
+// ANTHROPIC_API_KEY (prod today) returns the brain untouched.
+function plannerChoice(env) {
+  const e = env || {}
+  if (!e.ANTHROPIC_API_KEY) return 'jev'
+  return e.PLANNER === 'jev' ? 'jev' : 'llm'
+}
+
+function withPlanner(brain, env = process.env, fetchFn) {
+  if (!brain || plannerChoice(env) !== 'llm') return brain
+  return { ...brain, planner: 'llm', ...llmPlanner(env.ANTHROPIC_API_KEY, fetchFn, PLAN_TIMEOUT_MS, env.LLM_MODEL || LLM_MODEL) }
+}
+
+// Which planner answers plan() on this brain: llm | jev | none (logs + 'brain' chat).
+function plannerName(brain) {
+  if (brain && brain.planner) return brain.planner
+  return brain && typeof brain.plan === 'function' ? 'jev' : 'none'
+}
+
 function jevBrain(apiKey, fetchFn, timeoutMs = 1000, url = JEV_ENDPOINT) {
   const doFetch = fetchFn || fetch
   const source = sourceForUrl(url)
@@ -422,11 +517,13 @@ function makeBrain(env) {
     const rawTimeout = (env && env.BRAIN_TIMEOUT_MS) || (env && env.BRAIN_TICK_MS) || '1000'
     const timeoutMs = parseInt(rawTimeout, 10)
     const remote = jevBrain(key, undefined, Number.isFinite(timeoutMs) ? timeoutMs : 1000, url)
-    console.log(`brain=hybrid(${remote.name})`)
-    return hybridBrain(remote)
+    const b = withPlanner(hybridBrain(remote), env)
+    console.log(`brain=hybrid(${remote.name}) planner=${plannerName(b)}`)
+    return b
   }
-  console.log('brain=stub')
-  return stubBrain
+  const b = withPlanner(stubBrain, env)
+  console.log(`brain=stub planner=${plannerName(b)}`)
+  return b
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS }
+module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL }

@@ -3,7 +3,7 @@
 const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
-const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT, isHard, brainTimeoutMs, layaUrl, planner } = require('./brain')
+const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT, isHard, brainTimeoutMs, layaUrl, planner, withPlanner } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHostiles } = require('./perception')
 const { makeScout } = require('./behaviours/scout')
 const stuck = require('./stuck')
@@ -307,8 +307,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     ctx.rosterWasOnline = rosterOnline
   }
 
+  // Every runtime switch (autonomous step-down/restore, 'brain' chat)
+  // lands here, so the LLM stall planner (vhlb.2) re-attaches in one place.
   function doSetBrain(b, label) {
-    if (b) { brain = b; ctx.brain = b; if (label) brainEngine = label }
+    if (b) { b = withPlanner(b); brain = b; ctx.brain = b; if (label) brainEngine = label }
   }
 
   function clearStuck() { return stuck.clearStuck(ctx) }

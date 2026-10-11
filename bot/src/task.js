@@ -772,8 +772,8 @@ function planErrReason(err) {
   try {
     if (err && err.name === 'TimeoutError') return 'timeout'
     const msg = String((err && err.message) || err)
-    if (msg.startsWith('jev http')) return 'http'
-    if (msg.startsWith('jev missing')) return 'invalid'
+    if (/^(jev|llm) http/.test(msg)) return 'http'
+    if (/^(jev|llm) missing/.test(msg)) return 'invalid'
     return 'error'
   } catch (_) {
     return 'error'
@@ -1079,6 +1079,7 @@ function onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, err) 
       conf: typeof ans.confidence === 'number' ? ans.confidence : null,
       probs: ans.probabilities && typeof ans.probabilities === 'object' ? ans.probabilities : null,
       source: typeof ans.source === 'string' ? ans.source : 'jev',
+      reason: typeof ans.reason === 'string' && ans.reason ? ans.reason : null,
     }
   } catch (_) { /* a dropped answer re-fires on the next tick */ }
 }
@@ -1199,6 +1200,15 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   } catch (_) {
     options = ''
   }
+  // LLM planner reason (vhlb.2): rides the decided watchdog line and is
+  // chatted once per answer; JEV answers carry none, so their lines and
+  // chat are unchanged.
+  const reasonLog = ans && ans.reason ? ` reason="${String(ans.reason).replace(/"/g, "'")}"` : ''
+  const chatReason = () => {
+    try {
+      if (ans && ans.reason) chatStep(bot, ctx, chatClipped(`planner (${ans.source || 'llm'}): `, '', `${ans.step} — ${ans.reason}`))
+    } catch (_) { /* narration best-effort */ }
+  }
   const clearLowConf = () => {
     try {
       wd.lowConf = 0
@@ -1293,11 +1303,12 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     const conf = typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?'
     const diagnosis = diagnose(bot, ctx)
     try {
-      console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=park conf=${conf} source=${ans.source || 'jev'} why=${diagnosis}`)
+      console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=park conf=${conf} source=${ans.source || 'jev'} why=${diagnosis}${reasonLog}`)
     } catch (_) { /* log best-effort */ }
     try {
       metrics.goalWatchdogTotal.inc({ kind, choice: 'park', source: ans.source || 'jev' })
     } catch (_) { /* counter best-effort */ }
+    chatReason()
     wd.backoffMs = 0
     wd.backoffUntil = 0
     clearLowConf()
@@ -1311,11 +1322,12 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     const conf = typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?'
     const diagnosis = diagnose(bot, ctx)
     try {
-      console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=ask-owner conf=${conf} source=${ans.source || 'jev'} why=${diagnosis}`)
+      console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=ask-owner conf=${conf} source=${ans.source || 'jev'} why=${diagnosis}${reasonLog}`)
     } catch (_) { /* log best-effort */ }
     try {
       metrics.goalWatchdogTotal.inc({ kind, choice: 'ask-owner', source: ans.source || 'jev' })
     } catch (_) { /* counter best-effort */ }
+    chatReason()
     wd.backoffMs = 0
     wd.backoffUntil = 0
     clearLowConf()
@@ -1357,11 +1369,12 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   const conf = typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?'
   const diagnosis = diagnose(bot, ctx)
   try {
-    console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=${choice} conf=${conf} source=${ans.source || 'jev'} why=${diagnosis}`)
+    console.log(`goal watchdog kind=${kind} id=${id} progress=${done}/${total} stall=${stallS}s round=${round} step=${step} options=${options} choice=${choice} conf=${conf} source=${ans.source || 'jev'} why=${diagnosis}${reasonLog}`)
   } catch (_) { /* log best-effort */ }
   try {
     metrics.goalWatchdogTotal.inc({ kind, choice, source: ans.source || 'jev' })
   } catch (_) { /* counter best-effort */ }
+  chatReason()
   wd.backoffMs = 0
   wd.backoffUntil = 0
   clearLowConf()

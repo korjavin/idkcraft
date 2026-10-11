@@ -119,6 +119,9 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BOT_AUTONOMOUS`: stay and work with nobody online (default empty = off; chat `autonomous on` lasts until restart)
   - `LAYA_MEM_LIMIT`: Sidecar container memory cap (default `3g`)
   - `TYPESAFE_API_KEY`: JEV secret; only used when `BRAIN_URL` points at JEV
+  - `ANTHROPIC_API_KEY`: opt-in LLM stall-point planner (watchdog `plan()` only, never per tick); empty = today's planner
+  - `PLANNER`: `llm` | `jev` (default `llm` when `ANTHROPIC_API_KEY` is set, else `jev`)
+  - `LLM_MODEL`: LLM planner model (default `claude-haiku-5-5`)
   - `GOAL_WATCHDOG_MS`: Goal-metric flat window in ms before a fast JEV round fires (default `60000`; `0` = watchdog off, the shipped 15/45-min ladder)
   - `GOAL_COMMIT_MS`: Bounded commitment window in ms for a watchdog choice (default `120000`)
   - `GOAL_WATCHDOG_MAX_ROUNDS`: Consecutive flat rounds before park/plan-B (default `6`)
