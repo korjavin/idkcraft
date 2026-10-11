@@ -1526,7 +1526,7 @@ async function main() {
   // if block` answers 'Test passed' for air, 'Test failed' for a block.
   if (idle) {
     const c = tickCtx()
-    const cands = require('../src/castle').ownBandCells(c && c.placedByBot, c && c.castle)
+    const cands = require('../src/castle').ownBandCells(c && c.placedByBot, c && c.castle, c && c.placedNames)
     let n = 0
     for (const cell of cands) {
       const out = await rcon(`execute if block ${cell.x} ${cell.y} ${cell.z} air`).catch((e) => fail('yard-litter', e.message))
