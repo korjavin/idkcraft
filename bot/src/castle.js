@@ -35,7 +35,7 @@
 // terrain below (same rule as the build.js header); the reach invariant
 // (test/castle-reach.js) holds for every plan prefix.
 
-// What a NEW order gets (g0z.47: v3, stairs for the 72 step cells).
+// What a NEW order gets (g0z.47: v3, stairs for the 60 step cells).
 // Castles already ordered keep their stored version (v1 and v2 frozen).
 const BLUEPRINT_VERSION = 3
 const FULL_VERSION = 3
@@ -69,14 +69,12 @@ const FLIGHTS = [
 // Ascent direction per flight (tower-local, rot 0): F1/F3 climb +z,
 // F2/F4 climb -z. A v3 stairs cell carries its face {dx,dz}.
 const FLIGHT_FACE = [{ dx: 0, dz: 1 }, { dx: 0, dz: -1 }, { dx: 0, dz: 1 }, { dx: 0, dz: -1 }]
-// Landing-edge stairs (v3): the landing cell beside each flight's top step
-// becomes a stair too, so the last rise is 0.5, not a jump onto the slab.
-// Key 'x,dy,z' tower-local; all four are planks today, none a LANDINGS skip.
+// Landing-edge stairs (v3): L1's cell beside each F1 top step becomes a stair
+// too, so the last rise onto the slab is 0.5, not a jump. L2-L4 get none: the
+// flight tops out level with the landing (revmux 01 core-3). Key 'x,dy,z'
+// tower-local; planks today, not a LANDINGS skip.
 const STAIR_EDGES = new Map([
   ['2,3,3', { dx: 1, dz: 0 }], // L1, from F1 top (1,2,3)
-  ['2,6,1', { dx: -1, dz: 0 }], // L2, from F2 top (3,6,1)
-  ['2,9,3', { dx: 1, dz: 0 }], // L3, from F3 top (1,9,3)
-  ['2,12,1', { dx: -1, dz: 0 }], // L4, from F4 top (3,12,1)
 ])
 
 // Quarter-turn a face vector, same clockwise sense as rotatePlan/turn5.
@@ -130,7 +128,7 @@ function towerRing() {
 // and the keep-clear markers (doorway/windows) separately.
 //   top: last wall layer; door: 'door' (a door block) or 'air' (a doorway);
 //   windowAt(x, dy, z): true where a WINDOWS opening stays open.
-//   opts.stairs (g0z.47): flight steps and the four landing-edge cells are
+//   opts.stairs (g0z.47): flight steps and the L1 landing-edge cell are
 //   kind 'stairs' with a face; otherwise stone/planks as frozen in v1/v2.
 function towerPlan(top, door, windowAt, opts) {
   const plan = []

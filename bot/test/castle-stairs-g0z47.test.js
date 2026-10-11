@@ -203,6 +203,17 @@ describe('stairs dig/relay loop (g0z.47)', () => {
     assert.deepEqual(Object.keys(ctx.castle.blocked), [], 'no hole left behind')
   })
 
+  it('placeCell asks findRef to exclude the top ref for stairs (revmux 01 core-5)', async () => {
+    const { bot, ctx, c } = loopBot({ lay: 'right' })
+    bot.paint('air', {})
+    const real = build.findRef
+    const opts = []
+    build.findRef = (b, p, o) => { opts.push(o); return real(b, p, o) }
+    try { for (let i = 0; i < 12; i++) { castleMod(bot, ctx); await settle() } } finally { build.findRef = real }
+    assert.ok(opts.length >= 1, 'placeCell reached findRef')
+    assert.ok(opts.every((o) => o && o.excludeTop), 'stairs ask for excludeTop')
+  })
+
   it('a placement bug that keeps laying wrong blocks after STRIKES, never loops', async () => {
     const { bot, ctx, c } = loopBot({ lay: 'wrong-always' })
     // The fake lays facing north regardless; the first stairs cell wants
@@ -241,12 +252,24 @@ describe('stairs sourcing (g0z.47)', () => {
   }
 
   it('stairs-none crafts cobblestone_stairs', () => {
-    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 72 }; return 'stairs-none' }
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 60 }; return 'stairs-none' }
     const asked = []
     fetch.deps.craftItem = (bot, ctx, names, n) => { asked.push([names, n]); return 'running' }
     const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, phase: 'body', blocked: {} } }
     fetch(fetchBot([{ name: 'cobblestone', count: 64 }]), ctx)
     assert.deepEqual(asked, [[['cobblestone_stairs'], 4]])
+  })
+
+  it('short on cobble (variants, or only the reserve) digs instead of crafting (revmux 01 core-1/6)', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 60 }; return 'stairs-none' }
+    for (const items of [[{ name: 'andesite', count: 30 }], [{ name: 'cobblestone', count: 29 }]]) {
+      const asked = []
+      fetch.deps.craftItem = (bot, ctx, names, n) => { asked.push(names); return 'running' }
+      const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, phase: 'body', blocked: {} } }
+      fetch(fetchBot(items), ctx) // no pickaxe: digTick ends the leg at once (equip rearms)
+      assert.deepEqual(asked, [])
+      assert.equal(ctx.stepStatus, 'done')
+    }
   })
 
   it('stairs are castle material on v3 only; usable above a zero reserve', () => {
@@ -274,7 +297,7 @@ describe('stairs residence + rig paint (g0z.47)', () => {
     const st = { site: { ...SITE }, rot: 0, blueprintVersion: 3 }
     const cells = seedCastleCells(st)
     const stairs = cells.filter((c) => c.kind === 'stairs')
-    assert.equal(stairs.length, 72)
+    assert.equal(stairs.length, 60)
     for (const c of stairs) assert.match(c.block, /^cobblestone_stairs\[facing=(north|south|east|west),half=bottom\]$/)
     const one = stairs[0]
     const want = /facing=([a-z]+)/.exec(one.block)[1]

@@ -373,6 +373,7 @@ function craftTick(bot, ctx, f, d) {
   const names = craftNames(bot, d.kind)
   if (names.length === 0 || f.craftOut) return false
   if (d.kind === 'banner' && !bannerSelf(bot, ctx)) return false // beds first: the wool is theirs
+  if (d.kind === 'stairs' && stairsCobbleShort(bot)) return false // dig first (stairsDig); the scaffold/shelter reserve stays
   if (d.kind === 'torch' && countItems(bot, (n) => n === 'coal' || n === 'charcoal') <= require('./light').COAL_RESERVE) return false // smelting's coal floor
   let r = null
   try { r = deps.craftItem(bot, ctx, names, CRAFT_COUNT[d.kind] || 1) } catch (_) { r = { done: false } }
@@ -386,6 +387,13 @@ function craftTick(bot, ctx, f, d) {
   }
   f.craftOut = true // the pack cannot fund it: fall through to the world
   return false
+}
+
+// Stairs craft only from cobble above the castle's stone reserve (revmux 02
+// core-6); below it the leg digs (stairsDig) — the bot sources its own stone.
+const STAIRS_COBBLE = 6
+function stairsCobbleShort(bot) {
+  return countItems(bot, (n) => n === 'cobblestone') < STAIRS_COBBLE + castleMod.reserveOf('stone')
 }
 
 // Beds first (g0z.35): the banner self-source (hunt, chest wool, craft)
@@ -1278,7 +1286,7 @@ function castlefetch(bot, ctx, target, state) {
   st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
-  if (d.kind === 'stone') { digTick(bot, ctx, f); return }
+  if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot))) { digTick(bot, ctx, f); return }
   if (d.kind === 'planks' || d.kind === 'door' || d.kind === 'fence' || d.kind === 'chest' || d.kind === 'frame') {
     // Logs from the world: gather chops a load and ends the leg itself
     // ('done' at NEED_LOGS, or its own failure); the next pick crafts

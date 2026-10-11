@@ -208,14 +208,14 @@ describe('castle v2 moat: exit steps', () => {
 })
 
 describe('castle v3 stairs (g0z.47)', () => {
-  it('same shell as v2, 72 kind-only changes to stairs with a face each', () => {
+  it('same shell as v2, 60 kind-only changes to stairs with a face each', () => {
     assert.equal(V3.W, V2.W)
     assert.equal(V3.D, V2.D)
     assert.deepEqual(V3.ENTRANCE, V2.ENTRANCE)
     assert.deepEqual(V3.DOOR, V2.DOOR)
     assert.equal(V3.PLAN.length, V2.PLAN.length)
     const stairs = V3.PLAN.filter((c) => c.kind === 'stairs')
-    assert.equal(stairs.length, 72)
+    assert.equal(stairs.length, 60)
     for (const c of stairs) {
       assert.ok(c.face && typeof c.face.dx === 'number' && typeof c.face.dz === 'number', JSON.stringify(c))
       assert.ok(['north', 'south', 'east', 'west'].includes(castle.faceName(c.face)), JSON.stringify(c))
@@ -229,8 +229,8 @@ describe('castle v3 stairs (g0z.47)', () => {
         assert.equal(V3.PLAN[i].kind, 'stairs')
       }
     }
-    assert.equal(kindDiff, 72)
-    assert.equal(castle.billOfMaterials(V3.PLAN).stairs, 72)
+    assert.equal(kindDiff, 60)
+    assert.equal(castle.billOfMaterials(V3.PLAN).stairs, 60)
     assert.equal(castle.isPlaceTarget('stairs'), true)
     assert.equal(castle.matches('stairs', 'cobblestone_stairs'), true)
     assert.equal(castle.matches('stairs', 'cobblestone'), false)
@@ -242,7 +242,7 @@ describe('castle v3 stairs (g0z.47)', () => {
     assert.deepEqual(g0, { dx: 8, dy: 0, dz: 12, kind: 'stairs', face: { dx: 1, dz: 0 } })
     for (const rot of [1, 2, 3]) {
       const rp = castle.rotatePlan(V3.PLAN, rot, 3)
-      assert.equal(rp.filter((c) => c.kind === 'stairs').length, 72, `rot ${rot} stairs`)
+      assert.equal(rp.filter((c) => c.kind === 'stairs').length, 60, `rot ${rot} stairs`)
       const { w, d } = castle.siteDimensions(rot, 3)
       for (const c of rp.filter((c) => c.kind === 'stairs')) {
         assert.ok(c.face, `rot ${rot} ${JSON.stringify(c)} kept its face`)
@@ -285,16 +285,15 @@ describe('castle v3 stairs (g0z.47)', () => {
       checked++
       assert.ok(!skips.has(`${c.dx},${c.dy},${c.dz}`), `stairs on a skip: ${JSON.stringify(c)}`)
     }
-    assert.equal(checked, 21, '16 tower edges + 3 attic steps + 2 slab edges')
+    assert.equal(checked, 9, '4 L1 edges + 3 attic steps + 2 slab edges')
   })
 
   it('every stair run (3 steps + edge) climbs 0.5-block rises only', () => {
     // Pure helper: the next cell is one along the face and one up (steps)
-    // or level (the flush landing edges L2-L4) — both walkable on stairs.
+    // (revmux 01 core-3: edges only where the slab is one block above).
     const stepOk = (prev, next, face) =>
       next.dx - prev.dx === face.dx && next.dz - prev.dz === face.dz && next.dy - prev.dy === 1
-    const edgeOk = (prev, next, face) =>
-      next.dx - prev.dx === face.dx && next.dz - prev.dz === face.dz && (next.dy - prev.dy === 0 || next.dy - prev.dy === 1)
+    const edgeOk = stepOk
     const at = new Map(V3.PLAN.map((c) => [`${c.dx},${c.dy},${c.dz}`, c]))
     const turn5 = (rot, x, z) => rot === 1 ? [4 - z, x] : rot === 2 ? [4 - x, 4 - z] : rot === 3 ? [z, 4 - x] : [x, z]
     const runs = []
@@ -312,7 +311,14 @@ describe('castle v3 stairs (g0z.47)', () => {
         })
         const [ex, ey, ez] = f.edge
         const [lx, lz] = turn5(rot, ex, ez)
-        cells.push(at.get(`${tx + lx},${ey},${tz + lz}`))
+        const edge = at.get(`${tx + lx},${ey},${tz + lz}`)
+        if (ey !== 3) { // L2-L4: the flight tops out level with the slab, no edge stair
+          assert.equal(edge.kind, 'planks', JSON.stringify(edge))
+          assert.equal(cells[2].dy, ey, 'top step level with its landing')
+          runs.push({ cells, face: castle.rotFace(rot, f.face), edgeFace: null })
+          continue
+        }
+        cells.push(edge)
         const face = castle.rotFace(rot, f.face)
         const edgeFace = castle.rotFace(rot, f.edgeFace)
         runs.push({ cells, face, edgeFace })
@@ -332,11 +338,15 @@ describe('castle v3 stairs (g0z.47)', () => {
       assert.deepEqual(cells[0].face, face)
       assert.deepEqual(cells[1].face, face)
       assert.deepEqual(cells[2].face, face)
-      assert.deepEqual(cells[3].face, edgeFace)
       assert.ok(stepOk(cells[0], cells[1], face), `run ${JSON.stringify(cells[0])}`)
       assert.ok(stepOk(cells[1], cells[2], face), `run ${JSON.stringify(cells[1])}`)
+      if (!edgeFace) continue
+      assert.deepEqual(cells[3].face, edgeFace)
       assert.ok(edgeOk(cells[2], cells[3], edgeFace), `edge ${JSON.stringify(cells[2])} -> ${JSON.stringify(cells[3])}`)
     }
+    // Known limit (revmux 01 core-2, follow-up bead): step 1's low half backs
+    // onto a wall, so a player enters it from the side and jumps once per run
+    // (18 per full climb); the bot jumps regardless.
   })
 
   it('reach invariant green for every v3 prefix with the stairs ref restriction', () => {
