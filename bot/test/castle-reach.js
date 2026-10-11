@@ -16,7 +16,8 @@
 
 const RANGE = 4 // build.PLACE_RANGE (GoalPlaceBlock approach range)
 const REF_DIRS = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]]
-const COLLIDES = new Set(['stone', 'planks', 'frame', 'fence', 'chest'])
+const REF_DIRS_STAIRS = REF_DIRS.filter(([x, y, z]) => !(x === 0 && y === 1 && z === 0)) // g0z.47: stairs exclude the top ref (half='top')
+const COLLIDES = new Set(['stone', 'planks', 'frame', 'fence', 'chest', 'stairs'])
 const NO_STAND = new Set(['fence', 'chest'])
 const YMIN = -4
 const YMAX = 20
@@ -113,7 +114,8 @@ function checkCell(g, entrance, t) {
   if (ti >= 0) g.solid[ti] = 0 // cleared before the place (wrong occupant dug)
   try {
     let ref = null
-    for (const [ox, oy, oz] of REF_DIRS) {
+    const dirs = t.kind === 'stairs' ? REF_DIRS_STAIRS : REF_DIRS
+    for (const [ox, oy, oz] of dirs) {
       if (g.isSolid(t.dx + ox, t.dy + oy, t.dz + oz)) { ref = { x: t.dx + ox, y: t.dy + oy, z: t.dz + oz }; break }
     }
     if (!ref) return { ok: false, reason: 'no reference face (no solid neighbour or terrain)' }
@@ -169,4 +171,4 @@ function checkPlan(bp, isTarget, upTo = bp.PLAN.length) {
   return { ok: true, checked, grid: g, stances }
 }
 
-module.exports = { checkPlan, checkCell, makeGrid, apply, flood, standable, losClear, RANGE, REF_DIRS }
+module.exports = { checkPlan, checkCell, makeGrid, apply, flood, standable, losClear, RANGE, REF_DIRS, REF_DIRS_STAIRS }

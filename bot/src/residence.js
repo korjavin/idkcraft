@@ -143,7 +143,7 @@ const HOUSE = {
 // it for a v1 castle.
 const CV = 2
 const BP = castle.blueprintOf(CV)
-const COLLIDES = new Set(['stone', 'planks', 'frame', 'fence', 'chest'])
+const COLLIDES = new Set(['stone', 'planks', 'frame', 'fence', 'chest', 'stairs'])
 
 // rot-0 local cells (all checked against the plan in residence.test.js:
 // no plan cell, no keep-clear cell). Bedrooms are the upper-storey rooms
@@ -293,7 +293,7 @@ function sameCastle(home, st) {
 }
 
 // The home the bot should live in: undefined = no change (idempotent), else
-// the home to switch to (null = none). Only a complete v2 castle is a
+// the home to switch to (null = none). Only a complete v2+ castle is a
 // residence, adopted once per castle; a park, an unloaded site or a demolished entrance never
 // un-selects it (no flapping) and a new order keeps the old castle until the
 // new one completes. Only a forget (no castle at all) or the flag off falls
@@ -304,7 +304,7 @@ function wanted(ctx) {
   const st = ctx.castle
   const on = module.exports.RESIDENCE_CASTLE === true
   const isCastle = !!h && h.kind === 'castle'
-  if (on && st && st.site && st.phase === 'complete' && st.blueprintVersion === 2) {
+  if (on && st && st.site && st.phase === 'complete' && st.blueprintVersion >= 2) {
     // Edge, not level (01-review): adopted once (st.residence, persisted),
     // a later 'build here' stands until a new castle completes.
     return (isCastle && sameCastle(h, st)) || st.residence ? undefined : castleHome(st)

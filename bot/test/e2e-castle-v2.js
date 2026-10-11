@@ -36,8 +36,8 @@ const NAME = `Vtwo${TAG}`
 const GUIDE = `Guide${TAG}`
 // The whole first Fachwerk sill (dy 3): more than one gather load, so the
 // second load is chopped beside standing beams.
-const WANT_FRAME = blueprint.BLUEPRINTS[2].PLAN.filter((c) => c.kind === 'frame' && c.dy === 3).length
-const BLOCK = { stone: 'cobblestone', planks: 'oak_planks', torch: 'torch', frame: 'oak_log', chest: 'chest' }
+const WANT_FRAME = blueprint.BLUEPRINTS[blueprint.BLUEPRINT_VERSION].PLAN.filter((c) => c.kind === 'frame' && c.dy === 3).length
+const BLOCK = { stone: 'cobblestone', planks: 'oak_planks', torch: 'torch', frame: 'oak_log', chest: 'chest', stairs: 'cobblestone_stairs' }
 
 async function rcon(cmd) {
   const { stdout } = await execFileAsync('docker', ['exec', MC_CONTAINER, 'rcon-cli', cmd])
@@ -126,14 +126,14 @@ async function main() {
   guide.chat('build castle')
   await until('castle order', 15000, () => ctx.castle)
   const st = ctx.castle
-  if (st.blueprintVersion !== 2) throw new Error(`new order got v${st.blueprintVersion}, want v2`)
+  if (st.blueprintVersion !== blueprint.BLUEPRINT_VERSION) throw new Error(`new order got v${st.blueprintVersion}, want v${blueprint.BLUEPRINT_VERSION}`)
   if (st.site.x !== site.x || st.site.z !== site.z || st.rot !== rot) throw new Error(`site ${JSON.stringify(st.site)} rot ${st.rot}, want ${JSON.stringify(site)} rot ${rot}`)
   log(`order ok: ${chats[chats.length - 1]}`)
   guide.chat('castle stop')
   await rcon(`tp ${GUIDE} ${tx - 4} ${gy} ${site.z - 1}`)
   await rcon(`tp ${NAME} ${tx - 2} ${gy} ${site.z + 1}`)
   await sleep(2000)
-  const plan = blueprint.BLUEPRINTS[2].PLAN
+  const plan = blueprint.BLUEPRINTS[blueprint.BLUEPRINT_VERSION].PLAN
   const firstFrame = plan.findIndex((c) => c.kind === 'frame')
   log(`prefill ${await prefill(st, firstFrame)} cells up to the first frame cell (#${firstFrame})`)
   st.phase = 'body'

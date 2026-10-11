@@ -46,14 +46,16 @@ const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('.
 // one-layer rule never makes the furnace from cobble, so no furnace is
 // no craft — g0z.51 self-sources the mats). Missing stock fails honestly
 // into the hold.
-const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16, banner: 2, bookshelf: 5, enchanting_table: 1, blast_furnace: 1 }
+// stairs (g0z.47) — any *_stairs from the chest, else cobblestone_stairs
+// (6 cobble -> 4 at a table, one material for all 72).
+const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16, banner: 2, bookshelf: 5, enchanting_table: 1, blast_furnace: 1, stairs: 16 }
 // Batch yield (idkcraft-vmzq.20): a fetch leg hands a layable batch to the
 // castle after this long instead of running to its full target. Five
 // minutes ≈ one stone batch at the measured quarry rate, and bounds the
 // castle<->castlefetch switch rate from below no matter how the words flap.
 const LEG_MAX_MS = 5 * 60 * 1000
 // One craft op per call; the next tick re-checks the target.
-const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, blast_furnace: 1 }
+const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, blast_furnace: 1, stairs: 4 }
 const BANNER_WOOL = 6 // one colour per banner (table recipe)
 const BOOKS_PER_SHELF = 3 // table recipe: 6 planks + 3 books (g0z.49)
 const DIG_RADIUS = 32
@@ -148,6 +150,7 @@ function chestNames(bot, kind) {
   if (kind === 'bookshelf') return [['bookshelf'], ['book']]
   if (kind === 'enchanting_table') return [['enchanting_table']]
   if (kind === 'blast_furnace') return [['blast_furnace']]
+  if (kind === 'stairs') return [itemNames(bot, (n) => n.endsWith('_stairs'))]
   return []
 }
 
@@ -161,6 +164,7 @@ function craftNames(bot, kind) {
   if (kind === 'banner') return itemNames(bot, isBanner) // 6 wool of one colour + 1 stick at a table
   if (kind === 'bookshelf') return ['bookshelf'] // 6 planks + 3 books at a table (craftany does the planks layer from logs)
   if (kind === 'blast_furnace') return ['blast_furnace'] // 5 iron_ingot + 1 furnace + 3 smooth_stone at a table (g0z.50; the furnace itself must be held)
+  if (kind === 'stairs') return ['cobblestone_stairs'] // 6 cobble -> 4 at a table (g0z.47; cobble from the quarry legs)
   return []
 }
 

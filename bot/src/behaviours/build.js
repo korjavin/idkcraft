@@ -416,8 +416,12 @@ const REF_DIRS = [
 // The reference is a real Block, not a position: bot.placeBlock derefs
 // referenceBlock.position on the first line, so a bare Vec3 rejects every
 // placement (live bug: a whole site skipped as refused-on-air).
-function findRef(bot, p) {
+// opts.excludeTop (g0z.47 stairs): skip the (0,1,0) ref — clicking the
+// bottom face of the block above lays the stair half='top'.
+function findRef(bot, p, opts) {
+  const excludeTop = !!(opts && opts.excludeTop)
   for (const [ox, oy, oz] of REF_DIRS) {
+    if (excludeTop && ox === 0 && oy === 1 && oz === 0) continue
     const q = new Vec3(p.x + ox, p.y + oy, p.z + oz)
     let block = null
     try {
