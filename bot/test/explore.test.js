@@ -567,3 +567,71 @@ describe('explore idle alone (vmzq.59)', () => {
     assert.equal(sky.calls.goals[0].constructor.name, 'GoalXZ')
   })
 })
+
+describe('stranded-wood leash lift (vmzq.65)', () => {
+  function taskCtx(farEmpty) {
+    return {
+      home: { site: { x: 0, y: 64, z: 0 }, built: false, v: 2 },
+      stepStatus: 'running',
+      gather: { final: 'failed:no-trees', atLogs: 0, farEmpty, skip: new Set(), streak: 0 },
+    }
+  }
+  function ringsVisited(ctx) {
+    ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0 }
+    for (const r of [16, 32, 64]) {
+      for (let a = 0; a < 8; a++) {
+        const x = Math.round(r * Math.sin(a * Math.PI / 4))
+        const z = Math.round(-r * Math.cos(a * Math.PI / 4))
+        ctx.explore.visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
+      }
+    }
+  }
+
+  it('woodStranded reads the gather record', () => {
+    assert.equal(explore.woodStranded(taskCtx(true)), true)
+    assert.equal(explore.woodStranded(taskCtx(false)), false)
+    assert.equal(explore.woodStranded({ gather: {} }), false)
+    assert.equal(explore.woodStranded({}), false)
+    assert.equal(explore.woodStranded(null), false)
+  })
+
+  it('capOf lifts the task leash to the outer disk while stranded, no unlock', () => {
+    const bot = mockBot() // Owner online: the alone cap does not apply
+    const ctx = taskCtx(true)
+    assert.equal(ctx.goal, undefined, 'no watchdog window armed')
+    assert.equal(explore.capOf(bot, ctx, { maxRadius: explore.MAX_RADIUS }), 256)
+  })
+
+  it('capOf stays at the task radius once the record clears', () => {
+    const bot = mockBot()
+    assert.equal(explore.capOf(bot, taskCtx(false), { maxRadius: explore.MAX_RADIUS }), 64)
+  })
+
+  it('capOf stays at 64 alone even while stranded (vmzq.59)', () => {
+    const bot = mockBot()
+    bot.players = {}
+    assert.equal(explore.capOf(bot, taskCtx(true), { maxRadius: explore.MAX_RADIUS }), 64)
+  })
+
+  it('the spiral walks past 64 while stranded, ends at 64 once cleared', () => {
+    const bot = mockBot()
+    const c1 = taskCtx(true)
+    ringsVisited(c1)
+    explore(bot, c1, null, null)
+    assert.deepEqual(c1.explore.target, { x: 0, z: -128 })
+
+    const c2 = taskCtx(false)
+    ringsVisited(c2)
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      explore(bot, c2, null, null)
+    } finally {
+      console.log = origLog
+    }
+    assert.equal(c2.explore.target, null)
+    assert.equal(c2.stepStatus, 'done')
+    assert.deepEqual(logs, ['explore done: all chunks within 64 blocks visited'])
+  })
+})

@@ -134,6 +134,21 @@ function anchorY(bot, ctx) {
   } catch (_) { /* no height */ }
   return null
 }
+// Stranded-wood walk-out (idkcraft-vmzq.65): true while gather's staged
+// far search came back empty at the current log count — the task site
+// has no walkable wood within 160. gather sets g.farEmpty in failFinal
+// and the world-changed reset clears it when the log count moves; the
+// gyw relocation release keeps it (the retry at new ground still needs
+// the lifted leash). Read by capOf below and gather's taskFar: one
+// predicate, no new timer, no Movements touch.
+function woodStranded(ctx) {
+  try {
+    const g = ctx && ctx.gather
+    return !!(g && g.farEmpty)
+  } catch (_) {
+    return false
+  }
+}
 // Spiral cap for a fresh pick, and for the pending-leg check when alone.
 function capOf(bot, ctx, e) {
   // Task bound (vmzq.18): own side work caps the spiral at the site;
@@ -141,8 +156,15 @@ function capOf(bot, ctx, e) {
   // takes the same bound.
   // (.22) an explore-far unlock lifts the cap to the outer disk for the
   // window only; the radius clamps to 256 around the stable anchor.
+  // (vmzq.65) stranded wood lifts the TASK leash to the outer disk with
+  // no window: a 256-block round trip plus 14 chops never fits 120 s.
+  // The alone cap stays (vmzq.59): nobody online, no walk-out.
   let cap = e.maxRadius
   try { if ((taskActive(ctx) && !ownerBring(ctx)) || aloneIdle(bot, ctx)) cap = Math.min(cap, TASK_SEARCH_RADIUS) } catch (_) { /* unbound */ }
+  try {
+    const { OUTER_DISK } = require('../goal-unlock')
+    if (OUTER_DISK > cap && woodStranded(ctx) && taskActive(ctx) && !ownerBring(ctx) && !aloneIdle(bot, ctx)) cap = Math.min(e.maxRadius, OUTER_DISK)
+  } catch (_) { /* default cap */ }
   try {
     const { goalUnlock } = require('../goal-unlock')
     const r = goalUnlock(ctx, 'radius')
@@ -385,6 +407,8 @@ function nextTarget(bot, ctx, cap) {
 module.exports = explore
 module.exports.MAX_RADIUS = MAX_RADIUS
 module.exports.TASK_SEARCH_RADIUS = TASK_SEARCH_RADIUS
+module.exports.capOf = capOf // vmzq.65: stranded-lift tests read the cap directly
+module.exports.woodStranded = woodStranded // vmzq.65: gather's taskFar reads the one predicate
 module.exports.taskActive = taskActive
 module.exports.castleActive = castleActive
 module.exports.ownerBring = ownerBring

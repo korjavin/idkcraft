@@ -212,7 +212,9 @@ describe('b2o: build here starts work in ticks, not just in the reply', () => {
     // Bead b2o wired the chat transition (follow clears, site sets, coords
     // answered) and checked goal.decide directly. E2E: the ticks after the
     // chat really dispatch the work loop — gather first on an empty
-    // inventory, then rest with reasons when the only column skips.
+    // inventory, then the stranded walk-out (explore) when the only column
+    // skips (vmzq.65: a build order walks out with the owner online; rest
+    // only with no site).
     const bot = orderBot({ '20,64,0': 'oak_log', '20,65,0': 'oak_log', '20,66,0': 'oak_leaves' }, { oak_log: { id: 17 } })
     bot.players = { Steve: visiblePlayer('Steve', 10) }
     const clock = fakeClock() // oqul.2: controlled clock + seeded random for the journal
@@ -242,11 +244,11 @@ describe('b2o: build here starts work in ticks, not just in the reply', () => {
       assert.equal(r1.decision.action, 'gather', 'empty hands chop first')
       assert.match(ctx.lastGoalKey, /^gather:/, 'walking to trees')
       let t = 0
-      for (; t < 20 && r1.decision && ctx.step !== 'rest'; t++) {
+      for (; t < 20 && r1.decision && ctx.step !== 'explore'; t++) {
         const r = await ticker.tick()
         actions.push(r.decision.action)
       }
-      assert.ok(actions.includes('rest'), `nothing to chop -> rest: ${actions.join(',')}`)
+      assert.ok(actions.includes('explore'), `stranded build order walks out: ${actions.join(',')}`)
       assert.ok(!actions.slice(1).includes('follow'), `never trails again: ${actions.join(',')}`)
       golden('scenarios-orders', 'b2o follow -> build here -> work ticks', journal.events)
     } finally {
