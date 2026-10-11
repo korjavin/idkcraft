@@ -150,7 +150,7 @@ describe('scout tick feeds finds memory (atl.16)', () => {
     })
     bot.chat = (line) => { lines.push(line) }
     const ctx = {}
-    makeScout(bot, { everyMs: 0, ctx }).tick()
+    makeScout(bot, { everyMs: 0, ctx, say: (l) => bot.chat(l) }).tick()
     assert.deepEqual(lines, ['iron_ore x2 at 3 60 0'])
     assert.equal(resources.count(ctx), 2)
     const cells = [...ctx.resources.items.values()].sort((a, b) => a.x - b.x)
@@ -164,7 +164,7 @@ describe('scout tick feeds finds memory (atl.16)', () => {
     const bot = worldBot({ registry: REG, veins: [pos(3, 60, 0)], names })
     bot.chat = (line) => { lines.push(line) }
     const ctx = {}
-    const scout = makeScout(bot, { everyMs: 0, ctx })
+    const scout = makeScout(bot, { everyMs: 0, ctx, say: (l) => bot.chat(l) })
     scout.tick()
     assert.equal(resources.nearest(ctx, pos(0, 64, 0)).exposed, false)
     names['4,60,0'] = 'air' // the vein opens up (dug out next door)
@@ -181,7 +181,7 @@ describe('scout tick feeds finds memory (atl.16)', () => {
     })
     const lines = []
     bot.chat = (line) => { lines.push(line) }
-    makeScout(bot, { everyMs: 0 }).tick()
+    makeScout(bot, { everyMs: 0, say: (l) => bot.chat(l) }).tick()
     assert.deepEqual(lines, ['iron_ore x1 at 3 60 0'])
   })
 
@@ -212,7 +212,9 @@ describe('scout tick feeds finds memory (atl.16)', () => {
       idleTickMs: 10,
     })
     await ticker.tick()
-    assert.ok(bot.lines.includes('iron_ore x1 at 4 60 1'), `lines: ${bot.lines}`)
+    // (vmzq.66) the ticker wiring keeps the default say: the sighting feeds
+    // memory only, never chat.
+    assert.ok(!bot.lines.some((l) => l.includes('iron_ore')), `lines: ${bot.lines}`)
     const ctx = bot._tickerCtx
     assert.ok(ctx, 'ticker ctx exists')
     assert.equal(resources.count(ctx), 1)

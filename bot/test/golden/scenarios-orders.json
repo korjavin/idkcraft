@@ -14,7 +14,7 @@
   {"tick":4,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":4,"x":20,"y":65,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
   {"tick":4,"kind":"lastGoalKey","value":"gather:20,65,0"},
   {"tick":7,"kind":"stepStatus","value":"failed:no-trees"},
-  {"tick":7,"kind":"chat","text":"no trees within 48 blocks"},
+  {"tick":7,"kind":"chat","text":"no trees within 160 of here (2 near ones unusable)"},
   {"tick":7,"kind":"setGoal","goal":null,"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
   {"tick":7,"kind":"lastGoalKey","value":""},
   {"tick":8,"kind":"step","value":"explore"},

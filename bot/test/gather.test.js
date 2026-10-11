@@ -387,6 +387,58 @@ describe('gather step', () => {
     assert.equal(ctx.gather.farEmpty, true)
     assert.equal(ctx.gather.streak, 0)
     assert.equal(bot.calls.setGoal, 0, 'nothing walked to')
+    // (vmzq.66) only the 96 probe reads loaded, so only ring 70 ran — the
+    // line names the 96 actually searched, not 48, and the banned near log.
+    assert.deepEqual(bot.lines, ['no trees within 96 of here (1 near one unusable)'])
+  })
+
+  it('(vmzq.66) empty 48 and empty 96/160 shells chat the searched radius, not 48', () => {
+    const bot = mockBot({
+      spots: [],
+      names: { '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone' },
+    })
+    const ctx = freshCtx()
+    for (let i = 0; i < 120 && !(ctx.gather && ctx.gather.final); i++) gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-trees')
+    assert.deepEqual(bot.lines, ['no trees within 160 of here'])
+  })
+
+  it('(vmzq.66) unusable near trees are counted in the give-up line', () => {
+    const bot = mockBot({
+      spots: [pos(40, 64, 0), pos(30, 64, 5)],
+      names: {
+        '40,64,0': 'oak_log', '30,64,5': 'birch_log',
+        '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+      },
+    })
+    const ctx = freshCtx()
+    danger.mark(ctx, { x: 40, y: 64, z: 0 })
+    danger.mark(ctx, { x: 30, y: 64, z: 5 })
+    for (let i = 0; i < 120 && !(ctx.gather && ctx.gather.final); i++) gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:no-trees')
+    assert.deepEqual(bot.lines, ['no trees within 160 of here (2 near ones unusable)'])
+  })
+
+  it('(vmzq.66) the stranded record clears when the log count moves, even with no final', () => {
+    // Post-relocation shape (gyw release): final cleared, leash kept —
+    // wood landing at the new ground must drop it (codex P2).
+    const bot = mockBot({ spots: [pos(10, 64, 0)], names: { '10,64,0': 'oak_log' } })
+    bot._items = [{ name: 'oak_log', count: 2 }]
+    const ctx = freshCtx()
+    ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, farEmpty: true, farEmptyAt: 0, failPos: null, seenLogs: 0, lastProgressAt: Date.now() }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.gather.farEmpty, false)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('(vmzq.66) the stranded record holds while the log count holds', () => {
+    // The same shape with no new wood: the retry keeps the lifted leash.
+    const bot = mockBot({ spots: [pos(10, 64, 0)], names: { '10,64,0': 'oak_log' } })
+    const ctx = freshCtx()
+    ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, farEmpty: true, farEmptyAt: 0, failPos: null, seenLogs: 0, lastProgressAt: Date.now() }
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.gather.farEmpty, true)
+    assert.equal(ctx.stepStatus, 'running')
   })
 
   it('(f) no displacement for N ticks: tree skipped, next tree searched', () => {

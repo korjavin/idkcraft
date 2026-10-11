@@ -67,7 +67,7 @@ describe('scout first scan', () => {
       spots: [d1, d2, iron],
       names: { '5,10,0': 'diamond_ore', '3,10,0': 'diamond_ore', '1,12,0': 'iron_ore' },
     })
-    makeScout(bot, { everyMs: 0 }).tick()
+    makeScout(bot, { everyMs: 0, say: (l) => bot.chat(l) }).tick()
     assert.deepEqual(bot.lines, ['diamond_ore x2 at 3 10 0', 'iron_ore x1 at 1 12 0'])
     assert.deepEqual(logs, ['scout diamond_ore x2 at 3 10 0', 'scout iron_ore x1 at 1 12 0'])
   })
@@ -78,8 +78,21 @@ describe('scout first scan', () => {
       spots: [pos(4, 10, 0), pos(2, 10, 0), pos(6, 10, 0)],
       names: { '4,10,0': 'deepslate_diamond_ore', '2,10,0': 'diamond_ore', '6,10,0': 'deepslate_diamond_ore' },
     })
-    makeScout(bot, { everyMs: 0 }).tick()
+    makeScout(bot, { everyMs: 0, say: (l) => bot.chat(l) }).tick()
     assert.deepEqual(bot.lines, ['diamond_ore x3 at 2 10 0'])
+  })
+})
+
+describe('scout default silence (vmzq.66)', () => {
+  it('default say chats nothing; the console keeps the sighting', () => {
+    const bot = mockBot({
+      registry: REG,
+      spots: [pos(1, 12, 0)],
+      names: { '1,12,0': 'iron_ore' },
+    })
+    makeScout(bot, { everyMs: 0 }).tick()
+    assert.deepEqual(bot.lines, [], 'sightings never reach chat by default')
+    assert.deepEqual(logs, ['scout iron_ore x1 at 1 12 0'])
   })
 })
 
@@ -88,7 +101,7 @@ describe('scout dedup', () => {
     const spots = [pos(3, 10, 0)]
     const names = { '3,10,0': 'diamond_ore' }
     const bot = mockBot({ registry: REG, spots, names })
-    const scout = makeScout(bot, { everyMs: 0 })
+    const scout = makeScout(bot, { everyMs: 0, say: (l) => bot.chat(l) })
     scout.tick()
     assert.deepEqual(bot.lines, ['diamond_ore x1 at 3 10 0'])
     scout.tick()
@@ -106,7 +119,7 @@ describe('scout dedup', () => {
       spots: [pos(1, 1, 1), pos(2, 2, 2), pos(3, 3, 3)],
       names: { '1,1,1': 'iron_ore', '2,2,2': 'iron_ore', '3,3,3': 'iron_ore' },
     })
-    const scout = makeScout(bot, { everyMs: 0, maxSeen: 2 })
+    const scout = makeScout(bot, { everyMs: 0, maxSeen: 2, say: (l) => bot.chat(l) })
     scout.tick()
     assert.equal(bot.lines.length, 1)
     scout.tick()
@@ -143,7 +156,7 @@ describe('scout report cap', () => {
         '5,5,0': 'diamond_ore',
       },
     })
-    const scout = makeScout(bot, { everyMs: 0 })
+    const scout = makeScout(bot, { everyMs: 0, say: (l) => bot.chat(l) })
     scout.tick()
     assert.deepEqual(bot.lines, [
       'diamond_ore x1 at 5 5 0',
@@ -162,7 +175,7 @@ describe('scout robustness', () => {
       spots: [pos(3, 10, 0), pos(1, 12, 0)],
       names: { '3,10,0': 'diamond_ore', '1,12,0': 'iron_ore' },
     })
-    assert.doesNotThrow(() => makeScout(bot, { everyMs: 0 }).tick())
+    assert.doesNotThrow(() => makeScout(bot, { everyMs: 0, say: (l) => bot.chat(l) }).tick())
     assert.deepEqual(bot.lastOpts.matching, [15])
     assert.deepEqual(bot.lines, ['iron_ore x1 at 1 12 0'])
   })
@@ -208,7 +221,7 @@ describe('scout coal goes to memory, not chat (ipn.14)', () => {
     const iron = pos(5, 60, 0)
     const bot = mockBot({ registry: CREG, spots: [coal, iron], names: { '3,64,0': 'coal_ore', '5,60,0': 'iron_ore' } })
     const ctx = {}
-    makeScout(bot, { everyMs: 0, ctx }).tick()
+    makeScout(bot, { everyMs: 0, ctx, say: (l) => bot.chat(l) }).tick()
     const names = [...ctx.resources.items.values()].map((c) => c.name).sort()
     assert.deepEqual(names, ['coal_ore', 'iron_ore'])
     assert.equal(bot.lines.length, 1)
@@ -908,7 +921,7 @@ describe('scout ranking edges (idkcraft-l71)', () => {
     })
     const raw = bot.blockAt.bind(bot)
     bot.blockAt = (p) => (p.x === 30 ? { name: 'copper_ore' } : raw(p))
-    makeScout(bot, { everyMs: 0 }).tick()
+    makeScout(bot, { everyMs: 0, say: (l) => bot.chat(l) }).tick()
     assert.deepEqual(bot.lines, ['diamond_ore x1 at 3 10 0', 'copper_ore x1 at 30 10 0'])
   })
 

@@ -191,23 +191,49 @@ function farReject(bot, ctx, g, bp, q) {
   return false
 }
 
-function failFinal(bot, ctx, g, logs, final) {
+function failFinal(bot, ctx, g, logs, final, search = null) {
   g.final = final
   g.atLogs = logs
   // Stranded-wood record (vmzq.65): no-trees means the staged far search
   // came back with nothing walkable — the task leash lifts until the log
   // count moves. Any other final is not an empty search.
   g.farEmpty = (final === 'failed:no-trees')
+  g.farEmptyAt = logs
   g.failPos = bodyPos(bot)
   ctx.stepStatus = g.final
-  say(bot, g.final === 'failed:no-trees' ? 'no trees within 48 blocks' : g.final === 'failed:pack-full' ? 'pack full, banking first' : 'cannot reach the trees')
+  say(bot, finalLine(g, final, search))
   clearGoal(bot, ctx)
+}
+
+// Give-up wording (vmzq.66): the radius actually searched — the far
+// shells reached (ring 70 covers 48..96, rings 110/150 cover 96..160),
+// or the sync 48 when no far search ran — plus the near logs seen but
+// unusable (banned, protected, skipped).
+function finalLine(g, final, search) {
+  if (final === 'failed:pack-full') return 'pack full, banking first'
+  if (final !== 'failed:no-trees') return 'cannot reach the trees'
+  let radius = 48
+  try {
+    const queue = search && Array.isArray(search.queue) ? search.queue : []
+    const max = queue.reduce((m, c) => Math.max(m, (c && c.ring) || 0), 0)
+    if (max > 70) radius = 160
+    else if (max === 70) radius = 96
+  } catch (_) { /* sync radius */ }
+  if (radius === 48) return 'no trees within 48 blocks'
+  const n = g && g.nearMiss ? g.nearMiss.size : 0
+  const excl = n > 0 ? ` (${n} near one${n === 1 ? '' : 's'} unusable)` : ''
+  return `no trees within ${radius} of here${excl}`
 }
 
 function gather(bot, ctx, target, state) {
   const logs = countItems(bot, (n) => n.endsWith('_log'))
   if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now() }
   const g = ctx.gather
+  // (vmzq.66) the stranded record holds only at the log count that
+  // produced it — wood landing (a retry's chop, a walk-out gain) clears
+  // it even with no final on the books (the gyw release keeps none).
+  const strandedAt = typeof g.farEmptyAt === 'number' ? g.farEmptyAt : g.atLogs
+  if (g.farEmpty && logs !== strandedAt) g.farEmpty = false
   // A finished attempt stays finished until the world changes (log count):
   // decide() re-picks the step with status 'running', so re-assert here
   // instead of rescanning and re-chatting every tick.
@@ -237,6 +263,9 @@ function gather(bot, ctx, target, state) {
       return
     }
     g.final = null
+    // A fresh attempt re-counts its own near misses (stale ground's
+    // misses never ride a relocation retry's give-up line).
+    if (g.nearMiss) g.nearMiss.clear()
     if (!keepSkip) g.skip.clear()
     // The stranded record clears with the world change (vmzq.65) — but
     // survives the gyw relocation release (keepSkip): the retry at new
@@ -275,6 +304,7 @@ function gather(bot, ctx, target, state) {
       const exclude = (q) => g.skip.has(keyOf(q)) || dist(q, bp) <= FIND_RADIUS || banned(q) || farReject(bot, ctx, g, bp, q)
       const r = stepFarSearch(bot, g.search, { exclude })
       if (!r.done) return
+      const search = g.search
       g.search = null
       const hit = r.result && r.result !== 'unknown' ? r.result : null
       if (hit && hit.position && !exclude(hit.position)) {
@@ -284,8 +314,7 @@ function gather(bot, ctx, target, state) {
         // Honest word (vmzq.65): unreachable only when a trunk was walked
         // to and struck — the streak counts stall strikes (banned sync
         // hits and stale read-backs never strike, so they read no-trees).
-        // (Chat wording is the sibling narration bead's.)
-        failFinal(bot, ctx, g, logs, g.streak > 0 ? 'failed:unreachable' : 'failed:no-trees')
+        failFinal(bot, ctx, g, logs, g.streak > 0 ? 'failed:unreachable' : 'failed:no-trees', search)
       }
       return
     }
@@ -293,7 +322,16 @@ function gather(bot, ctx, target, state) {
     try {
       found = bot.findBlocks({ matching: logIds(bot), maxDistance: FIND_RADIUS, count: FIND_COUNT }) || []
     } catch (_) { found = [] }
-    const open = found.filter((p) => !g.skip.has(keyOf(p)) && !(g.gskip && g.gskip.has(keyOf(p))) && !banned(p))
+    // (vmzq.66) near logs seen but unusable ride the give-up line.
+    const open = found.filter((p) => {
+      const k = keyOf(p)
+      if (g.skip.has(k) || (g.gskip && g.gskip.has(k)) || banned(p)) {
+        if (!g.nearMiss) g.nearMiss = new Set()
+        g.nearMiss.add(k)
+        return false
+      }
+      return true
+    })
     // Nearest log the guard allows (idkcraft-m7ke): a protected log (decor,
     // an acacia branch with no column) is never walked to — it joins the
     // sticky gskip here instead of after the trip, when the dig refuses it.
