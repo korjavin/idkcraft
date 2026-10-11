@@ -199,26 +199,33 @@ function failFinal(bot, ctx, g, logs, final, search = null) {
   // count moves. Any other final is not an empty search.
   g.farEmpty = (final === 'failed:no-trees')
   g.farEmptyAt = logs
+  // The radius the give-up line names, for the watchdog narration to echo.
+  if (final === 'failed:no-trees') g.farRadius = searchRadius(search)
   g.failPos = bodyPos(bot)
   ctx.stepStatus = g.final
   say(bot, finalLine(g, final, search))
   clearGoal(bot, ctx)
 }
 
-// Give-up wording (vmzq.66): the radius actually searched — the far
-// shells reached (ring 70 covers 48..96, rings 110/150 cover 96..160),
-// or the sync 48 when no far search ran — plus the near logs seen but
-// unusable (banned, protected, skipped).
-function finalLine(g, final, search) {
-  if (final === 'failed:pack-full') return 'pack full, banking first'
-  if (final !== 'failed:no-trees') return 'cannot reach the trees'
-  let radius = 48
+// Radius actually searched by a completed far cursor: ring 70 covers
+// 48..96, rings 110/150 cover 96..160; no rings, no far search ran.
+function searchRadius(search) {
   try {
     const queue = search && Array.isArray(search.queue) ? search.queue : []
     const max = queue.reduce((m, c) => Math.max(m, (c && c.ring) || 0), 0)
-    if (max > 70) radius = 160
-    else if (max === 70) radius = 96
+    if (max > 70) return 160
+    if (max === 70) return 96
   } catch (_) { /* sync radius */ }
+  return 48
+}
+
+// Give-up wording (vmzq.66): the radius actually searched — the far
+// shells reached, or the sync 48 when no far search ran — plus the near
+// logs seen but unusable (banned, protected, skipped).
+function finalLine(g, final, search) {
+  if (final === 'failed:pack-full') return 'pack full, banking first'
+  if (final !== 'failed:no-trees') return 'cannot reach the trees'
+  const radius = searchRadius(search)
   if (radius === 48) return 'no trees within 48 blocks'
   const n = g && g.nearMiss ? g.nearMiss.size : 0
   const excl = n > 0 ? ` (${n} near one${n === 1 ? '' : 's'} unusable)` : ''

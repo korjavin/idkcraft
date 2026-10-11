@@ -1571,9 +1571,12 @@ function commitReason(ctx) {
   const status = (ctx && ctx.stepStatus) || ''
   const reason = failReason(status)
   if (reason !== null && reason !== '') {
-    // The stranded-wood stall names its search scope (the staged far
-    // search covers 48..160); any other failure names step and reason.
-    if (reason === 'no-trees') return 'no wood within 160'
+    // The stranded-wood stall names the radius gather actually searched
+    // (failFinal stores it); any other failure names step and reason.
+    if (reason === 'no-trees') {
+      const r = ctx && ctx.gather && ctx.gather.farRadius
+      return typeof r === 'number' ? `no wood within ${r}` : 'no wood found nearby'
+    }
     return `${step} failed (${reason})`
   }
   return `${step} ${status || 'running'}, no progress`
@@ -1584,8 +1587,15 @@ function commitHead(bot, ctx, kind, optionId, step) {
   try {
     const { goalOptions } = require('./goal-options')
     const opt = goalOptions(bot, ctx, kind).find((o) => o && o.id === optionId)
-    const text = opt && typeof opt.criterion === 'string' ? opt.criterion : ''
-    if (text) return text.split(';')[0].trim()
+    let text = opt && typeof opt.criterion === 'string' ? opt.criterion : ''
+    if (text) {
+      // Plain steps carry the STEP_CRITERIA 'trigger: action' shape —
+      // narrate the action, not the internal predicate. Far/bank
+      // criteria are plain prose without a colon and ride whole.
+      const cut = text.indexOf(': ')
+      if (cut !== -1) text = text.slice(cut + 2)
+      return text.split(';')[0].trim()
+    }
   } catch (_) { /* head best-effort */ }
   return step ? `retry ${step}` : String(optionId || 'unknown')
 }

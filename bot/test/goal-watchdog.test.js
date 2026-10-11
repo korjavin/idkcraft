@@ -1314,7 +1314,7 @@ describe('watchdog commit narration (vmzq.66)', () => {
     ctx.stepStatus = 'failed:no-trees'
     ctx.gather = {
       final: 'failed:no-trees', atLogs: 0, failPos: { x: 100, y: 64, z: 200 },
-      skip: new Set(), streak: 0, farEmpty: true, farEmptyAt: 0,
+      skip: new Set(), streak: 0, farEmpty: true, farEmptyAt: 0, farRadius: 160,
     }
     return { bot, ctx }
   }
@@ -1343,7 +1343,30 @@ describe('watchdog commit narration (vmzq.66)', () => {
     assert.equal(far.length, 1, `one narration for two same-option commits: ${JSON.stringify(bot.chats)}`)
     assert.match(far[0], /^build home: no wood within 160 — search beyond the task radius up to 256 blocks \(may find wood\)$/)
     assert.equal(bot.chats.length, 2, `a different option narrates its own line: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[1], /^build home: no wood within 160 — known is none: walk the visited boundary \(unlikely \+home now\)$/)
+    // Plain steps narrate the action, not the STEP_CRITERIA predicate (revmux 01).
+    assert.match(bot.chats[1], /^build home: no wood within 160 — walk the visited boundary \(unlikely \+home now\)$/)
+  })
+
+  it('the commit reason echoes the radius gather actually searched', async () => {
+    const { bot, ctx } = strandedHouse()
+    ctx.gather.farRadius = 96
+    const { brain } = answerBrain('explore-far')
+    ctx.brain = brain
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    await fullRound(bot, ctx, t0, 'house')
+    assert.match(bot.chats[0], /^build home: no wood within 96 — search beyond the task radius up to 256 blocks \(may find wood\)$/)
+  })
+
+  it('without a recorded radius the reason stays radius-free', async () => {
+    const { bot, ctx } = strandedHouse()
+    delete ctx.gather.farRadius
+    const { brain } = answerBrain('explore-far')
+    ctx.brain = brain
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    await fullRound(bot, ctx, t0, 'house')
+    assert.match(bot.chats[0], /^build home: no wood found nearby — search beyond the task radius up to 256 blocks \(may find wood\)$/)
   })
 
   it('256-cap give-up asks for logs at the park fork (tick loop to the round cap)', async () => {

@@ -7,7 +7,7 @@
   {"tick":0,"kind":"step","value":"castle"},
   {"tick":0,"kind":"stepPick","value":"{\"at\":1000000030000,\"source\":\"goal-fsm\",\"step\":\"castle\",\"why\":\"flip\"}"},
   {"tick":0,"kind":"step","value":"castlefetch"},
-  {"tick":0,"kind":"chat","text":"build castle: castlefetch running, no progress — castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word or blocked with its kind short and time i…"},
+  {"tick":0,"kind":"chat","text":"build castle: castlefetch running, no progress — fetch castle material from the castle chest, craft it, or dig stone and chop logs (+castle material)"},
   {"tick":0,"kind":"stepPick","value":"{\"at\":1700000000000,\"fsm\":\"castlefetch\",\"source\":\"task-plan\",\"step\":\"castlefetch\",\"why\":\"task-plan\"}"}
  ]
 }

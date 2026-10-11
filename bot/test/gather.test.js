@@ -390,6 +390,7 @@ describe('gather step', () => {
     // (vmzq.66) only the 96 probe reads loaded, so only ring 70 ran — the
     // line names the 96 actually searched, not 48, and the banned near log.
     assert.deepEqual(bot.lines, ['no trees within 96 of here (1 near one unusable)'])
+    assert.equal(ctx.gather.farRadius, 96, 'the narration echoes this radius')
   })
 
   it('(vmzq.66) empty 48 and empty 96/160 shells chat the searched radius, not 48', () => {
@@ -401,6 +402,7 @@ describe('gather step', () => {
     for (let i = 0; i < 120 && !(ctx.gather && ctx.gather.final); i++) gather(bot, ctx, null, {})
     assert.equal(ctx.stepStatus, 'failed:no-trees')
     assert.deepEqual(bot.lines, ['no trees within 160 of here'])
+    assert.equal(ctx.gather.farRadius, 160, 'the narration echoes this radius')
   })
 
   it('(vmzq.66) unusable near trees are counted in the give-up line', () => {
