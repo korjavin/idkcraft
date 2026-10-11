@@ -458,7 +458,10 @@ function findNearest(bot, blockName, refY = null, exclude = null) {
   return wrapResult(bot, blockName, p)
 }
 
-function makeScout(bot, { everyMs = 5000, radius = 16, say = bot.chat, now = () => Date.now(), maxSeen = 5000, ctx = null } = {}) {
+// Transparency (vmzq.66): scout sightings are console-only — say defaults
+// to a no-op, so only an explicit say reaches chat. Chat narrates the
+// bot's own attempts, plans and outcomes, never what it sees.
+function makeScout(bot, { everyMs = 5000, radius = 16, say = () => {}, now = () => Date.now(), maxSeen = 5000, ctx = null } = {}) {
   const oreIds = resolveIds(bot, ORE_NAMES)
   const coalIds = resolveIds(bot, COAL_NAMES)
   const seen = new Set()

@@ -25,7 +25,7 @@
 
 const metrics = require('./metrics')
 const { CHAT_LIMIT } = require('./commands')
-const { orderStamp, carryOrderStamp } = require('./step') // oqul.11: moved for home.js
+const { orderStamp, carryOrderStamp, chatStep, failReason } = require('./step') // oqul.11: moved for home.js
 
 const TASK_STALL_L1_MS = 15 * 60 * 1000
 const TASK_STALL_L2_MS = 45 * 60 * 1000
@@ -545,9 +545,21 @@ function chatClipped(prefix, suffix, diagnosis) {
   return (prefix + clipped + suffix).slice(0, TASK_PARK_DIAG_MAX)
 }
 
-function chatL2(kind, done, total, diagnosis) {
+function chatL2(kind, done, total, diagnosis, ask = false) {
   const resume = kind === 'castle' ? 'say castle go to resume' : 'say go work to resume'
-  return chatClipped(`${kind} parked at ${done}/${total} after 45 min without progress — `, `; ${resume}`, diagnosis)
+  // (vmzq.66) a stranded house park asks for what unblocks it — logs, or stop.
+  const suffix = ask ? `; ${resume} — drop me some logs or say stop` : `; ${resume}`
+  return chatClipped(`${kind} parked at ${done}/${total} after 45 min without progress — `, suffix, diagnosis)
+}
+
+// Stranded wood at the park fork (vmzq.66): gather's staged search came
+// back empty at the current log count — the owner can unblock with logs.
+function woodStranded(ctx) {
+  try {
+    return !!require('./behaviours/explore').woodStranded(ctx)
+  } catch (_) {
+    return false
+  }
 }
 
 function chatL3(kind, diagnosis) {
@@ -660,7 +672,8 @@ function parkTask(bot, ctx, kind, done, total, now) {
       console.log(`task ${kind} ${done}/${total} parked #${n}${latched ? ' latched' : ''} why=${diagnosis}`)
     } catch (_) { /* log best-effort */ }
     try {
-      bot.chat(latched ? chatL3(kind, diagnosis) : chatL2(kind, done, total, diagnosis))
+      const ask = !latched && kind === 'house' && ownerOnline(bot) && woodStranded(ctx)
+      bot.chat(latched ? chatL3(kind, diagnosis) : chatL2(kind, done, total, diagnosis, ask))
     } catch (_) { /* chat best-effort */ }
     try {
       metrics.taskStallTotal.inc({ task: kind, level: 'L2' })
@@ -1538,6 +1551,62 @@ function commitDelta(bot, ctx, kind, c) {
   return '?'
 }
 
+// Watchdog commit narration (vmzq.66): one chat line per commit — the
+// goal, the shortest true phrase for the stall, and the option's
+// criterion head (up to ';'). chatStep dedups repeats (10 s); the
+// watchdog fires at most every GOAL_WATCHDOG_MS, so no spam. Park and
+// ask-owner are forks, not commits — their lines stay where they are.
+function commitGoalWord(kind, ctx) {
+  if (kind === 'castle') return 'build castle'
+  if (kind === 'house') return 'build home'
+  try {
+    return goalTextFor(kind, ctx) || kind
+  } catch (_) {
+    return kind
+  }
+}
+
+function commitReason(ctx) {
+  const step = (ctx && ctx.step) || 'none'
+  const status = (ctx && ctx.stepStatus) || ''
+  const reason = failReason(status)
+  if (reason !== null && reason !== '') {
+    // The stranded-wood stall names the radius gather actually searched
+    // (failFinal stores it); any other failure names step and reason.
+    if (reason === 'no-trees') {
+      const r = ctx && ctx.gather && ctx.gather.farRadius
+      return typeof r === 'number' ? `no wood within ${r}` : 'no wood found nearby'
+    }
+    return `${step} failed (${reason})`
+  }
+  return `${step} ${status || 'running'}, no progress`
+}
+
+function commitHead(bot, ctx, kind, optionId, step) {
+  if (optionId === 'planb-relocate') return 'step aside, then re-ask'
+  try {
+    const { goalOptions } = require('./goal-options')
+    const opt = goalOptions(bot, ctx, kind).find((o) => o && o.id === optionId)
+    let text = opt && typeof opt.criterion === 'string' ? opt.criterion : ''
+    if (text) {
+      // Plain steps carry the STEP_CRITERIA 'trigger: action' shape —
+      // narrate the action, not the internal predicate. Far/bank
+      // criteria are plain prose without a colon and ride whole.
+      const cut = text.indexOf(': ')
+      if (cut !== -1 && cut < (text.indexOf('(') + 1 || Infinity)) text = text.slice(cut + 2)
+      return text.split(';')[0].trim()
+    }
+  } catch (_) { /* head best-effort */ }
+  return step ? `retry ${step}` : String(optionId || 'unknown')
+}
+
+function commitChatLine(bot, ctx, kind, optionId, step) {
+  const word = commitGoalWord(kind, ctx)
+  const reason = commitReason(ctx)
+  const head = commitHead(bot, ctx, kind, optionId, step)
+  return chatClipped(`${word}: `, '', `${reason} — ${head}`)
+}
+
 // Apply a watchdog choice as a bounded commitment window (GOAL_COMMIT_MS).
 // decide() honours it (safety-first) for work goals; order goals read the
 // unlock via goalUnlock in their dispatch/search policy. taskTick pauses,
@@ -1555,6 +1624,10 @@ function applyCommit(bot, ctx, kind, optionId, step, now, unlock = null) {
       snapshot: commitSnapshot(bot, ctx, kind),
       unlock: unlock && typeof unlock === 'object' ? { ...unlock } : null,
     }
+    try {
+      const line = commitChatLine(bot, ctx, kind, optionId, step)
+      if (line) chatStep(bot, ctx, line)
+    } catch (_) { /* narration never breaks the commit */ }
     return true
   } catch (_) {
     return false

@@ -2610,7 +2610,8 @@ describe('scout seam', () => {
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     assert.equal(bot.findCalls, 1)
-    assert.deepEqual(bot.lines, ['iron_ore x1 at 4 60 1'])
+    // (vmzq.66) the scan still runs; the sighting stays off chat.
+    assert.deepEqual(bot.lines, [])
   })
 
   it('never scans or chats when no player is online', async () => {
@@ -2649,7 +2650,8 @@ describe('paused stop', () => {
     assert.equal(bot.calls.setGoal, 1)
     assert.equal(brain.calls, 1)
     assert.equal(bot.findCalls, 1)
-    assert.deepEqual(bot.lines, ['iron_ore x1 at 4 60 1'])
+    // (vmzq.66) the scan still runs; the sighting stays off chat.
+    assert.deepEqual(bot.lines, [])
     // chat 'stop': clear the follow lock and park (moving, so the park stops once)
     bot.pathfinder.isMoving = () => true
     ticker.setFollow('')
@@ -2682,7 +2684,9 @@ describe('paused stop', () => {
     assert.deepEqual(r3.decision, { action: 'idle', sprint: false, source: 'local-idle' })
     assert.ok(lines.every((l) => !l.includes('action=follow')), 'no follow decision while parked')
     assert.ok(bot.findCalls > 1, 'scout keeps scanning while parked')
-    assert.ok(bot.lines.some((l) => l.includes('9 60 2')), 'scout reports new veins while parked')
+    // (vmzq.66) the scan still runs; the sighting lands on the console, never chat.
+    assert.ok(bot.lines.every((l) => !l.includes('9 60 2')), 'scout stays silent while parked')
+    assert.ok(lines.some((l) => l.includes('scout iron_ore x1 at 9 60 2')), 'scout logs new veins while parked')
     // chat 'follow me': resume
     ticker.setFollow('Steve')
     lines.length = 0

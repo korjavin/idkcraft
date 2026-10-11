@@ -1091,7 +1091,7 @@ describe('vmzq.65: stranded-wood walk-out for a build order', () => {
       assert.ok(!statuses.includes('failed:unreachable'), `statuses: ${[...new Set(statuses)].join(',')}`)
       assert.ok(!bot.lines.some((l) => l === 'cannot reach the trees'), `chat: ${bot.lines.join(' | ')}`)
       // Bot-own evidence per transition, not the mark lines themselves.
-      assert.ok(bot.lines.includes('no trees within 48 blocks'), `give-up chat: ${bot.lines.join(' | ')}`)
+      assert.ok(bot.lines.includes('no trees within 160 of here'), `give-up chat: ${bot.lines.join(' | ')}`)
       assert.ok(cap.lines.some((l) => l.includes('choice=explore-far') && l.includes('source=fallback')), 'fallback watchdog line')
       assert.ok(bot.lines.some((l) => /^going for oak_log, \d+ blocks away$/.test(l)), `far commit chat: ${bot.lines.join(' | ')}`)
     } finally {
