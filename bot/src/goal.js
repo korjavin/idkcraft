@@ -53,6 +53,19 @@ function woodCapped(bot, ctx) {
   }
 }
 
+// Unbuilt house site (idkcraft-vmzq.65): the build order the stranded
+// walk-out serves — player-set (`build here`) or self-chosen alike.
+// Strict built===false like explore's taskActive: anchor-only fixtures
+// (built undefined) stay unbound.
+function houseSiteActive(ctx) {
+  try {
+    const home = ctx && ctx.home
+    return !!(home && home.site && typeof home.site.x === 'number' && home.built === false)
+  } catch (_) {
+    return false
+  }
+}
+
 // Step menu: feasible(facts, bot, ctx) means the step can make progress NOW
 // (not just ever). Most steps read facts only; build also scans the home
 // site through the bot. Registration (BEHAVIOURS[name]) is checked
@@ -466,7 +479,9 @@ const MENU = {
     // failed-holding gather on an alone day opens the home-anchored bounded
     // spiral, so the menu moves the bot to new ground instead of idling
     // where gather died. Night pre-house never wanders, and neither does a
-    // bot with anyone online (p4s: stay with the player, the owner sees).
+    // bot with anyone online (p4s: stay with the player, the owner sees) —
+    // except for a build order (vmzq.65): with an unbuilt house site the
+    // stranded walk-out runs with people online, owner-approved.
     // A blocked castle vetoes the built-home search by day (g0z.23); the
     // pre-house stranded branch below stays. A parked task vetoes the
     // built-home search (vmzq.3: the parked wander is the failure to
@@ -474,7 +489,7 @@ const MENU = {
     feasible: (facts, bot, ctx) => {
       if (facts.home === 'built') return !castleBlocked(facts) && !taskParked(ctx)
       if (facts.time !== 'day') return false
-      if (facts.player !== 'none') return false
+      if (facts.player !== 'none' && !houseSiteActive(ctx)) return false
       // The stranded branch is the only release for a no-trees hold (gyw),
       // so an owner castle stop — no timer, never auto-resumes — must not
       // veto it (R2). Only the timer-bounded house park does.

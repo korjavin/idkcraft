@@ -881,7 +881,8 @@
       "src/behaviours/gather.js",
       "src/index.js"
     ],
-    "owner": "src/behaviours/gather.js"
+    "owner": "src/behaviours/gather.js",
+    "note": "farEmpty (vmzq.65): the staged far search came back empty at the current log count — set in failFinal, cleared by the world-changed reset, kept across the gyw relocation release. Nested; the scan only sees the top-level field."
   },
   "gear": {
     "writers": [
