@@ -27,7 +27,7 @@ describe('work-rig.sh validation', () => {
       [{ WORK_TICKRATE: 'fast' }, [], /tickrate: want an integer 1\.\.100/],
       [{ WORK_TICKRATE: '200' }, [], /tickrate: want an integer 1\.\.100/],
       [{ WORK_KIT: 'full' }, [], /WORK_KIT: want empty\|chest\|seeded/],
-      [{ RIG_PLANNER: 'laya' }, [], /RIG_PLANNER: want jev\|stub/],
+      [{ RIG_PLANNER: 'bogus' }, [], /RIG_PLANNER: want jev\|laya\|stub/],
       [{ WORK_MAX_MEMORY: 'huge' }, [], /memory: want/],
       [{ WORK_RIG_ID: 'abc' }, [], /must be one letter/],
     ]) {

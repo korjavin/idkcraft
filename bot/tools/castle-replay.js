@@ -24,7 +24,7 @@
 //   CASTLE_MINS (30), CASTLE_PAD ("300,300"), CASTLE_PADSPOT ("x,z", pins the
 //   pad probe pick — controlled pairs set it on both legs), CASTLE_OUT (json path),
 //   CASTLE_LOG (full log path; stdout keeps goal/need/blocked/death lines).
-//   RIG_PLANNER (jev|llm|stub, default jev), TYPESAFE_API_KEY (jev bearer),
+//   RIG_PLANNER (jev|laya|llm|stub, default jev), TYPESAFE_API_KEY (jev bearer),
 //   ANTHROPIC_API_KEY (llm, vhlb.2).
 //   CASTLE_NIGHT (1 = night mode, set by castle-rig.sh --night: the
 //   wrapper skips the day lock, createNightDriver runs the nights).
@@ -706,13 +706,17 @@ async function main() {
     if (!key) fail('planner-key', 'RIG_PLANNER=jev needs TYPESAFE_API_KEY (stash secrets/jev-api-key)')
     brain = brainMod.hybridBrain(brainMod.jevBrain(key, undefined, brainMod.brainTimeoutMs(process.env), brainMod.JEV_ENDPOINT))
     brainEngine = 'jev'
+  } else if (PLANNER === 'laya') { // idkcraft-vhlb.1: laya sidecar, tick asks only (no key = no JEV planner), prod's 3 s deadline
+    const url = process.env.REPLAY_BRAIN_URL || 'http://localhost:8000/v1/systemone'
+    brain = brainMod.hybridBrain(brainMod.jevBrain(undefined, undefined, parseInt(process.env.REPLAY_BRAIN_TIMEOUT_MS || '3000', 10), url))
+    brainEngine = 'laya'
   } else if (PLANNER === 'llm') {
     // vhlb.2: stub tick brain + the LLM stall planner (ANTHROPIC_API_KEY,
     // never printed); withPlanner refuses nothing, so check the key here.
     if (!process.env.ANTHROPIC_API_KEY) fail('planner-key', 'RIG_PLANNER=llm needs ANTHROPIC_API_KEY (stash secrets/minecraft/anthropic-api-key)')
     brain = brainMod.withPlanner(brainMod.stubBrain, { ...process.env, PLANNER: 'llm' })
   } else if (PLANNER !== 'stub') {
-    fail('planner', `RIG_PLANNER: want jev|llm|stub, got ${JSON.stringify(PLANNER)}`)
+    fail('planner', `RIG_PLANNER: want jev|laya|llm|stub, got ${JSON.stringify(PLANNER)}`)
   }
   origLog(`CASTLE-RIG planner=${PLANNER}`)
 
