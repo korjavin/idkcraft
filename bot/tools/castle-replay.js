@@ -696,6 +696,9 @@ async function main() {
   let brainEngine = ''
   if (SEED && SEED !== 'complete') fail('seed', `CASTLE_SEED: want ''|complete, got ${JSON.stringify(SEED)}`)
   if (IDLE && SEED !== 'complete') fail('idle', 'CASTLE_IDLE=1 needs CASTLE_SEED=complete (castle-rig.sh sets it)')
+  // vhlb.2: only the llm leg may reach the LLM planner — an operator
+  // shell key would otherwise re-attach it on the autonomous step-down.
+  if (PLANNER !== 'llm') delete process.env.ANTHROPIC_API_KEY
   if (PLANNER === 'jev') {
     const key = process.env.TYPESAFE_API_KEY
     // Loud, never silent: a jev run without a key would measure the stub

@@ -283,7 +283,8 @@ function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MO
 // Planner selection (vhlb.2): PLANNER=llm|jev; default llm when
 // ANTHROPIC_API_KEY exists, else jev (which already rides every
 // TYPESAFE-keyed brain). Only the llm choice changes a brain: no
-// ANTHROPIC_API_KEY (prod today) returns the brain untouched.
+// ANTHROPIC_API_KEY (prod today) returns the brain untouched, and so does a
+// brain marked planner 'none' (the manual 'brain off': no paid calls).
 function plannerChoice(env) {
   const e = env || {}
   if (!e.ANTHROPIC_API_KEY) return 'jev'
@@ -291,7 +292,7 @@ function plannerChoice(env) {
 }
 
 function withPlanner(brain, env = process.env, fetchFn) {
-  if (!brain || plannerChoice(env) !== 'llm') return brain
+  if (!brain || brain.planner === 'none' || plannerChoice(env) !== 'llm') return brain
   return { ...brain, planner: 'llm', ...llmPlanner(env.ANTHROPIC_API_KEY, fetchFn, PLAN_TIMEOUT_MS, env.LLM_MODEL || LLM_MODEL) }
 }
 

@@ -172,6 +172,7 @@ async function main() {
   const brainMod = require('../src/brain')
   let brain = brainMod.stubBrain
   let brainEngine = ''
+  delete process.env.ANTHROPIC_API_KEY // vhlb.2: jev|stub legs never reach the LLM planner
   if (PLANNER === 'jev') {
     const key = process.env.TYPESAFE_API_KEY
     if (!key) fail('planner-key', 'RIG_PLANNER=jev needs TYPESAFE_API_KEY (stash secrets/jev-api-key)')

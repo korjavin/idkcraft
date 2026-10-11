@@ -411,7 +411,8 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       }
       const from = ticker.getBrainEngine()
       const url = arg === 'laya' ? (layaUrl() || LAYA_URL_DEFAULT) : JEV_ENDPOINT
-      const next = arg === 'off' ? stubBrain : hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
+      // Manual off = FSM only, the LLM stall planner included (vhlb.2).
+      const next = arg === 'off' ? { ...stubBrain, planner: 'none' } : hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
       ticker.setBrain(next, arg)
       if (bot._tickerCtx) bot._tickerCtx.manualBrain = arg
       bot.chat(`brain: ${arg}`)
