@@ -18,6 +18,7 @@ const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
 const home = require('../src/behaviours/home')
 const castle = require('../src/behaviours/castle')
+const recover = require('../src/behaviours/recover')
 const body = require('../src/body')
 const goal = require('../src/goal')
 const { fleeReflex } = require('../src/reflexes')
@@ -137,6 +138,19 @@ describe('vmzq.30 shelter digs in on any pillar failure', () => {
     assert.equal(Math.floor(bot.entity.position.y), 61, 'three deep')
     assert.ok(logs.some((m) => m.includes('shelter pillar failed:place-error err=refused, digging in')), JSON.stringify(logs))
     assert.ok(!logs.some((m) => m.includes('holding on the ground')), 'no open-ground hold')
+  })
+  it('place-protected (yard ring veto) bans the pillar like place-error (g0z.53)', async () => {
+    const bot = flatBot({ x: 291.5, y: 64, z: 185.5 }, { items: [{ name: 'dirt', count: 12 }] })
+    const ctx = {
+      home: v2home({ x: -48, y: 65, z: -208 }),
+      step: 'shelter',
+      stepStatus: 'running',
+      recovery: { action: 'pillar_up', status: 'failed:place-protected', st: {} },
+    }
+    await quiet(async () => {
+      for (let t = 0; t < 3; t++) { home.shelter(bot, ctx, null, null); await flush() }
+    })
+    assert.equal(recover.recoverBanned(ctx, 'pillar_up'), true)
   })
 })
 

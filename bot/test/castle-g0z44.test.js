@@ -100,6 +100,17 @@ describe('g0z.44 fence band: within 1 of the ring line, dy 0..3', () => {
     assert.deepEqual(blueprint.ownBandCells(new Set(), st), [])
     assert.deepEqual(blueprint.ownBandCells(placed, {}), [])
   })
+  it('ownBandCells: scaffold in a decor cell shows, laid decor does not (g0z.53)', () => {
+    const bandK = new Set(blueprint.fenceBandCells(st).map((c) => key(c.x, c.y, c.z)))
+    const dc = blueprint.decorPlan(SITE, 0, 2).cells.find((c) => bandK.has(key(c.x, c.y, c.z)))
+    const k = key(dc.x, dc.y, dc.z)
+    const placed = new Set([k])
+    const got = (names) => blueprint.ownBandCells(placed, st, names).map((c) => key(c.x, c.y, c.z))
+    assert.deepEqual(got(undefined), [], 'no recorded name: trusted as decor')
+    assert.deepEqual(got(new Map([[k, 'dirt']])), [k], 'scaffold in the decor cell')
+    const laid = ['oak_fence', 'cobblestone_wall', 'stone_brick_wall', 'dirt'].find((n) => blueprint.matches(dc.kind, n))
+    assert.deepEqual(got(new Map([[k, laid]])), [], `laid ${laid} stays hidden`)
+  })
 })
 
 describe('g0z.44 guardCastle: the ring vetoes places and yard digs', () => {
@@ -287,6 +298,16 @@ describe('g0z.44 post-complete band sweep', () => {
       assert.equal(c.idx, 2100000 + ((dx + 1) * (d + 2) + (dz + 1)) * 40 + dy, 'the band idx shape')
     }
     assert.ok(ctx.castleLitter.key.includes('v2'), `blueprint in the cache key: ${ctx.castleLitter.key}`)
+  })
+  it('litterTargets: a cached band entry a player replaced is dropped (g0z.53)', () => {
+    const cells = painted()
+    cells.set(key(99, 64, 200), 'dirt')
+    const bot = worldBot(cells)
+    const ctx = { castle: st2(), placedByBot: new Set([key(99, 64, 200)]), placedNames: new Map([[key(99, 64, 200), 'dirt']]) }
+    const now = Date.now()
+    assert.equal(castle.litterTargets(bot, ctx, ctx.castle, now).length, 1)
+    cells.set(key(99, 64, 200), 'stone') // a player swapped it inside the 30 s window
+    assert.equal(castle.litterTargets(bot, ctx, ctx.castle, now + 1000).length, 0)
   })
   it('band idx are unique across the band', () => {
     const cells = painted()
