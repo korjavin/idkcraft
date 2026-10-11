@@ -454,12 +454,14 @@ function createResidenceNights({ deaths, log }) {
 // bot goes with a complete castle, nobody online, no order. Tracks max XZ
 // distance from home.site (explore.anchorOf's home anchor), min feet y and
 // seconds spent below home.y - 20. Pass: maxdist <= 200 (owner 2026-10-11:
-// distance does not matter), the bot ends within the home envelope
-// (IDLE_HOME = 64 + 16, the alone leash plus a margin: it came back), miny >= resources.surfaceFloor (the gather/explore
+// distance does not matter), the bot was within the home envelope
+// (IDLE_HOME = 64 + 16, the alone leash plus a margin) in the last 5 min
+// of samples (a forage trip in flight at the cutoff is fine), miny >= resources.surfaceFloor (the gather/explore
 // depth floor, read from the bot's own code), 0 deaths, every closed
 // residence night PASS. Pure (unit-tested): t = window seconds.
 const IDLE_HOME = 64 + 16
 const IDLE_MAXDIST = 200
+const IDLE_HOME_WINDOW_S = 300
 const IDLE_UNDERGROUND_DY = 20
 const IDLE_RESPAWN_DIST = 225
 // Respawn point for the forced death: IDLE_RESPAWN_DIST from home toward
@@ -474,7 +476,7 @@ function idleRespawnPoint(home, spawn) {
 function createIdleTrack(home) {
   const h = home.site
   const floor = require('../src/resources').surfaceFloor({ home })
-  const st = { maxdist: 0, miny: null, undergroundS: 0, lastT: null, lastUnder: false, lastD: null, diedS: null, rehomeS: null, paused: false, yardLitter: null }
+  const st = { maxdist: 0, miny: null, undergroundS: 0, lastT: null, lastUnder: false, homeT: null, endT: null, diedS: null, rehomeS: null, paused: false, yardLitter: null }
   return {
     st,
     floor,
@@ -496,7 +498,8 @@ function createIdleTrack(home) {
         if (d > IDLE_HOME) return
         st.rehomeS = t
       }
-      st.lastD = d
+      st.endT = t
+      if (d <= IDLE_HOME) st.homeT = t
       if (d > st.maxdist) st.maxdist = d
       if (st.miny == null || p.y < st.miny) st.miny = p.y
       if (st.lastUnder && st.lastT != null) st.undergroundS += t - st.lastT
@@ -512,7 +515,7 @@ function createIdleTrack(home) {
     verdict(deaths, nights = []) {
       const why = []
       if (st.maxdist > IDLE_MAXDIST) why.push(`maxdist ${Math.round(st.maxdist)}>${IDLE_MAXDIST}`)
-      if (st.lastD != null && st.lastD > IDLE_HOME) why.push(`not home at the end (${Math.round(st.lastD)}>${IDLE_HOME})`)
+      if (st.endT != null && (st.homeT == null || st.endT - st.homeT > IDLE_HOME_WINDOW_S)) why.push('not home at the end')
       if (st.miny == null) why.push('no position samples')
       else if (Math.floor(st.miny) < floor) why.push(`miny ${Math.floor(st.miny)}<${floor}`)
       if (st.diedS != null && st.rehomeS == null) why.push('never back within the leash after the forced death')
