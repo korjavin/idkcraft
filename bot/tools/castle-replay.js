@@ -1530,6 +1530,26 @@ async function main() {
     if (n > 0) origLog(`CASTLE-RIG yard-litter: ${n} own blocks left in the fence band`)
     idle.setYardLitter(n)
   }
+  // Stairs facing (g0z.47): every v3 stairs cell read back via rcon — laid
+  // (any stair) vs laid with the plan facing, half bottom. Build runs only.
+  if (!SEED && !idle) {
+    const c = tickCtx()
+    const st = c && c.castle
+    if (st && st.site && st.blueprintVersion === 3) {
+      const blueprint = require('../src/castle')
+      let laid = 0
+      let ok = 0
+      for (const cell of blueprint.absPlan(st.site, st.rot, 3).cells.filter((o) => o.kind === 'stairs')) {
+        const at = `${cell.x} ${cell.y} ${cell.z}`
+        const any = await rcon(`execute if block ${at} #minecraft:stairs`).catch((e) => `error ${e.message}`)
+        if (!/Test passed/.test(any)) continue
+        laid++
+        const right = await rcon(`execute if block ${at} minecraft:cobblestone_stairs[facing=${blueprint.faceName(cell.face)},half=bottom]`).catch((e) => `error ${e.message}`)
+        if (/Test passed/.test(right)) ok++
+      }
+      origLog(`CASTLE-RIG stairs: laid=${laid} facing-ok=${ok}`)
+    }
+  }
   // Panes (g0z.38): decor pane cells of the seeded castle reading
   // *glass_pane on the follower (unloaded cells are counted apart).
   // Upper fence (g0z.45): the same for the second fence row.
