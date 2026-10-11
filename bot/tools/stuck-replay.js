@@ -470,7 +470,12 @@ function pickBrain() {
       },
     }
   }
-  throw new Error(`REPLAY_BRAIN: want stub|laya, got ${JSON.stringify(which)}`)
+  if (which === 'jev') { // idkcraft-vhlb.1: the real JEV, key from TYPESAFE_API_KEY (never printed)
+    const key = process.env.TYPESAFE_API_KEY
+    if (!key) throw new Error('REPLAY_BRAIN=jev needs TYPESAFE_API_KEY')
+    return { label: 'jev', make: () => { const b = require('../src/brain'); return b.hybridBrain(b.jevBrain(key, undefined, b.brainTimeoutMs(process.env), b.JEV_ENDPOINT)) } }
+  }
+  throw new Error(`REPLAY_BRAIN: want stub|laya|jev, got ${JSON.stringify(which)}`)
 }
 
 function waitFor(em, ev, ms, what) {

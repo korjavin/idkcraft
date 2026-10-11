@@ -142,7 +142,7 @@ TICKRATE="${CASTLE_TICKRATE:-1}"
 case "$TICKRATE" in ''|*[!0-9]*) echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2 ;; esac
 { [ "$TICKRATE" -ge 1 ] && [ "$TICKRATE" -le 100 ]; } || { echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2; }
 RIG_PLANNER="${RIG_PLANNER:-jev}"
-case "$RIG_PLANNER" in jev|stub) ;; *) echo "RIG_PLANNER: want jev|stub, got '$RIG_PLANNER'"; exit 2 ;; esac
+case "$RIG_PLANNER" in jev|laya|stub) ;; *) echo "RIG_PLANNER: want jev|laya|stub, got '$RIG_PLANNER'"; exit 2 ;; esac
 export RIG_PLANNER
 if [ "$RIG_PLANNER" = jev ] && [ -z "${TYPESAFE_API_KEY:-}" ] && [ -x "$HOME/.local/bin/kv" ]; then
   # Stash fallback (idkcraft-vmzq.23): the key travels as env only — this
