@@ -114,6 +114,9 @@ services:
       GOAL_WATCHDOG_MAX_ROUNDS: ${GOAL_WATCHDOG_MAX_ROUNDS:-6}
       GOAL_TRAVEL_GRACE_MS: ${GOAL_TRAVEL_GRACE_MS:-90000}
       GOAL_PLANB_SWITCH_MS: ${GOAL_PLANB_SWITCH_MS:-450000}
+      WORKER_NAME: ${WORKER_NAME:-}
+      WORKER_HOST: ${WORKER_HOST:-baritone}
+      WORKER_PORT: ${WORKER_PORT:-7777}
     labels:
       prometheus.scrape: "true"
       prometheus.port: "9464"
@@ -157,6 +160,28 @@ services:
       timeout: 5s
       start_period: 120s
       retries: 10
+
+  baritone:
+    # Built by CI from ./baritone and pushed to GHCR.
+    # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
+    image: ghcr.io/korjavin/idkcraft-baritone:latest
+    container_name: ${BARITONE_CONTAINER_NAME:-idkcraft-baritone}
+    restart: unless-stopped
+    depends_on:
+      mc:
+        condition: service_healthy
+    # No ports: the write-only bridge is reachable only on the compose
+    # network (the bot's worker.js); the rig publishes it for ab.js.
+    # No healthcheck: default-off (no account) sleeps, which is not unhealthy.
+    mem_limit: ${BARITONE_MEM_LIMIT:-2500m}
+    volumes:
+      # One-time owner login (baritone/README.md): the account survives
+      # redeploys here. FIXED name — see the volumes block below.
+      - baritone-auth:/headlessmc/HeadlessMC/auth
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
 # Host monitoring stack (korjavin/monitoring-compose): its vmagent
 # discovers containers labelled prometheus.scrape=true, but can only reach
 # them on a network it is attached to. Locally without that stack:
@@ -170,6 +195,13 @@ volumes:
   # Bot disk memory (idkcraft-hlk): homes, resource finds, explored chunks
   # and danger spots. Named volume, no host bind.
   bot-memory:
+  # Baritone worker auth (one-time owner login). FIXED name: Portainer
+  # prefixes anonymous volumes with the stack name, which would orphan the
+  # login on every stack rename — idkcraft-baritone-auth stays put whatever
+  # the stack is called. NOT external: a missing external volume would
+  # refuse the whole stack.
+  baritone-auth:
+    name: idkcraft-baritone-auth
 
 configs:
   # Inline patch definition (no bind mount: Portainer git stacks resolve

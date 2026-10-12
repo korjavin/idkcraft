@@ -1,12 +1,15 @@
-// Baritone A/B driver (idkcraft-vhlb.6): replays the stuck corpus follow spots
-// (the 16 secs<=90 the vhlb.1 A/B used) plus baritone/tasks.json against a
-// Baritone client on the rig, judged server-side over rcon. Run by run.sh.
-// Env: RIG_CONTAINER (rcon target), BOT (client player name), CHAT_FIFO (the
-// client's HeadlessMc console stdin), AB_OUT (json), AB_ONLY (comma list).
+// Baritone A/B driver (idkcraft-vhlb.6, bridge since jlda.1): replays the stuck
+// corpus follow spots (the 16 secs<=90 the vhlb.1 A/B used) plus
+// baritone/tasks.json against a Baritone client on the rig, judged
+// server-side over rcon. Run by run.sh.
+// Env: RIG_CONTAINER (rcon target), BOT (client player name),
+// BRIDGE_HOST/BRIDGE_PORT (the worker's write-only bridge, default
+// localhost:7777 = run.sh's rig publish), AB_OUT (json), AB_ONLY (comma list).
 // Kit, prep and the reach radius mirror bot/tools/stuck-replay.js so the rows
 // sit next to its last-replay.json; stuck/eps/call are mineflayer-internal
 // counters, so here `stuck` = longest stretch (s) without 0.3 blocks of motion.
 const fs = require('node:fs')
+const net = require('node:net')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
 
@@ -48,13 +51,28 @@ function loadSpots(corpusFile, tasksFile, only) {
   return only ? all.filter((s) => only.includes(s.name)) : all
 }
 
-function main() {
+// Write one console line to the worker's bridge (start.sh socat -> HMC console
+// FIFO). One TCP connection per line; never reads a reply (write-only bridge,
+// see the jlda epic). Rejects on connect/write/timeout.
+function sendBridgeLine({ host, port, line, timeoutMs = 5000 }) {
+  return new Promise((resolve, reject) => {
+    let done = false
+    const sock = net.connect({ host, port })
+    const fail = (err) => { if (!done) { done = true; sock.destroy(); reject(err) } }
+    const ok = () => { if (!done) { done = true; sock.destroy(); resolve() } }
+    sock.setTimeout(timeoutMs, () => fail(new Error(`bridge ${host}:${port} timeout (${timeoutMs} ms)`)))
+    sock.on('error', fail)
+    sock.on('connect', () => sock.end(`${line}\n`, ok))
+  })
+}
+
+async function main() {
   const C = process.env.RIG_CONTAINER || 'idk-replay-z'
   const BOT = process.env.BOT
-  const FIFO = process.env.CHAT_FIFO
-  if (!BOT || !FIFO) throw new Error('BOT and CHAT_FIFO are required (run via run.sh)')
+  if (!BOT) throw new Error('BOT is required (run via run.sh)')
+  const BRIDGE = { host: process.env.BRIDGE_HOST || 'localhost', port: +(process.env.BRIDGE_PORT || 7777) }
   const rcon = (cmd) => execFileSync('docker', ['exec', C, 'rcon-cli', cmd], { encoding: 'utf8' })
-  const chat = (msg) => fs.appendFileSync(FIFO, `msg ${msg}\n`) // hmc-specifics sends quotes literally
+  const chat = (msg) => sendBridgeLine({ ...BRIDGE, line: `msg ${msg}` }) // hmc-specifics sends quotes literally
   const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
   const pos = () => parsePos(rcon(`data get entity ${BOT} Pos`))
   const only = process.env.AB_ONLY ? process.env.AB_ONLY.split(',') : null
@@ -62,7 +80,7 @@ function main() {
   const rows = []
   console.log('spot              reached  stuck  secs   minDist  note')
   for (const s of spots) {
-    chat('#stop')
+    await chat('#stop')
     for (const cmd of s.prep) rcon(cmd)
     rcon(`tp ${BOT} ${s.spawn.join(' ')}`)
     rcon(`clear ${BOT}`)
@@ -71,7 +89,7 @@ function main() {
     if (s.bucket) { rcon(`give ${BOT} water_bucket 1`); rcon(`give ${BOT} water_bucket 1`) }
     for (const e of ['water_breathing', 'fire_resistance']) rcon(`effect give ${BOT} minecraft:${e} ${s.secs + 30}`)
     sleep(2000) // chunks in, client landed
-    chat(command(s))
+    await chat(command(s))
     const t0 = Date.now()
     let reached = false; let stuck = 0; let minDist = Infinity; let note = ''
     let still = pos(); let stillAt = t0
@@ -95,12 +113,12 @@ function main() {
     rows.push(row)
     console.log(`${s.name.padEnd(17)} ${String(reached).padEnd(8)} ${String(row.stuck).padEnd(6)} ${String(secs).padEnd(6)} ${String(row.minDist).padEnd(8)} ${note}`)
   }
-  chat('#stop')
+  await chat('#stop')
   const out = process.env.AB_OUT || '/private/tmp/baritone-ab.json'
   fs.writeFileSync(out, JSON.stringify({ engine: 'baritone-1.18.0', date: new Date().toISOString(), rows }, null, 1))
   const ok = rows.filter((r) => r.reached).length
   console.log(`baritone: ${ok}/${rows.length} reached, ${rows.reduce((a, r) => a + r.secs, 0)} s total -> ${out}`)
 }
 
-module.exports = { parsePos, parseCount, dist, reachedAt, command, loadSpots }
-if (require.main === module) main()
+module.exports = { parsePos, parseCount, dist, reachedAt, command, loadSpots, sendBridgeLine }
+if (require.main === module) main().catch((e) => { console.error(e); process.exit(1) })

@@ -60,17 +60,20 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # Tag each image by its directory TREE hash, so pushes that change
-      # neither bot/ nor laya/ rebuild nothing (host disk filled up from one
-      # image per push; Portainer never prunes old tags). Content-addressed:
-      # a revert or rebase reuses the existing image. A docs-only push still
-      # redeploys with the same tags — intended, no new image lands.
+      # neither bot/, laya/ nor baritone/ rebuild nothing (host disk filled
+      # up from one image per push; Portainer never prunes old tags).
+      # Content-addressed: a revert or rebase reuses the existing image.
+      # A docs-only push still redeploys with the same tags — intended,
+      # no new image lands.
       - name: Resolve image tags
         run: |
           BOT_SHA=$(git rev-parse HEAD:bot)
           LAYA_SHA=$(git rev-parse HEAD:laya)
-          [ -n "$BOT_SHA" ] && [ -n "$LAYA_SHA" ] || exit 1
+          BARITONE_SHA=$(git rev-parse HEAD:baritone)
+          [ -n "$BOT_SHA" ] && [ -n "$LAYA_SHA" ] && [ -n "$BARITONE_SHA" ] || exit 1
           echo "BOT_SHA=${BOT_SHA}" >> "$GITHUB_ENV"
           echo "LAYA_SHA=${LAYA_SHA}" >> "$GITHUB_ENV"
+          echo "BARITONE_SHA=${BARITONE_SHA}" >> "$GITHUB_ENV"
 
       - name: Check bot image
         id: check-bot
@@ -133,12 +136,37 @@ jobs:
         run: |
           docker push "${LAYA_IMAGE}:${LAYA_SHA}"
 
+      - name: Check baritone image
+        id: check-baritone
+        env:
+          BARITONE_IMAGE: ghcr.io/korjavin/idkcraft-baritone
+          BARITONE_SHA: ${{ env.BARITONE_SHA }}
+        run: |
+          if docker manifest inspect "${BARITONE_IMAGE}:${BARITONE_SHA}" >/dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The build downloads the vanilla client (~100 MB) — cached like laya.
+      - name: Build and push baritone image
+        if: steps.check-baritone.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./baritone
+          push: true
+          tags: ghcr.io/korjavin/idkcraft-baritone:${{ env.BARITONE_SHA }}
+          cache-from: type=gha,scope=baritone
+          cache-to: type=gha,mode=max,scope=baritone
+
       - name: Update deploy branch
         env:
           IMAGE_BASE: ghcr.io/korjavin/idkcraft
           LAYA_IMAGE: ghcr.io/korjavin/idkcraft-laya
+          BARITONE_IMAGE: ghcr.io/korjavin/idkcraft-baritone
           BOT_SHA: ${{ env.BOT_SHA }}
           LAYA_SHA: ${{ env.LAYA_SHA }}
+          BARITONE_SHA: ${{ env.BARITONE_SHA }}
           GITHUB_COMMIT_SHA: ${{ github.sha }}
         run: |
           git config user.name "github-actions[bot]"
@@ -146,7 +174,8 @@ jobs:
           git checkout -B deploy
           sed -i "s|image: ${IMAGE_BASE}:.*|image: ${IMAGE_BASE}:${BOT_SHA}|" docker-compose.yml
           sed -i "s|image: ${LAYA_IMAGE}:.*|image: ${LAYA_IMAGE}:${LAYA_SHA}|" docker-compose.yml
-          if ! grep -q "image: ${IMAGE_BASE}:${BOT_SHA}" docker-compose.yml || ! grep -q "image: ${LAYA_IMAGE}:${LAYA_SHA}" docker-compose.yml; then
+          sed -i "s|image: ${BARITONE_IMAGE}:.*|image: ${BARITONE_IMAGE}:${BARITONE_SHA}|" docker-compose.yml
+          if ! grep -q "image: ${IMAGE_BASE}:${BOT_SHA}" docker-compose.yml || ! grep -q "image: ${LAYA_IMAGE}:${LAYA_SHA}" docker-compose.yml || ! grep -q "image: ${BARITONE_IMAGE}:${BARITONE_SHA}" docker-compose.yml; then
             echo "compose image line not rewritten"
             exit 1
           fi

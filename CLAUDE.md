@@ -72,7 +72,7 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Architecture Overview
 
-Three containers in a single Docker Compose stack, deployed without Traefik (Minecraft uses raw TCP/UDP, no HTTP routing):
+Four containers in a single Docker Compose stack, deployed without Traefik (Minecraft uses raw TCP/UDP, no HTTP routing):
 
 ```
 +-------------------------------------------------------------+
@@ -91,16 +91,23 @@ Three containers in a single Docker Compose stack, deployed without Traefik (Min
 |  | CPU System-1 brain, JEV REST shape, port 8000       |    |
 |  | (internal only, no published ports)                 |    |
 |  +-----------------------------------------------------+    |
+|                                                             |
+|  +-----------------------------------------------------+    |
+|  | baritone                                            |    |
+|  | HeadlessMc + Baritone pilot fish, bridge :7777      |    |
+|  | (internal only, no published ports)                 |    |
+|  +-----------------------------------------------------+    |
 +-------------------------------------------------------------+
 ```
 
 Bot architecture follows "one body, many senses": local perception (`bot/src/perception.js`) gathers facts every tick, the brain arbitrates body ownership (`fight` | `follow` | `roam` | `idle`, or the work-mode goal arbiter `stay` | `gohome` | `shelter` | `craft` | `equip` | `build` | `gather` | `deliver` | `forage` | `explore` | `rest` when nobody is followed), and execution dispatches via `BEHAVIOURS` (`bot/src/behaviours/*.js`), while scouting runs alongside as a local reflex. Bot disk memory (homes, finds, chunks, danger) lives in `/app/memory/<BOT_USERNAME>.json` on the `bot-memory` named volume — do not rename the path or the volume.
 
 ### Shared Contract (do not rename)
-- **Services:** `mc`, `bot`, `laya`
+- **Services:** `mc`, `bot`, `laya`, `baritone`
 - **Compose file:** `docker-compose.yml` at repository root
 - **Bot build context:** `./bot`, `bot/Dockerfile`
 - **Image:** `ghcr.io/korjavin/idkcraft:latest` (CI rewrites the tag to the commit SHA on the `deploy` branch)
+- **Baritone auth volume:** `idkcraft-baritone-auth` (fixed name — the owner's one-time login targets it whatever the Portainer stack name is)
 - **Stack Environment Variables:**
   - `MC_VERSION`: Paper version pin
   - `MC_MEMORY`: RAM allocation (default `4G`)
@@ -127,6 +134,10 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `GOAL_WATCHDOG_MAX_ROUNDS`: Consecutive flat rounds before park/plan-B (default `6`)
   - `GOAL_TRAVEL_GRACE_MS`: Rate-limit floor for the castlefetch travel grace (default `90000`)
   - `GOAL_PLANB_SWITCH_MS`: Plan-B goal-switch duration in ms when nobody is online (default `450000`)
+  - `WORKER_NAME`: Baritone worker player name (default empty = worker off, zero behaviour diff)
+  - `WORKER_HOST`: Worker bridge host (default `baritone`)
+  - `WORKER_PORT`: Worker bridge port (default `7777`)
+  - `BARITONE_MEM_LIMIT`: Worker container memory cap (default `2500m`)
 
 ## Conventions
 
