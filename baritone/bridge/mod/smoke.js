@@ -44,6 +44,19 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+async function waitTerminal(notes, id, secs) {
+  for (let i = 0; i < secs; i++) {
+    await sleep(1000)
+    const ev = notes.find((n) => n.method === 'baritone.event' && n.params && n.params.id === id) || null
+    if (ev) return ev
+  }
+  return null
+}
+
+function resolved(notes, id) {
+  return notes.some((n) => n.method === 'baritone.event' && n.params && n.params.id === id)
+}
+
 async function main() {
   const spotsPath = path.join(__dirname, '..', '..', '..', 'bot', 'tools', 'stuck-spots.json')
   let spot
@@ -194,6 +207,56 @@ async function main() {
   console.log(`  baritone.event: ${JSON.stringify(ev.params)}`)
   if (ev.params.status !== 'success') fail('baritone.event', `want success, got ${ev.params.status}`)
   pass('baritone.event', `id=${ev.params.id} status=success`)
+
+  // 6b. Mid-walk #set (the neuc.4 lease case): a control mints a fresh id
+  // but leaves the goal armed — success still arrives under the GOAL id.
+  const back = await t.call('baritone.cmd', { command: `#goto ${sx} ${sy} ${sz}` })
+  if (!back || typeof back.id !== 'number' || back.id <= cmd.id) fail('midwalk.set', `bad reply: ${JSON.stringify(back)}`)
+  await sleep(3000)
+  const set = await t.call('baritone.cmd', { command: '#set echoCommands false' })
+  if (!set || typeof set.id !== 'number' || set.id <= back.id) fail('midwalk.set', `bad set reply: ${JSON.stringify(set)}`)
+  const bsSet = await t.call('baritone.status', {})
+  if (!bsSet || bsSet.id !== back.id) fail('midwalk.set', `#set re-armed the tracker: ${JSON.stringify(bsSet)}`)
+  const evSet = await waitTerminal(notes, back.id, 120)
+  if (!evSet) fail('midwalk.set', `no terminal event for id=${back.id} within 120 s`)
+  if (evSet.params.status !== 'success') fail('midwalk.set', `want success, got ${evSet.params.status}`)
+  if (resolved(notes, set.id)) fail('midwalk.set', `#set id=${set.id} resolved (controls never resolve)`)
+  await t.call('baritone.cmd', { command: '#set echoCommands true' }).catch(() => {})
+  pass('midwalk.set', `goal id=${back.id} success; set id=${set.id} silent`)
+
+  // 6c. Pause/resume (the revmux 01 scenario): the walk continues after the
+  // resume and success arrives under the GOAL id, not the resume's.
+  const pr = await t.call('baritone.cmd', { command: `#goto ${gx} ${gy} ${gz}` })
+  if (!pr || typeof pr.id !== 'number' || pr.id <= set.id) fail('midwalk.pause', `bad reply: ${JSON.stringify(pr)}`)
+  await sleep(2000)
+  const pau = await t.call('baritone.cmd', { command: '#pause' })
+  if (!pau || typeof pau.id !== 'number' || pau.id <= pr.id) fail('midwalk.pause', `bad pause reply: ${JSON.stringify(pau)}`)
+  await sleep(3000)
+  const rsm = await t.call('baritone.cmd', { command: '#resume' })
+  if (!rsm || typeof rsm.id !== 'number' || rsm.id <= pau.id) fail('midwalk.pause', `bad resume reply: ${JSON.stringify(rsm)}`)
+  const bsPr = await t.call('baritone.status', {})
+  if (!bsPr || bsPr.id !== pr.id) fail('midwalk.pause', `pause/resume re-armed the tracker: ${JSON.stringify(bsPr)}`)
+  const evPr = await waitTerminal(notes, pr.id, 120)
+  if (!evPr) fail('midwalk.pause', `no terminal event for id=${pr.id} within 120 s`)
+  if (evPr.params.status !== 'success') fail('midwalk.pause', `want success, got ${evPr.params.status}`)
+  if (resolved(notes, pau.id)) fail('midwalk.pause', `#pause id=${pau.id} resolved (controls never resolve)`)
+  if (resolved(notes, rsm.id)) fail('midwalk.pause', `#resume id=${rsm.id} resolved (controls never resolve)`)
+  pass('midwalk.pause', `goal id=${pr.id} success; pause id=${pau.id} resume id=${rsm.id} silent`)
+
+  // 6d. Mid-walk #stop: the TRACKED goal id resolves as stopped.
+  const stp = await t.call('baritone.cmd', { command: `#goto ${sx} ${sy} ${sz}` })
+  if (!stp || typeof stp.id !== 'number' || stp.id <= rsm.id) fail('midwalk.stop', `bad reply: ${JSON.stringify(stp)}`)
+  await sleep(3000)
+  const halt = await t.call('baritone.cmd', { command: '#stop' })
+  if (!halt || typeof halt.id !== 'number' || halt.id <= stp.id) fail('midwalk.stop', `bad stop reply: ${JSON.stringify(halt)}`)
+  const evStop = await waitTerminal(notes, stp.id, 15)
+  if (!evStop) fail('midwalk.stop', `no terminal event for id=${stp.id} within 15 s`)
+  if (evStop.params.status !== 'stopped') fail('midwalk.stop', `want stopped, got ${evStop.params.status}`)
+  const bsStop = await t.call('baritone.status', {})
+  if (!bsStop || bsStop.id !== stp.id) fail('midwalk.stop', `status id moved: ${JSON.stringify(bsStop)}`)
+  if (bsStop.pathing) fail('midwalk.stop', 'still pathing after stop')
+  if (resolved(notes, halt.id)) fail('midwalk.stop', `#stop id=${halt.id} resolved (controls never resolve)`)
+  pass('midwalk.stop', `goal id=${stp.id} stopped; stop id=${halt.id} silent`)
 
   const fin = await t.call('state.get', {})
   console.log(`  final pos: ${fin.pos.x.toFixed(1)} ${fin.pos.y.toFixed(1)} ${fin.pos.z.toFixed(1)}`)

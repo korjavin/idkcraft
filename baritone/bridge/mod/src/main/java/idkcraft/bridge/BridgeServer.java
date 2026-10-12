@@ -100,6 +100,8 @@ public final class BridgeServer {
     private volatile long tickCount = 0;
     private volatile long deadlineTick = 0;
     private volatile long cmdTick = 0;
+    /** Bridge-issued #pause outstanding (cleared by #resume/#stop/a goal). */
+    private volatile boolean pausedLocal = false;
     private volatile long lastSnapWarnTick = -100000;
 
     private record ChatLine(boolean playerChat, String sender, String text, boolean overlay) {
@@ -256,6 +258,12 @@ public final class BridgeServer {
         return res;
     }
 
+    /**
+     * Every accepted command mints a fresh id, but only a goal-issuing one
+     * re-arms the tracker (a changed custom goal, or a process takeover).
+     * Controls (#stop/#pause/#resume/#set/…) return their id and leave the
+     * live goal armed; their ids never resolve.
+     */
     private com.google.gson.JsonElement baritoneCmd(JsonObject params) throws Rpc.RpcException {
         String command = requiredString(params, "command");
         if (command.startsWith("#")) {
@@ -266,18 +274,34 @@ public final class BridgeServer {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "command is empty");
         }
         final String cmd = command;
-        Boolean ok = submit(() -> baritone.getCommandManager().execute(cmd));
-        if (ok == null) {
+        final String verb = GoalTracker.firstToken(cmd);
+        record Probe(boolean ok, Goal before, Goal after) {
+        }
+        Probe probe = submit(() -> {
+            Goal before = baritone.getCustomGoalProcess().mostRecentGoal();
+            boolean ok = baritone.getCommandManager().execute(cmd);
+            Goal after = ok ? baritone.getCustomGoalProcess().mostRecentGoal() : before;
+            return new Probe(ok, before, after);
+        });
+        if (probe == null) {
             throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
         }
-        if (!ok) {
+        if (!probe.ok()) {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "unknown baritone command: " + cmd);
         }
         long id = cmdSeq.incrementAndGet();
-        currentId = id;
-        terminalReceived = false;
-        cmdTick = tickCount;
-        deadlineTick = tickCount + GOAL_TIMEOUT_TICKS;
+        if (GoalTracker.rearmsTracker(probe.before(), probe.after(), verb)) {
+            currentId = id;
+            terminalReceived = false;
+            cmdTick = tickCount;
+            deadlineTick = tickCount + GOAL_TIMEOUT_TICKS;
+            pausedLocal = false;
+        } else {
+            Boolean paused = GoalTracker.pauseFlagFor(verb);
+            if (paused != null) {
+                pausedLocal = paused;
+            }
+        }
         JsonObject res = new JsonObject();
         res.addProperty("id", id);
         return res;
@@ -536,9 +560,19 @@ public final class BridgeServer {
         return "";
     }
 
-    /** Client thread only. No terminal event within the window → timeout. */
+    /**
+     * Client thread only. No terminal event within the window → timeout. A
+     * bridge-issued #pause freezes the watchdog: the 120 s budget bills
+     * walking time, not paused time.
+     */
     private void checkTimeout() {
-        if (currentId <= 0 || terminalReceived || tickCount < deadlineTick) {
+        GoalTracker.TimeoutDecision decision =
+                GoalTracker.timeoutDecision(currentId, terminalReceived, pausedLocal, tickCount, deadlineTick);
+        if (decision == GoalTracker.TimeoutDecision.FREEZE) {
+            deadlineTick = tickCount + GOAL_TIMEOUT_TICKS;
+            return;
+        }
+        if (decision == GoalTracker.TimeoutDecision.SILENT) {
             return;
         }
         terminalReceived = true;

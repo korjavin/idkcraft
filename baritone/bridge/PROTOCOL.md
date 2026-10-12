@@ -32,7 +32,7 @@ inside the same envelope — no second port.
 | `hello` | — | `{mod,v,mc,baritone}` | handshake (version gate) |
 | `state.get` | — | `{pos:{x,y,z,yaw,pitch,onGround,vel},health,food,oxygen,time,spawn,isRaining,isSleeping,dimension,gameMode}` (all null offline) | `entity/position/health/food`, `time`, `game`, `isRaining` |
 | `chat.send` | `{message}` (`/…` runs a command) | `{sent:true}` | `chat(msg)` |
-| `baritone.cmd` | `{command}` e.g. `#goto x y z` (`#` stripped) | `{id}` (fresh monotonic goal id) | `pathfinder.setGoal/stop` |
+| `baritone.cmd` | `{command}` e.g. `#goto x y z` (`#` stripped) | `{id}` (fresh id per cmd; goal cmds arm the tracker) | `pathfinder.setGoal/stop` |
 | `baritone.status` | — | `{id,pathing,last}` (`last`: `none` before any terminal) | `isMoving`, `path_update`/`path_reset` |
 | `entities.list` | — | `{entities:[…]}` (shape in the entities section below) | `bot.entities[id]` |
 | `roster.get` | — | `{players:[…]}` | `bot.players[name]` |
@@ -59,24 +59,29 @@ an error) so the adapter polls for `pos`.
 
 Goal ids (replaces the spike's witnessed-motion latch — revmux 01 core-3,
 02 core-1 — which re-issued `follow.js` every tick on synthesised
-terminals): every `baritone.cmd` mints a fresh monotonic id (from 1; 0 =
-no cmd yet), INCLUDING `#stop`/`#pause`/`#resume` — the id is per
-command, not per goal. Events and `status.id` carry the LATEST minted id
-only; a superseded goal receives NO terminal event (the adapter tracks
-its outstanding id and drops anything older). First terminal per id wins;
-later events for the same id drop. Mapping: `AT_GOAL`→`success`,
-`CALC_FAILED`→`noPath`, `CANCELED`→`success` when the feet stand in
-`mostRecentGoal` (Baritone cancels the segment as arrival cleanup, and
-`AT_GOAL` never fires then — incl. goto-where-you-stand), else swallowed
-within 10 ticks of the cmd (the superseded segment's cancel, mislabeled
-with the new id), else `stopped`. `NEXT_CALC_FAILED` and the other
-`PathEvent`s are lookahead chatter, never terminal. No terminal within
-120 s of the cmd → `{id,timeout}` plus a mod-issued `#stop` to halt the
-body. `#stop`'s own `CANCELED` resolves the STOP cmd's id as `stopped`
-(the killed goal's id dangles — the adapter resolves its outstanding
-goal locally on the ack); `#pause`/`#resume` emit nothing (fire-and-
-forget, their ids never resolve). A cmd issued at the menu resolves
-`stopped` on the next tick — no player to drive.
+terminals): every accepted `baritone.cmd` mints a fresh monotonic id
+(from 1; 0 = no cmd yet), but only a goal-issuing command re-arms the
+tracker: the custom goal changed across the execute (Baritone news a
+`Goal` per setGoal, so even a same-spot re-issue counts), or a process
+command (`follow/mine/build/explore/farm/elytra/getto`) took over.
+Controls (`#stop`/`#pause`/`#resume`/`#set`/…) return their id and leave
+the live goal armed; their ids never resolve. Events and `status.id`
+carry the TRACKED goal id; a superseded goal receives NO terminal event
+(the adapter binds the echoed goal id and drops anything else). First
+terminal per tracked id wins; later events for it drop. Mapping:
+`AT_GOAL`→`success`, `CALC_FAILED`→`noPath`, `CANCELED`→`success` when
+the feet stand in `mostRecentGoal` (Baritone cancels the segment as
+arrival cleanup, and `AT_GOAL` never fires then — incl.
+goto-where-you-stand), else swallowed within 10 ticks of the goal cmd
+(the superseded segment's cancel), else `stopped`. `NEXT_CALC_FAILED`
+and the other `PathEvent`s are lookahead chatter, never terminal. No
+terminal within 120 s of walking → `{id,timeout}` plus a mod-issued
+`#stop` to halt the body; a bridge-issued `#pause` freezes that budget
+(it bills walking time, not paused time) — a `#pause` typed in game
+chat still bills the goal, the mod only sees bridge traffic. `#stop`'s
+`CANCELED` resolves the TRACKED goal id as `stopped` (idle stops stay
+silent). A cmd issued at the menu resolves `stopped` on the next tick —
+no player to drive.
 
 ## Prod methods (sized, not in the spike)
 
