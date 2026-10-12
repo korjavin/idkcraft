@@ -1,7 +1,9 @@
-# idkcraft — Paper+Geyser server (mc) + follow bot (bot) + LAYA brain (laya).
+# idkcraft — Paper+Geyser server (mc) + follow bot (bot) + Baritone worker (baritone).
 # No Traefik: Minecraft is raw TCP/UDP, host ports are published directly.
-# Service names (mc, bot, laya) and bot env names are the shared contract
+# Service names (mc, bot, baritone) and bot env names are the shared contract
 # with the bot bead (bot/**) — do not rename.
+# (The laya System-1 sidecar left the stack in idkcraft-jlda.6; its code
+# stays in laya/ as the rollback.)
 #
 # Geyser Floodgate auth is declarative (bring-up 2026-09-21 proved Geyser
 # 2.11 does NOT switch to Floodgate auth just because Floodgate is
@@ -92,9 +94,6 @@ services:
     depends_on:
       mc:
         condition: service_healthy # itzg image ships an mc-health healthcheck
-      laya:
-        condition: service_started # bot survives a dead brain via stub-fallback;
-          # a crash-looping laya must not keep the bot off the server
     environment:
       MC_HOST: mc
       MC_PORT: 25565
@@ -130,36 +129,6 @@ services:
       driver: json-file
       options:
         max-size: "20m"
-
-  laya:
-    # Built by CI from ./laya and pushed to GHCR.
-    # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
-    image: ghcr.io/korjavin/idkcraft-laya:latest
-    container_name: ${LAYA_CONTAINER_NAME:-idkcraft-laya}
-    restart: unless-stopped
-    # 2g contract replaced by 3g (2026-09-21: prod OOM-killed the sidecar
-    # under 2g at load; host budget still fits: mc 6g + laya 3g + ~5.2g other).
-    mem_limit: ${LAYA_MEM_LIMIT:-3g}
-    environment:
-      OMP_NUM_THREADS: ${LAYA_THREADS:-4}
-      MKL_NUM_THREADS: ${LAYA_THREADS:-4}
-    labels:
-      prometheus.scrape: "true"
-      prometheus.port: "8000"
-    networks: [default, monitoring]
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-    healthcheck:
-      # CMD-SHELL (not CMD list): Portainer word-splits CMD lists, so -c
-      # received only "import" (SyntaxError). CMD-SHELL re-joins the words
-      # into one shell string, which survives the split.
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\""]
-      interval: 15s
-      timeout: 5s
-      start_period: 120s
-      retries: 10
 
   baritone:
     # Built by CI from ./baritone and pushed to GHCR.
