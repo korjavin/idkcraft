@@ -140,9 +140,9 @@ RERUN="/tmp/stuck-rerun-$$.json"
 SRVPID=
 teardown() {
   # Worker client (idkcraft-jlda.3): stop it with the rig, on every exit
-  # path — a client left running trips the next run's already-running
-  # guard. Gated, so head-only runs pay nothing (not even a docker call).
-  if [ "${REPLAY_WORKER:-}" = 1 ]; then
+  # path — but only when THIS run started it (a failed start cleans
+  # itself; a guarded one must never stop another run's client).
+  if [ "${WORKER_STARTED:-}" = 1 ]; then
     sh "$TREE/baritone/client.sh" stop >/dev/null 2>&1 || true
   fi
   docker stop -t 5 "$CONTAINER" >/dev/null 2>&1 || true
@@ -230,6 +230,7 @@ if [ "${REPLAY_WORKER:-}" = 1 ]; then
   rcon_assert "op $WORKER"
   BARITONE_OFFLINE=1 RIG_CONTAINER="$CONTAINER" CLIENT_LOG="/tmp/stuck-worker-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
     sh "$TREE/baritone/client.sh" start "${REPLAY_PORT:-25571}" "$WORKER" || exit 2
+  WORKER_STARTED=1 # the client is ours to stop from here on (teardown)
   # Paper's same-IP connection throttle (4000 ms, bukkit.yml): the worker
   # just joined from localhost and the guide connects next — hold the 6 s
   # gap here (the replay holds guide->follower itself).

@@ -26,7 +26,9 @@ echo $$ > "$LOCK/pid"
 STATS=
 cleanup() {
   [ -n "$STATS" ] && kill "$STATS" 2>/dev/null
-  sh "$HERE/client.sh" stop >/dev/null 2>&1 || true
+  # Only our own client (a failed start cleans itself; an early exit must
+  # never stop another run's worker).
+  [ "${WORKER_STARTED:-}" = 1 ] && sh "$HERE/client.sh" stop >/dev/null 2>&1 || true
   docker stop -t 5 "$RIG" >/dev/null 2>&1 || true
   exec 9<&- || true
   rm -f "$SRVFIFO"; rm -rf "$LOCK"
@@ -60,6 +62,7 @@ docker exec "$RIG" rcon-cli "op $BOT"
 # exported above; BARITONE_OFFLINE/BARITONE_IMAGE/BRIDGE_PORT/RIG_BIND pass
 # through from the environment.
 sh "$HERE/client.sh" start "$PORT" "$BOT" || exit 2
+WORKER_STARTED=1 # the client is ours to stop from here on (cleanup)
 export BOT
 # Cost of the second bot while it paths, not one idle sample after the run.
 docker stats --format '{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}' "$CLIENT" "$RIG" > "$LOG.stats" 2>&1 &

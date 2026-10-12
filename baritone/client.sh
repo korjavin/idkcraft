@@ -65,7 +65,10 @@ bridge_send() { # one console line via the bridge (ab.js speaks TCP; POSIX sh ca
 }
 printf "wait: client console"
 for _ in $(seq 1 60); do docker logs "$CLIENT" 2>/dev/null | grep -q "HMC-Specifics initialized" && break; printf .; sleep 3; done
-docker logs "$CLIENT" 2>/dev/null | grep -q "HMC-Specifics initialized" || { echo " client never started ($CLIENT_LOG)"; exit 2; }
+# Past the guard the name is ours (sequential launches; parallel same-name
+# launches are unsupported), so a failed start stops what it launched —
+# callers stop only after a successful start (their WORKER_STARTED).
+docker logs "$CLIENT" 2>/dev/null | grep -q "HMC-Specifics initialized" || { echo " client never started ($CLIENT_LOG)"; docker stop -t 5 "$CLIENT" >/dev/null 2>&1 || true; exit 2; }
 printf " up; wait: client joins"
 JOINED=
 for i in $(seq 0 23); do
@@ -75,5 +78,5 @@ for i in $(seq 0 23); do
   docker exec "$RIG_CONTAINER" rcon-cli list 2>/dev/null | grep -qw "$BOTNAME" && { JOINED=1; break; }
   printf .
 done
-[ -n "$JOINED" ] || { echo " $BOTNAME never joined ($CLIENT_LOG; with a stored account set BOT=<profile name>)"; exit 2; }
+[ -n "$JOINED" ] || { echo " $BOTNAME never joined ($CLIENT_LOG; with a stored account set BOT=<profile name>)"; docker stop -t 5 "$CLIENT" >/dev/null 2>&1 || true; exit 2; }
 echo " $BOTNAME"
