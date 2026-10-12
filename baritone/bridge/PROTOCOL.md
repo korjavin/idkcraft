@@ -62,10 +62,12 @@ Goal ids (replaces the spike's witnessed-motion latch — revmux 01 core-3,
 terminals): every accepted `baritone.cmd` mints a fresh monotonic id
 (from 1; 0 = no cmd yet), but only a goal-issuing command re-arms the
 tracker: the custom goal changed across the execute (Baritone news a
-`Goal` per setGoal, so even a same-spot re-issue counts), or a process
-command (`follow/mine/build/explore/farm/elytra/getto`) took over.
-Controls (`#stop`/`#pause`/`#resume`/`#set`/…) return their id and leave
-the live goal armed; their ids never resolve. Events and `status.id`
+`Goal` per setGoal, so even a same-spot re-issue counts), another
+process took control (`#goto <block>` routes to GetToBlock and never
+touches the custom goal), or a process command
+(`follow/mine/build/explore/farm/elytra`) re-issued onto its live
+process. Controls (`#stop`/`#pause`/`#resume`/`#set`/…) return their id
+and leave the live goal armed; their ids never resolve. Events and `status.id`
 carry the TRACKED goal id; a superseded goal receives NO terminal event
 (the adapter binds the echoed goal id and drops anything else). First
 terminal per tracked id wins; later events for it drop. Mapping:
@@ -78,7 +80,9 @@ and the other `PathEvent`s are lookahead chatter, never terminal. No
 terminal within 120 s of walking → `{id,timeout}` plus a mod-issued
 `#stop` to halt the body; a bridge-issued `#pause` freezes that budget
 (it bills walking time, not paused time) — a `#pause` typed in game
-chat still bills the goal, the mod only sees bridge traffic. `#stop`'s
+chat still bills the goal, the mod only sees bridge traffic (and a
+`#resume` from any other channel leaves the freeze on until the next
+goal or `#stop`). `#stop`'s
 `CANCELED` resolves the TRACKED goal id as `stopped` (idle stops stay
 silent). A cmd issued at the menu resolves `stopped` on the next tick —
 no player to drive.

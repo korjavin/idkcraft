@@ -18,9 +18,9 @@ public final class GoalTracker {
      * traffic sends any).
      */
     private static final java.util.Set<String> PROCESS_CMDS =
-            java.util.Set.of("follow", "mine", "build", "explore", "farm", "elytra", "getto");
-    private static final java.util.Set<String> PAUSE_CMDS = java.util.Set.of("pause", "p");
-    private static final java.util.Set<String> RESUME_CMDS = java.util.Set.of("resume", "r");
+            java.util.Set.of("follow", "mine", "build", "explore", "farm", "elytra");
+    private static final java.util.Set<String> PAUSE_CMDS = java.util.Set.of("pause", "p", "paws");
+    private static final java.util.Set<String> RESUME_CMDS = java.util.Set.of("resume", "r", "unpause", "unpaws");
     private static final java.util.Set<String> STOP_CMDS =
             java.util.Set.of("stop", "cancel", "c", "forcecancel");
 
@@ -37,12 +37,19 @@ public final class GoalTracker {
     /**
      * A command re-arms the goal tracker when it changed the custom goal
      * (identity — Baritone news a Goal per setGoal, so even a same-spot
-     * re-issue counts) or took over with a process command. A malformed
-     * #goto that parsed nothing leaves the live goal armed. Identity is all
-     * it reads, hence {@code Object} (keeps this class game-free).
+     * re-issue counts), when another process took control ({@code #goto
+     * <block>} routes to GetToBlock and never touches the custom goal), or
+     * when a process command re-issues onto its live process (same
+     * instance, so the control check misses it). A malformed #goto that
+     * parsed nothing leaves the live goal armed. Identity is all it reads,
+     * hence {@code Object} (keeps this class game-free). Stops never
+     * re-arm: releasing control must not look like a takeover.
      */
-    static boolean rearmsTracker(Object before, Object after, String verb) {
-        return after != before || PROCESS_CMDS.contains(verb);
+    static boolean rearmsTracker(Object before, Object after, Object beforeProc, Object afterProc, String verb) {
+        if (STOP_CMDS.contains(verb)) {
+            return false;
+        }
+        return after != before || afterProc != beforeProc || PROCESS_CMDS.contains(verb);
     }
 
     /**

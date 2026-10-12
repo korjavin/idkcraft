@@ -275,13 +275,16 @@ public final class BridgeServer {
         }
         final String cmd = command;
         final String verb = GoalTracker.firstToken(cmd);
-        record Probe(boolean ok, Goal before, Goal after) {
+        record Probe(boolean ok, Goal before, Goal after, Object beforeProc, Object afterProc) {
         }
         Probe probe = submit(() -> {
             Goal before = baritone.getCustomGoalProcess().mostRecentGoal();
+            Object beforeProc = baritone.getPathingControlManager().mostRecentInControl().orElse(null);
             boolean ok = baritone.getCommandManager().execute(cmd);
             Goal after = ok ? baritone.getCustomGoalProcess().mostRecentGoal() : before;
-            return new Probe(ok, before, after);
+            Object afterProc =
+                    ok ? baritone.getPathingControlManager().mostRecentInControl().orElse(null) : beforeProc;
+            return new Probe(ok, before, after, beforeProc, afterProc);
         });
         if (probe == null) {
             throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
@@ -290,7 +293,7 @@ public final class BridgeServer {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "unknown baritone command: " + cmd);
         }
         long id = cmdSeq.incrementAndGet();
-        if (GoalTracker.rearmsTracker(probe.before(), probe.after(), verb)) {
+        if (GoalTracker.rearmsTracker(probe.before(), probe.after(), probe.beforeProc(), probe.afterProc(), verb)) {
             currentId = id;
             terminalReceived = false;
             cmdTick = tickCount;

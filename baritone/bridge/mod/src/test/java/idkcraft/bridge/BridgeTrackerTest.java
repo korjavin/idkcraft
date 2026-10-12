@@ -9,14 +9,20 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Goal-tracker arming without the game: only goal-issuing commands re-arm
- * (a changed custom goal, or a process takeover); controls keep the live
- * goal's id armed and a bridge-issued #pause freezes the watchdog.
+ * (a changed custom goal, a control takeover, or a process-command
+ * re-issue); controls keep the live goal's id armed and a bridge-issued
+ * #pause freezes the watchdog.
  */
 public class BridgeTrackerTest {
 
-    // Identity is all rearmsTracker reads, so plain Objects stand in for Goals
-    // (GoalTracker is game-free on purpose — see its javadoc).
+    // Identity is all rearmsTracker reads, so plain Objects stand in for
+    // Goals and processes (GoalTracker is game-free on purpose — see its
+    // javadoc).
     private static Object fakeGoal() {
+        return new Object();
+    }
+
+    private static Object fakeProc() {
         return new Object();
     }
 
@@ -31,38 +37,57 @@ public class BridgeTrackerTest {
     }
 
     @Test
-    public void changedGoalRearmsWhateverTheToken() {
+    public void changedGoalRearmsWhateverTheVerb() {
         Object before = fakeGoal();
-        assertTrue(GoalTracker.rearmsTracker(before, fakeGoal(), "goto"));
-        assertTrue(GoalTracker.rearmsTracker(before, fakeGoal(), "stop"));
-        assertTrue(GoalTracker.rearmsTracker(null, fakeGoal(), "goto"));
-        assertTrue(GoalTracker.rearmsTracker(before, null, "stop"));
+        Object proc = fakeProc();
+        assertTrue(GoalTracker.rearmsTracker(before, fakeGoal(), proc, proc, "goto"));
+        assertTrue(GoalTracker.rearmsTracker(before, fakeGoal(), proc, proc, "path"));
+        assertTrue(GoalTracker.rearmsTracker(null, fakeGoal(), null, proc, "goto"));
+        assertTrue(GoalTracker.rearmsTracker(before, null, proc, proc, "goto"));
+    }
+
+    @Test
+    public void takeoverRearmsAndStopsNeverDo() {
+        Object goal = fakeGoal();
+        Object proc = fakeProc();
+        // #goto <block> routes to GetToBlock: same custom goal, new control.
+        assertTrue(GoalTracker.rearmsTracker(goal, goal, proc, fakeProc(), "goto"));
+        assertTrue(GoalTracker.rearmsTracker(goal, goal, null, proc, "goto"));
+        // A stop releases control — that must not look like a takeover.
+        assertFalse(GoalTracker.rearmsTracker(goal, goal, proc, fakeProc(), "stop"));
+        assertFalse(GoalTracker.rearmsTracker(goal, goal, proc, null, "cancel"));
+        assertFalse(GoalTracker.rearmsTracker(fakeGoal(), fakeGoal(), proc, fakeProc(), "c"));
     }
 
     @Test
     public void unchangedGoalRearmsOnlyForProcessTakeover() {
         Object same = fakeGoal();
-        assertFalse(GoalTracker.rearmsTracker(same, same, "goto"));
-        assertFalse(GoalTracker.rearmsTracker(same, same, "set"));
-        assertFalse(GoalTracker.rearmsTracker(same, same, "pause"));
-        assertFalse(GoalTracker.rearmsTracker(same, same, "stop"));
-        assertFalse(GoalTracker.rearmsTracker(null, null, "set"));
-        assertFalse(GoalTracker.rearmsTracker(same, same, ""));
-        assertTrue(GoalTracker.rearmsTracker(same, same, "follow"));
-        assertTrue(GoalTracker.rearmsTracker(same, same, "mine"));
-        assertTrue(GoalTracker.rearmsTracker(same, same, "build"));
-        assertTrue(GoalTracker.rearmsTracker(same, same, "explore"));
-        assertTrue(GoalTracker.rearmsTracker(same, same, "farm"));
-        assertTrue(GoalTracker.rearmsTracker(same, same, "elytra"));
-        assertTrue(GoalTracker.rearmsTracker(same, same, "getto"));
+        Object proc = fakeProc();
+        assertFalse(GoalTracker.rearmsTracker(same, same, proc, proc, "goto"));
+        assertFalse(GoalTracker.rearmsTracker(same, same, proc, proc, "path"));
+        assertFalse(GoalTracker.rearmsTracker(same, same, proc, proc, "set"));
+        assertFalse(GoalTracker.rearmsTracker(same, same, proc, proc, "pause"));
+        assertFalse(GoalTracker.rearmsTracker(same, same, proc, proc, "stop"));
+        assertFalse(GoalTracker.rearmsTracker(null, null, null, null, "set"));
+        assertFalse(GoalTracker.rearmsTracker(same, same, proc, proc, ""));
+        assertFalse(GoalTracker.rearmsTracker(same, same, proc, proc, "getto"));
+        assertTrue(GoalTracker.rearmsTracker(same, same, proc, proc, "follow"));
+        assertTrue(GoalTracker.rearmsTracker(same, same, proc, proc, "mine"));
+        assertTrue(GoalTracker.rearmsTracker(same, same, proc, proc, "build"));
+        assertTrue(GoalTracker.rearmsTracker(same, same, proc, proc, "explore"));
+        assertTrue(GoalTracker.rearmsTracker(same, same, proc, proc, "farm"));
+        assertTrue(GoalTracker.rearmsTracker(same, same, proc, proc, "elytra"));
     }
 
     @Test
     public void pauseFlagFollowsPauseResumeStop() {
         assertEquals(Boolean.TRUE, GoalTracker.pauseFlagFor("pause"));
         assertEquals(Boolean.TRUE, GoalTracker.pauseFlagFor("p"));
+        assertEquals(Boolean.TRUE, GoalTracker.pauseFlagFor("paws"));
         assertEquals(Boolean.FALSE, GoalTracker.pauseFlagFor("resume"));
         assertEquals(Boolean.FALSE, GoalTracker.pauseFlagFor("r"));
+        assertEquals(Boolean.FALSE, GoalTracker.pauseFlagFor("unpause"));
+        assertEquals(Boolean.FALSE, GoalTracker.pauseFlagFor("unpaws"));
         assertEquals(Boolean.FALSE, GoalTracker.pauseFlagFor("stop"));
         assertEquals(Boolean.FALSE, GoalTracker.pauseFlagFor("cancel"));
         assertEquals(Boolean.FALSE, GoalTracker.pauseFlagFor("c"));
