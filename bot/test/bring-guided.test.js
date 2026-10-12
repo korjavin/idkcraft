@@ -469,9 +469,9 @@ describe('guided dig-in', () => {
     assert.deepEqual(sends, [], 'no bore for a dead job')
   })
 
-  it('meet timeout bores without the lend', async () => {
+  it('meet cap re-checks the side: far workers are called in again', async () => {
     const sends = []
-    const entity = { box: { position: pos(30, 64, 0) } }
+    const entity = { box: { position: pos(30, 64, 0) } } // still far side
     stubWorker({ sends, entity })
     const bot = mockBot({
       names: { '10,64,0': 'iron_ore' },
@@ -483,15 +483,43 @@ describe('guided dig-in', () => {
       ...buriedOrder(), phase: 'guided',
       guided: {
         at: Date.now() - 31000, target: { x: 9, y: 64, z: 0 }, phase: 'meet',
+        meetUntil: Date.now() - 1000,
         tool: { name: 'wooden_pickaxe', id: ITEMS.wooden_pickaxe }, headPos: { x: 0, y: 64, z: 0 },
         paused: false, goneSince: null, lastWorkerPos: null, lastMove: Date.now(),
-        reissuedAt: 0, held: false, tossInFlight: false, stopSent: false,
+        reissuedAt: 0, held: true, tossInFlight: false, stopSent: false,
       },
     }
     bring(bot, c, null, {})
     await flushes()
-    assert.equal(c.bring.guided.phase, 'bore', 'worker never came: bore from wherever')
+    assert.equal(c.bring.guided.phase, 'meet', 'far side: one more window, not a blind bore')
     assert.deepEqual(bot.tossCalls, [], 'nothing lent')
+    assert.deepEqual(sends.slice(-1), ['msg #goto 0 64 0'], 'called in again')
+    assert.ok(c.bring.guided.meetUntil > Date.now(), 'cap extended')
+  })
+
+  it('meet cap bores once the worker reached the head side', async () => {
+    const sends = []
+    const entity = { box: { position: pos(-40, 64, 0) } } // head side, still walking in
+    stubWorker({ sends, entity })
+    const bot = mockBot({
+      names: { '10,64,0': 'iron_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'wooden_pickaxe', count: 1 }],
+    })
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    c.bring = {
+      ...buriedOrder(), phase: 'guided',
+      guided: {
+        at: Date.now() - 31000, target: { x: 9, y: 64, z: 0 }, phase: 'meet',
+        meetUntil: Date.now() - 1000,
+        tool: { name: 'wooden_pickaxe', id: ITEMS.wooden_pickaxe }, headPos: { x: 0, y: 64, z: 0 },
+        paused: false, goneSince: null, lastWorkerPos: null, lastMove: Date.now(),
+        reissuedAt: 0, held: true, tossInFlight: false, stopSent: false,
+      },
+    }
+    bring(bot, c, null, {})
+    await flushes()
+    assert.equal(c.bring.guided.phase, 'bore', 'head side: bore from here')
     assert.deepEqual(sends.slice(-1), ['msg #goto 9 64 0'])
   })
 
@@ -557,6 +585,24 @@ describe('guided dig-in', () => {
     assert.deepEqual(guidedTarget(mate, ore, west), { x: 10, y: 65, z: 0 }, 'mate on the head face: perpendicular stone')
     const awayAir = mockBot({ names: { '10,64,0': 'iron_ore', '9,64,0': 'stone', '10,64,1': 'stone', '10,64,-1': 'stone', '10,63,0': 'stone', '10,65,0': 'stone' } })
     assert.deepEqual(guidedTarget(awayAir, ore, west), { x: 9, y: 64, z: 0 }, 'away air never wins over head-side stone')
+    // No bottom face: feet below the ore would put the worker's head in it.
+    const below = pos(10, 60, 0) // head below the ore
+    const caveFloor = mockBot({
+      names: {
+        '10,64,0': 'iron_ore', '10,63,0': 'iron_ore',
+        '11,64,0': 'stone', '9,64,0': 'stone', '10,64,1': 'stone',
+        '10,64,-1': 'stone', '10,65,0': 'stone',
+      },
+    })
+    assert.deepEqual(guidedTarget(caveFloor, ore, below), { x: 11, y: 64, z: 0 }, 'mate below: horizontal face, never -y')
+    const caveAir = mockBot({
+      names: {
+        '10,64,0': 'iron_ore',
+        '11,64,0': 'stone', '9,64,0': 'stone', '10,64,1': 'stone',
+        '10,64,-1': 'stone', '10,65,0': 'stone',
+      },
+    })
+    assert.deepEqual(guidedTarget(caveAir, ore, below), { x: 11, y: 64, z: 0 }, 'air below loses to head-side stone')
   })
 
   it('guidedStepback walks the face axis out, guidedSameSide splits the hemispheres', () => {

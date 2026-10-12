@@ -1182,9 +1182,11 @@ function unreachLine(o) {
 // toward-the-head first, away last; air beats stone (no last cell to
 // mine), a vein-mate is the last resort before the away face (the worker
 // eats one ore but the target stands — the away face would eat the target
-// itself). Name-based: any named non-air block counts as solid.
+// itself). No bottom face: #goto is a feet position and the worker stands
+// two tall, so feet below the ore puts its head in the ore cell.
+// Name-based: any named non-air block counts as solid.
 function guidedTarget(bot, p, bp) {
-  const faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+  const faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]]
     .map((f, i) => ({ f, i, dot: f[0] * (bp.x - p.x) + f[1] * (bp.y - p.y) + f[2] * (bp.z - p.z) }))
     .sort((a, b) => (b.dot - a.dot) || (a.i - b.i))
     .map((e) => e.f)
@@ -1297,6 +1299,7 @@ function guidedDelegate(bot, ctx, o, bp) {
   const meet = !!spare || !guidedSameSide(wpos, bp, o.pos)
   o.guided = {
     at: now, target, phase: meet ? 'meet' : 'bore',
+    meetUntil: now + GUIDED_TOOL_MS,
     tool: spare, headPos: { x: bp.x, y: bp.y, z: bp.z },
     paused: false, goneSince: null, lastWorkerPos: null, lastMove: now,
     reissuedAt: 0, held: false, tossInFlight: false, stopSent: false,
@@ -1379,10 +1382,15 @@ function guidedTick(bot, ctx, o, bp) {
         return
       }
     }
-    if (!g.tossInFlight && now - g.at >= GUIDED_TOOL_MS) { // the worker never came: bore from wherever
-      sendSeq([`msg #goto ${g.target.x} ${g.target.y} ${g.target.z}`])
-      g.phase = 'bore'
-      g.reissuedAt = 0
+    if (!g.tossInFlight && now >= (g.meetUntil || 0)) {
+      if (guidedSameSide(wpos, bp, o.pos)) { // on the head's side now: bore from here
+        sendSeq([`msg #goto ${g.target.x} ${g.target.y} ${g.target.z}`])
+        g.phase = 'bore'
+        g.reissuedAt = 0
+      } else { // still far: call it in again for one more window (the total bounds the wait)
+        sendSeq([`msg #goto ${Math.floor(g.headPos.x)} ${Math.floor(g.headPos.y)} ${Math.floor(g.headPos.z)}`])
+        g.meetUntil = now + GUIDED_TOOL_MS
+      }
     }
     return
   }
