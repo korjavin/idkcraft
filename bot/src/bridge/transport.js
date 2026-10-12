@@ -156,30 +156,40 @@ class FakeTransport extends EventEmitter {
         s.chatLog.push(params.message)
         return { sent: true }
       case 'baritone.cmd': {
-        // Fake the walk: #goto jumps pos to the goal, #stop/#follow ack.
-        s.baritone = params.command
-        const m = /^#goto\s+(-?[\d.]+)\s+(-?[\d.]+)(?:\s+(-?[\d.]+))?/.exec(params.command || '')
+        // Goal-id echo (.1 wire contract): every #goto takes an id the
+        // status and events carry back. #set is not a goal (no id, no
+        // status touch — a settings push mid-walk must not clobber it).
+        const cmd = params.command || ''
+        s.baritone = cmd
+        if (/^#set(\s|$)/.test(cmd)) {
+          (s.baritoneSets = s.baritoneSets || []).push(cmd)
+          return { id: null }
+        }
+        if (/^#stop/.test(cmd)) {
+          const id = s.baritoneId != null ? s.baritoneId : null
+          s.baritoneStatus = { id, pathing: false, last: 'stopped' }
+          s.baritonePhase = null
+          return { id }
+        }
+        const m = /^#goto\s+(-?[\d.]+)(?:\s+(-?[\d.]+))?(?:\s+(-?[\d.]+))?/.exec(cmd)
         if (m) {
-          if (m[3] === undefined) s.pos = { ...s.pos, x: +m[1], z: +m[2] }
-          else s.pos = { ...s.pos, x: +m[1], y: +m[2], z: +m[3] }
+          s.baritoneSeq = (s.baritoneSeq | 0) + 1
+          const id = s.baritoneSeq
+          s.baritoneId = id
+          if (m[3] !== undefined) s.pos = { ...s.pos, x: +m[1], y: +m[2], z: +m[3] }
+          else if (m[2] !== undefined) s.pos = { ...s.pos, x: +m[1], z: +m[2] }
+          else s.pos = { ...s.pos, y: +m[1] }
           // Two-phase status: the first poll witnesses motion (like a real
           // 10 Hz poll over a multi-tick walk), the second reports arrival.
-          // Without a witnessed-motion round the adapter cannot attribute
-          // the terminal to this goal (revmux 02 core-1).
-          s.baritoneStatus = { pathing: false, last: 'success' }
+          s.baritoneStatus = { id, pathing: false, last: 'success' }
           s.baritonePhase = 0
-        } else if (/^#stop/.test(params.command || '')) {
-          s.baritoneStatus = { pathing: false, last: 'stopped' }
-          s.baritonePhase = null
-        } else {
-          s.baritoneStatus = { pathing: false, last: 'ok' }
-          s.baritonePhase = null
+          return { id }
         }
-        return { accepted: true }
+        return { id: null }
       }
       case 'baritone.status':
-        if (s.baritonePhase === 0) { s.baritonePhase = 1; return { pathing: true, last: 'none' } }
-        return s.baritoneStatus || { pathing: false, last: 'none' }
+        if (s.baritonePhase === 0) { s.baritonePhase = 1; return { id: s.baritoneId, pathing: true, last: 'none' } }
+        return s.baritoneStatus || { id: null, pathing: false, last: 'none' }
       default:
         throw new Error(`bridge: unknown method ${method}`)
     }
