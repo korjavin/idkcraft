@@ -1,8 +1,10 @@
 #!/bin/sh
-# Baritone A/B run (idkcraft-vhlb.6): reset a private rig world from the
-# pristine world.tar, boot Paper (rig slot z: container idk-replay-z, port
-# 25597, lock /tmp/idkcraft-rig.lock-z — never collides with stuck-run's
-# default/auto slots 0 a b), launch the Baritone client, run ab.js, tear down.
+# Baritone A/B run (idkcraft-vhlb.6, prod plumbing since jlda.1): reset a
+# private rig world from the pristine world.tar, boot Paper (rig slot z:
+# container idk-replay-z, port 25597, lock /tmp/idkcraft-rig.lock-z — never
+# collides with stuck-run's default/auto slots 0 a b), launch the Baritone
+# client via the image's own entrypoint with the bridge published for the
+# rig, run ab.js through the bridge, tear down.
 # Usage: sh baritone/run.sh            (image: docker build -t idkcraft-baritone:spike baritone)
 # Account (see baritone/README.md): the client launches with the account stored
 # in the idkcraft-baritone-auth volume (one-time `login`), or offline ONLY when
@@ -14,16 +16,16 @@ IMAGE="${BARITONE_IMAGE:-idkcraft-baritone:spike}"
 RIG=idk-replay-z; PORT=25597; CLIENT=idk-baritone-client
 LOCK="${RIG_LOCK:-/tmp/idkcraft-rig.lock}-z"
 RIGDIR="$PRODWORLD/rigs/z"; D="$RIGDIR/replay-data/paper-base"
-SRVFIFO="/tmp/baritone-srv-$$.fifo"; export CHAT_FIFO="/tmp/baritone-chat-$$.fifo"
+SRVFIFO="/tmp/baritone-srv-$$.fifo"
 LOG=/tmp/baritone-run.log
 
 BOT="${BOT:-BaritoneBot}" # with a stored account: the profile name (pre-opped below)
-# No TTY in the container: hmc-specifics' JLine reader crashes the game at init
-# unless forced dumb. No -commands: that starts the runtime's own reader too and
-# the two split stdin between them (only hmc-specifics has connect/msg).
-HMC_PROPS="-Dhmc.jvmargs=-Dhmc.jline.dumb=true"; HMC_OFFLINE=
+# Fast account gate (start.sh gates too, but would only idle): the client
+# launches with the account stored in the idkcraft-baritone-auth volume
+# (one-time `login`), or offline ONLY when the owner opted in.
+OFFLINE_ENV=
 if [ "${BARITONE_OFFLINE:-}" = 1 ]; then
-  HMC_PROPS="$HMC_PROPS -Dhmc.offline.username=$BOT"; HMC_OFFLINE=-offline
+  OFFLINE_ENV="-e BARITONE_OFFLINE=1 -e BOT=$BOT"
 elif ! docker run --rm -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth --entrypoint test "$IMAGE" -s /headlessmc/HeadlessMC/auth/.accounts.json; then
   echo "no stored account: run the one-time login (baritone/README.md) or opt in with BARITONE_OFFLINE=1"; exit 2
 fi
@@ -34,8 +36,8 @@ STATS=
 cleanup() {
   [ -n "$STATS" ] && kill "$STATS" 2>/dev/null
   docker stop -t 5 "$CLIENT" "$RIG" >/dev/null 2>&1 || true
-  exec 8<&- 9<&- || true
-  rm -f "$SRVFIFO" "$CHAT_FIFO"; rm -rf "$LOCK"
+  exec 9<&- || true
+  rm -f "$SRVFIFO"; rm -rf "$LOCK"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -47,8 +49,8 @@ fi
 sed -e "s/--name idk-replay /--name $RIG /" -e "s/-p 25571:/-p $PORT:/" "$PRODWORLD/START.sh" > "$RIGDIR/START.sh"
 rm -rf "$D/world"; tar -xf "$PRODWORLD/world.tar" -C "$D"
 : > "$LOG"
-mkfifo "$SRVFIFO" "$CHAT_FIFO"
-exec 9<> "$SRVFIFO" 8<> "$CHAT_FIFO" # held open: an EOF on stdin kills Paper / the HMC console
+mkfifo "$SRVFIFO"
+exec 9<> "$SRVFIFO" # held open: an EOF on stdin kills Paper
 sh "$RIGDIR/START.sh" paper-base >>"$LOG" 2>&1 <&9 &
 printf "wait: rcon"
 for _ in $(seq 1 36); do docker exec "$RIG" rcon-cli list >/dev/null 2>&1 && break; printf .; sleep 5; done
@@ -61,10 +63,16 @@ done
 # is decided at login, a later op does not lift it (stuck-run.sh, 3ro).
 docker exec "$RIG" rcon-cli "op $BOT"
 
-# Client: HMC console on stdin (the FIFO ab.js writes to); hmc-specifics `connect`.
-docker run --rm -i --name "$CLIENT" -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth \
-  --entrypoint java "$IMAGE" $HMC_PROPS -jar headlessmc-launcher-wrapper.jar \
-  --command launch fabric-loader-0.19.5-26.1.2 -lwjgl $HMC_OFFLINE >"$LOG.client" 2>&1 <&8 &
+# Client: the image's own entrypoint (start.sh) — HMC console on its
+# in-container FIFO, bridge published for the rig, so the rig exercises the
+# exact prod plumbing. Plain -p, not a loopback bind: a literal loopback IP
+# trips the privacy pre-check, and the rig's Paper+rcon already publish the
+# same way. Container stdout = the client log.
+docker run --rm --name "$CLIENT" -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth \
+  $OFFLINE_ENV -p 7777:7777 "$IMAGE" >"$LOG.client" 2>&1 &
+bridge_send() { # one console line via the bridge (ab.js speaks TCP; POSIX sh cannot)
+  node -e "require(process.argv[1]).sendBridgeLine({host:'localhost',port:7777,line:process.argv[2]}).then(()=>{},(e)=>{console.error('bridge:',e.message);process.exit(1)})" "$HERE/ab.js" "$1"
+}
 printf "wait: client console"
 for _ in $(seq 1 60); do grep -q "HMC-Specifics initialized" "$LOG.client" && break; printf .; sleep 3; done
 grep -q "HMC-Specifics initialized" "$LOG.client" || { echo " client never started ($LOG.client)"; exit 2; }
@@ -72,7 +80,7 @@ printf " up; wait: client joins"
 JOINED=
 for i in $(seq 0 23); do
   # one connect per 30 s: a connect resent mid-login restarts the handshake
-  [ $((i % 6)) = 0 ] && echo "connect host.docker.internal $PORT" > "$CHAT_FIFO"
+  [ $((i % 6)) = 0 ] && bridge_send "connect host.docker.internal $PORT"
   sleep 5
   docker exec "$RIG" rcon-cli list | grep -qw "$BOT" && { JOINED=1; break; }
   printf .

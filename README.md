@@ -60,7 +60,7 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
 - `docker-compose.yml`: Top-level Docker Compose stack running `mc` (Paper + Geyser) and `bot` (Mineflayer).
 - `bot/`: Mineflayer companion bot runtime, test harnesses, and JEV/stub brain interfaces.
 - `mc/`: Minecraft server configuration overrides and plugin assets.
-- `.github/workflows/deploy.yml`: GitOps workflow that builds `ghcr.io/korjavin/idkcraft:<sha>` and `ghcr.io/korjavin/idkcraft-laya:<sha>`, updates the `deploy` branch, and signals the Portainer webhook.
+- `.github/workflows/deploy.yml`: GitOps workflow that builds `ghcr.io/korjavin/idkcraft:<sha>`, `ghcr.io/korjavin/idkcraft-laya:<sha>` and `ghcr.io/korjavin/idkcraft-baritone:<sha>`, updates the `deploy` branch, and signals the Portainer webhook.
 
 *Note: Environment variable definitions and deployment configurations live in `.env.example` and the project epic contract. Refer to those files directly for configuration details.*
 

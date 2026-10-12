@@ -1,0 +1,4 @@
+# The mineflayer head follows the worker on foot: a sprinting worker outruns it.
+allowSprint false
+# Parkour jumps risk falls the head cannot mirror; keep the path walkable.
+allowParkour false
