@@ -1387,7 +1387,7 @@ async function waitForWorkerLeave(bot, { waitMs = WORKER_LEAVE_WAIT_MS, pollMs =
   } catch (_) { /* tab watch best-effort */ }
 }
 
-function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', autonomous = false, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
+function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', autonomous = false, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping, bodyTag = '' }) {
   return new Promise((resolve) => {
     const bot = createBot({
       host,
@@ -1432,7 +1432,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // idkcraft-der: log the negotiated version + registry data at spawn so
       // rig/prod logs show which minecraft-data the bot actually runs on.
       const verSuffix = bot.version ? ` mc=${bot.version} proto=${bot.protocolVersion} data=${bot.registry?.version?.minecraftVersion}` : ''
-      console.log(`spawned as ${bot.username}${verSuffix}`)
+      console.log(`spawned as ${bot.username}${verSuffix}${bodyTag}`)
       // Session start far from spawn with nobody visible (quit in a cave):
       // pre-arm the unseen counter so the tick path walks home at once
       // instead of standing through N more ticks. Not when autonomous on an
@@ -1541,7 +1541,29 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
   })
 }
 
+// idkcraft-neuc.2: which physical body the unchanged ticker drives.
+// mineflayer (default) passes no createBot override, so runOnce keeps its
+// default factory and the v1 log lines stay byte-identical; baritone runs
+// the same ticker on the bridge adapter. A baritone body with no name
+// idles instead of joining as IdkBot (a v1 name collision would kick the
+// real bot). Exported for the body-switch test — main() itself is an
+// infinite join loop and cannot run under test.
+function selectBody(env = process.env) {
+  const name = (env && env.BOT_BODY) || 'mineflayer'
+  if (name !== 'mineflayer' && name !== 'baritone') return { name, fatal: `unknown BOT_BODY=${name} (want mineflayer|baritone)` }
+  if (name === 'baritone' && !(env && env.BOT_USERNAME)) return { name, idle: true }
+  if (name === 'baritone') return { name, createBot: require('./bridge/index').createBot, bodyTag: ' body=baritone' }
+  return { name }
+}
+
 async function main() {
+  const sel = selectBody(process.env)
+  if (sel.fatal) fatal('body', sel.fatal)
+  if (sel.idle) {
+    console.log('v2 idle: BOT_USERNAME empty')
+    setInterval(() => {}, 60000) // hold the loop: a bare await would drain and exit
+    await new Promise(() => {}) // never exits: compose restart: unless-stopped
+  }
   const rawTick = parseInt(process.env.BRAIN_TICK_MS || '1000', 10)
   const tickMs = Number.isFinite(rawTick) ? rawTick : 1000
   const leaveAfterMs = parseLeaveAfterMs(process.env)
@@ -1563,7 +1585,10 @@ async function main() {
       await waitForPlayers({ host, port, pingFn, username, workerConfigured: worker.configured() })
       await sleep(JOIN_SETTLE_MS)
     }
-    await runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, brainEngine, autonomous })
+    const runArgs = { host, port, username, tickMs, brain, leaveAfterMs, followName, brainEngine, autonomous }
+    if (sel.createBot) runArgs.createBot = sel.createBot
+    if (sel.bodyTag) runArgs.bodyTag = sel.bodyTag
+    await runOnce(runArgs)
   }
 }
 
@@ -1720,4 +1745,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, waitForWorkerLeave, runOnce, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, waitForWorkerLeave, runOnce, selectBody, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }
