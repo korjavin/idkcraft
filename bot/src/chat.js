@@ -2,7 +2,7 @@
 
 // Player chat + far-search handover (idkcraft-6x7.1): mechanically moved from
 // index.js — handleChat, the pending-search slicer, block-order/find answers.
-const { stubBrain, hybridBrain, jevBrain, JEV_ENDPOINT, brainTimeoutMs, layaUrl, LAYA_URL_DEFAULT } = require('./brain')
+const { stubBrain, hybridBrain, jevBrain, JEV_ENDPOINT, brainTimeoutMs, layaUrl, LAYA_URL_DEFAULT, plannerName } = require('./brain')
 const { resolvePlayer } = require('./perception')
 const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./behaviours/scout')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
@@ -398,7 +398,10 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     if (!allowed) return
     const arg = msg.slice(5).trim()
     if (!arg) {
-      bot.chat(`brain: ${ticker.getBrainEngine()}`)
+      // Planner suffix only once the LLM planner is configured (vhlb.2):
+      // without ANTHROPIC_API_KEY the reply stays 'brain: <engine>'.
+      const pn = process.env.ANTHROPIC_API_KEY ? ` planner=${plannerName(bot._tickerCtx && bot._tickerCtx.brain)}` : ''
+      bot.chat(`brain: ${ticker.getBrainEngine()}${pn}`)
       return
     }
     if (arg === 'off' || arg === 'laya' || arg === 'jev') {
@@ -408,7 +411,8 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       }
       const from = ticker.getBrainEngine()
       const url = arg === 'laya' ? (layaUrl() || LAYA_URL_DEFAULT) : JEV_ENDPOINT
-      const next = arg === 'off' ? stubBrain : hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
+      // Manual off = FSM only, the LLM stall planner included (vhlb.2).
+      const next = arg === 'off' ? { ...stubBrain, planner: 'none' } : hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), url))
       ticker.setBrain(next, arg)
       if (bot._tickerCtx) bot._tickerCtx.manualBrain = arg
       bot.chat(`brain: ${arg}`)

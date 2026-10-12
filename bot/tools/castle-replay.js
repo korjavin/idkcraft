@@ -24,7 +24,8 @@
 //   CASTLE_MINS (30), CASTLE_PAD ("300,300"), CASTLE_PADSPOT ("x,z", pins the
 //   pad probe pick — controlled pairs set it on both legs), CASTLE_OUT (json path),
 //   CASTLE_LOG (full log path; stdout keeps goal/need/blocked/death lines).
-//   RIG_PLANNER (jev|stub, default jev), TYPESAFE_API_KEY (jev bearer).
+//   RIG_PLANNER (jev|laya|llm|stub, default jev), TYPESAFE_API_KEY (jev bearer),
+//   ANTHROPIC_API_KEY (llm, vhlb.2).
 //   CASTLE_NIGHT (1 = night mode, set by castle-rig.sh --night: the
 //   wrapper skips the day lock, createNightDriver runs the nights).
 //   CASTLE_SEED (complete = g0z.33: rcon-place the whole v2 castle + beds
@@ -695,6 +696,9 @@ async function main() {
   let brainEngine = ''
   if (SEED && SEED !== 'complete') fail('seed', `CASTLE_SEED: want ''|complete, got ${JSON.stringify(SEED)}`)
   if (IDLE && SEED !== 'complete') fail('idle', 'CASTLE_IDLE=1 needs CASTLE_SEED=complete (castle-rig.sh sets it)')
+  // vhlb.2: only the llm leg may reach the LLM planner — an operator
+  // shell key would otherwise re-attach it on the autonomous step-down.
+  if (PLANNER !== 'llm') delete process.env.ANTHROPIC_API_KEY
   if (PLANNER === 'jev') {
     const key = process.env.TYPESAFE_API_KEY
     // Loud, never silent: a jev run without a key would measure the stub
@@ -706,8 +710,13 @@ async function main() {
     const url = process.env.REPLAY_BRAIN_URL || 'http://localhost:8000/v1/systemone'
     brain = brainMod.hybridBrain(brainMod.jevBrain(undefined, undefined, parseInt(process.env.REPLAY_BRAIN_TIMEOUT_MS || '3000', 10), url))
     brainEngine = 'laya'
+  } else if (PLANNER === 'llm') {
+    // vhlb.2: stub tick brain + the LLM stall planner (ANTHROPIC_API_KEY,
+    // never printed); withPlanner refuses nothing, so check the key here.
+    if (!process.env.ANTHROPIC_API_KEY) fail('planner-key', 'RIG_PLANNER=llm needs ANTHROPIC_API_KEY (stash secrets/minecraft/anthropic-api-key)')
+    brain = brainMod.withPlanner(brainMod.stubBrain, { ...process.env, PLANNER: 'llm' })
   } else if (PLANNER !== 'stub') {
-    fail('planner', `RIG_PLANNER: want jev|laya|stub, got ${JSON.stringify(PLANNER)}`)
+    fail('planner', `RIG_PLANNER: want jev|laya|llm|stub, got ${JSON.stringify(PLANNER)}`)
   }
   origLog(`CASTLE-RIG planner=${PLANNER}`)
 

@@ -838,6 +838,47 @@ describe('rounds, park and backoff (acceptance 4)', () => {
     assert.ok(wdLogs().some((l) => l.includes('source=http')), JSON.stringify(wdLogs()))
     assert.equal(ctx.task.castle.wd.backoffMs, 30000)
   })
+
+  it('an llm 429 backs off as an http failure too (vhlb.2)', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    ctx.brain = failingBrain(new Error('llm http 429')).brain
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    let t = t0
+    let guard = 0
+    while (!ctx.task.castle.wd?.pending && guard++ < 20) {
+      t += 10000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    await flush()
+    t += 10000
+    taskMod.taskTick(bot, ctx, t)
+    assert.ok(wdLogs().some((l) => l.includes('source=http')), JSON.stringify(wdLogs()))
+    assert.equal(ctx.task.castle.wd.backoffMs, 30000)
+  })
+
+  it('an llm answer logs its reason on the watchdog line and chats it once (vhlb.2)', async () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    ctx.brain = { plan: async () => ({ step: 'gather', confidence: null, probabilities: null, source: 'llm', reason: 'stone is "out", get more' }) }
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    let t = t0
+    let guard = 0
+    while (!ctx.task.castle.wd?.pending && guard++ < 20) {
+      t += 10000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    await flush()
+    t += 10000
+    taskMod.taskTick(bot, ctx, t)
+    const line = wdLogs().find((l) => l.includes('choice=gather'))
+    assert.ok(line, JSON.stringify(wdLogs()))
+    assert.match(line, /conf=\? source=llm why=.* reason="stone is 'out', get more"$/)
+    assert.equal(bot.chats.filter((c) => c.startsWith('planner (llm): gather — stone is')).length, 1, JSON.stringify(bot.chats))
+    assert.ok(ctx.goal.commit, 'null confidence passes the gate and commits')
+  })
 })
 
 describe('plan-B when the owner is offline (owner 2026-10-07)', () => {
