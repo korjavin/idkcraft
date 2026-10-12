@@ -2499,10 +2499,15 @@ function wantsPlan(ctx, rec, facts, names) {
 }
 
 // The model menu chooseRecovery would ask: 4jr exclusion + y34 shaping.
+// The planner never pages earlier than the FSM would (A/B: JEV picked
+// call_player over the FSM's dig_step on a healthy pit and paged — a
+// regression vs the strict maxCalls gate): call_player stays on the plan
+// menu only when it is the FSM pick; MAX_FAILS still pages as before.
 function askMenu(facts, names) {
   const failedM = /^(pillar_up|dig_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
-  return shapeRecoverMenu(unshaped, facts)
+  const fsm = recoverFsm(facts, names)
+  return shapeRecoverMenu(unshaped, facts).filter((n) => n !== 'call_player' || fsm === 'call_player')
 }
 
 // Fire one plan() call; true = in flight (the caller holds), false = no

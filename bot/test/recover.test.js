@@ -683,6 +683,17 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
       assert.equal(ctx.recovery.fails, 1, 'the hold adds no fail')
     })
 
+    it('call_player stays off the plan menu unless it is the FSM pick', async () => {
+      const bot = mkBot()
+      bot.players = { Owner: { username: 'Owner', entity: { position: pos(40, 61, 0) } } }
+      const { ctx, calls } = planCtx(failedRec())
+      await recover.decide(bot, ctx, null, null)
+      assert.equal(calls.length, 1)
+      const crit = Object.keys(calls[0].criteria)
+      assert.ok(!crit.includes('call_player'), `planner cannot page early: ${crit}`)
+      assert.equal(calls[0].state.target.player, 'online')
+    })
+
     it('planner error falls back to the FSM pick', async () => {
       const bot = mkBot()
       const { ctx, settle } = planCtx(failedRec())
