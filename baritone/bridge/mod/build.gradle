@@ -1,45 +1,88 @@
-// idkcraft-kqzf spike: Gradle build for the bridge mod. SKELETON — not run
-// in CI, versions are placeholders to pin when the epic starts (loom +
-// yarn for MC 26.1.2, Baritone 1.18.0 maven coordinates). Kept so the
-// sized plan names the real toolchain (Gradle in CI, days — the jlda epic
-// already calls this out for any new Fabric mod).
+// idkcraft-neuc.1: the one-body bridge mod. Compiles in CI via the
+// multi-stage baritone/Dockerfile (JDK 25 + ./gradlew build --no-daemon).
+//
+// Toolchain (all pinned): Gradle 9.4.1 (wrapper, committed), Unimined
+// 1.4.2-SNAPSHOT timestamp-pinned (the 26.1.2 toolchain both in-image mods
+// use — see settings.gradle for why not Loom), MC 26.1.2 mojmap,
+// fabric-loader 0.19.5, Baritone API 1.18.0 compileOnly (the runtime ships
+// baritone.jar; see the ivy repo + verifyBaritoneApi below).
 plugins {
-    id 'fabric-loom' version '1.10-SNAPSHOT'
     id 'java'
+    id 'xyz.wagyourtail.unimined' version '1.4.2-20260917.005300-30'
 }
 
-version = project.mod_version
-group = project.maven_group
+group = 'idkcraft'
+version = '0.1.0'
+
+base {
+    archivesName = 'idkcraft-bridge'
+}
 
 repositories {
     mavenCentral()
-    // Baritone releases (pin the 1.18.0 fabric artifact when epic'd).
-    maven { url = 'https://github.com/cabaletta/baritone/raw/master/maven' }
+    // authlib (compileOnly — the game provides it at runtime).
+    maven { url = 'https://libraries.minecraft.net/' }
+    // Baritone publishes no maven repo (only versioned release assets), so
+    // the API jar resolves straight from the v1.18.0 release. Immutable tag
+    // + the sha256 gate in verifyBaritoneApi = the same pinning the
+    // Dockerfile's ADD --checksum gives the runtime jar.
+    ivy {
+        url = 'https://github.com/cabaletta/baritone/releases/download/'
+        patternLayout { artifact 'v[revision]/[module]-[revision].[ext]' }
+        metadataSources { artifact() }
+    }
 }
 
-loom {
-    splitEnvironmentSourceSets()
-    mods {
-        'idkcraft-bridge' {
-            sourceSet sourceSets.main
-            sourceSet sourceSets.client
-        }
+unimined.minecraft {
+    version '26.1.2'
+    mappings {
+        mojmap()
+        devFallbackNamespace 'mojmap'
     }
+    fabric {
+        loader '0.19.5'
+    }
+    defaultRemapJar = true
 }
 
 dependencies {
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings loom.layered {
-        officialMojangMappings()
-        // TODO(kqzf-epic): pin the yarn build for 26.1.2.
-        // yarn("26.1.2+build.XXX:v2")
-    }
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-    // TODO(kqzf-epic): fabric-api modules as needed (lifecycle, networking).
-    // TODO(kqzf-epic): baritone api jar (compileOnly — the runtime ships it).
-    // Small pure-Java websocket server, no natives (the whole bridge).
-    implementation 'org.java-websocket:Java-WebSocket:1.5.6'
+    // Provided by the game / the runtime mods — never bundled.
+    compileOnly 'com.google.code.gson:gson:2.13.2'
+    compileOnly 'org.slf4j:slf4j-api:2.0.17'
+    compileOnly 'com.mojang:authlib:7.0.63'
+    compileOnly 'baritone:baritone-api-fabric:1.18.0@jar'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
+    testImplementation 'com.google.code.gson:gson:2.13.2'
+    testImplementation 'org.slf4j:slf4j-api:2.0.17'
+    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.17'
 }
+
+// Docker layer cache: downloads every compile/test artifact without needing
+// sources, so the Dockerfile warms one layer from the build files alone and
+// mod edits reuse it (same rule as the client-download layer there).
+tasks.register('warmDeps') {
+    doLast {
+        int n = configurations.compileClasspath.files.size()
+                + configurations.testCompileClasspath.files.size()
+                + configurations.testRuntimeClasspath.files.size()
+        logger.lifecycle("warmed ${n} artifacts")
+    }
+}
+
+// The release asset is immutable, but tags can be re-uploaded (it happened
+// to hmc-specifics: see baritone/Dockerfile). Fail the build on drift.
+tasks.register('verifyBaritoneApi') {
+    doLast {
+        def jar = configurations.compileClasspath.files.find { it.name == 'baritone-api-fabric-1.18.0.jar' }
+        if (jar == null) throw new GradleException('baritone-api jar not on the compile classpath')
+        def sha = java.security.MessageDigest.getInstance('SHA-256').digest(jar.bytes).encodeHex().toString()
+        if (sha != 'beec850e73591ab1dc81cb359d1d224ef3230a35d21dc6e72f8e8d287e7b79d2') {
+            throw new GradleException("baritone-api sha256 mismatch: ${sha}")
+        }
+    }
+}
+tasks.named('compileJava') { dependsOn 'verifyBaritoneApi' }
 
 processResources {
     inputs.property 'version', project.version
@@ -49,7 +92,16 @@ processResources {
 }
 
 java {
-    withSourcesJar()
     sourceCompatibility = JavaVersion.VERSION_25
     targetCompatibility = JavaVersion.VERSION_25
+}
+
+test {
+    useJUnitPlatform()
+    // No HTML report: its .js assets sit under a `test/` dir, which
+    // `node --test baritone/bridge/` would discover and run as tests.
+    // Failures still print on the console and land in test-results/*.xml.
+    reports {
+        html.required = false
+    }
 }

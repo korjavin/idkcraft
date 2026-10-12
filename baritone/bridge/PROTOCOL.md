@@ -1,10 +1,10 @@
-# One-body bridge protocol (idkcraft-kqzf spike)
+# One-body bridge protocol (idkcraft-neuc)
 
 Target: ONE body — the whole Node logic (castle, goals, orders, recovery)
 runs on a real headless client (HeadlessMc + Fabric + Baritone) instead of
 mineflayer, via a Node adapter (`bot/src/bridge/index.js`) that looks like mineflayer's
 `bot` to the logic. The client carries a small Fabric mod
-(`mod/`, skeleton in this spike) that exposes state+actions over a socket.
+(`mod/`, live since neuc.1) that exposes state+actions over a socket.
 Baritone itself only moves/mines/builds-from-schematic and exposes no
 world/inventory read API to an outside process, so without the mod the
 adapter cannot see anything.
@@ -25,36 +25,67 @@ JSON, not NBT/cbor: debuggable over `websocat`, and the 10 Hz state poll
 is ~200 bytes. Binary chunk snapshots (prod `chunk.get`) ride as base64
 inside the same envelope — no second port.
 
-## Spike methods (implemented in `bot/src/bridge/transport.js` FakeTransport + `bot/src/bridge/index.js` — neuc.2 moved them into the bot image)
+## Implemented methods (neuc.1 core + neuc.3 entities)
 
 | method | params | result | mineflayer surface |
 |---|---|---|---|
 | `hello` | — | `{mod,v,mc,baritone}` | handshake (version gate) |
-| `state.get` | — | `{pos:{x,y,z,yaw,pitch,onGround},health,food,baritone:{pathing,last}}` | `entity/position/health/food`, `isMoving` |
-| `block.get` | `{x,y,z}` (floored) | `{name,x,y,z}` | `blockAt` via the sync cache |
-| `inventory.get` | — | `{items:[{slot,name,count,type}]}` | `inventory.items()`, `heldItem` |
-| `dig.once` | `{x,y,z}` | `{broke:name}` | `dig(block)` promise |
-| `place.once` | `{x,y,z}` | `{placed:name}` | `placeBlock(ref,face)` promise |
-| `chat.send` | `{message}` | `{sent:true}` | `chat(msg)` |
-| `baritone.cmd` | `{command}` e.g. `#goto x y z` | `{accepted:true}` | `pathfinder.setGoal/stop` |
-| `baritone.status` | — | `{pathing,last}` | `isMoving`, `path_update`/`path_reset` |
+| `state.get` | — | `{pos:{x,y,z,yaw,pitch,onGround,vel},health,food,oxygen,time,spawn,isRaining,isSleeping,dimension,gameMode}` (all null offline) | `entity/position/health/food`, `time`, `game`, `isRaining` |
+| `chat.send` | `{message}` (`/…` runs a command) | `{sent:true}` | `chat(msg)` |
+| `baritone.cmd` | `{command}` e.g. `#goto x y z` (`#` stripped) | `{id}` (fresh id per cmd; goal cmds arm the tracker) | `pathfinder.setGoal/stop` |
+| `baritone.status` | — | `{id,pathing,last}` (`last`: `none` before any terminal) | `isMoving`, `path_update`/`path_reset` |
+| `entities.list` | — | `{entities:[…]}` (shape in the entities section below) | `bot.entities[id]` |
+| `roster.get` | — | `{players:[…]}` | `bot.players[name]` |
 
-Events (spike): `chat {username,message}`, `death {}`, `respawn {}`,
-`block.update {x,y,z,name}` (cache write-through), `baritone.event
-{status}` (`success|noPath|timeout`, from a Baritone API listener in the
-mod — the executive-poll fallback in `bot/src/bridge/index.js#refresh` is spike-only).
+Events: `chat {username,uuid,message,position:'chat'}` (player chat),
+`message {message,position:'system'|'game_info'}` (system lines, action bar,
+disguised chat), `baritone.event {id,status}` (`success|noPath|timeout|
+stopped`), `player.joined {name,uuid}` / `player.left {name,uuid}`,
+`entity.gone {id}` (best-effort; the list diff is the reliable channel).
+Unknown methods fail `-32601` (the adapter treats unimplemented surfaces
+as best-effort); `-32602` is bad params (incl. unknown Baritone
+commands), `-32603` internal, `-32001` client busy (the client thread
+didn't answer in 3 s), `-32002` not in world.
 
-Status attribution (revmux 01 core-3, 02 core-1): the spike adapter
-latches a goal generation per `setGoal`, arms a witnessed-motion flag on
-the first `pathing:true` poll, and only trusts a `pathing:false`
-terminal once motion was witnessed for THAT goal — a stale latch from a
-previous goal (or still calculating) keeps the `setGoal` latch and stays
-silent, because synthesising `success` (or even just flipping `isMoving`)
-re-issues `follow.js` every tick and the body never moves. A goal that
-fails before any poll shows motion must surface via the pushed
-`baritone.event`, never the poll. Prod replaces the latch with a goal id
-echoed through `baritone.cmd` → `baritone.status` (required, not optional:
-the latch trusts that every goal shows motion on some poll).
+Units are mineflayer's, by design (the adapter maps them straight onto
+`bot`): yaw/pitch are mineflayer-convention radians (not MC degrees);
+`vel` is blocks/tick; `oxygen` is `round(airTicks/15)` (0–20);
+`time` mirrors mineflayer's formulas (`timeOfDay` 0–23999, `isDay` below
+13000, frozen daylight reads `|clock|`); `dimension` is the full id
+(`minecraft:overworld`); `gameMode` the name (`survival`); `spawn` the
+world shared spawn (player bed/anchor refinement deferred). `state.get`
+while the client is at the menu returns every key present and null (never
+an error) so the adapter polls for `pos`.
+
+Goal ids (replaces the spike's witnessed-motion latch — revmux 01 core-3,
+02 core-1 — which re-issued `follow.js` every tick on synthesised
+terminals): every accepted `baritone.cmd` mints a fresh monotonic id
+(from 1; 0 = no cmd yet), but only a goal-issuing command re-arms the
+tracker: the custom goal changed across the execute (Baritone news a
+`Goal` per setGoal, so even a same-spot re-issue counts), another
+process took control (`#goto <block>` routes to GetToBlock and never
+touches the custom goal), or a process command
+(`follow/mine/build/explore/farm/elytra`) re-issued onto its live
+process. Controls (`#stop`/`#pause`/`#resume`/`#set`/…) return their id
+and leave the live goal armed; their ids never resolve. Events and `status.id`
+carry the TRACKED goal id; a superseded goal receives NO terminal event
+(the adapter binds the echoed goal id and drops anything else). First
+terminal per tracked id wins; later events for it drop. Mapping:
+`AT_GOAL`→`success`, `CALC_FAILED`→`noPath`, `CANCELED`→`success` when
+the feet stand in `mostRecentGoal` (Baritone cancels the segment as
+arrival cleanup, and `AT_GOAL` never fires then — incl.
+goto-where-you-stand), else swallowed within 10 ticks of the goal cmd
+(the superseded segment's cancel), else `stopped`. `NEXT_CALC_FAILED`
+and the other `PathEvent`s are lookahead chatter, never terminal. No
+terminal within 120 s of walking → `{id,timeout}` plus a mod-issued
+`#stop` to halt the body; a bridge-issued `#pause` freezes that budget
+(it bills walking time, not paused time) — a `#pause` typed in game
+chat still bills the goal, the mod only sees bridge traffic (and a
+`#resume` from any other channel leaves the freeze on until the next
+goal or `#stop`). `#stop`'s
+`CANCELED` resolves the TRACKED goal id as `stopped` (idle stops stay
+silent). A cmd issued at the menu resolves `stopped` on the next tick —
+no player to drive.
 
 ## Prod methods (sized, not in the spike)
 
@@ -242,7 +273,7 @@ round, `handleBridgeEvent` first in the adapter's event router).
 
 `type` is `'player'` or the mob registry id (e.g. `'zombie'`);
 `name` is set on players only (tab-list name, Floodgate dots untouched);
-`kind` is `player|hostile|animal|other` from the client's SpawnGroup
+`kind` is `player|hostile|animal|other` from the client's MobCategory
 (MONSTER→hostile, MISC→other, players→player, rest→animal);
 `gameMode` is the numeric mode id (null when the entry carries none);
 `self:true` tags the local player when the client world lists it.
@@ -265,7 +296,8 @@ Non-player `entity.type` comes from the passed-through registry
 same registry (zero bridge traffic); raw entity metadata is NOT streamed
 yet (sheep wool reads fail open). A null network handler (real
 disconnect) clears both snapshots; a null world with a live handler
-serves last-good. BridgeServer seam required: `onClientTick(Runnable)`
-plus `register`/`push` over plain Maps/Lists (.1 owns it). Node-side
-wiring is landed (poll + router in `bot/src/bridge/index.js`); the mod
-half (`Entities.install`) goes live with .1's `BridgeServer`.
+serves last-good. BridgeServer seam: `onClientTick(Runnable)` plus
+`register`/`push` over Gson `JsonObject`s (the snapshots stay plain
+Maps/Lists and convert at the boundary). Node-side wiring is landed
+(poll + router in `bot/src/bridge/index.js`); the mod half
+(`Entities.install`) went live with .1's `BridgeServer`.

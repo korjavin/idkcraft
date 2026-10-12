@@ -354,7 +354,7 @@ describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
   fs.mkdirSync(baritone, { recursive: true })
   // Fake client.sh: records args + the launch env, start exits FAKE_CLIENT_RC.
   fs.writeFileSync(path.join(baritone, 'client.sh'), '#!/bin/sh\necho "$@" >> "$FAKE_CALLS"\n' +
-    'echo "client=${BARITONE_CLIENT:-idk-baritone-client} console=${BRIDGE_PORT:-7777} mod=$MOD_PORT log=$CLIENT_LOG" >> "$FAKE_CALLS"\n' +
+    'echo "client=${BARITONE_CLIENT:-idk-baritone-client} console=${BRIDGE_PORT:-7777} mod=$MOD_PORT log=$CLIENT_LOG api=$BARITONE_API" >> "$FAKE_CALLS"\n' +
     '[ "$1" = start ] && exit "${FAKE_CLIENT_RC:-0}"\nexit 0\n')
   const bin = path.join(tmp, 'bin')
   fs.mkdirSync(bin)
@@ -380,18 +380,26 @@ describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
     const r = run({ FAKE_CLIENT_RC: '2' })
     assert.equal(r.status, 2, r.stdout + r.stderr)
     assert.deepEqual(r.calls, ['start 25571 StuckReplayt1',
-      'client=idk-baritone-body console=7779 mod=7778 log=/tmp/stuck-body-paper-base.log'])
+      'client=idk-baritone-body console=7779 mod=7778 log=/tmp/stuck-body-paper-base.log api=1'])
     assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
+  })
+
+  it('the body boot passes BARITONE_API=1 (the bridge mod needs the API jar, idkcraft-neuc.1)', () => {
+    const r = run({})
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(r.calls.includes(
+      'client=idk-baritone-body console=7779 mod=7778 log=/tmp/stuck-body-paper-base.log api=1'),
+    r.calls.join('\n'))
   })
 
   it('a successful start stops the client at teardown and exports the adapter addresses', () => {
     const r = run({})
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(r.calls, ['start 25571 StuckReplayt1',
-      'client=idk-baritone-body console=7779 mod=7778 log=/tmp/stuck-body-paper-base.log',
+      'client=idk-baritone-body console=7779 mod=7778 log=/tmp/stuck-body-paper-base.log api=1',
       // stop inherits the exported BRIDGE_PORT (the mod ws by then); the
-      // launch-only vars (MOD_PORT/CLIENT_LOG) were never exported.
-      'stop', 'client=idk-baritone-body console=7778 mod= log='])
+      // launch-only vars (MOD_PORT/CLIENT_LOG/BARITONE_API) were never exported.
+      'stop', 'client=idk-baritone-body console=7778 mod= log= api='])
     assert.deepEqual(r.envOut,
       { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '7778', BRIDGE_CONSOLE_PORT: '7779' })
     assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
@@ -400,7 +408,7 @@ describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
   it('BODY_CONSOLE_PORT/MOD_PORT overrides reach the client and the replay', () => {
     const r = run({ BODY_CONSOLE_PORT: '17779', MOD_PORT: '17778' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.ok(r.calls.includes('client=idk-baritone-body console=17779 mod=17778 log=/tmp/stuck-body-paper-base.log'),
+    assert.ok(r.calls.includes('client=idk-baritone-body console=17779 mod=17778 log=/tmp/stuck-body-paper-base.log api=1'),
       r.calls.join('\n'))
     assert.deepEqual(r.envOut,
       { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '17778', BRIDGE_CONSOLE_PORT: '17779' })
@@ -427,9 +435,9 @@ describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
     assert.equal(r.status, 0, r.stdout + r.stderr)
     // The worker launch clears MOD_PORT (its client publishes the console
     // only); the body publishes the console + the mod ws. No shared publish.
-    assert.ok(r.calls.includes('client=idk-baritone-client console=7777 mod= log=/tmp/stuck-worker-paper-base.log'),
+    assert.ok(r.calls.includes('client=idk-baritone-client console=7777 mod= log=/tmp/stuck-worker-paper-base.log api='),
       r.calls.join('\n'))
-    assert.ok(r.calls.includes('client=idk-baritone-body console=7779 mod=17778 log=/tmp/stuck-body-paper-base.log'),
+    assert.ok(r.calls.includes('client=idk-baritone-body console=7779 mod=17778 log=/tmp/stuck-body-paper-base.log api=1'),
       r.calls.join('\n'))
     assert.deepEqual(r.envOut,
       { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '17778', BRIDGE_CONSOLE_PORT: '7779' })
