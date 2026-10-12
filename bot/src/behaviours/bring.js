@@ -1194,7 +1194,8 @@ function guidedTarget(bot, p, bp) {
     const c = { x: Math.floor(p.x) + f[0], y: Math.floor(p.y) + f[1], z: Math.floor(p.z) + f[2] }
     let n = null
     try {
-      const b = bot.blockAt && bot.blockAt(c)
+      // Vec3, not the plain cell: prod blockAt calls pos.floored().
+      const b = bot.blockAt && bot.blockAt(new Vec3(c.x, c.y, c.z))
       n = (b && b.name) || null
     } catch (_) { n = null }
     return { c, n }

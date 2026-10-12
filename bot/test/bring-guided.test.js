@@ -605,6 +605,20 @@ describe('guided dig-in', () => {
     assert.deepEqual(guidedTarget(caveAir, ore, below), { x: 11, y: 64, z: 0 }, 'air below loses to head-side stone')
   })
 
+  it('guidedTarget passes Vec3 to blockAt (prod calls pos.floored())', () => {
+    const names = {
+      '10,64,0': 'iron_ore', '9,64,0': 'iron_ore', // mate on the head face
+      '11,64,0': 'stone', '10,64,1': 'stone', '10,64,-1': 'stone', '10,65,0': 'stone',
+    }
+    const bot = mockBot({ names })
+    bot.blockAt = (p) => {
+      const f = p.floored() // TypeError on a plain object, like prismarine-world
+      const n = names[`${f.x},${f.y},${f.z}`]
+      return n ? { name: n, position: pos(f.x, f.y, f.z) } : null
+    }
+    assert.deepEqual(guidedTarget(bot, pos(10, 64, 0), pos(0, 64, 0)), { x: 10, y: 65, z: 0 })
+  })
+
   it('guidedStepback walks the face axis out, guidedSameSide splits the hemispheres', () => {
     assert.deepEqual(guidedStepback({ x: 9, y: 64, z: 0 }, pos(10, 64, 0)), { x: 5, y: 64, z: 0 })
     assert.deepEqual(guidedStepback({ x: 59, y: 57, z: -205 }, pos(59, 56, -205)), { x: 59, y: 61, z: -205 })
