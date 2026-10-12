@@ -742,7 +742,11 @@ function litterTargets(bot, ctx, st, now) {
         const k = `${x},${y},${z}`
         if (at.has(k)) continue
         const n = nameAt(bot, { x, y, z })
-        if (n === 'cobblestone' || (placed.has(k) && NATURAL_SOLID.has(n))) {
+        // The stairs relay (g0z.48, revmux 02): the box holds a lived-in
+        // castle, not a construction site — cobblestone sweeps only when
+        // the bot placed it this session (trackPlaced), never the owner's.
+        const ownCobble = n === 'cobblestone' && (!st.upgrade || placed.has(k))
+        if (ownCobble || (placed.has(k) && NATURAL_SOLID.has(n))) {
           list.push({ x, y, z, kind: 'air', dy, idx: 2000000 + (dx * d + dz) * 40 + dy })
         }
       }

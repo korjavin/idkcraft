@@ -280,6 +280,43 @@ describe('castle upgrade order (g0z.48)', () => {
     assert.equal(ctx.castle.parked, false)
   })
 
+  it('the relay tail sweeps own box scaffold, never the owner cobble (revmux 02)', async () => {
+    const world = new Map()
+    paintV2(world)
+    for (const c of blueprint.absPlan(SITE, 0, 3).cells) {
+      if (c.kind !== 'stairs') continue
+      world.set(k3(c.x, c.y, c.z), { name: 'cobblestone_stairs', props: { facing: blueprint.faceName(c.face), half: 'bottom' } })
+    }
+    // Two off-plan ground cobbles in box-scan order: the owner's first.
+    const at = blueprint.absPlan(SITE, 0, 3).at
+    const dt = blueprint.decorPlan(SITE, 0, 3).at
+    const off = []
+    for (let dx = 1; dx <= 3 && off.length < 2; dx++) {
+      for (let dz = 12; dz <= 14 && off.length < 2; dz++) {
+        const k = k3(SITE.x + dx, SITE.y, SITE.z + dz)
+        if (!at.has(k) && !dt.has(k)) off.push({ x: SITE.x + dx, y: SITE.y, z: SITE.z + dz, k })
+      }
+    }
+    assert.equal(off.length, 2)
+    const [owner, own] = off
+    world.set(owner.k, { name: 'cobblestone', props: {} })
+    world.set(own.k, { name: 'cobblestone', props: {} })
+    const bot = worldBot(world, {
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }],
+      at: pos(owner.x + 0.5, owner.y, owner.z + 2.5),
+    })
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    const st = completeV2({ blueprintVersion: 3, phase: 'body', residence: true, upgrade: { from: 2, at: Date.now() } })
+    bot._tickerCtx.castle = st
+    bot._tickerCtx.home = residence.castleHome(st)
+    bot._tickerCtx.placedByBot = new Set([own.k])
+    const ctx = bot._tickerCtx
+    for (let i = 0; i < 8 && st.phase !== 'complete'; i++) { castleMod(bot, ctx); await settle() }
+    assert.equal(st.phase, 'complete')
+    assert.equal(world.get(owner.k).name, 'cobblestone', 'owner cobble survives the relay')
+    assert.equal(world.get(own.k).name, 'air', 'own scaffold is swept')
+  })
+
   it('the goal word is stairs-batch with a kit, and the castle step runs it', async () => {
     const { bot, ticker, ctx } = upgradedBot()
     handleChat(bot, ticker, 'Steve', 'castle upgrade')
