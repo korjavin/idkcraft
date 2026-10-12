@@ -7,10 +7,10 @@
 // so follow.js, perception.js, worker.players() and the chat sender
 // resolution run unchanged on v2.
 //
-// Wiring (adapter-owned, .2/.4 apply on merge; the unit test mirrors it):
-//   const { refreshEntities, handleBridgeEvent } = require('./entities')
-//   ... in the poll round, after state.get: await refreshEntities(bot, transport)
-//   ... in _handleEvent, first line: if (handleBridgeEvent(bot, method, params)) return
+// Wiring (landed in index.js): the poll round calls refreshEntities(bot,
+// transport) best-effort after inventory, and _handleEvent delegates to
+// handleBridgeEvent first. bridge-entities.test.js covers the wired path
+// end to end (incl. an EP1-shaped follow microcosm).
 //
 // Fold rules (mineflayer parity, plugins/entities.js):
 // - bot.entities[id] objects are STABLE: sighted entities mutate in place

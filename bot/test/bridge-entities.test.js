@@ -1,38 +1,21 @@
 // idkcraft-neuc.3: entities + roster fold over the bridge. The REAL
-// BaritoneBot adapter (spike path until .2 moves it), the REAL perception
-// (buildState/resolvePlayer), worker.players and follow.js run unchanged
-// against fixtures shaped exactly like the mod's entities.list/roster.get.
+// BaritoneBot adapter (wired: the poll folds entities, the event router
+// folds notifications), the REAL perception (buildState/resolvePlayer),
+// worker.players and follow.js run unchanged against FakeTransport
+// fixtures shaped exactly like the mod's entities.list/roster.get.
 'use strict'
 
-const fs = require('node:fs')
-const path = require('node:path')
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
-const { syncEntities, syncRoster, refreshEntities, handleBridgeEvent } = require('../src/bridge/entities')
+const { handleBridgeEvent } = require('../src/bridge/entities')
+const { BaritoneBot } = require('../src/bridge/index')
+const { FakeTransport } = require('../src/bridge/transport')
 const perception = require('../src/perception')
 const worker = require('../src/worker')
 const follow = require('../src/behaviours/follow')
-
-// Wave-1 parallel-bead loader: .2 moves the spike adapter/transport to
-// bot/src/bridge/. Prefer the moved location, fall back to the spike path
-// until .2 merges (delete the fallback after).
-function loadBridge() {
-  if (fs.existsSync(path.join(__dirname, '..', 'src', 'bridge', 'index.js'))) {
-    return {
-      BaritoneBot: require('../src/bridge/index').BaritoneBot,
-      FakeTransport: require('../src/bridge/transport').FakeTransport,
-    }
-  }
-  return {
-    BaritoneBot: require('../../baritone/bridge/adapter').BaritoneBot,
-    FakeTransport: require('../../baritone/bridge/transport').FakeTransport,
-  }
-}
-
-const { BaritoneBot, FakeTransport } = loadBridge()
 
 // Registry stub: entitiesByName[name].{height,width,type}, the same shape
 // minecraft-data serves in prod (zero bridge traffic).
@@ -47,23 +30,9 @@ const REGISTRY = {
   },
 }
 
-// FakeTransport with the .3 wire fixtures. Wire shapes match PROTOCOL.md:
-// entities.list -> {entities:[{id,uuid,type,name,displayName,kind,pos,vel,
-// yaw,pitch,health,onGround,pose,self?}]}, roster.get -> {players:[{name,
-// uuid,ping,gameMode}]}. (Post-.2 these fixtures move into
-// bot/src/bridge/transport.js proper.)
-class EntitiesFakeTransport extends FakeTransport {
-  async call(method, params = {}) {
-    if (method === 'entities.list') {
-      return { entities: JSON.parse(JSON.stringify(this.state.entities || [])) }
-    }
-    if (method === 'roster.get') {
-      return { players: (this.state.roster || []).map((p) => ({ ...p })) }
-    }
-    return super.call(method, params)
-  }
-}
-
+// Wire fixture shapes match PROTOCOL.md: entities.list ->
+// {entities:[{id,uuid,type,name,displayName,kind,pos,vel,yaw,pitch,health,
+// onGround,pose,self?}]}, roster.get -> {players:[{name,uuid,ping,gameMode}]}.
 function wirePlayer(o = {}) {
   return {
     id: o.id ?? 7,
@@ -110,16 +79,12 @@ function rosterEntry(o = {}) {
 }
 
 async function foldBot(state = {}) {
-  const transport = new EntitiesFakeTransport({
+  const transport = new FakeTransport({
     pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true },
     ...state,
   })
   const bot = new BaritoneBot(transport, { Vec3, registry: REGISTRY, username: 'IdkBody' })
-  await bot.start({ pollMs: 0 })
-  // The documented adapter wiring (.2 applies it in _refreshOnce/_handleEvent):
-  // one entities round per poll + notification delegation.
-  transport.on('event', (method, params) => { handleBridgeEvent(bot, method, params) })
-  await refreshEntities(bot, transport)
+  await bot.start({ pollMs: 0 }) // start() runs one wired poll round itself
   return { transport, bot }
 }
 
@@ -161,7 +126,7 @@ describe('entities.list fold (bot.entities, mineflayer-shaped)', () => {
     const pos = zombie.position
     const vel = zombie.velocity
     transport.state.entities = [wirePlayer(), wireMob({ x: 5, z: 6, vx: 1.5 })]
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     assert.equal(bot.entities['42'], zombie, 'same entity object')
     assert.equal(zombie.position, pos, 'same position Vec3')
     assert.equal(zombie.velocity, vel, 'same velocity Vec3')
@@ -174,7 +139,7 @@ describe('entities.list fold (bot.entities, mineflayer-shaped)', () => {
     const gone = []
     bot.on('entityGone', (e) => gone.push(e))
     transport.state.entities = [wirePlayer()]
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     assert.deepEqual(gone, [zombie])
     assert.equal(zombie.isValid, false)
     assert.equal(bot.entities['42'], undefined)
@@ -185,7 +150,7 @@ describe('entities.list fold (bot.entities, mineflayer-shaped)', () => {
     const spawned = []
     bot.on('entitySpawn', (e) => spawned.push(e.id))
     transport.state.entities = [wirePlayer(), wireMob(), wireMob({ id: 43, type: 'creeper', displayName: 'Creeper' })]
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     assert.deepEqual(spawned, [43])
   })
 
@@ -195,7 +160,7 @@ describe('entities.list fold (bot.entities, mineflayer-shaped)', () => {
       wireMob({ id: 45, type: 'grue', displayName: 'Grue', kind: 'hostile' }),
       wireMob({ id: 46, type: 'gruecart', displayName: 'Gruecart', kind: 'other' }),
     ]
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     assert.equal(bot.entities['44'].type, 'projectile', 'flat.js skips stuck arrows like v1')
     assert.equal(bot.entities['45'].type, 'mob', 'unmapped hostile name falls back')
     assert.equal(bot.entities['46'].type, 'object', 'unmapped MISC name falls back')
@@ -226,7 +191,7 @@ describe('roster.get fold (bot.players merged with entities)', () => {
     bot.on('playerJoined', (p) => joined.push(p.username))
     bot.on('playerLeft', (p) => left.push(p.username))
     transport.state.roster = [rosterEntry(), rosterEntry({ name: 'Newbie', uuid: '44444444-4444-4444-4444-444444444444' })]
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     assert.deepEqual(joined, ['Newbie'])
     assert.deepEqual(left, ['Guest'])
     assert.equal(bot.players.Guest, undefined)
@@ -237,7 +202,7 @@ describe('roster.get fold (bot.players merged with entities)', () => {
   it('unlinks the roster entry when its entity despawns', async () => {
     assert.ok(bot.players.Owner.entity)
     transport.state.entities = []
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     assert.equal(bot.players.Owner.entity, null)
     assert.ok(bot.players.Owner, 'roster entry survives; only the link drops')
   })
@@ -261,25 +226,25 @@ describe('bridge notifications (player.joined/left, entity.gone)', () => {
     assert.equal(bot.players.Guest.username, 'Guest')
     assert.deepEqual(joined, ['Guest'])
     transport.state.roster = [rosterEntry(), rosterEntry({ name: 'Guest', uuid: '33333333-3333-3333-3333-333333333333' })]
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     assert.deepEqual(joined, ['Guest'], 'poll converges, no double event')
   })
 
   it('player.left removes + emits once; the next poll does not re-emit', async () => {
     transport.state.roster = [rosterEntry(), rosterEntry({ name: 'Guest', uuid: '33333333-3333-3333-3333-333333333333' })]
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     const left = []
     bot.on('playerLeft', (p) => left.push(p.username))
     transport.inject('player.left', { name: 'Guest', uuid: '33333333-3333-3333-3333-333333333333' })
     assert.equal(bot.players.Guest, undefined)
     assert.deepEqual(left, ['Guest'])
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     assert.deepEqual(left, ['Guest'], 'poll converges, no double event')
   })
 
   it('entity.gone removes + emits; unknown ids and methods are no-ops', async () => {
     transport.state.entities = [wirePlayer(), wireMob()]
-    await refreshEntities(bot, transport)
+    await bot.refresh()
     const gone = []
     bot.on('entityGone', (e) => gone.push(e.id))
     transport.inject('entity.gone', { id: 42 })
@@ -304,11 +269,11 @@ describe('self alias (bot.entity in bot.entities, mineflayer parity)', () => {
       assert.equal(bot.entity.id, 1)
       assert.equal(bot.entity.type, 'player')
       // A second round with self still listed emits nothing for it.
-      await refreshEntities(bot, transport)
+      await bot.refresh()
       assert.deepEqual(spawned, [])
       // And a round WITHOUT self never removes the state.get-owned object.
       transport.state.entities = []
-      await refreshEntities(bot, transport)
+      await bot.refresh()
       assert.equal(bot.entities['1'], bot.entity)
       assert.equal(bot.players.IdkBody.entity, bot.entity, 'roster self falls back to bot.entity')
     } finally {
@@ -368,7 +333,7 @@ describe('REAL logic through the fold (perception + worker + follow)', () => {
         rosterEntry({ name: 'IdkBody', uuid: '00000000-0000-0000-0000-000000000000' }),
         rosterEntry({ name: 'TestWorker', uuid: '55555555-5555-5555-5555-555555555555' }),
       ]
-      await refreshEntities(bot, transport)
+      await bot.refresh()
       assert.deepEqual(Object.keys(worker.players(bot)), ['Owner'])
       assert.equal(perception.resolvePlayer(bot, 'Owner'), 'Owner')
       assert.equal(perception.resolvePlayer(bot, 'TestWorker'), null, 'the worker is never a player')
@@ -428,21 +393,57 @@ describe("Floodgate '.name' resolution through the fold", () => {
   })
 })
 
-describe('adapter wiring (idkcraft-neuc.17, lands with .2/.4)', () => {
-  // No manual refreshEntities/handleBridgeEvent: the adapter poll + event
-  // router must fold entities themselves. FAILS until .17 wires them.
-  it('adapter.refresh() fills bot.entities/bot.players with no manual fold', { skip: 'idkcraft-neuc.17 wires the fold into the adapter' }, async () => {
-    const transport = new EntitiesFakeTransport({
+describe('adapter wiring (fold lives in the poll + router)', () => {
+  it('adapter.refresh() fills bot.entities/bot.players with no manual fold', async () => {
+    const transport = new FakeTransport({
       entities: [wirePlayer(), wireMob()],
       roster: [rosterEntry()],
     })
     const bot = new BaritoneBot(transport, { Vec3, registry: REGISTRY, username: 'IdkBody' })
     try {
-      await bot.start({ pollMs: 0 }) // start() runs one poll round itself
+      await bot.start({ pollMs: 0 }) // start() runs one wired poll round itself
       assert.ok(bot.players.Owner, 'roster folded by the adapter poll')
       assert.ok(bot.entities['42'], 'entities folded by the adapter poll')
       transport.inject('player.joined', { name: 'Guest', uuid: '33333333-3333-3333-3333-333333333333' })
       assert.ok(bot.players.Guest, 'notification folded by the adapter router')
+    } finally {
+      await bot.stop()
+    }
+  })
+
+  // EP1 microcosm (the rig acceptance shape, FakeTransport loopback): the
+  // guide stands at 10,10, the follower folds the roster through the wired
+  // poll, follow.js issues GoalFollow, the fake #goto walks, arrival lands,
+  // and chat from the guide resolves through the folded roster.
+  it('EP1 shape: fold -> follow -> walk -> arrive -> chat answered', async () => {
+    const { transport, bot } = await foldBot({
+      entities: [wirePlayer()],
+      roster: [rosterEntry()],
+    })
+    try {
+      const ctx = {}
+      bot.on('path_update', (r) => { ctx.lastPathStatus = r && r.status })
+      const target = worker.players(bot).Owner.entity
+      follow(bot, ctx, target) // fresh key: issues GoalFollow at the folded pos
+      assert.ok(bot.pathfinder.goal instanceof goals.GoalFollow)
+      assert.equal(transport.state.baritone, '#goto 10.0 64.0 10.0')
+      await bot.refresh() // round 1: fake walk lands, motion witnessed
+      assert.deepEqual([bot.entity.position.x, bot.entity.position.z], [10, 10])
+      assert.equal(bot.pathfinder.isMoving(), true)
+      await bot.refresh() // round 2: arrival -> path_update success
+      assert.equal(bot.pathfinder.isMoving(), false)
+      assert.equal(ctx.lastPathStatus, 'success')
+      // Guide walks away: the next poll folds the new pos, follow re-issues.
+      transport.state.entities = [wirePlayer({ x: 30, z: 30 })]
+      await bot.refresh()
+      assert.deepEqual([target.position.x, target.position.z], [30, 30], 'folded target tracks the guide')
+      ctx.lastPathStatus = 'success'
+      follow(bot, ctx, target)
+      assert.equal(transport.state.baritone, '#goto 30.0 64.0 30.0')
+      // Chat from the guide resolves through the folded roster (the 'follow
+      // me'/'stay' acceptance half): sender name + uuid both hit.
+      assert.equal(perception.resolvePlayer(bot, 'Owner'), 'Owner')
+      assert.equal(perception.resolvePlayer(bot, 'Owner', '11111111-1111-1111-1111-111111111111'), 'Owner')
     } finally {
       await bot.stop()
     }

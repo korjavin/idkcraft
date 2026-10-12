@@ -194,5 +194,6 @@ same registry (zero bridge traffic); raw entity metadata is NOT streamed
 yet (sheep wool reads fail open). A null network handler (real
 disconnect) clears both snapshots; a null world with a live handler
 serves last-good. BridgeServer seam required: `onClientTick(Runnable)`
-plus `register`/`push` over plain Maps/Lists (.1 owns it). Adapter +
-mod wiring tracked in `idkcraft-neuc.17`.
+plus `register`/`push` over plain Maps/Lists (.1 owns it). Node-side
+wiring is landed (poll + router in `bot/src/bridge/index.js`); the mod
+half (`Entities.install`) goes live with .1's `BridgeServer`.
