@@ -29,11 +29,19 @@ const settle = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise(
 // The rig's v2 paint (castle-replay SEED_PAINT, oak frame here — any log matches).
 const V2_PAINT = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', fence: 'oak_fence', door: 'oak_door', chest: 'chest', torch: 'torch' }
 
-// A finished v2 castle as the world: every place cell laid, moat dug.
+// A finished v2 castle as the world: every place cell laid, moat dug —
+// and glazed (core-1): a lived-in complete castle has its decor, and the
+// 44 panes sit on plan air cells the relay must never touch.
 function paintV2(world) {
   for (const c of blueprint.absPlan(SITE, 0, 2).cells) {
     world.set(k3(c.x, c.y, c.z), blueprint.isPlaceTarget(c.kind) ? { name: V2_PAINT[c.kind], props: {} } : { name: 'air', props: {} })
   }
+  for (const c of blueprint.decorPlan(SITE, 0, 2).cells) {
+    if (c.kind === 'pane') world.set(k3(c.x, c.y, c.z), { name: 'glass_pane', props: {} })
+  }
+}
+function paneCells() {
+  return blueprint.decorPlan(SITE, 0, 2).cells.filter((c) => c.kind === 'pane')
 }
 
 function block(name, x, y, z, props) {
@@ -88,7 +96,7 @@ function completeV2(extra) {
 }
 
 describe('upgrade diff (g0z.48)', () => {
-  it('a laid v2 castle has exactly 60 undone v3 cells, all stairs, nothing else', () => {
+  it('a laid v2 castle has exactly 60 undone v3 place cells, all stairs — plus 44 glazed air cells the relay skips', () => {
     const world = new Map()
     paintV2(world)
     const bot = worldBot(world)
@@ -96,11 +104,16 @@ describe('upgrade diff (g0z.48)', () => {
     const v3 = blueprint.absPlan(SITE, 0, 3).cells
     assert.equal(v2.length, v3.length)
     assert.ok(v2.every((c, i) => c.x === v3[i].x && c.y === v3[i].y && c.z === v3[i].z && c.idx === v3[i].idx), 'same coords, same order, same idx')
+    assert.equal(paneCells().length, 44)
     const undone = v3.filter((c) => !castleMod.done(bot, c))
-    assert.equal(undone.length, 60)
-    assert.ok(undone.every((c) => c.kind === 'stairs' && c.face), 'every undone cell is a faced stairs cell')
+    const place = undone.filter((c) => blueprint.isPlaceTarget(c.kind))
+    assert.equal(place.length, 60)
+    assert.ok(place.every((c) => c.kind === 'stairs' && c.face), 'every undone place cell is a faced stairs cell')
+    const air = undone.filter((c) => !blueprint.isPlaceTarget(c.kind))
+    assert.equal(air.length, 44, 'the glazing reads undone — pick() must skip it, not clear it')
+    assert.ok(air.every((c) => c.kind === 'air'))
     const from = {}
-    for (const c of undone) {
+    for (const c of place) {
       const was = v2[c.idx].kind
       from[was] = (from[was] || 0) + 1
     }
@@ -230,10 +243,11 @@ describe('castle upgrade order (g0z.48)', () => {
     const dug = { ...ctx.castleFlight.cell }
     await settle()
     assert.equal(world.get(k3(dug.x, dug.y, dug.z)).name, 'air', 'the v2 step clears')
+    for (const p of paneCells()) assert.equal(world.get(k3(p.x, p.y, p.z)).name, 'glass_pane', 'glazing intact')
     assert.deepEqual(Object.keys(ctx.castle.blocked), [], 'no hole left behind')
   })
 
-  it('the tail re-completes: phase complete, upgrade cleared, no residence flap', () => {
+  it('the tail re-completes past the glazing: phase complete, upgrade cleared, no residence flap', () => {
     const world = new Map()
     paintV2(world)
     for (const c of blueprint.absPlan(SITE, 0, 3).cells) {
@@ -251,9 +265,19 @@ describe('castle upgrade order (g0z.48)', () => {
     assert.equal(st.status, 'complete')
     assert.equal(bot._tickerCtx.stepStatus, 'done')
     assert.ok(bot.chats.some((m) => m.startsWith('castle done at')))
+    for (const p of paneCells()) assert.equal(world.get(k3(p.x, p.y, p.z)).name, 'glass_pane', 'glazing intact')
+    assert.deepEqual(Object.keys(st.blocked), [], 'no pane hole')
     assert.equal(residence.wanted(bot._tickerCtx), undefined, 'same castle re-adopted: no flap')
     handleChat(bot, ticker, 'Steve', 'castle')
     assert.doesNotMatch(bot.chats.pop(), /upgrading/)
+  })
+
+  it("'castle upgrade' unparks a parked complete castle (core-3)", () => {
+    const { bot, ticker, ctx } = upgradedBot()
+    ctx.castle = completeV2({ residence: true, parked: true })
+    handleChat(bot, ticker, 'Steve', 'castle upgrade')
+    assert.match(bot.chats.pop(), /^upgrading the castle/)
+    assert.equal(ctx.castle.parked, false)
   })
 
   it('the goal word is stairs-batch with a kit, and the castle step runs it', async () => {

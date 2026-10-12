@@ -689,6 +689,10 @@ function castleChat(bot, ticker, playerName, cmd) {
     st.phase = 'body'
     st.blocked = {}
     st.upgrade = { from, at: Date.now() }
+    // An explicit order resumes (the 'castle go' shape): a parked castle
+    // would otherwise answer 'upgrading' and stand still.
+    try { taskMod.clearTaskParks(ctx) } catch (_) { /* resume best-effort */ }
+    st.parked = false
     // The setCastle seam on the same object: scratch reset + save + a
     // fresh task clock; residence and site stay.
     ticker.setCastle(st)

@@ -352,7 +352,10 @@ function pick(bot, ctx, st, cells, key, now) {
     let owed = null
     for (let i = full ? 0 : (ctx.castleCursor | 0); i < order.length; i++) {
       const c = cells[order[i]]
-      if (clearing(c) && complete) continue
+      // The stairs relay (g0z.48) converts place cells only: a complete
+      // castle's decor sits on plan air cells (glazed panes), and the moat
+      // is dug — re-clearing them would strike 44 protected panes.
+      if (clearing(c) && (complete || st.upgrade)) continue
       if (done(bot, c)) continue
       if (first < 0) first = i
       if (torchOwed(bot, c, owed)) {
@@ -396,7 +399,9 @@ function peek(bot, st, now, ctx) {
   let owed = null
   for (const idx of workOrder(cells, key)) {
     const c = cells[idx]
-    if (clearing(c) && complete) continue
+    // Same relay skip as pick(): the arbiter's word never reads 'clear'
+    // for a glazed window mid-upgrade.
+    if (clearing(c) && (complete || st.upgrade)) continue
     if (done(bot, c)) continue
     if (torchOwed(bot, c, owed)) {
       const bo = blocked[bkey(st, c.idx)]
