@@ -121,9 +121,20 @@ function installInput(bot, transport) {
     }
   }
 
+  // Connect-time reset (revmux 01 core-3): a previous Node process may
+  // have died holding keys — the mod keeps them (and its Baritone pause)
+  // across a ws reconnect, where v1 would drop all controls on disconnect.
+  // Force one input.clear before the first refresh adopts mod state.
+  bot._resetInput = async () => {
+    for (const c of CONTROLS) desired[c] = false
+    pendingClear = true
+    schedule()
+    await bot._flushInput()
+  }
+
   // Test/diagnostic seam: resolves when the current coalesced flush settles.
   bot._flushInput = async () => {
-    for (let i = 0; i < 50 && (flushQueued || flushing || dirty || pendingClear); i++) {
+    for (let i = 0; i < 5000 && (flushQueued || flushing || dirty || pendingClear); i++) {
       await new Promise((r) => setTimeout(r, 1))
     }
   }

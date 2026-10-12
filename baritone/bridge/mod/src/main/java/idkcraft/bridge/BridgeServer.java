@@ -196,11 +196,6 @@ public final class BridgeServer {
         tickHooks.add(hook);
     }
 
-    /** neuc.13: true while a tracked goal is latched and not yet terminal. */
-    boolean hasLiveGoal() {
-        return currentId > 0 && !terminalReceived;
-    }
-
     /**
      * neuc.13: run a Baritone control command on the client thread (used by
      * Input for pause/resume). Mirrors baritone.cmd's pausedLocal bookkeeping
@@ -253,7 +248,16 @@ public final class BridgeServer {
         // adapter (which waits for pos before driving anything) would hang.
         ensureClient();
         JsonObject snap = snapshot;
-        return snap != null ? snap : nullSnapshot();
+        if (snap == null) {
+            return nullSnapshot();
+        }
+        // neuc.13 (revmux 01 core-1): input states change on the ws thread
+        // at input.set time, up to a tick before the cached snapshot is
+        // rebuilt — serve them live so a poll can never roll back an
+        // already-acked press/release on the Node mirror.
+        JsonObject live = snap.deepCopy();
+        live.add("input", Input.snapshotJson());
+        return live;
     }
 
     private com.google.gson.JsonElement chatSend(JsonObject params) throws Rpc.RpcException {

@@ -274,6 +274,7 @@ class BaritoneBot extends EventEmitter {
   async start({ pollMs = 100, connect = true } = {}) {
     if (connect && this.transport && typeof this.transport.connect === 'function') await this.transport.connect()
     if (this.transport && typeof this.transport.on === 'function') this.transport.on('event', this._onTransportEvent)
+    await this._resetInput().catch(() => { /* best-effort; refresh still runs */ })
     await this.refresh()
     if (pollMs > 0) {
       this._poll = setInterval(() => {

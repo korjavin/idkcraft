@@ -33,11 +33,4 @@ class InputStateTest {
         assertFalse(s.anyHeld());
         assertEquals(7, s.snapshot().size());
     }
-
-    @Test
-    void resumeOnlyForOurPauseWithLatchedGoal() {
-        assertTrue(InputState.shouldResume(true, true));
-        assertFalse(InputState.shouldResume(true, false));
-        assertFalse(InputState.shouldResume(false, true));
-    }
 }

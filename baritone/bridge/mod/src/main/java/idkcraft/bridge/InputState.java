@@ -49,9 +49,4 @@ public final class InputState {
     public synchronized Map<String, Boolean> snapshot() {
         return new LinkedHashMap<>(states);
     }
-
-    /** Resume only what we paused, and only while a goal is still latched to resume into. */
-    public static boolean shouldResume(boolean pausedByInput, boolean goalLatched) {
-        return pausedByInput && goalLatched;
-    }
 }

@@ -30,12 +30,13 @@ describe('bridge input (neuc.13)', () => {
       assert.equal(bot.controlState.forward, true)
       assert.equal(bot.getControlState('sneak'), true)
       await bot._flushInput()
-      assert.deepEqual(transport.state.inputLog, [{ set: { forward: true, sneak: true, jump: true } }])
+      // Log[0] is the connect-time input.clear from start() (revmux core-3).
+      assert.deepEqual(transport.state.inputLog, [{ clear: true }, { set: { forward: true, sneak: true, jump: true } }])
       assert.equal(transport.state.inputPaused, true)
       // Diff only: releasing one key sends only that key.
       bot.setControlState('jump', false)
       await bot._flushInput()
-      assert.deepEqual(transport.state.inputLog[1], { set: { jump: false } })
+      assert.deepEqual(transport.state.inputLog[2], { set: { jump: false } })
       assert.throws(() => bot.setControlState('fly', true), /invalid control/)
       assert.throws(() => bot.getControlState('fly'), /invalid control/)
       assert.throws(() => bot.setControlState('jump', 1), /invalid state/)
@@ -49,15 +50,28 @@ describe('bridge input (neuc.13)', () => {
       bot.pathfinder.setGoal(new goals.GoalNear(10, 64, 10, 1))
       await new Promise((r) => setTimeout(r, 10))
       const goalId = bot._goalId
+      assert.ok(goalId != null)
+      // No baritone.cmd (goal re-issue or #stop) may cross during a
+      // hand-driven episode: pause/resume is mod-internal, the latched
+      // goal continues. (Baritone-side path survival is rig-only; the
+      // Node-side contract pinned here is "no re-issue, no reset".)
+      let goalCmds = 0
+      const orig = transport.call.bind(transport)
+      transport.call = async (m, p) => { if (m === 'baritone.cmd') goalCmds++; return orig(m, p) }
+      const resets = []
+      bot.on('path_reset', (r) => resets.push(r))
       bot.setControlState('forward', true)
       await bot._flushInput()
       assert.equal(transport.state.inputPaused, true)
       bot.clearControlStates()
       await bot._flushInput()
+      transport.call = orig
       assert.deepEqual(transport.state.inputLog.at(-1), { clear: true })
       assert.equal(bot.getControlState('forward'), false)
       assert.equal(transport.state.inputPaused, false)
-      assert.equal(bot._goalId, goalId, 'pause/resume must not lose the latched goal id')
+      assert.equal(goalCmds, 0, 'input episode must not re-issue or stop the goal')
+      assert.deepEqual(resets, [], 'input episode must not emit path_reset')
+      assert.equal(bot._goalId, goalId)
       assert.equal(bot._goalCmd, '#goto 10 64 10')
       // Idle clear is a no-op (no spam).
       const n = transport.state.inputLog.length

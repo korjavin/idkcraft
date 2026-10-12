@@ -27,8 +27,8 @@ import net.minecraft.world.phys.Vec2;
  *
  * <p>Baritone pause/resume: the first held key pauses Baritone via the
  * bridge command path (which also freezes the goal watchdog); clear (or
- * the last key released) resumes only if the tracked goal is still
- * latched. Pause/resume never clears the goal id, so the same goal
+ * the last key released) resumes it. Pause/resume never clears the goal
+ * id, so a latched goal
  * continues after the hand-driven episode — no re-issue, no path_reset.
  */
 public final class Input {
