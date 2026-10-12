@@ -31,6 +31,11 @@
 //   CASTLE_SEED (complete = g0z.33: rcon-place the whole v2 castle + beds
 //   + table on the pad, no order; the bot adopts it as its residence and
 //   createResidenceNights reports entered/slept/shelter/deaths/dawn-exit).
+//   CASTLE_SEED_VERSION (g0z.48: '' = current blueprint; 2 seeds the
+//   complete castle as v2 and the guide chats `castle upgrade` through the
+//   real chat path after adoption, so the window measures the stairs
+//   relay; pair with CASTLE_KIT=stairs and read upgrade=<facing-ok>/<total>
+//   @<phase> on the verdict).
 //   CASTLE_IDLE (1 = 6x7.24, needs CASTLE_SEED=complete: the verdict adds
 //   idle-maxdist/idle-miny/idle-underground-s, yard-litter=N (g0z.44: own
 //   blocks left in the fence band, placedByBot + rcon readback) and a
@@ -78,6 +83,21 @@ const BLOCKED = Math.max(0, parseInt(process.env.CASTLE_BLOCKED || '0', 10) || 0
 const PLANNER = process.env.RIG_PLANNER || 'jev'
 const NIGHT = process.env.CASTLE_NIGHT === '1'
 const SEED = process.env.CASTLE_SEED || ''
+// Seeded blueprint version (g0z.48): '' reads the current blueprint; an
+// older seed turns the run into an upgrade run (the guide chats
+// `castle upgrade` after adoption). Pure over the raw env (unit-tested).
+function parseSeedVersion(raw) {
+  const blueprint = require('../src/castle')
+  const s = String(raw == null ? '' : raw).trim()
+  if (!s) return blueprint.BLUEPRINT_VERSION
+  const v = Number(s)
+  if (!Number.isInteger(v) || blueprint.blueprintOf(v).version !== v) {
+    throw new Error(`CASTLE_SEED_VERSION: want ''|${Object.keys(blueprint.BLUEPRINTS).sort().join('|')}, got ${JSON.stringify(raw)}`)
+  }
+  return v
+}
+const SEED_VERSION = parseSeedVersion(process.env.CASTLE_SEED_VERSION || '')
+const SEED_UPGRADE = SEED === 'complete' && SEED_VERSION < require('../src/castle').BLUEPRINT_VERSION
 const SAND = process.env.CASTLE_SAND === '1'
 const IDLE = process.env.CASTLE_IDLE === '1'
 const IDLE_DEATH = IDLE ? Math.max(0, parseInt(process.env.CASTLE_IDLE_DEATH || '0', 10) || 0) : 0
@@ -913,6 +933,18 @@ async function main() {
     }
     origLog('CASTLE-RIG kit=valuables (36/36 ores + tools + wood, no stone/dirt)')
   }
+  // Stairs kit (g0z.48): the upgrade run's material — one stair per
+  // converted cell (the v3 count, read from the plan), a stone kit to dig
+  // the v2 steps out with, and bread for the 68 min window (a workable
+  // castle vetoes forage, so no food would stall the relay hungry).
+  if (KIT === 'stairs') {
+    const bp = require('../src/castle')
+    const n = bp.absPlan({ x: 0, y: 0, z: 0 }, 0, bp.BLUEPRINT_VERSION).cells.filter((c) => c.kind === 'stairs').length
+    for (const [item, count] of [['cobblestone_stairs', n], ['stone_pickaxe', 1], ['stone_sword', 1], ['bread', 32]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog(`CASTLE-RIG kit=stairs (${n} cobble stairs, stone pick+sword, 32 bread)`)
+  }
   await sleep(3000) // chunks in, both landed
   // Seeded complete castle (g0z.33): site SW corner so the 31x27 castle
   // centres on the pad, floor on the pad top + 1 (siteEval's median + 1).
@@ -922,7 +954,7 @@ async function main() {
   // setHome saves the memory home kind=castle — both checked.
   let seedTag = ''
   if (SEED === 'complete') {
-    const st = { site: { x: bx - 15, y: gy + 1, z: bz - 13 }, rot: 0, blueprintVersion: require('../src/castle').BLUEPRINT_VERSION }
+    const st = { site: { x: bx - 15, y: gy + 1, z: bz - 13 }, rot: 0, blueprintVersion: SEED_VERSION }
     const cells = seedCastleCells(st)
     const set = (c) => rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${c.block}`).catch((e) => fail('seed-castle', e.message))
     let next = 0
@@ -995,8 +1027,9 @@ async function main() {
 
   // The order needs the speaker's entity loaded on the follower, else the
   // bot answers "I can't see you" and nothing starts. A seeded castle
-  // needs no order (autonomous rides runOnce).
-  let ordered = SEED ? 'seeded' : null
+  // needs no order (autonomous rides runOnce) — except an older seed,
+  // which the guide relays with `castle upgrade` (g0z.48).
+  let ordered = SEED && !SEED_UPGRADE ? 'seeded' : null
   let sees = !!SEED
   for (let i = 0; i < 40 && !sees; i++) {
     try { sees = !!(follower.players && follower.players[GUIDE] && follower.players[GUIDE].entity) } catch (_) { sees = false }
@@ -1007,16 +1040,19 @@ async function main() {
     try { guide.chat('autonomous on') } catch (e) { fail('order', `autonomous chat: ${e.message}`) }
     await sleep(1000)
     try { guide.chat('build castle') } catch (e) { fail('order', `castle chat: ${e.message}`) }
+  } else if (SEED_UPGRADE) {
+    try { guide.chat('castle upgrade') } catch (e) { fail('order', `upgrade chat: ${e.message}`) }
   }
   // Order ack: the direct site ('castle at …, ~1722 blocks') or the search
-  // ('found a castle spot …', which carries the same startCastle tail).
-  // The asker leaving cancels the search, so the guide stays till the ack.
+  // ('found a castle spot …', which carries the same startCastle tail), or
+  // the upgrade relay ('upgrading the castle …'). The asker leaving
+  // cancels the search, so the guide stays till the ack.
   const tOrder = Date.now()
   let scanned = 0
   while (Date.now() - tOrder < 300000) {
     for (; scanned < chats.length; scanned++) {
       const line = chats[scanned]
-      if (/found a castle spot |castle at -?\d+ -?\d+ -?\d+, ~\d+ blocks/.test(line)) { ordered = line; break }
+      if (/found a castle spot |castle at -?\d+ -?\d+ -?\d+, ~\d+ blocks|upgrading the castle to stair blocks/.test(line)) { ordered = line; break }
       if (/I found no castle spot|I can't see you/.test(line)) fail('order', line.slice(0, 160))
     }
     if (ordered) break
@@ -1551,15 +1587,18 @@ async function main() {
     idle.setYardLitter(n)
   }
   // Stairs facing (g0z.47): every v3 stairs cell read back via rcon — laid
-  // (any stair) vs laid with the plan facing, half bottom. Build runs only.
-  if (!SEED && !idle) {
+  // (any stair) vs laid with the plan facing, half bottom. Build runs, and
+  // upgrade runs (g0z.48), where the facing-ok count joins the verdict.
+  let upgrade = null
+  if ((!SEED && !idle) || SEED_UPGRADE) {
     const c = tickCtx()
     const st = c && c.castle
     if (st && st.site && st.blueprintVersion === 3) {
       const blueprint = require('../src/castle')
+      const stairs = blueprint.absPlan(st.site, st.rot, 3).cells.filter((o) => o.kind === 'stairs')
       let laid = 0
       let ok = 0
-      for (const cell of blueprint.absPlan(st.site, st.rot, 3).cells.filter((o) => o.kind === 'stairs')) {
+      for (const cell of stairs) {
         const at = `${cell.x} ${cell.y} ${cell.z}`
         const any = await rcon(`execute if block ${at} #minecraft:stairs`).catch((e) => `error ${e.message}`)
         if (!/Test passed/.test(any)) continue
@@ -1568,6 +1607,9 @@ async function main() {
         if (/Test passed/.test(right)) ok++
       }
       origLog(`CASTLE-RIG stairs: laid=${laid} facing-ok=${ok}`)
+      if (SEED_UPGRADE) upgrade = { ok, total: stairs.length, phase: st.phase }
+    } else if (SEED_UPGRADE) {
+      upgrade = { ok: 0, total: 0, phase: (st && st.phase) || 'no-castle' }
     }
   }
   // Panes (g0z.38): decor pane cells of the seeded castle reading
@@ -1626,7 +1668,8 @@ async function main() {
     }
     furnaceTag = `, furnace-spot=${at.join('/')}`
   }
-  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
+  const upgradeTag = upgrade ? `, upgrade=${upgrade.ok}/${upgrade.total}@${upgrade.phase}` : ''
+  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
@@ -1637,6 +1680,7 @@ async function main() {
     series, timeEvents: seen.timeEvents, timeMaxDrift: seen.timeMaxDrift,
     nights: night ? night.nights : undefined,
     seed: SEED || undefined, residence: resNights ? resNights.nights : undefined,
+    seedVersion: SEED ? SEED_VERSION : undefined, upgrade: upgrade || undefined,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
@@ -1655,4 +1699,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }

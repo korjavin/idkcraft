@@ -252,6 +252,12 @@ function castleOf(c) {
     // Adopted as the residence once (g0z.29): never re-selected over a home
     // the owner chose later.
     if (c.residence === true) out.residence = true
+    // Stairs relay (g0z.48): the upgrade record rides along, so a restart
+    // mid-upgrade keeps reporting it (phase/blocked resume as usual).
+    if (c.upgrade && typeof c.upgrade === 'object' && Number.isInteger(c.upgrade.from) && c.upgrade.from >= 1 &&
+        Number.isInteger(c.upgrade.at) && c.upgrade.at >= 0) {
+      out.upgrade = { from: c.upgrade.from, at: c.upgrade.at }
+    }
     // Quarry frame latch (idkcraft-vmzq.20): one staircase base per side
     // (null = unprobed). A restart resumes the same frame instead of
     // re-probing dug floors as ground and walking the trench down.

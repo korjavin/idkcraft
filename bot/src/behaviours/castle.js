@@ -352,7 +352,10 @@ function pick(bot, ctx, st, cells, key, now) {
     let owed = null
     for (let i = full ? 0 : (ctx.castleCursor | 0); i < order.length; i++) {
       const c = cells[order[i]]
-      if (clearing(c) && complete) continue
+      // The stairs relay (g0z.48) converts place cells only: a complete
+      // castle's decor sits on plan air cells (glazed panes), and the moat
+      // is dug — re-clearing them would strike 44 protected panes.
+      if (clearing(c) && (complete || st.upgrade)) continue
       if (done(bot, c)) continue
       if (first < 0) first = i
       if (torchOwed(bot, c, owed)) {
@@ -396,7 +399,9 @@ function peek(bot, st, now, ctx) {
   let owed = null
   for (const idx of workOrder(cells, key)) {
     const c = cells[idx]
-    if (clearing(c) && complete) continue
+    // Same relay skip as pick(): the arbiter's word never reads 'clear'
+    // for a glazed window mid-upgrade.
+    if (clearing(c) && (complete || st.upgrade)) continue
     if (done(bot, c)) continue
     if (torchOwed(bot, c, owed)) {
       const bo = blocked[bkey(st, c.idx)]
@@ -737,7 +742,11 @@ function litterTargets(bot, ctx, st, now) {
         const k = `${x},${y},${z}`
         if (at.has(k)) continue
         const n = nameAt(bot, { x, y, z })
-        if (n === 'cobblestone' || (placed.has(k) && NATURAL_SOLID.has(n))) {
+        // The stairs relay (g0z.48, revmux 02): the box holds a lived-in
+        // castle, not a construction site — cobblestone sweeps only when
+        // the bot placed it this session (trackPlaced), never the owner's.
+        const ownCobble = n === 'cobblestone' && (!st.upgrade || placed.has(k))
+        if (ownCobble || (placed.has(k) && NATURAL_SOLID.has(n))) {
           list.push({ x, y, z, kind: 'air', dy, idx: 2000000 + (dx * d + dz) * 40 + dy })
         }
       }
@@ -1819,6 +1828,7 @@ function castle(bot, ctx) {
     ctx.stepStatus = 'done'
     if (st.phase !== 'complete') {
       st.phase = 'complete'
+      delete st.upgrade // the relay (g0z.48) ends where the build does
       try { bot.chat(`castle done at ${st.site.x} ${st.site.y} ${st.site.z}`) } catch (_) { /* chat best-effort */ }
     }
     return
