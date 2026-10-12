@@ -3,7 +3,6 @@
 // Player orders (idkcraft-6x7.1): mechanically moved from index.js — the
 // set*-API of the ticker object. Bodies are verbatim except the shared
 // closure lets, which go through the box (accessors owned by createTicker).
-const { layaUrl } = require('./brain')
 const { resolvePlayer } = require('./perception')
 const { findNearest, loadedSearchRadius, startFarSearch } = require('./behaviours/scout')
 const { clearPendingSearch, startBlockOrder } = require('./chat')
@@ -154,9 +153,7 @@ function createOrders(box) {
       if (!on) return 'autonomous off'
       let r = 'autonomous on — stays without players until restart (permanent: BOT_AUTONOMOUS env)'
       if (box.brainEngine === 'jev') {
-        r += layaUrl()
-          ? ' — brain is jev now, laya without players'
-          : ' — brain is jev now, off without players (laya not configured)'
+        r += ' — brain is jev now, off without players'
       }
       return r
     },

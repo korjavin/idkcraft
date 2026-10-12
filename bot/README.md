@@ -43,8 +43,8 @@ match offline-mode logins, so the server rejects chat-sent commands.)
 | `BOT_USERNAME` | `IdkBot` | Bot login name |
 | `BOT_FOLLOW` | `` (work mode) | Player name to follow; empty means the bot works on its own goal until `follow me` |
 | `BRAIN_TICK_MS` | `1000` | Reflex tick interval |
-| `TYPESAFE_API_KEY` | `` (stub brain) | JEV key; bogus key still joins, logs `stub-fallback` |
-| `BRAIN_URL` | JEV endpoint | Remote brain URL (same JEV wire shape); when set, the hybrid brain runs: FSM primary, remote model on hard states only. Empty = FSM only (`brain=stub`); that is the rollback. |
+| `TYPESAFE_API_KEY` | `` (stub brain) | JEV key; enables only the stall-point plan() and the manual `brain jev` (a bad key shows `stub-fallback` only after `brain jev`) |
+| `BRAIN_URL` | `` | Retired (vhlb.5): ignored with a `BRAIN_URL ignored` log line; the FSM decides every tick. |
 | `BRAIN_TIMEOUT_MS` | `BRAIN_TICK_MS` | Per-call deadline for the remote brain |
 | `BOT_LEAVE_AFTER_MS` | `60000` | Nobody-online grace (ms) before the bot quits and re-polls; `0` disables (always on) |
 | `BOT_AUTONOMOUS` | `` (off) | `1`/`true` = stay and work with nobody online (free brain only); chat `autonomous on` does the same until restart |

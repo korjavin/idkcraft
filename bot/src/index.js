@@ -3,7 +3,7 @@
 const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
-const { makeBrain, stubBrain, jevBrain, hybridBrain, sourceForUrl, JEV_ENDPOINT, isHard, brainTimeoutMs, layaUrl, planner, withPlanner } = require('./brain')
+const { makeBrain, stubBrain, jevBrain, hybridBrain, JEV_ENDPOINT, isHard, brainTimeoutMs, planner, withPlanner } = require('./brain')
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHostiles } = require('./perception')
 const { makeScout } = require('./behaviours/scout')
 const stuck = require('./stuck')
@@ -273,24 +273,18 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   }
 
   // Autonomous brain policy (dxl): alone, only free brains run. A jev
-  // brain with an empty roster steps down to laya (BRAIN_URL) or off when
-  // laya is not configured; a manually chosen jev returns on the next
+  // brain with an empty roster steps down to off; a manually chosen jev returns on the next
   // roster join. Downgrade fires once per empty period (brainRestore latch),
   // restore clears the latch on every join.
   function autoBrain(rosterOnline) {
     if (!ctx.autonomous) return
     if (!rosterOnline && brainEngine === 'jev' && !ctx.brainRestore) {
-      const url = layaUrl()
-      const to = url ? 'laya' : 'off'
+      const to = 'off'
       // Alone-exemption for plan() only (idkcraft-vmzq.5): the tick ask
-      // runs free/off, but the stall-point planner still reaches JEV. A
-      // laya-stepped-down brain keeps plan() automatically (plan posts to
-      // JEV, never to the tick URL); the off brain needs it attached, and
-      // only when the key exists.
+      // runs off, but the stall-point planner still reaches JEV (only when
+      // the key exists).
       const key = process.env.TYPESAFE_API_KEY
-      const next = to === 'laya'
-        ? hybridBrain(jevBrain(key, undefined, brainTimeoutMs(process.env), url))
-        : key ? { ...stubBrain, ...planner(key) } : stubBrain
+      const next = key ? { ...stubBrain, ...planner(key) } : stubBrain
       ctx.brainRestore = { from: 'jev', manual: ctx.manualBrain === 'jev' }
       doSetBrain(next, to)
       console.log(`brain auto to=${to} (nobody online)`)
@@ -1480,10 +1474,8 @@ async function main() {
   const username = process.env.BOT_USERNAME || 'IdkBot'
   const followName = process.env.BOT_FOLLOW || ''
   const brain = makeBrain(process.env)
-  // Initial engine label for 'brain' (mirrors makeBrain's choice).
-  const brainEngine = (process.env.BRAIN_URL || process.env.TYPESAFE_API_KEY)
-    ? sourceForUrl(process.env.BRAIN_URL || JEV_ENDPOINT)
-    : 'off'
+  // makeBrain is always the stub FSM (vhlb.5); only a manual 'brain jev|laya' asks.
+  const brainEngine = 'off'
   metrics.serve(parseInt(process.env.METRICS_PORT || '9464', 10))
   const pingFn = require('minecraft-protocol').ping
   for (;;) {

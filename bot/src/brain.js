@@ -510,19 +510,15 @@ function hybridBrain(remote) {
   }
 }
 
+// vhlb.5: the tick ask (laya/JEV) is out of the decision path — the A/B
+// (vhlb.1) showed neither beats the stub FSM. The base brain is always the
+// stub; a TYPESAFE key only adds the stall-point plan() (JEV), and
+// withPlanner may swap in the LLM one. BRAIN_URL is ignored (prod still has
+// it set to JEV); jevBrain/hybridBrain stay for the manual 'brain jev|laya'.
 function makeBrain(env) {
-  const customUrl = env && env.BRAIN_URL
   const key = env && env.TYPESAFE_API_KEY
-  if (customUrl || key) {
-    const url = customUrl || JEV_ENDPOINT
-    const rawTimeout = (env && env.BRAIN_TIMEOUT_MS) || (env && env.BRAIN_TICK_MS) || '1000'
-    const timeoutMs = parseInt(rawTimeout, 10)
-    const remote = jevBrain(key, undefined, Number.isFinite(timeoutMs) ? timeoutMs : 1000, url)
-    const b = withPlanner(hybridBrain(remote), env)
-    console.log(`brain=hybrid(${remote.name}) planner=${plannerName(b)}`)
-    return b
-  }
-  const b = withPlanner(stubBrain, env)
+  if (env && env.BRAIN_URL) console.log('BRAIN_URL ignored: the tick ask is retired (idkcraft-vhlb.5)')
+  const b = withPlanner(key ? { ...stubBrain, ...planner(key) } : stubBrain, env)
   console.log(`brain=stub planner=${plannerName(b)}`)
   return b
 }

@@ -74,7 +74,7 @@ describe('brain plan() (vmzq.5)', () => {
     assert.equal(jevBrain('', cannedFetch('equip')).plan, undefined)
     assert.equal(hybridBrain(jevBrain(undefined, cannedFetch('equip'))).plan, undefined)
     assert.equal(makeBrain({}).plan, undefined, 'key-absent bot runs the stub with no plan')
-    assert.equal(makeBrain({ BRAIN_URL: LAYA_URL }).plan, undefined, 'keyless laya hybrid has no plan')
+    assert.equal(makeBrain({ BRAIN_URL: LAYA_URL }).plan, undefined, 'BRAIN_URL alone gives no plan')
   })
 
   it('a choice outside the menu throws invalid and counts it', async () => {
