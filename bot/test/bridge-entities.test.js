@@ -361,17 +361,17 @@ describe('REAL logic through the fold (perception + worker + follow)', () => {
   })
 
   it('worker.players sieves self and the hybrid worker; resolvePlayer maps both', async () => {
-    worker.configure({ WORKER_NAME: 'IdkWorker' })
+    worker.configure({ WORKER_NAME: 'TestWorker' })
     try {
       transport.state.roster = [
         rosterEntry(),
         rosterEntry({ name: 'IdkBody', uuid: '00000000-0000-0000-0000-000000000000' }),
-        rosterEntry({ name: 'IdkWorker', uuid: '55555555-5555-5555-5555-555555555555' }),
+        rosterEntry({ name: 'TestWorker', uuid: '55555555-5555-5555-5555-555555555555' }),
       ]
       await refreshEntities(bot, transport)
       assert.deepEqual(Object.keys(worker.players(bot)), ['Owner'])
       assert.equal(perception.resolvePlayer(bot, 'Owner'), 'Owner')
-      assert.equal(perception.resolvePlayer(bot, 'IdkWorker'), null, 'the worker is never a player')
+      assert.equal(perception.resolvePlayer(bot, 'TestWorker'), null, 'the worker is never a player')
     } finally {
       worker.configure({})
     }
