@@ -154,3 +154,55 @@ lines through the existing write-only HMC bridge (`baritone/client.sh`
 plumbing) with no mod and no state. It exists only so `rig-goto.js`
 proves the `#goto` leg on real iron before the mod is written. Prod
 never uses it (no status, no state, position-blind `isMoving`).
+
+## Pathfinder parity (idkcraft-neuc.4)
+
+Goal-id attribution: `baritone.cmd` echoes `{id}` per `#goto`; the
+adapter binds the newest send's echo (sequence-guarded: a superseding
+setGoal/stop invalidates in-flight binds, overlapping follow re-issues
+order by seq) and applies `baritone.status {id,pathing,last}` /
+`baritone.event {id,status}` only for the latched id — older, foreign,
+or no-goal verdicts drop. A terminal for the live id emits `path_update
+{status}` + `path_reset` (`success` → `goal reached`, else the status
+verbatim) exactly once; the cleared latch drops the second channel.
+`stop()` on a live goal sends `#stop` + `path_reset 'stopped'` (no
+`path_update`: v1's stop leaves the status sticky); idle stops stay
+silent like v1. Unknown `last` verdicts fail as `timeout` (retry-safe,
+never synthesised success).
+
+Goal → command map (extends the spike's five):
+
+| goal | command |
+|---|---|
+| GoalNear/GoalBlock/GoalGetToBlock | `#goto x y z` |
+| GoalXZ/GoalNearXZ | `#goto x z` |
+| GoalY | `#goto y` (Baritone `goto <y>` = Y level, verified in GotoCommand) |
+| GoalFollow | one-shot `#goto` at the live target + adapter re-issue (> 1 block drift, ≤ 1 cmd/s, dynamic only; follow.js still owns terminal/timeout re-issue) |
+| GoalCompositeAny/All | first mappable member, else noPath |
+| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the block pos (approach-ability is the caller's check) |
+| GoalInvert, GoalBreakBlock | noPath (no `#goto` spelling; GoalBreakBlock throws on v1 — gather.js) |
+
+Movements → `#set` map (pushed on setMovements and every setGoal,
+diffed — only changes cross; the first push is absolute over the image
+settings.txt baseline):
+
+| Movements | Baritone setting |
+|---|---|
+| canDig | allowBreak |
+| allowSprinting | allowSprint |
+| allowParkour | allowParkour |
+| allow1by1towers | allowPlace |
+| scafoldingBlocks ids | acceptableThrowawayItems (comma-joined names via the registry) |
+| blocksCantBreak ids | blocksToAvoidBreaking (diggable names only — chest + deliberate adds; bedrock-class defaults need no telling) |
+
+Unmapped ceilings: canOpenDoors (Baritone opens doors itself), Movements
+blocksToAvoid (a future bead can send Baritone's own blocksToAvoid),
+exclusionAreasBreak/Place + danger.addPathCost (function costs over
+getNeighbors — no Baritone equivalent; // ponytail: danger marks not
+mapped; Baritone avoidance settings if a prod pit repeats). Lists never
+send empty (no `#set` spelling clears one); both are non-empty in
+practice. bestHarvestTool mirrors mineflayer-pathfinder over inventory
+digTime (enchantments read empty: prismarine-nbt is not a direct dep —
+ranking may prefer an unenchanted tool, digs still work); getPathTo is a
+sync `{status:'noPath',path:[]}` stub (no live callers — bring.js names
+it as a future upgrade path).
