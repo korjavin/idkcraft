@@ -172,6 +172,18 @@ public final class BridgeServer {
         rpc.register(method, handler);
     }
 
+    private final java.util.concurrent.CopyOnWriteArrayList<Runnable> tickHooks =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /**
+     * Run on every client post-tick, after the core snapshot (surfaces refresh
+     * their own snapshots here). A throwing hook is dropped with a throttled
+     * warn — it must never take the core tick down with it.
+     */
+    public void onClientTick(Runnable hook) {
+        tickHooks.add(hook);
+    }
+
     /** Push a mod→node notification to every connected client. */
     public void push(String method, JsonObject params) {
         JsonObject note = new JsonObject();
@@ -286,6 +298,16 @@ public final class BridgeServer {
             }
             flushChat();
             checkTimeout();
+            for (Runnable hook : tickHooks) {
+                try {
+                    hook.run();
+                } catch (Exception e) {
+                    if (tickCount - lastSnapWarnTick > 400) {
+                        lastSnapWarnTick = tickCount;
+                        LOG.warn("bridge tick hook failed", e);
+                    }
+                }
+            }
         }
 
         @Override
@@ -530,11 +552,12 @@ public final class BridgeServer {
 
     // Mineflayer rotation convention (mineflayer conversions.js,
     // fromNotchianYaw/fromNotchianPitch): radians, yaw zeroed on +Z.
-    private static double mineflayerYaw(float yRotDegrees) {
+    // Package-visible: entity surfaces convert the same way.
+    static double mineflayerYaw(float yRotDegrees) {
         return euclideanMod(Math.PI - Math.toRadians(yRotDegrees), Math.PI * 2);
     }
 
-    private static double mineflayerPitch(float xRotDegrees) {
+    static double mineflayerPitch(float xRotDegrees) {
         return euclideanMod(Math.toRadians(-xRotDegrees) + Math.PI, Math.PI * 2) - Math.PI;
     }
 
