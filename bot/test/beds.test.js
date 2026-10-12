@@ -1076,6 +1076,18 @@ describe('jr2.2 decide picks beds over explore until both are in', () => {
     const r2 = await goal.decide(bot2, ctx2)
     assert.equal(r2.action, 'explore')
   })
+
+  it('vhlb.3: a finished step lands in ctx.attempts; a running re-decide adds nothing', async () => {
+    const bot = ladenBot()
+    const ctx = ladenCtx(v2home())
+    await goal.decide(bot, ctx)
+    assert.equal(ctx.step, 'beds')
+    await goal.decide(bot, ctx) // still running: same step, not finished
+    assert.equal((ctx.attempts || []).length, 0)
+    ctx.stepStatus = 'failed:no-wool'
+    await goal.decide(bot, ctx) // re-pick after the failure
+    assert.deepEqual((ctx.attempts || []).map((a) => [a.step, a.out]), [['beds', 'failed:no-wool']])
+  })
 })
 
 describe('jr2.2 ground patches under floorless-house dips', () => {

@@ -13,15 +13,15 @@ const PLAN_INSTRUCTIONS = 'The goal is stalled: pick the step most likely to mov
 // world), not the FSM trigger rule STEP_CRITERIA restates. One text for
 // JEV and the LLM planner; the tick path keeps STEP_CRITERIA.
 const STEP_EFFECT_TEXT = {
-  gather: 'chops nearby trees: adds logs to the pack, moves the bot to the trees',
-  craft: 'turns logs into planks, table and door in place: unblocks tools and building',
+  gather: 'chops nearby trees — adds logs to the pack, moves the bot to the trees',
+  craft: 'turns logs into planks, table and door in place — unblocks tools and building',
   build: 'places the house blocks at the home site',
   beds: 'gets wool, crafts and places the bedroom beds in the house',
   light: 'places torches around the house',
-  castlefetch: 'fetches castle material: takes it from the castle chest, or digs stone and chops logs, then crafts it; walks away from here',
+  castlefetch: 'fetches castle material — takes it from the castle chest, or digs stone and chops logs, then crafts it; walks away from here',
   castle: 'lays the next castle blocks at the site',
   sitebed: 'places a bed outside the castle site and sets the spawn',
-  equip: 'crafts tools and digs blocks: gives pickaxe, sword and block stock',
+  equip: 'crafts tools and digs blocks — gives pickaxe, sword and block stock',
   gohome: 'walks to the home and goes inside',
   shelter: 'stops marching and waits here until dawn',
   gocastle: 'walks back to the castle site on the surface so laying can resume',

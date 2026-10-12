@@ -112,15 +112,16 @@ function inventory(bot) {
 
 // What the current step is heading for: the pathfinder goal when set, else
 // the active castle/home site. offset = target - bot (dx, dy, dz).
-function target(bot, ctx) {
+function target(bot, ctx, kind) {
   const p = bot && bot.entity && bot.entity.position
   let t = null
   try { t = (bot.pathfinder && bot.pathfinder.goal) || null } catch (_) { t = null }
   let at = 'path-goal'
   if (!t || typeof t.x !== 'number') {
-    const st = ctx && ((ctx.castle && ctx.castle.site) || (ctx.home && ctx.home.site))
+    // the site of the stalled goal kind: a house stall never points at the castle
+    const st = ctx && (kind === 'castle' ? ctx.castle && ctx.castle.site : ctx.home && ctx.home.site)
     t = st && typeof st.x === 'number' ? st : null
-    at = 'site'
+    at = kind === 'castle' ? 'castle-site' : 'home-site'
   }
   const step = (ctx && ctx.step) || null
   if (!p || !t) return { step, at: null }
@@ -128,12 +129,12 @@ function target(bot, ctx) {
 }
 
 // The one entry point: a plain JSON-safe object, every part best-effort.
-function stallState(bot, ctx) {
+function stallState(bot, ctx, kind) {
   const out = {}
   try { const v = voxelSlice(bot, ctx); if (v) { out.world = v; out.world_legend = LEGEND } } catch (_) { /* skip */ }
   try { out.attempts = Array.isArray(ctx && ctx.attempts) ? ctx.attempts.slice(-ATTEMPTS_KEPT) : [] } catch (_) { /* skip */ }
   try { out.inventory = inventory(bot) } catch (_) { /* skip */ }
-  try { out.target = target(bot, ctx) } catch (_) { /* skip */ }
+  try { out.target = target(bot, ctx, kind) } catch (_) { /* skip */ }
   return out
 }
 

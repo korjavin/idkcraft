@@ -760,7 +760,7 @@ function planState(bot, ctx, kind, done, total, state, withHistory) {
   // slice + attempts + inventory + target, the same object for JEV and LLM.
   try {
     const { stallState } = require('./stall-state')
-    Object.assign(out, stallState(bot, ctx))
+    Object.assign(out, stallState(bot, ctx, kind))
     if (out.world) console.log(`plan world dy+2..-2 ${out.world.join(' | ')}`)
   } catch (_) { /* rich state best-effort */ }
   if (withHistory) {
