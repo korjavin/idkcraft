@@ -360,9 +360,11 @@ S6-LEAD by the lost order (`reached`).
 ## Head-to-head tasks (`task-spots.json`, idkcraft-wh80)
 
 Same two tasks as `baritone/tasks.json`, judged the same way, not part of the
-gate (no baseline entries; run with `REPLAY_BASELINE_OFF=1`):
-`sh bot/tools/stuck-run.sh paper-base bot/tools/task-spots.json`. BED-60 is a
-follow spot (reached within 2.5 of the goal); MINE-10 is an order spot with a
+gate (no baseline entries):
+`REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base bot/tools/task-spots.json`.
+BED-60 is a follow spot (reached within 2.5 of the goal in 3D, or within 6 of
+the guide parked ~6 past it — looser than ab.js's XZ-only 2.5; the runs
+walked 61-64 blocks, i.e. to the goal); MINE-10 is an order spot with a
 `count`/`item` judge: peak `item` held by follower+guide >= `count` (the bot
 hands finds to the guide), instead of a chat marker.
 
