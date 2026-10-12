@@ -171,11 +171,13 @@ silent like v1. Unknown `last` verdicts fail as `timeout` (retry-safe,
 never synthesised success).
 
 Already-satisfied goals never reach Baritone: when `goal.isEnd(feet)`
-holds (or a place/look target is one step away — the walk would target
-the live feet), setGoal stops the live walk and emits the success pair
-with no command. v1 ends the same way (A* start isEnd), while Baritone's
+holds, setGoal stops the live walk and emits the success pair with no
+command. v1 ends the same way (A* start isEnd), while Baritone's
 setGoalAndPath returns before CALC_STARTED with no PathEvent for an
 in-goal `#goto` — sending one would wedge `isMoving` (revmux 01 core-1).
+Worldless place/look one step away also succeed (a clean isEnd=false is
+honoured; feet==p and p-at-head are excluded like v1's isStandingIn —
+v1 steps out first, so the walk does too).
 
 Goal → command map (extends the spike's five):
 
@@ -186,7 +188,7 @@ Goal → command map (extends the spike's five):
 | GoalY | `#goto y` (Baritone `goto <y>` = Y level, verified in GotoCommand) |
 | GoalFollow | one-shot `#goto` at the live target + adapter re-issue (> 1 block drift, ≤ 1 cmd/s, dynamic only; follow.js still owns terminal/timeout re-issue) |
 | GoalCompositeAny/All | first mappable member, else noPath |
-| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the neighbour cell on the bot's side at p.y (dominant horizontal axis; +x when above/below) — never into p itself, whose occupancy v1's isEnd forbids (revmux 01 core-2); no feet (console backend) → noPath |
+| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the neighbour cell on the bot's side (dominant horizontal axis; +x when above/below) — GoalBlock when p.y is above the feet (walls, roofs: Baritone pillars to reach like v1's executor), GoalXZ at/below feet level (fills, floors, table look: stand on the surface beside, never into solid ground or air); a step landing on our own feet reports noPath; no feet (console backend) → noPath (revmux 01 core-2, 02 core-2). Deep-below cells whose surface stands past place range fail visibly at the place attempt — a descend-first approach is wave-3 tuning if ever needed |
 | GoalInvert, GoalBreakBlock | noPath (no `#goto` spelling; GoalBreakBlock throws on v1 — gather.js) |
 
 Note for .1 (cc): every normal arrival emits AT_GOAL *then* CANCELED

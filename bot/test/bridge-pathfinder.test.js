@@ -86,12 +86,20 @@ describe('goal translation (pathfinder -> Baritone)', () => {
   it('maps place/look goals to the neighbour on the bot side, never into p', () => {
     const world = { getBlock: () => null }
     const place = () => new goals.GoalPlaceBlock(new Vec3(7, 64, 8), world, { range: 4 })
-    assert.equal(goalToBaritone(place(), new Vec3(10, 64, 8)), '#goto 8 64 8') // bot east
-    assert.equal(goalToBaritone(place(), new Vec3(7, 64, 3)), '#goto 7 64 7') // bot north
-    assert.equal(goalToBaritone(place(), new Vec3(7, 70, 8)), '#goto 8 64 8') // above: +x side
+    // Level or below: GoalXZ — stand on the surface beside, never into ground.
+    assert.equal(goalToBaritone(place(), new Vec3(10, 64, 8)), '#goto 8 8') // bot east
+    assert.equal(goalToBaritone(place(), new Vec3(7, 64, 3)), '#goto 7 7') // bot north
+    assert.equal(goalToBaritone(place(), new Vec3(7, 70, 8)), '#goto 8 8') // bot above: descend beside
+    // Above the feet: GoalBlock — pillar to reach walls and roofs.
+    assert.equal(goalToBaritone(place(), new Vec3(10, 60, 8)), '#goto 8 64 8')
     assert.equal(
       goalToBaritone(new goals.GoalLookAtBlock(new Vec3(7, 64, 8), world), new Vec3(4, 64, 8)),
-      '#goto 6 64 8',
+      '#goto 6 8',
+    )
+    // The step lands on us: null, never a silent in-goal #goto.
+    assert.equal(
+      goalToBaritone(new goals.GoalLookAtBlock(new Vec3(1, 64, 0), world), new Vec3(0, 64, 0)),
+      null,
     )
     assert.equal(goalToBaritone(place(), null), null) // no safe side without feet
     assert.equal(goalToBaritone(place(), {}), null)
@@ -299,7 +307,7 @@ describe('already-satisfied goals succeed without a command (revmux 01 core-1)',
     const g = new goals.GoalLookAtBlock(new Vec3(2, 64, 0), null)
     bot.pathfinder.setGoal(g)
     await sleep(10)
-    assert.equal(transport.state.baritone, '#goto 1 64 0') // neighbour on the bot side
+    assert.equal(transport.state.baritone, '#goto 1 0') // surface beside, level with p
     assert.deepEqual(seen.statuses, [])
   })
 
@@ -310,6 +318,34 @@ describe('already-satisfied goals succeed without a command (revmux 01 core-1)',
     assert.equal(transport.state.baritone, null)
     assert.deepEqual(seen.statuses, ['success'])
     assert.deepEqual(seen.resets, ['goal reached'])
+  })
+
+  it('standing in the placement cell walks out (world), like v1', async () => {
+    const world = { getBlock: () => null }
+    const g = new goals.GoalPlaceBlock(new Vec3(0, 64, 0), world, { range: 4 })
+    bot.pathfinder.setGoal(g)
+    await sleep(10)
+    assert.equal(transport.state.baritone, '#goto 1 0') // +x step out, GoalXZ at level
+    assert.deepEqual(seen.statuses, [])
+  })
+
+  it('p at head height walks, never instant-succeeds (worldless)', async () => {
+    const g = new goals.GoalLookAtBlock(new Vec3(0, 65, 0), null)
+    bot.pathfinder.setGoal(g)
+    await sleep(10)
+    assert.equal(transport.state.baritone, '#goto 1 65 0') // +x side, GoalBlock above
+    assert.deepEqual(seen.statuses, [])
+  })
+
+  it('adjacent with a clean isEnd=false fails visibly, never silently', async () => {
+    // World says no line of sight; the neighbour step would land on us.
+    const world = { raycast: () => null }
+    const g = new goals.GoalLookAtBlock(new Vec3(1, 64, 0), world)
+    bot.pathfinder.setGoal(g)
+    await sleep(10)
+    assert.equal(transport.state.baritone, null)
+    assert.deepEqual(seen.statuses, ['noPath'])
+    assert.deepEqual(seen.resets, ['noPath'])
   })
 
   it('follow with the target already in range sends no #goto', async () => {

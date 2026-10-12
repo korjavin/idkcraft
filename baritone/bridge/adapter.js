@@ -64,15 +64,29 @@ function goalToBaritone(goal, from) {
   if ((name === 'GoalPlaceBlock' || name === 'GoalLookAtBlock') && goal.pos && from) {
     const p = goal.pos
     if (typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return null
-    if (typeof from.x !== 'number' || typeof from.z !== 'number') return null
+    if (typeof from.x !== 'number' || typeof from.y !== 'number' || typeof from.z !== 'number') return null
     const px = Math.floor(p.x)
     const py = Math.floor(p.y)
     const pz = Math.floor(p.z)
-    const dx = Math.floor(from.x) - px
-    const dz = Math.floor(from.z) - pz
-    if (dx === 0 && dz === 0) return `#goto ${px + 1} ${py} ${pz}` // above/below: deterministic side
-    if (Math.abs(dx) >= Math.abs(dz)) return `#goto ${px + Math.sign(dx)} ${py} ${pz}`
-    return `#goto ${px} ${py} ${pz + Math.sign(dz)}`
+    const fx = Math.floor(from.x)
+    const fy = Math.floor(from.y)
+    const fz = Math.floor(from.z)
+    const dx = fx - px
+    const dz = fz - pz
+    let nx = px
+    let nz = pz
+    if (dx === 0 && dz === 0) nx = px + 1 // above/below: deterministic side
+    else if (Math.abs(dx) >= Math.abs(dz)) nx = px + Math.sign(dx)
+    else nz = pz + Math.sign(dz)
+    // The step lands on us (cardinally adjacent with a clean isEnd=false):
+    // an in-goal #goto is answered with silence, so fail visibly instead.
+    if (nx === fx && py === fy && nz === fz) return null
+    // Above the feet (walls, roofs): GoalBlock, Baritone pillars to reach
+    // like v1's executor does. Level or below (fills, floors, table look):
+    // GoalXZ stands on the surface beside — never into solid ground
+    // (Baritone would dig the stand cell out) or up into air.
+    if (py > fy) return `#goto ${nx} ${py} ${nz}`
+    return `#goto ${nx} ${nz}`
   }
   return null
 }
@@ -415,28 +429,34 @@ class BaritoneBot extends EventEmitter {
 
   // The goal's own verdict on the live feet, defaulting to "walk" on any
   // doubt (missing/worldless isEnd must never fail a goal by itself).
-  // Place/look one step away count as satisfied: in range by
-  // construction, and the walk alternative targets the live feet (the
-  // neighbour step lands on us) where Baritone answers with no PathEvent
-  // — success here, the place/look attempt validates.
+  // Worldless place/look one step away count as satisfied: in range by
+  // construction, and the walk alternative targets the live feet where
+  // Baritone answers with no PathEvent — success here, the place/look
+  // attempt validates. A clean isEnd=false is honoured (walk or visible
+  // noPath), and feet==p / p-at-head are excluded like v1's
+  // isStandingIn: v1 steps out first, so do we.
   _satisfiedNow(goal) {
     try {
       if (!goal) return false
       const p = this.entity && this.entity.position
       if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return false
       const feet = typeof p.floored === 'function' ? p.floored() : { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }
+      let worldless = true
       if (typeof goal.isEnd === 'function') {
         try {
           if (goal.isEnd(feet) === true) return true
+          worldless = false
         } catch (_) { /* worldless isEnd: adjacency decides below */ }
       }
+      if (!worldless) return false
       const name = goal.constructor && goal.constructor.name
       if ((name === 'GoalPlaceBlock' || name === 'GoalLookAtBlock') && goal.pos &&
         typeof goal.pos.x === 'number' && typeof goal.pos.y === 'number' && typeof goal.pos.z === 'number' &&
         typeof feet.x === 'number' && typeof feet.y === 'number' && typeof feet.z === 'number') {
-        const manhattan = Math.abs(Math.floor(goal.pos.x) - feet.x) +
-          Math.abs(Math.floor(goal.pos.y) - feet.y) + Math.abs(Math.floor(goal.pos.z) - feet.z)
-        if (manhattan <= 1) return true
+        const dx = Math.floor(goal.pos.x) - feet.x
+        const dy = Math.floor(goal.pos.y) - feet.y
+        const dz = Math.floor(goal.pos.z) - feet.z
+        if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) === 1 && !(dx === 0 && dy === 1 && dz === 0)) return true
       }
       return false
     } catch (_) {
