@@ -458,6 +458,22 @@ function gateCode(rows, diffs) {
 // a typo must not silently measure the wrong brain.
 function pickBrain() {
   const which = process.env.REPLAY_BRAIN || 'stub'
+  // vhlb.4: REPLAY_PLANNER=jev|llm adds the stall-point plan() to the stub
+  // (prod's makeBrain shape), so stuck recovery escalates through it; the
+  // cells differ only in the backend. Keys from env, never printed.
+  const pl = process.env.REPLAY_PLANNER || 'stub'
+  if (which === 'stub' && pl !== 'stub') {
+    const b = require('../src/brain')
+    if (pl === 'jev') {
+      if (!process.env.TYPESAFE_API_KEY) throw new Error('REPLAY_PLANNER=jev needs TYPESAFE_API_KEY')
+      return { label: 'stub+plan:jev', make: () => ({ ...b.stubBrain, ...b.planner(process.env.TYPESAFE_API_KEY) }) }
+    }
+    if (pl === 'llm') {
+      if (!process.env.ANTHROPIC_API_KEY) throw new Error('REPLAY_PLANNER=llm needs ANTHROPIC_API_KEY')
+      return { label: 'stub+plan:llm', make: () => ({ ...b.stubBrain, planner: 'llm', ...b.llmPlanner(process.env.ANTHROPIC_API_KEY, undefined, b.PLAN_TIMEOUT_MS, process.env.LLM_MODEL || b.LLM_MODEL) }) }
+    }
+    throw new Error(`REPLAY_PLANNER: want stub|jev|llm, got ${JSON.stringify(pl)}`)
+  }
   if (which === 'stub') return { label: 'stub', make: () => require('../src/brain').stubBrain }
   if (which === 'laya') {
     const url = process.env.REPLAY_BRAIN_URL || 'http://localhost:8000/v1/systemone'

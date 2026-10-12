@@ -2472,6 +2472,114 @@ function dropGoal(ctx, facts) {
   })
 }
 
+// Stall-point planner for stuck recovery (idkcraft-vhlb.4). The FSM stays
+// the first try (fast, free); once a primitive failed in this episode — or
+// at entry when the FSM pick already failed at this spot — the choice goes
+// to brain.plan() (JEV or the LLM) with the shaped feasible menu and the
+// rich stall state. Async like task.js fireWatchdog: fire, hold the body
+// still (planHold: the wait slot, no waitRun) and consume on a later tick;
+// an answer for an episode that ended or re-fired is dropped. Any planner
+// failure, a hung call past PLAN_HOLD_MS, or an answer the fresh menu no
+// longer offers falls back to the FSM pick — never worse than FSM-only.
+// No plan() on the brain: today's path, unchanged.
+const PLAN_HOLD_MS = 12000 // brain.js PLAN_TIMEOUT_MS (10 s) + slack for a hung promise
+const PLAN_INSTRUCTIONS = 'The bot is physically stuck on its way to a goal. attempts lists the escape ' +
+  'primitives already tried this episode with outcomes, failed_here the kinds that failed at this spot ' +
+  'before, world the blocks around its feet. Pick the one recovery action most likely to free it; ' +
+  'do not repeat a failed action unless the world changed.'
+
+function wantsPlan(ctx, rec, facts, names) {
+  const brain = ctx && ctx.brain
+  if (!brain || typeof brain.plan !== 'function' || !rec) return false
+  if ((rec.fails || 0) >= 1) return true
+  if (rec.attempts > 0) return false // entry only below
+  const st = ctx.recoverStreaks
+  const fsm = recoverFsm(facts, names)
+  return !!(st && st.fails && st.fails[fsm] && st.fails[fsm].n >= 1)
+}
+
+// The model menu chooseRecovery would ask: 4jr exclusion + y34 shaping.
+function askMenu(facts, names) {
+  const failedM = /^(pillar_up|dig_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
+  return shapeRecoverMenu(unshaped, facts)
+}
+
+// Fire one plan() call; true = in flight (the caller holds), false = no
+// call (menu of one: the only-option path answers without a model).
+function firePlan(bot, ctx, rec, facts, names) {
+  const ask = askMenu(facts, names)
+  if (ask.length <= 1) return false
+  const criteria = {}
+  for (const n of ask) criteria[n] = RECOVER_CRITERIA[n]
+  let s = {}
+  try { s = require('../stall-state').stallState(bot, ctx, null) } catch (_) { s = {} }
+  const st = ctx.recoverStreaks
+  const failedHere = {}
+  try { for (const k of Object.keys((st && st.fails) || {})) failedHere[k] = st.fails[k].n } catch (_) { /* best-effort */ }
+  const req = {
+    state: {
+      situation: 'stuck',
+      facts: recoverText(facts),
+      attempts: (rec.tries || []).slice(),
+      failed_here: failedHere,
+      target: { goal_dy: facts.goalDy, goal_dist: facts.goalDist, player: facts.playerOnline ? 'online' : 'none' },
+      world: s.world,
+      world_legend: s.world_legend,
+      inventory: s.inventory,
+    },
+    instructions: PLAN_INSTRUCTIONS,
+    criteria,
+  }
+  const seq = (rec.planSeq = (rec.planSeq || 0) + 1)
+  rec.plan = { seq, firedAt: Date.now(), answer: null, fsm: recoverFsm(facts, names) }
+  const brain = ctx.brain
+  Promise.resolve()
+    .then(() => brain.plan(req))
+    .then((ans) => onRecoverPlan(ctx, rec, seq, ans, null), (err) => onRecoverPlan(ctx, rec, seq, null, err))
+  return true
+}
+
+// Resolver: store for the next tick; a stale answer (the episode ended or a
+// newer call fired) is dropped.
+function onRecoverPlan(ctx, rec, seq, ans, err) {
+  try {
+    if (!ctx || ctx.recovery !== rec || !rec.plan || rec.plan.seq !== seq || rec.plan.answer) return
+    if (err || !ans || typeof ans.step !== 'string') {
+      const msg = String((err && err.message) || err || '')
+      rec.plan.answer = { error: (err && err.name === 'TimeoutError') ? 'timeout' : (!err || /missing/.test(msg)) ? 'invalid' : /http/.test(msg) ? 'http' : 'error' }
+      return
+    }
+    rec.plan.answer = {
+      step: ans.step,
+      source: typeof ans.source === 'string' ? ans.source : 'plan',
+      conf: typeof ans.confidence === 'number' ? ans.confidence : null,
+      reason: typeof ans.reason === 'string' ? ans.reason : '',
+    }
+  } catch (_) { /* a dropped answer falls back on the hold deadline */ }
+}
+
+// Consume: the planner's pick when the fresh menu still offers it, else the
+// FSM (chooseRecovery with no brain = only-option or fsm).
+async function consumeRecoverPlan(ctx, rec, facts, names) {
+  const p = rec.plan || {}
+  const a = p.answer || { error: 'timeout' }
+  rec.planHold = false
+  rec.plan = null
+  const ms = Date.now() - (p.firedAt || Date.now())
+  const ask = askMenu(facts, names)
+  const fsm = recoverFsm(facts, names)
+  const why = a.error ? a.error : !ask.includes(a.step) ? 'stale' : null
+  try {
+    console.log(`recover plan source=${a.source || 'plan'} answer=${a.step || 'none'} fsm=${fsm} why=${why || 'ok'} ms=${ms} ` +
+      `conf=${a.conf === null || a.conf === undefined ? '?' : Number(a.conf).toFixed(2)} menu=${ask.join(',')} reason=${JSON.stringify(a.reason || '')}`)
+  } catch (_) { /* log best-effort */ }
+  if (!why) return { action: a.step, source: a.source, fsm, model: a.source }
+  metrics.escalation.inc({ from: a.source || 'plan', to: 'fsm', reason: why === 'stale' ? 'invalid' : why })
+  const fb = await chooseRecovery(null, facts, names)
+  return fb.source === 'fsm' ? { ...fb, source: 'stub-fallback' } : fb
+}
+
 // Decision point: entry (no episode) or a finished primitive. A running
 // primitive keeps its action with no re-ask. Returns a BEHAVIOURS action
 // (the primitive) or idle after release.
@@ -2479,7 +2587,11 @@ async function decide(bot, ctx, state, target) {
   const facts = recoverFacts(bot, ctx, state, target)
   const text = recoverText(facts)
   let rec = ctx.recovery
-  if (rec && rec.status === 'running') {
+  if (rec && rec.planHold) {
+    if (!(rec.plan && rec.plan.answer) && rec.plan && Date.now() - rec.plan.firedAt < PLAN_HOLD_MS) {
+      return { action: 'wait', sprint: false, source: 'plan-wait' }
+    }
+  } else if (rec && rec.status === 'running') {
     return { action: rec.action, sprint: false, source: rec.source }
   }
   if (!rec) {
@@ -2500,13 +2612,17 @@ async function decide(bot, ctx, state, target) {
       logRecover(bot, ctx, 'none', 'fsm', 'drop-goal', facts)
       return release(bot, ctx, 'drop-goal')
     }
-  } else {
+  } else if (!rec.planHold) {
     // A primitive finished: record the outcome, then continue, re-ask, or
     // give up. Terminal states feed the next facts as last=<action>:<outcome>.
     const prev = rec.action
     const outcome = rec.status
     const source = rec.source || 'fsm'
     rec.last = { action: prev, outcome }
+    // vhlb.4: the episode's attempts ring for plan() (bounded by MAX_FAILS + REPEATS chains).
+    if (!Array.isArray(rec.tries)) rec.tries = []
+    rec.tries.push({ action: prev, out: outcome })
+    if (rec.tries.length > 8) rec.tries.shift()
     if (outcome === 'failed:place-error') rec.placeError = true
     // The choice below must see the just-recorded outcome: facts was built
     // before it, so FSM escalation and the model-menu exclusion would both
@@ -2643,7 +2759,20 @@ async function decide(bot, ctx, state, target) {
   const names = RECOVER_ORDER.filter((n) => {
     try { return RECOVER_MENU[n].feasible(facts, ctx) } catch (_) { return false }
   })
-  const choice = await chooseRecovery(ctx && ctx.brain, facts, names)
+  let choice
+  if (rec.planHold) {
+    choice = await consumeRecoverPlan(ctx, rec, facts, names)
+  } else {
+    if (wantsPlan(ctx, rec, facts, names) && firePlan(bot, ctx, rec, facts, names)) {
+      rec.planHold = true
+      rec.action = 'wait'
+      rec.source = 'plan-wait'
+      rec.status = 'running'
+      rec.st = null
+      return { action: 'wait', sprint: false, source: 'plan-wait' }
+    }
+    choice = await chooseRecovery(ctx && ctx.brain, facts, names)
+  }
   rec.action = choice.action
   rec.source = choice.source
   rec.model = choice.model
@@ -2672,6 +2801,7 @@ async function decide(bot, ctx, state, target) {
 function run(bot, ctx) {
   const rec = ctx && ctx.recovery
   if (!rec || !rec.action || !RECOVER_MENU[rec.action]) return
+  if (rec.planHold) return // vhlb.4: holding still for plan(); decide() consumes
   try {
     rec.status = RECOVER_MENU[rec.action].run(bot, ctx)
   } catch (_) {
@@ -2706,6 +2836,7 @@ module.exports = {
   recoverFsm,
   shapeRecoverMenu,
   chooseRecovery,
+  PLAN_HOLD_MS,
   setStuck,
   restGaveUpHolds,
   clearRelocatedRestMark,
