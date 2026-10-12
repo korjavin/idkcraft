@@ -12,13 +12,14 @@ HMC console FIFO; whatever the head writes is typed into the console
 (`connect`/`disconnect`, `msg #goto ...`). Baritone replies land in the
 client stdout (`docker logs`) as `[CHAT] [Baritone] ...`. No HTTP, no
 auto-connect (the head drives `connect mc 25565` / `disconnect`), no status
-endpoint. With no stored account the container logs the login hint and
-sleeps (default-off, no JVM, ~0 RAM).
+endpoint. With empty env and no stored account the container logs the login
+hint and sleeps (default-off, no JVM, ~0 RAM); with `BARITONE_OFFLINE=1`
+(compose, owner Q2) it launches offline under `WORKER_NAME` instead.
 
 | file | what |
 |---|---|
 | `Dockerfile` | Temurin 25 + HeadlessMc + Baritone + hmc-specifics (console `connect`/`msg`) + socat; jars pinned by sha256; entrypoint `start.sh` |
-| `start.sh` | container entrypoint: login passthrough (`--command login`), account gate, client on a FIFO, socat bridge |
+| `start.sh` | container entrypoint: login passthrough (`--command login`), offline/account gate, client on a FIFO, socat bridge |
 | `settings.txt` | Baritone presets baked into the run dir (`allowParkour` off — the head follows on foot; sprint stays default — `false` breaks doors, see the file) |
 | `run.sh` | rig slot `z` (container `idk-replay-z`, port 25597, lock `/tmp/idkcraft-rig.lock-z`): reset world from `world.tar`, boot Paper, launch the image's own entrypoint with the bridge published for the rig, run `ab.js` through it, `docker stats`, tear down |
 | `ab.js` | per spot: prep, tp, stuck-replay kit, `#goto` (or `#mine`) via the bridge; judged over rcon (pos within 2.5 of goal, or raw_iron count); rows to `/private/tmp/baritone-ab.json` |
@@ -32,23 +33,26 @@ Follow corpus (16 spots): mineflayer 15 reached / 296 s, Baritone 14 / 233-245 s
 failures: BED-60 reached in 16 s, MINE-10 10 iron in ~84 s. Client ~1.9 GiB,
 CPU mean ~30 %. Table and recommendation: PR #446 and the bead notes.
 
-## Prod: owner steps (one-time, never automated)
+## Prod: owner steps (env only, no login)
 
-A real client needs a Minecraft Java licence. Three steps, all by hand:
+Owner decision 2026-10-12 (Q2): the worker launches OFFLINE under its own
+name — no Java account, no device login. The server is `ONLINE_MODE=false`,
+so an offline name joins like the bot does. Two steps, all by hand:
 
-1. **Account login** (device code, ~5 min once): on the prod host,
-   `docker run --rm -it -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth ghcr.io/korjavin/idkcraft-baritone:<tag> --command login`
-   (`<tag>` = the baritone tree-hash sha CI wrote on the `deploy` branch).
-   The auth volume name is FIXED in `docker-compose.yml`, so the login
-   survives redeploys whatever the Portainer stack name is. The server is
-   `ONLINE_MODE=false`, so any owned profile joins.
-2. **Whitelist**: add the profile's OFFLINE uuid to `WHITELIST` (a name would
-   resolve to an online UUID and be rejected — same recipe as the IdkBot
-   comment in `docker-compose.yml`):
-   `python3 -c 'import uuid,hashlib;print(uuid.UUID(bytes=hashlib.md5(b"OfflinePlayer:<profile>").digest(),version=3))'`
-3. **Enable**: set `WORKER_NAME=<profile>` in the Portainer stack env,
-   redeploy. Empty `WORKER_NAME` = worker off (the container sleeps at ~0
-   RAM, the bot behaves exactly as today).
+1. **Whitelist**: add the worker name's OFFLINE uuid to `WHITELIST` (a name
+   would resolve to an online UUID and be rejected — same recipe as the
+   IdkBot comment in `docker-compose.yml`):
+   `python3 -c 'import uuid,hashlib;print(uuid.UUID(bytes=hashlib.md5(b"OfflinePlayer:<name>").digest(),version=3))'`
+2. **Enable**: set `WORKER_NAME=<name>` and `BARITONE_OFFLINE=1` in the
+   Portainer stack env, redeploy. The compose service passes the worker name
+   from `WORKER_NAME` — the same env the bot reads — so the two never
+   diverge. Empty `BARITONE_OFFLINE` = worker off (the container sleeps at
+   ~0 RAM, the bot behaves exactly as today); `BARITONE_OFFLINE=1` without
+   `WORKER_NAME` also sleeps — the offline launch needs a name.
+
+Never run the `--command login` for prod: the auth volume stays empty — a
+stored account would shadow the offline name (the client would join as the
+stored profile, not `WORKER_NAME`).
 
 ## Local rig
 
