@@ -278,7 +278,17 @@ function loadSpots() {
       }
       verifyBuild = true
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, after, danger, home, closeSecs, kit, verifyBuild }
+    // Count judge (idkcraft-wh80): an order spot may judge by items held
+    // instead of chat (mineflayer vs Baritone head-to-head, baritone/ab.js
+    // `raw_iron >= 10`): peak follower+guide count of `item` >= `count`.
+    let count = 0
+    if (s.count != null) {
+      if (mode !== 'order' || !Number.isInteger(s.count) || s.count < 1 || typeof s.item !== 'string' || !/^[a-z_]+$/.test(s.item)) {
+        throw new Error(`spots[${i}]: bad count/item (want an order spot with integer count and item)`)
+      }
+      count = s.count
+    }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, after, danger, home, closeSecs, kit, verifyBuild, count, item: s.item }
   })
 }
 
@@ -832,6 +842,12 @@ async function main() {
       }
     }
     const tx = s.goal[0]; const ty = s.goal[1]; const tz = s.goal[2]
+    let peak = 0 // count spots: most `item` held by follower+guide at one sample
+    const held = () => { // the bot hands finds to the guide, so count both
+      let n = 0
+      for (const b of [follower, guide]) { try { n += b.inventory.items().filter((it) => it.name === s.item).reduce((a, it) => a + it.count, 0) } catch (_) { /* sampling best-effort */ } }
+      return n
+    }
     const useGoal = Math.hypot(tx - s.spawn[0], ty - s.spawn[1], tz - s.spawn[2]) >= 4
     while (Date.now() - t0 < s.secs * 1000 && !died && !guideDied) {
       await sleep(500)
@@ -856,13 +872,15 @@ async function main() {
         } catch (_) { /* sampling best-effort */ }
       }
       scanOrderChat()
+      if (s.count) { peak = Math.max(peak, held()); if (peak >= s.count) { reached = true; break } if (orderVerdict === 'fail') break; continue }
       // Reached ends the window: post-goal walking is outside the spot.
       const w = windowReached(s.mode, useGoal, d, gd, orderVerdict)
       if (w !== null) { reached = w; break }
     }
     scanOrderChat() // final gap: a marker in the last <500 ms still counts
     const wEnd = windowReached(s.mode, false, null, null, orderVerdict)
-    if (wEnd !== null) reached = wEnd
+    if (s.count) reached = peak >= s.count
+    else if (wEnd !== null) reached = wEnd
     if (s.mode === 'shelter') {
       reached = shelterReached(closedAt, died, s.closeSecs)
       await rcon('time set 1000') // later spots (if any) walk in daylight
@@ -888,7 +906,7 @@ async function main() {
     // tells a hung order from a refused one at a glance. Death keeps its
     // note (dying is behavior, judged like any unreached row).
     const onote = (s.mode === 'order' || s.mode === 'night')
-      ? (orderVerdict === 'expect' ? `OK ${orderLine}` : orderVerdict === 'fail' ? `FAIL ${orderLine}` : 'TIMEOUT').slice(0, 70)
+      ? (s.count ? `${s.item} ${peak}/${s.count}${orderVerdict === 'fail' ? ` ${orderLine}` : ''}` : orderVerdict === 'expect' ? `OK ${orderLine}` : orderVerdict === 'fail' ? `FAIL ${orderLine}` : 'TIMEOUT').slice(0, 70)
       : s.mode === 'shelter'
         ? (closedAt === null ? `OPEN at ${(() => { try { return follower.entity.position.floored().toArray().join(' ') } catch (_) { return '?' } })()}` : `CLOSED ${closedAt.toFixed(0)}s`)
         : ''
