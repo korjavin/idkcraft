@@ -297,11 +297,13 @@ function walkDelegate(bot, ctx, rec, goalPos, opts) {
   const gx = Math.floor(goalPos.x)
   const gy = Math.floor(goalPos.y)
   const gz = Math.floor(goalPos.z)
+  let gen = null
+  try { gen = require('./step').stepGen(ctx) } catch (_) { gen = null }
   rec.guided = {
     at: now, goal: { x: gx, y: gy, z: gz }, xzOnly: !!o.xzOnly,
     key: typeof o.key === 'string' && o.key ? o.key : 'walk-guided',
     paused: false, goneSince: null, lastWorkerPos: null, lastMove: now,
-    reissuedAt: 0, stopSent: false,
+    reissuedAt: 0, stopSent: false, gen,
   }
   try {
     const { clearGoal, say } = require('./behaviours/util')
@@ -324,6 +326,37 @@ function walkStop(rec) {
   g.stopSent = true
   try { void module.exports.send('msg #stop') } catch (_) { /* bridge best-effort */ }
   return true
+}
+
+// Cancel a live guided walk (a stale re-pick restarts the leg): #stop the
+// worker and count outcome 'cancelled'. True when a live job was dropped.
+// Terminal jobs (stopSent, already counted done/fallback) are no-ops.
+// Drops that null the whole record (stop/new-order, shelter preempt) have
+// no record to cancel — the worker finishes its bounded #goto, idles, and
+// the next delegation's resume+goto re-tasks it (the bring.js shape).
+function walkCancel(rec) {
+  const g = rec && rec.guided
+  if (!g || g.stopSent) return false
+  walkStop(rec)
+  try {
+    const metrics = require('./metrics')
+    metrics.workerJobs.inc({ kind: 'walk', outcome: 'cancelled' })
+  } catch (_) { /* metric best-effort */ }
+  return true
+}
+
+// True when the guided state belongs to an older step instance (the step
+// was preempted away and re-picked: fight never bumps the gen, a fresh pick
+// does). The caller restarts its walk instead of failing stale at once.
+// Unreadable gens fail open to resume (the old tick continues).
+function walkStale(rec, ctx) {
+  try {
+    const g = rec && rec.guided
+    if (!g || typeof g.gen !== 'number') return false
+    return require('./step').stepGen(ctx) !== g.gen
+  } catch (_) {
+    return false
+  }
 }
 
 // One guided tick. arrived(bp) is the leg's own arrival predicate — when it
@@ -361,7 +394,13 @@ function walkTick(bot, ctx, rec, bp, arrived) {
   const waiting = walkD3(wpos, g.goal) <= WALK_ARRIVE_D
   if (waiting) {
     // The worker is at the goal waiting: the still clock cannot fail a head
-    // still en route, and a pause is meaningless (it already stopped).
+    // still en route, and a pause is meaningless (it already stopped). Once
+    // the head closes to leash range the follow goal (range 2) can already
+    // be satisfied 2 out on an axis — outside the leg's 1.5 arrival — so
+    // hand over to the leg's own walk for the last meters instead of
+    // idling to the 240 s total (revmux 01 core-1).
+    const d = walkD3(bp, wpos)
+    if (d <= WALK_RESUME_D) return done('done')
     g.lastMove = now
     g.lastWorkerPos = { x: wpos.x, y: wpos.y, z: wpos.z }
   } else {
@@ -400,4 +439,4 @@ function walkTick(bot, ctx, rec, bp, arrived) {
   return 'walk'
 }
 
-module.exports = { configure, configured, name, isWorker, players, workerEntity, workerOnline, send, ensureJoined, leave, JOIN_ABSENT_MS, JOIN_RESEND_MS, SEND_TIMEOUT_MS, walkAvailable, walkNightBlocked, walkWatchdogFlat, walkShouldDelegate, walkDelegate, walkStop, walkTick, WALK_FAR_BLOCKS, WALK_TOTAL_MS, WALK_GONE_MS, WALK_STILL_MS, WALK_PAUSE_D, WALK_RESUME_D, WALK_ARRIVE_D, WALK_FOLLOW_RANGE, WALK_REISSUE_MS, WALK_NIGHT_RANGE }
+module.exports = { configure, configured, name, isWorker, players, workerEntity, workerOnline, send, ensureJoined, leave, JOIN_ABSENT_MS, JOIN_RESEND_MS, SEND_TIMEOUT_MS, walkAvailable, walkNightBlocked, walkWatchdogFlat, walkShouldDelegate, walkDelegate, walkStop, walkCancel, walkStale, walkTick, WALK_FAR_BLOCKS, WALK_TOTAL_MS, WALK_GONE_MS, WALK_STILL_MS, WALK_PAUSE_D, WALK_RESUME_D, WALK_ARRIVE_D, WALK_FOLLOW_RANGE, WALK_REISSUE_MS, WALK_NIGHT_RANGE }

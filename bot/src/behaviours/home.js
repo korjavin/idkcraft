@@ -4,7 +4,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const castleData = require('../castle')
 const { HOSTILE_NAMES } = require('../perception')
-const { carryOrderStamp } = require('../step') // oqul.11: was a deferred task.js require
+const { carryOrderStamp, stepFailed } = require('../step') // oqul.11: was a deferred task.js require
 const worker = require('../worker')
 const { timeWord } = require('../site')
 // goalFacts(bot, ctx).time without the arbiter (oqul.11): the same word.
@@ -574,7 +574,19 @@ function gohomeTick(bot, ctx, target, state) {
   if (st.phase === 'guided') {
     // Guided far walk (idkcraft-jlda.5): the worker #gotos the door, the
     // head follows it. Fight preempts by dispatch order (this tick never
-    // runs under fight); arrival hands back to the walk below next tick.
+    // runs under fight); arrival hands back to the walk below next tick. A
+    // re-picked step restarts the walk instead of failing stale at once.
+    if (worker.walkStale(st, ctx)) {
+      worker.walkCancel(st)
+      st.guided = null
+      st.phase = 'walk'
+      st.stalls = 0
+      st.fails = 0
+      st.lastPos = null
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = ''
+      return
+    }
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work', { walk: true }) } catch (_) { /* lease best-effort */ }
     try { ctx.shelterLeg = out } catch (_) { /* lease stash best-effort */ }
     const bp = botPos(bot)
@@ -600,7 +612,7 @@ function gohomeTick(bot, ctx, target, state) {
     // set it before the delegation; re-set after the guidedClear).
     st.guided = null
     st.phase = 'failed'
-    ctx.stepStatus = 'failed:cannot-reach-home'
+    stepFailed(ctx, 'cannot-reach-home')
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
     ctx.shelterLeg = null; return
   }

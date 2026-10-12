@@ -7,6 +7,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { entrance } = require('./castle')
 const body = require('../body')
 const worker = require('../worker')
+const { stepFailed } = require('../step')
 const { issueGoal } = require('./util')
 
 const MOVE_TOLERANCE = 0.5
@@ -131,7 +132,19 @@ function gocastle(bot, ctx, target, state) {
     // Guided far walk (idkcraft-jlda.5): the worker #gotos the entrance,
     // the head follows it. Fight preempts by dispatch order; arrival hands
     // back to the walk below next tick. Before the climb calc: a guided
-    // head follows, it never climbs.
+    // head follows, it never climbs. A re-picked step leg restarts the
+    // walk instead of failing stale at once (orders never re-pick).
+    if (stepMode && worker.walkStale(od, ctx)) {
+      worker.walkCancel(od)
+      od.guided = null
+      od.phase = 'walk'
+      od.stalls = 0
+      od.fails = 0
+      od.lastPos = null
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = ''
+      return
+    }
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'gocastle', { walk: true }) } catch (_) { /* lease best-effort */ }
     try { ctx.shelterLeg = ent } catch (_) { /* lease stash best-effort */ }
     const res = worker.walkTick(bot, ctx, od, bp, (p) => atEntrance(p, ent))
@@ -149,7 +162,7 @@ function gocastle(bot, ctx, target, state) {
     // Failed: the XZ walk's own failure path, byte-identical.
     od.guided = null
     od.phase = 'failed'
-    ctx.stepStatus = 'failed:cannot-reach-castle'
+    stepFailed(ctx, 'cannot-reach-castle')
     if (order) {
       ctx.gocastle = null
       holdStill(bot, ctx)

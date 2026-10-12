@@ -331,6 +331,54 @@ describe('guided far walk guide', () => {
     assert.ok(!sends.includes('msg #pause'), 'no leash against a waiting worker')
   })
 
+  it('a waiting worker hands over once the head closes to leash range', async () => {
+    // Worker on the goal cell, head 2 out on an axis: GoalFollow(2) is
+    // already satisfied there, but the leg arrival (1.5) is not — without
+    // the handover the head would idle to the 240 s total (revmux 01).
+    const sends = []
+    const entity = { box: { position: pos(100, 64, 0) } }
+    stubWorker({ sends, entity })
+    const bot = unitBot({ at: { x: 98, y: 64, z: 0 } })
+    const ctx = { home: v2home(), lastGoalKey: 'comehome-guided' }
+    const rec = { guided: { at: Date.now(), goal: { x: 100, y: 64, z: 0 }, key: 'comehome-guided', paused: false, goneSince: null, lastWorkerPos: { x: 100, y: 64, z: 0 }, lastMove: Date.now(), reissuedAt: Date.now(), stopSent: false } }
+    assert.equal(worker.walkTick(bot, ctx, rec, bot.entity.position, () => false), 'done')
+    await flushes()
+    assert.ok(sends.includes('msg #stop'), `sends: ${sends}`)
+    // 5 out: still en route, keep following.
+    const far = unitBot({ at: { x: 95, y: 64, z: 0 } })
+    const rec2 = { guided: { at: Date.now(), goal: { x: 100, y: 64, z: 0 }, key: 'comehome-guided', paused: false, goneSince: null, lastWorkerPos: { x: 100, y: 64, z: 0 }, lastMove: Date.now(), reissuedAt: Date.now(), stopSent: false } }
+    assert.equal(worker.walkTick(far, ctx, rec2, far.entity.position, () => false), 'walk')
+  })
+
+  it('walkCancel parks a live job once and ignores terminal ones', async () => {
+    const sends = []
+    stubWorker({ sends, entity: { box: null } })
+    assert.equal(worker.walkCancel({ guided: { stopSent: false } }), true)
+    await flushes()
+    assert.ok(sends.includes('msg #stop'), `sends: ${sends}`)
+    assert.equal(worker.walkCancel({ guided: { stopSent: true } }), false, 'terminal: already counted')
+    assert.equal(worker.walkCancel({}), false, 'no job')
+    const metrics = require('../src/metrics')
+    const text = await metrics.client.register.metrics()
+    assert.match(text, /idkcraft_bot_worker_jobs_total\{kind="walk",outcome="cancelled"\} [1-9]/)
+  })
+
+  it('a stale re-pick restarts the walk instead of failing at once', () => {
+    const at = { x: 150, y: 64, z: 150 }
+    const sends = []
+    stubWorker({ sends, entity: { box: { position: pos(140, 64, 140) } } })
+    const bot = homeBot({ at })
+    // Guided under gen 1, re-picked under gen 2 with an expired clock: a
+    // live expiry would fail, but a re-pick restarts the walk.
+    const ctx = { home: v2home(), lastGoalKey: 'gohome-guided', lastPathStatus: 'noPath', stepStatus: 'running', step: 'gohome', stepGen: 2, gohome: { phase: 'guided', stalls: 0, fails: 0, lastPos: null } }
+    ctx.gohome.guided = { at: Date.now() - 300000, goal: { x: 13, y: 64, z: 19 }, key: 'gohome-guided', paused: false, goneSince: null, lastWorkerPos: null, lastMove: Date.now(), reissuedAt: 0, stopSent: false, gen: 1 }
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk', 'stale delegation restarts the walk')
+    assert.equal(ctx.gohome.guided, null)
+    assert.equal(ctx.stepStatus, 'running', 'no instant failure, no latch strike')
+    assert.ok(sends.includes('msg #stop'), `sends: ${sends}`)
+  })
+
   it('head arrival ends done after #stop', async () => {
     const sends = []
     stubWorker({ sends, entity: { box: { position: pos(98, 64, 0) } } })
