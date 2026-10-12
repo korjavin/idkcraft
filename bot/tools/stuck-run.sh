@@ -7,7 +7,11 @@
 #   REPLAY_TAG (bot name suffix; default r + 3 pid digits — exported so
 #   the pre-op below and the replay target the same names), REPLAY_OUT, REPLAY_BRAIN,
 #   REPLAY_BASELINE* (passed through to stuck-replay.js), REPLAY_WORKER=1
-#   (launch the Baritone worker client beside the head, idkcraft-jlda.3).
+#   (launch the Baritone worker client beside the head, idkcraft-jlda.3),
+#   REPLAY_BODY=baritone (run the FOLLOWER on the v2 Baritone body:
+#   idkcraft-neuc.5 boots the offline client under the follower name and
+#   exports BOT_BODY/BRIDGE_* for the replay; MOD_PORT/BODY_CONSOLE_PORT
+#   pick the host publishes, defaults 7778/7779).
 # Exit codes: 0 = baseline holds (incl. FLAKY: regressed spots held on the
 # one automatic rerun, see the flake protocol at the end), 1 = REGRESSION vs
 # the baseline (repeated on the rerun), 2 = environment failure (no START.sh/snapshot, rig never came up,
@@ -145,6 +149,10 @@ teardown() {
   if [ "${WORKER_STARTED:-}" = 1 ]; then
     sh "$TREE/baritone/client.sh" stop >/dev/null 2>&1 || true
   fi
+  # v2 body client (idkcraft-neuc.5): same ownership rule, its own name.
+  if [ "${BODY_STARTED:-}" = 1 ]; then
+    BARITONE_CLIENT=idk-baritone-body sh "$TREE/baritone/client.sh" stop >/dev/null 2>&1 || true
+  fi
   docker stop -t 5 "$CONTAINER" >/dev/null 2>&1 || true
   if [ -n "$SRVPID" ]; then kill "$SRVPID" >/dev/null 2>&1 || true; wait "$SRVPID" 2>/dev/null || true; fi
   SRVPID=
@@ -228,7 +236,11 @@ boot
 if [ "${REPLAY_WORKER:-}" = 1 ]; then
   WORKER="${BOT:-IdkWorker}"
   rcon_assert "op $WORKER"
-  BARITONE_OFFLINE=1 RIG_CONTAINER="$CONTAINER" CLIENT_LOG="/tmp/stuck-worker-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
+  # MOD_PORT cleared: the mod-ws publish belongs to the body client only
+  # (revmux 02 core-3) — an inherited value would collide with it on a
+  # shared box. Empty reads as unset in client.sh, so worker-only runs
+  # are unchanged.
+  MOD_PORT= BARITONE_OFFLINE=1 RIG_CONTAINER="$CONTAINER" CLIENT_LOG="/tmp/stuck-worker-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
     sh "$TREE/baritone/client.sh" start "${REPLAY_PORT:-25571}" "$WORKER" || exit 2
   WORKER_STARTED=1 # the client is ours to stop from here on (teardown)
   # Paper's same-IP connection throttle (4000 ms, bukkit.yml): the worker
@@ -238,6 +250,30 @@ if [ "${REPLAY_WORKER:-}" = 1 ]; then
   # localhost, not the literal loopback IP (privacy pre-check); the bridge
   # publishes on all interfaces, so both reach it.
   export WORKER_NAME="$WORKER" WORKER_HOST=localhost WORKER_PORT="${BRIDGE_PORT:-7777}"
+fi
+# v2 body (idkcraft-neuc.5): the FOLLOWER runs on the Baritone body — pre-op
+# its name, boot the offline client under it (client.sh owns the join),
+# publish the console bridge (BODY_CONSOLE_PORT) and the Fabric mod ws
+# (MOD_PORT), export the adapter addresses for the replay. Name and console
+# port are distinct from the worker's, so REPLAY_WORKER=1 +
+# REPLAY_BODY=baritone share one box (revmux 01 core-4: the same host port
+# would collide). The 7779 default is the spike's body-client port
+# (baritone/bridge/rig.sh). Wave-1 mode is record-only
+# (REPLAY_BASELINE_OFF=1); the flake rerun below does not relaunch the body
+# client (idkcraft-neuc.15 wires the v2 rerun).
+if [ "${REPLAY_BODY:-}" = baritone ]; then
+  rcon_assert "op StuckReplay$REPLAY_TAG"
+  BARITONE_OFFLINE=1 RIG_CONTAINER="$CONTAINER" BARITONE_CLIENT=idk-baritone-body \
+    BRIDGE_PORT="${BODY_CONSOLE_PORT:-7779}" MOD_PORT="${MOD_PORT:-7778}" \
+    CLIENT_LOG="/tmp/stuck-body-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
+    sh "$TREE/baritone/client.sh" start "${REPLAY_PORT:-25571}" "StuckReplay$REPLAY_TAG" || exit 2
+  BODY_STARTED=1 # the client is ours to stop from here on (teardown)
+  # Paper's same-IP connection throttle (4000 ms): the body just joined
+  # from localhost and the guide connects next — the same 6 s gap as the
+  # worker block (the replay holds guide->follower itself).
+  sleep 6
+  # localhost, not the literal loopback IP (privacy pre-check).
+  export BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT="${MOD_PORT:-7778}" BRIDGE_CONSOLE_PORT="${BODY_CONSOLE_PORT:-7779}"
 fi
 export REPLAY_VARIANT="$VARIANT" REPLAY_WORLDSHA="$SHA_BEFORE" REPLAY_GITSHA="$GITSHA"
 if [ -n "$SPOTS" ]; then

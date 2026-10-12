@@ -389,6 +389,31 @@ The baseline is forced off (worker rows are never compared), and the run
 exits 2 when the worker never joins. One worker client per box (a second
 `REPLAY_WORKER` run fails loud at the already-running guard).
 
+## v2 body runs (`REPLAY_BODY=baritone`, idkcraft-neuc.5)
+
+Runs the FOLLOWER on the Baritone body — the M1/M2 proof harness for the v2
+epic (idkcraft-neuc). The wrapper pre-ops the follower name, boots the
+offline client under it (`baritone/client.sh`, name `idk-baritone-body`),
+publishes the console bridge (`BODY_CONSOLE_PORT`, default 7779 — name and
+port are distinct from the worker's, so `REPLAY_WORKER=1` shares one box)
+and the Fabric mod ws (`MOD_PORT`, default 7778), and exports
+`BOT_BODY=baritone` plus the `BRIDGE_*` addresses for the replay; the replay
+builds the follower via `bot/src/bridge` (the MC address the container
+connects to is `REPLAY_BODY_MC_HOST`, default `host.docker.internal`)
+while the guide stays mineflayer. The body log lands at
+`/tmp/stuck-body-<variant>.log` (Baritone's `[CHAT] [Baritone] ...` lines
+prove the goal reached the client). Wave-1 mode is record-only:
+
+```sh
+REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base bot/tools/stuck-spots.json
+REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base bot/tools/task-spots.json   # MINE-10 is M2's gate
+sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical flow
+```
+
+One body client per box, like the worker. `REPLAY_BASELINE_OFF=1` keeps the
+v1 baseline from judging v2 rows; idkcraft-neuc.15 ships
+`stuck-baseline-v2.json`.
+
 ## `REPLAY_BRAIN=laya`
 
 Runs the follower on the shipped hybrid brain (FSM primary, model on hard

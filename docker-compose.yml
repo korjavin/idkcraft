@@ -1,7 +1,7 @@
 # idkcraft — Paper+Geyser server (mc) + follow bot (bot) + Baritone worker (baritone).
 # No Traefik: Minecraft is raw TCP/UDP, host ports are published directly.
-# Service names (mc, bot, baritone) and bot env names are the shared contract
-# with the bot bead (bot/**) — do not rename.
+# Service names (mc, bot, baritone, bot2, body2) and bot env names are the
+# shared contract with the bot bead (bot/**) — do not rename.
 # (The laya System-1 sidecar left the stack in idkcraft-jlda.6; its code
 # stays in laya/ as the rollback.)
 #
@@ -154,6 +154,80 @@ services:
       # One-time owner login (baritone/README.md): the account survives
       # redeploys here. FIXED name — see the volumes block below.
       - baritone-auth:/headlessmc/HeadlessMC/auth
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+
+  # v2 (idkcraft-neuc): the SAME Node logic on the Baritone body — a second
+  # bot under its own name, off until BOT2_USERNAME is set (bot2 idles,
+  # body2 sleeps at ~0 RAM, prod is untouched). Turning v2 on costs ~2.5g
+  # RAM (the client dominates; node adds ~150m).
+  bot2:
+    # Same image as bot (CI rewrites :latest to the commit sha on deploy).
+    image: ghcr.io/korjavin/idkcraft:latest
+    container_name: ${BOT2_CONTAINER_NAME:-idkcraft-bot2}
+    restart: unless-stopped
+    depends_on:
+      mc:
+        condition: service_healthy
+    environment:
+      MC_HOST: mc
+      MC_PORT: 25565
+      BOT_BODY: baritone
+      BOT_USERNAME: ${BOT2_USERNAME:-}
+      BOT_FOLLOW: ${BOT_FOLLOW:-}
+      BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
+      BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
+      BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
+      BRAIN_URL: ${BRAIN_URL:-}
+      BRAIN_TIMEOUT_MS: ${BRAIN_TIMEOUT_MS:-3000}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PLANNER: ${PLANNER:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      GOAL_WATCHDOG_MS: ${GOAL_WATCHDOG_MS:-60000}
+      GOAL_COMMIT_MS: ${GOAL_COMMIT_MS:-120000}
+      GOAL_WATCHDOG_MAX_ROUNDS: ${GOAL_WATCHDOG_MAX_ROUNDS:-6}
+      GOAL_TRAVEL_GRACE_MS: ${GOAL_TRAVEL_GRACE_MS:-90000}
+      GOAL_PLANB_SWITCH_MS: ${GOAL_PLANB_SWITCH_MS:-450000}
+      # No worker on v2 (empty, never inherits WORKER_NAME: one worker
+      # serves one head); WORKER_HOST/PORT below stay inert without it.
+      WORKER_NAME: ""
+      WORKER_HOST: ${WORKER_HOST:-baritone}
+      WORKER_PORT: ${WORKER_PORT:-7777}
+      BRIDGE_HOST: body2
+      BRIDGE_PORT: 7778
+      BRIDGE_CONSOLE_PORT: 7777
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "9464"
+    networks: [default, monitoring]
+    volumes:
+      # Same named volume as bot: one JSON file per BOT_USERNAME, so the
+      # two bots never collide.
+      - bot-memory:/app/memory
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+
+  # v2 body (idkcraft-neuc): the baritone image offline under BOT2_USERNAME.
+  # Empty name (default) = start.sh idles with no JVM at ~0 RAM. No ports:
+  # bot2 reaches the console bridge (7777) and the mod ws (7778) on the
+  # compose network. No auth volume (offline only: a stored account would
+  # shadow the name — baritone/README.md).
+  body2:
+    image: ghcr.io/korjavin/idkcraft-baritone:latest
+    container_name: ${BODY2_CONTAINER_NAME:-idkcraft-body2}
+    restart: unless-stopped
+    depends_on:
+      mc:
+        condition: service_healthy
+    mem_limit: ${BODY2_MEM_LIMIT:-2500m}
+    environment:
+      BARITONE_OFFLINE: "1"
+      BOT: ${BOT2_USERNAME:-}
     logging:
       driver: json-file
       options:

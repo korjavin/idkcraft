@@ -90,7 +90,7 @@ const bring = new client.Counter({
 })
 const workerJobs = new client.Counter({
   name: 'idkcraft_bot_worker_jobs_total',
-  help: 'Worker delegations by kind (bore) and outcome (done|fallback)',
+  help: 'Worker delegations by kind (bore|walk) and outcome (done|fallback|cancelled)',
   labelNames: ['kind', 'outcome']
 })
 const goalSteps = new client.Counter({

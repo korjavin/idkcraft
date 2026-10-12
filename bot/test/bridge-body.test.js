@@ -335,36 +335,60 @@ describe('bridge state mapping + chat shape', () => {
   })
 
   it("failed fire-and-forget calls log, never emit 'error' (runOnce would exit) (revmux 01 core-2)", async () => {
-    const transport = new FakeTransport()
-    const origCall = transport.call.bind(transport)
-    transport.call = async (method, params) => {
-      if (method === 'chat.send' || method === 'baritone.cmd') throw new Error('slow client')
-      return origCall(method, params)
-    }
-    const bot = new BaritoneBot(transport, { Vec3, registry: { blocksByName: {} } })
-    await bot.start({ pollMs: 0 })
-    try {
-      const errors = []
-      bot.on('error', (e) => errors.push(e))
-      const statuses = []
-      bot.on('path_update', (r) => statuses.push(r.status))
-      const lines = []
+    // A failed #goto reports noPath; a failure superseded by a same-tick
+    // stop drops (neuc.4 goal-id invalidation) — two scenarios below.
+    async function scenario(failCmd) {
+      const transport = new FakeTransport()
+      const origCall = transport.call.bind(transport)
+      transport.call = async (method, params) => {
+        if (method === 'chat.send' || (method === 'baritone.cmd' && failCmd(params.command))) {
+          throw new Error('slow client')
+        }
+        return origCall(method, params)
+      }
+      const bot = new BaritoneBot(transport, { Vec3, registry: { blocksByName: {} } })
+      await bot.start({ pollMs: 0 })
+      const seen = { errors: [], statuses: [], resets: [], lines: [] }
+      bot.on('error', (e) => seen.errors.push(e))
+      bot.on('path_update', (r) => seen.statuses.push(r.status))
+      bot.on('path_reset', (r) => seen.resets.push(r))
       const origLog = console.log
-      console.log = (l) => { lines.push(String(l)) }
+      console.log = (l) => { seen.lines.push(String(l)) }
+      const restore = () => { console.log = origLog }
+      return { transport, bot, seen, restore }
+    }
+    // Scenario 1: the #goto fails with nobody superseding it.
+    {
+      const { bot, seen, restore } = await scenario(() => true)
       try {
         bot.chat('hello?')
-        bot.pathfinder.setGoal(new goals.GoalNear(1, 64, 1, 2))
+        // Unsatisfied from fresh feet (neuc.4 short-circuits satisfied goals).
+        bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
+        await sleep(50)
+        assert.deepEqual(seen.errors, [])
+        assert.ok(seen.statuses.includes('noPath'), 'a failed cmd still reports noPath')
+        assert.ok(seen.lines.some((l) => l.includes('bridge chat.send failed')))
+        assert.ok(seen.lines.some((l) => l.includes('bridge baritone.cmd failed')))
+      } finally {
+        restore()
+        await bot.stop()
+      }
+    }
+    // Scenario 2: only the #stop fails, on a live bound goal.
+    {
+      const { bot, seen, restore } = await scenario((cmd) => /^#stop/.test(cmd || ''))
+      try {
+        bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
+        await sleep(10) // the echo binds: the stop below cancels a live goal
         bot.pathfinder.setGoal(null)
         await sleep(50)
+        assert.deepEqual(seen.errors, [])
+        assert.deepEqual(seen.resets, ['stopped'])
+        assert.ok(seen.lines.some((l) => l.includes('bridge baritone.cmd #stop failed')))
       } finally {
-        console.log = origLog
+        restore()
+        await bot.stop()
       }
-      assert.deepEqual(errors, [])
-      assert.ok(statuses.includes('noPath'), 'a failed cmd still reports noPath')
-      assert.ok(lines.some((l) => l.includes('bridge chat.send failed')))
-      assert.ok(lines.some((l) => l.includes('bridge baritone.cmd failed')))
-    } finally {
-      await bot.stop()
     }
   })
 

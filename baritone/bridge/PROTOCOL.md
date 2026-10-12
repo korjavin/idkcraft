@@ -174,6 +174,87 @@ it — 1793 sites, no incremental prod traffic. What de-risks it:
    `bot/`, the logic stays byte-identical (this spike changes zero
    `bot/src` files).
 
+## Console backend (spike-only, DELETED by neuc.2)
+
+The spike's `adapter.js` `backend:'console'` sent pathfinder goals as
+`msg #goto` lines through the existing write-only HMC bridge
+(`baritone/client.sh` plumbing) with no mod and no state. It existed
+only so `rig-goto.js` proved the `#goto` leg on real iron before the mod
+was written; both are deleted (neuc.5 brings the real harness). Prod
+never used it (no status, no state, position-blind `isMoving`).
+
+## Pathfinder parity (idkcraft-neuc.4)
+
+Goal-id attribution: `baritone.cmd` echoes `{id}` per `#goto`; the
+adapter binds the newest send's echo (sequence-guarded: a superseding
+setGoal/stop/re-issue invalidates in-flight binds and drops the old id
+at once, so a late terminal for it can neither clear the follow arm nor
+verdict a goal Baritone no longer runs) and applies
+`baritone.status {id,pathing,last}` /
+`baritone.event {id,status}` only for the latched id — older, foreign,
+or no-goal verdicts drop. A terminal for the live id emits `path_update
+{status}` + `path_reset` (`success` → `goal reached`, else the status
+verbatim) exactly once; the cleared latch drops the second channel.
+`stop()` on a live goal sends `#stop` + `path_reset 'stopped'` (no
+`path_update`: v1's stop leaves the status sticky); idle stops stay
+silent like v1. Unknown `last` verdicts fail as `timeout` (retry-safe,
+never synthesised success).
+
+Already-satisfied goals never reach Baritone: when `goal.isEnd(feet)`
+holds, setGoal stops the live walk and emits the success pair with no
+command. v1 ends the same way (A* start isEnd), while Baritone's
+setGoalAndPath returns before CALC_STARTED with no PathEvent for an
+in-goal `#goto` — sending one would wedge `isMoving` (revmux 01 core-1).
+Worldless place/look one step away also succeed (a clean isEnd=false is
+honoured; feet==p and p-at-head are excluded like v1's isStandingIn —
+v1 steps out first, so the walk does too).
+
+Goal → command map (extends the spike's five):
+
+| goal | command |
+|---|---|
+| GoalNear/GoalBlock/GoalGetToBlock | `#goto x y z` (GetToBlock keeps the spike cell for now — unused in bot/src; gets the neighbour treatment if a caller appears) |
+| GoalXZ/GoalNearXZ | `#goto x z` |
+| GoalY | `#goto y` (Baritone `goto <y>` = Y level, verified in GotoCommand) |
+| GoalFollow | one-shot `#goto` at the live target + adapter re-issue (> 1 block drift, ≤ 1 cmd/s, dynamic only; follow.js still owns terminal/timeout re-issue) |
+| GoalCompositeAny/All | first mappable member, else noPath |
+| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the neighbour cell on the bot's side (dominant horizontal axis; +x when above/below) — GoalBlock only past the goal's place range above the feet (roofs: Baritone pillars like v1's executor does when no ground node is in range; our own feet → noPath), else GoalXZ (rows 2-3, fills, floors, table look: v1 places those from the ground, so do we); our own column reports noPath at any level (GoalXZ counts any Y in it — an in-goal `#goto` is answered with silence); without feet there is no safe side → noPath (revmux 01 core-2, 02 core-2, 03 core-1/2, verify 01). Deep-below cells whose surface stands past place range fail visibly at the place attempt — a descend-first approach is wave-3 tuning if ever needed |
+| GoalInvert, GoalBreakBlock | noPath (no `#goto` spelling; GoalBreakBlock throws on v1 — gather.js) |
+
+Note for .1 (cc): every normal arrival emits AT_GOAL *then* CANCELED
+(the process tick after the executor finishes runs CANCEL_AND_SET_GOAL),
+and re-issues emit no CANCELED at all (FORCE_REVALIDATE goes through the
+event-free softCancelIfSafe; cancelled calcs suppress CALC_FAILED —
+verified in PathingBehavior/PathingControlManager). So: report AT_GOAL
+as success, and never surface a CANCELED after a reported success as a
+new verdict for that id — the adapter drops it as stale (id cleared),
+but a reordered CANCELED-first would wrongly stop a live goal.
+
+Movements → `#set` map (pushed on setMovements and every setGoal,
+diffed — only changes cross; the first push is absolute over the image
+settings.txt baseline):
+
+| Movements | Baritone setting |
+|---|---|
+| canDig | allowBreak |
+| allowSprinting | allowSprint |
+| allowParkour | allowParkour |
+| allow1by1towers | allowPlace |
+| scafoldingBlocks ids | acceptableThrowawayItems (comma-joined names via the registry) |
+| blocksCantBreak ids | blocksToAvoidBreaking (diggable names only — chest + deliberate adds; bedrock-class defaults need no telling) |
+
+Unmapped ceilings: canOpenDoors (Baritone opens doors itself), Movements
+blocksToAvoid (a future bead can send Baritone's own blocksToAvoid),
+exclusionAreasBreak/Place + danger.addPathCost (function costs over
+getNeighbors — no Baritone equivalent; // ponytail: danger marks not
+mapped; Baritone avoidance settings if a prod pit repeats). Lists never
+send empty (no `#set` spelling clears one); both are non-empty in
+practice. bestHarvestTool mirrors mineflayer-pathfinder over inventory
+digTime (enchantments read empty: prismarine-nbt is not a direct dep —
+ranking may prefer an unenchanted tool, digs still work); getPathTo is a
+sync `{status:'noPath',path:[]}` stub (no live callers — bring.js names
+it as a future upgrade path).
+
 ## entities.list / roster.get (idkcraft-neuc.3)
 
 Mod: `mod/src/main/java/idkcraft/bridge/Entities.java`
