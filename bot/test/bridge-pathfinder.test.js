@@ -3,19 +3,13 @@
 // idkcraft-neuc.4: pathfinder parity on Baritone — goal-id attribution,
 // GoalFollow re-issue, goal class mapping, Movements->#set map,
 // bestHarvestTool/getPathTo shims. FakeTransport = the mod.
-// NOTE(.2 moves): requires flip to ../src/bridge/* on rebase after .2 lands.
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 
-const { BaritoneBot, goalToBaritone, movementsToSettings } = require('../../baritone/bridge/adapter')
-const { FakeTransport } = require('../../baritone/bridge/transport')
+const { BaritoneBot, goalToBaritone, movementsToSettings } = require('../src/bridge/index')
+const { FakeTransport } = require('../src/bridge/transport')
 const { goals } = require('mineflayer-pathfinder')
-let Vec3
-try {
-  Vec3 = require('vec3')
-} catch (_) {
-  Vec3 = require('../../baritone/bridge/adapter').MinimalVec
-}
+const Vec3 = require('vec3')
 // The REAL behaviour, required unchanged.
 const follow = require('../src/behaviours/follow')
 
@@ -186,19 +180,27 @@ describe('goal-id attribution (FakeTransport = the mod)', () => {
     assert.deepEqual(seen.resets, [])
   })
 
-  it('a failed command fails the goal and raises error', async () => {
+  it('a failed command fails the goal, logs, never emits error', async () => {
     const orig = transport.call.bind(transport)
     transport.call = async (method, params) => {
       if (method === 'baritone.cmd') throw new Error('bridge down')
       return orig(method, params)
     }
-    bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
-    await sleep(10)
-    transport.call = orig
+    const lines = []
+    const origLog = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
+      await sleep(10)
+    } finally {
+      console.log = origLog
+      transport.call = orig
+    }
     assert.deepEqual(seen.statuses, ['noPath'])
     assert.deepEqual(seen.resets, ['noPath'])
     assert.equal(bot.pathfinder.isMoving(), false)
-    assert.equal(seen.errors.length, 1)
+    assert.deepEqual(seen.errors, []) // runOnce fatal()s every 'error'
+    assert.ok(lines.some((l) => l.includes('bridge baritone.cmd failed')))
   })
 
   it('an unknown last verdict fails as timeout, never synthesised success', async () => {
@@ -507,23 +509,6 @@ describe('Movements -> #set map', () => {
     }
   })
 
-  it('the console backend sends no settings', async () => {
-    const lines = []
-    const bot = new BaritoneBot(new FakeTransport(), {
-      Vec3,
-      registry: REGISTRY,
-      backend: 'console',
-      bridgeSend: async (line) => { lines.push(line) },
-    })
-    await bot.start({ pollMs: 0 })
-    try {
-      bot.pathfinder.setMovements(movs())
-      await sleep(10)
-      assert.deepEqual(lines, [])
-    } finally {
-      await bot.stop()
-    }
-  })
 })
 
 describe('bestHarvestTool/getPathTo shims', () => {
@@ -608,46 +593,3 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
   })
 })
 
-describe('console backend (rig proof without the mod)', () => {
-  it('setGoal sends msg #goto lines, stop sends #stop + path_reset', async () => {
-    const lines = []
-    const bot = new BaritoneBot(new FakeTransport(), {
-      Vec3,
-      registry: REGISTRY,
-      backend: 'console',
-      bridgeSend: async (line) => { lines.push(line) },
-    })
-    const resets = []
-    bot.on('path_reset', (r) => resets.push(r))
-    await bot.start({ pollMs: 0 })
-    try {
-      bot.pathfinder.setGoal(new goals.GoalNear(1, 64, -3, 2))
-      await sleep(10)
-      assert.deepEqual(lines, ['msg #goto 1 64 -3'])
-      assert.equal(bot.pathfinder.isMoving(), true)
-      assert.ok(bot.pathfinder.goal)
-      bot.pathfinder.setGoal(null) // clearGoal shape
-      await sleep(10)
-      assert.deepEqual(lines, ['msg #goto 1 64 -3', 'msg #stop'])
-      assert.equal(bot.pathfinder.goal, null)
-      assert.equal(bot.pathfinder.isMoving(), false)
-      assert.deepEqual(resets, ['stopped'])
-    } finally {
-      await bot.stop()
-    }
-  })
-
-  it('unmapped goals report noPath like an executor failure', async () => {
-    const bot = new BaritoneBot(new FakeTransport(), { Vec3, registry: REGISTRY, backend: 'console', bridgeSend: async () => {} })
-    await bot.start({ pollMs: 0 })
-    try {
-      const statuses = []
-      bot.on('path_update', (r) => statuses.push(r.status))
-      // Unsatisfied (blind feet are in the inner block) so it walks into noPath.
-      bot.pathfinder.setGoal(new goals.GoalInvert(new goals.GoalBlock(0, 64, 0)))
-      assert.deepEqual(statuses, ['noPath'])
-    } finally {
-      await bot.stop()
-    }
-  })
-})

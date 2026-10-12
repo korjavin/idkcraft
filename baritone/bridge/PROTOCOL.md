@@ -2,7 +2,7 @@
 
 Target: ONE body — the whole Node logic (castle, goals, orders, recovery)
 runs on a real headless client (HeadlessMc + Fabric + Baritone) instead of
-mineflayer, via a Node adapter (`adapter.js`) that looks like mineflayer's
+mineflayer, via a Node adapter (`bot/src/bridge/index.js`) that looks like mineflayer's
 `bot` to the logic. The client carries a small Fabric mod
 (`mod/`, skeleton in this spike) that exposes state+actions over a socket.
 Baritone itself only moves/mines/builds-from-schematic and exposes no
@@ -25,7 +25,7 @@ JSON, not NBT/cbor: debuggable over `websocat`, and the 10 Hz state poll
 is ~200 bytes. Binary chunk snapshots (prod `chunk.get`) ride as base64
 inside the same envelope — no second port.
 
-## Spike methods (implemented in `transport.js` FakeTransport + `adapter.js`)
+## Spike methods (implemented in `bot/src/bridge/transport.js` FakeTransport + `bot/src/bridge/index.js` — neuc.2 moved them into the bot image)
 
 | method | params | result | mineflayer surface |
 |---|---|---|---|
@@ -42,7 +42,7 @@ inside the same envelope — no second port.
 Events (spike): `chat {username,message}`, `death {}`, `respawn {}`,
 `block.update {x,y,z,name}` (cache write-through), `baritone.event
 {status}` (`success|noPath|timeout`, from a Baritone API listener in the
-mod — the executive-poll fallback in `adapter.js#refresh` is spike-only).
+mod — the executive-poll fallback in `bot/src/bridge/index.js#refresh` is spike-only).
 
 Status attribution (revmux 01 core-3, 02 core-1): the spike adapter
 latches a goal generation per `setGoal`, arms a witnessed-motion flag on
@@ -147,13 +147,14 @@ it — 1793 sites, no incremental prod traffic. What de-risks it:
    `bot/`, the logic stays byte-identical (this spike changes zero
    `bot/src` files).
 
-## Console backend (spike-only)
+## Console backend (spike-only, DELETED by neuc.2)
 
-`adapter.js` `backend:'console'` sends pathfinder goals as `msg #goto`
-lines through the existing write-only HMC bridge (`baritone/client.sh`
-plumbing) with no mod and no state. It exists only so `rig-goto.js`
-proves the `#goto` leg on real iron before the mod is written. Prod
-never uses it (no status, no state, position-blind `isMoving`).
+The spike's `adapter.js` `backend:'console'` sent pathfinder goals as
+`msg #goto` lines through the existing write-only HMC bridge
+(`baritone/client.sh` plumbing) with no mod and no state. It existed
+only so `rig-goto.js` proved the `#goto` leg on real iron before the mod
+was written; both are deleted (neuc.5 brings the real harness). Prod
+never used it (no status, no state, position-blind `isMoving`).
 
 ## Pathfinder parity (idkcraft-neuc.4)
 
@@ -188,7 +189,7 @@ Goal → command map (extends the spike's five):
 | GoalY | `#goto y` (Baritone `goto <y>` = Y level, verified in GotoCommand) |
 | GoalFollow | one-shot `#goto` at the live target + adapter re-issue (> 1 block drift, ≤ 1 cmd/s, dynamic only; follow.js still owns terminal/timeout re-issue) |
 | GoalCompositeAny/All | first mappable member, else noPath |
-| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the neighbour cell on the bot's side (dominant horizontal axis; +x when above/below) — GoalBlock when p.y is above the feet (walls, roofs: Baritone pillars to reach like v1's executor), GoalXZ at/below feet level (fills, floors, table look: stand on the surface beside, never into solid ground or air); a step landing on our own feet reports noPath; no feet (console backend) → noPath (revmux 01 core-2, 02 core-2). Deep-below cells whose surface stands past place range fail visibly at the place attempt — a descend-first approach is wave-3 tuning if ever needed |
+| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the neighbour cell on the bot's side (dominant horizontal axis; +x when above/below) — GoalBlock when p.y is above the feet (walls, roofs: Baritone pillars to reach like v1's executor), GoalXZ at/below feet level (fills, floors, table look: stand on the surface beside, never into solid ground or air); a step landing on our own feet reports noPath; without feet there is no safe side → noPath (revmux 01 core-2, 02 core-2). Deep-below cells whose surface stands past place range fail visibly at the place attempt — a descend-first approach is wave-3 tuning if ever needed |
 | GoalInvert, GoalBreakBlock | noPath (no `#goto` spelling; GoalBreakBlock throws on v1 — gather.js) |
 
 Note for .1 (cc): every normal arrival emits AT_GOAL *then* CANCELED

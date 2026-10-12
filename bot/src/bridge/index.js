@@ -1,15 +1,24 @@
-// idkcraft-kqzf spike: Node 'bot' adapter — looks like mineflayer's bot to
-// the logic, drives a real client (Fabric bridge mod + Baritone) underneath.
-// Spike subset only: entity/position, blockAt (sync cache), inventory,
-// canDigBlock, dig, placeBlock, chat + chat/message events, pathfinder
-// goto/follow mapped to Baritone #goto (mod backend) or the HMC console
-// (console backend = rig proof without the mod). Everything else is
-// documented in PROTOCOL.md with a size, not implemented here.
+// idkcraft-neuc.2: Node 'bot' for the Baritone body — looks like
+// mineflayer's bot to the UNCHANGED ticker, drives a real headless client
+// (HeadlessMc + Fabric bridge mod + Baritone) underneath. Moved from the
+// kqzf spike (baritone/bridge/adapter.js); the spike's 'console' backend is
+// gone (rig-goto.js went with it — .5 brings the real harness).
+//
+// Self-containment: this directory must never require anything from
+// bot/src outside bridge/ (bot/test/bridge-body.test.js holds that).
 'use strict'
 
 const { EventEmitter } = require('node:events')
+const net = require('node:net')
+const { BridgeTransport } = require('./transport')
 
 function keyOf(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
+// Failed fire-and-forget baritone.cmd: log, never emit 'error' (runOnce
+// fatal()s every 'error'; see chat()).
+function failLog(e) {
+  console.log(`bridge baritone.cmd failed: ${(e && e.message) || e}`)
+}
 
 // Minimal Vec3 when the caller injects none (tests inject the real vec3
 // from bot/node_modules for full parity: plus/minus/scaled/floored/...).
@@ -19,6 +28,17 @@ class MinimalVec {
   offset(dx, dy, dz) { return new MinimalVec(this.x + dx, this.y + dy, this.z + dz) }
   distanceTo(q) { return Math.hypot(this.x - q.x, this.y - q.y, this.z - q.z) }
   clone() { return new MinimalVec(this.x, this.y, this.z) }
+}
+
+// mineflayer game-mode names by the two low bits (mineflayer game.js
+// parseGameMode): the mod may send either form.
+const GAME_MODES = ['survival', 'creative', 'adventure', 'spectator']
+function gameModeName(gm) {
+  if (typeof gm === 'number' && gm >= 0 && gm <= 3) return GAME_MODES[gm]
+  return gm
+}
+function stripMcPrefix(s) {
+  return typeof s === 'string' ? s.replace(/^minecraft:/, '') : s
 }
 
 // mineflayer-pathfinder goal -> Baritone console command. GoalFollow is a
@@ -150,25 +170,36 @@ function movementsToSettings(m, registry) {
 
 class BaritoneBot extends EventEmitter {
   // transport: BridgeTransport (real mod) or FakeTransport (tests).
-  // opts: { Vec3, registry, username, backend='mod', bridgeSend }
-  // backend 'console' sends pathfinder goals as `msg <cmd>` lines via
-  // bridgeSend(line) (the existing write-only HMC bridge, no mod, no
-  // state — rig proof of the #goto leg only).
+  // opts: { Vec3, registry, username, version, console:{host,port,send} }.
   constructor(transport, opts = {}) {
     super()
     this.transport = transport
     this.Vec3 = opts.Vec3 || MinimalVec
     this.registry = opts.registry || { blocksByName: {} }
     this.username = opts.username || 'IdkBody'
-    this.backend = opts.backend || 'mod'
-    this.bridgeSend = opts.bridgeSend || null
     this.version = opts.version || '26.1.2'
+    this._console = opts.console || null
 
-    this.entity = { position: new this.Vec3(0, 64, 0), yaw: 0, pitch: 0, onGround: true }
+    this.entity = { position: new this.Vec3(0, 64, 0), velocity: new this.Vec3(0, 0, 0), yaw: 0, pitch: 0, onGround: true }
     this.players = {}
     this.entities = {}
     this.health = 20
     this.food = 20
+    this.oxygenLevel = 20
+    this.time = {
+      doDaylightCycle: null,
+      bigTime: null,
+      time: null,
+      timeOfDay: null,
+      day: null,
+      isDay: null,
+      moonPhase: null,
+      bigAge: null,
+      age: null,
+    }
+    this.game = {}
+    this.isRaining = false
+    this.isSleeping = false
     this.spawnPoint = new this.Vec3(0, 64, 0)
     this.heldItem = null
     this.targetDigBlock = null
@@ -184,6 +215,8 @@ class BaritoneBot extends EventEmitter {
     this._settings = {} // last `#set` values pushed (name -> string)
     this._refreshing = false
     this._pathStatus = 'none'
+    this._hasPos = false // first state.get with a non-null pos (createBot emits spawn on it)
+    this._quitting = false
     this._poll = null
     this._onTransportEvent = (method, params) => this._handleEvent(method, params)
 
@@ -193,7 +226,7 @@ class BaritoneBot extends EventEmitter {
       movements: null,
       setGoal: (goal, dynamic) => self._setGoal(goal, dynamic === true),
       stop: () => self._stopPath(),
-      isMoving: () => (self.backend === 'mod' ? !!self._pathing : !!self._consoleMoving),
+      isMoving: () => !!self._pathing,
       isMining: () => false, // spike: single digs, no executor mining
       isBuilding: () => false,
       setMovements: (m) => { self.pathfinder.movements = m || null; self._pushSettings() },
@@ -202,22 +235,43 @@ class BaritoneBot extends EventEmitter {
       // sync noPath shaped like the A* result the site would read.
       getPathTo: (_movements, _goal, _timeout) => ({ status: 'noPath', path: [] }),
     }
-    this._consoleMoving = false
     this.inventory = { items: () => this._inventory }
   }
 
-  async start({ pollMs = 100 } = {}) {
-    if (this.transport && typeof this.transport.connect === 'function') await this.transport.connect()
-    if (this.transport && typeof this.transport.on === 'function') this.transport.on('event', this._onTransportEvent)
-    if (this.backend === 'mod') {
-      await this.refresh()
-      if (pollMs > 0) {
-        this._poll = setInterval(() => {
-          if (this._refreshing) return // a slow round skips, never piles up (revmux 01 core-2)
-          this.refresh().catch(() => { /* poll best-effort; errors surface on demand calls */ })
-        }, pollMs)
-        if (typeof this._poll.unref === 'function') this._poll.unref()
+  // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
+  // bot.loadPlugin(pathfinder) on every body).
+  loadPlugin() {}
+
+  // mineflayer quit: console disconnect, then 'end' with the reason (runOnce
+  // resolves on 'end' when it asked for the quit, fatal()s otherwise).
+  quit(reason = 'quit') {
+    if (this._quitting) return
+    this._quitting = true
+    if (this._poll) clearInterval(this._poll)
+    this._poll = null
+    const finish = () => {
+      if (this.transport && typeof this.transport.close === 'function') {
+        try { this.transport.close() } catch (_) { /* close best-effort */ }
       }
+      this.emit('end', reason)
+    }
+    if (this._console && typeof this._console.send === 'function') {
+      this._console.send('disconnect').catch(() => {}).then(finish, finish)
+    } else {
+      finish()
+    }
+  }
+
+  async start({ pollMs = 100, connect = true } = {}) {
+    if (connect && this.transport && typeof this.transport.connect === 'function') await this.transport.connect()
+    if (this.transport && typeof this.transport.on === 'function') this.transport.on('event', this._onTransportEvent)
+    await this.refresh()
+    if (pollMs > 0) {
+      this._poll = setInterval(() => {
+        if (this._refreshing) return // a slow round skips, never piles up (revmux 01 core-2)
+        this.refresh().catch(() => { /* poll best-effort; errors surface on demand calls */ })
+      }, pollMs)
+      if (typeof this._poll.unref === 'function') this._poll.unref()
     }
     return this
   }
@@ -236,7 +290,6 @@ class BaritoneBot extends EventEmitter {
   // sync in mineflayer (268 sites), so it can only ever read the cache —
   // the async->sync gap is the core sizing item in PROTOCOL.md.
   async refresh() {
-    if (this.backend !== 'mod') throw new Error('adapter: refresh needs the mod backend (console has no state)')
     this._refreshing = true
     try {
       await this._refreshOnce()
@@ -249,15 +302,47 @@ class BaritoneBot extends EventEmitter {
   async _refreshOnce() {
     const st = await this.transport.call('state.get', {})
     if (st && st.pos) {
+      this._hasPos = true
       this.entity.position.x = st.pos.x
       this.entity.position.y = st.pos.y
       this.entity.position.z = st.pos.z
       if (typeof st.pos.yaw === 'number') this.entity.yaw = st.pos.yaw
       if (typeof st.pos.pitch === 'number') this.entity.pitch = st.pos.pitch
       if (typeof st.pos.onGround === 'boolean') this.entity.onGround = st.pos.onGround
+      const vel = st.pos.vel
+      if (vel && typeof vel.x === 'number' && typeof vel.y === 'number' && typeof vel.z === 'number') {
+        this.entity.velocity.x = vel.x
+        this.entity.velocity.y = vel.y
+        this.entity.velocity.z = vel.z
+      }
     }
     if (st && typeof st.health === 'number') this.health = st.health
     if (st && typeof st.food === 'number') this.food = st.food
+    if (st && typeof st.oxygen === 'number') this.oxygenLevel = st.oxygen
+    if (st && st.time && typeof st.time === 'object') {
+      const t = st.time
+      if (typeof t.age === 'number') {
+        this.time.age = t.age
+        if (Number.isInteger(t.age)) this.time.bigAge = BigInt(t.age)
+      }
+      if (typeof t.timeOfDay === 'number') this.time.timeOfDay = t.timeOfDay
+      if (typeof t.day === 'number') {
+        this.time.day = t.day
+        this.time.moonPhase = t.day % 8
+      }
+      if (typeof t.isDay === 'boolean') this.time.isDay = t.isDay
+      if (typeof this.time.timeOfDay === 'number' && typeof this.time.day === 'number') {
+        this.time.time = this.time.day * 24000 + this.time.timeOfDay
+        this.time.bigTime = BigInt(this.time.time)
+      }
+    }
+    if (st && st.spawn && typeof st.spawn.x === 'number' && typeof st.spawn.y === 'number' && typeof st.spawn.z === 'number') {
+      this.spawnPoint = new this.Vec3(st.spawn.x, st.spawn.y, st.spawn.z)
+    }
+    if (st && typeof st.isRaining === 'boolean') this.isRaining = st.isRaining
+    if (st && typeof st.isSleeping === 'boolean') this.isSleeping = st.isSleeping
+    if (st && typeof st.dimension === 'string' && st.dimension) this.game.dimension = stripMcPrefix(st.dimension)
+    if (st && st.gameMode !== undefined && st.gameMode !== null) this.game.gameMode = gameModeName(st.gameMode)
     try {
       const inv = await this.transport.call('inventory.get', {})
       this._inventory = Array.isArray(inv && inv.items) ? inv.items : []
@@ -348,8 +433,12 @@ class BaritoneBot extends EventEmitter {
 
   chat(message) {
     // mineflayer chat is fire-and-forget; the promise must never throw synchronously.
-    if (this.backend !== 'mod') return
-    this.transport.call('chat.send', { message: String(message) }).catch((e) => this.emit('error', e))
+    // A failed call logs, never emits 'error': runOnce fatal()s every 'error'
+    // (process exit), and a timed-out chat.send on a live socket is not a
+    // dead connection (revmux 01 core-2).
+    this.transport.call('chat.send', { message: String(message) }).catch((e) => {
+      console.log(`bridge chat.send failed: ${(e && e.message) || e}`)
+    })
   }
 
   _setGoal(goal, dynamic) {
@@ -366,51 +455,29 @@ class BaritoneBot extends EventEmitter {
     // clear. Succeed without a command, stopping the live walk first
     // like every other setGoal.
     if (this._satisfiedNow(goal)) {
-      const live = this.backend === 'mod' ? (this._pathing || this._goalId != null) : !!this._consoleMoving
+      const live = this._pathing || this._goalId != null
       this._boundSeq = this._cmdSeq
       this._goalId = null
       this._pathing = false
-      this._consoleMoving = false
-      if (live) {
-        if (this.backend === 'mod') this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => this.emit('error', e))
-        else if (this.bridgeSend) Promise.resolve().then(() => this.bridgeSend('msg #stop')).catch((e) => this.emit('error', e))
-      }
+      if (live) this.transport.call('baritone.cmd', { command: '#stop' }).catch(failLog)
       this._completeTerminal('success')
       return
     }
-    // The console backend is position-blind: no safe approach side, so
-    // place/look goals report noPath there (the rig never sends them).
-    const from = this.backend === 'mod' ? this.entity.position : null
-    const cmd = goalToBaritone(goal, from)
+    const cmd = goalToBaritone(goal, this.entity.position)
     if (!cmd) {
       // No Baritone mapping: stop the live walk (mineflayer's setGoal
       // always resets first) and fail like the executor would.
-      const live = this.backend === 'mod' ? (this._pathing || this._goalId != null) : !!this._consoleMoving
+      const live = this._pathing || this._goalId != null
       this._boundSeq = this._cmdSeq
       this._goalId = null
       this._pathing = false
-      this._consoleMoving = false
-      if (live) {
-        if (this.backend === 'mod') this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => this.emit('error', e))
-        else if (this.bridgeSend) Promise.resolve().then(() => this.bridgeSend('msg #stop')).catch((e) => this.emit('error', e))
-      }
+      if (live) this.transport.call('baritone.cmd', { command: '#stop' }).catch(failLog)
       this._pathStatus = 'noPath'
       this.emit('path_update', { status: 'noPath' })
       this.emit('path_reset', 'noPath')
       return
     }
     this._pathStatus = 'none'
-    if (this.backend === 'console') {
-      if (!this.bridgeSend) throw new Error('adapter: console backend needs bridgeSend(line)')
-      this._consoleMoving = true
-      // Fire-and-forget like chat: setGoal is sync in mineflayer. The
-      // caller must keep the event loop pumping (async sleeps, never a
-      // blocked Atomics.wait) or the socket send starves — see rig-goto.js.
-      Promise.resolve()
-        .then(() => this.bridgeSend(`msg ${cmd}`))
-        .catch((e) => this.emit('error', e))
-      return
-    }
     // The lease mutates the Movements object between goals (body.js
     // movementsFor), so flags re-push on every goal; the diff keeps the
     // cmd stream quiet.
@@ -466,7 +533,8 @@ class BaritoneBot extends EventEmitter {
 
   // Goal command with id binding: the echoed id latches only when this
   // send is still the newest (a superseding setGoal/stop invalidates via
-  // _boundSeq, overlapping follow re-issues order by seq).
+  // _boundSeq, overlapping follow re-issues order by seq). Failures log,
+  // never emit 'error' (runOnce fatal()s every 'error'; see chat()).
   _sendGoalCmd(command) {
     const seq = (this._cmdSeq = (this._cmdSeq | 0) + 1)
     this.transport.call('baritone.cmd', { command }).then(
@@ -475,6 +543,7 @@ class BaritoneBot extends EventEmitter {
         this._boundSeq = seq
         if (!r || r.id == null) {
           this._goalFailed() // tracked by nobody: fail, don't wedge isMoving
+          console.log('bridge baritone.cmd failed: no goal id echoed')
           return
         }
         this._goalId = r.id
@@ -483,7 +552,7 @@ class BaritoneBot extends EventEmitter {
         if (seq <= this._boundSeq) return
         this._boundSeq = seq
         this._goalFailed()
-        this.emit('error', e)
+        failLog(e)
       },
     )
   }
@@ -538,14 +607,14 @@ class BaritoneBot extends EventEmitter {
   // baseline only until then); afterwards only changes cross, so the cmd
   // stream stays quiet. A failed send unmarks for retry on the next push.
   _pushSettings() {
-    if (this.backend !== 'mod' || !this.transport) return
+    if (!this.transport) return
     const desired = movementsToSettings(this.pathfinder.movements, this.registry)
     for (const k of Object.keys(desired)) {
       if (this._settings[k] === desired[k]) continue
       this._settings[k] = desired[k]
       this.transport.call('baritone.cmd', { command: `#set ${k} ${desired[k]}` }).catch((e) => {
         if (this._settings[k] === desired[k]) delete this._settings[k]
-        this.emit('error', e)
+        console.log(`bridge #set ${k} failed: ${(e && e.message) || e}`) // never 'error': see chat()
       })
     }
   }
@@ -577,22 +646,17 @@ class BaritoneBot extends EventEmitter {
   }
 
   _stopPath() {
-    const live = this.backend === 'mod'
-      ? (this._pathing || this._goalId != null)
-      : (this.pathfinder.goal != null || !!this._consoleMoving)
+    const live = this._pathing || this._goalId != null
     this.pathfinder.goal = null
     this._follow = null
     this._boundSeq = this._cmdSeq // in-flight binds and late verdicts drop
     this._goalId = null
     this._pathing = false
-    this._consoleMoving = false
     if (!live) return // mineflayer's stop is silent when idle
     this._pathStatus = 'stopped'
-    if (this.backend === 'console') {
-      if (this.bridgeSend) Promise.resolve().then(() => this.bridgeSend('msg #stop')).catch((e) => this.emit('error', e))
-    } else {
-      this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => this.emit('error', e))
-    }
+    this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => {
+      console.log(`bridge baritone.cmd #stop failed: ${(e && e.message) || e}`) // never 'error': see chat()
+    })
     // v1 emits path_stop here (unheard by our ticker); the reset makes the
     // cancel visible on the same taps as every other terminal.
     this.emit('path_reset', 'stopped')
@@ -602,9 +666,10 @@ class BaritoneBot extends EventEmitter {
     const p = params || {}
     switch (method) {
       case 'chat':
-        // mineflayer 'chat' is (username, message); 'message' carries a ChatMessage.
+        // mineflayer 'chat' is (username, message); 'message' carries a
+        // ChatMessage. index.js:1485 reads (msg, position, senderUuid).
         this.emit('chat', p.username || '', p.message || '')
-        this.emit('message', { text: p.message || '', toString: () => String(p.message || '') }, 'chat', null)
+        this.emit('message', { text: p.message || '', toString: () => String(p.message || '') }, p.position || 'chat', p.uuid || null)
         break
       case 'death':
         this.emit('death')
@@ -632,4 +697,144 @@ class BaritoneBot extends EventEmitter {
   }
 }
 
-module.exports = { BaritoneBot, goalToBaritone, movementsToSettings, MinimalVec }
+// Console-line sender (worker.js send() shape, bridge-local: bridge/ must
+// not require bot/src): connect, one line + '\n', end. Never throws, never
+// rejects; resolves true only when the line flushed.
+function sendConsoleLine({ host, port, line, timeoutMs = 5000 }) {
+  return new Promise((resolve) => {
+    let sock = null
+    let settled = false
+    const done = (ok) => {
+      if (settled) return
+      settled = true
+      try { if (sock) sock.destroy() } catch (_) { /* already gone */ }
+      resolve(ok)
+    }
+    try {
+      sock = net.connect({ host, port })
+      sock.setTimeout(timeoutMs)
+      sock.once('connect', () => {
+        try { sock.end(String(line) + '\n', () => done(true)) } catch (_) { done(false) }
+      })
+      sock.once('timeout', () => done(false))
+      sock.once('error', () => done(false))
+      sock.once('close', () => done(false))
+    } catch (_) {
+      done(false)
+    }
+  })
+}
+
+// mineflayer.createBot-shaped factory for runOnce: returns the BaritoneBot
+// synchronously (mineflayer contract — runOnce calls loadPlugin on it
+// before the first await), then handshakes in the background and emits
+// 'login' + 'spawn' once the client is really on the server. Handshake
+// failures surface as 'error' (runOnce fatal()s → container restart =
+// reconnect, same as v1). inj = test seams only { transport, consoleSend }.
+function createBot(opts = {}, inj = {}) {
+  const Vec3 = require('vec3')
+  const host = opts.host || 'mc'
+  const port = opts.port || 25565
+  const bridgeHost = process.env.BRIDGE_HOST || 'body2'
+  const rawBridgePort = parseInt(process.env.BRIDGE_PORT || '7778', 10)
+  const bridgePort = Number.isFinite(rawBridgePort) ? rawBridgePort : 7778
+  const rawConsolePort = parseInt(process.env.BRIDGE_CONSOLE_PORT || '7777', 10)
+  const consolePort = Number.isFinite(rawConsolePort) ? rawConsolePort : 7777
+  const transport = (inj && inj.transport) || new BridgeTransport(`ws://${bridgeHost}:${bridgePort}/rpc`)
+  const consoleSend = (inj && inj.consoleSend) || ((line) => sendConsoleLine({ host: bridgeHost, port: consolePort, line }))
+  const bot = new BaritoneBot(transport, {
+    Vec3,
+    username: opts.username || 'IdkBody',
+    console: { host: bridgeHost, port: consolePort, send: consoleSend },
+  })
+  // Socket close/error while not quitting: 'end'/'error' like a dropped v1
+  // connection (runOnce fatal()s → container restart = reconnect).
+  transport.on('close', () => { if (!bot._quitting) bot.emit('end', 'bridge closed') })
+  transport.on('error', (err) => { if (!bot._quitting) bot.emit('error', err instanceof Error ? err : new Error(`bridge: ${err}`)) })
+  // Deadline for the first joined state (step 4): past the ~60 s
+  // HeadlessMC boot with margin; inj.posTimeoutMs overrides it in tests.
+  const rawPosTimeout = (inj && inj.posTimeoutMs) ?? 120000
+  const posTimeoutMs = Number.isFinite(rawPosTimeout) ? rawPosTimeout : 120000
+  void handshake(bot, { host, port, consoleSend, posTimeoutMs })
+  return bot
+}
+
+async function handshake(bot, { host, port, consoleSend, posTimeoutMs }) {
+  const transport = bot.transport
+  // 1. ws connect with backoff — HeadlessMC takes ~60 s to boot.
+  let delay = 1000
+  for (;;) {
+    if (bot._quitting) return
+    try {
+      await transport.connect()
+      break
+    } catch (e) {
+      console.log(`bridge waiting for the body: ${e && e.message ? e.message : e} (retry in ${Math.round(delay / 1000)} s)`)
+      await sleep(delay)
+      delay = Math.min(delay * 2, 10000)
+    }
+  }
+  if (bot._quitting) return
+  // 2. console connect: the client joins the MC server on our name. The
+  // adapter is the sole connecter, so three failed sends mean this round
+  // can never produce a join — error out (runOnce fatal()s → container
+  // restart = reconnect) instead of hanging on a pos that never comes
+  // (revmux 01 core-1).
+  let linked = false
+  for (let i = 0; i < 3 && !linked && !bot._quitting; i++) {
+    try { linked = await consoleSend(`connect ${host} ${port}`) } catch (_) { linked = false }
+    if (!linked && !bot._quitting) await sleep(2000)
+  }
+  console.log(`bridge console connect ${host} ${port} ok=${linked}`)
+  if (bot._quitting) return
+  if (!linked) {
+    bot.emit('error', new Error(`bridge: console connect ${host} ${port} failed (3 tries)`))
+    return
+  }
+  // 3. hello: the mc version gates the static registry (zero bridge
+  // traffic for the 93 registry sites afterwards).
+  let hello
+  try {
+    hello = await transport.call('hello', {})
+  } catch (e) {
+    bot.emit('error', e instanceof Error ? e : new Error(`bridge hello: ${e}`))
+    return
+  }
+  const mc = (hello && hello.mc) || null
+  let registry = null
+  try {
+    registry = mc ? require('minecraft-data')(mc) : null
+  } catch (_) { registry = null }
+  if (!registry) {
+    bot.emit('error', new Error(`bridge: no minecraft-data for mc=${mc}`))
+    return
+  }
+  bot.version = mc
+  bot.protocolVersion = registry.version && registry.version.version
+  bot.registry = registry
+  // 4. the first state.get with a non-null pos, then login+spawn. start()'s
+  // own refresh throws the mod-contact failure into the error path below;
+  // the 100 ms poll (skip-when-slow) drives the wait from there. The wait
+  // has a deadline: a refused join (or a state.get that never answers)
+  // must error into the container restart, never hang the process
+  // (revmux 01 core-1).
+  try {
+    await bot.start({ pollMs: 100, connect: false })
+    const deadline = Date.now() + posTimeoutMs
+    while (!bot._hasPos && !bot._quitting) {
+      if (Date.now() >= deadline) {
+        bot.emit('error', new Error(`bridge: no joined state within ${posTimeoutMs} ms`))
+        return
+      }
+      await sleep(250)
+    }
+  } catch (e) {
+    bot.emit('error', e instanceof Error ? e : new Error(`bridge state: ${e}`))
+    return
+  }
+  if (bot._quitting) return
+  bot.emit('login')
+  bot.emit('spawn')
+}
+
+module.exports = { BaritoneBot, goalToBaritone, movementsToSettings, MinimalVec, createBot }

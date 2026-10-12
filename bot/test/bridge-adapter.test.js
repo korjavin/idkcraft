@@ -1,32 +1,21 @@
-// idkcraft-kqzf spike: adapter tests. Run from the repo root after
-// `cd bot && npm ci`: `node --test baritone/bridge/`.
-// Pathfinder parity moved to bot/test/bridge-pathfinder.test.js
-// (idkcraft-neuc.4, gated by `npm test`); this file keeps the spike
-// surfaces until .2 moves it to bot/test/.
+// idkcraft-neuc.2: bridge adapter tests (moved from the kqzf spike's
+// baritone/bridge/adapter.test.js; the console-backend block is gone with
+// the deleted backend). Pathfinder parity moved to bridge-pathfinder.test.js
+// (idkcraft-neuc.4). Run: `cd bot && npm test`.
 'use strict'
 
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 
-const { BaritoneBot, goalToBaritone } = require('./adapter')
-const { FakeTransport } = require('./transport')
+const { BaritoneBot, goalToBaritone } = require('../src/bridge/index')
+const { FakeTransport } = require('../src/bridge/transport')
 
-let goals
-try {
-  goals = require('../../bot/node_modules/mineflayer-pathfinder').goals
-} catch (_) {
-  throw new Error('adapter.test: run `cd bot && npm ci` first (needs mineflayer-pathfinder)')
-}
-let Vec3
-try {
-  Vec3 = require('../../bot/node_modules/vec3')
-} catch (_) {
-  Vec3 = require('./adapter').MinimalVec
-}
+const { goals } = require('mineflayer-pathfinder')
+const Vec3 = require('vec3')
 // The REAL behaviours, required unchanged — the spike's whole point is
 // that this file is the only new code in the loop.
-const follow = require('../../bot/src/behaviours/follow')
-const { countItems } = require('../../bot/src/perception')
+const follow = require('../src/behaviours/follow')
+const { countItems } = require('../src/perception')
 
 const REGISTRY = { blocksByName: { air: { id: 0 }, dirt: { id: 1 }, stone: { id: 2 } } }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -161,7 +150,7 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
   })
 })
 
-describe('poll overlap (revmux 01 core-2, kept; latch tests moved to bot/test/)', () => {
+describe('poll overlap (revmux 01 core-2, kept; latch tests moved to bridge-pathfinder)', () => {
   it('poll honors pollMs: a handful of calls, not one per ms (core-2)', async () => {
     const { transport, bot } = spikeBot()
     let calls = 0
@@ -196,43 +185,17 @@ describe('poll overlap (revmux 01 core-2, kept; latch tests moved to bot/test/)'
 
   // The latch tests (revmux 01 core-3, 02 core-1, 03 core-1/2) tested the
   // spike's witnessed-motion attribution, replaced by goal ids in
-  // idkcraft-neuc.4 — their equivalents live in
-  // bot/test/bridge-pathfinder.test.js (gated by `npm test`).
+  // idkcraft-neuc.4 — their equivalents live in bridge-pathfinder.test.js.
 })
 
-describe('console backend (rig proof without the mod)', () => {
-  it('setGoal sends msg #goto lines, setGoal(null) stops', async () => {
-    const lines = []
-    const bot = new BaritoneBot(new FakeTransport(), {
-      Vec3,
-      registry: REGISTRY,
-      backend: 'console',
-      bridgeSend: async (line) => { lines.push(line) },
-    })
-    await bot.start({ pollMs: 0 })
-    try {
-      bot.pathfinder.setGoal(new goals.GoalNear(1, 64, -3, 2))
-      await sleep(10)
-      assert.deepEqual(lines, ['msg #goto 1 64 -3'])
-      assert.equal(bot.pathfinder.isMoving(), true)
-      assert.ok(bot.pathfinder.goal)
-      bot.pathfinder.setGoal(null) // clearGoal shape
-      await sleep(10)
-      assert.deepEqual(lines, ['msg #goto 1 64 -3', 'msg #stop'])
-      assert.equal(bot.pathfinder.goal, null)
-      assert.equal(bot.pathfinder.isMoving(), false)
-    } finally {
-      await bot.stop()
-    }
-  })
-
-  it('unmapped goals report noPath like an executor failure', async () => {
-    const bot = new BaritoneBot(new FakeTransport(), { Vec3, registry: REGISTRY, backend: 'console', bridgeSend: async () => {} })
+describe('unmapped goals (neuc.2: kept from the deleted console block)', () => {
+  it('report noPath like an executor failure', async () => {
+    const bot = new BaritoneBot(new FakeTransport(), { Vec3, registry: REGISTRY })
     await bot.start({ pollMs: 0 })
     try {
       const statuses = []
       bot.on('path_update', (r) => statuses.push(r.status))
-      // Unsatisfied (blind feet are in the inner block) so it walks into noPath.
+      // Unsatisfied (fresh feet are in the inner block) so it reports noPath.
       bot.pathfinder.setGoal(new goals.GoalInvert(new goals.GoalBlock(0, 64, 0)))
       assert.deepEqual(statuses, ['noPath'])
     } finally {
