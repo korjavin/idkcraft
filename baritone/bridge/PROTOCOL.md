@@ -301,3 +301,42 @@ serves last-good. BridgeServer seam: `onClientTick(Runnable)` plus
 Maps/Lists and convert at the boundary). Node-side wiring is landed
 (poll + router in `bot/src/bridge/index.js`); the mod half
 (`Entities.install`) went live with .1's `BridgeServer`.
+
+## inventory.get / select / equip / toss (idkcraft-neuc.8)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Inventory.java`
+(`Inventory.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/inventory.js` (`installInventory` in the adapter
+constructor — before `spawn`, so `reflexes.installEquipGuard` can wrap
+`bot.equip`; poll folds `inventory.get`, `_handleEvent` folds the update).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `inventory.get` | — | `{selected, slots:[{slot,name,count,damage,maxDamage,enchantments:[{name,level}],customName}]}` (non-empty slots only) | `bot.inventory` window |
+| `inventory.select` | `{hotbar:0..8}` | snapshot as above | `bot.setQuickBarSlot` / `quickBarSlot` |
+| `inventory.equip` | `{slot,dest:hand\|off-hand\|head\|torso\|legs\|feet}` (dest may be a numeric slot — the adapter's unequip move) | snapshot as above | `bot.equip`/`bot.unequip` |
+| `inventory.toss` | `{slot,count}` | snapshot as above | `bot.toss`/`bot.tossStack` |
+
+Event: `inventory.update {slot,item:{...}|null,selected}` per changed slot
+(diffed per client tick; `item` carries the same fields as a `slots` entry).
+
+Slot numbering is mineflayer's player-window numbering on the wire and in
+Node: 5-8 armor (head/torso/legs/feet — `fight.js` hard-codes them), 9-35
+main, 36-44 hotbar, 45 offhand. `name` is the registry id (`minecraft:`
+prefix stripped Node-side). Actions run one at a time on the client thread
+through the player's own `inventoryMenu` (pickup/swap clicks, no window
+open; armor goes by the same swap, a piece the slot rejects never lands);
+equipping a hotbar stack to the hand only moves the selection, like v1.
+An equip resolves only when the destination slot holds the item afterwards
+(mod checks, adapter re-verifies, mineflayer's error strings where the
+logic matches: `Invalid item object in equip ...`, `invalid destination:`).
+
+Node fold: `bot.inventory` is a prismarine-windows window when the package
+and a full registry resolve (transitive via mineflayer — dynamically
+loaded, zero new deps), else a minimal window with the same reads
+(`items()` = slots 9-44, `slots[]`, `count`, `emptySlotCount`,
+`firstEmptyInventorySlot`, `findInventoryItem`); items are prismarine-item
+instances when resolvable (`name/type/count/displayName/durabilityUsed`,
+`enchants` in prismarine-item's `{name,lvl}` shape, `customName` as a plain
+prop). `bot.heldItem = slots[36+selected]`; ops serialise through one
+adapter chain. `bot._syncWindow`/`currentWindow` are NOT here (.11/.12).

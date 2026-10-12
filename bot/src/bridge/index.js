@@ -12,6 +12,7 @@ const { EventEmitter } = require('node:events')
 const net = require('node:net')
 const { BridgeTransport } = require('./transport')
 const { refreshEntities, handleBridgeEvent } = require('./entities') // idkcraft-neuc.3: entities+roster fold
+const { installInventory, applyInventory, handleInventoryEvent } = require('./inventory') // idkcraft-neuc.8: inventory/equip/toss fold
 
 function keyOf(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
@@ -213,7 +214,6 @@ class BaritoneBot extends EventEmitter {
     this.currentWindow = null
 
     this._blocks = new Map() // "x,y,z" -> {name,type,position}
-    this._inventory = [] // [{name,count,slot,type}]
     this._goalId = null // live goal id from baritone.cmd; null = none or awaiting the echo
     this._cmdSeq = 0 // every baritone.cmd takes a sequence number ...
     this._boundSeq = 0 // ... and binds only when newer than this (stale replies drop)
@@ -242,7 +242,10 @@ class BaritoneBot extends EventEmitter {
       // sync noPath shaped like the A* result the site would read.
       getPathTo: (_movements, _goal, _timeout) => ({ status: 'noPath', path: [] }),
     }
-    this.inventory = { items: () => this._inventory }
+    // idkcraft-neuc.8: bot.inventory/heldItem/equip/unequip/toss/tossStack/
+    // setQuickBarSlot — defined here, before 'spawn', so reflexes'
+    // installEquipGuard can wrap bot.equip (see inventory.js).
+    installInventory(this)
   }
 
   // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
@@ -352,8 +355,7 @@ class BaritoneBot extends EventEmitter {
     if (st && st.gameMode !== undefined && st.gameMode !== null) this.game.gameMode = gameModeName(st.gameMode)
     try {
       const inv = await this.transport.call('inventory.get', {})
-      this._inventory = Array.isArray(inv && inv.items) ? inv.items : []
-      this.heldItem = this._inventory[0] || null // spike: selected slot tracking is plan work
+      if (inv) applyInventory(this, inv) // idkcraft-neuc.8: full snapshot per round
     } catch (_) { /* inventory best-effort per round */ }
     try {
       await refreshEntities(this, this.transport) // idkcraft-neuc.3: one entities.list+roster.get per round
@@ -679,6 +681,7 @@ class BaritoneBot extends EventEmitter {
   }
 
   _handleEvent(method, params) {
+    if (handleInventoryEvent(this, method, params)) return // idkcraft-neuc.8: inventory.update
     if (handleBridgeEvent(this, method, params)) return // idkcraft-neuc.3: player.joined/left, entity.gone
     const p = params || {}
     switch (method) {
