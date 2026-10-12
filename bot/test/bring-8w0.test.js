@@ -191,7 +191,7 @@ describe('bring walk gate (idkcraft-8w0)', () => {
     assert.deepEqual(decideBringSource(exp, dig), { pick: 'buried', why: 'clear' })
   })
 
-  it('find phase: buried 48 stash + deep-cave far vein verdicts the dig, no ask', async () => {
+  it('find phase: diggable buried 48 stash commits at once, gated far vein unscanned (jlda.11 early-commit)', async () => {
     const names = { '0,58,0': 'iron_ore', ...VEIN_NAMES, ...PROBES }
     const bot = mockBot({ spots: [pos(0, 58, 0), pos(VEIN.x, VEIN.y, VEIN.z)], names, items: PICK, playerPos: pos(30, 64, 0) })
     centerAware(bot)
@@ -199,8 +199,6 @@ describe('bring walk gate (idkcraft-8w0)', () => {
     tickerFor(bot, brain)
     const ctx = bot._tickerCtx
     ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
-    await bring(bot, ctx, null, {})
-    assert.equal(ctx.bring.phase, 'searchfar')
     await bring(bot, ctx, null, {})
     assert.equal(seen.length, 0, 'gated walk never asks')
     assert.deepEqual(bot.lines, ['going for 3 iron_ore, 6 blocks away'])
@@ -213,18 +211,16 @@ describe('bring walk gate (idkcraft-8w0)', () => {
     })
   })
 
-  it('creation: the same pair verdicts the dig over ticks, no ask', async () => {
+  it('creation: the same pair commits the dig at once, no far shells (jlda.11 early-commit)', async () => {
     const names = { '0,58,0': 'iron_ore', ...VEIN_NAMES, ...PROBES }
     const bot = mockBot({ spots: [pos(0, 58, 0), pos(VEIN.x, VEIN.y, VEIN.z)], names, items: PICK, playerPos: pos(30, 64, 0) })
     centerAware(bot)
     const { seen, brain } = countingBrain('walk_exposed') // must never be consulted
     const ticker = tickerFor(bot, brain)
     handleChat(bot, ticker, 'P', 'bring me iron')
-    assert.deepEqual(bot.lines, ['only buried iron within 48, checking further for open ore…'])
-    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
-    assert.equal(bot._tickerCtx.pendingSearch, null)
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 6 blocks away'])
+    assert.equal(bot._tickerCtx.pendingSearch, null, 'no far search for a diggable stash')
     assert.equal(seen.length, 0, 'gated walk never asks')
-    assert.ok(bot.lines.includes('going for 3 iron_ore, 6 blocks away'), `lines: ${bot.lines}`)
     const o = bot._tickerCtx.bring
     assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [0, 58, 0])
     assert.equal(o.verdict.pick, 'buried')

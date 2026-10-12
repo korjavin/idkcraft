@@ -2,7 +2,7 @@
 
 Target: ONE body — the whole Node logic (castle, goals, orders, recovery)
 runs on a real headless client (HeadlessMc + Fabric + Baritone) instead of
-mineflayer, via a Node adapter (`adapter.js`) that looks like mineflayer's
+mineflayer, via a Node adapter (`bot/src/bridge/index.js`) that looks like mineflayer's
 `bot` to the logic. The client carries a small Fabric mod
 (`mod/`, skeleton in this spike) that exposes state+actions over a socket.
 Baritone itself only moves/mines/builds-from-schematic and exposes no
@@ -25,7 +25,7 @@ JSON, not NBT/cbor: debuggable over `websocat`, and the 10 Hz state poll
 is ~200 bytes. Binary chunk snapshots (prod `chunk.get`) ride as base64
 inside the same envelope — no second port.
 
-## Spike methods (implemented in `transport.js` FakeTransport + `adapter.js`)
+## Spike methods (implemented in `bot/src/bridge/transport.js` FakeTransport + `bot/src/bridge/index.js` — neuc.2 moved them into the bot image)
 
 | method | params | result | mineflayer surface |
 |---|---|---|---|
@@ -42,7 +42,7 @@ inside the same envelope — no second port.
 Events (spike): `chat {username,message}`, `death {}`, `respawn {}`,
 `block.update {x,y,z,name}` (cache write-through), `baritone.event
 {status}` (`success|noPath|timeout`, from a Baritone API listener in the
-mod — the executive-poll fallback in `adapter.js#refresh` is spike-only).
+mod — the executive-poll fallback in `bot/src/bridge/index.js#refresh` is spike-only).
 
 Status attribution (revmux 01 core-3, 02 core-1): the spike adapter
 latches a goal generation per `setGoal`, arms a witnessed-motion flag on
@@ -147,10 +147,53 @@ it — 1793 sites, no incremental prod traffic. What de-risks it:
    `bot/`, the logic stays byte-identical (this spike changes zero
    `bot/src` files).
 
-## Console backend (spike-only)
+## Console backend (spike-only, DELETED by neuc.2)
 
-`adapter.js` `backend:'console'` sends pathfinder goals as `msg #goto`
-lines through the existing write-only HMC bridge (`baritone/client.sh`
-plumbing) with no mod and no state. It exists only so `rig-goto.js`
-proves the `#goto` leg on real iron before the mod is written. Prod
-never uses it (no status, no state, position-blind `isMoving`).
+The spike's `adapter.js` `backend:'console'` sent pathfinder goals as
+`msg #goto` lines through the existing write-only HMC bridge
+(`baritone/client.sh` plumbing) with no mod and no state. It existed
+only so `rig-goto.js` proved the `#goto` leg on real iron before the mod
+was written; both are deleted (neuc.5 brings the real harness). Prod
+never used it (no status, no state, position-blind `isMoving`).
+
+## entities.list / roster.get (idkcraft-neuc.3)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Entities.java`
+(`Entities.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/entities.js` (`refreshEntities` once per adapter poll
+round, `handleBridgeEvent` first in the adapter's event router).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `entities.list` | — | `{entities:[{id,uuid,type,name?,displayName,kind,pos{x,y,z},vel{x,y,z},yaw,pitch,health?,onGround,pose,self?}]}` | `bot.entities[id]` |
+| `roster.get` | — | `{players:[{name,uuid,ping,gameMode}]}` | `bot.players[name]` |
+
+`type` is `'player'` or the mob registry id (e.g. `'zombie'`);
+`name` is set on players only (tab-list name, Floodgate dots untouched);
+`kind` is `player|hostile|animal|other` from the client's SpawnGroup
+(MONSTER→hostile, MISC→other, players→player, rest→animal);
+`gameMode` is the numeric mode id (null when the entry carries none);
+`self:true` tags the local player when the client world lists it.
+
+Events: `player.joined {name,uuid}` / `player.left {name,uuid}` (tab-list
+diff per client tick), `entity.gone {id}` (best-effort; the list diff is
+the reliable channel — perception tolerates missing ids).
+
+Node fold rules: entity objects mutate in place (stable refs across polls;
+gone ones emit `entityGone`, flip `isValid=false`, unlink, delete); roster
+entries merge with the matching player entity by uuid with `entity:null`
+when out of range; roster/notification diffs emit `playerJoined` /
+`playerLeft` / `entitySpawn` exactly once (whichever channel runs first
+wins); `bot.entity` stays state.get-fed and is aliased under
+`bot.entities[selfId]` when the wire tags it (mineflayer parity);
+`bot.nearestEntity(filter)` mirrors mineflayer (skips `bot.entity`).
+Non-player `entity.type` comes from the passed-through registry
+(zombie→`hostile`, arrow→`projectile`, like v1; `flat.js` skips
+`projectile`), kind bucket as fallback. Mob height/width come from the
+same registry (zero bridge traffic); raw entity metadata is NOT streamed
+yet (sheep wool reads fail open). A null network handler (real
+disconnect) clears both snapshots; a null world with a live handler
+serves last-good. BridgeServer seam required: `onClientTick(Runnable)`
+plus `register`/`push` over plain Maps/Lists (.1 owns it). Node-side
+wiring is landed (poll + router in `bot/src/bridge/index.js`); the mod
+half (`Entities.install`) goes live with .1's `BridgeServer`.

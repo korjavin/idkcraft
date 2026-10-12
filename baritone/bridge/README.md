@@ -5,6 +5,14 @@ Baritone instead of mineflayer, via a Node adapter + a Fabric bridge mod?
 This spike answers with a go/no-go and a sized plan — not production code.
 Zero `bot/src` files change; all spike code is this new directory.
 
+> idkcraft-neuc.2 moved the Node side into the bot image:
+> `adapter.js` → `bot/src/bridge/index.js`, `transport.js` →
+> `bot/src/bridge/transport.js`, `adapter.test.js` →
+> `bot/test/bridge-adapter.test.js`, and deleted the spike-only
+> `console` backend with `rig-goto.js` (`rig.sh` now just holds the
+> rig up; neuc.5 brings the real harness). This directory keeps
+> the wire spec (`PROTOCOL.md`) and the mod (`mod/`).
+
 ## Verdict: CONDITIONAL GO
 
 Honest scope (revmux 01 core-1): only the `#goto` leg met a real
@@ -24,17 +32,17 @@ touch → live), keeping mineflayer as the rollback seam.
 | file | what |
 |---|---|
 | `PROTOCOL.md` | wire spec (JSON-RPC + event stream) + the easy/medium/hard sizing the bead asks for |
-| `adapter.js` | Node `bot` for the spike subset (entity, blockAt cache, inventory, dig, placeBlock, chat, pathfinder→`#goto`) |
-| `transport.js` | websocket client + `FakeTransport` loopback (the mod's 1:1 mirror for tests) |
-| `adapter.test.js` | 12 tests, incl. the REAL `follow.js` + `countItems` running unchanged through the adapter |
-| `rig-goto.js` | rig proof: one stuck spot through `setGoal(GoalNear)` → `msg #goto`, judged over rcon |
-| `rig.sh` | slot-z boot + offline client (`IdkBody`) + `rig-goto.js` (a `run.sh` sibling, no shared files touched) |
+| `bot/src/bridge/index.js` | Node `bot` for the spike subset — was `adapter.js` here (neuc.2 moved it into the bot image) |
+| `bot/src/bridge/transport.js` | websocket client + `FakeTransport` loopback — was `transport.js` here |
+| `bot/test/bridge-adapter.test.js` | moved spike tests, incl. the REAL `follow.js` + `countItems` running unchanged through the adapter |
+| `rig-goto.js` | DELETED by neuc.2 with the `console` backend (neuc.5 brings the real harness) |
+| `rig.sh` | slot-z boot + offline client (`IdkBody`); holds the rig up until neuc.5 brings the real harness (the bot cannot attach yet: no 7778 publish, no mod — see the script's NOTE) |
 | `mod/` | Fabric mod skeleton (method table + client/Baritone call sites, NOT compiled — sized, not built) |
 
 ## Verification (2026-10-12)
 
 - `cd bot && npm test`: 4767/4767 pass (incl. lint) — zero behaviour diff, no `bot/src` change.
-- `node --test baritone/bridge/`: 12/12 pass.
+- `node --test baritone/bridge/`: 12/12 pass (neuc.2 moved these into `cd bot && npm test`).
 - Rig (`sh baritone/bridge/rig.sh EP1`, offline `IdkBody`, slot z):
   `reached=true secs=2 minDist=0.9`, client log shows `> goto` — the
   adapter line walked real Baritone. First run red for a spike bug with

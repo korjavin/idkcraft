@@ -78,11 +78,20 @@ class FakeTransport extends EventEmitter {
   constructor(state = {}) {
     super()
     this.state = {
-      pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true },
+      pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true, vel: { x: 0, y: 0, z: 0 } },
       health: 20,
       food: 20,
+      oxygen: 20,
+      time: { age: 1000, timeOfDay: 1000, day: 0, isDay: true },
+      spawn: { x: 0, y: 64, z: 0 },
+      isRaining: false,
+      isSleeping: false,
+      dimension: 'overworld',
+      gameMode: 'survival',
       blocks: {}, // "x,y,z" -> name
       inventory: [], // [{slot,name,count}]
+      entities: [], // idkcraft-neuc.3 wire fixtures: [{id,uuid,type,name?,displayName,kind,pos,vel,yaw,pitch,health?,onGround,pose,self?}]
+      roster: [], // idkcraft-neuc.3 wire fixtures: [{name,uuid,ping,gameMode}]
       chatLog: [],
       baritone: null, // last command string
       ...state,
@@ -91,7 +100,10 @@ class FakeTransport extends EventEmitter {
   }
 
   async connect() { this.connected = true }
-  close() { this.connected = false }
+  close() {
+    this.connected = false
+    this.emit('close') // loopback fidelity: a real close follows the socket
+  }
 
   key(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
 
@@ -101,13 +113,29 @@ class FakeTransport extends EventEmitter {
       case 'hello':
         return { mod: 'idkcraft-bridge', v: 0, mc: '26.1.2', baritone: '1.18.0' }
       case 'state.get':
-        return { pos: { ...s.pos }, health: s.health, food: s.food, baritone: s.baritoneStatus || { pathing: false } }
+        return {
+          pos: s.pos == null ? null : { ...s.pos },
+          health: s.health,
+          food: s.food,
+          oxygen: s.oxygen,
+          time: s.time == null ? null : { ...s.time },
+          spawn: s.spawn == null ? null : { ...s.spawn },
+          isRaining: s.isRaining,
+          isSleeping: s.isSleeping,
+          dimension: s.dimension,
+          gameMode: s.gameMode,
+          baritone: s.baritoneStatus || { pathing: false },
+        }
       case 'block.get': {
         const name = s.blocks[this.key(params.x, params.y, params.z)] || 'air'
         return { name, x: Math.floor(params.x), y: Math.floor(params.y), z: Math.floor(params.z) }
       }
       case 'inventory.get':
         return { items: s.inventory.map((i) => ({ ...i })) }
+      case 'entities.list': // idkcraft-neuc.3: deep copy, the wire would serialize
+        return { entities: JSON.parse(JSON.stringify(s.entities || [])) }
+      case 'roster.get': // idkcraft-neuc.3
+        return { players: (s.roster || []).map((p) => ({ ...p })) }
       case 'dig.once': {
         const k = this.key(params.x, params.y, params.z)
         const name = s.blocks[k] || 'air'
