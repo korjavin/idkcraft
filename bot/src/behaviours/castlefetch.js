@@ -375,9 +375,10 @@ function chestTick(bot, ctx, f, d) {
         const bn = blastNeed(bot)
         const ironShort = Math.max(0, BLAST_IRON - bn.ingots - bn.raw)
         const chainShort = Math.max(0, BLAST_SMOOTH - bn.smooth - bn.stone)
-        // Cobble above the reserve (the stairs shape): the walks' cobble
-        // never counts toward the ladder's need.
-        const cobbleShort = Math.max(0, chainShort + (bn.furn > 0 ? 0 : BLAST_FURNACE_COBBLE) - Math.max(0, bn.cobble - castleMod.reserveOf('stone')))
+        // Cobble to the rung gate (reserve + ladder need, one withdraw —
+        // the gate below re-checks the same total, so a stocked chest
+        // spares the dig entirely).
+        const cobbleShort = Math.max(0, chainShort + (bn.furn > 0 ? 0 : BLAST_FURNACE_COBBLE) + castleMod.reserveOf('stone') - bn.cobble)
         const want = names[0] === 'iron_ingot' || names[0] === 'raw_iron' ? ironShort
           : names[0] === 'smooth_stone' || names[0] === 'stone' ? chainShort
           : names[0] === 'cobblestone' ? cobbleShort : 0

@@ -112,13 +112,15 @@ describe('g0z.27 castle bank', () => {
     await bankRun(bot, ctx)
     assert.equal(ctx.lastGoalKey, `stockpile-site:${CHEST.x},${CHEST.y},${CHEST.z}`)
     assert.equal(bot.chest.oak_planks, 14 * 64 - stockpile.GEAR_RESERVE_PLANKS) // the gear ladder reserve stays
-    assert.equal(bot.chest.cobblestone, 4 * 64 - stockpile.SCAFFOLD_KEEP - stockpile.GEAR_RESERVE_COBBLE)
+    // g0z.51: this harness leaves the blast cell open (air), so the ladder's
+    // 35 cobble stay packed too — ladder stock is not leftover BOM.
+    assert.equal(bot.chest.cobblestone, 4 * 64 - stockpile.BLAST_COBBLE_KEEP - stockpile.SCAFFOLD_KEEP - stockpile.GEAR_RESERVE_COBBLE)
     assert.equal(bot.chest.andesite, 54)
     assert.equal(packOf(bot, 'stone_pickaxe'), 1)
     assert.equal(packOf(bot, 'stone_sword'), 1)
     assert.equal(packOf(bot, 'bread'), stockpile.FOOD_KEEP)
     assert.equal(packOf(bot, 'white_bed'), 1, 'the spawn bed stays')
-    assert.equal(packOf(bot, 'cobblestone'), stockpile.SCAFFOLD_KEEP + stockpile.GEAR_RESERVE_COBBLE)
+    assert.equal(packOf(bot, 'cobblestone'), stockpile.BLAST_COBBLE_KEEP + stockpile.SCAFFOLD_KEEP + stockpile.GEAR_RESERVE_COBBLE)
     assert.equal(packOf(bot, 'oak_planks'), stockpile.GEAR_RESERVE_PLANKS)
     const line = bot.said.find((m) => m.startsWith('castle done at 8 65 -12'))
     assert.ok(line && /\d+ items banked/.test(line), `summary line: ${bot.said}`)

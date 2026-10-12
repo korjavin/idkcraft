@@ -250,8 +250,8 @@ describe('castle blast ladder (g0z.51)', () => {
 
   it('chest raw + cobble withdraw, then the ladder runs to done', async () => {
     const RES = castleMod.reserveOf('stone')
-    const items = [{ name: 'coal', count: 3 }, { name: 'cobblestone', count: RES }]
-    const bot = castleBot({ items, chest: [{ name: 'raw_iron', count: 5 }, { name: 'cobblestone', count: 11 }] })
+    const items = [{ name: 'coal', count: 3 }, { name: 'cobblestone', count: 4 }]
+    const bot = castleBot({ items, chest: [{ name: 'raw_iron', count: 5 }, { name: 'cobblestone', count: 100 }] })
     openBlast(bot)
     const ctx = { castle: completeState() }
     const { fn, jobs } = fakeFurnace(bot, items, [])
@@ -260,7 +260,9 @@ describe('castle blast ladder (g0z.51)', () => {
     await run(bot, ctx, () => ctx.stepStatus)
     assert.equal(ctx.stepStatus, 'done')
     assert.ok(bot.calls.withdraw.some(([t, n]) => t === 'raw_iron' && n === 5), JSON.stringify(bot.calls.withdraw))
-    assert.ok(bot.calls.withdraw.some(([t, n]) => t === 'cobblestone' && n === 11), JSON.stringify(bot.calls.withdraw))
+    // One withdraw to the rung gate (3 chain + 8 recipe + reserve 24 = 35
+    // minus the 4 held): a stocked chest spares the dig entirely.
+    assert.ok(bot.calls.withdraw.some(([t, n]) => t === 'cobblestone' && n === 11 + RES - 4), JSON.stringify(bot.calls.withdraw))
     assert.deepEqual(jobs.map((j) => j.input), ['raw_iron', 'cobblestone', 'stone'])
   })
 
@@ -392,10 +394,11 @@ describe('stockpile blast-ladder keep (g0z.51)', () => {
   }
   const banked = (plan, name) => plan.filter((p) => p.name === name).reduce((a, p) => a + p.count, 0)
 
-  it('open blast cell: keeps 5 iron / 3 chain / 1 furnace, banks the rest', () => {
+  it('open blast cell: keeps 5 iron / 3 chain / 1 furnace / 35 cobble, banks the rest', () => {
+    assert.equal(stockpile.BLAST_COBBLE_KEEP, 35, '24 reserve + 3 chain + 8 recipe (mirrors the rung gate)')
     const bot = packBot([
       { name: 'raw_iron', count: 6 }, { name: 'iron_ingot', count: 7 }, { name: 'stone', count: 4 },
-      { name: 'smooth_stone', count: 5 }, { name: 'furnace', count: 2 },
+      { name: 'smooth_stone', count: 5 }, { name: 'furnace', count: 2 }, { name: 'cobblestone', count: 76 },
     ], false)
     const plan = stockpile.depositPlan(bot, { castle: state(), home: null })
     assert.equal(banked(plan, 'raw_iron'), 1, JSON.stringify(plan))
@@ -403,6 +406,15 @@ describe('stockpile blast-ladder keep (g0z.51)', () => {
     assert.equal(banked(plan, 'stone'), 1, JSON.stringify(plan))
     assert.equal(banked(plan, 'smooth_stone'), 2, JSON.stringify(plan))
     assert.equal(banked(plan, 'furnace'), 1, JSON.stringify(plan))
+    // 76 - 35 ladder - 8 gear - 32 scaffold.
+    assert.equal(banked(plan, 'cobblestone'), 76 - stockpile.BLAST_COBBLE_KEEP - stockpile.GEAR_RESERVE_COBBLE - stockpile.SCAFFOLD_KEEP, JSON.stringify(plan))
+  })
+
+  it('dirt cannot squeeze the ladder cobble out of the shared scaffold pool', () => {
+    const open = packBot([{ name: 'dirt', count: 64 }, { name: 'cobblestone', count: 40 }], false)
+    assert.equal(banked(stockpile.depositPlan(open, { castle: state(), home: null }), 'cobblestone'), 0, 'blast + gear keeps hold all 40')
+    const laid = packBot([{ name: 'dirt', count: 64 }, { name: 'cobblestone', count: 40 }], true)
+    assert.equal(banked(stockpile.depositPlan(laid, { castle: state(), home: null }), 'cobblestone'), 32, 'dirt eats the pool, gear keeps 8')
   })
 
   it('laid blast cell: the stock banks like junk', () => {

@@ -55,9 +55,13 @@ const PANE_GLASS_KEEP = 18
 const SHELF_BOOK_KEEP = 3
 // Blast ladder (g0z.51): the recipe stock stays packed only while a blast
 // decor cell is open, capped (5 iron + the 3 smooth chain + the recipe
-// furnace); the rest banks like junk. Cobble rides the scaffold pool (32
-// covers the ladder's 19). The far-cell read matches paneKeep.
-const BLAST_KEEP = { raw_iron: 5, iron_ingot: 5, stone: 3, smooth_stone: 3, furnace: 1 }
+// furnace); the rest banks like junk. Cobble keeps the rung gate's 35 =
+// 24 scaffold/shelter reserve + 3 chain + 8 recipe (the STONE_KEEP mirror
+// precedent: no shared import, the numbers mirror castlefetch), ahead of
+// the dirt-shared scaffold pool — else a dug 35 banks between legs and
+// the next leg re-digs it. The far-cell read matches paneKeep.
+const BLAST_COBBLE_KEEP = 35
+const BLAST_KEEP = { raw_iron: 5, iron_ingot: 5, stone: 3, smooth_stone: 3, furnace: 1, cobblestone: BLAST_COBBLE_KEEP }
 // Pack room for a dig drop (moved from castlefetch, oqul.12; castlefetch
 // re-exports it). Pack-full yield (g0z.26): digging into a full pack drops
 // the cobble on the ground and counts no-gain strikes — castlefetch fails
@@ -1953,6 +1957,7 @@ module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2
 module.exports.spotsFor = spotsFor
 module.exports.FOOD_KEEP = FOOD_KEEP
 module.exports.SCAFFOLD_KEEP = SCAFFOLD_KEEP
+module.exports.BLAST_COBBLE_KEEP = BLAST_COBBLE_KEEP
 module.exports.GEAR_RESERVE_PLANKS = GEAR_RESERVE_PLANKS
 module.exports.GEAR_RESERVE_COBBLE = GEAR_RESERVE_COBBLE
 module.exports.GEAR_OWNER_WANT = GEAR_OWNER_WANT
