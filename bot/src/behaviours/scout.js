@@ -186,7 +186,11 @@ function gatedShaft(depthBelow, distH) {
 }
 
 // Shared ranking: exposed first (walkable, not solid rock), then closest in
-// height to refY, then nearest by straight distance. Capped to the nearest
+// height to refY, then nearest by straight distance — except a null refY
+// (bring) buckets sub-shaft buried depths (dy <= 1) to 0 first (jlda.12:
+// the vein-mate below the stance must beat a same-level ore 27 out, while
+// a deep shaft still loses to a shallow dig on height).
+// Capped to the nearest
 // 64 by distance first: a far search can merge hundreds of hits, and each
 // exposure check costs up to six blockAt reads on the completion tick.
 // full skips the cap: the chv rescan ranks the whole within-48 pool, where
@@ -219,7 +223,21 @@ function rankHits(bot, found, refY = null, full = false) {
     const gated = exposed === 0 ? 0 : (origin && typeof origin.x === 'number' && typeof origin.y === 'number' && typeof origin.z === 'number' &&
       p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number' &&
       gatedShaft(Math.floor(origin.y) - Math.floor(p.y), Math.hypot(p.x - origin.x, p.z - origin.z)) ? 1 : 0)
-    const dy = y0 != null && typeof p.y === 'number' ? Math.abs(p.y - y0) : 0
+    // Height breaks ties for walks only (jlda.12): exposed hits stay
+    // level-first (walkable), and explicit-refY calls (leads judge depth
+    // from the speaker's level) keep the legacy order. A null refY (bring)
+    // buckets sub-shaft depths (floored dy <= 1, the column-gate threshold)
+    // to 0 and ranks those by straight distance — depth is priced
+    // downstream (buriedCand digCost), and a same-level ore 27 blocks out
+    // must never outrank the vein-mate 2 blocks below the stance. Shaft
+    // depths keep their legacy height order, so a deep shaft still loses
+    // to a shallow dig the cost model prices 5-10x better (revmux 02).
+    const useDy = exposed === 0 || typeof refY === 'number'
+    let dy = 0
+    if (y0 != null && typeof p.y === 'number') {
+      dy = Math.abs(p.y - y0)
+      if (!useDy && Math.abs(Math.floor(p.y) - Math.floor(y0)) <= 1) dy = 0
+    }
     const d = origin ? dist(p, origin) : 0
     return [exposed, gated, dy, d]
   }
