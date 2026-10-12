@@ -486,6 +486,17 @@ of the pad; with the seeded castle the verdict adds `, panes=<laid>/44`
 CASTLE_SEED=complete CASTLE_KIT=empty CASTLE_SAND=1 CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh 60
 ```
 
+Stairs upgrade (g0z.48): `CASTLE_SEED_VERSION=2` seeds the complete
+castle as v2 and the guide chats `castle upgrade` after adoption, so the
+window measures the stairs relay; `CASTLE_KIT=stairs` carries one cobble
+stair per converted cell plus a stone kit and bread. The verdict adds
+`, upgrade=<facing-ok>/<total>@<phase>` (rcon readback of every v3
+stairs cell) next to the residence nights:
+
+```sh
+CASTLE_SEED=complete CASTLE_SEED_VERSION=2 CASTLE_KIT=stairs CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh --night 68
+```
+
 Interrupts clean up after themselves: `kill -INT`/`-TERM` (or Ctrl-C)
 kills every descendant (server client, node, tee), `docker rm -f`s this
 slot's container and drops the lock, exit 130 — the next run on the slot

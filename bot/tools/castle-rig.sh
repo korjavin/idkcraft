@@ -14,16 +14,22 @@
 #   CASTLE_TAG, CASTLE_PAD ("x,z"), CASTLE_PADSPOT ("x,z", pins the pad probe
 #   pick — controlled pairs set it on both legs), CASTLE_OUT, CASTLE_LOG, CASTLE_DAYLOCK=0
 #   to run the natural day/night cycle instead of locked day,
-#   CASTLE_KIT (empty|seeded|junk|valuables — seeded pre-fills cobble/planks/
+#   CASTLE_KIT (empty|seeded|junk|valuables|stairs — seeded pre-fills cobble/planks/
 #   tools so a 6-min window measures laying, not fetching; junk is vmzq.38's
 #   prod pack: 36/36 granite/diorite/andesite/sand/mob junk, no pickaxe, no
 #   cobble; valuables is vmzq.39's 36/36 never-dropped ores/tools/wood, no
-#   stone/dirt, with a pick, chests and a table),
+#   stone/dirt, with a pick, chests and a table; stairs is g0z.48's upgrade
+#   kit: the v3 stairs count in cobble stairs + stone pick/sword + bread),
 #   CASTLE_SEED (''|complete — g0z.33: complete rcon-places the whole v2
 #   castle (1722/1722 + beds + table) on the pad instead of ordering one,
 #   the bot adopts it as its residence (memory home kind=castle) and the
 #   verdict reports per night entered/slept/shelter/deaths/dawn-exit; run
 #   with --night 68 for the 3-night acceptance),
+#   CASTLE_SEED_VERSION (''|1|2|3, default '' = current — g0z.48: the
+#   blueprint version the CASTLE_SEED=complete castle is seeded as; 2 seeds
+#   a v2 castle and the guide chats `castle upgrade` after adoption, so the
+#   window measures the stairs relay — pair with CASTLE_KIT=stairs, read
+#   upgrade=<facing-ok>/<total>@<phase> on the verdict),
 #   CASTLE_IDLE (1 = 6x7.24 idle-alone oracle: implies CASTLE_SEED=complete,
 #   no order, nobody online; the verdict adds idle-maxdist/idle-miny/
 #   idle-underground-s, yard-litter=N (g0z.44: own blocks in the fence band,
@@ -129,9 +135,11 @@ MINS="${1:-${CASTLE_MINS:-6}}"
 case "$MINS" in ''|*[!0-9]*) echo "mins: want a positive integer, got '$MINS'"; exit 2 ;; esac
 [ "$MINS" -ge 1 ] || { echo "mins: want a positive integer, got '$MINS'"; exit 2; }
 KIT="${CASTLE_KIT:-empty}"
-case "$KIT" in empty|seeded|junk|valuables) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables, got '$KIT'"; exit 2 ;; esac
+case "$KIT" in empty|seeded|junk|valuables|stairs) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs, got '$KIT'"; exit 2 ;; esac
 SEED="${CASTLE_SEED:-}"
 case "$SEED" in ''|complete) ;; *) echo "CASTLE_SEED: want ''|complete, got '$SEED'"; exit 2 ;; esac
+SEED_VERSION="${CASTLE_SEED_VERSION:-}"
+case "$SEED_VERSION" in ''|1|2|3) ;; *) echo "CASTLE_SEED_VERSION: want ''|1|2|3, got '$SEED_VERSION'"; exit 2 ;; esac
 IDLE="${CASTLE_IDLE:-}"
 case "$IDLE" in ''|0) IDLE= ;; 1) SEED=complete ;; *) echo "CASTLE_IDLE: want ''|0|1, got '$IDLE'"; exit 2 ;; esac
 IDLE_DEATH="${CASTLE_IDLE_DEATH:-0}"
@@ -327,7 +335,7 @@ boot() {
 }
 boot
 export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
+export CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_SEED_VERSION="$SEED_VERSION" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in

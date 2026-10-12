@@ -822,6 +822,48 @@ describe('castle-replay.js seeded castle (idkcraft-g0z.33)', () => {
   })
 })
 
+describe('castle-replay.js upgrade run (idkcraft-g0z.48)', () => {
+  const { parseSeedVersion, seedCastleCells } = require('../tools/castle-replay')
+  const castle = require('../src/castle')
+
+  it('parseSeedVersion: blank reads current, known versions pass, the rest throws', () => {
+    assert.equal(parseSeedVersion(''), castle.BLUEPRINT_VERSION)
+    assert.equal(parseSeedVersion(null), castle.BLUEPRINT_VERSION)
+    assert.equal(parseSeedVersion('2'), 2)
+    assert.equal(parseSeedVersion(' 3 '), 3)
+    for (const bad of ['half', '0', '4', '9', '2.5']) {
+      assert.throws(() => parseSeedVersion(bad), /CASTLE_SEED_VERSION: want ''\|1\|2\|3/)
+    }
+  })
+
+  it('a v2 seed paints the 60 step cells as full blocks (the upgrade converts them)', () => {
+    const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, blueprintVersion: 2 }
+    const v2 = seedCastleCells(st)
+    assert.equal(v2.filter((c) => c.kind === 'stairs').length, 0, 'a v2 seed paints no stairs')
+    const v3 = castle.absPlan(st.site, 0, 3).cells.filter((c) => c.kind === 'stairs')
+    assert.equal(v3.length, 60)
+    const paint = new Map(v2.map((c) => [`${c.x},${c.y},${c.z}`, c.block]))
+    for (const c of v3) {
+      const b = paint.get(`${c.x},${c.y},${c.z}`)
+      assert.ok(b === 'cobblestone' || b === 'oak_planks', `${c.x} ${c.y} ${c.z}: ${b}`)
+    }
+  })
+
+  it('castle-rig.sh rejects a bad CASTLE_SEED_VERSION; the upgrade pair passes validation', () => {
+    const { spawnSync } = require('node:child_process')
+    const os = require('node:os')
+    const sh = path.join(__dirname, '..', 'tools', 'castle-rig.sh')
+    const base = { ...process.env, PRODWORLD: fs.mkdtempSync(path.join(os.tmpdir(), 'castle-up-')), RIG_PLANNER: 'stub' }
+    const bad = spawnSync('sh', [sh], { encoding: 'utf8', env: { ...base, CASTLE_LOCK: path.join(base.PRODWORLD, 'lock'), CASTLE_SEED_VERSION: 'half' } })
+    assert.equal(bad.status, 2)
+    assert.match(bad.stdout, /CASTLE_SEED_VERSION: want ''\|1\|2\|3/)
+    // Valid pair: past every validation, dies at the missing world copy.
+    const good = spawnSync('sh', [sh], { encoding: 'utf8', env: { ...base, CASTLE_LOCK: path.join(base.PRODWORLD, 'lock2'), CASTLE_SEED: 'complete', CASTLE_SEED_VERSION: '2', CASTLE_KIT: 'stairs' } })
+    assert.equal(good.status, 2)
+    assert.match(good.stdout, /no START.sh/)
+  })
+})
+
 describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
   const { createIdleTrack, IDLE_MAXDIST, IDLE_HOME } = require('../tools/castle-replay')
   const { surfaceFloor } = require('../src/resources')

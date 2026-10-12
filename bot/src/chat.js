@@ -569,9 +569,32 @@ function advanceCastleSearch(bot, ctx, p) {
   bot.chat(`found a castle spot ${dist} blocks away, going there; ${startCastle(p.ticker, r.site, r.rot, true)}`)
 }
 
+// Stairs steps of the castle's plan (g0z.48): the upgrade converts exactly
+// these — a laid v2 castle has 60 undone v3 cells, all stairs.
+function stairsTotal(st) {
+  try {
+    return blueprint.absPlan(st.site, st.rot | 0, st.blueprintVersion).cells.filter((c) => c.kind === 'stairs').length
+  } catch (_) { return 0 }
+}
+
+// The upgrade status line, or null when no upgrade is running: live
+// remaining steps when the site is loaded, the plan total from afar.
+function upgradeLine(bot, st, loaded) {
+  if (!st.upgrade || st.phase === 'complete') return null
+  let left = stairsTotal(st)
+  if (loaded) {
+    try {
+      const e = castleMod.progressByKind(bot, st).stairs
+      if (e) left = e.total - e.done
+    } catch (_) { /* the total stands */ }
+  }
+  return `castle upgrading v${st.upgrade.from} -> v${blueprint.blueprintOf(st.blueprintVersion).version}, ${left} steps`
+}
+
 // One castle per bot: 'build castle' starts it, 'castle' reports, 'castle
 // stop' / 'castle go' park and resume, 'castle forget' drops the project
-// (the laid blocks stay). Returns the reply line, or null for silence.
+// (the laid blocks stay), 'castle upgrade' relays a complete older castle
+// to the current blueprint. Returns the reply line, or null for silence.
 function castleChat(bot, ticker, playerName, cmd) {
   const ctx = bot && bot._tickerCtx
   if (!ticker || !ctx || typeof ticker.setCastle !== 'function') return null
@@ -620,7 +643,8 @@ function castleChat(bot, ticker, playerName, cmd) {
         yard = `; yard litter ${castleMod.litterTargets(bot, ctx, st, now).length}`
       } catch (_) { /* count best-effort */ }
     }
-    const tail = `now: ${st.parked ? 'parked — say castle go' : (st.status || 'waiting for its turn')}; blocked ${blocked}${yard}`
+    const upgrading = upgradeLine(bot, st, loaded)
+    const tail = `now: ${st.parked ? 'parked — say castle go' : (upgrading || st.status || 'waiting for its turn')}; blocked ${blocked}${yard}`
     if (!loaded) return `castle at ${at(st.site)}: too far to count; ${tail}`
     const by = castleMod.progressByKind(bot, st)
     let done = 0
@@ -653,7 +677,25 @@ function castleChat(bot, ticker, playerName, cmd) {
     ticker.setCastle(null)
     return `castle at ${at(st.site)} forgotten — the blocks stay`
   }
-  return 'try: castle, castle stop, castle go, castle forget'
+  if (cmd === 'castle upgrade') {
+    // Stairs relay (g0z.48): a complete older castle re-enters 'body' on
+    // the current blueprint — no prep, fresh blocked keys, the residence
+    // stays. The tail re-completes it once the converted cells are laid.
+    if (st.upgrade && st.phase !== 'complete') return 'already upgrading the castle — say castle for progress'
+    if (st.phase !== 'complete') return 'the castle is not finished yet — upgrade needs a complete castle'
+    const from = blueprint.blueprintOf(st.blueprintVersion).version
+    if (from >= blueprint.BLUEPRINT_VERSION) return `the castle is already on the latest blueprint (v${blueprint.BLUEPRINT_VERSION})`
+    st.blueprintVersion = blueprint.BLUEPRINT_VERSION
+    st.phase = 'body'
+    st.blocked = {}
+    st.upgrade = { from, at: Date.now() }
+    // The setCastle seam on the same object: scratch reset + save + a
+    // fresh task clock; residence and site stay.
+    ticker.setCastle(st)
+    ticker.work()
+    return `upgrading the castle to stair blocks: ~${stairsTotal(st)} steps, I keep sleeping inside`
+  }
+  return 'try: castle, castle stop, castle go, castle forget, castle upgrade'
 }
 
 // jr2.2: an order takes the body even at night — the server ignores

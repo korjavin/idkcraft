@@ -1819,6 +1819,7 @@ function castle(bot, ctx) {
     ctx.stepStatus = 'done'
     if (st.phase !== 'complete') {
       st.phase = 'complete'
+      delete st.upgrade // the relay (g0z.48) ends where the build does
       try { bot.chat(`castle done at ${st.site.x} ${st.site.y} ${st.site.z}`) } catch (_) { /* chat best-effort */ }
     }
     return
