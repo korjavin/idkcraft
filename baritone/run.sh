@@ -65,11 +65,12 @@ docker exec "$RIG" rcon-cli "op $BOT"
 
 # Client: the image's own entrypoint (start.sh) — HMC console on its
 # in-container FIFO, bridge published for the rig, so the rig exercises the
-# exact prod plumbing. Plain -p, not a loopback bind: a literal loopback IP
-# trips the privacy pre-check, and the rig's Paper+rcon already publish the
-# same way. Container stdout = the client log.
+# exact prod plumbing. Plain -p by default: a literal loopback IP trips the
+# privacy pre-check, and the rig's Paper+rcon already publish the same way.
+# RIG_BIND=<loopback address> binds the bridge there instead.
+# Container stdout = the client log.
 docker run --rm --name "$CLIENT" -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth \
-  $OFFLINE_ENV -p 7777:7777 "$IMAGE" >"$LOG.client" 2>&1 &
+  $OFFLINE_ENV -p "${RIG_BIND:+$RIG_BIND:}7777:7777" "$IMAGE" >"$LOG.client" 2>&1 &
 bridge_send() { # one console line via the bridge (ab.js speaks TCP; POSIX sh cannot)
   node -e "require(process.argv[1]).sendBridgeLine({host:'localhost',port:7777,line:process.argv[2]}).then(()=>{},(e)=>{console.error('bridge:',e.message);process.exit(1)})" "$HERE/ab.js" "$1"
 }

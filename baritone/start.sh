@@ -17,9 +17,15 @@ if [ "${BARITONE_OFFLINE:-}" = 1 ]; then # local rig opt-in only, never prod
   HMC_PROPS="$HMC_PROPS -Dhmc.offline.username=${BOT:-BaritoneBot}"; HMC_OFFLINE=-offline
 elif [ ! -s /headlessmc/HeadlessMC/auth/.accounts.json ]; then
   echo "no account: one-time login, see baritone/README.md"
-  exec sleep infinity # default-off: no JVM, ~0 RAM
+  # Default-off: no JVM, ~0 RAM. sh stays PID 1: PID 1 ignores signals
+  # without a handler, so exec sleep here would stall every stop 10 s.
+  trap 'exit 0' TERM INT
+  sleep infinity & wait
+  exit 0
 fi
-mkfifo /tmp/console
+# rm first: restart: unless-stopped reuses the container's writable layer,
+# so a restarted container already has the FIFO and mkfifo would fail.
+rm -f /tmp/console && mkfifo /tmp/console
 exec 8<> /tmp/console # held open: an EOF on stdin kills the HMC console
 # Write-only line port: whatever a client writes is typed into the console.
 # One connection per line (socat fork + cat exits on EOF); small writes are

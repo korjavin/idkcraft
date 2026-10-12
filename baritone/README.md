@@ -19,7 +19,7 @@ sleeps (default-off, no JVM, ~0 RAM).
 |---|---|
 | `Dockerfile` | Temurin 25 + HeadlessMc + Baritone + hmc-specifics (console `connect`/`msg`) + socat; jars pinned by sha256; entrypoint `start.sh` |
 | `start.sh` | container entrypoint: login passthrough (`--command login`), account gate, client on a FIFO, socat bridge |
-| `settings.txt` | Baritone presets baked into the run dir (`allowSprint`/`allowParkour` off — the head follows on foot) |
+| `settings.txt` | Baritone presets baked into the run dir (`allowParkour` off — the head follows on foot; sprint stays default — `false` breaks doors, see the file) |
 | `run.sh` | rig slot `z` (container `idk-replay-z`, port 25597, lock `/tmp/idkcraft-rig.lock-z`): reset world from `world.tar`, boot Paper, launch the image's own entrypoint with the bridge published for the rig, run `ab.js` through it, `docker stats`, tear down |
 | `ab.js` | per spot: prep, tp, stuck-replay kit, `#goto` (or `#mine`) via the bridge; judged over rcon (pos within 2.5 of goal, or raw_iron count); rows to `/private/tmp/baritone-ab.json` |
 | `tasks.json` | the two owner failures: BED-60 (walk 60+ blocks through terrain), MINE-10 (10 iron from the surface) |
@@ -65,9 +65,10 @@ A real client needs a Minecraft Java licence. Three steps, all by hand:
 Then: `docker build -t idkcraft-baritone:spike baritone && BOT=<profile name> sh baritone/run.sh`
 (~7 min; works on arm64 under Docker, client log `/tmp/baritone-run.log.client`).
 The rig uses the image's own entrypoint and publishes the bridge for the rig
-(`-p 7777:7777` — plain `-p`, not a loopback bind: a literal loopback IP
-trips the privacy pre-check, and the rig's Paper+rcon already publish the
-same way); `ab.js` drives the client through it, so the rig exercises the
+(`-p 7777:7777` — plain `-p` by default, since a literal loopback IP trips
+the privacy pre-check and the rig's Paper+rcon already publish the same
+way; `RIG_BIND=<loopback address>` binds it there instead); `ab.js` drives
+the client through it, so the rig exercises the
 exact prod plumbing — the client log shows the `[CHAT] [Baritone] > goto ...`
 lines arriving via the port.
 
