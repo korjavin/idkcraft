@@ -90,6 +90,8 @@ class FakeTransport extends EventEmitter {
       gameMode: 'survival',
       blocks: {}, // "x,y,z" -> name
       inventory: [], // [{slot,name,count}]
+      entities: [], // idkcraft-neuc.3 wire fixtures: [{id,uuid,type,name?,displayName,kind,pos,vel,yaw,pitch,health?,onGround,pose,self?}]
+      roster: [], // idkcraft-neuc.3 wire fixtures: [{name,uuid,ping,gameMode}]
       chatLog: [],
       baritone: null, // last command string
       ...state,
@@ -130,6 +132,10 @@ class FakeTransport extends EventEmitter {
       }
       case 'inventory.get':
         return { items: s.inventory.map((i) => ({ ...i })) }
+      case 'entities.list': // idkcraft-neuc.3: deep copy, the wire would serialize
+        return { entities: JSON.parse(JSON.stringify(s.entities || [])) }
+      case 'roster.get': // idkcraft-neuc.3
+        return { players: (s.roster || []).map((p) => ({ ...p })) }
       case 'dig.once': {
         const k = this.key(params.x, params.y, params.z)
         const name = s.blocks[k] || 'air'

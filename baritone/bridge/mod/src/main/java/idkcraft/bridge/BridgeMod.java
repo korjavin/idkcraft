@@ -19,6 +19,7 @@ public class BridgeMod implements ClientModInitializer {
     public void onInitializeClient() {
         try {
             BridgeServer server = new BridgeServer();
+            Entities.install(server); // idkcraft-neuc.3, enabled by .1
             server.start();
         } catch (NoClassDefFoundError e) {
             // The worker runs the API-less standalone Baritone: without
