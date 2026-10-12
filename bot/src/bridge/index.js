@@ -12,6 +12,7 @@ const { EventEmitter } = require('node:events')
 const net = require('node:net')
 const { BridgeTransport } = require('./transport')
 const { refreshEntities, handleBridgeEvent } = require('./entities') // idkcraft-neuc.3: entities+roster fold
+const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.13: control states
 
 function keyOf(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
@@ -243,6 +244,7 @@ class BaritoneBot extends EventEmitter {
       getPathTo: (_movements, _goal, _timeout) => ({ status: 'noPath', path: [] }),
     }
     this.inventory = { items: () => this._inventory }
+    installInput(this, transport) // neuc.13: setControlState/clearControlStates/controlState
   }
 
   // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
@@ -348,6 +350,7 @@ class BaritoneBot extends EventEmitter {
     }
     if (st && typeof st.isRaining === 'boolean') this.isRaining = st.isRaining
     if (st && typeof st.isSleeping === 'boolean') this.isSleeping = st.isSleeping
+    if (st && st.input && st.input.states) this._syncInputFromState(st.input.states) // neuc.13: mod-reported held states
     if (st && typeof st.dimension === 'string' && st.dimension) this.game.dimension = stripMcPrefix(st.dimension)
     if (st && st.gameMode !== undefined && st.gameMode !== null) this.game.gameMode = gameModeName(st.gameMode)
     try {
@@ -546,6 +549,7 @@ class BaritoneBot extends EventEmitter {
   // _boundSeq, overlapping follow re-issues order by seq). Failures log,
   // never emit 'error' (runOnce fatal()s every 'error'; see chat()).
   _sendGoalCmd(command) {
+    this._goalCmd = command // neuc.13: last goal cmd (diagnostics; pause/resume keeps the id, no re-issue)
     const seq = (this._cmdSeq = (this._cmdSeq | 0) + 1)
     this.transport.call('baritone.cmd', { command }).then(
       (r) => {
@@ -854,4 +858,4 @@ async function handshake(bot, { host, port, consoleSend, posTimeoutMs }) {
   bot.emit('spawn')
 }
 
-module.exports = { BaritoneBot, goalToBaritone, movementsToSettings, MinimalVec, createBot }
+module.exports = { BaritoneBot, goalToBaritone, movementsToSettings, MinimalVec, createBot, setBaritonePaused }

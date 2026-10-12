@@ -36,6 +36,7 @@ inside the same envelope — no second port.
 | `baritone.status` | — | `{id,pathing,last}` (`last`: `none` before any terminal) | `isMoving`, `path_update`/`path_reset` |
 | `entities.list` | — | `{entities:[…]}` (shape in the entities section below) | `bot.entities[id]` |
 | `roster.get` | — | `{players:[…]}` | `bot.players[name]` |
+| `input.set`/`input.clear` | partial booleans / — | `{states}` | `setControlState`/`clearControlStates` (neuc.13 section below) |
 
 Events: `chat {username,uuid,message,position:'chat'}` (player chat),
 `message {message,position:'system'|'game_info'}` (system lines, action bar,
@@ -258,6 +259,45 @@ digTime (enchantments read empty: prismarine-nbt is not a direct dep —
 ranking may prefer an unenchanted tool, digs still work); getPathTo is a
 sync `{status:'noPath',path:[]}` stub (no live callers — bring.js names
 it as a future upgrade path).
+
+## Control states (idkcraft-neuc.13)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Input.java` (+ pure `InputState.java`),
+wired from `BridgeMod.onInitializeClient`. Node: `bot/src/bridge/input.js`
+(`installInput` in the adapter constructor; `setBaritonePaused(bot, paused)`
+exported for neuc.9's look/attack/activate reuse).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `input.set` | `{forward?,back?,left?,right?,jump?,sneak?,sprint?}` booleans, absent = unchanged | `{states}` | `setControlState` (coalesced diff) |
+| `input.clear` | — | `{states}` (all false) | `clearControlStates` |
+
+`state.get` also reports `input:{states:{...}}`; the adapter adopts it only
+when no local change is queued/in flight. Node mirror: `bot.controlState[k]`,
+`bot.getControlState(k)`; invalid control/state throws like mineflayer.
+
+Held semantics: states hold until changed/cleared. Per client tick, while
+any key is held the mod swaps `LocalPlayer.input` for an adapter-owned
+`ClientInput` republishing the held `Input` record (sneak = shift) and a
+normalized move vector, restoring the original input on all-off. Direct
+KeyBinding/`keyPresses` writes do not survive KeyboardInput.tick() or
+Baritone's input override, and HeadlessMc `-lwjgl` has no key context —
+the swapped object is what `LocalPlayer.applyInput` reads. Held jump
+therefore repeats on ground; sprint rides the record's sprint flag.
+
+Baritone pause/resume: the first held key runs Baritone `pause` through
+`BridgeServer.executeBaritone` (also freezing the 120 s goal watchdog via
+`pausedLocal`); clear/last-release runs `resume`. Pause/resume never
+clears or re-mints the tracked goal id, so a latched goal continues after
+a hand-driven episode with no re-issue and no spurious `path_reset` —
+the adapter asserts this against FakeTransport (`inputPaused` flips, the
+goal id is unchanged). FakeTransport scripts `input.set`/`input.clear`
+and logs them in `inputLog`.
+
+Rig acceptance deferred to the batched rig run: DUGPIT-BARE escapes via
+the water-bucket climb, S6-PIT/HOME-PIT and recover sidestep/pillar rows
+under `REPLAY_BODY=baritone` are not run by this PR (per repo rule, rig
+runs batch on master).
 
 ## entities.list / roster.get (idkcraft-neuc.3)
 

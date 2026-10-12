@@ -196,6 +196,32 @@ public final class BridgeServer {
         tickHooks.add(hook);
     }
 
+    /** neuc.13: true while a tracked goal is latched and not yet terminal. */
+    boolean hasLiveGoal() {
+        return currentId > 0 && !terminalReceived;
+    }
+
+    /**
+     * neuc.13: run a Baritone control command on the client thread (used by
+     * Input for pause/resume). Mirrors baritone.cmd's pausedLocal bookkeeping
+     * so the goal watchdog freeze stays correct. Never throws.
+     */
+    boolean executeBaritone(String verb) {
+        try {
+            Boolean ok = submit(() -> baritone.getCommandManager().execute(verb));
+            if (ok == null || !ok) {
+                return false;
+            }
+            Boolean paused = GoalTracker.pauseFlagFor(verb);
+            if (paused != null) {
+                pausedLocal = paused;
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** Push a mod→node notification to every connected client. */
     public void push(String method, JsonObject params) {
         JsonObject note = new JsonObject();
@@ -476,6 +502,7 @@ public final class BridgeServer {
         } else {
             snap.add("spawn", JsonNull.INSTANCE);
         }
+        snap.add("input", Input.snapshotJson());
         snap.addProperty("isRaining", level.isRaining());
         snap.addProperty("isSleeping", pl.isSleeping());
         snap.addProperty("dimension", level.dimension().identifier().toString());
@@ -497,6 +524,7 @@ public final class BridgeServer {
         snap.add("health", JsonNull.INSTANCE);
         snap.add("food", JsonNull.INSTANCE);
         snap.add("oxygen", JsonNull.INSTANCE);
+        snap.add("input", Input.snapshotJson());
         snap.add("time", JsonNull.INSTANCE);
         snap.add("spawn", JsonNull.INSTANCE);
         snap.add("isRaining", JsonNull.INSTANCE);
