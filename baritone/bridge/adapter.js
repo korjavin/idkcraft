@@ -164,8 +164,11 @@ class BaritoneBot extends EventEmitter {
       // setGoal latch AND stay silent: synthesising 'success' — or even just
       // flipping isMoving — re-issues follow.js every tick and the body never
       // moves. A goal that fails before any poll shows pathing must surface
-      // via the pushed baritone.event, not the poll. Prod replaces the latch
-      // with a goal id echoed through baritone.cmd -> baritone.status.
+      // via the pushed baritone.event, not the poll (else the latch holds
+      // isMoving until the next setGoal — revmux 03 core-1; accepting a
+      // noPath/timeout after N motionless polls is epic tuning, not spike).
+      // Prod replaces the latch with a goal id echoed through
+      // baritone.cmd -> baritone.status.
       const genBefore = this._goalGen
       const was = this._baritone.pathing
       const bs = await this.transport.call('baritone.status', {})
@@ -293,6 +296,7 @@ class BaritoneBot extends EventEmitter {
   _stopPath() {
     this.pathfinder.goal = null
     this._sawPathing = false // goal cancelled: later terminals are not ours
+    this._goalGen = (this._goalGen | 0) + 1 // in-flight pre-stop polls drop as stale (revmux 03 core-2)
     this._consoleMoving = false
     if (this.backend === 'console') {
       if (this.bridgeSend) Promise.resolve().then(() => this.bridgeSend('msg #stop')).catch((e) => this.emit('error', e))

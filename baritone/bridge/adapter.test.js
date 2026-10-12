@@ -158,7 +158,7 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
   })
 })
 
-describe('revmux 01 fixes (poll pile-up, stale status)', () => {
+describe('status attribution fixes (revmux 01-03)', () => {
   it('poll honors pollMs: a handful of calls, not one per ms (core-2)', async () => {
     const { transport, bot } = spikeBot()
     let calls = 0
@@ -244,6 +244,64 @@ describe('revmux 01 fixes (poll pile-up, stale status)', () => {
       await bot.refresh()
       assert.deepEqual(statuses, ['success'])
       assert.equal(bot.pathfinder.isMoving(), false)
+    } finally {
+      await bot.stop()
+    }
+  })
+
+  it('a no-motion noPath poll stays silent; the pushed event rescues the goal (03 core-1)', async () => {
+    const { transport, bot } = spikeBot()
+    await bot.start({ pollMs: 0 })
+    try {
+      const statuses = []
+      const resets = []
+      bot.on('path_update', (r) => statuses.push(r.status))
+      bot.on('path_reset', (r) => resets.push(r))
+      bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
+      // CALC_FAILED before any poll saw motion: the mod latches noPath.
+      transport.state.baritonePhase = 1
+      transport.state.baritoneStatus = { pathing: false, last: 'noPath' }
+      await bot.refresh()
+      assert.deepEqual(statuses, []) // the poll cannot attribute it: silent
+      assert.equal(bot.pathfinder.isMoving(), true) // latch kept
+      // The pushed PathEvent is the attributed channel: it completes the goal.
+      transport.inject('baritone.event', { status: 'noPath' })
+      assert.deepEqual(statuses, ['noPath'])
+      assert.deepEqual(resets, ['noPath'])
+      assert.equal(bot.pathfinder.isMoving(), false)
+    } finally {
+      await bot.stop()
+    }
+  })
+
+  it('stop drops an in-flight pre-stop motion poll: no phantom re-arm (03 core-2)', async () => {
+    const { transport, bot } = spikeBot()
+    await bot.start({ pollMs: 0 })
+    try {
+      const statuses = []
+      bot.on('path_update', (r) => statuses.push(r.status))
+      bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
+      await bot.refresh() // motion witnessed
+      assert.equal(bot.pathfinder.isMoving(), true)
+      // A status round already in flight when stop lands.
+      const orig = transport.call.bind(transport)
+      let release
+      const gate = new Promise((r) => { release = r })
+      transport.call = async (method, params) => {
+        if (method === 'baritone.status') await gate
+        return orig(method, params)
+      }
+      const flight = bot.refresh()
+      await sleep(10) // the round parks on the status call (state+inventory pass first)
+      bot.pathfinder.setGoal(null) // stop: latch cleared, generation bumped
+      assert.equal(bot.pathfinder.goal, null)
+      // The reply in flight was generated pre-stop: it reports motion.
+      transport.state.baritonePhase = 0
+      release()
+      await flight
+      transport.call = orig
+      assert.equal(bot.pathfinder.isMoving(), false) // stale reply dropped, no re-arm
+      assert.deepEqual(statuses, [])
     } finally {
       await bot.stop()
     }
