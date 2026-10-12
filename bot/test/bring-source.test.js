@@ -385,6 +385,52 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     })
   })
 
+  it('creation with a wet buried 48 stash: still defers, walks the dry vein (jlda.11 revmux 01)', async () => {
+    // Water at y+3: above the find pre-check (+1), so the stash is wet via
+    // the column scan — early-commit stands down and the shells run; the
+    // wet-vs-dry rule then walks to the dry vein at 60.
+    const names = {
+      '0,59,0': 'iron_ore', '0,62,0': 'water', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 59, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const { seen, brain } = countingBrain('walk_exposed') // must never be consulted
+    const ticker = tickerFor(bot, brain)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['only buried iron within 48, checking further for open ore…'])
+    assert.ok(bot._tickerCtx.pendingSearch, 'far search pending')
+    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
+    assert.equal(bot._tickerCtx.pendingSearch, null)
+    assert.equal(seen.length, 0, 'wet-vs-dry asks nothing')
+    assert.ok(bot.lines.includes('going for 3 iron_ore, 60 blocks away (exposed)'), `lines: ${bot.lines}`)
+    const o = bot._tickerCtx.bring
+    assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [60, 64, 0])
+    assert.deepEqual(o.verdict, {
+      pick: 'exposed',
+      win: { x: 60, y: 64, z: 0, cost: 60 / SOURCE_COST.walkBlocksPerSec },
+      rival: { x: 0, y: 59, z: 0, cost: 5 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec + SOURCE_COST.wetPenaltySec },
+    })
+  })
+
+  it('find phase with a wet buried 48 stash: still scans, walks the dry vein (jlda.11 revmux 01)', async () => {
+    const names = {
+      '0,59,0': 'iron_ore', '0,62,0': 'water', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 59, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const { seen, brain } = countingBrain('walk_exposed') // must never be consulted
+    tickerFor(bot, brain)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'searchfar', 'wet stash scans')
+    await bring(bot, ctx, null, {})
+    assert.equal(seen.length, 0, 'wet-vs-dry asks nothing')
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 60 blocks away (exposed)'])
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
+    assert.equal(ctx.bring.phase, 'walk')
+  })
+
   it('creation contested at edge 48: interim line, then one ask on the first tick', async () => {
     const names = { '0,61,0': 'iron_ore', '30,64,0': 'iron_ore', '31,64,0': 'air' }
     const bot = mockBot({ spots: [pos(0, 61, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })

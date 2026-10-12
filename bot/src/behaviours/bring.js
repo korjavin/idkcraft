@@ -1588,9 +1588,9 @@ async function bring(bot, ctx, target, state) {
       return
     }
     // 48-best buried: stash it as the dig candidate (c), read the memory
-    // candidate (b) — a diggable stash commits below (jlda.11
+    // candidate (b) — a diggable dry stash commits below (jlda.11
     // early-commit) instead of running the far shells for live exposed
-    // ore (a); only a gated shaft still scans (atl.15).
+    // ore (a); a gated or wet shaft still scans (atl.15).
     o.buried = buriedCand(bp, res, bot)
     // Gated shaft (chv): remember the vein for the honest refusal — the
     // verdict below then weighs exposed-or-legs with no dig in play.
@@ -1619,18 +1619,19 @@ async function bring(bot, ctx, target, state) {
       await verdictSource(bot, ctx, o, exposedCached, o.buried)
       return
     }
-    // jlda.11 early-commit: with a diggable stash in hand the !search
-    // branch below commits it at once and the shells never run. Only a
-    // gated shaft (no dig in play) scans.
-    o.search = o.buried ? null : startFarSearch(bot, o.name, null, { exposedOnly: true })
+    // jlda.11 early-commit: with a diggable dry stash in hand the
+    // !search branch below commits it at once and the shells never run.
+    // A gated shaft (no dig in play) or a wet one (the wet-vs-dry rule
+    // needs a rival to walk to) still scans.
+    o.search = (o.buried && !o.buried.wet) ? null : startFarSearch(bot, o.name, null, { exposedOnly: true })
     if (o.search === 'unknown') {
       refuse(bot, ctx, `unknown block: ${o.name}`)
       return
     }
     if (!o.search) {
-      // Edge 48 (no shells) or a diggable stash (jlda.11 early-commit):
-      // decide between memory and buried now, asking the model once when
-      // contested (the tick awaits bring).
+      // Edge 48 (no shells) or a diggable dry stash (jlda.11
+      // early-commit): decide between memory and buried now, asking the
+      // model once when contested (the tick awaits bring).
       if (!o.memKnown && !o.buried) {
         await enterSearch(bot, ctx, o, gatedOrEmptyRefusal(o, loadedSearchRadius(bot)))
         return
