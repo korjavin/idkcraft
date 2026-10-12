@@ -1556,6 +1556,17 @@ function selectBody(env = process.env) {
   return { name }
 }
 
+// idkcraft-neuc.2: runOnce args for the selected body. v1 passes NEITHER
+// key, so runOnce keeps its default factory and empty tag (byte-identical
+// v1); v2 passes both. Split out of main() so the wiring itself is pinned
+// by the body-switch test (revmux 01 core-3).
+function runArgsFor(sel, base) {
+  const args = { ...base }
+  if (sel.createBot) args.createBot = sel.createBot
+  if (sel.bodyTag) args.bodyTag = sel.bodyTag
+  return args
+}
+
 async function main() {
   const sel = selectBody(process.env)
   if (sel.fatal) fatal('body', sel.fatal)
@@ -1585,10 +1596,7 @@ async function main() {
       await waitForPlayers({ host, port, pingFn, username, workerConfigured: worker.configured() })
       await sleep(JOIN_SETTLE_MS)
     }
-    const runArgs = { host, port, username, tickMs, brain, leaveAfterMs, followName, brainEngine, autonomous }
-    if (sel.createBot) runArgs.createBot = sel.createBot
-    if (sel.bodyTag) runArgs.bodyTag = sel.bodyTag
-    await runOnce(runArgs)
+    await runOnce(runArgsFor(sel, { host, port, username, tickMs, brain, leaveAfterMs, followName, brainEngine, autonomous }))
   }
 }
 
@@ -1745,4 +1753,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, waitForWorkerLeave, runOnce, selectBody, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, waitForWorkerLeave, runOnce, selectBody, runArgsFor, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }

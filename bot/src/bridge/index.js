@@ -21,7 +21,7 @@ class MinimalVec {
   constructor(x, y, z) { this.x = x; this.y = y; this.z = z }
   floored() { return new MinimalVec(Math.floor(this.x), Math.floor(this.y), Math.floor(this.z)) }
   offset(dx, dy, dz) { return new MinimalVec(this.x + dx, this.y + dy, this.z + dz) }
-  distanceTo(q) { return Math.hypot(this.x - q.x, this.y - q.z) }
+  distanceTo(q) { return Math.hypot(this.x - q.x, this.y - q.y, this.z - q.z) }
   clone() { return new MinimalVec(this.x, this.y, this.z) }
 }
 
@@ -337,7 +337,12 @@ class BaritoneBot extends EventEmitter {
 
   chat(message) {
     // mineflayer chat is fire-and-forget; the promise must never throw synchronously.
-    this.transport.call('chat.send', { message: String(message) }).catch((e) => this.emit('error', e))
+    // A failed call logs, never emits 'error': runOnce fatal()s every 'error'
+    // (process exit), and a timed-out chat.send on a live socket is not a
+    // dead connection (revmux 01 core-2).
+    this.transport.call('chat.send', { message: String(message) }).catch((e) => {
+      console.log(`bridge chat.send failed: ${(e && e.message) || e}`)
+    })
   }
 
   _setGoal(goal) {
@@ -361,7 +366,7 @@ class BaritoneBot extends EventEmitter {
       this._baritone = { pathing: false, last: 'noPath' }
       this._pathStatus = 'noPath'
       this.emit('path_update', { status: 'noPath' })
-      this.emit('error', e)
+      console.log(`bridge baritone.cmd failed: ${(e && e.message) || e}`) // never 'error': see chat() (revmux 01 core-2)
     })
   }
 
@@ -370,7 +375,9 @@ class BaritoneBot extends EventEmitter {
     this._sawPathing = false // goal cancelled: later terminals are not ours
     this._goalGen = (this._goalGen | 0) + 1 // in-flight pre-stop polls drop as stale (revmux 03 core-2)
     this._baritone = { pathing: false, last: 'stopped' }
-    this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => this.emit('error', e))
+    this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => {
+      console.log(`bridge baritone.cmd #stop failed: ${(e && e.message) || e}`) // never 'error': see chat() (revmux 01 core-2)
+    })
   }
 
   _handleEvent(method, params) {
@@ -468,11 +475,15 @@ function createBot(opts = {}, inj = {}) {
   // connection (runOnce fatal()s → container restart = reconnect).
   transport.on('close', () => { if (!bot._quitting) bot.emit('end', 'bridge closed') })
   transport.on('error', (err) => { if (!bot._quitting) bot.emit('error', err instanceof Error ? err : new Error(`bridge: ${err}`)) })
-  void handshake(bot, { host, port, consoleSend })
+  // Deadline for the first joined state (step 4): past the ~60 s
+  // HeadlessMC boot with margin; inj.posTimeoutMs overrides it in tests.
+  const rawPosTimeout = (inj && inj.posTimeoutMs) ?? 120000
+  const posTimeoutMs = Number.isFinite(rawPosTimeout) ? rawPosTimeout : 120000
+  void handshake(bot, { host, port, consoleSend, posTimeoutMs })
   return bot
 }
 
-async function handshake(bot, { host, port, consoleSend }) {
+async function handshake(bot, { host, port, consoleSend, posTimeoutMs }) {
   const transport = bot.transport
   // 1. ws connect with backoff — HeadlessMC takes ~60 s to boot.
   let delay = 1000
@@ -488,7 +499,11 @@ async function handshake(bot, { host, port, consoleSend }) {
     }
   }
   if (bot._quitting) return
-  // 2. console connect: the client joins the MC server on our name.
+  // 2. console connect: the client joins the MC server on our name. The
+  // adapter is the sole connecter, so three failed sends mean this round
+  // can never produce a join — error out (runOnce fatal()s → container
+  // restart = reconnect) instead of hanging on a pos that never comes
+  // (revmux 01 core-1).
   let linked = false
   for (let i = 0; i < 3 && !linked && !bot._quitting; i++) {
     try { linked = await consoleSend(`connect ${host} ${port}`) } catch (_) { linked = false }
@@ -496,6 +511,10 @@ async function handshake(bot, { host, port, consoleSend }) {
   }
   console.log(`bridge console connect ${host} ${port} ok=${linked}`)
   if (bot._quitting) return
+  if (!linked) {
+    bot.emit('error', new Error(`bridge: console connect ${host} ${port} failed (3 tries)`))
+    return
+  }
   // 3. hello: the mc version gates the static registry (zero bridge
   // traffic for the 93 registry sites afterwards).
   let hello
@@ -519,10 +538,20 @@ async function handshake(bot, { host, port, consoleSend }) {
   bot.registry = registry
   // 4. the first state.get with a non-null pos, then login+spawn. start()'s
   // own refresh throws the mod-contact failure into the error path below;
-  // the 100 ms poll (skip-when-slow) drives the wait from there.
+  // the 100 ms poll (skip-when-slow) drives the wait from there. The wait
+  // has a deadline: a refused join (or a state.get that never answers)
+  // must error into the container restart, never hang the process
+  // (revmux 01 core-1).
   try {
     await bot.start({ pollMs: 100, connect: false })
-    while (!bot._hasPos && !bot._quitting) await sleep(250)
+    const deadline = Date.now() + posTimeoutMs
+    while (!bot._hasPos && !bot._quitting) {
+      if (Date.now() >= deadline) {
+        bot.emit('error', new Error(`bridge: no joined state within ${posTimeoutMs} ms`))
+        return
+      }
+      await sleep(250)
+    }
   } catch (e) {
     bot.emit('error', e instanceof Error ? e : new Error(`bridge state: ${e}`))
     return

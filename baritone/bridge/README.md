@@ -9,9 +9,9 @@ Zero `bot/src` files change; all spike code is this new directory.
 > `adapter.js` → `bot/src/bridge/index.js`, `transport.js` →
 > `bot/src/bridge/transport.js`, `adapter.test.js` →
 > `bot/test/bridge-adapter.test.js`, and deleted the spike-only
-> `console` backend with `rig-goto.js` (neuc.5 brings the real harness;
-> `rig.sh`'s last line goes away with it). This directory keeps the wire
-> spec (`PROTOCOL.md`) and the mod (`mod/`).
+> `console` backend with `rig-goto.js` (`rig.sh` now holds the rig up
+> for manual runs; neuc.5 brings the real harness). This directory keeps
+> the wire spec (`PROTOCOL.md`) and the mod (`mod/`).
 
 ## Verdict: CONDITIONAL GO
 
@@ -36,7 +36,7 @@ touch → live), keeping mineflayer as the rollback seam.
 | `bot/src/bridge/transport.js` | websocket client + `FakeTransport` loopback — was `transport.js` here |
 | `bot/test/bridge-adapter.test.js` | moved spike tests, incl. the REAL `follow.js` + `countItems` running unchanged through the adapter |
 | `rig-goto.js` | DELETED by neuc.2 with the `console` backend (neuc.5 brings the real harness) |
-| `rig.sh` | slot-z boot + offline client (`IdkBody`); its `rig-goto.js` last line goes away with neuc.5 |
+| `rig.sh` | slot-z boot + offline client (`IdkBody`); holds the rig up for manual/acceptance runs until neuc.5 brings the real harness |
 | `mod/` | Fabric mod skeleton (method table + client/Baritone call sites, NOT compiled — sized, not built) |
 
 ## Verification (2026-10-12)

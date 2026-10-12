@@ -9,10 +9,11 @@ const { execFile, spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 
-const { selectBody, runOnce } = require('../src/index')
+const { selectBody, runArgsFor, runOnce } = require('../src/index')
 const bridge = require('../src/bridge/index')
-const { BaritoneBot, createBot } = bridge
+const { BaritoneBot, MinimalVec, createBot } = bridge
 const { FakeTransport } = require('../src/bridge/transport')
+const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -65,6 +66,16 @@ describe('selectBody (BOT_BODY switch)', () => {
     const sel = selectBody({ BOT_BODY: 'bogus' })
     assert.ok(typeof sel.fatal === 'string' && sel.fatal.includes('bogus'))
     assert.equal(sel.fatal.includes('\n'), false)
+  })
+
+  it('runArgsFor passes neither key for v1, both for v2 (revmux 01 core-3)', () => {
+    const v1 = runArgsFor(selectBody({}), { host: 'mc' })
+    assert.deepEqual(v1, { host: 'mc' })
+    assert.ok(!('createBot' in v1) && !('bodyTag' in v1))
+    const v2 = runArgsFor(selectBody({ BOT_BODY: 'baritone', BOT_USERNAME: 'IdkBody' }), { host: 'mc' })
+    assert.equal(v2.host, 'mc')
+    assert.equal(v2.createBot, bridge.createBot)
+    assert.equal(v2.bodyTag, ' body=baritone')
   })
 })
 
@@ -226,6 +237,32 @@ describe('createBot lifecycle on FakeTransport', () => {
       await once(bot, 'end')
     })
   })
+
+  it('three failed console sends error out instead of hanging (revmux 01 core-1)', async () => {
+    const transport = new FakeTransport()
+    await quiet(async () => {
+      const bot = createBot({ host: 'x', port: 1, username: 'IdkBody' }, { transport, consoleSend: async () => false })
+      let spawned = false
+      bot.on('spawn', () => { spawned = true })
+      const [err] = await once(bot, 'error', 15000)
+      assert.ok(String(err && err.message).includes('console connect x 1 failed (3 tries)'))
+      assert.equal(spawned, false)
+      await bot.stop()
+    })
+  })
+
+  it('a pos that never comes errors on the deadline (revmux 01 core-1)', async () => {
+    const { inj } = rig({ pos: null })
+    await quiet(async () => {
+      const bot = createBot({ host: 'x', port: 1, username: 'IdkBody' }, { ...inj, posTimeoutMs: 300 })
+      let spawned = false
+      bot.on('spawn', () => { spawned = true })
+      const [err] = await once(bot, 'error')
+      assert.ok(String(err && err.message).includes('no joined state within 300 ms'))
+      assert.equal(spawned, false)
+      await bot.stop()
+    })
+  })
 })
 
 describe('bridge state mapping + chat shape', () => {
@@ -287,6 +324,45 @@ describe('bridge state mapping + chat shape', () => {
       assert.equal(bot.time.day, 1)
       assert.equal(bot.oxygenLevel, 7)
       assert.equal(bot.game.dimension, 'the_nether')
+    } finally {
+      await bot.stop()
+    }
+  })
+
+  it('MinimalVec.distanceTo measures all three axes (revmux 01 core-4)', () => {
+    const d = new MinimalVec(0, 0, 0).distanceTo(new MinimalVec(1, 2, 2))
+    assert.equal(d, 3)
+  })
+
+  it("failed fire-and-forget calls log, never emit 'error' (runOnce would exit) (revmux 01 core-2)", async () => {
+    const transport = new FakeTransport()
+    const origCall = transport.call.bind(transport)
+    transport.call = async (method, params) => {
+      if (method === 'chat.send' || method === 'baritone.cmd') throw new Error('slow client')
+      return origCall(method, params)
+    }
+    const bot = new BaritoneBot(transport, { Vec3, registry: { blocksByName: {} } })
+    await bot.start({ pollMs: 0 })
+    try {
+      const errors = []
+      bot.on('error', (e) => errors.push(e))
+      const statuses = []
+      bot.on('path_update', (r) => statuses.push(r.status))
+      const lines = []
+      const origLog = console.log
+      console.log = (l) => { lines.push(String(l)) }
+      try {
+        bot.chat('hello?')
+        bot.pathfinder.setGoal(new goals.GoalNear(1, 64, 1, 2))
+        bot.pathfinder.setGoal(null)
+        await sleep(50)
+      } finally {
+        console.log = origLog
+      }
+      assert.deepEqual(errors, [])
+      assert.ok(statuses.includes('noPath'), 'a failed cmd still reports noPath')
+      assert.ok(lines.some((l) => l.includes('bridge chat.send failed')))
+      assert.ok(lines.some((l) => l.includes('bridge baritone.cmd failed')))
     } finally {
       await bot.stop()
     }
