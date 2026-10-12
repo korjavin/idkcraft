@@ -13,25 +13,26 @@ v1.18.0, MC 26.1.2 = the rig Paper) replays the same stuck corpus as
 | `tasks.json` | the two owner failures: BED-60 (walk 60+ blocks through terrain), MINE-10 (10 iron from the surface) |
 | `ab.test.js` | `node --test baritone/` |
 
-## Status: built, not run — blocked on the client account
+## Running it
 
-The image builds and installs Fabric for 26.1.2; Baritone and hmc-specifics
-both declare 26.1.x. **The game was never launched**: a real client needs a
-Minecraft Java licence. HeadlessMc allows offline accounts only for CI
-tests, and the agent did not launch Mojang's client without the owner's
-licence decision. `run.sh` refuses (exit 2) until one of:
+A real client needs a Minecraft Java licence. `run.sh` refuses (exit 2) until one of:
 
-1. **Owner account (cheapest, ~5 min once):** device-code login, stored in a
+1. **Owner account (~5 min once):** device-code login, stored in a
    local docker volume (never in the repo):
    `docker run --rm -it -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth idkcraft-baritone:spike --command login`
    The server is `ONLINE_MODE=false`, so any owned profile joins; run with
    `BOT=<profile name>` so it is pre-opped (spawn protection) before login.
-2. **Owner opt-in to offline** for this local test rig: `BARITONE_OFFLINE=1 sh baritone/run.sh`.
+2. **Owner opt-in to offline** for this local test rig: `BARITONE_OFFLINE=1 sh baritone/run.sh`
+   (not exercised: the owner account path was used).
 
-Then: `docker build -t idkcraft-baritone:spike baritone && sh baritone/run.sh`
-(~15 min: 16 spots ≤ 90 s + BED-60 240 s + MINE-10 600 s).
+Then: `docker build -t idkcraft-baritone:spike baritone && BOT=<profile name> sh baritone/run.sh`
+(~7 min; works on arm64 under Docker, client log `/tmp/baritone-run.log.client`).
 
-Unverified until the first launch: the `msg` console command reaching
-Baritone's chat hook, `connect host.docker.internal 25597` from inside the
-client container, `-Dhmc.offline.username` being honoured. The first run
-proves or kills each of these in its log (`/tmp/baritone-run.log.client`).
+Headless gotchas (fixed in `run.sh`): the container has no TTY, so the
+in-game JLine reader crashes the game at init unless forced dumb
+(`-Dhmc.jvmargs=-Dhmc.jline.dumb=true`); `-commands` must NOT be passed
+(it starts the runtime's own stdin reader, which then splits input with
+hmc-specifics'); `connect` is sent only after `HMC-Specifics initialized`;
+console `msg` sends quotes literally, so Baritone commands go unquoted
+(`msg #goto x y z`). `connect host.docker.internal 25597` works from inside
+the container.

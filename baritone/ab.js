@@ -54,7 +54,7 @@ function main() {
   const FIFO = process.env.CHAT_FIFO
   if (!BOT || !FIFO) throw new Error('BOT and CHAT_FIFO are required (run via run.sh)')
   const rcon = (cmd) => execFileSync('docker', ['exec', C, 'rcon-cli', cmd], { encoding: 'utf8' })
-  const chat = (msg) => fs.appendFileSync(FIFO, `msg "${msg}"\n`)
+  const chat = (msg) => fs.appendFileSync(FIFO, `msg ${msg}\n`) // hmc-specifics sends quotes literally
   const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
   const pos = () => parsePos(rcon(`data get entity ${BOT} Pos`))
   const only = process.env.AB_ONLY ? process.env.AB_ONLY.split(',') : null

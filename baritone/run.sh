@@ -18,9 +18,12 @@ SRVFIFO="/tmp/baritone-srv-$$.fifo"; export CHAT_FIFO="/tmp/baritone-chat-$$.fif
 LOG=/tmp/baritone-run.log
 
 BOT="${BOT:-BaritoneBot}" # with a stored account: the profile name (pre-opped below)
-HMC_PROPS=; HMC_OFFLINE=
+# No TTY in the container: hmc-specifics' JLine reader crashes the game at init
+# unless forced dumb. No -commands: that starts the runtime's own reader too and
+# the two split stdin between them (only hmc-specifics has connect/msg).
+HMC_PROPS="-Dhmc.jvmargs=-Dhmc.jline.dumb=true"; HMC_OFFLINE=
 if [ "${BARITONE_OFFLINE:-}" = 1 ]; then
-  HMC_PROPS="-Dhmc.offline.username=$BOT"; HMC_OFFLINE=-offline
+  HMC_PROPS="$HMC_PROPS -Dhmc.offline.username=$BOT"; HMC_OFFLINE=-offline
 elif ! docker run --rm -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth --entrypoint test "$IMAGE" -s /headlessmc/HeadlessMC/auth/.accounts.json; then
   echo "no stored account: run the one-time login (baritone/README.md) or opt in with BARITONE_OFFLINE=1"; exit 2
 fi
@@ -47,8 +50,8 @@ rm -rf "$D/world"; tar -xf "$PRODWORLD/world.tar" -C "$D"
 mkfifo "$SRVFIFO" "$CHAT_FIFO"
 exec 9<> "$SRVFIFO" 8<> "$CHAT_FIFO" # held open: an EOF on stdin kills Paper / the HMC console
 sh "$RIGDIR/START.sh" paper-base >>"$LOG" 2>&1 <&9 &
-echo -n "wait: rcon"
-for _ in $(seq 1 36); do docker exec "$RIG" rcon-cli list >/dev/null 2>&1 && break; echo -n .; sleep 5; done
+printf "wait: rcon"
+for _ in $(seq 1 36); do docker exec "$RIG" rcon-cli list >/dev/null 2>&1 && break; printf .; sleep 5; done
 docker exec "$RIG" rcon-cli list >/dev/null 2>&1 || { echo " rig never came up ($LOG)"; exit 2; }
 echo " up"
 for c in "difficulty peaceful" "gamerule fall_damage false" "gamerule advance_weather false" "weather clear"; do
@@ -61,14 +64,18 @@ docker exec "$RIG" rcon-cli "op $BOT"
 # Client: HMC console on stdin (the FIFO ab.js writes to); hmc-specifics `connect`.
 docker run --rm -i --name "$CLIENT" -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth \
   --entrypoint java "$IMAGE" $HMC_PROPS -jar headlessmc-launcher-wrapper.jar \
-  --command launch fabric-loader-0.19.5-26.1.2 -lwjgl -commands $HMC_OFFLINE >>"$LOG.client" 2>&1 <&8 &
-echo -n "wait: client joins"
+  --command launch fabric-loader-0.19.5-26.1.2 -lwjgl $HMC_OFFLINE >"$LOG.client" 2>&1 <&8 &
+printf "wait: client console"
+for _ in $(seq 1 60); do grep -q "HMC-Specifics initialized" "$LOG.client" && break; printf .; sleep 3; done
+grep -q "HMC-Specifics initialized" "$LOG.client" || { echo " client never started ($LOG.client)"; exit 2; }
+printf " up; wait: client joins"
 JOINED=
-for _ in $(seq 1 60); do
+for i in $(seq 0 23); do
+  # one connect per 30 s: a connect resent mid-login restarts the handshake
+  [ $((i % 6)) = 0 ] && echo "connect host.docker.internal $PORT" > "$CHAT_FIFO"
   sleep 5
-  echo "connect host.docker.internal $PORT" > "$CHAT_FIFO" # retried only until the join
   docker exec "$RIG" rcon-cli list | grep -qw "$BOT" && { JOINED=1; break; }
-  echo -n .
+  printf .
 done
 [ -n "$JOINED" ] || { echo " $BOT never joined ($LOG.client; with a stored account set BOT=<profile name>)"; exit 2; }
 echo " $BOT"
