@@ -49,8 +49,10 @@ import net.minecraft.registry.Registries;
  * interface {@code Object handle(Map<String, Object> params)};
  * {@code push(String method, Object params)} (thread-safe queue);
  * replies/params are plain Maps/Lists/primitives (Gson-serializable, no new
- * deps). A null world/handler serves the LAST GOOD snapshot so a transient
- * empty tick never flaps the Node roster diff.
+ * deps). A null world with a live handler serves the LAST GOOD snapshot so
+ * a transient empty tick never flaps the Node roster diff; a null network
+ * handler (real disconnect) clears both snapshots instead, so the polls
+ * diff the truth.
  */
 public final class Entities {
     private final BridgeServer server;
@@ -75,11 +77,34 @@ public final class Entities {
 
     private void tick() {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client == null || client.world == null) {
+        if (client == null) {
+            return;
+        }
+        if (client.getNetworkHandler() == null) {
+            // Real disconnect (kick/restart): drop everything so the Node
+            // polls diff the truth (everyone left) instead of frozen ghosts
+            // that would hold the leave grace off. A null world WITH a live
+            // handler (respawn/dimension swap) keeps last-good below — no
+            // flap. No gone/left pushes here: the emptied snapshots drive
+            // the same Node diffs without the spam.
+            clearSnapshots();
+            return;
+        }
+        if (client.world == null) {
             return;
         }
         tickEntities(client);
         tickRoster(client);
+    }
+
+    private void clearSnapshots() {
+        if (entitySnapshot.isEmpty() && rosterSnapshot.isEmpty() && lastIds.isEmpty() && lastRoster.isEmpty()) {
+            return;
+        }
+        entitySnapshot = Collections.emptyList();
+        rosterSnapshot = Collections.emptyList();
+        lastIds = new HashSet<>();
+        lastRoster = new HashMap<>();
     }
 
     private void tickEntities(MinecraftClient client) {

@@ -34,15 +34,16 @@ function loadBridge() {
 
 const { BaritoneBot, FakeTransport } = loadBridge()
 
-// Registry stub: dimsFor reads entitiesByName[name].{height,width}, the same
-// shape minecraft-data serves in prod (zero bridge traffic).
+// Registry stub: entitiesByName[name].{height,width,type}, the same shape
+// minecraft-data serves in prod (zero bridge traffic).
 const REGISTRY = {
   blocksByName: { air: { id: 0 } },
   entitiesByName: {
-    player: { height: 1.8, width: 0.6 },
-    zombie: { height: 1.95, width: 0.6 },
-    creeper: { height: 1.7, width: 0.6 },
-    sheep: { height: 1.3, width: 0.9 },
+    player: { height: 1.8, width: 0.6, type: 'player' },
+    zombie: { height: 1.95, width: 0.6, type: 'hostile' },
+    creeper: { height: 1.7, width: 0.6, type: 'hostile' },
+    sheep: { height: 1.3, width: 0.9, type: 'animal' },
+    arrow: { height: 0.5, width: 0.5, type: 'projectile' },
   },
 }
 
@@ -143,7 +144,7 @@ describe('entities.list fold (bot.entities, mineflayer-shaped)', () => {
     assert.equal(typeof owner.position.clone, 'function')
 
     const zombie = bot.entities['42']
-    assert.equal(zombie.type, 'mob')
+    assert.equal(zombie.type, 'hostile') // registry type, like v1 (flat.js skips 'projectile')
     assert.equal(zombie.name, 'zombie')
     assert.equal(zombie.displayName, 'Zombie')
     assert.equal(zombie.kind, 'hostile')
@@ -186,6 +187,18 @@ describe('entities.list fold (bot.entities, mineflayer-shaped)', () => {
     transport.state.entities = [wirePlayer(), wireMob(), wireMob({ id: 43, type: 'creeper', displayName: 'Creeper' })]
     await refreshEntities(bot, transport)
     assert.deepEqual(spawned, [43])
+  })
+
+  it('takes non-player types from the registry, kind bucket as fallback', async () => {
+    transport.state.entities = [
+      wireMob({ id: 44, type: 'arrow', displayName: 'Arrow', kind: 'other' }),
+      wireMob({ id: 45, type: 'grue', displayName: 'Grue', kind: 'hostile' }),
+      wireMob({ id: 46, type: 'gruecart', displayName: 'Gruecart', kind: 'other' }),
+    ]
+    await refreshEntities(bot, transport)
+    assert.equal(bot.entities['44'].type, 'projectile', 'flat.js skips stuck arrows like v1')
+    assert.equal(bot.entities['45'].type, 'mob', 'unmapped hostile name falls back')
+    assert.equal(bot.entities['46'].type, 'object', 'unmapped MISC name falls back')
   })
 })
 
@@ -409,6 +422,27 @@ describe("Floodgate '.name' resolution through the fold", () => {
         perception.resolvePlayer(bot, 'Alex', '77777777-7777-7777-7777-777777777777'),
         'Alex',
       )
+    } finally {
+      await bot.stop()
+    }
+  })
+})
+
+describe('adapter wiring (idkcraft-neuc.17, lands with .2/.4)', () => {
+  // No manual refreshEntities/handleBridgeEvent: the adapter poll + event
+  // router must fold entities themselves. FAILS until .17 wires them.
+  it('adapter.refresh() fills bot.entities/bot.players with no manual fold', { skip: 'idkcraft-neuc.17 wires the fold into the adapter' }, async () => {
+    const transport = new EntitiesFakeTransport({
+      entities: [wirePlayer(), wireMob()],
+      roster: [rosterEntry()],
+    })
+    const bot = new BaritoneBot(transport, { Vec3, registry: REGISTRY, username: 'IdkBody' })
+    try {
+      await bot.start({ pollMs: 0 }) // start() runs one poll round itself
+      assert.ok(bot.players.Owner, 'roster folded by the adapter poll')
+      assert.ok(bot.entities['42'], 'entities folded by the adapter poll')
+      transport.inject('player.joined', { name: 'Guest', uuid: '33333333-3333-3333-3333-333333333333' })
+      assert.ok(bot.players.Guest, 'notification folded by the adapter router')
     } finally {
       await bot.stop()
     }

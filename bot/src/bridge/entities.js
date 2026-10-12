@@ -49,10 +49,18 @@ function dimsFor(bot, name, type) {
   return { height: 1, width: 1, eyeHeight: null }
 }
 
-// Wire type is 'player' or the mob registry id (e.g. 'zombie'); the
-// mineflayer type buckets non-players by kind (SpawnGroup on the mod).
-function entityTypeOf(w) {
+// v1 parity (mineflayer setEntityData): entity.type comes from the
+// passed-through registry (zombie->'hostile', arrow->'projectile',
+// item->'other'), not the old mob/object buckets — flat.js skips only
+// type 'projectile'. Players stay 'player'; names missing from the
+// registry fall back to the kind bucket.
+function entityTypeOf(bot, w) {
   if (w.type === 'player' || w.kind === 'player') return 'player'
+  try {
+    const byName = bot && bot.registry && bot.registry.entitiesByName
+    const reg = byName && w.type && byName[w.type]
+    if (reg && typeof reg.type === 'string' && reg.type) return reg.type
+  } catch (_) { /* unmapped name reads the kind bucket below */ }
   return w.kind === 'other' ? 'object' : 'mob'
 }
 
@@ -72,7 +80,7 @@ function setVec(v, p) {
 }
 
 function makeEntity(bot, w) {
-  const type = entityTypeOf(w)
+  const type = entityTypeOf(bot, w)
   const name = type === 'player' ? 'player' : String(w.type || 'unknown')
   const dims = dimsFor(bot, name, type)
   const displayName = w.displayName || w.name || name

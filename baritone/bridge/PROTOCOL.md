@@ -186,7 +186,12 @@ when out of range; roster/notification diffs emit `playerJoined` /
 wins); `bot.entity` stays state.get-fed and is aliased under
 `bot.entities[selfId]` when the wire tags it (mineflayer parity);
 `bot.nearestEntity(filter)` mirrors mineflayer (skips `bot.entity`).
-Mob height/width come from the passed-through registry (zero bridge
-traffic); raw entity metadata is NOT streamed yet (sheep wool reads fail
-open). BridgeServer seam required: `onClientTick(Runnable)` plus
-`register`/`push` over plain Maps/Lists (.1 owns it).
+Non-player `entity.type` comes from the passed-through registry
+(zombie→`hostile`, arrow→`projectile`, like v1; `flat.js` skips
+`projectile`), kind bucket as fallback. Mob height/width come from the
+same registry (zero bridge traffic); raw entity metadata is NOT streamed
+yet (sheep wool reads fail open). A null network handler (real
+disconnect) clears both snapshots; a null world with a live handler
+serves last-good. BridgeServer seam required: `onClientTick(Runnable)`
+plus `register`/`push` over plain Maps/Lists (.1 owns it). Adapter +
+mod wiring tracked in `idkcraft-neuc.17`.
