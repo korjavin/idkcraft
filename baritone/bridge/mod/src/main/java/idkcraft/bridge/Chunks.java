@@ -34,7 +34,7 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
  *
  * <p>State ids are the client's own global ids ({@code Block.getId(state)}
  * over {@code BLOCK_STATE_REGISTRY}) — the same numbering minecraft-data
- * 26.1.2 uses for prismarine-block (asserted on the rig smoke: stone,
+ * 26.1.2 uses for prismarine-block (the rig smoke asserts this: stone,
  * air, water, oak_log). Section payloads are base64 int16-LE arrays of
  * 4096 ids in {@code (y<<8)|(z<<4)|x} section-local order, or null for
  * an all-air section.
@@ -166,6 +166,11 @@ public final class Chunks {
             if (level == null) {
                 return null;
             }
+            // getChunk would fabricate an empty placeholder for a column
+            // the Forget packet already dropped; the chunk source is truth.
+            if (level.getChunkSource().getChunk(cx, cz, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, false) == null) {
+                return null;
+            }
             LevelChunk chunk = level.getChunk(cx, cz);
             if (chunk == null) {
                 return null;
@@ -212,7 +217,6 @@ public final class Chunks {
             sections.add(s);
         }
         res.add("sections", sections);
-        loaded.add(pack(cx, cz));
         return res;
     }
 

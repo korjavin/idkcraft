@@ -134,11 +134,30 @@ describe('bridge chunk cache (neuc.6)', () => {
     assert.ok(b && b.name === 'oak_log', `background fill landed, got ${b && b.name}`)
   })
 
-  it('chunk.loaded fetches a new column on demand', async () => {
+  it('chunk.loaded fetches a new column (far ones via the throttled queue)', async () => {
     transport.state.blocks['80,64,0'] = 'oak_log' // column (5,0), not listed at start
     transport.inject('chunk.loaded', { cx: 5, cz: 0 })
     await sleep(20)
+    assert.equal(bot.blockAt(new Vec3(80, 64, 0)), null) // queued, not an immediate flood fetch
+    await sleep(300)
     assert.equal(bot.blockAt(new Vec3(80, 64, 0)).name, 'oak_log')
+  })
+
+  it('a chunk.get reply that races chunk.unloaded is dropped, next load refetches (revmux 01 core-2)', async () => {
+    const origCall = transport.call.bind(transport)
+    transport.call = async (method, params) => {
+      if (method === 'chunk.get') await sleep(40) // in flight long enough to race
+      return origCall(method, params)
+    }
+    transport.state.blocks['32,64,0'] = 'oak_log' // column (2,0), near
+    transport.inject('chunk.loaded', { cx: 2, cz: 0 })
+    await sleep(10)
+    transport.inject('chunk.unloaded', { cx: 2, cz: 0 })
+    await sleep(80)
+    assert.equal(bot.blockAt(new Vec3(32, 64, 0)), null, 'stale reply must not resurrect the column')
+    transport.inject('chunk.loaded', { cx: 2, cz: 0 })
+    await sleep(80)
+    assert.equal(bot.blockAt(new Vec3(32, 64, 0)).name, 'oak_log', 'the next load refetches')
   })
 
   it('the REAL gather.js find phase runs unchanged through the adapter', () => {

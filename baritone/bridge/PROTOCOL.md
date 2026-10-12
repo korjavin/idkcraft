@@ -319,8 +319,8 @@ base64 of 4096 int16-LE **global block-state ids** in section-local
 `(y<<8)|(z<<4)|x` order, or null for an all-air section. Ids are the
 client's own (`Block.getId(state)` over `BLOCK_STATE_REGISTRY`) — the
 same numbering minecraft-data 26.1.2 uses, so Node builds real
-prismarine-blocks from them (verified for stone/air/water/oak_log on
-the rig smoke). An unloaded `{cx,cz}` fails `-32002`.
+prismarine-blocks from them (the rig smoke asserts this numbering;
+see smoke step 5b). An unloaded `{cx,cz}` fails `-32002`.
 
 Events: `chunk.loaded {cx,cz}` / `chunk.unloaded {cx,cz}` (inbound
 chunk packets, packet-fed loaded set), `block.update {x,y,z,stateId}`
@@ -339,7 +339,9 @@ diggable + eye reach 5.1 with liquids/bedrock refused.
 
 Initial fill: on the first poll round, `chunks.list` → columns within
 4 chunks (Chebyshev) of the body load at once, the rest at ≤4 columns
-per 100 ms in the background; `chunk.loaded` fetches promptly. A failed
+per 100 ms in the background; `chunk.loaded` fetches near columns at
+once and queues the rest the same way, with at most 4 `chunk.get` calls
+in flight (the mod serves one connection serially). A failed
 fetch retries once in the background, then waits for the next
 `chunk.loaded`. `bot.game.minY`/`height` start at the overworld
 defaults (-64/384) and refine from each `chunk.get`.

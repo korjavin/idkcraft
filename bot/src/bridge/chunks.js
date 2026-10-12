@@ -120,11 +120,26 @@ const NEAR_CHUNKS = 4
 const BG_PER_TICK = 4
 const BG_MS = 100
 
+const MAX_INFLIGHT = 4 // chunk.get replies are 100 KB+ and the mod serves one connection serially
+
 function chunkState(bot) {
   if (!bot._chunks) {
-    bot._chunks = { listed: false, unsupported: false, loading: new Set(), retried: new Set(), queue: [], timer: null }
+    bot._chunks = {
+      listed: false, unsupported: false, loading: new Set(), retried: new Set(),
+      queue: [], queued: new Set(), gens: new Map(), inflight: 0, timer: null,
+    }
   }
   return bot._chunks
+}
+
+function queueColumn(bot, transport, cx, cz) {
+  const st = chunkState(bot)
+  const key = `${cx},${cz}`
+  if (st.loading.has(key) || st.queued.has(key)) return
+  if (bot._chunkCols && bot._chunkCols.has(key)) return
+  st.queued.add(key)
+  st.queue.push([cx, cz])
+  scheduleBackground(bot, transport)
 }
 
 async function fetchColumn(bot, transport, cx, cz) {
@@ -132,20 +147,28 @@ async function fetchColumn(bot, transport, cx, cz) {
   const key = `${cx},${cz}`
   if (st.loading.has(key)) return
   if (bot._chunkCols && bot._chunkCols.has(key)) return
+  if (st.inflight >= MAX_INFLIGHT) { queueColumn(bot, transport, cx, cz); return }
   st.loading.add(key)
+  st.inflight++
+  const gen = st.gens.get(key) || 0
   try {
     const payload = await transport.call('chunk.get', { cx, cz })
-    if (payload) applyChunk(bot, payload)
+    // An unload during the await wins: the reply is stale (or the empty
+    // placeholder column) and must not resurrect the column (revmux 01 core-2).
+    if (payload && (st.gens.get(key) || 0) === gen) {
+      applyChunk(bot, payload)
+      st.retried.delete(key)
+    }
   } catch (_) {
     // A column that raced an unload (or a busy client thread) retries
     // once in the background; after that it stays unloaded until the
     // next chunk.loaded for it.
-    if (!bot._quitting && !st.retried.has(key)) {
+    if (!bot._quitting && (st.gens.get(key) || 0) === gen && !st.retried.has(key)) {
       st.retried.add(key)
-      st.queue.push([cx, cz])
-      scheduleBackground(bot, transport)
+      queueColumn(bot, transport, cx, cz)
     }
   } finally {
+    st.inflight--
     st.loading.delete(key)
   }
 }
@@ -155,8 +178,12 @@ function scheduleBackground(bot, transport) {
   if (st.timer || st.queue.length === 0) return
   st.timer = setInterval(() => {
     if (bot._quitting) { clearInterval(st.timer); st.timer = null; return }
-    const batch = st.queue.splice(0, BG_PER_TICK)
-    for (const [cx, cz] of batch) void fetchColumn(bot, transport, cx, cz)
+    let n = BG_PER_TICK
+    while (n-- > 0 && st.queue.length > 0) {
+      const [cx, cz] = st.queue.shift()
+      st.queued.delete(`${cx},${cz}`)
+      void fetchColumn(bot, transport, cx, cz)
+    }
     if (st.queue.length === 0) { clearInterval(st.timer); st.timer = null }
   }, BG_MS)
   if (typeof st.timer.unref === 'function') st.timer.unref()
@@ -169,8 +196,10 @@ async function refreshChunks(bot, transport) {
   let list
   try {
     list = await transport.call('chunks.list', {})
-  } catch (_) {
-    st.unsupported = true // old mod: blockAt keeps reading null, no spam
+  } catch (e) {
+    // Only a method-not-found means an old mod (unsupported for good);
+    // a transient timeout retries on the next round (revmux 01 core-3).
+    if (/unknown method|-32601/.test(String((e && e.message) || e))) st.unsupported = true
     return
   }
   st.listed = true
@@ -183,7 +212,7 @@ async function refreshChunks(bot, transport) {
     if (!c || typeof c.cx !== 'number' || typeof c.cz !== 'number') continue
     const d = Math.max(Math.abs(c.cx - bcx), Math.abs(c.cz - bcz))
     if (d <= NEAR_CHUNKS) near.push([c.cx, c.cz])
-    else st.queue.push([c.cx, c.cz])
+    else queueColumn(bot, transport, c.cx, c.cz)
   }
   await Promise.all(near.map(([cx, cz]) => fetchColumn(bot, transport, cx, cz)))
   scheduleBackground(bot, transport)
@@ -198,13 +227,27 @@ function handleChunkEvent(bot, transport, method, params) {
     if (typeof p.cx === 'number' && typeof p.cz === 'number') {
       const st = chunkState(bot)
       st.unsupported = false
-      st.listed = true
-      void fetchColumn(bot, transport, p.cx, p.cz)
+      st.retried.delete(`${p.cx},${p.cz}`)
+      // A (re)load always refetches: a stale column from a raced unload
+      // must not survive it (revmux 01 core-2).
+      if (bot._chunkCols) bot._chunkCols.delete(`${p.cx},${p.cz}`)
+      // Near columns fetch now; the rest join the throttled background
+      // queue — the login stream is ~441 columns (revmux 01 body-2).
+      const bp = (bot.entity && bot.entity.position) || { x: 0, z: 0 }
+      const d = Math.max(Math.abs(p.cx - Math.floor(bp.x / 16)), Math.abs(p.cz - Math.floor(bp.z / 16)))
+      if (d <= NEAR_CHUNKS) void fetchColumn(bot, transport, p.cx, p.cz)
+      else queueColumn(bot, transport, p.cx, p.cz)
     }
     return true
   }
   if (method === 'chunk.unloaded') {
-    if (typeof p.cx === 'number' && typeof p.cz === 'number') unloadChunk(bot, p.cx, p.cz)
+    if (typeof p.cx === 'number' && typeof p.cz === 'number') {
+      const st = chunkState(bot)
+      const key = `${p.cx},${p.cz}`
+      st.gens.set(key, (st.gens.get(key) || 0) + 1) // in-flight fetches drop their reply
+      st.retried.delete(key)
+      unloadChunk(bot, p.cx, p.cz)
+    }
     return true
   }
   if (method === 'block.update') {

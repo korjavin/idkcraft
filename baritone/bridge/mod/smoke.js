@@ -192,6 +192,35 @@ async function main() {
   }
   pass('chunks', `${cl.columns.length} columns, minY=${cg.minY}, under-feet=${underName} at ${fx} ${fy} ${fz}`)
 
+  // 5c. chunks ground truth: rcon setblock writes known blocks into the
+  // body column; a fresh chunk.get must decode them back by NAME (this
+  // is the blockAt == server-truth probe: stone/water/oak_log/air ids).
+  const probes = [
+    [bcx * 16 + 2, fy + 1, bcz * 16 + 2, 'stone'],
+    [bcx * 16 + 2, fy + 2, bcz * 16 + 2, 'oak_log'],
+    [bcx * 16 + 3, fy + 1, bcz * 16 + 2, 'water'],
+    [bcx * 16 + 3, fy + 2, bcz * 16 + 2, 'air'],
+  ]
+  for (const [px, py, pz, name] of probes) {
+    const out = sh('docker', ['exec', RIG, 'rcon-cli', `setblock ${px} ${py} ${pz} minecraft:${name}`])
+    if (out === null) fail('chunks.probe', `rcon setblock ${name} failed`)
+  }
+  await sleep(500)
+  const cg2 = await t.call('chunk.get', { cx: bcx, cz: bcz })
+  const decodeAt = (cgx, px, py, pz) => {
+    const s = cgx.sections.find((s2) => s2.y === Math.floor(py / 16))
+    if (!s || !s.states) return 'air'
+    const raw = Buffer.from(s.states, 'base64')
+    const idx = (((py - cgx.minY) & 15) << 8) | ((pz & 15) << 4) | (px & 15)
+    const entry = mcData.blocksByStateId[raw.readInt16LE(idx * 2)]
+    return entry ? entry.name : null
+  }
+  for (const [px, py, pz, name] of probes) {
+    const got = decodeAt(cg2, px, py, pz)
+    if (got !== name) fail('chunks.probe', `at ${px} ${py} ${pz}: server set ${name}, chunk.get decoded ${got}`)
+  }
+  pass('chunks.probe', `setblock round-trip: ${probes.map((p) => p[3]).join('/')}`)
+
   // 6. baritone.cmd — walk EP1, the id must echo through status + event.
   // Prep mirrors the kqzf spike (rig-goto.js): teleport to the spot spawn,
   // clear, kit up — Baritone needs the pickaxe where the spot says so.
