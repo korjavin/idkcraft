@@ -122,7 +122,7 @@ describe('autonomous mode', () => {
     assert.equal(r2.action, 'follow', 'follow allowed with players')
   })
 
-  it('jev without players becomes laya, restored on join when manual', async () => {
+  it('jev without players becomes off, restored on join when manual', async () => {
     process.env.BRAIN_URL = 'http://laya:8000/v1/systemone'
     process.env.TYPESAFE_API_KEY = 'k'
     const bot = mockBot()
@@ -130,10 +130,10 @@ describe('autonomous mode', () => {
     const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev' })
     handleChat(bot, ticker, 'Steve', 'brain jev')
     handleChat(bot, ticker, 'Steve', 'autonomous on')
-    assert.ok(bot.lines.join(' ').includes('laya'), `on-reply names laya: ${bot.lines}`)
+    assert.ok(bot.lines.join(' ').includes('off without players'), `on-reply names off: ${bot.lines}`)
     bot.players = {}
     for (let i = 0; i < 3; i++) await ticker.tick()
-    assert.equal(ticker.getBrainEngine(), 'laya', 'downgraded without players')
+    assert.equal(ticker.getBrainEngine(), 'off', 'downgraded without players')
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
     await ticker.tick()
     assert.equal(ticker.getBrainEngine(), 'jev', 'restored on join')
@@ -169,20 +169,10 @@ describe('autonomous mode', () => {
   })
 
   it('downgraded brains keep plan() while the key exists (vmzq.5 exemption)', async () => {
-    // To laya: the tick ask steps down, the planner still reaches JEV.
-    process.env.BRAIN_URL = 'http://laya:8000/v1/systemone'
+    // Off: stub decide, planner attached.
+    process.env.BRAIN_URL = 'https://api.typesafe.ai/v1/systemone'
     process.env.TYPESAFE_API_KEY = 'k'
     const bot = mockBot()
-    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
-    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev' })
-    handleChat(bot, ticker, 'Steve', 'brain jev')
-    handleChat(bot, ticker, 'Steve', 'autonomous on')
-    bot.players = {}
-    for (let i = 0; i < 3; i++) await ticker.tick()
-    assert.equal(ticker.getBrainEngine(), 'laya')
-    assert.equal(typeof bot._tickerCtx.brain.plan, 'function', 'laya-stepped-down brain keeps plan()')
-    // To off: stub decide, planner attached.
-    process.env.BRAIN_URL = 'https://api.typesafe.ai/v1/systemone'
     const bot2 = mockBot()
     bot2.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
     const ticker2 = createTicker({ bot: bot2, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev' })

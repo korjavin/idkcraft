@@ -464,28 +464,6 @@ describe('configurable brain endpoint (laya sidecar)', () => {
     assert.deepEqual(decision, { action: 'follow', sprint: false, source: 'laya' })
   })
 
-  it('(b) makeBrain picks hybrid for BRAIN_URL, stub for empty env', () => {
-    assert.equal(makeBrain({ BRAIN_URL: LAYA }).name, 'hybrid')
-    assert.equal(makeBrain({}).name, 'stub')
-  })
-
-  it('(c) BRAIN_TIMEOUT_MS bounds a hanging call on a hard state', async () => {
-    const hanging = (url, opts) => new Promise((resolve, reject) => {
-      opts.signal.addEventListener('abort', () => reject(new Error('aborted')))
-    })
-    const origFetch = global.fetch
-    global.fetch = hanging
-    try {
-      const brain = makeBrain({ BRAIN_URL: LAYA, BRAIN_TIMEOUT_MS: '50' })
-      const t0 = Date.now()
-      // 82i: hostile fact joined — a bare count is a phantom crowd (easy) now.
-      const decision = await brain.decide({ nearby_hostiles: 3, hostile_distance: 2, distance_to_player: 5.6, player_moving: false, bot_health: 20 })
-      assert.ok(Date.now() - t0 < 1000, 'aborted near the 50 ms deadline')
-      assert.equal(decision.source, 'stub-fallback')
-    } finally {
-      global.fetch = origFetch
-    }
-  })
   it('(d) easy states never touch the network', async () => {
     let calls = 0
     const origFetch = global.fetch
@@ -502,13 +480,13 @@ describe('configurable brain endpoint (laya sidecar)', () => {
 })
 
 describe('makeBrain', () => {
-  it('picks stub without a key and hybrid with a key', () => {
-    assert.equal(makeBrain({}).name, 'stub')
-    assert.equal(makeBrain({ TYPESAFE_API_KEY: '' }).name, 'stub')
-    assert.equal(makeBrain({ TYPESAFE_API_KEY: 'x' }).name, 'hybrid')
-  })
-  it('picks hybrid for BRAIN_URL', () => {
-    assert.equal(makeBrain({ BRAIN_URL: 'http://laya:8000/v1/systemone' }).name, 'hybrid')
+  it('is always the stub: no tick ask with a key or a BRAIN_URL (vhlb.5)', () => {
+    for (const env of [{}, { TYPESAFE_API_KEY: '' }, { TYPESAFE_API_KEY: 'x' }, { BRAIN_URL: 'http://laya:8000/v1/systemone' }, { BRAIN_URL: JEV_ENDPOINT, TYPESAFE_API_KEY: 'x' }]) {
+      const b = makeBrain(env)
+      assert.equal(b.name, 'stub')
+      assert.equal(b.ask, undefined)
+    }
+    assert.equal(typeof makeBrain({ TYPESAFE_API_KEY: 'x' }).plan, 'function', 'key keeps plan()')
   })
 })
 
