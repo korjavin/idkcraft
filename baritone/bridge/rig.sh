@@ -58,8 +58,11 @@ done
 docker exec "$RIG" rcon-cli "op $BOT"
 sh "$HERE/../client.sh" start "$PORT" "$BOT" || exit 2
 WORKER_STARTED=1
-# neuc.2 deleted rig-goto.js with the console backend; hold the rig up for
-# manual/acceptance runs (BOT_BODY=baritone node bot/src/index.js attaches
-# to this client) until neuc.5 brings the real harness.
+# neuc.2 deleted rig-goto.js with the console backend; hold the rig up
+# until neuc.5 brings the real harness. NOTE: the bot cannot attach yet —
+# this publishes only the console ($BRIDGE_PORT -> in-container 7777), not
+# the mod RPC 7778, and the spike image has no mod (.1 builds it). Once it
+# does: BRIDGE_CONSOLE_PORT=$BRIDGE_PORT plus whatever publishes the RPC
+# (bot BRIDGE_PORT means the RPC port, not this script's console publish).
 echo "rig z up: Paper :$PORT, client $BOT; Ctrl-C to stop"
 while :; do sleep 60; done
