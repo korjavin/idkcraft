@@ -66,11 +66,31 @@ describe('bridge look/lookAt (idkcraft-neuc.9)', () => {
     bot.pathfinder.setGoal(new goals.GoalNear(10, 64, 10, 1))
     await tick()
     assert.equal(bot.pathfinder.isMoving(), true)
+    const seqBefore = transport.state.baritoneSeq
     bot.attack({ id: 42 })
     await tick(60)
     assert.deepEqual(transport.state.attacks, [42])
     assert.deepEqual(transport.state.baritonePauses, ['#pause', '#resume'])
     assert.equal(bot.pathfinder.isMoving(), true) // goal survived the pause
+    assert.equal(transport.state.baritoneSeq, seqBefore) // and was NOT re-issued (fresh post-resume status)
+  })
+
+  it('a refresh during a pause does not verdict the live goal', async () => {
+    let transport
+    ;({ transport, bot } = await lookBot())
+    bot.pathfinder.setGoal(new goals.GoalNear(10, 64, 10, 1))
+    await tick()
+    let resets = 0
+    bot.on('path_reset', () => { resets++ })
+    transport.state.baritoneStatus = { id: bot._goalId, pathing: false, last: 'success' }
+    transport.state.baritonePhase = 1
+    bot._pausedDepth = 1 // withBaritonePaused outstanding
+    await bot.refresh()
+    assert.equal(resets, 0)
+    assert.equal(bot.pathfinder.isMoving(), true)
+    bot._pausedDepth = 0
+    await bot.refresh()
+    assert.equal(resets, 1) // the same verdict lands once the pause lifts
   })
 
   it('re-issues the latched goal when Baritone drops it silently during a pause', async () => {

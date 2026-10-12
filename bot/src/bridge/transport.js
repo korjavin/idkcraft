@@ -241,6 +241,11 @@ class FakeTransport extends EventEmitter {
         return { id: null }
       }
       case 'baritone.status':
+        // While #pause holds, a live goal reads pathing:false with no
+        // verdict yet — the shape the adapter's re-issue check must NOT
+        // mistake for a dropped goal once #resume lands (the mod reads
+        // pathing fresh on the client thread, post-resume).
+        if (s.baritonePaused) return { id: s.baritoneId, pathing: false, last: 'none' }
         if (s.baritonePhase === 0) { s.baritonePhase = 1; return { id: s.baritoneId, pathing: true, last: 'none' } }
         return s.baritoneStatus || { id: null, pathing: false, last: 'none' }
       default:
