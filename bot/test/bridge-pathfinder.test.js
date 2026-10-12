@@ -84,15 +84,21 @@ describe('goal translation (pathfinder -> Baritone)', () => {
     assert.equal(goalToBaritone(place(), new Vec3(10, 64, 8)), '#goto 8 8') // bot east
     assert.equal(goalToBaritone(place(), new Vec3(7, 64, 3)), '#goto 7 7') // bot north
     assert.equal(goalToBaritone(place(), new Vec3(7, 70, 8)), '#goto 8 8') // bot above: descend beside
-    // Above the feet: GoalBlock — pillar to reach walls and roofs.
+    // Roof height: GoalBlock — pillar to reach, like v1's executor.
     assert.equal(goalToBaritone(place(), new Vec3(10, 60, 8)), '#goto 8 64 8')
+    // Near-above (rows 2-3): GoalXZ — v1 places those from the ground.
+    assert.equal(goalToBaritone(place(), new Vec3(10, 62, 8)), '#goto 8 8')
     assert.equal(
       goalToBaritone(new goals.GoalLookAtBlock(new Vec3(7, 64, 8), world), new Vec3(4, 64, 8)),
       '#goto 6 8',
     )
-    // The step lands on us: null, never a silent in-goal #goto.
+    // Our own column at/below feet level: null, never a silent in-goal #goto.
     assert.equal(
       goalToBaritone(new goals.GoalLookAtBlock(new Vec3(1, 64, 0), world), new Vec3(0, 64, 0)),
+      null,
+    )
+    assert.equal(
+      goalToBaritone(new goals.GoalLookAtBlock(new Vec3(1, 64, 0), world), new Vec3(0, 70, 0)),
       null,
     )
     assert.equal(goalToBaritone(place(), null), null) // no safe side without feet
@@ -335,8 +341,27 @@ describe('already-satisfied goals succeed without a command (revmux 01 core-1)',
     const g = new goals.GoalLookAtBlock(new Vec3(0, 65, 0), null)
     bot.pathfinder.setGoal(g)
     await sleep(10)
-    assert.equal(transport.state.baritone, '#goto 1 65 0') // +x side, GoalBlock above
+    assert.equal(transport.state.baritone, '#goto 1 0') // +x side, GoalXZ near-above
     assert.deepEqual(seen.statuses, [])
+  })
+
+  it('a below-feet neighbour column fails visibly, never silently', async () => {
+    // Cardinally adjacent in XZ, p below: GoalXZ would target our own column.
+    const { transport: t2, bot: b2 } = pathBot({
+      pos: { x: 0, y: 70, z: 0, yaw: 0, pitch: 0, onGround: true },
+    })
+    const seen2 = taps(b2)
+    await b2.start({ pollMs: 0 })
+    try {
+      const g = new goals.GoalLookAtBlock(new Vec3(1, 64, 0), { raycast: () => null })
+      b2.pathfinder.setGoal(g)
+      await sleep(10)
+      assert.equal(t2.state.baritone, null)
+      assert.deepEqual(seen2.statuses, ['noPath'])
+      assert.deepEqual(seen2.resets, ['noPath'])
+    } finally {
+      await b2.stop()
+    }
   })
 
   it('adjacent with a clean isEnd=false fails visibly, never silently', async () => {

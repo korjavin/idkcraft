@@ -98,14 +98,18 @@ function goalToBaritone(goal, from) {
     if (dx === 0 && dz === 0) nx = px + 1 // above/below: deterministic side
     else if (Math.abs(dx) >= Math.abs(dz)) nx = px + Math.sign(dx)
     else nz = pz + Math.sign(dz)
-    // The step lands on us (cardinally adjacent with a clean isEnd=false):
-    // an in-goal #goto is answered with silence, so fail visibly instead.
-    if (nx === fx && py === fy && nz === fz) return null
-    // Above the feet (walls, roofs): GoalBlock, Baritone pillars to reach
-    // like v1's executor does. Level or below (fills, floors, table look):
-    // GoalXZ stands on the surface beside — never into solid ground
-    // (Baritone would dig the stand cell out) or up into air.
-    if (py > fy) return `#goto ${nx} ${py} ${nz}`
+    // Our own column at/below feet level: GoalXZ counts any Y in it, so
+    // Baritone answers an in-goal #goto with silence — fail visibly
+    // instead. (Above the feet the GoalBlock below still needs the climb.)
+    if (nx === fx && nz === fz && py <= fy) return null
+    // Only a roof-height cell needs the climb: GoalBlock, Baritone pillars
+    // like v1's executor does when no ground node is in range. Anything
+    // else stands on the surface beside via GoalXZ — never into solid
+    // ground (Baritone would dig the stand cell out), air, or a needless
+    // scaffold pillar where v1 places from the ground.
+    const range = (goal.options && typeof goal.options.range === 'number') ? goal.options.range
+      : (typeof goal.reach === 'number' ? goal.reach : 4)
+    if (py - fy > range - 1) return `#goto ${nx} ${py} ${nz}`
     return `#goto ${nx} ${nz}`
   }
   return null
