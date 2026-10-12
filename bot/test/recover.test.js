@@ -694,6 +694,13 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
       assert.equal(calls[0].state.target.player, 'online')
     })
 
+    it('call_player stays on the plan menu when it is the FSM pick (enclosed high-goal pit)', () => {
+      const facts = { goalDy: 5, goalDist: 5, playerOnline: true, walls: 4, last: 'sidestep:failed:no-progress' }
+      const names = ['sidestep', 'dig_through', 'wait', 'call_player']
+      assert.equal(recover.recoverFsm(facts, names), 'call_player')
+      assert.ok(recover.askMenu(facts, names).includes('call_player'), `menu: ${recover.askMenu(facts, names)}`)
+    })
+
     it('planner error falls back to the FSM pick', async () => {
       const bot = mkBot()
       const { ctx, settle } = planCtx(failedRec())

@@ -2842,6 +2842,7 @@ module.exports = {
   shapeRecoverMenu,
   chooseRecovery,
   PLAN_HOLD_MS,
+  askMenu,
   setStuck,
   restGaveUpHolds,
   clearRelocatedRestMark,
