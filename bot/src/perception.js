@@ -1,5 +1,7 @@
 'use strict'
 
+const worker = require('./worker')
+
 const HOSTILE_NAMES = new Set([
   'zombie', 'skeleton', 'spider', 'creeper', 'enderman', 'witch',
   'slime', 'husk', 'stray', 'drowned', 'pillager', 'phantom', 'blaze',
@@ -125,7 +127,10 @@ function stateKey(state) {
 // ('.Steve') while the 'chat' event carries the name without it ('Steve'),
 // so a direct lookup misses. Resolve exact, then '.'+name, then a
 // case-insensitive match ignoring the leading dot.
-function resolvePlayer(bot, name, uuid) {
+function resolvePlayerRaw(bot, name, uuid) {
+  // Raw roster on purpose: the wrapper below resolves first, then maps the
+  // worker to nothing — the sieve would hide it before the Floodgate/UUID
+  // matching runs, and callers must see null, not the input name back.
   const players = (bot && bot.players) || {}
   // UUID first (idkcraft-8gf): Java 'X' and Bedrock '.X' online together are
   // indistinguishable by chat name, so the sender UUID from the message
@@ -147,17 +152,24 @@ function resolvePlayer(bot, name, uuid) {
   return name
 }
 
+// Hybrid worker (idkcraft-jlda.2): the worker is not a player — anything
+// resolving to it (a 'follow me' from it, a stale memory name) resolves to
+// nothing instead. A no-op until WORKER_NAME is set.
+function resolvePlayer(bot, name, uuid) {
+  const real = resolvePlayerRaw(bot, name, uuid)
+  return worker.isWorker(real) ? null : real
+}
+
 function findTarget(bot, followName) {
   if (followName) {
     const real = resolvePlayer(bot, followName)
-    const p = bot.players && bot.players[real]
+    const p = worker.players(bot)[real]
     return (p && p.entity) || null
   }
   let best = null
   let bestDist = Infinity
-  for (const player of Object.values(bot.players)) {
+  for (const player of Object.values(worker.players(bot))) {
     if (!player.entity) continue
-    if (player.username === bot.username) continue
     const d = bot.entity.position.distanceTo(player.entity.position)
     if (d < bestDist) {
       bestDist = d

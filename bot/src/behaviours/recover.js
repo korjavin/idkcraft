@@ -22,6 +22,7 @@ const metrics = require('../metrics')
 const danger = require('../danger')
 const doors = require('../doors')
 const { botPos, denyReason, logDeny, protectedReason } = require('./util')
+const worker = require('../worker')
 const { waterUpRun, countBuckets, wall2At, findCombo } = require('./waterup')
 const castle = require('../castle') // yardRing only (pure, no requires of its own)
 
@@ -735,16 +736,15 @@ function recoverFacts(bot, ctx, state, target) {
   let playerDist = null
   let playerName = (target && target.username) || ((ctx && ctx.lead && ctx.lead.by) || null)
   try {
-    const players = (bot && bot.players) || {}
-    for (const key of Object.keys(players)) {
-      if (key === bot.username) continue
+    const roster = worker.players(bot)
+    for (const key of Object.keys(roster)) {
       playerOnline = true
-      const ent = players[key] && players[key].entity
+      const ent = roster[key] && roster[key].entity
       if (ent && ent.position && bp) {
         const d = Math.hypot(ent.position.x - bp.x, ent.position.y - bp.y, ent.position.z - bp.z)
         if (playerDist === null || d < playerDist) {
           playerDist = d
-          playerName = (players[key] && players[key].username) || key
+          playerName = (roster[key] && roster[key].username) || key
         }
       }
     }
@@ -2180,10 +2180,7 @@ function goalClose(a, b) {
 
 function anyPlayerOnline(bot) {
   try {
-    const players = (bot && bot.players) || {}
-    for (const key of Object.keys(players)) {
-      if (key !== bot.username) return true
-    }
+    return Object.keys(worker.players(bot)).length > 0
   } catch (_) { /* roster best-effort */ }
   return false
 }

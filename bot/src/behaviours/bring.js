@@ -3,6 +3,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch, resolveFindIds, ORE_NAMES, MAX_DIG_DEPTH, MAX_DIG_DISTH } = require('./scout')
 const { countItems } = require('../perception')
+const worker = require('../worker')
 const resources = require('../resources')
 const fightMod = require('./fight')
 const exploreMod = require('./explore')
@@ -1534,7 +1535,8 @@ async function bring(bot, ctx, target, state) {
     // Self orders keep the goods: no walk, no toss (jr2.2 wool stays packed
     // for the beds). The owning step reads the pack, not the order.
     if (o.self) { done(bot, ctx); return }
-    const p = bot.players && bot.players[o.by] && bot.players[o.by].entity
+    const giver = worker.players(bot)[o.by]
+    const p = giver && giver.entity
     if (!p || !p.position) {
       // 3a7 honesty: no coordinates for an out-of-range player — say where
       // the bot is and hold the drops until the player is back.

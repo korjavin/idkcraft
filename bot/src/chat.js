@@ -13,6 +13,7 @@ const homeMod = require('./behaviours/home')
 const { denyReason } = require('./behaviours/util')
 const blueprint = require('./castle')
 const stepMod = require('./step')
+const worker = require('./worker')
 const castleMod = require('./behaviours/castle')
 const taskMod = require('./task')
 const Vec3 = require('vec3')
@@ -291,6 +292,9 @@ function clearPendingSearch(ctx) {
 
 function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
+  // Hybrid worker (idkcraft-jlda.2): its chat is Baritone/console noise,
+  // never an order — out at once, before the resolve and the log line.
+  if (worker.isWorker(username)) return
   const playerName = resolvePlayer(bot, username, senderUuid)
   const msg = message.toLowerCase().trim()
   // Puppet sessions (idkcraft-jlw7): the only incoming-chat tag — session
@@ -298,7 +302,8 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   console.log(`chat from=${playerName} msg=${msg}`)
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(playerName)
-    const seen = bot.players && bot.players[playerName] && bot.players[playerName].entity
+    const seenEntry = worker.players(bot)[playerName]
+    const seen = seenEntry && seenEntry.entity
     if (seen) {
       bot.chat(`Following ${playerName}`)
     } else {
@@ -341,7 +346,8 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       if (reply) bot.chat(reply)
     }
   } else if (msg === 'build here') {
-    const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
+    const speakerEntry = worker.players(bot)[playerName]
+    const speaker = speakerEntry && speakerEntry.entity
     const pos = speaker && speaker.position
     // b2o: out of tracking range is an answer, not silence — the server
     // sends no coordinates and the bot cannot walk there.
@@ -394,7 +400,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     const followed = ticker && typeof ticker.getFollowName === 'function' ? ticker.getFollowName() : null
     const allowed = ticker && playerName && (followed
       ? playerName === followed
-      : !!(bot.players && bot.players[playerName]))
+      : !!worker.players(bot)[playerName])
     if (!allowed) return
     const arg = msg.slice(5).trim()
     if (!arg) {
@@ -438,7 +444,8 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     if (m) {
       if (bot._tickerCtx) clearPendingSearch(bot._tickerCtx)
       const name = m[1]
-      const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
+      const speakerEntry = worker.players(bot)[playerName]
+      const speaker = speakerEntry && speakerEntry.entity
       const speakerY = speaker && typeof speaker.position?.y === 'number' ? speaker.position.y : null
       // No speaker entity (out of tracking range): judge depth from the
       // bot's own Y, the same fallback the ranking uses — never silently 0.
@@ -571,7 +578,8 @@ function castleChat(bot, ticker, playerName, cmd) {
   const st = ctx.castle
   if (cmd === 'build castle') {
     if (st) return `I already have a castle at ${at(st.site)} — say castle forget first`
-    const speaker = bot.players && bot.players[playerName] && bot.players[playerName].entity
+    const speakerEntry = worker.players(bot)[playerName]
+    const speaker = speakerEntry && speakerEntry.entity
     const pos = speaker && speaker.position
     if (!pos || typeof pos.x !== 'number') return "I can't see you, come closer"
     // The spot in front of the speaker first; else the bot searches the

@@ -25,6 +25,7 @@ const dangerMod = require('./danger')
 const exploreMod = require('./behaviours/explore')
 const metrics = require('./metrics')
 const stepMod = require('./step')
+const worker = require('./worker')
 
 const fightMod = require('./behaviours/fight')
 const retreatMod = require('./behaviours/retreat')
@@ -87,6 +88,9 @@ const ADOPT_GRACE = 5
 const FAR_FROM_SPAWN = 64
 
 function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, followName = '', leaveAfterMs = 0, onLeave = null, now = () => Date.now(), brainEngine = '', greeter = null, autonomous = false }) {
+  // Hybrid worker (idkcraft-jlda.2): env read once here; empty WORKER_NAME
+  // leaves every worker export a no-op (zero behaviour diff).
+  try { worker.configure(process.env) } catch (_) { /* worker best-effort */ }
   // Greeting gesture (v92): injectable for fake-clock tests, real otherwise.
   const greet = greeter || createGreeter()
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
@@ -321,7 +325,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     const bringing = decision.action === 'bring' && (decision.by || (ctx.bring && ctx.bring.by))
     const name = bringing || followName
     if (!name) return
-    const ent = bot.players && bot.players[name] && bot.players[name].entity
+    const greeted = worker.players(bot)[name]
+    const ent = greeted && greeted.entity
     const bp = bot.entity && bot.entity.position
     if (!ent || !ent.position || !bp) return
     let d = null
@@ -483,6 +488,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // at most one cloned packet per second, only on the airborne + storm +
     // zero-disp signature; see unpin.js for the ceiling. Best-effort.
     try { unpin.unpinTick(bot, ctx, now()) } catch (_) { /* unpin best-effort */ }
+    // Hybrid worker (idkcraft-jlda.2): head-owned join, ahead of every
+    // branch like unpin. Never awaited (send never rejects); a no-op until
+    // WORKER_NAME is set.
+    try { worker.ensureJoined(bot, now()) } catch (_) { /* worker best-effort */ }
     // Door reflex (idkcraft-6xno): open the plan's next door within reach,
     // shut our own openings behind us. Reads only + activateBlock, so it
     // runs ahead of every branch (paused, alone, normal) like unpin.
@@ -559,8 +568,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // server (roster, not visibility — walking out of render distance is
     // normal). Falls through to the normal path with target=null:
     // buildState handles null, and the work check below swaps idle steps.
-    const rosterOnline = bot.players &&
-      Object.keys(bot.players).some((n) => n !== bot.username)
+    const rosterOnline = Object.keys(worker.players(bot)).length > 0
     autoBrain(rosterOnline)
     // Alone-explore cap (dxl x atl.1): with nobody online the spiral must
     // not wander past AUTONOMOUS_EXPLORE_RADIUS — new chunks bloat the
@@ -571,7 +579,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // asked the bot to come, so reunion outranks cave work (3a7 keeps work
     // for an unseen follower; this walks instead once N trips). Pure work
     // mode with nobody waiting keeps running.
-    const followWaiting = !target && followName && bot.players && bot.players[resolvePlayer(bot, followName)]
+    const followWaiting = !target && followName && worker.players(bot)[resolvePlayer(bot, followName)]
     // A visible player with skipped work resumes it at once (one-shot):
     // sighting is the normal end of the homing walk, arrival the other.
     if (target && ctx.resumeWork && !followName) startWork()
@@ -1244,16 +1252,24 @@ function isAmbiguousPing(res) {
 // same throttle style as local-idle. selfConnected (the confirmLeave ping,
 // sent while we are on the server) decides the empty-sample case: the one
 // online is us.
-function playersOccupied(res, username, selfConnected = false) {
+function playersOccupied(res, username, selfConnected = false, workerOn = false) {
   const p = res && res.players
   if (!p || typeof p.online !== 'number' || p.online <= 0) return false
-  if (p.online > 1) return true
+  // Hybrid worker (idkcraft-jlda.2): the ping count includes the worker while
+  // it is on, so confirmLeave passes workerOnline(bot) and one head is
+  // subtracted first. Only above 1: at exactly 1 the counts are mid-flap and
+  // the sample/selfConnected rules below are the safer read. The sample
+  // filter is unconditional — a stray worker name in a visible sample never
+  // counts (waitForPlayers' guard: leave() ran, but the bridge may have been
+  // down at quit).
+  const online = workerOn && p.online > 1 ? p.online - 1 : p.online
+  if (online > 1) return true
   // online==1 with a visible sample: only our name means still empty — our
   // just-quit ghost off-server (the server has not processed our disconnect
   // yet while our local 'end' already fired), or ourselves on the
   // confirmLeave ping. Anyone else means occupied.
   const sample = pingSampleNames(res)
-  if (sample.length > 0) return sample.some((name) => name !== username)
+  if (sample.length > 0) return sample.some((name) => name !== username && !worker.isWorker(name))
   // online==1 with no sample at all: a hidden-sample server
   // (hide-online-players empties it). While connected the one online is
   // us; off-server it is our ghost or one real player — joining is the
@@ -1299,7 +1315,22 @@ let termSaver = null
 try {
   process.once('SIGTERM', () => {
     try { if (termSaver) termSaver() } catch (_) { /* exit anyway */ }
-    process.exit(143)
+    // Hybrid worker (idkcraft-jlda.2): best-effort disconnect first, so the
+    // worker never keeps the server "occupied" after the head dies. leave()
+    // always settles (<=1 s) and never rejects. Unconfigured the exit stays
+    // synchronous, exactly as before.
+    if (!worker.configured()) {
+      process.exit(143)
+      return
+    }
+    try {
+      Promise.resolve(worker.leave()).then(
+        () => process.exit(143),
+        () => process.exit(143)
+      )
+    } catch (_) {
+      process.exit(143)
+    }
   })
 } catch (_) { /* no process object in some harnesses */ }
 
@@ -1315,10 +1346,9 @@ try {
 // Pure: roster reads only, so unit tests pin every branch.
 function startupFollow(bot, memName) {
   try {
-    const players = (bot && bot.players) || {}
     if (typeof memName === 'string' && memName) {
       const real = resolvePlayer(bot, memName)
-      if (real && players[real]) return real
+      if (real && worker.players(bot)[real]) return real
     }
   } catch (_) { /* roster best-effort */ }
   return ''
@@ -1343,11 +1373,15 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // flap join/leave every grace period. Standing down re-arms the streak.
     async function confirmLeave() {
       let occupied = false
-      try { occupied = playersOccupied(await pingFn({ host, port, closeTimeout: 10000 }), username, true) } catch (_) { occupied = false }
+      try { occupied = playersOccupied(await pingFn({ host, port, closeTimeout: 10000 }), username, true, worker.workerOnline(bot)) } catch (_) { occupied = false }
       if (occupied) { ticker.rearm(); return }
       console.log('leaving: nobody online')
       wantQuit = true
       ticker.destroy()
+      // Hybrid worker (idkcraft-jlda.2): disconnect it before we quit, so it
+      // never keeps the server "occupied" alone. Fire-and-forget (the ping
+      // guards above absorb the in-flight window); a no-op until configured.
+      try { void worker.leave() } catch (_) { /* worker best-effort */ }
       try { bot.quit('nobody online') } catch (_) { /* already gone */ }
     }
 
@@ -1366,7 +1400,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       try {
         const bp = bot.entity && bot.entity.position
         const sp = bot.spawnPoint
-        const alone = tickCtx && tickCtx.autonomous && !Object.keys(bot.players || {}).some((n) => n !== bot.username)
+        const alone = tickCtx && tickCtx.autonomous && Object.keys(worker.players(bot)).length === 0
         if (tickCtx && bp && sp && !alone && Math.hypot(bp.x - sp.x, bp.y - sp.y, bp.z - sp.z) > FAR_FROM_SPAWN && !findTarget(bot, followName)) {
           tickCtx.unseenTicks = UNSEEN_HOME_TICKS
         }

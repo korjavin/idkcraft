@@ -34,6 +34,7 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
+const worker = require('../worker')
 const danger = require('../danger')
 const stuck = require('../stuck')
 const util = require('./util')
@@ -395,7 +396,7 @@ function cellOccupiedSelf(bot, x, y, z) {
 
 function cellOccupiedByPlayer(bot, x, y, z) {
   try {
-    for (const player of Object.values((bot && bot.players) || {})) {
+    for (const player of Object.values(worker.players(bot))) {
       if (player && player.entity && covers(player.entity, x, y, z)) return true
     }
   } catch (_) { /* unverifiable: treat as free, the place may refuse */ }
@@ -468,7 +469,7 @@ function threatenedSelf(bot, x, y, z) {
 
 function threatenedByPlayer(bot, x, y, z) {
   try {
-    for (const player of Object.values((bot && bot.players) || {})) {
+    for (const player of Object.values(worker.players(bot))) {
       if (player && player.entity && threatens(player.entity, x, y, z)) return true
     }
   } catch (_) { /* unverifiable: treat as free, the dig may refuse */ }
