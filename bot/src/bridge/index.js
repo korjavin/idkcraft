@@ -11,6 +11,7 @@
 const { EventEmitter } = require('node:events')
 const net = require('node:net')
 const { BridgeTransport } = require('./transport')
+const { refreshEntities, handleBridgeEvent } = require('./entities') // idkcraft-neuc.3: entities+roster fold
 
 function keyOf(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
@@ -353,6 +354,9 @@ class BaritoneBot extends EventEmitter {
       this.heldItem = this._inventory[0] || null // spike: selected slot tracking is plan work
     } catch (_) { /* inventory best-effort per round */ }
     try {
+      await refreshEntities(this, this.transport) // idkcraft-neuc.3: one entities.list+roster.get per round
+    } catch (_) { /* entities best-effort per round */ }
+    try {
       // Goal-id attribution (idkcraft-neuc.4): a status is ours only when
       // its id is the latched one. Anything else — older, foreign, or
       // arriving while no goal is live (setGoal/stop invalidate
@@ -667,6 +671,7 @@ class BaritoneBot extends EventEmitter {
   }
 
   _handleEvent(method, params) {
+    if (handleBridgeEvent(this, method, params)) return // idkcraft-neuc.3: player.joined/left, entity.gone
     const p = params || {}
     switch (method) {
       case 'chat':

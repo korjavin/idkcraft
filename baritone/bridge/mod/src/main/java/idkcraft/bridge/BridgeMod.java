@@ -25,6 +25,7 @@ public class BridgeMod implements ClientModInitializer {
         //       MinecraftClient.getInstance(),
         //       BaritoneAPI.getProvider().getPrimaryBaritone());
         //   server.start();
+        //   Entities.install(server); // idkcraft-neuc.3 (uncomment with the block when .1 lands)
         //   ClientPlayConnectionEvents.DISCONNECT.register((h, c) -> server.dropState());
         //   ClientReceiveMessageEvents.GAME.register((msg, overlay) ->
         //       server.push("chat", ChatCodec.of(msg)));

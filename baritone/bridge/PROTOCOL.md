@@ -225,3 +225,45 @@ digTime (enchantments read empty: prismarine-nbt is not a direct dep —
 ranking may prefer an unenchanted tool, digs still work); getPathTo is a
 sync `{status:'noPath',path:[]}` stub (no live callers — bring.js names
 it as a future upgrade path).
+
+## entities.list / roster.get (idkcraft-neuc.3)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Entities.java`
+(`Entities.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/entities.js` (`refreshEntities` once per adapter poll
+round, `handleBridgeEvent` first in the adapter's event router).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `entities.list` | — | `{entities:[{id,uuid,type,name?,displayName,kind,pos{x,y,z},vel{x,y,z},yaw,pitch,health?,onGround,pose,self?}]}` | `bot.entities[id]` |
+| `roster.get` | — | `{players:[{name,uuid,ping,gameMode}]}` | `bot.players[name]` |
+
+`type` is `'player'` or the mob registry id (e.g. `'zombie'`);
+`name` is set on players only (tab-list name, Floodgate dots untouched);
+`kind` is `player|hostile|animal|other` from the client's SpawnGroup
+(MONSTER→hostile, MISC→other, players→player, rest→animal);
+`gameMode` is the numeric mode id (null when the entry carries none);
+`self:true` tags the local player when the client world lists it.
+
+Events: `player.joined {name,uuid}` / `player.left {name,uuid}` (tab-list
+diff per client tick), `entity.gone {id}` (best-effort; the list diff is
+the reliable channel — perception tolerates missing ids).
+
+Node fold rules: entity objects mutate in place (stable refs across polls;
+gone ones emit `entityGone`, flip `isValid=false`, unlink, delete); roster
+entries merge with the matching player entity by uuid with `entity:null`
+when out of range; roster/notification diffs emit `playerJoined` /
+`playerLeft` / `entitySpawn` exactly once (whichever channel runs first
+wins); `bot.entity` stays state.get-fed and is aliased under
+`bot.entities[selfId]` when the wire tags it (mineflayer parity);
+`bot.nearestEntity(filter)` mirrors mineflayer (skips `bot.entity`).
+Non-player `entity.type` comes from the passed-through registry
+(zombie→`hostile`, arrow→`projectile`, like v1; `flat.js` skips
+`projectile`), kind bucket as fallback. Mob height/width come from the
+same registry (zero bridge traffic); raw entity metadata is NOT streamed
+yet (sheep wool reads fail open). A null network handler (real
+disconnect) clears both snapshots; a null world with a live handler
+serves last-good. BridgeServer seam required: `onClientTick(Runnable)`
+plus `register`/`push` over plain Maps/Lists (.1 owns it). Node-side
+wiring is landed (poll + router in `bot/src/bridge/index.js`); the mod
+half (`Entities.install`) goes live with .1's `BridgeServer`.

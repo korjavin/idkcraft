@@ -337,12 +337,36 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     })
   })
 
-  it('creation with loaded far shells: buried stash + exposed far verdict over ticks', async () => {
+  it('creation with a diggable buried 48 stash: commits at once, no far shells (jlda.11 early-commit)', async () => {
+    // The exposed vein at 60 stays unscanned: the diggable stash in hand
+    // commits immediately instead of running the full find verdict.
     const names = {
       '0,59,0': 'iron_ore', '60,64,0': 'iron_ore', '61,64,0': 'air',
       '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
     }
     const bot = mockBot({ spots: [pos(0, 59, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const { seen, brain } = countingBrain('walk_exposed') // must never be consulted
+    const ticker = tickerFor(bot, brain)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 5 blocks away'])
+    assert.equal(bot._tickerCtx.pendingSearch, null, 'no far search for a diggable stash')
+    assert.equal(seen.length, 0, 'only option asks nothing')
+    assert.deepEqual([bot._tickerCtx.bring.pos.x, bot._tickerCtx.bring.pos.y, bot._tickerCtx.bring.pos.z], [0, 59, 0])
+    assert.deepEqual(bot._tickerCtx.bring.verdict, {
+      pick: 'buried',
+      win: { x: 0, y: 59, z: 0, cost: 5 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec },
+      rival: null,
+    })
+  })
+
+  it('creation with a gated buried 48 stash: still defers to the far shells (jlda.11)', async () => {
+    // (30,40,0): 24 down at distH 30 — past the chv gate, so no dig is in
+    // play and the shells still run; the open vein at 60 wins over ticks.
+    const names = {
+      '30,40,0': 'iron_ore', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(30, 40, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
     const { seen, brain } = countingBrain('walk_exposed')
     const ticker = tickerFor(bot, brain)
     handleChat(bot, ticker, 'P', 'bring me iron')
@@ -352,13 +376,59 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
     assert.equal(bot._tickerCtx.pendingSearch, null)
     assert.equal(seen.length, 0, 'clear winner asks nothing')
-    assert.ok(bot.lines.includes('going for 3 iron_ore, 60 blocks away (exposed)'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('going for 3 iron_ore, 60 blocks away'), `lines: ${bot.lines}`)
     assert.deepEqual([bot._tickerCtx.bring.pos.x, bot._tickerCtx.bring.pos.y, bot._tickerCtx.bring.pos.z], [60, 64, 0])
     assert.deepEqual(bot._tickerCtx.bring.verdict, {
       pick: 'exposed',
       win: { x: 60, y: 64, z: 0, cost: 60 / SOURCE_COST.walkBlocksPerSec },
-      rival: { x: 0, y: 59, z: 0, cost: 5 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec },
+      rival: null, // the gated stash is no rival
     })
+  })
+
+  it('creation with a wet buried 48 stash: still defers, walks the dry vein (jlda.11 revmux 01)', async () => {
+    // Water at y+3: above the find pre-check (+1), so the stash is wet via
+    // the column scan — early-commit stands down and the shells run; the
+    // wet-vs-dry rule then walks to the dry vein at 60.
+    const names = {
+      '0,59,0': 'iron_ore', '0,62,0': 'water', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 59, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const { seen, brain } = countingBrain('walk_exposed') // must never be consulted
+    const ticker = tickerFor(bot, brain)
+    handleChat(bot, ticker, 'P', 'bring me iron')
+    assert.deepEqual(bot.lines, ['only buried iron within 48, checking further for open ore…'])
+    assert.ok(bot._tickerCtx.pendingSearch, 'far search pending')
+    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
+    assert.equal(bot._tickerCtx.pendingSearch, null)
+    assert.equal(seen.length, 0, 'wet-vs-dry asks nothing')
+    assert.ok(bot.lines.includes('going for 3 iron_ore, 60 blocks away (exposed)'), `lines: ${bot.lines}`)
+    const o = bot._tickerCtx.bring
+    assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [60, 64, 0])
+    assert.deepEqual(o.verdict, {
+      pick: 'exposed',
+      win: { x: 60, y: 64, z: 0, cost: 60 / SOURCE_COST.walkBlocksPerSec },
+      rival: { x: 0, y: 59, z: 0, cost: 5 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec + SOURCE_COST.wetPenaltySec },
+    })
+  })
+
+  it('find phase with a wet buried 48 stash: still scans, walks the dry vein (jlda.11 revmux 01)', async () => {
+    const names = {
+      '0,59,0': 'iron_ore', '0,62,0': 'water', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
+    }
+    const bot = mockBot({ spots: [pos(0, 59, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const { seen, brain } = countingBrain('walk_exposed') // must never be consulted
+    tickerFor(bot, brain)
+    const ctx = bot._tickerCtx
+    ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'searchfar', 'wet stash scans')
+    await bring(bot, ctx, null, {})
+    assert.equal(seen.length, 0, 'wet-vs-dry asks nothing')
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 60 blocks away (exposed)'])
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
+    assert.equal(ctx.bring.phase, 'walk')
   })
 
   it('creation contested at edge 48: interim line, then one ask on the first tick', async () => {
@@ -435,14 +505,17 @@ describe('bring source choice (idkcraft-atl.15)', () => {
       source: 'test',
       ask: () => new Promise((res) => { resolveAsk = res }),
     }
+    // Empty 48 (jlda.11: a diggable buried stash no longer defers): the
+    // shells find exposed ore at 60 (15 s) against a buried rival at 55
+    // (21.75 s) — contested, so the completion asks once.
     const names = {
-      '0,60,0': 'iron_ore', '60,64,0': 'iron_ore', '61,64,0': 'air',
+      '60,64,0': 'iron_ore', '61,64,0': 'air', '55,60,0': 'iron_ore',
       '48,64,0': 'stone', '96,64,0': 'stone', '128,64,0': 'stone', '160,64,0': 'stone',
     }
-    const bot = mockBot({ spots: [pos(0, 60, 0), pos(60, 64, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
+    const bot = mockBot({ spots: [pos(60, 64, 0), pos(55, 60, 0)], names, items: PICK, playerPos: pos(30, 64, 0) })
     const ticker = tickerFor(bot, brain)
     handleChat(bot, ticker, 'P', 'bring me iron')
-    assert.deepEqual(bot.lines, ['only buried iron within 48, checking further for open ore…'])
+    assert.deepEqual(bot.lines, ['nothing within 48, widening the search for iron…'])
     const t = ticker.tick()
     await tick2()
     assert.ok(resolveAsk, 'verdict ask in flight')
@@ -463,22 +536,26 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     tickerFor(bot)
     const ctx = bot._tickerCtx
     ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: true }
-    await bring(bot, ctx, null, {})
-    assert.equal(ctx.bring.phase, 'searchfar')
-    await bring(bot, ctx, null, {})
-    assert.equal(ctx.bring.phase, 'walk')
-    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
-    assert.ok(ctx.bring.farCache, 'verdict cached')
-    // Next unit from the same spot: no rescan, same-tick commit.
+    // jlda.11: a diggable 48 stash commits without scanning, so the reuse
+    // below starts from a planted cache (an earlier full scan's verdict)
+    // instead of running the shells first.
+    ctx.bring.farCache = {
+      x: 0, y: 64, z: 0, edge: 160,
+      hit: { name: 'iron_ore', pos: pos(60, 64, 0) }, buriedHit: null,
+    }
     let scans = 0
     const inner = bot.findBlocks.bind(bot)
     bot.findBlocks = (o) => { scans++; return inner(o) }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'walk', 'cached verdict commits same tick')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
+    assert.equal(scans, 1, 'only the sync 48 scan ran')
+    // Next unit from the same spot: no rescan, same-tick commit.
     ctx.bring.pos = null
     ctx.bring.phase = 'find'
     await bring(bot, ctx, null, {})
     assert.equal(ctx.bring.phase, 'walk', 'cached verdict commits same tick')
     assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
-    assert.equal(scans, 1, 'only the sync 48 scan ran')
     // Walked off: the cache drops and the shells run again.
     names['248,64,0'] = 'stone'
     names['296,64,0'] = 'stone'
@@ -529,11 +606,14 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     tickerFor(bot)
     const ctx = bot._tickerCtx
     ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: true }
-    await bring(bot, ctx, null, {})
-    await bring(bot, ctx, null, {})
-    assert.equal(ctx.bring.phase, 'walk')
-    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [0, 59, 0])
+    // jlda.11: the first find commits the diggable 48 stash without
+    // scanning, so the cached-fallback below starts dug-out with a planted
+    // cache (an earlier full scan's buried half).
     delete names['0,59,0'] // vein dug out within 48
+    ctx.bring.farCache = {
+      x: 0, y: 64, z: 0, edge: 160, hit: null,
+      buriedHit: { name: 'iron_ore', pos: pos(60, 64, 0) },
+    }
     let scans = 0
     const inner = bot.findBlocks.bind(bot)
     bot.findBlocks = (o) => { scans++; return inner(o) }
@@ -596,11 +676,16 @@ describe('bring source choice (idkcraft-atl.15)', () => {
     tickerFor(bot)
     const ctx = bot._tickerCtx
     ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: true }
-    await bring(bot, ctx, null, {})
-    await bring(bot, ctx, null, {})
-    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
+    // jlda.11: the first find commits the diggable 48 stash without
+    // scanning, so this starts from a planted cache whose chunk unloaded.
+    ctx.bring.farCache = {
+      x: 0, y: 64, z: 0, edge: 160,
+      hit: { name: 'iron_ore', pos: pos(60, 64, 0) }, buriedHit: null,
+    }
     delete names['60,64,0'] // chunk with the cached hit unloads
     delete names['61,64,0']
+    await bring(bot, ctx, null, {})
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [60, 64, 0])
     ctx.bring.pos = null
     ctx.bring.phase = 'find'
     await bring(bot, ctx, null, {})
@@ -865,11 +950,10 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
     assert.equal(ctx.bring.phase, 'walk')
   })
 
-  // Buried-48 path (revmux 01 core-3): the stashed sync hit is a deep
-  // shaft (34 down, 93 s), the open vein at 150 a clear winner (37.6 s).
-  // Near-field (distH 0), so a feasible rival under the chv gate — the
-  // (exposed) suffix and rival facts stand. Without the exposed flag the
-  // re-read stash closes ring 70 and the verdict digs.
+  // Buried-48 path (revmux 01 core-3, jlda.11 early-commit): the stashed
+  // sync hit is a deep shaft (34 down, 93 s) the open vein at 150
+  // (37.6 s) used to beat over ticks. Near-field (distH 0), so diggable
+  // under the chv gate — the shaft now commits at once, unscanned.
   const BNAMES = {
     '0,30,0': 'iron_ore',
     '139,64,57': 'iron_ore', '140,64,57': 'air',
@@ -877,29 +961,27 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
   }
   const BSPOTS = () => [pos(0, 30, 0), pos(139, 64, 57)]
 
-  it('creation with a buried 48 stash: still walks to the open vein, no ask', async () => {
+  it('creation with a buried 48 stash: commits the shaft at once, no far shells (jlda.11 early-commit)', async () => {
+    // The 34-down shaft (93 s) wins by immediacy over the 150-block walk
+    // the shells would have found: the scan latency dominates the trade.
     const bot = mockBot({ spots: BSPOTS(), names: { ...BNAMES }, items: PICK, playerPos: pos(30, 64, 0) })
     centerAware(bot)
     const { seen, brain } = countingBrain('dig_buried') // must never be consulted
     const ticker = tickerFor(bot, brain)
     handleChat(bot, ticker, 'P', 'bring me iron')
-    assert.deepEqual(bot.lines, ['only buried iron within 48, checking further for open ore…'])
-    assert.ok(bot._tickerCtx.pendingSearch, 'far search pending')
-    assert.ok(bot._tickerCtx.pendingSearch.buried, 'buried hit stashed')
-    for (let i = 0; i < 200 && bot._tickerCtx.pendingSearch; i++) await ticker.tick()
-    assert.equal(bot._tickerCtx.pendingSearch, null)
-    assert.equal(seen.length, 0, 'clear winner asks nothing')
-    assert.ok(bot.lines.includes('going for 3 iron_ore, 150 blocks away (exposed)'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 34 blocks away'])
+    assert.equal(bot._tickerCtx.pendingSearch, null, 'no far search for a diggable stash')
+    assert.equal(seen.length, 0, 'only option asks nothing')
     const o = bot._tickerCtx.bring
-    assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [139, 64, 57])
+    assert.deepEqual([o.pos.x, o.pos.y, o.pos.z], [0, 30, 0])
     assert.deepEqual(o.verdict, {
-      pick: 'exposed',
-      win: { x: 139, y: 64, z: 57, cost: Math.hypot(139, 57) / SOURCE_COST.walkBlocksPerSec },
-      rival: { x: 0, y: 30, z: 0, cost: 34 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec },
+      pick: 'buried',
+      win: { x: 0, y: 30, z: 0, cost: 34 * SOURCE_COST.digSecPerBlock + SOURCE_COST.shaftPenaltySec },
+      rival: null,
     })
   })
 
-  it('find phase with a buried 48 stash: still walks to the open vein, no ask', async () => {
+  it('find phase with a buried 48 stash: commits the shaft at once, no far shells (jlda.11 early-commit)', async () => {
     const bot = mockBot({ spots: BSPOTS(), names: { ...BNAMES }, items: PICK, playerPos: pos(30, 64, 0) })
     centerAware(bot)
     const { seen, brain } = countingBrain('dig_buried') // must never be consulted
@@ -907,11 +989,9 @@ describe('bring exposed far shells (idkcraft-atl.19)', () => {
     const ctx = bot._tickerCtx
     ctx.bring = { kind: 'block', name: 'iron', want: 3, by: 'P', phase: 'find', have: 0, announced: false }
     await bring(bot, ctx, null, {})
-    assert.equal(ctx.bring.phase, 'searchfar')
-    await bring(bot, ctx, null, {})
-    assert.equal(seen.length, 0, 'clear winner asks nothing')
-    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 150 blocks away (exposed)'])
-    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [139, 64, 57])
+    assert.equal(seen.length, 0, 'only option asks nothing')
+    assert.deepEqual(bot.lines, ['going for 3 iron_ore, 34 blocks away'])
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [0, 30, 0])
     assert.equal(ctx.bring.phase, 'walk')
   })
 })
