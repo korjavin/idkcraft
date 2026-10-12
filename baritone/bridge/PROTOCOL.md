@@ -44,11 +44,17 @@ Events (spike): `chat {username,message}`, `death {}`, `respawn {}`,
 {status}` (`success|noPath|timeout`, from a Baritone API listener in the
 mod — the executive-poll fallback in `adapter.js#refresh` is spike-only).
 
-Status attribution (revmux 01 core-3): the spike adapter latches a goal
-generation per `setGoal` and ignores `last:'none'` (mod still
-calculating) so a stale poll never synthesises a spurious `success`
-(which would re-issue `follow.js` every tick and wedge the body). Prod
-echoes a goal id through `baritone.cmd` → `baritone.status` instead.
+Status attribution (revmux 01 core-3, 02 core-1): the spike adapter
+latches a goal generation per `setGoal`, arms a witnessed-motion flag on
+the first `pathing:true` poll, and only trusts a `pathing:false`
+terminal once motion was witnessed for THAT goal — a stale latch from a
+previous goal (or still calculating) keeps the `setGoal` latch and stays
+silent, because synthesising `success` (or even just flipping `isMoving`)
+re-issues `follow.js` every tick and the body never moves. A goal that
+fails before any poll shows motion must surface via the pushed
+`baritone.event`, never the poll. Prod replaces the latch with a goal id
+echoed through `baritone.cmd` → `baritone.status` (required, not optional:
+the latch trusts that every goal shows motion on some poll).
 
 ## Prod methods (sized, not in the spike)
 

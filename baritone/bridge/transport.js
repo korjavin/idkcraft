@@ -134,15 +134,23 @@ class FakeTransport extends EventEmitter {
         if (m) {
           if (m[3] === undefined) s.pos = { ...s.pos, x: +m[1], z: +m[2] }
           else s.pos = { ...s.pos, x: +m[1], y: +m[2], z: +m[3] }
+          // Two-phase status: the first poll witnesses motion (like a real
+          // 10 Hz poll over a multi-tick walk), the second reports arrival.
+          // Without a witnessed-motion round the adapter cannot attribute
+          // the terminal to this goal (revmux 02 core-1).
           s.baritoneStatus = { pathing: false, last: 'success' }
+          s.baritonePhase = 0
         } else if (/^#stop/.test(params.command || '')) {
           s.baritoneStatus = { pathing: false, last: 'stopped' }
+          s.baritonePhase = null
         } else {
           s.baritoneStatus = { pathing: false, last: 'ok' }
+          s.baritonePhase = null
         }
         return { accepted: true }
       }
       case 'baritone.status':
+        if (s.baritonePhase === 0) { s.baritonePhase = 1; return { pathing: true, last: 'none' } }
         return s.baritoneStatus || { pathing: false, last: 'none' }
       default:
         throw new Error(`bridge: unknown method ${method}`)

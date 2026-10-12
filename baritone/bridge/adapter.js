@@ -75,6 +75,7 @@ class BaritoneBot extends EventEmitter {
     this._inventory = [] // [{name,count,slot,type}]
     this._baritone = { pathing: false, last: 'none' }
     this._goalGen = 0 // bumped per mod-backend setGoal; stale statuses drop (revmux 01 core-3)
+    this._sawPathing = false // witnessed pathing:true for THIS goal; unattributed terminals stay silent (revmux 02 core-1)
     this._refreshing = false
     this._pathStatus = 'none'
     this._poll = null
@@ -154,25 +155,35 @@ class BaritoneBot extends EventEmitter {
       this.heldItem = this._inventory[0] || null // spike: selected slot tracking is plan work
     } catch (_) { /* inventory best-effort per round */ }
     try {
-      // revmux 01 core-3: read was+generation BEFORE the await; a status
-      // older than the last setGoal, or one the mod can't attribute yet
-      // (last 'none': still calculating), stays silent and keeps the
-      // setGoal latch — synthesising 'success' here re-issues follow.js
-      // every tick and the body never moves. Prod echoes a goal id
-      // through baritone.cmd -> baritone.status instead of the latch.
+      // Status attribution (revmux 01 core-3, 02 core-1): read was+generation
+      // BEFORE the await. A status older than the last setGoal is stale.
+      // Motion witnessed NOW is attributed by construction (we are the only
+      // driver) and arms the latch. A pathing:false terminal is only OURS if
+      // motion was already witnessed for this goal — otherwise it is a stale
+      // latch from a previous goal (or still calculating) and must keep the
+      // setGoal latch AND stay silent: synthesising 'success' — or even just
+      // flipping isMoving — re-issues follow.js every tick and the body never
+      // moves. A goal that fails before any poll shows pathing must surface
+      // via the pushed baritone.event, not the poll. Prod replaces the latch
+      // with a goal id echoed through baritone.cmd -> baritone.status.
       const genBefore = this._goalGen
       const was = this._baritone.pathing
       const bs = await this.transport.call('baritone.status', {})
       if (genBefore !== this._goalGen) return // a setGoal landed mid-round: stale
-      if (!bs || typeof bs !== 'object' || bs.last === 'none' || bs.last == null) return
-      const nowPathing = !!bs.pathing
-      this._baritone = { pathing: nowPathing, last: bs.last }
-      if (was && !nowPathing) {
-        const last = bs.last
-        this._pathStatus = last === 'noPath' || last === 'timeout' ? last : 'success'
-        this.emit('path_update', { status: this._pathStatus })
-        this.emit('path_reset', this._pathStatus === 'success' ? 'goal reached' : this._pathStatus)
+      if (!bs || typeof bs !== 'object') return
+      if (bs.pathing) {
+        this._sawPathing = true
+        this._baritone = { pathing: true, last: bs.last || 'none' }
+        return
       }
+      if (bs.last === 'none' || bs.last == null) return
+      if (!this._sawPathing) return // unattributed terminal: keep the latch, stay silent
+      const last = bs.last
+      this._baritone = { pathing: false, last }
+      if (!was) return
+      this._pathStatus = last === 'noPath' || last === 'timeout' ? last : (last === 'stopped' ? 'stopped' : 'success')
+      this.emit('path_update', { status: this._pathStatus })
+      this.emit('path_reset', this._pathStatus === 'success' ? 'goal reached' : this._pathStatus)
     } catch (_) { /* status best-effort per round */ }
   }
 
@@ -270,6 +281,7 @@ class BaritoneBot extends EventEmitter {
     }
     this._baritone = { pathing: true, last: 'none' }
     this._goalGen = (this._goalGen | 0) + 1
+    this._sawPathing = false // new goal: nothing witnessed yet (revmux 02 core-1)
     this.transport.call('baritone.cmd', { command: cmd }).catch((e) => {
       this._baritone = { pathing: false, last: 'noPath' }
       this._pathStatus = 'noPath'
@@ -280,6 +292,7 @@ class BaritoneBot extends EventEmitter {
 
   _stopPath() {
     this.pathfinder.goal = null
+    this._sawPathing = false // goal cancelled: later terminals are not ours
     this._consoleMoving = false
     if (this.backend === 'console') {
       if (this.bridgeSend) Promise.resolve().then(() => this.bridgeSend('msg #stop')).catch((e) => this.emit('error', e))

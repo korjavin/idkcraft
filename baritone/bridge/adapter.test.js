@@ -134,12 +134,15 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
       follow(bot, ctx, target) // fresh key: issues GoalFollow
       assert.ok(bot.pathfinder.goal, 'goal stored')
       assert.equal(transport.state.baritone, '#goto 10.0 64.0 10.0')
-      await bot.refresh() // fake walk lands + status success -> path_update
+      await bot.refresh() // round 1: fake walk lands, motion witnessed
       assert.deepEqual(
         [bot.entity.position.x, bot.entity.position.z],
         [10, 10],
       )
+      assert.equal(bot.pathfinder.isMoving(), true)
+      await bot.refresh() // round 2: arrival -> path_update success
       assert.equal(bot.pathfinder.isMoving(), false)
+      assert.equal(ctx.lastPathStatus, 'success')
 
       const first = transport.state.baritone
       follow(bot, ctx, target) // in range: rest, no re-issue
@@ -195,13 +198,49 @@ describe('revmux 01 fixes (poll pile-up, stale status)', () => {
       const statuses = []
       bot.on('path_update', (r) => statuses.push(r.status))
       bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
-      // The mod hasn't caught up: still calculating, last unknown.
+      // The mod hasn't caught up: still calculating, last unknown (no
+      // motion round comes back, so nothing is witnessed for this goal).
+      transport.state.baritonePhase = 1
       transport.state.baritoneStatus = { pathing: false, last: 'none' }
       await bot.refresh()
       assert.deepEqual(statuses, [])
       assert.equal(bot.pathfinder.isMoving(), true)
-      // The real terminal status still synthesizes the pair.
+      // The real walk: motion witnessed, then arrival synthesizes the pair.
+      transport.state.baritonePhase = 0
       transport.state.baritoneStatus = { pathing: false, last: 'success' }
+      await bot.refresh()
+      assert.equal(bot.pathfinder.isMoving(), true)
+      await bot.refresh()
+      assert.deepEqual(statuses, ['success'])
+      assert.equal(bot.pathfinder.isMoving(), false)
+    } finally {
+      await bot.stop()
+    }
+  })
+
+  it("a previous goal's latched success never completes the next goal (02 core-1)", async () => {
+    const { transport, bot } = spikeBot()
+    await bot.start({ pollMs: 0 })
+    try {
+      const statuses = []
+      bot.on('path_update', (r) => statuses.push(r.status))
+      // Goal 1 runs to arrival: motion witnessed, success synthesized.
+      bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
+      await bot.refresh()
+      await bot.refresh()
+      assert.deepEqual(statuses, ['success'])
+      assert.equal(bot.pathfinder.isMoving(), false)
+      // Goal 2 issued; the mod still latches success while calculating
+      // (no motion round comes back yet for the new goal).
+      statuses.length = 0
+      bot.pathfinder.setGoal(new goals.GoalNear(20, 64, 20, 2))
+      transport.state.baritonePhase = 1
+      await bot.refresh()
+      assert.deepEqual(statuses, []) // silent: the stale latch is not ours
+      assert.equal(bot.pathfinder.isMoving(), true) // latch kept: no re-issue storm
+      // Gen-2 motion + arrival still complete normally.
+      transport.state.baritonePhase = 0
+      await bot.refresh()
       await bot.refresh()
       assert.deepEqual(statuses, ['success'])
       assert.equal(bot.pathfinder.isMoving(), false)
