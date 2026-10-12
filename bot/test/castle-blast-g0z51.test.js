@@ -169,7 +169,8 @@ describe('castle blast ladder (g0z.51)', () => {
   }
 
   it('full ladder: iron -> cobble -> stone smelts in order, furnace then blast crafted, done', async () => {
-    const items = [{ name: 'raw_iron', count: 5 }, { name: 'coal', count: 3 }, { name: 'cobblestone', count: 11 }]
+    const RES = castleMod.reserveOf('stone')
+    const items = [{ name: 'raw_iron', count: 5 }, { name: 'coal', count: 3 }, { name: 'cobblestone', count: 11 + RES }]
     const bot = castleBot({ items, chest: [] })
     openBlast(bot)
     const ctx = { castle: completeState() }
@@ -190,11 +191,28 @@ describe('castle blast ladder (g0z.51)', () => {
     assert.deepEqual(askedKinds.filter((n) => n === 'furnace' || n === 'blast_furnace').slice(-2), ['furnace', 'blast_furnace'])
     assert.ok(crafts.length > 2, 'the blast craft is retried as rungs land')
     assert.equal(count(items, 'blast_furnace'), 1)
-    assert.equal(count(items, 'cobblestone'), 0, '3 chain + 8 recipe')
+    assert.equal(count(items, 'cobblestone'), RES, '3 chain + 8 recipe above the reserve')
     assert.equal(bot.calls.gather, 0)
     assert.equal(ctx.bring, undefined)
     assert.equal(ctx.furnaceJob, null)
     assert.equal(castleMod.menuFact(bot, ctx), 'blast_furnace-batch')
+  })
+
+  it('cobble at the reserve digs instead of spending it (stairs shape)', async () => {
+    const RES = castleMod.reserveOf('stone')
+    const items = [{ name: 'raw_iron', count: 5 }, { name: 'coal', count: 3 }, { name: 'cobblestone', count: RES + 10 }]
+    const bot = castleBot({ items, chest: [] })
+    openBlast(bot)
+    const ctx = { castle: completeState() }
+    const { fn, jobs } = fakeFurnace(bot, items, [])
+    fetch.deps.driveFurnace = fn
+    fetch.deps.craftItem = craftStub(items, [])
+    fetch.deps.gather = () => { bot.calls.gather++ }
+    await run(bot, ctx, () => ctx.stepStatus || bot.calls.gather > 0)
+    assert.equal(ctx.stepStatus, undefined)
+    assert.ok(bot.calls.gather > 0, 'short of the 11 above the reserve: the cobble rung gathers wood for a pick')
+    assert.deepEqual(jobs, [{ input: 'raw_iron', output: 'iron_ingot', count: 5 }], 'iron lands, no chain smelt starts')
+    assert.equal(count(items, 'cobblestone'), RES + 10, 'the reserve stands untouched')
   })
 
   it('no iron anywhere: the craft is tried, then failed:castlefetch-no-iron', async () => {
@@ -231,7 +249,8 @@ describe('castle blast ladder (g0z.51)', () => {
   })
 
   it('chest raw + cobble withdraw, then the ladder runs to done', async () => {
-    const items = [{ name: 'coal', count: 3 }]
+    const RES = castleMod.reserveOf('stone')
+    const items = [{ name: 'coal', count: 3 }, { name: 'cobblestone', count: RES }]
     const bot = castleBot({ items, chest: [{ name: 'raw_iron', count: 5 }, { name: 'cobblestone', count: 11 }] })
     openBlast(bot)
     const ctx = { castle: completeState() }
@@ -288,7 +307,8 @@ describe('castle blast ladder (g0z.51)', () => {
   })
 
   it('recipe furnace craft fails: failed:castlefetch-craft-furnace', async () => {
-    const items = [{ name: 'iron_ingot', count: 5 }, { name: 'smooth_stone', count: 3 }, { name: 'cobblestone', count: 8 }, { name: 'coal', count: 3 }]
+    const RES = castleMod.reserveOf('stone')
+    const items = [{ name: 'iron_ingot', count: 5 }, { name: 'smooth_stone', count: 3 }, { name: 'cobblestone', count: 8 + RES }, { name: 'coal', count: 3 }]
     const bot = castleBot({ items, chest: [] })
     openBlast(bot)
     const ctx = { castle: completeState() }

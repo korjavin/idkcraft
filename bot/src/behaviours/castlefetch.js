@@ -375,7 +375,9 @@ function chestTick(bot, ctx, f, d) {
         const bn = blastNeed(bot)
         const ironShort = Math.max(0, BLAST_IRON - bn.ingots - bn.raw)
         const chainShort = Math.max(0, BLAST_SMOOTH - bn.smooth - bn.stone)
-        const cobbleShort = Math.max(0, chainShort + (bn.furn > 0 ? 0 : BLAST_FURNACE_COBBLE) - bn.cobble)
+        // Cobble above the reserve (the stairs shape): the walks' cobble
+        // never counts toward the ladder's need.
+        const cobbleShort = Math.max(0, chainShort + (bn.furn > 0 ? 0 : BLAST_FURNACE_COBBLE) - Math.max(0, bn.cobble - castleMod.reserveOf('stone')))
         const want = names[0] === 'iron_ingot' || names[0] === 'raw_iron' ? ironShort
           : names[0] === 'smooth_stone' || names[0] === 'stone' ? chainShort
           : names[0] === 'cobblestone' ? cobbleShort : 0
@@ -670,11 +672,14 @@ function blastTick(bot, ctx, f, d, target, state) {
     return
   }
   // Smooth rung: stone -> smooth, else cobble -> stone; the cobble for the
-  // chain and the recipe furnace is dug like the pane rung.
+  // chain and the recipe furnace is dug like the pane rung. Measured above
+  // the scaffold/shelter reserve (the stairs rung shape): the ladder digs
+  // its own instead of spending the walks' cobble.
   if (n.smooth < BLAST_SMOOTH) {
     const chain = Math.max(0, BLAST_SMOOTH - n.smooth - n.stone)
     const want = chain + (n.furn > 0 ? 0 : BLAST_FURNACE_COBBLE)
-    if (n.cobble < want) { cobbleTick(bot, ctx, f, target, state, dry, want, 'blast_furnace'); return }
+    const keep = castleMod.reserveOf('stone')
+    if (want > 0 && n.cobble - keep < want) { cobbleTick(bot, ctx, f, target, state, dry, want + keep, 'blast_furnace'); return }
     if (n.stone < BLAST_SMOOTH - n.smooth) {
       blastSmelt(bot, ctx, f, target, state, dry, fr, { input: 'cobblestone', output: 'stone', count: Math.min(n.cobble, BLAST_SMOOTH - n.smooth - n.stone) })
       return
@@ -682,9 +687,10 @@ function blastTick(bot, ctx, f, d, target, state) {
     blastSmelt(bot, ctx, f, target, state, dry, fr, { input: 'stone', output: 'smooth_stone', count: BLAST_SMOOTH - n.smooth })
     return
   }
-  // Recipe furnace rung: 8 cobble at a table.
+  // Recipe furnace rung: 8 cobble at a table, above the reserve (stairs shape).
   if (n.furn < 1) {
-    if (n.cobble < BLAST_FURNACE_COBBLE) { cobbleTick(bot, ctx, f, target, state, dry, BLAST_FURNACE_COBBLE, 'blast_furnace'); return }
+    const keep = castleMod.reserveOf('stone')
+    if (n.cobble - keep < BLAST_FURNACE_COBBLE) { cobbleTick(bot, ctx, f, target, state, dry, BLAST_FURNACE_COBBLE + keep, 'blast_furnace'); return }
     let r = null
     try { r = deps.craftItem(bot, ctx, ['furnace'], 1) } catch (_) { r = { done: false } }
     if (r === 'running') return
@@ -699,7 +705,7 @@ function blastTick(bot, ctx, f, d, target, state) {
 // the counted run (smeltTick settles it; done re-arms the craft).
 function blastSmelt(bot, ctx, f, target, state, dry, fr, job) {
   if (fuelTick(bot, ctx, f, target, state, job.count, dry)) return
-  if (f.cobble && blastNeed(bot).cobble < 8) { cobbleTick(bot, ctx, f, target, state, dry); return } // the station's 8 (pane rung)
+  if (f.cobble && blastNeed(bot).cobble < 8) { cobbleTick(bot, ctx, f, target, state, dry, 8, 'blast_furnace'); return } // the station's 8 (pane rung, blast dry kind)
   f.smelting = true
   f.smeltJob = job
   if (fr && fr.settled) fr.result = null // a stale outcome never ends the new run
