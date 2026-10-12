@@ -368,6 +368,27 @@ walked 61-64 blocks, i.e. to the goal); MINE-10 is an order spot with a
 `count`/`item` judge: peak `item` held by follower+guide >= `count` (the bot
 hands finds to the guide), instead of a chat marker.
 
+## Worker runs (`REPLAY_WORKER=1`, idkcraft-jlda.3)
+
+Runs the head with the Baritone worker beside it — the measurable harness
+for the delegation beads (guided dig-in, guided far walk):
+
+```sh
+REPLAY_WORKER=1 REPLAY_BASELINE_OFF=1 BOT=<worker name> sh bot/tools/stuck-run.sh paper-base bot/tools/task-spots.json
+sh bot/tools/stuck-run.sh   # head-only: unchanged, byte-identical flow
+```
+
+Before the replay, the wrapper launches the worker client
+(`baritone/client.sh`, offline under its own name — `BOT` overrides the
+default, never the owner's account) on the run's own slot, pre-opped
+(spawn protection is decided at login); the client log lands next to the
+run log. Per spot the replay stops the worker over its bridge, parks it
+next to the follower's spawn with a pickaxe and the same anti-noise
+effects; rows carry `worker: true` (in the tab list at the window end).
+The baseline is forced off (worker rows are never compared), and the run
+exits 2 when the worker never joins. One worker client per box (a second
+`REPLAY_WORKER` run fails loud at the already-running guard).
+
 ## `REPLAY_BRAIN=laya`
 
 Runs the follower on the shipped hybrid brain (FSM primary, model on hard

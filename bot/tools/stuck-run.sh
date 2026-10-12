@@ -6,7 +6,8 @@
 # Env: PRODWORLD (default /Users/iv/Projects/.idkcraft-prodworld),
 #   REPLAY_TAG (bot name suffix; default r + 3 pid digits — exported so
 #   the pre-op below and the replay target the same names), REPLAY_OUT, REPLAY_BRAIN,
-#   REPLAY_BASELINE* (passed through to stuck-replay.js).
+#   REPLAY_BASELINE* (passed through to stuck-replay.js), REPLAY_WORKER=1
+#   (launch the Baritone worker client beside the head, idkcraft-jlda.3).
 # Exit codes: 0 = baseline holds (incl. FLAKY: regressed spots held on the
 # one automatic rerun, see the flake protocol at the end), 1 = REGRESSION vs
 # the baseline (repeated on the rerun), 2 = environment failure (no START.sh/snapshot, rig never came up,
@@ -138,6 +139,12 @@ FIFO="/tmp/stuck-stdin-$$.fifo"
 RERUN="/tmp/stuck-rerun-$$.json"
 SRVPID=
 teardown() {
+  # Worker client (idkcraft-jlda.3): stop it with the rig, on every exit
+  # path — a client left running trips the next run's already-running
+  # guard. Gated, so head-only runs pay nothing (not even a docker call).
+  if [ "${REPLAY_WORKER:-}" = 1 ]; then
+    sh "$TREE/baritone/client.sh" stop >/dev/null 2>&1 || true
+  fi
   docker stop -t 5 "$CONTAINER" >/dev/null 2>&1 || true
   if [ -n "$SRVPID" ]; then kill "$SRVPID" >/dev/null 2>&1 || true; wait "$SRVPID" 2>/dev/null || true; fi
   SRVPID=
@@ -211,6 +218,26 @@ boot() { # reset the world copy from the pristine tar, start the rig, anti-noise
   rcon_assert "op StuckReplay$REPLAY_TAG"
 }
 boot
+# Worker beside the head (idkcraft-jlda.3): launch the Baritone client on
+# THIS rig's slot (the port, not run.sh's slot z), pre-opped BEFORE it
+# joins — spawn protection is decided at login (3ro). The worker is
+# offline under its own name (owner decision, jlda Q2): BARITONE_OFFLINE=1
+# is forced here, never the owner's account; BOT overrides the name. The
+# head never connects it (client.sh owns the join; the head's ensureJoined
+# stays quiet while it is online). client.sh stop rides in teardown().
+if [ "${REPLAY_WORKER:-}" = 1 ]; then
+  WORKER="${BOT:-IdkWorker}"
+  rcon_assert "op $WORKER"
+  BARITONE_OFFLINE=1 RIG_CONTAINER="$CONTAINER" CLIENT_LOG="/tmp/stuck-worker-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
+    sh "$TREE/baritone/client.sh" start "${REPLAY_PORT:-25571}" "$WORKER" || exit 2
+  # Paper's same-IP connection throttle (4000 ms, bukkit.yml): the worker
+  # just joined from localhost and the guide connects next — hold the 6 s
+  # gap here (the replay holds guide->follower itself).
+  sleep 6
+  # localhost, not the literal loopback IP (privacy pre-check); the bridge
+  # publishes on all interfaces, so both reach it.
+  export WORKER_NAME="$WORKER" WORKER_HOST=localhost WORKER_PORT="${BRIDGE_PORT:-7777}"
+fi
 export REPLAY_VARIANT="$VARIANT" REPLAY_WORLDSHA="$SHA_BEFORE" REPLAY_GITSHA="$GITSHA"
 if [ -n "$SPOTS" ]; then
   case "$SPOTS" in
