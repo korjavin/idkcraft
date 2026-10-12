@@ -48,6 +48,22 @@ const CHEST_STALL_TICKS = 5 // far+standing ticks before the chest fetch falls b
   // far reading is often a recovering pathfinder, not an unreachable chest)
 const RETURN_RANGE = 2
 
+// Guided dig-in (idkcraft-jlda.4): a buried walk stall delegates the TUNNEL,
+// not the ore — the Baritone worker bores to the vein, the head follows it
+// through, the worker steps back, the head digs and picks up itself. Every
+// deadline below falls back to the byte-identical refusal (pinned by test);
+// the deadline + #stop IS the recovery (no stuck detectors, the 6x7 rule).
+const GUIDED_TOTAL_MS = 180000 // whole delegation, all sub-phases
+const GUIDED_GONE_MS = 20000 // worker entity out of view
+const GUIDED_STILL_MS = 30000 // worker entity not displacing (suspended while leash-paused)
+const GUIDED_TOOL_MS = 30000 // worker never came for the pickaxe: slow bore beats no bore
+const GUIDED_PAUSE_D = 8 // head this far behind the worker: #pause (only on transitions)
+const GUIDED_RESUME_D = 4 // head back within this: #resume
+const GUIDED_ARRIVE_D = 2.5 // ab.js REACH_DIST: the worker is at its goto
+const GUIDED_CLEAR_D = 3 // stepped back this far from the bore target: the head digs
+const GUIDED_FOLLOW_RANGE = 2 // GoalFollow range behind the boring worker
+const GUIDED_REISSUE_MS = 6000 // re-anchor GoalFollow on the moving worker (follow.js rule)
+
 // Search budget (idkcraft-atl.9): K=24 legs or 5 minutes, whichever binds
 // first (time is the intended real limit). The 22 legs out to ring-128
 // walk ~770 blocks (~3 min open-ground + re-finds), so they fit the cap
@@ -646,6 +662,7 @@ function commitSource(bot, ctx, o, exposed, buried, pick) {
   o.phase = 'walk'
   o.stalls = 0
   o.lastPos = null
+  o.guided = null // a fresh target starts unguided; the stall re-delegates
   return true
 }
 
@@ -1152,6 +1169,248 @@ function chestFetch(bot, ctx, o, bp) {
 
 // The item chest fetch (fetchItem) lives in bringitem.js (did.4 split).
 
+// The walk-stall refusal line, shared by the direct stall and the guided
+// fallback so the two can never drift (the buried form is pinned by test).
+function unreachLine(o) {
+  const at = o.pos ? ` at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)}` : ''
+  return `could not reach ${o.block}` + (o.exposed === false ? ` (buried, no path in)${at}` : '')
+}
+
+// The bore target: the air cell adjacent to the ore the head would dig
+// from, else one block off horizontally (the worker bores to solid — that
+// is the job). Name-based: any named non-air block counts as solid.
+function guidedTarget(bot, p) {
+  const cands = [
+    { x: p.x + 1, y: p.y, z: p.z },
+    { x: p.x - 1, y: p.y, z: p.z },
+    { x: p.x, y: p.y, z: p.z + 1 },
+    { x: p.x, y: p.y, z: p.z - 1 },
+    { x: p.x, y: p.y - 1, z: p.z },
+    { x: p.x, y: p.y + 1, z: p.z },
+  ]
+  for (const c of cands) {
+    let b = null
+    try { b = bot.blockAt && bot.blockAt(c) } catch (_) { b = null }
+    const n = b && b.name
+    if (!n || n === 'air' || n.endsWith('_air')) return { x: Math.floor(c.x), y: Math.floor(c.y), z: Math.floor(c.z) }
+  }
+  return { x: Math.floor(p.x) + 1, y: Math.floor(p.y), z: Math.floor(p.z) }
+}
+
+// Four blocks back along the tunnel: the head followed behind in it, so
+// back runs from the target through the head (horizontal). Degenerate
+// stances fall back to away-from-the-ore, then +x (never the ore cell).
+function guidedStepback(target, bp, ore) {
+  let dx = bp.x - target.x
+  let dz = bp.z - target.z
+  if (Math.hypot(dx, dz) < 0.5) {
+    dx = target.x - ore.x
+    dz = target.z - ore.z
+  }
+  if (Math.hypot(dx, dz) < 0.5) { dx = 1; dz = 0 }
+  const len = Math.hypot(dx, dz)
+  return {
+    x: Math.floor(target.x + (dx / len) * 4),
+    y: Math.floor(target.y),
+    z: Math.floor(target.z + (dz / len) * 4),
+  }
+}
+
+// Ordered bridge lines: one connection per line, so chain the sends — two
+// bare sends could arrive swapped and a #goto would land on a pause.
+function sendSeq(lines) {
+  void (async () => {
+    for (const line of lines) {
+      try { await worker.send(line) } catch (_) { /* next line anyway */ }
+    }
+  })()
+}
+
+// The spare pickaxe to lend the worker: the head keeps its best, the
+// worker gets the lowest-rank stack's name + id. Null unless the head
+// holds 2+ pickaxes in total (ranks mirror bringbase PICKAXE_RANK).
+const TOOL_RANK = { wooden_pickaxe: 0, golden_pickaxe: 0, stone_pickaxe: 1, iron_pickaxe: 2, diamond_pickaxe: 3, netherite_pickaxe: 4 }
+function pickSpare(bot) {
+  let items = null
+  try { items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null } catch (_) { items = null }
+  if (!Array.isArray(items)) return null
+  const picks = items.filter((i) => i && typeof i.name === 'string' && (i.name in TOOL_RANK))
+  if (picks.reduce((a, i) => a + (i.count || 1), 0) < 2) return null
+  picks.sort((a, b) => TOOL_RANK[a.name] - TOOL_RANK[b.name])
+  let id = null
+  try { id = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[picks[0].name].id } catch (_) { id = null }
+  if (typeof id !== 'number') {
+    try { id = picks[0].type } catch (_) { id = null }
+  }
+  if (typeof id !== 'number' || typeof bot.toss !== 'function') return null
+  return { name: picks[0].name, id }
+}
+
+function guidedAvailable(bot) {
+  try {
+    return worker.configured() && worker.workerOnline(bot)
+  } catch (_) {
+    return false
+  }
+}
+
+function guidedName() {
+  try {
+    return worker.name()
+  } catch (_) {
+    return ''
+  }
+}
+
+// The walk stall hands the bore over: #resume (a stale pause from an older
+// job must not swallow the goto) then #goto. With a spare pickaxe and no
+// lend yet this session the worker is called to the head first (tool).
+function guidedDelegate(bot, ctx, o, bp) {
+  const target = guidedTarget(bot, o.pos)
+  const now = Date.now()
+  const spare = ctx.workerTooled ? null : pickSpare(bot)
+  o.guided = {
+    at: now, target, phase: spare ? 'tool' : 'bore',
+    tool: spare, headPos: { x: bp.x, y: bp.y, z: bp.z },
+    paused: false, goneSince: null, lastWorkerPos: null, lastMove: now,
+    reissuedAt: 0, held: false, tossInFlight: false, stopSent: false,
+  }
+  clearGoal(bot, ctx) // the walk goal died with the stall; the phases below issue their own
+  say(bot, `asking ${guidedName()} to dig in to ${o.block} at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)}`)
+  if (spare) {
+    sendSeq(['msg #resume', `msg #goto ${Math.floor(bp.x)} ${Math.floor(bp.y)} ${Math.floor(bp.z)}`])
+  } else {
+    sendSeq(['msg #resume', `msg #goto ${target.x} ${target.y} ${target.z}`])
+  }
+  o.phase = 'guided'
+  o.stalls = 0
+  o.lastPos = null
+  return true
+}
+
+function guidedCancel(bot, ctx, o) {
+  const g = o.guided
+  if (g) g.stopSent = true
+  try { void worker.send('msg #stop') } catch (_) { /* bridge best-effort */ }
+  metrics.workerJobs.inc({ kind: 'bore', outcome: 'fallback' })
+  refuse(bot, ctx, unreachLine(o))
+}
+
+function guidedToDig(bot, ctx, o) {
+  metrics.workerJobs.inc({ kind: 'bore', outcome: 'done' })
+  o.phase = 'dig'
+}
+
+function d3(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
+}
+
+// One guided tick (o.phase === 'guided'). Tool: hold while the worker
+// comes for the pickaxe, toss it, send it to the bore. Bore: follow the
+// worker entity (GoalFollow, the follow behaviour's own movement — the
+// body stays bring's), leashing it on distance. Stepback: hold in the
+// bored tunnel while the worker clears the ore, then dig.
+function guidedTick(bot, ctx, o, bp) {
+  const g = o.guided
+  if (!g || !g.target || !o.pos) { // corrupted handoff: re-walk, the stall re-delegates
+    o.guided = null
+    o.phase = 'walk'
+    o.stalls = 0
+    o.lastPos = null
+    return
+  }
+  const now = Date.now()
+  if (now - g.at >= GUIDED_TOTAL_MS) { guidedCancel(bot, ctx, o); return }
+  let w = null
+  try { w = worker.workerEntity(bot) } catch (_) { w = null }
+  const wpos = w && w.position ? w.position : null
+
+  if (g.phase === 'tool') {
+    if (!g.tool) { // the spare vanished: bore without it
+      sendSeq([`msg #goto ${g.target.x} ${g.target.y} ${g.target.z}`])
+      g.phase = 'bore'
+      g.reissuedAt = 0
+      return
+    }
+    if (!g.held) { g.held = true; clearGoal(bot, ctx) } // head holds; the worker comes to it
+    if (!wpos) {
+      if (g.goneSince === null || g.goneSince === undefined) g.goneSince = now
+      if (now - g.goneSince >= GUIDED_GONE_MS) { guidedCancel(bot, ctx, o); return }
+    } else {
+      g.goneSince = null
+      if (!g.tossInFlight && d3(wpos, g.headPos) <= GUIDED_ARRIVE_D) {
+        g.tossInFlight = true
+        const tool = g.tool
+        void (async () => {
+          try { await bot.toss(tool.id, null, 1); ctx.workerTooled = true } catch (_) { /* delegate anyway */ }
+          sendSeq([`msg #goto ${g.target.x} ${g.target.y} ${g.target.z}`])
+          g.phase = 'bore'
+          g.reissuedAt = 0
+          g.tossInFlight = false
+        })()
+        return
+      }
+    }
+    if (now - g.at >= GUIDED_TOOL_MS) { // the worker never came: a slow bore beats no bore
+      sendSeq([`msg #goto ${g.target.x} ${g.target.y} ${g.target.z}`])
+      g.phase = 'bore'
+      g.reissuedAt = 0
+    }
+    return
+  }
+
+  if (g.phase === 'bore') {
+    if (!wpos) {
+      if (g.goneSince === null || g.goneSince === undefined) g.goneSince = now
+      if (now - g.goneSince >= GUIDED_GONE_MS) { guidedCancel(bot, ctx, o); return }
+      return // hold the last follow goal while it is out of view
+    }
+    g.goneSince = null
+    if (d3(wpos, g.target) <= GUIDED_ARRIVE_D) { // bored through: clear the ore, then dig
+      const back = guidedStepback(g.target, bp, o.pos)
+      sendSeq(['msg #resume', `msg #goto ${back.x} ${back.y} ${back.z}`])
+      g.phase = 'stepback'
+      g.held = false
+      return
+    }
+    if (!g.paused) {
+      if (!g.lastWorkerPos || d3(wpos, g.lastWorkerPos) > 0.5) {
+        g.lastWorkerPos = { x: wpos.x, y: wpos.y, z: wpos.z }
+        g.lastMove = now
+      } else if (now - (g.lastMove || g.at) >= GUIDED_STILL_MS) { guidedCancel(bot, ctx, o); return }
+    }
+    const d = d3(bp, wpos)
+    if (!g.paused && d > GUIDED_PAUSE_D) {
+      g.paused = true
+      try { void worker.send('msg #pause') } catch (_) { /* bridge best-effort */ }
+    } else if (g.paused && d < GUIDED_RESUME_D) {
+      g.paused = false
+      try { void worker.send('msg #resume') } catch (_) { /* bridge best-effort */ }
+    }
+    const key = `bring-guided:${Math.floor(o.pos.x)},${Math.floor(o.pos.y)},${Math.floor(o.pos.z)}`
+    if (key !== ctx.lastGoalKey) {
+      issueGoal(bot, ctx, new goals.GoalFollow(w, GUIDED_FOLLOW_RANGE), key, true)
+      g.reissuedAt = now
+    } else if (now - (g.reissuedAt || 0) >= GUIDED_REISSUE_MS) {
+      try { bot.pathfinder.setGoal(new goals.GoalFollow(w, GUIDED_FOLLOW_RANGE), true) } catch (_) { /* body best-effort */ }
+      g.reissuedAt = now
+    }
+    return
+  }
+
+  // Stepback: the tunnel is bored, so a gone or still worker cannot block
+  // the dig — only the total deadline still refuses.
+  if (!g.held) { g.held = true; clearGoal(bot, ctx) } // head holds in the tunnel
+  if (!wpos) { guidedToDig(bot, ctx, o); return }
+  if (!g.lastWorkerPos || d3(wpos, g.lastWorkerPos) > 0.5) {
+    g.lastWorkerPos = { x: wpos.x, y: wpos.y, z: wpos.z }
+    g.lastMove = now
+  }
+  if (d3(wpos, g.target) >= GUIDED_CLEAR_D || now - (g.lastMove || g.at) >= GUIDED_STILL_MS) {
+    guidedToDig(bot, ctx, o)
+  }
+}
+
 async function bring(bot, ctx, target, state) {
   const o = ctx.bring
   if (!o) return
@@ -1179,6 +1438,8 @@ async function bring(bot, ctx, target, state) {
   }
 
   if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
+
+  if (o.phase === 'guided') { guidedTick(bot, ctx, o, bp); return }
 
   if (o.phase === 'chestfetch') { chestFetch(bot, ctx, o, bp); return }
 
@@ -1404,9 +1665,11 @@ async function bring(bot, ctx, target, state) {
       } else if (++o.stalls >= WALK_STALL_TICKS) {
         // Buried stalls name the vein coords (chv): the acceptance fallback
         // is an honest refusal with coords, never a silent surface trample.
-        // The exposed line stays byte-identical (pinned by test).
-        const at = o.pos ? ` at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)}` : ''
-        refuse(bot, ctx, `could not reach ${o.block}` + (o.exposed === false ? ` (buried, no path in)${at}` : ''))
+        // The exposed line stays byte-identical (pinned by test). A buried
+        // block stall with a worker online delegates the bore instead
+        // (guided dig-in); every guided deadline falls back to this line.
+        if ((o.kind || 'block') === 'block' && o.exposed === false && o.pos && guidedAvailable(bot) && guidedDelegate(bot, ctx, o, bp)) return
+        refuse(bot, ctx, unreachLine(o))
       }
       return
     }
@@ -1513,6 +1776,12 @@ async function bring(bot, ctx, target, state) {
     }
     // Reached or gave up getting there: the inventory count is the truth.
     o.have = countDrop(bot, o.drop)
+    // Guided dig-in: the bore is over once the head picked up — #stop the
+    // worker (it idles at its stepback); the next stall re-tasks it.
+    if (o.guided && !o.guided.stopSent) {
+      o.guided.stopSent = true
+      try { void worker.send('msg #stop') } catch (_) { /* bridge best-effort */ }
+    }
     if (o.have >= o.want) {
       if (o.subFor) { // the gap is filled: back to the parent craft rung
         itemMod.resumeSub(bot, ctx, o)
@@ -1628,6 +1897,18 @@ module.exports.memoryInBudget = memoryInBudget
 module.exports.liveExposed = liveExposed
 module.exports.buriedCand = buriedCand
 module.exports.skipKey = skipKey
+module.exports.unreachLine = unreachLine
+module.exports.guidedTarget = guidedTarget
+module.exports.guidedStepback = guidedStepback
+module.exports.pickSpare = pickSpare
+module.exports.GUIDED_TOTAL_MS = GUIDED_TOTAL_MS
+module.exports.GUIDED_GONE_MS = GUIDED_GONE_MS
+module.exports.GUIDED_STILL_MS = GUIDED_STILL_MS
+module.exports.GUIDED_TOOL_MS = GUIDED_TOOL_MS
+module.exports.GUIDED_PAUSE_D = GUIDED_PAUSE_D
+module.exports.GUIDED_RESUME_D = GUIDED_RESUME_D
+module.exports.GUIDED_ARRIVE_D = GUIDED_ARRIVE_D
+module.exports.GUIDED_CLEAR_D = GUIDED_CLEAR_D
 module.exports.bestExposed = bestExposed
 module.exports.deepVeinOf = deepVeinOf
 module.exports.descentGated = descentGated
