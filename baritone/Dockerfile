@@ -3,7 +3,24 @@
 # the rig (run.sh) exercises the same image, entrypoint and bridge.
 # MC 26.1.2 (= the prod Paper) needs Java 25; the HeadlessMc image ships 21,
 # so the launcher is copied onto a Temurin 25 base.
+#
+# The one-body bridge mod (idkcraft-neuc.1) builds in the mod stage below
+# and lands in run/mods next to baritone.jar; it serves the ws the v2
+# adapter (BOT_BODY=baritone) drives. No published ws port here — the rig
+# publishes it, compose keeps it internal.
 FROM 3arthqu4ke/headlessmc:2.10.0 AS hmc
+
+# Bridge mod (idkcraft-neuc.1): JDK 25 + Gradle compiles bridge/mod. Build
+# files copy first so the dependency layer caches across mod-source edits
+# (same rule as the client-download layer in the final stage).
+FROM eclipse-temurin:25-jdk AS mod
+WORKDIR /src
+COPY bridge/mod/settings.gradle bridge/mod/gradle.properties bridge/mod/build.gradle ./
+COPY bridge/mod/gradlew bridge/mod/gradlew.bat ./
+COPY bridge/mod/gradle ./gradle
+RUN chmod +x gradlew && ./gradlew --no-daemon warmDeps
+COPY bridge/mod/src ./src
+RUN ./gradlew --no-daemon build
 
 FROM eclipse-temurin:25-jre
 COPY --from=hmc /headlessmc /headlessmc
@@ -30,5 +47,6 @@ RUN java -jar headlessmc-launcher-wrapper.jar --command fabric 26.1.2 \
 # must not invalidate the ~100 MB client fetch. Game dir = HeadlessMC/run.
 COPY start.sh ./start.sh
 COPY settings.txt ./HeadlessMC/run/baritone/settings.txt
+COPY --from=mod /src/build/libs/idkcraft-bridge-0.1.0.jar ./HeadlessMC/run/mods/idkcraft-bridge.jar
 RUN chmod +x start.sh
 ENTRYPOINT ["./start.sh"]
