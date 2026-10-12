@@ -7,7 +7,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const furnace = require('../src/behaviours/furnace')
 
-const IDS = { furnace: 61, raw_iron: 100, coal: 101, charcoal: 102, cobblestone: 103, oak_planks: 104, sand: 105 }
+const IDS = { furnace: 61, raw_iron: 100, coal: 101, charcoal: 102, cobblestone: 103, oak_planks: 104, sand: 105, stone: 106, smooth_stone: 107 }
 const NAMES = Object.fromEntries(Object.entries(IDS).map(([n, id]) => [id, n]))
 
 function mockWindow(slots, log) {
@@ -763,6 +763,80 @@ describe('furnace smelt job (g0z.36: sand -> glass)', () => {
     assert.equal(ctx.stepStatus, 'running')
     assert.equal(ctx.furnace.result, 'done')
     assert.equal(ctx.furnace.settled, true)
+  })
+})
+
+describe('furnace counted smelt (g0z.51: cobble -> stone -> smooth_stone)', () => {
+  const SPOT = { '0,64,1': 'furnace' }
+  function jobBot(inv, slots = [null, null, null]) {
+    const log = []
+    const win = mockWindow(slots, log)
+    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, inv, blocks: { ...floorBlocks(), ...SPOT }, window: win })
+    return { bot, log, win }
+  }
+  const ctx0 = () => ({ home: { furnace: { x: 0, y: 64, z: 1 } } })
+  // The caller's contract: set the job before every tick of its leg.
+  const tickJob = async (bot, ctx, job) => { ctx.furnaceJob = { ...job }; furnace(bot, ctx); await settle() }
+  const sum = (log, op, id) => log.filter((e) => e[0] === op && e[1] === id).reduce((a, e) => a + e[2], 0)
+
+  it('10 cobble + coal, count 3: 3 in, 1 coal, done at 3 taken', async () => {
+    const { bot, log, win } = jobBot([{ name: 'cobblestone', count: 10 }, { name: 'coal', count: 6 }])
+    const ctx = ctx0()
+    const job = { input: 'cobblestone', output: 'stone', count: 3 }
+    await tickJob(bot, ctx, job)
+    assert.equal(sum(log, 'putInput', IDS.cobblestone), 3, JSON.stringify(log))
+    assert.equal(sum(log, 'putFuel', IDS.coal), 1, JSON.stringify(log))
+    assert.equal(ctx.furnace.result, null)
+    assert.deepEqual(ctx.furnace.job, { input: 'cobblestone', output: 'stone', count: 3, caller: true })
+    // The burn completes: 3 stone in the output, 7 cobble still packed.
+    bot.inventory.items = () => [{ name: 'cobblestone', count: 7 }, { name: 'coal', count: 5 }]
+    win.slots = [null, null, { name: 'stone', count: 3 }]
+    const lines = []
+    const orig = console.log
+    console.log = (l) => lines.push(l)
+    try { await tickJob(bot, ctx, job) } finally { console.log = orig }
+    assert.ok(log.some(([op, n]) => op === 'takeOutput' && n === 3))
+    assert.equal(ctx.furnace.result, 'done')
+    assert.equal(ctx.stepStatus, undefined, 'a caller job reports on the result only')
+    assert.ok(lines.includes('smelted 3 stone'), JSON.stringify(lines))
+    assert.equal(sum(log, 'putInput', IDS.cobblestone), 3, 'no fourth cobble loads')
+  })
+
+  it('the second pass: 3 stone -> 3 smooth_stone, then done', async () => {
+    const { bot, log, win } = jobBot([{ name: 'stone', count: 5 }, { name: 'coal', count: 2 }])
+    const ctx = ctx0()
+    const job = { input: 'stone', output: 'smooth_stone', count: 3 }
+    await tickJob(bot, ctx, job)
+    assert.equal(sum(log, 'putInput', IDS.stone), 3, JSON.stringify(log))
+    bot.inventory.items = () => [{ name: 'stone', count: 2 }, { name: 'coal', count: 1 }]
+    win.slots = [null, null, { name: 'smooth_stone', count: 3 }]
+    const lines = []
+    const orig = console.log
+    console.log = (l) => lines.push(l)
+    try { await tickJob(bot, ctx, job) } finally { console.log = orig }
+    assert.equal(ctx.furnace.result, 'done')
+    assert.ok(lines.includes('smelted 3 smooth_stone'), JSON.stringify(lines))
+  })
+
+  it('count above stock: loads what stands, done short when empty', async () => {
+    const { bot, log, win } = jobBot([{ name: 'cobblestone', count: 2 }, { name: 'coal', count: 1 }])
+    const ctx = ctx0()
+    const job = { input: 'cobblestone', output: 'stone', count: 5 }
+    await tickJob(bot, ctx, job)
+    assert.equal(sum(log, 'putInput', IDS.cobblestone), 2, JSON.stringify(log))
+    bot.inventory.items = () => []
+    win.slots = [null, null, { name: 'stone', count: 2 }]
+    await tickJob(bot, ctx, job)
+    assert.equal(ctx.furnace.result, 'done', 'the legacy empty settle still fires')
+    assert.equal(ctx.furnace.smelted, 2)
+  })
+
+  it('an invalid count smelts everything (legacy)', async () => {
+    const { bot, log } = jobBot([{ name: 'cobblestone', count: 10 }, { name: 'coal', count: 2 }])
+    const ctx = ctx0()
+    await tickJob(bot, ctx, { input: 'cobblestone', output: 'stone', count: 'many' })
+    assert.deepEqual(ctx.furnace.job, { input: 'cobblestone', output: 'stone', caller: true })
+    assert.equal(sum(log, 'putInput', IDS.cobblestone), 10, JSON.stringify(log))
   })
 })
 

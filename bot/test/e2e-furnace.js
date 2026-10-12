@@ -7,6 +7,9 @@
 // Asserts: the claim stands verified, `smelted 8 iron` logs, 8 ingots
 // land in inventory, only the needed coal burns (1 of 6). Cleans its site.
 // Exit 0/1. Budget ~8 min (8 ore x 10 s smelt + window flaps).
+// Phase 2 (g0z.51, same run, same station): the counted chain — 10 cobble
+// in, cobble -> stone x3 then stone -> smooth_stone x3, `smelted 3 stone`
+// and `smelted 3 smooth_stone` log, 7 cobble uncooked. Budget +6 min.
 
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
@@ -44,6 +47,32 @@ async function tpWait(bot, x, y, z) {
 
 function invCount(bot, name) {
   return bot.inventory.items().filter((i) => i && i.name === name).reduce((n, i) => n + i.count, 0)
+}
+
+// One drive to terminal: the default iron job ends on ctx.stepStatus, a
+// caller job (set before every tick, the g0z.36 contract) on the run's
+// own settled result (g0z.51: furnace.js keeps it off stepStatus).
+async function drive(bot, ctx, job, budgetMs) {
+  const end = Date.now() + budgetMs
+  let lastPhase = ''
+  for (;;) {
+    if (job) ctx.furnaceJob = { ...job }
+    try { furnace(bot, ctx) } catch (err) {
+      throw new Error(`furnace threw: ${err && err.message ? err.message : err}`)
+    }
+    if (ctx.furnace && ctx.furnace.phase !== lastPhase) {
+      lastPhase = ctx.furnace.phase
+      console.log(`phase=${lastPhase} smelted=${ctx.furnace.smelted || 0}`)
+    }
+    if (ctx.stepStatus === 'done') break
+    if (ctx.stepStatus && ctx.stepStatus.startsWith('failed:')) throw new Error(`step ${ctx.stepStatus}`)
+    if (job && ctx.furnace && ctx.furnace.settled && ctx.furnace.result !== null) {
+      if (ctx.furnace.result === 'done') break
+      throw new Error(`step ${ctx.furnace.result}`)
+    }
+    if (Date.now() > end) throw new Error('assay timed out (see phases above)')
+    await sleep(1000)
+  }
 }
 
 async function main() {
@@ -105,21 +134,7 @@ async function main() {
     }
     bot.pathfinder.setMovements(new Movements(bot))
     const ctx = { home: { table: { x: cx + 1, y: surf, z: cz } }, stepStatus: 'running', lastGoalKey: '' }
-    const end = Date.now() + BUDGET_MS
-    let lastPhase = ''
-    for (;;) {
-      try { furnace(bot, ctx) } catch (err) {
-        throw new Error(`furnace threw: ${err && err.message ? err.message : err}`)
-      }
-      if (ctx.furnace && ctx.furnace.phase !== lastPhase) {
-        lastPhase = ctx.furnace.phase
-        console.log(`phase=${lastPhase} smelted=${ctx.furnace.smelted || 0}`)
-      }
-      if (ctx.stepStatus === 'done') break
-      if (ctx.stepStatus && ctx.stepStatus.startsWith('failed:')) throw new Error(`step ${ctx.stepStatus}`)
-      if (Date.now() > end) throw new Error('assay timed out (see phases above)')
-      await sleep(1000)
-    }
+    await drive(bot, ctx, null, BUDGET_MS)
     // Verdicts.
     const spot = ctx.home && ctx.home.furnace
     if (!spot) throw new Error('no furnace claim')
@@ -130,6 +145,21 @@ async function main() {
     if (invCount(bot, 'iron_ingot') < 8) throw new Error('ingots never landed')
     if (invCount(bot, 'coal') < 5) throw new Error('overfuelled: more than one coal burned')
     console.log('PASS: furnace stands, 8 ore -> 8 ingots, one coal burned')
+    // Phase 2 (g0z.51): the counted chain on the same station.
+    await rcon(`give ${NAME} cobblestone 10`)
+    await rcon(`give ${NAME} coal 2`)
+    await sleep(1500)
+    if (invCount(bot, 'cobblestone') < 10) throw new Error('setup invalid: phase-2 /give did not land')
+    ctx.stepStatus = 'running'
+    await drive(bot, ctx, { input: 'cobblestone', output: 'stone', count: 3 }, 3 * 60 * 1000)
+    if (!lines.some((l) => l === 'smelted 3 stone')) throw new Error('missing `smelted 3 stone` line')
+    if (invCount(bot, 'stone') < 3) throw new Error('stone never landed')
+    if (invCount(bot, 'cobblestone') < 7) throw new Error('over-smelted: more than 3 cobble cooked')
+    ctx.stepStatus = 'running'
+    await drive(bot, ctx, { input: 'stone', output: 'smooth_stone', count: 3 }, 3 * 60 * 1000)
+    if (!lines.some((l) => l === 'smelted 3 smooth_stone')) throw new Error('missing `smelted 3 smooth_stone` line')
+    if (invCount(bot, 'smooth_stone') < 3) throw new Error('smooth stone never landed')
+    console.log('PASS: counted chain, 3 cobble -> 3 stone -> 3 smooth_stone')
   } finally {
     try {
       if (site) await rcon(`fill ${site.cx - 1} ${site.surf} ${site.cz - 1} ${site.cx + 1} ${site.surf + 1} ${site.cz + 1} air`)

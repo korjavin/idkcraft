@@ -329,7 +329,7 @@ describe('castle kitchen blast furnace behaviour (g0z.50)', () => {
     assert.deepEqual(asked[0], [['blast_furnace'], 1])
   })
 
-  it('no blast anywhere: the craft is tried, then failed:castlefetch-no-blast_furnace (no gather, no hunt)', async () => {
+  it('no blast anywhere: the craft is tried, then the ladder fails no-iron (no gather, no hunt)', async () => {
     const bot = castleBot({ items: [], chest: [] })
     closeDecor(bot, 0)
     const cell = blueprint.decorPlan(SITE, 0, 2).cells.find((c) => c.kind === 'blast_furnace')
@@ -340,7 +340,7 @@ describe('castle kitchen blast furnace behaviour (g0z.50)', () => {
     fetch.deps.gather = () => { bot.calls.gather++ }
     fetch.deps.craftItem = (b, c, names, n) => { asked.push([names, n]); return { done: false } }
     for (let i = 0; i < 40 && !ctx.stepStatus; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-blast_furnace')
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-iron') // g0z.51: the ladder's honest iron rung
     assert.deepEqual(asked, [[['blast_furnace'], 1]])
     assert.equal(bot.calls.gather, 0)
     assert.equal(ctx.bring, undefined)
@@ -363,7 +363,7 @@ describe('castle kitchen blast furnace behaviour (g0z.50)', () => {
     assert.equal(castleMod.menuFact(bot, ctx), 'blast_furnace-none')
     assert.equal(fetch.demand(bot, ctx).kind, 'blast_furnace')
     for (let i = 0; i < 40 && ctx.stepStatus === 'running'; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-blast_furnace')
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-iron') // g0z.51: the ladder's honest iron rung
     assert.deepEqual([...ctx.castleFetchDry], ['bookshelf', 'blast_furnace'])
     assert.equal(castleMod.menuFact(bot, ctx), 'bookshelf-none')
     assert.equal(ctx.castleFetchDry, null)
