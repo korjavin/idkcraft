@@ -98,4 +98,10 @@ java {
 
 test {
     useJUnitPlatform()
+    // No HTML report: its .js assets sit under a `test/` dir, which
+    // `node --test baritone/bridge/` would discover and run as tests.
+    // Failures still print on the console and land in test-results/*.xml.
+    reports {
+        html.required = false
+    }
 }
