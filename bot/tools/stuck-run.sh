@@ -252,7 +252,9 @@ if [ "${REPLAY_WORKER:-}" = 1 ]; then
   export WORKER_NAME="$WORKER" WORKER_HOST=localhost WORKER_PORT="${BRIDGE_PORT:-7777}"
 fi
 # v2 body (idkcraft-neuc.5): the FOLLOWER runs on the Baritone body — pre-op
-# its name, boot the offline client under it (client.sh owns the join),
+# its name, boot the offline client under it (client.sh owns the join)
+# with the API jar (BARITONE_API=1: the bridge mod needs
+# baritone/api/**, which the standalone jar strips),
 # publish the console bridge (BODY_CONSOLE_PORT) and the Fabric mod ws
 # (MOD_PORT), export the adapter addresses for the replay. Name and console
 # port are distinct from the worker's, so REPLAY_WORKER=1 +
@@ -263,7 +265,7 @@ fi
 # client (idkcraft-neuc.15 wires the v2 rerun).
 if [ "${REPLAY_BODY:-}" = baritone ]; then
   rcon_assert "op StuckReplay$REPLAY_TAG"
-  BARITONE_OFFLINE=1 RIG_CONTAINER="$CONTAINER" BARITONE_CLIENT=idk-baritone-body \
+  BARITONE_OFFLINE=1 BARITONE_API=1 RIG_CONTAINER="$CONTAINER" BARITONE_CLIENT=idk-baritone-body \
     BRIDGE_PORT="${BODY_CONSOLE_PORT:-7779}" MOD_PORT="${MOD_PORT:-7778}" \
     CLIENT_LOG="/tmp/stuck-body-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
     sh "$TREE/baritone/client.sh" start "${REPLAY_PORT:-25571}" "StuckReplay$REPLAY_TAG" || exit 2

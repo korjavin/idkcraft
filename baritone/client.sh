@@ -8,6 +8,8 @@
 # Env: BARITONE_IMAGE (default idkcraft-baritone:spike),
 #   BARITONE_CLIENT (container name, default idk-baritone-client),
 #   BARITONE_OFFLINE=1 (offline username <bot-name>, no stored account),
+#   BARITONE_API=1 (run the Baritone API jar instead of standalone — the v2
+#   body path; the bridge mod needs baritone/api/**, which standalone strips),
 #   BRIDGE_PORT (host publish of the in-container 7777, default 7777),
 #   MOD_PORT (host publish of the in-container 7778, the Fabric bridge mod
 #   ws; default unset = not published, so run.sh/REPLAY_WORKER are unchanged),
@@ -53,6 +55,10 @@ if [ "${BARITONE_OFFLINE:-}" = 1 ]; then
 elif ! docker run --rm $AUTH_VOL --entrypoint test "$IMAGE" -s /headlessmc/HeadlessMC/auth/.accounts.json; then
   echo "no stored account: run the one-time login (baritone/README.md) or opt in with BARITONE_OFFLINE=1"; exit 2
 fi
+API_ENV=
+if [ "${BARITONE_API:-}" = 1 ]; then
+  API_ENV="-e BARITONE_API=1"
+fi
 
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CLIENT"; then
   echo "$CLIENT already running — one worker client per box (BARITONE_CLIENT=... for another)"; exit 2
@@ -69,7 +75,7 @@ if [ -n "${MOD_PORT:-}" ]; then
   MOD_PUBLISH="-p ${RIG_BIND:+$RIG_BIND:}$MOD_PORT:7778"
 fi
 docker run --rm --name "$CLIENT" $AUTH_VOL \
-  $OFFLINE_ENV $MOD_PUBLISH -p "${RIG_BIND:+$RIG_BIND:}$BRIDGE_PORT:7777" "$IMAGE" >"$CLIENT_LOG" 2>&1 &
+  $OFFLINE_ENV $API_ENV $MOD_PUBLISH -p "${RIG_BIND:+$RIG_BIND:}$BRIDGE_PORT:7777" "$IMAGE" >"$CLIENT_LOG" 2>&1 &
 bridge_send() { # one console line via the bridge (ab.js speaks TCP; POSIX sh cannot)
   node -e "require(process.argv[1]).sendBridgeLine({host:'localhost',port:+process.argv[2],line:process.argv[3]}).then(()=>{},(e)=>{console.error('bridge:',e.message);process.exit(1)})" "$HERE/ab.js" "$BRIDGE_PORT" "$1"
 }
