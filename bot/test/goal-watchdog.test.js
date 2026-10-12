@@ -1385,7 +1385,7 @@ describe('watchdog commit narration (vmzq.66)', () => {
     assert.match(far[0], /^build home: no wood within 160 — search beyond the task radius up to 256 blocks \(may find wood\)$/)
     assert.equal(bot.chats.length, 2, `a different option narrates its own line: ${JSON.stringify(bot.chats)}`)
     // Plain steps narrate the action, not the STEP_CRITERIA predicate (revmux 01).
-    assert.match(bot.chats[1], /^build home: no wood within 160 — walk the visited boundary \(unlikely \+home now\)$/)
+    assert.match(bot.chats[1], /^build home: no wood within 160 — walks the visited boundary to new ground to find resources \(unlikely \+home now\)$/)
   })
 
   it('the bank option narrates whole: a colon after a paren is not a trigger cut', () => {

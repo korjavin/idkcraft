@@ -11,7 +11,7 @@
 
 const { OUTER_DISK } = require('./goal-unlock')
 const { failReason } = require('./step')
-const { PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION } = require('./plan-consts') // oqul.5: was a lazy task.js require
+const { PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, STEP_EFFECT_TEXT } = require('./plan-consts') // oqul.5: was a lazy task.js require
 
 function taskActive(ctx) {
   try {
@@ -295,7 +295,7 @@ function plainSteps(bot, ctx, kind = null) {
   })
   const eff = (kind && STEP_EFFECT[kind]) || {}
   return steps.map((n) => {
-    let criterion = goal.STEP_CRITERIA[n] || n
+    let criterion = STEP_EFFECT_TEXT[n] || goal.STEP_CRITERIA[n] || n
     if (eff[n]) criterion += eff[n]
     // Held steps ride as retry with their failure named (bead FIX 2).
     try {
