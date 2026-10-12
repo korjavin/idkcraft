@@ -12,8 +12,8 @@ const { EventEmitter } = require('node:events')
 const net = require('node:net')
 const { BridgeTransport } = require('./transport')
 const { refreshEntities, handleBridgeEvent } = require('./entities') // idkcraft-neuc.3: entities+roster fold
+const chunks = require('./chunks') // idkcraft-neuc.6: chunk cache -> sync blockAt/findBlocks/raycast
 
-function keyOf(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 // Failed fire-and-forget baritone.cmd: log, never emit 'error' (runOnce
 // fatal()s every 'error'; see chat()).
@@ -187,7 +187,7 @@ class BaritoneBot extends EventEmitter {
     this.version = opts.version || '26.1.2'
     this._console = opts.console || null
 
-    this.entity = { position: new this.Vec3(0, 64, 0), velocity: new this.Vec3(0, 0, 0), yaw: 0, pitch: 0, onGround: true }
+    this.entity = { position: new this.Vec3(0, 64, 0), velocity: new this.Vec3(0, 0, 0), yaw: 0, pitch: 0, onGround: true, height: 1.8, width: 0.6, eyeHeight: 1.62 }
     this.players = {}
     this.entities = {}
     this.health = 20
@@ -204,7 +204,8 @@ class BaritoneBot extends EventEmitter {
       bigAge: null,
       age: null,
     }
-    this.game = {}
+    this.game = { minY: -64, height: 384 } // overworld defaults; chunk.get refines (neuc.6)
+    this.world = null // prismarine-world WorldSync, built lazily by chunks.ensureWorld
     this.isRaining = false
     this.isSleeping = false
     this.spawnPoint = new this.Vec3(0, 64, 0)
@@ -212,7 +213,6 @@ class BaritoneBot extends EventEmitter {
     this.targetDigBlock = null
     this.currentWindow = null
 
-    this._blocks = new Map() // "x,y,z" -> {name,type,position}
     this._inventory = [] // [{name,count,slot,type}]
     this._goalId = null // live goal id from baritone.cmd; null = none or awaiting the echo
     this._cmdSeq = 0 // every baritone.cmd takes a sequence number ...
@@ -254,6 +254,7 @@ class BaritoneBot extends EventEmitter {
   quit(reason = 'quit') {
     if (this._quitting) return
     this._quitting = true
+    chunks.stopChunks(this)
     if (this._poll) clearInterval(this._poll)
     this._poll = null
     const finish = () => {
@@ -284,6 +285,7 @@ class BaritoneBot extends EventEmitter {
   }
 
   async stop() {
+    chunks.stopChunks(this)
     if (this._poll) clearInterval(this._poll)
     this._poll = null
     if (this.transport && typeof this.transport.removeListener === 'function') {
@@ -292,10 +294,9 @@ class BaritoneBot extends EventEmitter {
     if (this.transport && typeof this.transport.close === 'function') this.transport.close()
   }
 
-  // One state round: entity/health/food + inventory + Baritone status.
-  // Block cache fills via prefetch() + dig/place write-through: blockAt is
-  // sync in mineflayer (268 sites), so it can only ever read the cache —
-  // the async->sync gap is the core sizing item in PROTOCOL.md.
+  // One state round: entity/health/food + inventory + Baritone status +
+  // the one-time chunk fill (neuc.6; afterwards block.update is steady
+  // state and blockAt/findBlocks/raycast are sync local reads).
   async refresh() {
     this._refreshing = true
     try {
@@ -359,6 +360,9 @@ class BaritoneBot extends EventEmitter {
       await refreshEntities(this, this.transport) // idkcraft-neuc.3: one entities.list+roster.get per round
     } catch (_) { /* entities best-effort per round */ }
     try {
+      await chunks.refreshChunks(this, this.transport) // idkcraft-neuc.6: initial chunk fill (near first, rest background)
+    } catch (_) { /* chunks best-effort per round */ }
+    try {
       // Goal-id attribution (idkcraft-neuc.4): a status is ours only when
       // its id is the latched one. Anything else — older, foreign, or
       // arriving while no goal is live (setGoal/stop invalidate
@@ -380,38 +384,50 @@ class BaritoneBot extends EventEmitter {
     this._maybeReissueFollow()
   }
 
-  // Fill the block cache around coords the logic is about to read. Spike:
-  // one block.get per coord (N+1); prod uses chunk.get snapshots (PROTOCOL.md).
+  // Load the columns holding coords the logic is about to read
+  // (chunk.get snapshots, neuc.6 — the spike's N+1 block.get is gone).
   async prefetch(coords) {
     for (const c of coords || []) {
-      const b = await this.transport.call('block.get', { x: Math.floor(c.x), y: Math.floor(c.y), z: Math.floor(c.z) })
-      this._cacheBlock(b)
+      const cx = Math.floor(c.x / 16)
+      const cz = Math.floor(c.z / 16)
+      const key = `${cx},${cz}`
+      if (this._chunkCols && this._chunkCols.has(key)) continue
+      try {
+        const payload = await this.transport.call('chunk.get', { cx, cz })
+        if (payload) chunks.applyChunk(this, payload)
+      } catch (_) { /* unloaded stays unloaded: blockAt reads null */ }
     }
     return this
   }
 
-  _cacheBlock(b) {
-    if (!b || typeof b.x !== 'number') return null
-    const byName = (this.registry && this.registry.blocksByName) || {}
-    const entry = byName[b.name]
-    const rec = {
-      name: b.name,
-      type: entry && typeof entry.id === 'number' ? entry.id : -1,
-      position: new this.Vec3(b.x, b.y, b.z),
-    }
-    this._blocks.set(keyOf(b.x, b.y, b.z), rec)
-    return rec
+  // Sync world reads (neuc.6): prismarine-world over the chunk cache.
+  // Misses read null (unloaded), exactly like mineflayer.
+  blockAt(pos, _extraInfos) {
+    const world = chunks.ensureWorld(this)
+    if (!world || !pos || typeof pos.x !== 'number') return null
+    try { return world.getBlock(pos) } catch (_) { return null }
   }
 
-  blockAt(pos) {
-    if (!pos || typeof pos.x !== 'number') return null
-    return this._blocks.get(keyOf(pos.x, pos.y, pos.z)) || null // miss reads unloaded, like mineflayer
-  }
+  findBlocks(options) { return chunks.findBlocks(this, options) }
+  findBlock(options) { return chunks.findBlock(this, options) }
+  canSeeBlock(block) { return chunks.canSeeBlock(this, block) }
+  blockInSight(block) { return this.canSeeBlock(block) }
 
+  // mineflayer canDigBlock: diggable and within eye reach (5.1 from the
+  // eye point to the block centre); liquids and unbreakables excluded
+  // (their digTime is Infinity on v1, so dig() would throw there too).
   canDigBlock(block) {
-    if (!block || !block.name) return false
-    if (block.name === 'air' || block.name === 'bedrock') return false
-    return true // spike: hardness/tool parity is plan work (PROTOCOL.md)
+    if (!block || !block.diggable) return false
+    if (block.name === 'air' || block.name === 'bedrock' ||
+      block.name === 'water' || block.name === 'flowing_water' ||
+      block.name === 'lava' || block.name === 'flowing_lava') return false
+    if (typeof block.hardness === 'number' && block.hardness < 0) return false
+    try {
+      const eye = this.entity.position.offset(0, 1.65, 0)
+      return block.position.offset(0.5, 0.5, 0.5).distanceTo(eye) <= 5.1
+    } catch (_) {
+      return true // no usable geometry (unit fakes): diggability decided it
+    }
   }
 
   async dig(block, _forceLook) {
@@ -421,9 +437,7 @@ class BaritoneBot extends EventEmitter {
     this.targetDigBlock = block // stuck.js reads this during a lib dig
     try {
       const r = await this.transport.call('dig.once', { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) })
-      this._blocks.set(keyOf(p.x, p.y, p.z), {
-        name: 'air', type: -1, position: new this.Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)),
-      })
+      chunks.applyBlockUpdate(this, { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z), stateId: 0 }) // write-through; block.update also lands
       return r
     } finally {
       this.targetDigBlock = null
@@ -436,7 +450,8 @@ class BaritoneBot extends EventEmitter {
     const y = Math.floor(ref.position.y + face.y)
     const z = Math.floor(ref.position.z + face.z)
     const r = await this.transport.call('place.once', { x, y, z })
-    this._cacheBlock({ name: (r && r.placed) || 'stone', x, y, z })
+    const placed = (this.registry && this.registry.blocksByName && this.registry.blocksByName[(r && r.placed) || 'stone']) || null
+    if (placed && typeof placed.defaultState === 'number') chunks.applyBlockUpdate(this, { x, y, z, stateId: placed.defaultState })
     await this.refresh().catch(() => {}) // inventory moved; re-cache best-effort
     return r
   }
@@ -679,6 +694,7 @@ class BaritoneBot extends EventEmitter {
   }
 
   _handleEvent(method, params) {
+    if (chunks.handleChunkEvent(this, this.transport, method, params)) return // idkcraft-neuc.6: chunk.loaded/unloaded, block.update
     if (handleBridgeEvent(this, method, params)) return // idkcraft-neuc.3: player.joined/left, entity.gone
     const p = params || {}
     switch (method) {
@@ -693,10 +709,6 @@ class BaritoneBot extends EventEmitter {
         break
       case 'respawn':
         this.emit('respawn')
-        break
-      case 'block.update':
-        if (typeof p.x === 'number') this._cacheBlock(p)
-        this.emit('blockUpdate', null, this.blockAt(p))
         break
       case 'baritone.event':
         // Pushed Baritone PathEvent, id-attributed like the poll: foreign

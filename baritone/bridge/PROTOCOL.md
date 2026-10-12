@@ -301,3 +301,45 @@ serves last-good. BridgeServer seam: `onClientTick(Runnable)` plus
 Maps/Lists and convert at the boundary). Node-side wiring is landed
 (poll + router in `bot/src/bridge/index.js`); the mod half
 (`Entities.install`) went live with .1's `BridgeServer`.
+
+## Chunk cache (idkcraft-neuc.6)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Chunks.java`
+(`Chunks.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/chunks.js` (poll-round initial fill + event router
+in `bot/src/bridge/index.js`; the spike's N+1 `block.get` Map is gone).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `chunks.list` | — | `{columns:[{cx,cz}]}` | loaded columns |
+| `chunk.get` | `{cx,cz}` | `{cx,cz,minY,sections:[{y,states}]}` | one prismarine-chunk column |
+
+`y` is the section Y (blockY/16, e.g. -4 in the overworld); `states` is
+base64 of 4096 int16-LE **global block-state ids** in section-local
+`(y<<8)|(z<<4)|x` order, or null for an all-air section. Ids are the
+client's own (`Block.getId(state)` over `BLOCK_STATE_REGISTRY`) — the
+same numbering minecraft-data 26.1.2 uses, so Node builds real
+prismarine-blocks from them (verified for stone/air/water/oak_log on
+the rig smoke). An unloaded `{cx,cz}` fails `-32002`.
+
+Events: `chunk.loaded {cx,cz}` / `chunk.unloaded {cx,cz}` (inbound
+chunk packets, packet-fed loaded set), `block.update {x,y,z,stateId}`
+(single + multi-block packets fan out per cell; no mixins — the core
+packet hook in `BridgeServer.onPacket`).
+
+Node fold: `bot.world = new World(null).sync` (prismarine-world via
+mineflayer's deps, no new npm dep), columns = prismarine-chunk filled
+by `setBlockStateId` per section; `block.update` → `setBlockStateId` +
+`bot.emit('blockUpdate', old, new)` (unloaded column: silent, like
+mineflayer). `bot.blockAt(pos)` = `world.getBlock` (miss = null),
+`bot.findBlocks`/`findBlock` = a port of mineflayer
+`lib/plugins/blocks.js` over the same columns, `bot.world.raycast` and
+`bot.canSeeBlock` come from prismarine-world, `bot.canDigBlock` =
+diggable + eye reach 5.1 with liquids/bedrock refused.
+
+Initial fill: on the first poll round, `chunks.list` → columns within
+4 chunks (Chebyshev) of the body load at once, the rest at ≤4 columns
+per 100 ms in the background; `chunk.loaded` fetches promptly. A failed
+fetch retries once in the background, then waits for the next
+`chunk.loaded`. `bot.game.minY`/`height` start at the overworld
+defaults (-64/384) and refine from each `chunk.get`.

@@ -17,7 +17,7 @@ const Vec3 = require('vec3')
 const follow = require('../src/behaviours/follow')
 const { countItems } = require('../src/perception')
 
-const REGISTRY = { blocksByName: { air: { id: 0 }, dirt: { id: 1 }, stone: { id: 2 } } }
+const REGISTRY = require('minecraft-data')('26.1.2') // neuc.6: the chunk cache builds real prismarine blocks
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function spikeBot(state = {}) {
@@ -66,13 +66,12 @@ describe('spike surface round-trips (FakeTransport = the mod)', () => {
     assert.equal(typeof bot.entity.position.floored, 'function') // behaviours call .floored()
   })
 
-  it('blockAt reads the prefetched cache, misses read unloaded (null)', async () => {
-    assert.equal(bot.blockAt(new Vec3(5, 64, 5)), null) // nothing prefetched yet
-    await bot.prefetch([{ x: 5.2, y: 64, z: 5.8 }]) // floors like the world sync
+  it('blockAt reads the chunk cache, misses read unloaded (null)', async () => {
+    // The initial fill (start's first refresh) already loaded column 0,0.
     const b = bot.blockAt(new Vec3(5, 64, 5))
     assert.equal(b.name, 'dirt')
-    assert.equal(b.type, 1)
-    assert.equal(bot.blockAt(new Vec3(6, 64, 6)), null)
+    assert.equal(b.type, REGISTRY.blocksByName.dirt.id)
+    assert.equal(bot.blockAt(new Vec3(160, 64, 160)), null) // unloaded column
   })
 
   it('inventory.items feeds the real countItems unchanged', () => {
@@ -82,6 +81,7 @@ describe('spike surface round-trips (FakeTransport = the mod)', () => {
 
   it('dig breaks the block and clears targetDigBlock', async () => {
     await bot.prefetch([{ x: 5, y: 64, z: 5 }])
+    bot.entity.position = new Vec3(4, 64, 5) // within canDigBlock eye reach
     const b = bot.blockAt(new Vec3(5, 64, 5))
     assert.equal(bot.canDigBlock(b), true)
     assert.equal(bot.canDigBlock({ name: 'bedrock' }), false)

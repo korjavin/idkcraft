@@ -130,6 +130,10 @@ class FakeTransport extends EventEmitter {
         const name = s.blocks[this.key(params.x, params.y, params.z)] || 'air'
         return { name, x: Math.floor(params.x), y: Math.floor(params.y), z: Math.floor(params.z) }
       }
+      case 'chunks.list': // idkcraft-neuc.6: columns holding scripted blocks
+        return { columns: this._fakeColumns() }
+      case 'chunk.get': // idkcraft-neuc.6: state-id sections built from s.blocks
+        return this._fakeChunk(Math.floor(params.cx), Math.floor(params.cz))
       case 'inventory.get':
         return { items: s.inventory.map((i) => ({ ...i })) }
       case 'entities.list': // idkcraft-neuc.3: deep copy, the wire would serialize
@@ -193,6 +197,48 @@ class FakeTransport extends EventEmitter {
       default:
         throw new Error(`bridge: unknown method ${method}`)
     }
+  }
+
+  // idkcraft-neuc.6: scripted columns = columns holding a scripted block,
+  // plus any state.fakeColumns the test adds explicitly.
+  _fakeColumns() {
+    const cols = new Map()
+    for (const k of Object.keys(this.state.blocks || {})) {
+      const [x, , z] = k.split(',').map(Number)
+      const cx = Math.floor(x / 16)
+      const cz = Math.floor(z / 16)
+      cols.set(`${cx},${cz}`, { cx, cz })
+    }
+    for (const c of this.state.fakeColumns || []) cols.set(`${c.cx},${c.cz}`, { cx: c.cx, cz: c.cz })
+    return [...cols.values()]
+  }
+
+  // Wire-shaped chunk payload (PROTOCOL.md chunks section): every section
+  // present, null for all-air, else base64 int16-LE global state ids in
+  // (y<<8)|(z<<4)|x order. State ids come from the real registry so the
+  // adapter's prismarine blocks match a mineflayer block for the same id.
+  _fakeChunk(cx, cz) {
+    const s = this.state
+    const registry = require('minecraft-data')(s.mc || '26.1.2')
+    const minY = typeof s.chunkMinY === 'number' ? s.chunkMinY : -64
+    const numSections = typeof s.chunkSections === 'number' ? s.chunkSections : 24
+    const sections = []
+    for (let i = 0; i < numSections; i++) sections.push({ y: minY / 16 + i, states: null })
+    for (const [k, name] of Object.entries(s.blocks || {})) {
+      if (name === 'air') continue
+      const [x, y, z] = k.split(',').map(Number)
+      if (Math.floor(x / 16) !== cx || Math.floor(z / 16) !== cz) continue
+      const entry = registry.blocksByName[name]
+      if (!entry) continue
+      const si = Math.floor((y - minY) / 16)
+      if (si < 0 || si >= numSections) continue
+      const sec = sections[si]
+      if (sec.states === null) sec.states = Buffer.alloc(4096 * 2)
+      const idx = (((y - minY) & 15) << 8) | ((z & 15) << 4) | (x & 15)
+      sec.states.writeInt16LE(entry.defaultState, idx * 2)
+    }
+    for (const sec of sections) if (Buffer.isBuffer(sec.states)) sec.states = sec.states.toString('base64')
+    return { cx, cz, minY, sections }
   }
 
   // Test helper: inject a mod->node event (chat, death, ...).
