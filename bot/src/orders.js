@@ -373,18 +373,21 @@ function createOrders(box) {
           if (plan && plan.have > 0) return openPackOrder()
           return bringMod.tierRefusal(bot, res.name)
         }
-        // Buried 48-best (atl.15): the far shells may see exposed ore and
-        // memory may know some — the buried hit is stashed as the dig
-        // candidate instead of committing to the shaft at once.
+        // Buried 48-best (atl.15, jlda.11 early-commit): a diggable hit
+        // commits below (the !search branch) instead of scanning the far
+        // shells for exposed ore — the full verdict cost ~37 s on MINE-10
+        // before the first dig. Only a gated shaft (no dig in play) still
+        // defers to the shells; memory (free) still joins the verdict.
         const buried = bringMod.buriedCand(bp0, res, bot)
         let mem = null
         try { mem = bringMod.memoryExposed(bot, ctx, bp0, name, null) } catch (_) { mem = null }
         mem = bringMod.memoryInBudget(mem, buried)
-        const search = startFarSearch(bot, name, null, { exposedOnly: true })
+        const search = buried ? null : startFarSearch(bot, name, null, { exposedOnly: true })
         if (search === 'unknown') return `unknown block: ${name}`
         if (!search) {
-          // Edge 48, no shells: decide now; a contested pair opens the
-          // order in find so the first (awaited) tick asks the model once.
+          // Edge 48 (no shells) or a diggable stash (jlda.11 early-commit):
+          // decide now; a contested pair opens the order in find so the
+          // first (awaited) tick asks the model once.
           // A gated shaft with no exposed rival (chv) is no verdict at all:
           // the order opens in find so the legs hunt diggable ground (or
           // refuse honestly with the vein coords when anchorless).
