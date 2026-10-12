@@ -72,8 +72,12 @@ docker logs "$CLIENT" 2>/dev/null | grep -q "HMC-Specifics initialized" || { ech
 printf " up; wait: client joins"
 JOINED=
 for i in $(seq 0 23); do
-  # one connect per 30 s: a connect resent mid-login restarts the handshake
-  [ $((i % 6)) = 0 ] && bridge_send "connect host.docker.internal $MC_PORT"
+  # one connect per 30 s: a connect resent mid-login restarts the handshake.
+  # A dead bridge fails the start (it owns the join) and stops the launched
+  # client — a bare bridge_send here would exit under set -e and leak it.
+  if [ $((i % 6)) = 0 ]; then
+    bridge_send "connect host.docker.internal $MC_PORT" || { echo " bridge send failed ($CLIENT_LOG)"; docker stop -t 5 "$CLIENT" >/dev/null 2>&1 || true; exit 2; }
+  fi
   sleep 5
   docker exec "$RIG_CONTAINER" rcon-cli list 2>/dev/null | grep -qw "$BOTNAME" && { JOINED=1; break; }
   printf .

@@ -88,6 +88,11 @@ const bring = new client.Counter({
   help: 'Bring-me orders by outcome (done|refused|cancelled) and kind (block|food)',
   labelNames: ['outcome', 'kind']
 })
+const workerJobs = new client.Counter({
+  name: 'idkcraft_bot_worker_jobs_total',
+  help: 'Worker delegations by kind (bore) and outcome (done|fallback)',
+  labelNames: ['kind', 'outcome']
+})
 const goalSteps = new client.Counter({
   name: 'idkcraft_bot_goal_steps_total',
   help: 'Goal step choices by step and choice source (laya|jev|only-option|goal-fsm|fsm-fallback)',
@@ -179,4 +184,4 @@ const goalWatchdogTotal = new client.Counter({
   help: 'Goal watchdog rounds by kind, choice and source',
   labelNames: ['kind', 'choice', 'source']
 })
-module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, goalSteps, stepStaleCompletions, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, goalWatchdogTotal, setVitals, serve }
+module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, workerJobs, goalSteps, stepStaleCompletions, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, goalWatchdogTotal, setVitals, serve }

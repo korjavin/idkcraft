@@ -13,6 +13,7 @@ const metrics = require('../metrics')
 const { say, clearGoal } = require('./util')
 const woolMod = require('./wool')
 const stuck = require('../stuck')
+const worker = require('../worker')
 
 const WANT_ORE = 3
 const WANT_MAX = 16
@@ -42,6 +43,22 @@ function releaseSmelt(ctx) {
   if (f.settled) f.result = null
 }
 
+// Guided dig-in (idkcraft-jlda.4): park the worker when its order ends
+// anywhere but the guided paths (dig refusal after a guided arrival,
+// done). True when a #stop went out. No metric: done/fallback counted at
+// the guided outcome, cancelled at the dusk drop. stop/new-order drops
+// (orders.js/index.js) null ctx.bring before any hook could see the job —
+// the worker finishes its current leg, idles, and the next delegation's
+// resume+goto re-tasks it (bounded, self-healing); death never drops the
+// order (it resumes, and the worker boring on is what the job wants).
+function stopGuidedWork(ctx) {
+  const g = ctx && ctx.bring && ctx.bring.guided
+  if (!g || g.stopSent) return false
+  g.stopSent = true
+  try { void worker.send('msg #stop') } catch (_) { /* bridge best-effort */ }
+  return true
+}
+
 function refuse(bot, ctx, line) {
   // A failed sub-order (did.4) reads as the parent's honest line: the gap
   // that never filled, not the leg that failed it.
@@ -51,6 +68,7 @@ function refuse(bot, ctx, line) {
     : null
   say(bot, sub || line)
   metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
+  stopGuidedWork(ctx)
   ctx.bring = null
   releaseSmelt(ctx)
   clearGoal(bot, ctx)
@@ -58,6 +76,7 @@ function refuse(bot, ctx, line) {
 
 function done(bot, ctx) {
   metrics.bring.inc({ outcome: 'done', kind: bringKind(ctx) })
+  stopGuidedWork(ctx)
   ctx.bring = null
   releaseSmelt(ctx)
   clearGoal(bot, ctx)
@@ -194,7 +213,7 @@ function progressed(bp, last, grounded) {
 }
 
 module.exports = {
-  WANT_ORE, WANT_MAX, countDrop, bringKind, refuse, done, releaseSmelt,
+  WANT_ORE, WANT_MAX, countDrop, bringKind, refuse, done, releaseSmelt, stopGuidedWork,
   dropFor, PICKAXE_RANK, requiredTier, bestPickRank, hasPickaxe, tierArticle, tierRefusal,
   PREY_NAMES, PREY_DROPS, animalDist, findAnimal, entityById, progressed,
 }

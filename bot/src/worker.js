@@ -54,6 +54,12 @@ function configured() {
   return cfg.name !== ''
 }
 
+// The worker's player name ('' when unconfigured): chat lines address the
+// delegation to it. Read at call time — tests stub it like send().
+function name() {
+  return cfg.name
+}
+
 function isWorker(name) {
   return cfg.name !== '' && typeof name === 'string' && name === cfg.name
 }
@@ -178,4 +184,4 @@ function leave() {
   return send('disconnect')
 }
 
-module.exports = { configure, configured, isWorker, players, workerEntity, workerOnline, send, ensureJoined, leave, JOIN_ABSENT_MS, JOIN_RESEND_MS, SEND_TIMEOUT_MS }
+module.exports = { configure, configured, name, isWorker, players, workerEntity, workerOnline, send, ensureJoined, leave, JOIN_ABSENT_MS, JOIN_RESEND_MS, SEND_TIMEOUT_MS }
