@@ -4,7 +4,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const castleData = require('../castle')
 const { HOSTILE_NAMES } = require('../perception')
-const { carryOrderStamp } = require('../step') // oqul.11: was a deferred task.js require
+const { carryOrderStamp, stepFailed } = require('../step') // oqul.11: was a deferred task.js require
 const worker = require('../worker')
 const { timeWord } = require('../site')
 // goalFacts(bot, ctx).time without the arbiter (oqul.11): the same word.
@@ -571,6 +571,51 @@ function gohomeTick(bot, ctx, target, state) {
   const st = ctx.gohome
   const out = outsidePos(home)
   const inn = insidePos(home)
+  if (st.phase === 'guided') {
+    // Guided far walk (idkcraft-jlda.5): the worker #gotos the door, the
+    // head follows it. Fight preempts by dispatch order (this tick never
+    // runs under fight); arrival hands back to the walk below next tick. A
+    // re-picked step restarts the walk instead of failing stale at once.
+    if (worker.walkStale(st, ctx)) {
+      worker.walkCancel(st)
+      st.guided = null
+      st.phase = 'walk'
+      st.stalls = 0
+      st.fails = 0
+      st.lastPos = null
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = ''
+      return
+    }
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work', { walk: true }) } catch (_) { /* lease best-effort */ }
+    try { ctx.shelterLeg = out } catch (_) { /* lease stash best-effort */ }
+    const bp = botPos(bot)
+    if (!bp) return
+    const res = worker.walkTick(bot, ctx, st, bp, nearOut(out, 1, false))
+    if (res === 'walk') {
+      try {
+        if (factsTime(bot) === 'night') ctx.shelterRun = Date.now()
+      } catch (_) { /* unknown time: no stamp (fail closed) */ }
+      return
+    }
+    if (res === 'done') {
+      st.guided = null
+      st.phase = 'walk'
+      st.stalls = 0
+      st.fails = 0
+      st.lastPos = null
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = ''
+      return
+    }
+    // Failed: the walk's own failure path below, byte-identical (walkTo had
+    // set it before the delegation; re-set after the guidedClear).
+    st.guided = null
+    st.phase = 'failed'
+    stepFailed(ctx, 'cannot-reach-home')
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
+    ctx.shelterLeg = null; return
+  }
   if (st.phase === 'walk') {
     // Lease refresh pre-issue (the walk plans no-dig — explicit borrow,
     // the walk dispatches) + the shelter anchor for the post-dispatch
@@ -603,6 +648,18 @@ function gohomeTick(bot, ctx, target, state) {
         st.viaDone = true
         ctx.stepStatus = 'running'
         ctx.lastGoalKey = ''
+        return
+      }
+      // Guided far walk (idkcraft-jlda.5): the head's own leg failed — the
+      // worker takes the walk, the head follows. Only after the direct leg
+      // (never the detour), never first.
+      if (worker.walkShouldDelegate(bot, ctx, 'gohome', out)) {
+        worker.walkDelegate(bot, ctx, st, out, { kind: 'gohome', label: 'home', key: 'gohome-guided' })
+        st.phase = 'guided'
+        st.stalls = 0
+        st.fails = 0
+        st.lastPos = null
+        ctx.stepStatus = 'running'
         return
       }
       try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
@@ -1696,6 +1753,30 @@ function comehome(bot, ctx, target, state) {
   }
   const out = outsidePos(home)
   const meet = meetPos(home)
+  if (order.phase === 'guided') {
+    // Guided far walk (idkcraft-jlda.5): the worker #gotos the door, the
+    // head follows it. Fight preempts by dispatch order; arrival hands back
+    // to the walk below next tick.
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'comehome', { walk: true }) } catch (_) { /* lease best-effort */ }
+    try { ctx.shelterLeg = out } catch (_) { /* lease stash best-effort */ }
+    const bp = botPos(bot)
+    if (!bp) return
+    const res = worker.walkTick(bot, ctx, order, bp, nearOut(out, 1, false))
+    if (res === 'walk') return
+    if (res === 'done') {
+      order.guided = null
+      order.phase = 'walk'
+      order.stalls = 0
+      order.fails = 0
+      order.lastPos = null
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = ''
+      return
+    }
+    order.guided = null
+    failMeet(bot, ctx, 'failed:cannot-reach-home')
+    return
+  }
   if (order.phase === 'walk') {
     // Lease refresh pre-issue (the walk plans no-dig — explicit borrow,
     // the walk dispatches) + the shelter anchor for the post-dispatch
@@ -1725,6 +1806,18 @@ function comehome(bot, ctx, target, state) {
         order.viaDone = true
         ctx.stepStatus = 'running'
         ctx.lastGoalKey = ''
+        return
+      }
+      // Guided far walk (idkcraft-jlda.5): the head's own leg failed — the
+      // worker takes the walk, the head follows. Only after the direct leg,
+      // never first.
+      if (worker.walkShouldDelegate(bot, ctx, 'comehome', out)) {
+        worker.walkDelegate(bot, ctx, order, out, { kind: 'comehome', label: 'home', key: 'comehome-guided' })
+        order.phase = 'guided'
+        order.stalls = 0
+        order.fails = 0
+        order.lastPos = null
+        ctx.stepStatus = 'running'
         return
       }
       failMeet(bot, ctx, 'failed:cannot-reach-home')

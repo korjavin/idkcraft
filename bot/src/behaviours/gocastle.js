@@ -6,6 +6,8 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { entrance } = require('./castle')
 const body = require('../body')
+const worker = require('../worker')
+const { stepFailed } = require('../step')
 const { issueGoal } = require('./util')
 
 const MOVE_TOLERANCE = 0.5
@@ -123,6 +125,52 @@ function gocastle(bot, ctx, target, state) {
       return
     }
     holdStill(bot, ctx)
+    return
+  }
+
+  if (od.phase === 'guided') {
+    // Guided far walk (idkcraft-jlda.5): the worker #gotos the entrance,
+    // the head follows it. Fight preempts by dispatch order; arrival hands
+    // back to the walk below next tick. Before the climb calc: a guided
+    // head follows, it never climbs. A re-picked step leg restarts the
+    // walk instead of failing stale at once (orders never re-pick).
+    if (stepMode && worker.walkStale(od, ctx)) {
+      worker.walkCancel(od)
+      od.guided = null
+      od.phase = 'walk'
+      od.stalls = 0
+      od.fails = 0
+      od.lastPos = null
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = ''
+      return
+    }
+    try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'gocastle', { walk: true }) } catch (_) { /* lease best-effort */ }
+    try { ctx.shelterLeg = ent } catch (_) { /* lease stash best-effort */ }
+    const res = worker.walkTick(bot, ctx, od, bp, (p) => atEntrance(p, ent))
+    if (res === 'walk') return
+    if (res === 'done') {
+      od.guided = null
+      od.phase = 'walk'
+      od.stalls = 0
+      od.fails = 0
+      od.lastPos = null
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = ''
+      return
+    }
+    // Failed: the XZ walk's own failure path, byte-identical.
+    od.guided = null
+    od.phase = 'failed'
+    stepFailed(ctx, 'cannot-reach-castle')
+    if (order) {
+      ctx.gocastle = null
+      holdStill(bot, ctx)
+      try { bot.chat('cannot reach the castle') } catch (_) { /* chat best-effort */ }
+    } else {
+      ctx.gosite = null
+      holdStill(bot, ctx)
+    }
     return
   }
 
@@ -289,6 +337,18 @@ function gocastle(bot, ctx, target, state) {
     try { idle = !bot.pathfinder.isMoving() } catch (_) { /* retry */ }
     if (idle) ctx.lastGoalKey = ''
     if (od.fails >= MAX_REISSUES) {
+      // Guided far walk (idkcraft-jlda.5): the head's own XZ leg failed —
+      // the worker takes the walk, the head follows. Only the XZ walk
+      // delegates (the climb above never does); unloaded goals go XZ-only.
+      if (worker.walkShouldDelegate(bot, ctx, 'gocastle', ent)) {
+        worker.walkDelegate(bot, ctx, od, ent, { kind: 'gocastle', label: 'to the castle', key: 'gocastle-guided', xzOnly: !loaded })
+        od.phase = 'guided'
+        od.stalls = 0
+        od.fails = 0
+        od.lastPos = null
+        ctx.stepStatus = 'running'
+        return
+      }
       od.phase = 'failed'
       ctx.stepStatus = 'failed:cannot-reach-castle'
       if (order) {
