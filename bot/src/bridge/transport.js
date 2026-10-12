@@ -152,6 +152,54 @@ class FakeTransport extends EventEmitter {
         item.count--
         return { placed: s.blocks[k] }
       }
+      // idkcraft-neuc.9 look/interact surface: recorded for assertions,
+      // state mutations mirror the mod (pos yaw/pitch, sleeping, using).
+      case 'look.set':
+        (s.lookLog = s.lookLog || []).push({ method, ...params })
+        if (s.pos) { s.pos = { ...s.pos, yaw: params.yaw, pitch: params.pitch } }
+        return { ok: true }
+      case 'look.at': {
+        (s.lookLog = s.lookLog || []).push({ method, ...params })
+        if (s.pos) {
+          const dx = params.x - s.pos.x
+          const dy = params.y - (s.pos.y + 1.62)
+          const dz = params.z - s.pos.z
+          s.pos = { ...s.pos, yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) }
+        }
+        return { ok: true }
+      }
+      case 'attack':
+        (s.attacks = s.attacks || []).push(params.entityId)
+        return { ok: true }
+      case 'interact.block': {
+        (s.blockInteracts = s.blockInteracts || []).push({ ...params })
+        const name = s.blocks[this.key(params.x, params.y, params.z)] || 'air'
+        if (name.endsWith('_bed') || name === 'bed') s.isSleeping = true
+        return { ok: true, result: 'SUCCESS' }
+      }
+      case 'interact.item':
+        (s.itemUses = s.itemUses || []).push({ ...params })
+        s.usingItem = true
+        if (typeof s.eatDelayMs === 'number') {
+          const t = setTimeout(() => {
+            const held = s.inventory.find((i) => i.count > 0)
+            if (held) held.count--
+            s.usingItem = false
+          }, s.eatDelayMs)
+          if (typeof t.unref === 'function') t.unref()
+        }
+        return { ok: true }
+      case 'interact.stop':
+        s.usingItem = false
+        return { ok: true }
+      case 'sleep':
+        (s.sleepCalls = s.sleepCalls || []).push({ ...params })
+        s.isSleeping = true
+        return { ok: true }
+      case 'wake':
+        (s.wakeCalls = (s.wakeCalls || 0) + 1)
+        s.isSleeping = false
+        return { ok: true }
       case 'chat.send':
         s.chatLog.push(params.message)
         return { sent: true }
@@ -163,6 +211,11 @@ class FakeTransport extends EventEmitter {
         s.baritone = cmd
         if (/^#set(\s|$)/.test(cmd)) {
           (s.baritoneSets = s.baritoneSets || []).push(cmd)
+          return { id: null }
+        }
+        if (/^#(pause|resume)(\s|$)/.test(cmd)) { // idkcraft-neuc.9: goal stays armed, no status touch
+          (s.baritonePauses = s.baritonePauses || []).push(cmd)
+          s.baritonePaused = cmd.startsWith('#pause')
           return { id: null }
         }
         if (/^#stop/.test(cmd)) {

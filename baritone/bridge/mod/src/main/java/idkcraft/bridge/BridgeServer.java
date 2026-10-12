@@ -184,6 +184,20 @@ public final class BridgeServer {
         rpc.register(method, handler);
     }
 
+    /**
+     * Run one interaction on the client thread for a surface class
+     * (idkcraft-neuc.9 Look; later surfaces reuse it). Returns the task's
+     * result (which may itself be null to signal "no player"); a null from
+     * the submit machinery (booting / timed out) fails CLIENT_BUSY.
+     */
+    <V> V onClient(java.util.concurrent.Callable<V> task) throws Rpc.RpcException {
+        V res = submit(task);
+        if (res == null && !ensureClient()) {
+            throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
+        }
+        return res;
+    }
+
     private final java.util.concurrent.CopyOnWriteArrayList<Runnable> tickHooks =
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
