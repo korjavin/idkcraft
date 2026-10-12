@@ -713,4 +713,4 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan }
+module.exports = { say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
