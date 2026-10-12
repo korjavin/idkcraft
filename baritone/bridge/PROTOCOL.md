@@ -44,6 +44,12 @@ Events (spike): `chat {username,message}`, `death {}`, `respawn {}`,
 {status}` (`success|noPath|timeout`, from a Baritone API listener in the
 mod — the executive-poll fallback in `adapter.js#refresh` is spike-only).
 
+Status attribution (revmux 01 core-3): the spike adapter latches a goal
+generation per `setGoal` and ignores `last:'none'` (mod still
+calculating) so a stale poll never synthesises a spurious `success`
+(which would re-issue `follow.js` every tick and wedge the body). Prod
+echoes a goal id through `baritone.cmd` → `baritone.status` instead.
+
 ## Prod methods (sized, not in the spike)
 
 Ordered by the bead's ask (which surface is easy/hard). Sizes are

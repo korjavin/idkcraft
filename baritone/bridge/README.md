@@ -7,13 +7,17 @@ Zero `bot/src` files change; all spike code is this new directory.
 
 ## Verdict: CONDITIONAL GO
 
-The easy leg is proven on real iron (below): state + `#goto` + chat +
-single dig/place fit the adapter shape in ~2 weeks. The full swap is
-8–12 weeks with hard risks (windows/crafting, control states, packet
-taps — see `PROTOCOL.md`). Recommended sequence: land the hybrid first
-(epic idkcraft-jlda — its worker slot doubles as the adapter parity
-rig), then epic the adapter in three phases (walk → touch → live),
-keeping mineflayer as the rollback seam.
+Honest scope (revmux 01 core-1): only the `#goto` leg met a real
+client (rig proof below). State, chat, dig/place and the unchanged
+`follow.js` run are proven against the `FakeTransport` loopback only,
+and the mod is a skeleton (not built) — the mod build and a full
+behaviour-on-rig run are deferred to the epic (recorded on the bead).
+With that scope, the easy leg fits the adapter shape (~2 weeks); the
+full swap is 8–12 weeks with hard risks (windows/crafting, control
+states, packet taps — see `PROTOCOL.md`). Recommended sequence: land
+the hybrid first (epic idkcraft-jlda — its worker slot doubles as the
+adapter parity rig), then epic the adapter in three phases (walk →
+touch → live), keeping mineflayer as the rollback seam.
 
 ## Files
 
@@ -44,7 +48,10 @@ keeping mineflayer as the rollback seam.
 1. `blockAt` is sync (268 sites) but the bridge is async — the adapter
    must serve it from a chunk-snapshot cache; misses read unloaded.
 2. `GoalFollow` needs no Baritone `#follow`: `follow.js` already
-   re-issues, so a one-shot `#goto` at the live target suffices.
+   re-issues, so a one-shot `#goto` at the live target suffices — but
+   only with race-free status (revmux 01 core-3: the adapter latches a
+   goal generation and ignores `last:'none'`; prod echoes a goal id
+   through `baritone.cmd` → `baritone.status`).
 3. `registry` (90 sites) is static data — pass mineflayer's through, zero bridge traffic.
 4. Cutover is big-bang (one name = one connection, no shadow mode) —
    the hybrid rig is the parity harness before any cutover.

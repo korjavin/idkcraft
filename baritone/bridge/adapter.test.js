@@ -155,6 +155,62 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
   })
 })
 
+describe('revmux 01 fixes (poll pile-up, stale status)', () => {
+  it('poll honors pollMs: a handful of calls, not one per ms (core-2)', async () => {
+    const { transport, bot } = spikeBot()
+    let calls = 0
+    const orig = transport.call.bind(transport)
+    transport.call = async (...a) => { calls++; return orig(...a) }
+    await bot.start({ pollMs: 50 })
+    await sleep(130)
+    await bot.stop()
+    assert.ok(calls <= 30, `expected a handful of calls, got ${calls}`)
+  })
+
+  it('a slow round skips, never overlaps (core-2)', async () => {
+    const { transport, bot } = spikeBot()
+    let active = 0
+    let max = 0
+    const orig = transport.call.bind(transport)
+    transport.call = async (...a) => {
+      active++
+      max = Math.max(max, active)
+      try {
+        await sleep(80)
+        return await orig(...a)
+      } finally {
+        active--
+      }
+    }
+    await bot.start({ pollMs: 20 })
+    await sleep(110)
+    await bot.stop()
+    assert.equal(max, 1)
+  })
+
+  it("a stale 'none' status after setGoal stays silent, keeps isMoving (core-3)", async () => {
+    const { transport, bot } = spikeBot()
+    await bot.start({ pollMs: 0 })
+    try {
+      const statuses = []
+      bot.on('path_update', (r) => statuses.push(r.status))
+      bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
+      // The mod hasn't caught up: still calculating, last unknown.
+      transport.state.baritoneStatus = { pathing: false, last: 'none' }
+      await bot.refresh()
+      assert.deepEqual(statuses, [])
+      assert.equal(bot.pathfinder.isMoving(), true)
+      // The real terminal status still synthesizes the pair.
+      transport.state.baritoneStatus = { pathing: false, last: 'success' }
+      await bot.refresh()
+      assert.deepEqual(statuses, ['success'])
+      assert.equal(bot.pathfinder.isMoving(), false)
+    } finally {
+      await bot.stop()
+    }
+  })
+})
+
 describe('console backend (rig proof without the mod)', () => {
   it('setGoal sends msg #goto lines, setGoal(null) stops', async () => {
     const lines = []

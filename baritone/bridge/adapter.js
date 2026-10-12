@@ -74,6 +74,8 @@ class BaritoneBot extends EventEmitter {
     this._blocks = new Map() // "x,y,z" -> {name,type,position}
     this._inventory = [] // [{name,count,slot,type}]
     this._baritone = { pathing: false, last: 'none' }
+    this._goalGen = 0 // bumped per mod-backend setGoal; stale statuses drop (revmux 01 core-3)
+    this._refreshing = false
     this._pathStatus = 'none'
     this._poll = null
     this._onTransportEvent = (method, params) => this._handleEvent(method, params)
@@ -101,8 +103,9 @@ class BaritoneBot extends EventEmitter {
       await this.refresh()
       if (pollMs > 0) {
         this._poll = setInterval(() => {
+          if (this._refreshing) return // a slow round skips, never piles up (revmux 01 core-2)
           this.refresh().catch(() => { /* poll best-effort; errors surface on demand calls */ })
-        })
+        }, pollMs)
         if (typeof this._poll.unref === 'function') this._poll.unref()
       }
     }
@@ -124,6 +127,16 @@ class BaritoneBot extends EventEmitter {
   // the async->sync gap is the core sizing item in PROTOCOL.md.
   async refresh() {
     if (this.backend !== 'mod') throw new Error('adapter: refresh needs the mod backend (console has no state)')
+    this._refreshing = true
+    try {
+      await this._refreshOnce()
+    } finally {
+      this._refreshing = false
+    }
+    return this
+  }
+
+  async _refreshOnce() {
     const st = await this.transport.call('state.get', {})
     if (st && st.pos) {
       this.entity.position.x = st.pos.x
@@ -141,17 +154,26 @@ class BaritoneBot extends EventEmitter {
       this.heldItem = this._inventory[0] || null // spike: selected slot tracking is plan work
     } catch (_) { /* inventory best-effort per round */ }
     try {
-      const bs = await this.transport.call('baritone.status', {})
+      // revmux 01 core-3: read was+generation BEFORE the await; a status
+      // older than the last setGoal, or one the mod can't attribute yet
+      // (last 'none': still calculating), stays silent and keeps the
+      // setGoal latch — synthesising 'success' here re-issues follow.js
+      // every tick and the body never moves. Prod echoes a goal id
+      // through baritone.cmd -> baritone.status instead of the latch.
+      const genBefore = this._goalGen
       const was = this._baritone.pathing
-      this._baritone = bs && typeof bs === 'object' ? bs : { pathing: false, last: 'none' }
-      if (was && !this._baritone.pathing) {
-        const last = this._baritone.last || 'success'
-        this._pathStatus = last === 'success' ? 'success' : (last === 'noPath' || last === 'timeout' ? last : 'success')
+      const bs = await this.transport.call('baritone.status', {})
+      if (genBefore !== this._goalGen) return // a setGoal landed mid-round: stale
+      if (!bs || typeof bs !== 'object' || bs.last === 'none' || bs.last == null) return
+      const nowPathing = !!bs.pathing
+      this._baritone = { pathing: nowPathing, last: bs.last }
+      if (was && !nowPathing) {
+        const last = bs.last
+        this._pathStatus = last === 'noPath' || last === 'timeout' ? last : 'success'
         this.emit('path_update', { status: this._pathStatus })
         this.emit('path_reset', this._pathStatus === 'success' ? 'goal reached' : this._pathStatus)
       }
     } catch (_) { /* status best-effort per round */ }
-    return this
   }
 
   // Fill the block cache around coords the logic is about to read. Spike:
@@ -247,6 +269,7 @@ class BaritoneBot extends EventEmitter {
       return
     }
     this._baritone = { pathing: true, last: 'none' }
+    this._goalGen = (this._goalGen | 0) + 1
     this.transport.call('baritone.cmd', { command: cmd }).catch((e) => {
       this._baritone = { pathing: false, last: 'noPath' }
       this._pathStatus = 'noPath'
