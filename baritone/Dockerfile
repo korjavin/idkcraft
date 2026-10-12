@@ -13,11 +13,13 @@ COPY config.properties /headlessmc/HeadlessMC/config.properties
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 # Baritone v1.18.0 = "For Minecraft 26.1" (fabric.mod.json: minecraft 26.1.*);
 # hmc-specifics adds the in-game console commands (connect, msg) the driver uses.
+# Both jars pin immutable versioned release assets (idkcraft-jlda.9): the
+# 26.1.2-latest moving tag was re-uploaded under us and broke master CI.
 ADD --checksum=sha256:c50e46003e77e13e6d703d83fad51b03b200912994ccf4d174db7025a1c5b682 \
   https://github.com/cabaletta/baritone/releases/download/v1.18.0/baritone-standalone-fabric-1.18.0.jar \
   /headlessmc/HeadlessMC/run/mods/baritone.jar
-ADD --checksum=sha256:d81456a494f88810603b5c1c38946a0dad7fd24f93c9ea649eb48937a8a0a7dc \
-  https://github.com/headlesshq/hmc-specifics/releases/download/26.1.2-latest/hmc-specifics-26.1.2-fabric-latest.jar \
+ADD --checksum=sha256:2e5e4378727532db567ff648087f64f8f98ee7d1fad2b15193d7f0b2acc86aef \
+  https://github.com/headlesshq/hmc-specifics/releases/download/2.5.0/hmc-specifics-26.1.2-2.5.0-fabric-release.jar \
   /headlessmc/HeadlessMC/run/mods/hmc-specifics.jar
 WORKDIR /headlessmc
 # Downloads the vanilla client + Fabric loader at build time (no account needed

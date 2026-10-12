@@ -33,6 +33,23 @@ jobs:
           cache-dependency-path: bot/package-lock.json
       - run: cd bot && npm ci && npm run test:slow
 
+  # idkcraft-jlda.9: the deploy job only runs on master, so a broken
+  # baritone image build (ADD --checksum mismatch) passed PR CI and broke
+  # master. This PR-only job exercises the same build without pushing.
+  build-baritone:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build baritone image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./baritone
+          push: false
+          cache-from: type=gha,scope=baritone
+
   deploy:
     needs: [test, test-slow]
     if: github.event_name != 'pull_request'
