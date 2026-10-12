@@ -165,6 +165,33 @@ async function main() {
   if (typeof me.uuid !== 'string' || typeof me.ping !== 'number') fail('roster.get', `bad entry: ${JSON.stringify(me)}`)
   pass('roster.get', `${ro.players.length} player(s), ${BOT} ping=${me.ping} mode=${me.gameMode}`)
 
+  // 5b. chunks (neuc.6) — the body column lists, chunk.get decodes, and
+  // the state id under the feet must exist in minecraft-data 26.1.2 with
+  // the same numbering (the adapter builds prismarine-blocks from it).
+  const cl = await t.call('chunks.list', {})
+  if (!cl || !Array.isArray(cl.columns)) fail('chunks.list', `bad reply: ${JSON.stringify(cl)}`)
+  const bcx = Math.floor(pos.x / 16)
+  const bcz = Math.floor(pos.z / 16)
+  if (!cl.columns.some((c) => c.cx === bcx && c.cz === bcz)) fail('chunks.list', `body column ${bcx},${bcz} not loaded (${cl.columns.length} columns)`)
+  const cg = await t.call('chunk.get', { cx: bcx, cz: bcz })
+  if (!cg || !Array.isArray(cg.sections) || typeof cg.minY !== 'number') fail('chunk.get', `bad reply: ${JSON.stringify(cg && { minY: cg.minY, sections: (cg.sections || []).length })}`)
+  const mcData = require('../../../bot/node_modules/minecraft-data')('26.1.2')
+  const fx = Math.floor(pos.x)
+  const fy = Math.floor(pos.y) - 1
+  const fz = Math.floor(pos.z)
+  const sec = cg.sections.find((s) => s.y === Math.floor(fy / 16))
+  if (!sec) fail('chunk.get', `no section for y=${fy}`)
+  let underName = 'air'
+  if (sec.states) {
+    const raw = Buffer.from(sec.states, 'base64')
+    const idx = (((fy - cg.minY) & 15) << 8) | ((fz & 15) << 4) | (fx & 15)
+    const stateId = raw.readInt16LE(idx * 2)
+    const entry = mcData.blocksByStateId[stateId]
+    if (stateId !== 0 && !entry) fail('chunk.get', `stateId ${stateId} under feet not in minecraft-data (numbering mismatch)`)
+    underName = entry ? entry.name : 'air'
+  }
+  pass('chunks', `${cl.columns.length} columns, minY=${cg.minY}, under-feet=${underName} at ${fx} ${fy} ${fz}`)
+
   // 6. baritone.cmd — walk EP1, the id must echo through status + event.
   // Prep mirrors the kqzf spike (rig-goto.js): teleport to the spot spawn,
   // clear, kit up — Baritone needs the pickaxe where the spot says so.
