@@ -13,10 +13,14 @@ if [ $# -gt 0 ]; then
 fi
 HMC_PROPS="-Dhmc.jvmargs=-Dhmc.jline.dumb=true" # no TTY: the in-game JLine reader crashes init unless dumb
 HMC_OFFLINE=
-if [ "${BARITONE_OFFLINE:-}" = 1 ]; then # local rig opt-in only, never prod
-  HMC_PROPS="$HMC_PROPS -Dhmc.offline.username=${BOT:-BaritoneBot}"; HMC_OFFLINE=-offline
+if [ "${BARITONE_OFFLINE:-}" = 1 ] && [ -n "${BOT:-}" ]; then # offline worker (owner Q2): the rig opts in per-run, prod via compose env; an empty name falls through to idle
+  HMC_PROPS="$HMC_PROPS -Dhmc.offline.username=$BOT"; HMC_OFFLINE=-offline
 elif [ ! -s /headlessmc/HeadlessMC/auth/.accounts.json ]; then
-  echo "no account: one-time login, see baritone/README.md"
+  if [ "${BARITONE_OFFLINE:-}" = 1 ]; then
+    echo "BARITONE_OFFLINE=1 with an empty worker name: idling, see baritone/README.md"
+  else
+    echo "no account: one-time login, see baritone/README.md"
+  fi
   # Default-off: no JVM, ~0 RAM. sh stays PID 1: PID 1 ignores signals
   # without a handler, so exec sleep here would stall every stop 10 s.
   trap 'exit 0' TERM INT

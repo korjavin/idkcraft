@@ -131,6 +131,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `WORKER_HOST`: Worker bridge host (default `baritone`)
   - `WORKER_PORT`: Worker bridge port (default `7777`)
   - `BARITONE_MEM_LIMIT`: Worker container memory cap (default `2500m`)
+  - `BARITONE_OFFLINE`: `1` = worker launches offline under `WORKER_NAME`, no account (default empty = idle, no JVM)
 
 ## Conventions
 

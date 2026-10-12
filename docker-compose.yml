@@ -143,6 +143,13 @@ services:
     # network (the bot's worker.js); the rig publishes it for ab.js.
     # No healthcheck: default-off (no account) sleeps, which is not unhealthy.
     mem_limit: ${BARITONE_MEM_LIMIT:-2500m}
+    environment:
+      # Offline worker (owner Q2 2026-10-12): 1 = launch offline under BOT
+      # with no account (start.sh). The name comes from WORKER_NAME — the
+      # same env the bot reads — so the two never diverge. Empty (default) =
+      # idle exactly as before: no JVM, ~0 RAM.
+      BARITONE_OFFLINE: ${BARITONE_OFFLINE:-}
+      BOT: ${WORKER_NAME:-}
     volumes:
       # One-time owner login (baritone/README.md): the account survives
       # redeploys here. FIXED name — see the volumes block below.
