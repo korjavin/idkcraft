@@ -47,9 +47,15 @@ import org.slf4j.LoggerFactory;
  * <p>Threading: the socket threads only queue work and read the volatile
  * snapshot. All client/Baritone calls run on the client thread (via
  * {@link Minecraft#submit} from socket threads, directly from the Baritone
- * tick listener); reads come from the per-tick snapshot built in
- * {@link #onPostTick}. No fabric-api: ticks, path events and inbound packets
- * all arrive over Baritone's {@code IEventBus}, so the mod needs no mixins.
+ * tick listener); reads come from the per-tick snapshot built on the Baritone
+ * post-tick. No fabric-api: ticks, path events and inbound packets all arrive
+ * over Baritone's {@code IEventBus}, so the mod needs no mixins.
+ *
+ * <p>The client side starts lazy: the constructor only binds the socket (safe
+ * at mod-init time), and the first client-touching call grabs the running
+ * game and registers the Baritone listener. Before that the server answers
+ * static data and offline nulls — the worker, which nothing connects to,
+ * never touches Baritone at all.
  *
  * <p>Future surfaces (epic idkcraft-neuc §2) add one class each with a
  * {@code static void install(BridgeServer s)} that calls
@@ -67,13 +73,13 @@ public final class BridgeServer {
 
     private static final Logger LOG = LoggerFactory.getLogger(BridgeServer.class);
 
-    private final Minecraft client;
-    private final IBaritone baritone;
+    private volatile Minecraft client;
+    private volatile IBaritone baritone;
     private final WsServer ws;
     private final Rpc rpc = new Rpc();
     private final Gson gson = new GsonBuilder().serializeNulls().create();
 
-    private final String mcVersion;
+    private volatile String mcVersion = "unknown";
     private final String modVersion;
     private final String baritoneVersion;
 
@@ -93,24 +99,68 @@ public final class BridgeServer {
 
     private final ConcurrentLinkedQueue<ChatLine> chatQueue = new ConcurrentLinkedQueue<>();
 
-    public BridgeServer(Minecraft client) throws IOException {
-        this.client = client;
+    public BridgeServer() throws IOException {
         rpc.register("hello", this::hello)
                 .register("state.get", this::stateGet)
                 .register("chat.send", this::chatSend)
                 .register("baritone.cmd", this::baritoneCmd)
                 .register("baritone.status", this::baritoneStatus);
         this.ws = new WsServer("0.0.0.0", port(), rpc::handle);
-        this.baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
-        this.mcVersion = mcVersion();
         this.modVersion = modVersion(BridgeMod.MOD_ID);
         this.baritoneVersion = modVersion("baritone");
-        this.baritone.getGameEventHandler().registerEventListener(new Events());
     }
 
     public void start() {
         ws.start();
-        LOG.info("idkcraft-bridge listening on {} (mc {}, baritone {})", ws.getPort(), mcVersion, baritoneVersion);
+        LOG.info("idkcraft-bridge {} listening on {}", modVersion, ws.getPort());
+    }
+
+    /**
+     * Grab the running game and register the Baritone listener, once. Runs the
+     * Baritone side on the client thread; safe from any thread. Returns false
+     * while the game is still booting (callers fail retryably).
+     */
+    private synchronized boolean ensureClient() {
+        if (baritone != null) {
+            return true;
+        }
+        Minecraft mc;
+        try {
+            mc = Minecraft.getInstance();
+        } catch (Exception e) {
+            return false;
+        }
+        if (mc == null) {
+            return false;
+        }
+        final Minecraft game = mc;
+        IBaritone b;
+        if (game.isSameThread()) {
+            b = initBaritone();
+        } else {
+            CompletableFuture<IBaritone> future = game.submit(this::initBaritone);
+            try {
+                b = future.get(SUBMIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException | ExecutionException | InterruptedException e) {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                return false;
+            }
+        }
+        if (b == null) {
+            return false;
+        }
+        client = game;
+        baritone = b;
+        return true;
+    }
+
+    /** Client thread only (called under ensureClient's lock). */
+    private IBaritone initBaritone() {
+        IBaritone b = BaritoneAPI.getProvider().getPrimaryBaritone();
+        b.getGameEventHandler().registerEventListener(new Events());
+        return b;
     }
 
     public void stop() {
@@ -134,6 +184,11 @@ public final class BridgeServer {
     // ---- rpc methods (socket threads; client work goes through submit) ----
 
     private com.google.gson.JsonElement hello(JsonObject params) {
+        // The game version may not exist yet at mod-init time; keep asking
+        // until it does (the adapter gates its registry on this value).
+        if ("unknown".equals(mcVersion)) {
+            mcVersion = mcVersion();
+        }
         JsonObject res = new JsonObject();
         res.addProperty("mod", BridgeMod.MOD_ID);
         res.addProperty("v", 1);
@@ -432,17 +487,22 @@ public final class BridgeServer {
 
     /**
      * Run on the client thread, waiting up to {@link #SUBMIT_TIMEOUT_MS}.
-     * Returns null on timeout/interruption; re-entrant when already there.
+     * Returns null when the game is still booting or the call times out;
+     * re-entrant when already on the client thread.
      */
     private <V> V submit(java.util.concurrent.Callable<V> task) {
-        if (client.isSameThread()) {
+        if (!ensureClient()) {
+            return null;
+        }
+        Minecraft mc = client;
+        if (mc.isSameThread()) {
             try {
                 return task.call();
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
         }
-        CompletableFuture<V> future = client.submit(() -> {
+        CompletableFuture<V> future = mc.submit(() -> {
             try {
                 return task.call();
             } catch (Exception e) {

@@ -7,14 +7,15 @@
 //
 // (rig.sh holds the rig up once neuc.2 lands; MOD_PORT is neuc.5's client.sh.
 // Until both merge, borrow their files — see the bead transcript.)
-// Uses the REAL BridgeTransport (../transport.js), so a green run proves the
-// mod speaks what the adapter parses. Exits 0 on PASS, 1 on the first FAIL.
+// Uses the REAL BridgeTransport (bot/src/bridge/transport.js), so a green run
+// proves the mod speaks what the adapter parses. Exits 0 on PASS, 1 on the
+// first FAIL.
 'use strict'
 
 const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
-const { BridgeTransport } = require('../transport.js')
+const { BridgeTransport } = require('../../../bot/src/bridge/transport.js')
 
 const MOD_HOST = process.env.MOD_HOST || 'localhost'
 const MOD_PORT = parseInt(process.env.MOD_PORT || '7778', 10)

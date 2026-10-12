@@ -1,7 +1,6 @@
 package idkcraft.bridge;
 
 import net.fabricmc.api.ClientModInitializer;
-import net.minecraft.client.Minecraft;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,10 +18,19 @@ public class BridgeMod implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         try {
-            BridgeServer server = new BridgeServer(Minecraft.getInstance());
+            BridgeServer server = new BridgeServer();
             server.start();
-        } catch (Exception e) {
-            LOG.error("idkcraft-bridge failed to start; the game continues without it", e);
+        } catch (NoClassDefFoundError e) {
+            // The worker runs the API-less standalone Baritone: without
+            // baritone/api/** there is nothing to bridge (and nothing ever
+            // connects to its unpublished port, so this stays silent).
+            if (String.valueOf(e.getMessage()).contains("baritone/api")) {
+                LOG.info("idkcraft-bridge disabled: standalone Baritone has no Java API");
+            } else {
+                LOG.error("idkcraft-bridge failed to start; the game continues without it", e);
+            }
+        } catch (Throwable t) {
+            LOG.error("idkcraft-bridge failed to start; the game continues without it", t);
         }
     }
 }

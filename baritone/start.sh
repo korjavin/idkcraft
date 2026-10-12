@@ -43,6 +43,12 @@ trap 'kill $CLIENT $SOCAT 2>/dev/null' TERM INT
 # No -commands: it starts the runtime's own stdin reader, which splits input
 # with hmc-specifics' (only hmc-specifics has connect/msg). connect arrives
 # over the bridge only after HMC-Specifics initialized (the head/run.sh wait).
+# idkcraft-neuc.1: the v2 body drives Baritone through its Java API, which
+# only the api jar keeps named (same 1.18.0 code as baritone.jar above).
+# body2 sets BARITONE_API=1; the worker path never sets it and is untouched.
+if [ "${BARITONE_API:-}" = 1 ]; then
+  cp /headlessmc/baritone-api.jar HeadlessMC/run/mods/baritone.jar
+fi
 java $HMC_PROPS -jar headlessmc-launcher-wrapper.jar \
   --command launch fabric-loader-0.19.5-26.1.2 -lwjgl $HMC_OFFLINE < /tmp/console &
 CLIENT=$!
