@@ -456,7 +456,7 @@ function gateCode(rows, diffs) {
 // via the operator's tunnel — sequential single-bot inference calls, the
 // same read-only shape the stands use. Unknown values fail loud (exit 2):
 // a typo must not silently measure the wrong brain.
-const PLAN_STATS = { n: 0, ms: 0, err: 0 } // vhlb.4: REPLAY_PLANNER call counters
+const PLAN_STATS = { n: 0, done: 0, ms: 0, err: 0 } // vhlb.4: REPLAY_PLANNER call counters
 function pickBrain() {
   const which = process.env.REPLAY_BRAIN || 'stub'
   // vhlb.4: REPLAY_PLANNER=jev|llm adds the stall-point plan() to the stub
@@ -474,7 +474,7 @@ function pickBrain() {
     const plan = async (req) => {
       const t = Date.now()
       PLAN_STATS.n++
-      try { return await p.plan(req) } catch (e) { PLAN_STATS.err++; throw e } finally { PLAN_STATS.ms += Date.now() - t }
+      try { return await p.plan(req) } catch (e) { PLAN_STATS.err++; throw e } finally { PLAN_STATS.done++; PLAN_STATS.ms += Date.now() - t }
     }
     return { label: `stub+plan:${pl}`, make: () => ({ ...b.stubBrain, planner: pl, plan }) }
   }
@@ -882,7 +882,7 @@ async function main() {
     const stuck = resets.stuck || 0
     const call = chats.filter((m) => m.includes("I'm stuck at")).length
     const plans = PLAN_STATS.n - plan0.n
-    const planMs = plans > 0 ? Math.round((PLAN_STATS.ms - plan0.ms) / plans) : 0
+    const planMs = PLAN_STATS.done > plan0.done ? Math.round((PLAN_STATS.ms - plan0.ms) / (PLAN_STATS.done - plan0.done)) : 0 // completed calls only (an in-flight call lands in the next spot)
     const planErr = PLAN_STATS.err - plan0.err
     // Order spots report the terminal line (truncated): TIMEOUT vs FAIL
     // tells a hung order from a refused one at a glance. Death keeps its
