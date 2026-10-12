@@ -1,13 +1,14 @@
 #!/bin/sh
-# idkcraft-kqzf spike rig: ONE stuck spot through the adapter's console
-# backend (setGoal -> `msg #goto` on the real client), judged over rcon.
+# idkcraft-kqzf spike rig (neuc.2: the rig-goto.js judge is deleted with the
+# console backend; this now boots Paper + the offline client and HOLDS the
+# rig up for manual/acceptance runs until neuc.5 brings the real harness).
 # Slot z like baritone/run.sh (container idk-replay-z, port 25597, lock
 # /tmp/idkcraft-rig.lock-z) but a distinct client name + bridge port so a
 # concurrent run.sh never collides. Offline launch (no account):
-#   BARITONE_IMAGE=idkcraft-baritone:spike sh baritone/bridge/rig.sh [SPOT]
-# Env: GOTO_SPOT (default EP1), BOT (default IdkBody), RIG_LOCK_WAIT (secs
-# to wait on a busy slot-z lock instead of exiting 2), RIG_BIND (bind the
-# bridge there instead of all interfaces).
+#   BARITONE_IMAGE=idkcraft-baritone:spike sh baritone/bridge/rig.sh
+# Env: BOT (default IdkBody), RIG_LOCK_WAIT (secs to wait on a busy slot-z
+# lock instead of exiting 2), RIG_BIND (bind the bridge there instead of
+# all interfaces).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PRODWORLD="${PRODWORLD:-/Users/iv/Projects/.idkcraft-prodworld}"
@@ -18,7 +19,6 @@ SRVFIFO="/tmp/kqzf-srv-$$.fifo"
 LOG=/tmp/kqzf-rig.log
 
 BOT="${BOT:-IdkBody}"
-GOTO_SPOT="${1:-${GOTO_SPOT:-EP1}}"
 export BARITONE_CLIENT="$CLIENT" CLIENT_LOG="$LOG.client" RIG_CONTAINER="$RIG"
 export BARITONE_OFFLINE="${BARITONE_OFFLINE:-1}" BOT="$BOT" BRIDGE_PORT="${BRIDGE_PORT:-7779}"
 
@@ -58,4 +58,11 @@ done
 docker exec "$RIG" rcon-cli "op $BOT"
 sh "$HERE/../client.sh" start "$PORT" "$BOT" || exit 2
 WORKER_STARTED=1
-GOTO_SPOT="$GOTO_SPOT" node "$HERE/rig-goto.js"
+# neuc.2 deleted rig-goto.js with the console backend; hold the rig up
+# until neuc.5 brings the real harness. NOTE: the bot cannot attach yet —
+# this publishes only the console ($BRIDGE_PORT -> in-container 7777), not
+# the mod RPC 7778, and the spike image has no mod (.1 builds it). Once it
+# does: BRIDGE_CONSOLE_PORT=$BRIDGE_PORT plus whatever publishes the RPC
+# (bot BRIDGE_PORT means the RPC port, not this script's console publish).
+echo "rig z up: Paper :$PORT, client $BOT; Ctrl-C to stop"
+while :; do sleep 60; done
