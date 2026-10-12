@@ -50,10 +50,10 @@ public final class WsServer {
     private final Thread accepter;
 
     /** Binds (port 0 = ephemeral, for tests) but starts accepting on {@link #start}. */
-    public WsServer(String bindHost, int port, MessageHandler handler) throws IOException {
+    public WsServer(InetSocketAddress bind, MessageHandler handler) throws IOException {
         this.server = new ServerSocket();
         this.server.setReuseAddress(true);
-        this.server.bind(new InetSocketAddress(bindHost, port));
+        this.server.bind(bind);
         this.handler = handler;
         this.accepter = new Thread(this::acceptLoop, "bridge-ws-accept");
         this.accepter.setDaemon(true);

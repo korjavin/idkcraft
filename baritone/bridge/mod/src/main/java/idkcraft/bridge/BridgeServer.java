@@ -113,7 +113,9 @@ public final class BridgeServer {
                 .register("chat.send", this::chatSend)
                 .register("baritone.cmd", this::baritoneCmd)
                 .register("baritone.status", this::baritoneStatus);
-        this.ws = new WsServer("0.0.0.0", port(), rpc::handle);
+        // Wildcard bind: the v2 adapter lives in another container on the
+        // compose network (unpublished outside it; the rig publishes it).
+        this.ws = new WsServer(new java.net.InetSocketAddress(port()), rpc::handle);
         this.modVersion = modVersion(BridgeMod.MOD_ID);
         this.baritoneVersion = modVersion("baritone");
     }

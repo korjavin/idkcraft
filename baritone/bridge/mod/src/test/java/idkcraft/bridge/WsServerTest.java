@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
@@ -29,7 +31,7 @@ public class WsServerTest {
 
     @Test
     public void callRoundTrip() throws Exception {
-        server = new WsServer("127.0.0.1", 0, msg -> "{\"echo\":" + msg.length() + "}");
+        server = new WsServer(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), msg -> "{\"echo\":" + msg.length() + "}");
         server.start();
         try (RawClient c = new RawClient(server.getPort())) {
             c.sendText("{\"jsonrpc\":\"2.0\",\"id\":1}");
@@ -39,7 +41,7 @@ public class WsServerTest {
 
     @Test
     public void fragmentedMessageDeliversOnce() throws Exception {
-        server = new WsServer("127.0.0.1", 0, msg -> "got:" + msg);
+        server = new WsServer(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), msg -> "got:" + msg);
         server.start();
         try (RawClient c = new RawClient(server.getPort())) {
             c.sendFrame(0x1, "hel".getBytes(StandardCharsets.UTF_8), false);
@@ -50,7 +52,7 @@ public class WsServerTest {
 
     @Test
     public void pingGetsPongAndPushReachesClient() throws Exception {
-        server = new WsServer("127.0.0.1", 0, msg -> null);
+        server = new WsServer(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), msg -> null);
         server.start();
         try (RawClient c = new RawClient(server.getPort())) {
             c.sendFrame(0x9, new byte[] { 1, 2, 3 }, true);
@@ -64,9 +66,9 @@ public class WsServerTest {
 
     @Test
     public void wrongPathIs404() throws Exception {
-        server = new WsServer("127.0.0.1", 0, msg -> null);
+        server = new WsServer(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), msg -> null);
         server.start();
-        try (Socket sock = new Socket("127.0.0.1", server.getPort())) {
+        try (Socket sock = new Socket(InetAddress.getLoopbackAddress(), server.getPort())) {
             sock.setSoTimeout(5000);
             OutputStream out = sock.getOutputStream();
             out.write(("GET /nope HTTP/1.1\r\nHost: x\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1));
@@ -105,11 +107,11 @@ public class WsServerTest {
         private final Queue<RawFrame> frames = new ArrayDeque<>();
 
         RawClient(int port) throws Exception {
-            sock = new Socket("127.0.0.1", port);
+            sock = new Socket(InetAddress.getLoopbackAddress(), port);
             sock.setSoTimeout(5000);
             OutputStream out = sock.getOutputStream();
             out.write(("GET /rpc HTTP/1.1\r\n"
-                    + "Host: 127.0.0.1\r\n"
+                    + "Host: localhost\r\n"
                     + "Upgrade: websocket\r\n"
                     + "Connection: Upgrade\r\n"
                     + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"

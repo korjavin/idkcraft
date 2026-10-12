@@ -110,28 +110,28 @@ async function main() {
   pass('state.get', `pos=${pos.x.toFixed(1)} ${pos.y.toFixed(1)} ${pos.z.toFixed(1)} hp=${st.health} dim=${st.dimension} mode=${st.gameMode}`)
 
   // 3. chat.send — the line must reach the server log.
-  const token = `smoke${Date.now().toString(36)}`
-  const sent = await t.call('chat.send', { message: `hi-${token}` })
+  const tag = `smoke${Date.now().toString(36)}`
+  const sent = await t.call('chat.send', { message: `hi-${tag}` })
   if (!sent || sent.sent !== true) fail('chat.send', `bad reply: ${JSON.stringify(sent)}`)
   let line = null
   for (let i = 0; i < 15 && !line; i++) {
     await sleep(1000)
     const logs = sh('docker', ['logs', '--since', '2m', RIG])
-    if (logs) line = logs.split('\n').find((l) => l.includes(token)) || null
+    if (logs) line = logs.split('\n').find((l) => l.includes(tag)) || null
   }
-  if (!line) fail('chat.send', `hi-${token} never reached the server log`)
+  if (!line) fail('chat.send', `hi-${tag} never reached the server log`)
   pass('chat.send', line.trim().slice(-120))
 
   // 4. inbound system chat — rcon say must arrive as a message event.
-  const token2 = `say${Date.now().toString(36)}`
-  const said = sh('docker', ['exec', RIG, 'rcon-cli', `say ${token2}`])
+  const tag2 = `say${Date.now().toString(36)}`
+  const said = sh('docker', ['exec', RIG, 'rcon-cli', `say ${tag2}`])
   if (said === null) fail('message', 'rcon say failed')
   let got = null
   for (let i = 0; i < 15 && !got; i++) {
     await sleep(1000)
-    got = notes.find((n) => n.method === 'message' && JSON.stringify(n.params).includes(token2)) || null
+    got = notes.find((n) => n.method === 'message' && JSON.stringify(n.params).includes(tag2)) || null
   }
-  if (!got) fail('message', `no message event for say ${token2} (saw ${notes.length} notes)`)
+  if (!got) fail('message', `no message event for say ${tag2} (saw ${notes.length} notes)`)
   pass('message', `${got.params.position || '?'}: ${(got.params.message || '').slice(0, 80)}`)
   const chats = notes.filter((n) => n.method === 'chat')
   console.log(`  info: ${chats.length} chat event(s) so far` +
@@ -153,6 +153,29 @@ async function main() {
   pass('roster.get', `${ro.players.length} player(s), ${BOT} ping=${me.ping} mode=${me.gameMode}`)
 
   // 6. baritone.cmd — walk EP1, the id must echo through status + event.
+  // Prep mirrors the kqzf spike (rig-goto.js): teleport to the spot spawn,
+  // clear, kit up — Baritone needs the pickaxe where the spot says so.
+  const [sx, sy, sz] = spot.spawn
+  for (const cmd of spot.prep || []) sh('docker', ['exec', RIG, 'rcon-cli', cmd])
+  sh('docker', ['exec', RIG, 'rcon-cli', `tp ${BOT} ${sx} ${sy} ${sz}`])
+  sh('docker', ['exec', RIG, 'rcon-cli', `clear ${BOT}`])
+  if ((spot.scaffold || 0) > 0) sh('docker', ['exec', RIG, 'rcon-cli', `give ${BOT} dirt ${spot.scaffold}`])
+  if (spot.pickaxe) sh('docker', ['exec', RIG, 'rcon-cli', `give ${BOT} stone_pickaxe 1`])
+  if (spot.bucket) {
+    sh('docker', ['exec', RIG, 'rcon-cli', `give ${BOT} water_bucket 1`])
+    sh('docker', ['exec', RIG, 'rcon-cli', `give ${BOT} water_bucket 1`])
+  }
+  for (const e of ['water_breathing', 'fire_resistance']) {
+    sh('docker', ['exec', RIG, 'rcon-cli', `effect give ${BOT} minecraft:${e} 300`])
+  }
+  let atSpawn = false
+  for (let i = 0; i < 20 && !atSpawn; i++) {
+    await sleep(500)
+    const cur = await t.call('state.get', {})
+    atSpawn = cur && cur.pos && Math.abs(cur.pos.x - sx) < 2 && Math.abs(cur.pos.z - sz) < 2
+  }
+  if (!atSpawn) fail('baritone.cmd', `tp to spawn ${sx} ${sy} ${sz} never showed in state.get`)
+  console.log(`  at spawn: ${sx} ${sy} ${sz}`)
   const cmd = await t.call('baritone.cmd', { command: `#goto ${gx} ${gy} ${gz}` })
   if (!cmd || typeof cmd.id !== 'number' || cmd.id < 1) fail('baritone.cmd', `bad reply: ${JSON.stringify(cmd)}`)
   pass('baritone.cmd', `id=${cmd.id} for #goto ${gx} ${gy} ${gz}`)
