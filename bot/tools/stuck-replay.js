@@ -456,8 +456,28 @@ function gateCode(rows, diffs) {
 // via the operator's tunnel — sequential single-bot inference calls, the
 // same read-only shape the stands use. Unknown values fail loud (exit 2):
 // a typo must not silently measure the wrong brain.
+const PLAN_STATS = { n: 0, done: 0, ms: 0, err: 0 } // vhlb.4: REPLAY_PLANNER call counters
 function pickBrain() {
   const which = process.env.REPLAY_BRAIN || 'stub'
+  // vhlb.4: REPLAY_PLANNER=jev|llm adds the stall-point plan() to the stub
+  // (prod's makeBrain shape), so stuck recovery escalates through it; the
+  // cells differ only in the backend. Keys from env, never printed.
+  const pl = process.env.REPLAY_PLANNER || 'stub'
+  if (!['stub', 'jev', 'llm'].includes(pl)) throw new Error(`REPLAY_PLANNER: want stub|jev|llm, got ${JSON.stringify(pl)}`)
+  if (pl !== 'stub' && which !== 'stub') throw new Error('REPLAY_PLANNER needs REPLAY_BRAIN=stub')
+  if (pl !== 'stub') {
+    const b = require('../src/brain')
+    const key = pl === 'jev' ? process.env.TYPESAFE_API_KEY : process.env.ANTHROPIC_API_KEY
+    if (!key) throw new Error(`REPLAY_PLANNER=${pl} needs ${pl === 'jev' ? 'TYPESAFE_API_KEY' : 'ANTHROPIC_API_KEY'}`)
+    const p = pl === 'jev' ? b.planner(key) : b.llmPlanner(key, undefined, b.PLAN_TIMEOUT_MS, process.env.LLM_MODEL || b.LLM_MODEL)
+    // Per-spot plan() calls / latency / errors for the A/B table (rows read deltas).
+    const plan = async (req) => {
+      const t = Date.now()
+      PLAN_STATS.n++
+      try { return await p.plan(req) } catch (e) { PLAN_STATS.err++; throw e } finally { PLAN_STATS.done++; PLAN_STATS.ms += Date.now() - t }
+    }
+    return { label: `stub+plan:${pl}`, make: () => ({ ...b.stubBrain, planner: pl, plan }) }
+  }
   if (which === 'stub') return { label: 'stub', make: () => require('../src/brain').stubBrain }
   if (which === 'laya') {
     const url = process.env.REPLAY_BRAIN_URL || 'http://localhost:8000/v1/systemone'
@@ -785,6 +805,7 @@ async function main() {
       }
     }
     const t0 = Date.now()
+    const plan0 = { ...PLAN_STATS }
     try { follower.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
     for (const k of ['jump', 'back', 'forward', 'sprint', 'sneak']) {
       try { follower.setControlState(k, false) } catch (_) { /* control best-effort */ }
@@ -860,6 +881,9 @@ async function main() {
     const secs = (Date.now() - t0) / 1000
     const stuck = resets.stuck || 0
     const call = chats.filter((m) => m.includes("I'm stuck at")).length
+    const plans = PLAN_STATS.n - plan0.n
+    const planMs = PLAN_STATS.done > plan0.done ? Math.round((PLAN_STATS.ms - plan0.ms) / (PLAN_STATS.done - plan0.done)) : 0 // completed calls only (an in-flight call lands in the next spot)
+    const planErr = PLAN_STATS.err - plan0.err
     // Order spots report the terminal line (truncated): TIMEOUT vs FAIL
     // tells a hung order from a refused one at a glance. Death keeps its
     // note (dying is behavior, judged like any unreached row).
@@ -870,9 +894,9 @@ async function main() {
         : ''
     const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : (buildNote || onote || (s.danger.length > 0 ? `minDanger ${minDanger.toFixed(1)}` : '')))
     if (s.danger.length > 0 && c) c.danger = { spots: [] } // seeded marks never leak into later spots
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}) })
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(plans > 0 ? { plans, planMs, planErr } : {}), ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
-      `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}`)
+      `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}${plans > 0 ? ` plans=${plans} planMs=${planMs} planErr=${planErr}` : ''}`)
     // Bucket spots (idkcraft-jsf.7): water_up must bring both buckets back
     // (scoop after the climb). Informational — the gate judges the walk.
     if (s.bucket) {

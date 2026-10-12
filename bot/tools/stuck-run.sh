@@ -32,6 +32,19 @@
 # ($RIG_LOCK-<id>). RIG_ID=auto takes the first free of RIG_SLOTS (default
 # "0 a b"; 0 = the default rig). Unset/0 = the default rig, unchanged.
 set -e
+# vhlb.4: REPLAY_PLANNER=jev|llm (stall-point plan() on the stub, see
+# stuck-replay.js). Keys: env, else the stash — env-only, prints nothing;
+# a missing key fails before any lock/docker work.
+case "${REPLAY_PLANNER:-stub}" in
+  stub) ;;
+  jev) [ -z "${TYPESAFE_API_KEY:-}" ] && [ -x "$HOME/.local/bin/kv" ] && TYPESAFE_API_KEY="$("$HOME/.local/bin/kv" get secrets/jev-api-key 2>/dev/null || true)"
+    [ -n "${TYPESAFE_API_KEY:-}" ] || { echo "REPLAY_PLANNER=jev needs TYPESAFE_API_KEY (stash secrets/jev-api-key)"; exit 2; }
+    export TYPESAFE_API_KEY ;;
+  llm) [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -x "$HOME/.local/bin/kv" ] && ANTHROPIC_API_KEY="$("$HOME/.local/bin/kv" get secrets/minecraft/anthropic-api-key 2>/dev/null || true)"
+    [ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "REPLAY_PLANNER=llm needs ANTHROPIC_API_KEY (stash secrets/minecraft/anthropic-api-key)"; exit 2; }
+    export ANTHROPIC_API_KEY ;;
+  *) echo "REPLAY_PLANNER: want stub|jev|llm, got '$REPLAY_PLANNER'"; exit 2 ;;
+esac
 LOCKBASE="${RIG_LOCK:-/tmp/idkcraft-rig.lock}"
 RIG_ID="${RIG_ID:-}"
 [ "$RIG_ID" = 0 ] && RIG_ID=

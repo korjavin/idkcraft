@@ -635,6 +635,127 @@ describe('recover menu: no climb prims on level goals, no failed repeats (4jr)',
     assert.equal(r.action, 'dig_up', `escalated to the climb prim, got ${r.action}`)
     assert.equal(r.source, 'stub-fallback')
   })
+
+  // vhlb.4: stuck recovery via plan() — fire, hold, consume, stale drop.
+  describe('plan() escalation (vhlb.4)', () => {
+    const failedRec = () => ({
+      action: 'pillar_up', source: 'fsm', model: null, status: 'failed:place-error',
+      st: null, attempts: 1, fails: 0, repeats: 0, last: null,
+      calledPlayer: false, endEpisode: false, lastDy: null,
+    })
+    function planCtx(rec) {
+      const calls = []
+      let settle = null
+      const brain = {
+        name: 'stub',
+        plan: (req) => { calls.push(req); return new Promise((resolve, reject) => { settle = { resolve, reject } }) },
+      }
+      const ctx = { stuck: { by: 'gather', goal: { x: 0, y: 70, z: 0 }, key: 'gather' }, brain, recovery: rec }
+      return { ctx, calls, settle: () => settle }
+    }
+    function mkBot() {
+      const bot = levelBot(levelWorld().cap)
+      bot.entity.position = pos(0.5, 61, 0.5)
+      bot.players = {}
+      return bot
+    }
+
+    it('first failure fires plan(), holds still, consumes the answer on a later tick', async () => {
+      const bot = mkBot()
+      const { ctx, calls, settle } = planCtx(failedRec())
+      const r1 = await recover.decide(bot, ctx, null, null)
+      assert.deepEqual([r1.action, r1.source], ['wait', 'plan-wait'])
+      assert.equal(calls.length, 1)
+      const crit = Object.keys(calls[0].criteria)
+      assert.ok(!crit.includes('pillar_up') && crit.includes('sidestep'), `menu: ${crit}`)
+      assert.deepEqual(calls[0].state.attempts, [{ action: 'pillar_up', out: 'failed:place-error' }])
+      assert.ok(Array.isArray(calls[0].state.world) && calls[0].state.world.length === 5, 'voxel slice rides along')
+      recover.run(bot, ctx) // the hold runs no primitive
+      assert.equal(ctx.recovery.status, 'running')
+      const r2 = await recover.decide(bot, ctx, null, null)
+      assert.equal(r2.source, 'plan-wait', 'still pending: hold')
+      assert.equal(calls.length, 1, 'no re-fire while pending')
+      settle().resolve({ step: 'wait', source: 'llm', confidence: null, reason: 'let it settle' })
+      await flush()
+      const r3 = await recover.decide(bot, ctx, null, null)
+      assert.deepEqual([r3.action, r3.source], ['wait', 'llm'])
+      assert.equal(ctx.recovery.planHold, false)
+      assert.equal(ctx.recovery.fails, 1, 'the hold adds no fail')
+    })
+
+    it('call_player stays off the plan menu unless it is the FSM pick', async () => {
+      const bot = mkBot()
+      bot.players = { Owner: { username: 'Owner', entity: { position: pos(40, 61, 0) } } }
+      const { ctx, calls } = planCtx(failedRec())
+      await recover.decide(bot, ctx, null, null)
+      assert.equal(calls.length, 1)
+      const crit = Object.keys(calls[0].criteria)
+      assert.ok(!crit.includes('call_player'), `planner cannot page early: ${crit}`)
+      assert.equal(calls[0].state.target.player, 'online')
+    })
+
+    it('call_player stays on the plan menu when it is the FSM pick (enclosed high-goal pit)', () => {
+      const facts = { goalDy: 5, goalDist: 5, playerOnline: true, walls: 4, last: 'sidestep:failed:no-progress' }
+      const names = ['sidestep', 'dig_through', 'wait', 'call_player']
+      assert.equal(recover.recoverFsm(facts, names), 'call_player')
+      assert.ok(recover.askMenu(facts, names).includes('call_player'), `menu: ${recover.askMenu(facts, names)}`)
+    })
+
+    it('planner error falls back to the FSM pick', async () => {
+      const bot = mkBot()
+      const { ctx, settle } = planCtx(failedRec())
+      await recover.decide(bot, ctx, null, null)
+      settle().reject(new Error('jev http 500'))
+      await flush()
+      const r = await recover.decide(bot, ctx, null, null)
+      assert.deepEqual([r.action, r.source], ['sidestep', 'stub-fallback'])
+    })
+
+    it('a hung call past PLAN_HOLD_MS falls back to the FSM pick', async () => {
+      const bot = mkBot()
+      const { ctx } = planCtx(failedRec())
+      await recover.decide(bot, ctx, null, null)
+      ctx.recovery.plan.firedAt -= recover.PLAN_HOLD_MS + 1
+      const r = await recover.decide(bot, ctx, null, null)
+      assert.deepEqual([r.action, r.source], ['sidestep', 'stub-fallback'])
+    })
+
+    it('an answer the menu no longer offers falls back (stale label)', async () => {
+      const bot = mkBot()
+      const { ctx, settle } = planCtx(failedRec())
+      await recover.decide(bot, ctx, null, null)
+      settle().resolve({ step: 'pillar_up', source: 'jev', confidence: 0.9 })
+      await flush()
+      const r = await recover.decide(bot, ctx, null, null)
+      assert.deepEqual([r.action, r.source], ['sidestep', 'stub-fallback'])
+    })
+
+    it('an answer for an ended episode is dropped', async () => {
+      const bot = mkBot()
+      const { ctx, settle } = planCtx(failedRec())
+      await recover.decide(bot, ctx, null, null)
+      const old = ctx.recovery
+      ctx.recovery = null // order / release ended the episode
+      settle().resolve({ step: 'wait', source: 'jev' })
+      await flush()
+      assert.equal(old.plan.answer, null, 'stale answer not stored')
+    })
+
+    it('entry: FSM first, unless the FSM pick already failed at this spot', async () => {
+      const bot = mkBot()
+      const a = planCtx(null)
+      const r = await recover.decide(bot, a.ctx, null, null)
+      assert.equal(a.calls.length, 0, 'fresh spot: no plan call')
+      assert.notEqual(r.source, 'plan-wait')
+      const fsmPick = r.action
+      const b = planCtx(null)
+      b.ctx.recoverStreaks = { anchor: { x: 0.5, y: 61, z: 0.5 }, fails: { [fsmPick]: { n: 1, at: Date.now() } }, dones: {} }
+      const r2 = await recover.decide(bot, b.ctx, null, null)
+      assert.equal(b.calls.length, 1, `spot already failed ${fsmPick}: plan at entry`)
+      assert.equal(r2.source, 'plan-wait')
+      assert.deepEqual(b.calls[0].state.failed_here, { [fsmPick]: 1 })
+    })
+  })
 })
 
 describe('recover BEHAVIOURS wiring (round-1 finding 3)', () => {

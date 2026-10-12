@@ -53,6 +53,7 @@ No Minecraft client needed; Docker is required.
 | `REPLAY_BASELINE` | `bot/tools/stuck-baseline.json` | baseline file |
 | `REPLAY_BASELINE_OFF=1` | — | record only, skip the comparison |
 | `REPLAY_BRAIN` | `stub` | `stub` (gate) or `laya` (menu measurement, see below) |
+| `REPLAY_PLANNER` | `stub` | `jev` / `llm`: the stub brain plus the stall-point `plan()` (prod `makeBrain` shape), so stuck recovery escalates to it after a failed primitive (idkcraft-vhlb.4). Keys from env, else stash (`secrets/jev-api-key`, `secrets/minecraft/anthropic-api-key`). Judged against the stub baseline |
 | `REPLAY_BRAIN_URL` | `http://localhost:8000/v1/systemone` | operator's tunnel to the prod sidecar |
 | `REPLAY_BRAIN_TIMEOUT_MS` | `10000` | per-call model deadline |
 | `REPLAY_SPOTS` / argv[2] | `stuck-spots.json` | corpus file |
