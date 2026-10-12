@@ -4,6 +4,7 @@
 // set*-API of the ticker object. Bodies are verbatim except the shared
 // closure lets, which go through the box (accessors owned by createTicker).
 const { resolvePlayer } = require('./perception')
+const worker = require('./worker')
 const { findNearest, loadedSearchRadius, startFarSearch } = require('./behaviours/scout')
 const { clearPendingSearch, startBlockOrder } = require('./chat')
 const { CHAT_LIMIT } = require('./commands')
@@ -48,7 +49,8 @@ function createOrders(box) {
       box.followName = real
       try { ctx.followName = real || null } catch (_) { /* follow best-effort */ }
       try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
-      const seen = !real || (bot.players && bot.players[real] && bot.players[real].entity)
+      const seenEntry = worker.players(bot)[real]
+      const seen = !real || (seenEntry && seenEntry.entity)
       if (!real || seen) ctx.work = false
       ctx.lastGoalKey = ''
       ctx.lead = null
@@ -445,7 +447,8 @@ function createOrders(box) {
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
       // Center: the player who gave the command, or the bot itself when the
       // speaker is out of tracking range (same honest fallback as build here).
-      const speaker = by && bot.players && bot.players[by] && bot.players[by].entity
+      const speakerEntry = by && worker.players(bot)[by]
+      const speaker = speakerEntry && speakerEntry.entity
       const anchor = (speaker && speaker.position) || (bot.entity && bot.entity.position)
       const cx = anchor ? Math.floor(anchor.x) : 0
       const cz = anchor ? Math.floor(anchor.z) : 0

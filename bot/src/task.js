@@ -26,6 +26,7 @@
 const metrics = require('./metrics')
 const { CHAT_LIMIT } = require('./commands')
 const { orderStamp, carryOrderStamp, chatStep, failReason } = require('./step') // oqul.11: moved for home.js
+const worker = require('./worker')
 
 const TASK_STALL_L1_MS = 15 * 60 * 1000
 const TASK_STALL_L2_MS = 45 * 60 * 1000
@@ -202,7 +203,7 @@ function ensureGoal(ctx, kind, now) {
 // server counts, the bot itself excluded. Drives the plan-B fork.
 function ownerOnline(bot) {
   try {
-    return !!(bot && bot.players && Object.keys(bot.players).some((n) => n !== bot.username))
+    return Object.keys(worker.players(bot)).length > 0
   } catch (_) {
     return false
   }
@@ -308,9 +309,10 @@ function orderCurrent(bot, ctx, kind) {
       out.total = typeof o.want === 'number' ? o.want : out.done
       // Delivery-leg distance (return phase): the travel grace input.
       try {
-        if (o.phase === 'return' && o.by && bot && bot.players && bot.players[o.by] && bot.players[o.by].entity) {
+        const giver = o.phase === 'return' && o.by ? worker.players(bot)[o.by] : null
+        if (giver && giver.entity) {
           const bp = bot.entity && bot.entity.position
-          const tp = bot.players[o.by].entity.position
+          const tp = giver.entity.position
           const d = dist3(bp, tp)
           if (typeof d === 'number') out.dist = d
         }

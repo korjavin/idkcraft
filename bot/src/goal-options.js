@@ -12,6 +12,7 @@
 const { OUTER_DISK } = require('./goal-unlock')
 const { failReason } = require('./step')
 const { PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, STEP_EFFECT_TEXT } = require('./plan-consts') // oqul.5: was a lazy task.js require
+const worker = require('./worker')
 
 function taskActive(ctx) {
   try {
@@ -31,7 +32,7 @@ function anchorOf(bot, ctx) {
 
 function ownerOnline(bot) {
   try {
-    return !!(bot && bot.players && Object.keys(bot.players).some((n) => n !== bot.username))
+    return Object.keys(worker.players(bot)).length > 0
   } catch (_) {
     return false
   }

@@ -395,6 +395,8 @@ function cellOccupiedSelf(bot, x, y, z) {
 
 function cellOccupiedByPlayer(bot, x, y, z) {
   try {
+    // Raw roster, worker included on purpose (revmux 02 core-1): this is a
+    // collision check, not a presence count, and the worker has a hitbox.
     for (const player of Object.values((bot && bot.players) || {})) {
       if (player && player.entity && covers(player.entity, x, y, z)) return true
     }
@@ -468,6 +470,7 @@ function threatenedSelf(bot, x, y, z) {
 
 function threatenedByPlayer(bot, x, y, z) {
   try {
+    // Same intentional worker inclusion as cellOccupiedByPlayer (revmux 02).
     for (const player of Object.values((bot && bot.players) || {})) {
       if (player && player.entity && threatens(player.entity, x, y, z)) return true
     }

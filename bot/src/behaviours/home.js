@@ -5,6 +5,7 @@ const { goals } = require('mineflayer-pathfinder')
 const castleData = require('../castle')
 const { HOSTILE_NAMES } = require('../perception')
 const { carryOrderStamp } = require('../step') // oqul.11: was a deferred task.js require
+const worker = require('../worker')
 const { timeWord } = require('../site')
 // goalFacts(bot, ctx).time without the arbiter (oqul.11): the same word.
 const factsTime = (bot) => timeWord(bot) || 'day'
@@ -166,10 +167,9 @@ function playerAtDoor(bot, home) {
     const cz = door.z + 0.5
     const inn = insidePos(home)
     const inward = (facingOf(home) + 2) % 4
-    const players = (bot && bot.players) || {}
-    for (const key of Object.keys(players)) {
-      if (key === bot.username) continue
-      const ent = players[key] && players[key].entity
+    const roster = worker.players(bot)
+    for (const key of Object.keys(roster)) {
+      const ent = roster[key] && roster[key].entity
       const p = ent && ent.position
       if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') continue
       if (!beyond(p, inn, inward, 0) && Math.hypot(p.x - cx, p.z - cz) <= DOOR_GRACE_BLOCKS) return true

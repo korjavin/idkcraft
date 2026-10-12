@@ -17,6 +17,7 @@ const follow = require('./follow')
 const stuck = require('../stuck')
 const { countItems } = require('../perception')
 const { say, clearGoal, issueGoal, botPos, atPos } = require('./util') // atPos: oqul.11, was bring.atPos
+const worker = require('../worker')
 
 const DELIVER_RANGE = 3
 const TOSS_RANGE = DELIVER_RANGE + 0.5
@@ -87,10 +88,9 @@ function playerStatus(bot) {
   let nearDist = Infinity
   try {
     const bp = botPos(bot)
-    const players = (bot && bot.players) || {}
-    for (const key of Object.keys(players)) {
-      if (key === bot.username) continue
-      const p = players[key]
+    const roster = worker.players(bot)
+    for (const key of Object.keys(roster)) {
+      const p = roster[key]
       if (!p) continue
       const ent = p.entity
       if (ent && ent.position) {

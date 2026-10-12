@@ -18,6 +18,7 @@ const stuck = require('../stuck')
 const resources = require('../resources')
 const danger = require('../danger')
 const { say, clearGoal, issueGoal } = require('./util')
+const worker = require('../worker')
 
 const RINGS = [16, 32, 64, 128, 192, 256, 320, 384, 448, 512] // spiral radii, feet
 // Inner rings first: a hands-only walker without tools closes 16-32
@@ -121,7 +122,7 @@ function taskActive(ctx) {
 function aloneIdle(bot, ctx) {
   try {
     if (ownerBring(ctx)) return false
-    return !(bot && bot.players && Object.keys(bot.players).some((n) => n !== bot.username))
+    return Object.keys(worker.players(bot)).length === 0
   } catch (_) { return false }
 }
 // Surface height of the anchor: home site, else world spawn. Null: none.

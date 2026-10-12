@@ -49,6 +49,9 @@ match offline-mode logins, so the server rejects chat-sent commands.)
 | `BOT_LEAVE_AFTER_MS` | `60000` | Nobody-online grace (ms) before the bot quits and re-polls; `0` disables (always on) |
 | `BOT_AUTONOMOUS` | `` (off) | `1`/`true` = stay and work with nobody online (free brain only); chat `autonomous on` does the same until restart |
 | `BOT_MEMORY_FILE` | `/app/memory/<name>.json` | Override for the disk-memory file (tests point it at a tmp file) |
+| `WORKER_NAME` | `` (off) | Hybrid worker (jlda.2): the Baritone worker's player name; empty disables the bridge entirely (zero behaviour diff) |
+| `WORKER_HOST` | `baritone` | Worker bridge host (the worker container's write-only console port) |
+| `WORKER_PORT` | `7777` | Worker bridge port |
 
 Cost guards: with no player online the bot makes no brain calls at all (local
 idle decision, slow 10 s poll — 1 s while the melee reflex is swinging at a
