@@ -396,7 +396,13 @@ function cellOccupiedSelf(bot, x, y, z) {
 
 function cellOccupiedByPlayer(bot, x, y, z) {
   try {
-    for (const player of Object.values(worker.players(bot))) {
+    // Raw roster minus the worker only (revmux 01 core-2): mineflayer
+    // backfills bot.players[self].entity on login + player_info, so these
+    // loops always matched self — sieving self out here would wake the
+    // selfIn && !playerIn sidestep branches on the default config and
+    // break the zero-diff promise. The worker entry is the only skip.
+    for (const [key, player] of Object.entries((bot && bot.players) || {})) {
+      if (worker.isWorker(key) || worker.isWorker(player && player.username)) continue
       if (player && player.entity && covers(player.entity, x, y, z)) return true
     }
   } catch (_) { /* unverifiable: treat as free, the place may refuse */ }
@@ -469,7 +475,9 @@ function threatenedSelf(bot, x, y, z) {
 
 function threatenedByPlayer(bot, x, y, z) {
   try {
-    for (const player of Object.values(worker.players(bot))) {
+    // Same worker-only skip as cellOccupiedByPlayer above (revmux 01 core-2).
+    for (const [key, player] of Object.entries((bot && bot.players) || {})) {
+      if (worker.isWorker(key) || worker.isWorker(player && player.username)) continue
       if (player && player.entity && threatens(player.entity, x, y, z)) return true
     }
   } catch (_) { /* unverifiable: treat as free, the dig may refuse */ }

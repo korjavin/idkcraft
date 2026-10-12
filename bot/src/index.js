@@ -61,6 +61,11 @@ const JOIN_POLL_MS = 2000
 // 4500 ms clears the 4 s window with a small margin; typical join lands
 // ~5.5 s after the first player (up to ~6.5 s worst case).
 const JOIN_SETTLE_MS = 4500
+// Bound for the pre-quit worker tab-drop wait (revmux 01 core-1): the
+// disconnect crosses the TCP bridge, socat, the FIFO and the HMC console
+// before the tab list drops the worker.
+const WORKER_LEAVE_WAIT_MS = 5000
+const WORKER_LEAVE_POLL_MS = 250
 const LEAVE_AFTER_MS_DEFAULT = 60000
 const STAY_LOG_MS = 600000
 function parseAutonomous(env) {
@@ -1241,10 +1246,14 @@ function pingSampleNames(res) {
 
 // online==1 with an empty sample is ambiguous: our just-quit ghost or one
 // real player. Only a hidden-sample server (hide-online-players) produces
-// it; a visible sample always names the one online.
-function isAmbiguousPing(res) {
+// it; a visible sample always names the one online. With the worker
+// configured (revmux 01 core-1), online==2 with an empty sample is
+// ambiguous too: our ghost plus a worker still disconnecting reads 2, and
+// the settle + re-ping below usually clears it. Two real players (or one
+// real + a stray worker) stay 2 and still read occupied.
+function isAmbiguousPing(res, workerConfigured = false) {
   const p = res && res.players
-  return !!p && p.online === 1 && pingSampleNames(res).length === 0
+  return !!p && (p.online === 1 || (workerConfigured && p.online === 2)) && pingSampleNames(res).length === 0
 }
 
 // Off-server wait: ping the server until a real player is online. A refused
@@ -1277,19 +1286,26 @@ function playersOccupied(res, username, selfConnected = false, workerOn = false)
   return !selfConnected
 }
 
-async function waitForPlayers({ host, port, pingFn, pollMs = JOIN_POLL_MS, username = '' }) {
+async function waitForPlayers({ host, port, pingFn, pollMs = JOIN_POLL_MS, username = '', workerConfigured = false }) {
   let lastWaitLog = 0
   for (;;) {
     let occupied = false
     try {
       let res = await pingFn({ host, port, closeTimeout: 10000 })
-      if (isAmbiguousPing(res)) {
+      if (isAmbiguousPing(res, workerConfigured)) {
         // Our just-quit ghost still counted, or one real player: one
         // settle + re-ping tells them apart. The ghost clears to 0; a
-        // real player stays ambiguous, which reads occupied below.
+        // real player stays ambiguous, which reads occupied below. Same
+        // for ghost + disconnecting worker at online==2 (configured).
         await sleep(pollMs)
         res = await pingFn({ host, port, closeTimeout: 10000 })
       }
+      // workerOn stays false off-server: subtracting the worker here is a
+      // no-op (online==2 - 1 reads occupied either way), and a stray
+      // worker alone is indistinguishable from one real player on a
+      // hidden-sample server — joining is the safe default, and the next
+      // grace cycle retries the leave. The sample filter above still
+      // guards visible-sample servers.
       occupied = playersOccupied(res, username)
     } catch (_) { occupied = false }
     if (occupied) return
@@ -1354,6 +1370,23 @@ function startupFollow(bot, memName) {
   return ''
 }
 
+// Bounded tab-drop wait (revmux 01 core-1): after the disconnect flush,
+// poll until the tab list drops the worker or waitMs passes. Never throws.
+// Exported (the startupFollow precedent) so unit tests pin every branch
+// with a fake clock instead of sleeping through the real 5 s.
+async function waitForWorkerLeave(bot, { waitMs = WORKER_LEAVE_WAIT_MS, pollMs = WORKER_LEAVE_POLL_MS, sleepFn = sleep, nowFn = Date.now } = {}) {
+  try {
+    const stop = nowFn() + waitMs
+    while (worker.workerOnline(bot) && nowFn() < stop) {
+      try {
+        await sleepFn(pollMs)
+      } catch (_) {
+        break
+      }
+    }
+  } catch (_) { /* tab watch best-effort */ }
+}
+
 function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', autonomous = false, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping }) {
   return new Promise((resolve) => {
     const bot = createBot({
@@ -1376,12 +1409,21 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       try { occupied = playersOccupied(await pingFn({ host, port, closeTimeout: 10000 }), username, true, worker.workerOnline(bot)) } catch (_) { occupied = false }
       if (occupied) { ticker.rearm(); return }
       console.log('leaving: nobody online')
+      // Hybrid worker (idkcraft-jlda.2, revmux 01 core-1): the disconnect
+      // crosses the TCP bridge, socat, the FIFO and the HMC console before
+      // the worker actually leaves — quitting first lets the post-leave
+      // ping count ghost + worker as two players and rejoin at once. Await
+      // the flush, then give the tab list up to 5 s to drop the worker.
+      // Unconfigured this whole block is skipped. Residual: a bridge that
+      // is down at quit leaves a stray worker no hidden-sample ping can
+      // tell from a player — the next grace cycle retries the leave, so a
+      // recovered bridge heals the flap on its own.
+      if (worker.configured()) {
+        try { await worker.leave() } catch (_) { /* bridge best-effort */ }
+        await waitForWorkerLeave(bot)
+      }
       wantQuit = true
       ticker.destroy()
-      // Hybrid worker (idkcraft-jlda.2): disconnect it before we quit, so it
-      // never keeps the server "occupied" alone. Fire-and-forget (the ping
-      // guards above absorb the in-flight window); a no-op until configured.
-      try { void worker.leave() } catch (_) { /* worker best-effort */ }
       try { bot.quit('nobody online') } catch (_) { /* already gone */ }
     }
 
@@ -1518,7 +1560,7 @@ async function main() {
     // toggle (not the env const) decides, so 'autonomous off' lasts.
     const autonomous = autonomousEffective(process.env)
     if (leaveAfterMs !== 0 && !autonomous) {
-      await waitForPlayers({ host, port, pingFn, username })
+      await waitForPlayers({ host, port, pingFn, username, workerConfigured: worker.configured() })
       await sleep(JOIN_SETTLE_MS)
     }
     await runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, brainEngine, autonomous })
@@ -1678,4 +1720,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, runOnce, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, waitForWorkerLeave, runOnce, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }

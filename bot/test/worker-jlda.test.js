@@ -10,9 +10,11 @@ const { describe, it, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const net = require('net')
 const worker = require('../src/worker')
-const { createTicker, handleChat, playersOccupied } = require('../src/index')
+const index = require('../src/index')
+const { createTicker, handleChat, playersOccupied, waitForPlayers, waitForWorkerLeave } = require('../src/index')
 const { findTarget, resolvePlayer } = require('../src/perception')
 const { playerStatus } = require('../src/behaviours/deliver')
+const { cellOccupiedByPlayer, threatenedByPlayer } = require('../src/behaviours/flat')
 const goal = require('../src/goal')
 const taskMod = require('../src/task')
 const goalOptions = require('../src/goal-options')
@@ -104,6 +106,74 @@ async function closedPort() {
   const port = s.address().port
   await new Promise((resolve) => s.close(resolve))
   return port
+}
+
+// Poll fn until it returns truthy (async arrival: bridge lines, quit calls).
+async function waitFor(fn, timeoutMs = 2000, pollMs = 25) {
+  const stop = Date.now() + timeoutMs
+  for (;;) {
+    const v = fn()
+    if (v) return v
+    if (Date.now() >= stop) return null
+    await new Promise((r) => setTimeout(r, pollMs))
+  }
+}
+
+// Fake write-only bridge: collects every '\n'-terminated line sent to it.
+function startBridge() {
+  const lines = []
+  const server = net.createServer((c) => {
+    let buf = ''
+    c.on('data', (d) => {
+      buf += d
+      let i
+      while ((i = buf.indexOf('\n')) >= 0) { lines.push(buf.slice(0, i)); buf = buf.slice(i + 1) }
+    })
+  })
+  return {
+    lines,
+    server,
+    listen: () => new Promise((r) => server.listen(0, 'localhost', r)),
+    close: () => new Promise((r) => server.close(r)),
+  }
+}
+
+// runOnce-capable bot: an EventEmitter with the ticking shape (leaveBot) and
+// the spawn shape (memory.test.js connBot: spawnPoint, registry, loadPlugin).
+function connBot() {
+  const { EventEmitter } = require('node:events')
+  const bot = new EventEmitter()
+  const controls = {}
+  Object.assign(bot, {
+    username: 'IdkBot',
+    players: {},
+    entities: {},
+    health: 20,
+    food: 20,
+    entity: { position: pos(0, 64, 0) },
+    spawnPoint: pos(0, 64, 0),
+    registry: require('minecraft-data')('1.21.1'),
+    inventory: { items: () => [] },
+    time: { timeOfDay: 6000 },
+    chats: [],
+    quitCalls: 0,
+    quitReason: null,
+    quitAt: 0,
+    pathfinder: {
+      goal: null,
+      setGoal(g) { bot.pathfinder.goal = g },
+      stop() {},
+      isMoving: () => false,
+      setMovements() {},
+    },
+    loadPlugin() {},
+    chat(m) { bot.chats.push(String(m)) },
+    setControlState(c, v) { controls[c] = !!v },
+    clearControlStates() { for (const k in controls) controls[k] = false },
+    getControlState(c) { return !!controls[c] },
+    quit(reason) { bot.quitCalls++; bot.quitReason = reason; bot.quitAt = Date.now(); bot.emit('end', reason) },
+  })
+  return bot
 }
 
 describe('worker unit: identity and roster sieve', () => {
@@ -384,6 +454,254 @@ describe('worker e2e: a worker on the roster is not a player', () => {
     } finally {
       cap.release()
       ticker.destroy()
+    }
+  })
+})
+
+describe('worker e2e: flat occupancy keeps the prod roster shape (revmux 01 core-2)', () => {
+  // Prod roster shape: mineflayer backfills bot.players[self].entity (login
+  // + player_info in entities.js), so the occupancy loops always matched
+  // self — the sieve must not change that on the default config.
+  function prodBot() {
+    return {
+      username: 'IdkBot',
+      entity: { position: pos(0, 64, 0) },
+      players: {
+        IdkBot: { username: 'IdkBot', entity: { position: pos(0, 64, 0) } },
+      },
+    }
+  }
+  it('still matches the entity-ful self, but never the worker', () => {
+    const bot = prodBot()
+    assert.equal(threatenedByPlayer(bot, 0, 64, 0), true) // own feet cell: self matches (pre-jlda shape)
+    assert.equal(cellOccupiedByPlayer(bot, 0, 64, 0), true)
+    worker.configure({ WORKER_NAME: WORKER })
+    bot.players[WORKER] = { username: WORKER, entity: { position: pos(5, 64, 0) } }
+    assert.equal(threatenedByPlayer(bot, 0, 64, 0), true) // self still matches
+    assert.equal(cellOccupiedByPlayer(bot, 0, 64, 0), true)
+    assert.equal(threatenedByPlayer(bot, 5, 64, 0), false) // ...but the worker never does
+    assert.equal(cellOccupiedByPlayer(bot, 5, 64, 0), false)
+  })
+})
+
+describe('worker unit: waitForWorkerLeave bounded tab-drop wait (revmux 01 core-1)', () => {
+  it('returns at once when the worker is already gone', async () => {
+    worker.configure({ WORKER_NAME: WORKER })
+    let sleeps = 0
+    await waitForWorkerLeave(mockBot(), { sleepFn: async () => { sleeps++ } })
+    assert.equal(sleeps, 0)
+  })
+  it('returns as soon as the tab drops the worker', async () => {
+    worker.configure({ WORKER_NAME: WORKER })
+    const bot = mockBot()
+    bot.players = { [WORKER]: playerEntry(WORKER, 5) }
+    let t = 0
+    let sleeps = 0
+    await waitForWorkerLeave(bot, {
+      waitMs: 5000,
+      pollMs: 250,
+      nowFn: () => t,
+      sleepFn: async () => { sleeps++; t += 250; if (sleeps === 2) bot.players = {} },
+    })
+    assert.equal(sleeps, 2)
+  })
+  it('gives up after waitMs with a stuck worker', async () => {
+    worker.configure({ WORKER_NAME: WORKER })
+    const bot = mockBot()
+    bot.players = { [WORKER]: playerEntry(WORKER, 5) }
+    let t = 0
+    let sleeps = 0
+    await waitForWorkerLeave(bot, {
+      waitMs: 5000,
+      pollMs: 250,
+      nowFn: () => t,
+      sleepFn: async () => { sleeps++; t += 250 },
+    })
+    assert.equal(sleeps, 20)
+  })
+})
+
+describe('worker e2e: off-server wait settles a disconnecting worker (revmux 01 core-1)', () => {
+  it('online=2 with an empty sample re-pings when configured, joins at once when not', async () => {
+    // Configured: ghost + slow worker reads ambiguous; the re-ping clears it.
+    {
+      const pings = []
+      const script = [
+        { players: { online: 2 } }, // ghost + worker mid-disconnect, hidden sample
+        { players: { online: 0 } }, // settle: both gone
+        { players: { online: 0 } },
+        { players: { online: 1, sample: [{ name: 'Steve' }] } },
+      ]
+      const cap = capture()
+      try {
+        await waitForPlayers({
+          host: 'x', port: 1, pollMs: 5, username: 'IdkBot', workerConfigured: true,
+          pingFn: async () => { const r = script[Math.min(pings.length, script.length - 1)]; pings.push(r); return r },
+        })
+      } finally {
+        cap.release()
+      }
+      assert.equal(pings.length, 4) // the first 2 did NOT read occupied
+    }
+    // Unconfigured default: online=2 reads occupied at once (old path).
+    {
+      const pings = []
+      const cap = capture()
+      try {
+        await waitForPlayers({
+          host: 'x', port: 1, pollMs: 5, username: 'IdkBot',
+          pingFn: async () => { pings.push(1); return { players: { online: 2 } } },
+        })
+      } finally {
+        cap.release()
+      }
+      assert.equal(pings.length, 1)
+    }
+  })
+})
+
+describe('worker e2e: runOnce leave disconnects the worker first (revmux 01 core-1/3)', () => {
+  async function bridgedEnv() {
+    const bridge = startBridge()
+    await bridge.listen()
+    delete process.env.MC_HOST
+    delete process.env.MC_PORT
+    process.env.WORKER_NAME = WORKER
+    process.env.WORKER_HOST = 'localhost'
+    process.env.WORKER_PORT = String(bridge.server.address().port)
+    return bridge
+  }
+  function runLeaving(bot, pingFn) {
+    let settled = false
+    index.runOnce({
+      host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10,
+      brain: mockBrain(), leaveAfterMs: 30, followName: '', createBot: () => bot, pingFn,
+    }).then(() => { settled = true }, () => { settled = true })
+    return () => settled
+  }
+
+  it('nobody-online quit sends disconnect, resolved before bot.quit runs', async () => {
+    const bridge = await bridgedEnv()
+    const bot = connBot()
+    // Causal ordering log (no wall clock: resolve and quit land in the same
+    // ms): fire-and-forget would log quit BEFORE leave-resolved.
+    const events = []
+    const realQuit = bot.quit.bind(bot)
+    bot.quit = (r) => { events.push('quit'); realQuit(r) }
+    const realLeave = worker.leave
+    worker.leave = (...a) => realLeave(...a).then((v) => { events.push('leave-resolved'); return v })
+    const cap = capture()
+    try {
+      const settled = runLeaving(bot, async () => ({ players: { online: 0 } }))
+      bot.emit('spawn')
+      assert.ok(await waitFor(() => (bot.quitCalls > 0 ? true : null), 5000), 'bot quit on nobody-online')
+      assert.equal(bot.quitReason, 'nobody online')
+      assert.equal(await waitFor(() => (bridge.lines.length > 0 ? bridge.lines.join('\n') : null), 2000), 'disconnect')
+      assert.deepEqual(events, ['leave-resolved', 'quit'])
+      assert.ok(await waitFor(() => (settled() ? true : null), 2000), 'runOnce resolved into the join loop')
+    } finally {
+      worker.leave = realLeave
+      cap.release()
+      await bridge.close()
+    }
+  })
+
+  it('with the worker on and ping online=2 (hidden sample) the head still leaves', async () => {
+    const bridge = await bridgedEnv()
+    const bot = connBot()
+    bot.players = { [WORKER]: playerEntry(WORKER, 5) }
+    const cap = capture()
+    try {
+      runLeaving(bot, async () => ({ players: { online: 2 } })) // self + worker, hidden sample
+      bot.emit('spawn')
+      setTimeout(() => { bot.players = {} }, 100) // the worker processes the disconnect
+      assert.ok(await waitFor(() => (bot.quitCalls > 0 ? true : null), 5000), 'bot quit with only the worker on')
+      assert.equal(await waitFor(() => (bridge.lines.length > 0 ? bridge.lines.join('\n') : null), 2000), 'disconnect')
+    } finally {
+      cap.release()
+      await bridge.close()
+    }
+  })
+
+  it('a real player beside the worker re-arms: no quit, no disconnect', async () => {
+    const bridge = await bridgedEnv()
+    const bot = connBot()
+    bot.players = { [WORKER]: playerEntry(WORKER, 5) }
+    let pingRes = { players: { online: 3 } } // self + worker + one real player, hidden sample
+    const cap = capture()
+    try {
+      runLeaving(bot, async () => pingRes)
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 200)) // several re-armed grace cycles
+      assert.equal(bot.quitCalls, 0)
+      assert.equal(bridge.lines.length, 0)
+      // The player leaves and the worker processes its disconnect: the next
+      // grace quits fast (the full 5 s bound with a stuck worker is pinned
+      // by the waitForWorkerLeave unit test instead).
+      pingRes = { players: { online: 0 } }
+      bot.players = {}
+      assert.ok(await waitFor(() => (bot.quitCalls > 0 ? true : null), 5000), 'bot quit after the player left')
+      assert.equal(await waitFor(() => (bridge.lines.length > 0 ? bridge.lines.join('\n') : null), 2000), 'disconnect')
+    } finally {
+      cap.release()
+      await bridge.close()
+    }
+  })
+})
+
+describe('worker e2e: tickPrelude joins the worker (revmux 01 core-3)', () => {
+  it('past 30 s absent the tick sends connect over the bridge', async () => {
+    const bridge = startBridge()
+    await bridge.listen()
+    delete process.env.MC_HOST
+    delete process.env.MC_PORT
+    process.env.WORKER_NAME = WORKER
+    process.env.WORKER_HOST = 'localhost'
+    process.env.WORKER_PORT = String(bridge.server.address().port)
+    const bot = mockBot()
+    let t = 0
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, now: () => t })
+    const cap = capture()
+    try {
+      await ticker.tick() // t=0: the absence clock starts, nothing sent
+      assert.equal(bridge.lines.length, 0)
+      t = 30001
+      await ticker.tick()
+      assert.equal(await waitFor(() => (bridge.lines.length > 0 ? bridge.lines.join('\n') : null), 2000), 'connect mc 25565')
+    } finally {
+      cap.release()
+      ticker.destroy()
+      await bridge.close()
+    }
+  })
+})
+
+describe('worker e2e: SIGTERM disconnects the worker, then exits 143 (revmux 01 core-3)', () => {
+  it('configured SIGTERM sends disconnect before exit', async () => {
+    const bridge = startBridge()
+    await bridge.listen()
+    process.env.WORKER_NAME = WORKER
+    process.env.WORKER_HOST = 'localhost'
+    process.env.WORKER_PORT = String(bridge.server.address().port)
+    const bot = connBot()
+    const realExit = process.exit
+    let exitCode = null
+    process.exit = (c) => { exitCode = c }
+    const cap = capture()
+    try {
+      index.runOnce({
+        host: 'x', port: 1, username: 'IdkBot', tickMs: 60000, idleTickMs: 60000,
+        brain: mockBrain(), leaveAfterMs: 0, followName: '', createBot: () => bot, pingFn: async () => ({ players: { online: 0 } }),
+      }).then(() => {}, () => {})
+      bot.emit('spawn')
+      await new Promise((r) => setTimeout(r, 50))
+      process.emit('SIGTERM') // consumes this file's once-per-process listener
+      assert.equal(await waitFor(() => (bridge.lines.length > 0 ? bridge.lines.join('\n') : null), 2000), 'disconnect')
+      assert.equal(await waitFor(() => (exitCode !== null ? exitCode : null), 2000), 143)
+    } finally {
+      cap.release()
+      process.exit = realExit
+      await bridge.close()
     }
   })
 })
