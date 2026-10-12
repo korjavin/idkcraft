@@ -19,6 +19,7 @@ const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const craftMod = require('./craft')
 const { issueGoal } = require('./util')
+const { stepDone, stepFailed, isFinished } = require('../step')
 const residence = require('../residence')
 
 // The house's fixed indoor cells (jr2.1) live with the residence
@@ -26,16 +27,21 @@ const residence = require('../residence')
 const FURNACE_SPOTS = residence.FURNACE_SPOTS
 
 // Default smelt job (g0z.36): raw iron -> ingots. A caller sets
-// ctx.furnaceJob = { input, output } before EVERY furnace tick of its leg
-// (castle glass: sand -> glass); each tick consumes it, so a job never
-// leaks into gear's iron leg, and a run of another job restarts fresh.
+// ctx.furnaceJob = { input, output, count? } before EVERY furnace tick of
+// its leg (castle glass: sand -> glass); each tick consumes it, so a job
+// never leaks into gear's iron leg, and a run of another job restarts
+// fresh. count (g0z.51) caps the run's takes — the blast ladder's 3 stone
+// — while a missing count smelts everything on hand (iron, sand).
 const IRON_JOB = { input: 'raw_iron', output: 'iron_ingot' }
 
 // The job this tick asks for (consumed), else iron.
 function takeJob(ctx) {
   const j = ctx.furnaceJob
   if (j !== undefined) ctx.furnaceJob = null
-  return j && typeof j.input === 'string' && typeof j.output === 'string' ? { input: j.input, output: j.output, caller: true } : IRON_JOB
+  if (!j || typeof j.input !== 'string' || typeof j.output !== 'string') return IRON_JOB
+  const job = { input: j.input, output: j.output, caller: true }
+  if (typeof j.count === 'number' && Number.isFinite(j.count) && j.count >= 0) job.count = Math.floor(j.count)
+  return job
 }
 
 const FURNACE_REACH = craftMod.TABLE_REACH // window ops need table-like proximity
@@ -68,7 +74,7 @@ function ownStatus(ctx) {
 }
 
 function fail(ctx, reason) {
-  if (ownStatus(ctx)) ctx.stepStatus = `failed:${reason}`
+  if (ownStatus(ctx)) stepFailed(ctx, reason)
   // Slice-C contract: the outcome stays readable on ctx.furnace.result
   // (gear wraps stepStatus, which furnace would otherwise end).
   try {
@@ -344,7 +350,7 @@ function finishSmelt(bot, ctx, f, status) {
       const what = f.job && f.job.output !== IRON_JOB.output ? f.job.output : 'iron'
       try { console.log(`smelted ${f.smelted} ${what}`) } catch (_) { /* log best-effort */ }
     }
-    if (ownStatus(ctx)) ctx.stepStatus = 'done'
+    if (ownStatus(ctx)) stepDone(ctx)
     try { f.result = 'done' } catch (_) { /* flag best-effort */ }
   } else {
     fail(ctx, status)
@@ -366,6 +372,8 @@ function doSmelt(bot, ctx, f, spot) {
       if (!f.win) f.win = await bot.openFurnace(fblock)
       const win = f.win
       const job = f.job || IRON_JOB
+      // A counted run (g0z.51) loads and fuels at most this many takes.
+      const want = job && typeof job.count === 'number' && job.count >= 0 ? Math.floor(job.count) : null
       const outNow = slotCount(win.outputItem())
       let inN = slotCount(win.inputItem())
       // A shared station (castle kitchen): another job's leftover input
@@ -411,11 +419,14 @@ function doSmelt(bot, ctx, f, spot) {
       // left the slot but still cooks, so it counts or every ignition
       // parks one extra coal. Past the grace the discount lapses and a
       // cold furnace reloads.
-      const oreLoad = Math.min(invOre, 64 - inN)
+      // A counted run loads only its remainder (taken + cooking count).
+      const remaining = want == null ? Infinity : Math.max(0, want - (f.smelted || 0) - inN)
+      const oreLoad = Math.min(invOre, 64 - inN, remaining)
       const inFlight = f.tookOnce && (f.idleTicks || 0) < FUEL_GRACE_TICKS ? 1 : 0
+      const cookTotal = want == null ? invOre + inN : Math.min(invOre + inN, remaining + inN)
       const fuelLoad = plankName
-        ? Math.max(0, Math.min(64 - fuelN, fuelPieces(invOre + inN, invPlanks, ORE_PER_PLANK) - fuelN - inFlight)) // one 64 slot: 97+ ore outgrows it
-        : Math.max(0, fuelPieces(invOre + inN, invCoal + invChar) - fuelN - inFlight)
+        ? Math.max(0, Math.min(64 - fuelN, fuelPieces(cookTotal, invPlanks, ORE_PER_PLANK) - fuelN - inFlight)) // one 64 slot: 97+ ore outgrows it
+        : Math.max(0, fuelPieces(cookTotal, invCoal + invChar) - fuelN - inFlight)
       if (oreLoad > 0) {
         const id = craftMod.itemId(bot, input)
         if (id == null) throw new Error('no-ore-id')
@@ -464,6 +475,7 @@ function doSmelt(bot, ctx, f, spot) {
       // covers the burn in flight (a lit furnace with a drained slot
       // still cooks for one item time).
       const oreLeft = inN + invOre
+      if (want != null && (f.smelted || 0) >= want && (outNow === 0 || took)) { finishSmelt(bot, ctx, f, 'done'); return }
       if (oreLeft === 0 && (outNow === 0 || took)) { finishSmelt(bot, ctx, f, 'done'); return }
       if (outNow === 0 && oreLeft > 0 && fuelN === 0 && fuelLoad === 0 && (f.idleTicks || 0) >= FUEL_GRACE_TICKS) {
         finishSmelt(bot, ctx, f, 'no-fuel')
@@ -484,7 +496,7 @@ function doSmelt(bot, ctx, f, spot) {
 function furnace(bot, ctx, target, state) {
   const job = takeJob(ctx)
   if (ctx.furnaceInFlight) return // exactly one op at a time
-  if (ctx.stepStatus === 'done' || (ctx.stepStatus && String(ctx.stepStatus).startsWith('failed:'))) return // terminal: no second smelted line
+  if (isFinished(ctx.stepStatus)) return // terminal: no second smelted line
   const bp = botPos(bot)
   if (!bp) return
   // A settled run never resumes spent: the next pick starts fresh

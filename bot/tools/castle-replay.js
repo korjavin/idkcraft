@@ -945,6 +945,18 @@ async function main() {
     }
     origLog(`CASTLE-RIG kit=stairs (${n} cobble stairs, stone pick+sword, 32 bread)`)
   }
+  // Blast kit (g0z.51): the self-source run's material — 5 raw iron +
+  // coal + cobble (3 smooth chain + 8 recipe furnace + 8 station), a
+  // stone kit and bread. The finished block is NOT carried: the ladder
+  // smelts and crafts it. Pair with CASTLE_SEED=complete (+ CASTLE_SAND=1
+  // so the pane ladder completes instead of eating the window).
+  if (KIT === 'blast') {
+    for (const [item, count] of [['raw_iron', 5], ['coal', 16], ['cobblestone', 32],
+      ['stone_pickaxe', 1], ['stone_sword', 1], ['bread', 32]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog('CASTLE-RIG kit=blast (5 raw iron, 16 coal, 32 cobble, stone pick+sword, 32 bread)')
+  }
   await sleep(3000) // chunks in, both landed
   // Seeded complete castle (g0z.33): site SW corner so the 31x27 castle
   // centres on the pad, floor on the pad top + 1 (siteEval's median + 1).

@@ -14,12 +14,16 @@
 #   CASTLE_TAG, CASTLE_PAD ("x,z"), CASTLE_PADSPOT ("x,z", pins the pad probe
 #   pick — controlled pairs set it on both legs), CASTLE_OUT, CASTLE_LOG, CASTLE_DAYLOCK=0
 #   to run the natural day/night cycle instead of locked day,
-#   CASTLE_KIT (empty|seeded|junk|valuables|stairs — seeded pre-fills cobble/planks/
+#   CASTLE_KIT (empty|seeded|junk|valuables|stairs|blast — seeded pre-fills cobble/planks/
 #   tools so a 6-min window measures laying, not fetching; junk is vmzq.38's
 #   prod pack: 36/36 granite/diorite/andesite/sand/mob junk, no pickaxe, no
 #   cobble; valuables is vmzq.39's 36/36 never-dropped ores/tools/wood, no
 #   stone/dirt, with a pick, chests and a table; stairs is g0z.48's upgrade
-#   kit: the v3 stairs count in cobble stairs + stone pick/sword + bread),
+#   kit: the v3 stairs count in cobble stairs + stone pick/sword + bread;
+#   blast is g0z.51's self-source kit: 5 raw iron + coal + cobble + a stone
+#   kit + bread — the finished block is NOT carried, the ladder smelts and
+#   crafts it; pair with CASTLE_SEED=complete, + CASTLE_SAND=1 so the pane
+#   ladder completes instead of eating the window on its sand hunt),
 #   CASTLE_SEED (''|complete — g0z.33: complete rcon-places the whole v2
 #   castle (1722/1722 + beds + table) on the pad instead of ordering one,
 #   the bot adopts it as its residence (memory home kind=castle) and the
@@ -135,7 +139,7 @@ MINS="${1:-${CASTLE_MINS:-6}}"
 case "$MINS" in ''|*[!0-9]*) echo "mins: want a positive integer, got '$MINS'"; exit 2 ;; esac
 [ "$MINS" -ge 1 ] || { echo "mins: want a positive integer, got '$MINS'"; exit 2; }
 KIT="${CASTLE_KIT:-empty}"
-case "$KIT" in empty|seeded|junk|valuables|stairs) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs, got '$KIT'"; exit 2 ;; esac
+case "$KIT" in empty|seeded|junk|valuables|stairs|blast) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs|blast, got '$KIT'"; exit 2 ;; esac
 SEED="${CASTLE_SEED:-}"
 case "$SEED" in ''|complete) ;; *) echo "CASTLE_SEED: want ''|complete, got '$SEED'"; exit 2 ;; esac
 SEED_VERSION="${CASTLE_SEED_VERSION:-}"

@@ -24,6 +24,7 @@ const stockpileMod = require('./stockpile')
 const danger = require('../danger')
 const { countItems } = require('../perception')
 const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('./util')
+const { stepDone, stepFailed, failReason, isFinished } = require('../step')
 
 // Stack-ish targets per kind (bead: ~64 cobble, ~16 logs' worth). Each is
 // >= castle BATCH (door: its remainder is 1), so a fetch picked on a
@@ -41,11 +42,13 @@ const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('.
 // the chest, 3 books + 6 planks crafted at a table; enchanting_table —
 // chest only (no bot chain for obsidian/diamonds). Both fail honestly
 // into the hold, like banners before g0z.35.
-// blast_furnace (g0z.50) — the finished block from the chest, else one
-// table craft from 5 iron_ingot + 1 furnace + 3 smooth_stone held (the
-// one-layer rule never makes the furnace from cobble, so no furnace is
-// no craft — g0z.51 self-sources the mats). Missing stock fails honestly
-// into the hold.
+// blast_furnace (g0z.50, self-sourced g0z.51) — the finished block from
+// the chest, else one table craft from 5 iron_ingot + 1 furnace + 3
+// smooth_stone held; else the blast ladder (blastTick): chest iron/chain
+// mats, smelted iron, the cobble -> stone -> smooth_stone chain (cobble
+// dug like the pane rung), the recipe furnace from 8 cobble (craftany's
+// one-layer rule never makes it — g0z.50). Each rung fails honestly into
+// the hold.
 // stairs (g0z.47) — any *_stairs from the chest, else cobblestone_stairs
 // (6 cobble -> 4 at a table, one material for all 72).
 const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16, banner: 2, bookshelf: 5, enchanting_table: 1, blast_furnace: 1, stairs: 16 }
@@ -58,6 +61,11 @@ const LEG_MAX_MS = 5 * 60 * 1000
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, blast_furnace: 1, stairs: 4 }
 const BANNER_WOOL = 6 // one colour per banner (table recipe)
 const BOOKS_PER_SHELF = 3 // table recipe: 6 planks + 3 books (g0z.49)
+const BLAST_IRON = 5 // iron_ingot per blast furnace (table recipe, g0z.51)
+const BLAST_SMOOTH = 3 // smooth_stone per blast furnace
+const BLAST_FURNACE_COBBLE = 8 // the recipe's furnace, crafted from cobble (craftany never layers it — g0z.50)
+const BLAST_JOBS = { raw_iron: 'iron_ingot', cobblestone: 'stone', stone: 'smooth_stone' } // ladder smelts, input -> output
+const SAND_JOB = { input: 'sand', output: 'glass' } // the pane job, the smeltTick default
 const DIG_RADIUS = 32
 const FIND_COUNT = 4096
 const STONE_BELOW = 2 // target y window around the site's ground (no shafts, no pillars)
@@ -149,7 +157,7 @@ function chestNames(bot, kind) {
   if (kind === 'banner') return [itemNames(bot, (n) => blueprint.matches('banner', n)), itemNames(bot, (n) => n.endsWith('_wool'))]
   if (kind === 'bookshelf') return [['bookshelf'], ['book']]
   if (kind === 'enchanting_table') return [['enchanting_table']]
-  if (kind === 'blast_furnace') return [['blast_furnace']]
+  if (kind === 'blast_furnace') return [['blast_furnace'], ['iron_ingot'], ['raw_iron'], ['smooth_stone'], ['stone'], ['cobblestone']]
   if (kind === 'stairs') return [itemNames(bot, (n) => n.endsWith('_stairs'))]
   return []
 }
@@ -268,7 +276,8 @@ function finish(bot, ctx, status) {
   if (status !== 'done') {
     try { console.log(`castlefetch ${status}`) } catch (_) { /* log best-effort */ }
   }
-  ctx.stepStatus = status
+  if (status === 'done') stepDone(ctx)
+  else stepFailed(ctx, failReason(status) || status)
   ctx.castleFetch = null
   ctx.furnaceJob = null // g0z.38: a pane leg's job never outlives it (gear's iron smelt)
   clearGoal(bot, ctx)
@@ -357,6 +366,21 @@ function chestTick(bot, ctx, f, d) {
         const sn = paneNeed(bot, ctx, d).sandNeed
         if (sn > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, sn, at)
         break
+      }
+      // Blast mats (g0z.51): the ladder's whole need per mat, at once (the
+      // sand shape) — finished first through the generic need below, then
+      // iron, the smooth chain, recipe cobble. Recomputed per mat: each
+      // withdraw lands in the pack before the next want is read.
+      if (d.kind === 'blast_furnace' && names[0] !== 'blast_furnace') {
+        const bn = blastNeed(bot)
+        const ironShort = Math.max(0, BLAST_IRON - bn.ingots - bn.raw)
+        const chainShort = Math.max(0, BLAST_SMOOTH - bn.smooth - bn.stone)
+        const cobbleShort = Math.max(0, chainShort + (bn.furn > 0 ? 0 : BLAST_FURNACE_COBBLE) - bn.cobble)
+        const want = names[0] === 'iron_ingot' || names[0] === 'raw_iron' ? ironShort
+          : names[0] === 'smooth_stone' || names[0] === 'stone' ? chainShort
+          : names[0] === 'cobblestone' ? cobbleShort : 0
+        if (want > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
+        continue
       }
       // Books already packed cover shelves too (revmux 01 minor): never
       // withdraw what the pack holds.
@@ -479,6 +503,30 @@ function paneNeed(bot, ctx, d) {
   return { glass, sand, glassNeed, sandNeed: Math.max(0, glassNeed - sand) }
 }
 
+// Fuel for an n-item smelt (pane g0z.38, blast g0z.51): coal/charcoal,
+// else planks from logs, else gather chops a load and ends the leg
+// itself (the next leg re-enters with logs). True while it owns the tick.
+function fuelTick(bot, ctx, f, target, state, n, dry) {
+  const furnaceMod = require('./furnace')
+  const coal = countItems(bot, (nm) => nm === 'coal' || nm === 'charcoal')
+  const planks = countItems(bot, (nm) => nm.endsWith('_planks'))
+  if (coal < Math.ceil(n / furnaceMod.ORE_PER_FUEL) && planks < Math.ceil(n / furnaceMod.ORE_PER_PLANK)) {
+    if (countItems(bot, (nm) => nm.endsWith('_log')) > 0) {
+      let r = null
+      try { r = deps.craftItem(bot, ctx, craftNames(bot, 'planks'), CRAFT_COUNT.planks) } catch (_) { r = { done: false } }
+      if (r === 'running' || (r && r.done)) return true
+      dry('no-fuel') // logs on hand and no planks from them
+      return true
+    }
+    // No logs: gather chops a load and ends the leg itself; the next leg
+    // re-enters here with logs (the wood-kinds branch shape).
+    deps.gather(bot, ctx, target, state)
+    if (isFinished(ctx.stepStatus)) ctx.castleFetch = null
+    return true
+  }
+  return false
+}
+
 // Pane world source (g0z.38, owner 2026-10-09: the bot sources the glass
 // itself). Reached once the chest and the craft came up short this leg:
 // sand (self bring order) -> fuel (coal/charcoal, else planks from logs,
@@ -513,23 +561,7 @@ function paneTick(bot, ctx, f, d, target, state) {
     return
   }
   // Fuel for the whole load (furnace.js ORE_PER_FUEL / ORE_PER_PLANK).
-  const furnaceMod = require('./furnace')
-  const coal = countItems(bot, (nm) => nm === 'coal' || nm === 'charcoal')
-  const planks = countItems(bot, (nm) => nm.endsWith('_planks'))
-  if (coal < Math.ceil(n.sand / furnaceMod.ORE_PER_FUEL) && planks < Math.ceil(n.sand / furnaceMod.ORE_PER_PLANK)) {
-    if (countItems(bot, (nm) => nm.endsWith('_log')) > 0) {
-      let r = null
-      try { r = deps.craftItem(bot, ctx, craftNames(bot, 'planks'), CRAFT_COUNT.planks) } catch (_) { r = { done: false } }
-      if (r === 'running' || (r && r.done)) return
-      dry('no-fuel') // logs on hand and no planks from them
-      return
-    }
-    // No logs: gather chops a load and ends the leg itself; the next leg
-    // re-enters here with logs (the wood-kinds branch shape).
-    deps.gather(bot, ctx, target, state)
-    if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
-    return
-  }
+  if (fuelTick(bot, ctx, f, target, state, n.sand, dry)) return
   // Cobble rung (g0z.39): the castle furnace said no-cobble this leg.
   if (f.cobble && countItems(bot, (nm) => nm === 'cobblestone') < 8) { cobbleTick(bot, ctx, f, target, state, dry); return }
   f.smelting = true
@@ -543,47 +575,135 @@ function paneTick(bot, ctx, f, d, target, state) {
 // (ends the leg; the next leg re-enters via the smelt's no-cobble); then
 // digTick's stone source (exposed stone, quarry, pit) until 8 cobble, and
 // the smelt retries. digTick's own failures end the leg into the hold.
-function cobbleTick(bot, ctx, f, target, state, dry) {
-  ctx.castle.status = `fetching pane (cobble ${countItems(bot, (nm) => nm === 'cobblestone')}/8)`
+function cobbleTick(bot, ctx, f, target, state, dry, want = 8, kind = 'pane') {
+  ctx.castle.status = `fetching ${kind} (cobble ${countItems(bot, (nm) => nm === 'cobblestone')}/${want})`
   if (!hasPickaxe(bot)) {
     let r = null
     try { r = deps.craftItem(bot, ctx, ['wooden_pickaxe'], 1) } catch (_) { r = { done: false } }
     if (r === 'running' || (r && r.done)) return
     if (countItems(bot, (nm) => nm.endsWith('_log') || nm.endsWith('_planks')) > 0) { dry('no-pickaxe'); return } // wood on hand, craft failed (table, reach)
     deps.gather(bot, ctx, target, state)
-    if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') ctx.castleFetch = null
+    if (isFinished(ctx.stepStatus)) ctx.castleFetch = null
     return
   }
   digTick(bot, ctx, f)
-  if (typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:')) castleMod.noteDry(ctx, 'pane') // the decor word skips it (dry() shape)
+  if (failReason(ctx.stepStatus) !== null) castleMod.noteDry(ctx, kind) // the decor word skips it (dry() shape)
 }
 
 // One furnace tick per castlefetch tick (g0z.36 contract: the job is set
 // before EVERY driveFurnace call — the furnace consumes it each tick).
-// The window cycle settles async (revmux 01): a sand run's outcome lands on
+// The window cycle settles async (revmux 01): a run's outcome lands on
 // ctx.furnace.result after driveFurnace returned, so a settled run is read
 // back here first (furnace.js keeps a non-iron job off ctx.stepStatus).
+// The job rides f.smeltJob (g0z.51: the blast ladder's iron/stone/smooth
+// passes, counted); pane never sets it, so sand is the default.
 function smeltTick(bot, ctx, f, dry) {
-  ctx.castle.status = 'fetching pane (smelting)'
+  ctx.castle.status = `fetching ${f.kind} (smelting)`
+  const job = f.smeltJob || SAND_JOB
   let out = null
   const fr = ctx.furnace
-  if (fr && fr.settled && fr.result && fr.job && fr.job.input === 'sand') {
+  if (fr && fr.settled && fr.result && fr.job && fr.job.input === job.input && fr.job.output === job.output) {
     out = fr.result
     fr.result = null
   } else {
-    ctx.furnaceJob = { input: 'sand', output: 'glass' }
+    ctx.furnaceJob = job.count == null ? { input: job.input, output: job.output } : { input: job.input, output: job.output, count: job.count }
     try { out = deps.driveFurnace(bot, ctx) } catch (e) { out = 'failed:leg-threw' }
   }
   if (!out) return // running; the furnace walks itself
   f.smelting = false
+  f.smeltJob = null
   ctx.furnaceJob = null
-  if (out === 'done') { f.craftOut = false; return } // craftTick crafts the panes next tick
+  if (out === 'done') { f.craftOut = false; return } // craftTick crafts next tick
   if (out === 'failed:no-cobble' && !f.cobble) { // g0z.39: dig the furnace's 8 cobble, then smelt again
     f.cobble = true
-    try { console.log('castlefetch pane: no cobble for the furnace, digging 8') } catch (_) { /* log best-effort */ }
+    try { console.log(`castlefetch ${f.kind}: no cobble for the furnace, digging 8`) } catch (_) { /* log best-effort */ }
     return
   }
   dry(`smelt-${String(out).replace(/^failed:/, '')}`)
+}
+
+// Blast ladder need (g0z.51): the pack's recipe stock — 5 iron_ingot, 3
+// smooth_stone, the recipe furnace — plus the smeltable chain (raw iron;
+// stone and cobble feed the two smooth passes).
+function blastNeed(bot) {
+  return {
+    ingots: countItems(bot, (n) => n === 'iron_ingot'),
+    raw: countItems(bot, (n) => n === 'raw_iron'),
+    smooth: countItems(bot, (n) => n === 'smooth_stone'),
+    stone: countItems(bot, (n) => n === 'stone'),
+    cobble: countItems(bot, (n) => n === 'cobblestone'),
+    furn: countItems(bot, (n) => n === 'furnace'),
+  }
+}
+
+// Blast world source (g0z.51, owner: the bot gets its own materials).
+// Reached once the chest and the craft came up short this leg: 5 iron
+// (pack + chest raw smelted — no mining leg, deep.js digs no iron) -> 3
+// smooth stone (cobble -> stone -> smooth, two counted furnace passes,
+// the cobble dug like the pane rung) -> the recipe furnace (8 cobble at
+// a table; craftany's one-layer rule never makes it — g0z.50) ->
+// craftTick next tick. ponytail: no reopen counter — the 5-min
+// failed-leg hold is the retry.
+function blastTick(bot, ctx, f, d, target, state) {
+  if (ctx.bring) return // a foreign order runs (this ladder opens none)
+  const dry = (why) => { castleMod.noteDry(ctx, 'blast_furnace'); finish(bot, ctx, `failed:castlefetch-${why}`) }
+  // A preempted smelt resumes on the next leg instead of reordering work
+  // already in the furnace (paneTick shape).
+  const fr = ctx.furnace
+  if (fr && !fr.settled && fr.job && BLAST_JOBS[fr.job.input]) {
+    f.smelting = true
+    f.smeltJob = { input: fr.job.input, output: BLAST_JOBS[fr.job.input] }
+  }
+  if (f.smelting) { smeltTick(bot, ctx, f, dry); return } // a run is in the furnace: never reorder it
+  const n = blastNeed(bot)
+  if (n.ingots >= BLAST_IRON && n.smooth >= BLAST_SMOOTH && n.furn >= 1) { dry('craft-blast'); return } // mats on hand, craft failed (table, reach): never re-smelt
+  // A full pack: the crafts shed into it (craft.js dropRank); fail so the
+  // stockpile banks first (the stone roomForDrop line, pane shape).
+  let stacks = 0
+  try { stacks = (bot.inventory.items() || []).length } catch (_) { stacks = 0 }
+  if (stacks >= stockpileMod.PACK_RESERVE) { dry('pack-full'); return }
+  // Iron rung: smelt the pack's raw; none anywhere (the chest came up
+  // short this leg too) fails honestly — the hold is the retry.
+  if (n.ingots < BLAST_IRON) {
+    if (n.raw <= 0) { dry('no-iron'); return }
+    blastSmelt(bot, ctx, f, target, state, dry, fr, { input: 'raw_iron', output: 'iron_ingot', count: Math.min(n.raw, BLAST_IRON - n.ingots) })
+    return
+  }
+  // Smooth rung: stone -> smooth, else cobble -> stone; the cobble for the
+  // chain and the recipe furnace is dug like the pane rung.
+  if (n.smooth < BLAST_SMOOTH) {
+    const chain = Math.max(0, BLAST_SMOOTH - n.smooth - n.stone)
+    const want = chain + (n.furn > 0 ? 0 : BLAST_FURNACE_COBBLE)
+    if (n.cobble < want) { cobbleTick(bot, ctx, f, target, state, dry, want, 'blast_furnace'); return }
+    if (n.stone < BLAST_SMOOTH - n.smooth) {
+      blastSmelt(bot, ctx, f, target, state, dry, fr, { input: 'cobblestone', output: 'stone', count: Math.min(n.cobble, BLAST_SMOOTH - n.smooth - n.stone) })
+      return
+    }
+    blastSmelt(bot, ctx, f, target, state, dry, fr, { input: 'stone', output: 'smooth_stone', count: BLAST_SMOOTH - n.smooth })
+    return
+  }
+  // Recipe furnace rung: 8 cobble at a table.
+  if (n.furn < 1) {
+    if (n.cobble < BLAST_FURNACE_COBBLE) { cobbleTick(bot, ctx, f, target, state, dry, BLAST_FURNACE_COBBLE, 'blast_furnace'); return }
+    let r = null
+    try { r = deps.craftItem(bot, ctx, ['furnace'], 1) } catch (_) { r = { done: false } }
+    if (r === 'running') return
+    if (r && r.done) { f.craftOut = false; return } // craftTick crafts the blast next tick
+    dry('craft-furnace') // cobble on hand, craft failed (table, reach)
+    return
+  }
+  dry('craft-blast') // unreachable: all-mats short-circuits above — honest either way
+}
+
+// One blast smelt rung: fuel, the station's 8 on a no-cobble retry, then
+// the counted run (smeltTick settles it; done re-arms the craft).
+function blastSmelt(bot, ctx, f, target, state, dry, fr, job) {
+  if (fuelTick(bot, ctx, f, target, state, job.count, dry)) return
+  if (f.cobble && blastNeed(bot).cobble < 8) { cobbleTick(bot, ctx, f, target, state, dry); return } // the station's 8 (pane rung)
+  f.smelting = true
+  f.smeltJob = job
+  if (fr && fr.settled) fr.result = null // a stale outcome never ends the new run
+  smeltTick(bot, ctx, f, dry)
 }
 
 // Exposed stone only (revmux 01): air above, or air on a side — surface
@@ -1300,14 +1420,15 @@ function castlefetch(bot, ctx, target, state) {
       return
     }
     deps.gather(bot, ctx, target, state)
-    if (typeof ctx.stepStatus === 'string' && ctx.stepStatus !== 'running') {
-      if (d.kind === 'fence' && ctx.stepStatus.startsWith('failed:')) castleMod.noteDry(ctx, 'fence')
+    if (isFinished(ctx.stepStatus)) {
+      if (d.kind === 'fence' && failReason(ctx.stepStatus) !== null) castleMod.noteDry(ctx, 'fence')
       ctx.castleFetch = null
     }
     return
   }
   if (d.kind === 'banner' && bannerSelf(bot, ctx)) { bannerTick(bot, ctx, f, d); return }
   if (d.kind === 'pane') { paneTick(bot, ctx, f, d, target, state); return }
+  if (d.kind === 'blast_furnace') { blastTick(bot, ctx, f, d, target, state); return }
   castleMod.noteDry(ctx, d.kind) // the decor word tries the next open kind (castle menuFact)
   finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, banner without chest stock (beds first)
 }
@@ -1336,6 +1457,7 @@ module.exports.FETCH = FETCH
 module.exports.selfOrder = selfOrder
 module.exports.selfOrderBack = selfOrderBack
 module.exports.paneNeed = paneNeed
+module.exports.blastNeed = blastNeed
 module.exports.acceptStone = acceptStone
 module.exports.FIND_COUNT = FIND_COUNT
 module.exports.STONE_BELOW = STONE_BELOW

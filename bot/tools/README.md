@@ -486,6 +486,15 @@ of the pad; with the seeded castle the verdict adds `, panes=<laid>/44`
 CASTLE_SEED=complete CASTLE_KIT=empty CASTLE_SAND=1 CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh 60
 ```
 
+Blast self-source (g0z.51): `CASTLE_KIT=blast` carries 5 raw iron + coal
++ cobble (no finished block); the verdict's `blast=<laid>/1` reads the
+kitchen cell the ladder smelted and crafted itself (with `CASTLE_SAND=1`
+the pane ladder completes instead of eating the window on its sand hunt):
+
+```sh
+CASTLE_SEED=complete CASTLE_KIT=blast CASTLE_SAND=1 CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh 60
+```
+
 Stairs upgrade (g0z.48): `CASTLE_SEED_VERSION=2` seeds the complete
 castle as v2 and the guide chats `castle upgrade` after adoption, so the
 window measures the stairs relay; `CASTLE_KIT=stairs` carries one cobble
