@@ -36,8 +36,8 @@ touch → live), keeping mineflayer as the rollback seam.
 | `bot/src/bridge/transport.js` | websocket client + `FakeTransport` loopback — was `transport.js` here |
 | `bot/test/bridge-adapter.test.js` | moved spike tests, incl. the REAL `follow.js` + `countItems` running unchanged through the adapter |
 | `rig-goto.js` | DELETED by neuc.2 with the `console` backend (neuc.5 brings the real harness) |
-| `rig.sh` | slot-z boot + offline client (`IdkBody`); holds the rig up until neuc.5 brings the real harness (the bot cannot attach yet: no 7778 publish, no mod — see the script's NOTE) |
-| `mod/` | Fabric mod skeleton (method table + client/Baritone call sites, NOT compiled — sized, not built) |
+| `rig.sh` | slot-z boot + offline client (`IdkBody`); holds the rig up until neuc.5 brings the real harness (the bot cannot attach yet: no 7778 publish until neuc.5 — see the script's NOTE) |
+| `mod/` | Fabric bridge mod — neuc.1 builds it in CI (Unimined + committed Gradle wrapper) and `smoke.js` accepts it on the rig |
 
 ## Verification (2026-10-12)
 
