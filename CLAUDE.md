@@ -72,7 +72,7 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Architecture Overview
 
-Four containers in a single Docker Compose stack, deployed without Traefik (Minecraft uses raw TCP/UDP, no HTTP routing):
+Three containers in a single Docker Compose stack, deployed without Traefik (Minecraft uses raw TCP/UDP, no HTTP routing):
 
 ```
 +-------------------------------------------------------------+
@@ -83,14 +83,8 @@ Four containers in a single Docker Compose stack, deployed without Traefik (Mine
 |  | itzg/minecraft-server   |<----+ ghcr.io/korjavin/     |  |
 |  | TYPE=PAPER + Geyser     |     |   idkcraft:<sha>      |  |
 |  | 25565/tcp (Java + Bot)  |     | Node 22 + mineflayer  |  |
-|  | 19132/udp (Bedrock)     |     | rule FSM + System-1 on hard states |  |
+|  | 19132/udp (Bedrock)     |     | rule FSM              |  |
 |  +-------------------------+     +-----------------------+  |
-|                                                             |
-|  +-----------------------------------------------------+    |
-|  | laya                                                |    |
-|  | CPU System-1 brain, JEV REST shape, port 8000       |    |
-|  | (internal only, no published ports)                 |    |
-|  +-----------------------------------------------------+    |
 |                                                             |
 |  +-----------------------------------------------------+    |
 |  | baritone                                            |    |
@@ -103,7 +97,7 @@ Four containers in a single Docker Compose stack, deployed without Traefik (Mine
 Bot architecture follows "one body, many senses": local perception (`bot/src/perception.js`) gathers facts every tick, the brain arbitrates body ownership (`fight` | `follow` | `roam` | `idle`, or the work-mode goal arbiter `stay` | `gohome` | `shelter` | `craft` | `equip` | `build` | `gather` | `deliver` | `forage` | `explore` | `rest` when nobody is followed), and execution dispatches via `BEHAVIOURS` (`bot/src/behaviours/*.js`), while scouting runs alongside as a local reflex. Bot disk memory (homes, finds, chunks, danger) lives in `/app/memory/<BOT_USERNAME>.json` on the `bot-memory` named volume — do not rename the path or the volume.
 
 ### Shared Contract (do not rename)
-- **Services:** `mc`, `bot`, `laya`, `baritone`
+- **Services:** `mc`, `bot`, `baritone` (the `laya` sidecar left the stack in idkcraft-jlda.6; rollback: restore its service + CI steps from pre-jlda.6 git history and set `BRAIN_URL=http://laya:8000/v1/systemone`)
 - **Compose file:** `docker-compose.yml` at repository root
 - **Bot build context:** `./bot`, `bot/Dockerfile`
 - **Image:** `ghcr.io/korjavin/idkcraft:latest` (CI rewrites the tag to the commit SHA on the `deploy` branch)
@@ -120,11 +114,10 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BOT_USERNAME`: Bot player name (default `IdkBot`)
   - `BOT_FOLLOW`: Target player to follow (empty = work mode until `follow me`)
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
-  - `BRAIN_URL`: retired (idkcraft-vhlb.5) — ignored with a log line; the FSM decides every tick and the laya/JEV tick ask is gone (A/B vhlb.1: no gain). The laya service stays defined but idle; manual chat `brain laya|jev` still opts in
+  - `BRAIN_URL`: retired (idkcraft-vhlb.5) — ignored with a log line; the FSM decides every tick and the laya/JEV tick ask is gone (A/B vhlb.1: no gain). The laya sidecar left the stack in idkcraft-jlda.6 (default empty = stub); manual chat `brain laya|jev` still opts in
   - `BRAIN_TIMEOUT_MS`: Per-call deadline for the remote brain (default `3000`)
   - `BOT_LEAVE_AFTER_MS`: Nobody-online grace in ms before the bot quits and re-polls the server ping (default `60000`; `0` = always on)
   - `BOT_AUTONOMOUS`: stay and work with nobody online (default empty = off; chat `autonomous on` lasts until restart)
-  - `LAYA_MEM_LIMIT`: Sidecar container memory cap (default `3g`)
   - `TYPESAFE_API_KEY`: JEV secret; enables only the stall-point plan() (and manual `brain jev`)
   - `ANTHROPIC_API_KEY`: opt-in LLM stall-point planner (watchdog `plan()` only, never per tick); empty = today's planner
   - `PLANNER`: `llm` | `jev` (default `llm` when `ANTHROPIC_API_KEY` is set, else `jev`)
