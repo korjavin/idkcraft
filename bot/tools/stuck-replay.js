@@ -54,7 +54,11 @@
 //   head, idkcraft-jlda.3 — set by stuck-run.sh with REPLAY_WORKER=1 once
 //   the client joined) forces record-only (worker rows are never compared)
 //   and a per-spot worker setup; WORKER_HOST/WORKER_PORT (default
-//   localhost:7777) address its bridge. The rig server must already be up.
+//   localhost:7777) address its bridge. BOT_BODY=baritone (set by
+//   stuck-run.sh with REPLAY_BODY=baritone, idkcraft-neuc.5 — the client
+//   already joined) runs the FOLLOWER on bot/src/bridge instead of
+//   mineflayer; BRIDGE_HOST/BRIDGE_PORT/BRIDGE_CONSOLE_PORT address its
+//   bridges. The rig server must already be up.
 // Exit codes: 0 = baseline holds (or comparison skipped), 1 = REGRESSION
 // vs the baseline (a spot flipped reached->unreached, or overran its
 // stuck/episode ceiling, or has no baseline entry), 2 = harness/env error
@@ -592,9 +596,14 @@ async function main() {
   // to retry on (runOnce fatal-exits), so the gap must hold by itself.
   await sleep(6000)
 
+  // v2 body (idkcraft-neuc.5): BOT_BODY=baritone runs the FOLLOWER on the
+  // Baritone bridge adapter instead of mineflayer; the guide stays
+  // mineflayer. Lazy require: the bridge module must not load on v1 runs.
   let follower = null
   const mk = (opts) => {
-    const b = mineflayer.createBot({ ...opts, username: FOLLOWER })
+    const b = process.env.BOT_BODY === 'baritone'
+      ? require('../src/bridge').createBot({ ...opts, username: FOLLOWER })
+      : mineflayer.createBot({ ...opts, username: FOLLOWER })
     follower = b
     b.on('path_reset', (reason) => {
       const k = String(reason)

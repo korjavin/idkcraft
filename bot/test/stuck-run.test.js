@@ -332,3 +332,169 @@ describe('stuck-run.sh worker ownership (idkcraft-jlda.3)', () => {
     assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
   })
 })
+
+// idkcraft-neuc.5: v2 body ownership. REPLAY_BODY=baritone pre-ops the
+// follower name, boots the offline client under it (a distinct container
+// from the worker's), and exports the adapter addresses for the replay;
+// teardown stops only a client THIS run started. Fake
+// docker/START.sh/replay/client.sh — no real docker needed.
+describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
+  const { spawnSync } = require('node:child_process')
+  const os = require('node:os')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'body-own-'))
+  const tools = path.join(tmp, 'tree', 'bot', 'tools')
+  fs.mkdirSync(tools, { recursive: true })
+  fs.copyFileSync(path.join(__dirname, '..', 'tools', 'stuck-run.sh'), path.join(tools, 'stuck-run.sh'))
+  // Fake replay: records the adapter env the wrapper exported for it.
+  fs.writeFileSync(path.join(tools, 'stuck-replay.js'),
+    'require(\'fs\').writeFileSync(process.env.FAKE_ENV_OUT, JSON.stringify({ ' +
+    'BOT_BODY: process.env.BOT_BODY || null, BRIDGE_HOST: process.env.BRIDGE_HOST || null, ' +
+    'BRIDGE_PORT: process.env.BRIDGE_PORT || null, BRIDGE_CONSOLE_PORT: process.env.BRIDGE_CONSOLE_PORT || null }))\n')
+  const baritone = path.join(tmp, 'tree', 'baritone')
+  fs.mkdirSync(baritone, { recursive: true })
+  // Fake client.sh: records args + the launch env, start exits FAKE_CLIENT_RC.
+  fs.writeFileSync(path.join(baritone, 'client.sh'), '#!/bin/sh\necho "$@" >> "$FAKE_CALLS"\n' +
+    'echo "client=$BARITONE_CLIENT console=$BRIDGE_PORT mod=$MOD_PORT log=$CLIENT_LOG" >> "$FAKE_CALLS"\n' +
+    '[ "$1" = start ] && exit "${FAKE_CLIENT_RC:-0}"\nexit 0\n')
+  const bin = path.join(tmp, 'bin')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\nif [ "$1" = exec ]; then case "$4" in op*) echo "Made fake a server operator";; *) echo ok;; esac; fi\nexit 0\n', { mode: 0o755 })
+  const pw = path.join(tmp, 'pw')
+  fs.mkdirSync(path.join(pw, 'replay-data', 'paper-base', 'world'), { recursive: true })
+  fs.writeFileSync(path.join(pw, 'START.sh'), '# --name idk-replay -p 25571:\nexec sleep 30\n', { mode: 0o755 })
+  spawnSync('tar', ['-cf', path.join(pw, 'world.tar'), '-C', path.join(pw, 'replay-data', 'paper-base'), 'world'])
+  let k = 0
+  const run = (env) => {
+    const calls = path.join(tmp, 'calls' + k)
+    const envOut = path.join(tmp, 'env' + k)
+    k++
+    const r = spawnSync('sh', [path.join(tools, 'stuck-run.sh'), 'paper-base'], { encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRODWORLD: pw, RIG_LOCK: path.join(tmp, 'lock'),
+        REPLAY_BODY: 'baritone', REPLAY_TAG: 't1', FAKE_CALLS: calls, FAKE_ENV_OUT: envOut, ...env } })
+    return { ...r,
+      calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n') : [],
+      envOut: fs.existsSync(envOut) ? JSON.parse(fs.readFileSync(envOut, 'utf8')) : null }
+  }
+
+  it('a failed start stops nothing: exit 2, no stop call', () => {
+    const r = run({ FAKE_CLIENT_RC: '2' })
+    assert.equal(r.status, 2, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, ['start 25571 StuckReplayt1',
+      'client=idk-baritone-body console=7777 mod=7778 log=/tmp/stuck-body-paper-base.log'])
+    assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
+  })
+
+  it('a successful start stops the client at teardown and exports the adapter addresses', () => {
+    const r = run({})
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, ['start 25571 StuckReplayt1',
+      'client=idk-baritone-body console=7777 mod=7778 log=/tmp/stuck-body-paper-base.log',
+      // stop inherits the exported BRIDGE_PORT (the mod ws by then); the
+      // launch-only vars (MOD_PORT/CLIENT_LOG) were never exported.
+      'stop', 'client=idk-baritone-body console=7778 mod= log='])
+    assert.deepEqual(r.envOut,
+      { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '7778', BRIDGE_CONSOLE_PORT: '7777' })
+    assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
+  })
+
+  it('BRIDGE_PORT/MOD_PORT overrides reach the client and the replay', () => {
+    const r = run({ BRIDGE_PORT: '17777', MOD_PORT: '17778' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(r.calls.includes('client=idk-baritone-body console=17777 mod=17778 log=/tmp/stuck-body-paper-base.log'),
+      r.calls.join('\n'))
+    assert.deepEqual(r.envOut,
+      { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '17778', BRIDGE_CONSOLE_PORT: '17777' })
+  })
+
+  it('v1 (REPLAY_BODY unset): no client launch, no adapter env', () => {
+    const r = run({ REPLAY_BODY: '' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, [])
+    assert.deepEqual(r.envOut,
+      { BOT_BODY: null, BRIDGE_HOST: null, BRIDGE_PORT: null, BRIDGE_CONSOLE_PORT: null })
+  })
+})
+
+// idkcraft-neuc.5: client.sh MOD_PORT publishes the in-container mod ws
+// (7778) on the host; unset = not published, so run.sh/REPLAY_WORKER are
+// unchanged. The REAL client.sh with fake docker/node — no real docker.
+describe('client.sh MOD_PORT (idkcraft-neuc.5)', () => {
+  const { spawnSync } = require('node:child_process')
+  const os = require('node:os')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'modport-'))
+  const script = path.join(tmp, 'client.sh')
+  fs.copyFileSync(path.join(__dirname, '..', '..', 'baritone', 'client.sh'), script)
+  const bin = path.join(tmp, 'bin')
+  fs.mkdirSync(bin)
+  // Fake docker: run records its args, logs shows a started client, exec
+  // lists the joining bot, ps shows no collision.
+  fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\n' +
+    'case "$1" in\n' +
+    '  run) echo "$@" >> "$FAKE_CALLS" ;;\n' +
+    '  logs) echo "HMC-Specifics initialized" ;;\n' +
+    '  exec) echo "$FAKE_JOIN has joined" ;;\n' +
+    '  ps) ;; \n' +
+    'esac\nexit 0\n', { mode: 0o755 })
+  fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  let k = 0
+  const start = (env) => {
+    const calls = path.join(tmp, 'calls' + k++)
+    const r = spawnSync('sh', [script, 'start', '25571', 'FakeBody'], { encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BARITONE_OFFLINE: '1',
+        RIG_CONTAINER: 'fake-rig', CLIENT_LOG: path.join(tmp, 'client.log'), FAKE_CALLS: calls, FAKE_JOIN: 'FakeBody', ...env } })
+    return { ...r, runArgs: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '' }
+  }
+
+  it('MOD_PORT unset: only the console bridge is published', () => {
+    const r = start({})
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.runArgs, /-p 7777:7777/)
+    assert.doesNotMatch(r.runArgs, /7778/)
+  })
+
+  it('MOD_PORT set: the mod ws is published beside the console bridge', () => {
+    const r = start({ MOD_PORT: '7778' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.runArgs, /-p 7777:7777/)
+    assert.match(r.runArgs, /-p 7778:7778/)
+  })
+
+  it('RIG_BIND binds both publishes', () => {
+    const r = start({ MOD_PORT: '7778', RIG_BIND: 'localhost' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.runArgs, /-p localhost:7777:7777/)
+    assert.match(r.runArgs, /-p localhost:7778:7778/)
+  })
+
+  it('a non-numeric MOD_PORT fails loud before touching docker', () => {
+    const r = start({ MOD_PORT: 'abc' })
+    assert.equal(r.status, 2, r.stdout + r.stderr)
+    assert.equal(r.runArgs, '')
+  })
+})
+
+// idkcraft-neuc.5: the replay builds the FOLLOWER on the bridge adapter
+// under BOT_BODY=baritone; the guide stays mineflayer either way.
+describe('stuck-replay.js v2 body factory (idkcraft-neuc.5)', () => {
+  const replay = fs.readFileSync(path.join(__dirname, '..', 'tools', 'stuck-replay.js'), 'utf8')
+
+  it('BOT_BODY=baritone picks the bridge adapter for the follower', () => {
+    assert.ok(replay.includes("process.env.BOT_BODY === 'baritone'"), 'BOT_BODY switch missing')
+    assert.ok(replay.includes("require('../src/bridge').createBot({ ...opts, username: FOLLOWER })"),
+      'follower bridge factory missing')
+  })
+
+  it('the guide stays mineflayer', () => {
+    assert.ok(replay.includes('const guide = mineflayer.createBot('), 'guide factory changed')
+  })
+
+  it('the bridge module loads lazily inside mk, never at require time', () => {
+    assert.equal(replay.split("require('../src/bridge')").length - 1, 1, 'bridge require must appear exactly once')
+    assert.ok(replay.indexOf('const mk = (opts)') < replay.indexOf("require('../src/bridge')"),
+      'bridge require must sit inside mk')
+  })
+
+  it('the chat patch stays spawn-gated', () => {
+    assert.ok(replay.includes("b.once('spawn', () => {"), 'spawn-gated chat patch missing')
+  })
+})

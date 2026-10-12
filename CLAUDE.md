@@ -113,6 +113,10 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `LEVEL`: World directory name (default `world`)
   - `BOT_USERNAME`: Bot player name (default `IdkBot`)
   - `BOT_FOLLOW`: Target player to follow (empty = work mode until `follow me`)
+  - `BOT_BODY`: Bot body (`mineflayer` default | `baritone` — bot2 pins it; never set on bot)
+  - `BOT2_USERNAME`: v2 bot name (empty = v2 off; whitelist its OFFLINE uuid like `BOT_USERNAME`)
+  - `BODY2_MEM_LIMIT`: v2 body RAM cap (default `2500m`)
+  - `BRIDGE_HOST`/`BRIDGE_PORT`/`BRIDGE_CONSOLE_PORT`: bridge addresses (defaults `body2`/`7778`/`7777`, pinned on bot2)
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
   - `BRAIN_URL`: retired (idkcraft-vhlb.5) — ignored with a log line; the FSM decides every tick and the laya/JEV tick ask is gone (A/B vhlb.1: no gain). The laya sidecar left the stack in idkcraft-jlda.6 (default empty = stub); manual chat `brain laya|jev` still opts in
   - `BRAIN_TIMEOUT_MS`: Per-call deadline for the remote brain (default `3000`)
