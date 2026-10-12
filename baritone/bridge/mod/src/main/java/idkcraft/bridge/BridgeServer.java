@@ -8,6 +8,7 @@ import baritone.api.event.events.TickEvent;
 import baritone.api.event.events.WorldEvent;
 import baritone.api.event.events.type.EventState;
 import baritone.api.event.listener.AbstractGameEventListener;
+import baritone.api.pathing.goals.Goal;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonNull;
@@ -67,6 +68,12 @@ public final class BridgeServer {
 
     /** Goal watchdog: no terminal Baritone event within 120 s → timeout. */
     private static final long GOAL_TIMEOUT_TICKS = 20L * 120;
+    /**
+     * A re-issued goal cancels the old segment on the next tick; that CANCELED
+     * belongs to the superseded goal, not the new id, so out-of-goal cancels
+     * this soon after the cmd are swallowed (genuine stops land later).
+     */
+    private static final long CANCELED_SWALLOW_TICKS = 10;
     private static final long SUBMIT_TIMEOUT_MS = 3000;
     private static final int MAX_CHAT_QUEUE = 1000;
     private static final int MAX_CHAT_LEN = 1000;
@@ -92,6 +99,7 @@ public final class BridgeServer {
     private volatile boolean terminalReceived = false;
     private volatile long tickCount = 0;
     private volatile long deadlineTick = 0;
+    private volatile long cmdTick = 0;
     private volatile long lastSnapWarnTick = -100000;
 
     private record ChatLine(boolean playerChat, String sender, String text, boolean overlay) {
@@ -266,6 +274,7 @@ public final class BridgeServer {
         long id = cmdSeq.incrementAndGet();
         currentId = id;
         terminalReceived = false;
+        cmdTick = tickCount;
         deadlineTick = tickCount + GOAL_TIMEOUT_TICKS;
         JsonObject res = new JsonObject();
         res.addProperty("id", id);
@@ -316,10 +325,12 @@ public final class BridgeServer {
 
         @Override
         public void onPathEvent(PathEvent event) {
+            // NEXT_CALC_FAILED is transient (a lookahead segment failed; the
+            // main path continues and terminates on its own event).
             String status = switch (event) {
                 case AT_GOAL -> "success";
-                case CALC_FAILED, NEXT_CALC_FAILED -> "noPath";
-                case CANCELED -> "stopped";
+                case CALC_FAILED -> "noPath";
+                case CANCELED -> canceledStatus();
                 default -> null;
             };
             if (status == null || currentId <= 0 || terminalReceived) {
@@ -350,6 +361,38 @@ public final class BridgeServer {
                 snapshot = null;
             }
         }
+    }
+
+    /**
+     * Disambiguate CANCELED (client thread only — path events dispatch from
+     * the client tick). Baritone fires it for routine segment cleanup, not
+     * just user stops: on arrival (the goal process notices feet and segment
+     * start in goal and cancels the finished segment — AT_GOAL never fires
+     * then), on goal switches (the old segment's cancel), and on real stops.
+     * In-goal (against mostRecentGoal, which survives the arrival cleanup
+     * that nulls the live goal) reports success; offline reports stopped; an
+     * out-of-goal cancel within {@link #CANCELED_SWALLOW_TICKS} of the cmd is
+     * the superseded segment's and is swallowed (null); anything later is a
+     * genuine stop.
+     */
+    private String canceledStatus() {
+        Minecraft mc = client;
+        IBaritone b = baritone;
+        if (mc == null || b == null || mc.player == null || mc.level == null) {
+            return "stopped";
+        }
+        try {
+            Goal goal = b.getCustomGoalProcess().mostRecentGoal();
+            if (goal != null && goal.isInGoal(b.getPlayerContext().playerFeet())) {
+                return "success";
+            }
+        } catch (Exception e) {
+            return "stopped";
+        }
+        if (tickCount - cmdTick < CANCELED_SWALLOW_TICKS) {
+            return null;
+        }
+        return "stopped";
     }
 
     /** Client thread only. Reads every field fresh; throws stay with the caller. */
