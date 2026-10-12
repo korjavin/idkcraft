@@ -9,6 +9,8 @@
 #   BARITONE_CLIENT (container name, default idk-baritone-client),
 #   BARITONE_OFFLINE=1 (offline username <bot-name>, no stored account),
 #   BRIDGE_PORT (host publish of the in-container 7777, default 7777),
+#   MOD_PORT (host publish of the in-container 7778, the Fabric bridge mod
+#   ws; default unset = not published, so run.sh/REPLAY_WORKER are unchanged),
 #   RIG_BIND (bind the bridge there instead of all interfaces),
 #   CLIENT_LOG (container stdout, default /tmp/baritone-client.log),
 #   RIG_CONTAINER (the rig Paper container, for the join wait — required
@@ -32,6 +34,10 @@ BOTNAME="${3:-}"
 case "$MC_PORT" in ''|*[!0-9]*) echo "client.sh start: want a numeric <mc-port>, got '$MC_PORT'"; exit 2 ;; esac
 [ -n "$BOTNAME" ] || { echo "client.sh start: want a <bot-name>"; exit 2; }
 [ -n "${RIG_CONTAINER:-}" ] || { echo "client.sh start: RIG_CONTAINER is required (the rig Paper container)"; exit 2; }
+case "${MOD_PORT:-}" in
+  '') ;; # unset = the mod ws stays unpublished (run.sh/REPLAY_WORKER)
+  *[!0-9]*) echo "client.sh start: want a numeric MOD_PORT, got '$MOD_PORT'"; exit 2 ;;
+esac
 
 # Account gate (run.sh, unchanged): the client launches with the account
 # stored in the idkcraft-baritone-auth volume (one-time `login`), or
@@ -58,8 +64,12 @@ fi
 # pre-check, and the rig's Paper+rcon already publish the same way.
 # RIG_BIND=<loopback address> binds the bridge there instead.
 # Container stdout = the client log ($CLIENT_LOG).
+MOD_PUBLISH=
+if [ -n "${MOD_PORT:-}" ]; then
+  MOD_PUBLISH="-p ${RIG_BIND:+$RIG_BIND:}$MOD_PORT:7778"
+fi
 docker run --rm --name "$CLIENT" $AUTH_VOL \
-  $OFFLINE_ENV -p "${RIG_BIND:+$RIG_BIND:}$BRIDGE_PORT:7777" "$IMAGE" >"$CLIENT_LOG" 2>&1 &
+  $OFFLINE_ENV $MOD_PUBLISH -p "${RIG_BIND:+$RIG_BIND:}$BRIDGE_PORT:7777" "$IMAGE" >"$CLIENT_LOG" 2>&1 &
 bridge_send() { # one console line via the bridge (ab.js speaks TCP; POSIX sh cannot)
   node -e "require(process.argv[1]).sendBridgeLine({host:'localhost',port:+process.argv[2],line:process.argv[3]}).then(()=>{},(e)=>{console.error('bridge:',e.message);process.exit(1)})" "$HERE/ab.js" "$BRIDGE_PORT" "$1"
 }
