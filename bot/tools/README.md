@@ -487,12 +487,15 @@ CASTLE_SEED=complete CASTLE_KIT=empty CASTLE_SAND=1 CASTLE_RIG_ID=auto sh bot/to
 ```
 
 Blast self-source (g0z.51): `CASTLE_KIT=blast` carries 5 raw iron + coal
-+ cobble (no finished block); the verdict's `blast=<laid>/1` reads the
-kitchen cell the ladder smelted and crafted itself (with `CASTLE_SAND=1`
-the pane ladder completes instead of eating the window on its sand hunt):
++ cobble (no finished block) and `CASTLE_SEED_DECOR_EXCEPT=blast_furnace`
+seeds every other decor cell placed, so the window measures the blast
+ladder alone — the full gauntlet's wool hunt walked 85+ blocks out and
+pillared the kit cobble away before the blast leg ran (the IDLE_DEATH
+drowning, same fix). The verdict's `blast=<laid>/1` reads the kitchen
+cell the ladder smelted and crafted itself:
 
 ```sh
-CASTLE_SEED=complete CASTLE_KIT=blast CASTLE_SAND=1 CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh 60
+CASTLE_SEED=complete CASTLE_KIT=blast CASTLE_SEED_DECOR_EXCEPT=blast_furnace CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh 25
 ```
 
 Stairs upgrade (g0z.48): `CASTLE_SEED_VERSION=2` seeds the complete

@@ -98,6 +98,12 @@ function parseSeedVersion(raw) {
 }
 const SEED_VERSION = parseSeedVersion(process.env.CASTLE_SEED_VERSION || '')
 const SEED_UPGRADE = SEED === 'complete' && SEED_VERSION < require('../src/castle').BLUEPRINT_VERSION
+// Seed-except (g0z.51): with CASTLE_SEED=complete, seed every decor cell
+// placed EXCEPT the comma-separated kinds — one ladder measured without
+// the gauntlet (the IDLE_DEATH shape below, which seeds all decor for the
+// same reason: its sand/wool legs walked 85+ out and drowned the drift it
+// measures). Unset = today's behaviour (no decor seeded).
+const SEED_DECOR_EXCEPT = (process.env.CASTLE_SEED_DECOR_EXCEPT || '').split(',').map((s) => s.trim()).filter(Boolean)
 const SAND = process.env.CASTLE_SAND === '1'
 const IDLE = process.env.CASTLE_IDLE === '1'
 const IDLE_DEATH = IDLE ? Math.max(0, parseInt(process.env.CASTLE_IDLE_DEATH || '0', 10) || 0) : 0
@@ -992,14 +998,21 @@ async function main() {
     const placed = cells.filter((c) => c.kind !== 'extra' && c.kind !== 'air' && c.kind !== 'dig').length
     seedTag = `, seeded=${placed}/${placed}`
     origLog(`CASTLE-RIG seeded castle site ${st.site.x} ${st.site.y} ${st.site.z} rot 0: ${cells.length} setblocks, ${placed} plan blocks + gate + 2 beds + table read back`)
-    if (IDLE_DEATH > 0) {
+    if (IDLE_DEATH > 0 || SEED_DECOR_EXCEPT.length > 0) {
       // 6x7.25: decor too (44 panes + 2 gate banners + the g0z.45 upper
       // fence row + the g0z.49 attic nook + the g0z.50 blast furnace), so
       // castlefetch has nothing left to fetch: its sand/wool legs walked
       // 85+ out on both builds and drowned the gather drift this scenario
-      // measures.
+      // measures. g0z.51: CASTLE_SEED_DECOR_EXCEPT leaves kinds open (the
+      // blast acceptance seeds all but the blast, same drowning).
       const decor = require('../src/castle').decorPlan(st.site, 0, st.blueprintVersion).cells
+      const kinds = new Set(decor.map((c) => c.kind))
+      for (const k of SEED_DECOR_EXCEPT) {
+        if (!kinds.has(k)) fail('seed-decor', `unknown decor kind ${k} (have ${[...kinds].sort().join(',')})`)
+      }
+      let seeded = 0
       for (const c of decor) {
+        if (SEED_DECOR_EXCEPT.includes(c.kind)) continue
         let block = 'glass_pane'
         if (c.kind === 'banner') {
           const f = c.wall.z > c.z ? 'north' : c.wall.z < c.z ? 'south' : c.wall.x > c.x ? 'west' : 'east'
@@ -1014,8 +1027,9 @@ async function main() {
           block = 'blast_furnace'
         }
         await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${block}`).catch((e) => fail('seed-decor', e.message))
+        seeded++
       }
-      origLog(`CASTLE-RIG seeded decor: ${decor.length} cells (panes + banners + upper fence + attic + blast)`)
+      origLog(`CASTLE-RIG seeded decor: ${seeded}/${decor.length} cells (panes + banners + upper fence + attic + blast${SEED_DECOR_EXCEPT.length > 0 ? ` except ${SEED_DECOR_EXCEPT.join(',')}` : ''})`)
     }
     if (!tickCtx()) fail('seed-castle', 'no follower ctx')
     tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
