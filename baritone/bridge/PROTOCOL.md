@@ -154,3 +154,39 @@ lines through the existing write-only HMC bridge (`baritone/client.sh`
 plumbing) with no mod and no state. It exists only so `rig-goto.js`
 proves the `#goto` leg on real iron before the mod is written. Prod
 never uses it (no status, no state, position-blind `isMoving`).
+
+## entities.list / roster.get (idkcraft-neuc.3)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Entities.java`
+(`Entities.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/entities.js` (`refreshEntities` once per adapter poll
+round, `handleBridgeEvent` first in the adapter's event router).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `entities.list` | — | `{entities:[{id,uuid,type,name?,displayName,kind,pos{x,y,z},vel{x,y,z},yaw,pitch,health?,onGround,pose,self?}]}` | `bot.entities[id]` |
+| `roster.get` | — | `{players:[{name,uuid,ping,gameMode}]}` | `bot.players[name]` |
+
+`type` is `'player'` or the mob registry id (e.g. `'zombie'`);
+`name` is set on players only (tab-list name, Floodgate dots untouched);
+`kind` is `player|hostile|animal|other` from the client's SpawnGroup
+(MONSTER→hostile, MISC→other, players→player, rest→animal);
+`gameMode` is the numeric mode id (null when the entry carries none);
+`self:true` tags the local player when the client world lists it.
+
+Events: `player.joined {name,uuid}` / `player.left {name,uuid}` (tab-list
+diff per client tick), `entity.gone {id}` (best-effort; the list diff is
+the reliable channel — perception tolerates missing ids).
+
+Node fold rules: entity objects mutate in place (stable refs across polls;
+gone ones emit `entityGone`, flip `isValid=false`, unlink, delete); roster
+entries merge with the matching player entity by uuid with `entity:null`
+when out of range; roster/notification diffs emit `playerJoined` /
+`playerLeft` / `entitySpawn` exactly once (whichever channel runs first
+wins); `bot.entity` stays state.get-fed and is aliased under
+`bot.entities[selfId]` when the wire tags it (mineflayer parity);
+`bot.nearestEntity(filter)` mirrors mineflayer (skips `bot.entity`).
+Mob height/width come from the passed-through registry (zero bridge
+traffic); raw entity metadata is NOT streamed yet (sheep wool reads fail
+open). BridgeServer seam required: `onClientTick(Runnable)` plus
+`register`/`push` over plain Maps/Lists (.1 owns it).
