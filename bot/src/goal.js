@@ -21,6 +21,7 @@ const stockpileMod = require('./behaviours/stockpile')
 const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
 const residence = require('./residence')
+const { recordAttempt, markAttemptStart } = require('./stall-state')
 const { failReason, isFinished, nextStepGen, chatStep, STEP_CHAT_SAME_MS } = require('./step')
 
 // House budget and bounded-hold windows live in the leaf budget.js
@@ -2429,6 +2430,9 @@ function forceName(bot, ctx, facts, prev, status, text, gateFired) {
 // gohome), ctx.stepStatus, ctx.stepPick, ctx.stockpilePierced,
 // ctx.goalText, ctx.heldText.
 function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
+  // vhlb.3: the step that just ended joins the attempts ring (plan() state).
+  if (prev && (choice.step !== prev || finished)) recordAttempt(ctx, prev, bot)
+  if (choice.step !== prev || finished) markAttemptStart(ctx, bot)
   ctx.step = choice.step
   // oqul.7: a new step instance (another step, or a re-pick after the
   // last one finished) drops late completions of the old one's async ops.

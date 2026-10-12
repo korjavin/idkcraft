@@ -91,7 +91,7 @@ function goalMaxRounds() {
 function goalGraceMs() { return envMs('GOAL_TRAVEL_GRACE_MS', GOAL_TRAVEL_GRACE_MS_DEFAULT) }
 function goalPlanbMs() { return envMs('GOAL_PLANB_SWITCH_MS', GOAL_PLANB_SWITCH_MS_DEFAULT) }
 function watchdogOn() { return goalWatchdogMs() > 0 }
-const { PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, STEP_ORDER } = require('./plan-consts') // oqul.5: leaf
+const { PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, STEP_ORDER, STEP_EFFECT_TEXT } = require('./plan-consts') // oqul.5: leaf
 
 function taskKind(ctx) {
   try {
@@ -756,6 +756,13 @@ function planState(bot, ctx, kind, done, total, state, withHistory) {
     since_min: Math.floor(((state && state.stallMs) || 0) / 60000),
     facts: factsText,
   }
+  // vhlb.3: fire-time only (planState is never on the tick path): voxel
+  // slice + attempts + inventory + target, the same object for JEV and LLM.
+  try {
+    const { stallState } = require('./stall-state')
+    Object.assign(out, stallState(bot, ctx))
+    if (out.world) console.log(`plan world dy+2..-2 ${out.world.join(' | ')}`)
+  } catch (_) { /* rich state best-effort */ }
   if (withHistory) {
     let history = []
     try {
@@ -811,7 +818,7 @@ function tryPlan(bot, ctx, kind, done, total, state) {
   let instructions = ''
   try {
     const goal = require('./goal')
-    for (const n of menu) criteria[n] = goal.STEP_CRITERIA[n]
+    for (const n of menu) criteria[n] = STEP_EFFECT_TEXT[n] || goal.STEP_CRITERIA[n]
     instructions = goal.ASK_INSTRUCTIONS
   } catch (_) {
     return false
@@ -1040,7 +1047,7 @@ function fireWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   let criteria = {}
   try {
     const goal = require('./goal')
-    for (const n of menu) criteria[n] = n === 'park' ? PLAN_PARK_CRITERION : goal.STEP_CRITERIA[n]
+    for (const n of menu) criteria[n] = n === 'park' ? PLAN_PARK_CRITERION : (STEP_EFFECT_TEXT[n] || goal.STEP_CRITERIA[n])
   } catch (_) {
     return
   }

@@ -152,7 +152,7 @@ describe('stall-point planner (vmzq.5)', () => {
     assert.equal(parkChats(bot).length, 0)
     // The request carries the goal/situation/history object state.
     const req = calls[0]
-    assert.deepEqual(Object.keys(req.state).sort(), ['blocked_on', 'facts', 'goal', 'progress', 'recent', 'since_min'])
+    assert.deepEqual(Object.keys(req.state).sort(), ['attempts', 'blocked_on', 'facts', 'goal', 'inventory', 'progress', 'recent', 'since_min', 'target', 'world', 'world_legend'])
     assert.equal(req.state.goal, 'build castle')
     assert.equal(req.state.progress, '8/1722')
     assert.equal(req.state.since_min, 45)
@@ -163,7 +163,7 @@ describe('stall-point planner (vmzq.5)', () => {
     assert.ok(Object.keys(req.criteria).length > 0)
     assert.ok(!('rest' in req.criteria), 'rest is not a plan option')
     assert.ok(!(ctx.step in req.criteria), 'the running step is not offered (revmux 01 core-1)')
-    for (const k of Object.keys(req.criteria)) assert.equal(req.criteria[k], goal.STEP_CRITERIA[k])
+    for (const k of Object.keys(req.criteria)) assert.equal(req.criteria[k], require('../src/plan-consts').STEP_EFFECT_TEXT[k]) // vhlb.3: effect text
     // The plan line, the disagree line against the .3 park, the metric.
     assert.match(
       planLogs().find((l) => l.includes('answer=')) || '',
