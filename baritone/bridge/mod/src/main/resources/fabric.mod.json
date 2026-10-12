@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "idkcraft-bridge",
+  "version": "0.1.0-spike",
+  "name": "IdkCraft one-body bridge (spike skeleton, NOT BUILT)",
+  "description": "Exposes state+actions over a websocket for the Node adapter (idkcraft-kqzf). Skeleton only: the spike proves the Node side + the #goto leg; this mod is sized in PROTOCOL.md, not compiled.",
+  "authors": ["idkcraft"],
+  "license": "UNLICENSED",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["idkcraft.bridge.BridgeMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "26.1.x",
+    "baritone": "*"
+  }
+}

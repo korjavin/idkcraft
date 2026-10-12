@@ -1,0 +1,55 @@
+// idkcraft-kqzf spike: Gradle build for the bridge mod. SKELETON — not run
+// in CI, versions are placeholders to pin when the epic starts (loom +
+// yarn for MC 26.1.2, Baritone 1.18.0 maven coordinates). Kept so the
+// sized plan names the real toolchain (Gradle in CI, days — the jlda epic
+// already calls this out for any new Fabric mod).
+plugins {
+    id 'fabric-loom' version '1.10-SNAPSHOT'
+    id 'java'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+repositories {
+    mavenCentral()
+    // Baritone releases (pin the 1.18.0 fabric artifact when epic'd).
+    maven { url = 'https://github.com/cabaletta/baritone/raw/master/maven' }
+}
+
+loom {
+    splitEnvironmentSourceSets()
+    mods {
+        'idkcraft-bridge' {
+            sourceSet sourceSets.main
+            sourceSet sourceSets.client
+        }
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.layered {
+        officialMojangMappings()
+        // TODO(kqzf-epic): pin the yarn build for 26.1.2.
+        // yarn("26.1.2+build.XXX:v2")
+    }
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    // TODO(kqzf-epic): fabric-api modules as needed (lifecycle, networking).
+    // TODO(kqzf-epic): baritone api jar (compileOnly — the runtime ships it).
+    // Small pure-Java websocket server, no natives (the whole bridge).
+    implementation 'org.java-websocket:Java-WebSocket:1.5.6'
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
+}
+
+java {
+    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
