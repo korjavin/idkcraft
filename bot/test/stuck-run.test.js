@@ -354,7 +354,7 @@ describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
   fs.mkdirSync(baritone, { recursive: true })
   // Fake client.sh: records args + the launch env, start exits FAKE_CLIENT_RC.
   fs.writeFileSync(path.join(baritone, 'client.sh'), '#!/bin/sh\necho "$@" >> "$FAKE_CALLS"\n' +
-    'echo "client=$BARITONE_CLIENT console=$BRIDGE_PORT mod=$MOD_PORT log=$CLIENT_LOG" >> "$FAKE_CALLS"\n' +
+    'echo "client=${BARITONE_CLIENT:-idk-baritone-client} console=${BRIDGE_PORT:-7777} mod=$MOD_PORT log=$CLIENT_LOG" >> "$FAKE_CALLS"\n' +
     '[ "$1" = start ] && exit "${FAKE_CLIENT_RC:-0}"\nexit 0\n')
   const bin = path.join(tmp, 'bin')
   fs.mkdirSync(bin)
@@ -420,6 +420,20 @@ describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
     assert.deepEqual(r.calls, [])
     assert.deepEqual(r.envOut,
       { BOT_BODY: null, BRIDGE_HOST: null, BRIDGE_PORT: null, BRIDGE_CONSOLE_PORT: null })
+  })
+
+  it('REPLAY_WORKER=1 + REPLAY_BODY=baritone: distinct names, ports and logs (revmux 02 core-3)', () => {
+    const r = run({ REPLAY_WORKER: '1', BOT: 'FakeWorker', MOD_PORT: '17778' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    // The worker launch clears MOD_PORT (its client publishes the console
+    // only); the body publishes the console + the mod ws. No shared publish.
+    assert.ok(r.calls.includes('client=idk-baritone-client console=7777 mod= log=/tmp/stuck-worker-paper-base.log'),
+      r.calls.join('\n'))
+    assert.ok(r.calls.includes('client=idk-baritone-body console=7779 mod=17778 log=/tmp/stuck-body-paper-base.log'),
+      r.calls.join('\n'))
+    assert.deepEqual(r.envOut,
+      { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '17778', BRIDGE_CONSOLE_PORT: '7779' })
+    assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
   })
 })
 

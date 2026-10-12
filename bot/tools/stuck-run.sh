@@ -236,7 +236,11 @@ boot
 if [ "${REPLAY_WORKER:-}" = 1 ]; then
   WORKER="${BOT:-IdkWorker}"
   rcon_assert "op $WORKER"
-  BARITONE_OFFLINE=1 RIG_CONTAINER="$CONTAINER" CLIENT_LOG="/tmp/stuck-worker-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
+  # MOD_PORT cleared: the mod-ws publish belongs to the body client only
+  # (revmux 02 core-3) — an inherited value would collide with it on a
+  # shared box. Empty reads as unset in client.sh, so worker-only runs
+  # are unchanged.
+  MOD_PORT= BARITONE_OFFLINE=1 RIG_CONTAINER="$CONTAINER" CLIENT_LOG="/tmp/stuck-worker-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
     sh "$TREE/baritone/client.sh" start "${REPLAY_PORT:-25571}" "$WORKER" || exit 2
   WORKER_STARTED=1 # the client is ours to stop from here on (teardown)
   # Paper's same-IP connection throttle (4000 ms, bukkit.yml): the worker
