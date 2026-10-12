@@ -22,6 +22,7 @@ hint and sleeps (default-off, no JVM, ~0 RAM); with `BARITONE_OFFLINE=1`
 | `start.sh` | container entrypoint: login passthrough (`--command login`), offline/account gate, client on a FIFO, socat bridge |
 | `settings.txt` | Baritone presets baked into the run dir (`allowParkour` off — the head follows on foot; sprint stays default — `false` breaks doors, see the file) |
 | `run.sh` | rig slot `z` (container `idk-replay-z`, port 25597, lock `/tmp/idkcraft-rig.lock-z`): reset world from `world.tar`, boot Paper, launch the image's own entrypoint with the bridge published for the rig, run `ab.js` through it, `docker stats`, tear down |
+| `client.sh` | factored client launch (`start <mc-port> <bot-name>` \| `stop`): account gate, bridge publish, HMC console wait, connect + join wait — called by `run.sh` and by `stuck-run.sh` (`REPLAY_WORKER=1`) |
 | `ab.js` | per spot: prep, tp, stuck-replay kit, `#goto` (or `#mine`) via the bridge; judged over rcon (pos within 2.5 of goal, or raw_iron count); rows to `/private/tmp/baritone-ab.json` |
 | `tasks.json` | the two owner failures: BED-60 (walk 60+ blocks through terrain), MINE-10 (10 iron from the surface) |
 | `ab.test.js` | `node --test baritone/` |
@@ -64,7 +65,8 @@ stored profile, not `WORKER_NAME`).
    The server is `ONLINE_MODE=false`, so any owned profile joins; run with
    `BOT=<profile name>` so it is pre-opped (spawn protection) before login.
 2. **Owner opt-in to offline** for this local test rig: `BARITONE_OFFLINE=1 sh baritone/run.sh`
-   (not exercised: the owner account path was used).
+   (exercised via the `REPLAY_WORKER=1` harness; offline mounts no auth
+   volume — a stored account would shadow the offline name).
 
 Then: `docker build -t idkcraft-baritone:spike baritone && BOT=<profile name> sh baritone/run.sh`
 (~7 min; works on arm64 under Docker, client log `/tmp/baritone-run.log.client`).

@@ -12,7 +12,6 @@
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PRODWORLD="${PRODWORLD:-/Users/iv/Projects/.idkcraft-prodworld}"
-IMAGE="${BARITONE_IMAGE:-idkcraft-baritone:spike}"
 RIG=idk-replay-z; PORT=25597; CLIENT=idk-baritone-client
 LOCK="${RIG_LOCK:-/tmp/idkcraft-rig.lock}-z"
 RIGDIR="$PRODWORLD/rigs/z"; D="$RIGDIR/replay-data/paper-base"
@@ -20,22 +19,17 @@ SRVFIFO="/tmp/baritone-srv-$$.fifo"
 LOG=/tmp/baritone-run.log
 
 BOT="${BOT:-BaritoneBot}" # with a stored account: the profile name (pre-opped below)
-# Fast account gate (start.sh gates too, but would only idle): the client
-# launches with the account stored in the idkcraft-baritone-auth volume
-# (one-time `login`), or offline ONLY when the owner opted in.
-OFFLINE_ENV=
-if [ "${BARITONE_OFFLINE:-}" = 1 ]; then
-  OFFLINE_ENV="-e BARITONE_OFFLINE=1 -e BOT=$BOT"
-elif ! docker run --rm -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth --entrypoint test "$IMAGE" -s /headlessmc/HeadlessMC/auth/.accounts.json; then
-  echo "no stored account: run the one-time login (baritone/README.md) or opt in with BARITONE_OFFLINE=1"; exit 2
-fi
+export BARITONE_CLIENT="$CLIENT" CLIENT_LOG="$LOG.client" RIG_CONTAINER="$RIG"
 
 mkdir "$LOCK" 2>/dev/null || { echo "rig z busy ($LOCK)"; exit 2; }
 echo $$ > "$LOCK/pid"
 STATS=
 cleanup() {
   [ -n "$STATS" ] && kill "$STATS" 2>/dev/null
-  docker stop -t 5 "$CLIENT" "$RIG" >/dev/null 2>&1 || true
+  # Only our own client (a failed start cleans itself; an early exit must
+  # never stop another run's worker).
+  [ "${WORKER_STARTED:-}" = 1 ] && sh "$HERE/client.sh" stop >/dev/null 2>&1 || true
+  docker stop -t 5 "$RIG" >/dev/null 2>&1 || true
   exec 9<&- || true
   rm -f "$SRVFIFO"; rm -rf "$LOCK"
 }
@@ -63,32 +57,13 @@ done
 # is decided at login, a later op does not lift it (stuck-run.sh, 3ro).
 docker exec "$RIG" rcon-cli "op $BOT"
 
-# Client: the image's own entrypoint (start.sh) — HMC console on its
-# in-container FIFO, bridge published for the rig, so the rig exercises the
-# exact prod plumbing. Plain -p by default: a literal loopback IP trips the
-# privacy pre-check, and the rig's Paper+rcon already publish the same way.
-# RIG_BIND=<loopback address> binds the bridge there instead.
-# Container stdout = the client log.
-docker run --rm --name "$CLIENT" -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth \
-  $OFFLINE_ENV -p "${RIG_BIND:+$RIG_BIND:}7777:7777" "$IMAGE" >"$LOG.client" 2>&1 &
-bridge_send() { # one console line via the bridge (ab.js speaks TCP; POSIX sh cannot)
-  node -e "require(process.argv[1]).sendBridgeLine({host:'localhost',port:7777,line:process.argv[2]}).then(()=>{},(e)=>{console.error('bridge:',e.message);process.exit(1)})" "$HERE/ab.js" "$1"
-}
-printf "wait: client console"
-for _ in $(seq 1 60); do grep -q "HMC-Specifics initialized" "$LOG.client" && break; printf .; sleep 3; done
-grep -q "HMC-Specifics initialized" "$LOG.client" || { echo " client never started ($LOG.client)"; exit 2; }
-printf " up; wait: client joins"
-JOINED=
-for i in $(seq 0 23); do
-  # one connect per 30 s: a connect resent mid-login restarts the handshake
-  [ $((i % 6)) = 0 ] && bridge_send "connect host.docker.internal $PORT"
-  sleep 5
-  docker exec "$RIG" rcon-cli list | grep -qw "$BOT" && { JOINED=1; break; }
-  printf .
-done
-[ -n "$JOINED" ] || { echo " $BOT never joined ($LOG.client; with a stored account set BOT=<profile name>)"; exit 2; }
-echo " $BOT"
-export BOT RIG_CONTAINER="$RIG"
+# Client (client.sh: launch, HMC console wait, connect, join wait — exit 2
+# when the bot never joins). RIG_CONTAINER/BARITONE_CLIENT/CLIENT_LOG are
+# exported above; BARITONE_OFFLINE/BARITONE_IMAGE/BRIDGE_PORT/RIG_BIND pass
+# through from the environment.
+sh "$HERE/client.sh" start "$PORT" "$BOT" || exit 2
+WORKER_STARTED=1 # the client is ours to stop from here on (cleanup)
+export BOT
 # Cost of the second bot while it paths, not one idle sample after the run.
 docker stats --format '{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}' "$CLIENT" "$RIG" > "$LOG.stats" 2>&1 &
 STATS=$!

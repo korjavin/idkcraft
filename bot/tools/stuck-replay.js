@@ -50,7 +50,11 @@
 //   operator's tunnel to the prod sidecar; sequential single-bot calls,
 //   inference only, never a local stand),
 //   REPLAY_VARIANT/REPLAY_WORLDSHA/REPLAY_GITSHA (run header,
-//   set by stuck-run.sh). The rig server must already be up.
+//   set by stuck-run.sh). WORKER_NAME (the Baritone worker beside the
+//   head, idkcraft-jlda.3 — set by stuck-run.sh with REPLAY_WORKER=1 once
+//   the client joined) forces record-only (worker rows are never compared)
+//   and a per-spot worker setup; WORKER_HOST/WORKER_PORT (default
+//   localhost:7777) address its bridge. The rig server must already be up.
 // Exit codes: 0 = baseline holds (or comparison skipped), 1 = REGRESSION
 // vs the baseline (a spot flipped reached->unreached, or overran its
 // stuck/episode ceiling, or has no baseline entry), 2 = harness/env error
@@ -67,6 +71,11 @@ const execFileAsync = promisify(execFile)
 const HOST = process.env.REPLAY_HOST || '127.0.0.1'
 const PORT = parseInt(process.env.REPLAY_PORT || '25571', 10)
 const CONTAINER = process.env.REPLAY_CONTAINER || 'idk-replay'
+// Worker beside the head (idkcraft-jlda.3): the Baritone client's player
+// name, set by stuck-run.sh (REPLAY_WORKER=1) once the client joined. Empty
+// = head-only run, byte-identical flow.
+const WORKER = process.env.WORKER_NAME || ''
+const WORKER_BRIDGE = { host: process.env.WORKER_HOST || 'localhost', port: +(process.env.WORKER_PORT || 7777) }
 const TAG = process.env.REPLAY_TAG || String(Math.floor(Math.random() * 1000))
 const GUIDE = `StuckGuide${TAG}`
 const FOLLOWER = `StuckReplay${TAG}`
@@ -554,6 +563,9 @@ async function main() {
   const bringMod = require('../src/behaviours/bring')
   const buildMod = require('../src/behaviours/build')
   const { raiseHouse } = require('./raise-house')
+  // Worker bridge (idkcraft-jlda.3): required lazily — the harness-only
+  // baritone/ dependency must not load on head-only runs.
+  const workerBridge = WORKER ? require('../../baritone/ab.js') : null
 
   // Windowed counters (reset per spot): stuck declarations, path resets by
   // reason, follower-sent chats. Patched once — the ticker reads them live.
@@ -636,7 +648,7 @@ async function main() {
 
   console.log(`stuck-replay tag=${TAG} variant=${process.env.REPLAY_VARIANT || '?'} brain=${picked.label} ` +
     `worldsha=${(process.env.REPLAY_WORLDSHA || '?').slice(0, 12)} gitsha=${process.env.REPLAY_GITSHA || '?'} ` +
-    `date=${new Date().toISOString()} spots=${spots.length}`)
+    `date=${new Date().toISOString()} spots=${spots.length} worker=${WORKER || 'off'}`)
   console.log('spot      reached  stuck  eps  call?  secs   maxDisp  note')
   const rows = []
   let guideDied = false
@@ -707,6 +719,17 @@ async function main() {
       const [item, count] = entry.split(' ')
       await rcon(`give ${FOLLOWER} ${item} ${count}`)
     }
+    // Worker beside the head (idkcraft-jlda.3): stopped, parked next to the
+    // follower's spawn, cleared, handed a stone pickaxe — the prod head
+    // tosses one to a fresh worker, rcon is the honest rig shortcut. rcon
+    // asserts, so a worker that dropped mid-run fails the run (exit 2) at
+    // the next setup instead of running head-only rows.
+    if (WORKER) {
+      await workerBridge.sendBridgeLine({ ...WORKER_BRIDGE, line: 'msg #stop' }) // Baritone stop, via console chat (ab.js)
+      await rcon(`tp ${WORKER} ${s.spawn[0] + 1} ${s.spawn[1]} ${s.spawn[2] + 1}`)
+      await rcon(`clear ${WORKER}`)
+      await rcon(`give ${WORKER} stone_pickaxe 1`)
+    }
     // Rig-built home before the settle: the walls must stand (and their
     // chunks stream) before the window opens.
     if (s.house) {
@@ -718,7 +741,8 @@ async function main() {
     }
     // Anti-noise effects (death ends windows early and corrupts stuck
     // measurement): guides stand in water/lava lakes, followers walk them.
-    for (const who of [GUIDE, FOLLOWER]) {
+    // The worker gets the same pair (idkcraft-jlda.3).
+    for (const who of WORKER ? [GUIDE, FOLLOWER, WORKER] : [GUIDE, FOLLOWER]) {
       await rcon(`effect give ${who} minecraft:water_breathing 200`)
       await rcon(`effect give ${who} minecraft:fire_resistance 200`)
     }
@@ -912,7 +936,13 @@ async function main() {
         : ''
     const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : (buildNote || onote || (s.danger.length > 0 ? `minDanger ${minDanger.toFixed(1)}` : '')))
     if (s.danger.length > 0 && c) c.danger = { spots: [] } // seeded marks never leak into later spots
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(plans > 0 ? { plans, planMs, planErr } : {}), ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}) })
+    // Worker flag (idkcraft-jlda.3): in the tab list at the window end.
+    // Head-only rows carry no field (byte-identical flow).
+    let workerOnline = false
+    if (WORKER) {
+      try { workerOnline = !!(follower.players && follower.players[WORKER]) } catch (_) { /* sampling best-effort */ }
+    }
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(WORKER ? { worker: workerOnline } : {}), ...(plans > 0 ? { plans, planMs, planErr } : {}), ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}${plans > 0 ? ` plans=${plans} planMs=${planMs} planErr=${planErr}` : ''}`)
     // Bucket spots (idkcraft-jsf.7): water_up must bring both buckets back
@@ -935,8 +965,13 @@ async function main() {
   // entry is measured before it is committed).
   let code = 0
   const brainName = (process.env.REPLAY_BRAIN || 'stub')
-  if (process.env.REPLAY_BASELINE_OFF === '1') {
-    console.log('baseline: skipped (REPLAY_BASELINE_OFF=1)')
+  // A worker run forces record-only (idkcraft-jlda.3): worker rows are
+  // never compared with the baseline, whatever REPLAY_BASELINE_OFF says.
+  const baselineOff = process.env.REPLAY_BASELINE_OFF === '1' || WORKER !== ''
+  if (baselineOff) {
+    console.log(WORKER
+      ? 'baseline: skipped (REPLAY_WORKER=1: worker rows are never compared)'
+      : 'baseline: skipped (REPLAY_BASELINE_OFF=1)')
   } else if (brainName !== 'stub') {
     console.log(`baseline: skipped (no ${brainName} baseline committed; stub baseline does not apply)`)
   } else {

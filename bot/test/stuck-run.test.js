@@ -285,3 +285,50 @@ describe('stuck-replay.js self-op (idkcraft-3ro)', () => {
       'rcon op assert weakened')
   })
 })
+
+// idkcraft-jlda.3: worker ownership (revmux 01 core-1). teardown() stops
+// the worker client only when THIS run started it (WORKER_STARTED): a
+// guarded or failed start must never stop another run's client. Fake
+// docker/START.sh/replay/client.sh — no real docker needed.
+describe('stuck-run.sh worker ownership (idkcraft-jlda.3)', () => {
+  const { spawnSync } = require('node:child_process')
+  const os = require('node:os')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-own-'))
+  const tools = path.join(tmp, 'tree', 'bot', 'tools')
+  fs.mkdirSync(tools, { recursive: true })
+  fs.copyFileSync(path.join(__dirname, '..', 'tools', 'stuck-run.sh'), path.join(tools, 'stuck-run.sh'))
+  fs.writeFileSync(path.join(tools, 'stuck-replay.js'), 'process.exit(0)\n')
+  const baritone = path.join(tmp, 'tree', 'baritone')
+  fs.mkdirSync(baritone, { recursive: true })
+  // Fake client.sh: records its calls, start exits FAKE_CLIENT_RC.
+  fs.writeFileSync(path.join(baritone, 'client.sh'), '#!/bin/sh\necho "$@" >> "$FAKE_CALLS"\n[ "$1" = start ] && exit "${FAKE_CLIENT_RC:-0}"\nexit 0\n')
+  const bin = path.join(tmp, 'bin')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\nif [ "$1" = exec ]; then case "$4" in op*) echo "Made fake a server operator";; *) echo ok;; esac; fi\nexit 0\n', { mode: 0o755 })
+  const pw = path.join(tmp, 'pw')
+  fs.mkdirSync(path.join(pw, 'replay-data', 'paper-base', 'world'), { recursive: true })
+  fs.writeFileSync(path.join(pw, 'START.sh'), '# --name idk-replay -p 25571:\nexec sleep 30\n', { mode: 0o755 })
+  spawnSync('tar', ['-cf', path.join(pw, 'world.tar'), '-C', path.join(pw, 'replay-data', 'paper-base'), 'world'])
+  let k = 0
+  const run = (env) => {
+    const calls = path.join(tmp, 'calls' + k++)
+    const r = spawnSync('sh', [path.join(tools, 'stuck-run.sh'), 'paper-base'], { encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRODWORLD: pw, RIG_LOCK: path.join(tmp, 'lock'),
+        REPLAY_WORKER: '1', BOT: 'FakeWorker', FAKE_CALLS: calls, ...env } })
+    return { ...r, calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n') : [] }
+  }
+
+  it('a failed start (guard) stops nothing: exit 2, no stop call', () => {
+    const r = run({ FAKE_CLIENT_RC: '2' })
+    assert.equal(r.status, 2, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, ['start 25571 FakeWorker'])
+    assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
+  })
+
+  it('a successful start stops the client at teardown: exit 0, start then stop', () => {
+    const r = run({})
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, ['start 25571 FakeWorker', 'stop'])
+    assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
+  })
+})
