@@ -232,7 +232,8 @@ describe('console backend (rig proof without the mod)', () => {
     try {
       const statuses = []
       bot.on('path_update', (r) => statuses.push(r.status))
-      bot.pathfinder.setGoal(new goals.GoalInvert(new goals.GoalBlock(1, 2, 3)))
+      // Unsatisfied (blind feet are in the inner block) so it walks into noPath.
+      bot.pathfinder.setGoal(new goals.GoalInvert(new goals.GoalBlock(0, 64, 0)))
       assert.deepEqual(statuses, ['noPath'])
     } finally {
       await bot.stop()

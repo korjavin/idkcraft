@@ -29,9 +29,13 @@ class MinimalVec {
 // Composites resolve to the first mappable member; GoalInvert and
 // GoalBreakBlock have no mapping (the latter throws on v1 too — gather.js
 // documents the pinned-pathfinder crash — so noPath is the graceful twin).
+// from = the bot's feet {x,y,z}: place/look goals walk to the neighbour
+// cell on the bot's side, never into p itself (v1's isEnd excludes the
+// bot's own cells; walking in would stand in the placement cell or dig
+// out a look target). Without from there is no safe side: null.
 // Returns null when the goal has no Baritone mapping (caller then reports
 // noPath, like the executor would).
-function goalToBaritone(goal) {
+function goalToBaritone(goal, from) {
   if (!goal) return null
   const name = (goal.constructor && goal.constructor.name) || ''
   if ((name === 'GoalNear' || name === 'GoalBlock' || name === 'GoalGetToBlock') &&
@@ -52,16 +56,23 @@ function goalToBaritone(goal) {
   }
   if ((name === 'GoalCompositeAny' || name === 'GoalCompositeAll') && Array.isArray(goal.goals)) {
     for (const member of goal.goals) {
-      const cmd = goalToBaritone(member)
+      const cmd = goalToBaritone(member, from)
       if (cmd) return cmd
     }
     return null
   }
-  if ((name === 'GoalPlaceBlock' || name === 'GoalLookAtBlock') && goal.pos) {
+  if ((name === 'GoalPlaceBlock' || name === 'GoalLookAtBlock') && goal.pos && from) {
     const p = goal.pos
-    if (typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
-      return `#goto ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`
-    }
+    if (typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return null
+    if (typeof from.x !== 'number' || typeof from.z !== 'number') return null
+    const px = Math.floor(p.x)
+    const py = Math.floor(p.y)
+    const pz = Math.floor(p.z)
+    const dx = Math.floor(from.x) - px
+    const dz = Math.floor(from.z) - pz
+    if (dx === 0 && dz === 0) return `#goto ${px + 1} ${py} ${pz}` // above/below: deterministic side
+    if (Math.abs(dx) >= Math.abs(dz)) return `#goto ${px + Math.sign(dx)} ${py} ${pz}`
+    return `#goto ${px} ${py} ${pz + Math.sign(dz)}`
   }
   return null
 }
@@ -334,7 +345,29 @@ class BaritoneBot extends EventEmitter {
       this._stopPath()
       return
     }
-    const cmd = goalToBaritone(goal)
+    // Already there (revmux 01 core-1/2): v1 ends at once when
+    // goal.isEnd(start), while Baritone's setGoalAndPath returns before
+    // CALC_STARTED with no PathEvent for an in-goal #goto — the mod would
+    // hold last:'none' (or a lone CANCELED) and the latch would never
+    // clear. Succeed without a command, stopping the live walk first
+    // like every other setGoal.
+    if (this._satisfiedNow(goal)) {
+      const live = this.backend === 'mod' ? (this._pathing || this._goalId != null) : !!this._consoleMoving
+      this._boundSeq = this._cmdSeq
+      this._goalId = null
+      this._pathing = false
+      this._consoleMoving = false
+      if (live) {
+        if (this.backend === 'mod') this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => this.emit('error', e))
+        else if (this.bridgeSend) Promise.resolve().then(() => this.bridgeSend('msg #stop')).catch((e) => this.emit('error', e))
+      }
+      this._completeTerminal('success')
+      return
+    }
+    // The console backend is position-blind: no safe approach side, so
+    // place/look goals report noPath there (the rig never sends them).
+    const from = this.backend === 'mod' ? this.entity.position : null
+    const cmd = goalToBaritone(goal, from)
     if (!cmd) {
       // No Baritone mapping: stop the live walk (mineflayer's setGoal
       // always resets first) and fail like the executor would.
@@ -377,6 +410,37 @@ class BaritoneBot extends EventEmitter {
       if (typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
         this._follow = { entity: goal.entity, x: p.x, y: p.y, z: p.z, at: Date.now() }
       }
+    }
+  }
+
+  // The goal's own verdict on the live feet, defaulting to "walk" on any
+  // doubt (missing/worldless isEnd must never fail a goal by itself).
+  // Place/look one step away count as satisfied: in range by
+  // construction, and the walk alternative targets the live feet (the
+  // neighbour step lands on us) where Baritone answers with no PathEvent
+  // — success here, the place/look attempt validates.
+  _satisfiedNow(goal) {
+    try {
+      if (!goal) return false
+      const p = this.entity && this.entity.position
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return false
+      const feet = typeof p.floored === 'function' ? p.floored() : { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }
+      if (typeof goal.isEnd === 'function') {
+        try {
+          if (goal.isEnd(feet) === true) return true
+        } catch (_) { /* worldless isEnd: adjacency decides below */ }
+      }
+      const name = goal.constructor && goal.constructor.name
+      if ((name === 'GoalPlaceBlock' || name === 'GoalLookAtBlock') && goal.pos &&
+        typeof goal.pos.x === 'number' && typeof goal.pos.y === 'number' && typeof goal.pos.z === 'number' &&
+        typeof feet.x === 'number' && typeof feet.y === 'number' && typeof feet.z === 'number') {
+        const manhattan = Math.abs(Math.floor(goal.pos.x) - feet.x) +
+          Math.abs(Math.floor(goal.pos.y) - feet.y) + Math.abs(Math.floor(goal.pos.z) - feet.z)
+        if (manhattan <= 1) return true
+      }
+      return false
+    } catch (_) {
+      return false
     }
   }
 

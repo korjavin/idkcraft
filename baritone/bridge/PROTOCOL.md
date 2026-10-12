@@ -170,17 +170,33 @@ verbatim) exactly once; the cleared latch drops the second channel.
 silent like v1. Unknown `last` verdicts fail as `timeout` (retry-safe,
 never synthesised success).
 
+Already-satisfied goals never reach Baritone: when `goal.isEnd(feet)`
+holds (or a place/look target is one step away — the walk would target
+the live feet), setGoal stops the live walk and emits the success pair
+with no command. v1 ends the same way (A* start isEnd), while Baritone's
+setGoalAndPath returns before CALC_STARTED with no PathEvent for an
+in-goal `#goto` — sending one would wedge `isMoving` (revmux 01 core-1).
+
 Goal → command map (extends the spike's five):
 
 | goal | command |
 |---|---|
-| GoalNear/GoalBlock/GoalGetToBlock | `#goto x y z` |
+| GoalNear/GoalBlock/GoalGetToBlock | `#goto x y z` (GetToBlock keeps the spike cell for now — unused in bot/src; gets the neighbour treatment if a caller appears) |
 | GoalXZ/GoalNearXZ | `#goto x z` |
 | GoalY | `#goto y` (Baritone `goto <y>` = Y level, verified in GotoCommand) |
 | GoalFollow | one-shot `#goto` at the live target + adapter re-issue (> 1 block drift, ≤ 1 cmd/s, dynamic only; follow.js still owns terminal/timeout re-issue) |
 | GoalCompositeAny/All | first mappable member, else noPath |
-| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the block pos (approach-ability is the caller's check) |
+| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the neighbour cell on the bot's side at p.y (dominant horizontal axis; +x when above/below) — never into p itself, whose occupancy v1's isEnd forbids (revmux 01 core-2); no feet (console backend) → noPath |
 | GoalInvert, GoalBreakBlock | noPath (no `#goto` spelling; GoalBreakBlock throws on v1 — gather.js) |
+
+Note for .1 (cc): every normal arrival emits AT_GOAL *then* CANCELED
+(the process tick after the executor finishes runs CANCEL_AND_SET_GOAL),
+and re-issues emit no CANCELED at all (FORCE_REVALIDATE goes through the
+event-free softCancelIfSafe; cancelled calcs suppress CALC_FAILED —
+verified in PathingBehavior/PathingControlManager). So: report AT_GOAL
+as success, and never surface a CANCELED after a reported success as a
+new verdict for that id — the adapter drops it as stale (id cleared),
+but a reordered CANCELED-first would wrongly stop a live goal.
 
 Movements → `#set` map (pushed on setMovements and every setGoal,
 diffed — only changes cross; the first push is absolute over the image

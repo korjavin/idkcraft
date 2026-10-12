@@ -83,13 +83,18 @@ describe('goal translation (pathfinder -> Baritone)', () => {
     assert.equal(goalToBaritone(new goals.GoalCompositeAny([unmapped])), null)
     assert.equal(goalToBaritone(new goals.GoalCompositeAll([])), null)
   })
-  it('maps place/look goals to a #goto at the block', () => {
+  it('maps place/look goals to the neighbour on the bot side, never into p', () => {
     const world = { getBlock: () => null }
+    const place = () => new goals.GoalPlaceBlock(new Vec3(7, 64, 8), world, { range: 4 })
+    assert.equal(goalToBaritone(place(), new Vec3(10, 64, 8)), '#goto 8 64 8') // bot east
+    assert.equal(goalToBaritone(place(), new Vec3(7, 64, 3)), '#goto 7 64 7') // bot north
+    assert.equal(goalToBaritone(place(), new Vec3(7, 70, 8)), '#goto 8 64 8') // above: +x side
     assert.equal(
-      goalToBaritone(new goals.GoalPlaceBlock(new Vec3(7, 64, 8), world, { range: 4 })),
-      '#goto 7 64 8',
+      goalToBaritone(new goals.GoalLookAtBlock(new Vec3(7, 64, 8), world), new Vec3(4, 64, 8)),
+      '#goto 6 64 8',
     )
-    assert.equal(goalToBaritone(new goals.GoalLookAtBlock(new Vec3(7, 64, 8), world)), '#goto 7 64 8')
+    assert.equal(goalToBaritone(place(), null), null) // no safe side without feet
+    assert.equal(goalToBaritone(place(), {}), null)
   })
   it('returns null for goals with no Baritone mapping', () => {
     assert.equal(goalToBaritone(new goals.GoalInvert(new goals.GoalBlock(1, 2, 3))), null)
@@ -211,7 +216,8 @@ describe('goal-id attribution (FakeTransport = the mod)', () => {
     bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
     await sleep(10)
     await bot.refresh() // motion witnessed for id 1
-    bot.pathfinder.setGoal(new goals.GoalInvert(new goals.GoalBlock(1, 2, 3)))
+    // Unsatisfied (the fake walk landed the feet in the inner block).
+    bot.pathfinder.setGoal(new goals.GoalInvert(new goals.GoalBlock(9, 64, 9)))
     assert.equal(transport.state.baritone, '#stop')
     assert.deepEqual(seen.statuses, ['noPath'])
     assert.deepEqual(seen.resets, ['noPath'])
@@ -233,6 +239,90 @@ describe('goal-id attribution (FakeTransport = the mod)', () => {
   it('isMining/isBuilding stay false', () => {
     assert.equal(bot.pathfinder.isMining(), false)
     assert.equal(bot.pathfinder.isBuilding(), false)
+  })
+})
+
+describe('already-satisfied goals succeed without a command (revmux 01 core-1)', () => {
+  let transport
+  let bot
+  let seen
+  beforeEach(async () => {
+    ({ transport, bot } = pathBot())
+    seen = taps(bot)
+    await bot.start({ pollMs: 0 })
+  })
+  afterEach(async () => { await bot.stop() })
+
+  it('a goal ending at the live feet emits success and sends nothing', async () => {
+    bot.pathfinder.setGoal(new goals.GoalBlock(0, 64, 0)) // feet are (0, 64, 0)
+    await sleep(10)
+    assert.equal(transport.state.baritone, null)
+    assert.deepEqual(seen.statuses, ['success'])
+    assert.deepEqual(seen.resets, ['goal reached'])
+    assert.equal(bot.pathfinder.isMoving(), false)
+    assert.ok(bot.pathfinder.goal, 'goal stored')
+  })
+
+  it('in-range near/follow goals never reach Baritone', async () => {
+    bot.pathfinder.setGoal(new goals.GoalNear(1, 64, 0, 3))
+    await sleep(10)
+    assert.equal(transport.state.baritone, null)
+    assert.deepEqual(seen.statuses, ['success'])
+    const target = { username: 'Owner', id: 7, position: new Vec3(1, 64, 0) }
+    bot.pathfinder.setGoal(new goals.GoalFollow(target, 3), true)
+    await sleep(10)
+    assert.equal(transport.state.baritone, null)
+    assert.deepEqual(seen.statuses, ['success', 'success'])
+    assert.equal(bot._follow, null) // nothing to refresh mid-walk
+  })
+
+  it('the short-circuit stops a live walk first, like every setGoal', async () => {
+    bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
+    await sleep(10)
+    await bot.refresh() // motion witnessed for id 1
+    // Feet faked back under the new goal (a teleport, a push): the walk dies.
+    transport.state.pos = { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true }
+    transport.state.baritonePhase = null
+    transport.state.baritoneStatus = { id: 1, pathing: true, last: 'none' } // still walking
+    await bot.refresh()
+    bot.pathfinder.setGoal(new goals.GoalBlock(0, 64, 0))
+    await sleep(10)
+    assert.equal(transport.state.baritone, '#stop')
+    assert.deepEqual(seen.statuses, ['success'])
+    assert.deepEqual(seen.resets, ['goal reached'])
+    transport.inject('baritone.event', { id: 1, status: 'success' }) // late: stale
+    assert.deepEqual(seen.statuses, ['success'])
+  })
+
+  it('an isEnd that throws walks normally (worldless look goal)', async () => {
+    // Reach gate passes, then the null world throws: caught, adjacency fails, walk.
+    const g = new goals.GoalLookAtBlock(new Vec3(2, 64, 0), null)
+    bot.pathfinder.setGoal(g)
+    await sleep(10)
+    assert.equal(transport.state.baritone, '#goto 1 64 0') // neighbour on the bot side
+    assert.deepEqual(seen.statuses, [])
+  })
+
+  it('a look one step away succeeds (the walk would target our own feet)', async () => {
+    const g = new goals.GoalLookAtBlock(new Vec3(1, 64, 0), null)
+    bot.pathfinder.setGoal(g)
+    await sleep(10)
+    assert.equal(transport.state.baritone, null)
+    assert.deepEqual(seen.statuses, ['success'])
+    assert.deepEqual(seen.resets, ['goal reached'])
+  })
+
+  it('follow with the target already in range sends no #goto', async () => {
+    const ctx = {}
+    bot.on('path_update', (r) => { ctx.lastPathStatus = r && r.status })
+    const target = { username: 'Owner', id: 7, position: new Vec3(1, 64, 0) }
+    follow(bot, ctx, target) // fresh key, in range: instant success
+    await sleep(10)
+    assert.equal(transport.state.baritone, null)
+    assert.equal(ctx.lastPathStatus, 'success')
+    follow(bot, ctx, target) // rest, still nothing sent
+    await sleep(10)
+    assert.equal(transport.state.baritone, null)
   })
 })
 
@@ -517,7 +607,8 @@ describe('console backend (rig proof without the mod)', () => {
     try {
       const statuses = []
       bot.on('path_update', (r) => statuses.push(r.status))
-      bot.pathfinder.setGoal(new goals.GoalInvert(new goals.GoalBlock(1, 2, 3)))
+      // Unsatisfied (blind feet are in the inner block) so it walks into noPath.
+      bot.pathfinder.setGoal(new goals.GoalInvert(new goals.GoalBlock(0, 64, 0)))
       assert.deepEqual(statuses, ['noPath'])
     } finally {
       await bot.stop()
