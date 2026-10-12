@@ -99,18 +99,20 @@ function goalToBaritone(goal, from) {
     if (dx === 0 && dz === 0) nx = px + 1 // above/below: deterministic side
     else if (Math.abs(dx) >= Math.abs(dz)) nx = px + Math.sign(dx)
     else nz = pz + Math.sign(dz)
-    // Our own column at/below feet level: GoalXZ counts any Y in it, so
-    // Baritone answers an in-goal #goto with silence — fail visibly
-    // instead. (Above the feet the GoalBlock below still needs the climb.)
-    if (nx === fx && nz === fz && py <= fy) return null
     // Only a roof-height cell needs the climb: GoalBlock, Baritone pillars
-    // like v1's executor does when no ground node is in range. Anything
-    // else stands on the surface beside via GoalXZ — never into solid
-    // ground (Baritone would dig the stand cell out), air, or a needless
-    // scaffold pillar where v1 places from the ground.
+    // like v1's executor does when no ground node is in range — unless the
+    // cell IS our feet (degenerate range), which Baritone would answer
+    // with silence. Anything else stands on the surface beside via GoalXZ
+    // (v1 places rows 2-3 from the ground) — except our own column at any
+    // level: GoalXZ counts any Y in it, so an in-goal #goto is answered
+    // with silence. Both silence shapes fail visibly instead, never wedge.
     const range = (goal.options && typeof goal.options.range === 'number') ? goal.options.range
       : (typeof goal.reach === 'number' ? goal.reach : 4)
-    if (py - fy > range - 1) return `#goto ${nx} ${py} ${nz}`
+    if (py - fy > range - 1) {
+      if (nx === fx && py === fy && nz === fz) return null
+      return `#goto ${nx} ${py} ${nz}`
+    }
+    if (nx === fx && nz === fz) return null
     return `#goto ${nx} ${nz}`
   }
   return null
@@ -606,6 +608,12 @@ class BaritoneBot extends EventEmitter {
     f.z = p.z
     f.at = now
     this._pushSettings()
+    // The re-issue supersedes the live goal exactly like a setGoal: drop
+    // the old id now, so a late terminal for it cannot clear the arm or
+    // verdict a goal Baritone no longer runs. The arm (_follow) and the
+    // motion latch (_pathing) stay: Baritone never stopped walking.
+    this._boundSeq = this._cmdSeq
+    this._goalId = null
     this._sendGoalCmd(`#goto ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}`)
   }
 

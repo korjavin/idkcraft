@@ -92,7 +92,7 @@ describe('goal translation (pathfinder -> Baritone)', () => {
       goalToBaritone(new goals.GoalLookAtBlock(new Vec3(7, 64, 8), world), new Vec3(4, 64, 8)),
       '#goto 6 8',
     )
-    // Our own column at/below feet level: null, never a silent in-goal #goto.
+    // Our own column at any level: null, never a silent in-goal #goto.
     assert.equal(
       goalToBaritone(new goals.GoalLookAtBlock(new Vec3(1, 64, 0), world), new Vec3(0, 64, 0)),
       null,
@@ -101,6 +101,14 @@ describe('goal translation (pathfinder -> Baritone)', () => {
       goalToBaritone(new goals.GoalLookAtBlock(new Vec3(1, 64, 0), world), new Vec3(0, 70, 0)),
       null,
     )
+    assert.equal(
+      goalToBaritone(new goals.GoalLookAtBlock(new Vec3(1, 66, 0), world), new Vec3(0, 64, 0)),
+      null,
+    )
+    // Degenerate range (negative survives the constructor default): the
+    // GoalBlock cell is our own feet, so null as well.
+    const tiny = new goals.GoalPlaceBlock(new Vec3(1, 64, 0), world, { range: -1 })
+    assert.equal(goalToBaritone(tiny, new Vec3(0, 64, 0)), null)
     assert.equal(goalToBaritone(place(), null), null) // no safe side without feet
     assert.equal(goalToBaritone(place(), {}), null)
   })
@@ -345,6 +353,16 @@ describe('already-satisfied goals succeed without a command (revmux 01 core-1)',
     assert.deepEqual(seen.statuses, [])
   })
 
+  it('an above-feet neighbour in our own column fails visibly, never silently', async () => {
+    // Near-above takes the GoalXZ branch, which counts any Y in the column.
+    const g = new goals.GoalLookAtBlock(new Vec3(1, 66, 0), { raycast: () => null })
+    bot.pathfinder.setGoal(g)
+    await sleep(10)
+    assert.equal(transport.state.baritone, null)
+    assert.deepEqual(seen.statuses, ['noPath'])
+    assert.deepEqual(seen.resets, ['noPath'])
+  })
+
   it('a below-feet neighbour column fails visibly, never silently', async () => {
     // Cardinally adjacent in XZ, p below: GoalXZ would target our own column.
     const { transport: t2, bot: b2 } = pathBot({
@@ -424,6 +442,48 @@ describe('GoalFollow re-issue (dynamic, throttled)', () => {
     assert.equal(transport.state.baritone, '#goto 30.0 64.0 30.0')
     await sleep(10)
     assert.equal(bot._goalId, 2) // the new echo rebinds
+  })
+
+  it('a late terminal for the superseded goal drops after a re-issue', async () => {
+    const target = { username: 'Owner', id: 7, position: new Vec3(10, 64, 10) }
+    bot.pathfinder.setGoal(new goals.GoalFollow(target, 3), true)
+    await sleep(10)
+    transport.state.baritonePhase = null
+    transport.state.baritoneStatus = { id: 1, pathing: true, last: 'none' }
+    await bot.refresh() // motion round; arm live
+    // Hold the re-issue echo: the send→bind window stays open on purpose.
+    const orig = transport.call.bind(transport)
+    let releaseEcho = () => {}
+    transport.call = async (method, params) => {
+      const r = await orig(method, params)
+      if (method === 'baritone.cmd' && transport.state.baritoneSeq === 2) {
+        await new Promise((res) => { releaseEcho = res })
+      }
+      return r
+    }
+    try {
+      target.position = new Vec3(30, 64, 30)
+      bot._follow.at -= 1500
+      const statuses = []
+      const resets = []
+      bot.on('path_update', (r) => statuses.push(r.status))
+      bot.on('path_reset', (r) => resets.push(r))
+      await bot.refresh() // re-issue sends; id 2 parked in flight
+      assert.equal(transport.state.baritoneSeq, 2)
+      transport.inject('baritone.event', { id: 1, status: 'success' }) // late: stale now
+      assert.deepEqual(statuses, [])
+      assert.deepEqual(resets, [])
+      assert.ok(bot._follow, 'arm survives the stale terminal')
+      assert.equal(bot.pathfinder.isMoving(), true)
+      releaseEcho()
+      await sleep(10)
+      assert.equal(bot._goalId, 2) // the new echo binds
+      transport.inject('baritone.event', { id: 2, status: 'success' }) // the live goal completes
+      assert.deepEqual(statuses, ['success'])
+      assert.deepEqual(resets, ['goal reached'])
+    } finally {
+      transport.call = orig
+    }
   })
 
   it('does not arm without the dynamic flag or without a live entity', async () => {

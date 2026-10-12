@@ -160,8 +160,10 @@ never used it (no status, no state, position-blind `isMoving`).
 
 Goal-id attribution: `baritone.cmd` echoes `{id}` per `#goto`; the
 adapter binds the newest send's echo (sequence-guarded: a superseding
-setGoal/stop invalidates in-flight binds, overlapping follow re-issues
-order by seq) and applies `baritone.status {id,pathing,last}` /
+setGoal/stop/re-issue invalidates in-flight binds and drops the old id
+at once, so a late terminal for it can neither clear the follow arm nor
+verdict a goal Baritone no longer runs) and applies
+`baritone.status {id,pathing,last}` /
 `baritone.event {id,status}` only for the latched id — older, foreign,
 or no-goal verdicts drop. A terminal for the live id emits `path_update
 {status}` + `path_reset` (`success` → `goal reached`, else the status
@@ -189,7 +191,7 @@ Goal → command map (extends the spike's five):
 | GoalY | `#goto y` (Baritone `goto <y>` = Y level, verified in GotoCommand) |
 | GoalFollow | one-shot `#goto` at the live target + adapter re-issue (> 1 block drift, ≤ 1 cmd/s, dynamic only; follow.js still owns terminal/timeout re-issue) |
 | GoalCompositeAny/All | first mappable member, else noPath |
-| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the neighbour cell on the bot's side (dominant horizontal axis; +x when above/below) — GoalBlock only past the goal's place range above the feet (roofs: Baritone pillars like v1's executor does when no ground node is in range), else GoalXZ (rows 2-3, fills, floors, table look: v1 places those from the ground, so do we); our own column at/below feet level reports noPath (GoalXZ counts any Y in it — an in-goal `#goto` is answered with silence); without feet there is no safe side → noPath (revmux 01 core-2, 02 core-2, 03 core-1/2). Deep-below cells whose surface stands past place range fail visibly at the place attempt — a descend-first approach is wave-3 tuning if ever needed |
+| GoalPlaceBlock/GoalLookAtBlock | `#goto` at the neighbour cell on the bot's side (dominant horizontal axis; +x when above/below) — GoalBlock only past the goal's place range above the feet (roofs: Baritone pillars like v1's executor does when no ground node is in range; our own feet → noPath), else GoalXZ (rows 2-3, fills, floors, table look: v1 places those from the ground, so do we); our own column reports noPath at any level (GoalXZ counts any Y in it — an in-goal `#goto` is answered with silence); without feet there is no safe side → noPath (revmux 01 core-2, 02 core-2, 03 core-1/2, verify 01). Deep-below cells whose surface stands past place range fail visibly at the place attempt — a descend-first approach is wave-3 tuning if ever needed |
 | GoalInvert, GoalBreakBlock | noPath (no `#goto` spelling; GoalBreakBlock throws on v1 — gather.js) |
 
 Note for .1 (cc): every normal arrival emits AT_GOAL *then* CANCELED
