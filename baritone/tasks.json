@@ -1,0 +1,7 @@
+[
+  {"name": "BED-60", "spawn": [-61.3, 66, -210.5], "goal": [0, -210], "secs": 240, "scaffold": 64, "pickaxe": true,
+   "why": "owner failure: walk to a bed 60+ blocks away through terrain (XZ goal, y free)"},
+  {"name": "MINE-10", "mode": "mine", "spawn": [59.5, 64, -205.5], "count": 10, "blocks": ["iron_ore", "deepslate_iron_ore"],
+   "secs": 600, "scaffold": 64, "pickaxe": true,
+   "why": "owner failure: mine 10 iron starting on the surface (ATL-SHAFT start, pristine vein holds 2)"}
+]
