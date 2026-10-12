@@ -393,12 +393,14 @@ exits 2 when the worker never joins. One worker client per box (a second
 
 Runs the FOLLOWER on the Baritone body — the M1/M2 proof harness for the v2
 epic (idkcraft-neuc). The wrapper pre-ops the follower name, boots the
-offline client under it (`baritone/client.sh`, name `idk-baritone-body`, a
-distinct container from the worker's so the two share one box), publishes
-the console bridge (`BRIDGE_PORT`, default 7777) and the Fabric mod ws
-(`MOD_PORT`, default 7778), and exports `BOT_BODY=baritone` plus the
-`BRIDGE_*` addresses for the replay; the replay builds the follower via
-`bot/src/bridge` while the guide stays mineflayer. The body log lands at
+offline client under it (`baritone/client.sh`, name `idk-baritone-body`),
+publishes the console bridge (`BODY_CONSOLE_PORT`, default 7779 — name and
+port are distinct from the worker's, so `REPLAY_WORKER=1` shares one box)
+and the Fabric mod ws (`MOD_PORT`, default 7778), and exports
+`BOT_BODY=baritone` plus the `BRIDGE_*` addresses for the replay; the replay
+builds the follower via `bot/src/bridge` (the MC address the container
+connects to is `REPLAY_BODY_MC_HOST`, default `host.docker.internal`)
+while the guide stays mineflayer. The body log lands at
 `/tmp/stuck-body-<variant>.log` (Baritone's `[CHAT] [Baritone] ...` lines
 prove the goal reached the client). Wave-1 mode is record-only:
 

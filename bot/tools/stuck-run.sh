@@ -10,8 +10,8 @@
 #   (launch the Baritone worker client beside the head, idkcraft-jlda.3),
 #   REPLAY_BODY=baritone (run the FOLLOWER on the v2 Baritone body:
 #   idkcraft-neuc.5 boots the offline client under the follower name and
-#   exports BOT_BODY/BRIDGE_* for the replay; MOD_PORT/BRIDGE_PORT pick the
-#   host publishes, defaults 7778/7777).
+#   exports BOT_BODY/BRIDGE_* for the replay; MOD_PORT/BODY_CONSOLE_PORT
+#   pick the host publishes, defaults 7778/7779).
 # Exit codes: 0 = baseline holds (incl. FLAKY: regressed spots held on the
 # one automatic rerun, see the flake protocol at the end), 1 = REGRESSION vs
 # the baseline (repeated on the rerun), 2 = environment failure (no START.sh/snapshot, rig never came up,
@@ -249,15 +249,18 @@ if [ "${REPLAY_WORKER:-}" = 1 ]; then
 fi
 # v2 body (idkcraft-neuc.5): the FOLLOWER runs on the Baritone body — pre-op
 # its name, boot the offline client under it (client.sh owns the join),
-# publish the console bridge (BRIDGE_PORT) and the Fabric mod ws (MOD_PORT),
-# export the adapter addresses for the replay. The client name is distinct
-# from the worker's, so REPLAY_WORKER=1 + REPLAY_BODY=baritone share one box.
-# Wave-1 mode is record-only (REPLAY_BASELINE_OFF=1); the flake rerun below
-# does not relaunch the body client (idkcraft-neuc.15 wires the v2 rerun).
+# publish the console bridge (BODY_CONSOLE_PORT) and the Fabric mod ws
+# (MOD_PORT), export the adapter addresses for the replay. Name and console
+# port are distinct from the worker's, so REPLAY_WORKER=1 +
+# REPLAY_BODY=baritone share one box (revmux 01 core-4: the same host port
+# would collide). The 7779 default is the spike's body-client port
+# (baritone/bridge/rig.sh). Wave-1 mode is record-only
+# (REPLAY_BASELINE_OFF=1); the flake rerun below does not relaunch the body
+# client (idkcraft-neuc.15 wires the v2 rerun).
 if [ "${REPLAY_BODY:-}" = baritone ]; then
   rcon_assert "op StuckReplay$REPLAY_TAG"
   BARITONE_OFFLINE=1 RIG_CONTAINER="$CONTAINER" BARITONE_CLIENT=idk-baritone-body \
-    BRIDGE_PORT="${BRIDGE_PORT:-7777}" MOD_PORT="${MOD_PORT:-7778}" \
+    BRIDGE_PORT="${BODY_CONSOLE_PORT:-7779}" MOD_PORT="${MOD_PORT:-7778}" \
     CLIENT_LOG="/tmp/stuck-body-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
     sh "$TREE/baritone/client.sh" start "${REPLAY_PORT:-25571}" "StuckReplay$REPLAY_TAG" || exit 2
   BODY_STARTED=1 # the client is ours to stop from here on (teardown)
@@ -265,10 +268,8 @@ if [ "${REPLAY_BODY:-}" = baritone ]; then
   # from localhost and the guide connects next — the same 6 s gap as the
   # worker block (the replay holds guide->follower itself).
   sleep 6
-  # localhost, not the literal loopback IP (privacy pre-check). BRIDGE_PORT
-  # is the mod ws from here on (the worker block above already captured the
-  # console port into WORKER_PORT).
-  export BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT="${MOD_PORT:-7778}" BRIDGE_CONSOLE_PORT="${BRIDGE_PORT:-7777}"
+  # localhost, not the literal loopback IP (privacy pre-check).
+  export BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT="${MOD_PORT:-7778}" BRIDGE_CONSOLE_PORT="${BODY_CONSOLE_PORT:-7779}"
 fi
 export REPLAY_VARIANT="$VARIANT" REPLAY_WORLDSHA="$SHA_BEFORE" REPLAY_GITSHA="$GITSHA"
 if [ -n "$SPOTS" ]; then

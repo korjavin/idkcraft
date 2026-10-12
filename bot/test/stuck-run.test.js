@@ -380,7 +380,7 @@ describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
     const r = run({ FAKE_CLIENT_RC: '2' })
     assert.equal(r.status, 2, r.stdout + r.stderr)
     assert.deepEqual(r.calls, ['start 25571 StuckReplayt1',
-      'client=idk-baritone-body console=7777 mod=7778 log=/tmp/stuck-body-paper-base.log'])
+      'client=idk-baritone-body console=7779 mod=7778 log=/tmp/stuck-body-paper-base.log'])
     assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
   })
 
@@ -388,22 +388,30 @@ describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
     const r = run({})
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(r.calls, ['start 25571 StuckReplayt1',
-      'client=idk-baritone-body console=7777 mod=7778 log=/tmp/stuck-body-paper-base.log',
+      'client=idk-baritone-body console=7779 mod=7778 log=/tmp/stuck-body-paper-base.log',
       // stop inherits the exported BRIDGE_PORT (the mod ws by then); the
       // launch-only vars (MOD_PORT/CLIENT_LOG) were never exported.
       'stop', 'client=idk-baritone-body console=7778 mod= log='])
     assert.deepEqual(r.envOut,
-      { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '7778', BRIDGE_CONSOLE_PORT: '7777' })
+      { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '7778', BRIDGE_CONSOLE_PORT: '7779' })
     assert.equal(fs.existsSync(path.join(tmp, 'lock')), false, 'lock leaked after exit')
   })
 
-  it('BRIDGE_PORT/MOD_PORT overrides reach the client and the replay', () => {
-    const r = run({ BRIDGE_PORT: '17777', MOD_PORT: '17778' })
+  it('BODY_CONSOLE_PORT/MOD_PORT overrides reach the client and the replay', () => {
+    const r = run({ BODY_CONSOLE_PORT: '17779', MOD_PORT: '17778' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.ok(r.calls.includes('client=idk-baritone-body console=17777 mod=17778 log=/tmp/stuck-body-paper-base.log'),
+    assert.ok(r.calls.includes('client=idk-baritone-body console=17779 mod=17778 log=/tmp/stuck-body-paper-base.log'),
       r.calls.join('\n'))
     assert.deepEqual(r.envOut,
-      { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '17778', BRIDGE_CONSOLE_PORT: '17777' })
+      { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '17778', BRIDGE_CONSOLE_PORT: '17779' })
+  })
+
+  it('the body console defaults off the worker port (shared box, revmux 01 core-4)', () => {
+    const r = run({})
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    // The worker block publishes the console on ${BRIDGE_PORT:-7777}; the
+    // body must not default to the same host port.
+    assert.ok(!r.calls.join('\n').includes('console=7777'), r.calls.join('\n'))
   })
 
   it('v1 (REPLAY_BODY unset): no client launch, no adapter env', () => {
@@ -480,8 +488,17 @@ describe('stuck-replay.js v2 body factory (idkcraft-neuc.5)', () => {
 
   it('BOT_BODY=baritone picks the bridge adapter for the follower', () => {
     assert.ok(replay.includes("process.env.BOT_BODY === 'baritone'"), 'BOT_BODY switch missing')
-    assert.ok(replay.includes("require('../src/bridge').createBot({ ...opts, username: FOLLOWER })"),
+    assert.ok(replay.includes("require('../src/bridge').createBot({ ...opts, host: process.env.REPLAY_BODY_MC_HOST || 'host.docker.internal', username: FOLLOWER })"),
       'follower bridge factory missing')
+  })
+
+  it('the bridge follower gets a container-reachable MC host (revmux 01 core-2)', () => {
+    // The adapter sends `connect <host> <port>` from inside its container,
+    // where the replay's loopback is unreachable — the mk line must not
+    // pass the replay HOST through.
+    const mkLine = replay.split('\n').find((l) => l.includes("require('../src/bridge').createBot"))
+    assert.ok(mkLine && mkLine.includes("host: process.env.REPLAY_BODY_MC_HOST || 'host.docker.internal'"),
+      'container-reachable MC host missing from the bridge factory call')
   })
 
   it('the guide stays mineflayer', () => {

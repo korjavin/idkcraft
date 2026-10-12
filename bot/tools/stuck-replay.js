@@ -58,7 +58,8 @@
 //   stuck-run.sh with REPLAY_BODY=baritone, idkcraft-neuc.5 — the client
 //   already joined) runs the FOLLOWER on bot/src/bridge instead of
 //   mineflayer; BRIDGE_HOST/BRIDGE_PORT/BRIDGE_CONSOLE_PORT address its
-//   bridges. The rig server must already be up.
+//   bridges, REPLAY_BODY_MC_HOST (default host.docker.internal) the MC
+//   address the container connects to. The rig server must already be up.
 // Exit codes: 0 = baseline holds (or comparison skipped), 1 = REGRESSION
 // vs the baseline (a spot flipped reached->unreached, or overran its
 // stuck/episode ceiling, or has no baseline entry), 2 = harness/env error
@@ -599,10 +600,13 @@ async function main() {
   // v2 body (idkcraft-neuc.5): BOT_BODY=baritone runs the FOLLOWER on the
   // Baritone bridge adapter instead of mineflayer; the guide stays
   // mineflayer. Lazy require: the bridge module must not load on v1 runs.
+  // The adapter sends `connect <host> <port>` from inside its container,
+  // where the replay's loopback is unreachable — pass the container-
+  // reachable MC address (client.sh connects with the same one).
   let follower = null
   const mk = (opts) => {
     const b = process.env.BOT_BODY === 'baritone'
-      ? require('../src/bridge').createBot({ ...opts, username: FOLLOWER })
+      ? require('../src/bridge').createBot({ ...opts, host: process.env.REPLAY_BODY_MC_HOST || 'host.docker.internal', username: FOLLOWER })
       : mineflayer.createBot({ ...opts, username: FOLLOWER })
     follower = b
     b.on('path_reset', (reason) => {
