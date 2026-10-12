@@ -210,6 +210,10 @@ public final class BridgeServer {
     }
 
     private com.google.gson.JsonElement stateGet(JsonObject params) {
+        // Kicks the lazy client init: without this nothing would ever
+        // register the tick listener before the first chat/cmd call, and the
+        // adapter (which waits for pos before driving anything) would hang.
+        ensureClient();
         JsonObject snap = snapshot;
         return snap != null ? snap : nullSnapshot();
     }

@@ -21,6 +21,7 @@ const MOD_HOST = process.env.MOD_HOST || 'localhost'
 const MOD_PORT = parseInt(process.env.MOD_PORT || '7778', 10)
 const RIG = process.env.RIG_CONTAINER || 'idk-replay-z'
 const SPOT = process.env.GOTO_SPOT || 'EP1'
+const BOT = process.env.BOT || 'IdkBody'
 
 function fail(step, what) {
   console.log(`FAIL ${step}: ${what}`)
@@ -83,8 +84,14 @@ async function main() {
   if (typeof hello.baritone !== 'string' || !hello.baritone) fail('hello', 'missing baritone version')
   pass('hello', `mod=${hello.mod} v=${hello.v} mc=${hello.mc} baritone=${hello.baritone}`)
 
-  // 2. state.get — the full in-world snapshot.
-  const st = await t.call('state.get', {})
+  // 2. state.get — the full in-world snapshot (poll: the first call kicks
+  // the lazy client init and the snapshot lands on the next client tick).
+  let st = null
+  for (let i = 0; i < 20; i++) {
+    st = await t.call('state.get', {})
+    if (st && st.pos) break
+    await sleep(500)
+  }
   const pos = st && st.pos
   const finite = (n) => typeof n === 'number' && Number.isFinite(n)
   if (!pos || !finite(pos.x) || !finite(pos.y) || !finite(pos.z)) fail('state.get', `bad pos: ${JSON.stringify(st)}`)
@@ -130,7 +137,22 @@ async function main() {
   console.log(`  info: ${chats.length} chat event(s) so far` +
     (chats.length ? ` first from=${chats[0].params.username} text=${JSON.stringify((chats[0].params.message || '').slice(0, 60))}` : ''))
 
-  // 5. baritone.cmd — walk EP1, the id must echo through status + event.
+  // 5. entities.list / roster.get (neuc.3, enabled by this bead) — shape
+  // plus our own tab entry; mob content depends on the world, so the list
+  // asserts shape only.
+  const el = await t.call('entities.list', {})
+  if (!el || !Array.isArray(el.entities)) fail('entities.list', `bad reply: ${JSON.stringify(el)}`)
+  const self = el.entities.find((e) => e.self)
+  pass('entities.list', `${el.entities.length} entities` +
+    (self ? ` self id=${self.id} pos=${self.pos.x.toFixed(1)} ${self.pos.y.toFixed(1)} ${self.pos.z.toFixed(1)}` : ' (self not listed)'))
+  const ro = await t.call('roster.get', {})
+  if (!ro || !Array.isArray(ro.players)) fail('roster.get', `bad reply: ${JSON.stringify(ro)}`)
+  const me = ro.players.find((p) => p.name === BOT)
+  if (!me) fail('roster.get', `${BOT} not in roster: ${JSON.stringify(ro.players.map((p) => p.name))}`)
+  if (typeof me.uuid !== 'string' || typeof me.ping !== 'number') fail('roster.get', `bad entry: ${JSON.stringify(me)}`)
+  pass('roster.get', `${ro.players.length} player(s), ${BOT} ping=${me.ping} mode=${me.gameMode}`)
+
+  // 6. baritone.cmd — walk EP1, the id must echo through status + event.
   const cmd = await t.call('baritone.cmd', { command: `#goto ${gx} ${gy} ${gz}` })
   if (!cmd || typeof cmd.id !== 'number' || cmd.id < 1) fail('baritone.cmd', `bad reply: ${JSON.stringify(cmd)}`)
   pass('baritone.cmd', `id=${cmd.id} for #goto ${gx} ${gy} ${gz}`)
