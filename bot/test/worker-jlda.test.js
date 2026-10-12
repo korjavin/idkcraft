@@ -471,7 +471,7 @@ describe('worker e2e: flat occupancy keeps the prod roster shape (revmux 01 core
       },
     }
   }
-  it('still matches the entity-ful self, but never the worker', () => {
+  it('matches the entity-ful self and the worker body alike (collision, not presence)', () => {
     const bot = prodBot()
     assert.equal(threatenedByPlayer(bot, 0, 64, 0), true) // own feet cell: self matches (pre-jlda shape)
     assert.equal(cellOccupiedByPlayer(bot, 0, 64, 0), true)
@@ -479,8 +479,12 @@ describe('worker e2e: flat occupancy keeps the prod roster shape (revmux 01 core
     bot.players[WORKER] = { username: WORKER, entity: { position: pos(5, 64, 0) } }
     assert.equal(threatenedByPlayer(bot, 0, 64, 0), true) // self still matches
     assert.equal(cellOccupiedByPlayer(bot, 0, 64, 0), true)
-    assert.equal(threatenedByPlayer(bot, 5, 64, 0), false) // ...but the worker never does
-    assert.equal(cellOccupiedByPlayer(bot, 5, 64, 0), false)
+    // The worker is a body: placing into it or digging under it collides,
+    // so it matches like any player (revmux 02 core-1).
+    assert.equal(threatenedByPlayer(bot, 5, 64, 0), true)
+    assert.equal(cellOccupiedByPlayer(bot, 5, 64, 0), true)
+    assert.equal(threatenedByPlayer(bot, 9, 64, 0), false)
+    assert.equal(cellOccupiedByPlayer(bot, 9, 64, 0), false)
   })
 })
 

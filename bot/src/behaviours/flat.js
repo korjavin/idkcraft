@@ -34,7 +34,6 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const { countItems } = require('../perception')
-const worker = require('../worker')
 const danger = require('../danger')
 const stuck = require('../stuck')
 const util = require('./util')
@@ -396,13 +395,9 @@ function cellOccupiedSelf(bot, x, y, z) {
 
 function cellOccupiedByPlayer(bot, x, y, z) {
   try {
-    // Raw roster minus the worker only (revmux 01 core-2): mineflayer
-    // backfills bot.players[self].entity on login + player_info, so these
-    // loops always matched self — sieving self out here would wake the
-    // selfIn && !playerIn sidestep branches on the default config and
-    // break the zero-diff promise. The worker entry is the only skip.
-    for (const [key, player] of Object.entries((bot && bot.players) || {})) {
-      if (worker.isWorker(key) || worker.isWorker(player && player.username)) continue
+    // Raw roster, worker included on purpose (revmux 02 core-1): this is a
+    // collision check, not a presence count, and the worker has a hitbox.
+    for (const player of Object.values((bot && bot.players) || {})) {
       if (player && player.entity && covers(player.entity, x, y, z)) return true
     }
   } catch (_) { /* unverifiable: treat as free, the place may refuse */ }
@@ -475,9 +470,8 @@ function threatenedSelf(bot, x, y, z) {
 
 function threatenedByPlayer(bot, x, y, z) {
   try {
-    // Same worker-only skip as cellOccupiedByPlayer above (revmux 01 core-2).
-    for (const [key, player] of Object.entries((bot && bot.players) || {})) {
-      if (worker.isWorker(key) || worker.isWorker(player && player.username)) continue
+    // Same intentional worker inclusion as cellOccupiedByPlayer (revmux 02).
+    for (const player of Object.values((bot && bot.players) || {})) {
       if (player && player.entity && threatens(player.entity, x, y, z)) return true
     }
   } catch (_) { /* unverifiable: treat as free, the dig may refuse */ }
