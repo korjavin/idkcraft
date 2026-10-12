@@ -148,6 +148,23 @@ describe('bridge consume/sleep (idkcraft-neuc.9)', () => {
     await assert.rejects(() => bot.consume(), /Food is full/)
   })
 
+  it('consume rejects visibly when nothing is eaten in the window', async () => {
+    ;({ bot } = await lookBot({ food: 10, inventory: [{ slot: 0, name: 'bread', count: 1 }] }))
+    await assert.rejects(() => bot.consume(), /not consumed/)
+  })
+
+  it('overlapping interactions share one pause/resume pair (refcounted)', async () => {
+    let transport
+    ;({ transport, bot } = await lookBot())
+    bot.pathfinder.setGoal(new goals.GoalNear(10, 64, 10, 1))
+    await tick()
+    bot.attack({ id: 5 }) // fire-and-forget, overlaps the awaited lookAt
+    await bot.lookAt(new Vec3(5, 65, 5))
+    await tick(60)
+    assert.deepEqual(transport.state.baritonePauses, ['#pause', '#resume'])
+    assert.deepEqual(transport.state.attacks, [5])
+  })
+
   it('sleep clicks the bed, wake flips back on the mod notification', async () => {
     let transport
     ;({ transport, bot } = await lookBot({ blocks: { '3,64,3': 'red_bed' } }))

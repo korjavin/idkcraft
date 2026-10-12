@@ -343,8 +343,13 @@ from the latched `pathfinder.goal`. Reflex-tick cheapness: `bot.look`
 never crosses the wire for a sub-degree change (force always sends).
 
 `consume()` = `interact.item` held until the held count drops or 2 s
-pass, then `interact.stop`; it rejects with mineflayer's messages
-where mineflayer has one (`Food is full`, plus `not holding any item`).
+pass, then `interact.stop`; no drop in the window rejects
+(`consume: held item was not consumed`), and it rejects with
+mineflayer's messages where mineflayer has one (`Food is full`, plus
+`not holding any item`). The mod holds the client's use key for
+continuous uses (eat/drink/bow — a use animation) until
+`interact.stop`/the `holdMs` deadline, since vanilla releases a
+one-shot use on the next tick; instant uses (buckets) never hold.
 `interact.item` with `holdMs` also auto-stops on the client when the
 deadline passes. `sleep` waits up to 3 s for the sleeping state and
 rejects `bot is not sleeping` (mineflayer's timeout message); `wake`

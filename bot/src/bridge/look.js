@@ -53,22 +53,37 @@ function eyeOf(bot) {
 // dig/place): pause only when pathing, always resume, and re-issue the
 // latched goal when Baritone cancelled it silently during the pause
 // (status for the latched id, not pathing, no terminal verdict yet).
+// Reference-counted (bot._pausedDepth): overlapping interactions share
+// one #pause/#resume pair, and the adapter poll skips terminal
+// attribution while a pause is outstanding (a paused body reads
+// pathing:false, which must not verdict the live goal).
 async function withBaritonePaused(bot, fn) {
   const moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving())
   if (!moving || !bot.transport) return fn()
-  await bot.transport.call('baritone.cmd', { command: '#pause' }).catch((e) => failLog('#pause', e))
+  bot._pausedDepth = (bot._pausedDepth || 0) + 1
+  if (bot._pausedDepth === 1) {
+    await bot.transport.call('baritone.cmd', { command: '#pause' }).catch((e) => failLog('#pause', e))
+  }
   try {
     return await fn()
   } finally {
-    await bot.transport.call('baritone.cmd', { command: '#resume' }).catch((e) => failLog('#resume', e))
-    try {
-      const st = await bot.transport.call('baritone.status', {})
-      if (st && bot._goalId != null && st.id === bot._goalId && !st.pathing &&
-        (st.last === 'none' || st.last == null) &&
-        bot.pathfinder.goal && typeof bot._setGoal === 'function') {
-        bot._setGoal(bot.pathfinder.goal, false) // goal dropped mid-pause: re-issue the latch
-      }
-    } catch (_) { /* status best-effort; the poll resolves the goal */ }
+    bot._pausedDepth--
+    if (bot._pausedDepth <= 0) {
+      bot._pausedDepth = 0
+      // A lost #resume leaves Baritone paused with its watchdog frozen:
+      // retry once before giving up to the log.
+      await bot.transport.call('baritone.cmd', { command: '#resume' })
+        .catch(() => bot.transport.call('baritone.cmd', { command: '#resume' }))
+        .catch((e) => failLog('#resume', e))
+      try {
+        const st = await bot.transport.call('baritone.status', {})
+        if (st && bot._goalId != null && st.id === bot._goalId && !st.pathing &&
+          (st.last === 'none' || st.last == null) &&
+          bot.pathfinder.goal && typeof bot._setGoal === 'function') {
+          bot._setGoal(bot.pathfinder.goal, !!bot._follow) // goal dropped mid-pause: re-issue the latch
+        }
+      } catch (_) { /* status best-effort; the poll resolves the goal */ }
+    }
   }
 }
 
@@ -164,19 +179,23 @@ function installLook(bot) {
     await withBaritonePaused(bot, async () => {
       await bot.transport.call('interact.item', { hand: 'main' })
       bot.usingHeldItem = true
+      let dropped = false
       try {
         const deadline = Date.now() + 2000
         while (Date.now() < deadline) {
           await sleepMs(50)
           if (typeof bot.refresh === 'function') await bot.refresh().catch(() => {})
           const cur = bot.heldItem
-          if (!cur || cur.name !== beforeName) break
-          if (beforeCount != null && typeof cur.count === 'number' && cur.count < beforeCount) break
+          if (!cur || cur.name !== beforeName) { dropped = true; break }
+          if (beforeCount != null && typeof cur.count === 'number' && cur.count < beforeCount) { dropped = true; break }
         }
       } finally {
         bot.usingHeldItem = false
         await bot.transport.call('interact.stop', {}).catch(() => {})
       }
+      // No count drop in the window = nothing was eaten (wrong item, use
+      // cancelled): fail visibly instead of reporting a phantom meal.
+      if (!dropped) throw new Error('consume: held item was not consumed')
     })
   }
 

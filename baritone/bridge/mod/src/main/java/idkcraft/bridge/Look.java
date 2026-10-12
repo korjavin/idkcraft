@@ -136,15 +136,20 @@ public final class Look {
                 }
                 InteractionHand h = "off".equals(hand) ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
                 client.gameMode.useItem(player, h);
-                look.stopUsingAtMs = holdMs > 0 ? System.currentTimeMillis() + holdMs : 0;
+                // Continuous uses (eat/drink/bow: a use animation) are
+                // cancelled by vanilla next tick unless the use key stays
+                // down — hold it until interact.stop / the holdMs deadline.
+                // Instant uses (buckets, blocks: animation NONE) must NOT
+                // hold: a held key would re-fire the use (fill then pour).
+                if (player.getItemInHand(h).getUseAnimation() != net.minecraft.world.item.ItemUseAnimation.NONE) {
+                    client.options.keyUse.setDown(true);
+                    look.stopUsingAtMs = holdMs > 0 ? System.currentTimeMillis() + holdMs : 0;
+                }
                 return ok();
             });
         });
         server.register("interact.stop", params -> look.onPlayer(player -> {
-            look.stopUsingAtMs = 0;
-            if (player.isUsingItem()) {
-                player.stopUsingItem();
-            }
+            look.stopUsing(player);
             return ok();
         }));
         server.register("sleep", params -> {
@@ -219,17 +224,26 @@ public final class Look {
         }
         long stopAt = stopUsingAtMs;
         if (stopAt > 0 && System.currentTimeMillis() >= stopAt) {
-            stopUsingAtMs = 0;
-            if (player.isUsingItem()) {
-                player.stopUsingItem();
-            }
+            stopUsing(player);
+        }
+    }
+
+    /** Release a held use: key up first, then the game-mode release. */
+    private void stopUsing(LocalPlayer player) {
+        stopUsingAtMs = 0;
+        Minecraft client = Minecraft.getInstance();
+        if (client != null && client.options != null) {
+            client.options.keyUse.setDown(false);
+        }
+        if (player.isUsingItem() && client != null && client.gameMode != null) {
+            client.gameMode.releaseUsingItem(player);
         }
     }
 
     /** Mineflayer radians -> notch degrees, applied to body + head. */
     private static void applyLook(LocalPlayer player, double yawRad, double pitchRad) {
-        float notchYaw = (float) Math.toDegrees(Math.PI - yawRad);
-        float notchPitch = (float) Math.toDegrees(-pitchRad);
+        float notchYaw = (float) LookMath.notchYawDeg(yawRad);
+        float notchPitch = (float) LookMath.notchPitchDeg(pitchRad);
         player.setYRot(notchYaw);
         player.setXRot(notchPitch);
         player.setYHeadRot(notchYaw);

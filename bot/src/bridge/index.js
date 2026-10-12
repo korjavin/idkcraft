@@ -374,7 +374,9 @@ class BaritoneBot extends EventEmitter {
       if (bs && typeof bs === 'object' && bs.id != null && bs.id === this._goalId) {
         if (bs.pathing) {
           this._pathing = true
-        } else if (bs.last !== 'none' && bs.last != null) {
+        } else if (bs.last !== 'none' && bs.last != null && !(this._pausedDepth > 0)) {
+          // While a bridge pause is outstanding (neuc.9 withBaritonePaused)
+          // pathing reads false; a verdict waits for the post-resume poll.
           this._completeTerminal(bs.last)
         }
       }

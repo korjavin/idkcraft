@@ -309,6 +309,7 @@ public final class BridgeServer {
         long id = cmdSeq.incrementAndGet();
         if (GoalTracker.rearmsTracker(probe.before(), probe.after(), probe.beforeProc(), probe.afterProc(), verb)) {
             currentId = id;
+            last = "none"; // a new goal has no verdict yet (neuc.9: stale last falsely completed it)
             terminalReceived = false;
             cmdTick = tickCount;
             deadlineTick = tickCount + GOAL_TIMEOUT_TICKS;
