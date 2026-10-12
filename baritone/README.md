@@ -13,6 +13,13 @@ v1.18.0, MC 26.1.2 = the rig Paper) replays the same stuck corpus as
 | `tasks.json` | the two owner failures: BED-60 (walk 60+ blocks through terrain), MINE-10 (10 iron from the surface) |
 | `ab.test.js` | `node --test baritone/` |
 
+## Result (2026-10-12, n=2)
+
+Follow corpus (16 spots): mineflayer 15 reached / 296 s, Baritone 14 / 233-245 s
+(faster on most spots; fails DUGPIT-BARE — no water-bucket escape). Owner
+failures: BED-60 reached in 16 s, MINE-10 10 iron in ~84 s. Client ~1.9 GiB,
+CPU mean ~30 %. Table and recommendation: PR #446 and the bead notes.
+
 ## Running it
 
 A real client needs a Minecraft Java licence. `run.sh` refuses (exit 2) until one of:
