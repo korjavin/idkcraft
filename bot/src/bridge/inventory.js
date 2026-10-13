@@ -178,15 +178,22 @@ class MinimalWindow {
 // itself: windows hold mutable per-bot slots, and bots sharing a registry
 // (every createBot on the same mc version) must not share one (revmux 01).
 const windowFactoryCache = new WeakMap()
-function makeWindow(bot) {
+// neuc.11: exported — container windows (windows.js) build from the same factory.
+function windowFactory(bot) {
   const reg = bot && bot.registry
-  if (reg && typeof reg === 'object' && reg.itemsByName && typeof reg.supportFeature === 'function') {
-    let factory = windowFactoryCache.get(reg)
-    if (factory === undefined) {
-      const load = tryLoad('prismarine-windows')
-      try { factory = load ? load(reg) : null } catch (_) { factory = null }
-      windowFactoryCache.set(reg, factory)
-    }
+  if (!reg || typeof reg !== 'object' || !reg.itemsByName || typeof reg.supportFeature !== 'function') return null
+  let factory = windowFactoryCache.get(reg)
+  if (factory === undefined) {
+    const load = tryLoad('prismarine-windows')
+    try { factory = load ? load(reg) : null } catch (_) { factory = null }
+    windowFactoryCache.set(reg, factory)
+  }
+  return factory
+}
+
+function makeWindow(bot) {
+  const factory = windowFactory(bot)
+  if (factory) {
     let win = null
     try { win = factory ? factory.createWindow(0, 'minecraft:inventory', 'Inventory') : null } catch (_) { win = null }
     if (win) {
@@ -396,4 +403,4 @@ function installInventory(bot) {
   return bot
 }
 
-module.exports = { installInventory, applyInventory, applyInventoryUpdate, handleInventoryEvent, makeItem, MinimalWindow }
+module.exports = { installInventory, applyInventory, applyInventoryUpdate, handleInventoryEvent, makeItem, MinimalWindow, windowFactory }

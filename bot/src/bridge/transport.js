@@ -300,6 +300,27 @@ class FakeTransport extends EventEmitter {
         if (s.resumeStaleUntil && Date.now() < s.resumeStaleUntil) return { id: s.baritoneId, pathing: false, last: 'none' }
         if (s.baritonePhase === 0) { s.baritonePhase = 1; return { id: s.baritoneId, pathing: true, last: 'none' } }
         return s.baritoneStatus || { id: null, pathing: false, last: 'none' }
+      // idkcraft-neuc.11 windows: s.containers {"x,y,z": {type,size,title,
+      // slots:[{slot,name,count}]}}; the open menu is container slots then
+      // inventory 9-44 at size+0..35 (mineflayer numbering, like the mod).
+      case 'window.open': {
+        const key = this.key(params.x, params.y, params.z)
+        if (!(s.containers || {})[key]) throw new Error('bridge: window.open: no window opened')
+        s.windowSeq = (s.windowSeq | 0) + 1
+        s.window = { id: s.windowSeq, key }
+        s.cursor = null
+        return this._menu()
+      }
+      case 'window.click': {
+        (s.clickLog = s.clickLog || []).push({ ...params })
+        if (!s.window || s.window.id !== params.windowId) throw new Error(`bridge: stale window ${params.windowId}`)
+        this._click(params.slot, params.mouseButton, params.mode)
+        return this._menu()
+      }
+      case 'window.close':
+        (s.closeLog = s.closeLog || []).push(params.windowId)
+        if (s.window && s.window.id === params.windowId) s.window = null
+        return { ok: true }
       case 'respawn': // idkcraft-neuc.21: death-screen click; a live player no-ops
         s.respawnCalls = (s.respawnCalls | 0) + 1
         if (s.respawnIgnore > 0) { s.respawnIgnore--; return { ok: true } } // a click the client dropped
@@ -308,6 +329,76 @@ class FakeTransport extends EventEmitter {
       default:
         throw new Error(`bridge: unknown method ${method}`)
     }
+  }
+
+  // idkcraft-neuc.11: the open menu as the mod's wire shape.
+  _menu() {
+    const s = this.state
+    const c = s.containers[s.window.key]
+    const n = c.size
+    const slots = c.slots.map((i) => ({ ...i }))
+      .concat(s.inventory.filter((i) => i.slot >= 9 && i.slot <= 44).map((i) => ({ ...i, slot: i.slot - 9 + n })))
+    return { windowId: s.window.id, type: c.type, title: c.title || '', size: n + 36, slots, cursor: s.cursor ? { ...s.cursor } : null }
+  }
+
+  // Vanilla click subset the adapter sends: mode 0 left/right pickup/place/
+  // merge/swap, mode 1 shift-move to the other section, slot -999 drop.
+  // ponytail: every stack caps at 64 (fixtures are 64-stackers).
+  _click(slot, button, mode) {
+    const s = this.state
+    const c = s.containers[s.window.key]
+    const n = c.size
+    const arr = new Array(n + 36).fill(null)
+    for (const i of c.slots) arr[i.slot] = { name: i.name, count: i.count }
+    for (const i of s.inventory) if (i.slot >= 9 && i.slot <= 44) arr[i.slot - 9 + n] = { name: i.name, count: i.count }
+    let cur = s.cursor ? { ...s.cursor } : null
+    const it = slot >= 0 ? arr[slot] : null
+    // c.accept {slot: [names]}: a slot that refuses other items (furnace fuel).
+    const refuses = cur && c.accept && c.accept[slot] && !c.accept[slot].includes(cur.name)
+    if (refuses) {
+      // vanilla mayPlace false: the click changes nothing
+    } else if (slot === -999) {
+      if (cur) { cur.count = button === 0 ? 0 : cur.count - 1 }
+    } else if (mode === 0) {
+      if (!cur) {
+        if (it) {
+          const take = button === 0 ? it.count : Math.ceil(it.count / 2)
+          cur = { name: it.name, count: take }
+          it.count -= take
+        }
+      } else if (!it) {
+        const put = button === 0 ? cur.count : 1
+        arr[slot] = { name: cur.name, count: put }
+        cur.count -= put
+      } else if (it.name === cur.name) {
+        const mv = Math.min(64 - it.count, button === 0 ? cur.count : 1)
+        it.count += mv
+        cur.count -= mv
+      } else if (button === 0) {
+        arr[slot] = cur
+        cur = it
+      }
+    } else if (mode === 1 && it) {
+      const [a, b] = slot < n ? [n, n + 36] : [0, n]
+      for (let pass = 0; pass < 2 && it.count > 0; pass++) {
+        for (let d = a; d < b && it.count > 0; d++) {
+          const t = arr[d]
+          if (pass === 0 && t && t.name === it.name && t.count < 64) {
+            const mv = Math.min(64 - t.count, it.count)
+            t.count += mv
+            it.count -= mv
+          } else if (pass === 1 && !t) {
+            arr[d] = { name: it.name, count: it.count }
+            it.count = 0
+          }
+        }
+      }
+    }
+    s.cursor = cur && cur.count > 0 ? cur : null
+    c.slots = []
+    for (let i = 0; i < n; i++) if (arr[i] && arr[i].count > 0) c.slots.push({ slot: i, ...arr[i] })
+    s.inventory = s.inventory.filter((i) => i.slot < 9 || i.slot > 44)
+    for (let i = n; i < n + 36; i++) if (arr[i] && arr[i].count > 0) s.inventory.push({ slot: i - n + 9, ...arr[i] })
   }
 
   // Test helper: inject a mod->node event (chat, death, ...).
