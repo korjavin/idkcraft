@@ -37,9 +37,12 @@ describe('goal translation (pathfinder -> Baritone)', () => {
     assert.equal(goalToBaritone(new goals.GoalXZ(10, -20)), '#goto 10 -20')
     assert.equal(goalToBaritone(new goals.GoalNearXZ(10, -20, 3)), '#goto 10 -20')
   })
-  it('maps GoalFollow to a one-shot #goto at the live target', () => {
+  it('maps GoalFollow to #near around the floored live target cell (neuc.28)', () => {
     const target = { position: new Vec3(10.25, 64, -4.5) }
-    assert.equal(goalToBaritone(new goals.GoalFollow(target, 3)), '#goto 10.3 64.0 -4.5')
+    assert.equal(goalToBaritone(new goals.GoalFollow(target, 3)), '#near 10 64 -5 3')
+    // floored range never wider than v1's isEnd; range 0 = the target cell
+    assert.equal(goalToBaritone(new goals.GoalFollow(target, 1.5)), '#near 10 64 -5 1')
+    assert.equal(goalToBaritone(new goals.GoalFollow(target, 0)), '#near 10 64 -5 0')
   })
   it('returns null for goals with no Baritone mapping', () => {
     assert.equal(goalToBaritone(new goals.GoalInvert(new goals.GoalBlock(1, 2, 3))), null)
@@ -177,7 +180,7 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
 
       follow(bot, ctx, target) // fresh key: issues GoalFollow
       assert.ok(bot.pathfinder.goal, 'goal stored')
-      assert.equal(transport.state.baritone, '#goto 10.0 64.0 10.0')
+      assert.equal(transport.state.baritone, '#near 10 64 10 3')
       await bot.refresh() // round 1: fake walk lands, motion witnessed
       assert.deepEqual(
         [bot.entity.position.x, bot.entity.position.z],
@@ -195,7 +198,7 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
       target.position = new Vec3(30, 64, 30) // player walks away
       ctx.lastPathStatus = 'success' // terminal verdict, executor idle
       follow(bot, ctx, target)
-      assert.equal(transport.state.baritone, '#goto 30.0 64.0 30.0')
+      assert.equal(transport.state.baritone, '#near 30 64 30 3')
     } finally {
       await bot.stop()
     }
