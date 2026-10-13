@@ -175,6 +175,19 @@ describe('bridge chunk cache (neuc.6)', () => {
     assert.equal(bot.blockAt(new Vec3(48, 64, 0)).name, 'oak_log')
   })
 
+  it('a failed chunk.get retries once in the background and lands (revmux 03 minor)', async () => {
+    const origCall = transport.call.bind(transport)
+    let fails = 1
+    transport.call = async (method, params) => {
+      if (method === 'chunk.get' && params.cx === 4 && fails-- > 0) throw new Error('busy')
+      return origCall(method, params)
+    }
+    transport.state.blocks['64,64,0'] = 'oak_log' // column (4,0), near
+    transport.inject('chunk.loaded', { cx: 4, cz: 0 })
+    await sleep(300)
+    assert.equal(bot.blockAt(new Vec3(64, 64, 0)).name, 'oak_log')
+  })
+
   it('an empty chunks.list while in world retries on the next round', async () => {
     // Fresh bot whose first list sees nothing (mod set not caught up):
     // simulate by clearing the scripted world, then restoring it.

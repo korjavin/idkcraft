@@ -152,6 +152,7 @@ async function fetchColumn(bot, transport, cx, cz) {
   st.loading.add(key)
   st.inflight++
   const gen = st.gens.get(key) || 0
+  let retry = false
   try {
     const payload = await transport.call('chunk.get', { cx, cz })
     // An unload during the await wins: the reply is stale (or the empty
@@ -166,11 +167,12 @@ async function fetchColumn(bot, transport, cx, cz) {
     // next chunk.loaded for it.
     if (!bot._quitting && (st.gens.get(key) || 0) === gen && !st.retried.has(key)) {
       st.retried.add(key)
-      queueColumn(bot, transport, cx, cz)
+      retry = true // queued in finally: queueColumn skips keys still in st.loading
     }
   } finally {
     st.inflight--
     st.loading.delete(key)
+    if (retry && !bot._quitting) queueColumn(bot, transport, cx, cz)
     // A chunk.loaded that arrived mid-fetch asked for a refetch of the
     // (possibly reloaded) column; the reply above may predate it.
     if (st.reload.delete(key) && !bot._quitting) {
