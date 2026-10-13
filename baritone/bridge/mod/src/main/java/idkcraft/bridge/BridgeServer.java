@@ -184,6 +184,20 @@ public final class BridgeServer {
         rpc.register(method, handler);
     }
 
+    /**
+     * Run one interaction on the client thread for a surface class
+     * (idkcraft-neuc.9 Look; later surfaces reuse it). Returns the task's
+     * result (which may itself be null to signal "no player"); a null from
+     * the submit machinery (booting / timed out) fails CLIENT_BUSY.
+     */
+    <V> V onClient(java.util.concurrent.Callable<V> task) throws Rpc.RpcException {
+        V res = submit(task);
+        if (res == null && !ensureClient()) {
+            throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
+        }
+        return res;
+    }
+
     private final java.util.concurrent.CopyOnWriteArrayList<Runnable> tickHooks =
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
@@ -330,6 +344,7 @@ public final class BridgeServer {
         long id = cmdSeq.incrementAndGet();
         if (GoalTracker.rearmsTracker(probe.before(), probe.after(), probe.beforeProc(), probe.afterProc(), verb)) {
             currentId = id;
+            last = "none"; // a new goal has no verdict yet (neuc.9: stale last falsely completed it)
             terminalReceived = false;
             cmdTick = tickCount;
             deadlineTick = tickCount + GOAL_TIMEOUT_TICKS;
@@ -346,6 +361,19 @@ public final class BridgeServer {
     }
 
     private com.google.gson.JsonElement baritoneStatus(JsonObject params) {
+        // Fresh pathing read on the client thread (neuc.9 round-2/3): the
+        // snapshot cache still holds the paused tick's false in the gap
+        // right after a #resume, and the adapter's post-resume re-issue
+        // check would read a live goal as dropped. isPathing() alone is
+        // not enough either — pausedThisTick clears only on the next
+        // game tick — so the goal process's own active flag (pause-
+        // independent) counts as pathing too. Falls back to the cached
+        // value while the client is booting.
+        Boolean fresh = submit(() -> baritone.getPathingBehavior().isPathing()
+                || baritone.getCustomGoalProcess().isActive());
+        if (fresh != null) {
+            pathing = fresh;
+        }
         JsonObject res = new JsonObject();
         res.addProperty("id", currentId);
         res.addProperty("pathing", pathing);
