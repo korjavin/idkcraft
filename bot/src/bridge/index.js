@@ -13,6 +13,7 @@ const net = require('node:net')
 const { BridgeTransport } = require('./transport')
 const { refreshEntities, handleBridgeEvent } = require('./entities') // idkcraft-neuc.3: entities+roster fold
 const { installLook, handleLookEvent } = require('./look') // idkcraft-neuc.9: look/attack/interact/sleep
+const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.13: control states
 
 function keyOf(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
@@ -245,6 +246,7 @@ class BaritoneBot extends EventEmitter {
     }
     this.inventory = { items: () => this._inventory }
     installLook(this) // idkcraft-neuc.9: look/lookAt/attack/activate*/consume/sleep/wake/waitForTicks
+    installInput(this, transport) // neuc.13: setControlState/clearControlStates/controlState
   }
 
   // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
@@ -258,22 +260,34 @@ class BaritoneBot extends EventEmitter {
     this._quitting = true
     if (this._poll) clearInterval(this._poll)
     this._poll = null
+    // neuc.13: release held controls before the transport goes away, so
+    // the mod never keeps driving (or holding Baritone paused) for a body
+    // nobody owns. Best-effort with a bounded wait: a dead transport must
+    // not delay 'end' (runOnce resolves on it).
+    const cleared = (async () => {
+      try {
+        this.clearControlStates()
+        await Promise.race([this._flushInput(), sleep(500)])
+      } catch (_) { /* release best-effort */ }
+    })()
     const finish = () => {
       if (this.transport && typeof this.transport.close === 'function') {
         try { this.transport.close() } catch (_) { /* close best-effort */ }
       }
       this.emit('end', reason)
     }
+    const done = () => { cleared.then(finish, finish) }
     if (this._console && typeof this._console.send === 'function') {
-      this._console.send('disconnect').catch(() => {}).then(finish, finish)
+      this._console.send('disconnect').catch(() => {}).then(done, done)
     } else {
-      finish()
+      done()
     }
   }
 
   async start({ pollMs = 100, connect = true } = {}) {
     if (connect && this.transport && typeof this.transport.connect === 'function') await this.transport.connect()
     if (this.transport && typeof this.transport.on === 'function') this.transport.on('event', this._onTransportEvent)
+    await this._resetInput().catch(() => { /* best-effort; refresh still runs */ })
     await this.refresh()
     if (pollMs > 0) {
       this._poll = setInterval(() => {
@@ -350,6 +364,7 @@ class BaritoneBot extends EventEmitter {
     }
     if (st && typeof st.isRaining === 'boolean') this.isRaining = st.isRaining
     if (st && typeof st.isSleeping === 'boolean') this.isSleeping = st.isSleeping
+    if (st && st.input && st.input.states) this._syncInputFromState(st.input.states) // neuc.13: mod-reported held states
     if (st && typeof st.dimension === 'string' && st.dimension) this.game.dimension = stripMcPrefix(st.dimension)
     if (st && st.gameMode !== undefined && st.gameMode !== null) this.game.gameMode = gameModeName(st.gameMode)
     try {
@@ -550,6 +565,7 @@ class BaritoneBot extends EventEmitter {
   // _boundSeq, overlapping follow re-issues order by seq). Failures log,
   // never emit 'error' (runOnce fatal()s every 'error'; see chat()).
   _sendGoalCmd(command) {
+    this._goalCmd = command // neuc.13: last goal cmd (diagnostics; pause/resume keeps the id, no re-issue)
     const seq = (this._cmdSeq = (this._cmdSeq | 0) + 1)
     this.transport.call('baritone.cmd', { command }).then(
       (r) => {
@@ -859,4 +875,4 @@ async function handshake(bot, { host, port, consoleSend, posTimeoutMs }) {
   bot.emit('spawn')
 }
 
-module.exports = { BaritoneBot, goalToBaritone, movementsToSettings, MinimalVec, createBot }
+module.exports = { BaritoneBot, goalToBaritone, movementsToSettings, MinimalVec, createBot, setBaritonePaused }

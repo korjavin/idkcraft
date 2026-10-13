@@ -16,6 +16,8 @@
 // This file requires nothing outside bot/src/bridge/ (epic section 2).
 'use strict'
 
+const { setBaritonePaused } = require('./input') // neuc.13's shared pause helper
+
 const DEG = Math.PI / 180
 const EYE_HEIGHT = 1.62 // mineflayer player eye height; adapter entity has no eyeHeight field yet
 // mineflayer inventory.js ALWAYS_CONSUMABLES: edible even at full food.
@@ -62,7 +64,7 @@ async function withBaritonePaused(bot, fn) {
   if (!moving || !bot.transport) return fn()
   bot._pausedDepth = (bot._pausedDepth || 0) + 1
   if (bot._pausedDepth === 1) {
-    await bot.transport.call('baritone.cmd', { command: '#pause' }).catch((e) => failLog('#pause', e))
+    if (!await setBaritonePaused(bot, true)) failLog('#pause', new Error('not accepted'))
   }
   try {
     return await fn()
@@ -72,9 +74,9 @@ async function withBaritonePaused(bot, fn) {
       bot._pausedDepth = 0
       // A lost #resume leaves Baritone paused with its watchdog frozen:
       // retry once before giving up to the log.
-      await bot.transport.call('baritone.cmd', { command: '#resume' })
-        .catch(() => bot.transport.call('baritone.cmd', { command: '#resume' }))
-        .catch((e) => failLog('#resume', e))
+      if (!await setBaritonePaused(bot, false) && !await setBaritonePaused(bot, false)) {
+        failLog('#resume', new Error('not accepted'))
+      }
       // One tick before trusting status: Baritone's pausedThisTick (and
       // the mod's snapshot) clear only on the next game tick, so an
       // immediate read can still show a resumed goal as idle.

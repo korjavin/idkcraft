@@ -10,7 +10,7 @@ const exploreMod = require('./explore')
 const stuck = require('../stuck')
 const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
-const { say, clearGoal, issueGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason, atPos } = require('./util')
+const { say, clearGoal, issueGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason, atPos, isWetDigName } = require('./util')
 const itemMod = require('./bringitem')
 const {
   WANT_ORE, WANT_MAX, countDrop, refuse, done, releaseSmelt, stopGuidedWork, dropFor, requiredTier,
@@ -288,8 +288,13 @@ function buriedCand(bp, res, bot = null) {
   const distH = Math.hypot(p.x - bp.x, p.z - bp.z)
   const depthBelow = Math.max(0, Math.floor(bp.y) - Math.floor(p.y))
   if (depthBelow > SOURCE_COST.maxDigDepth && distH >= SOURCE_COST.maxDigDistH) return null // gated shaft: no-dig (chv)
+  // The column only matters for a real shaft (jlda.12): a same-level dig
+  // (depthBelow < 2) never breaches the cells above the ore, so water up
+  // there is not a flood risk — reading it wet routes a 2-block dig
+  // through the far shells into the absolute wet-vs-dry rule, which walks
+  // 150+ blocks to a dry rival over the vein-mate below the stance.
   let wet = false
-  if (bot) {
+  if (bot && depthBelow >= 2) {
     for (let i = 0; i < WET_COLUMN_CELLS && !wet; i++) wet = submergedAt(bot, p.x, p.y + i, p.z)
   }
   return { kind: 'buried', name: res.name, pos: p, distH, dist: res.distance, depthBelow, wet, cost: walkCost(distH) + digCost(depthBelow) + (wet ? SOURCE_COST.wetPenaltySec : 0), ageMs: null }
@@ -1176,6 +1181,38 @@ function unreachLine(o) {
   return `could not reach ${o.block}` + (o.exposed === false ? ` (buried, no path in)${at}` : '')
 }
 
+// Flood risk (idkcraft-jlda.12): true when digging the target would pour
+// water onto the bot's stance — a wet face on a side or above the target
+// at or above the feet level. The dug cell floods and the stance floods
+// with it (same level, and the walk got here, so it is connected), and a
+// floating head can neither swim out (Paper 26.1.2 rejects the wall-rise)
+// nor descend to the ore (the swim prune) — the MINE-10 vein pocket traps
+// the order into a 7/10 walk stall either way. Below-stance water stays
+// below: digging it only wets the hole, never the feet. The below face
+// is not read: water cannot flow up into the dug cell. On the atl.20
+// drop (drop=true) the hole becomes the stance, so the faces measure
+// against feet-1 instead of the pre-dig feet.
+function floodRisk(bot, block, bp, drop = false) {
+  try {
+    if (!block || !block.position || !bp || typeof bp.y !== 'number') return false
+    const feet = Math.floor(bp.y) - (drop ? 1 : 0)
+    const p = block.position
+    const faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]]
+    for (const [dx, dy, dz] of faces) {
+      const c = { x: Math.floor(p.x) + dx, y: Math.floor(p.y) + dy, z: Math.floor(p.z) + dz }
+      if (c.y < feet) continue
+      let n = null
+      try {
+        // Vec3, not the plain cell: prod blockAt calls pos.floored().
+        const b = bot.blockAt && bot.blockAt(new Vec3(c.x, c.y, c.z))
+        n = (b && b.name) || null
+      } catch (_) { n = null }
+      if (isWetDigName(n)) return true
+    }
+  } catch (_) { return false }
+  return false
+}
+
 // The bore target: a face neighbour of the ore on the head's side, so the
 // worker's approach never crosses the ore cell (it would break the ore
 // and hold the drop — the case the epic forbids). Faces run
@@ -1751,6 +1788,7 @@ async function bring(bot, ctx, target, state) {
       // protected path skips the block instead of striking or digging.
       bDeny = 'protected'
     }
+    let atl20Drop = false
     if (bDeny === 'below-feet' && solidBelow(bot, o.pos)) {
       // atl.20: the shaft-bottom loop (atl.18 5/9: selftrap → sidestep →
       // re-find the same block → walk back on top → refuse) died on this
@@ -1762,6 +1800,7 @@ async function bring(bot, ctx, target, state) {
       // behaviour (equip's no-deepen rule, forage/flat skips). The block
       // itself is type-clean here (protected was unmasked above).
       try { console.log(`below-feet ${o.block} at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)} onto solid — digging (atl.20)`) } catch (_) { /* logging never breaks a dig */ }
+      atl20Drop = true // the drop lands in the hole: it becomes the stance
     } else if (bDeny) {
       logDeny(block, bDeny)
       if (bDeny === 'protected' || bDeny === 'submerged') {
@@ -1794,6 +1833,18 @@ async function bring(bot, ctx, target, state) {
       if (bDeny === 'below-feet') {
         try { stuck.request(bot, ctx, 'bring', o.pos, `bring:${o.pos.x},${o.pos.y},${o.pos.z}`) } catch (_) { /* stuck best-effort */ }
       }
+      o.pos = null
+      o.phase = 'find'
+      return
+    }
+    if (floodRisk(bot, block, bp, atl20Drop)) {
+      // The dig would flood the stance (jlda.12): skip it like a dive —
+      // a dry farther vein wins without trapping the head in the pocket.
+      // Refusal happens when find comes up empty (the have>0 path delivers).
+      try { console.log(`selftrap: refused dig ${block.name} at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)} (flood-risk)`) } catch (_) { /* logging never breaks a dig */ }
+      o.sawSubmerged = true
+      if (!o.skip) o.skip = new Set()
+      o.skip.add(skipKey(o.pos))
       o.pos = null
       o.phase = 'find'
       return

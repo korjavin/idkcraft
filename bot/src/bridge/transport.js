@@ -93,6 +93,9 @@ class FakeTransport extends EventEmitter {
       entities: [], // idkcraft-neuc.3 wire fixtures: [{id,uuid,type,name?,displayName,kind,pos,vel,yaw,pitch,health?,onGround,pose,self?}]
       roster: [], // idkcraft-neuc.3 wire fixtures: [{name,uuid,ping,gameMode}]
       chatLog: [],
+      input: { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }, // neuc.13 held states
+      inputLog: [], // neuc.13: every input.set diff / input.clear, in order
+      inputPaused: false, // neuc.13: Baritone paused while any key held (goal id preserved)
       baritone: null, // last command string
       ...state,
     }
@@ -124,8 +127,24 @@ class FakeTransport extends EventEmitter {
           isSleeping: s.isSleeping,
           dimension: s.dimension,
           gameMode: s.gameMode,
+          input: { states: { ...(s.input || {}) } },
           baritone: s.baritoneStatus || { pathing: false },
         }
+      case 'input.set': { // neuc.13: absent = unchanged; any held pauses Baritone (id kept)
+        const diff = {}
+        for (const k of Object.keys(params || {})) {
+          if (typeof params[k] === 'boolean' && k in s.input) { s.input[k] = params[k]; diff[k] = params[k] }
+        }
+        s.inputLog.push({ set: diff })
+        s.inputPaused = Object.values(s.input).some(Boolean)
+        return { states: { ...s.input } }
+      }
+      case 'input.clear': { // neuc.13: all off; resume (goal id kept)
+        for (const k of Object.keys(s.input)) s.input[k] = false
+        s.inputLog.push({ clear: true })
+        s.inputPaused = false
+        return { states: { ...s.input } }
+      }
       case 'block.get': {
         const name = s.blocks[this.key(params.x, params.y, params.z)] || 'air'
         return { name, x: Math.floor(params.x), y: Math.floor(params.y), z: Math.floor(params.z) }
