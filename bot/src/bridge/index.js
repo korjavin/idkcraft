@@ -12,6 +12,7 @@ const { EventEmitter } = require('node:events')
 const net = require('node:net')
 const { BridgeTransport } = require('./transport')
 const { refreshEntities, handleBridgeEvent } = require('./entities') // idkcraft-neuc.3: entities+roster fold
+const { installLook, handleLookEvent } = require('./look') // idkcraft-neuc.9: look/attack/interact/sleep
 const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.13: control states
 
 function keyOf(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
@@ -244,6 +245,7 @@ class BaritoneBot extends EventEmitter {
       getPathTo: (_movements, _goal, _timeout) => ({ status: 'noPath', path: [] }),
     }
     this.inventory = { items: () => this._inventory }
+    installLook(this) // idkcraft-neuc.9: look/lookAt/attack/activate*/consume/sleep/wake/waitForTicks
     installInput(this, transport) // neuc.13: setControlState/clearControlStates/controlState
   }
 
@@ -387,7 +389,9 @@ class BaritoneBot extends EventEmitter {
       if (bs && typeof bs === 'object' && bs.id != null && bs.id === this._goalId) {
         if (bs.pathing) {
           this._pathing = true
-        } else if (bs.last !== 'none' && bs.last != null) {
+        } else if (bs.last !== 'none' && bs.last != null && !(this._pausedDepth > 0)) {
+          // While a bridge pause is outstanding (neuc.9 withBaritonePaused)
+          // pathing reads false; a verdict waits for the post-resume poll.
           this._completeTerminal(bs.last)
         }
       }
@@ -696,6 +700,7 @@ class BaritoneBot extends EventEmitter {
 
   _handleEvent(method, params) {
     if (handleBridgeEvent(this, method, params)) return // idkcraft-neuc.3: player.joined/left, entity.gone
+    if (handleLookEvent(this, method, params)) return // idkcraft-neuc.9: sleep/wake
     const p = params || {}
     switch (method) {
       case 'chat':

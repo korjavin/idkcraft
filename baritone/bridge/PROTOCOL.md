@@ -349,3 +349,62 @@ serves last-good. BridgeServer seam: `onClientTick(Runnable)` plus
 Maps/Lists and convert at the boundary). Node-side wiring is landed
 (poll + router in `bot/src/bridge/index.js`); the mod half
 (`Entities.install`) went live with .1's `BridgeServer`.
+
+## look / attack / interact / sleep (idkcraft-neuc.9)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Look.java`
+(`Look.install(server)`, wired from `BridgeMod.onInitializeClient`; one
+client-thread task per call via the `BridgeServer.onClient` seam).
+Node: `bot/src/bridge/look.js` (`installLook` from the adapter
+constructor, `handleLookEvent` in the adapter's event router).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `look.set` | `{yaw,pitch,force}` (mineflayer radians) | `{ok}` | `bot.look(yaw,pitch,force)` |
+| `look.at` | `{x,y,z}` | `{ok,yaw,pitch}` (aimed, mineflayer radians) | `bot.lookAt(point,force)` |
+| `attack` | `{entityId}` | `{ok}` | `bot.attack(entity)` |
+| `interact.block` | `{x,y,z,face,cursor{x,y,z},sneak}` | `{ok,result}` | `bot.activateBlock(block,direction,cursorPos)` |
+| `interact.item` | `{hand:'main'\|'off',holdMs?}` | `{ok}` | `bot.activateItem(offHand)` |
+| `interact.stop` | — | `{ok}` | `bot.deactivateItem()` |
+| `sleep` | `{x,y,z}` (bed block) | `{ok}` | `bot.sleep(bedBlock)` |
+| `wake` | — | `{ok}` | `bot.wake()` |
+
+Events: `sleep {}` / `wake {}` on the player's sleeping-state edge
+(per-tick hook in `Look`); the adapter flips `bot.isSleeping` and
+re-emits mineflayer's `sleep`/`wake`.
+
+Yaw/pitch stay mineflayer radians on the wire; the mod converts to
+notch degrees (`notchYaw = deg(pi - yaw)`, `notchPitch = deg(-pitch)`,
+the inverse of `state.get`'s conversion) and sets body + head rotation.
+`look.at` aims from the real eye position on the client; the adapter
+computes the same yaw/pitch locally for `bot.entity`.
+
+Baritone pause/resume lives in the NODE adapter, not the mod:
+`withBaritonePaused` (look.js, the one exported helper — neuc.7's
+dig/place reuse it) sends `#pause` before and `#resume` after an
+interaction only when `pathfinder.isMoving()`. `#pause`/`#resume` are
+control commands: the tracked goal stays armed and its 120 s watchdog
+freezes while paused. After resume the adapter re-checks
+`baritone.status` for the latched goal id; a goal Baritone dropped
+without a terminal verdict (not pathing, `last:'none'`) is re-issued
+from the latched `pathfinder.goal`. Reflex-tick cheapness: `bot.look`
+never crosses the wire for a sub-degree change (force always sends).
+
+`consume()` = `interact.item` held until the held count drops or 2 s
+pass, then `interact.stop`; no drop in the window rejects
+(`consume: held item was not consumed`), and it rejects with
+mineflayer's messages where mineflayer has one (`Food is full`, plus
+`not holding any item`). The mod holds the client's use key for
+continuous uses (eat/drink/bow — a use animation) until
+`interact.stop`/the `holdMs` deadline, since vanilla releases a
+one-shot use on the next tick; instant uses (buckets) never hold.
+`interact.item` with `holdMs` also auto-stops on the client when the
+deadline passes. `sleep` waits up to 3 s for the sleeping state and
+rejects `bot is not sleeping` (mineflayer's timeout message); `wake`
+rejects `already awake` and `sleep` rejects `already sleeping` /
+`wrong block : not a bed block`, all mineflayer's strings.
+
+Doors while pathing: Baritone opens doors itself, so the adapter's
+`activateBlock` is a no-op for `*_door` blocks while
+`pathfinder.isMoving()` (a reflex toggle would double-toggle the panel
+shut). Adapter-side only; `doors.js` is untouched.
