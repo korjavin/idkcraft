@@ -219,6 +219,12 @@ class FakeTransport extends EventEmitter {
         (s.wakeCalls = (s.wakeCalls || 0) + 1)
         s.isSleeping = false
         return { ok: true }
+      case 'respawn.now': // neuc.10: manual respawn request (mod auto-respawns too)
+        s.respawnCalls = (s.respawnCalls || 0) + 1
+        return { ok: true }
+      case 'respawn.set': // neuc.10: auto-respawn toggle
+        s.respawnAuto = params.auto !== false
+        return { ok: true, auto: s.respawnAuto }
       case 'chat.send':
         s.chatLog.push(params.message)
         return { sent: true }

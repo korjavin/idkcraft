@@ -14,6 +14,7 @@ const { BridgeTransport } = require('./transport')
 const { refreshEntities, handleBridgeEvent } = require('./entities') // idkcraft-neuc.3: entities+roster fold
 const { installLook, handleLookEvent } = require('./look') // idkcraft-neuc.9: look/attack/interact/sleep
 const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.13: control states
+const { installLifecycle, handleLifecycleEvent } = require('./lifecycle') // idkcraft-neuc.10: lifecycle/event parity
 
 function keyOf(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
@@ -247,6 +248,7 @@ class BaritoneBot extends EventEmitter {
     this.inventory = { items: () => this._inventory }
     installLook(this) // idkcraft-neuc.9: look/lookAt/attack/activate*/consume/sleep/wake/waitForTicks
     installInput(this, transport) // neuc.13: setControlState/clearControlStates/controlState
+    installLifecycle(this) // neuc.10: isAlive/foodSaturation/respawn()/setAutoRespawn()
   }
 
   // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
@@ -323,6 +325,8 @@ class BaritoneBot extends EventEmitter {
   }
 
   async _refreshOnce() {
+    const prevPos = this._hasPos && this.entity && this.entity.position
+      ? { x: this.entity.position.x, y: this.entity.position.y, z: this.entity.position.z } : null
     const st = await this.transport.call('state.get', {})
     if (st && st.pos) {
       this._hasPos = true
@@ -341,6 +345,7 @@ class BaritoneBot extends EventEmitter {
     }
     if (st && typeof st.health === 'number') this.health = st.health
     if (st && typeof st.food === 'number') this.food = st.food
+    if (st && typeof st.saturation === 'number') this.foodSaturation = st.saturation
     if (st && typeof st.oxygen === 'number') this.oxygenLevel = st.oxygen
     if (st && st.time && typeof st.time === 'object') {
       const t = st.time
@@ -397,6 +402,19 @@ class BaritoneBot extends EventEmitter {
       }
     } catch (_) { /* status best-effort per round */ }
     this._maybeReissueFollow()
+    // neuc.10: poll-cadence event synthesis. physicsTick every in-world
+    // round (doors.doorShutFast throttles to 250 ms itself); move (with
+    // the previous position, mineflayer's shape) when the position
+    // changed; forcedMove on a teleport-sized jump (> 8 blocks).
+    if (st && st.pos && this._hasPos) {
+      this._lifecycleEnded = false // in world again: a future end may fire
+      const p = this.entity.position
+      if (prevPos && (p.x !== prevPos.x || p.y !== prevPos.y || p.z !== prevPos.z)) {
+        this.emit('move', new this.Vec3(prevPos.x, prevPos.y, prevPos.z))
+        if (Math.hypot(p.x - prevPos.x, p.y - prevPos.y, p.z - prevPos.z) > 8) this.emit('forcedMove')
+      }
+      this.emit('physicsTick')
+    }
   }
 
   // Fill the block cache around coords the logic is about to read. Spike:
@@ -701,6 +719,7 @@ class BaritoneBot extends EventEmitter {
   _handleEvent(method, params) {
     if (handleBridgeEvent(this, method, params)) return // idkcraft-neuc.3: player.joined/left, entity.gone
     if (handleLookEvent(this, method, params)) return // idkcraft-neuc.9: sleep/wake
+    if (handleLifecycleEvent(this, method, params)) return // idkcraft-neuc.10: death/respawn/health/…/kicked/end
     const p = params || {}
     switch (method) {
       case 'chat':
@@ -708,12 +727,6 @@ class BaritoneBot extends EventEmitter {
         // ChatMessage. index.js:1485 reads (msg, position, senderUuid).
         this.emit('chat', p.username || '', p.message || '')
         this.emit('message', { text: p.message || '', toString: () => String(p.message || '') }, p.position || 'chat', p.uuid || null)
-        break
-      case 'death':
-        this.emit('death')
-        break
-      case 'respawn':
-        this.emit('respawn')
         break
       case 'block.update':
         if (typeof p.x === 'number') this._cacheBlock(p)

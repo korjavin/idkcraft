@@ -215,6 +215,15 @@ public final class BridgeServer {
         ws.onLastClose(hook);
     }
 
+    private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Packet<?>>>
+            packetHooks = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** neuc.10: observe every inbound packet (POST, netty thread — extract
+     * primitives only, never touch the world). */
+    public void onPacket(java.util.function.Consumer<Packet<?>> hook) {
+        packetHooks.add(hook);
+    }
+
     /**
      * neuc.13: run a Baritone control command on the client thread (used by
      * Input for pause/resume). Mirrors baritone.cmd's pausedLocal bookkeeping
@@ -445,6 +454,13 @@ public final class BridgeServer {
                 return;
             }
             captureChat(event.getPacket());
+            for (java.util.function.Consumer<Packet<?>> hook : packetHooks) {
+                try {
+                    hook.accept(event.getPacket());
+                } catch (Exception ignored) {
+                    // A surface's packet tap must never break packet handling.
+                }
+            }
         }
 
         @Override
@@ -527,6 +543,7 @@ public final class BridgeServer {
         snap.add("pos", pos);
         snap.addProperty("health", pl.getHealth());
         snap.addProperty("food", pl.getFoodData().getFoodLevel());
+        snap.addProperty("saturation", pl.getFoodData().getSaturationLevel());
         snap.addProperty("oxygen", (int) Math.round(pl.getAirSupply() / 15.0));
         snap.add("time", time);
         BlockPos sp = level.getLevelData().getRespawnData().pos();
@@ -560,6 +577,7 @@ public final class BridgeServer {
         snap.add("pos", JsonNull.INSTANCE);
         snap.add("health", JsonNull.INSTANCE);
         snap.add("food", JsonNull.INSTANCE);
+        snap.add("saturation", JsonNull.INSTANCE);
         snap.add("oxygen", JsonNull.INSTANCE);
         snap.add("input", Input.snapshotJson());
         snap.add("time", JsonNull.INSTANCE);
