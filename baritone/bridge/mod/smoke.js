@@ -221,6 +221,25 @@ async function main() {
   }
   pass('chunks.probe', `setblock round-trip: ${probes.map((p) => p[3]).join('/')}`)
 
+  // 5d. the bead's adapter probe: the REAL adapter (its own ws) fills its
+  // chunk cache; bot.blockAt(feet-1) at 5 random points around the body
+  // must name what the server holds (rcon `execute if block`).
+  const { BaritoneBot } = require('../../../bot/src/bridge/index.js')
+  const { Vec3 } = require('../../../bot/node_modules/vec3')
+  const ab = new BaritoneBot(new BridgeTransport(`ws://${MOD_HOST}:${MOD_PORT}/rpc`, { timeoutMs: 8000 }), { Vec3, registry: mcData, username: BOT })
+  await ab.start({ pollMs: 0 })
+  for (let i = 0; i < 5; i++) {
+    const [px, py, pz] = [fx + Math.floor(Math.random() * 25) - 12, fy, fz + Math.floor(Math.random() * 25) - 12]
+    let b = null
+    for (let k = 0; k < 20 && !b; k++) { b = ab.blockAt(new Vec3(px, py, pz)); if (!b) await sleep(250) }
+    if (!b) fail('adapter.blockAt', `null at ${px} ${py} ${pz} (column never filled)`)
+    const out = sh('docker', ['exec', RIG, 'rcon-cli', `execute if block ${px} ${py} ${pz} minecraft:${b.name}`])
+    if (out === null || !/passed/i.test(out)) fail('adapter.blockAt', `at ${px} ${py} ${pz}: adapter ${b.name}, rcon ${JSON.stringify(out)}`)
+    console.log(`  probe ${px} ${py} ${pz}: blockAt=${b.name} rcon=${out.trim()}`)
+  }
+  ab.quit()
+  pass('adapter.blockAt', '5/5 random feet-1 points match rcon')
+
   // 6. baritone.cmd — walk EP1, the id must echo through status + event.
   // Prep mirrors the kqzf spike (rig-goto.js): teleport to the spot spawn,
   // clear, kit up — Baritone needs the pickaxe where the spot says so.
