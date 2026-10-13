@@ -277,6 +277,11 @@ class FakeTransport extends EventEmitter {
         if (s.resumeStaleUntil && Date.now() < s.resumeStaleUntil) return { id: s.baritoneId, pathing: false, last: 'none' }
         if (s.baritonePhase === 0) { s.baritonePhase = 1; return { id: s.baritoneId, pathing: true, last: 'none' } }
         return s.baritoneStatus || { id: null, pathing: false, last: 'none' }
+      case 'respawn': // idkcraft-neuc.21: death-screen click; a live player no-ops
+        s.respawnCalls = (s.respawnCalls | 0) + 1
+        if (s.respawnIgnore > 0) { s.respawnIgnore--; return { ok: true } } // a click the client dropped
+        if (typeof s.health === 'number' && s.health <= 0) s.health = 20
+        return { ok: true }
       default:
         throw new Error(`bridge: unknown method ${method}`)
     }
