@@ -202,6 +202,45 @@ describe('stuck-baseline.json covers the corpus (idkcraft-6x7.4)', () => {
     }
   })
 
+  // idkcraft-neuc.15 subset rule: the v2 baseline may cover a SUBSET of the
+  // corpus while v2 is incomplete — a new corpus spot needs only its v1
+  // entry for npm test (a v2 run then reports NO BASELINE ENTRY until the
+  // v2 entry is measured). What must hold: no v2 entry dangles off-corpus,
+  // every entry is well-formed, and a spot v1 reaches but v2 does not names
+  // the bead that owns the gap (blockedBy).
+  it('stuck-baseline-v2.json: a well-formed subset of the corpus, gaps name their bead (idkcraft-neuc.15)', () => {
+    const v2 = JSON.parse(fs.readFileSync(path.join(TOOLS, 'stuck-baseline-v2.json'), 'utf8'))
+    assert.equal(v2.brain, 'stub')
+    assert.equal(v2.body, 'baritone')
+    const names = new Set(spots.map((s) => s.name))
+    for (const [k, e] of Object.entries(v2.spots)) {
+      assert.ok(names.has(k), `v2 baseline entry ${k} has no corpus spot`)
+      assert.equal(typeof e.reached, 'boolean', `${k}: reached must be boolean`)
+      for (const f of ['maxStuck', 'maxEps', 'maxCalls']) assert.ok(Number.isInteger(e[f]) && e[f] >= 0, `${k}: bad ${f}`)
+      if (!e.reached && baseline.spots[k] && baseline.spots[k].reached) {
+        assert.match(e.blockedBy || '', /^idkcraft-[a-z0-9.]+$/, `${k}: v2 gap without a blockedBy bead`)
+        assert.ok(typeof e.why === 'string' && e.why.length > 0, `${k}: v2 gap without a why`)
+      }
+    }
+  })
+
+  it('loadBaseline: BOT_BODY=baritone picks the v2 file, REPLAY_BASELINE still wins (idkcraft-neuc.15)', () => {
+    const { loadBaseline } = require('../tools/stuck-replay')
+    const saved = { body: process.env.BOT_BODY, file: process.env.REPLAY_BASELINE }
+    try {
+      delete process.env.REPLAY_BASELINE
+      delete process.env.BOT_BODY
+      assert.equal(path.basename(loadBaseline().file), 'stuck-baseline.json')
+      process.env.BOT_BODY = 'baritone'
+      assert.equal(path.basename(loadBaseline().file), 'stuck-baseline-v2.json')
+      process.env.REPLAY_BASELINE = '/nowhere/x.json'
+      assert.equal(loadBaseline().file, '/nowhere/x.json')
+    } finally {
+      if (saved.body === undefined) delete process.env.BOT_BODY; else process.env.BOT_BODY = saved.body
+      if (saved.file === undefined) delete process.env.REPLAY_BASELINE; else process.env.REPLAY_BASELINE = saved.file
+    }
+  })
+
   it('work-bug terrain spots carry their bead', () => {
     const byName = Object.fromEntries(spots.map((s) => [s.name, s]))
     for (const [spot, bead] of [['ATL-SHAFT', 'idkcraft-atl.17'], ['JR-SLOPE', 'idkcraft-jr2.4'], ['Q0H-PIT', 'idkcraft-q0h']]) {

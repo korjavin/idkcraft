@@ -11,8 +11,11 @@
 #   REPLAY_BODY=baritone (run the FOLLOWER on the v2 Baritone body:
 #   idkcraft-neuc.5 boots the offline client under the follower name and
 #   exports BOT_BODY/BRIDGE_* for the replay; MOD_PORT/BODY_CONSOLE_PORT
-#   pick the host publishes, defaults 7778/7779; BODY_CLIENT the client
-#   container name, default idk-baritone-body, for a second agent on one box).
+#   pick the host publishes, defaults 7778/7779 on the default rig and
+#   + 2 x letter index on RIG_ID=<a-z> (a=7780/7781); BODY_CLIENT the client
+#   container name, default idk-baritone-body[-<RIG_ID>] — per slot, so
+#   parallel v2 runs never collide, idkcraft-neuc.23. Judged against
+#   stuck-baseline-v2.json, idkcraft-neuc.15).
 # Exit codes: 0 = baseline holds (incl. FLAKY: regressed spots held on the
 # one automatic rerun, see the flake protocol at the end), 1 = REGRESSION vs
 # the baseline (repeated on the rerun), 2 = environment failure (no START.sh/snapshot, rig never came up,
@@ -152,7 +155,7 @@ teardown() {
   fi
   # v2 body client (idkcraft-neuc.5): same ownership rule, its own name.
   if [ "${BODY_STARTED:-}" = 1 ]; then
-    BARITONE_CLIENT="${BODY_CLIENT:-idk-baritone-body}" sh "$TREE/baritone/client.sh" stop >/dev/null 2>&1 || true
+    BARITONE_CLIENT="$BODY_CLIENT" sh "$TREE/baritone/client.sh" stop >/dev/null 2>&1 || true
   fi
   docker stop -t 5 "$CONTAINER" >/dev/null 2>&1 || true
   if [ -n "$SRVPID" ]; then kill "$SRVPID" >/dev/null 2>&1 || true; wait "$SRVPID" 2>/dev/null || true; fi
@@ -260,14 +263,22 @@ fi
 # (MOD_PORT), export the adapter addresses for the replay. Name and console
 # port are distinct from the worker's, so REPLAY_WORKER=1 +
 # REPLAY_BODY=baritone share one box (revmux 01 core-4: the same host port
-# would collide). The 7779 default is the spike's body-client port
-# (baritone/bridge/rig.sh). Wave-1 mode is record-only
-# (REPLAY_BASELINE_OFF=1); the flake rerun below does not relaunch the body
-# client (idkcraft-neuc.15 wires the v2 rerun).
+# would collide). The 7779 default is the spike's body-client port.
+# Per slot (idkcraft-neuc.23): RIG_ID=<a-z> shifts the container name and
+# both ports, so v2 runs on parallel rigs never collide. body_start runs
+# after every boot — the flake rerun relaunches the body too
+# (idkcraft-neuc.15; teardown stopped it with the rig).
 if [ "${REPLAY_BODY:-}" = baritone ]; then
+  _bn=0; [ -n "$RIG_ID" ] && _bn=$(( $(printf '%d' "'$RIG_ID") - 96 ))
+  BODY_CLIENT="${BODY_CLIENT:-idk-baritone-body${RIG_ID:+-$RIG_ID}}"
+  MOD_PORT="${MOD_PORT:-$((7778 + 2 * _bn))}"
+  BODY_CONSOLE_PORT="${BODY_CONSOLE_PORT:-$((7779 + 2 * _bn))}"
+fi
+body_start() {
+  [ "${REPLAY_BODY:-}" = baritone ] || return 0
   rcon_assert "op StuckReplay$REPLAY_TAG"
-  BARITONE_OFFLINE=1 BARITONE_API=1 RIG_CONTAINER="$CONTAINER" BARITONE_CLIENT="${BODY_CLIENT:-idk-baritone-body}" \
-    BRIDGE_PORT="${BODY_CONSOLE_PORT:-7779}" MOD_PORT="${MOD_PORT:-7778}" \
+  BARITONE_OFFLINE=1 BARITONE_API=1 RIG_CONTAINER="$CONTAINER" BARITONE_CLIENT="$BODY_CLIENT" \
+    BRIDGE_PORT="$BODY_CONSOLE_PORT" MOD_PORT="$MOD_PORT" \
     CLIENT_LOG="/tmp/stuck-body-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
     sh "$TREE/baritone/client.sh" start "${REPLAY_PORT:-25571}" "StuckReplay$REPLAY_TAG" || exit 2
   BODY_STARTED=1 # the client is ours to stop from here on (teardown)
@@ -276,8 +287,9 @@ if [ "${REPLAY_BODY:-}" = baritone ]; then
   # worker block (the replay holds guide->follower itself).
   sleep 6
   # localhost, not the literal loopback IP (privacy pre-check).
-  export BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT="${MOD_PORT:-7778}" BRIDGE_CONSOLE_PORT="${BODY_CONSOLE_PORT:-7779}"
-fi
+  export BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT="$MOD_PORT" BRIDGE_CONSOLE_PORT="$BODY_CONSOLE_PORT"
+}
+body_start
 export REPLAY_VARIANT="$VARIANT" REPLAY_WORLDSHA="$SHA_BEFORE" REPLAY_GITSHA="$GITSHA"
 if [ -n "$SPOTS" ]; then
   case "$SPOTS" in
@@ -307,8 +319,10 @@ console.log([...bad].join(" "))
 [ -n "$BAD" ] || { echo "verdict: REGRESSION (no rerun: a spot has no baseline entry)"; exit 1; }
 echo "RERUN (flake check): $BAD — once, on a freshly reset world"
 teardown
+BODY_STARTED=
 for _ in $(seq 1 30); do docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER" || break; sleep 1; done
 boot
+body_start
 set +e; REPLAY_SPOTS="$RERUN" REPLAY_OUT="/tmp/stuck-rerun-$VARIANT${RIG_ID:+-$RIG_ID}.json" node tools/stuck-replay.js; rc=$?; set -e
 case "$rc" in
   0) for s in $BAD; do echo "FLAKY $s: regressed on the first run (BASELINE line above), baseline held on the rerun"; done

@@ -4,15 +4,21 @@
 # rig up for manual/acceptance runs until neuc.5 brings the real harness).
 # Slot z like baritone/run.sh (container idk-replay-z, port 25597, lock
 # /tmp/idkcraft-rig.lock-z) but a distinct client name + bridge port so a
-# concurrent run.sh never collides. Offline launch (no account):
-#   BARITONE_IMAGE=idkcraft-baritone:spike sh baritone/bridge/rig.sh
+# concurrent run.sh never collides. Offline launch (no account), the v2 body
+# image (client.sh default idkcraft-baritone:local, built from this tree):
+#   sh baritone/bridge/rig.sh
 # Env: BOT (default IdkBody), RIG_LOCK_WAIT (secs to wait on a busy slot-z
 # lock instead of exiting 2), RIG_BIND (bind the bridge there instead of
-# all interfaces).
+# all interfaces), BARITONE_API (default 1: the bridge mod needs the API
+# jar; standalone logs 'no Java API' and the ws never opens), MOD_PORT
+# (mod ws publish, default 7830) / BRIDGE_PORT (console, default 7831) —
+# slot z of stuck-run's per-slot body ports (7778/7779 + 2 x letter index),
+# container idk-baritone-body-z (idkcraft-neuc.23: the old fixed name and
+# 7779 collided with a stuck-run body on the default slot).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PRODWORLD="${PRODWORLD:-/Users/iv/Projects/.idkcraft-prodworld}"
-RIG=idk-replay-z; PORT=25597; CLIENT=idk-baritone-body
+RIG=idk-replay-z; PORT=25597; CLIENT=idk-baritone-body-z
 LOCK="${RIG_LOCK:-/tmp/idkcraft-rig.lock}-z"
 RIGDIR="$PRODWORLD/rigs/z"; D="$RIGDIR/replay-data/paper-base"
 SRVFIFO="/tmp/kqzf-srv-$$.fifo"
@@ -20,7 +26,8 @@ LOG=/tmp/kqzf-rig.log
 
 BOT="${BOT:-IdkBody}"
 export BARITONE_CLIENT="$CLIENT" CLIENT_LOG="$LOG.client" RIG_CONTAINER="$RIG"
-export BARITONE_OFFLINE="${BARITONE_OFFLINE:-1}" BOT="$BOT" BRIDGE_PORT="${BRIDGE_PORT:-7779}"
+export BARITONE_OFFLINE="${BARITONE_OFFLINE:-1}" BOT="$BOT" BRIDGE_PORT="${BRIDGE_PORT:-7831}"
+export BARITONE_API="${BARITONE_API:-1}" MOD_PORT="${MOD_PORT:-7830}"
 
 if ! mkdir "$LOCK" 2>/dev/null; then
   WAIT="${RIG_LOCK_WAIT:-0}"
@@ -58,11 +65,9 @@ done
 docker exec "$RIG" rcon-cli "op $BOT"
 sh "$HERE/../client.sh" start "$PORT" "$BOT" || exit 2
 WORKER_STARTED=1
-# neuc.2 deleted rig-goto.js with the console backend; hold the rig up
-# until neuc.5 brings the real harness. NOTE: the bot cannot attach yet —
-# this publishes only the console ($BRIDGE_PORT -> in-container 7777), not
-# the mod RPC 7778, and the spike image has no mod (.1 builds it). Once it
-# does: BRIDGE_CONSOLE_PORT=$BRIDGE_PORT plus whatever publishes the RPC
-# (bot BRIDGE_PORT means the RPC port, not this script's console publish).
-echo "rig z up: Paper :$PORT, client $BOT; Ctrl-C to stop"
+# Held up for manual/acceptance runs (smoke.js, a hand-started bot):
+# attach with BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT=$MOD_PORT
+# BRIDGE_CONSOLE_PORT=$BRIDGE_PORT (the bot's BRIDGE_PORT is the mod RPC,
+# not this script's console publish).
+echo "rig z up: Paper :$PORT, client $BOT, mod ws :$MOD_PORT, console :$BRIDGE_PORT; Ctrl-C to stop"
 while :; do sleep 60; done
