@@ -150,8 +150,12 @@ describe('bridge lifecycle events (idkcraft-neuc.10)', () => {
 })
 
 describe('runOnce on the bridge body (real createLifecycle)', () => {
-  it('death → respawn logs through life.onDeath/onRespawn; a wanted end resolves runOnce', async () => {
+  it('death → respawn logs through life.onDeath/onRespawn; a wanted end resolves runOnce', { timeout: 15000 }, async () => {
     const transport = new FakeTransport()
+    // The ticker/poll timers are unref'd (prod: the ws socket holds the
+    // loop); the FakeTransport holds nothing, so hold the loop here or
+    // node:test cancels the pending runOnce (CI flake).
+    const hold = setInterval(() => {}, 1000)
     const lines = []
     const origLog = console.log
     const origErr = console.error
@@ -176,6 +180,7 @@ describe('runOnce on the bridge body (real createLifecycle)', () => {
       assert.ok(lines.some((l) => l.startsWith('death health=0')), `lines: ${lines.join(' | ')}`)
       assert.ok(lines.some((l) => l.startsWith('respawn at')), `lines: ${lines.join(' | ')}`)
     } finally {
+      clearInterval(hold)
       console.log = origLog
       console.error = origErr
     }
