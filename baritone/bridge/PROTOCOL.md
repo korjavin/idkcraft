@@ -521,6 +521,68 @@ Doors while pathing: Baritone opens doors itself, so the adapter's
 `pathfinder.isMoving()` (a reflex toggle would double-toggle the panel
 shut). Adapter-side only; `doors.js` is untouched.
 
+## Event parity (idkcraft-neuc.10)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Lifecycle.java`
+(`Lifecycle.install(server)`, wired from `BridgeMod.onInitializeClient`;
+packet taps ride the `BridgeServer.onPacket` seam, edges ride
+`onClientTick`). Node: `bot/src/bridge/lifecycle.js`
+(`installLifecycle` + `handleLifecycleEvent` in the adapter's event
+router), plus the poll synthesis in `bot/src/bridge/index.js`.
+`state.get` also carries `saturation` since this bead (the adapter maps
+it to `bot.foodSaturation`). death/respawn are neuc.21's (see its
+Lifecycle section above): `_noteLife` emits them off the state.get
+health edge and drives the Look `respawn` RPC; this bead's lifecycle
+fold shares the same `_dead` latch, so a stray mod death/respawn push
+can never double-emit, and `bot.respawn()` is that same RPC.
+
+Every `bot.on`/`bot.once` wire in `bot/src` (index.js spawn/message/
+chat/path taps + lifecycle, behaviours/util.js, unpin.js) and its v2
+source — no empty rows:
+
+| event | mod source | adapter emit (mineflayer shape) | test |
+|---|---|---|---|
+| `spawn` / `login` | first `state.get` with non-null pos (createBot handshake) | `login`, then `spawn`, no args | bridge-body: handshakes then login+spawn |
+| `message` | `ClientboundSystemChatPacket` / disguised chat (BridgeServer capture) | `(msg, position, senderUuid)` | bridge-body: chat events arrive as chat + message |
+| `chat` | `ClientboundPlayerChatPacket` | `(username, message)` (+ `message` twin) | bridge-body (same test) |
+| `path_update` | Baritone PathEvent bus via GoalTracker (neuc.4) | `({status})` on the attributed terminal | bridge-pathfinder |
+| `path_reset` | same terminal / `#stop` | `(reason)` (`goal reached` on success) | bridge-pathfinder |
+| `physicsTick` | none — synthesised at the 100 ms poll cadence (every in-world round) | no args; `doors.doorShutFast` throttles to 250 ms itself | bridge-lifecycle: physicsTick per poll round |
+| `move` | same poll synthesis, position changed | `(oldPos)` Vec3 of the previous position | bridge-lifecycle: move carries the old pos |
+| `forcedMove` | same, jump > 8 blocks between polls | no args | bridge-lifecycle: >8 blocks is forcedMove |
+| `death` | adapter `_noteLife` off the `state.get` health edge (neuc.21) | no args; `isAlive=false`; `_dead`-guarded (no re-fire) | bridge-lifecycle: death/respawn/spawnReset shapes |
+| `respawn` | same: first live poll after the Look `respawn` RPC revives the body (neuc.21) | no args; `isAlive=true` | bridge-lifecycle (same) + runOnce death→respawn logs |
+| `spawnReset` | `ClientboundGameEventPacket` NO_RESPAWN_BLOCK_AVAILABLE, or tick spawn-point change (first observed = baseline, no fire) | no args | bridge-lifecycle (same) |
+| `health` | tick change of health/food/saturation | no args, after `bot.health/food/foodSaturation` update | bridge-lifecycle: health updates before emitting |
+| `entityHurt` | `ClientboundDamageEventPacket` `{id}` | `(entity)` resolved from `bot.entities` (self aliased); mineflayer's 2nd `source` arg DROPPED — no consumer in bot/src | bridge-lifecycle: entityHurt resolves ids |
+| `entityGone` | Entities tick id diff `entity.gone {id}` (neuc.3; the list diff is the reliable twin) | `(entity)`, then `isValid=false` + delete | bridge-lifecycle (same) + bridge-entities |
+| `entitySpawn` | Entities `entities.list` diff (neuc.3) | `(entity)` | bridge-entities |
+| `playerCollect` | `ClientboundTakeItemEntityPacket` `{collectorId,itemId}` | `(collector, collected)` entity objects | bridge-lifecycle: playerCollect resolves ids |
+| `playerJoined` / `playerLeft` | Entities roster tick diff + `roster.get` (neuc.3) | `(player)` roster entry | bridge-entities |
+| `rain` | tick edge: `level.isRaining()` change `{raining}` | no args, after `bot.isRaining` update | bridge-lifecycle: rain and time |
+| `time` | tick cadence: once per 20 client ticks `{age,timeOfDay}` | no args, after `bot.time` update | bridge-lifecycle: rain and time |
+| `sleep` / `wake` | Look tick sleeping-state edge (neuc.9) | no args, `bot.isSleeping` flipped first | bridge-look |
+| `blockUpdate` | `block.update` notification (neuc.6 Chunks) | `(oldBlock, newBlock)` from the chunk cache (`chunks.handleChunkEvent`) | bridge-chunks |
+| `diggingCompleted` | neuc.7 (dig surface, not merged yet) | DEFERRED to neuc.7 — no `bot.on` consumer in bot/src (mineflayer's `dig()` awaits it internally); neuc.7's adapter `dig()` owns it | neuc.7 |
+| `windowOpen` / `windowClose` | `window.open` / `window.close` notifications (neuc.11 Windows) | `(window)` prismarine-windows window; no `bot.on` consumer in bot/src (mineflayer's open* use it internally) | bridge-windows: openChest -> windowOpen, close -> windowClose |
+| `kicked` | `ClientboundDisconnectPacket` / login disconnect `{reason,loggedIn}` | `(reason, loggedIn=true)` — runOnce fatal()s it like v1 | bridge-lifecycle: kicked carries (reason, loggedIn) |
+| `end` | disconnect packet; a silent drop with no packet is neuc.20's sustained null-pos grace in the adapter poll (`bridge: left world`) | `(reason)`; once per disconnect (the transport-close twin drops; our own `quit()` is not doubled) | bridge-lifecycle: end fires once + runOnce wanted-end resolves |
+| `error` | transport ws error / handshake failure (createBot) | `(Error)` — runOnce fatal()s it like v1 | bridge-body: unknown hello.mc surfaces as error |
+
+Deliberate drops: the deprecated `physicTick` alias (no consumer);
+`entityHurt`'s source entity (no consumer); a dimension-change
+`respawn` packet while not dead (mineflayer fires it, but index.js's
+createLifecycle already pairs respawn lines to deaths, so the visible
+behaviour is identical); physics consumers that only make sense under
+prismarine-physics (the real client's own physics runs the body —
+`physicsTick` here is a cadence tap, not a simulation step).
+
+Logging/metrics parity (verified by the runOnce bridge-lifecycle test):
+the death line prints on v2 (`deathLine` reads `bot.health` +
+`buildState` over `bot.entities`, both bridge-fed), `respawn at …`
+follows from `bot.spawnPoint`, and `metrics.setVitals` receives
+health/food through the unchanged ticker (`buildState` →
+`state.bot_health/bot_food`), with `setVitals(null)` on `end`.
 ## window.open / click / close (idkcraft-neuc.11)
 
 Mod: `mod/src/main/java/idkcraft/bridge/Windows.java`

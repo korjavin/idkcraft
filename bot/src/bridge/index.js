@@ -16,6 +16,7 @@ const chunks = require('./chunks') // idkcraft-neuc.6: chunk cache -> sync block
 const { installInventory, applyInventory, handleInventoryEvent } = require('./inventory') // idkcraft-neuc.8: inventory/equip/toss fold
 const { installLook, handleLookEvent } = require('./look') // idkcraft-neuc.9: look/attack/interact/sleep
 const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.13: control states
+const { installLifecycle, handleLifecycleEvent } = require('./lifecycle') // idkcraft-neuc.10: lifecycle/event parity
 const { installWindows, handleWindowEvent } = require('./windows') // idkcraft-neuc.11: container windows
 const { installInteract, handleInteractEvent } = require('./interact') // idkcraft-neuc.7: dig/place
 
@@ -282,6 +283,7 @@ class BaritoneBot extends EventEmitter {
     installInventory(this)
     installLook(this) // idkcraft-neuc.9: look/lookAt/attack/activate*/consume/sleep/wake/waitForTicks
     installInput(this, transport) // neuc.13: setControlState/clearControlStates/controlState
+    installLifecycle(this) // neuc.10: isAlive/foodSaturation/respawn()
     installWindows(this) // idkcraft-neuc.11: openContainer/openChest/openFurnace/currentWindow/clickWindow/closeWindow
     installInteract(this) // idkcraft-neuc.7: dig/stopDigging/targetDigBlock/placeBlock/swingArm — before 'spawn' (util.js wraps placeBlock)
   }
@@ -394,12 +396,14 @@ class BaritoneBot extends EventEmitter {
   // live poll after it -> 'respawn' (index.js lifecycle pairs the two).
   _noteLife(health) {
     if (health > 0) {
+      this.isAlive = true // neuc.10: mirror mineflayer's isAlive alongside _dead
       if (this._dead) {
         this._dead = false
         this.emit('respawn')
       }
       return
     }
+    this.isAlive = false
     if (!this._dead) {
       this._dead = true
       this.emit('death')
@@ -411,6 +415,8 @@ class BaritoneBot extends EventEmitter {
   }
 
   async _refreshOnce() {
+    const prevPos = this._hasPos && this.entity && this.entity.position
+      ? { x: this.entity.position.x, y: this.entity.position.y, z: this.entity.position.z } : null
     const st = await this.transport.call('state.get', {})
     if (!st || !st.pos) this._noteOutOfWorld()
     if (st && st.pos) {
@@ -434,6 +440,7 @@ class BaritoneBot extends EventEmitter {
       this._noteLife(st.health)
     }
     if (st && typeof st.food === 'number') this.food = st.food
+    if (st && typeof st.saturation === 'number') this.foodSaturation = st.saturation
     if (st && typeof st.oxygen === 'number') this.oxygenLevel = st.oxygen
     if (st && st.time && typeof st.time === 'object') {
       const t = st.time
@@ -492,6 +499,19 @@ class BaritoneBot extends EventEmitter {
       }
     } catch (_) { /* status best-effort per round */ }
     this._maybeReissueFollow()
+    // neuc.10: poll-cadence event synthesis. physicsTick every in-world
+    // round (doors.doorShutFast throttles to 250 ms itself); move (with
+    // the previous position, mineflayer's shape) when the position
+    // changed; forcedMove on a teleport-sized jump (> 8 blocks).
+    if (st && st.pos && this._hasPos) {
+      this._lifecycleEnded = false // in world again: a future end may fire
+      const p = this.entity.position
+      if (prevPos && (p.x !== prevPos.x || p.y !== prevPos.y || p.z !== prevPos.z)) {
+        this.emit('move', new this.Vec3(prevPos.x, prevPos.y, prevPos.z))
+        if (Math.hypot(p.x - prevPos.x, p.y - prevPos.y, p.z - prevPos.z) > 8) this.emit('forcedMove')
+      }
+      this.emit('physicsTick')
+    }
   }
 
   // Load the columns holding coords the logic is about to read
@@ -785,6 +805,7 @@ class BaritoneBot extends EventEmitter {
     if (handleInventoryEvent(this, method, params)) return // idkcraft-neuc.8: inventory.update
     if (handleBridgeEvent(this, method, params)) return // idkcraft-neuc.3: player.joined/left, entity.gone
     if (handleLookEvent(this, method, params)) return // idkcraft-neuc.9: sleep/wake
+    if (handleLifecycleEvent(this, method, params)) return // idkcraft-neuc.10: death/respawn/health/…/kicked/end
     if (handleWindowEvent(this, method, params)) return // idkcraft-neuc.11: window.open/slot/close
     if (handleInteractEvent(this, method, params)) return // idkcraft-neuc.7: dig.progress/done/abort
     const p = params || {}
@@ -794,12 +815,6 @@ class BaritoneBot extends EventEmitter {
         // ChatMessage. index.js:1485 reads (msg, position, senderUuid).
         this.emit('chat', p.username || '', p.message || '')
         this.emit('message', { text: p.message || '', toString: () => String(p.message || '') }, p.position || 'chat', p.uuid || null)
-        break
-      case 'death':
-        this.emit('death')
-        break
-      case 'respawn':
-        this.emit('respawn')
         break
       case 'baritone.event':
         // Pushed Baritone PathEvent, id-attributed like the poll: foreign
