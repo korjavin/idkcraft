@@ -451,7 +451,7 @@ function unpinTick(bot, ctx, now = Date.now()) {
 // delta-less re-touch, which face-touch validation forbids — end to end
 // proven by rig cures (A-spot 3/3 twice, freed on sustained displacement).
 function installUnpinTap(bot, ctx) {
-  if (!bot || bot._unpinTapInstalled) return
+  if (!bot || !bot._client || bot._unpinTapInstalled) return // neuc.14: bridge body has no _client — install nothing
   bot._unpinTapInstalled = true
   const client = bot._client
   if (client && typeof client.on === 'function') {
