@@ -159,6 +159,19 @@ describe('bridge inventory fold (idkcraft-neuc.8)', () => {
     assert.equal(typeof held.type, 'number')
   })
 
+  it('two bots on one registry never share a window (revmux 01 core-3)', async () => {
+    const other = invBot([{ slot: 36, name: 'stone', count: 9 }])
+    await other.bot.start({ pollMs: 0 })
+    try {
+      assert.notEqual(other.bot.inventory, bot.inventory)
+      assert.equal(countItems(other.bot, (n) => n === 'stone'), 9)
+      assert.equal(countItems(bot, (n) => n === 'stone'), 0)
+      assert.equal(countItems(bot, (n) => n === 'cobblestone'), 5) // unchanged
+    } finally {
+      await other.bot.stop()
+    }
+  })
+
   it('minimal-registry fallback still feeds countItems/findInventoryItem', async () => {
     const transport2 = new FakeTransport({
       pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true },

@@ -174,14 +174,21 @@ class MinimalWindow {
   }
 }
 
-const windowCache = new WeakMap()
+// Only the loaded factory is cached per registry — never the window
+// itself: windows hold mutable per-bot slots, and bots sharing a registry
+// (every createBot on the same mc version) must not share one (revmux 01).
+const windowFactoryCache = new WeakMap()
 function makeWindow(bot) {
   const reg = bot && bot.registry
   if (reg && typeof reg === 'object' && reg.itemsByName && typeof reg.supportFeature === 'function') {
-    if (windowCache.has(reg)) return windowCache.get(reg)
-    const load = tryLoad('prismarine-windows')
+    let factory = windowFactoryCache.get(reg)
+    if (factory === undefined) {
+      const load = tryLoad('prismarine-windows')
+      try { factory = load ? load(reg) : null } catch (_) { factory = null }
+      windowFactoryCache.set(reg, factory)
+    }
     let win = null
-    try { win = load ? load(reg).createWindow(0, 'minecraft:inventory', 'Inventory') : null } catch (_) { win = null }
+    try { win = factory ? factory.createWindow(0, 'minecraft:inventory', 'Inventory') : null } catch (_) { win = null }
     if (win) {
       // prismarine-windows has no emptySlotCount on some versions; v1's
       // window (mineflayer's) does — castle.js reads it guarded, keep parity.
@@ -192,10 +199,8 @@ function makeWindow(bot) {
           return n
         }
       }
-      windowCache.set(reg, win)
       return win
     }
-    windowCache.set(reg, null)
   }
   return new MinimalWindow()
 }

@@ -86,6 +86,12 @@ public final class Inventory {
         queue.add(op);
         try {
             return op.future().get(OP_WAIT_MS, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            // A timed-out op must never run later behind the caller's back
+            // (a toss reported failed still dropping items): cancel it, and
+            // tick() skips done futures (revmux 01 core-2).
+            op.future().cancel(false);
+            throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
         } catch (Exception e) {
             if (e instanceof java.util.concurrent.ExecutionException ee
                     && ee.getCause() instanceof Rpc.RpcException re) {
@@ -111,6 +117,9 @@ public final class Inventory {
         // Serialised: one inventory op at a time, in arrival order.
         Op op;
         while ((op = queue.poll()) != null) {
+            if (op.future().isDone()) {
+                continue; // timed out / cancelled on the socket thread: never runs late
+            }
             try {
                 op.future().complete(execute(client, player, op));
             } catch (Rpc.RpcException e) {
