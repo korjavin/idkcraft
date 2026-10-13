@@ -58,7 +58,11 @@ public final class Inventory {
     // Tick-thread only.
     private Map<Integer, String> lastSent = new LinkedHashMap<>();
 
-    private record Op(String kind, JsonObject params, CompletableFuture<JsonObject> future) {
+    private record Op(String kind, JsonObject params, CompletableFuture<JsonObject> future,
+                      java.util.concurrent.atomic.AtomicBoolean claimed) {
+        Op(String kind, JsonObject params, CompletableFuture<JsonObject> future) {
+            this(kind, params, future, new java.util.concurrent.atomic.AtomicBoolean());
+        }
     }
 
     private final ConcurrentLinkedQueue<Op> queue = new ConcurrentLinkedQueue<>();
@@ -88,10 +92,23 @@ public final class Inventory {
             return op.future().get(OP_WAIT_MS, TimeUnit.MILLISECONDS);
         } catch (java.util.concurrent.TimeoutException e) {
             // A timed-out op must never run later behind the caller's back
-            // (a toss reported failed still dropping items): cancel it, and
-            // tick() skips done futures (revmux 01 core-2).
-            op.future().cancel(false);
-            throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
+            // (a toss reported failed still dropping items): claim it first.
+            // Whoever wins the claim owns the outcome — if the client thread
+            // already claimed it, its result (not CLIENT_BUSY) is the truth
+            // the caller hears (revmux 01 core-2, 03 core-1).
+            if (op.claimed().compareAndSet(false, true)) {
+                op.future().cancel(false);
+                throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
+            }
+            try {
+                return op.future().get();
+            } catch (Exception owned) {
+                if (owned instanceof java.util.concurrent.ExecutionException ee
+                        && ee.getCause() instanceof Rpc.RpcException re) {
+                    throw re;
+                }
+                throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
+            }
         } catch (Exception e) {
             if (e instanceof java.util.concurrent.ExecutionException ee
                     && ee.getCause() instanceof Rpc.RpcException re) {
@@ -117,8 +134,8 @@ public final class Inventory {
         // Serialised: one inventory op at a time, in arrival order.
         Op op;
         while ((op = queue.poll()) != null) {
-            if (op.future().isDone()) {
-                continue; // timed out / cancelled on the socket thread: never runs late
+            if (op.future().isDone() || !op.claimed().compareAndSet(false, true)) {
+                continue; // claimed by the socket thread's timeout: never runs late
             }
             try {
                 op.future().complete(execute(client, player, op));
@@ -133,12 +150,6 @@ public final class Inventory {
     }
 
     private JsonObject execute(Minecraft client, LocalPlayer player, Op op) throws Rpc.RpcException {
-        // An op cancelled mid-execution (socket-thread timeout) stops before
-        // its next click: CompletableFuture.cancel cannot interrupt this
-        // thread, so the ops check between clicks (revmux 02 core-2).
-        if (op.future().isCancelled()) {
-            throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "inventory op cancelled");
-        }
         return switch (op.kind()) {
             case "select" -> doSelect(player, op.params());
             case "equip" -> doEquip(client, player, op);
@@ -200,11 +211,6 @@ public final class Inventory {
         // Pickup/swap through the player's own container: take the source,
         // place it on the destination, put any swapped stack back.
         client.gameMode.handleContainerInput(menu.containerId, slot, 0, ContainerInput.PICKUP, player);
-        if (op.future().isCancelled()) {
-            // Put the carried stack back before bailing: never strand it.
-            client.gameMode.handleContainerInput(menu.containerId, slot, 0, ContainerInput.PICKUP, player);
-            throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "inventory op cancelled");
-        }
         client.gameMode.handleContainerInput(menu.containerId, destSlot, 0, ContainerInput.PICKUP, player);
         if (!menu.getCarried().isEmpty()) {
             client.gameMode.handleContainerInput(menu.containerId, slot, 0, ContainerInput.PICKUP, player);
@@ -239,9 +245,6 @@ public final class Inventory {
             client.gameMode.handleContainerInput(menu.containerId, slot, 1, ContainerInput.THROW, player);
         } else {
             for (int i = 0; i < count; i++) {
-                if (op.future().isCancelled()) {
-                    break; // stop dropping: the caller already heard CLIENT_BUSY
-                }
                 client.gameMode.handleContainerInput(menu.containerId, slot, 0, ContainerInput.THROW, player);
             }
         }
