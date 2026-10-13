@@ -225,6 +225,16 @@ class BaritoneBot extends EventEmitter {
     this._refreshing = false
     this._pathStatus = 'none'
     this._hasPos = false // first state.get with a non-null pos (createBot emits spawn on it)
+    // idkcraft-neuc.20: out-of-world detection. The mod serves the null
+    // snapshot once the client leaves the world (disconnect/kick), but the
+    // ws stays up — without this the ticker keeps driving a body that is
+    // at the menu forever and never rejoins. A sustained null pos past
+    // the grace (respawn/dimension swaps flap briefly) ends the bot like
+    // a dropped v1 connection: runOnce fatal()s, the container restarts,
+    // and the handshake re-sends the console connect.
+    this._leftWorldMs = typeof opts.leftWorldMs === 'number' ? opts.leftWorldMs : 3000
+    this._outSince = null
+    this._leftFired = false
     this._quitting = false
     this._poll = null
     this._onTransportEvent = (method, params) => this._handleEvent(method, params)
@@ -276,11 +286,24 @@ class BaritoneBot extends EventEmitter {
       }
       this.emit('end', reason)
     }
-    const done = () => { cleared.then(finish, finish) }
-    if (this._console && typeof this._console.send === 'function') {
-      this._console.send('disconnect').catch(() => {}).then(done, done)
+    const disconnect = () => {
+      const done = () => { cleared.then(finish, finish) }
+      if (this._console && typeof this._console.send === 'function') {
+        this._console.send('disconnect').catch(() => {}).then(done, done)
+      } else {
+        done()
+      }
+    }
+    // idkcraft-neuc.20: cancel Baritone before the client leaves the
+    // world, so no pathing process survives into the menu (its out-of-
+    // world ticks NPE in Baritone's playerFeet). Bounded: a hung call
+    // must not delay the disconnect past 1 s. The mod also cancels on
+    // world unload, so this is belt and braces.
+    if (this.transport && typeof this.transport.call === 'function') {
+      const stopped = this.transport.call('baritone.cmd', { command: '#stop' }).catch(() => {})
+      Promise.race([stopped, sleep(1000)]).then(disconnect, disconnect)
     } else {
-      done()
+      disconnect()
     }
   }
 
@@ -322,9 +345,25 @@ class BaritoneBot extends EventEmitter {
     return this
   }
 
+  // idkcraft-neuc.20: one null-pos poll. Only a sustained absence past
+  // the grace ends the bot (see the constructor note); firing clears the
+  // poll so no further bridge traffic drives the out-of-world client.
+  _noteOutOfWorld() {
+    if (!this._hasPos || this._quitting || this._leftFired) return
+    const now = Date.now()
+    if (this._outSince == null) this._outSince = now
+    if (now - this._outSince < this._leftWorldMs) return
+    this._leftFired = true
+    if (this._poll) clearInterval(this._poll)
+    this._poll = null
+    this.emit('end', 'bridge: left world (client disconnected)')
+  }
+
   async _refreshOnce() {
     const st = await this.transport.call('state.get', {})
+    if (!st || !st.pos) this._noteOutOfWorld()
     if (st && st.pos) {
+      this._outSince = null
       this._hasPos = true
       this.entity.position.x = st.pos.x
       this.entity.position.y = st.pos.y
