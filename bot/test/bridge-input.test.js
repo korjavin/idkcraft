@@ -134,7 +134,7 @@ describe('bridge input (neuc.13)', () => {
   })
 
   it('REAL recover.js pillarUpRun first tick holds jump through the adapter', async () => {
-    const { transport, bot } = make({ inventory: [{ slot: 0, name: 'dirt', count: 3, type: 1 }] })
+    const { transport, bot } = make({ inventory: [{ slot: 36, name: 'dirt', count: 3, type: 1 }] })
     await bot.start({ pollMs: 0 })
     try {
       const ctx = { recovery: {} }

@@ -350,6 +350,44 @@ Maps/Lists and convert at the boundary). Node-side wiring is landed
 (poll + router in `bot/src/bridge/index.js`); the mod half
 (`Entities.install`) went live with .1's `BridgeServer`.
 
+## inventory.get / select / equip / toss (idkcraft-neuc.8)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Inventory.java`
+(`Inventory.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/inventory.js` (`installInventory` in the adapter
+constructor — before `spawn`, so `reflexes.installEquipGuard` can wrap
+`bot.equip`; poll folds `inventory.get`, `_handleEvent` folds the update).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `inventory.get` | — | `{selected, slots:[{slot,name,count,damage,maxDamage,enchantments:[{name,level}],customName}]}` (non-empty slots only) | `bot.inventory` window |
+| `inventory.select` | `{hotbar:0..8}` | snapshot as above | `bot.setQuickBarSlot` / `quickBarSlot` |
+| `inventory.equip` | `{slot,dest:hand\|off-hand\|head\|torso\|legs\|feet}` (dest may be a numeric slot — the adapter's unequip move) | snapshot as above | `bot.equip`/`bot.unequip` |
+| `inventory.toss` | `{slot,count}` | snapshot as above | `bot.toss`/`bot.tossStack` |
+
+Event: `inventory.update {slot,item:{...}|null,selected}` per changed slot
+(diffed per client tick; `item` carries the same fields as a `slots` entry).
+
+Slot numbering is mineflayer's player-window numbering on the wire and in
+Node: 5-8 armor (head/torso/legs/feet — `fight.js` hard-codes them), 9-35
+main, 36-44 hotbar, 45 offhand. `name` is the registry id (`minecraft:`
+prefix stripped Node-side). Actions run one at a time on the client thread
+through the player's own `inventoryMenu` (pickup/swap clicks, no window
+open; armor goes by the same swap, a piece the slot rejects never lands);
+equipping a hotbar stack to the hand only moves the selection, like v1.
+An equip resolves only when the destination slot holds the item afterwards
+(mod checks, adapter re-verifies, mineflayer's error strings where the
+logic matches: `Invalid item object in equip ...`, `invalid destination:`).
+
+Node fold: `bot.inventory` is a prismarine-windows window when the package
+and a full registry resolve (transitive via mineflayer — dynamically
+loaded, zero new deps), else a minimal window with the same reads
+(`items()` = slots 9-44, `slots[]`, `count`, `emptySlotCount`,
+`firstEmptyInventorySlot`, `findInventoryItem`); items are prismarine-item
+instances when resolvable (`name/type/count/displayName/durabilityUsed`,
+`enchants` in prismarine-item's `{name,lvl}` shape, `customName` as a plain
+prop). `bot.heldItem = slots[36+selected]`; ops serialise through one
+adapter chain. `bot._syncWindow`/`currentWindow` are NOT here (.11/.12).
 ## Lifecycle: leaving the world (idkcraft-neuc.20)
 
 The ws stays up while the client sits at the menu, so "connected" is not
@@ -480,8 +518,8 @@ source — no empty rows:
 | `time` | tick cadence: once per 20 client ticks `{age,timeOfDay}` | no args, after `bot.time` update | bridge-lifecycle: rain and time |
 | `sleep` / `wake` | Look tick sleeping-state edge (neuc.9) | no args, `bot.isSleeping` flipped first | bridge-look |
 | `blockUpdate` | `block.update` notification (neuc.6 owns the mod stream) | `(oldBlock=null, newBlock)` — the cache does not track the old block; the one consumer (util.js trackPlaced) null-guards `oldB` and reads position/type only when present | adapter fold pre-existing (index.js); mod stream is neuc.6 |
-| `diggingCompleted` | neuc.7 (dig surface, parallel bead) | DEFERRED to neuc.7 — not wired by this bead | neuc.7 |
-| `windowOpen` | neuc.11 (windows surface) | DEFERRED to neuc.11 — not wired by this bead | neuc.11 |
+| `diggingCompleted` | neuc.7 (dig surface, not merged yet) | DEFERRED to neuc.7 — no `bot.on` consumer in bot/src (mineflayer's `dig()` awaits it internally); neuc.7's adapter `dig()` owns it | neuc.7 |
+| `windowOpen` / `windowClose` | `window.open` / `window.close` notifications (neuc.11 Windows) | `(window)` prismarine-windows window; no `bot.on` consumer in bot/src (mineflayer's open* use it internally) | bridge-windows: openChest -> windowOpen, close -> windowClose |
 | `kicked` | `ClientboundDisconnectPacket` / login disconnect `{reason,loggedIn}` | `(reason, loggedIn=true)` — runOnce fatal()s it like v1 | bridge-lifecycle: kicked carries (reason, loggedIn) |
 | `end` | disconnect packet; a silent drop with no packet is neuc.20's sustained null-pos grace in the adapter poll (`bridge: left world`) | `(reason)`; once per disconnect (the transport-close twin drops; our own `quit()` is not doubled) | bridge-lifecycle: end fires once + runOnce wanted-end resolves |
 | `error` | transport ws error / handshake failure (createBot) | `(Error)` — runOnce fatal()s it like v1 | bridge-body: unknown hello.mc surfaces as error |
@@ -500,3 +538,57 @@ the death line prints on v2 (`deathLine` reads `bot.health` +
 follows from `bot.spawnPoint`, and `metrics.setVitals` receives
 health/food through the unchanged ticker (`buildState` →
 `state.bot_health/bot_food`), with `setVitals(null)` on `end`.
+## window.open / click / close (idkcraft-neuc.11)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Windows.java`
+(`Windows.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/windows.js` (`installWindows` from the adapter
+constructor, `handleWindowEvent` in the adapter's event router).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `window.open` | `{x,y,z}` (container block) | menu (below), after the server's window lands (≤ 1.5 s, else `window.open: no window opened`; a click the block does not take fails at once) | `bot.openContainer`/`openChest`/`openDispenser`/`openFurnace` |
+| `window.click` | `{windowId,slot,mouseButton,mode}` (mineflayer modes 0-6; slot `-999` = outside) | menu after the click | `bot.clickWindow`/`simpleClick` (+ `transfer`/`putAway`/`putSelectedItemRange`, window `withdraw`/`deposit`, furnace `put*`/`take*`) |
+| `window.close` | `{windowId}` | `{ok}` | `bot.closeWindow`/`window.close()` |
+
+Menu: `{windowId,type,title,size,slots:[{slot,...inventory slot fields}],cursor:{...}|null}`
+— `type` is the menu registry id (`minecraft:generic_9x3`, `minecraft:furnace`, …),
+`size` the menu's total slot count (container + 36), `slots` the non-empty
+slots only, `cursor` the carried stack.
+
+Events (diffed per client tick): `window.open` (menu, also for a window
+the server opened), `window.slot {windowId,slot,item|null}`,
+`window.close {windowId}` (our close or the server's).
+
+Slot numbering is the vanilla menu order = mineflayer's window numbering:
+container slots first, then the player's 27 main + 9 hotbar (a 9x3 chest:
+0-26 chest, 27-53 main, 54-62 hotbar). Window id 0 is the player
+inventory menu (clicks only; `window.close` on it is a no-op). `inventory.equip`/`toss`
+close an open container first (vanilla drops window-0 clicks while one is
+up); the `window.close` push clears Node's `currentWindow`. A click on
+a window that is no longer the open one fails `stale window <id>`.
+
+The client runs every click (`handleContainerInput`) and tracks the
+server's state id itself, so window-id/revision churn never reaches
+Node. Node does not predict: each click reply replaces the window's
+slots + cursor, and the container's player section is folded into
+`bot.inventory` on the spot (mineflayer `copyInventory`); later server
+corrections arrive as `window.slot`.
+
+Node fold: windows are prismarine-windows windows built from the same
+factory as `bot.inventory` (`inventory.js windowFactory`); `withdraw`/
+`deposit`/`transfer`/`putAway`/`putSelectedItemRange` are mineflayer's
+click algorithms over `clickWindow`, with its error strings
+(`destination full`, `Can't find <name> in slots [a - b]`, `Unable to
+withdraw, Bot inventory is full.`); a click that moves nothing fails
+(`transfer: click on slot N moved nothing`) instead of spinning. Furnace
+windows carry `inputItem/fuelItem/outputItem`, `takeInput/takeFuel/
+takeOutput`, `putInput/putFuel`. Baritone is paused across `window.open`
+and each `window.click` while pathing (`withBaritonePaused`, goal
+restored after) — per call, not for the window's lifetime, so a window
+left open (furnace.js keeps one across smelt ticks) never stalls a walk.
+
+Not on this wire: `window.property` (furnace fuel/progress — the
+furnace's `fuel`/`progress` fields stay null; furnace.js reads output
+growth only), entity containers (`openContainer(entity)`: no logic site
+uses it), `bot._syncWindow` (craft.js falls back to its settle wait; .12).

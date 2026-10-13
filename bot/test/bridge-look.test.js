@@ -151,7 +151,7 @@ describe('bridge consume/sleep (idkcraft-neuc.9)', () => {
     let transport
     ;({ transport, bot } = await lookBot({
       food: 10,
-      inventory: [{ slot: 0, name: 'bread', count: 2 }],
+      inventory: [{ slot: 36, name: 'bread', count: 2 }],
       eatDelayMs: 80,
     }))
     const ctx = {}
@@ -164,12 +164,12 @@ describe('bridge consume/sleep (idkcraft-neuc.9)', () => {
   })
 
   it('consume rejects with mineflayer\'s message at full food', async () => {
-    ;({ bot } = await lookBot({ food: 20, inventory: [{ slot: 0, name: 'bread', count: 1 }] }))
+    ;({ bot } = await lookBot({ food: 20, inventory: [{ slot: 36, name: 'bread', count: 1 }] }))
     await assert.rejects(() => bot.consume(), /Food is full/)
   })
 
   it('consume rejects visibly when nothing is eaten in the window', async () => {
-    ;({ bot } = await lookBot({ food: 10, inventory: [{ slot: 0, name: 'bread', count: 1 }] }))
+    ;({ bot } = await lookBot({ food: 10, inventory: [{ slot: 36, name: 'bread', count: 1 }] }))
     await assert.rejects(() => bot.consume(), /not consumed/)
   })
 
