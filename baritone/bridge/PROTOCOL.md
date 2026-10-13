@@ -717,3 +717,44 @@ place`. `bot.swingArm` is a no-op (the mod swings itself);
 `placeBlock`). Not on this wire: sneak-placing against interactables
 (the mod takes `sneak`, the adapter sends false like mineflayer), the
 deep.js raw `block_dig` burst (neuc.14).
+
+## mineflayer-internals on v2 (idkcraft-neuc.14)
+
+Every shared-code site that reaches past mineflayer's public API, and what
+it does on the bridge body. The bridge bot never defines `bot._client`
+(v1 always has it), so each guard keys on that field and v1 paths are
+unchanged. No new wire method; no new metric. Tests:
+`bot/test/bridge-internals.test.js`.
+
+| Site | v2 behaviour | Proof (test) |
+|---|---|---|
+| `index.js:1504` `unpin.installUnpinTap` (teleport counter + move-packet clone) | no-op: returns before setting `_unpinTapInstalled` (guard added here; before, the flag latched on a bot without `_client` — a silent partial install) | `unpin/decontact taps install nothing…`, `a later _client … still installs` |
+| `index.js:1509` `decontact.installFaceEpsilon` (move-packet x/z shift) | no-op: already returned `false` before its flag | `unpin/decontact taps install nothing…` |
+| `index.js:495` `unpin.unpinTick` (per tick) | `idle` every tick: teleports only arrive through the tap, so no storm, no nudge writer, no `unpin` lines | same test, 20 ticks |
+| `deep.js:1416-1436` `unfreeze` raw `block_dig` START/CANCEL burst | drop: returns `false`, sends nothing (already guarded); the walkTo caller's replan (`setGoal(null)` + re-issue) still runs, the return-up poke has none (see below). The burst cures a mineflayer ghost-pin a real client does not produce; v2 digs one block at a time through `dig.start` (neuc.7). No `dig.burst` mod method | `deep unfreeze skips the raw block_dig burst` |
+| `index.js:1223` `ticker.setMovements` customisations: `doors.banDoorBreaks`, `doors.addDoorPassages`, `swim.addSwimExits`, `swim.addSwimPrune`, `nocorner.addNoCornerCut`, `snow.addSnowGround`, `jumpcost.addJumpUpCost` | inert: all seven install on the mineflayer `Movements` object (built from the passed-through registry); Baritone never calls `getNeighbors`, it only reads the flags through `movementsToSettings` | `ticker.setMovements runs all seven customisations…` (install markers) |
+| `body.js:238` `movementsFor` (+ `danger.addPathCost`, `swim.addNightWaterCost`) | flags set as on v1, pushed as `#set` on the next `setGoal`; the two path-cost wraps install but stay unmapped (see Pathfinder parity) | same test (`_dangerCostInstalled`, `_nightWaterCostInstalled`) |
+| `body.js:294` `checkTripwire` | quiet: the adapter's `setMovements`/`setGoal` read the flags and never write them — no `body lease violation` across owner switches, sprint refreshes and goals | same test |
+
+Rig (2026-10-13, local, offline names, `REPLAY_BODY=baritone
+REPLAY_BASELINE_OFF=1`, the full 32-spot `stuck-spots.json` corpus on
+`paper-base`): 26/32 reached; zero `unpin`, `faceeps`, `deep unfreeze`
+and `body lease violation` lines across the whole run. The six misses
+(DUGPIT-VALIDATE, DUGPIT-BARE, JR-BUILD, JR-BUILD-FRESH, GATHER-CLIFF,
+SHELTER-WATER) are v2 parity gaps owned by neuc.15/neuc.29, not these
+sites (no line from any of them fired). Deep return/ascent time: not
+measured here. `unfreeze` fires only on a static body: (a) the walkTo
+stall (`walking` with `stalls === UNFREEZE_TICKS`), which also replans,
+and (b) the manual return-up poke (`stalls`/`retProgTicks` every
+`UNFREEZE_TICKS`), which has no replan — on v2 a frozen return-up runs
+to `RETURN_STALL` and fails `lost-shaft`. The real client does not
+produce the mineflayer ghost-pin the poke cures, so (b) should not
+trigger on v2; the v1-vs-v2 deep return time and `lost-shaft` count
+(ATL-SHAFT, MINE-10) are deferred to the parity report. A `dig.burst`
+mod method waits for evidence of a v2 return-up freeze.
+
+Livelock note (CLAUDE.md rule): the unpin/decontact cures exist for
+prismarine-physics' bit-exact face contact, which Paper rejects; the real
+client's physics never sends it, so dropping them on v2 is the intended
+behaviour, not a dropped pathing finding. A v2 wedge goes to recover/stuck
+as on v1.
