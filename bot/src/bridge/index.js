@@ -84,6 +84,16 @@ function stripMcPrefix(s) {
 function goalToBaritone(goal, from) {
   if (!goal) return null
   const name = (goal.constructor && goal.constructor.name) || ''
+  // GoalNear keeps its range (idkcraft-neuc.21): `#goto x y z` is an exact
+  // GoalBlock, and callers centre GoalNear on cells nobody can stand in
+  // (one above the floor, a log, a chest) — Baritone answered noPath or
+  // stopped beside it while v1 had long arrived. `#near` is the mod's own
+  // verb for Baritone's GoalNear (same distSq <= r² test as isEnd; the
+  // floored range never accepts a cell v1 would not).
+  if (name === 'GoalNear' && typeof goal.x === 'number' && typeof goal.y === 'number' &&
+    typeof goal.z === 'number' && typeof goal.rangeSq === 'number' && goal.rangeSq >= 0) {
+    return `#near ${goal.x} ${goal.y} ${goal.z} ${Math.floor(Math.sqrt(goal.rangeSq))}`
+  }
   if ((name === 'GoalNear' || name === 'GoalBlock' || name === 'GoalGetToBlock') &&
     typeof goal.x === 'number' && typeof goal.y === 'number' && typeof goal.z === 'number') {
     return `#goto ${goal.x} ${goal.y} ${goal.z}`
