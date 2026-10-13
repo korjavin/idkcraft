@@ -381,7 +381,7 @@ class BaritoneBot extends EventEmitter {
 
   // idkcraft-neuc.21: mineflayer's respawn:true parity. A dead client sits
   // on the death screen with its pos frozen — every goal, sidestep and
-  // hop then reads no-progress (the v2 spawn wedge). Death edge -> 'death',
+  // hop then reads no-progress forever (a wedge). Death edge -> 'death',
   // then click respawn (re-sent at most 1/s while still dead); the first
   // live poll after it -> 'respawn' (index.js lifecycle pairs the two).
   _noteLife(health) {

@@ -139,6 +139,29 @@ describe('spike surface round-trips (FakeTransport = the mod)', () => {
     assert.deepEqual(seen, ['death', 'respawn'])
     assert.equal(bot.health, 20)
   })
+
+  it('a dropped respawn click is re-sent at most 1/s while still dead (neuc.21)', async () => {
+    const seen = []
+    bot.on('death', () => seen.push('death'))
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => now
+    try {
+      transport.state.respawnIgnore = 1
+      transport.state.health = 0
+      await bot.refresh()
+      await bot.refresh() // same second: no re-click
+      await sleep(10)
+      assert.equal(transport.state.respawnCalls, 1)
+      now += 1000
+      await bot.refresh()
+      await sleep(10)
+      assert.equal(transport.state.respawnCalls, 2)
+      assert.deepEqual(seen, ['death']) // one death edge, however many clicks
+    } finally {
+      Date.now = realNow
+    }
+  })
 })
 
 describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
