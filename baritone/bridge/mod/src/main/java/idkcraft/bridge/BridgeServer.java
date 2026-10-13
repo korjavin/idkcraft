@@ -219,7 +219,8 @@ public final class BridgeServer {
     /**
      * Observe inbound packets (POST, netty thread — capture immutable data
      * only). Added for the chunks surface (idkcraft-neuc.6); additive, the
-     * core chat capture above is untouched.
+     * core chat capture above is untouched. A play disconnect packet is the
+     * one PRE delivery (neuc.10: its POST never fires).
      */
     public void onPacket(java.util.function.Consumer<Packet<?>> hook) {
         packetHooks.add(hook);
@@ -476,7 +477,12 @@ public final class BridgeServer {
             // POST = vanilla accepted the packet; PRE would also see drops.
             // Runs on the netty thread: capture immutable packet data only,
             // names resolve on the client tick in flushChat().
-            if (event.getState() != EventState.POST) {
+            // neuc.10: a play-state disconnect (kick) tears the connection
+            // down inside its handler, so its POST never fires (rig: rcon
+            // kick produced no kicked push) — the hooks see it at PRE.
+            boolean disconnect = event.getPacket()
+                    instanceof net.minecraft.network.protocol.common.ClientboundDisconnectPacket;
+            if (event.getState() != (disconnect ? EventState.PRE : EventState.POST)) {
                 return;
             }
             captureChat(event.getPacket());
@@ -588,6 +594,7 @@ public final class BridgeServer {
         snap.add("pos", pos);
         snap.addProperty("health", pl.getHealth());
         snap.addProperty("food", pl.getFoodData().getFoodLevel());
+        snap.addProperty("saturation", pl.getFoodData().getSaturationLevel());
         snap.addProperty("oxygen", (int) Math.round(pl.getAirSupply() / 15.0));
         snap.add("time", time);
         BlockPos sp = level.getLevelData().getRespawnData().pos();
@@ -621,6 +628,7 @@ public final class BridgeServer {
         snap.add("pos", JsonNull.INSTANCE);
         snap.add("health", JsonNull.INSTANCE);
         snap.add("food", JsonNull.INSTANCE);
+        snap.add("saturation", JsonNull.INSTANCE);
         snap.add("oxygen", JsonNull.INSTANCE);
         snap.add("input", Input.snapshotJson());
         snap.add("time", JsonNull.INSTANCE);
