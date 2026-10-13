@@ -9,6 +9,7 @@ import baritone.api.event.events.WorldEvent;
 import baritone.api.event.events.type.EventState;
 import baritone.api.event.listener.AbstractGameEventListener;
 import baritone.api.pathing.goals.Goal;
+import baritone.api.pathing.goals.GoalNear;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonNull;
@@ -354,6 +355,12 @@ public final class BridgeServer {
         }
         final String cmd = command;
         final String verb = GoalTracker.firstToken(cmd);
+        // idkcraft-neuc.21: `near x y z r` is ours, not Baritone's console —
+        // a ranged GoalNear set straight on the custom goal process.
+        final int[] near = GoalTracker.nearArgs(cmd);
+        if (near == null && verb.equals("near")) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "want: near <x> <y> <z> <range>");
+        }
         record Probe(boolean ok, boolean inWorld, Goal before, Goal after, Object beforeProc, Object afterProc) {
         }
         Probe probe = submit(() -> {
@@ -362,7 +369,13 @@ public final class BridgeServer {
             }
             Goal before = baritone.getCustomGoalProcess().mostRecentGoal();
             Object beforeProc = baritone.getPathingControlManager().mostRecentInControl().orElse(null);
-            boolean ok = baritone.getCommandManager().execute(cmd);
+            boolean ok = true;
+            if (near != null) {
+                baritone.getCustomGoalProcess().setGoalAndPath(
+                        new GoalNear(new BlockPos(near[0], near[1], near[2]), near[3]));
+            } else {
+                ok = baritone.getCommandManager().execute(cmd);
+            }
             Goal after = ok ? baritone.getCustomGoalProcess().mostRecentGoal() : before;
             Object afterProc =
                     ok ? baritone.getPathingControlManager().mostRecentInControl().orElse(null) : beforeProc;

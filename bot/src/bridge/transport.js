@@ -310,7 +310,7 @@ class FakeTransport extends EventEmitter {
           s.baritonePhase = null
           return { id }
         }
-        const m = /^#goto\s+(-?[\d.]+)(?:\s+(-?[\d.]+))?(?:\s+(-?[\d.]+))?/.exec(cmd)
+        const m = /^#(?:goto|near)\s+(-?[\d.]+)(?:\s+(-?[\d.]+))?(?:\s+(-?[\d.]+))?/.exec(cmd)
         if (m) {
           s.baritoneSeq = (s.baritoneSeq | 0) + 1
           const id = s.baritoneSeq
