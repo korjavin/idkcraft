@@ -750,3 +750,69 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
   })
 })
 
+// idkcraft-neuc.30: v1's 'stuck' re-plan (pathfinder resetPath after a
+// node takes > 3.5 s) mirrored for a Baritone that hangs in one movement
+// with the goal live — isMoving read true forever (rig JR-BUILD).
+describe('stall re-plan (still while pathing)', () => {
+  let transport
+  let bot
+  beforeEach(async () => {
+    ({ transport, bot } = pathBot())
+    await bot.start({ pollMs: 0 })
+  })
+  afterEach(async () => { await bot.stop() })
+
+  async function walking() {
+    bot.pathfinder.setGoal(new goals.GoalBlock(20, 64, 0))
+    await sleep(10)
+    transport.state.baritonePhase = null
+    transport.state.baritoneStatus = { id: 1, pathing: true, last: 'none' }
+    await bot.refresh() // anchors the stall clock
+    assert.equal(transport.state.baritoneSeq, 1)
+  }
+
+  it('re-sends the same goal and resets with stuck after the still budget', async () => {
+    const seen = taps(bot)
+    await walking()
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 1, 'inside the budget: no re-plan')
+    bot._stall.at -= 11000
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 2)
+    assert.equal(transport.state.baritone, '#goto 20 64 0')
+    assert.deepEqual(seen.resets, ['stuck'])
+    assert.equal(bot.pathfinder.isMoving(), true, 'the walk stays live')
+    await sleep(10)
+    assert.equal(bot._goalId, 2, 'the re-plan echo rebinds')
+    // Still again on the re-plan: unexecutable — stop and verdict noPath once.
+    transport.state.baritoneStatus = { id: 2, pathing: true, last: 'none' }
+    bot._stall.at -= 11000
+    await bot.refresh()
+    assert.equal(transport.state.baritone, '#stop')
+    assert.deepEqual(seen.statuses, ['noPath'])
+    assert.deepEqual(seen.resets, ['stuck', 'noPath'])
+    assert.equal(bot.pathfinder.isMoving(), false)
+    await bot.refresh()
+    assert.deepEqual(seen.statuses, ['noPath'], 'one verdict, no clock while idle')
+  })
+
+  it('a moving body, a held key or a dropped goal never re-plans', async () => {
+    const seen = taps(bot)
+    await walking()
+    bot._stall.at -= 11000
+    transport.state.pos = { ...transport.state.pos, x: 1 } // displaced past the tolerance
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 1, 'moved: fresh anchor')
+    bot._stall.at -= 11000
+    bot.setControlState('jump', true) // a primitive drives the body (Baritone paused)
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 1, 'held key: no re-plan')
+    assert.equal(bot._stall, null)
+    bot.setControlState('jump', false)
+    bot.pathfinder.setGoal(null)
+    await bot.refresh()
+    assert.equal(bot._stall, null, 'no goal: no clock')
+    assert.deepEqual(seen.resets.filter((r) => r === 'stuck'), [])
+  })
+})
+

@@ -64,6 +64,9 @@ function chatParts(message) {
   return parts
 }
 
+const STALL_MS = 10000 // still-while-pathing budget before a re-plan (_stallReplan)
+const STALL_MOVE = 0.5 // displacement that counts as moving (stuck.js MOVE_TOLERANCE)
+
 function stripMcPrefix(s) {
   return typeof s === 'string' ? s.replace(/^minecraft:/, '') : s
 }
@@ -529,6 +532,7 @@ class BaritoneBot extends EventEmitter {
       }
     } catch (_) { /* status best-effort per round */ }
     this._maybeReissueFollow()
+    this._stallReplan()
     // neuc.10: poll-cadence event synthesis. physicsTick every in-world
     // round (doors.doorShutFast throttles to 250 ms itself); move (with
     // the previous position, mineflayer's shape) when the position
@@ -792,6 +796,49 @@ class BaritoneBot extends EventEmitter {
     this._boundSeq = this._cmdSeq
     this._goalId = null
     this._sendGoalCmd(followCmd(p, f.rangeSq))
+  }
+
+  // Stall re-plan (idkcraft-neuc.30): mineflayer-pathfinder resets a path
+  // with 'stuck' when the next node takes > 3.5 s and re-plans from where
+  // the body stands; Baritone can hang inside one movement with the goal
+  // live and no PathEvent (rig JR-BUILD: a place approach's GoalXZ on the
+  // partition column, pathing:true, body still 30 s), so isMoving read
+  // true forever and the backstop's recover episode gave up. First stall:
+  // the same goal re-sent from the live feet plus v1's 'stuck' reset
+  // (stuck.js counts it). Still again (the rig re-plan re-hung 2/2): the
+  // walk is unexecutable — stop Baritone and verdict noPath, so the owner
+  // acts like on any terminal (build places from where it stands, follow
+  // re-issues). Bridge-only: v1 never loads this file. ponytail: 10 s, not
+  // 3.5 — Baritone mines inside a movement (hand-dug stone ~7.5 s) and a
+  // re-plan resets the break; a dig-progress signal from the mod if slower
+  // digs stall.
+  _stallReplan() {
+    const p = this.entity && this.entity.position
+    const live = this._pathing && this._goalCmd && !(this._pausedDepth > 0) &&
+      !Object.values(this.controlState || {}).some(Boolean)
+    if (!live || !p || typeof p.x !== 'number') { this._stall = null; return }
+    const now = Date.now()
+    const s = this._stall
+    if (!s || s.cmd !== this._goalCmd || Math.hypot(p.x - s.x, p.y - s.y, p.z - s.z) > STALL_MOVE) {
+      this._stall = { x: p.x, y: p.y, z: p.z, at: now, cmd: this._goalCmd, replans: 0 }
+      return
+    }
+    if (now - s.at < STALL_MS) return
+    const secs = Math.round((now - s.at) / 1000)
+    this._boundSeq = this._cmdSeq // the old id's late verdict drops, like a follow re-issue
+    if (s.replans >= 1) {
+      console.log(`bridge stall noPath ${this._goalCmd} after ${secs} s still (re-plan hung too)`)
+      this._stall = null
+      this.transport.call('baritone.cmd', { command: '#stop' }).catch(failLog)
+      this._completeTerminal('noPath')
+      return
+    }
+    console.log(`bridge stall re-plan ${this._goalCmd} after ${secs} s still`)
+    s.at = now
+    s.replans++
+    this._goalId = null
+    this._sendGoalCmd(this._goalCmd)
+    this.emit('path_reset', 'stuck')
   }
 
   // Diffed Movements -> `#set` push (idkcraft-neuc.4): installed flags on
