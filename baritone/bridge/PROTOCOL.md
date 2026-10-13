@@ -301,3 +301,22 @@ serves last-good. BridgeServer seam: `onClientTick(Runnable)` plus
 Maps/Lists and convert at the boundary). Node-side wiring is landed
 (poll + router in `bot/src/bridge/index.js`); the mod half
 (`Entities.install`) went live with .1's `BridgeServer`.
+
+## Lifecycle: leaving the world (idkcraft-neuc.20)
+
+The ws stays up while the client sits at the menu, so "connected" is not
+"in world". The in-world signal is `state.get`: a non-null `pos` means
+joined; the null snapshot means at the menu (disconnect/kick/never
+joined).
+
+- Mod: `baritone.cmd` fails `-32002` (not in world) whenever the client
+  has no player/level — Baritone commands are never executed out of
+  world (their goal code dereferences the null LocalPlayer). On world
+  unload the mod executes `stop`, marks the tracked goal `stopped`, and
+  clears `pathing`, so no pathing process ticks at the menu.
+- Node adapter: after the first joined state, a null `pos` sustained
+  past a 3 s grace (respawn/dimension swaps flap inside it) emits `end`
+  once, exactly like a dropped v1 connection — `runOnce` fatal()s, the
+  container restarts, and the handshake re-sends the console
+  `connect <host> <port>`: that is the v2 rejoin path. `quit()` sends
+  `#stop` (bounded to 1 s) before the console `disconnect`.

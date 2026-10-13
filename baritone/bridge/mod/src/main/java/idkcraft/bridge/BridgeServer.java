@@ -273,21 +273,35 @@ public final class BridgeServer {
         if (command.isEmpty()) {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "command is empty");
         }
+        // idkcraft-neuc.20: never execute a Baritone command out of world.
+        // Baritone's own goal code dereferences the (null) LocalPlayer
+        // (playerFeet NPE) when a command lands at the menu, and the Node
+        // adapter keeps issuing goals until it notices the disconnect.
+        // The null snapshot is the out-of-world shape state.get serves.
+        if (snapshot == null) {
+            throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
+        }
         final String cmd = command;
         final String verb = GoalTracker.firstToken(cmd);
-        record Probe(boolean ok, Goal before, Goal after, Object beforeProc, Object afterProc) {
+        record Probe(boolean ok, boolean inWorld, Goal before, Goal after, Object beforeProc, Object afterProc) {
         }
         Probe probe = submit(() -> {
+            if (client == null || client.player == null || client.level == null) {
+                return new Probe(false, false, null, null, null, null);
+            }
             Goal before = baritone.getCustomGoalProcess().mostRecentGoal();
             Object beforeProc = baritone.getPathingControlManager().mostRecentInControl().orElse(null);
             boolean ok = baritone.getCommandManager().execute(cmd);
             Goal after = ok ? baritone.getCustomGoalProcess().mostRecentGoal() : before;
             Object afterProc =
                     ok ? baritone.getPathingControlManager().mostRecentInControl().orElse(null) : beforeProc;
-            return new Probe(ok, before, after, beforeProc, afterProc);
+            return new Probe(ok, true, before, after, beforeProc, afterProc);
         });
         if (probe == null) {
             throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
+        }
+        if (!probe.inWorld()) {
+            throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
         }
         if (!probe.ok()) {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "unknown baritone command: " + cmd);
@@ -388,6 +402,25 @@ public final class BridgeServer {
         public void onWorldEvent(WorldEvent event) {
             if (event.getWorld() == null) {
                 snapshot = null;
+                // idkcraft-neuc.20: the client left the world (disconnect/
+                // kick) — cancel Baritone here so no pathing process keeps
+                // ticking against a null LocalPlayer (its playerFeet NPE),
+                // and verdict the tracked goal stopped so the Node poll
+                // releases its latch instead of holding a dead walk.
+                pathing = false;
+                pausedLocal = false;
+                if (currentId > 0 && !terminalReceived) {
+                    terminalReceived = true;
+                    last = "stopped";
+                }
+                try {
+                    IBaritone b = baritone;
+                    if (b != null) {
+                        b.getCommandManager().execute("stop");
+                    }
+                } catch (Exception e) {
+                    LOG.warn("bridge leave-world stop failed", e);
+                }
             }
         }
     }
