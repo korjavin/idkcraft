@@ -196,6 +196,32 @@ public final class BridgeServer {
         tickHooks.add(hook);
     }
 
+    /** neuc.13: fired when the last bridge websocket connection closes. */
+    public void onWsClose(Runnable hook) {
+        ws.onLastClose(hook);
+    }
+
+    /**
+     * neuc.13: run a Baritone control command on the client thread (used by
+     * Input for pause/resume). Mirrors baritone.cmd's pausedLocal bookkeeping
+     * so the goal watchdog freeze stays correct. Never throws.
+     */
+    boolean executeBaritone(String verb) {
+        try {
+            Boolean ok = submit(() -> baritone.getCommandManager().execute(verb));
+            if (ok == null || !ok) {
+                return false;
+            }
+            Boolean paused = GoalTracker.pauseFlagFor(verb);
+            if (paused != null) {
+                pausedLocal = paused;
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** Push a mod→node notification to every connected client. */
     public void push(String method, JsonObject params) {
         JsonObject note = new JsonObject();
@@ -227,7 +253,16 @@ public final class BridgeServer {
         // adapter (which waits for pos before driving anything) would hang.
         ensureClient();
         JsonObject snap = snapshot;
-        return snap != null ? snap : nullSnapshot();
+        if (snap == null) {
+            return nullSnapshot();
+        }
+        // neuc.13 (revmux 01 core-1): input states change on the ws thread
+        // at input.set time, up to a tick before the cached snapshot is
+        // rebuilt — serve them live so a poll can never roll back an
+        // already-acked press/release on the Node mirror.
+        JsonObject live = snap.deepCopy();
+        live.add("input", Input.snapshotJson());
+        return live;
     }
 
     private com.google.gson.JsonElement chatSend(JsonObject params) throws Rpc.RpcException {
@@ -509,6 +544,7 @@ public final class BridgeServer {
         } else {
             snap.add("spawn", JsonNull.INSTANCE);
         }
+        snap.add("input", Input.snapshotJson());
         snap.addProperty("isRaining", level.isRaining());
         snap.addProperty("isSleeping", pl.isSleeping());
         snap.addProperty("dimension", level.dimension().identifier().toString());
@@ -530,6 +566,7 @@ public final class BridgeServer {
         snap.add("health", JsonNull.INSTANCE);
         snap.add("food", JsonNull.INSTANCE);
         snap.add("oxygen", JsonNull.INSTANCE);
+        snap.add("input", Input.snapshotJson());
         snap.add("time", JsonNull.INSTANCE);
         snap.add("spawn", JsonNull.INSTANCE);
         snap.add("isRaining", JsonNull.INSTANCE);
