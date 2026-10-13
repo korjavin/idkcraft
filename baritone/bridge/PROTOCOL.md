@@ -475,3 +475,56 @@ Doors while pathing: Baritone opens doors itself, so the adapter's
 `activateBlock` is a no-op for `*_door` blocks while
 `pathfinder.isMoving()` (a reflex toggle would double-toggle the panel
 shut). Adapter-side only; `doors.js` is untouched.
+
+## window.open / click / close (idkcraft-neuc.11)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Windows.java`
+(`Windows.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/windows.js` (`installWindows` from the adapter
+constructor, `handleWindowEvent` in the adapter's event router).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `window.open` | `{x,y,z}` (container block) | menu (below), after the server's window lands (≤ 2 s, else error `window.open: no window opened`) | `bot.openContainer`/`openChest`/`openDispenser`/`openFurnace` |
+| `window.click` | `{windowId,slot,mouseButton,mode}` (mineflayer modes 0-6; slot `-999` = outside) | menu after the click | `bot.clickWindow`/`simpleClick` (+ `transfer`/`putAway`/`putSelectedItemRange`, window `withdraw`/`deposit`, furnace `put*`/`take*`) |
+| `window.close` | `{windowId}` | `{ok}` | `bot.closeWindow`/`window.close()` |
+
+Menu: `{windowId,type,title,size,slots:[{slot,...inventory slot fields}],cursor:{...}|null}`
+— `type` is the menu registry id (`minecraft:generic_9x3`, `minecraft:furnace`, …),
+`size` the menu's total slot count (container + 36), `slots` the non-empty
+slots only, `cursor` the carried stack.
+
+Events (diffed per client tick): `window.open` (menu, also for a window
+the server opened), `window.slot {windowId,slot,item|null}`,
+`window.close {windowId}` (our close or the server's).
+
+Slot numbering is the vanilla menu order = mineflayer's window numbering:
+container slots first, then the player's 27 main + 9 hotbar (a 9x3 chest:
+0-26 chest, 27-53 main, 54-62 hotbar). Window id 0 is the player
+inventory menu (clicks only; `window.close` on it is a no-op). A click on
+a window that is no longer the open one fails `stale window <id>`.
+
+The client runs every click (`handleContainerInput`) and tracks the
+server's state id itself, so window-id/revision churn never reaches
+Node. Node does not predict: each click reply replaces the window's
+slots + cursor, and the container's player section is folded into
+`bot.inventory` on the spot (mineflayer `copyInventory`); later server
+corrections arrive as `window.slot`.
+
+Node fold: windows are prismarine-windows windows built from the same
+factory as `bot.inventory` (`inventory.js windowFactory`); `withdraw`/
+`deposit`/`transfer`/`putAway`/`putSelectedItemRange` are mineflayer's
+click algorithms over `clickWindow`, with its error strings
+(`destination full`, `Can't find <name> in slots [a - b]`, `Unable to
+withdraw, Bot inventory is full.`); a click that moves nothing fails
+(`transfer: click on slot N moved nothing`) instead of spinning. Furnace
+windows carry `inputItem/fuelItem/outputItem`, `takeInput/takeFuel/
+takeOutput`, `putInput/putFuel`. Baritone is paused across `window.open`
+and each `window.click` while pathing (`withBaritonePaused`, goal
+restored after) — per call, not for the window's lifetime, so a window
+left open (furnace.js keeps one across smelt ticks) never stalls a walk.
+
+Not on this wire: `window.property` (furnace fuel/progress — the
+furnace's `fuel`/`progress` fields stay null; furnace.js reads output
+growth only), entity containers (`openContainer(entity)`: no logic site
+uses it), `bot._syncWindow` (craft.js falls back to its settle wait; .12).
