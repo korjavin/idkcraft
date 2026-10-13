@@ -135,13 +135,17 @@ describe('bridge lifecycle events (idkcraft-neuc.10)', () => {
     assert.equal(seen.at(-1), 'physicsTick')
   })
 
-  it('respawn()/setAutoRespawn() cross the wire as respawn.now/respawn.set', async () => {
+  it('respawn() crosses the wire as the Look respawn RPC (neuc.21); a stray mod respawn push cannot double-emit', async () => {
     let transport
     ;({ transport, bot } = await lifeBot())
-    await bot.respawn()
+    transport.state.health = 0
+    await bot.respawn() // FakeTransport revives a dead body like the click
     assert.equal(transport.state.respawnCalls, 1)
-    await bot.setAutoRespawn(false)
-    assert.equal(transport.state.respawnAuto, false)
+    assert.equal(transport.state.health, 20)
+    let respawns = 0
+    bot.on('respawn', () => { respawns++ })
+    transport.inject('respawn', {}) // no death outstanding: dropped, _noteLife owns the pair
+    assert.equal(respawns, 0)
   })
 })
 

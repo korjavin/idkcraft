@@ -447,11 +447,11 @@ packet taps ride the `BridgeServer.onPacket` seam, edges ride
 (`installLifecycle` + `handleLifecycleEvent` in the adapter's event
 router), plus the poll synthesis in `bot/src/bridge/index.js`.
 `state.get` also carries `saturation` since this bead (the adapter maps
-it to `bot.foodSaturation`). Methods: `respawn.now {}` (send the respawn
-request now; `bot.respawn()`) and `respawn.set {auto}` (toggle the mod's
-auto-respawn; `bot.setAutoRespawn(auto)`). Auto-respawn is ON by
-default: on the death edge the client sends the respawn request itself
-(mineflayer's default), retried every 20 ticks while still dead.
+it to `bot.foodSaturation`). death/respawn are neuc.21's (see its
+Lifecycle section above): `_noteLife` emits them off the state.get
+health edge and drives the Look `respawn` RPC; this bead's lifecycle
+fold shares the same `_dead` latch, so a stray mod death/respawn push
+can never double-emit, and `bot.respawn()` is that same RPC.
 
 Every `bot.on`/`bot.once` wire in `bot/src` (index.js spawn/message/
 chat/path taps + lifecycle, behaviours/util.js, unpin.js) and its v2
@@ -467,8 +467,8 @@ source — no empty rows:
 | `physicsTick` | none — synthesised at the 100 ms poll cadence (every in-world round) | no args; `doors.doorShutFast` throttles to 250 ms itself | bridge-lifecycle: physicsTick per poll round |
 | `move` | same poll synthesis, position changed | `(oldPos)` Vec3 of the previous position | bridge-lifecycle: move carries the old pos |
 | `forcedMove` | same, jump > 8 blocks between polls | no args | bridge-lifecycle: >8 blocks is forcedMove |
-| `death` | tick edge: health ≤ 0 (was alive) | no args; `bot.health=0`, `isAlive=false` first; isAlive-guarded (no re-fire) | bridge-lifecycle: death/respawn/spawnReset shapes |
-| `respawn` | `ClientboundRespawnPacket` while dead, or tick dead→alive edge (first wins) | no args; `isAlive=true` | bridge-lifecycle (same) + runOnce death→respawn logs |
+| `death` | adapter `_noteLife` off the `state.get` health edge (neuc.21) | no args; `isAlive=false`; `_dead`-guarded (no re-fire) | bridge-lifecycle: death/respawn/spawnReset shapes |
+| `respawn` | same: first live poll after the Look `respawn` RPC revives the body (neuc.21) | no args; `isAlive=true` | bridge-lifecycle (same) + runOnce death→respawn logs |
 | `spawnReset` | `ClientboundGameEventPacket` NO_RESPAWN_BLOCK_AVAILABLE, or tick spawn-point change (first observed = baseline, no fire) | no args | bridge-lifecycle (same) |
 | `health` | tick change of health/food/saturation | no args, after `bot.health/food/foodSaturation` update | bridge-lifecycle: health updates before emitting |
 | `entityHurt` | `ClientboundDamageEventPacket` `{id}` | `(entity)` resolved from `bot.entities` (self aliased); mineflayer's 2nd `source` arg DROPPED — no consumer in bot/src | bridge-lifecycle: entityHurt resolves ids |
@@ -483,7 +483,7 @@ source — no empty rows:
 | `diggingCompleted` | neuc.7 (dig surface, parallel bead) | DEFERRED to neuc.7 — not wired by this bead | neuc.7 |
 | `windowOpen` | neuc.11 (windows surface) | DEFERRED to neuc.11 — not wired by this bead | neuc.11 |
 | `kicked` | `ClientboundDisconnectPacket` / login disconnect `{reason,loggedIn}` | `(reason, loggedIn=true)` — runOnce fatal()s it like v1 | bridge-lifecycle: kicked carries (reason, loggedIn) |
-| `end` | disconnect packet, or tick fallback when the player leaves the world with no packet | `(reason)`; once per disconnect (the transport-close twin drops; our own `quit()` is not doubled) | bridge-lifecycle: end fires once + runOnce wanted-end resolves |
+| `end` | disconnect packet; a silent drop with no packet is neuc.20's sustained null-pos grace in the adapter poll (`bridge: left world`) | `(reason)`; once per disconnect (the transport-close twin drops; our own `quit()` is not doubled) | bridge-lifecycle: end fires once + runOnce wanted-end resolves |
 | `error` | transport ws error / handshake failure (createBot) | `(Error)` — runOnce fatal()s it like v1 | bridge-body: unknown hello.mc surfaces as error |
 
 Deliberate drops: the deprecated `physicTick` alias (no consumer);

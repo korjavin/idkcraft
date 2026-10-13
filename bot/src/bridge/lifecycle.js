@@ -1,8 +1,11 @@
 // idkcraft-neuc.10: lifecycle + event parity for the Baritone body.
 //
-// The mod (baritone/bridge/mod Lifecycle.java) pushes death/respawn/
-// spawnReset/health/entityHurt/playerCollect/rain/time/kicked/end
-// notifications; this module folds them into the exact mineflayer emit
+// The mod (baritone/bridge/mod Lifecycle.java) pushes spawnReset/
+// health/entityHurt/playerCollect/rain/time/kicked/end notifications;
+// death/respawn come from BaritoneBot._noteLife (neuc.21, the state.get
+// health edge) — the 'death'/'respawn' cases below only guard a stray
+// mod push on the shared _dead latch so it can never double-emit. This
+// module folds them into the exact mineflayer emit
 // shapes bot/src/index.js wires (death/respawn no args, health after the
 // bot.health/food update, entityHurt (entity), playerCollect (collector,
 // collected), kicked (reason, loggedIn), end (reason)). entityGone /
@@ -23,11 +26,9 @@ function entityById(bot, id) {
 function installLifecycle(bot) {
   bot.isAlive = true
   if (typeof bot.foodSaturation !== 'number') bot.foodSaturation = 0
-  // mineflayer bot.respawn(): ask the client to send the respawn request
-  // now (the mod also auto-respawns on the death edge by default).
-  bot.respawn = async () => { await bot.transport.call('respawn.now', {}) }
-  // Toggle the mod's auto-respawn (mineflayer's respawn option twin).
-  bot.setAutoRespawn = (auto) => bot.transport.call('respawn.set', { auto: !!auto })
+  // mineflayer bot.respawn(): the Look surface's respawn click (neuc.21);
+  // _noteLife drives it automatically on the death edge.
+  bot.respawn = async () => { await bot.transport.call('respawn', {}) }
 }
 
 // Returns true when the notification was consumed.
@@ -35,12 +36,17 @@ function handleLifecycleEvent(bot, method, params) {
   const p = params || {}
   switch (method) {
     case 'death':
-      if (bot.isAlive === false) return true // mineflayer guards on isAlive
+      // Shared _dead guard with _noteLife (neuc.21): whichever channel
+      // sees the death first emits; the other is a no-op.
+      if (bot._dead) { bot.isAlive = false; return true }
+      bot._dead = true
       bot.isAlive = false
       bot.health = 0
       bot.emit('death')
       return true
     case 'respawn':
+      if (!bot._dead) return true // not a death respawn (dimension swap): _noteLife owns the pair
+      bot._dead = false
       bot.isAlive = true
       bot.emit('respawn')
       return true

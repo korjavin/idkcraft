@@ -278,7 +278,7 @@ class BaritoneBot extends EventEmitter {
     this.inventory = { items: () => this._inventory }
     installLook(this) // idkcraft-neuc.9: look/lookAt/attack/activate*/consume/sleep/wake/waitForTicks
     installInput(this, transport) // neuc.13: setControlState/clearControlStates/controlState
-    installLifecycle(this) // neuc.10: isAlive/foodSaturation/respawn()/setAutoRespawn()
+    installLifecycle(this) // neuc.10: isAlive/foodSaturation/respawn()
   }
 
   // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
@@ -388,12 +388,14 @@ class BaritoneBot extends EventEmitter {
   // live poll after it -> 'respawn' (index.js lifecycle pairs the two).
   _noteLife(health) {
     if (health > 0) {
+      this.isAlive = true // neuc.10: mirror mineflayer's isAlive alongside _dead
       if (this._dead) {
         this._dead = false
         this.emit('respawn')
       }
       return
     }
+    this.isAlive = false
     if (!this._dead) {
       this._dead = true
       this.emit('death')
