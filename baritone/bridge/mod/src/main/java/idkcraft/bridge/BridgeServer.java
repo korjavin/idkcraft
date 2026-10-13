@@ -77,6 +77,9 @@ public final class BridgeServer {
     private static final long SUBMIT_TIMEOUT_MS = 3000;
     private static final int MAX_CHAT_QUEUE = 1000;
     private static final int MAX_CHAT_LEN = 1000;
+    /** Vanilla serverbound chat cap: a longer string kills the client (EncoderException, idkcraft-neuc.22). */
+    private static final int MAX_CHAT_PACKET = 256;
+    private static volatile boolean chatTruncSaid = false;
 
     private static final Logger LOG = LoggerFactory.getLogger(BridgeServer.class);
 
@@ -291,6 +294,12 @@ public final class BridgeServer {
             }
             if (message.startsWith("/")) {
                 pl.connection.sendCommand(message.substring(1));
+            } else if (message.length() > MAX_CHAT_PACKET) {
+                if (!chatTruncSaid) {
+                    chatTruncSaid = true;
+                    LOG.warn("bridge chat.send truncated {} chars to {}", message.length(), MAX_CHAT_PACKET);
+                }
+                pl.connection.sendChat(message.substring(0, MAX_CHAT_PACKET));
             } else {
                 pl.connection.sendChat(message);
             }

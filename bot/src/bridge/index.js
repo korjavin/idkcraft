@@ -40,6 +40,26 @@ function gameModeName(gm) {
   if (typeof gm === 'number' && gm >= 0 && gm <= 3) return GAME_MODES[gm]
   return gm
 }
+// idkcraft-neuc.22: mineflayer bot.chat's split (lib/plugins/chat.js
+// chatWithHeader, header ''): a '/' command goes whole, else per '\n' line
+// (empties dropped) in 256-char packets. One unsplit 449-char line killed
+// the v2 client ("String too big", EncoderException) every ~62 s on prod.
+const CHAT_LENGTH_LIMIT = 256
+let chatSplitSaid = false
+function chatParts(message) {
+  const msg = String(message)
+  if (msg.startsWith('/')) return [msg]
+  const parts = []
+  for (const line of msg.split('\n')) {
+    if (line.length > CHAT_LENGTH_LIMIT && !chatSplitSaid) {
+      chatSplitSaid = true // once per process: names the long line for the bead
+      console.log(`bridge chat split ${line.length} chars: ${line.slice(0, 120)}`)
+    }
+    for (let i = 0; i < line.length; i += CHAT_LENGTH_LIMIT) parts.push(line.substring(i, i + CHAT_LENGTH_LIMIT))
+  }
+  return parts
+}
+
 function stripMcPrefix(s) {
   return typeof s === 'string' ? s.replace(/^minecraft:/, '') : s
 }
@@ -504,9 +524,11 @@ class BaritoneBot extends EventEmitter {
     // A failed call logs, never emits 'error': runOnce fatal()s every 'error'
     // (process exit), and a timed-out chat.send on a live socket is not a
     // dead connection (revmux 01 core-2).
-    this.transport.call('chat.send', { message: String(message) }).catch((e) => {
-      console.log(`bridge chat.send failed: ${(e && e.message) || e}`)
-    })
+    for (const part of chatParts(message)) {
+      this.transport.call('chat.send', { message: part }).catch((e) => {
+        console.log(`bridge chat.send failed: ${(e && e.message) || e}`)
+      })
+    }
   }
 
   _setGoal(goal, dynamic) {
