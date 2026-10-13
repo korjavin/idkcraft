@@ -50,7 +50,7 @@ No Minecraft client needed; Docker is required.
 | `PRODWORLD` | `/Users/iv/Projects/.idkcraft-prodworld` | rig dir (outside the repo) |
 | `REPLAY_TAG` | `r` + 3 pid digits | bot name suffix (16-char username cap); the wrapper pre-ops these names |
 | `REPLAY_OUT` | `bot/tools/last-replay.json` | JSON results path |
-| `REPLAY_BASELINE` | `bot/tools/stuck-baseline.json` | baseline file |
+| `REPLAY_BASELINE` | `bot/tools/stuck-baseline.json` (`stuck-baseline-v2.json` under `REPLAY_BODY=baritone`) | baseline file |
 | `REPLAY_BASELINE_OFF=1` | — | record only, skip the comparison |
 | `REPLAY_BRAIN` | `stub` | `stub` (gate) or `laya` (menu measurement, see below) |
 | `REPLAY_PLANNER` | `stub` | `jev` / `llm`: the stub brain plus the stall-point `plan()` (prod `makeBrain` shape), so stuck recovery escalates to it after a failed primitive (idkcraft-vhlb.4). Keys from env, else stash (`secrets/jev-api-key`, `secrets/minecraft/anthropic-api-key`). Judged against the stub baseline |
@@ -389,30 +389,77 @@ The baseline is forced off (worker rows are never compared), and the run
 exits 2 when the worker never joins. One worker client per box (a second
 `REPLAY_WORKER` run fails loud at the already-running guard).
 
-## v2 body runs (`REPLAY_BODY=baritone`, idkcraft-neuc.5)
+## v2 body runs (`REPLAY_BODY=baritone`, idkcraft-neuc.5/.15/.23)
 
-Runs the FOLLOWER on the Baritone body — the M1/M2 proof harness for the v2
+Runs the FOLLOWER on the Baritone body — the regression gate for the v2
 epic (idkcraft-neuc). The wrapper pre-ops the follower name, boots the
-offline client under it (`baritone/client.sh`, name `idk-baritone-body`),
-publishes the console bridge (`BODY_CONSOLE_PORT`, default 7779 — name and
-port are distinct from the worker's, so `REPLAY_WORKER=1` shares one box)
-and the Fabric mod ws (`MOD_PORT`, default 7778), and exports
-`BOT_BODY=baritone` plus the `BRIDGE_*` addresses for the replay; the replay
-builds the follower via `bot/src/bridge` (the MC address the container
-connects to is `REPLAY_BODY_MC_HOST`, default `host.docker.internal`)
-while the guide stays mineflayer. The body log lands at
-`/tmp/stuck-body-<variant>.log` (Baritone's `[CHAT] [Baritone] ...` lines
-prove the goal reached the client). Wave-1 mode is record-only:
+offline client under it (`baritone/client.sh`, API jar), publishes the
+console bridge and the Fabric mod ws, and exports `BOT_BODY=baritone` plus
+the `BRIDGE_*` addresses for the replay; the replay builds the follower via
+`bot/src/bridge` (the MC address the container connects to is
+`REPLAY_BODY_MC_HOST`, default `host.docker.internal`) while the guide stays
+mineflayer. The body log lands at `/tmp/stuck-body-<variant>[-<RIG_ID>].log`
+(Baritone's `[CHAT] [Baritone] ...` lines prove the goal reached the client).
 
 ```sh
-REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base bot/tools/stuck-spots.json
-REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base bot/tools/task-spots.json   # MINE-10 is M2's gate
-sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical flow
+docker build -t idkcraft-baritone:local baritone   # once per mod change: client.sh's default image
+REPLAY_BODY=baritone sh bot/tools/stuck-run.sh                      # judged against stuck-baseline-v2.json
+REPLAY_BODY=baritone RIG_ID=auto RIG_LOCK_WAIT=3600 sh bot/tools/stuck-run.sh   # beside other rig users
+REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base bot/tools/task-spots.json
+sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical flow, stuck-baseline.json
 ```
 
-One body client per box, like the worker. `REPLAY_BASELINE_OFF=1` keeps the
-v1 baseline from judging v2 rows; idkcraft-neuc.15 ships
-`stuck-baseline-v2.json`.
+- **Image** (idkcraft-neuc.23): `client.sh` defaults to
+  `idkcraft-baritone:local`, a build of THIS tree's `baritone/` (bridge mod
+  included) — a missing image exits 2 with the build hint. Pin
+  `BARITONE_IMAGE=<tag>` when another agent may rebuild `:local` under you
+  mid-run (a tag per sha is the safe habit). The old `:spike` default had no
+  mod: the body joined, the ws never opened.
+- **Per slot** (idkcraft-neuc.23): on `RIG_ID=<a-z>` the body container is
+  `idk-baritone-body-<id>` and the ports shift by 2 x letter index
+  (default rig 7778/7779, a=7780/7781, z=7830/7831 — `baritone/bridge/rig.sh`
+  uses z), so parallel v2 runs never collide. `BODY_CLIENT`, `MOD_PORT`,
+  `BODY_CONSOLE_PORT` still override. The worker (`REPLAY_WORKER=1`) keeps
+  one fixed name/port: one worker per box.
+- **Baseline** (idkcraft-neuc.15): `BOT_BODY=baritone` makes the replay
+  judge against `stuck-baseline-v2.json` (`REPLAY_BASELINE` still wins); the
+  v1 file is never read by a v2 run and never edited for one. The flake
+  rerun relaunches the body client after the fresh boot. The v2 file is
+  recorded like v1 (worse of two full runs: reached = both, stuck + 2,
+  episodes + 1, calls strict) and may cover a SUBSET of the corpus while v2
+  is incomplete (`npm test`: no dangling entry, well-formed, and every spot
+  v1 reaches but v2 does not names its `blockedBy` bead plus a `why`). A
+  `blockedBy` spot reached on a later run prints `IMPROVED`: re-record both
+  runs and drop the annotation in the PR that fixed it.
+- `BOT_AUTONOMOUS` takes `1`/`true`/`yes` — `on` reads as off (bot/src
+  `parseAutonomous`; chat `autonomous on` is the in-game toggle).
+
+### v1 vs v2 (2026-10-13, rig, offline names)
+
+v2 on master f0f6dd63 (incl. neuc.30) with the body image built from it; v1
+on be078570 (neuc.30 touched only `bot/src/bridge` and the mod — no v1
+path). Per-spot table: the neuc.15 PR body.
+
+| | v1 (mineflayer) | v2 (Baritone body) |
+|---|---|---|
+| corpus reached (32) | 30 | 24 and 23 (baseline: 22, worse of two) |
+| BED-60 (3 runs) | 3/3, 24-25 s | 3/3, 21-22 s |
+| MINE-10 (3 runs) | 3/3, 161-163 s | 3/3, 107-109 s |
+| ATL-SHAFT order | 34 s, delivery 6 s after the last ore | 24-25 s, delivery 6 s after |
+| lost-shaft / deep unfreeze lines | 0 | 0 |
+| client CPU (mean) | node 15-17 % | node 8-10 % + body JVM 28-100 % |
+| client memory (mean / max) | node ~205 / 334 MiB | node ~150 / 282 MiB + body 2.1-2.2 / 2.6 GiB (corpus), 1.55 / 2.0 GiB (tasks) |
+
+v2 gaps (beads): DUGPIT-BARE (neuc.34, water_up never offered), JR-BUILD /
+JR-BUILD-FRESH / SHELTER-WATER (neuc.29, place refusals, no-cap-ref),
+MOAT-EXIT / HOME-PIT / HOME-ROOF / HOME-PIT-DEEP (neuc.33, order answered
+before the post-tp chunk cache fills), DROWNED-SHORE reached but through the
+drowned disc (closest 3.5-9.9 vs the v1 floor 30; no v2 `minDanger` yet,
+neuc.25). The body's corpus peak (2.6 GiB) is above the compose
+`BODY2_MEM_LIMIT` default (2500m) — size it before the prod rollout
+(neuc.16). Deep return: the diamond leg (`deep.js`, where `lost-shaft`
+lives) runs on none of these orders; ATL-SHAFT's iron shaft is shallow, and
+MINE-10's count judge ends the window before the walk back.
 
 ## `REPLAY_BRAIN=laya`
 
