@@ -91,7 +91,8 @@ const SITE_DIRS = [[6, 0], [4, 4], [0, 6], [-4, 4], [-6, 0], [-4, -4], [0, -6], 
 // The caller waits (chunks load, the next attempt validates) or refuses
 // honestly. The JR-BUILD slope rig is safe: its skip-0 baseline proves
 // the footprint wins this loop, the fallback never fired there.
-function siteFor(bot, around) {
+// `accept` (optional, neuc.32) vetoes a fit so the next direction is tried.
+function siteFor(bot, around, accept) {
   if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return null
   const cx = Math.floor(around.x)
   const cz = Math.floor(around.z)
@@ -118,7 +119,50 @@ function siteFor(bot, around) {
     // the R3 meadow fit, whose door sat on pristine grass_block). Flora
     // over flat dirt still reads y0, so the R3 meadow keeps accepting.
     if (groundY(bot, ox + 3, oz + 0, cy + 8) !== y0) continue
-    return makeHome(ox, y0, oz, 2)
+    const home = makeHome(ox, y0, oz, 2)
+    if (accept && !accept(home, cy + 8)) continue
+    return home
+  }
+  return null
+}
+
+// Open sky over a site (neuc.32): every footprint column reads air (or
+// clearable flora) from its ground up to SKY_CLEAR above the floor. Rock
+// read as ground at the scan top (underground), a cave ceiling, a canopy
+// or an overhang all refuse; unloaded cells refuse too.
+const SKY_CLEAR = 16
+function skyOpen(bot, home, topY) {
+  const { x: ox, y: y0, z: oz } = home.site
+  for (let ix = 0; ix < 7; ix++) {
+    for (let iz = 0; iz < 6; iz++) {
+      const gy = groundY(bot, ox + ix, oz + iz, topY)
+      if (gy == null || gy > y0 + 1) return false // a canopy read as ground
+      for (let y = gy; y <= y0 + SKY_CLEAR; y++) {
+        let b = null
+        try { b = bot.blockAt(new Vec3(ox + ix, y, oz + iz)) } catch (_) { return false }
+        if (!b || !b.name) return false
+        if (b.name !== 'air' && !CLEAR_FLORA.has(b.name)) return false
+      }
+    }
+  }
+  return true
+}
+
+// Homeless bot under cover (neuc.32: prod v2 sat under a lake bed at
+// 44,58,-20, every scan at the body read water and the shore site was 3
+// above the feet): the nearest open-sky site on rings around the body —
+// the body itself, then anchors 12 and 24 out (sites up to ~30 away).
+// ponytail: up to 17 siteFor scans per call; the no-site hold paces calls.
+function skySiteNear(bot, p) {
+  if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') return null
+  const accept = (home, topY) => skyOpen(bot, home, topY)
+  const near = siteFor(bot, p, accept)
+  if (near) return near
+  for (const k of [2, 4]) {
+    for (const [dx, dz] of SITE_DIRS) {
+      const s = siteFor(bot, { x: p.x + dx * k, y: p.y, z: p.z + dz * k }, accept)
+      if (s) return s
+    }
   }
   return null
 }
@@ -175,4 +219,4 @@ function timeWord(bot) {
   return timeOfDay < 12000 ? 'day' : timeOfDay <= 13000 ? 'dusk' : 'night'
 }
 
-module.exports = { needPlanks, makeHome, groundY, BUILT_GROUND, SITE_DIRS, siteFor, isV2House, timeWord }
+module.exports = { needPlanks, makeHome, groundY, BUILT_GROUND, SITE_DIRS, siteFor, skyOpen, skySiteNear, isV2House, timeWord }
