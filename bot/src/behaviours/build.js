@@ -481,11 +481,13 @@ function guardOwnWalls(bot, ctx, homeOpt) {
     }
     const byName = (bot.registry && bot.registry.blocksByName) || {}
     const ids = new Set()
+    const names = []
     for (const name of Object.keys(byName)) {
       const entry = byName[name]
       if (typeof name !== 'string' || !entry || typeof entry.id !== 'number') continue
       if (name.endsWith('_planks') || name.endsWith('_door') || name === 'crafting_table') {
         ids.add(entry.id)
+        names.push(name)
       }
     }
     if (ids.size === 0) return
@@ -507,6 +509,9 @@ function guardOwnWalls(bot, ctx, homeOpt) {
           q.z >= box.z0 && q.z <= box.z1) ? 100 : 0
       } catch (_) { return 0 }
     }
+    // v2 has no per-cell break cost: the bridge adapter reads these names
+    // into Baritone's blocksToAvoidBreaking (idkcraft-neuc.27). v1 ignores it.
+    fn.guardNames = names
     mov.exclusionAreasBreak.push(fn)
     ctx.buildGuardFn = fn
     ctx.buildGuardedMov = mov
@@ -669,11 +674,21 @@ function build(bot, ctx, target, state) {
   // lay hut cells at castle coords.
   if (ctx.home && ctx.home.kind === 'castle') { failBuild(ctx, 'castle-residence'); return }
   // First build step without a home: default the site to world spawn
-  // (site.js siteFor; the owner moves it with 'build here').
+  // (site.js siteFor; the owner moves it with 'build here'), else around
+  // the body (idkcraft-neuc.27: a fresh-memory bot far from spawn, or a
+  // spawn ringed by water/builds/relief, never validates a spawn site —
+  // rig: no-site forever on both bodies; 'build here' anchors the same way).
   if (!ctx.home) {
     const site = require('../site')
     try {
       ctx.home = site.siteFor(bot, bot.spawnPoint)
+      if (!ctx.home) {
+        // Only at the surface: underground the scan reads the rock above
+        // as flat ground (site y far above the feet) — refuse that.
+        const p = bot.entity && bot.entity.position
+        const near = p ? site.siteFor(bot, p) : null
+        if (near && Math.abs(near.site.y - Math.floor(p.y)) <= 1) ctx.home = near
+      }
     } catch (_) {
       ctx.home = null
     }

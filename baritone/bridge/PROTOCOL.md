@@ -248,7 +248,7 @@ settings.txt baseline):
 | allowParkour | allowParkour |
 | allow1by1towers | allowPlace |
 | scafoldingBlocks ids | acceptableThrowawayItems (comma-joined names via the registry) |
-| blocksCantBreak ids | blocksToAvoidBreaking (diggable names only — chest + deliberate adds; bedrock-class defaults need no telling) |
+| blocksCantBreak ids | blocksToAvoidBreaking (diggable names only — chest + deliberate adds; bedrock-class defaults need no telling) plus build.js's own-home guard names (`exclusionAreasBreak` fn `.guardNames`, id-global on v2) |
 
 Unmapped ceilings: canOpenDoors (Baritone opens doors itself), Movements
 blocksToAvoid (a future bead can send Baritone's own blocksToAvoid),
@@ -676,7 +676,7 @@ wrap `bot.placeBlock`; `handleInteractEvent` in the event router).
 |---|---|---|---|
 | `dig.start` | `{x,y,z,face,look}` | `{ok}` at once; the outcome is a notification | `bot.dig(block, forceLook, digFace)` |
 | `dig.abort` | — | `{ok,aborted}` | `bot.stopDigging()` |
-| `place.once` | `{x,y,z,face,yaw,pitch,cursor{x,y,z},sneak}` — x,y,z = the TARGET cell, `face` = the clicked face of the reference (ref = target − face) | `{ok,result}` (vanilla InteractionResult) | `bot.placeBlock(ref, faceVector)` |
+| `place.once` | `{x,y,z,face,yaw,pitch,cursor{x,y,z},sneak}` — x,y,z = the TARGET cell, `face` = the clicked face of the reference (ref = target − face); a hitbox overlapping the target cell by ≤ 0.5 is first stepped clear on the shorter axis (if the shifted box is collision-free, +120 ms settle) — Baritone stops anywhere in a block, mineflayer centres | `{ok,result}` (vanilla InteractionResult) | `bot.placeBlock(ref, faceVector)` |
 
 Notifications: `dig.progress {x,y,z,progress}` (0..1 on each destroy-stage
 change), `dig.done {x,y,z,broke,stateId}` (the cell's new state),

@@ -13,6 +13,7 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -45,6 +46,10 @@ public final class Interact {
     private static final long DIG_TIMEOUT_MS = 30000;
     /** Server reach slack past blockInteractionRange (vanilla validates 1.0 more). */
     private static final double REACH_SLACK = 1.0;
+    /** neuc.26 stepClear: clearance past the cell edge, the largest nudge, one tick + slack. */
+    private static final double SHIFT_MARGIN = 0.05;
+    private static final double MAX_SHIFT = 0.5;
+    private static final long SHIFT_SETTLE_MS = 120;
 
     private final BridgeServer server;
     /** The one dig in flight; client thread only. */
@@ -103,6 +108,18 @@ public final class Interact {
             double cx = cursor(params, "x", 0.5 + dir.getStepX() * 0.5);
             double cy = cursor(params, "y", 0.5 + dir.getStepY() * 0.5);
             double cz = cursor(params, "z", 0.5 + dir.getStepZ() * 0.5);
+            // neuc.26: Baritone stops anywhere inside the stand block, so our
+            // own hitbox can poke into the target cell and vanilla refuses the
+            // place (Fail, "still air"). Step out first, then let one client
+            // tick send the new position before the click.
+            JsonObject clear = in.onPlayer(player -> stepClear(player, new BlockPos(x, y, z)));
+            if (clear.has("shifted") && clear.get("shifted").getAsBoolean()) {
+                try {
+                    Thread.sleep(SHIFT_SETTLE_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             return in.onPlayer(player -> {
                 Minecraft client = Minecraft.getInstance();
                 if (client.gameMode == null) {
@@ -133,6 +150,41 @@ public final class Interact {
                 }
             });
         });
+    }
+
+    /**
+     * Client thread: when the player's hitbox intersects the target cell,
+     * move it out horizontally along the shallower axis (+ a small margin),
+     * only into free space and never further than MAX_SHIFT (standing in the
+     * target column is the caller's problem, as on v1). Reply
+     * {@code {ok,shifted}}.
+     */
+    private static JsonObject stepClear(LocalPlayer player, BlockPos target) {
+        JsonObject res = ok();
+        res.addProperty("shifted", false);
+        AABB box = player.getBoundingBox();
+        AABB cell = new AABB(target);
+        if (!box.intersects(cell)) {
+            return res;
+        }
+        double px = player.getX() >= target.getX() + 0.5 ? cell.maxX - box.minX : cell.minX - box.maxX;
+        double pz = player.getZ() >= target.getZ() + 0.5 ? cell.maxZ - box.minZ : cell.minZ - box.maxZ;
+        double dx = 0;
+        double dz = 0;
+        if (Math.abs(px) <= Math.abs(pz)) {
+            dx = px + Math.signum(px) * SHIFT_MARGIN;
+        } else {
+            dz = pz + Math.signum(pz) * SHIFT_MARGIN;
+        }
+        if (Math.abs(dx) + Math.abs(dz) > MAX_SHIFT) {
+            return res;
+        }
+        if (!player.level().noCollision(player, box.move(dx, 0, dz))) {
+            return res;
+        }
+        player.setPos(player.getX() + dx, player.getY(), player.getZ() + dz);
+        res.addProperty("shifted", true);
+        return res;
     }
 
     /** Client thread: begin a dig (replacing any dig in flight). */

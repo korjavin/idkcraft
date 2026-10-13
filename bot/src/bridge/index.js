@@ -206,6 +206,18 @@ function movementsToSettings(m, registry) {
       if (entry && entry.diggable === false) continue
       names.push(n)
     }
+    // build.js's own-home guard (idkcraft-neuc.27): a per-cell cost Baritone
+    // cannot express, so its block names are avoided everywhere while it is
+    // installed — rig: GoalXZ approaches dug the fresh walls and rebuilt them
+    // for 10+ min. ponytail: id-global; a box-scoped Baritone hook if v2 must
+    // dig stray planks far from home.
+    if (Array.isArray(m.exclusionAreasBreak)) {
+      for (const fn of m.exclusionAreasBreak) {
+        if (fn && Array.isArray(fn.guardNames)) {
+          for (const n of fn.guardNames) if (!names.includes(n)) names.push(n)
+        }
+      }
+    }
     if (names.length > 0) desired.blocksToAvoidBreaking = names.join(',')
   }
   return desired
