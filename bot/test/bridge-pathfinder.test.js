@@ -585,6 +585,14 @@ describe('Movements -> #set map', () => {
     })
   })
 
+  it('neuc.27: the own-home guard names join blocksToAvoidBreaking', () => {
+    const m = movs()
+    const guard = () => 0
+    guard.guardNames = ['oak_planks', 'chest', 'oak_door']
+    m.exclusionAreasBreak.push(guard)
+    assert.equal(movementsToSettings(m, REGISTRY).blocksToAvoidBreaking, 'chest,oak_planks,oak_door')
+  })
+
   it('resolves ids through the ByName maps when arrays are absent', () => {
     const minimal = { blocksByName: REGISTRY.blocksByName, itemsByName: REGISTRY.itemsByName }
     assert.deepEqual(movementsToSettings(movs(), minimal), {

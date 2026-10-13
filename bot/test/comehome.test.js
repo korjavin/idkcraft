@@ -628,6 +628,8 @@ describe('jr2.3 release walks the doorway before the new mode', () => {
     buildMod.guardOwnWalls(bot, ctx)
     assert.equal(seen(101, 64, 100), 100, 'new site guarded once outside')
     assert.equal(seen(11, 64, 20), 0, 'old box freed once outside')
+    // neuc.27: the guard carries its names for the v2 adapter (blocksToAvoidBreaking).
+    assert.deepEqual(bot.pathfinder.movements.exclusionAreasBreak[0].guardNames, ['oak_planks', 'oak_door'])
   })
 
   it('already outside (died mid-exit) releases at once', () => {

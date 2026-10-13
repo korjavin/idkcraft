@@ -78,11 +78,23 @@ describe('67z3: every build failure logs its reason', () => {
 
   it('failed:no-site writes build failed:no-site', () => {
     const world = makeWorld()
-    const bot = mockBot(world, { spawn: null })
+    // neuc.27: underground (the rock above reads as flat ground) refuses the
+    // body-anchored fallback too.
+    const bot = mockBot(world, { spawn: null, at: pos(0, 40, 0) })
     const ctx = {}
     const lines = logged(() => build(bot, ctx))
     assert.equal(ctx.stepStatus, 'failed:no-site')
     assert.ok(lines.some((l) => l === 'build failed:no-site'), lines.join('\n'))
+  })
+
+  it('neuc.27: no spawn site falls back to a surface site around the body', () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { spawn: null, at: pos(100, 64, 100) })
+    const ctx = {}
+    logged(() => build(bot, ctx))
+    assert.ok(ctx.home && ctx.home.site, 'site founded')
+    assert.equal(ctx.home.site.y, 64)
+    assert.ok(Math.hypot(ctx.home.site.x - 100, ctx.home.site.z - 100) <= 8)
   })
 
   it('failed:skipped-cells writes build failed:skipped-cells', () => {
