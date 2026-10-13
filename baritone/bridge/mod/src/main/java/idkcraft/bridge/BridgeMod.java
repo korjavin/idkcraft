@@ -20,6 +20,7 @@ public class BridgeMod implements ClientModInitializer {
         try {
             BridgeServer server = new BridgeServer();
             Entities.install(server); // idkcraft-neuc.3, enabled by .1
+            Look.install(server); // idkcraft-neuc.9
             Input.install(server); // idkcraft-neuc.13: control states
             server.start();
         } catch (NoClassDefFoundError e) {
