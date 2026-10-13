@@ -60,7 +60,7 @@ describe('goal translation (pathfinder -> Baritone)', () => {
   })
   it('maps GoalFollow to a one-shot #goto at the live target', () => {
     const target = { position: new Vec3(10.25, 64, -4.5) }
-    assert.equal(goalToBaritone(new goals.GoalFollow(target, 3)), '#goto 10.3 64.0 -4.5')
+    assert.equal(goalToBaritone(new goals.GoalFollow(target, 3)), '#near 10 64 -5 3')
   })
   it('maps GoalY to a single-number #goto (Baritone Y level)', () => {
     assert.equal(goalToBaritone(new goals.GoalY(70)), '#goto 70')
@@ -441,7 +441,7 @@ describe('GoalFollow re-issue (dynamic, throttled)', () => {
     bot._follow.at -= 1500 // the second passes
     await bot.refresh()
     assert.equal(transport.state.baritoneSeq, 2)
-    assert.equal(transport.state.baritone, '#goto 30.0 64.0 30.0')
+    assert.equal(transport.state.baritone, '#near 30 64 30 3')
     await sleep(10)
     assert.equal(bot._goalId, 2) // the new echo rebinds
   })
@@ -505,7 +505,7 @@ describe('GoalFollow re-issue (dynamic, throttled)', () => {
 
     target.position = new Vec3(5, 64, 0) // knocked back out of range
     await bot.refresh()
-    assert.equal(transport.state.baritone, '#goto 5.0 64.0 0.0')
+    assert.equal(transport.state.baritone, '#near 5 64 0 2')
     assert.equal(bot.pathfinder.isMoving(), true)
     await sleep(10)
     assert.equal(bot._goalId, 1)
@@ -698,14 +698,14 @@ describe('bestHarvestTool/getPathTo shims', () => {
 })
 
 describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
-  it('issues, walks (fake #goto), rests in range, re-issues when the target leaves', async () => {
+  it('issues, walks (fake #near), rests in range, re-issues when the target leaves', async () => {
     const { transport, bot } = pathBot()
     await bot.start({ pollMs: 0 })
     try {
       const gotos = []
       const orig = transport.call.bind(transport)
       transport.call = async (method, params) => {
-        if (method === 'baritone.cmd' && /^#goto/.test(params.command)) gotos.push(params.command)
+        if (method === 'baritone.cmd' && /^#(goto|near)/.test(params.command)) gotos.push(params.command)
         return orig(method, params)
       }
       const ctx = {}
@@ -715,7 +715,7 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
 
       follow(bot, ctx, target) // fresh key: issues GoalFollow
       assert.ok(bot.pathfinder.goal, 'goal stored')
-      assert.equal(transport.state.baritone, '#goto 10.0 64.0 10.0')
+      assert.equal(transport.state.baritone, '#near 10 64 10 3')
       await sleep(10)
       await bot.refresh() // round 1: fake walk lands, motion witnessed
       assert.deepEqual(
@@ -734,8 +734,8 @@ describe('follow.js unchanged through the adapter (FakeTransport walk)', () => {
       target.position = new Vec3(30, 64, 30) // player walks away
       ctx.lastPathStatus = 'success' // terminal verdict, executor idle
       follow(bot, ctx, target)
-      assert.equal(transport.state.baritone, '#goto 30.0 64.0 30.0')
-      assert.deepEqual(gotos, ['#goto 10.0 64.0 10.0', '#goto 30.0 64.0 30.0']) // one #goto per re-issue
+      assert.equal(transport.state.baritone, '#near 30 64 30 3')
+      assert.deepEqual(gotos, ['#near 10 64 10 3', '#near 30 64 30 3']) // one goal cmd per re-issue
     } finally {
       await bot.stop()
     }
