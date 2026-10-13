@@ -50,8 +50,12 @@ public final class Interact {
     private static final double REACH_SLACK = 1.0;
     /** neuc.26 stepClear: clearance past the cell edge, the largest nudge, one tick + slack. */
     private static final double SHIFT_MARGIN = 0.05;
-    /** Centre of the target column to clear of it: 0.5 + half the 0.6 hitbox + margin. */
-    private static final double MAX_SHIFT = 0.85;
+    /**
+     * Centre of the target column to clear of it: 0.5 + half the 0.6 hitbox
+     * + margin = 0.85, plus slack — the half-width is a float (0.30000001),
+     * so a centred body needs 0.85000001.
+     */
+    private static final double MAX_SHIFT = 0.9;
     /** neuc.29 stepClear: how deep under the shifted feet a floor must be found. */
     private static final double FLOOR_PROBE = 0.1;
     private static final long SHIFT_SETTLE_MS = 120;
