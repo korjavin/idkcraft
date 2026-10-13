@@ -24,14 +24,13 @@ function winBot({ inventory = [], chest = [], furnaceSlots = [] } = {}) {
   const transport = new FakeTransport({
     pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true },
     inventory,
+    blocks: { '2,64,0': 'chest', '-2,64,0': 'furnace' }, // neuc.6: the chunk cache serves them after start()
     containers: {
       '2,64,0': { type: 'minecraft:generic_9x3', size: 27, title: 'Chest', slots: chest },
       '-2,64,0': { type: 'minecraft:furnace', size: 3, title: 'Furnace', slots: furnaceSlots, accept: { 1: ['coal', 'charcoal'] } },
     },
   })
   const bot = new BaritoneBot(transport, { Vec3, registry, username: 'IdkBody' })
-  bot._cacheBlock({ name: 'chest', ...CHEST })
-  bot._cacheBlock({ name: 'furnace', ...FURNACE })
   return { transport, bot }
 }
 

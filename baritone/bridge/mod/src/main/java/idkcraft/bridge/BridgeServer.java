@@ -213,6 +213,18 @@ public final class BridgeServer {
         tickHooks.add(hook);
     }
 
+    private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Packet<?>>> packetHooks =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /**
+     * Observe inbound packets (POST, netty thread — capture immutable data
+     * only). Added for the chunks surface (idkcraft-neuc.6); additive, the
+     * core chat capture above is untouched.
+     */
+    public void onPacket(java.util.function.Consumer<Packet<?>> hook) {
+        packetHooks.add(hook);
+    }
+
     /** neuc.13: fired when the last bridge websocket connection closes. */
     public void onWsClose(Runnable hook) {
         ws.onLastClose(hook);
@@ -473,7 +485,12 @@ public final class BridgeServer {
             // POST = vanilla accepted the packet; PRE would also see drops.
             // Runs on the netty thread: capture immutable packet data only,
             // names resolve on the client tick in flushChat().
-            if (event.getState() != EventState.POST) {
+            // neuc.10: a play-state disconnect (kick) tears the connection
+            // down inside its handler, so its POST never fires (rig: rcon
+            // kick produced no kicked push) — the hooks see it at PRE.
+            boolean disconnect = event.getPacket()
+                    instanceof net.minecraft.network.protocol.common.ClientboundDisconnectPacket;
+            if (event.getState() != (disconnect ? EventState.PRE : EventState.POST)) {
                 return;
             }
             captureChat(event.getPacket());
@@ -481,7 +498,7 @@ public final class BridgeServer {
                 try {
                     hook.accept(event.getPacket());
                 } catch (Exception ignored) {
-                    // A surface's packet tap must never break packet handling.
+                    // A surface's packet view must never break the core capture.
                 }
             }
         }
@@ -723,7 +740,8 @@ public final class BridgeServer {
      * Returns null when the game is still booting or the call times out;
      * re-entrant when already on the client thread.
      */
-    private <V> V submit(java.util.concurrent.Callable<V> task) {
+    // Package-visible for surface classes (Chunks, neuc.6): same seam.
+    <V> V submit(java.util.concurrent.Callable<V> task) {
         if (!ensureClient()) {
             return null;
         }

@@ -165,6 +165,81 @@ async function main() {
   if (typeof me.uuid !== 'string' || typeof me.ping !== 'number') fail('roster.get', `bad entry: ${JSON.stringify(me)}`)
   pass('roster.get', `${ro.players.length} player(s), ${BOT} ping=${me.ping} mode=${me.gameMode}`)
 
+  // 5b. chunks (neuc.6) — the body column lists, chunk.get decodes, and
+  // the state id under the feet must exist in minecraft-data 26.1.2 with
+  // the same numbering (the adapter builds prismarine-blocks from it).
+  const cl = await t.call('chunks.list', {})
+  if (!cl || !Array.isArray(cl.columns)) fail('chunks.list', `bad reply: ${JSON.stringify(cl)}`)
+  const bcx = Math.floor(pos.x / 16)
+  const bcz = Math.floor(pos.z / 16)
+  if (!cl.columns.some((c) => c.cx === bcx && c.cz === bcz)) fail('chunks.list', `body column ${bcx},${bcz} not loaded (${cl.columns.length} columns)`)
+  const cg = await t.call('chunk.get', { cx: bcx, cz: bcz })
+  if (!cg || !Array.isArray(cg.sections) || typeof cg.minY !== 'number') fail('chunk.get', `bad reply: ${JSON.stringify(cg && { minY: cg.minY, sections: (cg.sections || []).length })}`)
+  const mcData = require('../../../bot/node_modules/minecraft-data')('26.1.2')
+  const fx = Math.floor(pos.x)
+  const fy = Math.floor(pos.y) - 1
+  const fz = Math.floor(pos.z)
+  const sec = cg.sections.find((s) => s.y === Math.floor(fy / 16))
+  if (!sec) fail('chunk.get', `no section for y=${fy}`)
+  let underName = 'air'
+  if (sec.states) {
+    const raw = Buffer.from(sec.states, 'base64')
+    const idx = (((fy - cg.minY) & 15) << 8) | ((fz & 15) << 4) | (fx & 15)
+    const stateId = raw.readInt16LE(idx * 2)
+    const entry = mcData.blocksByStateId[stateId]
+    if (stateId !== 0 && !entry) fail('chunk.get', `stateId ${stateId} under feet not in minecraft-data (numbering mismatch)`)
+    underName = entry ? entry.name : 'air'
+  }
+  pass('chunks', `${cl.columns.length} columns, minY=${cg.minY}, under-feet=${underName} at ${fx} ${fy} ${fz}`)
+
+  // 5c. chunks ground truth: rcon setblock writes known blocks into the
+  // body column; a fresh chunk.get must decode them back by NAME (this
+  // is the blockAt == server-truth probe: stone/water/oak_log/air ids).
+  const probes = [
+    [bcx * 16 + 2, fy + 1, bcz * 16 + 2, 'stone'],
+    [bcx * 16 + 2, fy + 2, bcz * 16 + 2, 'oak_log'],
+    [bcx * 16 + 3, fy + 1, bcz * 16 + 2, 'water'],
+    [bcx * 16 + 3, fy + 2, bcz * 16 + 2, 'air'],
+  ]
+  for (const [px, py, pz, name] of probes) {
+    const out = sh('docker', ['exec', RIG, 'rcon-cli', `setblock ${px} ${py} ${pz} minecraft:${name}`])
+    if (out === null) fail('chunks.probe', `rcon setblock ${name} failed`)
+  }
+  await sleep(500)
+  const cg2 = await t.call('chunk.get', { cx: bcx, cz: bcz })
+  const decodeAt = (cgx, px, py, pz) => {
+    const s = cgx.sections.find((s2) => s2.y === Math.floor(py / 16))
+    if (!s || !s.states) return 'air'
+    const raw = Buffer.from(s.states, 'base64')
+    const idx = (((py - cgx.minY) & 15) << 8) | ((pz & 15) << 4) | (px & 15)
+    const entry = mcData.blocksByStateId[raw.readInt16LE(idx * 2)]
+    return entry ? entry.name : null
+  }
+  for (const [px, py, pz, name] of probes) {
+    const got = decodeAt(cg2, px, py, pz)
+    if (got !== name) fail('chunks.probe', `at ${px} ${py} ${pz}: server set ${name}, chunk.get decoded ${got}`)
+  }
+  pass('chunks.probe', `setblock round-trip: ${probes.map((p) => p[3]).join('/')}`)
+
+  // 5d. the bead's adapter probe: the REAL adapter (its own ws) fills its
+  // chunk cache; bot.blockAt(feet-1) at 5 random points around the body
+  // must name what the server holds (rcon `execute if block`).
+  const { BaritoneBot } = require('../../../bot/src/bridge/index.js')
+  const { Vec3 } = require('../../../bot/node_modules/vec3')
+  const ab = new BaritoneBot(new BridgeTransport(`ws://${MOD_HOST}:${MOD_PORT}/rpc`, { timeoutMs: 8000 }), { Vec3, registry: mcData, username: BOT })
+  await ab.start({ pollMs: 0 })
+  for (let i = 0; i < 5; i++) {
+    const [px, py, pz] = [fx + Math.floor(Math.random() * 25) - 12, fy, fz + Math.floor(Math.random() * 25) - 12]
+    let b = null
+    for (let k = 0; k < 20 && !b; k++) { b = ab.blockAt(new Vec3(px, py, pz)); if (!b) await sleep(250) }
+    if (!b) fail('adapter.blockAt', `null at ${px} ${py} ${pz} (column never filled)`)
+    const out = sh('docker', ['exec', RIG, 'rcon-cli', `execute if block ${px} ${py} ${pz} minecraft:${b.name}`])
+    if (out === null || !/passed/i.test(out)) fail('adapter.blockAt', `at ${px} ${py} ${pz}: adapter ${b.name}, rcon ${JSON.stringify(out)}`)
+    console.log(`  probe ${px} ${py} ${pz}: blockAt=${b.name} rcon=${out.trim()}`)
+  }
+  ab.quit()
+  pass('adapter.blockAt', '5/5 random feet-1 points match rcon')
+
   // 6. baritone.cmd — walk EP1, the id must echo through status + event.
   // Prep mirrors the kqzf spike (rig-goto.js): teleport to the spot spawn,
   // clear, kit up — Baritone needs the pickaxe where the spot says so.

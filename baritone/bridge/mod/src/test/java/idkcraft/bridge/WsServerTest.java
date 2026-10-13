@@ -40,6 +40,20 @@ public class WsServerTest {
     }
 
     @Test
+    public void largeReplyRoundTrips() throws Exception {
+        // chunk.get replies are ~260 KB (24 base64 sections): one text frame
+        // with a 127-length header must reach the client intact (neuc.6).
+        String big = "x".repeat(300_000);
+        server = new WsServer(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), msg -> big);
+        server.start();
+        try (RawClient c = new RawClient(server.getPort())) {
+            c.sendText("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"chunk.get\"}");
+            String reply = c.nextText();
+            assertEquals(300_000, reply.length());
+        }
+    }
+
+    @Test
     public void fragmentedMessageDeliversOnce() throws Exception {
         server = new WsServer(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), msg -> "got:" + msg);
         server.start();
