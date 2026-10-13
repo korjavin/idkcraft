@@ -51,7 +51,8 @@ function taps(bot) {
 
 describe('goal translation (pathfinder -> Baritone)', () => {
   it('maps the walk goals to #goto', () => {
-    assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 2)), '#goto 1 64 -3')
+    assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 2)), '#near 1 64 -3 2') // neuc.21: the range rides along
+    assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 1.5)), '#near 1 64 -3 1') // floored: never wider than isEnd
     assert.equal(goalToBaritone(new goals.GoalBlock(1, 64, -3)), '#goto 1 64 -3')
     assert.equal(goalToBaritone(new goals.GoalGetToBlock(1, 64, -3)), '#goto 1 64 -3')
     assert.equal(goalToBaritone(new goals.GoalXZ(10, -20)), '#goto 10 -20')
@@ -563,12 +564,12 @@ describe('Movements -> #set map', () => {
       bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2)) // unchanged: quiet ...
       await sleep(10)
       assert.equal(transport.state.baritoneSets.length, 6)
-      assert.equal(transport.state.baritone, '#goto 9 64 9') // ... and the goto goes last
+      assert.equal(transport.state.baritone, '#near 9 64 9 2') // ... and the goto goes last
       m.canDig = true // the lease flips a flag between goals ...
       bot.pathfinder.setGoal(new goals.GoalNear(20, 64, 20, 2))
       await sleep(10)
       assert.deepEqual(transport.state.baritoneSets.slice(6), ['#set allowBreak true']) // ... one #set
-      assert.equal(transport.state.baritone, '#goto 20 64 20')
+      assert.equal(transport.state.baritone, '#near 20 64 20 2')
     } finally {
       await bot.stop()
     }

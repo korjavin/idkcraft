@@ -72,7 +72,7 @@ describe('bridge input (neuc.13)', () => {
       assert.equal(goalCmds, 0, 'input episode must not re-issue or stop the goal')
       assert.deepEqual(resets, [], 'input episode must not emit path_reset')
       assert.equal(bot._goalId, goalId)
-      assert.equal(bot._goalCmd, '#goto 10 64 10')
+      assert.equal(bot._goalCmd, '#near 10 64 10 1')
       // Idle clear is a no-op (no spam).
       const n = transport.state.inputLog.length
       bot.clearControlStates()
