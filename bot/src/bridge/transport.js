@@ -201,12 +201,12 @@ class FakeTransport extends EventEmitter {
         const at = { x: Math.floor(params.x), y: Math.floor(params.y), z: Math.floor(params.z) }
         if (s.digScript === 'hang') return { ok: true }
         setImmediate(() => {
-          if (s.digScript === 'abort') { this.inject('dig.abort', { ...at, reason: s.digAbortReason || 'moved' }); return }
-          this.inject('dig.progress', { ...at, progress: 0.5 })
+          if (s.digScript === 'abort') { this.inject('dig.abort', { ...at, id: params.id, reason: s.digAbortReason || 'moved' }); return }
+          this.inject('dig.progress', { ...at, id: params.id, progress: 0.5 })
           s.blocks[k] = 'air'
-          this.inject('dig.done', { ...at, broke: name !== 'air', stateId: 0 })
+          this.inject('dig.done', { ...at, id: params.id, broke: name !== 'air', stateId: 0 })
         })
-        return { ok: true }
+        return { ok: true, selected: typeof s.digSelect === 'number' ? (s.selected = s.digSelect) : (s.selected || 0) }
       }
       case 'dig.abort':
         s.digAborts = (s.digAborts | 0) + 1

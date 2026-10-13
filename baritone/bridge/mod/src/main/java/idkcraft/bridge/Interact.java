@@ -19,13 +19,14 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Dig / place surface (idkcraft-neuc.7).
  *
- * <p>Methods: {@code dig.start {x,y,z,face,look}} -> {@code {ok}} (the dig
+ * <p>Methods: {@code dig.start {x,y,z,face,look,id}} -> {@code {ok,selected}} (the dig
  * runs on the client ticks; the outcome arrives as a notification),
  * {@code dig.abort {}} -> {@code {ok,aborted}}, {@code place.once
  * {x,y,z,face,yaw,pitch,cursor,sneak}} -> {@code {ok,result}} (x,y,z = the
  * target cell; the clicked block is target - face). Notifications:
- * {@code dig.progress {x,y,z,progress}}, {@code dig.done
- * {x,y,z,broke,stateId}}, {@code dig.abort {x,y,z,reason}} with reason
+ * {@code dig.progress {id,x,y,z,progress}}, {@code dig.done
+ * {id,x,y,z,broke,stateId}}, {@code dig.abort {id,x,y,z,reason}} (id echoes
+ * dig.start's) with reason
  * moved|changed|timeout|unreachable|cancelled.
  *
  * <p>Digging mirrors Baritone's own BlockBreakHelper through its
@@ -53,13 +54,15 @@ public final class Interact {
         final BlockPos pos;
         final Direction dir;
         final Block block;
+        final long id;
         final long startMs;
         int lastStage = -2;
 
-        Dig(BlockPos pos, Direction dir, Block block) {
+        Dig(BlockPos pos, Direction dir, Block block, long id) {
             this.pos = pos;
             this.dir = dir;
             this.block = block;
+            this.id = id;
             this.startMs = System.currentTimeMillis();
         }
     }
@@ -78,7 +81,9 @@ public final class Interact {
             Direction dir = direction(params);
             boolean look = !params.has("look") || !params.get("look").isJsonPrimitive()
                     || params.get("look").getAsBoolean();
-            return in.onPlayer(player -> in.start(player, new BlockPos(x, y, z), dir, look));
+            Double rawId = optDouble(params, "id");
+            long id = rawId != null ? rawId.longValue() : 0;
+            return in.onPlayer(player -> in.start(player, new BlockPos(x, y, z), dir, look, id));
         });
         server.register("dig.abort", params -> in.onPlayer(player -> {
             JsonObject res = ok();
@@ -131,7 +136,7 @@ public final class Interact {
     }
 
     /** Client thread: begin a dig (replacing any dig in flight). */
-    private JsonObject start(LocalPlayer player, BlockPos pos, Direction dir, boolean look)
+    private JsonObject start(LocalPlayer player, BlockPos pos, Direction dir, boolean look, long id)
             throws Rpc.RpcException {
         Minecraft client = Minecraft.getInstance();
         ClientLevel level = client.level;
@@ -141,7 +146,7 @@ public final class Interact {
         abort("changed"); // mineflayer: a new dig cancels the old one
         BlockState state = level.getBlockState(pos);
         if (state.isAir()) { // already gone (Node's cache lagged): done at once, the write-through fixes it
-            JsonObject p = at(pos);
+            JsonObject p = at(pos, id);
             p.addProperty("broke", false);
             p.addProperty("stateId", Block.getId(state));
             server.push("dig.done", p);
@@ -166,8 +171,12 @@ public final class Interact {
         pc.clickBlock(pos, dir);
         player.swing(InteractionHand.MAIN_HAND);
         pc.setHittingBlock(false);
-        dig = new Dig(pos, dir, state.getBlock());
-        return ok();
+        dig = new Dig(pos, dir, state.getBlock(), id);
+        // The tool switch is selection-only (no slot content changes), so the
+        // inventory.update diff never carries it: the reply does.
+        JsonObject res = ok();
+        res.addProperty("selected", player.getInventory().getSelectedSlot());
+        return res;
     }
 
     /** Client thread (tick hook): drive the dig in flight one tick. */
@@ -205,7 +214,7 @@ public final class Interact {
         int stage = client.gameMode.getDestroyStage();
         if (stage != d.lastStage) {
             d.lastStage = stage;
-            JsonObject p = at(d.pos);
+            JsonObject p = at(d.pos, d.id);
             p.addProperty("progress", Math.max(0, stage + 1) / 10.0);
             server.push("dig.progress", p);
         }
@@ -223,7 +232,7 @@ public final class Interact {
         }
         if (now.isAir() || now.liquid()) {
             dig = null;
-            JsonObject p = at(d.pos);
+            JsonObject p = at(d.pos, d.id);
             p.addProperty("broke", true);
             p.addProperty("stateId", Block.getId(now));
             server.push("dig.done", p);
@@ -248,7 +257,7 @@ public final class Interact {
                 client.gameMode.stopDestroyBlock();
             }
         } finally {
-            JsonObject p = at(d.pos);
+            JsonObject p = at(d.pos, d.id);
             p.addProperty("reason", reason);
             server.push("dig.abort", p);
         }
@@ -326,8 +335,9 @@ public final class Interact {
         player.setYHeadRot(notchYaw);
     }
 
-    private static JsonObject at(BlockPos pos) {
+    private static JsonObject at(BlockPos pos, long id) {
         JsonObject p = new JsonObject();
+        p.addProperty("id", id);
         p.addProperty("x", pos.getX());
         p.addProperty("y", pos.getY());
         p.addProperty("z", pos.getZ());

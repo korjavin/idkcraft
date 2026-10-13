@@ -36,12 +36,12 @@ describe('bridge dig/place (idkcraft-neuc.7)', () => {
     assert.equal(bot.targetDigBlock, null)
     assert.deepEqual(seen, ['air'])
     assert.equal(bot.blockAt(new Vec3(5, 64, 5)).name, 'air') // re-read right after resolves air
-    assert.deepEqual(transport.state.digLog, [{ x: 5, y: 64, z: 5, face: 'up', look: true }])
+    assert.deepEqual(transport.state.digLog, [{ x: 5, y: 64, z: 5, face: 'up', look: true, id: 1 }])
   })
 
   it('dig: face vector and forceLook ignore cross the wire', async () => {
     await bot.dig(bot.blockAt(new Vec3(5, 64, 5)), 'ignore', new Vec3(-1, 0, 0))
-    assert.deepEqual(transport.state.digLog, [{ x: 5, y: 64, z: 5, face: 'west', look: false }])
+    assert.deepEqual(transport.state.digLog, [{ x: 5, y: 64, z: 5, face: 'west', look: false, id: 1 }])
   })
 
   it('dig: a mod dig.abort rejects Digging aborted (reason), emits diggingAborted, clears the target', async () => {
@@ -65,6 +65,40 @@ describe('bridge dig/place (idkcraft-neuc.7)', () => {
     await assert.rejects(p, /^Error: Digging aborted$/)
     assert.equal(transport.state.digAborts, 1)
     assert.equal(bot.targetDigBlock, null)
+  })
+
+  it('a stale same-cell dig.abort (older id) never rejects the re-dig', async () => {
+    transport.state.digScript = 'hang'
+    const first = bot.dig(bot.blockAt(new Vec3(5, 64, 5)))
+    await sleep(5)
+    bot.stopDigging()
+    await assert.rejects(first, /Digging aborted/)
+    const second = bot.dig(bot.blockAt(new Vec3(5, 64, 5)))
+    await sleep(5)
+    transport.inject('dig.abort', { x: 5, y: 64, z: 5, id: 1, reason: 'cancelled' }) // the first dig's late echo
+    assert.equal(bot.targetDigBlock && bot.targetDigBlock.name, 'dirt')
+    transport.inject('dig.done', { x: 5, y: 64, z: 5, id: 2, broke: true, stateId: 0 })
+    await second
+  })
+
+  it('overlapping digs across the #pause round-trip both settle', async () => {
+    transport.state.digScript = 'hang'
+    bot._pathing = true
+    const a = bot.dig(bot.blockAt(new Vec3(5, 64, 5)))
+    const b = bot.dig(bot.blockAt(new Vec3(6, 64, 5)))
+    await assert.rejects(Promise.race([a, b]), /Digging aborted/)
+    bot.stopDigging()
+    const r = await Promise.allSettled([a, b])
+    assert.deepEqual(r.map((x) => x.status), ['rejected', 'rejected'])
+  })
+
+  it('the mod tool pick (selection-only) lands in quickBarSlot/heldItem', async () => {
+    transport.state.inventory.push({ slot: 37, name: 'wooden_shovel', count: 1 })
+    await bot.refresh()
+    transport.state.digSelect = 1
+    await bot.dig(bot.blockAt(new Vec3(5, 64, 5)))
+    assert.equal(bot.quickBarSlot, 1)
+    assert.equal(bot.heldItem.name, 'wooden_shovel')
   })
 
   it('Baritone pauses across a dig while pathing and resumes after', async () => {

@@ -89,7 +89,12 @@ function installInteract(bot) {
       bot.entity.pitch = pitch
     }
     await withBaritonePaused(bot, () => new Promise((resolve, reject) => {
-      const d = { pos, block, resolve, reject, guard: null }
+      // A dig that slipped in during the #pause round-trip is superseded
+      // here (its own pre-await stopDigging saw no target yet).
+      if (bot._dig && settle(bot._dig, new Error('Digging aborted'))) {
+        bot.transport.call('dig.abort', {}).catch((e) => failLog('dig.abort', e))
+      }
+      const d = { id: (bot._digSeq = (bot._digSeq | 0) + 1), pos, block, resolve, reject, guard: null }
       bot._dig = d
       bot.targetDigBlock = block // stuck.js / deep.js read this mid-dig
       d.guard = setTimeout(() => {
@@ -98,7 +103,13 @@ function installInteract(bot) {
         }
       }, DIG_GUARD_MS)
       if (typeof d.guard.unref === 'function') d.guard.unref()
-      bot.transport.call('dig.start', { ...pos, face, look }).catch((e) => settle(d, e instanceof Error ? e : new Error(String(e))))
+      bot.transport.call('dig.start', { ...pos, face, look, id: d.id }).then((r) => {
+        // The mod's tool pick is selection-only: no inventory.update carries it.
+        if (r && typeof r.selected === 'number' && r.selected !== bot.quickBarSlot) {
+          bot.quickBarSlot = r.selected
+          bot.heldItem = (bot.inventory && bot.inventory.slots && bot.inventory.slots[36 + r.selected]) || null
+        }
+      }, (e) => settle(d, e instanceof Error ? e : new Error(String(e))))
     }))
   }
 
@@ -168,7 +179,7 @@ function handleInteractEvent(bot, method, params) {
   if (method !== 'dig.done' && method !== 'dig.abort') return false
   const p = params || {}
   const d = bot._dig
-  if (!d || !same(d.pos, cell(p))) return true // a stale dig's outcome
+  if (!d || p.id !== d.id || !same(d.pos, cell(p))) return true // a stale dig's outcome (ids echo dig.start)
   if (method === 'dig.done') {
     const stateId = typeof p.stateId === 'number' ? p.stateId : 0
     const [oldBlock, newBlock] = chunks.applyBlockUpdate(bot, { ...d.pos, stateId })
