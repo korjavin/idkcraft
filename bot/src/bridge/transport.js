@@ -188,21 +188,52 @@ class FakeTransport extends EventEmitter {
         return { entities: JSON.parse(JSON.stringify(s.entities || [])) }
       case 'roster.get': // idkcraft-neuc.3
         return { players: (s.roster || []).map((p) => ({ ...p })) }
-      case 'dig.once': {
+      // idkcraft-neuc.7 dig/place. dig.start answers {ok} and the outcome
+      // arrives as notifications on a later turn, like the mod's ticks:
+      // s.digScript 'hang' = nothing (the adapter's guard/stopDigging
+      // decides), 'abort' = dig.abort {reason: s.digAbortReason||'moved'},
+      // default = dig.progress then the block turns air + dig.done.
+      case 'dig.start': {
+        (s.digLog = s.digLog || []).push({ ...params })
         const k = this.key(params.x, params.y, params.z)
         const name = s.blocks[k] || 'air'
-        if (name === 'air' || name === 'bedrock') throw new Error(`bridge: cannot dig ${name} at ${k}`)
-        s.blocks[k] = 'air'
-        return { broke: name }
+        if (name === 'bedrock') throw new Error(`bridge: not diggable at ${k}`)
+        const at = { x: Math.floor(params.x), y: Math.floor(params.y), z: Math.floor(params.z) }
+        if (s.digScript === 'hang') return { ok: true }
+        setImmediate(() => {
+          if (s.digScript === 'abort') { this.inject('dig.abort', { ...at, id: params.id, reason: s.digAbortReason || 'moved' }); return }
+          this.inject('dig.progress', { ...at, id: params.id, progress: 0.5 })
+          s.blocks[k] = 'air'
+          this.inject('dig.done', { ...at, id: params.id, broke: name !== 'air', stateId: 0 })
+        })
+        return { ok: true, selected: typeof s.digSelect === 'number' ? (s.selected = s.digSelect) : (s.selected || 0) }
       }
+      case 'dig.abort':
+        s.digAborts = (s.digAborts | 0) + 1
+        return { ok: true, aborted: true }
+      // place.once: x,y,z = the target, the server answers with a
+      // block.update for it (placed, or the unchanged cell when refused —
+      // occupied target or s.refusePlace) plus the inventory.update.
       case 'place.once': {
+        (s.placeLog = s.placeLog || []).push({ ...params })
         const k = this.key(params.x, params.y, params.z)
-        if ((s.blocks[k] || 'air') !== 'air') throw new Error(`bridge: occupied ${k}`)
-        const item = s.inventory.find((i) => i.count > 0)
-        if (!item) throw new Error('bridge: empty hand')
-        s.blocks[k] = item.name.replace(/_item$/, '')
-        item.count--
-        return { placed: s.blocks[k] }
+        const registry = require('minecraft-data')(s.mc || '26.1.2')
+        const at = { x: Math.floor(params.x), y: Math.floor(params.y), z: Math.floor(params.z) }
+        const item = s.inventory.find((i) => i.slot === 36 + (s.selected || 0) && i.count > 0)
+        if (!item) return { ok: true, result: 'PASS' }
+        const cur = s.blocks[k] || 'air'
+        const refused = cur !== 'air' || s.refusePlace
+        if (!refused) {
+          s.blocks[k] = item.name
+          item.count--
+        }
+        const placed = registry.blocksByName[s.blocks[k] || 'air']
+        setImmediate(() => {
+          if (s.placeSilent) return
+          this.inject('block.update', { ...at, stateId: placed ? placed.defaultState : 0 })
+          if (!refused) this.inject('inventory.update', { slot: item.slot, item: item.count > 0 ? { ...item } : null, selected: s.selected || 0 })
+        })
+        return { ok: true, result: refused ? 'FAIL' : 'SUCCESS' }
       }
       // idkcraft-neuc.9 look/interact surface: recorded for assertions,
       // state mutations mirror the mod (pos yaw/pitch, sleeping, using).

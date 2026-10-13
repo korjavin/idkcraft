@@ -26,6 +26,7 @@ public class BridgeMod implements ClientModInitializer {
             Input.install(server); // idkcraft-neuc.13: control states
             Lifecycle.install(server); // idkcraft-neuc.10: lifecycle/event parity
             Windows.install(server); // idkcraft-neuc.11: container windows
+            Interact.install(server); // idkcraft-neuc.7: dig/place
             server.start();
         } catch (NoClassDefFoundError e) {
             // The worker runs the API-less standalone Baritone: without
