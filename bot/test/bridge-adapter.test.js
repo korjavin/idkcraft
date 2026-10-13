@@ -52,7 +52,7 @@ describe('spike surface round-trips (FakeTransport = the mod)', () => {
   beforeEach(async () => {
     ({ transport, bot } = spikeBot({
       blocks: { '5,64,5': 'dirt' },
-      inventory: [{ slot: 0, name: 'dirt', count: 3, type: 1 }],
+      inventory: [{ slot: 36, name: 'dirt', count: 3 }], // wire carries no type: the full registry resolves it by name
     }))
     await bot.start({ pollMs: 0 })
   })
