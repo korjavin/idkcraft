@@ -31,7 +31,7 @@ inside the same envelope — no second port.
 | method | params | result | mineflayer surface |
 |---|---|---|---|
 | `hello` | — | `{mod,v,mc,baritone}` | handshake (version gate) |
-| `state.get` | — | `{pos:{x,y,z,yaw,pitch,onGround,inWater,inLava,vel},health,food,oxygen,time,spawn,isRaining,isSleeping,dimension,gameMode}` (all null offline; `inWater`/`inLava` = the client `isInWater()`/`isInLava()`, neuc.25) | `entity/position/health/food`, `time`, `game`, `isRaining` |
+| `state.get` | — | `{pos:{x,y,z,yaw,pitch,onGround,inWater,inLava,digging,vel},health,food,oxygen,time,spawn,isRaining,isSleeping,dimension,gameMode}` (all null offline; `inWater`/`inLava` = the client `isInWater()`/`isInLava()`, neuc.25; `digging` = `gameMode.isDestroying()`, holds the adapter's stall re-plan, neuc.30) | `entity/position/health/food`, `time`, `game`, `isRaining` |
 | `chat.send` | `{message}` (`/…` runs a command) | `{sent:true}` | `chat(msg)` |
 | `baritone.cmd` | `{command}` e.g. `#goto x y z` (`#` stripped) | `{id}` (fresh id per cmd; goal cmds arm the tracker) | `pathfinder.setGoal/stop` |
 | `baritone.status` | — | `{id,pathing,last}` (`last`: `none` before any terminal) | `isMoving`, `path_update`/`path_reset` |

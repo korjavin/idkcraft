@@ -461,6 +461,7 @@ class BaritoneBot extends EventEmitter {
       // neuc.25: mineflayer physics flags; without them the breath reflex never fires on v2.
       if (typeof st.pos.inWater === 'boolean') this.entity.isInWater = st.pos.inWater
       if (typeof st.pos.inLava === 'boolean') this.entity.isInLava = st.pos.inLava
+      this._digging = st.pos.digging === true // neuc.30: a break in progress holds the stall re-plan
       const vel = st.pos.vel
       if (vel && typeof vel.x === 'number' && typeof vel.y === 'number' && typeof vel.z === 'number') {
         this.entity.velocity.x = vel.x
@@ -808,10 +809,13 @@ class BaritoneBot extends EventEmitter {
   // (stuck.js counts it). Still again (the rig re-plan re-hung 2/2): the
   // walk is unexecutable — stop Baritone and verdict noPath, so the owner
   // acts like on any terminal (build places from where it stands, follow
-  // re-issues). Bridge-only: v1 never loads this file. ponytail: 10 s, not
-  // 3.5 — Baritone mines inside a movement (hand-dug stone ~7.5 s) and a
-  // re-plan resets the break; a dig-progress signal from the mod if slower
-  // digs stall.
+  // re-issues). Bridge-only: v1 never loads this file. Progress reads like
+  // stuck.js progressed(): horizontal past the tolerance or a grounded
+  // floor change, so a jump apex or a water bob is not motion; a block
+  // break in progress (the mod's digging flag — Baritone mines inside a
+  // movement, barehand stone ~7.5 s a block) holds the clock like v1's dig
+  // hold. ponytail: 10 s still, not v1's 3.5 s — Baritone's own place and
+  // door waits stay inside it; a stall still owned by stuck.js's backstop.
   _stallReplan() {
     const p = this.entity && this.entity.position
     const live = this._pathing && this._goalCmd && !(this._pausedDepth > 0) &&
@@ -819,10 +823,13 @@ class BaritoneBot extends EventEmitter {
     if (!live || !p || typeof p.x !== 'number') { this._stall = null; return }
     const now = Date.now()
     const s = this._stall
-    if (!s || s.cmd !== this._goalCmd || Math.hypot(p.x - s.x, p.y - s.y, p.z - s.z) > STALL_MOVE) {
+    const moved = !!s && (Math.hypot(p.x - s.x, p.z - s.z) > STALL_MOVE ||
+      (this.entity.onGround !== false && Math.floor(p.y) !== Math.floor(s.y)))
+    if (!s || s.cmd !== this._goalCmd || moved) {
       this._stall = { x: p.x, y: p.y, z: p.z, at: now, cmd: this._goalCmd, replans: 0 }
       return
     }
+    if (this._digging) { s.at = now; return }
     if (now - s.at < STALL_MS) return
     const secs = Math.round((now - s.at) / 1000)
     this._boundSeq = this._cmdSeq // the old id's late verdict drops, like a follow re-issue

@@ -814,5 +814,31 @@ describe('stall re-plan (still while pathing)', () => {
     assert.equal(bot._stall, null, 'no goal: no clock')
     assert.deepEqual(seen.resets.filter((r) => r === 'stuck'), [])
   })
+
+  it('a jump apex or water bob is not motion; a break in progress holds (revmux 01)', async () => {
+    const seen = taps(bot)
+    await walking()
+    bot._stall.at -= 6000
+    transport.state.pos = { ...transport.state.pos, y: 65.2, onGround: false } // apex, x fixed
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 1, 'inside the budget')
+    bot._stall.at -= 6000
+    transport.state.pos = { ...transport.state.pos, y: 64, onGround: true }
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 2, 'bobbing in place still re-plans')
+    assert.deepEqual(seen.resets, ['stuck'])
+    await sleep(10)
+    transport.state.baritonePhase = null
+    transport.state.baritoneStatus = { id: 2, pathing: true, last: 'none' } // the re-plan hangs too
+    transport.state.pos = { ...transport.state.pos, digging: true } // Baritone mining in a movement
+    bot._stall.at -= 11000
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 2, 'digging: the clock holds')
+    assert.deepEqual(seen.statuses, [])
+    transport.state.pos = { ...transport.state.pos, digging: false }
+    bot._stall.at -= 11000
+    await bot.refresh()
+    assert.deepEqual(seen.statuses, ['noPath'], 'idle hands again: the hung re-plan verdicts')
+  })
 })
 
