@@ -219,6 +219,7 @@ describe('stuck-baseline.json covers the corpus (idkcraft-6x7.4)', () => {
       for (const f of ['maxStuck', 'maxEps', 'maxCalls']) assert.ok(Number.isInteger(e[f]) && e[f] >= 0, `${k}: bad ${f}`)
       if (!e.reached && baseline.spots[k] && baseline.spots[k].reached) {
         assert.match(e.blockedBy || '', /^idkcraft-[a-z0-9.]+$/, `${k}: v2 gap without a blockedBy bead`)
+        assert.ok(typeof e.why === 'string' && e.why.length > 0, `${k}: v2 gap without a why`)
       }
     }
   })
