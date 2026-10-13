@@ -415,7 +415,8 @@ Event: `inventory.update {slot,item:{...}|null,selected}` per changed slot
 (diffed per client tick; `item` carries the same fields as a `slots` entry).
 
 Slot numbering is mineflayer's player-window numbering on the wire and in
-Node: 5-8 armor (head/torso/legs/feet — `fight.js` hard-codes them), 9-35
+Node: 0 craft result + 1-4 the 2x2 craft grid (neuc.12; the result is
+filled only by the server), 5-8 armor (head/torso/legs/feet — `fight.js` hard-codes them), 9-35
 main, 36-44 hotbar, 45 offhand. `name` is the registry id (`minecraft:`
 prefix stripped Node-side). Actions run one at a time on the client thread
 through the player's own `inventoryMenu` (pickup/swap clicks, no window
@@ -639,6 +640,29 @@ Not on this wire: `window.property` (furnace fuel/progress — the
 furnace's `fuel`/`progress` fields stay null; furnace.js reads output
 growth only), entity containers (`openContainer(entity)`: no logic site
 uses it), `bot._syncWindow` (craft.js falls back to its settle wait; .12).
+
+## craft / recipesFor / recipesAll (idkcraft-neuc.12)
+
+No new wire methods. Node: `bot/src/bridge/craft.js` (`installCraft`,
+called from `installWindows`), a port of mineflayer
+`lib/plugins/craft.js` 4.39.0.
+
+- `recipesFor`/`recipesAll`: mineflayer's pure functions over
+  prismarine-recipe (`bot.registry`) + `bot.inventory.count` — zero bridge
+  traffic, same `requiresTable`/delta filtering.
+- `craft(recipe, count, table)`: with a table, `window.open` on it (menu
+  type `minecraft:crafting`, 3x3 grid in slots 1-9); without, the player
+  inventory menu (window 0, 2x2 grid in slots 1-4). Then mineflayer's
+  clicks over `bot.clickWindow` (pick up, right-click one per cell, rest
+  back to its source slot), a wait for the server's result in slot 0
+  (`window.slot`, or `inventory.update` for window 0 — the inventory diff
+  covers slots 0-45), `putAway(0)`; the table window closes after the
+  last op (also on error: a vanilla close returns grid leftovers).
+  Baritone is paused across the whole craft while pathing.
+- No `_syncWindow`: click replies are the client's own menu; a result
+  that never arrives (3 s) fails `craft: no <id> in the result slot`
+  instead of crafting blind. Shipped path: window clicks; the recipe-book
+  `clickRecipe` fast path was not needed.
 
 ## dig / place (idkcraft-neuc.7)
 

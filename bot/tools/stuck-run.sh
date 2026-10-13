@@ -11,7 +11,8 @@
 #   REPLAY_BODY=baritone (run the FOLLOWER on the v2 Baritone body:
 #   idkcraft-neuc.5 boots the offline client under the follower name and
 #   exports BOT_BODY/BRIDGE_* for the replay; MOD_PORT/BODY_CONSOLE_PORT
-#   pick the host publishes, defaults 7778/7779).
+#   pick the host publishes, defaults 7778/7779; BODY_CLIENT the client
+#   container name, default idk-baritone-body, for a second agent on one box).
 # Exit codes: 0 = baseline holds (incl. FLAKY: regressed spots held on the
 # one automatic rerun, see the flake protocol at the end), 1 = REGRESSION vs
 # the baseline (repeated on the rerun), 2 = environment failure (no START.sh/snapshot, rig never came up,
@@ -151,7 +152,7 @@ teardown() {
   fi
   # v2 body client (idkcraft-neuc.5): same ownership rule, its own name.
   if [ "${BODY_STARTED:-}" = 1 ]; then
-    BARITONE_CLIENT=idk-baritone-body sh "$TREE/baritone/client.sh" stop >/dev/null 2>&1 || true
+    BARITONE_CLIENT="${BODY_CLIENT:-idk-baritone-body}" sh "$TREE/baritone/client.sh" stop >/dev/null 2>&1 || true
   fi
   docker stop -t 5 "$CONTAINER" >/dev/null 2>&1 || true
   if [ -n "$SRVPID" ]; then kill "$SRVPID" >/dev/null 2>&1 || true; wait "$SRVPID" 2>/dev/null || true; fi
@@ -265,7 +266,7 @@ fi
 # client (idkcraft-neuc.15 wires the v2 rerun).
 if [ "${REPLAY_BODY:-}" = baritone ]; then
   rcon_assert "op StuckReplay$REPLAY_TAG"
-  BARITONE_OFFLINE=1 BARITONE_API=1 RIG_CONTAINER="$CONTAINER" BARITONE_CLIENT=idk-baritone-body \
+  BARITONE_OFFLINE=1 BARITONE_API=1 RIG_CONTAINER="$CONTAINER" BARITONE_CLIENT="${BODY_CLIENT:-idk-baritone-body}" \
     BRIDGE_PORT="${BODY_CONSOLE_PORT:-7779}" MOD_PORT="${MOD_PORT:-7778}" \
     CLIENT_LOG="/tmp/stuck-body-$VARIANT${RIG_ID:+-$RIG_ID}.log" \
     sh "$TREE/baritone/client.sh" start "${REPLAY_PORT:-25571}" "StuckReplay$REPLAY_TAG" || exit 2

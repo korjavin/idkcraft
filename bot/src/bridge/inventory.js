@@ -8,7 +8,8 @@
 // fight.equipGear (armor slots 5-8) and craft stack reads run unchanged.
 //
 // Slot numbering is mineflayer's player-window numbering everywhere on the
-// wire: 5-8 armor (head/torso/legs/feet), 9-35 main, 36-44 hotbar, 45
+// wire: 0-4 craft result + 2x2 grid (neuc.12), 5-8 armor
+// (head/torso/legs/feet), 9-35 main, 36-44 hotbar, 45
 // offhand. items() covers 9-44 only, exactly like v1.
 //
 // prismarine-windows/prismarine-item are transitive deps (via mineflayer),

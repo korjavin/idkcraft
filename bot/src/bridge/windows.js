@@ -17,13 +17,15 @@
 // client (which tracks the server's state id — the window-id/revision
 // churn is the client's problem) and replies with the whole menu, which
 // replaces the local window. bot._syncWindow is deliberately absent:
-// craft.js has a settle-wait fallback for it (.12 owns crafting).
+// craft.js has a settle-wait fallback for it, and the bridge craft
+// (craft.js here, neuc.12) waits on the result slot instead.
 //
 // This file requires nothing outside bot/src/bridge/ (epic section 2).
 'use strict'
 
 const { makeItem, windowFactory, applyInventory, applyInventoryUpdate } = require('./inventory')
 const { withBaritonePaused } = require('./look')
+const { installCraft } = require('./craft')
 
 // mineflayer chest.js / furnace.js allowed window types (prefix match).
 const CONTAINER_TYPES = ['minecraft:generic', 'minecraft:chest', 'minecraft:dispenser', 'minecraft:ender_chest',
@@ -281,6 +283,8 @@ function installWindows(bot) {
     win.putFuel = (itemType, metadata, count) => put(1, itemType, metadata, count)
     return win
   }
+
+  installCraft(bot, openBlock) // idkcraft-neuc.12: craft/recipesFor/recipesAll on these windows
 }
 
 // Mod notifications: a server-opened window, per-slot corrections

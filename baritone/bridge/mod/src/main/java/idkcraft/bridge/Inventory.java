@@ -27,7 +27,8 @@ import net.minecraft.world.item.enchantment.Enchantment;
  *
  * <p>Methods: {@code inventory.get} -> {@code {selected, slots:[{slot,name,
  * count,damage,maxDamage,enchantments,customName}]}} with mineflayer window
- * slot numbering (5-8 armor, 9-35 main, 36-44 hotbar, 45 offhand);
+ * slot numbering (0 craft result, 1-4 craft grid, 5-8 armor, 9-35 main,
+ * 36-44 hotbar, 45 offhand);
  * {@code inventory.select {hotbar}}; {@code inventory.equip {slot,dest}}
  * (dest: hand|off-hand|head|torso|legs|feet, or a numeric slot for the
  * adapter's unequip move); {@code inventory.toss {slot,count}}.
@@ -284,7 +285,9 @@ public final class Inventory {
         AbstractContainerMenu menu = player.inventoryMenu;
         List<Map<String, Object>> slots = new ArrayList<>();
         Map<Integer, String> now = new LinkedHashMap<>();
-        for (int slot = 5; slot <= 45 && slot < menu.slots.size(); slot++) {
+        // neuc.12: from 0 — the 2x2 craft grid (1-4) and its result (0, filled
+        // only by the server) must reach Node like mineflayer's window does.
+        for (int slot = 0; slot <= 45 && slot < menu.slots.size(); slot++) {
             ItemStack stack = menu.slots.get(slot).getItem();
             if (stack == null || stack.isEmpty()) {
                 continue;
@@ -295,7 +298,7 @@ public final class Inventory {
         }
         int selected = player.getInventory().getSelectedSlot();
         // Diff against the last pushed state: one update per changed slot.
-        for (int slot = 5; slot <= 45; slot++) {
+        for (int slot = 0; slot <= 45; slot++) {
             String before = lastSent.get(slot);
             String after = now.get(slot);
             if (java.util.Objects.equals(before, after)) {
