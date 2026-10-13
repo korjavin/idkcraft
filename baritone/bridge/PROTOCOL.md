@@ -369,6 +369,16 @@ joined).
   `connect <host> <port>`: that is the v2 rejoin path. `quit()` sends
   `#stop` (bounded to 1 s) before the console `disconnect`.
 
+## Lifecycle: death and respawn (idkcraft-neuc.21)
+
+A dead client sits on the death screen with a frozen `pos` (no auto
+respawn), so every walk, sidestep and hop reads no-progress forever.
+`respawn {}` → `{ok}` clicks respawn on the client thread
+(a live player no-ops; `-32002` when not in world). The Node adapter
+drives it off `state.get` `health` (mineflayer `respawn: true` parity):
+alive→`health <= 0` emits `death`, then `respawn` is called at most once
+per second while dead; the first live poll after that emits `respawn`.
+
 ## look / attack / interact / sleep (idkcraft-neuc.9)
 
 Mod: `mod/src/main/java/idkcraft/bridge/Look.java`
