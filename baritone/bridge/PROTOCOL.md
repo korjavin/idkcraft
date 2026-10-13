@@ -219,7 +219,7 @@ Goal → command map (extends the spike's five):
 
 | goal | command |
 |---|---|
-| GoalNear | `#near x y z r` — the mod's own verb (not a Baritone console command): sets Baritone's `GoalNear(BlockPos, r)` on the custom goal process, tracked like any `#goto`; `r = floor(sqrt(rangeSq))`, so the region is never wider than v1's isEnd. Malformed `near` → INVALID_PARAMS. Why (idkcraft-neuc.21): `#goto x y z` is an exact GoalBlock, and callers centre GoalNear on cells nobody stands in (one above the floor, a log, a chest) — rig at the prod spawn wedge: 6/10 three-block GoalNear(r=2) goals answered noPath (or stopped in range and still said noPath), 10/10 success with `#near` |
+| GoalNear | `#near x y z r` — the mod's own verb (not a Baritone console command): sets Baritone's `GoalNear(BlockPos, r)` on the custom goal process, tracked like any `#goto`; `r = floor(sqrt(rangeSq))`, so the region is never wider than v1's isEnd. Malformed `near` → INVALID_PARAMS. Why (idkcraft-neuc.21): `#goto x y z` is an exact GoalBlock, and callers centre GoalNear on cells nobody stands in (one above the floor, a log, a chest) — rig at the prod spawn wedge: 7/10 GoalNear(r=2) goals within 7 blocks answered noPath (or stopped in range and still said noPath), 10/10 success with `#near` |
 | GoalBlock/GoalGetToBlock | `#goto x y z` (GetToBlock keeps the spike cell for now — unused in bot/src; gets the neighbour treatment if a caller appears) |
 | GoalXZ/GoalNearXZ | `#goto x z` |
 | GoalY | `#goto y` (Baritone `goto <y>` = Y level, verified in GotoCommand) |
