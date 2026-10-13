@@ -69,7 +69,7 @@ function stripMcPrefix(s) {
 }
 
 // mineflayer-pathfinder goal -> Baritone console command. GoalFollow is a
-// one-shot #goto to the target's live position: follow.js already re-issues
+// one-shot #near around the target's live cell (followCmd): follow.js already re-issues
 // on movement/timeout, so no Baritone #follow semantics are needed (plus
 // the adapter's own 1/s re-issue for dynamic goals, _maybeReissueFollow).
 // GoalY is a single-number #goto (Baritone: "goto <y> - Go to a Y level").
@@ -82,6 +82,16 @@ function stripMcPrefix(s) {
 // out a look target). Without from there is no safe side: null.
 // Returns null when the goal has no Baritone mapping (caller then reports
 // noPath, like the executor would).
+// GoalFollow -> `#near` on the target's floored cell (idkcraft-neuc.28):
+// v1's isEnd is the same floored distSq <= rangeSq test as GoalNear, while
+// an exact `#goto` on the cell walked Baritone into the mob (and a mob in a
+// hole answered noPath). Shared by the initial goal and every re-issue.
+function followCmd(p, rangeSq) {
+  if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return null
+  const r = typeof rangeSq === 'number' && rangeSq >= 0 ? Math.floor(Math.sqrt(rangeSq)) : 0
+  return `#near ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)} ${r}`
+}
+
 function goalToBaritone(goal, from) {
   if (!goal) return null
   const name = (goal.constructor && goal.constructor.name) || ''
@@ -105,12 +115,7 @@ function goalToBaritone(goal, from) {
   if (name === 'GoalY' && typeof goal.y === 'number') {
     return `#goto ${goal.y}`
   }
-  if (name === 'GoalFollow' && goal.entity && goal.entity.position) {
-    const p = goal.entity.position
-    if (typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
-      return `#goto ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}`
-    }
-  }
+  if (name === 'GoalFollow' && goal.entity) return followCmd(goal.entity.position, goal.rangeSq)
   if ((name === 'GoalCompositeAny' || name === 'GoalCompositeAll') && Array.isArray(goal.goals)) {
     for (const member of goal.goals) {
       const cmd = goalToBaritone(member, from)
@@ -748,7 +753,7 @@ class BaritoneBot extends EventEmitter {
 
   // Dynamic GoalFollow mid-walk refresh (idkcraft-neuc.4): follow.js only
   // re-issues on terminal/timeout, so a walking player outruns the
-  // one-shot #goto. Re-command when the live target left the commanded
+  // one-shot #near. Re-command when the live target left the commanded
   // spot by > 1 block, at most one cmd/s. Silent: no ticker events — the
   // new echo rebinds the latch and the old id's late verdicts drop.
   _maybeReissueFollow() {
@@ -786,7 +791,7 @@ class BaritoneBot extends EventEmitter {
     // motion latch (_pathing) stay: Baritone never stopped walking.
     this._boundSeq = this._cmdSeq
     this._goalId = null
-    this._sendGoalCmd(`#goto ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}`)
+    this._sendGoalCmd(followCmd(p, f.rangeSq))
   }
 
   // Diffed Movements -> `#set` push (idkcraft-neuc.4): installed flags on

@@ -347,7 +347,7 @@ describe('REAL logic through the fold (perception + worker + follow)', () => {
     const target = worker.players(bot).Owner.entity
     follow(bot, ctx, target)
     assert.ok(bot.pathfinder.goal instanceof goals.GoalFollow)
-    assert.equal(transport.state.baritone, '#goto 10.0 64.0 10.0')
+    assert.equal(transport.state.baritone, '#near 10 64 10 3')
   })
 })
 
@@ -426,7 +426,7 @@ describe('adapter wiring (fold lives in the poll + router)', () => {
       const target = worker.players(bot).Owner.entity
       follow(bot, ctx, target) // fresh key: issues GoalFollow at the folded pos
       assert.ok(bot.pathfinder.goal instanceof goals.GoalFollow)
-      assert.equal(transport.state.baritone, '#goto 10.0 64.0 10.0')
+      assert.equal(transport.state.baritone, '#near 10 64 10 3')
       await bot.refresh() // round 1: fake walk lands, motion witnessed
       assert.deepEqual([bot.entity.position.x, bot.entity.position.z], [10, 10])
       assert.equal(bot.pathfinder.isMoving(), true)
@@ -439,7 +439,7 @@ describe('adapter wiring (fold lives in the poll + router)', () => {
       assert.deepEqual([target.position.x, target.position.z], [30, 30], 'folded target tracks the guide')
       ctx.lastPathStatus = 'success'
       follow(bot, ctx, target)
-      assert.equal(transport.state.baritone, '#goto 30.0 64.0 30.0')
+      assert.equal(transport.state.baritone, '#near 30 64 30 3')
       // Chat from the guide resolves through the folded roster (the 'follow
       // me'/'stay' acceptance half): sender name + uuid both hit.
       assert.equal(perception.resolvePlayer(bot, 'Owner'), 'Owner')
