@@ -133,10 +133,16 @@ public final class Inventory {
     }
 
     private JsonObject execute(Minecraft client, LocalPlayer player, Op op) throws Rpc.RpcException {
+        // An op cancelled mid-execution (socket-thread timeout) stops before
+        // its next click: CompletableFuture.cancel cannot interrupt this
+        // thread, so the ops check between clicks (revmux 02 core-2).
+        if (op.future().isCancelled()) {
+            throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "inventory op cancelled");
+        }
         return switch (op.kind()) {
             case "select" -> doSelect(player, op.params());
-            case "equip" -> doEquip(client, player, op.params());
-            case "toss" -> doToss(client, player, op.params());
+            case "equip" -> doEquip(client, player, op);
+            case "toss" -> doToss(client, player, op);
             default -> throw new Rpc.RpcException(Rpc.METHOD_NOT_FOUND, "unknown op " + op.kind());
         };
     }
@@ -158,8 +164,9 @@ public final class Inventory {
         }
     }
 
-    private JsonObject doEquip(Minecraft client, LocalPlayer player, JsonObject params)
+    private JsonObject doEquip(Minecraft client, LocalPlayer player, Op op)
             throws Rpc.RpcException {
+        JsonObject params = op.params();
         int slot = requiredInt(params, "slot");
         AbstractContainerMenu menu = player.inventoryMenu;
         if (slot < 0 || slot >= menu.slots.size()) {
@@ -193,6 +200,11 @@ public final class Inventory {
         // Pickup/swap through the player's own container: take the source,
         // place it on the destination, put any swapped stack back.
         client.gameMode.handleContainerInput(menu.containerId, slot, 0, ContainerInput.PICKUP, player);
+        if (op.future().isCancelled()) {
+            // Put the carried stack back before bailing: never strand it.
+            client.gameMode.handleContainerInput(menu.containerId, slot, 0, ContainerInput.PICKUP, player);
+            throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "inventory op cancelled");
+        }
         client.gameMode.handleContainerInput(menu.containerId, destSlot, 0, ContainerInput.PICKUP, player);
         if (!menu.getCarried().isEmpty()) {
             client.gameMode.handleContainerInput(menu.containerId, slot, 0, ContainerInput.PICKUP, player);
@@ -206,8 +218,9 @@ public final class Inventory {
         return snapshotJson();
     }
 
-    private JsonObject doToss(Minecraft client, LocalPlayer player, JsonObject params)
+    private JsonObject doToss(Minecraft client, LocalPlayer player, Op op)
             throws Rpc.RpcException {
+        JsonObject params = op.params();
         int slot = requiredInt(params, "slot");
         int count = requiredInt(params, "count");
         AbstractContainerMenu menu = player.inventoryMenu;
@@ -226,6 +239,9 @@ public final class Inventory {
             client.gameMode.handleContainerInput(menu.containerId, slot, 1, ContainerInput.THROW, player);
         } else {
             for (int i = 0; i < count; i++) {
+                if (op.future().isCancelled()) {
+                    break; // stop dropping: the caller already heard CLIENT_BUSY
+                }
                 client.gameMode.handleContainerInput(menu.containerId, slot, 0, ContainerInput.THROW, player);
             }
         }
