@@ -587,6 +587,9 @@ public final class BridgeServer {
         // breath reflex, swim.js, unpin.js read them; absent = never wet).
         pos.addProperty("inWater", pl.isInWater());
         pos.addProperty("inLava", pl.isInLava());
+        // idkcraft-neuc.30: a block break in progress (Baritone mines inside
+        // a movement with the body still); the adapter's stall re-plan holds.
+        pos.addProperty("digging", client.gameMode != null && client.gameMode.isDestroying());
         Vec3 v = pl.getDeltaMovement();
         JsonObject vel = new JsonObject();
         vel.addProperty("x", v.x);
