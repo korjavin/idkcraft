@@ -31,7 +31,8 @@ function spikeBot(state = {}) {
 
 describe('goal translation (pathfinder -> Baritone)', () => {
   it('maps the walk goals to #goto', () => {
-    assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 2)), '#goto 1 64 -3')
+    assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 2)), '#near 1 64 -3 2') // neuc.21: the range rides along
+    assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 1.5)), '#near 1 64 -3 1') // floored: never wider than isEnd
     assert.equal(goalToBaritone(new goals.GoalBlock(1, 64, -3)), '#goto 1 64 -3')
     assert.equal(goalToBaritone(new goals.GoalXZ(10, -20)), '#goto 10 -20')
     assert.equal(goalToBaritone(new goals.GoalNearXZ(10, -20, 3)), '#goto 10 -20')

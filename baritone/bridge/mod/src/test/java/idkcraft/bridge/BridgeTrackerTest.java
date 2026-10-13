@@ -37,6 +37,17 @@ public class BridgeTrackerTest {
     }
 
     @Test
+    public void nearArgsParsesOnlyAWellFormedRangedGoal() {
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new int[] {8, 70, -18, 2}, GoalTracker.nearArgs("#near 8 70 -18 2"));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new int[] {0, 64, 0, 0}, GoalTracker.nearArgs("NEAR 0 64 0 0"));
+        assertNull(GoalTracker.nearArgs("#goto 8 70 18"));
+        assertNull(GoalTracker.nearArgs("#near 8 70 18"));
+        assertNull(GoalTracker.nearArgs("#near 8 70 18 -1"));
+        assertNull(GoalTracker.nearArgs("#near 8.5 70 18 2"));
+        assertNull(GoalTracker.nearArgs("#near 8 70 18 2 9"));
+    }
+
+    @Test
     public void changedGoalRearmsWhateverTheVerb() {
         Object before = fakeGoal();
         Object proc = fakeProc();

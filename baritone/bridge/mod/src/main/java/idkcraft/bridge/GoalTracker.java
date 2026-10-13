@@ -53,6 +53,33 @@ public final class GoalTracker {
     }
 
     /**
+     * {@code near x y z r} (idkcraft-neuc.21): the bridge's own verb for a
+     * Baritone GoalNear — no console command keeps a range ({@code #goto x
+     * y z} is an exact GoalBlock, which a mineflayer GoalNear centre in the
+     * air or inside a block can never satisfy). Returns {x,y,z,r}, or null
+     * when the command is not a well-formed near (r >= 0).
+     */
+    static int[] nearArgs(String command) {
+        String c = command.trim();
+        if (c.startsWith("#")) {
+            c = c.substring(1);
+        }
+        String[] parts = c.trim().split("\\s+");
+        if (parts.length != 5 || !parts[0].equalsIgnoreCase("near")) {
+            return null;
+        }
+        int[] out = new int[4];
+        try {
+            for (int i = 0; i < 4; i++) {
+                out[i] = Integer.parseInt(parts[i + 1]);
+            }
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        return out[3] < 0 ? null : out;
+    }
+
+    /**
      * Pause-flag update for a control verb: true on #pause, false on
      * #resume/#stop, null (untouched) for anything else.
      */
