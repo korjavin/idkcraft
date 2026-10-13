@@ -251,6 +251,22 @@ process.exit(real.gateCode(rows, diffs).code)
     }
   })
 
+  it('v2 body: the rerun relaunches the body client the first teardown stopped (idkcraft-neuc.15)', () => {
+    const baritone = path.join(tmp, 'tree', 'baritone')
+    fs.mkdirSync(baritone, { recursive: true })
+    const clog = path.join(tmp, 'client-calls')
+    fs.writeFileSync(path.join(baritone, 'client.sh'),
+      '#!/bin/sh\necho "$1 ${BARITONE_CLIENT:-} ${BRIDGE_PORT:-} ${MOD_PORT:-}" >> "$FAKE_CLIENT_LOG"\nexit 0\n')
+    const r = run({ REPLAY_BODY: 'baritone', FAKE_FAIL_1: 'B', FAKE_CLIENT_LOG: clog })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(r.calls, ['A,B,C,D', 'B'])
+    // RIG_ID=z: per-slot name and ports (idkcraft-neuc.23, 7778/7779 + 2 x 26).
+    // stop inherits the exported BRIDGE_PORT (the mod ws) — irrelevant to stop.
+    assert.deepEqual(fs.readFileSync(clog, 'utf8').split('\n').filter(Boolean), [
+      'start idk-baritone-body-z 7831 7830', 'stop idk-baritone-body-z 7830 ',
+      'start idk-baritone-body-z 7831 7830', 'stop idk-baritone-body-z 7830 '])
+  })
+
   it('a spot without a baseline entry is deterministic: exit 1, no rerun', () => {
     fs.writeFileSync(baseline, JSON.stringify({ spots: { A: entry, B: entry, C: entry } }))
     const r = run({})
@@ -420,6 +436,16 @@ describe('stuck-run.sh body ownership (idkcraft-neuc.5)', () => {
     // The worker block publishes the console on ${BRIDGE_PORT:-7777}; the
     // body must not default to the same host port.
     assert.ok(!r.calls.join('\n').includes('console=7777'), r.calls.join('\n'))
+  })
+
+  it('RIG_ID=a: per-slot body container and ports, so parallel v2 rigs never collide (idkcraft-neuc.23)', () => {
+    const r = run({ RIG_ID: 'a' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(r.calls.slice(0, 2), ['start 25572 StuckReplayt1',
+      'client=idk-baritone-body-a console=7781 mod=7780 log=/tmp/stuck-body-paper-base-a.log api=1'])
+    assert.ok(r.calls.includes('client=idk-baritone-body-a console=7780 mod= log= api='), r.calls.join('\n'))
+    assert.deepEqual(r.envOut,
+      { BOT_BODY: 'baritone', BRIDGE_HOST: 'localhost', BRIDGE_PORT: '7780', BRIDGE_CONSOLE_PORT: '7781' })
   })
 
   it('v1 (REPLAY_BODY unset): no client launch, no adapter env', () => {

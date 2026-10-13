@@ -61,14 +61,14 @@ stored profile, not `WORKER_NAME`).
 
 1. **Owner account:** device-code login into the local docker volume (never
    in the repo):
-   `docker run --rm -it -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth idkcraft-baritone:spike --command login`
+   `docker run --rm -it -v idkcraft-baritone-auth:/headlessmc/HeadlessMC/auth idkcraft-baritone:local --command login`
    The server is `ONLINE_MODE=false`, so any owned profile joins; run with
    `BOT=<profile name>` so it is pre-opped (spawn protection) before login.
 2. **Owner opt-in to offline** for this local test rig: `BARITONE_OFFLINE=1 sh baritone/run.sh`
    (exercised via the `REPLAY_WORKER=1` harness; offline mounts no auth
    volume — a stored account would shadow the offline name).
 
-Then: `docker build -t idkcraft-baritone:spike baritone && BOT=<profile name> sh baritone/run.sh`
+Then: `docker build -t idkcraft-baritone:local baritone && BOT=<profile name> sh baritone/run.sh`
 (~7 min; works on arm64 under Docker, client log `/tmp/baritone-run.log.client`).
 The rig uses the image's own entrypoint and publishes the bridge for the rig
 (`-p 7777:7777` — plain `-p` by default, since a literal loopback IP trips

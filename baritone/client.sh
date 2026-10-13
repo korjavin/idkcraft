@@ -5,7 +5,11 @@
 # Both rig harnesses call it: baritone/run.sh (slot z A/B) and
 # bot/tools/stuck-run.sh (REPLAY_WORKER=1: the worker beside the head).
 # Usage: sh client.sh start <mc-port> <bot-name> | stop
-# Env: BARITONE_IMAGE (default idkcraft-baritone:spike),
+# Env: BARITONE_IMAGE (default idkcraft-baritone:local — a build of THIS
+#   tree's baritone/ with the bridge mod: `docker build -t
+#   idkcraft-baritone:local baritone`; a missing image exits 2 with that
+#   hint. idkcraft-neuc.23: the old spike default had no mod, so a v2 run
+#   never connected),
 #   BARITONE_CLIENT (container name, default idk-baritone-client),
 #   BARITONE_OFFLINE=1 (offline username <bot-name>, no stored account),
 #   BARITONE_API=1 (run the Baritone API jar instead of standalone — the v2
@@ -20,7 +24,7 @@
 #   never started, bot never joined).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
-IMAGE="${BARITONE_IMAGE:-idkcraft-baritone:spike}"
+IMAGE="${BARITONE_IMAGE:-idkcraft-baritone:local}"
 CLIENT="${BARITONE_CLIENT:-idk-baritone-client}"
 BRIDGE_PORT="${BRIDGE_PORT:-7777}"
 CLIENT_LOG="${CLIENT_LOG:-/tmp/baritone-client.log}"
@@ -40,6 +44,9 @@ case "${MOD_PORT:-}" in
   '') ;; # unset = the mod ws stays unpublished (run.sh/REPLAY_WORKER)
   *[!0-9]*) echo "client.sh start: want a numeric MOD_PORT, got '$MOD_PORT'"; exit 2 ;;
 esac
+
+docker image inspect "$IMAGE" >/dev/null 2>&1 || {
+  echo "client.sh start: no image $IMAGE — docker build -t $IMAGE baritone (or BARITONE_IMAGE=<tag>)"; exit 2; }
 
 # Account gate (run.sh, unchanged): the client launches with the account
 # stored in the idkcraft-baritone-auth volume (one-time `login`), or
