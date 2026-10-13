@@ -77,6 +77,9 @@ public final class BridgeServer {
     private static final long SUBMIT_TIMEOUT_MS = 3000;
     private static final int MAX_CHAT_QUEUE = 1000;
     private static final int MAX_CHAT_LEN = 1000;
+    /** Vanilla serverbound chat cap: a longer string kills the client (EncoderException, idkcraft-neuc.22). */
+    private static final int MAX_CHAT_PACKET = 256;
+    private static volatile boolean chatTruncSaid = false;
 
     private static final Logger LOG = LoggerFactory.getLogger(BridgeServer.class);
 
@@ -300,6 +303,12 @@ public final class BridgeServer {
             }
             if (message.startsWith("/")) {
                 pl.connection.sendCommand(message.substring(1));
+            } else if (message.length() > MAX_CHAT_PACKET) {
+                if (!chatTruncSaid) {
+                    chatTruncSaid = true;
+                    LOG.warn("bridge chat.send truncated {} chars to {}", message.length(), MAX_CHAT_PACKET);
+                }
+                pl.connection.sendChat(message.substring(0, MAX_CHAT_PACKET));
             } else {
                 pl.connection.sendChat(message);
             }
@@ -331,21 +340,35 @@ public final class BridgeServer {
         if (command.isEmpty()) {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "command is empty");
         }
+        // idkcraft-neuc.20: never execute a Baritone command out of world.
+        // Baritone's own goal code dereferences the (null) LocalPlayer
+        // (playerFeet NPE) when a command lands at the menu, and the Node
+        // adapter keeps issuing goals until it notices the disconnect.
+        // The null snapshot is the out-of-world shape state.get serves.
+        if (snapshot == null) {
+            throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
+        }
         final String cmd = command;
         final String verb = GoalTracker.firstToken(cmd);
-        record Probe(boolean ok, Goal before, Goal after, Object beforeProc, Object afterProc) {
+        record Probe(boolean ok, boolean inWorld, Goal before, Goal after, Object beforeProc, Object afterProc) {
         }
         Probe probe = submit(() -> {
+            if (client == null || client.player == null || client.level == null) {
+                return new Probe(false, false, null, null, null, null);
+            }
             Goal before = baritone.getCustomGoalProcess().mostRecentGoal();
             Object beforeProc = baritone.getPathingControlManager().mostRecentInControl().orElse(null);
             boolean ok = baritone.getCommandManager().execute(cmd);
             Goal after = ok ? baritone.getCustomGoalProcess().mostRecentGoal() : before;
             Object afterProc =
                     ok ? baritone.getPathingControlManager().mostRecentInControl().orElse(null) : beforeProc;
-            return new Probe(ok, before, after, beforeProc, afterProc);
+            return new Probe(ok, true, before, after, beforeProc, afterProc);
         });
         if (probe == null) {
             throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
+        }
+        if (!probe.inWorld()) {
+            throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
         }
         if (!probe.ok()) {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "unknown baritone command: " + cmd);
@@ -467,6 +490,25 @@ public final class BridgeServer {
         public void onWorldEvent(WorldEvent event) {
             if (event.getWorld() == null) {
                 snapshot = null;
+                // idkcraft-neuc.20: the client left the world (disconnect/
+                // kick) — cancel Baritone here so no pathing process keeps
+                // ticking against a null LocalPlayer (its playerFeet NPE),
+                // and verdict the tracked goal stopped so the Node poll
+                // releases its latch instead of holding a dead walk.
+                pathing = false;
+                pausedLocal = false;
+                if (currentId > 0 && !terminalReceived) {
+                    terminalReceived = true;
+                    last = "stopped";
+                }
+                try {
+                    IBaritone b = baritone;
+                    if (b != null) {
+                        b.getCommandManager().execute("stop");
+                    }
+                } catch (Exception e) {
+                    LOG.warn("bridge leave-world stop failed", e);
+                }
             }
         }
     }
