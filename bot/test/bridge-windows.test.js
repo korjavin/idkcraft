@@ -146,10 +146,13 @@ describe('bridge container windows (idkcraft-neuc.11)', () => {
     })
 
     it('player-inventory clicks (no window open) target window 0; closeWindow(inventory) is a no-op', async () => {
-      // The fake only models container menus; the wire id is what matters.
+      // neuc.12: the fake models the inventory menu as window 0.
       transport.state.window = null
-      await assert.rejects(bot.clickWindow(9, 0, 0), /stale window 0/)
-      assert.equal(transport.state.clickLog[0].windowId, 0)
+      await bot.clickWindow(9, 0, 0) // pick up the cobble
+      assert.equal(bot.inventory.selectedItem.name, 'cobblestone')
+      await bot.clickWindow(9, 0, 0) // and put it back
+      assert.deepEqual(transport.state.clickLog.map((c) => c.windowId), [0, 0])
+      assert.equal(invOf(bot, 'cobblestone'), 40)
       await bot.closeWindow(bot.inventory) // craft.js resync call: a no-op, never a wire close
       assert.equal(transport.state.closeLog, undefined)
     })

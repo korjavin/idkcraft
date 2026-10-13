@@ -348,7 +348,9 @@ class FakeTransport extends EventEmitter {
       }
       case 'window.click': {
         (s.clickLog = s.clickLog || []).push({ ...params })
-        if (!s.window || s.window.id !== params.windowId) throw new Error(`bridge: stale window ${params.windowId}`)
+        // neuc.12: window 0 = the player inventory menu (2x2 craft clicks).
+        const openId = s.window ? s.window.id : 0
+        if (openId !== params.windowId) throw new Error(`bridge: stale window ${params.windowId}`)
         this._click(params.slot, params.mouseButton, params.mode)
         return this._menu()
       }
@@ -411,6 +413,9 @@ class FakeTransport extends EventEmitter {
   // idkcraft-neuc.11: the open menu as the mod's wire shape.
   _menu() {
     const s = this.state
+    if (!s.window) { // neuc.12: the player inventory menu, mod numbering 0..45
+      return { windowId: 0, type: 'minecraft:inventory', title: '', size: 46, slots: s.inventory.map((i) => ({ ...i })), cursor: s.cursor ? { ...s.cursor } : null }
+    }
     const c = s.containers[s.window.key]
     const n = c.size
     const slots = c.slots.map((i) => ({ ...i }))
@@ -423,7 +428,10 @@ class FakeTransport extends EventEmitter {
   // ponytail: every stack caps at 64 (fixtures are 64-stackers).
   _click(slot, button, mode) {
     const s = this.state
-    const c = s.containers[s.window.key]
+    // neuc.12: no open window = the inventory menu, whose slots 0..8
+    // (result, 2x2 grid, armor) play the container part.
+    const inv = !s.window
+    const c = inv ? { type: 'minecraft:inventory', size: 9, slots: s.inventory.filter((i) => i.slot < 9) } : s.containers[s.window.key]
     const n = c.size
     const arr = new Array(n + 36).fill(null)
     for (const i of c.slots) arr[i.slot] = { name: i.name, count: i.count }
@@ -432,7 +440,22 @@ class FakeTransport extends EventEmitter {
     const it = slot >= 0 ? arr[slot] : null
     // c.accept {slot: [names]}: a slot that refuses other items (furnace fuel).
     const refuses = cur && c.accept && c.accept[slot] && !c.accept[slot].includes(cur.name)
-    if (refuses) {
+    const grid = this._grid(c)
+    if (grid && slot === 0) {
+      // Result slot: take only (whole result onto the cursor, or shift it
+      // into the inventory), one of each grid cell consumed.
+      const fits = it && (mode === 1 || !cur || (cur.name === it.name && cur.count + it.count <= 64))
+      if (fits) {
+        for (const g of grid) if (arr[g]) arr[g].count -= 1
+        if (mode === 1) {
+          const free = arr.findIndex((x, i) => i >= n && !x)
+          if (free !== -1) { arr[free] = { ...it }; arr[0] = null }
+        } else {
+          cur = cur ? { name: cur.name, count: cur.count + it.count } : { ...it }
+          arr[0] = null
+        }
+      }
+    } else if (refuses) {
       // vanilla mayPlace false: the click changes nothing
     } else if (slot === -999) {
       if (cur) { cur.count = button === 0 ? 0 : cur.count - 1 }
@@ -455,7 +478,7 @@ class FakeTransport extends EventEmitter {
         arr[slot] = cur
         cur = it
       }
-    } else if (mode === 1 && it) {
+    } else if (mode === 1 && it && !(inv && slot >= n)) {
       const [a, b] = slot < n ? [n, n + 36] : [0, n]
       for (let pass = 0; pass < 2 && it.count > 0; pass++) {
         for (let d = a; d < b && it.count > 0; d++) {
@@ -474,8 +497,41 @@ class FakeTransport extends EventEmitter {
     s.cursor = cur && cur.count > 0 ? cur : null
     c.slots = []
     for (let i = 0; i < n; i++) if (arr[i] && arr[i].count > 0) c.slots.push({ slot: i, ...arr[i] })
-    s.inventory = s.inventory.filter((i) => i.slot < 9 || i.slot > 44)
+    s.inventory = s.inventory.filter((i) => (!inv && i.slot < 9) || i.slot > 44)
+    if (inv) s.inventory.push(...c.slots)
     for (let i = n; i < n + 36; i++) if (arr[i] && arr[i].count > 0) s.inventory.push({ slot: i - n + 9, ...arr[i] })
+    // The server fills the result slot a round trip later (the client
+    // never predicts it): the click reply above is stale, a push follows.
+    const wid = inv ? 0 : s.window.id
+    if (grid) setImmediate(() => this._craftResult(c, grid, wid))
+  }
+
+  // neuc.12: crafting grid cells of a menu (2x2 inventory, 3x3 table), else null.
+  _grid(c) {
+    if (c.type === 'minecraft:inventory') return [1, 2, 3, 4]
+    if (String(c.type).startsWith('minecraft:crafting')) return [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    return null
+  }
+
+  // s.recipes [{grid:{name:count}, result:{name,count}}]: the grid's item
+  // multiset picks the result (ponytail: shape-blind, fixtures differ by
+  // multiset). Pushes inventory.update / window.slot like the mod's diff.
+  _craftResult(c, grid, windowId) {
+    const s = this.state
+    const live = windowId === 0 ? (s.window ? null : s.inventory) : (s.window && s.window.id === windowId ? c.slots : null)
+    if (!live) return
+    const have = {}
+    for (const i of live) if (grid.includes(i.slot)) have[i.name] = (have[i.name] || 0) + 1
+    const key = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, o[k]]))
+    const hit = (s.recipes || []).find((r) => key(r.grid) === key(have))
+    const want = hit ? { slot: 0, ...hit.result } : null
+    const now = live.find((i) => i.slot === 0) || null
+    if ((now && now.name) === (want && want.name) && (now && now.count) === (want && want.count)) return
+    const idx = live.indexOf(now)
+    if (idx !== -1) live.splice(idx, 1)
+    if (want) live.push(want)
+    if (windowId === 0) this.emit('event', 'inventory.update', { slot: 0, item: want })
+    else this.emit('event', 'window.slot', { windowId, slot: 0, item: want })
   }
 
   // Test helper: inject a mod->node event (chat, death, ...).
