@@ -160,6 +160,21 @@ describe('bridge chunk cache (neuc.6)', () => {
     assert.equal(bot.blockAt(new Vec3(32, 64, 0)).name, 'oak_log', 'the next load refetches')
   })
 
+  it('loaded/unloaded/loaded inside one in-flight fetch still lands the column (revmux 02 core-1)', async () => {
+    const origCall = transport.call.bind(transport)
+    transport.call = async (method, params) => {
+      if (method === 'chunk.get') await sleep(40)
+      return origCall(method, params)
+    }
+    transport.state.blocks['48,64,0'] = 'oak_log' // column (3,0), near
+    transport.inject('chunk.loaded', { cx: 3, cz: 0 })
+    await sleep(10)
+    transport.inject('chunk.unloaded', { cx: 3, cz: 0 })
+    transport.inject('chunk.loaded', { cx: 3, cz: 0 }) // mid-fetch reload: armed, not dropped
+    await sleep(200)
+    assert.equal(bot.blockAt(new Vec3(48, 64, 0)).name, 'oak_log')
+  })
+
   it('the REAL gather.js find phase runs unchanged through the adapter', () => {
     const ctx = { lastGoalKey: '', stepStatus: 'running' }
     gather(bot, ctx, null, {})

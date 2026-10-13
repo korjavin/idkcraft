@@ -125,20 +125,21 @@ const MAX_INFLIGHT = 4 // chunk.get replies are 100 KB+ and the mod serves one c
 function chunkState(bot) {
   if (!bot._chunks) {
     bot._chunks = {
-      listed: false, unsupported: false, loading: new Set(), retried: new Set(),
+      listed: false, unsupported: false, loading: new Set(), retried: new Set(), reload: new Set(),
       queue: [], queued: new Set(), gens: new Map(), inflight: 0, timer: null,
     }
   }
   return bot._chunks
 }
 
-function queueColumn(bot, transport, cx, cz) {
+function queueColumn(bot, transport, cx, cz, front = false) {
   const st = chunkState(bot)
   const key = `${cx},${cz}`
   if (st.loading.has(key) || st.queued.has(key)) return
   if (bot._chunkCols && bot._chunkCols.has(key)) return
   st.queued.add(key)
-  st.queue.push([cx, cz])
+  if (front) st.queue.unshift([cx, cz])
+  else st.queue.push([cx, cz])
   scheduleBackground(bot, transport)
 }
 
@@ -147,7 +148,7 @@ async function fetchColumn(bot, transport, cx, cz) {
   const key = `${cx},${cz}`
   if (st.loading.has(key)) return
   if (bot._chunkCols && bot._chunkCols.has(key)) return
-  if (st.inflight >= MAX_INFLIGHT) { queueColumn(bot, transport, cx, cz); return }
+  if (st.inflight >= MAX_INFLIGHT) { queueColumn(bot, transport, cx, cz, true); return } // near-first: front, not behind the far queue
   st.loading.add(key)
   st.inflight++
   const gen = st.gens.get(key) || 0
@@ -170,6 +171,12 @@ async function fetchColumn(bot, transport, cx, cz) {
   } finally {
     st.inflight--
     st.loading.delete(key)
+    // A chunk.loaded that arrived mid-fetch asked for a refetch of the
+    // (possibly reloaded) column; the reply above may predate it.
+    if (st.reload.delete(key) && !bot._quitting) {
+      if (bot._chunkCols) bot._chunkCols.delete(key) // force the refetch past the dedup
+      queueColumn(bot, transport, cx, cz)
+    }
   }
 }
 
@@ -178,7 +185,7 @@ function scheduleBackground(bot, transport) {
   if (st.timer || st.queue.length === 0) return
   st.timer = setInterval(() => {
     if (bot._quitting) { clearInterval(st.timer); st.timer = null; return }
-    let n = BG_PER_TICK
+    let n = Math.min(BG_PER_TICK, MAX_INFLIGHT - st.inflight)
     while (n-- > 0 && st.queue.length > 0) {
       const [cx, cz] = st.queue.shift()
       st.queued.delete(`${cx},${cz}`)
@@ -208,13 +215,16 @@ async function refreshChunks(bot, transport) {
   const bcx = Math.floor(bp.x / 16)
   const bcz = Math.floor(bp.z / 16)
   const near = []
+  const far = []
   for (const c of cols) {
     if (!c || typeof c.cx !== 'number' || typeof c.cz !== 'number') continue
     const d = Math.max(Math.abs(c.cx - bcx), Math.abs(c.cz - bcz))
     if (d <= NEAR_CHUNKS) near.push([c.cx, c.cz])
-    else queueColumn(bot, transport, c.cx, c.cz)
+    else far.push([c.cx, c.cz])
   }
+  // Near first, far queued only after (revmux 02 core-2).
   await Promise.all(near.map(([cx, cz]) => fetchColumn(bot, transport, cx, cz)))
+  for (const [cx, cz] of far) queueColumn(bot, transport, cx, cz)
   scheduleBackground(bot, transport)
 }
 
@@ -229,7 +239,9 @@ function handleChunkEvent(bot, transport, method, params) {
       st.unsupported = false
       st.retried.delete(`${p.cx},${p.cz}`)
       // A (re)load always refetches: a stale column from a raced unload
-      // must not survive it (revmux 01 core-2).
+      // must not survive it (revmux 01 core-2). Mid-fetch, the refetch
+      // is armed for fetchColumn's finally (revmux 02 core-1).
+      if (st.loading.has(`${p.cx},${p.cz}`)) st.reload.add(`${p.cx},${p.cz}`)
       if (bot._chunkCols) bot._chunkCols.delete(`${p.cx},${p.cz}`)
       // Near columns fetch now; the rest join the throttled background
       // queue — the login stream is ~441 columns (revmux 01 body-2).
