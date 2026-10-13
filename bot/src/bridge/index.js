@@ -438,6 +438,9 @@ class BaritoneBot extends EventEmitter {
       if (typeof st.pos.yaw === 'number') this.entity.yaw = st.pos.yaw
       if (typeof st.pos.pitch === 'number') this.entity.pitch = st.pos.pitch
       if (typeof st.pos.onGround === 'boolean') this.entity.onGround = st.pos.onGround
+      // neuc.25: mineflayer physics flags; without them the breath reflex never fires on v2.
+      if (typeof st.pos.inWater === 'boolean') this.entity.isInWater = st.pos.inWater
+      if (typeof st.pos.inLava === 'boolean') this.entity.isInLava = st.pos.inLava
       const vel = st.pos.vel
       if (vel && typeof vel.x === 'number' && typeof vel.y === 'number' && typeof vel.z === 'number') {
         this.entity.velocity.x = vel.x
@@ -595,7 +598,14 @@ class BaritoneBot extends EventEmitter {
     // hold last:'none' (or a lone CANCELED) and the latch would never
     // clear. Succeed without a command, stopping the live walk first
     // like every other setGoal.
+    // neuc.25: arm a dynamic GoalFollow BEFORE the in-range shortcut. v1
+    // keeps a dynamic goal live after arrival (pathfinder re-plans on
+    // goal.hasChanged), so a mob knocked back out of reach is chased at
+    // once; a fight that starts in range must arm too, or the body stands
+    // still until fight.js's 6-tick retry while the mob hits it.
+    const arm = this._followArm(goal, dynamic)
     if (this._satisfiedNow(goal)) {
+      this._follow = arm
       const live = this._pathing || this._goalId != null
       this._boundSeq = this._cmdSeq
       this._goalId = null
@@ -627,12 +637,14 @@ class BaritoneBot extends EventEmitter {
     this._goalId = null // awaiting the echo; foreign ids drop meanwhile
     this._pathing = true // optimistic latch: follow.js re-issues on !isMoving
     this._sendGoalCmd(cmd)
-    if (dynamic && goal.entity && goal.entity.position) {
-      const p = goal.entity.position
-      if (typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
-        this._follow = { entity: goal.entity, x: p.x, y: p.y, z: p.z, at: Date.now() }
-      }
-    }
+    this._follow = arm
+  }
+
+  _followArm(goal, dynamic) {
+    const p = dynamic && goal.entity && goal.entity.position
+    if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return null
+    const rangeSq = typeof goal.rangeSq === 'number' ? goal.rangeSq : 0
+    return { entity: goal.entity, x: p.x, y: p.y, z: p.z, at: Date.now(), rangeSq }
   }
 
   // The goal's own verdict on the live feet, defaulting to "walk" on any
@@ -715,7 +727,7 @@ class BaritoneBot extends EventEmitter {
   _completeTerminal(last) {
     const status = last === 'noPath' || last === 'timeout' || last === 'stopped' || last === 'success' ? last : 'timeout'
     this._goalId = null
-    this._follow = null
+    if (status !== 'success') this._follow = null // neuc.25: a reached dynamic goal stays armed (v1 parity)
     this._pathing = false
     this._pathStatus = status
     this.emit('path_update', { status })
@@ -729,12 +741,28 @@ class BaritoneBot extends EventEmitter {
   // new echo rebinds the latch and the old id's late verdicts drop.
   _maybeReissueFollow() {
     const f = this._follow
-    if (!f || this._goalId == null) return
+    if (!f) return
     const p = f.entity && f.entity.position
     if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return
-    if (Math.hypot(p.x - f.x, p.y - f.y, p.z - f.z) <= 1) return
+    if (f.entity.isValid === false) return
+    const idle = this._goalId == null && !this._pathing
+    if (idle) {
+      // neuc.25: reached (armed, idle). v1's GoalFollow re-plans once the
+      // target leaves range of the bot's feet (hasChanged + isEnd), so do
+      // the same: a knocked-back mob or a stepping player is re-chased.
+      const b = this.entity && this.entity.position
+      if (!b || typeof b.x !== 'number') return
+      const dx = Math.floor(p.x) - Math.floor(b.x)
+      const dy = Math.floor(p.y) - Math.floor(b.y)
+      const dz = Math.floor(p.z) - Math.floor(b.z)
+      if (dx * dx + dy * dy + dz * dz <= f.rangeSq) return
+    } else {
+      if (this._goalId == null) return // awaiting the echo
+      if (Math.hypot(p.x - f.x, p.y - f.y, p.z - f.z) <= 1) return
+    }
     const now = Date.now()
     if (now - f.at < 1000) return
+    if (idle) this._pathing = true // a fresh walk: isMoving like v1's re-plan
     f.x = p.x
     f.y = p.y
     f.z = p.z

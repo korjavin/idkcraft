@@ -583,6 +583,10 @@ public final class BridgeServer {
         pos.addProperty("yaw", mineflayerYaw(pl.getYRot()));
         pos.addProperty("pitch", mineflayerPitch(pl.getXRot()));
         pos.addProperty("onGround", pl.onGround());
+        // idkcraft-neuc.25: mineflayer's entity.isInWater/isInLava (the
+        // breath reflex, swim.js, unpin.js read them; absent = never wet).
+        pos.addProperty("inWater", pl.isInWater());
+        pos.addProperty("inLava", pl.isInLava());
         Vec3 v = pl.getDeltaMovement();
         JsonObject vel = new JsonObject();
         vel.addProperty("x", v.x);
