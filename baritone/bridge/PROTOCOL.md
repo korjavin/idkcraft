@@ -17,7 +17,8 @@ console bridge; never published outside the compose network / rig):
 - `ws://<client>:7778/rpc` — JSON-RPC 2.0 over websocket, Node calls mod.
   One call = `{jsonrpc:'2.0',id,method,params}`; reply =
   `{jsonrpc:'2.0',id,result|error}`. Timeouts are per call (5 s default);
-  `dig.once`/`place.once` may run longer (30 s).
+  `place.once` may wait on the client thread; a dig's outcome arrives
+  as notifications (see the dig/place section).
 - The same socket streams mod->node events as notifications (no `id`):
   `{jsonrpc:'2.0',method,params}`. The adapter folds them into `bot.emit`.
 
@@ -563,7 +564,7 @@ source — no empty rows:
 | `time` | tick cadence: once per 20 client ticks `{age,timeOfDay}` | no args, after `bot.time` update | bridge-lifecycle: rain and time |
 | `sleep` / `wake` | Look tick sleeping-state edge (neuc.9) | no args, `bot.isSleeping` flipped first | bridge-look |
 | `blockUpdate` | `block.update` notification (neuc.6 Chunks) | `(oldBlock, newBlock)` from the chunk cache (`chunks.handleChunkEvent`) | bridge-chunks |
-| `diggingCompleted` | neuc.7 (dig surface, not merged yet) | DEFERRED to neuc.7 — no `bot.on` consumer in bot/src (mineflayer's `dig()` awaits it internally); neuc.7's adapter `dig()` owns it | neuc.7 |
+| `diggingCompleted` / `diggingAborted` | Interact `dig.done` / `dig.abort` notifications (neuc.7) | `(newBlock)` / `(block)` from the adapter `dig()` (interact.js); no `bot.on` consumer in bot/src | bridge-interact: dig progress -> done, abort |
 | `windowOpen` / `windowClose` | `window.open` / `window.close` notifications (neuc.11 Windows) | `(window)` prismarine-windows window; no `bot.on` consumer in bot/src (mineflayer's open* use it internally) | bridge-windows: openChest -> windowOpen, close -> windowClose |
 | `kicked` | `ClientboundDisconnectPacket` / login disconnect `{reason,loggedIn}` | `(reason, loggedIn=true)` — runOnce fatal()s it like v1 | bridge-lifecycle: kicked carries (reason, loggedIn) |
 | `end` | disconnect packet; a silent drop with no packet is neuc.20's sustained null-pos grace in the adapter poll (`bridge: left world`) | `(reason)`; once per disconnect (the transport-close twin drops; our own `quit()` is not doubled) | bridge-lifecycle: end fires once + runOnce wanted-end resolves |
@@ -637,3 +638,57 @@ Not on this wire: `window.property` (furnace fuel/progress — the
 furnace's `fuel`/`progress` fields stay null; furnace.js reads output
 growth only), entity containers (`openContainer(entity)`: no logic site
 uses it), `bot._syncWindow` (craft.js falls back to its settle wait; .12).
+
+## dig / place (idkcraft-neuc.7)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Interact.java`
+(`Interact.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/interact.js` (`installInteract` in the adapter
+constructor — before `spawn`, so util.js `trackPlaced`/`installPlaceTiming`
+wrap `bot.placeBlock`; `handleInteractEvent` in the event router).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `dig.start` | `{x,y,z,face,look}` | `{ok}` at once; the outcome is a notification | `bot.dig(block, forceLook, digFace)` |
+| `dig.abort` | — | `{ok,aborted}` | `bot.stopDigging()` |
+| `place.once` | `{x,y,z,face,yaw,pitch,cursor{x,y,z},sneak}` — x,y,z = the TARGET cell, `face` = the clicked face of the reference (ref = target − face) | `{ok,result}` (vanilla InteractionResult) | `bot.placeBlock(ref, faceVector)` |
+
+Notifications: `dig.progress {x,y,z,progress}` (0..1 on each destroy-stage
+change), `dig.done {x,y,z,broke,stateId}` (the cell's new state),
+`dig.abort {x,y,z,reason}` with reason `moved` (out of interaction
+reach) | `changed` (the block became something else, or a new
+`dig.start` replaced it) | `timeout` (30 s) | `unreachable` (no player /
+dead) | `cancelled` (`dig.abort` call).
+
+Dig (client thread): picks the hotbar tool that breaks the block strictly
+faster than the held stack (tool speed / 30 harvestable, / 100 not —
+pathfinder bestHarvestTool simplified, enchants ignored), aims at the
+face centre unless `look:false`, then drives the break like Baritone's own
+BlockBreakHelper through its `IPlayerController`: `clickBlock` once,
+`onPlayerDamageBlock` + swing per client tick, `setHittingBlock(false)`
+after each (else vanilla's per-tick `continueAttack(false)` aborts the
+dig: the headless client never holds the attack key). Done = the block
+turned air/liquid on the client (mineflayer resolves on its predicted
+air too; a server refusal arrives as a `block.update` that restores the
+cache). A cell that is already air answers `dig.done {broke:false}`.
+
+Node: `bot.dig` rejects like mineflayer (`dig was called with an
+undefined or null block`, `dig time for <name> is Infinity`), sets
+`targetDigBlock` for the dig's life, resolves on `dig.done` (writing the
+cell through the chunk cache and emitting `blockUpdate` + 
+`diggingCompleted`), rejects `Digging aborted (<reason>)` on the mod's
+abort and `Digging aborted` on `stopDigging()` (emitting
+`diggingAborted`); a 35 s guard covers a lost notification. Baritone is
+paused for the whole dig while pathing (`withBaritonePaused`).
+`bot.placeBlock` looks at the face centre (mineflayer's point; the mod
+sets the rotation and clicks in one client-thread task), then settles on
+the server's `block.update` for the target like mineflayer
+`place_block.js`: a type change resolves (`blockPlaced`), an unchanged
+answer rejects `Server refused to place <item> at (x, y, z): the block
+is still <name>`, silence for 1 s rejects `Server did not answer the
+placement at ...`; no held item rejects `must be holding an item to
+place`. `bot.swingArm` is a no-op (the mod swings itself);
+`_placeBlockWithOptions` stays absent (castle.js stairs fall back to
+`placeBlock`). Not on this wire: sneak-placing against interactables
+(the mod takes `sneak`, the adapter sends false like mineflayer), the
+deep.js raw `block_dig` burst (neuc.14).

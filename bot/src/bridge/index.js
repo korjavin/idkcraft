@@ -18,6 +18,7 @@ const { installLook, handleLookEvent } = require('./look') // idkcraft-neuc.9: l
 const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.13: control states
 const { installLifecycle, handleLifecycleEvent } = require('./lifecycle') // idkcraft-neuc.10: lifecycle/event parity
 const { installWindows, handleWindowEvent } = require('./windows') // idkcraft-neuc.11: container windows
+const { installInteract, handleInteractEvent } = require('./interact') // idkcraft-neuc.7: dig/place
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 // Failed fire-and-forget baritone.cmd: log, never emit 'error' (runOnce
@@ -284,6 +285,7 @@ class BaritoneBot extends EventEmitter {
     installInput(this, transport) // neuc.13: setControlState/clearControlStates/controlState
     installLifecycle(this) // neuc.10: isAlive/foodSaturation/respawn()
     installWindows(this) // idkcraft-neuc.11: openContainer/openChest/openFurnace/currentWindow/clickWindow/closeWindow
+    installInteract(this) // idkcraft-neuc.7: dig/stopDigging/targetDigBlock/placeBlock/swingArm — before 'spawn' (util.js wraps placeBlock)
   }
 
   // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
@@ -558,32 +560,6 @@ class BaritoneBot extends EventEmitter {
     }
   }
 
-  async dig(block, _forceLook) {
-    if (!block || !block.position) throw new Error('adapter dig: want a block with a position')
-    if (!this.canDigBlock(block)) throw new Error(`adapter dig: cannot dig ${block.name || 'unknown'}`)
-    const p = block.position
-    this.targetDigBlock = block // stuck.js reads this during a lib dig
-    try {
-      const r = await this.transport.call('dig.once', { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) })
-      chunks.applyBlockUpdate(this, { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z), stateId: 0 }) // write-through; block.update also lands
-      return r
-    } finally {
-      this.targetDigBlock = null
-    }
-  }
-
-  async placeBlock(ref, face) {
-    if (!ref || !ref.position || !face) throw new Error('adapter placeBlock: want (ref, face)')
-    const x = Math.floor(ref.position.x + face.x)
-    const y = Math.floor(ref.position.y + face.y)
-    const z = Math.floor(ref.position.z + face.z)
-    const r = await this.transport.call('place.once', { x, y, z })
-    const placed = (this.registry && this.registry.blocksByName && this.registry.blocksByName[(r && r.placed) || 'stone']) || null
-    if (placed && typeof placed.defaultState === 'number') chunks.applyBlockUpdate(this, { x, y, z, stateId: placed.defaultState })
-    await this.refresh().catch(() => {}) // inventory moved; re-cache best-effort
-    return r
-  }
-
   chat(message) {
     // mineflayer chat is fire-and-forget; the promise must never throw synchronously.
     // A failed call logs, never emits 'error': runOnce fatal()s every 'error'
@@ -831,6 +807,7 @@ class BaritoneBot extends EventEmitter {
     if (handleLookEvent(this, method, params)) return // idkcraft-neuc.9: sleep/wake
     if (handleLifecycleEvent(this, method, params)) return // idkcraft-neuc.10: death/respawn/health/…/kicked/end
     if (handleWindowEvent(this, method, params)) return // idkcraft-neuc.11: window.open/slot/close
+    if (handleInteractEvent(this, method, params)) return // idkcraft-neuc.7: dig.progress/done/abort
     const p = params || {}
     switch (method) {
       case 'chat':
