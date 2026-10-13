@@ -43,7 +43,7 @@
 //   REPLAY_TAG (bot name suffix; default random), REPLAY_OUT (JSON results
 //   path; default tools/last-replay.json, gitignored),
 //   REPLAY_BASELINE (baseline file; default stuck-baseline.json next to
-//   this file), REPLAY_BASELINE_OFF=1 (record only, skip the comparison),
+//   this file, stuck-baseline-v2.json under BOT_BODY=baritone),REPLAY_BASELINE_OFF=1 (record only, skip the comparison),
 //   REPLAY_BRAIN (stub|laya; default stub — laya runs the follower on the
 //   hybrid brain against the prod sidecar, see REPLAY_BRAIN_URL),
 //   REPLAY_BRAIN_URL (default http://localhost:8000/v1/systemone — the
@@ -426,7 +426,10 @@ function compareBaseline(rows, baseline) {
 
 function loadBaseline() {
   const path = require('node:path')
-  const file = process.env.REPLAY_BASELINE || path.join(__dirname, 'stuck-baseline.json')
+  // v2 body (idkcraft-neuc.15): its own baseline on the same corpus; the v1
+  // file stays mineflayer-only. REPLAY_BASELINE still wins.
+  const def = process.env.BOT_BODY === 'baritone' ? 'stuck-baseline-v2.json' : 'stuck-baseline.json'
+  const file = process.env.REPLAY_BASELINE || path.join(__dirname, def)
   if (!fs.existsSync(file)) return { file, baseline: null }
   return { file, baseline: JSON.parse(fs.readFileSync(file, 'utf8')) }
 }
