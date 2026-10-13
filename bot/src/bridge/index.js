@@ -41,6 +41,26 @@ function gameModeName(gm) {
   if (typeof gm === 'number' && gm >= 0 && gm <= 3) return GAME_MODES[gm]
   return gm
 }
+// idkcraft-neuc.22: mineflayer bot.chat's split (lib/plugins/chat.js
+// chatWithHeader, header ''): a '/' command goes whole, else per '\n' line
+// (empties dropped) in 256-char packets. One unsplit 449-char line killed
+// the v2 client ("String too big", EncoderException) every ~62 s on prod.
+const CHAT_LENGTH_LIMIT = 256
+let chatSplitSaid = false
+function chatParts(message) {
+  const msg = String(message)
+  if (msg.startsWith('/')) return [msg]
+  const parts = []
+  for (const line of msg.split('\n')) {
+    if (line.length > CHAT_LENGTH_LIMIT && !chatSplitSaid) {
+      chatSplitSaid = true // once per process: names the long line for the bead
+      console.log(`bridge chat split ${line.length} chars: ${line.slice(0, 120)}`)
+    }
+    for (let i = 0; i < line.length; i += CHAT_LENGTH_LIMIT) parts.push(line.substring(i, i + CHAT_LENGTH_LIMIT))
+  }
+  return parts
+}
+
 function stripMcPrefix(s) {
   return typeof s === 'string' ? s.replace(/^minecraft:/, '') : s
 }
@@ -225,6 +245,16 @@ class BaritoneBot extends EventEmitter {
     this._refreshing = false
     this._pathStatus = 'none'
     this._hasPos = false // first state.get with a non-null pos (createBot emits spawn on it)
+    // idkcraft-neuc.20: out-of-world detection. The mod serves the null
+    // snapshot once the client leaves the world (disconnect/kick), but the
+    // ws stays up — without this the ticker keeps driving a body that is
+    // at the menu forever and never rejoins. A sustained null pos past
+    // the grace (respawn/dimension swaps flap briefly) ends the bot like
+    // a dropped v1 connection: runOnce fatal()s, the container restarts,
+    // and the handshake re-sends the console connect.
+    this._leftWorldMs = typeof opts.leftWorldMs === 'number' ? opts.leftWorldMs : 3000
+    this._outSince = null
+    this._leftFired = false
     this._quitting = false
     this._poll = null
     this._onTransportEvent = (method, params) => this._handleEvent(method, params)
@@ -279,11 +309,24 @@ class BaritoneBot extends EventEmitter {
       }
       this.emit('end', reason)
     }
-    const done = () => { cleared.then(finish, finish) }
-    if (this._console && typeof this._console.send === 'function') {
-      this._console.send('disconnect').catch(() => {}).then(done, done)
+    const disconnect = () => {
+      const done = () => { cleared.then(finish, finish) }
+      if (this._console && typeof this._console.send === 'function') {
+        this._console.send('disconnect').catch(() => {}).then(done, done)
+      } else {
+        done()
+      }
+    }
+    // idkcraft-neuc.20: cancel Baritone before the client leaves the
+    // world, so no pathing process survives into the menu (its out-of-
+    // world ticks NPE in Baritone's playerFeet). Bounded: a hung call
+    // must not delay the disconnect past 1 s. The mod also cancels on
+    // world unload, so this is belt and braces.
+    if (this.transport && typeof this.transport.call === 'function') {
+      const stopped = this.transport.call('baritone.cmd', { command: '#stop' }).catch(() => {})
+      Promise.race([stopped, sleep(1000)]).then(disconnect, disconnect)
     } else {
-      done()
+      disconnect()
     }
   }
 
@@ -325,9 +368,25 @@ class BaritoneBot extends EventEmitter {
     return this
   }
 
+  // idkcraft-neuc.20: one null-pos poll. Only a sustained absence past
+  // the grace ends the bot (see the constructor note); firing clears the
+  // poll so no further bridge traffic drives the out-of-world client.
+  _noteOutOfWorld() {
+    if (!this._hasPos || this._quitting || this._leftFired) return
+    const now = Date.now()
+    if (this._outSince == null) this._outSince = now
+    if (now - this._outSince < this._leftWorldMs) return
+    this._leftFired = true
+    if (this._poll) clearInterval(this._poll)
+    this._poll = null
+    this.emit('end', 'bridge: left world (client disconnected)')
+  }
+
   async _refreshOnce() {
     const st = await this.transport.call('state.get', {})
+    if (!st || !st.pos) this._noteOutOfWorld()
     if (st && st.pos) {
+      this._outSince = null
       this._hasPos = true
       this.entity.position.x = st.pos.x
       this.entity.position.y = st.pos.y
@@ -467,9 +526,11 @@ class BaritoneBot extends EventEmitter {
     // A failed call logs, never emits 'error': runOnce fatal()s every 'error'
     // (process exit), and a timed-out chat.send on a live socket is not a
     // dead connection (revmux 01 core-2).
-    this.transport.call('chat.send', { message: String(message) }).catch((e) => {
-      console.log(`bridge chat.send failed: ${(e && e.message) || e}`)
-    })
+    for (const part of chatParts(message)) {
+      this.transport.call('chat.send', { message: part }).catch((e) => {
+        console.log(`bridge chat.send failed: ${(e && e.message) || e}`)
+      })
+    }
   }
 
   _setGoal(goal, dynamic) {

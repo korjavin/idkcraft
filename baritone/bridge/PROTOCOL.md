@@ -388,6 +388,25 @@ instances when resolvable (`name/type/count/displayName/durabilityUsed`,
 `enchants` in prismarine-item's `{name,lvl}` shape, `customName` as a plain
 prop). `bot.heldItem = slots[36+selected]`; ops serialise through one
 adapter chain. `bot._syncWindow`/`currentWindow` are NOT here (.11/.12).
+## Lifecycle: leaving the world (idkcraft-neuc.20)
+
+The ws stays up while the client sits at the menu, so "connected" is not
+"in world". The in-world signal is `state.get`: a non-null `pos` means
+joined; the null snapshot means at the menu (disconnect/kick/never
+joined).
+
+- Mod: `baritone.cmd` fails `-32002` (not in world) whenever the client
+  has no player/level — Baritone commands are never executed out of
+  world (their goal code dereferences the null LocalPlayer). On world
+  unload the mod executes `stop`, marks the tracked goal `stopped`, and
+  clears `pathing`, so no pathing process ticks at the menu.
+- Node adapter: after the first joined state, a null `pos` sustained
+  past a 3 s grace (respawn/dimension swaps flap inside it) emits `end`
+  once, exactly like a dropped v1 connection — `runOnce` fatal()s, the
+  container restarts, and the handshake re-sends the console
+  `connect <host> <port>`: that is the v2 rejoin path. `quit()` sends
+  `#stop` (bounded to 1 s) before the console `disconnect`.
+
 ## look / attack / interact / sleep (idkcraft-neuc.9)
 
 Mod: `mod/src/main/java/idkcraft/bridge/Look.java`

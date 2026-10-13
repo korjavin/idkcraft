@@ -220,6 +220,55 @@ describe('createBot lifecycle on FakeTransport', () => {
     })
   })
 
+  it('client leaving the world after spawn ends the bot (rejoin via restart, neuc.20)', async () => {
+    const transport = new FakeTransport({ pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true } })
+    const bot = new BaritoneBot(transport, { Vec3, registry: { blocksByName: {} }, username: 'IdkBody', leftWorldMs: 30 })
+    const ends = []
+    bot.on('end', (r) => ends.push(r))
+    await bot.start({ pollMs: 0 })
+    transport.state.pos = null // server disconnect: mod serves the null snapshot
+    await bot.refresh()
+    assert.deepEqual(ends, [], 'a single null poll is within the grace (respawn/dimension flap)')
+    await sleep(50)
+    await bot.refresh()
+    assert.equal(ends.length, 1)
+    assert.match(String(ends[0]), /left world/)
+    await bot.refresh()
+    assert.equal(ends.length, 1, 'end fires exactly once')
+    await bot.stop()
+  })
+
+  it('a brief out-of-world flap that returns does not end the bot (neuc.20)', async () => {
+    const transport = new FakeTransport({ pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true } })
+    const bot = new BaritoneBot(transport, { Vec3, registry: { blocksByName: {} }, username: 'IdkBody', leftWorldMs: 30 })
+    const ends = []
+    bot.on('end', (r) => ends.push(r))
+    await bot.start({ pollMs: 0 })
+    transport.state.pos = null
+    await bot.refresh()
+    transport.state.pos = { x: 1, y: 64, z: 1, yaw: 0, pitch: 0, onGround: true }
+    await bot.refresh()
+    await sleep(50)
+    await bot.refresh()
+    assert.deepEqual(ends, [])
+    await bot.stop()
+  })
+
+  it('quit stops Baritone before the console disconnect (neuc.20)', async () => {
+    const transport = new FakeTransport({ pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true } })
+    const lines = []
+    const bot = new BaritoneBot(transport, {
+      Vec3, registry: { blocksByName: {} }, username: 'IdkBody',
+      console: { send: async (line) => { lines.push(`${line} after=${transport.state.baritone}`); return true } },
+    })
+    await bot.start({ pollMs: 0 })
+    const endP = once(bot, 'end')
+    bot.quit('test done')
+    const [reason] = await endP
+    assert.equal(reason, 'test done')
+    assert.deepEqual(lines, ['disconnect after=#stop'], 'Baritone is stopped before the client leaves the world')
+  })
+
   it('no spawn until the first state with a non-null pos', async () => {
     const { inj, transport } = rig({ pos: null })
     await quiet(async () => {
