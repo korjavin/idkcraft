@@ -227,6 +227,12 @@ services:
     mem_limit: ${BODY2_MEM_LIMIT:-2500m}
     environment:
       BARITONE_OFFLINE: "1"
+      # The bridge mod needs baritone/api/**, which only the API jar keeps:
+      # start.sh swaps it in only with BARITONE_API=1 (the rig boot passes
+      # the same, stuck-run.sh REPLAY_BODY). Without it the mod logs
+      # "standalone Baritone has no Java API", never opens :7778, and bot2
+      # can neither connect nor join (idkcraft-neuc.19). Worker untouched.
+      BARITONE_API: "1"
       BOT: ${BOT2_USERNAME:-}
     logging:
       driver: json-file
