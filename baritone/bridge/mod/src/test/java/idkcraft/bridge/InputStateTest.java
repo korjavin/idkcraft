@@ -26,6 +26,26 @@ class InputStateTest {
     }
 
     @Test
+    void releaseOnDisconnectClearsKeysAndResumesOnlyOurPause() {
+        InputState s = new InputState();
+        assertTrue(s.apply(Map.of("jump", true, "forward", true)));
+        s.markPausedByInput();
+        assertTrue(s.releaseOnDisconnect(), "our pause must be resumed on disconnect");
+        assertFalse(s.anyHeld());
+        assertFalse(s.isPausedByInput());
+        // Second disconnect: nothing held, no pause of ours — no resume.
+        assertFalse(s.releaseOnDisconnect());
+    }
+
+    @Test
+    void releaseOnDisconnectLeavesForeignPauseAlone() {
+        InputState s = new InputState();
+        assertTrue(s.apply(Map.of("sneak", true)));
+        assertFalse(s.releaseOnDisconnect(), "a pause we did not issue is not resumed");
+        assertFalse(s.anyHeld());
+    }
+
+    @Test
     void clearReleasesAll() {
         InputState s = new InputState();
         assertTrue(s.apply(Map.of("sneak", true, "sprint", true)));

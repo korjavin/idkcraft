@@ -37,7 +37,6 @@ public final class Input {
 
     private final BridgeServer server;
     private final InputState state = new InputState();
-    private volatile boolean pausedByInput = false;
     private ClientInput original; // client thread only
     private AdapterInput adapter; // client thread only
 
@@ -51,6 +50,20 @@ public final class Input {
         server.onClientTick(input::tick);
         server.register("input.set", input::set);
         server.register("input.clear", input::clear);
+        server.onWsClose(input::onDisconnect);
+    }
+
+    /**
+     * Last bridge connection gone (Node death / ws close): a held key and
+     * our Baritone pause must not outlive the process that pressed them —
+     * drop both now instead of waiting for a reconnect that may never
+     * come. Only a pause we issued is resumed (releaseOnDisconnect).
+     * The swapped-in input object is restored by the next tick.
+     */
+    void onDisconnect() {
+        if (state.releaseOnDisconnect()) {
+            server.executeBaritone("resume");
+        }
     }
 
     /** Current held states for state.get ({@code input:{states:{...}}}); empty object offline. */
@@ -92,15 +105,15 @@ public final class Input {
 
     private void afterChange(boolean wasHeld) {
         boolean held = state.anyHeld();
-        if (held && !wasHeld && !pausedByInput) {
+        if (held && !wasHeld && !state.isPausedByInput()) {
             if (server.executeBaritone("pause")) {
-                pausedByInput = true;
+                state.markPausedByInput();
             }
-        } else if (!held && wasHeld && pausedByInput) {
-            pausedByInput = false;
-            // Resume unconditionally: a latched goal continues (same id,
-            // never cleared by pause), and with no goal this just
-            // un-pauses so the next goal is not wedged.
+        } else if (!held && wasHeld && state.isPausedByInput()) {
+            state.clearPausedByInput();
+            // Only our own pause is resumed: a latched goal continues
+            // (same id, never cleared by pause), and with no goal this
+            // just un-pauses so the next goal is not wedged.
             server.executeBaritone("resume");
         }
     }

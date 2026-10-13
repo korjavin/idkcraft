@@ -258,16 +258,27 @@ class BaritoneBot extends EventEmitter {
     this._quitting = true
     if (this._poll) clearInterval(this._poll)
     this._poll = null
+    // neuc.13: release held controls before the transport goes away, so
+    // the mod never keeps driving (or holding Baritone paused) for a body
+    // nobody owns. Best-effort with a bounded wait: a dead transport must
+    // not delay 'end' (runOnce resolves on it).
+    const cleared = (async () => {
+      try {
+        this.clearControlStates()
+        await Promise.race([this._flushInput(), sleep(500)])
+      } catch (_) { /* release best-effort */ }
+    })()
     const finish = () => {
       if (this.transport && typeof this.transport.close === 'function') {
         try { this.transport.close() } catch (_) { /* close best-effort */ }
       }
       this.emit('end', reason)
     }
+    const done = () => { cleared.then(finish, finish) }
     if (this._console && typeof this._console.send === 'function') {
-      this._console.send('disconnect').catch(() => {}).then(finish, finish)
+      this._console.send('disconnect').catch(() => {}).then(done, done)
     } else {
-      finish()
+      done()
     }
   }
 

@@ -196,6 +196,11 @@ public final class BridgeServer {
         tickHooks.add(hook);
     }
 
+    /** neuc.13: fired when the last bridge websocket connection closes. */
+    public void onWsClose(Runnable hook) {
+        ws.onLastClose(hook);
+    }
+
     /**
      * neuc.13: run a Baritone control command on the client thread (used by
      * Input for pause/resume). Mirrors baritone.cmd's pausedLocal bookkeeping

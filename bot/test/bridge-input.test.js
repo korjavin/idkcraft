@@ -92,6 +92,38 @@ describe('bridge input (neuc.13)', () => {
     } finally { await bot.stop() }
   })
 
+  it('quit() sends input.clear before transport close and emits end', async () => {
+    const { transport, bot } = make()
+    await bot.start({ pollMs: 0 })
+    bot.setControlState('forward', true)
+    await bot._flushInput()
+    assert.equal(transport.state.input.forward, true)
+    const ended = new Promise((r) => bot.once('end', r))
+    bot.quit('test-quit')
+    assert.equal(await ended, 'test-quit')
+    assert.deepEqual(transport.state.inputLog.at(-1), { clear: true })
+    assert.equal(transport.state.input.forward, false)
+    assert.equal(transport.state.inputPaused, false)
+    assert.equal(bot.getControlState('forward'), false)
+    assert.equal(transport.connected, false)
+  })
+
+  it('_resetInput forces a clear: keys held by a dead predecessor do not survive reconnect', async () => {
+    const { transport, bot } = make()
+    await bot.start({ pollMs: 0 })
+    try {
+      // Predecessor died holding jump (mod-side state, mirror in sync).
+      bot.setControlState('jump', true)
+      await bot._flushInput()
+      assert.equal(transport.state.input.jump, true)
+      const n = transport.state.inputLog.length
+      await bot._resetInput()
+      assert.deepEqual(transport.state.inputLog[n], { clear: true })
+      assert.equal(transport.state.input.jump, false)
+      assert.equal(bot.getControlState('jump'), false)
+    } finally { await bot.stop() }
+  })
+
   it('setBaritonePaused helper sends #pause/#resume for neuc.9 reuse', async () => {
     const { transport, bot } = make()
     assert.equal(await setBaritonePaused(bot, true), true)

@@ -285,6 +285,14 @@ Baritone's input override, and HeadlessMc `-lwjgl` has no key context —
 the swapped object is what `LocalPlayer.applyInput` reads. Held jump
 therefore repeats on ground; sprint rides the record's sprint flag.
 
+Release on disconnect/quit: `BaritoneBot.quit()` sends `input.clear`
+best-effort (bounded 500 ms) before closing the transport, and the mod
+clears held inputs + resumes Baritone when the last bridge websocket
+closes (`WsServer.onLastClose` → `Input.onDisconnect`), so a dead Node
+process never leaves the body driving or paused. Only a pause issued by
+input itself is resumed; a foreign pause is left alone. On reconnect the
+adapter forces one `input.clear` before its first refresh.
+
 Baritone pause/resume: the first held key runs Baritone `pause` through
 `BridgeServer.executeBaritone` (also freezing the 120 s goal watchdog via
 `pausedLocal`); clear/last-release runs `resume`. Pause/resume never

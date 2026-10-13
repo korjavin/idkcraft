@@ -16,6 +16,7 @@ public final class InputState {
     public static final Set<String> KEYS = Set.of("forward", "back", "left", "right", "jump", "sneak", "sprint");
 
     private final Map<String, Boolean> states = new LinkedHashMap<>();
+    private boolean pausedByInput;
 
     public InputState() {
         for (String k : new String[] {"forward", "back", "left", "right", "jump", "sneak", "sprint"}) {
@@ -48,5 +49,31 @@ public final class InputState {
 
     public synchronized Map<String, Boolean> snapshot() {
         return new LinkedHashMap<>(states);
+    }
+
+    /** Record that Baritone was paused by an input press (only we resume it). */
+    public synchronized void markPausedByInput() {
+        pausedByInput = true;
+    }
+
+    public synchronized boolean isPausedByInput() {
+        return pausedByInput;
+    }
+
+    /** Take back our pause without resuming (the resume itself is game work). */
+    public synchronized void clearPausedByInput() {
+        pausedByInput = false;
+    }
+
+    /**
+     * Disconnect release: drop every held key and report whether the
+     * caller must resume Baritone — only a pause we issued is resumed,
+     * a foreign (in-game) pause is left alone.
+     */
+    public synchronized boolean releaseOnDisconnect() {
+        boolean resume = pausedByInput;
+        pausedByInput = false;
+        clear();
+        return resume;
     }
 }
