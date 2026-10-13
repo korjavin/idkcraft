@@ -75,6 +75,10 @@ async function withBaritonePaused(bot, fn) {
       await bot.transport.call('baritone.cmd', { command: '#resume' })
         .catch(() => bot.transport.call('baritone.cmd', { command: '#resume' }))
         .catch((e) => failLog('#resume', e))
+      // One tick before trusting status: Baritone's pausedThisTick (and
+      // the mod's snapshot) clear only on the next game tick, so an
+      // immediate read can still show a resumed goal as idle.
+      await sleepMs(60)
       try {
         const st = await bot.transport.call('baritone.status', {})
         if (st && bot._goalId != null && st.id === bot._goalId && !st.pathing &&

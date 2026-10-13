@@ -216,6 +216,9 @@ class FakeTransport extends EventEmitter {
         if (/^#(pause|resume)(\s|$)/.test(cmd)) { // idkcraft-neuc.9: goal stays armed, no status touch
           (s.baritonePauses = s.baritonePauses || []).push(cmd)
           s.baritonePaused = cmd.startsWith('#pause')
+          // Model pausedThisTick: for ~30 ms after #resume a status read
+          // still shows the paused tick (pathing:false, no verdict).
+          if (!s.baritonePaused) s.resumeStaleUntil = Date.now() + 30
           return { id: null }
         }
         if (/^#stop/.test(cmd)) {
@@ -246,6 +249,7 @@ class FakeTransport extends EventEmitter {
         // mistake for a dropped goal once #resume lands (the mod reads
         // pathing fresh on the client thread, post-resume).
         if (s.baritonePaused) return { id: s.baritoneId, pathing: false, last: 'none' }
+        if (s.resumeStaleUntil && Date.now() < s.resumeStaleUntil) return { id: s.baritoneId, pathing: false, last: 'none' }
         if (s.baritonePhase === 0) { s.baritonePhase = 1; return { id: s.baritoneId, pathing: true, last: 'none' } }
         return s.baritoneStatus || { id: null, pathing: false, last: 'none' }
       default:

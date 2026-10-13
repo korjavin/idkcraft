@@ -68,7 +68,7 @@ describe('bridge look/lookAt (idkcraft-neuc.9)', () => {
     assert.equal(bot.pathfinder.isMoving(), true)
     const seqBefore = transport.state.baritoneSeq
     bot.attack({ id: 42 })
-    await tick(60)
+    await tick(150) // pause + resume + the one-tick status wait
     assert.deepEqual(transport.state.attacks, [42])
     assert.deepEqual(transport.state.baritonePauses, ['#pause', '#resume'])
     assert.equal(bot.pathfinder.isMoving(), true) // goal survived the pause
@@ -103,7 +103,7 @@ describe('bridge look/lookAt (idkcraft-neuc.9)', () => {
     transport.state.baritoneStatus = { id: bot._goalId, pathing: false, last: 'none' }
     transport.state.baritonePhase = 1
     bot.attack({ id: 7 })
-    await tick(60)
+    await tick(150) // pause + resume + the one-tick status wait
     assert.ok(transport.state.baritoneSeq > seqBefore, 'latched goal re-issued after resume')
   })
 

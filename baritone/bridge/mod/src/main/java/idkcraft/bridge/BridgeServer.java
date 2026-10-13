@@ -326,12 +326,16 @@ public final class BridgeServer {
     }
 
     private com.google.gson.JsonElement baritoneStatus(JsonObject params) {
-        // Fresh pathing read on the client thread (neuc.9 round-2): the
+        // Fresh pathing read on the client thread (neuc.9 round-2/3): the
         // snapshot cache still holds the paused tick's false in the gap
         // right after a #resume, and the adapter's post-resume re-issue
-        // check would read a live goal as dropped. Falls back to the
-        // cached value while the client is booting.
-        Boolean fresh = submit(() -> baritone.getPathingBehavior().isPathing());
+        // check would read a live goal as dropped. isPathing() alone is
+        // not enough either — pausedThisTick clears only on the next
+        // game tick — so the goal process's own active flag (pause-
+        // independent) counts as pathing too. Falls back to the cached
+        // value while the client is booting.
+        Boolean fresh = submit(() -> baritone.getPathingBehavior().isPathing()
+                || baritone.getCustomGoalProcess().isActive());
         if (fresh != null) {
             pathing = fresh;
         }
