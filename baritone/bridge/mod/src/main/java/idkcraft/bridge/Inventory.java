@@ -150,6 +150,13 @@ public final class Inventory {
     }
 
     private JsonObject execute(Minecraft client, LocalPlayer player, Op op) throws Rpc.RpcException {
+        // neuc.11: clicks below go to inventoryMenu (id 0); vanilla drops a
+        // click whose id is not the open menu's, so an open container (a
+        // furnace kept open across smelt ticks) is closed first — like a
+        // player pressing E. The window.close push clears Node's currentWindow.
+        if (!"select".equals(op.kind()) && player.containerMenu != player.inventoryMenu) {
+            player.closeContainer();
+        }
         return switch (op.kind()) {
             case "select" -> doSelect(player, op.params());
             case "equip" -> doEquip(client, player, op);

@@ -353,7 +353,11 @@ class FakeTransport extends EventEmitter {
     for (const i of s.inventory) if (i.slot >= 9 && i.slot <= 44) arr[i.slot - 9 + n] = { name: i.name, count: i.count }
     let cur = s.cursor ? { ...s.cursor } : null
     const it = slot >= 0 ? arr[slot] : null
-    if (slot === -999) {
+    // c.accept {slot: [names]}: a slot that refuses other items (furnace fuel).
+    const refuses = cur && c.accept && c.accept[slot] && !c.accept[slot].includes(cur.name)
+    if (refuses) {
+      // vanilla mayPlace false: the click changes nothing
+    } else if (slot === -999) {
       if (cur) { cur.count = button === 0 ? 0 : cur.count - 1 }
     } else if (mode === 0) {
       if (!cur) {

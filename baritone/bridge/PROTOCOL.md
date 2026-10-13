@@ -485,7 +485,7 @@ constructor, `handleWindowEvent` in the adapter's event router).
 
 | method | params | result | mineflayer surface |
 |---|---|---|---|
-| `window.open` | `{x,y,z}` (container block) | menu (below), after the server's window lands (≤ 2 s, else error `window.open: no window opened`) | `bot.openContainer`/`openChest`/`openDispenser`/`openFurnace` |
+| `window.open` | `{x,y,z}` (container block) | menu (below), after the server's window lands (≤ 1.5 s, else `window.open: no window opened`; a click the block does not take fails at once) | `bot.openContainer`/`openChest`/`openDispenser`/`openFurnace` |
 | `window.click` | `{windowId,slot,mouseButton,mode}` (mineflayer modes 0-6; slot `-999` = outside) | menu after the click | `bot.clickWindow`/`simpleClick` (+ `transfer`/`putAway`/`putSelectedItemRange`, window `withdraw`/`deposit`, furnace `put*`/`take*`) |
 | `window.close` | `{windowId}` | `{ok}` | `bot.closeWindow`/`window.close()` |
 
@@ -501,7 +501,9 @@ the server opened), `window.slot {windowId,slot,item|null}`,
 Slot numbering is the vanilla menu order = mineflayer's window numbering:
 container slots first, then the player's 27 main + 9 hotbar (a 9x3 chest:
 0-26 chest, 27-53 main, 54-62 hotbar). Window id 0 is the player
-inventory menu (clicks only; `window.close` on it is a no-op). A click on
+inventory menu (clicks only; `window.close` on it is a no-op). `inventory.equip`/`toss`
+close an open container first (vanilla drops window-0 clicks while one is
+up); the `window.close` push clears Node's `currentWindow`. A click on
 a window that is no longer the open one fails `stale window <id>`.
 
 The client runs every click (`handleContainerInput`) and tracks the

@@ -126,15 +126,21 @@ function installWindows(bot) {
       const item = window.findItemRange(start, end, sel.type, sel.metadata, true, sel.nbt)
       if (item && item.stackSize !== item.count) {
         await bot.clickWindow(item.slot, 0, 0)
-        continue
+      } else {
+        const empty = window.firstEmptySlotRange(start, end)
+        if (empty !== null) {
+          await bot.clickWindow(empty, 0, 0)
+        } else {
+          if (slot != null) await bot.clickWindow(slot, 0, 0)
+          if (window.selectedItem) await bot.clickWindow(-999, 0, 0)
+        }
       }
-      const empty = window.firstEmptySlotRange(start, end)
-      if (empty !== null) {
-        await bot.clickWindow(empty, 0, 0)
-        continue
+      // Bridge items carry no components, so a same-type stack that differs
+      // in them swaps instead of merging: an unchanged cursor would lap forever.
+      const now = window.selectedItem
+      if (now && now.type === sel.type && now.count === sel.count) {
+        throw new Error('putSelectedItemRange: cursor did not move')
       }
-      if (slot != null) await bot.clickWindow(slot, 0, 0)
-      if (window.selectedItem) await bot.clickWindow(-999, 0, 0)
     }
   }
 

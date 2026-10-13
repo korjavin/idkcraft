@@ -40,7 +40,9 @@ import net.minecraft.world.phys.Vec3;
  */
 public final class Windows {
     private static final Gson GSON = new GsonBuilder().serializeNulls().create();
-    private static final long OPEN_WAIT_MS = 2000;
+    // ponytail: blocks this connection's read thread (Inventory's ops do too);
+    // a tick-completed future if a stalled poll ever matters.
+    private static final long OPEN_WAIT_MS = 1500;
     // mineflayer click modes 0..6 (protocol ids, same order as the enum).
     private static final ContainerInput[] MODES = {
         ContainerInput.PICKUP, ContainerInput.QUICK_MOVE, ContainerInput.SWAP, ContainerInput.CLONE,
@@ -112,7 +114,13 @@ public final class Windows {
             prev.addProperty("id", openId(player));
             BlockHitResult hit = new BlockHitResult(
                     new Vec3(x + 0.5, y + 0.5, z + 0.5), Direction.UP, new BlockPos(x, y, z), false);
-            client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
+            // Fail fast when the click did nothing (not a container, out of
+            // reach client-side): the wait below holds this connection's
+            // read thread, so only a click that took may pay for it.
+            if (!client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit).consumesAction()) {
+                throw new Rpc.RpcException(Rpc.INVALID_PARAMS,
+                        "window.open: block at " + x + " " + y + " " + z + " did not take the click");
+            }
             return prev;
         });
         int prevId = before.get("id").getAsInt();

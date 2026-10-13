@@ -26,7 +26,7 @@ function winBot({ inventory = [], chest = [], furnaceSlots = [] } = {}) {
     inventory,
     containers: {
       '2,64,0': { type: 'minecraft:generic_9x3', size: 27, title: 'Chest', slots: chest },
-      '-2,64,0': { type: 'minecraft:furnace', size: 3, title: 'Furnace', slots: furnaceSlots },
+      '-2,64,0': { type: 'minecraft:furnace', size: 3, title: 'Furnace', slots: furnaceSlots, accept: { 1: ['coal', 'charcoal'] } },
     },
   })
   const bot = new BaritoneBot(transport, { Vec3, registry, username: 'IdkBody' })
@@ -162,6 +162,13 @@ describe('bridge container windows (idkcraft-neuc.11)', () => {
         inventory: [{ slot: 9, name: 'raw_iron', count: 8 }, { slot: 10, name: 'coal', count: 3 }],
       }))
       await bot.start({ pollMs: 0 })
+    })
+
+    it('a refused click (raw iron into the fuel slot) fails instead of spinning', async () => {
+      const win = await bot.openFurnace(bot.blockAt(new Vec3(-2, 64, 0)))
+      await assert.rejects(win.putFuel(id('raw_iron'), null, 1), /moved nothing/)
+      assert.ok(transport.state.clickLog.length <= 2, `clicks: ${transport.state.clickLog.length}`)
+      await win.close()
     })
 
     it('REAL furnace.js smelt: loads ore + one coal, takes the ingots, logs smelted 8 iron', async () => {
