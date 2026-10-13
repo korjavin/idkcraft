@@ -219,7 +219,8 @@ public final class BridgeServer {
     /**
      * Observe inbound packets (POST, netty thread — capture immutable data
      * only). Added for the chunks surface (idkcraft-neuc.6); additive, the
-     * core chat capture above is untouched.
+     * core chat capture above is untouched. A play disconnect packet is the
+     * one PRE delivery (neuc.10: its POST never fires).
      */
     public void onPacket(java.util.function.Consumer<Packet<?>> hook) {
         packetHooks.add(hook);
@@ -228,15 +229,6 @@ public final class BridgeServer {
     /** neuc.13: fired when the last bridge websocket connection closes. */
     public void onWsClose(Runnable hook) {
         ws.onLastClose(hook);
-    }
-
-    private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Packet<?>>>
-            packetHooks = new java.util.concurrent.CopyOnWriteArrayList<>();
-
-    /** neuc.10: observe every inbound packet (POST, netty thread — extract
-     * primitives only, never touch the world). */
-    public void onPacket(java.util.function.Consumer<Packet<?>> hook) {
-        packetHooks.add(hook);
     }
 
     /**
