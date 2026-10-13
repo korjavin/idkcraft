@@ -350,8 +350,13 @@ public final class WsServer {
                 out.write(payload.length & 0xFF);
             } else {
                 out.write(127);
+                // 64-bit length: the shift must be long — an int shift is
+                // masked mod 32 and wrote the 4-byte length twice, which
+                // strict ws clients reject (first hit by chunk.get replies,
+                // the first >64 KB frames on this socket, neuc.6).
+                long len = payload.length;
                 for (int i = 7; i >= 0; i--) {
-                    out.write((payload.length >>> (8 * i)) & 0xFF);
+                    out.write((int) ((len >>> (8 * i)) & 0xFF));
                 }
             }
             out.write(payload);

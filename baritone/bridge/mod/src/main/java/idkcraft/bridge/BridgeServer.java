@@ -213,6 +213,18 @@ public final class BridgeServer {
         tickHooks.add(hook);
     }
 
+    private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Packet<?>>> packetHooks =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /**
+     * Observe inbound packets (POST, netty thread — capture immutable data
+     * only). Added for the chunks surface (idkcraft-neuc.6); additive, the
+     * core chat capture above is untouched.
+     */
+    public void onPacket(java.util.function.Consumer<Packet<?>> hook) {
+        packetHooks.add(hook);
+    }
+
     /** neuc.13: fired when the last bridge websocket connection closes. */
     public void onWsClose(Runnable hook) {
         ws.onLastClose(hook);
@@ -468,6 +480,13 @@ public final class BridgeServer {
                 return;
             }
             captureChat(event.getPacket());
+            for (java.util.function.Consumer<Packet<?>> hook : packetHooks) {
+                try {
+                    hook.accept(event.getPacket());
+                } catch (Exception ignored) {
+                    // A surface's packet view must never break the core capture.
+                }
+            }
         }
 
         @Override
@@ -705,7 +724,8 @@ public final class BridgeServer {
      * Returns null when the game is still booting or the call times out;
      * re-entrant when already on the client thread.
      */
-    private <V> V submit(java.util.concurrent.Callable<V> task) {
+    // Package-visible for surface classes (Chunks, neuc.6): same seam.
+    <V> V submit(java.util.concurrent.Callable<V> task) {
         if (!ensureClient()) {
             return null;
         }
