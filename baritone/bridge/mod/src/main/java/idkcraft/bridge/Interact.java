@@ -8,6 +8,8 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
@@ -48,7 +50,10 @@ public final class Interact {
     private static final double REACH_SLACK = 1.0;
     /** neuc.26 stepClear: clearance past the cell edge, the largest nudge, one tick + slack. */
     private static final double SHIFT_MARGIN = 0.05;
-    private static final double MAX_SHIFT = 0.5;
+    /** Centre of the target column to clear of it: 0.5 + half the 0.6 hitbox + margin. */
+    private static final double MAX_SHIFT = 0.85;
+    /** neuc.29 stepClear: how deep under the shifted feet a floor must be found. */
+    private static final double FLOOR_PROBE = 0.1;
     private static final long SHIFT_SETTLE_MS = 120;
 
     private final BridgeServer server;
@@ -154,37 +159,56 @@ public final class Interact {
 
     /**
      * Client thread: when the player's hitbox intersects the target cell,
-     * move it out horizontally along the shallower axis (+ a small margin),
-     * only into free space and never further than MAX_SHIFT (standing in the
-     * target column is the caller's problem, as on v1). Reply
-     * {@code {ok,shifted}}.
+     * move it out horizontally (shallower axis first, the other one if that
+     * is blocked; + a small margin), never further than MAX_SHIFT — which
+     * covers standing in the target's own column (neuc.29: a head-height
+     * cell refused 3x and skipped). Only from the ground (a mid-air shift
+     * would carry a pillar jump off its column) and only onto a stand that
+     * is free, still has a floor under it and touches no lava/fire
+     * (neuc.29: no shift over a drop or a hazard). Reply {@code {ok,shifted}}.
      */
     private static JsonObject stepClear(LocalPlayer player, BlockPos target) {
         JsonObject res = ok();
         res.addProperty("shifted", false);
         AABB box = player.getBoundingBox();
         AABB cell = new AABB(target);
-        if (!box.intersects(cell)) {
+        if (!box.intersects(cell) || !player.onGround()) {
             return res;
         }
         double px = player.getX() >= target.getX() + 0.5 ? cell.maxX - box.minX : cell.minX - box.maxX;
         double pz = player.getZ() >= target.getZ() + 0.5 ? cell.maxZ - box.minZ : cell.minZ - box.maxZ;
-        double dx = 0;
-        double dz = 0;
-        if (Math.abs(px) <= Math.abs(pz)) {
-            dx = px + Math.signum(px) * SHIFT_MARGIN;
-        } else {
-            dz = pz + Math.signum(pz) * SHIFT_MARGIN;
-        }
-        if (Math.abs(dx) + Math.abs(dz) > MAX_SHIFT) {
+        double sx = px + Math.signum(px) * SHIFT_MARGIN;
+        double sz = pz + Math.signum(pz) * SHIFT_MARGIN;
+        double[][] tries = Math.abs(px) <= Math.abs(pz)
+                ? new double[][] {{sx, 0}, {0, sz}}
+                : new double[][] {{0, sz}, {sx, 0}};
+        for (double[] t : tries) {
+            if (Math.abs(t[0]) + Math.abs(t[1]) > MAX_SHIFT) {
+                continue;
+            }
+            AABB moved = box.move(t[0], 0, t[1]);
+            if (!safeStand(player, moved)) {
+                continue;
+            }
+            player.setPos(player.getX() + t[0], player.getY(), player.getZ() + t[1]);
+            res.addProperty("shifted", true);
             return res;
         }
-        if (!player.level().noCollision(player, box.move(dx, 0, dz))) {
-            return res;
-        }
-        player.setPos(player.getX() + dx, player.getY(), player.getZ() + dz);
-        res.addProperty("shifted", true);
         return res;
+    }
+
+    /** Free box, a floor within FLOOR_PROBE under it, no lava/fire in it or the floor layer. */
+    private static boolean safeStand(LocalPlayer player, AABB moved) {
+        var level = player.level();
+        if (!level.noCollision(player, moved)) {
+            return false;
+        }
+        AABB floor = new AABB(moved.minX, moved.minY - FLOOR_PROBE, moved.minZ, moved.maxX, moved.minY, moved.maxZ);
+        if (level.noCollision(player, floor)) {
+            return false; // nothing under the shifted feet: a drop
+        }
+        return level.getBlockStates(moved.expandTowards(0, -1, 0))
+                .noneMatch(s -> s.getFluidState().is(FluidTags.LAVA) || s.is(BlockTags.FIRE));
     }
 
     /** Client thread: begin a dig (replacing any dig in flight). */

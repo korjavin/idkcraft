@@ -676,7 +676,7 @@ wrap `bot.placeBlock`; `handleInteractEvent` in the event router).
 |---|---|---|---|
 | `dig.start` | `{x,y,z,face,look}` | `{ok}` at once; the outcome is a notification | `bot.dig(block, forceLook, digFace)` |
 | `dig.abort` | — | `{ok,aborted}` | `bot.stopDigging()` |
-| `place.once` | `{x,y,z,face,yaw,pitch,cursor{x,y,z},sneak}` — x,y,z = the TARGET cell, `face` = the clicked face of the reference (ref = target − face); a hitbox overlapping the target cell by ≤ 0.5 is first stepped clear on the shorter axis (if the shifted box is collision-free, +120 ms settle) — Baritone stops anywhere in a block, mineflayer centres | `{ok,result}` (vanilla InteractionResult) | `bot.placeBlock(ref, faceVector)` |
+| `place.once` | `{x,y,z,face,yaw,pitch,cursor{x,y,z},sneak}` — x,y,z = the TARGET cell, `face` = the clicked face of the reference (ref = target − face); a grounded hitbox overlapping the target cell is first stepped clear by ≤ 0.85 (shorter axis, else the other; standing in the target column included) onto a collision-free stand with a floor under it and no lava/fire (+120 ms settle; airborne = no shift) — Baritone stops anywhere in a block, mineflayer centres | `{ok,result}` (vanilla InteractionResult) | `bot.placeBlock(ref, faceVector)` |
 
 Notifications: `dig.progress {x,y,z,progress}` (0..1 on each destroy-stage
 change), `dig.done {x,y,z,broke,stateId}` (the cell's new state),
