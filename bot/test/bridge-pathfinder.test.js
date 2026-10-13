@@ -804,6 +804,11 @@ describe('stall re-plan (still while pathing)', () => {
     await bot.refresh()
     assert.equal(transport.state.baritoneSeq, 1, 'moved: fresh anchor')
     bot._stall.at -= 11000
+    transport.state.pos = { ...transport.state.pos, y: 65, onGround: true } // pillar/ascend in place
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 1, 'grounded floor change: fresh anchor')
+    assert.equal(bot._stall.y, 65)
+    bot._stall.at -= 11000
     bot.setControlState('jump', true) // a primitive drives the body (Baritone paused)
     await bot.refresh()
     assert.equal(transport.state.baritoneSeq, 1, 'held key: no re-plan')
