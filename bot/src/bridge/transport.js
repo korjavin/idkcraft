@@ -149,8 +149,37 @@ class FakeTransport extends EventEmitter {
         const name = s.blocks[this.key(params.x, params.y, params.z)] || 'air'
         return { name, x: Math.floor(params.x), y: Math.floor(params.y), z: Math.floor(params.z) }
       }
-      case 'inventory.get':
-        return { items: s.inventory.map((i) => ({ ...i })) }
+      case 'inventory.get': // idkcraft-neuc.8: {selected, slots:[{slot,name,count,...}]}
+        return { selected: s.selected || 0, slots: s.inventory.map((i) => ({ ...i })) }
+      case 'inventory.select': {
+        s.selected = params.hotbar
+        return { selected: s.selected, slots: s.inventory.map((i) => ({ ...i })) }
+      }
+      case 'inventory.equip': {
+        // Model the menu swap on the flat fixture list (entries carry their
+        // mineflayer slot); dest may be a name or a numeric slot (unequip).
+        const destSlot = typeof params.dest === 'number' ? params.dest
+          : params.dest === 'hand' ? 36 + (s.selected || 0)
+            : ({ head: 5, torso: 6, legs: 7, feet: 8, 'off-hand': 45 })[params.dest]
+        if (destSlot == null) throw new Error(`bridge: invalid destination: ${params.dest}`)
+        const src = s.inventory.find((i) => i.slot === params.slot)
+        if (!src) throw new Error('bridge: equip source slot empty')
+        if (params.dest === 'hand' && params.slot >= 36 && params.slot <= 44) {
+          s.selected = params.slot - 36
+        } else if (params.slot !== destSlot) {
+          const dst = s.inventory.find((i) => i.slot === destSlot)
+          src.slot = destSlot
+          if (dst) dst.slot = params.slot
+        }
+        return { selected: s.selected || 0, slots: s.inventory.map((i) => ({ ...i })) }
+      }
+      case 'inventory.toss': {
+        const it = s.inventory.find((i) => i.slot === params.slot)
+        if (!it) throw new Error('bridge: toss slot empty')
+        it.count -= Math.min(params.count || it.count, it.count)
+        if (it.count <= 0) s.inventory.splice(s.inventory.indexOf(it), 1)
+        return { selected: s.selected || 0, slots: s.inventory.map((i) => ({ ...i })) }
+      }
       case 'entities.list': // idkcraft-neuc.3: deep copy, the wire would serialize
         return { entities: JSON.parse(JSON.stringify(s.entities || [])) }
       case 'roster.get': // idkcraft-neuc.3

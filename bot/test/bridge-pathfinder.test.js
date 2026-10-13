@@ -599,7 +599,7 @@ describe('Movements -> #set map', () => {
 describe('bestHarvestTool/getPathTo shims', () => {
   let bot
   beforeEach(async () => {
-    ({ bot } = pathBot({ inventory: [{ slot: 0, name: 'dirt', count: 3, type: 1 }] }))
+    ({ bot } = pathBot({ inventory: [{ slot: 36, name: 'dirt', count: 3, type: 1 }] }))
     await bot.start({ pollMs: 0 })
   })
   afterEach(async () => { await bot.stop() })
@@ -612,15 +612,17 @@ describe('bestHarvestTool/getPathTo shims', () => {
         return type === 2 ? 5 : 50
       },
     }
-    bot._inventory = [{ name: 'dirt', type: 1 }, { name: 'stone_pickaxe', type: 2 }]
-    assert.equal(bot.pathfinder.bestHarvestTool(block), bot._inventory[1])
+    const { applyInventory } = require('../src/bridge/inventory')
+    applyInventory(bot, { selected: 0, slots: [{ slot: 36, name: 'dirt', type: 1, count: 1 }, { slot: 37, name: 'stone_pickaxe', type: 2, count: 1 }] })
+    assert.equal(bot.pathfinder.bestHarvestTool(block), bot.inventory.items()[1])
     assert.deepEqual(calls[0], [1, false, false, false, [], undefined])
   })
 
   it('bestHarvestTool reads null until the world/inventory surfaces fill in', () => {
     assert.equal(bot.pathfinder.bestHarvestTool(null), null)
     assert.equal(bot.pathfinder.bestHarvestTool({ name: 'dirt' }), null) // no digTime yet (.6)
-    bot._inventory = []
+    const { applyInventory } = require('../src/bridge/inventory')
+    applyInventory(bot, { selected: 0, slots: [] })
     assert.equal(bot.pathfinder.bestHarvestTool({ digTime: () => 1 }), null) // empty pack (.8)
     assert.equal(bot.pathfinder.bestHarvestTool({ digTime: () => { throw new Error('x') } }), null)
   })
