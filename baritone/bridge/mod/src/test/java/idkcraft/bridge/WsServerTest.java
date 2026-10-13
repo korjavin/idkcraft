@@ -79,6 +79,22 @@ public class WsServerTest {
     }
 
     @Test
+    public void lastCloseHookFiresWhenTheOnlyClientDrops() throws Exception {
+        server = new WsServer(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), msg -> null);
+        java.util.concurrent.atomic.AtomicInteger closes = new java.util.concurrent.atomic.AtomicInteger();
+        server.onLastClose(closes::incrementAndGet);
+        server.start();
+        RawClient c = new RawClient(server.getPort());
+        c.sendText("hello");
+        c.close();
+        long deadline = System.currentTimeMillis() + 5000;
+        while (closes.get() == 0 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(25);
+        }
+        assertEquals(1, closes.get(), "last-close hook must fire once when the only client drops");
+    }
+
+    @Test
     public void wrongPathIs404() throws Exception {
         server = new WsServer(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), msg -> null);
         server.start();

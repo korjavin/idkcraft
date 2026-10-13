@@ -36,6 +36,7 @@ inside the same envelope — no second port.
 | `baritone.status` | — | `{id,pathing,last}` (`last`: `none` before any terminal) | `isMoving`, `path_update`/`path_reset` |
 | `entities.list` | — | `{entities:[…]}` (shape in the entities section below) | `bot.entities[id]` |
 | `roster.get` | — | `{players:[…]}` | `bot.players[name]` |
+| `input.set`/`input.clear` | partial booleans / — | `{states}` | `setControlState`/`clearControlStates` (neuc.13 section below) |
 
 Events: `chat {username,uuid,message,position:'chat'}` (player chat),
 `message {message,position:'system'|'game_info'}` (system lines, action bar,
@@ -259,6 +260,53 @@ ranking may prefer an unenchanted tool, digs still work); getPathTo is a
 sync `{status:'noPath',path:[]}` stub (no live callers — bring.js names
 it as a future upgrade path).
 
+## Control states (idkcraft-neuc.13)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Input.java` (+ pure `InputState.java`),
+wired from `BridgeMod.onInitializeClient`. Node: `bot/src/bridge/input.js`
+(`installInput` in the adapter constructor; `setBaritonePaused(bot, paused)`
+exported for neuc.9's look/attack/activate reuse).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `input.set` | `{forward?,back?,left?,right?,jump?,sneak?,sprint?}` booleans, absent = unchanged | `{states}` | `setControlState` (coalesced diff) |
+| `input.clear` | — | `{states}` (all false) | `clearControlStates` |
+
+`state.get` also reports `input:{states:{...}}`; the adapter adopts it only
+when no local change is queued/in flight. Node mirror: `bot.controlState[k]`,
+`bot.getControlState(k)`; invalid control/state throws like mineflayer.
+
+Held semantics: states hold until changed/cleared. Per client tick, while
+any key is held the mod swaps `LocalPlayer.input` for an adapter-owned
+`ClientInput` republishing the held `Input` record (sneak = shift) and a
+normalized move vector, restoring the original input on all-off. Direct
+KeyBinding/`keyPresses` writes do not survive KeyboardInput.tick() or
+Baritone's input override, and HeadlessMc `-lwjgl` has no key context —
+the swapped object is what `LocalPlayer.applyInput` reads. Held jump
+therefore repeats on ground; sprint rides the record's sprint flag.
+
+Release on disconnect/quit: `BaritoneBot.quit()` sends `input.clear`
+best-effort (bounded 500 ms) before closing the transport, and the mod
+clears held inputs + resumes Baritone when the last bridge websocket
+closes (`WsServer.onLastClose` → `Input.onDisconnect`), so a dead Node
+process never leaves the body driving or paused. Only a pause issued by
+input itself is resumed; a foreign pause is left alone. On reconnect the
+adapter forces one `input.clear` before its first refresh.
+
+Baritone pause/resume: the first held key runs Baritone `pause` through
+`BridgeServer.executeBaritone` (also freezing the 120 s goal watchdog via
+`pausedLocal`); clear/last-release runs `resume`. Pause/resume never
+clears or re-mints the tracked goal id, so a latched goal continues after
+a hand-driven episode with no re-issue and no spurious `path_reset` —
+the adapter asserts this against FakeTransport (`inputPaused` flips, the
+goal id is unchanged). FakeTransport scripts `input.set`/`input.clear`
+and logs them in `inputLog`.
+
+Rig acceptance deferred to the batched rig run: DUGPIT-BARE escapes via
+the water-bucket climb, S6-PIT/HOME-PIT and recover sidestep/pillar rows
+under `REPLAY_BODY=baritone` are not run by this PR (per repo rule, rig
+runs batch on master).
+
 ## entities.list / roster.get (idkcraft-neuc.3)
 
 Mod: `mod/src/main/java/idkcraft/bridge/Entities.java`
@@ -345,3 +393,90 @@ in flight (the mod serves one connection serially). A failed
 fetch retries once in the background, then waits for the next
 `chunk.loaded`. `bot.game.minY`/`height` start at the overworld
 defaults (-64/384) and refine from each `chunk.get`.
+## Lifecycle: leaving the world (idkcraft-neuc.20)
+
+The ws stays up while the client sits at the menu, so "connected" is not
+"in world". The in-world signal is `state.get`: a non-null `pos` means
+joined; the null snapshot means at the menu (disconnect/kick/never
+joined).
+
+- Mod: `baritone.cmd` fails `-32002` (not in world) whenever the client
+  has no player/level — Baritone commands are never executed out of
+  world (their goal code dereferences the null LocalPlayer). On world
+  unload the mod executes `stop`, marks the tracked goal `stopped`, and
+  clears `pathing`, so no pathing process ticks at the menu.
+- Node adapter: after the first joined state, a null `pos` sustained
+  past a 3 s grace (respawn/dimension swaps flap inside it) emits `end`
+  once, exactly like a dropped v1 connection — `runOnce` fatal()s, the
+  container restarts, and the handshake re-sends the console
+  `connect <host> <port>`: that is the v2 rejoin path. `quit()` sends
+  `#stop` (bounded to 1 s) before the console `disconnect`.
+
+## Lifecycle: death and respawn (idkcraft-neuc.21)
+
+A dead client sits on the death screen with a frozen `pos` (no auto
+respawn), so every walk, sidestep and hop reads no-progress forever.
+`respawn {}` → `{ok}` clicks respawn on the client thread
+(a live player no-ops; `-32002` when not in world). The Node adapter
+drives it off `state.get` `health` (mineflayer `respawn: true` parity):
+alive→`health <= 0` emits `death`, then `respawn` is called at most once
+per second while dead; the first live poll after that emits `respawn`.
+
+## look / attack / interact / sleep (idkcraft-neuc.9)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Look.java`
+(`Look.install(server)`, wired from `BridgeMod.onInitializeClient`; one
+client-thread task per call via the `BridgeServer.onClient` seam).
+Node: `bot/src/bridge/look.js` (`installLook` from the adapter
+constructor, `handleLookEvent` in the adapter's event router).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `look.set` | `{yaw,pitch,force}` (mineflayer radians) | `{ok}` | `bot.look(yaw,pitch,force)` |
+| `look.at` | `{x,y,z}` | `{ok,yaw,pitch}` (aimed, mineflayer radians) | `bot.lookAt(point,force)` |
+| `attack` | `{entityId}` | `{ok}` | `bot.attack(entity)` |
+| `interact.block` | `{x,y,z,face,cursor{x,y,z},sneak}` | `{ok,result}` | `bot.activateBlock(block,direction,cursorPos)` |
+| `interact.item` | `{hand:'main'\|'off',holdMs?}` | `{ok}` | `bot.activateItem(offHand)` |
+| `interact.stop` | — | `{ok}` | `bot.deactivateItem()` |
+| `sleep` | `{x,y,z}` (bed block) | `{ok}` | `bot.sleep(bedBlock)` |
+| `wake` | — | `{ok}` | `bot.wake()` |
+
+Events: `sleep {}` / `wake {}` on the player's sleeping-state edge
+(per-tick hook in `Look`); the adapter flips `bot.isSleeping` and
+re-emits mineflayer's `sleep`/`wake`.
+
+Yaw/pitch stay mineflayer radians on the wire; the mod converts to
+notch degrees (`notchYaw = deg(pi - yaw)`, `notchPitch = deg(-pitch)`,
+the inverse of `state.get`'s conversion) and sets body + head rotation.
+`look.at` aims from the real eye position on the client; the adapter
+computes the same yaw/pitch locally for `bot.entity`.
+
+Baritone pause/resume lives in the NODE adapter, not the mod:
+`withBaritonePaused` (look.js, the one exported helper — neuc.7's
+dig/place reuse it) sends `#pause` before and `#resume` after an
+interaction only when `pathfinder.isMoving()`. `#pause`/`#resume` are
+control commands: the tracked goal stays armed and its 120 s watchdog
+freezes while paused. After resume the adapter re-checks
+`baritone.status` for the latched goal id; a goal Baritone dropped
+without a terminal verdict (not pathing, `last:'none'`) is re-issued
+from the latched `pathfinder.goal`. Reflex-tick cheapness: `bot.look`
+never crosses the wire for a sub-degree change (force always sends).
+
+`consume()` = `interact.item` held until the held count drops or 2 s
+pass, then `interact.stop`; no drop in the window rejects
+(`consume: held item was not consumed`), and it rejects with
+mineflayer's messages where mineflayer has one (`Food is full`, plus
+`not holding any item`). The mod holds the client's use key for
+continuous uses (eat/drink/bow — a use animation) until
+`interact.stop`/the `holdMs` deadline, since vanilla releases a
+one-shot use on the next tick; instant uses (buckets) never hold.
+`interact.item` with `holdMs` also auto-stops on the client when the
+deadline passes. `sleep` waits up to 3 s for the sleeping state and
+rejects `bot is not sleeping` (mineflayer's timeout message); `wake`
+rejects `already awake` and `sleep` rejects `already sleeping` /
+`wrong block : not a bed block`, all mineflayer's strings.
+
+Doors while pathing: Baritone opens doors itself, so the adapter's
+`activateBlock` is a no-op for `*_door` blocks while
+`pathfinder.isMoving()` (a reflex toggle would double-toggle the panel
+shut). Adapter-side only; `doors.js` is untouched.

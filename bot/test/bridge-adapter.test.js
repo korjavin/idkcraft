@@ -100,6 +100,17 @@ describe('spike surface round-trips (FakeTransport = the mod)', () => {
     assert.equal(countItems(bot, (n) => n === 'dirt'), 2)
   })
 
+  it('chat splits like mineflayer bot.chat: 256-char packets, per line, commands whole (neuc.22)', async () => {
+    transport.state.chatLog.length = 0
+    const long = 'a'.repeat(256) + 'b'.repeat(193) // the prod 449-char line
+    const cmd = '/tell Owner ' + 'c'.repeat(300)
+    bot.chat(long + '\n\nshort')
+    bot.chat(cmd)
+    await sleep(10)
+    assert.deepEqual(transport.state.chatLog, ['a'.repeat(256), 'b'.repeat(193), 'short', cmd])
+    assert.ok(transport.state.chatLog.slice(0, 3).every((m) => m.length <= 256))
+  })
+
   it('chat is fire-and-forget; mod chat events arrive as chat+message', async () => {
     bot.chat('hello rig')
     await sleep(10)
@@ -110,6 +121,46 @@ describe('spike surface round-trips (FakeTransport = the mod)', () => {
     transport.inject('chat', { username: 'Owner', message: 'follow me' })
     assert.deepEqual(seen.chat, ['Owner', 'follow me'])
     assert.equal(seen.message, 'follow me')
+  })
+
+  it('a dead body clicks respawn (death -> respawn pair, mineflayer respawn:true parity; neuc.21)', async () => {
+    const seen = []
+    bot.on('death', () => seen.push('death'))
+    bot.on('respawn', () => seen.push('respawn'))
+    transport.state.health = 20
+    await bot.refresh()
+    assert.equal(transport.state.respawnCalls | 0, 0) // alive: no click
+    transport.state.health = 0
+    await bot.refresh()
+    await sleep(10)
+    assert.equal(transport.state.respawnCalls, 1)
+    assert.deepEqual(seen, ['death'])
+    await bot.refresh() // fake respawned it: health 20 again
+    assert.deepEqual(seen, ['death', 'respawn'])
+    assert.equal(bot.health, 20)
+  })
+
+  it('a dropped respawn click is re-sent at most 1/s while still dead (neuc.21)', async () => {
+    const seen = []
+    bot.on('death', () => seen.push('death'))
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => now
+    try {
+      transport.state.respawnIgnore = 1
+      transport.state.health = 0
+      await bot.refresh()
+      await bot.refresh() // same second: no re-click
+      await sleep(10)
+      assert.equal(transport.state.respawnCalls, 1)
+      now += 1000
+      await bot.refresh()
+      await sleep(10)
+      assert.equal(transport.state.respawnCalls, 2)
+      assert.deepEqual(seen, ['death']) // one death edge, however many clicks
+    } finally {
+      Date.now = realNow
+    }
   })
 })
 

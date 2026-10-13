@@ -13,6 +13,8 @@ const net = require('node:net')
 const { BridgeTransport } = require('./transport')
 const { refreshEntities, handleBridgeEvent } = require('./entities') // idkcraft-neuc.3: entities+roster fold
 const chunks = require('./chunks') // idkcraft-neuc.6: chunk cache -> sync blockAt/findBlocks/raycast
+const { installLook, handleLookEvent } = require('./look') // idkcraft-neuc.9: look/attack/interact/sleep
+const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.13: control states
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 // Failed fire-and-forget baritone.cmd: log, never emit 'error' (runOnce
@@ -38,6 +40,26 @@ function gameModeName(gm) {
   if (typeof gm === 'number' && gm >= 0 && gm <= 3) return GAME_MODES[gm]
   return gm
 }
+// idkcraft-neuc.22: mineflayer bot.chat's split (lib/plugins/chat.js
+// chatWithHeader, header ''): a '/' command goes whole, else per '\n' line
+// (empties dropped) in 256-char packets. One unsplit 449-char line killed
+// the v2 client ("String too big", EncoderException) every ~62 s on prod.
+const CHAT_LENGTH_LIMIT = 256
+let chatSplitSaid = false
+function chatParts(message) {
+  const msg = String(message)
+  if (msg.startsWith('/')) return [msg]
+  const parts = []
+  for (const line of msg.split('\n')) {
+    if (line.length > CHAT_LENGTH_LIMIT && !chatSplitSaid) {
+      chatSplitSaid = true // once per process: names the long line for the bead
+      console.log(`bridge chat split ${line.length} chars: ${line.slice(0, 120)}`)
+    }
+    for (let i = 0; i < line.length; i += CHAT_LENGTH_LIMIT) parts.push(line.substring(i, i + CHAT_LENGTH_LIMIT))
+  }
+  return parts
+}
+
 function stripMcPrefix(s) {
   return typeof s === 'string' ? s.replace(/^minecraft:/, '') : s
 }
@@ -223,6 +245,16 @@ class BaritoneBot extends EventEmitter {
     this._refreshing = false
     this._pathStatus = 'none'
     this._hasPos = false // first state.get with a non-null pos (createBot emits spawn on it)
+    // idkcraft-neuc.20: out-of-world detection. The mod serves the null
+    // snapshot once the client leaves the world (disconnect/kick), but the
+    // ws stays up — without this the ticker keeps driving a body that is
+    // at the menu forever and never rejoins. A sustained null pos past
+    // the grace (respawn/dimension swaps flap briefly) ends the bot like
+    // a dropped v1 connection: runOnce fatal()s, the container restarts,
+    // and the handshake re-sends the console connect.
+    this._leftWorldMs = typeof opts.leftWorldMs === 'number' ? opts.leftWorldMs : 3000
+    this._outSince = null
+    this._leftFired = false
     this._quitting = false
     this._poll = null
     this._onTransportEvent = (method, params) => this._handleEvent(method, params)
@@ -243,6 +275,8 @@ class BaritoneBot extends EventEmitter {
       getPathTo: (_movements, _goal, _timeout) => ({ status: 'noPath', path: [] }),
     }
     this.inventory = { items: () => this._inventory }
+    installLook(this) // idkcraft-neuc.9: look/lookAt/attack/activate*/consume/sleep/wake/waitForTicks
+    installInput(this, transport) // neuc.13: setControlState/clearControlStates/controlState
   }
 
   // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
@@ -257,22 +291,47 @@ class BaritoneBot extends EventEmitter {
     chunks.stopChunks(this)
     if (this._poll) clearInterval(this._poll)
     this._poll = null
+    // neuc.13: release held controls before the transport goes away, so
+    // the mod never keeps driving (or holding Baritone paused) for a body
+    // nobody owns. Best-effort with a bounded wait: a dead transport must
+    // not delay 'end' (runOnce resolves on it).
+    const cleared = (async () => {
+      try {
+        this.clearControlStates()
+        await Promise.race([this._flushInput(), sleep(500)])
+      } catch (_) { /* release best-effort */ }
+    })()
     const finish = () => {
       if (this.transport && typeof this.transport.close === 'function') {
         try { this.transport.close() } catch (_) { /* close best-effort */ }
       }
       this.emit('end', reason)
     }
-    if (this._console && typeof this._console.send === 'function') {
-      this._console.send('disconnect').catch(() => {}).then(finish, finish)
+    const disconnect = () => {
+      const done = () => { cleared.then(finish, finish) }
+      if (this._console && typeof this._console.send === 'function') {
+        this._console.send('disconnect').catch(() => {}).then(done, done)
+      } else {
+        done()
+      }
+    }
+    // idkcraft-neuc.20: cancel Baritone before the client leaves the
+    // world, so no pathing process survives into the menu (its out-of-
+    // world ticks NPE in Baritone's playerFeet). Bounded: a hung call
+    // must not delay the disconnect past 1 s. The mod also cancels on
+    // world unload, so this is belt and braces.
+    if (this.transport && typeof this.transport.call === 'function') {
+      const stopped = this.transport.call('baritone.cmd', { command: '#stop' }).catch(() => {})
+      Promise.race([stopped, sleep(1000)]).then(disconnect, disconnect)
     } else {
-      finish()
+      disconnect()
     }
   }
 
   async start({ pollMs = 100, connect = true } = {}) {
     if (connect && this.transport && typeof this.transport.connect === 'function') await this.transport.connect()
     if (this.transport && typeof this.transport.on === 'function') this.transport.on('event', this._onTransportEvent)
+    await this._resetInput().catch(() => { /* best-effort; refresh still runs */ })
     await this.refresh()
     if (pollMs > 0) {
       this._poll = setInterval(() => {
@@ -307,9 +366,48 @@ class BaritoneBot extends EventEmitter {
     return this
   }
 
+  // idkcraft-neuc.20: one null-pos poll. Only a sustained absence past
+  // the grace ends the bot (see the constructor note); firing clears the
+  // poll so no further bridge traffic drives the out-of-world client.
+  _noteOutOfWorld() {
+    if (!this._hasPos || this._quitting || this._leftFired) return
+    const now = Date.now()
+    if (this._outSince == null) this._outSince = now
+    if (now - this._outSince < this._leftWorldMs) return
+    this._leftFired = true
+    if (this._poll) clearInterval(this._poll)
+    this._poll = null
+    this.emit('end', 'bridge: left world (client disconnected)')
+  }
+
+  // idkcraft-neuc.21: mineflayer's respawn:true parity. A dead client sits
+  // on the death screen with its pos frozen — every goal, sidestep and
+  // hop then reads no-progress forever (a wedge). Death edge -> 'death',
+  // then click respawn (re-sent at most 1/s while still dead); the first
+  // live poll after it -> 'respawn' (index.js lifecycle pairs the two).
+  _noteLife(health) {
+    if (health > 0) {
+      if (this._dead) {
+        this._dead = false
+        this.emit('respawn')
+      }
+      return
+    }
+    if (!this._dead) {
+      this._dead = true
+      this.emit('death')
+    }
+    const now = Date.now()
+    if (now - (this._respawnAt || 0) < 1000) return
+    this._respawnAt = now
+    this.transport.call('respawn', {}).catch(failLog)
+  }
+
   async _refreshOnce() {
     const st = await this.transport.call('state.get', {})
+    if (!st || !st.pos) this._noteOutOfWorld()
     if (st && st.pos) {
+      this._outSince = null
       this._hasPos = true
       this.entity.position.x = st.pos.x
       this.entity.position.y = st.pos.y
@@ -324,7 +422,10 @@ class BaritoneBot extends EventEmitter {
         this.entity.velocity.z = vel.z
       }
     }
-    if (st && typeof st.health === 'number') this.health = st.health
+    if (st && typeof st.health === 'number') {
+      this.health = st.health
+      this._noteLife(st.health)
+    }
     if (st && typeof st.food === 'number') this.food = st.food
     if (st && typeof st.oxygen === 'number') this.oxygenLevel = st.oxygen
     if (st && st.time && typeof st.time === 'object') {
@@ -349,6 +450,7 @@ class BaritoneBot extends EventEmitter {
     }
     if (st && typeof st.isRaining === 'boolean') this.isRaining = st.isRaining
     if (st && typeof st.isSleeping === 'boolean') this.isSleeping = st.isSleeping
+    if (st && st.input && st.input.states) this._syncInputFromState(st.input.states) // neuc.13: mod-reported held states
     if (st && typeof st.dimension === 'string' && st.dimension) this.game.dimension = stripMcPrefix(st.dimension)
     if (st && st.gameMode !== undefined && st.gameMode !== null) this.game.gameMode = gameModeName(st.gameMode)
     try {
@@ -376,7 +478,9 @@ class BaritoneBot extends EventEmitter {
       if (bs && typeof bs === 'object' && bs.id != null && bs.id === this._goalId) {
         if (bs.pathing) {
           this._pathing = true
-        } else if (bs.last !== 'none' && bs.last != null) {
+        } else if (bs.last !== 'none' && bs.last != null && !(this._pausedDepth > 0)) {
+          // While a bridge pause is outstanding (neuc.9 withBaritonePaused)
+          // pathing reads false; a verdict waits for the post-resume poll.
           this._completeTerminal(bs.last)
         }
       }
@@ -461,9 +565,11 @@ class BaritoneBot extends EventEmitter {
     // A failed call logs, never emits 'error': runOnce fatal()s every 'error'
     // (process exit), and a timed-out chat.send on a live socket is not a
     // dead connection (revmux 01 core-2).
-    this.transport.call('chat.send', { message: String(message) }).catch((e) => {
-      console.log(`bridge chat.send failed: ${(e && e.message) || e}`)
-    })
+    for (const part of chatParts(message)) {
+      this.transport.call('chat.send', { message: part }).catch((e) => {
+        console.log(`bridge chat.send failed: ${(e && e.message) || e}`)
+      })
+    }
   }
 
   _setGoal(goal, dynamic) {
@@ -561,6 +667,7 @@ class BaritoneBot extends EventEmitter {
   // _boundSeq, overlapping follow re-issues order by seq). Failures log,
   // never emit 'error' (runOnce fatal()s every 'error'; see chat()).
   _sendGoalCmd(command) {
+    this._goalCmd = command // neuc.13: last goal cmd (diagnostics; pause/resume keeps the id, no re-issue)
     const seq = (this._cmdSeq = (this._cmdSeq | 0) + 1)
     this.transport.call('baritone.cmd', { command }).then(
       (r) => {
@@ -696,6 +803,7 @@ class BaritoneBot extends EventEmitter {
   _handleEvent(method, params) {
     if (chunks.handleChunkEvent(this, this.transport, method, params)) return // idkcraft-neuc.6: chunk.loaded/unloaded, block.update
     if (handleBridgeEvent(this, method, params)) return // idkcraft-neuc.3: player.joined/left, entity.gone
+    if (handleLookEvent(this, method, params)) return // idkcraft-neuc.9: sleep/wake
     const p = params || {}
     switch (method) {
       case 'chat':
@@ -866,4 +974,4 @@ async function handshake(bot, { host, port, consoleSend, posTimeoutMs }) {
   bot.emit('spawn')
 }
 
-module.exports = { BaritoneBot, goalToBaritone, movementsToSettings, MinimalVec, createBot }
+module.exports = { BaritoneBot, goalToBaritone, movementsToSettings, MinimalVec, createBot, setBaritonePaused }

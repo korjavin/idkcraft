@@ -45,6 +45,7 @@ public final class WsServer {
 
     private final ServerSocket server;
     private final MessageHandler handler;
+    private volatile Runnable onLastClose = () -> {};
     private final Set<Conn> conns = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Thread accepter;
@@ -61,6 +62,11 @@ public final class WsServer {
 
     public int getPort() {
         return server.getLocalPort();
+    }
+
+    /** Fired when the last open connection closes (never on {@link #stop}). */
+    public void onLastClose(Runnable hook) {
+        this.onLastClose = hook != null ? hook : () -> {};
     }
 
     public void start() {
@@ -140,11 +146,18 @@ public final class WsServer {
         }
 
         void closeQuietly() {
-            conns.remove(this);
+            boolean wasOpen = conns.remove(this);
             try {
                 sock.close();
             } catch (IOException ignored) {
                 // Already closed.
+            }
+            if (wasOpen && running.get() && conns.isEmpty()) {
+                try {
+                    onLastClose.run();
+                } catch (RuntimeException e) {
+                    LOG.warn("bridge ws close hook failed", e);
+                }
             }
         }
 

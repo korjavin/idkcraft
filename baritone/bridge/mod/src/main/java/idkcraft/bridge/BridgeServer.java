@@ -77,6 +77,9 @@ public final class BridgeServer {
     private static final long SUBMIT_TIMEOUT_MS = 3000;
     private static final int MAX_CHAT_QUEUE = 1000;
     private static final int MAX_CHAT_LEN = 1000;
+    /** Vanilla serverbound chat cap: a longer string kills the client (EncoderException, idkcraft-neuc.22). */
+    private static final int MAX_CHAT_PACKET = 256;
+    private static volatile boolean chatTruncSaid = false;
 
     private static final Logger LOG = LoggerFactory.getLogger(BridgeServer.class);
 
@@ -184,6 +187,20 @@ public final class BridgeServer {
         rpc.register(method, handler);
     }
 
+    /**
+     * Run one interaction on the client thread for a surface class
+     * (idkcraft-neuc.9 Look; later surfaces reuse it). Returns the task's
+     * result (which may itself be null to signal "no player"); a null from
+     * the submit machinery (booting / timed out) fails CLIENT_BUSY.
+     */
+    <V> V onClient(java.util.concurrent.Callable<V> task) throws Rpc.RpcException {
+        V res = submit(task);
+        if (res == null && !ensureClient()) {
+            throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
+        }
+        return res;
+    }
+
     private final java.util.concurrent.CopyOnWriteArrayList<Runnable> tickHooks =
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
@@ -206,6 +223,32 @@ public final class BridgeServer {
      */
     public void onPacket(java.util.function.Consumer<Packet<?>> hook) {
         packetHooks.add(hook);
+    }
+
+    /** neuc.13: fired when the last bridge websocket connection closes. */
+    public void onWsClose(Runnable hook) {
+        ws.onLastClose(hook);
+    }
+
+    /**
+     * neuc.13: run a Baritone control command on the client thread (used by
+     * Input for pause/resume). Mirrors baritone.cmd's pausedLocal bookkeeping
+     * so the goal watchdog freeze stays correct. Never throws.
+     */
+    boolean executeBaritone(String verb) {
+        try {
+            Boolean ok = submit(() -> baritone.getCommandManager().execute(verb));
+            if (ok == null || !ok) {
+                return false;
+            }
+            Boolean paused = GoalTracker.pauseFlagFor(verb);
+            if (paused != null) {
+                pausedLocal = paused;
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /** Push a mod→node notification to every connected client. */
@@ -239,7 +282,16 @@ public final class BridgeServer {
         // adapter (which waits for pos before driving anything) would hang.
         ensureClient();
         JsonObject snap = snapshot;
-        return snap != null ? snap : nullSnapshot();
+        if (snap == null) {
+            return nullSnapshot();
+        }
+        // neuc.13 (revmux 01 core-1): input states change on the ws thread
+        // at input.set time, up to a tick before the cached snapshot is
+        // rebuilt — serve them live so a poll can never roll back an
+        // already-acked press/release on the Node mirror.
+        JsonObject live = snap.deepCopy();
+        live.add("input", Input.snapshotJson());
+        return live;
     }
 
     private com.google.gson.JsonElement chatSend(JsonObject params) throws Rpc.RpcException {
@@ -254,6 +306,12 @@ public final class BridgeServer {
             }
             if (message.startsWith("/")) {
                 pl.connection.sendCommand(message.substring(1));
+            } else if (message.length() > MAX_CHAT_PACKET) {
+                if (!chatTruncSaid) {
+                    chatTruncSaid = true;
+                    LOG.warn("bridge chat.send truncated {} chars to {}", message.length(), MAX_CHAT_PACKET);
+                }
+                pl.connection.sendChat(message.substring(0, MAX_CHAT_PACKET));
             } else {
                 pl.connection.sendChat(message);
             }
@@ -285,21 +343,35 @@ public final class BridgeServer {
         if (command.isEmpty()) {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "command is empty");
         }
+        // idkcraft-neuc.20: never execute a Baritone command out of world.
+        // Baritone's own goal code dereferences the (null) LocalPlayer
+        // (playerFeet NPE) when a command lands at the menu, and the Node
+        // adapter keeps issuing goals until it notices the disconnect.
+        // The null snapshot is the out-of-world shape state.get serves.
+        if (snapshot == null) {
+            throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
+        }
         final String cmd = command;
         final String verb = GoalTracker.firstToken(cmd);
-        record Probe(boolean ok, Goal before, Goal after, Object beforeProc, Object afterProc) {
+        record Probe(boolean ok, boolean inWorld, Goal before, Goal after, Object beforeProc, Object afterProc) {
         }
         Probe probe = submit(() -> {
+            if (client == null || client.player == null || client.level == null) {
+                return new Probe(false, false, null, null, null, null);
+            }
             Goal before = baritone.getCustomGoalProcess().mostRecentGoal();
             Object beforeProc = baritone.getPathingControlManager().mostRecentInControl().orElse(null);
             boolean ok = baritone.getCommandManager().execute(cmd);
             Goal after = ok ? baritone.getCustomGoalProcess().mostRecentGoal() : before;
             Object afterProc =
                     ok ? baritone.getPathingControlManager().mostRecentInControl().orElse(null) : beforeProc;
-            return new Probe(ok, before, after, beforeProc, afterProc);
+            return new Probe(ok, true, before, after, beforeProc, afterProc);
         });
         if (probe == null) {
             throw new Rpc.RpcException(Rpc.CLIENT_BUSY, "client thread did not answer");
+        }
+        if (!probe.inWorld()) {
+            throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
         }
         if (!probe.ok()) {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "unknown baritone command: " + cmd);
@@ -307,6 +379,7 @@ public final class BridgeServer {
         long id = cmdSeq.incrementAndGet();
         if (GoalTracker.rearmsTracker(probe.before(), probe.after(), probe.beforeProc(), probe.afterProc(), verb)) {
             currentId = id;
+            last = "none"; // a new goal has no verdict yet (neuc.9: stale last falsely completed it)
             terminalReceived = false;
             cmdTick = tickCount;
             deadlineTick = tickCount + GOAL_TIMEOUT_TICKS;
@@ -323,6 +396,19 @@ public final class BridgeServer {
     }
 
     private com.google.gson.JsonElement baritoneStatus(JsonObject params) {
+        // Fresh pathing read on the client thread (neuc.9 round-2/3): the
+        // snapshot cache still holds the paused tick's false in the gap
+        // right after a #resume, and the adapter's post-resume re-issue
+        // check would read a live goal as dropped. isPathing() alone is
+        // not enough either — pausedThisTick clears only on the next
+        // game tick — so the goal process's own active flag (pause-
+        // independent) counts as pathing too. Falls back to the cached
+        // value while the client is booting.
+        Boolean fresh = submit(() -> baritone.getPathingBehavior().isPathing()
+                || baritone.getCustomGoalProcess().isActive());
+        if (fresh != null) {
+            pathing = fresh;
+        }
         JsonObject res = new JsonObject();
         res.addProperty("id", currentId);
         res.addProperty("pathing", pathing);
@@ -407,6 +493,25 @@ public final class BridgeServer {
         public void onWorldEvent(WorldEvent event) {
             if (event.getWorld() == null) {
                 snapshot = null;
+                // idkcraft-neuc.20: the client left the world (disconnect/
+                // kick) — cancel Baritone here so no pathing process keeps
+                // ticking against a null LocalPlayer (its playerFeet NPE),
+                // and verdict the tracked goal stopped so the Node poll
+                // releases its latch instead of holding a dead walk.
+                pathing = false;
+                pausedLocal = false;
+                if (currentId > 0 && !terminalReceived) {
+                    terminalReceived = true;
+                    last = "stopped";
+                }
+                try {
+                    IBaritone b = baritone;
+                    if (b != null) {
+                        b.getCommandManager().execute("stop");
+                    }
+                } catch (Exception e) {
+                    LOG.warn("bridge leave-world stop failed", e);
+                }
             }
         }
     }
@@ -495,6 +600,7 @@ public final class BridgeServer {
         } else {
             snap.add("spawn", JsonNull.INSTANCE);
         }
+        snap.add("input", Input.snapshotJson());
         snap.addProperty("isRaining", level.isRaining());
         snap.addProperty("isSleeping", pl.isSleeping());
         snap.addProperty("dimension", level.dimension().identifier().toString());
@@ -516,6 +622,7 @@ public final class BridgeServer {
         snap.add("health", JsonNull.INSTANCE);
         snap.add("food", JsonNull.INSTANCE);
         snap.add("oxygen", JsonNull.INSTANCE);
+        snap.add("input", Input.snapshotJson());
         snap.add("time", JsonNull.INSTANCE);
         snap.add("spawn", JsonNull.INSTANCE);
         snap.add("isRaining", JsonNull.INSTANCE);

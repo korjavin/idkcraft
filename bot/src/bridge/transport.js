@@ -93,6 +93,9 @@ class FakeTransport extends EventEmitter {
       entities: [], // idkcraft-neuc.3 wire fixtures: [{id,uuid,type,name?,displayName,kind,pos,vel,yaw,pitch,health?,onGround,pose,self?}]
       roster: [], // idkcraft-neuc.3 wire fixtures: [{name,uuid,ping,gameMode}]
       chatLog: [],
+      input: { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }, // neuc.13 held states
+      inputLog: [], // neuc.13: every input.set diff / input.clear, in order
+      inputPaused: false, // neuc.13: Baritone paused while any key held (goal id preserved)
       baritone: null, // last command string
       ...state,
     }
@@ -124,8 +127,24 @@ class FakeTransport extends EventEmitter {
           isSleeping: s.isSleeping,
           dimension: s.dimension,
           gameMode: s.gameMode,
+          input: { states: { ...(s.input || {}) } },
           baritone: s.baritoneStatus || { pathing: false },
         }
+      case 'input.set': { // neuc.13: absent = unchanged; any held pauses Baritone (id kept)
+        const diff = {}
+        for (const k of Object.keys(params || {})) {
+          if (typeof params[k] === 'boolean' && k in s.input) { s.input[k] = params[k]; diff[k] = params[k] }
+        }
+        s.inputLog.push({ set: diff })
+        s.inputPaused = Object.values(s.input).some(Boolean)
+        return { states: { ...s.input } }
+      }
+      case 'input.clear': { // neuc.13: all off; resume (goal id kept)
+        for (const k of Object.keys(s.input)) s.input[k] = false
+        s.inputLog.push({ clear: true })
+        s.inputPaused = false
+        return { states: { ...s.input } }
+      }
       case 'block.get': {
         const name = s.blocks[this.key(params.x, params.y, params.z)] || 'air'
         return { name, x: Math.floor(params.x), y: Math.floor(params.y), z: Math.floor(params.z) }
@@ -156,6 +175,54 @@ class FakeTransport extends EventEmitter {
         item.count--
         return { placed: s.blocks[k] }
       }
+      // idkcraft-neuc.9 look/interact surface: recorded for assertions,
+      // state mutations mirror the mod (pos yaw/pitch, sleeping, using).
+      case 'look.set':
+        (s.lookLog = s.lookLog || []).push({ method, ...params })
+        if (s.pos) { s.pos = { ...s.pos, yaw: params.yaw, pitch: params.pitch } }
+        return { ok: true }
+      case 'look.at': {
+        (s.lookLog = s.lookLog || []).push({ method, ...params })
+        if (s.pos) {
+          const dx = params.x - s.pos.x
+          const dy = params.y - (s.pos.y + 1.62)
+          const dz = params.z - s.pos.z
+          s.pos = { ...s.pos, yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) }
+        }
+        return { ok: true }
+      }
+      case 'attack':
+        (s.attacks = s.attacks || []).push(params.entityId)
+        return { ok: true }
+      case 'interact.block': {
+        (s.blockInteracts = s.blockInteracts || []).push({ ...params })
+        const name = s.blocks[this.key(params.x, params.y, params.z)] || 'air'
+        if (name.endsWith('_bed') || name === 'bed') s.isSleeping = true
+        return { ok: true, result: 'SUCCESS' }
+      }
+      case 'interact.item':
+        (s.itemUses = s.itemUses || []).push({ ...params })
+        s.usingItem = true
+        if (typeof s.eatDelayMs === 'number') {
+          const t = setTimeout(() => {
+            const held = s.inventory.find((i) => i.count > 0)
+            if (held) held.count--
+            s.usingItem = false
+          }, s.eatDelayMs)
+          if (typeof t.unref === 'function') t.unref()
+        }
+        return { ok: true }
+      case 'interact.stop':
+        s.usingItem = false
+        return { ok: true }
+      case 'sleep':
+        (s.sleepCalls = s.sleepCalls || []).push({ ...params })
+        s.isSleeping = true
+        return { ok: true }
+      case 'wake':
+        (s.wakeCalls = (s.wakeCalls || 0) + 1)
+        s.isSleeping = false
+        return { ok: true }
       case 'chat.send':
         s.chatLog.push(params.message)
         return { sent: true }
@@ -167,6 +234,14 @@ class FakeTransport extends EventEmitter {
         s.baritone = cmd
         if (/^#set(\s|$)/.test(cmd)) {
           (s.baritoneSets = s.baritoneSets || []).push(cmd)
+          return { id: null }
+        }
+        if (/^#(pause|resume)(\s|$)/.test(cmd)) { // idkcraft-neuc.9: goal stays armed, no status touch
+          (s.baritonePauses = s.baritonePauses || []).push(cmd)
+          s.baritonePaused = cmd.startsWith('#pause')
+          // Model pausedThisTick: for ~30 ms after #resume a status read
+          // still shows the paused tick (pathing:false, no verdict).
+          if (!s.baritonePaused) s.resumeStaleUntil = Date.now() + 30
           return { id: null }
         }
         if (/^#stop/.test(cmd)) {
@@ -192,8 +267,19 @@ class FakeTransport extends EventEmitter {
         return { id: null }
       }
       case 'baritone.status':
+        // While #pause holds, a live goal reads pathing:false with no
+        // verdict yet — the shape the adapter's re-issue check must NOT
+        // mistake for a dropped goal once #resume lands (the mod reads
+        // pathing fresh on the client thread, post-resume).
+        if (s.baritonePaused) return { id: s.baritoneId, pathing: false, last: 'none' }
+        if (s.resumeStaleUntil && Date.now() < s.resumeStaleUntil) return { id: s.baritoneId, pathing: false, last: 'none' }
         if (s.baritonePhase === 0) { s.baritonePhase = 1; return { id: s.baritoneId, pathing: true, last: 'none' } }
         return s.baritoneStatus || { id: null, pathing: false, last: 'none' }
+      case 'respawn': // idkcraft-neuc.21: death-screen click; a live player no-ops
+        s.respawnCalls = (s.respawnCalls | 0) + 1
+        if (s.respawnIgnore > 0) { s.respawnIgnore--; return { ok: true } } // a click the client dropped
+        if (typeof s.health === 'number' && s.health <= 0) s.health = 20
+        return { ok: true }
       default:
         throw new Error(`bridge: unknown method ${method}`)
     }
