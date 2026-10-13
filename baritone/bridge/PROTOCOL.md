@@ -736,6 +736,19 @@ unchanged. No new wire method; no new metric. Tests:
 | `body.js:238` `movementsFor` (+ `danger.addPathCost`, `swim.addNightWaterCost`) | flags set as on v1, pushed as `#set` on the next `setGoal`; the two path-cost wraps install but stay unmapped (see Pathfinder parity) | same test (`_dangerCostInstalled`, `_nightWaterCostInstalled`) |
 | `body.js:294` `checkTripwire` | quiet: the adapter's `setMovements`/`setGoal` read the flags and never write them — no `body lease violation` across owner switches, sprint refreshes and goals | same test |
 
+Rig (2026-10-13, local, offline names, `REPLAY_BODY=baritone
+REPLAY_BASELINE_OFF=1`, the full 32-spot `stuck-spots.json` corpus on
+`paper-base`): 26/32 reached; zero `unpin`, `faceeps`, `deep unfreeze`
+and `body lease violation` lines across the whole run. The six misses
+(DUGPIT-VALIDATE, DUGPIT-BARE, JR-BUILD, JR-BUILD-FRESH, GATHER-CLIFF,
+SHELTER-WATER) are v2 parity gaps owned by neuc.15/neuc.29, not these
+sites (no line from any of them fired). Deep descent time: not measured
+here — `unfreeze` only fires on a mineflayer ghost-pin (`walking` with
+`stalls === UNFREEZE_TICKS`), so its absence on v2 costs nothing unless
+v2 wedges in a shaft, where the replan still runs; the v1-vs-v2 descent
+numbers belong to the neuc.15 parity report. A `dig.burst` mod method
+waits for a v2 shaft wedge that the replan does not clear.
+
 Livelock note (CLAUDE.md rule): the unpin/decontact cures exist for
 prismarine-physics' bit-exact face contact, which Paper rejects; the real
 client's physics never sends it, so dropping them on v2 is the intended
