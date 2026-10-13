@@ -131,16 +131,19 @@ function siteFor(bot, around, accept) {
 // read as ground at the scan top (underground), a cave ceiling, a canopy
 // or an overhang all refuse; unloaded cells refuse too.
 const SKY_CLEAR = 16
+const TREE_TOP = /(_leaves|_log|_wood|mushroom_block)$/
 function skyOpen(bot, home, topY) {
   const { x: ox, y: y0, z: oz } = home.site
   for (let ix = 0; ix < 7; ix++) {
     for (let iz = 0; iz < 6; iz++) {
       const gy = groundY(bot, ox + ix, oz + iz, topY)
       if (gy == null || gy > y0 + 1) return false // a canopy read as ground
-      for (let y = gy; y <= y0 + SKY_CLEAR; y++) {
+      for (let y = gy - 1; y <= y0 + SKY_CLEAR; y++) {
         let b = null
         try { b = bot.blockAt(new Vec3(ox + ix, y, oz + iz)) } catch (_) { return false }
         if (!b || !b.name) return false
+        // The floor block: a flat canopy top is not ground (revmux 01).
+        if (y === gy - 1) { if (TREE_TOP.test(b.name)) return false; continue }
         if (b.name !== 'air' && !CLEAR_FLORA.has(b.name)) return false
       }
     }

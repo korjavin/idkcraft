@@ -398,4 +398,15 @@ describe('neuc.32: homeless under cover', () => {
     world.set(3, 70, 2, 'oak_leaves') // below it: read as ground
     assert.equal(site.skyOpen(bot, home, 72), false)
   })
+
+  it('v2 under a flat leaf canopy never founds on the canopy top (revmux 01)', () => {
+    // Forest floor feet 64 under a dark-oak-style leaf layer at 69 over
+    // x/z -40..40: every site in range would sit on leaves.
+    const world = makeWorld()
+    for (let x = -40; x <= 40; x++) for (let z = -40; z <= 40; z++) world.set(x, 69, z, 'dark_oak_leaves')
+    const bot = mockBot(world, { spawn: null, at: pos(0, 64, 0) })
+    const ctx = {}
+    withBody('baritone', () => logged(() => build(bot, ctx)))
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+  })
 })
