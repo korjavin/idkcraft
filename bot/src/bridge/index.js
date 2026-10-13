@@ -379,6 +379,29 @@ class BaritoneBot extends EventEmitter {
     this.emit('end', 'bridge: left world (client disconnected)')
   }
 
+  // idkcraft-neuc.21: mineflayer's respawn:true parity. A dead client sits
+  // on the death screen with its pos frozen — every goal, sidestep and
+  // hop then reads no-progress (the v2 spawn wedge). Death edge -> 'death',
+  // then click respawn (re-sent at most 1/s while still dead); the first
+  // live poll after it -> 'respawn' (index.js lifecycle pairs the two).
+  _noteLife(health) {
+    if (health > 0) {
+      if (this._dead) {
+        this._dead = false
+        this.emit('respawn')
+      }
+      return
+    }
+    if (!this._dead) {
+      this._dead = true
+      this.emit('death')
+    }
+    const now = Date.now()
+    if (now - (this._respawnAt || 0) < 1000) return
+    this._respawnAt = now
+    this.transport.call('respawn', {}).catch(failLog)
+  }
+
   async _refreshOnce() {
     const st = await this.transport.call('state.get', {})
     if (!st || !st.pos) this._noteOutOfWorld()
@@ -398,7 +421,10 @@ class BaritoneBot extends EventEmitter {
         this.entity.velocity.z = vel.z
       }
     }
-    if (st && typeof st.health === 'number') this.health = st.health
+    if (st && typeof st.health === 'number') {
+      this.health = st.health
+      this._noteLife(st.health)
+    }
     if (st && typeof st.food === 'number') this.food = st.food
     if (st && typeof st.oxygen === 'number') this.oxygenLevel = st.oxygen
     if (st && st.time && typeof st.time === 'object') {

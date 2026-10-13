@@ -17,7 +17,7 @@ import net.minecraft.world.phys.Vec3;
  * <p>Methods: {@code look.set {yaw,pitch,force}}, {@code look.at {x,y,z}},
  * {@code attack {entityId}}, {@code interact.block {x,y,z,face,cursor,sneak}},
  * {@code interact.item {hand,holdMs}}, {@code interact.stop {}},
- * {@code sleep {x,y,z}}, {@code wake {}}. Notifications: {@code sleep {}} /
+ * {@code sleep {x,y,z}}, {@code wake {}}, {@code respawn {}}. Notifications: {@code sleep {}} /
  * {@code wake {}} on the player's sleeping-state edge (per-tick hook).
  *
  * <p>Yaw/pitch on the wire are mineflayer radians (PROTOCOL.md units);
@@ -172,6 +172,15 @@ public final class Look {
             if (player.connection != null) {
                 player.connection.send(new ServerboundPlayerCommandPacket(
                         player, ServerboundPlayerCommandPacket.Action.STOP_SLEEPING));
+            }
+            return ok();
+        }));
+        // idkcraft-neuc.21: the death-screen respawn click (mineflayer
+        // respawn:true parity, driven by the Node adapter on health <= 0).
+        // A live player is a no-op, so a late or repeated call is harmless.
+        server.register("respawn", params -> look.onPlayer(player -> {
+            if (player.isDeadOrDying()) {
+                player.respawn();
             }
             return ok();
         }));
