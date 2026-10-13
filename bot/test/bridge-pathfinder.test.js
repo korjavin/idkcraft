@@ -298,7 +298,8 @@ describe('already-satisfied goals succeed without a command (revmux 01 core-1)',
     await sleep(10)
     assert.equal(transport.state.baritone, null)
     assert.deepEqual(seen.statuses, ['success', 'success'])
-    assert.equal(bot._follow, null) // nothing to refresh mid-walk
+    assert.ok(bot._follow, 'neuc.25: in-range dynamic follow stays armed (v1 keeps the goal live)')
+    assert.equal(bot.pathfinder.isMoving(), false)
   })
 
   it('the short-circuit stops a live walk first, like every setGoal', async () => {
@@ -485,6 +486,66 @@ describe('GoalFollow re-issue (dynamic, throttled)', () => {
     } finally {
       transport.call = orig
     }
+  })
+
+  // neuc.25 (prod: v2 lost fist fights v1 wins): v1's dynamic GoalFollow
+  // stays live after arrival and re-plans once the target leaves range,
+  // so a knocked-back mob is chased at once. The adapter used to drop the
+  // arm on success and stand still until fight.js's 6-tick retry.
+  it('a reached dynamic follow re-chases once the target leaves range (v1 parity)', async () => {
+    const target = { id: 9, position: new Vec3(1, 64, 1), isValid: true }
+    bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true) // in range: instant success
+    await sleep(10)
+    assert.equal(transport.state.baritone, null)
+    assert.ok(bot._follow, 'armed')
+    bot._follow.at -= 1500
+    await bot.refresh() // still in range: rest
+    assert.equal(transport.state.baritone, null)
+    assert.equal(bot.pathfinder.isMoving(), false)
+
+    target.position = new Vec3(5, 64, 0) // knocked back out of range
+    await bot.refresh()
+    assert.equal(transport.state.baritone, '#goto 5.0 64.0 0.0')
+    assert.equal(bot.pathfinder.isMoving(), true)
+    await sleep(10)
+    assert.equal(bot._goalId, 1)
+  })
+
+  it('the re-chase is throttled and a failed walk disarms (no noPath loop)', async () => {
+    const target = { id: 9, position: new Vec3(1, 64, 1), isValid: true }
+    bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true)
+    await sleep(10)
+    target.position = new Vec3(8, 64, 0)
+    await bot.refresh() // inside the 1 s throttle from arming
+    assert.equal(transport.state.baritone, null)
+    bot._follow.at -= 1500
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 1)
+    await sleep(10)
+    transport.inject('baritone.event', { id: 1, status: 'noPath' })
+    assert.equal(bot._follow, null)
+    target.position = new Vec3(12, 64, 0)
+    await bot.refresh()
+    assert.equal(transport.state.baritoneSeq, 1) // disarmed: the caller decides
+  })
+
+  it('state.get inWater/inLava fold onto entity.isInWater/isInLava (breath reflex input)', async () => {
+    assert.equal(bot.entity.isInWater, undefined) // an older mod: absent stays absent
+    transport.state.pos = { ...transport.state.pos, inWater: true, inLava: false }
+    await bot.refresh()
+    assert.equal(bot.entity.isInWater, true)
+    assert.equal(bot.entity.isInLava, false)
+  })
+
+  it('an invalid (gone) target is never re-chased', async () => {
+    const target = { id: 9, position: new Vec3(1, 64, 1), isValid: true }
+    bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true)
+    await sleep(10)
+    target.position = new Vec3(8, 64, 0)
+    target.isValid = false
+    bot._follow.at -= 1500
+    await bot.refresh()
+    assert.equal(transport.state.baritone, null)
   })
 
   it('does not arm without the dynamic flag or without a live entity', async () => {
