@@ -335,3 +335,78 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
     })
   })
 })
+
+// neuc.32: prod v2 sat under a lake bed (44,58,-20, head blocked): every
+// body-anchored footprint read water and the shore site sat 3 above the
+// feet, so the homeless build failed:no-site forever. v2 widens to the
+// nearest open-sky site; v1 keeps #484's refusal byte-identical.
+describe('neuc.32: homeless under cover', () => {
+  // Lake over x/z -15..15 (water at 63), dry meadow (feet 64) beyond.
+  function lakeWorld() {
+    const world = makeWorld()
+    for (let x = -15; x <= 15; x++) for (let z = -15; z <= 15; z++) world.set(x, 63, z, 'water')
+    return world
+  }
+  function withBody(body, fn) {
+    const prev = process.env.BOT_BODY
+    if (body) process.env.BOT_BODY = body
+    else delete process.env.BOT_BODY
+    try { return fn() } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  }
+
+  it('v1 (BOT_BODY unset) under the lake bed still fails no-site', () => {
+    const bot = mockBot(lakeWorld(), { spawn: null, at: pos(0, 58, 0) })
+    const ctx = {}
+    const lines = withBody(null, () => logged(() => build(bot, ctx)))
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+    assert.equal(ctx.home, null)
+    assert.ok(lines.includes('build failed:no-site'), lines.join('\n'))
+  })
+
+  it('v2 under the lake bed founds the nearest dry open-sky site', () => {
+    const bot = mockBot(lakeWorld(), { spawn: null, at: pos(0, 58, 0) })
+    const ctx = {}
+    withBody('baritone', () => logged(() => build(bot, ctx)))
+    assert.ok(ctx.home && ctx.home.site, 'site founded')
+    const s = ctx.home.site
+    assert.equal(s.y, 64)
+    // whole 7x6 footprint off the lake, within the ~30 ring
+    const offLake = s.x > 15 || s.x + 6 < -15 || s.z > 15 || s.z + 5 < -15
+    assert.ok(offLake, JSON.stringify(s))
+    assert.ok(Math.hypot(s.x, s.z) <= 31, JSON.stringify(s))
+  })
+
+  it('v2 deep underground still refuses (rock at the scan top is not sky)', () => {
+    const bot = mockBot(makeWorld(), { spawn: null, at: pos(0, 40, 0) })
+    const ctx = {}
+    withBody('baritone', () => logged(() => build(bot, ctx)))
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+  })
+
+  it('skyOpen refuses a footprint under a leaf canopy', () => {
+    const site = require('../src/site')
+    const world = makeWorld()
+    const bot = { blockAt: (p) => world.blockAt(p) }
+    const home = site.makeHome(0, 64, 0, 2)
+    assert.equal(site.skyOpen(bot, home, 72), true)
+    world.set(3, 76, 2, 'oak_leaves') // above the scan top
+    assert.equal(site.skyOpen(bot, home, 72), false)
+    world.set(3, 76, 2, 'air')
+    world.set(3, 70, 2, 'oak_leaves') // below it: read as ground
+    assert.equal(site.skyOpen(bot, home, 72), false)
+  })
+
+  it('v2 under a flat leaf canopy never founds on the canopy top (revmux 01)', () => {
+    // Forest floor feet 64 under a dark-oak-style leaf layer at 69 over
+    // x/z -40..40: every site in range would sit on leaves.
+    const world = makeWorld()
+    for (let x = -40; x <= 40; x++) for (let z = -40; z <= 40; z++) world.set(x, 69, z, 'dark_oak_leaves')
+    const bot = mockBot(world, { spawn: null, at: pos(0, 64, 0) })
+    const ctx = {}
+    withBody('baritone', () => logged(() => build(bot, ctx)))
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+  })
+})

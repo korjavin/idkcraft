@@ -688,6 +688,9 @@ function build(bot, ctx, target, state) {
         const p = bot.entity && bot.entity.position
         const near = p ? site.siteFor(bot, p) : null
         if (near && Math.abs(near.site.y - Math.floor(p.y)) <= 1) ctx.home = near
+        // neuc.32: v2 under cover (lake bed, overhang) widens to the
+        // nearest open-sky site within ~30; v1 (BOT_BODY unset) unchanged.
+        if (!ctx.home && p && process.env.BOT_BODY === 'baritone') ctx.home = site.skySiteNear(bot, p)
       }
     } catch (_) {
       ctx.home = null
