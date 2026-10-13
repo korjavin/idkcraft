@@ -59,6 +59,7 @@ public final class Chunks {
         server.onPacket(chunks::onPacket);
         server.onClientTick(chunks::tick);
         server.register("chunks.list", params -> {
+            chunks.reconcileLoaded();
             JsonArray cols = new JsonArray();
             for (Long packed : chunks.loaded) {
                 JsonObject c = new JsonObject();
@@ -134,6 +135,43 @@ public final class Chunks {
         note.addProperty("stateId", Block.getId(state));
         server.push("block.update", note);
     }
+
+    /**
+     * Rebuild the loaded set from the chunk source around the player.
+     * The packet-fed set misses every column streamed before the bridge
+     * listener registered (the adapter usually attaches after the join),
+     * so chunks.list — the adapter's first chunk call — reconciles on
+     * the client thread. Probe radius covers any sane view distance;
+     * chunk.loaded keeps the set current afterwards.
+     */
+    private void reconcileLoaded() {
+        java.util.Set<Long> scanned = server.submit(() -> {
+            Minecraft client = Minecraft.getInstance();
+            ClientLevel level = client != null ? client.level : null;
+            if (level == null || client.player == null) {
+                return null;
+            }
+            int pcx = (int) Math.floor(client.player.getX() / 16.0);
+            int pcz = (int) Math.floor(client.player.getZ() / 16.0);
+            java.util.Set<Long> found = new java.util.HashSet<>();
+            for (int cx = pcx - SCAN_RADIUS; cx <= pcx + SCAN_RADIUS; cx++) {
+                for (int cz = pcz - SCAN_RADIUS; cz <= pcz + SCAN_RADIUS; cz++) {
+                    if (level.getChunkSource().getChunk(cx, cz,
+                            net.minecraft.world.level.chunk.status.ChunkStatus.FULL, false) != null) {
+                        found.add(pack(cx, cz));
+                    }
+                }
+            }
+            return found;
+        });
+        if (scanned == null) {
+            return; // at the menu / busy: the packet-fed set stands
+        }
+        loaded.retainAll(scanned);
+        loaded.addAll(scanned);
+    }
+
+    private static final int SCAN_RADIUS = 32;
 
     // ---- client tick: a gone world clears the loaded set ----
 

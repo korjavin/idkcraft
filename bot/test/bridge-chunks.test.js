@@ -175,6 +175,20 @@ describe('bridge chunk cache (neuc.6)', () => {
     assert.equal(bot.blockAt(new Vec3(48, 64, 0)).name, 'oak_log')
   })
 
+  it('an empty chunks.list while in world retries on the next round', async () => {
+    // Fresh bot whose first list sees nothing (mod set not caught up):
+    // simulate by clearing the scripted world, then restoring it.
+    const saved = transport.state.blocks
+    transport.state.blocks = {}
+    bot._chunks.listed = false
+    await bot.refresh()
+    assert.equal(bot._chunks.listed, false)
+    transport.state.blocks = saved
+    await bot.refresh()
+    assert.equal(bot._chunks.listed, true)
+    assert.equal(bot.blockAt(new Vec3(3, 64, 0)).name, 'oak_log')
+  })
+
   it('the REAL gather.js find phase runs unchanged through the adapter', () => {
     const ctx = { lastGoalKey: '', stepStatus: 'running' }
     gather(bot, ctx, null, {})

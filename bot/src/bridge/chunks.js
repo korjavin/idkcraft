@@ -209,8 +209,11 @@ async function refreshChunks(bot, transport) {
     if (/unknown method|-32601/.test(String((e && e.message) || e))) st.unsupported = true
     return
   }
-  st.listed = true
   const cols = list && Array.isArray(list.columns) ? list.columns : []
+  // An empty list while in world means the mod's packet-fed set has not
+  // caught up (it reconciles per call): keep retrying on later rounds.
+  if (cols.length === 0 && bot._hasPos) return
+  st.listed = true
   const bp = (bot.entity && bot.entity.position) || { x: 0, z: 0 }
   const bcx = Math.floor(bp.x / 16)
   const bcz = Math.floor(bp.z / 16)
