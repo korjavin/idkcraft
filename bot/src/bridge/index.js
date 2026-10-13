@@ -16,6 +16,7 @@ const chunks = require('./chunks') // idkcraft-neuc.6: chunk cache -> sync block
 const { installInventory, applyInventory, handleInventoryEvent } = require('./inventory') // idkcraft-neuc.8: inventory/equip/toss fold
 const { installLook, handleLookEvent } = require('./look') // idkcraft-neuc.9: look/attack/interact/sleep
 const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.13: control states
+const { installWindows, handleWindowEvent } = require('./windows') // idkcraft-neuc.11: container windows
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 // Failed fire-and-forget baritone.cmd: log, never emit 'error' (runOnce
@@ -280,6 +281,7 @@ class BaritoneBot extends EventEmitter {
     installInventory(this)
     installLook(this) // idkcraft-neuc.9: look/lookAt/attack/activate*/consume/sleep/wake/waitForTicks
     installInput(this, transport) // neuc.13: setControlState/clearControlStates/controlState
+    installWindows(this) // idkcraft-neuc.11: openContainer/openChest/openFurnace/currentWindow/clickWindow/closeWindow
   }
 
   // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
@@ -807,6 +809,7 @@ class BaritoneBot extends EventEmitter {
     if (handleInventoryEvent(this, method, params)) return // idkcraft-neuc.8: inventory.update
     if (handleBridgeEvent(this, method, params)) return // idkcraft-neuc.3: player.joined/left, entity.gone
     if (handleLookEvent(this, method, params)) return // idkcraft-neuc.9: sleep/wake
+    if (handleWindowEvent(this, method, params)) return // idkcraft-neuc.11: window.open/slot/close
     const p = params || {}
     switch (method) {
       case 'chat':

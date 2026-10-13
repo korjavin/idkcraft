@@ -150,6 +150,13 @@ public final class Inventory {
     }
 
     private JsonObject execute(Minecraft client, LocalPlayer player, Op op) throws Rpc.RpcException {
+        // neuc.11: clicks below go to inventoryMenu (id 0); vanilla drops a
+        // click whose id is not the open menu's, so an open container (a
+        // furnace kept open across smelt ticks) is closed first — like a
+        // player pressing E. The window.close push clears Node's currentWindow.
+        if (!"select".equals(op.kind()) && player.containerMenu != player.inventoryMenu) {
+            player.closeContainer();
+        }
         return switch (op.kind()) {
             case "select" -> doSelect(player, op.params());
             case "equip" -> doEquip(client, player, op);
@@ -321,7 +328,7 @@ public final class Inventory {
         return res;
     }
 
-    private static Map<String, Object> describe(int slot, ItemStack stack) {
+    static Map<String, Object> describe(int slot, ItemStack stack) { // neuc.11: Windows reuses it
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("slot", slot);
         m.put("name", itemName(stack));
@@ -348,7 +355,7 @@ public final class Inventory {
         return id == null ? "unknown" : id.toString();
     }
 
-    private static String fingerprint(Map<String, Object> m) {
+    static String fingerprint(Map<String, Object> m) { // neuc.11: Windows reuses it
         return m.get("name") + "|" + m.get("count") + "|" + m.get("damage") + "|"
                 + m.get("enchantments") + "|" + m.get("customName");
     }
