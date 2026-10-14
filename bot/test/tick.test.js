@@ -4287,7 +4287,7 @@ describe('startup follow adoption (idkcraft-p4s)', () => {
     return { username: 'IdkBot', players }
   }
   it('saved follow online wins', () => {
-    assert.equal(startupFollow(rosterBot(['LoptiFriend']), 'LoptiFriend'), 'LoptiFriend')
+    assert.equal(startupFollow(rosterBot(['TestFriend']), 'TestFriend'), 'TestFriend')
   })
   it('saved follow offline adopts nobody (AGY correction)', () => {
     assert.equal(startupFollow(rosterBot(['Solo']), 'Gone'), '')
