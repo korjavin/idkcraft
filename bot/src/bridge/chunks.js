@@ -316,13 +316,15 @@ function handleChunkEvent(bot, transport, method, params) {
     return true
   }
   if (method === 'block.update') {
+    // neuc.33: a column in flight also replays it onto the reply (whose
+    // snapshot may predate it); a cached column being re-fetched still
+    // applies and emits now, as before.
     if (typeof p.x === 'number' && typeof p.z === 'number' && bot._chunks) {
       const key = `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`
       const st = bot._chunks
-      if (st.loading.has(key) && !(bot._chunkCols && bot._chunkCols.has(key))) {
+      if (st.loading.has(key)) {
         if (!st.held.has(key)) st.held.set(key, [])
-        st.held.get(key).push(p) // replayed onto the reply (neuc.33)
-        return true
+        st.held.get(key).push(p)
       }
     }
     const [oldBlock, newBlock] = applyBlockUpdate(bot, p)

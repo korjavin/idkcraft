@@ -300,4 +300,21 @@ describe('bridge chunk cache after a teleport (neuc.33)', () => {
     await sleep(80)
     assert.equal(bot.blockAt(new Vec3(40, 64, 40)).name, 'oak_door')
   })
+
+  it('a cached column being re-fetched still emits blockUpdate now and keeps the update after the reply', async () => {
+    const origCall = transport.call.bind(transport)
+    transport.call = async (method, params) => {
+      const r = await origCall(method, params)
+      if (method === 'chunk.get') await sleep(40)
+      return r
+    }
+    const seen = []
+    bot.on('blockUpdate', (o, n) => seen.push(n && n.name))
+    transport.inject('chunk.loaded', { cx: 0, cz: 0 }) // re-send of a cached column
+    await sleep(10)
+    transport.inject('block.update', { x: 3, y: 64, z: 0, stateId: 0 }) // the log is dug mid-refetch
+    assert.deepEqual(seen, ['air'], 'emitted at once (placement/dig waiters)')
+    await sleep(80)
+    assert.equal(bot.blockAt(new Vec3(3, 64, 0)).name, 'air', 'the stale snapshot did not resurrect the log')
+  })
 })
