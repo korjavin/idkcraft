@@ -176,6 +176,9 @@ services:
       MC_PORT: 25565
       BOT_BODY: baritone
       BOT_USERNAME: ${BOT2_USERNAME:-}
+      # g0z.59: v2 reads (never writes) v1's complete castle from v1's
+      # memory file on the shared volume, so it sleeps inside it too.
+      BOT_CASTLE_PEER: ${BOT_USERNAME:-IdkBot}
       BOT_FOLLOW: ${BOT_FOLLOW:-}
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}

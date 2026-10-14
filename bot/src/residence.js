@@ -315,4 +315,29 @@ function wanted(ctx) {
   return ctx.hutHome || null
 }
 
-module.exports = { of, HUT, HOUSE, CASTLE, LIGHT_SPOTS, LIGHT_SPOTS_V2, CHEST_SPOTS, CHEST_SPOTS_V2, FURNACE_SPOTS, RESIDENCE_CASTLE, castleHome, wanted }
+// Night residence (idkcraft-g0z.59, owner 2026-10-14: at night the bot is
+// inside the castle or its house). Without a built home — an unbuilt house
+// order (a 'build here' after the castle was adopted), or none — a complete
+// v2+ castle is where the night steps (gohome/stay/sleep) go: the bot's own,
+// else a peer bot's read-only record (ctx.peerCastle, memory.js). Only
+// within NIGHT_CASTLE_RANGE of the house site (homeless: of pos); the house
+// order resumes by day. The castle home is cached on ctx (bed claims ride
+// on it through the night). Pure; ctx.home otherwise.
+const NIGHT_CASTLE_RANGE = 96 // retreat.HOME_WALK_RANGE: a walkable night
+function nightHome(ctx, pos) {
+  try {
+    const h = ctx && ctx.home
+    if (h && h.built === true) return h
+    const own = ctx.castle && ctx.castle.phase === 'complete' ? ctx.castle : null
+    const st = own || ctx.peerCastle
+    if (!st || !st.site || st.phase !== 'complete' || !(st.blueprintVersion >= 2)) return h
+    const a = h && h.site ? h.site : pos
+    if (!a || typeof a.x !== 'number' || Math.hypot(a.x - st.site.x, a.z - st.site.z) > NIGHT_CASTLE_RANGE) return h
+    if (!sameCastle(ctx.nightCastle, st)) ctx.nightCastle = castleHome(st)
+    return ctx.nightCastle
+  } catch (_) {
+    return ctx && ctx.home
+  }
+}
+
+module.exports = { of, HUT, HOUSE, CASTLE, LIGHT_SPOTS, LIGHT_SPOTS_V2, CHEST_SPOTS, CHEST_SPOTS_V2, FURNACE_SPOTS, RESIDENCE_CASTLE, castleHome, wanted, nightHome, NIGHT_CASTLE_RANGE }

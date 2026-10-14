@@ -841,8 +841,9 @@ function tableYieldToBuild(facts, bot, ctx) {
 function nightFarFromHome(bot, ctx) {
   try {
     const range = require('./behaviours/retreat').HOME_WALK_RANGE || 96
-    const site = ctx && ctx.home && ctx.home.site
     const bp = bot && bot.entity && bot.entity.position
+    const nh = residence.nightHome(ctx, bp) // g0z.59: the castle covering an unbuilt house
+    const site = nh && nh.site
     if (!site || typeof site.x !== 'number' || !bp || typeof bp.x !== 'number') return false
     return Math.hypot(bp.x - site.x, bp.z - site.z) > range
   } catch (_) {
@@ -982,12 +983,14 @@ function castleSiteNight(bot, ctx) {
 const BAND_GOHOME_FAILS = 6
 function castleBandHome(bot, ctx) {
   try {
-    const h = ctx && ctx.home
+    const bp = bot && bot.entity && bot.entity.position
+    const h = residence.nightHome(ctx, bp) // g0z.59: the castle covering an unbuilt house
     if (!h || !h.site || h.built !== true) return false
     const gl = ctx.gohomeLatch
     if (gl && gl.day === mcDay(bot) && (gl.band | 0) >= BAND_GOHOME_FAILS) return false
     if (nightFarFromHome(bot, ctx)) return false
-    return require('./castle').nightBand(ctx.castle, bot && bot.entity && bot.entity.position)
+    // g0z.59: v2 keeps no castle of its own — the peer record's band.
+    return require('./castle').nightBand(ctx.castle && ctx.castle.site ? ctx.castle : ctx.peerCastle, bp)
   } catch (_) {
     return false
   }
@@ -1212,7 +1215,15 @@ function goalFacts(bot, ctx) {
       }
     }
   } catch (_) { /* inventory not ready: 0 */ }
-  const home = !ctx || !ctx.home ? 'none' : ctx.home.built ? 'built' : 'site'
+  let home = !ctx || !ctx.home ? 'none' : ctx.home.built ? 'built' : 'site'
+  // Night residence (g0z.59): an unbuilt house with a complete castle in
+  // range reads built at dusk and night — the night steps go to the castle
+  // (residence.nightHome); by day the house order reads its own site.
+  let nightHomeRec = ctx && ctx.home
+  try {
+    nightHomeRec = residence.nightHome(ctx, bot && bot.entity && bot.entity.position)
+    if (time !== 'day' && nightHomeRec && nightHomeRec !== ctx.home) home = 'built'
+  } catch (_) { /* the house reads as before */ }
   // Unlit torch spots around the house (rw4.13 light step): scanned like
   // the build remainder, so the step ends when the ring burns.
   let unlit = 0
@@ -1227,7 +1238,7 @@ function goalFacts(bot, ctx) {
   let inside = 'no'
   try {
     const bp = bot && bot.entity && bot.entity.position
-    const home = ctx && ctx.home
+    const home = time !== 'day' ? nightHomeRec : ctx && ctx.home
     if (bp && home && residence.of(home).interior(home, bp)) inside = 'yes'
   } catch (_) { /* not inside */ }
   // A station the equip step placed also counts (atl.6): otherwise the

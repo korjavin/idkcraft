@@ -531,11 +531,18 @@ function logPhase(bot, ctx, st, home) {
 
 function gohome(bot, ctx, target, state) {
   gohomeTick(bot, ctx, target, state)
-  if (ctx && ctx.home && ctx.home.site) logPhase(bot, ctx, ctx.gohome, ctx.home)
+  const home = nightHome(bot, ctx)
+  if (home && home.site) logPhase(bot, ctx, ctx.gohome, home)
+}
+
+// The night steps' home (g0z.59): the house, or the complete castle that
+// covers an unbuilt one (residence.nightHome).
+function nightHome(bot, ctx) {
+  return residence.nightHome(ctx, botPos(bot))
 }
 
 function gohomeTick(bot, ctx, target, state) {
-  const home = ctx && ctx.home
+  const home = nightHome(bot, ctx)
   if (!home || !home.site) {
     ctx.stepStatus = 'failed:no-home'
     // The walk borrow needs a home site: refresh to release a leaked one.
@@ -913,7 +920,7 @@ function farFromInside(bot, inn) {
 }
 
 function stay(bot, ctx, target, state) {
-  const home = ctx && ctx.home
+  const home = nightHome(bot, ctx)
   if (!home || !home.site) {
     ctx.stepStatus = 'failed:no-home'
     return
@@ -1158,7 +1165,8 @@ function shelterOpen(ctx) {
 function shelter(bot, ctx, target, state) {
   // Homeless is fine (vmzq.32: goal's castleSiteNight picks it for a
   // homeless castle): home only answers "already inside" and the swim aim.
-  const home = ctx && ctx.home && ctx.home.site ? ctx.home : null
+  const nh = ctx && nightHome(bot, ctx)
+  const home = nh && nh.site ? nh : null
   if (home && isInside(bot, home)) {
     // Walked in by hand (or a lagged first tick): stay owns the inside.
     ctx.stepStatus = 'done'

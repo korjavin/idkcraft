@@ -680,4 +680,34 @@ function saveThrottled(bot, ctx, now) {
   }
 }
 
-module.exports = { save, restore, saveThrottled, fileFor, worldKey, SAVE_MIN_MS, VISITED_MAX, HOMES_MAX }
+// Peer castle (idkcraft-g0z.59): v2 keeps no castle of its own, so the
+// complete v2+ castle in the peer bot's file (BOT_CASTLE_PEER, a username,
+// next to this bot's file on the shared volume) of the same world is READ,
+// never written, into ctx.peerCastle — only the night residence reads it
+// (residence.nightHome, goal castleBandHome); it never becomes ctx.castle,
+// so no castle work, residence switch or save touches it. Re-read at most
+// once per SAVE_MIN_MS: a castle the peer completes later lands without a
+// restart. Unset, missing or other-world: null.
+let peerAt = 0
+function refreshPeerCastle(bot, ctx, now, env) {
+  try {
+    const t = typeof now === 'number' ? now : Date.now()
+    if (!ctx || t - peerAt < SAVE_MIN_MS) return
+    peerAt = t
+    const e = env || process.env
+    const peer = typeof e.BOT_CASTLE_PEER === 'string' ? e.BOT_CASTLE_PEER : ''
+    const own = fileFor(e, bot && bot.username)
+    const f = path.join(path.dirname(own), `${safeName(peer)}.json`)
+    let c = null
+    if (peer && f !== own) {
+      try {
+        const doc = readDoc(f)
+        const world = worldKey(bot)
+        if (doc && doc.v === VERSION && world && doc.world === world) c = castleOf(doc.castle)
+      } catch (_) { c = null }
+    }
+    ctx.peerCastle = c && c.phase === 'complete' && c.blueprintVersion >= 2 ? c : null
+  } catch (_) { /* peer best-effort */ }
+}
+
+module.exports = { save, restore, saveThrottled, refreshPeerCastle, fileFor, worldKey, SAVE_MIN_MS, VISITED_MAX, HOMES_MAX }

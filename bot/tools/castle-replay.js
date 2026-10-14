@@ -62,6 +62,7 @@
 const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const fs = require('node:fs')
+const path = require('node:path')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
 
@@ -104,6 +105,16 @@ const SEED_UPGRADE = SEED === 'complete' && SEED_VERSION < require('../src/castl
 // same reason: its sand/wool legs walked 85+ out and drowned the drift it
 // measures). Unset = today's behaviour (no decor seeded).
 const SEED_DECOR_EXCEPT = (process.env.CASTLE_SEED_DECOR_EXCEPT || '').split(',').map((s) => s.trim()).filter(Boolean)
+// Night home (g0z.59, needs CASTLE_SEED=complete): house = the castle is
+// adopted, then an unbuilt (parked) house site on the pad corner becomes
+// the home — prod's 'build here' by the castle; peer = the castle is never
+// the bot's own: it lands in a peer memory file (BOT_CASTLE_PEER, v2's
+// read-only path) and the same unbuilt house is the home. Either way the
+// residence nights judge the castle as the night home.
+const NIGHT_HOME = process.env.CASTLE_NIGHT_HOME || ''
+if (!['', 'house', 'peer'].includes(NIGHT_HOME) || (NIGHT_HOME && SEED !== 'complete')) {
+  throw new Error(`CASTLE_NIGHT_HOME: want ''|house|peer with CASTLE_SEED=complete, got ${JSON.stringify(NIGHT_HOME)}`)
+}
 const SAND = process.env.CASTLE_SAND === '1'
 const IDLE = process.env.CASTLE_IDLE === '1'
 const IDLE_DEATH = IDLE ? Math.max(0, parseInt(process.env.CASTLE_IDLE_DEATH || '0', 10) || 0) : 0
@@ -1032,10 +1043,31 @@ async function main() {
       origLog(`CASTLE-RIG seeded decor: ${seeded}/${decor.length} cells (panes + banners + upper fence + attic + blast${SEED_DECOR_EXCEPT.length > 0 ? ` except ${SEED_DECOR_EXCEPT.join(',')}` : ''})`)
     }
     if (!tickCtx()) fail('seed-castle', 'no follower ctx')
-    tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
+    if (NIGHT_HOME === 'peer') {
+      // g0z.59: the castle only in a peer's memory file — never ctx.castle.
+      const peer = `CastlePeer${(process.env.CASTLE_RIG_ID || '0').replace(/[^a-z0-9]/g, '')}`
+      const peerFile = path.join(path.dirname(process.env.BOT_MEMORY_FILE), `${peer}.json`)
+      const world = require('../src/memory').worldKey(follower)
+      if (!world) fail('seed-castle', 'no world key for the peer file')
+      fs.writeFileSync(peerFile, JSON.stringify({ v: 1, world, castle: { ...st, phase: 'complete', blocked: {}, parked: false } }))
+      process.env.BOT_CASTLE_PEER = peer
+      origLog(`CASTLE-RIG peer castle: ${peerFile} (BOT_CASTLE_PEER=${peer}), the bot keeps no castle`)
+    } else {
+      tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
+    }
   }
   if (tickCtx()) tickCtx().paused = false
-  if (SEED === 'complete') {
+  if (SEED === 'complete' && NIGHT_HOME === 'peer') {
+    // Settles past one refresh window (memory.SAVE_MIN_MS) so the first
+    // dusk already reads it.
+    let seen = false
+    for (let i = 0; i < 120 && !seen; i++) {
+      seen = !!(tickCtx() && tickCtx().peerCastle)
+      if (!seen) await sleep(500)
+    }
+    if (!seen) fail('seed-castle', 'the bot never read the peer castle')
+    if (tickCtx().castle) fail('seed-castle', 'the peer castle became the bot\'s own')
+  } else if (SEED === 'complete') {
     let adopted = false
     for (let i = 0; i < 60 && !adopted; i++) {
       const h = tickCtx() && tickCtx().home
@@ -1050,6 +1082,13 @@ async function main() {
     } catch (e) { fail('seed-castle', `memory file unreadable: ${e.message}`) }
     if (!memHome || memHome.kind !== 'castle') fail('seed-castle', `memory home is not kind=castle: ${JSON.stringify(memHome).slice(0, 160)}`)
     origLog('CASTLE-RIG residence: castle adopted, memory home kind=castle')
+  }
+  if (NIGHT_HOME) {
+    // g0z.59: an unbuilt house order on the pad corner, parked so the day
+    // never builds it (the night is what this measures).
+    const site = new Vec3(bx + 17, gy + 1, bz + 17)
+    tickCtx().home = { site, interior: null, door: null, table: null, built: false, v: 2, parked: true }
+    origLog(`CASTLE-RIG night home=${NIGHT_HOME}: unbuilt house site ${site.x} ${site.y} ${site.z}`)
   }
 
   // The order needs the speaker's entity loaded on the follower, else the
@@ -1231,7 +1270,8 @@ async function main() {
     const resSample = () => {
       let inside = false
       try {
-        const h = follower._tickerCtx && follower._tickerCtx.home
+        // g0z.59: the night home (the castle covering an unbuilt house).
+        const h = follower._tickerCtx && require('../src/residence').nightHome(follower._tickerCtx, follower.entity.position)
         inside = !!h && h.kind === 'castle' && require('../src/residence').of(h).interior(h, follower.entity.position)
       } catch (_) { inside = false }
       resNights.onSample(Math.round((Date.now() - t0) / 1000), inside, !!follower.isSleeping)

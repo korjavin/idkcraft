@@ -115,6 +115,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BOT_FOLLOW`: Target player to follow (empty = work mode until `follow me`)
   - `BOT_BODY`: Bot body (`mineflayer` default | `baritone` — bot2 pins it; never set on bot)
   - `BOT2_USERNAME`: v2 bot name (empty = v2 off; whitelist its OFFLINE uuid like `BOT_USERNAME`)
+  - `BOT_CASTLE_PEER`: peer bot whose memory file's complete castle is read (never written) as a night residence (bot2 pins it to `BOT_USERNAME`; empty = off)
   - `BODY2_MEM_LIMIT`: v2 body RAM cap (default `2500m`)
   - `BRIDGE_HOST`/`BRIDGE_PORT`/`BRIDGE_CONSOLE_PORT`: bridge addresses (defaults `body2`/`7778`/`7777`, pinned on bot2)
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
