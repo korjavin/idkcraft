@@ -80,6 +80,35 @@ public final class GoalTracker {
     }
 
     /**
+     * Heuristic penalty per block of depth into a danger disc (idkcraft-neuc.25):
+     * about ten walked blocks (Baritone's walk is ~4.6 ticks a block), the
+     * v2 twin of v1's PATH_COST 10 per move (bot/src/danger.js).
+     */
+    static final double AVOID_PER_BLOCK = 50;
+
+    /**
+     * Penalty Baritone's A* adds to a node's heuristic at (x, z): for every
+     * disc {cx, cz, lim} (flat triples) the node's cell centre is closer
+     * than lim to, (lim - d) * AVOID_PER_BLOCK. A heuristic, never a cost or
+     * a ban: deep nodes are expanded last and never picked as a partial
+     * path's best node, so plans bend around the disc while a goal inside
+     * it still plans. Malformed (non-triple) input reads as no disc.
+     */
+    static double avoidPenalty(double[] discs, int x, int z) {
+        if (discs == null || discs.length % 3 != 0) {
+            return 0;
+        }
+        double p = 0;
+        for (int i = 0; i < discs.length; i += 3) {
+            double d = Math.hypot(x + 0.5 - discs[i], z + 0.5 - discs[i + 1]);
+            if (d < discs[i + 2]) {
+                p += (discs[i + 2] - d) * AVOID_PER_BLOCK;
+            }
+        }
+        return p;
+    }
+
+    /**
      * Pause-flag update for a control verb: true on #pause, false on
      * #resume/#stop, null (untouched) for anything else.
      */

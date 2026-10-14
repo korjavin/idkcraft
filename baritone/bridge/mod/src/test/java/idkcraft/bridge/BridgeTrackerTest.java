@@ -37,6 +37,20 @@ public class BridgeTrackerTest {
     }
 
     @Test
+    public void avoidPenaltyGrowsWithDepthIntoADisc() {
+        double[] disc = {0.5, 0.5, 32};
+        assertEquals(32 * GoalTracker.AVOID_PER_BLOCK, GoalTracker.avoidPenalty(disc, 0, 0), 1e-9); // centre
+        assertEquals(2 * GoalTracker.AVOID_PER_BLOCK, GoalTracker.avoidPenalty(disc, 30, 0), 1e-9); // 2 deep
+        assertEquals(0, GoalTracker.avoidPenalty(disc, 32, 0), 1e-9); // on the rim
+        assertEquals(0, GoalTracker.avoidPenalty(disc, 40, 40), 1e-9); // outside
+        assertEquals(0, GoalTracker.avoidPenalty(null, 0, 0), 1e-9);
+        assertEquals(0, GoalTracker.avoidPenalty(new double[] {0.5, 0.5}, 0, 0), 1e-9); // malformed
+        double[] two = {0.5, 0.5, 32, 10.5, 0.5, 5};
+        assertEquals(22 * GoalTracker.AVOID_PER_BLOCK + 5 * GoalTracker.AVOID_PER_BLOCK,
+                GoalTracker.avoidPenalty(two, 10, 0), 1e-9); // discs add
+    }
+
+    @Test
     public void nearArgsParsesOnlyAWellFormedRangedGoal() {
         org.junit.jupiter.api.Assertions.assertArrayEquals(new int[] {8, 70, -18, 2}, GoalTracker.nearArgs("#near 8 70 -18 2"));
         org.junit.jupiter.api.Assertions.assertArrayEquals(new int[] {0, 64, 0, 0}, GoalTracker.nearArgs("NEAR 0 64 0 0"));

@@ -96,6 +96,16 @@ function followCmd(p, rangeSq) {
   return `#near ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)} ${r}`
 }
 
+// The xz a goal command aims at (cell centre, like danger.js goalXZ), or
+// null for a Y-only #goto.
+function cmdXZ(command) {
+  const n = String(command || '').trim().split(/\s+/).slice(1).map(Number)
+  if (!n.every(Number.isFinite)) return null
+  if (n.length === 3 || n.length === 4) return { x: n[0] + 0.5, z: n[2] + 0.5 } // #goto x y z / #near x y z r
+  if (n.length === 2) return { x: n[0] + 0.5, z: n[1] + 0.5 } // #goto x z
+  return null
+}
+
 function goalToBaritone(goal, from) {
   if (!goal) return null
   const name = (goal.constructor && goal.constructor.name) || ''
@@ -181,8 +191,8 @@ function nameForId(registry, kind, id) {
 // canOpenDoors has no setting (Baritone opens doors itself); blocksToAvoid
 // is unmapped (a future bead can send Baritone's own blocksToAvoid);
 // exclusionAreas* + danger.addPathCost wrap getNeighbors with function
-// costs Baritone cannot express (// ponytail: danger marks not mapped;
-// Baritone avoidance settings if a prod pit repeats). Empty lists are
+// costs Baritone cannot express (danger's water discs cross per goal
+// instead: _dangerAvoid, neuc.25). Empty lists are
 // omitted (no `#set` spelling clears a list); both are non-empty whenever
 // body.js runs (the scaffold set never reads empty, vmzq.29; chest is a
 // default cant-break).
@@ -714,7 +724,8 @@ class BaritoneBot extends EventEmitter {
   _sendGoalCmd(command) {
     this._goalCmd = command // neuc.13: last goal cmd (diagnostics; pause/resume keeps the id, no re-issue)
     const seq = (this._cmdSeq = (this._cmdSeq | 0) + 1)
-    this.transport.call('baritone.cmd', { command }).then(
+    const avoid = this._dangerAvoid(command)
+    this.transport.call('baritone.cmd', avoid ? { command, avoid } : { command }).then(
       (r) => {
         if (seq <= this._boundSeq) return
         this._boundSeq = seq
@@ -732,6 +743,23 @@ class BaritoneBot extends EventEmitter {
         failLog(e)
       },
     )
+  }
+
+  // Water-death discs (idkcraft-neuc.25) for the goal command: v1's
+  // danger.addPathCost wraps getNeighbors, which Baritone never calls, so
+  // v2 walked straight through the drowned shore (rig DROWNED-SHORE). The
+  // live discs ride the command as [[x, z, lim]] (same feet/goal ring
+  // shrink as v1); the mod wraps the goal with a heuristic penalty inside
+  // them. Null when none apply (the wire stays {command}).
+  _dangerAvoid(command) {
+    try {
+      const m = this.pathfinder && this.pathfinder.movements
+      if (!m || typeof m.dangerDiscs !== 'function') return null
+      const discs = m.dangerDiscs(this.entity && this.entity.position, cmdXZ(command))
+      const out = []
+      for (const d of discs || []) if (d && d.lim > 0) out.push([d.x, d.z, d.lim])
+      return out.length > 0 ? out : null
+    } catch (_) { return null }
   }
 
   _goalFailed() {

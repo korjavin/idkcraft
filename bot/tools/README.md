@@ -453,9 +453,10 @@ path). Per-spot table: the neuc.15 PR body.
 v2 gaps (beads): DUGPIT-BARE (neuc.34, water_up never offered), JR-BUILD /
 JR-BUILD-FRESH / SHELTER-WATER (neuc.29, place refusals, no-cap-ref),
 MOAT-EXIT / HOME-PIT / HOME-ROOF / HOME-PIT-DEEP (neuc.33, order answered
-before the post-tp chunk cache fills), DROWNED-SHORE reached but through the
-drowned disc (closest 3.5-9.9 vs the v1 floor 30; no v2 `minDanger` yet,
-neuc.25). The 2.6 GiB corpus peak above was an UNCAPPED rig
+before the post-tp chunk cache fills). DROWNED-SHORE went through the
+drowned disc (closest 3.5-9.9) until neuc.25 sent the water-death discs to
+Baritone (PROTOCOL.md "Danger discs on goals"): closest 31.1 on 3/3 runs,
+v2 `minDanger` 30 = the v1 floor. The 2.6 GiB corpus peak above was an UNCAPPED rig
 client (heap sizes to host RAM). Under the compose cap (`BARITONE_MEM=2500m`
 on `client.sh`, = `BODY2_MEM_LIMIT`) the JVM's max heap is 25 % of it
 (~626 MiB) and the full 32-spot corpus measured 1.58 GiB mean / 1.60 GiB
