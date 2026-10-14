@@ -497,8 +497,13 @@ describe('castle break guard (g0z.55)', () => {
       let s = sync()
       for (const n of ['granite', 'tuff', 'cobblestone']) assert.ok(s.ban.includes(n) && !s.avoid.includes(n), `near: ${n}`)
       for (const n of ['stone', 'deepslate', 'oak_log']) assert.ok(s.avoid.includes(n) && !s.ban.includes(n), `near: ${n}`)
+      let pushes = 0
+      bot.pathfinder.setMovements = () => { pushes++ }
+      sync()
+      assert.equal(pushes, 0, 'no flip, no push')
       bot.entity.position = { x: SITE.x + 300, y: 40, z: SITE.z } // a cave far off: the CLUSTER-BARE shape
       s = sync()
+      assert.equal(pushes, 1, 'crossing the range mid-goal re-pushes the settings')
       for (const n of ['granite', 'tuff']) assert.ok(s.avoid.includes(n) && !s.ban.includes(n), `far: ${n}`)
       assert.ok(s.ban.includes('cobblestone'), 'built-only kinds stay banned far off')
       assert.equal(bot.pathfinder.movements.exclusionAreasBreak.length, 1, 'one guard fn across the switch')

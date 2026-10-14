@@ -276,7 +276,14 @@ function castleNamesGuard(bot, near) {
     castleNames = { byName, fn: () => 0, near: lists(bulk), far: lists(far) } // fn: names only, no per-cell cost
   }
   // One fn object rides the Movements; the bridge reads its lists per sync.
+  const flip = castleNames.isNear !== undefined && castleNames.isNear !== !!near
+  castleNames.isNear = !!near
   Object.assign(castleNames.fn, near ? castleNames.near : castleNames.far)
+  // The bridge syncs settings on setGoal/setMovements only: a walk that
+  // crosses the range mid-goal re-pushes now (diffed: just the two lists).
+  if (flip) {
+    try { bot.pathfinder.setMovements(bot.pathfinder.movements) } catch (_) { /* next setGoal syncs */ }
+  }
   return castleNames.fn
 }
 
