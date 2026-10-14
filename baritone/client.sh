@@ -17,6 +17,9 @@
 #   BRIDGE_PORT (host publish of the in-container 7777, default 7777),
 #   MOD_PORT (host publish of the in-container 7778, the Fabric bridge mod
 #   ws; default unset = not published, so run.sh/REPLAY_WORKER are unchanged),
+#   BARITONE_MEM (docker --memory for the client, e.g. 2500m = the compose
+#   BODY2_MEM_LIMIT default, so the rig sees the cgroup the JVM sees in
+#   prod; unset = unlimited, the old rig behaviour),
 #   RIG_BIND (bind the bridge there instead of all interfaces),
 #   CLIENT_LOG (container stdout, default /tmp/baritone-client.log),
 #   RIG_CONTAINER (the rig Paper container, for the join wait — required
@@ -81,7 +84,7 @@ MOD_PUBLISH=
 if [ -n "${MOD_PORT:-}" ]; then
   MOD_PUBLISH="-p ${RIG_BIND:+$RIG_BIND:}$MOD_PORT:7778"
 fi
-docker run --rm --name "$CLIENT" $AUTH_VOL \
+docker run --rm --name "$CLIENT" ${BARITONE_MEM:+--memory $BARITONE_MEM} $AUTH_VOL \
   $OFFLINE_ENV $API_ENV $MOD_PUBLISH -p "${RIG_BIND:+$RIG_BIND:}$BRIDGE_PORT:7777" "$IMAGE" >"$CLIENT_LOG" 2>&1 &
 bridge_send() { # one console line via the bridge (ab.js speaks TCP; POSIX sh cannot)
   node -e "require(process.argv[1]).sendBridgeLine({host:'localhost',port:+process.argv[2],line:process.argv[3]}).then(()=>{},(e)=>{console.error('bridge:',e.message);process.exit(1)})" "$HERE/ab.js" "$BRIDGE_PORT" "$1"

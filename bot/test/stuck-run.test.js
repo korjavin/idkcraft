@@ -515,6 +515,11 @@ describe('client.sh MOD_PORT (idkcraft-neuc.5)', () => {
     assert.match(r.runArgs, /-p 7778:7778/)
   })
 
+  it('BARITONE_MEM (idkcraft-neuc.38): unset = unlimited, set = docker --memory', () => {
+    assert.doesNotMatch(start({}).runArgs, /--memory/)
+    assert.match(start({ BARITONE_MEM: '2500m' }).runArgs, /--memory 2500m/)
+  })
+
   it('RIG_BIND binds both publishes', () => {
     const r = start({ MOD_PORT: '7778', RIG_BIND: 'localhost' })
     assert.equal(r.status, 0, r.stdout + r.stderr)

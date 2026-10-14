@@ -455,9 +455,13 @@ JR-BUILD-FRESH / SHELTER-WATER (neuc.29, place refusals, no-cap-ref),
 MOAT-EXIT / HOME-PIT / HOME-ROOF / HOME-PIT-DEEP (neuc.33, order answered
 before the post-tp chunk cache fills), DROWNED-SHORE reached but through the
 drowned disc (closest 3.5-9.9 vs the v1 floor 30; no v2 `minDanger` yet,
-neuc.25). The body's corpus peak (2.6 GiB) is above the compose
-`BODY2_MEM_LIMIT` default (2500m) — size it before the prod rollout
-(neuc.16). Deep return: the diamond leg (`deep.js`, where `lost-shaft`
+neuc.25). The 2.6 GiB corpus peak above was an UNCAPPED rig
+client (heap sizes to host RAM). Under the compose cap (`BARITONE_MEM=2500m`
+on `client.sh`, = `BODY2_MEM_LIMIT`) the JVM's max heap is 25 % of it
+(~626 MiB) and the full 32-spot corpus measured 1.58 GiB mean / 1.60 GiB
+peak (`docker stats`, 2.44 GiB limit; uncapped on the same box: 1.82 / 2.13)
+— no OOM, no JVM flags (idkcraft-neuc.38). Rig runs that size memory set
+`BARITONE_MEM=2500m`. Deep return: the diamond leg (`deep.js`, where `lost-shaft`
 lives) runs on none of these orders; ATL-SHAFT's iron shaft is shallow, and
 MINE-10's count judge ends the window before the walk back.
 
