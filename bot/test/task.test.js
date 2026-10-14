@@ -476,7 +476,10 @@ describe('task stall clock (vmzq.2)', () => {
     tick() // credited as wood (the mark was 0)
     at(200)
     tick()
-    assert.equal(ctx.task.house.stallMs, 1000, 'no travel credit once the wood covers the cells left')
+    assert.equal(ctx.task.house.stallMs, 1000, 'the wood credit cleared the marks: a fresh baseline')
+    at(220) // 20 blocks closer than that baseline
+    tick()
+    assert.equal(ctx.task.house.stallMs, 2000, 'no travel credit once the wood covers the cells left')
   })
 
   it('an A<->B tree swap credits each tree once, and travel never lowers the wood mark (oqj5 verify)', () => {
