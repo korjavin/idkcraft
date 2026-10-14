@@ -417,3 +417,70 @@ describe('ticker body lease', () => {
     assert.match(bot._tickerCtx.lastGoalKey, /^lead:/) // the new owner overwrote on issue
   })
 })
+
+describe('castle break guard (g0z.55)', () => {
+  const castle = require('../src/castle')
+  const { guardCastle } = require('../src/behaviours/castle')
+  const { movementsToSettings } = require('../src/bridge/index')
+  const SITE = { x: 8, y: 65, z: -12 }
+  const blocksByName = {}
+  let id = 1
+  for (const n of ['cobblestone', 'stone', 'deepslate', 'granite', 'tuff', 'oak_planks', 'oak_log', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane', 'dirt', 'grass_block', 'chest']) {
+    blocksByName[n] = { id: id++, name: n, diggable: true }
+  }
+  const registry = { blocksByName, itemsByName: {} }
+  const v2Bot = () => ({ registry, pathfinder: { movements: { canDig: true, exclusionAreasBreak: [], blocksCantBreak: new Set([blocksByName.chest.id]) } } })
+
+  function withBody(value, fn) {
+    const prev = process.env.BOT_BODY
+    if (value == null) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = value
+    try { fn() } finally {
+      if (prev == null) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  }
+
+  it('v1 per-cell guard: walls and the fence decor row veto, natural stone outside is free, forget releases', () => {
+    const bot = { pathfinder: { movements: { exclusionAreasBreak: [], exclusionAreasPlace: [] } } }
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 3 } }
+    guardCastle(bot, ctx)
+    const brk = (b) => bot.pathfinder.movements.exclusionAreasBreak.reduce((s, f) => s + f(b), 0)
+    const wall = castle.absPlan(SITE, 0, 3).cells.find((c) => c.kind === 'stone')
+    const fence = castle.decorPlan(SITE, 0, 3).cells.find((c) => c.kind === 'fence')
+    assert.ok(brk({ name: 'cobblestone', position: wall }) >= 100)
+    assert.ok(brk({ name: 'oak_fence', position: fence }) >= 100)
+    assert.equal(brk({ name: 'stone', position: { x: SITE.x + 200, y: 60, z: SITE.z } }), 0)
+    ctx.castle = null
+    assert.equal(brk({ name: 'cobblestone', position: wall }), 0)
+  })
+
+  it('v1 (mineflayer body): movementsFor installs nothing', () => {
+    withBody(null, () => {
+      const bot = v2Bot()
+      body.movementsFor('work', bot, {})
+      assert.equal(bot.pathfinder.movements.exclusionAreasBreak.length, 0)
+    })
+  })
+
+  it('v2 (baritone body): castle names reach blocksToAvoidBreaking, once per Movements, no castle needed', () => {
+    withBody('baritone', () => {
+      const bot = v2Bot()
+      body.movementsFor('work', bot, {})
+      body.movementsFor('work', bot, {})
+      const mov = bot.pathfinder.movements
+      assert.equal(mov.exclusionAreasBreak.length, 1)
+      assert.equal(mov.exclusionAreasBreak[0]({ name: 'cobblestone', position: { x: 0, y: 0, z: 0 } }), 0, 'names only, no per-cell cost')
+      const set = movementsToSettings(mov, registry)
+      const avoid = set.blocksToAvoidBreaking.split(',')
+      const ban = set.blocksToDisallowBreaking.split(',')
+      // Natural bulk kinds: a cost (v2 still tunnels rock); built-only: a hard ban.
+      for (const n of ['stone', 'deepslate', 'oak_log']) assert.ok(avoid.includes(n) && !ban.includes(n), n)
+      assert.ok(avoid.includes('chest'), 'the default cant-break still crosses')
+      for (const n of ['cobblestone', 'granite', 'tuff', 'oak_planks', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane']) {
+        assert.ok(ban.includes(n), n)
+      }
+      for (const n of ['dirt', 'grass_block']) assert.ok(!avoid.includes(n) && !ban.includes(n), n)
+    })
+  })
+})

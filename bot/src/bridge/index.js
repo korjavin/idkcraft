@@ -239,6 +239,18 @@ function movementsToSettings(m, registry) {
     }
     if (names.length > 0) desired.blocksToAvoidBreaking = names.join(',')
   }
+  // body.js's v2 castle guard (idkcraft-g0z.55): built-only castle kinds are
+  // a hard ban (blocksToDisallowBreaking) — the avoid list above is a cost
+  // a long detour outweighs.
+  if (Array.isArray(m.exclusionAreasBreak)) {
+    const ban = []
+    for (const fn of m.exclusionAreasBreak) {
+      if (fn && Array.isArray(fn.banNames)) {
+        for (const n of fn.banNames) if (!ban.includes(n)) ban.push(n)
+      }
+    }
+    if (ban.length > 0) desired.blocksToDisallowBreaking = ban.join(',')
+  }
   return desired
 }
 

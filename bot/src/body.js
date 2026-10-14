@@ -128,7 +128,8 @@ function castleWalk(ctx) {
 // maxD=4 plan would strand the next sprint-off tick.
 const danger = require('./danger')
 const swim = require('./swim')
-const { STONE_ITEMS, isStone } = require('./castle') // pure blueprint data
+const castle = require('./castle') // pure blueprint data
+const { STONE_ITEMS, isStone } = castle
 
 const SPRINT_DIST = 8
 const SPRINT_LOOKAHEAD = 6
@@ -235,6 +236,41 @@ function scaffoldCobble(bot, mov, on) {
   }
 }
 
+// Castle break guard, v2 (idkcraft-g0z.55): Baritone plans in the client,
+// so the per-cell guard (behaviours/castle.js guardCastle, v1's pathfinder
+// castle guard since g0z.2) never reaches it — the bridge only reads an
+// exclusionAreasBreak fn's .guardNames into blocksToAvoidBreaking (neuc.27).
+// IdkBotV2 also keeps no castle in memory, so this names-only fn rides on
+// every Movements whenever BOT_BODY=baritone. Built-only kinds (cobble,
+// planks, fences, doors, torches, stairs, panes, ...) ride .banNames into
+// blocksToDisallowBreaking — a hard ban: the avoid list is only a ~10x dig
+// cost, so a long door detour still lost to a straight tunnel (revmux 01
+// core-1). Only the bulk rock the quarry never lays (stone and deepslate
+// mine into their cobbled forms) and logs stay in .guardNames (avoid: a
+// cost) so v2 can still tunnel and recover in rock; granite/diorite/tuff/...
+// are laid as mined (vmzq.38) and are bounded blobs v2 paths around (02).
+// ponytail: id-global — v2 never breaks cobble/planks/fences anywhere while
+// pathing (explicit digs unaffected); a shared castle descriptor if v2 must
+// tunnel cobble far from home. v1 never installs it (zero diff).
+const NATURAL_CASTLE = new Set(['stone', 'deepslate'])
+let castleNames = null
+function castleNamesGuard(bot) {
+  const byName = bot && bot.registry && bot.registry.blocksByName
+  if (!byName) return null
+  if (castleNames && castleNames.byName === byName) return castleNames.fn
+  const kinds = new Set()
+  for (const v of Object.keys(castle.BLUEPRINTS)) for (const c of castle.BLUEPRINTS[v].PLAN) kinds.add(c.kind)
+  for (const v of Object.keys(castle.DECOR)) for (const c of castle.DECOR[v]) kinds.add(c.kind)
+  const live = [...kinds].filter(castle.isPlaceTarget)
+  const fn = () => 0 // names only: v2 has no per-cell break cost
+  const names = Object.keys(byName).filter((n) => live.some((k) => castle.matches(k, n)))
+  const natural = (n) => NATURAL_CASTLE.has(n) || n.endsWith('_log')
+  fn.guardNames = names.filter(natural)
+  fn.banNames = names.filter((n) => !natural(n))
+  castleNames = { byName, fn }
+  return fn
+}
+
 function movementsFor(owner, bot, ctx, extra) {
   const movs = movementTargets(bot, ctx)
   if (movs.length === 0) return
@@ -259,8 +295,10 @@ function movementsFor(owner, bot, ctx, extra) {
     }
   } catch (_) { /* policy best-effort: defaults stand */ }
   const keepStone = castleStone(bot, ctx)
+  const v2Guard = process.env.BOT_BODY === 'baritone' ? castleNamesGuard(bot) : null
   for (const mov of movs) {
     try {
+      if (v2Guard && Array.isArray(mov.exclusionAreasBreak) && !mov.exclusionAreasBreak.includes(v2Guard)) mov.exclusionAreasBreak.push(v2Guard)
       scaffoldCobble(bot, mov, !(keepStone && otherScaffold(bot, mov)))
       if (typeof mov.canDig === 'boolean') mov.canDig = canDig
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint

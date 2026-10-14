@@ -249,6 +249,7 @@ settings.txt baseline):
 | allow1by1towers | allowPlace |
 | scafoldingBlocks ids | acceptableThrowawayItems (comma-joined names via the registry) |
 | blocksCantBreak ids | blocksToAvoidBreaking (diggable names only — chest + deliberate adds; bedrock-class defaults need no telling) plus build.js's own-home guard names (`exclusionAreasBreak` fn `.guardNames`, id-global on v2) |
+| `exclusionAreasBreak` fn `.banNames` | blocksToDisallowBreaking (body.js's v2 castle guard, g0z.55: built-only castle kinds, a hard ban, id-global) |
 
 Unmapped ceilings: canOpenDoors (Baritone opens doors itself), Movements
 blocksToAvoid (a future bead can send Baritone's own blocksToAvoid),
