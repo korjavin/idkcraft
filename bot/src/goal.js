@@ -873,7 +873,10 @@ function noteGohomeFail(ctx, bot, status) {
   const gl = ctx.gohomeLatch && ctx.gohomeLatch.day === day ? ctx.gohomeLatch : null
   // Unreadable position counts as the same spot (holds, like failHolds).
   const same = !!gl && (!gl.pos || !pos || Math.hypot(pos.x - gl.pos.x, pos.z - gl.pos.z) <= REFAIL_DIST)
-  ctx.gohomeLatch = same ? { fails: gl.fails + 1, pos: gl.pos || pos, day } : { fails: 1, pos, day }
+  // g0z.57: band failures count per night, wherever they happen.
+  const band = (gl ? gl.band | 0 : 0) + (castleBandHome(bot, ctx) ? 1 : 0)
+  ctx.gohomeLatch = same ? { fails: gl.fails + 1, pos: gl.pos || pos, day, band } : { fails: 1, pos, day, band }
+  if (band === BAND_GOHOME_FAILS && (!gl || (gl.band | 0) < band)) console.log(`goal gohome castle band spent fails=${band} status=${status}`)
   if (ctx.gohomeLatch.fails === GOHOME_LATCH_FAILS) {
     const f = (p) => (p ? `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}` : '?')
     console.log(`goal gohome latched for the night fails=${ctx.gohomeLatch.fails} status=${status} pos=${f(pos)}`)
@@ -969,26 +972,22 @@ function castleSiteNight(bot, ctx) {
 // is INSIDE the castle or its house, never sheltering at the fence ring —
 // a pillar/pit there drew creepers that blew fence rows and the entrance
 // (prod 10-09..10-14: gohome failed from a pit by the fence, latched, and
-// the shelter pillared on the ring). Feet within CASTLE_BAND of the site
-// box (surface layers only: a dig-in deep below harms nothing) with a
-// built home in walking range: gohome owns the night there, latched or not.
-// ponytail: no reachable home (unbuilt, or a house past the walk range)
-// keeps the old shelter even in the band — nothing to be inside of.
-const CASTLE_BAND = 6
-const CASTLE_BAND_BELOW = 4
+// the shelter pillared on the ring). In the castle's night band
+// (castle.nightBand) with a built home in walking range, gohome owns the
+// night past the xhqv latch — for BAND_GOHOME_FAILS band failures a night
+// (gohome is self-advancing: an unbounded override would re-pick a dead
+// walk till dawn). Spent, or with nothing to be inside of (unbuilt home, a
+// house past the walk range), the shelter takes the night and walks out of
+// the band before it digs in (home.js shelter).
+const BAND_GOHOME_FAILS = 6
 function castleBandHome(bot, ctx) {
   try {
-    const st = ctx && ctx.castle
-    const s = st && st.site
     const h = ctx && ctx.home
-    const bp = bot && bot.entity && bot.entity.position
-    if (!s || typeof s.x !== 'number' || !h || !h.site || h.built !== true || !bp || typeof bp.x !== 'number') return false
+    if (!h || !h.site || h.built !== true) return false
+    const gl = ctx.gohomeLatch
+    if (gl && gl.day === mcDay(bot) && (gl.band | 0) >= BAND_GOHOME_FAILS) return false
     if (nightFarFromHome(bot, ctx)) return false
-    const castle = require('./castle')
-    const { w, d } = castle.siteDimensions(st.rot | 0, st.blueprintVersion)
-    const x = Math.floor(bp.x), y = Math.floor(bp.y), z = Math.floor(bp.z)
-    return x >= s.x - CASTLE_BAND && x < s.x + w + CASTLE_BAND && z >= s.z - CASTLE_BAND && z < s.z + d + CASTLE_BAND &&
-      y >= s.y - CASTLE_BAND_BELOW && y <= s.y + castle.YARD_TOP
+    return require('./castle').nightBand(ctx.castle, bot && bot.entity && bot.entity.position)
   } catch (_) {
     return false
   }

@@ -1096,7 +1096,7 @@ function castleGroundHere(bot, ctx) {
 // (run8: every night failed:protected), so the shelter walks farther
 // instead of holding open ground. One shot per episode (st.offCastle);
 // the walk reuses digInRun's walk below, the veto is recover's.
-const SHELTER_CASTLE_GAP = 6
+const SHELTER_CASTLE_GAP = castleData.NIGHT_BAND // g0z.57: the spot clears the night band
 const SHELTER_CASTLE_R = 24
 function offCastleSpot(bot, ctx) {
   try {
@@ -1211,6 +1211,7 @@ function shelter(bot, ctx, target, state) {
       st.descended = false
       st.exposed = false // vmzq.48: a fresh episode re-arms the verdict below
       st.offCastle = false // ... and re-earns its one off-footprint walk
+      st.bandTried = false // g0z.57: ... and its one band walk-out
       st.wetDeadline = false // vmzq.58: the new spot earns its own swim
       st.wetSince = null
       st.pit = false
@@ -1292,6 +1293,21 @@ function shelter(bot, ctx, target, state) {
     }
     st.dry = null
     st.skip = null
+  }
+  // Castle night band (idkcraft-g0z.57): never pillar or dig in by the
+  // fence ring — creepers follow the bot there and blow the ring. Walk out
+  // of the band first (offCastleSpot: 6+ from the box, the band's edge) and
+  // dig in there; one shot per episode, like the vmzq.48 walk-off below.
+  // No ground out there keeps the old pillar in place.
+  if (!st.pillared && !st.bandTried && !st.offCastle && !ctx.recovery && !st.dig && castleData.nightBand(ctx.castle, botPos(bot))) {
+    st.bandTried = true
+    let spot = null
+    try { spot = offCastleSpot(bot, ctx) } catch (_) { spot = null }
+    if (spot) {
+      st.offCastle = true // the vmzq.48 walk-off marker: a failed walk holds exposed
+      st.dig = { walk: spot, walkTicks: 0, walked: true, extra: 0 }
+      try { console.log(`shelter leaving the castle band, digging in at ${spot.x} ${spot.y} ${spot.z}`) } catch (_) { /* log best-effort */ }
+    }
   }
   if (!st.pillared) {
     // Climbing unsheltered (revmux 01 core-1): arming inShelter before the

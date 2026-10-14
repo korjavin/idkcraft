@@ -13,6 +13,8 @@ const assert = require('node:assert/strict')
 const goal = require('../src/goal')
 const residence = require('../src/residence')
 const castle = require('../src/castle')
+const home = require('../src/behaviours/home')
+const { Vec3 } = require('vec3')
 
 function pos(x, y, z) {
   const p = { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
@@ -74,18 +76,38 @@ describe('g0z.57 castle band night: inside the castle or its house, never at the
     assert.equal(goal.stepWhy('shelter', facts('night'), b, ctx, ''), 'shelter: not by the castle, going in')
   })
 
-  it('the band edge: 6 out of the box in, 7 out not; deep below not', () => {
+  it('the band edge: under 6 from the box in, 6 out; deep below not', () => {
     const ctx = residenceCtx()
-    assert.equal(goal.castleBandHome(bot({ x: SITE.x - 6, y: 65, z: SITE.z + 3 }, 15000), ctx), true)
-    assert.equal(goal.castleBandHome(bot({ x: SITE.x - 7, y: 65, z: SITE.z + 3 }, 15000), ctx), false)
-    assert.equal(goal.castleBandHome(bot({ x: SITE.x + W + 5, y: 65, z: SITE.z + 3 }, 15000), ctx), true)
-    assert.equal(goal.castleBandHome(bot({ x: SITE.x + W + 6, y: 65, z: SITE.z + 3 }, 15000), ctx), false)
+    assert.equal(goal.castleBandHome(bot({ x: SITE.x - 5, y: 65, z: SITE.z + 3 }, 15000), ctx), true)
+    assert.equal(goal.castleBandHome(bot({ x: SITE.x - 6, y: 65, z: SITE.z + 3 }, 15000), ctx), false)
+    assert.equal(goal.castleBandHome(bot({ x: SITE.x + W - 1 + 5, y: 65, z: SITE.z + 3 }, 15000), ctx), true)
+    assert.equal(goal.castleBandHome(bot({ x: SITE.x + W - 1 + 6, y: 65, z: SITE.z + 3 }, 15000), ctx), false)
+    assert.equal(goal.castleBandHome(bot({ x: SITE.x - 4, y: 65, z: SITE.z - 4 }, 15000), ctx), true, 'corner 4,4: 5.7')
+    assert.equal(goal.castleBandHome(bot({ x: SITE.x - 5, y: 65, z: SITE.z - 5 }, 15000), ctx), false, 'corner 5,5: 7.1')
     // Prod 10-09: latched 30+ below the castle the shelter dug in down there
     // — harmless to the castle, and a no-dig walk up would fail all night.
     const deep = bot({ x: SITE.x + 15, y: SITE.y - 20, z: SITE.z + 10 }, 15000)
     assert.equal(goal.castleBandHome(deep, ctx), false)
     assert.equal(FGO(facts('night'), deep, ctx), false, 'deep: latched as before')
     assert.equal(FSH(facts('night'), deep, ctx), true, 'deep: shelter as before')
+  })
+
+  it('the band override is bounded: BAND fails a night, then the shelter takes it', async () => {
+    await quiet(async () => {
+      const b = bot(BY_FENCE, 15000)
+      const ctx = residenceCtx()
+      ctx.gohomeLatch = null
+      let n = 0
+      for (; n < 20 && FGO(facts('night'), b, ctx); n++) {
+        ctx.step = 'gohome'
+        ctx.stepStatus = 'failed:cannot-reach-home'
+        await goal.decide(b, ctx) // notes the failure, re-picks
+      }
+      assert.equal(n, 6, 'six band failures a night, never a dawn-long loop')
+      assert.equal(FSH(facts('night'), b, ctx), true, 'spent: the shelter (walks out of the band)')
+      b.time.day = 6 // the next night re-arms the budget
+      assert.equal(goal.castleBandHome(b, ctx), true)
+    })
   })
 
   it('away from the band the latch still hands the night to shelter', () => {
@@ -126,5 +148,28 @@ describe('g0z.57 castle band night: inside the castle or its house, never at the
       ctx.stepStatus = 'running'
       assert.equal((await goal.decide(b, ctx)).action, 'gohome', 'a ring shelter is not sticky')
     })
+  })
+
+  it('shelter by the fence of a complete castle walks out of the band before any pillar', async () => {
+    // Flat dirt at y<=64, every castle cell air (the veto reads the plan,
+    // not the world): the spot pick must refuse every band cell.
+    const b = bot({ x: 11.5, y: 65, z: SITE.z + D + 1.5 }, 15000)
+    b.blockAt = (p) => {
+      const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z)
+      const solid = y <= 64
+      return { name: solid ? 'dirt' : 'air', position: new Vec3(x, y, z), boundingBox: solid ? 'block' : 'empty' }
+    }
+    b.entity.onGround = true
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: castleState() }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try { home.shelter(b, ctx, null, null) } finally { console.log = orig }
+    assert.ok(logs.some((m) => m.includes('shelter leaving the castle band')), JSON.stringify(logs))
+    const walk = ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk
+    assert.ok(walk, JSON.stringify(logs))
+    assert.equal(castle.nightBand(ctx.castle, walk), false, `spot outside the band: ${JSON.stringify(walk)}`)
+    assert.ok(Math.hypot(walk.x - 11, walk.z - (SITE.z + D + 1)) <= 8, 'the nearest such spot, not a march')
+    assert.equal(ctx.recovery == null || ctx.recovery.action !== 'pillar_up', true, 'no pillar on the ring')
   })
 })
