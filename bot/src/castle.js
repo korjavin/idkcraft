@@ -645,6 +645,26 @@ function yardRing(state, pos) {
   } catch (_) { return false }
 }
 
+// Night band (idkcraft-g0z.57): feet whose XZ distance from the site box is
+// under NIGHT_BAND, on the surface layers (site.y - NIGHT_BAND_BELOW up to
+// the yard top) — where a night pillar or pit draws creepers onto the fence
+// ring. The same metric as the shelter's off-castle walk (home.js
+// offCastleSpot, gap 6): its spot is always outside the band. Pure.
+const NIGHT_BAND = 6
+const NIGHT_BAND_BELOW = 4
+function nightBand(state, pos) {
+  try {
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number' || !pos || typeof pos.x !== 'number') return false
+    const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
+    if (y < site.y - NIGHT_BAND_BELOW || y > site.y + YARD_TOP) return false
+    const { w, d } = siteDimensions(state.rot | 0, state.blueprintVersion)
+    const ox = x < site.x ? site.x - x : x >= site.x + w ? x - (site.x + w - 1) : 0
+    const oz = z < site.z ? site.z - z : z >= site.z + d ? z - (site.z + d - 1) : 0
+    return ox * ox + oz * oz < NIGHT_BAND * NIGHT_BAND
+  } catch (_) { return false }
+}
+
 // Fence band (idkcraft-g0z.44): cells within 1 of the fence ring line (the
 // box edges), both sides, dy 0..3 — the post-complete sweep band. Absolute
 // {x,y,z} cells, deduped; rot-free (the ring line is the box edge). Pure.
@@ -750,6 +770,8 @@ module.exports = {
   groundCell,
   inFootprint,
   yardRing,
+  nightBand,
+  NIGHT_BAND,
   fenceBandCells,
   ownBandCells,
   onSite,

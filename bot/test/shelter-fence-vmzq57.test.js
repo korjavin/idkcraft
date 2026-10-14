@@ -127,8 +127,10 @@ describe('vmzq.57 shelter on the castle fence corner (9,66,14)', () => {
     assert.deepEqual(w.intact(), [], 'complete castle before the night')
     const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
     const logs = await episode(w.bot, ctx)
-    // g0z.44: the yard guard refuses before the mock server (was place-error).
-    assert.ok(logs.some((m) => m.includes('shelter pillar failed:place-protected')), JSON.stringify(logs))
+    // g0z.57: on the ring the shelter walks out of the night band before
+    // any pillar (was: pillar refused place-protected, then the dig-in).
+    assert.ok(logs.some((m) => m.includes('shelter leaving the castle band')), JSON.stringify(logs))
+    assert.ok(!logs.some((m) => m.includes('shelter pillar')), JSON.stringify(logs))
     assert.deepEqual(w.intact(), [], `castle cells lost: ${JSON.stringify({ breaks: w.breaks, logs })}`)
     assert.ok(w.breaks.length > 0 && logs.includes('shelter dig-in done'), 'a pit was dug (not vacuous)')
     for (const b of w.breaks) {
@@ -144,8 +146,10 @@ describe('vmzq.57 shelter on the castle fence corner (9,66,14)', () => {
     })
     const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
     const logs = await episode(w.bot, ctx)
-    // g0z.44: the yard guard refuses before the mock server (was place-error).
-    assert.ok(logs.some((m) => m.includes('shelter pillar failed:place-protected')), JSON.stringify(logs))
+    // g0z.57: on the ring the shelter walks out of the night band before
+    // any pillar (was: pillar refused place-protected, then the dig-in).
+    assert.ok(logs.some((m) => m.includes('shelter leaving the castle band')), JSON.stringify(logs))
+    assert.ok(!logs.some((m) => m.includes('shelter pillar')), JSON.stringify(logs))
     assert.deepEqual(w.intact(), [], JSON.stringify({ breaks: w.breaks, logs }))
     for (const b of w.breaks) {
       assert.ok(!castleData.inFootprint(CASTLE, b) && !castleData.groundCell(CASTLE, b), `dig in the castle: ${JSON.stringify({ b, logs })}`)

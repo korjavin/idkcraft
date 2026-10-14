@@ -88,7 +88,10 @@ const MENU = {
     // except away from home with an active castle (vmzq.19): the night
     // belongs to the site, never to a 500-block march back.
     feasible: (facts, bot, ctx) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no' &&
-      !(facts.time === 'night' && nightFarFromHome(bot, ctx)) && !gohomeLatched(ctx, bot) && !castleNight(bot, ctx) && !castleSiteNight(bot, ctx),
+      !(facts.time === 'night' && nightFarFromHome(bot, ctx)) &&
+      // Castle band (g0z.57): by the castle with a home in walking range
+      // the bot keeps heading in — no latch, no castle-night shelter.
+      (castleBandHome(bot, ctx) || (!gohomeLatched(ctx, bot) && !castleNight(bot, ctx) && !castleSiteNight(bot, ctx))),
     chat: () => 'on my own: heading home',
     verb: 'heading home',
   },
@@ -870,7 +873,10 @@ function noteGohomeFail(ctx, bot, status) {
   const gl = ctx.gohomeLatch && ctx.gohomeLatch.day === day ? ctx.gohomeLatch : null
   // Unreadable position counts as the same spot (holds, like failHolds).
   const same = !!gl && (!gl.pos || !pos || Math.hypot(pos.x - gl.pos.x, pos.z - gl.pos.z) <= REFAIL_DIST)
-  ctx.gohomeLatch = same ? { fails: gl.fails + 1, pos: gl.pos || pos, day } : { fails: 1, pos, day }
+  // g0z.57: band failures count per night, wherever they happen.
+  const band = (gl ? gl.band | 0 : 0) + (castleBandHome(bot, ctx) ? 1 : 0)
+  ctx.gohomeLatch = same ? { fails: gl.fails + 1, pos: gl.pos || pos, day, band } : { fails: 1, pos, day, band }
+  if (band === BAND_GOHOME_FAILS && (!gl || (gl.band | 0) < band)) console.log(`goal gohome castle band spent fails=${band} status=${status}`)
   if (ctx.gohomeLatch.fails === GOHOME_LATCH_FAILS) {
     const f = (p) => (p ? `${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}` : '?')
     console.log(`goal gohome latched for the night fails=${ctx.gohomeLatch.fails} status=${status} pos=${f(pos)}`)
@@ -962,12 +968,37 @@ function castleSiteNight(bot, ctx) {
     return false
   }
 }
+// Castle band night (idkcraft-g0z.57, owner 2026-10-14): at night the bot
+// is INSIDE the castle or its house, never sheltering at the fence ring —
+// a pillar/pit there drew creepers that blew fence rows and the entrance
+// (prod 10-09..10-14: gohome failed from a pit by the fence, latched, and
+// the shelter pillared on the ring). In the castle's night band
+// (castle.nightBand) with a built home in walking range, gohome owns the
+// night past the xhqv latch — for BAND_GOHOME_FAILS band failures a night
+// (gohome is self-advancing: an unbounded override would re-pick a dead
+// walk till dawn). Spent, or with nothing to be inside of (unbuilt home, a
+// house past the walk range), the shelter takes the night and walks out of
+// the band before it digs in (home.js shelter).
+const BAND_GOHOME_FAILS = 6
+function castleBandHome(bot, ctx) {
+  try {
+    const h = ctx && ctx.home
+    if (!h || !h.site || h.built !== true) return false
+    const gl = ctx.gohomeLatch
+    if (gl && gl.day === mcDay(bot) && (gl.band | 0) >= BAND_GOHOME_FAILS) return false
+    if (nightFarFromHome(bot, ctx)) return false
+    return require('./castle').nightBand(ctx.castle, bot && bot.entity && bot.entity.position)
+  } catch (_) {
+    return false
+  }
+}
 // Shelter fits now: the night it owns, a castle dusk (g0z.21), or dusk and
 // night away from home with an active castle (vmzq.19, castleSiteNight) —
 // the stickiness and the night-near force below read this too, so a
 // mid-map dusk shelter holds instead of re-deciding every tick.
 function shelterFits(facts, bot, ctx) {
   const t = facts && facts.time
+  if (castleBandHome(bot, ctx)) return false // g0z.57: never at the fence ring
   return (t === 'night' && shelterOwns(bot, ctx)) || (t === 'dusk' && castleNight(bot, ctx)) ||
     ((t === 'dusk' || t === 'night') && castleSiteNight(bot, ctx))
 }
@@ -1656,6 +1687,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.time === 'dusk') return 'shelter: dusk marches home'
       if (facts.home !== 'built') return 'shelter: home not built'
       if (facts.inside !== 'no') return 'shelter: already inside'
+      if (castleBandHome(bot, ctx)) return 'shelter: not by the castle, going in'
       return 'shelter: home is close'
     case 'gocastle':
       if (!ctx || !ctx.castle || !ctx.castle.site || ctx.castle.parked || ctx.castle.phase === 'complete') return 'gocastle: no active castle'
@@ -2606,4 +2638,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle }
+module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome }

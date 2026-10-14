@@ -144,17 +144,14 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     })
     const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
     const logs = []
-    await pillarTicks(bot, ctx, logs)
-    // g0z.44: the client-side yard guard refuses before the mock server's
-    // 'still air' refusal is reached (was failed:place-error).
-    assert.ok(logs.some((m) => m.includes('shelter pillar failed:place-protected')), JSON.stringify(logs))
-    // The shelter-path cross-ban stays place-error-only: its mirror lives
-    // in home.js, owned by in-flight g0z.52 (follow-up, not this bead).
-    // The stuck-path place-protected ban is pinned in castle-g0z44.test.js.
+    // g0z.57: in the castle night band the shelter walks out before any
+    // pillar — the same off-castle spot the protected failure used to earn.
+    logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
+    assert.ok(!logs.some((m) => m.includes('shelter pillar')), `no pillar in the band: ${JSON.stringify(logs)}`)
     const walk = ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk
     assert.ok(walk, `relocation walk issued, not an open hold: ${JSON.stringify(logs)}`)
     assert.ok(boxDist(walk.x, walk.z) >= 6, `6+ blocks from the castle: ${JSON.stringify(walk)}`)
-    assert.ok(logs.some((m) => m.includes('leaving the castle footprint')), JSON.stringify(logs))
+    assert.ok(logs.some((m) => m.includes('leaving the castle band')), JSON.stringify(logs))
     // The pathfinder walks it; arrival digs a closed pit and arms the hold.
     bot.entity.position = pos(walk.x + 0.5, walk.y, walk.z + 0.5)
     for (let t = 0; t < 20 && ctx.shelter.dig; t++) {
@@ -200,7 +197,9 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     })
     const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
     const logs = []
-    await pillarTicks(bot, ctx, logs)
+    // g0z.57: in the castle night band the shelter walks out before any
+    // pillar — the same off-castle spot the protected failure used to earn.
+    logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
     assert.ok(ctx.shelter.dig && ctx.shelter.dig.walk, 'relocation launched')
     for (let t = 0; t < 20 && ctx.shelter.dig; t++) {
       logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
@@ -225,7 +224,9 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     })
     const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
     const logs = []
-    await pillarTicks(bot, ctx, logs)
+    // g0z.57: in the castle night band the shelter walks out before any
+    // pillar — the same off-castle spot the protected failure used to earn.
+    logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
     assert.ok(ctx.shelter.dig && ctx.shelter.dig.walk, 'relocation launched')
     logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
     await flush() // one walk tick seeds floor0 at the start ...
@@ -290,7 +291,9 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     })
     const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
     const logs = []
-    await pillarTicks(bot, ctx, logs)
+    // g0z.57: in the castle night band the shelter walks out before any
+    // pillar — the same off-castle spot the protected failure used to earn.
+    logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
     const walk = ctx.shelter.dig.walk
     assert.ok(walk, 'relocation launched')
     bot.entity.position = pos(walk.x + 0.5, walk.y, walk.z + 0.5)
@@ -317,7 +320,9 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     })
     const ctx = { step: 'shelter', stepStatus: 'running', castle: { ...CASTLE, site: { ...CASTLE.site } } }
     const logs = []
-    await pillarTicks(bot, ctx, logs)
+    // g0z.57: in the castle night band the shelter walks out before any
+    // pillar — the same off-castle spot the protected failure used to earn.
+    logs.push(...await quiet(() => home.shelter(bot, ctx, null, null)))
     const walk = ctx.shelter.dig.walk
     assert.ok(walk, 'relocation launched')
     bot.entity.position = pos(walk.x + 0.5, walk.y, walk.z + 0.5)
@@ -340,7 +345,7 @@ describe('vmzq.48 shelter at the castle site: pillar refused + ground protected'
     // protected dig failure — a pillar that works keeps the exact old
     // shape. Past the ring (g0z.44 refuses every yard pillar now, so the
     // old castle-centre stance pillars no more).
-    const bot = castleBot({ x: 35.5, y: 64, z: 5.5 }, {
+    const bot = castleBot({ x: 37.5, y: 64, z: 5.5 }, { // g0z.57: past the night band too
       items: [{ name: 'cobblestone', count: 16 }],
       refuseSite: false,
       groundAt: () => 'dirt',
