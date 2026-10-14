@@ -66,6 +66,7 @@ function chatParts(message) {
 
 const STALL_MS = 10000 // still-while-pathing budget before a re-plan (_stallReplan)
 const STALL_MOVE = 0.5 // displacement that counts as moving (stuck.js MOVE_TOLERANCE)
+const CHAT_HOLD_MS = 10000 // neuc.33: max wait for the near columns before an order is delivered anyway (~8 columns/s)
 
 function stripMcPrefix(s) {
   return typeof s === 'string' ? s.replace(/^minecraft:/, '') : s
@@ -909,6 +910,34 @@ class BaritoneBot extends EventEmitter {
     this.emit('path_reset', 'stopped')
   }
 
+  // idkcraft-neuc.33: mineflayer applies chunk packets before a later chat
+  // packet, so an order sees the terrain streamed ahead of it. Here columns
+  // arrive by async chunk.get after their chunk.loaded: an order right after
+  // a teleport/respawn read a half-empty cache ('no home yet' in 1 s). Chat
+  // waits, in arrival order, while columns around the body are still
+  // pending — capped, so a stalled fetch never swallows an order. Nothing
+  // pending = delivered synchronously, as before.
+  _holdChat(p) {
+    const q = this._chatHeld || (this._chatHeld = [])
+    q.push(p)
+    if (q.length > 1) return // a flush is already waiting; keep the order
+    const deadline = Date.now() + CHAT_HOLD_MS
+    const flush = () => {
+      if (!this._quitting && Date.now() < deadline && chunks.nearPending(this)) {
+        const t = setTimeout(flush, 50)
+        if (typeof t.unref === 'function') t.unref()
+        return
+      }
+      for (const m of q.splice(0)) {
+        // mineflayer 'chat' is (username, message); 'message' carries a
+        // ChatMessage. index.js:1485 reads (msg, position, senderUuid).
+        this.emit('chat', m.username || '', m.message || '')
+        this.emit('message', { text: m.message || '', toString: () => String(m.message || '') }, m.position || 'chat', m.uuid || null)
+      }
+    }
+    flush()
+  }
+
   _handleEvent(method, params) {
     if (chunks.handleChunkEvent(this, this.transport, method, params)) return // idkcraft-neuc.6: chunk.loaded/unloaded, block.update
     if (handleInventoryEvent(this, method, params)) return // idkcraft-neuc.8: inventory.update
@@ -920,10 +949,7 @@ class BaritoneBot extends EventEmitter {
     const p = params || {}
     switch (method) {
       case 'chat':
-        // mineflayer 'chat' is (username, message); 'message' carries a
-        // ChatMessage. index.js:1485 reads (msg, position, senderUuid).
-        this.emit('chat', p.username || '', p.message || '')
-        this.emit('message', { text: p.message || '', toString: () => String(p.message || '') }, p.position || 'chat', p.uuid || null)
+        this._holdChat(p)
         break
       case 'baritone.event':
         // Pushed Baritone PathEvent, id-attributed like the poll: foreign
