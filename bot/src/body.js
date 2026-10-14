@@ -241,11 +241,16 @@ function scaffoldCobble(bot, mov, on) {
 // castle guard since g0z.2) never reaches it — the bridge only reads an
 // exclusionAreasBreak fn's .guardNames into blocksToAvoidBreaking (neuc.27).
 // IdkBotV2 also keeps no castle in memory, so this names-only fn rides on
-// every Movements whenever BOT_BODY=baritone. ponytail: v2 avoids breaking
-// castle-kind blocks (stone family, planks, logs, fences, ...) everywhere
-// while pathing (Baritone's avoid multiplier: a cost, not a ban); explicit
-// digs are unaffected. A shared castle descriptor if v2 must tunnel cobble
-// far from home. v1 never installs it (zero diff).
+// every Movements whenever BOT_BODY=baritone. Built-only kinds (cobble,
+// planks, fences, doors, torches, stairs, panes, ...) ride .banNames into
+// blocksToDisallowBreaking — a hard ban: the avoid list is only a ~10x dig
+// cost, so a long door detour still lost to a straight tunnel (revmux 01
+// core-1). Kinds that generate in bulk (natural stone family, logs) stay in
+// .guardNames (avoid: a cost) so v2 can still tunnel and recover in rock.
+// ponytail: id-global — v2 never breaks cobble/planks/fences anywhere while
+// pathing (explicit digs unaffected); a shared castle descriptor if v2 must
+// tunnel cobble far from home. v1 never installs it (zero diff).
+const NATURAL_CASTLE = new Set(['stone', 'granite', 'diorite', 'andesite', 'deepslate', 'tuff', 'calcite', 'smooth_basalt'])
 let castleNames = null
 function castleNamesGuard(bot) {
   const byName = bot && bot.registry && bot.registry.blocksByName
@@ -256,7 +261,10 @@ function castleNamesGuard(bot) {
   for (const v of Object.keys(castle.DECOR)) for (const c of castle.DECOR[v]) kinds.add(c.kind)
   const live = [...kinds].filter(castle.isPlaceTarget)
   const fn = () => 0 // names only: v2 has no per-cell break cost
-  fn.guardNames = Object.keys(byName).filter((n) => live.some((k) => castle.matches(k, n)))
+  const names = Object.keys(byName).filter((n) => live.some((k) => castle.matches(k, n)))
+  const natural = (n) => NATURAL_CASTLE.has(n) || n.endsWith('_log')
+  fn.guardNames = names.filter(natural)
+  fn.banNames = names.filter((n) => !natural(n))
   castleNames = { byName, fn }
   return fn
 }

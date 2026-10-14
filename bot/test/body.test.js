@@ -471,11 +471,16 @@ describe('castle break guard (g0z.55)', () => {
       const mov = bot.pathfinder.movements
       assert.equal(mov.exclusionAreasBreak.length, 1)
       assert.equal(mov.exclusionAreasBreak[0]({ name: 'cobblestone', position: { x: 0, y: 0, z: 0 } }), 0, 'names only, no per-cell cost')
-      const avoid = movementsToSettings(mov, registry).blocksToAvoidBreaking.split(',')
-      for (const n of ['chest', 'cobblestone', 'stone', 'oak_planks', 'oak_log', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane']) {
-        assert.ok(avoid.includes(n), n)
+      const set = movementsToSettings(mov, registry)
+      const avoid = set.blocksToAvoidBreaking.split(',')
+      const ban = set.blocksToDisallowBreaking.split(',')
+      // Natural bulk kinds: a cost (v2 still tunnels rock); built-only: a hard ban.
+      for (const n of ['stone', 'oak_log']) assert.ok(avoid.includes(n) && !ban.includes(n), n)
+      assert.ok(avoid.includes('chest'), 'the default cant-break still crosses')
+      for (const n of ['cobblestone', 'oak_planks', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane']) {
+        assert.ok(ban.includes(n), n)
       }
-      assert.ok(!avoid.includes('dirt') && !avoid.includes('grass_block'))
+      for (const n of ['dirt', 'grass_block']) assert.ok(!avoid.includes(n) && !ban.includes(n), n)
     })
   })
 })
