@@ -374,6 +374,23 @@ function clearOwed(bot, home, skipped) {
   } catch (_) { return false }
 }
 
+// The house table cell (plan[0]) is loaded, empty and not given up
+// (idkcraft-neuc.41): only a table ITEM lays it, so a station standing
+// anywhere else (equip's roadside claim) must not stop craft from making
+// one — rig: the claim held craft off while build failed no-planks on the
+// table cell with 113 planks, forever. Only a real read counts: unloaded
+// or unreadable is not owed (45j: the build walk loads it first).
+function houseTableOwed(bot, home, skipped) {
+  try {
+    if (!home || !home.site) return false
+    const t = blueprintFor(home)[0]
+    if (!t || t.kind !== 'table') return false
+    if (Array.isArray(skipped) && skipped.includes(0)) return false
+    const name = blockNameAt(bot, cellAbs(home, t))
+    return name != null && name !== 'crafting_table'
+  } catch (_) { return false }
+}
+
 // Remaining loose planks to lay (door/table need items, not planks). Without
 // a home there is no origin to scan from, so the whole wall+roof count.
 function countRemainingPlanks(bot, home, skipped) {
@@ -1062,6 +1079,7 @@ module.exports.isPlanCell = isPlanCell
 module.exports.nextCellIdx = nextCellIdx
 module.exports.isComplete = isComplete
 module.exports.clearOwed = clearOwed
+module.exports.houseTableOwed = houseTableOwed
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
 module.exports.cellLoaded = cellLoaded

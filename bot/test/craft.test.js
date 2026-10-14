@@ -233,6 +233,37 @@ describe('craft step', () => {
     ghostBot.restoreError()
   })
 
+  it('(neuc.41) a roadside claim never stops the house table: the empty table cell crafts one', async () => {
+    // Rig: equip placed the table roadside, the house table cell stayed
+    // empty, and build failed no-planks on it with 113 planks forever.
+    const home = { site: pos(0, 64, 0), v: 2 }
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 40 }, { name: 'oak_door', count: 1 }],
+      ids: IDS,
+      recipes: { crafting_table: recipeFor('crafting_table') },
+    })
+    bot.blockAt = (p) => ({ name: p.x === 9 ? 'crafting_table' : 'air' }) // roadside station at x=9
+    const ctx = freshCtx(home)
+    ctx.claimedTable = { x: 9, y: 64, z: 9 }
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 1)
+    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('crafting_table'))
+    bot.restoreError()
+    // Table cell standing (or unloaded): the claim doubles, no new table.
+    // The claim stands in both, so only the owed gate can craft (revmux 01 minor).
+    for (const read of [() => ({ name: 'crafting_table' }), (p) => (p.x === 9 ? { name: 'crafting_table' } : null)]) {
+      const b2 = mockBot({ items: [{ name: 'oak_planks', count: 40 }, { name: 'oak_door', count: 1 }], ids: IDS, recipes: { crafting_table: recipeFor('crafting_table') } })
+      b2.blockAt = read
+      const c2 = freshCtx(home)
+      c2.claimedTable = { x: 9, y: 64, z: 9 }
+      craft(b2, c2, null, {})
+      await flush()
+      assert.equal(b2.calls.craft.length, 0)
+      b2.restoreError()
+    }
+  })
+
   it('(d) nothing to craft -> done', () => {
     const bot = mockBot({ items: [], ids: IDS, recipes: {} })
     const ctx = freshCtx()
