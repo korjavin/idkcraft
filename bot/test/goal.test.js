@@ -1217,6 +1217,28 @@ describe('xoj stepWhy mirrors the next-cell item gate', () => {
   })
 })
 
+describe('neuc.41 the house table cell outranks a roadside station', () => {
+  const day = { time: 'day', logs: 0, home: 'site', inside: 'no' }
+  it('owed table cell: craft is feasible despite the claim; stood or unloaded: unchanged', () => {
+    const home = siteFor(flatBot(), pos(0, 64, 0))
+    const t = { x: home.site.x + 5, y: home.site.y, z: home.site.z + 1 } // v2 table cell
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 113 }, { name: 'oak_door', count: 1 }] })
+    const ctx = { home, claimedTable: pos(40, 64, 40) }
+    bot.blockAt = (p) => ({ name: Math.floor(p.x) === 40 ? 'crafting_table' : 'air' })
+    const f = goalFacts(bot, ctx)
+    assert.equal(f.tablePlaced, true)
+    assert.equal(f.tableOwed, true)
+    assert.equal(MENU.craft.feasible(f, bot, ctx), true)
+    assert.equal(MENU.build.feasible(f, bot, ctx), false) // the table cell gates build until the item exists
+    bot.blockAt = (p) => ({ name: Math.floor(p.x) === 40 || (Math.floor(p.x) === t.x && Math.floor(p.z) === t.z && Math.floor(p.y) === t.y) ? 'crafting_table' : 'air' })
+    assert.equal(goalFacts(bot, ctx).tableOwed, false)
+    bot.blockAt = () => null
+    assert.equal(goalFacts(bot, ctx).tableOwed, false)
+    assert.equal(stepWhy('craft', { ...day, logs: 0, planks: 3, maxPlanks: 3, table: 0, door: 1, tablePlaced: true, tableOwed: true }, bot, ctx, ''),
+      'craft: need 4 planks for the house table, have 3')
+  })
+})
+
 describe('rest re-pick after failure (idkcraft-q0h round 2)', () => {
   it('empty menu re-picks rest: the hold paces episodes, not the menu', async () => {
     // Round-1 core-1: after rest fails as the only option, the arbiter

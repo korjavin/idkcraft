@@ -1335,6 +1335,19 @@ function craft(bot, ctx, target, state) {
       }
     }
   }
+  // neuc.41: a station elsewhere never lays the house table cell — with
+  // the door in hand (or none craftable yet) an owed cell gets a table.
+  if (!op && countItems(bot, (n) => n === 'crafting_table') === 0) {
+    let owed = false
+    try { owed = require('./build').houseTableOwed(bot, ctx.home, ctx.buildSkip) } catch (_) { owed = false }
+    if (owed) {
+      for (const [, n] of sortedWoods(planks)) {
+        if (n < 4) break
+        const found = recipes(bot, 'crafting_table', null)
+        if (found.length > 0) { op = { item: 'crafting_table', recipe: found[0], count: 1, table: null }; break }
+      }
+    }
+  }
   if (!op) {
     let total = 0
     let first = null

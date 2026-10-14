@@ -287,9 +287,10 @@ describe('stall-point planner (vmzq.5)', () => {
   })
 
   it('an empty menu parks without calling (nothing to try)', async () => {
-    // Rich bot, placed table, door on hand, full kit: gather/craft/equip
-    // infeasible by the numbers, build gated on the table item it has no
-    // reason to craft, everything else site/none-gated.
+    // Rich bot, house table standing, door on hand, full kit: gather/craft/
+    // equip infeasible by the numbers, build held by a fresh structural
+    // failure, everything else site/none-gated. (neuc.41: an EMPTY house
+    // table cell is no longer a dead menu — craft makes the table.)
     const bot = makeBot({
       items: [
         { name: 'oak_planks', count: 120 },
@@ -300,10 +301,11 @@ describe('stall-point planner (vmzq.5)', () => {
       ],
     })
     const { ctx } = houseCtx(bot)
-    ctx.home.table = { x: 50, y: 64, z: 50 } // standing, off the footprint
-    bot.blockAt = (p) => (Math.floor(p.x) === 50 && Math.floor(p.z) === 50
+    ctx.home.table = { x: 5, y: 64, z: 1 } // the v2 table cell, standing
+    bot.blockAt = (p) => (Math.floor(p.x) === 5 && Math.floor(p.y) === 64 && Math.floor(p.z) === 1
       ? { name: 'crafting_table', boundingBox: 'block' }
       : { name: 'air', boundingBox: 'empty' })
+    ctx.stepFail = { build: { status: 'failed:skipped-cells', at: Date.now() } }
     const calls = []
     ctx.brain = { plan: async (req) => { calls.push(req); return { step: 'gather', confidence: 0.9, source: 'jev' } } }
     const t0 = 1000000000000
