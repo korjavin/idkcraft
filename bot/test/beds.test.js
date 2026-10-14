@@ -891,6 +891,23 @@ describe('jr2.2 stay sleeps in the own bed, never the owner\'s', () => {
     const cells = { [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed' }
     const bot = mockBot({
       cells, at: { x: 12, y: 64, z: 23 }, timeOfDay: 15000,
+      sleepImpl: async () => { tries++; throw new Error('too far') },
+    })
+    const ctx = stayCtx()
+    homeMod.stay(bot, ctx)
+    await flush()
+    homeMod.stay(bot, ctx)
+    await flush()
+    assert.equal(tries, 1, 'never retries tonight (no listener pile-up)')
+    assert.equal(ctx.stay.sleepGiveUp, true)
+  })
+
+  it('g0z.59: an occupied bed A (the peer bot in it) backs off and retries, never gives up the night', async () => {
+    // mineflayer throws 'occupied' before arming its sleep listener: no pile-up.
+    let tries = 0
+    const cells = { [cellKey(A_FOOT)]: 'white_bed', [cellKey(A_HEAD)]: 'white_bed' }
+    const bot = mockBot({
+      cells, at: { x: 12, y: 64, z: 23 }, timeOfDay: 15000,
       sleepImpl: async () => { tries++; throw new Error('the bed is occupied') },
     })
     const ctx = stayCtx()
@@ -898,8 +915,9 @@ describe('jr2.2 stay sleeps in the own bed, never the owner\'s', () => {
     await flush()
     homeMod.stay(bot, ctx)
     await flush()
-    assert.equal(tries, 1, 'occupied never retries tonight (no listener pile-up)')
-    assert.equal(ctx.stay.sleepGiveUp, true)
+    assert.equal(tries, 1, 'backs off between tries')
+    assert.notEqual(ctx.stay.sleepGiveUp, true)
+    assert.ok(ctx.stay.sleepCooldown > 0)
   })
 
   it('g0z.43: a silent server refusal backs off and retries instead of giving up the night', async () => {

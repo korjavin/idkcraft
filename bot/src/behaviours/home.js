@@ -531,11 +531,18 @@ function logPhase(bot, ctx, st, home) {
 
 function gohome(bot, ctx, target, state) {
   gohomeTick(bot, ctx, target, state)
-  if (ctx && ctx.home && ctx.home.site) logPhase(bot, ctx, ctx.gohome, ctx.home)
+  const home = nightHome(bot, ctx)
+  if (home && home.site) logPhase(bot, ctx, ctx.gohome, home)
+}
+
+// The night steps' home (g0z.59): the house, or the complete castle that
+// covers an unbuilt one (residence.nightHome).
+function nightHome(bot, ctx) {
+  return residence.nightHome(ctx, botPos(bot))
 }
 
 function gohomeTick(bot, ctx, target, state) {
-  const home = ctx && ctx.home
+  const home = nightHome(bot, ctx)
   if (!home || !home.site) {
     ctx.stepStatus = 'failed:no-home'
     // The walk borrow needs a home site: refresh to release a leaked one.
@@ -880,7 +887,10 @@ function sleepTick(bot, ctx, home, st) {
         }
       } catch (err) {
         const msg = err && err.message ? String(err.message) : ''
-        if (/monsters nearby|not night/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
+        // g0z.59: occupied retries too — v1 and v2 share the castle's bed A
+        // (bedroom B stays the owner's): the second bot holds inside awake
+        // and takes the bed if it frees, never gives up the night.
+        if (/monsters nearby|not night|occupied/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
         else if (/not sleeping/i.test(msg)) {
           // Silent server refusal (clock skew under lag): back off and retry
           // a few times, then give up — a permanently refused bed must not
@@ -913,7 +923,7 @@ function farFromInside(bot, inn) {
 }
 
 function stay(bot, ctx, target, state) {
-  const home = ctx && ctx.home
+  const home = nightHome(bot, ctx)
   if (!home || !home.site) {
     ctx.stepStatus = 'failed:no-home'
     return
@@ -952,7 +962,8 @@ function stay(bot, ctx, target, state) {
     if (!door) {
       ctx.inShelter = false
       if (!st.doorLogged) { st.doorLogged = true; console.log('door missing at stay-hold') }
-    } else if (doorOpen(door)) {
+    } else if (doorOpen(door) && !playerAtDoor(bot, home)) {
+      // g0z.59: never shut it on a player coming in (the peer bot shares the castle).
       tryToggle(bot, ctx, st, door)
     }
     holdStill(bot, ctx)
@@ -1158,7 +1169,8 @@ function shelterOpen(ctx) {
 function shelter(bot, ctx, target, state) {
   // Homeless is fine (vmzq.32: goal's castleSiteNight picks it for a
   // homeless castle): home only answers "already inside" and the swim aim.
-  const home = ctx && ctx.home && ctx.home.site ? ctx.home : null
+  const nh = ctx && nightHome(bot, ctx)
+  const home = nh && nh.site ? nh : null
   if (home && isInside(bot, home)) {
     // Walked in by hand (or a lagged first tick): stay owns the inside.
     ctx.stepStatus = 'done'

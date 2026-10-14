@@ -29,6 +29,10 @@
 #   the bot adopts it as its residence (memory home kind=castle) and the
 #   verdict reports per night entered/slept/shelter/deaths/dawn-exit; run
 #   with --night 68 for the 3-night acceptance),
+#   CASTLE_NIGHT_HOME (''|house|peer, needs CASTLE_SEED=complete — g0z.59:
+#   house = after adoption an unbuilt parked house site on the pad corner
+#   is the home, the castle must still cover the nights; peer = the castle
+#   lives only in a peer memory file read via BOT_CASTLE_PEER, v2's path),
 #   CASTLE_SEED_VERSION (''|1|2|3, default '' = current — g0z.48: the
 #   blueprint version the CASTLE_SEED=complete castle is seeded as; 2 seeds
 #   a v2 castle and the guide chats `castle upgrade` after adoption, so the
