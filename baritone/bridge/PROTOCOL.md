@@ -758,3 +758,21 @@ prismarine-physics' bit-exact face contact, which Paper rejects; the real
 client's physics never sends it, so dropping them on v2 is the intended
 behaviour, not a dropped pathing finding. A v2 wedge goes to recover/stuck
 as on v1.
+
+## Danger discs on goals (idkcraft-neuc.25)
+
+`baritone.cmd` takes an optional `avoid: [[x, z, lim], ...]` beside
+`command`. v1's water-death path cost (`bot/src/danger.js` addPathCost,
+idkcraft-zj2p) wraps mineflayer's `getNeighbors`, which Baritone never
+calls, so v2 walked straight through the drowned shore. The adapter now
+sends the live wide marks with every goal command (`_dangerAvoid`: the same
+feet/goal ring shrink as v1, read through `movements.dangerDiscs`); no
+live disc = the old `{command}` wire. When the command set a new custom
+goal, the mod re-sets it wrapped (`AvoidGoal`, same tick, before any plan):
+arrival is the inner goal's, the heuristic gains
+`(lim - d) * 50` per disc the node's cell centre lies inside
+(`GoalTracker.avoidPenalty`) — about ten walked blocks per block of depth,
+v1's PATH_COST 10. A heuristic, not a cost: deep nodes expand last and are
+never a partial path's best node, while a goal inside a disc still plans.
+Malformed `avoid` is ignored (the goal runs unwrapped); a process takeover
+(`#goto <block>`) is not wrapped.

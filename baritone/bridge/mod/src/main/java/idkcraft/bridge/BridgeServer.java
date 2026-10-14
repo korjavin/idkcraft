@@ -361,6 +361,7 @@ public final class BridgeServer {
         if (near == null && verb.equals("near")) {
             throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "want: near <x> <y> <z> <range>");
         }
+        final double[] avoid = avoidArg(params);
         record Probe(boolean ok, boolean inWorld, Goal before, Goal after, Object beforeProc, Object afterProc) {
         }
         Probe probe = submit(() -> {
@@ -375,6 +376,13 @@ public final class BridgeServer {
                         new GoalNear(new BlockPos(near[0], near[1], near[2]), near[3]));
             } else {
                 ok = baritone.getCommandManager().execute(cmd);
+            }
+            // idkcraft-neuc.25: the danger discs wrap the goal this command
+            // just set (same tick, before any plan) — a process takeover
+            // (#goto <block>) leaves the custom goal alone and is not wrapped.
+            Goal set = baritone.getCustomGoalProcess().mostRecentGoal();
+            if (ok && avoid != null && set != null && set != before) {
+                baritone.getCustomGoalProcess().setGoalAndPath(new AvoidGoal(set, avoid));
             }
             Goal after = ok ? baritone.getCustomGoalProcess().mostRecentGoal() : before;
             Object afterProc =
@@ -779,6 +787,62 @@ public final class BridgeServer {
             return null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+
+    /**
+     * Danger discs (idkcraft-neuc.25): v1's water-death path cost wraps
+     * mineflayer's getNeighbors, which Baritone never calls. The adapter
+     * sends the live discs with the goal; this goal adds
+     * {@link GoalTracker#avoidPenalty} to the inner heuristic, so A* plans
+     * around them and partial paths stop at the rim. Arrival is the inner
+     * goal's.
+     */
+    private record AvoidGoal(Goal inner, double[] discs) implements Goal {
+        @Override
+        public boolean isInGoal(int x, int y, int z) {
+            return inner.isInGoal(x, y, z);
+        }
+
+        @Override
+        public double heuristic(int x, int y, int z) {
+            return inner.heuristic(x, y, z) + GoalTracker.avoidPenalty(discs, x, z);
+        }
+
+        @Override
+        public double heuristic() {
+            return inner.heuristic();
+        }
+
+        @Override
+        public String toString() {
+            return "Avoid{" + inner + ", discs=" + discs.length / 3 + "}";
+        }
+    }
+
+    /** Optional {@code avoid: [[x, z, lim], ...]} as flat triples; absent/malformed = null. */
+    private static double[] avoidArg(JsonObject params) {
+        try {
+            if (!params.has("avoid") || !params.get("avoid").isJsonArray()) {
+                return null;
+            }
+            com.google.gson.JsonArray arr = params.getAsJsonArray("avoid");
+            double[] out = new double[arr.size() * 3];
+            for (int i = 0; i < arr.size(); i++) {
+                com.google.gson.JsonArray d = arr.get(i).getAsJsonArray();
+                if (d.size() != 3) {
+                    return null;
+                }
+                for (int k = 0; k < 3; k++) {
+                    out[i * 3 + k] = d.get(k).getAsDouble();
+                    if (!Double.isFinite(out[i * 3 + k])) {
+                        return null;
+                    }
+                }
+            }
+            return out.length > 0 ? out : null;
+        } catch (RuntimeException e) {
             return null;
         }
     }

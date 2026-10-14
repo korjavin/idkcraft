@@ -191,11 +191,16 @@ function clear(ctx) {
 // creep is slowed, not latched; latch the ring per live goal if prod shows
 // walks spiralling in. The goal is read from the live pathfinder goal (x/z
 // goals and GoalFollow's entity; other goal kinds keep the full disc).
+// v2 (Baritone body, idkcraft-neuc.25) reads the same discs through
+// movements.dangerDiscs and turns them into a heuristic penalty in the mod.
 const PATH_COST = 10
 function addPathCost(movements, ctx, bot) {
   // Unit mocks carry flags only: wrap only a real Movements.
   if (!movements || typeof movements.getNeighbors !== 'function' || movements._dangerCostInstalled) return
   movements._dangerCostInstalled = true
+  // neuc.25: the same live discs for a body that never calls getNeighbors
+  // (bot/src/bridge: Baritone plans in the client). v1 never reads it.
+  movements.dangerDiscs = (feet, goal) => wideSpots(ctx, Date.now(), feet, goal)
   const orig = movements.getNeighbors.bind(movements)
   movements.getNeighbors = (node) => {
     const ns = orig(node)
