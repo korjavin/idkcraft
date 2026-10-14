@@ -474,10 +474,10 @@ describe('castle break guard (g0z.55)', () => {
       const set = movementsToSettings(mov, registry)
       const avoid = set.blocksToAvoidBreaking.split(',')
       const ban = set.blocksToDisallowBreaking.split(',')
-      // Natural bulk kinds: a cost (v2 still tunnels rock); built-only: a hard ban.
-      for (const n of ['stone', 'deepslate', 'oak_log']) assert.ok(avoid.includes(n) && !ban.includes(n), n)
+      // Natural bulk kinds: a cost (v2 still tunnels rock, neuc.46 CLUSTER-BARE); built-only: a hard ban.
+      for (const n of ['stone', 'deepslate', 'granite', 'tuff', 'oak_log']) assert.ok(avoid.includes(n) && !ban.includes(n), n)
       assert.ok(avoid.includes('chest'), 'the default cant-break still crosses')
-      for (const n of ['cobblestone', 'granite', 'tuff', 'oak_planks', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane']) {
+      for (const n of ['cobblestone', 'oak_planks', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane']) {
         assert.ok(ban.includes(n), n)
       }
       for (const n of ['dirt', 'grass_block']) assert.ok(!avoid.includes(n) && !ban.includes(n), n)
