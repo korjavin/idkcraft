@@ -41,7 +41,7 @@ function bot(at, timeOfDay, username = 'IdkBot') {
     inventory: { items: () => [] },
     blockAt: () => ({ name: 'air', boundingBox: 'empty' }),
     findBlocks: () => [],
-    pathfinder: { goal: null, setGoal: () => {}, isMoving: () => false },
+    pathfinder: { goal: null, setGoal(g) { this.goal = g }, isMoving: () => false },
     setControlState: () => {},
     clearControlStates: () => {},
     chat: () => {},
@@ -95,7 +95,8 @@ describe('g0z.59 night residence: the castle covers an unbuilt house', () => {
       assert.equal(ctx.gohome.phase, 'walk', 'walking to the castle, not yielding to build')
       const out = residence.CASTLE.entrance(residence.castleHome(castleState())).outside
       const g = b.pathfinder.goal
-      assert.ok(!g || Math.hypot(g.x - out.x, g.z - out.z) <= 30, 'aims at the castle entrance')
+      assert.ok(g, 'a walk goal was issued')
+      assert.ok(Math.hypot(g.x - out.x, g.z - out.z) <= 1, `aims at the castle entrance: ${JSON.stringify(g)} vs ${JSON.stringify(out)}`)
       const inn = residence.CASTLE.entrance(residence.castleHome(castleState())).inside
       const inside = bot({ x: inn.x + 0.5, y: inn.y, z: inn.z + 0.5 }, NIGHT)
       const c2 = { home: HOUSE(), castle: castleState(), step: 'gohome', stepStatus: 'done' }
@@ -104,6 +105,30 @@ describe('g0z.59 night residence: the castle covers an unbuilt house', () => {
       assert.notEqual(c2.stepStatus, 'failed:not-inside', 'stay holds inside the castle')
       assert.equal(c2.home.built, false, 'the house order is untouched')
     })
+  })
+
+  it('inside the castle: shelter yields, no creeper flee, an intruder in the castle counts', () => {
+    const inn = residence.CASTLE.entrance(residence.castleHome(castleState())).inside
+    const at = { x: inn.x + 0.5, y: inn.y, z: inn.z + 0.5 }
+    const ctx = { home: HOUSE(), castle: castleState(), step: 'shelter', stepStatus: 'running', inShelter: true }
+    home.shelter(bot(at, NIGHT), ctx, null, null)
+    assert.equal(ctx.stepStatus, 'done', 'walked in: stay owns the inside')
+    const b = bot(at, NIGHT)
+    b.entities = { 1: { id: 1, name: 'creeper', type: 'hostile', isValid: true, position: pos(at.x + 3, at.y, at.z) } }
+    const { fleeReflex } = require('../src/reflexes')
+    assert.ok(fleeReflex(b, { ...ctx, inShelter: false }), 'the control: out of shelter the creeper is fled')
+    assert.equal(fleeReflex(b, { ...ctx, inShelter: true }), false, 'no flee out of the castle')
+  })
+
+  it('night-far is measured to the castle: past the walk range the night shelters', () => {
+    // House 90 off the castle, bot 100 past the house on the far side.
+    const house = { site: { x: SITE.x + 90, y: 65, z: SITE.z }, built: false, v: 2 }
+    const ctx = { home: house, castle: castleState(), step: 'build', stepStatus: 'done' }
+    const b = bot({ x: SITE.x + 150, y: 65, z: SITE.z }, NIGHT)
+    const f = goal.goalFacts(b, ctx)
+    assert.equal(f.home, 'built')
+    assert.equal(goal.MENU.gohome.feasible(f, b, ctx), false, 'no night march to the castle')
+    assert.equal(goal.MENU.shelter.feasible(f, b, ctx), true)
   })
 
   it('the house far from the castle keeps the old night', () => {

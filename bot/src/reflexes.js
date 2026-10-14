@@ -509,7 +509,9 @@ function fleeReflex(bot, ctx) {
   // rqdj: a creeper outside a closed house cannot reach us; running out is the danger.
   // inShelter alone is not enough (home.js sets it on the open-air night pillar
   // too), so require the body to be inside the home box.
-  if (ctx.inShelter && ctx.home && isInside(bot, ctx.home)) return false // util.isInside (oqul.11: was a deferred home.js require)
+  // g0z.59: the night home (the castle covering an unbuilt house).
+  const nh = ctx.inShelter ? require('./residence').nightHome(ctx, bot.entity && bot.entity.position) : null
+  if (nh && isInside(bot, nh)) return false // util.isInside (oqul.11: was a deferred home.js require)
   // vmzq.30: a capped pit or a pillar top is shelter too — fleeing
   // pathfinds out through the cap (canDig) or off the top and abandons
   // it (rig: dug in, fled a creeper, zombie kill 2 min later). A creeper

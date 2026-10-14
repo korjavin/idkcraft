@@ -887,7 +887,10 @@ function sleepTick(bot, ctx, home, st) {
         }
       } catch (err) {
         const msg = err && err.message ? String(err.message) : ''
-        if (/monsters nearby|not night/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
+        // g0z.59: occupied retries too — v1 and v2 share the castle's bed A
+        // (bedroom B stays the owner's): the second bot holds inside awake
+        // and takes the bed if it frees, never gives up the night.
+        if (/monsters nearby|not night|occupied/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
         else if (/not sleeping/i.test(msg)) {
           // Silent server refusal (clock skew under lag): back off and retry
           // a few times, then give up — a permanently refused bed must not
@@ -959,7 +962,8 @@ function stay(bot, ctx, target, state) {
     if (!door) {
       ctx.inShelter = false
       if (!st.doorLogged) { st.doorLogged = true; console.log('door missing at stay-hold') }
-    } else if (doorOpen(door)) {
+    } else if (doorOpen(door) && !playerAtDoor(bot, home)) {
+      // g0z.59: never shut it on a player coming in (the peer bot shares the castle).
       tryToggle(bot, ctx, st, door)
     }
     holdStill(bot, ctx)
