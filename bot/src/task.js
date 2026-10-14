@@ -2372,6 +2372,36 @@ function setStallGauge(kind, ms) {
 // only, so a wedge or an out-and-back trip never counts; on site or after a
 // teleport (respawn) the mark rebaselines.
 const CASTLE_TRAVEL_STEP = 8
+// Far-tree walk (oqj5, the castleTravel shape): a gather walking to its
+// committed tree reads flat on cells and wood until the first chop (rig:
+// a tree 123 blocks out, ~80 s of walk, the watchdog fires at 60). The
+// distance sinking CASTLE_TRAVEL_STEP below the tree's low-water mark is
+// progress. Per target: a new tree rebaselines without credit, and a
+// wedge or a walk away never counts. The caller bounds it to a wood-short
+// house. Must run every house tick to keep the mark current.
+function gatherTravel(bot, ctx, state) {
+  try {
+    const g = ctx && ctx.gather
+    const bp = bot && bot.entity && bot.entity.position
+    if (!g || ctx.step !== 'gather' || g.phase !== 'walk' || !g.pos || !bp) {
+      state.treeKey = null
+      return false
+    }
+    const key = `${g.pos.x},${g.pos.y},${g.pos.z}`
+    const d = Math.hypot(bp.x - g.pos.x, bp.z - g.pos.z)
+    if (state.treeKey !== key || typeof state.treeDist !== 'number') {
+      state.treeKey = key
+      state.treeDist = d
+      return false
+    }
+    if (d + CASTLE_TRAVEL_STEP > state.treeDist) return false
+    state.treeDist = d
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 function castleTravel(bot, ctx, state) {
   try {
     const castle = require('./behaviours/castle')
@@ -3058,7 +3088,8 @@ function taskTick(bot, ctx, now = Date.now()) {
       return
     }
 
-    // House: placed cells, or wood toward them (oqj5, houseProgressWhy).
+    // House: placed cells, or wood toward them, or the walk to a far tree
+    // (oqj5: houseProgressWhy, gatherTravel).
     // ponytail: an unread house (never loaded this process) has no cells-left
     // bound, so its wood earns no credit until the first loaded reading.
     const cur = houseCur
@@ -3121,7 +3152,9 @@ function taskTick(bot, ctx, now = Date.now()) {
         }
       }
     } catch (_) { /* castle watch best-effort */ }
-    const houseWhy = houseProgressWhy(state, { done: cur.done, wood })
+    const walked = gatherTravel(bot, ctx, state)
+    const woodShort = typeof state.wood === 'number' && state.wood < state.total - state.done
+    const houseWhy = houseProgressWhy(state, { done: cur.done, wood }) || (walked && woodShort ? 'travel' : null)
     if (houseWhy) {
       // Cells adopt the wood too: placing spends planks, a new episode.
       if (cur.done > state.done) {

@@ -434,6 +434,50 @@ describe('task stall clock (vmzq.2)', () => {
     assert.equal(ctx.task.house.stallMs, 1000, 'wood past the cells left does not reset')
   })
 
+  it('the walk to a far tree is house progress per target, low-water, wood-short only (oqj5)', () => {
+    const items = []
+    const bot = makeBot({ items })
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/130
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    let s = 0
+    const tick = () => taskMod.taskTick(bot, ctx, t0 + (++s) * 1000)
+    const at = (x) => { bot.entity.position = pos(x, 64, 200) }
+    taskMod.taskTick(bot, ctx, t0)
+    ctx.step = 'gather'
+    ctx.gather = { phase: 'walk', pos: { x: 223, y: 64, z: 200 } } // 123 blocks out
+    tick() // baseline the tree
+    for (let i = 0; i < 7; i++) { at(100 + i); tick() }
+    assert.equal(ctx.task.house.stallMs, 8000, 'under one travel step: flat')
+    at(108)
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, '8 blocks closer resets')
+    assert.ok(lines.includes('goal reset kind=house why=travel'), JSON.stringify(lines))
+    at(100) // walked back: never counts
+    tick()
+    at(108) // and back to the mark: still below nothing new
+    tick()
+    assert.equal(ctx.task.house.stallMs, 2000, 'out-and-back is not progress')
+    ctx.gather.pos = { x: 400, y: 64, z: 200 } // a new tree: rebaseline, no credit
+    at(130)
+    tick()
+    assert.equal(ctx.task.house.stallMs, 3000, 'a new target rebaselines without credit')
+    ctx.step = 'explore' // not a gather walk
+    at(160)
+    tick()
+    assert.equal(ctx.task.house.stallMs, 4000, 'only the gather step walk counts')
+    ctx.step = 'gather'
+    tick() // rebaseline (the explore tick dropped the target)
+    items.push({ name: 'oak_planks', count: 99 }) // the pack covers the cells left
+    tick() // credited as wood (the mark was 0)
+    at(200)
+    tick()
+    assert.equal(ctx.task.house.stallMs, 1000, 'no travel credit once the wood covers the cells left')
+  })
+
   it('a placed cell re-baselines the wood mark, so the next gather run credits again (oqj5)', () => {
     const items = [{ name: 'oak_planks', count: 64 }]
     const bot = makeBot({ items })
