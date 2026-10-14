@@ -241,6 +241,70 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(ctx.castle.taskPark.auto, true, 'new day retries again')
   })
 
+  // idkcraft-neuc.40: a latched house park ('parked for the day') outlived
+  // the day and every restart, so a homeless bot rested with
+  // 'gather: house parked' until an owner said go work.
+  function latchedHouse(bot, at) {
+    const { ctx } = houseCtx(bot)
+    ctx.home.parked = true
+    ctx.home.taskPark = { at, auto: false, diag: 'step=build failed:no-site' }
+    ctx.home.parkHist = { day: '2001-09-09', n: 3 }
+    return ctx
+  }
+
+  it('a latched park resumes on the next UTC day, not before (neuc.40)', () => {
+    const bot = makeBot()
+    const at = Date.parse('2001-09-09T20:00:00Z')
+    const ctx = latchedHouse(bot, at)
+    taskMod.taskTick(bot, ctx, Date.parse('2001-09-09T23:59:00Z'))
+    assert.equal(ctx.home.parked, true, 'same day: still latched')
+    taskMod.taskTick(bot, ctx, Date.parse('2001-09-10T00:00:30Z'))
+    assert.equal(ctx.home.parked, false, 'next day: resumed')
+    assert.equal(ctx.home.taskPark, null)
+    const day = { time: 'day', health: 20, home: 'site', inside: 'no', logs: 0, planks: 4, maxPlanks: 4, table: 0, tablePlaced: false, door: 1, castle: 'none', known: 'none', player: 'none', beds: 'both' }
+    assert.notEqual(goal.stepWhy('gather', day, bot, ctx, ''), 'gather: house parked')
+  })
+
+  it('a latched park restored after a restart re-arms one auto retry (neuc.40)', () => {
+    const bot = makeBot()
+    const t1 = Date.parse('2001-09-09T10:00:00Z')
+    const ctx = latchedHouse(bot, t1 - 2 * 3600 * 1000)
+    // In process the latch holds (the vmzq.3 L3 contract).
+    taskMod.taskTick(bot, ctx, t1)
+    assert.equal(ctx.home.parked, true, 'no restart: latched')
+    const file = path.join(os.tmpdir(), `task-park-n40-${process.pid}.json`)
+    try {
+      assert.equal(memory.save(bot, ctx, file, t1), true)
+      const bot2 = makeBot()
+      const ctx2 = {}
+      assert.ok(memory.restore(bot2, ctx2, file, t1))
+      assert.equal(ctx2.home.parked, true, 'restored parked')
+      assert.equal(ctx2.home.taskPark.auto, true, 'restart re-arms the latch as one retry')
+      assert.deepEqual(ctx2.home.parkHist, { day: '2001-09-09', n: 3 }, 'day count kept: the next park latches again')
+      ctx2.work = true
+      taskMod.taskTick(bot2, ctx2, t1 + 1000)
+      assert.equal(ctx2.home.parked, false, 'past the 60 min retry: resumed')
+      // A fresh park the same day latches again (bounded: one try per restart/day).
+      ctx2.home.taskPark = null
+      taskMod.taskTick(bot2, ctx2, t1 + 2000)
+      const t = advance(bot2, ctx2, t1 + 2000, 46)
+      assert.equal(ctx2.home.parked, true, 're-parked')
+      assert.equal(ctx2.home.taskPark.auto, false, 'n=4 latches again')
+      taskMod.taskTick(bot2, ctx2, t + 3 * 3600 * 1000)
+      assert.equal(ctx2.home.parked, true, 'no in-process retry the same day')
+      // A reconnect in the same process (join loop) keeps a latch it set
+      // itself: only parks from before the process re-arm (revmux 01).
+      const live = Date.now()
+      ctx.home.taskPark = { at: live, auto: false, diag: 'x' }
+      assert.equal(memory.save(bot, ctx, file, live), true)
+      const ctx3 = {}
+      assert.ok(memory.restore(makeBot(), ctx3, file, live))
+      assert.equal(ctx3.home.taskPark.auto, false, 'same-process latch survives a rejoin')
+    } finally {
+      try { fs.unlinkSync(file) } catch (_) { /* tmp best-effort */ }
+    }
+  })
+
   it('house park vetoes the house chain; go work resumes', () => {
     const bot = makeBot()
     const { ticker, ctx } = houseCtx(bot)
