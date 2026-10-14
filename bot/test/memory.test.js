@@ -383,12 +383,12 @@ describe('followName persistence (idkcraft-p4s)', () => {
   it('round-trips the follow target through save/restore', () => {
     const ctx1 = {}
     fillCtx(ctx1, 1000)
-    ctx1.followName = 'LoptiFriend'
+    ctx1.followName = 'TestFriend'
     assert.equal(memory.save(botAt(SPAWN_A), ctx1, file, 1000), true)
     const ctx2 = {}
     const back = memory.restore(botAt(SPAWN_A), ctx2, file, 1000)
     assert.ok(back, 'restore works')
-    assert.equal(ctx2.followName, 'LoptiFriend')
+    assert.equal(ctx2.followName, 'TestFriend')
     assert.equal(back.follow, 1)
   })
 
