@@ -132,8 +132,8 @@ const BLUEPRINT_V2 = (() => {
   // except the partition posts and the table cell (their own plan cells)
   // is dug free of natural ground. APPENDED so persisted skip indices stay
   // put; v2Order visits them first (open site, long before the door).
-  // ponytail: dirt in a post/table/wall cell still refuses its placement
-  // (pre-existing); widen the occupier dig if a site ever shows it.
+  // Natural ground in a post/wall cell is dug by the place flow (neuc.42);
+  // ponytail: in the table cell it still refuses its placement.
   const part = new Set(['1,3', '3,3', '5,3', '3,4'])
   for (let dz = 1; dz <= 4; dz++) {
     for (const dy of [1, 0]) {
@@ -634,9 +634,17 @@ function retrySkipsOnce(ctx) {
     const at = ctx.buildSkipAt && typeof ctx.buildSkipAt === 'object' ? ctx.buildSkipAt : {}
     const key = `${s.x},${s.y},${s.z},v${ctx.home.v === 2 ? 2 : 1}`
     if (!ctx.buildSkipRetry || ctx.buildSkipRetry.key !== key) ctx.buildSkipRetry = { key, done: [] }
-    const done = ctx.buildSkipRetry.done
+    const R = ctx.buildSkipRetry
+    // Another pass while the last one closed a hole (idkcraft-neuc.42): the
+    // pass walks lay order, so a wall cell whose only reference is a later
+    // hole (rig: 54,63,-33 over a dip, beside the skipped 55,63,-33 and
+    // under the skipped upper cell) re-skips no-ref before its neighbours
+    // land. Bounded: each new pass starts with strictly fewer skips.
+    if (typeof R.n === 'number' && ctx.buildSkip.length < R.n) R.done = []
+    const done = R.done
     const again = ctx.buildSkip.filter((i) => typeof at[i] === 'number' && !done.includes(i))
     if (again.length === 0) return false
+    R.n = ctx.buildSkip.length
     done.push(...again)
     ctx.buildSkip = ctx.buildSkip.filter((i) => !again.includes(i))
     for (const i of again) delete at[i]
@@ -1006,13 +1014,21 @@ function build(bot, ctx, target, state) {
       // block from this session (6x7.23: the pathfinder's scaffold dirt in
       // a wall cell refused 3x, the retry re-skipped it, the house failed
       // skipped-cells); any other wrong-kind occupier counts as a refusal.
+      // Natural ground in a plank cell (idkcraft-neuc.42) clears too: the
+      // Baritone body's scaffold dirt is never tracked as ours (rig: dirt
+      // appeared mid-build in wall cell 51,64,-28 and failed the house).
+      // The plank lands in that very cell, so the house-footprint ground
+      // rule is checked without the home (digClear precedent).
+      // ponytail: natural names only; Baritone scaffolds cobble when it
+      // holds no dirt, and foreign cobble here still refuses — widen if seen.
+      const ground = cell.kind === 'planks' && NATURAL_SOLID.has(occupier)
       if (occupier != null && wantItem(cell)(occupier)) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
       } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell) ||
-        (occupier === 'crafting_table' && cell.kind !== 'table') || isOwnPlaced(ctx, bot.blockAt(p)))) {
+        (occupier === 'crafting_table' && cell.kind !== 'table') || ground || isOwnPlaced(ctx, bot.blockAt(p)))) {
         let cell = null
         try { cell = bot.blockAt(p) } catch (_) { cell = null }
-        const clearDeny = cell && denyReason(bot, cell, ctx)
+        const clearDeny = cell && denyReason(bot, cell, ground ? { ...ctx, home: null } : ctx)
         if (clearDeny) {
           logDeny(cell, clearDeny) // idkcraft-drq: never clear foreign torches to build
         } else {
