@@ -395,6 +395,45 @@ describe('task stall clock (vmzq.2)', () => {
     assert.match(bot.chats[0], /^house: no progress for 15 min at 31\/130/)
   })
 
+  it('house wood toward the cells left is progress, high-water and bounded (oqj5)', () => {
+    const items = []
+    const bot = makeBot({ items })
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/130: 99 cells left
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    let s = 0
+    const tick = () => taskMod.taskTick(bot, ctx, t0 + (++s) * 1000)
+    taskMod.taskTick(bot, ctx, t0)
+    for (let i = 0; i < 600; i++) tick()
+    assert.equal(ctx.task.house.stallMs, 600000, 'no wood, no cells: flat')
+    items.push({ name: 'oak_log', count: 1 }) // chopped a far tree
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, 'a log toward the house resets')
+    assert.ok(lines.includes('goal reset kind=house why=wood'), JSON.stringify(lines))
+    items[0] = { name: 'oak_planks', count: 4 } // crafted: net zero
+    tick()
+    assert.equal(ctx.task.house.stallMs, 1000, 'crafting logs to planks is not progress')
+    items[0] = { name: 'oak_planks', count: 0 } // spent on tools
+    tick()
+    items[0] = { name: 'oak_planks', count: 4 } // re-chopped back to the mark
+    tick()
+    assert.equal(ctx.task.house.stallMs, 3000, 'regain below the high-water mark is not progress')
+    items.push({ name: 'birch_log', count: 1 })
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, 'past the mark resets again')
+    // Bounded: once the pack covers the cells left, more wood is not progress.
+    items.length = 0
+    items.push({ name: 'oak_planks', count: 99 })
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, '8 -> 99 planks, the baseline was still short')
+    items.push({ name: 'oak_log', count: 3 })
+    tick()
+    assert.equal(ctx.task.house.stallMs, 1000, 'wood past the cells left does not reset')
+  })
+
   it('unloaded house holds the baseline (core-1)', () => {
     const bot = makeBot()
     let loaded = true

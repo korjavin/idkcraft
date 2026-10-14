@@ -687,6 +687,18 @@ describe('watchdog consume paths', () => {
     assert.ok(wdLogs().some((l) => l.includes('choice=park') && l.includes('source=jev')), JSON.stringify(wdLogs()))
   })
 
+  it('a low-confidence park is undecided: no park, backoff (oqj5 prod: park at 0.18 latched the house)', async () => {
+    const bot = makeBot({ players: { Steve: {} } })
+    const { ctx } = castleCtx(bot)
+    const { t } = await firedAnswer(bot, ctx, 1000000000000, { step: 'park', confidence: 0.18, probabilities: { park: 0.18 }, source: 'jev' })
+    assert.equal(ctx.castle.parked, false, 'no park below the confidence floor')
+    assert.equal(ctx.castle.taskPark || null, null, 'no parkTask record')
+    assert.ok(wdLogs().some((l) => l.includes('choice=none') && l.includes('low-confidence park conf=0.18')), JSON.stringify(wdLogs()))
+    assert.equal(ctx.task.castle.wd.backoffMs, 30000, 'backoff armed')
+    assert.ok(ctx.task.castle.wd.backoffUntil > t)
+    assert.equal(ctx.task.castle.wd.lowConf, 1, 'counts toward the undecided fallback')
+  })
+
   it('a park choice routes to plan-B when the owner is offline (no alone-park)', async () => {
     const bot = makeBot() // players {} = owner offline
     const { ctx } = castleCtx(bot)

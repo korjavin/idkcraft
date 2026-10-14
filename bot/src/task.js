@@ -429,6 +429,29 @@ function houseProgress(bot, home) {
   return { done, total: plan.length }
 }
 
+// House wood (idkcraft-oqj5): the house's own input, in planks (a log
+// crafts 4). Prod v2 parked the house at 63/130 while it explored and
+// chopped far trees: the clock saw only placed cells, so every gather run
+// read as a stall. Wood rising past the episode's high-water mark is
+// progress while the pack is still short of the cells left (bounded like
+// castle enabling, m1yb: once the wood covers the rest, only cells count,
+// and a consume-and-rechop or death-and-pickup loop never re-credits).
+function houseWood(bot) {
+  try {
+    const en = castleEnabling(bot)
+    return en.planks + 4 * en.logs
+  } catch (_) {
+    return null
+  }
+}
+
+function houseProgressWhy(state, cur) {
+  if (typeof cur.done === 'number' && typeof state.done === 'number' && cur.done > state.done) return 'cells'
+  if (typeof cur.wood === 'number' && typeof state.wood === 'number' && cur.wood > state.wood &&
+    typeof state.done === 'number' && typeof state.total === 'number' && state.wood < state.total - state.done) return 'wood'
+  return null
+}
+
 // Shared with orders.status (verify scope): the skipped/blocked reasons, one
 // implementation used by both the status lines and the L1 diagnosis.
 function skippedReason(bot, ctx, facts, text, upto) {
@@ -1308,6 +1331,15 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     return
   }
   const choice = ans.step
+  // A park is held to the same confidence floor as a step (oqj5, prod v2:
+  // round 1 at stall=62s answered park at 0.18 and latched the house for
+  // the day). Below it the answer is undecided: back off, and the second
+  // undecided takes the deterministic fallback (park only when nothing
+  // else is left).
+  if (choice === 'park' && typeof ans.conf === 'number' && ans.conf < TASK_PLAN_MIN_CONF) {
+    fail('invalid', `low-confidence park conf=${ans.conf.toFixed(2)}`)
+    return
+  }
   if (choice === 'park') {
     const conf = typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?'
     const diagnosis = diagnose(bot, ctx)
@@ -1453,7 +1485,7 @@ function commitSnapshot(bot, ctx, kind) {
   void bot
   const st = (ctx && ctx.task && ctx.task[kind]) || null
   if (kind === 'house') {
-    return { done: st && st.done, total: st && st.total }
+    return { done: st && st.done, total: st && st.total, wood: st && st.wood }
   }
   if (isOrderKind(kind)) {
     return {
@@ -1497,7 +1529,7 @@ function commitAdvanced(bot, ctx, kind, c) {
     } catch (_) {
       done = null
     }
-    return typeof done === 'number' && typeof s.done === 'number' && done > s.done
+    return houseProgressWhy(s, { done, wood: houseWood(bot) }) !== null
   }
   if (isOrderKind(k)) {
     let cur = {}
@@ -1530,6 +1562,8 @@ function commitDelta(bot, ctx, kind, c) {
       done = null
     }
     const before = typeof s.done === 'number' ? s.done : '?'
+    const wood = houseWood(bot)
+    if ((typeof done !== 'number' || done === s.done) && typeof wood === 'number' && typeof s.wood === 'number' && wood !== s.wood) return `wood${s.wood}->${wood}`
     return `cells${before}->${typeof done === 'number' ? done : before}`
   }
   if (isOrderKind(k)) {
@@ -2706,11 +2740,11 @@ function taskTick(bot, ctx, now = Date.now()) {
             t[kind].total = Math.round(cur.dist)
           }
         } else if (houseCur) {
-          t.house = { done: houseCur.done, total: houseCur.total, stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
+          t.house = { done: houseCur.done, total: houseCur.total, wood: houseWood(bot), stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
         } else {
           // Unloaded and never read (core-1): wait for a loaded reading
           // instead of baselining 0/0.
-          t.house = { stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
+          t.house = { wood: houseWood(bot), stallMs: 0, lastAt: now, lastL1At: null, fails: [] }
         }
         setStallGauge(kind, 0)
         return
@@ -3024,8 +3058,12 @@ function taskTick(bot, ctx, now = Date.now()) {
       return
     }
 
-    // House: placed cells only.
+    // House: placed cells, or wood toward them (oqj5, houseProgressWhy).
+    // ponytail: an unread house (never loaded this process) has no cells-left
+    // bound, so its wood earns no credit until the first loaded reading.
     const cur = houseCur
+    const wood = houseWood(bot)
+    if (typeof state.wood !== 'number') state.wood = wood
     if (!cur || typeof cur.done !== 'number') {
       // Never read since reset (round-2 core-1): the bot may be stalled far
       // from the house. Advance the clock so the stall still reports; the
@@ -3083,11 +3121,16 @@ function taskTick(bot, ctx, now = Date.now()) {
         }
       }
     } catch (_) { /* castle watch best-effort */ }
-    if (cur.done > state.done) {
-      state.done = cur.done
-      state.total = cur.total
+    const houseWhy = houseProgressWhy(state, { done: cur.done, wood })
+    if (houseWhy) {
+      // Cells adopt the wood too: placing spends planks, a new episode.
+      if (cur.done > state.done) {
+        state.done = cur.done
+        state.total = cur.total
+      }
+      state.wood = wood
       progressReset(state, kind, now)
-      logReset(kind, 'cells')
+      logReset(kind, houseWhy)
       try {
         const g = ctx && ctx.goal
         const c0 = g && g.commit
