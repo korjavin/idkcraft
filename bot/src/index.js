@@ -386,6 +386,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // scans, danger marks) with no per-store hooks. No world key (unit
     // mocks) or missing dir means a silent skip.
     try { memory.saveThrottled(bot, ctx) } catch (_) { /* memory best-effort */ }
+    try { memory.refreshPeerCastle(bot, ctx) } catch (_) { /* g0z.59: read-only peer castle, best-effort */ }
     if (r.decision) {
       endTimer({ brain_called: String(r.calledBrain) })
       metrics.decisions.inc({ source: r.decision.source, action: r.decision.action })
@@ -889,10 +890,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // state.hostile: the nearest may stand outside the wall. The pin and
     // the state swap keep fight's sticky target on the intruder.
     let intruder = null
-    if (ctx.inShelter && decision.action === 'fight' && ctx.home) {
+    // g0z.59: the night home — the castle stay holds in while the house is unbuilt.
+    const shelterHome = ctx.inShelter ? require('./residence').nightHome(ctx, bot.entity && bot.entity.position) : null
+    if (ctx.inShelter && decision.action === 'fight' && shelterHome) {
       const bp = bot.entity && bot.entity.position
       for (const e of Object.values(bot.entities || {})) {
-        if (!e || e.isValid === false || !bp || !isFightTarget(e, bp, null) || !homeMod.isInside({ entity: e }, ctx.home)) continue
+        if (!e || e.isValid === false || !bp || !isFightTarget(e, bp, null) || !homeMod.isInside({ entity: e }, shelterHome)) continue
         if (!intruder || e.position.distanceTo(bp) < intruder.position.distanceTo(bp)) intruder = e
       }
     }
@@ -1645,6 +1648,8 @@ function respawnLine(bot) {
     // The claim alone never set the spawn: only a slept bed wins (revmux
     // 01-review — a day-1 /kill before first sleep lands on world spawn).
     bed = ctx && ctx.home && ctx.home.sleptA && (ctx.home.bedA || null)
+    // g0z.59: the castle night home carries its own claim.
+    if (!bed) bed = ctx && ctx.nightCastle && ctx.nightCastle.sleptA && (ctx.nightCastle.bedA || null)
     if (!bed) bed = ctx && ctx.castle && ctx.castle.siteBed && ctx.castle.siteSpawnSet && ctx.castle.siteBed
   } catch (_) { bed = null }
   const dest = (bed && typeof bed.x === 'number' && { x: bed.x, y: bed.y, z: bed.z }) ||
