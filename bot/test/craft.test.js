@@ -251,8 +251,9 @@ describe('craft step', () => {
     assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('crafting_table'))
     bot.restoreError()
     // Table cell standing (or unloaded): the claim doubles, no new table.
-    for (const read of [() => ({ name: 'crafting_table' }), () => null]) {
-      const b2 = mockBot({ items: [{ name: 'oak_planks', count: 40 }, { name: 'oak_door', count: 1 }], ids: IDS, recipes: {} })
+    // The claim stands in both, so only the owed gate can craft (revmux 01 minor).
+    for (const read of [() => ({ name: 'crafting_table' }), (p) => (p.x === 9 ? { name: 'crafting_table' } : null)]) {
+      const b2 = mockBot({ items: [{ name: 'oak_planks', count: 40 }, { name: 'oak_door', count: 1 }], ids: IDS, recipes: { crafting_table: recipeFor('crafting_table') } })
       b2.blockAt = read
       const c2 = freshCtx(home)
       c2.claimedTable = { x: 9, y: 64, z: 9 }
