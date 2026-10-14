@@ -137,8 +137,11 @@ function taskParkOf(v) {
 // from disk becomes one auto retry on its 60-min timer — a deploy may have
 // fixed what stalled, and nothing else unparked it. parkHist keeps the day
 // count, so the next park that day latches again: one try per restart.
+// Only parks from before this process (revmux 01): the join loop restores
+// on every reconnect, and a rejoin must not re-arm a latch it set itself.
+const BOOT_AT = Date.now()
 function rearmPark(rec) {
-  if (rec && rec.taskPark) rec.taskPark.auto = true
+  if (rec && rec.taskPark && rec.taskPark.at < BOOT_AT) rec.taskPark.auto = true
   return rec
 }
 function parkHistOf(v) {

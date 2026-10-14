@@ -292,6 +292,14 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
       assert.equal(ctx2.home.taskPark.auto, false, 'n=4 latches again')
       taskMod.taskTick(bot2, ctx2, t + 3 * 3600 * 1000)
       assert.equal(ctx2.home.parked, true, 'no in-process retry the same day')
+      // A reconnect in the same process (join loop) keeps a latch it set
+      // itself: only parks from before the process re-arm (revmux 01).
+      const live = Date.now()
+      ctx.home.taskPark = { at: live, auto: false, diag: 'x' }
+      assert.equal(memory.save(bot, ctx, file, live), true)
+      const ctx3 = {}
+      assert.ok(memory.restore(makeBot(), ctx3, file, live))
+      assert.equal(ctx3.home.taskPark.auto, false, 'same-process latch survives a rejoin')
     } finally {
       try { fs.unlinkSync(file) } catch (_) { /* tmp best-effort */ }
     }
