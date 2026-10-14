@@ -214,3 +214,90 @@ describe('bridge chunk cache (neuc.6)', () => {
     if (g.pos) assert.deepEqual([g.pos.x, g.pos.z], [3, 0])
   })
 })
+
+// idkcraft-neuc.33: an order right after a teleport/respawn must not be
+// answered from a half-filled cache (MOAT-EXIT/HOME-* failed in 1 s on v2).
+describe('bridge chunk cache after a teleport (neuc.33)', () => {
+  let transport
+  let bot
+  beforeEach(async () => { ({ transport, bot } = await rigBot()) })
+  afterEach(async () => { await bot.stop() })
+
+  it('chat with nothing pending is delivered synchronously (unchanged)', () => {
+    let seen = null
+    bot.on('chat', (u, m) => { seen = [u, m] })
+    transport.inject('chat', { username: 'Owner', message: 'come home' })
+    assert.deepEqual(seen, ['Owner', 'come home'])
+  })
+
+  it('chat waits, in order, until the near columns announced before it land', async () => {
+    const origCall = transport.call.bind(transport)
+    transport.call = async (method, params) => {
+      if (method === 'chunk.get') await sleep(40)
+      return origCall(method, params)
+    }
+    transport.state.blocks['20,64,20'] = 'oak_door' // column (1,1): announced by chunk.loaded only
+    transport.inject('chunk.loaded', { cx: 1, cz: 1 })
+    const seen = []
+    bot.on('chat', (u, m) => {
+      const b = bot.blockAt(new Vec3(20, 64, 20))
+      seen.push([m, b && b.name])
+    })
+    transport.inject('chat', { username: 'Guide', message: 'come home' })
+    transport.inject('chat', { username: 'Guide', message: 'stop' })
+    assert.deepEqual(seen, [], 'held while the column is in flight')
+    await sleep(150)
+    assert.deepEqual(seen, [['come home', 'oak_door'], ['stop', 'oak_door']])
+  })
+
+  it('the hold is capped: a column that never lands cannot swallow an order', async () => {
+    const origCall = transport.call.bind(transport)
+    transport.call = (method, params) => (method === 'chunk.get' ? new Promise(() => {}) : origCall(method, params))
+    transport.inject('chunk.loaded', { cx: 1, cz: 1 })
+    let seen = null
+    bot.on('chat', (u, m) => { seen = m })
+    const realNow = Date.now
+    try {
+      transport.inject('chat', { username: 'Guide', message: 'come home' })
+      await sleep(80)
+      assert.equal(seen, null)
+      Date.now = () => realNow() + 11000
+      await sleep(80)
+      assert.equal(seen, 'come home')
+    } finally {
+      Date.now = realNow
+    }
+  })
+
+  it('the background queue fetches nearest-to-the-body first (tp: stream classified against the old pos)', async () => {
+    // The new view streams in while the body still reads the old position:
+    // every column is "far" and queued, the body's own column (40,0) last.
+    for (const cx of [36, 44, 37, 43, 38, 42, 39, 41, 40]) transport.inject('chunk.loaded', { cx, cz: 0 })
+    bot.entity.position.x = 40 * 16 + 8 // the poll catches up
+    await sleep(150) // <= 2 background ticks (8 columns): FIFO would not reach (40,0)
+    assert.ok(bot.blockAt(new Vec3(648, 64, 8)), 'body column fetched first')
+    assert.equal(bot.blockAt(new Vec3(36 * 16, 64, 8)), null, 'the farthest still waits')
+  })
+
+  it('chunk.unloaded drops a queued fetch of that column', () => {
+    transport.inject('chunk.loaded', { cx: 20, cz: 0 })
+    assert.ok(bot._chunks.queued.has('20,0'))
+    transport.inject('chunk.unloaded', { cx: 20, cz: 0 })
+    assert.ok(!bot._chunks.queued.has('20,0'))
+    assert.ok(!bot._chunks.queue.some(([cx, cz]) => cx === 20 && cz === 0))
+  })
+
+  it('a block.update that lands while its column is in flight is replayed onto the reply', async () => {
+    const origCall = transport.call.bind(transport)
+    transport.call = async (method, params) => {
+      const r = await origCall(method, params) // snapshot first, like the mod's client-thread copy
+      if (method === 'chunk.get') await sleep(40)
+      return r
+    }
+    transport.inject('chunk.loaded', { cx: 2, cz: 2 })
+    await sleep(10)
+    transport.inject('block.update', { x: 40, y: 64, z: 40, stateId: registry.blocksByName.oak_door.defaultState })
+    await sleep(80)
+    assert.equal(bot.blockAt(new Vec3(40, 64, 40)).name, 'oak_door')
+  })
+})

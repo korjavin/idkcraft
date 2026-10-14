@@ -120,6 +120,9 @@ const NEAR_CHUNKS = 4
 const BG_PER_TICK = 4
 const BG_MS = 100
 
+// neuc.33: the ring an order waits for (48 blocks: the sync find radius).
+const HOLD_CHUNKS = 3
+
 const MAX_INFLIGHT = 4 // chunk.get replies are 100 KB+ and the mod serves one connection serially
 
 function chunkState(bot) {
@@ -127,6 +130,7 @@ function chunkState(bot) {
     bot._chunks = {
       listed: false, unsupported: false, loading: new Set(), retried: new Set(), reload: new Set(),
       queue: [], queued: new Set(), gens: new Map(), inflight: 0, timer: null,
+      held: new Map(), // neuc.33: block.update cells that landed while their column was in flight
     }
   }
   return bot._chunks
@@ -160,6 +164,9 @@ async function fetchColumn(bot, transport, cx, cz) {
     if (payload && (st.gens.get(key) || 0) === gen) {
       applyChunk(bot, payload)
       st.retried.delete(key)
+      // neuc.33: the snapshot may predate updates pushed mid-fetch (the
+      // mod pushes on receipt, applies on the client thread): replay them.
+      for (const u of st.held.get(key) || []) applyBlockUpdate(bot, u)
     }
   } catch (_) {
     // A column that raced an unload (or a busy client thread) retries
@@ -172,6 +179,7 @@ async function fetchColumn(bot, transport, cx, cz) {
   } finally {
     st.inflight--
     st.loading.delete(key)
+    st.held.delete(key)
     if (retry && !bot._quitting) queueColumn(bot, transport, cx, cz)
     // A chunk.loaded that arrived mid-fetch asked for a refetch of the
     // (possibly reloaded) column; the reply above may predate it.
@@ -182,6 +190,44 @@ async function fetchColumn(bot, transport, cx, cz) {
   }
 }
 
+function bodyChunk(bot) {
+  const bp = (bot.entity && bot.entity.position) || { x: 0, z: 0 }
+  return [Math.floor(bp.x / 16), Math.floor(bp.z / 16)]
+}
+
+// neuc.33: nearest-to-the-body first, measured at pop time. After a
+// teleport the whole new view arrives classified against the OLD position
+// (state.get lags the chunk stream), and FIFO put the body's own columns
+// behind hundreds of others (~8 columns/s over the bridge).
+// ponytail: O(queue) scan per pop (<= ~600 entries, 40 pops/s).
+function takeNearest(bot, st) {
+  const [bcx, bcz] = bodyChunk(bot)
+  let best = 0
+  let bestD = Infinity
+  for (let i = 0; i < st.queue.length; i++) {
+    const [cx, cz] = st.queue[i]
+    const d = Math.max(Math.abs(cx - bcx), Math.abs(cz - bcz))
+    if (d < bestD) { bestD = d; best = i }
+  }
+  return st.queue.splice(best, 1)[0]
+}
+
+// neuc.33: columns within r of the body the cache still waits for
+// (announced by chunk.loaded, queued or in flight). Never-announced or
+// given-up columns are not pending: they read null, like mineflayer.
+function nearPending(bot, r = HOLD_CHUNKS) {
+  const st = bot._chunks
+  if (!st) return false
+  const [bcx, bcz] = bodyChunk(bot)
+  for (let dx = -r; dx <= r; dx++) {
+    for (let dz = -r; dz <= r; dz++) {
+      const key = `${bcx + dx},${bcz + dz}`
+      if (st.queued.has(key) || st.loading.has(key)) return true
+    }
+  }
+  return false
+}
+
 function scheduleBackground(bot, transport) {
   const st = chunkState(bot)
   if (st.timer || st.queue.length === 0) return
@@ -189,7 +235,7 @@ function scheduleBackground(bot, transport) {
     if (bot._quitting) { clearInterval(st.timer); st.timer = null; return }
     let n = Math.min(BG_PER_TICK, MAX_INFLIGHT - st.inflight)
     while (n-- > 0 && st.queue.length > 0) {
-      const [cx, cz] = st.queue.shift()
+      const [cx, cz] = takeNearest(bot, st)
       st.queued.delete(`${cx},${cz}`)
       void fetchColumn(bot, transport, cx, cz)
     }
@@ -263,11 +309,22 @@ function handleChunkEvent(bot, transport, method, params) {
       const key = `${p.cx},${p.cz}`
       st.gens.set(key, (st.gens.get(key) || 0) + 1) // in-flight fetches drop their reply
       st.retried.delete(key)
+      // neuc.33: a queued fetch of a gone column is a wasted (failing) call.
+      if (st.queued.delete(key)) st.queue = st.queue.filter(([cx, cz]) => cx !== p.cx || cz !== p.cz)
       unloadChunk(bot, p.cx, p.cz)
     }
     return true
   }
   if (method === 'block.update') {
+    if (typeof p.x === 'number' && typeof p.z === 'number' && bot._chunks) {
+      const key = `${Math.floor(p.x / 16)},${Math.floor(p.z / 16)}`
+      const st = bot._chunks
+      if (st.loading.has(key) && !(bot._chunkCols && bot._chunkCols.has(key))) {
+        if (!st.held.has(key)) st.held.set(key, [])
+        st.held.get(key).push(p) // replayed onto the reply (neuc.33)
+        return true
+      }
+    }
     const [oldBlock, newBlock] = applyBlockUpdate(bot, p)
     if (newBlock) bot.emit('blockUpdate', oldBlock, newBlock)
     return true
@@ -384,6 +441,6 @@ function canSeeBlock(bot, block) {
 
 module.exports = {
   ensureWorld, applyChunk, unloadChunk, applyBlockUpdate,
-  refreshChunks, handleChunkEvent, stopChunks,
+  refreshChunks, handleChunkEvent, stopChunks, nearPending,
   findBlocks, findBlock, canSeeBlock, registryUsable,
 }
