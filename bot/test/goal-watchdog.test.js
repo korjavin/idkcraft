@@ -454,6 +454,33 @@ describe('truthful metrics (acceptance 2)', () => {
     assert.equal(wdLogs().length, 0)
     assert.ok(resetLogs().length >= 2, `verdict resets happened: ${JSON.stringify(resetLogs())}`)
   })
+
+  it('the fresh-read cells reset re-baselines the wood mark (oqj5 verify)', async () => {
+    process.env.GOAL_WATCHDOG_MS = '30000'
+    const items = [{ name: 'oak_planks', count: 64 }]
+    const bot = makeBot({ items })
+    const { ctx } = houseCtx(bot)
+    const { brain } = answerBrain('build')
+    ctx.brain = brain
+    const build = require('../src/behaviours/build')
+    const cell = build.blueprintFor(ctx.home)[1]
+    const k = `${cell.dx},${64 + cell.dy},${cell.dz}`
+    let placed = false
+    bot.blockAt = (p) => (placed && `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` === k
+      ? { name: 'oak_planks', boundingBox: 'block' }
+      : { name: 'air', boundingBox: 'empty' })
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.house.wood, 64)
+    placed = true // the build run spends its planks; the 60 s cache still reads 31
+    items[0].count = 0
+    const t = advance(bot, ctx, t0, 40)
+    assert.ok(resetLogs().includes('goal reset kind=house why=cells'), JSON.stringify(resetLogs()))
+    assert.equal(ctx.task.house.wood, 0, 'the fresh-read reset adopts the spent wood')
+    items[0].count = 4 // the next gather run
+    taskMod.taskTick(bot, ctx, t + 1000)
+    assert.ok(resetLogs().includes('goal reset kind=house why=wood'), JSON.stringify(resetLogs()))
+  })
 })
 
 describe('window pauses, preempts and generation (acceptance 3)', () => {

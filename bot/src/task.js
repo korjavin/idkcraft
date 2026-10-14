@@ -1463,6 +1463,8 @@ function maybeWatchdog(bot, ctx, kind, done, total, state, now) {
           if (typeof state.done === 'number' && fresh.done > state.done) {
             state.done = fresh.done
             state.total = fresh.total
+            state.wood = houseWood(bot)
+            state.trees = null
             progressReset(state, kind, now)
             logReset(kind, 'cells')
             return
@@ -2378,24 +2380,29 @@ const CASTLE_TRAVEL_STEP = 8
 // distance sinking CASTLE_TRAVEL_STEP below the tree's low-water mark is
 // progress. Per target: a new tree rebaselines without credit, and a
 // wedge or a walk away never counts. The caller bounds it to a wood-short
-// house. Must run every house tick to keep the mark current.
+// house. The marks live in one per-tree map (state.trees) that only cells
+// or wood progress clears, so leaving the walk phase or swapping targets
+// A<->B never rebaselines a tree already approached: each tree credits at
+// most its first-seen distance / 8 per episode.
+// ponytail: capped at GATHER_TRAVEL_TREES trees per episode (a new tree past
+// it earns nothing); no jump rebaseline as castleTravel has, so a walk back
+// from a respawn credits only below the old mark (fails safe: fewer credits).
+const GATHER_TRAVEL_TREES = 16
 function gatherTravel(bot, ctx, state) {
   try {
     const g = ctx && ctx.gather
     const bp = bot && bot.entity && bot.entity.position
-    if (!g || ctx.step !== 'gather' || g.phase !== 'walk' || !g.pos || !bp) {
-      state.treeKey = null
-      return false
-    }
+    if (!g || ctx.step !== 'gather' || g.phase !== 'walk' || !g.pos || !bp) return false
     const key = `${g.pos.x},${g.pos.y},${g.pos.z}`
     const d = Math.hypot(bp.x - g.pos.x, bp.z - g.pos.z)
-    if (state.treeKey !== key || typeof state.treeDist !== 'number') {
-      state.treeKey = key
-      state.treeDist = d
+    if (!state.trees || typeof state.trees !== 'object') state.trees = {}
+    const mark = state.trees[key]
+    if (typeof mark !== 'number') {
+      if (Object.keys(state.trees).length < GATHER_TRAVEL_TREES) state.trees[key] = d
       return false
     }
-    if (d + CASTLE_TRAVEL_STEP > state.treeDist) return false
-    state.treeDist = d
+    if (d + CASTLE_TRAVEL_STEP > mark) return false
+    state.trees[key] = d
     return true
   } catch (_) {
     return false
@@ -3161,7 +3168,13 @@ function taskTick(bot, ctx, now = Date.now()) {
         state.done = cur.done
         state.total = cur.total
       }
-      state.wood = wood
+      // Travel keeps the wood mark and the tree marks (verify: a lowered
+      // mark re-credits a consume-and-rechop; a cleared map re-credits an
+      // A<->B walk). Real progress starts both afresh.
+      if (houseWhy !== 'travel') {
+        state.wood = wood
+        state.trees = null
+      }
       progressReset(state, kind, now)
       logReset(kind, houseWhy)
       try {

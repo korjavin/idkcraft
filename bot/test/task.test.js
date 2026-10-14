@@ -470,12 +470,48 @@ describe('task stall clock (vmzq.2)', () => {
     tick()
     assert.equal(ctx.task.house.stallMs, 4000, 'only the gather step walk counts')
     ctx.step = 'gather'
-    tick() // rebaseline (the explore tick dropped the target)
+    tick() // back in the walk: the tree kept its mark (240 < 270 - 8)
+    assert.equal(ctx.task.house.stallMs, 0, 'the explore detour does not rebaseline the tree')
     items.push({ name: 'oak_planks', count: 99 }) // the pack covers the cells left
     tick() // credited as wood (the mark was 0)
     at(200)
     tick()
     assert.equal(ctx.task.house.stallMs, 1000, 'no travel credit once the wood covers the cells left')
+  })
+
+  it('an A<->B tree swap credits each tree once, and travel never lowers the wood mark (oqj5 verify)', () => {
+    const items = [{ name: 'oak_planks', count: 64 }]
+    const bot = makeBot({ items })
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/130: 99 cells left
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    let s = 0
+    const tick = () => taskMod.taskTick(bot, ctx, t0 + (++s) * 1000)
+    const at = (x) => { bot.entity.position = pos(x, 64, 200) }
+    const A = { x: 300, y: 64, z: 200 }
+    const B = { x: 0, y: 64, z: 200 }
+    taskMod.taskTick(bot, ctx, t0)
+    items[0].count = 0 // spent on tools: below the 64 mark
+    ctx.step = 'gather'
+    ctx.gather = { phase: 'walk', pos: A }
+    at(150); tick() // A baseline 150
+    at(160); tick() // A 140: credit
+    assert.equal(ctx.task.house.stallMs, 0, 'first approach to A credits')
+    ctx.gather.pos = B; tick() // B baseline 160
+    at(150); tick() // B 150: credit
+    assert.equal(ctx.task.house.stallMs, 0, 'first approach to B credits')
+    for (let i = 0; i < 5; i++) {
+      ctx.gather.pos = A; tick(); at(160); tick()
+      ctx.gather.pos = B; tick(); at(150); tick()
+    }
+    assert.equal(ctx.task.house.stallMs, 20000, 'the A<->B shuttle never resets again')
+    items[0].count = 4 // re-chopped, still below the 64 high-water mark
+    tick()
+    assert.equal(ctx.task.house.stallMs, 21000, 'travel credits kept the wood mark')
+    assert.equal(ctx.task.house.wood, 64)
   })
 
   it('a placed cell re-baselines the wood mark, so the next gather run credits again (oqj5)', () => {
