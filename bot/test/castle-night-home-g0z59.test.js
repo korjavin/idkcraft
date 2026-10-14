@@ -107,7 +107,7 @@ describe('g0z.59 night residence: the castle covers an unbuilt house', () => {
     })
   })
 
-  it('inside the castle: shelter yields, no creeper flee, an intruder in the castle counts', () => {
+  it('inside the castle: shelter yields, no creeper flee out of it', () => {
     const inn = residence.CASTLE.entrance(residence.castleHome(castleState())).inside
     const at = { x: inn.x + 0.5, y: inn.y, z: inn.z + 0.5 }
     const ctx = { home: HOUSE(), castle: castleState(), step: 'shelter', stepStatus: 'running', inShelter: true }
