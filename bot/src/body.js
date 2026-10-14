@@ -245,31 +245,52 @@ function scaffoldCobble(bot, mov, on) {
 // planks, fences, doors, torches, stairs, panes, ...) ride .banNames into
 // blocksToDisallowBreaking — a hard ban: the avoid list is only a ~10x dig
 // cost, so a long door detour still lost to a straight tunnel (revmux 01
-// core-1). Every kind that generates in bulk underground (the natural stone
-// family, logs) stays in .guardNames (avoid: a cost) so v2 can still tunnel
-// and recover in rock: banning the granite/andesite/tuff blobs too walled v2
-// into a cave (stuck oracle CLUSTER-BARE, idkcraft-neuc.46). The quarry lays
-// those as mined (vmzq.38), so a granite wall block is only avoid-guarded.
+// core-1). Stone, deepslate (the quarry lays them cobbled) and logs always
+// stay in .guardNames (avoid: a cost) so v2 can still tunnel and recover in
+// rock. The rest of the natural stone family (granite/diorite/andesite/tuff/
+// calcite/smooth_basalt) is laid as mined (vmzq.38), so it joins the ban
+// only within CASTLE_ROCK_RANGE of a known castle (own or peer, g0z.59):
+// banned everywhere it walled v2 into a cave of andesite/granite blobs
+// (stuck oracle CLUSTER-BARE, idkcraft-neuc.46).
 // ponytail: id-global — v2 never breaks cobble/planks/fences anywhere while
 // pathing (explicit digs unaffected); a shared castle descriptor if v2 must
 // tunnel cobble far from home. v1 never installs it (zero diff).
-const NATURAL_CASTLE = new Set(['stone', 'granite', 'diorite', 'andesite', 'deepslate', 'tuff', 'calcite', 'smooth_basalt'])
+// ponytail: the rock ban is a radius around the site, not per cell (Baritone
+// takes names only); a mod-side box hook if v2 must tunnel granite by a castle.
+const BULK_ROCK = new Set(['stone', 'deepslate'])
+const LAID_ROCK = new Set(['granite', 'diorite', 'andesite', 'tuff', 'calcite', 'smooth_basalt'])
+const CASTLE_ROCK_RANGE = 48 // from the site centre: the castle plus a re-plan's lookahead
 let castleNames = null
-function castleNamesGuard(bot) {
+function castleNamesGuard(bot, near) {
   const byName = bot && bot.registry && bot.registry.blocksByName
   if (!byName) return null
-  if (castleNames && castleNames.byName === byName) return castleNames.fn
-  const kinds = new Set()
-  for (const v of Object.keys(castle.BLUEPRINTS)) for (const c of castle.BLUEPRINTS[v].PLAN) kinds.add(c.kind)
-  for (const v of Object.keys(castle.DECOR)) for (const c of castle.DECOR[v]) kinds.add(c.kind)
-  const live = [...kinds].filter(castle.isPlaceTarget)
-  const fn = () => 0 // names only: v2 has no per-cell break cost
-  const names = Object.keys(byName).filter((n) => live.some((k) => castle.matches(k, n)))
-  const natural = (n) => NATURAL_CASTLE.has(n) || n.endsWith('_log')
-  fn.guardNames = names.filter(natural)
-  fn.banNames = names.filter((n) => !natural(n))
-  castleNames = { byName, fn }
-  return fn
+  if (!castleNames || castleNames.byName !== byName) {
+    const kinds = new Set()
+    for (const v of Object.keys(castle.BLUEPRINTS)) for (const c of castle.BLUEPRINTS[v].PLAN) kinds.add(c.kind)
+    for (const v of Object.keys(castle.DECOR)) for (const c of castle.DECOR[v]) kinds.add(c.kind)
+    const live = [...kinds].filter(castle.isPlaceTarget)
+    const names = Object.keys(byName).filter((n) => live.some((k) => castle.matches(k, n)))
+    const bulk = (n) => BULK_ROCK.has(n) || n.endsWith('_log')
+    const far = (n) => bulk(n) || LAID_ROCK.has(n)
+    const lists = (avoid) => ({ guardNames: names.filter(avoid), banNames: names.filter((n) => !avoid(n)) })
+    castleNames = { byName, fn: () => 0, near: lists(bulk), far: lists(far) } // fn: names only, no per-cell cost
+  }
+  // One fn object rides the Movements; the bridge reads its lists per sync.
+  Object.assign(castleNames.fn, near ? castleNames.near : castleNames.far)
+  return castleNames.fn
+}
+
+function nearCastle(bot, ctx) {
+  try {
+    const p = bodyPos(bot)
+    if (!p) return false
+    for (const c of [ctx && ctx.castle, ctx && ctx.peerCastle]) {
+      if (!c || !c.site || typeof c.site.x !== 'number') continue
+      const { w, d } = castle.siteDimensions(c.rot | 0, c.blueprintVersion)
+      if (Math.hypot(p.x - (c.site.x + w / 2), p.z - (c.site.z + d / 2)) <= CASTLE_ROCK_RANGE) return true
+    }
+  } catch (_) { /* no castle read: far */ }
+  return false
 }
 
 function movementsFor(owner, bot, ctx, extra) {
@@ -296,7 +317,7 @@ function movementsFor(owner, bot, ctx, extra) {
     }
   } catch (_) { /* policy best-effort: defaults stand */ }
   const keepStone = castleStone(bot, ctx)
-  const v2Guard = process.env.BOT_BODY === 'baritone' ? castleNamesGuard(bot) : null
+  const v2Guard = process.env.BOT_BODY === 'baritone' ? castleNamesGuard(bot, nearCastle(bot, ctx)) : null
   for (const mov of movs) {
     try {
       if (v2Guard && Array.isArray(mov.exclusionAreasBreak) && !mov.exclusionAreasBreak.includes(v2Guard)) mov.exclusionAreasBreak.push(v2Guard)

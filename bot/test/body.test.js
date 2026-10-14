@@ -483,4 +483,28 @@ describe('castle break guard (g0z.55)', () => {
       for (const n of ['dirt', 'grass_block']) assert.ok(!avoid.includes(n) && !ban.includes(n), n)
     })
   })
+
+  it('v2 (neuc.46): laid rock (granite/tuff) is banned only near a known castle (own or peer); stone/deepslate/logs stay a cost', () => {
+    withBody('baritone', () => {
+      const bot = v2Bot()
+      const ctx = { peerCastle: { site: SITE, rot: 0, blueprintVersion: 3, phase: 'complete' } }
+      const sync = () => {
+        body.movementsFor('work', bot, ctx)
+        const set = movementsToSettings(bot.pathfinder.movements, registry)
+        return { avoid: set.blocksToAvoidBreaking.split(','), ban: set.blocksToDisallowBreaking.split(',') }
+      }
+      bot.entity = { position: { x: SITE.x + 5, y: 65, z: SITE.z + 5 } }
+      let s = sync()
+      for (const n of ['granite', 'tuff', 'cobblestone']) assert.ok(s.ban.includes(n) && !s.avoid.includes(n), `near: ${n}`)
+      for (const n of ['stone', 'deepslate', 'oak_log']) assert.ok(s.avoid.includes(n) && !s.ban.includes(n), `near: ${n}`)
+      bot.entity.position = { x: SITE.x + 300, y: 40, z: SITE.z } // a cave far off: the CLUSTER-BARE shape
+      s = sync()
+      for (const n of ['granite', 'tuff']) assert.ok(s.avoid.includes(n) && !s.ban.includes(n), `far: ${n}`)
+      assert.ok(s.ban.includes('cobblestone'), 'built-only kinds stay banned far off')
+      assert.equal(bot.pathfinder.movements.exclusionAreasBreak.length, 1, 'one guard fn across the switch')
+      ctx.peerCastle = null
+      bot.entity.position = { x: SITE.x + 5, y: 65, z: SITE.z + 5 }
+      assert.ok(sync().avoid.includes('granite'), 'no castle known: avoid only')
+    })
+  })
 })
