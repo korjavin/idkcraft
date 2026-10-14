@@ -484,10 +484,10 @@ describe('castle break guard (g0z.55)', () => {
     })
   })
 
-  it('v2 (neuc.46): laid rock (granite/tuff) is banned only near a known castle (own or peer); stone/deepslate/logs stay a cost', () => {
+  it('v2 (neuc.46): laid rock (granite/tuff) is banned only near its own castle (never a peer castle); stone/deepslate/logs stay a cost', () => {
     withBody('baritone', () => {
       const bot = v2Bot()
-      const ctx = { peerCastle: { site: SITE, rot: 0, blueprintVersion: 3, phase: 'complete' } }
+      const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 3, phase: 'complete' } }
       const sync = () => {
         body.movementsFor('work', bot, ctx)
         const set = movementsToSettings(bot.pathfinder.movements, registry)
@@ -507,9 +507,9 @@ describe('castle break guard (g0z.55)', () => {
       for (const n of ['granite', 'tuff']) assert.ok(s.avoid.includes(n) && !s.ban.includes(n), `far: ${n}`)
       assert.ok(s.ban.includes('cobblestone'), 'built-only kinds stay banned far off')
       assert.equal(bot.pathfinder.movements.exclusionAreasBreak.length, 1, 'one guard fn across the switch')
-      ctx.peerCastle = null
+      ctx.peerCastle = ctx.castle; ctx.castle = null // a peer (v1) castle never scopes the ban
       bot.entity.position = { x: SITE.x + 5, y: 65, z: SITE.z + 5 }
-      assert.ok(sync().avoid.includes('granite'), 'no castle known: avoid only')
+      assert.ok(sync().avoid.includes('granite'), 'peer castle only: avoid only')
     })
   })
 })

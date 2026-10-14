@@ -249,9 +249,11 @@ function scaffoldCobble(bot, mov, on) {
 // stay in .guardNames (avoid: a cost) so v2 can still tunnel and recover in
 // rock. The rest of the natural stone family (granite/diorite/andesite/tuff/
 // calcite/smooth_basalt) is laid as mined (vmzq.38), so it joins the ban
-// only within CASTLE_ROCK_RANGE of a known castle (own or peer, g0z.59):
-// banned everywhere it walled v2 into a cave of andesite/granite blobs
-// (stuck oracle CLUSTER-BARE, idkcraft-neuc.46).
+// only within CASTLE_ROCK_RANGE of the bot's OWN castle (ctx.castle; never
+// the peer's, v1 phase-out): banned everywhere it walled v2 into a cave of
+// andesite/granite blobs (stuck oracle CLUSTER-BARE, idkcraft-neuc.46).
+// Trade-off: a peer (v1) castle's laid granite is only avoid-guarded from
+// v2; its cobble/planks/fences keep the global ban.
 // ponytail: id-global — v2 never breaks cobble/planks/fences anywhere while
 // pathing (explicit digs unaffected); a shared castle descriptor if v2 must
 // tunnel cobble far from home. v1 never installs it (zero diff).
@@ -291,11 +293,10 @@ function nearCastle(bot, ctx) {
   try {
     const p = bodyPos(bot)
     if (!p) return false
-    for (const c of [ctx && ctx.castle, ctx && ctx.peerCastle]) {
-      if (!c || !c.site || typeof c.site.x !== 'number') continue
-      const { w, d } = castle.siteDimensions(c.rot | 0, c.blueprintVersion)
-      if (Math.hypot(p.x - (c.site.x + w / 2), p.z - (c.site.z + d / 2)) <= CASTLE_ROCK_RANGE) return true
-    }
+    const c = ctx && ctx.castle // own castle only: no peerCastle (v1 phase-out)
+    if (!c || !c.site || typeof c.site.x !== 'number') return false
+    const { w, d } = castle.siteDimensions(c.rot | 0, c.blueprintVersion)
+    return Math.hypot(p.x - (c.site.x + w / 2), p.z - (c.site.z + d / 2)) <= CASTLE_ROCK_RANGE
   } catch (_) { /* no castle read: far */ }
   return false
 }
