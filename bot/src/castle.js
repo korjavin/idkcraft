@@ -750,6 +750,7 @@ module.exports = {
   groundCell,
   inFootprint,
   yardRing,
+  YARD_TOP,
   fenceBandCells,
   ownBandCells,
   onSite,
