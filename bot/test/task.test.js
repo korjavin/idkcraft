@@ -395,6 +395,160 @@ describe('task stall clock (vmzq.2)', () => {
     assert.match(bot.chats[0], /^house: no progress for 15 min at 31\/130/)
   })
 
+  it('house wood toward the cells left is progress, high-water and bounded (oqj5)', () => {
+    const items = []
+    const bot = makeBot({ items })
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/130: 99 cells left
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    let s = 0
+    const tick = () => taskMod.taskTick(bot, ctx, t0 + (++s) * 1000)
+    taskMod.taskTick(bot, ctx, t0)
+    for (let i = 0; i < 600; i++) tick()
+    assert.equal(ctx.task.house.stallMs, 600000, 'no wood, no cells: flat')
+    items.push({ name: 'oak_log', count: 1 }) // chopped a far tree
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, 'a log toward the house resets')
+    assert.ok(lines.includes('goal reset kind=house why=wood'), JSON.stringify(lines))
+    items[0] = { name: 'oak_planks', count: 4 } // crafted: net zero
+    tick()
+    assert.equal(ctx.task.house.stallMs, 1000, 'crafting logs to planks is not progress')
+    items[0] = { name: 'oak_planks', count: 0 } // spent on tools
+    tick()
+    items[0] = { name: 'oak_planks', count: 4 } // re-chopped back to the mark
+    tick()
+    assert.equal(ctx.task.house.stallMs, 3000, 'regain below the high-water mark is not progress')
+    items.push({ name: 'birch_log', count: 1 })
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, 'past the mark resets again')
+    // Bounded: once the pack covers the cells left, more wood is not progress.
+    items.length = 0
+    items.push({ name: 'oak_planks', count: 99 })
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, '8 -> 99 planks, the baseline was still short')
+    items.push({ name: 'oak_log', count: 3 })
+    tick()
+    assert.equal(ctx.task.house.stallMs, 1000, 'wood past the cells left does not reset')
+  })
+
+  it('the walk to a far tree is house progress per target, low-water, wood-short only (oqj5)', () => {
+    const items = []
+    const bot = makeBot({ items })
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/130
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    let s = 0
+    const tick = () => taskMod.taskTick(bot, ctx, t0 + (++s) * 1000)
+    const at = (x) => { bot.entity.position = pos(x, 64, 200) }
+    taskMod.taskTick(bot, ctx, t0)
+    ctx.step = 'gather'
+    ctx.gather = { phase: 'walk', pos: { x: 223, y: 64, z: 200 } } // 123 blocks out
+    tick() // baseline the tree
+    for (let i = 0; i < 7; i++) { at(100 + i); tick() }
+    assert.equal(ctx.task.house.stallMs, 8000, 'under one travel step: flat')
+    at(108)
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, '8 blocks closer resets')
+    assert.ok(lines.includes('goal reset kind=house why=travel'), JSON.stringify(lines))
+    at(100) // walked back: never counts
+    tick()
+    at(108) // and back to the mark: still below nothing new
+    tick()
+    assert.equal(ctx.task.house.stallMs, 2000, 'out-and-back is not progress')
+    ctx.gather.pos = { x: 400, y: 64, z: 200 } // a new tree: rebaseline, no credit
+    at(130)
+    tick()
+    assert.equal(ctx.task.house.stallMs, 3000, 'a new target rebaselines without credit')
+    ctx.step = 'explore' // not a gather walk
+    at(160)
+    tick()
+    assert.equal(ctx.task.house.stallMs, 4000, 'only the gather step walk counts')
+    ctx.step = 'gather'
+    tick() // back in the walk: the tree kept its mark (240 < 270 - 8)
+    assert.equal(ctx.task.house.stallMs, 0, 'the explore detour does not rebaseline the tree')
+    items.push({ name: 'oak_planks', count: 99 }) // the pack covers the cells left
+    tick() // credited as wood (the mark was 0)
+    at(200)
+    tick()
+    assert.equal(ctx.task.house.stallMs, 1000, 'the wood credit cleared the marks: a fresh baseline')
+    at(220) // 20 blocks closer than that baseline
+    tick()
+    assert.equal(ctx.task.house.stallMs, 2000, 'no travel credit once the wood covers the cells left')
+  })
+
+  it('an A<->B tree swap credits each tree once, and travel never lowers the wood mark (oqj5 verify)', () => {
+    const items = [{ name: 'oak_planks', count: 64 }]
+    const bot = makeBot({ items })
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/130: 99 cells left
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    let s = 0
+    const tick = () => taskMod.taskTick(bot, ctx, t0 + (++s) * 1000)
+    const at = (x) => { bot.entity.position = pos(x, 64, 200) }
+    const A = { x: 300, y: 64, z: 200 }
+    const B = { x: 0, y: 64, z: 200 }
+    taskMod.taskTick(bot, ctx, t0)
+    items[0].count = 0 // spent on tools: below the 64 mark
+    ctx.step = 'gather'
+    ctx.gather = { phase: 'walk', pos: A }
+    at(150); tick() // A baseline 150
+    at(160); tick() // A 140: credit
+    assert.equal(ctx.task.house.stallMs, 0, 'first approach to A credits')
+    ctx.gather.pos = B; tick() // B baseline 160
+    at(150); tick() // B 150: credit
+    assert.equal(ctx.task.house.stallMs, 0, 'first approach to B credits')
+    for (let i = 0; i < 5; i++) {
+      ctx.gather.pos = A; tick(); at(160); tick()
+      ctx.gather.pos = B; tick(); at(150); tick()
+    }
+    assert.equal(ctx.task.house.stallMs, 20000, 'the A<->B shuttle never resets again')
+    items[0].count = 4 // re-chopped, still below the 64 high-water mark
+    tick()
+    assert.equal(ctx.task.house.stallMs, 21000, 'travel credits kept the wood mark')
+    assert.equal(ctx.task.house.wood, 64)
+  })
+
+  it('a placed cell re-baselines the wood mark, so the next gather run credits again (oqj5)', () => {
+    const items = [{ name: 'oak_planks', count: 64 }]
+    const bot = makeBot({ items })
+    const build = require('../src/behaviours/build')
+    const home = { site: { x: 0, y: 64, z: 0 }, built: false, v: 2 }
+    const cell = build.blueprintFor(home)[1] // a plank wall cell (plan[0] is the table)
+    const key = `${cell.dx},${64 + cell.dy},${cell.dz}`
+    let placed = false
+    bot.blockAt = (p) => (placed && `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` === key
+      ? { name: 'oak_planks', boundingBox: 'block' }
+      : { name: 'air', boundingBox: 'empty' })
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome(home)
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    let s = 0
+    const tick = () => taskMod.taskTick(bot, ctx, t0 + (++s) * 1000)
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.house.wood, 64)
+    placed = true // the build run lays its planks
+    items[0].count = 0
+    for (let i = 0; i < 61; i++) tick() // past the 60 s cells cache
+    assert.equal(ctx.task.house.done, 32)
+    assert.equal(ctx.task.house.wood, 0, 'cells adopt the spent wood')
+    tick()
+    items[0].count = 4 // the next gather run, far below the old 64 mark
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, 'wood credits again after a build run')
+    assert.equal(lines.filter((l) => l === 'goal reset kind=house why=wood').length, 1, JSON.stringify(lines))
+  })
+
   it('unloaded house holds the baseline (core-1)', () => {
     const bot = makeBot()
     let loaded = true

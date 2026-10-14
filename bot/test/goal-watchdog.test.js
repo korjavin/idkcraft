@@ -454,6 +454,33 @@ describe('truthful metrics (acceptance 2)', () => {
     assert.equal(wdLogs().length, 0)
     assert.ok(resetLogs().length >= 2, `verdict resets happened: ${JSON.stringify(resetLogs())}`)
   })
+
+  it('the fresh-read cells reset re-baselines the wood mark (oqj5 verify)', async () => {
+    process.env.GOAL_WATCHDOG_MS = '30000'
+    const items = [{ name: 'oak_planks', count: 64 }]
+    const bot = makeBot({ items })
+    const { ctx } = houseCtx(bot)
+    const { brain } = answerBrain('build')
+    ctx.brain = brain
+    const build = require('../src/behaviours/build')
+    const cell = build.blueprintFor(ctx.home)[1]
+    const k = `${cell.dx},${64 + cell.dy},${cell.dz}`
+    let placed = false
+    bot.blockAt = (p) => (placed && `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` === k
+      ? { name: 'oak_planks', boundingBox: 'block' }
+      : { name: 'air', boundingBox: 'empty' })
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.house.wood, 64)
+    placed = true // the build run spends its planks; the 60 s cache still reads 31
+    items[0].count = 0
+    const t = advance(bot, ctx, t0, 40)
+    assert.ok(resetLogs().includes('goal reset kind=house why=cells'), JSON.stringify(resetLogs()))
+    assert.equal(ctx.task.house.wood, 0, 'the fresh-read reset adopts the spent wood')
+    items[0].count = 4 // the next gather run
+    taskMod.taskTick(bot, ctx, t + 1000)
+    assert.ok(resetLogs().includes('goal reset kind=house why=wood'), JSON.stringify(resetLogs()))
+  })
 })
 
 describe('window pauses, preempts and generation (acceptance 3)', () => {
@@ -685,6 +712,18 @@ describe('watchdog consume paths', () => {
     assert.equal(ctx.castle.parked, true)
     assert.ok(bot.chats.some((c) => c.includes('parked at')), JSON.stringify(bot.chats))
     assert.ok(wdLogs().some((l) => l.includes('choice=park') && l.includes('source=jev')), JSON.stringify(wdLogs()))
+  })
+
+  it('a low-confidence park is undecided: no park, backoff (oqj5 prod: park at 0.18 latched the house)', async () => {
+    const bot = makeBot({ players: { Steve: {} } })
+    const { ctx } = castleCtx(bot)
+    const { t } = await firedAnswer(bot, ctx, 1000000000000, { step: 'park', confidence: 0.18, probabilities: { park: 0.18 }, source: 'jev' })
+    assert.equal(ctx.castle.parked, false, 'no park below the confidence floor')
+    assert.equal(ctx.castle.taskPark || null, null, 'no parkTask record')
+    assert.ok(wdLogs().some((l) => l.includes('choice=none') && l.includes('low-confidence park conf=0.18')), JSON.stringify(wdLogs()))
+    assert.equal(ctx.task.castle.wd.backoffMs, 30000, 'backoff armed')
+    assert.ok(ctx.task.castle.wd.backoffUntil > t)
+    assert.equal(ctx.task.castle.wd.lowConf, 1, 'counts toward the undecided fallback')
   })
 
   it('a park choice routes to plan-B when the owner is offline (no alone-park)', async () => {
