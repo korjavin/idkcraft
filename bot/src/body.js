@@ -245,12 +245,14 @@ function scaffoldCobble(bot, mov, on) {
 // planks, fences, doors, torches, stairs, panes, ...) ride .banNames into
 // blocksToDisallowBreaking — a hard ban: the avoid list is only a ~10x dig
 // cost, so a long door detour still lost to a straight tunnel (revmux 01
-// core-1). Kinds that generate in bulk (natural stone family, logs) stay in
-// .guardNames (avoid: a cost) so v2 can still tunnel and recover in rock.
+// core-1). Only the bulk rock the quarry never lays (stone and deepslate
+// mine into their cobbled forms) and logs stay in .guardNames (avoid: a
+// cost) so v2 can still tunnel and recover in rock; granite/diorite/tuff/...
+// are laid as mined (vmzq.38) and are bounded blobs v2 paths around (02).
 // ponytail: id-global — v2 never breaks cobble/planks/fences anywhere while
 // pathing (explicit digs unaffected); a shared castle descriptor if v2 must
 // tunnel cobble far from home. v1 never installs it (zero diff).
-const NATURAL_CASTLE = new Set(['stone', 'granite', 'diorite', 'andesite', 'deepslate', 'tuff', 'calcite', 'smooth_basalt'])
+const NATURAL_CASTLE = new Set(['stone', 'deepslate'])
 let castleNames = null
 function castleNamesGuard(bot) {
   const byName = bot && bot.registry && bot.registry.blocksByName

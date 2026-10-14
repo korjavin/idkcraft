@@ -425,7 +425,7 @@ describe('castle break guard (g0z.55)', () => {
   const SITE = { x: 8, y: 65, z: -12 }
   const blocksByName = {}
   let id = 1
-  for (const n of ['cobblestone', 'stone', 'oak_planks', 'oak_log', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane', 'dirt', 'grass_block', 'chest']) {
+  for (const n of ['cobblestone', 'stone', 'deepslate', 'granite', 'tuff', 'oak_planks', 'oak_log', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane', 'dirt', 'grass_block', 'chest']) {
     blocksByName[n] = { id: id++, name: n, diggable: true }
   }
   const registry = { blocksByName, itemsByName: {} }
@@ -475,9 +475,9 @@ describe('castle break guard (g0z.55)', () => {
       const avoid = set.blocksToAvoidBreaking.split(',')
       const ban = set.blocksToDisallowBreaking.split(',')
       // Natural bulk kinds: a cost (v2 still tunnels rock); built-only: a hard ban.
-      for (const n of ['stone', 'oak_log']) assert.ok(avoid.includes(n) && !ban.includes(n), n)
+      for (const n of ['stone', 'deepslate', 'oak_log']) assert.ok(avoid.includes(n) && !ban.includes(n), n)
       assert.ok(avoid.includes('chest'), 'the default cant-break still crosses')
-      for (const n of ['cobblestone', 'oak_planks', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane']) {
+      for (const n of ['cobblestone', 'granite', 'tuff', 'oak_planks', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane']) {
         assert.ok(ban.includes(n), n)
       }
       for (const n of ['dirt', 'grass_block']) assert.ok(!avoid.includes(n) && !ban.includes(n), n)
