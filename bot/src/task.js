@@ -2155,7 +2155,11 @@ function maybeResume(bot, ctx, now) {
         continue
       }
       const ep = rec.taskPark
-      if (!ep || ep.auto !== true || typeof ep.at !== 'number') continue
+      if (!ep || typeof ep.at !== 'number') continue
+      // A latched park is 'parked for the day' (idkcraft-neuc.40): it
+      // resumes once the UTC day turns instead of waiting for an owner
+      // command forever. The day count resets on the next park.
+      if (ep.auto !== true && utcDay(ep.at) === utcDay(now)) continue
       if (now - ep.at < TASK_PARK_RETRY_MS) continue
       const n = (rec.parkHist && typeof rec.parkHist.n === 'number' && rec.parkHist.n >= 1) ? rec.parkHist.n : 1
       rec.parked = false

@@ -133,6 +133,14 @@ function taskParkOf(v) {
     return null
   }
 }
+// Restart re-arm (idkcraft-neuc.40): a latched (owner-wait) park restored
+// from disk becomes one auto retry on its 60-min timer — a deploy may have
+// fixed what stalled, and nothing else unparked it. parkHist keeps the day
+// count, so the next park that day latches again: one try per restart.
+function rearmPark(rec) {
+  if (rec && rec.taskPark) rec.taskPark.auto = true
+  return rec
+}
 function parkHistOf(v) {
   try {
     if (!v || typeof v !== 'object') return null
@@ -551,7 +559,7 @@ function restore(bot, ctx, file, now) {
     // order-time site checks never re-run over it.
     const castle = castleOf(doc.castle)
     if (castle) {
-      ctx.castle = castle
+      ctx.castle = rearmPark(castle)
       out.castle = 1
     }
     if (typeof doc.follow === 'string' && doc.follow) {
@@ -591,7 +599,7 @@ function restore(bot, ctx, file, now) {
       if (h && h.kind === 'castle' && !(c && c.site && c.site.x === h.castle.site.x && c.site.y === h.castle.site.y &&
           c.site.z === h.castle.site.z && c.rot === h.castle.rot)) h = ctx.hutHome || null
       if (h) {
-        ctx.home = h
+        ctx.home = rearmPark(h)
         // The record's skips are this home's (ipn.10): a deploy mid-build
         // resumes past the given-up cells instead of re-looping them.
         try {

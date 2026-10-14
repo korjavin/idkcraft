@@ -331,8 +331,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     }
   } else if (msg === 'go work' || msg === 'free') {
     // Owner resume (vmzq.3): an L2 task park clears on the explicit order
-    // (internal work() entries — login adoption, resumeWork — keep it, so
-    // the L3 latch survives a restart). Owner castle parks keep theirs.
+    // (internal work() entries — login adoption, resumeWork — keep it; a
+    // restart re-arms an L3 latch as one 60-min retry, neuc.40). Owner
+    // castle parks keep theirs.
     try {
       if (taskMod.clearTaskParks(bot && bot._tickerCtx) && ticker) ticker.saveMemory()
     } catch (_) { /* resume best-effort */ }
