@@ -1702,8 +1702,11 @@ function stepWhy(name, facts, bot, ctx, text) {
           const ni = buildMod.nextCellIdx(bot, home, ctx.buildSkip, ctx) // build's own pick (6x7.21)
           // Unloaded next cell (45j): only the plank batch gates, as in feasible.
           if (ni >= 0) kind = buildMod.cellLoaded(bot, home, buildMod.blueprintFor(home)[ni]) ? buildMod.blueprintFor(home)[ni].kind : 'unloaded'
+          else if (!buildMod.isComplete(bot, home)) kind = 'holes'
         }
       } catch (_) { kind = null }
+      // neuc.42: only given-up cells left — no item is the reason.
+      if (kind === 'holes') return 'build: only skipped cells left'
       if ((kind === 'table' && facts.table === 0) || (kind === 'door' && facts.door === 0) ||
         (kind == null && (facts.table === 0 || facts.door === 0))) return 'build: need table/door item'
       if (facts.planks < Math.min(PLANK_COUNT, 16)) return `build: need ${Math.min(PLANK_COUNT, 16)} planks, have ${facts.planks}`

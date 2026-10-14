@@ -657,14 +657,14 @@ describe('d7i gave-up wedge skips the cell', () => {
   // scaffold dirt sat in an upper wall cell; every place refused 'dirt',
   // the cell skipped, the once-retry re-skipped it and the house failed
   // skipped-cells. Our own block in a wall cell is cleared like the table.
-  function scaffoldInWall(own) {
+  function scaffoldInWall(own, name = 'dirt') {
     const home = { site: { x: 0, y: 64, z: 0 }, v: 2, built: false }
     const plan = build.blueprintFor(home)
     const idx = plan.findIndex((c) => c.kind === 'planks' && c.dy === 2 && c.dz === 0 && c.dx === 1)
     const c = plan[idx]
     const world = makeWorld()
     paintHouse(world, home, [idx])
-    world.set(c.dx, 64 + c.dy, c.dz, 'dirt')
+    world.set(c.dx, 64 + c.dy, c.dz, name)
     const bot = mockBot(world, {
       items: [{ name: 'oak_planks', count: 64 }],
       at: pos(c.dx + 0.5, 64, -1.5),
@@ -700,8 +700,11 @@ describe('d7i gave-up wedge skips the cell', () => {
     assert.deepEqual(ctx.buildSkip, [])
   })
 
-  it('dirt in a wall cell that is not ours is never dug: the cell skips after 3 (6x7.23)', async () => {
-    const { idx, c, world, bot, ctx } = scaffoldInWall(false)
+  // neuc.42: foreign natural ground (the Baritone body's untracked dirt)
+  // is now dug like our own (build-neuc42.test.js); a foreign non-natural
+  // block keeps the 6x7.23 rule.
+  it('cobblestone in a wall cell that is not ours is never dug: the cell skips after 3 (6x7.23)', async () => {
+    const { idx, c, world, bot, ctx } = scaffoldInWall(false, 'cobblestone')
     const q = quiet()
     try {
       for (let t = 0; t < 20 && ctx.buildSkip.length === 0; t++) {
@@ -712,7 +715,7 @@ describe('d7i gave-up wedge skips the cell', () => {
       q.restore()
     }
     assert.deepEqual(bot.calls.digs, [])
-    assert.equal(world.get(c.dx, 64 + c.dy, c.dz), 'dirt')
+    assert.equal(world.get(c.dx, 64 + c.dy, c.dz), 'cobblestone')
     assert.deepEqual(ctx.buildSkip, [idx])
   })
 
