@@ -434,6 +434,38 @@ describe('task stall clock (vmzq.2)', () => {
     assert.equal(ctx.task.house.stallMs, 1000, 'wood past the cells left does not reset')
   })
 
+  it('a placed cell re-baselines the wood mark, so the next gather run credits again (oqj5)', () => {
+    const items = [{ name: 'oak_planks', count: 64 }]
+    const bot = makeBot({ items })
+    const build = require('../src/behaviours/build')
+    const home = { site: { x: 0, y: 64, z: 0 }, built: false, v: 2 }
+    const cell = build.blueprintFor(home)[1] // a plank wall cell (plan[0] is the table)
+    const key = `${cell.dx},${64 + cell.dy},${cell.dz}`
+    let placed = false
+    bot.blockAt = (p) => (placed && `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` === key
+      ? { name: 'oak_planks', boundingBox: 'block' }
+      : { name: 'air', boundingBox: 'empty' })
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    ticker.setHome(home)
+    ticker.work()
+    const ctx = bot._tickerCtx
+    const t0 = 1000000000000
+    let s = 0
+    const tick = () => taskMod.taskTick(bot, ctx, t0 + (++s) * 1000)
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.house.wood, 64)
+    placed = true // the build run lays its planks
+    items[0].count = 0
+    for (let i = 0; i < 61; i++) tick() // past the 60 s cells cache
+    assert.equal(ctx.task.house.done, 32)
+    assert.equal(ctx.task.house.wood, 0, 'cells adopt the spent wood')
+    tick()
+    items[0].count = 4 // the next gather run, far below the old 64 mark
+    tick()
+    assert.equal(ctx.task.house.stallMs, 0, 'wood credits again after a build run')
+    assert.equal(lines.filter((l) => l === 'goal reset kind=house why=wood').length, 1, JSON.stringify(lines))
+  })
+
   it('unloaded house holds the baseline (core-1)', () => {
     const bot = makeBot()
     let loaded = true
