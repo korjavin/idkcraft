@@ -617,10 +617,11 @@ pathing hard-bans both kinds, so
 only an explicit dig gets out. The verdict adds `, start=<d>[/<cell>],
 escaped@<s>, home@<s>` (first second in the castle interior) and
 `regress=<n>` (castle regress lines over the whole window; 0 = it never
-tunnelled through the walls):
+tunnelled through the walls). Pin the pad: the start lands off it, and
+an unpinned pick can put the cell under a lake (padspot 250,350 is dry):
 
 ```sh
-CASTLE_SEED=complete CASTLE_BODY=baritone CASTLE_START=50,-5,31 CASTLE_START_CELL=cobble sh bot/tools/castle-rig.sh --night 18
+CASTLE_PADSPOT=250,350 CASTLE_SEED=complete CASTLE_BODY=baritone CASTLE_START=50,-5,31 CASTLE_START_CELL=cobble sh bot/tools/castle-rig.sh --night 18
 ```
 
 Interrupts clean up after themselves: `kill -INT`/`-TERM` (or Ctrl-C)
