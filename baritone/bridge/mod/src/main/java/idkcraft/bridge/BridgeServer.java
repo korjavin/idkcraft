@@ -427,7 +427,8 @@ public final class BridgeServer {
         // independent) counts as pathing too. Falls back to the cached
         // value while the client is booting.
         Boolean fresh = submit(() -> baritone.getPathingBehavior().isPathing()
-                || baritone.getCustomGoalProcess().isActive());
+                || baritone.getCustomGoalProcess().isActive()
+                || Mine.isActive()); // idkcraft-neuc.53: a live mine reads as pathing, never idle
         if (fresh != null) {
             pathing = fresh;
         }

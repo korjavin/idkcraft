@@ -19,6 +19,7 @@ const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.
 const { installLifecycle, handleLifecycleEvent } = require('./lifecycle') // idkcraft-neuc.10: lifecycle/event parity
 const { installWindows, handleWindowEvent } = require('./windows') // idkcraft-neuc.11: container windows
 const { installInteract, handleInteractEvent } = require('./interact') // idkcraft-neuc.7: dig/place
+const { installMine, handleMineEvent } = require('./mine') // idkcraft-neuc.53: baritone.mine -> MineProcess
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 // Failed fire-and-forget baritone.cmd: log, never emit 'error' (runOnce
@@ -380,6 +381,7 @@ class BaritoneBot extends EventEmitter {
     installLifecycle(this) // neuc.10: isAlive/foodSaturation/respawn()
     installWindows(this) // idkcraft-neuc.11: openContainer/openChest/openFurnace/currentWindow/clickWindow/closeWindow
     installInteract(this) // idkcraft-neuc.7: dig/stopDigging/targetDigBlock/placeBlock/swingArm — before 'spawn' (util.js wraps placeBlock)
+    installMine(this) // idkcraft-neuc.53: bot.mine (v2 only; v1 never loads bridge/)
   }
 
   // mineflayer plugin host: the bridge body needs no plugins (runOnce calls
@@ -1027,6 +1029,7 @@ class BaritoneBot extends EventEmitter {
     if (handleLifecycleEvent(this, method, params)) return // idkcraft-neuc.10: death/respawn/health/…/kicked/end
     if (handleWindowEvent(this, method, params)) return // idkcraft-neuc.11: window.open/slot/close
     if (handleInteractEvent(this, method, params)) return // idkcraft-neuc.7: dig.progress/done/abort
+    if (handleMineEvent(this, method, params)) return // idkcraft-neuc.53: baritone.event kind mine
     const p = params || {}
     switch (method) {
       case 'chat':

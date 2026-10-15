@@ -555,6 +555,44 @@ function digTick(bot, ctx, st, bp) {
     fail(bot, ctx, 'pack-full', new Error('pack full, banking first'))
     return
   }
+  // v2 Baritone body (idkcraft-neuc.53): one MineProcess does the whole
+  // scaffold loop — Baritone scans, paths, digs and walks over the drops
+  // until the kit is full. The pack-reserve guard above still runs (a pack
+  // invariant, not the dig loop); the v1 scan/approach/dig below is
+  // unreached on v2. Rejects fail 'blocks' so the atl.4 hold and the
+  // equipLatched wording keep working.
+  if (typeof bot.mine === 'function') {
+    const need = SCAFFOLD_FULL - scaffoldCount(bot)
+    if (need <= 0) return
+    if (ctx.equipDigInFlight) return
+    ctx.equipDigInFlight = true
+    const gen = stepGen(ctx)
+    let settled = false
+    const done = (fn) => {
+      if (settled) return
+      settled = true
+      ctx.equipDigInFlight = false
+      if (typeof fn === 'function') fn()
+    }
+    // Forbid the cells the v1 scan skips: protected ground, our own
+    // footprint placements and the castle site. Block-level protection
+    // rides the #set avoid lists from Movements; this leashes the body.
+    const forbid = (pos) => {
+      try {
+        if (!pos || typeof pos.x !== 'number') return false
+        if (ctx && ctx.castle && ctx.castle.site && onSite(ctx.castle, pos)) return true
+        if (typeof bot.blockAt !== 'function') return false
+        const b = bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) - 1, Math.floor(pos.z)))
+        if (!b) return false
+        return protectedReason(bot, b, ctx) !== null || ownInFootprint(ctx, b)
+      } catch (_) { return false }
+    }
+    bot.mine(digTargets(bot), need, { radius: 12, forbid }).then(
+      () => done(),
+      (err) => done(() => fail(bot, ctx, 'blocks', err instanceof Error ? err : new Error(String(err)), gen)),
+    )
+    return
+  }
   if (st.digs >= DIG_STALL_STRIKES) {
     fail(bot, ctx, 'blocks', new Error('dig-stall'))
     return

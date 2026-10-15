@@ -34,6 +34,7 @@ inside the same envelope — no second port.
 | `state.get` | — | `{pos:{x,y,z,yaw,pitch,onGround,inWater,inLava,digging,vel},health,food,oxygen,time,spawn,isRaining,isSleeping,dimension,gameMode}` (all null offline; `inWater`/`inLava` = the client `isInWater()`/`isInLava()`, neuc.25; `digging` = `gameMode.isDestroying()`, holds the adapter's stall re-plan, neuc.30) | `entity/position/health/food`, `time`, `game`, `isRaining` |
 | `chat.send` | `{message}` (`/…` runs a command) | `{sent:true}` | `chat(msg)` |
 | `baritone.cmd` | `{command}` e.g. `#goto x y z` (`#` stripped) | `{id}` (fresh id per cmd; goal cmds arm the tracker) | `pathfinder.setGoal/stop` |
+| `baritone.mine` | `{blocks:[names],count,radius}` (neuc.53 section below) | `{id,have,target}` | `bot.mine` (v2 only; undefined on v1) |
 | `baritone.status` | — | `{id,pathing,last}` (`last`: `none` before any terminal) | `isMoving`, `path_update`/`path_reset` |
 | `entities.list` | — | `{entities:[…]}` (shape in the entities section below) | `bot.entities[id]` |
 | `roster.get` | — | `{players:[…]}` | `bot.players[name]` |
@@ -88,6 +89,40 @@ goal or `#stop`). `#stop`'s
 `CANCELED` resolves the TRACKED goal id as `stopped` (idle stops stay
 silent). A cmd issued at the menu resolves `stopped` on the next tick —
 no player to drive.
+
+## Mine (idkcraft-neuc.53)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Mine.java`
+(`Mine.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/mine.js` (`installMine` in the adapter
+constructor; `handleMineEvent` first in the adapter's event router for
+`baritone.event` with `kind:'mine'`).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `baritone.mine` | `{blocks:[names],count,radius}` (`blocks` non-empty, `count` positive; `radius` accepted, enforced in Node) | `{id,have,target}` (`target` = live matching count + `count`, Baritone's absolute quantity) | `bot.mine(names,count,{radius,forbid})` → `Promise<{have}>` |
+
+Quantity is Baritone's own: `IMineProcess.mineByName(target, ...blocks)`
+stops when the inventory holds `target` (verified against the
+baritone-api 1.18.0 jar the Dockerfile ships). Drops count toward
+their block (stone→cobblestone, grass_block→dirt), both sides. Cancel:
+`#stop` already cancels every process (kept — no new verb); the next
+tick reports the end. Progress: `baritone.event
+{kind:'mine',id,have,target,active}` on each tick the count changes
+and once on end (`status:'done'` when `have >= target`, else
+`'noPath'` — the process gave up by itself; a process that stays live
+without gaining is the Node stall). `baritone.status` reads a live
+mine as pathing (the custom-goal probe counts it, so the stall
+watchdog never reads a live mine as idle). Settings ride the existing
+`#set` path with the verb: `mineScanDroppedItems true`, `legitMine
+false`, `mineGoalUpdateInterval 5` (Baritone 1.18.0 defaults, pinned because
+`#set` persists to the client settings.txt across calls). Baritone has no per-process
+region: the Node side leashes (`radius` from the start position, plus
+a caller `forbid(pos)` — a leash that trips on entry, so a mine that
+starts inside never fails at once) and rejects
+`mine-noPath`/`mine-stall`/`mine-leash`. On v1 `bot.mine` is
+undefined (no mineflayer implementation — callers branch on
+`typeof bot.mine === 'function'`).
 
 ## Prod methods (sized, not in the spike)
 

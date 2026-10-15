@@ -1197,7 +1197,7 @@ function pickQuarry(bot, ctx, f) {
 // pickup reach, pickaxe in hand, one dig at a time with a deadline).
 // Pack-full yield (g0z.26): roomForDrop lives in stockpile (oqul.12).
 const roomForDrop = (bot, ctx) => stockpileMod.roomForDrop(bot, ctx)
-function digTick(bot, ctx, f) {
+function digTick(bot, ctx, f, d) {
   const bp = bodyPos(bot)
   if (!bp) { spend(f, 'other'); return }
   if (!hasPickaxe(bot)) { spend(f, 'other'); finish(bot, ctx, 'done'); return } // equip rearms first
@@ -1232,6 +1232,34 @@ function digTick(bot, ctx, f) {
         try { console.log('castlefetch stone: pick upgrade done, digging on') } catch (_) { /* log best-effort */ }
       }
     }
+  }
+  // v2 Baritone body (idkcraft-neuc.53): one MineProcess does the whole
+  // stone leg — Baritone scans, paths, digs and walks over the drops
+  // until the batch is on hand. The guards and the pick upgrade above
+  // still run; the v1 target picking, walks and per-block digs below are
+  // unreached on v2. mine-stall keeps the 'failed:castlefetch-dig-stall'
+  // reason string (the goal watchdog and metrics key on it).
+  if (typeof bot.mine === 'function') {
+    const need = (d && typeof d.short === 'number' && d.short > 0) ? d.short : castleMod.BATCH
+    if (ctx.castleFetchInFlight) return
+    ctx.castleFetchInFlight = true
+    ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig
+    spend(f, 'dig')
+    const st0 = ctx.castle
+    const forbid = (pos) => {
+      try { return !!(st0 && st0.site && onSite(st0, pos)) } catch (_) { return false }
+    }
+    bot.mine(['stone', 'cobblestone'], need, { radius: DIG_RADIUS, forbid }).then(
+      () => { ctx.castleFetchInFlight = false; finish(bot, ctx, 'done') },
+      (err) => {
+        ctx.castleFetchInFlight = false
+        const m = err && err.message
+        if (m === 'mine-noPath') finish(bot, ctx, 'failed:castlefetch-no-stone')
+        else if (m === 'mine-leash') finish(bot, ctx, 'failed:castlefetch-unreachable')
+        else finish(bot, ctx, 'failed:castlefetch-dig-stall')
+      },
+    )
+    return
   }
   const st = ctx.castle
   const skip = f.skip || (f.skip = new Set())
@@ -1435,7 +1463,7 @@ function castlefetch(bot, ctx, target, state) {
   if (st.status !== NO_WOOD || !WOOD.has(d.kind)) st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
-  if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot))) { digTick(bot, ctx, f); return }
+  if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot))) { digTick(bot, ctx, f, d); return }
   if (d.kind === 'planks' || d.kind === 'door' || d.kind === 'fence' || d.kind === 'chest' || d.kind === 'frame') {
     // Logs from the world: gather chops a load and ends the leg itself
     // ('done' at NEED_LOGS, or its own failure); the next pick crafts

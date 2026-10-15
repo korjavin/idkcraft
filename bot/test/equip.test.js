@@ -2875,3 +2875,51 @@ describe('tableFor sight (neuc.50)', () => {
     } finally { craftMod.tableUsable = real }
   })
 })
+
+describe('equip v2 mine branch (idkcraft-neuc.53)', () => {
+  const KIT = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
+
+  it('one bot.mine call for the shortfall, no bot.dig', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1, 'exactly one mine call')
+    assert.deepEqual(mines[0].names, ['dirt', 'grass_block', 'stone', 'cobblestone'])
+    assert.equal(mines[0].count, 22, 'SCAFFOLD_FULL(32) - scaffold(10)')
+    assert.equal(mines[0].opts.radius, 12)
+    assert.equal(typeof mines[0].opts.forbid, 'function')
+    assert.equal(bot.calls.dig.length, 0, 'no single digs on the mine path')
+    await flush()
+    assert.equal(ctx.equipDigInFlight, false, 'the in-flight flag clears on resolve')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('a rejected mine fails blocks so the hold and latch keep working', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    bot.mine = async () => { throw new Error('mine-stall') }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.equipDigInFlight, false)
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+    assert.ok(bot.errs.join(' ').includes('mine-stall'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('a full kit never mines', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 32 }], ids: IDS, recipes: {} })
+    let mined = 0
+    bot.mine = async () => { mined++ }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(mined, 0)
+    assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
+  })
+})
