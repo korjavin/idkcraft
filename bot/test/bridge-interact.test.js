@@ -142,7 +142,10 @@ describe('bridge dig/place (idkcraft-neuc.7)', () => {
     // the castle stair site places through it on v2 (no placeBlock fallback re-aim)
     await castle.placeFaced(bot, { ref: bot.blockAt(new Vec3(6, 64, 5)), face: new Vec3(0, 1, 0) }, { x: 6, y: 65, z: 5 })
     const faced = transport.state.placeLog[1]
-    assert.equal(faced.yaw, bot.entity.yaw)
+    // placeFaced's lookAt aims at the cell centre (6.5,65.5,5.5) from the eye at y 65.62;
+    // a placeBlock re-aim would send the top-face centre pitch atan2(0.38, 2) instead
+    assert.equal(faced.yaw, Math.atan2(-2, -0))
+    assert.ok(Math.abs(faced.pitch - Math.atan2(65.5 - 65.62, 2)) < 1e-9, `pitch ${faced.pitch}`)
     assert.equal(faced.sneak, false)
     // plain placeBlock still aims at the face centre
     await bot.placeBlock(bot.blockAt(new Vec3(5, 64, 5)), new Vec3(0, 1, 0))
