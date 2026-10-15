@@ -134,7 +134,7 @@ const MENU = {
     // the planks would pile past what the castle needs (prod: 700 in 11
     // slots). Table/door branches are unaffected (they spend planks).
     feasible: (facts, bot, ctx) => !(ctx && ctx.home && ctx.home.parked) && ((facts.logs >= NEED_LOGS && !woodCapped(bot, ctx) && !String(facts.castle).startsWith('frame-') &&
-      !(facts.castle === 'blocked' && ctx && ctx.castleWord && ctx.castleWord.kind === 'frame')) || (facts.maxPlanks >= 4 && facts.table === 0 && (!facts.tablePlaced || facts.tableOwed)) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced)),
+      !(facts.castle === 'blocked' && ctx && ctx.castleWord && ctx.castleWord.kind === 'frame')) || (facts.maxPlanks >= 4 && facts.table === 0 && ((!facts.tablePlaced && !facts.houseTable) || facts.tableOwed)) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced)),
     chat: () => 'on my own: crafting planks and tools',
     verb: 'crafting',
   },
@@ -1248,6 +1248,9 @@ function goalFacts(bot, ctx) {
   // no-table forever; an unloaded chunk keeps its claim (stationStanding).
   const tablePlaced = stationStanding(bot, ctx && ctx.home && ctx.home.table) ||
     stationStanding(bot, ctx && ctx.claimedTable)
+  // neuc.47: the house table cell stands (claimed or not yet): no new table.
+  let houseTable = false
+  try { houseTable = !!buildMod.houseTableAt(bot, ctx && ctx.home) } catch (_) { houseTable = false }
   // neuc.41: the house table cell still wants a table item, whatever
   // station stands elsewhere (craft makes one; build lays it).
   let tableOwed = false
@@ -1358,7 +1361,7 @@ function goalFacts(bot, ctx) {
   } catch (_) { /* unknown food reads full */ }
   let rearm = false
   try { rearm = require('./behaviours/equip').pickRearmDue(bot, ctx) } catch (_) { rearm = false }
-  return { rearm, time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, tableOwed, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
+  return { rearm, time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, tableOwed, houseTable, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
@@ -1709,7 +1712,7 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'craft':
       if (ctx && ctx.home && ctx.home.parked) return 'craft: house parked'
       if (facts.table === 0 && facts.tableOwed) return `craft: need 4 planks for the house table, have ${facts.maxPlanks}`
-      if ((facts.table > 0 || facts.tablePlaced) && facts.door > 0) return 'craft: nothing to craft'
+      if ((facts.table > 0 || facts.tablePlaced || facts.houseTable) && facts.door > 0) return 'craft: nothing to craft'
       if (facts.door === 0 && facts.tablePlaced) return `craft: need 6 planks for the door, have ${facts.maxPlanks}`
       if (facts.table === 0 && !facts.tablePlaced) return `craft: need 4 planks for the table, have ${facts.maxPlanks}`
       if (facts.logs >= NEED_LOGS && woodCapped(bot, ctx)) return 'craft: wood store full, banking the surplus'

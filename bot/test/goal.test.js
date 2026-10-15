@@ -1239,6 +1239,25 @@ describe('neuc.41 the house table cell outranks a roadside station', () => {
   })
 })
 
+describe('neuc.47 the table just laid in the house cell is a station before build claims it', () => {
+  it('no table item, no home.table yet, table cell stands: no table craft', () => {
+    const home = siteFor(flatBot(), pos(0, 64, 0))
+    const t = { x: home.site.x + 5, y: home.site.y, z: home.site.z + 1 } // v2 table cell
+    const bot = goalBot({ items: [{ name: 'acacia_planks', count: 90 }, { name: 'acacia_door', count: 1 }] })
+    const ctx = { home }
+    const atT = (p) => Math.floor(p.x) === t.x && Math.floor(p.y) === t.y && Math.floor(p.z) === t.z
+    bot.blockAt = (p) => ({ name: atT(p) ? 'crafting_table' : 'air' })
+    const f = goalFacts(bot, ctx)
+    assert.equal(f.table, 0)
+    assert.equal(f.houseTable, true)
+    assert.equal(f.tableOwed, false)
+    assert.equal(MENU.craft.feasible(f, bot, ctx), false) // pre-fix: true, a second table from the kit planks
+    assert.equal(stepWhy('craft', f, bot, ctx, ''), 'craft: nothing to craft')
+    bot.blockAt = () => null // unloaded: no claim (unlike stationStanding)
+    assert.equal(goalFacts(bot, ctx).houseTable, false)
+  })
+})
+
 describe('rest re-pick after failure (idkcraft-q0h round 2)', () => {
   it('empty menu re-picks rest: the hold paces episodes, not the menu', async () => {
     // Round-1 core-1: after rest fails as the only option, the arbiter
