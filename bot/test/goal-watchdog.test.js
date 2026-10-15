@@ -190,6 +190,16 @@ describe('goal watchdog env (vmzq.21)', () => {
     assert.equal(taskMod.ownerOnline({ username: 'IdkBot', players: {} }), false)
     assert.equal(taskMod.ownerOnline({ username: 'IdkBot', players: { Steve: {} } }), true)
     assert.equal(taskMod.ownerOnline({ username: 'IdkBot', players: { IdkBot: {} } }), false, 'self excluded')
+    process.env.BOT_USERNAME = 'IdkBot'
+    process.env.BOT2_USERNAME = 'IdkBot2'
+    try {
+      const only = { username: 'IdkBot', players: { IdkBot: {}, IdkBot2: {} } }
+      assert.equal(taskMod.ownerOnline(only), false, 'peer bot is not an owner')
+      assert.equal(taskMod.ownerOnline({ username: 'IdkBot', players: { IdkBot2: {}, Steve: {} } }), true)
+    } finally {
+      delete process.env.BOT_USERNAME
+      delete process.env.BOT2_USERNAME
+    }
   })
 
   it('GOAL_WATCHDOG_MS=0 keeps the shipped one-shot ladder (acceptance 5)', async () => {
