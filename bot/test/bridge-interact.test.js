@@ -125,6 +125,30 @@ describe('bridge dig/place (idkcraft-neuc.7)', () => {
     assert.equal(bot.heldItem.count, 2)
   })
 
+  it('_placeBlockWithOptions (neuc.24 castle stairs): forceLook ignore keeps the looked yaw, half bottom lowers a side cursor, held sneak rides the click', async () => {
+    const castle = require('../src/behaviours/castle')
+    const ref = bot.blockAt(new Vec3(6, 64, 5)) // stone; its north face -> (6,64,4)
+    await bot.look(Math.PI / 2, 0) // stair plan face: whatever the caller looked along
+    bot.setControlState('sneak', true)
+    await bot._placeBlockWithOptions(ref, new Vec3(0, 0, -1), { forceLook: 'ignore', half: 'bottom', swingArm: 'right' })
+    bot.setControlState('sneak', false)
+    const call = transport.state.placeLog[0]
+    assert.deepEqual([call.x, call.y, call.z, call.face], [6, 64, 4, 'north'])
+    assert.equal(call.yaw, Math.PI / 2) // not re-aimed at the face centre: the stair faces the plan
+    assert.equal(call.pitch, 0)
+    assert.deepEqual(call.cursor, { x: 0.5, y: 0.25, z: 0 })
+    assert.equal(call.sneak, true)
+    assert.equal(bot.blockAt(new Vec3(6, 64, 4)).name, 'cobblestone')
+    // the castle stair site places through it on v2 (no placeBlock fallback re-aim)
+    await castle.placeFaced(bot, { ref: bot.blockAt(new Vec3(6, 64, 5)), face: new Vec3(0, 1, 0) }, { x: 6, y: 65, z: 5 })
+    const faced = transport.state.placeLog[1]
+    assert.equal(faced.yaw, bot.entity.yaw)
+    assert.equal(faced.sneak, false)
+    // plain placeBlock still aims at the face centre
+    await bot.placeBlock(bot.blockAt(new Vec3(5, 64, 5)), new Vec3(0, 1, 0))
+    assert.deepEqual(transport.state.placeLog[2].cursor, { x: 0.5, y: 1, z: 0.5 })
+  })
+
   it('placeBlock refusals reject with mineflayer strings', async () => {
     const ref = bot.blockAt(new Vec3(5, 64, 5))
     transport.state.refusePlace = true

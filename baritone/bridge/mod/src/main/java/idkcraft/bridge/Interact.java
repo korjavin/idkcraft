@@ -8,6 +8,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
@@ -137,6 +138,13 @@ public final class Interact {
                 BlockPos ref = new BlockPos(x, y, z).relative(dir.getOpposite());
                 if (yaw != null && pitch != null) {
                     applyLook(player, yaw, pitch);
+                    // neuc.24: the server faces stairs/furnaces by ITS copy of
+                    // our rotation, which the client only sends on its next
+                    // tick — send it now so the click below is judged on it.
+                    if (player.connection != null) {
+                        player.connection.send(new ServerboundMovePlayerPacket.Rot(
+                                player.getYRot(), player.getXRot(), player.onGround(), player.horizontalCollision));
+                    }
                 }
                 BlockHitResult hit = new BlockHitResult(
                         new Vec3(ref.getX() + cx, ref.getY() + cy, ref.getZ() + cz), dir, ref, false);

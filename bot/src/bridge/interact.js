@@ -10,7 +10,9 @@
 //
 // Defined from the adapter constructor, i.e. before 'spawn' — util.js
 // trackPlaced/installPlaceTiming wrap bot.placeBlock at first spawn.
-// _placeBlockWithOptions stays absent (castle.js falls back to placeBlock).
+// _placeBlockWithOptions (neuc.24, castle stairs / faced blocks / beds):
+// mineflayer's forceLook 'ignore' + half, and a held sneak control state
+// rides the click like mineflayer's server-side sneak.
 //
 // This file requires nothing outside bot/src/bridge/ (epic section 2).
 'use strict'
@@ -124,17 +126,26 @@ function installInteract(bot) {
   // mineflayer swingArm: cosmetic; the mod swings on every dig/place itself.
   bot.swingArm = () => {}
 
-  // mineflayer placeBlock(referenceBlock, faceVector): look at the face
-  // centre, click it, then settle on the server's block.update for the
-  // target — a type change places; an unchanged answer (or none within
+  // mineflayer _placeBlockWithOptions(referenceBlock, faceVector, options):
+  // look at the face point (half 'top'/'bottom' moves a side face's cursor
+  // ±0.25 like _genericPlace), or with forceLook 'ignore' keep the current
+  // look — the stair/faced-block callers looked first, and the mod gets
+  // bot.entity's yaw/pitch so a sub-degree look.set skip cannot leave a
+  // stale rotation. Click, then settle on the server's block.update for
+  // the target — a type change places; an unchanged answer (or none within
   // 1 s) rejects with mineflayer's strings.
-  bot.placeBlock = async (referenceBlock, faceVector) => {
+  bot._placeBlockWithOptions = async (referenceBlock, faceVector, options = {}) => {
     if (!referenceBlock || !referenceBlock.position || !faceVector) throw new Error('placeBlock: want (referenceBlock, faceVector)')
     if (!bot.heldItem) throw new Error('must be holding an item to place')
     const rp = cell(referenceBlock.position)
     const dest = { x: rp.x + faceVector.x, y: rp.y + faceVector.y, z: rp.z + faceVector.z }
     const cursor = { x: 0.5 + faceVector.x * 0.5, y: 0.5 + faceVector.y * 0.5, z: 0.5 + faceVector.z * 0.5 }
-    const { yaw, pitch } = yawPitchFor(eyeOf(bot), { x: rp.x + cursor.x, y: rp.y + cursor.y, z: rp.z + cursor.z })
+    if (cursor.y === 0.5 && options.half === 'top') cursor.y += 0.25
+    else if (cursor.y === 0.5 && options.half === 'bottom') cursor.y -= 0.25
+    const { yaw, pitch } = options.forceLook === 'ignore'
+      ? { yaw: bot.entity.yaw || 0, pitch: bot.entity.pitch || 0 }
+      : yawPitchFor(eyeOf(bot), { x: rp.x + cursor.x, y: rp.y + cursor.y, z: rp.z + cursor.z })
+    const sneak = !!(bot.controlState && bot.controlState.sneak)
     const heldName = bot.heldItem.name
     let oldBlock = null
     try { oldBlock = bot.blockAt(new bot.Vec3(dest.x, dest.y, dest.z)) } catch (_) { oldBlock = null }
@@ -152,7 +163,7 @@ function installInteract(bot) {
       }
       bot.on('blockUpdate', onUpdate)
       try {
-        await bot.transport.call('place.once', { ...dest, face: faceName(faceVector), yaw, pitch, cursor, sneak: false })
+        await bot.transport.call('place.once', { ...dest, face: faceName(faceVector), yaw, pitch, cursor, sneak })
         bot.entity.yaw = yaw
         bot.entity.pitch = pitch
         timer = setTimeout(() => done({ timeout: true }), PLACE_WAIT_MS)
@@ -169,6 +180,9 @@ function installInteract(bot) {
       }
     })
   }
+
+  // mineflayer placeBlock = _placeBlockWithOptions with swingArm (the mod swings).
+  bot.placeBlock = (referenceBlock, faceVector) => bot._placeBlockWithOptions(referenceBlock, faceVector, { swingArm: 'right' })
 }
 
 // Mod dig notifications. dig.done writes the broken cell through (the
