@@ -130,6 +130,10 @@ const deps = {
   driveFurnace: (bot, ctx) => require('./gear').driveFurnace(bot, ctx, require('./furnace')),
 }
 
+// Wood kinds (g0z.56): crafted from planks/logs, chopped when short.
+const WOOD = new Set(['planks', 'door', 'fence', 'chest', 'frame'])
+const NO_WOOD = 'no wood within 64 — drop logs in the castle chest'
+
 function birchFirst(names) {
   return names.sort((a, b) => (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
 }
@@ -410,7 +414,11 @@ function craftTick(bot, ctx, f, d) {
   // with materials on hand and the reason was invisible in the logs.
   // Classified by kind; once per latch (craftOut), so no spam.
   if (r && typeof r.line === 'string' && r.line) {
-    try { console.log(`castlefetch ${d.kind}: craft failed: ${r.line}`) } catch (_) { /* log best-effort */ }
+    // g0z.56: with no wood at all craftany names its last tie-break variant
+    // (warped_fence) — name the real gap instead.
+    const woodless = WOOD.has(d.kind) && countItems(bot, (n) => n.endsWith('_planks') || n.endsWith('_log')) === 0
+    const line = woodless ? `can't craft ${d.kind}: no planks or logs` : r.line
+    try { console.log(`castlefetch ${d.kind}: craft failed: ${line}`) } catch (_) { /* log best-effort */ }
   }
   f.craftOut = true // the pack cannot fund it: fall through to the world
   return false
@@ -1410,7 +1418,7 @@ function castlefetch(bot, ctx, target, state) {
     finish(bot, ctx, 'done')
     return
   }
-  st.status = `fetching ${d.kind}`
+  if (st.status !== NO_WOOD || !WOOD.has(d.kind)) st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
   if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot))) { digTick(bot, ctx, f); return }
@@ -1429,6 +1437,13 @@ function castlefetch(bot, ctx, target, state) {
     deps.gather(bot, ctx, target, state)
     if (isFinished(ctx.stepStatus)) {
       if (d.kind === 'fence' && failReason(ctx.stepStatus) !== null) castleMod.noteDry(ctx, 'fence')
+      // g0z.56: the wood shortfall, named once on the castle status (the
+      // 'castle' / 'castle repair' replies read it) — the owner's shortcut
+      // is the castle chest, chestTick's first source next leg.
+      if (failReason(ctx.stepStatus) === 'no-trees' && st.status !== NO_WOOD) {
+        st.status = NO_WOOD
+        try { console.log(`castlefetch ${d.kind}: ${NO_WOOD}`) } catch (_) { /* log best-effort */ }
+      }
       ctx.castleFetch = null
     }
     return
