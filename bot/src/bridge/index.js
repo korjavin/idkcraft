@@ -115,7 +115,12 @@ function goalToBaritone(goal, from) {
   // stopped beside it while v1 had long arrived. `#near` is the mod's own
   // verb for Baritone's GoalNear (same distSq <= r² test as isEnd; the
   // floored range never accepts a cell v1 would not).
-  if (name === 'GoalNear' && typeof goal.x === 'number' && typeof goal.y === 'number' &&
+  // GoalSeeTable (craft.tableGoal, g0z.40) is a GoalNear whose isEnd also
+  // wants sight of the table; unmapped it answered noPath and every table
+  // walk on v2 failed (neuc.50: castlefetch stairs "can't reach the crafting
+  // table"). ponytail: Baritone has no sight test — the range rides along and
+  // the caller's tableUsable re-check + walk give-up cover a blind arrival.
+  if ((name === 'GoalNear' || name === 'GoalSeeTable') && typeof goal.x === 'number' && typeof goal.y === 'number' &&
     typeof goal.z === 'number' && typeof goal.rangeSq === 'number' && goal.rangeSq >= 0) {
     return `#near ${goal.x} ${goal.y} ${goal.z} ${Math.floor(Math.sqrt(goal.rangeSq))}`
   }
