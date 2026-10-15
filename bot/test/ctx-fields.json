@@ -1602,6 +1602,7 @@
   "stepFail": {
     "writers": [
       "src/behaviours/stockpile.js",
+      "src/chat.js",
       "src/goal.js",
       "src/index.js",
       "src/orders.js"

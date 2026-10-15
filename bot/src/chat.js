@@ -592,8 +592,20 @@ function upgradeLine(bot, st, loaded) {
   return `castle upgrading v${st.upgrade.from} -> v${blueprint.blueprintOf(st.blueprintVersion).version}, ${left} steps`
 }
 
+// Missing place cells of a castle by kind (g0z.56), most first; the moat
+// is left out (a complete castle never re-digs it). Null when intact.
+const WOOD_KINDS = new Set(['planks', 'frame', 'fence', 'door', 'chest'])
+function damageOf(by) {
+  const miss = Object.entries(by).filter(([k, e]) => k !== 'moat' && e.done < e.total)
+    .map(([k, e]) => [k, e.total - e.done]).sort((a, b) => b[1] - a[1])
+  const n = miss.reduce((s, [, m]) => s + m, 0)
+  if (!n) return null
+  return { n, kinds: miss.map(([k]) => k), line: `${n} cells missing (${miss.map(([k, m]) => `${k} ${m}`).join(', ')})` }
+}
+
 // One castle per bot: 'build castle' starts it, 'castle' reports, 'castle
-// stop' / 'castle go' park and resume, 'castle forget' drops the project
+// stop' / 'castle go' park and resume, 'castle repair' reports the damage
+// and resumes the relay, 'castle forget' drops the project
 // (the laid blocks stay), 'castle upgrade' relays a complete older castle
 // to the current blueprint. Returns the reply line, or null for silence.
 function castleChat(bot, ticker, playerName, cmd) {
@@ -651,8 +663,33 @@ function castleChat(bot, ticker, playerName, cmd) {
     let done = 0
     let total = 0
     for (const e of Object.values(by)) { done += e.done; total += e.total }
+    const pct = total ? Math.floor((100 * done) / total) : 100
+    // g0z.56: a complete castle reports its damage by kind, not the
+    // per-kind laid counts (the relay re-lays exactly these cells).
+    const dmg = st.phase === 'complete' ? damageOf(by) : null
+    if (dmg) return `castle at ${at(st.site)}: ${pct}%, ${dmg.line}; ${tail}`
     const parts = Object.entries(by).map(([k, e]) => `${k} ${e.done}/${e.total}`).join(', ')
-    return `castle at ${at(st.site)}: ${total ? Math.floor((100 * done) / total) : 100}% (${parts}); ${tail}`
+    return `castle at ${at(st.site)}: ${pct}% (${parts}); ${tail}`
+  }
+  if (cmd === 'castle repair') {
+    // g0z.56: owner-facing repair verb. The relay itself already runs on
+    // every complete castle (castle.js pick: place cells read live); this
+    // reports the damage and resumes like 'castle go'. Intact or unseen:
+    // nothing changes.
+    if (st.phase !== 'complete') return 'the castle is not finished yet — say castle go to resume'
+    if (!castleMod.siteLoaded(bot, st)) return `castle at ${at(st.site)}: too far to see the damage — bring me near it and say castle repair`
+    const dmg = damageOf(castleMod.progressByKind(bot, st))
+    if (!dmg) return `castle at ${at(st.site)} is intact — nothing to repair`
+    const dry = typeof st.status === 'string' && st.status.startsWith('no wood') ? `; ${st.status}` : ''
+    try { taskMod.clearTaskParks(ctx) } catch (_) { /* resume best-effort */ }
+    // The owner may just have filled the chest: the fetch retries now, not
+    // after the CASTLEFETCH_RETRY_MS hold.
+    if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.castlefetch
+    st.parked = false
+    ticker.saveMemory()
+    ticker.work()
+    const wood = dmg.kinds.some((k) => WOOD_KINDS.has(k)) ? ' — drop logs in the castle chest to speed it up' : ''
+    return `castle: ${dmg.line}; repairing${wood}${dry}`
   }
   if (cmd === 'castle stop') {
     st.parked = true
@@ -700,7 +737,7 @@ function castleChat(bot, ticker, playerName, cmd) {
     ticker.work()
     return `upgrading the castle to stair blocks: ~${stairsTotal(st)} steps, I keep sleeping inside`
   }
-  return 'try: castle, castle stop, castle go, castle forget, castle upgrade'
+  return 'try: castle, castle stop, castle go, castle repair, castle forget, castle upgrade'
 }
 
 // jr2.2: an order takes the body even at night — the server ignores
