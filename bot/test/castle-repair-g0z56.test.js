@@ -83,7 +83,7 @@ describe('castle repair (g0z.56)', () => {
     const work = ticker.work
     ticker.work = () => { worked++; return work() }
     handleChat(bot, ticker, 'Steve', 'castle repair')
-    assert.equal(bot.chats.pop(), 'castle: 20 cells missing (fence 12, stone 4, torch 3, door 1); repairing — drop logs or planks in the castle chest to speed it up')
+    assert.equal(bot.chats.pop(), 'castle: 20 cells missing (fence 12, stone 4, torch 3, door 1); repairing — drop logs in the castle chest to speed it up')
     assert.equal(ctx.castle.parked, false)
     assert.equal(worked, 1)
   })
@@ -123,7 +123,7 @@ describe('castle repair (g0z.56)', () => {
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     bot._tickerCtx.castle = castleState({ status: 'no wood within 64 — drop logs in the castle chest' })
     handleChat(bot, ticker, 'Steve', 'castle repair')
-    assert.match(bot.chats.pop(), /; repairing — drop logs or planks in the castle chest to speed it up; no wood within 64 — drop logs in the castle chest$/)
+    assert.match(bot.chats.pop(), /; repairing — drop logs in the castle chest to speed it up; no wood within 64 — drop logs in the castle chest$/)
     handleChat(bot, ticker, 'Steve', 'castle')
     assert.match(bot.chats.pop(), /now: no wood within 64 — drop logs in the castle chest; blocked 0/)
   })
@@ -150,6 +150,32 @@ describe('castle repair (g0z.56)', () => {
     assert.ok(logs.includes("castlefetch fence: craft failed: can't craft fence: no planks or logs"), logs.join('\n'))
     assert.equal(ctx.castle.status, 'no wood within 64 — drop logs in the castle chest')
     assert.ok(logs.includes('castlefetch fence: no wood within 64 — drop logs in the castle chest'))
+  })
+
+  it('castlefetch: logs in the castle chest fund a fence leg (2 fences per log)', async () => {
+    const set = completeSet()
+    for (const c of blueprint.absPlan(SITE, 0, 2).cells.filter((x) => x.kind === 'fence').slice(0, 12)) set.set(`${c.x},${c.y},${c.z}`, 'air')
+    const chest = blueprint.absPlan(SITE, 0, 2).cells.find((c) => c.kind === 'chest')
+    const bot = makeBot({ set, items: [{ name: 'stone_pickaxe', count: 1 }] })
+    bot.entity.position = pos(chest.x + 0.5, chest.y, chest.z + 1.5)
+    bot.registry = { itemsByName: { oak_fence: {}, oak_log: {}, birch_log: {} }, blocksByName: { chest: { id: 54 } } }
+    bot.findBlocks = () => [pos(chest.x, chest.y, chest.z)]
+    const ctx = { castle: castleState() }
+    const short = castlefetch.demand(bot, ctx).short
+    const stockpile = require('../src/behaviours/stockpile')
+    const orig = stockpile.withdrawAnyFromChest
+    const calls = []
+    stockpile.withdrawAnyFromChest = async (b, c, names, n) => {
+      calls.push([names, n])
+      return { got: names.includes('oak_log') ? n : 0 }
+    }
+    try {
+      castlefetch(bot, ctx, null, {})
+      for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r))
+    } finally {
+      stockpile.withdrawAnyFromChest = orig
+    }
+    assert.deepEqual(calls, [[['oak_fence'], short], [['birch_log', 'oak_log'], Math.ceil(short / 2)]])
   })
 
   it('the arbiter keeps the relay ahead of the house while cells are missing', async () => {

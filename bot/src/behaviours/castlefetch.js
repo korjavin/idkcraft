@@ -133,6 +133,8 @@ const deps = {
 // Wood kinds (g0z.56): crafted from planks/logs, chopped when short.
 const WOOD = new Set(['planks', 'door', 'fence', 'chest', 'frame'])
 const NO_WOOD = 'no wood within 64 — drop logs in the castle chest'
+// Items one chest log funds per kind (craftTick crafts the rest).
+const LOG_YIELD = { planks: 4, frame: 1, fence: 2, door: 2, chest: 0.5 }
 
 function birchFirst(names) {
   return names.sort((a, b) => (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
@@ -152,11 +154,13 @@ const isBanner = (n) => n.endsWith('_banner') && !n.endsWith('_wall_banner')
 function chestNames(bot, kind) {
   if (kind === 'stone') return [[...blueprint.STONE_ITEMS]]
   if (kind === 'planks') return [itemNames(bot, (n) => n.endsWith('_planks')), itemNames(bot, (n) => n.endsWith('_log'))]
-  if (kind === 'door') return [itemNames(bot, isDoor)]
-  if (kind === 'fence') return [itemNames(bot, isFence)]
+  // g0z.56: logs dropped in the chest fund the wood kinds too (the
+  // owner's repair shortcut; craftTick turns them into the item).
+  if (kind === 'door') return [itemNames(bot, isDoor), itemNames(bot, (n) => n.endsWith('_log'))]
+  if (kind === 'fence') return [itemNames(bot, isFence), itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'torch') return [['torch']]
   if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
-  if (kind === 'chest') return [['chest']]
+  if (kind === 'chest') return [['chest'], itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'pane') return [itemNames(bot, (n) => blueprint.matches('pane', n)), ['glass'], ['sand']]
   if (kind === 'banner') return [itemNames(bot, (n) => blueprint.matches('banner', n)), itemNames(bot, (n) => n.endsWith('_wool'))]
   if (kind === 'bookshelf') return [['bookshelf'], ['book']]
@@ -358,7 +362,8 @@ function chestTick(bot, ctx, f, d) {
       if (need <= 0 || names.length === 0) break
       // Planks' second list is logs: one log is four planks; panes' is
       // glass: six glass are sixteen panes (one craft).
-      const logs = d.kind === 'planks' && names.some((n) => n.endsWith('_log'))
+      // g0z.56: a log also makes 2 fences or doors, half a chest.
+      const logs = names.some((n) => n.endsWith('_log')) ? (LOG_YIELD[d.kind] || 0) : 0
       const glass = d.kind === 'pane' && names[0] === 'glass'
       // Banners' is wool (g0z.35): six per banner, only once the beds stand.
       const wool = d.kind === 'banner' && names[0].endsWith('_wool')
@@ -392,8 +397,8 @@ function chestTick(bot, ctx, f, d) {
       // Books already packed cover shelves too (revmux 01 minor): never
       // withdraw what the pack holds.
       const bookWant = book ? Math.max(0, BOOKS_PER_SHELF * Math.ceil(need) - countItems(bot, (n) => n === 'book')) : need
-      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / 4) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
-      need -= (r && r.got ? r.got : 0) * (logs ? 4 : glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1)
+      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
+      need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
     }
   }, CHEST_TIMEOUT_MS)
   return true

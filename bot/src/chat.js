@@ -684,7 +684,7 @@ function castleChat(bot, ticker, playerName, cmd) {
     st.parked = false
     ticker.saveMemory()
     ticker.work()
-    const wood = dmg.kinds.some((k) => WOOD_KINDS.has(k)) ? ' — drop logs or planks in the castle chest to speed it up' : ''
+    const wood = dmg.kinds.some((k) => WOOD_KINDS.has(k)) ? ' — drop logs in the castle chest to speed it up' : ''
     const dry = typeof st.status === 'string' && st.status.startsWith('no wood') ? `; ${st.status}` : ''
     return `castle: ${dmg.line}; repairing${wood}${dry}`
   }
