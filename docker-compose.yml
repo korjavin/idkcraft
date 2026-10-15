@@ -98,6 +98,7 @@ services:
       MC_HOST: mc
       MC_PORT: 25565
       BOT_USERNAME: ${BOT_USERNAME:-IdkBot}
+      BOT2_USERNAME: ${BOT2_USERNAME:-} # peer name only: ownerOnline excludes it (neuc.45)
       BOT_FOLLOW: ${BOT_FOLLOW:-}
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
