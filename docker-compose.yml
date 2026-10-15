@@ -180,6 +180,8 @@ services:
       # g0z.59: v2 reads (never writes) v1's complete castle from v1's
       # memory file on the shared volume, so it sleeps inside it too.
       BOT_CASTLE_PEER: ${BOT_USERNAME:-IdkBot}
+      # v1's name for ownerOnline (neuc.45); bot2's BOT_USERNAME is its own
+      BOT_PEER_USERNAME: ${BOT_USERNAME:-IdkBot}
       BOT_FOLLOW: ${BOT_FOLLOW:-}
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}

@@ -196,15 +196,15 @@ describe('goal watchdog env (vmzq.21)', () => {
       const only = { username: 'IdkBot', players: { IdkBot: {}, IdkBot2: {} } }
       assert.equal(taskMod.ownerOnline(only), false, 'peer bot is not an owner')
       assert.equal(taskMod.ownerOnline({ username: 'IdkBot', players: { IdkBot2: {}, Steve: {} } }), true)
-      // bot2 side: its peer arrives as BOT_CASTLE_PEER; goal-options has its own copy
+      // bot2 side: its peer (v1) arrives as BOT_PEER_USERNAME; goal-options has its own copy
       process.env.BOT_USERNAME = 'IdkBot2'
       delete process.env.BOT2_USERNAME
-      process.env.BOT_CASTLE_PEER = 'IdkBot'
+      process.env.BOT_PEER_USERNAME = 'IdkBot'
       const v2 = { username: 'IdkBot2', players: { IdkBot: {} } }
       assert.equal(taskMod.ownerOnline(v2), false)
       assert.equal(require('../src/goal-options').ownerOnline(v2), false)
     } finally {
-      delete process.env.BOT_CASTLE_PEER
+      delete process.env.BOT_PEER_USERNAME
       delete process.env.BOT_USERNAME
       delete process.env.BOT2_USERNAME
     }

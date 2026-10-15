@@ -33,7 +33,7 @@ function anchorOf(bot, ctx) {
 function ownerOnline(bot) {
   try {
     // neuc.45: the peer bot (v1/v2) is not an owner
-    const bots = [process.env.BOT_USERNAME, process.env.BOT2_USERNAME, process.env.BOT_CASTLE_PEER].filter(Boolean)
+    const bots = [process.env.BOT_USERNAME, process.env.BOT2_USERNAME, process.env.BOT_PEER_USERNAME].filter(Boolean)
     return Object.keys(worker.players(bot)).some((n) => !bots.includes(n))
   } catch (_) {
     return false
