@@ -1195,17 +1195,24 @@ async function main() {
     start = startPlan({ x: bx - 15, y: gy + 1, z: bz - 13 }, START, START_CELL)
     tickCtx().paused = true
     await rcon(start.cmd).catch((e) => fail('start', e.message))
+    await rcon(`tp ${FOLLOWER} ${start.x + 0.5} ${start.y} ${start.z + 0.5}`).catch((e) => fail('start', e.message))
     if (start.cell) {
+      // Mark own only after the fill's block updates reached the bot:
+      // trackPlaced drops a key whose cell changes kind (that ate the marks).
+      await sleep(3000)
       const c = tickCtx()
       if (!(c.placedByBot instanceof Set)) c.placedByBot = new Set()
       if (!(c.placedNames instanceof Map)) c.placedNames = new Map()
+      const unread = start.shell.filter((b) => {
+        try { const blk = follower.blockAt(new Vec3(b.x, b.y, b.z)); return !blk || blk.name !== b.name } catch (_) { return true }
+      })
+      if (unread.length) fail('start', `${unread.length} shell cells not ${start.shell[0].name} on the bot`)
       for (const b of start.shell) {
         c.placedByBot.add(`${b.x},${b.y},${b.z}`)
         c.placedNames.set(`${b.x},${b.y},${b.z}`, b.name)
       }
       await rcon(`give ${FOLLOWER} stone_pickaxe 1`).catch((e) => fail('start', e.message))
     }
-    await rcon(`tp ${FOLLOWER} ${start.x + 0.5} ${start.y} ${start.z + 0.5}`).catch((e) => fail('start', e.message))
     tickCtx().paused = false
     origLog(`CASTLE-RIG start ${start.x} ${start.y} ${start.z} (site +${start.d.join(',')})${start.cell ? `, sealed in ${start.cell}` : ', bare pocket'}`)
   }
