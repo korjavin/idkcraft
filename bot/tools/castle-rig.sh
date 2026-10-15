@@ -33,6 +33,13 @@
 #   house = after adoption an unbuilt parked house site on the pad corner
 #   is the home, the castle must still cover the nights; peer = the castle
 #   lives only in a peer memory file read via BOT_CASTLE_PEER, v2's path),
+#   CASTLE_BODY (''|baritone — g0z.56: the builder runs on the v2 Baritone
+#   body, client image BARITONE_IMAGE, default idkcraft-baritone:local),
+#   CASTLE_REPAIR (''|wood|nowood, needs CASTLE_SEED=complete — g0z.56:
+#   after adoption knock out 20 plan cells (12 fence, the door, 4 wall,
+#   3 torches), wood = 16 oak_log in the castle chest; the guide chats
+#   `castle repair`; the verdict adds repair=<relaid>/20@<s>, regress=<n>
+#   after the full relay and nowood@<s> (the shortfall status)),
 #   CASTLE_SEED_VERSION (''|1|2|3, default '' = current — g0z.48: the
 #   blueprint version the CASTLE_SEED=complete castle is seeded as; 2 seeds
 #   a v2 castle and the guide chats `castle upgrade` after adoption, so the
@@ -153,6 +160,8 @@ SEED="${CASTLE_SEED:-}"
 case "$SEED" in ''|complete) ;; *) echo "CASTLE_SEED: want ''|complete, got '$SEED'"; exit 2 ;; esac
 SEED_VERSION="${CASTLE_SEED_VERSION:-}"
 case "$SEED_VERSION" in ''|1|2|3) ;; *) echo "CASTLE_SEED_VERSION: want ''|1|2|3, got '$SEED_VERSION'"; exit 2 ;; esac
+case "${CASTLE_REPAIR:-}" in ''|wood|nowood) ;; *) echo "CASTLE_REPAIR: want ''|wood|nowood, got '$CASTLE_REPAIR'"; exit 2 ;; esac
+[ -z "${CASTLE_REPAIR:-}" ] || [ "$SEED" = complete ] || { echo "CASTLE_REPAIR needs CASTLE_SEED=complete"; exit 2; }
 IDLE="${CASTLE_IDLE:-}"
 case "$IDLE" in ''|0) IDLE= ;; 1) SEED=complete ;; *) echo "CASTLE_IDLE: want ''|0|1, got '$IDLE'"; exit 2 ;; esac
 IDLE_DEATH="${CASTLE_IDLE_DEATH:-0}"
@@ -261,6 +270,11 @@ kill_tree() { # $1 = pid: its descendants first, then itself (TERM — backgroun
 }
 teardown() {
   for _c in $(pgrep -P $$ 2>/dev/null); do kill_tree "$_c"; done
+  # v2 body client (g0z.56): only the one this run started.
+  if [ "${BODY_STARTED:-}" = 1 ]; then
+    BARITONE_CLIENT="$BODY_CLIENT" sh "$TREE/baritone/client.sh" stop >/dev/null 2>&1 || true
+  fi
+  BODY_STARTED=
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   if [ -n "$SRVPID" ]; then wait "$SRVPID" 2>/dev/null || true; fi
   SRVPID=
@@ -347,8 +361,26 @@ boot() {
   rcon_assert "op CastleBuild$CASTLE_TAG"
 }
 boot
+# v2 body (g0z.56, the stuck-run neuc.5 shape): CASTLE_BODY=baritone runs
+# the builder on the Baritone body — the offline client joins under the
+# builder name (op'd in boot), the replay drives it over the bridge. Ports
+# 7850/7851 + 2 x letter index: clear of the stuck rig's 7778.. and the
+# z slot's 7830/7831, so a castle and a stuck v2 run share the box.
+case "${CASTLE_BODY:-}" in ''|mineflayer|baritone) ;; *) echo "CASTLE_BODY: want ''|baritone, got '$CASTLE_BODY'"; exit 2 ;; esac
+if [ "${CASTLE_BODY:-}" = baritone ]; then
+  _bn=0; [ -n "$RIG_ID" ] && _bn=$(( $(printf '%d' "'$RIG_ID") - 96 ))
+  BODY_CLIENT="idk-castle-body${RIG_ID:+-$RIG_ID}"
+  MOD_PORT=$((7850 + 2 * _bn))
+  BODY_CONSOLE_PORT=$((7851 + 2 * _bn))
+  BARITONE_MEM="${BARITONE_MEM-2500m}" BARITONE_OFFLINE=1 BARITONE_API=1 RIG_CONTAINER="$CONTAINER" BARITONE_CLIENT="$BODY_CLIENT" \
+    BRIDGE_PORT="$BODY_CONSOLE_PORT" MOD_PORT="$MOD_PORT" CLIENT_LOG="/tmp/castle-body-${RIG_ID:-0}.log" \
+    sh "$TREE/baritone/client.sh" start "$RIG_PORT" "CastleBuild$CASTLE_TAG" || exit 2
+  BODY_STARTED=1
+  sleep 6 # Paper's same-IP connection throttle before the guide joins
+  export BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT="$MOD_PORT" BRIDGE_CONSOLE_PORT="$BODY_CONSOLE_PORT"
+fi
 export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_SEED_VERSION="$SEED_VERSION" CASTLE_SEED_DECOR_EXCEPT="${CASTLE_SEED_DECOR_EXCEPT:-}" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
+export CASTLE_REPAIR="${CASTLE_REPAIR:-}" CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_SEED_VERSION="$SEED_VERSION" CASTLE_SEED_DECOR_EXCEPT="${CASTLE_SEED_DECOR_EXCEPT:-}" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in

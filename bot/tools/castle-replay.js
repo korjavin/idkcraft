@@ -116,6 +116,26 @@ if (!['', 'house', 'peer'].includes(NIGHT_HOME) || (NIGHT_HOME && SEED !== 'comp
   throw new Error(`CASTLE_NIGHT_HOME: want ''|house|peer with CASTLE_SEED=complete, got ${JSON.stringify(NIGHT_HOME)}`)
 }
 const SAND = process.env.CASTLE_SAND === '1'
+// Repair run (g0z.56, needs CASTLE_SEED=complete): after adoption the
+// acceptance's 20 cells are knocked out (repairCells), wood = 16 oak_log in
+// the castle chest, nowood = an empty chest and every log within
+// NOWOOD_RADIUS cleared; the guide chats `castle repair`.
+const REPAIR = process.env.CASTLE_REPAIR || ''
+if (!['', 'wood', 'nowood'].includes(REPAIR) || (REPAIR && SEED !== 'complete')) {
+  throw new Error(`CASTLE_REPAIR: want ''|wood|nowood with CASTLE_SEED=complete, got ${JSON.stringify(REPAIR)}`)
+}
+const NOWOOD_RADIUS = 72
+// The 20 knocked-out cells (g0z.56 acceptance): a fence row (12), the
+// door, 4 ground-floor wall cells, 3 torches. Pure (unit-tested).
+function repairCells(st) {
+  const cells = require('../src/castle').absPlan(st.site, st.rot, st.blueprintVersion).cells
+  return [
+    ...cells.filter((c) => c.kind === 'fence').slice(0, 12),
+    ...cells.filter((c) => c.kind === 'door'),
+    ...cells.filter((c) => c.kind === 'stone' && c.y === st.site.y + 1).slice(0, 4),
+    ...cells.filter((c) => c.kind === 'torch').slice(0, 3),
+  ]
+}
 const IDLE = process.env.CASTLE_IDLE === '1'
 const IDLE_DEATH = IDLE ? Math.max(0, parseInt(process.env.CASTLE_IDLE_DEATH || '0', 10) || 0) : 0
 // Far respawn (vmzq.29, prod run6): after CASTLE_FAR_AFTER min of the
@@ -185,8 +205,9 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /, /^residence /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0 }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [] }
 function resetSeen() {
+  seen.regressAt = []
   seen.shelterEps = 0
   seen.flips = 0
   seen.steps = {}
@@ -220,6 +241,7 @@ function hookConsole() {
 // reasons, watchdog fires + choices, commitment outcomes. Parsed from the
 // bot's own log lines (in-process, loss-free). now is injectable for tests.
 function classify(line, now = Date.now()) {
+  if (line.startsWith('castle regress ')) { seen.regressAt.push(now); return } // g0z.56
   let m = /^goal step=(\S+) prev=(\S+)/.exec(line)
   if (m) {
     seen.step = m[1]
@@ -786,9 +808,15 @@ async function main() {
   let follower = null
   const chats = []
   const mk = (opts) => {
-    const b = mineflayer.createBot({ ...opts, username: FOLLOWER })
+    // v2 body (g0z.56, the stuck-replay neuc.5 shape): BOT_BODY=baritone
+    // builds on the bridge adapter; it connects from inside its container,
+    // where the rig's loopback is host.docker.internal. No raw packet
+    // client there: the time resync tracks the bot clock only.
+    const b = process.env.BOT_BODY === 'baritone'
+      ? require('../src/bridge').createBot({ ...opts, host: process.env.REPLAY_BODY_MC_HOST || 'host.docker.internal', username: FOLLOWER })
+      : mineflayer.createBot({ ...opts, username: FOLLOWER })
     follower = b
-    b._client.on('update_time', (packet) => timeResync.onPacket(b, packet))
+    if (b._client) b._client.on('update_time', (packet) => timeResync.onPacket(b, packet))
     b.on('time', () => timeResync.apply(b))
     b.on('physicsTick', () => timeResync.onTick(b))
     b.once('spawn', () => {
@@ -1083,6 +1111,34 @@ async function main() {
     if (!memHome || memHome.kind !== 'castle') fail('seed-castle', `memory home is not kind=castle: ${JSON.stringify(memHome).slice(0, 160)}`)
     origLog('CASTLE-RIG residence: castle adopted, memory home kind=castle')
   }
+  let knocked = []
+  if (REPAIR) {
+    const st = tickCtx().castle
+    knocked = repairCells(st)
+    const door = knocked.find((c) => c.kind === 'door')
+    // Upper door half first: no dropped door item to hand the bot.
+    await rcon(`setblock ${door.x} ${door.y + 1} ${door.z} minecraft:air`).catch((e) => fail('repair-seed', e.message))
+    for (const c of knocked) await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:air`).catch((e) => fail('repair-seed', e.message))
+    await rcon(`kill @e[type=minecraft:item,x=${st.site.x + 15},y=${st.site.y},z=${st.site.z + 13},distance=..40]`).catch(() => {})
+    const chest = require('../src/castle').absPlan(st.site, st.rot, st.blueprintVersion).cells.find((c) => c.kind === 'chest')
+    if (REPAIR === 'wood') {
+      await rcon(`item replace block ${chest.x} ${chest.y} ${chest.z} container.0 with minecraft:oak_log 16`).catch((e) => fail('repair-seed', e.message))
+    } else {
+      // No wood within reach: every log in a NOWOOD_RADIUS square, one
+      // y layer per fill (the 32768-block cap).
+      const cx = st.site.x + 15
+      const cz = st.site.z + 13
+      for (let y = gy - 12; y <= gy + 30; y++) {
+        await rcon(`fill ${cx - NOWOOD_RADIUS} ${y} ${cz - NOWOOD_RADIUS} ${cx + NOWOOD_RADIUS} ${y} ${cz + NOWOOD_RADIUS} minecraft:air replace #minecraft:logs`).catch((e) => fail('repair-seed', e.message))
+      }
+    }
+    await sleep(2000)
+    const miss = knocked.filter((c) => {
+      try { const b = guide.blockAt(new Vec3(c.x, c.y, c.z)); return !b || b.name !== 'air' } catch (_) { return true }
+    })
+    if (miss.length) fail('repair-seed', `${miss.length} knocked cells not air`)
+    origLog(`CASTLE-RIG repair seed: ${knocked.length} cells knocked out (${knocked.map((c) => c.kind).join(',')}), chest ${REPAIR === 'wood' ? '16 oak_log' : `empty, logs cleared within ${NOWOOD_RADIUS}`}`)
+  }
   if (NIGHT_HOME) {
     // g0z.59: an unbuilt house order on the pad corner, parked so the day
     // never builds it (the night is what this measures).
@@ -1108,6 +1164,16 @@ async function main() {
     try { guide.chat('build castle') } catch (e) { fail('order', `castle chat: ${e.message}`) }
   } else if (SEED_UPGRADE) {
     try { guide.chat('castle upgrade') } catch (e) { fail('order', `upgrade chat: ${e.message}`) }
+  } else if (REPAIR) {
+    const from = chats.length
+    try { guide.chat('castle repair') } catch (e) { fail('order', `repair chat: ${e.message}`) }
+    let reply = null
+    for (let i = 0; i < 40 && !reply; i++) {
+      reply = chats.slice(from).find((l) => /^castle(:| at )/.test(l)) || null
+      if (!reply) await sleep(500)
+    }
+    if (!reply) fail('order', 'no castle repair reply in 20 s')
+    origLog(`CASTLE-RIG repair reply: ${reply.slice(0, 200)}`)
   }
   // Order ack: the direct site ('castle at …, ~1722 blocks') or the search
   // ('found a castle spot …', which carries the same startCastle tail), or
@@ -1153,6 +1219,8 @@ async function main() {
   // Window: sample progress/step/pos every 15 s; a short sample line every
   // 5 min keeps long runs visibly alive without burying the verdict.
   const series = []
+  let repairT = null
+  let nowoodT = null
   const t0 = Date.now()
   const endAt = t0 + MINS * 60000
   let lastSampleLine = 0
@@ -1226,6 +1294,18 @@ async function main() {
       const f = c && c.castleFetch
       if (f) s.fetch = { kind: f.kind, quarry: !!(f.target && f.target.quarry), skips: f.skips || 0, dead: (f.quarry && f.quarry.dead) || [] }
     } catch (_) { /* fetch best-effort */ }
+    if (knocked.length) {
+      // g0z.56: knocked cells laid back (read on the follower), the first
+      // full relay, the first 'no wood' status.
+      let n = 0
+      for (const c of knocked) {
+        try { const b = follower.blockAt(new Vec3(c.x, c.y, c.z)); if (b && require('../src/castle').matches(c.kind, b.name)) n++ } catch (_) { /* unread */ }
+      }
+      s.relaid = n
+      if (n === knocked.length && repairT == null) repairT = s.t
+      const st = follower._tickerCtx && follower._tickerCtx.castle
+      if (nowoodT == null && st && typeof st.status === 'string' && st.status.startsWith('no wood')) nowoodT = s.t
+    }
     series.push(s)
     return s
   }
@@ -1736,7 +1816,13 @@ async function main() {
     furnaceTag = `, furnace-spot=${at.join('/')}`
   }
   const upgradeTag = upgrade ? `, upgrade=${upgrade.ok}/${upgrade.total}@${upgrade.phase}` : ''
-  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
+  let repairTag = ''
+  if (knocked.length) {
+    const relaid = series.length ? series[series.length - 1].relaid : 0
+    const after = repairT == null ? 0 : seen.regressAt.filter((at) => at > t0 + repairT * 1000).length
+    repairTag = `, repair=${relaid}/${knocked.length}@${repairT == null ? '-' : `${repairT}s`}, regress=${after}, nowood@${nowoodT == null ? '-' : `${nowoodT}s`}`
+  }
+  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + repairTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
@@ -1766,4 +1852,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { repairCells, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
