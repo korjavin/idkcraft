@@ -636,6 +636,21 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     assert.equal(ctx.castleFetch ? ctx.castleFetch.pickup : null, null, 'in the hole: the step is over')
   })
 
+  it('neuc.51: a hole the walk never reaches gives up after PICKUP_WAITS and digs on', async () => {
+    const tx = SITE.x - 5
+    const tz = SITE.z - 5
+    const set = new Map([[`${tx},${SITE.y - 1},${tz}`, 'stone'], [`${tx - 1},${SITE.y},${tz}`, 'stone']])
+    const bot = makeBot({ items: TOOLS(), set }) // never moves
+    bot.dig = async (b) => { bot.calls.dig.push(b.position); set.set(`${b.position.x},${b.position.y},${b.position.z}`, 'air') }
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx); await settle(); await settle()
+    assert.ok(ctx.castleFetch.pickup)
+    for (let i = 0; i < 12 && ctx.castleFetch && ctx.castleFetch.pickup; i++) { fetch(bot, ctx); await settle() }
+    assert.equal(ctx.castleFetch.pickup, null, 'the hole walk gave up')
+    fetch(bot, ctx)
+    assert.ok(ctx.castleFetch.target, 'the leg picks its next stone')
+  })
+
   it('neuc.51: a below-feet drop already in the pack skips the hole walk', async () => {
     const tx = SITE.x - 5
     const tz = SITE.z - 5
