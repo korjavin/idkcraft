@@ -2850,3 +2850,28 @@ describe('equip no-table spot transience (idkcraft-u07s)', () => {
     bot.restoreError()
   })
 })
+
+describe('tableFor sight (neuc.50)', () => {
+  const Vec3 = require('vec3')
+  const craftMod = require('../src/behaviours/craft')
+  it('a table in reach but out of sight walks to a seeing cell instead of resolving', async () => {
+    const goals = []
+    const bot = {
+      entity: { position: new Vec3(0.5, 64, 0.5) },
+      inventory: { items: () => [] },
+      blockAt: (p) => ({ name: 'crafting_table', position: p }),
+      pathfinder: { setGoal: (g) => goals.push(g), isMoving: () => false },
+    }
+    const ctx = { home: { table: { x: 2, y: 63, z: 0 } } }
+    const real = craftMod.tableUsable
+    try {
+      craftMod.tableUsable = () => false // in reach (2.2), the ditch rim hides it
+      assert.equal(await equip.tableFor(bot, ctx), null, 'walking, not crafting blind')
+      assert.equal(goals.length, 1)
+      assert.equal(goals[0].constructor.name, 'GoalSeeTable')
+      craftMod.tableUsable = () => true
+      const t = await equip.tableFor(bot, ctx)
+      assert.equal(t.pos, ctx.home.table, 'seen: the table resolves')
+    } finally { craftMod.tableUsable = real }
+  })
+})

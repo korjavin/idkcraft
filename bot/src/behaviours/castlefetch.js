@@ -1402,6 +1402,15 @@ function castlefetch(bot, ctx, target, state) {
     if (ctx.castleFetch) spend(ctx.castleFetch, ctx.castleFetchFlight === 'dig' ? 'dig' : 'other')
     return
   }
+  // neuc.50 rig: a craft op in flight (craftany/gear) owns the tick too.
+  // Mid-craft the grid holds the cobble, so stairsCobbleShort / the stone
+  // pick's stoneUpgradeDue flip, digTick walks the body off and the server
+  // closes the table window (stale window: gear-cobblestone_stairs,
+  // gear-stone_pickaxe).
+  if (ctx.gearInFlight) {
+    if (ctx.castleFetch) spend(ctx.castleFetch, 'other')
+    return
+  }
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') { finish(bot, ctx, 'done'); return }
   const d = demand(bot, ctx)

@@ -17,7 +17,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const craftMod = require('./craft')
 const gearMod = require('./gear')
-const { tableFor } = require('./tablespot') // oqul.14: the pack-table placement lives in the leaf, not equip
+const { tableFor, dayOf } = require('./tablespot') // oqul.14: the pack-table placement lives in the leaf, not equip
 const { countItems } = require('../perception')
 const { TABLE_REACH } = require('../budget')
 const WALK_GIVE_UP = 20 // table-walk ticks before the honest no-table line
@@ -174,8 +174,17 @@ function missingLine(target, missing) {
 // Standing table; under ctx.craftanyLocal (vmzq.37 buried pick rearm) only
 // one within reach counts — a far one would be walked to, and a body
 // sealed underground cannot walk; it places its own instead.
+// neuc.50 review 02: a table whose walk gave up today (the ajoe latch
+// tableFor keeps) is skipped, so the run crafts and places its own instead
+// of re-walking the same dead table every leg.
+function deadToday(bot, ctx, p) {
+  const u = ctx && ctx.equipTableUnreachable
+  return !!u && !!p && u.day === dayOf(bot) && u.x === p.x && u.y === p.y && u.z === p.z
+}
+
 function standingTable(bot, ctx) {
   const tb = gearMod.tableBlock(bot, ctx)
+  if (tb && deadToday(bot, ctx, tb.pos)) return null
   if (!tb || !ctx || !ctx.craftanyLocal) return tb
   const bp = bot.entity && bot.entity.position
   for (const p of [ctx.home && ctx.home.table, ctx.claimedTable]) {
@@ -455,6 +464,7 @@ function craftItem(bot, ctx, name, count) {
         else st.walkTicks += 1
         st.lastDist = d
         if (st.walkTicks > WALK_GIVE_UP) {
+          try { ctx.equipTableUnreachable = { day: dayOf(bot), x: tb.pos.x, y: tb.pos.y, z: tb.pos.z } } catch (_) { /* latch best-effort */ }
           clearRun(ctx)
           return { done: false, line: "can't reach the crafting table" }
         }

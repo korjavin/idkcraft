@@ -37,6 +37,22 @@ describe('goal translation (pathfinder -> Baritone)', () => {
     assert.equal(goalToBaritone(new goals.GoalXZ(10, -20)), '#goto 10 -20')
     assert.equal(goalToBaritone(new goals.GoalNearXZ(10, -20, 3)), '#goto 10 -20')
   })
+  it('maps the table-sight goal to #near (neuc.50: every v2 table walk was noPath)', () => {
+    const g = require('../src/behaviours/craft').tableGoal({ world: null }, { x: 260, y: 70, z: 352 })
+    assert.equal(g.constructor.name, 'GoalSeeTable')
+    assert.equal(goalToBaritone(g), '#near 260 70 352 3') // no world read: the range alone
+  })
+  it('picks the nearest standable cell that sees the table (neuc.50: forest-floor table under leaves)', () => {
+    const T = { x: 283, y: 66, z: 333 }
+    // Leaves over the table hide it from the adjacent cells; 2+ away the ray clears.
+    const world = { raycast: (eye) => (Math.max(Math.abs(eye.x - 283.5), Math.abs(eye.z - 333.5)) < 2 ? { position: { x: 283, y: 67, z: 333 } } : null) }
+    const g = require('../src/behaviours/craft').tableGoal({ world }, T)
+    const blockAt = (x, y, z) => ({ boundingBox: y === 65 || (x === T.x && y === T.y && z === T.z) ? 'block' : 'empty' })
+    assert.equal(goalToBaritone(g, { x: 290.5, y: 66, z: 333.5 }, blockAt), '#goto 286 66 333') // range 3, the body's side
+    const [, x, , z] = goalToBaritone(g, { x: 284.5, y: 66, z: 333.5 }, blockAt).split(' ').map(Number)
+    assert.ok(Math.max(Math.abs(x - 283), Math.abs(z - 333)) >= 2, 'from beside the table: a cell 2 out, not the blind neighbour')
+    assert.equal(goalToBaritone(g, { x: 290.5, y: 66, z: 333.5 }, () => ({ boundingBox: 'block' })), '#near 283 66 333 3', 'nowhere to stand: the range walk')
+  })
   it('maps GoalFollow to #near around the floored live target cell (neuc.28)', () => {
     const target = { position: new Vec3(10.25, 64, -4.5) }
     assert.equal(goalToBaritone(new goals.GoalFollow(target, 3)), '#near 10 64 -5 3')

@@ -724,6 +724,7 @@
   },
   "equipTableUnreachable": {
     "writers": [
+      "src/behaviours/craftany.js",
       "src/behaviours/tablespot.js"
     ],
     "owner": "src/behaviours/equip.js"

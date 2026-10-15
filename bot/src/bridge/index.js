@@ -106,7 +106,35 @@ function cmdXZ(command) {
   return null
 }
 
-function goalToBaritone(goal, from) {
+// neuc.50: the GoalSeeTable cell (see goalToBaritone). blockAt = the body's
+// sync world read; feet + head passable, solid floor. ponytail: a 7x7x7
+// scan once per setGoal (343 isEnd rays at most), no path-cost ranking.
+function seeCellCmd(goal, from, blockAt) {
+  if (typeof blockAt !== 'function' || typeof goal.isEnd !== 'function' || !from) return null
+  const open = (b) => !!b && b.boundingBox === 'empty'
+  let best = null
+  let bestD = Infinity
+  try {
+    for (let dx = -3; dx <= 3; dx++) {
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dz = -3; dz <= 3; dz++) {
+          const x = goal.x + dx
+          const y = goal.y + dy
+          const z = goal.z + dz
+          const d = (x + 0.5 - from.x) ** 2 + (y - from.y) ** 2 + (z + 0.5 - from.z) ** 2
+          if (d >= bestD || !goal.isEnd({ x, y, z })) continue
+          const below = blockAt(x, y - 1, z)
+          if (!below || below.boundingBox !== 'block' || !open(blockAt(x, y, z)) || !open(blockAt(x, y + 1, z))) continue
+          best = { x, y, z }
+          bestD = d
+        }
+      }
+    }
+  } catch (_) { return null }
+  return best ? `#goto ${best.x} ${best.y} ${best.z}` : null
+}
+
+function goalToBaritone(goal, from, blockAt) {
   if (!goal) return null
   const name = (goal.constructor && goal.constructor.name) || ''
   // GoalNear keeps its range (idkcraft-neuc.21): `#goto x y z` is an exact
@@ -115,6 +143,19 @@ function goalToBaritone(goal, from) {
   // stopped beside it while v1 had long arrived. `#near` is the mod's own
   // verb for Baritone's GoalNear (same distSq <= r² test as isEnd; the
   // floored range never accepts a cell v1 would not).
+  // GoalSeeTable (craft.tableGoal, g0z.40) is a GoalNear whose isEnd also
+  // wants sight of the table; unmapped it answered noPath and every table
+  // walk on v2 failed (neuc.50: castlefetch stairs "can't reach the crafting
+  // table"). Baritone has no sight test, so the bridge picks the cell: the
+  // standable cell nearest the body that the goal's own isEnd accepts
+  // (range 3 + the eye ray), as an exact #goto. A plain #near stopped on
+  // blind cells — a forest-floor table under leaves is seen from 2 away,
+  // never from beside it (rig: table-unseeable, no pickaxe for 35 min).
+  // No seeing cell known (unloaded, boxed in): #near 3, and the callers'
+  // walk give-up fails it honestly (equip's tableFor then places its own).
+  if (name === 'GoalSeeTable' && typeof goal.x === 'number' && typeof goal.y === 'number' && typeof goal.z === 'number') {
+    return seeCellCmd(goal, from, blockAt) || `#near ${goal.x} ${goal.y} ${goal.z} 3`
+  }
   if (name === 'GoalNear' && typeof goal.x === 'number' && typeof goal.y === 'number' &&
     typeof goal.z === 'number' && typeof goal.rangeSq === 'number' && goal.rangeSq >= 0) {
     return `#near ${goal.x} ${goal.y} ${goal.z} ${Math.floor(Math.sqrt(goal.rangeSq))}`
@@ -132,7 +173,7 @@ function goalToBaritone(goal, from) {
   if (name === 'GoalFollow' && goal.entity) return followCmd(goal.entity.position, goal.rangeSq)
   if ((name === 'GoalCompositeAny' || name === 'GoalCompositeAll') && Array.isArray(goal.goals)) {
     for (const member of goal.goals) {
-      const cmd = goalToBaritone(member, from)
+      const cmd = goalToBaritone(member, from, blockAt)
       if (cmd) return cmd
     }
     return null
@@ -659,7 +700,7 @@ class BaritoneBot extends EventEmitter {
       this._completeTerminal('success')
       return
     }
-    const cmd = goalToBaritone(goal, this.entity.position)
+    const cmd = goalToBaritone(goal, this.entity.position, (x, y, z) => this.blockAt(new this.Vec3(x, y, z)))
     if (!cmd) {
       // No Baritone mapping: stop the live walk (mineflayer's setGoal
       // always resets first) and fail like the executor would.
