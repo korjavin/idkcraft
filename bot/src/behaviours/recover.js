@@ -1259,11 +1259,19 @@ function digInRun(bot, ctx, st) {
     // Walking to a hand-dig column (stone stance): arrival re-seeds the
     // descent there; the pathfinder owns the body until then.
     const w = st.walk
-    if (Math.floor(bp.x) === w.x && Math.floor(bp.y) === w.y && Math.floor(bp.z) === w.z) {
+    // A walk-back drops into the dug mouth: arrival is x/z with the feet at
+    // or below the mouth (a real body stepping over it falls in), and the
+    // depth keeps counting from the mouth level, not the fallen feet.
+    const arrived = st.walkBack
+      ? (Math.floor(bp.x) === w.x && Math.floor(bp.z) === w.z && Math.floor(bp.y) <= w.y)
+      : (Math.floor(bp.x) === w.x && Math.floor(bp.y) === w.y && Math.floor(bp.z) === w.z)
+    if (arrived) {
       try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
+      const back = !!st.walkBack
       st.walk = null
       st.walkBack = false
-      st.floor0 = Math.floor(bp.y)
+      st.floor0 = back ? w.y : Math.floor(bp.y)
+      if (!back) st.col = null // a fresh walk re-pins at its first dig (core-1)
       st.settled = false // v2 re-settles below (the #stop slide); v1 digs at once
       st.settleTicks = 0
       st.settlePos = null
@@ -1282,21 +1290,27 @@ function digInRun(bot, ctx, st) {
   }
   // v2 only: the walk above (and the swim/pillar path before a direct dig)
   // ends with a live slide — dig where the body stops, not where the tick
-  // saw it. Pin the stopped, centred cell as the dig column; a later tick
-  // off that column walks one step back instead of digging the neighbour.
+  // saw it. Settle stationary AND centred first; the dig column pins when
+  // the first dig is dispatched (a refused veto can still walk elsewhere).
+  // A later tick off the pinned column walks one step back instead of
+  // digging the neighbour.
   if (process.env.BOT_BODY === 'baritone' && !st.settled) {
     st.settleTicks = (st.settleTicks || 0) + 1
     const prev = st.settlePos
     st.settlePos = { x: bp.x, z: bp.z }
     const still = !!prev && Math.hypot(bp.x - prev.x, bp.z - prev.z) < DIG_IN_SETTLE_STILL
     const grounded = !bot.entity || bot.entity.onGround !== false
+    // Over air the centre pulse below would aim at the overhang cell and
+    // step off the ledge (body-2): skip it and let the edge branch own the
+    // stance. The column still pins at the first dig, wherever that lands.
+    const underSolid = solid(cellAt(bot, 0, -1, 0))
     const fx = bp.x - Math.floor(bp.x)
     const fz = bp.z - Math.floor(bp.z)
-    const centred = Math.abs(fx - 0.5) <= DIG_IN_CENTRE_HALF && Math.abs(fz - 0.5) <= DIG_IN_CENTRE_HALF
+    const centred = !underSolid ||
+      (Math.abs(fx - 0.5) <= DIG_IN_CENTRE_HALF && Math.abs(fz - 0.5) <= DIG_IN_CENTRE_HALF)
     if ((still && grounded && centred) || st.settleTicks > DIG_IN_SETTLE_TICKS) {
       st.settled = true
       st.settleTicks = 0
-      if (!st.col) st.col = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
       setForward(bot, false)
     } else {
       if (still && grounded && !centred) {
@@ -1372,6 +1386,12 @@ function digInRun(bot, ctx, st) {
     const veto = digInVeto(bot, ctx, 0, 0, 0, !st.digs, st.extra | 0)
     if (!veto) {
       if (typeof bot.dig !== 'function') return 'failed:no-dig'
+      // Pin the dug column here (neuc.49 core-1): the settle above only
+      // stills the body — a refused veto can still walk to a new column
+      // first, and fight ticks can move it before the first dig.
+      if (process.env.BOT_BODY === 'baritone' && !st.col) {
+        st.col = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
+      }
       // A server that reverts the break (protection) would re-dig forever.
       if ((st.digs = (st.digs || 0) + 1) > DIG_IN_DEPTH + (st.extra | 0) + 2) return 'failed:dig-refused'
       st.digInFlight = true

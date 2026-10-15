@@ -25,7 +25,7 @@ function pos(x, y, z) {
 // Flat grass world like the ed88 harness, but the dig is deferred: the
 // promise resolves when the test says so, so the test can slide the body
 // mid-dig the way Baritone momentum does on v2.
-function v2bot(at) {
+function v2bot(at, opts = {}) {
   const dug = new Set()
   const placed = new Set()
   const items = []
@@ -57,7 +57,7 @@ function v2bot(at) {
     blockAt(p) {
       const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
       const s = solidAt(x, y, z)
-      const name = s ? (y === 63 ? 'grass_block' : 'dirt') : 'air'
+      const name = s ? ((opts.groundAt && opts.groundAt(x, y, z)) || (y === 63 ? 'grass_block' : 'dirt')) : 'air'
       return { name, position: new Vec3(x, y, z), boundingBox: s ? 'block' : 'empty' }
     },
     dig(b) {
@@ -135,17 +135,52 @@ describe('neuc.49 v2 dig-in slide: settle pins the stopped column', () => {
     assert.equal(st.returns, 1)
     const g = bot.pathfinder.goal
     assert.ok(g && g.x === 96 && g.z === 0, `walks back to the dug column: ${JSON.stringify(g)}`)
-    // Baritone steps back up to the mouth; the fall continues the descent.
-    bot.entity.position = pos(96.5, 64, 0.5)
+    // A real body stepping back over the mouth falls in: arrival takes
+    // x/z with the feet at or below the mouth, and the depth still counts
+    // from the mouth level.
+    bot.entity.position = pos(96.5, 63, 0.5)
     assert.equal(recover.digInRun(bot, {}, st), 'running') // arrival re-settles
-    bot.entity.position = pos(96.5, 63, 0.5) // stepped into the mouth, fell in
+    assert.equal(st.walk, null)
+    assert.equal(st.floor0, 64, 'mouth level kept, not the fallen feet')
     let r = 'running'
     for (let t = 0; t < 20 && r === 'running'; t++) {
       r = recover.digInRun(bot, {}, st)
       await resolveAll(bot)
     }
     assert.equal(r, 'done')
+    assert.equal(bot.digCalls[1], key(96, 62, 0), 'descent continues in the dug column')
     assert.ok(closedIn(bot), 'closed pit on the dug column')
+  })
+
+  it('stone stance pins the walked-to column, never walks back to the refusal', async () => {
+    // Core-1: the veto refuses the stance column, digInSpot walks to dirt;
+    // the pin must land on the first dispatched dig, not the stance.
+    const bot = v2bot({ x: 0.5, y: 64, z: 0.5 }, { groundAt: (x, y, z) => (x === 3 && z === 0 ? null : 'stone') })
+    const st = {}
+    assert.equal(recover.digInRun(bot, {}, st), 'running') // settle tick 1
+    assert.equal(recover.digInRun(bot, {}, st), 'running') // settled, veto refuses, walks
+    assert.ok(!st.col, 'no pin before the first dig')
+    assert.ok(st.walk && st.walk.x === 3, `walks to the dirt column: ${JSON.stringify(st.walk)}`)
+    bot.entity.position = pos(3.5, 64, 0.5) // the pathfinder walked it
+    assert.equal(recover.digInRun(bot, {}, st), 'running') // arrival re-settles
+    let r = 'running'
+    for (let t = 0; t < 20 && r === 'running'; t++) {
+      r = recover.digInRun(bot, {}, st)
+      await resolveAll(bot)
+    }
+    assert.equal(r, 'done')
+    assert.deepEqual([st.col.x, st.col.z], [3, 0], 'pinned where it dug')
+    assert.ok(!st.returns, 'never walks back to the refused stance')
+    assert.ok(closedIn(bot), 'closed pit at the dirt column')
+  })
+
+  it('over-air stance never pulses toward the overhang centre', () => {
+    // Body-2: grounded over an edge, the settle must not steer into the drop.
+    const bot = v2bot({ x: 0.2, y: 65, z: 0.5 }) // off-centre over air: the old pulse aimed at 0.5, past the rim
+    const st = {}
+    assert.equal(recover.digInRun(bot, {}, st), 'running') // settle tick 1
+    assert.equal(recover.digInRun(bot, {}, st), 'failed:edge') // edge branch owns it, never stepped off
+    assert.ok(!bot.controls.forward, 'no centre pulse off the ledge')
   })
 
   it('a body that never re-reaches the column fails bounded, never paces', async () => {
