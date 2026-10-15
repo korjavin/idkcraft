@@ -14,7 +14,7 @@ const { BridgeTransport } = require('./transport')
 const { refreshEntities, handleBridgeEvent } = require('./entities') // idkcraft-neuc.3: entities+roster fold
 const chunks = require('./chunks') // idkcraft-neuc.6: chunk cache -> sync blockAt/findBlocks/raycast
 const { installInventory, applyInventory, handleInventoryEvent } = require('./inventory') // idkcraft-neuc.8: inventory/equip/toss fold
-const { installLook, handleLookEvent } = require('./look') // idkcraft-neuc.9: look/attack/interact/sleep
+const { installLook, handleLookEvent, withBaritonePaused } = require('./look') // idkcraft-neuc.9: look/attack/interact/sleep
 const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.13: control states
 const { installLifecycle, handleLifecycleEvent } = require('./lifecycle') // idkcraft-neuc.10: lifecycle/event parity
 const { installWindows, handleWindowEvent } = require('./windows') // idkcraft-neuc.11: container windows
@@ -66,6 +66,7 @@ function chatParts(message) {
 
 const STALL_MS = 10000 // still-while-pathing budget before a re-plan (_stallReplan)
 const STALL_MOVE = 0.5 // displacement that counts as moving (stuck.js MOVE_TOLERANCE)
+const DOOR_KICK_COOLDOWN_MS = 2000 // one hand-toggle per door cell per window (doors.js DOOR_TOGGLE_COOLDOWN_MS shape)
 const CHAT_HOLD_MS = 10000 // neuc.33: max wait for the near columns before an order is delivered anyway (~8 columns/s)
 
 function stripMcPrefix(s) {
@@ -777,6 +778,69 @@ class BaritoneBot extends EventEmitter {
   _sendGoalCmd(command) {
     this._goalCmd = command // neuc.13: last goal cmd (diagnostics; pause/resume keeps the id, no re-issue)
     const seq = (this._cmdSeq = (this._cmdSeq | 0) + 1)
+    // idkcraft-neuc.48: never path-start inside a closed door cell. The
+    // body sometimes ends up standing in the doorway with the panel shut
+    // around it (DOOR-ROOM ~1 in 4), and Baritone CALC_FAILEDs every
+    // re-plan out of the closed cell while nothing ever re-opens it:
+    // bot.activateBlock is a deliberate no-op for doors while pathing
+    // (neuc.9 landmine) and doors.js's opener needs a plan window v2 never
+    // fills. The kick runs first; the goal follows on its heels.
+    const wedge = this._doorKickCell()
+    if (!wedge) {
+      this._sendGoalCmdNow(command, seq)
+      return
+    }
+    void (async () => {
+      await this._doorKickOpen(wedge)
+      if (seq <= this._boundSeq) return // superseded/stopped mid-kick: stay stopped, never revive the walk
+      this._sendGoalCmdNow(command, seq)
+    })()
+  }
+
+  // The closed hand-door cell around the feet, or null. Sync (blockAt is a
+  // local cache read), so a wedgeless _sendGoalCmd keeps its exact timing.
+  // Iron doors never kick (no hand toggle exists); an open or unreadable
+  // cell never kicks either (fail closed, like doorEdge).
+  _doorKickCell() {
+    try {
+      const p = this.entity && this.entity.position
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return null
+      const x = Math.floor(p.x)
+      const y = Math.floor(p.y)
+      const z = Math.floor(p.z)
+      const key = `${x},${y},${z}`
+      if (this._doorKickKey === key && Date.now() - (this._doorKickAt || 0) < DOOR_KICK_COOLDOWN_MS) return null
+      const feet = this.blockAt(new this.Vec3(x, y, z))
+      if (!feet || typeof feet.name !== 'string') return null
+      if (!feet.name.endsWith('_door') || feet.name.includes('iron')) return null
+      let props = null
+      try { props = typeof feet.getProperties === 'function' ? feet.getProperties() : null } catch (_) { return null }
+      if (!props || props.open === true) return null
+      return { x, y, z }
+    } catch (_) {
+      return null
+    }
+  }
+
+  // Re-open the wedged panel, then the caller sends the goal: Baritone
+  // plans from an open doorway instead of CALC_FAILEDing out of a closed
+  // one. A direct transport call, never bot.activateBlock — the stall
+  // re-plan kicks while still pathing, where that helper no-ops.
+  // Best-effort: a refused click still sends the goal (the next re-plan
+  // retries past the cooldown), and nothing here ever throws.
+  async _doorKickOpen(cell) {
+    try {
+      if (!this.transport || !cell) return
+      this._doorKickKey = `${cell.x},${cell.y},${cell.z}`
+      this._doorKickAt = Date.now()
+      await withBaritonePaused(this, () => this.transport.call('interact.block', {
+        x: cell.x, y: cell.y, z: cell.z, face: 'up', cursor: { x: 0.5, y: 0.5, z: 0.5 }, sneak: false,
+      }))
+      console.log(`bridge door kick at ${cell.x} ${cell.y} ${cell.z}`)
+    } catch (_) { /* best-effort */ }
+  }
+
+  _sendGoalCmdNow(command, seq) {
     const avoid = this._dangerAvoid(command)
     this.transport.call('baritone.cmd', avoid ? { command, avoid } : { command }).then(
       (r) => {
