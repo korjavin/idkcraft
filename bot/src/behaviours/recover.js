@@ -2826,6 +2826,7 @@ function run(bot, ctx) {
     } catch (_) {
       rec.status = 'failed:error'
     }
+    if (!ctx.recovery) return // gave-up inside: the episode already released
     return
   }
   if (!RECOVER_MENU[rec.action]) return

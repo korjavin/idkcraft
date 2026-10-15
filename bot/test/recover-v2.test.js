@@ -79,6 +79,14 @@ describe('neuc.52 v2 escape', () => {
     // No ladder rung ran: the episode state carries the escape target.
     assert.equal(ctx.recovery.action, 'escape')
     assert.deepEqual(ctx.recovery.st.target, { x: tx, y: ty, z: tz })
+    // Adjacent first candidate: still wedged on the issue tick, no
+    // instant done before Baritone moves (revmux 01 critical).
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'no arrival before displacement')
+    // A shuffle short of the tolerance still proves nothing.
+    bot.entity.position = pos(2.9, 64, 0.5)
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', '0.4 shuffle is not an arrival')
     // Reaching the target ends the episode done.
     bot.entity.position = pos(tx + 0.5, ty, tz + 0.5)
     ctx.lastPathStatus = 'success'
@@ -87,6 +95,65 @@ describe('neuc.52 v2 escape', () => {
     const rel = await recover.decide(bot, ctx, null, null)
     assert.equal(rel.action, 'idle', 'arrival releases the episode')
     assert.equal(ctx.recovery, null)
+  })
+
+  it('a stolen goal is re-issued, never waited on', async () => {
+    process.env.BOT_BODY = 'baritone'
+    const bot = doorBot()
+    const ctx = doorCtx('door-steal')
+    const d = await recover.decide(bot, ctx, null, null)
+    assert.equal(d.action, 'escape')
+    const live = bot.pathfinder.goal
+    assert.ok(live, 'escape goal live')
+    // An urgent fight parks its own goal over ours (raw setGoal path).
+    const stolen = { kind: 'GoalFollow' }
+    bot.pathfinder.goal = stolen
+    ctx.lastGoalKey = 'fight'
+    ctx.lastPathStatus = 'success' // the other owner's verdict must not end us
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'running', 'stale success never releases')
+    assert.equal(bot.pathfinder.goal.constructor.name, 'GoalNear', 'our goal goes back out')
+    assert.equal(ctx.lastGoalKey, recoverV2.ESCAPE_KEY, 'under our key')
+    assert.equal(ctx.lastPathStatus, 'none', 'a fresh verdict judges the re-issue')
+  })
+
+  it('a verdict-less episode advances on the tick budget, then pages', async () => {
+    process.env.BOT_BODY = 'baritone'
+    const bot = doorBot()
+    bot.players = { Owner: { username: 'Owner', entity: { position: pos(50, 64, 0) } } }
+    const ctx = doorCtx('door-budget')
+    const d = await recover.decide(bot, ctx, null, null)
+    assert.equal(d.action, 'escape')
+    const first = ctx.recovery.st.target
+    // Silence until the budget: still running, same target.
+    for (let i = 0; i < recoverV2.MAX_TICKS; i++) {
+      ctx.lastPathStatus = 'none'
+      recover.run(bot, ctx)
+      assert.equal(ctx.recovery.status, 'running')
+    }
+    assert.deepEqual(ctx.recovery.st.target, first, 'no verdict, no advance before the budget')
+    ctx.lastPathStatus = 'none'
+    recover.run(bot, ctx)
+    assert.notDeepEqual(ctx.recovery.st.target, first, 'past the budget the next candidate goes out')
+    assert.equal(ctx.recovery.status, 'running')
+  })
+
+  it('no sky cell: the episode opens and pages without touching the ladder', async () => {
+    process.env.BOT_BODY = 'baritone'
+    const bot = doorBot()
+    // Roof the world: every column is cave, not even the fallback applies.
+    bot.blockAt = (p) => {
+      const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
+      const n = y <= 63 ? 'dirt' : (y <= 80 ? 'stone' : 'air')
+      return { name: n, position: new Vec3(x, y, z), boundingBox: n === 'air' ? 'empty' : 'block' }
+    }
+    bot.players = { Owner: { username: 'Owner', entity: { position: pos(50, 64, 0) } } }
+    const ctx = doorCtx('door-roofed')
+    const d = await recover.decide(bot, ctx, null, null)
+    assert.equal(d.action, 'escape', 'v2 owns the episode even with no candidate')
+    assert.equal(bot.pathfinder.goal, null, 'no goal issued')
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.action, 'call_player', 'straight to the last rung')
   })
 
   it('noPath twice tries the next candidate, then hands to call_player', async () => {
@@ -144,6 +211,27 @@ describe('neuc.52 v2 escape', () => {
     const ctx = doorCtx('door-direct')
     assert.equal(recoverV2.escape(bot, ctx, null), false)
     assert.equal(ctx.recovery || null, null, 'no episode state touched')
+  })
+
+  it('the escape lease forces canDig and allow1by1towers, v1 untouched', () => {
+    const body = require('../src/body')
+    const mov = () => ({ canDig: false, allowSprinting: false, allowParkour: true, allow1by1towers: false })
+    // Explicit extra: digging even under a walk borrow.
+    process.env.BOT_BODY = 'baritone'
+    const ctx = { recovery: { action: 'escape' }, movements: mov(), deepRan: false }
+    body.movementsFor('recover', { pathfinder: {} }, ctx, { walk: true, escape: true })
+    assert.equal(ctx.movements.canDig, true, 'escape re-opens the drill')
+    assert.equal(ctx.movements.allow1by1towers, true, 'Baritone may pillar')
+    // Episode state alone (the tick-start claim shape) forces both too.
+    const ctx2 = { recovery: { action: 'escape' }, movements: mov() }
+    body.movementsFor('recover', { pathfinder: {} }, ctx2)
+    assert.equal(ctx2.movements.canDig, true)
+    assert.equal(ctx2.movements.allow1by1towers, true)
+    // v1: no escape anywhere, flags stand as computed.
+    delete process.env.BOT_BODY
+    const ctx3 = { recovery: { action: 'pillar_up' }, movements: mov() }
+    body.movementsFor('recover', { pathfinder: {} }, ctx3)
+    assert.equal(ctx3.movements.allow1by1towers, false, 'v1 never gains the pillar flag')
   })
 
   it('moving clear of the wedge anchor ends the episode done', async () => {

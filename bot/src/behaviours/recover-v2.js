@@ -23,6 +23,7 @@ const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const metrics = require('../metrics')
 const danger = require('../danger')
+const bodyLease = require('../body')
 const { botPos, issueGoal } = require('./util')
 
 const RADIUS = 8 // cell search radius around the feet, per the bead
@@ -30,6 +31,10 @@ const SKY_CLEAR = 14 // air cells needed above the head for open sky
 const COLUMN_SCAN = 12 // liquid scan above the head: never tunnel into water
 const MAX_TRIES = 3 // candidates per episode, then the old call_player rung
 const ANCHOR_DIST = 3 // moved this far from the wedge: a new situation, done
+const ARRIVE_DIST = 1 // within this of the target cell centre: arrived…
+const ARRIVE_MOVED = 0.5 // …but only past this displacement from the wedge anchor (an adjacent first candidate reads exactly 1.0 at issue, before Baritone moves)
+const MAX_TICKS = 180 // backstop when no verdict ever lands (~1 Hz ticks): try the next candidate instead of holding forever (v1 rungs cap at 8-40)
+const ESCAPE_KEY = 'recover-escape' // lastGoalKey of the live escape goal
 
 function isV2() {
   try { return process.env.BOT_BODY === 'baritone' } catch (_) { return false }
@@ -123,15 +128,21 @@ function pickCandidates(bot, ctx, bp) {
   return pool.slice(0, 6).map(({ x, y, z }) => ({ x, y, z }))
 }
 
-function issueTarget(bot, ctx, t) {
-  issueGoal(bot, ctx, new goals.GoalNear(t.x, t.y, t.z, 0), 'recover-escape', true)
+function issueTarget(bot, ctx, st, t) {
+  const g = new goals.GoalNear(t.x, t.y, t.z, 0)
+  st.goal = g
+  st.key = ESCAPE_KEY
+  st.ticks = 0
+  issueGoal(bot, ctx, g, ESCAPE_KEY, true)
   try { ctx.lastPathStatus = 'none' } catch (_) { /* fresh verdict for the new goal */ }
 }
 
 // Episode entry, called from decide() right after dropGoal. Fills the
 // already-created ctx.recovery (metrics/routes already counted there),
 // issues the first goal and returns true; false runs the old ladder.
-// deps carries { logRecover } from recover.js (no back-require).
+// With no candidate the episode still opens (st.noCandidate) and run()
+// pages-or-gives-up at once — v2 never falls back to the ladder, only
+// its last rung survives. deps carries { logRecover } (no back-require).
 function escape(bot, ctx, facts, deps) {
   if (!isV2()) return false
   let bp = null
@@ -141,15 +152,28 @@ function escape(bot, ctx, facts, deps) {
   if (!rec) return false
   let cands = null
   try { cands = pickCandidates(bot, ctx, bp) } catch (_) { return false }
-  if (!cands || cands.length === 0) return false
-  const t = cands[0]
   rec.action = 'escape'
   rec.source = 'fsm'
   rec.model = null
   rec.status = 'running'
   rec.attempts = (rec.attempts || 0) + 1
+  // The lease refresh applies the escape movements (canDig +
+  // allow1by1towers) BEFORE the goal goes out: the bridge pushes
+  // allowBreak/allowPlace on setGoal, so issuing first would send the
+  // previous owner's flags. Same owner: refresh-only, no cleanup.
+  try { bodyLease.claimBody(bot, ctx, 'recover', { escape: true }) } catch (_) { /* lease best-effort */ }
+  if (!cands || cands.length === 0) {
+    rec.st = { candidates: [], idx: 0, target: null, anchor: { x: bp.x, y: bp.y, z: bp.z }, noCandidate: true }
+    try { metrics.recover.inc({ action: 'escape', source: 'fsm', outcome: 'chosen' }) } catch (_) { /* metric best-effort */ }
+    try {
+      if (deps && typeof deps.logRecover === 'function') deps.logRecover(bot, ctx, 'escape', 'fsm', 'chosen', facts)
+    } catch (_) { /* log best-effort */ }
+    try { console.log(`recover v2 escape -> none (no sky cell) pos=${fmtShort(bp)}`) } catch (_) { /* log best-effort */ }
+    return true
+  }
+  const t = cands[0]
   rec.st = { candidates: cands, idx: 0, target: t, anchor: { x: bp.x, y: bp.y, z: bp.z } }
-  try { issueTarget(bot, ctx, t) } catch (_) { return false }
+  try { issueTarget(bot, ctx, rec.st, t) } catch (_) { /* run() re-issues below */ }
   try { metrics.recover.inc({ action: 'escape', source: 'fsm', outcome: 'chosen' }) } catch (_) { /* metric best-effort */ }
   try {
     if (deps && typeof deps.logRecover === 'function') deps.logRecover(bot, ctx, 'escape', 'fsm', 'chosen', facts)
@@ -179,7 +203,7 @@ function nextOrPage(bot, ctx, deps) {
   if (st.idx < st.candidates.length && st.idx < MAX_TRIES) {
     const t = st.candidates[st.idx]
     st.target = t
-    try { issueTarget(bot, ctx, t) } catch (_) { return 'failed:issue' }
+    try { issueTarget(bot, ctx, st, t) } catch (_) { /* retried by the liveness check below */ }
     try { console.log(`recover v2 escape -> ${t.x} ${t.y} ${t.z} retry idx=${st.idx}`) } catch (_) { /* log best-effort */ }
     return 'running'
   }
@@ -204,22 +228,38 @@ function nextOrPage(bot, ctx, deps) {
 }
 
 // Per-tick driver, dispatched from recover.run for the escape action.
-// Returns a status string like every other primitive.
+// Total: only 'running' | 'done' | 'gave-up' — internal failures degrade
+// to the next candidate, never to the v1 ladder.
 function run(bot, ctx, deps) {
-  const rec = ctx && ctx.recovery
-  const st = rec && rec.st
-  if (!rec || !st || !st.target) return 'failed:no-escape'
-  let bp = null
-  try { bp = botPos(bot) } catch (_) { bp = null }
-  if (!bp) return 'failed:no-pos'
-  const t = st.target
-  if (Math.hypot(bp.x - (t.x + 0.5), bp.y - t.y, bp.z - (t.z + 0.5)) <= 1) return 'done'
-  const a = st.anchor
-  if (a && Math.hypot(bp.x - a.x, bp.y - a.y, bp.z - a.z) > ANCHOR_DIST) return 'done'
-  const status = ctx.lastPathStatus
-  if (status === 'success') return 'done'
-  if (status === 'noPath' || status === 'timeout') return nextOrPage(bot, ctx, deps)
-  return 'running'
+  try {
+    const rec = ctx && ctx.recovery
+    const st = rec && rec.st
+    if (!rec || !st) return 'running' // released mid-flight: the next tick routes away
+    if (st.noCandidate || !st.target) return nextOrPage(bot, ctx, deps)
+    let bp = null
+    try { bp = botPos(bot) } catch (_) { bp = null }
+    if (!bp) return 'running' // transient read: wait a tick, the budget below bounds it
+    // A stolen or parked goal (fight, pause) is re-issued, not waited on:
+    // its verdicts belong to the other owner. Untracked st (hand-built in
+    // tests) skips this and stays verdict-driven.
+    if (st.key && (ctx.lastGoalKey !== st.key || !bot.pathfinder || bot.pathfinder.goal !== st.goal)) {
+      try { issueTarget(bot, ctx, st, st.target) } catch (_) { /* budget advances below */ }
+      return 'running'
+    }
+    st.ticks = (st.ticks | 0) + 1
+    const t = st.target
+    const a = st.anchor
+    const moved = a ? Math.hypot(bp.x - a.x, bp.y - a.y, bp.z - a.z) : 0
+    if (Math.hypot(bp.x - (t.x + 0.5), bp.y - t.y, bp.z - (t.z + 0.5)) <= ARRIVE_DIST && moved > ARRIVE_MOVED) return 'done'
+    if (a && moved > ANCHOR_DIST) return 'done'
+    const status = ctx.lastPathStatus
+    if (status === 'success') return 'done'
+    if (status === 'noPath' || status === 'timeout') return nextOrPage(bot, ctx, deps)
+    if (st.ticks > MAX_TICKS) return nextOrPage(bot, ctx, deps)
+    return 'running'
+  } catch (_) {
+    try { return nextOrPage(bot, ctx, deps) } catch (_) { return 'running' }
+  }
 }
 
-module.exports = { isV2, escape, run, pickCandidates, RADIUS, MAX_TRIES, ANCHOR_DIST }
+module.exports = { isV2, escape, run, pickCandidates, RADIUS, MAX_TRIES, MAX_TICKS, ANCHOR_DIST, ESCAPE_KEY }
