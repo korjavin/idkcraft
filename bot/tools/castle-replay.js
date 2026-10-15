@@ -1115,6 +1115,7 @@ async function main() {
   if (REPAIR) {
     const st = tickCtx().castle
     knocked = repairCells(st)
+    tickCtx().paused = true // no relay before the readback (the nowood fills take seconds)
     const door = knocked.find((c) => c.kind === 'door')
     // Upper door half first: no dropped door item to hand the bot.
     await rcon(`setblock ${door.x} ${door.y + 1} ${door.z} minecraft:air`).catch((e) => fail('repair-seed', e.message))
@@ -1131,12 +1132,17 @@ async function main() {
       for (let y = gy - 12; y <= gy + 30; y++) {
         await rcon(`fill ${cx - NOWOOD_RADIUS} ${y} ${cz - NOWOOD_RADIUS} ${cx + NOWOOD_RADIUS} ${y} ${cz + NOWOOD_RADIUS} minecraft:air replace #minecraft:logs`).catch((e) => fail('repair-seed', e.message))
       }
+      // The fill took the castle's own Fachwerk beams too: lay them back.
+      for (const c of seedCastleCells(st)) {
+        if (c.kind === 'frame') await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${c.block}`).catch((e) => fail('repair-seed', e.message))
+      }
     }
     await sleep(2000)
     const miss = knocked.filter((c) => {
       try { const b = guide.blockAt(new Vec3(c.x, c.y, c.z)); return !b || b.name !== 'air' } catch (_) { return true }
     })
     if (miss.length) fail('repair-seed', `${miss.length} knocked cells not air`)
+    tickCtx().paused = false
     origLog(`CASTLE-RIG repair seed: ${knocked.length} cells knocked out (${knocked.map((c) => c.kind).join(',')}), chest ${REPAIR === 'wood' ? '16 oak_log' : `empty, logs cleared within ${NOWOOD_RADIUS}`}`)
   }
   if (NIGHT_HOME) {

@@ -587,6 +587,19 @@ stairs cell) next to the residence nights:
 CASTLE_SEED=complete CASTLE_SEED_VERSION=2 CASTLE_KIT=stairs CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh --night 68
 ```
 
+Repair relay (g0z.56): `CASTLE_REPAIR=wood|nowood` knocks out 20 plan
+cells of the seeded castle after adoption (12 fence, the door, 4 wall, 3
+torches); `wood` puts 16 oak_log in the castle chest, `nowood` leaves it
+empty and clears every log within 72. The guide chats `castle repair`
+(the reply is logged). The verdict adds `, repair=<relaid>/20@<s>,
+regress=<n after the full relay>, nowood@<s>` (first 'no wood' status).
+`CASTLE_BODY=baritone` runs the builder on the v2 body (client image
+`BARITONE_IMAGE`, ports 7850/7851 + 2 x slot index):
+
+```sh
+CASTLE_SEED=complete CASTLE_REPAIR=wood CASTLE_BODY=baritone CASTLE_KIT=blast sh bot/tools/castle-rig.sh 30
+```
+
 Interrupts clean up after themselves: `kill -INT`/`-TERM` (or Ctrl-C)
 kills every descendant (server client, node, tee), `docker rm -f`s this
 slot's container and drops the lock, exit 130 — the next run on the slot
