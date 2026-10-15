@@ -611,7 +611,9 @@ CASTLE_SEED=complete CASTLE_REPAIR=wood CASTLE_BODY=baritone CASTLE_KIT=blast sh
 Start spot (g0z.58): `CASTLE_START="dx,dy,dz"` (off the seeded site's SW
 corner) lands the builder in a 1x2 air pocket there after adoption; prod's
 g0z.55 tunnel start is `50,-5,31`. `CASTLE_START_CELL=cobble|planks` walls
-the pocket in a 3x4x3 shell of that block — v2 pathing hard-bans both, so
+the pocket in a 3x4x3 shell of that block, marked the bot's own (self-enclosed;
+a foreign box is a player build, never dug) plus a stone pickaxe — v2
+pathing hard-bans both kinds, so
 only an explicit dig gets out. The verdict adds `, start=<d>[/<cell>],
 escaped@<s>, home@<s>` (first second in the castle interior) and
 `regress=<n>` (castle regress lines over the whole window; 0 = it never

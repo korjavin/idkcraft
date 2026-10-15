@@ -45,7 +45,8 @@
 #   prod's g0z.55 tunnel start is "50,-5,31"; the verdict adds start=,
 #   escaped@<s>, home@<s> (first second in the castle interior) and
 #   regress=<n> over the whole window), CASTLE_START_CELL (''|cobble|planks
-#   — walls the pocket in a 3x4x3 shell: v2 pathing hard-bans both kinds),
+#   — walls the pocket in a 3x4x3 shell marked the bot's own + a stone
+#   pickaxe, a self-enclosed cell: v2 pathing hard-bans both kinds),
 #   CASTLE_SEED_VERSION (''|1|2|3, default '' = current — g0z.48: the
 #   blueprint version the CASTLE_SEED=complete castle is seeded as; 2 seeds
 #   a v2 castle and the guide chats `castle upgrade` after adoption, so the

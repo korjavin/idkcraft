@@ -24,6 +24,12 @@ describe('castle rig start spot (g0z.58)', () => {
   it('a sealed cell: a hollow 3x4x3 shell of the block', () => {
     assert.equal(startPlan(SITE, '0,0,0', 'cobble').cmd, 'fill 99 63 199 101 66 201 minecraft:cobblestone hollow')
     assert.equal(startPlan(SITE, '0,0,0', 'planks').cmd, 'fill 99 63 199 101 66 201 minecraft:oak_planks hollow')
+    // The shell cells (marked own: self-enclosed) are the fill box minus the 1x2 pocket.
+    const sh = startPlan(SITE, '0,0,0', 'cobble').shell
+    assert.equal(sh.length, 3 * 4 * 3 - 2)
+    assert.ok(sh.every((b) => b.name === 'cobblestone'))
+    assert.ok(!sh.some((b) => b.x === 100 && b.z === 200 && (b.y === 64 || b.y === 65)))
+    assert.deepEqual(startPlan(SITE, '0,0,0', '').shell, [])
   })
 
   it('out = past the shell box', () => {

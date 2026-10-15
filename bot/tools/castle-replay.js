@@ -141,8 +141,11 @@ function repairCells(st) {
 // 1x2 air pocket there (prod g0z.55: castle site 8 65 -12, tunnel start
 // 58 60 19 = "50,-5,31"). CASTLE_START_CELL=cobble|planks walls the pocket
 // in a 3x4x3 shell of that block: v2 pathing hard-bans both (g0z.55
-// blocksToDisallowBreaking), so only an explicit dig gets it out. Pure
-// (unit-tested); null when CASTLE_START is unset.
+// blocksToDisallowBreaking), so only an explicit dig gets it out. The
+// shell is SELF-enclosed: its cells land in the bot's placedByBot (a
+// foreign cobble/planks box is a player build — default-deny protected,
+// never dug) and the bot gets a stone pickaxe (its night-shelter kit).
+// Pure (unit-tested); null when CASTLE_START is unset.
 const START_BLOCK = { cobble: 'cobblestone', planks: 'oak_planks' }
 function startPlan(site, raw, cell) {
   const s = String(raw || '').trim()
@@ -161,7 +164,18 @@ function startPlan(site, raw, cell) {
   // Out of the pocket = out of its shell box (the cell, or the 3x4x3 around a bare pocket).
   const out = (p) => Math.abs(Math.floor(p.x) - x) > 1 || Math.abs(Math.floor(p.z) - z) > 1 ||
     Math.floor(p.y) < y - 1 || Math.floor(p.y) > y + 2
-  return { x, y, z, d, cell: c, cmd, out }
+  const shell = []
+  if (c) {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 2; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          if (dx === 0 && dz === 0 && (dy === 0 || dy === 1)) continue
+          shell.push({ x: x + dx, y: y + dy, z: z + dz, name: START_BLOCK[c] })
+        }
+      }
+    }
+  }
+  return { x, y, z, d, cell: c, cmd, out, shell }
 }
 const START = process.env.CASTLE_START || ''
 const START_CELL = process.env.CASTLE_START_CELL || ''
@@ -1181,6 +1195,16 @@ async function main() {
     start = startPlan({ x: bx - 15, y: gy + 1, z: bz - 13 }, START, START_CELL)
     tickCtx().paused = true
     await rcon(start.cmd).catch((e) => fail('start', e.message))
+    if (start.cell) {
+      const c = tickCtx()
+      if (!(c.placedByBot instanceof Set)) c.placedByBot = new Set()
+      if (!(c.placedNames instanceof Map)) c.placedNames = new Map()
+      for (const b of start.shell) {
+        c.placedByBot.add(`${b.x},${b.y},${b.z}`)
+        c.placedNames.set(`${b.x},${b.y},${b.z}`, b.name)
+      }
+      await rcon(`give ${FOLLOWER} stone_pickaxe 1`).catch((e) => fail('start', e.message))
+    }
     await rcon(`tp ${FOLLOWER} ${start.x + 0.5} ${start.y} ${start.z + 0.5}`).catch((e) => fail('start', e.message))
     tickCtx().paused = false
     origLog(`CASTLE-RIG start ${start.x} ${start.y} ${start.z} (site +${start.d.join(',')})${start.cell ? `, sealed in ${start.cell}` : ', bare pocket'}`)
