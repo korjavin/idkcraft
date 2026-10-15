@@ -410,6 +410,10 @@ REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base 
 sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical flow, stuck-baseline.json
 ```
 
+**Merge gate** (CLAUDE.md "v2 merge gate"): a v2 PR is judged on ONE throughput
+verdict line (castle cells/90 min, house done-seconds, deaths/night), not on
+stuck spots. The v2 stuck-run above is a regression check only (not worse).
+
 - **Image** (idkcraft-neuc.23): `client.sh` defaults to
   `idkcraft-baritone:local`, a build of THIS tree's `baritone/` (bridge mod
   included) — a missing image exits 2 with the build hint. Pin

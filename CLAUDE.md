@@ -181,6 +181,15 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   body; a batch task adds them to `bot/tools/stuck-spots.json` (with `bead`) plus the measured
   entry in `bot/tools/stuck-baseline.json` — one without the other fails the gate or `npm test`.
   `STUCKRUN=<file>` stays optional for review rounds. Manual: `bot/tools/README.md`.
+- v2 merge gate (owner 2026-10-15, throughput not stall spots): a PR touching v2 behaviour
+  (`bot/src/bridge/*`, `baritone/*`, or a `BOT_BODY=baritone` branch in `bot/src`) quotes ONE
+  throughput verdict line it moved or held, before/after in the PR body: castle cells per 90 min
+  (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh 90`), house done-seconds + fail top-3
+  (`sh bot/tools/work-rig.sh 20 v2`), or deaths per night (`castle-rig.sh --night`). No new
+  `failed:<reason>` string without a verdict line it moves. `REPLAY_BODY=baritone` stuck-run is a
+  regression check only (not worse), never the reason to merge; v1 `stuck-run.sh` is unchanged and
+  frozen (v1 is phased out). Stall-point beads (neuc.29/.31/.48/.49, umou, sfmk) are deferred
+  "postponed: structural plan" until the mine/recover/build beads land.
 - Rounds 2+ only after a critical/major was fixed: `PREV=<round-1 findings.json> REVIEWED_SHA=<sha>
   .revmux/review.sh <bead> 02-after-fix` (scope = the fix delta, one-agent `idkcraft` profile unless one is passed). Minors are fixed in the same commit
   and never trigger another round. Max 3 rounds (the script refuses a 4th); whatever is still gating is outstanding in the handoff.
