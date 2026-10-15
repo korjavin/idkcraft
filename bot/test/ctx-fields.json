@@ -1131,6 +1131,7 @@
     "writers": [
       "src/behaviours/forage.js",
       "src/behaviours/gather.js",
+      "src/behaviours/recover-v2.js",
       "src/index.js"
     ],
     "owner": "src/behaviours/forage.js"

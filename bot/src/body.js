@@ -307,8 +307,16 @@ function movementsFor(owner, bot, ctx, extra) {
   let canDig = true
   let sprint = false
   let parkour = true
+  // neuc.52: the v2 escape digs/pillars through Baritone itself
+  // (allowBreak/allowPlace, mapped from canDig/allow1by1towers by the
+  // bridge). Forced on for the recover owner only, while its episode runs
+  // the escape — v1 never sets extra.escape and never runs one, so this
+  // reads false there and nothing below moves.
+  const escape = !!((extra && extra.escape) || (owner === 'recover' && ctx && ctx.recovery &&
+    ctx.recovery.action === 'escape' && process.env.BOT_BODY === 'baritone'))
   try {
     if ((extra && extra.walk) || ctx.deepRan || ctx.intruderFight || gohomeWalk(ctx) || meetDig(ctx) || castleWalk(ctx)) canDig = false
+    if (escape) canDig = true
     if (extra && extra.sprint) {
       const bp = bodyPos(bot)
       const nodes = ctx.lastPathNodes
@@ -330,6 +338,7 @@ function movementsFor(owner, bot, ctx, extra) {
     try {
       if (v2Guard && Array.isArray(mov.exclusionAreasBreak) && !mov.exclusionAreasBreak.includes(v2Guard)) mov.exclusionAreasBreak.push(v2Guard)
       scaffoldCobble(bot, mov, !(keepStone && otherScaffold(bot, mov)))
+      if (escape && typeof mov.allow1by1towers === 'boolean') mov.allow1by1towers = true
       if (typeof mov.canDig === 'boolean') mov.canDig = canDig
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour

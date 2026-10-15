@@ -25,6 +25,7 @@ const { botPos, denyReason, logDeny, protectedReason } = require('./util')
 const worker = require('../worker')
 const { waterUpRun, countBuckets, wall2At, findCombo, findComboStand } = require('./waterup')
 const castle = require('../castle') // yardRing only (pure, no requires of its own)
+const recoverV2 = require('./recover-v2') // v2 escape (neuc.52): no edge back (it lazy-requires here)
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
 const REPEATS = 4 // max chained dones of one progress primitive, no re-ask
@@ -2615,6 +2616,12 @@ async function decide(bot, ctx, state, target) {
       logRecover(bot, ctx, 'none', 'fsm', 'drop-goal', facts)
       return release(bot, ctx, 'drop-goal')
     }
+    // neuc.52: on a Baritone body the ladder below misfires rung by rung —
+    // one native escape goal replaces it. v1 falls through untouched
+    // (escape() is never even called there).
+    if (recoverV2.isV2() && recoverV2.escape(bot, ctx, facts, { logRecover })) {
+      return { action: 'escape', sprint: false, source: 'fsm' }
+    }
   } else if (!rec.planHold) {
     // A primitive finished: record the outcome, then continue, re-ask, or
     // give up. Terminal states feed the next facts as last=<action>:<outcome>.
@@ -2803,7 +2810,25 @@ async function decide(bot, ctx, state, target) {
 // metric work unchanged.
 function run(bot, ctx) {
   const rec = ctx && ctx.recovery
-  if (!rec || !rec.action || !RECOVER_MENU[rec.action]) return
+  if (!rec || !rec.action) return
+  // neuc.52: the v2 escape is not a menu rung (RECOVER_ORDER/MENU parity),
+  // so it dispatches here with recover.js helpers injected — recover-v2
+  // keeps no require edge back (the graph is acyclic).
+  if (rec.action === 'escape') {
+    if (rec.planHold) return
+    try {
+      rec.status = recoverV2.run(bot, ctx, {
+        logRecover,
+        release,
+        recoverFacts,
+        callPlayerFeasible: (facts, c) => RECOVER_MENU.call_player.feasible(facts, c),
+      })
+    } catch (_) {
+      rec.status = 'failed:error'
+    }
+    return
+  }
+  if (!RECOVER_MENU[rec.action]) return
   if (rec.planHold) return // vhlb.4: holding still for plan(); decide() consumes
   try {
     rec.status = RECOVER_MENU[rec.action].run(bot, ctx)

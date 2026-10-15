@@ -51,6 +51,10 @@ const BEHAVIOURS = {
   dig_through: (bot, ctx) => recover.run(bot, ctx),
   wait: (bot, ctx) => recover.run(bot, ctx),
   call_player: (bot, ctx) => recover.run(bot, ctx),
+  // neuc.52: the v2 escape dispatches through recover.run like the ladder
+  // primitives — without this line applyDecision would stopOnce() the live
+  // escape goal every tick.
+  escape: (bot, ctx) => recover.run(bot, ctx),
 }
 
 module.exports = { BEHAVIOURS }
