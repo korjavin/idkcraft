@@ -338,8 +338,9 @@ S6-LEAD by the lost order (`reached`).
   water by the yrtx drowned death (103 62 -420): shelter must swim to the
   shore before it digs in. Swim + dig closes 18-24 s (stuck 1-2: beaching
   trips stuck resets), past the stand-and-dig budget, so the spot carries
-  `closeSecs: 35`. On pre-#293 code the dig-in fails `airborne` and the
-  window stays OPEN.
+  `closeSecs: 45` (`secs: 60`): v2 closes 26-32 s, which the old 35 left
+  3 s of slack (idkcraft-neuc.47). On pre-#293 code the dig-in fails
+  `airborne` and the window stays OPEN.
 - Night spots (`mode: "night"`, idkcraft-6x7.17) are the house-at-night
   family: the shelter setup (`time set 18000`, `home` injected as
   `ctx.home`, guide parked out of entity range on `goal`, `go work`) at a
@@ -431,6 +432,13 @@ sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical f
   v1 reaches but v2 does not names its `blockedBy` bead plus a `why`). A
   `blockedBy` spot reached on a later run prints `IMPROVED`: re-record both
   runs and drop the annotation in the PR that fixed it.
+- **Known flakes** (idkcraft-neuc.47): a reached entry may carry `flaky`
+  (the bead owning the failure mode) plus `flakyWhy` (the measurement).
+  Annotation only — the judge ignores it and the rerun protocol is
+  unchanged; it says which `FLAKY` lines are known (DOOR-ROOM: door-cell
+  wedge, neuc.48; SHELTER-WATER: no-cap-ref after the swim, neuc.49). A
+  `FLAKY` on any other spot is news: measure it N=5 before calling it
+  noise (neuc.47's JR-BUILD "flake" was a plank shortfall, fixed).
 - `BOT_AUTONOMOUS` takes `1`/`true`/`yes` — `on` reads as off (bot/src
   `parseAutonomous`; chat `autonomous on` is the in-game toggle).
 

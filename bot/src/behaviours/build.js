@@ -391,6 +391,23 @@ function houseTableOwed(bot, home, skipped) {
   } catch (_) { return false }
 }
 
+// The house table cell's coords when a crafting table stands in it, else
+// null (idkcraft-neuc.47). build claims home.table only on its NEXT tick,
+// but the facts read runs first: the tick after the table landed read
+// table=0 and no station, so craft made a second table from the house
+// planks (equip then placed it roadside) — 4 of the kit's planks gone,
+// and the build ran short and walked off to gather (rig: JR-BUILD v2).
+// Only a real read counts (unloaded is null, unlike stationStanding).
+function houseTableAt(bot, home) {
+  try {
+    if (!home || !home.site) return null
+    const t = blueprintFor(home)[0]
+    if (!t || t.kind !== 'table') return null
+    const p = cellAbs(home, t)
+    return blockNameAt(bot, p) === 'crafting_table' ? p : null
+  } catch (_) { return null }
+}
+
 // Remaining loose planks to lay (door/table need items, not planks). Without
 // a home there is no origin to scan from, so the whole wall+roof count.
 function countRemainingPlanks(bot, home, skipped) {
@@ -1096,6 +1113,7 @@ module.exports.nextCellIdx = nextCellIdx
 module.exports.isComplete = isComplete
 module.exports.clearOwed = clearOwed
 module.exports.houseTableOwed = houseTableOwed
+module.exports.houseTableAt = houseTableAt
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
 module.exports.cellLoaded = cellLoaded

@@ -1291,7 +1291,10 @@ function craft(bot, ctx, target, state) {
   let op = ops[0] || null
   if (!op) {
     const tableCount = countItems(bot, (n) => n === 'crafting_table')
-    if (tableCount === 0 && !tableBlock) {
+    // neuc.47: nor while the house table cell stands unclaimed (goal facts mirror).
+    let houseTable = null
+    try { houseTable = require('./build').houseTableAt(bot, ctx.home) } catch (_) { houseTable = null }
+    if (tableCount === 0 && !tableBlock && !houseTable) {
       for (const [wood, n] of sortedWoods(planks)) {
         if (n < 4) break
         const found = recipes(bot, 'crafting_table', null)
