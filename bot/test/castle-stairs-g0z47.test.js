@@ -270,6 +270,17 @@ describe('stairs sourcing (g0z.47)', () => {
     }
   })
 
+  it('a craft in flight owns the tick: the grid-held cobble never starts the dig (neuc.50)', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 60 }; return 'stairs-none' }
+    fetch.deps.craftItem = () => 'running'
+    const ctx = { gearInFlight: true, castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, phase: 'body', blocked: {} } }
+    fetch(fetchBot([{ name: 'cobblestone', count: 23 }]), ctx) // 6 of 29 in the table grid mid-craft
+    assert.equal(ctx.stepStatus, undefined, 'no dig leg ended the step mid-craft')
+    ctx.gearInFlight = false
+    fetch(fetchBot([{ name: 'cobblestone', count: 23 }]), ctx)
+    assert.equal(ctx.stepStatus, 'done', 'the op over, short cobble digs again')
+  })
+
   it('stairs are castle material on v3 only; usable above a zero reserve', () => {
     assert.equal(fetch.FETCH.stairs, 16)
     assert.equal(castleMod.isMaterial('cobblestone_stairs', { blueprintVersion: 3 }), true)

@@ -408,6 +408,10 @@ function chestTick(bot, ctx, f, d) {
 function craftTick(bot, ctx, f, d) {
   const names = craftNames(bot, d.kind)
   if (names.length === 0 || f.craftOut) return false
+  // neuc.50 rig: a craft in flight owns the tick. Mid-craft the grid holds
+  // the cobble, stairsCobbleShort flipped, digTick walked the body off and
+  // the server closed the table window (stale window, gear-cobblestone_stairs).
+  if (ctx.gearInFlight) return true
   if (d.kind === 'banner' && !bannerSelf(bot, ctx)) return false // beds first: the wool is theirs
   if (d.kind === 'stairs' && stairsCobbleShort(bot)) return false // dig first (stairsDig); the scaffold/shelter reserve stays
   if (d.kind === 'torch' && countItems(bot, (n) => n === 'coal' || n === 'charcoal') <= require('./light').COAL_RESERVE) return false // smelting's coal floor
