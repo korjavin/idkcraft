@@ -574,17 +574,22 @@ function digTick(bot, ctx, st, bp) {
       ctx.equipDigInFlight = false
       if (typeof fn === 'function') fn()
     }
-    // Forbid the cells the v1 scan skips: protected ground, our own
-    // footprint placements and the castle site. Block-level protection
-    // rides the #set avoid lists from Movements; this leashes the body.
+    // Forbid real no-go zones for the body only: the castle site and the
+    // house footprint (box + apron) plus our own placements in it. Never
+    // the block underfoot through protectedReason — that is a dig
+    // allow-list and fires for water, air, paths and farmland, which would
+    // trip the leash on every swim, jump apex and village crossing
+    // (round-1 core-4). Block-level protection rides the #set avoid lists
+    // from Movements; this leashes the body.
     const forbid = (pos) => {
       try {
         if (!pos || typeof pos.x !== 'number') return false
         if (ctx && ctx.castle && ctx.castle.site && onSite(ctx.castle, pos)) return true
+        if (ctx && ctx.home && inHouseFootprint(ctx.home, pos)) return true
         if (typeof bot.blockAt !== 'function') return false
         const b = bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) - 1, Math.floor(pos.z)))
         if (!b) return false
-        return protectedReason(bot, b, ctx) !== null || ownInFootprint(ctx, b)
+        return ownInFootprint(ctx, b)
       } catch (_) { return false }
     }
     bot.mine(digTargets(bot), need, { radius: 12, forbid }).then(

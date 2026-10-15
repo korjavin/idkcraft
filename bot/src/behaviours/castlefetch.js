@@ -24,7 +24,7 @@ const stockpileMod = require('./stockpile')
 const danger = require('../danger')
 const { countItems } = require('../perception')
 const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('./util')
-const { stepDone, stepFailed, failReason, isFinished } = require('../step')
+const { stepDone, stepFailed, failReason, isFinished, stepGen, stale } = require('../step')
 
 // Stack-ish targets per kind (bead: ~64 cobble, ~16 logs' worth). Each is
 // >= castle BATCH (door: its remainder is 1), so a fetch picked on a
@@ -815,6 +815,22 @@ function siteCenter(st) {
   return { x: st.site.x + Math.floor(w / 2), y: st.site.y, z: st.site.z + Math.floor(d / 2) }
 }
 
+// Mod guard box for the v2 mine (round-1 body-3): the onSite footprint
+// with the same margin/below the onSite test uses (1 and 3) and the same
+// top (16, blueprint onSite's FETCH_SITE_TOP). Null without a site — the
+// mine then runs on the body leash alone.
+function siteGuardBox(st) {
+  try {
+    if (!st || !st.site || typeof st.site.x !== 'number') return null
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    if (!(w > 0) || !(d > 0)) return null
+    return {
+      x0: st.site.x - 1, y0: st.site.y - 3, z0: st.site.z - 1,
+      x1: st.site.x + w, y1: st.site.y + 16, z1: st.site.z + d,
+    }
+  } catch (_) { return null }
+}
+
 // Trench side s (0..3) on ring (0..1, vmzq.31): origin column just
 // outside the footprint near a corner (the entrance sits mid-side, never
 // in front of it), the outward direction and the width axis. Ring 1 works
@@ -1241,22 +1257,35 @@ function digTick(bot, ctx, f, d) {
   // unreached on v2. mine-stall keeps the 'failed:castlefetch-dig-stall'
   // reason string (the goal watchdog and metrics key on it).
   if (typeof bot.mine === 'function') {
-    const need = (d && typeof d.short === 'number' && d.short > 0) ? d.short : castleMod.BATCH
+    // Batch legs yield a layable batch (core-5, the vmzq.20 shape): a slow
+    // mine must not run the full shortfall while the castle could lay.
+    let need = (d && typeof d.short === 'number' && d.short > 0) ? d.short : castleMod.BATCH
+    if (d && d.word === 'batch') need = Math.min(need, castleMod.BATCH)
     if (ctx.castleFetchInFlight) return
     ctx.castleFetchInFlight = true
     ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig
+    ctx.castleFetchMine = true // a bridge mine owns the tick (not a v1 flight): pack-full can cancel it below
     spend(f, 'dig')
     const st0 = ctx.castle
     const forbid = (pos) => {
       try { return !!(st0 && st0.site && onSite(st0, pos)) } catch (_) { return false }
     }
-    bot.mine(['stone', 'cobblestone'], need, { radius: DIG_RADIUS, forbid }).then(
-      () => { ctx.castleFetchInFlight = false; finish(bot, ctx, 'done') },
+    // Cell-level castle guard (round-1 body-3): the body leash cannot stop
+    // a break made from reach outside the site, so the mod snapshots the
+    // site box's stone cells at begin and stops on the first break inside.
+    // Top mirrors blueprint onSite's FETCH_SITE_TOP (bot/src/castle.js).
+    const guard = siteGuardBox(st0)
+    const gen = stepGen(ctx) // round-1 core-1: a late settle must not finish a step that is gone
+    const settleMine = () => { ctx.castleFetchInFlight = false; ctx.castleFetchMine = false }
+    const settled = () => isFinished(ctx.stepStatus) || stale(ctx, gen) || (ctx.step && ctx.step !== 'castlefetch')
+    bot.mine(['stone', 'cobblestone'], need, { radius: DIG_RADIUS, forbid, guard }).then(
+      () => { settleMine(); if (!settled()) finish(bot, ctx, 'done') },
       (err) => {
-        ctx.castleFetchInFlight = false
+        settleMine()
+        if (settled()) return
         const m = err && err.message
         if (m === 'mine-noPath') finish(bot, ctx, 'failed:castlefetch-no-stone')
-        else if (m === 'mine-leash') finish(bot, ctx, 'failed:castlefetch-unreachable')
+        else if (m === 'mine-leash' || m === 'mine-stopped') finish(bot, ctx, 'failed:castlefetch-unreachable')
         else finish(bot, ctx, 'failed:castlefetch-dig-stall')
       },
     )
@@ -1451,6 +1480,17 @@ function castlefetch(bot, ctx, target, state) {
   // continuation ticks here, so dig reads as duration, not starts.
   if (ctx.castleFetchInFlight) {
     if (ctx.castleFetch) spend(ctx.castleFetch, ctx.castleFetchFlight === 'dig' ? 'dig' : 'other')
+    // Pack filled mid-mine (round-1 core-5): roomForDrop only gated the
+    // start, and a full pack loses every further drop into a dig-stall.
+    // Cancel the bridge mine and bank instead; the v1 flight below owns no
+    // cancellable handle, so this only runs for the mine marker above.
+    if (ctx.castleFetchMine && !roomForDrop(bot, ctx)) {
+      ctx.castleFetchMine = false
+      ctx.castleFetchInFlight = false
+      try { if (bot && typeof bot.cancelMine === 'function') bot.cancelMine(new Error('mine-stopped')) } catch (_) { /* cancel best-effort */ }
+      finish(bot, ctx, 'failed:castlefetch-pack-full')
+      return
+    }
     return
   }
   // neuc.50 rig: a craft op in flight (craftany/gear) owns the tick too.
@@ -1528,6 +1568,7 @@ module.exports.quarrySide = quarrySide
 module.exports.QUARRY_RINGS = QUARRY_RINGS
 module.exports.pickQuarry = pickQuarry
 module.exports.pickStone = pickStone
+module.exports.siteGuardBox = siteGuardBox
 module.exports.pickPit = pickPit
 module.exports.pitSpots = pitSpots
 module.exports.inTrench = inTrench

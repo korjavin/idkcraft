@@ -49,6 +49,8 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     assert.ok(sets.some((c) => c === '#set mineScanDroppedItems true'), 'scan drops pinned')
     assert.ok(sets.some((c) => c === '#set legitMine false'), 'legit mine pinned')
     assert.ok(sets.some((c) => c === '#set mineGoalUpdateInterval 5'), 'goal interval pinned')
+    assert.ok(sets.some((c) => c === '#set allowBreak true'), 'a mine digs even under a no-dig walk lease')
+    assert.equal(bot._settings.allowBreak, 'true', 'the pin mirrors into the adapter diff')
     assert.ok(!(transport.state.digLog || []).length, 'no single digs on the mine path')
   })
 
@@ -104,6 +106,33 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     transport.state.pos = { ...transport.state.pos, x: 6 }
     await bot.refresh()
     await assert.rejects(p, /mine-leash/)
+  })
+
+  it('a guard break ends mine-leash even at target', async () => {
+    ({ transport, bot } = mineBot({ mineScript: 'guard' }))
+    await bot.start({ pollMs: 0 })
+    await assert.rejects(bot.mine(['stone'], 4, { tickMs: 5 }), /mine-leash/)
+  })
+
+  it('cancelMine stops the body and rejects mine-stopped; stop() cancels a live mine', async () => {
+    ({ transport, bot } = mineBot({ mineScript: 'hang' }))
+    await bot.start({ pollMs: 0 })
+    const p = bot.mine(['dirt'], 3, { stallMs: 5000, tickMs: 5 })
+    await untilMineSent()
+    assert.equal(bot.cancelMine(), true, 'a live mine cancels')
+    await assert.rejects(p, /mine-stopped/)
+    assert.equal(transport.state.baritone, '#stop')
+    assert.equal(bot.cancelMine(), false, 'nothing live: quiet')
+  })
+
+  it('pathfinder.stop() cancels a live mine instead of leaving it mining', async () => {
+    ({ transport, bot } = mineBot({ mineScript: 'hang' }))
+    await bot.start({ pollMs: 0 })
+    const p = bot.mine(['dirt'], 3, { stallMs: 5000, tickMs: 5 })
+    await untilMineSent()
+    bot.pathfinder.stop()
+    await assert.rejects(p, /mine-stopped/)
+    assert.equal(transport.state.baritone, '#stop')
   })
 
   it('rejects empty names and non-positive counts without touching the wire', async () => {

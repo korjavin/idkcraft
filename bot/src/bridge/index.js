@@ -19,7 +19,7 @@ const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.
 const { installLifecycle, handleLifecycleEvent } = require('./lifecycle') // idkcraft-neuc.10: lifecycle/event parity
 const { installWindows, handleWindowEvent } = require('./windows') // idkcraft-neuc.11: container windows
 const { installInteract, handleInteractEvent } = require('./interact') // idkcraft-neuc.7: dig/place
-const { installMine, handleMineEvent } = require('./mine') // idkcraft-neuc.53: baritone.mine -> MineProcess
+const { installMine, handleMineEvent, cancelMine } = require('./mine') // idkcraft-neuc.53: baritone.mine -> MineProcess
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 // Failed fire-and-forget baritone.cmd: log, never emit 'error' (runOnce
@@ -676,6 +676,10 @@ class BaritoneBot extends EventEmitter {
   _setGoal(goal, dynamic) {
     this.pathfinder.goal = goal || null
     this._follow = null
+    // A new goal supersedes a live mine (round-1 body-2/core-2): the mine
+    // walks Baritone itself, outside the path latch, so an owner stop or a
+    // step change would otherwise leave it mining forever.
+    cancelMine(this)
     if (!goal) {
       this._stopPath()
       return
@@ -977,7 +981,7 @@ class BaritoneBot extends EventEmitter {
   }
 
   _stopPath() {
-    const live = this._pathing || this._goalId != null
+    const live = this._pathing || this._goalId != null || (this._mine && !this._mine.settled)
     this.pathfinder.goal = null
     this._follow = null
     this._boundSeq = this._cmdSeq // in-flight binds and late verdicts drop
@@ -985,9 +989,13 @@ class BaritoneBot extends EventEmitter {
     this._pathing = false
     if (!live) return // mineflayer's stop is silent when idle
     this._pathStatus = 'stopped'
-    this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => {
-      console.log(`bridge baritone.cmd #stop failed: ${(e && e.message) || e}`) // never 'error': see chat()
-    })
+    // cancelMine sends the #stop itself when a live mine was holding the
+    // body; the behaviour gen guards drop its mine-stopped settle.
+    if (!cancelMine(this)) {
+      this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => {
+        console.log(`bridge baritone.cmd #stop failed: ${(e && e.message) || e}`) // never 'error': see chat()
+      })
+    }
     // v1 emits path_stop here (unheard by our ticker); the reset makes the
     // cancel visible on the same taps as every other terminal.
     this.emit('path_reset', 'stopped')

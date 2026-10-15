@@ -32,7 +32,11 @@ import net.minecraft.world.item.ItemStack;
  * Node (bot/src/bridge/mine.js); the mod accepts the radius and ignores it.
  * Block protection (castle floor, porch) rides the existing {@code #set}
  * avoid lists from Movements; the Node forbid predicate is the second
- * guard. All client/Baritone calls run on the client thread.
+ * guard. The optional {@code guard} box ({x0,y0,z0,x1,y1,z1}, idkcraft-neuc.53
+ * round-1 body-3) is the cell-level one: cells inside it that match the
+ * requested blocks are snapshotted at begin, and the first break inside
+ * stops the process at once. All client/Baritone calls run on the client
+ * thread.
  */
 public final class Mine {
 
@@ -54,6 +58,12 @@ public final class Mine {
     private static volatile int target = 0;
     private static volatile List<String> names = List.of();
     private static volatile int lastHave = 0;
+    /** Guard box corners {x0,y0,z0,x1,y1,z1}, or null. Client thread only. */
+    private static volatile int[] guardBox = null;
+    /** idx -> stateId snapshot of guard cells matching the blocks. Client thread only. */
+    private static final java.util.Map<Integer, Integer> guardSnap = new java.util.HashMap<>();
+    /** Largest guard box by volume (a castle site is ~14k cells). */
+    static final int MAX_GUARD_CELLS = 262144;
 
     private Mine() {
     }
@@ -121,6 +131,7 @@ public final class Mine {
         }
         final List<String> want = List.copyOf(blocks);
         final int need = count;
+        final int[] guard = guardBox(params);
         Rpc.RpcException[] failure = new Rpc.RpcException[1];
         JsonObject res = server.onClient(() -> {
             Minecraft client = Minecraft.getInstance();
@@ -129,7 +140,7 @@ public final class Mine {
                 return null;
             }
             try {
-                return begin(want, need);
+                return begin(want, need, guard);
             } catch (Rpc.RpcException e) {
                 failure[0] = e;
                 return null;
@@ -144,8 +155,41 @@ public final class Mine {
         return res;
     }
 
+    /**
+     * Optional guard box from the params (socket thread — pure). Null when
+     * absent; INVALID_PARAMS when malformed or absurdly large. Corners are
+     * normalized to min/max.
+     */
+    static int[] guardBox(JsonObject params) throws Rpc.RpcException {
+        if (!params.has("guard") || params.get("guard").isJsonNull()) {
+            return null;
+        }
+        if (!params.get("guard").isJsonObject()) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: guard wants {x0,y0,z0,x1,y1,z1}");
+        }
+        JsonObject g = params.getAsJsonObject("guard");
+        int[] c = new int[6];
+        String[] keys = {"x0", "y0", "z0", "x1", "y1", "z1"};
+        for (int i = 0; i < 6; i++) {
+            if (!g.has(keys[i]) || !g.get(keys[i]).isJsonPrimitive()
+                    || !g.get(keys[i]).getAsJsonPrimitive().isNumber()) {
+                throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: guard wants {x0,y0,z0,x1,y1,z1}");
+            }
+            c[i] = (int) Math.floor(g.get(keys[i]).getAsDouble());
+        }
+        int[] box = {
+            Math.min(c[0], c[3]), Math.min(c[1], c[4]), Math.min(c[2], c[5]),
+            Math.max(c[0], c[3]), Math.max(c[1], c[4]), Math.max(c[2], c[5]),
+        };
+        long vol = (long) (box[3] - box[0] + 1) * (box[4] - box[1] + 1) * (box[5] - box[2] + 1);
+        if (vol > MAX_GUARD_CELLS) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: guard box too big");
+        }
+        return box;
+    }
+
     /** Client thread: arm the mine and start the process. */
-    private static JsonObject begin(List<String> blocks, int count) throws Rpc.RpcException {
+    private static JsonObject begin(List<String> blocks, int count, int[] guard) throws Rpc.RpcException {
         IBaritone b = BaritoneAPI.getProvider().getPrimaryBaritone();
         int have = countInventory(acceptedItems(blocks));
         int goal = have + count;
@@ -159,11 +203,78 @@ public final class Mine {
         target = goal;
         lastHave = have;
         active = true;
+        guardBox = guard;
+        snapshotGuard(blocks, guard);
         JsonObject res = new JsonObject();
         res.addProperty("id", mineId);
         res.addProperty("have", have);
         res.addProperty("target", goal);
         return res;
+    }
+
+    /** Client thread: record stateIds of guard cells matching the blocks. */
+    private static void snapshotGuard(List<String> blocks, int[] box) {
+        guardSnap.clear();
+        if (box == null) {
+            return;
+        }
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.level == null) {
+            return;
+        }
+        int sx = box[3] - box[0] + 1;
+        int sy = box[4] - box[1] + 1;
+        try {
+            for (int x = box[0]; x <= box[3]; x++) {
+                for (int y = box[1]; y <= box[4]; y++) {
+                    for (int z = box[2]; z <= box[5]; z++) {
+                        var pos = new net.minecraft.core.BlockPos(x, y, z);
+                        var state = client.level.getBlockState(pos);
+                        String n = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
+                        if (!blocks.contains(n)) {
+                            continue;
+                        }
+                        int idx = (x - box[0]) + sx * ((y - box[1]) + sy * (z - box[2]));
+                        guardSnap.put(idx, net.minecraft.world.level.block.Block.getId(state));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            guardSnap.clear();
+        }
+    }
+
+    /**
+     * Client thread: true when a watched guard cell changed (broken or
+     * swapped) since begin. Unreadable cells read as unchanged.
+     */
+    private static boolean guardTripped(int[] box) {
+        if (box == null || guardSnap.isEmpty()) {
+            return false;
+        }
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.level == null) {
+            return false;
+        }
+        int sx = box[3] - box[0] + 1;
+        int sy = box[4] - box[1] + 1;
+        try {
+            for (var e : guardSnap.entrySet()) {
+                int idx = e.getKey();
+                int z = idx / (sx * sy);
+                int rest = idx - z * sx * sy;
+                int y = rest / sx;
+                int x = rest - y * sx;
+                var pos = new net.minecraft.core.BlockPos(box[0] + x, box[1] + y, box[2] + z);
+                int now = net.minecraft.world.level.block.Block.getId(client.level.getBlockState(pos));
+                if (now != e.getValue()) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+        return false;
     }
 
     /** Client thread (tick hook): progress on change, one end event. */
@@ -179,6 +290,18 @@ public final class Mine {
         }
         int have = countInventory(acceptedItems(names));
         IBaritone b = BaritoneAPI.getProvider().getPrimaryBaritone();
+        if (guardTripped(guardBox)) {
+            // A guarded cell broke (castle floor/wall inside the site box):
+            // stop at once — one cell of damage, then the Node side ends
+            // the leg instead of quarrying on.
+            try {
+                b.getCommandManager().execute("stop");
+            } catch (Exception ignored) {
+                // Stopping is best-effort; the end event still lands.
+            }
+            end(server, have, "guard");
+            return;
+        }
         boolean procActive;
         try {
             procActive = b.getMineProcess().isActive();

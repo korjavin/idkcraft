@@ -311,6 +311,11 @@ class FakeTransport extends EventEmitter {
             this.inject('baritone.event', { kind: 'mine', id, have, target, active: false })
             return
           }
+          if (s.mineScript === 'guard') {
+            // At target AND guarded: the break still ends loudly.
+            this.inject('baritone.event', { kind: 'mine', id, have: target, target, active: false, status: 'guard' })
+            return
+          }
           const gainName = want.has('dirt') && blocks.map(String).includes('dirt') ? 'dirt'
             : [...want][0]
           const gain = target - have

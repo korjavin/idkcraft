@@ -100,27 +100,38 @@ constructor; `handleMineEvent` first in the adapter's event router for
 
 | method | params | result | mineflayer surface |
 |---|---|---|---|
-| `baritone.mine` | `{blocks:[names],count,radius}` (`blocks` non-empty, `count` positive; `radius` accepted, enforced in Node) | `{id,have,target}` (`target` = live matching count + `count`, Baritone's absolute quantity) | `bot.mine(names,count,{radius,forbid})` → `Promise<{have}>` |
+| `baritone.mine` | `{blocks:[names],count,radius,guard?}` (`blocks` non-empty, `count` positive; `radius` accepted, enforced in Node; `guard` = `{x0,y0,z0,x1,y1,z1}` cell box, mod-enforced) | `{id,have,target}` (`target` = live matching count + `count`, Baritone's absolute quantity) | `bot.mine(names,count,{radius,forbid})` → `Promise<{have}>` |
 
 Quantity is Baritone's own: `IMineProcess.mineByName(target, ...blocks)`
 stops when the inventory holds `target` (verified against the
 baritone-api 1.18.0 jar the Dockerfile ships). Drops count toward
 their block (stone→cobblestone, grass_block→dirt), both sides. Cancel:
 `#stop` already cancels every process (kept — no new verb); the next
-tick reports the end. Progress: `baritone.event
+tick reports the end, and the adapter's goal latch (`_stopPath`, any
+`_setGoal`) cancels a live mine the same way (`bot.cancelMine`, reject
+`mine-stopped`) so an owner stop or step change never leaves it mining.
+Progress: `baritone.event
 {kind:'mine',id,have,target,active}` on each tick the count changes
-and once on end (`status:'done'` when `have >= target`, else
-`'noPath'` — the process gave up by itself; a process that stays live
-without gaining is the Node stall). `baritone.status` reads a live
+and once on end (`status:'done'` when `have >= target`, `'guard'` when
+a guarded cell broke, else `'noPath'` — the process gave up by itself;
+a process that stays live without gaining is the Node stall, and the
+Node side maps `guard` to `mine-leash`). `baritone.status` reads a live
 mine as pathing (the custom-goal probe counts it, so the stall
 watchdog never reads a live mine as idle). Settings ride the existing
 `#set` path with the verb: `mineScanDroppedItems true`, `legitMine
-false`, `mineGoalUpdateInterval 5` (Baritone 1.18.0 defaults, pinned because
-`#set` persists to the client settings.txt across calls). Baritone has no per-process
+false`, `mineGoalUpdateInterval 5`, `allowBreak true` (Baritone 1.18.0
+defaults for the first three, pinned because `#set` persists to the
+client settings.txt across calls; `allowBreak` because a mine digs by
+definition — a no-dig walk lease would leave it targetless — mirrored
+into the adapter diff so the next lease restores its value). Baritone has no per-process
 region: the Node side leashes (`radius` from the start position, plus
 a caller `forbid(pos)` — a leash that trips on entry, so a mine that
 starts inside never fails at once) and rejects
-`mine-noPath`/`mine-stall`/`mine-leash`. On v1 `bot.mine` is
+`mine-noPath`/`mine-stall`/`mine-leash`/`mine-stopped`. The `guard` box
+is the cell-level counterpart to the body leash: cells inside it that
+match the requested blocks are snapshotted at begin, and the first
+break inside stops the process at once (castlefetch passes the site
+box; at most 64³ cells). On v1 `bot.mine` is
 undefined (no mineflayer implementation — callers branch on
 `typeof bot.mine === 'function'`).
 

@@ -2922,4 +2922,33 @@ describe('equip v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(ctx.stepStatus, 'done')
     bot.restoreError()
   })
+
+  it('water underfoot never trips the leash', async () => {
+    const bot = mockBot({
+      items: [...KIT, { name: 'dirt', count: 10 }],
+      ids: IDS,
+      recipes: {},
+      blockAtImpl: (p) => (p.y === 63 ? { name: 'water', position: p } : null),
+    })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.equal(mines[0].opts.forbid({ x: 0, y: 64, z: 0 }), false, 'swimming past water is not forbidden')
+    bot.restoreError()
+  })
+
+  it('the castle site still forbids the body', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx()
+    ctx.castle = { site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: 1 }
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.equal(mines[0].opts.forbid({ x: 0, y: 64, z: 0 }), true, 'standing on the site is forbidden')
+    assert.equal(mines[0].opts.forbid({ x: 500, y: 64, z: 500 }), false, 'far ground is not')
+    bot.restoreError()
+  })
 })

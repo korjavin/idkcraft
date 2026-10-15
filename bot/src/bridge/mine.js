@@ -28,6 +28,11 @@ const MINE_SETTINGS = [
   ['mineScanDroppedItems', 'true'],
   ['legitMine', 'false'],
   ['mineGoalUpdateInterval', '5'],
+  // A mine digs by definition: a no-dig walk lease (gocastle/gohome set
+  // canDig false) would leave MineProcess targetless on its first tick
+  // and the leg would read noPath (round-1 core-3). The mirror below keeps
+  // the adapter's diff honest so the next lease restores its own value.
+  ['allowBreak', 'true'],
 ]
 // Drops counted toward a block name (mirrors Mine.java): a mine for
 // stone is done when the cobblestone lands, grass when the dirt does.
@@ -69,8 +74,25 @@ function dist3(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
+// Cancel the live mine from the adapter's goal latch (_stopPath, _setGoal:
+// a new goal supersedes the mine). Sends #stop and rejects with
+// mine-stopped; the behaviour gen guards drop the stale settle. True when
+// a live mine was cancelled.
+function cancelMine(bot, err) {
+  const st = bot && bot._mine
+  if (!st || st.settled) return false
+  try {
+    if (bot.transport && typeof bot.transport.call === 'function') {
+      bot.transport.call('baritone.cmd', { command: '#stop' }).catch(() => { /* stop best-effort */ })
+    }
+  } catch (_) { /* stop best-effort */ }
+  settle(bot, st, err instanceof Error ? err : new Error('mine-stopped'))
+  return true
+}
+
 function installMine(bot) {
   bot._mine = null
+  bot.cancelMine = (err) => cancelMine(bot, err)
 
   bot.mine = (names, count, opts = {}) => {
     if (!Array.isArray(names) || names.length === 0) return Promise.reject(new Error('mine: want non-empty names'))
@@ -81,6 +103,7 @@ function installMine(bot) {
     if (bot._mine) return bot._mine.promise
     const radius = opts && typeof opts.radius === 'number' ? opts.radius : 12
     const forbid = opts && typeof opts.forbid === 'function' ? opts.forbid : null
+    const guard = opts && opts.guard && typeof opts.guard === 'object' ? opts.guard : null
     const stallMs = opts && typeof opts.stallMs === 'number' ? opts.stallMs : MINE_STALL_MS
     const tickMs = opts && typeof opts.tickMs === 'number' ? opts.tickMs : MINE_TICK_MS
 
@@ -90,7 +113,7 @@ function installMine(bot) {
     }
     st.promise = new Promise((resolve, reject) => { st.resolve = resolve; st.reject = reject })
     bot._mine = st
-    void run(bot, st, names, need, { radius, forbid, stallMs, tickMs })
+    void run(bot, st, names, need, { radius, forbid, guard, stallMs, tickMs })
     return st.promise
   }
 }
@@ -105,20 +128,35 @@ function settle(bot, st, err, have) {
   else st.resolve({ have })
 }
 
-async function run(bot, st, names, need, { radius, forbid, stallMs, tickMs }) {
+async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickMs }) {
   try {
     for (const [k, v] of MINE_SETTINGS) {
       try { await bot.transport.call('baritone.cmd', { command: `#set ${k} ${v}` }) } catch (_) { /* settings best-effort */ }
     }
-    // The mine walks itself: clear the live walk first (its late verdict
-    // drops — the goal latch is replaced below, like a follow re-issue).
+    // Mirror the allowBreak pin into the adapter's diff: the next lease
+    // push must see the live value, or a canDig lease would read synced
+    // while Baritone still breaks (round-1 core-3).
+    try { if (bot._settings) bot._settings.allowBreak = 'true' } catch (_) { /* mirror best-effort */ }
+    // The mine walks itself: clear the live walk first, superseding the
+    // latch silently like a follow re-issue (_maybeReissueFollow) — the
+    // stopped event for the old goal drops, and isMoving reads false while
+    // the mine (not the path latch) owns the body.
     try { await bot.transport.call('baritone.cmd', { command: '#stop' }) } catch (_) { /* stop best-effort */ }
+    bot._boundSeq = bot._cmdSeq
+    bot._goalId = null
+    bot._pathing = false
+    bot._follow = null
     st.start = posOf(bot)
     // The forbid leash trips on entry: a mine that starts inside (the
     // body fetching on the castle site) arms once it leaves.
     try { st.armed = !forbid || !forbid(st.start) } catch (_) { st.armed = true }
-    const r = await bot.transport.call('baritone.mine', { blocks: names.map(stripMcPrefix), count: need, radius })
+    const params = { blocks: names.map(stripMcPrefix), count: need, radius }
+    if (guard) params.guard = guard
+    const r = await bot.transport.call('baritone.mine', params)
     if (!r || r.id == null || typeof r.target !== 'number') throw new Error(`mine: bad baritone.mine reply ${JSON.stringify(r)}`)
+    // A goal that superseded us while the verb was in flight already
+    // settled (cancelMine): never arm the watch on a dead run.
+    if (st.settled || bot._mine !== st) return
     st.id = r.id
     st.target = r.target
     st.have = typeof r.have === 'number' ? r.have : countHave(bot, names)
@@ -173,6 +211,12 @@ function handleMineEvent(bot, method, params) {
     st.gainAt = Date.now()
   }
   if (params.active === false) {
+    // A guarded cell broke: reject even at target — the leg must end
+    // loudly (the hold parks it) instead of succeeding over the damage.
+    if (params.status === 'guard') {
+      settle(bot, st, new Error('mine-leash'))
+      return true
+    }
     const have = typeof params.have === 'number' ? params.have : st.have
     if (st.target != null && have >= st.target) settle(bot, st, null, have)
     else settle(bot, st, new Error('mine-noPath'))
@@ -180,4 +224,4 @@ function handleMineEvent(bot, method, params) {
   return true
 }
 
-module.exports = { installMine, handleMineEvent, countHave, acceptedNames, MINE_STALL_MS, MINE_TICK_MS }
+module.exports = { installMine, handleMineEvent, cancelMine, countHave, acceptedNames, MINE_STALL_MS, MINE_TICK_MS }
