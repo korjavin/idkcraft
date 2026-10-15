@@ -525,6 +525,45 @@ describe('g0z.2 castle executor', () => {
     assert.equal(p.y, SITE.y)
   })
 
+  it('neuc.57: the last pick stays sticky while workable, even with a nearer cell', async () => {
+    const v2 = blueprint.absPlan(SITE, 0, 2).cells
+    const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', torch: 'torch' }
+    const wall0 = v2.findIndex((c) => c.dy === 0 && c.x === SITE.x + 12 && c.z === SITE.z + 7)
+    const north = v2.find((c) => c.dy === 0 && c.x === SITE.x + 16 && c.z === SITE.z + 7)
+    assert.ok(north.idx > wall0)
+    const world = makeWorld()
+    for (const c of v2.slice(0, wall0)) if (NAME[c.kind]) world.set(c.x, c.y, c.z, NAME[c.kind])
+    const bot = mockBot(world, { items: [...KIT, { name: 'oak_log', count: 64 }] })
+    bot.entity.position = { x: SITE.x + 15.5, y: SITE.y, z: SITE.z + 20.5 } // at the south wall
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'body' }, castleNearIdx: north.idx }
+    await run(bot, ctx, 4)
+    const p = bot.calls.places[0]
+    assert.deepEqual([p.x, p.y, p.z], [north.x, north.y, north.z], 'committed north cell first')
+  })
+
+  it('neuc.57: a hanging run never picks a nearer cell with nothing laid beside it', async () => {
+    const v2 = blueprint.absPlan(SITE, 0, 2).cells
+    const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', torch: 'torch' }
+    // Ground storey dy0 laid; next run is dy3 (walls + slab) hanging off the towers.
+    const start = v2.findIndex((c, i) => i > 0 && c.dy === 3 && v2[i - 1].dy === 0 && !(c.x <= SITE.x + 11 || c.x >= SITE.x + 19))
+    assert.ok(start > 0)
+    const world = makeWorld()
+    for (const c of v2.slice(0, start)) if (NAME[c.kind]) world.set(c.x, c.y, c.z, NAME[c.kind])
+    const laid = new Set(v2.slice(0, start).filter((c) => NAME[c.kind]).map((c) => `${c.x},${c.y},${c.z}`))
+    const centre = v2.find((c, i) => i > start && c.dy === 3 && c.x === SITE.x + 15 && c.z === SITE.z + 13)
+    assert.ok(centre, 'a slab cell mid-hall')
+    const bot = mockBot(world, { items: [...KIT, { name: 'oak_log', count: 64 }] })
+    bot.entity.position = { x: centre.x + 0.5, y: centre.y + 1, z: centre.z + 0.5 } // right above the unsupported centre
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'body' } }
+    await run(bot, ctx, 4)
+    const p = bot.calls.places[0]
+    assert.ok(p, 'a cell was laid')
+    assert.notDeepEqual([p.x, p.y, p.z], [centre.x, centre.y, centre.z])
+    const solid = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+      .some(([a, b, d]) => laid.has(`${p.x + a},${p.y + b},${p.z + d}`))
+    assert.ok(solid, `${p.x},${p.y},${p.z} laid with a neighbour`)
+  })
+
   it('g0z.6 + vmzq.27: v2 moat digs past a blocked hole; deck first, bridge columns last, fence after the moat, spoil picked up', async () => {
     const v2 = blueprint.absPlan(SITE, 0, 2).cells
     const world = makeWorld()

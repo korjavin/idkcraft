@@ -339,6 +339,7 @@ function torchOwed(bot, c, owed) {
 // rank change, so storey order (reach invariant), door deferral and the
 // moat/fence ranks stand. Sticky: the last pick (keepIdx) keeps winning
 // while it stays workable in the run, so the target never flaps mid-walk.
+// Cells the body occupies never win (c0 stays the fallback).
 // ponytail: up to ~7 blockAt per window cell per pick; shrink the window
 // if it shows in the tick timer.
 const NEAR_WINDOW = 64
@@ -369,6 +370,9 @@ function nearest(bot, ctx, st, cells, order, i, now) {
     const b = blocked[bkey(st, c.idx)]
     if (b && (b.retired || b.until > now)) continue
     if (torchOwed(bot, c, null) || !held(c)) continue
+    // The cell the body stands in is the nearest by construction, and
+    // every lay into it starts with a sidestep (revmux 01).
+    if (flat.cellOccupiedSelf(bot, c.x, c.y, c.z)) continue
     if (!clearing(c) && !supported(bot, c)) continue
     if (c.idx === keepIdx) return c
     const d = d2(c)
