@@ -615,6 +615,11 @@ describe('bring craft handover and give-ups (idkcraft-did.2 revmux 01)', () => {
     assert.equal(at, 20, 'gives up on the 21st frozen tick')
     assert.deepEqual(res, { done: false, line: "can't reach the crafting table" })
     assert.equal(fctx.craftany, null)
+    // neuc.50 review 02: the dead walk latches for the day; the next run
+    // skips that table (no walk) and falls to the own-table branch.
+    assert.deepEqual(fctx.equipTableUnreachable, { day: 0, x: 100, y: 64, z: 0 })
+    const again = craftany(frozen, fctx, ['stone_axe'], 1)
+    assert.deepEqual(again, { done: false, line: 'need a crafting table' }, 'no planks for a table here: honest line, no re-walk')
 
     const moving = mockBot({
       items: [{ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }],
