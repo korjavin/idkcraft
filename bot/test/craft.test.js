@@ -264,6 +264,21 @@ describe('craft step', () => {
     }
   })
 
+  it('(neuc.47) a table just laid in the house cell, home.table not claimed yet: no second table', async () => {
+    // Rig JR-BUILD v2: the craft ran before build claimed home.table and
+    // made a second table from the kit planks; the house ran short.
+    const home = { site: pos(0, 64, 0), v: 2 } // v2 table cell at (5, 64, 1)
+    const atCell = (p) => p.x === 5 && p.y === 64 && p.z === 1
+    for (const [read, want] of [[(p) => ({ name: atCell(p) ? 'crafting_table' : 'air' }), 0], [() => ({ name: 'air' }), 1]]) {
+      const bot = mockBot({ items: [{ name: 'oak_planks', count: 40 }, { name: 'oak_door', count: 1 }], ids: IDS, recipes: { crafting_table: recipeFor('crafting_table') } })
+      bot.blockAt = read
+      craft(bot, freshCtx(home), null, {})
+      await flush()
+      assert.equal(bot.calls.craft.length, want)
+      bot.restoreError()
+    }
+  })
+
   it('(d) nothing to craft -> done', () => {
     const bot = mockBot({ items: [], ids: IDS, recipes: {} })
     const ctx = freshCtx()
