@@ -98,15 +98,18 @@ describe('g0z.2 castle executor', () => {
     assert.equal(BEHAVIOURS.castle, castle)
   })
 
-  it('lays the first ground ring in plan order', async () => {
+  it('lays the first ground ring first, nearest cell first (neuc.57)', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
     const ctx = { castle: { site: SITE, rot: 0 } }
     // The door is deferred (revmux 01): the doorway stays open for A*.
-    const ring = cells().filter((c) => c.dy === 0 && blueprint.isPlaceTarget(c.kind) && c.kind !== 'door').slice(0, 15)
+    const layer = cells().filter((c) => c.dy === 0 && blueprint.isPlaceTarget(c.kind) && c.kind !== 'door')
+    const ring = layer.slice(0, 15)
     await run(bot, ctx, 80)
     const laid = bot.calls.places.slice(0, 15).map((p) => `${p.x},${p.y},${p.z}`)
-    assert.deepEqual(laid, ring.map((c) => `${c.x},${c.y},${c.z}`))
+    const keys = layer.map((c) => `${c.x},${c.y},${c.z}`)
+    for (const k of laid) assert.ok(keys.includes(k), `${k} outside the ground layer`)
+    assert.notDeepEqual(laid, ring.map((c) => `${c.x},${c.y},${c.z}`), 'not plan order')
     assert.equal(world.get(ring[0].x, 64, ring[0].z), 'cobblestone')
     const door = cells().find((c) => c.kind === 'door')
     assert.equal(world.get(door.x, door.y, door.z), 'air')
@@ -488,13 +491,38 @@ describe('g0z.2 castle executor', () => {
     const bot = mockBot(world)
     const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2 } }
     await run(bot, ctx, 30)
-    const ring = v2.filter((c) => blueprint.isPlaceTarget(c.kind)).slice(0, 5).map((c) => `${c.x},${c.y},${c.z}`)
-    assert.deepEqual(bot.calls.places.slice(0, 5).map((p) => `${p.x},${p.y},${p.z}`), ring)
+    // Nearest-first (neuc.57): the first five come from the first run (the
+    // first tower's ground layer), in nearest order.
+    const run0 = v2.slice(0, v2.findIndex((c) => c.y !== v2[0].y)).map((c) => `${c.x},${c.y},${c.z}`)
+    const first5 = bot.calls.places.slice(0, 5).map((p) => `${p.x},${p.y},${p.z}`)
+    assert.equal(new Set(first5).size, 5)
+    for (const k of first5) assert.ok(run0.includes(k), `${k} outside the first run`)
     const w2 = makeWorld()
     w2.set(v2[0].x, v2[0].y, v2[0].z, 'ender_chest')
     const ctx2 = { castle: { site: SITE, rot: 0, blueprintVersion: 2 } }
-    await run(mockBot(w2), ctx2, 2)
+    const bot2 = mockBot(w2)
+    bot2.entity.position = { x: v2[0].x + 1.5, y: v2[0].y, z: v2[0].z + 0.5 } // east of cell 0: the nearest in its run
+    await run(bot2, ctx2, 2)
     assert.equal(ctx2.castle.blocked['2:0'].why, 'kept-ender_chest')
+  })
+
+  it('neuc.57: standing at the south wall, the next pick is a south-wall cell (plan order says north)', async () => {
+    const v2 = blueprint.absPlan(SITE, 0, 2).cells
+    const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', torch: 'torch' }
+    // Towers done: the next run is the ground wall layer, which the plan
+    // opens on the north segment ([12,7]) and pairs with the south ([12,19]).
+    const wall0 = v2.findIndex((c) => c.dy === 0 && c.x === SITE.x + 12 && c.z === SITE.z + 7)
+    assert.ok(wall0 > 0)
+    const world = makeWorld()
+    for (const c of v2.slice(0, wall0)) if (NAME[c.kind]) world.set(c.x, c.y, c.z, NAME[c.kind])
+    const bot = mockBot(world, { items: [...KIT, { name: 'oak_log', count: 64 }] })
+    bot.entity.position = { x: SITE.x + 15.5, y: SITE.y, z: SITE.z + 20.5 } // just outside the south wall
+    const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 2, phase: 'body' } }
+    await run(bot, ctx, 4)
+    const p = bot.calls.places[0]
+    assert.ok(p, 'a cell was laid')
+    assert.equal(p.z, SITE.z + 19, `south wall cell, got ${p.x},${p.y},${p.z}`)
+    assert.equal(p.y, SITE.y)
   })
 
   it('g0z.6 + vmzq.27: v2 moat digs past a blocked hole; deck first, bridge columns last, fence after the moat, spoil picked up', async () => {
