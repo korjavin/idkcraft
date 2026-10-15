@@ -67,12 +67,30 @@ describe('neuc.52 v2 escape', () => {
     process.env.BOT_BODY = 'baritone'
     const bot = doorBot()
     const ctx = doorCtx()
+    // A walk borrow is active (gohome leg): without the lease refresh
+    // before setGoal the bridge would push canDig=false with the goal.
+    ctx.work = true
+    ctx.step = 'gohome'
+    ctx.gohome = { phase: 'walk' }
+    ctx.home = { site: { x: 0, y: 64, z: 0 } }
+    // canDig starts false (the tick-start claim under the borrow); only the
+    // pre-issue refresh may flip it back before setGoal reads the flags.
+    ctx.movements = { canDig: false, allowSprinting: false, allowParkour: true, allow1by1towers: false }
+    const atIssue = []
+    const origSet = bot.pathfinder.setGoal.bind(bot.pathfinder)
+    bot.pathfinder.setGoal = (g, dyn) => {
+      atIssue.push({ canDig: ctx.movements.canDig, place: ctx.movements.allow1by1towers })
+      return origSet(g, dyn)
+    }
     const d = await recover.decide(bot, ctx, null, null)
     assert.equal(d.action, 'escape', 'v2 opens with the escape, not the ladder')
     const g = bot.pathfinder.goal
     assert.ok(g, 'a goal is issued')
     assert.equal(g.constructor.name, 'GoalNear', 'one GoalNear through the setGoal path')
     assert.equal(typeof g.rangeSq === 'number' ? Math.sqrt(g.rangeSq) : NaN, 0, 'GoalNear range 0')
+    assert.ok(atIssue.length >= 1, 'a goal went out')
+    assert.equal(atIssue[0].canDig, true, 'the lease precedes the issue: digging on')
+    assert.equal(atIssue[0].place, true, 'the lease precedes the issue: Baritone may pillar')
     const tx = g.x; const ty = g.y; const tz = g.z
     assert.ok(Math.abs(tx) > 2 || Math.abs(tz) > 2, `target outside the roofed room, got ${tx},${ty},${tz}`)
     assert.equal(ty, 64, 'target at feet level')
@@ -115,6 +133,24 @@ describe('neuc.52 v2 escape', () => {
     assert.equal(bot.pathfinder.goal.constructor.name, 'GoalNear', 'our goal goes back out')
     assert.equal(ctx.lastGoalKey, recoverV2.ESCAPE_KEY, 'under our key')
     assert.equal(ctx.lastPathStatus, 'none', 'a fresh verdict judges the re-issue')
+  })
+
+  it('a repeated steal still burns the budget and advances', async () => {
+    process.env.BOT_BODY = 'baritone'
+    const bot = doorBot()
+    const ctx = doorCtx('door-steal-loop')
+    const d = await recover.decide(bot, ctx, null, null)
+    assert.equal(d.action, 'escape')
+    const first = ctx.recovery.st.target
+    // Every tick steals the goal back: re-issues must not restart the budget.
+    for (let i = 0; i <= recoverV2.MAX_TICKS; i++) {
+      bot.pathfinder.goal = { kind: 'GoalFollow' }
+      ctx.lastGoalKey = 'fight'
+      ctx.lastPathStatus = 'none'
+      recover.run(bot, ctx)
+      assert.equal(ctx.recovery.status, 'running')
+    }
+    assert.notDeepEqual(ctx.recovery.st.target, first, 'the steal loop advances past the budget')
   })
 
   it('a verdict-less episode advances on the tick budget, then pages', async () => {

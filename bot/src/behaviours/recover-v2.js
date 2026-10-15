@@ -132,7 +132,9 @@ function issueTarget(bot, ctx, st, t) {
   const g = new goals.GoalNear(t.x, t.y, t.z, 0)
   st.goal = g
   st.key = ESCAPE_KEY
-  st.ticks = 0
+  // No tick reset here: a liveness re-issue of the SAME candidate must not
+  // restart its budget (a repeated steal would hold one cell forever).
+  // escape() and nextOrPage() zero the budget with each NEW candidate.
   issueGoal(bot, ctx, g, ESCAPE_KEY, true)
   try { ctx.lastPathStatus = 'none' } catch (_) { /* fresh verdict for the new goal */ }
 }
@@ -163,7 +165,7 @@ function escape(bot, ctx, facts, deps) {
   // previous owner's flags. Same owner: refresh-only, no cleanup.
   try { bodyLease.claimBody(bot, ctx, 'recover', { escape: true }) } catch (_) { /* lease best-effort */ }
   if (!cands || cands.length === 0) {
-    rec.st = { candidates: [], idx: 0, target: null, anchor: { x: bp.x, y: bp.y, z: bp.z }, noCandidate: true }
+    rec.st = { candidates: [], idx: 0, target: null, anchor: { x: bp.x, y: bp.y, z: bp.z }, noCandidate: true, ticks: 0 }
     try { metrics.recover.inc({ action: 'escape', source: 'fsm', outcome: 'chosen' }) } catch (_) { /* metric best-effort */ }
     try {
       if (deps && typeof deps.logRecover === 'function') deps.logRecover(bot, ctx, 'escape', 'fsm', 'chosen', facts)
@@ -172,7 +174,7 @@ function escape(bot, ctx, facts, deps) {
     return true
   }
   const t = cands[0]
-  rec.st = { candidates: cands, idx: 0, target: t, anchor: { x: bp.x, y: bp.y, z: bp.z } }
+  rec.st = { candidates: cands, idx: 0, target: t, anchor: { x: bp.x, y: bp.y, z: bp.z }, ticks: 0 }
   try { issueTarget(bot, ctx, rec.st, t) } catch (_) { /* run() re-issues below */ }
   try { metrics.recover.inc({ action: 'escape', source: 'fsm', outcome: 'chosen' }) } catch (_) { /* metric best-effort */ }
   try {
@@ -203,6 +205,7 @@ function nextOrPage(bot, ctx, deps) {
   if (st.idx < st.candidates.length && st.idx < MAX_TRIES) {
     const t = st.candidates[st.idx]
     st.target = t
+    st.ticks = 0
     try { issueTarget(bot, ctx, st, t) } catch (_) { /* retried by the liveness check below */ }
     try { console.log(`recover v2 escape -> ${t.x} ${t.y} ${t.z} retry idx=${st.idx}`) } catch (_) { /* log best-effort */ }
     return 'running'
@@ -239,14 +242,17 @@ function run(bot, ctx, deps) {
     let bp = null
     try { bp = botPos(bot) } catch (_) { bp = null }
     if (!bp) return 'running' // transient read: wait a tick, the budget below bounds it
-    // A stolen or parked goal (fight, pause) is re-issued, not waited on:
-    // its verdicts belong to the other owner. Untracked st (hand-built in
-    // tests) skips this and stays verdict-driven.
+    // Every tick counts toward the candidate budget — including re-issue
+    // ticks — so a repeated steal advances instead of holding one cell.
+    st.ticks = (st.ticks | 0) + 1
+    // A stolen or parked goal (fight, pause, breath) is re-issued, not
+    // waited on: its verdicts belong to the other owner. Untracked st
+    // (hand-built in tests) skips this and stays verdict-driven.
     if (st.key && (ctx.lastGoalKey !== st.key || !bot.pathfinder || bot.pathfinder.goal !== st.goal)) {
-      try { issueTarget(bot, ctx, st, st.target) } catch (_) { /* budget advances below */ }
+      try { issueTarget(bot, ctx, st, st.target) } catch (_) { /* budget already advanced above */ }
+      if (st.ticks > MAX_TICKS) return nextOrPage(bot, ctx, deps)
       return 'running'
     }
-    st.ticks = (st.ticks | 0) + 1
     const t = st.target
     const a = st.anchor
     const moved = a ? Math.hypot(bp.x - a.x, bp.y - a.y, bp.z - a.z) : 0
