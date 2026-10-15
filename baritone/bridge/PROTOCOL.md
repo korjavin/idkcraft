@@ -713,11 +713,16 @@ the server's `block.update` for the target like mineflayer
 answer rejects `Server refused to place <item> at (x, y, z): the block
 is still <name>`, silence for 1 s rejects `Server did not answer the
 placement at ...`; no held item rejects `must be holding an item to
-place`. `bot.swingArm` is a no-op (the mod swings itself);
-`_placeBlockWithOptions` stays absent (castle.js stairs fall back to
-`placeBlock`). Not on this wire: sneak-placing against interactables
-(the mod takes `sneak`, the adapter sends false like mineflayer), the
-deep.js raw `block_dig` burst (neuc.14).
+place`. `bot.swingArm` is a no-op (the mod swings itself).
+`bot._placeBlockWithOptions(ref, face, {forceLook, half})` (neuc.24:
+castle stairs and faced blocks, beds, home/sitebed floors) is the same
+place: `half` `top`/`bottom` moves a side face's cursor ±0.25 like
+mineflayer `_genericPlace`, and `forceLook: 'ignore'` sends
+`bot.entity`'s current yaw/pitch instead of re-aiming at the face (the
+stair faces the caller's look). `bot.placeBlock` is it with `swingArm`.
+Sneak-placing: `sneak` carries the held `sneak` control state (mineflayer's
+server sees the same held shift). Not on this wire: the deep.js raw
+`block_dig` burst (neuc.14).
 
 ## mineflayer-internals on v2 (idkcraft-neuc.14)
 
