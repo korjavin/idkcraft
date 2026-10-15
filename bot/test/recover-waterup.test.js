@@ -106,6 +106,29 @@ describe('water_up wiring', () => {
     assert.ok(names.includes('water_up'))
   })
 
+  it('v2: a wedge two walks off the combo column offers water_up; v1 does not (neuc.34)', () => {
+    const world = shaftWorld()
+    // The wedge column is open to the sky too (DUGPIT: head free) but has
+    // no ledge one cell off it, so the own cell reads no combo.
+    for (let y = 61; y <= 70; y++) world.solids.delete(key(-2, y, 0))
+    for (const y of [61, 62]) world.solids.delete(key(-1, y, 0))
+    const bot = worldBot(world, [{ name: 'water_bucket', count: 2 }])
+    bot.entity.position = pos(-1.5, 61, 0.5)
+    const stuck = { by: 'test', goal: { x: 6, y: 66, z: 0 } }
+    const prev = process.env.BOT_BODY
+    try {
+      delete process.env.BOT_BODY
+      assert.equal(menuNames(bot, stuck).facts.combo, false)
+      process.env.BOT_BODY = 'baritone'
+      const { facts, names } = menuNames(bot, stuck)
+      assert.equal(facts.combo, true)
+      assert.ok(names.includes('water_up'))
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
   it('one-sided shaft + high goal offers water_up (pit reads false there)', () => {
     // The CLUSTER shaft: a single hemmed side (pit=false under jsf.3's 2-side
     // rule) with a climbable combo — the replay acceptance geometry.

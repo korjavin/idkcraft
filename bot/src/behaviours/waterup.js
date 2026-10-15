@@ -376,12 +376,17 @@ function findCombo(bot, at) {
 // own cell is the caller's findCombo; this one is only the fallback.
 const STAND_STEPS = 4
 function findComboStand(bot) {
+  // v2 only (the bead: no v1 change) — v1's pathfinder ends its wedge on the
+  // goal side of the pit and climbs from the own cell (5/5 rig).
+  if (process.env.BOT_BODY !== 'baritone') return null
   if (!bot || !bot.entity || bot.entity.onGround !== true) return null
   const p = botPos(bot)
   if (!p) return null
   const fx = Math.floor(p.x)
   const fy = Math.floor(p.y)
   const fz = Math.floor(p.z)
+  const floor = new Set(['0,0'])
+  const order = []
   const seen = new Set(['0,0'])
   let frontier = [[0, 0]]
   for (let step = 1; step <= STAND_STEPS && frontier.length > 0; step++) {
@@ -397,12 +402,34 @@ function findComboStand(bot) {
         const cz = fz + nz
         if (!isAirish(laneCell(bot, cx, fy, cz)) || !isAirish(laneCell(bot, cx, fy + 1, cz))) continue // eslint-disable-line no-continue
         if (!solid(laneCell(bot, cx, fy - 1, cz))) continue // eslint-disable-line no-continue
+        floor.add(k)
+        order.push([nx, nz])
         next.push([nx, nz])
-        const at = { x: cx + 0.5, y: fy, z: cz + 0.5 }
-        if (findCombo(bot, at)) return at
       }
     }
     frontier = next
+  }
+  // The run walks a STRAIGHT line (lookAt + taps), so every cell the body's
+  // width sweeps on the way must be floor too — a stand reached only around
+  // a hole or a wall corner is not an offer.
+  // ponytail: straight segments only; a waypoint walk if a rig wedge needs a bend.
+  const swept = (tx, tz) => {
+    const dx = tx - p.x
+    const dz = tz - p.z
+    const len = Math.hypot(dx, dz) || 1
+    const ox = (-dz / len) * 0.3
+    const oz = (dx / len) * 0.3
+    for (let i = 0; i <= 10; i++) {
+      for (const side of [-1, 0, 1]) {
+        const k = (Math.floor(p.x + dx * i / 10 + ox * side) - fx) + ',' + (Math.floor(p.z + dz * i / 10 + oz * side) - fz)
+        if (!floor.has(k)) return false
+      }
+    }
+    return true
+  }
+  for (const [nx, nz] of order) {
+    const at = { x: fx + nx + 0.5, y: fy, z: fz + nz + 0.5 }
+    if (swept(at.x, at.z) && findCombo(bot, at)) return at
   }
   return null
 }
@@ -573,7 +600,7 @@ function waterUpRun(bot, ctx) {
     }
     const ccx = st.stand ? st.stand.x : Math.floor(bp.x) + 0.5
     const ccz = st.stand ? st.stand.z : Math.floor(bp.z) + 0.5
-    const far = Math.hypot(bp.x - ccx, bp.z - ccz) > STAND_WALK_DIST
+    const far = !!st.stand && Math.hypot(bp.x - ccx, bp.z - ccz) > STAND_WALK_DIST
     if (Math.hypot(bp.x - ccx, bp.z - ccz) >= CENTER_DIST) {
       // Sneak taps, not a held walk: 1 Hz ticks hold forward for a full
       // second (4+ blocks at walk speed) and blow straight past the middle
