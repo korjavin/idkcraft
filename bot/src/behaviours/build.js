@@ -41,6 +41,7 @@ const Vec3 = require('vec3')
 const { denyReason, logDeny, isInteractRef, NATURAL_SOLID, isOwnPlaced } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
+const { stepFailed } = require('../step')
 
 const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
 const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset (revmux 01 major)
@@ -585,7 +586,7 @@ function guardExitWalls(bot, ctx, home) {
 function failBuild(ctx, reason) {
   const status = `failed:${reason}`
   const fresh = ctx.stepStatus !== status
-  ctx.stepStatus = status
+  stepFailed(ctx, reason)
   if (fresh) console.log(`build failed:${reason}`)
 }
 
@@ -914,7 +915,8 @@ function build(bot, ctx, target, state) {
 
   const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
   if (!item && cell.kind !== 'clear') {
-    failBuild(ctx, 'no-planks')
+    // no-planks stays the plank reason; table/door cells name themselves.
+    failBuild(ctx, cell.kind === 'table' ? 'no-table' : cell.kind === 'door' ? 'no-door' : 'no-planks')
     return
   }
 

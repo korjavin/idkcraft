@@ -66,14 +66,14 @@ function logged(fn) {
 }
 
 describe('67z3: every build failure logs its reason', () => {
-  it('failed:no-planks writes build failed:no-planks', () => {
+  it('failed:no-table writes build failed:no-table', () => {
     const world = makeWorld()
     const bot = mockBot(world, { items: [] })
     // v1 home on open ground: next cell is the table, pack is empty.
     const ctx = { home: { site: { x: 0, y: 64, z: 0 } } }
     const lines = logged(() => build(bot, ctx))
-    assert.equal(ctx.stepStatus, 'failed:no-planks')
-    assert.ok(lines.some((l) => l === 'build failed:no-planks'), lines.join('\n'))
+    assert.equal(ctx.stepStatus, 'failed:no-table')
+    assert.ok(lines.some((l) => l === 'build failed:no-table'), lines.join('\n'))
   })
 
   it('failed:no-site writes build failed:no-site', () => {
@@ -141,6 +141,15 @@ describe('67z3: a failed build holds past facts drift, then retries', () => {
     const ctx = { stepFail: { build: { status: 'failed:no-planks', text: 'stale text', pos: null, at: Date.now(), sig: 's', n: 2 } } }
     assert.equal(F()(facts(), bot(), ctx), false)
     assert.equal(goal.stepWhy('build', facts(), bot(), ctx, 'new text'), 'build holds after failure')
+  })
+
+  it('neuc.43: no-table / no-door hold like no-planks', () => {
+    for (const status of ['failed:no-table', 'failed:no-door']) {
+      const once = { stepFail: { build: { status, text: 't', pos: null, at: Date.now(), sig: 's', n: 1 } } }
+      assert.equal(F()(facts(), bot(), once), true, status)
+      const ctx = { stepFail: { build: { status, text: 'stale', pos: null, at: Date.now(), sig: 's', n: 2 } } }
+      assert.equal(F()(facts(), bot(), ctx), false, status)
+    }
   })
 
   it('structural verdicts pace from the first failure', () => {
