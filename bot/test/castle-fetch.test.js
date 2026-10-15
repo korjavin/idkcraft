@@ -616,7 +616,52 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     const ctx = { castle: castleState() }
     for (let i = 0; i < 20 && ctx.stepStatus == null; i++) { fetch(bot, ctx); await settle(); await settle() }
     assert.equal(ctx.stepStatus, 'failed:castlefetch-dig-stall')
-    assert.equal(bot.calls.dig.length, 5)
+    assert.equal(bot.calls.dig.length, 8) // NOGAIN_STRIKES (neuc.51)
+  })
+
+  it('neuc.51: a stone dug below the feet walks into its hole for the drop, then digs on', async () => {
+    const tx = SITE.x - 5
+    const tz = SITE.z - 5
+    const set = new Map([[`${tx},${SITE.y - 1},${tz}`, 'stone']])
+    const bot = makeBot({ items: TOOLS(), set }) // feet at SITE.y, one column over
+    bot.dig = async (b) => { bot.calls.dig.push(b.position); set.set(`${b.position.x},${b.position.y},${b.position.z}`, 'air') } // drop rests in the hole
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx); await settle(); await settle()
+    assert.equal(bot.calls.dig.length, 1)
+    fetch(bot, ctx)
+    const g = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.deepEqual([g.x, g.y, g.z, g.rangeSq], [tx, SITE.y - 1, tz, 0], 'walks into the hole')
+    bot.entity.position = pos(tx + 0.5, SITE.y - 1, tz + 0.5)
+    fetch(bot, ctx)
+    assert.equal(ctx.castleFetch ? ctx.castleFetch.pickup : null, null, 'in the hole: the step is over')
+  })
+
+  it('neuc.51: a below-feet drop already in the pack skips the hole walk', async () => {
+    const tx = SITE.x - 5
+    const tz = SITE.z - 5
+    const set = new Map([[`${tx},${SITE.y - 1},${tz}`, 'stone'], [`${tx - 1},${SITE.y},${tz}`, 'stone']])
+    const bot = makeBot({ items: TOOLS(), set }) // the default dig puts the cobble in the pack
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx); await settle(); await settle()
+    fetch(bot, ctx)
+    assert.ok(!bot.calls.goals.some((g) => g.y === SITE.y - 1 && g.rangeSq === 0), 'no hole walk')
+    assert.equal(ctx.castleFetch.pickup, null)
+  })
+
+  it('neuc.51: trench cobble crafted away mid-leg (stairs) is no dig-stall', async () => {
+    const items = TOOLS()
+    const bot = makeBot({ items, under: (y) => (y <= 63 ? 'stone' : 'air') })
+    const realDig = bot.dig
+    bot.dig = async (b) => { await realDig(b); const c = items.find((i) => i.name === 'cobblestone'); if (c && c.count >= 6) c.count -= 6 } // the stairs craft at every 6
+    const ctx = { castle: castleState() }
+    for (let i = 0; i < 300 && ctx.stepStatus == null; i++) {
+      fetch(bot, ctx)
+      const t = ctx.castleFetch && ctx.castleFetch.target
+      if (t) bot.entity.position = t.stance ? pos(t.stance.x + 0.5, t.stance.y, t.stance.z + 0.5) : pos(t.x + 0.5, t.y + 1, t.z + 0.5)
+      await settle(); await settle()
+    }
+    assert.notEqual(ctx.stepStatus, 'failed:castlefetch-dig-stall')
+    assert.ok(bot.calls.dig.length > 40, `dug ${bot.calls.dig.length}`)
   })
 
   it('a chest the walk never reaches falls through to the next source', () => {
