@@ -169,6 +169,7 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(guard.z0, -1)
     assert.equal(guard.y1, 80)
     assert.ok(guard.x1 > guard.x0 && guard.z1 > guard.z0, 'a real footprint, not a point')
+    assert.equal(ctx.lastGoalKey, 'mine:castlefetch', 'a goal key while the mine owns the body')
     await flush()
   })
 

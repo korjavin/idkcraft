@@ -110,6 +110,12 @@ their block (stone→cobblestone, grass_block→dirt), both sides. Cancel:
 tick reports the end, and the adapter's goal latch (`_stopPath`, any
 `_setGoal`) cancels a live mine the same way (`bot.cancelMine`, reject
 `mine-stopped`) so an owner stop or step change never leaves it mining.
+While live, the mine parks a `{mine:true}` marker as `pathfinder.goal`
+— `stopOnce`/clearOwner-switch cleanups gate on the goal, and `isMoving`
+stays false so the stuck machine never counts a mining body (the mine
+has its own 60 s stall). Callers write `lastGoalKey = 'mine:<step>'`
+when the mine starts, or a `stopOnce` parked at `'idle'` would gate out
+before reading the goal.
 Progress: `baritone.event
 {kind:'mine',id,have,target,active}` on each tick the count changes
 and once on end (`status:'done'` when `have >= target`, `'guard'` when

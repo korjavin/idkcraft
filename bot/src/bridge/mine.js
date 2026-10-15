@@ -124,6 +124,11 @@ function settle(bot, st, err, have) {
   if (st.watch) clearInterval(st.watch)
   st.watch = null
   if (bot._mine === st) bot._mine = null
+  // Lift the goal marker (round-3 core-1): only when it is still ours — a
+  // superseding goal or stop already replaced it.
+  try {
+    if (bot.pathfinder && bot.pathfinder.goal && bot.pathfinder.goal.mine === true) bot.pathfinder.goal = null
+  } catch (_) { /* marker best-effort */ }
   if (err) st.reject(err)
   else st.resolve({ have })
 }
@@ -144,14 +149,19 @@ async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickM
     try { if (bot._settings) bot._settings.allowBreak = 'true' } catch (_) { /* mirror best-effort */ }
     // The mine walks itself: clear the live walk first, superseding the
     // latch silently like a follow re-issue (_maybeReissueFollow) — the
-    // stopped event for the old goal drops, and the mine (not the path
-    // latch) owns the body while isMoving covers it.
+    // stopped event for the old goal drops. The mine then parks a marker
+    // as pathfinder.goal (round-3 core-1/core-3): stopOnce/clearGoal and
+    // the body owner-switch cleanup gate on the goal, not on isMoving, so
+    // the marker — not a moving latch — is what lets a stop reach the
+    // mine. isMoving stays false while mining (the mine has its own 60 s
+    // stall; the stuck machine must not count it).
     try { await bot.transport.call('baritone.cmd', { command: '#stop' }) } catch (_) { /* stop best-effort */ }
     if (dead()) return
     bot._boundSeq = bot._cmdSeq
     bot._goalId = null
     bot._pathing = false
     bot._follow = null
+    try { if (bot.pathfinder) bot.pathfinder.goal = { mine: true } } catch (_) { /* marker best-effort */ }
     st.start = posOf(bot)
     // The forbid leash trips on entry: a mine that starts inside (the
     // body fetching on the castle site) arms once it leaves.
@@ -161,12 +171,10 @@ async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickM
     const r = await bot.transport.call('baritone.mine', params)
     if (!r || r.id == null || typeof r.target !== 'number') throw new Error(`mine: bad baritone.mine reply ${JSON.stringify(r)}`)
     // A goal that superseded us while the verb was in flight already
-    // settled (cancelMine) — and the verb may still have started a
-    // Baritone mine nobody tracks: stop it, never arm the watch.
-    if (dead()) {
-      try { await bot.transport.call('baritone.cmd', { command: '#stop' }) } catch (_) { /* stop best-effort */ }
-      return
-    }
+    // settled through cancelMine, whose #stop follows the verb on the
+    // wire — send nothing more (round-3 core-4: an extra #stop here would
+    // cancel the fresh #goto that superseded us), never arm the watch.
+    if (dead()) return
     st.id = r.id
     st.target = r.target
     st.have = typeof r.have === 'number' ? r.have : countHave(bot, names)

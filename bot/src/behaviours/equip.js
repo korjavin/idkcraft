@@ -123,6 +123,8 @@ function resetRunCounters(ctx) {
       delete st.made
       delete st.noGain
       delete st.lastScaffold
+      delete st.guardWaits
+      delete st.guardExit
     }
   } catch (_) { /* reset best-effort */ }
 }
@@ -315,6 +317,28 @@ function equipGuardBox(home) {
       x1: b.max.x + 3, y1: Math.max(b.max.y + 1, s.y + 1), z1: b.max.z + 3,
     }
   } catch (_) { return null }
+}
+
+// Inside the guard box (floored cells)? Mirror of castlefetch's
+// insideGuard (kept local: castlefetch requires equip, so an import
+// would cycle).
+function insideGuardBox(guard, bp) {
+  try {
+    if (!guard || !bp) return false
+    const x = Math.floor(bp.x), y = Math.floor(bp.y), z = Math.floor(bp.z)
+    return x >= guard.x0 && x <= guard.x1 && y >= guard.y0 && y <= guard.y1 && z >= guard.z0 && z <= guard.z1
+  } catch (_) { return false }
+}
+
+// Shortest horizontal push out of the box, one cell past the edge.
+function guardExitBox(guard, bp) {
+  const dx0 = bp.x - guard.x0, dx1 = guard.x1 + 1 - bp.x
+  const dz0 = bp.z - guard.z0, dz1 = guard.z1 + 1 - bp.z
+  const m = Math.min(dx0, dx1, dz0, dz1)
+  if (m === dx0) return { x: guard.x0 - 1, y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  if (m === dx1) return { x: guard.x1 + 1, y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  if (m === dz0) return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: guard.z0 - 1 }
+  return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: guard.z1 + 1 }
 }
 
 // Cells that make a dig wet (swim.js executor-water minus lava): mining
@@ -583,7 +607,6 @@ function digTick(bot, ctx, st, bp) {
     const need = SCAFFOLD_FULL - scaffoldCount(bot)
     if (need <= 0) return
     if (ctx.equipDigInFlight) return
-    ctx.equipDigInFlight = true
     const gen = stepGen(ctx)
     let settled = false
     const done = (fn) => {
@@ -615,6 +638,23 @@ function digTick(bot, ctx, st, bp) {
     // stop a break made from reach. The mod snapshots the footprint +
     // apron box at begin and stops on the first break inside.
     const guard = equipGuardBox(ctx && ctx.home)
+    // Start outside the box (round-3 core-2): from the porch the nearest
+    // dirt is guarded — one break, one failed leg, every leg, then the day
+    // latch. Walk out first (latched per run, bounded); a wedged walk
+    // mines anyway and trips end it loudly. No in-flight flag on walk
+    // ticks — the next tick must reach digTick again.
+    if (guard && insideGuardBox(guard, bp)) {
+      const exit = st.guardExit || (st.guardExit = guardExitBox(guard, bp))
+      issueGoal(bot, ctx, new goals.GoalNear(exit.x, exit.y, exit.z, 0), `equip-guard:${exit.x},${exit.z}`, false)
+      st.guardWaits = (st.guardWaits || 0) + 1
+      if (st.guardWaits <= 30) return
+    }
+    // A goal key while the mine owns the body (round-3 core-3): stopOnce
+    // gates on lastGoalKey !== 'idle' before it ever reads the goal.
+    // The in-flight flag lands here too — walk ticks above must not hold
+    // it, or the next tick returns early and the walk-out wedges.
+    ctx.lastGoalKey = 'mine:equip'
+    ctx.equipDigInFlight = true
     bot.mine(digTargets(bot), need, { radius: 12, forbid, guard }).then(
       () => done(),
       (err) => {
@@ -777,6 +817,8 @@ module.exports = equip
 module.exports.SCAFFOLD_LOW = SCAFFOLD_LOW
 module.exports.SCAFFOLD_FULL = SCAFFOLD_FULL
 module.exports.equipGuardBox = equipGuardBox
+module.exports.insideGuardBox = insideGuardBox
+module.exports.guardExitBox = guardExitBox
 // Craft-any reuse (idkcraft-did.2): the h9z place-and-verify table contract.
 module.exports.tableFor = tableFor
 // Goal-gate reuse (idkcraft-x15): a rank-0 pickaxe with the stone chain,

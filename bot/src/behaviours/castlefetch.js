@@ -1316,6 +1316,10 @@ function digTick(bot, ctx, f, d) {
     const gen = stepGen(ctx) // round-1 core-1: a late settle must not finish a step that is gone
     const settleMine = () => { ctx.castleFetchInFlight = false; ctx.castleFetchMine = false }
     const settled = () => isFinished(ctx.stepStatus) || stale(ctx, gen) || (ctx.step && ctx.step !== 'castlefetch')
+    // A goal key while the mine owns the body (round-3 core-3): stopOnce
+    // gates on lastGoalKey !== 'idle' before it ever reads the goal, so a
+    // mine started from a parked tick would survive an owner stop.
+    ctx.lastGoalKey = 'mine:castlefetch'
     bot.mine(['stone', 'cobblestone'], need, { radius: DIG_RADIUS, forbid, guard }).then(
       () => { settleMine(); if (!settled()) finish(bot, ctx, 'done') },
       (err) => {

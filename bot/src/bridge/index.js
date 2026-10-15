@@ -363,10 +363,12 @@ class BaritoneBot extends EventEmitter {
       movements: null,
       setGoal: (goal, dynamic) => self._setGoal(goal, dynamic === true),
       stop: () => self._stopPath(),
-      // A live mine owns the body outside the path latch (round-2 core-1):
-      // stopOnce/clearGoal gate on isMoving, so it must read true here or
-      // an owner stop never reaches _stopPath and the mine runs forever.
-      isMoving: () => !!self._pathing || !!(self._mine && !self._mine.settled),
+      // False while a mine owns the body (round-3 core-1): the mine parks
+      // a marker as pathfinder.goal instead, which is what stopOnce/
+      // clearGoal and the owner-switch cleanup read. Reading true here
+      // would feed the stuck machine a still body every stone/scaffold
+      // mine (the mine has its own 60 s stall).
+      isMoving: () => !!self._pathing,
       isMining: () => false, // spike: single digs, no executor mining
       isBuilding: () => false,
       setMovements: (m) => { self.pathfinder.movements = m || null; self._pushSettings() },

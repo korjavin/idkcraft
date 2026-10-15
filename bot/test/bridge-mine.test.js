@@ -125,16 +125,29 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     assert.equal(bot.cancelMine(), false, 'nothing live: quiet')
   })
 
+  it('a live mine parks a goal marker (not a moving latch) so stop paths reach it', async () => {
+    ({ transport, bot } = mineBot({ mineScript: 'hang' }))
+    await bot.start({ pollMs: 0 })
+    const p = bot.mine(['dirt'], 3, { stallMs: 5000, tickMs: 5 })
+    await untilMineSent()
+    assert.equal(bot.pathfinder.isMoving(), false, 'stuck machine stays silent mid-mine')
+    assert.ok(bot.pathfinder.goal && bot.pathfinder.goal.mine === true, 'stop paths gate on the goal')
+    // stopOnce shape (bot/src/index.js): moving? stop : goal? setGoal(null).
+    if (bot.pathfinder.isMoving()) bot.pathfinder.stop()
+    else if (bot.pathfinder.goal) bot.pathfinder.setGoal(null)
+    await assert.rejects(p, /mine-stopped/)
+    assert.equal(transport.state.baritone, '#stop')
+    assert.equal(bot.pathfinder.goal, null, 'settle lifts the marker')
+  })
+
   it('pathfinder.stop() cancels a live mine instead of leaving it mining', async () => {
     ({ transport, bot } = mineBot({ mineScript: 'hang' }))
     await bot.start({ pollMs: 0 })
     const p = bot.mine(['dirt'], 3, { stallMs: 5000, tickMs: 5 })
     await untilMineSent()
-    assert.equal(bot.pathfinder.isMoving(), true, 'a live mine reads as moving (stopOnce gate)')
     bot.pathfinder.stop()
     await assert.rejects(p, /mine-stopped/)
     assert.equal(transport.state.baritone, '#stop')
-    assert.equal(bot.pathfinder.isMoving(), false, 'settled: idle again')
   })
 
   it('a cancel between the pre-verb awaits sends no verb and no watch', async () => {

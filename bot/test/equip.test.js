@@ -2924,6 +2924,30 @@ describe('equip v2 mine branch (idkcraft-neuc.53)', () => {
     bot.restoreError()
   })
 
+  it('a body inside the home box walks out before any mine', async () => {
+    const home = { site: { x: 0, y: 64, z: 0 }, interior: { min: { x: -2, y: 63, z: -2 }, max: { x: 2, y: 66, z: 2 } } }
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx(home) // body (0,64,0) is inside the box
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 0, 'no mine from the porch')
+    assert.equal(bot.calls.goals.length, 1, 'one walk-out goal')
+    assert.ok(String(ctx.lastGoalKey).startsWith('equip-guard:'), `walk-out key, not idle: ${ctx.lastGoalKey}`)
+    bot.entity.position = { x: 500, y: 64, z: 500 } // out: the mine starts
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.equal(ctx.lastGoalKey, 'mine:equip', 'a goal key while the mine owns the body')
+    bot.restoreError()
+  })
+
+  it('insideGuardBox/guardExitBox pick the shortest way out', async () => {
+    const guard = { x0: -5, y0: 58, z0: -5, x1: 5, y1: 67, z1: 5 }
+    assert.equal(equip.insideGuardBox(guard, { x: 0, y: 64, z: 0 }), true)
+    assert.equal(equip.insideGuardBox(guard, { x: 500, y: 64, z: 500 }), false)
+    assert.deepEqual(equip.guardExitBox(guard, { x: 0, y: 64, z: 4 }), { x: 0, y: 64, z: 6 })
+  })
+
   it('the mine carries the home guard box, none without a home', async () => {
     const home = { site: { x: 0, y: 64, z: 0 }, interior: { min: { x: -2, y: 63, z: -2 }, max: { x: 2, y: 66, z: 2 } } }
     assert.deepEqual(equip.equipGuardBox(home), {
@@ -2933,6 +2957,7 @@ describe('equip v2 mine branch (idkcraft-neuc.53)', () => {
     const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
     const mines = []
     bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    bot.entity.position = { x: 500, y: 64, z: 500 } // outside the box: the mine starts
     const ctx = freshCtx(home)
     equip(bot, ctx, null, {})
     assert.equal(mines.length, 1)
