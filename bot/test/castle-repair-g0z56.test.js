@@ -122,8 +122,10 @@ describe('castle repair (g0z.56)', () => {
     const bot = makeBot({ set })
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     bot._tickerCtx.castle = castleState({ status: 'no wood within 64 — drop logs in the castle chest' })
+    bot._tickerCtx.stepFail = { castlefetch: { status: 'failed:no-trees', at: Date.now() } }
     handleChat(bot, ticker, 'Steve', 'castle repair')
     assert.match(bot.chats.pop(), /; repairing — drop logs in the castle chest to speed it up; no wood within 64 — drop logs in the castle chest$/)
+    assert.equal(bot._tickerCtx.stepFail.castlefetch, undefined, 'the fetch hold is lifted: the chest may be full now')
     handleChat(bot, ticker, 'Steve', 'castle')
     assert.match(bot.chats.pop(), /now: no wood within 64 — drop logs in the castle chest; blocked 0/)
   })
@@ -150,6 +152,19 @@ describe('castle repair (g0z.56)', () => {
     assert.ok(logs.includes("castlefetch fence: craft failed: can't craft fence: no planks or logs"), logs.join('\n'))
     assert.equal(ctx.castle.status, 'no wood within 64 — drop logs in the castle chest')
     assert.ok(logs.includes('castlefetch fence: no wood within 64 — drop logs in the castle chest'))
+    // The next wood leg keeps the shortfall on the status (not 'fetching fence').
+    ctx.stepStatus = null
+    ctx.stepFail = {}
+    try {
+      d.craftItem = () => ({ done: false, line: 'x' })
+      d.gather = () => {}
+      console.log = () => {}
+      castlefetch(bot, ctx, null, {})
+    } finally {
+      Object.assign(d, saved)
+      console.log = log
+    }
+    assert.equal(ctx.castle.status, 'no wood within 64 — drop logs in the castle chest')
   })
 
   it('castlefetch: logs in the castle chest fund a fence leg (2 fences per log)', async () => {

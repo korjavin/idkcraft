@@ -680,12 +680,15 @@ function castleChat(bot, ticker, playerName, cmd) {
     if (!castleMod.siteLoaded(bot, st)) return `castle at ${at(st.site)}: too far to see the damage — bring me near it and say castle repair`
     const dmg = damageOf(castleMod.progressByKind(bot, st))
     if (!dmg) return `castle at ${at(st.site)} is intact — nothing to repair`
+    const dry = typeof st.status === 'string' && st.status.startsWith('no wood') ? `; ${st.status}` : ''
     try { taskMod.clearTaskParks(ctx) } catch (_) { /* resume best-effort */ }
+    // The owner may just have filled the chest: the fetch retries now, not
+    // after the CASTLEFETCH_RETRY_MS hold.
+    if (ctx.stepFail && typeof ctx.stepFail === 'object') delete ctx.stepFail.castlefetch
     st.parked = false
     ticker.saveMemory()
     ticker.work()
     const wood = dmg.kinds.some((k) => WOOD_KINDS.has(k)) ? ' — drop logs in the castle chest to speed it up' : ''
-    const dry = typeof st.status === 'string' && st.status.startsWith('no wood') ? `; ${st.status}` : ''
     return `castle: ${dmg.line}; repairing${wood}${dry}`
   }
   if (cmd === 'castle stop') {
