@@ -299,6 +299,24 @@ function digTargets(bot) {
   return names
 }
 
+// Mod guard box for the v2 scaffold mine (round-2 core-4): the house
+// footprint box plus the apron, mirroring inHouseFootprint (box ±1,
+// apron ±3 past the walls, 3 past the door side, up to the doorstep).
+// Below the floor the box runs 6 deep — under-floor support digs near the
+// surface. Null without a readable home — the mine then runs on the body
+// leash alone.
+function equipGuardBox(home) {
+  try {
+    const s = home && home.site
+    const b = home && home.interior
+    if (!s || !b || !b.min || !b.max) return null
+    return {
+      x0: b.min.x - 3, y0: s.y - 6, z0: Math.min(b.min.z - 3, s.z - 3),
+      x1: b.max.x + 3, y1: Math.max(b.max.y + 1, s.y + 1), z1: b.max.z + 3,
+    }
+  } catch (_) { return null }
+}
+
 // Cells that make a dig wet (swim.js executor-water minus lava): mining
 // through them is ~5x slower without aqua affinity, the bot must stand in
 // water, and the drop floats off — the prod 22:04 stall (dj3: lakebed
@@ -592,9 +610,20 @@ function digTick(bot, ctx, st, bp) {
         return ownInFootprint(ctx, b)
       } catch (_) { return false }
     }
-    bot.mine(digTargets(bot), need, { radius: 12, forbid }).then(
+    // Cell-level home guard (round-2 core-4): Baritone picks the nearest
+    // dirt, which from the porch is porch dirt — the body leash cannot
+    // stop a break made from reach. The mod snapshots the footprint +
+    // apron box at begin and stops on the first break inside.
+    const guard = equipGuardBox(ctx && ctx.home)
+    bot.mine(digTargets(bot), need, { radius: 12, forbid, guard }).then(
       () => done(),
-      (err) => done(() => fail(bot, ctx, 'blocks', err instanceof Error ? err : new Error(String(err)), gen)),
+      (err) => {
+        // mine-stopped settles quietly (round-2 core-2): same step/gen as
+        // a borrowing fight — the next tick re-issues instead of failing
+        // the step out from under it.
+        if (err && err.message === 'mine-stopped') { done(); return }
+        done(() => fail(bot, ctx, 'blocks', err instanceof Error ? err : new Error(String(err)), gen))
+      },
     )
     return
   }
@@ -747,6 +776,7 @@ function digTick(bot, ctx, st, bp) {
 module.exports = equip
 module.exports.SCAFFOLD_LOW = SCAFFOLD_LOW
 module.exports.SCAFFOLD_FULL = SCAFFOLD_FULL
+module.exports.equipGuardBox = equipGuardBox
 // Craft-any reuse (idkcraft-did.2): the h9z place-and-verify table contract.
 module.exports.tableFor = tableFor
 // Goal-gate reuse (idkcraft-x15): a rank-0 pickaxe with the stone chain,

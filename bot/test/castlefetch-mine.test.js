@@ -8,12 +8,12 @@ const assert = require('node:assert/strict')
 
 const castlefetch = require('../src/behaviours/castlefetch')
 
-function mockBot({ items = [], mineImpl = null, digImpl = null } = {}) {
+function mockBot({ items = [], mineImpl = null, digImpl = null, pos = null } = {}) {
   const calls = { mine: [], dig: [] }
   const bot = {
     calls,
     _items: items,
-    entity: { position: { x: 10, y: 64, z: 10 }, onGround: true },
+    entity: { position: pos || { ...OUTSIDE }, onGround: true },
     inventory: { items: () => bot._items },
     blockAt: () => null,
     findBlocks: () => [],
@@ -34,6 +34,10 @@ function stoneCtx() {
     castleFetch: { kind: 'stone', chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: 0 },
   }
 }
+
+// Outside every guard box used here (the site box spans roughly 0..30):
+// starting outside means the mine starts at once, no walk-out.
+const OUTSIDE = { x: 500, y: 64, z: 500 }
 
 async function flush() {
   for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve))
@@ -84,7 +88,7 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
   })
 
-  it('a mine-stopped ends the leg unreachable (externally superseded)', async () => {
+  it('a mine-stopped settles quietly: no finish onto a borrowing fight', async () => {
     const bot = mockBot({
       items: [{ name: 'stone_pickaxe', count: 1 }],
       mineImpl: () => async () => { throw new Error('mine-stopped') },
@@ -93,7 +97,10 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
     await flush()
     await flush()
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-unreachable')
+    assert.equal(ctx.stepStatus, 'running', 'no unreachable written over the fight')
+    assert.equal(ctx.castleFetchInFlight, false)
+    assert.equal(ctx.castleFetchMine, false)
+    assert.notEqual(ctx.castleFetch, null, 'the leg survives for the next tick to re-issue')
   })
 
   it('a batch leg mines at most one BATCH', async () => {
@@ -106,6 +113,46 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(bot.calls.mine.length, 1)
     assert.equal(bot.calls.mine[0].count, 16, 'capped at castle BATCH')
     await flush()
+  })
+
+  it('a none leg also mines at most one BATCH', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      mineImpl: (b, calls) => async (names, count, opts) => { calls.mine.push({ names, count, opts }) },
+    })
+    const ctx = stoneCtx()
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'none', short: 64 })
+    assert.equal(bot.calls.mine.length, 1)
+    assert.equal(bot.calls.mine[0].count, 16, 'capped at castle BATCH whatever the word')
+    await flush()
+  })
+
+  it('a body inside the guard box walks out before any mine', async () => {
+    const goals = []
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      mineImpl: (b, calls) => async (names, count, opts) => { calls.mine.push({ names, count, opts }) },
+    })
+    bot.entity.position = { x: 10, y: 64, z: 10 }
+    bot.pathfinder.setGoal = (g) => goals.push(g)
+    const ctx = stoneCtx()
+    ctx.castle.site = { x: 8, y: 64, z: 8 }
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
+    assert.equal(bot.calls.mine.length, 0, 'no mine from inside the box')
+    assert.equal(goals.length, 1, 'one walk-out goal')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.entity.position = { x: 500, y: 64, z: 500 } // out: the mine starts
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
+    assert.equal(bot.calls.mine.length, 1)
+    await flush()
+  })
+
+  it('insideGuard/guardExit pick the shortest way out', async () => {
+    const guard = { x0: 0, y0: 60, z0: 0, x1: 10, y1: 80, z1: 10 }
+    assert.equal(castlefetch.insideGuard(guard, { x: 5, y: 64, z: 5 }), true)
+    assert.equal(castlefetch.insideGuard(guard, { x: 50, y: 64, z: 5 }), false)
+    assert.deepEqual(castlefetch.guardExit(guard, { x: 2, y: 64, z: 5 }), { x: -1, y: 64, z: 5 })
+    assert.deepEqual(castlefetch.guardExit(guard, { x: 5, y: 64, z: 9 }), { x: 5, y: 64, z: 11 })
   })
 
   it('the mine carries the site guard box', async () => {
@@ -156,7 +203,7 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
       const bot = {
         calls,
         _items: items,
-        entity: { position: { x: 10, y: 64, z: 10 }, onGround: true },
+        entity: { position: { ...OUTSIDE }, onGround: true },
         inventory: { items: () => bot._items },
         blockAt: () => null,
         findBlocks: () => [],

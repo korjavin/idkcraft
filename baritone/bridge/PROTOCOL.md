@@ -127,11 +127,16 @@ into the adapter diff so the next lease restores its value). Baritone has no per
 region: the Node side leashes (`radius` from the start position, plus
 a caller `forbid(pos)` — a leash that trips on entry, so a mine that
 starts inside never fails at once) and rejects
-`mine-noPath`/`mine-stall`/`mine-leash`/`mine-stopped`. The `guard` box
+`mine-noPath`/`mine-stall`/`mine-leash`/`mine-stopped` (`mine-stopped`
+settles quietly in the behaviours — no finish/fail, the next tick
+re-issues — so a borrowing fight keeps the body). Every stone leg
+mines at most one castle BATCH (16) per call; longer hauls re-issue.
+The `guard` box
 is the cell-level counterpart to the body leash: cells inside it that
 match the requested blocks are snapshotted at begin, and the first
 break inside stops the process at once (castlefetch passes the site
-box; at most 64³ cells). On v1 `bot.mine` is
+box after walking out of it; equip passes the home footprint + apron;
+at most 64³ cells). On v1 `bot.mine` is
 undefined (no mineflayer implementation — callers branch on
 `typeof bot.mine === 'function'`).
 

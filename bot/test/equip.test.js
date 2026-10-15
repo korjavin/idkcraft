@@ -2911,6 +2911,35 @@ describe('equip v2 mine branch (idkcraft-neuc.53)', () => {
     bot.restoreError()
   })
 
+  it('a mine-stopped settles quietly: no fail onto a borrowing fight', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    bot.mine = async () => { throw new Error('mine-stopped') }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(ctx.equipDigInFlight, false)
+    assert.equal(ctx.stepStatus, 'running', 'no equip-blocks written over the fight')
+    assert.equal(bot.errs.length, 0)
+    bot.restoreError()
+  })
+
+  it('the mine carries the home guard box, none without a home', async () => {
+    const home = { site: { x: 0, y: 64, z: 0 }, interior: { min: { x: -2, y: 63, z: -2 }, max: { x: 2, y: 66, z: 2 } } }
+    assert.deepEqual(equip.equipGuardBox(home), {
+      x0: -5, y0: 58, z0: -5, x1: 5, y1: 67, z1: 5,
+    })
+    assert.equal(equip.equipGuardBox(null), null)
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx(home)
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.deepEqual(mines[0].opts.guard, equip.equipGuardBox(home))
+    bot.restoreError()
+  })
+
   it('a full kit never mines', async () => {
     const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 32 }], ids: IDS, recipes: {} })
     let mined = 0

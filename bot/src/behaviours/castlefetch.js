@@ -831,6 +831,28 @@ function siteGuardBox(st) {
   } catch (_) { return null }
 }
 
+// Inside the guard box (floored cells, round-2 core-6)?
+function insideGuard(guard, bp) {
+  try {
+    if (!guard || !bp) return false
+    const x = Math.floor(bp.x), y = Math.floor(bp.y), z = Math.floor(bp.z)
+    return x >= guard.x0 && x <= guard.x1 && y >= guard.y0 && y <= guard.y1 && z >= guard.z0 && z <= guard.z1
+  } catch (_) { return false }
+}
+
+// Shortest horizontal push out of the box, one cell past the edge at body
+// height (round-2 core-6: start the mine where the nearest stone is not a
+// site cell).
+function guardExit(guard, bp) {
+  const dx0 = bp.x - guard.x0, dx1 = guard.x1 + 1 - bp.x
+  const dz0 = bp.z - guard.z0, dz1 = guard.z1 + 1 - bp.z
+  const m = Math.min(dx0, dx1, dz0, dz1)
+  if (m === dx0) return { x: guard.x0 - 1, y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  if (m === dx1) return { x: guard.x1 + 1, y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  if (m === dz0) return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: guard.z0 - 1 }
+  return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: guard.z1 + 1 }
+}
+
 // Trench side s (0..3) on ring (0..1, vmzq.31): origin column just
 // outside the footprint near a corner (the entrance sits mid-side, never
 // in front of it), the outward direction and the width axis. Ring 1 works
@@ -1257,15 +1279,13 @@ function digTick(bot, ctx, f, d) {
   // unreached on v2. mine-stall keeps the 'failed:castlefetch-dig-stall'
   // reason string (the goal watchdog and metrics key on it).
   if (typeof bot.mine === 'function') {
-    // Batch legs yield a layable batch (core-5, the vmzq.20 shape): a slow
-    // mine must not run the full shortfall while the castle could lay.
-    let need = (d && typeof d.short === 'number' && d.short > 0) ? d.short : castleMod.BATCH
-    if (d && d.word === 'batch') need = Math.min(need, castleMod.BATCH)
+    // Every leg mines at most one layable batch (round-2 core-5, the
+    // vmzq.20 shape): a none/some leg must not run the whole shortfall
+    // while the castle could lay, and the LEG_MAX_MS yield never fires
+    // mid-mine.
+    const raw = (d && typeof d.short === 'number' && d.short > 0) ? d.short : castleMod.BATCH
+    const need = Math.min(raw, castleMod.BATCH)
     if (ctx.castleFetchInFlight) return
-    ctx.castleFetchInFlight = true
-    ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig
-    ctx.castleFetchMine = true // a bridge mine owns the tick (not a v1 flight): pack-full can cancel it below
-    spend(f, 'dig')
     const st0 = ctx.castle
     const forbid = (pos) => {
       try { return !!(st0 && st0.site && onSite(st0, pos)) } catch (_) { return false }
@@ -1275,6 +1295,24 @@ function digTick(bot, ctx, f, d) {
     // site box's stone cells at begin and stops on the first break inside.
     // Top mirrors blueprint onSite's FETCH_SITE_TOP (bot/src/castle.js).
     const guard = siteGuardBox(st0)
+    // Start outside the box (round-2 core-6): Baritone picks the nearest
+    // stone, which from inside is a site cell — one break, one failed leg,
+    // every leg. Walk out first; a wedged walk mines anyway (trips end it
+    // loudly and the hold parks the leg).
+    if (guard && insideGuard(guard, bp)) {
+      // Latched per leg: recomputing each tick could flip the exit side as
+      // the body moves and jitter the walk. No in-flight flags on walk
+      // ticks — the next tick must reach digTick again, not the early
+      // return above.
+      const exit = f.guardExit || (f.guardExit = guardExit(guard, bp))
+      walkTo(bot, ctx, `castlefetch-guard:${exit.x},${exit.z}`, exit, 0)
+      spend(f, 'walk')
+      if (!stalled(f.guardWalk || (f.guardWalk = {}), 0, APPROACH_WAITS)) return
+    }
+    ctx.castleFetchInFlight = true
+    ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig
+    ctx.castleFetchMine = true // a bridge mine owns the tick (not a v1 flight): pack-full can cancel it below
+    spend(f, 'dig')
     const gen = stepGen(ctx) // round-1 core-1: a late settle must not finish a step that is gone
     const settleMine = () => { ctx.castleFetchInFlight = false; ctx.castleFetchMine = false }
     const settled = () => isFinished(ctx.stepStatus) || stale(ctx, gen) || (ctx.step && ctx.step !== 'castlefetch')
@@ -1284,8 +1322,13 @@ function digTick(bot, ctx, f, d) {
         settleMine()
         if (settled()) return
         const m = err && err.message
+        // mine-stopped settles quietly (round-2 core-2): a fight borrowing
+        // the body keeps step/gen, and finish's clearGoal would kill its
+        // chase — the next tick re-issues instead. unreachable stays for
+        // the leash only.
+        if (m === 'mine-stopped') return
         if (m === 'mine-noPath') finish(bot, ctx, 'failed:castlefetch-no-stone')
-        else if (m === 'mine-leash' || m === 'mine-stopped') finish(bot, ctx, 'failed:castlefetch-unreachable')
+        else if (m === 'mine-leash') finish(bot, ctx, 'failed:castlefetch-unreachable')
         else finish(bot, ctx, 'failed:castlefetch-dig-stall')
       },
     )
@@ -1569,6 +1612,8 @@ module.exports.QUARRY_RINGS = QUARRY_RINGS
 module.exports.pickQuarry = pickQuarry
 module.exports.pickStone = pickStone
 module.exports.siteGuardBox = siteGuardBox
+module.exports.insideGuard = insideGuard
+module.exports.guardExit = guardExit
 module.exports.pickPit = pickPit
 module.exports.pitSpots = pitSpots
 module.exports.inTrench = inTrench

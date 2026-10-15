@@ -130,9 +130,22 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     await bot.start({ pollMs: 0 })
     const p = bot.mine(['dirt'], 3, { stallMs: 5000, tickMs: 5 })
     await untilMineSent()
+    assert.equal(bot.pathfinder.isMoving(), true, 'a live mine reads as moving (stopOnce gate)')
     bot.pathfinder.stop()
     await assert.rejects(p, /mine-stopped/)
     assert.equal(transport.state.baritone, '#stop')
+    assert.equal(bot.pathfinder.isMoving(), false, 'settled: idle again')
+  })
+
+  it('a cancel between the pre-verb awaits sends no verb and no watch', async () => {
+    ({ transport, bot } = mineBot({ mineScript: 'hang' }))
+    await bot.start({ pollMs: 0 })
+    const p = bot.mine(['dirt'], 3, { stallMs: 5000, tickMs: 5 })
+    bot.cancelMine()
+    await assert.rejects(p, /mine-stopped/)
+    await new Promise((r) => setTimeout(r, 30))
+    assert.ok(!(transport.state.mineLog || []).length, 'baritone.mine never sent')
+    assert.equal(transport.state.baritone, '#stop', 'only the cancel stop')
   })
 
   it('rejects empty names and non-positive counts without touching the wire', async () => {

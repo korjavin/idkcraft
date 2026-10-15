@@ -363,7 +363,10 @@ class BaritoneBot extends EventEmitter {
       movements: null,
       setGoal: (goal, dynamic) => self._setGoal(goal, dynamic === true),
       stop: () => self._stopPath(),
-      isMoving: () => !!self._pathing,
+      // A live mine owns the body outside the path latch (round-2 core-1):
+      // stopOnce/clearGoal gate on isMoving, so it must read true here or
+      // an owner stop never reaches _stopPath and the mine runs forever.
+      isMoving: () => !!self._pathing || !!(self._mine && !self._mine.settled),
       isMining: () => false, // spike: single digs, no executor mining
       isBuilding: () => false,
       setMovements: (m) => { self.pathfinder.movements = m || null; self._pushSettings() },

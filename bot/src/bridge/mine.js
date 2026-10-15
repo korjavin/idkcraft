@@ -129,9 +129,14 @@ function settle(bot, st, err, have) {
 }
 
 async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickMs }) {
+  // A cancel between the awaits below (fight preemption, owner stop)
+  // settles st through cancelMine; every leg checks it, so a dead run
+  // sends nothing more (round-2 core-3).
+  const dead = () => st.settled || bot._mine !== st
   try {
     for (const [k, v] of MINE_SETTINGS) {
       try { await bot.transport.call('baritone.cmd', { command: `#set ${k} ${v}` }) } catch (_) { /* settings best-effort */ }
+      if (dead()) return
     }
     // Mirror the allowBreak pin into the adapter's diff: the next lease
     // push must see the live value, or a canDig lease would read synced
@@ -139,9 +144,10 @@ async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickM
     try { if (bot._settings) bot._settings.allowBreak = 'true' } catch (_) { /* mirror best-effort */ }
     // The mine walks itself: clear the live walk first, superseding the
     // latch silently like a follow re-issue (_maybeReissueFollow) — the
-    // stopped event for the old goal drops, and isMoving reads false while
-    // the mine (not the path latch) owns the body.
+    // stopped event for the old goal drops, and the mine (not the path
+    // latch) owns the body while isMoving covers it.
     try { await bot.transport.call('baritone.cmd', { command: '#stop' }) } catch (_) { /* stop best-effort */ }
+    if (dead()) return
     bot._boundSeq = bot._cmdSeq
     bot._goalId = null
     bot._pathing = false
@@ -155,8 +161,12 @@ async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickM
     const r = await bot.transport.call('baritone.mine', params)
     if (!r || r.id == null || typeof r.target !== 'number') throw new Error(`mine: bad baritone.mine reply ${JSON.stringify(r)}`)
     // A goal that superseded us while the verb was in flight already
-    // settled (cancelMine): never arm the watch on a dead run.
-    if (st.settled || bot._mine !== st) return
+    // settled (cancelMine) — and the verb may still have started a
+    // Baritone mine nobody tracks: stop it, never arm the watch.
+    if (dead()) {
+      try { await bot.transport.call('baritone.cmd', { command: '#stop' }) } catch (_) { /* stop best-effort */ }
+      return
+    }
     st.id = r.id
     st.target = r.target
     st.have = typeof r.have === 'number' ? r.have : countHave(bot, names)
