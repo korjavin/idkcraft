@@ -136,6 +136,37 @@ function repairCells(st) {
     ...cells.filter((c) => c.kind === 'torch').slice(0, 3),
   ]
 }
+// Start spot (g0z.58, needs CASTLE_SEED=complete): CASTLE_START="dx,dy,dz"
+// off the seeded site's SW corner — after adoption the follower lands in a
+// 1x2 air pocket there (prod g0z.55: castle site 8 65 -12, tunnel start
+// 58 60 19 = "50,-5,31"). CASTLE_START_CELL=cobble|planks walls the pocket
+// in a 3x4x3 shell of that block: v2 pathing hard-bans both (g0z.55
+// blocksToDisallowBreaking), so only an explicit dig gets it out. Pure
+// (unit-tested); null when CASTLE_START is unset.
+const START_BLOCK = { cobble: 'cobblestone', planks: 'oak_planks' }
+function startPlan(site, raw, cell) {
+  const s = String(raw || '').trim()
+  const c = String(cell || '').trim()
+  if (c && !START_BLOCK[c]) throw new Error(`CASTLE_START_CELL: want ''|cobble|planks, got ${JSON.stringify(cell)}`)
+  if (!s) {
+    if (c) throw new Error('CASTLE_START_CELL needs CASTLE_START')
+    return null
+  }
+  const d = s.split(',').map((v) => Number(v.trim()))
+  if (d.length !== 3 || !d.every(Number.isInteger)) throw new Error(`CASTLE_START: want "dx,dy,dz" (site-relative integers), got ${JSON.stringify(raw)}`)
+  const x = site.x + d[0]; const y = site.y + d[1]; const z = site.z + d[2]
+  const cmd = c
+    ? `fill ${x - 1} ${y - 1} ${z - 1} ${x + 1} ${y + 2} ${z + 1} minecraft:${START_BLOCK[c]} hollow`
+    : `fill ${x} ${y} ${z} ${x} ${y + 1} ${z} minecraft:air`
+  // Out of the pocket = out of its shell box (the cell, or the 3x4x3 around a bare pocket).
+  const out = (p) => Math.abs(Math.floor(p.x) - x) > 1 || Math.abs(Math.floor(p.z) - z) > 1 ||
+    Math.floor(p.y) < y - 1 || Math.floor(p.y) > y + 2
+  return { x, y, z, d, cell: c, cmd, out }
+}
+const START = process.env.CASTLE_START || ''
+const START_CELL = process.env.CASTLE_START_CELL || ''
+startPlan({ x: 0, y: 0, z: 0 }, START, START_CELL) // validate up front
+if (START && SEED !== 'complete') throw new Error('CASTLE_START needs CASTLE_SEED=complete')
 const IDLE = process.env.CASTLE_IDLE === '1'
 const IDLE_DEATH = IDLE ? Math.max(0, parseInt(process.env.CASTLE_IDLE_DEATH || '0', 10) || 0) : 0
 // Far respawn (vmzq.29, prod run6): after CASTLE_FAR_AFTER min of the
@@ -1145,6 +1176,15 @@ async function main() {
     tickCtx().paused = false
     origLog(`CASTLE-RIG repair seed: ${knocked.length} cells knocked out (${knocked.map((c) => c.kind).join(',')}), chest ${REPAIR === 'wood' ? '16 oak_log' : `empty, logs cleared within ${NOWOOD_RADIUS}`}`)
   }
+  let start = null
+  if (START) {
+    start = startPlan({ x: bx - 15, y: gy + 1, z: bz - 13 }, START, START_CELL)
+    tickCtx().paused = true
+    await rcon(start.cmd).catch((e) => fail('start', e.message))
+    await rcon(`tp ${FOLLOWER} ${start.x + 0.5} ${start.y} ${start.z + 0.5}`).catch((e) => fail('start', e.message))
+    tickCtx().paused = false
+    origLog(`CASTLE-RIG start ${start.x} ${start.y} ${start.z} (site +${start.d.join(',')})${start.cell ? `, sealed in ${start.cell}` : ', bare pocket'}`)
+  }
   if (NIGHT_HOME) {
     // g0z.59: an unbuilt house order on the pad corner, parked so the day
     // never builds it (the night is what this measures).
@@ -1350,6 +1390,8 @@ async function main() {
   if (night) await night.open()
   winT0 = t0
   let resTimer = null
+  let startEscS = null // g0z.58: first second out of the start pocket
+  let startHomeS = null // g0z.58: first second inside the castle interior
   const idle = IDLE ? createIdleTrack(tickCtx().home) : null
   if (resNights) {
     resNights.open()
@@ -1360,7 +1402,12 @@ async function main() {
         const h = follower._tickerCtx && require('../src/residence').nightHome(follower._tickerCtx, follower.entity.position)
         inside = !!h && h.kind === 'castle' && require('../src/residence').of(h).interior(h, follower.entity.position)
       } catch (_) { inside = false }
-      resNights.onSample(Math.round((Date.now() - t0) / 1000), inside, !!follower.isSleeping)
+      const tS = Math.round((Date.now() - t0) / 1000)
+      resNights.onSample(tS, inside, !!follower.isSleeping)
+      if (start) {
+        try { if (startEscS == null && start.out(follower.entity.position)) startEscS = tS } catch (_) { /* start best-effort */ }
+        if (startHomeS == null && inside) startHomeS = tS
+      }
       if (idle) { try { idle.onSample((Date.now() - t0) / 1000, follower.entity.position) } catch (_) { /* idle best-effort */ } }
     }
     resTimer = setInterval(resSample, 1000)
@@ -1828,7 +1875,10 @@ async function main() {
     const after = repairT == null ? 0 : seen.regressAt.filter((at) => at > t0 + repairT * 1000).length
     repairTag = `, repair=${relaid}/${knocked.length}@${repairT == null ? '-' : `${repairT}s`}, regress=${after}, nowood@${nowoodT == null ? '-' : `${nowoodT}s`}`
   }
-  const nightTag = (night ? night.tag() : '') + seedTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + repairTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
+  // g0z.58: regress counts the whole window (a v2 tunnel through the wall
+  // logs one), escaped/home are seconds from window open.
+  const startTag = start ? `, start=${start.d.join(',')}${start.cell ? `/${start.cell}` : ''}, escaped@${startEscS == null ? 'no' : `${startEscS}s`}, home@${startHomeS == null ? 'no' : `${startHomeS}s`}, regress=${seen.regressAt.filter((at) => at >= t0).length}` : ''
+  const nightTag = (night ? night.tag() : '') + seedTag + startTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + repairTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
@@ -1858,4 +1908,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { repairCells, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }

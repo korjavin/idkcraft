@@ -40,6 +40,12 @@
 #   3 torches), wood = 16 oak_log in the castle chest; the guide chats
 #   `castle repair`; the verdict adds repair=<relaid>/20@<s>, regress=<n>
 #   after the full relay and nowood@<s> (the shortfall status)),
+#   CASTLE_START ("dx,dy,dz" off the site SW corner, needs CASTLE_SEED=complete
+#   — g0z.58: after adoption the builder lands in a 1x2 air pocket there;
+#   prod's g0z.55 tunnel start is "50,-5,31"; the verdict adds start=,
+#   escaped@<s>, home@<s> (first second in the castle interior) and
+#   regress=<n> over the whole window), CASTLE_START_CELL (''|cobble|planks
+#   — walls the pocket in a 3x4x3 shell: v2 pathing hard-bans both kinds),
 #   CASTLE_SEED_VERSION (''|1|2|3, default '' = current — g0z.48: the
 #   blueprint version the CASTLE_SEED=complete castle is seeded as; 2 seeds
 #   a v2 castle and the guide chats `castle upgrade` after adoption, so the
@@ -162,6 +168,8 @@ SEED_VERSION="${CASTLE_SEED_VERSION:-}"
 case "$SEED_VERSION" in ''|1|2|3) ;; *) echo "CASTLE_SEED_VERSION: want ''|1|2|3, got '$SEED_VERSION'"; exit 2 ;; esac
 case "${CASTLE_REPAIR:-}" in ''|wood|nowood) ;; *) echo "CASTLE_REPAIR: want ''|wood|nowood, got '$CASTLE_REPAIR'"; exit 2 ;; esac
 [ -z "${CASTLE_REPAIR:-}" ] || [ "$SEED" = complete ] || { echo "CASTLE_REPAIR needs CASTLE_SEED=complete"; exit 2; }
+case "${CASTLE_START_CELL:-}" in ''|cobble|planks) ;; *) echo "CASTLE_START_CELL: want ''|cobble|planks, got '$CASTLE_START_CELL'"; exit 2 ;; esac
+[ -z "${CASTLE_START:-}${CASTLE_START_CELL:-}" ] || { [ -n "${CASTLE_START:-}" ] && [ "$SEED" = complete ]; } || { echo "CASTLE_START(_CELL) needs CASTLE_START and CASTLE_SEED=complete"; exit 2; }
 IDLE="${CASTLE_IDLE:-}"
 case "$IDLE" in ''|0) IDLE= ;; 1) SEED=complete ;; *) echo "CASTLE_IDLE: want ''|0|1, got '$IDLE'"; exit 2 ;; esac
 IDLE_DEATH="${CASTLE_IDLE_DEATH:-0}"
