@@ -608,6 +608,19 @@ regress=<n after the full relay>, nowood@<s>` (first 'no wood' status).
 CASTLE_SEED=complete CASTLE_REPAIR=wood CASTLE_BODY=baritone CASTLE_KIT=blast sh bot/tools/castle-rig.sh 30
 ```
 
+Start spot (g0z.58): `CASTLE_START="dx,dy,dz"` (off the seeded site's SW
+corner) lands the builder in a 1x2 air pocket there after adoption; prod's
+g0z.55 tunnel start is `50,-5,31`. `CASTLE_START_CELL=cobble|planks` walls
+the pocket in a 3x4x3 shell of that block — v2 pathing hard-bans both, so
+only an explicit dig gets out. The verdict adds `, start=<d>[/<cell>],
+escaped@<s>, home@<s>` (first second in the castle interior) and
+`regress=<n>` (castle regress lines over the whole window; 0 = it never
+tunnelled through the walls):
+
+```sh
+CASTLE_SEED=complete CASTLE_BODY=baritone CASTLE_START=50,-5,31 CASTLE_START_CELL=cobble sh bot/tools/castle-rig.sh --night 18
+```
+
 Interrupts clean up after themselves: `kill -INT`/`-TERM` (or Ctrl-C)
 kills every descendant (server client, node, tee), `docker rm -f`s this
 slot's container and drops the lock, exit 130 — the next run on the slot
