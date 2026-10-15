@@ -64,6 +64,7 @@ const CENTER_TIMEOUT_TICKS = 10 // center tap budget (a 0.7 corner at 0.16/tap +
 const CENTER_STALL_PROG = 0.05 // per-tick progress below this reads stuck (a free sneak tap steps ~0.16)
 const CENTER_STALL_TICKS = 3 // stuck this long: one unsneaked walk tap instead of another sneak tap
 const CENTER_TAP_MS = 120 // tap length (~0.16 blocks per tap at sneak speed)
+const STAND_WALK_DIST = 0.6 // neuc.34: farther than this from a remote combo stand, walk taps (~0.5/tap) instead of sneak taps
 const SWIM_CENTER_DIST = 0.2 // past this off the lane middle: centering tap
 const SWIM_TAP_MS = 100 // tap length (releases between 1 Hz ticks)
 const TRAVERSE_STALL_TICKS = 3 // no horizontal progress: release press 1 tick
@@ -148,9 +149,9 @@ function wall2At(bot) {
 
 // A pour at one height: solid side ref + air dest in the own column + reach.
 // Returns { dest:{x,y,z}, ref, face:[x,y,z] } or null.
-function highPourAt(bot, dy) {
-  const p = botPos(bot)
-  const eye = eyeOf(bot)
+function highPourAt(bot, dy, at) {
+  const p = at || botPos(bot)
+  const eye = p && { x: p.x, y: p.y + EYE_HEIGHT, z: p.z }
   if (!p || !eye) return null
   const fx = Math.floor(p.x)
   const fy = Math.floor(p.y)
@@ -263,8 +264,8 @@ function faceRefs(bot, dc, eye) {
 // above the A source (below-or-level would already be A spread — current that
 // pins the traverse), and within the traverse mount of the plateau.
 // Returns { dest, ref, face, below } or null.
-function ledgePourAt(bot, cx, cy, cz, eyeY, srcAY, plateauY) {
-  const p = botPos(bot)
+function ledgePourAt(bot, cx, cy, cz, eyeY, srcAY, plateauY, at) {
+  const p = at || botPos(bot)
   if (!p) return null
   const eye = { x: p.x, y: eyeY, z: p.z }
   const mountMax = (plateauY === null || plateauY === undefined ? eyeY - EYE_HEIGHT : plateauY) + COMBO_MOUNT_BUDGET
@@ -335,7 +336,7 @@ function laneCell(bot, cx, y, cz) {
 // spread and a clear swim lane (own column, feet+1 through the source — a
 // ceiling inside the lane kills the combo even when the pour face reads
 // fine). The swim is vertical, so the plateau column is the floor column.
-function findCombo(bot) {
+function findCombo(bot, at) {
   // Decide-time stance gate: a combo predicted from a falling/jumping body
   // is meaningless — the replay shaft fired water_up mid-hop, the center
   // target fell away (failed:no-center), and the follow-up shuffles walked
@@ -343,12 +344,12 @@ function findCombo(bot) {
   // standing (onGround; standing under water still counts); the run itself
   // never re-decides, so this cannot abort a mid-climb hover.
   if (!bot || !bot.entity || bot.entity.onGround !== true) return null
-  const p = botPos(bot)
+  const p = at || botPos(bot)
   if (!p) return null
   const cx = Math.floor(p.x)
   const cz = Math.floor(p.z)
   for (let dy = 5; dy >= 2; dy--) {
-    const A = highPourAt(bot, dy)
+    const A = highPourAt(bot, dy, at)
     if (!A) continue // eslint-disable-line no-continue
     let lane = true
     for (let y = Math.floor(p.y) + 1; y <= A.dest.y; y++) {
@@ -357,9 +358,78 @@ function findCombo(bot) {
     }
     if (!lane) continue // eslint-disable-line no-continue
     const plateauY = A.dest.y - PLATEAU_BELOW_SRC
-    const B = ledgePourAt(bot, cx, Math.floor(plateauY), cz, plateauY + EYE_HEIGHT, A.dest.y, plateauY)
+    const B = ledgePourAt(bot, cx, Math.floor(plateauY), cz, plateauY + EYE_HEIGHT, A.dest.y, plateauY, at)
     if (!B) continue // eslint-disable-line no-continue
     return { A, B, plateauY }
+  }
+  return null
+}
+
+// Combo stand nearby (idkcraft-neuc.34): the floor cell the climb must start
+// from is fixed by the geometry (the B ledge is one cell off the swim lane),
+// but where the body wedges is not — the v2 body stops wherever its partial
+// path ended (rig DUGPIT: the SW corner of a 4x4 pit, three cells from the
+// only column whose plateau reaches the ledge), so the own-cell scan reads
+// no combo and water_up is never offered. BFS over same-level floor cells
+// (feet + head clear, solid below) up to STAND_STEPS walks; the nearest with
+// a combo wins. Returns { x, y, z } (the stand's feet centre) or null. The
+// own cell is the caller's findCombo; this one is only the fallback.
+const STAND_STEPS = 4
+function findComboStand(bot) {
+  // v2 only (the bead: no v1 change) — v1's pathfinder ends its wedge on the
+  // goal side of the pit and climbs from the own cell (5/5 rig).
+  if (process.env.BOT_BODY !== 'baritone') return null
+  if (!bot || !bot.entity || bot.entity.onGround !== true) return null
+  const p = botPos(bot)
+  if (!p) return null
+  const fx = Math.floor(p.x)
+  const fy = Math.floor(p.y)
+  const fz = Math.floor(p.z)
+  const floor = new Set(['0,0'])
+  const order = []
+  const seen = new Set(['0,0'])
+  let frontier = [[0, 0]]
+  for (let step = 1; step <= STAND_STEPS && frontier.length > 0; step++) {
+    const next = []
+    for (const [x, z] of frontier) {
+      for (const [dx, dz] of SIDES) {
+        const nx = x + dx
+        const nz = z + dz
+        const k = nx + ',' + nz
+        if (seen.has(k)) continue // eslint-disable-line no-continue
+        seen.add(k)
+        const cx = fx + nx
+        const cz = fz + nz
+        if (!isAirish(laneCell(bot, cx, fy, cz)) || !isAirish(laneCell(bot, cx, fy + 1, cz))) continue // eslint-disable-line no-continue
+        if (!solid(laneCell(bot, cx, fy - 1, cz))) continue // eslint-disable-line no-continue
+        floor.add(k)
+        order.push([nx, nz])
+        next.push([nx, nz])
+      }
+    }
+    frontier = next
+  }
+  // The run walks a STRAIGHT line (lookAt + taps), so every cell the body's
+  // width sweeps on the way must be floor too — a stand reached only around
+  // a hole or a wall corner is not an offer.
+  // ponytail: straight segments only; a waypoint walk if a rig wedge needs a bend.
+  const swept = (tx, tz) => {
+    const dx = tx - p.x
+    const dz = tz - p.z
+    const len = Math.hypot(dx, dz) || 1
+    const ox = (-dz / len) * 0.3
+    const oz = (dx / len) * 0.3
+    for (let i = 0; i <= 10; i++) {
+      for (const side of [-1, 0, 1]) {
+        const k = (Math.floor(p.x + dx * i / 10 + ox * side) - fx) + ',' + (Math.floor(p.z + dz * i / 10 + oz * side) - fz)
+        if (!floor.has(k)) return false
+      }
+    }
+    return true
+  }
+  for (const [nx, nz] of order) {
+    const at = { x: fx + nx + 0.5, y: fy, z: fz + nz + 0.5 }
+    if (swept(at.x, at.z) && findCombo(bot, at)) return at
   }
   return null
 }
@@ -520,8 +590,17 @@ function waterUpRun(bot, ctx) {
     // in/against collision zeroes vy) — every centered rig spawn rose,
     // every touching one stalled at +0. Pouring from a bad stance only
     // wastes the budget, so an uncenterable cell fails fast and clean.
-    const ccx = Math.floor(bp.x) + 0.5
-    const ccz = Math.floor(bp.z) + 0.5
+    // neuc.34: no combo from the own cell but one from a stand a few walks
+    // away — center on THAT cell instead (walk taps while far, then the
+    // sneak taps below). Picked once at the first scan tick: re-picking per
+    // tick would chase a moving target as the body crosses cells.
+    if (st.stand === undefined) {
+      st.stand = findCombo(bot) ? null : findComboStand(bot)
+      st.standTicks = st.stand ? STAND_STEPS * 2 : 0
+    }
+    const ccx = st.stand ? st.stand.x : Math.floor(bp.x) + 0.5
+    const ccz = st.stand ? st.stand.z : Math.floor(bp.z) + 0.5
+    const far = !!st.stand && Math.hypot(bp.x - ccx, bp.z - ccz) > STAND_WALK_DIST
     if (Math.hypot(bp.x - ccx, bp.z - ccz) >= CENTER_DIST) {
       // Sneak taps, not a held walk: 1 Hz ticks hold forward for a full
       // second (4+ blocks at walk speed) and blow straight past the middle
@@ -541,14 +620,15 @@ function waterUpRun(bot, ctx) {
       // the center re-targets the landing cell), then sneak resumes. Also
       // the pin-vs-glue experiment for 1cj: displacement here rules the
       // edge-touch pin out (a pin would hold through the walk tap too).
-      const walkItOff = (st.centerStall || 0) >= CENTER_STALL_TICKS
-      if (walkItOff) st.centerStall = 0
+      const stalled = (st.centerStall || 0) >= CENTER_STALL_TICKS
+      if (stalled) st.centerStall = 0
+      const walkItOff = far || stalled
       try { bot.lookAt(new Vec3(ccx, bp.y + 0.5, ccz)) } catch (_) { /* facing best-effort */ }
       setSneak(bot, !walkItOff)
       setForward(bot, true)
       setJump(bot, false)
       try { setTimeout(() => setForward(bot, false), CENTER_TAP_MS) } catch (_) { /* timer best-effort */ }
-      if (++st.waited > CENTER_TIMEOUT_TICKS) {
+      if (++st.waited > CENTER_TIMEOUT_TICKS + st.standTicks) {
         setForward(bot, false)
         setSneak(bot, false)
         return 'failed:no-center'
@@ -944,6 +1024,7 @@ module.exports = {
   ledgePourAt,
   findLedgePour,
   findCombo,
+  findComboStand,
   waterUpRun,
   equipStep,
   resetEquip,

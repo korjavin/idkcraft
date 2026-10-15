@@ -450,7 +450,8 @@ path). Per-spot table: the neuc.15 PR body.
 | client CPU (mean) | node 15-17 % | node 8-10 % + body JVM 28-100 % |
 | client memory (mean / max) | node ~205 / 334 MiB | node ~150 / 282 MiB + body 2.1-2.2 / 2.6 GiB (corpus), 1.55 / 2.0 GiB (tasks) |
 
-v2 gaps (beads): DUGPIT-BARE (neuc.34, water_up never offered; reached 1 of 2 since neuc.46),
+v2 gaps (beads): DUGPIT-BARE closed (neuc.34: a wedge off the combo column walks to the
+stand first, v2 only; re-recorded reached),
 JR-BUILD / JR-BUILD-FRESH / SHELTER-WATER closed (re-recorded reached by neuc.46),
 MOAT-EXIT / HOME-PIT / HOME-ROOF / HOME-PIT-DEEP (neuc.33, order answered
 before the post-tp chunk cache fills). DROWNED-SHORE went through the

@@ -6,7 +6,7 @@
   "measuredAt": "2026-10-13T22:19:25Z",
   "gitsha": "f0f6dd63",
   "image": "idkcraft-baritone built from baritone/ at f0f6dd63 (bridge mod incl. neuc.30)",
-  "note": "v2 body (REPLAY_BODY=baritone) on the SAME 32-spot corpus as stuck-baseline.json, worse of two full runs on master f0f6dd63 (24/32 and 23/32 reached; 22/32 here): reached = both runs reached, maxStuck = max + 2, maxEps = max + 1, maxCalls = max strict (the v1 convention). Unreached spots v1 reaches name the owning bead (blockedBy) and why; a spot reached on the judged run prints IMPROVED (re-record). DUGPIT-VALIDATE keeps the control rule (minCalls 1). DROWNED-SHORE minDanger 30 (the v1 floor) recorded by idkcraft-neuc.25: the water-death discs now reach Baritone (closest 31.1 on 3/3 judged runs; 9.9 on 3/3 before the fix). Re-measure after each v2 parity merge (neuc.29 et al.). MOAT-EXIT, HOME-PIT, HOME-ROOF, HOME-PIT-DEEP re-recorded by idkcraft-neuc.33 (worse of two full judged runs on its branch, image unchanged: 4/4 reached in both). JR-BUILD, JR-BUILD-FRESH, SHELTER-WATER re-recorded by idkcraft-neuc.46 (reached in both full runs: the batch run on master 7f282f19 and the judged run on its branch; DUGPIT-BARE stays unreached, reached 1 of 2 plus the rerun).",
+  "note": "v2 body (REPLAY_BODY=baritone) on the SAME 32-spot corpus as stuck-baseline.json, worse of two full runs on master f0f6dd63 (24/32 and 23/32 reached; 22/32 here): reached = both runs reached, maxStuck = max + 2, maxEps = max + 1, maxCalls = max strict (the v1 convention). Unreached spots v1 reaches name the owning bead (blockedBy) and why; a spot reached on the judged run prints IMPROVED (re-record). DUGPIT-VALIDATE keeps the control rule (minCalls 1). DROWNED-SHORE minDanger 30 (the v1 floor) recorded by idkcraft-neuc.25: the water-death discs now reach Baritone (closest 31.1 on 3/3 judged runs; 9.9 on 3/3 before the fix). Re-measure after each v2 parity merge (neuc.29 et al.). MOAT-EXIT, HOME-PIT, HOME-ROOF, HOME-PIT-DEEP re-recorded by idkcraft-neuc.33 (worse of two full judged runs on its branch, image unchanged: 4/4 reached in both). JR-BUILD, JR-BUILD-FRESH, SHELTER-WATER re-recorded by idkcraft-neuc.46 (reached in both full runs: the batch run on master 7f282f19 and the judged run on its branch; DUGPIT-BARE stays unreached, reached 1 of 2 plus the rerun). DUGPIT-BARE re-recorded reached by idkcraft-neuc.34 (worse of two full judged runs on its branch, image unchanged: stuck 2/1, eps 1/1, calls 0/0, 58/50 s, buckets 2/2; DUGPIT-VALIDATE paged once in both).",
   "spots": {
     "EP1": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
     "CLUSTER": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
@@ -23,7 +23,7 @@
     "S6-PIT": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
     "S6-LEAD": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
     "DUGPIT-VALIDATE": { "reached": false, "maxStuck": 6, "maxEps": 3, "maxCalls": 1, "minCalls": 1 },
-    "DUGPIT-BARE": { "reached": false, "maxStuck": 4, "maxEps": 2, "maxCalls": 0, "blockedBy": "idkcraft-neuc.34", "why": "recover never offers water_up (off-centre wedge, facts walls 2->1 pit yes->no), sidestep/wait give up" },
+    "DUGPIT-BARE": { "reached": true, "maxStuck": 4, "maxEps": 2, "maxCalls": 0 },
     "ATL-SHAFT": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
     "JR-SLOPE": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0 },
     "DROWNED-SHORE": { "reached": true, "maxStuck": 2, "maxEps": 1, "maxCalls": 0, "minDanger": 30 },
