@@ -118,9 +118,17 @@ function goalToBaritone(goal, from) {
   // GoalSeeTable (craft.tableGoal, g0z.40) is a GoalNear whose isEnd also
   // wants sight of the table; unmapped it answered noPath and every table
   // walk on v2 failed (neuc.50: castlefetch stairs "can't reach the crafting
-  // table"). ponytail: Baritone has no sight test — the range rides along and
-  // the caller's tableUsable re-check + walk give-up cover a blind arrival.
-  if ((name === 'GoalNear' || name === 'GoalSeeTable') && typeof goal.x === 'number' && typeof goal.y === 'number' &&
+  // table"). Baritone has no sight test, so it walks to range 1 — beside or
+  // on top of the table, where the eye ray sees it; range 3 stopped behind
+  // the ditch rim (rig: table-unseeable, no pickaxe). An already-seeing
+  // in-range body never gets here (_satisfiedNow runs the real isEnd).
+  // ponytail: a table boxed on all five open faces still ends blind — the
+  // callers' walk give-up fails it honestly (equip's tableFor then places
+  // its own table on the next pick).
+  if (name === 'GoalSeeTable' && typeof goal.x === 'number' && typeof goal.y === 'number' && typeof goal.z === 'number') {
+    return `#near ${goal.x} ${goal.y} ${goal.z} 1`
+  }
+  if (name === 'GoalNear' && typeof goal.x === 'number' && typeof goal.y === 'number' &&
     typeof goal.z === 'number' && typeof goal.rangeSq === 'number' && goal.rangeSq >= 0) {
     return `#near ${goal.x} ${goal.y} ${goal.z} ${Math.floor(Math.sqrt(goal.rangeSq))}`
   }

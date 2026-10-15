@@ -136,13 +136,18 @@ function tableFor(bot, ctx) {
     homeBlock = farBlock
   }
   if (homeTable) {
-    if (dist3(bp, homeTable) <= TABLE_REACH) {
+    // Reach AND sight (neuc.50 rig): a ditch table in reach but out of
+    // sight resolved here and safeCraft threw table-out-of-sight every
+    // pick — no pickaxe for 35 min. The walk ends on a seeing cell
+    // (craft.tableGoal, the craftany/door shape). Deferred: craft is not a leaf.
+    const craftMod = require('./craft')
+    if (craftMod.tableUsable(bot, homeBlock, homeTable)) {
       st.walkWaits = 0
       return Promise.resolve({ block: homeBlock, pos: homeTable })
     }
     const key = `equip-table:${homeTable.x},${homeTable.y},${homeTable.z}`
     if (key !== ctx.lastGoalKey && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
-      issueGoal(bot, ctx, new goals.GoalNear(homeTable.x, homeTable.y, homeTable.z, 3), key, false)
+      issueGoal(bot, ctx, craftMod.tableGoal(bot, homeTable), key, false)
     }
     st.walkWaits = (st.walkWaits || 0) + 1
     // Walking that never arrives is a stall, not progress: fail so the

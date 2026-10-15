@@ -40,7 +40,7 @@ describe('goal translation (pathfinder -> Baritone)', () => {
   it('maps the table-sight goal to #near (neuc.50: every v2 table walk was noPath)', () => {
     const g = require('../src/behaviours/craft').tableGoal({ world: null }, { x: 260, y: 70, z: 352 })
     assert.equal(g.constructor.name, 'GoalSeeTable')
-    assert.equal(goalToBaritone(g), '#near 260 70 352 3')
+    assert.equal(goalToBaritone(g), '#near 260 70 352 1') // no sight test in Baritone: beside/on the table
   })
   it('maps GoalFollow to #near around the floored live target cell (neuc.28)', () => {
     const target = { position: new Vec3(10.25, 64, -4.5) }
