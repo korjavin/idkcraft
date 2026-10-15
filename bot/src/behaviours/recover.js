@@ -23,7 +23,7 @@ const danger = require('../danger')
 const doors = require('../doors')
 const { botPos, denyReason, logDeny, protectedReason } = require('./util')
 const worker = require('../worker')
-const { waterUpRun, countBuckets, wall2At, findCombo } = require('./waterup')
+const { waterUpRun, countBuckets, wall2At, findCombo, findComboStand } = require('./waterup')
 const castle = require('../castle') // yardRing only (pure, no requires of its own)
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
@@ -772,7 +772,8 @@ function recoverFacts(bot, ctx, state, target) {
     // the body (the bead's one-side pit gate — jsf.3's 2-side pit reads false
     // in 1-wide open shafts, the proven geometry). Scanned like digStep /
     // hopStep: decide-time only, never per tick.
-    combo: !!findCombo(bot),
+    // neuc.34: or from a floor stand a few walks away (the run walks there).
+    combo: !!findCombo(bot) || !!findComboStand(bot),
     wall2: wall2At(bot),
     freeSides: sides.free,
     shuffleOut: recoverShuffleBanned(ctx, 'sidestep'),

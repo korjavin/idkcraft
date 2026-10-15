@@ -524,6 +524,35 @@ describe('waterup run', () => {
     assert.equal(countOf(items, 'water_bucket'), 2)
   })
 
+  it('a wedge two cells off the combo column walks there, then climbs (neuc.34)', async () => {
+    // Rig DUGPIT on the v2 body: the wedge sat in the pit corner, three
+    // cells from the only column whose plateau reaches the ledge — the own
+    // cell has no combo, so water_up was never offered (mutation: drop
+    // findComboStand and the scan reads null / the run dies no-pour-site).
+    const solids = shaftWorld()
+    for (const x of [-1, -2]) for (const y of [61, 62]) solids.delete(key(x, y, 0))
+    const items = [{ name: 'water_bucket', count: 2 }]
+    const bot = worldBot(solids, items)
+    bot.opts.sites = [{ x: 0, y: 66, z: 0 }, { x: 1, y: 67, z: 0 }]
+    bot.entity.position = pos(-1.5, 61, 0.5)
+    assert.equal(waterup.findCombo(bot), null)
+    assert.deepEqual(waterup.findComboStand(bot), { x: 0.5, y: 61, z: 0.5 })
+    const out = await runTicks(bot, { recovery: {} }, 80)
+    assert.equal(out, 'done')
+    assert.equal(bot._waters.size, 0)
+    assert.equal(countOf(items, 'water_bucket'), 2)
+  })
+
+  it('no combo stand past the walk budget or across a wall', () => {
+    const solids = shaftWorld()
+    for (const x of [-1, -2, -3]) for (const y of [61, 62]) solids.delete(key(x, y, 0))
+    const bot = worldBot(solids, [{ name: 'water_bucket', count: 2 }])
+    bot.entity.position = pos(-2.5, 61, 0.5)
+    assert.ok(waterup.findComboStand(bot)) // 3 walks: in budget
+    solids.add(key(-1, 62, 0)) // a head-high block on the way: no stand through it
+    assert.equal(waterup.findComboStand(bot), null)
+  })
+
   it('uncenterable cell fails fast without pouring', async () => {
     const items = [{ name: 'water_bucket', count: 2 }]
     const bot = worldBot(shaftWorld(), items, { pinWalk: true })
