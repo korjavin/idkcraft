@@ -221,6 +221,10 @@ describe('stuck-baseline.json covers the corpus (idkcraft-6x7.4)', () => {
         assert.match(e.blockedBy || '', /^idkcraft-[a-z0-9.]+$/, `${k}: v2 gap without a blockedBy bead`)
         assert.ok(typeof e.why === 'string' && e.why.length > 0, `${k}: v2 gap without a why`)
       }
+      if (e.flaky !== undefined) { // neuc.47: a known flake names its bead and the measurement
+        assert.match(e.flaky, /^idkcraft-[a-z0-9.]+$/, `${k}: flaky without a bead`)
+        assert.ok(typeof e.flakyWhy === 'string' && e.flakyWhy.length > 0, `${k}: flaky without a flakyWhy`)
+      }
     }
   })
 
@@ -784,8 +788,8 @@ describe('shelter close budget (idkcraft-hoy7)', () => {
     assert.deepEqual(w.spawn, [100.5, 62, -405.5], 'prod water by the yrtx drowned death (103 62 -420)')
     assert.equal(w.scaffold, 0, 'empty kit: the pillar cannot run, dig-in closes')
     assert.equal(w.pickaxe, false)
-    assert.equal(w.secs, 45)
-    assert.equal(w.closeSecs, 35, 'swim + dig closes 18-24 s, past the 15 s stand budget')
+    assert.equal(w.secs, 60)
+    assert.equal(w.closeSecs, 45, 'swim + dig closes 18-24 s (v1), 26-32 s (v2, neuc.47), past the 15 s stand budget')
     assert.ok(Math.hypot(w.home[0] - w.spawn[0], w.home[2] - w.spawn[2]) > 96, 'home past the night walk range')
     assert.ok(Math.hypot(w.goal[0] - w.spawn[0], w.goal[2] - w.spawn[2]) > 128, 'guide out of entity range: the bot works alone')
     assert.deepEqual(baseline.spots['SHELTER-WATER'], { reached: true, maxStuck: 4, maxEps: 1, maxCalls: 0 },
@@ -1203,7 +1207,7 @@ describe('spot kit (idkcraft-6x7.10)', () => {
     }
   })
 
-  it('JR-BUILD is the seeded build-here spot (house BOM, 300 s window)', () => {
+  it('JR-BUILD is the seeded build-here spot (house BOM, 420 s window)', () => {
     // Seeded since idkcraft-6x7.10 (was from-scratch, 496-671 s of a 900 s
     // window, ±90 s of gather noise): the kit skips only the gather — 107
     // acacia planks is needPlanks (92 walls/roof/partition + 5 floor cells,
@@ -1215,7 +1219,7 @@ describe('spot kit (idkcraft-6x7.10)', () => {
     const b = byName['JR-BUILD']
     assert.ok(b, 'JR-BUILD in the corpus')
     assert.deepEqual(b.kit, ['acacia_planks 107', 'crafting_table 1', 'acacia_door 1'])
-    assert.equal(b.secs, 300)
+    assert.equal(b.secs, 420) // neuc.47: v2 completes 271-275 s, v1 ~250 s
     assert.equal(b.bead, 'idkcraft-d7i')
     const e = baseline.spots['JR-BUILD']
     assert.ok(e, 'JR-BUILD has a baseline entry (a spot without one fails the gate)')
