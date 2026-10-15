@@ -185,7 +185,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   (`bot/src/bridge/*`, `baritone/*`, or a `BOT_BODY=baritone` branch in `bot/src`) quotes ONE
   throughput verdict line it moved or held, before/after in the PR body: castle cells per 90 min
   (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh 90`), house done-seconds + fail top-3
-  (`sh bot/tools/work-rig.sh 20 v2`), or deaths per night (`castle-rig.sh --night`). No new
+  (`sh bot/tools/work-rig.sh 20`), or deaths per night (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh --night`). No new
   `failed:<reason>` string without a verdict line it moves. `REPLAY_BODY=baritone` stuck-run is a
   regression check only (not worse), never the reason to merge; v1 `stuck-run.sh` is unchanged and
   frozen (v1 is phased out). Stall-point beads (neuc.29/.31/.48/.49, umou, sfmk) are deferred
