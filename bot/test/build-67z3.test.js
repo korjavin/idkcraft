@@ -66,14 +66,14 @@ function logged(fn) {
 }
 
 describe('67z3: every build failure logs its reason', () => {
-  it('failed:no-planks writes build failed:no-planks', () => {
+  it('failed:no-table writes build failed:no-table', () => {
     const world = makeWorld()
     const bot = mockBot(world, { items: [] })
     // v1 home on open ground: next cell is the table, pack is empty.
     const ctx = { home: { site: { x: 0, y: 64, z: 0 } } }
     const lines = logged(() => build(bot, ctx))
-    assert.equal(ctx.stepStatus, 'failed:no-planks')
-    assert.ok(lines.some((l) => l === 'build failed:no-planks'), lines.join('\n'))
+    assert.equal(ctx.stepStatus, 'failed:no-table')
+    assert.ok(lines.some((l) => l === 'build failed:no-table'), lines.join('\n'))
   })
 
   it('failed:no-site writes build failed:no-site', () => {
@@ -143,6 +143,15 @@ describe('67z3: a failed build holds past facts drift, then retries', () => {
     assert.equal(goal.stepWhy('build', facts(), bot(), ctx, 'new text'), 'build holds after failure')
   })
 
+  it('neuc.43: no-table / no-door hold like no-planks', () => {
+    for (const status of ['failed:no-table', 'failed:no-door']) {
+      const once = { stepFail: { build: { status, text: 't', pos: null, at: Date.now(), sig: 's', n: 1 } } }
+      assert.equal(F()(facts(), bot(), once), true, status)
+      const ctx = { stepFail: { build: { status, text: 'stale', pos: null, at: Date.now(), sig: 's', n: 2 } } }
+      assert.equal(F()(facts(), bot(), ctx), false, status)
+    }
+  })
+
   it('structural verdicts pace from the first failure', () => {
     for (const status of ['failed:skipped-cells', 'failed:cannot-reach-site']) {
       const ctx = { stepFail: { build: { status, text: 't', pos: null, at: Date.now(), sig: 's', n: 1 } } }
@@ -204,11 +213,11 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
     await quietAsync(async () => {
       const world = makeWorld()
       const bot = decideBot(world, [{ name: 'oak_planks', count: 5 }])
-      const ctx = { step: 'build', stepStatus: 'failed:no-planks', home: { site: { x: 0, y: 64, z: 0 } } }
+      const ctx = { step: 'build', stepStatus: 'failed:no-table', home: { site: { x: 0, y: 64, z: 0 } } }
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 1)
       ctx.step = 'build'
-      ctx.stepStatus = 'failed:no-planks'
+      ctx.stepStatus = 'failed:no-table'
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 2)
       // Held now: homeless-shaped facts keep every other gate open.
@@ -220,12 +229,12 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
     await quietAsync(async () => {
       const world = makeWorld()
       const bot = decideBot(world, [{ name: 'oak_planks', count: 5 }])
-      const ctx = { step: 'build', stepStatus: 'failed:no-planks', home: { site: { x: 0, y: 64, z: 0 } } }
+      const ctx = { step: 'build', stepStatus: 'failed:no-table', home: { site: { x: 0, y: 64, z: 0 } } }
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 1)
       world.set(0 + 4, 64, 0 + 1, 'crafting_table') // the v1 table cell lands
       ctx.step = 'build'
-      ctx.stepStatus = 'failed:no-planks'
+      ctx.stepStatus = 'failed:no-table'
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 1, 'progress resets the count')
     })
@@ -236,12 +245,12 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
       const world = makeWorld()
       const items = [{ name: 'oak_planks', count: 5 }]
       const bot = decideBot(world, items)
-      const ctx = { step: 'build', stepStatus: 'failed:no-planks', home: { site: { x: 0, y: 64, z: 0 } } }
+      const ctx = { step: 'build', stepStatus: 'failed:no-table', home: { site: { x: 0, y: 64, z: 0 } } }
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 1)
       items.push({ name: 'oak_door', count: 1 }) // craft delivered
       ctx.step = 'build'
-      ctx.stepStatus = 'failed:no-planks'
+      ctx.stepStatus = 'failed:no-table'
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 1, 'new resources reset the count')
     })
@@ -260,11 +269,11 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
         { name: 'cobblestone', count: 64 },
       ]
       const bot = decideBot(makeWorld(), items)
-      const ctx = { step: 'build', stepStatus: 'failed:no-planks' }
+      const ctx = { step: 'build', stepStatus: 'failed:no-table' }
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 1)
       ctx.step = 'build'
-      ctx.stepStatus = 'failed:no-planks'
+      ctx.stepStatus = 'failed:no-table'
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 2)
       // Held now: steady rest replays.
@@ -282,7 +291,7 @@ describe('67z3: decide counts consecutive same-cause failures, progress re-arms'
       assert.equal((await goal.decide(bot, ctx)).action, 'build', 'expiry forces a fresh pick')
       assert.equal(ctx.stepFail.build.retryFired, true, 'force is one-shot')
       ctx.step = 'build'
-      ctx.stepStatus = 'failed:no-planks'
+      ctx.stepStatus = 'failed:no-table'
       await goal.decide(bot, ctx)
       assert.equal(nOf(ctx), 3, 'kept counter counts on')
       assert.equal(goal.MENU.build.feasible(goal.goalFacts(bot, ctx), bot, ctx), false, 'no second free pick')

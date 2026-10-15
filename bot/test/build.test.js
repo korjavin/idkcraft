@@ -315,15 +315,31 @@ describe('rw4.4 roof above the door avoids the door reference', () => {
 })
 
 describe('rw4.4 (f) missing material fails without walking', () => {
-  it('failed:no-planks, no goal, no place call', () => {
+  it('failed:no-table (first cell), no goal, no place call', () => {
     const world = makeWorld()
     const bot = mockBot(world, { items: [] })
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
     build(bot, ctx, null, null)
-    assert.equal(ctx.stepStatus, 'failed:no-planks')
+    assert.equal(ctx.stepStatus, 'failed:no-table')
     assert.equal(bot.calls.goals.length, 0)
     assert.equal(bot.calls.places.length, 0)
   })
+})
+
+describe('neuc.43 missing table/door names itself', () => {
+  for (const kind of ['table', 'door']) {
+    it(`failed:no-${kind} when the ${kind} cell has no item`, () => {
+      const world = makeWorld()
+      const bot = mockBot(world, { items: [] })
+      const home = goal.siteFor(bot, pos(0, 64, 0))
+      const plan = build.blueprintFor(home)
+      const idx = plan.findIndex((c) => c.kind === kind)
+      assert.ok(idx >= 0)
+      const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: plan.map((_, i) => i).filter((i) => i !== idx), buildLastProgressLog: Date.now() }
+      build(bot, ctx, null, null)
+      assert.equal(ctx.stepStatus, `failed:no-${kind}`)
+    })
+  }
 })
 
 describe('rw4.4 (g) three refusals skip the cell with one log line', () => {
