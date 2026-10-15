@@ -79,6 +79,13 @@ const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
 const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
 const NOGAIN_STRIKES = 8 // digs without the cobble count growing (neuc.51: v2 digs one a second, the pickup trails 1-2 digs; 5 failed live legs)
 const DIG_TIMEOUT_MS = 10000
+// Quarry truth (vmzq.38; neuc.53 rig evidence): granite/diorite/andesite/
+// tuff/calcite/deepslate land as often as cobble and the castle lays them
+// (isStone). The v2 mine must target the whole family: with only
+// stone/cobblestone Baritone tunnels mixed rock whose drops neither side
+// counts, and every leg stalls at 60 s with +a few uncounted blocks.
+const STONE_FAMILY = Array.isArray(blueprint.STONE_ITEMS) && blueprint.STONE_ITEMS.length > 0
+  ? [...blueprint.STONE_ITEMS] : ['stone', 'cobblestone']
 const CHEST_REACH = stockpileMod.INTERACT_REACH
 const CHEST_WAITS = 30 // ticks without closing in on the chest
 const CHEST_TIMEOUT_MS = 15000
@@ -1320,7 +1327,7 @@ function digTick(bot, ctx, f, d) {
     // gates on lastGoalKey !== 'idle' before it ever reads the goal, so a
     // mine started from a parked tick would survive an owner stop.
     ctx.lastGoalKey = 'mine:castlefetch'
-    bot.mine(['stone', 'cobblestone'], need, { radius: DIG_RADIUS, forbid, guard }).then(
+    bot.mine(STONE_FAMILY, need, { radius: DIG_RADIUS, forbid, guard }).then(
       () => { settleMine(); if (!settled()) finish(bot, ctx, 'done') },
       (err) => {
         settleMine()

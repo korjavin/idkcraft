@@ -53,7 +53,7 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     const d = { kind: 'stone', word: 'batch', short: 8 }
     castlefetch.digTick(bot, ctx, ctx.castleFetch, d)
     assert.equal(bot.calls.mine.length, 1, 'exactly one mine call')
-    assert.deepEqual(bot.calls.mine[0].names, ['stone', 'cobblestone'])
+    assert.deepEqual(bot.calls.mine[0].names, require('../src/castle').STONE_ITEMS)
     assert.equal(bot.calls.mine[0].count, 8)
     assert.equal(bot.calls.mine[0].opts.radius, 32, 'the pickStone search radius')
     assert.equal(typeof bot.calls.mine[0].opts.forbid, 'function')
