@@ -338,11 +338,11 @@ function movementsFor(owner, bot, ctx, extra) {
     try {
       if (v2Guard && Array.isArray(mov.exclusionAreasBreak) && !mov.exclusionAreasBreak.includes(v2Guard)) mov.exclusionAreasBreak.push(v2Guard)
       scaffoldCobble(bot, mov, !(keepStone && otherScaffold(bot, mov)))
-      // Owns the flag both ways: an escape episode that leaves it true
-      // would keep Baritone pillar rights on every later goal (the
-      // Movements object persists across claims). v1 never reads true —
-      // nothing there sets it — so the reset is a no-op there.
-      if (typeof mov.allow1by1towers === 'boolean') mov.allow1by1towers = escape
+      // neuc.52: force pillar rights only while escaping. The Movements
+      // default is true (mineflayer-pathfinder) and nothing else in src
+      // writes this flag, so any other value is left alone — resetting to
+      // false here broke v1 1x1 towers and v2 allowPlace off-episode.
+      if (escape && typeof mov.allow1by1towers === 'boolean') mov.allow1by1towers = true
       if (typeof mov.canDig === 'boolean') mov.canDig = canDig
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour

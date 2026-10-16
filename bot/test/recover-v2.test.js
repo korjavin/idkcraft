@@ -192,6 +192,32 @@ describe('neuc.52 v2 escape', () => {
     assert.equal(ctx.recovery.action, 'call_player', 'straight to the last rung')
   })
 
+  it('tries at most MAX_TRIES candidates, then pages (cap pinned)', async () => {
+    process.env.BOT_BODY = 'baritone'
+    const bot = doorBot()
+    bot.players = { Owner: { username: 'Owner', entity: { position: pos(50, 64, 0) } } }
+    // Six candidates on offer: only three goals may go out (idx 0 is live,
+    // two re-issues), the fourth noPath pages instead of issuing idx 3.
+    const far = (x, z) => ({ x, y: 64, z })
+    const ctx = doorCtx('door-cap')
+    ctx.recovery = {
+      action: 'escape', source: 'fsm', model: null, status: 'running', attempts: 1,
+      st: {
+        candidates: [far(10, 0), far(-10, 5), far(10, 5), far(-10, -5), far(10, -5), far(20, 0)],
+        idx: 0, target: far(10, 0), anchor: { x: 2.5, y: 64, z: 0.5 },
+      },
+    }
+    const issued = []
+    bot.pathfinder.setGoal = (g) => { issued.push(g ? { x: g.x, y: g.y, z: g.z } : null); bot.pathfinder.goal = g }
+    for (let i = 0; i < 3; i++) {
+      ctx.lastPathStatus = 'noPath'
+      recover.run(bot, ctx)
+      assert.equal(ctx.recovery.status, 'running')
+    }
+    assert.equal(issued.length, 2, 'idx 1 and 2 go out, never idx 3')
+    assert.equal(ctx.recovery.action, 'call_player', 'the fourth noPath pages')
+  })
+
   it('noPath twice tries the next candidate, then hands to call_player', async () => {
     process.env.BOT_BODY = 'baritone'
     const bot = doorBot()
@@ -263,11 +289,12 @@ describe('neuc.52 v2 escape', () => {
     body.movementsFor('recover', { pathfinder: {} }, ctx2)
     assert.equal(ctx2.movements.canDig, true)
     assert.equal(ctx2.movements.allow1by1towers, true)
-    // After the episode the flag resets: pillar rights must not leak onto
-    // later goals (castle-rig throughput gap, send-back 2).
+    // After the episode the flag is left alone: the Movements default is
+    // true and nothing else in src writes it, so pillar rights stand as
+    // the default off-episode (resetting to false broke v1 1x1 towers).
     ctx2.recovery = null
     body.movementsFor('work', { pathfinder: {} }, ctx2)
-    assert.equal(ctx2.movements.allow1by1towers, false, 'no leak past the episode')
+    assert.equal(ctx2.movements.allow1by1towers, true, 'default stands past the episode')
     // v1: no escape anywhere, flags stand as computed.
     delete process.env.BOT_BODY
     const ctx3 = { recovery: { action: 'pillar_up' }, movements: mov() }
