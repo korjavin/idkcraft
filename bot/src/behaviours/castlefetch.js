@@ -214,8 +214,52 @@ function demand(bot, ctx) {
   const cw = ctx && ctx.castleWord
   const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
   const target = Math.min(FETCH[kind], left)
+  // neuc.58: a v2 stone leg hauls the forecast, not FETCH — the blueprint
+  // remainder capped by pack room and what the held picks can still dig
+  // (stone by hand drops nothing). Pickless keeps the v1 target: equip
+  // rearms first (digTick, goal needsDigNoPick).
+  if (kind === 'stone' && process.env.BOT_BODY === 'baritone') {
+    const picks = pickBudget(bot)
+    if (picks > 0) {
+      const forecast = left + castleMod.reserveOf(kind) - castleMod.held(bot, kind)
+      return { kind, word, short: Math.max(0, Math.min(forecast, stoneRoom(bot), picks)) }
+    }
+  }
   // Raw items: below the reserve the reserve refills first (never laid).
   return { kind, word, short: Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) }
+}
+
+// neuc.58: uses left on the held pickaxes (bridge items carry
+// maxDurability/durabilityUsed; missing fields read as a fresh pick).
+const PICK_USES = { wooden_pickaxe: 59, stone_pickaxe: 131, golden_pickaxe: 32, iron_pickaxe: 250, diamond_pickaxe: 1561, netherite_pickaxe: 2031 }
+function pickBudget(bot) {
+  let n = 0
+  try {
+    for (const it of bot.inventory.items() || []) {
+      if (!it || typeof it.name !== 'string' || !it.name.endsWith('_pickaxe')) continue
+      const max = typeof it.maxDurability === 'number' && it.maxDurability > 0 ? it.maxDurability : (PICK_USES[it.name] || 59)
+      n += Math.max(0, max - (typeof it.durabilityUsed === 'number' ? it.durabilityUsed : 0))
+    }
+  } catch (_) { return 0 }
+  return n
+}
+
+// neuc.58: stone the pack still takes — empty slots plus partial stone
+// stacks, minus ROOM_KEEP slots for drops/kit (Baritone keeps mining into
+// a full pack: the count never grows).
+const ROOM_KEEP = 2
+function stoneRoom(bot) {
+  try {
+    const items = bot.inventory.items() || []
+    const empty = typeof bot.inventory.emptySlotCount === 'function' ? bot.inventory.emptySlotCount() : 36 - items.length
+    let head = 0
+    for (const it of items) {
+      if (!it || !blueprint.isStone(it.name)) continue
+      const cap = typeof it.stackSize === 'number' && it.stackSize > 0 ? it.stackSize : 64
+      head += Math.max(0, cap - (typeof it.count === 'number' ? it.count : 1))
+    }
+    return Math.max(0, (empty - ROOM_KEEP) * 64 + head)
+  } catch (_) { return 0 }
 }
 
 function bodyPos(bot) {
@@ -280,7 +324,7 @@ function finish(bot, ctx, status) {
     } catch (_) { /* delta best-effort */ }
     let wall = '?'
     try { wall = (typeof f.t0 === 'number' ? Math.round((Date.now() - f.t0) / 1000) + 's' : '?') } catch (_) { /* wall best-effort */ }
-    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${f.spend.dig | 0} walk=${f.spend.walk | 0} other=${f.spend.other | 0} starts=${f.starts | 0} dug=${f.dug | 0} blocks=${delta} wall=${wall}`) } catch (_) { /* log best-effort */ }
+    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${f.spend.dig | 0} walk=${f.spend.walk | 0} other=${f.spend.other | 0} starts=${f.starts | 0} dug=${f.dug | 0} blocks=${delta} target=${typeof f.haul === 'number' ? f.haul : '?'} wall=${wall}`) } catch (_) { /* log best-effort */ }
   }
   if (status !== 'done') {
     try { console.log(`castlefetch ${status}`) } catch (_) { /* log best-effort */ }
@@ -1440,7 +1484,7 @@ function castlefetch(bot, ctx, target, state) {
   if (!d || d.short <= 0) { finish(bot, ctx, 'done'); return }
   let f = ctx.castleFetch
   if (!f || f.kind !== d.kind) {
-    f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: blocksOnHand(bot) }
+    f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: blocksOnHand(bot), haul: d.short }
     try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
   }
   // Batch yield (idkcraft-vmzq.20): a leg that reached a layable batch but
@@ -1450,7 +1494,20 @@ function castlefetch(bot, ctx, target, state) {
   // no hold parks the re-pick after the castle drains. Below a batch the
   // leg keeps fetching — yielding to a castle that cannot lay would flip
   // straight back. 'some'/'none'/'blocked' never yield by construction.
-  if (d.word === 'batch' && typeof f.t0 === 'number' && Date.now() - f.t0 > LEG_MAX_MS) {
+  // neuc.58: on v2 the clock runs from the last gain, not the leg start —
+  // a mine still filling the pack goes on to its forecast target; a leg
+  // with no gain for LEG_MAX_MS yields as before. v1 untouched.
+  let since = f.t0
+  if (process.env.BOT_BODY === 'baritone') {
+    const now = blocksOnHand(bot)
+    const prev = typeof f.lastBlocks === 'number' ? f.lastBlocks : f.blocks0
+    if (typeof now === 'number') {
+      if (typeof prev === 'number' && now > prev) f.lastGainAt = Date.now()
+      f.lastBlocks = now
+    }
+    if (typeof f.lastGainAt === 'number') since = f.lastGainAt
+  }
+  if (d.word === 'batch' && typeof since === 'number' && Date.now() - since > LEG_MAX_MS) {
     try { console.log(`castlefetch ${d.kind}: batch ready, yielding`) } catch (_) { /* log best-effort */ }
     finish(bot, ctx, 'done')
     return

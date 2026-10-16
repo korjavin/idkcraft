@@ -245,3 +245,79 @@ describe('vmzq.20 table footing: refused cells are skipped, water takes no place
     })
   })
 })
+
+// neuc.58: on v2 (BOT_BODY=baritone) a stone leg's target is the forecast
+// min(blueprint remainder + reserve - held, pack room, pick budget), not
+// FETCH=64; the LEG_MAX_MS yield waits for LEG_MAX_MS without a gain.
+describe('neuc.58 v2 stone haul = forecast', () => {
+  async function v2(fn) {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try { return await quiet(fn) } finally { if (prev === undefined) delete process.env.BOT_BODY; else process.env.BOT_BODY = prev }
+  }
+  const pick = (name, max, used) => ({ name, count: 1, maxDurability: max, durabilityUsed: used })
+  const fill = (n) => Array.from({ length: n }, (_, i) => ({ name: `junk${i}`, count: 1 }))
+  const short = (items) => {
+    const bot = makeBot({ items })
+    const ctx = { castle: castleState(), work: true }
+    const d = fetch.demand(bot, ctx)
+    return { d, left: ctx.castleWord.left }
+  }
+
+  it('pick-bound: one stone pick with 31 uses left caps the leg at 31', async () => {
+    await v2(async () => {
+      const { d, left } = short([pick('stone_pickaxe', 131, 100)])
+      assert.ok(left + 24 > 31)
+      assert.equal(d.kind, 'stone')
+      assert.equal(d.short, 31)
+    })
+  })
+
+  it('room-bound: 34 slots used (2 kept) leave only the partial stone headroom', async () => {
+    await v2(async () => {
+      const items = [pick('diamond_pickaxe', 1561, 0), { name: 'cobblestone', count: 40 }, ...fill(32)]
+      const { d, left } = short(items)
+      assert.ok(left + 24 - 40 > 24)
+      assert.equal(d.short, 24) // 2 empty minus 2 kept; 64-40 headroom
+    })
+  })
+
+  it('remainder-bound: big picks and an empty pack ask for exactly the remainder + reserve', async () => {
+    await v2(async () => {
+      const items = [pick('diamond_pickaxe', 1561, 0), pick('netherite_pickaxe', 2031, 0)]
+      const { d, left } = short(items)
+      assert.ok(left + 24 < 32 * 64, `left=${left} must fit the pack for this case`)
+      assert.equal(d.short, left + 24)
+      assert.ok(d.short > fetch.FETCH.stone + 24, 'bigger than the v1 FETCH haul')
+    })
+  })
+
+  it('missing durability fields read as a fresh pick (131 stone)', async () => {
+    await v2(async () => {
+      assert.equal(short([{ name: 'stone_pickaxe', count: 1 }]).d.short, 131)
+    })
+  })
+
+  it('v1 (BOT_BODY unset) keeps FETCH: 64 + reserve', async () => {
+    await quiet(async () => {
+      assert.equal(process.env.BOT_BODY, undefined)
+      assert.equal(short([pick('diamond_pickaxe', 1561, 0)]).d.short, 64 + 24)
+    })
+  })
+
+  it('an expired batch leg still gaining keeps going; one with no gain for LEG_MAX_MS yields', async () => {
+    await v2(async () => {
+      const items = [{ name: 'cobblestone', count: 40 }, pick('stone_pickaxe', 131, 0)]
+      const bot = makeBot({ items })
+      const t0 = Date.now() - LEG_MAX_MS - 1
+      const ctx = { castle: castleState(), work: true, step: 'castlefetch', stepStatus: 'running', castleFetch: { kind: 'stone', t0, blocks0: 30, skips: 0 } }
+      assert.equal(castleMod.menuFact(bot, ctx), 'stone-batch')
+      fetch(bot, ctx) // 40 > 30: a gain this leg, the clock restarts
+      assert.equal(ctx.stepStatus, 'running')
+      assert.ok(ctx.castleFetch.lastGainAt >= t0 + LEG_MAX_MS)
+      ctx.castleFetch.lastGainAt = Date.now() - LEG_MAX_MS - 1 // no gain since
+      fetch(bot, ctx)
+      assert.equal(ctx.stepStatus, 'done')
+    })
+  })
+})
