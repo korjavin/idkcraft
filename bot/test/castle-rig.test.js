@@ -346,7 +346,7 @@ describe('castle-replay.js verdict contract', () => {
   it('prints the one-line verdict shape and names its env seams', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8')
     assert.ok(src.includes('castle ${done}/${total} in ${MINS} min, flips='), 'verdict line shape drifted')
-    for (const seam of ['CASTLE_PORT', 'CASTLE_CONTAINER', 'CASTLE_TAG', 'CASTLE_MINS', 'CASTLE_PAD', 'CASTLE_PADSPOT', 'CASTLE_OUT', 'CASTLE_BLOCKED']) {
+    for (const seam of ['CASTLE_PORT', 'CASTLE_CONTAINER', 'CASTLE_TAG', 'CASTLE_MINS', 'CASTLE_PAD', 'CASTLE_PADSPOT', 'CASTLE_OUT', 'CASTLE_BLOCKED', 'CASTLE_DIAG']) {
       assert.ok(src.includes(seam), `missing env seam ${seam}`)
     }
     // Usernames cap at 16 chars (stuck-replay precedent): the length guard
@@ -356,6 +356,8 @@ describe('castle-replay.js verdict contract', () => {
     // log + OUT record, or the one-line acceptance has no rig evidence.
     assert.ok(src.includes('CASTLE-RIG say: '), 'missing holes say-capture')
     assert.ok(src.includes('said: seen.said'), 'missing said record field')
+    assert.ok(src.includes('diag: DIAG'), 'DIAG not passed to componentLine')
+    assert.ok(fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-rig.sh'), 'utf8').includes('export CASTLE_DIAG='), 'wrapper does not export CASTLE_DIAG')
   })
 
   it('counts castle<->castlefetch flips in both directions (one-char join bug)', () => {
@@ -980,6 +982,12 @@ describe('castle rig speed (idkcraft-neuc.60)', () => {
     assert.match(componentLine('lay', { laid: 100, gameMin: 10, wallMin: 10, legs: [], tick: '1', baseline: { rate: 20 } }), /-50%, OUTSIDE ±15%/)
   })
 
+  it('diag window prints the rate with the DIAG tag and no judge (6x7.26)', () => {
+    const l = componentLine('lay', { laid: 72, gameMin: 3, wallMin: 3, tick: '1', baseline: { rate: 28 }, diag: true })
+    assert.equal(l, 'lay-rate 24.0/game-min (DIAG, no baseline verdict): laid=72 in 3.0 game-min, tick=1')
+    assert.doesNotMatch(componentLine('mine', { laid: 0, gameMin: 3, wallMin: 3, series: [], tick: '1', baseline: { rate: 5 }, diag: true }), /±15%/)
+  })
+
   it('mine rate = stone banked per game minute of castlefetch, from the first gain', () => {
     const series = [
       { t: 0, step: null, stone: 0 },
@@ -997,7 +1005,7 @@ describe('castle rig speed (idkcraft-neuc.60)', () => {
 
   it('validates CASTLE_COMPONENT / CASTLE_TICK_RATE before touching the world', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-comp-'))
-    const run = (env) => spawnSync('sh', [sh], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), RIG_PLANNER: 'stub', ...env } })
+    const run = (env, args = []) => spawnSync('sh', [sh, ...args], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), RIG_PLANNER: 'stub', ...env } })
     const bad = run({ CASTLE_COMPONENT: 'fly' })
     assert.equal(bad.status, 2)
     assert.match(bad.stdout, /CASTLE_COMPONENT: want ''\|mine\|lay/)
@@ -1010,6 +1018,10 @@ describe('castle rig speed (idkcraft-neuc.60)', () => {
     const ok = run({ CASTLE_COMPONENT: 'mine', CASTLE_TICK_RATE: '60' })
     assert.match(ok.stdout, /neither body follows a server above 20 tps/)
     assert.match(ok.stdout, /no START.sh/)
+    assert.match(run({ CASTLE_COMPONENT: 'lay' }, ['3']).stdout, /DIAG leg: 3 game-min lay component — diagnosis only, NOT a gate verdict/)
+    assert.doesNotMatch(run({ CASTLE_COMPONENT: 'lay' }, ['10']).stdout, /DIAG/)
+    assert.doesNotMatch(run({ CASTLE_COMPONENT: 'lay' }).stdout, /DIAG/)
+    assert.doesNotMatch(run({}, ['3']).stdout, /DIAG/)
   })
 
   it('component-baseline.json: v2 lay + mine, two runs each within ±15% of the rate', () => {

@@ -191,6 +191,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   (`bot/src/bridge/*`, `baritone/*`, or a `BOT_BODY=baritone` branch in `bot/src`) quotes in the PR
   body the 10-game-min component rig verdict lines, before/after on equal settings, vs
   `bot/tools/component-baseline.json`: `CASTLE_COMPONENT=lay` and `CASTLE_COMPONENT=mine`
+  (gate legs are the 10-game-min lines only; a shorter DIAG leg's line is not a verdict)
   (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh`, see `bot/tools/README.md` "Rig speed");
   OUTSIDE ±15% downward = regression. No `/tick rate` castle pair (>20 does not speed up v2).
   The full 90-min castle rig (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh 90`) is batched like

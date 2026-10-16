@@ -93,7 +93,8 @@
 #   min; lay = CASTLE_KIT=lay, a full-stock kit: cells laid per game
 #   minute; mine = CASTLE_KIT=pick, 3 stone picks and nothing to lay:
 #   blocks banked per game minute inside stone fetch legs; one extra
-#   `<kind>-rate` verdict line judged against component-baseline.json),
+#   `<kind>-rate` verdict line judged against component-baseline.json;
+#   [mins] < 10 is a DIAG leg: loud start line, rate printed unjudged),
 #   RIG_PLANNER (jev|laya|llm|stub, default jev — the real JEV; llm = the
 #   vhlb.2 LLM planner, key ANTHROPIC_API_KEY or stash
 #   secrets/minecraft/anthropic-api-key; the jev key comes from
@@ -177,6 +178,12 @@ _mdef=6; [ -n "$COMPONENT" ] && _mdef=10
 MINS="${1:-${CASTLE_MINS:-$_mdef}}"
 case "$MINS" in ''|*[!0-9]*) echo "mins: want a positive integer, got '$MINS'"; exit 2 ;; esac
 [ "$MINS" -ge 1 ] || { echo "mins: want a positive integer, got '$MINS'"; exit 2; }
+# 6x7.26: a component window under the 10-min baseline window is a DIAG leg
+# (the replay prints the rate unjudged); the 10-min default is the gate.
+DIAG=; if [ -n "$COMPONENT" ] && [ "$MINS" -lt 10 ]; then
+  DIAG=1; echo "DIAG leg: $MINS game-min $COMPONENT component — diagnosis only, NOT a gate verdict"
+fi
+export CASTLE_DIAG="$DIAG"
 KIT="${CASTLE_KIT:-empty}"
 case "$KIT" in empty|seeded|junk|valuables|stairs|blast|lay|pick) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs|blast|lay|pick, got '$KIT'"; exit 2 ;; esac
 SEED="${CASTLE_SEED:-}"

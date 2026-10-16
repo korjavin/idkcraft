@@ -75,6 +75,7 @@ const TAG = process.env.CASTLE_TAG || `c${Math.floor(Math.random() * 1000)}`
 const GUIDE = `CastleGuide${TAG}`
 const FOLLOWER = `CastleBuild${TAG}`
 const MINS = Math.max(1, parseInt(process.env.CASTLE_MINS || '30', 10) || 30)
+const DIAG = process.env.CASTLE_DIAG === '1' // 6x7.26: set by castle-rig.sh for a component under 10 min
 const PAD = String(process.env.CASTLE_PAD || '300,300').split(',').map(Number)
 const OUT = process.env.CASTLE_OUT || `${__dirname}/last-castle.json`
 const LOGFILE = process.env.CASTLE_LOG || `/tmp/castle-rig-${TAG}.log`
@@ -760,8 +761,9 @@ function bankedOf(series) {
 // in the pack per game minute of castlefetch time, counted from the sample
 // before the first gain (the walk to the first stone is first=, not rate).
 // series = the 15 s samples ({ t, step, stone, done }); wall seconds scale
-// by the measured game/wall ratio. baseline = { rate } or null.
-function componentLine(kind, { laid, gameMin, wallMin, series, tick, baseline }) {
+// by the measured game/wall ratio. baseline = { rate } or null. diag (6x7.26:
+// a window under the baseline's 10 game-min) never judges and tags the line.
+function componentLine(kind, { laid, gameMin, wallMin, series, tick, baseline, diag }) {
   const ratio = wallMin > 0 ? gameMin / wallMin : 1
   let rate = null
   let body
@@ -775,11 +777,11 @@ function componentLine(kind, { laid, gameMin, wallMin, series, tick, baseline })
     body = `banked=+${banked} in ${spanMin.toFixed(1)} game-min of castlefetch, first=${firstS == null ? '-' : `${Math.round(firstS * ratio)}s`}, window=${gameMin.toFixed(1)} game-min`
   }
   let judge = ''
-  if (rate != null && baseline && baseline.rate > 0) {
+  if (!diag && rate != null && baseline && baseline.rate > 0) {
     const pct = Math.round((rate / baseline.rate - 1) * 100)
     judge = `, baseline ${baseline.rate} -> ${rate.toFixed(1)} (${pct >= 0 ? '+' : ''}${pct}%, ${Math.abs(pct) <= 15 ? 'within' : 'OUTSIDE'} ±15%)`
   }
-  return `${kind}-rate ${rate == null ? '-' : rate.toFixed(1)}/game-min: ${body}, tick=${tick}${judge}`
+  return `${kind}-rate ${rate == null ? '-' : rate.toFixed(1)}/game-min${diag ? ' (DIAG, no baseline verdict)' : ''}: ${body}, tick=${tick}${judge}`
 }
 
 // neuc.62: fetch verdict, pure (unit-tested). events = classify's leg events
@@ -2070,7 +2072,7 @@ async function main() {
   if (COMPONENT) {
     let base = null
     try { base = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'][COMPONENT] || null } catch (_) { base = null }
-    compLine = componentLine(COMPONENT, { laid, gameMin, wallMin, series, tick: TICKRATE, baseline: base })
+    compLine = componentLine(COMPONENT, { laid, gameMin, wallMin, series, tick: TICKRATE, baseline: base, diag: DIAG })
   }
   let mineBase = null
   try { mineBase = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'].mine || null } catch (_) { mineBase = null }
@@ -2085,7 +2087,7 @@ async function main() {
     nights: night ? night.nights : undefined,
     seed: SEED || undefined, residence: resNights ? resNights.nights : undefined,
     seedVersion: SEED ? SEED_VERSION : undefined, upgrade: upgrade || undefined,
-    gameMin, wallMin, component: compLine || undefined, fetch: fetchTxt,
+    gameMin, wallMin, component: compLine || undefined, diag: DIAG || undefined, fetch: fetchTxt,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)

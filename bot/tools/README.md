@@ -759,6 +759,17 @@ lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.2 -> 24.2
 mine-rate 15.5/game-min: banked=+120 in 7.7 game-min of castlefetch, first=135s, window=10.0 game-min, tick=1, baseline 15.8 -> 15.5 (-2%, within ±15%)
 ```
 
+**Diagnosis leg (idkcraft-6x7.26).** A component with `[mins]` under 10
+is a DIAG leg: `CASTLE_COMPONENT=lay ... sh bot/tools/castle-rig.sh 3`
+prints `DIAG leg: 3 game-min lay component — diagnosis only, NOT a gate
+verdict` at start and a component line `lay-rate 23.9/game-min (DIAG, no
+baseline verdict): ...` with no baseline or ±15% judge (the record carries
+`diag: true`; laid, series and `first=` are unchanged). Recommended: lay 3,
+mine 5 (`first=` is a ~135 s walk that is not in the rate, so a 3-min mine
+window leaves under a minute of mining). Wall cost ~7 min vs ~14 for the
+gate leg. A DIAG line is never quoted in a PR body as before/after; only
+the 10-game-min lines are gate legs.
+
 ### Fetch line (idkcraft-neuc.62)
 
 Every castle-rig run (the 90-min castle and the component rigs) also prints
