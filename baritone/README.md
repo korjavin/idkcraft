@@ -70,6 +70,10 @@ stored profile, not `WORKER_NAME`).
 
 Then: `docker build -t idkcraft-baritone:local baritone && BOT=<profile name> sh baritone/run.sh`
 (~7 min; works on arm64 under Docker, client log `/tmp/baritone-run.log.client`).
+The image is warm (idkcraft-6x7.28): the build launches the client offline
+once, so the libraries + assets are baked in and no launch downloads them.
+Without `BARITONE_IMAGE`, `client.sh` uses (and builds if missing)
+`idkcraft-baritone:<short hash of HEAD:baritone>`.
 The rig uses the image's own entrypoint and publishes the bridge for the rig
 (`-p 7777:7777` — plain `-p` by default, since a literal loopback IP trips
 the privacy pre-check and the rig's Paper+rcon already publish the same

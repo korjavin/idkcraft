@@ -50,6 +50,25 @@ WORKDIR /headlessmc
 # to download; launching is gated by start.sh, see README).
 RUN java -jar headlessmc-launcher-wrapper.jar --command fabric 26.1.2 \
  && java -jar headlessmc-launcher-wrapper.jar --command versions
+# Warm layer (idkcraft-6x7.28): launch the client offline once so the ~600 MB
+# of libraries + assets the first launch downloads live in the image, then
+# kill it. Waits on the start.sh/client.sh marker, not a sleep; 300 s cap =
+# the build fails loud. Before the mod/start.sh/settings COPYs below, so
+# their edits reuse this layer (libraries do not depend on them). Leaves no
+# account (auth/.accounts.json stays empty: offline); drops logs, the lock
+# and the per-launch natives dir.
+RUN mkfifo /tmp/warm-in && exec 8<> /tmp/warm-in \
+ && (java -Dhmc.jvmargs=-Dhmc.jline.dumb=true -Dhmc.offline.username=warm \
+      -jar headlessmc-launcher-wrapper.jar \
+      --command launch fabric-loader-0.19.5-26.1.2 -lwjgl -offline \
+      < /tmp/warm-in > /tmp/warm.log 2>&1 &) \
+ && for _ in $(seq 1 100); do grep -q "HMC-Specifics initialized" /tmp/warm.log && break; sleep 3; done \
+ && if ! grep -q "HMC-Specifics initialized" /tmp/warm.log; then tail -50 /tmp/warm.log; exit 1; fi \
+ && grep -c "is missing, downloading" /tmp/warm.log || true \
+ && pkill -f headlessmc ; pkill java ; sleep 3 \
+ ; rm -rf /tmp/warm-in /tmp/warm.log HeadlessMC/run/logs HeadlessMC/run/crash-reports \
+   HeadlessMC/headlessmc.log.lck HeadlessMC/*-*-*-*-*/ \
+ && test ! -s HeadlessMC/auth/.accounts.json
 # Worker entrypoint + Baritone presets AFTER the download layer: shell edits
 # must not invalidate the ~100 MB client fetch. Game dir = HeadlessMC/run.
 COPY start.sh ./start.sh
