@@ -378,6 +378,36 @@ describe('flat ticker wiring', () => {
     } finally { r.done() }
   })
 
+  describe('swarm (lhg2)', () => {
+    const saved = {}
+    beforeEach(() => {
+      for (const k of ['BOT_SWARM_N', 'BOT_SWARM_I']) saved[k] = process.env[k]
+      process.env.BOT_SWARM_N = '9'
+      process.env.BOT_SWARM_I = '3'
+    })
+    afterEach(() => {
+      for (const k of Object.keys(saved)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] }
+    })
+
+    it('setFlat attaches the env strip to the episode', () => {
+      const r = rig({ players: { P: { username: 'P', entity: { position: pos(100, 64, 200) } } } })
+      try {
+        r.ticker.setFlat({ radius: 16, by: 'P' })
+        assert.deepEqual(r.ctx.flat.tile, { i: 3, n: 9 })
+        assert.equal(r.ctx.flat.cx, 100)
+      } finally { r.done() }
+    })
+
+    it('setFlat refuses (no episode) when the speaker is out of range', () => {
+      const r = rig({})
+      try {
+        const line = r.ticker.setFlat({ radius: 16, by: 'Ghost' })
+        assert.match(line, /can't see you/)
+        assert.ok(!r.ctx.flat, 'no episode started')
+      } finally { r.done() }
+    })
+  })
+
   it('setFlat centers on the bot when the speaker is out of range', async () => {
     const r = rig({})
     try {

@@ -442,6 +442,11 @@ function createOrders(box) {
       return answer
     },
     setFlat: ({ radius, by, explicit }) => {
+      // Swarm (lhg2): a strip is only right on the speaker's square — a
+      // bot that cannot see the speaker refuses instead of centring on itself.
+      const tile = flatMod.swarmTile()
+      const seen = by && worker.players(bot)[by]
+      if (tile && !(seen && seen.entity && seen.entity.position)) return `can't see you — come within 48 or /tp ${bot.username} ${by || 'you'}`
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
@@ -470,7 +475,7 @@ function createOrders(box) {
         ctx.paused = false
         return flatMod.resumeLine(f)
       }
-      ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you')
+      ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you', tile)
       ctx.unseenTicks = 0
       ctx.resumeWork = false
       ctx.paused = false
