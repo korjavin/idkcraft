@@ -58,6 +58,10 @@ const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: cas
 // minutes ≈ one stone batch at the measured quarry rate, and bounds the
 // castle<->castlefetch switch rate from below no matter how the words flap.
 const LEG_MAX_MS = 5 * 60 * 1000
+// neuc.63: a live castle builder batch with no placed growth this long is
+// paused on missing material — castlefetch stops it and takes the body.
+// The bridge's build events come secondly while it lays.
+const BUILDER_IDLE_MS = 10000
 // One craft op per call; the next tick re-checks the target.
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, blast_furnace: 1, stairs: 4 }
 const BANNER_WOOL = 6 // one colour per banner (table recipe)
@@ -1697,6 +1701,21 @@ function castlefetch(bot, ctx, target, state) {
     if (ctx.castleFetch) spend(ctx.castleFetch, 'other')
     return
   }
+  // neuc.63: a v2 castle builder batch still owns the body — the word
+  // flips to <kind>-none mid-batch (the last stairs went into the batch,
+  // its stone still laying). A table placed or a craft run under a live
+  // BuilderProcess is refused (rig 8a3/8a4/8bl: refused table spots ->
+  // 'need a crafting table' -> failed:castlefetch-no-stairs -> 5-min hold
+  // -> forage/rest/house spiral). Wait while it lays; once it stops
+  // growing (paused on the material we are here for) stop it and fetch.
+  if (ctx.castleBuildFlight) {
+    if (ctx.castleFetch) spend(ctx.castleFetch, 'other')
+    const b = bot && bot._build
+    if (b && !b.preempted && Date.now() - b.grownAt > BUILDER_IDLE_MS && typeof bot.stopBuild === 'function') {
+      bot.stopBuild().catch(() => { /* release best-effort: the bridge watchdog settles it anyway */ })
+    }
+    return
+  }
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') { finish(bot, ctx, 'done'); return }
   const d = demand(bot, ctx)
@@ -1780,6 +1799,7 @@ function castlefetch(bot, ctx, target, state) {
 
 module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
+module.exports.BUILDER_IDLE_MS = BUILDER_IDLE_MS
 module.exports.stairsCobbleShort = stairsCobbleShort
 module.exports.QUARRY_ADAPT = QUARRY_ADAPT
 module.exports.quarrySide = quarrySide
