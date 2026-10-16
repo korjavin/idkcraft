@@ -1555,6 +1555,10 @@ function selectBody(env = process.env) {
   const name = (env && env.BOT_BODY) || 'mineflayer'
   if (name !== 'mineflayer' && name !== 'baritone') return { name, fatal: `unknown BOT_BODY=${name} (want mineflayer|baritone)` }
   if (name === 'baritone' && !(env && env.BOT_USERNAME)) return { name, idle: true }
+  // Flat swarm (lhg2): swarm bot I>=1 idles unless I < BOT_SWARM_N, so the
+  // 8 compose services cost ~0 until the owner sets BOT_SWARM_N.
+  const si = parseInt((env && env.BOT_SWARM_I) || '0', 10)
+  if (si >= 1 && !(si < parseInt((env && env.BOT_SWARM_N) || '0', 10))) return { name, idle: true }
   if (name === 'baritone') return { name, createBot: require('./bridge/index').createBot, bodyTag: ' body=baritone' }
   return { name }
 }
@@ -1574,7 +1578,7 @@ async function main() {
   const sel = selectBody(process.env)
   if (sel.fatal) fatal('body', sel.fatal)
   if (sel.idle) {
-    console.log('v2 idle: BOT_USERNAME empty')
+    console.log(process.env.BOT_SWARM_I ? 'swarm idle: BOT_SWARM_I >= BOT_SWARM_N' : 'v2 idle: BOT_USERNAME empty')
     setInterval(() => {}, 60000) // hold the loop: a bare await would drain and exit
     await new Promise(() => {}) // never exits: compose restart: unless-stopped
   }

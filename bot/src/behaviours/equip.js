@@ -75,6 +75,74 @@ function pickRank(name) {
   const m = typeof name === 'string' && name.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
   return m ? PICKAXE_RANK[m[1]] : 0
 }
+// Pick budget (idkcraft-neuc.59): on the v2 body with an active castle the
+// haul bead caps a stone leg at the uses left on the held picks, and one
+// stone pick is 131 uses against a ~1100-cobble castle bill — every pick
+// death is a kit-flip cycle boundary (goal.js force=kit, castleFetchGo
+// needsDigNoPick). So the pickaxe want is a BUDGET, topped up
+// opportunistically inside equip's run: the kit word stays 'pickaxe=yes'
+// while one pick is held (goal.js frozen, never a new force), and the
+// fetch leg just gets a smaller pick-capped target until the next equip
+// run refills. PICK_BUDGET is 4 stone picks' worth (12 cobble + 8 sticks =
+// 4 planks = 1 log); a full 17-stack haul wants ~9, hence the ceiling.
+// v1 (no bot.mine, BOT_BODY unset) never sees it: byte-identical.
+const PICK_BUDGET = 4 * 131
+// Uses per pick rank when the item carries no durability fields (the
+// castlefetch PICK_USES mirror; a require would close the
+// castlefetch->craftany->equip cycle — the PICKAXE_RANK precedent above).
+const PICK_USES = { wooden_pickaxe: 59, golden_pickaxe: 32, stone_pickaxe: 131, iron_pickaxe: 250, diamond_pickaxe: 1561, netherite_pickaxe: 2031 }
+function isV2(bot) {
+  try {
+    if (bot && typeof bot.mine === 'function') return true
+  } catch (_) { /* probe best-effort */ }
+  try { return process.env.BOT_BODY === 'baritone' } catch (_) { return false }
+}
+function pickCount(bot) {
+  return countItems(bot, (n) => n.endsWith('_pickaxe'))
+}
+// Uses left on the held pickaxes (bridge items carry
+// maxDurability/durabilityUsed; missing fields read as a fresh pick).
+function pickUsesLeft(bot) {
+  let n = 0
+  try {
+    for (const i of itemsOf(bot)) {
+      if (!i || typeof i.name !== 'string' || !i.name.endsWith('_pickaxe')) continue
+      const max = typeof i.maxDurability === 'number' && i.maxDurability > 0
+        ? i.maxDurability
+        : (PICK_USES[i.name] || 59)
+      n += Math.max(0, max - (typeof i.durabilityUsed === 'number' ? i.durabilityUsed : 0))
+    }
+  } catch (_) { /* unreadable: no budget */ }
+  return n
+}
+// The budget want: PICK_BUDGET capped at the castle's stone remainder
+// (castleWord.left counts open stone cells) so a nearly-done castle does
+// not over-craft.
+function pickBudgetNeed(ctx) {
+  try {
+    const cw = ctx && ctx.castleWord
+    if (cw && cw.kind === 'stone' && typeof cw.left === 'number') return Math.max(0, Math.min(PICK_BUDGET, cw.left))
+  } catch (_) { /* no cap */ }
+  return PICK_BUDGET
+}
+// True when equip should craft another stone pick on top of the held ones:
+// v2 with an active castle, the budget below want, the 3-cobble head above
+// the scaffold reserve, the chain able to move now (toolOp's own verdict —
+// else the normal sword/blocks flow runs instead of a loud no-materials
+// fail), and a station to craft on right now (the upgrade probe: without
+// one the step digs scaffold exactly as before instead of failing
+// no-table). One craft per tick as today, k ticks for k picks.
+function pickBudgetDue(bot, ctx) {
+  try {
+    if (!isV2(bot)) return false
+    if (!require('./explore').castleActive(ctx)) return false // deferred: explore requires equip
+    if (!(pickUsesLeft(bot) < pickBudgetNeed(ctx) - 131)) return false
+    if (countItems(bot, (n) => n === 'cobblestone') < SCAFFOLD_LOW + 3) return false
+    if (toolOp(bot, 'pickaxe').fail) return false
+    if (!tableReady(bot, ctx)) return false
+    return true
+  } catch (_) { return false }
+}
 // The stone chain behind toolOp's pickaxe branch: 3 cobble plus 2 sticks
 // on hand or one stick-op away (2 same planks or any log — toolOp's own
 // conditions, so a due upgrade always yields stone, never a second wooden).
@@ -394,7 +462,12 @@ function equip(bot, ctx) {
   // table probe keeps it opportunistic — without a verified station the
   // step digs scaffold exactly as before instead of failing no-table.
   const upgradePick = stoneUpgradeDue(bot) && tableReady(bot, ctx)
-  const kind = !hasPickaxe(bot) || upgradePick ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
+  // neuc.59: on v2 with an active castle a held pick is not enough — the
+  // budget tops up inside this run (goal.js frozen: no new force, the kit
+  // word stays 'pickaxe=yes' while one pick is held). isV2 first: v1 never
+  // takes an extra inventory read (the flaky-inventory tests pin the count).
+  const budgetPick = isV2(bot) && hasPickaxe(bot) && hasSword(bot) && !upgradePick && pickBudgetDue(bot, ctx)
+  const kind = !hasPickaxe(bot) || upgradePick || budgetPick ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
   if (!kind) {
     if (scaffoldCount(bot) >= SCAFFOLD_FULL) {
       stepDone(ctx)
@@ -411,6 +484,12 @@ function equip(bot, ctx) {
     fail(bot, ctx, kind, new Error(op.fail))
     return
   }
+  issueToolOp(bot, ctx, op)
+}
+
+// One tool craft op through the table path (shared by equip's run and the
+// castlefetch spare-pick fallback below).
+function issueToolOp(bot, ctx, op) {
   if (op.tabled) {
     const make = ownTableOp(bot, ctx, op)
     if (make) {
@@ -428,7 +507,7 @@ function equip(bot, ctx) {
           fail(bot, ctx, op.item, new Error('no-recipe'), gen)
           return
         }
-        craftOne(bot, ctx, { item: op.item, recipe: found[0], count: 1, table: t.block }, gen)
+        craftOne(bot, ctx, { item: op.item, recipe: found[0], count: 1, table: t.block, onSettle: op.onSettle }, gen)
       },
       (err) => {
         ctx.equipInFlight = false
@@ -438,6 +517,67 @@ function equip(bot, ctx) {
     return
   }
   craftOne(bot, ctx, op)
+}
+
+// Spare-pick top-up for the castlefetch fallback (neuc.59): a v2 stone leg
+// tops up the budget at its start, one craft per tick, because the refill
+// rarely gets an equip run in castle mode (goal.js only dispatches equip
+// with a whole kit while scaffold < SCAFFOLD_LOW, and the castle's stone
+// reserve keeps it above). True when the tick is consumed (due and crafting,
+// or a craft already in flight), false when the budget is not due — the
+// caller then digs as before. Async failures settle through the shared
+// fail path (stale-dropped outside the equip step, never poisoning it).
+// Consecutive topped-up ticks with no pick landing before the slow give-up
+// fires (round-3 review): table walks settle nothing, so dry SETTLES alone
+// cannot bound a walk loop (tableFor gives up at 20 walkWaits, then the
+// next tick walks again). 40 is well above a healthy top-up — a landed pick
+// resets — and far below a wedged leg.
+const SPARE_TICK_CAP = 40
+function craftSparePick(bot, ctx) {
+  try {
+    if (ctx.equipInFlight) return true
+    if (!pickBudgetDue(bot, ctx)) return false
+    // Give-up (round-2 review): async failures settle stale-dropped outside
+    // the equip step (fail() early-returns when step !== 'equip'), so a
+    // broken table path would retry every tick and the leg would never dig.
+    // Two caps per leg. Fast: consecutive settled dry crafts (the
+    // craft-stall 3) — walks and precursors settle nothing and never
+    // increment (round-3 review). Slow: SPARE_TICK_CAP true ticks with no
+    // pick landing, bounding the walk loop. A landed pick resets both.
+    const f = ctx.castleFetch
+    if (f && f.spareGiveUp) return false
+    if (f) {
+      const picks = pickCount(bot)
+      if (typeof f.spareTickPicks !== 'number' || picks > f.spareTickPicks) {
+        f.spareTicks = 0
+        f.spareTickPicks = picks
+      } else if ((f.spareTicks = (f.spareTicks | 0) + 1) >= SPARE_TICK_CAP) {
+        f.spareGiveUp = true
+        return false
+      }
+    }
+    const op = toolOp(bot, 'pickaxe')
+    if (!op || op.fail) return false
+    if (op.item.endsWith('_pickaxe')) {
+      const leg = f || null
+      try {
+        op.onSettle = (landed) => {
+          try {
+            if (!leg || ctx.castleFetch !== leg || leg.spareGiveUp) return
+            if (landed) {
+              leg.spareTries = 0
+              leg.spareTickPicks = pickCount(bot)
+              leg.spareTicks = 0
+            } else if ((leg.spareTries = (leg.spareTries | 0) + 1) >= CRAFT_STALL_STRIKES) {
+              leg.spareGiveUp = true
+            }
+          } catch (_) { /* accounting best-effort */ }
+        }
+      } catch (_) { /* accounting best-effort */ }
+    }
+    issueToolOp(bot, ctx, op)
+    return true
+  } catch (_) { return false }
 }
 
 // Pickless castle (idkcraft-vmzq.37, prod: the pick wore out in a forage
@@ -498,6 +638,16 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
     return
   }
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
+  // Count base for the pickaxe landing check below (neuc.59).
+  const pickBase = op.item.endsWith('_pickaxe') ? pickCount(bot) : 0
+  // Settle reporting (neuc.59): the castlefetch spare-pick fallback counts
+  // settled dry crafts per leg. Absent for every other caller: zero change.
+  let reported = false
+  const report = (landed) => {
+    if (reported) return
+    reported = true
+    try { if (op && typeof op.onSettle === 'function') op.onSettle(!!landed) } catch (_) { /* accounting best-effort */ }
+  }
   ctx.equipInFlight = true
   // Exactly-once settlement: a hung window (live ghost reads) must fail
   // loudly on a deadline, never freeze the menu with the flag stuck.
@@ -515,12 +665,17 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
     // Rank-aware (x15): a ghost upgrade must strike — any-pickaxe reads
     // the old wooden as landed and burns the cobble retrying. Fresh
     // wooden crafts are unchanged (rank 0 landed == hasPickaxe).
-    : op.item.endsWith('_pickaxe') ? bestPickRank(bot) >= pickRank(op.item) : hasSword(bot)
+    // Count-aware too (neuc.59): a spare-pick craft lands exactly one more
+    // pick — rank alone reads a held stone as landed and would chat fakes
+    // on a ghost (rwuu). The rank half still refuses a ground pickup of a
+    // lesser pick as a landing.
+    : op.item.endsWith('_pickaxe') ? pickCount(bot) > pickBase && bestPickRank(bot) >= pickRank(op.item) : hasSword(bot)
   const run = async () => {
     try {
       await craftMod.safeCraft(bot, op.recipe, op.count, op.table, { ctx, item: op.item })
     } catch (err) {
       finish(() => fail(bot, ctx, op.item, err, gen))
+      report(false)
       return
     }
     // g0z.25 escalating verify: the immediate post-craft model lies
@@ -539,6 +694,7 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
       if (timedOut) return
       landed = landedNow()
     }
+    report(landed)
     finish()
     const strikes = (st.made && st.made[op.item]) || 0
     if (!landed) {
@@ -571,6 +727,7 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
   })
   void Promise.race([run(), timeout]).catch((err) => {
     timedOut = true
+    report(false)
     finish(() => fail(bot, ctx, op.item, err, gen))
   })
 }
@@ -831,3 +988,10 @@ module.exports.tableReady = tableReady
 module.exports.equipLatched = equipLatched
 module.exports.EQUIP_LATCH = EQUIP_LATCH
 module.exports.pickRearmDue = pickRearmDue
+// Pick-budget reuse (idkcraft-neuc.59): the castlefetch fallback crafts
+// through this helper when the refill never gets an equip run.
+module.exports.PICK_BUDGET = PICK_BUDGET
+module.exports.pickUsesLeft = pickUsesLeft
+module.exports.pickBudgetNeed = pickBudgetNeed
+module.exports.pickBudgetDue = pickBudgetDue
+module.exports.craftSparePick = craftSparePick
