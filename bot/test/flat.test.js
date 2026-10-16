@@ -458,6 +458,23 @@ describe('flat ticker wiring', () => {
       } finally { r.done() }
     })
 
+    // vewo.8: a deploy restart resumes the remembered square; strip 0 relays once.
+    it('resumeFlat: the main bot restores and relays once, a helper restores silently', () => {
+      for (const [i, relays] of [['0', 1], ['3', 0]]) {
+        process.env.BOT_SWARM_I = i
+        const r = rig({ players: {} })
+        try {
+          r.ticker.stop() // the spawn handler parks a helper first
+          r.ctx.flatSaved = { cx: 24, cz: 23, r: 7, yTop: 75, level: 64, by: 'Owner' }
+          assert.match(r.ticker.resumeFlat(), /^scanning 15x15 at 24,23/)
+          assert.equal(r.ticker.resumeFlat(), null, 'one restore per spawn')
+          const f = r.ctx.flat
+          assert.deepEqual([f.cx, f.cz, f.r, f.fixedLevel, f.yTop, f.by, f.parked, r.ctx.paused], [24, 23, 7, 64, 75, 'Owner', false, false])
+          assert.deepEqual(r.bot.chats.filter((m) => m.startsWith('swarm flat')), relays ? ['swarm flat 7 24 23 y65 level 64 by Owner'] : [])
+        } finally { r.done() }
+      }
+    })
+
     it('explicit re-flat resumes the same anchor only; another anchor inside starts over', async () => {
       const world = makeWorld({})
       world.set(-1, 63, -38, 'air') // strip 4/9 of x -4..4

@@ -845,6 +845,13 @@
     ],
     "owner": "src/behaviours/flat.js"
   },
+  "flatSaved": {
+    "writers": [
+      "src/memory.js",
+      "src/orders.js"
+    ],
+    "owner": "src/memory.js"
+  },
   "fleeTargetId": {
     "writers": [
       "src/reflexes.js"

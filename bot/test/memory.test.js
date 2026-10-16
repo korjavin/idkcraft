@@ -556,3 +556,29 @@ describe('castle blocked why survives a restart (g0z.23 follow-up)', () => {
     assert.equal(ctx4.castle.quarryPits, undefined)
   })
 })
+
+describe('flat job survives a restart (idkcraft-vewo.8)', () => {
+  const { startEpisode } = require('../src/behaviours/flat')
+  const job = () => startEpisode(24, 23, 7, 75, 'Owner', { i: 0, n: 13 }, 64)
+  it('save/restore round trip parks the square in ctx.flatSaved', () => {
+    const ctx = { flat: job() }
+    assert.equal(memory.save(botAt(SPAWN_A), ctx, file), true)
+    const ctx2 = {}
+    assert.equal(memory.restore(botAt(SPAWN_A), ctx2, file).flat, 1)
+    assert.deepEqual(ctx2.flatSaved, { cx: 24, cz: 23, r: 7, yTop: 75, level: 64, by: 'Owner' })
+    assert.equal(ctx2.flat, undefined, 'not live until the spawn handler resumes it')
+  })
+  it('a finished (null) or stopped (parked) job is dropped; an untouched ctx keeps it', () => {
+    for (const end of [null, { ...job(), parked: true }]) {
+      memory.save(botAt(SPAWN_A), { flat: job() }, file)
+      memory.save(botAt(SPAWN_A), {}, file) // an unrestored ctx never wipes it
+      const kept = {}
+      memory.restore(botAt(SPAWN_A), kept, file)
+      assert.ok(kept.flatSaved)
+      assert.equal(memory.save(botAt(SPAWN_A), { flat: end }, file), true)
+      const ctx2 = {}
+      memory.restore(botAt(SPAWN_A), ctx2, file)
+      assert.equal(ctx2.flatSaved, undefined)
+    }
+  })
+})

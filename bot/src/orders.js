@@ -130,6 +130,17 @@ function createOrders(box) {
     // save-on-exit; the periodic tick save covers the rest.
     loadMemory: () => { try { return memory.restore(bot, ctx) } catch (_) { return null } },
     saveMemory: () => { try { return memory.save(bot, ctx) } catch (_) { return false } },
+    // vewo.8: the flat job a deploy interrupted resumes on the same square,
+    // owner online or not; the relay path skips the sight checks, and the
+    // main bot (strip 0) re-announces it so helpers adopt the one square.
+    resumeFlat: () => {
+      const s = ctx.flatSaved
+      ctx.flatSaved = null
+      if (!s || (ctx.flat && !ctx.flat.parked)) return null
+      const line = orders.setFlat({ radius: s.r, cx: s.cx, cz: s.cz, explicit: true, relay: true, feet: s.yTop - flatMod.SCAN_UP, level: s.level, by: s.by })
+      console.log(`flat restore anchor=${s.cx},${s.cz} r=${s.r} reply=${line}`)
+      return line
+    },
     stop: () => {
       clearPendingSearch(ctx)
       clearStuck()

@@ -332,6 +332,21 @@ function sheepOf(v, now) {
   }
 }
 
+// Flat job (idkcraft-vewo.8): the square fixed at order time survives a
+// deploy; progress does not (the restored episode rescans). Strict shape.
+function flatOf(v) {
+  try {
+    if (!v || typeof v !== 'object') return null
+    const { cx, cz, r, yTop, level, by } = v
+    if (![cx, cz, r, yTop].every(Number.isInteger) || r < 1) return null
+    if (level !== null && !Number.isInteger(level)) return null
+    if (typeof by !== 'string' || !/^\S{1,32}$/.test(by)) return null
+    return { cx, cz, r, yTop, level, by }
+  } catch (_) {
+    return null
+  }
+}
+
 function sameSite(a, b) {
   try {
     return !!a && !!b && !!a.site && !!b.site &&
@@ -444,7 +459,15 @@ function snapshot(bot, ctx, now) {
   } catch (_) { /* castle best-effort */ }
   let sheep
   try { sheep = sheepOf(ctx.beds && ctx.beds.noWool, t) || undefined } catch (_) { /* latch best-effort */ }
-  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle, sheep }
+  // Flat (vewo.8), tri-state like castle: a running job, null once it
+  // finished/stopped (a parked episode is stopped), undefined untouched.
+  let flat
+  try {
+    const f = ctx.flat
+    if (f === null || (f && f.parked)) flat = null
+    else if (f) flat = flatOf({ cx: f.cx, cz: f.cz, r: f.r, yTop: f.yTop, level: f.fixedLevel == null ? null : f.fixedLevel, by: f.by }) || undefined
+  } catch (_) { /* flat best-effort */ }
+  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle, sheep, flat }
 }
 
 // Gear ledger maps, sanitized both ways (own write, but a hand-edited
@@ -502,7 +525,7 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle && !doc.sheep
+    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle && !doc.sheep && !doc.flat
     f = file || fileFor(process.env, bot && bot.username)
     let prev = null
     try {
@@ -524,7 +547,9 @@ function save(bot, ctx, file, now) {
     // Same-world gate as the castle: restore ignores another world's name.
     if (doc.follow === undefined && prevFollow && prev.v === VERSION && prev.world === doc.world) doc.follow = prevFollow
     if (doc.castle === undefined && prevCastle) doc.castle = prevCastle
-    if (empty && !(prevFollow && doc.follow === null) && !(prevCastle && doc.castle === null)) return false
+    const prevFlat = prev && prev.v === VERSION && prev.world === doc.world ? flatOf(prev.flat) : null
+    if (doc.flat === undefined && prevFlat) doc.flat = prevFlat
+    if (empty && !(prevFollow && doc.follow === null) && !(prevCastle && doc.castle === null) && !(prevFlat && doc.flat === null)) return false
     tmp = `${f}.tmp-${process.pid}`
     fs.writeFileSync(tmp, JSON.stringify(doc))
     fs.renameSync(tmp, f)
@@ -551,7 +576,7 @@ function restore(bot, ctx, file, now) {
     const world = worldKey(bot)
     if (!world || doc.world !== world) return null
     const t = typeof now === 'number' ? now : Date.now()
-    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0, castle: 0, sheep: 0 }
+    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0, castle: 0, sheep: 0, flat: 0 }
     const sheep = sheepOf(doc.sheep, t)
     if (sheep) {
       if (!ctx.beds || typeof ctx.beds !== 'object') ctx.beds = {}
@@ -564,6 +589,13 @@ function restore(bot, ctx, file, now) {
     if (castle) {
       ctx.castle = rearmPark(castle)
       out.castle = 1
+    }
+    // vewo.8: parked, not live — the spawn handler resumes it last
+    // (ticker.resumeFlat), after the startup follow/stop that clear ctx.flat.
+    const flat = flatOf(doc.flat)
+    if (flat) {
+      ctx.flatSaved = flat
+      out.flat = 1
     }
     if (typeof doc.follow === 'string' && doc.follow) {
       ctx.followName = doc.follow

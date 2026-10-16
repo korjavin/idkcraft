@@ -1502,6 +1502,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // tpd1: a swarm helper parks until a flat order (stand still, no homing walk).
       if (flatMod.swarmHelper()) ticker.stop()
       else if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName && !followedNow) ticker.work()
+      if (typeof ticker.resumeFlat === 'function') ticker.resumeFlat() // vewo.8: after the follow/stop above
       ticker.start()
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
