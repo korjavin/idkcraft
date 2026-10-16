@@ -954,11 +954,17 @@ function digFlight(bot, ctx, f, h, block) {
   })().catch(() => { ctx.digInFlight = false })
 }
 
+// idkcraft-vewo.4: swarm helpers (strip >= 1) log progress/refill lines instead of chatting; start + done stay chat
+function tell(bot, f, line) {
+  if (f.tile && f.tile.i >= 1) console.log(`flat quiet strip=${f.tile.i + 1}/${f.tile.n}: ${line}`)
+  else say(bot, line)
+}
+
 function startDig(bot, ctx, f) {
   f.phase = 'dig'
   f.dig = { pos: null, phase: 'walk', skip: new Set(), streak: 0, ticks: 0, stalls: 0, lastPos: null }
   f.lastProgressTick = f.ticks
-  say(bot, 'out of fill blocks, digging dirt')
+  tell(bot, f, 'out of fill blocks, digging dirt')
 }
 
 // Restock origin: findBlocks returns the matches nearest to its point, so
@@ -1042,7 +1048,7 @@ function endDig(bot, ctx, f, resume) {
     f.phase = 'shave'
     f.abortWhy = 'no fill blocks'
     f.lastProgressTick = f.ticks
-    say(bot, `no fill blocks, shaving ${f.bumps.length} bumps first`)
+    tell(bot, f, `no fill blocks, shaving ${f.bumps.length} bumps first`)
     return
   }
   finish(bot, ctx, f, 'no fill blocks')
@@ -1176,8 +1182,8 @@ function progressChat(bot, f) {
   }
   f.lastChat = now
   f.progressChats = (f.progressChats || 0) + 1
-  if (f.phase === 'shave') say(bot, `flat shave ${f.shaved + (f.sweptN || 0)}/${f.totalBumps + (f.sweepTotal || 0)} (level ${f.level})`)
-  else say(bot, `flat ${f.filled}/${f.total} (level ${f.level})`)
+  if (f.phase === 'shave') tell(bot, f, `flat shave ${f.shaved + (f.sweptN || 0)}/${f.totalBumps + (f.sweepTotal || 0)} (level ${f.level})`)
+  else tell(bot, f, `flat ${f.filled}/${f.total} (level ${f.level})`)
 }
 
 function fillTick(bot, ctx, f, bp) {
