@@ -493,6 +493,113 @@ describe('flat ticker wiring', () => {
       } finally { r.done() }
     })
 
+    // zchb: bare `flat <r>` — ONE square around where the speaker stood and
+    // ONE level = the speaker's feet level, resolved by the main bot at
+    // command time and relayed; the speaker moving/leaving changes nothing.
+    it('zchb: main resolves the square + feet level, every helper adopts the relay', async () => {
+      const world = makeWorld({})
+      world.set(100, 64, -40, 'dirt') // the speaker stands on a one-block bump: mode would say 63
+      const P = { username: 'P', entity: { position: pos(100.7, 65, -39.3) } }
+      const holes = new Map()
+      process.env.BOT_SWARM_I = '0'
+      const main = rig({ world, players: { P } })
+      let relay
+      try {
+        handleChat(main.bot, main.ticker, 'P', 'flat 4')
+        relay = main.bot.chats.find((c) => c.startsWith('swarm flat'))
+        assert.equal(relay, 'swarm flat 4 100 -40 y65 level 64 by P')
+        assert.ok(main.bot.chats.some((c) => c.startsWith('scanning 9x9')), main.bot.chats.join('\n'))
+        P.entity.position = pos(300, 80, 300) // sprints away...
+        let t = await main.ticker.tick()
+        main.bot.players = {} // ...and disconnects
+        t = await main.ticker.tick()
+        assert.equal(t.decision.action, 'flat', 'works on with nobody online')
+        const f = main.ctx.flat
+        assert.deepEqual([f.cx, f.cz, f.r, f.level], [100, -40, 4, 64])
+        for (const h of f.holes) holes.set(`${h.x},${h.z}`, 0)
+      } finally { main.done() }
+      for (let i = 1; i < 9; i++) {
+        process.env.BOT_SWARM_I = String(i)
+        const r = rig({ world, players: i % 2 ? {} : { P: { username: 'P', entity: { position: pos(i * 50, 70, 0) } } } })
+        try {
+          r.bot.username = `IdkSwarm${i}`
+          r.bot.entity.position = pos(100 + i - 4, 64, -40)
+          handleChat(r.bot, r.ticker, 'P', 'flat 4') // the owner's own line: helpers wait for the relay
+          assert.ok(!r.ctx.flat, `helper ${i} ignored the owner line`)
+          handleChat(r.bot, r.ticker, 'IdkBot', relay)
+          assert.deepEqual(r.bot.chats, [], 'relay replies are logged, not chatted')
+          await r.ticker.tick()
+          const f = r.ctx.flat
+          assert.deepEqual([f.cx, f.cz, f.r, f.level], [100, -40, 4, 64], `helper ${i}`)
+          for (const h of f.holes) {
+            assert.ok(!holes.has(`${h.x},${h.z}`), `${h.x},${h.z} taken twice`)
+            holes.set(`${h.x},${h.z}`, i)
+          }
+        } finally { r.done() }
+      }
+      assert.equal(holes.size, 80, 'every column below the speaker level owned by exactly one strip')
+    })
+
+    it('zchb: a helper beyond sight walks to the relayed square, then levels it', async () => {
+      let far = true
+      const world = makeWorld({ unloaded: (x) => far && x >= 200 })
+      const r = rig({ world, players: {} })
+      try {
+        r.bot.username = 'IdkSwarm3'
+        handleChat(r.bot, r.ticker, 'IdkBot', 'swarm flat 4 200 0 y63 level 62 by P')
+        assert.ok(r.ctx.flat)
+        const t = await r.ticker.tick()
+        assert.equal(t.decision.action, 'flat')
+        assert.equal(r.ctx.flat.phase, 'scan')
+        const g = r.bot.calls.goals.at(-1)
+        assert.equal(g.constructor.name, 'GoalNearXZ')
+        assert.deepEqual([g.x, g.z], [200, 0])
+        far = false
+        r.bot.entity.position = pos(196, 64, 0)
+        await r.ticker.tick()
+        assert.equal(r.ctx.flat.level, 62, 'the relayed level, not a vote')
+        assert.ok(r.ctx.flat.bumps.length > 0, 'shaves down to the relayed level')
+      } finally { r.done() }
+    })
+
+    it('zchb: travel that never gets nearer gives up and parks (review 01)', () => {
+      const bot = mockBot(makeWorld({ unloaded: (x) => x >= 200 }))
+      const ctx = { lastGoalKey: '', flat: startEpisode(200, 0, 4, 74, 'P', { i: 3, n: 9 }, 62) }
+      for (let i = 0; i <= flat.TRAVEL_STALL_TICKS; i++) flat(bot, ctx, null, null)
+      assert.equal(ctx.flat, null)
+      assert.equal(ctx.paused, true, 'a helper parks, so the leave re-arms')
+      assert.ok(bot.chats.some((c) => c.includes('cannot reach the square')), bot.chats.join('\n'))
+    })
+
+    it('zchb: relay line round-trips; garbage and non-main senders are ignored', () => {
+      const f = startEpisode(-7, 12, 16, 75, 'Owner_1', null, 64)
+      assert.deepEqual(flat.parseRelay(flat.relayLine(f)), { radius: 16, cx: -7, cz: 12, feet: 65, level: 64, by: 'Owner_1' })
+      assert.equal(flat.parseRelay(flat.relayLine(startEpisode(0, 0, 8, 74, 'P'))).level, null)
+      for (const bad of ['swarm flat 4 0 0 level 63 by P', 'swarm flat 4 0 0 y64 level up by P', 'flat 4']) assert.equal(flat.parseRelay(bad), null, bad)
+      const r = rig({})
+      try {
+        r.bot.username = 'IdkSwarm3'
+        handleChat(r.bot, r.ticker, 'IdkSwarm2', 'swarm flat 4 0 0 y64 level 63 by P')
+        assert.ok(!r.ctx.flat, 'only the main bot relays')
+      } finally { r.done() }
+    })
+
+    it('zchb: a running flat holds off the nobody-online leave; parked it does not', async () => {
+      let t = 0
+      let left = 0
+      const bot = mockBot(makeWorld({}), { players: {} })
+      bot.username = 'IdkSwarm3'
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 50, onLeave: () => { left++ }, now: () => t })
+      try {
+        bot._tickerCtx.flat = startEpisode(0, 0, 4, 74, 'P', null, 62) // shave work: stays running
+        for (let i = 0; i < 5; i++) { t += 100; await ticker.tick() }
+        assert.equal(left, 0)
+        ticker.stop()
+        for (let i = 0; i < 3; i++) { t += 100; await ticker.tick() }
+        assert.equal(left, 1)
+      } finally { ticker.destroy() }
+    })
+
     // tpd1 (iii): helpers are flat-only.
     it('helper refuses follow/work orders and changes nothing', () => {
       const r = rig({ players: { P: { username: 'P', entity: { position: pos(3, 64, 0) } } } })
@@ -569,6 +676,42 @@ describe('flat ticker wiring', () => {
       assert.equal(playersOccupied({ players: { online: 9 } }, 'IdkBot', true), true, 'hidden sample unchanged (accepted limit)')
       assert.equal(playersOccupied({ players: { online: 9, sample: [{ name: 'IdkSwarm3' }] } }, 'IdkBot', true), true, 'partial sample: unlisted heads count')
     })
+  })
+
+  it('zchb: a flat running alone steps a manual jev brain down; the join restores it (review 02)', async () => {
+    const saved = { u: process.env.BRAIN_URL, k: process.env.TYPESAFE_API_KEY }
+    process.env.BRAIN_URL = 'http://laya:8000/v1/systemone'
+    process.env.TYPESAFE_API_KEY = 'k'
+    const P = { username: 'P', entity: { position: pos(1, 63, 0) } } // level 62: shave work keeps it running
+    const bot = mockBot(makeWorld({}), { players: { P } })
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, brainEngine: 'jev' })
+    try {
+      handleChat(bot, ticker, 'P', 'brain jev')
+      ticker.setFlat({ radius: 4, by: 'P', explicit: true })
+      bot.players = {}
+      await ticker.tick()
+      assert.ok(bot._tickerCtx.flat, 'flat still running')
+      assert.equal(ticker.getBrainEngine(), 'off', 'no paid brain with nobody online')
+      bot._tickerCtx.flat = null
+      bot.players = { P }
+      await ticker.tick()
+      assert.equal(ticker.getBrainEngine(), 'jev', 'restored on join after the flat')
+    } finally {
+      ticker.destroy()
+      for (const [k, v] of [['BRAIN_URL', saved.u], ['TYPESAFE_API_KEY', saved.k]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+    }
+  })
+
+  it('zchb: single bot — bare flat levels to the speaker feet level, no relay chat', async () => {
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'dirt')
+    const r = rig({ world, players: { P: { username: 'P', entity: { position: pos(3.5, 65, 0.5) } } } })
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P', explicit: true })
+      assert.deepEqual(r.bot.chats, [])
+      await r.ticker.tick()
+      assert.equal(r.ctx.flat.level, 64)
+    } finally { r.done() }
   })
 
   it('setFlat centers on the bot when the speaker is out of range', async () => {
