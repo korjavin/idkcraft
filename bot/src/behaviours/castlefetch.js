@@ -1518,7 +1518,17 @@ function castlefetch(bot, ctx, target, state) {
   if (st.status !== NO_WOOD || !WOOD.has(d.kind)) st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
-  if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot))) { digTick(bot, ctx, f); return }
+  if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot))) {
+    // neuc.59 fallback: a v2 stone leg tops up the pick budget first, one
+    // craft per tick (goal.js frozen) — the refill rarely gets an equip run
+    // in castle mode. v1 reads false and digs as before.
+    if (d.kind === 'stone') {
+      try {
+        if (require('./equip').craftSparePick(bot, ctx)) return // deferred: craftany requires equip
+      } catch (_) { /* unfunded: dig as before */ }
+    }
+    digTick(bot, ctx, f); return
+  }
   if (d.kind === 'planks' || d.kind === 'door' || d.kind === 'fence' || d.kind === 'chest' || d.kind === 'frame') {
     // Logs from the world: gather chops a load and ends the leg itself
     // ('done' at NEED_LOGS, or its own failure); the next pick crafts

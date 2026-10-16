@@ -424,7 +424,7 @@ function equip(bot, ctx) {
   // budget tops up inside this run (goal.js frozen: no new force, the kit
   // word stays 'pickaxe=yes' while one pick is held). isV2 first: v1 never
   // takes an extra inventory read (the flaky-inventory tests pin the count).
-  const budgetPick = isV2(bot) && hasPickaxe(bot) && !upgradePick && pickBudgetDue(bot, ctx)
+  const budgetPick = isV2(bot) && hasPickaxe(bot) && hasSword(bot) && !upgradePick && pickBudgetDue(bot, ctx)
   const kind = !hasPickaxe(bot) || upgradePick || budgetPick ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
   if (!kind) {
     if (scaffoldCount(bot) >= SCAFFOLD_FULL) {
@@ -442,6 +442,12 @@ function equip(bot, ctx) {
     fail(bot, ctx, kind, new Error(op.fail))
     return
   }
+  issueToolOp(bot, ctx, op)
+}
+
+// One tool craft op through the table path (shared by equip's run and the
+// castlefetch spare-pick fallback below).
+function issueToolOp(bot, ctx, op) {
   if (op.tabled) {
     const make = ownTableOp(bot, ctx, op)
     if (make) {
@@ -469,6 +475,25 @@ function equip(bot, ctx) {
     return
   }
   craftOne(bot, ctx, op)
+}
+
+// Spare-pick top-up for the castlefetch fallback (neuc.59): a v2 stone leg
+// tops up the budget at its start, one craft per tick, because the refill
+// rarely gets an equip run in castle mode (goal.js only dispatches equip
+// with a whole kit while scaffold < SCAFFOLD_LOW, and the castle's stone
+// reserve keeps it above). True when the tick is consumed (due and crafting,
+// or a craft already in flight), false when the budget is not due — the
+// caller then digs as before. Async failures settle through the shared
+// fail path (stale-dropped outside the equip step, never poisoning it).
+function craftSparePick(bot, ctx) {
+  try {
+    if (ctx.equipInFlight) return true
+    if (!pickBudgetDue(bot, ctx)) return false
+    const op = toolOp(bot, 'pickaxe')
+    if (!op || op.fail) return false
+    issueToolOp(bot, ctx, op)
+    return true
+  } catch (_) { return false }
 }
 
 // Pickless castle (idkcraft-vmzq.37, prod: the pick wore out in a forage
@@ -801,3 +826,4 @@ module.exports.PICK_BUDGET = PICK_BUDGET
 module.exports.pickUsesLeft = pickUsesLeft
 module.exports.pickBudgetNeed = pickBudgetNeed
 module.exports.pickBudgetDue = pickBudgetDue
+module.exports.craftSparePick = craftSparePick

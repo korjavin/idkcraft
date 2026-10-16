@@ -1368,3 +1368,29 @@ describe('neuc.59: the stone target grows with the pick budget', () => {
     })
   })
 })
+
+describe('neuc.59: a v2 stone leg tops up the pick budget before digging', () => {
+  async function v2(fn) {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try { return await fn() } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  }
+  it('the leg asks equip first; no dig while topping up', async () => {
+    await v2(async () => {
+      const equipMod = require('../src/behaviours/equip')
+      const real = equipMod.craftSparePick
+      const seen = []
+      equipMod.craftSparePick = () => { seen.push(true); return true }
+      try {
+        const bot = makeBot({ items: TOOLS() })
+        const ctx = { castle: castleState() }
+        fetch(bot, ctx)
+        assert.equal(seen.length, 1, 'the stone leg asks the helper first')
+        assert.equal(bot.calls.dig.length, 0, 'no dig while topping up')
+      } finally { equipMod.craftSparePick = real }
+    })
+  })
+})
