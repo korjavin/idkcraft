@@ -1427,6 +1427,8 @@ function digTick(bot, ctx, f, d) {
     ctx.castleFetchInFlight = true
     ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig
     ctx.castleFetchMine = true // a bridge mine owns the tick (not a v1 flight): pack-full can cancel it below
+    // TEMP-DIAG neuc.53 r2: arm line per mine (revert before merge).
+    try { console.log(`mine arm-req stance=${qt && qt.stance ? `${qt.stance.x},${qt.stance.y},${qt.stance.z}` : 'in-place'} cell=${qt ? qt.k : 'none'} cache=${cacheReady(bot, (qt && qt.stance) || bp, QSTANCE_RADIUS)} need=${need} reloc=${f.mineReloc | 0}`) } catch (_) { /* diag best-effort */ }
     spend(f, 'dig')
     const gen = stepGen(ctx) // round-1 core-1: a late settle must not finish a step that is gone
     const settleMine = () => { ctx.castleFetchInFlight = false; ctx.castleFetchMine = false }

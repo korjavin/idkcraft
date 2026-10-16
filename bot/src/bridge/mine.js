@@ -131,6 +131,7 @@ async function warmCache(bot, at, radius, budgetMs, dead) {
 function cancelMine(bot, err) {
   const st = bot && bot._mine
   if (!st || st.settled) return false
+  try { console.log(`mine cancel id=${st.id} have=${st.have}`) } catch (_) { /* diag best-effort */ }
   try {
     if (bot.transport && typeof bot.transport.call === 'function') {
       bot.transport.call('baritone.cmd', { command: '#stop' }).catch(() => { /* stop best-effort */ })
@@ -188,7 +189,8 @@ function settle(bot, st, err, have) {
   if (err instanceof Error && typeof st.have === 'number' && st.have > 0) {
     try { err.mineHave = st.have } catch (_) { /* attach best-effort */ }
   }
-  if (err) st.reject(err)
+  try { console.log(`mine end err=${err ? err.message : 'done'} have=${typeof have === 'number' ? have : (st && st.have)}`) } catch (_) { /* diag best-effort */ }
+  if (err) { snapMineState(bot, 'end'); st.reject(err) }
   else st.resolve({ have })
 }
 
@@ -246,6 +248,8 @@ async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickM
     st.target = r.target
     st.have = typeof r.have === 'number' ? r.have : countHave(bot, names)
     st.gainAt = Date.now()
+    try { console.log(`mine arm id=${st.id} have=${st.have} target=${st.target} radius=${radius}`) } catch (_) { /* diag best-effort */ }
+    snapMineState(bot, 'arm')
     st.watch = setInterval(() => watch(bot, st, names, { radius, forbid, stallMs }), tickMs)
     if (typeof st.watch.unref === 'function') st.watch.unref()
   } catch (err) {
@@ -282,7 +286,24 @@ function stopAndReject(bot, st, err) {
       bot.transport.call('baritone.cmd', { command: '#stop' }).catch(() => { /* stop best-effort */ })
     }
   } catch (_) { /* stop best-effort */ }
+  try { console.log(`mine trip ${err && err.message} have=${st && st.have} target=${st && st.target}`) } catch (_) { /* diag best-effort */ }
+  snapMineState(bot, 'trip')
   settle(bot, st, err)
+}
+
+// TEMP-DIAG neuc.53 r2: Baritone-side snapshot (known/blacklisted/
+// pathing), best-effort, never rejects the mine.
+function snapMineState(bot, why) {
+  try {
+    Promise.resolve()
+      .then(() => bot.transport.call('baritone.minestate', {}))
+      .then((s) => {
+        try {
+          console.log(`mine state ${why} known=${s && s.known} blacklisted=${s && s.blacklisted} procActive=${s && s.procActive} pathing=${s && s.pathing} inControl=${s && s.inControl} goal=${s && s.customGoal} active=${s && s.active} have=${s && s.have} target=${s && s.target}`)
+        } catch (_) { /* diag best-effort */ }
+      })
+      .catch(() => { /* no minestate (unit fakes): silent */ })
+  } catch (_) { /* diag best-effort */ }
 }
 
 // Mod mine notifications. A foreign id (a superseded mine, a stop echo)
@@ -291,6 +312,7 @@ function handleMineEvent(bot, method, params) {
   if (method !== 'baritone.event' || !params || params.kind !== 'mine') return false
   const st = bot._mine
   if (!st || st.settled || params.id == null || params.id !== st.id) return true
+  try { console.log(`mine event id=${params.id} have=${params.have} target=${params.target} active=${params.active} status=${params.status || 'none'}`) } catch (_) { /* diag best-effort */ }
   if (typeof params.have === 'number' && params.have > st.have) {
     st.have = params.have
     st.gainAt = Date.now()
