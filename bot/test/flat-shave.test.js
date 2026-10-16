@@ -792,20 +792,167 @@ describe('sweep leftover scaffold (idkcraft-7wt)', () => {
     assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump') && c.includes('swept 1 leftover')), bot.chats.join('\n'))
   })
 
-  it('leaves foreign cobble in stepped columns (drq protected)', async () => {
+  it('leaves a foreign cobble wall in stepped columns (drq protected)', async () => {
     const world = makeWorld({})
     world.set(1, 64, 0, 'dirt') // one original bump: shave phase runs
     const { bot, ctx } = started(world)
     flat(bot, ctx, null, null); await settle() // scan
     assert.equal(ctx.flat.phase, 'shave')
     // Foreign cobble mid-episode on a stepped column (never scanned), and
-    // NOT in ctx.placedByBot: the sweep queues it, the guard keeps it.
+    // NOT in ctx.placedByBot: the sweep queues it, the guard keeps it. It
+    // touches more cobble, so it is a wall, not a lone pillar (vewo.7).
     world.set(3, 64, 0, 'cobblestone')
+    world.set(3, 64, 1, 'cobblestone')
     ctx.flat.stepped.add('3,0')
     await drive(bot, ctx, 60)
     assert.equal(ctx.flat, null, 'episode ends')
     assert.equal(world.blockAt({ x: 1, y: 64, z: 0 }).name, 'air', 'dirt bump shaved')
     assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'cobblestone', 'foreign cobble kept')
+  })
+})
+
+describe('lone pillars are shaved (idkcraft-vewo.7)', () => {
+  let cap
+  beforeEach(() => { cap = capture() })
+  afterEach(() => { cap.release() })
+
+  async function drive(bot, ctx, n) {
+    for (let i = 0; i < n && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'shave' && f.bumps.length > 0) {
+        const h = f.bumps[0]
+        bot.entity.position = pos(h.x + 2, h.y, h.z)
+      }
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+  }
+
+  function run(world, tile = null) {
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', tile) }
+    return { bot, ctx }
+  }
+
+  function column(world, x, z, h, name = 'cobblestone') {
+    for (let y = 64; y < 64 + h; y++) world.set(x, y, z, name)
+  }
+
+  for (const h of [1, 2, 3, 4, 5]) {
+    it(`shaves a free-standing ${h}-high cobble pillar to the level (not bot-placed)`, async () => {
+      const world = makeWorld({})
+      column(world, 2, 1, h)
+      const { bot, ctx } = run(world)
+      await drive(bot, ctx, 40 + 10 * h)
+      assert.equal(ctx.flat, null, 'episode ends')
+      for (let y = 64; y < 64 + h; y++) assert.equal(world.blockAt({ x: 2, y, z: 1 }).name, 'air', `y=${y} dug`)
+      assert.equal(world.blockAt({ x: 2, y: 63, z: 1 }).name, 'dirt', 'level ground kept')
+    })
+  }
+
+  it('our own tower beside a tall pillar does not stop the shave halfway (review core-1)', async () => {
+    const world = makeWorld({})
+    column(world, 2, 1, 3)
+    world.set(3, 64, 1, 'dirt') // pathfinder tower block placed to reach the top
+    const { bot, ctx } = run(world)
+    ctx.placedByBot = new Set(['3,64,1'])
+    ctx.flat.stepped.add('3,1')
+    // Body stays on the tower (feet 65): never teleported to the dig height.
+    for (let i = 0; i < 80 && ctx.flat; i++) {
+      bot.entity.position = pos(3.5, 65, 1.5)
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+    assert.equal(ctx.flat, null)
+    for (let y = 64; y <= 66; y++) assert.equal(world.blockAt({ x: 2, y, z: 1 }).name, 'air', `y=${y} dug`)
+  })
+
+  it('a foreign solid neighbour still makes it a wall', () => {
+    const world = makeWorld({})
+    world.set(3, 64, 1, 'dirt')
+    const bot = mockBot(world)
+    assert.equal(flat.lonePillar(bot, {}, 2, 64, 1), false)
+    assert.equal(flat.lonePillar(bot, { placedByBot: new Set(['3,64,1']) }, 2, 64, 1), true)
+    assert.equal(flat.lonePillar(bot, {}, 2, 65, 1), true)
+  })
+
+  it('shaves dirt and cobbled_deepslate pillars too', async () => {
+    const world = makeWorld({})
+    column(world, 2, 1, 3, 'dirt')
+    column(world, -2, -1, 2, 'cobbled_deepslate')
+    const { bot, ctx } = run(world)
+    await drive(bot, ctx, 80)
+    assert.equal(ctx.flat, null)
+    assert.equal(world.blockAt({ x: 2, y: 64, z: 1 }).name, 'air')
+    assert.equal(world.blockAt({ x: -2, y: 64, z: -1 }).name, 'air')
+  })
+
+  it('keeps a 2-wide cobble wall', async () => {
+    const world = makeWorld({})
+    column(world, 2, 1, 2)
+    column(world, 2, 2, 2)
+    const { bot, ctx } = run(world)
+    await drive(bot, ctx, 60)
+    assert.equal(ctx.flat, null)
+    assert.equal(world.blockAt({ x: 2, y: 64, z: 1 }).name, 'cobblestone')
+    assert.equal(world.blockAt({ x: 2, y: 65, z: 2 }).name, 'cobblestone')
+  })
+
+  for (const side of ['oak_planks', 'oak_door', 'torch']) {
+    it(`keeps a cobble pillar touching ${side}`, async () => {
+      const world = makeWorld({})
+      column(world, 2, 1, 2)
+      world.set(3, 64, 1, side)
+      const { bot, ctx } = run(world)
+      await drive(bot, ctx, 60)
+      assert.equal(ctx.flat, null)
+      assert.equal(world.blockAt({ x: 2, y: 64, z: 1 }).name, 'cobblestone')
+      assert.equal(world.blockAt({ x: 2, y: 65, z: 1 }).name, 'cobblestone')
+    })
+  }
+
+  for (const [where, x] of [['house box', 2], ['house apron', -3]]) {
+    it(`keeps a lone cobble/dirt pillar inside the ${where} (house footprint beats the exemption)`, async () => {
+      const world = makeWorld({})
+      column(world, x, 1, 2)
+      column(world, x, -1, 1, 'dirt')
+      const { bot, ctx } = run(world)
+      // Box case: pillar inside interior x 1..3. Apron case: interior x 0..1,
+      // so x=-3 is outside the wall ring but inside the 3-cell apron.
+      ctx.home = x === 2
+        ? { site: pos(2, 63, -3), interior: { min: pos(1, 64, -2), max: pos(3, 66, 2) } }
+        : { site: pos(0, 66, -3), interior: { min: pos(0, 64, -2), max: pos(1, 66, 2) } }
+      await drive(bot, ctx, 60)
+      assert.equal(ctx.flat, null)
+      assert.equal(world.blockAt({ x, y: 64, z: 1 }).name, 'cobblestone')
+      assert.equal(world.blockAt({ x, y: 64, z: -1 }).name, 'dirt')
+    })
+  }
+
+  it('logs and leaves stay kept (unchanged)', async () => {
+    const world = makeWorld({})
+    column(world, 2, 1, 3, 'oak_log')
+    column(world, -2, -1, 1, 'oak_leaves')
+    const { bot, ctx } = run(world)
+    await drive(bot, ctx, 60)
+    assert.equal(ctx.flat, null)
+    assert.equal(world.blockAt({ x: 2, y: 66, z: 1 }).name, 'oak_log')
+    assert.equal(world.blockAt({ x: -2, y: 64, z: -1 }).name, 'oak_leaves')
+  })
+
+  it('swarm strips each shave only their own pillars', async () => {
+    const world = makeWorld({})
+    column(world, -3, 0, 2) // strip 0 of 2
+    column(world, 3, 0, 2) // strip 1 of 2
+    const a = run(world, { i: 0, n: 2 })
+    await drive(a.bot, a.ctx, 60)
+    assert.equal(a.ctx.flat, null)
+    assert.equal(world.blockAt({ x: -3, y: 64, z: 0 }).name, 'air', 'strip 0 pillar shaved')
+    assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'cobblestone', 'strip 1 pillar left to its bot')
+    const b = run(world, { i: 1, n: 2 })
+    await drive(b.bot, b.ctx, 60)
+    assert.equal(b.ctx.flat, null)
+    assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'air', 'strip 1 pillar shaved')
   })
 })
 
