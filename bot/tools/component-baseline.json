@@ -1,0 +1,18 @@
+{
+  "v2": {
+    "lay": {
+      "rate": 24.2,
+      "runs": [24.2, 24.2],
+      "sha": "a910c3f2",
+      "date": "2026-10-16",
+      "setup": "CASTLE_COMPONENT=lay CASTLE_BODY=baritone BARITONE_IMAGE=idkcraft-baritone:g0z58-warm CASTLE_PADSPOT=250,350, 10 min, tick untouched"
+    },
+    "mine": {
+      "rate": 15.8,
+      "runs": [16.0, 15.5],
+      "sha": "a910c3f2",
+      "date": "2026-10-16",
+      "setup": "CASTLE_COMPONENT=mine CASTLE_BODY=baritone BARITONE_IMAGE=idkcraft-baritone:g0z58-warm CASTLE_PADSPOT=250,350, 10 min, tick untouched"
+    }
+  }
+}

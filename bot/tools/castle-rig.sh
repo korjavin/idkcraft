@@ -84,9 +84,16 @@
 #   CASTLE_PIT_REFUSE=0 keeps placements working: the pillar control),
 #   CASTLE_PIT_GOAL=level forces pit stuck goals level (the i4wm repro),
 #   CASTLE_PIT_SHAPE=corner|hall picks the hollow (i4wm corner/hall repro),
-#   CASTLE_TICKRATE (1 = wall-clock game untouched, the gate regime;
-#   N > 1 runs /tick rate N — literal ticks/sec, 20 = normal, 60 = 3x,
-#   100 = 5x — for fast iteration),
+#   CASTLE_TICK_RATE (neuc.60; CASTLE_TICKRATE is the old name: 1 = server
+#   untouched, the default; N > 1 runs /tick rate N — literal ticks/sec,
+#   20 = normal, 60 = 3x — and [mins] become GAME minutes: wall =
+#   mins * 20 / N; the verdict adds tick=, game= (rcon gametime) and
+#   cells/game-min; no speedup on either body above 20 — README),
+#   CASTLE_COMPONENT (''|mine|lay — neuc.60: a component rig, default 10
+#   min; lay = CASTLE_KIT=lay, a full-stock kit: cells laid per game
+#   minute; mine = CASTLE_KIT=pick, 3 stone picks and nothing to lay:
+#   blocks banked per game minute inside stone fetch legs; one extra
+#   `<kind>-rate` verdict line judged against component-baseline.json),
 #   RIG_PLANNER (jev|laya|llm|stub, default jev — the real JEV; llm = the
 #   vhlb.2 LLM planner, key ANTHROPIC_API_KEY or stash
 #   secrets/minecraft/anthropic-api-key; the jev key comes from
@@ -101,9 +108,9 @@
 # on the slot starts without manual cleanup.
 # The pristine snapshot (world/world.tar) is only ever READ (tar -xf); a
 # sha move fails the run (exit 2) so runs stay comparable. Acceleration
-# caveat: the bot ticks on wall-clock seconds, so a faster game clock gives
-# it more game-time per decision — gates run at 1; the max safe rate is
-# measured in the vmzq.24 report, not assumed here.
+# caveat: the bot ticks on wall-clock seconds and neither body follows a
+# faster server (measured neuc.60: v2 lays 24.2 cells/game-min at 20, 9.4
+# at 40, 4.6 at 60) — the safe rate is 20; gates run untouched.
 # One castle run per rig (own containers/ports/locks, so a castle run and a
 # stuck run can share the box): container idk-castle[-<id>], host port
 # 25581 + letter index (a=25582, b=25583), data under
@@ -158,11 +165,20 @@ NIGHT="${CASTLE_NIGHT:-0}"
 if [ "${1:-}" = --night ]; then NIGHT=1; shift; fi
 [ $# -le 1 ] || { echo "usage: castle-rig.sh [--night] [mins] (got: $*)"; exit 2; }
 case "$NIGHT" in 0|1) ;; *) echo "CASTLE_NIGHT: want 0|1, got '$NIGHT'"; exit 2 ;; esac
-MINS="${1:-${CASTLE_MINS:-6}}"
+COMPONENT="${CASTLE_COMPONENT:-}"
+case "$COMPONENT" in
+  '') ;;
+  lay) CASTLE_KIT="${CASTLE_KIT:-lay}" ;;
+  mine) CASTLE_KIT="${CASTLE_KIT:-pick}" ;;
+  *) echo "CASTLE_COMPONENT: want ''|mine|lay, got '$COMPONENT'"; exit 2 ;;
+esac
+[ -z "$COMPONENT" ] || [ -z "${CASTLE_SEED:-}${CASTLE_IDLE:-}" ] || { echo "CASTLE_COMPONENT orders a castle: no CASTLE_SEED/CASTLE_IDLE"; exit 2; }
+_mdef=6; [ -n "$COMPONENT" ] && _mdef=10
+MINS="${1:-${CASTLE_MINS:-$_mdef}}"
 case "$MINS" in ''|*[!0-9]*) echo "mins: want a positive integer, got '$MINS'"; exit 2 ;; esac
 [ "$MINS" -ge 1 ] || { echo "mins: want a positive integer, got '$MINS'"; exit 2; }
 KIT="${CASTLE_KIT:-empty}"
-case "$KIT" in empty|seeded|junk|valuables|stairs|blast) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs|blast, got '$KIT'"; exit 2 ;; esac
+case "$KIT" in empty|seeded|junk|valuables|stairs|blast|lay|pick) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs|blast|lay|pick, got '$KIT'"; exit 2 ;; esac
 SEED="${CASTLE_SEED:-}"
 case "$SEED" in ''|complete) ;; *) echo "CASTLE_SEED: want ''|complete, got '$SEED'"; exit 2 ;; esac
 SEED_VERSION="${CASTLE_SEED_VERSION:-}"
@@ -179,9 +195,12 @@ case "$IDLE_DEATH" in ''|*[!0-9]*) echo "CASTLE_IDLE_DEATH: want minutes >= 0, g
 BLOCKED="${CASTLE_BLOCKED:-0}"
 case "$BLOCKED" in ''|*[!0-9]*) echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2 ;; esac
 { [ "$BLOCKED" -ge 0 ] && [ "$BLOCKED" -le 16 ]; } || { echo "blocked: want an integer 0..16, got '$BLOCKED'"; exit 2; }
-TICKRATE="${CASTLE_TICKRATE:-1}"
+TICKRATE="${CASTLE_TICK_RATE:-${CASTLE_TICKRATE:-1}}"
 case "$TICKRATE" in ''|*[!0-9]*) echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2 ;; esac
 { [ "$TICKRATE" -ge 1 ] && [ "$TICKRATE" -le 100 ]; } || { echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2; }
+if [ "$TICKRATE" -gt 20 ]; then
+  echo "tickrate [$TICKRATE]: neither body follows a server above 20 tps (neuc.60, README) — [mins] are game minutes; expect fewer cells per game minute, not a speedup"
+fi
 RIG_PLANNER="${RIG_PLANNER:-jev}"
 case "$RIG_PLANNER" in jev|laya|llm|stub) ;; *) echo "RIG_PLANNER: want jev|laya|llm|stub, got '$RIG_PLANNER'"; exit 2 ;; esac
 export RIG_PLANNER
@@ -388,7 +407,7 @@ if [ "${CASTLE_BODY:-}" = baritone ]; then
   sleep 6 # Paper's same-IP connection throttle before the guide joins
   export BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT="$MOD_PORT" BRIDGE_CONSOLE_PORT="$BODY_CONSOLE_PORT"
 fi
-export CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
+export CASTLE_COMPONENT="$COMPONENT" CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
 export CASTLE_REPAIR="${CASTLE_REPAIR:-}" CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_SEED_VERSION="$SEED_VERSION" CASTLE_SEED_DECOR_EXCEPT="${CASTLE_SEED_DECOR_EXCEPT:-}" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
