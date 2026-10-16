@@ -245,6 +245,7 @@ const CHEST_DRY_MS = 10 * 60 * 1000
 function chestLogsTick(bot, ctx, g, logs, bp) {
   let pick = g.chestLogs
   if (!pick) {
+    if (g.chestTried) return false // one try per attempt, dry window or not
     try {
       if (ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx)) return false
     } catch (_) { return false }
@@ -264,6 +265,7 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
   const markDry = () => {
     (ctx.chestLogsDry || (ctx.chestLogsDry = {}))[pick.k] = Date.now()
     g.chestLogs = null
+    g.chestTried = true
   }
   const want = NEED_LOGS - logs
   let busy = false
@@ -321,6 +323,7 @@ function gather(bot, ctx, target, state) {
       return
     }
     g.final = null
+    g.chestTried = false // a fresh attempt may draw the chest again (ht8l)
     // A fresh attempt re-counts its own near misses (stale ground's
     // misses never ride a relocation retry's give-up line).
     if (g.nearMiss) g.nearMiss.clear()

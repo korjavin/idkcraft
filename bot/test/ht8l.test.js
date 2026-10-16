@@ -118,6 +118,28 @@ describe('gather draws banked logs first (ht8l)', () => {
     assert.ok(ctx.chestLogsDry['20,64,20'])
   })
 
+  it('a chest past the task radius is never walked to (far castle, home 200 off)', async () => {
+    const bot = makeBot({ chests: { '200,64,0': [{ name: 'oak_log', count: 40 }] } })
+    const ctx = castleCtx(pos(200, 64, 0))
+    gather(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.opens.length, 0)
+    assert.ok(treeGoal(bot), 'chops on the first tick')
+  })
+
+  it('a short draw is one try per attempt, even past the dry window', async () => {
+    const chests = { '1,64,1': [{ name: 'oak_log', count: 3 }] }
+    const bot = makeBot({ chests })
+    const ctx = castleCtx(pos(1, 64, 1))
+    gather(bot, ctx)
+    await settle(); await settle()
+    ctx.chestLogsDry = {} // the window lapsed mid-chop
+    chests['1,64,1'][0].count = 40
+    gather(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.opens.length, 1)
+  })
+
   it('built home, no castle: never draws (stockpile would bank the logs straight back)', async () => {
     const bot = makeBot({ chests: { '1,64,1': [{ name: 'oak_log', count: 40 }] } })
     const ctx = castleCtx(pos(1, 64, 1), { castle: null })
