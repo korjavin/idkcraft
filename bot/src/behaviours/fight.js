@@ -1,9 +1,10 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const { Vec3 } = require('vec3')
 const { isFightTarget } = require('../perception')
 const follow = require('./follow')
-const { issueGoal } = require('./util')
+const { issueGoal, clearGoal } = require('./util')
 
 const SWING_RANGE = 3
 // ponytail: spaced retries + give-up. Re-issuing setGoal every brain tick
@@ -41,6 +42,27 @@ function fight(bot, ctx, target, state) {
   ctx.fightId = hostile.id
   const key = `fight:${hostile.id}`
   const inRange = bot.entity.position.distanceTo(hostile.position) <= SWING_RANGE
+  if (airborne(bot, hostile)) {
+    // idkcraft-2pkm: never pursue a flying mob (phantom, bat, a rising
+    // blaze). GoalFollow's isEnd is 3D, so the only path to a mob in open
+    // air is up: v1 1x1 towers / placed jump-up stairs, v2 Baritone
+    // allowPlace pillars — and the column stays in the landscape. No
+    // pursuit goal ever (in reach too: a dynamic follow of a swooping
+    // phantom chases it back up); drop our own one, since follow(null) in
+    // work mode leaves it driving. In reach: swing. Out of reach: a flying
+    // kind is written off like an unreachable mob (brain sees
+    // hostile_reachable=false); a walker momentarily over air (falling off
+    // a ledge) only gets no goal this tick and is re-checked next tick.
+    if (ctx.lastGoalKey === key) clearGoal(bot, ctx)
+    ctx.fightPursuit = 0
+    if (inRange) {
+      if (!ctx.reflexSwung) swing(bot, hostile)
+      return
+    }
+    if (FLYERS.has(hostile.name)) ctx.fightGivenUpId = hostile.id
+    follow(bot, ctx, target, state)
+    return
+  }
   if (ctx.fightGivenUpId === hostile.id) {
     // Pursuit abandoned (the brain sees hostile_reachable=false and yields
     // to follow): shadow the player as the local safety net, swing if the
@@ -105,6 +127,29 @@ function stickyTarget(bot, ctx, target, fresh) {
   return prev
 }
 
+// Flying = an always-flying kind (FLYERS: a phantom swooping low is still
+// one tick from climbing away), or no floor (any non-air block: ground,
+// leaves, water) in the mob's own cell (slab, carpet, snow layer) or the
+// FLOOR_CELLS cells under its feet, i.e. not standing where a bot on foot
+// can stand within melee height of it. Unknown cells (no blockAt,
+// unloaded chunk) read as grounded: the old pursuit stands.
+// ponytail: a grounded mob on a tall ledge can still be towered to (old
+// behaviour, not this bead).
+const FLOOR_CELLS = 2
+const FLYERS = new Set(['phantom', 'ghast', 'vex', 'bat'])
+function airborne(bot, hostile) {
+  if (FLYERS.has(hostile.name)) return true
+  if (typeof bot.blockAt !== 'function') return false
+  const p = hostile.position
+  try {
+    for (let k = 0; k <= FLOOR_CELLS; k++) {
+      const b = bot.blockAt(new Vec3(Math.floor(p.x), Math.floor(p.y) - k, Math.floor(p.z)))
+      if (!b || !/(^|_)air$/.test(b.name || '')) return false
+    }
+  } catch (_) { return false }
+  return true
+}
+
 function swing(bot, hostile) {
   bot.lookAt(hostile.position.offset(0, hostile.height * 0.8, 0), true)
   bot.attack(hostile)
@@ -164,4 +209,5 @@ function equipGear(bot) {
 module.exports = fight
 module.exports.SWING_RANGE = SWING_RANGE
 module.exports.swing = swing
+module.exports.airborne = airborne
 module.exports.equipGear = equipGear
