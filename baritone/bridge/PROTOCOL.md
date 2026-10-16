@@ -34,6 +34,7 @@ inside the same envelope — no second port.
 | `state.get` | — | `{pos:{x,y,z,yaw,pitch,onGround,inWater,inLava,digging,vel},health,food,oxygen,time,spawn,isRaining,isSleeping,dimension,gameMode}` (all null offline; `inWater`/`inLava` = the client `isInWater()`/`isInLava()`, neuc.25; `digging` = `gameMode.isDestroying()`, holds the adapter's stall re-plan, neuc.30) | `entity/position/health/food`, `time`, `game`, `isRaining` |
 | `chat.send` | `{message}` (`/…` runs a command) | `{sent:true}` | `chat(msg)` |
 | `baritone.cmd` | `{command}` e.g. `#goto x y z` (`#` stripped) | `{id}` (fresh id per cmd; goal cmds arm the tracker) | `pathfinder.setGoal/stop` |
+| `baritone.mine` | `{blocks:[names],count,radius}` (neuc.53 section below) | `{id,have,target}` | `bot.mine` (v2 only; undefined on v1) |
 | `baritone.status` | — | `{id,pathing,last}` (`last`: `none` before any terminal) | `isMoving`, `path_update`/`path_reset` |
 | `entities.list` | — | `{entities:[…]}` (shape in the entities section below) | `bot.entities[id]` |
 | `roster.get` | — | `{players:[…]}` | `bot.players[name]` |
@@ -88,6 +89,79 @@ goal or `#stop`). `#stop`'s
 `CANCELED` resolves the TRACKED goal id as `stopped` (idle stops stay
 silent). A cmd issued at the menu resolves `stopped` on the next tick —
 no player to drive.
+
+## Mine (idkcraft-neuc.53)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Mine.java`
+(`Mine.install(server)`, wired from `BridgeMod.onInitializeClient`).
+Node: `bot/src/bridge/mine.js` (`installMine` in the adapter
+constructor; `handleMineEvent` first in the adapter's event router for
+`baritone.event` with `kind:'mine'`).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `baritone.mine` | `{blocks:[names],count,radius,guard?}` (`blocks` non-empty, `count` positive; `radius` accepted, enforced in Node; `guard` = `{x0,y0,z0,x1,y1,z1}` cell box, mod-enforced) | `{id,have,target}` (`target` = live matching count + `count`, Baritone's absolute quantity) | `bot.mine(names,count,{radius,forbid})` → `Promise<{have}>` |
+| `baritone.minestate` | `{}` (diagnostic read, no params) | `{id,have,target,active,procActive,pathing,inControl,customGoal,known,blacklisted}` (control/goal best-effort nulls, list sizes -1 when unreadable; throws `not in world` out of world) | scratch probes only (no `bot.*` surface) |
+
+End statuses on `baritone.event {kind:'mine', …}`: `done` (at/above target),
+`noPath` (the process gave up by itself), `guard` (a guarded cell broke →
+`mine-guard`, its own error so callers retire the stance instead of
+re-arming beside it like the body `mine-leash`), `futile` (live churn trip: no gains while the blacklist
+keeps growing → `mine-futile`, read by callers like no reachable
+targets). The trip rule lives in `Mine.futileTrip` (unit-tested).
+
+Quantity is Baritone's own: `IMineProcess.mineByName(target, ...blocks)`
+stops when the inventory holds `target` (verified against the
+baritone-api 1.18.0 jar the Dockerfile ships). Drops count toward
+their block (stone→cobblestone, grass_block→dirt), both sides. Cancel:
+`#stop` already cancels every process (kept — no new verb); the next
+tick reports the end, and the adapter's goal latch (`_stopPath`, any
+`_setGoal`) cancels a live mine the same way (`bot.cancelMine`, reject
+`mine-stopped`) so an owner stop or step change never leaves it mining.
+While live, the mine parks a `{mine:true}` marker as `pathfinder.goal`
+— `stopOnce`/clearOwner-switch cleanups gate on the goal, and `isMoving`
+stays false so the stuck machine never counts a mining body (the mine
+has its own 60 s stall). Callers write `lastGoalKey = 'mine:<step>'`
+when the mine starts, or a `stopOnce` parked at `'idle'` would gate out
+before reading the goal.
+Progress: `baritone.event
+{kind:'mine',id,have,target,active}` on each tick the count changes
+and once on end (`status:'done'` when `have >= target`, `'guard'` when
+a guarded cell broke, else `'noPath'` — the process gave up by itself;
+a process that stays live without gaining is the Node stall, and the
+Node side maps `guard` to `mine-guard`). `baritone.status` reads a live
+mine as pathing (the custom-goal probe counts it, so the stall
+watchdog never reads a live mine as idle). Settings ride the existing
+`#set` path with the verb: `mineScanDroppedItems true`, `legitMine
+false`, `mineGoalUpdateInterval 5`, `allowBreak true` (Baritone 1.18.0
+defaults for the first three, pinned because `#set` persists to the
+client settings.txt across calls; `allowBreak` because a mine digs by
+definition — a no-dig walk lease would leave it targetless — mirrored
+into the adapter diff so the next lease restores its value). The mod
+additionally suspends `blocksToDisallowBreaking` /
+`blocksToAvoidBreaking` for exactly the requested blocks for the call
+(v2 Movements hard-ban built castle kinds and cost quarry rock, and
+Baritone's `plausibleToBreak` discards every banned target — without
+the suspension a mine next to the castle scans stone it may never
+break; v1's mineflayer dig bypasses the lists, which is why only v2
+stalled). The adapter skips those three keys in lease re-pushes while
+a mine is live, so no mid-mine sync re-bans targets; both restore on
+every end (mod snapshot + next lease diff). Baritone has no per-process
+region: the Node side leashes (`radius` from the start position, plus
+a caller `forbid(pos)` — a leash that trips on entry, so a mine that
+starts inside never fails at once) and rejects
+`mine-noPath`/`mine-stall`/`mine-leash`/`mine-stopped` (`mine-stopped`
+settles quietly in the behaviours — no finish/fail, the next tick
+re-issues — so a borrowing fight keeps the body). Every stone leg
+mines at most one castle BATCH (16) per call; longer hauls re-issue.
+The `guard` box
+is the cell-level counterpart to the body leash: cells inside it that
+match the requested blocks are snapshotted at begin, and the first
+break inside stops the process at once (castlefetch passes the site
+box after walking out of it; equip passes the home footprint + apron;
+at most 64³ cells). On v1 `bot.mine` is
+undefined (no mineflayer implementation — callers branch on
+`typeof bot.mine === 'function'`).
 
 ## Prod methods (sized, not in the spike)
 

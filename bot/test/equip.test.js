@@ -2876,6 +2876,137 @@ describe('tableFor sight (neuc.50)', () => {
   })
 })
 
+describe('equip v2 mine branch (idkcraft-neuc.53)', () => {
+  const KIT = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
+
+  it('one bot.mine call for the shortfall, no bot.dig', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1, 'exactly one mine call')
+    assert.deepEqual(mines[0].names, ['dirt', 'grass_block', 'stone', 'cobblestone'])
+    assert.equal(mines[0].count, 22, 'SCAFFOLD_FULL(32) - scaffold(10)')
+    assert.equal(mines[0].opts.radius, 12)
+    assert.equal(typeof mines[0].opts.forbid, 'function')
+    assert.equal(bot.calls.dig.length, 0, 'no single digs on the mine path')
+    await flush()
+    assert.equal(ctx.equipDigInFlight, false, 'the in-flight flag clears on resolve')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('a rejected mine fails blocks so the hold and latch keep working', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    bot.mine = async () => { throw new Error('mine-stall') }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.equipDigInFlight, false)
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+    assert.ok(bot.errs.join(' ').includes('mine-stall'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('a mine-stopped settles quietly: no fail onto a borrowing fight', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    bot.mine = async () => { throw new Error('mine-stopped') }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(ctx.equipDigInFlight, false)
+    assert.equal(ctx.stepStatus, 'running', 'no equip-blocks written over the fight')
+    assert.equal(bot.errs.length, 0)
+    bot.restoreError()
+  })
+
+  it('a body inside the home box walks out before any mine', async () => {
+    const home = { site: { x: 0, y: 64, z: 0 }, interior: { min: { x: -2, y: 63, z: -2 }, max: { x: 2, y: 66, z: 2 } } }
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx(home) // body (0,64,0) is inside the box
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 0, 'no mine from the porch')
+    assert.equal(bot.calls.goals.length, 1, 'one walk-out goal')
+    assert.ok(String(ctx.lastGoalKey).startsWith('equip-guard:'), `walk-out key, not idle: ${ctx.lastGoalKey}`)
+    bot.entity.position = { x: 500, y: 64, z: 500 } // out: the mine starts
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.equal(ctx.lastGoalKey, 'mine:equip', 'a goal key while the mine owns the body')
+    bot.restoreError()
+  })
+
+  it('insideGuardBox/guardExitBox pick the shortest way out', async () => {
+    const guard = { x0: -5, y0: 58, z0: -5, x1: 5, y1: 67, z1: 5 }
+    assert.equal(equip.insideGuardBox(guard, { x: 0, y: 64, z: 0 }), true)
+    assert.equal(equip.insideGuardBox(guard, { x: 500, y: 64, z: 500 }), false)
+    assert.deepEqual(equip.guardExitBox(guard, { x: 0, y: 64, z: 4 }), { x: 0, y: 64, z: 6 })
+  })
+
+  it('the mine carries the home guard box, none without a home', async () => {
+    const home = { site: { x: 0, y: 64, z: 0 }, interior: { min: { x: -2, y: 63, z: -2 }, max: { x: 2, y: 66, z: 2 } } }
+    assert.deepEqual(equip.equipGuardBox(home), {
+      x0: -5, y0: 58, z0: -5, x1: 5, y1: 67, z1: 5,
+    })
+    assert.equal(equip.equipGuardBox(null), null)
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    bot.entity.position = { x: 500, y: 64, z: 500 } // outside the box: the mine starts
+    const ctx = freshCtx(home)
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.deepEqual(mines[0].opts.guard, equip.equipGuardBox(home))
+    bot.restoreError()
+  })
+
+  it('a full kit never mines', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 32 }], ids: IDS, recipes: {} })
+    let mined = 0
+    bot.mine = async () => { mined++ }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(mined, 0)
+    assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
+  })
+
+  it('water underfoot never trips the leash', async () => {
+    const bot = mockBot({
+      items: [...KIT, { name: 'dirt', count: 10 }],
+      ids: IDS,
+      recipes: {},
+      blockAtImpl: (p) => (p.y === 63 ? { name: 'water', position: p } : null),
+    })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.equal(mines[0].opts.forbid({ x: 0, y: 64, z: 0 }), false, 'swimming past water is not forbidden')
+    bot.restoreError()
+  })
+
+  it('the castle site still forbids the body', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx()
+    ctx.castle = { site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: 1 }
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.equal(mines[0].opts.forbid({ x: 0, y: 64, z: 0 }), true, 'standing on the site is forbidden')
+    assert.equal(mines[0].opts.forbid({ x: 500, y: 64, z: 500 }), false, 'far ground is not')
+    bot.restoreError()
+  })
+})
+
 describe('equip pick budget (idkcraft-neuc.59)', () => {
   // v2 fake: bot.mine marks the Baritone body (no BOT_BODY env juggling, so
   // v1 tests in this file keep running with the env untouched).

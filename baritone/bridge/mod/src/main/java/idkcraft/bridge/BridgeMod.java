@@ -27,6 +27,7 @@ public class BridgeMod implements ClientModInitializer {
             Lifecycle.install(server); // idkcraft-neuc.10: lifecycle/event parity
             Windows.install(server); // idkcraft-neuc.11: container windows
             Interact.install(server); // idkcraft-neuc.7: dig/place
+            Mine.install(server); // idkcraft-neuc.53: baritone.mine -> MineProcess
             Build.install(server); // idkcraft-neuc.54: baritone.build (BuilderProcess)
             server.start();
         } catch (NoClassDefFoundError e) {

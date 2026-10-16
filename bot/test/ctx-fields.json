@@ -1124,6 +1124,7 @@
       "src/behaviours/castlefetch.js",
       "src/behaviours/craftany.js",
       "src/behaviours/deep.js",
+      "src/behaviours/equip.js",
       "src/behaviours/explore.js",
       "src/behaviours/flat.js",
       "src/behaviours/forage.js",
