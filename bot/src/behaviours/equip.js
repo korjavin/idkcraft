@@ -465,7 +465,7 @@ function issueToolOp(bot, ctx, op) {
           fail(bot, ctx, op.item, new Error('no-recipe'), gen)
           return
         }
-        craftOne(bot, ctx, { item: op.item, recipe: found[0], count: 1, table: t.block }, gen)
+        craftOne(bot, ctx, { item: op.item, recipe: found[0], count: 1, table: t.block, onSettle: op.onSettle }, gen)
       },
       (err) => {
         ctx.equipInFlight = false
@@ -485,6 +485,12 @@ function issueToolOp(bot, ctx, op) {
 // or a craft already in flight), false when the budget is not due — the
 // caller then digs as before. Async failures settle through the shared
 // fail path (stale-dropped outside the equip step, never poisoning it).
+// Consecutive topped-up ticks with no pick landing before the slow give-up
+// fires (round-3 review): table walks settle nothing, so dry SETTLES alone
+// cannot bound a walk loop (tableFor gives up at 20 walkWaits, then the
+// next tick walks again). 40 is well above a healthy top-up — a landed pick
+// resets — and far below a wedged leg.
+const SPARE_TICK_CAP = 40
 function craftSparePick(bot, ctx) {
   try {
     if (ctx.equipInFlight) return true
@@ -492,21 +498,41 @@ function craftSparePick(bot, ctx) {
     // Give-up (round-2 review): async failures settle stale-dropped outside
     // the equip step (fail() early-returns when step !== 'equip'), so a
     // broken table path would retry every tick and the leg would never dig.
-    // Cap consecutive no-progress attempts per leg (the craft-stall 3): a
-    // landed pick resets, the third dry attempt latches for the leg.
+    // Two caps per leg. Fast: consecutive settled dry crafts (the
+    // craft-stall 3) — walks and precursors settle nothing and never
+    // increment (round-3 review). Slow: SPARE_TICK_CAP true ticks with no
+    // pick landing, bounding the walk loop. A landed pick resets both.
     const f = ctx.castleFetch
     if (f && f.spareGiveUp) return false
-    const picks = pickCount(bot)
-    if (f && typeof f.sparePicks === 'number') {
-      if (picks > f.sparePicks) f.spareTries = 0
-      else {
-        f.spareTries = (f.spareTries | 0) + 1
-        if (f.spareTries >= CRAFT_STALL_STRIKES) { f.spareGiveUp = true; return false }
+    if (f) {
+      const picks = pickCount(bot)
+      if (typeof f.spareTickPicks !== 'number' || picks > f.spareTickPicks) {
+        f.spareTicks = 0
+        f.spareTickPicks = picks
+      } else if ((f.spareTicks = (f.spareTicks | 0) + 1) >= SPARE_TICK_CAP) {
+        f.spareGiveUp = true
+        return false
       }
     }
-    if (f) f.sparePicks = picks
     const op = toolOp(bot, 'pickaxe')
     if (!op || op.fail) return false
+    if (op.item.endsWith('_pickaxe')) {
+      const leg = f || null
+      try {
+        op.onSettle = (landed) => {
+          try {
+            if (!leg || ctx.castleFetch !== leg || leg.spareGiveUp) return
+            if (landed) {
+              leg.spareTries = 0
+              leg.spareTickPicks = pickCount(bot)
+              leg.spareTicks = 0
+            } else if ((leg.spareTries = (leg.spareTries | 0) + 1) >= CRAFT_STALL_STRIKES) {
+              leg.spareGiveUp = true
+            }
+          } catch (_) { /* accounting best-effort */ }
+        }
+      } catch (_) { /* accounting best-effort */ }
+    }
     issueToolOp(bot, ctx, op)
     return true
   } catch (_) { return false }
@@ -572,6 +598,14 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
   const st = (ctx.equip && typeof ctx.equip === 'object') ? ctx.equip : (ctx.equip = {})
   // Count base for the pickaxe landing check below (neuc.59).
   const pickBase = op.item.endsWith('_pickaxe') ? pickCount(bot) : 0
+  // Settle reporting (neuc.59): the castlefetch spare-pick fallback counts
+  // settled dry crafts per leg. Absent for every other caller: zero change.
+  let reported = false
+  const report = (landed) => {
+    if (reported) return
+    reported = true
+    try { if (op && typeof op.onSettle === 'function') op.onSettle(!!landed) } catch (_) { /* accounting best-effort */ }
+  }
   ctx.equipInFlight = true
   // Exactly-once settlement: a hung window (live ghost reads) must fail
   // loudly on a deadline, never freeze the menu with the flag stuck.
@@ -599,6 +633,7 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
       await craftMod.safeCraft(bot, op.recipe, op.count, op.table, { ctx, item: op.item })
     } catch (err) {
       finish(() => fail(bot, ctx, op.item, err, gen))
+      report(false)
       return
     }
     // g0z.25 escalating verify: the immediate post-craft model lies
@@ -617,6 +652,7 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
       if (timedOut) return
       landed = landedNow()
     }
+    report(landed)
     finish()
     const strikes = (st.made && st.made[op.item]) || 0
     if (!landed) {
@@ -649,6 +685,7 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
   })
   void Promise.race([run(), timeout]).catch((err) => {
     timedOut = true
+    report(false)
     finish(() => fail(bot, ctx, op.item, err, gen))
   })
 }
