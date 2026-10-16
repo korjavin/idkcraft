@@ -494,13 +494,14 @@ function bankWoolTick(bot, ctx, st) {
 
 // Walk to the home chest and run one async op there (one flight at a time).
 // True while walking or in flight; false when there is no chest or it is
-// unreachable.
-function chestTick(bot, ctx, st, key, op) {
+// unreachable. `at`: an explicit chest instead of the home one (ht8l: the
+// castle site chest), no adoption.
+function chestTick(bot, ctx, st, key, op, at = null) {
   // Adopt-on-sight (stockpile mirror): a fresh session has no chest claim
   // until stockpile runs, and the withdraw must not instant-fail for that.
   try {
     const home = ctx.home
-    if (home && home.site && (!home.chest || typeof home.chest.x !== 'number')) {
+    if (!at && home && home.site && (!home.chest || typeof home.chest.x !== 'number')) {
       for (const s of stockpileMod.spotsFor(home)) {
         let nm = null
         try {
@@ -514,7 +515,7 @@ function chestTick(bot, ctx, st, key, op) {
       }
     }
   } catch (_) { /* unadopted: fall through to the claim check */ }
-  const c = ctx.home && ctx.home.chest
+  const c = at || (ctx.home && ctx.home.chest)
   if (!c || typeof c.x !== 'number') return false
   const bp = bot.entity && bot.entity.position
   if (!bp || typeof bp.x !== 'number') return true

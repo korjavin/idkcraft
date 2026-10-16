@@ -232,6 +232,57 @@ function finalLine(g, final, search) {
   return `no trees within ${radius} of here${excl}`
 }
 
+// Banked logs first (ht8l, owner: "chests full of logs, it chops anyway"):
+// the home chest (or the castle site chest), nearest within the task
+// radius, before any tree. One try per need: a draw short of the ask, or an
+// unreachable chest, marks that chest dry for CHEST_DRY_MS and the chop runs
+// as before — an empty chest never loops. Only while nothing banks the logs
+// straight back (no ping-pong): an unbuilt home (stockpile is built-only) or
+// an open castle (its wood keep, LOG_KEEP, covers a full NEED_LOGS load).
+// ponytail: logs only — banked planks feed beds (beds.js) and the castle
+// chest (castlefetch chestTick); add planks here if a plank-only bank shows.
+const CHEST_DRY_MS = 10 * 60 * 1000
+function chestLogsTick(bot, ctx, g, logs, bp) {
+  let pick = g.chestLogs
+  if (!pick) {
+    try {
+      if (ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx)) return false
+    } catch (_) { return false }
+    const dry = ctx.chestLogsDry || {}
+    const now = Date.now()
+    for (const c of [ctx.home && ctx.home.chest, ctx.castle && ctx.castle.siteChest]) {
+      if (!c || typeof c.x !== 'number') continue
+      const k = `${c.x},${c.y},${c.z}`
+      if (typeof dry[k] === 'number' && now - dry[k] < CHEST_DRY_MS) continue
+      const d = Math.hypot(bp.x - c.x, bp.z - c.z)
+      if (d <= exploreMod.TASK_SEARCH_RADIUS && (!pick || d < pick.d)) pick = { c, k, d }
+    }
+    if (!pick) return false
+    g.chestLogs = pick
+    if (ctx.lastGoalKey === `gather-chest:${pick.k}`) ctx.lastGoalKey = null // a stale key never issues the walk
+  }
+  const markDry = () => {
+    (ctx.chestLogsDry || (ctx.chestLogsDry = {}))[pick.k] = Date.now()
+    g.chestLogs = null
+  }
+  const want = NEED_LOGS - logs
+  let busy = false
+  try {
+    busy = require('./beds').chestTick(bot, ctx, g, `gather-chest:${pick.k}`, async () => {
+      let got = 0
+      try {
+        const r = await require('./stockpile').withdrawAnyFromChest(bot, ctx, logNames(bot), want, pick.c)
+        got = (r && r.got) || 0
+      } catch (_) { got = 0 }
+      if (got < want) markDry()
+      else g.chestLogs = null
+      try { console.log(`gather: ${got} logs from the chest at ${pick.k}`) } catch (_) { /* log best-effort */ }
+    }, pick.c)
+  } catch (_) { busy = false }
+  if (!busy) markDry() // unreachable: chop
+  return busy
+}
+
 function gather(bot, ctx, target, state) {
   const logs = countItems(bot, (n) => n.endsWith('_log'))
   if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now() }
@@ -290,6 +341,7 @@ function gather(bot, ctx, target, state) {
   }
   const bp = bot.entity && bot.entity.position
   if (!bp) return
+  if (!g.pos && chestLogsTick(bot, ctx, g, logs, bp)) return
   // mnx pit memory: no target within a gave-up spot's radius.
   // g0z.12: laid castle beams (v2 frame cells) are logs the castle owns —
   // never a tree target (dig-time protection would refuse them only after
