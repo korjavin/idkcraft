@@ -59,12 +59,29 @@ function pickBefore(entries, { base, now, isAncestor, rigChanged }) {
   return { reason: `miss: no cached before for master ${base.slice(0, 8)}` }
 }
 
+// Knobs outside the cache key that change the rate: a leg that set any of
+// them is not a gate before and never caches (revmux 01 core-1).
+const GATE_DEFAULTS = {
+  CASTLE_NIGHT: ['', '0'], CASTLE_BLOCKED: ['', '0'], RIG_PLANNER: ['', 'jev'], CASTLE_DAYLOCK: ['', '1'],
+  CASTLE_BURY: ['', '0'], CASTLE_PIT: ['', '0'], CASTLE_SAND: ['', '0'],
+  CASTLE_PAD: [''], GOAL_WATCHDOG_MS: [''], GOAL_COMMIT_MS: [''], CASTLE_BASELINE_RATE: [''],
+  CASTLE_INIT_MEMORY: [''], CASTLE_MAX_MEMORY: [''], BARITONE_MEM: [''], CASTLE_VIEW_DISTANCE: [''], CASTLE_SIM_DISTANCE: [''],
+}
+const COMPONENT_KIT = { lay: 'lay', mine: 'pick' }
+
+// Pure: the names of the off-gate knobs set in env ([] = a gate leg).
+function offGate(env) {
+  const off = Object.keys(GATE_DEFAULTS).filter((k) => !GATE_DEFAULTS[k].includes(env[k] || ''))
+  if ((env.CASTLE_KIT || COMPONENT_KIT[env.CASTLE_COMPONENT]) !== COMPONENT_KIT[env.CASTLE_COMPONENT]) off.push('CASTLE_KIT')
+  return off
+}
+
 // Pure: what the write-through stores, or null when the leg is not a
 // clean gate before (no component, DIAG, a stale record, dirty tree, not
 // origin/master).
 function storeEntry({ env, record, head, master, clean }) {
   const component = env.CASTLE_COMPONENT
-  if (!component || env.CASTLE_DIAG === '1') return null
+  if (!component || env.CASTLE_DIAG === '1' || offGate(env).length) return null
   if (!record || !record.component || record.diag || record.tag !== env.CASTLE_TAG) return null
   if (!clean || !head || head !== master) return null
   const settings = settingsOf(env)
@@ -90,7 +107,8 @@ function main(argv, env) {
     let record = null
     try { record = JSON.parse(fs.readFileSync(env.CASTLE_OUT, 'utf8')) } catch (_) { record = null }
     const e = storeEntry({ env, record, head: gitOk('rev-parse', 'HEAD') && git('rev-parse', 'HEAD'), master: gitOk('rev-parse', 'origin/master') && git('rev-parse', 'origin/master'), clean: git('status', '--porcelain', '--untracked-files=no') === '' })
-    if (!e) { console.log('castle-before: not cached (needs a clean 10-min component leg on origin/master)'); return 0 }
+    const off = offGate(env)
+    if (!e) { console.log(`castle-before: not cached (needs a clean 10-min gate-settings component leg on origin/master${off.length ? `; off-gate knobs set: ${off.join(' ')}` : ''})`); return 0 }
     fs.mkdirSync(dir, { recursive: true })
     const f = path.join(dir, `${e.key}.json`)
     fs.writeFileSync(`${f}.tmp`, JSON.stringify(e, null, 1))
@@ -117,9 +135,12 @@ function main(argv, env) {
     console.log(`before (cached ${r.hit.date.slice(0, 10)}, master ${r.hit.sha.slice(0, 8)}): ${r.hit.line}`)
     return 0
   }
-  console.log(`castle-before ${mode}: ${r.reason} — run ${rigCommand(mode, settings)}`)
+  // A branch behind master: legs on origin/master cache master, never this base (revmux 01 core-2).
+  const master = git('rev-parse', 'origin/master')
+  const behind = master !== base ? ` (base ${base.slice(0, 8)} is behind master ${master.slice(0, 8)}: merge origin/master into the branch first, then re-check)` : ''
+  console.log(`castle-before ${mode}: ${r.reason}${behind} — run ${rigCommand(mode, settings)}`)
   return 1
 }
 
 if (require.main === module) process.exit(main(process.argv.slice(2), process.env))
-module.exports = { cacheKey, settingsOf, pickBefore, storeEntry, rigCommand, MAX_AGE_MS, RIG_PATHS }
+module.exports = { cacheKey, settingsOf, pickBefore, storeEntry, offGate, rigCommand, MAX_AGE_MS, RIG_PATHS }

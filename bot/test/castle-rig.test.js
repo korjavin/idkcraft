@@ -1093,13 +1093,24 @@ describe('castle-before.js shared before cache', () => {
     assert.equal(cb.storeEntry({ ...ok, env: { ...env, CASTLE_DIAG: '1' } }), null, 'DIAG leg')
     assert.equal(cb.storeEntry({ ...ok, env: { ...env, CASTLE_COMPONENT: '' } }), null, 'no component')
     assert.equal(cb.storeEntry({ ...ok, record: { ...record, tag: 'old' } }), null, 'stale record file')
+    for (const k of [{ CASTLE_NIGHT: '1' }, { CASTLE_KIT: 'empty' }, { CASTLE_BLOCKED: '4' }, { CASTLE_PAD: '1,2' }, { RIG_PLANNER: 'stub' }, { GOAL_WATCHDOG_MS: '1' }, { CASTLE_MAX_MEMORY: '2G' }, { BARITONE_MEM: '3g' }, { CASTLE_DAYLOCK: '0' }, { CASTLE_BASELINE_RATE: '20' }]) {
+      assert.equal(cb.storeEntry({ ...ok, env: { ...env, ...k } }), null, `off-gate ${JSON.stringify(k)} must not cache`)
+      assert.deepEqual(cb.offGate({ ...env, ...k }), Object.keys(k))
+    }
+    assert.ok(cb.storeEntry({ ...ok, env: { ...env, CASTLE_KIT: 'lay', RIG_PLANNER: 'jev', CASTLE_NIGHT: '0' } }), 'explicit gate defaults still cache')
+    assert.ok(cb.storeEntry({ ...ok, env: { ...env, CASTLE_COMPONENT: 'mine', CASTLE_KIT: 'pick' } }), 'mine kit default caches')
   })
 
   it('the wrapper writes through only after a measured non-DIAG component leg; replay honours CASTLE_BASELINE_RATE', () => {
     const rig = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-rig.sh'), 'utf8')
     assert.ok(rig.includes('[ "$_rc" = 0 ] && [ -n "$COMPONENT" ] && [ -z "$DIAG" ]'), 'write-through guard drifted')
     assert.ok(rig.includes('node tools/castle-before.js store || true'), 'write-through must never fail the run')
-    assert.ok(fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8').includes('CASTLE_BASELINE_RATE'))
+    const { baselineFor, componentLine } = require('../tools/castle-replay.js')
+    const file = { rate: 24.2 }
+    assert.deepEqual(baselineFor(file, { CASTLE_BASELINE_RATE: '20.5' }), { rate: 20.5 })
+    for (const v of [undefined, '', '0', 'abc', '-3']) assert.equal(baselineFor(file, { CASTLE_BASELINE_RATE: v }), file, `override ${v}`)
+    assert.match(componentLine('lay', { laid: 205, gameMin: 10, wallMin: 10, series: [], tick: 1, baseline: baselineFor(file, { CASTLE_BASELINE_RATE: '20.5' }) }), /baseline 20\.5 -> 20\.5 \(\+0%, within ±15%\)/)
+    assert.ok(fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8').includes('baseline: baselineFor(base, process.env)'), 'replay does not judge through baselineFor')
     assert.match(cb.rigCommand('mine', cb.settingsOf(v2)), /CASTLE_BODY=baritone BARITONE_IMAGE=idkcraft-baritone:abc CASTLE_PADSPOT=250,350 CASTLE_COMPONENT=mine .*castle-rig\.sh$/)
   })
 })
