@@ -4,8 +4,10 @@
 //
 // bot.mine(names, count, opts) -> Promise<{have}> resolving when the pack
 // holds target (have-at-call + count), rejecting with Error('mine-noPath'
-// | 'mine-stall' | 'mine-leash'). Stall = no inventory gain for 60 s while
-// the process is live (one constant, not the 10 s goal STALL_MS); leash =
+// | 'mine-stall' | 'mine-leash'). Stall = no inventory gain for 25 s while
+// the process is live (one constant, not the 10 s goal STALL_MS; gains
+// reset it, so working legs never trip — only zero-gain churn ends fast);
+// leash =
 // the body farther than radius from the start position, or inside the
 // caller forbid(pos) — a leash that trips on ENTRY (armed once the body
 // leaves it), so a mine that starts inside never fails at once —
@@ -19,7 +21,7 @@
 // This file requires nothing outside bot/src/bridge/ (epic section 2).
 'use strict'
 
-const MINE_STALL_MS = 60000 // no-gain budget while the process is live
+const MINE_STALL_MS = 25000 // no-gain budget while the process is live
 const MINE_TICK_MS = 1000 // leash/stall watch cadence
 // Pushed with the verb through the existing #set path (Baritone 1.18.0
 // Settings.java defaults; pinned because #set persists to the client
@@ -38,6 +40,10 @@ const MINE_SETTINGS = [
   // and the leg would read noPath (round-1 core-3). The mirror below keeps
   // the adapter's diff honest so the next lease restores its own value.
   ['allowBreak', 'true'],
+  // No wandering on an empty scan (rig evidence: a cold-cache begin
+  // explores on GoalRunAway instead of failing, and the leg reads as
+  // motionless no-gain churn). Empty fails fast as noPath instead.
+  ['exploreForBlocks', 'false'],
 ]
 // Drops counted toward a block name (mirrors Mine.java): a mine for
 // stone is done when the cobblestone lands, grass when the dirt does.
