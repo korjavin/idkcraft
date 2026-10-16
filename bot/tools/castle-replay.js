@@ -302,7 +302,8 @@ function classify(line, now = Date.now()) {
       const why = /why=(\S+)/.exec(line)
       const force = /force=(\S+)/.exec(line)
       const by = force ? `force=${force[1]}` : seen.lastWd ? `watchdog:${seen.lastWd}` : (why ? why[1] : '?')
-      seen.fetchEv.push({ at: now, ev: 'cut', by })
+      // step-done: the leg ended itself without a `leg over` line (finish) — not a cut
+      seen.fetchEv.push(why && why[1] === 'step-done' && !force ? { at: now, ev: 'finish' } : { at: now, ev: 'cut', by })
       seen.leg = null
     }
     seen.lastWd = null
@@ -328,14 +329,14 @@ function classify(line, now = Date.now()) {
     seen.fails[r] = (seen.fails[r] || 0) + 1
   }
   // neuc.62: castlefetch leg start / finish (the cut is the goal-step branch above).
-  m = /^castlefetch \S+: need (\d+) more/.exec(line)
+  m = /^castlefetch stone: need (\d+) more/.exec(line)
   if (m) {
     if (seen.leg) seen.fetchEv.push({ at: now, ev: 'cut', by: 'kind-switch' })
     seen.fetchEv.push({ at: now, ev: 'start' })
     seen.leg = true
     return
   }
-  if (/^castlefetch \S+: leg over \(/.test(line)) {
+  if (/^castlefetch stone: leg over \(/.test(line)) {
     seen.fetchEv.push({ at: now, ev: 'finish' })
     seen.leg = null
     return
@@ -346,7 +347,12 @@ function classify(line, now = Date.now()) {
   m = /^goal watchdog .* choice=(\S+)/.exec(line)
   if (m) {
     seen.wdCalls++
-    seen.lastWd = m[1] !== 'none' ? m[1] : null
+    // A far choice taken inside a live castlefetch leg prints no goal step
+    // line (same step): the near leg is cut and a far leg starts, right here.
+    if (seen.leg && /far/.test(m[1])) {
+      seen.fetchEv.push({ at: now, ev: 'cut', by: `watchdog:${m[1]}` }, { at: now, ev: 'start' })
+      seen.lastWd = null
+    } else seen.lastWd = m[1] !== 'none' ? m[1] : null
     if (m[1] !== 'none') {
       seen.wdChoices[m[1]] = (seen.wdChoices[m[1]] || 0) + 1
       if (!seen.wdFirstAt) seen.wdFirstAt = now

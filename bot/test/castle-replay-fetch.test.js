@@ -20,15 +20,18 @@ describe('fetch verdict (neuc.62)', () => {
     L('goal step=castlefetch prev=gather why=need', 101)
     L('castlefetch stone: need 10 more', 101)
     L('goal watchdog round=1 choice=castlefetch-far', 400)
-    L('goal step=castle prev=castlefetch why=watchdog', 401)
+    // the real sequence: far taken inside the live leg (no goal step line), later cut by task-plan
+    L('goal step=castle prev=castlefetch why=task-plan', 401)
+    L('castlefetch planks: need 4 more', 402) // wood legs are not this line's business
+    L('goal step=castle prev=castlefetch why=step-done', 403)
     assert.deepEqual(seen.fetchEv.map((e) => e.ev + (e.by ? `:${e.by}` : '')),
-      ['start', 'finish', 'start', 'cut:force=kit', 'start', 'cut:watchdog:castlefetch-far'])
+      ['start', 'finish', 'start', 'cut:force=kit', 'start', 'cut:watchdog:castlefetch-far', 'start', 'cut:task-plan'])
     const series = [fs(0, 0, 'castle'), fs(15, 0), fs(30, 5), fs(45, 10), // +10 banked
       fs(60, 10), fs(75, 10), fs(90, 10), fs(105, 10), fs(120, 10), fs(135, 10), fs(150, 10), fs(165, 10), fs(180, 10), // dead 45..180 = 135 s
       fs(195, 12), fs(210, 'x')]
     const events = seen.fetchEv.map((e) => ({ ...e, t: e.at / 1000 }))
     const l = fetchLine({ series, events, ticks: 99, ratio: 1, mineBase: { rate: 15.8 } })
-    assert.equal(l, 'fetch: ticks=99 stone=+12 (16.3 s/stone, component 3.8) legs=3 finished=1 cut=2 cut-by=force=kit:1,watchdog:castlefetch-far:1 far=1 dead=2min (t=1-3)')
+    assert.equal(l, 'fetch: ticks=99 stone=+12 (16.3 s/stone, component 3.8) legs=4 finished=1 cut=3 cut-by=force=kit:1,watchdog:castlefetch-far:1,task-plan:1 far=1 dead=2min (t=1-3)')
   })
 
   it('no castlefetch samples -> fetch: -', () => {

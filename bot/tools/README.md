@@ -771,10 +771,12 @@ fetch: ticks=3436 stone=+290 (11.9 s/stone, component 3.8) legs=12 finished=1 cu
 - `stone=` the banked rule of the mine component (one shared loop);
   `s/stone` = castlefetch sample seconds (game time) / banked; `component`
   = 60 / the mine baseline rate, `-` without a baseline.
-- `legs`/`finished`/`cut` from the bot's own `castlefetch <kind>: need`,
-  `leg over` and `goal step=<x> prev=castlefetch` lines; `cut-by` is
-  `force=<f>`, else `watchdog:<choice>` when the previous watchdog line
-  chose, else the goal line's `why=`. `far` = cuts whose reason names far.
+- `legs`/`finished`/`cut` (stone legs only) from the bot's own
+  `castlefetch stone: need`, `leg over` and `goal step=<x> prev=castlefetch`
+  lines (`why=step-done` counts as finished); `cut-by` is `force=<f>`, else
+  `watchdog:<choice>` when the previous watchdog line chose, else the goal
+  line's `why=`. A far choice inside a live leg (no goal line) counts as
+  a cut plus a new leg. `far` = cuts whose reason names far.
 - `dead` = castlefetch samples with no stone gain for >= 120 s, in game
   minutes from the window open (list capped at 5). `fetch: -` = no
   castlefetch at all. Promote to a gate only when two runs show it stable.
