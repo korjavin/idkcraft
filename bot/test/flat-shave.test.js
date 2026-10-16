@@ -911,6 +911,24 @@ describe('lone pillars are shaved (idkcraft-vewo.7)', () => {
     })
   }
 
+  for (const [where, x] of [['house box', 2], ['house apron', -3]]) {
+    it(`keeps a lone cobble/dirt pillar inside the ${where} (house footprint beats the exemption)`, async () => {
+      const world = makeWorld({})
+      column(world, x, 1, 2)
+      column(world, x, -1, 1, 'dirt')
+      const { bot, ctx } = run(world)
+      // Box case: pillar inside interior x 1..3. Apron case: interior x 0..1,
+      // so x=-3 is outside the wall ring but inside the 3-cell apron.
+      ctx.home = x === 2
+        ? { site: pos(2, 63, -3), interior: { min: pos(1, 64, -2), max: pos(3, 66, 2) } }
+        : { site: pos(0, 66, -3), interior: { min: pos(0, 64, -2), max: pos(1, 66, 2) } }
+      await drive(bot, ctx, 60)
+      assert.equal(ctx.flat, null)
+      assert.equal(world.blockAt({ x, y: 64, z: 1 }).name, 'cobblestone')
+      assert.equal(world.blockAt({ x, y: 64, z: -1 }).name, 'dirt')
+    })
+  }
+
   it('logs and leaves stay kept (unchanged)', async () => {
     const world = makeWorld({})
     column(world, 2, 1, 3, 'oak_log')

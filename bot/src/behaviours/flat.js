@@ -1667,7 +1667,10 @@ function shaveTick(bot, ctx, f, bp) {
     shiftBumpSkip(f, 'refused')
     return
   }
-  const shaveDeny = denyReason(bot, block, pillar ? pillarCtx(ctx, h.x, y, h.z) : ctx) // idkcraft-drq: shave terrain, not houses
+  // House footprint (box + apron) beats the lone-pillar exemption, like the
+  // bed/castle/yard rules: the own-scaffold ctx would pass it above site.y.
+  const asPillar = pillar && !util.inHouseFootprint(ctx && ctx.home, block.position)
+  const shaveDeny = denyReason(bot, block, asPillar ? pillarCtx(ctx, h.x, y, h.z) : ctx) // idkcraft-drq: shave terrain, not houses
   if (shaveDeny) {
     logDeny(block, shaveDeny)
     shiftBumpSkip(f, 'protected')
