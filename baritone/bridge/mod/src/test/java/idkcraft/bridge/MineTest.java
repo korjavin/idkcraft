@@ -77,4 +77,18 @@ public class MineTest {
         p.add("guard", g);
         assertThrows(Rpc.RpcException.class, () -> Mine.guardBox(p));
     }
+
+    @Test
+    public void dropTargetsKeepsEverythingElse() {
+        assertEquals(
+                List.of("oak_planks", "dirt"),
+                Mine.dropTargets(
+                        List.of("cobblestone", "oak_planks", "granite", "dirt"),
+                        List.of("stone", "cobblestone", "granite")));
+    }
+
+    @Test
+    public void dropTargetsEmptyTargetsChangesNothing() {
+        assertEquals(List.of("cobblestone"), Mine.dropTargets(List.of("cobblestone"), List.of()));
+    }
 }

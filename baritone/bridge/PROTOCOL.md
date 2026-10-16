@@ -129,7 +129,16 @@ false`, `mineGoalUpdateInterval 5`, `allowBreak true` (Baritone 1.18.0
 defaults for the first three, pinned because `#set` persists to the
 client settings.txt across calls; `allowBreak` because a mine digs by
 definition — a no-dig walk lease would leave it targetless — mirrored
-into the adapter diff so the next lease restores its value). Baritone has no per-process
+into the adapter diff so the next lease restores its value). The mod
+additionally suspends `blocksToDisallowBreaking` /
+`blocksToAvoidBreaking` for exactly the requested blocks for the call
+(v2 Movements hard-ban built castle kinds and cost quarry rock, and
+Baritone's `plausibleToBreak` discards every banned target — without
+the suspension a mine next to the castle scans stone it may never
+break; v1's mineflayer dig bypasses the lists, which is why only v2
+stalled). The adapter skips those three keys in lease re-pushes while
+a mine is live, so no mid-mine sync re-bans targets; both restore on
+every end (mod snapshot + next lease diff). Baritone has no per-process
 region: the Node side leashes (`radius` from the start position, plus
 a caller `forbid(pos)` — a leash that trips on entry, so a mine that
 starts inside never fails at once) and rejects

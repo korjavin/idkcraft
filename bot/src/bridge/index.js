@@ -950,6 +950,15 @@ class BaritoneBot extends EventEmitter {
     if (!this.transport) return
     const desired = movementsToSettings(this.pathfinder.movements, this.registry)
     for (const k of Object.keys(desired)) {
+      // A live mine owns break-policy for the call (neuc.53 rig evidence):
+      // the mod suspends the ban/avoid for the mine's blocks at begin and
+      // restores at end; a lease re-push mid-mine would re-ban targets and
+      // starve it back into 60 s stalls. Skipped keys wait for the next
+      // push after settle (a mid-mine lease flip heals on the next goal).
+      if (k === 'allowBreak' || k === 'blocksToAvoidBreaking' || k === 'blocksToDisallowBreaking') {
+        const m = this._mine
+        if (m && !m.settled) continue
+      }
       if (this._settings[k] === desired[k]) continue
       this._settings[k] = desired[k]
       this.transport.call('baritone.cmd', { command: `#set ${k} ${desired[k]}` }).catch((e) => {

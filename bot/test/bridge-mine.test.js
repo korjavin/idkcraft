@@ -161,6 +161,40 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     assert.equal(transport.state.baritone, '#stop', 'only the cancel stop')
   })
 
+  it('lease re-pushes skip break-policy while a mine is live', async () => {
+    ({ transport, bot } = mineBot({ mineScript: 'hang' }))
+    await bot.start({ pollMs: 0 })
+    const mov = (canDig, sprint, guard, ban) => ({
+      canDig, allowSprinting: sprint, blocksCantBreak: [],
+      exclusionAreasBreak: [{ guardNames: guard, banNames: ban }],
+    })
+    const sets = () => transport.state.baritoneSets || []
+    bot.pathfinder.movements = mov(false, false, ['dirt'], ['cobblestone'])
+    bot._pushSettings()
+    await new Promise((r) => setImmediate(r))
+    assert.ok(sets().some((c) => c === '#set allowBreak false'), 'the lease breaks sync without a mine')
+    const p = bot.mine(['stone', 'cobblestone'], 4, { stallMs: 5000, tickMs: 5 })
+    await untilMineSent()
+    const n = sets().length
+    bot.pathfinder.movements = mov(true, true, ['sand'], ['stone'])
+    bot._pushSettings()
+    await new Promise((r) => setImmediate(r))
+    assert.ok(sets().some((c) => c === '#set allowSprint true'), 'non-break keys still flow mid-mine')
+    assert.ok(!sets().slice(n).some((c) => c.startsWith('#set allowBreak')), 'no allowBreak re-push mid-mine')
+    assert.ok(!sets().slice(n).some((c) => c.startsWith('#set blocksTo')), 'no avoid/ban re-push mid-mine')
+    bot.cancelMine()
+    await assert.rejects(p, /mine-stopped/)
+    // Flip every lease value: the skipped call-2 values were never marked,
+    // so the post-settle push must carry all three break keys.
+    bot.pathfinder.movements = mov(false, false, ['clay'], ['oak_planks'])
+    bot._pushSettings()
+    await new Promise((r) => setImmediate(r))
+    const after = sets().slice(n + 1) // past the mid-mine allowSprint push
+    assert.ok(after.some((c) => c === '#set allowBreak false'), 'allowBreak restores after settle')
+    assert.ok(after.some((c) => c === '#set blocksToAvoidBreaking clay'), 'avoid restores after settle')
+    assert.ok(after.some((c) => c === '#set blocksToDisallowBreaking oak_planks'), 'ban restores after settle')
+  })
+
   it('rejects empty names and non-positive counts without touching the wire', async () => {
     ({ transport, bot } = mineBot({}))
     await bot.start({ pollMs: 0 })

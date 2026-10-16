@@ -58,6 +58,9 @@ public final class Mine {
     private static volatile int target = 0;
     private static volatile List<String> names = List.of();
     private static volatile int lastHave = 0;
+    /** Break-policy snapshots to restore in end(). Client thread only. */
+    private static volatile java.util.List<net.minecraft.world.level.block.Block> banSnap = null;
+    private static volatile java.util.List<net.minecraft.world.level.block.Block> avoidSnap = null;
     /** Guard box corners {x0,y0,z0,x1,y1,z1}, or null. Client thread only. */
     private static volatile int[] guardBox = null;
     /** idx -> stateId snapshot of guard cells matching the blocks. Client thread only. */
@@ -104,6 +107,64 @@ public final class Mine {
         }
         String n = name.trim().toLowerCase(java.util.Locale.ROOT);
         return n.startsWith("minecraft:") ? n.substring("minecraft:".length()) : n;
+    }
+
+    /**
+     * Break-policy suspension (neuc.53 rig evidence — Baritone 1.18.0
+     * {@code MineProcess.plausibleToBreak} discards every banned target, so
+     * a mine next to the castle, where body.js hard-bans built castle kinds
+     * and costs quarry rock, scans stone it may never break and stalls every
+     * leg at 60 s while v1's mineflayer dig bypasses the lists). An explicit
+     * mine is not pathing (the ban's purpose): suspend the ban and the avoid
+     * cost for exactly the requested blocks for the call, restore on every
+     * end. Pure list math here (unit-tested); Setting reads/writes on the
+     * client thread only, matched by registry path (no parsing).
+     */
+    static List<String> dropTargets(List<String> banned, List<String> targets) {
+        List<String> out = new ArrayList<>();
+        for (String b : banned) {
+            if (b != null && !targets.contains(b)) {
+                out.add(b);
+            }
+        }
+        return out;
+    }
+
+    private static String blockName(net.minecraft.world.level.block.Block b) {
+        try {
+            return BuiltInRegistries.BLOCK.getKey(b).getPath();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** Client thread: snapshot + suspend the ban/avoid lists for these blocks. */
+    private static void suspendBreakPolicy(List<String> blocks) {
+        var settings = BaritoneAPI.getSettings();
+        banSnap = new ArrayList<>(settings.blocksToDisallowBreaking.value);
+        avoidSnap = new ArrayList<>(settings.blocksToAvoidBreaking.value);
+        java.util.Set<String> want = new java.util.HashSet<>(blocks);
+        settings.blocksToDisallowBreaking.value.removeIf(b -> want.contains(blockName(b)));
+        settings.blocksToAvoidBreaking.value.removeIf(b -> want.contains(blockName(b)));
+    }
+
+    /** Client thread: put the snapshot lists back (every end path, once). */
+    private static void restoreBreakPolicy() {
+        try {
+            var settings = BaritoneAPI.getSettings();
+            if (banSnap != null) {
+                settings.blocksToDisallowBreaking.value.clear();
+                settings.blocksToDisallowBreaking.value.addAll(banSnap);
+                banSnap = null;
+            }
+            if (avoidSnap != null) {
+                settings.blocksToAvoidBreaking.value.clear();
+                settings.blocksToAvoidBreaking.value.addAll(avoidSnap);
+                avoidSnap = null;
+            }
+        } catch (Exception ignored) {
+            // Best-effort: the next lease #set re-pushes absolute lists.
+        }
     }
 
     private static JsonObject start(BridgeServer server, JsonObject params) throws Rpc.RpcException {
@@ -202,6 +263,7 @@ public final class Mine {
         names = blocks;
         target = goal;
         lastHave = have;
+        suspendBreakPolicy(blocks);
         active = true;
         guardBox = guard;
         snapshotGuard(blocks, guard);
@@ -328,6 +390,7 @@ public final class Mine {
         }
         active = false;
         lastHave = have;
+        restoreBreakPolicy();
         push(server, have, false, status);
     }
 
