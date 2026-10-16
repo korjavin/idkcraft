@@ -68,6 +68,28 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     await assert.rejects(bot.mine(['stone', 'cobblestone'], 4, { tickMs: 5 }), /mine-futile/)
   })
 
+  it('the verb waits for the leg area chunks, then arms', async () => {
+    ({ transport, bot } = mineBot({}))
+    await bot.start({ pollMs: 0 })
+    let calls = 0
+    let loaded = false
+    setTimeout(() => { loaded = true }, 300).unref()
+    bot.world = { getChunk: () => { calls++; return loaded ? {} : null } }
+    // pos (0,64,0) radius 12: one full pass is 4 chunk reads; waiting
+    // adds sleep rounds, so more reads prove the gate held the verb.
+    await bot.mine(['dirt'], 3, { radius: 12, tickMs: 5, warmupMs: 5000 })
+    assert.ok(calls > 4, `gate waited for chunks (reads=${calls})`)
+    assert.equal(transport.state.mineLog.length, 1)
+  })
+
+  it('the verb arms anyway when the warmup budget runs out', async () => {
+    ({ transport, bot } = mineBot({}))
+    await bot.start({ pollMs: 0 })
+    bot.world = { getChunk: () => null }
+    await bot.mine(['dirt'], 3, { radius: 12, tickMs: 5, warmupMs: 300 })
+    assert.equal(transport.state.mineLog.length, 1)
+  })
+
   it('no gain for the stall budget rejects mine-stall and stops the process', async () => {
     ({ transport, bot } = mineBot({ mineScript: 'hang' }))
     await bot.start({ pollMs: 0 })

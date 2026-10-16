@@ -23,6 +23,7 @@
 
 const MINE_STALL_MS = 25000 // no-gain budget while the process is live
 const MINE_TICK_MS = 1000 // leash/stall watch cadence
+const WARMUP_MS = 30000 // bounded pre-arm wait for the leg area to load
 // Pushed with the verb through the existing #set path (Baritone 1.18.0
 // Settings.java defaults; pinned because #set persists to the client
 // settings.txt across calls).
@@ -85,6 +86,40 @@ function dist3(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
+// Warm-cache gate: true once every chunk in radius of at is loaded in
+// our world (same server packets feed Baritone's cache), false on a
+// cancel or when the budget runs out (the caller arms anyway — the
+// churn trip and the stall budget bound the damage). No world surface
+// (unit fakes) reads as warm at once.
+async function warmCache(bot, at, radius, budgetMs, dead) {
+  let get = null
+  try {
+    if (bot && bot.world && typeof bot.world.getChunk === 'function') {
+      get = (cx, cz) => {
+        try { return bot.world.getChunk(cx, cz) || null } catch (_) { return null }
+      }
+    }
+  } catch (_) { /* no world: warm at once below */ }
+  if (!get) return true
+  const r = Math.max(0, radius || 0)
+  const x0 = Math.floor((at.x - r) / 16), x1 = Math.floor((at.x + r) / 16)
+  const z0 = Math.floor((at.z - r) / 16), z1 = Math.floor((at.z + r) / 16)
+  const t0 = Date.now()
+  for (;;) {
+    let missing = false
+    for (let cx = x0; cx <= x1 && !missing; cx++) {
+      for (let cz = z0; cz <= z1; cz++) {
+        if (!get(cx, cz)) { missing = true; break }
+      }
+    }
+    if (!missing) return true
+    if (dead()) return false
+    if (Date.now() - t0 > budgetMs) return false
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    if (dead()) return false
+  }
+}
+
 // Cancel the live mine from the adapter's goal latch (_stopPath, _setGoal:
 // a new goal supersedes the mine). Sends #stop and rejects with
 // mine-stopped; the behaviour gen guards drop the stale settle. True when
@@ -117,6 +152,7 @@ function installMine(bot) {
     const guard = opts && opts.guard && typeof opts.guard === 'object' ? opts.guard : null
     const stallMs = opts && typeof opts.stallMs === 'number' ? opts.stallMs : MINE_STALL_MS
     const tickMs = opts && typeof opts.tickMs === 'number' ? opts.tickMs : MINE_TICK_MS
+    const warmupMs = opts && typeof opts.warmupMs === 'number' ? opts.warmupMs : WARMUP_MS
 
     const st = {
       promise: null, id: null, target: null, have: 0, gainAt: Date.now(),
@@ -124,7 +160,7 @@ function installMine(bot) {
     }
     st.promise = new Promise((resolve, reject) => { st.resolve = resolve; st.reject = reject })
     bot._mine = st
-    void run(bot, st, names, need, { radius, forbid, guard, stallMs, tickMs })
+    void run(bot, st, names, need, { radius, forbid, guard, stallMs, tickMs, warmupMs })
     return st.promise
   }
 }
@@ -144,7 +180,7 @@ function settle(bot, st, err, have) {
   else st.resolve({ have })
 }
 
-async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickMs }) {
+async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickMs, warmupMs }) {
   // A cancel between the awaits below (fight preemption, owner stop)
   // settles st through cancelMine; every leg checks it, so a dead run
   // sends nothing more (round-2 core-3).
@@ -177,6 +213,14 @@ async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickM
     // The forbid leash trips on entry: a mine that starts inside (the
     // body fetching on the castle site) arms once it leaves.
     try { st.armed = !forbid || !forbid(st.start) } catch (_) { st.armed = true }
+    // Warm-cache gate (neuc.53 rig evidence): Baritone scans its chunk
+    // cache, and a cold/fringe cache reads as phantom targets — live
+    // churn with zero gains. The same server packets feed our world, so
+    // wait (bounded) for the leg area to load here first, then arm.
+    if (st.start) {
+      if (warmupMs > 0) await warmCache(bot, st.start, radius, warmupMs, dead)
+      if (dead()) return
+    }
     const params = { blocks: names.map(stripMcPrefix), count: need, radius }
     if (guard) params.guard = guard
     const r = await bot.transport.call('baritone.mine', params)
