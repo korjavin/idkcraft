@@ -1247,6 +1247,13 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   }
 }
 
+// vewo.8: a remembered flat job joins an empty server too (the owner may be
+// gone). No join/leave loop: a running flat holds the leave off (noteGone),
+// and once it ends the 'end' save writes flat:null, so the next pass waits.
+function joinWaits(env, username, leaveAfterMs, autonomous) {
+  return leaveAfterMs !== 0 && !autonomous && !memory.hasFlat(memory.fileFor(env, username))
+}
+
 function parseLeaveAfterMs(env) {
   const raw = parseInt((env && env.BOT_LEAVE_AFTER_MS) || '60000', 10)
   if (!Number.isFinite(raw) || raw < 0) return LEAVE_AFTER_MS_DEFAULT
@@ -1502,6 +1509,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // tpd1: a swarm helper parks until a flat order (stand still, no homing walk).
       if (flatMod.swarmHelper()) ticker.stop()
       else if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName && !followedNow) ticker.work()
+      if (typeof ticker.resumeFlat === 'function') ticker.resumeFlat() // vewo.8: after the follow/stop above
       ticker.start()
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })
@@ -1626,7 +1634,7 @@ async function main() {
     // Autonomous joins an empty server too: staying is the point. The chat
     // toggle (not the env const) decides, so 'autonomous off' lasts.
     const autonomous = autonomousEffective(process.env)
-    if (leaveAfterMs !== 0 && !autonomous) {
+    if (joinWaits(process.env, username, leaveAfterMs, autonomous)) {
       await waitForPlayers({ host, port, pingFn, username, workerConfigured: worker.configured() })
       await sleep(JOIN_SETTLE_MS)
     }
@@ -1789,4 +1797,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, waitForPlayers, playersOccupied, waitForWorkerLeave, runOnce, selectBody, runArgsFor, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, joinWaits, waitForPlayers, playersOccupied, waitForWorkerLeave, runOnce, selectBody, runArgsFor, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }

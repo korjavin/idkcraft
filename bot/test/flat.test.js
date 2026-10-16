@@ -458,6 +458,23 @@ describe('flat ticker wiring', () => {
       } finally { r.done() }
     })
 
+    // vewo.8: a deploy restart resumes the remembered square; strip 0 relays once.
+    it('resumeFlat: the main bot restores and relays once, a helper restores silently', () => {
+      for (const [i, relays] of [['0', 1], ['3', 0]]) {
+        process.env.BOT_SWARM_I = i
+        const r = rig({ players: {} })
+        try {
+          r.ticker.stop() // the spawn handler parks a helper first
+          r.ctx.flatSaved = { cx: 24, cz: 23, r: 7, yTop: 75, level: 64, by: 'Owner' }
+          assert.match(r.ticker.resumeFlat(), /^scanning 15x15 at 24,23/)
+          assert.equal(r.ticker.resumeFlat(), null, 'one restore per spawn')
+          const f = r.ctx.flat
+          assert.deepEqual([f.cx, f.cz, f.r, f.fixedLevel, f.yTop, f.by, f.parked, r.ctx.paused], [24, 23, 7, 64, 75, 'Owner', false, false])
+          assert.deepEqual(r.bot.chats.filter((m) => m.startsWith('swarm flat')), relays ? ['swarm flat 7 24 23 y65 level 64 by Owner'] : [])
+        } finally { r.done() }
+      }
+    })
+
     it('explicit re-flat resumes the same anchor only; another anchor inside starts over', async () => {
       const world = makeWorld({})
       world.set(-1, 63, -38, 'air') // strip 4/9 of x -4..4
@@ -597,6 +614,21 @@ describe('flat ticker wiring', () => {
         ticker.stop()
         for (let i = 0; i < 3; i++) { t += 100; await ticker.tick() }
         assert.equal(left, 1)
+      } finally { ticker.destroy() }
+    })
+
+    it('vewo.8: a restored flat with nobody online holds off the leave until it ends', async () => {
+      let t = 0
+      let left = 0
+      const bot = mockBot(makeWorld({}), { players: {} })
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 50, onLeave: () => { left++ }, now: () => t })
+      try {
+        ticker.stop() // helper spawn path
+        bot._tickerCtx.flatSaved = { cx: 0, cz: 0, r: 4, yTop: 74, level: 62, by: 'P' } // shave work: stays running
+        ticker.resumeFlat()
+        for (let i = 0; i < 5; i++) { t += 100; await ticker.tick() }
+        assert.equal(left, 0, 'no leave, so main() never rejoins in a loop')
+        assert.ok(bot._tickerCtx.flat && !bot._tickerCtx.flat.parked)
       } finally { ticker.destroy() }
     })
 
