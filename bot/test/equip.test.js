@@ -3066,8 +3066,9 @@ describe('equip pick budget round 4 (idkcraft-neuc.59 review 03)', () => {
 
   it('endless table walks give up and the leg digs', async () => {
     // Standing but unreachable table: tableFor walks every tick, settles
-    // nothing, and its own 20-walk give-up only restarts the walk. The slow
-    // cap must end it so the leg digs.
+    // nothing, and latches the day-unreachable mark at 20 walks — since
+    // zk7e the fallback honors the mark and ends there instead of walking
+    // to the 40-tick slow cap. Either way the leg digs.
     const bot = v2bot({
       items: [worn(100), { name: 'stone_sword', count: 1 },
         { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
@@ -3080,13 +3081,69 @@ describe('equip pick budget round 4 (idkcraft-neuc.59 review 03)', () => {
     ctx.step = 'castlefetch' // prod shape: table fails settle stale-dropped, never poisoning
     ctx.stepStatus = 'running'
     ctx.castleFetch = { kind: 'stone' }
-    for (let i = 0; i < 40; i++) {
-      assert.equal(equip.craftSparePick(bot, ctx), true, `walk tick ${i + 1} still tries`)
+    let ticks = 0
+    for (let i = 0; i < 45; i++) {
+      ticks++
+      if (!equip.craftSparePick(bot, ctx)) break
       await flush()
     }
-    assert.equal(equip.craftSparePick(bot, ctx), false, '40 dry true ticks latch the leg')
+    assert.ok(ticks < 40, `the mark ends the walk early, took ${ticks} ticks`)
+    assert.ok(ctx.equipTableUnreachable, 'tableFor latched the day mark')
     assert.equal(bot.calls.craft.length, 0, 'no craft ever issued: the leg digs as before')
     assert.equal(ctx.stepStatus, 'running', 'stale-dropped, never failed')
+    bot.restoreError()
+  })
+})
+
+describe('equip pick budget day-unreachable mark (idkcraft-zk7e)', () => {
+  const tablespot = require('../src/behaviours/tablespot')
+  function v2bot(opts) {
+    const bot = mockBot(opts)
+    bot.mine = async () => {}
+    return bot
+  }
+  const castleCtx = (home, extra) => ({ ...freshCtx(home), castle: { site: { x: 0, y: 64, z: 0 } }, ...extra })
+  const worn = (used) => ({ name: 'stone_pickaxe', count: 1, maxDurability: 131, durabilityUsed: used })
+
+  it('a same-day unreachable mark skips the budget; a carried table still proceeds', () => {
+    const bot = v2bot({
+      items: [worn(100), { name: 'stone_sword', count: 1 },
+        { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
+      blockAtImpl: () => TABLE, // the home claim stands, so tableReady passes
+    })
+    const ctx = castleCtx({ table: { x: 10, y: 64, z: 0 } })
+    assert.equal(equip.pickBudgetDue(bot, ctx), true)
+    ctx.equipTableUnreachable = { day: tablespot.dayOf(bot), x: 10, y: 64, z: 0 }
+    assert.equal(equip.pickBudgetDue(bot, ctx), false, 'marked today: dig, never re-walk')
+    assert.equal(equip.craftSparePick(bot, ctx), false)
+    bot._items.push({ name: 'crafting_table', count: 1 }) // placed beside the body, never walked
+    assert.equal(equip.pickBudgetDue(bot, ctx), true)
+    bot.restoreError()
+  })
+
+  it('a marked station still skipped when a second claim is unreadable', () => {
+    const bot = v2bot({
+      items: [worn(100), { name: 'stone_sword', count: 1 },
+        { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
+      blockAtImpl: (p) => (Math.floor(p.x) === 10 ? TABLE : null), // second claim unloaded
+    })
+    const ctx = castleCtx({ table: { x: 10, y: 64, z: 0 } })
+    ctx.claimedTable = { x: 500, y: 64, z: 500 }
+    assert.equal(equip.pickBudgetDue(bot, ctx), true)
+    ctx.equipTableUnreachable = { day: tablespot.dayOf(bot), x: 10, y: 64, z: 0 }
+    assert.equal(equip.pickBudgetDue(bot, ctx), false, 'unreadable second claim must not mask the marked walk')
+    bot.restoreError()
+  })
+
+  it('a usable nearby claim proceeds despite the mark', () => {
+    const bot = v2bot({
+      items: [worn(100), { name: 'stone_sword', count: 1 },
+        { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
+      blockAtImpl: (p) => ([1, 10].includes(Math.floor(p.x)) ? TABLE : null),
+    })
+    const ctx = castleCtx({ table: { x: 10, y: 64, z: 0 } }, { equip: { tablePos: { x: 1, y: 64, z: 0 } } })
+    ctx.equipTableUnreachable = { day: tablespot.dayOf(bot), x: 10, y: 64, z: 0 }
+    assert.equal(equip.pickBudgetDue(bot, ctx), true, 'ajoe recovery: the fresh roadside table wins')
     bot.restoreError()
   })
 })

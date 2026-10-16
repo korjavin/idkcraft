@@ -140,7 +140,39 @@ function pickBudgetDue(bot, ctx) {
     if (countItems(bot, (n) => n === 'cobblestone') < SCAFFOLD_LOW + 3) return false
     if (toolOp(bot, 'pickaxe').fail) return false
     if (!tableReady(bot, ctx)) return false
+    if (tableUnreachableToday(bot, ctx)) return false
     return true
+  } catch (_) { return false }
+}
+// Day-unreachable table mark (idkcraft-zk7e): tableFor latches
+// ctx.equipTableUnreachable when the walk fails, and ajoe's contract says
+// the next pick places its own table instead of re-walking — but the spare
+// paths carry no table, so they would walk up to 40 ticks per leg. Skip
+// while the fallback would walk to the marked table, mirroring tableFor's
+// own selection order (a second unreadable or far claim must not mask the
+// marked station it still walks to). A carried table still proceeds
+// (tableFor places it beside the body, never a walk).
+function tableUnreachableToday(bot, ctx) {
+  try {
+    const u = ctx && ctx.equipTableUnreachable
+    if (!u || typeof u.x !== 'number') return false
+    if (u.day !== dayOf(bot)) return false
+    if (itemsOf(bot).some((i) => i && i.name === 'crafting_table')) return false
+    const bp = bot.entity && bot.entity.position
+    if (!bp || typeof bot.blockAt !== 'function') return false
+    const st = ctx && ctx.equip
+    const claims = [ctx && ctx.home && ctx.home.table, st && st.tablePos]
+    if (ctx && ctx.claimedTable && ctx.claimedTable !== (st && st.tablePos)) claims.push(ctx.claimedTable)
+    let far = null
+    for (const t of claims) {
+      if (!t || typeof t.x !== 'number') continue
+      let block = null
+      try { block = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { block = null }
+      if (!block || block.name !== 'crafting_table') continue // ghost/unreadable: tableFor skips
+      if (!tableFar(bot, ctx, bp, t)) return false // usable nearby: proceed
+      if (!far) far = t
+    }
+    return !!far && far.x === u.x && far.y === u.y && far.z === u.z
   } catch (_) { return false }
 }
 // The stone chain behind toolOp's pickaxe branch: 3 cobble plus 2 sticks
@@ -879,4 +911,5 @@ module.exports.PICK_BUDGET = PICK_BUDGET
 module.exports.pickUsesLeft = pickUsesLeft
 module.exports.pickBudgetNeed = pickBudgetNeed
 module.exports.pickBudgetDue = pickBudgetDue
+module.exports.tableUnreachableToday = tableUnreachableToday
 module.exports.craftSparePick = craftSparePick
