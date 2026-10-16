@@ -726,12 +726,14 @@ function walkToSite(bot, ctx, p, goal, reason) {
 // nowhere to walk — the caller fails no-site.
 const SKY_ARRIVE = 3
 const SKY_WALK_CAP = 600
+const SKY_STALE_MS = 5000
 function skyWalk(bot, ctx) {
   const bp = bot.entity && bot.entity.position
   if (!bp || typeof bp.x !== 'number') return false
   const far = (c) => Math.hypot(c.x + 0.5 - bp.x, c.y - bp.y, c.z + 0.5 - bp.z) > SKY_ARRIVE
   let w = ctx.buildSiteWalk
-  if (!w || !w.sky) {
+  // A latch not ticked for SKY_STALE_MS is an old episode (death, a night, another step): re-pick (revmux 02 minor).
+  if (!w || !w.sky || Date.now() - (w.seen || 0) > SKY_STALE_MS) {
     let c = null
     try { c = require('../site').skyCellNear(bot, bp) } catch (_) { c = null }
     if (!c || !far(c)) {
@@ -743,6 +745,7 @@ function skyWalk(bot, ctx) {
     ctx.buildGoalIdx = -1
   }
   const c = w.sky
+  w.seen = Date.now()
   if (!far(c) || ++w.total > SKY_WALK_CAP) {
     ctx.buildSiteWalk = null
     ctx.buildGoalIdx = -1

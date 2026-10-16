@@ -449,6 +449,14 @@ describe('neuc.32: homeless under cover', () => {
     assert.ok(set.every((g) => g.x === 0 && g.y === 64 && g.z === 0))
   })
 
+  it('v2 sky walk re-picks a stale latch from an old episode (neuc.35 revmux 02)', () => {
+    const bot = mockBot(makeWorld(), { spawn: null, at: pos(0, 40, 0) })
+    const old = { x: 0, z: 0, ticks: 0, sky: { x: 60, y: 64, z: 60 }, total: 0, seen: Date.now() - 10000 }
+    const ctx = { buildSiteWalk: old }
+    withBody('baritone', () => logged(() => build(bot, ctx)))
+    assert.deepEqual(ctx.buildSiteWalk.sky, { x: 0, y: 64, z: 0 })
+  })
+
   it('v2 at the surface with no flat ground anywhere fails no-site without a walk (neuc.35)', () => {
     // Checkerboard relief everywhere: no site fits, the sky cell is the
     // body's own column.
