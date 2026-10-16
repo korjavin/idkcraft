@@ -297,7 +297,14 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   if (worker.isWorker(username)) return
   // tpd1: swarm bots' chat (`flat 10/11…`, `flat done…`) is never an order
   // either — parsed, every progress line drew N-1 `try: flat 16` replies.
-  if (worker.isSwarmBot(username)) return
+  // zchb: the one exception — a helper adopts the main bot's flat relay
+  // (the square and level it resolved from the speaker at command time).
+  if (worker.isSwarmBot(username)) {
+    const relay = ticker && ticker.swarmHelper && username === process.env.BOT_PEER_USERNAME && typeof ticker.setFlat === 'function'
+      ? flatMod.parseRelay(message) : null
+    if (relay) console.log(`flat relay from=${username} reply=${ticker.setFlat({ ...relay, explicit: true, relay: true })}`)
+    return
+  }
   const playerName = resolvePlayer(bot, username, senderUuid)
   const msg = message.toLowerCase().trim()
   // Puppet sessions (idkcraft-jlw7): the only incoming-chat tag — session
@@ -485,7 +492,10 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       // tpd1: flat <r> [at] <x> <z> — an explicit anchor every swarm bot shares.
       const m = msg.match(/^(?:flat|make flat|flatten)(?:\s+(\S+)(?:\s+(?:at\s+)?(-?\d+)\s+(-?\d+))?)?$/)
       const r = m ? flatMod.parseRadius(m[1]) : null
-      if (r == null) bot.chat('try: flat 16')
+      // zchb: a helper never resolves the owner's flat itself — it waits
+      // for the main bot's relay so all strips share one square and level.
+      if (ticker && ticker.swarmHelper) console.log('flat: helper waits for the main bot relay')
+      else if (r == null) bot.chat('try: flat 16')
       else if (ticker && typeof ticker.setFlat === 'function') {
         const order = { radius: r, by: playerName, explicit: m[1] != null }
         if (m[2] != null) { order.cx = parseInt(m[2], 10); order.cz = parseInt(m[3], 10) }

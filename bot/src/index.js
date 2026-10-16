@@ -7,6 +7,7 @@ const { makeBrain, stubBrain, jevBrain, hybridBrain, JEV_ENDPOINT, isHard, brain
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHostiles } = require('./perception')
 const { makeScout } = require('./behaviours/scout')
 const stuck = require('./stuck')
+const { limitChat } = require('./chat-limit')
 const { UNSEEN_HOME_TICKS } = stuck
 const body = require('./body')
 const { handleChat, advancePendingSearch, clearPendingSearch, wakeBody } = require('./chat')
@@ -181,7 +182,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     }
   }
   function noteGone() {
-    if (ctx.autonomous) noteStay()
+    // zchb: a running flat outlives its speaker — no leave streak while it works.
+    if (ctx.flat && !ctx.flat.parked) noteSeen()
+    else if (ctx.autonomous) noteStay()
     else noteEmpty()
   }
   // Tear-down for the join loop: after our own quit() the old ticker must
@@ -296,7 +299,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // roster join. Downgrade fires once per empty period (brainRestore latch),
   // restore clears the latch on every join.
   function autoBrain(rosterOnline) {
-    if (!ctx.autonomous) return
+    // zchb: a running flat works alone too; a pending restore still needs the join edge.
+    if (!ctx.autonomous && !(ctx.flat && !ctx.flat.parked) && !ctx.brainRestore) return
     if (!rosterOnline && brainEngine === 'jev' && !ctx.brainRestore) {
       const to = 'off'
       // Alone-exemption for plan() only (idkcraft-vmzq.5): the tick ask
@@ -630,7 +634,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // not park it and the homing walk must not steal it mid-order. The
     // come-home meet rides the same way (jr2.3): the owner waits at home,
     // out of tracking range while the bot walks.
-    const workAlone = (ctx.work || ctx.bring || (ctx.flat && !ctx.flat.parked) || ctx.comehome || ctx.gocastle) && !target && (rosterOnline || ctx.autonomous) && !homing
+    // zchb: flat needs nobody online — the owner may disconnect after the order.
+    const flatOn = !!(ctx.flat && !ctx.flat.parked)
+    const workAlone = (ctx.work || ctx.bring || flatOn || ctx.comehome || ctx.gocastle) && !target && (rosterOnline || ctx.autonomous || flatOn) && !homing
     return { target, workAlone }
   }
 
@@ -1416,6 +1422,8 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       auth: 'offline' // offline-mode server; see README for the online-mode note
     })
     bot.loadPlugin(pathfinder)
+    // idkcraft-vewo.3: on login, not here — mineflayer installs bot.chat when its plugins inject.
+    bot.once('login', () => limitChat(bot))
     let wantQuit = false
     const ticker = createTicker({
       bot, brain, tickMs, idleTickMs, followName, leaveAfterMs, brainEngine, autonomous,
