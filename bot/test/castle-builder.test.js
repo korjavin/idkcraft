@@ -67,6 +67,7 @@ function mockBot(world, { items = KIT, withBuilder = true, buildScript = 'ok' } 
     bot.buildCells = async (name, origin, cells, opts) => {
       calls.builds.push({ name, origin, cells: cells.map((c) => ({ ...c })), forbid: opts && opts.forbid })
       if (buildScript === 'stall') throw new Error('build-stall')
+      if (buildScript === 'preempted') throw new Error('build-preempted')
       if (buildScript === 'starve') return { placed: 0, missing: cells.length }
       for (const c of cells) world.set(origin.x + c.dx, origin.y + c.dy, origin.z + c.dz, c.block)
       return { placed: cells.length, missing: 0 }
@@ -232,6 +233,17 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     ctx.stepGen = (ctx.stepGen | 0) + 1 // the step turned over mid-batch
     await settle()
     assert.ok(!ctx.stepStatus, `stale settle writes nothing, got ${ctx.stepStatus}`)
+    assert.equal(ctx.castleBuildFlight, false)
+    assert.deepEqual(ctx.castle.batchStrikes || {}, {})
+  })
+
+  it('a same-step preemption neither fails nor strikes (round-3 core-2)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { buildScript: 'preempted' })
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    castle(bot, ctx)
+    await settle()
+    assert.ok(!ctx.stepStatus, `preempted settle writes nothing, got ${ctx.stepStatus}`)
     assert.equal(ctx.castleBuildFlight, false)
     assert.deepEqual(ctx.castle.batchStrikes || {}, {})
   })

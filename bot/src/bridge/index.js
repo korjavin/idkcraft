@@ -701,7 +701,10 @@ class BaritoneBot extends EventEmitter {
       this._boundSeq = this._cmdSeq
       this._goalId = null
       this._pathing = false
-      if (live) this.transport.call('baritone.cmd', { command: '#stop' }).catch(failLog)
+      if (live) {
+        if (this._build) this._build.preempted = true
+        this.transport.call('baritone.cmd', { command: '#stop' }).catch(failLog)
+      }
       this._completeTerminal('success')
       return
     }
@@ -713,7 +716,10 @@ class BaritoneBot extends EventEmitter {
       this._boundSeq = this._cmdSeq
       this._goalId = null
       this._pathing = false
-      if (live) this.transport.call('baritone.cmd', { command: '#stop' }).catch(failLog)
+      if (live) {
+        if (this._build) this._build.preempted = true
+        this.transport.call('baritone.cmd', { command: '#stop' }).catch(failLog)
+      }
       this._pathStatus = 'noPath'
       this.emit('path_update', { status: 'noPath' })
       this.emit('path_reset', 'noPath')
@@ -780,6 +786,10 @@ class BaritoneBot extends EventEmitter {
   // _boundSeq, overlapping follow re-issues order by seq). Failures log,
   // never emit 'error' (runOnce fatal()s every 'error'; see chat()).
   _sendGoalCmd(command) {
+    // A new goal preempts a live builder on the Baritone side without any
+    // #stop going out (round-3 core-2): mark it, so the idle final rejects
+    // 'build-preempted' instead of settling starved.
+    if (this._build) this._build.preempted = true
     this._goalCmd = command // neuc.13: last goal cmd (diagnostics; pause/resume keeps the id, no re-issue)
     const seq = (this._cmdSeq = (this._cmdSeq | 0) + 1)
     const avoid = this._dangerAvoid(command)
@@ -982,7 +992,9 @@ class BaritoneBot extends EventEmitter {
   _stopPath() {
     // A live builder counts as live (core-4): #stop cancels it like any
     // other process, so a step change, fight, or follow that stops pathing
-    // never leaves BuilderProcess steering an unowned body.
+    // never leaves BuilderProcess steering an unowned body. Our own #stop
+    // preempts our own build (round-3 core-2): the final rejects
+    // 'build-preempted' instead of settling starved.
     const live = this._pathing || this._goalId != null || this._build != null
     this.pathfinder.goal = null
     this._follow = null
@@ -991,6 +1003,9 @@ class BaritoneBot extends EventEmitter {
     this._pathing = false
     if (!live) return // mineflayer's stop is silent when idle
     this._pathStatus = 'stopped'
+    // Only when a #stop actually goes out: a silent stop must not poison a
+    // build that keeps running.
+    if (this._build) this._build.preempted = true
     this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => {
       console.log(`bridge baritone.cmd #stop failed: ${(e && e.message) || e}`) // never 'error': see chat()
     })

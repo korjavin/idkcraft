@@ -59,6 +59,7 @@ function mockBot(world, { items = KIT, withBuilder = true, buildScript = 'ok' } 
     bot.buildCells = async (name, origin, cells, opts) => {
       calls.builds.push({ name, origin, cells: cells.map((c) => ({ ...c })), forbid: opts && opts.forbid })
       if (buildScript === 'stall') throw new Error('build-stall')
+      if (buildScript === 'preempted') throw new Error('build-preempted')
       if (buildScript === 'starve') return { placed: 0, missing: cells.length }
       for (const c of cells) world.set(origin.x + c.dx, origin.y + c.dy, origin.z + c.dz, c.block)
       return { placed: cells.length, missing: 0 }
@@ -160,6 +161,20 @@ describe('house builder branch (idkcraft-neuc.54)', () => {
     const ctx = freshCtx()
     build(bot, ctx)
     ctx.stepGen = (ctx.stepGen | 0) + 1 // the step turned over mid-batch
+    await settle()
+    assert.deepEqual(ctx.buildSkip, [])
+    assert.deepEqual(ctx.buildBatchStrikes || {}, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.buildCellsInFlight, false)
+  })
+
+  it('a same-step preemption neither strikes nor fails (round-3 core-2)', async () => {
+    const world = makeWorld()
+    // Fight took the body mid-batch without turning the step over: the
+    // adapter rejects build-preempted, and the step re-batches silently.
+    const bot = mockBot(world, { buildScript: 'preempted' })
+    const ctx = freshCtx()
+    build(bot, ctx)
     await settle()
     assert.deepEqual(ctx.buildSkip, [])
     assert.deepEqual(ctx.buildBatchStrikes || {}, {})

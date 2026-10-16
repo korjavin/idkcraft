@@ -162,10 +162,17 @@ function installBuild(bot) {
 
 // #stop cancels the builder like any other process (the mod's tick reports
 // the idle as the build's final event); stopBuild is that spelling for
-// callers that hold no pathfinder goal to stop.
+// callers that hold no pathfinder goal to stop. A #stop we send while our
+// own build is live preempts it (round-3 core-2): the final then rejects
+// 'build-preempted' — neither a strike nor a step failure — instead of
+// settling as a starved resolve that would fail the step for material the
+// pack holds.
 function installBuildStop(bot) {
-  bot.stopBuild = () => bot.transport.call('baritone.cmd', { command: '#stop' })
-    .then((r) => ({ stopped: true, id: r && r.id != null ? r.id : null }))
+  bot.stopBuild = () => {
+    if (bot._build) bot._build.preempted = true
+    return bot.transport.call('baritone.cmd', { command: '#stop' })
+      .then((r) => ({ stopped: true, id: r && r.id != null ? r.id : null }))
+  }
 }
 
 // The mod's build notifications only (kind:'build'); true when consumed.
@@ -181,7 +188,10 @@ function handleBuildEvent(bot, method, params) {
     st.grownAt = Date.now()
   }
   if (typeof params.missing === 'number') st.missing = params.missing
-  if (params.active === false) st.settle(st.resolve, { placed: st.placed, missing: st.missing })
+  if (params.active === false) {
+    if (st.preempted) st.settle(st.reject, new Error('build-preempted'))
+    else st.settle(st.resolve, { placed: st.placed, missing: st.missing })
+  }
   return true
 }
 

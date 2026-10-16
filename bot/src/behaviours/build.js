@@ -663,6 +663,10 @@ function builderBatch(bot, ctx) {
       },
       (err) => {
         ctx.buildCellsInFlight = false
+        // Preempted (round-3 core-2: fight took the body, same stepGen):
+        // neither a strike nor a failure — the step keeps running and
+        // re-batches next tick.
+        if (err && err.message === 'build-preempted') return
         if (err && err.message === 'build-stall' && gen === stepGen(ctx)) {
           noteBatchMisses(bot, ctx, batch.home, batch)
         }

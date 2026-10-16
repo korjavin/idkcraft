@@ -1861,6 +1861,12 @@ function castleBuilderBatch(bot, ctx, st, c) {
         if (miss) settleFail(`no-${miss.kind}`)
       },
       (err) => {
+        // Preempted (round-3 core-2): the step keeps running and re-batches;
+        // never a strike nor a fetch word for material the pack holds.
+        if (err && err.message === 'build-preempted') {
+          ctx.castleBuildFlight = false
+          return
+        }
         if (err && err.message === 'build-stall' && gen === stepGen(ctx)) strikeMisses()
         settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
       },

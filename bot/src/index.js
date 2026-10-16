@@ -259,15 +259,16 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   }
 
   function stopOnce() {
+    // A goal-less builder drive (neuc.54 batch) is neither moving nor a
+    // goal, and lastGoalKey may already read 'idle' from a previous park —
+    // so this runs outside the guard below (round-3 core-1), or a parked
+    // builder keeps walking, towering and placing.
+    if (typeof bot.stopBuild === 'function' && (ctx.buildCellsInFlight || ctx.castleBuildFlight)) {
+      bot.stopBuild().catch(() => { /* release best-effort */ })
+    }
     if (ctx.lastGoalKey !== 'idle') {
       if (bot.pathfinder.isMoving()) bot.pathfinder.stop()
       else if (bot.pathfinder.goal) bot.pathfinder.setGoal(null)
-      // A goal-less builder drive (neuc.54 batch) is neither moving nor a
-      // goal, so the two lines above miss it: stop it explicitly, or it
-      // keeps walking, towering and placing for a step that is gone.
-      if (typeof bot.stopBuild === 'function' && (ctx.buildCellsInFlight || ctx.castleBuildFlight)) {
-        bot.stopBuild().catch(() => { /* release best-effort */ })
-      }
       // Manual control states too (rw4.5 doorway sneak): the pathfinder
       // never clears them itself, so a parked bot would keep walking.
       try { bot.clearControlStates() } catch (_) { /* park best-effort */ }

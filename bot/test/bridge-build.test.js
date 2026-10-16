@@ -103,8 +103,9 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
     const p = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS)
     await sleep(10)
     await bot.stopBuild()
-    const res = await p // resolves (cancelled), never hangs
-    assert.equal(res.missing, CELLS.length)
+    // Our own #stop preempts our own build (round-3 core-2): rejects
+    // build-preempted, never hangs, never settles starved.
+    await assert.rejects(p, /^Error: build-preempted$/)
     assert.equal(bot._build, null)
   })
 
@@ -147,14 +148,15 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
     assert.ok(bot._build !== null)
     bot.pathfinder.stop() // no goal live: only the builder keeps it live
     assert.equal(transport.state.baritone, '#stop')
-    await p.catch(() => {}) // the fake's #stop final settles it
+    // Our own #stop preempts our own build (round-3 core-2): the final
+    // rejects build-preempted instead of settling starved.
+    await assert.rejects(p, /^Error: build-preempted$/)
     const q = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1))
     await sleep(10)
     // An already-satisfied goal sends no walk — but still stops the builder.
     bot.pathfinder.setGoal({ constructor: { name: 'GoalBlock' }, isEnd: () => true })
     assert.equal(transport.state.baritone, '#stop')
-    await bot.stopBuild()
-    await q.catch(() => {})
+    await assert.rejects(q, /^Error: build-preempted$/)
   })
 
   it('wire names are unique per call; a foreign final never settles the live build (core-2)', async () => {
