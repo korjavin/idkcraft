@@ -298,7 +298,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // roster join. Downgrade fires once per empty period (brainRestore latch),
   // restore clears the latch on every join.
   function autoBrain(rosterOnline) {
-    if (!ctx.autonomous) return
+    // zchb: a running flat works alone too; a pending restore still needs the join edge.
+    if (!ctx.autonomous && !(ctx.flat && !ctx.flat.parked) && !ctx.brainRestore) return
     if (!rosterOnline && brainEngine === 'jev' && !ctx.brainRestore) {
       const to = 'off'
       // Alone-exemption for plan() only (idkcraft-vmzq.5): the tick ask

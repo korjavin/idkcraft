@@ -562,6 +562,15 @@ describe('flat ticker wiring', () => {
       } finally { r.done() }
     })
 
+    it('zchb: travel that never gets nearer gives up and parks (review 01)', () => {
+      const bot = mockBot(makeWorld({ unloaded: (x) => x >= 200 }))
+      const ctx = { lastGoalKey: '', flat: startEpisode(200, 0, 4, 74, 'P', { i: 3, n: 9 }, 62) }
+      for (let i = 0; i <= flat.TRAVEL_STALL_TICKS; i++) flat(bot, ctx, null, null)
+      assert.equal(ctx.flat, null)
+      assert.equal(ctx.paused, true, 'a helper parks, so the leave re-arms')
+      assert.ok(bot.chats.some((c) => c.includes('cannot reach the square')), bot.chats.join('\n'))
+    })
+
     it('zchb: relay line round-trips; garbage and non-main senders are ignored', () => {
       const f = startEpisode(-7, 12, 16, 75, 'Owner_1', null, 64)
       assert.deepEqual(flat.parseRelay(flat.relayLine(f)), { radius: 16, cx: -7, cz: 12, feet: 65, level: 64, by: 'Owner_1' })

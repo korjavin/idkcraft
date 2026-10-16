@@ -56,6 +56,7 @@ const OCC_DEFERS = 6 // rotations before an occupied cell is skipped
 const SUPPORT_DEPTH = 4 // support fills below one cap before deferring
 const SELF_OCC_LIMIT = 6 // sidesteps out of our own cap cell before skip
 const TRAVEL_REISSUE = 5 // idle travel ticks before the far-square goal is re-issued
+const TRAVEL_STALL_TICKS = 120 // travel ticks without getting nearer before giving up
 const SIDESTEPS = [[3, 0], [-3, 0], [0, 3], [0, -3]]
 const PROGRESS_MS = 120000 // progress chat cadence on the long job
 const FIRST_PROGRESS_MS = 25000 // first progress comes fast: 2 min of silence reads as broken
@@ -730,6 +731,8 @@ function startEpisode(cx, cz, r, yTop, by, tile = null, level = null) {
     progressChats: 0,
     dig: null,
     travelIdle: 0,
+    travelBest: null,
+    travelStall: 0,
   }
 }
 
@@ -778,6 +781,7 @@ function finish(bot, ctx, f, why) {
   if (f.totalBumps > 0) line += `, shaved ${f.shaved} bump${f.shaved === 1 ? '' : 's'}`
   if (f.sweptN > 0) line += `, swept ${f.sweptN} leftover${f.sweptN === 1 ? '' : 's'}`
   if (left > 0) line += `, ${left} left (${leftWhy})`
+  else if (why) line += ` (${why})` // zchb: a give-up with nothing queued still says why
   if (skipped > 0) {
     const parts = Object.entries(f.skip).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`)
     line += `, skipped ${skipped}: ${parts.join(', ')}`
@@ -1637,7 +1641,14 @@ function shaveTick(bot, ctx, f, bp) {
 // ok) until its chunks load, then scan. setGoal resets the path, so a goal
 // is re-issued only after TRAVEL_REISSUE idle ticks (pathing a far goal
 // thinks across ticks; re-issuing every tick would never finish).
-function travelTick(bot, ctx, f) {
+function travelTick(bot, ctx, f, bp) {
+  // No new nearest whole-block distance for TRAVEL_STALL_TICKS = the
+  // square is unreachable from here: finish (parks a helper, re-arms leave).
+  const d = Math.floor(Math.hypot(bp.x - f.cx, bp.z - f.cz))
+  if (f.travelBest == null || d < f.travelBest) { f.travelBest = d; f.travelStall = 0 } else if (++f.travelStall >= TRAVEL_STALL_TICKS) {
+    finish(bot, ctx, f, 'cannot reach the square')
+    return
+  }
   const key = `flat:travel:${f.cx},${f.cz}`
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* idle */ }
@@ -1660,7 +1671,7 @@ function flat(bot, ctx, target, state) {
   if (f.phase === 'scan') {
     // Inside the square: scan now, unloaded columns are reported as today.
     const away = Math.hypot(bp.x - f.cx, bp.z - f.cz) > f.r + 1
-    if (away && !squareLoaded(bot, f.cx, f.cz, f.r, f.yTop)) travelTick(bot, ctx, f)
+    if (away && !squareLoaded(bot, f.cx, f.cz, f.r, f.yTop)) travelTick(bot, ctx, f, bp)
     else scanTick(bot, ctx, f)
     return
   }
@@ -1742,6 +1753,7 @@ module.exports.feetLevel = feetLevel
 module.exports.relayLine = relayLine
 module.exports.parseRelay = parseRelay
 module.exports.squareLoaded = squareLoaded
+module.exports.TRAVEL_STALL_TICKS = TRAVEL_STALL_TICKS
 module.exports.progressChat = progressChat
 module.exports.FIRST_PROGRESS_MS = FIRST_PROGRESS_MS
 module.exports.FIRST_PROGRESS_N = FIRST_PROGRESS_N
