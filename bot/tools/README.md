@@ -523,7 +523,7 @@ from one worktree in parallel need distinct `REPLAY_OUT`.
 ```sh
 sh bot/tools/castle-rig.sh [mins]   # default 6; gates pass 30+ explicitly
 CASTLE_KIT=seeded sh bot/tools/castle-rig.sh 6   # laying, not fetching
-CASTLE_KIT=seeded CASTLE_TICKRATE=60 sh bot/tools/castle-rig.sh 5   # 3x server tps; the bot is wall-clock paced, so this does NOT shorten the window
+CASTLE_KIT=seeded CASTLE_TICK_RATE=60 sh bot/tools/castle-rig.sh 5   # /tick rate 60, 5 GAME min; no speedup for either body (neuc.60, below)
 CASTLE_KIT=junk sh bot/tools/castle-rig.sh 5     # vmzq.38: the 36/36 prod junk pack, no pickaxe — must recover and lay
 sh bot/tools/castle-rig.sh --night 30            # ek69: natural cycle, hostile nights, one verdict per night
 ```
@@ -673,8 +673,9 @@ measures build throughput, not survival. `CASTLE_KIT=seeded` pre-fills
 after the clear, so
 a 6-min window measures laying (equip is kit-complete, the first word is
 a batch) independent of the fetch chain; `empty` (default) runs the full
-chain from nothing. `CASTLE_TICKRATE=N` runs `/tick rate N` for fast
-iteration — literal ticks/sec (20 = normal, 60 = 3x, 100 = 5x; 2..19
+chain from nothing. `CASTLE_TICKRATE=N` (now `CASTLE_TICK_RATE`; the
+window is GAME minutes since neuc.60, see "Rig speed") runs `/tick rate N`
+— literal ticks/sec (20 = normal, 60 = 3x, 100 = 5x; 2..19
 warns, it runs slower than wall clock). A Paper that rejects it warns
 loudly and runs at wall clock; the record carries the effective rate.
 Gates always run at 1, since the bot ticks on wall-clock seconds and a
@@ -727,6 +728,67 @@ stall shapes with reviewer labels and decision-history rings): JEV
 budget ~1 call/row, sequential. The confidence split it prints re-sets
 `TASK_PLAN_MIN_CONF` (`test/stand-steps.test.js` pins the variant shape
 and the fixture cache without network).
+
+### Rig speed: component rigs + `CASTLE_TICK_RATE` (idkcraft-neuc.60)
+
+Two 10-minute component rigs replace "wait 90 min for one noisy castle
+number" for a v2 PR's per-component signal:
+
+```sh
+B="CASTLE_BODY=baritone BARITONE_IMAGE=<tag> CASTLE_PADSPOT=250,350 CASTLE_RIG_ID=auto"
+env $B CASTLE_COMPONENT=lay  sh bot/tools/castle-rig.sh   # 10 min, cells laid / game-min
+env $B CASTLE_COMPONENT=mine sh bot/tools/castle-rig.sh   # 10 min, stone banked / game-min
+```
+
+- `lay` = `CASTLE_KIT=lay`: the seeded kit with stock for the whole window
+  (640 cobble, 192 planks, 64 dirt, 32 torches, stone pick + sword, the
+  attic and blast items), so no fetch leg opens. Rate = castle cells laid
+  per game minute of the window.
+- `mine` = `CASTLE_KIT=pick`: 3 stone picks + a sword and nothing to lay,
+  so the first castle word opens one stone leg that mines the whole
+  window. Rate = stone (every castle `STONE_ITEMS` kind) banked in the
+  pack per game minute of castlefetch time, counted from the 15 s sample
+  before the first gain; `first=` is the walk to the first stone (not in
+  the rate).
+
+Each run prints the usual castle line plus ONE component line, judged
+against `component-baseline.json` (`v1`/`v2` by `BOT_BODY`):
+
+```
+lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.0 -> 24.2 (+1%, within ±15%)
+mine-rate 16.0/game-min: banked=+124 in 7.8 game-min of castlefetch, first=135s, window=10.0 game-min, tick=1, baseline 16.2 -> 16.0 (-1%, within ±15%)
+```
+
+so a PR quotes `before -> after` per component straight from its two
+lines. Re-record a baseline (two master runs, each within ±15% of the
+`rate`; `npm test` enforces it) in the PR that moves it on purpose.
+Pre-existing `CASTLE_*` knobs stay usable but change what the line means;
+`CASTLE_SEED`/`CASTLE_IDLE` are refused (a component orders a castle).
+
+`CASTLE_TICK_RATE=N` (old name `CASTLE_TICKRATE`; unset = server
+untouched) runs `/tick rate N` and makes `[mins]` GAME minutes (wall =
+mins x 20 / N); every rate-set line adds `tick=, game=` (rcon `time query
+gametime` delta — a server that cannot hold the rate shows here) and
+`cells/game-min`. **Measured: no rate above 20 is usable, v2 included**
+(2026-10-16, v2 body, pad 250,350, 10 game-min each):
+
+| rate | lay cells/game-min | mine stone/game-min | mine first= (game s) |
+|---|---|---|---|
+| 20 | 24.2 | 16.5 | 135 |
+| 40 | 9.4 | — | — |
+| 60 | 4.6 | 4.3 | 405 |
+
+The server holds the rate (game=10.0-10.5 min in 1/3 the wall time at
+60), but the body does not follow it: the walk to the first stone takes
+the same 135 WALL seconds at 20 and 60, and per wall minute laying and
+mining are flat or slower (lay 24 vs 14/wall-min at 60). This matches the
+vanilla client clamping its tick length to >= 50 ms (it slows down with
+the server, never speeds up), and v1's mineflayer physics is wall-clock
+paced too (vmzq.24: 20/60/100 tps, identical laying per wall minute). So
+the safe rate is 20; acceleration needs a client-side change (a mod
+mixin lifting that clamp), out of this tooling scope. The wrapper warns on
+any rate > 20; above 20 the line is a game-clock
+measurement, not a speedup.
 
 ## Work-cycle rig (`work-rig.sh`, idkcraft-6x7.16)
 

@@ -88,7 +88,7 @@
 #   untouched, the default; N > 1 runs /tick rate N — literal ticks/sec,
 #   20 = normal, 60 = 3x — and [mins] become GAME minutes: wall =
 #   mins * 20 / N; the verdict adds tick=, game= (rcon gametime) and
-#   cells/game-min; v2 only — v1 physics is wall-clock paced),
+#   cells/game-min; no speedup on either body above 20 — README),
 #   CASTLE_COMPONENT (''|mine|lay — neuc.60: a component rig, default 10
 #   min; lay = CASTLE_KIT=lay, a full-stock kit: cells laid per game
 #   minute; mine = CASTLE_KIT=pick, 3 stone picks and nothing to lay:
@@ -108,9 +108,9 @@
 # on the slot starts without manual cleanup.
 # The pristine snapshot (world/world.tar) is only ever READ (tar -xf); a
 # sha move fails the run (exit 2) so runs stay comparable. Acceleration
-# caveat: the bot ticks on wall-clock seconds, so a faster game clock gives
-# it more game-time per decision — gates run at 1; the max safe rate is
-# measured in the vmzq.24 report, not assumed here.
+# caveat: the bot ticks on wall-clock seconds and neither body follows a
+# faster server (measured neuc.60: v2 lays 24.2 cells/game-min at 20, 9.4
+# at 40, 4.6 at 60) — the safe rate is 20; gates run untouched.
 # One castle run per rig (own containers/ports/locks, so a castle run and a
 # stuck run can share the box): container idk-castle[-<id>], host port
 # 25581 + letter index (a=25582, b=25583), data under
@@ -198,8 +198,8 @@ case "$BLOCKED" in ''|*[!0-9]*) echo "blocked: want an integer 0..16, got '$BLOC
 TICKRATE="${CASTLE_TICK_RATE:-${CASTLE_TICKRATE:-1}}"
 case "$TICKRATE" in ''|*[!0-9]*) echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2 ;; esac
 { [ "$TICKRATE" -ge 1 ] && [ "$TICKRATE" -le 100 ]; } || { echo "tickrate: want an integer 1..100, got '$TICKRATE'"; exit 2; }
-if [ "$TICKRATE" -gt 20 ] && [ "${CASTLE_BODY:-}" != baritone ]; then
-  echo "tickrate [$TICKRATE]: v1 (mineflayer) physics runs on wall clock — game-time windows are v2-only (README); expect fewer cells per game minute"
+if [ "$TICKRATE" -gt 20 ]; then
+  echo "tickrate [$TICKRATE]: neither body follows a server above 20 tps (neuc.60, README) — [mins] are game minutes; expect fewer cells per game minute, not a speedup"
 fi
 RIG_PLANNER="${RIG_PLANNER:-jev}"
 case "$RIG_PLANNER" in jev|laya|llm|stub) ;; *) echo "RIG_PLANNER: want jev|laya|llm|stub, got '$RIG_PLANNER'"; exit 2 ;; esac

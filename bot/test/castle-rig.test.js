@@ -969,28 +969,30 @@ describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
 })
 
 describe('castle rig speed (idkcraft-neuc.60)', () => {
-  const { componentLine, classify, seen, resetSeen } = require('../tools/castle-replay')
+  const { componentLine } = require('../tools/castle-replay')
   const { spawnSync } = require('node:child_process')
   const os = require('node:os')
   const sh = path.join(__dirname, '..', 'tools', 'castle-rig.sh')
 
   it('lay rate = cells per game minute, judged against the baseline', () => {
     const l = componentLine('lay', { laid: 300, gameMin: 10, wallMin: 3.33, legs: [], tick: '60', baseline: { rate: 28 } })
-    assert.equal(l, 'lay-rate 30.0/game-min: laid=300 in 10.0 game-min, fetch-legs=0, tick=60, baseline=28 (+7%, within ±15%)')
+    assert.equal(l, 'lay-rate 30.0/game-min: laid=300 in 10.0 game-min, tick=60, baseline 28 -> 30.0 (+7%, within ±15%)')
     assert.match(componentLine('lay', { laid: 100, gameMin: 10, wallMin: 10, legs: [], tick: '1', baseline: { rate: 20 } }), /-50%, OUTSIDE ±15%/)
   })
 
-  it('mine rate reads only stone legs, in game minutes from the measured ratio', () => {
-    resetSeen()
-    classify('castlefetch stone: leg over (done) ticks dig=10 walk=2 other=1 starts=1 dug=40 blocks=+40 target=40 wall=20s')
-    classify('castlefetch planks: leg over (done) ticks dig=0 walk=2 other=1 starts=1 dug=0 blocks=+8 target=8 wall=30s')
-    classify('castlefetch stone: leg over (failed:x) ticks dig=1 walk=2 other=1 starts=1 dug=0 blocks=-2 target=40 wall=10s')
-    assert.equal(seen.legs.length, 3)
-    // 30 wall s of stone legs at a measured 3x = 1.5 game min; -2 counts 0.
-    const l = componentLine('mine', { laid: 0, gameMin: 9, wallMin: 3, legs: seen.legs, tick: '60', baseline: null })
-    assert.equal(l, 'mine-rate 26.7/game-min: blocks=+40 in 1.5 game-min of 2 stone legs, window=9.0 game-min, tick=60')
-    assert.match(componentLine('mine', { laid: 0, gameMin: 9, wallMin: 3, legs: [], tick: '60', baseline: { rate: 5 } }), /^mine-rate -\/game-min/)
-    resetSeen()
+  it('mine rate = stone banked per game minute of castlefetch, from the first gain', () => {
+    const series = [
+      { t: 0, step: null, stone: 0 },
+      { t: 15, step: 'castlefetch', stone: 0 }, // the walk: first=, not rate
+      { t: 30, step: 'castlefetch', stone: 10 },
+      { t: 45, step: 'castle', stone: 4 }, // laying: neither banked nor timed
+      { t: 60, step: 'castlefetch', stone: 14 },
+      { t: 75, step: 'castlefetch', stone: 12 }, // a loss counts 0
+    ]
+    // 45 wall s of castlefetch at a measured 3x = 2.25 game min, +20 banked.
+    const l = componentLine('mine', { laid: 0, gameMin: 3.75, wallMin: 1.25, series, tick: '60', baseline: null })
+    assert.equal(l, 'mine-rate 8.9/game-min: banked=+20 in 2.3 game-min of castlefetch, first=45s, window=3.8 game-min, tick=60')
+    assert.match(componentLine('mine', { laid: 0, gameMin: 9, wallMin: 3, series: series.slice(0, 2), tick: '60', baseline: { rate: 5 } }), /^mine-rate -\/game-min: banked=\+0 .*first=-/)
   })
 
   it('validates CASTLE_COMPONENT / CASTLE_TICK_RATE before touching the world', () => {
@@ -1006,7 +1008,7 @@ describe('castle rig speed (idkcraft-neuc.60)', () => {
     assert.equal(rate.status, 2)
     assert.match(rate.stdout, /tickrate: want an integer/)
     const ok = run({ CASTLE_COMPONENT: 'mine', CASTLE_TICK_RATE: '60' })
-    assert.match(ok.stdout, /v2-only/)
+    assert.match(ok.stdout, /neither body follows a server above 20 tps/)
     assert.match(ok.stdout, /no START.sh/)
   })
 

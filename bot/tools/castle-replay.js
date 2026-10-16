@@ -256,9 +256,8 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /, /^residence /]
 const origLog = console.log
 const origErr = console.error
-const seen = { legs: [], flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [] }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [] }
 function resetSeen() {
-  seen.legs = []
   seen.regressAt = []
   seen.shelterEps = 0
   seen.flips = 0
@@ -294,9 +293,6 @@ function hookConsole() {
 // bot's own log lines (in-process, loss-free). now is injectable for tests.
 function classify(line, now = Date.now()) {
   if (line.startsWith('castle regress ')) { seen.regressAt.push(now); return } // g0z.56
-  // neuc.60: castlefetch leg ledger (the mine-rate component reads stone legs).
-  const lm = /^castlefetch (\S+): leg over \((\S+)\) .* blocks=([+-]?\d+) .*wall=(\d+)s/.exec(line)
-  if (lm) { seen.legs.push({ kind: lm[1], status: lm[2], blocks: Number(lm[3]), wallS: Number(lm[4]) }); return }
   let m = /^goal step=(\S+) prev=(\S+)/.exec(line)
   if (m) {
     seen.step = m[1]
@@ -698,27 +694,40 @@ async function gameTime() {
 }
 
 // neuc.60: component verdict, pure (unit-tested). lay = castle cells laid
-// per game minute of the window; mine = blocks banked per game minute
-// INSIDE finished stone legs (laying time excluded), leg wall seconds
-// scaled by the measured game/wall ratio. baseline = { rate } or null.
-function componentLine(kind, { laid, gameMin, wallMin, legs, tick, baseline }) {
+// per game minute of the window; mine = stone (castle STONE_ITEMS) banked
+// in the pack per game minute of castlefetch time, counted from the sample
+// before the first gain (the walk to the first stone is first=, not rate).
+// series = the 15 s samples ({ t, step, stone, done }); wall seconds scale
+// by the measured game/wall ratio. baseline = { rate } or null.
+function componentLine(kind, { laid, gameMin, wallMin, series, tick, baseline }) {
   const ratio = wallMin > 0 ? gameMin / wallMin : 1
   let rate = null
   let body
   if (kind === 'lay') {
     rate = gameMin > 0 ? laid / gameMin : null
-    body = `laid=${laid} in ${gameMin.toFixed(1)} game-min, fetch-legs=${legs.length}`
+    body = `laid=${laid} in ${gameMin.toFixed(1)} game-min`
   } else {
-    const st = legs.filter((l) => l.kind === 'stone')
-    const blocks = st.reduce((n, l) => n + Math.max(0, l.blocks), 0)
-    const legMin = st.reduce((n, l) => n + l.wallS, 0) / 60 * ratio
-    rate = legMin > 0 ? blocks / legMin : null
-    body = `blocks=+${blocks} in ${legMin.toFixed(1)} game-min of ${st.length} stone legs, window=${gameMin.toFixed(1)} game-min`
+    let banked = 0
+    let spanS = 0
+    let firstS = null
+    for (let i = 1; i < series.length; i++) {
+      const a = series[i - 1]
+      const b = series[i]
+      if (b.step !== 'castlefetch' || typeof a.stone !== 'number' || typeof b.stone !== 'number') continue
+      const gain = Math.max(0, b.stone - a.stone)
+      if (firstS == null && gain > 0) firstS = a.t
+      if (firstS == null) continue
+      banked += gain
+      spanS += b.t - a.t
+    }
+    const spanMin = spanS / 60 * ratio
+    rate = spanMin > 0 ? banked / spanMin : null
+    body = `banked=+${banked} in ${spanMin.toFixed(1)} game-min of castlefetch, first=${firstS == null ? '-' : `${Math.round(firstS * ratio)}s`}, window=${gameMin.toFixed(1)} game-min`
   }
   let judge = ''
   if (rate != null && baseline && baseline.rate > 0) {
     const pct = Math.round((rate / baseline.rate - 1) * 100)
-    judge = `, baseline=${baseline.rate} (${pct >= 0 ? '+' : ''}${pct}%, ${Math.abs(pct) <= 15 ? 'within' : 'OUTSIDE'} ±15%)`
+    judge = `, baseline ${baseline.rate} -> ${rate.toFixed(1)} (${pct >= 0 ? '+' : ''}${pct}%, ${Math.abs(pct) <= 15 ? 'within' : 'OUTSIDE'} ±15%)`
   }
   return `${kind}-rate ${rate == null ? '-' : rate.toFixed(1)}/game-min: ${body}, tick=${tick}${judge}`
 }
@@ -1412,6 +1421,12 @@ async function main() {
           else if (pick === 'none' && it.name === 'wooden_pickaxe') pick = 'wood'
         }
       }
+      // neuc.60: every castle stone kind (the mine-rate component).
+      const { isStone } = require('../src/castle')
+      s.stone = 0
+      for (const it of (follower.inventory && follower.inventory.items()) || []) {
+        if (it && isStone(it.name)) s.stone += typeof it.count === 'number' ? it.count : 1
+      }
       s.cobble = cobble; s.dirt = dirt; s.logs = logs; s.planks = planks; s.sticks = sticks; s.pick = pick; s.edibles = edibles
     } catch (_) { /* inventory best-effort */ }
     try {
@@ -1984,7 +1999,7 @@ async function main() {
   if (COMPONENT) {
     let base = null
     try { base = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'][COMPONENT] || null } catch (_) { base = null }
-    compLine = componentLine(COMPONENT, { laid, gameMin, wallMin, legs: seen.legs, tick: TICKRATE, baseline: base })
+    compLine = componentLine(COMPONENT, { laid, gameMin, wallMin, series, tick: TICKRATE, baseline: base })
   }
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
@@ -1996,7 +2011,7 @@ async function main() {
     nights: night ? night.nights : undefined,
     seed: SEED || undefined, residence: resNights ? resNights.nights : undefined,
     seedVersion: SEED ? SEED_VERSION : undefined, upgrade: upgrade || undefined,
-    gameMin, wallMin, legs: seen.legs, component: compLine || undefined,
+    gameMin, wallMin, component: compLine || undefined,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
