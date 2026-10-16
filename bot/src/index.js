@@ -7,6 +7,7 @@ const { makeBrain, stubBrain, jevBrain, hybridBrain, JEV_ENDPOINT, isHard, brain
 const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHostiles } = require('./perception')
 const { makeScout } = require('./behaviours/scout')
 const stuck = require('./stuck')
+const { limitChat } = require('./chat-limit')
 const { UNSEEN_HOME_TICKS } = stuck
 const body = require('./body')
 const { handleChat, advancePendingSearch, clearPendingSearch, wakeBody } = require('./chat')
@@ -1421,6 +1422,8 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       auth: 'offline' // offline-mode server; see README for the online-mode note
     })
     bot.loadPlugin(pathfinder)
+    // idkcraft-vewo.3: on login, not here — mineflayer installs bot.chat when its plugins inject.
+    bot.once('login', () => limitChat(bot))
     let wantQuit = false
     const ticker = createTicker({
       bot, brain, tickMs, idleTickMs, followName, leaveAfterMs, brainEngine, autonomous,
