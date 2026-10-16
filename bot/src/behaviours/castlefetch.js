@@ -74,9 +74,10 @@ const DIG_REACH = 4
 const PICKUP_REACH = 2 // drops land where the block stood (equip lesson)
 const EYE = 1.62 // eye over feet: trench reach is measured from it
 const AIR_WAITS = 3 // ticks a dig waits for the feet to land
+const PICKUP_WAITS = 8 // ticks walking into a below-feet hole for its drop (neuc.51)
 const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
 const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
-const NOGAIN_STRIKES = 5 // digs without the cobble count growing
+const NOGAIN_STRIKES = 8 // digs without the cobble count growing (neuc.51: v2 digs one a second, the pickup trails 1-2 digs; 5 failed live legs)
 const DIG_TIMEOUT_MS = 10000
 const CHEST_REACH = stockpileMod.INTERACT_REACH
 const CHEST_WAITS = 30 // ticks without closing in on the chest
@@ -1245,6 +1246,22 @@ function digTick(bot, ctx, f) {
   }
   let t = f.target
   if (t && !targetAt(t)) t = f.target = null // dug (or gone): pick the next
+  // neuc.51: a stone dug below the feet drops into its own hole, under the
+  // pickup box (feet - 0.5; rig: 5 such digs after the pick upgrade, cobble
+  // 0 -> 0, dig-stall). Step into the hole first; the pit's next cells are
+  // then at feet level. A drop already in the pack (v1 often lands in the
+  // hole on its own) or a hole the walk never closes in on skips the step.
+  const pu = !t && f.pickup
+  if (pu) {
+    const hd = Math.hypot(bp.x - (pu.x + 0.5), bp.z - (pu.z + 0.5))
+    const there = hd <= 1 && bp.y < pu.y + 0.75
+    if (there || cobble(bot) > pu.have || stalled(pu, hd + Math.abs(bp.y - pu.y), PICKUP_WAITS)) f.pickup = null
+    else {
+      walkTo(bot, ctx, `castlefetch-pickup:${pu.x},${pu.y},${pu.z}`, pu, 0)
+      spend(f, 'walk')
+      return
+    }
+  }
   if (!t) {
     // Far from the castle: walk there first, the stone is searched there.
     // (.22) a castlefetch-far unlock walks to the known candidate instead
@@ -1365,8 +1382,13 @@ function digTick(bot, ctx, f) {
     }
     // Drops never reaching the pack (revmux 01): a trench's worth of stone
     // dug with no cobble gained ends the leg instead of digging all day.
+    // Last-seen baseline, not a high-water mark (neuc.51): a stairs leg
+    // crafts 6 cobble away at every threshold, so the count never beat
+    // its old peak and every leg died dig-stall near its 16th stair.
     const have = cobble(bot)
-    if (f.qCobble == null || have > f.qCobble) { f.qCobble = have; f.qNoGain = 0 } else if (b.name === 'stone' && ++f.qNoGain > QUARRY_NOGAIN) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
+    if (f.qCobble == null || have > f.qCobble) f.qNoGain = 0
+    else if (b.name === 'stone' && ++f.qNoGain > QUARRY_NOGAIN) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
+    f.qCobble = have
   } else {
     const have = cobble(bot)
     if (f.lastCobble != null && have <= f.lastCobble) {
@@ -1376,6 +1398,7 @@ function digTick(bot, ctx, f) {
   }
   spend(f, 'dig')
   try { f.starts = (f.starts | 0) + 1 } catch (_) { /* counter best-effort */ }
+  const below = !t.quarry && !s && t.y < Math.floor(bp.y) ? { x: t.x, y: t.y, z: t.z, have: cobble(bot) } : null
   ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig below
   flight(ctx, async () => {
     // Trench dirt by hand (rig: the pick wore out on the sod before the
@@ -1392,7 +1415,7 @@ function digTick(bot, ctx, f) {
     try { console.log(`castlefetch stone: dig timed out at ${t.x} ${t.y} ${t.z}, skipping`) } catch (_) { /* log best-effort */ }
     skip.add(t.k)
     if (f.target === t) f.target = null
-  }, () => { try { f.dug = (f.dug | 0) + 1 } catch (_) { /* counter best-effort */ } })
+  }, () => { try { f.dug = (f.dug | 0) + 1; if (below) f.pickup = below } catch (_) { /* counter best-effort */ } })
 }
 
 function castlefetch(bot, ctx, target, state) {

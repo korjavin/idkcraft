@@ -1445,6 +1445,8 @@ function forageHeld(ctx) {
     return false
   }
 }
+// Missing cell item (planks, or the table/door a cell wants): one family.
+const MISSING_ITEM_RE = /^failed:no-(planks|table|door)$/
 // Failed-build hold (idkcraft-67z3): BUILD_RETRY_MS and its why in budget.js.
 function buildHeld(ctx) {
   try {
@@ -1458,7 +1460,7 @@ function buildHeld(ctx) {
       if (ctx && ctx.home && ctx.home.site) return false
       return (sf.n || 1) >= 2
     }
-    if (sf.status === 'failed:no-planks') return (sf.n || 1) >= 2
+    if (MISSING_ITEM_RE.test(sf.status)) return (sf.n || 1) >= 2
     return true
   } catch (_) {
     return false
@@ -1475,7 +1477,7 @@ function buildFailSig(status, facts, ctx, bot) {
   try {
     const home = ctx && ctx.home
     if (status === 'failed:no-site') return 'site=none'
-    if (status === 'failed:no-planks') {
+    if (MISSING_ITEM_RE.test(status)) {
       let remaining = null
       try {
         if (home && home.site && bot) {
