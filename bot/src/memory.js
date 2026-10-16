@@ -347,6 +347,18 @@ function flatOf(v) {
   }
 }
 
+// Pre-connect peek (vewo.8): a saved flat job skips the wait-for-players.
+// ponytail: no world check before login; a stale other-world file costs a
+// join/leave cycle per grace until a save in this world replaces it.
+function hasFlat(file) {
+  try {
+    const doc = readDoc(file)
+    return !!(doc && doc.v === VERSION && flatOf(doc.flat))
+  } catch (_) {
+    return false
+  }
+}
+
 function sameSite(a, b) {
   try {
     return !!a && !!b && !!a.site && !!b.site &&
@@ -742,4 +754,4 @@ function refreshPeerCastle(bot, ctx, now, env) {
   } catch (_) { /* peer best-effort */ }
 }
 
-module.exports = { save, restore, saveThrottled, refreshPeerCastle, fileFor, worldKey, SAVE_MIN_MS, VISITED_MAX, HOMES_MAX }
+module.exports = { save, restore, hasFlat, saveThrottled, refreshPeerCastle, fileFor, worldKey, SAVE_MIN_MS, VISITED_MAX, HOMES_MAX }

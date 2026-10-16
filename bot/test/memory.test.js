@@ -567,6 +567,10 @@ describe('flat job survives a restart (idkcraft-vewo.8)', () => {
     assert.equal(memory.restore(botAt(SPAWN_A), ctx2, file).flat, 1)
     assert.deepEqual(ctx2.flatSaved, { cx: 24, cz: 23, r: 7, yTop: 75, level: 64, by: 'Owner' })
     assert.equal(ctx2.flat, undefined, 'not live until the spawn handler resumes it')
+    assert.equal(memory.hasFlat(file), true, 'main() skips the wait-for-players')
+    memory.save(botAt(SPAWN_A), { flat: null }, file)
+    assert.equal(memory.hasFlat(file), false)
+    assert.equal(memory.hasFlat(path.join(dir, 'missing.json')), false)
   })
   it('a finished (null) or stopped (parked) job is dropped; an untouched ctx keeps it', () => {
     for (const end of [null, { ...job(), parked: true }]) {

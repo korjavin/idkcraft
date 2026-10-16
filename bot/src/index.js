@@ -1627,7 +1627,8 @@ async function main() {
     // Autonomous joins an empty server too: staying is the point. The chat
     // toggle (not the env const) decides, so 'autonomous off' lasts.
     const autonomous = autonomousEffective(process.env)
-    if (leaveAfterMs !== 0 && !autonomous) {
+    // vewo.8: a remembered flat job joins an empty server too (owner may be gone).
+    if (leaveAfterMs !== 0 && !autonomous && !memory.hasFlat(memory.fileFor(process.env, username))) {
       await waitForPlayers({ host, port, pingFn, username, workerConfigured: worker.configured() })
       await sleep(JOIN_SETTLE_MS)
     }
