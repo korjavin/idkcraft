@@ -755,8 +755,8 @@ Each run prints the usual castle line plus ONE component line, judged
 against `component-baseline.json` (`v1`/`v2` by `BOT_BODY`):
 
 ```
-lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.0 -> 24.2 (+1%, within ±15%)
-mine-rate 16.0/game-min: banked=+124 in 7.8 game-min of castlefetch, first=135s, window=10.0 game-min, tick=1, baseline 16.2 -> 16.0 (-1%, within ±15%)
+lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.2 -> 24.2 (+0%, within ±15%)
+mine-rate 15.5/game-min: banked=+120 in 7.7 game-min of castlefetch, first=135s, window=10.0 game-min, tick=1, baseline 15.8 -> 15.5 (-2%, within ±15%)
 ```
 
 so a PR quotes `before -> after` per component straight from its two
@@ -774,7 +774,8 @@ gametime` delta — a server that cannot hold the rate shows here) and
 
 | rate | lay cells/game-min | mine stone/game-min | mine first= (game s) |
 |---|---|---|---|
-| 20 | 24.2 | 16.5 | 135 |
+| 20 (set) | 24.2 | 16.5 (from the cobble samples; the field predates `stone`) | 135 |
+| untouched (the baselines) | 24.2, 24.2 | 16.0, 15.5 | 135, 135 |
 | 40 | 9.4 | — | — |
 | 60 | 4.6 | 4.3 | 405 |
 
