@@ -1033,3 +1033,73 @@ describe('castle rig speed (idkcraft-neuc.60)', () => {
     }
   })
 })
+
+// idkcraft-6x7.27: shared BEFORE cache — key, staleness and write-through
+// rules are pure, fed shas/dates (no docker, no git).
+describe('castle-before.js shared before cache', () => {
+  const cb = require('../tools/castle-before.js')
+  const A = 'a'.repeat(40)
+  const B = 'b'.repeat(40)
+  const C = 'c'.repeat(40)
+  const now = Date.parse('2026-10-17T12:00:00Z')
+  const day = 24 * 3600 * 1000
+  const at = (d) => new Date(now - d * day).toISOString()
+  const opts = (o = {}) => ({ base: B, now, isAncestor: () => true, rigChanged: () => false, ...o })
+  const v2 = { CASTLE_BODY: 'baritone', CASTLE_PADSPOT: '250,350', BARITONE_IMAGE: 'idkcraft-baritone:abc' }
+
+  it('key = <sha>-<component>-<image tag>-<settings hash>; every gate setting moves it', () => {
+    const s = cb.settingsOf(v2)
+    assert.deepEqual(s, { body: 'baritone', padspot: '250,350', mins: '10', tick: '1', image: 'idkcraft-baritone:abc' })
+    const k = cb.cacheKey(A, 'lay', s)
+    assert.match(k, new RegExp(`^${A}-lay-idkcraft-baritone_abc-[0-9a-f]{10}$`))
+    for (const ch of [{ CASTLE_PADSPOT: '1,2' }, { CASTLE_MINS: '15' }, { CASTLE_TICK_RATE: '20' }, { BARITONE_IMAGE: 'idkcraft-baritone:def' }, { CASTLE_BODY: '' }]) {
+      assert.notEqual(cb.cacheKey(A, 'lay', cb.settingsOf({ ...v2, ...ch })), k, JSON.stringify(ch))
+    }
+    assert.notEqual(cb.cacheKey(A, 'mine', s), k)
+    assert.equal(cb.settingsOf({}).image, '-', 'v1 body has no image')
+  })
+
+  it('exact sha hits; stale (>7 d), ancestor-with-rig-changes and miss each give a one-line reason', () => {
+    assert.equal(cb.pickBefore([{ sha: B, date: at(1), line: 'x' }], opts()).hit.line, 'x')
+    const stale = cb.pickBefore([{ sha: B, date: at(8), line: 'x' }], opts())
+    assert.match(stale.reason, /^stale: /)
+    const anc = [{ sha: A, date: at(1), line: 'old' }]
+    assert.equal(cb.pickBefore(anc, opts()).hit.line, 'old', 'docs-only ancestor is valid')
+    assert.match(cb.pickBefore(anc, opts({ rigChanged: () => true })).reason, /^changed: .*ancestor.*rig files moved/)
+    assert.match(cb.pickBefore([{ sha: A, date: at(9), line: 'old' }], opts()).reason, /^stale: /)
+    assert.match(cb.pickBefore(anc, opts({ isAncestor: () => false })).reason, /^miss: /)
+    assert.match(cb.pickBefore([], opts()).reason, /^miss: /)
+    for (const r of [stale.reason, cb.pickBefore([], opts()).reason]) assert.ok(!r.includes('\n'))
+  })
+
+  it('prefers the exact sha, then the newest valid ancestor', () => {
+    const es = [{ sha: A, date: at(0.5), line: 'anc' }, { sha: B, date: at(2), line: 'exact' }]
+    assert.equal(cb.pickBefore(es, opts()).hit.line, 'exact')
+    const two = [{ sha: A, date: at(3), line: 'older' }, { sha: C, date: at(1), line: 'newer' }]
+    assert.equal(cb.pickBefore(two, opts()).hit.line, 'newer')
+    assert.equal(cb.pickBefore(two, opts({ rigChanged: (s) => s === C })).hit.line, 'older')
+  })
+
+  it('stores only a clean, non-DIAG component leg on origin/master with this run\'s record', () => {
+    const env = { ...v2, CASTLE_COMPONENT: 'lay', CASTLE_TAG: 'c1', CASTLE_MINS: '10', CASTLE_TICKRATE: '1' }
+    const record = { tag: 'c1', date: at(0), component: 'lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.2 -> 24.2 (+0%, within ±15%)' }
+    const ok = { env, record, head: A, master: A, clean: true }
+    const e = cb.storeEntry(ok)
+    assert.equal(e.key, cb.cacheKey(A, 'lay', cb.settingsOf(env)))
+    assert.equal(e.rate, 24.2)
+    assert.equal(e.line, record.component)
+    assert.equal(cb.storeEntry({ ...ok, head: B }), null, 'not origin/master')
+    assert.equal(cb.storeEntry({ ...ok, clean: false }), null, 'dirty tree')
+    assert.equal(cb.storeEntry({ ...ok, env: { ...env, CASTLE_DIAG: '1' } }), null, 'DIAG leg')
+    assert.equal(cb.storeEntry({ ...ok, env: { ...env, CASTLE_COMPONENT: '' } }), null, 'no component')
+    assert.equal(cb.storeEntry({ ...ok, record: { ...record, tag: 'old' } }), null, 'stale record file')
+  })
+
+  it('the wrapper writes through only after a measured non-DIAG component leg; replay honours CASTLE_BASELINE_RATE', () => {
+    const rig = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-rig.sh'), 'utf8')
+    assert.ok(rig.includes('[ "$_rc" = 0 ] && [ -n "$COMPONENT" ] && [ -z "$DIAG" ]'), 'write-through guard drifted')
+    assert.ok(rig.includes('node tools/castle-before.js store || true'), 'write-through must never fail the run')
+    assert.ok(fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8').includes('CASTLE_BASELINE_RATE'))
+    assert.match(cb.rigCommand('mine', cb.settingsOf(v2)), /CASTLE_BODY=baritone BARITONE_IMAGE=idkcraft-baritone:abc CASTLE_PADSPOT=250,350 CASTLE_COMPONENT=mine .*castle-rig\.sh$/)
+  })
+})

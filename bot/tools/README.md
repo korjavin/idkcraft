@@ -770,6 +770,33 @@ window leaves under a minute of mining). Wall cost ~7 min vs ~14 for the
 gate leg. A DIAG line is never quoted in a PR body as before/after; only
 the 10-game-min lines are gate legs.
 
+**Shared before (idkcraft-6x7.27).** The two before legs measure
+origin/master, the same commit for every PR between merges, so they run
+once per master sha. A 10-min component leg that exits 0 from a clean tree
+(tracked files) whose HEAD equals `origin/master` (after a `git fetch`)
+writes its record + component line through to
+`$PRODWORLD/castle-rigs/before/<sha>-<component>-<image tag>-<settings hash>.json`
+(local, never in git). Settings = the gate's "equal settings":
+`CASTLE_BODY`, `CASTLE_PADSPOT`, mins, tick rate, `BARITONE_IMAGE`. A DIAG
+leg never caches. A PR then reads its base's before with the same env:
+
+```sh
+env $B sh bot/tools/castle-before.sh lay    # before (cached <date>, master <sha>): lay-rate ...
+env $B sh bot/tools/castle-before.sh mine
+```
+
+Valid: an exact-sha hit, or a cached ancestor of the base
+(`git merge-base origin/master HEAD`) when `git diff <cached>..<base> --
+bot/src baritone bot/tools/castle-replay.js bot/tools/castle-rig.sh
+bot/tools/component-baseline.json` is empty (docs/CI-only merges do not
+change the rig). Hard cap 7 days on any entry (host/image drift). A miss,
+a stale entry or "ancestor but rig files moved" prints one reason line
+plus the exact rig command to run from a clean origin/master worktree, and
+exits 1 — whoever misses pays the two before legs (as before), which also
+fills the cache; no cron. `CASTLE_BASELINE_RATE=<rate from the before line>`
+on the after legs judges `baseline <before> -> <after>` against the cached
+before instead of `component-baseline.json`.
+
 ### Fetch line (idkcraft-neuc.62)
 
 Every castle-rig run (the 90-min castle and the component rigs) also prints

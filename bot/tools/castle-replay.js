@@ -2072,6 +2072,8 @@ async function main() {
   if (COMPONENT) {
     let base = null
     try { base = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'][COMPONENT] || null } catch (_) { base = null }
+    // 6x7.27: judge against the cached before (castle-before.sh) instead of the committed baseline.
+    if (Number(process.env.CASTLE_BASELINE_RATE) > 0) base = { rate: Number(process.env.CASTLE_BASELINE_RATE) }
     compLine = componentLine(COMPONENT, { laid, gameMin, wallMin, series, tick: TICKRATE, baseline: base, diag: DIAG })
   }
   let mineBase = null
