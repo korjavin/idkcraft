@@ -649,6 +649,7 @@ describe('flat ticker wiring', () => {
       }
       assert.deepEqual(run('IdkBot', false, 'IdkBot2: help').chats, [], 'other bot ignores')
       assert.deepEqual(run('IdkSwarm1', true, 'IdkBot2: help').chats, [], 'helper ignores')
+      assert.deepEqual(run('IdkBot2', false, 'IdkBot: help').chats, [], 'prefix must be the full name')
       assert.ok(run('IdkBot2', false, 'idkbot2: help').chats.length > 0, 'addressed bot answers, case-insensitive')
       assert.ok(run('IdkBot', false, 'IdkBot:help').chats.length > 0, 'space after colon optional')
       assert.ok(run('IdkBot', false, 'help').chats.length > 0, 'unprefixed unchanged')
