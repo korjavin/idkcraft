@@ -782,3 +782,42 @@ v1's PATH_COST 10. A heuristic, not a cost: deep nodes expand last and are
 never a partial path's best node, while a goal inside a disc still plans.
 Malformed `avoid` is ignored (the goal runs unwrapped); a process takeover
 (`#goto <block>`) is not wrapped.
+
+## baritone.build (idkcraft-neuc.54)
+
+Mod: `mod/src/main/java/idkcraft/bridge/Build.java`
+(`Build.install(server)`, wired from `BridgeMod.onInitializeClient`; wire
+parsing and progress math in the game-free `BuildPlan.java`, covered by
+`BuildPlanTest` without the client).
+Node: `bot/src/bridge/build.js` (`installBuild`/`installBuildStop` in the
+adapter constructor, `handleBuildEvent` in the event router).
+
+| method | params | result | mineflayer surface |
+|---|---|---|---|
+| `baritone.build` | `{name, origin:{x,y,z}, cells:[{dx,dy,dz,block}], props?, forbid?}` — `block` a plain (optionally `minecraft:`-prefixed) name, `props` property-name→serialized-value overrides, `forbid` block names guarded while building | `{ok,cells,missing}` at once; progress and the end are notifications | `bot.buildCells(name, origin, cells, {forbid})` → `Promise<{placed,missing}>` |
+
+Notifications: `baritone.event {kind:'build', name, placed, missing,
+active}` every second while a build is live, plus a final `active:false`
+when the builder goes idle — done, out of world, or cancelled (`#stop`
+cancels the builder like any other process; the mod's tick reports the
+idle, so no separate stop verb exists and `bot.stopBuild()` is that `#stop`
+spelling).
+
+The schematic is sparse (bounds from the cell offsets, only listed cells
+in-schematic); desired states are the block default plus `props`. A desired
+`*_planks` counts any laid `*_planks` as placed (same for `*_fence` /
+`*_log` — the FSM's wood-variant rule, so castle kinds lay whatever the
+quarry yielded). Unknown blocks, bad props, duplicate cells or > 4096
+cells refuse the call (`-32602`). Settings at build start:
+`buildIgnoreExisting false`, `buildInLayers false`, `okIfAir` empty;
+`forbid` joins `blocksToDisallowBreaking` for the build (restored on end).
+Substitutes ride `buildValidSubstitutes` (accept in place): the schematic
+block is already the held item, so `buildSubstitutes` (build-this-instead)
+would demand a variant nobody holds.
+
+Node: `bot.buildCells` settles on the final event only. No placed growth
+for 90 s with wanted material on hand rejects `build-stall` (a wedged
+builder fails loud); with nothing on hand it resolves `{placed, missing}`
+so the FSM fetches (build's `no-planks`, castle's `failed:no-<kind>`) —
+Baritone pauses a starved build instead of ending it. A second build while
+one runs rejects `build-busy`.
