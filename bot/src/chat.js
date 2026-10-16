@@ -295,6 +295,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   // Hybrid worker (idkcraft-jlda.2): its chat is Baritone/console noise,
   // never an order — out at once, before the resolve and the log line.
   if (worker.isWorker(username)) return
+  // tpd1: swarm bots' chat (`flat 10/11…`, `flat done…`) is never an order
+  // either — parsed, every progress line drew N-1 `try: flat 16` replies.
+  if (worker.isSwarmBot(username)) return
   const playerName = resolvePlayer(bot, username, senderUuid)
   const msg = message.toLowerCase().trim()
   // Puppet sessions (idkcraft-jlw7): the only incoming-chat tag — session

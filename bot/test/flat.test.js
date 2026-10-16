@@ -484,6 +484,15 @@ describe('flat ticker wiring', () => {
       }
     })
 
+    it('swarm bots never parse each other\'s chat as orders', () => {
+      const r = rig({})
+      try {
+        for (const [from, msg] of [['IdkSwarm2', 'flat 8/9 (level -61)'], ['IdkSwarm2', 'flat done: filled 9 holes'], ['IdkBot', 'flat 16 0 0']]) handleChat(r.bot, r.ticker, from, msg)
+        assert.deepEqual(r.bot.chats, [])
+        assert.ok(!r.ctx.flat)
+      } finally { r.done() }
+    })
+
     // tpd1 (iii): helpers are flat-only.
     it('helper refuses follow/work orders and changes nothing', () => {
       const r = rig({ players: { P: { username: 'P', entity: { position: pos(3, 64, 0) } } } })
