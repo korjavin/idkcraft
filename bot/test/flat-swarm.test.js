@@ -91,8 +91,6 @@ describe('flat swarm: helpers are never players', () => {
 describe('flat swarm: selectBody idles swarm bots past BOT_SWARM_N', () => {
   it('swarm bot idles when the swarm is off or its index is out of range', () => {
     assert.ok(selectBody({ BOT_SWARM_I: '1' }).idle)
-    assert.ok(selectBody({ BOT_SWARM_I: '1' }).swarmIdle)
-    assert.ok(!selectBody({ BOT_BODY: 'baritone' }).swarmIdle) // v2 idle keeps holding
     assert.ok(selectBody({ BOT_SWARM_I: '5', BOT_SWARM_N: '5' }).idle)
     assert.ok(!selectBody({ BOT_SWARM_I: '4', BOT_SWARM_N: '5' }).idle)
     assert.ok(!selectBody({ BOT_SWARM_I: '8', BOT_SWARM_N: '9' }).idle)

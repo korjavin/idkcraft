@@ -1585,7 +1585,7 @@ function selectBody(env = process.env) {
   // Flat swarm (lhg2): swarm bot I>=1 idles unless I < BOT_SWARM_N, so the
   // 8 compose services cost ~0 until the owner sets BOT_SWARM_N.
   const si = parseInt((env && env.BOT_SWARM_I) || '0', 10)
-  if (si >= 1 && !(si < parseInt((env && env.BOT_SWARM_N) || '0', 10))) return { name, idle: true, swarmIdle: true }
+  if (si >= 1 && !(si < parseInt((env && env.BOT_SWARM_N) || '0', 10))) return { name, idle: true }
   if (name === 'baritone') return { name, createBot: require('./bridge/index').createBot, bodyTag: ' body=baritone' }
   return { name }
 }
@@ -1606,11 +1606,8 @@ async function main() {
   if (sel.fatal) fatal('body', sel.fatal)
   if (sel.idle) {
     console.log(process.env.BOT_SWARM_I ? 'swarm idle: BOT_SWARM_I >= BOT_SWARM_N' : 'v2 idle: BOT_USERNAME empty')
-    // Idle swarm slot (vewo.9): exit 0 and stay Exited (restart: on-failure on
-    // swarm1..32 skips a clean exit). Active slots never exit 0: fatal=1, SIGTERM=143.
-    if (sel.swarmIdle) process.exit(0)
     setInterval(() => {}, 60000) // hold the loop: a bare await would drain and exit
-    await new Promise(() => {}) // v2 idle never exits: compose restart: unless-stopped
+    await new Promise(() => {}) // never exits: compose restart: unless-stopped
   }
   const rawTick = parseInt(process.env.BRAIN_TICK_MS || '1000', 10)
   const tickMs = Number.isFinite(rawTick) ? rawTick : 1000
