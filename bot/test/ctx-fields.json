@@ -473,6 +473,13 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleNearIdx": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castlePickup": {
     "writers": [
       "src/behaviours/castle.js"

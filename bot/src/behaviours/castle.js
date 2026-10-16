@@ -327,6 +327,60 @@ function torchOwed(bot, c, owed) {
   return c.kind === 'door' && !!owed
 }
 
+// Nearest-first (neuc.57): the plan pairs opposite walls ([x,7],[x,19]),
+// so plan order alone shuttles the bot across the castle per block. From
+// the work-order cell at order[i], scan the rest of its run — same y, same
+// rank, the next NEAR_WINDOW undone cells — and take the workable cell
+// nearest the body. Workable = what pick() would take (no active/retired
+// hole, torch on hand) plus, for a place cell, its material on hand (an
+// unheld kind never pulls a fetch leg ahead of held work; none held keeps
+// the plan cell, so the word is unchanged) and a laid neighbour to click
+// (lay()'s support rule, read from the world). A run never crosses a y or
+// rank change, so storey order (reach invariant), door deferral and the
+// moat/fence ranks stand. Sticky: the last pick (keepIdx) keeps winning
+// while it stays workable in the run, so the target never flaps mid-walk.
+// Cells the body occupies never win (c0 stays the fallback).
+// ponytail: up to ~7 blockAt per window cell per pick; shrink the window
+// if it shows in the tick timer.
+const NEAR_WINDOW = 64
+const NEIGH6 = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]]
+function supported(bot, c) {
+  return NEIGH6.some(([a, b, d]) => {
+    try {
+      const k = bot.blockAt(new Vec3(c.x + a, c.y + b, c.z + d))
+      return !!k && !AIR.has(k.name) && k.boundingBox !== 'empty'
+    } catch (_) { return false }
+  })
+}
+function nearest(bot, ctx, st, cells, order, i, now) {
+  const c0 = cells[order[i]]
+  const p = bodyPos(bot)
+  const keepIdx = ctx && ctx.castleNearIdx
+  if (!p || c0.idx === keepIdx) return c0
+  const blocked = st.blocked || {}
+  const held = (c) => clearing(c) || usable(bot, c.kind, ctx) > 0
+  const d2 = (c) => (c.x + 0.5 - p.x) ** 2 + (c.y + 0.5 - p.y) ** 2 + (c.z + 0.5 - p.z) ** 2
+  let best = held(c0) ? c0 : null
+  let bd = best ? d2(c0) : Infinity
+  for (let j = i + 1, seen = 0; j < order.length && seen < NEAR_WINDOW; j++) {
+    const c = cells[order[j]]
+    if (c.y !== c0.y || rank(c) !== rank(c0)) break
+    if (done(bot, c)) continue
+    seen++
+    const b = blocked[bkey(st, c.idx)]
+    if (b && (b.retired || b.until > now)) continue
+    if (torchOwed(bot, c, null) || !held(c)) continue
+    // The cell the body stands in is the nearest by construction, and
+    // every lay into it starts with a sidestep (revmux 01).
+    if (flat.cellOccupiedSelf(bot, c.x, c.y, c.z)) continue
+    if (!clearing(c) && !supported(bot, c)) continue
+    if (c.idx === keepIdx) return c
+    const d = d2(c)
+    if (d < bd) { best = c; bd = d }
+  }
+  return best || c0
+}
+
 // Next cell to work in work order, or why there is none.
 function pick(bot, ctx, st, cells, key, now) {
   const order = workOrder(cells, key)
@@ -371,7 +425,9 @@ function pick(bot, ctx, st, cells, key, now) {
       if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
       if (interior(c)) inside = true
       ctx.castleCursor = first
-      return { idx: c.idx }
+      const n = nearest(bot, ctx, st, cells, order, i, now)
+      ctx.castleNearIdx = n.idx
+      return { idx: n.idx }
     }
     ctx.castleCursor = first < 0 ? order.length : first
     if (first < 0 && !full) { full = true; continue } // confirm "all done" from 0
@@ -397,8 +453,9 @@ function peek(bot, st, now, ctx) {
   let waiting = null
   let inside = false
   let owed = null
-  for (const idx of workOrder(cells, key)) {
-    const c = cells[idx]
+  const order = workOrder(cells, key)
+  for (let i = 0; i < order.length; i++) {
+    const c = cells[order[i]]
     // Same relay skip as pick(): the arbiter's word never reads 'clear'
     // for a glazed window mid-upgrade.
     if (clearing(c) && (complete || st.upgrade)) continue
@@ -413,7 +470,7 @@ function peek(bot, st, now, ctx) {
     if (b && b.until > now) { waiting = waiting || c; continue }
     if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
     if (interior(c)) inside = true
-    return { cell: c, waiting: null, cells }
+    return { cell: nearest(bot, ctx, st, cells, order, i, now), waiting: null, cells }
   }
   return { cell: owed, waiting: owed ? null : waiting, cells }
 }
