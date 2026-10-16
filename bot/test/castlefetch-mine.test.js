@@ -160,6 +160,44 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(mined, 1, 'verbs fires from the vetted stance')
   })
 
+  it('an arrived stance on a cold stance cache waits before arming', async () => {
+    let mined = 0
+    const bot = mockBot({
+      pos: { x: 520.5, y: 64, z: 520.5 },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      mineImpl: () => async () => { mined++; },
+    })
+    bot.world = { getChunk: () => null } // fringe: nothing loaded
+    bot.blockAt = () => ({ name: 'stone', position: { x: 521, y: 64, z: 520 } })
+    const ctx = stoneCtx()
+    ctx.castleFetch.qWait0 = Date.now() - 60000 // leg-level budget long spent
+    ctx.castleFetch.qTarget = { k: 'q', x: 521, y: 64, z: 520, stance: { x: 520, y: 64, z: 520 } }
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
+    await flush()
+    assert.equal(mined, 0, 'no blind arm onto a cold stance cache')
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('the stance wait arms once the stance cache warms or the bound lapses', async () => {
+    let mined = 0
+    const bot = mockBot({
+      pos: { x: 520.5, y: 64, z: 520.5 },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      mineImpl: () => async () => { mined++; },
+    })
+    bot.world = { getChunk: () => null }
+    bot.blockAt = () => ({ name: 'stone', position: { x: 521, y: 64, z: 520 } })
+    const ctx = stoneCtx()
+    ctx.castleFetch.qWait0 = Date.now() - 60000
+    ctx.castleFetch.qTarget = { k: 'q', x: 521, y: 64, z: 520, stance: { x: 520, y: 64, z: 520 } }
+    ctx.castleFetch.qStanceFor = '520,64,520'
+    ctx.castleFetch.qStance0 = Date.now() - 60000 // waited out: arm anyway
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
+    await flush()
+    await flush()
+    assert.equal(mined, 1, 'a cache that never warms still arms, bounded')
+  })
+
   it('the quarry pick waits for a warm cache', async () => {
     let mined = 0
     const bot = mockBot({

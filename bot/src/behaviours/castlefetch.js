@@ -79,6 +79,10 @@ const PICKUP_WAITS = 8 // ticks walking into a below-feet hole for its drop (neu
 const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
 const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
 const QWAIT_MS = 45000 // bounded pre-pick wait for the leg area chunks
+const QSTANCE_RADIUS = 8 // stance-anchored arm wait: the vetted cell and
+// its stance sit a few blocks apart, so a small window around the stance
+// covers the pick's reads without stalling on the whole leg area
+const QSTANCE_MS = 20000 // per-stance bound: a cache that never warms arms anyway
 const NOGAIN_STRIKES = 8 // digs without the cobble count growing (neuc.51: v2 digs one a second, the pickup trails 1-2 digs; 5 failed live legs)
 const DIG_TIMEOUT_MS = 10000
 // Quarry truth (vmzq.38; neuc.53 rig evidence): granite/diorite/andesite/
@@ -1394,6 +1398,18 @@ function digTick(bot, ctx, f, d) {
         f.skips = (f.skips | 0) + 1
         if (f.skips >= SKIPS_TO_FAIL) { finish(bot, ctx, 'failed:castlefetch-unreachable'); return }
         return
+      }
+      // Stance-anchored arm wait (neuc.53 rig evidence: a relocated or
+      // fringe stance arms onto a cold cache and churns with zero gains
+      // while the blacklist grows — the pick vetted stale reads, and the
+      // leg-level pre-pick budget is long spent by re-arm time). Wait,
+      // bounded per stance, for the stance area to read warm; a cache
+      // that never warms arms anyway and the trip/timer bound that leg.
+      const skey = `${qt.stance.x},${qt.stance.y},${qt.stance.z}`
+      if (!cacheReady(bot, qt.stance, QSTANCE_RADIUS)) {
+        if (f.qStanceFor !== skey) { f.qStanceFor = skey; f.qStance0 = Date.now() }
+        if (Date.now() - f.qStance0 < QSTANCE_MS) { spend(f, 'other'); return }
+        try { console.log(`castlefetch v2 stance cache cold at ${skey}, arming (${QSTANCE_MS}ms waited)`) } catch (_) { /* log best-effort */ }
       }
       // Cell rules at arm time (v1 dig-time shape): no mining a trap,
       // gravity, submerged or protected cell.
