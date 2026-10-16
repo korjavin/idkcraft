@@ -75,6 +75,13 @@ describe('flat swarm: helpers are never players', () => {
     assert.equal(isSwarmBot('Owner', env), false)
     assert.equal(isSwarmBot('Flat3', { ...env, BOT_SWARM_PREFIX: 'Flat' }), true)
   })
+  it('bot2 name is dropped with or without the swarm; bot2 env shape does not split', () => {
+    assert.equal(isSwarmBot('IdkV2', { BOT2_USERNAME: 'IdkV2' }), true)
+    assert.equal(isSwarmBot('IdkV2', {}), false)
+    const b2 = { BOT_SWARM_N: '13', BOT_SWARM_PREFIX: 'IdkSwarm', BOT_SWARM_I: '-1', BOT2_USERNAME: 'IdkV2' }
+    assert.equal(isSwarmBot('IdkSwarm3', b2), true)
+    assert.equal(require('../src/behaviours/flat').swarmTile(b2), null)
+  })
   it('a helper also drops the main bot; the main bot keeps seeing itself as itself', () => {
     assert.equal(isSwarmBot('IdkBot', { BOT_SWARM_N: '9', BOT_SWARM_I: '2', BOT_PEER_USERNAME: 'IdkBot' }), true)
     assert.equal(isSwarmBot('IdkBot', { BOT_SWARM_N: '9' }), false)
