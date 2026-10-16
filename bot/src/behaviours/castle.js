@@ -32,7 +32,7 @@ const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.j
 const build = require('./build')
 const flat = require('./flat')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
-const { stepFailed } = require('../step')
+const { stepFailed, stepGen } = require('../step')
 
 const STRIKES = 3
 const BACKOFF_BASE_MS = 30000
@@ -1747,8 +1747,12 @@ function guardCastle(bot, ctx) {
 // this same re-issue: pick() still surfaces missing place cells one by one
 // after 'complete', and the first eligible one re-issues the schematic for
 // all of them, so sfmk's "repair on return" needs no cadence code.
-const CASTLE_BUILDER_KINDS = new Set(['stone', 'planks', 'frame', 'fence', 'torch'])
+const CASTLE_BUILDER_KINDS = new Set(['stone', 'planks', 'frame', 'torch'])
 const CASTLE_BUILDER_BATCH = 256
+// Fences stay on the per-cell path (core-6): Baritone compares full block
+// state, and a connected fence ring never matches the default schematic
+// state — the builder would break/re-lay (or refuse) it forever. Plain
+// cubes only here, like the bead's RISKS ask.
 function heldName(bot, kind) {
   const want = ITEM[kind]
   if (!want) return null
@@ -1786,24 +1790,49 @@ function castleBuilderCells(bot, ctx, st) {
     return null
   }
 }
+// Same-block rule for the schematic (core-8): the quarry yields granite /
+// diorite / andesite as often as cobble, and usable(stone) counts them —
+// a cobblestone cell with only deepslate on hand is starved, not wedged.
+function castleSame(want, have) {
+  if (want === have) return true
+  if (typeof want !== 'string' || typeof have !== 'string') return false
+  if (blueprint.isStone(want) && blueprint.isStone(have)) return true
+  for (const suffix of ['_planks', '_fence', '_log']) {
+    if (want.endsWith(suffix) && have.endsWith(suffix)) return true
+  }
+  return false
+}
 function castleBuilderBatch(bot, ctx, st, c) {
   if (ctx.castleBuildFlight) return true
   if (!c || clearing(c) || c.prep || !CASTLE_BUILDER_KINDS.has(c.kind)) return false
   const batch = castleBuilderCells(bot, ctx, st)
   if (!batch) return false
   ctx.castleBuildFlight = true
+  const gen = stepGen(ctx) // stale batches must not fail a newer step (core-5)
   const forbid = [...new Set(batch.cells.map((o) => o.block))]
   const name = `castle@${st.site.x},${st.site.z}`
   const flightCells = batch.cells
   const settleFail = (reason) => {
     ctx.castleBuildFlight = false
-    st.status = reason
-    stepFailed(ctx, reason)
+    if (gen === stepGen(ctx)) st.status = reason
+    stepFailed(ctx, reason, gen)
+  }
+  // Strike-back (core-3): still-missing cells with material on hand were
+  // attempted and refused — strike them into the usual backoff/retire
+  // machinery instead of re-batching them forever. Starved misses fetch.
+  const strikeMisses = () => {
+    try {
+      for (const o of flightCells) {
+        if (done(bot, o)) continue
+        if (usable(bot, o.kind, ctx) <= 0) continue
+        strike(ctx, st, o, 'build-miss', Date.now())
+      }
+    } catch (_) { /* strike-back best-effort */ }
   }
   try {
     bot.buildCells(name, batch.origin, flightCells.map((o) => ({
       dx: o.x - st.site.x, dy: o.y - st.site.y, dz: o.z - st.site.z, block: o.block,
-    })), { forbid }).then(
+    })), { forbid, isSame: castleSame }).then(
       () => {
         ctx.castleBuildFlight = false
         // Missing kinds re-read from the world: whatever is still not
@@ -1814,9 +1843,15 @@ function castleBuilderBatch(bot, ctx, st, c) {
         } catch (_) {
           miss = flightCells[0] || null
         }
-        if (miss) settleFail(`no-${miss.kind}`)
+        if (miss) {
+          strikeMisses()
+          settleFail(`no-${miss.kind}`)
+        }
       },
-      (err) => settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed'),
+      (err) => {
+        strikeMisses()
+        settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
+      },
     )
   } catch (_) {
     ctx.castleBuildFlight = false

@@ -47,7 +47,7 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
     const res = await bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS)
     assert.deepEqual(res, { placed: 3, missing: 0 })
     assert.equal(transport.state.buildLog.length, 1)
-    assert.deepEqual(transport.state.buildLog[0].name, 'house')
+    assert.ok(transport.state.buildLog[0].name.startsWith('house#'), 'unique wire name per call')
     assert.deepEqual(transport.state.buildLog[0].origin, { x: 100, y: 64, z: -40 })
     assert.deepEqual(transport.state.buildLog[0].cells, CELLS)
     assert.equal(bot.blockAt(new Vec3(100, 64, -40)).name, 'oak_planks')
@@ -126,5 +126,20 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
   it('a mod refusal (unknown block) rejects', async () => {
     transport.state.buildRefuse = 'unobtainium'
     await assert.rejects(bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1)), /unknown block/)
+  })
+
+  it('wire names are unique per call; a foreign final never settles the live build (core-2)', async () => {
+    transport.state.buildScript = 'stall'
+    bot._buildTiming = { stallMs: 40, watchMs: 5 }
+    const a = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1))
+    // A replaced build's late final (a different wire name) lands mid-flight…
+    transport.inject('baritone.event', { kind: 'build', name: `${transport.state.buildLog[0].name}-old`, placed: 0, missing: 1, active: false })
+    await sleep(10)
+    assert.ok(bot._build !== null, 'live build survives a foreign final')
+    await assert.rejects(a, /^Error: build-stall$/) // …then the watchdog owns the verdict
+    const b = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1))
+    await assert.rejects(b, /^Error: build-stall$/)
+    const names = transport.state.buildLog.map((e) => e.name)
+    assert.equal(new Set(names).size, names.length, 'every call mints its own wire name')
   })
 })

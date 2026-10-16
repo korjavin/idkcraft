@@ -127,6 +127,20 @@ describe('house builder branch (idkcraft-neuc.54)', () => {
     assert.equal(ctx.stepStatus, 'failed:no-planks')
   })
 
+  it('a refused cell skips after 3 batch misses (core-3 strike-back)', async () => {
+    const world = makeWorld()
+    // Nothing ever lands (starved stub paints nothing) but planks stay on
+    // hand, so every miss strikes; after 3 the cells skip like 3 refusals.
+    const bot = mockBot(world, { buildScript: 'starve' })
+    const ctx = freshCtx()
+    for (let i = 0; i < 3; i++) {
+      build(bot, ctx)
+      await settle()
+    }
+    assert.ok(ctx.buildSkip.length > 0, 'struck cells skip instead of re-batching forever')
+    assert.equal(ctx.stepStatus, 'failed:no-planks')
+  })
+
   it('without buildCells the v1 per-cell path is unchanged (planks via placeBlock)', async () => {
     const world = makeWorld()
     for (const [dx, dz] of [[1, 4], [2, 4], [4, 4], [5, 4], [3, 0]]) world.set(dx, 63, dz, 'air')

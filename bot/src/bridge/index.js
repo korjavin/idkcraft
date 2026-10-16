@@ -978,7 +978,10 @@ class BaritoneBot extends EventEmitter {
   }
 
   _stopPath() {
-    const live = this._pathing || this._goalId != null
+    // A live builder counts as live (core-4): #stop cancels it like any
+    // other process, so a step change, fight, or follow that stops pathing
+    // never leaves BuilderProcess steering an unowned body.
+    const live = this._pathing || this._goalId != null || this._build != null
     this.pathfinder.goal = null
     this._follow = null
     this._boundSeq = this._cmdSeq // in-flight binds and late verdicts drop

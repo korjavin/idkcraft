@@ -41,7 +41,7 @@ const Vec3 = require('vec3')
 const { denyReason, logDeny, isInteractRef, NATURAL_SOLID, isOwnPlaced } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
-const { stepFailed } = require('../step')
+const { stepFailed, stepGen } = require('../step')
 
 const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
 const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset (revmux 01 major)
@@ -583,10 +583,10 @@ function guardExitWalls(bot, ctx, home) {
 // log line — a silent stepStatus stranded the post-park rig in a
 // build<->rest oscillation with no line naming the cause. Once per episode
 // (the holes-line precedent): repeated ticks on a failed step stay silent.
-function failBuild(ctx, reason) {
+function failBuild(ctx, reason, gen) {
   const status = `failed:${reason}`
   const fresh = ctx.stepStatus !== status
-  stepFailed(ctx, reason)
+  stepFailed(ctx, reason, gen)
   if (fresh) console.log(`build failed:${reason}`)
 }
 
@@ -613,7 +613,7 @@ function builderCells(bot, home, skipped) {
       if (!BUILDER_KINDS.has(cell.kind) || skip.has(i)) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
       if (!cellLoaded(bot, home, cell) || cellDone(bot, home, cell)) continue
-      cells.push({ dx: cell.dx, dy: cell.dy, dz: cell.dz, block: item.name })
+      cells.push({ idx: i, dx: cell.dx, dy: cell.dy, dz: cell.dz, block: item.name })
     }
     if (cells.length === 0) return null
     return { origin: { x: home.site.x, y: home.site.y, z: home.site.z }, cells, block: item.name }
@@ -621,25 +621,52 @@ function builderCells(bot, home, skipped) {
     return null
   }
 }
+// Strike-back (core-3): a batch that settles with missing cells maps them
+// back to plan indices. A miss with material still on hand was attempted
+// and refused — three such strikes skip the cell like three per-cell
+// refusals, so one unplaceable cell (protection, entity, no reference)
+// cannot hold every later batch for 90 s each. Starved misses (hands
+// empty) never strike: they fetch like today.
+function noteBatchMisses(bot, ctx, home, batch) {
+  try {
+    const plan = blueprintFor(home)
+    if (!ctx.buildBatchStrikes || typeof ctx.buildBatchStrikes !== 'object') ctx.buildBatchStrikes = {}
+    const held = !!findItem(bot, wantItem({ kind: 'planks' }))
+    for (const c of batch.cells) {
+      const cell = plan[c.idx]
+      if (!cell || cellDone(bot, home, cell)) continue
+      if (!held) continue
+      const p = cellAbs(home, cell)
+      const n = (ctx.buildBatchStrikes[c.idx] = (ctx.buildBatchStrikes[c.idx] | 0) + 1)
+      if (n >= 3) skipCell(ctx, c.idx, p, 'build-miss')
+    }
+  } catch (_) { /* strike-back best-effort */ }
+}
 function builderBatch(bot, ctx) {
   if (ctx.buildCellsInFlight) return true
   const batch = builderCells(bot, ctx.home, ctx.buildSkip)
   if (!batch) return false
   ctx.buildCellsInFlight = true
+  const gen = stepGen(ctx) // stale batches must not fail a newer step (core-5)
+  const wireCells = batch.cells.map(({ dx, dy, dz, block }) => ({ dx, dy, dz, block }))
   try {
-    bot.buildCells('house', batch.origin, batch.cells, { forbid: [batch.block] }).then(
+    bot.buildCells('house', batch.origin, wireCells, { forbid: [batch.block] }).then(
       ({ missing }) => {
         ctx.buildCellsInFlight = false
-        if (missing > 0) failBuild(ctx, 'no-planks')
+        if (missing > 0) {
+          noteBatchMisses(bot, ctx, ctx.home, batch)
+          failBuild(ctx, 'no-planks', gen)
+        }
       },
       (err) => {
         ctx.buildCellsInFlight = false
-        failBuild(ctx, err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
+        noteBatchMisses(bot, ctx, ctx.home, batch)
+        failBuild(ctx, err && err.message === 'build-stall' ? 'build-stall' : 'build-failed', gen)
       },
     )
   } catch (err) {
     ctx.buildCellsInFlight = false
-    failBuild(ctx, 'build-failed')
+    failBuild(ctx, 'build-failed', gen)
   }
   return true
 }

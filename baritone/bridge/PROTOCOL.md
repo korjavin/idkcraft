@@ -811,6 +811,9 @@ quarry yielded). Unknown blocks, bad props, duplicate cells or > 4096
 cells refuse the call (`-32602`). Settings at build start:
 `buildIgnoreExisting false`, `buildInLayers false`, `okIfAir` empty;
 `forbid` joins `blocksToDisallowBreaking` for the build (restored on end).
+Substitutes ride `buildValidSubstitutes` (accept in place): the schematic
+block is already the held item, so `buildSubstitutes` (build-this-instead)
+would demand a variant nobody holds.
 
 Node: `bot.buildCells` settles on the final event only. No placed growth
 for 90 s with wanted material on hand rejects `build-stall` (a wedged

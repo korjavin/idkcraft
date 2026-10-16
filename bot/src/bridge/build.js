@@ -32,16 +32,23 @@ function suffixClass(name) {
   return null
 }
 
-// The mod accepts any same-class wood for a schematic cell; the material
-// check must too, or a birch-held oak-planks build reads starved forever.
-function onHand(bot, want) {
+// Same-block rule: exact, or the mod's wood-variant acceptance (any
+// same-class variant for a schematic cell). Callers may pass their own
+// (castle stone: any quarry variant for a stone cell) as opts.isSame.
+function defaultSame(want, have) {
+  if (want === have) return true
+  const cls = suffixClass(want)
+  return !!(cls && typeof have === 'string' && have.endsWith(cls))
+}
+
+// The mod accepts substitutes for a schematic cell; the material check
+// must too, or a birch-held oak-planks build reads starved forever.
+function onHand(bot, want, isSame = defaultSame) {
   try {
     const items = (bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()) || []
-    const cls = suffixClass(want)
     for (const it of items) {
       if (!it || typeof it.name !== 'string' || !(it.count > 0)) continue
-      if (it.name === want) return true
-      if (cls && it.name.endsWith(cls)) return true
+      if (isSame(want, it.name)) return true
     }
   } catch (_) { /* no inventory: nothing on hand */ }
   return false
@@ -58,14 +65,11 @@ function blockNameAt(bot, x, y, z) {
 
 // Missing cells re-read from the sync world (unreadable reads missing, like
 // the behaviours' done tests). A standing substitute counts as placed.
-function missingCells(bot, origin, cells) {
+function missingCells(bot, origin, cells, isSame = defaultSame) {
   const out = []
   for (const c of cells) {
     const cur = blockNameAt(bot, origin.x + c.dx, origin.y + c.dy, origin.z + c.dz)
-    if (cur == null) { out.push(c); continue }
-    if (cur === c.block) continue
-    const cls = suffixClass(c.block)
-    if (!(cls && cur.endsWith(cls))) out.push(c)
+    if (cur == null || !isSame(c.block, cur)) out.push(c)
   }
   return out
 }
@@ -89,11 +93,19 @@ function installBuild(bot) {
       }
     }
     const forbid = Array.isArray(opts.forbid) ? opts.forbid.filter((n) => typeof n === 'string' && n) : []
+    const isSame = typeof opts.isSame === 'function' ? opts.isSame : defaultSame
     return new Promise((resolve, reject) => {
+      // Unique wire name per call (core-2): names are constant per
+      // behaviour ('house', 'castle@x,z'), and the mod ends a replaced
+      // build with the OLD name's final — without this the new call would
+      // settle at once on the old final with missing=cells.length.
+      const wire = `${name}#${(bot._buildSeq = (bot._buildSeq | 0) + 1)}`
       const st = {
         name,
+        wire,
         origin: { x: origin.x, y: origin.y, z: origin.z },
         cells: cells.map((c) => ({ dx: c.dx, dy: c.dy, dz: c.dz, block: c.block })),
+        isSame,
         placed: 0,
         missing: cells.length,
         grownAt: Date.now(),
@@ -124,10 +136,12 @@ function installBuild(bot) {
       // watchdog (bridge-build.test.js); prod always uses the constants.
       const timing = bot._buildTiming || {}
       st.stallMs = timing.stallMs || STALL_MS
+      // Referenced, not unref'd: a pending buildCells promise owns the
+      // loop until it settles (an unref'd watchdog let the file's loop
+      // drain with the promise still pending).
       st.timer = setInterval(() => watch(bot, st), timing.watchMs || WATCH_MS)
-      if (typeof st.timer.unref === 'function') st.timer.unref()
       bot.transport.call('baritone.build', {
-        name,
+        name: wire,
         origin: st.origin,
         cells: st.cells,
         ...(forbid.length > 0 ? { forbid } : {}),
@@ -161,7 +175,7 @@ function handleBuildEvent(bot, method, params) {
   if (method !== 'baritone.event' || !params || params.kind !== 'build') return false
   const st = bot._build
   if (!st) return true
-  if (params.name != null && params.name !== st.name) return true
+  if (params.name != null && params.name !== st.wire) return true
   if (typeof params.placed === 'number' && params.placed > st.placed) {
     st.placed = params.placed
     st.grownAt = Date.now()
@@ -179,7 +193,7 @@ function watch(bot, st) {
   if (st.settled || Date.now() - st.grownAt < (st.stallMs || STALL_MS)) return
   let missing = null
   try {
-    missing = missingCells(bot, st.origin, st.cells)
+    missing = missingCells(bot, st.origin, st.cells, st.isSame)
   } catch (_) {
     missing = null
   }
@@ -188,13 +202,26 @@ function watch(bot, st) {
     st.placed = st.cells.length - missing.length
   }
   const kinds = new Set((missing || st.cells).map((c) => c.block))
+  let starved = true
   for (const want of kinds) {
-    if (onHand(bot, want)) {
-      st.settle(st.reject, new Error('build-stall'))
-      return
+    if (onHand(bot, want, st.isSame)) {
+      starved = false
+      break
     }
   }
-  st.settle(st.resolve, { placed: st.placed, missing: st.missing })
+  // Settle first, then stop the builder: the watchdog's verdict owns the
+  // promise, and a still-running (paused or wedged) builder must never
+  // survive untracked (core-2) — the late final finds no live build.
+  if (starved) {
+    st.settle(st.resolve, { placed: st.placed, missing: st.missing })
+  } else {
+    st.settle(st.reject, new Error('build-stall'))
+  }
+  try {
+    if (bot.transport && typeof bot.transport.call === 'function') {
+      bot.transport.call('baritone.cmd', { command: '#stop' }).catch(() => { /* release best-effort */ })
+    }
+  } catch (_) { /* release best-effort */ }
 }
 
-module.exports = { installBuild, installBuildStop, handleBuildEvent, missingCells, onHand, STALL_MS, WATCH_MS }
+module.exports = { installBuild, installBuildStop, handleBuildEvent, missingCells, onHand, defaultSame, STALL_MS, WATCH_MS }

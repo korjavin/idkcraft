@@ -292,15 +292,20 @@ class FakeTransport extends EventEmitter {
       // wood variant) is held get laid — the rest stay missing, so the
       // adapter's material path resolves instead of hanging. s.buildScript
       // 'stall' = silence (the adapter's watchdog decides); s.buildRefuse
-      // = throw (the mod's unknown-block refusal).
+      // = throw (the mod's unknown-block refusal). A new call replaces the
+      // live one with the old name's final first, exactly like the mod's
+      // start() (core-2).
       case 'baritone.build': {
         const cells = Array.isArray(params.cells) ? params.cells : []
         const origin = params.origin || { x: 0, y: 0, z: 0 };
         (s.buildLog = s.buildLog || []).push({ name: params.name, origin: { ...origin }, cells: cells.map((c) => ({ ...c })), forbid: params.forbid ? [...params.forbid] : undefined })
         if (s.buildRefuse) throw new Error(`bridge: unknown block: ${s.buildRefuse}`)
-        if (!s.buildActive || s.buildActive.name !== params.name) {
-          s.buildActive = { name: params.name, origin: { ...origin }, remaining: cells.map((c) => ({ ...c })), total: cells.length }
+        if (s.buildActive) {
+          const old = s.buildActive
+          s.buildActive = null
+          this.inject('baritone.event', { kind: 'build', name: old.name, placed: old.total - old.remaining.length, missing: old.remaining.length, active: false })
         }
+        s.buildActive = { name: params.name, origin: { ...origin }, remaining: cells.map((c) => ({ ...c })), total: cells.length }
         if (s.buildScript !== 'stall') setImmediate(() => this._buildStep())
         return { ok: true, cells: cells.length, missing: cells.length }
       }

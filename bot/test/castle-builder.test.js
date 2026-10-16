@@ -33,7 +33,7 @@ const KIT = [
   { name: 'cobblestone_stairs', count: 64 },
 ]
 
-function mockBot(world, { items = KIT, withBuilder = true } = {}) {
+function mockBot(world, { items = KIT, withBuilder = true, buildScript = 'ok' } = {}) {
   const calls = { goals: [], places: [], digs: [], builds: [] }
   const bot = {
     calls,
@@ -66,6 +66,8 @@ function mockBot(world, { items = KIT, withBuilder = true } = {}) {
   if (withBuilder) {
     bot.buildCells = async (name, origin, cells, opts) => {
       calls.builds.push({ name, origin, cells: cells.map((c) => ({ ...c })), forbid: opts && opts.forbid })
+      if (buildScript === 'stall') throw new Error('build-stall')
+      if (buildScript === 'starve') return { placed: 0, missing: cells.length }
       for (const c of cells) world.set(origin.x + c.dx, origin.y + c.dy, origin.z + c.dz, c.block)
       return { placed: cells.length, missing: 0 }
     }
@@ -91,6 +93,18 @@ function paintAll(world, { except = null } = {}) {
 }
 
 describe('castle builder branch (idkcraft-neuc.54)', () => {
+  it('only plain cubes batch: no fence/stairs/door (core-6)', () => {
+    assert.deepEqual([...castle.CASTLE_BUILDER_KINDS].sort(), ['frame', 'planks', 'stone', 'torch'])
+    const world = makeWorld()
+    // A lone open fence cell must not enter any schematic.
+    paintAll(world, { except: (c) => c.kind === 'fence' })
+    const bot = mockBot(world)
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 3 }
+    const batch = castle.castleBuilderCells(bot, { castleCarry: null }, st)
+    // Only fence cells stand open: no eligible cube is owed, so no batch.
+    assert.equal(batch, null, 'open fence cells never form a schematic')
+  })
+
   it('one buildCells call per batch; only plain cubes enter the schematic', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
@@ -175,5 +189,25 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
     await run(bot, ctx, 6)
     assert.ok(bot.calls.places.length > 0, 'per-cell placements still lay')
+  })
+
+  it('a wedged builder fails build-stall and releases the flight (core-9)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { buildScript: 'stall' })
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    await run(bot, ctx, 1)
+    assert.equal(bot.calls.builds.length, 1)
+    assert.equal(ctx.stepStatus, 'failed:build-stall')
+    assert.equal(ctx.castleBuildFlight, false)
+  })
+
+  it('a starved batch fails the fetch word and releases the flight (core-9)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { buildScript: 'starve' })
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    await run(bot, ctx, 1)
+    assert.equal(bot.calls.builds.length, 1)
+    assert.ok((ctx.stepStatus || '').startsWith('failed:no-'), `fetch word, got ${ctx.stepStatus}`)
+    assert.equal(ctx.castleBuildFlight, false)
   })
 })

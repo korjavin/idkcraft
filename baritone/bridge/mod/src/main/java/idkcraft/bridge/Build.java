@@ -44,7 +44,10 @@ import net.minecraft.world.level.block.state.properties.Property;
  * false}, {@code buildInLayers false}, {@code okIfAir} empty;
  * {@code forbid} block names join {@code blocksToDisallowBreaking} for the
  * build's duration (restored on end) so the pathfinder never eats the fresh
- * work.
+ * work. Substitutes ride {@code buildValidSubstitutes} (accept in place),
+ * never {@code buildSubstitutes} (build-this-instead): the cell's block is
+ * already the held item, so "instead" would demand a variant nobody holds
+ * (core-1).
  *
  * <p>Wire parsing and progress math live in the game-free {@link BuildPlan}
  * (unit-tested without the client). Threading: the rpc handler parses on
@@ -266,7 +269,7 @@ public final class Build {
             }
             javaSubstitutes.put(blocks.get(e.getKey()), alts);
         }
-        settings.buildSubstitutes.value = javaSubstitutes;
+        settings.buildValidSubstitutes.value = javaSubstitutes;
         baritone.getBuilderProcess().build(spec.name, schematic, origin);
         active = new Active(spec, origin, schematic, substitutes, savedDisallow);
         int missing = countNow(spec, substitutes);
