@@ -1057,6 +1057,8 @@ describe('castle-before.js shared before cache', () => {
     }
     assert.notEqual(cb.cacheKey(A, 'mine', s), k)
     assert.equal(cb.settingsOf({}).image, '-', 'v1 body has no image')
+    assert.equal(cb.settingsOf({ CASTLE_BODY: 'baritone' }, '1a2b3c4d').image, 'idkcraft-baritone:1a2b3c4d', 'default = client.sh tree-hash tag at the measured sha')
+    assert.equal(cb.settingsOf({ CASTLE_BODY: 'baritone' }).image, 'idkcraft-baritone:local', 'no git = client.sh :local')
   })
 
   it('exact sha hits; stale (>7 d), ancestor-with-rig-changes and miss each give a one-line reason', () => {
@@ -1093,7 +1095,7 @@ describe('castle-before.js shared before cache', () => {
     assert.equal(cb.storeEntry({ ...ok, env: { ...env, CASTLE_DIAG: '1' } }), null, 'DIAG leg')
     assert.equal(cb.storeEntry({ ...ok, env: { ...env, CASTLE_COMPONENT: '' } }), null, 'no component')
     assert.equal(cb.storeEntry({ ...ok, record: { ...record, tag: 'old' } }), null, 'stale record file')
-    for (const k of [{ CASTLE_NIGHT: '1' }, { CASTLE_KIT: 'empty' }, { CASTLE_BLOCKED: '4' }, { CASTLE_PAD: '1,2' }, { RIG_PLANNER: 'stub' }, { GOAL_WATCHDOG_MS: '1' }, { CASTLE_MAX_MEMORY: '2G' }, { BARITONE_MEM: '3g' }, { CASTLE_DAYLOCK: '0' }, { CASTLE_BASELINE_RATE: '20' }]) {
+    for (const k of [{ CASTLE_NIGHT: '1' }, { CASTLE_KIT: 'empty' }, { CASTLE_BLOCKED: '4' }, { CASTLE_PAD: '1,2' }, { RIG_PLANNER: 'stub' }, { GOAL_WATCHDOG_MS: '1' }, { CASTLE_MAX_MEMORY: '2G' }, { BARITONE_MEM: '3g' }, { CASTLE_DAYLOCK: '0' }, { CASTLE_BASELINE_RATE: '20' }, { CASTLE_FAR: '40' }]) {
       assert.equal(cb.storeEntry({ ...ok, env: { ...env, ...k } }), null, `off-gate ${JSON.stringify(k)} must not cache`)
       assert.deepEqual(cb.offGate({ ...env, ...k }), Object.keys(k))
     }
@@ -1111,6 +1113,7 @@ describe('castle-before.js shared before cache', () => {
     for (const v of [undefined, '', '0', 'abc', '-3']) assert.equal(baselineFor(file, { CASTLE_BASELINE_RATE: v }), file, `override ${v}`)
     assert.match(componentLine('lay', { laid: 205, gameMin: 10, wallMin: 10, series: [], tick: 1, baseline: baselineFor(file, { CASTLE_BASELINE_RATE: '20.5' }) }), /baseline 20\.5 -> 20\.5 \(\+0%, within ±15%\)/)
     assert.ok(fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8').includes('baseline: baselineFor(base, process.env)'), 'replay does not judge through baselineFor')
-    assert.match(cb.rigCommand('mine', cb.settingsOf(v2)), /CASTLE_BODY=baritone BARITONE_IMAGE=idkcraft-baritone:abc CASTLE_PADSPOT=250,350 CASTLE_COMPONENT=mine .*castle-rig\.sh$/)
+    assert.match(cb.rigCommand('mine', cb.settingsOf(v2), true), /CASTLE_BODY=baritone BARITONE_IMAGE=idkcraft-baritone:abc CASTLE_PADSPOT=250,350 CASTLE_COMPONENT=mine .*castle-rig\.sh$/)
+    assert.doesNotMatch(cb.rigCommand('mine', cb.settingsOf({ CASTLE_BODY: 'baritone' }, 'abc'), false), /BARITONE_IMAGE/, 'default tag stays implicit: client.sh builds it')
   })
 })

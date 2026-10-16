@@ -781,8 +781,13 @@ once per master sha. A 10-min component leg that exits 0 from a clean tree
 writes its record + component line through to
 `$PRODWORLD/castle-rigs/before/<sha>-<component>-<image tag>-<settings hash>.json`
 (local, never in git). Settings = the gate's "equal settings":
-`CASTLE_BODY`, `CASTLE_PADSPOT`, mins, tick rate, `BARITONE_IMAGE`. A DIAG
-leg never caches. A PR then reads its base's before with the same env:
+`CASTLE_BODY`, `CASTLE_PADSPOT`, mins, tick rate, `BARITONE_IMAGE` (unset =
+client.sh's tree-hash tag resolved at the measured sha, so a PR touching
+`baritone/` still reads master's body). A DIAG leg, or a leg with any
+off-gate knob set (`--night`, a non-default `CASTLE_KIT`, `CASTLE_BLOCKED`,
+`CASTLE_PAD`, `RIG_PLANNER` other than jev, `GOAL_*`, memory/distance
+trims, `CASTLE_BASELINE_RATE`, ...), never caches. A PR then reads its
+base's before with the same env:
 
 ```sh
 env $B sh bot/tools/castle-before.sh lay    # before (cached <date>, master <sha>): lay-rate ...
