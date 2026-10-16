@@ -616,17 +616,17 @@ function builderCells(bot, home, skipped) {
       cells.push({ idx: i, dx: cell.dx, dy: cell.dy, dz: cell.dz, block: item.name })
     }
     if (cells.length === 0) return null
-    return { origin: { x: home.site.x, y: home.site.y, z: home.site.z }, cells, block: item.name }
+    return { home, origin: { x: home.site.x, y: home.site.y, z: home.site.z }, cells, block: item.name }
   } catch (_) {
     return null
   }
 }
-// Strike-back (core-3): a batch that settles with missing cells maps them
-// back to plan indices. A miss with material still on hand was attempted
-// and refused — three such strikes skip the cell like three per-cell
-// refusals, so one unplaceable cell (protection, entity, no reference)
-// cannot hold every later batch for 90 s each. Starved misses (hands
-// empty) never strike: they fetch like today.
+// Strike-back (core-3, round-2 core-2): only a fresh-gen watchdog stall
+// strikes — the batch demonstrably attempted those cells with material on
+// hand and got refusals. Starved resolves fetch and retry whole; stale
+// completions (a preemption's late final) and non-stall errors never
+// strike, or three fights would skip the whole house. A landed cell's
+// entry clears, so a retry starts fresh.
 function noteBatchMisses(bot, ctx, home, batch) {
   try {
     const plan = blueprintFor(home)
@@ -634,11 +634,17 @@ function noteBatchMisses(bot, ctx, home, batch) {
     const held = !!findItem(bot, wantItem({ kind: 'planks' }))
     for (const c of batch.cells) {
       const cell = plan[c.idx]
-      if (!cell || cellDone(bot, home, cell)) continue
+      if (!cell || cellDone(bot, home, cell)) {
+        delete ctx.buildBatchStrikes[c.idx]
+        continue
+      }
       if (!held) continue
       const p = cellAbs(home, cell)
       const n = (ctx.buildBatchStrikes[c.idx] = (ctx.buildBatchStrikes[c.idx] | 0) + 1)
-      if (n >= 3) skipCell(ctx, c.idx, p, 'build-miss')
+      if (n >= 3) {
+        delete ctx.buildBatchStrikes[c.idx]
+        skipCell(ctx, c.idx, p, 'build-miss')
+      }
     }
   } catch (_) { /* strike-back best-effort */ }
 }
@@ -653,14 +659,13 @@ function builderBatch(bot, ctx) {
     bot.buildCells('house', batch.origin, wireCells, { forbid: [batch.block] }).then(
       ({ missing }) => {
         ctx.buildCellsInFlight = false
-        if (missing > 0) {
-          noteBatchMisses(bot, ctx, ctx.home, batch)
-          failBuild(ctx, 'no-planks', gen)
-        }
+        if (missing > 0 && gen === stepGen(ctx)) failBuild(ctx, 'no-planks', gen)
       },
       (err) => {
         ctx.buildCellsInFlight = false
-        noteBatchMisses(bot, ctx, ctx.home, batch)
+        if (err && err.message === 'build-stall' && gen === stepGen(ctx)) {
+          noteBatchMisses(bot, ctx, batch.home, batch)
+        }
         failBuild(ctx, err && err.message === 'build-stall' ? 'build-stall' : 'build-failed', gen)
       },
     )
@@ -878,6 +883,7 @@ function build(bot, ctx, target, state) {
     ctx.buildSkip = []
     ctx.buildSkipAt = {}
     ctx.buildSkipRetry = null
+    ctx.buildBatchStrikes = {} // a new site re-arms strike-back (round-2 core-2)
     ctx.buildFails = 0
     ctx.buildFailIdx = -1
     ctx.buildFarIdx = -1

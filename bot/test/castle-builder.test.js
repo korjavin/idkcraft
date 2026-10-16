@@ -210,4 +210,29 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     assert.ok((ctx.stepStatus || '').startsWith('failed:no-'), `fetch word, got ${ctx.stepStatus}`)
     assert.equal(ctx.castleBuildFlight, false)
   })
+
+  it('two refused cells both back off after 3 stalls (round-2 core-1)', async () => {
+    const world = makeWorld()
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    const open = plan.filter((c) => c.kind === 'stone').slice(0, 2)
+    paintAll(world, { except: (c) => open.includes(c) })
+    const bot = mockBot(world, { buildScript: 'stall' })
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    await run(bot, ctx, 5)
+    assert.ok(bot.calls.builds.length >= 3, `re-batches while unblocked (${bot.calls.builds.length})`)
+    const keys = open.map((c) => `${blueprint.blueprintOf(3).version}:${c.idx}`)
+    for (const k of keys) assert.ok(ctx.castle.blocked[k], `${k} backed off`)
+  })
+
+  it('a stale preemption neither fails nor strikes (round-2 core-2)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { buildScript: 'starve' })
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    castle(bot, ctx)
+    ctx.stepGen = (ctx.stepGen | 0) + 1 // the step turned over mid-batch
+    await settle()
+    assert.ok(!ctx.stepStatus, `stale settle writes nothing, got ${ctx.stepStatus}`)
+    assert.equal(ctx.castleBuildFlight, false)
+    assert.deepEqual(ctx.castle.batchStrikes || {}, {})
+  })
 })

@@ -128,6 +128,35 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
     await assert.rejects(bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1)), /unknown block/)
   })
 
+  it('starvation is exact-name: a variant on hand still starves (round-2 core-5)', async () => {
+    await bot.stop()
+    ;({ transport, bot } = makeBot({ inventory: [{ slot: 36, name: 'cobbled_deepslate', count: 64 }] }))
+    await bot.start({ pollMs: 0 })
+    bot._buildTiming = { stallMs: 30, watchMs: 5 }
+    transport.state.buildScript = 'stall'
+    // The builder cannot lay cobblestone from deepslate; that is starved
+    // (fetch the named stone), not a wedged builder.
+    const res = await bot.buildCells('castle', { x: 100, y: 64, z: -40 }, [{ dx: 0, dy: 0, dz: 0, block: 'cobblestone' }])
+    assert.deepEqual(res, { placed: 0, missing: 1 })
+  })
+
+  it('a live builder is stopped by pathfinder.stop and by an in-reach goal (round-2 core-3)', async () => {
+    transport.state.buildScript = 'stall'
+    const p = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1))
+    await sleep(10)
+    assert.ok(bot._build !== null)
+    bot.pathfinder.stop() // no goal live: only the builder keeps it live
+    assert.equal(transport.state.baritone, '#stop')
+    await p.catch(() => {}) // the fake's #stop final settles it
+    const q = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1))
+    await sleep(10)
+    // An already-satisfied goal sends no walk — but still stops the builder.
+    bot.pathfinder.setGoal({ constructor: { name: 'GoalBlock' }, isEnd: () => true })
+    assert.equal(transport.state.baritone, '#stop')
+    await bot.stopBuild()
+    await q.catch(() => {})
+  })
+
   it('wire names are unique per call; a foreign final never settles the live build (core-2)', async () => {
     transport.state.buildScript = 'stall'
     bot._buildTiming = { stallMs: 40, watchMs: 5 }

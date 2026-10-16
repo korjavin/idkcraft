@@ -127,18 +127,44 @@ describe('house builder branch (idkcraft-neuc.54)', () => {
     assert.equal(ctx.stepStatus, 'failed:no-planks')
   })
 
-  it('a refused cell skips after 3 batch misses (core-3 strike-back)', async () => {
+  it('a refused cell skips after 3 watchdog stalls (core-3 strike-back)', async () => {
     const world = makeWorld()
-    // Nothing ever lands (starved stub paints nothing) but planks stay on
-    // hand, so every miss strikes; after 3 the cells skip like 3 refusals.
-    const bot = mockBot(world, { buildScript: 'starve' })
+    // Nothing ever lands (stalling stub paints nothing) but planks stay on
+    // hand, so every stall strikes; after 3 the cells skip like 3 refusals.
+    const bot = mockBot(world, { buildScript: 'stall' })
     const ctx = freshCtx()
     for (let i = 0; i < 3; i++) {
       build(bot, ctx)
       await settle()
     }
     assert.ok(ctx.buildSkip.length > 0, 'struck cells skip instead of re-batching forever')
+    assert.equal(ctx.stepStatus, 'failed:build-stall')
+  })
+
+  it('starved batches never strike (round-2 core-2)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { buildScript: 'starve' })
+    const ctx = freshCtx()
+    for (let i = 0; i < 3; i++) {
+      build(bot, ctx)
+      await settle()
+    }
+    assert.deepEqual(ctx.buildSkip, [])
+    assert.deepEqual(ctx.buildBatchStrikes || {}, {})
     assert.equal(ctx.stepStatus, 'failed:no-planks')
+  })
+
+  it('a stale preemption never strikes nor fails (round-2 core-2)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { buildScript: 'stall' })
+    const ctx = freshCtx()
+    build(bot, ctx)
+    ctx.stepGen = (ctx.stepGen | 0) + 1 // the step turned over mid-batch
+    await settle()
+    assert.deepEqual(ctx.buildSkip, [])
+    assert.deepEqual(ctx.buildBatchStrikes || {}, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.buildCellsInFlight, false)
   })
 
   it('without buildCells the v1 per-cell path is unchanged (planks via placeBlock)', async () => {

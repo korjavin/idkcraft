@@ -1817,15 +1817,25 @@ function castleBuilderBatch(bot, ctx, st, c) {
     if (gen === stepGen(ctx)) st.status = reason
     stepFailed(ctx, reason, gen)
   }
-  // Strike-back (core-3): still-missing cells with material on hand were
-  // attempted and refused — strike them into the usual backoff/retire
-  // machinery instead of re-batching them forever. Starved misses fetch.
+  // Strike-back (core-3, round-2 core-1): still-missing cells with
+  // material on hand were attempted and refused. Counted PER CELL in
+  // st.batchStrikes — the shared strike() keeps one counter for the last
+  // idx only, so two refused cells would reset each other forever. At
+  // STRIKES the cell enters the usual backoff/retire machinery instead of
+  // re-batching forever. Starved misses fetch, never strike.
   const strikeMisses = () => {
     try {
+      if (!st.batchStrikes || typeof st.batchStrikes !== 'object') st.batchStrikes = {}
+      const now = Date.now()
       for (const o of flightCells) {
-        if (done(bot, o)) continue
+        if (done(bot, o)) { delete st.batchStrikes[bkey(st, o.idx)]; continue }
         if (usable(bot, o.kind, ctx) <= 0) continue
-        strike(ctx, st, o, 'build-miss', Date.now())
+        const k = bkey(st, o.idx)
+        const n = (st.batchStrikes[k] = (st.batchStrikes[k] | 0) + 1)
+        if (n >= STRIKES) {
+          delete st.batchStrikes[k]
+          blockCell(ctx, st, o, 'build-miss', now)
+        }
       }
     } catch (_) { /* strike-back best-effort */ }
   }
@@ -1835,6 +1845,11 @@ function castleBuilderBatch(bot, ctx, st, c) {
     })), { forbid, isSame: castleSame }).then(
       () => {
         ctx.castleBuildFlight = false
+        // A starved resolve fetches more material and retries the whole
+        // batch — it never strikes (round-2 core-2): the misses were not
+        // attempted, and a stale preemption must not poison live cells.
+        // Only a fresh-gen watchdog stall (attempted, refused) strikes.
+        if (gen !== stepGen(ctx)) return
         // Missing kinds re-read from the world: whatever is still not
         // done names the fetch word, like work()'s material path.
         let miss = null
@@ -1843,13 +1858,10 @@ function castleBuilderBatch(bot, ctx, st, c) {
         } catch (_) {
           miss = flightCells[0] || null
         }
-        if (miss) {
-          strikeMisses()
-          settleFail(`no-${miss.kind}`)
-        }
+        if (miss) settleFail(`no-${miss.kind}`)
       },
       (err) => {
-        strikeMisses()
+        if (err && err.message === 'build-stall' && gen === stepGen(ctx)) strikeMisses()
         settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
       },
     )

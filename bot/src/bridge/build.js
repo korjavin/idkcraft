@@ -201,10 +201,15 @@ function watch(bot, st) {
     st.missing = missing.length
     st.placed = st.cells.length - missing.length
   }
+  // Starvation is EXACT-name (round-2 core-5): the builder can only place
+  // what it holds — a valid substitute counts a standing cell as done
+  // (missingCells), but laying the next one needs the named item itself.
+  // A cobblestone cell with only deepslate on hand starves (fetch more),
+  // it is not a wedged builder.
   const kinds = new Set((missing || st.cells).map((c) => c.block))
   let starved = true
   for (const want of kinds) {
-    if (onHand(bot, want, st.isSame)) {
+    if (onHand(bot, want, (w, h) => w === h)) {
       starved = false
       break
     }

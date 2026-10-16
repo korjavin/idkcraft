@@ -695,7 +695,9 @@ class BaritoneBot extends EventEmitter {
     const arm = this._followArm(goal, dynamic)
     if (this._satisfiedNow(goal)) {
       this._follow = arm
-      const live = this._pathing || this._goalId != null
+      // A live builder counts as live (round-2 core-3): an in-reach goal
+      // sends no walk, so without this no #stop cancels the builder.
+      const live = this._pathing || this._goalId != null || this._build != null
       this._boundSeq = this._cmdSeq
       this._goalId = null
       this._pathing = false
@@ -707,7 +709,7 @@ class BaritoneBot extends EventEmitter {
     if (!cmd) {
       // No Baritone mapping: stop the live walk (mineflayer's setGoal
       // always resets first) and fail like the executor would.
-      const live = this._pathing || this._goalId != null
+      const live = this._pathing || this._goalId != null || this._build != null
       this._boundSeq = this._cmdSeq
       this._goalId = null
       this._pathing = false
