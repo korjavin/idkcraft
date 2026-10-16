@@ -472,6 +472,24 @@ describe('airborne target (phantom) builds no column', () => {
     assert.equal(bot.calls.goals.filter((g) => g && g.entity === ph).length, 1) // no new one
   })
 
+  it('a falling walker gets no goal and no latch; pursued again once it lands', () => {
+    const bot = world(mockBot())
+    const ctx = { lastGoalKey: '' }
+    const z = phantom(6, 70, 'zombie')
+    fight(bot, ctx, null, { hostile: z })
+    assert.equal(bot.calls.goals.filter((g) => g && g.entity === z).length, 0)
+    assert.equal(ctx.fightGivenUpId, undefined) // not written off for 30 ticks
+    z.position.y = 64 // landed
+    fight(bot, ctx, null, { hostile: z })
+    assert.equal(bot.calls.goals.filter((g) => g && g.entity === z).length, 1)
+  })
+
+  it('a mob on a slab over air is grounded (own cell probed)', () => {
+    const bot = mockBot()
+    bot.blockAt = (p) => ({ name: p.y === 64 ? 'stone_slab' : 'air' })
+    assert.equal(fight.airborne(bot, phantom(0, 64.5, 'zombie')), false)
+  })
+
   it('swooping into melee range still gets swung, never a pursuit goal', () => {
     const bot = world(mockBot())
     const ctx = { lastGoalKey: '' }
