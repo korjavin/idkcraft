@@ -265,7 +265,7 @@ services:
   swarm1: &swarm
     image: ghcr.io/korjavin/idkcraft:latest
     container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}1
-    restart: unless-stopped
+    restart: on-failure  # idle slots (I >= BOT_SWARM_N) exit 0 and stay stopped
     depends_on:
       mc:
         condition: service_healthy
