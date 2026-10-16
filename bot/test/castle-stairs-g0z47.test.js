@@ -281,22 +281,24 @@ describe('stairs sourcing (g0z.47)', () => {
     assert.equal(ctx.stepStatus, 'done', 'the op over, short cobble digs again')
   })
 
-  it('a live castle builder batch owns the body: wait while it lays, stop it once idle (neuc.63)', () => {
+  it('a live castle builder batch owns the body: stop it once, fetch after its final (neuc.63)', () => {
     castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 60 }; return 'stairs-none' }
-    fetch.deps.craftItem = () => { throw new Error('no craft under a live builder') }
+    let crafts = 0
+    fetch.deps.craftItem = () => { crafts++; return 'running' }
     const ctx = { castleBuildFlight: true, castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, phase: 'body', blocked: {} } }
     let stops = 0
     const bot = fetchBot([{ name: 'cobblestone', count: 64 }])
     bot._build = { grownAt: Date.now(), preempted: false }
     bot.stopBuild = () => { stops++; bot._build.preempted = true; return Promise.resolve({ stopped: true }) }
     fetch(bot, ctx)
-    assert.equal(stops, 0, 'a growing batch keeps laying')
-    assert.equal(ctx.stepStatus, undefined)
-    bot._build.grownAt = Date.now() - fetch.BUILDER_IDLE_MS - 1
     fetch(bot, ctx)
-    fetch(bot, ctx)
-    assert.equal(stops, 1, 'an idle batch is stopped once')
+    assert.equal(stops, 1, 'the live batch is stopped once')
+    assert.equal(crafts, 0, 'no craft under a live builder')
     assert.equal(ctx.stepStatus, undefined, 'still waiting for the preempted final')
+    ctx.castleBuildFlight = false // build-preempted settled
+    bot._build = null
+    fetch(bot, ctx)
+    assert.equal(crafts, 1, 'the freed body crafts')
   })
 
   it('stairs are castle material on v3 only; usable above a zero reserve', () => {

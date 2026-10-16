@@ -58,12 +58,6 @@ const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: cas
 // minutes ≈ one stone batch at the measured quarry rate, and bounds the
 // castle<->castlefetch switch rate from below no matter how the words flap.
 const LEG_MAX_MS = 5 * 60 * 1000
-// neuc.63: a live castle builder batch with no placed cell this long is
-// read as paused on missing material — castlefetch stops it and takes the
-// body. Growth only moves on a newly placed cell, so the window spans a
-// builder walk/climb between cells; well under the bridge's 90 s stall.
-// ponytail: time heuristic; read the mod's paused state if 30 s misfires.
-const BUILDER_IDLE_MS = 30000
 // One craft op per call; the next tick re-checks the target.
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, blast_furnace: 1, stairs: 4 }
 const BANNER_WOOL = 6 // one colour per banner (table recipe)
@@ -1704,16 +1698,20 @@ function castlefetch(bot, ctx, target, state) {
     return
   }
   // neuc.63: a v2 castle builder batch still owns the body — the word
-  // flips to <kind>-none mid-batch (the last stairs went into the batch,
-  // its stone still laying). A table placed or a craft run under a live
-  // BuilderProcess is refused (rig 8a3/8a4/8bl: refused table spots ->
-  // 'need a crafting table' -> failed:castlefetch-no-stairs -> 5-min hold
-  // -> forage/rest/house spiral). Wait while it lays; once it stops
-  // growing (paused on the material we are here for) stop it and fetch.
+  // flips to <kind>-none mid-batch (the next per-cell kind, e.g. stairs,
+  // is unheld while the batch's stone still lays). A table placed or a
+  // craft run under a live BuilderProcess is refused (rig 8a3/8a4/8bl:
+  // refused table spots -> 'need a crafting table' ->
+  // failed:castlefetch-no-stairs -> 5-min hold -> forage/rest/house
+  // spiral). Stop the batch (build-preempted: no strike, no fetch word)
+  // and fetch once its final lands. Never wait it out: a full batch
+  // climbs the builder to y+14 and the per-cell stairs are unreachable
+  // from there (rig n63-a1/a2: wedged at ~200 cells).
   if (ctx.castleBuildFlight) {
     if (ctx.castleFetch) spend(ctx.castleFetch, 'other')
     const b = bot && bot._build
-    if (b && !b.preempted && Date.now() - b.grownAt > BUILDER_IDLE_MS && typeof bot.stopBuild === 'function') {
+    if (b && !b.preempted && typeof bot.stopBuild === 'function') {
+      try { console.log(`castlefetch: stopping the castle builder batch (placed ${b.placed | 0})`) } catch (_) { /* log best-effort */ }
       bot.stopBuild().catch(() => { /* release best-effort: the bridge watchdog settles it anyway */ })
     }
     return
@@ -1801,7 +1799,6 @@ function castlefetch(bot, ctx, target, state) {
 
 module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
-module.exports.BUILDER_IDLE_MS = BUILDER_IDLE_MS
 module.exports.stairsCobbleShort = stairsCobbleShort
 module.exports.QUARRY_ADAPT = QUARRY_ADAPT
 module.exports.quarrySide = quarrySide
