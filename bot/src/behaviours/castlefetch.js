@@ -217,12 +217,15 @@ function demand(bot, ctx) {
   // neuc.58: a v2 stone leg hauls the forecast, not FETCH — the blueprint
   // remainder capped by pack room and what the held picks can still dig
   // (stone by hand drops nothing). Pickless keeps the v1 target: equip
-  // rearms first (digTick, goal needsDigNoPick).
+  // rearms first (digTick, goal needsDigNoPick). No room keeps it too: the
+  // leg digs into the last slots and fails pack-full, which opens
+  // stockpile's pierce (stockpile.packFull = !roomForDrop at 36 slots).
   if (kind === 'stone' && process.env.BOT_BODY === 'baritone') {
     const picks = pickBudget(bot)
-    if (picks > 0) {
+    const room = stoneRoom(bot)
+    if (picks > 0 && room > 0) {
       const forecast = left + castleMod.reserveOf(kind) - castleMod.held(bot, kind)
-      return { kind, word, short: Math.max(0, Math.min(forecast, stoneRoom(bot), picks)) }
+      return { kind, word, short: Math.max(0, Math.min(forecast, room, picks)) }
     }
   }
   // Raw items: below the reserve the reserve refills first (never laid).
