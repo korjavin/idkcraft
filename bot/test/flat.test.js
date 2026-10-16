@@ -617,6 +617,21 @@ describe('flat ticker wiring', () => {
       } finally { ticker.destroy() }
     })
 
+    it('vewo.8: a restored flat with nobody online holds off the leave until it ends', async () => {
+      let t = 0
+      let left = 0
+      const bot = mockBot(makeWorld({}), { players: {} })
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 50, onLeave: () => { left++ }, now: () => t })
+      try {
+        ticker.stop() // helper spawn path
+        bot._tickerCtx.flatSaved = { cx: 0, cz: 0, r: 4, yTop: 74, level: 62, by: 'P' } // shave work: stays running
+        ticker.resumeFlat()
+        for (let i = 0; i < 5; i++) { t += 100; await ticker.tick() }
+        assert.equal(left, 0, 'no leave, so main() never rejoins in a loop')
+        assert.ok(bot._tickerCtx.flat && !bot._tickerCtx.flat.parked)
+      } finally { ticker.destroy() }
+    })
+
     // tpd1 (iii): helpers are flat-only.
     it('helper refuses follow/work orders and changes nothing', () => {
       const r = rig({ players: { P: { username: 'P', entity: { position: pos(3, 64, 0) } } } })

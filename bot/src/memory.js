@@ -348,8 +348,8 @@ function flatOf(v) {
 }
 
 // Pre-connect peek (vewo.8): a saved flat job skips the wait-for-players.
-// ponytail: no world check before login; a stale other-world file costs a
-// join/leave cycle per grace until a save in this world replaces it.
+// No world check before login: a stale other-world file costs one
+// join/leave cycle, then the 'end' save replaces it (save: staleFlat).
 function hasFlat(file) {
   try {
     const doc = readDoc(file)
@@ -561,7 +561,10 @@ function save(bot, ctx, file, now) {
     if (doc.castle === undefined && prevCastle) doc.castle = prevCastle
     const prevFlat = prev && prev.v === VERSION && prev.world === doc.world ? flatOf(prev.flat) : null
     if (doc.flat === undefined && prevFlat) doc.flat = prevFlat
-    if (empty && !(prevFollow && doc.follow === null) && !(prevCastle && doc.castle === null) && !(prevFlat && doc.flat === null)) return false
+    // Another world's flat would make main() rejoin an empty server forever
+    // (hasFlat cannot check the world before login): replace that file.
+    const staleFlat = !!(prev && prev.flat && !prevFlat)
+    if (empty && !staleFlat && !(prevFollow && doc.follow === null) && !(prevCastle && doc.castle === null) && !(prevFlat && doc.flat === null)) return false
     tmp = `${f}.tmp-${process.pid}`
     fs.writeFileSync(tmp, JSON.stringify(doc))
     fs.renameSync(tmp, f)

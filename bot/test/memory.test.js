@@ -572,6 +572,19 @@ describe('flat job survives a restart (idkcraft-vewo.8)', () => {
     assert.equal(memory.hasFlat(file), false)
     assert.equal(memory.hasFlat(path.join(dir, 'missing.json')), false)
   })
+  it('main() join gate: a saved job joins an empty server, a cleared or stale one waits', () => {
+    const { joinWaits } = require('../src/index')
+    const env = { BOT_MEMORY_FILE: file }
+    memory.save(botAt(SPAWN_A), { flat: job() }, file)
+    assert.equal(joinWaits(env, 'MemBot', 60000, false), false)
+    assert.equal(joinWaits(env, 'MemBot', 0, false), false)
+    memory.save(botAt(SPAWN_A), { flat: null }, file) // the 'end' save after finish/stop
+    assert.equal(joinWaits(env, 'MemBot', 60000, false), true)
+    memory.save(botAt(SPAWN_A), { flat: job() }, file)
+    // another world's job: the one join it causes ends in an empty-ctx save that replaces it
+    assert.equal(memory.save(botAt(SPAWN_B), {}, file), true)
+    assert.equal(joinWaits(env, 'MemBot', 60000, false), true)
+  })
   it('a finished (null) or stopped (parked) job is dropped; an untouched ctx keeps it', () => {
     for (const end of [null, { ...job(), parked: true }]) {
       memory.save(botAt(SPAWN_A), { flat: job() }, file)
