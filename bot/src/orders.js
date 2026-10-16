@@ -470,7 +470,7 @@ function createOrders(box) {
         ctx.paused = false
         return flatMod.resumeLine(f)
       }
-      ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you')
+      ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you', flatMod.swarmTile())
       ctx.unseenTicks = 0
       ctx.resumeWork = false
       ctx.paused = false

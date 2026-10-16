@@ -117,6 +117,8 @@ services:
       WORKER_NAME: ${WORKER_NAME:-}
       WORKER_HOST: ${WORKER_HOST:-baritone}
       WORKER_PORT: ${WORKER_PORT:-7777}
+      # Flat swarm (lhg2): bot is strip 0 of BOT_SWARM_N (empty = whole square).
+      BOT_SWARM_N: ${BOT_SWARM_N:-}
     labels:
       prometheus.scrape: "true"
       prometheus.port: "9464"
@@ -244,6 +246,89 @@ services:
       driver: json-file
       options:
         max-size: "20m"
+
+  # Flat swarm (idkcraft-lhg2): 8 extra v1 (mineflayer) bots named
+  # <BOT_SWARM_PREFIX>1..8 (default IdkSwarm1..8) that split one `flat` square into BOT_SWARM_N strips
+  # (bot = strip 0, swarmK = strip K). Off by default: swarm K idles (no
+  # join, ~40m RAM) unless K < BOT_SWARM_N — BOT_SWARM_N=9 turns all 8 on.
+  # Each needs its OFFLINE uuid in WHITELIST (same as BOT_USERNAME). Own
+  # memory file /app/memory/<name>.json on the shared volume. No planner
+  # keys (stub brain), no worker, no follow.
+  swarm1: &swarm
+    image: ghcr.io/korjavin/idkcraft:latest
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}1
+    restart: unless-stopped
+    depends_on:
+      mc:
+        condition: service_healthy
+    mem_limit: ${BOT_SWARM_MEM_LIMIT:-400m}
+    environment: &swarm-env
+      MC_HOST: mc
+      MC_PORT: 25565
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}1
+      BOT_SWARM_I: "1"
+      BOT_SWARM_N: ${BOT_SWARM_N:-}
+      BOT_PEER_USERNAME: ${BOT_USERNAME:-IdkBot}
+      BOT_FOLLOW: ""
+      WORKER_NAME: ""
+      BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
+      BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
+      BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
+    volumes:
+      - bot-memory:/app/memory
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+  swarm2:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}2
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}2
+      BOT_SWARM_I: "2"
+  swarm3:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}3
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}3
+      BOT_SWARM_I: "3"
+  swarm4:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}4
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}4
+      BOT_SWARM_I: "4"
+  swarm5:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}5
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}5
+      BOT_SWARM_I: "5"
+  swarm6:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}6
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}6
+      BOT_SWARM_I: "6"
+  swarm7:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}7
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}7
+      BOT_SWARM_I: "7"
+  swarm8:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}8
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}8
+      BOT_SWARM_I: "8"
 # Host monitoring stack (korjavin/monitoring-compose): its vmagent
 # discovers containers labelled prometheus.scrape=true, but can only reach
 # them on a network it is attached to. Locally without that stack:

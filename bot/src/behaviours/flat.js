@@ -639,10 +639,31 @@ function resumeLine(f) {
   return `resuming flat, ${holes} holes left`
 }
 
-function startEpisode(cx, cz, r, yTop, by) {
+// Flat swarm (lhg2): BOT_SWARM_N bots split one square into N x-strips;
+// bot BOT_SWARM_I (0..N-1) works strip I. null (N unset/1, bad I) = whole
+// square, the single-bot behaviour. Every bot scans the WHOLE square so the
+// level vote is identical; only its own strip's holes/bumps are queued.
+function swarmTile(env = process.env) {
+  const n = parseInt(env.BOT_SWARM_N || '', 10)
+  const i = parseInt(env.BOT_SWARM_I || '0', 10)
+  if (!(n > 1) || !(i >= 0 && i < n)) return null
+  return { i, n }
+}
+
+// Strip index of column x in the square cx±r: disjoint and covering by
+// construction (floor of a monotone map onto 0..n-1).
+function stripOf(x, cx, r, n) {
+  return Math.floor(((x - (cx - r)) * n) / (2 * r + 1))
+}
+
+function inTile(f, x, z) {
+  return !f.tile || stripOf(x, f.cx, f.r, f.tile.n) === f.tile.i
+}
+
+function startEpisode(cx, cz, r, yTop, by, tile = null) {
   return {
     key: `${cx},${cz},${r}`,
-    cx, cz, r, by: by || 'you',
+    cx, cz, r, by: by || 'you', tile,
     yTop, yBottom: yTop - SCAN_DOWN,
     phase: 'scan',
     scan: { queue: spiralColumns(cx, cz, r), i: 0 },
@@ -732,6 +753,11 @@ function finish(bot, ctx, f, why) {
 }
 
 function scanRecord(f, c, r) {
+  // Swarm: off-strip columns only vote the level (walkable tops).
+  if (!inTile(f, c.x, c.z)) {
+    if (r.status === 'ok' && r.liquidTop == null && r.walkable) f.tops.push(r.topY)
+    return
+  }
   if (r.status === 'unloaded') {
     f.counts.unloaded++
   } else if (r.status === 'liquid') {
@@ -797,7 +823,7 @@ function scanTick(bot, ctx, f) {
   f.lastProgressTick = f.ticks
   f.lastChat = Date.now() // the start line below is the first progress
   const size = 2 * f.r + 1
-  let line = `flattening ${size}x${size} around ${f.by}, level ${level}: ${f.total} holes`
+  let line = `flattening ${size}x${size} around ${f.by}${f.tile ? ` (strip ${f.tile.i + 1}/${f.tile.n})` : ''}, level ${level}: ${f.total} holes`
   if (f.totalBumps > 0) line += `, ${f.totalBumps} bumps`
   if (f.counts.unloaded > 0) line += `, ${f.counts.unloaded} unloaded`
   if (f.counts.liquid > 0) line += `, ${f.counts.liquid} water skipped`
@@ -1353,6 +1379,7 @@ function buildSweep(bot, f) {
     const sz = Number(parts[1])
     if (!Number.isFinite(sx) || !Number.isFinite(sz)) continue
     if (Math.abs(sx - f.cx) > f.r || Math.abs(sz - f.cz) > f.r) continue
+    if (!inTile(f, sx, sz)) continue
     if (f.bumpCols && f.bumpCols.has(key)) continue
     const r = probeColumn(blockAt, sx, sz, f.level + 1 + SCAN_UP_EXTEND, f.level + 1)
     if (!r || r.status !== 'ok' || typeof r.topY !== 'number' || r.topY <= f.level) continue
@@ -1619,6 +1646,9 @@ module.exports.isAirCell = isAirCell
 module.exports.cellAt = cellAt
 module.exports.probeColumn = probeColumn
 module.exports.spiralColumns = spiralColumns
+module.exports.swarmTile = swarmTile
+module.exports.stripOf = stripOf
+module.exports.scanRecord = scanRecord
 module.exports.chooseLevel = chooseLevel
 module.exports.detectHoles = detectHoles
 module.exports.findFillItem = findFillItem
