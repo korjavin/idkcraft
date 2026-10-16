@@ -263,6 +263,11 @@ describe('neuc.52 v2 escape', () => {
     body.movementsFor('recover', { pathfinder: {} }, ctx2)
     assert.equal(ctx2.movements.canDig, true)
     assert.equal(ctx2.movements.allow1by1towers, true)
+    // After the episode the flag resets: pillar rights must not leak onto
+    // later goals (castle-rig throughput gap, send-back 2).
+    ctx2.recovery = null
+    body.movementsFor('work', { pathfinder: {} }, ctx2)
+    assert.equal(ctx2.movements.allow1by1towers, false, 'no leak past the episode')
     // v1: no escape anywhere, flags stand as computed.
     delete process.env.BOT_BODY
     const ctx3 = { recovery: { action: 'pillar_up' }, movements: mov() }

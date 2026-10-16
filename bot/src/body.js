@@ -338,7 +338,11 @@ function movementsFor(owner, bot, ctx, extra) {
     try {
       if (v2Guard && Array.isArray(mov.exclusionAreasBreak) && !mov.exclusionAreasBreak.includes(v2Guard)) mov.exclusionAreasBreak.push(v2Guard)
       scaffoldCobble(bot, mov, !(keepStone && otherScaffold(bot, mov)))
-      if (escape && typeof mov.allow1by1towers === 'boolean') mov.allow1by1towers = true
+      // Owns the flag both ways: an escape episode that leaves it true
+      // would keep Baritone pillar rights on every later goal (the
+      // Movements object persists across claims). v1 never reads true —
+      // nothing there sets it — so the reset is a no-op there.
+      if (typeof mov.allow1by1towers === 'boolean') mov.allow1by1towers = escape
       if (typeof mov.canDig === 'boolean') mov.canDig = canDig
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour
