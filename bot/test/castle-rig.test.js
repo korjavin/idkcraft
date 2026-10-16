@@ -346,7 +346,7 @@ describe('castle-replay.js verdict contract', () => {
   it('prints the one-line verdict shape and names its env seams', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8')
     assert.ok(src.includes('castle ${done}/${total} in ${MINS} min, flips='), 'verdict line shape drifted')
-    for (const seam of ['CASTLE_PORT', 'CASTLE_CONTAINER', 'CASTLE_TAG', 'CASTLE_MINS', 'CASTLE_PAD', 'CASTLE_PADSPOT', 'CASTLE_OUT', 'CASTLE_BLOCKED']) {
+    for (const seam of ['CASTLE_PORT', 'CASTLE_CONTAINER', 'CASTLE_TAG', 'CASTLE_MINS', 'CASTLE_PAD', 'CASTLE_PADSPOT', 'CASTLE_OUT', 'CASTLE_BLOCKED', 'CASTLE_DIAG']) {
       assert.ok(src.includes(seam), `missing env seam ${seam}`)
     }
     // Usernames cap at 16 chars (stuck-replay precedent): the length guard
@@ -356,6 +356,8 @@ describe('castle-replay.js verdict contract', () => {
     // log + OUT record, or the one-line acceptance has no rig evidence.
     assert.ok(src.includes('CASTLE-RIG say: '), 'missing holes say-capture')
     assert.ok(src.includes('said: seen.said'), 'missing said record field')
+    assert.ok(src.includes('diag: DIAG'), 'DIAG not passed to componentLine')
+    assert.ok(fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-rig.sh'), 'utf8').includes('export CASTLE_DIAG='), 'wrapper does not export CASTLE_DIAG')
   })
 
   it('counts castle<->castlefetch flips in both directions (one-char join bug)', () => {
