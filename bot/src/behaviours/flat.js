@@ -1421,13 +1421,15 @@ const SWEEP_MATS = new Set(['dirt', 'cobblestone'])
 // (placedByBot is per bot and lost on restart, so shape decides).
 // ponytail: a player's bare 1-wide cobble post with no marker block next to
 // it gets dug (accepted trade-off); the upgrade is a persisted, swarm-shared
-// placedByBot. Unloaded neighbours read as solid (keep).
+// placedByBot. Unloaded neighbours read as solid (keep). Our own placed
+// neighbours do not count: the pathfinder towers beside a tall pillar to
+// reach its top, and that tower must not turn the lower cells into a wall.
 const PILLAR_MATS = new Set([...SWEEP_MATS, 'cobbled_deepslate'])
-function lonePillar(bot, x, y, z) {
+function lonePillar(bot, ctx, x, y, z) {
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     let b = null
     try { b = bot.blockAt(new Vec3(x + dx, y, z + dz)) } catch (_) { b = null }
-    if (!b || isSolidCell(b)) return false
+    if (!b || (isSolidCell(b) && !util.isOwnPlaced(ctx, b))) return false
   }
   return true
 }
@@ -1575,7 +1577,7 @@ function shaveTick(bot, ctx, f, bp) {
   // allowlist (cobblestone is not diggable for ordinary bumps), and so do
   // lone 1x1 pillar cells of scaffold fill (vewo.7). All other gates below
   // (structure, liquid, under-feet) still apply.
-  const pillar = PILLAR_MATS.has(name) && lonePillar(bot, h.x, y, h.z)
+  const pillar = PILLAR_MATS.has(name) && lonePillar(bot, ctx, h.x, y, h.z)
   if (!isDiggable(name) && !(h.sweep && SWEEP_MATS.has(name)) && !pillar) {
     shiftBumpSkip(f, 'kept') // ore, wood, built: keep valuables, keep houses
     return

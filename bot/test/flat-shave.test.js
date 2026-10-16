@@ -850,6 +850,32 @@ describe('lone pillars are shaved (idkcraft-vewo.7)', () => {
     })
   }
 
+  it('our own tower beside a tall pillar does not stop the shave halfway (review core-1)', async () => {
+    const world = makeWorld({})
+    column(world, 2, 1, 3)
+    world.set(3, 64, 1, 'dirt') // pathfinder tower block placed to reach the top
+    const { bot, ctx } = run(world)
+    ctx.placedByBot = new Set(['3,64,1'])
+    ctx.flat.stepped.add('3,1')
+    // Body stays on the tower (feet 65): never teleported to the dig height.
+    for (let i = 0; i < 80 && ctx.flat; i++) {
+      bot.entity.position = pos(3.5, 65, 1.5)
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+    assert.equal(ctx.flat, null)
+    for (let y = 64; y <= 66; y++) assert.equal(world.blockAt({ x: 2, y, z: 1 }).name, 'air', `y=${y} dug`)
+  })
+
+  it('a foreign solid neighbour still makes it a wall', () => {
+    const world = makeWorld({})
+    world.set(3, 64, 1, 'dirt')
+    const bot = mockBot(world)
+    assert.equal(flat.lonePillar(bot, {}, 2, 64, 1), false)
+    assert.equal(flat.lonePillar(bot, { placedByBot: new Set(['3,64,1']) }, 2, 64, 1), true)
+    assert.equal(flat.lonePillar(bot, {}, 2, 65, 1), true)
+  })
+
   it('shaves dirt and cobbled_deepslate pillars too', async () => {
     const world = makeWorld({})
     column(world, 2, 1, 3, 'dirt')
