@@ -381,9 +381,10 @@ describe('flat ticker wiring', () => {
   describe('swarm (lhg2)', () => {
     const saved = {}
     beforeEach(() => {
-      for (const k of ['BOT_SWARM_N', 'BOT_SWARM_I']) saved[k] = process.env[k]
+      for (const k of ['BOT_SWARM_N', 'BOT_SWARM_I', 'BOT_PEER_USERNAME']) saved[k] = process.env[k]
       process.env.BOT_SWARM_N = '9'
       process.env.BOT_SWARM_I = '3'
+      process.env.BOT_PEER_USERNAME = 'IdkBot'
     })
     afterEach(() => {
       for (const k of Object.keys(saved)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] }
@@ -405,6 +406,133 @@ describe('flat ticker wiring', () => {
         assert.match(line, /can't see you/)
         assert.ok(!r.ctx.flat, 'no episode started')
       } finally { r.done() }
+    })
+
+    // tpd1 (i): flat <r> <x> <z> — nine bots, nine different speaker views
+    // (some see nobody), one square: same anchor, same level, disjoint strips.
+    it('explicit anchor: nine bots agree on the square, level and strips', async () => {
+      const world = makeWorld({})
+      for (let x = 96; x <= 104; x++) world.set(x, 63, -38, 'air') // a hole in every strip
+      const holes = new Map()
+      const keys = new Set()
+      for (let i = 0; i < 9; i++) {
+        process.env.BOT_SWARM_I = String(i)
+        const players = i % 2 ? {} : { P: { username: 'P', entity: { position: pos(100 + i * 3, 64, -40 - i) } } }
+        const r = rig({ world, players: { ...players, Owner: { username: 'Owner', entity: { position: pos(0, 64, 0) } } } })
+        try {
+          r.bot.entity.position = pos(i, 64 + i, 0) // different own feet: the surface still reads 63
+          const line = r.ticker.setFlat({ radius: 4, by: 'P', explicit: true, cx: 100, cz: -40 })
+          assert.equal(line, `scanning 9x9 at 100,-40 (strip ${i + 1}/9)…`)
+          const f = r.ctx.flat
+          keys.add(`${f.cx},${f.cz},${f.r},${f.yTop}`)
+          await r.ticker.tick()
+          assert.equal(f.level, 63, `bot ${i} level`)
+          for (const h of f.holes) {
+            assert.ok(!holes.has(`${h.x},${h.z}`), `${h.x},${h.z} taken twice`)
+            holes.set(`${h.x},${h.z}`, i)
+          }
+        } finally { r.done() }
+      }
+      assert.deepEqual([...keys], ['100,-40,4,74'])
+      assert.equal(holes.size, 9, 'every hole owned by exactly one strip')
+    })
+
+    // tpd1 (ii)
+    it('a helper that cannot see the speaker accepts the explicit form only', () => {
+      const r = rig({})
+      try {
+        assert.match(r.ticker.setFlat({ radius: 16, by: 'Ghost' }), /can't see you/)
+        assert.ok(!r.ctx.flat)
+        assert.match(r.ticker.setFlat({ radius: 16, by: 'Ghost', explicit: true, cx: 5, cz: -7 }), /^scanning 33x33 at 5,-7 \(strip 4\/9\)/)
+        assert.equal(r.ctx.flat.cx, 5)
+        assert.equal(r.ctx.flat.cz, -7)
+      } finally { r.done() }
+    })
+
+    it('explicit re-flat inside the running square resumes', async () => {
+      const world = makeWorld({})
+      world.set(-1, 63, -38, 'air') // strip 4/9 of x -4..4
+      const r = rig({ world })
+      try {
+        r.ticker.setFlat({ radius: 4, by: 'P', explicit: true, cx: 0, cz: -40 })
+        await r.ticker.tick()
+        const f = r.ctx.flat
+        assert.match(r.ticker.setFlat({ radius: 4, by: 'P', explicit: true, cx: 1, cz: -39 }), /resuming flat/)
+        assert.equal(r.ctx.flat, f)
+      } finally { r.done() }
+    })
+
+    // tpd1 (iii): helpers are flat-only.
+    it('helper refuses follow/work orders and changes nothing', () => {
+      const r = rig({ players: { P: { username: 'P', entity: { position: pos(3, 64, 0) } } } })
+      try {
+        assert.equal(r.ticker.work(), 'swarm helper: flat only')
+        assert.equal(r.ctx.work, false)
+        assert.equal(r.ticker.setFollow('P'), 'swarm helper: flat only')
+        assert.equal(r.ticker.getFollowName(), '')
+        for (const msg of ['go work', 'free', 'follow me', 'build here', 'build castle', 'castle go']) {
+          r.bot.chats.length = 0
+          handleChat(r.bot, r.ticker, 'P', msg)
+          assert.deepEqual(r.bot.chats, ['swarm helper: flat only'], msg)
+        }
+        assert.equal(r.ctx.work, false)
+        assert.equal(r.ticker.getFollowName(), '')
+        assert.ok(!r.ctx.castle && !r.ctx.home)
+        handleChat(r.bot, r.ticker, 'P', 'stop')
+        assert.equal(r.ctx.paused, true, 'stop still works')
+      } finally { r.done() }
+    })
+
+    it('helper parks where its flat finished; the main bot does not', async () => {
+      for (const [i, parked] of [['3', true], ['0', false]]) {
+        process.env.BOT_SWARM_I = i
+        const r = rig({ players: { P: { username: 'P', entity: { position: pos(0, 64, 0) } } } })
+        try {
+          r.ticker.setFlat({ radius: 4, by: 'P', explicit: true, cx: 0, cz: 0 })
+          await r.ticker.tick() // flat world: nothing to do, finishes at once
+          assert.equal(r.ctx.flat, null, `I=${i} finished`)
+          assert.equal(!!r.ctx.paused, parked, `I=${i} parked`)
+          if (parked) assert.equal((await r.ticker.tick()).decision.action, 'idle')
+        } finally { r.done() }
+      }
+    })
+
+    it('main bot (I=0) still follows and works', () => {
+      process.env.BOT_SWARM_I = '0'
+      const r = rig({ players: { P: { username: 'P', entity: { position: pos(3, 64, 0) } } } })
+      try {
+        assert.equal(r.ticker.work(), undefined)
+        assert.equal(r.ctx.work, true)
+        assert.equal(r.ticker.setFollow('P'), undefined)
+        assert.equal(r.ticker.getFollowName(), 'P')
+      } finally { r.done() }
+    })
+
+    it('helper boot: no follow adoption, no work — parked', async () => {
+      const { EventEmitter } = require('node:events')
+      const { runOnce } = require('../src/index')
+      const bot = Object.assign(new EventEmitter(), mockBot(makeWorld({}), { registry: require('minecraft-data')('1.21.1'), players: { Owner: { username: 'Owner', entity: { position: pos(2, 64, 0) } } } }))
+      bot.loadPlugin = () => {}
+      bot.quit = (reason) => bot.emit('end', reason)
+      const done = runOnce({ host: 'x', port: 1, username: 'IdkBot', tickMs: 10, idleTickMs: 10, brain: mockBrain(), leaveAfterMs: 50, followName: '', createBot: () => bot, pingFn: async () => ({ players: { online: 0 } }) })
+      bot.emit('spawn')
+      const ctx = bot._tickerCtx
+      assert.equal(ctx.paused, true)
+      assert.equal(ctx.work, false)
+      assert.ok(!ctx.followName, 'sole player not adopted')
+      bot.players = {} // the owner leaves: the nobody-online quit ends runOnce
+      await done
+    })
+
+    // tpd1 (iv): a complete visible sample of swarm bots reads empty.
+    it('playersOccupied: swarm names never count in a visible sample', () => {
+      const { playersOccupied } = require('../src/index')
+      const ping = (names) => ({ players: { online: names.length, sample: names.map((name) => ({ name })) } })
+      assert.equal(playersOccupied(ping(['IdkSwarm3', 'IdkBot']), 'IdkSwarm3', true), false)
+      assert.equal(playersOccupied(ping(['IdkBot', 'IdkSwarm3']), 'IdkBot', true), false)
+      assert.equal(playersOccupied(ping(['IdkBot', 'IdkSwarm3', 'Owner']), 'IdkBot', true), true)
+      assert.equal(playersOccupied({ players: { online: 9 } }, 'IdkBot', true), true, 'hidden sample unchanged (accepted limit)')
+      assert.equal(playersOccupied({ players: { online: 9, sample: [{ name: 'IdkSwarm3' }] } }, 'IdkBot', true), true, 'partial sample: unlisted heads count')
     })
   })
 

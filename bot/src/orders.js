@@ -3,6 +3,7 @@
 // Player orders (idkcraft-6x7.1): mechanically moved from index.js — the
 // set*-API of the ticker object. Bodies are verbatim except the shared
 // closure lets, which go through the box (accessors owned by createTicker).
+const Vec3 = require('vec3')
 const { resolvePlayer } = require('./perception')
 const worker = require('./worker')
 const { findNearest, loadedSearchRadius, startFarSearch } = require('./behaviours/scout')
@@ -35,8 +36,23 @@ function clipStatus(line) {
 
 function createOrders(box) {
   const { bot, ctx, greet, clearStuck, resetNightStep, startWork, stopOnce, doSetBrain } = box
+  // tpd1: feet height over column (x,z) for an explicit flat anchor — the
+  // highest solid block walking down from our own y + SCAN_UP; unloaded or
+  // nothing within 64 below falls back to our own feet.
+  function surfaceFeet(x, z) {
+    const by = Math.floor(bot.entity && bot.entity.position ? bot.entity.position.y : 64)
+    try {
+      for (let y = by + flatMod.SCAN_UP; y >= by - 64; y--) {
+        const b = bot.blockAt(new Vec3(x, y, z))
+        if (!b) break
+        if (b.boundingBox === 'block') return y + 1
+      }
+    } catch (_) { /* unreadable world: own feet */ }
+    return by
+  }
   const orders = {
     setFollow: (name) => {
+      if (name && box.swarmHelper) return flatMod.SWARM_HELPER_LINE // tpd1: refused, nothing changes; stop ('') passes
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
@@ -58,7 +74,7 @@ function createOrders(box) {
       if (real) ctx.paused = false
     },
     // Work mode (epic rw4): autonomous goal steps until follow me / stop.
-    work: () => { startWork() },
+    work: () => startWork(), // a swarm helper's refusal line, else undefined
     // Home site (epic rw4.4): 'build here' and spawn adoption replace the
     // site. Fail counts reset with it — a new origin is a new plan — but
     // given-up cells ride a same-site swap (ipn.10, ybt mirror): a fresh
@@ -441,12 +457,15 @@ function createOrders(box) {
       if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
       return answer
     },
-    setFlat: ({ radius, by, explicit }) => {
+    setFlat: ({ radius, by, explicit, cx: atX, cz: atZ }) => {
+      // tpd1: flat <r> <x> <z> — the given column IS the anchor, so every
+      // swarm bot cuts the same square whoever sees the speaker.
+      const at = Number.isInteger(atX) && Number.isInteger(atZ)
       // Swarm (lhg2): a strip is only right on the speaker's square — a
       // bot that cannot see the speaker refuses instead of centring on itself.
       const tile = flatMod.swarmTile()
       const seen = by && worker.players(bot)[by]
-      if (tile && !(seen && seen.entity && seen.entity.position)) return `can't see you — come within 48 or /tp ${bot.username} ${by || 'you'}`
+      if (tile && !at && !(seen && seen.entity && seen.entity.position)) return `can't see you — come within 48 or /tp ${bot.username} ${by || 'you'}`
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
@@ -459,9 +478,9 @@ function createOrders(box) {
       const speakerEntry = by && worker.players(bot)[by]
       const speaker = speakerEntry && speakerEntry.entity
       const anchor = (speaker && speaker.position) || (bot.entity && bot.entity.position)
-      const cx = anchor ? Math.floor(anchor.x) : 0
-      const cz = anchor ? Math.floor(anchor.z) : 0
-      const yTop = Math.floor(anchor ? anchor.y : 64) + flatMod.SCAN_UP
+      const cx = at ? atX : (anchor ? Math.floor(anchor.x) : 0)
+      const cz = at ? atZ : (anchor ? Math.floor(anchor.z) : 0)
+      const yTop = (at ? surfaceFeet(cx, cz) : Math.floor(anchor ? anchor.y : 64)) + flatMod.SCAN_UP
       const f = ctx.flat
       // Any re-flat from inside the running square resumes with its
       // progress (9k4: a stepped-aside retype used to wipe the run); only
@@ -480,6 +499,7 @@ function createOrders(box) {
       ctx.resumeWork = false
       ctx.paused = false
       const size = 2 * radius + 1
+      if (at) return `scanning ${size}x${size} at ${cx},${cz}${tile ? ` (strip ${tile.i + 1}/${tile.n})` : ''}…`
       const hint = explicit ? '' : ' (flat 48 for a big field)'
       return `scanning ${size}x${size} for holes…${hint}`
     },

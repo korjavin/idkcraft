@@ -121,6 +121,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BOT_SWARM_N`: flat swarm size incl. `bot` (idkcraft-lhg2; empty = off, swarm1..8 idle; `9` = bot + all 8). `flat <r>` splits the square into N x-strips: bot = strip 0, swarmK = strip K (`BOT_SWARM_I`, pinned per service; never set on bot). bot2 does not split
   - `BOT_SWARM_PREFIX`: swarm bot names `<prefix>1..8` (default `IdkSwarm`; whitelist each OFFLINE uuid like `BOT_USERNAME`; must not collide with `BOT2_USERNAME`)
   - `BOT_SWARM_MEM_LIMIT`: per-swarm-bot RAM cap (default `400m`)
+    - Swarm use (idkcraft-tpd1): say `flat <r> <x> <z>` so every bot cuts the same square; helpers are flat-only (refuse follow/work, park after `flat done`). Helpers keep the server occupied on a hidden-sample ping — clear `BOT_SWARM_N` after the job
   - `BRIDGE_HOST`/`BRIDGE_PORT`/`BRIDGE_CONSOLE_PORT`: bridge addresses (defaults `body2`/`7778`/`7777`, pinned on bot2)
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)
   - `BRAIN_URL`: retired (idkcraft-vhlb.5) — ignored with a log line; the FSM decides every tick and the laya/JEV tick ask is gone (A/B vhlb.1: no gain). The laya sidecar left the stack in idkcraft-jlda.6 (default empty = stub); manual chat `brain laya|jev` still opts in

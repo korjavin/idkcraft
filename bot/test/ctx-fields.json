@@ -1327,6 +1327,7 @@
   },
   "paused": {
     "writers": [
+      "src/behaviours/flat.js",
       "src/chat.js",
       "src/index.js",
       "src/orders.js"

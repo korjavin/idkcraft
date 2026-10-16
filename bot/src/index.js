@@ -30,7 +30,7 @@ const worker = require('./worker')
 const fightMod = require('./behaviours/fight')
 const retreatMod = require('./behaviours/retreat')
 const bringMod = require('./behaviours/bring')
-require('./behaviours/flat') // ponytail: kept for load order only (the table moved to behaviours/index.js)
+const flatMod = require('./behaviours/flat') // load order + swarm helper flag (tpd1)
 const homeMod = require('./behaviours/home')
 const buildMod = require('./behaviours/build')
 const castleMod = require('./behaviours/castle')
@@ -102,6 +102,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // decide closure below, so 'brain jev' steers step choice too.
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, jumpCooldown: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, stuckState: 'MOVING', lastPos: null }
   ctx.greeter = greet // deliver greets arrivals through the same latch
+  // tpd1: env read once — a swarm helper never follows or works.
+  const swarmHelper = flatMod.swarmHelper()
   ctx.autonomous = !!autonomous
   ctx.manualBrain = null
   ctx.brainRestore = null
@@ -227,6 +229,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle') } catch (_) { /* lease best-effort */ }
   }
   function startWork() {
+    if (swarmHelper) return flatMod.SWARM_HELPER_LINE // tpd1: refused, nothing changes
     clearPendingSearch(ctx)
     clearStuck()
     resetNightStep()
@@ -1198,7 +1201,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     set followName(v) { followName = v },
     get brainEngine() { return brainEngine },
     set autonomousOverride(v) { autonomousOverride = v },
-    clearStuck, resetNightStep, startWork, stopOnce, doSetBrain,
+    clearStuck, resetNightStep, startWork, stopOnce, doSetBrain, swarmHelper,
   }
   const orders = createOrders(ordersBox)
 
@@ -1227,6 +1230,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     destroy,
     rearm,
     ...orders,
+    swarmHelper, // tpd1: chat refuses follow/work orders on a helper
   }
 }
 
@@ -1275,13 +1279,19 @@ function playersOccupied(res, username, selfConnected = false, workerOn = false)
   // counts (waitForPlayers' guard: leave() ran, but the bridge may have been
   // down at quit).
   const online = workerOn && p.online > 1 ? p.online - 1 : p.online
+  // tpd1: a complete visible sample decides by name — swarm helpers (and a
+  // stray worker) never count, so nine swarm bots alone read empty.
+  // ACCEPTED LIMIT: a hidden sample still counts them (no cheap correct
+  // rule) — clear BOT_SWARM_N after the job.
+  const real = (name) => name !== username && !worker.isWorker(name) && !worker.isSwarmBot(name)
+  const visible = pingSampleNames(res)
+  if (visible.length > 0 && visible.length >= p.online) return visible.some(real)
   if (online > 1) return true
   // online==1 with a visible sample: only our name means still empty — our
   // just-quit ghost off-server (the server has not processed our disconnect
   // yet while our local 'end' already fired), or ourselves on the
   // confirmLeave ping. Anyone else means occupied.
-  const sample = pingSampleNames(res)
-  if (sample.length > 0) return sample.some((name) => name !== username && !worker.isWorker(name))
+  if (visible.length > 0) return visible.some(real)
   // online==1 with no sample at all: a hidden-sample server
   // (hide-online-players empties it). While connected the one online is
   // us; off-server it is our ghost or one real player — joining is the
@@ -1455,7 +1465,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       // tests stay explicit about entering work mode. Exception: a far,
       // unseen start walks home first (see pre-arm below) — working a cave
       // 225 blocks from the player helps no one.
-      if (tickCtx && tickCtx.unseenTicks >= UNSEEN_HOME_TICKS && !followName) tickCtx.resumeWork = true
+      if (tickCtx && tickCtx.unseenTicks >= UNSEEN_HOME_TICKS && !followName && !flatMod.swarmHelper()) tickCtx.resumeWork = true
       // Disk memory (idkcraft-hlk): restore before adopting — a saved
       // home (e.g. an unfinished new site) wins over re-adopting the old
       // door near spawn. Adopt only when memory holds no home.
@@ -1465,7 +1475,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       if (tickCtx && ticker && typeof ticker.selectResidence === 'function') ticker.selectResidence()
       // idkcraft-p4s: follow survives the deploy — adopt the remembered (or
       // sole) target before the first decision, so work mode never starts.
-      if (tickCtx && ticker && !followName && typeof ticker.setFollow === 'function') {
+      if (tickCtx && ticker && !followName && !flatMod.swarmHelper() && typeof ticker.setFollow === 'function') {
         const adopted = startupFollow(bot, tickCtx.followName)
         if (adopted) ticker.setFollow(adopted)
       }
@@ -1474,7 +1484,9 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       const found = (!tickCtx || !tickCtx.home) ? goal.adoptHome(bot) : null
       if (found && ticker && typeof ticker.setHome === 'function') ticker.setHome(found)
       const followedNow = ticker && typeof ticker.getFollowName === 'function' && ticker.getFollowName()
-      if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName && !followedNow) ticker.work()
+      // tpd1: a swarm helper parks until a flat order (stand still, no homing walk).
+      if (flatMod.swarmHelper()) ticker.stop()
+      else if ((!tickCtx || (tickCtx.unseenTicks || 0) < UNSEEN_HOME_TICKS) && !followName && !followedNow) ticker.work()
       ticker.start()
     })
     bot.on('spawn', () => { metrics.events.inc({ event: 'spawn' }); metrics.online.set(1); fightMod.equipGear(bot); console.log(kitLine(bot)) })

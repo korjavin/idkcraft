@@ -300,6 +300,13 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   // Puppet sessions (idkcraft-jlw7): the only incoming-chat tag — session
   // review tells from=IdkTester apart from live players. No metric label.
   console.log(`chat from=${playerName} msg=${msg}`)
+  // tpd1: a swarm helper is flat-only — every order that would follow or
+  // work answers one line and changes nothing (startWork/setFollow refuse
+  // the internal paths too).
+  if (ticker && ticker.swarmHelper && /^(?:follow me|go work|free|build here|build castle|castle(?: go| repair| upgrade)?)$/.test(msg)) {
+    bot.chat(flatMod.SWARM_HELPER_LINE)
+    return
+  }
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(playerName)
     const seenEntry = worker.players(bot)[playerName]
@@ -472,10 +479,15 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     } else if (msg === 'find me' || msg.startsWith('find me ')) {
       bot.chat('try: find me iron')
     } else if (msg === 'flat' || msg.startsWith('flat ') || msg === 'make flat' || msg.startsWith('make flat ') || msg === 'flatten' || msg.startsWith('flatten ')) {
-      const m = msg.match(/^(?:flat|make flat|flatten)(?:\s+(\S+))?$/)
+      // tpd1: flat <r> [at] <x> <z> — an explicit anchor every swarm bot shares.
+      const m = msg.match(/^(?:flat|make flat|flatten)(?:\s+(\S+))?(?:\s+(?:at\s+)?(-?\d+)\s+(-?\d+))?$/)
       const r = m ? flatMod.parseRadius(m[1]) : null
       if (r == null) bot.chat('try: flat 16')
-      else if (ticker && typeof ticker.setFlat === 'function') bot.chat(ticker.setFlat({ radius: r, by: playerName, explicit: m[1] != null }))
+      else if (ticker && typeof ticker.setFlat === 'function') {
+        const order = { radius: r, by: playerName, explicit: m[1] != null }
+        if (m[2] != null) { order.cx = parseInt(m[2], 10); order.cz = parseInt(m[3], 10) }
+        bot.chat(ticker.setFlat(order))
+      }
     } else if (msg === 'share') {
       if (ticker && typeof ticker.setShare === 'function') {
         const r = ticker.setShare({ by: playerName })
