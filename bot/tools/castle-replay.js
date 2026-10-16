@@ -256,9 +256,12 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /, /^residence /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [] }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [], fetchEv: [], leg: null, lastWd: null }
 function resetSeen() {
   seen.regressAt = []
+  seen.fetchEv = []
+  seen.leg = null
+  seen.lastWd = null
   seen.shelterEps = 0
   seen.flips = 0
   seen.steps = {}
@@ -295,6 +298,14 @@ function classify(line, now = Date.now()) {
   if (line.startsWith('castle regress ')) { seen.regressAt.push(now); return } // g0z.56
   let m = /^goal step=(\S+) prev=(\S+)/.exec(line)
   if (m) {
+    if (seen.leg && m[2] === 'castlefetch' && m[1] !== 'castlefetch') { // neuc.62: leg cut by a goal switch
+      const why = /why=(\S+)/.exec(line)
+      const force = /force=(\S+)/.exec(line)
+      const by = force ? `force=${force[1]}` : seen.lastWd ? `watchdog:${seen.lastWd}` : (why ? why[1] : '?')
+      seen.fetchEv.push({ at: now, ev: 'cut', by })
+      seen.leg = null
+    }
+    seen.lastWd = null
     seen.step = m[1]
     if (seen.nightSteps) seen.nightSteps.add(m[1])
     if (m[1] === 'shelter' && m[2] !== 'shelter') seen.shelterEps++
@@ -316,12 +327,26 @@ function classify(line, now = Date.now()) {
     // top-list; the ordering is what matters).
     seen.fails[r] = (seen.fails[r] || 0) + 1
   }
+  // neuc.62: castlefetch leg start / finish (the cut is the goal-step branch above).
+  m = /^castlefetch \S+: need (\d+) more/.exec(line)
+  if (m) {
+    if (seen.leg) seen.fetchEv.push({ at: now, ev: 'cut', by: 'kind-switch' })
+    seen.fetchEv.push({ at: now, ev: 'start' })
+    seen.leg = true
+    return
+  }
+  if (/^castlefetch \S+: leg over \(/.test(line)) {
+    seen.fetchEv.push({ at: now, ev: 'finish' })
+    seen.leg = null
+    return
+  }
   // Watchdog resolutions (vmzq.21): every `goal watchdog` line is one
   // consumed round; choice=none is a failure path (error/stale/low-conf),
   // not an intervention — counted in calls, not in choices/first.
   m = /^goal watchdog .* choice=(\S+)/.exec(line)
   if (m) {
     seen.wdCalls++
+    seen.lastWd = m[1] !== 'none' ? m[1] : null
     if (m[1] !== 'none') {
       seen.wdChoices[m[1]] = (seen.wdChoices[m[1]] || 0) + 1
       if (!seen.wdFirstAt) seen.wdFirstAt = now
@@ -693,6 +718,37 @@ async function gameTime() {
   } catch (_) { return null }
 }
 
+// neuc.62: the one banked-stone loop (componentLine and fetchLine share it).
+// banked = positive stone deltas between consecutive castlefetch samples;
+// spanS/firstS count from the sample before the first gain; fetchS = all
+// castlefetch sample seconds; dead = [from, to] windows (wall s) of >= 120 s
+// without a gain.
+function bankedOf(series) {
+  let banked = 0
+  let spanS = 0
+  let firstS = null
+  let fetchS = 0
+  const dead = []
+  let w = null
+  const close = () => { if (w && w[1] - w[0] >= 120) dead.push(w); w = null }
+  for (let i = 1; i < series.length; i++) {
+    const a = series[i - 1]
+    const b = series[i]
+    if (b.step !== 'castlefetch' || typeof a.stone !== 'number' || typeof b.stone !== 'number') { close(); continue }
+    fetchS += b.t - a.t
+    const gain = Math.max(0, b.stone - a.stone)
+    if (gain > 0) close()
+    else if (w && w[1] === a.t) w[1] = b.t
+    else { close(); w = [a.t, b.t] }
+    if (firstS == null && gain > 0) firstS = a.t
+    if (firstS == null) continue
+    banked += gain
+    spanS += b.t - a.t
+  }
+  close()
+  return { banked, spanS, firstS, fetchS, dead }
+}
+
 // neuc.60: component verdict, pure (unit-tested). lay = castle cells laid
 // per game minute of the window; mine = stone (castle STONE_ITEMS) banked
 // in the pack per game minute of castlefetch time, counted from the sample
@@ -707,19 +763,7 @@ function componentLine(kind, { laid, gameMin, wallMin, series, tick, baseline })
     rate = gameMin > 0 ? laid / gameMin : null
     body = `laid=${laid} in ${gameMin.toFixed(1)} game-min`
   } else {
-    let banked = 0
-    let spanS = 0
-    let firstS = null
-    for (let i = 1; i < series.length; i++) {
-      const a = series[i - 1]
-      const b = series[i]
-      if (b.step !== 'castlefetch' || typeof a.stone !== 'number' || typeof b.stone !== 'number') continue
-      const gain = Math.max(0, b.stone - a.stone)
-      if (firstS == null && gain > 0) firstS = a.t
-      if (firstS == null) continue
-      banked += gain
-      spanS += b.t - a.t
-    }
+    const { banked, spanS, firstS } = bankedOf(series)
     const spanMin = spanS / 60 * ratio
     rate = spanMin > 0 ? banked / spanMin : null
     body = `banked=+${banked} in ${spanMin.toFixed(1)} game-min of castlefetch, first=${firstS == null ? '-' : `${Math.round(firstS * ratio)}s`}, window=${gameMin.toFixed(1)} game-min`
@@ -730,6 +774,27 @@ function componentLine(kind, { laid, gameMin, wallMin, series, tick, baseline })
     judge = `, baseline ${baseline.rate} -> ${rate.toFixed(1)} (${pct >= 0 ? '+' : ''}${pct}%, ${Math.abs(pct) <= 15 ? 'within' : 'OUTSIDE'} ±15%)`
   }
   return `${kind}-rate ${rate == null ? '-' : rate.toFixed(1)}/game-min: ${body}, tick=${tick}${judge}`
+}
+
+// neuc.62: fetch verdict, pure (unit-tested). events = classify's leg events
+// with t (wall s from window open); ticks = castlefetch decisions; mineBase =
+// the mine entry of component-baseline.json or null. Diagnosis only, no judge.
+function fetchLine({ series, events, ticks, ratio, mineBase }) {
+  const { banked, fetchS, dead } = bankedOf(series)
+  const starts = events.filter((e) => e.ev === 'start').length
+  if (!fetchS && !starts) return 'fetch: -'
+  const cuts = {}
+  let nCut = 0
+  for (const e of events) if (e.ev === 'cut') { cuts[e.by] = (cuts[e.by] || 0) + 1; nCut++ }
+  const fin = events.filter((e) => e.ev === 'finish').length
+  const per = banked > 0 ? (fetchS * ratio / banked).toFixed(1) : '-'
+  const comp = mineBase && mineBase.rate > 0 ? (60 / mineBase.rate).toFixed(1) : '-'
+  const by = Object.entries(cuts).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k}:${v}`).join(',') || 'none'
+  const far = Object.entries(cuts).filter(([k]) => /far/.test(k)).reduce((n, [, v]) => n + v, 0)
+  const min = (x) => Math.round(x / 60 * ratio)
+  const deadMin = Math.round(dead.reduce((n, w) => n + (w[1] - w[0]), 0) / 60 * ratio)
+  const ranges = dead.slice(0, 5).map((w) => `${min(w[0])}-${min(w[1])}`).join(',')
+  return `fetch: ticks=${ticks || 0} stone=+${banked} (${per} s/stone, component ${comp}) legs=${starts} finished=${fin} cut=${nCut} cut-by=${by} far=${far} dead=${deadMin}min${ranges ? ` (t=${ranges}${dead.length > 5 ? ',...' : ''})` : ''}`
 }
 
 async function rcon(cmd) {
@@ -2001,6 +2066,9 @@ async function main() {
     try { base = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'][COMPONENT] || null } catch (_) { base = null }
     compLine = componentLine(COMPONENT, { laid, gameMin, wallMin, series, tick: TICKRATE, baseline: base })
   }
+  let mineBase = null
+  try { mineBase = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'].mine || null } catch (_) { mineBase = null }
+  const fetchTxt = fetchLine({ series, events: seen.fetchEv.map((e) => ({ ...e, t: (e.at - t0) / 1000 })), ticks: seen.steps.castlefetch, ratio: wallMin > 0 ? gameMin / wallMin : 1, mineBase })
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },
@@ -2011,13 +2079,14 @@ async function main() {
     nights: night ? night.nights : undefined,
     seed: SEED || undefined, residence: resNights ? resNights.nights : undefined,
     seedVersion: SEED ? SEED_VERSION : undefined, upgrade: upgrade || undefined,
-    gameMin, wallMin, component: compLine || undefined,
+    gameMin, wallMin, component: compLine || undefined, fetch: fetchTxt,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
   }
   origLog(line)
   if (compLine) origLog(compLine)
+  origLog(fetchTxt)
   const idleV = idle ? idle.verdict(deaths - idleForced, resNights ? resNights.nights : []) : null
   if (idleV) origLog(idleV.line)
   try { logStream.end() } catch (_) { /* close best-effort */ }
@@ -2031,4 +2100,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { componentLine, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { componentLine, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }

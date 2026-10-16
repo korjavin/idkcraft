@@ -759,6 +759,26 @@ lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.2 -> 24.2
 mine-rate 15.5/game-min: banked=+120 in 7.7 game-min of castlefetch, first=135s, window=10.0 game-min, tick=1, baseline 15.8 -> 15.5 (-2%, within ±15%)
 ```
 
+### Fetch line (idkcraft-neuc.62)
+
+Every castle-rig run (the 90-min castle and the component rigs) also prints
+ONE diagnosis line, not judged, no exit-code effect:
+
+```
+fetch: ticks=3436 stone=+290 (11.9 s/stone, component 3.8) legs=12 finished=1 cut=11 cut-by=force=kit:4,watchdog:castlefetch-far:6,castle-word:1 far=6 dead=22min (t=15-24,47-55,65-70)
+```
+
+- `stone=` the banked rule of the mine component (one shared loop);
+  `s/stone` = castlefetch sample seconds (game time) / banked; `component`
+  = 60 / the mine baseline rate, `-` without a baseline.
+- `legs`/`finished`/`cut` from the bot's own `castlefetch <kind>: need`,
+  `leg over` and `goal step=<x> prev=castlefetch` lines; `cut-by` is
+  `force=<f>`, else `watchdog:<choice>` when the previous watchdog line
+  chose, else the goal line's `why=`. `far` = cuts whose reason names far.
+- `dead` = castlefetch samples with no stone gain for >= 120 s, in game
+  minutes from the window open (list capped at 5). `fetch: -` = no
+  castlefetch at all. Promote to a gate only when two runs show it stable.
+
 so a PR quotes `before -> after` per component straight from its two
 lines. Re-record a baseline (two master runs, each within ±15% of the
 `rate`; `npm test` enforces it) in the PR that moves it on purpose.
