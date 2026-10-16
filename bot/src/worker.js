@@ -91,7 +91,10 @@ function players(bot) {
 // Env read per call; swarm off = no-op. ponytail: the server ping count still
 // includes the bots (hidden sample), so they keep each other on like bot+bot2.
 function isSwarmBot(name, env = process.env) {
-  if (typeof name !== 'string' || !(parseInt(env.BOT_SWARM_N || '', 10) > 1)) return false
+  if (typeof name !== 'string') return false
+  // vewo.2: bot2 is a bot too — its flat lines are never orders, swarm or not.
+  if (env.BOT2_USERNAME && name === env.BOT2_USERNAME) return true
+  if (!(parseInt(env.BOT_SWARM_N || '', 10) > 1)) return false
   if (parseInt(env.BOT_SWARM_I || '0', 10) >= 1 && name === env.BOT_PEER_USERNAME) return true
   const p = env.BOT_SWARM_PREFIX || 'IdkSwarm'
   return name.startsWith(p) && /^([1-9]|[12]\d|3[0-2])$/.test(name.slice(p.length))

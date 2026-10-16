@@ -49,6 +49,8 @@ services:
       # python3 -c 'import uuid,hashlib;print(uuid.UUID(bytes=hashlib.md5(b"OfflinePlayer:IdkBot").digest(),version=3))'
       WHITELIST: ${WHITELIST:-3d1f4b94-9298-3ba3-af2d-3f73ce56138f}
       OPS: ${OPS:-}
+      # vewo.5: swarm (bot + bot2 + 32 helpers + worker + owners) exceeds itzg's 20.
+      MAX_PLAYERS: ${MC_MAX_PLAYERS:-40}
       DIFFICULTY: ${MC_DIFFICULTY:-easy}
       MOTD: idkcraft
       # World directory name (level-name). Default keeps the original world;
@@ -185,6 +187,11 @@ services:
       BOT_CASTLE_PEER: ${BOT_USERNAME:-IdkBot}
       # v1's name for ownerOnline (neuc.45); bot2's BOT_USERNAME is its own
       BOT_PEER_USERNAME: ${BOT_USERNAME:-IdkBot}
+      # vewo.2: swarm chat sieve (swarm lines are never orders). BOT_SWARM_I -1
+      # = no strip: bot2 does not split a flat (unset would mean strip 0).
+      BOT_SWARM_N: ${BOT_SWARM_N:-}
+      BOT_SWARM_PREFIX: ${BOT_SWARM_PREFIX:-IdkSwarm}
+      BOT_SWARM_I: "-1"
       BOT_FOLLOW: ${BOT_FOLLOW:-}
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
