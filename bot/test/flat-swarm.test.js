@@ -11,7 +11,7 @@ const OK = { status: 'ok', topY: 63, walkable: true, liquidTop: null }
 
 describe('flat swarm tiles', () => {
   it('N bots get disjoint strips covering the square', () => {
-    for (const n of [2, 3, 8, 9]) {
+    for (const n of [2, 3, 8, 9, 33]) {
       for (const r of [4, 8, 16, 48, 64]) {
         const cx = 100
         const cz = -40
@@ -32,7 +32,7 @@ describe('flat swarm tiles', () => {
           assert.equal(f.tops.length, (2 * r + 1) ** 2)
         }
         assert.equal(seen.size, (2 * r + 1) ** 2, `n=${n} r=${r} covers the square`)
-        for (let i = 0; i < n; i++) assert.ok([...seen.values()].includes(i), `n=${n} r=${r} strip ${i} non-empty`)
+        if (n <= 2 * r + 1) for (let i = 0; i < n; i++) assert.ok([...seen.values()].includes(i), `n=${n} r=${r} strip ${i} non-empty`)
       }
     }
   })
@@ -63,11 +63,14 @@ describe('flat swarm: helpers are never players', () => {
   it('swarm off = no-op', () => {
     assert.equal(isSwarmBot('IdkSwarm1', {}), false)
   })
-  it('swarm on drops <prefix>1..8 only', () => {
+  it('swarm on drops <prefix>1..32 only', () => {
     const env = { BOT_SWARM_N: '9' }
     assert.equal(isSwarmBot('IdkSwarm1', env), true)
     assert.equal(isSwarmBot('IdkSwarm8', env), true)
-    assert.equal(isSwarmBot('IdkSwarm9', env), false)
+    assert.equal(isSwarmBot('IdkSwarm32', env), true)
+    assert.equal(isSwarmBot('IdkSwarm33', env), false)
+    assert.equal(isSwarmBot('IdkSwarm0', env), false)
+    assert.equal(isSwarmBot('IdkSwarm9', env), true)
     assert.equal(isSwarmBot('IdkSwarm', env), false)
     assert.equal(isSwarmBot('Owner', env), false)
     assert.equal(isSwarmBot('Flat3', { ...env, BOT_SWARM_PREFIX: 'Flat' }), true)

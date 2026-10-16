@@ -248,10 +248,10 @@ services:
       options:
         max-size: "20m"
 
-  # Flat swarm (idkcraft-lhg2): 8 extra v1 (mineflayer) bots named
-  # <BOT_SWARM_PREFIX>1..8 (default IdkSwarm1..8) that split one `flat` square into BOT_SWARM_N strips
+  # Flat swarm (idkcraft-lhg2): 32 extra v1 (mineflayer) bots named
+  # <BOT_SWARM_PREFIX>1..32 (default IdkSwarm1..32) that split one `flat` square into BOT_SWARM_N strips
   # (bot = strip 0, swarmK = strip K). Off by default: swarm K idles (no
-  # join, ~40m RAM) unless K < BOT_SWARM_N — BOT_SWARM_N=9 turns all 8 on.
+  # join, ~40m RAM) unless K < BOT_SWARM_N — BOT_SWARM_N=33 turns all 32 on.
   # Each needs its OFFLINE uuid in WHITELIST (same as BOT_USERNAME). Own
   # memory file /app/memory/<name>.json on the shared volume. No planner
   # keys (stub brain), no worker, no follow.
@@ -332,6 +332,174 @@ services:
       <<: *swarm-env
       BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}8
       BOT_SWARM_I: "8"
+  swarm9:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}9
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}9
+      BOT_SWARM_I: "9"
+  swarm10:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}10
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}10
+      BOT_SWARM_I: "10"
+  swarm11:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}11
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}11
+      BOT_SWARM_I: "11"
+  swarm12:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}12
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}12
+      BOT_SWARM_I: "12"
+  swarm13:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}13
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}13
+      BOT_SWARM_I: "13"
+  swarm14:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}14
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}14
+      BOT_SWARM_I: "14"
+  swarm15:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}15
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}15
+      BOT_SWARM_I: "15"
+  swarm16:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}16
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}16
+      BOT_SWARM_I: "16"
+  swarm17:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}17
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}17
+      BOT_SWARM_I: "17"
+  swarm18:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}18
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}18
+      BOT_SWARM_I: "18"
+  swarm19:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}19
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}19
+      BOT_SWARM_I: "19"
+  swarm20:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}20
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}20
+      BOT_SWARM_I: "20"
+  swarm21:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}21
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}21
+      BOT_SWARM_I: "21"
+  swarm22:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}22
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}22
+      BOT_SWARM_I: "22"
+  swarm23:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}23
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}23
+      BOT_SWARM_I: "23"
+  swarm24:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}24
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}24
+      BOT_SWARM_I: "24"
+  swarm25:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}25
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}25
+      BOT_SWARM_I: "25"
+  swarm26:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}26
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}26
+      BOT_SWARM_I: "26"
+  swarm27:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}27
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}27
+      BOT_SWARM_I: "27"
+  swarm28:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}28
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}28
+      BOT_SWARM_I: "28"
+  swarm29:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}29
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}29
+      BOT_SWARM_I: "29"
+  swarm30:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}30
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}30
+      BOT_SWARM_I: "30"
+  swarm31:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}31
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}31
+      BOT_SWARM_I: "31"
+  swarm32:
+    <<: *swarm
+    container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}32
+    environment:
+      <<: *swarm-env
+      BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}32
+      BOT_SWARM_I: "32"
 # Host monitoring stack (korjavin/monitoring-compose): its vmagent
 # discovers containers labelled prometheus.scrape=true, but can only reach
 # them on a network it is attached to. Locally without that stack:
