@@ -988,7 +988,9 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     const LAID = { stone: 'cobblestone', planks: 'oak_planks', torch: 'torch', frame: 'oak_log' }
     for (const c of cells.slice(0, i)) if (LAID[c.kind]) set.set(`${c.x},${c.y},${c.z}`, LAID[c.kind])
     const bot = makeBot({ items: [{ name: 'oak_log', count: 10 }], set })
-    const ctx = { castle: castleState({ blueprintVersion: 2 }) }
+    // Committed to the planks cell (neuc.57 sticky pick): unpinned, the held
+    // logs would make the nearest frame beam the next cell instead.
+    const ctx = { castle: castleState({ blueprintVersion: 2 }), castleNearIdx: cells[i].idx }
     const d = fetch.demand(bot, ctx)
     assert.equal(d.kind, 'planks')
     assert.equal(ctx.castleWord.left, 4)
