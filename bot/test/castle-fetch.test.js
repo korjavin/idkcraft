@@ -1337,3 +1337,34 @@ describe('castlefetch quarry stance: no climb-out per column (vmzq.26)', () => {
     assert.ok(maxWalk <= 12, `walks stay inside the trench, longest ${maxWalk} steps`)
   })
 })
+
+describe('neuc.59: the stone target grows with the pick budget', () => {
+  // The v2 gate in castlefetch is process.env.BOT_BODY (the neuc.58
+  // precedent in vmzq20.test.js); restored after each case.
+  async function v2(fn) {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try { return await fn() } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  }
+  const pick = (used) => ({ name: 'stone_pickaxe', count: 1, maxDurability: 131, durabilityUsed: used })
+  const stoneShort = (items) => {
+    const bot = makeBot({ items })
+    const ctx = { castle: castleState() }
+    const d = fetch.demand(bot, ctx)
+    return { d, left: ctx.castleWord.left }
+  }
+  it('one worn pick caps the leg at 31; a full budget hauls the forecast', async () => {
+    await v2(async () => {
+      const one = stoneShort([pick(100)])
+      assert.equal(one.d.kind, 'stone')
+      assert.equal(one.d.short, 31)
+      const four = stoneShort([pick(0), pick(0), pick(0), pick(0)])
+      assert.equal(four.d.kind, 'stone')
+      assert.ok(four.d.short > one.d.short, `budget haul ${four.d.short} must beat one worn pick ${one.d.short}`)
+      assert.equal(four.d.short, four.left + castleMod.reserveOf('stone'), 'four fresh picks haul the whole forecast')
+    })
+  })
+})
