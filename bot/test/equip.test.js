@@ -3134,4 +3134,16 @@ describe('equip pick budget day-unreachable mark (idkcraft-zk7e)', () => {
     assert.equal(equip.pickBudgetDue(bot, ctx), false, 'unreadable second claim must not mask the marked walk')
     bot.restoreError()
   })
+
+  it('a usable nearby claim proceeds despite the mark', () => {
+    const bot = v2bot({
+      items: [worn(100), { name: 'stone_sword', count: 1 },
+        { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
+      blockAtImpl: (p) => ([1, 10].includes(Math.floor(p.x)) ? TABLE : null),
+    })
+    const ctx = castleCtx({ table: { x: 10, y: 64, z: 0 } }, { equip: { tablePos: { x: 1, y: 64, z: 0 } } })
+    ctx.equipTableUnreachable = { day: tablespot.dayOf(bot), x: 10, y: 64, z: 0 }
+    assert.equal(equip.pickBudgetDue(bot, ctx), true, 'ajoe recovery: the fresh roadside table wins')
+    bot.restoreError()
+  })
 })
