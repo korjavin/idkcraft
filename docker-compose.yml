@@ -249,7 +249,7 @@ services:
         max-size: "20m"
 
   # Flat swarm (idkcraft-lhg2): 32 extra v1 (mineflayer) bots named
-  # <BOT_SWARM_PREFIX>1..32 (default IdkSwarm1..8) that split one `flat` square into BOT_SWARM_N strips
+  # <BOT_SWARM_PREFIX>1..32 (default IdkSwarm1..32) that split one `flat` square into BOT_SWARM_N strips
   # (bot = strip 0, swarmK = strip K). Off by default: swarm K idles (no
   # join, ~40m RAM) unless K < BOT_SWARM_N — BOT_SWARM_N=33 turns all 32 on.
   # Each needs its OFFLINE uuid in WHITELIST (same as BOT_USERNAME). Own
