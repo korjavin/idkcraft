@@ -259,7 +259,10 @@ public final class Build {
             settings.blocksToDisallowBreaking.value = new ArrayList<>(disallow);
         }
         CellSchematic schematic = new CellSchematic(spec.cells, desired);
-        BlockPos origin = new BlockPos(spec.ox, spec.oy, spec.oz);
+        // Rebase by the bounds minimum (BuildPlan.rebasedOrigin): the
+        // schematic's (0,0,0) is the minimum cell, not the caller's origin.
+        int[] o = BuildPlan.rebasedOrigin(spec);
+        BlockPos origin = new BlockPos(o[0], o[1], o[2]);
         baritone.api.IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
         Map<Block, List<Block>> javaSubstitutes = new HashMap<>();
         for (Map.Entry<String, List<String>> e : substitutes.entrySet()) {

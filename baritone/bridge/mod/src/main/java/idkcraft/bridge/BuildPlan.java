@@ -232,6 +232,19 @@ final class BuildPlan {
         return n;
     }
 
+    /**
+     * World origin Baritone must build from: the schematic spans
+     * {@code [0,size)} with cell {@code (dx,dy,dz)} at schematic
+     * {@code (dx-minX,dy-minY,dz-minZ)} (BuilderProcess maps world to
+     * schematic as {@code pos - origin}), so the world origin is the
+     * caller's origin shifted by the bounds minimum — otherwise every
+     * negative-offset cell lands shifted and the counter never sees it.
+     */
+    static int[] rebasedOrigin(Spec spec) {
+        int[] b = boundsOf(spec.cells);
+        return new int[] {spec.ox + b[0], spec.oy + b[1], spec.oz + b[2]};
+    }
+
     private static int requiredInt(JsonObject params, String key) throws Rpc.RpcException {
         if (params == null || !params.has(key) || !params.get(key).isJsonPrimitive()
                 || !params.get(key).getAsJsonPrimitive().isNumber()) {

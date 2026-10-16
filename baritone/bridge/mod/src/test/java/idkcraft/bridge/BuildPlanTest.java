@@ -81,6 +81,19 @@ public class BuildPlanTest {
     }
 
     @Test
+    public void originRebasesByBoundsMinimum() throws Exception {
+        // The rig killer (send-back 1): schematic (0,0,0) is the minimum
+        // cell — without this rebase every negative-offset cell lands
+        // shifted, the counter reads 0, and the watchdog calls stall.
+        BuildPlan.Spec spec = BuildPlan.parse(params("[" + cell(-2, -1, 0, "oak_planks") + ","
+                + cell(3, 2, 5, "oak_planks") + "]"));
+        int[] o = BuildPlan.rebasedOrigin(spec);
+        assertEquals(98, o[0]);
+        assertEquals(63, o[1]);
+        assertEquals(-40, o[2]);
+    }
+
+    @Test
     public void boundsSpanTheOffsets() throws Exception {
         BuildPlan.Spec spec = BuildPlan.parse(params("[" + cell(-2, 0, 0, "oak_planks") + ","
                 + cell(3, 2, 5, "oak_planks") + "]"));
