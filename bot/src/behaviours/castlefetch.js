@@ -1455,18 +1455,20 @@ function digTick(bot, ctx, f, d) {
         if (m === 'mine-stopped') return
         // The worked cell is spent either way (depleted or unworkable):
         // skip it so the next pick advances the quarry instead of
-        // re-mining the same dead ground. Leash keeps its cell (the spot
-        // may be fine — the body ranged too far, which re-anchoring
-        // would only repeat).
-        if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall') && f.qTarget) {
+        // re-mining the same dead ground. A guard trip retires the stance
+        // too (it invited a site break — re-arming would eat the next
+        // site cell). Leash keeps its cell (the spot may be fine — the
+        // body ranged too far, which re-anchoring would only repeat).
+        if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall' || m === 'mine-guard') && f.qTarget) {
           try { (f.skip || (f.skip = new Set())).add(f.qTarget.k) } catch (_) { /* skip best-effort */ }
           f.qTarget = null
         }
         // Relocation: a below-target end that still broke ground re-arms
         // at the new stance (the body moved while gaining — fresh cache,
         // fresh lottery) instead of failing the leg. Bounded per leg;
-        // the last error finishes it. Leash stays terminal (re-anchoring
-        // would defeat the site guard), zero-gain ends fail below.
+        // the last error finishes it. Leash and guard stay terminal
+        // (re-anchoring would defeat the site guard), zero-gain ends
+        // fail below.
         const peak = err && typeof err.mineHave === 'number' ? err.mineHave : 0
         const reloc = f.mineReloc | 0
         if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall') && peak > (f.mineArmHave | 0) && reloc < 3) {
@@ -1476,7 +1478,7 @@ function digTick(bot, ctx, f, d) {
           return
         }
         if (m === 'mine-noPath' || m === 'mine-futile') finish(bot, ctx, 'failed:castlefetch-no-stone')
-        else if (m === 'mine-leash') finish(bot, ctx, 'failed:castlefetch-unreachable')
+        else if (m === 'mine-leash' || m === 'mine-guard') finish(bot, ctx, 'failed:castlefetch-unreachable')
         else finish(bot, ctx, 'failed:castlefetch-dig-stall')
       },
     )

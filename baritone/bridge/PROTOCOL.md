@@ -105,7 +105,8 @@ constructor; `handleMineEvent` first in the adapter's event router for
 
 End statuses on `baritone.event {kind:'mine', …}`: `done` (at/above target),
 `noPath` (the process gave up by itself), `guard` (a guarded cell broke →
-`mine-leash`), `futile` (live churn trip: no gains while the blacklist
+`mine-guard`, its own error so callers retire the stance instead of
+re-arming beside it like the body `mine-leash`), `futile` (live churn trip: no gains while the blacklist
 keeps growing → `mine-futile`, read by callers like no reachable
 targets). The trip rule lives in `Mine.futileTrip` (unit-tested).
 
@@ -128,7 +129,7 @@ Progress: `baritone.event
 and once on end (`status:'done'` when `have >= target`, `'guard'` when
 a guarded cell broke, else `'noPath'` — the process gave up by itself;
 a process that stays live without gaining is the Node stall, and the
-Node side maps `guard` to `mine-leash`). `baritone.status` reads a live
+Node side maps `guard` to `mine-guard`). `baritone.status` reads a live
 mine as pathing (the custom-goal probe counts it, so the stall
 watchdog never reads a live mine as idle). Settings ride the existing
 `#set` path with the verb: `mineScanDroppedItems true`, `legitMine

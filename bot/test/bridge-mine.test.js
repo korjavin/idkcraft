@@ -149,10 +149,10 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     await assert.rejects(p, /mine-leash/)
   })
 
-  it('a guard break ends mine-leash even at target', async () => {
+  it('a guard break ends mine-guard even at target', async () => {
     ({ transport, bot } = mineBot({ mineScript: 'guard' }))
     await bot.start({ pollMs: 0 })
-    await assert.rejects(bot.mine(['stone'], 4, { tickMs: 5 }), /mine-leash/)
+    await assert.rejects(bot.mine(['stone'], 4, { tickMs: 5 }), /mine-guard/)
   })
 
   it('cancelMine stops the body and rejects mine-stopped; stop() cancels a live mine', async () => {

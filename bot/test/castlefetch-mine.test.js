@@ -227,6 +227,31 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(mined, 1, 'cold quarry still arms in place after the wait')
   })
 
+  it('a guard trip retires the stance and fails unreachable, never re-arming', async () => {
+    const bot = mockBot({
+      pos: { x: 120.5, y: 64, z: 120.5 }, // on the stance, clear of the site: arms at once
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 5 }],
+      mineImpl: (b, calls) => async () => {
+        calls.mine.push({})
+        const e = new Error('mine-guard')
+        e.mineHave = 9 // broke ground, but the stance invited a site break
+        throw e
+      },
+    })
+    bot.blockAt = () => ({ name: 'stone', position: { x: 121, y: 64, z: 120 } })
+    const ctx = stoneCtx()
+    ctx.castleFetch.qTarget = { k: 'q9', x: 121, y: 64, z: 120, stance: { x: 120, y: 64, z: 120 } }
+    const leg = ctx.castleFetch // finish drops the leg: hold it for the retired-stance asserts
+    castlefetch.digTick(bot, ctx, leg, { kind: 'stone', word: 'batch', short: 8 })
+    await flush()
+    await flush()
+    assert.equal(bot.calls.mine.length, 1, 'no relocation re-arm after a guard trip')
+    assert.equal(leg.qTarget, null, 'the stance is retired')
+    assert.ok((leg.skip || new Set()).has('q9'), 'the stance key is skipped')
+    assert.equal(leg.mineReloc | 0, 0, 'relocation never counts a guard trip')
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-unreachable')
+  })
+
   it('relocation stops after three re-arms and fails with the last error', async () => {
     const bot = mockBot({
       items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 5 }],
