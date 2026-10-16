@@ -433,6 +433,67 @@ describe('fight behaviour', () => {
   })
 })
 
+// idkcraft-2pkm: a flying mob is never pursued (no tower / scaffold path).
+describe('airborne target (phantom) builds no column', () => {
+  // ground at y<=63, open air above; only the column under x=6 is probed.
+  const world = (bot, groundTop = 63) => {
+    bot.blockAt = (p) => ({ name: p.y <= groundTop ? 'stone' : 'air' })
+    return bot
+  }
+  const phantom = (x, y) => {
+    const m = mobEntity(9, 'phantom', x)
+    m.position.y = y
+    return m
+  }
+
+  it('phantom at y+6 over air: no mob goal, written off, shadows the player', () => {
+    const bot = world(mockBot())
+    const ctx = { lastGoalKey: '' }
+    const player = playerEntity(10)
+    const ph = phantom(2, 70)
+    for (let t = 0; t < 5; t++) fight(bot, ctx, player, { hostile: ph })
+    assert.equal(bot.calls.goals.filter((g) => g && g.entity === ph).length, 0)
+    assert.equal(ctx.fightGivenUpId, 9) // brain sees hostile_reachable=false
+    assert.equal(bot.calls.goals[bot.calls.goals.length - 1].entity, player)
+    assert.equal(bot.calls.attack, 0)
+  })
+
+  it('work mode (no player): drops a running pursuit goal at a mob that took off', () => {
+    const bot = world(mockBot())
+    const ph = phantom(2, 64)
+    const ctx = { lastGoalKey: '' }
+    fight(bot, ctx, null, { hostile: ph }) // grounded at y=64: pursued (ground mobs unchanged)
+    assert.equal(bot.calls.goals.filter((g) => g && g.entity === ph).length, 1)
+    bot.pathfinder.goal = bot.calls.goals[0]
+    ph.position.y = 70 // lifts off
+    fight(bot, ctx, null, { hostile: ph })
+    assert.equal(bot.calls.goals[bot.calls.goals.length - 1], null) // pursuit cleared
+    assert.equal(ctx.lastGoalKey, '')
+    assert.equal(bot.calls.goals.filter((g) => g && g.entity === ph).length, 1) // no new one
+  })
+
+  it('swooping into melee range still gets swung, no pursuit goal', () => {
+    const bot = world(mockBot(), 60)
+    const ctx = { lastGoalKey: '' }
+    fight(bot, ctx, playerEntity(10), { hostile: phantom(1, 66) })
+    assert.equal(bot.calls.attack, 1)
+  })
+
+  it('airborne(): ground/water within two cells is grounded; no blockAt reads grounded', () => {
+    const bot = world(mockBot())
+    assert.equal(fight.airborne(bot, phantom(0, 64)), false)
+    assert.equal(fight.airborne(bot, phantom(0, 65.4)), false)
+    assert.equal(fight.airborne(bot, phantom(0, 66)), true)
+    bot.blockAt = () => ({ name: 'water' })
+    assert.equal(fight.airborne(bot, phantom(0, 70)), false)
+    bot.blockAt = () => ({ name: 'cave_air' })
+    assert.equal(fight.airborne(bot, phantom(0, 70)), true)
+    bot.blockAt = () => null
+    assert.equal(fight.airborne(bot, phantom(0, 70)), false)
+    assert.equal(fight.airborne(mockBot(), phantom(0, 70)), false)
+  })
+})
+
 describe('stub fight end-to-end', () => {
   it('zombie at 4 blocks -> fight; zombie gone -> follow', async () => {
     const bot = mockBot()

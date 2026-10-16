@@ -597,7 +597,11 @@ describe('taking-fire retreat (0ay)', () => {
     // Mob at ~4.5 blocks: beyond the latch melee override (a written-off
     // mob in swing reach reports reachable) but inside the retreat menu
     // (<=6) and the under-fire gate (<=8) — the prod 11:50 shape.
-    const bot = fieldBot({ entities: { 1: zombie(1, 5, 64, 0) }, health })
+    // Field widened to x=5 so the mob stands on ground (2pkm: a mob over
+    // air reads airborne and fight writes it off without a pursuit).
+    const solids = new Set()
+    for (let x = -4; x <= 5; x++) for (let z = -4; z <= 4; z++) solids.add(key(x, 63, z))
+    const bot = fieldBot({ solids, entities: { 1: zombie(1, 5, 64, 0) }, health })
     bot.players = {}
     return bot
   }

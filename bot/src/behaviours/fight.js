@@ -1,9 +1,10 @@
 'use strict'
 
 const { goals } = require('mineflayer-pathfinder')
+const { Vec3 } = require('vec3')
 const { isFightTarget } = require('../perception')
 const follow = require('./follow')
-const { issueGoal } = require('./util')
+const { issueGoal, clearGoal } = require('./util')
 
 const SWING_RANGE = 3
 // ponytail: spaced retries + give-up. Re-issuing setGoal every brain tick
@@ -41,6 +42,21 @@ function fight(bot, ctx, target, state) {
   ctx.fightId = hostile.id
   const key = `fight:${hostile.id}`
   const inRange = bot.entity.position.distanceTo(hostile.position) <= SWING_RANGE
+  if (!inRange && airborne(bot, hostile)) {
+    // idkcraft-2pkm: never pursue a flying mob (phantom, bat, a rising
+    // blaze/vex). GoalFollow's isEnd is 3D, so the only path to a mob in
+    // open air is up: v1 1x1 towers / placed jump-up stairs, v2 Baritone
+    // allowPlace pillars — and the column stays in the landscape. Write it
+    // off like an unreachable mob (brain sees hostile_reachable=false);
+    // the melee reflex and the given-up branch still swing if it swoops
+    // into range. Drop our own pursuit goal: follow(null) in work mode
+    // leaves the dynamic goal driving.
+    if (ctx.lastGoalKey === key) clearGoal(bot, ctx)
+    ctx.fightGivenUpId = hostile.id
+    ctx.fightPursuit = 0
+    follow(bot, ctx, target, state)
+    return
+  }
   if (ctx.fightGivenUpId === hostile.id) {
     // Pursuit abandoned (the brain sees hostile_reachable=false and yields
     // to follow): shadow the player as the local safety net, swing if the
@@ -105,6 +121,26 @@ function stickyTarget(bot, ctx, target, fresh) {
   return prev
 }
 
+// Flying = no floor (any non-air block: ground, leaves, water) in the
+// FLOOR_CELLS cells under the mob's feet, i.e. not standing where a bot
+// on foot can stand within melee height of it. Unknown cells (no
+// blockAt, unloaded chunk) read as grounded: the old pursuit stands.
+// ponytail: a mob falling off a ledge reads flying for a tick and is
+// written off until the 30-tick re-probe; a grounded mob on a tall ledge
+// can still be towered to (old behaviour, not this bead).
+const FLOOR_CELLS = 2
+function airborne(bot, hostile) {
+  if (typeof bot.blockAt !== 'function') return false
+  const p = hostile.position
+  try {
+    for (let k = 1; k <= FLOOR_CELLS; k++) {
+      const b = bot.blockAt(new Vec3(Math.floor(p.x), Math.floor(p.y) - k, Math.floor(p.z)))
+      if (!b || !/(^|_)air$/.test(b.name || '')) return false
+    }
+  } catch (_) { return false }
+  return true
+}
+
 function swing(bot, hostile) {
   bot.lookAt(hostile.position.offset(0, hostile.height * 0.8, 0), true)
   bot.attack(hostile)
@@ -164,4 +200,5 @@ function equipGear(bot) {
 module.exports = fight
 module.exports.SWING_RANGE = SWING_RANGE
 module.exports.swing = swing
+module.exports.airborne = airborne
 module.exports.equipGear = equipGear
