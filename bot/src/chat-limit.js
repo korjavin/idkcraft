@@ -5,7 +5,10 @@
 // queue FIFO and flush at the drain rate. Queue past QUEUE_MAX drops the
 // oldest line, never the zchb `swarm flat ...` relay (delay is fine).
 // ponytail: one bucket per bot, constants not env; add a knob if a server
-// with a different throttle shows up.
+// with a different throttle shows up. Drains by wall clock = assumes 20 TPS:
+// under lag the server drains slower and the 40-point headroom covers only
+// ~40/(20-TPS) s of saturated flushing; drain by bot.time.age deltas if a
+// lagging server still kicks (a slower constant would queue 1 line/s too).
 const COST = 20
 const DRAIN_PER_MS = 20 / 1000
 const LIMIT = 160 // headroom under 200 for the server's own tick skew
