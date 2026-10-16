@@ -55,6 +55,7 @@ const HOLE_DEFERS = 4 // queue rotations before an unplaceable hole is skipped
 const OCC_DEFERS = 6 // rotations before an occupied cell is skipped
 const SUPPORT_DEPTH = 4 // support fills below one cap before deferring
 const SELF_OCC_LIMIT = 6 // sidesteps out of our own cap cell before skip
+const TRAVEL_REISSUE = 5 // idle travel ticks before the far-square goal is re-issued
 const SIDESTEPS = [[3, 0], [-3, 0], [0, 3], [0, -3]]
 const PROGRESS_MS = 120000 // progress chat cadence on the long job
 const FIRST_PROGRESS_MS = 25000 // first progress comes fast: 2 min of silence reads as broken
@@ -667,10 +668,38 @@ function inTile(f, x, z) {
   return !f.tile || stripOf(x, f.cx, f.r, f.tile.n) === f.tile.i
 }
 
-function startEpisode(cx, cz, r, yTop, by, tile = null) {
+// zchb: the surface level under a standing player = the block their feet
+// rest on (a slab top at y+0.5 reads as that slab's block).
+function feetLevel(pos) {
+  return Math.floor(pos.y - 0.01)
+}
+
+// zchb: the main bot (strip 0) relays the ONE resolved square to its helpers
+// in chat; `level mode` = no fixed level, every bot votes the same square.
+function relayLine(f) {
+  return `swarm flat ${f.r} ${f.cx} ${f.cz} y${f.yTop - SCAN_UP} level ${f.fixedLevel == null ? 'mode' : f.fixedLevel} by ${f.by}`
+}
+function parseRelay(msg) {
+  const m = /^swarm flat (\d+) (-?\d+) (-?\d+) y(-?\d+) level (-?\d+|mode) by (\S+)$/.exec(String(msg).trim())
+  if (!m) return null
+  const radius = parseRadius(m[1])
+  if (radius == null) return null
+  return { radius, cx: +m[2], cz: +m[3], feet: +m[4], level: m[5] === 'mode' ? null : +m[5], by: m[6] }
+}
+
+// The anchor column and the square's corners are loaded for this bot (a
+// far bot would vote the level on a partial square, review 01 tpd1).
+function squareLoaded(bot, cx, cz, r, y) {
+  try {
+    return [[0, 0], [r, r], [r, -r], [-r, r], [-r, -r]].every(([dx, dz]) => bot.blockAt(new Vec3(cx + dx, y, cz + dz)) != null)
+  } catch (_) { return false }
+}
+
+function startEpisode(cx, cz, r, yTop, by, tile = null, level = null) {
   return {
     key: `${cx},${cz},${r}`,
     cx, cz, r, by: by || 'you', tile,
+    fixedLevel: level, // zchb: speaker feet level; null = mode vote
     yTop, yBottom: yTop - SCAN_DOWN,
     phase: 'scan',
     scan: { queue: spiralColumns(cx, cz, r), i: 0 },
@@ -700,6 +729,7 @@ function startEpisode(cx, cz, r, yTop, by, tile = null) {
     lastChat: 0,
     progressChats: 0,
     dig: null,
+    travelIdle: 0,
   }
 }
 
@@ -809,7 +839,7 @@ function scanTick(bot, ctx, f) {
   }
   f.lastProgressTick = f.ticks
   if (t.i < t.queue.length) return
-  const level = chooseLevel(f.tops)
+  const level = f.fixedLevel != null ? f.fixedLevel : chooseLevel(f.tops)
   if (level == null) {
     finish(bot, ctx, f, 'no ground found')
     return
@@ -1603,6 +1633,21 @@ function shaveTick(bot, ctx, f, bp) {
   digFlight(bot, ctx, f, h, block)
 }
 
+// zchb: a relayed square this bot cannot see yet — walk there (long walk
+// ok) until its chunks load, then scan. setGoal resets the path, so a goal
+// is re-issued only after TRAVEL_REISSUE idle ticks (pathing a far goal
+// thinks across ticks; re-issuing every tick would never finish).
+function travelTick(bot, ctx, f) {
+  const key = `flat:travel:${f.cx},${f.cz}`
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* idle */ }
+  if (key === ctx.lastGoalKey && (moving || ++f.travelIdle < TRAVEL_REISSUE)) return
+  if (key !== ctx.lastGoalKey) console.log(`flat travel anchor=${f.cx},${f.cz} r=${f.r}`)
+  f.travelIdle = 0
+  try { bot.pathfinder.setGoal(new goals.GoalNearXZ(f.cx, f.cz, f.r), false) } catch (_) { return }
+  ctx.lastGoalKey = key
+}
+
 function flat(bot, ctx, target, state) {
   const f = ctx.flat
   if (!f) return
@@ -1613,7 +1658,10 @@ function flat(bot, ctx, target, state) {
   if (ctx.placeInFlight || ctx.digInFlight) return
   guardFlatSurface(bot, ctx)
   if (f.phase === 'scan') {
-    scanTick(bot, ctx, f)
+    // Inside the square: scan now, unloaded columns are reported as today.
+    const away = Math.hypot(bp.x - f.cx, bp.z - f.cz) > f.r + 1
+    if (away && !squareLoaded(bot, f.cx, f.cz, f.r, f.yTop)) travelTick(bot, ctx, f)
+    else scanTick(bot, ctx, f)
     return
   }
   if (f.phase === 'dig') {
@@ -1690,6 +1738,10 @@ module.exports.SELF_OCC_LIMIT = SELF_OCC_LIMIT
 module.exports.findRef = findRef
 module.exports.parseRadius = parseRadius
 module.exports.startEpisode = startEpisode
+module.exports.feetLevel = feetLevel
+module.exports.relayLine = relayLine
+module.exports.parseRelay = parseRelay
+module.exports.squareLoaded = squareLoaded
 module.exports.progressChat = progressChat
 module.exports.FIRST_PROGRESS_MS = FIRST_PROGRESS_MS
 module.exports.FIRST_PROGRESS_N = FIRST_PROGRESS_N

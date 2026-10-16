@@ -50,13 +50,8 @@ function createOrders(box) {
     } catch (_) { return null }
     return by
   }
-  // The anchor column and the square's corners are loaded for this bot (a
-  // far bot would vote the level on a partial square, review 01).
   function squareLoaded(cx, cz, r) {
-    const by = Math.floor(bot.entity && bot.entity.position ? bot.entity.position.y : 64)
-    try {
-      return [[r, r], [r, -r], [-r, r], [-r, -r]].every(([dx, dz]) => bot.blockAt(new Vec3(cx + dx, by, cz + dz)) != null)
-    } catch (_) { return false }
+    return flatMod.squareLoaded(bot, cx, cz, r, Math.floor(bot.entity && bot.entity.position ? bot.entity.position.y : 64))
   }
   const orders = {
     setFollow: (name) => {
@@ -465,17 +460,20 @@ function createOrders(box) {
       if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
       return answer
     },
-    setFlat: ({ radius, by, explicit, cx: atX, cz: atZ }) => {
+    setFlat: ({ radius, by, explicit, cx: atX, cz: atZ, relay, feet: relayFeet, level: relayLevel }) => {
       // tpd1: flat <r> <x> <z> — the given column IS the anchor, so every
       // swarm bot cuts the same square whoever sees the speaker.
       const at = Number.isInteger(atX) && Number.isInteger(atZ)
+      // zchb: a helper takes the main bot's relayed square verbatim — no
+      // sight checks; a far helper walks there (flat travel phase).
+      const tile = flatMod.swarmTile()
+      const speakerEntry = by && worker.players(bot)[by]
+      const speaker = speakerEntry && speakerEntry.entity && speakerEntry.entity.position ? speakerEntry.entity : null
       // Swarm (lhg2): a strip is only right on the speaker's square — a
       // bot that cannot see the speaker refuses instead of centring on itself.
-      const tile = flatMod.swarmTile()
-      const seen = by && worker.players(bot)[by]
-      if (tile && !at && !(seen && seen.entity && seen.entity.position)) return `can't see you — come within 48 or /tp ${bot.username} ${by || 'you'}`
-      const atFeet = at ? surfaceFeet(atX, atZ) : null
-      if (at && (atFeet == null || !squareLoaded(atX, atZ, radius))) return `too far to see ${atX},${atZ} — come closer or /tp ${bot.username} ${by || 'you'}`
+      if (!relay && tile && !at && !speaker) return `can't see you — come within 48 or /tp ${bot.username} ${by || 'you'}`
+      const atFeet = at && !relay ? surfaceFeet(atX, atZ) : null
+      if (at && !relay && (atFeet == null || !squareLoaded(atX, atZ, radius))) return `too far to see ${atX},${atZ} — come closer or /tp ${bot.username} ${by || 'you'}`
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
@@ -485,13 +483,18 @@ function createOrders(box) {
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
       // Center: the player who gave the command, or the bot itself when the
       // speaker is out of tracking range (same honest fallback as build here).
-      const speakerEntry = by && worker.players(bot)[by]
-      const speaker = speakerEntry && speakerEntry.entity
+      // zchb: level = the speaker's feet level at command time, fixed for
+      // the whole job (no speaker in sight: the walkable-height mode).
       const anchor = (speaker && speaker.position) || (bot.entity && bot.entity.position)
+      const level = relay ? relayLevel : (speaker ? flatMod.feetLevel(speaker.position) : null)
       const cx = at ? atX : (anchor ? Math.floor(anchor.x) : 0)
       const cz = at ? atZ : (anchor ? Math.floor(anchor.z) : 0)
-      const yTop = (at ? atFeet : Math.floor(anchor ? anchor.y : 64)) + flatMod.SCAN_UP
+      const feet = level != null ? level + 1 : (relay ? relayFeet : (at ? atFeet : Math.floor(anchor ? anchor.y : 64)))
+      const yTop = feet + flatMod.SCAN_UP
       const f = ctx.flat
+      // zchb: the main bot (strip 0) relays the one square it resolved —
+      // started or resumed — and every helper adopts exactly that.
+      const announce = (ep) => { if (tile && tile.i === 0) bot.chat(flatMod.relayLine(ep)) }
       // Any re-flat from inside the running square resumes with its
       // progress (9k4: a stepped-aside retype used to wipe the run); only
       // a new area or an explicit new radius starts over. Bare `flat`
@@ -501,15 +504,18 @@ function createOrders(box) {
       const inside = f && (at ? cx === f.cx && cz === f.cz
         : Math.abs(cx - f.cx) <= f.r && Math.abs(cz - f.cz) <= f.r)
       if (f && inside && (!explicit || radius === f.r)) {
-        f.by = by || f.by
+        if (!relay) f.by = by || f.by
         f.parked = false
         ctx.paused = false
+        announce(f)
         return flatMod.resumeLine(f)
       }
-      ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you', tile)
+      ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you', tile, level)
       ctx.unseenTicks = 0
       ctx.resumeWork = false
       ctx.paused = false
+      announce(ctx.flat)
+      console.log(`flat order anchor=${cx},${cz} r=${radius} level=${level == null ? 'mode' : level}${relay ? ' relay' : ''}`)
       const size = 2 * radius + 1
       if (at) return `scanning ${size}x${size} at ${cx},${cz}${tile ? ` (strip ${tile.i + 1}/${tile.n})` : ''}…`
       const hint = explicit ? '' : ' (flat 48 for a big field)'
