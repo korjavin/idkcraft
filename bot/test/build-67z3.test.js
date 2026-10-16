@@ -388,11 +388,74 @@ describe('neuc.32: homeless under cover', () => {
     assert.ok(Math.hypot(s.x, s.z) <= 31, JSON.stringify(s))
   })
 
-  it('v2 deep underground still refuses (rock at the scan top is not sky)', () => {
+  it('v2 deep underground founds nothing (rock at the scan top is not sky), walks to open sky instead (neuc.35)', () => {
     const bot = mockBot(makeWorld(), { spawn: null, at: pos(0, 40, 0) })
+    const set = []
+    bot.pathfinder.setGoal = (g) => set.push(g)
+    const ctx = {}
+    const lines = withBody('baritone', () => logged(() => build(bot, ctx)))
+    assert.equal(ctx.home, null, 'no site founded on the rock above')
+    assert.notEqual(ctx.stepStatus, 'failed:no-site', 'walking, not failing')
+    assert.equal(set.length, 1)
+    const g = set[0]
+    assert.deepEqual([g.x, g.y, g.z], [0, 64, 0], 'the surface straight above')
+    assert.ok(lines.includes('build no-site: walking to open sky at 0 64 0'), lines.join('\n'))
+    // On arrival at the surface the scan finds the site.
+    bot.entity.position = pos(0.5, 64, 0.5)
+    withBody('baritone', () => logged(() => build(bot, ctx)))
+    assert.ok(ctx.home && ctx.home.site, 'site founded at the surface')
+    assert.equal(ctx.home.site.y, 64)
+    assert.equal(ctx.buildSiteWalk, null)
+  })
+
+  it('v1 deep underground still fails no-site without a walk (neuc.35 is v2-only)', () => {
+    const bot = mockBot(makeWorld(), { spawn: null, at: pos(0, 40, 0) })
+    const set = []
+    bot.pathfinder.setGoal = (g) => set.push(g)
+    const ctx = {}
+    withBody(null, () => logged(() => build(bot, ctx)))
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+    assert.equal(set.length, 0)
+  })
+
+  it('v2 sky walk that stops getting anywhere fails no-site (neuc.35)', () => {
+    const bot = mockBot(makeWorld(), { spawn: null, at: pos(0, 40, 0) })
+    const ctx = {}
+    withBody('baritone', () => logged(() => {
+      for (let i = 0; i <= build.CELL_TICK_BUDGET && ctx.stepStatus !== 'failed:no-site'; i++) build(bot, ctx)
+    }))
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+  })
+
+  it('v2 at the surface with no flat ground anywhere fails no-site without a walk (neuc.35)', () => {
+    // Checkerboard relief everywhere: no site fits, the sky cell is the
+    // body's own column.
+    const world = makeWorld()
+    for (let x = -80; x <= 80; x++) for (let z = -80; z <= 80; z++) if ((x + z) % 2 === 0) { world.set(x, 64, z, 'dirt'); world.set(x, 65, z, 'dirt') }
+    const bot = mockBot(world, { spawn: null, at: pos(1.5, 64, 0.5) })
+    const set = []
+    bot.pathfinder.setGoal = (g) => set.push(g)
     const ctx = {}
     withBody('baritone', () => logged(() => build(bot, ctx)))
     assert.equal(ctx.stepStatus, 'failed:no-site')
+    assert.equal(set.length, 0)
+  })
+
+  it('v2 no-site hold releases when the wide sky ring validates (neuc.35)', () => {
+    // Deep in a cave: no spawn site, the hold stands; the body surfaces
+    // inside REFAIL_DIST (same column) and the sky probe releases it.
+    const bot = mockBot(makeWorld(), { spawn: null, at: pos(0, 40, 0) })
+    const ctx = { stepFail: { build: { status: 'failed:no-site', text: 't', pos: { x: 0, y: 40, z: 0 }, at: Date.now(), sig: 'site=none', n: 2 } } }
+    withBody('baritone', () => {
+      assert.equal(goal.failHolds(ctx, 'build', 't', bot), true, 'cave: hold stands')
+      bot.entity.position = pos(0.5, 64, 0.5)
+      delete ctx.skySiteProbe // the cached cave verdict ages out
+      assert.equal(goal.failHolds(ctx, 'build', 't', bot), false, 'surface: hold releases')
+    })
+    withBody(null, () => {
+      delete ctx.skySiteProbe
+      assert.equal(goal.failHolds(ctx, 'build', 't', bot), true, 'v1: spawn-only probe, hold stands')
+    })
   })
 
   it('skyOpen refuses a footprint under a leaf canopy', () => {
@@ -410,12 +473,24 @@ describe('neuc.32: homeless under cover', () => {
 
   it('v2 under a flat leaf canopy never founds on the canopy top (revmux 01)', () => {
     // Forest floor feet 64 under a dark-oak-style leaf layer at 69 over
-    // x/z -40..40: every site in range would sit on leaves.
+    // x/z -70..70: every site in range would sit on leaves.
+    const world = makeWorld()
+    for (let x = -70; x <= 70; x++) for (let z = -70; z <= 70; z++) world.set(x, 69, z, 'dark_oak_leaves')
+    const bot = mockBot(world, { spawn: null, at: pos(0, 64, 0) })
+    const ctx = {}
+    withBody('baritone', () => logged(() => build(bot, ctx)))
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+  })
+
+  it('v2 under a canopy wider than 30 founds past its edge on the far rings (neuc.35)', () => {
     const world = makeWorld()
     for (let x = -40; x <= 40; x++) for (let z = -40; z <= 40; z++) world.set(x, 69, z, 'dark_oak_leaves')
     const bot = mockBot(world, { spawn: null, at: pos(0, 64, 0) })
     const ctx = {}
     withBody('baritone', () => logged(() => build(bot, ctx)))
-    assert.equal(ctx.stepStatus, 'failed:no-site')
+    assert.ok(ctx.home && ctx.home.site, 'site founded')
+    const s = ctx.home.site
+    assert.equal(s.y, 64)
+    assert.ok(s.x > 40 || s.x + 6 < -40 || s.z > 40 || s.z + 5 < -40, JSON.stringify(s))
   })
 })

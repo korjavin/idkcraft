@@ -154,17 +154,55 @@ function skyOpen(bot, home, topY) {
 // Homeless bot under cover (neuc.32: prod v2 sat under a lake bed at
 // 44,58,-20, every scan at the body read water and the shore site was 3
 // above the feet): the nearest open-sky site on rings around the body —
-// the body itself, then anchors 12 and 24 out (sites up to ~30 away).
-// ponytail: up to 17 siteFor scans per call; the no-site hold paces calls.
+// the body itself, then anchors 12..64 out (neuc.35: 36/48/64 added for a
+// canopy or relief with no open site within ~30). Unloaded footprints
+// refuse, so the far rings only find what the client has loaded.
+// ponytail: up to 41 siteFor scans per call; build calls it only while
+// homeless, the goal.js hold probe caches it (SKY_PROBE_MS).
+const SKY_RINGS = [12, 24, 36, 48, 64]
 function skySiteNear(bot, p) {
   if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') return null
   const accept = (home, topY) => skyOpen(bot, home, topY)
   const near = siteFor(bot, p, accept)
   if (near) return near
-  for (const k of [2, 4]) {
+  for (const r of SKY_RINGS) {
     for (const [dx, dz] of SITE_DIRS) {
-      const s = siteFor(bot, { x: p.x + dx * k, y: p.y, z: p.z + dz * k }, accept)
+      const s = siteFor(bot, { x: p.x + dx * r / 6, y: p.y, z: p.z + dz * r / 6 }, accept)
       if (s) return s
+    }
+  }
+  return null
+}
+
+// Nearest open-sky standable cell (neuc.35): the target of the build
+// no-site walk when the body is deep in a cave (siteFor scans only 8
+// above the feet, so the surface is out of its reach). Columns on rings
+// 0..64 around the body read from SKY_SCAN_UP above the feet down to 24
+// below: the top cell must be air (inside a mountain the sky is unknown),
+// the first non-air non-flora block is the surface; liquid, built or
+// tree-top surfaces and unloaded columns refuse. Null when none.
+const SKY_SCAN_UP = 48
+const SKY_CELL_RINGS = [0, 8, 16, 24, 32, 48, 64]
+function skyCellNear(bot, p) {
+  if (!p || typeof p.x !== 'number' || typeof p.z !== 'number' || typeof p.y !== 'number') return null
+  const top = Math.floor(p.y) + SKY_SCAN_UP
+  const column = (x, z) => {
+    for (let y = top; y > Math.floor(p.y) - 24; y--) {
+      let b = null
+      try { b = bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null }
+      if (!b || !b.name) return null
+      if (b.name === 'air' || CLEAR_FLORA.has(b.name)) continue
+      if (y === top) return null
+      if (b.name === 'water' || b.name === 'lava' || b.name === 'bubble_column') return null
+      if (BUILT_GROUND.test(b.name) || TREE_TOP.test(b.name)) return null
+      return { x, y: y + 1, z }
+    }
+    return null
+  }
+  for (const r of SKY_CELL_RINGS) {
+    for (const [dx, dz] of r === 0 ? [[0, 0]] : SITE_DIRS) {
+      const c = column(Math.floor(p.x + dx * r / 6), Math.floor(p.z + dz * r / 6))
+      if (c) return c
     }
   }
   return null
@@ -222,4 +260,4 @@ function timeWord(bot) {
   return timeOfDay < 12000 ? 'day' : timeOfDay <= 13000 ? 'dusk' : 'night'
 }
 
-module.exports = { needPlanks, makeHome, groundY, BUILT_GROUND, SITE_DIRS, siteFor, skyOpen, skySiteNear, isV2House, timeWord }
+module.exports = { needPlanks, makeHome, groundY, BUILT_GROUND, SITE_DIRS, siteFor, skyOpen, skySiteNear, skyCellNear, isV2House, timeWord }

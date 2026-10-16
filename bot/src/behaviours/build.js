@@ -690,7 +690,7 @@ function wedgeLatched(ctx, p, idx) {
   } catch (_) { return false }
 }
 
-function walkToSite(bot, ctx, p) {
+function walkToSite(bot, ctx, p, goal, reason) {
   const bp = bot.entity && bot.entity.position
   if (!bp || typeof bp.x !== 'number') return
   const w = ctx.buildSiteWalk
@@ -699,7 +699,7 @@ function walkToSite(bot, ctx, p) {
   } else if (++w.ticks >= CELL_TICK_BUDGET) {
     ctx.buildSiteWalk = null
     ctx.buildGoalIdx = -1
-    failBuild(ctx, 'cannot-reach-site')
+    failBuild(ctx, reason || 'cannot-reach-site')
     return
   }
   let moving = false
@@ -708,7 +708,28 @@ function walkToSite(bot, ctx, p) {
   // each re-plan from the new stand gets further.
   if (ctx.buildGoalIdx === 'site' && moving) return
   ctx.buildGoalIdx = 'site'
-  try { bot.pathfinder.setGoal(new goals.GoalNearXZ(p.x, p.z, PLACE_RANGE)) } catch (_) { /* retry next tick */ }
+  try { bot.pathfinder.setGoal(goal || new goals.GoalNearXZ(p.x, p.z, PLACE_RANGE)) } catch (_) { /* retry next tick */ }
+}
+
+// No-site walk (neuc.35, v2): homeless deep in a cave, every scan reads
+// the rock above as ground, so walk toward the nearest open-sky cell and
+// re-scan from there (skySiteNear runs every homeless tick). Ends on its
+// own: at the surface the nearest sky cell is the body's own column. A
+// walk that stops getting anywhere (walkToSite's budget) fails no-site.
+// False when there is nowhere to walk — the caller fails no-site.
+const SKY_ARRIVE = 3
+function skyWalk(bot, ctx) {
+  const bp = bot.entity && bot.entity.position
+  if (!bp || typeof bp.x !== 'number') return false
+  let c = null
+  try { c = require('../site').skyCellNear(bot, bp) } catch (_) { c = null }
+  if (!c || Math.hypot(c.x + 0.5 - bp.x, c.y - bp.y, c.z + 0.5 - bp.z) <= SKY_ARRIVE) {
+    ctx.buildSiteWalk = null
+    return false
+  }
+  if (!ctx.buildSiteWalk) console.log(`build no-site: walking to open sky at ${c.x} ${c.y} ${c.z}`)
+  walkToSite(bot, ctx, c, new goals.GoalNear(c.x, c.y, c.z, 2), 'no-site')
+  return true
 }
 
 function build(bot, ctx, target, state) {
@@ -744,9 +765,12 @@ function build(bot, ctx, target, state) {
     // stall clock sees the failure. The next attempt validates once
     // chunks load.
     if (!ctx.home) {
+      if (process.env.BOT_BODY === 'baritone' && skyWalk(bot, ctx)) return
       failBuild(ctx, 'no-site')
       return
     }
+    ctx.buildSiteWalk = null
+    ctx.buildGoalIdx = -1
     ctx.buildSkip = []
     ctx.buildSkipAt = {}
     ctx.buildSkipRetry = null
