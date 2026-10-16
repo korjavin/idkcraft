@@ -42,18 +42,22 @@ function fight(bot, ctx, target, state) {
   ctx.fightId = hostile.id
   const key = `fight:${hostile.id}`
   const inRange = bot.entity.position.distanceTo(hostile.position) <= SWING_RANGE
-  if (!inRange && airborne(bot, hostile)) {
+  if (airborne(bot, hostile)) {
     // idkcraft-2pkm: never pursue a flying mob (phantom, bat, a rising
-    // blaze/vex). GoalFollow's isEnd is 3D, so the only path to a mob in
-    // open air is up: v1 1x1 towers / placed jump-up stairs, v2 Baritone
-    // allowPlace pillars — and the column stays in the landscape. Write it
-    // off like an unreachable mob (brain sees hostile_reachable=false);
-    // the melee reflex and the given-up branch still swing if it swoops
-    // into range. Drop our own pursuit goal: follow(null) in work mode
-    // leaves the dynamic goal driving.
+    // blaze). GoalFollow's isEnd is 3D, so the only path to a mob in open
+    // air is up: v1 1x1 towers / placed jump-up stairs, v2 Baritone
+    // allowPlace pillars — and the column stays in the landscape. No
+    // pursuit goal ever (in reach too: a dynamic follow of a swooping
+    // phantom chases it back up); drop our own one, since follow(null) in
+    // work mode leaves it driving. In reach: swing. Out of reach: write it
+    // off like an unreachable mob (brain sees hostile_reachable=false).
     if (ctx.lastGoalKey === key) clearGoal(bot, ctx)
-    ctx.fightGivenUpId = hostile.id
     ctx.fightPursuit = 0
+    if (inRange) {
+      if (!ctx.reflexSwung) swing(bot, hostile)
+      return
+    }
+    ctx.fightGivenUpId = hostile.id
     follow(bot, ctx, target, state)
     return
   }
@@ -121,15 +125,19 @@ function stickyTarget(bot, ctx, target, fresh) {
   return prev
 }
 
-// Flying = no floor (any non-air block: ground, leaves, water) in the
-// FLOOR_CELLS cells under the mob's feet, i.e. not standing where a bot
-// on foot can stand within melee height of it. Unknown cells (no
-// blockAt, unloaded chunk) read as grounded: the old pursuit stands.
+// Flying = an always-flying kind (FLYERS: a phantom swooping low is still
+// one tick from climbing away), or no floor (any non-air block: ground,
+// leaves, water) in the FLOOR_CELLS cells under the mob's feet, i.e. not
+// standing where a bot on foot can stand within melee height of it.
+// Unknown cells (no blockAt, unloaded chunk) read as grounded: the old
+// pursuit stands.
 // ponytail: a mob falling off a ledge reads flying for a tick and is
 // written off until the 30-tick re-probe; a grounded mob on a tall ledge
 // can still be towered to (old behaviour, not this bead).
 const FLOOR_CELLS = 2
+const FLYERS = new Set(['phantom', 'ghast', 'vex', 'bat'])
 function airborne(bot, hostile) {
+  if (FLYERS.has(hostile.name)) return true
   if (typeof bot.blockAt !== 'function') return false
   const p = hostile.position
   try {
