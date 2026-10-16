@@ -480,7 +480,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       bot.chat('try: find me iron')
     } else if (msg === 'flat' || msg.startsWith('flat ') || msg === 'make flat' || msg.startsWith('make flat ') || msg === 'flatten' || msg.startsWith('flatten ')) {
       // tpd1: flat <r> [at] <x> <z> — an explicit anchor every swarm bot shares.
-      const m = msg.match(/^(?:flat|make flat|flatten)(?:\s+(\S+))?(?:\s+(?:at\s+)?(-?\d+)\s+(-?\d+))?$/)
+      const m = msg.match(/^(?:flat|make flat|flatten)(?:\s+(\S+)(?:\s+(?:at\s+)?(-?\d+)\s+(-?\d+))?)?$/)
       const r = m ? flatMod.parseRadius(m[1]) : null
       if (r == null) bot.chat('try: flat 16')
       else if (ticker && typeof ticker.setFlat === 'function') {

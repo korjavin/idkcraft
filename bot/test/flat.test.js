@@ -342,9 +342,18 @@ describe('flat chat command', () => {
     assert.ok(seen.every((s) => s.by === 'P'))
   })
 
+  it('flat <r> [at] <x> <z> routes the explicit anchor (tpd1)', () => {
+    const seen = []
+    const ticker = { setFlat: (arg) => { seen.push(arg); return 'ok' } }
+    for (const msg of ['flat 48 100 -40', 'flat 48 at 100 -40', 'flatten 16 -3 7']) handleChat(chatBot(), ticker, 'P', msg)
+    assert.deepEqual(seen.map((o) => [o.radius, o.cx, o.cz, o.explicit]), [[48, 100, -40, true], [48, 100, -40, true], [16, -3, 7, true]])
+    handleChat(chatBot(), ticker, 'P', 'flat 16')
+    assert.ok(!('cx' in seen[3]), 'speaker form unchanged')
+  })
+
   it('hints usage on garbage instead of starting', () => {
     const ticker = { setFlat: () => { throw new Error('must not start') } }
-    for (const msg of ['flat abc', 'flat 16 x']) {
+    for (const msg of ['flat abc', 'flat 16 x', 'flat 16 100', 'flat at 100 -40']) {
       const bot = chatBot()
       handleChat(bot, ticker, 'P', msg)
       assert.deepEqual(bot.chats, ['try: flat 16'], msg)
@@ -449,7 +458,7 @@ describe('flat ticker wiring', () => {
       } finally { r.done() }
     })
 
-    it('explicit re-flat inside the running square resumes', async () => {
+    it('explicit re-flat resumes the same anchor only; another anchor inside starts over', async () => {
       const world = makeWorld({})
       world.set(-1, 63, -38, 'air') // strip 4/9 of x -4..4
       const r = rig({ world })
@@ -457,9 +466,22 @@ describe('flat ticker wiring', () => {
         r.ticker.setFlat({ radius: 4, by: 'P', explicit: true, cx: 0, cz: -40 })
         await r.ticker.tick()
         const f = r.ctx.flat
-        assert.match(r.ticker.setFlat({ radius: 4, by: 'P', explicit: true, cx: 1, cz: -39 }), /resuming flat/)
+        r.ticker.stop()
+        assert.match(r.ticker.setFlat({ radius: 4, by: 'P', explicit: true, cx: 0, cz: -40 }), /resuming flat/)
         assert.equal(r.ctx.flat, f)
+        assert.match(r.ticker.setFlat({ radius: 4, by: 'P', explicit: true, cx: 1, cz: -39 }), /^scanning 9x9 at 1,-39/)
+        assert.notEqual(r.ctx.flat, f, 'a divergent older square never resumes on the explicit form')
       } finally { r.done() }
+    })
+
+    it('explicit anchor refuses when this bot cannot see the square', () => {
+      for (const unloaded of [(x) => x >= 200, (x) => x === 216]) { // anchor column / one corner
+        const r = rig({ world: makeWorld({ unloaded }) })
+        try {
+          assert.match(r.ticker.setFlat({ radius: 16, by: 'P', explicit: true, cx: 200, cz: 0 }), /^too far to see 200,0/)
+          assert.ok(!r.ctx.flat, 'no episode started')
+        } finally { r.done() }
+      }
     })
 
     // tpd1 (iii): helpers are flat-only.

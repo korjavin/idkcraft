@@ -37,18 +37,26 @@ function clipStatus(line) {
 function createOrders(box) {
   const { bot, ctx, greet, clearStuck, resetNightStep, startWork, stopOnce, doSetBrain } = box
   // tpd1: feet height over column (x,z) for an explicit flat anchor — the
-  // highest solid block walking down from our own y + SCAN_UP; unloaded or
-  // nothing within 64 below falls back to our own feet.
+  // highest solid block walking down from our own y + SCAN_UP; nothing
+  // solid within 64 below falls back to our own feet. null = unloaded.
   function surfaceFeet(x, z) {
     const by = Math.floor(bot.entity && bot.entity.position ? bot.entity.position.y : 64)
     try {
       for (let y = by + flatMod.SCAN_UP; y >= by - 64; y--) {
         const b = bot.blockAt(new Vec3(x, y, z))
-        if (!b) break
+        if (!b) return null
         if (b.boundingBox === 'block') return y + 1
       }
-    } catch (_) { /* unreadable world: own feet */ }
+    } catch (_) { return null }
     return by
+  }
+  // The anchor column and the square's corners are loaded for this bot (a
+  // far bot would vote the level on a partial square, review 01).
+  function squareLoaded(cx, cz, r) {
+    const by = Math.floor(bot.entity && bot.entity.position ? bot.entity.position.y : 64)
+    try {
+      return [[r, r], [r, -r], [-r, r], [-r, -r]].every(([dx, dz]) => bot.blockAt(new Vec3(cx + dx, by, cz + dz)) != null)
+    } catch (_) { return false }
   }
   const orders = {
     setFollow: (name) => {
@@ -466,6 +474,8 @@ function createOrders(box) {
       const tile = flatMod.swarmTile()
       const seen = by && worker.players(bot)[by]
       if (tile && !at && !(seen && seen.entity && seen.entity.position)) return `can't see you — come within 48 or /tp ${bot.username} ${by || 'you'}`
+      const atFeet = at ? surfaceFeet(atX, atZ) : null
+      if (at && (atFeet == null || !squareLoaded(atX, atZ, radius))) return `too far to see ${atX},${atZ} — come closer or /tp ${bot.username} ${by || 'you'}`
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
@@ -480,14 +490,16 @@ function createOrders(box) {
       const anchor = (speaker && speaker.position) || (bot.entity && bot.entity.position)
       const cx = at ? atX : (anchor ? Math.floor(anchor.x) : 0)
       const cz = at ? atZ : (anchor ? Math.floor(anchor.z) : 0)
-      const yTop = (at ? surfaceFeet(cx, cz) : Math.floor(anchor ? anchor.y : 64)) + flatMod.SCAN_UP
+      const yTop = (at ? atFeet : Math.floor(anchor ? anchor.y : 64)) + flatMod.SCAN_UP
       const f = ctx.flat
       // Any re-flat from inside the running square resumes with its
       // progress (9k4: a stepped-aside retype used to wipe the run); only
       // a new area or an explicit new radius starts over. Bare `flat`
       // (no radius argument) always means "this job".
-      const inside = f &&
-        Math.abs(cx - f.cx) <= f.r && Math.abs(cz - f.cz) <= f.r
+      // An explicit anchor resumes only the SAME square (review 01): each
+      // bot's older episode may sit on its own divergent centre.
+      const inside = f && (at ? cx === f.cx && cz === f.cz
+        : Math.abs(cx - f.cx) <= f.r && Math.abs(cz - f.cz) <= f.r)
       if (f && inside && (!explicit || radius === f.r)) {
         f.by = by || f.by
         f.parked = false
