@@ -690,16 +690,20 @@ function wedgeLatched(ctx, p, idx) {
   } catch (_) { return false }
 }
 
-function walkToSite(bot, ctx, p) {
+function walkToSite(bot, ctx, p, goal, reason) {
   const bp = bot.entity && bot.entity.position
   if (!bp || typeof bp.x !== 'number') return
   const w = ctx.buildSiteWalk
-  if (!w || Math.hypot(bp.x - w.x, bp.z - w.z) > CELL_PROGRESS) {
+  if (!w) {
     ctx.buildSiteWalk = { x: bp.x, z: bp.z, ticks: 0 }
+  } else if (Math.hypot(bp.x - w.x, bp.z - w.z) > CELL_PROGRESS) {
+    w.x = bp.x // re-anchor in place: the sky walk's latch rides along
+    w.z = bp.z
+    w.ticks = 0
   } else if (++w.ticks >= CELL_TICK_BUDGET) {
     ctx.buildSiteWalk = null
     ctx.buildGoalIdx = -1
-    failBuild(ctx, 'cannot-reach-site')
+    failBuild(ctx, reason || 'cannot-reach-site')
     return
   }
   let moving = false
@@ -708,7 +712,47 @@ function walkToSite(bot, ctx, p) {
   // each re-plan from the new stand gets further.
   if (ctx.buildGoalIdx === 'site' && moving) return
   ctx.buildGoalIdx = 'site'
-  try { bot.pathfinder.setGoal(new goals.GoalNearXZ(p.x, p.z, PLACE_RANGE)) } catch (_) { /* retry next tick */ }
+  try { bot.pathfinder.setGoal(goal || new goals.GoalNearXZ(p.x, p.z, PLACE_RANGE)) } catch (_) { /* retry next tick */ }
+}
+
+// No-site walk (neuc.35, v2): homeless deep in a cave, every scan reads
+// the rock above as ground, so walk toward the nearest open-sky cell and
+// re-scan from there (skySiteNear runs every homeless tick). The target is
+// latched at the start (revmux 01 major: a per-tick re-pick never
+// arrives); arrival returns false, so that tick's scan was the re-scan and
+// the caller fails no-site. Give-ups: walkToSite's no-progress budget, and
+// SKY_WALK_CAP ticks in all whatever the displacement. At the surface the
+// nearest sky cell is the body's own column: no walk. False when there is
+// nowhere to walk — the caller fails no-site.
+const SKY_ARRIVE = 3
+const SKY_WALK_CAP = 600
+const SKY_STALE_MS = 5000
+function skyWalk(bot, ctx) {
+  const bp = bot.entity && bot.entity.position
+  if (!bp || typeof bp.x !== 'number') return false
+  const far = (c) => Math.hypot(c.x + 0.5 - bp.x, c.y - bp.y, c.z + 0.5 - bp.z) > SKY_ARRIVE
+  let w = ctx.buildSiteWalk
+  // A latch not ticked for SKY_STALE_MS is an old episode (death, a night, another step): re-pick (revmux 02 minor).
+  if (!w || !w.sky || Date.now() - (w.seen || 0) > SKY_STALE_MS) {
+    let c = null
+    try { c = require('../site').skyCellNear(bot, bp) } catch (_) { c = null }
+    if (!c || !far(c)) {
+      ctx.buildSiteWalk = null
+      return false
+    }
+    console.log(`build no-site: walking to open sky at ${c.x} ${c.y} ${c.z}`)
+    w = ctx.buildSiteWalk = { x: bp.x, z: bp.z, ticks: 0, sky: c, total: 0 }
+    ctx.buildGoalIdx = -1
+  }
+  const c = w.sky
+  w.seen = Date.now()
+  if (!far(c) || ++w.total > SKY_WALK_CAP) {
+    ctx.buildSiteWalk = null
+    ctx.buildGoalIdx = -1
+    return false
+  }
+  walkToSite(bot, ctx, c, new goals.GoalNear(c.x, c.y, c.z, 2), 'no-site')
+  return true
 }
 
 function build(bot, ctx, target, state) {
@@ -744,9 +788,12 @@ function build(bot, ctx, target, state) {
     // stall clock sees the failure. The next attempt validates once
     // chunks load.
     if (!ctx.home) {
+      if (process.env.BOT_BODY === 'baritone' && skyWalk(bot, ctx)) return
       failBuild(ctx, 'no-site')
       return
     }
+    ctx.buildSiteWalk = null
+    ctx.buildGoalIdx = -1
     ctx.buildSkip = []
     ctx.buildSkipAt = {}
     ctx.buildSkipRetry = null
@@ -1126,5 +1173,6 @@ module.exports.PLACE_RANGE = PLACE_RANGE
 module.exports.PLACE_REACH = PLACE_REACH
 module.exports.CELL_TICK_BUDGET = CELL_TICK_BUDGET
 module.exports.CELL_PROGRESS = CELL_PROGRESS
+module.exports.SKY_WALK_CAP = SKY_WALK_CAP
 module.exports.CELL_HARD_CAP = CELL_HARD_CAP
 module.exports.FLIGHT_TIMEOUT_MS = FLIGHT_TIMEOUT_MS
