@@ -5,7 +5,7 @@
 # collides with stuck-run's default/auto slots 0 a b), launch the Baritone
 # client via the image's own entrypoint with the bridge published for the
 # rig, run ab.js through the bridge, tear down.
-# Usage: sh baritone/run.sh            (image: docker build -t idkcraft-baritone:local baritone)
+# Usage: sh baritone/run.sh            (image: client.sh default, built if missing)
 # Account (see baritone/README.md): the client launches with the account stored
 # in the idkcraft-baritone-auth volume (one-time `login`), or offline ONLY when
 # the owner opted in with BARITONE_OFFLINE=1.

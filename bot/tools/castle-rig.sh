@@ -34,7 +34,7 @@
 #   is the home, the castle must still cover the nights; peer = the castle
 #   lives only in a peer memory file read via BOT_CASTLE_PEER, v2's path),
 #   CASTLE_BODY (''|baritone — g0z.56: the builder runs on the v2 Baritone
-#   body, client image BARITONE_IMAGE, default idkcraft-baritone:local),
+#   body, client image BARITONE_IMAGE, default client.sh tree-hash tag),
 #   CASTLE_REPAIR (''|wood|nowood, needs CASTLE_SEED=complete — g0z.56:
 #   after adoption knock out 20 plan cells (12 fence, the door, 4 wall,
 #   3 torches), wood = 16 oak_log in the castle chest; the guide chats

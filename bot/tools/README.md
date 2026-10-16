@@ -403,7 +403,7 @@ mineflayer. The body log lands at `/tmp/stuck-body-<variant>[-<RIG_ID>].log`
 (Baritone's `[CHAT] [Baritone] ...` lines prove the goal reached the client).
 
 ```sh
-docker build -t idkcraft-baritone:local baritone   # once per mod change: client.sh's default image
+# client.sh builds-or-reuses its default image idkcraft-baritone:<baritone/ tree hash>
 REPLAY_BODY=baritone sh bot/tools/stuck-run.sh                      # judged against stuck-baseline-v2.json
 REPLAY_BODY=baritone RIG_ID=auto RIG_LOCK_WAIT=3600 sh bot/tools/stuck-run.sh   # beside other rig users
 REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base bot/tools/task-spots.json
@@ -414,12 +414,16 @@ sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical f
 verdict line (castle cells/90 min, house done-seconds, deaths/night), not on
 stuck spots. The v2 stuck-run above is a regression check only (not worse).
 
-- **Image** (idkcraft-neuc.23): `client.sh` defaults to
-  `idkcraft-baritone:local`, a build of THIS tree's `baritone/` (bridge mod
-  included) — a missing image exits 2 with the build hint. Pin
-  `BARITONE_IMAGE=<tag>` when another agent may rebuild `:local` under you
-  mid-run (a tag per sha is the safe habit). The old `:spike` default had no
-  mod: the body joined, the ws never opened.
+- **Image** (idkcraft-neuc.23, 6x7.28): `client.sh` defaults to
+  `idkcraft-baritone:<git rev-parse --short=8 HEAD:baritone>` of the checkout
+  it runs from (the tag CI uses on ghcr) and builds it when missing — so a
+  before (master) and an after (PR) worktree each run their own body, and
+  trees sharing `baritone/` share one image. Uncommitted `baritone/` edits
+  refuse (exit 2): commit them or pass `BARITONE_IMAGE=<tag>` (an explicit
+  tag is never built). The Dockerfile's warm layer bakes the first launch's
+  libraries + assets in (~+600 MB), so the client is up in ~25 s with no
+  downloads. The old `:spike` default had no mod: the body joined, the ws
+  never opened.
 - **Per slot** (idkcraft-neuc.23): on `RIG_ID=<a-z>` the body container is
   `idk-baritone-body-<id>` and the ports shift by 2 x letter index
   (default rig 7778/7779, a=7780/7781, z=7830/7831 — `baritone/bridge/rig.sh`
@@ -735,7 +739,7 @@ Two 10-minute component rigs replace "wait 90 min for one noisy castle
 number" for a v2 PR's per-component signal:
 
 ```sh
-B="CASTLE_BODY=baritone BARITONE_IMAGE=<tag> CASTLE_PADSPOT=250,350 CASTLE_RIG_ID=auto"
+B="CASTLE_BODY=baritone CASTLE_PADSPOT=250,350 CASTLE_RIG_ID=auto"   # image: client.sh default (tree-hash tag)
 env $B CASTLE_COMPONENT=lay  sh bot/tools/castle-rig.sh   # 10 min, cells laid / game-min
 env $B CASTLE_COMPONENT=mine sh bot/tools/castle-rig.sh   # 10 min, stone banked / game-min
 ```

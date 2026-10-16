@@ -486,18 +486,21 @@ describe('client.sh MOD_PORT (idkcraft-neuc.5)', () => {
   // lists the joining bot, ps shows no collision.
   fs.writeFileSync(path.join(bin, 'docker'), '#!/bin/sh\n' +
     'case "$1" in\n' +
-    '  run) echo "$@" >> "$FAKE_CALLS" ;;\n' +
+    '  run|build) echo "$@" >> "$FAKE_CALLS" ;;\n' +
+    '  image) [ -z "$FAKE_MISSING" ] || exit 1 ;;\n' +
     '  logs) echo "HMC-Specifics initialized" ;;\n' +
     '  exec) echo "$FAKE_JOIN has joined" ;;\n' +
     '  ps) ;; \n' +
     'esac\nexit 0\n', { mode: 0o755 })
   fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  // Fake git (idkcraft-6x7.28): rev-parse = the baritone/ tree hash, status = FAKE_DIRTY.
+  fs.writeFileSync(path.join(bin, 'git'), '#!/bin/sh\ncase "$3" in rev-parse) echo abc1234 ;; status) echo "$FAKE_DIRTY" ;; esac\n', { mode: 0o755 })
   let k = 0
   const start = (env) => {
     const calls = path.join(tmp, 'calls' + k++)
     const r = spawnSync('sh', [script, 'start', '25571', 'FakeBody'], { encoding: 'utf8',
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BARITONE_OFFLINE: '1',
-        RIG_CONTAINER: 'fake-rig', CLIENT_LOG: path.join(tmp, 'client.log'), FAKE_CALLS: calls, FAKE_JOIN: 'FakeBody', ...env } })
+        BARITONE_IMAGE: '', RIG_CONTAINER: 'fake-rig', CLIENT_LOG: path.join(tmp, 'client.log'), FAKE_CALLS: calls, FAKE_JOIN: 'FakeBody', ...env } })
     return { ...r, runArgs: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '' }
   }
 
@@ -525,6 +528,19 @@ describe('client.sh MOD_PORT (idkcraft-neuc.5)', () => {
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.match(r.runArgs, /-p localhost:7777:7777/)
     assert.match(r.runArgs, /-p localhost:7778:7778/)
+  })
+
+  it('default image = the baritone/ tree hash tag, built when missing (idkcraft-6x7.28)', () => {
+    assert.match(start({}).runArgs, /idkcraft-baritone:abc1234$/m)
+    const built = start({ FAKE_MISSING: '1' })
+    assert.equal(built.status, 0, built.stdout + built.stderr)
+    assert.match(built.runArgs, /^build -t idkcraft-baritone:abc1234 /m)
+    const dirty = start({ FAKE_MISSING: '1', FAKE_DIRTY: ' M Dockerfile' })
+    assert.equal(dirty.status, 2, dirty.stdout + dirty.stderr)
+    assert.equal(dirty.runArgs, '')
+    const pinned = start({ FAKE_MISSING: '1', BARITONE_IMAGE: 'idkcraft-baritone:x' })
+    assert.equal(pinned.status, 2, pinned.stdout + pinned.stderr)
+    assert.equal(pinned.runArgs, '')
   })
 
   it('a non-numeric MOD_PORT fails loud before touching docker', () => {
