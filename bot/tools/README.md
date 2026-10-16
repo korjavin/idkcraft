@@ -415,7 +415,7 @@ verdict line (castle cells/90 min, house done-seconds, deaths/night), not on
 stuck spots. The v2 stuck-run above is a regression check only (not worse).
 
 - **Image** (idkcraft-neuc.23, 6x7.28): `client.sh` defaults to
-  `idkcraft-baritone:<git rev-parse --short HEAD:baritone>` of the checkout
+  `idkcraft-baritone:<git rev-parse --short=8 HEAD:baritone>` of the checkout
   it runs from (the tag CI uses on ghcr) and builds it when missing — so a
   before (master) and an after (PR) worktree each run their own body, and
   trees sharing `baritone/` share one image. Uncommitted `baritone/` edits

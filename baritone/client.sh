@@ -32,7 +32,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # (PR) worktree each get their own body, and trees that share baritone/
 # share one image. Uncommitted baritone/ edits are not in the hash: commit
 # them or pass BARITONE_IMAGE. No git = the old :local default.
-TREE_TAG="$(git -C "$HERE" rev-parse --short HEAD:baritone 2>/dev/null || true)"
+TREE_TAG="$(git -C "$HERE" rev-parse --short=8 HEAD:baritone 2>/dev/null || true)"
 IMAGE="${BARITONE_IMAGE:-idkcraft-baritone:${TREE_TAG:-local}}"
 CLIENT="${BARITONE_CLIENT:-idk-baritone-client}"
 BRIDGE_PORT="${BRIDGE_PORT:-7777}"

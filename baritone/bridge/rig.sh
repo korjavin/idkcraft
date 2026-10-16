@@ -5,7 +5,7 @@
 # Slot z like baritone/run.sh (container idk-replay-z, port 25597, lock
 # /tmp/idkcraft-rig.lock-z) but a distinct client name + bridge port so a
 # concurrent run.sh never collides. Offline launch (no account), the v2 body
-# image (client.sh default idkcraft-baritone:local, built from this tree):
+# image (client.sh default: the baritone/ tree-hash tag, built if missing):
 #   sh baritone/bridge/rig.sh
 # Env: BOT (default IdkBody), RIG_LOCK_WAIT (secs to wait on a busy slot-z
 # lock instead of exiting 2), RIG_BIND (bind the bridge there instead of

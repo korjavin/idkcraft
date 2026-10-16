@@ -500,7 +500,7 @@ describe('client.sh MOD_PORT (idkcraft-neuc.5)', () => {
     const calls = path.join(tmp, 'calls' + k++)
     const r = spawnSync('sh', [script, 'start', '25571', 'FakeBody'], { encoding: 'utf8',
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BARITONE_OFFLINE: '1',
-        RIG_CONTAINER: 'fake-rig', CLIENT_LOG: path.join(tmp, 'client.log'), FAKE_CALLS: calls, FAKE_JOIN: 'FakeBody', ...env } })
+        BARITONE_IMAGE: '', RIG_CONTAINER: 'fake-rig', CLIENT_LOG: path.join(tmp, 'client.log'), FAKE_CALLS: calls, FAKE_JOIN: 'FakeBody', ...env } })
     return { ...r, runArgs: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '' }
   }
 
