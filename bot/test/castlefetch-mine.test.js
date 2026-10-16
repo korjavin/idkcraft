@@ -128,6 +128,38 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(ctx.stepStatus, 'done')
   })
 
+  it('a far quarry stance walks before any mine', async () => {
+    const goals = []
+    let mined = 0
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      mineImpl: () => async () => { mined++; },
+    })
+    bot.pathfinder.setGoal = (g) => goals.push(g)
+    const ctx = stoneCtx()
+    ctx.castleFetch.qTarget = { k: 'q', x: 10, y: 64, z: 10, stance: { x: 20, y: 64, z: 20 } }
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
+    await flush()
+    assert.equal(mined, 0, 'no verb while walking to the stance')
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(goals.length, 1, 'one stance walk goal')
+  })
+
+  it('an arrived quarry stance arms the mine', async () => {
+    let mined = 0
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      mineImpl: () => async () => { mined++; },
+    })
+    const ctx = stoneCtx()
+    ctx.castleFetch.qTarget = { k: 'q', x: 500, y: 64, z: 500, stance: { x: 500, y: 64, z: 500 } }
+    bot.blockAt = () => ({ name: 'stone', position: { x: 500, y: 64, z: 500 } })
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
+    await flush()
+    await flush()
+    assert.equal(mined, 1, 'verbs fires from the vetted stance')
+  })
+
   it('relocation stops after three re-arms and fails with the last error', async () => {
     const bot = mockBot({
       items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 5 }],

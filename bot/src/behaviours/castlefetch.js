@@ -1316,6 +1316,40 @@ function digTick(bot, ctx, f, d) {
       spend(f, 'walk')
       if (!stalled(f.guardWalk || (f.guardWalk = {}), 0, APPROACH_WAITS)) return
     }
+    // Quarry-stance arming (neuc.53 rig evidence: unvetted walk-out exits
+    // arm onto fringe cache and churn with zero gains, while vetted trench
+    // stances mine): take the next v1 quarry cell and walk to its stance
+    // first — dry, exposed, reachable, stance-safe by construction. A
+    // dead quarry (null) arms in place; the trip and the timer bound it.
+    if (!f.qTarget) {
+      try { f.qTarget = pickQuarry(bot, ctx, f) } catch (_) { f.qTarget = null }
+    }
+    const qt = f.qTarget
+    if (qt && qt.stance) {
+      const sd = Math.hypot(bp.x - (qt.stance.x + 0.5), bp.y - qt.stance.y, bp.z - (qt.stance.z + 0.5))
+      if (sd > 1.5) {
+        walkTo(bot, ctx, `castlefetch-qstance:${qt.stance.x},${qt.stance.y},${qt.stance.z}`, qt.stance, 0)
+        spend(f, 'walk')
+        if (!stalled(qt, sd, APPROACH_WAITS)) return
+        try { (f.skip || (f.skip = new Set())).add(qt.k) } catch (_) { /* skip best-effort */ }
+        f.qTarget = null
+        f.skips = (f.skips | 0) + 1
+        if (f.skips >= SKIPS_TO_FAIL) { finish(bot, ctx, 'failed:castlefetch-unreachable'); return }
+        return
+      }
+      // Cell rules at arm time (v1 dig-time shape): no mining a trap,
+      // gravity, submerged or protected cell.
+      let cell = null
+      try { cell = bot.blockAt(new Vec3(qt.x, qt.y, qt.z)) } catch (_) { cell = null }
+      const deny = denyReason(bot, cell, ctx)
+      if (deny) {
+        logDeny(cell, deny)
+        try { (f.skip || (f.skip = new Set())).add(qt.k) } catch (_) { /* skip best-effort */ }
+        f.qTarget = null
+        spend(f, 'other')
+        return
+      }
+    }
     ctx.castleFetchInFlight = true
     ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig
     ctx.castleFetchMine = true // a bridge mine owns the tick (not a v1 flight): pack-full can cancel it below
@@ -1345,6 +1379,15 @@ function digTick(bot, ctx, f, d) {
         // chase — the next tick re-issues instead. unreachable stays for
         // the leash only.
         if (m === 'mine-stopped') return
+        // The worked cell is spent either way (depleted or unworkable):
+        // skip it so the next pick advances the quarry instead of
+        // re-mining the same dead ground. Leash keeps its cell (the spot
+        // may be fine — the body ranged too far, which re-anchoring
+        // would only repeat).
+        if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall') && f.qTarget) {
+          try { (f.skip || (f.skip = new Set())).add(f.qTarget.k) } catch (_) { /* skip best-effort */ }
+          f.qTarget = null
+        }
         // Relocation: a below-target end that still broke ground re-arms
         // at the new stance (the body moved while gaining — fresh cache,
         // fresh lottery) instead of failing the leg. Bounded per leg;
