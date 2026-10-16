@@ -1035,6 +1035,21 @@ describe('flat progress chat', () => {
     assert.deepEqual(bot.chats, ['flat 5/20 (level 63)'])
   })
 
+  it('swarm helper (strip >= 1) logs progress instead of chatting; strip 0 chats', () => {
+    const bot = progBot()
+    const logs = []
+    const orig = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      progressChat(bot, progFlat({ lastChat: Date.now() - 26000, tile: { i: 1, n: 3 } }))
+      assert.deepEqual(bot.chats, [])
+      assert.equal(logs.length, 1)
+      assert.ok(logs[0].includes('flat 0/20 (level 63)'), logs[0])
+      progressChat(bot, progFlat({ lastChat: Date.now() - 26000, tile: { i: 0, n: 3 } }))
+    } finally { console.log = orig }
+    assert.deepEqual(bot.chats, ['flat 0/20 (level 63)'])
+  })
+
   it('second immediate call on the same episode stays silent', () => {
     // Revmux 01 core-1: without the progressChats increment a resolved
     // field would chat every tick; the second call must post nothing.
