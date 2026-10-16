@@ -88,7 +88,30 @@ function freshCtx() {
   return { home: { site: { ...SITE }, v: 2 }, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
 }
 
+function capture() {
+  const logged = []
+  const origLog = console.log
+  console.log = (m) => { logged.push(String(m)) }
+  return { logged, release() { console.log = origLog } }
+}
+
 describe('house builder branch (idkcraft-neuc.54)', () => {
+  it('the fire line names the batch composition (r185 stall diagnosis)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const ctx = freshCtx()
+    const cap = capture()
+    try {
+      build(bot, ctx)
+      await settle()
+    } finally {
+      cap.release()
+    }
+    const line = cap.logged.find((m) => m.startsWith('build builder house:'))
+    assert.ok(line, `fire line logged, got: ${cap.logged.join(' | ').slice(0, 200)}`)
+    assert.ok(/cells block=oak_planks$/.test(line), `composition reads back: ${line}`)
+  })
+
   it('batches planks+fill in one buildCells call; door and table keep the per-cell path', async () => {
     const world = makeWorld()
     // Fill dips read undone (air below the floor line).

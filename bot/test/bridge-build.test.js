@@ -88,6 +88,25 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
     )
   })
 
+  it('the stall verdict names the still-missing cells (r185 stall diagnosis)', async () => {
+    transport.state.buildScript = 'stall'
+    bot._buildTiming = { stallMs: 30, watchMs: 5 }
+    const logged = []
+    const origLog = console.log
+    console.log = (m) => { logged.push(String(m)) }
+    try {
+      await assert.rejects(
+        bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1)),
+        /^Error: build-stall$/,
+      )
+    } finally {
+      console.log = origLog
+    }
+    const line = logged.find((m) => m.startsWith('build-stall house:'))
+    assert.ok(line, `stall-site line logged, got: ${logged.join(' | ').slice(0, 200)}`)
+    assert.ok(/100,64,-40:oak_planks/.test(line), `site reads back: ${line}`)
+  })
+
   it('a silent builder with no material resolves missing (starved, not wedged)', async () => {
     await bot.stop()
     ;({ transport, bot } = makeBot({ inventory: [] }))
