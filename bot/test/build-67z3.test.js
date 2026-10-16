@@ -427,6 +427,28 @@ describe('neuc.32: homeless under cover', () => {
     assert.equal(ctx.stepStatus, 'failed:no-site')
   })
 
+  it('v2 sky walk latches its target and gives up on the hard cap while displacing (neuc.35 revmux 01)', () => {
+    const bot = mockBot(makeWorld(), { spawn: null, at: pos(0, 40, 0) })
+    const set = []
+    bot.pathfinder.setGoal = (g) => set.push(g)
+    const ctx = {}
+    let ticks = 0
+    withBody('baritone', () => logged(() => {
+      build(bot, ctx)
+      // Oscillate 2 blocks each tick under the cave roof: the no-progress
+      // budget re-arms every tick, only the hard cap ends it.
+      while (ctx.stepStatus !== 'failed:no-site' && ticks < build.SKY_WALK_CAP + 5) {
+        ticks++
+        bot.entity.position = pos(ticks % 2 ? 20 : 18, 40, 0)
+        build(bot, ctx)
+        if (ctx.buildSiteWalk) assert.deepEqual(ctx.buildSiteWalk.sky, { x: 0, y: 64, z: 0 }, 'target latched')
+      }
+    }))
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+    assert.ok(ticks <= build.SKY_WALK_CAP + 1, String(ticks))
+    assert.ok(set.every((g) => g.x === 0 && g.y === 64 && g.z === 0))
+  })
+
   it('v2 at the surface with no flat ground anywhere fails no-site without a walk (neuc.35)', () => {
     // Checkerboard relief everywhere: no site fits, the sky cell is the
     // body's own column.
