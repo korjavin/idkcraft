@@ -1327,6 +1327,13 @@ function digTick(bot, ctx, f, d) {
     // gates on lastGoalKey !== 'idle' before it ever reads the goal, so a
     // mine started from a parked tick would survive an owner stop.
     ctx.lastGoalKey = 'mine:castlefetch'
+    // Relocation baseline (neuc.53 rig evidence: a warm spot depletes
+    // after ~20 blocks): peak-vs-arm tells a depleted spot (re-arm at
+    // the new stance) from a dead one (fail below). Pre-bleed peak, so
+    // stairs legs that craft mid-mine still count their breaks.
+    let armHave = 0
+    try { armHave = cobble(bot) } catch (_) { /* pack unreadable: no reloc below */ }
+    f.mineArmHave = armHave
     bot.mine(STONE_FAMILY, need, { radius: DIG_RADIUS, forbid, guard }).then(
       () => { settleMine(); if (!settled()) finish(bot, ctx, 'done') },
       (err) => {
@@ -1338,6 +1345,19 @@ function digTick(bot, ctx, f, d) {
         // chase — the next tick re-issues instead. unreachable stays for
         // the leash only.
         if (m === 'mine-stopped') return
+        // Relocation: a below-target end that still broke ground re-arms
+        // at the new stance (the body moved while gaining — fresh cache,
+        // fresh lottery) instead of failing the leg. Bounded per leg;
+        // the last error finishes it. Leash stays terminal (re-anchoring
+        // would defeat the site guard), zero-gain ends fail below.
+        const peak = err && typeof err.mineHave === 'number' ? err.mineHave : 0
+        const reloc = f.mineReloc | 0
+        if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall') && peak > (f.mineArmHave | 0) && reloc < 3) {
+          f.mineReloc = reloc + 1
+          f.guardExit = null
+          try { delete f.guardWalk } catch (_) { /* tracker best-effort */ }
+          return
+        }
         if (m === 'mine-noPath' || m === 'mine-futile') finish(bot, ctx, 'failed:castlefetch-no-stone')
         else if (m === 'mine-leash') finish(bot, ctx, 'failed:castlefetch-unreachable')
         else finish(bot, ctx, 'failed:castlefetch-dig-stall')

@@ -100,6 +100,56 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
   })
 
+  it('a partial mine end re-arms at the new stance instead of failing', async () => {
+    let arms = 0
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 5 }],
+      mineImpl: (b, calls) => async () => {
+        calls.mine.push({})
+        if (++arms === 1) {
+          const e = new Error('mine-futile')
+          e.mineHave = 9 // broke 4 over the arm-time 5, then the spot died
+          throw e
+        }
+      },
+    })
+    const ctx = stoneCtx()
+    const d = { kind: 'stone', word: 'batch', short: 8 }
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, d)
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'running', 'no finish on a depleted spot')
+    assert.equal(ctx.castleFetchInFlight, false, 'in-flight cleared for the re-arm')
+    assert.equal(ctx.castleFetch.mineReloc, 1)
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, d)
+    await flush()
+    await flush()
+    assert.equal(bot.calls.mine.length, 2, 're-armed at the new stance')
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('relocation stops after three re-arms and fails with the last error', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 5 }],
+      mineImpl: (b, calls) => async () => {
+        calls.mine.push({})
+        const e = new Error('mine-futile')
+        e.mineHave = 9
+        throw e
+      },
+    })
+    const ctx = stoneCtx()
+    const d = { kind: 'stone', word: 'batch', short: 8 }
+    for (let i = 0; i < 5; i++) {
+      castlefetch.digTick(bot, ctx, ctx.castleFetch, d)
+      await flush()
+      await flush()
+      if (ctx.stepStatus !== 'running') break
+    }
+    assert.equal(bot.calls.mine.length, 4, 'initial arm plus three relocations')
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+  })
+
   it('a mine-stopped settles quietly: no finish onto a borrowing fight', async () => {
     const bot = mockBot({
       items: [{ name: 'stone_pickaxe', count: 1 }],

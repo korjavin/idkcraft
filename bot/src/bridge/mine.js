@@ -176,6 +176,14 @@ function settle(bot, st, err, have) {
   try {
     if (bot.pathfinder && bot.pathfinder.goal && bot.pathfinder.goal.mine === true) bot.pathfinder.goal = null
   } catch (_) { /* marker best-effort */ }
+  // Peak inventory on the way out (neuc.53 relocation): st.have only
+  // climbs on progress events, so it reads as pre-bleed breaks even on
+  // stairs legs that craft the cobble away mid-mine. Callers compare it
+  // against the arm-time pack to tell a depleted spot (relocate) from a
+  // dead one (fail).
+  if (err instanceof Error && typeof st.have === 'number' && st.have > 0) {
+    try { err.mineHave = st.have } catch (_) { /* attach best-effort */ }
+  }
   if (err) st.reject(err)
   else st.resolve({ have })
 }
