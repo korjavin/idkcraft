@@ -310,13 +310,10 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   // Puppet sessions (idkcraft-jlw7): the only incoming-chat tag — session
   // review tells from=IdkTester apart from live players. No metric label.
   console.log(`chat from=${playerName} msg=${msg}`)
-  // tpd1: a swarm helper is flat-only — every order that would follow or
-  // work answers one line and changes nothing (startWork/setFollow refuse
-  // the internal paths too).
-  if (ticker && ticker.swarmHelper && /^(?:follow me|go work|free|build here|build castle|castle(?: go| repair| upgrade)?)$/.test(msg)) {
-    bot.chat(flatMod.SWARM_HELPER_LINE)
-    return
-  }
+  // vewo.1: a swarm helper answers only `stop` and the flat family (the
+  // main bot answers everything else); an allowlist, silent — N identical
+  // refusal lines are the chatter. startWork/setFollow keep their own guards.
+  if (ticker && ticker.swarmHelper && !/^(?:stop|(?:flat|make flat|flatten)(?: .*)?)$/.test(msg)) return
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(playerName)
     const seenEntry = worker.players(bot)[playerName]

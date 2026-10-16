@@ -611,13 +611,26 @@ describe('flat ticker wiring', () => {
         for (const msg of ['go work', 'free', 'follow me', 'build here', 'build castle', 'castle go']) {
           r.bot.chats.length = 0
           handleChat(r.bot, r.ticker, 'P', msg)
-          assert.deepEqual(r.bot.chats, ['swarm helper: flat only'], msg)
+          assert.deepEqual(r.bot.chats, [], msg)
         }
         assert.equal(r.ctx.work, false)
         assert.equal(r.ticker.getFollowName(), '')
         assert.ok(!r.ctx.castle && !r.ctx.home)
         handleChat(r.bot, r.ticker, 'P', 'stop')
         assert.equal(r.ctx.paused, true, 'stop still works')
+      } finally { r.done() }
+    })
+
+    it('vewo.1: helper stays silent on every non-flat order', () => {
+      const r = rig({ players: { P: { username: 'P', entity: { position: pos(3, 64, 0) } } } })
+      try {
+        for (const msg of ['bring me coal', 'find me iron', 'come home', 'go castle', 'share', 'help', 'status', 'lead anyway', 'autonomous on', 'brain jev']) {
+          handleChat(r.bot, r.ticker, 'P', msg)
+        }
+        assert.deepEqual(r.bot.chats, [])
+        assert.ok(!r.ctx.bring && !r.ctx.pendingSearch && !r.ctx.lead && !r.ctx.work)
+        handleChat(r.bot, r.ticker, 'P', 'flat 16 100 -40')
+        assert.ok(r.ctx.flat || r.bot.chats.length === 0, 'flat family still reaches its branch')
       } finally { r.done() }
     })
 
