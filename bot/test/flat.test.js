@@ -611,7 +611,7 @@ describe('flat ticker wiring', () => {
         for (const msg of ['go work', 'free', 'follow me', 'build here', 'build castle', 'castle go']) {
           r.bot.chats.length = 0
           handleChat(r.bot, r.ticker, 'P', msg)
-          assert.deepEqual(r.bot.chats, ['swarm helper: flat only'], msg)
+          assert.deepEqual(r.bot.chats, [], msg)
         }
         assert.equal(r.ctx.work, false)
         assert.equal(r.ticker.getFollowName(), '')
@@ -619,6 +619,45 @@ describe('flat ticker wiring', () => {
         handleChat(r.bot, r.ticker, 'P', 'stop')
         assert.equal(r.ctx.paused, true, 'stop still works')
       } finally { r.done() }
+    })
+
+    it('vewo.1: helper stays silent on every non-flat order', () => {
+      const r = rig({ players: { P: { username: 'P', entity: { position: pos(3, 64, 0) } } } })
+      try {
+        for (const msg of ['bring me coal', 'find me iron', 'come home', 'go castle', 'share', 'help', 'status', 'lead anyway', 'autonomous on', 'brain jev']) {
+          handleChat(r.bot, r.ticker, 'P', msg)
+        }
+        assert.deepEqual(r.bot.chats, [])
+        assert.ok(!r.ctx.bring && !r.ctx.pendingSearch && !r.ctx.lead && !r.ctx.work)
+        const logs = []
+        const log = console.log
+        console.log = (...a) => logs.push(a.join(' '))
+        try { handleChat(r.bot, r.ticker, 'P', 'flat 16 100 -40') } finally { console.log = log }
+        assert.ok(logs.some((l) => l.includes('helper waits for the main bot relay')), 'flat family still reaches its branch')
+      } finally { r.done() }
+    })
+
+    it('vewo.6: a name prefix addresses exactly one bot', () => {
+      const run = (name, helper, msg) => {
+        process.env.BOT_SWARM_I = helper ? '1' : '0'
+        const r = rig({ players: { P: { username: 'P', entity: { position: pos(3, 64, 0) } } } })
+        try {
+          r.bot.username = name
+          handleChat(r.bot, r.ticker, 'P', msg)
+          return { chats: r.bot.chats.slice(), paused: r.ctx.paused }
+        } finally { r.done() }
+      }
+      assert.deepEqual(run('IdkBot', false, 'IdkBot2: help').chats, [], 'other bot ignores')
+      assert.deepEqual(run('IdkSwarm1', true, 'IdkBot2: help').chats, [], 'helper ignores')
+      assert.deepEqual(run('IdkBot2', false, 'IdkBot: help').chats, [], 'prefix must be the full name')
+      // unknown name: an ordinary line, not stripped (and not ignored by other bots)
+      assert.ok(!run('IdkSwarm1', true, 'ok: stop').paused, 'unknown prefix is not stripped')
+      assert.ok(!run('IdkBot', false, 'ok: stop').paused)
+      assert.ok(run('IdkBot2', false, 'idkbot2: help').chats.length > 0, 'addressed bot answers, case-insensitive')
+      assert.ok(run('IdkBot', false, 'IdkBot:help').chats.length > 0, 'space after colon optional')
+      assert.ok(run('IdkBot', false, 'help').chats.length > 0, 'unprefixed unchanged')
+      assert.equal(run('IdkSwarm1', true, 'idkswarm1: stop').paused, true, 'addressed helper obeys stop')
+      assert.deepEqual(run('IdkSwarm1', true, 'IdkSwarm1: help').chats, [], 'addressed helper still flat-only')
     })
 
     it('helper parks where its flat finished; the main bot does not', async () => {
