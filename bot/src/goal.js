@@ -29,7 +29,7 @@ const { failReason, isFinished, nextStepGen, chatStep, STEP_CHAT_SAME_MS } = req
 const { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS } = require('./budget')
 // Home/site geometry and the gather retry policy live in the leaves site.js
 // and holds.js (oqul.4); the exported names are re-exported here.
-const { needPlanks, makeHome, siteFor, isV2House, timeWord } = require('./site')
+const { needPlanks, makeHome, siteFor, skySiteNear, isV2House, timeWord } = require('./site')
 const { REFAIL_DIST, gatherFailedHolds } = require('./holds')
 const { PARK_FORAGE_RADIUS, castleFirst, homeLegVetoed, taskParked } = require('./vetoes') // oqul.11: moved out for forage/stockpile
 const packFull = (bot, ctx) => stockpileMod.packFull(bot, ctx) // oqul.12: lives with roomForDrop in stockpile
@@ -1515,6 +1515,24 @@ function buildFailSig(status, facts, ctx, bot) {
 function doneHoldable(name) {
   return name === 'craft' || name === 'build' || name === 'gather' || name === 'light'
 }
+// A homeless build would found a site now (neuc.35): the spawn-anchored
+// site, or on v2 the wide open-sky ring around the body (build's
+// skySiteNear branch) — the no-site hold used to re-check only the spawn
+// site and released on v2 only when the body moved. The v2 probe is up to
+// 41 siteFor scans, so it is cached on ctx for SKY_PROBE_MS.
+// ponytail: a site appearing within SKY_PROBE_MS waits for the next probe.
+const SKY_PROBE_MS = 5000
+function siteValidNow(bot, ctx) {
+  if (bot && bot.spawnPoint && siteFor(bot, bot.spawnPoint)) return true
+  if (process.env.BOT_BODY !== 'baritone' || !ctx) return false
+  const p = bot && bot.entity && bot.entity.position
+  if (!p || typeof p.x !== 'number') return false
+  const c = ctx.skySiteProbe
+  if (c && Date.now() - c.at < SKY_PROBE_MS) return c.ok
+  const ok = !!skySiteNear(bot, p)
+  ctx.skySiteProbe = { at: Date.now(), ok }
+  return ok
+}
 function failHolds(ctx, name, text, bot) {
   try {
     if (SELF_ADVANCING[name]) return false
@@ -1533,7 +1551,7 @@ function failHolds(ctx, name, text, bot) {
     // stand without churn.
     if (name === 'build' && sf.status === 'failed:no-site' && !(ctx && ctx.home && ctx.home.site)) {
       try {
-        if (bot && bot.spawnPoint && siteFor(bot, bot.spawnPoint)) return false
+        if (siteValidNow(bot, ctx)) return false
       } catch (_) { /* unverifiable: hold stands */ }
     }
     return true
@@ -1992,14 +2010,15 @@ const FORCES = [
       return false
     },
   },
-  // No-site hold retires when a spawn-anchored site validates now.
+  // No-site hold retires when a site validates now (spawn-anchored, or
+  // the v2 sky ring — neuc.35).
   {
     name: 'site-retry', bead: 'idkcraft-vmzq.16', kind: 'gate',
     fires: (prev, facts, ctx, status, bot, text) => {
       const sf = ctx && ctx.stepFail && ctx.stepFail.build
       if (sf && sf.status === 'failed:no-site' && sf.text === text && !(ctx && ctx.home && ctx.home.site)) {
-        let site = null
-        try { site = bot && bot.spawnPoint ? siteFor(bot, bot.spawnPoint) : null } catch (_) { site = null }
+        let site = false
+        try { site = siteValidNow(bot, ctx) } catch (_) { site = false }
         if (site) {
           delete ctx.stepFail.build
           return true
