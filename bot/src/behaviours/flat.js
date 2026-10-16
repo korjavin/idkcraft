@@ -650,6 +650,13 @@ function swarmTile(env = process.env) {
   return { i, n }
 }
 
+// tpd1: a swarm helper (strip >= 1) is flat-only — no follow, no work.
+const SWARM_HELPER_LINE = 'swarm helper: flat only'
+function swarmHelper(env = process.env) {
+  const t = swarmTile(env)
+  return !!(t && t.i >= 1)
+}
+
 // Strip index of column x in the square cx±r: disjoint and covering by
 // construction (floor of a monotone map onto 0..n-1).
 function stripOf(x, cx, r, n) {
@@ -749,6 +756,9 @@ function finish(bot, ctx, f, why) {
   console.log(`flat finish filled=${f.filled} shaved=${f.shaved} supports=${f.supports} left=${left} why=${why || 'done'} skip=${JSON.stringify(f.skip)}`)
   clearGoal(bot, ctx)
   ctx.flat = null
+  // tpd1: a helper parks where it finished — unparked with no work it
+  // would walk home (unseen latch); the next flat order unparks it.
+  if (f.tile && f.tile.i >= 1) ctx.paused = true
   guardFlatSurface(bot, ctx) // episode gone: the detach path below runs
 }
 
@@ -828,6 +838,7 @@ function scanTick(bot, ctx, f) {
   if (f.counts.unloaded > 0) line += `, ${f.counts.unloaded} unloaded`
   if (f.counts.liquid > 0) line += `, ${f.counts.liquid} water skipped`
   say(bot, line)
+  console.log(`flat start anchor=${f.cx},${f.cz} r=${f.r} level=${level}${f.tile ? ` strip=${f.tile.i + 1}/${f.tile.n}` : ''}`)
   if (f.total === 0 && f.totalBumps === 0) finish(bot, ctx, f, null)
   else if (f.total === 0) f.phase = 'shave'
 }
@@ -1647,6 +1658,8 @@ module.exports.cellAt = cellAt
 module.exports.probeColumn = probeColumn
 module.exports.spiralColumns = spiralColumns
 module.exports.swarmTile = swarmTile
+module.exports.swarmHelper = swarmHelper
+module.exports.SWARM_HELPER_LINE = SWARM_HELPER_LINE
 module.exports.stripOf = stripOf
 module.exports.scanRecord = scanRecord
 module.exports.chooseLevel = chooseLevel
