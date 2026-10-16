@@ -590,6 +590,60 @@ function failBuild(ctx, reason) {
   if (fresh) console.log(`build failed:${reason}`)
 }
 
+// Builder batch (idkcraft-neuc.54): on the Baritone body (bot.buildCells
+// present) the plain-cube cells (planks + fill, which also takes a plank)
+// go to BuilderProcess in one call per batch, instead of the per-cell
+// GoalPlaceBlock/place/retry/skip loop above. Door, table and clear cells
+// keep the JS path (facing, beds, digs) — they never enter the schematic.
+// One batch in flight at a time (the adapter serializes); a settled batch
+// with missing cells fails material (no-planks) so the FSM fetches like
+// today, a wedged builder fails build-stall loud.
+const BUILDER_KINDS = new Set(['planks', 'fill'])
+const BUILDER_BATCH = 256
+function builderCells(bot, home, skipped) {
+  try {
+    if (!home || !home.site) return null
+    const skip = new Set(Array.isArray(skipped) ? skipped : [])
+    const plan = blueprintFor(home)
+    const item = findItem(bot, wantItem({ kind: 'planks' }))
+    if (!item || typeof item.name !== 'string') return null // no-planks via the old path
+    const cells = []
+    for (let i = 0; i < plan.length && cells.length < BUILDER_BATCH; i++) {
+      const cell = plan[i]
+      if (!BUILDER_KINDS.has(cell.kind) || skip.has(i)) continue
+      if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
+      if (!cellLoaded(bot, home, cell) || cellDone(bot, home, cell)) continue
+      cells.push({ dx: cell.dx, dy: cell.dy, dz: cell.dz, block: item.name })
+    }
+    if (cells.length === 0) return null
+    return { origin: { x: home.site.x, y: home.site.y, z: home.site.z }, cells, block: item.name }
+  } catch (_) {
+    return null
+  }
+}
+function builderBatch(bot, ctx) {
+  if (ctx.buildCellsInFlight) return true
+  const batch = builderCells(bot, ctx.home, ctx.buildSkip)
+  if (!batch) return false
+  ctx.buildCellsInFlight = true
+  try {
+    bot.buildCells('house', batch.origin, batch.cells, { forbid: [batch.block] }).then(
+      ({ missing }) => {
+        ctx.buildCellsInFlight = false
+        if (missing > 0) failBuild(ctx, 'no-planks')
+      },
+      (err) => {
+        ctx.buildCellsInFlight = false
+        failBuild(ctx, err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
+      },
+    )
+  } catch (err) {
+    ctx.buildCellsInFlight = false
+    failBuild(ctx, 'build-failed')
+  }
+  return true
+}
+
 function skipCell(ctx, idx, p, why) {
   if (!Array.isArray(ctx.buildSkip)) ctx.buildSkip = []
   if (!ctx.buildSkip.includes(idx)) ctx.buildSkip.push(idx)
@@ -818,7 +872,7 @@ function build(bot, ctx, target, state) {
       if (ctx.buildFails >= 3) skipCell(ctx, hIdx, cellAbs(ctx.home, blueprintFor(ctx.home)[hIdx]), 'flight-hang')
     }
   }
-  if (ctx.placeInFlight) return
+  if (ctx.placeInFlight || ctx.buildCellsInFlight) return
   if (!ctx.home) return
   guardOwnWalls(bot, ctx)
   // Claim the table coords the moment the workbench stands (see makeHome):
@@ -959,6 +1013,10 @@ function build(bot, ctx, target, state) {
     ctx.buildLastProgressLog = now
     try { bot.chat(`building ${total - wrong}/${total}`) } catch (_) { /* chat best-effort */ }
   }
+
+  // v2 builder (neuc.54): plain-cube cells batch through BuilderProcess;
+  // door/table/clear fall through to the per-cell path below.
+  if (typeof bot.buildCells === 'function' && builderBatch(bot, ctx)) return
 
   const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
   if (!item && cell.kind !== 'clear') {
@@ -1166,6 +1224,9 @@ module.exports.houseTableAt = houseTableAt
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
 module.exports.cellLoaded = cellLoaded
+module.exports.builderCells = builderCells
+module.exports.builderBatch = builderBatch
+module.exports.BUILDER_KINDS = BUILDER_KINDS
 module.exports.pruneBuildSkips = pruneBuildSkips
 module.exports.retrySkipsOnce = retrySkipsOnce
 module.exports.BUILD_SKIP_RETRY_MS = BUILD_SKIP_RETRY_MS

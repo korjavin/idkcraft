@@ -286,6 +286,24 @@ class FakeTransport extends EventEmitter {
       case 'chat.send':
         s.chatLog.push(params.message)
         return { sent: true }
+      // idkcraft-neuc.54 baritone.build. Records the call, then lays on a
+      // later turn like the mod's ticks: one progress event per turn, then
+      // the final active:false. Only cells whose block (or a same-class
+      // wood variant) is held get laid — the rest stay missing, so the
+      // adapter's material path resolves instead of hanging. s.buildScript
+      // 'stall' = silence (the adapter's watchdog decides); s.buildRefuse
+      // = throw (the mod's unknown-block refusal).
+      case 'baritone.build': {
+        const cells = Array.isArray(params.cells) ? params.cells : []
+        const origin = params.origin || { x: 0, y: 0, z: 0 };
+        (s.buildLog = s.buildLog || []).push({ name: params.name, origin: { ...origin }, cells: cells.map((c) => ({ ...c })), forbid: params.forbid ? [...params.forbid] : undefined })
+        if (s.buildRefuse) throw new Error(`bridge: unknown block: ${s.buildRefuse}`)
+        if (!s.buildActive || s.buildActive.name !== params.name) {
+          s.buildActive = { name: params.name, origin: { ...origin }, remaining: cells.map((c) => ({ ...c })), total: cells.length }
+        }
+        if (s.buildScript !== 'stall') setImmediate(() => this._buildStep())
+        return { ok: true, cells: cells.length, missing: cells.length }
+      }
       case 'baritone.cmd': {
         // Goal-id echo (.1 wire contract): every #goto takes an id the
         // status and events carry back. #set is not a goal (no id, no
@@ -308,6 +326,11 @@ class FakeTransport extends EventEmitter {
           const id = s.baritoneId != null ? s.baritoneId : null
           s.baritoneStatus = { id, pathing: false, last: 'stopped' }
           s.baritonePhase = null
+          if (s.buildActive) { // idkcraft-neuc.54: #stop cancels the builder too
+            const b = s.buildActive
+            s.buildActive = null
+            this.inject('baritone.event', { kind: 'build', name: b.name, placed: b.total - b.remaining.length, missing: b.remaining.length, active: false })
+          }
           return { id }
         }
         const m = /^#(?:goto|near)\s+(-?[\d.]+)(?:\s+(-?[\d.]+))?(?:\s+(-?[\d.]+))?/.exec(cmd)
@@ -535,6 +558,45 @@ class FakeTransport extends EventEmitter {
   }
 
   // Test helper: inject a mod->node event (chat, death, ...).
+  // One builder turn: lay up to a few placeable cells, report progress,
+  // and end (active:false) when everything stands or nothing more can lay
+  // (starved — the mod's paused builder, settled by the adapter's watch).
+  _buildStep() {
+    const s = this.state
+    const b = s.buildActive
+    if (!b) return
+    const registry = require('minecraft-data')(s.mc || '26.1.2')
+    const cls = (n) => typeof n === 'string' && (n.endsWith('_planks') ? '_planks' : n.endsWith('_fence') ? '_fence' : n.endsWith('_log') ? '_log' : null)
+    let laid = 0
+    const still = []
+    for (const c of b.remaining) {
+      const at = { x: b.origin.x + c.dx, y: b.origin.y + c.dy, z: b.origin.z + c.dz }
+      const k = this.key(at.x, at.y, at.z)
+      const cur = s.blocks[k] || 'air'
+      if (cur === c.block || (cls(c.block) && cur.endsWith(cls(c.block)))) continue // already standing
+      const item = s.inventory.find((i) => i.count > 0 && (i.name === c.block || (cls(c.block) && i.name.endsWith(cls(c.block)))))
+      if (item && laid < 8 && (cur === 'air' || cur === 'water')) {
+        item.count--
+        s.blocks[k] = item.name
+        laid++
+        const placed = registry.blocksByName[item.name]
+        this.inject('block.update', { ...at, stateId: placed ? placed.defaultState : 0 })
+        this.inject('inventory.update', { slot: item.slot, item: item.count > 0 ? { ...item } : null, selected: s.selected || 0 })
+      } else {
+        still.push(c)
+      }
+    }
+    b.remaining = still
+    const placed = b.total - still.length
+    if (still.length === 0 || laid === 0) {
+      s.buildActive = null
+      this.inject('baritone.event', { kind: 'build', name: b.name, placed, missing: still.length, active: false })
+    } else {
+      this.inject('baritone.event', { kind: 'build', name: b.name, placed, missing: still.length, active: true })
+      setImmediate(() => this._buildStep())
+    }
+  }
+
   inject(method, params = {}) { this.emit('event', method, params) }
 }
 
