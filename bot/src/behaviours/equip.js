@@ -489,6 +489,22 @@ function craftSparePick(bot, ctx) {
   try {
     if (ctx.equipInFlight) return true
     if (!pickBudgetDue(bot, ctx)) return false
+    // Give-up (round-2 review): async failures settle stale-dropped outside
+    // the equip step (fail() early-returns when step !== 'equip'), so a
+    // broken table path would retry every tick and the leg would never dig.
+    // Cap consecutive no-progress attempts per leg (the craft-stall 3): a
+    // landed pick resets, the third dry attempt latches for the leg.
+    const f = ctx.castleFetch
+    if (f && f.spareGiveUp) return false
+    const picks = pickCount(bot)
+    if (f && typeof f.sparePicks === 'number') {
+      if (picks > f.sparePicks) f.spareTries = 0
+      else {
+        f.spareTries = (f.spareTries | 0) + 1
+        if (f.spareTries >= CRAFT_STALL_STRIKES) { f.spareGiveUp = true; return false }
+      }
+    }
+    if (f) f.sparePicks = picks
     const op = toolOp(bot, 'pickaxe')
     if (!op || op.fail) return false
     issueToolOp(bot, ctx, op)
