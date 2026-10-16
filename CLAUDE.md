@@ -194,6 +194,10 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   (gate legs are the 10-game-min lines only; a shorter DIAG leg's line is not a verdict)
   (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh`, see `bot/tools/README.md` "Rig speed");
   OUTSIDE ±15% downward = regression. No `/tick rate` castle pair (>20 does not speed up v2).
+  The before is shared per master sha (6x7.27): quote `sh bot/tools/castle-before.sh lay|mine`
+  (its sha/date ride the line; exact sha, or an ancestor with no rig-file diff, max 7 days) + two
+  fresh after legs; a miss/stale/changed exit 1 means you run the two before legs on a clean
+  origin/master worktree (that fills the cache), i.e. 4 legs as before.
   The full 90-min castle rig (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh 90`) is batched like
   the stuck oracle: every 3 v2 merges or before an owner play session, on `master`, judged vs a
   recorded baseline; regression -> bisect within the batch + P1 bead. House done-seconds + fail

@@ -435,4 +435,10 @@ RIGOUT="/tmp/castle-rig-out-${RIG_ID:-0}.log"
 : > "$RIGOUT"
 { _rc=0; node tools/castle-replay.js 2>&1 || _rc=$?; echo "$_rc" > "$RCFILE"; } | tee -a "$RIGOUT" &
 wait $! || true
-exit "$(cat "$RCFILE" 2>/dev/null || echo 2)"
+_rc="$(cat "$RCFILE" 2>/dev/null || echo 2)"
+# 6x7.27: a clean 10-min component leg on origin/master is the shared
+# before for every PR on that sha (castle-before.js decides; never fails the run).
+if [ "$_rc" = 0 ] && [ -n "$COMPONENT" ] && [ -z "$DIAG" ]; then
+  PRODWORLD="$PRODWORLD" node tools/castle-before.js store || true
+fi
+exit "$_rc"

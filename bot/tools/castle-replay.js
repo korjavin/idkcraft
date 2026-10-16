@@ -784,6 +784,13 @@ function componentLine(kind, { laid, gameMin, wallMin, series, tick, baseline, d
   return `${kind}-rate ${rate == null ? '-' : rate.toFixed(1)}/game-min${diag ? ' (DIAG, no baseline verdict)' : ''}: ${body}, tick=${tick}${judge}`
 }
 
+// 6x7.27: CASTLE_BASELINE_RATE > 0 judges against the cached before
+// (castle-before.sh) instead of the component-baseline.json entry.
+function baselineFor(fileEntry, env) {
+  const r = Number(env.CASTLE_BASELINE_RATE)
+  return r > 0 ? { rate: r } : fileEntry
+}
+
 // neuc.62: fetch verdict, pure (unit-tested). events = classify's leg events
 // with t (wall s from window open); ticks = castlefetch decisions; mineBase =
 // the mine entry of component-baseline.json or null. Diagnosis only, no judge.
@@ -2072,7 +2079,7 @@ async function main() {
   if (COMPONENT) {
     let base = null
     try { base = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'][COMPONENT] || null } catch (_) { base = null }
-    compLine = componentLine(COMPONENT, { laid, gameMin, wallMin, series, tick: TICKRATE, baseline: base, diag: DIAG })
+    compLine = componentLine(COMPONENT, { laid, gameMin, wallMin, series, tick: TICKRATE, baseline: baselineFor(base, process.env), diag: DIAG })
   }
   let mineBase = null
   try { mineBase = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'].mine || null } catch (_) { mineBase = null }
@@ -2108,4 +2115,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { componentLine, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
