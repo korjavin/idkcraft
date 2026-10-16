@@ -1414,6 +1414,35 @@ function recordStepped(f, bp) {
 // so it always terminates; tall remnants skip
 // honestly as unreachable. Returns true when bumps were queued.
 const SWEEP_MATS = new Set(['dirt', 'cobblestone'])
+
+// Lone pillar (idkcraft-vewo.7): a free-standing 1x1 column cell of bot
+// scaffold fill — nothing solid on its 4 horizontal sides at that height.
+// Owner rule "flat means flat": such a column is shaved whoever placed it
+// (placedByBot is per bot and lost on restart, so shape decides).
+// ponytail: a player's bare 1-wide cobble post with no marker block next to
+// it gets dug (accepted trade-off); the upgrade is a persisted, swarm-shared
+// placedByBot. Unloaded neighbours read as solid (keep).
+const PILLAR_MATS = new Set([...SWEEP_MATS, 'cobbled_deepslate'])
+function lonePillar(bot, x, y, z) {
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    let b = null
+    try { b = bot.blockAt(new Vec3(x + dx, y, z + dz)) } catch (_) { b = null }
+    if (!b || isSolidCell(b)) return false
+  }
+  return true
+}
+
+// denyReason ctx for a lone pillar: the cell counts as own scaffold, so the
+// drq default-deny on foreign cobble lets it through while beds, castle,
+// castle yard and house-footprint rules (checked before the own exemption)
+// still protect it.
+function pillarCtx(ctx, x, y, z) {
+  const own = new Set(ctx && ctx.placedByBot instanceof Set ? ctx.placedByBot : [])
+  own.add(`${x},${y},${z}`)
+  const names = ctx && ctx.placedNames instanceof Map ? new Map(ctx.placedNames) : null
+  if (names) names.delete(`${x},${y},${z}`)
+  return Object.assign(Object.create(ctx || null), { placedByBot: own, placedNames: names })
+}
 function buildSweep(bot, f) {
   if (!f || !f.stepped || f.stepped.size === 0 || f.level == null) return false
   const before = f.bumps.length
@@ -1543,9 +1572,11 @@ function shaveTick(bot, ctx, f, bp) {
   }
   const name = blockNameAt(bot, new Vec3(h.x, y, h.z))
   // Sweep bumps carry our own pillar dirt/cobble: let SWEEP_MATS past the
-  // allowlist (cobblestone is not diggable for ordinary bumps). All other
-  // gates below (structure, liquid, under-feet) still apply.
-  if (!isDiggable(name) && !(h.sweep && SWEEP_MATS.has(name))) {
+  // allowlist (cobblestone is not diggable for ordinary bumps), and so do
+  // lone 1x1 pillar cells of scaffold fill (vewo.7). All other gates below
+  // (structure, liquid, under-feet) still apply.
+  const pillar = PILLAR_MATS.has(name) && lonePillar(bot, h.x, y, h.z)
+  if (!isDiggable(name) && !(h.sweep && SWEEP_MATS.has(name)) && !pillar) {
     shiftBumpSkip(f, 'kept') // ore, wood, built: keep valuables, keep houses
     return
   }
@@ -1634,7 +1665,7 @@ function shaveTick(bot, ctx, f, bp) {
     shiftBumpSkip(f, 'refused')
     return
   }
-  const shaveDeny = denyReason(bot, block, ctx) // idkcraft-drq: shave terrain, not houses
+  const shaveDeny = denyReason(bot, block, pillar ? pillarCtx(ctx, h.x, y, h.z) : ctx) // idkcraft-drq: shave terrain, not houses
   if (shaveDeny) {
     logDeny(block, shaveDeny)
     shiftBumpSkip(f, 'protected')
@@ -1744,6 +1775,7 @@ module.exports.structureNear = structureNear
 module.exports.liquidNear = liquidNear
 module.exports.detectBumps = detectBumps
 module.exports.buildSweep = buildSweep
+module.exports.lonePillar = lonePillar
 module.exports.resumeLine = resumeLine
 module.exports.DIG_ATTEMPTS = DIG_ATTEMPTS
 module.exports.PICKUP_STALLS = PICKUP_STALLS
