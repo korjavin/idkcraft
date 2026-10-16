@@ -58,10 +58,12 @@ const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: cas
 // minutes ≈ one stone batch at the measured quarry rate, and bounds the
 // castle<->castlefetch switch rate from below no matter how the words flap.
 const LEG_MAX_MS = 5 * 60 * 1000
-// neuc.63: a live castle builder batch with no placed growth this long is
-// paused on missing material — castlefetch stops it and takes the body.
-// The bridge's build events come secondly while it lays.
-const BUILDER_IDLE_MS = 10000
+// neuc.63: a live castle builder batch with no placed cell this long is
+// read as paused on missing material — castlefetch stops it and takes the
+// body. Growth only moves on a newly placed cell, so the window spans a
+// builder walk/climb between cells; well under the bridge's 90 s stall.
+// ponytail: time heuristic; read the mod's paused state if 30 s misfires.
+const BUILDER_IDLE_MS = 30000
 // One craft op per call; the next tick re-checks the target.
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, blast_furnace: 1, stairs: 4 }
 const BANNER_WOOL = 6 // one colour per banner (table recipe)
