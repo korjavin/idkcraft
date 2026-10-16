@@ -715,6 +715,16 @@ describe('sweep leftover scaffold (idkcraft-7wt)', () => {
     assert.equal(f.bumps.length, 0)
   })
 
+  it('swarm (lhg2): skips stepped columns in another bot\'s strip', () => {
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'dirt') // x=3 is strip 1 of 2 on the 9-wide square
+    world.set(-3, 64, 0, 'dirt') // x=-3 is strip 0: ours
+    const { bot, f } = sweepF(world, ['3,0', '-3,0'], [])
+    f.tile = { i: 0, n: 2 }
+    assert.equal(buildSweep(bot, f), true)
+    assert.deepEqual(f.bumps.map((b) => b.x), [-3])
+  })
+
   it('skips stepped columns outside the square', () => {
     const world = makeWorld({})
     world.set(9, 64, 0, 'dirt')

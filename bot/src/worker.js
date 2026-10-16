@@ -78,10 +78,23 @@ function players(bot) {
       const entry = roster[key]
       if (self !== null && entry && entry.username === self) continue
       if (isWorker(key) || (entry && isWorker(entry.username))) continue
+      if (isSwarmBot(key)) continue
       out[key] = entry
     }
   } catch (_) { /* unreadable roster reads empty */ }
   return out
+}
+
+// Flat swarm (lhg2): with BOT_SWARM_N > 1 the swarm helpers (<prefix>1..8)
+// are never players — not a target, owner or delivery recipient — and a
+// helper (BOT_SWARM_I >= 1) also drops the main bot (BOT_PEER_USERNAME).
+// Env read per call; swarm off = no-op. ponytail: the server ping count still
+// includes the bots (hidden sample), so they keep each other on like bot+bot2.
+function isSwarmBot(name, env = process.env) {
+  if (typeof name !== 'string' || !(parseInt(env.BOT_SWARM_N || '', 10) > 1)) return false
+  if (parseInt(env.BOT_SWARM_I || '0', 10) >= 1 && name === env.BOT_PEER_USERNAME) return true
+  const p = env.BOT_SWARM_PREFIX || 'IdkSwarm'
+  return name.startsWith(p) && /^[1-8]$/.test(name.slice(p.length))
 }
 
 function workerEntity(bot) {
@@ -439,4 +452,4 @@ function walkTick(bot, ctx, rec, bp, arrived) {
   return 'walk'
 }
 
-module.exports = { configure, configured, name, isWorker, players, workerEntity, workerOnline, send, ensureJoined, leave, JOIN_ABSENT_MS, JOIN_RESEND_MS, SEND_TIMEOUT_MS, walkAvailable, walkNightBlocked, walkWatchdogFlat, walkShouldDelegate, walkDelegate, walkStop, walkCancel, walkStale, walkTick, WALK_FAR_BLOCKS, WALK_TOTAL_MS, WALK_GONE_MS, WALK_STILL_MS, WALK_PAUSE_D, WALK_RESUME_D, WALK_ARRIVE_D, WALK_FOLLOW_RANGE, WALK_REISSUE_MS, WALK_NIGHT_RANGE }
+module.exports = { configure, configured, name, isWorker, isSwarmBot, players, workerEntity, workerOnline, send, ensureJoined, leave, JOIN_ABSENT_MS, JOIN_RESEND_MS, SEND_TIMEOUT_MS, walkAvailable, walkNightBlocked, walkWatchdogFlat, walkShouldDelegate, walkDelegate, walkStop, walkCancel, walkStale, walkTick, WALK_FAR_BLOCKS, WALK_TOTAL_MS, WALK_GONE_MS, WALK_STILL_MS, WALK_PAUSE_D, WALK_RESUME_D, WALK_ARRIVE_D, WALK_FOLLOW_RANGE, WALK_REISSUE_MS, WALK_NIGHT_RANGE }

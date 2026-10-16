@@ -58,6 +58,26 @@ describe('flat swarm tiles', () => {
   })
 })
 
+describe('flat swarm: helpers are never players', () => {
+  const { isSwarmBot } = require('../src/worker')
+  it('swarm off = no-op', () => {
+    assert.equal(isSwarmBot('IdkSwarm1', {}), false)
+  })
+  it('swarm on drops <prefix>1..8 only', () => {
+    const env = { BOT_SWARM_N: '9' }
+    assert.equal(isSwarmBot('IdkSwarm1', env), true)
+    assert.equal(isSwarmBot('IdkSwarm8', env), true)
+    assert.equal(isSwarmBot('IdkSwarm9', env), false)
+    assert.equal(isSwarmBot('IdkSwarm', env), false)
+    assert.equal(isSwarmBot('Owner', env), false)
+    assert.equal(isSwarmBot('Flat3', { ...env, BOT_SWARM_PREFIX: 'Flat' }), true)
+  })
+  it('a helper also drops the main bot; the main bot keeps seeing itself as itself', () => {
+    assert.equal(isSwarmBot('IdkBot', { BOT_SWARM_N: '9', BOT_SWARM_I: '2', BOT_PEER_USERNAME: 'IdkBot' }), true)
+    assert.equal(isSwarmBot('IdkBot', { BOT_SWARM_N: '9' }), false)
+  })
+})
+
 describe('flat swarm: selectBody idles swarm bots past BOT_SWARM_N', () => {
   it('swarm bot idles when the swarm is off or its index is out of range', () => {
     assert.ok(selectBody({ BOT_SWARM_I: '1' }).idle)

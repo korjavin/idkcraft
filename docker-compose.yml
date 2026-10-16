@@ -119,6 +119,7 @@ services:
       WORKER_PORT: ${WORKER_PORT:-7777}
       # Flat swarm (lhg2): bot is strip 0 of BOT_SWARM_N (empty = whole square).
       BOT_SWARM_N: ${BOT_SWARM_N:-}
+      BOT_SWARM_PREFIX: ${BOT_SWARM_PREFIX:-IdkSwarm} # helpers never count as players
     labels:
       prometheus.scrape: "true"
       prometheus.port: "9464"
@@ -268,7 +269,9 @@ services:
       BOT_USERNAME: ${BOT_SWARM_PREFIX:-IdkSwarm}1
       BOT_SWARM_I: "1"
       BOT_SWARM_N: ${BOT_SWARM_N:-}
+      BOT_SWARM_PREFIX: ${BOT_SWARM_PREFIX:-IdkSwarm}
       BOT_PEER_USERNAME: ${BOT_USERNAME:-IdkBot}
+      BOT2_USERNAME: ${BOT2_USERNAME:-}
       BOT_FOLLOW: ""
       WORKER_NAME: ""
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
