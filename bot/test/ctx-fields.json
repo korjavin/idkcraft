@@ -23,6 +23,18 @@
     ],
     "owner": "src/index.js"
   },
+  "attemptFrom": {
+    "writers": [
+      "src/stall-state.js"
+    ],
+    "owner": "src/stall-state.js"
+  },
+  "attempts": {
+    "writers": [
+      "src/stall-state.js"
+    ],
+    "owner": "src/stall-state.js"
+  },
   "autonomous": {
     "writers": [
       "src/index.js",
@@ -154,7 +166,21 @@
     ],
     "owner": "src/behaviours/build.js"
   },
+  "buildBatchStrikes": {
+    "writers": [
+      "src/behaviours/build.js",
+      "src/index.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
   "buildCellIdx": {
+    "writers": [
+      "src/behaviours/build.js"
+    ],
+    "owner": "src/behaviours/build.js"
+  },
+  "buildCellsInFlight": {
     "writers": [
       "src/behaviours/build.js"
     ],
@@ -352,6 +378,12 @@
     "owner": "src/behaviours/stockpile.js"
   },
   "castleBlockedSaid": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleBuildFlight": {
     "writers": [
       "src/behaviours/castle.js"
     ],
@@ -576,6 +608,12 @@
     ],
     "owner": "src/behaviours/stockpile.js"
   },
+  "chestLogsDry": {
+    "writers": [
+      "src/behaviours/gather.js"
+    ],
+    "owner": "src/behaviours/gather.js"
+  },
   "chestNoSpotAt": {
     "writers": [
       "src/behaviours/stockpile.js",
@@ -611,6 +649,12 @@
       "src/behaviours/equip.js"
     ],
     "owner": "src/behaviours/equip.js"
+  },
+  "craftDoorWalk": {
+    "writers": [
+      "src/behaviours/craft.js"
+    ],
+    "owner": "src/behaviours/craft.js"
   },
   "craftInFlight": {
     "writers": [
@@ -1314,6 +1358,12 @@
     ],
     "owner": "src/behaviours/home.js"
   },
+  "nightCastle": {
+    "writers": [
+      "src/residence.js"
+    ],
+    "owner": "src/residence.js"
+  },
   "nightGraceFallbackLogged": {
     "writers": [
       "src/index.js"
@@ -1333,6 +1383,12 @@
       "src/orders.js"
     ],
     "owner": "src/orders.js"
+  },
+  "peerCastle": {
+    "writers": [
+      "src/memory.js"
+    ],
+    "owner": "src/memory.js"
   },
   "pendingSearch": {
     "writers": [
@@ -1580,6 +1636,12 @@
     ],
     "owner": "src/behaviours/stockpile.js"
   },
+  "skySiteProbe": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
   "sleepInFlight": {
     "writers": [
       "src/behaviours/home.js"
@@ -1636,13 +1698,11 @@
       "src/behaviours/bring.js",
       "src/behaviours/build.js",
       "src/behaviours/castle.js",
-      "src/behaviours/castlefetch.js",
       "src/behaviours/craftany.js",
       "src/behaviours/deep.js",
       "src/behaviours/deliver.js",
       "src/behaviours/explore.js",
       "src/behaviours/forage.js",
-      "src/behaviours/furnace.js",
       "src/behaviours/gather.js",
       "src/behaviours/gear.js",
       "src/behaviours/gocastle.js",
@@ -1756,5 +1816,11 @@
       "src/orders.js"
     ],
     "owner": "src/orders.js"
+  },
+  "workerTooled": {
+    "writers": [
+      "src/behaviours/bring.js"
+    ],
+    "owner": "src/behaviours/bring.js"
   }
 }

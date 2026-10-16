@@ -32,6 +32,7 @@ const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.j
 const build = require('./build')
 const flat = require('./flat')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
+const { stepFailed, stepGen } = require('../step')
 
 const STRIKES = 3
 const BACKOFF_BASE_MS = 30000
@@ -1738,6 +1739,145 @@ function guardCastle(bot, ctx) {
   } catch (_) { /* best-effort: util.protectedReason still guards digs */ }
 }
 
+// Builder batch (idkcraft-neuc.54): on the Baritone body (bot.buildCells
+// present) the plain-cube place kinds (stone/planks/frame/fence/torch) go
+// to BuilderProcess in one call per batch. Stairs and doors keep the faced
+// per-cell path (placeStairs/placeFaced), dig/air/prep/decor cells keep
+// theirs — they never enter the schematic. The complete-phase repair is
+// this same re-issue: pick() still surfaces missing place cells one by one
+// after 'complete', and the first eligible one re-issues the schematic for
+// all of them, so sfmk's "repair on return" needs no cadence code.
+const CASTLE_BUILDER_KINDS = new Set(['stone', 'planks', 'frame', 'torch'])
+const CASTLE_BUILDER_BATCH = 256
+// Fences stay on the per-cell path (core-6): Baritone compares full block
+// state, and a connected fence ring never matches the default schematic
+// state — the builder would break/re-lay (or refuse) it forever. Plain
+// cubes only here, like the bead's RISKS ask.
+function heldName(bot, kind) {
+  const want = ITEM[kind]
+  if (!want) return null
+  try {
+    for (const it of bot.inventory.items() || []) {
+      if (it && typeof it.name === 'string' && it.count > 0 && want(it.name)) return it.name
+    }
+  } catch (_) { /* no inventory: no item */ }
+  return null
+}
+function castleBuilderCells(bot, ctx, st) {
+  try {
+    if (!st || !st.site || st.phase === 'prep') return null
+    const { cells } = blueprint.absPlan(st.site, st.rot | 0, st.blueprintVersion)
+    const blocked = st.blocked || {}
+    const held = {}
+    const out = []
+    for (const c of cells) {
+      if (out.length >= CASTLE_BUILDER_BATCH) break
+      if (!CASTLE_BUILDER_KINDS.has(c.kind) || c.prep) continue
+      if (done(bot, c)) continue
+      const b = blocked[bkey(st, c.idx)]
+      if (b && (b.retired || b.until > Date.now())) continue
+      // Held kinds only: an unheld kind falls through to work()'s material
+      // path (failed:no-<kind>) so castlefetch fetches it as today.
+      if (held[c.kind] === undefined) {
+        held[c.kind] = usable(bot, c.kind, ctx) > 0 ? heldName(bot, c.kind) : null
+      }
+      if (!held[c.kind]) continue
+      out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, idx: c.idx, block: held[c.kind] })
+    }
+    if (out.length === 0) return null
+    return { origin: { x: st.site.x, y: st.site.y, z: st.site.z }, cells: out }
+  } catch (_) {
+    return null
+  }
+}
+// Same-block rule for the schematic (core-8): the quarry yields granite /
+// diorite / andesite as often as cobble, and usable(stone) counts them —
+// a cobblestone cell with only deepslate on hand is starved, not wedged.
+function castleSame(want, have) {
+  if (want === have) return true
+  if (typeof want !== 'string' || typeof have !== 'string') return false
+  if (blueprint.isStone(want) && blueprint.isStone(have)) return true
+  for (const suffix of ['_planks', '_fence', '_log']) {
+    if (want.endsWith(suffix) && have.endsWith(suffix)) return true
+  }
+  return false
+}
+function castleBuilderBatch(bot, ctx, st, c) {
+  if (ctx.castleBuildFlight) return true
+  if (!c || clearing(c) || c.prep || !CASTLE_BUILDER_KINDS.has(c.kind)) return false
+  const batch = castleBuilderCells(bot, ctx, st)
+  if (!batch) return false
+  ctx.castleBuildFlight = true
+  const gen = stepGen(ctx) // stale batches must not fail a newer step (core-5)
+  const forbid = [...new Set(batch.cells.map((o) => o.block))]
+  const name = `castle@${st.site.x},${st.site.z}`
+  const flightCells = batch.cells
+  const settleFail = (reason) => {
+    ctx.castleBuildFlight = false
+    if (gen === stepGen(ctx)) st.status = reason
+    stepFailed(ctx, reason, gen)
+  }
+  // Strike-back (core-3, round-2 core-1): still-missing cells with
+  // material on hand were attempted and refused. Counted PER CELL in
+  // st.batchStrikes — the shared strike() keeps one counter for the last
+  // idx only, so two refused cells would reset each other forever. At
+  // STRIKES the cell enters the usual backoff/retire machinery instead of
+  // re-batching forever. Starved misses fetch, never strike.
+  const strikeMisses = () => {
+    try {
+      if (!st.batchStrikes || typeof st.batchStrikes !== 'object') st.batchStrikes = {}
+      const now = Date.now()
+      for (const o of flightCells) {
+        if (done(bot, o)) { delete st.batchStrikes[bkey(st, o.idx)]; continue }
+        if (usable(bot, o.kind, ctx) <= 0) continue
+        const k = bkey(st, o.idx)
+        const n = (st.batchStrikes[k] = (st.batchStrikes[k] | 0) + 1)
+        if (n >= STRIKES) {
+          delete st.batchStrikes[k]
+          blockCell(ctx, st, o, 'build-miss', now)
+        }
+      }
+    } catch (_) { /* strike-back best-effort */ }
+  }
+  try {
+    bot.buildCells(name, batch.origin, flightCells.map((o) => ({
+      dx: o.x - st.site.x, dy: o.y - st.site.y, dz: o.z - st.site.z, block: o.block,
+    })), { forbid, isSame: castleSame }).then(
+      () => {
+        ctx.castleBuildFlight = false
+        // A starved resolve fetches more material and retries the whole
+        // batch — it never strikes (round-2 core-2): the misses were not
+        // attempted, and a stale preemption must not poison live cells.
+        // Only a fresh-gen watchdog stall (attempted, refused) strikes.
+        if (gen !== stepGen(ctx)) return
+        // Missing kinds re-read from the world: whatever is still not
+        // done names the fetch word, like work()'s material path.
+        let miss = null
+        try {
+          miss = flightCells.find((o) => !done(bot, o))
+        } catch (_) {
+          miss = flightCells[0] || null
+        }
+        if (miss) settleFail(`no-${miss.kind}`)
+      },
+      (err) => {
+        // Preempted (round-3 core-2): the step keeps running and re-batches;
+        // never a strike nor a fetch word for material the pack holds.
+        if (err && err.message === 'build-preempted') {
+          ctx.castleBuildFlight = false
+          return
+        }
+        if (err && err.message === 'build-stall' && gen === stepGen(ctx)) strikeMisses()
+        settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
+      },
+    )
+  } catch (_) {
+    ctx.castleBuildFlight = false
+    return false
+  }
+  return true
+}
+
 // One tick on one cell (plan or prep): material check, budget, then place
 // into an open cell or dig a wrong occupant.
 function work(bot, ctx, st, c, now, status) {
@@ -1764,6 +1904,9 @@ function work(bot, ctx, st, c, now, status) {
       return
     }
   } catch (_) { /* walk best-effort: fall through to the cell */ }
+  // v2 builder (neuc.54): plain-cube place cells batch through
+  // BuilderProcess; everything else keeps the per-cell path below.
+  if (typeof bot.buildCells === 'function' && castleBuilderBatch(bot, ctx, st, c)) return
   let item = null
   if (!clearing(c)) {
     item = c.prep === 'fill' ? fillItem(bot, ctx) : findItem(bot, c.kind, ctx)
@@ -1820,7 +1963,7 @@ function castle(bot, ctx) {
     const c = fl.cell || blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells[fl.idx]
     if (c) strike(ctx, st, c, 'flight-hang', now)
   }
-  if (ctx.placeInFlight || ctx.digInFlight) return
+  if (ctx.placeInFlight || ctx.digInFlight || ctx.castleBuildFlight) return
   guardCastle(bot, ctx)
   if (st.announce) arrive(bot, st)
   if (ctx.castlePickup && pickup(bot, ctx)) return
@@ -1926,6 +2069,9 @@ module.exports.noteDry = noteDry
 module.exports.placeFaced = placeFaced // g0z.50: the g0z.47 stairs reuse the faced placement
 module.exports.placeStairs = placeStairs
 module.exports.done = done
+module.exports.castleBuilderCells = castleBuilderCells
+module.exports.castleBuilderBatch = castleBuilderBatch
+module.exports.CASTLE_BUILDER_KINDS = CASTLE_BUILDER_KINDS
 module.exports.stateAt = stateAt
 module.exports.findItem = findItem
 module.exports.fillItem = fillItem

@@ -513,7 +513,7 @@ function createOrders(box) {
       clearStuck()
       resetNightStep()
       if (home !== ctx.home) {
-        ctx.home = home; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildSkipRetry = null; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
+        ctx.home = home; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildSkipRetry = null; ctx.buildBatchStrikes = {}; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
         try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
       }
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }

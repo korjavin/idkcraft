@@ -259,6 +259,13 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   }
 
   function stopOnce() {
+    // A goal-less builder drive (neuc.54 batch) is neither moving nor a
+    // goal, and lastGoalKey may already read 'idle' from a previous park —
+    // so this runs outside the guard below (round-3 core-1), or a parked
+    // builder keeps walking, towering and placing.
+    if (typeof bot.stopBuild === 'function' && (ctx.buildCellsInFlight || ctx.castleBuildFlight)) {
+      bot.stopBuild().catch(() => { /* release best-effort */ })
+    }
     if (ctx.lastGoalKey !== 'idle') {
       if (bot.pathfinder.isMoving()) bot.pathfinder.stop()
       else if (bot.pathfinder.goal) bot.pathfinder.setGoal(null)
@@ -1046,7 +1053,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       if (foundEarly) {
         ctx.adoptDone = true
         // Same resets as setHome below (no ticker handle in this scope).
-        ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
+        ctx.home = foundEarly; ctx.buildSkip = []; ctx.buildSkipAt = {}; ctx.buildBatchStrikes = {}; ctx.buildFails = 0; ctx.buildFailIdx = -1; ctx.buildGoalIdx = -1; ctx.buildFarIdx = -1
         try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
       } else if (!canStream || !ready || (ctx.adoptReadyMisses = (ctx.adoptReadyMisses || 0) + 1) > ADOPT_GRACE) {
         // Give up to build: a mock that never streams, patience out

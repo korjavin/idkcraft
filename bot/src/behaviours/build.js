@@ -41,7 +41,7 @@ const Vec3 = require('vec3')
 const { denyReason, logDeny, isInteractRef, NATURAL_SOLID, isOwnPlaced } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
-const { stepFailed } = require('../step')
+const { stepFailed, stepGen } = require('../step')
 
 const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
 const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset (revmux 01 major)
@@ -583,11 +583,101 @@ function guardExitWalls(bot, ctx, home) {
 // log line — a silent stepStatus stranded the post-park rig in a
 // build<->rest oscillation with no line naming the cause. Once per episode
 // (the holes-line precedent): repeated ticks on a failed step stay silent.
-function failBuild(ctx, reason) {
+function failBuild(ctx, reason, gen) {
   const status = `failed:${reason}`
   const fresh = ctx.stepStatus !== status
-  stepFailed(ctx, reason)
+  stepFailed(ctx, reason, gen)
   if (fresh) console.log(`build failed:${reason}`)
+}
+
+// Builder batch (idkcraft-neuc.54): on the Baritone body (bot.buildCells
+// present) the plain-cube cells (planks + fill, which also takes a plank)
+// go to BuilderProcess in one call per batch, instead of the per-cell
+// GoalPlaceBlock/place/retry/skip loop above. Door, table and clear cells
+// keep the JS path (facing, beds, digs) — they never enter the schematic.
+// One batch in flight at a time (the adapter serializes); a settled batch
+// with missing cells fails material (no-planks) so the FSM fetches like
+// today, a wedged builder fails build-stall loud.
+const BUILDER_KINDS = new Set(['planks', 'fill'])
+const BUILDER_BATCH = 256
+function builderCells(bot, home, skipped) {
+  try {
+    if (!home || !home.site) return null
+    const skip = new Set(Array.isArray(skipped) ? skipped : [])
+    const plan = blueprintFor(home)
+    const item = findItem(bot, wantItem({ kind: 'planks' }))
+    if (!item || typeof item.name !== 'string') return null // no-planks via the old path
+    const cells = []
+    for (let i = 0; i < plan.length && cells.length < BUILDER_BATCH; i++) {
+      const cell = plan[i]
+      if (!BUILDER_KINDS.has(cell.kind) || skip.has(i)) continue
+      if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
+      if (!cellLoaded(bot, home, cell) || cellDone(bot, home, cell)) continue
+      cells.push({ idx: i, dx: cell.dx, dy: cell.dy, dz: cell.dz, block: item.name })
+    }
+    if (cells.length === 0) return null
+    return { home, origin: { x: home.site.x, y: home.site.y, z: home.site.z }, cells, block: item.name }
+  } catch (_) {
+    return null
+  }
+}
+// Strike-back (core-3, round-2 core-2): only a fresh-gen watchdog stall
+// strikes — the batch demonstrably attempted those cells with material on
+// hand and got refusals. Starved resolves fetch and retry whole; stale
+// completions (a preemption's late final) and non-stall errors never
+// strike, or three fights would skip the whole house. A landed cell's
+// entry clears, so a retry starts fresh.
+function noteBatchMisses(bot, ctx, home, batch) {
+  try {
+    const plan = blueprintFor(home)
+    if (!ctx.buildBatchStrikes || typeof ctx.buildBatchStrikes !== 'object') ctx.buildBatchStrikes = {}
+    const held = !!findItem(bot, wantItem({ kind: 'planks' }))
+    for (const c of batch.cells) {
+      const cell = plan[c.idx]
+      if (!cell || cellDone(bot, home, cell)) {
+        delete ctx.buildBatchStrikes[c.idx]
+        continue
+      }
+      if (!held) continue
+      const p = cellAbs(home, cell)
+      const n = (ctx.buildBatchStrikes[c.idx] = (ctx.buildBatchStrikes[c.idx] | 0) + 1)
+      if (n >= 3) {
+        delete ctx.buildBatchStrikes[c.idx]
+        skipCell(ctx, c.idx, p, 'build-miss')
+      }
+    }
+  } catch (_) { /* strike-back best-effort */ }
+}
+function builderBatch(bot, ctx) {
+  if (ctx.buildCellsInFlight) return true
+  const batch = builderCells(bot, ctx.home, ctx.buildSkip)
+  if (!batch) return false
+  ctx.buildCellsInFlight = true
+  const gen = stepGen(ctx) // stale batches must not fail a newer step (core-5)
+  const wireCells = batch.cells.map(({ dx, dy, dz, block }) => ({ dx, dy, dz, block }))
+  try {
+    bot.buildCells('house', batch.origin, wireCells, { forbid: [batch.block] }).then(
+      ({ missing }) => {
+        ctx.buildCellsInFlight = false
+        if (missing > 0 && gen === stepGen(ctx)) failBuild(ctx, 'no-planks', gen)
+      },
+      (err) => {
+        ctx.buildCellsInFlight = false
+        // Preempted (round-3 core-2: fight took the body, same stepGen):
+        // neither a strike nor a failure — the step keeps running and
+        // re-batches next tick.
+        if (err && err.message === 'build-preempted') return
+        if (err && err.message === 'build-stall' && gen === stepGen(ctx)) {
+          noteBatchMisses(bot, ctx, batch.home, batch)
+        }
+        failBuild(ctx, err && err.message === 'build-stall' ? 'build-stall' : 'build-failed', gen)
+      },
+    )
+  } catch (err) {
+    ctx.buildCellsInFlight = false
+    failBuild(ctx, 'build-failed', gen)
+  }
+  return true
 }
 
 function skipCell(ctx, idx, p, why) {
@@ -797,6 +887,7 @@ function build(bot, ctx, target, state) {
     ctx.buildSkip = []
     ctx.buildSkipAt = {}
     ctx.buildSkipRetry = null
+    ctx.buildBatchStrikes = {} // a new site re-arms strike-back (round-2 core-2)
     ctx.buildFails = 0
     ctx.buildFailIdx = -1
     ctx.buildFarIdx = -1
@@ -818,7 +909,7 @@ function build(bot, ctx, target, state) {
       if (ctx.buildFails >= 3) skipCell(ctx, hIdx, cellAbs(ctx.home, blueprintFor(ctx.home)[hIdx]), 'flight-hang')
     }
   }
-  if (ctx.placeInFlight) return
+  if (ctx.placeInFlight || ctx.buildCellsInFlight) return
   if (!ctx.home) return
   guardOwnWalls(bot, ctx)
   // Claim the table coords the moment the workbench stands (see makeHome):
@@ -959,6 +1050,10 @@ function build(bot, ctx, target, state) {
     ctx.buildLastProgressLog = now
     try { bot.chat(`building ${total - wrong}/${total}`) } catch (_) { /* chat best-effort */ }
   }
+
+  // v2 builder (neuc.54): plain-cube cells batch through BuilderProcess;
+  // door/table/clear fall through to the per-cell path below.
+  if (typeof bot.buildCells === 'function' && builderBatch(bot, ctx)) return
 
   const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
   if (!item && cell.kind !== 'clear') {
@@ -1166,6 +1261,9 @@ module.exports.houseTableAt = houseTableAt
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
 module.exports.cellLoaded = cellLoaded
+module.exports.builderCells = builderCells
+module.exports.builderBatch = builderBatch
+module.exports.BUILDER_KINDS = BUILDER_KINDS
 module.exports.pruneBuildSkips = pruneBuildSkips
 module.exports.retrySkipsOnce = retrySkipsOnce
 module.exports.BUILD_SKIP_RETRY_MS = BUILD_SKIP_RETRY_MS

@@ -97,7 +97,7 @@ Three containers in a single Docker Compose stack, deployed without Traefik (Min
 Bot architecture follows "one body, many senses": local perception (`bot/src/perception.js`) gathers facts every tick, the brain arbitrates body ownership (`fight` | `follow` | `roam` | `idle`, or the work-mode goal arbiter `stay` | `gohome` | `shelter` | `craft` | `equip` | `build` | `gather` | `deliver` | `forage` | `explore` | `rest` when nobody is followed), and execution dispatches via `BEHAVIOURS` (`bot/src/behaviours/*.js`), while scouting runs alongside as a local reflex. Bot disk memory (homes, finds, chunks, danger) lives in `/app/memory/<BOT_USERNAME>.json` on the `bot-memory` named volume — do not rename the path or the volume.
 
 ### Shared Contract (do not rename)
-- **Services:** `mc`, `bot`, `baritone`, `bot2`, `body2`, `swarm1`..`swarm8` (the `laya` sidecar left the stack in idkcraft-jlda.6; rollback: restore its service + CI steps from pre-jlda.6 git history and set `BRAIN_URL=http://laya:8000/v1/systemone`)
+- **Services:** `mc`, `bot`, `baritone`, `bot2`, `body2`, `swarm1`..`swarm32` (the `laya` sidecar left the stack in idkcraft-jlda.6; rollback: restore its service + CI steps from pre-jlda.6 git history and set `BRAIN_URL=http://laya:8000/v1/systemone`)
 - **Compose file:** `docker-compose.yml` at repository root
 - **Bot build context:** `./bot`, `bot/Dockerfile`
 - **Image:** `ghcr.io/korjavin/idkcraft:latest` (CI rewrites the tag to the commit SHA on the `deploy` branch)
@@ -118,8 +118,8 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BOT_CASTLE_PEER`: peer bot whose memory file's complete castle is read (never written) as a night residence (bot2 pins it to `BOT_USERNAME`; empty = off)
   - `BOT_PEER_USERNAME`: peer bot name that ownerOnline ignores (bot2 pins it to `BOT_USERNAME`; v1 excludes v2 via `BOT2_USERNAME`; never set on bot)
   - `BODY2_MEM_LIMIT`: v2 body RAM cap (default `2500m`)
-  - `BOT_SWARM_N`: flat swarm size incl. `bot` (idkcraft-lhg2; empty = off, swarm1..8 idle; `9` = bot + all 8). `flat <r>` splits the square into N x-strips: bot = strip 0, swarmK = strip K (`BOT_SWARM_I`, pinned per service; never set on bot). bot2 does not split
-  - `BOT_SWARM_PREFIX`: swarm bot names `<prefix>1..8` (default `IdkSwarm`; whitelist each OFFLINE uuid like `BOT_USERNAME`; must not collide with `BOT2_USERNAME`)
+  - `BOT_SWARM_N`: flat swarm size incl. `bot` (idkcraft-lhg2; empty = off, swarm1..32 idle; `33` = bot + all 32). `flat <r>` splits the square into N x-strips: bot = strip 0, swarmK = strip K (`BOT_SWARM_I`, pinned per service; never set on bot). bot2 does not split
+  - `BOT_SWARM_PREFIX`: swarm bot names `<prefix>1..32` (default `IdkSwarm`; whitelist each OFFLINE uuid like `BOT_USERNAME`; must not collide with `BOT2_USERNAME`)
   - `BOT_SWARM_MEM_LIMIT`: per-swarm-bot RAM cap (default `400m`)
   - `BRIDGE_HOST`/`BRIDGE_PORT`/`BRIDGE_CONSOLE_PORT`: bridge addresses (defaults `body2`/`7778`/`7777`, pinned on bot2)
   - `BRAIN_TICK_MS`: Reflex loop interval (default `1000`)

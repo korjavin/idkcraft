@@ -303,3 +303,31 @@ describe('3nt.23: fight without a hostile follows, never stops', () => {
     }
   })
 })
+
+describe('neuc.54: stop parks a goal-less builder drive (round-3 core-1)', () => {
+  it('batch in flight with lastGoalKey idle: stop still sends stopBuild', async () => {
+    const bot = orderBot()
+    bot.players = { Steve: visiblePlayer('Steve', 5) }
+    bot.stopBuild = async () => { bot._buildStops = (bot._buildStops | 0) + 1 }
+    const ticker = createTicker({
+      bot,
+      brain: { async decide() { return { action: 'idle', sprint: false, source: 'stub' } } },
+      tickMs: 10,
+      idleTickMs: 10,
+    })
+    const ctx = bot._tickerCtx
+    const cap = capture()
+    try {
+      // A previous park left the key idle; the on-site batch went out with
+      // no goal at all (neither moving nor a goal to clear).
+      ctx.lastGoalKey = 'idle'
+      ctx.buildCellsInFlight = true
+      handleChat(bot, ticker, 'Steve', 'stop')
+      for (let t = 0; t < 10 && !(bot._buildStops > 0); t++) await ticker.tick()
+      assert.ok(bot._buildStops > 0, 'stopOnce stops the builder outside the idle guard')
+    } finally {
+      cap.release()
+      ticker.destroy()
+    }
+  })
+})
