@@ -91,4 +91,26 @@ public class MineTest {
     public void dropTargetsEmptyTargetsChangesNothing() {
         assertEquals(List.of("cobblestone"), Mine.dropTargets(List.of("cobblestone"), List.of()));
     }
+
+    static class FakeProc {
+        @SuppressWarnings("unused")
+        private final java.util.List<String> known = java.util.List.of("a", "b", "c");
+        @SuppressWarnings("unused")
+        private final java.util.List<String> blacklist = java.util.List.of("x");
+    }
+
+    @Test
+    public void processListSizesReadsFirstTwoLists() {
+        assertArrayEquals(new int[] {3, 1}, Mine.processListSizes(new FakeProc()));
+    }
+
+    @Test
+    public void processListSizesNullReadsUnknown() {
+        assertArrayEquals(new int[] {-1, -1}, Mine.processListSizes(null));
+    }
+
+    @Test
+    public void processListSizesGarbageReadsUnknown() {
+        assertArrayEquals(new int[] {-1, -1}, Mine.processListSizes("no lists here"));
+    }
 }

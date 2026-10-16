@@ -73,6 +73,7 @@ public final class Mine {
 
     public static void install(BridgeServer server) {
         server.register("baritone.mine", params -> start(server, params));
+        server.register("baritone.minestate", params -> state(server));
         server.onClientTick(() -> tick(server));
     }
 
@@ -272,6 +273,118 @@ public final class Mine {
         res.addProperty("have", have);
         res.addProperty("target", goal);
         return res;
+    }
+
+    /**
+     * Diagnostic read (neuc.53 rig evidence — the process lives but never
+     * gains): who holds pathing control, the custom goal behind it, and the
+     * candidate/blacklist sizes. Best-effort everywhere except the
+     * out-of-world gate; a rig probe polls it mid-leg.
+     */
+    private static JsonObject state(BridgeServer server) throws Rpc.RpcException {
+        JsonObject res = server.onClient(() -> {
+            Minecraft client = Minecraft.getInstance();
+            if (client == null || client.player == null || client.level == null) {
+                return null;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("id", mineId);
+            o.addProperty("target", target);
+            o.addProperty("active", active);
+            IBaritone b;
+            try {
+                b = BaritoneAPI.getProvider().getPrimaryBaritone();
+            } catch (Exception e) {
+                return o;
+            }
+            try {
+                o.addProperty("have", countInventory(acceptedItems(names)));
+            } catch (Exception e) {
+                o.addProperty("have", lastHave);
+            }
+            try {
+                o.addProperty("procActive", b.getMineProcess().isActive());
+            } catch (Exception e) {
+                o.addProperty("procActive", false);
+            }
+            try {
+                o.addProperty("pathing", b.getPathingBehavior().isPathing());
+            } catch (Exception e) {
+                o.addProperty("pathing", false);
+            }
+            String inControl = null;
+            try {
+                Object c = b.getPathingControlManager().mostRecentInControl().orElse(null);
+                if (c != null) {
+                    inControl = c.getClass().getSimpleName();
+                }
+            } catch (Exception ignored) {
+                // Best-effort: control info is diagnostic only.
+            }
+            if (inControl != null) {
+                o.addProperty("inControl", inControl);
+            } else {
+                o.add("inControl", null);
+            }
+            String goal = null;
+            try {
+                Object g = b.getCustomGoalProcess().mostRecentGoal();
+                if (g != null) {
+                    goal = String.valueOf(g);
+                }
+            } catch (Exception ignored) {
+                // Best-effort: goal info is diagnostic only.
+            }
+            if (goal != null) {
+                o.addProperty("customGoal", goal);
+            } else {
+                o.add("customGoal", null);
+            }
+            int[] lists = {-1, -1};
+            try {
+                lists = processListSizes(b.getMineProcess());
+            } catch (Exception ignored) {
+                // Best-effort: sizes are diagnostic only.
+            }
+            o.addProperty("known", lists[0]);
+            o.addProperty("blacklisted", lists[1]);
+            return o;
+        });
+        if (res == null) {
+            throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
+        }
+        return res;
+    }
+
+    /**
+     * Best-effort sizes of the first two {@code List} fields on a mine
+     * process (known locations, blacklist, in declaration order); {@code
+     * {-1, -1}} when unreadable. Pure reflection, no game, so unit tests
+     * reach it with a stand-in.
+     */
+    static int[] processListSizes(Object proc) {
+        int[] out = {-1, -1};
+        if (proc == null) {
+            return out;
+        }
+        try {
+            int i = 0;
+            for (java.lang.reflect.Field f : proc.getClass().getDeclaredFields()) {
+                if (i >= 2) {
+                    break;
+                }
+                if (java.util.List.class.isAssignableFrom(f.getType())) {
+                    f.setAccessible(true);
+                    Object v = f.get(proc);
+                    if (v instanceof java.util.List) {
+                        out[i++] = ((java.util.List<?>) v).size();
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // Best-effort: sizes are diagnostic only.
+        }
+        return out;
     }
 
     /** Client thread: record stateIds of guard cells matching the blocks. */
