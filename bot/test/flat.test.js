@@ -678,6 +678,30 @@ describe('flat ticker wiring', () => {
     })
   })
 
+  it('zchb: a flat running alone steps a manual jev brain down; the join restores it (review 02)', async () => {
+    const saved = { u: process.env.BRAIN_URL, k: process.env.TYPESAFE_API_KEY }
+    process.env.BRAIN_URL = 'http://laya:8000/v1/systemone'
+    process.env.TYPESAFE_API_KEY = 'k'
+    const P = { username: 'P', entity: { position: pos(1, 63, 0) } } // level 62: shave work keeps it running
+    const bot = mockBot(makeWorld({}), { players: { P } })
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, brainEngine: 'jev' })
+    try {
+      handleChat(bot, ticker, 'P', 'brain jev')
+      ticker.setFlat({ radius: 4, by: 'P', explicit: true })
+      bot.players = {}
+      await ticker.tick()
+      assert.ok(bot._tickerCtx.flat, 'flat still running')
+      assert.equal(ticker.getBrainEngine(), 'off', 'no paid brain with nobody online')
+      bot._tickerCtx.flat = null
+      bot.players = { P }
+      await ticker.tick()
+      assert.equal(ticker.getBrainEngine(), 'jev', 'restored on join after the flat')
+    } finally {
+      ticker.destroy()
+      for (const [k, v] of [['BRAIN_URL', saved.u], ['TYPESAFE_API_KEY', saved.k]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+    }
+  })
+
   it('zchb: single bot — bare flat levels to the speaker feet level, no relay chat', async () => {
     const world = makeWorld({})
     world.set(3, 64, 0, 'dirt')

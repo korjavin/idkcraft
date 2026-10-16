@@ -505,6 +505,8 @@ function createOrders(box) {
         : Math.abs(cx - f.cx) <= f.r && Math.abs(cz - f.cz) <= f.r)
       if (f && inside && (!explicit || radius === f.r)) {
         if (!relay) f.by = by || f.by
+        f.travelBest = null // a resumed far walk gets a fresh give-up budget (review 02)
+        f.travelStall = 0
         f.parked = false
         ctx.paused = false
         announce(f)
