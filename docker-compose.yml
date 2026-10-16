@@ -270,6 +270,11 @@ services:
       mc:
         condition: service_healthy
     mem_limit: ${BOT_SWARM_MEM_LIMIT:-400m}
+    # Idle slot (I >= N or N empty): sleep instead of starting node (~1 MiB vs ~30).
+    command:
+      - sh
+      - -c
+      - 'if [ "$${BOT_SWARM_N:-0}" -le "$$BOT_SWARM_I" ] 2>/dev/null; then echo "swarm idle: BOT_SWARM_I >= BOT_SWARM_N"; exec sleep infinity; fi; exec node src/index.js'
     environment: &swarm-env
       MC_HOST: mc
       MC_PORT: 25565
