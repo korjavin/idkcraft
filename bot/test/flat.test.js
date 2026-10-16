@@ -629,8 +629,11 @@ describe('flat ticker wiring', () => {
         }
         assert.deepEqual(r.bot.chats, [])
         assert.ok(!r.ctx.bring && !r.ctx.pendingSearch && !r.ctx.lead && !r.ctx.work)
-        handleChat(r.bot, r.ticker, 'P', 'flat 16 100 -40')
-        assert.ok(r.ctx.flat || r.bot.chats.length === 0, 'flat family still reaches its branch')
+        const logs = []
+        const log = console.log
+        console.log = (...a) => logs.push(a.join(' '))
+        try { handleChat(r.bot, r.ticker, 'P', 'flat 16 100 -40') } finally { console.log = log }
+        assert.ok(logs.some((l) => l.includes('helper waits for the main bot relay')), 'flat family still reaches its branch')
       } finally { r.done() }
     })
 
