@@ -637,6 +637,25 @@ describe('flat ticker wiring', () => {
       } finally { r.done() }
     })
 
+    it('vewo.6: a name prefix addresses exactly one bot', () => {
+      const run = (name, helper, msg) => {
+        process.env.BOT_SWARM_I = helper ? '1' : '0'
+        const r = rig({ players: { P: { username: 'P', entity: { position: pos(3, 64, 0) } } } })
+        try {
+          r.bot.username = name
+          handleChat(r.bot, r.ticker, 'P', msg)
+          return { chats: r.bot.chats.slice(), paused: r.ctx.paused }
+        } finally { r.done() }
+      }
+      assert.deepEqual(run('IdkBot', false, 'IdkBot2: help').chats, [], 'other bot ignores')
+      assert.deepEqual(run('IdkSwarm1', true, 'IdkBot2: help').chats, [], 'helper ignores')
+      assert.ok(run('IdkBot2', false, 'idkbot2: help').chats.length > 0, 'addressed bot answers, case-insensitive')
+      assert.ok(run('IdkBot', false, 'IdkBot:help').chats.length > 0, 'space after colon optional')
+      assert.ok(run('IdkBot', false, 'help').chats.length > 0, 'unprefixed unchanged')
+      assert.equal(run('IdkSwarm1', true, 'idkswarm1: stop').paused, true, 'addressed helper obeys stop')
+      assert.deepEqual(run('IdkSwarm1', true, 'IdkSwarm1: help').chats, [], 'addressed helper still flat-only')
+    })
+
     it('helper parks where its flat finished; the main bot does not', async () => {
       for (const [i, parked] of [['3', true], ['0', false]]) {
         process.env.BOT_SWARM_I = i

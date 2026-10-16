@@ -306,7 +306,14 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     return
   }
   const playerName = resolvePlayer(bot, username, senderUuid)
-  const msg = message.toLowerCase().trim()
+  let msg = message.toLowerCase().trim()
+  // vewo.6: '<BotName>: <command>' belongs to that bot alone (full name,
+  // case-insensitive); every other bot ignores the line. Unprefixed unchanged.
+  const addr = /^([\w.]{3,16}):\s*(.*)$/.exec(msg)
+  if (addr) {
+    if (addr[1] !== String(bot.username).toLowerCase()) return
+    msg = addr[2]
+  }
   // Puppet sessions (idkcraft-jlw7): the only incoming-chat tag — session
   // review tells from=IdkTester apart from live players. No metric label.
   console.log(`chat from=${playerName} msg=${msg}`)
