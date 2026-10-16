@@ -655,6 +655,10 @@ function builderBatch(bot, ctx) {
   ctx.buildCellsInFlight = true
   const gen = stepGen(ctx) // stale batches must not fail a newer step (core-5)
   const wireCells = batch.cells.map(({ dx, dy, dz, block }) => ({ dx, dy, dz, block }))
+  // Fire line (r185): batch composition the stall watchdog cannot see.
+  try {
+    console.log(`build builder house: ${wireCells.length} cells block=${batch.block}`)
+  } catch (_) { /* fire line best-effort */ }
   try {
     bot.buildCells('house', batch.origin, wireCells, { forbid: [batch.block] }).then(
       ({ missing }) => {

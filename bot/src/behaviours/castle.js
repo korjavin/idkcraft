@@ -1812,6 +1812,14 @@ function castleBuilderBatch(bot, ctx, st, c) {
   const forbid = [...new Set(batch.cells.map((o) => o.block))]
   const name = `castle@${st.site.x},${st.site.z}`
   const flightCells = batch.cells
+  // Fire line (r185): batch composition the stall watchdog cannot see —
+  // the next failed:build-stall reads back what this batch held.
+  try {
+    const kinds = {}
+    for (const o of flightCells) kinds[o.kind] = (kinds[o.kind] | 0) + 1
+    const first = flightCells[0]
+    console.log(`castle builder ${name}: ${flightCells.length} cells (${Object.entries(kinds).map(([k, n]) => `${k}x${n}`).join(',')}) first=${first.x},${first.y},${first.z}`)
+  } catch (_) { /* fire line best-effort */ }
   const settleFail = (reason) => {
     ctx.castleBuildFlight = false
     if (gen === stepGen(ctx)) st.status = reason

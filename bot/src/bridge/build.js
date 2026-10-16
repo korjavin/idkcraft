@@ -230,6 +230,14 @@ function watch(bot, st) {
   if (starved) {
     st.settle(st.resolve, { placed: st.placed, missing: st.missing })
   } else {
+    // Stall-site line (r185): absolute coords the world still shows
+    // unplaced, capped so one wedge cannot flood the log.
+    try {
+      const show = (missing || st.cells).slice(0, 10)
+        .map((c) => `${st.origin.x + c.dx},${st.origin.y + c.dy},${st.origin.z + c.dz}:${c.block}`)
+        .join(' ')
+      console.log(`build-stall ${st.name}: ${st.missing} cells unplaced e.g. ${show}`)
+    } catch (_) { /* stall-site line best-effort */ }
     st.settle(st.reject, new Error('build-stall'))
   }
   try {

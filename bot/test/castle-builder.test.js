@@ -93,7 +93,34 @@ function paintAll(world, { except = null } = {}) {
   }
 }
 
+function capture() {
+  const logged = []
+  const origLog = console.log
+  console.log = (m) => { logged.push(String(m)) }
+  return { logged, release() { console.log = origLog } }
+}
+
 describe('castle builder branch (idkcraft-neuc.54)', () => {
+  it('the fire line names the batch composition (r185 stall diagnosis)', async () => {
+    const world = makeWorld()
+    paintAll(world)
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    const broken = plan.filter((c) => c.kind === 'stone').slice(0, 2)
+    for (const c of broken) world.set(c.x, c.y, c.z, 'air')
+    const bot = mockBot(world)
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    const cap = capture()
+    try {
+      castle(bot, ctx)
+      await settle()
+    } finally {
+      cap.release()
+    }
+    const line = cap.logged.find((m) => m.startsWith('castle builder castle@'))
+    assert.ok(line, `fire line logged, got: ${cap.logged.join(' | ').slice(0, 200)}`)
+    assert.ok(/stone/.test(line) && /first=/.test(line), `composition reads back: ${line}`)
+  })
+
   it('only plain cubes batch: no fence/stairs/door (core-6)', () => {
     assert.deepEqual([...castle.CASTLE_BUILDER_KINDS].sort(), ['frame', 'planks', 'stone', 'torch'])
     const world = makeWorld()
