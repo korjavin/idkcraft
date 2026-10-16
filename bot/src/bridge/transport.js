@@ -286,6 +286,58 @@ class FakeTransport extends EventEmitter {
       case 'chat.send':
         s.chatLog.push(params.message)
         return { sent: true }
+      // idkcraft-neuc.53 baritone.mine: s.mineScript 'hang' = no events
+      // (the adapter's stall/leash watch decides), 'noPath' = an end
+      // below target, default = a progress tick then the batch landing
+      // (gains modelled into the pack) + the done end.
+      case 'baritone.mine': {
+        const blocks = Array.isArray(params.blocks) ? params.blocks : [];
+        (s.mineLog = s.mineLog || []).push({ ...params })
+        s.mineSeq = (s.mineSeq | 0) + 1
+        const id = s.mineSeq
+        const want = new Set()
+        for (const b of blocks) {
+          const n = String(b).replace(/^minecraft:/, '')
+          want.add(n)
+          if (n === 'grass_block') want.add('dirt')
+          if (n === 'stone') want.add('cobblestone')
+        }
+        let have = 0
+        for (const i of s.inventory) if (i.slot >= 9 && want.has(i.name)) have += i.count
+        const target = have + Math.floor(params.count)
+        if (s.mineScript === 'hang') return { id, have, target }
+        setImmediate(() => {
+          if (s.mineScript === 'noPath') {
+            this.inject('baritone.event', { kind: 'mine', id, have, target, active: false })
+            return
+          }
+          if (s.mineScript === 'guard') {
+            // At target AND guarded: the break still ends loudly.
+            this.inject('baritone.event', { kind: 'mine', id, have: target, target, active: false, status: 'guard' })
+            return
+          }
+          if (s.mineScript === 'futile') {
+            // Churn trip below target: blacklist churn with zero gains.
+            this.inject('baritone.event', { kind: 'mine', id, have, target, active: false, status: 'futile' })
+            return
+          }
+          const gainName = want.has('dirt') && blocks.map(String).includes('dirt') ? 'dirt'
+            : [...want][0]
+          const gain = target - have
+          if (gain > 0) {
+            let stack = s.inventory.find((i) => i.slot >= 9 && i.name === gainName)
+            if (!stack) {
+              const free = [...Array(36).keys()].map((k) => k + 9).find((slot) => !s.inventory.some((i) => i.slot === slot))
+              stack = { slot: free == null ? 9 : free, name: gainName, count: 0 }
+              if (free != null) s.inventory.push(stack)
+            }
+            stack.count += gain
+          }
+          this.inject('baritone.event', { kind: 'mine', id, have: have + 1 > target ? target : have + 1, target, active: true })
+          this.inject('baritone.event', { kind: 'mine', id, have: target, target, active: false })
+        })
+        return { id, have, target }
+      }
       // idkcraft-neuc.54 baritone.build. Records the call, then lays on a
       // later turn like the mod's ticks: one progress event per turn, then
       // the final active:false. Only cells whose block (or a same-class

@@ -2876,6 +2876,137 @@ describe('tableFor sight (neuc.50)', () => {
   })
 })
 
+describe('equip v2 mine branch (idkcraft-neuc.53)', () => {
+  const KIT = [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }]
+
+  it('one bot.mine call for the shortfall, no bot.dig', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1, 'exactly one mine call')
+    assert.deepEqual(mines[0].names, ['dirt', 'grass_block', 'stone', 'cobblestone'])
+    assert.equal(mines[0].count, 22, 'SCAFFOLD_FULL(32) - scaffold(10)')
+    assert.equal(mines[0].opts.radius, 12)
+    assert.equal(typeof mines[0].opts.forbid, 'function')
+    assert.equal(bot.calls.dig.length, 0, 'no single digs on the mine path')
+    await flush()
+    assert.equal(ctx.equipDigInFlight, false, 'the in-flight flag clears on resolve')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('a rejected mine fails blocks so the hold and latch keep working', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    bot.mine = async () => { throw new Error('mine-stall') }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(bot.calls.dig.length, 0)
+    assert.equal(ctx.equipDigInFlight, false)
+    assert.equal(ctx.stepStatus, 'failed:equip-blocks')
+    assert.ok(bot.errs.join(' ').includes('mine-stall'), `errs: ${bot.errs}`)
+    bot.restoreError()
+  })
+
+  it('a mine-stopped settles quietly: no fail onto a borrowing fight', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    bot.mine = async () => { throw new Error('mine-stopped') }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    await flush()
+    assert.equal(ctx.equipDigInFlight, false)
+    assert.equal(ctx.stepStatus, 'running', 'no equip-blocks written over the fight')
+    assert.equal(bot.errs.length, 0)
+    bot.restoreError()
+  })
+
+  it('a body inside the home box walks out before any mine', async () => {
+    const home = { site: { x: 0, y: 64, z: 0 }, interior: { min: { x: -2, y: 63, z: -2 }, max: { x: 2, y: 66, z: 2 } } }
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx(home) // body (0,64,0) is inside the box
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 0, 'no mine from the porch')
+    assert.equal(bot.calls.goals.length, 1, 'one walk-out goal')
+    assert.ok(String(ctx.lastGoalKey).startsWith('equip-guard:'), `walk-out key, not idle: ${ctx.lastGoalKey}`)
+    bot.entity.position = { x: 500, y: 64, z: 500 } // out: the mine starts
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.equal(ctx.lastGoalKey, 'mine:equip', 'a goal key while the mine owns the body')
+    bot.restoreError()
+  })
+
+  it('insideGuardBox/guardExitBox pick the shortest way out', async () => {
+    const guard = { x0: -5, y0: 58, z0: -5, x1: 5, y1: 67, z1: 5 }
+    assert.equal(equip.insideGuardBox(guard, { x: 0, y: 64, z: 0 }), true)
+    assert.equal(equip.insideGuardBox(guard, { x: 500, y: 64, z: 500 }), false)
+    assert.deepEqual(equip.guardExitBox(guard, { x: 0, y: 64, z: 4 }), { x: 0, y: 64, z: 6 })
+  })
+
+  it('the mine carries the home guard box, none without a home', async () => {
+    const home = { site: { x: 0, y: 64, z: 0 }, interior: { min: { x: -2, y: 63, z: -2 }, max: { x: 2, y: 66, z: 2 } } }
+    assert.deepEqual(equip.equipGuardBox(home), {
+      x0: -5, y0: 58, z0: -5, x1: 5, y1: 67, z1: 5,
+    })
+    assert.equal(equip.equipGuardBox(null), null)
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    bot.entity.position = { x: 500, y: 64, z: 500 } // outside the box: the mine starts
+    const ctx = freshCtx(home)
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.deepEqual(mines[0].opts.guard, equip.equipGuardBox(home))
+    bot.restoreError()
+  })
+
+  it('a full kit never mines', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 32 }], ids: IDS, recipes: {} })
+    let mined = 0
+    bot.mine = async () => { mined++ }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(mined, 0)
+    assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
+  })
+
+  it('water underfoot never trips the leash', async () => {
+    const bot = mockBot({
+      items: [...KIT, { name: 'dirt', count: 10 }],
+      ids: IDS,
+      recipes: {},
+      blockAtImpl: (p) => (p.y === 63 ? { name: 'water', position: p } : null),
+    })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx()
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.equal(mines[0].opts.forbid({ x: 0, y: 64, z: 0 }), false, 'swimming past water is not forbidden')
+    bot.restoreError()
+  })
+
+  it('the castle site still forbids the body', async () => {
+    const bot = mockBot({ items: [...KIT, { name: 'dirt', count: 10 }], ids: IDS, recipes: {} })
+    const mines = []
+    bot.mine = async (names, count, opts) => { mines.push({ names, count, opts }) }
+    const ctx = freshCtx()
+    ctx.castle = { site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: 1 }
+    equip(bot, ctx, null, {})
+    assert.equal(mines.length, 1)
+    assert.equal(mines[0].opts.forbid({ x: 0, y: 64, z: 0 }), true, 'standing on the site is forbidden')
+    assert.equal(mines[0].opts.forbid({ x: 500, y: 64, z: 500 }), false, 'far ground is not')
+    bot.restoreError()
+  })
+})
+
 describe('equip pick budget (idkcraft-neuc.59)', () => {
   // v2 fake: bot.mine marks the Baritone body (no BOT_BODY env juggling, so
   // v1 tests in this file keep running with the env untouched).
@@ -3066,8 +3197,9 @@ describe('equip pick budget round 4 (idkcraft-neuc.59 review 03)', () => {
 
   it('endless table walks give up and the leg digs', async () => {
     // Standing but unreachable table: tableFor walks every tick, settles
-    // nothing, and its own 20-walk give-up only restarts the walk. The slow
-    // cap must end it so the leg digs.
+    // nothing, and latches the day-unreachable mark at 20 walks — since
+    // zk7e the fallback honors the mark and ends there instead of walking
+    // to the 40-tick slow cap. Either way the leg digs.
     const bot = v2bot({
       items: [worn(100), { name: 'stone_sword', count: 1 },
         { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
@@ -3080,13 +3212,69 @@ describe('equip pick budget round 4 (idkcraft-neuc.59 review 03)', () => {
     ctx.step = 'castlefetch' // prod shape: table fails settle stale-dropped, never poisoning
     ctx.stepStatus = 'running'
     ctx.castleFetch = { kind: 'stone' }
-    for (let i = 0; i < 40; i++) {
-      assert.equal(equip.craftSparePick(bot, ctx), true, `walk tick ${i + 1} still tries`)
+    let ticks = 0
+    for (let i = 0; i < 45; i++) {
+      ticks++
+      if (!equip.craftSparePick(bot, ctx)) break
       await flush()
     }
-    assert.equal(equip.craftSparePick(bot, ctx), false, '40 dry true ticks latch the leg')
+    assert.ok(ticks < 40, `the mark ends the walk early, took ${ticks} ticks`)
+    assert.ok(ctx.equipTableUnreachable, 'tableFor latched the day mark')
     assert.equal(bot.calls.craft.length, 0, 'no craft ever issued: the leg digs as before')
     assert.equal(ctx.stepStatus, 'running', 'stale-dropped, never failed')
+    bot.restoreError()
+  })
+})
+
+describe('equip pick budget day-unreachable mark (idkcraft-zk7e)', () => {
+  const tablespot = require('../src/behaviours/tablespot')
+  function v2bot(opts) {
+    const bot = mockBot(opts)
+    bot.mine = async () => {}
+    return bot
+  }
+  const castleCtx = (home, extra) => ({ ...freshCtx(home), castle: { site: { x: 0, y: 64, z: 0 } }, ...extra })
+  const worn = (used) => ({ name: 'stone_pickaxe', count: 1, maxDurability: 131, durabilityUsed: used })
+
+  it('a same-day unreachable mark skips the budget; a carried table still proceeds', () => {
+    const bot = v2bot({
+      items: [worn(100), { name: 'stone_sword', count: 1 },
+        { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
+      blockAtImpl: () => TABLE, // the home claim stands, so tableReady passes
+    })
+    const ctx = castleCtx({ table: { x: 10, y: 64, z: 0 } })
+    assert.equal(equip.pickBudgetDue(bot, ctx), true)
+    ctx.equipTableUnreachable = { day: tablespot.dayOf(bot), x: 10, y: 64, z: 0 }
+    assert.equal(equip.pickBudgetDue(bot, ctx), false, 'marked today: dig, never re-walk')
+    assert.equal(equip.craftSparePick(bot, ctx), false)
+    bot._items.push({ name: 'crafting_table', count: 1 }) // placed beside the body, never walked
+    assert.equal(equip.pickBudgetDue(bot, ctx), true)
+    bot.restoreError()
+  })
+
+  it('a marked station still skipped when a second claim is unreadable', () => {
+    const bot = v2bot({
+      items: [worn(100), { name: 'stone_sword', count: 1 },
+        { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
+      blockAtImpl: (p) => (Math.floor(p.x) === 10 ? TABLE : null), // second claim unloaded
+    })
+    const ctx = castleCtx({ table: { x: 10, y: 64, z: 0 } })
+    ctx.claimedTable = { x: 500, y: 64, z: 500 }
+    assert.equal(equip.pickBudgetDue(bot, ctx), true)
+    ctx.equipTableUnreachable = { day: tablespot.dayOf(bot), x: 10, y: 64, z: 0 }
+    assert.equal(equip.pickBudgetDue(bot, ctx), false, 'unreadable second claim must not mask the marked walk')
+    bot.restoreError()
+  })
+
+  it('a usable nearby claim proceeds despite the mark', () => {
+    const bot = v2bot({
+      items: [worn(100), { name: 'stone_sword', count: 1 },
+        { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
+      blockAtImpl: (p) => ([1, 10].includes(Math.floor(p.x)) ? TABLE : null),
+    })
+    const ctx = castleCtx({ table: { x: 10, y: 64, z: 0 } }, { equip: { tablePos: { x: 1, y: 64, z: 0 } } })
+    ctx.equipTableUnreachable = { day: tablespot.dayOf(bot), x: 10, y: 64, z: 0 }
+    assert.equal(equip.pickBudgetDue(bot, ctx), true, 'ajoe recovery: the fresh roadside table wins')
     bot.restoreError()
   })
 })

@@ -24,7 +24,8 @@ const stockpileMod = require('./stockpile')
 const danger = require('../danger')
 const { countItems } = require('../perception')
 const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('./util')
-const { stepDone, stepFailed, failReason, isFinished } = require('../step')
+const { cacheReady } = require('../bridge/mine')
+const { stepDone, stepFailed, failReason, isFinished, stepGen, stale } = require('../step')
 
 // Stack-ish targets per kind (bead: ~64 cobble, ~16 logs' worth). Each is
 // >= castle BATCH (door: its remainder is 1), so a fetch picked on a
@@ -77,8 +78,20 @@ const AIR_WAITS = 3 // ticks a dig waits for the feet to land
 const PICKUP_WAITS = 8 // ticks walking into a below-feet hole for its drop (neuc.51)
 const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
 const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
+const QWAIT_MS = 45000 // bounded pre-pick wait for the leg area chunks
+const QSTANCE_RADIUS = 8 // stance-anchored arm wait: the vetted cell and
+// its stance sit a few blocks apart, so a small window around the stance
+// covers the pick's reads without stalling on the whole leg area
+const QSTANCE_MS = 20000 // per-stance bound: a cache that never warms arms anyway
 const NOGAIN_STRIKES = 8 // digs without the cobble count growing (neuc.51: v2 digs one a second, the pickup trails 1-2 digs; 5 failed live legs)
 const DIG_TIMEOUT_MS = 10000
+// Quarry truth (vmzq.38; neuc.53 rig evidence): granite/diorite/andesite/
+// tuff/calcite/deepslate land as often as cobble and the castle lays them
+// (isStone). The v2 mine must target the whole family: with only
+// stone/cobblestone Baritone tunnels mixed rock whose drops neither side
+// counts, and every leg stalls at 60 s with +a few uncounted blocks.
+const STONE_FAMILY = Array.isArray(blueprint.STONE_ITEMS) && blueprint.STONE_ITEMS.length > 0
+  ? [...blueprint.STONE_ITEMS] : ['stone', 'cobblestone']
 const CHEST_REACH = stockpileMod.INTERACT_REACH
 const CHEST_WAITS = 30 // ticks without closing in on the chest
 const CHEST_TIMEOUT_MS = 15000
@@ -862,6 +875,44 @@ function siteCenter(st) {
   return { x: st.site.x + Math.floor(w / 2), y: st.site.y, z: st.site.z + Math.floor(d / 2) }
 }
 
+// Mod guard box for the v2 mine (round-1 body-3): the onSite footprint
+// with the same margin/below the onSite test uses (1 and 3) and the same
+// top (16, blueprint onSite's FETCH_SITE_TOP). Null without a site — the
+// mine then runs on the body leash alone.
+function siteGuardBox(st) {
+  try {
+    if (!st || !st.site || typeof st.site.x !== 'number') return null
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    if (!(w > 0) || !(d > 0)) return null
+    return {
+      x0: st.site.x - 1, y0: st.site.y - 3, z0: st.site.z - 1,
+      x1: st.site.x + w, y1: st.site.y + 16, z1: st.site.z + d,
+    }
+  } catch (_) { return null }
+}
+
+// Inside the guard box (floored cells, round-2 core-6)?
+function insideGuard(guard, bp) {
+  try {
+    if (!guard || !bp) return false
+    const x = Math.floor(bp.x), y = Math.floor(bp.y), z = Math.floor(bp.z)
+    return x >= guard.x0 && x <= guard.x1 && y >= guard.y0 && y <= guard.y1 && z >= guard.z0 && z <= guard.z1
+  } catch (_) { return false }
+}
+
+// Shortest horizontal push out of the box, one cell past the edge at body
+// height (round-2 core-6: start the mine where the nearest stone is not a
+// site cell).
+function guardExit(guard, bp) {
+  const dx0 = bp.x - guard.x0, dx1 = guard.x1 + 1 - bp.x
+  const dz0 = bp.z - guard.z0, dz1 = guard.z1 + 1 - bp.z
+  const m = Math.min(dx0, dx1, dz0, dz1)
+  if (m === dx0) return { x: guard.x0 - 1, y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  if (m === dx1) return { x: guard.x1 + 1, y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  if (m === dz0) return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: guard.z0 - 1 }
+  return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: guard.z1 + 1 }
+}
+
 // Trench side s (0..3) on ring (0..1, vmzq.31): origin column just
 // outside the footprint near a corner (the entrance sits mid-side, never
 // in front of it), the outward direction and the width axis. Ring 1 works
@@ -1245,7 +1296,7 @@ function pickQuarry(bot, ctx, f) {
 // pickup reach, pickaxe in hand, one dig at a time with a deadline).
 // Pack-full yield (g0z.26): roomForDrop lives in stockpile (oqul.12).
 const roomForDrop = (bot, ctx) => stockpileMod.roomForDrop(bot, ctx)
-function digTick(bot, ctx, f) {
+function digTick(bot, ctx, f, d) {
   const bp = bodyPos(bot)
   if (!bp) { spend(f, 'other'); return }
   if (!hasPickaxe(bot)) { spend(f, 'other'); finish(bot, ctx, 'done'); return } // equip rearms first
@@ -1280,6 +1331,160 @@ function digTick(bot, ctx, f) {
         try { console.log('castlefetch stone: pick upgrade done, digging on') } catch (_) { /* log best-effort */ }
       }
     }
+  }
+  // v2 Baritone body (idkcraft-neuc.53): one MineProcess does the whole
+  // stone leg — Baritone scans, paths, digs and walks over the drops
+  // until the batch is on hand. The guards and the pick upgrade above
+  // still run; the v1 target picking, walks and per-block digs below are
+  // unreached on v2. mine-stall keeps the 'failed:castlefetch-dig-stall'
+  // reason string (the goal watchdog and metrics key on it).
+  if (typeof bot.mine === 'function') {
+    // Every leg mines at most one layable batch (round-2 core-5, the
+    // vmzq.20 shape): a none/some leg must not run the whole shortfall
+    // while the castle could lay, and the LEG_MAX_MS yield never fires
+    // mid-mine.
+    const raw = (d && typeof d.short === 'number' && d.short > 0) ? d.short : castleMod.BATCH
+    const need = Math.min(raw, castleMod.BATCH)
+    if (ctx.castleFetchInFlight) return
+    const st0 = ctx.castle
+    const forbid = (pos) => {
+      try { return !!(st0 && st0.site && onSite(st0, pos)) } catch (_) { return false }
+    }
+    // Cell-level castle guard (round-1 body-3): the body leash cannot stop
+    // a break made from reach outside the site, so the mod snapshots the
+    // site box's stone cells at begin and stops on the first break inside.
+    // Top mirrors blueprint onSite's FETCH_SITE_TOP (bot/src/castle.js).
+    const guard = siteGuardBox(st0)
+    // Start outside the box (round-2 core-6): Baritone picks the nearest
+    // stone, which from inside is a site cell — one break, one failed leg,
+    // every leg. Walk out first; a wedged walk mines anyway (trips end it
+    // loudly and the hold parks the leg).
+    if (guard && insideGuard(guard, bp)) {
+      // Latched per leg: recomputing each tick could flip the exit side as
+      // the body moves and jitter the walk. No in-flight flags on walk
+      // ticks — the next tick must reach digTick again, not the early
+      // return above.
+      const exit = f.guardExit || (f.guardExit = guardExit(guard, bp))
+      walkTo(bot, ctx, `castlefetch-guard:${exit.x},${exit.z}`, exit, 0)
+      spend(f, 'walk')
+      if (!stalled(f.guardWalk || (f.guardWalk = {}), 0, APPROACH_WAITS)) return
+    }
+    // Quarry-stance arming (neuc.53 rig evidence: unvetted walk-out exits
+    // arm onto fringe cache and churn with zero gains, while vetted trench
+    // stances mine): take the next v1 quarry cell and walk to its stance
+    // first — dry, exposed, reachable, stance-safe by construction. A
+    // dead quarry (null) arms in place; the trip and the timer bound it.
+    // Pick on warm ground only (neuc.53 rig evidence: the picker reads
+    // our world, and a cold cache blinds it the same way it blinds the
+    // mine — every side reads void and the quarry looks dead). Bounded:
+    // a cache that never warms arms in place after the wait, and the
+    // trip/timer bound that leg like before.
+    if (!cacheReady(bot, bp, DIG_RADIUS)) {
+      if (f.qWait0 == null) f.qWait0 = Date.now()
+      if (Date.now() - f.qWait0 < QWAIT_MS) { spend(f, 'other'); return }
+    }
+    if (!f.qTarget) {
+      try { f.qTarget = pickQuarry(bot, ctx, f) } catch (_) { f.qTarget = null }
+    }
+    const qt = f.qTarget
+    if (qt && qt.stance) {
+      const sd = Math.hypot(bp.x - (qt.stance.x + 0.5), bp.y - qt.stance.y, bp.z - (qt.stance.z + 0.5))
+      if (sd > 1.5) {
+        walkTo(bot, ctx, `castlefetch-qstance:${qt.stance.x},${qt.stance.y},${qt.stance.z}`, qt.stance, 0)
+        spend(f, 'walk')
+        if (!stalled(qt, sd, APPROACH_WAITS)) return
+        try { (f.skip || (f.skip = new Set())).add(qt.k) } catch (_) { /* skip best-effort */ }
+        f.qTarget = null
+        f.skips = (f.skips | 0) + 1
+        if (f.skips >= SKIPS_TO_FAIL) { finish(bot, ctx, 'failed:castlefetch-unreachable'); return }
+        return
+      }
+      // Stance-anchored arm wait (neuc.53 rig evidence: a relocated or
+      // fringe stance arms onto a cold cache and churns with zero gains
+      // while the blacklist grows — the pick vetted stale reads, and the
+      // leg-level pre-pick budget is long spent by re-arm time). Wait,
+      // bounded per stance, for the stance area to read warm; a cache
+      // that never warms arms anyway and the trip/timer bound that leg.
+      const skey = `${qt.stance.x},${qt.stance.y},${qt.stance.z}`
+      if (!cacheReady(bot, qt.stance, QSTANCE_RADIUS)) {
+        if (f.qStanceFor !== skey) { f.qStanceFor = skey; f.qStance0 = Date.now() }
+        if (Date.now() - f.qStance0 < QSTANCE_MS) { spend(f, 'other'); return }
+        try { console.log(`castlefetch v2 stance cache cold at ${skey}, arming (${QSTANCE_MS}ms waited)`) } catch (_) { /* log best-effort */ }
+      }
+      // Cell rules at arm time (v1 dig-time shape): no mining a trap,
+      // gravity, submerged or protected cell.
+      let cell = null
+      try { cell = bot.blockAt(new Vec3(qt.x, qt.y, qt.z)) } catch (_) { cell = null }
+      const deny = denyReason(bot, cell, ctx)
+      if (deny) {
+        logDeny(cell, deny)
+        try { (f.skip || (f.skip = new Set())).add(qt.k) } catch (_) { /* skip best-effort */ }
+        f.qTarget = null
+        spend(f, 'other')
+        return
+      }
+    }
+    ctx.castleFetchInFlight = true
+    ctx.castleFetchFlight = 'dig' // in-flight ticks keep bucketing as dig
+    ctx.castleFetchMine = true // a bridge mine owns the tick (not a v1 flight): pack-full can cancel it below
+    spend(f, 'dig')
+    const gen = stepGen(ctx) // round-1 core-1: a late settle must not finish a step that is gone
+    const settleMine = () => { ctx.castleFetchInFlight = false; ctx.castleFetchMine = false }
+    const settled = () => isFinished(ctx.stepStatus) || stale(ctx, gen) || (ctx.step && ctx.step !== 'castlefetch')
+    // A goal key while the mine owns the body (round-3 core-3): stopOnce
+    // gates on lastGoalKey !== 'idle' before it ever reads the goal, so a
+    // mine started from a parked tick would survive an owner stop.
+    ctx.lastGoalKey = 'mine:castlefetch'
+    // Relocation baseline (neuc.53 rig evidence: a warm spot depletes
+    // after ~20 blocks): peak-vs-arm tells a depleted spot (re-arm at
+    // the new stance) from a dead one (fail below). Pre-bleed peak, so
+    // stairs legs that craft mid-mine still count their breaks.
+    let armHave = 0
+    try { armHave = cobble(bot) } catch (_) { /* pack unreadable: no reloc below */ }
+    f.mineArmHave = armHave
+    bot.mine(STONE_FAMILY, need, { radius: DIG_RADIUS, forbid, guard }).then(
+      () => { settleMine(); if (!settled()) finish(bot, ctx, 'done') },
+      (err) => {
+        settleMine()
+        if (settled()) return
+        const m = err && err.message
+        // mine-stopped settles quietly (round-2 core-2): a fight borrowing
+        // the body keeps step/gen, and finish's clearGoal would kill its
+        // chase — the next tick re-issues instead. unreachable stays for
+        // the leash only.
+        if (m === 'mine-stopped') return
+        // The worked cell is spent either way (depleted or unworkable):
+        // skip it so the next pick advances the quarry instead of
+        // re-mining the same dead ground. A guard trip retires the stance
+        // too (it invited a site break — re-arming would eat the next
+        // site cell). Leash keeps its cell (the spot may be fine — the
+        // body ranged too far, which re-anchoring would only repeat).
+        const hadTarget = !!f.qTarget
+        if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall' || m === 'mine-guard') && f.qTarget) {
+          try { (f.skip || (f.skip = new Set())).add(f.qTarget.k) } catch (_) { /* skip best-effort */ }
+          f.qTarget = null
+        }
+        // Relocation: a below-target end re-arms at the new stance
+        // instead of failing the leg — a depleted productive spot AND a
+        // spent vetted stance both deserve the next stance (fresh cache,
+        // fresh lottery), while a blind in-place arm with zero gains
+        // fails below (re-picking it would re-arm the same blind spot).
+        // Bounded per leg; the last error finishes it. Leash and guard
+        // stay terminal (re-anchoring would defeat the site guard).
+        const peak = err && typeof err.mineHave === 'number' ? err.mineHave : 0
+        const reloc = f.mineReloc | 0
+        if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall') && (peak > (f.mineArmHave | 0) || hadTarget) && reloc < 3) {
+          f.mineReloc = reloc + 1
+          f.guardExit = null
+          try { delete f.guardWalk } catch (_) { /* tracker best-effort */ }
+          return
+        }
+        if (m === 'mine-noPath' || m === 'mine-futile') finish(bot, ctx, 'failed:castlefetch-no-stone')
+        else if (m === 'mine-leash' || m === 'mine-guard') finish(bot, ctx, 'failed:castlefetch-unreachable')
+        else finish(bot, ctx, 'failed:castlefetch-dig-stall')
+      },
+    )
+    return
   }
   const st = ctx.castle
   const skip = f.skip || (f.skip = new Set())
@@ -1470,6 +1675,17 @@ function castlefetch(bot, ctx, target, state) {
   // continuation ticks here, so dig reads as duration, not starts.
   if (ctx.castleFetchInFlight) {
     if (ctx.castleFetch) spend(ctx.castleFetch, ctx.castleFetchFlight === 'dig' ? 'dig' : 'other')
+    // Pack filled mid-mine (round-1 core-5): roomForDrop only gated the
+    // start, and a full pack loses every further drop into a dig-stall.
+    // Cancel the bridge mine and bank instead; the v1 flight below owns no
+    // cancellable handle, so this only runs for the mine marker above.
+    if (ctx.castleFetchMine && !roomForDrop(bot, ctx)) {
+      ctx.castleFetchMine = false
+      ctx.castleFetchInFlight = false
+      try { if (bot && typeof bot.cancelMine === 'function') bot.cancelMine(new Error('mine-stopped')) } catch (_) { /* cancel best-effort */ }
+      finish(bot, ctx, 'failed:castlefetch-pack-full')
+      return
+    }
     return
   }
   // neuc.50 rig: a craft op in flight (craftany/gear) owns the tick too.
@@ -1527,7 +1743,7 @@ function castlefetch(bot, ctx, target, state) {
         if (require('./equip').craftSparePick(bot, ctx)) return // deferred: craftany requires equip
       } catch (_) { /* unfunded: dig as before */ }
     }
-    digTick(bot, ctx, f); return
+    digTick(bot, ctx, f, d); return // neuc.53: the v2 mine sizes from d.short
   }
   if (d.kind === 'planks' || d.kind === 'door' || d.kind === 'fence' || d.kind === 'chest' || d.kind === 'frame') {
     // Logs from the world: gather chops a load and ends the leg itself
@@ -1570,6 +1786,9 @@ module.exports.quarrySide = quarrySide
 module.exports.QUARRY_RINGS = QUARRY_RINGS
 module.exports.pickQuarry = pickQuarry
 module.exports.pickStone = pickStone
+module.exports.siteGuardBox = siteGuardBox
+module.exports.insideGuard = insideGuard
+module.exports.guardExit = guardExit
 module.exports.pickPit = pickPit
 module.exports.pitSpots = pitSpots
 module.exports.inTrench = inTrench

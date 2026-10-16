@@ -140,7 +140,39 @@ function pickBudgetDue(bot, ctx) {
     if (countItems(bot, (n) => n === 'cobblestone') < SCAFFOLD_LOW + 3) return false
     if (toolOp(bot, 'pickaxe').fail) return false
     if (!tableReady(bot, ctx)) return false
+    if (tableUnreachableToday(bot, ctx)) return false
     return true
+  } catch (_) { return false }
+}
+// Day-unreachable table mark (idkcraft-zk7e): tableFor latches
+// ctx.equipTableUnreachable when the walk fails, and ajoe's contract says
+// the next pick places its own table instead of re-walking — but the spare
+// paths carry no table, so they would walk up to 40 ticks per leg. Skip
+// while the fallback would walk to the marked table, mirroring tableFor's
+// own selection order (a second unreadable or far claim must not mask the
+// marked station it still walks to). A carried table still proceeds
+// (tableFor places it beside the body, never a walk).
+function tableUnreachableToday(bot, ctx) {
+  try {
+    const u = ctx && ctx.equipTableUnreachable
+    if (!u || typeof u.x !== 'number') return false
+    if (u.day !== dayOf(bot)) return false
+    if (itemsOf(bot).some((i) => i && i.name === 'crafting_table')) return false
+    const bp = bot.entity && bot.entity.position
+    if (!bp || typeof bot.blockAt !== 'function') return false
+    const st = ctx && ctx.equip
+    const claims = [ctx && ctx.home && ctx.home.table, st && st.tablePos]
+    if (ctx && ctx.claimedTable && ctx.claimedTable !== (st && st.tablePos)) claims.push(ctx.claimedTable)
+    let far = null
+    for (const t of claims) {
+      if (!t || typeof t.x !== 'number') continue
+      let block = null
+      try { block = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { block = null }
+      if (!block || block.name !== 'crafting_table') continue // ghost/unreadable: tableFor skips
+      if (!tableFar(bot, ctx, bp, t)) return false // usable nearby: proceed
+      if (!far) far = t
+    }
+    return !!far && far.x === u.x && far.y === u.y && far.z === u.z
   } catch (_) { return false }
 }
 // The stone chain behind toolOp's pickaxe branch: 3 cobble plus 2 sticks
@@ -191,6 +223,8 @@ function resetRunCounters(ctx) {
       delete st.made
       delete st.noGain
       delete st.lastScaffold
+      delete st.guardWaits
+      delete st.guardExit
     }
   } catch (_) { /* reset best-effort */ }
 }
@@ -365,6 +399,46 @@ function digTargets(bot) {
   const names = ['dirt', 'grass_block']
   if (hasPickaxe(bot)) names.push('stone', 'cobblestone')
   return names
+}
+
+// Mod guard box for the v2 scaffold mine (round-2 core-4): the house
+// footprint box plus the apron, mirroring inHouseFootprint (box ±1,
+// apron ±3 past the walls, 3 past the door side, up to the doorstep).
+// Below the floor the box runs 6 deep — under-floor support digs near the
+// surface. Null without a readable home — the mine then runs on the body
+// leash alone.
+function equipGuardBox(home) {
+  try {
+    const s = home && home.site
+    const b = home && home.interior
+    if (!s || !b || !b.min || !b.max) return null
+    return {
+      x0: b.min.x - 3, y0: s.y - 6, z0: Math.min(b.min.z - 3, s.z - 3),
+      x1: b.max.x + 3, y1: Math.max(b.max.y + 1, s.y + 1), z1: b.max.z + 3,
+    }
+  } catch (_) { return null }
+}
+
+// Inside the guard box (floored cells)? Mirror of castlefetch's
+// insideGuard (kept local: castlefetch requires equip, so an import
+// would cycle).
+function insideGuardBox(guard, bp) {
+  try {
+    if (!guard || !bp) return false
+    const x = Math.floor(bp.x), y = Math.floor(bp.y), z = Math.floor(bp.z)
+    return x >= guard.x0 && x <= guard.x1 && y >= guard.y0 && y <= guard.y1 && z >= guard.z0 && z <= guard.z1
+  } catch (_) { return false }
+}
+
+// Shortest horizontal push out of the box, one cell past the edge.
+function guardExitBox(guard, bp) {
+  const dx0 = bp.x - guard.x0, dx1 = guard.x1 + 1 - bp.x
+  const dz0 = bp.z - guard.z0, dz1 = guard.z1 + 1 - bp.z
+  const m = Math.min(dx0, dx1, dz0, dz1)
+  if (m === dx0) return { x: guard.x0 - 1, y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  if (m === dx1) return { x: guard.x1 + 1, y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  if (m === dz0) return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: guard.z0 - 1 }
+  return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: guard.z1 + 1 }
 }
 
 // Cells that make a dig wet (swim.js executor-water minus lava): mining
@@ -712,6 +786,76 @@ function digTick(bot, ctx, st, bp) {
     fail(bot, ctx, 'pack-full', new Error('pack full, banking first'))
     return
   }
+  // v2 Baritone body (idkcraft-neuc.53): one MineProcess does the whole
+  // scaffold loop — Baritone scans, paths, digs and walks over the drops
+  // until the kit is full. The pack-reserve guard above still runs (a pack
+  // invariant, not the dig loop); the v1 scan/approach/dig below is
+  // unreached on v2. Rejects fail 'blocks' so the atl.4 hold and the
+  // equipLatched wording keep working.
+  if (typeof bot.mine === 'function') {
+    const need = SCAFFOLD_FULL - scaffoldCount(bot)
+    if (need <= 0) return
+    if (ctx.equipDigInFlight) return
+    const gen = stepGen(ctx)
+    let settled = false
+    const done = (fn) => {
+      if (settled) return
+      settled = true
+      ctx.equipDigInFlight = false
+      if (typeof fn === 'function') fn()
+    }
+    // Forbid real no-go zones for the body only: the castle site and the
+    // house footprint (box + apron) plus our own placements in it. Never
+    // the block underfoot through protectedReason — that is a dig
+    // allow-list and fires for water, air, paths and farmland, which would
+    // trip the leash on every swim, jump apex and village crossing
+    // (round-1 core-4). Block-level protection rides the #set avoid lists
+    // from Movements; this leashes the body.
+    const forbid = (pos) => {
+      try {
+        if (!pos || typeof pos.x !== 'number') return false
+        if (ctx && ctx.castle && ctx.castle.site && onSite(ctx.castle, pos)) return true
+        if (ctx && ctx.home && inHouseFootprint(ctx.home, pos)) return true
+        if (typeof bot.blockAt !== 'function') return false
+        const b = bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) - 1, Math.floor(pos.z)))
+        if (!b) return false
+        return ownInFootprint(ctx, b)
+      } catch (_) { return false }
+    }
+    // Cell-level home guard (round-2 core-4): Baritone picks the nearest
+    // dirt, which from the porch is porch dirt — the body leash cannot
+    // stop a break made from reach. The mod snapshots the footprint +
+    // apron box at begin and stops on the first break inside.
+    const guard = equipGuardBox(ctx && ctx.home)
+    // Start outside the box (round-3 core-2): from the porch the nearest
+    // dirt is guarded — one break, one failed leg, every leg, then the day
+    // latch. Walk out first (latched per run, bounded); a wedged walk
+    // mines anyway and trips end it loudly. No in-flight flag on walk
+    // ticks — the next tick must reach digTick again.
+    if (guard && insideGuardBox(guard, bp)) {
+      const exit = st.guardExit || (st.guardExit = guardExitBox(guard, bp))
+      issueGoal(bot, ctx, new goals.GoalNear(exit.x, exit.y, exit.z, 0), `equip-guard:${exit.x},${exit.z}`, false)
+      st.guardWaits = (st.guardWaits || 0) + 1
+      if (st.guardWaits <= 30) return
+    }
+    // A goal key while the mine owns the body (round-3 core-3): stopOnce
+    // gates on lastGoalKey !== 'idle' before it ever reads the goal.
+    // The in-flight flag lands here too — walk ticks above must not hold
+    // it, or the next tick returns early and the walk-out wedges.
+    ctx.lastGoalKey = 'mine:equip'
+    ctx.equipDigInFlight = true
+    bot.mine(digTargets(bot), need, { radius: 12, forbid, guard }).then(
+      () => done(),
+      (err) => {
+        // mine-stopped settles quietly (round-2 core-2): same step/gen as
+        // a borrowing fight — the next tick re-issues instead of failing
+        // the step out from under it.
+        if (err && err.message === 'mine-stopped') { done(); return }
+        done(() => fail(bot, ctx, 'blocks', err instanceof Error ? err : new Error(String(err)), gen))
+      },
+    )
+    return
+  }
   if (st.digs >= DIG_STALL_STRIKES) {
     fail(bot, ctx, 'blocks', new Error('dig-stall'))
     return
@@ -861,6 +1005,9 @@ function digTick(bot, ctx, st, bp) {
 module.exports = equip
 module.exports.SCAFFOLD_LOW = SCAFFOLD_LOW
 module.exports.SCAFFOLD_FULL = SCAFFOLD_FULL
+module.exports.equipGuardBox = equipGuardBox
+module.exports.insideGuardBox = insideGuardBox
+module.exports.guardExitBox = guardExitBox
 // Craft-any reuse (idkcraft-did.2): the h9z place-and-verify table contract.
 module.exports.tableFor = tableFor
 // Goal-gate reuse (idkcraft-x15): a rank-0 pickaxe with the stone chain,
@@ -879,4 +1026,5 @@ module.exports.PICK_BUDGET = PICK_BUDGET
 module.exports.pickUsesLeft = pickUsesLeft
 module.exports.pickBudgetNeed = pickBudgetNeed
 module.exports.pickBudgetDue = pickBudgetDue
+module.exports.tableUnreachableToday = tableUnreachableToday
 module.exports.craftSparePick = craftSparePick

@@ -1,0 +1,593 @@
+package idkcraft.bridge;
+
+import baritone.api.BaritoneAPI;
+import baritone.api.IBaritone;
+import com.google.gson.JsonObject;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.item.ItemStack;
+
+/**
+ * Mine surface (idkcraft-neuc.53).
+ *
+ * <p>Method: {@code baritone.mine {blocks:[names], count:int, radius:int}} ->
+ * {@code {id, have, target}}, driving Baritone's MineProcess (#mine) instead
+ * of a hand-rolled per-tick dig loop. Quantity is absolute like Baritone's
+ * own (MineProcess stops when the inventory holds the quantity), so the
+ * target is the current matching count plus the requested count — verified
+ * against the baritone-api 1.18.0 jar the Dockerfile ships
+ * ({@code IMineProcess.mineByName(int quantity, String... blocks)}; the mod
+ * compiles against the same API twin). Notifications: {@code baritone.event
+ * {kind:'mine', id, have, target, active}} on each tick the count changes
+ * and once on end. {@code #stop} already cancels every process (kept): the
+ * Node side stops the mine through the existing {@code baritone.cmd}, and
+ * the tick hook below reports the end.
+ *
+ * <p>Baritone has no per-process region — the radius leash is enforced in
+ * Node (bot/src/bridge/mine.js); the mod accepts the radius and ignores it.
+ * Block protection (castle floor, porch) rides the existing {@code #set}
+ * avoid lists from Movements; the Node forbid predicate is the second
+ * guard. The optional {@code guard} box ({x0,y0,z0,x1,y1,z1}, idkcraft-neuc.53
+ * round-1 body-3) is the cell-level one: cells inside it that match the
+ * requested blocks are snapshotted at begin, and the first break inside
+ * stops the process at once. All client/Baritone calls run on the client
+ * thread.
+ */
+public final class Mine {
+
+    private static final AtomicLong MINE_SEQ = new AtomicLong(0);
+
+    /**
+     * Drops counted toward a block name: mining stone yields cobblestone
+     * (no silk touch) and grass yields dirt, so a mine for those names is
+     * only done when the drops land. Callers pass both names anyway
+     * (equip digTargets, castlefetch stone leg); the map keeps future
+     * single-name callers honest.
+     */
+    private static final Map<String, String> DROPS = Map.of(
+            "grass_block", "dirt",
+            "stone", "cobblestone");
+
+    private static volatile long mineId = 0;
+    private static volatile boolean active = false;
+    private static volatile int target = 0;
+    private static volatile List<String> names = List.of();
+    private static volatile int lastHave = 0;
+    /** Futility window (client thread only): gains-flat baseline for the trip rule below. */
+    private static volatile int tripHave = 0;
+    private static volatile int tripBase = -1;
+    private static volatile long tripSinceMs = 0;
+    /** Trip after this long with no gains while the blacklist keeps growing. */
+    static final long FUTILE_MS = 15000;
+    /** Blacklist growth within the window that reads as churn, not bad luck. */
+    static final int FUTILE_GROWTH = 4;
+    /** Break-policy snapshots to restore in end(). Client thread only. */
+    private static volatile java.util.List<net.minecraft.world.level.block.Block> banSnap = null;
+    private static volatile java.util.List<net.minecraft.world.level.block.Block> avoidSnap = null;
+    /** Guard box corners {x0,y0,z0,x1,y1,z1}, or null. Client thread only. */
+    private static volatile int[] guardBox = null;
+    /** idx -> stateId snapshot of guard cells matching the blocks. Client thread only. */
+    private static final java.util.Map<Integer, Integer> guardSnap = new java.util.HashMap<>();
+    /** Largest guard box by volume (a castle site is ~14k cells). */
+    static final int MAX_GUARD_CELLS = 262144;
+
+    private Mine() {
+    }
+
+    public static void install(BridgeServer server) {
+        server.register("baritone.mine", params -> start(server, params));
+        server.register("baritone.minestate", params -> state(server));
+        server.onClientTick(() -> tick(server));
+    }
+
+    /** Live mine (client thread only) — the baritone.status probe counts it. */
+    public static boolean isActive() {
+        return active;
+    }
+
+    /**
+     * Item names accepted toward the requested blocks: the blocks themselves
+     * plus their drops above. Pure (game-free) so unit tests reach it.
+     */
+    static List<String> acceptedItems(List<String> blocks) {
+        List<String> out = new ArrayList<>();
+        for (String b : blocks) {
+            String n = strip(b);
+            if (n.isEmpty() || out.contains(n)) {
+                continue;
+            }
+            out.add(n);
+            String drop = DROPS.get(n);
+            if (drop != null && !out.contains(drop)) {
+                out.add(drop);
+            }
+        }
+        return out;
+    }
+
+    private static String strip(String name) {
+        if (name == null) {
+            return "";
+        }
+        String n = name.trim().toLowerCase(java.util.Locale.ROOT);
+        return n.startsWith("minecraft:") ? n.substring("minecraft:".length()) : n;
+    }
+
+    /**
+     * Break-policy suspension (neuc.53 rig evidence — Baritone 1.18.0
+     * {@code MineProcess.plausibleToBreak} discards every banned target, so
+     * a mine next to the castle, where body.js hard-bans built castle kinds
+     * and costs quarry rock, scans stone it may never break and stalls every
+     * leg at 60 s while v1's mineflayer dig bypasses the lists). An explicit
+     * mine is not pathing (the ban's purpose): suspend the ban and the avoid
+     * cost for exactly the requested blocks for the call, restore on every
+     * end. Pure list math here (unit-tested); Setting reads/writes on the
+     * client thread only, matched by registry path (no parsing).
+     */
+    static List<String> dropTargets(List<String> banned, List<String> targets) {
+        List<String> out = new ArrayList<>();
+        for (String b : banned) {
+            if (b != null && !targets.contains(b)) {
+                out.add(b);
+            }
+        }
+        return out;
+    }
+
+    private static String blockName(net.minecraft.world.level.block.Block b) {
+        try {
+            return BuiltInRegistries.BLOCK.getKey(b).getPath();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** Client thread: snapshot + suspend the ban/avoid lists for these blocks. */
+    private static void suspendBreakPolicy(List<String> blocks) {
+        var settings = BaritoneAPI.getSettings();
+        banSnap = new ArrayList<>(settings.blocksToDisallowBreaking.value);
+        avoidSnap = new ArrayList<>(settings.blocksToAvoidBreaking.value);
+        java.util.Set<String> want = new java.util.HashSet<>(blocks);
+        settings.blocksToDisallowBreaking.value.removeIf(b -> want.contains(blockName(b)));
+        settings.blocksToAvoidBreaking.value.removeIf(b -> want.contains(blockName(b)));
+    }
+
+    /** Client thread: put the snapshot lists back (every end path, once). */
+    private static void restoreBreakPolicy() {
+        try {
+            var settings = BaritoneAPI.getSettings();
+            if (banSnap != null) {
+                settings.blocksToDisallowBreaking.value.clear();
+                settings.blocksToDisallowBreaking.value.addAll(banSnap);
+                banSnap = null;
+            }
+            if (avoidSnap != null) {
+                settings.blocksToAvoidBreaking.value.clear();
+                settings.blocksToAvoidBreaking.value.addAll(avoidSnap);
+                avoidSnap = null;
+            }
+        } catch (Exception ignored) {
+            // Best-effort: the next lease #set re-pushes absolute lists.
+        }
+    }
+
+    private static JsonObject start(BridgeServer server, JsonObject params) throws Rpc.RpcException {
+        List<String> blocks = new ArrayList<>();
+        if (params.has("blocks") && params.get("blocks").isJsonArray()) {
+            for (var el : params.getAsJsonArray("blocks")) {
+                if (el.isJsonPrimitive() && el.getAsJsonPrimitive().isString()) {
+                    String n = strip(el.getAsString());
+                    if (!n.isEmpty() && !blocks.contains(n)) {
+                        blocks.add(n);
+                    }
+                }
+            }
+        }
+        if (blocks.isEmpty()) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: want non-empty blocks:[names]");
+        }
+        if (!params.has("count") || !params.get("count").isJsonPrimitive()
+                || !params.get("count").getAsJsonPrimitive().isNumber()) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: want number count");
+        }
+        int count = (int) Math.floor(params.get("count").getAsDouble());
+        if (count <= 0) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: want positive count");
+        }
+        final List<String> want = List.copyOf(blocks);
+        final int need = count;
+        final int[] guard = guardBox(params);
+        Rpc.RpcException[] failure = new Rpc.RpcException[1];
+        JsonObject res = server.onClient(() -> {
+            Minecraft client = Minecraft.getInstance();
+            LocalPlayer player = client != null ? client.player : null;
+            if (player == null || client.level == null) {
+                return null;
+            }
+            try {
+                return begin(want, need, guard);
+            } catch (Rpc.RpcException e) {
+                failure[0] = e;
+                return null;
+            }
+        });
+        if (failure[0] != null) {
+            throw failure[0];
+        }
+        if (res == null) {
+            throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
+        }
+        return res;
+    }
+
+    /**
+     * Optional guard box from the params (socket thread — pure). Null when
+     * absent; INVALID_PARAMS when malformed or absurdly large. Corners are
+     * normalized to min/max.
+     */
+    static int[] guardBox(JsonObject params) throws Rpc.RpcException {
+        if (!params.has("guard") || params.get("guard").isJsonNull()) {
+            return null;
+        }
+        if (!params.get("guard").isJsonObject()) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: guard wants {x0,y0,z0,x1,y1,z1}");
+        }
+        JsonObject g = params.getAsJsonObject("guard");
+        int[] c = new int[6];
+        String[] keys = {"x0", "y0", "z0", "x1", "y1", "z1"};
+        for (int i = 0; i < 6; i++) {
+            if (!g.has(keys[i]) || !g.get(keys[i]).isJsonPrimitive()
+                    || !g.get(keys[i]).getAsJsonPrimitive().isNumber()) {
+                throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: guard wants {x0,y0,z0,x1,y1,z1}");
+            }
+            c[i] = (int) Math.floor(g.get(keys[i]).getAsDouble());
+        }
+        int[] box = {
+            Math.min(c[0], c[3]), Math.min(c[1], c[4]), Math.min(c[2], c[5]),
+            Math.max(c[0], c[3]), Math.max(c[1], c[4]), Math.max(c[2], c[5]),
+        };
+        long vol = (long) (box[3] - box[0] + 1) * (box[4] - box[1] + 1) * (box[5] - box[2] + 1);
+        if (vol > MAX_GUARD_CELLS) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: guard box too big");
+        }
+        return box;
+    }
+
+    /** Client thread: arm the mine and start the process. */
+    private static JsonObject begin(List<String> blocks, int count, int[] guard) throws Rpc.RpcException {
+        IBaritone b = BaritoneAPI.getProvider().getPrimaryBaritone();
+        int have = countInventory(acceptedItems(blocks));
+        int goal = have + count;
+        try {
+            b.getMineProcess().mineByName(goal, blocks.toArray(new String[0]));
+        } catch (IllegalArgumentException e) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "baritone.mine: " + e.getMessage());
+        }
+        mineId = MINE_SEQ.incrementAndGet();
+        names = blocks;
+        target = goal;
+        lastHave = have;
+        tripHave = have;
+        tripBase = -1;
+        tripSinceMs = System.currentTimeMillis();
+        suspendBreakPolicy(blocks);
+        active = true;
+        guardBox = guard;
+        snapshotGuard(blocks, guard);
+        JsonObject res = new JsonObject();
+        res.addProperty("id", mineId);
+        res.addProperty("have", have);
+        res.addProperty("target", goal);
+        return res;
+    }
+
+    /**
+     * Diagnostic read (neuc.53 rig evidence — the process lives but never
+     * gains): who holds pathing control, the custom goal behind it, and the
+     * candidate/blacklist sizes. Best-effort everywhere except the
+     * out-of-world gate; a rig probe polls it mid-leg.
+     */
+    private static JsonObject state(BridgeServer server) throws Rpc.RpcException {
+        JsonObject res = server.onClient(() -> {
+            Minecraft client = Minecraft.getInstance();
+            if (client == null || client.player == null || client.level == null) {
+                return null;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("id", mineId);
+            o.addProperty("target", target);
+            o.addProperty("active", active);
+            IBaritone b;
+            try {
+                b = BaritoneAPI.getProvider().getPrimaryBaritone();
+            } catch (Exception e) {
+                return o;
+            }
+            try {
+                o.addProperty("have", countInventory(acceptedItems(names)));
+            } catch (Exception e) {
+                o.addProperty("have", lastHave);
+            }
+            try {
+                o.addProperty("procActive", b.getMineProcess().isActive());
+            } catch (Exception e) {
+                o.addProperty("procActive", false);
+            }
+            try {
+                o.addProperty("pathing", b.getPathingBehavior().isPathing());
+            } catch (Exception e) {
+                o.addProperty("pathing", false);
+            }
+            String inControl = null;
+            try {
+                Object c = b.getPathingControlManager().mostRecentInControl().orElse(null);
+                if (c != null) {
+                    inControl = c.getClass().getSimpleName();
+                }
+            } catch (Exception ignored) {
+                // Best-effort: control info is diagnostic only.
+            }
+            if (inControl != null) {
+                o.addProperty("inControl", inControl);
+            } else {
+                o.add("inControl", null);
+            }
+            String goal = null;
+            try {
+                Object g = b.getCustomGoalProcess().mostRecentGoal();
+                if (g != null) {
+                    goal = String.valueOf(g);
+                }
+            } catch (Exception ignored) {
+                // Best-effort: goal info is diagnostic only.
+            }
+            if (goal != null) {
+                o.addProperty("customGoal", goal);
+            } else {
+                o.add("customGoal", null);
+            }
+            int[] lists = {-1, -1};
+            try {
+                lists = processListSizes(b.getMineProcess());
+            } catch (Exception ignored) {
+                // Best-effort: sizes are diagnostic only.
+            }
+            o.addProperty("known", lists[0]);
+            o.addProperty("blacklisted", lists[1]);
+            return o;
+        });
+        if (res == null) {
+            throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
+        }
+        return res;
+    }
+
+    /**
+     * Pure futility rule (unit-tested): no gains for the window while the
+     * blacklist grew past threshold reads as churn (unroutable targets),
+     * not a slow leg — healthy legs gain (resetting the window) or hold a
+     * static list while they work through it.
+     */
+    static boolean futileTrip(int have, int tripHave, int growth, long elapsedMs) {
+        return have == tripHave && growth >= FUTILE_GROWTH && elapsedMs >= FUTILE_MS;
+    }
+
+    /**
+     * Best-effort sizes of the first two {@code List} fields on a mine
+     * process (known locations, blacklist, in declaration order); {@code
+     * {-1, -1}} when unreadable. Pure reflection, no game, so unit tests
+     * reach it with a stand-in.
+     */
+    static int[] processListSizes(Object proc) {
+        int[] out = {-1, -1};
+        if (proc == null) {
+            return out;
+        }
+        try {
+            int i = 0;
+            for (java.lang.reflect.Field f : proc.getClass().getDeclaredFields()) {
+                if (i >= 2) {
+                    break;
+                }
+                if (java.util.List.class.isAssignableFrom(f.getType())) {
+                    f.setAccessible(true);
+                    Object v = f.get(proc);
+                    if (v instanceof java.util.List) {
+                        out[i++] = ((java.util.List<?>) v).size();
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // Best-effort: sizes are diagnostic only.
+        }
+        return out;
+    }
+
+    /** Client thread: record stateIds of guard cells matching the blocks. */
+    private static void snapshotGuard(List<String> blocks, int[] box) {
+        guardSnap.clear();
+        if (box == null) {
+            return;
+        }
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.level == null) {
+            return;
+        }
+        int sx = box[3] - box[0] + 1;
+        int sy = box[4] - box[1] + 1;
+        try {
+            for (int x = box[0]; x <= box[3]; x++) {
+                for (int y = box[1]; y <= box[4]; y++) {
+                    for (int z = box[2]; z <= box[5]; z++) {
+                        var pos = new net.minecraft.core.BlockPos(x, y, z);
+                        var state = client.level.getBlockState(pos);
+                        String n = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
+                        if (!blocks.contains(n)) {
+                            continue;
+                        }
+                        int idx = (x - box[0]) + sx * ((y - box[1]) + sy * (z - box[2]));
+                        guardSnap.put(idx, net.minecraft.world.level.block.Block.getId(state));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            guardSnap.clear();
+        }
+    }
+
+    /**
+     * Client thread: true when a watched guard cell changed (broken or
+     * swapped) since begin. Unreadable cells read as unchanged.
+     */
+    private static boolean guardTripped(int[] box) {
+        if (box == null || guardSnap.isEmpty()) {
+            return false;
+        }
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.level == null) {
+            return false;
+        }
+        int sx = box[3] - box[0] + 1;
+        int sy = box[4] - box[1] + 1;
+        try {
+            for (var e : guardSnap.entrySet()) {
+                int idx = e.getKey();
+                int z = idx / (sx * sy);
+                int rest = idx - z * sx * sy;
+                int y = rest / sx;
+                int x = rest - y * sx;
+                var pos = new net.minecraft.core.BlockPos(box[0] + x, box[1] + y, box[2] + z);
+                int now = net.minecraft.world.level.block.Block.getId(client.level.getBlockState(pos));
+                if (now != e.getValue()) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+        return false;
+    }
+
+    /** Client thread (tick hook): progress on change, one end event. */
+    private static void tick(BridgeServer server) {
+        if (!active) {
+            return;
+        }
+        Minecraft client = Minecraft.getInstance();
+        LocalPlayer player = client != null ? client.player : null;
+        if (player == null || client.level == null) {
+            end(server, lastHave, "noPath");
+            return;
+        }
+        int have = countInventory(acceptedItems(names));
+        IBaritone b = BaritoneAPI.getProvider().getPrimaryBaritone();
+        if (guardTripped(guardBox)) {
+            // A guarded cell broke (castle floor/wall inside the site box):
+            // stop at once — one cell of damage, then the Node side ends
+            // the leg instead of quarrying on.
+            try {
+                b.getCommandManager().execute("stop");
+            } catch (Exception ignored) {
+                // Stopping is best-effort; the end event still lands.
+            }
+            end(server, have, "guard");
+            return;
+        }
+        boolean procActive;
+        try {
+            procActive = b.getMineProcess().isActive();
+        } catch (Exception e) {
+            procActive = false;
+        }
+        if (have != lastHave) {
+            lastHave = have;
+            push(server, have, true, have >= target ? "done" : null);
+        }
+        if (have >= target) {
+            end(server, have, "done");
+        } else if (!procActive) {
+            // The process gave up by itself (no path to any match —
+            // MineProcess cancels on an unreachable scan); the Node stall
+            // watchdog covers a process that stays live without gaining.
+            end(server, have, "noPath");
+        } else {
+            // Churn trip (neuc.53 rig evidence): a live process that
+            // blacklists target after target with zero gains is not a
+            // slow leg — end it as futile so the caller retries elsewhere
+            // instead of riding the stall timer out.
+            int blacklisted = -1;
+            try {
+                blacklisted = processListSizes(b.getMineProcess())[1];
+            } catch (Exception ignored) {
+                // Best-effort: unreadable lists never trip.
+            }
+            long nowMs = System.currentTimeMillis();
+            if (have != tripHave || blacklisted < 0 || tripBase < 0 || blacklisted < tripBase) {
+                tripHave = have;
+                tripBase = blacklisted;
+                tripSinceMs = nowMs;
+            } else if (futileTrip(have, tripHave, blacklisted - tripBase, nowMs - tripSinceMs)) {
+                try {
+                    b.getCommandManager().execute("stop");
+                } catch (Exception ignored) {
+                    // Stopping is best-effort; the end event still lands.
+                }
+                end(server, have, "futile");
+            }
+        }
+    }
+
+    private static void end(BridgeServer server, int have, String status) {
+        if (!active) {
+            return;
+        }
+        active = false;
+        lastHave = have;
+        restoreBreakPolicy();
+        push(server, have, false, status);
+    }
+
+    private static void push(BridgeServer server, int have, boolean live, String status) {
+        JsonObject p = new JsonObject();
+        p.addProperty("kind", "mine");
+        p.addProperty("id", mineId);
+        p.addProperty("have", have);
+        p.addProperty("target", target);
+        p.addProperty("active", live);
+        if (status != null) {
+            p.addProperty("status", status);
+        }
+        server.push("baritone.event", p);
+    }
+
+    /** Client thread: matching items in the main inventory. */
+    private static int countInventory(List<String> want) {
+        Minecraft client = Minecraft.getInstance();
+        LocalPlayer player = client != null ? client.player : null;
+        if (player == null) {
+            return 0;
+        }
+        int n = 0;
+        try {
+            // Same read as Baritone's own completion check (MineProcess
+            // counts getNonEquipmentItems against the filter).
+            for (ItemStack stack : player.getInventory().getNonEquipmentItems()) {
+                if (stack == null || stack.isEmpty()) {
+                    continue;
+                }
+                String item = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath();
+                if (want.contains(item)) {
+                    n += stack.getCount();
+                }
+            }
+        } catch (Exception e) {
+            return 0;
+        }
+        return n;
+    }
+}

@@ -19,6 +19,7 @@ const { installInput, setBaritonePaused } = require('./input') // idkcraft-neuc.
 const { installLifecycle, handleLifecycleEvent } = require('./lifecycle') // idkcraft-neuc.10: lifecycle/event parity
 const { installWindows, handleWindowEvent } = require('./windows') // idkcraft-neuc.11: container windows
 const { installInteract, handleInteractEvent } = require('./interact') // idkcraft-neuc.7: dig/place
+const { installMine, handleMineEvent, cancelMine } = require('./mine') // idkcraft-neuc.53: baritone.mine -> MineProcess
 const { installBuild, installBuildStop, handleBuildEvent } = require('./build') // idkcraft-neuc.54: buildCells
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
@@ -363,6 +364,11 @@ class BaritoneBot extends EventEmitter {
       movements: null,
       setGoal: (goal, dynamic) => self._setGoal(goal, dynamic === true),
       stop: () => self._stopPath(),
+      // False while a mine owns the body (round-3 core-1): the mine parks
+      // a marker as pathfinder.goal instead, which is what stopOnce/
+      // clearGoal and the owner-switch cleanup read. Reading true here
+      // would feed the stuck machine a still body every stone/scaffold
+      // mine (the mine has its own 60 s stall).
       isMoving: () => !!self._pathing,
       isMining: () => false, // spike: single digs, no executor mining
       isBuilding: () => false,
@@ -381,6 +387,7 @@ class BaritoneBot extends EventEmitter {
     installLifecycle(this) // neuc.10: isAlive/foodSaturation/respawn()
     installWindows(this) // idkcraft-neuc.11: openContainer/openChest/openFurnace/currentWindow/clickWindow/closeWindow
     installInteract(this) // idkcraft-neuc.7: dig/stopDigging/targetDigBlock/placeBlock/swingArm — before 'spawn' (util.js wraps placeBlock)
+    installMine(this) // idkcraft-neuc.53: bot.mine (v2 only; v1 never loads bridge/)
     installBuild(this) // idkcraft-neuc.54: buildCells over baritone.build
     installBuildStop(this) // idkcraft-neuc.54: stopBuild spelling of #stop
   }
@@ -677,6 +684,10 @@ class BaritoneBot extends EventEmitter {
   _setGoal(goal, dynamic) {
     this.pathfinder.goal = goal || null
     this._follow = null
+    // A new goal supersedes a live mine (round-1 body-2/core-2): the mine
+    // walks Baritone itself, outside the path latch, so an owner stop or a
+    // step change would otherwise leave it mining forever.
+    cancelMine(this)
     if (!goal) {
       this._stopPath()
       return
@@ -954,6 +965,15 @@ class BaritoneBot extends EventEmitter {
     if (!this.transport) return
     const desired = movementsToSettings(this.pathfinder.movements, this.registry)
     for (const k of Object.keys(desired)) {
+      // A live mine owns break-policy for the call (neuc.53 rig evidence):
+      // the mod suspends the ban/avoid for the mine's blocks at begin and
+      // restores at end; a lease re-push mid-mine would re-ban targets and
+      // starve it back into 60 s stalls. Skipped keys wait for the next
+      // push after settle (a mid-mine lease flip heals on the next goal).
+      if (k === 'allowBreak' || k === 'blocksToAvoidBreaking' || k === 'blocksToDisallowBreaking') {
+        const m = this._mine
+        if (m && !m.settled) continue
+      }
       if (this._settings[k] === desired[k]) continue
       this._settings[k] = desired[k]
       this.transport.call('baritone.cmd', { command: `#set ${k} ${desired[k]}` }).catch((e) => {
@@ -994,8 +1014,9 @@ class BaritoneBot extends EventEmitter {
     // other process, so a step change, fight, or follow that stops pathing
     // never leaves BuilderProcess steering an unowned body. Our own #stop
     // preempts our own build (round-3 core-2): the final rejects
-    // 'build-preempted' instead of settling starved.
-    const live = this._pathing || this._goalId != null || this._build != null
+    // 'build-preempted' instead of settling starved. A live mine counts
+    // too (neuc.53): cancelMine below sends the #stop for it.
+    const live = this._pathing || this._goalId != null || (this._mine && !this._mine.settled) || this._build != null
     this.pathfinder.goal = null
     this._follow = null
     this._boundSeq = this._cmdSeq // in-flight binds and late verdicts drop
@@ -1003,12 +1024,18 @@ class BaritoneBot extends EventEmitter {
     this._pathing = false
     if (!live) return // mineflayer's stop is silent when idle
     this._pathStatus = 'stopped'
-    // Only when a #stop actually goes out: a silent stop must not poison a
-    // build that keeps running.
+    // A #stop preempts our own build (round-3 core-2): mark it so its end
+    // settles build-preempted instead of starved — including the #stop
+    // cancelMine sends for a live mine, which cancels the build mod-side
+    // too. cancelMine sends the #stop itself when a live mine was holding
+    // the body (the behaviour gen guards drop its mine-stopped settle);
+    // otherwise one #stop goes out here.
     if (this._build) this._build.preempted = true
-    this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => {
-      console.log(`bridge baritone.cmd #stop failed: ${(e && e.message) || e}`) // never 'error': see chat()
-    })
+    if (!cancelMine(this)) {
+      this.transport.call('baritone.cmd', { command: '#stop' }).catch((e) => {
+        console.log(`bridge baritone.cmd #stop failed: ${(e && e.message) || e}`) // never 'error': see chat()
+      })
+    }
     // v1 emits path_stop here (unheard by our ticker); the reset makes the
     // cancel visible on the same taps as every other terminal.
     this.emit('path_reset', 'stopped')
@@ -1050,6 +1077,7 @@ class BaritoneBot extends EventEmitter {
     if (handleLifecycleEvent(this, method, params)) return // idkcraft-neuc.10: death/respawn/health/…/kicked/end
     if (handleWindowEvent(this, method, params)) return // idkcraft-neuc.11: window.open/slot/close
     if (handleInteractEvent(this, method, params)) return // idkcraft-neuc.7: dig.progress/done/abort
+    if (handleMineEvent(this, method, params)) return // idkcraft-neuc.53: baritone.event kind mine
     if (handleBuildEvent(this, method, params)) return // idkcraft-neuc.54: build progress/end
     const p = params || {}
     switch (method) {
