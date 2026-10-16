@@ -967,3 +967,55 @@ describe('castle-replay.js idle-alone oracle (idkcraft-6x7.24)', () => {
     assert.ok(src.includes('node tools/castle-replay.js 2>&1 || _rc=$?'), 'replay rc capture is not set -e safe')
   })
 })
+
+describe('castle rig speed (idkcraft-neuc.60)', () => {
+  const { componentLine, classify, seen, resetSeen } = require('../tools/castle-replay')
+  const { spawnSync } = require('node:child_process')
+  const os = require('node:os')
+  const sh = path.join(__dirname, '..', 'tools', 'castle-rig.sh')
+
+  it('lay rate = cells per game minute, judged against the baseline', () => {
+    const l = componentLine('lay', { laid: 300, gameMin: 10, wallMin: 3.33, legs: [], tick: '60', baseline: { rate: 28 } })
+    assert.equal(l, 'lay-rate 30.0/game-min: laid=300 in 10.0 game-min, fetch-legs=0, tick=60, baseline=28 (+7%, within ±15%)')
+    assert.match(componentLine('lay', { laid: 100, gameMin: 10, wallMin: 10, legs: [], tick: '1', baseline: { rate: 20 } }), /-50%, OUTSIDE ±15%/)
+  })
+
+  it('mine rate reads only stone legs, in game minutes from the measured ratio', () => {
+    resetSeen()
+    classify('castlefetch stone: leg over (done) ticks dig=10 walk=2 other=1 starts=1 dug=40 blocks=+40 target=40 wall=20s')
+    classify('castlefetch planks: leg over (done) ticks dig=0 walk=2 other=1 starts=1 dug=0 blocks=+8 target=8 wall=30s')
+    classify('castlefetch stone: leg over (failed:x) ticks dig=1 walk=2 other=1 starts=1 dug=0 blocks=-2 target=40 wall=10s')
+    assert.equal(seen.legs.length, 3)
+    // 30 wall s of stone legs at a measured 3x = 1.5 game min; -2 counts 0.
+    const l = componentLine('mine', { laid: 0, gameMin: 9, wallMin: 3, legs: seen.legs, tick: '60', baseline: null })
+    assert.equal(l, 'mine-rate 26.7/game-min: blocks=+40 in 1.5 game-min of 2 stone legs, window=9.0 game-min, tick=60')
+    assert.match(componentLine('mine', { laid: 0, gameMin: 9, wallMin: 3, legs: [], tick: '60', baseline: { rate: 5 } }), /^mine-rate -\/game-min/)
+    resetSeen()
+  })
+
+  it('validates CASTLE_COMPONENT / CASTLE_TICK_RATE before touching the world', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-comp-'))
+    const run = (env) => spawnSync('sh', [sh], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), RIG_PLANNER: 'stub', ...env } })
+    const bad = run({ CASTLE_COMPONENT: 'fly' })
+    assert.equal(bad.status, 2)
+    assert.match(bad.stdout, /CASTLE_COMPONENT: want ''\|mine\|lay/)
+    const seeded = run({ CASTLE_COMPONENT: 'lay', CASTLE_SEED: 'complete' })
+    assert.equal(seeded.status, 2)
+    assert.match(seeded.stdout, /CASTLE_COMPONENT orders a castle/)
+    const rate = run({ CASTLE_TICK_RATE: 'fast' })
+    assert.equal(rate.status, 2)
+    assert.match(rate.stdout, /tickrate: want an integer/)
+    const ok = run({ CASTLE_COMPONENT: 'mine', CASTLE_TICK_RATE: '60' })
+    assert.match(ok.stdout, /v2-only/)
+    assert.match(ok.stdout, /no START.sh/)
+  })
+
+  it('component-baseline.json: v2 lay + mine, two runs each within ±15% of the rate', () => {
+    const b = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'component-baseline.json'), 'utf8'))
+    for (const k of ['lay', 'mine']) {
+      const e = b.v2 && b.v2[k]
+      assert.ok(e && e.rate > 0 && Array.isArray(e.runs) && e.runs.length >= 2, `v2.${k} malformed`)
+      for (const r of e.runs) assert.ok(Math.abs(r / e.rate - 1) <= 0.15, `v2.${k} run ${r} outside ±15% of ${e.rate}`)
+    }
+  })
+})

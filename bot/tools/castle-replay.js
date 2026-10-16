@@ -80,6 +80,12 @@ const OUT = process.env.CASTLE_OUT || `${__dirname}/last-castle.json`
 const LOGFILE = process.env.CASTLE_LOG || `/tmp/castle-rig-${TAG}.log`
 const KIT = process.env.CASTLE_KIT || 'empty'
 const TICKRATE = process.env.CASTLE_TICKRATE || '1'
+// neuc.60: /tick rate N (N > 1; 20 = normal) makes MINS GAME minutes — the
+// window runs MINS * 20 / N wall minutes. Rate 1 = the server untouched.
+const SPEED = (parseInt(TICKRATE, 10) || 1) > 1 ? parseInt(TICKRATE, 10) / 20 : 1
+// neuc.60: component rig (castle-rig.sh CASTLE_COMPONENT=mine|lay) — one
+// extra verdict line per GAME minute, judged against component-baseline.json.
+const COMPONENT = process.env.CASTLE_COMPONENT || ''
 const BLOCKED = Math.max(0, parseInt(process.env.CASTLE_BLOCKED || '0', 10) || 0)
 const PLANNER = process.env.RIG_PLANNER || 'jev'
 const NIGHT = process.env.CASTLE_NIGHT === '1'
@@ -250,8 +256,9 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /, /^residence /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [] }
+const seen = { legs: [], flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [] }
 function resetSeen() {
+  seen.legs = []
   seen.regressAt = []
   seen.shelterEps = 0
   seen.flips = 0
@@ -287,6 +294,9 @@ function hookConsole() {
 // bot's own log lines (in-process, loss-free). now is injectable for tests.
 function classify(line, now = Date.now()) {
   if (line.startsWith('castle regress ')) { seen.regressAt.push(now); return } // g0z.56
+  // neuc.60: castlefetch leg ledger (the mine-rate component reads stone legs).
+  const lm = /^castlefetch (\S+): leg over \((\S+)\) .* blocks=([+-]?\d+) .*wall=(\d+)s/.exec(line)
+  if (lm) { seen.legs.push({ kind: lm[1], status: lm[2], blocks: Number(lm[3]), wallS: Number(lm[4]) }); return }
   let m = /^goal step=(\S+) prev=(\S+)/.exec(line)
   if (m) {
     seen.step = m[1]
@@ -678,6 +688,41 @@ function seedMatches(cell, name, props) {
   return true
 }
 
+// neuc.60: the world's game tick counter (advances under the day lock too);
+// null when unreadable — the caller falls back to wall x SPEED.
+async function gameTime() {
+  try {
+    const m = /(\d+)/.exec(await rcon('time query gametime'))
+    return m ? Number(m[1]) : null
+  } catch (_) { return null }
+}
+
+// neuc.60: component verdict, pure (unit-tested). lay = castle cells laid
+// per game minute of the window; mine = blocks banked per game minute
+// INSIDE finished stone legs (laying time excluded), leg wall seconds
+// scaled by the measured game/wall ratio. baseline = { rate } or null.
+function componentLine(kind, { laid, gameMin, wallMin, legs, tick, baseline }) {
+  const ratio = wallMin > 0 ? gameMin / wallMin : 1
+  let rate = null
+  let body
+  if (kind === 'lay') {
+    rate = gameMin > 0 ? laid / gameMin : null
+    body = `laid=${laid} in ${gameMin.toFixed(1)} game-min, fetch-legs=${legs.length}`
+  } else {
+    const st = legs.filter((l) => l.kind === 'stone')
+    const blocks = st.reduce((n, l) => n + Math.max(0, l.blocks), 0)
+    const legMin = st.reduce((n, l) => n + l.wallS, 0) / 60 * ratio
+    rate = legMin > 0 ? blocks / legMin : null
+    body = `blocks=+${blocks} in ${legMin.toFixed(1)} game-min of ${st.length} stone legs, window=${gameMin.toFixed(1)} game-min`
+  }
+  let judge = ''
+  if (rate != null && baseline && baseline.rate > 0) {
+    const pct = Math.round((rate / baseline.rate - 1) * 100)
+    judge = `, baseline=${baseline.rate} (${pct >= 0 ? '+' : ''}${pct}%, ${Math.abs(pct) <= 15 ? 'within' : 'OUTSIDE'} ±15%)`
+  }
+  return `${kind}-rate ${rate == null ? '-' : rate.toFixed(1)}/game-min: ${body}, tick=${tick}${judge}`
+}
+
 async function rcon(cmd) {
   const { stdout } = await execFileAsync('docker', ['exec', CONTAINER, 'rcon-cli', cmd])
   const out = String(stdout)
@@ -995,6 +1040,22 @@ async function main() {
     }
     origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword, 5 shelves + table, blast furnace)')
   }
+  // neuc.60 component kits: lay = the seeded kit with stock for a whole
+  // 10-game-min window (no fetch leg should open); pick = 3 stone picks +
+  // a sword and nothing to lay, so the first castle word opens a stone leg.
+  if (KIT === 'lay') {
+    for (const [item, count] of [['cobblestone', 640], ['oak_planks', 192], ['dirt', 64], ['torch', 32],
+      ['stone_pickaxe', 1], ['stone_sword', 1], ['bookshelf', 5], ['enchanting_table', 1], ['blast_furnace', 1]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog('CASTLE-RIG kit=lay (640 cobble, 192 planks, 64 dirt, 32 torches, stone pick+sword, 5 shelves + table, blast furnace)')
+  }
+  if (KIT === 'pick') {
+    for (const [item, count] of [['stone_pickaxe', 3], ['stone_sword', 1]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog('CASTLE-RIG kit=pick (3 stone picks + sword, nothing to lay)')
+  }
   // Junk kit (vmzq.38): the prod 2026-10-06 pack — 36/36 stone variants,
   // sand and mob junk, wooden sword only: no pickaxe, no table, no cobble.
   if (KIT === 'junk') {
@@ -1299,7 +1360,8 @@ async function main() {
   let repairT = null
   let nowoodT = null
   const t0 = Date.now()
-  const endAt = t0 + MINS * 60000
+  const endAt = t0 + MINS * 60000 / SPEED
+  const gt0 = await gameTime()
   let lastSampleLine = 0
   const sample = () => {
     const s = { t: Math.round((Date.now() - t0) / 1000) }
@@ -1417,7 +1479,7 @@ async function main() {
       }
     }
   }
-  origLog(`CASTLE-RIG window: ${MINS} min, ends ${new Date(endAt).toISOString()}`)
+  origLog(`CASTLE-RIG window: ${MINS} ${SPEED !== 1 ? `game min (tick rate ${TICKRATE}, ${(MINS / SPEED).toFixed(1)} wall min)` : 'min'}, ends ${new Date(endAt).toISOString()}`)
   if (night) await night.open()
   winT0 = t0
   let resTimer = null
@@ -1789,6 +1851,13 @@ async function main() {
   const last = series[series.length - 1] || {}
   const done = typeof last.done === 'number' ? last.done : 0
   const total = typeof last.total === 'number' ? last.total : 0
+  // neuc.60: game minutes actually run (gametime delta; wall x SPEED when
+  // unreadable) — a server that cannot hold the rate shows here.
+  const wallMin = (Date.now() - t0) / 60000
+  const gt1 = await gameTime()
+  const gameMin = gt0 != null && gt1 != null ? (gt1 - gt0) / 1200 : wallMin * SPEED
+  const laid = done - (typeof series[0].done === 'number' ? series[0].done : 0)
+  const tickTag = TICKRATE !== '1' ? `, tick=${TICKRATE}, game=${gameMin.toFixed(1)}min, cells/game-min=${(gameMin > 0 ? laid / gameMin : 0).toFixed(1)}` : ''
   const top = (obj, n) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k}:${v}`).join(',') || 'none'
   const first = seen.wdFirstAt ? Math.round((seen.wdFirstAt - t0) / 1000) : '-'
   // Far event readout (vmzq.29): done at the jump / lowest sample after it
@@ -1910,7 +1979,13 @@ async function main() {
   // logs one), escaped/home are seconds from window open.
   const startTag = start ? `, start=${start.d.join(',')}${start.cell ? `/${start.cell}` : ''}, escaped@${startEscS == null ? 'no' : `${startEscS}s`}, home@${startHomeS == null ? 'no' : `${startHomeS}s`}, regress=${seen.regressAt.filter((at) => at >= t0).length}` : ''
   const nightTag = (night ? night.tag() : '') + seedTag + startTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + repairTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
-  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}`
+  const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}${tickTag}`
+  let compLine = null
+  if (COMPONENT) {
+    let base = null
+    try { base = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'][COMPONENT] || null } catch (_) { base = null }
+    compLine = componentLine(COMPONENT, { laid, gameMin, wallMin, legs: seen.legs, tick: TICKRATE, baseline: base })
+  }
   const record = {
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },
@@ -1921,11 +1996,13 @@ async function main() {
     nights: night ? night.nights : undefined,
     seed: SEED || undefined, residence: resNights ? resNights.nights : undefined,
     seedVersion: SEED ? SEED_VERSION : undefined, upgrade: upgrade || undefined,
+    gameMin, wallMin, legs: seen.legs, component: compLine || undefined,
   }
   try { fs.writeFileSync(OUT, JSON.stringify(record, null, 1)) } catch (e) {
     origLog(`CASTLE-RIG out write failed: ${e.message}`)
   }
   origLog(line)
+  if (compLine) origLog(compLine)
   const idleV = idle ? idle.verdict(deaths - idleForced, resNights ? resNights.nights : []) : null
   if (idleV) origLog(idleV.line)
   try { logStream.end() } catch (_) { /* close best-effort */ }
@@ -1939,4 +2016,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { componentLine, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
