@@ -86,12 +86,10 @@ function dist3(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
-// Warm-cache gate: true once every chunk in radius of at is loaded in
-// our world (same server packets feed Baritone's cache), false on a
-// cancel or when the budget runs out (the caller arms anyway — the
-// churn trip and the stall budget bound the damage). No world surface
-// (unit fakes) reads as warm at once.
-async function warmCache(bot, at, radius, budgetMs, dead) {
+// Sync leg-area check for the warm-cache gate: every chunk in radius
+// of at loaded in our world (same server packets feed Baritone's
+// cache). No world surface (unit fakes) reads as warm at once.
+function cacheReady(bot, at, radius) {
   let get = null
   try {
     if (bot && bot.world && typeof bot.world.getChunk === 'function') {
@@ -104,15 +102,21 @@ async function warmCache(bot, at, radius, budgetMs, dead) {
   const r = Math.max(0, radius || 0)
   const x0 = Math.floor((at.x - r) / 16), x1 = Math.floor((at.x + r) / 16)
   const z0 = Math.floor((at.z - r) / 16), z1 = Math.floor((at.z + r) / 16)
+  for (let cx = x0; cx <= x1; cx++) {
+    for (let cz = z0; cz <= z1; cz++) {
+      if (!get(cx, cz)) return false
+    }
+  }
+  return true
+}
+
+// Warm-cache gate: true once the leg area reads ready, false on a
+// cancel or when the budget runs out (the caller arms anyway — the
+// churn trip and the stall budget bound the damage).
+async function warmCache(bot, at, radius, budgetMs, dead) {
   const t0 = Date.now()
   for (;;) {
-    let missing = false
-    for (let cx = x0; cx <= x1 && !missing; cx++) {
-      for (let cz = z0; cz <= z1; cz++) {
-        if (!get(cx, cz)) { missing = true; break }
-      }
-    }
-    if (!missing) return true
+    if (cacheReady(bot, at, radius)) return true
     if (dead()) return false
     if (Date.now() - t0 > budgetMs) return false
     await new Promise((resolve) => setTimeout(resolve, 250))
@@ -312,4 +316,4 @@ function handleMineEvent(bot, method, params) {
   return true
 }
 
-module.exports = { installMine, handleMineEvent, cancelMine, countHave, acceptedNames, MINE_STALL_MS, MINE_TICK_MS }
+module.exports = { installMine, handleMineEvent, cancelMine, countHave, acceptedNames, cacheReady, MINE_STALL_MS, MINE_TICK_MS }

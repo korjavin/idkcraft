@@ -24,6 +24,7 @@ const stockpileMod = require('./stockpile')
 const danger = require('../danger')
 const { countItems } = require('../perception')
 const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('./util')
+const { cacheReady } = require('../bridge/mine')
 const { stepDone, stepFailed, failReason, isFinished, stepGen, stale } = require('../step')
 
 // Stack-ish targets per kind (bead: ~64 cobble, ~16 logs' worth). Each is
@@ -77,6 +78,7 @@ const AIR_WAITS = 3 // ticks a dig waits for the feet to land
 const PICKUP_WAITS = 8 // ticks walking into a below-feet hole for its drop (neuc.51)
 const APPROACH_WAITS = 30 // ticks walking to one target before it is skipped
 const SKIPS_TO_FAIL = 3 // skipped targets before the leg fails unreachable
+const QWAIT_MS = 45000 // bounded pre-pick wait for the leg area chunks
 const NOGAIN_STRIKES = 8 // digs without the cobble count growing (neuc.51: v2 digs one a second, the pickup trails 1-2 digs; 5 failed live legs)
 const DIG_TIMEOUT_MS = 10000
 // Quarry truth (vmzq.38; neuc.53 rig evidence): granite/diorite/andesite/
@@ -1368,6 +1370,15 @@ function digTick(bot, ctx, f, d) {
     // stances mine): take the next v1 quarry cell and walk to its stance
     // first — dry, exposed, reachable, stance-safe by construction. A
     // dead quarry (null) arms in place; the trip and the timer bound it.
+    // Pick on warm ground only (neuc.53 rig evidence: the picker reads
+    // our world, and a cold cache blinds it the same way it blinds the
+    // mine — every side reads void and the quarry looks dead). Bounded:
+    // a cache that never warms arms in place after the wait, and the
+    // trip/timer bound that leg like before.
+    if (!cacheReady(bot, bp, DIG_RADIUS)) {
+      if (f.qWait0 == null) f.qWait0 = Date.now()
+      if (Date.now() - f.qWait0 < QWAIT_MS) { spend(f, 'other'); return }
+    }
     if (!f.qTarget) {
       try { f.qTarget = pickQuarry(bot, ctx, f) } catch (_) { f.qTarget = null }
     }

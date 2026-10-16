@@ -9,6 +9,7 @@ const Vec3 = require('vec3')
 
 const { BaritoneBot } = require('../src/bridge/index')
 const { FakeTransport } = require('../src/bridge/transport')
+const { cacheReady } = require('../src/bridge/mine')
 
 const registry = require('minecraft-data')('26.1.2')
 
@@ -88,6 +89,16 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     bot.world = { getChunk: () => null }
     await bot.mine(['dirt'], 3, { radius: 12, tickMs: 5, warmupMs: 300 })
     assert.equal(transport.state.mineLog.length, 1)
+  })
+
+  it('cacheReady needs every chunk in radius, or no world at all', () => {
+    const at = { x: 0, y: 64, z: 0 }
+    assert.equal(cacheReady({}, at, 12), true, 'no world reads warm')
+    assert.equal(cacheReady({ world: {} }, at, 12), true, 'no getChunk reads warm')
+    assert.equal(cacheReady({ world: { getChunk: () => ({}) } }, at, 12), true)
+    let calls = 0
+    const hole = { world: { getChunk: () => { calls++; return calls > 1 ? {} : null } } }
+    assert.equal(cacheReady(hole, at, 12), false, 'one missing chunk fails the area')
   })
 
   it('no gain for the stall budget rejects mine-stall and stops the process', async () => {

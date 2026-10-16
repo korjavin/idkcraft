@@ -160,6 +160,35 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(mined, 1, 'verbs fires from the vetted stance')
   })
 
+  it('the quarry pick waits for a warm cache', async () => {
+    let mined = 0
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      mineImpl: () => async () => { mined++; },
+    })
+    bot.world = { getChunk: () => null }
+    const ctx = stoneCtx()
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
+    await flush()
+    assert.equal(mined, 0, 'no pick and no verb on cold ground')
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('the quarry pick proceeds after the wait budget', async () => {
+    let mined = 0
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      mineImpl: () => async () => { mined++; },
+    })
+    bot.world = { getChunk: () => null }
+    const ctx = stoneCtx()
+    ctx.castleFetch.qWait0 = Date.now() - 60000
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
+    await flush()
+    await flush()
+    assert.equal(mined, 1, 'cold quarry still arms in place after the wait')
+  })
+
   it('relocation stops after three re-arms and fails with the last error', async () => {
     const bot = mockBot({
       items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 5 }],
