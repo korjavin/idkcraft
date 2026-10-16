@@ -107,6 +107,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `MC_MEMORY`: RAM allocation (default `4G`)
   - `MC_JAVA_PORT`: Java listening port (`25565`)
   - `MC_BEDROCK_PORT`: Bedrock listening port (`19132`)
+  - `MC_MAX_PLAYERS`: Paper max-players (default `40`; swarm up to 33 bots + bot2 + worker + owners; needs an mc restart)
   - `MC_DATA_PATH`: Host bind-mount path (default `./data`)
   - `WHITELIST`: Comma-separated list (Bedrock players prefixed with `.`)
   - `OPS`: Comma-separated operators
@@ -118,7 +119,8 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BOT_CASTLE_PEER`: peer bot whose memory file's complete castle is read (never written) as a night residence (bot2 pins it to `BOT_USERNAME`; empty = off)
   - `BOT_PEER_USERNAME`: peer bot name that ownerOnline ignores (bot2 pins it to `BOT_USERNAME`; v1 excludes v2 via `BOT2_USERNAME`; never set on bot)
   - `BODY2_MEM_LIMIT`: v2 body RAM cap (default `2500m`)
->>>>>>> origin/master; helpers answer only `stop`/`flat`; `<BotName>: <command>` addresses one bot
+  - `BOT_SWARM_N`: flat swarm size incl. `bot` (idkcraft-lhg2; empty = off, swarm1..32 idle; `33` = bot + all 32). `flat <r>` splits the square into N x-strips: bot = strip 0, swarmK = strip K (`BOT_SWARM_I`, pinned per service; never set on bot). bot2 does not split (compose pins bot2 `BOT_SWARM_I=-1`, no strip, and passes `BOT_SWARM_N`/`BOT_SWARM_PREFIX` so its chat sieve matches the swarm). Helpers (strip >= 1) chat only `flattening...` and `flat done`; their progress/refill lines go to the log; helpers answer only `stop`/`flat`; `<BotName>: <command>` addresses one known bot
+  - `BOT_SWARM_PREFIX`: swarm bot names `<prefix>1..32` (default `IdkSwarm`; whitelist each OFFLINE uuid like `BOT_USERNAME`; must not collide with `BOT2_USERNAME`)
   - `BOT_SWARM_MEM_LIMIT`: per-swarm-bot RAM cap (default `400m`)
     - Swarm use (idkcraft-zchb): say `flat <r>` — the main bot fixes the square around where you stood and the level = your feet level at command time, relays it (`swarm flat …` chat line, the only bot chat helpers obey; they ignore your own flat line), far helpers walk there; moving away or disconnecting changes nothing, only a new `flat`/`stop`. `flat <r> <x> <z>` (tpd1) still works (level = your feet if the main bot sees you, else the mode). Helpers are flat-only (refuse follow/work, park after `flat done`). Helpers keep the server occupied on a hidden-sample ping — clear `BOT_SWARM_N` after the job
   - `BRIDGE_HOST`/`BRIDGE_PORT`/`BRIDGE_CONSOLE_PORT`: bridge addresses (defaults `body2`/`7778`/`7777`, pinned on bot2)
