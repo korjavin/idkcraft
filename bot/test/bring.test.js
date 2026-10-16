@@ -244,6 +244,59 @@ describe('bring me order', () => {
     assert.ok(bot.lines.includes('could not reach iron_ore (buried, no path in) at 10 64 0'), `lines: ${bot.lines}`)
   })
 
+  it('pillar wedge re-paths once, then the stall refuses (jlda.13)', () => {
+    const bot = mockBot({
+      spots: [pos(10, 64, 0)],
+      names: { '10,64,0': 'iron_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    bot._moving = true
+    bot.pathfinder.isBuilding = () => true // a jump-place step held, body hovering
+    bot.entity.onGround = false
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    c.bring = {
+      name: 'iron', want: 3, by: 'P', block: 'iron_ore', drop: 'iron',
+      pos: pos(10, 64, 0), phase: 'walk', stalls: 0, lastPos: null,
+      have: 0, announced: true, exposed: false,
+    }
+    const nulls = () => bot.calls.goals.filter((g) => g === null).length
+    let ticks = 0
+    while (nulls() === 0 && ticks < 9) { bring(bot, c, null, {}); ticks++ }
+    assert.equal(nulls(), 1, 'the wedge cleared the goal once')
+    assert.ok(ticks < 9, `wedge seen well inside the 10-tick stall (${ticks} ticks)`)
+    assert.ok(c.bring, 'order still live after the re-path')
+    const issued = bot.calls.goals.filter((g) => g).length
+    bring(bot, c, null, {})
+    assert.equal(bot.calls.goals.filter((g) => g).length, issued + 1, 'goal re-issued')
+    for (let i = 0; i < 20 && c.bring; i++) bring(bot, c, null, {})
+    assert.equal(c.bring, null, 'second wedge falls to the refusal')
+    assert.equal(nulls(), 2, 'no second re-path: the refusal clears the goal')
+    assert.ok(bot.lines.includes('could not reach iron_ore (buried, no path in) at 10 64 0'), `lines: ${bot.lines}`)
+  })
+
+  it('a rising pillar is not a wedge (jlda.13)', () => {
+    const bot = mockBot({
+      spots: [pos(10, 80, 0)],
+      names: { '10,80,0': 'iron_ore' },
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    bot._moving = true
+    bot.pathfinder.isBuilding = () => true
+    bot.entity.onGround = false // mid-jump on every sample: no progress by the stall rule
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    c.bring = {
+      name: 'iron', want: 3, by: 'P', block: 'iron_ore', drop: 'iron',
+      pos: pos(10, 80, 0), phase: 'walk', stalls: 0, lastPos: null,
+      have: 0, announced: true, exposed: false,
+    }
+    for (let i = 0; i < 8; i++) { bot.entity.position = pos(0, 64 + i, 0); bring(bot, c, null, {}) }
+    assert.equal(bot.calls.goals.filter((g) => g === null).length, 0, 'no re-path while rising')
+  })
+
   it('walk stall on exposed ore keeps the plain refusal', () => {
     const bot = mockBot({
       spots: [pos(10, 64, 0)],

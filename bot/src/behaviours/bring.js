@@ -1174,6 +1174,31 @@ function chestFetch(bot, ctx, o, bp) {
 
 // The item chest fetch (fetchItem) lives in bringitem.js (did.4 split).
 
+// Pillar wedge (idkcraft-jlda.13): mineflayer-pathfinder 2.4.5 holds jump on
+// a jump-place step until the body rises past the placement, and its placing
+// branch returns before the 3.5 s 'stuck' check — a rise Paper cancels (the
+// jumpcost.js wedge) hovers with no path reset until the walk stall refuses.
+// MINE-10: partial A* rounds flip between the tunnel dig and a pillar up the
+// 1x1 shaft, and the run that commits to the pillar hovers there. Only this
+// signature (a place step held while the body stays put) counts, once per
+// target key; a pathfinder without isBuilding never wedges.
+const PILLAR_WEDGE_TICKS = 3
+function pillarWedged(bot, o, bp, key) {
+  if (o.unwedged === key) return false
+  let building = false
+  try { building = !!(bot.pathfinder && typeof bot.pathfinder.isBuilding === 'function' && bot.pathfinder.isBuilding()) } catch (_) { building = false }
+  // A healthy pillar rises ~1 block per tick without landing on every
+  // sample (no horizontal progress either): only a body that also stays at
+  // the same height counts.
+  const still = typeof o.wedgeY === 'number' && Math.abs(bp.y - o.wedgeY) < 0.5
+  o.wedgeY = bp.y
+  if (!building || !still) { o.wedge = 0; return false }
+  if ((o.wedge = (o.wedge || 0) + 1) < PILLAR_WEDGE_TICKS) return false
+  o.wedge = 0
+  o.unwedged = key
+  return true
+}
+
 // The walk-stall refusal line, shared by the direct stall and the guided
 // fallback so the two can never drift (the buried form is pinned by test).
 function unreachLine(o) {
@@ -1752,7 +1777,13 @@ async function bring(bot, ctx, target, state) {
     if (o.phase === 'walk') {
       if (progressed(bp, o.lastPos, grounded)) {
         o.stalls = 0
+        o.wedge = 0
         o.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+      } else if (pillarWedged(bot, o, bp, key)) {
+        // jlda.13: re-path once per target; the next tick re-issues the goal
+        // with a fresh stall budget, a second wedge falls to the refusal.
+        try { console.log(`bring: pillar wedge at ${bp.x.toFixed(1)} ${bp.y.toFixed(1)} ${bp.z.toFixed(1)} — re-path (jlda.13)`) } catch (_) { /* logging never breaks a walk */ }
+        clearGoal(bot, ctx) // resetPath drops the stuck place step and releases jump
       } else if (++o.stalls >= WALK_STALL_TICKS) {
         // Buried stalls name the vein coords (chv): the acceptance fallback
         // is an honest refusal with coords, never a silent surface trample.
