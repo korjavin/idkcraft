@@ -3,7 +3,7 @@
 // tripped watch). Run: `cd bot && npm test`.
 'use strict'
 
-const { describe, it, afterEach } = require('node:test')
+const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const Vec3 = require('vec3')
 
@@ -27,7 +27,14 @@ function mineBot(state) {
 describe('bridge mine (idkcraft-neuc.53)', () => {
   let transport
   let bot
-  afterEach(async () => { await bot.stop() })
+  // The stall/leash watch runs on an unref'd interval (prod: a background
+  // watch must never hold the process open). A test run whose loop holds
+  // only unref'd handles fails the pending test on some Node versions, so
+  // one ref'd heartbeat lives for the file; the per-test timers do the
+  // real waiting.
+  let beat = null
+  beforeEach(() => { beat = setInterval(() => {}, 1000) })
+  afterEach(async () => { try { clearInterval(beat) } catch (_) { /* heartbeat best-effort */ } await bot.stop() })
 
   // The mine captures its start position on the way to the verb; move the
   // body only after the verb landed, or the start moves with it.
