@@ -49,6 +49,7 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     assert.ok(sets.some((c) => c === '#set mineScanDroppedItems true'), 'scan drops pinned')
     assert.ok(sets.some((c) => c === '#set legitMine false'), 'legit mine pinned')
     assert.ok(sets.some((c) => c === '#set mineGoalUpdateInterval 5'), 'goal interval pinned')
+    assert.ok(sets.some((c) => c === '#set mineMaxOreLocationsCount 12'), 'small target set pinned')
     assert.ok(sets.some((c) => c === '#set allowBreak true'), 'a mine digs even under a no-dig walk lease')
     assert.equal(bot._settings.allowBreak, 'true', 'the pin mirrors into the adapter diff')
     assert.ok(!(transport.state.digLog || []).length, 'no single digs on the mine path')

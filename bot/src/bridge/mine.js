@@ -28,6 +28,11 @@ const MINE_SETTINGS = [
   ['mineScanDroppedItems', 'true'],
   ['legitMine', 'false'],
   ['mineGoalUpdateInterval', '5'],
+  // Rig evidence (neuc.53 instrumented runs): a 64-target composite never
+  // completes a calc under rig load — every second reissues the goal and
+  // blacklists the closest instance, 60 s of motionless spam. Twelve
+  // nearest keeps calcs ms-scale, so paths follow or fail fast.
+  ['mineMaxOreLocationsCount', '12'],
   // A mine digs by definition: a no-dig walk lease (gocastle/gohome set
   // canDig false) would leave MineProcess targetless on its first tick
   // and the leg would read noPath (round-1 core-3). The mirror below keeps
