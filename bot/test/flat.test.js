@@ -543,7 +543,11 @@ describe('flat ticker wiring', () => {
       assert.equal(ctx.work, false)
       assert.ok(!ctx.followName, 'sole player not adopted')
       bot.players = {} // the owner leaves: the nobody-online quit ends runOnce
-      await done
+      // The ticker's timers are unref'd: hold the loop open (bounded) for the leave.
+      const keep = setInterval(() => {}, 20)
+      try {
+        assert.ok(await Promise.race([done.then(() => true), new Promise((res) => setTimeout(res, 5000, false))]), 'runOnce left cleanly')
+      } finally { clearInterval(keep) }
     })
 
     // tpd1 (iv): a complete visible sample of swarm bots reads empty.
