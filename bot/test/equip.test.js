@@ -2875,3 +2875,218 @@ describe('tableFor sight (neuc.50)', () => {
     } finally { craftMod.tableUsable = real }
   })
 })
+
+describe('equip pick budget (idkcraft-neuc.59)', () => {
+  // v2 fake: bot.mine marks the Baritone body (no BOT_BODY env juggling, so
+  // v1 tests in this file keep running with the env untouched).
+  function v2bot(opts) {
+    const bot = mockBot(opts)
+    bot.mine = async () => {}
+    return bot
+  }
+  const castleCtx = (home, extra) => ({ ...freshCtx(home), castle: { site: { x: 0, y: 64, z: 0 } }, ...extra })
+  const worn = (used) => ({ name: 'stone_pickaxe', count: 1, maxDurability: 131, durabilityUsed: used })
+  const kit = (pick) => [pick, { name: 'stone_sword', count: 1 }, { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }]
+  const v2opts = (items) => ({ items, ids: IDS, recipes: { stone_pickaxe: recipeFor('stone_pickaxe') }, blockAtImpl: () => TABLE })
+
+  it('pickUsesLeft sums held picks, fieldless reads as a fresh pick', () => {
+    assert.equal(equip.pickUsesLeft({ inventory: { items: () => [worn(100), { name: 'stone_pickaxe', count: 1 }] } }), 31 + 131)
+    assert.equal(equip.PICK_BUDGET, 524)
+    assert.equal(equip.pickBudgetNeed({}), 524)
+    assert.equal(equip.pickBudgetNeed({ castleWord: { kind: 'stone', left: 100 } }), 100)
+  })
+
+  it('v2 castle: a worn pick tops up across ticks and stops at the budget', async () => {
+    const bot = v2bot(v2opts(kit(worn(100)))) // 31 uses on hand
+    bot.craft = landingCraft(bot)
+    const ctx = castleCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 1)
+    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('stone_pickaxe'))
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 2)
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 3)
+    // 31 + 3 fresh picks = 424 uses, over want (524 - 131): the next tick
+    // lays the kit down instead of crafting a fourth.
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 3)
+    assert.ok(bot.calls.craft.every((c) => c.recipe.result.name === 'stone_pickaxe'))
+    assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
+  })
+
+  it('v2 castle: one fresh pick above a small stone remainder crafts nothing', async () => {
+    const bot = v2bot(v2opts(kit({ name: 'stone_pickaxe', count: 1, maxDurability: 131, durabilityUsed: 0 })))
+    bot.craft = landingCraft(bot)
+    const ctx = castleCtx({ table: { x: 1, y: 64, z: 0 } }, { castleWord: { kind: 'stone', left: 100 } })
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0)
+    assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
+  })
+
+  it('v1: a worn pick with a funded chain still stops at one pick', async () => {
+    const bot = mockBot(v2opts(kit(worn(100)))) // no bot.mine: the v1 body
+    bot.craft = landingCraft(bot)
+    const ctx = castleCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0, 'the budget never fires on v1')
+    assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
+  })
+})
+
+describe('equip pick budget round 2 (idkcraft-neuc.59 review)', () => {
+  function v2bot(opts) {
+    const bot = mockBot(opts)
+    bot.mine = async () => {}
+    return bot
+  }
+  const castleCtx = (home, extra) => ({ ...freshCtx(home), castle: { site: { x: 0, y: 64, z: 0 } }, ...extra })
+  const worn = (used) => ({ name: 'stone_pickaxe', count: 1, maxDurability: 131, durabilityUsed: used })
+  const v2opts = (items) => ({
+    items,
+    ids: IDS,
+    recipes: { stone_pickaxe: recipeFor('stone_pickaxe'), stone_sword: recipeFor('stone_sword') },
+    blockAtImpl: () => TABLE,
+  })
+
+  it('v2 castle: pickless tops up from the first landing to the budget', async () => {
+    const bot = v2bot(v2opts([
+      { name: 'stone_sword', count: 1 },
+      { name: 'cobblestone', count: 30 }, { name: 'stick', count: 8 }, { name: 'dirt', count: 32 },
+    ]))
+    bot.craft = landingCraft(bot)
+    const ctx = castleCtx({ table: { x: 1, y: 64, z: 0 } })
+    for (let i = 0; i < 3; i++) {
+      equip(bot, ctx, null, {})
+      await untilCrafts(bot, i + 1)
+    }
+    // 3 fresh picks = 393 uses, at want (524 - 131): the next tick lays the
+    // kit down instead of crafting a fourth.
+    equip(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 3)
+    assert.ok(bot.calls.craft.every((c) => c.recipe.result.name === 'stone_pickaxe'))
+    assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
+  })
+
+  it('v2 castle: a missing sword outranks spare picks', async () => {
+    const bot = v2bot(v2opts([
+      worn(100), { name: 'cobblestone', count: 30 }, { name: 'stick', count: 4 }, { name: 'dirt', count: 32 },
+    ]))
+    bot.craft = landingCraft(bot)
+    const ctx = castleCtx({ table: { x: 1, y: 64, z: 0 } })
+    equip(bot, ctx, null, {})
+    await untilCrafts(bot, 1)
+    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('stone_sword'))
+    bot.restoreError()
+  })
+
+  it('craftSparePick tops up one pick per call and reads false at the budget', async () => {
+    const bot = v2bot(v2opts([
+      worn(100), { name: 'stone_sword', count: 1 },
+      { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 },
+    ]))
+    bot.craft = landingCraft(bot)
+    const ctx = castleCtx({ table: { x: 1, y: 64, z: 0 } })
+    for (let i = 0; i < 3; i++) {
+      assert.equal(equip.craftSparePick(bot, ctx), true)
+      await untilCrafts(bot, i + 1)
+    }
+    await flush()
+    assert.equal(equip.craftSparePick(bot, ctx), false, '424 uses is over want')
+    assert.equal(bot.calls.craft.length, 3)
+    bot.restoreError()
+  })
+
+  it('craftSparePick reads false on v1 and with no funded chain', async () => {
+    const v1 = mockBot(v2opts([
+      worn(100), { name: 'stone_sword', count: 1 },
+      { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 },
+    ]))
+    assert.equal(equip.craftSparePick(v1, castleCtx({ table: { x: 1, y: 64, z: 0 } })), false)
+    v1.restoreError()
+    const poor = v2bot(v2opts([worn(100), { name: 'stone_sword', count: 1 }, { name: 'dirt', count: 32 }]))
+    assert.equal(equip.craftSparePick(poor, castleCtx({ table: { x: 1, y: 64, z: 0 } })), false, 'no cobble above the reserve: dig as before')
+    poor.restoreError()
+  })
+})
+
+describe('equip pick budget round 3 (idkcraft-neuc.59 review 02)', () => {
+  function v2bot(opts) {
+    const bot = mockBot(opts)
+    bot.mine = async () => {}
+    return bot
+  }
+  const castleCtx = (home, extra) => ({ ...freshCtx(home), castle: { site: { x: 0, y: 64, z: 0 } }, ...extra })
+  const worn = (used) => ({ name: 'stone_pickaxe', count: 1, maxDurability: 131, durabilityUsed: used })
+  const v2opts = (items) => ({
+    items,
+    ids: IDS,
+    recipes: { stone_pickaxe: recipeFor('stone_pickaxe'), stone_sword: recipeFor('stone_sword') },
+    blockAtImpl: () => TABLE,
+  })
+
+  it('craftSparePick gives up after three dry attempts and the leg digs', async () => {
+    const bot = v2bot(v2opts([
+      worn(100), { name: 'stone_sword', count: 1 },
+      { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 },
+    ]))
+    bot.craft = async (recipe) => { bot.calls.craft.push({ recipe }) } // ghost: never lands
+    const ctx = castleCtx({ table: { x: 1, y: 64, z: 0 } })
+    ctx.step = 'castlefetch' // prod shape: async fails settle stale-dropped, never poisoning
+    ctx.stepStatus = 'running'
+    ctx.castleFetch = { kind: 'stone' }
+    for (let i = 0; i < 3; i++) {
+      assert.equal(equip.craftSparePick(bot, ctx), true, `attempt ${i + 1} crafts`)
+      await untilCrafts(bot, i + 1)
+      await new Promise((r) => setTimeout(r, 700)) // ghost verify + settle
+    }
+    assert.equal(equip.craftSparePick(bot, ctx), false, 'three dry attempts latch the leg')
+    assert.equal(bot.calls.craft.length, 3, 'no fourth craft: the leg digs as before')
+    assert.equal(ctx.stepStatus, 'running', 'stale-dropped, never failed')
+    bot.restoreError()
+  })
+})
+
+describe('equip pick budget round 4 (idkcraft-neuc.59 review 03)', () => {
+  function v2bot(opts) {
+    const bot = mockBot(opts)
+    bot.mine = async () => {}
+    return bot
+  }
+  const castleCtx = (home, extra) => ({ ...freshCtx(home), castle: { site: { x: 0, y: 64, z: 0 } }, ...extra })
+  const worn = (used) => ({ name: 'stone_pickaxe', count: 1, maxDurability: 131, durabilityUsed: used })
+
+  it('endless table walks give up and the leg digs', async () => {
+    // Standing but unreachable table: tableFor walks every tick, settles
+    // nothing, and its own 20-walk give-up only restarts the walk. The slow
+    // cap must end it so the leg digs.
+    const bot = v2bot({
+      items: [worn(100), { name: 'stone_sword', count: 1 },
+        { name: 'cobblestone', count: 30 }, { name: 'stick', count: 6 }, { name: 'dirt', count: 32 }],
+      ids: IDS,
+      recipes: { stone_pickaxe: recipeFor('stone_pickaxe'), stone_sword: recipeFor('stone_sword') },
+      blockAtImpl: (p) => (Math.floor(p.x) === 10 ? { name: 'crafting_table' } : null),
+    })
+    bot.craft = landingCraft(bot)
+    const ctx = castleCtx({ table: { x: 10, y: 64, z: 0 } })
+    ctx.step = 'castlefetch' // prod shape: table fails settle stale-dropped, never poisoning
+    ctx.stepStatus = 'running'
+    ctx.castleFetch = { kind: 'stone' }
+    for (let i = 0; i < 40; i++) {
+      assert.equal(equip.craftSparePick(bot, ctx), true, `walk tick ${i + 1} still tries`)
+      await flush()
+    }
+    assert.equal(equip.craftSparePick(bot, ctx), false, '40 dry true ticks latch the leg')
+    assert.equal(bot.calls.craft.length, 0, 'no craft ever issued: the leg digs as before')
+    assert.equal(ctx.stepStatus, 'running', 'stale-dropped, never failed')
+    bot.restoreError()
+  })
+})
