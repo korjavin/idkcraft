@@ -4,7 +4,7 @@
 //
 // bot.mine(names, count, opts) -> Promise<{have}> resolving when the pack
 // holds target (have-at-call + count), rejecting with Error('mine-noPath'
-// | 'mine-stall' | 'mine-leash'). Stall = no inventory gain for 25 s while
+// | 'mine-stall' | 'mine-leash' | 'mine-futile'). Stall = no inventory gain for 25 s while
 // the process is live (one constant, not the 10 s goal STALL_MS; gains
 // reset it, so working legs never trip — only zero-gain churn ends fast);
 // leash =
@@ -244,6 +244,13 @@ function handleMineEvent(bot, method, params) {
     // loudly (the hold parks it) instead of succeeding over the damage.
     if (params.status === 'guard') {
       settle(bot, st, new Error('mine-leash'))
+      return true
+    }
+    // Churn trip (neuc.53 rig evidence): the mod ends a live process
+    // that blacklists target after target with zero gains — the caller
+    // reads it like no reachable targets, not a stall.
+    if (params.status === 'futile') {
+      settle(bot, st, new Error('mine-futile'))
       return true
     }
     const have = typeof params.have === 'number' ? params.have : st.have

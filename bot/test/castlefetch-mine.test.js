@@ -88,6 +88,18 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
   })
 
+  it('a mine-futile ends the leg no-stone', async () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      mineImpl: () => async () => { throw new Error('mine-futile') },
+    })
+    const ctx = stoneCtx()
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
+  })
+
   it('a mine-stopped settles quietly: no finish onto a borrowing fight', async () => {
     const bot = mockBot({
       items: [{ name: 'stone_pickaxe', count: 1 }],

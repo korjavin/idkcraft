@@ -1338,7 +1338,7 @@ function digTick(bot, ctx, f, d) {
         // chase — the next tick re-issues instead. unreachable stays for
         // the leash only.
         if (m === 'mine-stopped') return
-        if (m === 'mine-noPath') finish(bot, ctx, 'failed:castlefetch-no-stone')
+        if (m === 'mine-noPath' || m === 'mine-futile') finish(bot, ctx, 'failed:castlefetch-no-stone')
         else if (m === 'mine-leash') finish(bot, ctx, 'failed:castlefetch-unreachable')
         else finish(bot, ctx, 'failed:castlefetch-dig-stall')
       },

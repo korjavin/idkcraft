@@ -103,6 +103,12 @@ constructor; `handleMineEvent` first in the adapter's event router for
 | `baritone.mine` | `{blocks:[names],count,radius,guard?}` (`blocks` non-empty, `count` positive; `radius` accepted, enforced in Node; `guard` = `{x0,y0,z0,x1,y1,z1}` cell box, mod-enforced) | `{id,have,target}` (`target` = live matching count + `count`, Baritone's absolute quantity) | `bot.mine(names,count,{radius,forbid})` → `Promise<{have}>` |
 | `baritone.minestate` | `{}` (diagnostic read, no params) | `{id,have,target,active,procActive,pathing,inControl,customGoal,known,blacklisted}` (control/goal best-effort nulls, list sizes -1 when unreadable; throws `not in world` out of world) | scratch probes only (no `bot.*` surface) |
 
+End statuses on `baritone.event {kind:'mine', …}`: `done` (at/above target),
+`noPath` (the process gave up by itself), `guard` (a guarded cell broke →
+`mine-leash`), `futile` (live churn trip: no gains while the blacklist
+keeps growing → `mine-futile`, read by callers like no reachable
+targets). The trip rule lives in `Mine.futileTrip` (unit-tested).
+
 Quantity is Baritone's own: `IMineProcess.mineByName(target, ...blocks)`
 stops when the inventory holds `target` (verified against the
 baritone-api 1.18.0 jar the Dockerfile ships). Drops count toward

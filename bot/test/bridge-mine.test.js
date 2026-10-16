@@ -62,6 +62,12 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     await assert.rejects(bot.mine(['stone', 'cobblestone'], 4, { tickMs: 5 }), /mine-noPath/)
   })
 
+  it('a churn-tripped mine rejects mine-futile', async () => {
+    ({ transport, bot } = mineBot({ mineScript: 'futile' }))
+    await bot.start({ pollMs: 0 })
+    await assert.rejects(bot.mine(['stone', 'cobblestone'], 4, { tickMs: 5 }), /mine-futile/)
+  })
+
   it('no gain for the stall budget rejects mine-stall and stops the process', async () => {
     ({ transport, bot } = mineBot({ mineScript: 'hang' }))
     await bot.start({ pollMs: 0 })

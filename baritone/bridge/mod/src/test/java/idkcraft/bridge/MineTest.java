@@ -2,6 +2,7 @@ package idkcraft.bridge;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -112,5 +113,26 @@ public class MineTest {
     @Test
     public void processListSizesGarbageReadsUnknown() {
         assertArrayEquals(new int[] {-1, -1}, Mine.processListSizes("no lists here"));
+    }
+
+    @Test
+    public void futileTripNeedsStaleGainsGrowthAndTime() {
+        assertTrue(Mine.futileTrip(0, 0, 4, 15000));
+        assertTrue(Mine.futileTrip(0, 0, 11, 40000));
+    }
+
+    @Test
+    public void futileTripSparesGains() {
+        assertFalse(Mine.futileTrip(3, 0, 9, 60000));
+    }
+
+    @Test
+    public void futileTripSparesStaticLists() {
+        assertFalse(Mine.futileTrip(0, 0, 2, 60000));
+    }
+
+    @Test
+    public void futileTripSparesFreshWindows() {
+        assertFalse(Mine.futileTrip(0, 0, 9, 5000));
     }
 }

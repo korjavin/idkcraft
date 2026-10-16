@@ -58,6 +58,14 @@ public final class Mine {
     private static volatile int target = 0;
     private static volatile List<String> names = List.of();
     private static volatile int lastHave = 0;
+    /** Futility window (client thread only): gains-flat baseline for the trip rule below. */
+    private static volatile int tripHave = 0;
+    private static volatile int tripBase = -1;
+    private static volatile long tripSinceMs = 0;
+    /** Trip after this long with no gains while the blacklist keeps growing. */
+    static final long FUTILE_MS = 15000;
+    /** Blacklist growth within the window that reads as churn, not bad luck. */
+    static final int FUTILE_GROWTH = 4;
     /** Break-policy snapshots to restore in end(). Client thread only. */
     private static volatile java.util.List<net.minecraft.world.level.block.Block> banSnap = null;
     private static volatile java.util.List<net.minecraft.world.level.block.Block> avoidSnap = null;
@@ -264,6 +272,9 @@ public final class Mine {
         names = blocks;
         target = goal;
         lastHave = have;
+        tripHave = have;
+        tripBase = -1;
+        tripSinceMs = System.currentTimeMillis();
         suspendBreakPolicy(blocks);
         active = true;
         guardBox = guard;
@@ -354,6 +365,16 @@ public final class Mine {
             throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
         }
         return res;
+    }
+
+    /**
+     * Pure futility rule (unit-tested): no gains for the window while the
+     * blacklist grew past threshold reads as churn (unroutable targets),
+     * not a slow leg — healthy legs gain (resetting the window) or hold a
+     * static list while they work through it.
+     */
+    static boolean futileTrip(int have, int tripHave, int growth, long elapsedMs) {
+        return have == tripHave && growth >= FUTILE_GROWTH && elapsedMs >= FUTILE_MS;
     }
 
     /**
@@ -494,6 +515,30 @@ public final class Mine {
             // MineProcess cancels on an unreachable scan); the Node stall
             // watchdog covers a process that stays live without gaining.
             end(server, have, "noPath");
+        } else {
+            // Churn trip (neuc.53 rig evidence): a live process that
+            // blacklists target after target with zero gains is not a
+            // slow leg — end it as futile so the caller retries elsewhere
+            // instead of riding the stall timer out.
+            int blacklisted = -1;
+            try {
+                blacklisted = processListSizes(b.getMineProcess())[1];
+            } catch (Exception ignored) {
+                // Best-effort: unreadable lists never trip.
+            }
+            long nowMs = System.currentTimeMillis();
+            if (have != tripHave || blacklisted < 0 || tripBase < 0 || blacklisted < tripBase) {
+                tripHave = have;
+                tripBase = blacklisted;
+                tripSinceMs = nowMs;
+            } else if (futileTrip(have, tripHave, blacklisted - tripBase, nowMs - tripSinceMs)) {
+                try {
+                    b.getCommandManager().execute("stop");
+                } catch (Exception ignored) {
+                    // Stopping is best-effort; the end event still lands.
+                }
+                end(server, have, "futile");
+            }
         }
     }
 

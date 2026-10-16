@@ -316,6 +316,11 @@ class FakeTransport extends EventEmitter {
             this.inject('baritone.event', { kind: 'mine', id, have: target, target, active: false, status: 'guard' })
             return
           }
+          if (s.mineScript === 'futile') {
+            // Churn trip below target: blacklist churn with zero gains.
+            this.inject('baritone.event', { kind: 'mine', id, have, target, active: false, status: 'futile' })
+            return
+          }
           const gainName = want.has('dirt') && blocks.map(String).includes('dirt') ? 'dirt'
             : [...want][0]
           const gain = target - have
