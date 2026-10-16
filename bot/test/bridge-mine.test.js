@@ -57,7 +57,7 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     assert.ok(sets.some((c) => c === '#set mineScanDroppedItems true'), 'scan drops pinned')
     assert.ok(sets.some((c) => c === '#set legitMine false'), 'legit mine pinned')
     assert.ok(sets.some((c) => c === '#set mineGoalUpdateInterval 5'), 'goal interval pinned')
-    assert.ok(sets.some((c) => c === '#set mineMaxOreLocationsCount 12'), 'small target set pinned')
+    assert.ok(!sets.some((c) => c.startsWith('#set mineMaxOreLocationsCount')), 'no phantom pin: the setting does not exist in Baritone 1.18.2')
     assert.ok(sets.some((c) => c === '#set exploreForBlocks false'), 'no wandering on empty scan')
     assert.ok(sets.some((c) => c === '#set allowBreak true'), 'a mine digs even under a no-dig walk lease')
     assert.equal(bot._settings.allowBreak, 'true', 'the pin mirrors into the adapter diff')
@@ -124,6 +124,52 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     await bot.refresh()
     await assert.rejects(p, /mine-leash/)
     assert.equal(transport.state.baritone, '#stop')
+  })
+
+  it('a gain re-anchors the leash start to the working frontier', async () => {
+    ({ transport, bot } = mineBot({ mineScript: 'hang' }))
+    await bot.start({ pollMs: 0 })
+    const p = bot.mine(['dirt'], 30, { radius: 2, stallMs: 5000, tickMs: 5 })
+    await untilMineSent()
+    let settled = null
+    p.then(() => { settled = 'resolved' }, () => { settled = 'rejected' })
+    transport.state.pos = { ...transport.state.pos, x: 1.5 }
+    await bot.refresh()
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(settled, null, 'inside the radius: no trip')
+    // A gain at the frontier moves the leash with the body: 3.0 is past
+    // the arm origin's radius but inside the re-anchored one.
+    transport.inject('baritone.event', { kind: 'mine', id: bot._mine.id, have: 5, target: 30, active: true })
+    await new Promise((r) => setTimeout(r, 10))
+    transport.state.pos = { ...transport.state.pos, x: 3 }
+    await bot.refresh()
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(settled, null, 'a gaining mine roams with its frontier')
+    transport.state.pos = { ...transport.state.pos, x: 10 }
+    await bot.refresh()
+    await assert.rejects(p, /mine-leash/)
+  })
+
+  it('the origin backstop trips a gainer that drifts past 3x radius', async () => {
+    ({ transport, bot } = mineBot({ mineScript: 'hang' }))
+    await bot.start({ pollMs: 0 })
+    const p = bot.mine(['dirt'], 90, { radius: 100, stallMs: 20000, tickMs: 5 })
+    await untilMineSent()
+    let settled = null
+    p.then(() => { settled = 'resolved' }, () => { settled = 'rejected' })
+    // Four 90-block hops with a gain each: every hop stays inside the
+    // re-anchored radius, but the fourth crosses 3x radius from origin.
+    let have = 0
+    for (const x of [90, 180, 270]) {
+      transport.state.pos = { ...transport.state.pos, x }
+      await bot.refresh()
+      transport.inject('baritone.event', { kind: 'mine', id: bot._mine.id, have: (have += 5), target: 90, active: true })
+      await new Promise((r) => setTimeout(r, 10))
+      assert.equal(settled, null, `hop to ${x}: roaming with gains`)
+    }
+    transport.state.pos = { ...transport.state.pos, x: 360 }
+    await bot.refresh()
+    await assert.rejects(p, /mine-leash/)
   })
 
   it('entering the forbid predicate stops and rejects mine-leash', async () => {

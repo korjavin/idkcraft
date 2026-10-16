@@ -128,6 +128,25 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.equal(ctx.stepStatus, 'done')
   })
 
+  it('a zero-gain stall on a spent stance re-arms instead of failing', async () => {
+    const bot = mockBot({
+      pos: { x: 120.5, y: 64, z: 120.5 },
+      items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 5 }],
+      mineImpl: (b, calls) => async () => { calls.mine.push({}); throw new Error('mine-stall') },
+    })
+    bot.blockAt = () => ({ name: 'stone', position: { x: 121, y: 64, z: 120 } })
+    const ctx = stoneCtx()
+    ctx.castleFetch.qTarget = { k: 'q7', x: 121, y: 64, z: 120, stance: { x: 120, y: 64, z: 120 } }
+    const leg = ctx.castleFetch
+    castlefetch.digTick(bot, ctx, leg, { kind: 'stone', word: 'batch', short: 8 })
+    await flush()
+    await flush()
+    assert.equal(ctx.stepStatus, 'running', 'no fail on a spent stance')
+    assert.equal(leg.mineReloc, 1)
+    assert.equal(leg.qTarget, null, 'the spent stance retires')
+    assert.ok((leg.skip || new Set()).has('q7'))
+  })
+
   it('a far quarry stance walks before any mine', async () => {
     const goals = []
     let mined = 0

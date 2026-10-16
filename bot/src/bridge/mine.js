@@ -31,11 +31,9 @@ const MINE_SETTINGS = [
   ['mineScanDroppedItems', 'true'],
   ['legitMine', 'false'],
   ['mineGoalUpdateInterval', '5'],
-  // Rig evidence (neuc.53 instrumented runs): a 64-target composite never
-  // completes a calc under rig load — every second reissues the goal and
-  // blacklists the closest instance, 60 s of motionless spam. Twelve
-  // nearest keeps calcs ms-scale, so paths follow or fail fast.
-  ['mineMaxOreLocationsCount', '12'],
+  // No mineMaxOreLocationsCount: no such setting exists in Baritone
+  // 1.18.2 (neuc.53 r2 source check) — the #set was a no-op and the real
+  // cap is the hardcoded ORE_LOCATIONS_COUNT=64 in MineProcess.
   // A mine digs by definition: a no-dig walk lease (gocastle/gohome set
   // canDig false) would leave MineProcess targetless on its first tick
   // and the leg would read noPath (round-1 core-3). The mirror below keeps
@@ -224,6 +222,7 @@ async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickM
     bot._follow = null
     try { if (bot.pathfinder) bot.pathfinder.goal = { mine: true } } catch (_) { /* marker best-effort */ }
     st.start = posOf(bot)
+    st.origin = st.start // absolute backstop anchor; start re-anchors on gains
     // The forbid leash trips on entry: a mine that starts inside (the
     // body fetching on the castle site) arms once it leaves.
     try { st.armed = !forbid || !forbid(st.start) } catch (_) { st.armed = true }
@@ -259,10 +258,18 @@ async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickM
 
 // Leash + stall watch: a trip stops the process and rejects; the mod's
 // end event for the stopped mine lands stale and drops (id cleared).
+// The radius leash follows a gaining mine (neuc.53 r2: an equip mine
+// died leashed at 28/32 — a working mine roams with its frontier, so
+// every gain re-anchors start; the site guard and forbid still bound
+// it). An absolute backstop from the arm origin trips true runaways.
 function watch(bot, st, names, { radius, forbid, stallMs }) {
   if (bot._mine !== st || st.settled || st.id == null) return
   const now = posOf(bot)
   if (now && st.start && dist3(now, st.start) > radius) {
+    stopAndReject(bot, st, new Error('mine-leash'))
+    return
+  }
+  if (now && st.origin && dist3(now, st.origin) > 3 * radius) {
     stopAndReject(bot, st, new Error('mine-leash'))
     return
   }
@@ -316,6 +323,10 @@ function handleMineEvent(bot, method, params) {
   if (typeof params.have === 'number' && params.have > st.have) {
     st.have = params.have
     st.gainAt = Date.now()
+    // Leash re-anchor (neuc.53 r2 mine 2: gains mean the frontier moved
+    // with the body — follow it; the origin backstop still trips a
+    // runaway that gains while drifting).
+    try { const p = posOf(bot); if (p) st.start = p } catch (_) { /* anchor best-effort */ }
   }
   if (params.active === false) {
     // A guarded cell broke: reject even at target — the leg must end

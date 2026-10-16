@@ -1461,19 +1461,21 @@ function digTick(bot, ctx, f, d) {
         // too (it invited a site break — re-arming would eat the next
         // site cell). Leash keeps its cell (the spot may be fine — the
         // body ranged too far, which re-anchoring would only repeat).
+        const hadTarget = !!f.qTarget
         if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall' || m === 'mine-guard') && f.qTarget) {
           try { (f.skip || (f.skip = new Set())).add(f.qTarget.k) } catch (_) { /* skip best-effort */ }
           f.qTarget = null
         }
-        // Relocation: a below-target end that still broke ground re-arms
-        // at the new stance (the body moved while gaining — fresh cache,
-        // fresh lottery) instead of failing the leg. Bounded per leg;
-        // the last error finishes it. Leash and guard stay terminal
-        // (re-anchoring would defeat the site guard), zero-gain ends
-        // fail below.
+        // Relocation: a below-target end re-arms at the new stance
+        // instead of failing the leg — a depleted productive spot AND a
+        // spent vetted stance both deserve the next stance (fresh cache,
+        // fresh lottery), while a blind in-place arm with zero gains
+        // fails below (re-picking it would re-arm the same blind spot).
+        // Bounded per leg; the last error finishes it. Leash and guard
+        // stay terminal (re-anchoring would defeat the site guard).
         const peak = err && typeof err.mineHave === 'number' ? err.mineHave : 0
         const reloc = f.mineReloc | 0
-        if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall') && peak > (f.mineArmHave | 0) && reloc < 3) {
+        if ((m === 'mine-noPath' || m === 'mine-futile' || m === 'mine-stall') && (peak > (f.mineArmHave | 0) || hadTarget) && reloc < 3) {
           f.mineReloc = reloc + 1
           f.guardExit = null
           try { delete f.guardWalk } catch (_) { /* tracker best-effort */ }
