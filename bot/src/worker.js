@@ -85,7 +85,7 @@ function players(bot) {
   return out
 }
 
-// Flat swarm (lhg2): with BOT_SWARM_N > 1 the swarm helpers (<prefix>1..8)
+// Flat swarm (lhg2): with BOT_SWARM_N > 1 the swarm helpers (<prefix>1..32)
 // are never players — not a target, owner or delivery recipient — and a
 // helper (BOT_SWARM_I >= 1) also drops the main bot (BOT_PEER_USERNAME).
 // Env read per call; swarm off = no-op. ponytail: the server ping count still
@@ -94,7 +94,7 @@ function isSwarmBot(name, env = process.env) {
   if (typeof name !== 'string' || !(parseInt(env.BOT_SWARM_N || '', 10) > 1)) return false
   if (parseInt(env.BOT_SWARM_I || '0', 10) >= 1 && name === env.BOT_PEER_USERNAME) return true
   const p = env.BOT_SWARM_PREFIX || 'IdkSwarm'
-  return name.startsWith(p) && /^[1-8]$/.test(name.slice(p.length))
+  return name.startsWith(p) && /^([1-9]|[12]\d|3[0-2])$/.test(name.slice(p.length))
 }
 
 function workerEntity(bot) {
