@@ -1,7 +1,7 @@
 # idkcraft — project review profile
 
 ## What this is
-A hobby Minecraft stack: Paper server (`mc`), a Node 22 mineflayer bot (`bot/src`), and a CPU
+A hobby Minecraft stack: Paper server (`mc`), a Node 26 mineflayer bot (`bot/src`), and a CPU
 "System-1" brain sidecar (`laya/shim.py`, FastAPI-shaped REST). Deployed by GitOps to Portainer.
 The owner treats it as a learning project: changes should be readable and explain themselves.
 

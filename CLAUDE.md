@@ -59,7 +59,7 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-- **Node 22** everywhere (`.nvmrc`; CI, `bot/Dockerfile` and `bot/package.json` engines `22.x` agree; bump all together). `nvm use`/`fnm use` picks it up. `npm ci` on another major only warns (EBADENGINE); to make it fail, run `echo engine-strict=true > bot/.npmrc` (idkcraft-6x7.29 shipped soft: no Node 22 manager on the dev laptop yet; once one is installed, commit that `bot/.npmrc`).
+- **Node 26** everywhere (`.nvmrc`; CI, `bot/Dockerfile` and `bot/package.json` engines `26.x` agree; bump all together). `nvm use`/`fnm use` picks it up. `npm ci` on another major only warns (EBADENGINE); to make it fail, run `echo engine-strict=true > bot/.npmrc` (idkcraft-6x7.29 shipped soft: no matching Node manager on the dev laptop yet; once one is installed, commit that `bot/.npmrc`).
 - **Bot tests:**
   ```bash
   cd bot && npm ci && npm test
