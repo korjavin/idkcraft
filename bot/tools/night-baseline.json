@@ -1,0 +1,31 @@
+{
+  "note": "idkcraft-neuc.65.2: castle-rig --night prod 68 baselines (bot code at master ed8f1107, one run each, default pad pick, untouched tick rate). Verdict tails are copied from the run lines.",
+  "v1": {
+    "bare": {
+      "setup": "CASTLE_BARE=1 sh bot/tools/castle-rig.sh --night prod 68",
+      "nights": 3, "sheltered": "3/3", "nightDeaths": 0, "dayDeaths": 0, "kitless": 0,
+      "line": "nights=3, sheltered=3/3, night-deaths=0, day-deaths=0, kitless=0",
+      "sha": "ed8f1107", "date": "2026-10-18"
+    },
+    "castle": {
+      "setup": "CASTLE_SEED=complete sh bot/tools/castle-rig.sh --night prod 68",
+      "nights": 5, "sheltered": "0/5", "nightDeaths": 1, "dayDeaths": 2, "kitless": 3,
+      "line": "nights=5, sheltered=0/5, night-deaths=1, day-deaths=2, kitless=3, residence=4/6",
+      "sha": "ed8f1107", "date": "2026-10-18"
+    },
+    "house-bump": {
+      "setup": "CASTLE_BARE=1 CASTLE_HOUSE=bump sh bot/tools/castle-rig.sh --night prod 68",
+      "nights": 3, "sheltered": "3/3", "nightDeaths": 0, "dayDeaths": 0, "kitless": 0, "bump": "3/3", "doorDist": [8, 9, 9],
+      "line": "nights=3, sheltered=3/3, night-deaths=0, day-deaths=0, kitless=0, bump=3/3",
+      "sha": "ed8f1107", "date": "2026-10-18"
+    }
+  },
+  "v2": {
+    "bare": {
+      "setup": "CASTLE_BODY=baritone CASTLE_BARE=1 sh bot/tools/castle-rig.sh --night prod 68",
+      "nights": 3, "sheltered": "3/3", "nightDeaths": 0, "dayDeaths": 0, "kitless": 0,
+      "line": "nights=3, sheltered=3/3, night-deaths=0, day-deaths=0, kitless=0",
+      "sha": "ed8f1107", "date": "2026-10-18"
+    }
+  }
+}

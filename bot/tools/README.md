@@ -571,7 +571,15 @@ adds `CASTLE-RIG house-bump night <n>: gohome-fails=<k>, shelter-at=<x y
 z|none>, door-dist=<d|none>, deaths=<d>, PASS|FAIL`, where shelter-at is
 the last settled `shelter phase` pos and PASS means 8+ blocks from the
 door with 0 deaths (neuc.65.3's walk-off). The verdict line gets
-`, bump=<pass>/<n>`. Baselines are in `night-baseline.json`.
+`, bump=<pass>/<n>`. Baselines are in `night-baseline.json` (master
+ed8f1107, one 68-min run each). v1 bare: 3 nights, sheltered 3/3,
+night-deaths 0, day-deaths 0, kitless 0. v1 castle (`CASTLE_SEED=complete`;
+sleeping skips the night, so it gets 5 nights): night-deaths 1,
+day-deaths 2, kitless 3, residence 4/6. v1 house-bump: bump 3/3 with the
+door 8/9/9 blocks away, 0 deaths. v2 bare: 3 nights, 0 deaths. On the v2
+body (no packet client), the crossings come from the bridge's `bot.time`.
+Before neuc.65.2, a `CASTLE_BODY=baritone --night` run never closed a
+night.
 
 `CASTLE_SEED=complete` (idkcraft-g0z.33, the g0z.30 "lives in the castle"
 acceptance): instead of ordering a castle, setblocks the whole v2 castle
