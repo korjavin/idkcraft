@@ -83,7 +83,7 @@ Three containers in a single Docker Compose stack, deployed without Traefik (Min
 |  | mc                      |     | bot                   |  |
 |  | itzg/minecraft-server   |<----+ ghcr.io/korjavin/     |  |
 |  | TYPE=PAPER + Geyser     |     |   idkcraft:<sha>      |  |
-|  | 25565/tcp (Java + Bot)  |     | Node 22 + mineflayer  |  |
+|  | 25565/tcp (Java + Bot)  |     | Node 26 + mineflayer  |  |
 |  | 19132/udp (Bedrock)     |     | rule FSM              |  |
 |  +-------------------------+     +-----------------------+  |
 |                                                             |
