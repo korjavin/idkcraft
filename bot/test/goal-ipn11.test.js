@@ -176,6 +176,30 @@ describe('ipn.11 same-reason equip failures latch equip for the day', () => {
     assert.equal(equip.equipLatched(ctx, bot), false)
   })
 
+  it('qea9: a blocks/sword latch does not bar a lost pickaxe; a pickaxe latch still holds', () => {
+    // Batch-2 castle dead end: pickaxe=none, equip day-locked by
+    // 'blocks:mine-leash' x2, cobble + sticks + a placed table on hand.
+    const pack = [{ name: 'cobblestone', count: 40 }, { name: 'stick', count: 4 }, { name: 'stone_sword', count: 1 }]
+    const bot = equipBot()
+    bot.inventory = { items: () => pack }
+    const ctx = equipCtx(bot)
+    const F = goal.MENU.equip.feasible
+    const facts = { sword: 1, pickaxe: 0, sticks: 4, planks: 0, logs: 0, cobble: 40, table: 0, tablePlaced: true, scaffold: 40 }
+    ctx.equipLatch = { day: 5, key: 'blocks:mine-leash', fails: 2 }
+    assert.equal(equip.equipLatched(ctx, bot), false, 'pickless: the blocks latch yields')
+    assert.equal(F(facts, bot, ctx), true, 'equip rearms the pickaxe')
+    assert.notEqual(goal.stepWhy('equip', facts, bot, ctx, ''), 'equip: same failure again today')
+    ctx.equipLatch = { day: 5, key: 'stone_sword:table-unreachable', fails: 2 }
+    assert.equal(equip.equipLatched(ctx, bot), false, 'pickless: a sword latch yields too')
+    ctx.equipLatch = { day: 5, key: 'stone_pickaxe:table-unreachable', fails: 2 }
+    assert.equal(equip.equipLatched(ctx, bot), true, 'the pickaxe plan itself still latches (bounded)')
+    ctx.equipLatch = { day: 5, key: 'stick:craft-stall', fails: 2 }
+    assert.equal(equip.equipLatched(ctx, bot), true, 'a shared chain item still latches')
+    pack.push({ name: 'stone_pickaxe', count: 1 })
+    ctx.equipLatch = { day: 5, key: 'blocks:mine-leash', fails: 2 }
+    assert.equal(equip.equipLatched(ctx, bot), true, 'with a pickaxe held the blocks latch holds as before')
+  })
+
   it('latch input never throws', () => {
     const bot = equipBot()
     assert.equal(equip.equipLatched(undefined, undefined), false)
