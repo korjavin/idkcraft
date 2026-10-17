@@ -251,7 +251,18 @@ function equipLatched(ctx, bot) {
   try {
     const cur = ctx && ctx.equipLatch
     if (!cur || typeof cur !== 'object') return false
-    return cur.day === dayOf(bot) && (cur.fails || 0) >= EQUIP_LATCH
+    if (!(cur.day === dayOf(bot) && (cur.fails || 0) >= EQUIP_LATCH)) return false
+    // Lost pickaxe (idkcraft-qea9): a latch from another plan (scaffold
+    // blocks, a sword) does not bar the pickaxe that equip picks first —
+    // batch-2 castle: 'blocks:mine-leash' x2 at t=12, the stone pick wore
+    // out at t=48, equip read 'same failure again today' and the castle
+    // parked 33 min (day-locked rig: forever). Bounded: a failing pickaxe
+    // run re-keys the latch to its own item and latches after two.
+    // Shared chain items (stick/planks/table) stay latched: the pickaxe
+    // chain would hit the same failure.
+    const item = typeof cur.key === 'string' ? cur.key.split(':')[0] : ''
+    if ((item === 'blocks' || item.endsWith('sword')) && !hasPickaxe(bot)) return false
+    return true
   } catch (_) { return false }
 }
 
