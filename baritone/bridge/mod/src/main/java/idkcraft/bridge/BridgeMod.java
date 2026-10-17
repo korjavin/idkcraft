@@ -29,6 +29,7 @@ public class BridgeMod implements ClientModInitializer {
             Interact.install(server); // idkcraft-neuc.7: dig/place
             Mine.install(server); // idkcraft-neuc.53: baritone.mine -> MineProcess
             Build.install(server); // idkcraft-neuc.54: baritone.build (BuilderProcess)
+            Stats.install(server); // idkcraft-neuc.67: body.stats once a minute
             server.start();
         } catch (NoClassDefFoundError e) {
             // The worker runs the API-less standalone Baritone: without

@@ -1093,6 +1093,9 @@ class BaritoneBot extends EventEmitter {
           this._completeTerminal(p.status)
         }
         break
+      case 'body.stats': // neuc.67: the body JVM once a minute (Stats.java) — the prod GC read
+        console.log(`body.stats heap=${p.heapUsedMb}/${p.heapMaxMb}MB gc=${p.gcCount}x${p.gcMs}ms maxTickGap=${p.maxTickGapMs}ms maxPush=${p.maxPushMs}ms chunks=${p.chunks} entities=${p.entities}`)
+        break
       default:
         this.emit(method, p)
         break

@@ -55,6 +55,22 @@ Never run the `--command login` for prod: the auth volume stays empty — a
 stored account would shadow the offline name (the client would join as the
 stored profile, not `WORKER_NAME`).
 
+## Body JVM args and the dig read (idkcraft-neuc.67)
+
+`BODY_JVM_ARGS` (compose `body2`, the rig via `client.sh`) is appended to
+the game JVM's `hmc.jvmargs` by `start.sh`; empty (the default, and always
+on the worker) = the JVM as before: no `-Xmx`, max heap = 25% of the
+cgroup (~626 MiB at `BODY2_MEM_LIMIT=2500m`). Example:
+`BODY_JVM_ARGS=-XX:MaxRAMPercentage=60 -Xlog:gc:stdout` (~1.5 GiB heap, GC
+pause lines in the container log).
+
+The prod read needs no JVM tools (the JRE image has none): the bot2 log
+carries `body.stats heap=<used>/<max>MB gc=<n>x<ms>ms maxTickGap=<ms>
+maxPush=<ms> chunks=<n> entities=<n>` once a minute and
+`dig slow <block> expect=<ms> ticks=<n> client=<ms> wall=<ms> rpc=<ms>`
+for a dig past 1.3x its expected time (PROTOCOL.md, dig/place +
+body.stats).
+
 ## Local rig
 
 `run.sh` refuses (exit 2) until the client can launch with one of:

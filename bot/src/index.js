@@ -1671,7 +1671,40 @@ function deathLine(bot) {
   const at = pos ? `${Math.floor(pos.x)} ${Math.floor(pos.y)} ${Math.floor(pos.z)}` : 'unknown'
   let line = `death health=${health} hostiles=${hostiles} at ${at}`
   if (nearest && nearest.name) line += ` nearest=${nearest.name} ${nearest.dist.toFixed(1)}`
-  return line
+  return line + deathFacts(bot, pos)
+}
+
+// neuc.65.1: the triage facts, appended after the byte-identical prefix
+// (session-review greps 'death health=' / 'nearest='). time/inside read the
+// goal.js facts predicates (goalFacts ~1222-1245) so the two lines agree;
+// sword/pickaxe the facts counters. Every field has its own unknown and a
+// throw in one never drops the others: the line must still print.
+function deathFacts(bot, pos) {
+  const ctx = (bot && bot._tickerCtx) || null
+  const f = (fn, dflt) => { try { const v = fn(); return v == null ? dflt : v } catch (_) { return dflt } }
+  const word = f(() => require('./site').timeWord(bot), null)
+  // goalFacts reads an unreadable clock as day; the line prints '?'.
+  const home = f(() => (word && word !== 'day' ? require('./residence').nightHome(ctx, pos) : ctx.home), null)
+  const inside = f(() => (pos && home && require('./residence').of(home).interior(home, pos) ? 'yes' : 'no'), 'no')
+  const step = f(() => ctx.step, 'none')
+  const pick = f(() => ctx.stepPick.step, null)
+  // index.js retreat chain overwrites ctx.step: name the goal pick too.
+  const stepWord = pick && step !== 'none' && pick !== step ? `${pick} via=${step}` : step
+  const owner = f(() => ctx.body.owner, 'none')
+  const items = f(() => bot.inventory.items(), [])
+  let sword = 0
+  let rank = -1
+  for (const i of Array.isArray(items) ? items : []) {
+    const n = i && typeof i.name === 'string' ? i.name : ''
+    if (n.endsWith('_sword')) sword += typeof i.count === 'number' ? i.count : 1
+    const m = n.match(/^(wooden|golden|stone|iron|diamond|netherite)_pickaxe$/)
+    if (m) rank = Math.max(rank, m[1] === 'wooden' || m[1] === 'golden' ? 0 : 1)
+  }
+  const pickaxe = rank < 0 ? 'none' : rank === 0 ? 'wood' : 'stone+'
+  const dist = (a) => (pos && a && typeof a.x === 'number' ? String(Math.round(Math.hypot(a.x - pos.x, a.z - pos.z))) : 'none')
+  const distHome = f(() => dist(home.site), 'none')
+  const distSpawn = f(() => dist(bot.spawnPoint), 'none')
+  return ` time=${word || '?'} inside=${inside} step=${stepWord} owner=${owner} sword=${sword} pickaxe=${pickaxe} dist_home=${distHome} dist_spawn=${distSpawn}`
 }
 
 function respawnLine(bot) {
@@ -1696,6 +1729,29 @@ function respawnLine(bot) {
     (bot.entity && bot.entity.position)
   const at = dest ? `${Math.floor(dest.x)} ${Math.floor(dest.y)} ${Math.floor(dest.z)}` : 'unknown'
   return bed && at !== 'unknown' ? `respawn at ${at} (bed)` : `respawn at ${at}`
+}
+
+// neuc.65.1: respawnLine prints the bot's bed claim; this one-shot line
+// prints where the body actually landed. mineflayer moves bot.entity on the
+// position sync after the respawn packet (forcedMove, ~1.5 s later); the
+// bridge may already hold the new pos at 'respawn' (no jump, no
+// forcedMove), so a timeout reads whatever position is there.
+const RESPAWNED_PROBE_MS = 5000
+function respawnedLine(bot) {
+  const p = bot && bot.entity && bot.entity.position
+  return p ? `respawned at ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}` : 'respawned at unknown'
+}
+function probeRespawned(bot, ms = RESPAWNED_PROBE_MS) {
+  if (!bot || typeof bot.once !== 'function') return
+  let timer = null
+  const fire = () => {
+    clearTimeout(timer)
+    try { bot.removeListener('forcedMove', fire) } catch (_) { /* best-effort */ }
+    try { console.log(respawnedLine(bot)) } catch (_) { /* log best-effort */ }
+  }
+  bot.once('forcedMove', fire)
+  timer = setTimeout(fire, ms)
+  if (timer && typeof timer.unref === 'function') timer.unref()
 }
 
 function handleDeath(bot, ticker) {
@@ -1733,6 +1789,7 @@ function handleDeath(bot, ticker) {
 function handleRespawn(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   console.log(respawnLine(bot))
+  try { probeRespawned(bot) } catch (_) { /* measurement best-effort */ }
   // Post-respawn night grace (idkcraft-lph3): stamp the reappearance so
   // dispatch holds fight preemption while the night step digs in. Each
   // death re-stamps; the stamp goes stale on its own after the window.
@@ -1797,4 +1854,4 @@ function kitLine(bot) {
   return `kit scaffold=${scaffold} pickaxe=${pickaxe ? 'yes' : 'no'} sword=${sword ? 'yes' : 'no'} food=${food}`
 }
 
-module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, joinWaits, waitForPlayers, playersOccupied, waitForWorkerLeave, runOnce, selectBody, runArgsFor, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }
+module.exports = { createTicker, BEHAVIOURS, handleChat, advancePendingSearch, parseAutonomous, autonomousEffective, resolvePlayer, startupFollow, handleDeath, handleRespawn, handlePlayerLeft, deathLine, respawnLine, respawnedLine, probeRespawned, kitLine, createLifecycle, wakeBody, TARGET_GONE_TICKS, parseLeaveAfterMs, joinWaits, waitForPlayers, playersOccupied, waitForWorkerLeave, runOnce, selectBody, runArgsFor, eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL }

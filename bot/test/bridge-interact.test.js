@@ -81,6 +81,31 @@ describe('bridge dig/place (idkcraft-neuc.7)', () => {
     await second
   })
 
+  it('neuc.67: dig.done ticks/clientMs + wall land in _lastDig; dig slow logs past 1.3x expect only', async () => {
+    const logs = []
+    const orig = console.log
+    console.log = (...a) => { logs.push(a.join(' ')); }
+    try {
+      transport.state.digScript = 'hang'
+      const b = bot.blockAt(new Vec3(5, 64, 5))
+      const p = bot.dig(b)
+      await sleep(5)
+      bot._dig.expect = 1 // force wall > 1.3 x expect
+      transport.inject('dig.done', { x: 5, y: 64, z: 5, id: bot._dig.id, broke: true, stateId: 0, ticks: 15, clientMs: 760 })
+      await p
+      assert.equal(bot._lastDig.ticks, 15)
+      assert.equal(bot._lastDig.clientMs, 760)
+      assert.ok(bot._lastDig.wallMs >= 5)
+      assert.match(logs.find((l) => l.startsWith('dig slow')) || '', /^dig slow dirt expect=1 ticks=15 client=760 wall=\d+ rpc=\d+$/)
+      logs.length = 0
+      const q = bot.dig(bot.blockAt(new Vec3(6, 64, 5)))
+      await sleep(1)
+      transport.inject('dig.done', { x: 6, y: 64, z: 5, id: bot._dig.id, broke: true, stateId: 0, ticks: 150, clientMs: 7500 })
+      await q
+      assert.equal(logs.some((l) => l.startsWith('dig slow')), false) // stone by hand: wall << expect
+    } finally { console.log = orig }
+  })
+
   it('overlapping digs across the #pause round-trip both settle', async () => {
     transport.state.digScript = 'hang'
     bot._pathing = true
