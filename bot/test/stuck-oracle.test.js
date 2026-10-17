@@ -747,7 +747,7 @@ describe('shelter close budget (idkcraft-hoy7)', () => {
     assert.equal(shelterReached(35.5, false, 35), false, 'past the budget')
     assert.equal(shelterReached(null, false, 35), false, 'never closed, any budget')
     assert.equal(shelterReached(24, true, 35), false, 'died, any budget')
-    assert.equal(shelterReached(16, false), false, 'default stays 15 (SPAWN-BARE)')
+    assert.equal(shelterReached(16, false), false, 'default stays 15')
   })
 
   it('loadSpots parses closeSecs on shelter spots, rejects it elsewhere', () => {
@@ -776,8 +776,10 @@ describe('shelter close budget (idkcraft-hoy7)', () => {
     }
   })
 
-  it('SPAWN-BARE keeps the default budget', () => {
-    assert.equal(byName['SPAWN-BARE'].closeSecs, undefined, 'no override: 15 s stands')
+  it('SPAWN-BARE carries a 25 s close budget (idkcraft-bn4d)', () => {
+    // Same 13 brain ticks fresh; after a long spot the v2 body client hand-digs
+    // ~40% slower (0.9-1.0 s -> 1.26-1.49 s per cell), closes 15-19 s.
+    assert.equal(byName['SPAWN-BARE'].closeSecs, 25)
   })
 
   it('SHELTER-WATER is the yrtx night-shelter-in-water spot', () => {
