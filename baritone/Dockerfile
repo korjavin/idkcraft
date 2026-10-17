@@ -69,6 +69,14 @@ RUN mkfifo /tmp/warm-in && exec 8<> /tmp/warm-in \
  ; rm -rf /tmp/warm-in /tmp/warm.log HeadlessMC/run/logs HeadlessMC/run/crash-reports \
    HeadlessMC/headlessmc.log.lck HeadlessMC/*-*-*-*-*/ \
  && test ! -s HeadlessMC/auth/.accounts.json
+# idkcraft-neuc.67.1: the headless client gets no keyboard/mouse input, so the
+# vanilla AFK limiter ("afk", FramerateLimitTracker) caps it at 30 fps after
+# 1 min and 10 fps after 10 min. Every bridge client-thread call waits for
+# the next frame (Minecraft.submit), so an aged body answered each one in
+# ~100 ms and the serial ws read thread stacked them (dig.start rpc ~400 ms).
+# "minimized" = throttle only when iconified (never, headless): maxFps holds.
+RUN sed -i 's/^inactivityFpsLimit:.*/inactivityFpsLimit:"minimized"/' HeadlessMC/run/options.txt \
+ && grep -qx 'inactivityFpsLimit:"minimized"' HeadlessMC/run/options.txt
 # Worker entrypoint + Baritone presets AFTER the download layer: shell edits
 # must not invalidate the ~100 MB client fetch. Game dir = HeadlessMC/run.
 COPY start.sh ./start.sh
