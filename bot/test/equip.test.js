@@ -1582,13 +1582,14 @@ describe('equip guard-arm residuals (idkcraft-17a batch Q)', () => {
     bot.restoreError()
   })
 
-  it('Q04 occupied cells are skipped, no-table-ref', async () => {
+  it('Q04 occupied cells are skipped, no-table-ref (no dig: gfgx digs only with bot.dig)', async () => {
     const bot = mockBot({
       items: PLACE_ITEMS,
       ids: IDS,
       recipes: { wooden_pickaxe: recipeFor('wooden_pickaxe') },
       blockAtImpl: (p) => ({ name: 'stone', position: { x: p.x, y: p.y, z: p.z } }),
     })
+    delete bot.dig
     const ctx = freshCtx()
     equip(bot, ctx, null, {})
     await flush()
