@@ -20,6 +20,20 @@ function pos(x, y, z) {
 }
 
 // `chests`: "x,y,z" -> stacks; no chest in the castle footprint, no stone.
+// The ht8l.test.js makeBot shape. Each stub mirrors the real API:
+// - bot.openChest(block) -> Promise<Chest>: mineflayer lib/plugins/chest.js
+//   (openChest = openContainer). Chest.containerItems() -> Item[] with
+//   { type, count, metadata, name }.
+// - Chest.withdraw(itemType, metadata, count): mineflayer
+//   lib/plugins/inventory.js transfer(). It moves count items into the pack
+//   and throws "Can't find <item> in slots" once the source runs dry. The
+//   stub moves count with no check: stockpile.withdrawAnyFromChest never
+//   asks for more than a containerItems() stack holds.
+// - bot.findBlocks(options) -> Vec3[] (mineflayer index.d.ts): always [],
+//   so there is no footprint chest and no stone in range.
+// - bot.pathfinder.setGoal(goal) / isMoving() (mineflayer-pathfinder
+//   index.d.ts): records the goal, never moves. Tests teleport
+//   entity.position to stand in reach.
 function makeBot({ items, chests, at }) {
   const blocksByName = {}
   for (const [n, id] of Object.entries(IDS)) blocksByName[n] = { id }
