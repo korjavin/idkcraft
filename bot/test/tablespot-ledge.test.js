@@ -21,6 +21,19 @@ function world() {
   return { cells, key, blockAt }
 }
 
+// Each stub mirrors the real API:
+// - bot.blockAt(pos) -> Block | null: mineflayer lib/plugins/blocks.js.
+//   The fake keeps only { name, boundingBox ('block' | 'empty'), position }
+//   (prismarine-block). It never returns null, because every chunk is loaded.
+// - bot.placeBlock(referenceBlock, faceVector) -> Promise<void>: mineflayer
+//   lib/plugins/place_block.js. The real one awaits the blockUpdate at
+//   referenceBlock.position + faceVector and throws on timeout. The fake
+//   writes 'crafting_table' into that cell at once and never times out.
+//   bridge/interact.js keeps the same (ref, face) signature on v2.
+// - bot.equip(item, 'hand') -> Promise<void>: mineflayer
+//   lib/plugins/inventory.js. The fake is a no-op, since placement decides.
+// - bot.inventory.items() -> Item[] (prismarine-windows). The fake carries
+//   { name, count } only, which is all tableFor reads.
 function bot(w) {
   const calls = []
   return {
