@@ -70,19 +70,18 @@ public final class Build {
         final CellSchematic schematic;
         final Map<String, List<String>> substitutes;
         final List<Block> savedDisallow;
-        final boolean savedAllowInventory;
+        /** True while this build holds the shared allowInventory (AllowInventory). */
+        boolean holdsInv = true;
         int lastPlaced;
         int lastMissing;
 
         Active(Spec spec, BlockPos origin, CellSchematic schematic,
-                Map<String, List<String>> substitutes, List<Block> savedDisallow,
-                boolean savedAllowInventory) {
+                Map<String, List<String>> substitutes, List<Block> savedDisallow) {
             this.spec = spec;
             this.origin = origin;
             this.schematic = schematic;
             this.substitutes = substitutes;
             this.savedDisallow = savedDisallow;
-            this.savedAllowInventory = savedAllowInventory;
         }
     }
 
@@ -259,9 +258,10 @@ public final class Build {
         // allowInventory off it still paths to cells it could place from the
         // main inventory and wedges there (crafted house planks land in
         // slots 9-35: 0 placed, build-stall). On, it swaps stacks to the
-        // hotbar itself. Build-scoped, restored on end like the ban list.
-        boolean savedAllowInventory = settings.allowInventory.value;
-        settings.allowInventory.value = true;
+        // hotbar itself. Build-scoped, restored on end like the ban list;
+        // refcounted with Mine (idkcraft-605b) so an overlap never restores
+        // the other's true mid-call or leaks it on.
+        AllowInventory.acquire(() -> settings.allowInventory.value, v -> settings.allowInventory.value = v);
         if (!forbidBlocks.isEmpty()) {
             Set<Block> disallow = new HashSet<>(savedDisallow);
             for (String path : forbidBlocks) {
@@ -285,7 +285,7 @@ public final class Build {
         }
         settings.buildValidSubstitutes.value = javaSubstitutes;
         baritone.getBuilderProcess().build(spec.name, schematic, origin);
-        active = new Active(spec, origin, schematic, substitutes, savedDisallow, savedAllowInventory);
+        active = new Active(spec, origin, schematic, substitutes, savedDisallow);
         int missing = countNow(spec, substitutes);
         active.lastPlaced = spec.cells.size() - missing;
         active.lastMissing = missing;
@@ -301,7 +301,10 @@ public final class Build {
         try {
             Settings settings = BaritoneAPI.getSettings();
             settings.blocksToDisallowBreaking.value = new ArrayList<>(a.savedDisallow);
-            settings.allowInventory.value = a.savedAllowInventory;
+            if (a.holdsInv) {
+                a.holdsInv = false;
+                AllowInventory.release(v -> settings.allowInventory.value = v);
+            }
         } catch (Exception e) {
             // restore best-effort: the next build re-arms its own set
         }

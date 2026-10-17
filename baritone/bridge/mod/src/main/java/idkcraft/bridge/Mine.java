@@ -69,8 +69,8 @@ public final class Mine {
     /** Break-policy snapshots to restore in end(). Client thread only. */
     private static volatile java.util.List<net.minecraft.world.level.block.Block> banSnap = null;
     private static volatile java.util.List<net.minecraft.world.level.block.Block> avoidSnap = null;
-    /** allowInventory snapshot to restore in end(), or null. Client thread only. */
-    private static volatile Boolean allowInvSnap = null;
+    /** True while this mine holds the shared allowInventory (AllowInventory). Client thread only. */
+    private static volatile boolean holdsInv = false;
     /** Guard box corners {x0,y0,z0,x1,y1,z1}, or null. Client thread only. */
     private static volatile int[] guardBox = null;
     /** idx -> stateId snapshot of guard cells matching the blocks. Client thread only. */
@@ -162,12 +162,12 @@ public final class Mine {
         // empty hotbar). The path search then costs stone at bare-hand
         // speed, times out on every target and the leg ends noPath/futile
         // at +0. allowInventory on lets InventoryBehavior swap the best
-        // pick into the hotbar (the pwoi Build.java precedent); mine-scoped.
-        // Snapshot once: a re-armed mine must not capture its own true.
-        if (allowInvSnap == null) {
-            allowInvSnap = settings.allowInventory.value;
+        // pick into the hotbar (the pwoi Build.java precedent); mine-scoped,
+        // refcounted with Build so an overlap never restores mid-call.
+        if (!holdsInv) {
+            holdsInv = true;
+            AllowInventory.acquire(() -> settings.allowInventory.value, v -> settings.allowInventory.value = v);
         }
-        settings.allowInventory.value = true;
     }
 
     /** Client thread: put the snapshot lists back (every end path, once). */
@@ -184,9 +184,9 @@ public final class Mine {
                 settings.blocksToAvoidBreaking.value.addAll(avoidSnap);
                 avoidSnap = null;
             }
-            if (allowInvSnap != null) {
-                settings.allowInventory.value = allowInvSnap;
-                allowInvSnap = null;
+            if (holdsInv) {
+                holdsInv = false;
+                AllowInventory.release(v -> settings.allowInventory.value = v);
             }
         } catch (Exception ignored) {
             // Best-effort: the next lease #set re-pushes absolute lists.
