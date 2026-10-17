@@ -45,6 +45,26 @@ describe('gfgx tableFor digs a cell free when encased', () => {
     assert.equal(r.block.name, 'crafting_table')
   })
 
+  it('castle-protected neighbours are never dug: no-table-ref', async () => {
+    const b = bot(world())
+    const ctx = { castle: { site: { x: -3, y: 60, z: -3 }, rot: 0, blueprintVersion: 2 } }
+    await assert.rejects(tableFor(b, ctx), /no-table-ref/)
+    assert.equal(b.calls.dig.length, 0)
+  })
+
+  it('a failed dig skips that cell; the next pick digs another neighbour', async () => {
+    const w = world()
+    const b = bot(w)
+    const okDig = b.dig
+    b.dig = async () => { throw new Error('Digging aborted') }
+    const ctx = {}
+    await assert.rejects(tableFor(b, ctx), /table-dig: Digging aborted/)
+    assert.ok(ctx.equipTableSkip.has('1,64,0'))
+    b.dig = okDig
+    await tableFor(b, ctx)
+    assert.deepEqual(b.calls.dig, [{ x: -1, y: 64, z: 0 }])
+  })
+
   it('water above every neighbour keeps no-table-ref', async () => {
     const extra = {}
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) extra[`${dx},65,${dz}`] = 'water'

@@ -242,7 +242,7 @@ function tableFor(bot, ctx) {
       // idkcraft-gfgx: a body encased in stone (a castlefetch shaft) had no
       // open neighbour and failed no-table-ref with the table in the pack.
       // Remember the first plain solid cell to dig free, last resort only.
-      if (!digCell && !tried && digFree(bot, cell, bx + dx, by, bz + dz)) digCell = { cell, below }
+      if (!digCell && !tried && digFree(bot, ctx, cell, bx + dx, by, bz + dz)) digCell = { cell, below }
       continue
     }
     if (tried) {
@@ -253,15 +253,16 @@ function tableFor(bot, ctx) {
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)
     break
   }
-  if (!ref && fallback) {
-    ref = fallback
-    at = new Vec3(fallback.position.x, fallback.position.y + 1, fallback.position.z)
-  }
+  // A fresh dig cell beats re-burning a refused one (gfgx review minor).
   let dig = null
   if (!ref && digCell) {
     dig = digCell.cell
     ref = digCell.below
     at = new Vec3(ref.position.x, ref.position.y + 1, ref.position.z)
+  }
+  if (!ref && fallback) {
+    ref = fallback
+    at = new Vec3(fallback.position.x, fallback.position.y + 1, fallback.position.z)
   }
   if (!ref) return nope('no-table-ref')
   // mineflayer places the HELD item: hold the table or a planks block lands
@@ -333,14 +334,16 @@ function tableFor(bot, ctx) {
 
 // gfgx: a neighbour worth digging for the table — a full plain block with
 // no liquid or gravity block above to pour in, never a station/container
-// (the plan/bedroom cells are already skipped by the caller).
+// (the plan/bedroom cells are already skipped by the caller), and only what
+// the shared dig guard allows (laid castle, yard, house footprint, review 01).
 const DIG_NEVER = /chest|barrel|shulker|_bed$|furnace|smoker|crafting_table|door|bedrock|obsidian|spawner|lava|water|_planks/
 const DIG_ABOVE_NEVER = /water|lava|sand|gravel|concrete_powder/
-function digFree(bot, cell, x, y, z) {
+function digFree(bot, ctx, cell, x, y, z) {
   try {
     if (typeof bot.dig !== 'function' || !cell.position) return false
     if (cell.boundingBox != null && cell.boundingBox !== 'block') return false
     if (DIG_NEVER.test(cell.name)) return false
+    if (require('./util').denyReason(bot, cell, ctx)) return false
     const above = bot.blockAt(new Vec3(x, y + 1, z))
     return !(above && above.name && DIG_ABOVE_NEVER.test(above.name))
   } catch (_) { return false }
