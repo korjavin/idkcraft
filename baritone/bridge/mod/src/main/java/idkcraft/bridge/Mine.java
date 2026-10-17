@@ -69,6 +69,8 @@ public final class Mine {
     /** Break-policy snapshots to restore in end(). Client thread only. */
     private static volatile java.util.List<net.minecraft.world.level.block.Block> banSnap = null;
     private static volatile java.util.List<net.minecraft.world.level.block.Block> avoidSnap = null;
+    /** allowInventory snapshot to restore in end(), or null. Client thread only. */
+    private static volatile Boolean allowInvSnap = null;
     /** Guard box corners {x0,y0,z0,x1,y1,z1}, or null. Client thread only. */
     private static volatile int[] guardBox = null;
     /** idx -> stateId snapshot of guard cells matching the blocks. Client thread only. */
@@ -155,6 +157,14 @@ public final class Mine {
         java.util.Set<String> want = new java.util.HashSet<>(blocks);
         settings.blocksToDisallowBreaking.value.removeIf(b -> want.contains(blockName(b)));
         settings.blocksToAvoidBreaking.value.removeIf(b -> want.contains(blockName(b)));
+        // idkcraft-605b: Baritone's ToolSet reads the hotbar only, and a
+        // crafted pickaxe lands in slots 9-35 (rig: wooden_pickaxe@13,
+        // empty hotbar). The path search then costs stone at bare-hand
+        // speed, times out on every target and the leg ends noPath/futile
+        // at +0. allowInventory on lets InventoryBehavior swap the best
+        // pick into the hotbar (the pwoi Build.java precedent); mine-scoped.
+        allowInvSnap = settings.allowInventory.value;
+        settings.allowInventory.value = true;
     }
 
     /** Client thread: put the snapshot lists back (every end path, once). */
@@ -170,6 +180,10 @@ public final class Mine {
                 settings.blocksToAvoidBreaking.value.clear();
                 settings.blocksToAvoidBreaking.value.addAll(avoidSnap);
                 avoidSnap = null;
+            }
+            if (allowInvSnap != null) {
+                settings.allowInventory.value = allowInvSnap;
+                allowInvSnap = null;
             }
         } catch (Exception ignored) {
             // Best-effort: the next lease #set re-pushes absolute lists.
