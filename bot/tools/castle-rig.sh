@@ -8,6 +8,12 @@
 #   CASTLE_NIGHT=1) runs the natural cycle from time 0 at window open: easy
 #   + 2 phantoms over the bot each nightfall, peaceful each dawn, one
 #   `CASTLE-RIG night <n>:` verdict per night (deaths, sheltered).
+#   --night prod (idkcraft-neuc.65.2, or CASTLE_NIGHT=prod): the same
+#   nights under prod conditions from window open — easy all window (no
+#   phantoms, no peaceful dawn: day deaths count), fall damage on, world
+#   spawn 150 from the pad; keep_inventory stays true (prod reads true;
+#   CASTLE_KEEP_INVENTORY=0 drops the kit on death instead);
+#   the verdict adds day-deaths=<d>, kitless=<deaths with sword=0>.
 # Env: PRODWORLD (default /Users/iv/Projects/.idkcraft-prodworld),
 #   CASTLE_RIG_ID (''/0 default, a-z, or auto over CASTLE_SLOTS "0 a b c"),
 #   CASTLE_LOCK (default /tmp/idkcraft-castle-rig.lock), CASTLE_LOCK_WAIT,
@@ -35,6 +41,11 @@
 #   lives only in a peer memory file read via BOT_CASTLE_PEER, v2's path),
 #   CASTLE_BARE (1 = neuc.65.3: no order, no seed — the guide only chats
 #   `autonomous on`; pair with --night for the no-castle, no-house nights),
+#   CASTLE_HOUSE (''|clean|bump, needs CASTLE_BARE=1 — neuc.65.2: a built
+#   v2 house with a bed on the pad is the home; bump = bedrock behind the
+#   door, so gohome fails cannot-reach-home; the night adds one
+#   `CASTLE-RIG house-bump night <n>:` line (shelter spot's door distance,
+#   PASS = 8+ and 0 deaths) and the verdict bump=<pass>/<n>),
 #   CASTLE_BODY (''|baritone — g0z.56: the builder runs on the v2 Baritone
 #   body, client image BARITONE_IMAGE, default client.sh tree-hash tag),
 #   CASTLE_REPAIR (''|wood|nowood, needs CASTLE_SEED=complete — g0z.56:
@@ -165,9 +176,10 @@ elif [ "$RIG_ID" = auto ]; then
 fi
 case "$RIG_ID" in ''|[a-z]) ;; *) echo "CASTLE_RIG_ID must be one letter a-z, 0 or auto (got '$RIG_ID')"; exit 2 ;; esac
 NIGHT="${CASTLE_NIGHT:-0}"
-if [ "${1:-}" = --night ]; then NIGHT=1; shift; fi
-[ $# -le 1 ] || { echo "usage: castle-rig.sh [--night] [mins] (got: $*)"; exit 2; }
-case "$NIGHT" in 0|1) ;; *) echo "CASTLE_NIGHT: want 0|1, got '$NIGHT'"; exit 2 ;; esac
+if [ "${1:-}" = --night ]; then NIGHT=1; shift; if [ "${1:-}" = prod ]; then NIGHT=prod; shift; fi; fi
+[ $# -le 1 ] || { echo "usage: castle-rig.sh [--night] [mins] (--night prod: prod nights; got: $*)"; exit 2; }
+case "$NIGHT" in 0|1|prod) ;; *) echo "CASTLE_NIGHT: want 0|1|prod, got '$NIGHT'"; exit 2 ;; esac
+case "${CASTLE_HOUSE:-}" in '') ;; clean|bump) [ "${CASTLE_BARE:-}" = 1 ] || { echo "CASTLE_HOUSE needs CASTLE_BARE=1"; exit 2; } ;; *) echo "CASTLE_HOUSE: want ''|clean|bump, got '$CASTLE_HOUSE'"; exit 2 ;; esac
 COMPONENT="${CASTLE_COMPONENT:-}"
 case "$COMPONENT" in
   '') ;;
@@ -367,7 +379,9 @@ boot() {
   rcon_assert "gamerule advance_weather false"
   rcon_assert "gamerule keep_inventory true"
   rcon_assert "weather clear"
-  if [ "$NIGHT" = 1 ]; then
+  if [ "$NIGHT" = prod ]; then
+    echo "night prod: natural cycle, time 0 at window open, easy + fall damage on all window (no phantoms, no peaceful dawn), world spawn 150 from the pad"
+  elif [ "$NIGHT" = 1 ]; then
     echo "night: natural cycle, time 0 at window open, easy + 2 phantoms each nightfall, peaceful each dawn"
   elif [ "${CASTLE_DAYLOCK:-1}" != 0 ]; then
     if _out=$(docker exec "$CONTAINER" rcon-cli "gamerule advance_time false" 2>&1) && \
