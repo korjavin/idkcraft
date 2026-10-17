@@ -330,6 +330,7 @@ function castleChest(bot, st) {
 function finish(bot, ctx, status) {
   const f = ctx.castleFetch
   if (status === 'done') ctx.castleFetchDry = null // a leg that got stock retires the dry mark
+  if (status === 'done' && f && f.kind === 'stairs' && !f.stairsMine) ctx.castleStairsMines = 0 // 8njf: stairs on hand (chest, craft) re-arm the mine fallback
   if (f && f.spend) {
     let delta = '?'
     try {
@@ -475,7 +476,7 @@ function craftTick(bot, ctx, f, d) {
   let r = null
   try { r = deps.craftItem(bot, ctx, names, CRAFT_COUNT[d.kind] || 1) } catch (_) { r = { done: false } }
   if (r === 'running') return true
-  if (r && r.done) return true // re-check the target next tick
+  if (r && r.done) { if (d.kind === 'stairs') ctx.castleStairsMines = 0; return true } // re-check the target next tick
   // idkcraft-pdjx: the failure line used to die here — a craft leg failed
   // with materials on hand and the reason was invisible in the logs.
   // Classified by kind; once per latch (craftOut), so no spam.
@@ -485,6 +486,16 @@ function craftTick(bot, ctx, f, d) {
     const woodless = WOOD.has(d.kind) && countItems(bot, (n) => n.endsWith('_planks') || n.endsWith('_log')) === 0
     const line = woodless ? `can't craft ${d.kind}: no planks or logs` : r.line
     try { console.log(`castlefetch ${d.kind}: craft failed: ${line}`) } catch (_) { /* log best-effort */ }
+    // idkcraft-8njf: a table failure gets one fresh craft run per leg. The
+    // walk give-up latched that table dead for the day (craftany deadToday)
+    // and a refused placement run ended on its try cap, so the re-plan
+    // places a fresh table from the pack — instead of the leg failing into
+    // the 5-min hold -> forage -> rest -> house-build spiral (pwoi rig).
+    if (/crafting table/.test(line) && !f.tableRetry) {
+      f.tableRetry = true
+      try { console.log(`castlefetch ${d.kind}: retrying the craft with a fresh table`) } catch (_) { /* log best-effort */ }
+      return true
+    }
   }
   f.craftOut = true // the pack cannot fund it: fall through to the world
   return false
@@ -1753,7 +1764,25 @@ function castlefetch(bot, ctx, target, state) {
   if (st.status !== NO_WOOD || !WOOD.has(d.kind)) st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
-  if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot))) {
+  // idkcraft-8njf: on v2 a stairs craft that still fails after the table
+  // retry mines ONE stone batch instead of failing into the 5-min hold
+  // (forage -> rest -> house-build): stone is the castle's own material,
+  // and the next leg crafts again with a fresh table retry. bot.mine banks
+  // a delta, so the leg never ends 'done' at once. ponytail: one batch per
+  // craft success (ctx.castleStairsMines, reset when a stairs craft lands)
+  // — a table refused for good still reaches the hold on the next leg
+  // instead of a mine loop the watchdog reads as flat. v1 untouched (its
+  // digTick can end at once on a full cobble stock — a per-tick re-pick).
+  let stairsMine = false
+  if (d.kind === 'stairs' && f.craftOut && typeof bot.mine === 'function' && !stairsCobbleShort(bot)) {
+    if (!f.stairsMine && !(ctx.castleStairsMines > 0)) {
+      f.stairsMine = true
+      ctx.castleStairsMines = 1
+      try { console.log('castlefetch stairs: craft out, mining a stone batch instead') } catch (_) { /* log best-effort */ }
+    }
+    stairsMine = !!f.stairsMine
+  }
+  if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot)) || stairsMine) {
     // neuc.59 fallback: a v2 stone leg tops up the pick budget first, one
     // craft per tick (goal.js frozen) — the refill rarely gets an equip run
     // in castle mode. v1 reads false and digs as before.
