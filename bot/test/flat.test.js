@@ -806,9 +806,20 @@ describe('flat ticker wiring', () => {
         } else {
           assert.equal(ctx.flat, null)
           assert.equal(ctx.paused, true)
+          assert.ok(cap.lines.includes('flat steal moved nothing: nothing to steal, parking'), cap.lines.join('\n'))
         }
         assert.ok(cap.lines.some((l) => l.startsWith('flat finish') && l.includes('steal=3')), cap.lines.join('\n'))
       }
+    })
+
+    it('x3y6.3: a home strip that gave up its holes (abortWhy) parks, no steal', () => {
+      const bot = mockBot(stealWorld(0, 20), { feet: pos(-3, 64, 0) })
+      const f = startEpisode(0, 0, 4, 74, 'P', { i: 1, n: 3 }, 63)
+      Object.assign(f, { phase: 'shave', level: 63, shaved: 2, swept: true, abortWhy: 'no fill blocks' })
+      const ctx = { lastGoalKey: '', flat: f }
+      flat(bot, ctx, null, null)
+      assert.equal(ctx.flat, null)
+      assert.equal(ctx.paused, true)
     })
 
     it('x3y6.3: a relay for the same square resumes the steal, another square starts over', () => {

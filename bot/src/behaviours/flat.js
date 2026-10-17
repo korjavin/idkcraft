@@ -807,9 +807,10 @@ function finish(bot, ctx, f, why) {
     line += `, skipped ${skipped}: ${parts.join(', ')}`
   }
   // x3y6.3: a clean swarm finish re-scans the square to steal a strip; a
-  // steal that moved nothing (skips only) parks instead of ping-ponging.
+  // steal that moved nothing (skips only) parks instead of ping-ponging,
+  // and a strip that gave up its holes (abortWhy) parks as today.
   const home = homeOf(f)
-  const again = !!home && why == null && (!f.steal || f.filled + f.shaved > 0)
+  const again = !!home && why == null && !f.abortWhy && (!f.steal || f.filled + f.shaved > 0)
   if (why === 'nothing to steal') console.log(line)
   else say(bot, line)
   console.log(`flat finish filled=${f.filled} shaved=${f.shaved} supports=${f.supports} left=${left} why=${why || 'done'} skip=${JSON.stringify(f.skip)} steal=${f.steal && f.tile ? f.tile.i + 1 : (again ? 'scan' : 'none')}`)
@@ -824,6 +825,7 @@ function finish(bot, ctx, f, why) {
     guardFlatSurface(bot, ctx)
     return
   }
+  if (f.steal && why == null) console.log('flat steal moved nothing: nothing to steal, parking')
   // tpd1: a helper parks where it finished — unparked with no work it
   // would walk home (unseen latch); the next flat order unparks it.
   if (home && home.i >= 1) ctx.paused = true
