@@ -245,6 +245,52 @@ final class BuildPlan {
         return new int[] {spec.ox + b[0], spec.oy + b[1], spec.oz + b[2]};
     }
 
+    /**
+     * Baritone's own pause verdict, read from its chat lines (idkcraft-pnxy).
+     * BuilderProcess logs {@code Missing materials for at least:} then one
+     * {@code <n>x Block{minecraft:<id>}...} line per starved state, then
+     * {@code Unable to do it. Pausing.}, all in one client tick; the verdict
+     * is {@code missing:<id>[,<id>...]} when those lines share the
+     * "Unable" line's tick, else {@code unable} (a reach/path pause). A
+     * missing list from an earlier tick (assemble also logs on ticks that
+     * found a goal) never leaks into a later pause.
+     */
+    static final class PauseTap {
+        private static final java.util.regex.Pattern MISSING =
+                java.util.regex.Pattern.compile("\\d+x Block\\{minecraft:([a-z0-9_]+)\\}");
+        private final Set<String> pending = new java.util.LinkedHashSet<>();
+        private long pendingTick = Long.MIN_VALUE;
+        private String verdict;
+
+        synchronized void line(String text, long tick) {
+            if (text == null) {
+                return;
+            }
+            if (tick != pendingTick) {
+                pending.clear();
+                pendingTick = tick;
+            }
+            java.util.regex.Matcher m = MISSING.matcher(text);
+            while (m.find()) {
+                pending.add(m.group(1));
+            }
+            if (text.contains("Unable to do it")) {
+                verdict = pending.isEmpty() ? "unable" : "missing:" + String.join(",", pending);
+                pending.clear();
+            }
+        }
+
+        /** The last pause verdict since {@link #reset}, or null. */
+        synchronized String verdict() {
+            return verdict;
+        }
+
+        synchronized void reset() {
+            verdict = null;
+            pending.clear();
+        }
+    }
+
     private static int requiredInt(JsonObject params, String key) throws Rpc.RpcException {
         if (params == null || !params.has(key) || !params.get(key).isJsonPrimitive()
                 || !params.get(key).getAsJsonPrimitive().isNumber()) {

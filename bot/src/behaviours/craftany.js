@@ -490,7 +490,11 @@ function craftItem(bot, ctx, name, count) {
             st.tableP = true
             st.tableTries += 1
             void tableFor(bot, ctx).then(
-              (t) => { st.tableP = false; if (t) st.table = t.block },
+              (t) => {
+                st.tableP = false
+                if (t) st.table = t.block
+                else st.tableTries -= 1 // null = walking in, not a spent try (idkcraft-unm6); tableFor bounds the walk (20 waits, then it rejects)
+              },
               (e) => { // idkcraft-8njf: the refusal reason used to die here ('need a crafting table' after TABLE_TRIES)
                 st.tableP = false
                 try { console.log(`craftany ${plan.target}: table place ${st.tableTries}/${TABLE_TRIES} failed: ${(e && e.message) || e}`) } catch (_) { /* log best-effort */ }

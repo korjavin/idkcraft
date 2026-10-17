@@ -69,6 +69,12 @@ function mockBot(world, { items = KIT, withBuilder = true, buildScript = 'ok' } 
       if (buildScript === 'stall') throw new Error('build-stall')
       if (buildScript === 'preempted') throw new Error('build-preempted')
       if (buildScript === 'starve') return { placed: 0, missing: cells.length }
+      if (buildScript === 'starve-spent') { items.length = 0; return { placed: 0, missing: cells.length } }
+      if (buildScript === 'starve-names') { // the mod spent every named stack, other variants stay
+        const names = new Set(cells.map((c) => c.block))
+        for (let i = items.length - 1; i >= 0; i--) if (names.has(items[i].name)) items.splice(i, 1)
+        return { placed: 0, missing: cells.length }
+      }
       for (const c of cells) world.set(origin.x + c.dx, origin.y + c.dy, origin.z + c.dz, c.block)
       return { placed: cells.length, missing: 0 }
     }
@@ -229,14 +235,80 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     assert.equal(ctx.castleBuildFlight, false)
   })
 
-  it('a starved batch fails the fetch word and releases the flight (core-9)', async () => {
+  it('a starved batch with the kind spent fails the fetch word and releases the flight (core-9)', async () => {
     const world = makeWorld()
-    const bot = mockBot(world, { buildScript: 'starve' })
+    const bot = mockBot(world, { items: KIT.map((i) => ({ ...i })), buildScript: 'starve-spent' })
     const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
     await run(bot, ctx, 1)
     assert.equal(bot.calls.builds.length, 1)
     assert.ok((ctx.stepStatus || '').startsWith('failed:no-'), `fetch word, got ${ctx.stepStatus}`)
     assert.equal(ctx.castleBuildFlight, false)
+  })
+
+  it('a starved batch with the kind still usable re-batches, no fetch word, no strike (cu1a)', async () => {
+    const world = makeWorld()
+    const items = [{ name: 'cobblestone', count: 300 }, { name: 'andesite', count: 30 }]
+    const bot = mockBot(world, { items, buildScript: 'starve-names' })
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    await run(bot, ctx, 1)
+    assert.equal(bot.calls.builds.length, 1)
+    assert.ok(!(ctx.stepStatus || '').startsWith('failed:'), `no failure while usable, got ${ctx.stepStatus}`)
+    assert.equal(ctx.castleBuildFlight, false)
+    assert.deepEqual(ctx.castle.batchStrikes || {}, {}, 'starved misses never strike')
+    await run(bot, ctx, 1)
+    assert.equal(bot.calls.builds.length, 2, 'the next tick re-batches')
+    assert.ok(bot.calls.builds[1].cells.every((c) => c.block === 'andesite'), 'fresh names from what is left')
+  })
+
+  it('a final that leaves cells missing with their name still held strikes them (cu1a review)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world, { buildScript: 'starve' })
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    await run(bot, ctx, 1)
+    assert.ok(!(ctx.stepStatus || '').startsWith('failed:'), `no fetch word, got ${ctx.stepStatus}`)
+    assert.ok(Object.keys(ctx.castle.batchStrikes || {}).length > 0, 'refused cells strike')
+  })
+
+  it('a stack is never named past its count: the next stack takes over (cu1a review)', () => {
+    const world = makeWorld()
+    const items = [{ name: 'cobblestone', count: 40 }, { name: 'andesite', count: 40 }, { name: 'granite', count: 10 }]
+    const bot = mockBot(world, { items })
+    const ctx = { castleCarry: null }
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 3 }
+    const stone = castle.castleBuilderCells(bot, ctx, st).cells.filter((c) => c.kind === 'stone')
+    const by = {}
+    for (const c of stone) by[c.block] = (by[c.block] | 0) + 1
+    assert.equal(stone.length, castle.usable(bot, 'stone', ctx), 'budget = usable')
+    assert.ok(by.cobblestone <= 40 && by.andesite <= 40 && (by.granite | 0) <= 10, JSON.stringify(by))
+    assert.ok(by.cobblestone > 0 && by.andesite > 0, `both stacks named: ${JSON.stringify(by)}`)
+  })
+
+  it('the owner\'s carried stacks never get names (cu1a review)', () => {
+    const world = makeWorld()
+    const items = [{ name: 'cobblestone', count: 60 }, { name: 'andesite', count: 64 }]
+    const bot = mockBot(world, { items })
+    const ctx = { castleCarry: { items: [{ name: 'andesite', count: 64 }] } }
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 3 }
+    const stone = castle.castleBuilderCells(bot, ctx, st).cells.filter((c) => c.kind === 'stone')
+    assert.ok(stone.length > 0 && stone.every((c) => c.block === 'cobblestone'), 'own cobble only')
+  })
+
+  it('names each cell from the held stacks, biggest first, capped at usable (cu1a)', () => {
+    const world = makeWorld()
+    const items = [{ slot: 9, name: 'andesite', count: 3 }, { slot: 20, name: 'cobblestone', count: 64 },
+      { slot: 21, name: 'cobblestone', count: 64 }, { slot: 22, name: 'cobblestone', count: 72 }]
+    const bot = mockBot(world, { items })
+    const ctx = { castleCarry: null }
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 3 }
+    const usable = castle.usable(bot, 'stone', ctx)
+    assert.equal(usable, 203 - castle.reserveOf('stone'))
+    const stone = castle.castleBuilderCells(bot, ctx, st).cells.filter((c) => c.kind === 'stone')
+    const by = {}
+    for (const c of stone) by[c.block] = (by[c.block] | 0) + 1
+    assert.ok(stone.length <= usable, `batch ${stone.length} <= usable ${usable}`)
+    assert.ok((by.andesite | 0) <= 3, `andesite at most its count: ${JSON.stringify(by)}`)
+    assert.equal(stone[0].block, 'cobblestone', 'the biggest stack leads')
+    assert.equal(by.cobblestone + (by.andesite | 0), stone.length, 'only held names')
   })
 
   it('two refused cells both back off after 3 stalls (round-2 core-1)', async () => {
@@ -273,5 +345,37 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     assert.ok(!ctx.stepStatus, `preempted settle writes nothing, got ${ctx.stepStatus}`)
     assert.equal(ctx.castleBuildFlight, false)
     assert.deepEqual(ctx.castle.batchStrikes || {}, {})
+  })
+})
+
+describe('castle builder over the fake body (idkcraft-cu1a repro)', () => {
+  it('a small first variant stack no longer starves the batch: the cobble lays, no failed:no-stone', async () => {
+    const Vec3 = require('vec3')
+    const { BaritoneBot } = require('../src/bridge/index')
+    const { FakeTransport } = require('../src/bridge/transport')
+    const site = { x: 100, y: 64, z: -40 }
+    const transport = new FakeTransport({
+      pos: { x: 100.5, y: 64, z: -39.5, yaw: 0, pitch: 0, onGround: true },
+      blocks: {},
+      fakeColumns: [{ cx: 6, cz: -3 }, { cx: 7, cz: -3 }, { cx: 6, cz: -2 }, { cx: 7, cz: -2 }],
+      inventory: [{ slot: 9, name: 'andesite', count: 3 }, { slot: 20, name: 'cobblestone', count: 64 },
+        { slot: 21, name: 'cobblestone', count: 64 }, { slot: 22, name: 'cobblestone', count: 64 }],
+    })
+    const bot = new BaritoneBot(transport, { Vec3, registry: require('minecraft-data')('26.1.2'), username: 'IdkBody' })
+    await bot.start({ pollMs: 0 })
+    try {
+      bot._buildTiming = { stallMs: 200, watchMs: 5 }
+      const st = { site: { ...site }, rot: 0, blueprintVersion: 3 }
+      const ctx = { castle: st, castleCarry: null }
+      const c = blueprint.absPlan(site, 0, 3).cells.find((x) => x.kind === 'stone' && !x.prep)
+      assert.equal(castle.castleBuilderBatch(bot, ctx, st, c), true, 'batch fired')
+      for (let i = 0; i < 400 && ctx.castleBuildFlight; i++) await new Promise((r) => setTimeout(r, 5))
+      assert.equal(ctx.castleBuildFlight, false, 'flight settled')
+      assert.ok(!(ctx.stepStatus || '').startsWith('failed:'), `no failure with stone on hand, got ${ctx.stepStatus}`)
+      const laid = Object.values(transport.state.blocks).filter((n) => n === 'cobblestone').length
+      assert.ok(laid > 3, `the cobble lays past the andesite (${laid})`)
+    } finally {
+      await bot.stop()
+    }
   })
 })
