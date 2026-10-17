@@ -143,6 +143,19 @@ describe('castlefetch draws the bank chests (g0z.60)', () => {
     assert.notEqual(ctx.lastGoalKey, 'castlefetch-chest:100,64,170')
   })
 
+  it('a full bank batch never walks on to the second bank chest', async () => {
+    word('stone')
+    const chests = { '100,64,170': [{ name: 'cobblestone', count: 400 }], '101,64,170': [{ name: 'cobblestone', count: 400 }] }
+    const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }], chests, at: pos(100.5, 64, 171.5) })
+    const ctx = ctxFor()
+    ctx.castle.siteChest = pos(101, 64, 170)
+    fetch(bot, ctx)
+    await settle(); await settle(); await settle()
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.calls.opens.length, 1)
+  })
+
   it('a bank chest past the task radius is never walked to', () => {
     word('stone')
     const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }], chests: { '100,64,170': [{ name: 'cobblestone', count: 400 }] }, at: pos(300.5, 64, 400.5) })

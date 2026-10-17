@@ -431,9 +431,7 @@ function chestTick(bot, ctx, f, d) {
   // (FETCH + reserve = STONE_KEEP 88; planks 34 < PLANK_KEEP 64): what it
   // hands over is never banked straight back (no deposit<->withdraw
   // ping-pong). The owner's footprint chest draws the whole short, as before.
-  let need0 = d.short
-  if (bank && d.kind in FETCH) need0 = Math.min(need0, Math.max(0, FETCH[d.kind] + castleMod.reserveOf(d.kind) - castleMod.held(bot, d.kind)))
-  if (bank && need0 <= 0) return true // the keep is packed: nothing to draw here, next chest
+  const need0 = bank ? Math.min(d.short, bankCap(bot, d.kind)) : d.short
   flight(ctx, async () => {
     const left = await drawChest(bot, ctx, d, at, need0)
     if (!bank) return
@@ -455,8 +453,13 @@ function markChestDry(ctx, kind, k) {
 // Nearest untried chest this leg: the footprint chest (owner's, never
 // dry-marked: he restocks it), ctx.castle.siteChest, ctx.home.chest —
 // the bank ones within TASK_SEARCH_RADIUS of the body.
+function bankCap(bot, kind) {
+  return kind in FETCH ? Math.max(0, FETCH[kind] + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) : Infinity
+}
+
 function pickChest(bot, ctx, f, kind) {
   const tried = f.chestTried || (f.chestTried = new Set())
+  const banks = !f.bankFull && bankCap(bot, kind) > 0 // the keep packed: no bank walk
   const bp = bodyPos(bot)
   const dry = ctx.castleChestDry || {}
   const now = Date.now()
@@ -464,7 +467,7 @@ function pickChest(bot, ctx, f, kind) {
   const own = castleChest(bot, ctx.castle)
   if (own) cands.push({ at: own, bank: false })
   for (const c of [ctx.castle && ctx.castle.siteChest, ctx.home && ctx.home.chest]) {
-    if (c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true })
+    if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true })
   }
   let best = null
   for (const c of cands) {

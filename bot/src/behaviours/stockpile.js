@@ -1361,6 +1361,7 @@ function stockpileSite(bot, ctx, bp) {
       }
       if (banked > 0) {
         ctx.siteChestFullAt = null
+        ctx.castleChestDry = null // g0z.60: fresh bank stock re-arms the castlefetch draw
         ctx.siteExpanded = false
         clearPackFullHold(ctx)
         // The summary once per session (revmux 01 minor): later banks are
@@ -1678,6 +1679,7 @@ function stockpile(bot, ctx, target, state) {
         ctx.chestFullAt = null
         ctx.chestErrorAt = null
         ctx.homeExpanded = false
+        ctx.castleChestDry = null // g0z.60: fresh bank stock re-arms the castlefetch draw
         clearPackFullHold(ctx)
         say(bot, `stockpiled ${names.join(', ')}`)
         if (handed.length > 0) {
