@@ -1171,6 +1171,18 @@ describe('flat behaviour', () => {
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole, shaved 1 bump'), bot.chats.join('\n'))
   })
 
+  it('x3y6.2: a fill place and a shave dig each count one block', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(2, 64, 0, 'dirt')
+    const { bot, ctx } = started(world)
+    const f = ctx.flat
+    await drive(bot, ctx, 20)
+    assert.equal(bot.calls.places.length, 1)
+    assert.equal(bot.calls.digs.length, 1)
+    assert.equal(f.blocks, 2)
+  })
+
   it('caps a ditch with below-level water, water stays', async () => {
     // 7wt: liquid strictly below the level is an ordinary hole; the cap
     // lands over the water without draining it.
@@ -1640,6 +1652,17 @@ describe('flat behaviour', () => {
     assert.ok(bot.calls.digs.length >= 1)
     assert.ok(bot.chats.some((c) => c === 'out of fill blocks, digging dirt'), bot.chats.join('\n'))
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole'), bot.chats.join('\n'))
+  })
+
+  it('x3y6.2: a restock dig counts a block', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world, { items: [], registry: DIRT_REGISTRY, dirtSpots: [{ x: 20, y: 63, z: 0 }] })
+    const f = ctx.flat
+    await drive(bot, ctx, 40)
+    assert.equal(bot.calls.digs.length, 1)
+    assert.equal(bot.calls.places.length, 1)
+    assert.equal(f.blocks, 2)
   })
 
   it('reports no fill blocks when no dirt is around', async () => {
