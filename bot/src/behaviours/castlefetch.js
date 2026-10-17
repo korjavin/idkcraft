@@ -435,6 +435,7 @@ function chestTick(bot, ctx, f, d) {
   flight(ctx, async () => {
     const left = await drawChest(bot, ctx, d, at, need0)
     if (!bank) return
+    try { console.log(`castlefetch ${d.kind}: drew ${Math.max(0, Math.round(need0 - left))} of ${need0} from the bank chest at ${k}`) } catch (_) { /* log best-effort */ }
     if (left > 0) markChestDry(ctx, d.kind, k) // drained: no walk back to it within CHEST_DRY_MS
     else f.bankFull = true // a full bank batch: the leg lays it instead of digging the rest
   }, CHEST_TIMEOUT_MS, () => { if (bank) markChestDry(ctx, d.kind, k) })

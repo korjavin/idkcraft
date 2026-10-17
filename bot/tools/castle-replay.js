@@ -1145,6 +1145,17 @@ async function main() {
     }
     origLog('CASTLE-RIG kit=pick (3 stone picks + sword, nothing to lay)')
   }
+  // Bank kit (g0z.60): the owner's prod gift — more castle stock than the
+  // pack's castle keep, so stockpile banks the surplus (site chest: no home
+  // on the pad) and castlefetch must draw it back instead of digging. Read
+  // the `castlefetch <kind>: drew` lines vs `quarry`/`mine` lines.
+  if (KIT === 'bank') {
+    for (const [item, count] of [['cobblestone', 512], ['oak_planks', 192], ['chest', 2], ['dirt', 64],
+      ['stone_pickaxe', 2], ['stone_sword', 1], ['bread', 32]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog('CASTLE-RIG kit=bank (512 cobble, 192 planks, 2 chests, 64 dirt, 2 stone picks + sword, 32 bread)')
+  }
   // Junk kit (vmzq.38): the prod 2026-10-06 pack — 36/36 stone variants,
   // sand and mob junk, wooden sword only: no pickaxe, no table, no cobble.
   if (KIT === 'junk') {

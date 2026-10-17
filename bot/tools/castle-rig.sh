@@ -14,12 +14,14 @@
 #   CASTLE_TAG, CASTLE_PAD ("x,z"), CASTLE_PADSPOT ("x,z", pins the pad probe
 #   pick — controlled pairs set it on both legs), CASTLE_OUT, CASTLE_LOG, CASTLE_DAYLOCK=0
 #   to run the natural day/night cycle instead of locked day,
-#   CASTLE_KIT (empty|seeded|junk|valuables|stairs|blast — seeded pre-fills cobble/planks/
+#   CASTLE_KIT (empty|seeded|junk|valuables|stairs|blast|bank — seeded pre-fills cobble/planks/
 #   tools so a 6-min window measures laying, not fetching; junk is vmzq.38's
 #   prod pack: 36/36 granite/diorite/andesite/sand/mob junk, no pickaxe, no
 #   cobble; valuables is vmzq.39's 36/36 never-dropped ores/tools/wood, no
 #   stone/dirt, with a pick, chests and a table; stairs is g0z.48's upgrade
 #   kit: the v3 stairs count in cobble stairs + stone pick/sword + bread;
+#   bank is g0z.60's gift kit: 512 cobble + 192 planks + 2 chests, stone kit
+#   — stockpile banks the surplus, castlefetch must draw it back (`drew` lines);
 #   blast is g0z.51's self-source kit: 5 raw iron + coal + cobble + a stone
 #   kit + bread — the finished block is NOT carried, the ladder smelts and
 #   crafts it; pair with CASTLE_SEED=complete +
