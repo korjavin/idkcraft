@@ -765,6 +765,8 @@ describe('flat ticker wiring', () => {
       for (let k = 1; k < cheb.length; k++) assert.ok(cheb[k - 1] >= cheb[k], `farthest first: ${cheb.join(',')}`)
       assert.ok(cap.lines.includes('flat steal strip=3/3 left=20 from=1'), cap.lines.join('\n'))
       assert.ok(cap.lines.some((l) => l.startsWith('flat finish') && l.includes('steal=scan')), cap.lines.join('\n'))
+      assert.deepEqual(bot.chats.filter((c) => c.startsWith('flat done') || c.includes(' steal)')), [], 'no chat during a steal round')
+      assert.ok(cap.lines.some((l) => l.startsWith('flattening') && l.includes('(strip 3/3 steal)')), 'steal start is logged')
       // Deterministic: a second thief scanning the same world picks the same strip and order.
       const bot2 = mockBot(stealWorld(4, 20), { feet: pos(-3, 64, 0) })
       const ctx2 = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: 1, n: 3 }, 63) }
@@ -788,7 +790,7 @@ describe('flat ticker wiring', () => {
         assert.equal(ctx.flat, null, `home=${home}`)
         assert.equal(!!ctx.paused, parked, `home=${home} parked`)
         assert.ok(cap.lines.some((l) => l.includes('why=nothing to steal')), cap.lines.join('\n'))
-        assert.ok(!bot.chats.some((c) => c.includes('nothing to steal')), 'log only, no chat')
+        assert.equal(bot.chats.filter((c) => c.startsWith('flat done')).length, 1, 'one done chat, at the real stop')
       }
     })
 

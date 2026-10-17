@@ -811,7 +811,9 @@ function finish(bot, ctx, f, why) {
   // and a strip that gave up its holes (abortWhy) parks as today.
   const home = homeOf(f)
   const again = !!home && why == null && !f.abortWhy && (!f.steal || f.filled + f.shaved > 0)
-  if (why === 'nothing to steal') console.log(line)
+  // Chat once, when the bot truly stops; a finish going on to steal is
+  // log-only (13 bots x every round would spam the server).
+  if (again) console.log(line)
   else say(bot, line)
   console.log(`flat finish filled=${f.filled} shaved=${f.shaved} supports=${f.supports} left=${left} why=${why || 'done'} skip=${JSON.stringify(f.skip)} steal=${f.steal && f.tile ? f.tile.i + 1 : (again ? 'scan' : 'none')}`)
   clearGoal(bot, ctx)
@@ -922,7 +924,8 @@ function scanTick(bot, ctx, f) {
   if (f.totalBumps > 0) line += `, ${f.totalBumps} bumps`
   if (f.counts.unloaded > 0) line += `, ${f.counts.unloaded} unloaded`
   if (f.counts.liquid > 0) line += `, ${f.counts.liquid} water skipped`
-  say(bot, line)
+  if (f.steal) console.log(line) // x3y6.3: steal rounds are log-only
+  else say(bot, line)
   console.log(`flat start anchor=${f.cx},${f.cz} r=${f.r} level=${level}${f.tile ? ` strip=${f.tile.i + 1}/${f.tile.n}` : ''}`)
   if (f.total === 0 && f.totalBumps === 0) finish(bot, ctx, f, null)
   else if (f.total === 0) f.phase = 'shave'
