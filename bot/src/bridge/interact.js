@@ -111,6 +111,7 @@ function installInteract(bot) {
         if (r && typeof r.selected === 'number' && r.selected !== bot.quickBarSlot) {
           bot.quickBarSlot = r.selected
           bot.heldItem = (bot.inventory && bot.inventory.slots && bot.inventory.slots[36 + r.selected]) || null
+          d.expect = digTimeOf(bot, block) // the dig runs on the mod's tool, not the pre-switch hand
         }
       }, (e) => settle(d, e instanceof Error ? e : new Error(String(e))))
     }))
