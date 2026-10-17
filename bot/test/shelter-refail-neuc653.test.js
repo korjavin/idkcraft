@@ -18,7 +18,23 @@ function pos(x, y, z) {
   return p
 }
 
-// Flat dirt world: solid at y <= 63, air above.
+// pos(): the vec3 Vec3 subset the shelter reads (x/y/z, distanceTo,
+// clone, floored). Vec3 arithmetic (plus/offset) is skipped: the code
+// under test never calls it.
+// Flat dirt world: solid at y <= 63, air above. Each stub mirrors the
+// mineflayer bot surface (index.d.ts):
+// - bot.blockAt(pos) -> Block | null: always a Block { name, position
+//   (Vec3), boundingBox 'block'|'empty' }, never null (every chunk is
+//   loaded). No waterlogging, metadata or light; dirt digs by hand.
+// - bot.time.timeOfDay (0..24000) and bot.time.day: set by the test, never
+//   advance (no physics tick).
+// - bot.entity.position (Vec3) / onGround: fixed; nothing moves the body.
+// - bot.pathfinder.setGoal(goal) / isMoving() / stop() (mineflayer-pathfinder
+//   index.d.ts): records the goal, never walks, so a dig-in walk can only
+//   time out (the bounded failure the test drives).
+// - bot.inventory.items() -> Item[]: always empty, so the pillar fails
+//   no-scaffold and digs in. dig/placeBlock/equip are absent: no test
+//   reaches a dig or a place.
 function flatBot(at) {
   return {
     username: 'IdkBot',
