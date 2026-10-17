@@ -20,7 +20,7 @@ hint and sleeps (default-off, no JVM, ~0 RAM); with `BARITONE_OFFLINE=1`
 |---|---|
 | `Dockerfile` | Temurin 25 + HeadlessMc + Baritone + hmc-specifics (console `connect`/`msg`) + socat; jars pinned by sha256; entrypoint `start.sh` |
 | `start.sh` | container entrypoint: login passthrough (`--command login`), offline/account gate, client on a FIFO, socat bridge |
-| `settings.txt` | Baritone presets baked into the run dir (`allowParkour` off — the head follows on foot; sprint stays default — `false` breaks doors, see the file) |
+| `settings.txt` | Baritone presets baked into the run dir (`allowParkour` off — the head follows on foot; `chatControl` off — own status chat never runs as a command; sprint stays default — `false` breaks doors, see the file) |
 | `run.sh` | rig slot `z` (container `idk-replay-z`, port 25597, lock `/tmp/idkcraft-rig.lock-z`): reset world from `world.tar`, boot Paper, launch the image's own entrypoint with the bridge published for the rig, run `ab.js` through it, `docker stats`, tear down |
 | `client.sh` | factored client launch (`start <mc-port> <bot-name>` \| `stop`): account gate, bridge publish, HMC console wait, connect + join wait — called by `run.sh` and by `stuck-run.sh` (`REPLAY_WORKER=1`) |
 | `ab.js` | per spot: prep, tp, stuck-replay kit, `#goto` (or `#mine`) via the bridge; judged over rcon (pos within 2.5 of goal, or raw_iron count); rows to `/private/tmp/baritone-ab.json` |
