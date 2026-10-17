@@ -26,6 +26,11 @@ class BridgeTransport extends EventEmitter {
     return s
   }
 
+  _noteRtt(method, ms) {
+    const t = this.rtt.get(method) || [0, 0, 0]
+    this.rtt.set(method, [t[0] + 1, t[1] + ms, Math.max(t[2], ms)])
+  }
+
   connect() {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(this.url)
@@ -51,6 +56,7 @@ class BridgeTransport extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
+        this._noteRtt(method, this.timeoutMs) // a timed-out call is the slowest round trip, not a missing one
         reject(new Error(`bridge ${method}: timeout (${this.timeoutMs} ms)`))
       }, this.timeoutMs)
       this.pending.set(id, { resolve, reject, timer, method, t0: Date.now() })
@@ -72,9 +78,7 @@ class BridgeTransport extends EventEmitter {
       const { resolve, reject, timer, method, t0 } = this.pending.get(msg.id)
       this.pending.delete(msg.id)
       clearTimeout(timer)
-      const ms = Date.now() - t0
-      const t = this.rtt.get(method) || [0, 0, 0]
-      this.rtt.set(method, [t[0] + 1, t[1] + ms, Math.max(t[2], ms)])
+      this._noteRtt(method, Date.now() - t0)
       if (msg.error) reject(new Error(`bridge: ${msg.error.message || msg.error.code || 'error'}`))
       else resolve(msg.result)
       return

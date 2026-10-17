@@ -15,3 +15,10 @@ test('takeRtt counts replies per method, heaviest total first, then resets', asy
   assert.match(s, /^chunk\.get=2\/\d+\/\d+ dig\.start=1\/\d+\/\d+$|^dig\.start=1\/\d+\/\d+ chunk\.get=2\/\d+\/\d+$/)
   assert.strictEqual(t.takeRtt(), '')
 })
+
+test('takeRtt counts a timed-out call at timeoutMs', async () => {
+  const t = new BridgeTransport('ws://unused', { timeoutMs: 20 })
+  t.ws = { send: () => {} }
+  await assert.rejects(t.call('dig.start'), /timeout/)
+  assert.strictEqual(t.takeRtt(), 'dig.start=1/20/20')
+})
