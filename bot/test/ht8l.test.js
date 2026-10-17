@@ -175,9 +175,11 @@ describe('castle wood need draws the home chest before chopping (ht8l)', () => {
     const ctx = castleCtx(pos(1, 64, 1))
     fetch(bot, ctx)
     await settle(); await settle()
-    assert.deepEqual(bot.calls.opens, ['1,64,1'])
-    assert.equal(logs(bot), NEED_LOGS)
-    fetch(bot, ctx) // the load is in: the leg ends, the next one crafts
+    // g0z.60: castlefetch's own chest source reads the home chest first
+    // (planks list, then logs): one batch, 34 planks' worth = 9 logs.
+    assert.deepEqual(bot.calls.opens, ['1,64,1', '1,64,1'])
+    assert.equal(logs(bot), 9)
+    fetch(bot, ctx) // the batch is in: the leg ends, the next one crafts
     assert.equal(treeGoal(bot), false)
     assert.equal(bot.calls.dig, 0)
   })
