@@ -1132,7 +1132,7 @@ function digTick(bot, ctx, f, bp) {
       }
       ctx.digInFlight = true
       ;(async () => {
-        try { await bot.dig(block) } catch (_) { /* gone or interrupted: recount anyway */ }
+        try { await bot.dig(block); f.blocks++ } catch (_) { /* gone or interrupted: recount anyway */ }
         ctx.digInFlight = false
         d.phase = 'pickup'
       })().catch(() => { ctx.digInFlight = false })
@@ -1721,12 +1721,13 @@ function flat(bot, ctx, target, state) {
     else scanTick(bot, ctx, f)
     return
   }
-  if (f.phase !== 'dig' && f.travelPhase !== f.phase) { f.travelPhase = f.phase; f.travelBest = null; f.travelStall = 0 }
   // x3y6.6: loaded chunks from afar skip the scan travel; walk in before approaching holes/bumps
   if ((f.phase === 'fill' || f.phase === 'shave') && Math.max(Math.abs(bp.x - f.cx), Math.abs(bp.z - f.cz)) > f.r + TRAVEL_FAR) {
+    if (!f.walkIn) { f.walkIn = true; f.travelBest = null; f.travelStall = 0 } // fresh give-up budget per walk-in
     travelTick(bot, ctx, f, bp)
     return
   }
+  f.walkIn = false
   if (f.phase === 'dig') {
     digTick(bot, ctx, f, bp)
     return
