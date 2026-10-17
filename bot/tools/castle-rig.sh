@@ -187,7 +187,7 @@ DIAG=; if [ -n "$COMPONENT" ] && [ "$MINS" -lt 10 ]; then
 fi
 export CASTLE_DIAG="$DIAG"
 KIT="${CASTLE_KIT:-empty}"
-case "$KIT" in empty|seeded|junk|valuables|stairs|blast|lay|pick) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs|blast|lay|pick, got '$KIT'"; exit 2 ;; esac
+case "$KIT" in empty|seeded|junk|valuables|stairs|blast|lay|pick|bank) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs|blast|lay|pick|bank, got '$KIT'"; exit 2 ;; esac
 SEED="${CASTLE_SEED:-}"
 case "$SEED" in ''|complete) ;; *) echo "CASTLE_SEED: want ''|complete, got '$SEED'"; exit 2 ;; esac
 SEED_VERSION="${CASTLE_SEED_VERSION:-}"
