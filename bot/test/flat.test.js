@@ -605,6 +605,20 @@ describe('flat ticker wiring', () => {
       }
     })
 
+    it('x3y6.6: a second walk-in gets a fresh give-up budget', () => {
+      const bot = mockBot(makeWorld())
+      const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: 3, n: 9 }, 62) }
+      ctx.flat.phase = 'fill'
+      ctx.flat.holes = Array.from({ length: 5 }, () => ({ x: 1, z: 1 })) // keeps fill alive on arrival
+      bot.entity.position = pos(40, 64, 0)
+      flat(bot, ctx, null, null)
+      bot.entity.position = pos(4 + flat.TRAVEL_FAR - 1, 64, 0) // arrived; the old best was 40
+      flat(bot, ctx, null, null)
+      bot.entity.position = pos(60, 64, 0) // sent away again, farther than the old best
+      for (let i = 0; i < flat.TRAVEL_STALL_TICKS; i++) flat(bot, ctx, null, null)
+      assert.ok(ctx.flat, 'still walking ' + bot.chats.join(';'))
+    })
+
     it('zchb: relay line round-trips; garbage and non-main senders are ignored', () => {
       const f = startEpisode(-7, 12, 16, 75, 'Owner_1', null, 64)
       assert.deepEqual(flat.parseRelay(flat.relayLine(f)), { radius: 16, cx: -7, cz: 12, feet: 65, level: 64, by: 'Owner_1' })
