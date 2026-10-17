@@ -191,7 +191,6 @@ function tableFor(bot, ctx) {
   let ref = null
   let at = null
   let fallback = null
-  let digCell = null // gfgx: a solid neighbour to dig free when no cell is open
   const castleSpot = castleTableSpot(bot, ctx, bp, skip)
   if (castleSpot) {
     const k = `${castleSpot.at.x},${castleSpot.at.y},${castleSpot.at.z}`
@@ -227,8 +226,8 @@ function tableFor(bot, ctx) {
     // not an occupied one — in the woods all four neighbours are flora and
     // the strict air check failed every pick with the table in the pack.
     // cave_air/void_air are air-likes.
-    const occupied = cell && cell.name && cell.name !== 'air' && cell.name !== 'cave_air' && cell.name !== 'void_air' &&
-        !PLACE_OVER.has(cell.name)
+    if (cell && cell.name && cell.name !== 'air' && cell.name !== 'cave_air' && cell.name !== 'void_air' &&
+        !PLACE_OVER.has(cell.name)) continue
     // Bedroom cells are never table spots (idkcraft-4nx: a roadside table on
     // B-foot blocked the bed, which fails loud by design). Reads the
     // bedfacts leaf (oqul.13); unreadable reads as placeable.
@@ -238,13 +237,6 @@ function tableFor(bot, ctx) {
       // doorway left the house doorless).
       if (require('./build').isPlanCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
     } catch (_) { /* untestable home: place as before */ }
-    if (occupied) {
-      // idkcraft-gfgx: a body encased in stone (a castlefetch shaft) had no
-      // open neighbour and failed no-table-ref with the table in the pack.
-      // Remember the first plain solid cell to dig free, last resort only.
-      if (!digCell && !tried && digFree(bot, ctx, cell, bx + dx, by, bz + dz)) digCell = { cell, below }
-      continue
-    }
     if (tried) {
       if (!fallback) fallback = below
       continue
@@ -252,13 +244,6 @@ function tableFor(bot, ctx) {
     ref = below
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)
     break
-  }
-  // A fresh dig cell beats re-burning a refused one (gfgx review minor).
-  let dig = null
-  if (!ref && digCell) {
-    dig = digCell.cell
-    ref = digCell.below
-    at = new Vec3(ref.position.x, ref.position.y + 1, ref.position.z)
   }
   if (!ref && fallback) {
     ref = fallback
@@ -268,18 +253,6 @@ function tableFor(bot, ctx) {
   // mineflayer places the HELD item: hold the table or a planks block lands
   // (and reads truthy) where the table should be.
   const run = async () => {
-    if (dig) {
-      try {
-        const tool = bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function' && bot.pathfinder.bestHarvestTool(dig)
-        if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
-      } catch (_) { /* bare hand digs too, slower */ }
-      try {
-        await bot.dig(dig)
-      } catch (err) {
-        try { skip.add(`${at.x},${at.y},${at.z}`) } catch (_) { /* skip best-effort */ }
-        throw new Error(`table-dig: ${(err && err.message) || err}`)
-      }
-    }
     if (typeof bot.equip === 'function') {
       try {
         await bot.equip(tableItem, 'hand')
@@ -326,27 +299,10 @@ function tableFor(bot, ctx) {
   // A hung placement must not wedge the menu (see the in-flight stickiness
   // in decide()): time out into the loud failure instead.
   const timeout = new Promise((_, reject) => {
-    const t = setTimeout(() => reject(new Error('table-timeout')), dig ? 45000 : 15000) // a dig: bridge guard 35 s
+    const t = setTimeout(() => reject(new Error('table-timeout')), 15000)
     if (t && typeof t.unref === 'function') t.unref()
   })
   return Promise.race([run(), timeout])
-}
-
-// gfgx: a neighbour worth digging for the table — a full plain block with
-// no liquid or gravity block above to pour in, never a station/container
-// (the plan/bedroom cells are already skipped by the caller), and only what
-// the shared dig guard allows (laid castle, yard, house footprint, review 01).
-const DIG_NEVER = /chest|barrel|shulker|_bed$|furnace|smoker|crafting_table|door|bedrock|obsidian|spawner|lava|water|_planks/
-const DIG_ABOVE_NEVER = /water|lava|sand|gravel|concrete_powder/
-function digFree(bot, ctx, cell, x, y, z) {
-  try {
-    if (typeof bot.dig !== 'function' || !cell.position) return false
-    if (cell.boundingBox != null && cell.boundingBox !== 'block') return false
-    if (DIG_NEVER.test(cell.name)) return false
-    if (require('./util').denyReason(bot, cell, ctx)) return false
-    const above = bot.blockAt(new Vec3(x, y + 1, z))
-    return !(above && above.name && DIG_ABOVE_NEVER.test(above.name))
-  } catch (_) { return false }
 }
 
 module.exports = { FAR_TABLE, PLACE_OVER, itemsOf, dist3, dayOf, tableFar, castleTableSpot, tableFor }
