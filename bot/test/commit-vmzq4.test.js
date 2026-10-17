@@ -260,7 +260,10 @@ describe('vmzq.4 trace-equivalence with the FSM (old facts-changed rule)', () =>
     let menu = new Set()
     useMenu((n) => menu.has(n))
     const b = mkBot()
-    const ctx = {}
+    // A built home in walking range (neuc.65.3): homeless, shelter fits
+    // every dusk and night whatever the random menu says — the real gate
+    // keeps it feasible there, so the old-rule equivalence needs a house.
+    const ctx = { home: { site: pos(40, 64, 0), built: true, v: 2 } }
     await decide(b, ctx)
     let lastText = ctx.goalText
     let moves = 0

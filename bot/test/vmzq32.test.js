@@ -57,10 +57,10 @@ describe('vmzq.32 homeless castle night', () => {
     }
   })
 
-  it('no castle, parked or complete: the homeless night is unchanged', async () => {
+  it('no castle, parked or complete: the homeless night shelters too (neuc.65.3)', async () => {
     for (const castle of [null, { ...active(), parked: true }, { ...active(), phase: 'complete' }]) {
       const r = await quiet(() => goal.decide(bot(15000), ctxWith(castle)))
-      assert.notEqual(r.action, 'shelter', JSON.stringify(castle))
+      assert.equal(r.action, 'shelter', JSON.stringify(castle))
     }
   })
 

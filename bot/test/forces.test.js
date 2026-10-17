@@ -84,7 +84,7 @@ describe('FORCES table (vmzq.62)', () => {
 
   it('night-near: a night shelter that no longer fits fires; day or another step does not', () => {
     const near = { home: { site: pos(2, 64, 0), door: pos(2, 64, 0), built: true } }
-    assert.equal(fire('night-near', { prev: 'shelter', facts: { time: 'night' }, ctx: near }), true)
+    assert.equal(fire('night-near', { prev: 'shelter', facts: { time: 'night', home: 'built' }, ctx: near }), true)
     assert.equal(fire('night-near', { prev: 'shelter', facts: { time: 'day' }, ctx: near }), false)
     assert.equal(fire('night-near', { prev: 'gohome', facts: { time: 'night' }, ctx: near }), false)
   })

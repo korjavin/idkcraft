@@ -105,7 +105,9 @@ const MENU = {
     // Dusk dig-up (vmzq.50): underground and displaced at dusk the climb
     // runs first — sheltering in a cave pillars head-blocked and digs
     // undiggable (run8 16:13). Night keeps shelter (vmzq.48 owns it).
-    feasible: (facts, bot, ctx) => (facts.home === 'built' || castleSiteNight(bot, ctx)) && facts.inside === 'no' && shelterFits(facts, bot, ctx) && !duskClimbOut(facts, bot, ctx),
+    // Homeless night (neuc.65.3): no built home (none or an unbuilt site)
+    // and no castle residence — the home gate is shelterFits' now.
+    feasible: (facts, bot, ctx) => facts.inside === 'no' && shelterFits(facts, bot, ctx) && !duskClimbOut(facts, bot, ctx),
     chat: () => 'on my own: sheltering here till dawn',
     verb: 'sheltering till dawn',
   },
@@ -1002,6 +1004,12 @@ function castleBandHome(bot, ctx) {
 function shelterFits(facts, bot, ctx) {
   const t = facts && facts.time
   if (castleBandHome(bot, ctx)) return false // g0z.57: never at the fence ring
+  // Homeless night (neuc.65.3, family A): with home none or an unbuilt
+  // site (facts.home reads 'built' when a castle covers the night, g0z.59)
+  // gohome/stay cannot run, and the old built gate left NO night step —
+  // prod 10-14 worked the dark at world spawn and died every 30-90 s.
+  // Shelter in place from dusk; dawn ends it (the step's own day done).
+  if ((t === 'dusk' || t === 'night') && facts.home !== 'built') return true
   return (t === 'night' && shelterOwns(bot, ctx)) || (t === 'dusk' && castleNight(bot, ctx)) ||
     ((t === 'dusk' || t === 'night') && castleSiteNight(bot, ctx))
 }
@@ -1591,7 +1599,7 @@ const STEP_CRITERIA = {
   sitebed: 'time is day or dusk and the pack holds a bed while a castle is active: place the bed outside the site and set the spawn',
   equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
-  shelter: 'time is night (or dusk at the far castle) and home is built and inside is no: stop marching and wait where you are till dawn',
+  shelter: 'time is night (or dusk at the far castle, or dusk with home not built) and inside is no: stop marching and wait where you are till dawn',
   gocastle: 'time is day and the castle site is far: walk back to the castle site on the surface so laying can resume',
   deliver: 'haul is waiting: carry it to the player',
   stockpile: 'chest is no, surplus is yes, or handover is waiting: place the home chest (or a site chest) and bank the surplus',
@@ -1718,9 +1726,8 @@ function stepWhy(name, facts, bot, ctx, text) {
     case 'shelter':
       if (facts.time === 'day') return 'shelter: daytime'
       if (duskClimbOut(facts, bot, ctx)) return 'shelter: climbing out before sheltering'
-      if (facts.time === 'dusk') return 'shelter: dusk marches home'
-      if (facts.home !== 'built') return 'shelter: home not built'
       if (facts.inside !== 'no') return 'shelter: already inside'
+      if (facts.time === 'dusk') return 'shelter: dusk marches home'
       if (castleBandHome(bot, ctx)) return 'shelter: not by the castle, going in'
       return 'shelter: home is close'
     case 'gocastle':
