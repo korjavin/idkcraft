@@ -874,11 +874,22 @@ adapter constructor, `handleBuildEvent` in the event router).
 | `baritone.build` | `{name, origin:{x,y,z}, cells:[{dx,dy,dz,block}], props?, forbid?}` — `block` a plain (optionally `minecraft:`-prefixed) name, `props` property-name→serialized-value overrides, `forbid` block names guarded while building | `{ok,cells,missing}` at once; progress and the end are notifications | `bot.buildCells(name, origin, cells, {forbid})` → `Promise<{placed,missing}>` |
 
 Notifications: `baritone.event {kind:'build', name, placed, missing,
-active}` every second while a build is live, plus a final `active:false`
+active, paused, reason?}` every second while a build is live, plus a final `active:false`
 when the builder goes idle — done, out of world, or cancelled (`#stop`
 cancels the builder like any other process; the mod's tick reports the
 idle, so no separate stop verb exists and `bot.stopBuild()` is that `#stop`
 spelling).
+
+`paused` (idkcraft-pnxy): Baritone's `IBuilderProcess#isPaused()` — the
+builder pauses itself ("Unable to do it. Pausing.") while `isActive()`
+stays true, so without it a paused build reads as a slow one. Set once the
+builder has read paused for 2 ticks (its chat lines land a tick late);
+`reason` then is `missing:<id>[,<id>...]` — the ids Baritone's own
+"Missing materials for at least: <n>x Block{minecraft:<id>}" lines named
+in the pausing tick (the mod taps `Settings.logger`, lines still reach
+chat) — or `unable` (paused with no missing line that tick: nothing
+reachable/placeable). `paused:false` and no `reason` otherwise (and on the
+final).
 
 The schematic is sparse (bounds from the cell offsets, only listed cells
 in-schematic); desired states are the block default plus `props`. A desired
@@ -894,7 +905,14 @@ Substitutes ride `buildValidSubstitutes` (accept in place): the schematic
 block is already the held item, so `buildSubstitutes` (build-this-instead)
 would demand a variant nobody holds.
 
-Node: `bot.buildCells` settles on the final event only. No placed growth
+Node: `bot.buildCells` settles on the final event, or at once on the
+first `paused:true` (then `#stop`): `missing:<ids>` resolves `{placed,
+missing}` (starved — Baritone's verdict, whatever the Node mirror reads;
+one `build paused <name> reason=missing:<id> node=<n> mod=<m>` line per id,
+`node` = mirror count and `mod` = a fresh `inventory.get` count over slots
+9-44, `offhand=<k>` when slot 45 holds it), any other reason rejects
+`build-stall` with the stall-site line ending `paused=yes reason=<r>`
+(the watchdog's own stall line ends `paused=no`). No placed growth
 for 90 s with wanted material on hand rejects `build-stall` (a wedged
 builder fails loud); with nothing on hand it resolves `{placed, missing}`
 so the FSM fetches (build's `no-planks`, castle's `failed:no-<kind>`) —

@@ -28,8 +28,10 @@ import net.minecraft.world.level.block.state.properties.Property;
  * {name, origin:{x,y,z}, cells:[{dx,dy,dz,block,props?}], forbid?}} ->
  * {@code {ok, cells, missing}} (the build runs on Baritone's BuilderProcess;
  * progress arrives as notifications). Notifications: {@code baritone.event
- * {kind:'build', name, placed, missing, active}} every second while a build
- * is live, plus a final {@code active:false} when the builder goes idle
+ * {kind:'build', name, placed, missing, active, paused, reason?}} every
+ * second while a build is live ({@code paused:true} + {@code reason}
+ * {@code missing:<id>[,<id>]} or {@code unable} once Baritone has paused
+ * the build — idkcraft-pnxy), plus a final {@code active:false} when the builder goes idle
  * (done, out of world, or cancelled — {@code #stop} cancels the builder
  * like any other process, and the tick below reports it).
  *
@@ -59,10 +61,40 @@ public final class Build {
     /** Ticks between progress notifications (20 = ~1 s). */
     static final int PROGRESS_EVERY_TICKS = 20;
 
+    /** Ticks a builder must read paused before the event says so (its chat lines land a tick late). */
+    static final int PAUSED_SETTLE_TICKS = 2;
+
     private final BridgeServer server;
     /** Live build; client thread only. */
     private Active active;
     private long ticks;
+    /** Every client tick, build or not: the tap's line clock. */
+    private volatile long clock;
+    /** Baritone's pause verdict from its own chat lines (idkcraft-pnxy). */
+    private final BuildPlan.PauseTap pauseTap = new BuildPlan.PauseTap();
+
+    /**
+     * Wraps {@code Settings.logger} (Baritone's chat sink) so the builder's
+     * "Missing materials" / "Unable to do it" lines reach {@link #pauseTap};
+     * forwards every line unchanged. Installed once, left in place.
+     */
+    private final class LogTap implements java.util.function.Consumer<net.minecraft.network.chat.Component> {
+        final java.util.function.Consumer<net.minecraft.network.chat.Component> next;
+
+        LogTap(java.util.function.Consumer<net.minecraft.network.chat.Component> next) {
+            this.next = next;
+        }
+
+        @Override
+        public void accept(net.minecraft.network.chat.Component c) {
+            try {
+                pauseTap.line(c.getString(), clock);
+            } catch (Exception e) {
+                // the tap must never break Baritone's chat
+            }
+            next.accept(c);
+        }
+    }
 
     private static final class Active {
         final Spec spec;
@@ -74,6 +106,7 @@ public final class Build {
         boolean holdsInv = true;
         int lastPlaced;
         int lastMissing;
+        int pausedTicks;
 
         Active(Spec spec, BlockPos origin, CellSchematic schematic,
                 Map<String, List<String>> substitutes, List<Block> savedDisallow) {
@@ -245,7 +278,7 @@ public final class Build {
         // A replaced build ends now with its final event, so no name hangs
         // without one (the adapter settles a build on its own final only).
         if (active != null) {
-            push(active.spec.name, active.lastPlaced, active.lastMissing, false);
+            push(active.spec.name, active.lastPlaced, active.lastMissing, false, null);
             restore(active);
             active = null;
         }
@@ -284,12 +317,16 @@ public final class Build {
             javaSubstitutes.put(blocks.get(e.getKey()), alts);
         }
         settings.buildValidSubstitutes.value = javaSubstitutes;
+        if (!(settings.logger.value instanceof LogTap)) {
+            settings.logger.value = new LogTap(settings.logger.value);
+        }
+        pauseTap.reset();
         baritone.getBuilderProcess().build(spec.name, schematic, origin);
         active = new Active(spec, origin, schematic, substitutes, savedDisallow);
         int missing = countNow(spec, substitutes);
         active.lastPlaced = spec.cells.size() - missing;
         active.lastMissing = missing;
-        push(spec.name, active.lastPlaced, missing, true);
+        push(spec.name, active.lastPlaced, missing, true, null);
         JsonObject res = new JsonObject();
         res.addProperty("ok", true);
         res.addProperty("cells", spec.cells.size());
@@ -334,18 +371,24 @@ public final class Build {
         return spec.cells.size() - BuildPlan.countPlaced(spec.cells, currentByKey(spec), substitutes);
     }
 
-    private void push(String name, int placed, int missing, boolean live) {
+    /** {@code reason} non-null = the builder is paused (idkcraft-pnxy): paused:true + reason. */
+    private void push(String name, int placed, int missing, boolean live, String reason) {
         JsonObject note = new JsonObject();
         note.addProperty("kind", "build");
         note.addProperty("name", name);
         note.addProperty("placed", placed);
         note.addProperty("missing", missing);
         note.addProperty("active", live);
+        note.addProperty("paused", reason != null);
+        if (reason != null) {
+            note.addProperty("reason", reason);
+        }
         server.push("baritone.event", note);
     }
 
     /** Client thread, every post-tick: secondly progress, end when the builder idles. */
     private void tick() {
+        clock++;
         Active a = active;
         if (a == null) {
             return;
@@ -353,18 +396,25 @@ public final class Build {
         Minecraft client = Minecraft.getInstance();
         boolean inWorld = client != null && client.player != null && client.level != null;
         boolean building = false;
+        boolean paused = false;
         try {
-            building = inWorld
-                    && BaritoneAPI.getProvider().getPrimaryBaritone().getBuilderProcess().isActive();
+            baritone.api.process.IBuilderProcess builder =
+                    BaritoneAPI.getProvider().getPrimaryBaritone().getBuilderProcess();
+            building = inWorld && builder.isActive();
+            // isActive() stays true while Baritone has PAUSED the build
+            // (missing materials / nothing reachable): without this a
+            // paused builder reads as a slow one for the adapter's 90 s.
+            paused = building && builder.isPaused();
         } catch (Exception e) {
             building = false;
         }
+        a.pausedTicks = paused ? a.pausedTicks + 1 : 0;
         if (!building) {
             // Done, out of world, or #stop took the builder: the final event
             // settles the adapter's build (a quiet world still counts what
             // stands, so a re-issue repairs the rest).
             int missing = inWorld ? countNow(a.spec, a.substitutes) : a.lastMissing;
-            push(a.spec.name, a.spec.cells.size() - missing, missing, false);
+            push(a.spec.name, a.spec.cells.size() - missing, missing, false, null);
             restore(a);
             active = null;
             return;
@@ -376,6 +426,10 @@ public final class Build {
         int missing = countNow(a.spec, a.substitutes);
         a.lastPlaced = a.spec.cells.size() - missing;
         a.lastMissing = missing;
-        push(a.spec.name, a.lastPlaced, missing, true);
+        String reason = null;
+        if (a.pausedTicks >= PAUSED_SETTLE_TICKS) {
+            reason = pauseTap.verdict() != null ? pauseTap.verdict() : "unable";
+        }
+        push(a.spec.name, a.lastPlaced, missing, true, reason);
     }
 }

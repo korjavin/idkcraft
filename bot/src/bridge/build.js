@@ -4,12 +4,17 @@
 // cells = [{dx,dy,dz,block}] offsets from origin {x,y,z} with plain block
 // names ('oak_planks'). The mod owns approach, scaffolding and re-lay; the
 // adapter only tracks progress/end through baritone.event {kind:'build'}:
-// {kind:'build', name, placed, missing, active} (secondly while live, final
-// active:false when the builder idles — done, out of world, or #stop).
+// {kind:'build', name, placed, missing, active, paused, reason?} (secondly
+// while live, final active:false when the builder idles — done, out of
+// world, or #stop).
 //
 // End semantics, mirroring today's place flow:
-// - material exhausted: Baritone pauses the build when it holds none of the
-//   next block, so no placed growth ever comes. The watchdog below resolves
+// - paused (idkcraft-pnxy): Baritone pauses the build and says why; the mod
+//   relays it as paused:true + reason. missing:<id> resolves starved at
+//   once (Baritone's verdict, whatever the node mirror reads — the mismatch
+//   is logged with both counts); any other reason rejects build-stall at
+//   once. No 90 s wait for either.
+// - material exhausted with no pause seen: the watchdog below resolves
 //   {placed, missing} instead of hanging, and the FSM goes to craft/gather
 //   as today (build's no-planks, castle's failed:no-<kind>).
 // - stall: no placed growth for STALL_MS with wanted material on hand
@@ -188,6 +193,10 @@ function handleBuildEvent(bot, method, params) {
     st.grownAt = Date.now()
   }
   if (typeof params.missing === 'number') st.missing = params.missing
+  if (params.paused === true && params.active !== false && !st.preempted) {
+    paused(bot, st, typeof params.reason === 'string' ? params.reason : 'unable')
+    return true
+  }
   if (params.active === false) {
     if (st.preempted) st.settle(st.reject, new Error('build-preempted'))
     else st.settle(st.resolve, { placed: st.placed, missing: st.missing })
@@ -195,12 +204,8 @@ function handleBuildEvent(bot, method, params) {
   return true
 }
 
-// No placed growth for STALL_MS: wanted material on hand means the builder
-// is wedged (reject); without it the build is starved (resolve missing so
-// the FSM fetches). Missing re-reads from the world, never from the last
-// event alone.
-function watch(bot, st) {
-  if (st.settled || Date.now() - st.grownAt < (st.stallMs || STALL_MS)) return
+// Re-read missing from the world into st; null when unreadable.
+function refresh(bot, st) {
   let missing = null
   try {
     missing = missingCells(bot, st.origin, st.cells, st.isSame)
@@ -211,6 +216,78 @@ function watch(bot, st) {
     st.missing = missing.length
     st.placed = st.cells.length - missing.length
   }
+  return missing
+}
+
+// Stall-site line (r185): absolute coords the world still shows unplaced,
+// capped so one wedge cannot flood the log; then reject build-stall.
+function stall(st, missing, tail) {
+  try {
+    const show = (missing || st.cells).slice(0, 10)
+      .map((c) => `${st.origin.x + c.dx},${st.origin.y + c.dy},${st.origin.z + c.dz}:${c.block}`)
+      .join(' ')
+    console.log(`build-stall ${st.name}: ${st.missing} cells unplaced e.g. ${show} ${tail}`)
+  } catch (_) { /* stall-site line best-effort */ }
+  st.settle(st.reject, new Error('build-stall'))
+}
+
+function release(bot) {
+  try {
+    if (bot.transport && typeof bot.transport.call === 'function') {
+      bot.transport.call('baritone.cmd', { command: '#stop' }).catch(() => { /* release best-effort */ })
+    }
+  } catch (_) { /* release best-effort */ }
+}
+
+function countExact(items, name, lo, hi) {
+  let n = 0
+  for (const it of items || []) {
+    if (!it || typeof it.slot !== 'number' || it.slot < lo || it.slot > hi) continue
+    if (String(it.name).replace(/^minecraft:/, '') === name) n += it.count | 0
+  }
+  return n
+}
+
+// Baritone paused the build (idkcraft-pnxy): its verdict settles at once.
+// missing:<ids> -> starved resolve (the FSM re-batches/fetches) plus one
+// mismatch line per id: node = this mirror's exact count (slots 9-44),
+// mod = the live inventory.get count over the same slots Baritone reads
+// (offhand 45 shown apart: approxPlaceable never looks there). Anything
+// else (unable: nothing reachable) -> build-stall with the stall-site line.
+function paused(bot, st, reason) {
+  const missing = refresh(bot, st)
+  if (reason.startsWith('missing:')) {
+    const ids = reason.slice('missing:'.length).split(',').filter(Boolean)
+    let node = {}
+    try {
+      const items = (bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()) || []
+      for (const id of ids) node[id] = countExact(items, id, 9, 44)
+    } catch (_) { node = {} }
+    st.settle(st.resolve, { placed: st.placed, missing: st.missing })
+    const say = (slots) => {
+      for (const id of ids) {
+        const mod = slots ? countExact(slots, id, 9, 44) : '?'
+        const off = slots ? countExact(slots, id, 45, 45) : 0
+        console.log(`build paused ${st.name} reason=missing:${id} node=${node[id] != null ? node[id] : '?'} mod=${mod}${off ? ` offhand=${off}` : ''}`)
+      }
+    }
+    try {
+      Promise.resolve(bot.transport.call('inventory.get', {}))
+        .then((inv) => say(inv && Array.isArray(inv.slots) ? inv.slots : null), () => say(null))
+    } catch (_) { say(null) }
+  } else {
+    stall(st, missing, `paused=yes reason=${reason}`)
+  }
+  release(bot)
+}
+
+// No placed growth for STALL_MS: wanted material on hand means the builder
+// is wedged (reject); without it the build is starved (resolve missing so
+// the FSM fetches). Missing re-reads from the world, never from the last
+// event alone.
+function watch(bot, st) {
+  if (st.settled || Date.now() - st.grownAt < (st.stallMs || STALL_MS)) return
+  const missing = refresh(bot, st)
   // Starvation is EXACT-name (round-2 core-5): the builder can only place
   // what it holds — a valid substitute counts a standing cell as done
   // (missingCells), but laying the next one needs the named item itself.
@@ -227,24 +304,9 @@ function watch(bot, st) {
   // Settle first, then stop the builder: the watchdog's verdict owns the
   // promise, and a still-running (paused or wedged) builder must never
   // survive untracked (core-2) — the late final finds no live build.
-  if (starved) {
-    st.settle(st.resolve, { placed: st.placed, missing: st.missing })
-  } else {
-    // Stall-site line (r185): absolute coords the world still shows
-    // unplaced, capped so one wedge cannot flood the log.
-    try {
-      const show = (missing || st.cells).slice(0, 10)
-        .map((c) => `${st.origin.x + c.dx},${st.origin.y + c.dy},${st.origin.z + c.dz}:${c.block}`)
-        .join(' ')
-      console.log(`build-stall ${st.name}: ${st.missing} cells unplaced e.g. ${show}`)
-    } catch (_) { /* stall-site line best-effort */ }
-    st.settle(st.reject, new Error('build-stall'))
-  }
-  try {
-    if (bot.transport && typeof bot.transport.call === 'function') {
-      bot.transport.call('baritone.cmd', { command: '#stop' }).catch(() => { /* release best-effort */ })
-    }
-  } catch (_) { /* release best-effort */ }
+  if (starved) st.settle(st.resolve, { placed: st.placed, missing: st.missing })
+  else stall(st, missing, 'paused=no')
+  release(bot)
 }
 
 module.exports = { installBuild, installBuildStop, handleBuildEvent, missingCells, onHand, defaultSame, STALL_MS, WATCH_MS }

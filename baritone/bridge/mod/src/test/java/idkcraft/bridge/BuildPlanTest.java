@@ -148,4 +148,25 @@ public class BuildPlanTest {
         params.add("forbid", forbid);
         assertEquals(List.of("oak_planks"), BuildPlan.parse(params).forbid);
     }
+
+    @Test
+    public void pauseTapNamesMissingBlocksOfThePausingTick() {
+        BuildPlan.PauseTap tap = new BuildPlan.PauseTap();
+        // Tick 1: assemble logged a missing list but found a goal (no pause).
+        tap.line("[Baritone] Missing materials for at least:", 1);
+        tap.line("[Baritone] 3x Block{minecraft:dirt}", 1);
+        assertEquals(null, tap.verdict());
+        // Tick 5: the rig's real pause shape (body log, 2026-10-16).
+        tap.line("[Baritone] Missing materials for at least:", 5);
+        tap.line("[Baritone] 95x Block{minecraft:granite}", 5);
+        tap.line("[Baritone] 2x Block{minecraft:oak_stairs}[facing=north,half=bottom]", 5);
+        tap.line("[Baritone] Unable to do it. Pausing. resume to resume, cancel to cancel", 5);
+        assertEquals("missing:granite,oak_stairs", tap.verdict());
+        // Tick 9: a pause with no missing line that tick is reach/path.
+        tap.line("[Baritone] 3x Block{minecraft:dirt}", 8);
+        tap.line("[Baritone] Unable to do it. Pausing. resume to resume, cancel to cancel", 9);
+        assertEquals("unable", tap.verdict());
+        tap.reset();
+        assertEquals(null, tap.verdict());
+    }
 }
