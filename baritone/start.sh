@@ -11,10 +11,10 @@ cd /headlessmc
 if [ $# -gt 0 ]; then
   exec java -jar headlessmc-launcher-wrapper.jar "$@"
 fi
-HMC_PROPS="-Dhmc.jvmargs=-Dhmc.jline.dumb=true" # no TTY: the in-game JLine reader crashes init unless dumb
+HMC_PROPS= # the jvmargs -D is its own quoted word at the launch below (it carries spaces with BODY_JVM_ARGS)
 HMC_OFFLINE=
 if [ "${BARITONE_OFFLINE:-}" = 1 ] && [ -n "${BOT:-}" ]; then # offline worker (owner Q2): the rig opts in per-run, prod via compose env; an empty name falls through to idle
-  HMC_PROPS="$HMC_PROPS -Dhmc.offline.username=$BOT"; HMC_OFFLINE=-offline
+  HMC_PROPS="-Dhmc.offline.username=$BOT"; HMC_OFFLINE=-offline
 elif [ ! -s /headlessmc/HeadlessMC/auth/.accounts.json ]; then
   if [ "${BARITONE_OFFLINE:-}" = 1 ]; then
     echo "BARITONE_OFFLINE=1 with an empty worker name: idling, see baritone/README.md"
@@ -49,7 +49,10 @@ trap 'kill $CLIENT $SOCAT 2>/dev/null' TERM INT
 if [ "${BARITONE_API:-}" = 1 ]; then
   cp /headlessmc/baritone-api.jar HeadlessMC/run/mods/baritone.jar
 fi
-java $HMC_PROPS -jar headlessmc-launcher-wrapper.jar \
+# Game JVM args: no TTY, so the in-game JLine reader crashes init unless dumb.
+# idkcraft-neuc.67: BODY_JVM_ARGS (compose body2) appends the body's heap/GC
+# flags; unset (the worker, the old body) = the same single arg as before.
+java "-Dhmc.jvmargs=-Dhmc.jline.dumb=true${BODY_JVM_ARGS:+ $BODY_JVM_ARGS}" $HMC_PROPS -jar headlessmc-launcher-wrapper.jar \
   --command launch fabric-loader-0.19.5-26.1.2 -lwjgl $HMC_OFFLINE < /tmp/console &
 CLIENT=$!
 wait $CLIENT

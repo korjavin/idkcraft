@@ -294,6 +294,8 @@ services:
       # can neither connect nor join (idkcraft-neuc.19). Worker untouched.
       BARITONE_API: "1"
       BOT: ${BOT2_USERNAME:-}
+      # idkcraft-neuc.67: extra game-JVM args (heap/GC), appended by start.sh.
+      BODY_JVM_ARGS: ${BODY_JVM_ARGS:-}
     logging:
       driver: json-file
       options:
