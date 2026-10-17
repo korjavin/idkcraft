@@ -1051,7 +1051,7 @@ in this repo.
 deaths by killer (mc log), then from the bot's `death health=` lines the time
 word, step, kitless share (`sword=0`), share within `NEAR` (60) blocks of
 spawn and the death loop (death within `LOOP_S` (300) s of a respawn at
-world spawn; the measured `respawned at` line wins over the `respawn at`
+world spawn, `SPAWN_R` (12) blocks per axis; the measured `respawned at` line wins over the `respawn at`
 claim). Swarm names (`SWARM_PREFIX`, default `IdkSwarm`) fold into one
 `swarm` row, phantoms included. `FROM`/`TO` bound the days; the closing
 `summary` lines are what `deaths-baseline.json` records. Offline: the

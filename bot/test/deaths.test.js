@@ -19,7 +19,16 @@ const DUMP = [
   '2026-10-17 10:07:00 IdkSwarm12 was slain by Phantom whilst trying to escape Zombie',
   '2026-10-17 10:08:00 [Not Secure] <IdkBot> next: gathering (goal-fsm)',
   '2026-10-17 10:09:00 IdkBot left the game',
-  '2026-10-18 01:00:00 IdkBot drowned',
+  '2026-10-19 01:00:00 IdkBot drowned',
+  // v2: the claim line sorts after its same-second death; the measured
+  // 'respawned at' (scattered 9 blocks per axis) overrides the bed claim.
+  '2026-10-17 10:10:00 IdkBotV2 respawn at 50 64 50 (bed)',
+  '2026-10-17 10:10:00 IdkBotV2 death health=0 hostiles=0 at 300 64 300',
+  '2026-10-17 10:10:00 IdkBotV2 was doomed to fall',
+  '2026-10-17 10:10:02 IdkBotV2 respawned at 9 70 25',
+  '2026-10-17 10:12:00 IdkBotV2 fell off a ladder',
+  '2026-10-17 10:12:00 IdkBotV2 death health=0 hostiles=0 at 5 70 20',
+  '2026-10-17 10:13:00 UUID of player IdkBotV2 is 0000',
 ].join('\n') + '\n'
 
 describe('deaths.sh', () => {
@@ -33,7 +42,9 @@ describe('deaths.sh', () => {
     assert.match(out, /^ {2}kitless=1\/2 near_spawn=2\/3 loop=1\/3$/m)
     assert.match(out, /^swarm 2026-10-17 deaths=2 lines=0$/m)
     assert.match(out, /^ {2}killer phantom:2$/m)
-    assert.match(out, /^summary IdkBot days=2 deaths=4 perDay=2\.0 /m)
+    assert.match(out, /^IdkBotV2 2026-10-17 deaths=2 lines=2\n {2}killer fell:2\n.*\n.*\n {2}kitless=0\/0 near_spawn=1\/2 loop=1\/2$/m)
+    // perDay over the calendar span 10-17..10-19 (the empty 10-18 counts).
+    assert.match(out, /^summary IdkBot days=3 deaths=4 perDay=1\.3 /m)
     assert.match(out, /^summary swarm days=1 deaths=2 perDay=2\.0 topKillers=phantom:2 /m)
     assert.ok(!/next:|left/.test(out), out)
   })

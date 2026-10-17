@@ -8,7 +8,9 @@
 #   bot: 2026-10-17 11:47:20 IdkBot death health=0 hostiles=1 at -51 71 -225 nearest=skeleton 2.5 time=night ...
 #        2026-10-17 11:47:20 IdkBot respawn at 0 70 16 [(bed)] / ... respawned at 0 70 16
 # Anything else is skipped. How to pull the dumps: README "Deaths per day".
-# Env: SPAWN_XZ (world spawn x z, default "0 16"), SWARM_PREFIX (default
+# Env: SPAWN_XZ (world spawn x z, default "0 16"), SPAWN_R (a respawn within
+#   this many blocks per axis is at world spawn: spawnRadius 10 + margin,
+#   default 12), SWARM_PREFIX (default
 #   IdkSwarm: those names fold into one 'swarm' row), FROM / TO (YYYY-MM-DD,
 #   inclusive day bounds), NEAR (spawn radius, default 60), LOOP_S (death
 #   within this many seconds of a respawn at world spawn, default 300).
@@ -16,8 +18,10 @@
 # dist_spawn then comes from the 'at x y z' position.
 # ponytail: one awk pass over time-sorted lines, no JSON output — the
 # baseline JSON is copied by hand from the 'summary' lines.
-cat "$@" | LC_ALL=C sort -s -k1,2 | awk \
-  -v spawn="${SPAWN_XZ:-0 16}" -v swarm="${SWARM_PREFIX:-IdkSwarm}" \
+# Sorted oldest first; within one second a death sorts before its respawn
+# (k4: death < respawn < respawned), so no death counts against its own.
+cat "$@" | LC_ALL=C sort -s -k1,2 -k4,4 | awk \
+  -v spawn="${SPAWN_XZ:-0 16}" -v spawnr="${SPAWN_R:-12}" -v swarm="${SWARM_PREFIX:-IdkSwarm}" \
   -v from="${FROM:-0000-00-00}" -v to="${TO:-9999-99-99}" \
   -v near="${NEAR:-60}" -v loops="${LOOP_S:-300}" '
 function secs(d, t,   y, m, dd, a) {  # days-from-civil, good for sorting/diffs
@@ -46,10 +50,10 @@ function killer(msg,   k, n) {
     k = tolower(k); gsub(/ /, "_", k); return k
   }
   if (msg ~ /^drowned/) return "drowning"
-  if (msg ~ /^fell from a high place/) return "fell"
+  if (msg ~ /^(fell |was doomed to fall)/) return "fell"
   if (msg ~ /^hit the ground too hard/) return "hit-ground"
   if (msg ~ /^suffocated in a wall/) return "suffocated"
-  if (msg ~ /^(burned to death|went up in flames|tried to swim in lava|starved to death|died|was (killed|squashed|pricked|struck|frozen|fireballed|stung|poked|squished))/) return "other"
+  if (msg ~ /^(burned to death|went up in flames|tried to swim in lava|starved to death|died|walked into fire|discovered the floor was lava|withered away|experienced kinetic energy|froze to death|blew up|was (killed|squashed|pricked|struck|frozen|fireballed|stung|poked|squished|obliterated|skewered|roasted|blown up))/) return "other"
   return ""
 }
 BEGIN { split(spawn, sp, " ") }
@@ -57,9 +61,12 @@ $1 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && $2 ~ /^[0-9][0-9]:[0-9][0
   d = $1; if (d < from || d > to) next
   b = who($3); msg = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ /, "", msg)
   now = secs(d, $2)
+  if (!(b in firstD)) firstD[b] = d
+  lastD[b] = d  # perDay divides by the calendar span, zero-death days included
   if ($4 == "respawn" || $4 == "respawned") {     # respawned (measured) overrides the claim
     if ($5 != "at" || $6 == "unknown") next
-    atSpawn = (msg !~ /\(bed\)/ && (($6 - sp[1]) ^ 2 + ($8 - sp[2]) ^ 2) <= 64)
+    dx = $6 - sp[1]; dz = $8 - sp[2]
+    atSpawn = (msg !~ /\(bed\)/ && dx <= spawnr && -dx <= spawnr && dz <= spawnr && -dz <= spawnr)
     lastAt[$3] = now; lastSpawn[$3] = atSpawn; next
   }
   if ($4 == "death" && $5 ~ /^health=/) {
@@ -82,7 +89,6 @@ $1 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && $2 ~ /^[0-9][0-9]:[0-9][0
   k = killer(msg); if (k == "" || $3 !~ /^[A-Za-z0-9_]+$/) next
   if (!((b, d) in seen)) { seen[b, d] = 1; rows[++nr] = b SUBSEP d }
   if (!(b in bots)) { bots[b] = 1; order[++nb] = b }
-  if (!((b, d) in days)) { days[b, d] = 1; ndays[b]++ }
   bump("D" b SUBSEP d); bump("D" b); bump("X" b SUBSEP d SUBSEP k); bump("x" b SUBSEP k)
 }
 function c(k) { return (k in cnt) ? cnt[k] : 0 }
@@ -97,7 +103,7 @@ END {
     printf "  kitless=%d/%d near_spawn=%d/%d loop=%d/%d\n", c("k" key), c("K" key), c("N" key), L, c("R" key), L
   }
   for (i = 1; i <= nb; i++) {
-    b = order[i]; n = ndays[b] ? ndays[b] : 1
-    printf "summary %s days=%d deaths=%d perDay=%.1f topKillers=%s topSteps=%s kitless=%d/%d loop=%d/%d\n", b, ndays[b], c("D" b), c("D" b) / n, top("x" b SUBSEP, 3), top("s" b SUBSEP, 3), c("k" b), c("K" b), c("R" b), c("L" b)
+    b = order[i]; n = (secs(lastD[b], "00:00:00") - secs(firstD[b], "00:00:00")) / 86400 + 1
+    printf "summary %s days=%d deaths=%d perDay=%.1f topKillers=%s topSteps=%s kitless=%d/%d loop=%d/%d\n", b, n, c("D" b), c("D" b) / n, top("x" b SUBSEP, 3), top("s" b SUBSEP, 3), c("k" b), c("K" b), c("R" b), c("L" b)
   }
 }'
