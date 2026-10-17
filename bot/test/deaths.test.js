@@ -29,6 +29,10 @@ const DUMP = [
   '2026-10-17 10:12:00 IdkBotV2 fell off a ladder',
   '2026-10-17 10:12:00 IdkBotV2 death health=0 hostiles=0 at 5 70 20',
   '2026-10-17 10:13:00 UUID of player IdkBotV2 is 0000',
+  // same second, world-spawn claim listed first: never a loop against itself
+  '2026-10-17 10:20:00 IdkBotX respawn at 0 70 16',
+  '2026-10-17 10:20:00 IdkBotX death health=0 hostiles=0 at 0 70 16',
+  '2026-10-17 10:20:00 IdkBotX was slain by Zombie',
 ].join('\n') + '\n'
 
 describe('deaths.sh', () => {
@@ -43,6 +47,7 @@ describe('deaths.sh', () => {
     assert.match(out, /^swarm 2026-10-17 deaths=2 lines=0$/m)
     assert.match(out, /^ {2}killer phantom:2$/m)
     assert.match(out, /^IdkBotV2 2026-10-17 deaths=2 lines=2\n {2}killer fell:2\n.*\n.*\n {2}kitless=0\/0 near_spawn=1\/2 loop=1\/2$/m)
+    assert.match(out, /^IdkBotX 2026-10-17 deaths=1 lines=1\n(.*\n){3} {2}kitless=0\/0 near_spawn=1\/1 loop=0\/1$/m)
     // perDay over the calendar span 10-17..10-19 (the empty 10-18 counts).
     assert.match(out, /^summary IdkBot days=3 deaths=4 perDay=1\.3 /m)
     assert.match(out, /^summary swarm days=1 deaths=2 perDay=2\.0 topKillers=phantom:2 /m)
