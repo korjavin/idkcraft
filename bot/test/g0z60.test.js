@@ -143,6 +143,41 @@ describe('castlefetch draws the bank chests (g0z.60)', () => {
     assert.notEqual(ctx.lastGoalKey, 'castlefetch-chest:100,64,170')
   })
 
+  // Acceptance 2 (fake harness): the owner's gift banked in the home chest
+  // feeds leg after leg — each leg draws one batch, the castle lays it, the
+  // chest drains, nothing digs, and stockpile never re-banks a batch.
+  for (const body of ['mineflayer', 'baritone']) {
+    it(`${body}: bank-and-lay cycles drain the home chest without a dig`, async () => {
+      process.env.BOT_BODY = body
+      word('stone')
+      const chests = { '100,64,170': [{ name: 'cobblestone', count: 480 }] }
+      const items = [{ name: 'cobblestone', count: 0 }, { name: 'stone_pickaxe', count: 1 }]
+      const bot = makeBot({ items, chests, at: pos(100.5, 64, 171.5) })
+      const ctx = ctxFor()
+      let laid = 0
+      const stock = () => chests['100,64,170'][0].count
+      for (let leg = 0; leg < 5; leg++) {
+        const before = stock()
+        ctx.stepStatus = undefined
+        for (let t = 0; t < 6 && ctx.stepStatus !== 'done'; t++) {
+          fetch(bot, ctx)
+          await settle(); await settle(); await settle()
+        }
+        assert.equal(ctx.stepStatus, 'done', `leg ${leg} ends done`)
+        assert.ok(stock() < before, `leg ${leg} drew from the home chest`)
+        const plan = stockpileMod.depositPlan(bot, ctx)
+        assert.equal(plan.filter((p) => p.name === 'cobblestone').length, 0, `leg ${leg}: nothing banks back`)
+        // The castle lays down to its reserve.
+        const c = items.find((i) => i.name === 'cobblestone')
+        laid += c.count - castleMod.reserveOf('stone')
+        c.count = castleMod.reserveOf('stone')
+      }
+      assert.equal(bot.calls.dig + bot.calls.mine, 0, 'never dug')
+      assert.ok(laid >= 5 * 64, `laid ${laid} from the bank`)
+      assert.ok(stock() < 480 - 5 * 64, 'the home chest drains')
+    })
+  }
+
   it('a full bank batch never walks on to the second bank chest', async () => {
     word('stone')
     const chests = { '100,64,170': [{ name: 'cobblestone', count: 400 }], '101,64,170': [{ name: 'cobblestone', count: 400 }] }
