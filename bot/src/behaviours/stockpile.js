@@ -968,6 +968,14 @@ function distXZ(a, b) {
     return Infinity
   }
 }
+// g0z.60: a bank of castle material ("<n> <name>" lines) re-arms the
+// castlefetch bank draw (its dry marks); coal or dirt leave them alone.
+function rearmCastleDraw(ctx, names) {
+  try {
+    const castle = require('./castle')
+    if (names.some((s) => castle.isMaterial(String(s).split(' ').pop(), ctx.castle))) ctx.castleChestDry = null
+  } catch (_) { /* marks lapse on their own (CHEST_DRY_MS) */ }
+}
 // True when site banking owns the tick: an active castle, the body near
 // the site, and home unavailable (unbuilt) or far (the home leash would
 // veto). Near home the home chest wins (existing storage, tested).
@@ -1361,7 +1369,7 @@ function stockpileSite(bot, ctx, bp) {
       }
       if (banked > 0) {
         ctx.siteChestFullAt = null
-        ctx.castleChestDry = null // g0z.60: fresh bank stock re-arms the castlefetch draw
+        rearmCastleDraw(ctx, names)
         ctx.siteExpanded = false
         clearPackFullHold(ctx)
         // The summary once per session (revmux 01 minor): later banks are
@@ -1679,7 +1687,7 @@ function stockpile(bot, ctx, target, state) {
         ctx.chestFullAt = null
         ctx.chestErrorAt = null
         ctx.homeExpanded = false
-        ctx.castleChestDry = null // g0z.60: fresh bank stock re-arms the castlefetch draw
+        rearmCastleDraw(ctx, names)
         clearPackFullHold(ctx)
         say(bot, `stockpiled ${names.join(', ')}`)
         if (handed.length > 0) {
@@ -1982,4 +1990,5 @@ module.exports.doubleArmed = doubleArmed
 module.exports.homeFallbackViable = homeFallbackViable
 module.exports.siteParked = siteParked
 module.exports.SITE_STORE_RADIUS = SITE_STORE_RADIUS
+module.exports.rearmCastleDraw = rearmCastleDraw
 module.exports.SITE_CHEST_RADIUS = SITE_CHEST_RADIUS

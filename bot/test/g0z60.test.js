@@ -191,6 +191,15 @@ describe('castlefetch draws the bank chests (g0z.60)', () => {
     assert.equal(bot.calls.opens.length, 1)
   })
 
+  it('stockpile re-arms the dry marks only on a castle-material bank', () => {
+    const ctx = ctxFor()
+    ctx.castleChestDry = { 'stone@100,64,170': Date.now() }
+    stockpileMod.rearmCastleDraw(ctx, ['64 coal', '32 dirt'])
+    assert.ok(ctx.castleChestDry, 'coal/dirt keep the mark')
+    stockpileMod.rearmCastleDraw(ctx, ['64 cobblestone'])
+    assert.equal(ctx.castleChestDry, null)
+  })
+
   it('a bank chest past the task radius is never walked to', () => {
     word('stone')
     const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }], chests: { '100,64,170': [{ name: 'cobblestone', count: 400 }] }, at: pos(300.5, 64, 400.5) })
