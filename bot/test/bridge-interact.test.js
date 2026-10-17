@@ -96,7 +96,7 @@ describe('bridge dig/place (idkcraft-neuc.7)', () => {
       assert.equal(bot._lastDig.ticks, 15)
       assert.equal(bot._lastDig.clientMs, 760)
       assert.ok(bot._lastDig.wallMs >= 5)
-      assert.match(logs.find((l) => l.startsWith('dig slow')) || '', /^dig slow dirt expect=1 ticks=15 client=760 wall=\d+$/)
+      assert.match(logs.find((l) => l.startsWith('dig slow')) || '', /^dig slow dirt expect=1 ticks=15 client=760 wall=\d+ rpc=\d+$/)
       logs.length = 0
       const q = bot.dig(bot.blockAt(new Vec3(6, 64, 5)))
       await sleep(1)

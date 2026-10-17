@@ -106,6 +106,7 @@ function installInteract(bot) {
       }, DIG_GUARD_MS)
       if (typeof d.guard.unref === 'function') d.guard.unref()
       bot.transport.call('dig.start', { ...pos, face, look, id: d.id }).then((r) => {
+        d.rpcMs = Date.now() - d.t0 // neuc.67: the start leg of wall (the mod creates the dig before it replies)
         // The mod's tool pick is selection-only: no inventory.update carries it.
         if (r && typeof r.selected === 'number' && r.selected !== bot.quickBarSlot) {
           bot.quickBarSlot = r.selected
@@ -209,13 +210,14 @@ function handleInteractEvent(bot, method, params) {
 // neuc.67: one dig in three numbers — client ticks + client ms (the mod's
 // dig.done) and wall ms here. ticks ~ expected and client ~ wall ~ slow =
 // dropped client ticks (GC/host); ticks >> expected = game-side; client
-// << wall = bridge/ws delivery. bot._lastDig feeds stuck-replay's trace.
+// << wall = bridge/ws delivery (rpc = the dig.start round trip, the rest
+// of the gap is dig.done's way back). bot._lastDig feeds stuck-replay's trace.
 const DIG_SLOW = 1.3
 function digTiming(bot, d, p) {
-  const t = { ticks: p.ticks, clientMs: p.clientMs, wallMs: Date.now() - d.t0, expectMs: Math.round(d.expect) }
+  const t = { ticks: p.ticks, clientMs: p.clientMs, wallMs: Date.now() - d.t0, rpcMs: d.rpcMs, expectMs: Math.round(d.expect) }
   bot._lastDig = t
   if (t.expectMs > 0 && Number.isFinite(t.expectMs) && t.wallMs > DIG_SLOW * t.expectMs) {
-    console.log(`dig slow ${(d.block && d.block.name) || '?'} expect=${t.expectMs} ticks=${t.ticks ?? '?'} client=${t.clientMs ?? '?'} wall=${t.wallMs}`)
+    console.log(`dig slow ${(d.block && d.block.name) || '?'} expect=${t.expectMs} ticks=${t.ticks ?? '?'} client=${t.clientMs ?? '?'} wall=${t.wallMs} rpc=${t.rpcMs ?? '?'}`)
   }
 }
 

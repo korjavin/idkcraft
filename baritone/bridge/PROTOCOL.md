@@ -757,7 +757,9 @@ wrap `bot.placeBlock`; `handleInteractEvent` in the event router).
 | `place.once` | `{x,y,z,face,yaw,pitch,cursor{x,y,z},sneak}` — x,y,z = the TARGET cell, `face` = the clicked face of the reference (ref = target − face); a grounded hitbox overlapping the target cell is first stepped clear by ≤ 0.9 (shorter axis, else the other; standing in the target column included) onto a collision-free stand with a floor under it and no lava/fire (+120 ms settle; airborne = no shift) — Baritone stops anywhere in a block, mineflayer centres | `{ok,result}` (vanilla InteractionResult) | `bot.placeBlock(ref, faceVector)` |
 
 Notifications: `dig.progress {x,y,z,progress}` (0..1 on each destroy-stage
-change), `dig.done {x,y,z,broke,stateId}` (the cell's new state),
+change), `dig.done {x,y,z,broke,stateId,ticks,clientMs}` (the cell's
+new state; neuc.67: `ticks` = client ticks the dig was driven, `clientMs` =
+client wall ms from `dig.start`, both 0 for an already-air cell),
 `dig.abort {x,y,z,reason}` with reason `moved` (out of interaction
 reach) | `changed` (the block became something else, or a new
 `dig.start` replaced it) | `timeout` (30 s) | `unreachable` (no player /
@@ -781,7 +783,12 @@ undefined or null block`, `dig time for <name> is Infinity`), sets
 cell through the chunk cache and emitting `blockUpdate` + 
 `diggingCompleted`), rejects `Digging aborted (<reason>)` on the mod's
 abort and `Digging aborted` on `stopDigging()` (emitting
-`diggingAborted`); a 35 s guard covers a lost notification. Baritone is
+`diggingAborted`); a 35 s guard covers a lost notification. neuc.67:
+a dig whose Node wall time passes 1.3x mineflayer's `digTime` logs
+`dig slow <block> expect=<ms> ticks=<n> client=<ms> wall=<ms> rpc=<ms>`
+(rpc = the `dig.start` round trip; ticks ~
+expected with client ~ wall = dropped client ticks, GC/host; ticks >>
+expected = game side; client << wall = ws delivery). Baritone is
 paused for the whole dig while pathing (`withBaritonePaused`).
 `bot.placeBlock` looks at the face centre (mineflayer's point; the mod
 sets the rotation and clicks in one client-thread task), then settles on
@@ -924,3 +931,14 @@ builder fails loud); with nothing on hand it resolves `{placed, missing}`
 so the FSM fetches (build's `no-planks`, castle's `failed:no-<kind>`) —
 Baritone pauses a starved build instead of ending it. A second build while
 one runs rejects `build-busy`.
+
+## body.stats (idkcraft-neuc.67)
+
+Mod: `Stats.java`, a client tick hook; Node: logged by the adapter
+(`bot/src/bridge/index.js`) as one `body.stats ...` line. Pushed once a
+minute while in world: `{heapUsedMb,heapMaxMb,gcCount,gcMs,maxTickGapMs,
+maxPushMs,chunks,entities}` — `gcCount`/`gcMs` = collections in the window
+(all GarbageCollectorMXBeans), `maxTickGapMs` = the longest wall gap between
+two client post-ticks in it (50 = smooth), `maxPushMs` = the slowest
+blocking ws write (`WsServer.push`) in it. Observation only. The game JVM's
+extra args come from `BODY_JVM_ARGS` (start.sh, compose body2).
