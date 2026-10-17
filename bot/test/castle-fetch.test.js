@@ -551,6 +551,13 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     assert.equal(ctx.stepStatus, undefined, 'no failed:castlefetch-no-stairs hold')
     assert.ok(ctx.castleFetch && ctx.castleFetch.craftOut, 'the leg runs on as a dig leg')
     assert.deepEqual(mined, [16], 'one stone batch for the stairs shortfall')
+    // The next leg (the batch landed 'done'): no second batch until a stairs craft lands.
+    ctx.castleFetch = null
+    ctx.castleFetchInFlight = false
+    ctx.castleFetchMine = false
+    for (let i = 0; i < 5 && !ctx.stepStatus; i++) fetch(bot, ctx)
+    assert.deepEqual(mined, [16], 'one batch per craft success')
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stairs', 'a table refused for good reaches the hold')
   })
 
   it('v1: a stairs craft still out after the retry fails as before (idkcraft-8njf)', () => {
