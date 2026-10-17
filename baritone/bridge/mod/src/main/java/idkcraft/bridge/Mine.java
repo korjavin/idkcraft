@@ -163,7 +163,10 @@ public final class Mine {
         // speed, times out on every target and the leg ends noPath/futile
         // at +0. allowInventory on lets InventoryBehavior swap the best
         // pick into the hotbar (the pwoi Build.java precedent); mine-scoped.
-        allowInvSnap = settings.allowInventory.value;
+        // Snapshot once: a re-armed mine must not capture its own true.
+        if (allowInvSnap == null) {
+            allowInvSnap = settings.allowInventory.value;
+        }
         settings.allowInventory.value = true;
     }
 
