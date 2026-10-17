@@ -43,7 +43,7 @@ import net.minecraft.world.level.block.state.properties.Property;
  * {@code *_fence} / {@code *_log} like craftNames): a desired
  * {@code oak_planks} counts any laid {@code *_planks} as placed, same for
  * fences and logs. Settings at build start: {@code buildIgnoreExisting
- * false}, {@code buildInLayers false}, {@code okIfAir} empty,
+ * false}, {@code buildInLayers true} + {@code skipFailedLayers true}, {@code okIfAir} empty,
  * {@code allowInventory true} (the builder places from the hotbar only;
  * restored on end); {@code forbid} block names join {@code blocksToDisallowBreaking} for the
  * build's duration (restored on end) so the pathfinder never eats the fresh
@@ -284,7 +284,14 @@ public final class Build {
         }
         Settings settings = BaritoneAPI.getSettings();
         settings.buildIgnoreExisting.value = false;
-        settings.buildInLayers.value = false;
+        // idkcraft-pnxy H2: a castle batch is a whole tower (dy 0..13).
+        // Unlayered, Baritone chased the top course from the ground and
+        // re-pathed for 90 s (rig: 2 cobblestone cells at dy 8-9, no pause,
+        // build-stall). Layered = bottom-up courses inside the batch, each
+        // standing on the one below; an unconstructable layer is skipped
+        // (its cells come back missing on the final) instead of pausing.
+        settings.buildInLayers.value = true;
+        settings.skipFailedLayers.value = true;
         settings.okIfAir.value = new ArrayList<>();
         List<Block> savedDisallow = new ArrayList<>(settings.blocksToDisallowBreaking.value);
         // idkcraft-pwoi: BuilderProcess places from the hotbar only; with

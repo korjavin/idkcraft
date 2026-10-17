@@ -897,7 +897,10 @@ in-schematic); desired states are the block default plus `props`. A desired
 `*_log` — the FSM's wood-variant rule, so castle kinds lay whatever the
 quarry yielded). Unknown blocks, bad props, duplicate cells or > 4096
 cells refuse the call (`-32602`). Settings at build start:
-`buildIgnoreExisting false`, `buildInLayers false`, `okIfAir` empty,
+`buildIgnoreExisting false`, `buildInLayers true` + `skipFailedLayers true`
+(bottom-up courses inside a batch — a castle batch is a whole tower; a
+layer it cannot construct is skipped, its cells read missing on the final —
+idkcraft-pnxy), `okIfAir` empty,
 `allowInventory true` (the builder places from the hotbar only and would
 wedge on stacks in the main inventory; restored on end, refcounted with mine);
 `forbid` joins `blocksToDisallowBreaking` for the build (restored on end).
