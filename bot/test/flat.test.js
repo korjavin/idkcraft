@@ -729,10 +729,107 @@ describe('flat ticker wiring', () => {
         const r = rig({ players: { P: { username: 'P', entity: { position: pos(0, 64, 0) } } } })
         try {
           r.ticker.setFlat({ radius: 4, by: 'P', explicit: true, cx: 0, cz: 0 })
-          await r.ticker.tick() // flat world: nothing to do, finishes at once
+          await r.ticker.tick() // flat world: nothing to do, finishes at once...
+          assert.deepEqual(r.ctx.flat && r.ctx.flat.steal, { i: +i, n: 9 }, `I=${i} re-scans to steal (x3y6.3)`)
+          await r.ticker.tick() // ...and nothing to steal: the tpd1 park
           assert.equal(r.ctx.flat, null, `I=${i} finished`)
+          assert.ok(cap.lines.some((l) => l.includes('why=nothing to steal') && l.includes('steal=none')), cap.lines.join('\n'))
           assert.equal(!!r.ctx.paused, parked, `I=${i} parked`)
           if (parked) assert.equal((await r.ticker.tick()).decision.action, 'idle')
+        } finally { r.done() }
+      }
+    })
+
+    // x3y6.3 work stealing, n=3 over r=4: strips x -4..-2 / -1..1 / 2..4.
+    function stealWorld(holes1, holes2) {
+      const world = makeWorld({})
+      const dig = (xs, k) => { let left = k; for (const x of xs) for (let z = -4; z <= 4 && left > 0; z++, left--) world.set(x, 63, z, 'air') }
+      dig([-1, 0, 1], holes1)
+      dig([2, 3, 4], holes2)
+      return world
+    }
+    function stealDrive(bot, ctx, n = 3) { for (let k = 0; k < n && ctx.flat && ctx.flat.phase === 'scan'; k++) flat(bot, ctx, null, null) }
+
+    it('x3y6.3: an empty strip steals the strip with most left, farthest first', () => {
+      const bot = mockBot(stealWorld(4, 20), { feet: pos(-3, 64, 0), items: [{ name: 'dirt', count: 64 }] })
+      const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: 0, n: 3 }, 63) }
+      flat(bot, ctx, null, null) // home scan: 0 holes -> done -> steal episode
+      assert.deepEqual(ctx.flat.steal, { i: 0, n: 3 })
+      assert.equal(ctx.flat.key, '0,0,4', 'same square key: a relay resumes the steal')
+      stealDrive(bot, ctx)
+      const f = ctx.flat
+      assert.deepEqual(f.tile, { i: 2, n: 3 }, 'strip 3 (20 left), never strip 2 (4 < STEAL_MIN)')
+      assert.equal(f.holes.length, 20)
+      assert.ok(f.holes.every((h) => h.x >= 2), 'victim strip only')
+      const cheb = f.holes.map((h) => Math.max(Math.abs(h.x), Math.abs(h.z)))
+      for (let k = 1; k < cheb.length; k++) assert.ok(cheb[k - 1] >= cheb[k], `farthest first: ${cheb.join(',')}`)
+      assert.ok(cap.lines.includes('flat steal strip=3/3 left=20 from=1'), cap.lines.join('\n'))
+      assert.ok(cap.lines.some((l) => l.startsWith('flat finish') && l.includes('steal=scan')), cap.lines.join('\n'))
+      // Deterministic: a second thief scanning the same world picks the same strip and order.
+      const bot2 = mockBot(stealWorld(4, 20), { feet: pos(-3, 64, 0) })
+      const ctx2 = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: 1, n: 3 }, 63) }
+      ctx2.flat.holes = []
+      ctx2.flat.phase = 'fill'
+      ctx2.flat.level = 63
+      ctx2.flat.filled = 1 // home strip done with work: steal
+      ctx2.flat.swept = true
+      flat(bot2, ctx2, null, null)
+      stealDrive(bot2, ctx2)
+      assert.deepEqual(ctx2.flat.tile, { i: 2, n: 3 })
+      assert.deepEqual(ctx2.flat.holes.map((h) => [h.x, h.z]), f.holes.map((h) => [h.x, h.z]))
+    })
+
+    it('x3y6.3: nothing >= STEAL_MIN left parks the helper; the main bot stays free', () => {
+      for (const [home, parked] of [[2, true], [0, false]]) {
+        const bot = mockBot(stealWorld(flat.STEAL_MIN - 1, 0), { feet: pos(3, 64, 0) })
+        const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: home, n: 3 }, 63) }
+        flat(bot, ctx, null, null)
+        stealDrive(bot, ctx)
+        assert.equal(ctx.flat, null, `home=${home}`)
+        assert.equal(!!ctx.paused, parked, `home=${home} parked`)
+        assert.ok(cap.lines.some((l) => l.includes('why=nothing to steal')), cap.lines.join('\n'))
+        assert.ok(!bot.chats.some((c) => c.includes('nothing to steal')), 'log only, no chat')
+      }
+    })
+
+    it('x3y6.3: a steal that moved nothing parks; one that worked steals again', () => {
+      for (const [filled, again] of [[0, false], [3, true]]) {
+        const bot = mockBot(makeWorld({}), { feet: pos(3, 64, 0) })
+        const f = startEpisode(0, 0, 4, 74, 'P', { i: 2, n: 3 }, 63)
+        Object.assign(f, { steal: { i: 1, n: 3 }, phase: 'fill', level: 63, filled, swept: true })
+        const ctx = { lastGoalKey: '', flat: f }
+        flat(bot, ctx, null, null)
+        if (again) {
+          assert.deepEqual(ctx.flat.steal, { i: 1, n: 3 })
+          assert.equal(ctx.flat.phase, 'scan')
+          assert.ok(!ctx.paused)
+        } else {
+          assert.equal(ctx.flat, null)
+          assert.equal(ctx.paused, true)
+        }
+        assert.ok(cap.lines.some((l) => l.startsWith('flat finish') && l.includes('steal=3')), cap.lines.join('\n'))
+      }
+    })
+
+    it('x3y6.3: a relay for the same square resumes the steal, another square starts over', () => {
+      for (const [msg, keep] of [['swarm flat 4 0 0 y63 level 63 by P', true], ['swarm flat 4 50 0 y63 level 63 by P', false]]) {
+        const r = rig({ world: stealWorld(0, 20), players: {} })
+        try {
+          r.bot.username = 'IdkSwarm3'
+          handleChat(r.bot, r.ticker, 'IdkBot', 'swarm flat 4 0 0 y63 level 63 by P')
+          const f = r.ctx.flat
+          f.steal = { i: 3, n: 9 }
+          f.tile = { i: 7, n: 9 }
+          f.phase = 'fill'
+          handleChat(r.bot, r.ticker, 'IdkBot', msg)
+          if (keep) {
+            assert.equal(r.ctx.flat, f, 'same episode resumed')
+            assert.deepEqual(r.ctx.flat.steal, { i: 3, n: 9 })
+          } else {
+            assert.notEqual(r.ctx.flat, f)
+            assert.equal(r.ctx.flat.steal, undefined)
+            assert.deepEqual(r.ctx.flat.tile, { i: 3, n: 9 }, 'home strip again')
+          }
         } finally { r.done() }
       }
     })
