@@ -62,9 +62,11 @@ services:
       # `configs:` (datapack never landed). itzg runs one RCON command per line
       # on every client connect (it cannot say who), so each line gives only
       # to that online helper when it holds no pickaxe - idempotent, no flood.
-      # Helper names follow BOT_SWARM_PREFIX. Not periodic: a pickaxe lost on
-      # death is replaced at the next connect by any client (needs keepInventory
-      # or a helper reconnect).
+      # Helper names follow BOT_SWARM_PREFIX. Not periodic: the pickaxe is
+      # unbreakable (no wear), but one lost on death is replaced only at the
+      # next connect by any client unless keepInventory is on in the world.
+      # The bot's own spawn kit line can read pickaxe=no on first connect (the
+      # give lands seconds after spawn); check by dig intervals instead.
       RCON_CMDS_ON_CONNECT: |
         execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}1] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}1] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}1 minecraft:stone_pickaxe[unbreakable={}]
         execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}2] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}2] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}2 minecraft:stone_pickaxe[unbreakable={}]
