@@ -1045,3 +1045,15 @@ describe('woodless far dig trails the spiral (vmzq.65)', () => {
     assert.match(wood.criterion, /\(\+home wood\)/)
   })
 })
+
+describe('x3y6.2 flat watchdog metric counts dug/placed blocks', () => {
+  it('blocks rising is progress while cells stay flat; flat blocks is not', () => {
+    const ctx = { flat: { filled: 0, shaved: 0, total: 0, totalBumps: 393, blocks: 5 } }
+    const cur = taskMod.orderCurrent(makeBot(), ctx, 'flat')
+    assert.equal(cur.blocks, 5)
+    const state = { done: 0, total: 393, blocks: 5 }
+    assert.equal(taskMod.orderProgressWhy(state, cur, 'flat'), null)
+    ctx.flat.blocks = 6
+    assert.equal(taskMod.orderProgressWhy(state, taskMod.orderCurrent(makeBot(), ctx, 'flat'), 'flat'), 'blocks')
+  })
+})

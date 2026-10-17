@@ -588,6 +588,23 @@ describe('flat ticker wiring', () => {
       assert.ok(bot.chats.some((c) => c.includes('cannot reach the square')), bot.chats.join('\n'))
     })
 
+    it('x3y6.6: a far fill/shave phase walks to the square first; inside TRAVEL_FAR it does not', () => {
+      for (const phase of ['fill', 'shave']) {
+        const bot = mockBot(makeWorld())
+        bot.entity.position = pos(60, 64, 0)
+        const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: 3, n: 9 }, 62) }
+        ctx.flat.phase = phase
+        flat(bot, ctx, null, null)
+        assert.match(ctx.lastGoalKey, /^flat:travel:/, phase)
+        const near = mockBot(makeWorld())
+        near.entity.position = pos(4 + flat.TRAVEL_FAR, 64, 0)
+        const c2 = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: 3, n: 9 }, 62) }
+        c2.flat.phase = phase
+        flat(near, c2, null, null)
+        assert.ok(!/^flat:travel:/.test(c2.lastGoalKey), phase)
+      }
+    })
+
     it('zchb: relay line round-trips; garbage and non-main senders are ignored', () => {
       const f = startEpisode(-7, 12, 16, 75, 'Owner_1', null, 64)
       assert.deepEqual(flat.parseRelay(flat.relayLine(f)), { radius: 16, cx: -7, cz: 12, feet: 65, level: 64, by: 'Owner_1' })

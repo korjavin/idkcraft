@@ -370,6 +370,7 @@ function orderCurrent(bot, ctx, kind) {
       const total = (f.total || 0) + (f.totalBumps || 0)
       out.done = done
       out.total = total
+      out.blocks = f.blocks || 0 // x3y6.2: dug/placed blocks, finer than levelled cells
       return out
     }
   } catch (_) { /* unreadable reads empty */ }
@@ -380,7 +381,7 @@ function orderCurrent(bot, ctx, kind) {
 // - bring: have rising
 // - travel (comehome/gocastle/lead): distance shrinking past the 2-block
 //   displacement threshold (peer Q1: tiny improvements must not reset)
-// - flat: levelled cells rising.
+// - flat: levelled cells or dug/placed blocks rising.
 const ORDER_ARRIVE_BLOCKS = 2
 function orderProgressWhy(state, cur, kind) {
   try {
@@ -388,6 +389,7 @@ function orderProgressWhy(state, cur, kind) {
       if (typeof cur.done === 'number' && typeof state.done === 'number' && cur.done > state.done) {
         return kind === 'bring' ? 'have' : 'cells'
       }
+      if (kind === 'flat' && cur.blocks > (state.blocks || 0)) return 'blocks'
       return null
     }
     if (kind === 'comehome' || kind === 'gocastle' || kind === 'lead') {
@@ -2835,6 +2837,7 @@ function taskTick(bot, ctx, now = Date.now()) {
         if (typeof cur.done === 'number') state.done = cur.done
         if (typeof cur.total === 'number') state.total = cur.total
         if (typeof cur.dist === 'number') state.dist = cur.dist
+        if (typeof cur.blocks === 'number') state.blocks = cur.blocks
         progressReset(state, kind, now)
         logReset(kind, why)
         try {
