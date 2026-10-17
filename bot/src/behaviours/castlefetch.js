@@ -4,7 +4,9 @@
 // revision 2026-10-02). The castle step only runs with material on hand
 // (g0z.3 menuFact word); this step fetches it, in source order:
 //   1. the castle chest — a chest the owner placed on the castle site
-//      (withdraw what he dropped there; never deposit castle stock in it);
+//      (withdraw what he dropped there; never deposit castle stock in it),
+//      then the bank chests stockpile fills (castle siteChest, home chest;
+//      g0z.60), nearest first, one batch each;
 //   2. inventory conversions through craftany (logs -> planks, planks ->
 //      sticks -> fence, door, coal + stick -> torch);
 //   3. the world — stone dug with the pickaxe (drop: cobblestone), logs
@@ -406,64 +408,127 @@ function chestTick(bot, ctx, f, d) {
       return false
     }
   } catch (_) { /* reserve unreadable: draw as before */ }
-  const at = f.chest || (f.chest = castleChest(bot, ctx.castle))
-  if (!at) { f.chestDone = true; return false }
+  if (!f.chest) {
+    f.chest = pickChest(bot, ctx, f, d.kind)
+    f.chestWalk = null
+  }
+  if (!f.chest) { f.chestDone = true; return false }
+  const { at, k, bank } = f.chest
   if (!near(bot, at, CHEST_REACH)) {
-    walkTo(bot, ctx, `castlefetch-chest:${at.x},${at.y},${at.z}`, at, 2)
+    walkTo(bot, ctx, `castlefetch-chest:${k}`, at, 2)
     // Stalled walk only (a far chest stays walkable while the bot closes in).
     const bp = bodyPos(bot)
     const dd = bp ? Math.hypot(bp.x - at.x, bp.y - at.y, bp.z - at.z) : Infinity
-    if (stalled(f.chestWalk || (f.chestWalk = {}), dd, CHEST_WAITS)) f.chestDone = true // unreachable: next source
+    if (stalled(f.chestWalk || (f.chestWalk = {}), dd, CHEST_WAITS)) { // unreachable: next chest
+      if (bank) markChestDry(ctx, d.kind, k)
+      f.chest = null
+    }
     return true
   }
-  f.chestDone = true // one withdraw per leg: an empty chest falls through
+  f.chest = null // one withdraw per chest per leg: the next tick picks the next chest
   ctx.castleFetchFlight = 'chest' // time-split label: in-flight ticks bucket below
+  // A bank chest draws one batch, never past stockpile's castle keep
+  // (FETCH + reserve = STONE_KEEP 88; planks 34 < PLANK_KEEP 64): what it
+  // hands over is never banked straight back (no deposit<->withdraw
+  // ping-pong). The owner's footprint chest draws the whole short, as before.
+  const need0 = bank ? Math.min(d.short, bankCap(bot, d.kind)) : d.short
   flight(ctx, async () => {
-    let need = d.short
-    for (const names of chestNames(bot, d.kind)) {
-      if (need <= 0 || names.length === 0) break
-      // Planks' second list is logs: one log is four planks; panes' is
-      // glass: six glass are sixteen panes (one craft).
-      // g0z.56: a log also makes 2 fences or doors, half a chest.
-      const logs = names.some((n) => n.endsWith('_log')) ? (LOG_YIELD[d.kind] || 0) : 0
-      const glass = d.kind === 'pane' && names[0] === 'glass'
-      // Banners' is wool (g0z.35): six per banner, only once the beds stand.
-      const wool = d.kind === 'banner' && names[0].endsWith('_wool')
-      if (wool && !bannerSelf(bot, ctx)) break
-      // Shelves' is books (g0z.49): three per shelf, the wool shape.
-      const book = d.kind === 'bookshelf' && names[0] === 'book'
-      // Panes' third is sand (g0z.38): the ladder's whole sand need, at once.
-      if (d.kind === 'pane' && names[0] === 'sand') {
-        const sn = paneNeed(bot, ctx, d).sandNeed
-        if (sn > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, sn, at)
-        break
-      }
-      // Blast mats (g0z.51): the ladder's whole need per mat, at once (the
-      // sand shape) — finished first through the generic need below, then
-      // iron, the smooth chain, recipe cobble. Recomputed per mat: each
-      // withdraw lands in the pack before the next want is read.
-      if (d.kind === 'blast_furnace' && names[0] !== 'blast_furnace') {
-        const bn = blastNeed(bot)
-        const ironShort = Math.max(0, BLAST_IRON - bn.ingots - bn.raw)
-        const chainShort = Math.max(0, BLAST_SMOOTH - bn.smooth - bn.stone)
-        // Cobble to the rung gate (reserve + ladder need, one withdraw —
-        // the gate below re-checks the same total, so a stocked chest
-        // spares the dig entirely).
-        const cobbleShort = Math.max(0, chainShort + (bn.furn > 0 ? 0 : BLAST_FURNACE_COBBLE) + castleMod.reserveOf('stone') - bn.cobble)
-        const want = names[0] === 'iron_ingot' || names[0] === 'raw_iron' ? ironShort
-          : names[0] === 'smooth_stone' || names[0] === 'stone' ? chainShort
-          : names[0] === 'cobblestone' ? cobbleShort : 0
-        if (want > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
-        continue
-      }
-      // Books already packed cover shelves too (revmux 01 minor): never
-      // withdraw what the pack holds.
-      const bookWant = book ? Math.max(0, BOOKS_PER_SHELF * Math.ceil(need) - countItems(bot, (n) => n === 'book')) : need
-      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
-      need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
-    }
-  }, CHEST_TIMEOUT_MS)
+    const left = await drawChest(bot, ctx, d, at, need0)
+    if (!bank) return
+    try { console.log(`castlefetch ${d.kind}: drew ${Math.max(0, Math.round(need0 - left))} of ${need0} from the bank chest at ${k}`) } catch (_) { /* log best-effort */ }
+    if (left > 0) markChestDry(ctx, d.kind, k) // drained: no walk back to it within CHEST_DRY_MS
+    else f.bankFull = true // a full bank batch: the leg lays it instead of digging the rest
+  }, CHEST_TIMEOUT_MS, () => { if (bank) markChestDry(ctx, d.kind, k) })
   return true
+}
+
+// g0z.60: castle stock banked by stockpile (home chest, else the site
+// chest) is a castlefetch source too — deposit and withdraw meet. A
+// drained/unreachable bank chest is dry for the kind for CHEST_DRY_MS (the
+// gather chestLogsTick shape), so it never loops.
+const CHEST_DRY_MS = 10 * 60 * 1000
+function markChestDry(ctx, kind, k) {
+  (ctx.castleChestDry || (ctx.castleChestDry = {}))[`${kind}@${k}`] = Date.now()
+}
+
+// Nearest untried chest this leg: the footprint chest (owner's, never
+// dry-marked: he restocks it), ctx.castle.siteChest, ctx.home.chest —
+// the bank ones within TASK_SEARCH_RADIUS of the body.
+function bankCap(bot, kind) {
+  return kind in FETCH ? Math.max(0, FETCH[kind] + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) : Infinity
+}
+
+function pickChest(bot, ctx, f, kind) {
+  const tried = f.chestTried || (f.chestTried = new Set())
+  const banks = !f.bankFull && bankCap(bot, kind) > 0 // the keep packed: no bank walk
+  const bp = bodyPos(bot)
+  const dry = ctx.castleChestDry || {}
+  const now = Date.now()
+  const cands = []
+  const own = castleChest(bot, ctx.castle)
+  if (own) cands.push({ at: own, bank: false })
+  for (const c of [ctx.castle && ctx.castle.siteChest, ctx.home && ctx.home.chest]) {
+    if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true })
+  }
+  let best = null
+  for (const c of cands) {
+    const k = `${c.at.x},${c.at.y},${c.at.z}`
+    if (tried.has(k)) continue
+    if (c.bank && typeof dry[`${kind}@${k}`] === 'number' && now - dry[`${kind}@${k}`] < CHEST_DRY_MS) continue
+    const dist = bp ? Math.hypot(bp.x - c.at.x, bp.z - c.at.z) : 0
+    if (c.bank && dist > require('./explore').TASK_SEARCH_RADIUS) continue
+    if (!best || dist < best.dist) best = { ...c, k, dist }
+  }
+  if (best) tried.add(best.k)
+  return best
+}
+
+// One chest's withdraw for the demand: the kind's lists in order (finished
+// item first, then its raw stock). Returns the need left (> 0: short).
+async function drawChest(bot, ctx, d, at, need) {
+  for (const names of chestNames(bot, d.kind)) {
+    if (need <= 0 || names.length === 0) break
+    // Planks' second list is logs: one log is four planks; panes' is
+    // glass: six glass are sixteen panes (one craft).
+    // g0z.56: a log also makes 2 fences or doors, half a chest.
+    const logs = names.some((n) => n.endsWith('_log')) ? (LOG_YIELD[d.kind] || 0) : 0
+    const glass = d.kind === 'pane' && names[0] === 'glass'
+    // Banners' is wool (g0z.35): six per banner, only once the beds stand.
+    const wool = d.kind === 'banner' && names[0].endsWith('_wool')
+    if (wool && !bannerSelf(bot, ctx)) break
+    // Shelves' is books (g0z.49): three per shelf, the wool shape.
+    const book = d.kind === 'bookshelf' && names[0] === 'book'
+    // Panes' third is sand (g0z.38): the ladder's whole sand need, at once.
+    if (d.kind === 'pane' && names[0] === 'sand') {
+      const sn = paneNeed(bot, ctx, d).sandNeed
+      if (sn > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, sn, at)
+      break
+    }
+    // Blast mats (g0z.51): the ladder's whole need per mat, at once (the
+    // sand shape) — finished first through the generic need below, then
+    // iron, the smooth chain, recipe cobble. Recomputed per mat: each
+    // withdraw lands in the pack before the next want is read.
+    if (d.kind === 'blast_furnace' && names[0] !== 'blast_furnace') {
+      const bn = blastNeed(bot)
+      const ironShort = Math.max(0, BLAST_IRON - bn.ingots - bn.raw)
+      const chainShort = Math.max(0, BLAST_SMOOTH - bn.smooth - bn.stone)
+      // Cobble to the rung gate (reserve + ladder need, one withdraw —
+      // the gate below re-checks the same total, so a stocked chest
+      // spares the dig entirely).
+      const cobbleShort = Math.max(0, chainShort + (bn.furn > 0 ? 0 : BLAST_FURNACE_COBBLE) + castleMod.reserveOf('stone') - bn.cobble)
+      const want = names[0] === 'iron_ingot' || names[0] === 'raw_iron' ? ironShort
+        : names[0] === 'smooth_stone' || names[0] === 'stone' ? chainShort
+        : names[0] === 'cobblestone' ? cobbleShort : 0
+      if (want > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
+      continue
+    }
+    // Books already packed cover shelves too (revmux 01 minor): never
+    // withdraw what the pack holds.
+    const bookWant = book ? Math.max(0, BOOKS_PER_SHELF * Math.ceil(need) - countItems(bot, (n) => n === 'book')) : need
+    const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
+    need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
+  }
+  return need
 }
 
 // Source 2: craft from the pack. Returns true while it owns the tick.
@@ -1764,6 +1829,7 @@ function castlefetch(bot, ctx, target, state) {
   if (st.status !== NO_WOOD || !WOOD.has(d.kind)) st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
+  if (f.bankFull) { finish(bot, ctx, 'done'); return } // g0z.60: a bank batch on hand lays before any dig
   // idkcraft-8njf: on v2 a stairs craft that still fails after the table
   // retry mines ONE stone batch instead of failing into the 5-min hold
   // (forage -> rest -> house-build): stone is the castle's own material,

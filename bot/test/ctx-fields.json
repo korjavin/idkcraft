@@ -402,6 +402,14 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleChestDry": {
+    "writers": [
+      "src/behaviours/castlefetch.js",
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js",
+    "note": "g0z.60: { '<kind>@x,y,z': ms } bank chests (home/site) a castlefetch draw found drained or unreachable; castlefetch skips them for CHEST_DRY_MS, stockpile clears the map (null) on a castle-material bank (rearmCastleDraw)."
+  },
   "castleCursor": {
     "writers": [
       "src/behaviours/castle.js",
