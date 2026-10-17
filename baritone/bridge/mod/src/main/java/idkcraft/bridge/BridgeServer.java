@@ -107,6 +107,7 @@ public final class BridgeServer {
     /** Bridge-issued #pause outstanding (cleared by #resume/#stop/a goal). */
     private volatile boolean pausedLocal = false;
     private volatile long lastSnapWarnTick = -100000;
+    private volatile long maxPushMs = 0;
 
     private record ChatLine(boolean playerChat, String sender, String text, boolean overlay) {
     }
@@ -259,7 +260,19 @@ public final class BridgeServer {
         note.addProperty("jsonrpc", "2.0");
         note.addProperty("method", method);
         note.add("params", params);
+        long t = System.nanoTime();
         ws.push(gson.toJson(note));
+        long ms = (System.nanoTime() - t) / 1_000_000;
+        if (ms > maxPushMs) {
+            maxPushMs = ms; // ponytail: racy max across threads, a lost update only under-reports one push
+        }
+    }
+
+    /** neuc.67: slowest push (blocking ws write) since the last call, then reset (Stats). */
+    long takeMaxPushMs() {
+        long ms = maxPushMs;
+        maxPushMs = 0;
+        return ms;
     }
 
     // ---- rpc methods (socket threads; client work goes through submit) ----

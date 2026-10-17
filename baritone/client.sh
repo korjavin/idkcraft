@@ -20,6 +20,7 @@
 #   BARITONE_MEM (docker --memory for the client, e.g. 2500m = the compose
 #   BODY2_MEM_LIMIT default, so the rig sees the cgroup the JVM sees in
 #   prod; unset = unlimited, the old rig behaviour),
+#   BODY_JVM_ARGS (extra game JVM args, start.sh; unset = none),
 #   RIG_BIND (bind the bridge there instead of all interfaces),
 #   CLIENT_LOG (container stdout, default /tmp/baritone-client.log),
 #   RIG_CONTAINER (the rig Paper container, for the join wait — required
@@ -83,6 +84,8 @@ API_ENV=
 if [ "${BARITONE_API:-}" = 1 ]; then
   API_ENV="-e BARITONE_API=1"
 fi
+# neuc.67: -e NAME (no value) passes the caller's BODY_JVM_ARGS through as is (spaces kept)
+[ -n "${BODY_JVM_ARGS:-}" ] && export BODY_JVM_ARGS && API_ENV="$API_ENV -e BODY_JVM_ARGS"
 
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CLIENT"; then
   echo "$CLIENT already running — one worker client per box (BARITONE_CLIENT=... for another)"; exit 2

@@ -96,7 +96,7 @@ function installInteract(bot) {
       if (bot._dig && settle(bot._dig, new Error('Digging aborted'))) {
         bot.transport.call('dig.abort', {}).catch((e) => failLog('dig.abort', e))
       }
-      const d = { id: (bot._digSeq = (bot._digSeq | 0) + 1), pos, block, resolve, reject, guard: null }
+      const d = { id: (bot._digSeq = (bot._digSeq | 0) + 1), pos, block, resolve, reject, guard: null, t0: Date.now(), expect: digTimeOf(bot, block) }
       bot._dig = d
       bot.targetDigBlock = block // stuck.js / deep.js read this mid-dig
       d.guard = setTimeout(() => {
@@ -106,10 +106,12 @@ function installInteract(bot) {
       }, DIG_GUARD_MS)
       if (typeof d.guard.unref === 'function') d.guard.unref()
       bot.transport.call('dig.start', { ...pos, face, look, id: d.id }).then((r) => {
+        d.rpcMs = Date.now() - d.t0 // neuc.67: the start leg of wall (the mod creates the dig before it replies)
         // The mod's tool pick is selection-only: no inventory.update carries it.
         if (r && typeof r.selected === 'number' && r.selected !== bot.quickBarSlot) {
           bot.quickBarSlot = r.selected
           bot.heldItem = (bot.inventory && bot.inventory.slots && bot.inventory.slots[36 + r.selected]) || null
+          d.expect = digTimeOf(bot, block) // the dig runs on the mod's tool, not the pre-switch hand
         }
       }, (e) => settle(d, e instanceof Error ? e : new Error(String(e))))
     }))
@@ -195,6 +197,7 @@ function handleInteractEvent(bot, method, params) {
   const d = bot._dig
   if (!d || p.id !== d.id || !same(d.pos, cell(p))) return true // a stale dig's outcome (ids echo dig.start)
   if (method === 'dig.done') {
+    digTiming(bot, d, p)
     const stateId = typeof p.stateId === 'number' ? p.stateId : 0
     const [oldBlock, newBlock] = chunks.applyBlockUpdate(bot, { ...d.pos, stateId })
     if (newBlock) bot.emit('blockUpdate', oldBlock, newBlock)
@@ -203,6 +206,20 @@ function handleInteractEvent(bot, method, params) {
     bot._settleDig(d, new Error(`Digging aborted (${p.reason || 'unknown'})`))
   }
   return true
+}
+
+// neuc.67: one dig in three numbers — client ticks + client ms (the mod's
+// dig.done) and wall ms here. ticks ~ expected and client ~ wall ~ slow =
+// dropped client ticks (GC/host); ticks >> expected = game-side; client
+// << wall = bridge/ws delivery (rpc = the dig.start round trip, the rest
+// of the gap is dig.done's way back). bot._lastDig feeds stuck-replay's trace.
+const DIG_SLOW = 1.3
+function digTiming(bot, d, p) {
+  const t = { ticks: p.ticks, clientMs: p.clientMs, wallMs: Date.now() - d.t0, rpcMs: d.rpcMs, expectMs: Math.round(d.expect) }
+  bot._lastDig = t
+  if (t.expectMs > 0 && Number.isFinite(t.expectMs) && t.wallMs > DIG_SLOW * t.expectMs) {
+    console.log(`dig slow ${(d.block && d.block.name) || '?'} expect=${t.expectMs} ticks=${t.ticks ?? '?'} client=${t.clientMs ?? '?'} wall=${t.wallMs} rpc=${t.rpcMs ?? '?'}`)
+  }
 }
 
 module.exports = { installInteract, handleInteractEvent, digTimeOf }

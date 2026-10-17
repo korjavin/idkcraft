@@ -72,6 +72,8 @@ public final class Interact {
         final long id;
         final long startMs;
         int lastStage = -2;
+        /** neuc.67: client ticks this dig was driven (tick() calls). */
+        int ticks;
 
         Dig(BlockPos pos, Direction dir, Block block, long id) {
             this.pos = pos;
@@ -237,6 +239,8 @@ public final class Interact {
             JsonObject p = at(pos, id);
             p.addProperty("broke", false);
             p.addProperty("stateId", Block.getId(state));
+            p.addProperty("ticks", 0);
+            p.addProperty("clientMs", 0);
             server.push("dig.done", p);
             return ok();
         }
@@ -287,6 +291,7 @@ public final class Interact {
             abort("timeout");
             return;
         }
+        d.ticks++;
         if (!player.isWithinBlockInteractionRange(d.pos, REACH_SLACK)) {
             abort("moved");
             return;
@@ -323,6 +328,7 @@ public final class Interact {
             JsonObject p = at(d.pos, d.id);
             p.addProperty("broke", true);
             p.addProperty("stateId", Block.getId(now));
+            timing(p, d);
             server.push("dig.done", p);
         } else {
             abort("changed");
@@ -421,6 +427,12 @@ public final class Interact {
         player.setYRot(notchYaw);
         player.setXRot(notchPitch);
         player.setYHeadRot(notchYaw);
+    }
+
+    /** neuc.67: client ticks + client-side ms of the dig (dig.done), the Node side adds wall ms. */
+    private static void timing(JsonObject p, Dig d) {
+        p.addProperty("ticks", d.ticks);
+        p.addProperty("clientMs", System.currentTimeMillis() - d.startMs);
     }
 
     private static JsonObject at(BlockPos pos, long id) {

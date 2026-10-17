@@ -897,7 +897,9 @@ async function main() {
       follower.dig = async (...a) => {
         const t = Date.now()
         try { return await dig0.apply(follower, a) } finally {
-          if (follower._digTrace) console.log(`shelter-trace dig ${(a[0] && a[0].name) || '?'} ${Date.now() - t}ms`)
+          const ld = follower._lastDig // neuc.67: the mod's ticks + client ms of the same dig (v2 only)
+          if (follower._digTrace) console.log(`shelter-trace dig ${(a[0] && a[0].name) || '?'} ${Date.now() - t}ms${ld ? ` ticks=${ld.ticks} client=${ld.clientMs} rpc=${ld.rpcMs}` : ''}`)
+          follower._lastDig = null
         }
       }
     }
