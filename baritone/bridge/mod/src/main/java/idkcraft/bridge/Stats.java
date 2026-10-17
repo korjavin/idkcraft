@@ -10,11 +10,12 @@ import net.minecraft.client.multiplayer.ClientLevel;
  * idkcraft-neuc.67: {@code body.stats} once a minute (client tick hook) —
  * the prod read of the body JVM without JVM tools (the JRE image has no
  * jcmd/jstat). {@code {heapUsedMb,heapMaxMb,gcCount,gcMs,maxTickGapMs,
- * maxPushMs,chunks,entities}}: gc* = the collections in the last window
+ * maxPushMs,chunks,entities,rpc}}: gc* = the collections in the last window
  * (all GarbageCollectorMXBeans), maxTickGapMs = the longest wall gap
  * between two client post-ticks in it (50 = smooth; a GC pause or a
  * blocked client thread shows here), maxPushMs = the slowest blocking ws
- * write (WsServer.push) in it. Observation only.
+ * write (WsServer.push) in it, rpc = handler ms per method in it
+ * (neuc.67.1, Rpc.takeTimings). Observation only.
  */
 final class Stats {
     private static final long WINDOW_MS = 60_000;
@@ -60,6 +61,7 @@ final class Stats {
         p.addProperty("gcMs", gc[1] - gcMs0);
         p.addProperty("maxTickGapMs", maxGapMs);
         p.addProperty("maxPushMs", server.takeMaxPushMs());
+        p.addProperty("rpc", server.takeRpcTimings());
         ClientLevel level = Minecraft.getInstance().level;
         p.addProperty("chunks", level != null ? level.getChunkSource().getLoadedChunksCount() : 0);
         p.addProperty("entities", level != null ? level.getEntityCount() : 0);
