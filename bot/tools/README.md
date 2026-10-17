@@ -1044,3 +1044,36 @@ in this repo.
 ## castle-give.sh
 
 `sh bot/tools/castle-give.sh <file|->`: one rcon command per line (e.g. `give IdkBotV2 minecraft:cobblestone 896`) run on prod `mc` via Portainer exec; keys from stash. The owner's standing ask (curator 2026-10-17): top up the bots' castle materials with it instead of waiting.
+
+## Deaths per day (`deaths.sh`, idkcraft-neuc.65.1)
+
+`sh bot/tools/deaths.sh mc.txt bot.txt` (or stdin): per bot per UTC day,
+deaths by killer (mc log), then from the bot's `death health=` lines the time
+word, step, kitless share (`sword=0`), share within `NEAR` (60) blocks of
+spawn and the death loop (death within `LOOP_S` (300) s of a respawn at
+world spawn; the measured `respawned at` line wins over the `respawn at`
+claim). Swarm names (`SWARM_PREFIX`, default `IdkSwarm`) fold into one
+`swarm` row, phantoms included. `FROM`/`TO` bound the days; the closing
+`summary` lines are what `deaths-baseline.json` records. Offline: the
+script reads files only — no hosts, tokens or container ids in it.
+
+Every input line is `YYYY-MM-DD HH:MM:SS <name> <msg>` (UTC):
+
+- mc: the `mc` service's `/data/logs/*.log.gz` + `latest.log` (Portainer
+  exec, read-only), each `[HH:MM:SS] [Server thread/INFO]: ` prefix rewritten
+  to `<file date> HH:MM:SS `. Demultiplex the exec stream (8-byte frame
+  headers) before parsing, or names come out split.
+- bots: the idkcraft-session-review VictoriaLogs query
+  `(container_name:idkcraft-bot* or container_name:idkcraft-swarm*) ("death health=" or "respawn at" or "respawned at")`,
+  printed as `_time <bot name> _msg` (`bot` -> `BOT_USERNAME`, `bot2` ->
+  `BOT2_USERNAME`, `swarmK` -> `<BOT_SWARM_PREFIX>K`).
+
+Credentials: the Portainer url/api-key and the Grafana sa-token live in stash
+(`kv ls secrets`: the `portainer-url`, `portainer-api-key` and
+`grafana … sa-token` keys, as in the session-review skill); the Grafana host
+is the `monitoring` stack's `GRAFANA_HOST` env. Never paste them into the
+repo, a bead or a PR.
+
+`deaths-baseline.json` holds the BEFORE row (10-15..17, old death lines: no
+step/kit facts). Re-measure 3 prod days after the enriched line deploys and
+replace it.
