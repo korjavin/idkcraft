@@ -457,7 +457,7 @@ describe('vmzq.30 shelter near a sited-but-unbuilt home', () => {
     assert.equal(FSH(facts('night'), botAt(NEAR), ctx), true)
   })
   it('no castle or built home: as before; no home at all shelters (vmzq.32)', () => {
-    assert.equal(FSH(facts('night'), botAt(NEAR), ctxWith(unbuiltHome(), null)), false, 'house flow untouched')
+    assert.equal(FSH(facts('night'), botAt(NEAR), ctxWith(unbuiltHome(), null)), true, 'neuc.65.3: an unbuilt house shelters without a castle too')
     assert.equal(FSH(facts('night', 'built'), botAt(NEAR), ctxWith(builtHome(), activeCastle(FAR_CASTLE))), false, 'near a built house: walk in')
     assert.equal(FGO(facts('night', 'built'), botAt(NEAR), ctxWith(builtHome(), activeCastle(FAR_CASTLE))), true)
     // vmzq.32: no siter runs under a castle and the spawn may hold no flat

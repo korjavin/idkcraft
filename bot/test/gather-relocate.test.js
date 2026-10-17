@@ -261,7 +261,7 @@ describe('gyw arbiter: the relocated bot re-picks gather', () => {
     assert.equal(r.action, 'explore')
   })
 
-  it('at night the stranded bot still rests: pre-house never wanders', async () => {
+  it('at night the stranded bot shelters (neuc.65.3): pre-house never wanders', async () => {
     const bot = goalBot({ at: pos(0, 64, 0) })
     bot.time = { timeOfDay: 18000 }
     const ctx = {
@@ -273,7 +273,7 @@ describe('gyw arbiter: the relocated bot re-picks gather', () => {
       brain: {},
     }
     const r = await decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'shelter')
   })
 })
 

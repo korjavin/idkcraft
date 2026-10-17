@@ -89,8 +89,9 @@ describe('ipn.12 night-far menu: shelter owns it, gohome owns the rest', () => {
     assert.equal(goal.stepWhy('shelter', { time: 'day', home: 'built', inside: 'no' }, bot, ctx, ''), 'shelter: daytime')
     assert.equal(FSH({ time: 'night', home: 'built', inside: 'yes' }, bot, ctx), false)
     assert.equal(goal.stepWhy('shelter', { time: 'night', home: 'built', inside: 'yes' }, bot, ctx, ''), 'shelter: already inside')
-    assert.equal(FSH({ time: 'night', home: 'site', inside: 'no' }, bot, ctx), false)
-    assert.equal(goal.stepWhy('shelter', { time: 'night', home: 'site', inside: 'no' }, bot, ctx, ''), 'shelter: home not built')
+    // neuc.65.3: an unbuilt home has no other night step — it shelters.
+    assert.equal(FSH({ time: 'night', home: 'site', inside: 'no' }, bot, ctx), true)
+    assert.equal(FSH({ time: 'dusk', home: 'none', inside: 'no' }, bot, { home: null }), true)
     assert.equal(goal.stepWhy('gohome', { time: 'night', home: 'built', inside: 'no' }, bot, ctx, ''), 'gohome: too far to walk at night')
   })
 

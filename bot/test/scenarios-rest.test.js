@@ -13,6 +13,7 @@ const os = require('node:os')
 const path = require('node:path')
 const fs = require('node:fs')
 const { createTicker } = require('../src/index')
+const { MENU } = require('../src/goal')
 
 function pos(x, y, z) {
   const p = {
@@ -119,7 +120,10 @@ describe('q0h: rest pit escalates instead of spinning episodes', () => {
     // held, rest running, one gave-up already counted. Night pin (gyw): an
     // alone day with a holding gather now explores, but the wedge/gave-up
     // mechanics under test are time-blind — night keeps the steady rest.
+    // neuc.65.3: an unbuilt site shelters at night — stubbed out here.
     bot.time = { timeOfDay: 18000 }
+    const origShelter = MENU.shelter.feasible
+    MENU.shelter.feasible = () => false
     ctx.work = true
     ctx.home = { site: { x: 20, y: 65, z: 0 } }
     ctx.step = 'rest'
@@ -176,6 +180,7 @@ describe('q0h: rest pit escalates instead of spinning episodes', () => {
         'relocation re-arms the roam-back detector')
       assert.ok(ctx.stuck, 'fact raises again past the mark')
     } finally {
+      MENU.shelter.feasible = origShelter
       cap.release()
       ticker.destroy()
     }

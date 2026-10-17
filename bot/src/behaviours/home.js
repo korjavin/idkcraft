@@ -1112,20 +1112,54 @@ const SHELTER_CASTLE_R = 24
 function offCastleSpot(bot, ctx) {
   try {
     const st = ctx && ctx.castle
-    const bp = botPos(bot)
-    if (!st || !st.site || typeof st.site.x !== 'number' || !bp || typeof bot.blockAt !== 'function') return null
+    if (!st || !st.site || typeof st.site.x !== 'number') return null
     const { w, d } = castleData.siteDimensions(st.rot | 0, st.blueprintVersion)
-    const x0 = Math.floor(bp.x); const y0 = Math.floor(bp.y); const z0 = Math.floor(bp.z)
     const gap2 = SHELTER_CASTLE_GAP * SHELTER_CASTLE_GAP
+    return walkOffSpot(bot, ctx, (ax, az) => {
+      const ox = ax < st.site.x ? st.site.x - ax : ax >= st.site.x + w ? ax - (st.site.x + w - 1) : 0
+      const oz = az < st.site.z ? st.site.z - az : az >= st.site.z + d ? az - (st.site.z + d - 1) : 0
+      return ox * ox + oz * oz >= gap2
+    })
+  } catch (_) { return null }
+}
+// Gohome-failure walk-off (idkcraft-neuc.65.3): a gohome that failed
+// tonight (cannot-reach-home at a house the body cannot enter) leaves the
+// bot on the failing approach, and the shelter pillared on that cell every
+// dusk (prod v2 10-16: -85 82 -3, three nights, three deaths). Within
+// SHELTER_REFAIL_GAP of tonight's failure (the xhqv latch record) the
+// shelter digs in SHELTER_REFAIL_GAP+ away instead; one shot per episode.
+const SHELTER_REFAIL_GAP = 8
+function refailSpot(bot, ctx) {
+  try {
+    const gl = ctx && ctx.gohomeLatch
+    const day = bot && bot.time && bot.time.day
+    const bp = botPos(bot)
+    if (!gl || !gl.pos || typeof gl.pos.x !== 'number' || gl.day !== day || !bp) return null
+    const g2 = SHELTER_REFAIL_GAP * SHELTER_REFAIL_GAP
+    const off = (p, x, z) => !p || typeof p.x !== 'number' || (x - p.x) * (x - p.x) + (z - p.z) * (z - p.z) >= g2
+    // Clear of the failure spot AND the door (a failure 3 from the door
+    // must not walk to the far side of the doorway).
+    let door = null
+    try { const nh = nightHome(bot, ctx); door = nh && nh.site ? doorPos(nh) : null } catch (_) { door = null }
+    const far = (x, z) => off(gl.pos, x, z) && off(door, x, z)
+    if (off(gl.pos, bp.x, bp.z)) return null
+    return walkOffSpot(bot, ctx, (ax, az) => far(ax + 0.5, az + 0.5))
+  } catch (_) { return null }
+}
+// The nearest standable feet cell within SHELTER_CASTLE_R that keep(x, z)
+// takes and whose fresh dig the shared veto allows (the walk-offs above).
+function walkOffSpot(bot, ctx, keep) {
+  try {
+    const bp = botPos(bot)
+    if (!bp || typeof bot.blockAt !== 'function') return null
+    const x0 = Math.floor(bp.x); const y0 = Math.floor(bp.y); const z0 = Math.floor(bp.z)
     const free = (b) => !!b && b.boundingBox === 'empty'
     let best = null
     let bd = Infinity
     for (let dx = -SHELTER_CASTLE_R; dx <= SHELTER_CASTLE_R; dx++) {
       for (let dz = -SHELTER_CASTLE_R; dz <= SHELTER_CASTLE_R; dz++) {
         const ax = x0 + dx; const az = z0 + dz
-        const ox = ax < st.site.x ? st.site.x - ax : ax >= st.site.x + w ? ax - (st.site.x + w - 1) : 0
-        const oz = az < st.site.z ? st.site.z - az : az >= st.site.z + d ? az - (st.site.z + d - 1) : 0
-        if (ox * ox + oz * oz < gap2) continue
+        if (!keep(ax, az)) continue
         for (let dy = 1; dy >= -4; dy--) { // nearestDry's climbable band
           const dist = Math.hypot(dx, dy, dz)
           if (dist >= bd) continue
@@ -1171,7 +1205,9 @@ function shelter(bot, ctx, target, state) {
   // homeless castle): home only answers "already inside" and the swim aim.
   const nh = ctx && nightHome(bot, ctx)
   const home = nh && nh.site ? nh : null
-  if (home && isInside(bot, home)) {
+  // neuc.65.3: an unbuilt site's floor is no shelter — only a built home
+  // (or the castle covering it) is inside.
+  if (home && (home.built === true || home !== ctx.home) && isInside(bot, home)) {
     // Walked in by hand (or a lagged first tick): stay owns the inside.
     ctx.stepStatus = 'done'
     return
@@ -1227,6 +1263,8 @@ function shelter(bot, ctx, target, state) {
       st.wetDeadline = false // vmzq.58: the new spot earns its own swim
       st.wetSince = null
       st.pit = false
+      st.refailTried = false // neuc.65.3: ... and its one gohome-failure walk-off
+      st.refailWalk = false
       if (ctx.recovery && ctx.recovery.action === 'pillar_up') {
         try { ctx.recovery = null } catch (_) { /* release best-effort */ }
       }
@@ -1319,6 +1357,16 @@ function shelter(bot, ctx, target, state) {
       st.offCastle = true // the vmzq.48 walk-off marker: a failed walk holds exposed
       st.dig = { walk: spot, walkTicks: 0, walked: true, extra: 0 }
       try { console.log(`shelter leaving the castle band, digging in at ${spot.x} ${spot.y} ${spot.z}`) } catch (_) { /* log best-effort */ }
+    }
+  }
+  if (!st.pillared && !st.refailTried && !st.offCastle && !ctx.recovery && !st.dig) {
+    st.refailTried = true // one scan per episode, spot or not
+    let spot = null
+    try { spot = refailSpot(bot, ctx) } catch (_) { spot = null }
+    if (spot) {
+      st.refailWalk = true
+      st.dig = { walk: spot, walkTicks: 0, walked: true, extra: 0 }
+      try { console.log(`shelter leaving the gohome failure spot, digging in at ${spot.x} ${spot.y} ${spot.z}`) } catch (_) { /* log best-effort */ }
     }
   }
   if (!st.pillared) {
@@ -1438,6 +1486,15 @@ function shelter(bot, ctx, target, state) {
       // vmzq.58 (revmux 01): a failed dig that left the body down a pit is
       // still a committed descent — the fight release never climbs out.
       st.pit = dugDown > 0
+      if (r !== 'done' && st.refailWalk && dugDown === 0) {
+        // neuc.65.3: the walk-off (or its dig) failed on the surface —
+        // pillar where it stands next tick (refailTried: never again).
+        st.refailWalk = false
+        st.pillarAt = null
+        try { console.log(`shelter walk-off ${r}, pillaring here`) } catch (_) { /* log best-effort */ }
+        return
+      }
+      st.refailWalk = false
       if (r !== 'done') {
         if (r === 'failed:protected' && !st.offCastle && castleGroundHere(bot, ctx)) {
           let spot = null

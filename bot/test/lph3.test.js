@@ -16,6 +16,7 @@ const { Vec3 } = require('vec3')
 const home = require('../src/behaviours/home')
 const recover = require('../src/behaviours/recover')
 const { createTicker, BEHAVIOURS, handleRespawn } = require('../src/index')
+const { MENU } = require('../src/goal')
 
 function pos(x, y, z) {
   const p = { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
@@ -397,15 +398,18 @@ describe('lph3 ticker: night grace holds fight, shelter digs', () => {
     }
   })
 
-  it('fresh grace but work picks a day step (no home, no castle): fights instead of working the dark', async () => {
+  it('fresh grace but work picks a day step: fights instead of working the dark', async () => {
     const bot = graceBot()
     const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
     ticker.work()
     const ctx = bot._tickerCtx
-    ctx.home = null // no home, no castle: stay/gohome/shelter infeasible
+    ctx.home = null // no home, no castle: stay/gohome infeasible
     ctx.castle = null
     ctx.adoptDone = true // past the spawn-chunk adopt grace: goal decides now
     ctx.lastRespawnAt = Date.now()
+    // neuc.65.3: a homeless night shelters now — stub it out so a day step wins.
+    const origShelter = MENU.shelter.feasible
+    MENU.shelter.feasible = () => false
     const origFight = BEHAVIOURS.fight
     let fightRan = 0
     BEHAVIOURS.fight = () => { fightRan++ }
@@ -417,6 +421,7 @@ describe('lph3 ticker: night grace holds fight, shelter digs', () => {
       assert.equal(ctx.step, null, 'pre-check never ran goal.decide (no step, no chat)')
     } finally {
       BEHAVIOURS.fight = origFight
+      MENU.shelter.feasible = origShelter
       ticker.destroy()
     }
   })
