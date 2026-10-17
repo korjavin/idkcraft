@@ -54,6 +54,25 @@ describe('gfgx tableFor on a ledge', () => {
     assert.deepEqual(b.calls, [{ ref: { x: -1, y: 77, z: 0 }, face: { x: 0, y: 1, z: 0 } }])
   })
 
+  it('a refused floored cell yields to a fresh ledge cell', async () => {
+    const w = world()
+    w.cells.set('-1,77,0', 'cobblestone') // the one floored neighbour
+    const b = bot(w)
+    const okPlace = b.placeBlock
+    b.placeBlock = async () => { throw new Error('refused') }
+    const ctx = {}
+    await assert.rejects(tableFor(b, ctx), /refused/)
+    b.placeBlock = okPlace
+    await tableFor(b, ctx)
+    assert.deepEqual(b.calls, [{ ref: { x: 0, y: 77, z: 0 }, face: { x: 1, y: 0, z: 0 } }])
+  })
+
+  it('an overhang above the ledge cell blocks it (table top out of sight)', async () => {
+    const w = world()
+    for (const k of ['1,78,0', '-1,78,0', '0,78,1', '0,78,-1']) w.cells.set(k, 'cobblestone')
+    await assert.rejects(tableFor(bot(w), {}), /no-table-ref/)
+  })
+
   it('castle plan cells are never table spots (home=none on the builder)', async () => {
     const castle = require('../src/castle')
     const site = { x: -18, y: 72, z: -10 } // puts (1,77,0) on the plan, (-1,77,0) off it

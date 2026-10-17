@@ -229,7 +229,9 @@ function tableFor(bot, ctx) {
       below = bot.blockAt(new Vec3(bx + dx, by - 1, bz + dz))
       cell = bot.blockAt(new Vec3(bx + dx, by, bz + dz))
     } catch (_) { below = null; cell = null }
-    if (!ledge && below && below.position && AIRISH.has(below.name) && underSolid() &&
+    // The feet-level cell above it stays open: the table's top is in sight.
+    if (!ledge && below && below.position && AIRISH.has(below.name) &&
+        (!cell || AIRISH.has(cell.name) || PLACE_OVER.has(cell.name)) && underSolid() &&
         !skip.has(`${bx + dx},${by - 1},${bz + dz}`) && !spotBlocked(ctx, bx + dx, by - 1, bz + dz)) {
       ledge = { at: new Vec3(bx + dx, by - 1, bz + dz), face: new Vec3(dx, 0, dz) }
     }
@@ -257,14 +259,14 @@ function tableFor(bot, ctx) {
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)
     break
   }
-  if (!ref && fallback) {
-    ref = fallback
-    at = new Vec3(fallback.position.x, fallback.position.y + 1, fallback.position.z)
-  }
-  if (!ref && ledge) {
+  if (!ref && ledge) { // a fresh ledge cell beats re-burning a refused one
     ref = under
     at = ledge.at
     face = ledge.face
+  }
+  if (!ref && fallback) {
+    ref = fallback
+    at = new Vec3(fallback.position.x, fallback.position.y + 1, fallback.position.z)
   }
   if (!ref) return nope('no-table-ref')
   // mineflayer places the HELD item: hold the table or a planks block lands
