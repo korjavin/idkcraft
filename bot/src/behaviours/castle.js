@@ -1758,12 +1758,16 @@ const CASTLE_BUILDER_BATCH = 256
 // of the owner's cobble x512) starved after 3 cells with 500 on hand.
 // Each name gets at most its count, biggest stack first, and the kind's
 // total stops at usable() so the reserve is never batched.
-function heldStacks(bot, kind, budget) {
+function heldStacks(bot, kind, budget, ctx) {
   const want = ITEM[kind]
   const by = {}
   try {
     for (const it of bot.inventory.items() || []) {
       if (it && typeof it.name === 'string' && it.count > 0 && want && want(it.name)) by[it.name] = (by[it.name] | 0) + it.count
+    }
+    // The owner's relocated stacks (vmzq.40) never get names.
+    for (const it of (ctx && ctx.castleCarry && ctx.castleCarry.items) || []) {
+      if (by[it.name]) by[it.name] = Math.max(0, by[it.name] - it.count)
     }
   } catch (_) { /* no inventory: no item */ }
   const q = Object.entries(by).map(([name, left]) => ({ name, left })).sort((a, b) => b.left - a.left)
@@ -1791,7 +1795,7 @@ function castleBuilderCells(bot, ctx, st) {
       if (b && (b.retired || b.until > Date.now())) continue
       // Held kinds only: an unheld kind falls through to work()'s material
       // path (failed:no-<kind>) so castlefetch fetches it as today.
-      if (held[c.kind] === undefined) held[c.kind] = heldStacks(bot, c.kind, usable(bot, c.kind, ctx))
+      if (held[c.kind] === undefined) held[c.kind] = heldStacks(bot, c.kind, usable(bot, c.kind, ctx), ctx)
       const block = takeName(held[c.kind])
       if (!block) continue
       out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, idx: c.idx, block })
@@ -1880,8 +1884,15 @@ function castleBuilderBatch(bot, ctx, st, c) {
         }
         // Starved with the kind still usable (cu1a): the named stacks ran
         // out but other variants remain — re-batch next tick with fresh
-        // names; only an empty kind is the fetch word.
-        if (miss && usable(bot, miss.kind, ctx) > 0) return
+        // names; only an empty kind is the fetch word. A final that left
+        // cells missing with their exact name still held was refused, not
+        // starved: strike them so they back off instead of re-firing.
+        if (miss && usable(bot, miss.kind, ctx) > 0) {
+          const named = new Set()
+          try { for (const it of bot.inventory.items() || []) if (it && it.count > 0) named.add(it.name) } catch (_) { /* none */ }
+          if (flightCells.some((o) => !done(bot, o) && named.has(o.block))) strikeMisses()
+          return
+        }
         if (miss) settleFail(`no-${miss.kind}`)
       },
       (err) => {
