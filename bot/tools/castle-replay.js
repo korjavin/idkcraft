@@ -122,6 +122,11 @@ const NIGHT_HOME = process.env.CASTLE_NIGHT_HOME || ''
 if (!['', 'house', 'peer'].includes(NIGHT_HOME) || (NIGHT_HOME && SEED !== 'complete')) {
   throw new Error(`CASTLE_NIGHT_HOME: want ''|house|peer with CASTLE_SEED=complete, got ${JSON.stringify(NIGHT_HOME)}`)
 }
+// Bare night (idkcraft-neuc.65.3): no castle order and no seed — the guide
+// only chats `autonomous on`, so the bot lives from fresh memory with no
+// active castle (home none, then an unbuilt site): prod family A's nights.
+const BARE = process.env.CASTLE_BARE === '1'
+if (BARE && SEED) throw new Error('CASTLE_BARE=1 excludes CASTLE_SEED')
 const SAND = process.env.CASTLE_SAND === '1'
 // Repair run (g0z.56, needs CASTLE_SEED=complete): after adoption the
 // acceptance's 20 cells are knocked out (repairCells), wood = 16 oak_log in
@@ -1378,7 +1383,7 @@ async function main() {
   // bot answers "I can't see you" and nothing starts. A seeded castle
   // needs no order (autonomous rides runOnce) — except an older seed,
   // which the guide relays with `castle upgrade` (g0z.48).
-  let ordered = SEED && !SEED_UPGRADE ? 'seeded' : null
+  let ordered = BARE ? 'bare (autonomous on, no castle)' : SEED && !SEED_UPGRADE ? 'seeded' : null
   let sees = !!SEED
   for (let i = 0; i < 40 && !sees; i++) {
     try { sees = !!(follower.players && follower.players[GUIDE] && follower.players[GUIDE].entity) } catch (_) { sees = false }
@@ -1388,7 +1393,7 @@ async function main() {
   if (!SEED) {
     try { guide.chat('autonomous on') } catch (e) { fail('order', `autonomous chat: ${e.message}`) }
     await sleep(1000)
-    try { guide.chat('build castle') } catch (e) { fail('order', `castle chat: ${e.message}`) }
+    if (!BARE) try { guide.chat('build castle') } catch (e) { fail('order', `castle chat: ${e.message}`) }
   } else if (SEED_UPGRADE) {
     try { guide.chat('castle upgrade') } catch (e) { fail('order', `upgrade chat: ${e.message}`) }
   } else if (REPAIR) {

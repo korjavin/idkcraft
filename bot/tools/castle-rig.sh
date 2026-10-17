@@ -33,6 +33,8 @@
 #   house = after adoption an unbuilt parked house site on the pad corner
 #   is the home, the castle must still cover the nights; peer = the castle
 #   lives only in a peer memory file read via BOT_CASTLE_PEER, v2's path),
+#   CASTLE_BARE (1 = neuc.65.3: no order, no seed — the guide only chats
+#   `autonomous on`; pair with --night for the no-castle, no-house nights),
 #   CASTLE_BODY (''|baritone — g0z.56: the builder runs on the v2 Baritone
 #   body, client image BARITONE_IMAGE, default client.sh tree-hash tag),
 #   CASTLE_REPAIR (''|wood|nowood, needs CASTLE_SEED=complete — g0z.56:
