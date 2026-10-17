@@ -558,8 +558,9 @@ peaceful dawn, so day deaths count), `gamerule fall_damage true`, and the
 world spawn moved 150 blocks from the pad toward the snapshot's spawn
 (`setworldspawn` on the world surface; the snapshot spawn is ~600 off the
 pad, prod deaths respawn 100-250 out). keep_inventory stays true, because
-prod reads true (2026-10-17), and so does the rest of the rig (weather
-locked clear). The verdict line adds `, day-deaths=<window deaths outside
+prod reads true (2026-10-17; `CASTLE_KEEP_INVENTORY=0` drops the kit on
+death instead, which is the bead's family-B assumption), and so does the
+rest of the rig (weather locked clear). The verdict line adds `, day-deaths=<window deaths outside
 the nights>, kitless=<death lines with sword=0>` after `night-deaths=`.
 House variants: `CASTLE_SEED=complete` (castle residence present),
 `CASTLE_BARE=1` (no house: home none, then an unbuilt site), and

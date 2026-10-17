@@ -1053,7 +1053,9 @@ async function main() {
   const timeT0 = Date.now()
   // deaths is declared below; the driver reads it only once armed (window open).
   // neuc.65.2: filled once the pad is known (open() reads them at window start).
-  const nightOpen = NIGHT_PROD ? ['difficulty easy', 'gamerule fall_damage true'] : []
+  // keep_inventory stays true (prod reads true 2026-10-17, the bead assumed
+  // false): CASTLE_KEEP_INVENTORY=0 drops the kit on death instead.
+  const nightOpen = NIGHT_PROD ? ['difficulty easy', 'gamerule fall_damage true', ...(process.env.CASTLE_KEEP_INVENTORY === '0' ? ['gamerule keep_inventory false'] : [])] : []
   const bumpDoor = HOUSE === 'bump' ? { x: 0, z: 0 } : null
   const night = NIGHT ? createNightDriver({ cmd: rcon, who: FOLLOWER, deaths: () => deaths, log: origLog, prod: NIGHT_PROD, openCmds: nightOpen, door: bumpDoor }) : null
   const resNights = SEED ? createResidenceNights({ deaths: () => deaths, log: origLog }) : null

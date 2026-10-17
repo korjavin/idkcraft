@@ -11,7 +11,8 @@
 #   --night prod (idkcraft-neuc.65.2, or CASTLE_NIGHT=prod): the same
 #   nights under prod conditions from window open — easy all window (no
 #   phantoms, no peaceful dawn: day deaths count), fall damage on, world
-#   spawn 150 from the pad; keep_inventory stays true (prod reads true);
+#   spawn 150 from the pad; keep_inventory stays true (prod reads true;
+#   CASTLE_KEEP_INVENTORY=0 drops the kit on death instead);
 #   the verdict adds day-deaths=<d>, kitless=<deaths with sword=0>.
 # Env: PRODWORLD (default /Users/iv/Projects/.idkcraft-prodworld),
 #   CASTLE_RIG_ID (''/0 default, a-z, or auto over CASTLE_SLOTS "0 a b c"),
