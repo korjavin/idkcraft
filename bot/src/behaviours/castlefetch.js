@@ -1763,7 +1763,18 @@ function castlefetch(bot, ctx, target, state) {
   if (st.status !== NO_WOOD || !WOOD.has(d.kind)) st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
-  if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot))) {
+  // idkcraft-8njf: on v2 a stairs craft that still fails after the table
+  // retry mines a stone batch instead of failing into the 5-min hold
+  // (forage -> rest -> house-build): stone is the castle's own material,
+  // and the next leg crafts again. bot.mine banks a delta, so the leg never
+  // ends 'done' at once; pack-full bounds the loop. v1 untouched (its
+  // digTick can end at once on a full cobble stock — a per-tick re-pick).
+  const stairsMine = d.kind === 'stairs' && f.craftOut && typeof bot.mine === 'function'
+  if (d.kind === 'stone' || (d.kind === 'stairs' && stairsCobbleShort(bot)) || stairsMine) {
+    if (stairsMine && !f.stairsMineLogged) {
+      f.stairsMineLogged = true
+      try { console.log('castlefetch stairs: craft out, mining a stone batch instead') } catch (_) { /* log best-effort */ }
+    }
     // neuc.59 fallback: a v2 stone leg tops up the pick budget first, one
     // craft per tick (goal.js frozen) — the refill rarely gets an equip run
     // in castle mode. v1 reads false and digs as before.
