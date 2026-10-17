@@ -937,8 +937,15 @@ one runs rejects `build-busy`.
 Mod: `Stats.java`, a client tick hook; Node: logged by the adapter
 (`bot/src/bridge/index.js`) as one `body.stats ...` line. Pushed once a
 minute while in world: `{heapUsedMb,heapMaxMb,gcCount,gcMs,maxTickGapMs,
-maxPushMs,chunks,entities}` — `gcCount`/`gcMs` = collections in the window
+maxPushMs,chunks,entities,rpc}` — `gcCount`/`gcMs` = collections in the window
 (all GarbageCollectorMXBeans), `maxTickGapMs` = the longest wall gap between
 two client post-ticks in it (50 = smooth), `maxPushMs` = the slowest
-blocking ws write (`WsServer.push`) in it. Observation only. The game JVM's
+blocking ws write (`WsServer.push`) in it, `rpc` (idkcraft-neuc.67.1) = the
+window's handler ms per method on the ws read thread, `busy=<ms> method=n/sumMs/maxMs ...`
+(heaviest six; `busy` = all methods). The adapter appends its own reply round
+trips per method as `rtt=[...]` (`BridgeTransport.takeRtt`): rtt >> rpc for a
+method = it queued behind others on the serial read thread. Observation only.
+The body client runs `inactivityFpsLimit:"minimized"` (Dockerfile): vanilla's
+AFK limiter dropped the headless client to 10 fps after 10 min without input,
+and every client-thread call waits for the next frame. The game JVM's
 extra args come from `BODY_JVM_ARGS` (start.sh, compose body2).

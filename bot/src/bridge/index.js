@@ -1094,7 +1094,7 @@ class BaritoneBot extends EventEmitter {
         }
         break
       case 'body.stats': // neuc.67: the body JVM once a minute (Stats.java) — the prod GC read
-        console.log(`body.stats heap=${p.heapUsedMb}/${p.heapMaxMb}MB gc=${p.gcCount}x${p.gcMs}ms maxTickGap=${p.maxTickGapMs}ms maxPush=${p.maxPushMs}ms chunks=${p.chunks} entities=${p.entities}`)
+        console.log(`body.stats heap=${p.heapUsedMb}/${p.heapMaxMb}MB gc=${p.gcCount}x${p.gcMs}ms maxTickGap=${p.maxTickGapMs}ms maxPush=${p.maxPushMs}ms chunks=${p.chunks} entities=${p.entities} rpc=[${p.rpc ?? ''}] rtt=[${typeof this.transport.takeRtt === 'function' ? this.transport.takeRtt() : ''}]`) // neuc.67.1: mod handler ms vs Node round trip per method
         break
       default:
         this.emit(method, p)

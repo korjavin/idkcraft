@@ -275,6 +275,11 @@ public final class BridgeServer {
         return ms;
     }
 
+    /** neuc.67.1: the window's per-method handler time (Rpc.takeTimings), then reset (Stats). */
+    String takeRpcTimings() {
+        return rpc.takeTimings(6);
+    }
+
     // ---- rpc methods (socket threads; client work goes through submit) ----
 
     private com.google.gson.JsonElement hello(JsonObject params) {
