@@ -521,6 +521,87 @@ describe('airborne target (phantom) builds no column', () => {
   })
 })
 
+// idkcraft-neuc.64: a mob in water is swing-only, never pursued (v2 drowned
+// at the spawn lake: the pursuit goal is the mob, no water cost can steer it).
+describe('hostile in water is never pursued', () => {
+  // water at y=64..65 under x>=5 (lake), sand everywhere else.
+  const lake = (bot, headWater = true) => {
+    bot.blockAt = (p) => {
+      if (p.x >= 5 && p.y === 64) return { name: 'water' }
+      if (p.x >= 5 && p.y === 65 && headWater) return { name: 'water' }
+      return { name: p.y < 64 ? 'sand' : 'air' }
+    }
+    return bot
+  }
+  const mobGoals = (bot, m) => bot.calls.goals.filter((g) => g && g.entity === m).length
+
+  it('drowned 6 blocks out in water: no pursuit, written off, brain sees unreachable', () => {
+    const bot = lake(mockBot())
+    const ctx = { lastGoalKey: '' }
+    const d = mobEntity(9, 'drowned', 6)
+    bot.entities = { 9: d }
+    for (let t = 0; t < 5; t++) fight(bot, ctx, null, { hostile: d })
+    assert.equal(mobGoals(bot, d), 0)
+    assert.equal(ctx.fightGivenUpId, 9)
+    assert.equal(buildState(bot, playerEntity(20), null, ctx.fightGivenUpId).hostile_reachable, false)
+    assert.equal(bot.calls.attack, 0)
+  })
+
+  it('drowned in reach (2.5 blocks) in water: swung, still no goal', () => {
+    const bot = mockBot()
+    bot.blockAt = (p) => ({ name: p.y === 64 ? 'water' : 'air' })
+    const ctx = { lastGoalKey: '' }
+    const d = mobEntity(9, 'drowned', 2.5)
+    fight(bot, ctx, null, { hostile: d })
+    assert.equal(bot.calls.attack, 1)
+    assert.equal(mobGoals(bot, d), 0)
+  })
+
+  it('the same drowned on sand is pursued as before', () => {
+    const bot = lake(mockBot())
+    const ctx = { lastGoalKey: '' }
+    const d = mobEntity(9, 'drowned', 3.5)
+    fight(bot, ctx, null, { hostile: d })
+    assert.equal(mobGoals(bot, d), 1)
+    assert.equal(ctx.fightGivenUpId, null)
+  })
+
+  it('a zombie wading at the shore (feet water, head air) counts as in water', () => {
+    const bot = lake(mockBot(), false)
+    assert.equal(fight.inWater(bot, mobEntity(9, 'zombie', 6)), true)
+    const ctx = { lastGoalKey: '' }
+    const z = mobEntity(9, 'zombie', 6)
+    fight(bot, ctx, null, { hostile: z })
+    assert.equal(mobGoals(bot, z), 0)
+    assert.equal(ctx.fightGivenUpId, 9)
+  })
+
+  it('drops a live pursuit once its mob steps into the water', () => {
+    const bot = lake(mockBot())
+    const ctx = { lastGoalKey: '' }
+    const d = mobEntity(9, 'drowned', 4)
+    fight(bot, ctx, null, { hostile: d })
+    assert.equal(mobGoals(bot, d), 1)
+    bot.pathfinder.goal = bot.calls.goals[0]
+    d.position.x = 6
+    fight(bot, ctx, null, { hostile: d })
+    assert.equal(bot.calls.goals[bot.calls.goals.length - 1], null)
+    assert.equal(mobGoals(bot, d), 1)
+  })
+
+  it('inWater(): kelp/seagrass count; unknown or missing cells read dry', () => {
+    const bot = mockBot()
+    const d = mobEntity(9, 'drowned', 0)
+    assert.equal(fight.inWater(bot, d), false) // no blockAt
+    bot.blockAt = () => null
+    assert.equal(fight.inWater(bot, d), false)
+    bot.blockAt = () => { throw new Error('unloaded') }
+    assert.equal(fight.inWater(bot, d), false)
+    bot.blockAt = (p) => ({ name: p.y === 65 ? 'seagrass' : 'air' })
+    assert.equal(fight.inWater(bot, d), true)
+  })
+})
+
 describe('stub fight end-to-end', () => {
   it('zombie at 4 blocks -> fight; zombie gone -> follow', async () => {
     const bot = mockBot()

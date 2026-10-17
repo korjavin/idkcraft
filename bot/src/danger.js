@@ -249,4 +249,4 @@ function wideSpots(ctx, t, feet, goal) {
   return out
 }
 
-module.exports = { addPathCost, PATH_COST, mark, near, covers, spots, prune, count, clear, markWaterDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, MAX_RADIUS }
+module.exports = { addPathCost, PATH_COST, WATER_BLOCKS, mark, near, covers, spots, prune, count, clear, markWaterDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, MAX_RADIUS }
