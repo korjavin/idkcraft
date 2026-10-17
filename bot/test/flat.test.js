@@ -588,6 +588,37 @@ describe('flat ticker wiring', () => {
       assert.ok(bot.chats.some((c) => c.includes('cannot reach the square')), bot.chats.join('\n'))
     })
 
+    it('x3y6.6: a far fill/shave phase walks to the square first; inside TRAVEL_FAR it does not', () => {
+      for (const phase of ['fill', 'shave']) {
+        const bot = mockBot(makeWorld())
+        bot.entity.position = pos(60, 64, 0)
+        const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: 3, n: 9 }, 62) }
+        ctx.flat.phase = phase
+        flat(bot, ctx, null, null)
+        assert.match(ctx.lastGoalKey, /^flat:travel:/, phase)
+        const near = mockBot(makeWorld())
+        near.entity.position = pos(4 + flat.TRAVEL_FAR, 64, 0)
+        const c2 = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: 3, n: 9 }, 62) }
+        c2.flat.phase = phase
+        flat(near, c2, null, null)
+        assert.ok(!/^flat:travel:/.test(c2.lastGoalKey), phase)
+      }
+    })
+
+    it('x3y6.6: a second walk-in gets a fresh give-up budget', () => {
+      const bot = mockBot(makeWorld())
+      const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P', { i: 3, n: 9 }, 62) }
+      ctx.flat.phase = 'fill'
+      ctx.flat.holes = Array.from({ length: 5 }, () => ({ x: 1, z: 1 })) // keeps fill alive on arrival
+      bot.entity.position = pos(40, 64, 0)
+      flat(bot, ctx, null, null)
+      bot.entity.position = pos(4 + flat.TRAVEL_FAR - 1, 64, 0) // arrived; the old best was 40
+      flat(bot, ctx, null, null)
+      bot.entity.position = pos(60, 64, 0) // sent away again, farther than the old best
+      for (let i = 0; i < flat.TRAVEL_STALL_TICKS; i++) flat(bot, ctx, null, null)
+      assert.ok(ctx.flat, 'still walking ' + bot.chats.join(';'))
+    })
+
     it('zchb: relay line round-trips; garbage and non-main senders are ignored', () => {
       const f = startEpisode(-7, 12, 16, 75, 'Owner_1', null, 64)
       assert.deepEqual(flat.parseRelay(flat.relayLine(f)), { radius: 16, cx: -7, cz: 12, feet: 65, level: 64, by: 'Owner_1' })
@@ -1140,6 +1171,18 @@ describe('flat behaviour', () => {
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole, shaved 1 bump'), bot.chats.join('\n'))
   })
 
+  it('x3y6.2: a fill place and a shave dig each count one block', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(2, 64, 0, 'dirt')
+    const { bot, ctx } = started(world)
+    const f = ctx.flat
+    await drive(bot, ctx, 20)
+    assert.equal(bot.calls.places.length, 1)
+    assert.equal(bot.calls.digs.length, 1)
+    assert.equal(f.blocks, 2)
+  })
+
   it('caps a ditch with below-level water, water stays', async () => {
     // 7wt: liquid strictly below the level is an ordinary hole; the cap
     // lands over the water without draining it.
@@ -1609,6 +1652,17 @@ describe('flat behaviour', () => {
     assert.ok(bot.calls.digs.length >= 1)
     assert.ok(bot.chats.some((c) => c === 'out of fill blocks, digging dirt'), bot.chats.join('\n'))
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole'), bot.chats.join('\n'))
+  })
+
+  it('x3y6.2: a restock dig counts a block', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const { bot, ctx } = started(world, { items: [], registry: DIRT_REGISTRY, dirtSpots: [{ x: 20, y: 63, z: 0 }] })
+    const f = ctx.flat
+    await drive(bot, ctx, 40)
+    assert.equal(bot.calls.digs.length, 1)
+    assert.equal(bot.calls.places.length, 1)
+    assert.equal(f.blocks, 2)
   })
 
   it('reports no fill blocks when no dirt is around', async () => {

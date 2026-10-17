@@ -1045,3 +1045,47 @@ describe('woodless far dig trails the spiral (vmzq.65)', () => {
     assert.match(wood.criterion, /\(\+home wood\)/)
   })
 })
+
+describe('x3y6.2 flat watchdog metric counts dug/placed blocks', () => {
+  function flatRun(grow) {
+    const bot = makeBot()
+    const { ctx } = bringCtx(bot)
+    delete ctx.bring
+    ctx.flat = { filled: 0, shaved: 0, total: 0, totalBumps: 393, blocks: 0, parked: false }
+    const { calls, brain } = answerBrain('park')
+    ctx.brain = brain
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    let t = t0
+    for (let i = 0; i < 12; i++) { // 120 s > GOAL_WATCHDOG_MS
+      t += 10000
+      if (grow) ctx.flat.blocks++
+      taskMod.taskTick(bot, ctx, t)
+    }
+    return { ctx, calls }
+  }
+
+  it('blocks rising for 2 min with cells flat: no round, no park', async () => {
+    const { ctx, calls } = flatRun(true)
+    await flush()
+    assert.equal(calls.length, 0)
+    assert.ok(!(ctx.task.flat && ctx.task.flat.wd && ctx.task.flat.wd.pending))
+  })
+
+  it('blocks flat too: the round fires as before', async () => {
+    const { ctx, calls } = flatRun(false)
+    await flush()
+    assert.equal(calls.length, 1)
+    assert.equal(ctx.goal.kind, 'flat')
+  })
+
+  it('blocks rising is progress while cells stay flat; flat blocks is not', () => {
+    const ctx = { flat: { filled: 0, shaved: 0, total: 0, totalBumps: 393, blocks: 5 } }
+    const cur = taskMod.orderCurrent(makeBot(), ctx, 'flat')
+    assert.equal(cur.blocks, 5)
+    const state = { done: 0, total: 393, blocks: 5 }
+    assert.equal(taskMod.orderProgressWhy(state, cur, 'flat'), null)
+    ctx.flat.blocks = 6
+    assert.equal(taskMod.orderProgressWhy(state, taskMod.orderCurrent(makeBot(), ctx, 'flat'), 'flat'), 'blocks')
+  })
+})

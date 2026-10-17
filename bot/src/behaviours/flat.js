@@ -56,6 +56,7 @@ const OCC_DEFERS = 6 // rotations before an occupied cell is skipped
 const SUPPORT_DEPTH = 4 // support fills below one cap before deferring
 const SELF_OCC_LIMIT = 6 // sidesteps out of our own cap cell before skip
 const TRAVEL_REISSUE = 5 // idle travel ticks before the far-square goal is re-issued
+const TRAVEL_FAR = 24 // blocks past the square edge (Chebyshev) beyond which fill/shave walks in first
 const TRAVEL_STALL_TICKS = 120 // travel ticks without getting nearer before giving up
 const SIDESTEPS = [[3, 0], [-3, 0], [0, 3], [0, -3]]
 const PROGRESS_MS = 120000 // progress chat cadence on the long job
@@ -727,6 +728,7 @@ function startEpisode(cx, cz, r, yTop, by, tile = null, level = null) {
     issuedKey: null,
     ticks: 0,
     lastProgressTick: 0,
+    blocks: 0, // dug + placed blocks (x3y6.2: the goal watchdog's flat metric)
     lastChat: 0,
     progressChats: 0,
     dig: null,
@@ -909,6 +911,7 @@ function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
     try {
       await bot.equip(item, 'hand')
       await bot.placeBlock(ref.ref, ref.face)
+      f.blocks++
       if (isSupport) {
         h.sup++
         f.supports++
@@ -940,6 +943,7 @@ function digFlight(bot, ctx, f, h, block) {
       try { tool = bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(block) : null } catch (_) { tool = null }
       if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
       await bot.dig(block)
+      f.blocks++
       h.pickup = at // walk the drop into the inventory (gather pattern)
       f.lastProgressTick = f.ticks
     } catch (e) {
@@ -1128,7 +1132,7 @@ function digTick(bot, ctx, f, bp) {
       }
       ctx.digInFlight = true
       ;(async () => {
-        try { await bot.dig(block) } catch (_) { /* gone or interrupted: recount anyway */ }
+        try { await bot.dig(block); f.blocks++ } catch (_) { /* gone or interrupted: recount anyway */ }
         ctx.digInFlight = false
         d.phase = 'pickup'
       })().catch(() => { ctx.digInFlight = false })
@@ -1717,6 +1721,13 @@ function flat(bot, ctx, target, state) {
     else scanTick(bot, ctx, f)
     return
   }
+  // x3y6.6: loaded chunks from afar skip the scan travel; walk in before approaching holes/bumps
+  if ((f.phase === 'fill' || f.phase === 'shave') && Math.max(Math.abs(bp.x - f.cx), Math.abs(bp.z - f.cz)) > f.r + TRAVEL_FAR) {
+    if (!f.walkIn) { f.walkIn = true; f.travelBest = null; f.travelStall = 0 } // fresh give-up budget per walk-in
+    travelTick(bot, ctx, f, bp)
+    return
+  }
+  f.walkIn = false
   if (f.phase === 'dig') {
     digTick(bot, ctx, f, bp)
     return
@@ -1797,6 +1808,7 @@ module.exports.relayLine = relayLine
 module.exports.parseRelay = parseRelay
 module.exports.squareLoaded = squareLoaded
 module.exports.TRAVEL_STALL_TICKS = TRAVEL_STALL_TICKS
+module.exports.TRAVEL_FAR = TRAVEL_FAR
 module.exports.progressChat = progressChat
 module.exports.FIRST_PROGRESS_MS = FIRST_PROGRESS_MS
 module.exports.FIRST_PROGRESS_N = FIRST_PROGRESS_N
