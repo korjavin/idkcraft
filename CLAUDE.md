@@ -120,6 +120,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BOT_CASTLE_PEER`: peer bot whose memory file's complete castle is read (never written) as a night residence (bot2 pins it to `BOT_USERNAME`; empty = off)
   - `BOT_PEER_USERNAME`: peer bot name that ownerOnline ignores (bot2 pins it to `BOT_USERNAME`; v1 excludes v2 via `BOT2_USERNAME`; never set on bot)
   - `BODY2_MEM_LIMIT`: v2 body RAM cap (default `2500m`)
+  - `BODY_JVM_ARGS`: extra game-JVM args for the v2 body, appended to `hmc.jvmargs` by `baritone/start.sh` (default empty = today's JVM; e.g. `-XX:MaxRAMPercentage=60 -Xlog:gc:stdout`; idkcraft-neuc.67)
   - `BOT_SWARM_N`: flat swarm size incl. `bot` (idkcraft-lhg2; empty = off, swarm1..32 idle: slots with `BOT_SWARM_I` >= N run `sleep infinity` from the compose `command` instead of node; `33` = bot + all 32). `flat <r>` splits the square into N x-strips: bot = strip 0, swarmK = strip K (`BOT_SWARM_I`, pinned per service; never set on bot). bot2 does not split (compose pins bot2 `BOT_SWARM_I=-1`, no strip, and passes `BOT_SWARM_N`/`BOT_SWARM_PREFIX` so its chat sieve matches the swarm). Helpers (strip >= 1) chat only `flattening...` and `flat done`; their progress/refill lines go to the log; helpers answer only `stop`/`flat`; `<BotName>: <command>` addresses one known bot
   - `BOT_SWARM_PREFIX`: swarm bot names `<prefix>1..32` (default `IdkSwarm`; whitelist each OFFLINE uuid like `BOT_USERNAME`; must not collide with `BOT2_USERNAME`)
   - `BOT_SWARM_MEM_LIMIT`: per-swarm-bot RAM cap (default `400m`)
