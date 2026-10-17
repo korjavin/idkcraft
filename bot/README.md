@@ -1,6 +1,6 @@
 # IdkCraft bot
 
-Node 22 companion bot that joins the Paper server, follows the player, scouts
+Node 26 companion bot that joins the Paper server, follows the player, scouts
 for valuable ore, and fights hostile mobs. Built around a "one body, many senses"
 concurrency architecture: perception and scouting are local, always-on reflexes,
 while the hybrid brain (rule FSM primary, remote LAYA/JEV model on named
