@@ -56,6 +56,13 @@ services:
       # World directory name (level-name). Default keeps the original world;
       # the stack env overrides it (LEVEL=world2 in Portainer since 2026-10-08).
       LEVEL: ${LEVEL:-world}
+      # x3y6.5 (owner 2026-10-17): swarm helpers get an unbreakable stone
+      # pickaxe from the server (hand-dug stone is 10 s/block, drops nothing).
+      # The kit function (configs kit-fn below) gives it only to an online
+      # helper holding none, so it never floods an inventory. It runs on every
+      # client connect (itzg cannot say who) and every 60 s from the datapack
+      # loop, so a death/loss is replaced within a minute.
+      RCON_CMDS_ON_CONNECT: function idkcraft:kit
       PATCH_DEFINITIONS: /patches
       # Geyser/Floodgate/ViaVersion track "latest" — drift risk accepted for
       # iteration 1. ViaVersion is needed because Geyser emulates a 26.2 Java
@@ -86,6 +93,16 @@ services:
     configs:
       - source: geyser-floodgate
         target: /patches/geyser-floodgate.json
+      # x3y6.5 datapack, inline (see the configs block). Paper loads it from the
+      # world's datapacks dir at start. Helper names follow BOT_SWARM_PREFIX.
+      - source: kit-mcmeta
+        target: /data/${LEVEL:-world}/datapacks/idkcraft/pack.mcmeta
+      - source: kit-load
+        target: /data/${LEVEL:-world}/datapacks/idkcraft/data/minecraft/tags/function/load.json
+      - source: kit-loop
+        target: /data/${LEVEL:-world}/datapacks/idkcraft/data/idkcraft/function/loop.mcfunction
+      - source: kit-fn
+        target: /data/${LEVEL:-world}/datapacks/idkcraft/data/idkcraft/function/kit.mcfunction
 
   bot:
     # Built by CI from ./bot (sibling bead owns bot/**) and pushed to GHCR.
@@ -541,3 +558,48 @@ configs:
     content: |
       {"file": "/data/plugins/Geyser-Spigot/config.yml",
        "ops": [{"$$set": {"path": "$$.java['auth-type']", "value": "floodgate"}}]}
+  # x3y6.5 swarm kit datapack (inline, like the patch above).
+  kit-mcmeta:
+    content: |
+      {"pack": {"description": "idkcraft swarm kit", "min_format": 101, "max_format": 999}}
+  kit-load:
+    content: |
+      {"values": ["idkcraft:loop"]}
+  kit-loop:
+    content: |
+      function idkcraft:kit
+      schedule function idkcraft:loop 60s
+  kit-fn:
+    content: |
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}1] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}1] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}1 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}2] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}2] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}2 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}3] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}3] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}3 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}4] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}4] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}4 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}5] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}5] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}5 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}6] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}6] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}6 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}7] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}7] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}7 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}8] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}8] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}8 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}9] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}9] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}9 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}10] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}10] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}10 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}11] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}11] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}11 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}12] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}12] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}12 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}13] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}13] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}13 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}14] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}14] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}14 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}15] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}15] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}15 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}16] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}16] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}16 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}17] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}17] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}17 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}18] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}18] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}18 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}19] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}19] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}19 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}20] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}20] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}20 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}21] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}21] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}21 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}22] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}22] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}22 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}23] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}23] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}23 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}24] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}24] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}24 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}25] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}25] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}25 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}26] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}26] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}26 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}27] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}27] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}27 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}28] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}28] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}28 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}29] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}29] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}29 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}30] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}30] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}30 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}31] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}31] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}31 minecraft:stone_pickaxe[unbreakable={}]
+      execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}32] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}32] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}32 minecraft:stone_pickaxe[unbreakable={}]
