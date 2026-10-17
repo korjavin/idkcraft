@@ -208,6 +208,20 @@ function tableFor(bot, ctx) {
     }
     st.castleTableWaits = 0
   }
+  // Ledge stance (idkcraft-gfgx, lay rig): the builder stood on a 1-wide
+  // castle wall top, every neighbour open air with no floor, and failed
+  // no-table-ref 6/6 with the table in the pack. Last resort: the open cell
+  // beside the block under our feet, placed against that block's side.
+  let face = new Vec3(0, 1, 0)
+  let ledge = null
+  let head = null
+  let under // read lazily: only a floorless neighbour needs it
+  const underSolid = () => {
+    if (under === undefined) {
+      try { under = bot.blockAt(new Vec3(bx, by - 1, bz)) } catch (_) { under = null }
+    }
+    return !!(under && under.position && under.name && under.name !== 'air' && under.boundingBox === 'block')
+  }
   for (const [dx, dz] of (ref ? [] : [[1, 0], [-1, 0], [0, 1], [0, -1]])) {
     const tried = skip.has(`${bx + dx},${by},${bz + dz}`)
     let below = null
@@ -216,6 +230,24 @@ function tableFor(bot, ctx) {
       below = bot.blockAt(new Vec3(bx + dx, by - 1, bz + dz))
       cell = bot.blockAt(new Vec3(bx + dx, by, bz + dz))
     } catch (_) { below = null; cell = null }
+    // The feet-level cell above it stays open: the table's top is in sight.
+    if (!ledge && below && below.position && AIRISH.has(below.name) &&
+        (!cell || AIRISH.has(cell.name) || PLACE_OVER.has(cell.name)) && underSolid() &&
+        !skip.has(`${bx + dx},${by - 1},${bz + dz}`) && !spotBlocked(ctx, bx + dx, by - 1, bz + dz)) {
+      ledge = { at: new Vec3(bx + dx, by - 1, bz + dz), face: new Vec3(dx, 0, dz) }
+    }
+    // Canopy stance (gfgx, 90-min castle rig, master and branch): the first
+    // kit's equip ran up a tree with every feet-level neighbour leaves/log
+    // and failed no-table-ref. Then the table sits on top of that block, in
+    // the open head-level cell (eye-level, in sight).
+    if (!head && cell && cell.position && cell.name && !AIRISH.has(cell.name) && cell.boundingBox === 'block' &&
+        !skip.has(`${bx + dx},${by + 1},${bz + dz}`) && !spotBlocked(ctx, bx + dx, by + 1, bz + dz)) {
+      let up = null
+      try { up = bot.blockAt(new Vec3(bx + dx, by + 1, bz + dz)) } catch (_) { up = null }
+      if (up && up.name && (AIRISH.has(up.name) || PLACE_OVER.has(up.name))) {
+        head = { ref: cell, at: new Vec3(bx + dx, by + 1, bz + dz) }
+      }
+    }
     if (!below || !below.position || !below.name || below.name === 'air') continue
     // Solid footing only: water, snow and flora are non-air but take no
     // placement (the packet dies and the item with it). Fail-open on an
@@ -231,12 +263,7 @@ function tableFor(bot, ctx) {
     // Bedroom cells are never table spots (idkcraft-4nx: a roadside table on
     // B-foot blocked the bed, which fails loud by design). Reads the
     // bedfacts leaf (oqul.13); unreadable reads as placeable.
-    try {
-      if (require('./bedfacts').isBedroomCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
-      // Nor any wall/door cell of the plan (idkcraft-d7i: a station in the
-      // doorway left the house doorless).
-      if (require('./build').isPlanCell(ctx && ctx.home, bx + dx, by, bz + dz)) continue
-    } catch (_) { /* untestable home: place as before */ }
+    if (spotBlocked(ctx, bx + dx, by, bz + dz)) continue
     if (tried) {
       if (!fallback) fallback = below
       continue
@@ -244,6 +271,15 @@ function tableFor(bot, ctx) {
     ref = below
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)
     break
+  }
+  if (!ref && ledge) { // a fresh ledge cell beats re-burning a refused one
+    ref = under
+    at = ledge.at
+    face = ledge.face
+  }
+  if (!ref && head) {
+    ref = head.ref
+    at = head.at
   }
   if (!ref && fallback) {
     ref = fallback
@@ -259,7 +295,7 @@ function tableFor(bot, ctx) {
       } catch (_) { /* held already or bust: placement decides */ }
     }
     try {
-      await bot.placeBlock(ref, new Vec3(0, 1, 0))
+      await bot.placeBlock(ref, face)
     } catch (err) {
       // The item is eaten with the refusal: never re-try this cell (the
       // scan above skips it next pick).
@@ -303,6 +339,25 @@ function tableFor(bot, ctx) {
     if (t && typeof t.unref === 'function') t.unref()
   })
   return Promise.race([run(), timeout])
+}
+
+const AIRISH = new Set(['air', 'cave_air', 'void_air'])
+
+// A table spot that would block a plan: bedroom cells (idkcraft-4nx: a
+// roadside table on B-foot blocked the bed), any wall/door cell of the home
+// plan (idkcraft-d7i: a station in the doorway left the house doorless), and
+// any castle plan cell of ctx.castle (gfgx: the castle builder runs with
+// home=none, so the home check alone let a table land in an unlaid wall
+// cell). Unreadable reads as placeable.
+function spotBlocked(ctx, x, y, z) {
+  try {
+    if (require('./bedfacts').isBedroomCell(ctx && ctx.home, x, y, z)) return true
+    if (require('./build').isPlanCell(ctx && ctx.home, x, y, z)) return true
+    const c = ctx && ctx.castle
+    if (c && c.site && typeof c.site.x === 'number' &&
+        require('../castle').absPlan(c.site, c.rot | 0, c.blueprintVersion).at.has(`${x},${y},${z}`)) return true
+  } catch (_) { /* untestable home: place as before */ }
+  return false
 }
 
 module.exports = { FAR_TABLE, PLACE_OVER, itemsOf, dist3, dayOf, tableFar, castleTableSpot, tableFor }
