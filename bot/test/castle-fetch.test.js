@@ -213,7 +213,7 @@ describe('castlefetch sources (g0z.4)', () => {
     bot.entity.position = pos(SITE.x + 1.5, 64, SITE.z - 0.5)
     fetch(bot, ctx)
     await settle(); await settle()
-    assert.ok(ctx.castleFetch.chestDone)
+    assert.equal(bot.calls.opens.length, 1, 'the empty chest is opened once')
     bot.entity.position = pos(SITE.x - 4, 64, SITE.z - 4)
     fetch(bot, ctx) // picks the target (in pickup reach) and digs
     await settle(); await settle()
