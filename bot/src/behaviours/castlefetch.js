@@ -330,6 +330,7 @@ function castleChest(bot, st) {
 function finish(bot, ctx, status) {
   const f = ctx.castleFetch
   if (status === 'done') ctx.castleFetchDry = null // a leg that got stock retires the dry mark
+  if (status === 'done' && f && f.kind === 'stairs' && !f.stairsMine) ctx.castleStairsMines = 0 // 8njf: stairs on hand (chest, craft) re-arm the mine fallback
   if (f && f.spend) {
     let delta = '?'
     try {

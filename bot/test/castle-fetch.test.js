@@ -560,6 +560,15 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stairs', 'a table refused for good reaches the hold')
   })
 
+  it('a landed stairs craft re-arms the v2 mine fallback (idkcraft-8njf)', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 16 }; return 'stairs-none' }
+    fetch.deps.craftItem = () => ({ done: true })
+    const bot = makeBot({ items: [...TOOLS(), { name: 'cobblestone', count: 200 }, { name: 'oak_planks', count: 16 }] })
+    const ctx = { castle: castleState(), castleStairsMines: 1 }
+    fetch(bot, ctx)
+    assert.equal(ctx.castleStairsMines, 0)
+  })
+
   it('v1: a stairs craft still out after the retry fails as before (idkcraft-8njf)', () => {
     castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 16 }; return 'stairs-none' }
     fetch.deps.craftItem = () => ({ done: false, line: 'need a crafting table' })
