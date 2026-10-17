@@ -210,6 +210,22 @@ describe('castle-rig.sh --night and interrupt cleanup (idkcraft-ek69)', () => {
     assert.ok(script.includes('CASTLE_NIGHT="$NIGHT"'), 'night not exported to the replay')
   })
 
+  it('parses --night prod and checks CASTLE_HOUSE (idkcraft-neuc.65.2)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-night-'))
+    const run = (args, env = {}) => spawnSync('sh', [sh, ...args], { encoding: 'utf8', env: { ...process.env, PRODWORLD: tmp, CASTLE_LOCK: path.join(tmp, 'lock'), RIG_PLANNER: 'stub', ...env } })
+    assert.match(run(['--night', 'prod', '68']).stdout, /no START.sh/)
+    assert.match(run(['--night', 'prod']).stdout, /no START.sh/)
+    assert.match(run([], { CASTLE_NIGHT: 'prod' }).stdout, /no START.sh/)
+    assert.equal(run(['--night', 'prod', '6', 'x']).status, 2)
+    const lone = run(['--night'], { CASTLE_HOUSE: 'bump' })
+    assert.equal(lone.status, 2)
+    assert.match(lone.stdout, /CASTLE_HOUSE needs CASTLE_BARE=1/)
+    assert.match(run(['--night'], { CASTLE_HOUSE: 'bump', CASTLE_BARE: '1' }).stdout, /no START.sh/)
+    assert.match(run([], { CASTLE_HOUSE: 'tower', CASTLE_BARE: '1' }).stdout, /CASTLE_HOUSE: want/)
+    const script = fs.readFileSync(sh, 'utf8')
+    assert.ok(script.includes('if [ "$NIGHT" = prod ]; then'), 'prod night does not bypass the day lock')
+  })
+
   // Fake rig: docker `run` stays alive like the Paper client (pid in
   // run.pid), rcon answers `ok` when up (else the rig sits in its boot
   // wait), a fake `node` replays NODE_MODE (hang: pid in node.pid; exit2).
@@ -318,6 +334,59 @@ describe('castle-replay.js night driver (idkcraft-ek69)', () => {
     await d.open()
     assert.ok(lines.some((l) => l.includes('night-rcon FAILED [time set 0]: boom')))
     assert.equal(d.tag(), ', nights=0')
+  })
+
+  it('prod: easy + fall damage once at open, no flips, day-deaths and kitless (idkcraft-neuc.65.2)', async () => {
+    resetSeen()
+    const cmds = []
+    const lines = []
+    let deaths = 2 // setup deaths before open are not the window's
+    const d = createNightDriver({ cmd: async (c) => { cmds.push(c); return 'ok' }, who: 'Bot', deaths: () => deaths, log: (l) => lines.push(l), prod: true, openCmds: ['difficulty easy', 'gamerule fall_damage true'] })
+    classify('death health=0 hostiles=1 at 1 64 1 time=day inside=no step=forage owner=work sword=0 pickaxe=none dist_home=none dist_spawn=3')
+    await d.open()
+    assert.deepEqual(cmds, ['time set 0', 'difficulty easy', 'gamerule fall_damage true'])
+    deaths = 3 // a day death, kitless
+    classify('death health=0 hostiles=1 at 1 64 1 time=day inside=no step=forage owner=work sword=0 pickaxe=none dist_home=none dist_spawn=3')
+    await d.onEvent({ event: 'nightfall' })
+    deaths = 4 // a night death with a sword
+    classify('death health=0 hostiles=1 at 1 64 1 time=night inside=no step=shelter owner=work sword=1 pickaxe=stone+ dist_home=none dist_spawn=3')
+    await d.onEvent({ event: 'dawn' })
+    assert.equal(cmds.length, 3, 'no difficulty flips or phantoms')
+    assert.deepEqual(d.nights[0], { night: 1, deaths: 1, sheltered: false, steps: [], partial: false })
+    assert.ok(lines.includes('CASTLE-RIG night 1: deaths=1, sheltered=no, steps=none'))
+    assert.equal(d.tag(), ', nights=1, sheltered=0/1, night-deaths=1, day-deaths=1, kitless=1')
+  })
+
+  it('house-bump: door distance of the settled shelter per night (idkcraft-neuc.65.2)', async () => {
+    resetSeen()
+    const lines = []
+    const door = { x: 10.5, z: 0.5 }
+    const d = createNightDriver({ cmd: async () => 'ok', who: 'Bot', deaths: () => 0, log: (l) => lines.push(l), prod: true, door })
+    await d.open()
+    classify('goal step=shelter prev=gohome source=x fsm=shelter why=step-failed fail=failed:cannot-reach-home menu=m facts=f')
+    classify('shelter phase=walk pos=10 64 -1 hostile=none')
+    classify('shelter phase=dug-in pos=10 63 -10 hostile=none') // dusk: before nightfall
+    await d.onEvent({ event: 'nightfall' })
+    await d.onEvent({ event: 'dawn' })
+    assert.equal(d.nights[0].doorDist, 10)
+    assert.ok(lines.includes('CASTLE-RIG house-bump night 1: gohome-fails=1, shelter-at=10 63 -10, door-dist=10, deaths=0, PASS'))
+    classify('shelter phase=pillar pos=10 64 -2 hostile=none') // night 2: pillars at the door
+    await d.onEvent({ event: 'nightfall' })
+    await d.onEvent({ event: 'dawn' })
+    assert.ok(lines.includes('CASTLE-RIG house-bump night 2: gohome-fails=0, shelter-at=10 64 -2, door-dist=2, deaths=0, FAIL'))
+    await d.onEvent({ event: 'nightfall' })
+    d.finish()
+    assert.ok(lines.includes('CASTLE-RIG house-bump night 3: gohome-fails=0, shelter-at=none, door-dist=none, deaths=0, FAIL (partial)'))
+    assert.equal(d.tag(), ', nights=3, sheltered=3/3, night-deaths=0, day-deaths=0, kitless=0, bump=1/3')
+  })
+
+  it('prodSpawnPoint / rigHouseCommands (idkcraft-neuc.65.2)', () => {
+    const { prodSpawnPoint, rigHouseCommands } = require('../tools/castle-replay')
+    assert.deepEqual(prodSpawnPoint({ x: 250, z: 350 }, { x: -50, z: -50 }), { x: 160, z: 230 })
+    assert.deepEqual(prodSpawnPoint({ x: 0, z: 0 }, { x: 0, z: 0 }), { x: 150, z: 0 })
+    assert.deepEqual(prodSpawnPoint({ x: 0, z: 0 }, null), { x: 150, z: 0 })
+    assert.equal(rigHouseCommands({ x: 0, y: 64, z: 0 }, 'clean').length, 2)
+    assert.equal(rigHouseCommands({ x: 0, y: 64, z: 0 }, 'bump')[2], 'fill 3 64 1 3 65 1 bedrock')
   })
 })
 
