@@ -1,0 +1,11 @@
+{
+  "measuredAt": "2026-10-17T18:15:00Z",
+  "gitsha": "ad49660b",
+  "window": "2026-10-15..2026-10-17 UTC (10-17 to 18:15Z); swarm 2026-10-16..17 only (BOT_SWARM_N on since 10-16)",
+  "note": "BEFORE row (idkcraft-neuc.65.1): measured with deaths.sh on the prod mc log + bot death/respawn lines BEFORE the enriched death line deployed, so topSteps/kitlessShare are null (old lines carry no step/kit) and loopShare reads the respawn CLAIM line (no measured 'respawned at' yet). Re-measure FROM the deploy day for 3 days and replace with the AFTER row; do not hand-tune. loopShare = deaths within 300 s of a respawn at world spawn (SPAWN_R 12 per axis). Swarm: IdkSwarm1..12 folded into one row; phantoms are counted, not fixed (owner 2026-10-17). Earlier days (mc log): IdkBot 10-13 171, 10-14 111; IdkBotV2 10-13 37, 10-14 102.",
+  "bots": {
+    "IdkBot": { "perDay": 21.0, "days": { "2026-10-15": 21, "2026-10-16": 20, "2026-10-17": 22 }, "topKillers": { "zombie": 18, "skeleton": 10, "creeper": 9 }, "topSteps": null, "kitlessShare": null, "loopShare": "2/63" },
+    "IdkBotV2": { "perDay": 30.0, "days": { "2026-10-15": 29, "2026-10-16": 37, "2026-10-17": 24 }, "topKillers": { "zombie": 32, "fell": 12, "skeleton": 11 }, "topSteps": null, "kitlessShare": null, "loopShare": "18/90" },
+    "swarm": { "perDay": 122.5, "days": { "2026-10-16": 58, "2026-10-17": 187 }, "topKillers": { "phantom": 108, "zombie": 51, "skeleton": 42 }, "topSteps": null, "kitlessShare": null, "loopShare": "38/245" }
+  }
+}

@@ -2753,6 +2753,7 @@ describe('paused stop', () => {
 describe('death/respawn log lines', () => {
   const { deathLine, respawnLine, handleDeath, handleRespawn, createLifecycle } = require('../src/index')
   const { buildState } = require('../src/perception')
+  const BARE = ' time=? inside=no step=none owner=none sword=0 pickaxe=none dist_home=none dist_spawn=none'
 
   function deadBot() {
     return {
@@ -2768,14 +2769,14 @@ describe('death/respawn log lines', () => {
   }
 
   it('death line carries health, hostile count and position', () => {
-    assert.equal(deathLine(deadBot()), 'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0')
+    assert.equal(deathLine(deadBot()), 'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0' + BARE)
   })
 
   it('hostile count ignores mobType-only entities (no deprecated fallback)', () => {
     const bot = deadBot()
     bot.entities[2] = { id: 2, type: 'mob', mobType: 'zombie', position: pos(101, 64, -20) }
     assert.equal(buildState(bot, null).nearby_hostiles, 1)
-    assert.equal(deathLine(bot), 'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0')
+    assert.equal(deathLine(bot), 'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0' + BARE)
   })
 
   it('respawn line carries the position', () => {
@@ -2812,7 +2813,7 @@ describe('death/respawn log lines', () => {
       life.onDeath(bot)
       life.onRespawn(bot)
       assert.deepEqual(lines, [
-        'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0',
+        'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0' + BARE.replace('dist_spawn=none', 'dist_spawn=102'),
         'respawn at 0 64 0',
       ])
       life.onRespawn(bot) // second respawn without a death stays silent
@@ -2840,7 +2841,7 @@ describe('death/respawn log lines', () => {
     }
     bot.entities = {} // the killer exploded with the bot
     bot.health = 0
-    assert.equal(deathLine(bot), 'death health=0 hostiles=1 at 0 64 0 nearest=creeper 4.0')
+    assert.ok(deathLine(bot).startsWith('death health=0 hostiles=1 at 0 64 0 nearest=creeper 4.0 time='), deathLine(bot))
   })
 
   it('handlers print exactly one line each', () => {
@@ -2856,9 +2857,71 @@ describe('death/respawn log lines', () => {
       console.log = orig
     }
     assert.deepEqual(lines, [
-      'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0',
+      'death health=0 hostiles=1 at 100 64 -20 nearest=zombie 2.0' + BARE,
       'respawn at 0 64 0',
     ])
+  })
+
+  // neuc.65.1: the enriched death line parses back field by field.
+  const DEATH_RE = /^death health=(\S+) hostiles=(\d+) at (-?\d+ -?\d+ -?\d+|unknown)(?: nearest=(\S+) (\S+))? time=(day|dusk|night|\?) inside=(yes|no) step=(\S+)(?: via=(\S+))? owner=(\S+) sword=(\d+) pickaxe=(none|wood|stone\+) dist_home=(\d+|none) dist_spawn=(\d+|none)$/
+
+  function ctxBot() {
+    const bot = deadBot()
+    bot.time = { timeOfDay: 18000 }
+    bot.spawnPoint = pos(0, 70, 16)
+    bot.inventory = { items: () => [{ name: 'stone_sword', count: 1 }, { name: 'wooden_pickaxe', count: 1 }, { name: 'iron_pickaxe', count: 1 }] }
+    const home = { built: true, site: { x: 100, y: 64, z: 0 }, interior: { min: { x: 98, y: 63, z: -22 }, max: { x: 102, y: 66, z: -18 } } }
+    bot._tickerCtx = { step: 'retreat', stepPick: { step: 'gather' }, body: { owner: 'roam' }, home }
+    return bot
+  }
+
+  it('enriched death line: ctx facts parse back field by field', () => {
+    const line = deathLine(ctxBot())
+    const m = line.match(DEATH_RE)
+    assert.ok(m, line)
+    assert.deepEqual(m.slice(6), ['night', 'yes', 'gather', 'retreat', 'roam', '1', 'stone+', '20', '106'])
+  })
+
+  it('enriched death line: day reads ctx.home, one step when goal and step agree', () => {
+    const bot = ctxBot()
+    bot.time = { timeOfDay: 1000 }
+    bot.entity = { position: pos(130, 64, 0) }
+    bot._tickerCtx.step = 'gather'
+    bot.inventory = { items: () => [] }
+    const m = deathLine(bot).match(DEATH_RE)
+    assert.ok(m, deathLine(bot))
+    assert.deepEqual(m.slice(6), ['day', 'no', 'gather', undefined, 'roam', '0', 'none', '30', '131'])
+  })
+
+  it('enriched death line never throws: a throwing ctx prints the unknowns', () => {
+    const bot = deadBot()
+    bot._tickerCtx = new Proxy({}, { get() { throw new Error('boom') } })
+    bot.inventory = { items() { throw new Error('boom') } }
+    assert.ok(DEATH_RE.test(deathLine(bot)), deathLine(bot))
+  })
+
+  it('respawned line: one shot on forcedMove, else the timeout', async () => {
+    const { EventEmitter } = require('events')
+    const { probeRespawned } = require('../src/index')
+    const lines = []
+    const orig = console.log
+    console.log = (l) => { if (String(l).startsWith('respawned')) lines.push(String(l)) }
+    try {
+      const bot = new EventEmitter()
+      bot.entity = { position: pos(100, 64, -20) }
+      probeRespawned(bot, 50)
+      bot.entity.position = pos(0.5, 70, 16.5)
+      bot.emit('forcedMove')
+      bot.emit('forcedMove')
+      await new Promise((r) => setTimeout(r, 80))
+      assert.deepEqual(lines, ['respawned at 0 70 16'])
+      probeRespawned(bot, 10) // no forcedMove (bridge: pos already moved)
+      await new Promise((r) => setTimeout(r, 40))
+      assert.deepEqual(lines, ['respawned at 0 70 16', 'respawned at 0 70 16'])
+      assert.equal(bot.listenerCount('forcedMove'), 0)
+    } finally {
+      console.log = orig
+    }
   })
 })
 
