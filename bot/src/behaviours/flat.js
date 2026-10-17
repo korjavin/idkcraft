@@ -1111,7 +1111,9 @@ function endDig(bot, ctx, f, resume) {
   }
   // Shaving needs no fill blocks: fall through to the bumps instead of
   // ending the episode, and keep the reason for the leftover holes (body-5).
-  if (f.bumps.length > 0) {
+  // x3y6.4: bumps are shaved before a restock now, so this is mostly the
+  // leftover-scaffold sweep the clean ends offer too.
+  if (f.bumps.length > 0 || maybeSweep(bot, f)) {
     f.phase = 'shave'
     f.abortWhy = 'no fill blocks'
     f.lastProgressTick = f.ticks
