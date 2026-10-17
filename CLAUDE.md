@@ -162,6 +162,16 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - Smallest diff that meets acceptance criteria, no speculative abstractions beyond the single brain interface.
   - Server runs `ONLINE_MODE=false` + `ENFORCE_WHITELIST=TRUE` in iteration 1 so the bot does not need a Microsoft account.
 
+## Delivery (curator 2026-10-14)
+
+- A wait over 10 min (castle-rig, stuck-run, a live body): hand it to one foreground `Agent` with
+  `model: "haiku"` ("wait until <file/condition>, return its last 40 lines"), never repeated 10-min
+  polls — each poll re-reads the developer's ~150k context (~650k tokens per 40-min rig run).
+- A follow-up from a developer hand-back on a symptom that already has ≥2 beads → spawn the architect
+  (family rule: design bead + rig scenario), never `bd create` another point fix (g0z.38→.54, neuc.35/.36).
+- Bundle beads only when together they fit one ~100-turn developer run; a bead that needs a rig run
+  never bundles (neuc.15+.23: 174 turns, 2 compactions).
+
 ## Review (revmux)
 
 - One command, run from the branch's worktree: `.revmux/review.sh <bead> 01-review` — privacy pre-check,
@@ -179,7 +189,8 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
 - Risky files: the review archive is **mandatory** for merge.
 - Stuck oracle (idkcraft-6x7.4), **batched** (owner 2026-10-03): PRs do NOT run
   `sh bot/tools/stuck-run.sh` and do not add spots — the rig run is too slow per PR. After a batch
-  of risky merges (default: every 3, or before an owner play session) one `stuck-run.sh` runs on
+  of risky merges (default: every 3, or before an owner play session; the orchestrator holds the 4th
+  risky/v2 merge until it is green — curator 2026-10-17: a 13-PR batch hid #519 for 8 merges) one `stuck-run.sh` runs on
   `master`, judged against `stuck-baseline.json`; exit 1 (regression) → bisect within the batch
   and file a P1 bead; exit 2 is an environment failure, fix the rig, not the code. The script
   holds its own rig lock (busy = exit 2; `RIG_LOCK_WAIT=<secs>` to wait). Accepted risk: a
