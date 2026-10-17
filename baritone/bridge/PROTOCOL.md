@@ -144,7 +144,10 @@ additionally suspends `blocksToDisallowBreaking` /
 Baritone's `plausibleToBreak` discards every banned target — without
 the suspension a mine next to the castle scans stone it may never
 break; v1's mineflayer dig bypasses the lists, which is why only v2
-stalled). The adapter skips those three keys in lease re-pushes while
+stalled), and sets `allowInventory true` for the call (Baritone's
+ToolSet reads the hotbar only; a crafted pick lands in slots 9-35, so
+without the swap every stone costs bare-hand speed and the path search
+times out on every target — idkcraft-605b). The adapter skips those three keys in lease re-pushes while
 a mine is live, so no mid-mine sync re-bans targets; both restore on
 every end (mod snapshot + next lease diff). Baritone has no per-process
 region: the Node side leashes (`radius` from the start position, plus
