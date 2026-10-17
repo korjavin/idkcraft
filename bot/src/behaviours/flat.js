@@ -670,6 +670,24 @@ function inTile(f, x, z) {
   return !f.tile || stripOf(x, f.cx, f.r, f.tile.n) === f.tile.i
 }
 
+// x3y6.3 work stealing: the bot's own strip {i, n} — f.steal while it works
+// another strip (f.tile = the victim then), else f.tile; null = no swarm.
+function homeOf(f) {
+  return f.steal || f.tile
+}
+
+// Victim strip for a steal: most holes+bumps left over k != home, ties to
+// the lowest k (deterministic, every thief agrees); null below STEAL_MIN.
+const STEAL_MIN = 8
+function stealVictim(cells, f) {
+  const { i: home, n } = f.steal
+  const left = new Array(n).fill(0)
+  for (const c of cells) left[stripOf(c.x, f.cx, f.r, n)]++
+  let best = -1
+  for (let k = 0; k < n; k++) if (k !== home && (best < 0 || left[k] > left[best])) best = k
+  return best >= 0 && left[best] >= STEAL_MIN ? { i: best, left: left[best] } : null
+}
+
 // zchb: the surface level under a standing player = the block their feet
 // rest on (a slab top at y+0.5 reads as that slab's block).
 function feetLevel(pos) {
@@ -788,13 +806,31 @@ function finish(bot, ctx, f, why) {
     const parts = Object.entries(f.skip).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`)
     line += `, skipped ${skipped}: ${parts.join(', ')}`
   }
-  say(bot, line)
-  console.log(`flat finish filled=${f.filled} shaved=${f.shaved} supports=${f.supports} left=${left} why=${why || 'done'} skip=${JSON.stringify(f.skip)}`)
+  // x3y6.3: a clean swarm finish re-scans the square to steal a strip; a
+  // steal that moved nothing (skips only) parks instead of ping-ponging,
+  // and a strip that gave up its holes (abortWhy) parks as today.
+  const home = homeOf(f)
+  const again = !!home && why == null && !f.abortWhy && (!f.steal || f.filled + f.shaved > 0)
+  // Chat once, when the bot truly stops; a finish going on to steal is
+  // log-only (13 bots x every round would spam the server).
+  if (again) console.log(line)
+  else say(bot, line)
+  console.log(`flat finish filled=${f.filled} shaved=${f.shaved} supports=${f.supports} left=${left} why=${why || 'done'} skip=${JSON.stringify(f.skip)} steal=${f.steal && f.tile ? f.tile.i + 1 : (again ? 'scan' : 'none')}`)
   clearGoal(bot, ctx)
   ctx.flat = null
+  if (again) {
+    // Same key (cx,cz,r): a relay/re-flat of this square resumes the steal.
+    // Persists like any episode; a restart resumes the home strip.
+    ctx.flat = startEpisode(f.cx, f.cz, f.r, f.yTop, f.by, null, f.level)
+    ctx.flat.steal = { i: home.i, n: home.n }
+    ctx.flat.blocks = f.blocks // the watchdog metric stays monotone
+    guardFlatSurface(bot, ctx)
+    return
+  }
+  if (f.steal && why == null) console.log('flat steal moved nothing: nothing to steal, parking')
   // tpd1: a helper parks where it finished — unparked with no work it
   // would walk home (unseen latch); the next flat order unparks it.
-  if (f.tile && f.tile.i >= 1) ctx.paused = true
+  if (home && home.i >= 1) ctx.paused = true
   guardFlatSurface(bot, ctx) // episode gone: the detach path below runs
 }
 
@@ -860,6 +896,21 @@ function scanTick(bot, ctx, f) {
   f.liquidCols = []
   f.holes = detectHoles(f.cands, level, f.cx, f.cz)
   f.bumps = detectBumps(f.cands, level, f.cx, f.cz)
+  if (f.steal) {
+    // Whole square was kept (tile null): pick the victim, keep its strip,
+    // farthest from the centre first — the owner works centre-out.
+    const v = stealVictim([...f.holes, ...f.bumps], f)
+    if (!v) {
+      f.holes = []
+      f.bumps = []
+      finish(bot, ctx, f, 'nothing to steal')
+      return
+    }
+    f.tile = { i: v.i, n: f.steal.n }
+    f.holes = f.holes.filter((h) => inTile(f, h.x, h.z)).reverse()
+    f.bumps = f.bumps.filter((h) => inTile(f, h.x, h.z)).reverse()
+    console.log(`flat steal strip=${v.i + 1}/${f.steal.n} left=${v.left} from=${f.steal.i + 1}`)
+  }
   f.bumpCols = new Set(f.bumps.map((b) => `${b.x},${b.z}`))
   f.cands = []
   f.tops = []
@@ -869,11 +920,12 @@ function scanTick(bot, ctx, f) {
   f.lastProgressTick = f.ticks
   f.lastChat = Date.now() // the start line below is the first progress
   const size = 2 * f.r + 1
-  let line = `flattening ${size}x${size} around ${f.by}${f.tile ? ` (strip ${f.tile.i + 1}/${f.tile.n})` : ''}, level ${level}: ${f.total} holes`
+  let line = `flattening ${size}x${size} around ${f.by}${f.tile ? ` (strip ${f.tile.i + 1}/${f.tile.n}${f.steal ? ' steal' : ''})` : ''}, level ${level}: ${f.total} holes`
   if (f.totalBumps > 0) line += `, ${f.totalBumps} bumps`
   if (f.counts.unloaded > 0) line += `, ${f.counts.unloaded} unloaded`
   if (f.counts.liquid > 0) line += `, ${f.counts.liquid} water skipped`
-  say(bot, line)
+  if (f.steal) console.log(line) // x3y6.3: steal rounds are log-only
+  else say(bot, line)
   console.log(`flat start anchor=${f.cx},${f.cz} r=${f.r} level=${level}${f.tile ? ` strip=${f.tile.i + 1}/${f.tile.n}` : ''}`)
   if (f.total === 0 && f.totalBumps === 0) finish(bot, ctx, f, null)
   else if (f.total === 0) f.phase = 'shave'
@@ -960,7 +1012,8 @@ function digFlight(bot, ctx, f, h, block) {
 
 // idkcraft-vewo.4: swarm helpers (strip >= 1) log progress/refill lines instead of chatting; start + done stay chat
 function tell(bot, f, line) {
-  if (f.tile && f.tile.i >= 1) console.log(`flat quiet strip=${f.tile.i + 1}/${f.tile.n}: ${line}`)
+  const home = homeOf(f)
+  if (home && home.i >= 1) console.log(`flat quiet strip=${f.tile.i + 1}/${f.tile.n}: ${line}`)
   else say(bot, line)
 }
 
@@ -1773,6 +1826,7 @@ module.exports.swarmTile = swarmTile
 module.exports.swarmHelper = swarmHelper
 module.exports.SWARM_HELPER_LINE = SWARM_HELPER_LINE
 module.exports.stripOf = stripOf
+module.exports.STEAL_MIN = STEAL_MIN
 module.exports.scanRecord = scanRecord
 module.exports.chooseLevel = chooseLevel
 module.exports.detectHoles = detectHoles
