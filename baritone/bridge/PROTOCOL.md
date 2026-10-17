@@ -144,7 +144,10 @@ additionally suspends `blocksToDisallowBreaking` /
 Baritone's `plausibleToBreak` discards every banned target — without
 the suspension a mine next to the castle scans stone it may never
 break; v1's mineflayer dig bypasses the lists, which is why only v2
-stalled). The adapter skips those three keys in lease re-pushes while
+stalled), and sets `allowInventory true` for the call (Baritone's
+ToolSet reads the hotbar only; a crafted pick lands in slots 9-35, so
+without the swap every stone costs bare-hand speed and the path search
+times out on every target — idkcraft-605b; refcounted with build through one shared holder, so an overlap neither restores mid-call nor leaks it on). The adapter skips those three keys in lease re-pushes while
 a mine is live, so no mid-mine sync re-bans targets; both restore on
 every end (mod snapshot + next lease diff). Baritone has no per-process
 region: the Node side leashes (`radius` from the start position, plus
@@ -885,7 +888,7 @@ quarry yielded). Unknown blocks, bad props, duplicate cells or > 4096
 cells refuse the call (`-32602`). Settings at build start:
 `buildIgnoreExisting false`, `buildInLayers false`, `okIfAir` empty,
 `allowInventory true` (the builder places from the hotbar only and would
-wedge on stacks in the main inventory; restored on end);
+wedge on stacks in the main inventory; restored on end, refcounted with mine);
 `forbid` joins `blocksToDisallowBreaking` for the build (restored on end).
 Substitutes ride `buildValidSubstitutes` (accept in place): the schematic
 block is already the held item, so `buildSubstitutes` (build-this-instead)
