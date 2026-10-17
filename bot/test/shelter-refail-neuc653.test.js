@@ -63,6 +63,31 @@ describe('neuc.65.3 shelter walks off tonight\'s gohome failure spot', () => {
     assert.equal(ctx.recovery == null, true, 'no pillar on the failing cell')
   })
 
+  it('the spot clears the door too (failure 3 from the door, the prod shape)', () => {
+    const { makeHome } = require('../src/site')
+    const h = makeHome(-3, 64, 3) // v2 house: door at (0, 64, 3)
+    h.built = true
+    const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
+    const ctx = { step: 'shelter', home: h, gohomeLatch: { fails: 2, pos: { x: 0.5, y: 64, z: 0.5 }, day: 5 } }
+    quiet(() => home.shelter(bot, ctx, null, {}))
+    const w = ctx.shelter.dig && ctx.shelter.dig.walk
+    assert.ok(w, 'a walk-off spot')
+    assert.ok(Math.hypot(w.x + 0.5 - h.door.x, w.z + 0.5 - h.door.z) >= 8, `spot ${JSON.stringify(w)} is 8+ from the door`)
+    assert.ok(Math.hypot(w.x, w.z) >= 7.5, 'and from the failure spot')
+  })
+
+  it('homeless on an unbuilt site floor: shelters, never done as "inside"', () => {
+    const { makeHome } = require('../src/site')
+    const h = makeHome(-1, 64, -1) // unbuilt: the bot stands on its interior box
+    const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })
+    const ctx = { step: 'shelter', home: h }
+    quiet(() => home.shelter(bot, ctx, null, {}))
+    assert.notEqual(ctx.stepStatus, 'done')
+    const goal = require('../src/goal')
+    assert.equal(goal.MENU.shelter.feasible({ time: 'night', home: 'site', inside: 'yes' }, bot, ctx), true)
+    assert.equal(goal.MENU.shelter.feasible({ time: 'night', home: 'built', inside: 'yes' }, bot, { home: { ...h, built: true } }), false)
+  })
+
   it('a failure from another day, or far away, pillars as before', () => {
     for (const gl of [{ fails: 2, pos: { x: 0.5, y: 64, z: 0.5 }, day: 4 }, { fails: 2, pos: { x: 40, y: 64, z: 0 }, day: 5 }, null]) {
       const bot = flatBot({ x: 0.5, y: 64, z: 0.5 })

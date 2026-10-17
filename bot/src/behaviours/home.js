@@ -1136,8 +1136,13 @@ function refailSpot(bot, ctx) {
     const bp = botPos(bot)
     if (!gl || !gl.pos || typeof gl.pos.x !== 'number' || gl.day !== day || !bp) return null
     const g2 = SHELTER_REFAIL_GAP * SHELTER_REFAIL_GAP
-    const far = (x, z) => (x - gl.pos.x) * (x - gl.pos.x) + (z - gl.pos.z) * (z - gl.pos.z) >= g2
-    if (far(bp.x, bp.z)) return null
+    const off = (p, x, z) => !p || typeof p.x !== 'number' || (x - p.x) * (x - p.x) + (z - p.z) * (z - p.z) >= g2
+    // Clear of the failure spot AND the door (a failure 3 from the door
+    // must not walk to the far side of the doorway).
+    let door = null
+    try { const nh = nightHome(bot, ctx); door = nh && nh.site ? doorPos(nh) : null } catch (_) { door = null }
+    const far = (x, z) => off(gl.pos, x, z) && off(door, x, z)
+    if (off(gl.pos, bp.x, bp.z)) return null
     return walkOffSpot(bot, ctx, (ax, az) => far(ax + 0.5, az + 0.5))
   } catch (_) { return null }
 }
@@ -1200,7 +1205,9 @@ function shelter(bot, ctx, target, state) {
   // homeless castle): home only answers "already inside" and the swim aim.
   const nh = ctx && nightHome(bot, ctx)
   const home = nh && nh.site ? nh : null
-  if (home && isInside(bot, home)) {
+  // neuc.65.3: an unbuilt site's floor is no shelter — only a built home
+  // (or the castle covering it) is inside.
+  if (home && (home.built === true || home !== ctx.home) && isInside(bot, home)) {
     // Walked in by hand (or a lagged first tick): stay owns the inside.
     ctx.stepStatus = 'done'
     return

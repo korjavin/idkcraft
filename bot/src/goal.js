@@ -106,8 +106,9 @@ const MENU = {
     // runs first — sheltering in a cave pillars head-blocked and digs
     // undiggable (run8 16:13). Night keeps shelter (vmzq.48 owns it).
     // Homeless night (neuc.65.3): no built home (none or an unbuilt site)
-    // and no castle residence — the home gate is shelterFits' now.
-    feasible: (facts, bot, ctx) => facts.inside === 'no' && shelterFits(facts, bot, ctx) && !duskClimbOut(facts, bot, ctx),
+    // and no castle residence — the home gate is shelterFits' now; the
+    // floor of an unbuilt site is no inside (no walls, no roof).
+    feasible: (facts, bot, ctx) => (facts.inside === 'no' || facts.home !== 'built') && shelterFits(facts, bot, ctx) && !duskClimbOut(facts, bot, ctx),
     chat: () => 'on my own: sheltering here till dawn',
     verb: 'sheltering till dawn',
   },
