@@ -65,6 +65,19 @@ describe('gfgx tableFor digs a cell free when encased', () => {
     assert.deepEqual(b.calls.dig, [{ x: -1, y: 64, z: 0 }])
   })
 
+  it('a refused placement on a dug cell digs a fresh neighbour next, not the refused one', async () => {
+    const w = world()
+    const b = bot(w)
+    const okPlace = b.placeBlock
+    b.placeBlock = async () => { throw new Error('refused') }
+    const ctx = {}
+    await assert.rejects(tableFor(b, ctx), /refused/)
+    b.placeBlock = okPlace
+    await tableFor(b, ctx)
+    assert.deepEqual(b.calls.dig, [{ x: 1, y: 64, z: 0 }, { x: -1, y: 64, z: 0 }])
+    assert.deepEqual(b.calls.place, [{ x: -1, y: 63, z: 0 }])
+  })
+
   it('water above every neighbour keeps no-table-ref', async () => {
     const extra = {}
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) extra[`${dx},65,${dz}`] = 'water'
