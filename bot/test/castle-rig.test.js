@@ -380,6 +380,17 @@ describe('castle-replay.js night driver (idkcraft-ek69)', () => {
     assert.equal(d.tag(), ', nights=3, sheltered=3/3, night-deaths=0, day-deaths=0, kitless=0, bump=1/3')
   })
 
+  it('v2 body: crossings from bot.time without a packet client (idkcraft-neuc.65.2)', () => {
+    const { createTimeResync } = require('../tools/castle-replay')
+    const events = []
+    const r = createTimeResync({ write: false, onEvent: (e) => events.push(e) })
+    const bot = { time: { timeOfDay: 11000 } }
+    r.onBotTime(bot, 1) // first read arms, no event
+    for (const [t, at] of [[12100, 2], [12500, 3], [13100, 4], [23999, 5], [10, 6], [13500, 7]]) { bot.time.timeOfDay = t; r.onBotTime(bot, at) }
+    // 13500 straight from day (a forward set) is not a crossing
+    assert.deepEqual(events.map((e) => [e.event, e.server, e.at]), [['dusk', 12100, 2], ['nightfall', 13100, 4], ['dawn', 10, 6]])
+  })
+
   it('prodSpawnPoint / rigHouseCommands (idkcraft-neuc.65.2)', () => {
     const { prodSpawnPoint, rigHouseCommands } = require('../tools/castle-replay')
     assert.deepEqual(prodSpawnPoint({ x: 250, z: 350 }, { x: -50, z: -50 }), { x: 160, z: 230 })

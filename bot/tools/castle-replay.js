@@ -505,6 +505,19 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
       st.empties++
       crossed(bot, now)
     },
+    // v2 body (neuc.65.2): the bridge has no packet client, so crossings
+    // come from its bot.time (the mod's server clock) on each 'time' event;
+    // without this a CASTLE_BODY=baritone --night never closed a night.
+    onBotTime(bot, now = Date.now()) {
+      const d = bot && bot.time && bot.time.timeOfDay
+      if (typeof d !== 'number' || !Number.isFinite(d) || !onEvent) return
+      const w = resyncWord(((d % 24000) + 24000) % 24000)
+      const prev = st.word
+      st.word = w
+      if (prev == null || prev === w) return
+      if (!((prev === 'day' && w === 'dusk') || (prev === 'dusk' && w === 'night') || (prev === 'night' && w === 'day'))) return
+      onEvent({ event: w === 'dusk' ? 'dusk' : w === 'night' ? 'nightfall' : 'dawn', server: d, bot: d, at: now })
+    },
     apply(bot) { // bot 'time' tap: lands after mineflayer's own write
       if (!write || st.anchor == null || !(st.rate > 0)) return
       if (!bot || !bot.game || bot.game.dimension !== st.dim) return
@@ -1088,6 +1101,7 @@ async function main() {
       : mineflayer.createBot({ ...opts, username: FOLLOWER })
     follower = b
     if (b._client) b._client.on('update_time', (packet) => timeResync.onPacket(b, packet))
+    else b.on('time', () => timeResync.onBotTime(b))
     b.on('time', () => timeResync.apply(b))
     b.on('physicsTick', () => timeResync.onTick(b))
     b.once('spawn', () => {
