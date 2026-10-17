@@ -595,31 +595,53 @@ describe('shave round-1 fixes', () => {
     assert.ok(bot2.chats.some((c) => c.includes('skipped 1: 1 lava')), bot2.chats.join('\n'))
   })
 
-  it('falls through to shaving when fill runs out of blocks', async () => {
+  // x3y6.4: out of fill -> own bumps first (their drops are fill), restock only with no bumps left.
+  async function driveFill(bot, ctx, n, onTick) {
+    for (let i = 0; i < n && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'fill' && f.holes.length > 0) bot.entity.position = pos(f.holes[0].x + 2, 64, f.holes[0].z)
+      else if (f.phase === 'shave' && f.bumps.length > 0) bot.entity.position = pos(f.bumps[0].x + 2, f.bumps[0].y, f.bumps[0].z)
+      flat(bot, ctx, null, null); await settle()
+      if (onTick && ctx.flat) onTick(ctx.flat)
+    }
+  }
+
+  it('x3y6.4: out of fill shaves own bumps first, fills with the drops, then finishes as before', async () => {
     const world = makeWorld({})
-    world.set(1, 63, 0, 'air') // hole, no blocks, no dirt registry
-    world.set(2, 64, 0, 'dirt') // bump shaved anyway
+    for (let z = -2; z <= 2; z++) world.set(-2, 63, z, 'air') // 5 holes
+    for (const z of [-2, 0, 2]) world.set(2, 64, z, 'dirt') // 3 dirt bumps
+    const bot = mockBot(world, { items: [] }) // no dirt registry: a restock finds nothing
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    const phases = []
+    await driveFill(bot, ctx, 120, (f) => { if (phases[phases.length - 1] !== f.phase) phases.push(f.phase) })
+    assert.equal(ctx.flat, null)
+    assert.equal(phases[phases.indexOf('shave') - 1], 'fill', 'shave straight from fill: no restock walk first')
+    const shaveAt = bot.chats.indexOf('out of fill blocks, shaving 3 bumps first')
+    assert.ok(shaveAt >= 0, bot.chats.join('\n'))
+    assert.ok(bot.chats.indexOf('out of fill blocks, digging dirt') > shaveAt, 'restock only once bumps are gone')
+    for (const z of [-2, 0, 2]) assert.equal(world.blockAt({ x: 2, y: 64, z }).name, 'air', 'bump shaved')
+    assert.equal([-2, -1, 0, 1, 2].filter((z) => world.blockAt({ x: -2, y: 63, z }).name === 'dirt').length, 3, '3 drops fill 3 holes')
+    assert.ok(bot.chats.some((c) => c.includes('shaved 3 bumps, 2 left (no fill blocks)')), bot.chats.join('\n'))
+  })
+
+  it('x3y6.4: fill resumes at FILL_RESUME blocks with bumps still left', async () => {
+    const world = makeWorld({})
+    world.set(-2, 63, 0, 'air')
+    for (let y = 64; y <= 72; y++) { world.set(2, y, 0, 'dirt'); world.set(2, y, 2, 'dirt') } // 18 drops
+    world.set(2, 64, -2, 'dirt')
     const bot = mockBot(world, { items: [] })
     const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
-    flat(bot, ctx, null, null); await settle() // scan
-    flat(bot, ctx, null, null); await settle() // fill: issue
-    bot.entity.position = pos(3, 64, 0)
-    flat(bot, ctx, null, null); await settle() // arrived, no item -> dig
-    assert.equal(ctx.flat.phase, 'dig')
-    flat(bot, ctx, null, null); await settle() // dig: no dirt -> shave, not finish
-    assert.equal(ctx.flat.phase, 'shave')
-    for (let i = 0; i < 40 && ctx.flat; i++) {
-      const f = ctx.flat
-      if (f.phase === 'shave' && f.bumps.length > 0) {
-        const h = f.bumps[0]
-        bot.entity.position = pos(h.x + 2, h.y, h.z)
-      }
-      flat(bot, ctx, null, null); await settle()
-    }
+    let resumed = null
+    let prev = null
+    await driveFill(bot, ctx, 200, (f) => {
+      if (prev === 'shave' && f.phase === 'fill' && !resumed) resumed = { have: flat.countFill(bot), bumps: f.bumps.length }
+      prev = f.phase
+    })
+    assert.ok(resumed, 'went back to fill')
+    assert.ok(resumed.have >= 16 && resumed.bumps >= 1, JSON.stringify(resumed))
     assert.equal(ctx.flat, null)
-    assert.equal(world.blockAt({ x: 2, y: 64, z: 0 }).name, 'air', 'bump shaved')
-    assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'air', 'hole honestly left')
-    assert.ok(bot.chats.some((c) => c.includes('1 left (no fill blocks)')), bot.chats.join('\n'))
+    assert.equal(world.blockAt({ x: -2, y: 63, z: 0 }).name, 'dirt', 'hole filled')
+    assert.equal(world.blockAt({ x: 2, y: 64, z: -2 }).name, 'air', 'the rest shaved after the holes')
   })
 
   it('falls through to shaving when fill stalls', async () => {
