@@ -1697,6 +1697,25 @@ function castlefetch(bot, ctx, target, state) {
     if (ctx.castleFetch) spend(ctx.castleFetch, 'other')
     return
   }
+  // neuc.63: a v2 castle builder batch still owns the body — the word
+  // flips to <kind>-none mid-batch (the next per-cell kind, e.g. stairs,
+  // is unheld while the batch's stone still lays). A table placed or a
+  // craft run under a live BuilderProcess is refused (rig 8a3/8a4/8bl:
+  // refused table spots -> 'need a crafting table' ->
+  // failed:castlefetch-no-stairs -> 5-min hold -> forage/rest/house
+  // spiral). Stop the batch (build-preempted: no strike, no fetch word)
+  // and fetch once its final lands. Never wait it out: a full batch
+  // climbs the builder to y+14 and the per-cell stairs are unreachable
+  // from there (rig n63-a1/a2: wedged at ~200 cells).
+  if (ctx.castleBuildFlight) {
+    if (ctx.castleFetch) spend(ctx.castleFetch, 'other')
+    const b = bot && bot._build
+    if (b && !b.preempted && typeof bot.stopBuild === 'function') {
+      try { console.log(`castlefetch: stopping the castle builder batch (placed ${b.placed | 0})`) } catch (_) { /* log best-effort */ }
+      bot.stopBuild().catch(() => { /* release best-effort: the bridge watchdog settles it anyway */ })
+    }
+    return
+  }
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') { finish(bot, ctx, 'done'); return }
   const d = demand(bot, ctx)

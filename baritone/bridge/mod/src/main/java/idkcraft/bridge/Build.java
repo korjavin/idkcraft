@@ -41,8 +41,9 @@ import net.minecraft.world.level.block.state.properties.Property;
  * {@code *_fence} / {@code *_log} like craftNames): a desired
  * {@code oak_planks} counts any laid {@code *_planks} as placed, same for
  * fences and logs. Settings at build start: {@code buildIgnoreExisting
- * false}, {@code buildInLayers false}, {@code okIfAir} empty;
- * {@code forbid} block names join {@code blocksToDisallowBreaking} for the
+ * false}, {@code buildInLayers false}, {@code okIfAir} empty,
+ * {@code allowInventory true} (the builder places from the hotbar only;
+ * restored on end); {@code forbid} block names join {@code blocksToDisallowBreaking} for the
  * build's duration (restored on end) so the pathfinder never eats the fresh
  * work. Substitutes ride {@code buildValidSubstitutes} (accept in place),
  * never {@code buildSubstitutes} (build-this-instead): the cell's block is
@@ -69,16 +70,19 @@ public final class Build {
         final CellSchematic schematic;
         final Map<String, List<String>> substitutes;
         final List<Block> savedDisallow;
+        final boolean savedAllowInventory;
         int lastPlaced;
         int lastMissing;
 
         Active(Spec spec, BlockPos origin, CellSchematic schematic,
-                Map<String, List<String>> substitutes, List<Block> savedDisallow) {
+                Map<String, List<String>> substitutes, List<Block> savedDisallow,
+                boolean savedAllowInventory) {
             this.spec = spec;
             this.origin = origin;
             this.schematic = schematic;
             this.substitutes = substitutes;
             this.savedDisallow = savedDisallow;
+            this.savedAllowInventory = savedAllowInventory;
         }
     }
 
@@ -251,6 +255,13 @@ public final class Build {
         settings.buildInLayers.value = false;
         settings.okIfAir.value = new ArrayList<>();
         List<Block> savedDisallow = new ArrayList<>(settings.blocksToDisallowBreaking.value);
+        // idkcraft-pwoi: BuilderProcess places from the hotbar only; with
+        // allowInventory off it still paths to cells it could place from the
+        // main inventory and wedges there (crafted house planks land in
+        // slots 9-35: 0 placed, build-stall). On, it swaps stacks to the
+        // hotbar itself. Build-scoped, restored on end like the ban list.
+        boolean savedAllowInventory = settings.allowInventory.value;
+        settings.allowInventory.value = true;
         if (!forbidBlocks.isEmpty()) {
             Set<Block> disallow = new HashSet<>(savedDisallow);
             for (String path : forbidBlocks) {
@@ -274,7 +285,7 @@ public final class Build {
         }
         settings.buildValidSubstitutes.value = javaSubstitutes;
         baritone.getBuilderProcess().build(spec.name, schematic, origin);
-        active = new Active(spec, origin, schematic, substitutes, savedDisallow);
+        active = new Active(spec, origin, schematic, substitutes, savedDisallow, savedAllowInventory);
         int missing = countNow(spec, substitutes);
         active.lastPlaced = spec.cells.size() - missing;
         active.lastMissing = missing;
@@ -290,6 +301,7 @@ public final class Build {
         try {
             Settings settings = BaritoneAPI.getSettings();
             settings.blocksToDisallowBreaking.value = new ArrayList<>(a.savedDisallow);
+            settings.allowInventory.value = a.savedAllowInventory;
         } catch (Exception e) {
             // restore best-effort: the next build re-arms its own set
         }
