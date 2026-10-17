@@ -485,6 +485,16 @@ function craftTick(bot, ctx, f, d) {
     const woodless = WOOD.has(d.kind) && countItems(bot, (n) => n.endsWith('_planks') || n.endsWith('_log')) === 0
     const line = woodless ? `can't craft ${d.kind}: no planks or logs` : r.line
     try { console.log(`castlefetch ${d.kind}: craft failed: ${line}`) } catch (_) { /* log best-effort */ }
+    // idkcraft-8njf: a table failure gets one fresh craft run per leg. The
+    // walk give-up latched that table dead for the day (craftany deadToday)
+    // and a refused placement run ended on its try cap, so the re-plan
+    // places a fresh table from the pack — instead of the leg failing into
+    // the 5-min hold -> forage -> rest -> house-build spiral (pwoi rig).
+    if (/crafting table/.test(line) && !f.tableRetry) {
+      f.tableRetry = true
+      try { console.log(`castlefetch ${d.kind}: retrying the craft with a fresh table`) } catch (_) { /* log best-effort */ }
+      return true
+    }
   }
   f.craftOut = true // the pack cannot fund it: fall through to the world
   return false

@@ -518,7 +518,33 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     const bot = makeBot({ items: [{ name: 'oak_log', count: 14 }] })
     const ctx = { castle: castleState() }
     fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, undefined, 'idkcraft-8njf: the first table failure re-crafts')
+    fetch(bot, ctx)
     assert.equal(chopped, 0)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-door')
+  })
+
+  it('a table craft failure retries once with a fresh table before the leg fails (idkcraft-8njf)', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 16 }; return 'stairs-none' }
+    const lines = ["can't reach the crafting table", 'need a crafting table']
+    let calls = 0
+    fetch.deps.craftItem = () => ({ done: false, line: lines[calls++] })
+    const bot = makeBot({ items: [...TOOLS(), { name: 'cobblestone', count: 200 }, { name: 'oak_planks', count: 16 }] })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
+    assert.equal(calls, 1)
+    assert.equal(ctx.stepStatus, undefined, 'the leg stays on for a fresh craft run')
+    fetch(bot, ctx)
+    assert.equal(calls, 2, 'one retry per leg')
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stairs')
+  })
+
+  it('a non-table craft failure never retries (idkcraft-8njf)', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'door', left: 1 }; return 'door-none' }
+    fetch.deps.craftItem = () => ({ done: false, line: 'need 6 planks' })
+    const bot = makeBot({ items: [{ name: 'oak_log', count: 14 }] })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:castlefetch-craft-door')
   })
 
@@ -532,6 +558,7 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     console.log = (m) => { lines.push(String(m)) }
     try {
       fetch(bot, ctx)
+      fetch(bot, ctx) // idkcraft-8njf: the table retry first
     } finally {
       console.log = origLog
     }
