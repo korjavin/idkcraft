@@ -3,6 +3,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { isFightTarget } = require('../perception')
+const { WATER_BLOCKS } = require('../danger')
 const follow = require('./follow')
 const { issueGoal, clearGoal } = require('./util')
 
@@ -42,7 +43,8 @@ function fight(bot, ctx, target, state) {
   ctx.fightId = hostile.id
   const key = `fight:${hostile.id}`
   const inRange = bot.entity.position.distanceTo(hostile.position) <= SWING_RANGE
-  if (airborne(bot, hostile)) {
+  const wet = inWater(bot, hostile)
+  if (wet || airborne(bot, hostile)) {
     // idkcraft-2pkm: never pursue a flying mob (phantom, bat, a rising
     // blaze). GoalFollow's isEnd is 3D, so the only path to a mob in open
     // air is up: v1 1x1 towers / placed jump-up stairs, v2 Baritone
@@ -59,7 +61,7 @@ function fight(bot, ctx, target, state) {
       if (!ctx.reflexSwung) swing(bot, hostile)
       return
     }
-    if (FLYERS.has(hostile.name)) ctx.fightGivenUpId = hostile.id
+    if (wet || FLYERS.has(hostile.name)) ctx.fightGivenUpId = hostile.id
     follow(bot, ctx, target, state)
     return
   }
@@ -150,6 +152,21 @@ function airborne(bot, hostile) {
   return true
 }
 
+// In water = the mob's feet cell or head cell is a danger.js WATER_BLOCKS
+// block. A zombie wading at the shore (feet water, head air) counts too: it
+// is one step from deep water. Unknown cells read as dry (old pursuit).
+function inWater(bot, hostile) {
+  if (typeof bot.blockAt !== 'function') return false
+  const p = hostile.position
+  try {
+    for (let k = 0; k <= 1; k++) {
+      const b = bot.blockAt(new Vec3(Math.floor(p.x), Math.floor(p.y) + k, Math.floor(p.z)))
+      if (b && WATER_BLOCKS.has(b.name)) return true
+    }
+  } catch (_) { return false }
+  return false
+}
+
 function swing(bot, hostile) {
   bot.lookAt(hostile.position.offset(0, hostile.height * 0.8, 0), true)
   bot.attack(hostile)
@@ -210,4 +227,5 @@ module.exports = fight
 module.exports.SWING_RANGE = SWING_RANGE
 module.exports.swing = swing
 module.exports.airborne = airborne
+module.exports.inWater = inWater
 module.exports.equipGear = equipGear
