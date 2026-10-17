@@ -64,6 +64,7 @@ const FIRST_PROGRESS_MS = 25000 // first progress comes fast: 2 min of silence r
 const FIRST_PROGRESS_N = 10 // ...or after this many resolved cells, whichever first
 const BACKSTOP_TICKS = 180 // ticks without any placement/skip before giving up
 const DIG_TARGET = 32 // dirt to dig per restock episode
+const FILL_RESUME = 16 // x3y6.4: fill blocks banked from own bumps before filling resumes
 const DIG_TICKS = 300 // restock budget before resuming with what is on hand
 const DIG_STALLS = 10
 const DIG_STREAK = 3
@@ -1018,6 +1019,15 @@ function tell(bot, f, line) {
 }
 
 function startDig(bot, ctx, f) {
+  // x3y6.4: the strip's own bumps come off anyway and drop fill: shave
+  // them first; the restock walk runs only once no bump is left.
+  if (f.bumps.length > 0) {
+    f.phase = 'shave'
+    f.shaveForFill = true
+    f.lastProgressTick = f.ticks
+    tell(bot, f, `out of fill blocks, shaving ${f.bumps.length} bumps first`)
+    return
+  }
   f.phase = 'dig'
   f.dig = { pos: null, phase: 'walk', skip: new Set(), streak: 0, ticks: 0, stalls: 0, lastPos: null }
   f.lastProgressTick = f.ticks
@@ -1101,7 +1111,9 @@ function endDig(bot, ctx, f, resume) {
   }
   // Shaving needs no fill blocks: fall through to the bumps instead of
   // ending the episode, and keep the reason for the leftover holes (body-5).
-  if (f.bumps.length > 0) {
+  // x3y6.4: bumps are shaved before a restock now, so this is mostly the
+  // leftover-scaffold sweep the clean ends offer too.
+  if (f.bumps.length > 0 || maybeSweep(bot, f)) {
     f.phase = 'shave'
     f.abortWhy = 'no fill blocks'
     f.lastProgressTick = f.ticks
@@ -1547,6 +1559,14 @@ function shaveTick(bot, ctx, f, bp) {
   progressChat(bot, f)
   if (f.ticks - f.lastProgressTick > BACKSTOP_TICKS) {
     finish(bot, ctx, f, 'stalled')
+    return
+  }
+  // x3y6.4: back to the holes once enough is banked or the bumps ran out
+  // (no bumps -> the next empty hand takes the restock walk, then finishes).
+  if (f.shaveForFill && (f.bumps.length === 0 || countFill(bot) >= FILL_RESUME)) {
+    f.shaveForFill = false
+    f.phase = 'fill'
+    f.lastProgressTick = f.ticks
     return
   }
   if (f.bumps.length === 0) {
