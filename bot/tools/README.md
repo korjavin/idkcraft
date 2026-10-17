@@ -1032,3 +1032,7 @@ Grafana: the `idkcraft_bot_task_progress{task}` / `_stall_seconds{task}`
 panel queries live in `bot/README.md` (Task panel queries, vmzq.9) — the
 metric landed in #316, the dashboard JSON lives in the house Grafana, not
 in this repo.
+
+## castle-give.sh
+
+`sh bot/tools/castle-give.sh <file|->`: one rcon command per line (e.g. `give IdkBotV2 minecraft:cobblestone 896`) run on prod `mc` via Portainer exec; keys from stash. The owner's standing ask (curator 2026-10-17): top up the bots' castle materials with it instead of waiting.
