@@ -214,6 +214,7 @@ function tableFor(bot, ctx) {
   // beside the block under our feet, placed against that block's side.
   let face = new Vec3(0, 1, 0)
   let ledge = null
+  let head = null
   let under // read lazily: only a floorless neighbour needs it
   const underSolid = () => {
     if (under === undefined) {
@@ -234,6 +235,18 @@ function tableFor(bot, ctx) {
         (!cell || AIRISH.has(cell.name) || PLACE_OVER.has(cell.name)) && underSolid() &&
         !skip.has(`${bx + dx},${by - 1},${bz + dz}`) && !spotBlocked(ctx, bx + dx, by - 1, bz + dz)) {
       ledge = { at: new Vec3(bx + dx, by - 1, bz + dz), face: new Vec3(dx, 0, dz) }
+    }
+    // Canopy stance (gfgx, 90-min castle rig, master and branch): the first
+    // kit's equip ran up a tree with every feet-level neighbour leaves/log
+    // and failed no-table-ref. Then the table sits on top of that block, in
+    // the open head-level cell (eye-level, in sight).
+    if (!head && cell && cell.position && cell.name && !AIRISH.has(cell.name) && cell.boundingBox === 'block' &&
+        !skip.has(`${bx + dx},${by + 1},${bz + dz}`) && !spotBlocked(ctx, bx + dx, by + 1, bz + dz)) {
+      let up = null
+      try { up = bot.blockAt(new Vec3(bx + dx, by + 1, bz + dz)) } catch (_) { up = null }
+      if (up && up.name && (AIRISH.has(up.name) || PLACE_OVER.has(up.name))) {
+        head = { ref: cell, at: new Vec3(bx + dx, by + 1, bz + dz) }
+      }
     }
     if (!below || !below.position || !below.name || below.name === 'air') continue
     // Solid footing only: water, snow and flora are non-air but take no
@@ -263,6 +276,10 @@ function tableFor(bot, ctx) {
     ref = under
     at = ledge.at
     face = ledge.face
+  }
+  if (!ref && head) {
+    ref = head.ref
+    at = head.at
   }
   if (!ref && fallback) {
     ref = fallback

@@ -70,7 +70,22 @@ describe('gfgx tableFor on a ledge', () => {
   it('an overhang above the ledge cell blocks it (table top out of sight)', async () => {
     const w = world()
     for (const k of ['1,78,0', '-1,78,0', '0,78,1', '0,78,-1']) w.cells.set(k, 'cobblestone')
-    await assert.rejects(tableFor(bot(w), {}), /no-table-ref/)
+    const b = bot(w)
+    await tableFor(b, {})
+    // not the hidden ledge cell (1,77,0): the canopy spot on top instead
+    assert.deepEqual(b.calls, [{ ref: { x: 1, y: 78, z: 0 }, face: { x: 0, y: 1, z: 0 } }])
+  })
+
+  it('canopy: leaves on every feet-level side -> the table sits on top of one, head level', async () => {
+    const w = world()
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      w.cells.set(`${dx},78,${dz}`, 'birch_leaves')
+      w.cells.set(`${dx},77,${dz}`, 'birch_leaves')
+    }
+    const b = bot(w)
+    const r = await tableFor(b, {})
+    assert.deepEqual(b.calls, [{ ref: { x: 1, y: 78, z: 0 }, face: { x: 0, y: 1, z: 0 } }])
+    assert.deepEqual({ ...r.pos }, { x: 1, y: 79, z: 0 })
   })
 
   it('castle plan cells are never table spots (home=none on the builder)', async () => {
