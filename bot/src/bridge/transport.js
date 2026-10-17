@@ -16,6 +16,14 @@ class BridgeTransport extends EventEmitter {
     this.nextId = 1
     this.pending = new Map()
     this.ws = null
+    this.rtt = new Map() // neuc.67.1: method -> [n, sumMs, maxMs] reply round trips since takeRtt()
+  }
+
+  // neuc.67.1: the window's round trips, heaviest total first ('method=n/sumMs/maxMs ...', top n), then reset.
+  takeRtt(top = 6) {
+    const s = [...this.rtt].sort((a, b) => b[1][1] - a[1][1]).slice(0, top).map(([m, t]) => `${m}=${t.join('/')}`).join(' ')
+    this.rtt.clear()
+    return s
   }
 
   connect() {
@@ -45,7 +53,7 @@ class BridgeTransport extends EventEmitter {
         this.pending.delete(id)
         reject(new Error(`bridge ${method}: timeout (${this.timeoutMs} ms)`))
       }, this.timeoutMs)
-      this.pending.set(id, { resolve, reject, timer })
+      this.pending.set(id, { resolve, reject, timer, method, t0: Date.now() })
       try {
         this.ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
       } catch (e) {
@@ -61,9 +69,12 @@ class BridgeTransport extends EventEmitter {
     try { msg = JSON.parse(String(data)) } catch (_) { return }
     if (msg == null || typeof msg !== 'object') return
     if (msg.id != null && this.pending.has(msg.id)) {
-      const { resolve, reject, timer } = this.pending.get(msg.id)
+      const { resolve, reject, timer, method, t0 } = this.pending.get(msg.id)
       this.pending.delete(msg.id)
       clearTimeout(timer)
+      const ms = Date.now() - t0
+      const t = this.rtt.get(method) || [0, 0, 0]
+      this.rtt.set(method, [t[0] + 1, t[1] + ms, Math.max(t[2], ms)])
       if (msg.error) reject(new Error(`bridge: ${msg.error.message || msg.error.code || 'error'}`))
       else resolve(msg.result)
       return

@@ -120,6 +120,7 @@ public final class Rpc {
             return notification ? null : error(id, INVALID_PARAMS, "params must be an object");
         }
         final JsonElement result;
+        long t0 = System.nanoTime();
         try {
             result = handler.handle(params);
         } catch (RpcException e) {
@@ -127,6 +128,8 @@ public final class Rpc {
         } catch (Exception e) {
             LOG.warn("bridge rpc {} failed", method, e);
             return notification ? null : error(id, INTERNAL_ERROR, "internal error");
+        } finally {
+            time(method, (System.nanoTime() - t0) / 1_000_000);
         }
         if (notification) {
             return null;
@@ -136,6 +139,37 @@ public final class Rpc {
         reply.add("id", id);
         reply.add("result", result == null ? new JsonObject() : result);
         return GSON.toJson(reply);
+    }
+
+    /** neuc.67.1: per-method handler ms since the last {@link #takeTimings}: method -> {n, sumMs, maxMs}. */
+    private final Map<String, long[]> timings = new java.util.HashMap<>();
+
+    private synchronized void time(String method, long ms) {
+        long[] t = timings.computeIfAbsent(method, k -> new long[3]);
+        t[0]++;
+        t[1] += ms;
+        t[2] = Math.max(t[2], ms);
+    }
+
+    /**
+     * neuc.67.1 (body.stats {@code rpc}): the window's handler time per
+     * method, heaviest total first, as {@code method=n/sumMs/maxMs ...}
+     * (top {@code top}; {@code busy=<sumMs>} first = the read thread's
+     * total, all methods), then reset. Observation only.
+     */
+    public synchronized String takeTimings(int top) {
+        long busy = 0;
+        for (long[] t : timings.values()) {
+            busy += t[1];
+        }
+        StringBuilder sb = new StringBuilder("busy=").append(busy);
+        timings.entrySet().stream()
+                .sorted((a, b) -> Long.compare(b.getValue()[1], a.getValue()[1]))
+                .limit(top)
+                .forEach(e -> sb.append(' ').append(e.getKey()).append('=').append(e.getValue()[0])
+                        .append('/').append(e.getValue()[1]).append('/').append(e.getValue()[2]));
+        timings.clear();
+        return sb.toString();
     }
 
     private static String error(JsonElement id, int code, String message) {

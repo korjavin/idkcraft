@@ -38,6 +38,19 @@ public class RpcTest {
     }
 
     @Test
+    public void takeTimingsCountsPerMethodThenResets() {
+        Rpc rpc = rpc();
+        rpc.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"echo\",\"params\":{\"v\":1}}");
+        rpc.handle("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"echo\",\"params\":{\"v\":2}}");
+        rpc.handle("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"fail\"}");
+        String t = rpc.takeTimings(6);
+        assertTrue(t.startsWith("busy="), t);
+        assertTrue(t.matches(".* echo=2/\\d+/\\d+.*"), t);
+        assertTrue(t.matches(".* fail=1/\\d+/\\d+.*"), t); // failed calls still occupied the read thread
+        assertEquals("busy=0", rpc.takeTimings(6));
+    }
+
+    @Test
     public void unknownMethodIs32601() {
         String reply = rpc().handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"nope\"}");
         assertEquals(-32601, JsonParser.parseString(reply).getAsJsonObject()
