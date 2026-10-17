@@ -267,8 +267,10 @@ function paused(bot, st, reason) {
     // Mirror disagrees (it still holds a block Baritone calls missing — H1):
     // a starved resolve would re-batch the same phantom names every ~2 s
     // and strike-retire live cells (review core-1), so it keeps the
-    // watchdog's on-hand verdict, build-stall (the step fails and holds),
-    // minus the 90 s wait.
+    // watchdog's on-hand verdict, build-stall, minus the 90 s wait: it
+    // still strikes, but once per step failure + hold, as on master.
+    // ponytail: H1 itself (the mirror/Baritone disagreement) is unfixed
+    // until a rig shows mod=0 with node>0 on this line.
     if (ids.some((id) => node[id] > 0)) stall(st, missing, `paused=yes reason=${reason} mismatch`)
     else st.settle(st.resolve, { placed: st.placed, missing: st.missing })
     const say = (slots) => {
