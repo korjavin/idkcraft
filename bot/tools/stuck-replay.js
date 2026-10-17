@@ -570,6 +570,19 @@ async function main() {
   const recover = require('../src/behaviours/recover')
   const bringMod = require('../src/behaviours/bring')
   const buildMod = require('../src/behaviours/build')
+  const metrics = require('../src/metrics')
+  // idkcraft-bn4d: brain ticks (count, summed ms) for the shelter trace —
+  // tells a slow tick (load) from extra ticks (code) on a late close.
+  const tickStats = async () => {
+    try {
+      let n = 0; let sum = 0
+      for (const v of (await metrics.tickDuration.get()).values) {
+        if (v.metricName.endsWith('_count')) n += v.value
+        else if (v.metricName.endsWith('_sum')) sum += v.value
+      }
+      return { n, ms: sum * 1000 }
+    } catch (_) { return null }
+  }
   const { raiseHouse } = require('./raise-house')
   // Worker bridge (idkcraft-jlda.3): required lazily — the harness-only
   // baritone/ dependency must not load on head-only runs.
@@ -874,6 +887,21 @@ async function main() {
     let orderLine = ''
     let scannedChats = 0
     let closedAt = null // shelter spots: seconds into the window the pit first read enclosed
+    let shelterPhase = ''
+    const tick0 = s.mode === 'shelter' ? await tickStats() : null
+    // bn4d: wall time per hand dig in the shelter window (a slow body
+    // client stretches every dig; a slow brain stretches the tick period).
+    if (s.mode === 'shelter' && !follower._digTraced && typeof follower.dig === 'function') {
+      const dig0 = follower.dig
+      follower._digTraced = true
+      follower.dig = async (...a) => {
+        const t = Date.now()
+        try { return await dig0.apply(follower, a) } finally {
+          if (follower._digTrace) console.log(`shelter-trace dig ${(a[0] && a[0].name) || '?'} ${Date.now() - t}ms`)
+        }
+      }
+    }
+    follower._digTrace = s.mode === 'shelter'
     const scanOrderChat = () => {
       if ((s.mode !== 'order' && s.mode !== 'night') || orderVerdict) return
       for (; scannedChats < chats.length; scannedChats++) {
@@ -905,9 +933,20 @@ async function main() {
       } catch (_) { /* sampling best-effort */ }
       if (s.mode === 'shelter' && closedAt === null) {
         try {
+          const sh = c && c.shelter
+          const dg = sh && sh.dig
+          const ph = !sh ? 'none' : !dg ? 'shelter' : dg.walk ? 'walk' : dg.capping ? 'cap' : `dig${dg.digs | 0}`
+          if (ph !== shelterPhase) { shelterPhase = ph; console.log(`shelter-trace ${((Date.now() - t0) / 1000).toFixed(1)}s ${ph}`) }
+        } catch (_) { /* trace best-effort */ }
+        try {
           const f = follower.entity.position.floored()
           if (enclosed((dx, dy, dz) => { const b = follower.blockAt(f.offset(dx, dy, dz)); return !!b && b.boundingBox === 'block' })) {
             closedAt = (Date.now() - t0) / 1000
+            const tk = await tickStats()
+            if (tick0 && tk) {
+              const n = tk.n - tick0.n
+              console.log(`shelter-trace ${closedAt.toFixed(1)}s closed ticks=${n} tickMs=${n > 0 ? ((tk.ms - tick0.ms) / n).toFixed(0) : '?'} period=${n > 0 ? (closedAt * 1000 / n).toFixed(0) : '?'}ms`)
+            }
           }
         } catch (_) { /* sampling best-effort */ }
       }

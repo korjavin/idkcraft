@@ -160,7 +160,8 @@ menu, so the budget is never read. An order spot proves recover-sensitivity
 only where its green path fails a primitive and rescues.
 
 The shelter spot (SPAWN-BARE, idkcraft-ed88) sees the night shelter with
-an empty kit. Green runs read `CLOSED 11s` (3/3). With `digInRun`
+an empty kit. Green runs read `CLOSED 11s` (3/3, v1; v2 13-14 s fresh,
+15-19 s after a long spot — idkcraft-bn4d, budget `closeSecs: 25`). With `digInRun`
 sabotaged to fail at once, the bot holds on the bare stone (`OPEN at
 -58 61 -214`, maxDisp 0.0) and the run exits 1 (`BASELINE SPAWN-BARE …
 REGRESSION (unreached (was reached))`).
@@ -333,7 +334,14 @@ S6-LEAD by the lost order (`reached`).
   `closeSecs` overrides — idkcraft-hoy7), and alive at the window end
   (the window always runs its full `secs`). The row note reads
   `CLOSED <s>s` or `OPEN at <x y z>`. It chats `go work` (follow-revoking),
-  so it stays after every follow spot.
+  so it stays after every follow spot. Budget `closeSecs: 25`
+  (idkcraft-bn4d): v2 closes in 13 brain ticks fresh (13-14 s), but after
+  a long spot (JR-BUILD-FRESH) the body client hand-digs ~40% slower
+  (`shelter-trace dig` 0.9-1.0 s -> 1.26-1.49 s per cell, brain tick period
+  unchanged ~1.0 s), each dig spills one more tick, 15-19 s — the 15 s
+  default flipped on spot order, not code. Shelter windows print
+  `shelter-trace` lines (phase changes, per-dig wall time, ticks and tick
+  cost at close) to tell a slow body from a slow brain.
 - SHELTER-WATER (idkcraft-yrtx, via idkcraft-hoy7) spawns floating in prod
   water by the yrtx drowned death (103 62 -420): shelter must swim to the
   shore before it digs in. Swim + dig closes 18-24 s (stuck 1-2: beaching
