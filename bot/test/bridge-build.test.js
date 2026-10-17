@@ -122,18 +122,37 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
   }
 
   it('a paused missing:<id> resolves starved at once and logs node vs mod counts (pnxy)', async () => {
+    await bot.stop()
+    ;({ transport, bot } = makeBot({ inventory: [{ slot: 37, name: 'cobblestone', count: 64 }] }))
+    await bot.start({ pollMs: 0 })
     transport.state.buildScript = 'stall' // no placed growth; the watchdog would wait 90 s
     pauseAfterStart('missing:oak_planks')
     const { out, logged } = await capture(async () => {
       const res = await bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1))
-      await sleep(20) // the mismatch line follows one inventory.get
+      await sleep(20) // the count line follows one inventory.get
       return res
     })
     assert.deepEqual(out, { placed: 0, missing: 1 })
     const line = logged.find((m) => m.startsWith('build paused house reason=missing:oak_planks'))
     assert.ok(line, `pause line logged, got: ${logged.join(' | ').slice(0, 300)}`)
-    assert.ok(/node=64 mod=64$/.test(line), line)
+    assert.ok(/node=0 mod=0$/.test(line), line)
     assert.equal(bot._build, null)
+  })
+
+  it('a missing:<id> pause the mirror disagrees with keeps build-stall, never a fast re-batch (pnxy core-1)', async () => {
+    transport.state.buildScript = 'stall'
+    pauseAfterStart('missing:oak_planks')
+    const { logged } = await capture(async () => {
+      await assert.rejects(
+        bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1)),
+        /^Error: build-stall$/,
+      )
+      await sleep(20)
+    })
+    const stallLine = logged.find((m) => m.startsWith('build-stall house:'))
+    assert.ok(stallLine && /paused=yes reason=missing:oak_planks mismatch$/.test(stallLine), `stall line: ${stallLine}`)
+    const line = logged.find((m) => m.startsWith('build paused house reason=missing:oak_planks'))
+    assert.ok(line && /node=64 mod=64$/.test(line), `count line: ${line}`)
   })
 
   it('a paused builder with any other reason rejects build-stall at once (pnxy)', async () => {

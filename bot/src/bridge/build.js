@@ -249,8 +249,9 @@ function countExact(items, name, lo, hi) {
 }
 
 // Baritone paused the build (idkcraft-pnxy): its verdict settles at once.
-// missing:<ids> -> starved resolve (the FSM re-batches/fetches) plus one
-// mismatch line per id: node = this mirror's exact count (slots 9-44),
+// missing:<ids> -> starved resolve (the FSM re-batches/fetches) unless the
+// mirror still holds one of them (then build-stall ... mismatch), plus one
+// line per id: node = this mirror's exact count (slots 9-44),
 // mod = the live inventory.get count over the same slots Baritone reads
 // (offhand 45 shown apart: approxPlaceable never looks there). Anything
 // else (unable: nothing reachable) -> build-stall with the stall-site line.
@@ -263,7 +264,13 @@ function paused(bot, st, reason) {
       const items = (bot.inventory && typeof bot.inventory.items === 'function' && bot.inventory.items()) || []
       for (const id of ids) node[id] = countExact(items, id, 9, 44)
     } catch (_) { node = {} }
-    st.settle(st.resolve, { placed: st.placed, missing: st.missing })
+    // Mirror disagrees (it still holds a block Baritone calls missing — H1):
+    // a starved resolve would re-batch the same phantom names every ~2 s
+    // and strike-retire live cells (review core-1), so it keeps the
+    // watchdog's on-hand verdict, build-stall (the step fails and holds),
+    // minus the 90 s wait.
+    if (ids.some((id) => node[id] > 0)) stall(st, missing, `paused=yes reason=${reason} mismatch`)
+    else st.settle(st.resolve, { placed: st.placed, missing: st.missing })
     const say = (slots) => {
       for (const id of ids) {
         const mod = slots ? countExact(slots, id, 9, 44) : '?'

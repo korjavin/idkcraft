@@ -910,7 +910,10 @@ would demand a variant nobody holds.
 
 Node: `bot.buildCells` settles on the final event, or at once on the
 first `paused:true` (then `#stop`): `missing:<ids>` resolves `{placed,
-missing}` (starved — Baritone's verdict, whatever the Node mirror reads;
+missing}` (starved) — unless the Node mirror still holds one of the ids
+exactly, which keeps the on-hand verdict `build-stall` (stall line ends
+`paused=yes reason=missing:<ids> mismatch`) so a mirror/Baritone
+disagreement never re-batches the same names every second; either way
 one `build paused <name> reason=missing:<id> node=<n> mod=<m>` line per id,
 `node` = mirror count and `mod` = a fresh `inventory.get` count over slots
 9-44, `offhand=<k>` when slot 45 holds it), any other reason rejects
