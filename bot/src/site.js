@@ -6,7 +6,7 @@
 // arbiter. goal.js re-exports the same names.
 
 const Vec3 = require('vec3')
-const { CLEAR_FLORA } = require('./behaviours/util')
+const { CLEAR_FLORA, solidBelow: solidLanding } = require('./behaviours/util')
 const { NEED_PLANKS, NEED_PLANKS_V1 } = require('./budget')
 
 function needPlanks(home) {
@@ -80,6 +80,18 @@ function groundY(bot, x, z, topY) {
   return null
 }
 
+// Solid support under a column (idkcraft-neuc.65.6.2): the n blocks
+// y0-1..y0-n are all non-air, non-liquid. groundY stops at the first
+// block, so a 1-block crust over a cave read like a meadow (prod v2 house
+// -88 88 -3 founded over a y 80-86 void; the doorstep and floor later fell
+// through). Each cell is util's proven-solid landing test (atl.20: air,
+// liquid, flora and unknown cells are not), so unloaded refuses too.
+function solidBelow(bot, x, z, y0, n) {
+  for (let k = 0; k < n; k++) if (!solidLanding(bot, { x, y: y0 - k, z })) return false
+  return true
+}
+const SOLID_BELOW = 3
+
 // 8 candidate origins around `around` at radius 6 (bead .4).
 const SITE_DIRS = [[6, 0], [4, 4], [0, 6], [-4, 4], [-6, 0], [-4, -4], [0, -6], [4, -4]]
 
@@ -105,7 +117,7 @@ function siteFor(bot, around, accept) {
     for (let ix = 0; ix < 7 && ok; ix++) {
       for (let iz = 0; iz < 6 && ok; iz++) {
         const gy = groundY(bot, ox + ix, oz + iz, cy + 8)
-        if (gy == null) { ok = false; break }
+        if (gy == null || !solidBelow(bot, ox + ix, oz + iz, gy, SOLID_BELOW)) { ok = false; break }
         ys.push(gy)
       }
     }
@@ -119,6 +131,14 @@ function siteFor(bot, around, accept) {
     // the R3 meadow fit, whose door sat on pristine grass_block). Flora
     // over flat dirt still reads y0, so the R3 meadow keeps accepting.
     if (groundY(bot, ox + 3, oz + 0, cy + 8) !== y0) continue
+    // Doorstep row (outsidePos and flanks, neuc.65.6.2): the walk-in
+    // cells must not be a crust either. A lower doorstep (downhill) is
+    // probed under its own ground, not refused for the step down.
+    const step = (ix) => {
+      const gy = groundY(bot, ox + ix, oz - 1, cy + 8)
+      return solidBelow(bot, ox + ix, oz - 1, gy != null && gy < y0 ? gy : y0, SOLID_BELOW)
+    }
+    if (![2, 3, 4].every(step)) continue
     const home = makeHome(ox, y0, oz, 2)
     if (accept && !accept(home, cy + 8)) continue
     return home
@@ -260,4 +280,4 @@ function timeWord(bot) {
   return timeOfDay < 12000 ? 'day' : timeOfDay <= 13000 ? 'dusk' : 'night'
 }
 
-module.exports = { needPlanks, makeHome, groundY, BUILT_GROUND, SITE_DIRS, siteFor, skyOpen, skySiteNear, skyCellNear, isV2House, timeWord }
+module.exports = { needPlanks, makeHome, groundY, solidBelow, BUILT_GROUND, SITE_DIRS, siteFor, skyOpen, skySiteNear, skyCellNear, isV2House, timeWord }
