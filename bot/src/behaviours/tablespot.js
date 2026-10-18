@@ -145,6 +145,9 @@ function tableFor(bot, ctx) {
       st.walkWaits = 0
       return Promise.resolve({ block: homeBlock, pos: homeTable })
     }
+    // mlob: no walk into a holed house (build.entranceHoled) — fail soft,
+    // the re-opened build refills first.
+    if (require('./build').entranceHoled(bot, ctx, homeTable)) return nope('entrance-holed')
     const key = `equip-table:${homeTable.x},${homeTable.y},${homeTable.z}`
     if (key !== ctx.lastGoalKey && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') {
       issueGoal(bot, ctx, craftMod.tableGoal(bot, homeTable), key, false)
