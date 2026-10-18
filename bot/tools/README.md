@@ -591,6 +591,11 @@ leaves the body on the doorstep edge and it drops when Baritone resumes
 house re-opens, build refills the doorstep in ~2 min, gohome gets in and
 drops=0 (one later run drops=1, away from the doorstep: a forage chase off the
 crust's north edge into the void, not the house).
+The same verdicts add `, door-lost=<n>` (idkcraft-z591): the house door
+cell turning into a non-door, each logged as `CASTLE-RIG door-lost <n>
+<old>-><new> at <s>s pos <x y z> step=<s>`; every change of the door's sill
+(the block under it) logs `CASTLE-RIG sill <old>-><new> at ...`, the
+support-break trace. raise-house lays the sill as planks, as v2 builds it.
 Baselines are in `night-baseline.json` (master
 ed8f1107, one 68-min run each). v1 bare: 3 nights, sheltered 3/3,
 night-deaths 0, day-deaths 0, kitless 0. v1 castle (`CASTLE_SEED=complete`;
