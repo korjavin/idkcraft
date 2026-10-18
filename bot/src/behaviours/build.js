@@ -39,7 +39,7 @@
 // sends the bot back to gather/craft for the next batch.
 
 const Vec3 = require('vec3')
-const { denyReason, logDeny, isInteractRef, NATURAL_SOLID, isOwnPlaced } = require('./util')
+const { denyReason, logDeny, isInteractRef, NATURAL_SOLID, isOwnPlaced, inHouseFootprint } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
 const { stepFailed, stepGen } = require('../step')
@@ -159,11 +159,25 @@ const BLUEPRINT_V2 = (() => {
   // walk into the house dropped 6 (10 fall deaths at one cell). The row
   // (dx 2..4, inHouseFootprint's door apron) is fill cells, so holeOwed
   // re-opens a built house and build refills it. APPENDED (persisted skip
-  // indices stay put). ponytail: interior floor cells are NOT fill cells —
-  // the v2 builder cannot reach an interior hole behind the door (rig
-  // gallery: build-stall on the table-side cell, house unbuilt 30 min);
-  // add them once build can place inside through the doorway.
+  // indices stay put).
   for (let dx = 2; dx <= 4; dx++) plan.push({ dx, dy: -1, dz: -1, kind: 'fill' })
+  // Interior floor (idkcraft-mlob): dy -1 under every interior cell the bed
+  // floor above does not already own — prod's house lost the cell under the
+  // table to the gallery void. floor:true cells skip the Baritone builder
+  // batch: BuilderProcess wants sight of the hole's face and stalled behind
+  // the walls (neuc.65.6.1 rig: build-stall, house unbuilt 30 min). The
+  // per-cell path places them from any stand within 2 of the cell above
+  // (inside or through the wall: place.once needs reach, not sight). Best
+  // effort like clear: a refused floor cell never holds the house back.
+  // APPENDED (persisted skip indices stay put). ponytail: the north-wall
+  // line (dz 0 under the wall planks, prod 10-18) is not a cell — nobody
+  // walks there; add it if a wall ever drops.
+  const bedFloor = new Set(['1,4', '2,4', '4,4', '5,4'])
+  for (let dz = 1; dz <= 4; dz++) {
+    for (let dx = 1; dx <= 5; dx++) {
+      if (!bedFloor.has(`${dx},${dz}`)) plan.push({ dx, dy: -1, dz, kind: 'fill', floor: true })
+    }
+  }
   return plan
 })()
 
@@ -334,7 +348,7 @@ function isComplete(bot, home) {
   try {
     const plan = blueprintFor(home)
     for (const cell of plan) {
-      if (cell.kind === 'clear') continue
+      if (cell.kind === 'clear' || cell.floor) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
       if (!cellDone(bot, home, cell)) return false
     }
@@ -406,20 +420,28 @@ function clearOwed(bot, home, skipped) {
 }
 
 // A built v2 house with a loaded hole in the doorstep row (dz -1;
-// idkcraft-neuc.65.6.1): the index.js revalidation re-opens it so build
-// refills it before any walk drops through, and the house table walk fails
-// soft (entrance-holed) meanwhile. On v2 the door sill (z591) re-opens too:
-// it is placed from the doorstep, outside the door. Bed floor cells never
-// re-open: the builder cannot reach a hole behind the door (rig a1
-// build-stall), and prod houses already miss some. Skips do not count (the
-// clearOwed rule: a refused fill waits for the 1h skip retry).
+// idkcraft-neuc.65.6.1) or the interior floor (idkcraft-mlob): the index.js
+// revalidation re-opens it so build refills it before any walk drops
+// through, and the interior walks fail soft (entrance-holed) meanwhile. On
+// v2 the door sill (z591) re-opens too: it is placed from the doorstep,
+// outside the door. Bed floor cells never re-open: the beds stand on them
+// and the builder batch cannot reach behind the door. Skips do not count
+// (the clearOwed rule: a refused fill waits for the 1h skip retry).
 function holeOwed(bot, home, skipped) {
   try {
     if (!home || !home.site || home.v !== 2) return false
     const skip = new Set(Array.isArray(skipped) ? skipped : [])
-    return blueprintFor(home).some((c, i) => c.kind === 'fill' && (c.dz === -1 || (c.sill && process.env.BOT_BODY === 'baritone')) && !skip.has(i) &&
+    return blueprintFor(home).some((c, i) => c.kind === 'fill' && (c.dz === -1 || c.floor || (c.sill && process.env.BOT_BODY === 'baritone')) && !skip.has(i) &&
       cellLoaded(bot, home, c) && !cellDone(bot, home, c))
   } catch (_) { return false }
+}
+
+// An interior walk to pos waits for the house (neuc.65.6.1, mlob): pos in
+// the house footprint while holeOwed — the walk would cross the hole. The
+// callers fail soft (entrance-holed) or pick another source; the re-opened
+// build refills first.
+function entranceHoled(bot, ctx, pos) {
+  try { return !!(ctx && inHouseFootprint(ctx.home, pos)) && holeOwed(bot, ctx.home, ctx.buildSkip) } catch (_) { return false }
 }
 
 // The house table cell (plan[0]) is loaded, empty and not given up
@@ -657,7 +679,7 @@ function builderCells(bot, home, skipped) {
     const cells = []
     for (let i = 0; i < plan.length && cells.length < BUILDER_BATCH; i++) {
       const cell = plan[i]
-      if (!BUILDER_KINDS.has(cell.kind) || skip.has(i)) continue
+      if (!BUILDER_KINDS.has(cell.kind) || cell.floor || skip.has(i)) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
       if (!cellLoaded(bot, home, cell) || cellDone(bot, home, cell)) continue
       cells.push({ idx: i, dx: cell.dx, dy: cell.dy, dz: cell.dz, block: item.name })
@@ -1133,6 +1155,11 @@ function build(bot, ctx, target, state) {
         ? new goals.GoalNearXZ(p.x, p.z - 2, 1)
         : cell.kind === 'clear' // a dig, not a place: no face, no LOS (dig 'auto')
           ? new goals.GoalNear(p.x, p.y, p.z, PLACE_RANGE - 1)
+          // mlob: a floor hole is placed from any stand within 2 of the
+          // cell above it — GoalPlaceBlock's bridge side pick aims at a wall
+          // column, and sight is not needed (place.once checks reach only,
+          // baritone/bridge/PROTOCOL.md dig/place table).
+          : cell.floor ? new goals.GoalNear(p.x, p.y + 1, p.z, 2)
           : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
     } catch (_) { /* retry next tick */ }
     return
@@ -1308,6 +1335,7 @@ module.exports.nextCellIdx = nextCellIdx
 module.exports.isComplete = isComplete
 module.exports.clearOwed = clearOwed
 module.exports.holeOwed = holeOwed
+module.exports.entranceHoled = entranceHoled
 module.exports.houseTableOwed = houseTableOwed
 module.exports.houseTableAt = houseTableAt
 module.exports.countRemainingPlanks = countRemainingPlanks

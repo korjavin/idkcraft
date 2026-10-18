@@ -473,6 +473,8 @@ function pickChest(bot, ctx, f, kind) {
   const own = castleChest(bot, ctx.castle)
   if (own) cands.push({ at: own, bank: false })
   for (const c of [ctx.castle && ctx.castle.siteChest, ctx.home && ctx.home.chest]) {
+    // mlob: the home chest of a holed house is no source (build.entranceHoled).
+    if (c && ctx.home && c === ctx.home.chest && require('./build').entranceHoled(bot, ctx, c)) continue
     if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true })
   }
   let best = null
@@ -1899,6 +1901,7 @@ function castlefetch(bot, ctx, target, state) {
 
 module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
+module.exports.pickChest = pickChest
 module.exports.stairsCobbleShort = stairsCobbleShort
 module.exports.QUARRY_ADAPT = QUARRY_ADAPT
 module.exports.quarrySide = quarrySide
