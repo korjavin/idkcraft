@@ -205,7 +205,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   `bot/tools/component-baseline.json`: `CASTLE_COMPONENT=lay` and `CASTLE_COMPONENT=mine`
   (gate legs are the 10-game-min lines only; a shorter DIAG leg's line is not a verdict)
   (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh`, see `bot/tools/README.md` "Rig speed");
-  OUTSIDE ±15% downward = regression. No `/tick rate` castle pair (>20 does not speed up v2).
+  OUTSIDE ±20% downward = regression (owner 2026-10-18; mine is judged on the mean of 3 pairs: run 3 after legs and compare their mean to the baseline mean; one mine leg's within/OUTSIDE text is not the verdict). No `/tick rate` castle pair (>20 does not speed up v2).
   The before is shared per master sha (6x7.27): quote `sh bot/tools/castle-before.sh lay|mine`
   (its sha/date ride the line; exact sha, or an ancestor with no rig-file diff, max 7 days) + two
   fresh after legs; a miss/stale/changed exit 1 means you run the two before legs on a clean

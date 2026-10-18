@@ -1100,14 +1100,14 @@ describe('castle rig speed (idkcraft-neuc.60)', () => {
 
   it('lay rate = cells per game minute, judged against the baseline', () => {
     const l = componentLine('lay', { laid: 300, gameMin: 10, wallMin: 3.33, legs: [], tick: '60', baseline: { rate: 28 } })
-    assert.equal(l, 'lay-rate 30.0/game-min: laid=300 in 10.0 game-min, tick=60, baseline 28 -> 30.0 (+7%, within ±15%)')
-    assert.match(componentLine('lay', { laid: 100, gameMin: 10, wallMin: 10, legs: [], tick: '1', baseline: { rate: 20 } }), /-50%, OUTSIDE ±15%/)
+    assert.equal(l, 'lay-rate 30.0/game-min: laid=300 in 10.0 game-min, tick=60, baseline 28 -> 30.0 (+7%, within ±20%)')
+    assert.match(componentLine('lay', { laid: 100, gameMin: 10, wallMin: 10, legs: [], tick: '1', baseline: { rate: 20 } }), /-50%, OUTSIDE ±20%/)
   })
 
   it('diag window prints the rate with the DIAG tag and no judge (6x7.26)', () => {
     const l = componentLine('lay', { laid: 72, gameMin: 3, wallMin: 3, tick: '1', baseline: { rate: 28 }, diag: true })
     assert.equal(l, 'lay-rate 24.0/game-min (DIAG, no baseline verdict): laid=72 in 3.0 game-min, tick=1')
-    assert.doesNotMatch(componentLine('mine', { laid: 0, gameMin: 3, wallMin: 3, series: [], tick: '1', baseline: { rate: 5 }, diag: true }), /±15%/)
+    assert.doesNotMatch(componentLine('mine', { laid: 0, gameMin: 3, wallMin: 3, series: [], tick: '1', baseline: { rate: 5 }, diag: true }), /±20%/)
   })
 
   it('mine rate = stone banked per game minute of castlefetch, from the first gain', () => {
@@ -1146,12 +1146,15 @@ describe('castle rig speed (idkcraft-neuc.60)', () => {
     assert.doesNotMatch(run({}, ['3']).stdout, /DIAG/)
   })
 
-  it('component-baseline.json: v2 lay + mine, two runs each within ±15% of the rate', () => {
+  it('component-baseline.json: v2 lay + mine, rate = mean of runs; lay runs within ±20% (mine spread is noted, judged on the mean)', () => {
     const b = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'component-baseline.json'), 'utf8'))
     for (const k of ['lay', 'mine']) {
       const e = b.v2 && b.v2[k]
       assert.ok(e && e.rate > 0 && Array.isArray(e.runs) && e.runs.length >= 2, `v2.${k} malformed`)
-      for (const r of e.runs) assert.ok(Math.abs(r / e.rate - 1) <= 0.15, `v2.${k} run ${r} outside ±15% of ${e.rate}`)
+      if (k === 'mine') assert.ok(e.runs.length >= 3, 'v2.mine needs >= 3 runs (mean of 3 pairs)')
+      const mean = e.runs.reduce((a, r) => a + r, 0) / e.runs.length
+      assert.ok(Math.abs(mean - e.rate) <= 0.1, `v2.${k} rate ${e.rate} is not the mean ${mean.toFixed(1)} of its runs`)
+      if (k === 'lay') for (const r of e.runs) assert.ok(Math.abs(r / e.rate - 1) <= 0.2, `v2.${k} run ${r} outside ±20% of ${e.rate}`)
     }
   })
 })
@@ -1206,7 +1209,7 @@ describe('castle-before.js shared before cache', () => {
 
   it('stores only a clean, non-DIAG component leg on origin/master with this run\'s record', () => {
     const env = { ...v2, CASTLE_COMPONENT: 'lay', CASTLE_TAG: 'c1', CASTLE_MINS: '10', CASTLE_TICKRATE: '1' }
-    const record = { tag: 'c1', date: at(0), component: 'lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.2 -> 24.2 (+0%, within ±15%)' }
+    const record = { tag: 'c1', date: at(0), component: 'lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.2 -> 24.2 (+0%, within ±20%)' }
     const ok = { env, record, head: A, master: A, clean: true }
     const e = cb.storeEntry(ok)
     assert.equal(e.key, cb.cacheKey(A, 'lay', cb.settingsOf(env)))
@@ -1233,7 +1236,7 @@ describe('castle-before.js shared before cache', () => {
     const file = { rate: 24.2 }
     assert.deepEqual(baselineFor(file, { CASTLE_BASELINE_RATE: '20.5' }), { rate: 20.5 })
     for (const v of [undefined, '', '0', 'abc', '-3']) assert.equal(baselineFor(file, { CASTLE_BASELINE_RATE: v }), file, `override ${v}`)
-    assert.match(componentLine('lay', { laid: 205, gameMin: 10, wallMin: 10, series: [], tick: 1, baseline: baselineFor(file, { CASTLE_BASELINE_RATE: '20.5' }) }), /baseline 20\.5 -> 20\.5 \(\+0%, within ±15%\)/)
+    assert.match(componentLine('lay', { laid: 205, gameMin: 10, wallMin: 10, series: [], tick: 1, baseline: baselineFor(file, { CASTLE_BASELINE_RATE: '20.5' }) }), /baseline 20\.5 -> 20\.5 \(\+0%, within ±20%\)/)
     assert.ok(fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-replay.js'), 'utf8').includes('baseline: baselineFor(base, process.env)'), 'replay does not judge through baselineFor')
     assert.match(cb.rigCommand('mine', cb.settingsOf(v2), true), /CASTLE_BODY=baritone BARITONE_IMAGE=idkcraft-baritone:abc CASTLE_PADSPOT=250,350 CASTLE_COMPONENT=mine .*castle-rig\.sh$/)
     assert.doesNotMatch(cb.rigCommand('mine', cb.settingsOf({ CASTLE_BODY: 'baritone' }, 'abc'), false), /BARITONE_IMAGE/, 'default tag stays implicit: client.sh builds it')

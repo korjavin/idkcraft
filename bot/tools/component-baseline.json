@@ -1,18 +1,18 @@
 {
   "v2": {
     "lay": {
-      "rate": 24.2,
-      "runs": [24.2, 24.2],
-      "sha": "a910c3f2",
-      "date": "2026-10-16",
-      "setup": "CASTLE_COMPONENT=lay CASTLE_BODY=baritone BARITONE_IMAGE=idkcraft-baritone:g0z58-warm CASTLE_PADSPOT=250,350, 10 min, tick untouched"
+      "rate": 76.5,
+      "runs": [76.5, 76.5],
+      "sha": "566f2302",
+      "date": "2026-10-18",
+      "setup": "CASTLE_COMPONENT=lay CASTLE_BODY=baritone CASTLE_PADSPOT=250,350, 10 game-min (batch-3 a641f479 and batch-4 566f2302 identical)"
     },
     "mine": {
-      "rate": 15.8,
-      "runs": [16.0, 15.5],
-      "sha": "a910c3f2",
-      "date": "2026-10-16",
-      "setup": "CASTLE_COMPONENT=mine CASTLE_BODY=baritone BARITONE_IMAGE=idkcraft-baritone:g0z58-warm CASTLE_PADSPOT=250,350, 10 min, tick untouched"
+      "rate": 29.4,
+      "runs": [27.0, 24.9, 36.2],
+      "sha": "566f2302",
+      "date": "2026-10-18",
+      "setup": "CASTLE_COMPONENT=mine CASTLE_BODY=baritone CASTLE_PADSPOT=250,350, 10 game-min; rate = mean of 3 pairs, spread 24.9-36.2 (castlefetch window only 2-3 game-min); judge a PR on the mean of 3 pairs"
     }
   }
 }

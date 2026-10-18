@@ -817,15 +817,15 @@ Each run prints the usual castle line plus ONE component line, judged
 against `component-baseline.json` (`v1`/`v2` by `BOT_BODY`):
 
 ```
-lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.2 -> 24.2 (+0%, within ±15%)
-mine-rate 15.5/game-min: banked=+120 in 7.7 game-min of castlefetch, first=135s, window=10.0 game-min, tick=1, baseline 15.8 -> 15.5 (-2%, within ±15%)
+lay-rate 24.2/game-min: laid=242 in 10.0 game-min, tick=1, baseline 24.2 -> 24.2 (+0%, within ±20%)
+mine-rate 15.5/game-min: banked=+120 in 7.7 game-min of castlefetch, first=135s, window=10.0 game-min, tick=1, baseline 15.8 -> 15.5 (-2%, within ±20%)
 ```
 
 **Diagnosis leg (idkcraft-6x7.26).** A component with `[mins]` under 10
 is a DIAG leg: `CASTLE_COMPONENT=lay ... sh bot/tools/castle-rig.sh 3`
 prints `DIAG leg: 3 game-min lay component — diagnosis only, NOT a gate
 verdict` at start and a component line `lay-rate 23.9/game-min (DIAG, no
-baseline verdict): ...` with no baseline or ±15% judge (the record carries
+baseline verdict): ...` with no baseline or ±20% judge (the record carries
 `diag: true`; laid, series and `first=` are unchanged). Recommended: lay 3,
 mine 5 (`first=` is a ~135 s walk that is not in the rate, so a 3-min mine
 window leaves under a minute of mining). Wall cost ~7 min vs ~14 for the
@@ -887,8 +887,8 @@ fetch: ticks=3436 stone=+290 (11.9 s/stone, component 3.8) legs=12 finished=1 cu
   castlefetch at all. Promote to a gate only when two runs show it stable.
 
 so a PR quotes `before -> after` per component straight from its two
-lines. Re-record a baseline (two master runs, each within ±15% of the
-`rate`; `npm test` enforces it) in the PR that moves it on purpose.
+lines. Re-record a baseline (lay: two master runs, each within ±20% of the
+`rate`; mine: `rate` = mean of 3 pairs, spread noted; `npm test` enforces it) in the PR that moves it on purpose.
 Pre-existing `CASTLE_*` knobs stay usable but change what the line means;
 `CASTLE_SEED`/`CASTLE_IDLE` are refused (a component orders a castle).
 
