@@ -184,4 +184,17 @@ const goalWatchdogTotal = new client.Counter({
   help: 'Goal watchdog rounds by kind, choice and source',
   labelNames: ['kind', 'choice', 'source']
 })
-module.exports = { client, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, workerJobs, goalSteps, stepStaleCompletions, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, goalWatchdogTotal, setVitals, serve }
+// LLM guardrails (idkcraft-vf8e.5): every Anthropic call goes through
+// brain.js llmCall(); tokens from the response usage, calls by outcome
+// (ok|timeout|http|invalid|error|budget). No prices: cost is read in the console.
+const llmTokens = new client.Counter({
+  name: 'idkcraft_bot_llm_tokens_total',
+  help: 'Anthropic Messages API tokens by direction (in|out) and use (planner|orders|skill)',
+  labelNames: ['dir', 'use']
+})
+const llmCalls = new client.Counter({
+  name: 'idkcraft_bot_llm_calls_total',
+  help: 'Anthropic Messages API calls by use and outcome (budget = skipped, LLM_TOKENS_PER_HOUR spent)',
+  labelNames: ['use', 'outcome']
+})
+module.exports = { client, llmTokens, llmCalls, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, workerJobs, goalSteps, stepStaleCompletions, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, goalWatchdogTotal, setVitals, serve }

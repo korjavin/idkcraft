@@ -221,8 +221,72 @@ const LLM_SYSTEM = 'You are the stall-point planner of a Minecraft companion bot
   'most likely to get progress moving again. Answer with JSON only, no prose: ' +
   '{"choice": "<one of the option ids>", "reason": "<one short sentence>"}'
 
+// LLM guardrails (idkcraft-vf8e.5): the ONE Anthropic call site — every use
+// (planner today; orders/skill later) posts through llmCall(). It counts
+// data.usage.input_tokens/output_tokens (the Messages API response `usage`
+// object, https://docs.claude.com/en/api/messages) into a sliding-hour
+// in-process budget, LLM_TOKENS_PER_HOUR (default 200000, 0 = unlimited;
+// per bot process). Spent -> the call is skipped before any fetch with an
+// 'llm budget exhausted' error, which task.js planErrReason reads as error ->
+// the deterministic park/FSM fallback, same as any failed call today.
+// ponytail: {t, n} array pruned per call (a few calls/hour); the check is
+// before the fetch, so one in-flight call can overshoot the cap by its size.
+const LLM_TOKENS_PER_HOUR_DEFAULT = 200000
+const LLM_WINDOW_MS = 3600000
+const llmSpend = []
+let llmBudgetLogged = false
+
+function llmTokensPerHour(env = process.env) {
+  const raw = env.LLM_TOKENS_PER_HOUR
+  if (raw === undefined || raw === '') return LLM_TOKENS_PER_HOUR_DEFAULT
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : LLM_TOKENS_PER_HOUR_DEFAULT
+}
+
+// Tests only: the window is module state.
+function resetLlmBudget() {
+  llmSpend.length = 0
+  llmBudgetLogged = false
+}
+
+function hhmm(ms) {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// llmCall({ use, apiKey, body, signal, fetchFn }) -> the parsed response JSON;
+// throws 'llm budget exhausted' | 'llm http <status>' | the fetch/abort error.
+async function llmCall({ use, apiKey, body, signal, fetchFn }) {
+  const now = Date.now()
+  while (llmSpend.length && now - llmSpend[0].t >= LLM_WINDOW_MS) llmSpend.shift()
+  const cap = llmTokensPerHour()
+  const used = llmSpend.reduce((a, e) => a + e.n, 0)
+  if (cap > 0 && used >= cap) {
+    if (!llmBudgetLogged) {
+      llmBudgetLogged = true
+      console.log(`llm budget exhausted until ${hhmm(llmSpend[0].t + LLM_WINDOW_MS)} (${used}/${cap} tokens/h)`)
+    }
+    throw new Error('llm budget exhausted')
+  }
+  llmBudgetLogged = false
+  const res = await (fetchFn || fetch)(LLM_ENDPOINT, {
+    method: 'POST',
+    signal,
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`llm http ${res.status}`)
+  const data = await res.json()
+  const u = (data && data.usage) || {}
+  const tin = Number.isFinite(u.input_tokens) ? u.input_tokens : 0
+  const tout = Number.isFinite(u.output_tokens) ? u.output_tokens : 0
+  metrics.llmTokens.inc({ dir: 'in', use }, tin)
+  metrics.llmTokens.inc({ dir: 'out', use }, tout)
+  llmSpend.push({ t: Date.now(), n: tin + tout })
+  return data
+}
+
 function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MODEL) {
-  const doFetch = fetchFn || fetch
   async function plan({ state, instructions, criteria }) {
     const keys = Object.keys(criteria || {})
     if (keys.length === 0) throw new Error('llm missing plan answer')
@@ -235,21 +299,20 @@ function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MO
         keys.map((k) => `${k}: ${criteria[k]}`).join('\n')
       let data
       try {
-        const res = await doFetch(LLM_ENDPOINT, {
-          method: 'POST',
+        data = await llmCall({
+          use: 'planner',
+          apiKey,
           signal: ac.signal,
-          headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({
+          fetchFn,
+          body: {
             model,
             max_tokens: 300,
             // A one-line menu pick: no thinking keeps it inside the 10 s deadline.
             thinking: { type: 'disabled' },
             system: LLM_SYSTEM,
             messages: [{ role: 'user', content: user }],
-          }),
+          },
         })
-        if (!res.ok) throw new Error(`llm http ${res.status}`)
-        data = await res.json()
       } finally {
         clearTimeout(timer)
       }
@@ -265,6 +328,7 @@ function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MO
       const reason = typeof ans.reason === 'string' ? ans.reason.replace(/\s+/g, ' ').trim().slice(0, 160) : ''
       endTimer()
       metrics.brainRequests.inc({ source: 'llm', outcome: 'ok' })
+      metrics.llmCalls.inc({ use: 'planner', outcome: 'ok' })
       return { step: choice, confidence: null, probabilities: null, source: 'llm', reason }
     } catch (err) {
       endTimer()
@@ -272,8 +336,11 @@ function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MO
       const outcome = err && err.name === 'TimeoutError' ? 'timeout'
         : msg.startsWith('llm http') ? 'http'
         : msg.startsWith('llm missing') ? 'invalid'
+        : msg.startsWith('llm budget') ? 'budget'
         : 'error'
-      metrics.brainRequests.inc({ source: 'llm', outcome })
+      // brain_requests keeps its vocabulary: a budget skip counts as error there.
+      metrics.brainRequests.inc({ source: 'llm', outcome: outcome === 'budget' ? 'error' : outcome })
+      metrics.llmCalls.inc({ use: 'planner', outcome })
       throw err
     }
   }
@@ -523,4 +590,4 @@ function makeBrain(env) {
   return b
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL }
+module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, llmCall, llmTokensPerHour, resetLlmBudget }

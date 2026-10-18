@@ -13,7 +13,8 @@ const STATE = { goal: 'build castle', progress: '8/1722', blocked_on: 'step=cast
 const CRITERIA = { castlefetch: 'stone is near: fetch it', gather: 'logs are few: chop', park: 'nothing helps: park' }
 const REQ = { state: STATE, instructions: 'Pick the next step', criteria: CRITERIA }
 
-// Shape of a real Messages API response (content blocks + usage).
+// Shape of a real Messages API response (content blocks + usage), per
+// https://docs.claude.com/en/api/messages (response: content[], usage.input_tokens/output_tokens).
 function messagesFetch(text, seen = {}) {
   return async (url, opts) => {
     seen.url = url
