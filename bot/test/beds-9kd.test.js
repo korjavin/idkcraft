@@ -144,13 +144,15 @@ describe('9kd water death marks a wide danger disc', () => {
   })
 
   it('handleDeath wires the mark: water corpse bans the swim, dry corpse does not', () => {
+    // neuc.65.6: a dry hostile-free corpse now marks the small fall disc (no swim ban).
     const wet = deathBot(MONUMENT, 'water')
     quiet(() => handleDeath(wet.bot, null))
     assert.equal(danger.count(wet.ctx), 1)
     assert.equal(danger.covers(wet.ctx, { x: MONUMENT.x, z: MONUMENT.z + 20 }), true)
     const dry = deathBot({ x: 10, y: 65, z: 20 }, 'stone')
     quiet(() => handleDeath(dry.bot, null))
-    assert.equal(danger.count(dry.ctx), 0)
+    assert.equal(danger.covers(dry.ctx, { x: 10, z: 20 + 20 }), false)
+    assert.equal(dry.ctx.danger.spots.every((s) => s.fall === true), true)
   })
 
   it('revmux 01: a water death drops the in-flight leg target, a dry one keeps it', () => {
