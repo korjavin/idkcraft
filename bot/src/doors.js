@@ -427,7 +427,7 @@ function adoptPassedGates(bot, ctx, bp) {
     const tracked = trackedDoors(ctx)
     const key = doorKey(x, fy, z)
     if (tracked.has(key)) continue
-    tracked.set(key, { x, y: fy, z, seen: true })
+    tracked.set(key, { x, y: fy, z, seen: true, adopted: true })
     while (tracked.size > DOOR_TRACK_MAX) tracked.delete(tracked.keys().next().value)
   }
 }
@@ -460,9 +460,15 @@ function closeOwnDoors(bot, ctx) {
       const at = windowIndexOf(nodes, door.x, door.y, door.z)
       if (doorStillAhead(nodes, ahead, at, bp)) continue // still walking toward it
     }
-    if (Math.hypot(door.x + 0.5 - bp.x, door.z + 0.5 - bp.z) <= DOOR_CLOSE_DIST) continue
+    const hd = Math.hypot(door.x + 0.5 - bp.x, door.z + 0.5 - bp.z)
+    // Adopted gate (v2, no plan window — revmux 03 minor): shut only while
+    // the body walks AWAY (a wobble back toward it keeps it open), and a
+    // missed shut is dropped at reach, never shut ahead on a return visit.
+    const nearing = door.adopted && typeof door.lastHd === 'number' && hd <= door.lastHd
+    if (door.adopted) door.lastHd = hd
+    if (hd <= DOOR_CLOSE_DIST || nearing) continue
     const d = Math.hypot(door.x + 0.5 - bp.x, door.y + 0.5 - bp.y, door.z + 0.5 - bp.z)
-    if (d > DOOR_REACH) continue // out of reach: shut on the return visit
+    if (d > DOOR_REACH) { if (door.adopted) tracked.delete(key); continue } // shut on the return visit (own openings only)
     if (!stampReady(ctx, 'doorShutAt', key, Date.now())) continue
     if (!tryToggle(bot, block)) continue
     try { console.log(`door shut at ${door.x} ${door.y} ${door.z}`) } catch (_) { /* log best-effort */ }

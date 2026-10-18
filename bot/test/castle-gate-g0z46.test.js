@@ -287,6 +287,25 @@ describe('doors: fence gates (g0z.46)', () => {
       doors.doorShutFast(bot, ctx)
       assert.ok(ctx.doorOpened && ctx.doorOpened.has('0,64,-2'), 'not adopted')
       assert.equal(bot.toggles, 0, 'shut into the body')
+      // A missed shut (stamp cooling) then walking back toward it: no shut
+      // in front of the body; out of reach drops the entry (no return shut).
+      ctx.doorShutAt = { '0,64,-2': Date.now() }
+      bot.entity.position = new Vec3(0.5, 64, -4.0)
+      ctx.doorShutFastAt = 0
+      doors.doorShutFast(bot, ctx)
+      ctx.doorShutAt = {}
+      bot.entity.position = new Vec3(0.5, 64, -3.6)
+      ctx.doorShutFastAt = 0
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 0, 'shut in front of a body walking back')
+      bot.entity.position = new Vec3(0.5, 64, -8.0)
+      ctx.doorShutFastAt = 0
+      doors.doorShutFast(bot, ctx)
+      assert.ok(!ctx.doorOpened.has('0,64,-2'), 'stale adopted entry kept')
+      // Walked through again: re-adopted, shut once walking away.
+      bot.entity.position = new Vec3(0.5, 64, -2.3)
+      ctx.doorShutFastAt = 0
+      doors.doorShutFast(bot, ctx)
       bot.entity.position = new Vec3(0.5, 64, -4.0)
       ctx.doorShutFastAt = 0
       doors.doorShutFast(bot, ctx)
