@@ -998,14 +998,18 @@ function castleBandHome(bot, ctx) {
     return false
   }
 }
+// A re-opened house (rw4.19 clear / neuc.65.6.1 hole: built flipped false,
+// walls and roof still stand) whose repair build can take tonight — then
+// build digs the bump and stay sleeps inside (idkcraft-pr98: HOUSE-BUMP dug
+// in outside). Build held/hurt/short keeps the homeless shelter (revmux 01).
+function repairTakesNight(facts, bot, ctx) {
+  const home = ctx && ctx.home
+  try { return !!(home && home.site && buildMod.isComplete(bot, home) && MENU.build.feasible(facts, bot, ctx)) } catch (_) { return false }
+}
 // Shelter fits now: the night it owns, a castle dusk (g0z.21), or dusk and
 // night away from home with an active castle (vmzq.19, castleSiteNight) —
 // the stickiness and the night-near force below read this too, so a
 // mid-map dusk shelter holds instead of re-deciding every tick.
-function standingHouse(ctx, bot) {
-  const home = ctx && ctx.home
-  try { return !!(home && home.site && buildMod.isComplete(bot, home)) } catch (_) { return false }
-}
 function shelterFits(facts, bot, ctx) {
   const t = facts && facts.time
   if (castleBandHome(bot, ctx)) return false // g0z.57: never at the fence ring
@@ -1014,10 +1018,7 @@ function shelterFits(facts, bot, ctx) {
   // gohome/stay cannot run, and the old built gate left NO night step —
   // prod 10-14 worked the dark at world spawn and died every 30-90 s.
   // Shelter in place from dusk; dawn ends it (the step's own day done).
-  // A re-opened house (rw4.19 clear / neuc.65.6.1 hole: built flipped false,
-  // walls and roof still stand) is a repair, not homeless — build digs the
-  // bump and stay sleeps inside (idkcraft-pr98: HOUSE-BUMP dug in outside).
-  if ((t === 'dusk' || t === 'night') && facts.home !== 'built' && !standingHouse(ctx, bot)) return true
+  if ((t === 'dusk' || t === 'night') && facts.home !== 'built' && !repairTakesNight(facts, bot, ctx)) return true
   return (t === 'night' && shelterOwns(bot, ctx)) || (t === 'dusk' && castleNight(bot, ctx)) ||
     ((t === 'dusk' || t === 'night') && castleSiteNight(bot, ctx))
 }
