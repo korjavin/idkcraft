@@ -1,6 +1,6 @@
 {
   "note": "idkcraft-neuc.65.2: castle-rig --night prod 68 baselines (bot code at master ed8f1107, one run each, default pad pick, untouched tick rate). Verdict tails are copied from the run lines.",
-  "falls": "0 fall deaths in all four runs (killers from the server log: castle run zombie x2 + skeleton x1, others 0 deaths). fall_damage true is read back by rcon at window open; the dry leg is plain --night (fall_damage false by construction).",
+  "falls": "0 fall deaths in all four runs (killers from the server log: castle run zombie x2 + skeleton x1, others 0 deaths). fall_damage true is read back by rcon at window open; the dry leg is plain --night (fall_damage false by construction). There is no fall because the rig pad is flattened (48x48 dirt, air above) and the house sits on a level slab, so no route has a drop. Every death was a mob. Prod's family-D falls come from a pillar beside a hillside house (one cell, 10 of 12). A family-D before/after needs a site with a drop, which this rig does not have.",
   "keepInventory": "true in every row: prod reads keep_inventory true (2026-10-17). CASTLE_KEEP_INVENTORY=0 drops the kit on death (unmeasured).",
   "v1": {
     "bare": {
