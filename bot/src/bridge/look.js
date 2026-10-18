@@ -27,6 +27,10 @@ function gateOpen(block) {
     return !!p && p.open === true
   } catch (_) { return false }
 }
+function underFeet(bot, p) {
+  const e = bot.entity && bot.entity.position
+  return !!e && Math.floor(e.x) === Math.floor(p.x) && Math.floor(e.y) === Math.floor(p.y) && Math.floor(e.z) === Math.floor(p.z)
+}
 const EYE_HEIGHT = 1.62 // mineflayer player eye height; adapter entity has no eyeHeight field yet
 // mineflayer inventory.js ALWAYS_CONSUMABLES: edible even at full food.
 const ALWAYS_CONSUMABLES = ['potion', 'milk_bucket', 'enchanted_golden_apple', 'golden_apple']
@@ -153,12 +157,14 @@ function installLook(bot) {
   // panel shut again (neuc.9 landmine) — a no-op here, adapter-side only.
   // Fence gates (g0z.46): only the OPEN click no-ops mid-walk (Baritone's
   // job); shutting an open gate the body walked through goes ahead —
-  // Baritone never shuts one, and an open ring gate lets mobs in.
+  // Baritone never shuts one, and an open ring gate lets mobs in. A shut
+  // gate under the feet is a Baritone stall (doors.openGateUnderFeet): it
+  // never clicks a gate in the cell it stands in, so that open goes ahead.
   bot.activateBlock = async (block, direction, cursorPos) => {
     if (!block || !block.position) throw new Error('activateBlock: want a block with a position')
     const moving = bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()
     if (moving && typeof block.name === 'string' && block.name.endsWith('_door')) return
-    if (moving && typeof block.name === 'string' && block.name.endsWith('_fence_gate') && !gateOpen(block)) return
+    if (moving && typeof block.name === 'string' && block.name.endsWith('_fence_gate') && !gateOpen(block) && !underFeet(bot, block.position)) return
     const p = block.position
     const bx = Math.floor(p.x)
     const by = Math.floor(p.y)

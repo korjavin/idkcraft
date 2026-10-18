@@ -72,6 +72,9 @@ const DOOR_SHUT_FAST_MS = 250
 // A gate this close to the body (cell centre, horizontal) is being walked
 // through: inside DOOR_CLOSE_DIST, so adoption never shuts it at once.
 const GATE_ADOPT_DIST = 1.0
+// A shut gate under the feet this long is a stall, not Baritone's own click
+// still in flight (that echo lands well inside it).
+const GATE_FEET_MS = 1000
 // Tracked doors cap (FIFO): a teleported-away bot must not grow the map.
 const DOOR_TRACK_MAX = 16
 
@@ -432,9 +435,29 @@ function adoptPassedGates(bot, ctx, bp) {
   }
 }
 
+// v2 stall (g0z.46 rig): Baritone checks a gate only in the cell it walks
+// INTO. A body pressed against a shut gate has its centre past the cell edge
+// (the gate's box is mid-cell), so Baritone reads it as standing in the gate
+// cell and walks into the panel forever. A shut gate under the feet for
+// GATE_FEET_MS is opened here; the adopt step then shuts it once past.
+function openGateUnderFeet(bot, ctx, bp) {
+  const at = new Vec3(Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z))
+  const b = bot.blockAt && bot.blockAt(at)
+  const key = doorKey(at.x, at.y, at.z)
+  if (!b || !isHandGate(b.name) || doorOpen(b)) { ctx.gateFeetSince = null; return }
+  const now = Date.now()
+  const s = ctx.gateFeetSince
+  if (!s || s.key !== key) { ctx.gateFeetSince = { key, t: now }; return }
+  if (now - s.t < GATE_FEET_MS) return
+  if (!stampReady(ctx, 'doorToggleAt', key, now)) return
+  if (!tryToggle(bot, b)) return
+  try { console.log(`door open under feet at ${at.x} ${at.y} ${at.z}`) } catch (_) { /* log best-effort */ }
+}
+
 function closeOwnDoors(bot, ctx) {
   const bp = botPos(bot)
   if (!bp) return
+  try { openGateUnderFeet(bot, ctx, bp) } catch (_) { /* unstick best-effort */ }
   try { adoptPassedGates(bot, ctx, bp) } catch (_) { /* adopt best-effort */ }
   const tracked = ctx.doorOpened instanceof Map ? ctx.doorOpened : null
   if (!tracked || tracked.size === 0) return

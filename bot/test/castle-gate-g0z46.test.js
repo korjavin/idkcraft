@@ -321,6 +321,40 @@ describe('doors: fence gates (g0z.46)', () => {
     }
   })
 
+  it('v2 stall: a shut gate under the feet for GATE_FEET_MS is opened once', () => {
+    const bot = {
+      entity: { position: new Vec3(0.5, 64, -1.9) }, // pressed against it: centre in the gate cell
+      toggles: 0,
+      blockAt: (p) => {
+        const at = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+        if (at.x === 0 && at.y === 64 && at.z === -2) return { name: 'oak_fence_gate', position: at, getProperties: () => ({ open: false, facing: 'south' }) }
+        return { name: 'air', position: at, getProperties: () => ({}) }
+      },
+      activateBlock: async () => { bot.toggles++ },
+    }
+    const ctx = {}
+    const log = console.log
+    const realNow = Date.now
+    let now = 1e6
+    Date.now = () => now
+    console.log = () => {}
+    try {
+      doors.doorShutFast(bot, ctx)
+      now += 500
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 0, 'clicked inside the dwell (Baritone echo in flight)')
+      now += 600
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 1, 'stall not unstuck')
+      now += 300
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 1, 'double toggle')
+    } finally {
+      console.log = log
+      Date.now = realNow
+    }
+  })
+
   it('isPassage: hand doors and gates, never iron', () => {
     assert.ok(doors.isPassage('oak_fence_gate'))
     assert.ok(doors.isPassage('oak_door'))
