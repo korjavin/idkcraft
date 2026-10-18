@@ -68,6 +68,8 @@ describe('z591 v2 door sill', () => {
     assert.equal(batch.cells[0].block, 'oak_planks')
     world.set(3, 63, 0, 'stone')
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), false, 'any natural ground')
+    world.set(3, 63, 0, 'granite')
+    assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), true, 'laid rock is banned near a castle: never swapped')
     world.set(3, 63, 0, 'cobblestone')
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), true, 'a built (banned) kind stays done: the builder cannot replace it')
     world.set(3, 63, 0, 'spruce_planks')

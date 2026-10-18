@@ -743,6 +743,9 @@ function rigHouseCommands(site, kind) {
     cmds.push(`setblock ${ox + 4} ${oy - 1} ${oz + 1} air`)
     for (let k = 1; k <= 6; k++) cmds.push(`fill ${ox - 8 - k} ${oy - 7 + k} ${oz - 1} ${ox - 8 - k} ${oy - 1} ${oz + 1} air`)
   }
+  // z591: CASTLE_SILL=dirt puts natural dirt back under the standing door,
+  // the sill every pre-z591 prod house has (the swap leg).
+  if (process.env.CASTLE_SILL === 'dirt') cmds.push(`setblock ${ox + 3} ${oy - 1} ${oz} dirt`)
   return cmds
 }
 // neuc.65.6: a server fall-death message for the follower (the vanilla

@@ -167,6 +167,9 @@ const BLUEPRINT_V2 = (() => {
   return plan
 })()
 
+// Natural rock v2 hard-bans near its own castle (body.js LAID_ROCK): the
+// builder could never swap such a sill, so it stays done (z591 revmux 02).
+const SILL_KEEP = new Set(['granite', 'diorite', 'andesite', 'tuff', 'calcite'])
 const PLANK_COUNT = BLUEPRINT.filter((c) => c.kind === 'planks').length
 const PLANK_COUNT_V2 = BLUEPRINT_V2.filter((c) => c.kind === 'planks').length
 
@@ -304,7 +307,7 @@ function cellDone(bot, home, cell) {
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
   if (cell.kind === 'fill') {
-    if (cell.sill && process.env.BOT_BODY === 'baritone' && NATURAL_SOLID.has(name)) return false
+    if (cell.sill && process.env.BOT_BODY === 'baritone' && NATURAL_SOLID.has(name) && !SILL_KEEP.has(name)) return false
     return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
   }
   // Clear (rw4.19): only natural ground with collision is a leftover; air,
