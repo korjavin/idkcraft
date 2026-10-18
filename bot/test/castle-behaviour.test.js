@@ -465,12 +465,13 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.castle.phase, 'complete')
     assert.equal(bot.calls.digs.length, 2)
     for (const c of plan) if (blueprint.isPlaceTarget(c.kind)) assert.ok(blueprint.matches(c.kind, world.get(c.x, c.y, c.z)), `${c.kind} at ${c.x},${c.y},${c.z}`)
-    // After complete the owner's cobblestone inside is kept.
-    world.set(spot.x, SITE.y, spot.z, 'cobblestone')
+    // After complete the owner's build inside is kept (g0z.61: a lone
+    // cobblestone post would sweep by shape — owner Q1 — so a planks block).
+    world.set(spot.x, SITE.y, spot.z, 'oak_planks')
     ctx.castleScanAt = 0
     ctx.castleLitter = null
     await run(bot, ctx, 4)
-    assert.equal(world.get(spot.x, SITE.y, spot.z), 'cobblestone')
+    assert.equal(world.get(spot.x, SITE.y, spot.z), 'oak_planks')
   })
 
   it('g0z.14: a refusing litter block is skipped (blocked) and the castle completes', async () => {

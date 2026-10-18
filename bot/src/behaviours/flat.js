@@ -1493,12 +1493,14 @@ const SWEEP_MATS = new Set(['dirt', 'cobblestone'])
 // placedByBot. Unloaded neighbours read as solid (keep). Our own placed
 // neighbours do not count: the pathfinder towers beside a tall pillar to
 // reach its top, and that tower must not turn the lower cells into a wall.
+// ignore(b) (g0z.61, optional): more neighbours that do not count — the
+// castle sweep passes its plan/decor cells (a tower against a castle wall).
 const PILLAR_MATS = new Set([...SWEEP_MATS, 'cobbled_deepslate'])
-function lonePillar(bot, ctx, x, y, z) {
+function lonePillar(bot, ctx, x, y, z, ignore = null) {
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     let b = null
     try { b = bot.blockAt(new Vec3(x + dx, y, z + dz)) } catch (_) { b = null }
-    if (!b || (isSolidCell(b) && !util.isOwnPlaced(ctx, b))) return false
+    if (!b || (isSolidCell(b) && !util.isOwnPlaced(ctx, b) && !(ignore && ignore(b)))) return false
   }
   return true
 }
@@ -1866,6 +1868,7 @@ module.exports.liquidNear = liquidNear
 module.exports.detectBumps = detectBumps
 module.exports.buildSweep = buildSweep
 module.exports.lonePillar = lonePillar
+module.exports.PILLAR_MATS = PILLAR_MATS
 module.exports.resumeLine = resumeLine
 module.exports.DIG_ATTEMPTS = DIG_ATTEMPTS
 module.exports.PICKUP_STALLS = PICKUP_STALLS
