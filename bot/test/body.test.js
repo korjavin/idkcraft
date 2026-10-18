@@ -537,6 +537,13 @@ describe('castle break guard (g0z.55)', () => {
       bot.entity.position = { x: cx, y: 65, z: cz + 40 }
       assert.equal(sync(), 'false', 'own castle in progress')
       assert.equal(pushes, 2)
+      ctx.step = 'castle' // the own lay keeps its approaches
+      assert.equal(sync(), 'true', 'own castle step')
+      assert.equal(pushes, 3)
+      ctx.step = 'castlefetch'
+      assert.equal(sync(), 'false', 'other steps by the own castle')
+      assert.equal(pushes, 4)
+      pushes = 2
       ctx.step = 'build' // the house build keeps its throwaway towers by a castle
       assert.equal(sync(), 'true', 'house build step by the own castle')
       assert.equal(pushes, 3)

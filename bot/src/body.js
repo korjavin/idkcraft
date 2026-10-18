@@ -305,10 +305,10 @@ function nearCastle(bot, ctx) {
 // bridged the fence/moat with throwaway dirt/cobble. Within
 // CASTLE_ROCK_RANGE of ANY known castle centre (own, in progress too, and
 // every peer's: castle.anyCastle over ctx.knownCastles) allow1by1towers is
-// false, except the house build by the OWN castle (its wall/roof
-// approaches need throwaway towers; v1's inCastleApron exemption), so the bridge sends allowPlace=false (bridge/index.js
-// movementsToSettings). The lay climbs its own stairs (reach invariant) and
-// explicit places go through bot.placeBlock, not Baritone. Pit recovery
+// false, except the castle and house build steps by the OWN castle (their
+// approaches need throwaway towers; v1's inCastleApron exemption), so the
+// bridge sends allowPlace=false (bridge/index.js movementsToSettings).
+// Explicit places go through bot.placeBlock, not Baritone. Pit recovery
 // keeps allowBreak plus the recover prims.
 // ponytail: a radius, not the apron (Baritone takes a boolean); a mod-side
 // place-box hook if v2 must tower near a castle for anything.
@@ -316,9 +316,10 @@ let placeNear
 function nearAnyCastle(bot, ctx) {
   try {
     const p = bodyPos(bot)
-    // The house build towers to its wall/roof cells: exempt by the OWN
-    // castle only, as v1's inCastleApron (a peer castle keeps the guard).
-    return !!castle.anyCastle(ctx, (c, own) => !(own && ctx.step === 'build') && inRockRange(p, c))
+    // The own castle's lay and house build keep their approaches (v1's
+    // inCastleApron exemption; a peer castle keeps the guard): rig lay
+    // 76.4 -> 34.1 with the castle step guarded too (build-stall).
+    return !!castle.anyCastle(ctx, (c, own) => !(own && (ctx.step === 'castle' || ctx.step === 'build')) && inRockRange(p, c))
   } catch (_) { /* no castle read: far */ }
   return false
 }
