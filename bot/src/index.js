@@ -1648,6 +1648,19 @@ if (require.main === module) { main().catch((err) => fatal('main', err)) }
 // default, so without these lines a death looks like a teleport. The
 // hostile count reuses buildState(bot, null) (null target = no player
 // needed for the nearby-hostile scan).
+// The death-tick hostile count (deathLine, neuc.65.6's fall read).
+function deathHostiles(bot) {
+  let hostiles = buildState(bot, null).nearby_hostiles
+  const snap = (bot && bot._tickerCtx && bot._tickerCtx.lastHostileSnap) || null
+  if (hostiles <= 0 && snap && typeof snap.count === 'number' && snap.count > 0) {
+    // The killer is usually gone at the death tick (exploded creeper), so a
+    // live scan prints hostiles=0 over a corpse. The last tick's snapshot
+    // is the truthful count.
+    hostiles = snap.count
+  }
+  return hostiles
+}
+
 function deathLine(bot) {
   let health = typeof bot.health === 'number' ? bot.health : 20
   let hostiles = 0
@@ -1655,14 +1668,8 @@ function deathLine(bot) {
   try {
     const state = buildState(bot, null)
     health = state.bot_health
-    hostiles = state.nearby_hostiles
+    hostiles = deathHostiles(bot)
     const snap = (bot && bot._tickerCtx && bot._tickerCtx.lastHostileSnap) || null
-    if (hostiles <= 0 && snap && typeof snap.count === 'number' && snap.count > 0) {
-      // The killer is usually gone at the death tick (exploded creeper), so a
-      // live scan prints hostiles=0 over a corpse. The last tick's snapshot
-      // is the truthful count.
-      hostiles = snap.count
-    }
     const live = snapHostiles(bot)
     if (live && live.count > 0) nearest = live
     else if (snap && snap.count > 0) nearest = snap
@@ -1766,6 +1773,9 @@ function handleDeath(bot, ticker) {
   try {
     const ctx = bot && bot._tickerCtx
     if (dangerMod.markWaterDeath(bot, ctx)) exploreMod.dropDeadLeg(ctx)
+    // neuc.65.6: a dry, hostile-free death is a fall — the small disc keeps
+    // the next life's paths off the drop (prod v2: ten at one doorstep).
+    else if (dangerMod.markFallDeath(bot, ctx, deathHostiles(bot))) console.log('danger: fall death marked')
   } catch (_) { /* memory best-effort */ }
   // ed88: night-step phase records belong to the dead body's position — a
   // gohome 'enter' resumed from world spawn stood 60 s, then cannot-reach.

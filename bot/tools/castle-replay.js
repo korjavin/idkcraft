@@ -136,10 +136,12 @@ if (BARE && SEED) throw new Error('CASTLE_BARE=1 excludes CASTLE_SEED')
 // house (raise-house.js) on the pad is the bot's home; bump = the same house
 // with bedrock behind the door (gohome cannot get in: prod v2 10-16's
 // cannot-reach-home dusks) — the night lines add the shelter spot's
-// distance from the door (neuc.65.3's walk-off: 8+ is the pass).
+// distance from the door (neuc.65.3's walk-off: 8+ is the pass). pit
+// (neuc.65.6) = the doorstep is a 6-deep crater (prod v2 10-16: ten falls
+// at one cell in front of a creeper-holed house door).
 const HOUSE = process.env.CASTLE_HOUSE || ''
-if (!['', 'clean', 'bump'].includes(HOUSE) || (HOUSE && !BARE)) {
-  throw new Error(`CASTLE_HOUSE: want ''|clean|bump with CASTLE_BARE=1, got ${JSON.stringify(HOUSE)}`)
+if (!['', 'clean', 'bump', 'pit'].includes(HOUSE) || (HOUSE && !BARE)) {
+  throw new Error(`CASTLE_HOUSE: want ''|clean|bump|pit with CASTLE_BARE=1, got ${JSON.stringify(HOUSE)}`)
 }
 const SAND = process.env.CASTLE_SAND === '1'
 // Repair run (g0z.56, needs CASTLE_SEED=complete): after adoption the
@@ -276,9 +278,10 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /, /^residence /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [], fetchEv: [], leg: null, lastWd: null, kitless: 0, gohomeFails: 0, shelterAt: null }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [], fetchEv: [], leg: null, lastWd: null, kitless: 0, falls: 0, gohomeFails: 0, shelterAt: null }
 function resetSeen() {
   seen.kitless = 0
+  seen.falls = 0
   seen.gohomeFails = 0
   seen.shelterAt = null
   seen.regressAt = []
@@ -582,7 +585,7 @@ function createNightDriver({ cmd, who, deaths, log, phantoms = 2, prod = false, 
     nights,
     async open() {
       armed = true
-      open0 = { d: deaths(), k: seen.kitless }
+      open0 = { d: deaths(), k: seen.kitless, f: seen.falls }
       gLast = seen.gohomeFails
       seen.shelterAt = null
       await run('time set 0')
@@ -605,7 +608,7 @@ function createNightDriver({ cmd, who, deaths, log, phantoms = 2, prod = false, 
     // Verdict-line tail: nights seen, how many sheltered, deaths at night.
     tag() {
       const nd = nights.reduce((a, n) => a + n.deaths, 0)
-      const prodTag = prod && open0 ? `, day-deaths=${deaths() - open0.d - nd}, kitless=${seen.kitless - open0.k}` : ''
+      const prodTag = prod && open0 ? `, day-deaths=${deaths() - open0.d - nd}, kitless=${seen.kitless - open0.k}, falls=${seen.falls - open0.f}` : ''
       const bumpTag = door ? `, bump=${nights.filter((n) => n.bump).length}/${nights.length}` : ''
       if (!nights.length) return ', nights=0' + prodTag + bumpTag
       return `, nights=${nights.length}, sheltered=${nights.filter((n) => n.sheltered).length}/${nights.length}, night-deaths=${nd}` + prodTag + bumpTag
@@ -716,7 +719,21 @@ function rigHouseCommands(site, kind) {
     `setblock ${ox + 1} ${oy} ${oz + 4} red_bed[facing=east,part=foot]`,
   ]
   if (kind === 'bump') cmds.push(`fill ${ox + 3} ${oy} ${oz + 1} ${ox + 3} ${oy + 1} ${oz + 1} bedrock`)
+  if (kind === 'pit') {
+    // neuc.65.6: the 3x2 doorstep (raise-house) becomes a 6-deep crater in
+    // a stone shell — floor 6 below the house floor, like prod's -85 82 -4
+    // under the 88 floor. The house slab (z >= oz, y = oy-1) stays.
+    cmds.push(`fill ${ox + 1} ${oy - 7} ${oz - 3} ${ox + 5} ${oy - 2} ${oz} stone`)
+    cmds.push(`fill ${ox + 2} ${oy - 6} ${oz - 2} ${ox + 4} ${oy - 1} ${oz - 1} air`)
+  }
   return cmds
+}
+// neuc.65.6: a server fall-death message for the follower (the vanilla
+// fall family: high place, too hard, doomed to fall, fell off/while).
+const FALL_DEATH = /^(\S+) (fell from a high place|hit the ground too hard|was doomed to fall|fell off |fell while |was knocked off|fell too far)/
+function isFallDeath(msg, who) {
+  const m = FALL_DEATH.exec(String(msg || ''))
+  return !!m && m[1] === who
 }
 function idleRespawnPoint(home, spawn) {
   const dx = spawn.x - home.x
@@ -1095,6 +1112,7 @@ async function main() {
 
   const guide = mineflayer.createBot({ host: HOST, port: PORT, username: GUIDE, auth: 'offline' })
   await waitFor(guide, 'spawn', 60000, 'guide spawn').catch((e) => fail('guide-spawn', e.message))
+  guide.on('messagestr', (m) => { if (isFallDeath(m, FOLLOWER)) seen.falls++ }) // neuc.65.6: falls= on the prod tag
   await sleep(6000) // past Paper's same-IP connection throttle (stuck-replay precedent)
 
   let follower = null
@@ -1504,7 +1522,7 @@ async function main() {
     }
     if (bumpDoor) { bumpDoor.x = site.x + 3.5; bumpDoor.z = site.z + 0.5 }
     tickCtx().paused = false
-    origLog(`CASTLE-RIG house=${HOUSE}: built house ${site.x} ${site.y} ${site.z}, door ${site.x + 3} ${site.y} ${site.z}${HOUSE === 'bump' ? ', bedrock behind the door' : ''}`)
+    origLog(`CASTLE-RIG house=${HOUSE}: built house ${site.x} ${site.y} ${site.z}, door ${site.x + 3} ${site.y} ${site.z}${HOUSE === 'bump' ? ', bedrock behind the door' : HOUSE === 'pit' ? ', 6-deep doorstep pit' : ''}`)
   }
   if (NIGHT_PROD) {
     const sp = prodSpawnPoint({ x: bx, z: bz }, worldSpawn)
@@ -2256,4 +2274,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
