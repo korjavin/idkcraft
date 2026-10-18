@@ -68,8 +68,22 @@ describe('neuc.65.6 fall death marks a small danger disc', () => {
     const ns = m.getNeighbors({})
     assert.equal(ns[0].cost, 1 + danger.PATH_COST, 'landing in the drop cell costs')
     assert.equal(ns[1].cost, 1, 'outside the disc is free')
-    // Home 3+ out (prod: house -88 88 -3): the goal ring keeps the disc whole.
-    assert.equal(m.dangerDiscs({ x: -60, z: 0 }, { x: -87.5, z: -2.5 })[0].lim, 3)
+    // revmux 01: the gohome goal is the house entrance's outside cell, prod's
+    // drop itself (house -88 88 -3 -> outside -85 88 -4): the disc stays whole.
+    const home = { site: { x: -88, y: 88, z: -3 }, built: true, v: 2 }
+    const out = require('../src/residence').of(home).entrance(home).outside
+    assert.deepEqual([out.x, out.z], [-85, -4])
+    assert.equal(m.dangerDiscs({ x: -60, z: 0 }, { x: out.x + 0.5, z: out.z + 0.5 })[0].lim, danger.FALL_RADIUS)
+    // Feet inside the disc still shrink it (the walk out stays cheap).
+    assert.equal(m.dangerDiscs({ x: CELL.x + 1.5, z: CELL.z }, null)[0].lim, 1)
+  })
+
+  it('revmux 01 minor: a later plain mark on the drop keeps the fall flag', () => {
+    const ctx = {}
+    danger.markFallDeath(deathBot(CELL).bot, ctx, 0)
+    danger.mark(ctx, CELL)
+    assert.equal(danger.count(ctx), 1)
+    assert.equal(ctx.danger.spots[0].fall, true)
   })
 
   it('the fall flag survives a restart', () => {

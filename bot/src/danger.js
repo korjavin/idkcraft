@@ -43,10 +43,12 @@ function mark(ctx, p, now, radius) {
   prune(ctx, t)
   const y = typeof p.y === 'number' ? p.y : 0
   const i = mem.spots.findIndex((s) => Math.hypot(s.x - p.x, s.z - p.z) < 1 && Math.abs(s.y - y) < 2)
+  const wasFall = i >= 0 && mem.spots[i].fall === true
   if (i >= 0) mem.spots.splice(i, 1)
   const spot = { x: p.x, y, z: p.z, at: t }
   const r = radOf(radius)
   if (r !== AVOID_RADIUS) spot.r = r
+  if (wasFall) spot.fall = true // neuc.65.6: a later pit mark on the drop keeps its path cost
   mem.spots.push(spot)
   while (mem.spots.length > MAX_SPOTS) mem.spots.shift()
   return mem.spots.length
@@ -266,7 +268,10 @@ function wideSpots(ctx, t, feet, goal) {
     if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
     const r = spotRadius(s)
     if (r < WATER_RADIUS && !s.fall) continue
-    out.push({ x: s.x, z: s.z, lim: Math.min(r, ring(s, feet), ring(s, goal)) })
+    // neuc.65.6 (revmux 01): a fall disc ignores the goal ring — prod's drop
+    // sat under the house entrance's outside cell, the gohome walk's own
+    // goal, so the shrink zeroed it. 3 blocks of cost cannot flood A*.
+    out.push({ x: s.x, z: s.z, lim: Math.min(r, ring(s, feet), s.fall ? Infinity : ring(s, goal)) })
   }
   return out
 }
