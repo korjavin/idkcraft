@@ -589,7 +589,8 @@ Measured (v2, 30 min): master drops=2 and drops=1 — the gohome enter leg
 leaves the body on the doorstep edge and it drops when Baritone resumes
 (cannot-reach-home, twice a night); with the doorstep fill cells the
 house re-opens, build refills the doorstep in ~2 min, gohome gets in and
-drops=0.
+drops=0 (one later run drops=1, away from the doorstep: a forage chase off the
+crust's north edge into the void, not the house).
 Baselines are in `night-baseline.json` (master
 ed8f1107, one 68-min run each). v1 bare: 3 nights, sheltered 3/3,
 night-deaths 0, day-deaths 0, kitless 0. v1 castle (`CASTLE_SEED=complete`;
