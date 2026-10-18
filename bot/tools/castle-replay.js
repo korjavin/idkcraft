@@ -2473,7 +2473,7 @@ async function main() {
     }
     await rcon(`forceload remove ${box.x1} ${box.z1} ${box.x2} ${box.z2}`).catch(() => {})
     const hist = Object.entries(names).map(([k, val]) => `${k}:${val}`).join(',')
-    apronTag += `, apron-throwaway=${thrown}, apron-new=${n}${hist ? `(${hist})` : ''}, apron-changed=${changed.length}`
+    apronTag += `, apron-throwaway=${thrown}, apron-new=${n}${hist ? `(${hist})` : ''}, apron-changed=${changed.length}${changed.length >= 4000 ? '+ CAPPED (incomplete: counts are a floor)' : ''}`
   }
   // Stairs facing (g0z.47): every v3 stairs cell read back via rcon — laid
   // (any stair) vs laid with the plan facing, half bottom. Build runs, and
