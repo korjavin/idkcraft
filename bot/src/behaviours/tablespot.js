@@ -122,6 +122,11 @@ function tableFor(bot, ctx) {
         if (!block) unreadable = true
       } else unreadable = true
     } catch (_) { block = null; unreadable = true }
+    // mlob: a table inside a holed house is no station unless already in
+    // reach (build.entranceHoled: the walk would cross the hole); the
+    // pack/roadside branch below serves (revmux 02: one in reach still does).
+    if (block && block.name === 'crafting_table' && require('./build').entranceHoled(bot, ctx, t) &&
+      !require('./craft').tableUsable(bot, block, t)) continue
     if (block && block.name === 'crafting_table') {
       // ajoe: a far or today-unreachable station only wins when nothing
       // nearer stands and no table is in the pack to place beside us.

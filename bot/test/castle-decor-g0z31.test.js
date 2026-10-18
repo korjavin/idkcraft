@@ -371,7 +371,9 @@ describe('castle gate banners (g0z.32)', () => {
       // A scaffold block under each banner cell (findRef's first pick: a
       // standing banner) and the windows glazed, but one pane still open
       // and none held: the held banners word first.
-      for (const c of banners(rot)) bot.set.set(k3(c.x, c.y - 1, c.z), 'cobblestone')
+      // Planks, not cobble: a floating cobble is apron scaffold (g0z.61) and
+      // this fake's dig never removes it.
+      for (const c of banners(rot)) bot.set.set(k3(c.x, c.y - 1, c.z), 'oak_planks')
       paintPanes(bot, rot)
       const open = blueprint.decorPlan(SITE, rot, 2).cells[0]
       bot.set.delete(k3(open.x, open.y, open.z))

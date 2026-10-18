@@ -33,6 +33,7 @@ const build = require('./build')
 const flat = require('./flat')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
 const { stepFailed, stepGen } = require('../step')
+const worker = require('../worker')
 
 const STRIKES = 3
 const BACKOFF_BASE_MS = 30000
@@ -749,49 +750,163 @@ function prepTargets(bot, ctx, st, now) {
 // castle completes without it. Cached 30 s (a full-box scan).
 // ponytail: a pillar top out of reach blocks after three strikes; the reach
 // invariant keeps tall pillars off the site.
-// Band sweep (g0z.44): after 'complete', only the fence band (within 1 of
-// the ring line, dy 0..3) — ~1.3k reads, not the 14k box scan — and
-// ownership there is isOwnPlaced only: cobblestone by name outside the box
-// may be the owner's path. Panes sit on plan air cells, so the plan skip
-// covers them; the g0z.45 upper fence row sits off-plan, so laid decor
-// skips by a decor match instead (own scaffold in an OPEN row cell still
-// clears — it is in the decor's way). The band idx strides over the grown box
-// ((dx+1)*(d+2)+(dz+1), dy < 40), unique across the band, on its own base:
-// band blocked entries live until swept (pick, below), so refusals escalate
-// to retired instead of re-chasing every 30 s — box-litter entries still
-// prune on expiry, so the two modes must not share idx space.
-const LITTER_BAND_BASE = 2100000
+// Band sweep (g0z.44) grown to the apron (g0z.61): after 'complete' the
+// scan covers the site box grown by blueprint.CASTLE_APRON in x/z, dy
+// -NIGHT_BAND_BELOW..SITE_TOP — the box interior (towers to windows) and
+// the pillars/bridges V2, swarm helpers and respawns left around it.
+// Sliced (litterSlice): the fence band first, then one x-strip of the grown
+// box per call, so no tick reads the whole ~78k cells. Litter (isLitter)
+// carries a scaffold name AND is own-placed in the yard ring above the
+// floor, or scaffold by shape whoever placed it (owner Q1 2026-10-18).
+// Panes sit on plan air cells, so the plan skip covers them; laid decor
+// skips by a decor match (own scaffold in an OPEN decor cell still clears —
+// it is in the decor's way). The idx strides over the grown box, unique
+// across it, on its own base: band blocked entries live until swept (pick,
+// below), so refusals escalate to retired instead of re-chasing every 30 s
+// — box-litter entries still prune on expiry, so the two modes must not
+// share idx space. The base moved from g0z.44's 2100000 with the strides:
+// a persisted old entry prunes instead of decoding to another cell.
+const LITTER_BAND_BASE = 2200000
+const LITTER_BELOW = blueprint.NIGHT_BAND_BELOW
+// Scaffold names (body.js scafoldingBlocks = dirt + castle.STONE_ITEMS;
+// recover/flat pillars dirt/cobble): never grass, snow, beds, chests, doors.
+const SCAFFOLD_MATS = new Set([...flat.PILLAR_MATS, ...blueprint.STONE_ITEMS])
+const LITTER_PLAYER_R = 8
+function blockAtXYZ(bot, x, y, z) {
+  try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null }
+}
+// Bot scaffold by shape (g0z.61): a scaffold-name block that is a lone 1x1
+// column cell (flat.lonePillar) or a 1-wide bridge cell (nothing solid
+// below, at most one solid horizontal neighbour). Above the floor the
+// castle's own plan/decor cells do not count as neighbours (a tower against
+// a wall or window). Never a plan cell or laid decor. Natural ground has
+// solid below and neighbours; a player's wall or path on the ground has
+// solid below or 2+ neighbours. ponytail: shape decides — a player's lone
+// dirt/cobble post or 1-wide sky bridge within the apron gets dug (owner
+// Q1); upgrade = a persisted swarm-shared placedByBot.
+function scaffoldShape(bot, ctx, b, st = ctx && ctx.castle) {
+  try {
+    if (!b || !b.position || !SCAFFOLD_MATS.has(b.name) || !st || !st.site) return false
+    const x = Math.floor(b.position.x), y = Math.floor(b.position.y), z = Math.floor(b.position.z)
+    const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
+    const dt = blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).at
+    const k = `${x},${y},${z}`
+    if (at.has(k)) return false
+    const dc = dt.get(k)
+    if (dc && blueprint.matches(dc.kind, b.name)) return false
+    const kk = (n) => `${Math.floor(n.position.x)},${Math.floor(n.position.y)},${Math.floor(n.position.z)}`
+    const ignore = y >= st.site.y ? (n) => !!n.position && (at.has(kk(n)) || dt.has(kk(n))) : null
+    if (flat.lonePillar(bot, ctx, x, y, z, ignore)) {
+      // Free-standing: every cell above it in the column is lone scaffold
+      // too (revmux 01: a doorway jamb is lone at its own height but
+      // carries the lintel).
+      for (let yy = y + 1; yy <= y + 24; yy++) {
+        const a = blockAtXYZ(bot, x, yy, z)
+        if (!a) return false
+        if (!flat.isSolidCell(a)) return true
+        if (!SCAFFOLD_MATS.has(a.name) || !flat.lonePillar(bot, ctx, x, yy, z, ignore)) return false
+      }
+      return false
+    }
+    const below = blockAtXYZ(bot, x, y - 1, z)
+    if (!below || flat.isSolidCell(below)) return false
+    // At most one solid neighbour (revmux 01: an "axis free" rule matched
+    // the block over a doorway in a player's 1-thick wall and ate the wall
+    // upward). A longer bridge erodes from its ends, one cell per pass.
+    let solid = 0
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const n = blockAtXYZ(bot, x + dx, y, z + dz)
+      if (!n || (flat.isSolidCell(n) && !isOwnPlaced(ctx, n) && !(ignore && ignore(n)))) solid++
+    }
+    return solid <= 1
+  } catch (_) { return false }
+}
+// One cell's verdict on a complete castle. The scan and the read-time
+// re-check share it (g0z.53: a block a player swapped inside the cache
+// window is judged again, never dug on the old verdict).
+function isLitter(bot, ctx, st, x, y, z, w, d) {
+  const b = blockAtXYZ(bot, x, y, z)
+  const n = b && b.name
+  if (!SCAFFOLD_MATS.has(n)) return false
+  // A filled plan 'dig' cell (revmux 01: a walker's moat bridge lands at
+  // dy -1, in the dug moat) is litter: the complete castle dug it, nothing
+  // natural refills it, and the relay skips dig cells after complete.
+  const pc = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${x},${y},${z}`)
+  if (pc) return pc.kind === 'dig'
+  const ring = y >= st.site.y && x >= st.site.x - 1 && x <= st.site.x + w && z >= st.site.z - 1 && z <= st.site.z + d
+  if (ring && isOwnPlaced(ctx, b)) {
+    const k = `${x},${y},${z}`
+    if (blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.has(k)) return false
+    const dc = blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).at.get(k)
+    return !(dc && blueprint.matches(dc.kind, n))
+  }
+  return scaffoldShape(bot, ctx, b, st)
+}
+function litterCell(st, d, x, y, z) {
+  const R = blueprint.CASTLE_APRON
+  const dx = x - st.site.x, dy = y - st.site.y, dz = z - st.site.z
+  return { x, y, z, kind: 'air', dy, idx: LITTER_BAND_BASE + ((dx + R) * (d + 2 * R) + (dz + R)) * 40 + dy + LITTER_BELOW }
+}
+// Slice s: 0 = the fence band, s >= 1 = the x-strip site.x - R + s - 1 of
+// the grown box, top-down (a pillar sweeps from its top, so its lower
+// cells stay lone).
+function litterSlice(bot, ctx, st, s, w, d) {
+  const out = []
+  if (s === 0) {
+    for (const c of blueprint.fenceBandCells(st)) {
+      if (isLitter(bot, ctx, st, c.x, c.y, c.z, w, d)) out.push(litterCell(st, d, c.x, c.y, c.z))
+    }
+    return out
+  }
+  const R = blueprint.CASTLE_APRON
+  const x0 = st.site.x, x1 = x0 + w - 1, z0 = st.site.z, z1 = z0 + d - 1
+  const x = x0 - R + s - 1
+  const nearX = x >= x0 - 1 && x <= x1 + 1
+  for (let z = z0 - R; z <= z1 + R; z++) {
+    // Slice 0's cells (fenceBandCells: within 1 of the ring line, dy 0..3).
+    const inBand = nearX && z >= z0 - 1 && z <= z1 + 1 && (x <= x0 + 1 || x >= x1 - 1 || z <= z0 + 1 || z >= z1 - 1)
+    for (let dy = SITE_TOP; dy >= -LITTER_BELOW; dy--) {
+      if (inBand && dy >= 0 && dy <= 3) continue
+      const y = st.site.y + dy
+      if (isLitter(bot, ctx, st, x, y, z, w, d)) out.push(litterCell(st, d, x, y, z))
+    }
+  }
+  return out
+}
 function litterTargets(bot, ctx, st, now) {
   const complete = st.phase === 'complete'
-  const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0},v${ver(st)},${complete ? 'band' : 'box'}`
-  const c0 = ctx.castleLitter
-  // Band entries re-check ownership at read time (g0z.53): a block a player
-  // replaced inside the 30 s window is theirs, never dug.
-  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) {
-    return c0.list.filter((c) => !done(bot, c) && (c.idx < LITTER_BAND_BASE || isOwnPlaced(ctx, { position: c, name: nameAt(bot, c) })))
-  }
+  const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0},v${ver(st)},${complete ? 'apron' : 'box'}`
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  if (complete) {
+    // One slice per call; the previous pass's list stands in for the
+    // slices this pass has not reached yet. A finished pass waits
+    // FULL_RESCAN_MS before the next one starts.
+    const last = w + 2 * blueprint.CASTLE_APRON
+    let c = ctx.castleLitter
+    if (!c || c.key !== key || !Array.isArray(c.acc)) c = ctx.castleLitter = { key, at: now, list: [], acc: [], next: 0 }
+    if (c.next > last && now - c.at >= FULL_RESCAN_MS) { c.at = now; c.next = 0; c.acc = [] }
+    // Slices run until one workable cell is pending (or the pass ends): an
+    // empty first strip must not word the menu past the sweep into a long
+    // castlefetch leg (rig CASTLE_LITTER: 0/30 swept).
+    // ponytail: worst case one whole pass (w + 2R strips) in a call, at most
+    // once per FULL_RESCAN_MS; a time budget if that ever shows in tick time.
+    const pendingOf = () => (c.next > last ? c.list : c.acc.concat(c.list.filter((o) => o.slice >= c.next)))
+      .filter((o) => isLitter(bot, ctx, st, o.x, o.y, o.z, w, d))
+    let pending = pendingOf()
+    while (c.next <= last) {
+      for (const o of litterSlice(bot, ctx, st, c.next, w, d)) { o.slice = c.next; c.acc.push(o) }
+      c.next++
+      if (c.next > last) { c.list = c.acc; c.acc = [] }
+      pending = pendingOf()
+      if (nextLitter(st, pending, now, bot)) break
+    }
+    return pending
+  }
+  const c0 = ctx.castleLitter
+  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) return c0.list.filter((c) => !done(bot, c))
   const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
-  const dt = blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).at
   const placed = ctx.placedByBot instanceof Set ? ctx.placedByBot : new Set()
   const list = []
-  if (complete) {
-    for (const cell of blueprint.fenceBandCells(st)) {
-      const k = `${cell.x},${cell.y},${cell.z}`
-      if (at.has(k)) continue
-      const n = nameAt(bot, cell)
-      if (n == null || AIR.has(n) || n === 'water') continue
-      const dc = dt.get(k)
-      if (dc && blueprint.matches(dc.kind, n)) continue // laid decor (g0z.45): never litter
-      if (!isOwnPlaced(ctx, { position: cell, name: n })) continue
-      const dx = cell.x - st.site.x
-      const dy = cell.y - st.site.y
-      const dz = cell.z - st.site.z
-      list.push({ x: cell.x, y: cell.y, z: cell.z, kind: 'air', dy, idx: LITTER_BAND_BASE + ((dx + 1) * (d + 2) + (dz + 1)) * 40 + dy })
-    }
-    ctx.castleLitter = { key, at: now, list }
-    return list
-  }
   for (let dy = 0; dy <= SITE_TOP; dy++) {
     for (let dx = 0; dx < w; dx++) {
       for (let dz = 0; dz < d; dz++) {
@@ -815,29 +930,42 @@ function litterTargets(bot, ctx, st, now) {
   return list
 }
 
-// Next workable litter cell (not backing off, never retired): the menu and
-// the tail share it. Retired band cells stay listed by litterTargets (the
-// status line reports them) but are never re-worded or re-worked.
-function nextLitter(st, list, now) {
+// Next workable litter cell (not backing off, never retired, no player —
+// worker.players, bots excluded — within LITTER_PLAYER_R: g0z.61, retried
+// next call, no strike): the menu and the tail share it. Retired band cells
+// stay listed by litterTargets (the status line reports them) but are never
+// re-worded or re-worked.
+function nextLitter(st, list, now, bot = null) {
   const bl = st.blocked || {}
+  let near = []
+  try {
+    // bot2's peer (BOT_PEER_USERNAME = IdkBot) is a bot too; worker.js:98
+    // drops it only on swarm helpers (revmux 01 minor).
+    const peer = process.env.BOT_PEER_USERNAME
+    near = Object.entries(worker.players(bot)).filter(([n]) => !peer || n !== peer)
+      .map(([, p]) => p && p.entity && p.entity.position).filter(Boolean)
+  } catch (_) { near = [] }
+  const r2 = LITTER_PLAYER_R * LITTER_PLAYER_R
   return list.find((o) => {
     const b = bl[bkey(st, o.idx)]
-    return !(b && (b.retired || b.until > now))
+    if (b && (b.retired || b.until > now)) return false
+    return !near.some((p) => (p.x - o.x - 0.5) ** 2 + (p.y - o.y - 0.5) ** 2 + (p.z - o.z - 0.5) ** 2 < r2)
   })
 }
 
-// A band idx back to its cell (g0z.44, the litterTargets formula inverted),
-// or null. Only the range checks can fail: dy = t mod 40 and the strides
-// divide by construction.
+// A band idx back to its cell (the litterCell formula inverted), or null.
+// Only the range checks can fail: dy = t mod 40 and the strides divide by
+// construction.
 function bandOf(st, idx) {
-  if (!(idx >= LITTER_BAND_BASE)) return null
+  if (!(idx >= LITTER_BAND_BASE && idx < blueprint.DECOR_BASE)) return null
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const R = blueprint.CASTLE_APRON
   const t = idx - LITTER_BAND_BASE
-  const dy = t % 40
-  const q = (t - dy) / 40
-  const dz = (q % (d + 2)) - 1
-  const dx = (q - (dz + 1)) / (d + 2) - 1
-  if (dy < 0 || dy > 3 || dx < -1 || dx > w || dz < -1 || dz > d) return null
+  const dy = (t % 40) - LITTER_BELOW
+  const q = (t - (t % 40)) / 40
+  const dz = (q % (d + 2 * R)) - R
+  const dx = (q - (dz + R)) / (d + 2 * R) - R
+  if (dy > SITE_TOP || dx >= w + R || dz >= d + R) return null
   return { x: st.site.x + dx, y: st.site.y + dy, z: st.site.z + dz, kind: 'air', dy, idx }
 }
 
@@ -997,7 +1125,7 @@ function menuFact(bot, ctx, now = Date.now()) {
           ctx.castleWord = { kind, left }
           return stockWord(bot, kind, left)
         }
-        if (nextLitter(st, litterTargets(bot, ctx, st, now), now)) {
+        if (nextLitter(st, litterTargets(bot, ctx, st, now), now, bot)) {
           ctx.castleWord = { word: 'clear' }
           return 'clear'
         }
@@ -1358,7 +1486,9 @@ function digCell(bot, ctx, st, c, now) {
   // in a castle cell clears by name too: after a restart the leftover
   // pillar's key is gone, and without the name rule it would read as a
   // foreign build and block its cell.
-  let ours = name === 'cobblestone'
+  // Apron litter (g0z.61) was judged ours by litterTargets (own or shape);
+  // beds, castle cells and the trap rules still refuse in denyReason.
+  let ours = name === 'cobblestone' || (c.idx >= LITTER_BAND_BASE && c.idx < blueprint.DECOR_BASE)
   try { ours = ours || (ctx.placedByBot instanceof Set && ctx.placedByBot.has(`${c.x},${c.y},${c.z}`)) } catch (_) { /* name rule stands */ }
   // Air/dig cells (moat, keep-clear, prep logs) take any natural block —
   // ores and every NATURAL_SOLID (idkcraft-g0z.13: an ore in a moat cell
@@ -2054,7 +2184,7 @@ function castle(bot, ctx) {
     }
     // Litter (g0z.14 box scan, g0z.44 band scan on a complete castle):
     // the sweep runs before decor.
-    const lit = nextLitter(st, litterTargets(bot, ctx, st, now), now)
+    const lit = nextLitter(st, litterTargets(bot, ctx, st, now), now, bot)
     if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
     // Decor (g0z.31): a complete castle lays its panes (g0z.32: and
     // banners) through the same placeCell; phase stays 'complete'
@@ -2092,6 +2222,10 @@ module.exports.isMaterial = (name, st) => typeof name === 'string' && Object.ent
     (blueprint.DECOR[blueprint.blueprintOf(st.blueprintVersion).version] || []).some((c) => c.kind === kind)))
 module.exports.menuFact = menuFact
 module.exports.litterTargets = litterTargets
+module.exports.scaffoldShape = scaffoldShape
+module.exports.LITTER_BAND_BASE = LITTER_BAND_BASE
+module.exports.litterCell = litterCell
+module.exports.bandOf = bandOf
 module.exports.decorOpen = decorOpen
 module.exports.rank = rank
 module.exports.siteCheck = siteCheck
