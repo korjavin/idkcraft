@@ -33,6 +33,8 @@
 // Shelter spots (idkcraft-ed88, mode=shelter, home:[x,y,z]) run the night
 // shelter step alone: reached = enclosed within the close budget (15 s
 // default, closeSecs overrides — idkcraft-hoy7) and alive at the end.
+// sabotage (idkcraft-vf8e.1, optional, any mode): a RECOVER_MENU primitive
+// name removed for the spot's window (README "Micro-rig").
 // The 4 header rig spots stay embedded as a no-file fallback.
 // Usage: node stuck-replay.js [spots.json] [secs]
 // Env: REPLAY_SPOTS (spots file; argv[2] wins), REPLAY_SECS (argv[3] wins),
@@ -302,8 +304,29 @@ function loadSpots() {
       }
       count = s.count
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, after, danger, home, closeSecs, kit, verifyBuild, count, item: s.item }
+    // Sabotage knob (idkcraft-vf8e.1): the named RECOVER_MENU primitive is
+    // removed for this spot's window only, so a scenario can require a NEW
+    // skill instead of the hand primitive (the README's hand sabotages,
+    // as data). Validated against the shipped menu: a typo fails loud.
+    let sabotage = null
+    if (s.sabotage != null) {
+      if (typeof s.sabotage !== 'string' || !Object.hasOwn(require('../src/behaviours/recover').RECOVER_MENU, s.sabotage)) {
+        throw new Error(`spots[${i}]: bad sabotage (want a RECOVER_MENU primitive name)`)
+      }
+      sabotage = s.sabotage
+    }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, after, danger, home, closeSecs, kit, verifyBuild, count, item: s.item, sabotage }
   })
+}
+
+// Sabotage (idkcraft-vf8e.1): drop menu[name] and return the undo. Every
+// menu read in recover.js is guarded (RECOVER_MENU[n] && … / try-catch on
+// .feasible), so an absent key reads as infeasible, never a crash.
+function sabotageMenu(menu, name) {
+  if (!name) return () => {}
+  const saved = menu[name]
+  delete menu[name]
+  return () => { menu[name] = saved }
 }
 
 // Order-spot chat verdict (idkcraft-6x7.7): pure, unit-tested. Matches one
@@ -856,6 +879,8 @@ async function main() {
         throw new Error(`spot ${s.name}: work chat failed: ${e && e.message ? e.message : e}`)
       }
     }
+    const unSabotage = sabotageMenu(recover.RECOVER_MENU, s.sabotage)
+    if (s.sabotage) console.log(`sabotage ${s.name}: ${s.sabotage} removed from RECOVER_MENU for this window`)
     if (c) c.paused = false
     // Order spots (idkcraft-6x7.7): the guide chats the work order at window
     // start, like a player would — the follower takes it through the real
@@ -958,6 +983,7 @@ async function main() {
       const w = windowReached(s.mode, useGoal, d, gd, orderVerdict)
       if (w !== null) { reached = w; break }
     }
+    unSabotage() // later spots run the full menu
     scanOrderChat() // final gap: a marker in the last <500 ms still counts
     const wEnd = windowReached(s.mode, false, null, null, orderVerdict)
     if (s.count) reached = peak >= s.count
@@ -999,7 +1025,7 @@ async function main() {
     if (WORKER) {
       try { workerOnline = !!(follower.players && follower.players[WORKER]) } catch (_) { /* sampling best-effort */ }
     }
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(WORKER ? { worker: workerOnline } : {}), ...(plans > 0 ? { plans, planMs, planErr } : {}), ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}) })
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(WORKER ? { worker: workerOnline } : {}), ...(plans > 0 ? { plans, planMs, planErr } : {}), ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}), ...(s.sabotage ? { sabotage: s.sabotage } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}${plans > 0 ? ` plans=${plans} planMs=${planMs} planErr=${planErr}` : ''}`)
     // Bucket spots (idkcraft-jsf.7): water_up must bring both buckets back
@@ -1069,4 +1095,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify }
+module.exports = { sabotageMenu, verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify }

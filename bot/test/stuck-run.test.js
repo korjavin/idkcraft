@@ -584,3 +584,53 @@ describe('stuck-replay.js v2 body factory (idkcraft-neuc.5)', () => {
     assert.ok(replay.includes("b.once('spawn', () => {"), 'spawn-gated chat patch missing')
   })
 })
+
+// idkcraft-vf8e.1: micro-rig inner runs. A live keeper's keep.env turns
+// REPLAY_KEEP=1 into an inner run: no lock, no boot — one replay process on
+// the kept rig's env, its exit code passed through. A fake `node` stands in
+// for stuck-replay.js (the script's only call: `node tools/stuck-replay.js`,
+// stuck-run.sh inner-run block) and echoes the env it was handed.
+describe('stuck-run.sh keep mode inner runs (idkcraft-vf8e.1)', () => {
+  const { spawnSync } = require('node:child_process')
+  const os = require('node:os')
+  const sh = path.join(__dirname, '..', 'tools', 'stuck-run.sh')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'keep-'))
+  const lock = path.join(tmp, 'lock')
+  const bin = path.join(tmp, 'bin')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\necho "fake-node $1 tag=$REPLAY_TAG spots=$REPLAY_SPOTS port=$REPLAY_PORT"\nexit 1\n', { mode: 0o755 })
+  const run = (args, env = {}) => spawnSync('sh', [sh, ...args], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRODWORLD: tmp, RIG_LOCK: lock, REPLAY_KEEP: '1', ...env } })
+  const keep = (pid, variant = 'paper-base') => {
+    fs.mkdirSync(lock, { recursive: true })
+    fs.writeFileSync(path.join(lock, 'pid'), String(pid))
+    fs.writeFileSync(path.join(lock, 'keep.env'), `KEEP_PID=${pid}\nKEEP_VARIANT='${variant}'\nexport REPLAY_TAG='k42'\nexport REPLAY_PORT='25572'\n`)
+  }
+
+  it('a live keeper: one replay on its env, exit passed through, keeper lock kept, run lock released', () => {
+    keep(process.pid)
+    const r = run(['paper-base', '/x/spots.json'])
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.match(r.stdout, /micro-run: kept rig 0/)
+    assert.match(r.stdout, /fake-node tools\/stuck-replay\.js tag=k42 spots=\/x\/spots\.json port=25572/)
+    assert.match(r.stdout, /micro-run: exit 1 in \d+s/)
+    assert.equal(fs.readFileSync(path.join(lock, 'pid'), 'utf8'), String(process.pid))
+    assert.equal(fs.existsSync(path.join(lock, 'run')), false, 'run lock leaked')
+    fs.rmSync(lock, { recursive: true })
+  })
+
+  it('a variant other than the kept one is refused (exit 2)', () => {
+    keep(process.pid)
+    const r = run(['paper-relaxed', '/x/spots.json'])
+    assert.equal(r.status, 2)
+    assert.match(r.stdout, /kept rig 0 runs paper-base/)
+    fs.rmSync(lock, { recursive: true })
+  })
+
+  it('a dead keeper is no kept rig: the normal locked path runs', () => {
+    keep(999999)
+    const r = run(['paper-base'])
+    assert.doesNotMatch(r.stdout, /micro-run/)
+    assert.match(r.stdout, /stale/)
+    assert.match(r.stdout, /no START\.sh/)
+  })
+})
