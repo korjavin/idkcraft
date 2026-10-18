@@ -36,8 +36,19 @@ describe('pr98 a re-opened standing house is not homeless', () => {
     for (const t of ['dusk', 'night']) assert.equal(complete(false, () => buildOk(true, () => FSH(facts(t), bot, ctx()))), true, t)
   })
   it('standing house but build held or hurt (real build gate): shelter still fits', () => {
+    // Fakes of build.js cellDone (:291: every cell but the clear bump stands),
+    // cellLoaded (:283) and nextCellIdx (:339: build's pick = the bump), so the
+    // real MENU.build.feasible passes with no veto (the control below).
+    const plan = buildMod.blueprintFor(ctx().home)
+    const bump = plan.findIndex((c) => c.kind === 'clear')
+    const real = (body) => stub(buildMod, 'cellDone', (b, h, c) => c.kind !== 'clear', () =>
+      stub(buildMod, 'cellLoaded', () => true, () => stub(buildMod, 'nextCellIdx', () => bump, () => complete(true, body))))
+    assert.equal(real(() => FSH(facts('night'), bot, ctx())), false, 'control: build takes the night')
     const held = ctx({ stepFail: { build: { status: 'failed:cannot-reach-site', at: Date.now() } } })
-    assert.equal(complete(true, () => FSH(facts('night'), bot, held)), true, 'buildHeld')
-    assert.equal(complete(true, () => FSH(facts('night', 3), bot, ctx())), true, 'nightHurt')
+    assert.equal(real(() => FSH(facts('night'), bot, held)), true, 'buildHeld')
+    assert.equal(real(() => FSH(facts('night', 3), bot, ctx())), true, 'nightHurt')
+  })
+  it('a shelter already running keeps the night (no mid-night climb-out on a hold flip)', () => {
+    assert.equal(complete(true, () => buildOk(true, () => FSH(facts('night'), bot, ctx({ step: 'shelter' })))), true)
   })
 })

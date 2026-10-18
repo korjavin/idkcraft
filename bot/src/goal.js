@@ -1001,9 +1001,11 @@ function castleBandHome(bot, ctx) {
 // A re-opened house (rw4.19 clear / neuc.65.6.1 hole: built flipped false,
 // walls and roof still stand) whose repair build can take tonight — then
 // build digs the bump and stay sleeps inside (idkcraft-pr98: HOUSE-BUMP dug
-// in outside). Build held/hurt/short keeps the homeless shelter (revmux 01).
+// in outside). Build held/hurt/short keeps the homeless shelter (revmux 01),
+// and a running night shelter keeps the night (02: no climb-out on a hold flip).
 function repairTakesNight(facts, bot, ctx) {
   const home = ctx && ctx.home
+  if (facts.time === 'night' && ctx && ctx.step === 'shelter') return false
   try { return !!(home && home.site && buildMod.isComplete(bot, home) && MENU.build.feasible(facts, bot, ctx)) } catch (_) { return false }
 }
 // Shelter fits now: the night it owns, a castle dusk (g0z.21), or dusk and
