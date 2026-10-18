@@ -633,4 +633,37 @@ describe('stuck-run.sh keep mode inner runs (idkcraft-vf8e.1)', () => {
     assert.match(r.stdout, /stale/)
     assert.match(r.stdout, /no START\.sh/)
   })
+
+  // Keeper side: a fake docker (rcon answers accepted, no container listed)
+  // and a START.sh that just sleeps stand in for the Paper boot (the real
+  // START.sh is only ever started in the background, stuck-run.sh boot()).
+  it('keeper: publishes keep.env, holds while an inner run is live, idles out and unpublishes', async () => {
+    const { spawn } = require('node:child_process')
+    const kbin = path.join(tmp, 'kbin')
+    fs.mkdirSync(kbin)
+    fs.writeFileSync(path.join(kbin, 'docker'), '#!/bin/sh\necho ok\n', { mode: 0o755 })
+    fs.mkdirSync(path.join(tmp, 'replay-data', 'vf8e-keeptest', 'world'), { recursive: true })
+    fs.mkdirSync(path.join(tmp, 'w', 'world'), { recursive: true })
+    spawnSync('tar', ['-cf', path.join(tmp, 'world.tar'), '-C', path.join(tmp, 'w'), 'world'])
+    fs.writeFileSync(path.join(tmp, 'START.sh'), '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+    const k = spawn('sh', [sh, 'vf8e-keeptest'], { env: { ...process.env, PATH: `${kbin}:${process.env.PATH}`, PRODWORLD: tmp, RIG_LOCK: lock, REPLAY_KEEP: '1', REPLAY_KEEP_IDLE: '6', REPLAY_TAG: 'kt1' } })
+    let out = ''
+    k.stdout.on('data', (d) => { out += d })
+    const exited = new Promise((resolve) => k.on('exit', resolve))
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+    const env = path.join(lock, 'keep.env')
+    for (let i = 0; i < 100 && !fs.existsSync(env); i++) await sleep(100)
+    const ke = fs.readFileSync(env, 'utf8')
+    assert.match(ke, new RegExp(`^KEEP_PID=${k.pid}$`, 'm'))
+    assert.match(ke, /^KEEP_VARIANT='vf8e-keeptest'$/m)
+    assert.match(ke, /^export REPLAY_TAG='kt1'$/m)
+    fs.mkdirSync(path.join(lock, 'run'))
+    fs.writeFileSync(path.join(lock, 'run', 'pid'), String(process.pid)) // a live inner run
+    await sleep(12000) // two idle windows' worth
+    assert.equal(k.exitCode, null, `keeper idled out under a live inner run: ${out}`)
+    fs.rmSync(path.join(lock, 'run'), { recursive: true })
+    assert.equal(await exited, 0, out)
+    assert.match(out, /kept: idle 6s — tearing down/)
+    assert.equal(fs.existsSync(lock), false, 'keeper lock leaked')
+  })
 })

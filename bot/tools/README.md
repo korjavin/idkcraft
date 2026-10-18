@@ -538,9 +538,12 @@ skill attempt (human or LLM), not a gate:
 ```sh
 # keeper: lock, reset, boot, run the spots once, then hold the rig up
 REPLAY_KEEP=1 RIG_ID=auto sh bot/tools/stuck-run.sh paper-base spots.json &
-# inner runs (any worktree): one replay on the live server each
-REPLAY_KEEP=1 RIG_ID=auto sh bot/tools/stuck-run.sh paper-base spots.json
+# inner runs (any worktree), AFTER the keeper printed `kept: rig <id> up`:
+REPLAY_KEEP=1 RIG_ID=<id> sh bot/tools/stuck-run.sh paper-base spots.json
 ```
+
+An inner call made before `kept:` finds no published rig and falls through
+to the normal path — with `RIG_ID=auto` that boots and keeps a SECOND rig.
 
 The keeper holds the rig lock and publishes the rig in `$RIG_LOCK/keep.env`
 (tag, container, port, v2/worker bridge env). A `REPLAY_KEEP=1` call that

@@ -228,6 +228,7 @@ on_exit() { # EXIT only: the replay verdict (0/1) passes through, env exits stay
   fi
 }
 on_sig() { # INT/TERM: never report a kill as a pass
+  if [ "${KEPT:-}" = 1 ]; then rm -f "$RIG_LOCK/keep.env"; fi # unpublish before the slow teardown
   teardown
   echo "interrupted"
   exit 130
