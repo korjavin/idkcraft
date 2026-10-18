@@ -389,16 +389,18 @@ function clearOwed(bot, home, skipped) {
   } catch (_) { return false }
 }
 
-// A built v2 house with a loaded hole in a fill cell (doorstep row, door
-// and bed floor; idkcraft-neuc.65.6.1): the index.js revalidation re-opens
-// it so build refills it before any walk drops through, and the house
-// table walk fails soft (entrance-holed) meanwhile. Skips do not count (the
+// A built v2 house with a loaded hole in the doorstep row (dz -1;
+// idkcraft-neuc.65.6.1): the index.js revalidation re-opens it so build
+// refills it before any walk drops through, and the house table walk fails
+// soft (entrance-holed) meanwhile. Interior fill cells (door/bed floor) never
+// re-open: the builder cannot reach a hole behind the door (rig a1
+// build-stall), and prod houses already miss some. Skips do not count (the
 // clearOwed rule: a refused fill waits for the 1h skip retry).
 function holeOwed(bot, home, skipped) {
   try {
     if (!home || !home.site || home.v !== 2) return false
     const skip = new Set(Array.isArray(skipped) ? skipped : [])
-    return blueprintFor(home).some((c, i) => c.kind === 'fill' && !skip.has(i) &&
+    return blueprintFor(home).some((c, i) => c.kind === 'fill' && c.dz === -1 && !skip.has(i) &&
       cellLoaded(bot, home, c) && !cellDone(bot, home, c))
   } catch (_) { return false }
 }

@@ -1247,6 +1247,13 @@ describe('rw4.19 interior clear cells', () => {
     world.set(s.x + 3, s.y - 1, s.z - 1, 'oak_planks')
     world.set(s.x + 4, s.y - 1, s.z + 1, 'air') // a floor cell beside the table: not a plan cell (ponytail)
     assert.equal(build.holeOwed(bot, home, []), false)
+    // verifier GAP: an interior fill cell (under the door) missing with a solid doorstep never re-opens
+    assert.ok(BLUEPRINT_V2.some((c) => c.kind === 'fill' && c.dx === 3 && c.dy === -1 && c.dz === 0))
+    world.set(s.x + 3, s.y - 1, s.z, 'air')
+    for (const c of BLUEPRINT_V2) {
+      if (c.kind === 'fill' && c.dz !== -1) world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    }
+    assert.equal(build.holeOwed(bot, home, []), false, 'interior floor holes are not owed (prod houses miss some)')
     world.set(s.x + 2, s.y - 1, s.z - 1, 'air') // a doorstep flank
     assert.equal(build.holeOwed(bot, home, []), true)
   })
