@@ -41,12 +41,14 @@
 #   lives only in a peer memory file read via BOT_CASTLE_PEER, v2's path),
 #   CASTLE_BARE (1 = neuc.65.3: no order, no seed — the guide only chats
 #   `autonomous on`; pair with --night for the no-castle, no-house nights),
-#   CASTLE_HOUSE (''|clean|bump|pit, needs CASTLE_BARE=1 — neuc.65.2: a built
+#   CASTLE_HOUSE (''|clean|bump|pit|gallery, needs CASTLE_BARE=1 — neuc.65.2: a built
 #   v2 house with a bed on the pad is the home; bump = bedrock behind the
 #   door, so gohome fails cannot-reach-home; the night adds one
 #   `CASTLE-RIG house-bump night <n>:` line (shelter spot's door distance,
 #   PASS = 8+ and 0 deaths) and the verdict bump=<pass>/<n>; pit = neuc.65.6:
 #   the doorstep is a 6-deep stone crater (prod v2 10-16's creeper hole);
+#   gallery = neuc.65.6.1: the house on a 1-block crust over a 6-deep void,
+#   doorstep + one floor cell gone, a west ramp back up (prod's terrain);
 #   --night prod's verdict adds falls=<server fall-death messages>),
 #   CASTLE_BODY (''|baritone — g0z.56: the builder runs on the v2 Baritone
 #   body, client image BARITONE_IMAGE, default client.sh tree-hash tag),
@@ -181,7 +183,7 @@ NIGHT="${CASTLE_NIGHT:-0}"
 if [ "${1:-}" = --night ]; then NIGHT=1; shift; if [ "${1:-}" = prod ]; then NIGHT=prod; shift; fi; fi
 [ $# -le 1 ] || { echo "usage: castle-rig.sh [--night] [mins] (--night prod: prod nights; got: $*)"; exit 2; }
 case "$NIGHT" in 0|1|prod) ;; *) echo "CASTLE_NIGHT: want 0|1|prod, got '$NIGHT'"; exit 2 ;; esac
-case "${CASTLE_HOUSE:-}" in '') ;; clean|bump|pit) [ "${CASTLE_BARE:-}" = 1 ] || { echo "CASTLE_HOUSE needs CASTLE_BARE=1"; exit 2; } ;; *) echo "CASTLE_HOUSE: want ''|clean|bump|pit, got '$CASTLE_HOUSE'"; exit 2 ;; esac
+case "${CASTLE_HOUSE:-}" in '') ;; clean|bump|pit|gallery) [ "${CASTLE_BARE:-}" = 1 ] || { echo "CASTLE_HOUSE needs CASTLE_BARE=1"; exit 2; } ;; *) echo "CASTLE_HOUSE: want ''|clean|bump|pit|gallery, got '$CASTLE_HOUSE'"; exit 2 ;; esac
 COMPONENT="${CASTLE_COMPONENT:-}"
 case "$COMPONENT" in
   '') ;;
