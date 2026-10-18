@@ -1023,8 +1023,10 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
-  it('(a6c) built v2 house over a holed doorstep re-opens; a skipped fill does not (neuc.65.6.1)', async () => {
-    for (const skipped of [false, true]) {
+  it('(a6c) built v2 house over a holed doorstep or floor re-opens; a skipped fill does not (neuc.65.6.1, mlob)', async () => {
+    // mlob revmux 01: the floor cell (4,-1,1) is best effort in isComplete,
+    // so the stale-built flip must wait on holeOwed too (no built flicker).
+    for (const [hx, hz, skipped] of [[3, -1, false], [3, -1, true], [4, 1, false], [4, 1, true]]) {
       const bot = workBot()
       bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
       bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }]
@@ -1034,7 +1036,7 @@ describe('work mode (epic rw4)', () => {
       for (const c of plan) {
         cells.set(`${site.x + c.dx},${site.y + c.dy},${site.z + c.dz}`, c.kind === 'clear' ? 'air' : c.kind === 'table' ? 'crafting_table' : c.kind === 'door' ? 'oak_door' : c.kind === 'fill' ? 'dirt' : 'oak_planks')
       }
-      cells.set(`${site.x + 3},${site.y - 1},${site.z - 1}`, 'air') // the doorstep crust fell into the void
+      cells.set(`${site.x + hx},${site.y - 1},${site.z + hz}`, 'air') // the doorstep crust / the floor fell into the void
       bot.blockAt = (pt) => {
         const n = cells.get(`${Math.floor(pt.x)},${Math.floor(pt.y)},${Math.floor(pt.z)}`)
         return n ? { name: n, boundingBox: n === 'air' ? 'empty' : 'block' } : null
@@ -1044,7 +1046,7 @@ describe('work mode (epic rw4)', () => {
       ticker.work()
       const ctx = bot._tickerCtx
       ctx.adoptDone = true
-      const step = plan.findIndex((c) => c.kind === 'fill' && c.dx === 3 && c.dz === -1)
+      const step = plan.findIndex((c) => c.kind === 'fill' && c.dx === hx && c.dy === -1 && c.dz === hz)
       ctx.buildSkip = skipped ? [step] : []
       ctx.home = { site, v: 2, built: true, table: null }
       const origRest = BEHAVIOURS.rest

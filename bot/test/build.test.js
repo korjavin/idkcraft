@@ -1295,6 +1295,36 @@ describe('rw4.19 interior clear cells', () => {
     assert.equal(build.holeOwed(bot, home, []), false)
   })
 
+  it('mlob: a holed house hides its table and chest from the walks (furnace.tableBlock, tablespot, castlefetch)', async () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    paintHouse(world, home)
+    for (const c of BLUEPRINT_V2) if (c.kind === 'clear') world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    const table = pos(s.x + 5, s.y, s.z + 1)
+    const chest = pos(s.x + 5, s.y, s.z + 2)
+    world.set(chest.x, chest.y, chest.z, 'chest')
+    home.table = table
+    home.chest = chest
+    bot.entity.position = pos(s.x + 20, s.y, s.z) // out of reach: every station is a walk
+    const ctx = { home, buildSkip: [] }
+    const furnace = require('../src/behaviours/furnace')
+    const tablespot = require('../src/behaviours/tablespot')
+    const castlefetch = require('../src/behaviours/castlefetch')
+    assert.deepEqual(furnace.tableBlock(bot, ctx).pos, table, 'solid floor: the house table serves')
+    assert.equal(castlefetch.pickChest(bot, ctx, {}, 'stone').k, `${chest.x},${chest.y},${chest.z}`)
+    world.set(s.x + 4, s.y - 1, s.z + 1, 'air') // the floor beside the table falls in
+    assert.equal(furnace.tableBlock(bot, ctx), null, 'gear/craftany fall back to their own table')
+    ctx.claimedTable = pos(s.x + 20, s.y, s.z + 2)
+    world.set(ctx.claimedTable.x, ctx.claimedTable.y, ctx.claimedTable.z, 'crafting_table')
+    assert.deepEqual(furnace.tableBlock(bot, ctx).pos, ctx.claimedTable, 'a roadside claim still serves')
+    ctx.claimedTable = null
+    await assert.rejects(tablespot.tableFor(bot, ctx), (e) => !/entrance/.test(e.message), 'equip skips the house table (no table item: its own reason)')
+    assert.ok(!bot.calls.goals.length, 'no walk toward the holed house')
+    assert.equal(castlefetch.pickChest(bot, ctx, {}, 'stone'), null, 'the home chest is no source')
+  })
+
   it('(c) air, flora and furnishings in clear cells are done without a dig', () => {
     const world = makeWorld()
     const bot = mockBot(world)

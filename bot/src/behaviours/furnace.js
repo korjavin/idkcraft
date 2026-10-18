@@ -101,6 +101,9 @@ function tableBlock(bot, ctx) {
     const castleTable = home && home.kind === 'castle' && home.site ? residence.of(home).table(home) : null
     for (const tablePos of [(home && home.table), (ctx && ctx.claimedTable), castleTable]) {
       if (!tablePos || typeof tablePos.x !== 'number') continue
+      // mlob: a table inside a holed house is no station (build.entranceHoled:
+      // the walk crosses the hole) — gear/craftany fall back to their own.
+      if (require('./build').entranceHoled(bot, ctx, tablePos)) continue
       // Vec3-normalized: live blockAt calls .floored(), plain claims throw.
       const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
       if (block && block.name === 'crafting_table') return { block, pos: tablePos }

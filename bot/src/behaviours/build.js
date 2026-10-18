@@ -1157,7 +1157,8 @@ function build(bot, ctx, target, state) {
           ? new goals.GoalNear(p.x, p.y, p.z, PLACE_RANGE - 1)
           // mlob: a floor hole is placed from any stand within 2 of the
           // cell above it — GoalPlaceBlock's bridge side pick aims at a wall
-          // column, and sight is not needed (place.once checks reach only).
+          // column, and sight is not needed (place.once checks reach only,
+          // baritone/bridge/PROTOCOL.md dig/place table).
           : cell.floor ? new goals.GoalNear(p.x, p.y + 1, p.z, 2)
           : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
     } catch (_) { /* retry next tick */ }

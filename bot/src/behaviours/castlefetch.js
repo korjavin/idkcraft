@@ -1901,6 +1901,7 @@ function castlefetch(bot, ctx, target, state) {
 
 module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
+module.exports.pickChest = pickChest
 module.exports.stairsCobbleShort = stairsCobbleShort
 module.exports.QUARRY_ADAPT = QUARRY_ADAPT
 module.exports.quarrySide = quarrySide

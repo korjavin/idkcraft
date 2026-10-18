@@ -450,11 +450,6 @@ function craftItem(bot, ctx, name, count) {
     } catch (_) { tb = null }
     if (tb) {
       if (!craftMod.tableUsable(bot, tb.block, tb.pos)) { // g0z.40: reach + sight
-        // mlob: no walk into a holed house (build.entranceHoled).
-        if (require('./build').entranceHoled(bot, ctx, tb.pos)) {
-          clearRun(ctx)
-          return { done: false, line: 'the house floor is holed, mending it first' }
-        }
         const tkey = `craftany-table:${tb.pos.x},${tb.pos.y},${tb.pos.z}`
         if (tkey !== ctx.lastGoalKey) {
           try {
