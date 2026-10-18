@@ -998,6 +998,16 @@ function castleBandHome(bot, ctx) {
     return false
   }
 }
+// A re-opened house (rw4.19 clear / neuc.65.6.1 hole: built flipped false,
+// walls and roof still stand) whose repair build can take tonight — then
+// build digs the bump and stay sleeps inside (idkcraft-pr98: HOUSE-BUMP dug
+// in outside). Build held/hurt/short keeps the homeless shelter (revmux 01),
+// and a running night shelter keeps the night (02: no climb-out on a hold flip).
+function repairTakesNight(facts, bot, ctx) {
+  const home = ctx && ctx.home
+  if (facts.time === 'night' && ctx && ctx.step === 'shelter') return false
+  try { return !!(home && home.site && buildMod.isComplete(bot, home) && MENU.build.feasible(facts, bot, ctx)) } catch (_) { return false }
+}
 // Shelter fits now: the night it owns, a castle dusk (g0z.21), or dusk and
 // night away from home with an active castle (vmzq.19, castleSiteNight) —
 // the stickiness and the night-near force below read this too, so a
@@ -1010,7 +1020,7 @@ function shelterFits(facts, bot, ctx) {
   // gohome/stay cannot run, and the old built gate left NO night step —
   // prod 10-14 worked the dark at world spawn and died every 30-90 s.
   // Shelter in place from dusk; dawn ends it (the step's own day done).
-  if ((t === 'dusk' || t === 'night') && facts.home !== 'built') return true
+  if ((t === 'dusk' || t === 'night') && facts.home !== 'built' && !repairTakesNight(facts, bot, ctx)) return true
   return (t === 'night' && shelterOwns(bot, ctx)) || (t === 'dusk' && castleNight(bot, ctx)) ||
     ((t === 'dusk' || t === 'night') && castleSiteNight(bot, ctx))
 }
