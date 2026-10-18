@@ -218,8 +218,9 @@ function leave() {
 // jlda.1), so baritone/settings.txt keeps sprint at its default and the
 // worker's lead is capped by #pause past WALK_PAUSE_D / #resume inside
 // WALK_RESUME_D (bring.js GUIDED_PAUSE_D/GUIDED_RESUME_D, same rule). A
-// sprinting worker only ever gets WALK_PAUSE_D ahead; DOOR-ROOM 3/3 in 1 s
-// with this configuration (jlda.8 rig).
+// sprinting worker gets about WALK_PAUSE_D ahead (checked once per tick, the
+// #pause is async). Rig (jlda.8): sprint default DOOR-ROOM 3/3 in 1 s — a
+// short leg, so the leash itself is not exercised through a door there.
 const WALK_FAR_BLOCKS = 32 // legs at or under this never delegate
 const WALK_TOTAL_MS = 240000 // whole delegation, then the leg's failure path
 const WALK_GONE_MS = 20000 // worker entity out of view
