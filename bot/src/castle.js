@@ -823,6 +823,7 @@ module.exports = {
   yardRing,
   nightBand,
   NIGHT_BAND,
+  NIGHT_BAND_BELOW,
   CASTLE_APRON,
   apronOf,
   anyCastle,

@@ -282,7 +282,10 @@ describe('g0z.44 post-complete band sweep', () => {
     const cells = painted()
     cells.set(key(99, 64, 200), 'dirt') // dx -1 dy 0, ours
     cells.set(key(100, 64, 227), 'cobblestone') // dz d, ours
-    cells.set(key(98, 64, 200), 'cobblestone') // outside the box, NOT ours: the owner path
+    cells.set(key(98, 64, 200), 'cobblestone') // outside the box, NOT ours: the owner path on the ground (g0z.61: 2 long, solid below)
+    cells.set(key(97, 64, 200), 'cobblestone')
+    cells.set(key(98, 63, 200), 'grass_block')
+    cells.set(key(97, 63, 200), 'grass_block')
     cells.set(key(100, 64, 200), 'dirt') // a fence plan cell holding dirt, key and all
     const bot = worldBot(cells)
     const ctx = {
@@ -295,7 +298,7 @@ describe('g0z.44 post-complete band sweep', () => {
     const { d } = blueprint.siteDimensions(0, 2)
     for (const c of list) {
       const dx = c.x - SITE.x; const dy = c.y - SITE.y; const dz = c.z - SITE.z
-      assert.equal(c.idx, 2100000 + ((dx + 1) * (d + 2) + (dz + 1)) * 40 + dy, 'the band idx shape')
+      assert.equal(c.idx, castle.LITTER_BAND_BASE + ((dx + 16) * (d + 32) + (dz + 16)) * 40 + dy + 4, 'the apron idx shape (g0z.61)')
     }
     assert.ok(ctx.castleLitter.key.includes('v2'), `blueprint in the cache key: ${ctx.castleLitter.key}`)
   })
@@ -306,7 +309,7 @@ describe('g0z.44 post-complete band sweep', () => {
     const ctx = { castle: st2(), placedByBot: new Set([key(99, 64, 200)]), placedNames: new Map([[key(99, 64, 200), 'dirt']]) }
     const now = Date.now()
     assert.equal(castle.litterTargets(bot, ctx, ctx.castle, now).length, 1)
-    cells.set(key(99, 64, 200), 'stone') // a player swapped it inside the 30 s window
+    cells.set(key(99, 64, 200), 'oak_planks') // a player swapped it inside the 30 s window
     assert.equal(castle.litterTargets(bot, ctx, ctx.castle, now + 1000).length, 0)
   })
   it('band idx are unique across the band', () => {

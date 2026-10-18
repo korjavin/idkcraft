@@ -171,6 +171,90 @@ function repairCells(st) {
     ...cells.filter((c) => c.kind === 'torch').slice(0, 3),
   ]
 }
+// Litter sweep (g0z.61, CASTLE_LITTER=1, needs CASTLE_SEED=complete): after
+// adoption 30 litter items are rcon-placed — 10 lone dirt pillars in the
+// open yard (one 4-high to a dy-3 window), 10 cobble bridge cells at dy -1
+// in the dry moat's north strip, 10 two-high dirt pillars 2..14 west of
+// the ring — plus 5 player structures east of the ring (a 3x2 cobble wall,
+// a 5-long cobble path on the ground, a chest, a bed, a 2-high planks
+// post). An item is swept once every cell reads air. Pure, rot 0 (the seed's
+// rot); throws when the blueprint has no spot (unit-tested).
+const LITTER = process.env.CASTLE_LITTER === '1'
+const LITTER_PASS = 27 // of 30 items
+const LITTER_BY_S = 15 * 60 // 15 game-min (tick rate 1)
+if (LITTER && SEED !== 'complete') throw new Error('CASTLE_LITTER=1 needs CASTLE_SEED=complete')
+function litterSeeds(st) {
+  const bp = require('../src/castle')
+  if ((st.rot | 0) !== 0) throw new Error('litterSeeds: rot 0 only (the seeded castle)')
+  const { w, d } = bp.siteDimensions(0, st.blueprintVersion)
+  const at = bp.absPlan(st.site, 0, st.blueprintVersion).at
+  const decor = bp.decorPlan(st.site, 0, st.blueprintVersion)
+  const k = (x, y, z) => `${x},${y},${z}`
+  const extras = new Set(seedCastleCells(st).filter((c) => c.kind === 'extra').map((c) => k(c.x, c.y, c.z)))
+  const free = (x, y, z) => !at.has(k(x, y, z)) && !decor.at.has(k(x, y, z)) && !extras.has(k(x, y, z))
+  const { x: sx, y: sy, z: sz } = st.site
+  const sky = (x, z) => {
+    if (at.has(k(x, sy - 1, z))) return false // a moat dig or a foundation: no yard floor
+    for (let y = sy; y <= sy + 16; y++) if (!free(x, y, z)) return false
+    return true
+  }
+  const cols = []
+  const apart = (x, z) => cols.every((c) => Math.abs(c.x - x) > 1 || Math.abs(c.z - z) > 1)
+  const litter = []
+  const add = (what, x, z, y0, h, block) => {
+    cols.push({ x, z })
+    const cells = []
+    for (let y = y0; y < y0 + h; y++) cells.push({ x, y, z, block })
+    litter.push({ what, cells })
+  }
+  // The window tower: the open-sky side of a dy-3 pane, dy 0..3.
+  for (const p of decor.cells) {
+    if (p.kind !== 'pane' || p.dy !== 3 || cols.length) continue
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      if (!sky(p.x + dx, p.z + dz)) continue
+      add('tower', p.x + dx, p.z + dz, sy, 4, 'dirt')
+      break
+    }
+  }
+  if (!cols.length) throw new Error('litterSeeds: no open-sky column beside a dy-3 window')
+  for (let dx = 2; dx < w - 2 && litter.length < 10; dx += 3) {
+    for (let dz = 2; dz < d - 2 && litter.length < 10; dz += 3) {
+      const x = sx + dx, z = sz + dz
+      if (sky(x, z) && apart(x, z)) add('yard', x, z, sy, 1 + (litter.length % 3), 'dirt')
+    }
+  }
+  if (litter.length < 10) throw new Error(`litterSeeds: only ${litter.length} yard pillars`)
+  // Moat bridges: both north-strip cells (dz 3 and 4) at dy -1, in the dug
+  // moat's plan 'dig' cells — where a walker crossing at floor level places
+  // (revmux 01), bank to bank.
+  let bridges = 0
+  for (let dx = 3; dx <= w - 4 && bridges < 5; dx++) {
+    const x = sx + dx
+    const dug = (z) => { const c = at.get(k(x, sy - 1, z)); const u = at.get(k(x, sy - 2, z)); return c && c.kind === 'dig' && u && u.kind === 'dig' }
+    if (!dug(sz + 3) || !dug(sz + 4) || !apart(x, sz + 3) || !apart(x, sz + 4)) continue
+    add('bridge', x, sz + 3, sy - 1, 1, 'cobblestone')
+    add('bridge', x, sz + 4, sy - 1, 1, 'cobblestone')
+    bridges++
+    dx += 2
+  }
+  if (bridges < 5) throw new Error(`litterSeeds: only ${bridges} moat bridges`)
+  ;[2, 3, 4, 6, 7, 8, 10, 11, 12, 14].forEach((out, i) => add('outside', sx - out, sz + 1 + 2 * i, sy, 2, 'dirt'))
+  const xe = sx + w + 3
+  const player = [
+    { what: 'wall', cells: [2, 3, 4].flatMap((dz) => [0, 1].map((dy) => ({ x: xe, y: sy + dy, z: sz + dz, block: 'cobblestone' }))) },
+    { what: 'path', cells: [8, 9, 10, 11, 12].map((dz) => ({ x: xe, y: sy, z: sz + dz, block: 'cobblestone' })) },
+    { what: 'chest', cells: [{ x: xe, y: sy, z: sz + 15, block: 'chest' }] },
+    { what: 'bed', cells: [{ x: xe, y: sy, z: sz + 18, block: 'red_bed[part=foot,facing=east]' }, { x: xe + 1, y: sy, z: sz + 18, block: 'red_bed[part=head,facing=east]' }] },
+    { what: 'post', cells: [0, 1].map((dy) => ({ x: xe, y: sy + dy, z: sz + 21, block: 'oak_planks' })) },
+  ]
+  // The west pillars stand past the pad edge (pad = site +-9): a dirt
+  // ground strip and air above it, so they are lone on flat ground.
+  const prep = [
+    `fill ${sx - 16} ${sy - 4} ${sz - 1} ${sx - 1} ${sy - 1} ${sz + d} minecraft:dirt`,
+    `fill ${sx - 16} ${sy} ${sz - 1} ${sx - 1} ${sy + 8} ${sz + d} minecraft:air`,
+  ]
+  return { litter, player, prep }
+}
 // Start spot (g0z.58, needs CASTLE_SEED=complete): CASTLE_START="dx,dy,dz"
 // off the seeded site's SW corner — after adoption the follower lands in a
 // 1x2 air pocket there (prod g0z.55: castle site 8 65 -12, tunnel start
@@ -1546,6 +1630,22 @@ async function main() {
     tickCtx().paused = false
     origLog(`CASTLE-RIG repair seed: ${knocked.length} cells knocked out (${knocked.map((c) => c.kind).join(',')}), chest ${REPAIR === 'wood' ? '16 oak_log' : `empty, logs cleared within ${NOWOOD_RADIUS}`}`)
   }
+  let litterSeed = null
+  if (LITTER) {
+    litterSeed = litterSeeds(tickCtx().castle)
+    tickCtx().paused = true // no sweep before the readback
+    for (const c of litterSeed.prep) await rcon(c).catch((e) => fail('litter-seed', e.message))
+    const all = [...litterSeed.litter, ...litterSeed.player].flatMap((o) => o.cells)
+    for (const c of all) await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${c.block}`).catch((e) => fail('litter-seed', e.message))
+    await sleep(2000)
+    const miss = all.filter((c) => {
+      try { const b = guide.blockAt(new Vec3(c.x, c.y, c.z)); return !b || b.name !== c.block.split('[')[0] } catch (_) { return true }
+    })
+    if (miss.length) fail('litter-seed', `${miss.length} seeded cells wrong: ${miss.slice(0, 5).map((c) => `${c.x} ${c.y} ${c.z} ${c.block}`).join('; ')}`)
+    tickCtx().paused = false
+    const n = (what) => litterSeed.litter.filter((o) => o.what === what).length
+    origLog(`CASTLE-RIG litter seed: ${litterSeed.litter.length} items (${litterSeed.litter.flatMap((o) => o.cells).length} cells: tower+yard ${n('tower') + n('yard')}, bridge ${n('bridge')}, outside ${n('outside')}), player ${litterSeed.player.map((o) => o.what).join(',')}`)
+  }
   let start = null
   if (START) {
     start = startPlan({ x: bx - 15, y: gy + 1, z: bz - 13 }, START, START_CELL)
@@ -1680,6 +1780,7 @@ async function main() {
   // 5 min keeps long runs visibly alive without burying the verdict.
   const series = []
   let repairT = null
+  let litterT = null
   let nowoodT = null
   const t0 = Date.now()
   const endAt = t0 + MINS * 60000 / SPEED
@@ -1772,6 +1873,12 @@ async function main() {
       if (n === knocked.length && repairT == null) repairT = s.t
       const st = follower._tickerCtx && follower._tickerCtx.castle
       if (nowoodT == null && st && typeof st.status === 'string' && st.status.startsWith('no wood')) nowoodT = s.t
+    }
+    if (litterSeed) {
+      // g0z.61: litter items swept (every cell air, read on the follower).
+      const air = (c) => { try { const b = follower.blockAt(new Vec3(c.x, c.y, c.z)); return !!b && b.name === 'air' } catch (_) { return false } }
+      s.litter = litterSeed.litter.filter((o) => o.cells.every(air)).length
+      if (s.litter >= LITTER_PASS && litterT == null) litterT = s.t
     }
     series.push(s)
     return s
@@ -2367,7 +2474,20 @@ async function main() {
   // g0z.58: regress counts the whole window (a v2 tunnel through the wall
   // logs one), escaped/home are seconds from window open.
   const startTag = start ? `, start=${start.d.join(',')}${start.cell ? `/${start.cell}` : ''}, escaped@${startEscS == null ? 'no' : `${startEscS}s`}, home@${startHomeS == null ? 'no' : `${startHomeS}s`}, regress=${seen.regressAt.filter((at) => at >= t0).length}` : ''
-  const nightTag = (night ? night.tag() : '') + seedTag + startTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + repairTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '') + apronTag
+  let litterTag = ''
+  let litterV = null
+  if (litterSeed) {
+    const swept = series.length ? series[series.length - 1].litter : 0
+    const nameAt = (c) => { try { const b = follower.blockAt(new Vec3(c.x, c.y, c.z)); return b && b.name } catch (_) { return null } }
+    const intact = litterSeed.player.filter((o) => o.cells.every((c) => nameAt(c) === c.block.split('[')[0]))
+    const regress = seen.regressAt.filter((at) => at >= t0).length
+    litterTag = `, litter=${swept}/${litterSeed.litter.length}@${litterT == null ? '-' : `${litterT}s`}, player=${intact.length}/${litterSeed.player.length}, regress=${regress}`
+    const broken = litterSeed.player.filter((o) => !intact.includes(o)).map((o) => o.what)
+    const left = litterSeed.litter.filter((o) => !o.cells.every((c) => nameAt(c) === 'air')).map((o) => `${o.what}@${o.cells[0].x},${o.cells[0].y},${o.cells[0].z}`)
+    const pass = litterT != null && litterT <= LITTER_BY_S && broken.length === 0 && regress === 0 && done === total
+    litterV = `CASTLE-RIG litter: ${pass ? 'PASS' : 'FAIL'} (>= ${LITTER_PASS}/${litterSeed.litter.length} swept by ${LITTER_BY_S}s: ${litterT == null ? 'never' : `${litterT}s`}; player intact ${intact.length}/${litterSeed.player.length}${broken.length ? ` broken=${broken.join(',')}` : ''}; plan ${done}/${total}, regress=${regress}${left.length ? `; left ${left.slice(0, 6).join(' ')}` : ''})`
+  }
+  const nightTag = (night ? night.tag() : '') + seedTag + startTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + repairTag + litterTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '') + apronTag
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}${tickTag}`
   let compLine = null
   if (COMPONENT) {
@@ -2398,6 +2518,7 @@ async function main() {
   origLog(fetchTxt)
   const idleV = idle ? idle.verdict(deaths - idleForced, resNights ? resNights.nights : []) : null
   if (idleV) origLog(idleV.line)
+  if (litterV) origLog(litterV)
   try { logStream.end() } catch (_) { /* close best-effort */ }
   process.exit(idleV && !idleV.pass ? 1 : 0)
 }
@@ -2409,4 +2530,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, litterSeeds, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
