@@ -132,8 +132,13 @@ function siteFor(bot, around, accept) {
     // over flat dirt still reads y0, so the R3 meadow keeps accepting.
     if (groundY(bot, ox + 3, oz + 0, cy + 8) !== y0) continue
     // Doorstep row (outsidePos and flanks, neuc.65.6.2): the walk-in
-    // cells must not be a crust either.
-    if (![2, 3, 4].every((ix) => solidBelow(bot, ox + ix, oz - 1, y0, SOLID_BELOW))) continue
+    // cells must not be a crust either. A lower doorstep (downhill) is
+    // probed under its own ground, not refused for the step down.
+    const step = (ix) => {
+      const gy = groundY(bot, ox + ix, oz - 1, cy + 8)
+      return solidBelow(bot, ox + ix, oz - 1, gy != null && gy < y0 ? gy : y0, SOLID_BELOW)
+    }
+    if (![2, 3, 4].every(step)) continue
     const home = makeHome(ox, y0, oz, 2)
     if (accept && !accept(home, cy + 8)) continue
     return home

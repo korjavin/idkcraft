@@ -49,6 +49,13 @@ describe('neuc.65.6.2 siteFor refuses a crust over a void', () => {
     assert.deepEqual(home.site, { x: 4, y: 64, z: 4 })
   })
 
+  it('a solid doorstep one block downhill still accepts', () => {
+    const h = new Set([2, 3, 4].map((ix) => `${6 + ix},63,-1`)) // doorstep ground at y=62 (surface air)
+    const w = world(); const base = w.blockAt
+    w.blockAt = (p) => (h.has(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`) ? { name: 'air' } : base(p))
+    assert.deepEqual(siteFor(w, AROUND).site, { x: 6, y: 64, z: 0 })
+  })
+
   it('a void 3 down still counts as solid (n = 3 blocks)', () => {
     const h = new Set([`${6 + 4},60,${3}`]) // y 63, 62, 61 solid; 60 air
     assert.deepEqual(siteFor(world(h), AROUND).site, { x: 6, y: 64, z: 0 })
