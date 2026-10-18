@@ -160,10 +160,11 @@ function installLook(bot) {
   // Baritone never shuts one, and an open ring gate lets mobs in. A shut
   // gate under the feet is a Baritone stall (doors.openGateUnderFeet): it
   // never clicks a gate in the cell it stands in, so that open goes ahead.
+  // Same for a shut door under the feet (idkcraft-da2f, doors.openGateUnderFeet).
   bot.activateBlock = async (block, direction, cursorPos) => {
     if (!block || !block.position) throw new Error('activateBlock: want a block with a position')
     const moving = bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()
-    if (moving && typeof block.name === 'string' && block.name.endsWith('_door')) return
+    if (moving && typeof block.name === 'string' && block.name.endsWith('_door') && (gateOpen(block) || !underFeet(bot, block.position))) return
     if (moving && typeof block.name === 'string' && block.name.endsWith('_fence_gate') && !gateOpen(block) && !underFeet(bot, block.position)) return
     const p = block.position
     const bx = Math.floor(p.x)

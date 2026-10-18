@@ -129,6 +129,12 @@ describe('bridge look/lookAt (idkcraft-neuc.9)', () => {
     const feet = bot.entity.position.floored()
     await bot.activateBlock({ name: 'oak_fence_gate', position: feet, getProperties: () => ({ open: false }) })
     assert.equal(transport.state.blockInteracts.length, 3)
+    // da2f: a shut door under the feet (the doorway wedge) is opened too…
+    await bot.activateBlock({ name: 'oak_door', position: feet, getProperties: () => ({ open: false }) })
+    assert.equal(transport.state.blockInteracts.length, 4)
+    // …but an open one under the feet is never shut mid-walk.
+    await bot.activateBlock({ name: 'oak_door', position: feet, getProperties: () => ({ open: true }) })
+    assert.equal(transport.state.blockInteracts.length, 4)
   })
 
   it('activateItem/deactivateItem start and stop the held-item use', async () => {
