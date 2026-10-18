@@ -268,10 +268,10 @@ function wideSpots(ctx, t, feet, goal) {
     if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
     const r = spotRadius(s)
     if (r < WATER_RADIUS && !s.fall) continue
-    // neuc.65.6 (revmux 01): a fall disc ignores the goal ring — prod's drop
-    // sat under the house entrance's outside cell, the gohome walk's own
-    // goal, so the shrink zeroed it. 3 blocks of cost cannot flood A*.
-    out.push({ x: s.x, z: s.z, lim: Math.min(r, ring(s, feet), s.fall ? Infinity : ring(s, goal)) })
+    // neuc.65.6: fall discs keep the goal-ring shrink too — exempt, a disc on
+    // the house entrance makes the door the deepest AvoidGoal node (PROTOCOL
+    // 'Danger discs on goals') and gohome fails cannot-reach-home all night.
+    out.push({ x: s.x, z: s.z, lim: Math.min(r, ring(s, feet), ring(s, goal)) })
   }
   return out
 }
