@@ -885,13 +885,22 @@ function litterTargets(bot, ctx, st, now) {
     let c = ctx.castleLitter
     if (!c || c.key !== key || !Array.isArray(c.acc)) c = ctx.castleLitter = { key, at: now, list: [], acc: [], next: 0 }
     if (c.next > last && now - c.at >= FULL_RESCAN_MS) { c.at = now; c.next = 0; c.acc = [] }
-    if (c.next <= last) {
+    // Slices run until one workable cell is pending (or the pass ends): an
+    // empty first strip must not word the menu past the sweep into a long
+    // castlefetch leg (rig CASTLE_LITTER: 0/30 swept).
+    // ponytail: worst case one whole pass (w + 2R strips) in a call, at most
+    // once per FULL_RESCAN_MS; a time budget if that ever shows in tick time.
+    const pendingOf = () => (c.next > last ? c.list : c.acc.concat(c.list.filter((o) => o.slice >= c.next)))
+      .filter((o) => isLitter(bot, ctx, st, o.x, o.y, o.z, w, d))
+    let pending = pendingOf()
+    while (c.next <= last) {
       for (const o of litterSlice(bot, ctx, st, c.next, w, d)) { o.slice = c.next; c.acc.push(o) }
       c.next++
       if (c.next > last) { c.list = c.acc; c.acc = [] }
+      pending = pendingOf()
+      if (nextLitter(st, pending, now, bot)) break
     }
-    const pending = c.next > last ? c.list : c.acc.concat(c.list.filter((o) => o.slice >= c.next))
-    return pending.filter((o) => isLitter(bot, ctx, st, o.x, o.y, o.z, w, d))
+    return pending
   }
   const c0 = ctx.castleLitter
   if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) return c0.list.filter((c) => !done(bot, c))

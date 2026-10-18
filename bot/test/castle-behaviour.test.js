@@ -1080,6 +1080,8 @@ describe('g0z.44 post-complete band sweep', () => {
     const world = makeWorld()
     for (const c of blueprint.absPlan(SITE, 0, 2).cells) {
       if (blueprint.isPlaceTarget(c.kind)) world.set(c.x, c.y, c.z, LAID2[c.kind])
+      // A complete castle's moat is dug: dirt left in a dig cell is litter (g0z.61).
+      else if (c.kind === 'dig') world.set(c.x, c.y, c.z, 'air')
     }
     const decor = blueprint.decorPlan(SITE, 0, 2).cells
     for (const c of decor.slice(1)) world.set(c.x, c.y, c.z, c.kind === 'pane' ? 'glass_pane' : 'white_wall_banner')

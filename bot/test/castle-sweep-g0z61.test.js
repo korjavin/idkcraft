@@ -225,6 +225,32 @@ describe('g0z.61 own blocks, players, idx', () => {
     players.Owner.entity.position = { x: c.x + 9, y: c.y, z: c.z }
     assert.equal(castle.menuFact(bot, ctx), 'clear', 'free again')
   })
+  it('BOT_PEER_USERNAME within 8 never holds a cell; another player still does', () => {
+    const cells = painted(2) // v2: same fake limit as above (castle.js:172 stateAt)
+    const c = { x: SITE.x - 10, y: SITE.y, z: SITE.z + 13 }
+    cells.set(key(c.x, c.y, c.z), 'dirt')
+    const players = { IdkBot: { username: 'IdkBot', entity: { position: { x: c.x + 2, y: c.y, z: c.z } } } }
+    const bot = worldBot(cells, { players })
+    const ctx = { castle: st3({ blueprintVersion: 2 }) }
+    const prev = process.env.BOT_PEER_USERNAME
+    process.env.BOT_PEER_USERNAME = 'IdkBot'
+    try {
+      pass(bot, ctx)
+      assert.equal(castle.menuFact(bot, ctx), 'clear', 'the peer bot is no player')
+      players.Owner = { username: 'Owner', entity: { position: { x: c.x + 3, y: c.y, z: c.z } } }
+      assert.notEqual(castle.menuFact(bot, ctx), 'clear', 'a real player holds it')
+    } finally {
+      if (prev === undefined) delete process.env.BOT_PEER_USERNAME
+      else process.env.BOT_PEER_USERNAME = prev
+    }
+  })
+  it('an empty band does not hide strip litter: the first menu call words clear', () => {
+    const cells = painted(2) // v2: castle.js:172 stateAt, as above
+    cells.set(key(SITE.x - 10, SITE.y, SITE.z + 13), 'dirt')
+    const bot = worldBot(cells)
+    const ctx = { castle: st3({ blueprintVersion: 2 }) }
+    assert.equal(castle.menuFact(bot, ctx), 'clear', 'strips scanned until a workable cell')
+  })
   it('idx unique over the whole grown box and bandOf inverts it', () => {
     const st = st3()
     const seen = new Set()
