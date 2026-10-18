@@ -140,12 +140,13 @@ function installLook(bot) {
   }
 
   // mineflayer activateBlock: look at the block centre, then use the held
-  // item on it. Doors are the one exception while pathing: Baritone opens
-  // doors itself, so a reflex toggle mid-walk would double-toggle the
-  // panel shut again (neuc.9 landmine) — a no-op here, adapter-side only.
+  // item on it. Doors and fence gates (g0z.46) are the exception while
+  // pathing: Baritone opens both itself, so a reflex toggle mid-walk would
+  // double-toggle the panel shut again (neuc.9 landmine) — a no-op here,
+  // adapter-side only.
   bot.activateBlock = async (block, direction, cursorPos) => {
     if (!block || !block.position) throw new Error('activateBlock: want a block with a position')
-    if (typeof block.name === 'string' && block.name.endsWith('_door') &&
+    if (typeof block.name === 'string' && (block.name.endsWith('_door') || block.name.endsWith('_fence_gate')) &&
       bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) return
     const p = block.position
     const bx = Math.floor(p.x)
