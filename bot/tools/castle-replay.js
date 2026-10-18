@@ -281,11 +281,12 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /, /^residence /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [], fetchEv: [], leg: null, lastWd: null, kitless: 0, falls: 0, drops: 0, gohomeFails: 0, shelterAt: null }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [], fetchEv: [], leg: null, lastWd: null, kitless: 0, falls: 0, drops: 0, doorLost: 0, gohomeFails: 0, shelterAt: null }
 function resetSeen() {
   seen.kitless = 0
   seen.falls = 0
   seen.drops = 0
+  seen.doorLost = 0
   seen.gohomeFails = 0
   seen.shelterAt = null
   seen.regressAt = []
@@ -612,7 +613,7 @@ function createNightDriver({ cmd, who, deaths, log, phantoms = 2, prod = false, 
     // Verdict-line tail: nights seen, how many sheltered, deaths at night.
     tag() {
       const nd = nights.reduce((a, n) => a + n.deaths, 0)
-      const prodTag = prod && open0 ? `, day-deaths=${deaths() - open0.d - nd}, kitless=${seen.kitless - open0.k}, falls=${seen.falls - open0.f}${HOUSE ? `, drops=${seen.drops}` : ''}` : ''
+      const prodTag = prod && open0 ? `, day-deaths=${deaths() - open0.d - nd}, kitless=${seen.kitless - open0.k}, falls=${seen.falls - open0.f}${HOUSE ? `, drops=${seen.drops}, door-lost=${seen.doorLost}` : ''}` : ''
       const bumpTag = door ? `, bump=${nights.filter((n) => n.bump).length}/${nights.length}` : ''
       if (!nights.length) return ', nights=0' + prodTag + bumpTag
       return `, nights=${nights.length}, sheltered=${nights.filter((n) => n.sheltered).length}/${nights.length}, night-deaths=${nd}` + prodTag + bumpTag
@@ -1785,6 +1786,28 @@ async function main() {
         }
       } catch (_) { /* drops best-effort */ }
     }, 250)
+    // idkcraft-z591: the house door and its sill (the block it hangs on).
+    // A door that turns into a non-door counts once as door-lost; every
+    // sill change logs with the body pos + step (the support-break trace).
+    if (h && typeof follower.on === 'function') {
+      const door = `${h.x + 3},${h.y},${h.z}`
+      const sill = `${h.x + 3},${h.y - 1},${h.z}`
+      follower.on('blockUpdate', (oldB, newB) => {
+        try {
+          const q = (newB && newB.position) || (oldB && oldB.position)
+          if (!q) return
+          const k = `${q.x},${q.y},${q.z}`
+          if (k !== door && k !== sill) return
+          const o = (oldB && oldB.name) || '?'
+          const n = (newB && newB.name) || '?'
+          if (o === n) return
+          const e = follower.entity
+          const at = `at ${(Date.now() - t0) / 1000 | 0}s pos ${e ? `${e.position.x.toFixed(2)} ${e.position.y.toFixed(2)} ${e.position.z.toFixed(2)}` : '?'} step=${seen.step || '?'}`
+          if (k === sill) origLog(`CASTLE-RIG sill ${o}->${n} ${at}`)
+          else if (o.endsWith('_door') && !n.endsWith('_door')) origLog(`CASTLE-RIG door-lost ${++seen.doorLost} ${o}->${n} ${at}`)
+        } catch (_) { /* trace best-effort */ }
+      })
+    }
   }
   let resTimer = null
   let startEscS = null // g0z.58: first second out of the start pocket
