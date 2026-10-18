@@ -16,6 +16,12 @@ const { makeHome } = require('../src/site')
 const HOME = { ...makeHome(-88, 88, -3, 2), built: true }
 const GY = 88 // ground anchor of the stone window
 
+// Fake contract: mineflayer 4.39 bot.blockAt(Vec3) (lib/plugins/blocks.js:215-218)
+// returns a prismarine Block (or null for an unloaded chunk). Fields read on
+// this path: `name` (castlefetch.js:885 exposure AIRISH test, :891 the
+// target; util.js:422 protectedReason NATURAL_SOLID), `position` (util.js:423
+// -> inHouseFootprint, util.js:326), `boundingBox` ('block'/'empty' as the
+// real client reports for stone/air).
 function makeBot(stone) {
   return {
     username: 'IdkBotV2',

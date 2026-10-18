@@ -10,6 +10,13 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { siteFor, solidBelow } = require('../src/site')
 
+// Fake contract: mineflayer 4.39 bot.blockAt(Vec3) (lib/plugins/blocks.js:215-218)
+// returns a prismarine Block or null when the chunk is not loaded — it does
+// not throw. Fields read here: `name` (site.js:59 groundY, 67-77; util.js:245
+// solidBelow -> isWall(b.name), util.js:251) and `boundingBox` (util.js:250:
+// 'empty' for air/water in the real client; absent here, so only the name
+// decides, as the fakes in build-vmzq12.test.js do). Real cave voids read
+// 'cave_air', surface air 'air'.
 // Flat meadow: grass at y=63 over dirt, air above. `hollow` cells are
 // air (cave under the crust).
 function world(hollow = new Set()) {
@@ -64,6 +71,8 @@ describe('neuc.65.6.2 siteFor refuses a crust over a void', () => {
   it('solidBelow refuses liquid and unloaded cells', () => {
     const water = { blockAt: (p) => ({ name: Math.floor(p.y) === 62 ? 'water' : 'dirt' }) }
     assert.equal(solidBelow(water, 0, 0, 64, 3), false)
+    // Real unloaded = null (blocks.js:218, below); a throwing blockAt is the
+    // defensive path (util.js solidBelow's try/catch), not a real behaviour.
     const unloaded = { blockAt: () => { throw new Error('unloaded') } }
     assert.equal(solidBelow(unloaded, 0, 0, 64, 3), false)
     assert.equal(solidBelow({ blockAt: () => null }, 0, 0, 64, 3), false)
