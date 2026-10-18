@@ -538,8 +538,11 @@ describe('castle break guard (g0z.55)', () => {
       assert.equal(sync(), 'false', 'own castle in progress')
       assert.equal(pushes, 2)
       ctx.step = 'build' // the house build keeps its throwaway towers by a castle
-      assert.equal(sync(), 'true', 'house build step')
+      assert.equal(sync(), 'true', 'house build step by the own castle')
       assert.equal(pushes, 3)
+      ctx.castle = null; ctx.knownCastles = [peer] // a peer castle keeps the guard on the build step
+      assert.equal(sync(), 'false', 'house build step by a peer castle')
+      assert.equal(pushes, 4)
     })
   })
 
