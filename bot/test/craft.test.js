@@ -173,6 +173,33 @@ describe('craft step', () => {
     far.restoreError()
   })
 
+  it('neuc.65.6.1: the house table behind a holed doorstep fails entrance-holed, no walk', async () => {
+    const site = { x: 0, y: 64, z: 0 }
+    const tablePos = pos(5, 64, 1) // BLUEPRINT_V2[0]
+    const home = { site, v: 2, built: true, table: tablePos, interior: { min: { x: 1, y: 64, z: 1 }, max: { x: 5, y: 65, z: 4 } } }
+    const mk = (holed) => {
+      const bot = mockBot({ items: [{ name: 'oak_planks', count: 6 }], ids: IDS, recipes: { oak_door: recipeFor('oak_door') } })
+      bot.entity.position = pos(20, 64, 0)
+      bot.blockAt = (p) => {
+        if (p.y === 63) return holed && p.x === 3 && p.z === -1 ? { name: 'air', boundingBox: 'empty' } : { name: 'dirt', boundingBox: 'block' }
+        return { name: 'crafting_table', boundingBox: 'block' }
+      }
+      return bot
+    }
+    const bot = mk(true)
+    const ctx = freshCtx(home)
+    craft(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:entrance-holed')
+    assert.equal(bot.calls.setGoal, 0)
+    bot.restoreError()
+    const solid = mk(false)
+    const sctx = freshCtx(home)
+    craft(solid, sctx, null, {})
+    assert.equal(sctx.stepStatus, 'running')
+    assert.equal(solid.calls.setGoal, 1, 'a solid doorstep walks as before')
+    solid.restoreError()
+  })
+
   it('g0z.40: a door table no cell sees fails table-unseeable after 21 still ticks; progress keeps walking', async () => {
     const tablePos = pos(2, 64, 0)
     const bot = mockBot({ items: [{ name: 'oak_planks', count: 6 }], ids: IDS, recipes: { oak_door: recipeFor('oak_door') } })

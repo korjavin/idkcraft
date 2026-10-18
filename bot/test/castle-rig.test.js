@@ -424,6 +424,17 @@ describe('castle-replay.js night driver (idkcraft-ek69)', () => {
     const pit = rigHouseCommands({ x: 0, y: 64, z: 0 }, 'pit')
     // shell first, then the 3x2 doorstep aired 6 deep (floor at y 57, house floor 64)
     assert.deepEqual(pit.slice(2), ['fill 1 57 -3 5 62 0 stone', 'fill 2 58 -2 4 63 -1 air'])
+    // neuc.65.6.1 gallery: void under the crust, doorstep + table-side floor aired, 6 ramp steps
+    const gal = rigHouseCommands({ x: 0, y: 64, z: 0 }, 'gallery')
+    assert.deepEqual(gal.slice(2, 6), ['fill -15 56 -11 13 62 8 dirt', 'fill -8 57 -10 12 62 7 air', 'setblock 3 63 -1 air', 'setblock 4 63 1 air'])
+    assert.deepEqual([gal[6], gal[11]], ['fill -9 58 -1 -9 63 1 air', 'fill -14 63 -1 -14 63 1 air'])
+    assert.equal(gal.length, 12)
+    // drops: a 7-block landing near the house counts once; ramp steps and mid-air samples never
+    const { createDropTrack } = require('../tools/castle-replay')
+    const tr = createDropTrack((p) => p.x < 100)
+    const ys = [[70, true], [69.5, false], [66, false], [63, true], [63, true], [64, true], [65, true], [70, true]]
+    assert.equal(ys.reduce((n, [y, g]) => n + tr.onSample({ x: 0, y, z: 0 }, g), 0), 1)
+    assert.equal(tr.onSample({ x: 200, y: 60, z: 0 }, true), 0, 'far from the house: re-anchor only')
     assert.equal(isFallDeath('CastleBuildc1 fell from a high place', 'CastleBuildc1'), true)
     assert.equal(isFallDeath('CastleBuildc1 hit the ground too hard', 'CastleBuildc1'), true)
     assert.equal(isFallDeath('CastleBuildc1 was doomed to fall by Zombie', 'CastleBuildc1'), true)

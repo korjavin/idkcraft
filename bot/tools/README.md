@@ -578,7 +578,19 @@ of its creeper-holed door), and every `--night prod` verdict adds
 Measured (v2, master c541d62e, two 30-min runs): falls=0 both times — the
 gohome walk aims at the doorstep cell over the pit, and Baritone bridges it
 with scaffold (stands at floor+1 over the crater), so this pit alone does not
-reproduce prod's falls.
+reproduce prod's falls. `gallery` (neuc.65.6.1) is prod's real terrain: the
+house on a 1-block crust over a void 6 deep (x -8..+12, z -10..+7 off the
+site), the doorstep crust cell and the floor beside the table aired, and a
+3-wide west ramp of 1-high steps back to the surface. Every `CASTLE_HOUSE`
+`--night prod` verdict also adds `, drops=<n>`: landings 4+ below the last
+grounded sample within 16 of the house (non-lethal falls; prod died after
+~7), each one logged as `CASTLE-RIG drop <n> at <s>s pos <x y z> step=<s>`.
+Measured (v2, 30 min): master drops=2 and drops=1 — the gohome enter leg
+leaves the body on the doorstep edge and it drops when Baritone resumes
+(cannot-reach-home, twice a night); with the doorstep fill cells the
+house re-opens, build refills the doorstep in ~2 min, gohome gets in and
+drops=0 (one later run drops=1, away from the doorstep: a forage chase off the
+crust's north edge into the void, not the house).
 Baselines are in `night-baseline.json` (master
 ed8f1107, one 68-min run each). v1 bare: 3 nights, sheltered 3/3,
 night-deaths 0, day-deaths 0, kitless 0. v1 castle (`CASTLE_SEED=complete`;

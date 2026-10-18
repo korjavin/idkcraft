@@ -1224,7 +1224,10 @@ describe('neuc.41 the house table cell outranks a roadside station', () => {
     const t = { x: home.site.x + 5, y: home.site.y, z: home.site.z + 1 } // v2 table cell
     const bot = goalBot({ items: [{ name: 'oak_planks', count: 113 }, { name: 'oak_door', count: 1 }] })
     const ctx = { home, claimedTable: pos(40, 64, 40) }
-    bot.blockAt = (p) => ({ name: Math.floor(p.x) === 40 ? 'crafting_table' : 'air' })
+    // neuc.65.6.1: the doorstep row is laid first, so it stands here for the table gate to be next
+    const doorstep = (p) => Math.floor(p.y) === home.site.y - 1 && Math.floor(p.z) === home.site.z - 1 &&
+      Math.floor(p.x) >= home.site.x + 2 && Math.floor(p.x) <= home.site.x + 4
+    bot.blockAt = (p) => ({ name: Math.floor(p.x) === 40 ? 'crafting_table' : doorstep(p) ? 'cobblestone' : 'air' })
     const f = goalFacts(bot, ctx)
     assert.equal(f.tablePlaced, true)
     assert.equal(f.tableOwed, true)

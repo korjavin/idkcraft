@@ -144,6 +144,16 @@ const BLUEPRINT_V2 = (() => {
       }
     }
   }
+  // Doorstep row (idkcraft-neuc.65.6.1): prod v2 founded on a 1-block crust
+  // over a void; the doorstep crust (outsidePos, dz -1) fell in and every
+  // walk into the house dropped 6 (10 fall deaths at one cell). The row
+  // (dx 2..4, inHouseFootprint's door apron) is fill cells, so holeOwed
+  // re-opens a built house and build refills it. APPENDED (persisted skip
+  // indices stay put). ponytail: interior floor cells are NOT fill cells —
+  // the v2 builder cannot reach an interior hole behind the door (rig
+  // gallery: build-stall on the table-side cell, house unbuilt 30 min);
+  // add them once build can place inside through the doorway.
+  for (let dx = 2; dx <= 4; dx++) plan.push({ dx, dy: -1, dz: -1, kind: 'fill' })
   return plan
 })()
 
@@ -356,9 +366,13 @@ function v2Order(plan) {
   const idx = [...plan.keys()]
   const part = idx.filter((i) => isPartition(plan[i]))
   const clear = idx.filter((i) => plan[i].kind === 'clear')
-  const rest = idx.filter((i) => !isPartition(plan[i]) && plan[i].kind !== 'clear')
+  // neuc.65.6.1 revmux 01: the doorstep row before everything else — a
+  // missing door is laid only once a door item exists, and craft refuses
+  // the house-table walk while the doorstep is holed (entrance-holed).
+  const step = idx.filter((i) => plan[i].kind === 'fill' && plan[i].dz === -1)
+  const rest = idx.filter((i) => !isPartition(plan[i]) && plan[i].kind !== 'clear' && !step.includes(i))
   const door = rest.findIndex((i) => plan[i].kind === 'door')
-  return door < 0 ? idx : [...clear, ...rest.slice(0, door), ...part, ...rest.slice(door)]
+  return door < 0 ? idx : [...step, ...clear, ...rest.slice(0, door), ...part, ...rest.slice(door)]
 }
 
 // A built house with natural ground in a live clear cell (rw4.19 revmux 01
@@ -371,6 +385,22 @@ function clearOwed(bot, home, skipped) {
     if (!home || !home.site || home.v !== 2) return false
     const skip = new Set(Array.isArray(skipped) ? skipped : [])
     return blueprintFor(home).some((c, i) => c.kind === 'clear' && !skip.has(i) &&
+      cellLoaded(bot, home, c) && !cellDone(bot, home, c))
+  } catch (_) { return false }
+}
+
+// A built v2 house with a loaded hole in the doorstep row (dz -1;
+// idkcraft-neuc.65.6.1): the index.js revalidation re-opens it so build
+// refills it before any walk drops through, and the house table walk fails
+// soft (entrance-holed) meanwhile. Interior fill cells (door/bed floor) never
+// re-open: the builder cannot reach a hole behind the door (rig a1
+// build-stall), and prod houses already miss some. Skips do not count (the
+// clearOwed rule: a refused fill waits for the 1h skip retry).
+function holeOwed(bot, home, skipped) {
+  try {
+    if (!home || !home.site || home.v !== 2) return false
+    const skip = new Set(Array.isArray(skipped) ? skipped : [])
+    return blueprintFor(home).some((c, i) => c.kind === 'fill' && c.dz === -1 && !skip.has(i) &&
       cellLoaded(bot, home, c) && !cellDone(bot, home, c))
   } catch (_) { return false }
 }
@@ -1260,6 +1290,7 @@ module.exports.isPlanCell = isPlanCell
 module.exports.nextCellIdx = nextCellIdx
 module.exports.isComplete = isComplete
 module.exports.clearOwed = clearOwed
+module.exports.holeOwed = holeOwed
 module.exports.houseTableOwed = houseTableOwed
 module.exports.houseTableAt = houseTableAt
 module.exports.countRemainingPlanks = countRemainingPlanks
