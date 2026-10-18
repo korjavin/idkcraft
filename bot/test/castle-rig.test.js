@@ -346,6 +346,7 @@ describe('castle-replay.js night driver (idkcraft-ek69)', () => {
     await d.open()
     assert.deepEqual(cmds, ['time set 0', 'difficulty easy', 'gamerule fall_damage true'])
     deaths = 3 // a day death, kitless
+    seen.falls++ // neuc.65.6: the guide read its fall message
     classify('death health=0 hostiles=1 at 1 64 1 time=day inside=no step=forage owner=work sword=0 pickaxe=none dist_home=none dist_spawn=3')
     await d.onEvent({ event: 'nightfall' })
     deaths = 4 // a night death with a sword
@@ -354,7 +355,7 @@ describe('castle-replay.js night driver (idkcraft-ek69)', () => {
     assert.equal(cmds.length, 3, 'no difficulty flips or phantoms')
     assert.deepEqual(d.nights[0], { night: 1, deaths: 1, sheltered: false, steps: [], partial: false })
     assert.ok(lines.includes('CASTLE-RIG night 1: deaths=1, sheltered=no, steps=none'))
-    assert.equal(d.tag(), ', nights=1, sheltered=0/1, night-deaths=1, day-deaths=1, kitless=1')
+    assert.equal(d.tag(), ', nights=1, sheltered=0/1, night-deaths=1, day-deaths=1, kitless=1, falls=1')
   })
 
   it('house-bump: door distance of the settled shelter per night (idkcraft-neuc.65.2)', async () => {
@@ -377,7 +378,7 @@ describe('castle-replay.js night driver (idkcraft-ek69)', () => {
     await d.onEvent({ event: 'nightfall' })
     d.finish()
     assert.ok(lines.includes('CASTLE-RIG house-bump night 3: gohome-fails=0, shelter-at=none, door-dist=none, deaths=0, FAIL (partial)'))
-    assert.equal(d.tag(), ', nights=3, sheltered=3/3, night-deaths=0, day-deaths=0, kitless=0, bump=1/3')
+    assert.equal(d.tag(), ', nights=3, sheltered=3/3, night-deaths=0, day-deaths=0, kitless=0, falls=0, bump=1/3')
   })
 
   it('v2 body: crossings from bot.time without a packet client (idkcraft-neuc.65.2)', () => {
@@ -416,6 +417,18 @@ describe('castle-replay.js night driver (idkcraft-ek69)', () => {
     assert.deepEqual(prodSpawnPoint({ x: 0, z: 0 }, null), { x: 150, z: 0 })
     assert.equal(rigHouseCommands({ x: 0, y: 64, z: 0 }, 'clean').length, 2)
     assert.equal(rigHouseCommands({ x: 0, y: 64, z: 0 }, 'bump')[2], 'fill 3 64 1 3 65 1 bedrock')
+  })
+
+  it('rigHouseCommands pit / isFallDeath (idkcraft-neuc.65.6)', () => {
+    const { rigHouseCommands, isFallDeath } = require('../tools/castle-replay')
+    const pit = rigHouseCommands({ x: 0, y: 64, z: 0 }, 'pit')
+    // shell first, then the 3x2 doorstep aired 6 deep (floor at y 57, house floor 64)
+    assert.deepEqual(pit.slice(2), ['fill 1 57 -3 5 62 0 stone', 'fill 2 58 -2 4 63 -1 air'])
+    assert.equal(isFallDeath('CastleBuildc1 fell from a high place', 'CastleBuildc1'), true)
+    assert.equal(isFallDeath('CastleBuildc1 hit the ground too hard', 'CastleBuildc1'), true)
+    assert.equal(isFallDeath('CastleBuildc1 was doomed to fall by Zombie', 'CastleBuildc1'), true)
+    assert.equal(isFallDeath('CastleBuildc1 was slain by Zombie', 'CastleBuildc1'), false)
+    assert.equal(isFallDeath('CastleGuidec1 fell from a high place', 'CastleBuildc1'), false)
   })
 })
 

@@ -571,7 +571,11 @@ adds `CASTLE-RIG house-bump night <n>: gohome-fails=<k>, shelter-at=<x y
 z|none>, door-dist=<d|none>, deaths=<d>, PASS|FAIL`, where shelter-at is
 the last settled `shelter phase` pos and PASS means 8+ blocks from the
 door with 0 deaths (neuc.65.3's walk-off). The verdict line gets
-`, bump=<pass>/<n>`. Baselines are in `night-baseline.json` (master
+`, bump=<pass>/<n>`. In `pit` (neuc.65.6), the 3x2 doorstep is a 6-deep
+crater in a stone shell (prod v2 10-16 fell ten times at one cell in front
+of its creeper-holed door), and every `--night prod` verdict adds
+`, falls=<server fall-death messages for the bot>` (the guide reads them).
+Baselines are in `night-baseline.json` (master
 ed8f1107, one 68-min run each). v1 bare: 3 nights, sheltered 3/3,
 night-deaths 0, day-deaths 0, kitless 0. v1 castle (`CASTLE_SEED=complete`;
 sleeping skips the night, so it gets 5 nights): night-deaths 1,
