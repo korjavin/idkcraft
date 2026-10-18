@@ -2450,23 +2450,30 @@ async function main() {
     await rcon(`forceload add ${box.x1} ${box.z1} ${box.x2} ${box.z2}`).catch((e) => fail('apron-diff', e.message))
     await sleep(3000)
     const changed = await apronChanged(rcon, box).catch((e) => fail('apron-diff', e.message))
+    // Throwaway = Baritone's acceptableThrowawayItems (body.js scaffold set:
+    // dirt + castle.STONE_ITEMS) — the gate count; the rest (tree growth,
+    // a crafting table, ...) is named for the diagnosis only.
+    const throwaway = ['dirt', ...bp.STONE_ITEMS]
+    const other = ['#minecraft:leaves', '#minecraft:logs', '#minecraft:saplings', '#minecraft:flowers', '#minecraft:replaceable', 'oak_planks', 'crafting_table', 'furnace', 'torch', 'chest', 'water', 'lava']
     const names = {}
     let n = 0
+    let thrown = 0
     for (const c of changed) {
       if (plan.has(`${c.x},${c.y},${c.z}`)) continue
       if (!/Test passed/.test(await rcon(`execute if block ${c.x} ${c.copyY} ${c.z} air`))) continue // was solid: a dig or a swap
       if (/Test passed/.test(await rcon(`execute if block ${c.x} ${c.y} ${c.z} air`))) continue
       let nm = '?'
-      for (const k of ['cobblestone', 'dirt', 'oak_planks', 'stone', 'granite', 'diorite', 'andesite', 'cobbled_deepslate', 'water', 'lava']) {
-        if (/Test passed/.test(await rcon(`execute if block ${c.x} ${c.y} ${c.z} ${k}`))) { nm = k; break }
+      for (const k of [...throwaway, ...other]) {
+        if (/Test passed/.test(await rcon(`execute if block ${c.x} ${c.y} ${c.z} ${k}`))) { nm = k.replace('#minecraft:', '#'); break }
       }
       n++
+      if (throwaway.includes(nm)) thrown++
       names[nm] = (names[nm] || 0) + 1
       if (n <= 40) origLog(`CASTLE-RIG apron-new cell ${c.x} ${c.y} ${c.z} ${nm}`)
     }
     await rcon(`forceload remove ${box.x1} ${box.z1} ${box.x2} ${box.z2}`).catch(() => {})
     const hist = Object.entries(names).map(([k, val]) => `${k}:${val}`).join(',')
-    apronTag += `, apron-new=${n}${hist ? `(${hist})` : ''}, apron-changed=${changed.length}`
+    apronTag += `, apron-throwaway=${thrown}, apron-new=${n}${hist ? `(${hist})` : ''}, apron-changed=${changed.length}`
   }
   // Stairs facing (g0z.47): every v3 stairs cell read back via rcon — laid
   // (any stair) vs laid with the plan facing, half bottom. Build runs, and

@@ -75,7 +75,7 @@
 #   pickaxe, a self-enclosed cell: v2 pathing hard-bans both kinds),
 #   CASTLE_APRON_DIFF (1 = g0z.64, needs CASTLE_SEED=complete: the apron box
 #   is cloned under the site after the start spot and diffed at the end;
-#   the verdict adds apron-new=<cells air at the snapshot, solid now, off
+#   the verdict adds apron-throwaway=<dirt/castle stone among them>, apron-new=<cells air at the snapshot, solid now, off
 #   plan>(<names>), apron-changed=<n> — catches v2 Baritone placements,
 #   which never reach placedByBot),
 #   CASTLE_SEED_VERSION (''|1|2|3, default '' = current — g0z.48: the
