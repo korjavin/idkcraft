@@ -506,3 +506,14 @@ describe('guided far walk fallback byte-identity', () => {
     assert.equal(ctx.comehome.phase, 'enter', 'the walk success path takes over')
   })
 })
+
+describe('worker speed bound (idkcraft-jlda.8)', () => {
+  it('sprint stays on (doors) and the leash bounds the lead instead', () => {
+    const fs = require('node:fs')
+    const path = require('node:path')
+    const settings = fs.readFileSync(path.join(__dirname, '..', '..', 'baritone', 'settings.txt'), 'utf8')
+    const live = settings.split('\n').filter((l) => !l.trim().startsWith('#'))
+    assert.ok(!live.some((l) => /^\s*allowSprint\s+false\b/.test(l)), 'allowSprint false breaks DOOR-ROOM (jlda.1): bound speed with the leash')
+    assert.ok(worker.WALK_PAUSE_D > worker.WALK_RESUME_D, 'pause/resume hysteresis')
+  })
+})
