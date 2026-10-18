@@ -6,7 +6,7 @@
 // arbiter. goal.js re-exports the same names.
 
 const Vec3 = require('vec3')
-const { CLEAR_FLORA } = require('./behaviours/util')
+const { CLEAR_FLORA, solidBelow: solidLanding } = require('./behaviours/util')
 const { NEED_PLANKS, NEED_PLANKS_V1 } = require('./budget')
 
 function needPlanks(home) {
@@ -84,15 +84,10 @@ function groundY(bot, x, z, topY) {
 // y0-1..y0-n are all non-air, non-liquid. groundY stops at the first
 // block, so a 1-block crust over a cave read like a meadow (prod v2 house
 // -88 88 -3 founded over a y 80-86 void; the doorstep and floor later fell
-// through). Unloaded (blockAt throws or null) refuses, like groundY.
-const AIRISH = new Set(['air', 'cave_air', 'void_air'])
+// through). Each cell is util's proven-solid landing test (atl.20: air,
+// liquid, flora and unknown cells are not), so unloaded refuses too.
 function solidBelow(bot, x, z, y0, n) {
-  for (let y = y0 - 1; y >= y0 - n; y--) {
-    let b = null
-    try { b = bot.blockAt(new Vec3(x, y, z)) } catch (_) { return false }
-    if (!b || !b.name || AIRISH.has(b.name)) return false
-    if (b.name === 'water' || b.name === 'lava' || b.name === 'bubble_column') return false
-  }
+  for (let k = 0; k < n; k++) if (!solidLanding(bot, { x, y: y0 - k, z })) return false
   return true
 }
 const SOLID_BELOW = 3
