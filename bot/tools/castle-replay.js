@@ -1444,7 +1444,18 @@ async function main() {
       const peerFile = path.join(path.dirname(process.env.BOT_MEMORY_FILE), `${peer}.json`)
       const world = require('../src/memory').worldKey(follower)
       if (!world) fail('seed-castle', 'no world key for the peer file')
-      fs.writeFileSync(peerFile, JSON.stringify({ v: 1, world, castle: { ...st, phase: 'complete', blocked: {}, parked: false } }))
+      const peerDoc = (w) => JSON.stringify({ v: 1, world: w, castle: { ...st, phase: 'complete', blocked: {}, parked: false } })
+      fs.writeFileSync(peerFile, peerDoc(world))
+      // g0z.63: --night prod moves the world spawn after this seed, which
+      // re-keys the bot's world (memory.worldKey) and would read the peer
+      // as another world. Prod's spawn is fixed: follow the key here.
+      let peerWorld = world
+      setInterval(() => {
+        try {
+          const w = require('../src/memory').worldKey(follower)
+          if (w && w !== peerWorld) { fs.writeFileSync(peerFile, peerDoc(w)); peerWorld = w; origLog(`CASTLE-RIG peer castle re-keyed: ${w}`) }
+        } catch (_) { /* re-key best-effort */ }
+      }, 5000).unref()
       if (NIGHT_HOME === 'peer') process.env.BOT_CASTLE_PEER = peer
       else delete process.env.BOT_CASTLE_PEER
       origLog(`CASTLE-RIG peer castle: ${peerFile} (BOT_CASTLE_PEER=${process.env.BOT_CASTLE_PEER || ''}), the bot keeps no castle`)
