@@ -377,12 +377,12 @@ function pitWalls(bot) {
 const LATCH_REARM = 4
 
 // A cell the body can be in (vmzq.47r4): air-like, or a hand-openable
-// door the A* door reflex walks through (doors.js: non-iron *_door;
+// door or fence gate (g0z.46) the A* door reflex walks through (doors.js: non-iron *_door;
 // iron stays a wall, routed around like the pathfinder does). Nulls read
 // passable (solid() says so), so a blind read latches as before.
 function passable(b) {
   if (!solid(b)) return true
-  try { return doors.isHandDoor(b.name) } catch (_) { return false }
+  try { return doors.isPassage(b.name) } catch (_) { return false }
 }
 
 // A floor the body can stand (or swim) on: solid ground, water — or

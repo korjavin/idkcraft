@@ -45,6 +45,12 @@
 //    the (1.2, 3.5] shut window in ~0.5 s, which 1 s ticks skip by phase.
 //    A door past the 8-node plan window heals via one stuck cycle: the push
 //    replans, the fresh head names the door, the opener fires.
+//
+// Fence gates (idkcraft-g0z.46: the castle fence-ring gate) ride all three:
+// a gate cell gets a level straight edge (head cell clear, floor solid) and
+// the reflex opens/shuts it like a door. Any cardinal step, not only along
+// the facing: an open gate has no collision at all, so the facing never
+// blocks the walk-through (a wrong-facing gate stays passable).
 const Vec3 = require('vec3')
 const Move = require('mineflayer-pathfinder/lib/move')
 const { botPos, doorOpen } = require('./behaviours/util')
@@ -72,6 +78,15 @@ function isDoorName(name) {
 
 function isHandDoor(name) {
   return isDoorName(name) && !name.includes('iron')
+}
+
+function isHandGate(name) {
+  return typeof name === 'string' && name.endsWith('_fence_gate')
+}
+
+// What the reflex opens and the body may stand in: a hand door or a gate.
+function isPassage(name) {
+  return isHandDoor(name) || isHandGate(name)
 }
 
 function registryOf(movements) {
@@ -115,7 +130,7 @@ function addDoorPassages(movements) {
   movements.getNeighbors = (node) => {
     const out = orig(node)
     for (const [dx, dz] of DIRS) {
-      const edge = doorEdge(movements, node, dx, dz)
+      const edge = doorEdge(movements, node, dx, dz) || gateEdge(movements, node, dx, dz)
       if (edge) out.push(edge)
     }
     return filterDoorExits(movements, node, out)
@@ -176,7 +191,27 @@ function doorEdge(movements, node, dx, dz) {
   if (!across) return null
   let feet = null
   try { feet = movements.getBlock(node, dx, 0, dz) } catch (_) { return null }
-  // Standable floor under the door (never place under one).
+  return passMove(movements, node, dx, dz, feet)
+}
+
+// A level straight step into a fence-gate cell (g0z.46): the head cell
+// above the gate must be clear (the lib reads the gate itself as unsafe,
+// open or shut). Unreadable fails closed, like doorEdge.
+function gateEdge(movements, node, dx, dz) {
+  let feet = null
+  let head = null
+  try {
+    feet = movements.getBlock(node, dx, 0, dz)
+    if (!feet || !isHandGate(feet.name)) return null
+    head = movements.getBlock(node, dx, 1, dz)
+  } catch (_) { return null }
+  if (!head || !head.safe) return null
+  return passMove(movements, node, dx, dz, feet)
+}
+
+// The shared edge: standable floor under the passage (never place under
+// one), the door-handling surcharge, exclusion and entity costs.
+function passMove(movements, node, dx, dz, feet) {
   let under = null
   try { under = movements.getBlock(node, dx, -1, dz) } catch (_) { return null }
   if (!under || !under.physical) return null
@@ -323,7 +358,7 @@ function openNextDoor(bot, ctx) {
     const z = Math.floor(n.z)
     let block = null
     try { block = bot.blockAt && bot.blockAt(new Vec3(x, y, z)) } catch (_) { continue }
-    if (!block || !isHandDoor(block.name)) continue
+    if (!block || !isPassage(block.name)) continue
     const d = Math.hypot(x + 0.5 - bp.x, y + 0.5 - bp.y, z + 0.5 - bp.z)
     if (d > DOOR_REACH || d >= pickD) continue
     pick = { x, y, z, block }
@@ -341,14 +376,14 @@ function openNextDoor(bot, ctx) {
     const fy = Math.floor(bp.y)
     const fz = Math.floor(bp.z)
     const fb = bot.blockAt && bot.blockAt(new Vec3(fx, fy, fz))
-    if (fb && isHandDoor(fb.name) && !doorOpen(fb)) pick = { x: fx, y: fy, z: fz }
+    if (fb && isPassage(fb.name) && !doorOpen(fb)) pick = { x: fx, y: fy, z: fz }
   } catch (_) { /* feet read best-effort */ }
   if (!pick) return
   // State at the moment of the click: a door the player just opened is
   // none of ours — re-read, never trust the scan above.
   let fresh = null
   try { fresh = bot.blockAt && bot.blockAt(new Vec3(pick.x, pick.y, pick.z)) } catch (_) { return }
-  if (!fresh || !isHandDoor(fresh.name) || doorOpen(fresh)) return
+  if (!fresh || !isPassage(fresh.name) || doorOpen(fresh)) return
   const key = doorKey(pick.x, pick.y, pick.z)
   if (!stampReady(ctx, 'doorToggleAt', key, Date.now())) return
   if (!tryToggle(bot, fresh)) return
@@ -377,7 +412,7 @@ function closeOwnDoors(bot, ctx) {
     if (!door || typeof door.x !== 'number') { tracked.delete(key); continue }
     let block = null
     try { block = bot.blockAt && bot.blockAt(new Vec3(door.x, door.y, door.z)) } catch (_) { continue }
-    if (!block || !isDoorName(block.name)) { tracked.delete(key); continue }
+    if (!block || !(isDoorName(block.name) || isHandGate(block.name))) { tracked.delete(key); continue }
     if (!doorOpen(block)) {
       // Only an observed open untracks on shut (sendback a): a closed read
       // on an unseen entry is the open echo still in flight — stay tracked
@@ -424,6 +459,8 @@ module.exports = {
   doorShutFast,
   isDoorName,
   isHandDoor,
+  isHandGate,
+  isPassage,
   DOOR_PASS_EXTRA,
   DOOR_REACH,
   DOOR_CLOSE_DIST,

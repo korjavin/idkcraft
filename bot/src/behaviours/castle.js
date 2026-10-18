@@ -58,6 +58,7 @@ const ITEM = {
   bookshelf: (n) => blueprint.matches('bookshelf', n), // g0z.49 decor: attic shelves (chest books, crafted)
   enchanting_table: (n) => blueprint.matches('enchanting_table', n), // g0z.49 decor: attic table (chest-only, never crafted)
   blast_furnace: (n) => blueprint.matches('blast_furnace', n), // g0z.50 decor: kitchen blast furnace (chest, else crafted)
+  gate: (n) => blueprint.matches('gate', n), // g0z.46 decor: the fence-ring gate (chest, else crafted from wood)
 }
 
 // Project-material reservation (g0z.3 design): the castle never lays the
@@ -1308,7 +1309,7 @@ function placeCell(bot, ctx, st, c, item, now) {
     try {
       await bot.equip(item, 'hand')
       if (c.kind === 'blast_furnace' && c.stance) await placeFaced(bot, ref, c)
-      else if (c.kind === 'stairs' && c.face) await placeStairs(bot, ref, c)
+      else if ((c.kind === 'stairs' || c.kind === 'gate') && c.face) await placeStairs(bot, ref, c) // g0z.46: a gate faces the look too
       else await bot.placeBlock(ref.ref, ref.face)
       if (live(ctx, token)) {
         // A stair that lands facing wrong is not done: strike it now so a

@@ -45,9 +45,9 @@ describe('castle attic decor plan (g0z.49)', () => {
       ...SHELVES.map((c) => `bookshelf@${k3(c.dx, c.dy, c.dz)}`),
     ])
     const dp = blueprint.decorPlan(SITE, 0, 2)
-    assert.equal(dp.cells.length, 44 + 2 + V2.PLAN.filter((c) => c.kind === 'fence').length + 6 + 1) // +1: the g0z.50 blast furnace after the nook
+    assert.equal(dp.cells.length, 44 + 2 + V2.PLAN.filter((c) => c.kind === 'fence').length + 6 + 1 + 5) // +1: the g0z.50 blast furnace after the nook, +5: the g0z.46 gate gap
     NOOK.forEach((c, i) => {
-      assert.equal(dp.cells[dp.cells.length - 7 + i].idx, blueprint.DECOR_BASE + dp.cells.length - 7 + i)
+      assert.equal(dp.cells[dp.cells.length - 12 + i].idx, blueprint.DECOR_BASE + dp.cells.length - 12 + i)
     })
   })
 
