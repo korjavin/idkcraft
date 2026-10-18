@@ -173,8 +173,8 @@ function repairCells(st) {
 }
 // Litter sweep (g0z.61, CASTLE_LITTER=1, needs CASTLE_SEED=complete): after
 // adoption 30 litter items are rcon-placed — 10 lone dirt pillars in the
-// open yard (one 4-high to a dy-3 window), 10 cobble bridge cells at dy 0
-// over the dry moat's north strip, 10 two-high dirt pillars 2..14 west of
+// open yard (one 4-high to a dy-3 window), 10 cobble bridge cells at dy -1
+// in the dry moat's north strip, 10 two-high dirt pillars 2..14 west of
 // the ring — plus 5 player structures east of the ring (a 3x2 cobble wall,
 // a 5-long cobble path on the ground, a chest, a bed, a 2-high planks
 // post). An item is swept once every cell reads air. Pure, rot 0 (the seed's
@@ -224,14 +224,16 @@ function litterSeeds(st) {
     }
   }
   if (litter.length < 10) throw new Error(`litterSeeds: only ${litter.length} yard pillars`)
-  // Moat bridges: both north-strip cells (dz 3 and 4, dug at dy -1) at dy 0.
+  // Moat bridges: both north-strip cells (dz 3 and 4) at dy -1, in the dug
+  // moat's plan 'dig' cells — where a walker crossing at floor level places
+  // (revmux 01), bank to bank.
   let bridges = 0
   for (let dx = 3; dx <= w - 4 && bridges < 5; dx++) {
     const x = sx + dx
-    const dug = (z) => { const c = at.get(k(x, sy - 1, z)); return c && c.kind === 'dig' && free(x, sy, z) }
+    const dug = (z) => { const c = at.get(k(x, sy - 1, z)); const u = at.get(k(x, sy - 2, z)); return c && c.kind === 'dig' && u && u.kind === 'dig' }
     if (!dug(sz + 3) || !dug(sz + 4) || !apart(x, sz + 3) || !apart(x, sz + 4)) continue
-    add('bridge', x, sz + 3, sy, 1, 'cobblestone')
-    add('bridge', x, sz + 4, sy, 1, 'cobblestone')
+    add('bridge', x, sz + 3, sy - 1, 1, 'cobblestone')
+    add('bridge', x, sz + 4, sy - 1, 1, 'cobblestone')
     bridges++
     dx += 2
   }

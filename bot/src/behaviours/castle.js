@@ -777,7 +777,7 @@ function blockAtXYZ(bot, x, y, z) {
 }
 // Bot scaffold by shape (g0z.61): a scaffold-name block that is a lone 1x1
 // column cell (flat.lonePillar) or a 1-wide bridge cell (nothing solid
-// below, one horizontal axis free on both sides). Above the floor the
+// below, at most one solid horizontal neighbour). Above the floor the
 // castle's own plan/decor cells do not count as neighbours (a tower against
 // a wall or window). Never a plan cell or laid decor. Natural ground has
 // solid below and neighbours; a player's wall or path on the ground has
@@ -796,14 +796,29 @@ function scaffoldShape(bot, ctx, b, st = ctx && ctx.castle) {
     if (dc && blueprint.matches(dc.kind, b.name)) return false
     const kk = (n) => `${Math.floor(n.position.x)},${Math.floor(n.position.y)},${Math.floor(n.position.z)}`
     const ignore = y >= st.site.y ? (n) => !!n.position && (at.has(kk(n)) || dt.has(kk(n))) : null
-    if (flat.lonePillar(bot, ctx, x, y, z, ignore)) return true
+    if (flat.lonePillar(bot, ctx, x, y, z, ignore)) {
+      // Free-standing: every cell above it in the column is lone scaffold
+      // too (revmux 01: a doorway jamb is lone at its own height but
+      // carries the lintel).
+      for (let yy = y + 1; yy <= y + 24; yy++) {
+        const a = blockAtXYZ(bot, x, yy, z)
+        if (!a) return false
+        if (!flat.isSolidCell(a)) return true
+        if (!SCAFFOLD_MATS.has(a.name) || !flat.lonePillar(bot, ctx, x, yy, z, ignore)) return false
+      }
+      return false
+    }
     const below = blockAtXYZ(bot, x, y - 1, z)
     if (!below || flat.isSolidCell(below)) return false
-    const solid = (dx, dz) => {
+    // At most one solid neighbour (revmux 01: an "axis free" rule matched
+    // the block over a doorway in a player's 1-thick wall and ate the wall
+    // upward). A longer bridge erodes from its ends, one cell per pass.
+    let solid = 0
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const n = blockAtXYZ(bot, x + dx, y, z + dz)
-      return !n || (flat.isSolidCell(n) && !isOwnPlaced(ctx, n) && !(ignore && ignore(n)))
+      if (!n || (flat.isSolidCell(n) && !isOwnPlaced(ctx, n) && !(ignore && ignore(n)))) solid++
     }
-    return (!solid(1, 0) && !solid(-1, 0)) || (!solid(0, 1) && !solid(0, -1))
+    return solid <= 1
   } catch (_) { return false }
 }
 // One cell's verdict on a complete castle. The scan and the read-time
@@ -813,6 +828,11 @@ function isLitter(bot, ctx, st, x, y, z, w, d) {
   const b = blockAtXYZ(bot, x, y, z)
   const n = b && b.name
   if (!SCAFFOLD_MATS.has(n)) return false
+  // A filled plan 'dig' cell (revmux 01: a walker's moat bridge lands at
+  // dy -1, in the dug moat) is litter: the complete castle dug it, nothing
+  // natural refills it, and the relay skips dig cells after complete.
+  const pc = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${x},${y},${z}`)
+  if (pc) return pc.kind === 'dig'
   const ring = y >= st.site.y && x >= st.site.x - 1 && x <= st.site.x + w && z >= st.site.z - 1 && z <= st.site.z + d
   if (ring && isOwnPlaced(ctx, b)) {
     const k = `${x},${y},${z}`
@@ -910,7 +930,11 @@ function nextLitter(st, list, now, bot = null) {
   const bl = st.blocked || {}
   let near = []
   try {
-    near = Object.values(worker.players(bot)).map((p) => p && p.entity && p.entity.position).filter(Boolean)
+    // bot2's peer (BOT_PEER_USERNAME = IdkBot) is a bot too; worker.js:98
+    // drops it only on swarm helpers (revmux 01 minor).
+    const peer = process.env.BOT_PEER_USERNAME
+    near = Object.entries(worker.players(bot)).filter(([n]) => !peer || n !== peer)
+      .map(([, p]) => p && p.entity && p.entity.position).filter(Boolean)
   } catch (_) { near = [] }
   const r2 = LITTER_PLAYER_R * LITTER_PLAYER_R
   return list.find((o) => {

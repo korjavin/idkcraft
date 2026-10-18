@@ -71,7 +71,10 @@ describe('g0z.61 apron region', () => {
     // dy -4: own dirt in solid ground stays; a dirt column in a dug pocket goes.
     const own = { x: SITE.x - 5, y: SITE.y - 4, z: zc }
     const lone = { x: SITE.x - 10, y: SITE.y - 4, z: zc }
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) cells.set(key(lone.x + dx, lone.y, lone.z + dz), 'air')
+    // A dirt post at the bottom of an open 3x3 pit (dy -4..-1 dug around and above it).
+    for (let y = lone.y; y < SITE.y; y++) {
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) if (dx || dz || y > lone.y) cells.set(key(lone.x + dx, y, lone.z + dz), 'air')
+    }
     const bot = worldBot(cells)
     const ctx = { castle: st3(), placedByBot: new Set([key(own.x, own.y, own.z)]) }
     const list = pass(bot, ctx)
@@ -112,8 +115,28 @@ describe('g0z.61 scaffoldShape', () => {
     const b = new Map(painted())
     for (let i = 0; i < 5; i++) b.set(key(X + i, Y + 3, Z - 4), 'cobblestone')
     const bb = worldBot(b)
-    assert.equal(castle.scaffoldShape(bb, ctx, at(b, X + 2, Y + 3, Z - 4)), true, 'bridge middle (2 along-axis neighbours)')
     assert.equal(castle.scaffoldShape(bb, ctx, at(b, X, Y + 3, Z - 4)), true, 'bridge end')
+    // At most one neighbour (revmux 01): the middle waits for the ends.
+    assert.equal(castle.scaffoldShape(bb, ctx, at(b, X + 2, Y + 3, Z - 4)), false, 'bridge middle (2 neighbours)')
+    b.set(key(X, Y + 3, Z - 4), 'air')
+    assert.equal(castle.scaffoldShape(bb, ctx, at(b, X + 1, Y + 3, Z - 4)), true, 'the next cell is an end once the end is dug')
+  })
+  it('false for the block over a doorway in a 1-thick player wall (revmux 01)', () => {
+    const cells = painted()
+    for (let i = 0; i < 3; i++) for (let h = 0; h < 3; h++) cells.set(key(X + i, Y + h, Z), 'cobblestone')
+    cells.set(key(X + 1, Y, Z), 'air'); cells.set(key(X + 1, Y + 1, Z), 'air') // a 1x2 doorway
+    const bot = worldBot(cells)
+    assert.equal(castle.scaffoldShape(bot, ctx, at(cells, X + 1, Y + 2, Z)), false, 'lintel')
+    const list = pass(bot, { castle: st3() })
+    assert.ok(!list.some((c) => c.z === Z && c.x >= X && c.x <= X + 2 && c.y >= Y && c.y <= Y + 2), 'no wall cell listed')
+  })
+  it('scaffold in a dug moat cell (plan dig) is litter, ground in a plan place cell never', () => {
+    const cells = painted()
+    const dig = blueprint.absPlan(SITE, 0, V).cells.find((c) => c.kind === 'dig' && c.dy === -1)
+    cells.set(key(dig.x, dig.y, dig.z), 'cobblestone') // a walker's bridge in the moat
+    const list = pass(worldBot(cells), { castle: st3() })
+    assert.ok(has(list, dig.x, dig.y, dig.z), 'moat fill listed')
+    assert.equal(list.length, 1, 'nothing else')
   })
   it('false for grass with 4 solid neighbours, a 2-wide wall, a plan cell, laid decor, a bed', () => {
     const cells = painted()
