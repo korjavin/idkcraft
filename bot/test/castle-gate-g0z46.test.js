@@ -413,6 +413,36 @@ describe('doors: fence gates (g0z.46)', () => {
     }
   })
 
+  it('a v2 build walking with isMoving() false still opens a gate under the feet', () => {
+    const bot = {
+      pathfinder: { isMoving: () => false },
+      _build: {},
+      entity: { position: new Vec3(0.5, 64, -1.9) }, // pressed against it: centre in the gate cell
+      toggles: 0,
+      blockAt: (p) => {
+        const at = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+        if (at.x === 0 && at.y === 64 && at.z === -2) return { name: 'oak_fence_gate', position: at, getProperties: () => ({ open: false, facing: 'south' }) }
+        return { name: 'air', position: at, getProperties: () => ({}) }
+      },
+      activateBlock: async () => { bot.toggles++ },
+    }
+    const ctx = {}
+    const log = console.log
+    const realNow = Date.now
+    let now = 1e6
+    Date.now = () => now
+    console.log = () => {}
+    try {
+      doors.doorShutFast(bot, ctx)
+      now += 1100
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 1, 'live build did not count as busy')
+    } finally {
+      console.log = log
+      Date.now = realNow
+    }
+  })
+
   it('isPassage: hand doors and gates, never iron', () => {
     assert.ok(doors.isPassage('oak_fence_gate'))
     assert.ok(doors.isPassage('oak_door'))
