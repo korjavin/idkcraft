@@ -23,7 +23,7 @@
 //        (1,4),(2,4),(4,4),(5,4) plus the doorway (3,0) — the door hangs
 //        on the block below like a bed. Done means SOLID ground (dirt
 //        counts), so flat sites place nothing and only dips take a plank.
-//        The doorway cell is the door's sill: planks only on v2 (z591).
+//        The doorway cell is the door's sill: never natural ground on v2 (z591).
 //   y=0..1 interior clear (rw4.19): natural ground left inside the rooms
 //        (a relief-1 bump) is dug out first, before the table.
 //
@@ -108,12 +108,14 @@ const BLUEPRINT_V2 = (() => {
   for (const [dx, dz] of [[1, 4], [2, 4], [4, 4], [5, 4]]) {
     plan.push({ dx, dy: -1, dz, kind: 'fill' })
   }
-  // The door's sill (idkcraft-z591): on the v2 body only planks count as
-  // done here. Baritone breaks bans are names only and v2 hard-bans planks
-  // (body.js castle guard); natural dirt under the door was broken from
-  // below by a body climbing out of the void under the house, and the door
-  // popped. A dirt sill reads undone, so holeOwed re-opens a built house
-  // and the builder swaps it for a plank (the door pops once and is re-laid).
+  // The door's sill (idkcraft-z591): on the v2 body natural ground never
+  // counts as done here. Baritone break bans are names only; v2 hard-bans
+  // planks and the other built kinds (body.js castle guard), not dirt, and
+  // dirt under the door was broken from below by a body climbing out of the
+  // void under the house — the door popped. A natural sill reads undone, so
+  // holeOwed re-opens a built house and the builder swaps it for a plank
+  // (the door pops once and is re-laid). A built kind (cobble) stays done:
+  // it is banned too, and the builder could never replace it.
   plan.push({ dx: 3, dy: -1, dz: 0, kind: 'fill', sill: true })
   const ring = (dy) => {
     for (const dx of [0, 1, 2, 4, 5, 6]) plan.push({ dx, dy, dz: 0, kind: 'planks' })
@@ -302,7 +304,7 @@ function cellDone(bot, home, cell) {
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
   if (cell.kind === 'fill') {
-    if (cell.sill && process.env.BOT_BODY === 'baritone' && !name.endsWith('_planks')) return false
+    if (cell.sill && process.env.BOT_BODY === 'baritone' && NATURAL_SOLID.has(name)) return false
     return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
   }
   // Clear (rw4.19): only natural ground with collision is a leftover; air,

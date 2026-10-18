@@ -1,5 +1,5 @@
-// idkcraft-z591: the v2 door sill is planks only (Baritone hard-bans planks
-// by name; natural dirt under the door was broken from below and the door
+// idkcraft-z591: the v2 door sill is never natural ground (Baritone hard-bans
+// planks by name, not dirt; natural dirt under the door was broken from below and the door
 // popped). v1 keeps the solid-ground rule.
 'use strict'
 
@@ -66,6 +66,10 @@ describe('z591 v2 door sill', () => {
     const batch = build.builderCells(bot, h, [])
     assert.deepEqual(batch.cells.map((c) => c.idx), [SILL])
     assert.equal(batch.cells[0].block, 'oak_planks')
+    world.set(3, 63, 0, 'stone')
+    assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), false, 'any natural ground')
+    world.set(3, 63, 0, 'cobblestone')
+    assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), true, 'a built (banned) kind stays done: the builder cannot replace it')
     world.set(3, 63, 0, 'spruce_planks')
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), true, 'any planks variant')
     assert.equal(build.isComplete(bot, h), true)
