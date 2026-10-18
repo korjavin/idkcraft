@@ -135,6 +135,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `ANTHROPIC_API_KEY`: opt-in LLM stall-point planner (watchdog `plan()` only, never per tick); empty = today's planner
   - `PLANNER`: `llm` | `jev` (default `llm` when `ANTHROPIC_API_KEY` is set, else `jev`)
   - `LLM_MODEL`: LLM planner model (default `claude-haiku-5-5`)
+  - `LLM_TOKENS_PER_HOUR`: sliding-hour token cap per bot process for every Anthropic call (`brain.js` `llmCall`; default `200000`, `0` = unlimited); over it the call is skipped (`llm_calls_total{outcome="budget"}`) and the planner parks as on any error
   - `GOAL_WATCHDOG_MS`: Goal-metric flat window in ms before a fast JEV round fires (default `60000`; `0` = watchdog off, the shipped 15/45-min ladder)
   - `GOAL_COMMIT_MS`: Bounded commitment window in ms for a watchdog choice (default `120000`)
   - `GOAL_WATCHDOG_MAX_ROUNDS`: Consecutive flat rounds before park/plan-B (default `6`)
