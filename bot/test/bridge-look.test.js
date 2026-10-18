@@ -119,8 +119,12 @@ describe('bridge look/lookAt (idkcraft-neuc.9)', () => {
     await tick()
     await bot.activateBlock({ name: 'oak_door', position: new Vec3(6, 64, 5) })
     assert.equal(transport.state.blockInteracts.length, 1) // Baritone opens it; no double-toggle
-    await bot.activateBlock({ name: 'oak_fence_gate', position: new Vec3(6, 64, 5) }) // g0z.46: gates too
+    // g0z.46: a shut gate's open click no-ops mid-walk (Baritone opens it)…
+    await bot.activateBlock({ name: 'oak_fence_gate', position: new Vec3(6, 64, 5), getProperties: () => ({ open: false }) })
     assert.equal(transport.state.blockInteracts.length, 1)
+    // …but shutting an open gate behind the body goes through.
+    await bot.activateBlock({ name: 'oak_fence_gate', position: new Vec3(6, 64, 5), getProperties: () => ({ open: true }) })
+    assert.equal(transport.state.blockInteracts.length, 2)
   })
 
   it('activateItem/deactivateItem start and stop the held-item use', async () => {

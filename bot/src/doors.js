@@ -69,6 +69,9 @@ const DOOR_TOGGLE_COOLDOWN_MS = 2000
 // Fast-shut cadence (the physicsTick tap): a walk-past spends ~0.5 s in the
 // shut window, so 250 ms catches it twice; 1 s ticks skip it by phase.
 const DOOR_SHUT_FAST_MS = 250
+// A gate this close to the body (cell centre, horizontal) is being walked
+// through: inside DOOR_CLOSE_DIST, so adoption never shuts it at once.
+const GATE_ADOPT_DIST = 1.0
 // Tracked doors cap (FIFO): a teleported-away bot must not grow the map.
 const DOOR_TRACK_MAX = 16
 
@@ -403,11 +406,38 @@ function openNextDoor(bot, ctx) {
 // the body is out of the doorway and the door is off the walked-ahead
 // plan, only within reach (a teleport away leaves the entry for the return
 // visit). A missing or non-door cell and an already-shut door untrack.
+// Passed gates (g0z.46, v2): Baritone opens a gate itself and never shuts
+// it, and the opener above never clicks it (the bridge no-ops the open
+// click mid-walk), so the closer would never learn of it. An OPEN gate
+// within GATE_ADOPT_DIST of the body — the body is walking through it —
+// joins the tracked set as seen, and the closer shuts it once past, like
+// its own openings. Gates only: a door someone else opened stays theirs;
+// an open gate in the ring left behind is a mob way in.
+function adoptPassedGates(bot, ctx, bp) {
+  const fx = Math.floor(bp.x)
+  const fy = Math.floor(bp.y)
+  const fz = Math.floor(bp.z)
+  for (const [dx, dz] of [[0, 0], ...DIRS]) {
+    const x = fx + dx
+    const z = fz + dz
+    if (Math.hypot(x + 0.5 - bp.x, z + 0.5 - bp.z) > GATE_ADOPT_DIST) continue
+    let b = null
+    try { b = bot.blockAt && bot.blockAt(new Vec3(x, fy, z)) } catch (_) { continue }
+    if (!b || !isHandGate(b.name) || !doorOpen(b)) continue
+    const tracked = trackedDoors(ctx)
+    const key = doorKey(x, fy, z)
+    if (tracked.has(key)) continue
+    tracked.set(key, { x, y: fy, z, seen: true })
+    while (tracked.size > DOOR_TRACK_MAX) tracked.delete(tracked.keys().next().value)
+  }
+}
+
 function closeOwnDoors(bot, ctx) {
-  const tracked = ctx.doorOpened instanceof Map ? ctx.doorOpened : null
-  if (!tracked || tracked.size === 0) return
   const bp = botPos(bot)
   if (!bp) return
+  try { adoptPassedGates(bot, ctx, bp) } catch (_) { /* adopt best-effort */ }
+  const tracked = ctx.doorOpened instanceof Map ? ctx.doorOpened : null
+  if (!tracked || tracked.size === 0) return
   const nodes = planWindow(ctx)
   const ahead = nodes ? nearestAhead(nodes, bp) : 0
   const feetKey = doorKey(Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z))
