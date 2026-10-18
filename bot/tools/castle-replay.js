@@ -89,7 +89,12 @@ const SPEED = (parseInt(TICKRATE, 10) || 1) > 1 ? parseInt(TICKRATE, 10) / 20 : 
 const COMPONENT = process.env.CASTLE_COMPONENT || ''
 const BLOCKED = Math.max(0, parseInt(process.env.CASTLE_BLOCKED || '0', 10) || 0)
 const PLANNER = process.env.RIG_PLANNER || 'jev'
-const NIGHT = process.env.CASTLE_NIGHT === '1'
+// Prod night (idkcraft-neuc.65.2, CASTLE_NIGHT=prod / --night prod): the same
+// night machinery under prod conditions from window open — easy all window
+// (no phantoms, no peaceful dawn), fall damage on, world spawn moved
+// PROD_SPAWN_DIST from the pad; the tag adds day-deaths= and kitless=.
+const NIGHT_PROD = process.env.CASTLE_NIGHT === 'prod'
+const NIGHT = process.env.CASTLE_NIGHT === '1' || NIGHT_PROD
 const SEED = process.env.CASTLE_SEED || ''
 // Seeded blueprint version (g0z.48): '' reads the current blueprint; an
 // older seed turns the run into an upgrade run (the guide chats
@@ -127,6 +132,15 @@ if (!['', 'house', 'peer'].includes(NIGHT_HOME) || (NIGHT_HOME && SEED !== 'comp
 // active castle (home none, then an unbuilt site): prod family A's nights.
 const BARE = process.env.CASTLE_BARE === '1'
 if (BARE && SEED) throw new Error('CASTLE_BARE=1 excludes CASTLE_SEED')
+// Rig house (idkcraft-neuc.65.2, needs CASTLE_BARE=1): clean = a built v2
+// house (raise-house.js) on the pad is the bot's home; bump = the same house
+// with bedrock behind the door (gohome cannot get in: prod v2 10-16's
+// cannot-reach-home dusks) — the night lines add the shelter spot's
+// distance from the door (neuc.65.3's walk-off: 8+ is the pass).
+const HOUSE = process.env.CASTLE_HOUSE || ''
+if (!['', 'clean', 'bump'].includes(HOUSE) || (HOUSE && !BARE)) {
+  throw new Error(`CASTLE_HOUSE: want ''|clean|bump with CASTLE_BARE=1, got ${JSON.stringify(HOUSE)}`)
+}
 const SAND = process.env.CASTLE_SAND === '1'
 // Repair run (g0z.56, needs CASTLE_SEED=complete): after adoption the
 // acceptance's 20 cells are knocked out (repairCells), wood = 16 oak_log in
@@ -262,8 +276,11 @@ const PRINT = [/^goal step=/, /^castlefetch \S+: need /, /^castle blocked /, /^c
   /^goal watchdog /, /^goal outcome /, /^residence /]
 const origLog = console.log
 const origErr = console.error
-const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [], fetchEv: [], leg: null, lastWd: null }
+const seen = { flips: 0, steps: {}, fails: {}, progress: [], said: [], wdCalls: 0, wdChoices: {}, wdFirstAt: 0, outcomes: { progress: 0, flat: 0, preempted: 0 }, timeEvents: [], timeMaxDrift: 0, step: null, nightSteps: null, shelterEps: 0, regressAt: [], fetchEv: [], leg: null, lastWd: null, kitless: 0, gohomeFails: 0, shelterAt: null }
 function resetSeen() {
+  seen.kitless = 0
+  seen.gohomeFails = 0
+  seen.shelterAt = null
   seen.regressAt = []
   seen.fetchEv = []
   seen.leg = null
@@ -302,6 +319,14 @@ function hookConsole() {
 // bot's own log lines (in-process, loss-free). now is injectable for tests.
 function classify(line, now = Date.now()) {
   if (line.startsWith('castle regress ')) { seen.regressAt.push(now); return } // g0z.56
+  // neuc.65.2: kitless = a death line (neuc.65.1 facts) with no sword held.
+  if (line.startsWith('death health=')) { if (/ sword=0( |$)/.test(line)) seen.kitless++; return }
+  // neuc.65.2: where the shelter settled (the house-bump door distance).
+  const sp = /^shelter phase=(\S+) pos=(-?\d+) (-?\d+) (-?\d+)/.exec(line)
+  if (sp) {
+    if (sp[1] !== 'walk' && sp[1] !== 'swim') seen.shelterAt = { x: +sp[2], y: +sp[3], z: +sp[4] }
+    return
+  }
   let m = /^goal step=(\S+) prev=(\S+)/.exec(line)
   if (m) {
     if (seen.leg && m[2] === 'castlefetch' && m[1] !== 'castlefetch') { // neuc.62: leg cut by a goal switch
@@ -313,6 +338,7 @@ function classify(line, now = Date.now()) {
       seen.leg = null
     }
     seen.lastWd = null
+    if (line.includes(' fail=failed:cannot-reach-home')) seen.gohomeFails++
     seen.step = m[1]
     if (seen.nightSteps) seen.nightSteps.add(m[1])
     if (m[1] === 'shelter' && m[2] !== 'shelter') seen.shelterEps++
@@ -479,6 +505,19 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
       st.empties++
       crossed(bot, now)
     },
+    // v2 body (neuc.65.2): the bridge has no packet client, so crossings
+    // come from its bot.time (the mod's server clock) on each 'time' event;
+    // without this a CASTLE_BODY=baritone --night never closed a night.
+    onBotTime(bot, now = Date.now()) {
+      const d = bot && bot.time && bot.time.timeOfDay
+      if (typeof d !== 'number' || !Number.isFinite(d) || !onEvent) return
+      const w = resyncWord(((d % 24000) + 24000) % 24000)
+      const prev = st.word
+      st.word = w
+      if (prev == null || prev === w) return
+      if (!((prev === 'day' && w === 'dusk') || (prev === 'dusk' && w === 'night') || (prev === 'night' && w === 'day'))) return
+      onEvent({ event: w === 'dusk' ? 'dusk' : w === 'night' ? 'nightfall' : 'dawn', server: d, bot: d, at: now })
+    },
     apply(bot) { // bot 'time' tap: lands after mineflayer's own write
       if (!write || st.anchor == null || !(st.rate > 0)) return
       if (!bot || !bot.game || bot.game.dimension !== st.dim) return
@@ -500,10 +539,18 @@ function createTimeResync({ write = true, onEvent = null } = {}) {
 // Crossings before open() (setup) stay peaceful. cmd runs one rcon command,
 // deaths() reads the follower's death count; never fails the run.
 const NIGHT_SAFE_STEPS = new Set(['shelter', 'rest'])
-function createNightDriver({ cmd, who, deaths, log, phantoms = 2 }) {
+// prod (neuc.65.2): no per-night difficulty flips or phantoms — openCmds
+// (easy, fall damage, world spawn) run once at open and hold all window;
+// the tag adds day-deaths (window deaths outside the nights) and kitless
+// (seen.kitless since open). door ({x, z}, the house-bump door) adds one
+// `CASTLE-RIG house-bump night <n>:` line per night and bump=<pass>/<n>.
+const BUMP_DOOR_GAP = 8
+function createNightDriver({ cmd, who, deaths, log, phantoms = 2, prod = false, openCmds = [], door = null }) {
   const nights = []
   let armed = false
   let cur = null
+  let open0 = null
+  let gLast = 0
   const run = (c) => Promise.resolve().then(() => cmd(c)).then(
     (o) => log(`CASTLE-RIG night-rcon [${c}]: ${String(o).trim().split('\n')[0]}`),
     (e) => log(`CASTLE-RIG night-rcon FAILED [${c}]: ${e && e.message ? e.message : e}`))
@@ -511,32 +558,57 @@ function createNightDriver({ cmd, who, deaths, log, phantoms = 2 }) {
     if (!cur) return null
     const steps = [...cur.steps]
     const n = { night: nights.length + 1, deaths: deaths() - cur.d0, sheltered: steps.some((s) => NIGHT_SAFE_STEPS.has(s)), steps, partial }
+    if (door) {
+      const at = seen.shelterAt
+      n.gohomeFails = seen.gohomeFails - gLast
+      n.shelterAt = at
+      n.doorDist = at ? Math.round(Math.hypot(at.x + 0.5 - door.x, at.z + 0.5 - door.z)) : null
+      n.bump = !partial && n.deaths === 0 && n.doorDist != null && n.doorDist >= BUMP_DOOR_GAP
+    }
     nights.push(n)
     cur = null
     seen.nightSteps = null
+    // Per day: dusk's gohome failure and shelter land before nightfall.
+    gLast = seen.gohomeFails
+    seen.shelterAt = null
     log(`CASTLE-RIG night ${n.night}: deaths=${n.deaths}, sheltered=${n.sheltered ? 'yes' : 'no'}, steps=${steps.join(',') || 'none'}${partial ? ' (partial)' : ''}`)
+    if (door) {
+      log(`CASTLE-RIG house-bump night ${n.night}: gohome-fails=${n.gohomeFails}, shelter-at=${n.shelterAt ? `${n.shelterAt.x} ${n.shelterAt.y} ${n.shelterAt.z}` : 'none'}, ` +
+        `door-dist=${n.doorDist == null ? 'none' : n.doorDist}, deaths=${n.deaths}, ${n.bump ? 'PASS' : 'FAIL'}${partial ? ' (partial)' : ''}`)
+    }
     return n
   }
   return {
     nights,
-    async open() { armed = true; await run('time set 0') },
+    async open() {
+      armed = true
+      open0 = { d: deaths(), k: seen.kitless }
+      gLast = seen.gohomeFails
+      seen.shelterAt = null
+      await run('time set 0')
+      for (const c of openCmds) await run(c)
+    },
     async onEvent(ev) {
       if (!armed) return
       if (ev.event === 'nightfall' && !cur) {
         cur = { d0: deaths(), steps: new Set(seen.step ? [seen.step] : []) }
         seen.nightSteps = cur.steps
+        if (prod) return
         await run('difficulty easy')
         for (let i = 0; i < phantoms; i++) await run(`execute at ${who} run summon phantom ~ ~16 ~`)
       } else if (ev.event === 'dawn' && cur) {
         close(false)
-        await run('difficulty peaceful')
+        if (!prod) await run('difficulty peaceful')
       }
     },
     finish() { return close(true) },
     // Verdict-line tail: nights seen, how many sheltered, deaths at night.
     tag() {
-      if (!nights.length) return ', nights=0'
-      return `, nights=${nights.length}, sheltered=${nights.filter((n) => n.sheltered).length}/${nights.length}, night-deaths=${nights.reduce((a, n) => a + n.deaths, 0)}`
+      const nd = nights.reduce((a, n) => a + n.deaths, 0)
+      const prodTag = prod && open0 ? `, day-deaths=${deaths() - open0.d - nd}, kitless=${seen.kitless - open0.k}` : ''
+      const bumpTag = door ? `, bump=${nights.filter((n) => n.bump).length}/${nights.length}` : ''
+      if (!nights.length) return ', nights=0' + prodTag + bumpTag
+      return `, nights=${nights.length}, sheltered=${nights.filter((n) => n.sheltered).length}/${nights.length}, night-deaths=${nd}` + prodTag + bumpTag
     },
   }
 }
@@ -615,6 +687,37 @@ const IDLE_RESPAWN_DIST = 225
 // Respawn point for the forced death: IDLE_RESPAWN_DIST from home toward
 // the world spawn (the spawn itself when closer), y 150 — fall damage is
 // off in the rig, the bot drops onto whatever surface is there.
+// v2 body clock (neuc.65.2): bridge bot.time crossings feed only a night
+// run; other modes keep today's no-event v2 path (no CASTLE-RIG time:
+// lines, no residence-night feed). Returns whether it hooked.
+function hookBotClock(b, timeResync, night) {
+  if (!night || !b || typeof b.on !== 'function') return false
+  b.on('time', () => timeResync.onBotTime(b))
+  return true
+}
+// Prod-night world spawn (neuc.65.2): PROD_SPAWN_DIST from the pad centre
+// toward the snapshot's world spawn (+x when they coincide) — prod deaths
+// respawn 100-250 out, the snapshot's spawn is ~600 off the pad.
+const PROD_SPAWN_DIST = 150
+function prodSpawnPoint(pad, spawn) {
+  const dx = spawn ? spawn.x - pad.x : 0
+  const dz = spawn ? spawn.z - pad.z : 0
+  const d = Math.hypot(dx, dz)
+  if (d < 1) return { x: Math.round(pad.x + PROD_SPAWN_DIST), z: Math.round(pad.z) }
+  return { x: Math.round(pad.x + dx * PROD_SPAWN_DIST / d), z: Math.round(pad.z + dz * PROD_SPAWN_DIST / d) }
+}
+// Rig house cells after raiseHouse (neuc.65.2): a bed in the bedroom (the
+// HOUSE-NIGHT cells), and for bump bedrock in the two cells behind the
+// door — the gohome walk cannot get in and nothing digs it.
+function rigHouseCommands(site, kind) {
+  const { x: ox, y: oy, z: oz } = site
+  const cmds = [
+    `setblock ${ox + 2} ${oy} ${oz + 4} red_bed[facing=east,part=head]`,
+    `setblock ${ox + 1} ${oy} ${oz + 4} red_bed[facing=east,part=foot]`,
+  ]
+  if (kind === 'bump') cmds.push(`fill ${ox + 3} ${oy} ${oz + 1} ${ox + 3} ${oy + 1} ${oz + 1} bedrock`)
+  return cmds
+}
 function idleRespawnPoint(home, spawn) {
   const dx = spawn.x - home.x
   const dz = spawn.z - home.z
@@ -970,7 +1073,12 @@ async function main() {
   const RESYNC_WRITE = (parseInt(TICKRATE, 10) || 1) > 1
   const timeT0 = Date.now()
   // deaths is declared below; the driver reads it only once armed (window open).
-  const night = NIGHT ? createNightDriver({ cmd: rcon, who: FOLLOWER, deaths: () => deaths, log: origLog }) : null
+  // neuc.65.2: filled once the pad is known (open() reads them at window start).
+  // keep_inventory stays true (prod reads true 2026-10-17, the bead assumed
+  // false): CASTLE_KEEP_INVENTORY=0 drops the kit on death instead.
+  const nightOpen = NIGHT_PROD ? ['difficulty easy', 'gamerule fall_damage true', ...(process.env.CASTLE_KEEP_INVENTORY === '0' ? ['gamerule keep_inventory false'] : [])] : []
+  const bumpDoor = HOUSE === 'bump' ? { x: 0, z: 0 } : null
+  const night = NIGHT ? createNightDriver({ cmd: rcon, who: FOLLOWER, deaths: () => deaths, log: origLog, prod: NIGHT_PROD, openCmds: nightOpen, door: bumpDoor }) : null
   const resNights = SEED ? createResidenceNights({ deaths: () => deaths, log: origLog }) : null
   let winT0 = 0 // window start; residence nights count seconds from it
   const timeResync = createTimeResync({
@@ -1001,6 +1109,7 @@ async function main() {
       : mineflayer.createBot({ ...opts, username: FOLLOWER })
     follower = b
     if (b._client) b._client.on('update_time', (packet) => timeResync.onPacket(b, packet))
+    else hookBotClock(b, timeResync, NIGHT)
     b.on('time', () => timeResync.apply(b))
     b.on('physicsTick', () => timeResync.onTick(b))
     b.once('spawn', () => {
@@ -1377,6 +1486,33 @@ async function main() {
     const site = new Vec3(bx + 17, gy + 1, bz + 17)
     tickCtx().home = { site, interior: null, door: null, table: null, built: false, v: 2, parked: true }
     origLog(`CASTLE-RIG night home=${NIGHT_HOME}: unbuilt house site ${site.x} ${site.y} ${site.z}`)
+  }
+  if (HOUSE) {
+    // neuc.65.2: a built rig house on the pad's SE quarter is the home (the
+    // stuck-replay night-spot shape), the follower re-seated after the fill.
+    const site = { x: bx + 8, y: gy + 1, z: bz + 8 }
+    tickCtx().paused = true // no tick picks a home site mid-raise
+    try {
+      await require('./raise-house').raiseHouse(rcon, site)
+      for (const c of rigHouseCommands(site, HOUSE)) await rcon(c)
+    } catch (e) { fail('house', e.message) }
+    await rcon(`tp ${FOLLOWER} ${bx + 2.5} ${gy + 1} ${standZ + 0.5}`).catch((e) => fail('house', e.message))
+    tickCtx().home = {
+      site: { ...site }, built: true, v: 2,
+      interior: { min: { x: site.x + 1, y: site.y, z: site.z + 1 }, max: { x: site.x + 5, y: site.y + 1, z: site.z + 4 } },
+      door: { x: site.x + 3, y: site.y, z: site.z },
+    }
+    if (bumpDoor) { bumpDoor.x = site.x + 3.5; bumpDoor.z = site.z + 0.5 }
+    tickCtx().paused = false
+    origLog(`CASTLE-RIG house=${HOUSE}: built house ${site.x} ${site.y} ${site.z}, door ${site.x + 3} ${site.y} ${site.z}${HOUSE === 'bump' ? ', bedrock behind the door' : ''}`)
+  }
+  if (NIGHT_PROD) {
+    const sp = prodSpawnPoint({ x: bx, z: bz }, worldSpawn)
+    let out = ''
+    try { out = String(await rcon(`execute positioned ${sp.x} 0 ${sp.z} positioned over world_surface run setworldspawn ~ ~ ~`)) } catch (e) { fail('world-spawn', e.message) }
+    const y = /(-?\d+), (-?\d+), (-?\d+)/.exec(out)
+    if (!y || +y[2] < 40) fail('world-spawn', `setworldspawn ${sp.x} ${sp.z}: ${out.trim().split('\n')[0] || 'no reply'}`)
+    origLog(`CASTLE-RIG night prod: world spawn ${y[1]} ${y[2]} ${y[3]} (${PROD_SPAWN_DIST} from the pad toward ${worldSpawn ? `${worldSpawn.x} ${worldSpawn.z}` : '?'}), easy + fall damage from window open`)
   }
 
   // The order needs the speaker's entity loaded on the follower, else the
@@ -2120,4 +2256,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }

@@ -551,6 +551,36 @@ night cut by the window end is `(partial)`). The verdict line gains
 `nights` array. Crossings are the replay's resynced clock, so it works at
 any `CASTLE_TICKRATE`.
 
+`--night prod` (or `CASTLE_NIGHT=prod`; idkcraft-neuc.65.2) keeps those
+per-night lines and changes only the conditions, all from window open:
+`difficulty easy` for the whole window (natural spawns, no phantoms, no
+peaceful dawn, so day deaths count), `gamerule fall_damage true`, and the
+world spawn moved 150 blocks from the pad toward the snapshot's spawn
+(`setworldspawn` on the world surface; the snapshot spawn is ~600 off the
+pad, prod deaths respawn 100-250 out). keep_inventory stays true, because
+prod reads true (2026-10-17; `CASTLE_KEEP_INVENTORY=0` drops the kit on
+death instead, which is the bead's family-B assumption), and so does the
+rest of the rig (weather locked clear). The verdict line adds `, day-deaths=<window deaths outside
+the nights>, kitless=<death lines with sword=0>` after `night-deaths=`.
+House variants: `CASTLE_SEED=complete` (castle residence present),
+`CASTLE_BARE=1` (no house: home none, then an unbuilt site), and
+`CASTLE_BARE=1 CASTLE_HOUSE=clean|bump`, a built v2 house with a bed on
+the pad (raise-house.js) as the home. In `bump`, bedrock fills the two
+cells behind the door so gohome fails `cannot-reach-home`. Each night then
+adds `CASTLE-RIG house-bump night <n>: gohome-fails=<k>, shelter-at=<x y
+z|none>, door-dist=<d|none>, deaths=<d>, PASS|FAIL`, where shelter-at is
+the last settled `shelter phase` pos and PASS means 8+ blocks from the
+door with 0 deaths (neuc.65.3's walk-off). The verdict line gets
+`, bump=<pass>/<n>`. Baselines are in `night-baseline.json` (master
+ed8f1107, one 68-min run each). v1 bare: 3 nights, sheltered 3/3,
+night-deaths 0, day-deaths 0, kitless 0. v1 castle (`CASTLE_SEED=complete`;
+sleeping skips the night, so it gets 5 nights): night-deaths 1,
+day-deaths 2, kitless 3, residence 4/6. v1 house-bump: bump 3/3 with the
+door 8/9/9 blocks away, 0 deaths. v2 bare: 3 nights, 0 deaths. On the v2
+body (no packet client), the crossings come from the bridge's `bot.time`.
+Before neuc.65.2, a `CASTLE_BODY=baritone --night` run never closed a
+night.
+
 `CASTLE_SEED=complete` (idkcraft-g0z.33, the g0z.30 "lives in the castle"
 acceptance): instead of ordering a castle, setblocks the whole v2 castle
 centred on the pad (site = pad centre - 15,-13, rot 0; all 1722 plan
