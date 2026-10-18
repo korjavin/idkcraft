@@ -89,6 +89,16 @@ describe('llm budget (vf8e.5)', () => {
     assert.match(logs[0], /until \d\d:\d\d \(1260\/1260 tokens\/h\)/)
   })
 
+  it('a timed-out call (no usage) still charges the window an estimate', async () => {
+    process.env.LLM_TOKENS_PER_HOUR = '1'
+    let n = 0
+    const hanging = (url, opts) => { n++; return new Promise((resolve, reject) => opts.signal.addEventListener('abort', () => reject(opts.signal.reason))) }
+    const p = llmPlanner('k', hanging, 20)
+    await assert.rejects(p.plan(REQ), (err) => err && err.name === 'TimeoutError')
+    await assert.rejects(p.plan(REQ), /llm budget exhausted/)
+    assert.equal(n, 1)
+  })
+
   it('0 = unlimited', async () => {
     process.env.LLM_TOKENS_PER_HOUR = '0'
     const c = { n: 0 }

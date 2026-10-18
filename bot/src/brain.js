@@ -269,14 +269,32 @@ async function llmCall({ use, apiKey, body, signal, fetchFn }) {
     throw new Error('llm budget exhausted')
   }
   llmBudgetLogged = false
-  const res = await (fetchFn || fetch)(LLM_ENDPOINT, {
-    method: 'POST',
-    signal,
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify(body),
-  })
+  const payload = JSON.stringify(body)
+  // A sent call that dies without usage (deadline abort mid-generation, a
+  // body that never parses) may still be billed: charge the window a
+  // conservative estimate (~4 chars/token in + the max_tokens ceiling out)
+  // so a run of timeouts still trips the cap. The counters stay real usage.
+  const charge = () => llmSpend.push({ t: Date.now(), n: Math.ceil(payload.length / 4) + (Number(body.max_tokens) || 0) })
+  let res
+  try {
+    res = await (fetchFn || fetch)(LLM_ENDPOINT, {
+      method: 'POST',
+      signal,
+      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: payload,
+    })
+  } catch (err) {
+    if (signal && signal.aborted) charge()
+    throw err
+  }
   if (!res.ok) throw new Error(`llm http ${res.status}`)
-  const data = await res.json()
+  let data
+  try {
+    data = await res.json()
+  } catch (err) {
+    charge()
+    throw err
+  }
   const u = (data && data.usage) || {}
   const tin = Number.isFinite(u.input_tokens) ? u.input_tokens : 0
   const tout = Number.isFinite(u.output_tokens) ? u.output_tokens : 0
