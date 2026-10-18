@@ -1112,12 +1112,17 @@ const SHELTER_CASTLE_R = 24
 function offCastleSpot(bot, ctx) {
   try {
     const st = ctx && ctx.castle
-    if (!st || !st.site || typeof st.site.x !== 'number') return null
-    const { w, d } = castleData.siteDimensions(st.rot | 0, st.blueprintVersion)
+    const own = st && st.site && typeof st.site.x === 'number' ? st : null
+    const { w, d } = own ? castleData.siteDimensions(own.rot | 0, own.blueprintVersion) : { w: 0, d: 0 }
     const gap2 = SHELTER_CASTLE_GAP * SHELTER_CASTLE_GAP
+    // g0z.63: and outside the apron of every known castle (the pillar and
+    // the cap are refused there), XZ only — at the castle's own level.
+    const clear = (ax, az) => !castleData.inCastleApron(ctx, { x: ax, z: az })
     return walkOffSpot(bot, ctx, (ax, az) => {
-      const ox = ax < st.site.x ? st.site.x - ax : ax >= st.site.x + w ? ax - (st.site.x + w - 1) : 0
-      const oz = az < st.site.z ? st.site.z - az : az >= st.site.z + d ? az - (st.site.z + d - 1) : 0
+      if (!clear(ax, az)) return false
+      if (!own) return true
+      const ox = ax < own.site.x ? own.site.x - ax : ax >= own.site.x + w ? ax - (own.site.x + w - 1) : 0
+      const oz = az < own.site.z ? own.site.z - az : az >= own.site.z + d ? az - (own.site.z + d - 1) : 0
       return ox * ox + oz * oz >= gap2
     })
   } catch (_) { return null }
@@ -1348,8 +1353,9 @@ function shelter(bot, ctx, target, state) {
   // fence ring — creepers follow the bot there and blow the ring. Walk out
   // of the band first (offCastleSpot: 6+ from the box, the band's edge) and
   // dig in there; one shot per episode, like the vmzq.48 walk-off below.
-  // No ground out there keeps the old pillar in place.
-  if (!st.pillared && !st.bandTried && !st.offCastle && !ctx.recovery && !st.dig && castleData.nightBand(ctx.castle, botPos(bot))) {
+  // No ground out there keeps the old pillar in place. g0z.63: the apron
+  // of any known complete castle (a peer's too) walks off the same way.
+  if (!st.pillared && !st.bandTried && !st.offCastle && !ctx.recovery && !st.dig && (castleData.nightBand(ctx.castle, botPos(bot)) || castleData.inCastleApron(ctx, botPos(bot)))) {
     st.bandTried = true
     let spot = null
     try { spot = offCastleSpot(bot, ctx) } catch (_) { spot = null }

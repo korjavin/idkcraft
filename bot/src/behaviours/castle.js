@@ -1691,7 +1691,10 @@ function siteDist(bot, st) {
 function guardCastle(bot, ctx) {
   try {
     const mov = bot && bot.pathfinder && bot.pathfinder.movements
-    if (!ctx || !ctx.castle || !mov || !Array.isArray(mov.exclusionAreasBreak) || !Array.isArray(mov.exclusionAreasPlace)) return
+    // g0z.63: a castleless bot (swarm, V2) installs too — the apron of every
+    // known castle (memory.refreshKnownCastles) vetoes its scaffolding.
+    const known = ctx && (ctx.castle || (Array.isArray(ctx.knownCastles) && ctx.knownCastles.length))
+    if (!known || !mov ||!Array.isArray(mov.exclusionAreasBreak) || !Array.isArray(mov.exclusionAreasPlace)) return
     if (ctx.castleGuardMov === mov && mov.exclusionAreasBreak.includes(ctx.castleGuardFn) &&
       mov.exclusionAreasPlace.includes(ctx.castlePlaceFn)) return
     for (const m of new Set([ctx.castleGuardMov, mov])) {
@@ -1714,7 +1717,9 @@ function guardCastle(bot, ctx) {
       try {
         const st = ctx.castle
         const q = block && block.position
-        if (!st || !st.site || !q) return 0
+        if (!q) return 0
+        if (blueprint.inCastleApron(ctx, q)) return 100 // g0z.63: any known castle's apron
+        if (!st || !st.site) return 0
         const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
         const dx = q.x - st.site.x
         const dy = q.y - st.site.y

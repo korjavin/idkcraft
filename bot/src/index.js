@@ -400,7 +400,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // scans, danger marks) with no per-store hooks. No world key (unit
     // mocks) or missing dir means a silent skip.
     try { memory.saveThrottled(bot, ctx) } catch (_) { /* memory best-effort */ }
-    try { memory.refreshPeerCastle(bot, ctx) } catch (_) { /* g0z.59: read-only peer castle, best-effort */ }
+    try { memory.refreshKnownCastles(bot, ctx) } catch (_) { /* g0z.59/.63: read-only peer castles, best-effort */ }
     if (r.decision) {
       endTimer({ brain_called: String(r.calledBrain) })
       metrics.decisions.inc({ source: r.decision.source, action: r.decision.action })

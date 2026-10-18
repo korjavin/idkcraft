@@ -154,7 +154,7 @@ describe('g0z.59 peer castle: v2 reads v1\'s complete castle, never writes it', 
   it('a complete peer castle becomes the night home; no adoption, no write', async () => {
     const { b, peerFile, env, raw } = setup(castleState())
     const ctx = { home: HOUSE(), castle: null }
-    memory.refreshPeerCastle(b, ctx, tick(), env)
+    memory.refreshKnownCastles(b, ctx, tick(), env)
     assert.ok(ctx.peerCastle && ctx.peerCastle.phase === 'complete')
     assert.equal(ctx.castle, null, 'never its own castle: no castle work')
     assert.equal(residence.wanted(ctx), undefined, 'no residence switch')
@@ -177,7 +177,7 @@ describe('g0z.59 peer castle: v2 reads v1\'s complete castle, never writes it', 
       const { b, peerFile, env } = setup(castle)
       if (world) fs.writeFileSync(peerFile, JSON.stringify({ v: 1, world, castle }))
       const ctx = { home: HOUSE(), peerCastle: castleState() }
-      memory.refreshPeerCastle(b, ctx, tick(), { ...env, ...envPatch })
+      memory.refreshKnownCastles(b, ctx, tick(), { ...env, ...envPatch })
       assert.equal(ctx.peerCastle, null, JSON.stringify({ castle, envPatch, world }))
     }
   })
@@ -186,12 +186,12 @@ describe('g0z.59 peer castle: v2 reads v1\'s complete castle, never writes it', 
     const { b, peerFile, env } = setup(castleState())
     const ctx = { home: HOUSE() }
     const t = tick()
-    memory.refreshPeerCastle(b, ctx, t, env)
+    memory.refreshKnownCastles(b, ctx, t, env)
     assert.ok(ctx.peerCastle)
     fs.unlinkSync(peerFile)
-    memory.refreshPeerCastle(b, ctx, t + 1000, env)
+    memory.refreshKnownCastles(b, ctx, t + 1000, env)
     assert.ok(ctx.peerCastle, 'within the window: no re-read')
-    memory.refreshPeerCastle(b, ctx, tick(), env)
+    memory.refreshKnownCastles(b, ctx, tick(), env)
     assert.equal(ctx.peerCastle, null, 'next window: the gone file reads nothing')
   })
 })

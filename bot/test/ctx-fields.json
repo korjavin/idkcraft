@@ -1397,6 +1397,12 @@
     ],
     "owner": "src/index.js"
   },
+  "knownCastles": {
+    "writers": [
+      "src/memory.js"
+    ],
+    "owner": "src/memory.js"
+  },
   "paused": {
     "writers": [
       "src/behaviours/flat.js",
