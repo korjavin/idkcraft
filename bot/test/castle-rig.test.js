@@ -384,11 +384,29 @@ describe('castle-replay.js night driver (idkcraft-ek69)', () => {
     const { createTimeResync } = require('../tools/castle-replay')
     const events = []
     const r = createTimeResync({ write: false, onEvent: (e) => events.push(e) })
+    // Fake mirrors the bridge contract: bot/src/bridge/index.js:549 writes
+    // st.time.timeOfDay into bot.time.timeOfDay, then emits 'time'.
     const bot = { time: { timeOfDay: 11000 } }
     r.onBotTime(bot, 1) // first read arms, no event
     for (const [t, at] of [[12100, 2], [12500, 3], [13100, 4], [23999, 5], [10, 6], [13500, 7]]) { bot.time.timeOfDay = t; r.onBotTime(bot, at) }
     // 13500 straight from day (a forward set) is not a crossing
     assert.deepEqual(events.map((e) => [e.event, e.server, e.at]), [['dusk', 12100, 2], ['nightfall', 13100, 4], ['dawn', 10, 6]])
+  })
+
+  it('v2 clock hook runs only in night mode (idkcraft-neuc.65.2)', () => {
+    const { EventEmitter } = require('node:events')
+    const { createTimeResync, hookBotClock } = require('../tools/castle-replay')
+    const run = (night) => {
+      const events = []
+      const r = createTimeResync({ write: false, onEvent: (e) => events.push(e) })
+      const b = new EventEmitter() // bridge bot shape: bot.time + 'time' (bot/src/bridge/index.js:549)
+      b.time = { timeOfDay: 11000 }
+      const hooked = hookBotClock(b, r, night)
+      for (const t of [11000, 12100, 13100]) { b.time.timeOfDay = t; b.emit('time') }
+      return { hooked, events: events.map((e) => e.event) }
+    }
+    assert.deepEqual(run(false), { hooked: false, events: [] })
+    assert.deepEqual(run(true), { hooked: true, events: ['dusk', 'nightfall'] })
   })
 
   it('prodSpawnPoint / rigHouseCommands (idkcraft-neuc.65.2)', () => {

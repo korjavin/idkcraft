@@ -687,6 +687,14 @@ const IDLE_RESPAWN_DIST = 225
 // Respawn point for the forced death: IDLE_RESPAWN_DIST from home toward
 // the world spawn (the spawn itself when closer), y 150 — fall damage is
 // off in the rig, the bot drops onto whatever surface is there.
+// v2 body clock (neuc.65.2): bridge bot.time crossings feed only a night
+// run; other modes keep today's no-event v2 path (no CASTLE-RIG time:
+// lines, no residence-night feed). Returns whether it hooked.
+function hookBotClock(b, timeResync, night) {
+  if (!night || !b || typeof b.on !== 'function') return false
+  b.on('time', () => timeResync.onBotTime(b))
+  return true
+}
 // Prod-night world spawn (neuc.65.2): PROD_SPAWN_DIST from the pad centre
 // toward the snapshot's world spawn (+x when they coincide) — prod deaths
 // respawn 100-250 out, the snapshot's spawn is ~600 off the pad.
@@ -1101,7 +1109,7 @@ async function main() {
       : mineflayer.createBot({ ...opts, username: FOLLOWER })
     follower = b
     if (b._client) b._client.on('update_time', (packet) => timeResync.onPacket(b, packet))
-    else b.on('time', () => timeResync.onBotTime(b))
+    else hookBotClock(b, timeResync, NIGHT)
     b.on('time', () => timeResync.apply(b))
     b.on('physicsTick', () => timeResync.onTick(b))
     b.once('spawn', () => {
@@ -2248,4 +2256,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, rigHouseCommands, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
