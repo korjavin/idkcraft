@@ -1151,6 +1151,7 @@ describe('castle rig speed (idkcraft-neuc.60)', () => {
     for (const k of ['lay', 'mine']) {
       const e = b.v2 && b.v2[k]
       assert.ok(e && e.rate > 0 && Array.isArray(e.runs) && e.runs.length >= 2, `v2.${k} malformed`)
+      if (k === 'mine') assert.ok(e.runs.length >= 3, 'v2.mine needs >= 3 runs (mean of 3 pairs)')
       const mean = e.runs.reduce((a, r) => a + r, 0) / e.runs.length
       assert.ok(Math.abs(mean - e.rate) <= 0.1, `v2.${k} rate ${e.rate} is not the mean ${mean.toFixed(1)} of its runs`)
       if (k === 'lay') for (const r of e.runs) assert.ok(Math.abs(r / e.rate - 1) <= 0.2, `v2.${k} run ${r} outside ±20% of ${e.rate}`)
