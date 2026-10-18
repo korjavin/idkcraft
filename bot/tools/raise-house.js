@@ -36,7 +36,8 @@ function houseCommands(site) {
   let door = null
   let table = null
   for (const c of plan) {
-    if (c.kind === 'fill') continue // the slab reads solid: done
+    if (c.kind === 'fill' && !c.sill) continue // the slab reads solid: done
+    if (c.kind === 'fill') { cmds.push(`setblock ${ox + c.dx} ${oy + c.dy} ${oz + c.dz} oak_planks`); continue } // z591: the door sill
     if (c.kind === 'clear') continue // the air fill above reads empty: done
     if (c.kind === 'door') { door = c; continue }
     if (c.kind === 'table') { table = c; continue }

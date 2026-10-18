@@ -91,7 +91,7 @@ describe('1c4 floor cells sit under the jr2.2 bed halves, table still first', ()
       { dx: 2, dy: -1, dz: 4, kind: 'fill' },
       { dx: 4, dy: -1, dz: 4, kind: 'fill' },
       { dx: 5, dy: -1, dz: 4, kind: 'fill' },
-      { dx: 3, dy: -1, dz: 0, kind: 'fill' },
+      { dx: 3, dy: -1, dz: 0, kind: 'fill', sill: true },
     ])
   })
 
