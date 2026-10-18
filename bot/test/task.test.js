@@ -389,16 +389,16 @@ describe('task stall clock (vmzq.2)', () => {
     taskMod.taskTick(bot, ctx, t0)
     assert.equal(ctx.task.active, 'house')
     // 31 interior clear cells (rw4.19) read done on air.
-    assert.equal(taskMod.taskLine(ctx), 'task house 31/149 stall=0s')
+    assert.equal(taskMod.taskLine(ctx), 'task house 31/133 stall=0s')
     for (let s = 1; s <= 15 * 60; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
     assert.equal(taskLogs().length, 1)
-    assert.match(bot.chats[0], /^house: no progress for 15 min at 31\/149/)
+    assert.match(bot.chats[0], /^house: no progress for 15 min at 31\/133/)
   })
 
   it('house wood toward the cells left is progress, high-water and bounded (oqj5)', () => {
     const items = []
     const bot = makeBot({ items })
-    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/149: 118 cells left
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/133: 102 cells left
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
     ticker.work()
@@ -426,9 +426,9 @@ describe('task stall clock (vmzq.2)', () => {
     assert.equal(ctx.task.house.stallMs, 0, 'past the mark resets again')
     // Bounded: once the pack covers the cells left, more wood is not progress.
     items.length = 0
-    items.push({ name: 'oak_planks', count: 118 })
+    items.push({ name: 'oak_planks', count: 102 })
     tick()
-    assert.equal(ctx.task.house.stallMs, 0, '8 -> 118 planks, the baseline was still short')
+    assert.equal(ctx.task.house.stallMs, 0, '8 -> 102 planks, the baseline was still short')
     items.push({ name: 'oak_log', count: 3 })
     tick()
     assert.equal(ctx.task.house.stallMs, 1000, 'wood past the cells left does not reset')
@@ -437,7 +437,7 @@ describe('task stall clock (vmzq.2)', () => {
   it('the walk to a far tree is house progress per target, low-water, wood-short only (oqj5)', () => {
     const items = []
     const bot = makeBot({ items })
-    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/149
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/133
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
     ticker.work()
@@ -472,7 +472,7 @@ describe('task stall clock (vmzq.2)', () => {
     ctx.step = 'gather'
     tick() // back in the walk: the tree kept its mark (240 < 270 - 8)
     assert.equal(ctx.task.house.stallMs, 0, 'the explore detour does not rebaseline the tree')
-    items.push({ name: 'oak_planks', count: 118 }) // the pack covers the cells left
+    items.push({ name: 'oak_planks', count: 102 }) // the pack covers the cells left
     tick() // credited as wood (the mark was 0)
     at(200)
     tick()
@@ -485,7 +485,7 @@ describe('task stall clock (vmzq.2)', () => {
   it('an A<->B tree swap credits each tree once, and travel never lowers the wood mark (oqj5 verify)', () => {
     const items = [{ name: 'oak_planks', count: 64 }]
     const bot = makeBot({ items })
-    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/149: 118 cells left
+    bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' }) // 31/133: 102 cells left
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: false, v: 2 })
     ticker.work()
