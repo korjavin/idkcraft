@@ -1,5 +1,7 @@
 {
   "note": "idkcraft-neuc.65.2: castle-rig --night prod 68 baselines (bot code at master ed8f1107, one run each, default pad pick, untouched tick rate). Verdict tails are copied from the run lines.",
+  "falls": "0 fall deaths in all four runs (killers from the server log: castle run zombie x2 + skeleton x1, others 0 deaths). fall_damage true is read back by rcon at window open; the dry leg is plain --night (fall_damage false by construction).",
+  "keepInventory": "true in every row: prod reads keep_inventory true (2026-10-17). CASTLE_KEEP_INVENTORY=0 drops the kit on death (unmeasured).",
   "v1": {
     "bare": {
       "setup": "CASTLE_BARE=1 sh bot/tools/castle-rig.sh --night prod 68",
