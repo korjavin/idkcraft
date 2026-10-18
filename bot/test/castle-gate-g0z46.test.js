@@ -323,6 +323,7 @@ describe('doors: fence gates (g0z.46)', () => {
 
   it('v2 stall: a shut gate under the feet for GATE_FEET_MS is opened once', () => {
     const bot = {
+      pathfinder: { isMoving: () => true },
       entity: { position: new Vec3(0.5, 64, -1.9) }, // pressed against it: centre in the gate cell
       toggles: 0,
       blockAt: (p) => {
@@ -349,6 +350,33 @@ describe('doors: fence gates (g0z.46)', () => {
       now += 300
       doors.doorShutFast(bot, ctx)
       assert.equal(bot.toggles, 1, 'double toggle')
+    } finally {
+      console.log = log
+      Date.now = realNow
+    }
+  })
+
+  it('an idle body in a shut gate cell never opens it (moving guard)', () => {
+    const bot = {
+      pathfinder: { isMoving: () => false },
+      entity: { position: new Vec3(0.5, 64, -1.9) }, // pressed against it: centre in the gate cell
+      toggles: 0,
+      blockAt: (p) => {
+        const at = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+        if (at.x === 0 && at.y === 64 && at.z === -2) return { name: 'oak_fence_gate', position: at, getProperties: () => ({ open: false, facing: 'south' }) }
+        return { name: 'air', position: at, getProperties: () => ({}) }
+      },
+      activateBlock: async () => { bot.toggles++ },
+    }
+    const ctx = {}
+    const log = console.log
+    const realNow = Date.now
+    let now = 1e6
+    Date.now = () => now
+    console.log = () => {}
+    try {
+      for (let i = 0; i < 5; i++) { doors.doorShutFast(bot, ctx); now += 600 }
+      assert.equal(bot.toggles, 0, 'idle body opened the gate')
     } finally {
       console.log = log
       Date.now = realNow
