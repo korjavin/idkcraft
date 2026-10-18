@@ -10,6 +10,7 @@ const MAX_SPOTS = 64
 const TTL_MS = 2 * 60 * 60 * 1000 // a filled pit goes stale within a session
 const AVOID_RADIUS = 6 // pit + body + approach margin
 const WATER_RADIUS = 32 // a water death bans the swim around it, not one cell
+const FALL_RADIUS = 3 // neuc.65.6: a fall death costs the drop cell, not the house beside it
 const MAX_RADIUS = 64 // widest mark: an ocean monument
 
 function store(ctx) {
@@ -141,6 +142,26 @@ function markWaterDeath(bot, ctx, now) {
   } catch (_) { return false }
 }
 
+// Fall death (idkcraft-neuc.65.6): prod v2 fell ten times in one morning
+// into one doorstep crater beside its house — nothing remembered the cell,
+// so every life walked the same drop. The bot never sees the cause, so a
+// dry death with no hostile (live or the last tick's snapshot, the caller's
+// count) reads as a fall. ponytail: lava/suffocation deaths read the same
+// and mark the same small disc, which is right for them too; read the
+// server death message if a non-fall cause ever needs its own reaction.
+// The mark carries fall: true so addPathCost steers A* (v1) and the
+// Baritone AvoidGoal (v2) round it. True when marked, never throws.
+function markFallDeath(bot, ctx, hostiles, now) {
+  try {
+    if (!ctx || (typeof hostiles === 'number' && hostiles > 0)) return false
+    const pos = bot && bot.entity && bot.entity.position
+    if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') return false
+    if (!mark(ctx, pos, now, FALL_RADIUS)) return false
+    ctx.danger.spots[ctx.danger.spots.length - 1].fall = true
+    return true
+  } catch (_) { return false }
+}
+
 function prune(ctx, now) {
   const mem = ctx && ctx.danger
   if (!mem || !Array.isArray(mem.spots)) return 0
@@ -163,8 +184,9 @@ function clear(ctx) {
 // walker (gohome, equip, castlefetch, forage, explore legs, homing, follow)
 // routes around the drowned lake instead of re-walking its shore — the
 // marks used to steer target picks only. A cost, never a ban: a target
-// inside the disc (home by the water) still plans. Wide marks only
-// (r >= WATER_RADIUS): pit marks belong to recover/detour. Measured on the
+// inside the disc (home by the water) still plans. Wide marks and fall
+// marks only (r >= WATER_RADIUS or .fall, neuc.65.6): pit marks belong to
+// recover/detour. Measured on the
 // landing cell centre, xz like near(). Same getNeighbors wrap shape as
 // jumpcost.js; installed once per Movements by movementsFor (body.js),
 // reading ctx live, so a fresh mark steers the next plan.
@@ -233,7 +255,7 @@ function goalXZ(bot) {
   return null
 }
 
-// Live water-wide marks as { x, z, lim }: a landing closer than lim to the
+// Live water-wide and fall marks as { x, z, lim }: a landing closer than lim to the
 // centre costs. Hot path (once per A* expansion): no copies of the store.
 function wideSpots(ctx, t, feet, goal) {
   const ring = (s, p) => (p ? Math.floor(Math.hypot(s.x - p.x, s.z - p.z)) : Infinity)
@@ -243,10 +265,10 @@ function wideSpots(ctx, t, feet, goal) {
   for (const s of mem.spots) {
     if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
     const r = spotRadius(s)
-    if (r < WATER_RADIUS) continue
+    if (r < WATER_RADIUS && !s.fall) continue
     out.push({ x: s.x, z: s.z, lim: Math.min(r, ring(s, feet), ring(s, goal)) })
   }
   return out
 }
 
-module.exports = { addPathCost, PATH_COST, WATER_BLOCKS, mark, near, covers, spots, prune, count, clear, markWaterDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, MAX_RADIUS }
+module.exports = { addPathCost, PATH_COST, WATER_BLOCKS, mark, near, covers, spots, prune, count, clear, markWaterDeath, markFallDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, FALL_RADIUS, MAX_RADIUS }
