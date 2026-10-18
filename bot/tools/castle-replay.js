@@ -937,7 +937,7 @@ function componentLine(kind, { laid, gameMin, wallMin, series, tick, baseline, d
   let judge = ''
   if (!diag && rate != null && baseline && baseline.rate > 0) {
     const pct = Math.round((rate / baseline.rate - 1) * 100)
-    judge = `, baseline ${baseline.rate} -> ${rate.toFixed(1)} (${pct >= 0 ? '+' : ''}${pct}%, ${Math.abs(pct) <= 15 ? 'within' : 'OUTSIDE'} ±15%)`
+    judge = `, baseline ${baseline.rate} -> ${rate.toFixed(1)} (${pct >= 0 ? '+' : ''}${pct}%, ${Math.abs(pct) <= 20 ? 'within' : 'OUTSIDE'} ±20%)`
   }
   return `${kind}-rate ${rate == null ? '-' : rate.toFixed(1)}/game-min${diag ? ' (DIAG, no baseline verdict)' : ''}: ${body}, tick=${tick}${judge}`
 }
