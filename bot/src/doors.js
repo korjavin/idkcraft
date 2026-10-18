@@ -440,6 +440,15 @@ function adoptPassedGates(bot, ctx, bp) {
 // (the gate's box is mid-cell), so Baritone reads it as standing in the gate
 // cell and walks into the panel forever. A shut gate under the feet for
 // GATE_FEET_MS is opened here; the adopt step then shuts it once past.
+// Hand doors, v2 only (idkcraft-da2f): the same blind spot. A shut door's
+// panel sits on one cell edge (facing=north: the south edge, so a north-wall
+// house door shuts on its interior side). Walked in from the open side, the
+// body stands in the cell with the panel ahead. Baritone never clicks the door
+// in its own cell, and the bridge no-ops door clicks mid-walk
+// (bridge/look.js), so nothing opens it: the craft/beds house-table walk
+// wedged there (gallery rig, feet+head oak_door). The door stays open after
+// this, like any door Baritone opens itself. v1 keeps openNextDoor's
+// in-doorway seed.
 function openGateUnderFeet(bot, ctx, bp) {
   const at = new Vec3(Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z))
   const b = bot.blockAt && bot.blockAt(at)
@@ -447,7 +456,8 @@ function openGateUnderFeet(bot, ctx, bp) {
   // An idle body (parked, home-legs) never opens a gate; the dwell restarts on
   // resume. v2 mine/build walk with isMoving() false by design, so a live one counts.
   const busy = executorMoving(bot) || !!(bot._mine && !bot._mine.settled) || bot._build != null
-  if (!busy || !b || !isHandGate(b.name) || doorOpen(b)) { ctx.gateFeetSince = null; return }
+  const kind = b && (isHandGate(b.name) || (process.env.BOT_BODY === 'baritone' && isHandDoor(b.name)))
+  if (!busy || !kind || doorOpen(b)) { ctx.gateFeetSince = null; return }
   const now = Date.now()
   const s = ctx.gateFeetSince
   if (!s || s.key !== key) { ctx.gateFeetSince = { key, t: now }; return }
