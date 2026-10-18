@@ -390,7 +390,12 @@ describe('g0z.2 castle executor', () => {
     const deep = blueprint.absPlan(SITE, 0, 2).cells.find((c) => c.kind === 'dig' && c.dy === -2)
     assert.equal(place({ position: deep }), 100, 'bottom moat layer too')
     const ground = blueprint.absPlan(SITE, 0, 2).cells.find((c) => c.kind !== 'dig' && c.dy === 0)
-    assert.equal(place({ position: { x: ground.x, y: SITE.y - 1, z: ground.z } }), 0, 'terrain under a non-dig cell stays free')
+    const terrain = { position: { x: ground.x, y: SITE.y - 1, z: ground.z } }
+    // g0z.63: the mock completed the castle; its apron vetoes every other
+    // step, the castle step keeps the box/moat rules only.
+    assert.equal(place(terrain), 100, 'complete castle apron')
+    ctx.step = 'castle'
+    assert.equal(place(terrain), 0, 'terrain under a non-dig cell stays free')
     assert.equal(bot.calls.digs.length, 1)
     assert.deepEqual(ctx.castleRedig[`2:${m.idx}`], { digs: 1, blocks: 0 }, 'normal dig path counts one dig')
     assert.deepEqual(ctx.castle.blocked, {})

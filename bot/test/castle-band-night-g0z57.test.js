@@ -169,7 +169,9 @@ describe('g0z.57 castle band night: inside the castle or its house, never at the
     const walk = ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk
     assert.ok(walk, JSON.stringify(logs))
     assert.equal(castle.nightBand(ctx.castle, walk), false, `spot outside the band: ${JSON.stringify(walk)}`)
-    assert.ok(Math.hypot(walk.x - 11, walk.z - (SITE.z + D + 1)) <= 8, 'the nearest such spot, not a march')
+    // g0z.63: and outside the complete castle's 16 apron (pillar/cap refused there).
+    assert.equal(castle.apronOf(ctx.castle, walk), false, `spot outside the apron: ${JSON.stringify(walk)}`)
+    assert.ok(Math.hypot(walk.x - 11, walk.z - (SITE.z + D + 1)) <= 16, 'the nearest such spot, not a march')
     assert.equal(ctx.recovery == null || ctx.recovery.action !== 'pillar_up', true, 'no pillar on the ring')
   })
 })

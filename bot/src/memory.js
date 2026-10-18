@@ -729,34 +729,47 @@ function saveThrottled(bot, ctx, now) {
   }
 }
 
-// Peer castle (idkcraft-g0z.59): v2 keeps no castle of its own, so the
-// complete v2+ castle in the peer bot's file (BOT_CASTLE_PEER, a username,
-// next to this bot's file on the shared volume) of the same world is READ,
-// never written, into ctx.peerCastle — only the night residence reads it
-// (residence.nightHome, goal castleBandHome); it never becomes ctx.castle,
-// so no castle work, residence switch or save touches it. Re-read at most
-// once per SAVE_MIN_MS: a castle the peer completes later lands without a
-// restart. Unset, missing or other-world: null.
+// Known castles (idkcraft-g0z.59, g0z.63): every other bot's file on the
+// shared volume (the dir of this bot's file) is READ, never written; the
+// complete v2+ castles of the same world land in ctx.knownCastles =
+// [ctx.castle?, ...peers] (own first) — the castle apron guards
+// (castle.inCastleApron) fire around all of them, so a swarm helper or V2
+// never pillars beside a castle it does not own. ctx.peerCastle stays the
+// BOT_CASTLE_PEER entry, which only the night residence reads
+// (residence.nightHome, goal castleBandHome); neither becomes ctx.castle,
+// so no castle work, residence switch or save touches them. Re-read at most
+// once per SAVE_MIN_MS: a castle a peer completes later lands without a
+// restart. A half-written or other-world file reads nothing.
 let peerAt = 0
-function refreshPeerCastle(bot, ctx, now, env) {
+function refreshKnownCastles(bot, ctx, now, env) {
   try {
     const t = typeof now === 'number' ? now : Date.now()
     if (!ctx || t - peerAt < SAVE_MIN_MS) return
     peerAt = t
     const e = env || process.env
-    const peer = typeof e.BOT_CASTLE_PEER === 'string' ? e.BOT_CASTLE_PEER : ''
+    const peer = typeof e.BOT_CASTLE_PEER === 'string' && e.BOT_CASTLE_PEER ? `${safeName(e.BOT_CASTLE_PEER)}.json` : ''
     const own = fileFor(e, bot && bot.username)
-    const f = path.join(path.dirname(own), `${safeName(peer)}.json`)
-    let c = null
-    if (peer && f !== own) {
+    const dir = path.dirname(own)
+    const world = worldKey(bot)
+    const known = ctx.castle && ctx.castle.site ? [ctx.castle] : []
+    let pc = null
+    let names = []
+    try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')).sort() } catch (_) { names = [] }
+    for (const n of names) {
+      const f = path.join(dir, n)
+      if (f === own) continue
+      let c = null
       try {
         const doc = readDoc(f)
-        const world = worldKey(bot)
         if (doc && doc.v === VERSION && world && doc.world === world) c = castleOf(doc.castle)
       } catch (_) { c = null }
+      if (!c || c.phase !== 'complete' || !(c.blueprintVersion >= 2)) continue
+      known.push(c)
+      if (n === peer) pc = c
     }
-    ctx.peerCastle = c && c.phase === 'complete' && c.blueprintVersion >= 2 ? c : null
-  } catch (_) { /* peer best-effort */ }
+    ctx.knownCastles = known
+    ctx.peerCastle = pc
+  } catch (_) { /* peers best-effort */ }
 }
 
-module.exports = { save, restore, hasFlat, saveThrottled, refreshPeerCastle, fileFor, worldKey, SAVE_MIN_MS, VISITED_MAX, HOMES_MAX }
+module.exports = { save, restore, hasFlat, saveThrottled, refreshKnownCastles, fileFor, worldKey, SAVE_MIN_MS, VISITED_MAX, HOMES_MAX }

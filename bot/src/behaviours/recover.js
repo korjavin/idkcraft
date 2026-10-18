@@ -1094,7 +1094,9 @@ function issuePillarPlace(bot, ctx, st) {
   // place-error: the menu falls through, shelter digs in, the spot bans
   // (noteRecoverFail); not episode-latched, so walking out of the yard
   // re-enables the pillar. A moat pit (y < site.y) is below the ring.
-  if (ctx && ctx.castle && castle.yardRing(ctx.castle, { x: fx, y: fy, z: fz })) return 'place-protected'
+  // g0z.63: the apron of every known complete castle refuses alike.
+  const cell = { x: fx, y: fy, z: fz }
+  if (ctx && ((ctx.castle && castle.yardRing(ctx.castle, cell)) || castle.inCastleApron(ctx, cell))) return 'place-protected'
   // Equip first: mineflayer throws 'must be holding an item to place' on
   // an empty hand and the server refuses a held tool (prod 2026-09-27: 67
   // pillar_ups, 0 placed). Prefer the held stack: the fast trigger
@@ -1332,8 +1334,11 @@ function digInRun(bot, ctx, st) {
   {
     const site = ctx && ctx.castle && ctx.castle.site
     const cy = Math.floor(bp.y) + 2
-    if (site && typeof site.y === 'number' && cy > site.y &&
-      castle.yardRing(ctx.castle, { x: Math.floor(bp.x), y: cy, z: Math.floor(bp.z) })) return 'failed:place-protected'
+    const cap = { x: Math.floor(bp.x), y: cy, z: Math.floor(bp.z) }
+    if (site && typeof site.y === 'number' && cy > site.y && castle.yardRing(ctx.castle, cap)) return 'failed:place-protected'
+    // g0z.63: the same flush rule in the apron of every known castle.
+    const apron = castle.inCastleApron(ctx, cap)
+    if (apron && cy > apron.site.y) return 'failed:place-protected'
   }
   const item = findScaffoldItem(bot)
   if (!item) return ++st.capWait > DIG_IN_CAP_WAIT_TICKS ? 'failed:no-cap' : 'running'

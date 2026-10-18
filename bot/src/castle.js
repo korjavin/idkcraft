@@ -675,6 +675,47 @@ function nightBand(state, pos) {
   } catch (_) { return false }
 }
 
+// Castle apron (idkcraft-g0z.63): the site box grown by r in x and z,
+// site.y - NIGHT_BAND_BELOW <= y <= site.y + YARD_TOP. No A* scaffolding,
+// recover pillar or dig-in cap there around ANY known complete castle (prod:
+// respawns at the world spawn 16 from IdkBot's box pillared, swarm helpers
+// pillared beside V2's castle). The dig ban (yardDigBan) does NOT widen:
+// digging terrain 10 from a castle is normal work. ponytail: a v1 bot
+// wedged in a pit inside the apron relies on sidestep/dig_step; a pit
+// deeper than NIGHT_BAND_BELOW is below the floor and re-enables the
+// pillar. Pure.
+const CASTLE_APRON = 16
+function apronOf(state, pos, r = CASTLE_APRON) {
+  try {
+    const site = state && state.site
+    if (!site || typeof site.x !== 'number' || !pos || typeof pos.x !== 'number') return false
+    const x = Math.floor(pos.x), z = Math.floor(pos.z)
+    const { w, d } = siteDimensions(state.rot | 0, state.blueprintVersion)
+    if (!(x >= site.x - r && x < site.x + w + r && z >= site.z - r && z < site.z + d + r)) return false
+    if (typeof pos.y !== 'number') return true // XZ-only query (the shelter walk-off)
+    const y = Math.floor(pos.y)
+    return y >= site.y - NIGHT_BAND_BELOW && y <= site.y + YARD_TOP
+  } catch (_) { return false }
+}
+// Every known castle (ctx.castle live first, then memory.refreshKnownCastles'
+// ctx.knownCastles): the first state fn(state, own) takes, else null. Pure.
+function anyCastle(ctx, fn) {
+  const own = ctx && ctx.castle && ctx.castle.site ? ctx.castle : null
+  const list = own ? [own] : []
+  for (const c of (ctx && Array.isArray(ctx.knownCastles) ? ctx.knownCastles : [])) if (c && c !== own && c.site) list.push(c)
+  return list.find((c) => { try { return !!fn(c, c === own) } catch (_) { return false } }) || null
+}
+// The v1 place guards' one predicate: the complete known castle whose
+// apron holds pos, else null. The own castle's castle step (site walks,
+// repairs), its house build step (build.js towers to wall/roof cells by
+// the castle) and an unfinished own castle (castlefetch/gather around a
+// site in progress) keep the yard ring only. ponytail: every other A*
+// placement in the apron is vetoed too, flat's at/below-level bridging
+// included (flat's own fill places bypass the seam).
+function inCastleApron(ctx, pos) {
+  return anyCastle(ctx, (c, own) => c.phase === 'complete' && !(own && (ctx.step === 'castle' || ctx.step === 'build')) && apronOf(c, pos))
+}
+
 // Fence band (idkcraft-g0z.44): cells within 1 of the fence ring line (the
 // box edges), both sides, dy 0..3 — the post-complete sweep band. Absolute
 // {x,y,z} cells, deduped; rot-free (the ring line is the box edge). Pure.
@@ -782,6 +823,10 @@ module.exports = {
   yardRing,
   nightBand,
   NIGHT_BAND,
+  CASTLE_APRON,
+  apronOf,
+  anyCastle,
+  inCastleApron,
   fenceBandCells,
   ownBandCells,
   onSite,

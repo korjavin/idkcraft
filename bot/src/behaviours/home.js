@@ -1112,14 +1112,22 @@ const SHELTER_CASTLE_R = 24
 function offCastleSpot(bot, ctx) {
   try {
     const st = ctx && ctx.castle
-    if (!st || !st.site || typeof st.site.x !== 'number') return null
-    const { w, d } = castleData.siteDimensions(st.rot | 0, st.blueprintVersion)
+    const own = st && st.site && typeof st.site.x === 'number' ? st : null
+    const { w, d } = own ? castleData.siteDimensions(own.rot | 0, own.blueprintVersion) : { w: 0, d: 0 }
     const gap2 = SHELTER_CASTLE_GAP * SHELTER_CASTLE_GAP
-    return walkOffSpot(bot, ctx, (ax, az) => {
-      const ox = ax < st.site.x ? st.site.x - ax : ax >= st.site.x + w ? ax - (st.site.x + w - 1) : 0
-      const oz = az < st.site.z ? st.site.z - az : az >= st.site.z + d ? az - (st.site.z + d - 1) : 0
+    const gap = (ax, az) => {
+      if (!own) return true
+      const ox = ax < own.site.x ? own.site.x - ax : ax >= own.site.x + w ? ax - (own.site.x + w - 1) : 0
+      const oz = az < own.site.z ? own.site.z - az : az >= own.site.z + d ? az - (own.site.z + d - 1) : 0
       return ox * ox + oz * oz >= gap2
-    })
+    }
+    // g0z.63: and outside the apron of every known castle (the pillar and
+    // the cap are refused there), XZ only — at the castle's own level. The
+    // search reaches out of the apron from a 31x27 box's centre (16 + 17);
+    // no such spot keeps the old gap-6 walk-off from the own box.
+    const clear = (ax, az) => !castleData.inCastleApron(ctx, { x: ax, z: az })
+    return walkOffSpot(bot, ctx, (ax, az) => clear(ax, az) && gap(ax, az), castleData.CASTLE_APRON + 17) ||
+      (own ? walkOffSpot(bot, ctx, gap) : null)
   } catch (_) { return null }
 }
 // Gohome-failure walk-off (idkcraft-neuc.65.3): a gohome that failed
@@ -1146,9 +1154,9 @@ function refailSpot(bot, ctx) {
     return walkOffSpot(bot, ctx, (ax, az) => far(ax + 0.5, az + 0.5))
   } catch (_) { return null }
 }
-// The nearest standable feet cell within SHELTER_CASTLE_R that keep(x, z)
+// The nearest standable feet cell within r (SHELTER_CASTLE_R) that keep(x, z)
 // takes and whose fresh dig the shared veto allows (the walk-offs above).
-function walkOffSpot(bot, ctx, keep) {
+function walkOffSpot(bot, ctx, keep, r = SHELTER_CASTLE_R) {
   try {
     const bp = botPos(bot)
     if (!bp || typeof bot.blockAt !== 'function') return null
@@ -1156,8 +1164,8 @@ function walkOffSpot(bot, ctx, keep) {
     const free = (b) => !!b && b.boundingBox === 'empty'
     let best = null
     let bd = Infinity
-    for (let dx = -SHELTER_CASTLE_R; dx <= SHELTER_CASTLE_R; dx++) {
-      for (let dz = -SHELTER_CASTLE_R; dz <= SHELTER_CASTLE_R; dz++) {
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
         const ax = x0 + dx; const az = z0 + dz
         if (!keep(ax, az)) continue
         for (let dy = 1; dy >= -4; dy--) { // nearestDry's climbable band
@@ -1348,8 +1356,9 @@ function shelter(bot, ctx, target, state) {
   // fence ring — creepers follow the bot there and blow the ring. Walk out
   // of the band first (offCastleSpot: 6+ from the box, the band's edge) and
   // dig in there; one shot per episode, like the vmzq.48 walk-off below.
-  // No ground out there keeps the old pillar in place.
-  if (!st.pillared && !st.bandTried && !st.offCastle && !ctx.recovery && !st.dig && castleData.nightBand(ctx.castle, botPos(bot))) {
+  // No ground out there keeps the old pillar in place. g0z.63: the apron
+  // of any known complete castle (a peer's too) walks off the same way.
+  if (!st.pillared && !st.bandTried && !st.offCastle && !ctx.recovery && !st.dig && (castleData.nightBand(ctx.castle, botPos(bot)) || castleData.inCastleApron(ctx, botPos(bot)))) {
     st.bandTried = true
     let spot = null
     try { spot = offCastleSpot(bot, ctx) } catch (_) { spot = null }

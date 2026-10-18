@@ -122,11 +122,15 @@ const SEED_DECOR_EXCEPT = (process.env.CASTLE_SEED_DECOR_EXCEPT || '').split(','
 // the home — prod's 'build here' by the castle; peer = the castle is never
 // the bot's own: it lands in a peer memory file (BOT_CASTLE_PEER, v2's
 // read-only path) and the same unbuilt house is the home. Either way the
-// residence nights judge the castle as the night home.
+// residence nights judge the castle as the night home. apron (g0z.63) =
+// peer without BOT_CASTLE_PEER: a swarm helper's view, the castle is only a
+// known castle (no night home), the unbuilt house sits in its apron, and the
+// verdict adds apron-litter=<own non-plan blocks left in the apron>.
 const NIGHT_HOME = process.env.CASTLE_NIGHT_HOME || ''
-if (!['', 'house', 'peer'].includes(NIGHT_HOME) || (NIGHT_HOME && SEED !== 'complete')) {
-  throw new Error(`CASTLE_NIGHT_HOME: want ''|house|peer with CASTLE_SEED=complete, got ${JSON.stringify(NIGHT_HOME)}`)
+if (!['', 'house', 'peer', 'apron'].includes(NIGHT_HOME) || (NIGHT_HOME && SEED !== 'complete')) {
+  throw new Error(`CASTLE_NIGHT_HOME: want ''|house|peer|apron with CASTLE_SEED=complete, got ${JSON.stringify(NIGHT_HOME)}`)
 }
+const PEER_FILE = NIGHT_HOME === 'peer' || NIGHT_HOME === 'apron'
 // Bare night (idkcraft-neuc.65.3): no castle order and no seed — the guide
 // only chats `autonomous on`, so the bot lives from fresh memory with no
 // active castle (home none, then an unbuilt site): prod family A's nights.
@@ -1438,26 +1442,56 @@ async function main() {
       origLog(`CASTLE-RIG seeded decor: ${seeded}/${decor.length} cells (panes + banners + upper fence + attic + blast + gate${SEED_DECOR_EXCEPT.length > 0 ? ` except ${SEED_DECOR_EXCEPT.join(',')}` : ''})`)
     }
     if (!tickCtx()) fail('seed-castle', 'no follower ctx')
-    if (NIGHT_HOME === 'peer') {
+    if (PEER_FILE) {
       // g0z.59: the castle only in a peer's memory file — never ctx.castle.
       const peer = `CastlePeer${(process.env.CASTLE_RIG_ID || '0').replace(/[^a-z0-9]/g, '')}`
       const peerFile = path.join(path.dirname(process.env.BOT_MEMORY_FILE), `${peer}.json`)
       const world = require('../src/memory').worldKey(follower)
       if (!world) fail('seed-castle', 'no world key for the peer file')
-      fs.writeFileSync(peerFile, JSON.stringify({ v: 1, world, castle: { ...st, phase: 'complete', blocked: {}, parked: false } }))
-      process.env.BOT_CASTLE_PEER = peer
-      origLog(`CASTLE-RIG peer castle: ${peerFile} (BOT_CASTLE_PEER=${peer}), the bot keeps no castle`)
+      const peerDoc = (w) => JSON.stringify({ v: 1, world: w, castle: { ...st, phase: 'complete', blocked: {}, parked: false } })
+      fs.writeFileSync(peerFile, peerDoc(world))
+      // g0z.63: --night prod moves the world spawn after this seed, which
+      // re-keys the bot's world (memory.worldKey) and would read the peer
+      // as another world. Prod's spawn is fixed: follow the key here.
+      let peerWorld = world
+      setInterval(() => {
+        try {
+          const w = require('../src/memory').worldKey(follower)
+          if (w && w !== peerWorld) { fs.writeFileSync(peerFile, peerDoc(w)); peerWorld = w; origLog(`CASTLE-RIG peer castle re-keyed: ${w}`) }
+        } catch (_) { /* re-key best-effort */ }
+      }, 5000).unref()
+      if (NIGHT_HOME === 'apron') {
+        // Which step placed each own block (the apron-litter diagnosis).
+        const seenK = new Set()
+        setInterval(() => {
+          try {
+            const c = tickCtx()
+            if (!c || !(c.placedByBot instanceof Set)) return
+            for (const k of c.placedByBot) {
+              if (seenK.has(k)) continue
+              seenK.add(k)
+              const [x, y, z] = k.split(',').map(Number)
+              const inA = require('../src/castle').apronOf(st, { x, y, z })
+              origLog(`CASTLE-RIG placed ${k} ${(c.placedNames instanceof Map && c.placedNames.get(k)) || '?'} step=${c.step} rec=${c.recovery ? c.recovery.action : '-'} apron=${inA ? 'in' : 'out'} known=${Array.isArray(c.knownCastles) ? c.knownCastles.length : 0}`)
+            }
+          } catch (_) { /* diag best-effort */ }
+        }, 250).unref()
+      }
+      if (NIGHT_HOME === 'peer') process.env.BOT_CASTLE_PEER = peer
+      else delete process.env.BOT_CASTLE_PEER
+      origLog(`CASTLE-RIG peer castle: ${peerFile} (BOT_CASTLE_PEER=${process.env.BOT_CASTLE_PEER || ''}), the bot keeps no castle`)
     } else {
       tickCtx().castle = { ...st, phase: 'complete', blocked: {}, parked: false }
     }
   }
   if (tickCtx()) tickCtx().paused = false
-  if (SEED === 'complete' && NIGHT_HOME === 'peer') {
+  if (SEED === 'complete' && PEER_FILE) {
     // Settles past one refresh window (memory.SAVE_MIN_MS) so the first
     // dusk already reads it.
     let seen = false
     for (let i = 0; i < 120 && !seen; i++) {
-      seen = !!(tickCtx() && tickCtx().peerCastle)
+      const c = tickCtx()
+      seen = !!(c && (NIGHT_HOME === 'peer' ? c.peerCastle : Array.isArray(c.knownCastles) && c.knownCastles.length))
       if (!seen) await sleep(500)
     }
     if (!seen) fail('seed-castle', 'the bot never read the peer castle')
@@ -2217,6 +2251,30 @@ async function main() {
     if (n > 0) origLog(`CASTLE-RIG yard-litter: ${n} own blocks left in the fence band`)
     idle.setYardLitter(n)
   }
+  // Apron litter (g0z.63): the non-owner's own blocks (placedByBot) left
+  // solid in the known castle's apron, off its plan — read back via rcon
+  // like the yard litter.
+  let apronTag = ''
+  if (NIGHT_HOME === 'apron') {
+    const c = tickCtx()
+    const known = c && Array.isArray(c.knownCastles) ? c.knownCastles[0] : null
+    const bp = require('../src/castle')
+    const at = known ? bp.absPlan(known.site, known.rot, known.blueprintVersion).at : new Map()
+    let n = 0
+    const names = {}
+    for (const k of (c && c.placedByBot instanceof Set ? c.placedByBot : [])) {
+      const [x, y, z] = k.split(',').map(Number)
+      if (!known || !bp.apronOf(known, { x, y, z }) || at.has(k)) continue
+      const out = await rcon(`execute if block ${x} ${y} ${z} air`).catch((e) => fail('apron-litter', e.message))
+      if (!/Test failed/.test(out)) continue
+      n++
+      const nm = (c.placedNames instanceof Map && c.placedNames.get(k)) || '?'
+      names[nm] = (names[nm] || 0) + 1
+      if (n <= 40) origLog(`CASTLE-RIG apron-litter cell ${x} ${y} ${z} ${nm}`)
+    }
+    const hist = Object.entries(names).map(([k, v]) => `${k}:${v}`).join(',')
+    apronTag = `, apron-litter=${known ? n : 'no-known-castle'}${hist ? `(${hist})` : ''}`
+  }
   // Stairs facing (g0z.47): every v3 stairs cell read back via rcon — laid
   // (any stair) vs laid with the plan facing, half bottom. Build runs, and
   // upgrade runs (g0z.48), where the facing-ok count joins the verdict.
@@ -2309,7 +2367,7 @@ async function main() {
   // g0z.58: regress counts the whole window (a v2 tunnel through the wall
   // logs one), escaped/home are seconds from window open.
   const startTag = start ? `, start=${start.d.join(',')}${start.cell ? `/${start.cell}` : ''}, escaped@${startEscS == null ? 'no' : `${startEscS}s`}, home@${startHomeS == null ? 'no' : `${startHomeS}s`}, regress=${seen.regressAt.filter((at) => at >= t0).length}` : ''
-  const nightTag = (night ? night.tag() : '') + seedTag + startTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + repairTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '')
+  const nightTag = (night ? night.tag() : '') + seedTag + startTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + repairTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '') + apronTag
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}${tickTag}`
   let compLine = null
   if (COMPONENT) {
