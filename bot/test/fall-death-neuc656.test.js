@@ -16,6 +16,10 @@ const { handleDeath } = require('../src/index')
 
 const CELL = { x: -84.5, y: 82, z: -3.5 }
 
+// Fake mirrors what the death path reads: bot._tickerCtx (index.js:1774
+// handleDeath, :1654 deathHostiles), bot.entity.position (danger.js:159
+// markFallDeath), players/entities/health for buildState (perception.js:186),
+// blockAt for markWaterDeath (danger.js:129), time/spawnPoint for deathFacts.
 function deathBot(at, ctx = {}) {
   const p = { ...at, distanceTo: (q) => Math.hypot(at.x - q.x, at.y - q.y, at.z - q.z) }
   const bot = {
@@ -94,6 +98,8 @@ describe('neuc.65.6 fall death marks a small danger disc', () => {
       const now = Date.now()
       const ctx = {}
       danger.markFallDeath(deathBot(CELL).bot, ctx, 0, now)
+      // save/restore read only bot.username (memory.js:542 fileFor) and
+      // bot.spawnPoint (memory.js:48 world key) — the memory.test.js botAt shape.
       assert.equal(memory.save({ username: 'MemBot', spawnPoint: { x: 0, y: 64, z: 0 } }, ctx, file, now), true)
       const ctx2 = {}
       memory.restore({ username: 'MemBot', spawnPoint: { x: 0, y: 64, z: 0 } }, ctx2, file, now)

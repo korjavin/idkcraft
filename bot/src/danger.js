@@ -268,9 +268,10 @@ function wideSpots(ctx, t, feet, goal) {
     if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
     const r = spotRadius(s)
     if (r < WATER_RADIUS && !s.fall) continue
-    // neuc.65.6: fall discs keep the goal-ring shrink too — exempt, a disc on
-    // the house entrance makes the door the deepest AvoidGoal node (PROTOCOL
-    // 'Danger discs on goals') and gohome fails cannot-reach-home all night.
+    // neuc.65.6: fall discs shrink with the goal ring like water discs. A
+    // whole disc on the house entrance would make the door the deepest
+    // AvoidGoal node (PROTOCOL 'Danger discs on goals') and gohome would fail
+    // cannot-reach-home all night; shrunk, a doorstep goal reads lim 0.
     out.push({ x: s.x, z: s.z, lim: Math.min(r, ring(s, feet), ring(s, goal)) })
   }
   return out
