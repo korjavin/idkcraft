@@ -104,6 +104,9 @@ public final class WsServer {
             try {
                 Socket sock = server.accept();
                 sock.setKeepAlive(true);
+                // neuc.67.1.1: replies are small request/response frames; Nagle
+                // held each one behind the peer's delayed ACK (~40 ms per RPC).
+                sock.setTcpNoDelay(true);
                 Conn conn = new Conn(sock);
                 conns.add(conn);
                 conn.start();
@@ -340,26 +343,31 @@ public final class WsServer {
             if (sock.isClosed()) {
                 throw new EOFException("closed");
             }
-            OutputStream out = sock.getOutputStream();
-            out.write(0x80 | opcode);
-            if (payload.length < 126) {
-                out.write(payload.length);
-            } else if (payload.length < 65536) {
-                out.write(126);
-                out.write((payload.length >>> 8) & 0xFF);
-                out.write(payload.length & 0xFF);
+            // One write per frame (neuc.67.1.1): header and payload leave in
+            // one segment instead of a 2-10 byte header segment first.
+            int hl = payload.length < 126 ? 2 : payload.length < 65536 ? 4 : 10;
+            byte[] frame = new byte[hl + payload.length];
+            frame[0] = (byte) (0x80 | opcode);
+            if (hl == 2) {
+                frame[1] = (byte) payload.length;
+            } else if (hl == 4) {
+                frame[1] = 126;
+                frame[2] = (byte) (payload.length >>> 8);
+                frame[3] = (byte) payload.length;
             } else {
-                out.write(127);
+                frame[1] = 127;
                 // 64-bit length: the shift must be long — an int shift is
                 // masked mod 32 and wrote the 4-byte length twice, which
                 // strict ws clients reject (first hit by chunk.get replies,
                 // the first >64 KB frames on this socket, neuc.6).
                 long len = payload.length;
-                for (int i = 7; i >= 0; i--) {
-                    out.write((int) ((len >>> (8 * i)) & 0xFF));
+                for (int i = 0; i < 8; i++) {
+                    frame[2 + i] = (byte) (len >>> (8 * (7 - i)));
                 }
             }
-            out.write(payload);
+            System.arraycopy(payload, 0, frame, hl, payload.length);
+            OutputStream out = sock.getOutputStream();
+            out.write(frame);
             out.flush();
         }
 
