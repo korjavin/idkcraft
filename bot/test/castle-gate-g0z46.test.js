@@ -323,6 +323,8 @@ describe('doors: fence gates (g0z.46)', () => {
 
   it('v2 stall: a shut gate under the feet for GATE_FEET_MS is opened once', () => {
     const bot = {
+      // mirrors the v2 bridge pathfinder: isMoving: () => !!self._pathing (bridge/index.js:372); mineflayer's pathfinder.isMoving() is the v1 equivalent
+      pathfinder: { isMoving: () => true },
       entity: { position: new Vec3(0.5, 64, -1.9) }, // pressed against it: centre in the gate cell
       toggles: 0,
       blockAt: (p) => {
@@ -349,6 +351,125 @@ describe('doors: fence gates (g0z.46)', () => {
       now += 300
       doors.doorShutFast(bot, ctx)
       assert.equal(bot.toggles, 1, 'double toggle')
+    } finally {
+      console.log = log
+      Date.now = realNow
+    }
+  })
+
+  it('an idle body in a shut gate cell never opens it (moving guard)', () => {
+    const bot = {
+      // idle bridge: isMoving: () => !!self._pathing with _pathing false (bridge/index.js:372)
+      pathfinder: { isMoving: () => false },
+      entity: { position: new Vec3(0.5, 64, -1.9) }, // pressed against it: centre in the gate cell
+      toggles: 0,
+      blockAt: (p) => {
+        const at = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+        if (at.x === 0 && at.y === 64 && at.z === -2) return { name: 'oak_fence_gate', position: at, getProperties: () => ({ open: false, facing: 'south' }) }
+        return { name: 'air', position: at, getProperties: () => ({}) }
+      },
+      activateBlock: async () => { bot.toggles++ },
+    }
+    const ctx = {}
+    const log = console.log
+    const realNow = Date.now
+    let now = 1e6
+    Date.now = () => now
+    console.log = () => {}
+    try {
+      for (let i = 0; i < 5; i++) { doors.doorShutFast(bot, ctx); now += 600 }
+      assert.equal(bot.toggles, 0, 'idle body opened the gate')
+    } finally {
+      console.log = log
+      Date.now = realNow
+    }
+  })
+
+  it('a v2 mine walking with isMoving() false still opens a gate under the feet', () => {
+    const bot = {
+      pathfinder: { isMoving: () => false }, // bridge/index.js:372; a mine sets _pathing=false on purpose (bridge/mine.js:219)
+      // live mine latch: bot._mine = st with st.settled false (bridge/mine.js:164); settle() sets settled true and nulls it (mine.js:172-175)
+      _mine: { settled: false },
+      entity: { position: new Vec3(0.5, 64, -1.9) }, // pressed against it: centre in the gate cell
+      toggles: 0,
+      blockAt: (p) => {
+        const at = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+        if (at.x === 0 && at.y === 64 && at.z === -2) return { name: 'oak_fence_gate', position: at, getProperties: () => ({ open: false, facing: 'south' }) }
+        return { name: 'air', position: at, getProperties: () => ({}) }
+      },
+      activateBlock: async () => { bot.toggles++ },
+    }
+    const ctx = {}
+    const log = console.log
+    const realNow = Date.now
+    let now = 1e6
+    Date.now = () => now
+    console.log = () => {}
+    try {
+      doors.doorShutFast(bot, ctx)
+      now += 1100
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 1, 'live mine did not count as busy')
+    } finally {
+      console.log = log
+      Date.now = realNow
+    }
+  })
+
+  it('a settled v2 mine is not busy: an idle body never opens the gate', () => {
+    const bot = {
+      pathfinder: { isMoving: () => false }, // bridge/index.js:372; a mine sets _pathing=false on purpose (bridge/mine.js:219)
+      // live mine latch: bot._mine = st with st.settled false (bridge/mine.js:164); settle() sets settled true (mine.js:172) and nulls bot._mine (mine.js:175); a stale settled latch must not count
+      _mine: { settled: true },
+      entity: { position: new Vec3(0.5, 64, -1.9) }, // pressed against it: centre in the gate cell
+      toggles: 0,
+      blockAt: (p) => {
+        const at = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+        if (at.x === 0 && at.y === 64 && at.z === -2) return { name: 'oak_fence_gate', position: at, getProperties: () => ({ open: false, facing: 'south' }) }
+        return { name: 'air', position: at, getProperties: () => ({}) }
+      },
+      activateBlock: async () => { bot.toggles++ },
+    }
+    const ctx = {}
+    const log = console.log
+    const realNow = Date.now
+    let now = 1e6
+    Date.now = () => now
+    console.log = () => {}
+    try {
+      for (let i = 0; i < 5; i++) { doors.doorShutFast(bot, ctx); now += 600 }
+      assert.equal(bot.toggles, 0, 'settled mine counted as busy')
+    } finally {
+      console.log = log
+      Date.now = realNow
+    }
+  })
+
+  it('a v2 build walking with isMoving() false still opens a gate under the feet', () => {
+    const bot = {
+      pathfinder: { isMoving: () => false }, // bridge/index.js:372
+      // live build latch: bot._build = st (bridge/build.js:130), nulled on settle (bridge/build.js:126)
+      _build: {},
+      entity: { position: new Vec3(0.5, 64, -1.9) }, // pressed against it: centre in the gate cell
+      toggles: 0,
+      blockAt: (p) => {
+        const at = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+        if (at.x === 0 && at.y === 64 && at.z === -2) return { name: 'oak_fence_gate', position: at, getProperties: () => ({ open: false, facing: 'south' }) }
+        return { name: 'air', position: at, getProperties: () => ({}) }
+      },
+      activateBlock: async () => { bot.toggles++ },
+    }
+    const ctx = {}
+    const log = console.log
+    const realNow = Date.now
+    let now = 1e6
+    Date.now = () => now
+    console.log = () => {}
+    try {
+      doors.doorShutFast(bot, ctx)
+      now += 1100
+      doors.doorShutFast(bot, ctx)
+      assert.equal(bot.toggles, 1, 'live build did not count as busy')
     } finally {
       console.log = log
       Date.now = realNow

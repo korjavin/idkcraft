@@ -444,7 +444,10 @@ function openGateUnderFeet(bot, ctx, bp) {
   const at = new Vec3(Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z))
   const b = bot.blockAt && bot.blockAt(at)
   const key = doorKey(at.x, at.y, at.z)
-  if (!b || !isHandGate(b.name) || doorOpen(b)) { ctx.gateFeetSince = null; return }
+  // An idle body (parked, home-legs) never opens a gate; the dwell restarts on
+  // resume. v2 mine/build walk with isMoving() false by design, so a live one counts.
+  const busy = executorMoving(bot) || !!(bot._mine && !bot._mine.settled) || bot._build != null
+  if (!busy || !b || !isHandGate(b.name) || doorOpen(b)) { ctx.gateFeetSince = null; return }
   const now = Date.now()
   const s = ctx.gateFeetSince
   if (!s || s.key !== key) { ctx.gateFeetSince = { key, t: now }; return }
