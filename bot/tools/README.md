@@ -530,6 +530,51 @@ never drift. `RIG_ID=auto` takes the first free of `RIG_SLOTS` (default
 Each Paper takes ~1.5 GB; three fit Docker's 8 GB next to the stand. Runs
 from one worktree in parallel need distinct `REPLAY_OUT`.
 
+## Micro-rig (`REPLAY_KEEP=1`, idkcraft-vf8e.1)
+
+One scenario, one verdict, the server stays up — the inner loop for a
+skill attempt (human or LLM), not a gate:
+
+```sh
+# keeper: lock, reset, boot, run the spots once, then hold the rig up
+REPLAY_KEEP=1 RIG_ID=auto sh bot/tools/stuck-run.sh paper-base spots.json &
+# inner runs (any worktree), AFTER the keeper printed `kept: rig <id> up`:
+REPLAY_KEEP=1 RIG_ID=<id> sh bot/tools/stuck-run.sh paper-base spots.json
+```
+
+An inner call made before `kept:` finds no published rig and falls through
+to the normal path — with `RIG_ID=auto` that boots and keeps a SECOND rig.
+
+The keeper holds the rig lock and publishes the rig in `$RIG_LOCK/keep.env`
+(tag, container, port, v2/worker bridge env). A `REPLAY_KEEP=1` call that
+finds a live keeper on its slot (`RIG_ID=auto` = the first kept one) is an
+inner run: no lock (the RIG_LOCK_HELD contract), no world reset, no boot,
+no flake rerun — one fresh `stuck-replay.js` process (the bot code of the
+calling tree, reloaded), the same table/`BASELINE` lines and exit code as
+a gate run, then `micro-run: exit <rc> in <s>s`. Inner runs serialise on
+`$RIG_LOCK/run`. The arena reset is each spot's own prep/tp/kit — so only
+spots whose `prep` rebuilds the terrain they dig are repeatable (DUGPIT-*,
+S6-LEAD, the rig-built houses); a dug follow spot stays dug. The keeper
+tears down on INT/TERM or after `REPLAY_KEEP_IDLE` seconds (default 1800)
+with no inner run. `REPLAY_SKILLS_DIR=<dir>` exports `SKILLS_DIR` +
+`BOT_SKILLS=1` to the bot (keep mode only; read by the skill runtime,
+idkcraft-vf8e.2).
+
+Sabotage knob: `"sabotage": "<primitive>"` on a spot removes that
+`RECOVER_MENU` entry for its window only (validated against the menu), so
+a scenario can demand a new skill instead of the hand primitive — the
+hand sabotages above, as data. Any mode, gate runs included; the corpus
+carries none.
+
+Measured (2026-10-18, v1, DUGPIT-BARE on a kept rig): runs 2 and 3
+`micro-run: exit 0 in 72s` / `73s` (59 s window, `water_bucket 2/2`,
+`baseline: 1/1 ok`) vs ~2.5 min for the keeper's boot + first run;
+`sabotage: "water_up"` → sidestep fails, one page, `BASELINE DUGPIT-BARE …
+REGRESSION (unreached (was reached))`, exit 1 in 105 s — the
+`BUCKETS_NEEDED=3` outcome. Inner runs inherit the rig's world, so the
+follower's inventory from the last run is still there until the kit's
+`clear`.
+
 ## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
 
 ```sh

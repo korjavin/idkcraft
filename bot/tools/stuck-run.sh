@@ -15,7 +15,14 @@
 #   + 2 x letter index on RIG_ID=<a-z> (a=7780/7781); BODY_CLIENT the client
 #   container name, default idk-baritone-body[-<RIG_ID>] — per slot, so
 #   parallel v2 runs never collide, idkcraft-neuc.23. Judged against
-#   stuck-baseline-v2.json, idkcraft-neuc.15).
+#   stuck-baseline-v2.json, idkcraft-neuc.15),
+#   REPLAY_KEEP=1 (micro-rig, idkcraft-vf8e.1: the first call boots, runs
+#   the given spots once and KEEPS the rig up — idle teardown after
+#   REPLAY_KEEP_IDLE secs, default 1800, or on INT/TERM; later
+#   REPLAY_KEEP=1 calls on the same slot are inner runs on the live
+#   server, see the block below the lock helpers), REPLAY_SKILLS_DIR
+#   (keep mode only: exported to the bot as SKILLS_DIR + BOT_SKILLS=1).
+#   Unset REPLAY_KEEP = the gate run, unchanged.
 # Exit codes: 0 = baseline holds (incl. FLAKY: regressed spots held on the
 # one automatic rerun, see the flake protocol at the end), 1 = REGRESSION vs
 # the baseline (repeated on the rerun), 2 = environment failure (no START.sh/snapshot, rig never came up,
@@ -73,6 +80,48 @@ rig_try() { # $1 = lock dir; 0 = taken (a dead holder's lock is reclaimed)
   fi
   return 1
 }
+# Micro-rig (idkcraft-vf8e.1): REPLAY_KEEP=1 with a kept rig already up on
+# the slot (its keeper wrote $RIG_LOCK/keep.env and is alive) = an INNER run:
+# no lock (the keeper holds it — the RIG_LOCK_HELD=1 contract), no reset, no
+# boot, no flake rerun — one stuck-replay.js process (fresh bot code) over
+# the given spots on the live server, its own verdict and exit code. Inner
+# runs serialise on $RIG_LOCK/run. Each spot's prep/tp/kit is the arena reset.
+# RIG_ID=auto picks the first kept slot of RIG_SLOTS.
+if [ "${REPLAY_KEEP:-}" = 1 ]; then
+  _ks="${RIG_ID:-0}"; [ "$_ks" = auto ] && _ks="${RIG_SLOTS:-0 a b}"
+  for _s in $_ks; do
+    [ "$_s" = 0 ] && _s=
+    _kl="$LOCKBASE${_s:+-$_s}"
+    [ -f "$_kl/keep.env" ] || continue
+    KEEP_PID=; . "$_kl/keep.env"
+    { [ -n "$KEEP_PID" ] && kill -0 "$KEEP_PID" 2>/dev/null; } || continue
+    [ "${1:-paper-base}" = "$KEEP_VARIANT" ] || { echo "kept rig ${_s:-0} runs $KEEP_VARIANT, not ${1:-paper-base}"; exit 2; }
+    RIG_LOCK="$_kl/run"
+    until rig_try "$RIG_LOCK"; do
+      kill -0 "$KEEP_PID" 2>/dev/null || { echo "keeper $KEEP_PID died while waiting"; exit 2; }
+      sleep 2
+    done
+    echo $$ > "$RIG_LOCK/pid"
+    trap rig_release EXIT
+    trap 'exit 130' INT TERM
+    _t0=$(date +%s)
+    echo "micro-run: kept rig ${_s:-0} (keeper $KEEP_PID, tag $REPLAY_TAG)"
+    _here="$(dirname "$0")"
+    REPLAY_GITSHA="$(git -C "$_here/../.." rev-parse --short HEAD 2>/dev/null || echo '?')"
+    export REPLAY_GITSHA
+    case "${2:-}" in
+      '') ;;
+      /*) export REPLAY_SPOTS="$2" ;;
+      *) REPLAY_SPOTS="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; export REPLAY_SPOTS ;;
+    esac
+    [ -n "${3:-}" ] && export REPLAY_SECS="$3"
+    [ -n "${REPLAY_SKILLS_DIR:-}" ] && export SKILLS_DIR="$REPLAY_SKILLS_DIR" BOT_SKILLS=1
+    cd "$_here/.."
+    set +e; node tools/stuck-replay.js; rc=$?; set -e
+    echo "micro-run: exit $rc in $(( $(date +%s) - _t0 ))s"
+    exit "$rc"
+  done
+fi
 if [ "${RIG_LOCK_HELD:-}" != 1 ]; then
   _auto=; if [ "$RIG_ID" = auto ]; then _auto=1; _slots="${RIG_SLOTS:-0 a b}"; else _slots="${RIG_ID:-0}"; fi
   _waited=0
@@ -165,6 +214,7 @@ teardown() {
 }
 on_exit() { # EXIT only: the replay verdict (0/1) passes through, env exits stay 2
   rc=$?
+  if [ "${KEPT:-}" = 1 ]; then rm -f "$RIG_LOCK/keep.env"; fi # unpublish first: no inner run starts on a dying rig
   teardown
   rm -f "$RERUN"
   rig_release
@@ -178,6 +228,7 @@ on_exit() { # EXIT only: the replay verdict (0/1) passes through, env exits stay
   fi
 }
 on_sig() { # INT/TERM: never report a kill as a pass
+  if [ "${KEPT:-}" = 1 ]; then rm -f "$RIG_LOCK/keep.env"; fi # unpublish before the slow teardown
   teardown
   echo "interrupted"
   exit 130
@@ -299,6 +350,35 @@ if [ -n "$SPOTS" ]; then
 fi
 [ -n "$SECS" ] && export REPLAY_SECS="$SECS"
 cd "$HERE/.."
+# Micro-rig keeper (idkcraft-vf8e.1): run the given spots once if any, then
+# publish the rig for inner runs (see the REPLAY_KEEP block at the top) and
+# hold the server up until INT/TERM or REPLAY_KEEP_IDLE seconds (default
+# 1800) without an inner run; every exit tears down through on_exit.
+if [ "${REPLAY_KEEP:-}" = 1 ]; then
+  [ -n "${REPLAY_SKILLS_DIR:-}" ] && export SKILLS_DIR="$REPLAY_SKILLS_DIR" BOT_SKILLS=1
+  if [ -n "$SPOTS" ]; then
+    set +e; node tools/stuck-replay.js; rc=$?; set -e
+    echo "keep: first run exit $rc"
+  fi
+  {
+    echo "KEEP_PID=$$"
+    echo "KEEP_VARIANT='$VARIANT'"
+    for _v in REPLAY_TAG REPLAY_CONTAINER REPLAY_PORT REPLAY_VARIANT REPLAY_WORLDSHA BOT_BODY BRIDGE_HOST BRIDGE_PORT BRIDGE_CONSOLE_PORT WORKER_NAME WORKER_HOST WORKER_PORT; do
+      eval "_val=\${$_v-}"
+      [ -z "$_val" ] || echo "export $_v='$_val'"
+    done
+  } > "$RIG_LOCK/keep.env"
+  KEPT=1
+  _idle=0; _max="${REPLAY_KEEP_IDLE:-1800}"
+  echo "kept: rig ${RIG_ID:-0} up — inner runs: REPLAY_KEEP=1${RIG_ID:+ RIG_ID=$RIG_ID} sh bot/tools/stuck-run.sh $VARIANT <spots.json>; idle teardown after ${_max}s, INT/TERM tears down"
+  while [ "$_idle" -lt "$_max" ]; do
+    sleep 5
+    _rp="$(cat "$RIG_LOCK/run/pid" 2>/dev/null || true)"
+    if [ -n "$_rp" ] && kill -0 "$_rp" 2>/dev/null; then _idle=0; else _idle=$((_idle + 5)); fi
+  done
+  echo "kept: idle ${_max}s — tearing down"
+  exit 0
+fi
 set +e; node tools/stuck-replay.js; rc=$?; set -e
 [ "$rc" = 1 ] || exit "$rc"
 # Flake protocol (idkcraft-6x7.9): the corpus is non-deterministic by
