@@ -1456,6 +1456,23 @@ async function main() {
           if (w && w !== peerWorld) { fs.writeFileSync(peerFile, peerDoc(w)); peerWorld = w; origLog(`CASTLE-RIG peer castle re-keyed: ${w}`) }
         } catch (_) { /* re-key best-effort */ }
       }, 5000).unref()
+      if (NIGHT_HOME === 'apron') {
+        // Which step placed each own block (the apron-litter diagnosis).
+        const seenK = new Set()
+        setInterval(() => {
+          try {
+            const c = tickCtx()
+            if (!c || !(c.placedByBot instanceof Set)) return
+            for (const k of c.placedByBot) {
+              if (seenK.has(k)) continue
+              seenK.add(k)
+              const [x, y, z] = k.split(',').map(Number)
+              const inA = require('../src/castle').apronOf(st, { x, y, z })
+              origLog(`CASTLE-RIG placed ${k} ${(c.placedNames instanceof Map && c.placedNames.get(k)) || '?'} step=${c.step} rec=${c.recovery ? c.recovery.action : '-'} apron=${inA ? 'in' : 'out'} known=${Array.isArray(c.knownCastles) ? c.knownCastles.length : 0}`)
+            }
+          } catch (_) { /* diag best-effort */ }
+        }, 250).unref()
+      }
       if (NIGHT_HOME === 'peer') process.env.BOT_CASTLE_PEER = peer
       else delete process.env.BOT_CASTLE_PEER
       origLog(`CASTLE-RIG peer castle: ${peerFile} (BOT_CASTLE_PEER=${process.env.BOT_CASTLE_PEER || ''}), the bot keeps no castle`)
@@ -2218,13 +2235,19 @@ async function main() {
     const bp = require('../src/castle')
     const at = known ? bp.absPlan(known.site, known.rot, known.blueprintVersion).at : new Map()
     let n = 0
+    const names = {}
     for (const k of (c && c.placedByBot instanceof Set ? c.placedByBot : [])) {
       const [x, y, z] = k.split(',').map(Number)
       if (!known || !bp.apronOf(known, { x, y, z }) || at.has(k)) continue
       const out = await rcon(`execute if block ${x} ${y} ${z} air`).catch((e) => fail('apron-litter', e.message))
-      if (/Test failed/.test(out)) n++
+      if (!/Test failed/.test(out)) continue
+      n++
+      const nm = (c.placedNames instanceof Map && c.placedNames.get(k)) || '?'
+      names[nm] = (names[nm] || 0) + 1
+      if (n <= 40) origLog(`CASTLE-RIG apron-litter cell ${x} ${y} ${z} ${nm}`)
     }
-    apronTag = `, apron-litter=${known ? n : 'no-known-castle'}`
+    const hist = Object.entries(names).map(([k, v]) => `${k}:${v}`).join(',')
+    apronTag = `, apron-litter=${known ? n : 'no-known-castle'}${hist ? `(${hist})` : ''}`
   }
   // Stairs facing (g0z.47): every v3 stairs cell read back via rcon — laid
   // (any stair) vs laid with the plan facing, half bottom. Build runs, and
