@@ -537,6 +537,9 @@ describe('castle break guard (g0z.55)', () => {
       bot.entity.position = { x: cx, y: 65, z: cz + 40 }
       assert.equal(sync(), 'false', 'own castle in progress')
       assert.equal(pushes, 2)
+      ctx.step = 'build' // the house build keeps its throwaway towers by a castle
+      assert.equal(sync(), 'true', 'house build step')
+      assert.equal(pushes, 3)
     })
   })
 

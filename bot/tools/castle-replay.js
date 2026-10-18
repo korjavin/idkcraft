@@ -252,10 +252,12 @@ async function apronChanged(rcon, box, cap = 4000) {
   const out = []
   async function walk(b) {
     if (out.length >= cap) return
-    const res = String(await rcon(`execute if blocks ${b.x1} ${b.y1} ${b.z1} ${b.x2} ${b.y2} ${b.z2} ${b.x1} ${b.y1 + dy} ${b.z1} all`))
-    if (/Test passed/.test(res)) return
-    if (!/Test failed/.test(res)) throw new Error(`apron diff: unreadable ${res.slice(0, 120)}`)
     const sx = b.x2 - b.x1, sy = b.y2 - b.y1, sz = b.z2 - b.z1
+    if ((sx + 1) * (sy + 1) * (sz + 1) <= 32768) { // vanilla's `if blocks` cap: bigger boxes split unasked
+      const res = String(await rcon(`execute if blocks ${b.x1} ${b.y1} ${b.z1} ${b.x2} ${b.y2} ${b.z2} ${b.x1} ${b.y1 + dy} ${b.z1} all`))
+      if (/Test passed/.test(res)) return
+      if (!/Test failed/.test(res)) throw new Error(`apron diff: unreadable ${res.slice(0, 120)}`)
+    }
     if (sx === 0 && sy === 0 && sz === 0) { out.push({ x: b.x1, y: b.y1, z: b.z1, copyY: b.y1 + dy }); return }
     const ax = sx >= sy && sx >= sz ? 'x' : sy >= sz ? 'y' : 'z'
     const m = Math.floor((b[`${ax}1`] + b[`${ax}2`]) / 2)

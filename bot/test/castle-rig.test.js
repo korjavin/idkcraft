@@ -1264,6 +1264,8 @@ describe('apron diff (g0z.64)', () => {
       calls++
       const [x1, y1, z1, x2, y2, z2, , dy] = cmd.split(' ').slice(3, 11).map(Number)
       assert.equal(dy, y1 - 61 - 58, 'dest offset')
+      const vol = (x2 - x1 + 1) * (y2 - y1 + 1) * (z2 - z1 + 1)
+      if (vol > 32768) return `Too many blocks in the specified area (maximum 32768, specified ${vol})` // the vanilla error
       for (const k of diff) {
         const [x, y, z] = k.split(',').map(Number)
         if (x >= x1 && x <= x2 && y >= y1 && y <= y2 && z >= z1 && z <= z2) return 'Test failed'

@@ -305,7 +305,8 @@ function nearCastle(bot, ctx) {
 // bridged the fence/moat with throwaway dirt/cobble. Within
 // CASTLE_ROCK_RANGE of ANY known castle centre (own, in progress too, and
 // every peer's: castle.anyCastle over ctx.knownCastles) allow1by1towers is
-// false, so the bridge sends allowPlace=false (bridge/index.js
+// false on every step but the house build (its wall/roof approaches need
+// throwaway towers, as v1's inCastleApron exemption), so the bridge sends allowPlace=false (bridge/index.js
 // movementsToSettings). The lay climbs its own stairs (reach invariant) and
 // explicit places go through bot.placeBlock, not Baritone. Pit recovery
 // keeps allowBreak plus the recover prims.
@@ -346,7 +347,7 @@ function movementsFor(owner, bot, ctx, extra) {
   const keepStone = castleStone(bot, ctx)
   const v2 = process.env.BOT_BODY === 'baritone'
   const v2Guard = v2 ? castleNamesGuard(bot, nearCastle(bot, ctx)) : null
-  const noPlace = v2 && nearAnyCastle(bot, ctx)
+  const noPlace = v2 && !(ctx && ctx.step === 'build') && nearAnyCastle(bot, ctx) // the house build towers to its wall/roof cells (v1 inCastleApron exempts it too)
   const flip = v2 && ((placeNear !== undefined && placeNear !== noPlace) || !!(v2Guard && castleNames.flipped))
   if (v2) placeNear = noPlace
   for (const mov of movs) {
