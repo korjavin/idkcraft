@@ -1,6 +1,6 @@
 # idkcraft
 
-`idkcraft` is a production Minecraft deployment designed for seamless cross-play and AI experimentation. It runs a high-performance [Paper](https://papermc.io) Java Minecraft server in Docker, bridged to Bedrock Edition (including Nintendo Switch) via [GeyserMC](https://geysermc.org) and [Floodgate](https://github.com/GeyserMC/Floodgate). An embodied companion bot built with [Mineflayer](https://github.com/PrismarineJS/mineflayer) connects to the server and follows players in real time, driven by sub-40ms reflex decisions powered by [TypeSafe AI JEV](https://typesafe.ai) (a non-autoregressive "System 1" decision engine; see background in the project research report).
+`idkcraft` is a production Minecraft deployment designed for seamless cross-play and AI experimentation. It runs a [Paper](https://papermc.io) Java server in Docker, bridged to Bedrock Edition (including Nintendo Switch) via [GeyserMC](https://geysermc.org) and [Floodgate](https://github.com/GeyserMC/Floodgate). Embodied companion bots built with [Mineflayer](https://github.com/PrismarineJS/mineflayer) (and a Baritone-driven second body) join the server, follow players and work on their own goals. A rule-based FSM decides every tick; LLM/JEV planners are opt-in and only consulted when a goal stalls.
 
 ---
 
@@ -47,22 +47,39 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
 
 ---
 
-## Companion Bot (`IdkBot`)
+## Bots
 
-- **Automatic Presence:** The bot container joins the server automatically with the username `IdkBot`.
-- **Behavior:** Operates a ~1-second System-1 perception-decision loop. With no `BOT_FOLLOW` target it works on its own goal (see bot/README.md#autonomy--chat-commands); `follow me` (or a `BOT_FOLLOW` name) switches it to following that player.
-- **Commands:** Supports in-game chat instructions such as `follow me` and `stop` (open chat with D-pad Right on Switch or T on Java, type `follow me` without a slash; see [bot/README.md](bot/README.md#chat-commands) for full command documentation and brain options).
+- **v1 (`bot`, default `IdkBot`):** Mineflayer body. Joins automatically; with no `BOT_FOLLOW` target it works on its own goal, and `follow me` switches it to following you.
+- **v2 (`bot2` + `body2`, `BOT_BODY=baritone`):** same brain driving a Baritone pilot over an internal bridge. Off unless `BOT2_USERNAME` is set. A separate `baritone` worker container is optional (`WORKER_NAME`).
+- **Swarm (`swarm1`..`swarm32`):** extra helper bots, idle unless `BOT_SWARM_N` is set; they split a `flat` job into strips.
+- **Work-mode goals** (nobody followed): night shelter, craft, equip, build the house, gather wood, deliver, forage, explore, rest, plus the castle project, `flat` (level ground), and stockpile. `fight` always preempts.
+- **Chat commands:** plain text, no leading slash (T on Java, D-pad Right on Switch). Common ones: `follow me`, `stop`, `go work`, `come home`, `build here`, `build castle`, `go castle`, `castle`, `find me <block>`, `bring me <item>`, `flat [radius]`, `status`, `share`. Say `help` in game for the list; see [bot/README.md](bot/README.md#chat-commands) for full docs. Prefix `<BotName>: ` to address one bot.
 
 ---
 
 ## Repository Layout
 
-- `docker-compose.yml`: Top-level Docker Compose stack running `mc` (Paper + Geyser) and `bot` (Mineflayer).
-- `bot/`: Mineflayer companion bot runtime, test harnesses, and JEV/stub brain interfaces.
-- `mc/`: Minecraft server configuration overrides and plugin assets.
-- `.github/workflows/deploy.yml`: GitOps workflow that builds `ghcr.io/korjavin/idkcraft:<sha>` and `ghcr.io/korjavin/idkcraft-baritone:<sha>`, updates the `deploy` branch, and signals the Portainer webhook.
+- `docker-compose.yml`: the stack: `mc` (Paper + Geyser), `bot`, `baritone`, `bot2`, `body2`, `swarm1`..`swarm32`.
+- `bot/`: bot runtime (`bot/src`), tests, and rigs/tools (see [bot/tools/README.md](bot/tools/README.md)).
+- `baritone/`: Baritone worker/pilot image.
+- `.github/workflows/deploy.yml`: GitOps workflow (see Deploy).
 
-*Note: Environment variable definitions and deployment configurations live in `.env.example` and the project epic contract. Refer to those files directly for configuration details.*
+Environment variables are listed in [CLAUDE.md](CLAUDE.md) (Shared Contract) and `.env.example`.
+
+---
+
+## Run and test locally
+
+```bash
+docker compose up            # needs Docker; first Paper boot downloads plugins, ~1-2 min
+cd bot && npm ci && npm test # no Minecraft client needed (fake-player e2e harness)
+```
+
+---
+
+## Deploy
+
+Push to `master` -> GitHub Actions builds the bot image `ghcr.io/korjavin/idkcraft:<sha>` -> force-pushes the `deploy` branch -> calls the Portainer webhook. Portainer tracks `deploy`, never `master`.
 
 ---
 
@@ -70,7 +87,7 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
 
 1. **Portainer Stack:** Deploy as a Portainer Git stack named `idkcraft` tracking branch `deploy` with compose path `docker-compose.yml`. Commits pushed to `master` trigger CI to build the bot image, force-push `deploy`, and call the webhook in secret `PORTAINER_REDEPLOY_HOOK`.
 2. **Environment Variables:** Set in Portainer:
-   - `TYPESAFE_API_KEY`: Secret key for the JEV reflex brain.
+   - `TYPESAFE_API_KEY` / `ANTHROPIC_API_KEY`: optional planner keys; without them the bot runs the stub brain.
    - `MC_DATA_PATH`: Set to `/srv/idkcraft/data` (absolute host path so world data persists across redeploys).
    - All other variables rely on defaults documented in `.env.example`.
 3. **Player Whitelisting:**
