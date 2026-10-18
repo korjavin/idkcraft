@@ -1242,3 +1242,37 @@ describe('castle-before.js shared before cache', () => {
     assert.doesNotMatch(cb.rigCommand('mine', cb.settingsOf({ CASTLE_BODY: 'baritone' }, 'abc'), false), /BARITONE_IMAGE/, 'default tag stays implicit: client.sh builds it')
   })
 })
+
+describe('apron diff (g0z.64)', () => {
+  const { apronBox, apronCloneCmds, apronChanged } = require('../tools/castle-replay')
+  it('the apron box clones in slabs under the 32768 limit and bisects to exactly the changed cells', async () => {
+    const box = apronBox({ site: { x: 100, y: 65, z: 200 }, rot: 0, blueprintVersion: 3 })
+    assert.deepEqual(box, { x1: 84, x2: 146, y1: 61, y2: 81, z1: 184, z2: 242 }) // castle.apronOf's box: r=16, y -4..+16
+    const cmds = apronCloneCmds(box)
+    let ys = 0
+    for (const c of cmds) {
+      const [, , y1, , , y2] = c.split(' ').map(Number)
+      assert.ok((y2 - y1 + 1) * 63 * 59 <= 32768, c)
+      ys += y2 - y1 + 1
+    }
+    assert.equal(ys, 21)
+    assert.match(cmds[0], /^clone 84 61 184 146 \d+ 242 84 -58 184 replace force$/)
+    // Fake rcon over the vanilla `execute if blocks <src> <dst> all` answer: "Test passed, count: N" | "Test failed".
+    const diff = new Set(['90,70,190', '146,81,242'])
+    let calls = 0
+    const rcon = async (cmd) => {
+      calls++
+      const [x1, y1, z1, x2, y2, z2, , dy] = cmd.split(' ').slice(3, 11).map(Number)
+      assert.equal(dy, y1 - 61 - 58, 'dest offset')
+      for (const k of diff) {
+        const [x, y, z] = k.split(',').map(Number)
+        if (x >= x1 && x <= x2 && y >= y1 && y <= y2 && z >= z1 && z <= z2) return 'Test failed'
+      }
+      return 'Test passed, count: 1'
+    }
+    const out = await apronChanged(rcon, box)
+    assert.deepEqual(out.map((c) => `${c.x},${c.y},${c.z}`).sort(), [...diff].sort())
+    assert.equal(out.find((c) => c.x === 90).copyY, 70 - 61 - 58)
+    assert.ok(calls < 100, `bisection, not a scan: ${calls}`)
+  })
+})

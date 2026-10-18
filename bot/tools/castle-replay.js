@@ -216,6 +216,55 @@ const START = process.env.CASTLE_START || ''
 const START_CELL = process.env.CASTLE_START_CELL || ''
 startPlan({ x: 0, y: 0, z: 0 }, START, START_CELL) // validate up front
 if (START && SEED !== 'complete') throw new Error('CASTLE_START needs CASTLE_SEED=complete')
+// Apron diff (g0z.64, needs CASTLE_SEED=complete): v2 places through
+// Baritone in the client, so its throwaway towers/bridges never reach
+// placedByBot (the bridge emits no blockUpdate) and apron-litter cannot see
+// them. After the start spot the whole apron box (castle.apronOf's box:
+// r=16, y site-4..site+16) is cloned into the deepslate under the site
+// (y -58 up, slabs under the 32768 clone limit); at the window end
+// `execute if blocks ... all` bisects to the changed cells. New = a cell
+// that was air at the snapshot, is not now, and is no plan/decor cell.
+// ponytail: the copy lives under the site — a mine leg that digs to y -38
+// there corrupts it (night/residence rigs never do).
+const APRON_DIFF = process.env.CASTLE_APRON_DIFF === '1'
+if (APRON_DIFF && SEED !== 'complete') throw new Error('CASTLE_APRON_DIFF=1 needs CASTLE_SEED=complete')
+const APRON_COPY_Y = -58
+function apronBox(st) {
+  const bp = require('../src/castle')
+  const { w, d } = bp.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const r = bp.CASTLE_APRON
+  return { x1: st.site.x - r, x2: st.site.x + w + r - 1, y1: st.site.y - 4, y2: st.site.y + 16, z1: st.site.z - r, z2: st.site.z + d + r - 1 }
+}
+// Pure: the snapshot's clone commands, slabs of at most 32768 cells.
+function apronCloneCmds(box) {
+  const per = Math.max(1, Math.floor(32768 / ((box.x2 - box.x1 + 1) * (box.z2 - box.z1 + 1))))
+  const out = []
+  for (let y = box.y1; y <= box.y2; y += per) {
+    const y2 = Math.min(box.y2, y + per - 1)
+    out.push(`clone ${box.x1} ${y} ${box.z1} ${box.x2} ${y2} ${box.z2} ${box.x1} ${APRON_COPY_Y + y - box.y1} ${box.z1} replace force`)
+  }
+  return out
+}
+// The changed cells of box vs its copy, bisecting `execute if blocks ...
+// all` (rcon(cmd) -> its output text). Unit-tested with a fake rcon.
+async function apronChanged(rcon, box, cap = 4000) {
+  const dy = APRON_COPY_Y - box.y1
+  const out = []
+  async function walk(b) {
+    if (out.length >= cap) return
+    const res = String(await rcon(`execute if blocks ${b.x1} ${b.y1} ${b.z1} ${b.x2} ${b.y2} ${b.z2} ${b.x1} ${b.y1 + dy} ${b.z1} all`))
+    if (/Test passed/.test(res)) return
+    if (!/Test failed/.test(res)) throw new Error(`apron diff: unreadable ${res.slice(0, 120)}`)
+    const sx = b.x2 - b.x1, sy = b.y2 - b.y1, sz = b.z2 - b.z1
+    if (sx === 0 && sy === 0 && sz === 0) { out.push({ x: b.x1, y: b.y1, z: b.z1, copyY: b.y1 + dy }); return }
+    const ax = sx >= sy && sx >= sz ? 'x' : sy >= sz ? 'y' : 'z'
+    const m = Math.floor((b[`${ax}1`] + b[`${ax}2`]) / 2)
+    await walk({ ...b, [`${ax}2`]: m })
+    await walk({ ...b, [`${ax}1`]: m + 1 })
+  }
+  await walk(box)
+  return out
+}
 const IDLE = process.env.CASTLE_IDLE === '1'
 const IDLE_DEATH = IDLE ? Math.max(0, parseInt(process.env.CASTLE_IDLE_DEATH || '0', 10) || 0) : 0
 // Far respawn (vmzq.29, prod run6): after CASTLE_FAR_AFTER min of the
@@ -1572,6 +1621,15 @@ async function main() {
     tickCtx().paused = false
     origLog(`CASTLE-RIG start ${start.x} ${start.y} ${start.z} (site +${start.d.join(',')})${start.cell ? `, sealed in ${start.cell}` : ', bare pocket'}`)
   }
+  let apronSnap = null
+  if (APRON_DIFF) {
+    apronSnap = { site: { x: bx - 15, y: gy + 1, z: bz - 13 }, rot: 0, blueprintVersion: SEED_VERSION }
+    for (const c of apronCloneCmds(apronBox(apronSnap))) {
+      const out = await rcon(c).catch((e) => fail('apron-diff', e.message))
+      if (!/Successfully cloned/.test(out)) fail('apron-diff', `${c}: ${String(out).trim().slice(0, 120)}`)
+    }
+    origLog(`CASTLE-RIG apron snapshot: ${JSON.stringify(apronBox(apronSnap))} -> y ${APRON_COPY_Y}`)
+  }
   if (NIGHT_HOME) {
     // g0z.59: an unbuilt house order on the pad corner, parked so the day
     // never builds it (the night is what this measures).
@@ -2275,6 +2333,32 @@ async function main() {
     const hist = Object.entries(names).map(([k, v]) => `${k}:${v}`).join(',')
     apronTag = `, apron-litter=${known ? n : 'no-known-castle'}${hist ? `(${hist})` : ''}`
   }
+  if (apronSnap) {
+    const box = apronBox(apronSnap)
+    const bp = require('../src/castle')
+    const v = apronSnap.blueprintVersion
+    const plan = new Set([...bp.absPlan(apronSnap.site, 0, v).cells, ...bp.decorPlan(apronSnap.site, 0, v).cells].map((c) => `${c.x},${c.y},${c.z}`))
+    await rcon(`forceload add ${box.x1} ${box.z1} ${box.x2} ${box.z2}`).catch((e) => fail('apron-diff', e.message))
+    await sleep(3000)
+    const changed = await apronChanged(rcon, box).catch((e) => fail('apron-diff', e.message))
+    const names = {}
+    let n = 0
+    for (const c of changed) {
+      if (plan.has(`${c.x},${c.y},${c.z}`)) continue
+      if (!/Test passed/.test(await rcon(`execute if block ${c.x} ${c.copyY} ${c.z} air`))) continue // was solid: a dig or a swap
+      if (/Test passed/.test(await rcon(`execute if block ${c.x} ${c.y} ${c.z} air`))) continue
+      let nm = '?'
+      for (const k of ['cobblestone', 'dirt', 'oak_planks', 'stone', 'granite', 'diorite', 'andesite', 'cobbled_deepslate', 'water', 'lava']) {
+        if (/Test passed/.test(await rcon(`execute if block ${c.x} ${c.y} ${c.z} ${k}`))) { nm = k; break }
+      }
+      n++
+      names[nm] = (names[nm] || 0) + 1
+      if (n <= 40) origLog(`CASTLE-RIG apron-new cell ${c.x} ${c.y} ${c.z} ${nm}`)
+    }
+    await rcon(`forceload remove ${box.x1} ${box.z1} ${box.x2} ${box.z2}`).catch(() => {})
+    const hist = Object.entries(names).map(([k, val]) => `${k}:${val}`).join(',')
+    apronTag += `, apron-new=${n}${hist ? `(${hist})` : ''}, apron-changed=${changed.length}`
+  }
   // Stairs facing (g0z.47): every v3 stairs cell read back via rcon — laid
   // (any stair) vs laid with the plan facing, half bottom. Build runs, and
   // upgrade runs (g0z.48), where the facing-ok count joins the verdict.
@@ -2409,4 +2493,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { apronBox, apronCloneCmds, apronChanged, componentLine, baselineFor, fetchLine, bankedOf, repairCells, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
