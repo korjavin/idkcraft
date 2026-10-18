@@ -538,7 +538,8 @@ describe('castle break guard (g0z.55)', () => {
       assert.equal(sync(), 'false', 'own castle in progress')
       assert.equal(pushes, 2)
       ctx.step = 'castle' // the own lay keeps its approaches
-      assert.equal(sync(), 'true', 'own castle step')
+      ctx.knownCastles = [{ ...ctx.castle }] // memory's refresh-time copy of the own castle, since replaced (rig lay 8.0)
+      assert.equal(sync(), 'true', 'own castle step, stale own copy in knownCastles')
       assert.equal(pushes, 3)
       ctx.step = 'castlefetch'
       assert.equal(sync(), 'false', 'other steps by the own castle')

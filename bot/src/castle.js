@@ -702,7 +702,11 @@ function apronOf(state, pos, r = CASTLE_APRON) {
 function anyCastle(ctx, fn) {
   const own = ctx && ctx.castle && ctx.castle.site ? ctx.castle : null
   const list = own ? [own] : []
-  for (const c of (ctx && Array.isArray(ctx.knownCastles) ? ctx.knownCastles : [])) if (c && c !== own && c.site) list.push(c)
+  // knownCastles holds ctx.castle as it was at the last refresh: once the
+  // live state is replaced, that stale copy of the own castle must not
+  // read as a peer (g0z.64 rig: the own lay lost its exemption).
+  const same = (c) => own && c.site.x === own.site.x && c.site.y === own.site.y && c.site.z === own.site.z
+  for (const c of (ctx && Array.isArray(ctx.knownCastles) ? ctx.knownCastles : [])) if (c && c !== own && c.site && !same(c)) list.push(c)
   return list.find((c) => { try { return !!fn(c, c === own) } catch (_) { return false } }) || null
 }
 // The v1 place guards' one predicate: the complete known castle whose
