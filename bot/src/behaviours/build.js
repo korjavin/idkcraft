@@ -366,9 +366,13 @@ function v2Order(plan) {
   const idx = [...plan.keys()]
   const part = idx.filter((i) => isPartition(plan[i]))
   const clear = idx.filter((i) => plan[i].kind === 'clear')
-  const rest = idx.filter((i) => !isPartition(plan[i]) && plan[i].kind !== 'clear')
+  // neuc.65.6.1 revmux 01: the doorstep row before everything else — a
+  // missing door is laid only once a door item exists, and craft refuses
+  // the house-table walk while the doorstep is holed (entrance-holed).
+  const step = idx.filter((i) => plan[i].kind === 'fill' && plan[i].dz === -1)
+  const rest = idx.filter((i) => !isPartition(plan[i]) && plan[i].kind !== 'clear' && !step.includes(i))
   const door = rest.findIndex((i) => plan[i].kind === 'door')
-  return door < 0 ? idx : [...clear, ...rest.slice(0, door), ...part, ...rest.slice(door)]
+  return door < 0 ? idx : [...step, ...clear, ...rest.slice(0, door), ...part, ...rest.slice(door)]
 }
 
 // A built house with natural ground in a live clear cell (rw4.19 revmux 01

@@ -1239,6 +1239,9 @@ describe('rw4.19 interior clear cells', () => {
     assert.equal(build.holeOwed(bot, home, []), true)
     assert.equal(build.isComplete(bot, home), false, 'the stale-built flip waits for the refill')
     assert.equal(build.nextCellIdx(bot, home, []), di)
+    world.set(s.x + 3, s.y, s.z, 'air') // revmux 01: the door is gone too
+    assert.equal(build.nextCellIdx(bot, home, []), di, 'the doorstep goes before the door (no craft deadlock)')
+    world.set(s.x + 3, s.y, s.z, 'oak_door')
     assert.equal(build.holeOwed(bot, home, [di]), false, 'a skipped fill never re-opens')
     assert.equal(build.holeOwed(bot, { ...home, v: 1 }, []), false, 'v1 plan has no doorstep row')
     world.set(s.x + 3, s.y - 1, s.z - 1, 'oak_planks')
