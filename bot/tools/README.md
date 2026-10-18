@@ -575,6 +575,10 @@ door with 0 deaths (neuc.65.3's walk-off). The verdict line gets
 crater in a stone shell (prod v2 10-16 fell ten times at one cell in front
 of its creeper-holed door), and every `--night prod` verdict adds
 `, falls=<server fall-death messages for the bot>` (the guide reads them).
+Measured (v2, master c541d62e, two 30-min runs): falls=0 both times — the
+gohome walk aims at the doorstep cell over the pit, and Baritone bridges it
+with scaffold (stands at floor+1 over the crater), so this pit alone does not
+reproduce prod's falls.
 Baselines are in `night-baseline.json` (master
 ed8f1107, one 68-min run each). v1 bare: 3 nights, sheltered 3/3,
 night-deaths 0, day-deaths 0, kitless 0. v1 castle (`CASTLE_SEED=complete`;

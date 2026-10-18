@@ -28,6 +28,13 @@
       "nights": 3, "sheltered": "3/3", "nightDeaths": 0, "dayDeaths": 0, "kitless": 0,
       "line": "nights=3, sheltered=3/3, night-deaths=0, day-deaths=0, kitless=0",
       "sha": "ed8f1107", "date": "2026-10-18"
+    },
+    "house-pit": {
+      "setup": "CASTLE_BODY=baritone CASTLE_BARE=1 CASTLE_HOUSE=pit sh bot/tools/castle-rig.sh --night prod 30",
+      "runs": 2, "falls": [0, 0], "deaths": [0, 0],
+      "lines": ["nights=1, sheltered=1/1, night-deaths=0, day-deaths=0, kitless=0, falls=0", "nights=2, sheltered=0/2, night-deaths=0, day-deaths=0, kitless=0, falls=0"],
+      "note": "idkcraft-neuc.65.6 before legs (bot code = master c541d62e). Run 1 never reached the house (stuck in water/vines 60 out); run 2 walked gohome to the door twice a night: Baritone bridged the 3x2 doorstep pit (stood at floor+1 over it), no fall. The pit alone does not reproduce prod's family-D falls.",
+      "sha": "c541d62e", "date": "2026-10-18"
     }
   }
 }
