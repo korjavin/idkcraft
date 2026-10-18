@@ -1316,6 +1316,9 @@ describe('rw4.19 interior clear cells', () => {
     assert.equal(castlefetch.pickChest(bot, ctx, {}, 'stone').k, `${chest.x},${chest.y},${chest.z}`)
     world.set(s.x + 4, s.y - 1, s.z + 1, 'air') // the floor beside the table falls in
     assert.equal(furnace.tableBlock(bot, ctx), null, 'gear/craftany fall back to their own table')
+    bot.entity.position = pos(s.x + 3.5, s.y, s.z + 1.5) // inside, beside it: no walk, it serves (revmux 02)
+    assert.deepEqual(furnace.tableBlock(bot, ctx).pos, table)
+    bot.entity.position = pos(s.x + 20, s.y, s.z)
     ctx.claimedTable = pos(s.x + 20, s.y, s.z + 2)
     world.set(ctx.claimedTable.x, ctx.claimedTable.y, ctx.claimedTable.z, 'crafting_table')
     assert.deepEqual(furnace.tableBlock(bot, ctx).pos, ctx.claimedTable, 'a roadside claim still serves')
