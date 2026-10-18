@@ -23,6 +23,7 @@
 //        (1,4),(2,4),(4,4),(5,4) plus the doorway (3,0) — the door hangs
 //        on the block below like a bed. Done means SOLID ground (dirt
 //        counts), so flat sites place nothing and only dips take a plank.
+//        The doorway cell is the door's sill: planks only on v2 (z591).
 //   y=0..1 interior clear (rw4.19): natural ground left inside the rooms
 //        (a relief-1 bump) is dug out first, before the table.
 //
@@ -104,9 +105,16 @@ const BLUEPRINT_V2 = (() => {
   // hangs on the block below like a bed, so its dip strands it the same
   // way (rig-proven: air under (3,0) refused the door 3x). Bed cells
   // pinned to beds.cellsOf.
-  for (const [dx, dz] of [[1, 4], [2, 4], [4, 4], [5, 4], [3, 0]]) {
+  for (const [dx, dz] of [[1, 4], [2, 4], [4, 4], [5, 4]]) {
     plan.push({ dx, dy: -1, dz, kind: 'fill' })
   }
+  // The door's sill (idkcraft-z591): on the v2 body only planks count as
+  // done here. Baritone breaks bans are names only and v2 hard-bans planks
+  // (body.js castle guard); natural dirt under the door was broken from
+  // below by a body climbing out of the void under the house, and the door
+  // popped. A dirt sill reads undone, so holeOwed re-opens a built house
+  // and the builder swaps it for a plank (the door pops once and is re-laid).
+  plan.push({ dx: 3, dy: -1, dz: 0, kind: 'fill', sill: true })
   const ring = (dy) => {
     for (const dx of [0, 1, 2, 4, 5, 6]) plan.push({ dx, dy, dz: 0, kind: 'planks' })
     for (let dx = 0; dx <= 6; dx++) plan.push({ dx, dy, dz: 5, kind: 'planks' })
@@ -293,7 +301,10 @@ function cellDone(bot, home, cell) {
   if (name == null) return false
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
-  if (cell.kind === 'fill') return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
+  if (cell.kind === 'fill') {
+    if (cell.sill && process.env.BOT_BODY === 'baritone' && !name.endsWith('_planks')) return false
+    return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
+  }
   // Clear (rw4.19): only natural ground with collision is a leftover; air,
   // flora and anything we put there (beds, chest, furnace, table) is done.
   if (cell.kind === 'clear') return !(NATURAL_SOLID.has(name) && hasCollision(bot, cellAbs(home, cell)))
@@ -392,7 +403,8 @@ function clearOwed(bot, home, skipped) {
 // A built v2 house with a loaded hole in the doorstep row (dz -1;
 // idkcraft-neuc.65.6.1): the index.js revalidation re-opens it so build
 // refills it before any walk drops through, and the house table walk fails
-// soft (entrance-holed) meanwhile. Interior fill cells (door/bed floor) never
+// soft (entrance-holed) meanwhile. On v2 the door sill (z591) re-opens too:
+// it is placed from the doorstep, outside the door. Bed floor cells never
 // re-open: the builder cannot reach a hole behind the door (rig a1
 // build-stall), and prod houses already miss some. Skips do not count (the
 // clearOwed rule: a refused fill waits for the 1h skip retry).
@@ -400,7 +412,7 @@ function holeOwed(bot, home, skipped) {
   try {
     if (!home || !home.site || home.v !== 2) return false
     const skip = new Set(Array.isArray(skipped) ? skipped : [])
-    return blueprintFor(home).some((c, i) => c.kind === 'fill' && c.dz === -1 && !skip.has(i) &&
+    return blueprintFor(home).some((c, i) => c.kind === 'fill' && (c.dz === -1 || (c.sill && process.env.BOT_BODY === 'baritone')) && !skip.has(i) &&
       cellLoaded(bot, home, c) && !cellDone(bot, home, c))
   } catch (_) { return false }
 }

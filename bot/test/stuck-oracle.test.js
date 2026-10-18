@@ -589,8 +589,9 @@ describe('raise-house (idkcraft-6x7.8)', () => {
     for (const c of plan) {
       const k = `${site.x + c.dx},${site.y + c.dy},${site.z + c.dz}`
       if (c.kind === 'fill') {
-        // Fill cells sit at dy=-1: the slab itself reads solid (their done).
-        assert.equal(cells.get(k), 'dirt', k)
+        // Fill cells sit at dy=-1: the slab itself reads solid (their done);
+        // the door sill is planks (z591: v2 done means planks there).
+        assert.equal(cells.get(k), c.sill ? 'oak_planks' : 'dirt', k)
         continue
       }
       if (c.kind === 'clear') { assert.equal(cells.get(k), 'air', k); continue } // rw4.19
@@ -606,7 +607,7 @@ describe('raise-house (idkcraft-6x7.8)', () => {
     const cells = covered(houseCommands({ x: 0, y: 64, z: 0 }))
     for (let ix = 0; ix < 7; ix++) {
       for (let iz = 0; iz < 6; iz++) {
-        assert.equal(cells.get(`${ix},63,${iz}`), 'dirt', `slab ${ix},${iz}`)
+        assert.equal(cells.get(`${ix},63,${iz}`), ix === 3 && iz === 0 ? 'oak_planks' : 'dirt', `slab ${ix},${iz}`)
         assert.equal(cells.get(`${ix},64,${iz}`) === 'air' || cells.get(`${ix},64,${iz}`).startsWith('oak_') || cells.get(`${ix},64,${iz}`) === 'crafting_table', true, `room ${ix},${iz}`)
       }
     }
