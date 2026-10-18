@@ -737,6 +737,12 @@
     ],
     "owner": "src/doors.js"
   },
+  "gateFeetSince": {
+    "writers": [
+      "src/doors.js"
+    ],
+    "owner": "src/doors.js"
+  },
   "eatInFlight": {
     "writers": [
       "src/reflexes.js"

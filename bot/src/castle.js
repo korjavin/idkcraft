@@ -481,6 +481,7 @@ function matches(kind, name) {
   if (kind === 'enchanting_table') return name === 'enchanting_table' // attic decor (g0z.49)
   if (kind === 'blast_furnace') return name === 'blast_furnace' // kitchen decor (g0z.50)
   if (kind === 'stairs') return name.endsWith('_stairs') // v3 steps (g0z.47)
+  if (kind === 'gate') return name.endsWith('_fence_gate') // fence-ring gate decor (g0z.46)
   if (kind === 'air') return AIR_NAMES.has(name) || name.endsWith('_door')
   if (kind === 'dig') return AIR_NAMES.has(name)
   return false
@@ -534,6 +535,12 @@ function absPlan(site, rot, version) {
 // is the free floor north of it (14,0,17): the bot stands there and
 // looks south-into-kitchen at placement, so the front faces into the
 // room. Appended after the attic nook so every earlier idx stays put.
+// 'gate' (g0z.46, owner 2026-10-12): the fence-ring gap (dx 14..16, dz 0,
+// in line with the bridge) closes — fence posts at dx 14 and 16 (dy 0, then
+// the dy 1 second row on them) and one fence gate at (15,0,0). Mobs cannot
+// open a gate; the bot's reflex does (doors.js). `face` is the walkway
+// axis (+z, into the castle): placed looking along it (placeStairs), so the
+// gate swings across z between the posts. Appended last, idx stay put.
 const DECOR_BASE = 3000000
 const DECOR = {
   2: BLUEPRINTS[2].PLAN
@@ -544,7 +551,9 @@ const DECOR = {
       .map((c) => ({ dx: c.dx, dy: c.dy + 1, dz: c.dz, kind: 'fence' })))
     .concat([{ dx: 15, dy: 8, dz: 12, kind: 'enchanting_table' }]
       .concat([13, 14, 15, 16, 17].map((dx) => ({ dx, dy: 8, dz: 10, kind: 'bookshelf' }))))
-    .concat([{ dx: 14, dy: 0, dz: 18, kind: 'blast_furnace', stance: { dx: 14, dy: 0, dz: 17 } }]),
+    .concat([{ dx: 14, dy: 0, dz: 18, kind: 'blast_furnace', stance: { dx: 14, dy: 0, dz: 17 } }])
+    .concat([0, 1].flatMap((dy) => [14, 16].map((dx) => ({ dx, dy, dz: 0, kind: 'fence' }))))
+    .concat([{ dx: 15, dy: 0, dz: 0, kind: 'gate', face: { dx: 0, dz: 1 } }]),
 }
 // v3 shares v2's decor (same object): the full-castle cosmetics apply to both.
 DECOR[3] = DECOR[2]
@@ -557,6 +566,7 @@ function decorPlan(site, rot, version) {
   const local = DECOR[bp.version] || []
   const cells = rotatePlan(local, rot | 0, bp.version).map((c, i) => {
     const o = { x: site.x + c.dx, y: site.y + c.dy, z: site.z + c.dz, kind: c.kind, dy: c.dy, idx: DECOR_BASE + i }
+    if (c.face) o.face = c.face // g0z.46: the gate's walkway axis, rotated
     if (local[i].wall) {
       const w = rotatePlan([{ ...local[i].wall, kind: 'stone' }], rot | 0, bp.version)[0]
       o.wall = { x: site.x + w.dx, y: site.y + w.dy, z: site.z + w.dz }

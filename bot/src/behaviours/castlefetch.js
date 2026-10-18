@@ -54,14 +54,16 @@ const { stepDone, stepFailed, failReason, isFinished, stepGen, stale } = require
 // the hold.
 // stairs (g0z.47) — any *_stairs from the chest, else cobblestone_stairs
 // (6 cobble -> 4 at a table, one material for all 72).
-const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16, banner: 2, bookshelf: 5, enchanting_table: 1, blast_furnace: 1, stairs: 16 }
+// gate (g0z.46) — a wood kind like the door: any *_fence_gate from the
+// chest, else chest logs / chopped logs crafted (4 sticks + 2 planks).
+const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: castleMod.BATCH_OF.frame, chest: 1, pane: 16, banner: 2, bookshelf: 5, enchanting_table: 1, blast_furnace: 1, stairs: 16, gate: 1 }
 // Batch yield (idkcraft-vmzq.20): a fetch leg hands a layable batch to the
 // castle after this long instead of running to its full target. Five
 // minutes ≈ one stone batch at the measured quarry rate, and bounds the
 // castle<->castlefetch switch rate from below no matter how the words flap.
 const LEG_MAX_MS = 5 * 60 * 1000
 // One craft op per call; the next tick re-checks the target.
-const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, blast_furnace: 1, stairs: 4 }
+const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, blast_furnace: 1, stairs: 4, gate: 1 }
 const BANNER_WOOL = 6 // one colour per banner (table recipe)
 const BOOKS_PER_SHELF = 3 // table recipe: 6 planks + 3 books (g0z.49)
 const BLAST_IRON = 5 // iron_ingot per blast furnace (table recipe, g0z.51)
@@ -147,10 +149,10 @@ const deps = {
 }
 
 // Wood kinds (g0z.56): crafted from planks/logs, chopped when short.
-const WOOD = new Set(['planks', 'door', 'fence', 'chest', 'frame'])
+const WOOD = new Set(['planks', 'door', 'fence', 'chest', 'frame', 'gate'])
 const NO_WOOD = 'no wood within 64 — drop logs in the castle chest'
 // Items one chest log funds per kind (craftTick crafts the rest).
-const LOG_YIELD = { planks: 4, frame: 1, fence: 2, door: 2, chest: 0.5 }
+const LOG_YIELD = { planks: 4, frame: 1, fence: 2, door: 2, chest: 0.5, gate: 1 }
 
 function birchFirst(names) {
   return names.sort((a, b) => (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
@@ -164,6 +166,7 @@ function itemNames(bot, test) {
 const isDoor = (n) => n.endsWith('_door') && n !== 'iron_door'
 const isFence = (n) => n.endsWith('_fence') && n !== 'nether_brick_fence'
 const isBanner = (n) => n.endsWith('_banner') && !n.endsWith('_wall_banner')
+const isGate = (n) => n.endsWith('_fence_gate')
 
 // What the chest yields for a kind, finished items first; planks also
 // take logs (converted by the craft source next tick).
@@ -174,6 +177,7 @@ function chestNames(bot, kind) {
   // owner's repair shortcut; craftTick turns them into the item).
   if (kind === 'door') return [itemNames(bot, isDoor), itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'fence') return [itemNames(bot, isFence), itemNames(bot, (n) => n.endsWith('_log'))]
+  if (kind === 'gate') return [itemNames(bot, isGate), itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'torch') return [['torch']]
   if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'chest') return [['chest'], itemNames(bot, (n) => n.endsWith('_log'))]
@@ -190,6 +194,7 @@ function craftNames(bot, kind) {
   if (kind === 'planks') return itemNames(bot, (n) => n.endsWith('_planks'))
   if (kind === 'door') return itemNames(bot, isDoor)
   if (kind === 'fence') return itemNames(bot, isFence)
+  if (kind === 'gate') return itemNames(bot, isGate)
   if (kind === 'torch') return ['torch']
   if (kind === 'chest') return ['chest'] // 8 planks at a table (craftany crafts planks from logs)
   if (kind === 'pane') return ['glass_pane'] // 6 glass -> 16 at a table
@@ -1859,7 +1864,7 @@ function castlefetch(bot, ctx, target, state) {
     }
     digTick(bot, ctx, f, d); return // neuc.53: the v2 mine sizes from d.short
   }
-  if (d.kind === 'planks' || d.kind === 'door' || d.kind === 'fence' || d.kind === 'chest' || d.kind === 'frame') {
+  if (WOOD.has(d.kind)) {
     // Logs from the world: gather chops a load and ends the leg itself
     // ('done' at NEED_LOGS, or its own failure); the next pick crafts
     // (frame: the logs are the material, the next tick reads the target).
@@ -1867,13 +1872,13 @@ function castlefetch(bot, ctx, target, state) {
     // reason (table, reach): chopping more would finish 'done' at once
     // and re-pick forever (revmux 01) — fail so the hold parks it.
     if (countItems(bot, (n) => n.endsWith('_log')) >= require('../budget').NEED_LOGS) {
-      if (d.kind === 'fence') castleMod.noteDry(ctx, 'fence') // the decor word skips it (dry() shape)
+      if (d.kind === 'fence' || d.kind === 'gate') castleMod.noteDry(ctx, d.kind) // the decor word skips it (dry() shape)
       finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
       return
     }
     deps.gather(bot, ctx, target, state)
     if (isFinished(ctx.stepStatus)) {
-      if (d.kind === 'fence' && failReason(ctx.stepStatus) !== null) castleMod.noteDry(ctx, 'fence')
+      if ((d.kind === 'fence' || d.kind === 'gate') && failReason(ctx.stepStatus) !== null) castleMod.noteDry(ctx, d.kind)
       // g0z.56: the wood shortfall, named once on the castle status (the
       // 'castle' / 'castle repair' replies read it) — the owner's shortcut
       // is the castle chest, chestTick's first source next leg.

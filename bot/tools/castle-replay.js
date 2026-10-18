@@ -1391,11 +1391,14 @@ async function main() {
           block = 'enchanting_table'
         } else if (c.kind === 'blast_furnace') {
           block = 'blast_furnace'
+        } else if (c.kind === 'gate') {
+          // g0z.46: seeded SHUT, so the night acceptance proves the opener.
+          block = `oak_fence_gate[facing=${require('../src/castle').faceName(c.face)},open=false]`
         }
         await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${block}`).catch((e) => fail('seed-decor', e.message))
         seeded++
       }
-      origLog(`CASTLE-RIG seeded decor: ${seeded}/${decor.length} cells (panes + banners + upper fence + attic + blast${SEED_DECOR_EXCEPT.length > 0 ? ` except ${SEED_DECOR_EXCEPT.join(',')}` : ''})`)
+      origLog(`CASTLE-RIG seeded decor: ${seeded}/${decor.length} cells (panes + banners + upper fence + attic + blast + gate${SEED_DECOR_EXCEPT.length > 0 ? ` except ${SEED_DECOR_EXCEPT.join(',')}` : ''})`)
     }
     if (!tickCtx()) fail('seed-castle', 'no follower ctx')
     if (NIGHT_HOME === 'peer') {

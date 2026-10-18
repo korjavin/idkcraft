@@ -45,6 +45,12 @@
 //    the (1.2, 3.5] shut window in ~0.5 s, which 1 s ticks skip by phase.
 //    A door past the 8-node plan window heals via one stuck cycle: the push
 //    replans, the fresh head names the door, the opener fires.
+//
+// Fence gates (idkcraft-g0z.46: the castle fence-ring gate) ride all three:
+// a gate cell gets a level straight edge (head cell clear, floor solid) and
+// the reflex opens/shuts it like a door. Any cardinal step, not only along
+// the facing: an open gate has no collision at all, so the facing never
+// blocks the walk-through (a wrong-facing gate stays passable).
 const Vec3 = require('vec3')
 const Move = require('mineflayer-pathfinder/lib/move')
 const { botPos, doorOpen } = require('./behaviours/util')
@@ -63,6 +69,12 @@ const DOOR_TOGGLE_COOLDOWN_MS = 2000
 // Fast-shut cadence (the physicsTick tap): a walk-past spends ~0.5 s in the
 // shut window, so 250 ms catches it twice; 1 s ticks skip it by phase.
 const DOOR_SHUT_FAST_MS = 250
+// A gate this close to the body (cell centre, horizontal) is being walked
+// through: inside DOOR_CLOSE_DIST, so adoption never shuts it at once.
+const GATE_ADOPT_DIST = 1.0
+// A shut gate under the feet this long is a stall, not Baritone's own click
+// still in flight (that echo lands well inside it).
+const GATE_FEET_MS = 1000
 // Tracked doors cap (FIFO): a teleported-away bot must not grow the map.
 const DOOR_TRACK_MAX = 16
 
@@ -72,6 +84,15 @@ function isDoorName(name) {
 
 function isHandDoor(name) {
   return isDoorName(name) && !name.includes('iron')
+}
+
+function isHandGate(name) {
+  return typeof name === 'string' && name.endsWith('_fence_gate')
+}
+
+// What the reflex opens and the body may stand in: a hand door or a gate.
+function isPassage(name) {
+  return isHandDoor(name) || isHandGate(name)
 }
 
 function registryOf(movements) {
@@ -91,15 +112,18 @@ function banDoorBreaks(movements) {
   }
 }
 
-// Part 2: hand-door ids read as openable (the postProcessPath doorway arm —
-// floor centre, not on top of the panel). canOpenDoors stays false: the
-// lib's blind useOne click would shut open doors.
+// Part 2: hand-door and gate ids read as openable (the postProcessPath
+// doorway arm — floor centre, not on top of the panel). The lib's own gate
+// list (interactable.json) misses the newer woods (cherry, mangrove,
+// bamboo, crimson, warped, pale_oak), so every *_fence_gate joins here
+// (g0z.46 revmux 01). canOpenDoors stays false: the lib's blind useOne
+// click would shut open doors.
 function addHandDoorsOpenable(movements) {
   if (!movements || !(movements.openable instanceof Set)) return
   const reg = registryOf(movements)
   if (!reg) return
   for (const name of Object.keys(reg.blocksByName)) {
-    if (!isHandDoor(name)) continue
+    if (!isPassage(name)) continue
     const e = reg.blocksByName[name]
     if (e && Number.isInteger(e.id)) movements.openable.add(e.id)
   }
@@ -115,7 +139,7 @@ function addDoorPassages(movements) {
   movements.getNeighbors = (node) => {
     const out = orig(node)
     for (const [dx, dz] of DIRS) {
-      const edge = doorEdge(movements, node, dx, dz)
+      const edge = doorEdge(movements, node, dx, dz) || gateEdge(movements, node, dx, dz)
       if (edge) out.push(edge)
     }
     return filterDoorExits(movements, node, out)
@@ -176,7 +200,27 @@ function doorEdge(movements, node, dx, dz) {
   if (!across) return null
   let feet = null
   try { feet = movements.getBlock(node, dx, 0, dz) } catch (_) { return null }
-  // Standable floor under the door (never place under one).
+  return passMove(movements, node, dx, dz, feet)
+}
+
+// A level straight step into a fence-gate cell (g0z.46): the head cell
+// above the gate must be clear (the lib reads the gate itself as unsafe,
+// open or shut). Unreadable fails closed, like doorEdge.
+function gateEdge(movements, node, dx, dz) {
+  let feet = null
+  let head = null
+  try {
+    feet = movements.getBlock(node, dx, 0, dz)
+    if (!feet || !isHandGate(feet.name)) return null
+    head = movements.getBlock(node, dx, 1, dz)
+  } catch (_) { return null }
+  if (!head || !head.safe) return null
+  return passMove(movements, node, dx, dz, feet)
+}
+
+// The shared edge: standable floor under the passage (never place under
+// one), the door-handling surcharge, exclusion and entity costs.
+function passMove(movements, node, dx, dz, feet) {
   let under = null
   try { under = movements.getBlock(node, dx, -1, dz) } catch (_) { return null }
   if (!under || !under.physical) return null
@@ -323,7 +367,7 @@ function openNextDoor(bot, ctx) {
     const z = Math.floor(n.z)
     let block = null
     try { block = bot.blockAt && bot.blockAt(new Vec3(x, y, z)) } catch (_) { continue }
-    if (!block || !isHandDoor(block.name)) continue
+    if (!block || !isPassage(block.name)) continue
     const d = Math.hypot(x + 0.5 - bp.x, y + 0.5 - bp.y, z + 0.5 - bp.z)
     if (d > DOOR_REACH || d >= pickD) continue
     pick = { x, y, z, block }
@@ -341,14 +385,14 @@ function openNextDoor(bot, ctx) {
     const fy = Math.floor(bp.y)
     const fz = Math.floor(bp.z)
     const fb = bot.blockAt && bot.blockAt(new Vec3(fx, fy, fz))
-    if (fb && isHandDoor(fb.name) && !doorOpen(fb)) pick = { x: fx, y: fy, z: fz }
+    if (fb && isPassage(fb.name) && !doorOpen(fb)) pick = { x: fx, y: fy, z: fz }
   } catch (_) { /* feet read best-effort */ }
   if (!pick) return
   // State at the moment of the click: a door the player just opened is
   // none of ours — re-read, never trust the scan above.
   let fresh = null
   try { fresh = bot.blockAt && bot.blockAt(new Vec3(pick.x, pick.y, pick.z)) } catch (_) { return }
-  if (!fresh || !isHandDoor(fresh.name) || doorOpen(fresh)) return
+  if (!fresh || !isPassage(fresh.name) || doorOpen(fresh)) return
   const key = doorKey(pick.x, pick.y, pick.z)
   if (!stampReady(ctx, 'doorToggleAt', key, Date.now())) return
   if (!tryToggle(bot, fresh)) return
@@ -365,11 +409,58 @@ function openNextDoor(bot, ctx) {
 // the body is out of the doorway and the door is off the walked-ahead
 // plan, only within reach (a teleport away leaves the entry for the return
 // visit). A missing or non-door cell and an already-shut door untrack.
+// Passed gates (g0z.46, v2): Baritone opens a gate itself and never shuts
+// it, and the opener above never clicks it (the bridge no-ops the open
+// click mid-walk), so the closer would never learn of it. An OPEN gate
+// within GATE_ADOPT_DIST of the body — the body is walking through it —
+// joins the tracked set as seen, and the closer shuts it once past, like
+// its own openings. Gates only: a door someone else opened stays theirs;
+// an open gate in the ring left behind is a mob way in.
+function adoptPassedGates(bot, ctx, bp) {
+  const fx = Math.floor(bp.x)
+  const fy = Math.floor(bp.y)
+  const fz = Math.floor(bp.z)
+  for (const [dx, dz] of [[0, 0], ...DIRS]) {
+    const x = fx + dx
+    const z = fz + dz
+    if (Math.hypot(x + 0.5 - bp.x, z + 0.5 - bp.z) > GATE_ADOPT_DIST) continue
+    let b = null
+    try { b = bot.blockAt && bot.blockAt(new Vec3(x, fy, z)) } catch (_) { continue }
+    if (!b || !isHandGate(b.name) || !doorOpen(b)) continue
+    const tracked = trackedDoors(ctx)
+    const key = doorKey(x, fy, z)
+    if (tracked.has(key)) continue
+    tracked.set(key, { x, y: fy, z, seen: true, adopted: true })
+    while (tracked.size > DOOR_TRACK_MAX) tracked.delete(tracked.keys().next().value)
+  }
+}
+
+// v2 stall (g0z.46 rig): Baritone checks a gate only in the cell it walks
+// INTO. A body pressed against a shut gate has its centre past the cell edge
+// (the gate's box is mid-cell), so Baritone reads it as standing in the gate
+// cell and walks into the panel forever. A shut gate under the feet for
+// GATE_FEET_MS is opened here; the adopt step then shuts it once past.
+function openGateUnderFeet(bot, ctx, bp) {
+  const at = new Vec3(Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z))
+  const b = bot.blockAt && bot.blockAt(at)
+  const key = doorKey(at.x, at.y, at.z)
+  if (!b || !isHandGate(b.name) || doorOpen(b)) { ctx.gateFeetSince = null; return }
+  const now = Date.now()
+  const s = ctx.gateFeetSince
+  if (!s || s.key !== key) { ctx.gateFeetSince = { key, t: now }; return }
+  if (now - s.t < GATE_FEET_MS) return
+  if (!stampReady(ctx, 'doorToggleAt', key, now)) return
+  if (!tryToggle(bot, b)) return
+  try { console.log(`door open under feet at ${at.x} ${at.y} ${at.z}`) } catch (_) { /* log best-effort */ }
+}
+
 function closeOwnDoors(bot, ctx) {
-  const tracked = ctx.doorOpened instanceof Map ? ctx.doorOpened : null
-  if (!tracked || tracked.size === 0) return
   const bp = botPos(bot)
   if (!bp) return
+  try { openGateUnderFeet(bot, ctx, bp) } catch (_) { /* unstick best-effort */ }
+  try { adoptPassedGates(bot, ctx, bp) } catch (_) { /* adopt best-effort */ }
+  const tracked = ctx.doorOpened instanceof Map ? ctx.doorOpened : null
+  if (!tracked || tracked.size === 0) return
   const nodes = planWindow(ctx)
   const ahead = nodes ? nearestAhead(nodes, bp) : 0
   const feetKey = doorKey(Math.floor(bp.x), Math.floor(bp.y), Math.floor(bp.z))
@@ -377,7 +468,7 @@ function closeOwnDoors(bot, ctx) {
     if (!door || typeof door.x !== 'number') { tracked.delete(key); continue }
     let block = null
     try { block = bot.blockAt && bot.blockAt(new Vec3(door.x, door.y, door.z)) } catch (_) { continue }
-    if (!block || !isDoorName(block.name)) { tracked.delete(key); continue }
+    if (!block || !(isDoorName(block.name) || isHandGate(block.name))) { tracked.delete(key); continue }
     if (!doorOpen(block)) {
       // Only an observed open untracks on shut (sendback a): a closed read
       // on an unseen entry is the open echo still in flight — stay tracked
@@ -392,9 +483,15 @@ function closeOwnDoors(bot, ctx) {
       const at = windowIndexOf(nodes, door.x, door.y, door.z)
       if (doorStillAhead(nodes, ahead, at, bp)) continue // still walking toward it
     }
-    if (Math.hypot(door.x + 0.5 - bp.x, door.z + 0.5 - bp.z) <= DOOR_CLOSE_DIST) continue
+    const hd = Math.hypot(door.x + 0.5 - bp.x, door.z + 0.5 - bp.z)
+    // Adopted gate (v2, no plan window — revmux 03 minor): shut only while
+    // the body walks AWAY (a wobble back toward it keeps it open), and a
+    // missed shut is dropped at reach, never shut ahead on a return visit.
+    const nearing = door.adopted && typeof door.lastHd === 'number' && hd <= door.lastHd
+    if (door.adopted) door.lastHd = hd
+    if (hd <= DOOR_CLOSE_DIST || nearing) continue
     const d = Math.hypot(door.x + 0.5 - bp.x, door.y + 0.5 - bp.y, door.z + 0.5 - bp.z)
-    if (d > DOOR_REACH) continue // out of reach: shut on the return visit
+    if (d > DOOR_REACH) { if (door.adopted) tracked.delete(key); continue } // shut on the return visit (own openings only)
     if (!stampReady(ctx, 'doorShutAt', key, Date.now())) continue
     if (!tryToggle(bot, block)) continue
     try { console.log(`door shut at ${door.x} ${door.y} ${door.z}`) } catch (_) { /* log best-effort */ }
@@ -424,6 +521,8 @@ module.exports = {
   doorShutFast,
   isDoorName,
   isHandDoor,
+  isHandGate,
+  isPassage,
   DOOR_PASS_EXTRA,
   DOOR_REACH,
   DOOR_CLOSE_DIST,

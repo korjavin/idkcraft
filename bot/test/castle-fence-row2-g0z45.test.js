@@ -24,7 +24,11 @@ const PAINT = { stone: 'cobblestone', planks: 'oak_planks', frame: 'spruce_log',
 const k3 = (x, y, z) => `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`
 const settle = () => new Promise((r) => setImmediate(r))
 const PLAN_FENCES = V2.PLAN.filter((c) => c.kind === 'fence')
-const ROW2 = blueprint.DECOR[2].filter((c) => c.kind === 'fence')
+// g0z.46 appends the gap's posts (dz 0, dx 14/16, dy 0 and 1) after the
+// nook: the g0z.45 row is every decor fence outside that gap.
+const inGap = (c) => c.dz === 0 && c.dx >= 14 && c.dx <= 16
+const ROW2 = blueprint.DECOR[2].filter((c) => c.kind === 'fence' && !inGap(c))
+const ROW2_END = blueprint.DECOR_BASE + 46 + PLAN_FENCES.length // idx past the g0z.45 row
 
 describe('castle second fence row plan (g0z.45)', () => {
   it('one dy-1 fence cell per plan fence cell, count asserted from the plan', () => {
@@ -69,7 +73,7 @@ describe('castle second fence row plan (g0z.45)', () => {
   it('rotations keep every row-2 cell over its post at all 4 rots', () => {
     for (let rot = 0; rot < 4; rot++) {
       const plan = blueprint.absPlan(SITE, rot, 2)
-      const row = blueprint.decorPlan(SITE, rot, 2).cells.filter((c) => c.kind === 'fence')
+      const row = blueprint.decorPlan(SITE, rot, 2).cells.filter((c) => c.kind === 'fence' && c.idx < ROW2_END)
       assert.equal(row.length, PLAN_FENCES.length)
       for (const c of row) {
         const below = plan.at.get(k3(c.x, c.y - 1, c.z))
@@ -206,7 +210,7 @@ describe('castle second fence row behaviour (g0z.45)', () => {
   it('decorOpen lists the row on a seeded complete castle', () => {
     const bot = castleBot()
     const open = castleMod.decorOpen(bot, completeState(), Date.now())
-    assert.equal(open.filter((c) => c.kind === 'fence').length, PLAN_FENCES.length)
+    assert.equal(open.filter((c) => c.kind === 'fence').length, PLAN_FENCES.length + 4) // + the g0z.46 gap posts
   })
 
   it('the tail lays held fences on the lower posts; progress and phase stay complete', async () => {
