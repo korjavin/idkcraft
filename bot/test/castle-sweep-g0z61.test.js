@@ -152,6 +152,28 @@ describe('g0z.61 scaffoldShape', () => {
   })
 })
 
+describe('g0z.61 rig seeds (castle-replay litterSeeds)', () => {
+  it('30 litter items all sweep by shape in a full pass, the 5 player structures never', () => {
+    const { litterSeeds, seedCastleCells } = require('../tools/castle-replay')
+    const st = st3()
+    const seeds = litterSeeds(st)
+    assert.equal(seeds.litter.length, 30)
+    assert.deepEqual(seeds.litter.map((o) => o.what).reduce((m, w) => ({ ...m, [w]: (m[w] || 0) + 1 }), {}), { tower: 1, yard: 9, bridge: 10, outside: 10 })
+    assert.equal(seeds.litter.find((o) => o.what === 'tower').cells.length, 4)
+    assert.deepEqual(seeds.player.map((o) => o.what), ['wall', 'path', 'chest', 'bed', 'post'])
+    // The rig world: the seeded castle (rcon setblocks) on a dirt pad, then the seeds.
+    const cells = new Map()
+    for (const c of seedCastleCells(st)) cells.set(key(c.x, c.y, c.z), c.block.split('[')[0])
+    for (const o of [...seeds.litter, ...seeds.player]) for (const c of o.cells) cells.set(key(c.x, c.y, c.z), c.block.split('[')[0])
+    const bot = worldBot(cells)
+    const list = pass(bot, { castle: st })
+    for (const o of seeds.litter) for (const c of o.cells) assert.ok(has(list, c.x, c.y, c.z), `${o.what} ${c.x},${c.y},${c.z}`)
+    for (const o of seeds.player) for (const c of o.cells) assert.ok(!has(list, c.x, c.y, c.z), `player ${o.what} ${c.x},${c.y},${c.z}`)
+    const litterK = new Set(seeds.litter.flatMap((o) => o.cells).map((c) => key(c.x, c.y, c.z)))
+    assert.deepEqual(list.filter((c) => !litterK.has(key(c.x, c.y, c.z))).map((c) => key(c.x, c.y, c.z)), [], 'nothing else in the seeded castle')
+  })
+})
+
 describe('g0z.61 own blocks, players, idx', () => {
   it('own scaffold in the band sweeps, own beds/chests never', () => {
     const cells = painted()
