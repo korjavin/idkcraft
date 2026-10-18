@@ -106,15 +106,18 @@ function banDoorBreaks(movements) {
   }
 }
 
-// Part 2: hand-door ids read as openable (the postProcessPath doorway arm —
-// floor centre, not on top of the panel). canOpenDoors stays false: the
-// lib's blind useOne click would shut open doors.
+// Part 2: hand-door and gate ids read as openable (the postProcessPath
+// doorway arm — floor centre, not on top of the panel). The lib's own gate
+// list (interactable.json) misses the newer woods (cherry, mangrove,
+// bamboo, crimson, warped, pale_oak), so every *_fence_gate joins here
+// (g0z.46 revmux 01). canOpenDoors stays false: the lib's blind useOne
+// click would shut open doors.
 function addHandDoorsOpenable(movements) {
   if (!movements || !(movements.openable instanceof Set)) return
   const reg = registryOf(movements)
   if (!reg) return
   for (const name of Object.keys(reg.blocksByName)) {
-    if (!isHandDoor(name)) continue
+    if (!isPassage(name)) continue
     const e = reg.blocksByName[name]
     if (e && Number.isInteger(e.id)) movements.openable.add(e.id)
   }

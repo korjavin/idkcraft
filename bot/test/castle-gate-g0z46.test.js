@@ -224,6 +224,13 @@ describe('doors: fence gates (g0z.46)', () => {
     })
   }
 
+  it('every wood gate reads openable, the lib list misses the newer woods (revmux 01)', () => {
+    const m = wired(yardCells())
+    for (const n of ['oak_fence_gate', 'cherry_fence_gate', 'mangrove_fence_gate', 'bamboo_fence_gate', 'crimson_fence_gate', 'warped_fence_gate']) {
+      assert.ok(m.openable.has(mcData.blocksByName[n].id), `${n} not openable`)
+    }
+  })
+
   it('a gate under a solid head cell is no passage', () => {
     assert.notEqual(plan(wired(yardCells({ head: 'bedrock' }))).status, 'success')
   })
