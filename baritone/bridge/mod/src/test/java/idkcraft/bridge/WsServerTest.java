@@ -40,6 +40,25 @@ public class WsServerTest {
     }
 
     @Test
+    public void serialRoundTripsDoNotWaitOnDelayedAck() throws Exception {
+        // neuc.67.1.1: a header segment then a payload segment under Nagle
+        // waited the peer's delayed ACK, ~40 ms per reply on Linux. 50 serial
+        // calls then take ~2 s; one write per frame + TCP_NODELAY, a few ms.
+        server = new WsServer(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), msg -> "{\"ok\":1}");
+        server.start();
+        try (RawClient c = new RawClient(server.getPort())) {
+            c.sock.setTcpNoDelay(true); // the Node ws client sets it too
+            long t0 = System.nanoTime();
+            for (int i = 0; i < 50; i++) {
+                c.sendText("{\"id\":" + i + "}");
+                assertEquals("{\"ok\":1}", c.nextText());
+            }
+            long ms = (System.nanoTime() - t0) / 1_000_000;
+            assertTrue(ms < 1000, "50 serial round trips took " + ms + " ms");
+        }
+    }
+
+    @Test
     public void largeReplyRoundTrips() throws Exception {
         // chunk.get replies are ~260 KB (24 base64 sections): one text frame
         // with a 127-length header must reach the client intact (neuc.6).
