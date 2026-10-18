@@ -707,10 +707,13 @@ function anyCastle(ctx, fn) {
 }
 // The v1 place guards' one predicate: the complete known castle whose
 // apron holds pos, else null. The own castle's castle step (site walks,
-// repairs) and an unfinished own castle (castlefetch/gather around a site
-// in progress) keep the yard ring only.
+// repairs), its house build step (build.js towers to wall/roof cells by
+// the castle) and an unfinished own castle (castlefetch/gather around a
+// site in progress) keep the yard ring only. ponytail: every other A*
+// placement in the apron is vetoed too, flat's at/below-level bridging
+// included (flat's own fill places bypass the seam).
 function inCastleApron(ctx, pos) {
-  return anyCastle(ctx, (c, own) => c.phase === 'complete' && !(own && ctx.step === 'castle') && apronOf(c, pos))
+  return anyCastle(ctx, (c, own) => c.phase === 'complete' && !(own && (ctx.step === 'castle' || ctx.step === 'build')) && apronOf(c, pos))
 }
 
 // Fence band (idkcraft-g0z.44): cells within 1 of the fence ring line (the

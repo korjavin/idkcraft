@@ -192,4 +192,24 @@ describe('g0z.63 shelter: 16 from a peer castle walks out of its apron first', (
     assert.equal(blueprint.apronOf(ctx.knownCastles[0], walk), false, JSON.stringify(walk))
     assert.ok(Math.hypot(walk.x - (SITE.x - 16), walk.z - (SITE.z + 3)) <= 3, 'the nearest such spot')
   })
+  it('from the centre of a 31x27 peer box the search still leaves the apron (revmux 01)', () => {
+    const b = worldBot(new Map(), { ground: (x, y) => (y <= 64 ? 'dirt' : 'air') })
+    b.entity.position = pos(SITE.x + 15.5, 65, SITE.z + 13.5)
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: null, knownCastles: [complete()] }
+    const orig = console.log
+    console.log = () => {}
+    try { home.shelter(b, ctx, null, null) } finally { console.log = orig }
+    const walk = ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk
+    assert.ok(walk, 'a spot past the apron')
+    assert.equal(blueprint.apronOf(ctx.knownCastles[0], walk), false, JSON.stringify(walk))
+  })
+})
+
+describe('g0z.63 own complete castle: the house build step keeps the yard ring only (revmux 01 minor)', () => {
+  it('build exempt, gather vetoed', () => {
+    const p = { x: SITE.x - 10, y: 65, z: SITE.z }
+    assert.equal(blueprint.inCastleApron({ castle: complete(), step: 'build' }, p), null)
+    assert.ok(blueprint.inCastleApron({ castle: complete(), step: 'gather' }, p))
+    assert.ok(blueprint.inCastleApron({ castle: null, knownCastles: [complete()], step: 'build' }, p), 'a peer castle is never exempt')
+  })
 })
