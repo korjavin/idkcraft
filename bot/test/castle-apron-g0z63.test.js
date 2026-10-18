@@ -205,6 +205,25 @@ describe('g0z.63 shelter: 16 from a peer castle walks out of its apron first', (
   })
 })
 
+describe('g0z.63 shelter fallback: no ground past the apron keeps the gap-6 walk-off (revmux 02 minor)', () => {
+  it('own complete castle, ground only within box+10: the spot is 6+ from the box', () => {
+    const { w, d } = blueprint.siteDimensions(0, 3)
+    const ground = (x, y, z) => (y <= 64 && x >= SITE.x - 10 && x < SITE.x + w + 10 && z >= SITE.z - 10 && z < SITE.z + d + 10 ? 'dirt' : 'air')
+    const b = worldBot(new Map(), { ground })
+    b.entity.position = pos(SITE.x - 3 + 0.5, 65, SITE.z + 3.5)
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: complete() }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try { home.shelter(b, ctx, null, null) } finally { console.log = orig }
+    assert.ok(logs.some((m) => m.includes('shelter leaving the castle band')), JSON.stringify(logs))
+    const walk = ctx.shelter && ctx.shelter.dig && ctx.shelter.dig.walk
+    assert.ok(walk, JSON.stringify(logs))
+    assert.equal(blueprint.nightBand(ctx.castle, walk), false, JSON.stringify(walk))
+    assert.ok(blueprint.apronOf(ctx.castle, walk), 'the fallback spot is inside the apron')
+  })
+})
+
 describe('g0z.63 own complete castle: the house build step keeps the yard ring only (revmux 01 minor)', () => {
   it('build exempt, gather vetoed', () => {
     const p = { x: SITE.x - 10, y: 65, z: SITE.z }
