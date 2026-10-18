@@ -6,7 +6,7 @@ const { NEED_LOGS, TABLE_REACH } = require('../budget')
 const { countItems } = require('../perception')
 const { isStone } = require('../castle')
 const { stepDone, stepFailed, stepGen } = require('../step')
-const { issueGoal, clearGoal } = require('./util')
+const { issueGoal, clearGoal, inHouseFootprint } = require('./util')
 
 // craft: logs -> planks -> crafting table -> door, one op per tick, async
 // with ctx.craftInFlight (same shape as eatInFlight). Registered in
@@ -1315,6 +1315,15 @@ function craft(bot, ctx, target, state) {
         }
       } else {
         const key = `craft-table:${tablePos.x},${tablePos.y},${tablePos.z}`
+        // neuc.65.6.1: the house table behind a holed doorstep/floor is a
+        // drop into the void under the crust — build refills it first.
+        let holed = false
+        try { holed = !!inHouseFootprint(ctx.home, tablePos) && require('./build').holeOwed(bot, ctx.home, ctx.buildSkip) } catch (_) { holed = false }
+        if (holed) {
+          clearGoal(bot, ctx)
+          stepFailed(ctx, 'entrance-holed')
+          return
+        }
         if (key !== ctx.lastGoalKey) {
           issueGoal(bot, ctx, tableGoal(bot, tablePos), key, false)
         }

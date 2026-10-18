@@ -1197,6 +1197,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       ctx.home.built = false
       console.log('home: natural ground inside the house, re-opening the build (rw4.19)')
       try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
+    } else if (ctx.home && ctx.home.site && ctx.home.built && buildMod.holeOwed(bot, ctx.home, ctx.buildSkip)) {
+      // neuc.65.6.1: a holed doorstep/floor (crust over a void) re-opens so
+      // build refills it; gohome yields to build meanwhile (home.js).
+      ctx.home.built = false
+      console.log('home: doorstep/floor holed, re-opening the build (neuc.65.6.1)')
+      try { memory.save(bot, ctx) } catch (_) { /* memory best-effort */ }
     }
     // The chain owns ctx.retreat only across its own dispatches: any other
     // step taking the tick ends the episode, so the next veto re-chains

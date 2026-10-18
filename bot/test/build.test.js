@@ -138,8 +138,8 @@ describe('rw4.4 (b) blueprint: table first, ring-door-ring-roof', () => {
     assert.equal(roof.length, 16)
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
   })
-  it('v2 lays 130 cells: table, 5 floor, 21+door+21, 42 roof, 8 partition, 31 clear', () => {
-    assert.equal(BLUEPRINT_V2.length, 130)
+  it('v2 lays 149 cells: table, 5 floor, 21+door+21, 42 roof, 8 partition, 31 clear, 19 doorstep+floor', () => {
+    assert.equal(BLUEPRINT_V2.length, 149)
     assert.equal(PLANK_COUNT_V2, 92)
     assert.deepEqual(BLUEPRINT_V2[0], { dx: 5, dy: 0, dz: 1, kind: 'table' })
     const floor = BLUEPRINT_V2.slice(1, 6)
@@ -160,7 +160,12 @@ describe('rw4.4 (b) blueprint: table first, ring-door-ring-roof', () => {
     assert.ok(roof.every((c) => c.kind === 'planks' && c.dy === 2))
     const part = BLUEPRINT_V2.slice(doorIdx + 64, doorIdx + 72)
     assert.equal(part.length, 8)
-    assert.equal(BLUEPRINT_V2.slice(doorIdx + 72).length, 31) // rw4.19 clear cells, appended
+    assert.equal(BLUEPRINT_V2.slice(doorIdx + 72, doorIdx + 103).length, 31) // rw4.19 clear cells, appended
+    const holes = BLUEPRINT_V2.slice(doorIdx + 103) // neuc.65.6.1 doorstep row + interior floor, appended
+    assert.equal(holes.length, 19)
+    assert.ok(holes.every((c) => c.kind === 'fill' && c.dy === -1))
+    assert.deepEqual(holes.slice(0, 3).map((c) => [c.dx, c.dz]), [[2, -1], [3, -1], [4, -1]])
+    assert.equal(new Set(BLUEPRINT_V2.filter((c) => c.kind === 'fill').map((c) => `${c.dx},${c.dz}`)).size, 24, 'no duplicate fill cell')
     assert.deepEqual(part.map((c) => [c.dx, c.dy, c.dz]).sort((a, b) => a[0] - b[0] || a[2] - b[2] || a[1] - b[1]), [
       [1, 0, 3], [1, 1, 3], [3, 0, 3], [3, 1, 3], [3, 0, 4], [3, 1, 4], [5, 0, 3], [5, 1, 3],
     ])
@@ -258,7 +263,7 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
     bot.entity.position = pos(11, 64, 2) // next to the table cell (placements are in-reach only)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
     build(bot, ctx, null, null) // tick 1: progress chat + approach goal
-    assert.ok(bot.chats.some((m) => m === 'building 36/130')) // the dirt floor and the air interior read done from the start
+    assert.ok(bot.chats.some((m) => m === 'building 55/149')) // the dirt floor and the air interior read done from the start
     assert.equal(bot.calls.goals.length, 1)
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalPlaceBlock')
     assert.equal(bot.calls.places.length, 0)
@@ -1219,6 +1224,26 @@ describe('rw4.19 interior clear cells', () => {
     assert.equal(build.clearOwed(bot, home, []), false)
     assert.equal(home.built, true)
     assert.ok(bot.chats.some((m) => m === `home done at ${s.x} ${s.y} ${s.z}`))
+  })
+
+  it('neuc.65.6.1: a holed doorstep/floor is owed (re-open), skips and v1 are not', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    paintHouse(world, home)
+    for (const c of BLUEPRINT_V2) if (c.kind === 'clear') world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    assert.equal(build.holeOwed(bot, home, []), false, 'dirt under a painted house: nothing owed')
+    world.set(s.x + 3, s.y - 1, s.z - 1, 'air') // the doorstep crust fell in
+    const di = BLUEPRINT_V2.findIndex((c) => c.kind === 'fill' && c.dx === 3 && c.dz === -1)
+    assert.equal(build.holeOwed(bot, home, []), true)
+    assert.equal(build.isComplete(bot, home), false, 'the stale-built flip waits for the refill')
+    assert.equal(build.nextCellIdx(bot, home, []), di)
+    assert.equal(build.holeOwed(bot, home, [di]), false, 'a skipped fill never re-opens')
+    assert.equal(build.holeOwed(bot, { ...home, v: 1 }, []), false, 'v1 plan has no doorstep row')
+    world.set(s.x + 3, s.y - 1, s.z - 1, 'oak_planks')
+    world.set(s.x + 4, s.y - 1, s.z + 1, 'air') // a floor cell beside the table
+    assert.equal(build.holeOwed(bot, home, []), true)
   })
 
   it('(c) air, flora and furnishings in clear cells are done without a dig', () => {

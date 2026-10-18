@@ -144,6 +144,20 @@ const BLUEPRINT_V2 = (() => {
       }
     }
   }
+  // Doorstep + interior floor (idkcraft-neuc.65.6.1): prod v2 founded on a
+  // 1-block crust over a void; the doorstep crust (outsidePos, dz -1) and
+  // floor cells fell in and every walk into the house dropped 6 (10 fall
+  // deaths at one cell). The doorstep row (dx 2..4, inHouseFootprint's door
+  // apron) and every interior floor cell not already filled under a bed
+  // are fill cells, so holeOwed re-opens a built house and build refills
+  // them. APPENDED (persisted skip indices stay put).
+  for (let dx = 2; dx <= 4; dx++) plan.push({ dx, dy: -1, dz: -1, kind: 'fill' })
+  const bedFloor = new Set(['1,4', '2,4', '4,4', '5,4'])
+  for (let dz = 1; dz <= 4; dz++) {
+    for (let dx = 1; dx <= 5; dx++) {
+      if (!bedFloor.has(`${dx},${dz}`)) plan.push({ dx, dy: -1, dz, kind: 'fill' })
+    }
+  }
   return plan
 })()
 
@@ -371,6 +385,20 @@ function clearOwed(bot, home, skipped) {
     if (!home || !home.site || home.v !== 2) return false
     const skip = new Set(Array.isArray(skipped) ? skipped : [])
     return blueprintFor(home).some((c, i) => c.kind === 'clear' && !skip.has(i) &&
+      cellLoaded(bot, home, c) && !cellDone(bot, home, c))
+  } catch (_) { return false }
+}
+
+// A built v2 house with a loaded hole in a fill cell (doorstep row,
+// floor; idkcraft-neuc.65.6.1): the index.js revalidation re-opens it so
+// build refills the floor before any walk drops through it, and interior
+// walks fail soft (entrance-holed) meanwhile. Skips do not count (the
+// clearOwed rule: a refused fill waits for the 1h skip retry).
+function holeOwed(bot, home, skipped) {
+  try {
+    if (!home || !home.site || home.v !== 2) return false
+    const skip = new Set(Array.isArray(skipped) ? skipped : [])
+    return blueprintFor(home).some((c, i) => c.kind === 'fill' && !skip.has(i) &&
       cellLoaded(bot, home, c) && !cellDone(bot, home, c))
   } catch (_) { return false }
 }
@@ -1260,6 +1288,7 @@ module.exports.isPlanCell = isPlanCell
 module.exports.nextCellIdx = nextCellIdx
 module.exports.isComplete = isComplete
 module.exports.clearOwed = clearOwed
+module.exports.holeOwed = holeOwed
 module.exports.houseTableOwed = houseTableOwed
 module.exports.houseTableAt = houseTableAt
 module.exports.countRemainingPlanks = countRemainingPlanks

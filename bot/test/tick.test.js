@@ -1023,6 +1023,48 @@ describe('work mode (epic rw4)', () => {
     }
   })
 
+  it('(a6c) built v2 house over a holed doorstep re-opens; a skipped fill does not (neuc.65.6.1)', async () => {
+    for (const skipped of [false, true]) {
+      const bot = workBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }]
+      const cells = new Map()
+      const site = { x: 8, y: 64, z: 8 }
+      const plan = buildMod.blueprintFor({ v: 2 })
+      for (const c of plan) {
+        cells.set(`${site.x + c.dx},${site.y + c.dy},${site.z + c.dz}`, c.kind === 'clear' ? 'air' : c.kind === 'table' ? 'crafting_table' : c.kind === 'door' ? 'oak_door' : c.kind === 'fill' ? 'dirt' : 'oak_planks')
+      }
+      cells.set(`${site.x + 3},${site.y - 1},${site.z - 1}`, 'air') // the doorstep crust fell into the void
+      bot.blockAt = (pt) => {
+        const n = cells.get(`${Math.floor(pt.x)},${Math.floor(pt.y)},${Math.floor(pt.z)}`)
+        return n ? { name: n, boundingBox: n === 'air' ? 'empty' : 'block' } : null
+      }
+      bot.findBlocks = () => []
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = bot._tickerCtx
+      ctx.adoptDone = true
+      const step = plan.findIndex((c) => c.kind === 'fill' && c.dx === 3 && c.dz === -1)
+      ctx.buildSkip = skipped ? [step] : []
+      ctx.home = { site, v: 2, built: true, table: null }
+      const origRest = BEHAVIOURS.rest
+      const origBuild = BEHAVIOURS.build
+      BEHAVIOURS.rest = () => {}
+      BEHAVIOURS.build = () => {}
+      try {
+        await ticker.tick()
+        assert.equal(ctx.home.built, skipped, skipped ? 'a refused fill keeps the house' : 'the hole re-opens the build')
+        await ticker.tick()
+        assert.equal(ctx.home.built, skipped, 'no flicker on the next tick')
+        assert.ok(!bot.chats.some((m) => m.startsWith('home done at')), 'no announce over the hole')
+      } finally {
+        BEHAVIOURS.rest = origRest
+        BEHAVIOURS.build = origBuild
+        ticker.destroy()
+      }
+    }
+  })
+
   it('(a7) work + skipped hole with a stale built=false: revalidation never flips (vmzq.10)', async () => {
     // Prod (site -40 63 -215): 30 given-up cells read as done and the house
     // announced `home done` over the holes. The post-dispatch recheck must
