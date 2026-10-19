@@ -298,16 +298,21 @@ describe('gather replant (idkcraft-gc3j)', () => {
   })
 
   it('a leafless owner pillar stays protected: never dug, never planted', async () => {
-    const names = { '12,63,0': 'dirt', '12,64,0': 'oak_log', '12,65,0': 'oak_log' }
-    const bot = mockBot({
-      names,
-      items: [{ name: 'oak_sapling', count: 1 }],
-      syncHits: [{ x: 12, y: 64, z: 0 }, { x: 12, y: 65, z: 0 }],
-    })
+    // revmux 02 core-2: the pillar is unloaded at commit time (a memory
+    // stand past view) and streams in as an owner build by the dig — the
+    // dig-deny forgets it, so no later run walks it again.
+    const names = { '200,63,0': 'dirt', '200,64,0': 'oak_log', '200,65,0': 'oak_log' }
+    const bot = mockBot({ names, items: [{ name: 'oak_sapling', count: 1 }] })
+    const rawAt = bot.blockAt
+    bot.blockAt = (p) => (
+      Math.abs(Math.floor(p.x) - bot.entity.position.x) > 100 ? null : rawAt(p)
+    )
     const ctx = homeCtx()
+    resources.noteSpots(ctx, [{ x: 200, y: 64, z: 0, name: 'oak_log' }], Date.now())
     await drive(bot, ctx, 60)
     assert.equal(bot.digCalls, 0)
     assert.equal(bot.placeCalls, 0)
+    assert.ok(!memCells(ctx).has('200,64,0'), 'protected cell forgotten on deny')
   })
 })
 

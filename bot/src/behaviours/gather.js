@@ -705,6 +705,13 @@ function gather(bot, ctx, target, state) {
     const gDeny = denyReason(bot, g.block, ctx) // idkcraft-drq: placed logs are not trees
     if (gDeny) {
       logDeny(g.block, gDeny)
+      // revmux 02 core-2: a protected cell is gone for every future run
+      // too (forage.js precedent) — trap denials stay trip-scoped.
+      try {
+        if (gDeny === 'protected' && g.pos && typeof g.pos.x === 'number') {
+          resources.forget(ctx, Math.floor(g.pos.x), Math.floor(g.pos.y), Math.floor(g.pos.z))
+        }
+      } catch (_) { /* forget best-effort */ }
       g.skip.add(keyOf(g.pos))
       // 'protected' is a property of the block, not of the trip: it
       // survives the drop-landed clear below, or the bot re-walks to the
