@@ -2000,6 +2000,21 @@ function castlefetch(bot, ctx, target, state) {
     }
     return
   }
+  // vf8e.8 verifier P2: wood that lands mid-leg (gather's first chop,
+  // the re-opened chest draw) must re-craft instead of holding with the
+  // table funded — stairsTableFunded flips true so the branch below is
+  // skipped, but f.craftOut still blocks craftTick. Clear the out flags
+  // once per leg on the unfunded->funded transition (never when the pack
+  // was funded all along: a full load that cannot table still holds).
+  if (d.kind === 'stairs' && f.craftOut && f.tableRetry && !f.fundedRetry) {
+    if (!stairsTableFunded(bot, ctx)) f.brokeUnfunded = true
+    else if (f.brokeUnfunded) {
+      f.fundedRetry = true
+      f.craftOut = false
+      f.tableRetry = false
+      return // craft retries next tick
+    }
+  }
   if (d.kind === 'stairs' && stairsTableBroke(bot, ctx, f)) {
     // vf8e.8: the table craft is still out and the pack holds no wood —
     // chop the table's log through the wood route's load (its surplus

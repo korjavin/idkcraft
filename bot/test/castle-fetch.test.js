@@ -607,13 +607,13 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     const asked = []
     fetch.deps.craftItem = (b, c, names, n) => { asked.push([names, n]); return 'running' }
     const items = stairsPack()
-    const chest = [{ name: 'crafting_table', count: 1 }]
+    const chest = [{ name: 'crafting_table', count: 5 }]
     const bot = stairsBot({ items, chest })
     const ctx = { castle: castleState() }
     fetch(bot, ctx)
     for (let i = 0; i < 10; i++) await settle()
     assert.equal(count(items, 'crafting_table'), 1, 'draws the table, not the stairs need')
-    assert.equal(chest[0].count, 0)
+    assert.equal(chest[0].count, 4)
     assert.deepEqual(asked, [], 'chestTick owns the tick')
     fetch(bot, ctx)
     assert.deepEqual(asked, [[['cobblestone_stairs'], 4]], 'craft runs next tick')
@@ -656,6 +656,26 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     fetch(bot, ctx)
     fetch(bot, ctx)
     assert.equal(chopped, 1)
+    assert.equal(ctx.stepStatus, undefined)
+  })
+
+  it('stairs: wood landed mid-leg re-crafts next tick instead of holding (vf8e.8 verifier P2)', () => {
+    castleMod.menuFact = stairsWord
+    let calls = 0
+    fetch.deps.craftItem = () => { calls++; return { done: false, line: 'need a crafting table' } }
+    const items = stairsPack()
+    fetch.deps.gather = () => {
+      const it = items.find((i) => i.name === 'oak_log')
+      if (it) it.count++
+      else items.push({ name: 'oak_log', count: 1 })
+    }
+    const bot = makeBot({ items })
+    const ctx = { castle: castleState() }
+    fetch(bot, ctx) // craft fails once: the table retry
+    fetch(bot, ctx) // craft fails twice: craftOut; gather chops the first log
+    fetch(bot, ctx) // funded now: the out flags clear instead of holding
+    fetch(bot, ctx) // craft retries with the wood on hand
+    assert.equal(calls, 3, 'the retry runs instead of failed:castlefetch-no-stairs')
     assert.equal(ctx.stepStatus, undefined)
   })
 
