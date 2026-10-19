@@ -132,6 +132,22 @@ describe('castle tidy (g0z.62)', () => {
     assert.equal(goal.displacedFromCastle(bot, ctx), false)
   })
 
+  it('revmux 02: a leg that keeps moving but never arrives ends after 10 min of leg time; night gaps do not count', () => {
+    const bot = makeBot({ loaded: false, at: FAR() })
+    const ctx = { castle: castleState(), step: 'gocastle', stepStatus: 'running' }
+    const t0 = Date.now()
+    let t = t0
+    for (; t < t0 + 9 * 60000; t += 1000) assert.equal(castleMod.menuFact(bot, ctx, t), 'tidy')
+    // A night with the leg off: the clock holds.
+    ctx.step = 'shelter'
+    for (const end = t + 10 * 60000; t < end; t += 1000) castleMod.menuFact(bot, ctx, t)
+    ctx.step = 'gocastle'
+    assert.equal(castleMod.menuFact(bot, ctx, t), 'tidy')
+    for (const end = t + 2 * 60000; t < end; t += 1000) castleMod.menuFact(bot, ctx, t)
+    assert.equal(castleMod.menuFact(bot, ctx, t), 'done')
+    assert.ok(ctx.castle.visitedAt > t0 + 19 * 60000)
+  })
+
   it('visitedAt persists through memory save/restore (future stamps clamp to now)', () => {
     const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'g0z62-')), 'IdkBot.json')
     const bot = { username: 'IdkBot', spawnPoint: { x: 0, y: 64, z: 0 } }

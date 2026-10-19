@@ -1027,6 +1027,9 @@ function siteLoaded(bot, st) {
 // return walk's displacement ends — no band where the walk stops short of
 // a visit and the bot ping-pongs at the load edge.
 const TIDY_VISIT_DIST = 64
+// ponytail: a flat 10-min cap on the walk back (230 blocks walk in ~2);
+// make it distance-scaled if a castle ever sits a far-leg away.
+const TIDY_TRIP_MS = 10 * 60 * 1000
 function tidyMs() {
   const raw = process.env.CASTLE_TIDY_MS
   const v = raw ? Number(raw) : NaN
@@ -1037,12 +1040,15 @@ function tidyDue(st, now = Date.now()) {
   if (!st || !st.site || st.phase !== 'complete' || st.parked || !(ms > 0)) return false
   return now - (typeof st.visitedAt === 'number' ? st.visitedAt : 0) > ms
 }
-function noteVisit(bot, st, now) {
+function noteVisit(bot, ctx, st, now) {
   try {
     const bp = bot && bot.entity && bot.entity.position
     if (!bp || typeof bp.x !== 'number') return
     const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-    if (Math.hypot(bp.x - (st.site.x + w / 2), bp.z - (st.site.z + d / 2)) <= TIDY_VISIT_DIST) st.visitedAt = now
+    if (Math.hypot(bp.x - (st.site.x + w / 2), bp.z - (st.site.z + d / 2)) <= TIDY_VISIT_DIST) {
+      st.visitedAt = now
+      ctx.tidyLegMs = 0
+    }
   } catch (_) { /* visit best-effort */ }
 }
 
@@ -1068,11 +1074,22 @@ function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
   if (st.parked) return 'parked'
-  // Tidy bound (g0z.62 revmux 01): the watchdog never watches a complete
-  // castle, so a failed trip leg counts as the visit — one try per
-  // CASTLE_TIDY_MS, never a day of re-walks to an unreachable site. Read
-  // here (decide's first facts read), so this very tick already says 'done'.
-  if ((ctx.step === 'gocastle' || ctx.step === 'castle') && failReason(ctx.stepStatus) !== null && tidyDue(st, now)) st.visitedAt = now
+  // Tidy bound (g0z.62 revmux 01/02): the watchdog never watches a
+  // complete castle, so a failed trip leg — or TIDY_TRIP_MS of leg time
+  // without arriving (a walk that moves but never closes in) — counts as
+  // the visit: one try per CASTLE_TIDY_MS, never a day of re-walks to an
+  // unreachable site. Leg time only (ticks capped at 5 s), so a night
+  // between legs does not eat the trip. Read here (decide's first facts
+  // read), so this very tick already says 'done'.
+  if (tidyDue(st, now)) {
+    const leg = ctx.step === 'gocastle' || ctx.step === 'castle'
+    if (leg) ctx.tidyLegMs = (ctx.tidyLegMs || 0) + Math.max(0, Math.min(now - (ctx.tidyTickAt || now), 5000))
+    if ((leg && failReason(ctx.stepStatus) !== null) || ctx.tidyLegMs > TIDY_TRIP_MS) {
+      st.visitedAt = now
+      ctx.tidyLegMs = 0
+    }
+  }
+  ctx.tidyTickAt = now
   try {
     if (!siteLoaded(bot, st)) {
       if (st.phase === 'complete') return tidyDue(st, now) ? 'tidy' : 'done'
@@ -1082,7 +1099,7 @@ function menuFact(bot, ctx, now = Date.now()) {
       const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
       return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH)
     }
-    noteVisit(bot, st, now)
+    noteVisit(bot, ctx, st, now)
     let r = peek(bot, st, now, ctx)
     // Prep with nothing left to prep (g0z.15): the next castle tick starts
     // the body, so the word is the body's — never 'finish' at 0/240.
