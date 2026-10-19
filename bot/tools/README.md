@@ -640,7 +640,24 @@ recorded per bead):
 | dig_step S6 rescue (au4j, 6x7.11) | 2 | +215/-28 | ~15 h | 3 rounds, ~1.6M cache-read |
 | shelter dig-in (ed88, hoy7, bn4d) | 3 | +824/-30 | ed88 7.8 h; thread 15 days | ed88: 3 rounds, ~4.4M cache-read |
 
-Gates with the two green skills loaded (`BOT_SKILLS=1`, no sabotage): GATES_PENDING
+Gates with the two green skills loaded (`BOT_SKILLS=1`, no sabotage; `skills loaded n=2` in
+each bot log):
+
+| gate | result | verdict |
+|---|---|---|
+| full `stuck-run.sh` | `baseline: 32/32 ok, 0 improved, 0 regressed`, exit 0 | no regression |
+| lay (v2, 10 game-min) | 75.4/game-min, baseline 76.5 (-1%) | within |
+| mine (v2, 10 game-min, 3 runs) | 20.0, 35.3, 30.0 = mean 28.4, baseline 29.4 (-3%) | within |
+| `work-rig.sh 20` | nights=5 slept=5 inside=4 deaths=1 banked=18/h | report only (no recorded baseline) |
+
+Notes on the gates:
+
+- **mine.** A single mine run is too noisy to judge alone. The 20.0 run had no recover episode
+  at all, and the cached master run at the base sha read 37.2 (+27%).
+- **Skills in the corpus.** In all 32 spots, the only skill run was `gen_brow_step` once in
+  the DUGPIT area: `failed:no-dir` in 5 ticks, then the hand chain went on.
+- **Decision rule.** Met: 2/3 green within 6 attempts, and no regression on the three gates.
+  vf8e.4 and vf8e.6 proceed.
 
 ## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
 
