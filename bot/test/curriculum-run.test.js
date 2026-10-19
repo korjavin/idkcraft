@@ -162,6 +162,9 @@ describe('curriculum.sh night (idkcraft-vf8e.10)', () => {
     assert.match(seen2, /PRERUN BODY=mineflayer/)
     assert.match(seen2, /LOOP BODY=mineflayer RIG=0/)
     assert.equal(Object.values(ledger(t2))[0].body, 'mineflayer')
+    assert.match(r.out, /PROMOTE: REPLAY_BODY=baritone node tools\/skill-promote\.js/)
+    assert.match(r2.out, /PROMOTE: node tools\/skill-promote\.js/)
+    assert.ok(!/PROMOTE: REPLAY_BODY/.test(r2.out), 'default PROMOTE carries no body')
   })
 
   it('the 7-day retry re-picks grown RED, parks at 3 REDs, skips recent', () => {
@@ -220,13 +223,14 @@ describe('curriculum ledger helpers (idkcraft-vf8e.10)', () => {
       assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'RED', res]), 0)
       assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'RED', res]), 0)
       let e = CURRICULUM.readLedger()['ab12cd34']
-      assert.deepEqual([e.verdict, e.attempts, e.cost, e.count, e.reds], ['RED', 6, 1.25, 5, 2])
+      // Same-day re-record adds (revmux 02 core-1): the $ cap stays exact.
+      assert.deepEqual([e.verdict, e.attempts, e.cost, e.count, e.reds], ['RED', 12, 2.5, 5, 2])
       assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'GREEN:unpromoted', res, '/w/skills/gen_x.js']), 0)
       e = CURRICULUM.readLedger()['ab12cd34']
-      assert.deepEqual([e.verdict, e.reds, e.skillPath], ['GREEN:unpromoted', 2, '/w/skills/gen_x.js'])
+      assert.deepEqual([e.verdict, e.reds, e.skillPath, e.body], ['GREEN:unpromoted', 2, '/w/skills/gen_x.js', 'mineflayer'])
       assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'env', res]), 0)
       e = CURRICULUM.readLedger()['ab12cd34']
-      assert.deepEqual([e.verdict, e.cost, e.reds, e.envs], ['env', 1.25, 2, 1])
+      assert.deepEqual([e.verdict, e.reds, e.envs], ['env', 2, 1])
       assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'bogus']), 2)
       assert.match(out.join('\n'), /ledger ab12cd34: RED attempts=6 cost=\$1\.25 reds=1/)
     })

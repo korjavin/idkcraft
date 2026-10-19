@@ -275,8 +275,15 @@ function record(sig, verdict, resultFile, skillPath) {
   }
   const ledger = readLedger()
   const prev = ledger[sig] || {}
+  // Same-day re-record (an env entry retried tonight, or two runs in one
+  // UTC day): add, don't overwrite, or the earlier spend hides from the $
+  // cap (revmux 02 core-1). The entry then totals today for the signature;
+  // each run's own cost stays on its CURRICULUM line.
+  const sameDay = prev.date === today()
   ledger[sig] = {
-    date: today(), verdict, attempts, cost,
+    date: today(), verdict,
+    attempts: attempts + (sameDay ? prev.attempts || 0 : 0),
+    cost: cost + (sameDay ? prev.cost || 0 : 0),
     skillPath: skillPath || prev.skillPath || null,
     resultJson: resultFile || prev.resultJson || null,
     count: c ? c.count : (prev.count || 0),

@@ -251,7 +251,10 @@ for SIG in $(grep '^pick ' "$PICKF" | awk '{print $2}' || true); do
     node tools/curriculum.js record "$SIG" GREEN:unpromoted "$RES" "$SKILLF"
     ngreen=$((ngreen + 1))
     echo "CURRICULUM $SIG GREEN attempts=$ATTN cost=\$$COST skill=$SKILLF"
-    echo "PROMOTE: node tools/skill-promote.js $SCBEAD $SKILLF  # scenario $SCN spot $SPOTS result $RES (run from bot/)"
+    # The promotion refuses a body mismatch (vf8e.4): carry the night's body.
+    PROMOTE_ENV=""
+    [ -n "${REPLAY_BODY:-}" ] && PROMOTE_ENV="REPLAY_BODY=$REPLAY_BODY "
+    echo "PROMOTE: ${PROMOTE_ENV}node tools/skill-promote.js $SCBEAD $SKILLF  # scenario $SCN spot $SPOTS result $RES (run from bot/)"
   elif [ "$LRC" = 1 ]; then
     node tools/curriculum.js record "$SIG" RED "$RES"
     nred=$((nred + 1))
