@@ -435,7 +435,10 @@ function protectedReason(bot, block, ctx) {
     // every other executor still hits default-deny).
     let props = null
     try { props = block && typeof block.getProperties === 'function' ? block.getProperties() : null } catch (_) { props = null }
-    if (ctx && ctx.castle && castleProtects(ctx.castle, pos, name, props)) return 'protected'
+    // The v2 door sill swap (lqgo: castle.js digCell) digs its own natural
+    // ground cell; everything else keeps the castle guard.
+    const sill = !!(ctx && ctx.castleSill) && NATURAL_SOLID.has(name)
+    if (ctx && ctx.castle && !sill && castleProtects(ctx.castle, pos, name, props)) return 'protected'
     if (castleClears(ctx, pos, name)) return null // vmzq.40: castle step, footprint blocker
     // Castle yard (idkcraft-g0z.44): after the castle step's own clears
     // (prep cuts, litter, foreign-clear keep working), before the own

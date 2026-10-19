@@ -186,8 +186,38 @@ function entrance(st) {
   return { x: st.site.x + e.dx, y: st.site.y + e.dy, z: st.site.z + e.dz }
 }
 
+// Door sill (idkcraft-lqgo, the house z591 rule): on the v2 body the block
+// under the gate door is never natural ground. groundCell guards that dirt
+// from the v1 pathfinder only — Baritone break bans are names (body.js
+// castle guard), and a v2 mining leg broke it from below: the door popped.
+// Off-plan (the PLAN stays frozen), idx SILL_IDX: a natural sill (laid rock
+// excepted, build.SILL_KEEP — it is banned too) or a hole is swapped for
+// planks, which v2 hard-bans; the door pops once and is re-laid. It goes
+// ahead of the picked plan cell once planks are on hand, the door is next
+// or the castle is complete (sillFirst), so a fresh build never fetches
+// planks ahead of its stone. Per-cell path only (never the builder batch).
+const SILL_IDX = 4000000
+function sillOf(st) {
+  const bp = blueprint.blueprintOf(st.blueprintVersion)
+  const d = blueprint.rotatePlan([{ ...bp.DOOR, kind: 'door' }], st.rot | 0, bp.version)[0]
+  return { x: st.site.x + d.dx, y: st.site.y + d.dy - 1, z: st.site.z + d.dz, kind: 'planks', dy: d.dy - 1, idx: SILL_IDX, sill: true }
+}
+function sillFirst(bot, ctx, st, next, now) {
+  if (process.env.BOT_BODY !== 'baritone' || st.phase === 'prep') return null
+  const c = sillOf(st)
+  const n = nameAt(bot, c)
+  if (n == null || done(bot, c)) return null // unreadable: never owed off site
+  const b = (st.blocked || {})[bkey(st, c.idx)]
+  if (b && (b.retired || b.until > now)) return null
+  return st.phase === 'complete' || !next || next.kind === 'door' || usable(bot, 'planks', ctx) > 0 ? c : null
+}
+
 function done(bot, c) {
   if (c.prep) return prepDone(bot, c)
+  if (c.sill) {
+    const n = nameAt(bot, c)
+    return n != null && !AIR.has(n) && n !== 'water' && !build.isReplaceable(n) && !(NATURAL_SOLID.has(n) && !build.SILL_KEEP.has(n))
+  }
   if (c.kind === 'stairs' && c.face) {
     const st = stateAt(bot, c)
     if (!st || !blueprint.matches('stairs', st.name)) return false
@@ -393,7 +423,7 @@ function pick(bot, ctx, st, cells, key, now) {
   // lays while holes wait out their backoff.
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
-    const c = cells[Number(i)] || decorOf(st, Number(i)) || bandOf(st, Number(i))
+    const c = cells[Number(i)] || decorOf(st, Number(i)) || bandOf(st, Number(i)) || (Number(i) === SILL_IDX ? sillOf(st) : null)
     // Off-plan entries (prep, box litter) live until they expire (g0z.14);
     // decor entries (g0z.31) live until laid, so a bad pane cell retires;
     // band entries (g0z.44) live until swept, so refusals escalate to
@@ -445,6 +475,11 @@ function pick(bot, ctx, st, cells, key, now) {
 // ponytail: O(plan) blockAt per decide; cache per tick if g0z.11's ~2000
 // cells ever show in the tick timer.
 function peek(bot, st, now, ctx) {
+  const r = peekPlan(bot, st, now, ctx)
+  const s = sillFirst(bot, ctx, st, r.cell, now)
+  return s ? { cell: s, waiting: null, cells: r.cells } : r
+}
+function peekPlan(bot, st, now, ctx) {
   if (st.phase === 'prep') {
     const list = prepTargets(bot, ctx, st, now)
     const bl = st.blocked || {}
@@ -1578,7 +1613,9 @@ function digCell(bot, ctx, st, c, now) {
   // that never reads strikes 'unreadable' instead (g0z.22).
   // The footprint is ours (vmzq.40): a foreign blocker clears for the
   // castle step (util.castleClears), a box relocates with its contents.
-  const clear = { ...ctx, castleClear: true }
+  // The sill's natural ground is groundCell (castleProtects): only this dig
+  // may swap it (lqgo).
+  const clear = c.sill ? { ...ctx, castleClear: true, castleSill: true } : { ...ctx, castleClear: true }
   if (name != null && RELOCATE.test(name) && castleClears({ ...ctx, castleClear: 'emptied' }, c, name)) { relocate(bot, ctx, st, c, name, now); return }
   const footprintOnly = name != null && !ours && !natural
   if (footprintOnly && !castleClears(clear, c, name)) { blockCell(ctx, st, c, `kept-${name}`, now); return }
@@ -2033,7 +2070,7 @@ function castleSame(want, have) {
 }
 function castleBuilderBatch(bot, ctx, st, c) {
   if (ctx.castleBuildFlight) return true
-  if (!c || clearing(c) || c.prep || !CASTLE_BUILDER_KINDS.has(c.kind)) return false
+  if (!c || clearing(c) || c.prep || c.sill || !CASTLE_BUILDER_KINDS.has(c.kind)) return false
   const batch = castleBuilderCells(bot, ctx, st)
   if (!batch) return false
   ctx.castleBuildFlight = true
@@ -2249,6 +2286,8 @@ function castle(bot, ctx) {
   // read 0/1722 and the walk back counted as fresh progress. Off-site the
   // last value stands (as in menuFact).
   if (ctx.castleScanAt !== fullBefore && siteLoaded(bot, st)) progress(bot, st, cells, ctx)
+  const sill = sillFirst(bot, ctx, st, r.idx < 0 ? null : cells[r.idx], now)
+  if (sill) { work(bot, ctx, st, sill, now, 'laying the door sill'); return }
   if (r.idx < 0) {
     if (r.waiting) {
       // Every remaining cell is waiting out a backoff (or owed): the holes

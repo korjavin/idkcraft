@@ -87,10 +87,10 @@ describe('1c4 floor cells sit under the jr2.2 bed halves, table still first', ()
   it('plan[0] is the table, plan[1..5] the dy -1 bedroom floor', () => {
     assert.deepEqual(BLUEPRINT_V2[0], { dx: 5, dy: 0, dz: 1, kind: 'table' })
     assert.deepEqual(BLUEPRINT_V2.slice(1, 6), [
-      { dx: 1, dy: -1, dz: 4, kind: 'fill' },
-      { dx: 2, dy: -1, dz: 4, kind: 'fill' },
-      { dx: 4, dy: -1, dz: 4, kind: 'fill' },
-      { dx: 5, dy: -1, dz: 4, kind: 'fill' },
+      { dx: 1, dy: -1, dz: 4, kind: 'fill', bed: true },
+      { dx: 2, dy: -1, dz: 4, kind: 'fill', bed: true },
+      { dx: 4, dy: -1, dz: 4, kind: 'fill', bed: true },
+      { dx: 5, dy: -1, dz: 4, kind: 'fill', bed: true },
       { dx: 3, dy: -1, dz: 0, kind: 'fill', sill: true },
     ])
   })

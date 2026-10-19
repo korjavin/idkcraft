@@ -104,9 +104,13 @@ const BLUEPRINT_V2 = (() => {
   // dip stranded bed placement (rig-proven: air under A-foot); the door
   // hangs on the block below like a bed, so its dip strands it the same
   // way (rig-proven: air under (3,0) refused the door 3x). Bed cells
-  // pinned to beds.cellsOf.
+  // pinned to beds.cellsOf. bed: the z591 sill rule (idkcraft-8542) — on
+  // v2 natural ground under a bed half is swapped for a plank while no bed
+  // stands there (a bed pops when v2 mines its dirt from below); a standing
+  // bed keeps its floor (never popped for it), and isComplete keeps the old
+  // solid-ground rule (best effort: a re-opened house never waits on it).
   for (const [dx, dz] of [[1, 4], [2, 4], [4, 4], [5, 4]]) {
-    plan.push({ dx, dy: -1, dz, kind: 'fill' })
+    plan.push({ dx, dy: -1, dz, kind: 'fill', bed: true })
   }
   // The door's sill (idkcraft-z591): on the v2 body natural ground never
   // counts as done here. Baritone break bans are names only; v2 hard-bans
@@ -315,14 +319,19 @@ function cellLoaded(bot, home, cell) {
   }
 }
 
+function fillGround(bot, home, cell, name) {
+  return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
+}
+
 function cellDone(bot, home, cell) {
   const name = blockNameAt(bot, cellAbs(home, cell))
   if (name == null) return false
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
   if (cell.kind === 'fill') {
-    if (cell.sill && process.env.BOT_BODY === 'baritone' && NATURAL_SOLID.has(name) && !SILL_KEEP.has(name)) return false
-    return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
+    if ((cell.sill || cell.bed) && process.env.BOT_BODY === 'baritone' && NATURAL_SOLID.has(name) && !SILL_KEEP.has(name) &&
+      !(cell.bed && String(blockNameAt(bot, cellAbs(home, cell).offset(0, 1, 0))).endsWith('_bed'))) return false
+    return fillGround(bot, home, cell, name)
   }
   // Clear (rw4.19): only natural ground with collision is a leftover; air,
   // flora and anything we put there (beds, chest, furnace, table) is done.
@@ -350,7 +359,7 @@ function isComplete(bot, home) {
     for (const cell of plan) {
       if (cell.kind === 'clear' || cell.floor) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
-      if (!cellDone(bot, home, cell)) return false
+      if (cell.bed ? !fillGround(bot, home, cell, blockNameAt(bot, cellAbs(home, cell))) : !cellDone(bot, home, cell)) return false
     }
     return true
   } catch (_) { return false }
@@ -1364,6 +1373,7 @@ module.exports.houseTableOwed = houseTableOwed
 module.exports.houseTableAt = houseTableAt
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
+module.exports.SILL_KEEP = SILL_KEEP
 module.exports.cellLoaded = cellLoaded
 module.exports.builderCells = builderCells
 module.exports.builderBatch = builderBatch
