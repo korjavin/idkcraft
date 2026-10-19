@@ -9,11 +9,16 @@ const assert = require('node:assert/strict')
 const bring = require('../src/behaviours/bring')
 const { handleChat, createTicker } = require('../src/index')
 
+// Mineflayer contract (prismarine-world src/worldsync.js getBlock calls
+// pos.floored(); findBlocks sorts nearest-first, blocks.js:199-200): every
+// position the bot hands back or takes here is a floored-able point, and
+// blockAt below enforces it — a plain {x,y,z} throws, exactly like prod.
 function pos(x, y, z) {
   const p = {
     x, y, z,
     distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z),
     clone() { return pos(p.x, p.y, p.z) },
+    floored() { return pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) },
   }
   return p
 }
@@ -45,12 +50,19 @@ function mockBot({ items = [], playerPos = null, water = [], levels = {}, rock =
       isMoving: () => bot._moving,
     },
     inventory: { items: () => bot._items },
-    findBlocks: () => bot._water.map(([x, y, z]) => ({ x, y, z })),
+    // Count-honouring findBlocks like the server (mineflayer blocks.js
+    // sorts nearest-first, then slices to count).
+    findBlocks: ({ count } = {}) => bot._water
+      .map(([x, y, z]) => ({ p: pos(x, y, z), d: Math.hypot(x - bot.entity.position.x, y - bot.entity.position.y, z - bot.entity.position.z) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, count)
+      .map(({ p }) => p),
     blockAt(p) {
-      const key = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
-      if (rockSet.has(key)) return { name: 'stone', boundingBox: 'block', position: pos(p.x, p.y, p.z) }
+      const f = p.floored() // prod parity: a plain {x,y,z} throws here
+      const key = `${f.x},${f.y},${f.z}`
+      if (rockSet.has(key)) return { name: 'stone', boundingBox: 'block', position: pos(f.x, f.y, f.z) }
       if (!(key in levels)) return null
-      return { name: 'water', position: pos(p.x, p.y, p.z), getProperties: () => ({ level: levels[key] }) }
+      return { name: 'water', position: pos(f.x, f.y, f.z), getProperties: () => ({ level: levels[key] }) }
     },
     equip: async () => {},
     lookAt: () => {},
@@ -241,29 +253,52 @@ describe('bring water_bucket fill (idkcraft-k2ze)', () => {
     assert.equal(bot._tickerCtx.lastGoalKey, 'bring-fill:30,64,0', 'walks past the buried aquifer to the open source')
   })
 
+  it('flow past the slice never masks the source (deep scan)', async () => {
+    // Seventy nearer flow cells plus one farther source, and a
+    // count-honouring findBlocks: a 64-cap slice ends inside the flow and
+    // refuses despite the source behind it.
+    const cells = []
+    for (let i = 1; i <= 70; i++) cells.push([i, 64, 0])
+    cells.push([100, 64, 0])
+    const levels = {}
+    for (const [x, y, z] of cells) levels[`${x},${y},${z}`] = x === 100 ? '0' : '2'
+    const bot = mockBot({
+      items: [{ name: 'bucket', count: 1 }],
+      playerPos: pos(30, 64, 0),
+      water: cells,
+      levels,
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me water_bucket 1')
+    await bring(bot, bot._tickerCtx, null, {})
+    await flush()
+    const o = bot._tickerCtx.bring
+    assert.ok(o && o.phase === 'fill', 'order still filling, not refused')
+    assert.equal(bot._tickerCtx.lastGoalKey, 'bring-fill:100,64,0', 'walks past 70 flow cells to the source')
+  })
+
   it('an unreachable cell is skipped, the next one fills', async () => {
     const bot = mockBot({
       items: [{ name: 'bucket', count: 1 }],
       playerPos: pos(30, 64, 0),
-      water: [[30, 64, 0], [2, 64, 0]],
-      levels: { '30,64,0': '0', '2,64,0': '0' },
+      water: [[2, 64, 0], [30, 64, 0]],
+      levels: { '2,64,0': '0', '30,64,0': '0' },
     })
     handleChat(bot, tickerFor(bot), 'P', 'bring me water_bucket 1')
-    // Never arrives at the far cell: the walk patience marks it tried,
-    // then the bot reaches the near one and the scoop fires.
+    // Never arrives at the near cell: the walk patience marks it tried,
+    // then the bot reaches the far one and the scoop fires.
     bot._moving = true
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 80; i++) {
       await bring(bot, bot._tickerCtx, null, {})
       await flush()
       const oo = bot._tickerCtx.bring
       if (!oo || oo.phase !== 'fill' || oo.fillInFlight) break
-      if (oo.fillTarget && oo.fillTarget.key === '2,64,0') {
+      if (oo.fillTarget && oo.fillTarget.key === '30,64,0') {
         bot._moving = false
-        bot.entity.position = pos(3, 64, 0)
+        bot.entity.position = pos(31, 64, 0)
       }
     }
     const o = bot._tickerCtx.bring
-    assert.ok(o && o.fillTried['30,64,0'], 'unreachable cell marked tried')
+    assert.ok(o && o.fillTried['2,64,0'], 'unreachable cell marked tried')
     await drive(bot, bot._tickerCtx)
     assert.ok(!bot._tickerCtx.bring, 'order ended')
     assert.ok(bot.lines.includes('here is 1 water_bucket'), `lines: ${bot.lines}`)

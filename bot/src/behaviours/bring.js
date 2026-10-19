@@ -1051,7 +1051,12 @@ async function gatherWool(bot, ctx, o, bp, grounded) {
 // buckets on Paper); only level-0 still water fills, flow never does.
 const FILL_SEARCH = 32
 const FILL_REACH = 4
-const FILL_SCAN_COUNT = 64
+// Deep scan (gear.js FILL_SCAN_COUNT shape): findBlocks slices to count
+// BEFORE we filter, so a shallow count hides a farther source behind nearer
+// flow — masking needs 513 nearer unfillable cells to refuse wrongly, which
+// still water never has. The depth costs nothing extra (findBlocks scans
+// the sphere either way and only sorts/slices more).
+const FILL_SCAN_COUNT = 512
 const FILL_WALK_TICKS = 30 // per-cell walk patience before the next cell
 const FILL_SETTLE_MS = 500 // scoop apply + client update
 const FILL_BUDGET_MS = 5 * 60 * 1000 // whole fill phase, all cells
@@ -1093,7 +1098,10 @@ function isFillFlow(bot, p) {
 // the cell tried and moves on.
 function hasSolidAbove(bot, p) {
   try {
-    const b = bot && typeof bot.blockAt === 'function' ? bot.blockAt({ x: p.x, y: p.y + 1, z: p.z }) : null
+    // Vec3, not a plain object: bot.blockAt -> world getBlock calls
+    // pos.floored() (prismarine-world worldsync.js), which throws on a
+    // plain {x,y,z} — the catch below would then read every cell as open.
+    const b = bot && typeof bot.blockAt === 'function' ? bot.blockAt(new Vec3(p.x, p.y + 1, p.z)) : null
     if (!b) return false
     if (typeof b.boundingBox === 'string') return b.boundingBox !== 'empty'
     const n = typeof b.name === 'string' ? b.name : ''
