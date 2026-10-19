@@ -216,7 +216,7 @@ describe('llm orders: flag on', () => {
     }
   })
 
-  it('the arbiter re-deciding away re-pins while the step is feasible, ends when its work is gone', async () => {
+  it('the arbiter re-deciding away re-pins while the step is feasible; a ran step that left the menu is done', async () => {
     const goal = require('../src/goal')
     const orig = goal.MENU.light.feasible
     let feasible = true
@@ -242,10 +242,11 @@ describe('llm orders: flag on', () => {
       for (let i = 0; i < 6; i++) flicker()
       assert.ok(ctx.llmOrder, 'a flicker never kills a live step')
       assert.equal(ctx.taskPlanStep, 'light')
-      feasible = false
+      feasible = false // rig LIGHT-HOUSE: torches placed, unlit none, light left the menu
       flicker()
+      llmOrders.tick(bot, ctx)
       assert.equal(ctx.llmOrder, null)
-      assert.ok(bot.lines.includes('plan stopped at light: not possible now'), String(bot.lines))
+      assert.ok(bot.lines.includes('done: light up the house'), String(bot.lines))
     } finally {
       goal.MENU.light.feasible = orig
     }

@@ -41,7 +41,7 @@ const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stock
 const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their companion bot. ' +
   'Use only the listed step ids, in the order they must run. Item and block names are Minecraft registry ids (torch, water_bucket, iron_ore). ' +
   'Answer JSON only, no prose: {"plan":[{"step":"<id>","item":"<id>","count":<n>,"done":"<what is true when this step is done>"}]}. ' +
-  'Leave out item/count when the step takes none. At most ' + PLAN_MAX + ' steps. ' +
+  'Leave out item/count when the step takes none. At most ' + PLAN_MAX + ' steps; use the fewest — an order step gathers, mines, crafts and smelts for itself, so never put forage or gather before it. ' +
   'Answer {"plan":[]} when the line is not an order to the bot or no listed step can do it.'
 
 function enabled(env = process.env) {
@@ -310,11 +310,14 @@ function tick(bot, ctx, now = Date.now()) {
     // Another step took the body. A retreat (non-MENU ctx.step) re-pins;
     // the goal arbiter re-deciding away (textForce releases a task-plan
     // pick on every text move, `known` flickers every 1-3 s) re-pins only
-    // while the step is still feasible — a step whose work is gone ends
-    // honestly, and a flicker never kills a live one (revmux 02/03: a count
-    // cap did). ponytail: bounded by feasibility, the step's own done/failed
-    // and STEP_MS; vouch llm pins in goal.textForce if the restarts cost.
-    if (goal.MENU[ctx.step] && !stillFeasible(bot, ctx, s.step)) return end(bot, ctx, o, 'failed:not possible now')
+    // while the step is still feasible, and a flicker never kills a live
+    // one (revmux 02/03: a count cap did). A step that RAN and left the menu
+    // did its work (rig: light placed 10 torches, unlit went none, the
+    // arbiter moved on with no `done` status) = done; one that never ran is
+    // the miss path below. ponytail: "left the menu" can also mean "ran out
+    // of material" — read the step's own failReason if that lies in prod;
+    // vouch llm pins in goal.textForce if the restarts cost.
+    if (goal.MENU[ctx.step] && !stillFeasible(bot, ctx, s.step)) return next()
     c.seen = false
     c.gen = stepGen(ctx)
     ctx.taskPlanStep = s.step
