@@ -120,6 +120,18 @@ describe('castle tidy (g0z.62)', () => {
     assert.equal(goal.MENU.gocastle.feasible({ castle: 'tidy', time: 'dusk', health: 20 }, bot, ctx), false)
   })
 
+  it('revmux 01: a failed trip leg counts as the visit — no re-walk to an unreachable castle', async () => {
+    const bot = makeBot({ loaded: false, at: FAR(), items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }] })
+    const ctx = { castle: castleState(), step: 'gocastle', stepStatus: 'running' }
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'tidy')
+    ctx.stepStatus = 'failed:cannot-reach-castle'
+    const r = await goal.decide(bot, ctx)
+    assert.ok(typeof ctx.castle.visitedAt === 'number' && ctx.castle.visitedAt > 0)
+    assert.ok(!['gocastle', 'castle'].includes(r.action), r.action)
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'done')
+    assert.equal(goal.displacedFromCastle(bot, ctx), false)
+  })
+
   it('visitedAt persists through memory save/restore (future stamps clamp to now)', () => {
     const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'g0z62-')), 'IdkBot.json')
     const bot = { username: 'IdkBot', spawnPoint: { x: 0, y: 64, z: 0 } }

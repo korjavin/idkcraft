@@ -32,7 +32,7 @@ const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.j
 const build = require('./build')
 const flat = require('./flat')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
-const { stepFailed, stepGen } = require('../step')
+const { stepFailed, stepGen, failReason } = require('../step')
 const worker = require('../worker')
 
 const STRIKES = 3
@@ -1068,6 +1068,11 @@ function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
   if (st.parked) return 'parked'
+  // Tidy bound (g0z.62 revmux 01): the watchdog never watches a complete
+  // castle, so a failed trip leg counts as the visit — one try per
+  // CASTLE_TIDY_MS, never a day of re-walks to an unreachable site. Read
+  // here (decide's first facts read), so this very tick already says 'done'.
+  if ((ctx.step === 'gocastle' || ctx.step === 'castle') && failReason(ctx.stepStatus) !== null && tidyDue(st, now)) st.visitedAt = now
   try {
     if (!siteLoaded(bot, st)) {
       if (st.phase === 'complete') return tidyDue(st, now) ? 'tidy' : 'done'
