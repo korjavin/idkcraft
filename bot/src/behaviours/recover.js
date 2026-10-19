@@ -2296,12 +2296,13 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
     try {
       let n = ctx && ctx.lastPathNext
       // v2 (Baritone bridge) emits no path nodes, so lastPathNext stays null:
-      // fall back to the goal (stuck goal, else the live one) so the heading
-      // still reaches the log; a level goal (no y) reads the bot's own y.
+      // fall back to the goal (stuck goal, else the one decide() saw die) so
+      // the heading still reaches the log; a level goal (no y) reads the
+      // bot's own y. A Vec3, as blockAt floors it.
       if (!n || typeof n.x !== 'number') {
-        const g = (ctx && ctx.stuck && ctx.stuck.goal) || (bot.pathfinder && bot.pathfinder.goal)
+        const g = (ctx && ctx.stuck && ctx.stuck.goal) || (ctx && ctx.recovery && ctx.recovery.goalHint)
         if (g && typeof g.x === 'number' && typeof g.z === 'number') {
-          n = { x: g.x, y: typeof g.y === 'number' ? g.y : Math.floor(botPos(bot).y), z: g.z }
+          n = new Vec3(g.x, typeof g.y === 'number' ? g.y : Math.floor(botPos(bot).y), g.z)
         }
       }
       if (n && typeof n.x === 'number') {
@@ -2632,6 +2633,8 @@ async function decide(bot, ctx, state, target) {
     // primitive except sidestep, which sets its own goal afterwards.
     try {
       if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
+        const g = bot.pathfinder.goal // 2y8h: heading for the log lines, read before it dies
+        if (typeof g.x === 'number' && typeof g.z === 'number') rec.goalHint = { x: g.x, y: g.y, z: g.z }
         bot.pathfinder.setGoal(null)
       }
     } catch (_) { /* body best-effort */ }
