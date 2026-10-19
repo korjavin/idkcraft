@@ -204,22 +204,18 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   body; a batch task adds them to `bot/tools/stuck-spots.json` (with `bead`) plus the measured
   entry in `bot/tools/stuck-baseline.json` — one without the other fails the gate or `npm test`.
   `STUCKRUN=<file>` stays optional for review rounds. Manual: `bot/tools/README.md`.
-- v2 merge gate (owner 2026-10-15/16, throughput not stall spots): a PR touching v2 behaviour
-  (`bot/src/bridge/*`, `baritone/*`, or a `BOT_BODY=baritone` branch in `bot/src`) quotes in the PR
-  body the 10-game-min component rig verdict lines, before/after on equal settings, vs
-  `bot/tools/component-baseline.json`: `CASTLE_COMPONENT=lay` and `CASTLE_COMPONENT=mine`
-  (gate legs are the 10-game-min lines only; a shorter DIAG leg's line is not a verdict)
-  (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh`, see `bot/tools/README.md` "Rig speed");
-  OUTSIDE ±20% downward = regression (owner 2026-10-18; mine is judged on the mean of 3 pairs: run 3 after legs and compare their mean to the baseline mean; one mine leg's within/OUTSIDE text is not the verdict). No `/tick rate` castle pair (>20 does not speed up v2).
-  The before is shared per master sha (6x7.27): quote `sh bot/tools/castle-before.sh lay|mine`
-  (its sha/date ride the line; exact sha, or an ancestor with no rig-file diff, max 7 days) + two
-  fresh after legs; a miss/stale/changed exit 1 means you run the two before legs on a clean
-  origin/master worktree (that fills the cache), i.e. 4 legs as before.
-  The full 90-min castle rig (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh 90`) is batched like
-  the stuck oracle: every 3 v2 merges or before an owner play session, on `master`, judged vs a
-  recorded baseline; regression -> bisect within the batch + P1 bead. House done-seconds + fail
+- v2 merge gate (owner 2026-10-20, batch-only): a PR touching v2 behaviour
+  (`bot/src/bridge/*`, `baritone/*`, or a `BOT_BODY=baritone` branch in `bot/src`) runs no rig
+  legs and quotes no before/after lines. The batch (every 3 v2/risky merges or before an owner
+  play session, on `master`) runs `stuck-run.sh` (exit 1 vs baseline) and its v2 leg
+  (`REPLAY_BODY=baritone`, not-worse vs `stuck-baseline-v2.json`), the lay/mine pair
+  (`CASTLE_BODY=baritone CASTLE_PADSPOT=250,350`; mine judged on the mean of 3 pairs) and
+  the full 90-min castle rig (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh 90`); the lay/mine
+  and castle legs are judged vs their recorded baselines (`bot/tools/component-baseline.json`
+  for lay/mine), OUTSIDE ±20% downward = regression -> bisect within the batch + P1 bead. A PR whose acceptance criterion is itself a rig number runs
+  that scenario once and quotes its verdict line. House done-seconds + fail
   top-3 (`sh bot/tools/work-rig.sh 20`) and deaths per night (`castle-rig.sh --night`) stay
-  optional verdicts. No new `failed:<reason>` string without a verdict line it moves.
+  optional verdicts.
   `REPLAY_BODY=baritone` stuck-run is a regression check only (not worse), never the reason to
   merge; v1 `stuck-run.sh` is unchanged and frozen (v1 is phased out). Stall-point beads
   (neuc.29/.31/.48/.49, umou, sfmk) are deferred "postponed: structural plan" until the

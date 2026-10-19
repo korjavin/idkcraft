@@ -434,9 +434,10 @@ REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base 
 sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical flow, stuck-baseline.json
 ```
 
-**Merge gate** (CLAUDE.md "v2 merge gate"): a v2 PR is judged on ONE throughput
-verdict line (castle cells/90 min, house done-seconds, deaths/night), not on
-stuck spots. The v2 stuck-run above is a regression check only (not worse).
+**Merge gate** (CLAUDE.md "v2 merge gate"): v2 PRs run no rig legs; the batch on
+master judges the lay/mine pair, the 90-min castle throughput (cells/90 min,
+house done-seconds, deaths/night) and the v2 stuck-run vs the recorded
+baselines, not on stuck spots. The v2 stuck-run above is a regression check only (not worse).
 
 - **Image** (idkcraft-neuc.23, 6x7.28): `client.sh` defaults to
   `idkcraft-baritone:<git rev-parse --short=8 HEAD:baritone>` of the checkout
@@ -1089,7 +1090,7 @@ and the fixture cache without network).
 ### Rig speed: component rigs + `CASTLE_TICK_RATE` (idkcraft-neuc.60)
 
 Two 10-minute component rigs replace "wait 90 min for one noisy castle
-number" for a v2 PR's per-component signal:
+number" for the batch's per-component signal (v2 PRs quote no lines; CLAUDE.md "v2 merge gate"):
 
 ```sh
 B="CASTLE_BODY=baritone CASTLE_PADSPOT=250,350 CASTLE_RIG_ID=auto"   # image: client.sh default (tree-hash tag)
@@ -1128,7 +1129,7 @@ gate leg. A DIAG line is never quoted in a PR body as before/after; only
 the 10-game-min lines are gate legs.
 
 **Shared before (idkcraft-6x7.27).** The two before legs measure
-origin/master, the same commit for every PR between merges, so they run
+origin/master, the same commit for every batch run between merges, so they run
 once per master sha. A 10-min component leg that exits 0 from a clean tree
 (tracked files) whose HEAD equals `origin/master` (after a `git fetch`)
 writes its record + component line through to
@@ -1181,7 +1182,7 @@ fetch: ticks=3436 stone=+290 (11.9 s/stone, component 3.8) legs=12 finished=1 cu
   minutes from the window open (list capped at 5). `fetch: -` = no
   castlefetch at all. Promote to a gate only when two runs show it stable.
 
-so a PR quotes `before -> after` per component straight from its two
+so the batch run quotes `before -> after` per component straight from its two
 lines. Re-record a baseline (lay: two master runs, each within ±20% of the
 `rate`; mine: `rate` = mean of 3 pairs, spread noted; `npm test` enforces it) in the PR that moves it on purpose.
 Pre-existing `CASTLE_*` knobs stay usable but change what the line means;
