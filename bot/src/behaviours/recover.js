@@ -2837,6 +2837,7 @@ module.exports = {
   RECOVER_BAN_ANCHOR_DIST,
   RECOVER_BAN_MS,
   RECOVER_SHUFFLE,
+  RECOVER_BANNABLE, // vf8e.2: skills.js adds recover skills (cross-episode spot bans)
   noteRecoverFail,
   noteRecoverDone,
   recoverBanned,

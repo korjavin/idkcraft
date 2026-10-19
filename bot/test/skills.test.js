@@ -176,6 +176,29 @@ describe('skills: sandbox (vf8e.2)', () => {
     assert.equal(bot.controls.forward, false, 'controls released on a terminal outcome')
   })
 
+  it('goto is idempotent under a skill: key, and a terminal tick clears the goal it left', () => {
+    const bot = fakeBot()
+    bot.pathfinder.calls = 0
+    bot.pathfinder.setGoal = function (g) { this.goal = g; this.calls++ }
+    const sk = compiled('walker', 'const a = bot.goto(5, 61, 0); const b = bot.goto(5, 61, 0); st.n = (st.n || 0) + 1; ' +
+      'if (st.n >= 3) return "done"; return a === (st.n === 1 ? "started" : "moving") && b === "moving" ? "running" : "failed:" + a + "-" + b')
+    const ctx = { lastGoalKey: 'idle' }
+    const st = { ticks: 0, hs: { busy: null, err: null } }
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    assert.equal(bot.pathfinder.calls, 1, 'one setGoal for an unchanged target')
+    assert.equal(ctx.lastGoalKey, 'skill:walker:5,61,0,1')
+    bot.pathfinder.goal = { foreign: true } // a raw-setGoal walker took the body under the stale key
+    const st2 = { ticks: 0, hs: { busy: null, err: null } }
+    sk.reset()
+    assert.equal(sk.tick(bot, ctx, st2), 'running')
+    assert.equal(bot.pathfinder.calls, 2, 'a foreign goal is never read as our own')
+    assert.equal(sk.tick(bot, ctx, st2), 'running')
+    assert.equal(sk.tick(bot, ctx, st2), 'done')
+    assert.equal(bot.pathfinder.goal, null, 'terminal tick drops the skill goal')
+    assert.equal(ctx.lastGoalKey, '')
+  })
+
   it('a looping feasible is an error, not a hang', () => {
     const text = '/* skill {"name": "loop_feas", "description": "x", "kind": "recover"} */\n' +
       'function feasible(f) { while (true) {} }\nfunction run(bot, st) { return "done" }\n'
@@ -202,7 +225,7 @@ describe('skills: SKILLS_DIR load (vf8e.2)', () => {
   })
 
   it('registers both kinds once, after the hand entries', () => {
-    assert.deepEqual(names, ['ledge_fixture', 'stroll_fixture'])
+    assert.deepEqual(names, ['broken_step_fixture', 'ledge_fixture', 'stroll_fixture'])
     assert.deepEqual(recover.RECOVER_ORDER, [...hand, 'ledge_fixture'])
     assert.equal(typeof BEHAVIOURS.ledge_fixture, 'function')
     assert.ok(recover.RECOVER_SKILLS.has('ledge_fixture'))
@@ -210,7 +233,7 @@ describe('skills: SKILLS_DIR load (vf8e.2)', () => {
     assert.deepEqual(skills.load({ BOT_SKILLS: '1', SKILLS_DIR: FIXTURES }), names, 'idempotent')
     assert.deepEqual(recover.RECOVER_ORDER, [...hand, 'ledge_fixture'])
     const rest = handSteps.indexOf('rest')
-    assert.deepEqual(STEP_ORDER, [...handSteps.slice(0, rest), 'stroll_fixture', 'rest'])
+    assert.deepEqual(STEP_ORDER, [...handSteps.slice(0, rest), 'broken_step_fixture', 'stroll_fixture', 'rest'])
   })
 
   it('the skill is on the recover model menu with its description', async () => {
@@ -262,6 +285,27 @@ describe('skills: SKILLS_DIR load (vf8e.2)', () => {
     assert.equal(ctx2.recovery.status, 'failed:protected')
     assert.equal(recover.RECOVER_MENU.ledge_fixture.feasible({ walls: 0 }, ctx2), false, 'banned this episode')
     assert.equal(recover.RECOVER_MENU.ledge_fixture.feasible({ walls: 0 }, { recovery: {} }), true, 'a new episode offers it again')
+  })
+
+  it('cross-episode spot bans: same-spot fails and flat boxed dones take it off the menu', () => {
+    const at = new Vec3(0.5, 61, 0.5)
+    const failCtx = {}
+    for (let i = 0; i < recover.RECOVER_BAN_FAILS; i++) recover.noteRecoverFail(failCtx, at, 'ledge_fixture', 'failed:protected')
+    assert.equal(recover.RECOVER_MENU.ledge_fixture.feasible({ walls: 0 }, failCtx), false, 'fail streak')
+    const doneCtx = {}
+    for (let i = 0; i < recover.RECOVER_BAN_FAILS; i++) recover.noteRecoverDone(doneCtx, at, 'ledge_fixture', true)
+    assert.equal(recover.RECOVER_MENU.ledge_fixture.feasible({ walls: 0 }, doneCtx), false, 'flat boxed dones')
+    const freeCtx = {}
+    for (let i = 0; i < recover.RECOVER_BAN_FAILS; i++) recover.noteRecoverDone(freeCtx, at, 'ledge_fixture', false)
+    assert.equal(recover.RECOVER_MENU.ledge_fixture.feasible({ walls: 0 }, freeCtx), true, 'open-ground dones never ban')
+  })
+
+  it('a looping step feasible is switched off after the first timeout', () => {
+    const f = goal.MENU.broken_step_fixture.feasible
+    assert.equal(f({ time: 'day' }), false)
+    const t0 = Date.now()
+    assert.equal(f({ time: 'day' }), false)
+    assert.ok(Date.now() - t0 < 20, 'no second 50 ms call')
   })
 
   it('a step skill is registered for the goal arbiter and finishes through step.js', () => {

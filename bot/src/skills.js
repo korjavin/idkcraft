@@ -29,7 +29,7 @@ const { goals } = require('mineflayer-pathfinder')
 const metrics = require('./metrics')
 const castle = require('./castle')
 const body = require('./body')
-const { botPos, denyReason, logDeny, isInteractRef } = require('./behaviours/util')
+const { botPos, denyReason, logDeny, isInteractRef, issueGoal, clearGoal } = require('./behaviours/util')
 const { stepDone, stepFailed, failReason, stepGen } = require('./step')
 
 const PROMOTED_DIR = path.join(__dirname, '..', 'skills')
@@ -166,14 +166,24 @@ const OPS = {
     }
     return 'denied:no-reference'
   },
+  // Idempotent (3nt.19): setGoal resets the path, so the same target with a
+  // live goal is not re-issued; the skill: key lets stopOnce and the hand
+  // steps' key dedupe see the skill's goal (issueGoal, like every walker).
   goto(c, x, y, z, range = 1) {
-    const g = new goals.GoalNear(num(x), num(y), num(z), Math.max(0, num(range)))
+    const r = Math.max(0, num(range))
+    const key = `skill:${c.name}:${num(x)},${num(y)},${num(z)},${r}`
+    // Own goal object, per episode: a raw-setGoal walker (castle, build)
+    // may have replaced it under a stale key (revmux 02).
+    if (c.hs.goalKey === key && c.bot.pathfinder.goal === c.hs.goal) return 'moving'
     body.movementsFor((c.ctx.body && c.ctx.body.owner) || 'idle', c.bot, c.ctx)
-    c.bot.pathfinder.setGoal(g)
+    const g = new goals.GoalNear(x, y, z, r)
+    issueGoal(c.bot, c.ctx, g, key, false)
+    c.hs.goal = g
+    c.hs.goalKey = key
     return 'started'
   },
   stop(c) {
-    try { if (c.bot.pathfinder && c.bot.pathfinder.goal) c.bot.pathfinder.setGoal(null) } catch (_) { /* best-effort */ }
+    try { clearGoal(c.bot, c.ctx) } catch (_) { /* best-effort */ }
     releaseControls(c.bot)
     return 'ok'
   },
@@ -278,7 +288,7 @@ function compile(file, text, env) {
       if (++st.ticks > TICK_BUDGET[meta.kind]) {
         out = 'failed:skill-timeout'
       } else {
-        const r = call(runScript, { bot, ctx, hs: st.hs })
+        const r = call(runScript, { bot, ctx, hs: st.hs, name: meta.name })
         if (r.error) {
           out = `failed:${r.error}`
           console.log(`skill error skill=${meta.name} outcome=${r.error} msg=${JSON.stringify(r.msg)}`)
@@ -289,6 +299,10 @@ function compile(file, text, env) {
       }
       if (out !== 'running') {
         releaseControls(bot)
+        // A goal the skill left live dies with it (a stale goal re-wedges: yvi).
+        if (typeof ctx.lastGoalKey === 'string' && ctx.lastGoalKey.startsWith('skill:')) {
+          try { clearGoal(bot, ctx) } catch (_) { /* best-effort */ }
+        }
         const reason = failReason(out)
         const label = out === 'done' ? 'done' : (reason === 'skill-timeout' || reason === 'skill-error') ? reason : 'failed'
         metrics.skillRuns.inc({ skill: meta.name, outcome: label })
@@ -315,11 +329,17 @@ function banSkill(ctx, name) {
 function registerRecover(sk, tables) {
   const { recover, BEHAVIOURS } = tables
   const name = sk.name
+  // Cross-episode spot memory (vmzq.47/i4wm): RECOVER_BAN_FAILS same-spot
+  // fails, or that many flat boxed dones (a false 'done' in a pit), ban it
+  // there like a hand shuffle — release() never latches while boxed and
+  // relies on these bans to bound the re-fire.
+  recover.RECOVER_BANNABLE.add(name)
+  recover.RECOVER_SHUFFLE.add(name)
   recover.RECOVER_MENU[name] = {
-    // A skill that failed (any reason) is out for the rest of the episode,
-    // like recoverBanned; a throwing/looping feasible bans it too.
+    // A skill that failed (any reason) is out for the rest of the episode;
+    // a throwing/looping feasible bans it too.
     feasible: (facts, ctx) => {
-      if (skillBanned(ctx, name)) return false
+      if (skillBanned(ctx, name) || recover.recoverBanned(ctx, name)) return false
       const ok = sk.feasible(facts)
       if (ok && ok.error) { banSkill(ctx, name); return false }
       return ok === true
@@ -346,8 +366,14 @@ function registerStep(sk, tables) {
   const { goal, STEP_ORDER, BEHAVIOURS } = tables
   const name = sk.name
   const verb = sk.meta.verb || name.replace(/_/g, ' ')
+  let broken = false // a throwing/looping step feasible is off for the process (logged once)
   goal.MENU[name] = {
-    feasible: (facts) => sk.feasible(facts) === true,
+    feasible: (facts) => {
+      if (broken) return false
+      const ok = sk.feasible(facts)
+      if (ok && ok.error) broken = true
+      return ok === true
+    },
     chat: () => `on my own: ${verb}`,
     verb,
   }

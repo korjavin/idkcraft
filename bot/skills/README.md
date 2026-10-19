@@ -54,7 +54,9 @@ top-level functions.
   menu, `plan()` criteria and the FSM see it. The FSM picks a feasible skill
   after every hand escape and before the generic fallbacks (`dig_through`,
   `call_player`, `wait`). A skill that fails for any reason is banned for
-  the rest of the episode.
+  the rest of the episode. It also joins the cross-episode spot bans like a
+  hand shuffle (`RECOVER_BANNABLE` + `RECOVER_SHUFFLE`): 3 same-spot fails,
+  or 3 flat dones while boxed in, take it off the menu at that spot.
 - **step**: `MENU[name]`, inserted before `rest` in `STEP_ORDER`,
   `STEP_CRITERIA[name] = description`, plus `BEHAVIOURS[name]`, so
   `goal.registered()` admits it. It finishes through `step.js`
@@ -97,7 +99,10 @@ ticks.
   refuses the castle yard ring and apron (`denied:place-protected`) and never
   clicks a GUI block.
 - `goto(x, y, z, range=1)` sets a pathfinder `GoalNear` on the live Movements
-  after `body.movementsFor`. It never builds a new `Movements`.
+  after `body.movementsFor`. It never builds a new `Movements`. The goal is
+  issued under a `skill:` goal key. It is idempotent: the same target with a
+  live goal returns `'moving'` without re-issuing, so calling it every tick
+  is safe. A new target returns `'started'`.
 - `stop()` clears the goal and the controls.
 - `control(name, on)` takes `forward|back|left|right|jump|sprint|sneak`. Jump
   is `control('jump', true)`.
@@ -105,7 +110,9 @@ ticks.
 - `equip(item, 'hand'|'off-hand')`.
 
 There is no toss, drop or chat, so a skill can never drop items or talk. On
-a terminal outcome the runtime releases every control.
+a terminal outcome the runtime releases every control and clears a goal the
+skill left live. A step skill whose `feasible` throws or loops is switched
+off for the rest of the process.
 
 node:vm is a guard rail for generated code that a person reviews before
 promotion. It is not a security boundary against hostile code.
