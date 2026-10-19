@@ -846,8 +846,11 @@ function recoverFsm(facts, names) {
   // a sideways shuffle the strict sidestep rule would fail anyway (9sh). In
   // the open (walls < 3) sidestep keeps its turn: walking goalward can still
   // gain and free the wedge, which the fja rule counts as done.
+  // vf8e.3: a feasible skill is a climb candidate too (empty set with the
+  // flag off: unchanged) — else the page preempts it before its turn below.
   if (facts.goalDy >= 2 && facts.playerOnline && facts.walls >= 3 && pick('call_player') &&
-    !ok.has('pillar_up') && !ok.has('dig_up') && !ok.has('water_up') && !ok.has('dig_step')) return 'call_player'
+    !ok.has('pillar_up') && !ok.has('dig_up') && !ok.has('water_up') && !ok.has('dig_step') &&
+    ![...RECOVER_SKILLS].some((n) => ok.has(n))) return 'call_player'
   // Level goal with a mountable +1 next to the body: hopping it beats a
   // sideways shuffle (cjq: the executor wedges on straight +1 steps with
   // path=success, and sidestep displacement just re-queues the same wedge).

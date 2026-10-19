@@ -48,7 +48,7 @@ const KINDS = new Set(['recover', 'step'])
 const BODIES = new Set(['any', 'mineflayer', 'baritone'])
 const CONTROLS = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
 const FACADE_OPS = ['pos', 'blockAt', 'findBlocks', 'inventory', 'count', 'health', 'food', 'time', 'entities', 'status',
-  'dig', 'place', 'goto', 'stop', 'control', 'lookAt', 'equip']
+  'dig', 'place', 'use', 'goto', 'stop', 'control', 'lookAt', 'equip']
 
 function enabled(env) {
   const raw = String((env && env.BOT_SKILLS) || '').trim().toLowerCase()
@@ -207,6 +207,25 @@ const OPS = {
   lookAt(c, x, y, z) {
     Promise.resolve(c.bot.lookAt(new Vec3(num(x), num(y), num(z)), true)).catch(() => { /* look best-effort */ })
     return 'ok'
+  },
+  // vf8e.3: buckets work only through use_item (lookAt + activateItem, the
+  // server raycast — waterup.js); place() cannot pour (spike: 6/6 attempts
+  // failed no-water-placed). Bucket-only, in reach, never into the castle
+  // yard ring/apron (the place() refusal).
+  // ponytail: bucket items only; widen the set when a skill needs another use.
+  use(c, x, y, z) {
+    const cell = { x: Math.floor(num(x)), y: Math.floor(num(y)), z: Math.floor(num(z)) }
+    const held = c.bot.heldItem && c.bot.heldItem.name
+    if (held !== 'water_bucket' && held !== 'bucket') return 'denied:not-a-bucket'
+    const p = botPos(c.bot)
+    if (!p || Math.hypot(cell.x + 0.5 - p.x, cell.y + 0.5 - (p.y + 1.62), cell.z + 0.5 - p.z) > 4.5) return 'denied:out-of-reach'
+    if ((c.ctx.castle && castle.yardRing(c.ctx.castle, cell)) || castle.inCastleApron(c.ctx, cell)) return 'denied:use-protected'
+    return fire(c, 'use', async (live) => {
+      live()
+      await c.bot.lookAt(new Vec3(cell.x + 0.5, cell.y + 0.5, cell.z + 0.5), true)
+      live()
+      c.bot.activateItem()
+    })
   },
   equip(c, item, dest = 'hand') {
     if (dest !== 'hand' && dest !== 'off-hand') throw new Error('bad dest')

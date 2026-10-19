@@ -29,6 +29,19 @@ describe('skill-loop (idkcraft-vf8e.3)', () => {
     assert.match(check(sc, 'gen_x.js', 'nope'), /^compile: /)
   })
 
+  it('the 9sh page rule waits for a feasible skill climber (S6 brow: dig_up failed, no hand climber)', () => {
+    const { recoverFsm, RECOVER_SKILLS } = require('../src/behaviours/recover')
+    const facts = { goalDy: 2, playerOnline: true, walls: 4, last: 'dig_up:failed:no-progress' }
+    assert.equal(recoverFsm(facts, ['call_player', 'wait']), 'call_player', 'flag off: unchanged')
+    RECOVER_SKILLS.add('gen_t')
+    try {
+      assert.equal(recoverFsm(facts, ['call_player', 'wait', 'gen_t']), 'gen_t')
+      assert.equal(recoverFsm(facts, ['call_player', 'wait']), 'call_player', 'banned/infeasible skill: page as before')
+    } finally {
+      RECOVER_SKILLS.delete('gen_t')
+    }
+  })
+
   it('every scenario names a corpus spot, a real sabotage target and a free skill name', () => {
     for (const sc of scenarios) {
       assert.ok(spots.some((s) => s.name === sc.spot), sc.spot)

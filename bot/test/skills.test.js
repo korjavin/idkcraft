@@ -68,7 +68,10 @@ function fakeBot(cells = new Map()) {
       }
       return out.sort((a, b) => o.distanceTo(a) - o.distanceTo(b)).slice(0, count)
     },
-    async lookAt() {},
+    async lookAt(p) { bot.looked = p },
+    // activateItem(offHand=false): use_item on the held item, server raycast from the look (mineflayer api.md).
+    used: [],
+    activateItem() { bot.used.push({ item: bot.heldItem && bot.heldItem.name, at: bot.looked && key(bot.looked.x, bot.looked.y, bot.looked.z) }) },
     async equip(item, dest) { if (dest === 'hand') bot.heldItem = item },
     // dig resolves after its timer; stopDigging rejects the pending dig (mineflayer digging.js).
     stopped: 0,
@@ -255,6 +258,22 @@ describe('skills: sandbox (vf8e.2)', () => {
     assert.equal(one(7, 61, 1, 'cobblestone', apron), 'failed:denied-place-protected', 'complete castle apron')
     assert.equal(one(0, 70, 0, 'cobblestone'), 'failed:denied-no-reference', 'mid-air: no solid neighbour')
     assert.equal(bot.placed.length, 1)
+  })
+
+  it('use (vf8e.3) aims at the cell and activates a held bucket; other items, far cells and the castle are refused', async () => {
+    const bot = fakeBot()
+    const one = (x, y, z, ctx = {}) => tick(compiled('user',
+      `const r = bot.use(${x}, ${y}, ${z}); return r === "started" ? "running" : "failed:" + r.replace(":", "-")`), bot, ctx)
+    assert.equal(one(1, 61, 0), 'failed:denied-not-a-bucket', 'empty hand')
+    bot.heldItem = { name: 'cobblestone' }
+    assert.equal(one(1, 61, 0), 'failed:denied-not-a-bucket')
+    bot.heldItem = { name: 'water_bucket' }
+    assert.equal(one(1, 61, 0), 'running')
+    await flush()
+    assert.deepEqual(bot.used, [{ item: 'water_bucket', at: key(1, 61, 0) }])
+    assert.equal(one(9, 61, 0), 'failed:denied-out-of-reach')
+    assert.equal(one(1, 61, 1, { castle: { site: { x: 1, y: 61, z: 0 }, rot: 0 } }), 'failed:denied-use-protected', 'yard ring')
+    assert.equal(bot.used.length, 1)
   })
 
   it('codex 03: rejected skill promises never crash, thrown getters stay timed, a lost episode never lands its place', async () => {

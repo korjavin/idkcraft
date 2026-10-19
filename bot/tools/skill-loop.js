@@ -14,7 +14,7 @@
 // secrets/minecraft/anthropic-api-key (never printed). Every call goes
 // through brain.llmCall (vf8e.5: usage metrics + LLM_TOKENS_PER_HOUR cap).
 // Model SKILL_LOOP_MODEL (default claude-opus-5-5), effort SKILL_LOOP_EFFORT
-// (default high). Work dir SKILL_LOOP_DIR (default /tmp/idkcraft-skill-loop/
+// (default medium), max_tokens 32000 (thinking included). Work dir SKILL_LOOP_DIR (default /tmp/idkcraft-skill-loop/
 // <scenario>): skills/, spots.json, keeper.log, attempt-N.log, result.json.
 // The keeper boots under RIG_LOCK_WAIT (default 7200 s: the laptop slot is
 // shared) and is torn down when the loop ends, green or not.
@@ -30,7 +30,10 @@ const { spawn, spawnSync, execFileSync } = require('node:child_process')
 
 const BOT = path.join(__dirname, '..')
 const MODEL = process.env.SKILL_LOOP_MODEL || 'claude-opus-5-5'
-const EFFORT = process.env.SKILL_LOOP_EFFORT || 'high'
+// medium = Opus 5.5's own default; high spent the whole 16k on thinking
+// (first live attempt: answer cut at max_tokens after 164 s).
+const EFFORT = process.env.SKILL_LOOP_EFFORT || 'medium'
+const MAX_TOKENS = 32000
 // $ per 1M tokens in/out (claude-api skill table, 2026-10-06).
 const PRICE = { 'claude-opus-5-5': [4, 20], 'claude-sonnet-5-5': [2, 10], 'claude-haiku-5-5': [0.1, 0.5] }
 
@@ -87,7 +90,7 @@ function system(sc) {
     'whole `bot` facade are below; nothing else exists inside the skill. run(bot, st) is called once per bot tick (about 1 s) and must ' +
     "return at once: start an act, return 'running', and poll bot.status() on later ticks. A verifier runs your file on a real server " +
     'and reports the verdict and the bot log; you get that report and your previous file on the next attempt.\n' +
-    `Required header: name "${sc.skill}", kind "${sc.kind}". Reply with ONE \`\`\`js block holding the complete file, header first.\n\n` +
+    `Required header: name "${sc.skill}", kind "${sc.kind}". Reply with ONE \`\`\`js block holding the complete file, header first, and no prose. Keep it small (well under 200 lines).\n\n` +
     fs.readFileSync(path.join(BOT, 'skills', 'README.md'), 'utf8')
 }
 
@@ -182,7 +185,7 @@ async function main() {
       const ta = Date.now()
       const body = {
         model: MODEL,
-        max_tokens: 16000,
+        max_tokens: MAX_TOKENS,
         thinking: { type: 'adaptive' },
         output_config: { effort: EFFORT },
         system: system(sc),
@@ -192,8 +195,12 @@ async function main() {
       try {
         data = await brain.llmCall({ use: 'skill', apiKey: key, body })
       } catch (e) {
-        envFail = `llm: ${(e && e.message) || e}`
-        break
+        const msg = String((e && e.message) || e)
+        if (msg.startsWith('llm budget')) { envFail = `llm: ${msg}`; break }
+        // A failed call is a spent attempt (its tokens are unknown), not an abort.
+        rows.push({ attempt: n, in: 0, out: 0, llmSecs: Math.round((Date.now() - ta) / 1000), rigSecs: 0, rc: null, verdict: `llm error: ${msg.slice(0, 120)}` })
+        console.log(`attempt ${n}: ${rows[rows.length - 1].verdict}`)
+        continue
       }
       const llmSecs = Math.round((Date.now() - ta) / 1000)
       const u = data.usage || {}

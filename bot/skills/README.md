@@ -98,6 +98,12 @@ ticks.
 - `place(x, y, z, item)` places INTO that cell against a solid neighbour. It
   refuses the castle yard ring and apron (`denied:place-protected`) and never
   clicks a GUI block.
+- `use(x, y, z)` uses the held bucket on that cell (look at its centre,
+  then the server's use-item raycast): a held `water_bucket` pours, a held
+  `bucket` scoops a water source. `place()` cannot pour. It refuses any other
+  held item (`denied:not-a-bucket`), a cell farther than 4.5 from the eyes
+  (`denied:out-of-reach`) and the castle yard ring/apron
+  (`denied:use-protected`). `equip` the bucket first.
 - `goto(x, y, z, range=1)` sets a pathfinder `GoalNear` on the live Movements
   after `body.movementsFor`. It never builds a new `Movements`. The goal is
   issued under a `skill:` goal key. It is idempotent: the same target with a
