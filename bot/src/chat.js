@@ -16,6 +16,7 @@ const stepMod = require('./step')
 const worker = require('./worker')
 const castleMod = require('./behaviours/castle')
 const taskMod = require('./task')
+const llmOrders = require('./llm-orders')
 const Vec3 = require('vec3')
 
 // Targets declined as too deep, held per player for an explicit 'lead
@@ -329,6 +330,14 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   // main bot answers everything else); an allowlist, silent — N identical
   // refusal lines are the chatter. startWork/setFollow keep their own guards.
   if (ticker && ticker.swarmHelper && !/^(?:stop|(?:flat|make flat|flatten)(?: .*)?)$/.test(msg)) return
+  // vf8e.6: LLM orders (BOT_LLM_ORDERS=1) — a roster player's line the FSM
+  // cannot parse asks the model for a plan; the plan's own re-fed lines never
+  // go back to it. Flag off: llmAsk is false and nothing below changes.
+  const lctx = bot._tickerCtx
+  const llmAsk = (fallback, text = msg) => !!(ticker && lctx && llmOrders.enabled() && !llmOrders.feeding(lctx) &&
+    worker.players(bot)[playerName] &&
+    llmOrders.ask(bot, lctx, { text, by: playerName, ticker, fallback, feed: (line) => handleChat(bot, ticker, username, line, senderUuid) }))
+  if (msg === 'stop' || msg === 'follow me' || msg === 'go work' || msg === 'free') llmOrders.cancel(lctx, msg)
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(playerName)
     const seenEntry = worker.players(bot)[playerName]
@@ -536,8 +545,16 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         const want = m[2]
           ? Math.min(bringMod.WANT_MAX, Math.max(1, parseInt(m[2], 10)))
           : (food ? bringMod.WANT_FOOD : (/logs?$|_log$/.test(name) ? bringMod.WANT_LOGS : bringMod.WANT_ORE))
-        bot.chat(ticker.setBring({ name, want, by: playerName }))
+        const reply = ticker.setBring({ name, want, by: playerName })
+        // vf8e.6: an unknown name ('bring me 8 torches') is the model's to
+        // read; its empty answer chats this refusal after all.
+        if (!(/^unknown (?:item|block):/.test(String(reply)) && llmAsk(reply))) bot.chat(reply)
       }
+    } else if (msg.startsWith('plan ')) {
+      // vf8e.6: force the planner on any line (A/B against the FSM parse).
+      llmAsk(null, msg.slice(5).trim())
+    } else {
+      llmAsk(null)
     }
   }
 }

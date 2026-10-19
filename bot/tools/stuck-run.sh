@@ -61,6 +61,13 @@ case "${REPLAY_PLANNER:-stub}" in
     export ANTHROPIC_API_KEY ;;
   *) echo "REPLAY_PLANNER: want stub|jev|llm, got '$REPLAY_PLANNER'"; exit 2 ;;
 esac
+# vf8e.6: BOT_LLM_ORDERS=1 (the follower plans unparsed orders) needs the
+# Anthropic key too — same env-else-stash load, prints nothing.
+if [ "${BOT_LLM_ORDERS:-}" = 1 ]; then
+  [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -x "$HOME/.local/bin/kv" ] && ANTHROPIC_API_KEY="$("$HOME/.local/bin/kv" get secrets/minecraft/anthropic-api-key 2>/dev/null || true)"
+  [ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "BOT_LLM_ORDERS=1 needs ANTHROPIC_API_KEY (stash secrets/minecraft/anthropic-api-key)"; exit 2; }
+  export ANTHROPIC_API_KEY BOT_LLM_ORDERS
+fi
 LOCKBASE="${RIG_LOCK:-/tmp/idkcraft-rig.lock}"
 RIG_ID="${RIG_ID:-}"
 [ "$RIG_ID" = 0 ] && RIG_ID=

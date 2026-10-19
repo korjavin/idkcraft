@@ -470,6 +470,12 @@
     ],
     "owner": "src/behaviours/castlefetch.js"
   },
+  "castleFetchMine": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
   "castleFlight": {
     "writers": [
       "src/behaviours/castle.js"
@@ -579,6 +585,12 @@
       "src/orders.js"
     ],
     "owner": "src/behaviours/castle.js"
+  },
+  "castleStairsMines": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
   },
   "castleStoneAsked": {
     "writers": [
@@ -732,12 +744,6 @@
     "owner": "src/behaviours/home.js"
   },
   "doorShutFastAt": {
-    "writers": [
-      "src/doors.js"
-    ],
-    "owner": "src/doors.js"
-  },
-  "gateFeetSince": {
     "writers": [
       "src/doors.js"
     ],
@@ -949,6 +955,12 @@
     ],
     "owner": "src/behaviours/furnace.js"
   },
+  "gateFeetSince": {
+    "writers": [
+      "src/doors.js"
+    ],
+    "owner": "src/doors.js"
+  },
   "gather": {
     "writers": [
       "src/behaviours/gather.js",
@@ -1131,6 +1143,12 @@
       "src/stuck.js"
     ],
     "owner": "src/stuck.js"
+  },
+  "knownCastles": {
+    "writers": [
+      "src/memory.js"
+    ],
+    "owner": "src/memory.js"
   },
   "lastDecision": {
     "writers": [
@@ -1343,6 +1361,18 @@
     ],
     "owner": "src/behaviours/light.js"
   },
+  "llmAsk": {
+    "writers": [
+      "src/llm-orders.js"
+    ],
+    "owner": "src/llm-orders.js"
+  },
+  "llmOrder": {
+    "writers": [
+      "src/llm-orders.js"
+    ],
+    "owner": "src/llm-orders.js"
+  },
   "lowHpGateLast": {
     "writers": [
       "src/goal.js"
@@ -1396,12 +1426,6 @@
       "src/index.js"
     ],
     "owner": "src/index.js"
-  },
-  "knownCastles": {
-    "writers": [
-      "src/memory.js"
-    ],
-    "owner": "src/memory.js"
   },
   "paused": {
     "writers": [
@@ -1814,6 +1838,7 @@
   "taskPlanStep": {
     "writers": [
       "src/goal.js",
+      "src/llm-orders.js",
       "src/task.js"
     ],
     "owner": "src/task.js"

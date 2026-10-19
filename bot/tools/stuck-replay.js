@@ -174,7 +174,11 @@ function loadSpots() {
       }
       home = { x: s.home[0], y: s.home[1], z: s.home[2] }
     } else if (s.home != null) {
-      throw new Error(`spots[${i}]: home needs mode=shelter|night`)
+      // vf8e.6: an order spot may stand on a built home too (light up the
+      // house) — injected at window start, no night, no 'go work'.
+      if (mode !== 'order') throw new Error(`spots[${i}]: home needs mode=shelter|night|order`)
+      if (!Array.isArray(s.home) || s.home.length !== 3 || !s.home.every(Number.isInteger)) throw new Error(`spots[${i}]: bad home (want integer [x, y, z])`)
+      home = { x: s.home[0], y: s.home[1], z: s.home[2] }
     }
     // Close budget (idkcraft-hoy7): a shelter spot that swims before it digs
     // (SHELTER-WATER) closes 18-24 s, past the 15 s stand-and-dig budget.
@@ -854,6 +858,7 @@ async function main() {
       c.gather = null; c.forage = null; c.forageSkip = null; c.forageFinal = null
       c.gohome = null; c.stay = null; c.shelter = null; c.inShelter = false
       c.restGaveUps = 0; c.restGaveUpAt = null; c.restGaveUpCalled = false
+      c.llmOrder = null; c.llmAsk = null; c.taskPlanStep = null // vf8e.6: a timed-out plan must not drive the next window
       try { if (c.movements && typeof c.movements.canDig === 'boolean') c.movements.canDig = true } catch (_) { /* reset best-effort */ }
       if (s.danger.length > 0) c.danger = { spots: s.danger.map(([x, y, z, r]) => ({ x, y, z, r, at: Date.now() })) }
     }
@@ -864,16 +869,17 @@ async function main() {
     // Shelter spots (idkcraft-ed88): night, a built home far past the walk
     // range, then 'go work' through the real chat path (revokes the follow;
     // the corpus keeps this spot after every follow spot). Set before the
-    // unpause so no tick walks toward the guide first.
-    if (s.mode === 'shelter' || s.mode === 'night') {
+    // unpause so no tick walks toward the guide first. An order spot's
+    // home (vf8e.6) is injected the same way, without night or 'go work'.
+    if (s.home && c) {
       const h = s.home
-      if (c) {
-        c.home = {
-          site: { ...h }, built: true, v: 2,
-          interior: { min: { x: h.x + 1, y: h.y, z: h.z + 1 }, max: { x: h.x + 5, y: h.y + 1, z: h.z + 4 } },
-          door: { x: h.x + 3, y: h.y, z: h.z },
-        }
+      c.home = {
+        site: { ...h }, built: true, v: 2,
+        interior: { min: { x: h.x + 1, y: h.y, z: h.z + 1 }, max: { x: h.x + 5, y: h.y + 1, z: h.z + 4 } },
+        door: { x: h.x + 3, y: h.y, z: h.z },
       }
+    }
+    if (s.mode === 'shelter' || s.mode === 'night') {
       await rcon('time set 18000')
       try { guide.chat('go work') } catch (e) {
         throw new Error(`spot ${s.name}: work chat failed: ${e && e.message ? e.message : e}`)

@@ -27,6 +27,7 @@ const COMMANDS = [
   { names: ['flat', 'make flat', 'flatten'], usage: 'flat [radius] [x z]', what: 'fills holes and shaves bumps around you (or around column x z) to level ground', example: 'flat 16' },
   { names: ['help'], usage: 'help [command]', what: 'lists commands, or explains one in detail', example: 'help find me' },
   { names: ['brain'], usage: 'brain [laya|jev|off]', what: 'switches the remote brain, or reports it', example: 'brain laya' },
+  { names: ['plan'], usage: 'plan <order>', what: 'asks the LLM to plan any order from the bot\'s steps (only with BOT_LLM_ORDERS on; then unknown orders plan by themselves)', example: 'plan light up the house' },
 ]
 
 // Exact alias match first, then a single prefix match ('help find' -> the

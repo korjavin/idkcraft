@@ -1,0 +1,260 @@
+'use strict'
+
+// LLM orders (idkcraft-vf8e.6). With BOT_LLM_ORDERS=1 (and ANTHROPIC_API_KEY)
+// a player's chat line the FSM cannot parse becomes ONE Messages-API call
+// (brain.llmCall: the .5 token counters + LLM_TOKENS_PER_HOUR cap) that
+// answers a JSON plan over a whitelist:
+// - order steps = the existing chat orders, re-fed through handleChat as the
+//   player's own line (every chat-time guard, refusal and executor stays);
+// - work steps = goal MENU steps, pinned one at a time through
+//   ctx.taskPlanStep, the stall-planner seam decide() already honours
+//   (feasible + registered only, safety and night steps still win).
+// The task executive runs each step as usual (orders keep their watchdog and
+// park, work steps their decide/commit rules). No LLM on the tick: tick()
+// only reads ctx to move to the next step. Flag off: nothing here runs.
+// ponytail: raw Baritone #commands are not plan steps — on v2 bring/flat
+// already drive #mine/#goto over the bridge with the protected-block guards;
+// a raw #mine would bypass them. Skills (vf8e.2) join when they enter MENU.
+
+const brain = require('./brain')
+const goal = require('./goal')
+const metrics = require('./metrics')
+const { STEP_EFFECT_TEXT } = require('./plan-consts')
+const { isFinished, failReason, stepGen, chatStep } = require('./step')
+
+const ORDER_TIMEOUT_MS = 20000
+const STEP_MS = 10 * 60 * 1000 // one plan step's deadline
+const PLAN_MAX = 6
+const MISS_TICKS = 3 // pin consumed without the step starting = not possible now
+
+const ORDER_STEPS = {
+  bring: { args: 'item, count', what: 'gets an item to the player: from the pack, the home chest, by crafting or smelting it, mining the block, shearing sheep or hunting for food', chat: (s) => `bring me ${s.item}${s.count ? ` ${s.count}` : ''}` },
+  find: { args: 'item', what: 'finds the nearest block of that name and leads the player to it', chat: (s) => `find me ${s.item}` },
+  flat: { args: 'count', what: 'levels the ground around the player, count = radius', chat: (s) => `flat ${s.count || 8}` },
+  share: { args: '', what: 'hands the player everything carried except tools, weapons and armour', chat: () => 'share' },
+}
+// Work steps the plan may pin: not the night/safety steps (the FSM owns
+// them), not deliver/rest/castle internals.
+const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stockpile', 'gear', 'forage', 'explore']
+
+const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their companion bot. ' +
+  'Use only the listed step ids, in the order they must run. Item and block names are Minecraft registry ids (torch, water_bucket, iron_ore). ' +
+  'Answer JSON only, no prose: {"plan":[{"step":"<id>","item":"<id>","count":<n>,"done":"<what is true when this step is done>"}]}. ' +
+  'Leave out item/count when the step takes none. At most ' + PLAN_MAX + ' steps. ' +
+  'Answer {"plan":[]} when the line is not an order to the bot or no listed step can do it.'
+
+function enabled(env = process.env) {
+  return /^(1|true|yes)$/i.test(String(env.BOT_LLM_ORDERS || '')) && !!env.ANTHROPIC_API_KEY
+}
+
+function workSteps() {
+  return WORK_STEPS.filter((n) => goal.MENU[n] && goal.registered(n))
+}
+
+function stepList() {
+  const lines = Object.entries(ORDER_STEPS).map(([id, s]) => `${id}(${s.args}): ${s.what}`)
+  for (const id of workSteps()) {
+    const when = goal.STEP_CRITERIA[id] ? ` (runs when: ${goal.STEP_CRITERIA[id].split(':')[0]})` : ''
+    lines.push(`${id}: ${STEP_EFFECT_TEXT[id] || id}${when}`)
+  }
+  return lines.join('\n')
+}
+
+function inventoryText(bot) {
+  try {
+    const n = {}
+    for (const i of bot.inventory.items()) n[i.name] = (n[i.name] || 0) + i.count
+    return Object.entries(n).map(([k, v]) => `${k} ${v}`).join(', ') || 'empty'
+  } catch (_) { return 'unknown' }
+}
+
+function stateText(bot, ctx) {
+  try { return goal.goalText(goal.goalFacts(bot, ctx), ctx.home) } catch (_) { return 'unknown' }
+}
+
+// Model answer -> { steps } | { error } | { empty: true }. The whitelist is
+// the safety: an id outside it refuses the whole plan.
+function validatePlan(ans, works = workSteps()) {
+  const raw = ans && Array.isArray(ans.plan) ? ans.plan : null
+  if (!raw) return { error: 'no plan' }
+  if (raw.length === 0) return { empty: true }
+  if (raw.length > PLAN_MAX) return { error: `plan too long (${raw.length})` }
+  const steps = []
+  for (const r of raw) {
+    const id = r && typeof r.step === 'string' ? r.step.toLowerCase().trim() : ''
+    if (!ORDER_STEPS[id] && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"` }
+    const s = { step: id, done: typeof r.done === 'string' ? r.done.replace(/\s+/g, ' ').trim().slice(0, 80) : '' }
+    if (ORDER_STEPS[id] && ORDER_STEPS[id].args.includes('item')) {
+      const item = String(r.item || '').toLowerCase().trim().replace(/\s+/g, '_')
+      if (!/^[a-z0-9_]{1,40}$/.test(item)) return { error: `${id} needs an item` }
+      s.item = item
+    }
+    if (ORDER_STEPS[id] && ORDER_STEPS[id].args.includes('count') && r.count != null) {
+      const c = Math.floor(Number(r.count))
+      if (!(c >= 1 && c <= 64)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
+      s.count = c
+    }
+    steps.push(s)
+  }
+  return { steps }
+}
+
+function label(s) {
+  return [s.step, s.item, s.count].filter((x) => x != null && x !== '').join(' ')
+}
+
+// One Messages-API call -> { steps|error|empty, tokens }.
+async function planOrder(bot, ctx, text, fetchFn) {
+  const user = `Order from the player: "${text}"\n\nBot state: ${stateText(bot, ctx)}\nInventory: ${inventoryText(bot)}\n\nSteps (id(args): what it does):\n${stepList()}`
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
+  let data
+  try {
+    data = await brain.llmCall({
+      use: 'orders',
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      signal: ac.signal,
+      fetchFn,
+      body: {
+        model: process.env.LLM_MODEL || brain.LLM_MODEL,
+        max_tokens: 500,
+        thinking: { type: 'disabled' },
+        system: SYSTEM,
+        messages: [{ role: 'user', content: user }],
+      },
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+  const u = (data && data.usage) || {}
+  const tokens = `${u.input_tokens | 0}/${u.output_tokens | 0}`
+  const out = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+  let ans = null
+  try { ans = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch (_) { ans = null }
+  return { ...validatePlan(ans), tokens }
+}
+
+// Chat entry: ask for a plan, never blocking the chat handler. One ask in
+// flight (ctx.llmAsk); a running plan (ctx.llmOrder) is replaced only by a
+// valid new plan — chatter answered {"plan":[]} leaves it alone.
+// req = { text, by, ticker, feed(line), fallback } — fallback is the FSM's
+// own refusal, chatted when no plan comes back.
+function ask(bot, ctx, req, fetchFn) {
+  if (!ctx || ctx.llmAsk) return false
+  const a = { text: String(req.text).slice(0, 200), at: Date.now() }
+  ctx.llmAsk = a
+  const say = (line) => { try { bot.chat(line) } catch (_) { /* chat best-effort */ } }
+  return (async () => {
+    let r
+    try {
+      r = await planOrder(bot, ctx, a.text, fetchFn)
+    } catch (err) {
+      const msg = String(err && err.message ? err.message : err)
+      r = { error: err && err.name === 'TimeoutError' ? 'timeout' : msg.startsWith('llm budget') ? 'budget' : msg.slice(0, 40), outcome: msg.startsWith('llm budget') ? 'budget' : 'error' }
+    }
+    if (ctx.llmAsk !== a) return // cancelled mid-ask (stop / follow me / go work)
+    ctx.llmAsk = null
+    const ms = Date.now() - a.at
+    const outcome = r.steps ? 'ok' : r.empty ? 'empty' : (r.outcome || 'invalid')
+    try { metrics.llmCalls.inc({ use: 'orders', outcome }) } catch (_) { /* metric best-effort */ }
+    console.log(`llm order by=${req.by} text="${a.text}" outcome=${outcome} plan=${r.steps ? r.steps.map(label).join('>') : (r.error || '-')} tokens=${r.tokens || '0/0'} ms=${ms}`)
+    if (r.empty) { if (req.fallback) say(req.fallback); return }
+    if (!r.steps) {
+      say(req.fallback || `I can't plan that (${r.error}) — try: help`)
+      return
+    }
+    ctx.llmOrder = { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed, steps: r.steps, i: 0, cur: null, at: Date.now(), feeding: false }
+    say(`plan: ${r.steps.map(label).join(', then ')}`.slice(0, 250))
+  })()
+}
+
+// Owner stop / follow me / go work: the plan and any ask in flight end.
+function cancel(ctx, why = 'stop') {
+  if (!ctx) return
+  if (ctx.llmOrder) console.log(`llm order end text="${ctx.llmOrder.text}" result=${why} step=${ctx.llmOrder.i + 1}/${ctx.llmOrder.steps.length}`)
+  ctx.llmOrder = null
+  ctx.llmAsk = null
+}
+
+// True while the sequencer re-feeds its own chat line: the chat hooks must
+// not send that line back to the model.
+function feeding(ctx) {
+  return !!(ctx && ctx.llmOrder && ctx.llmOrder.feeding)
+}
+
+function orderBusy(ctx) {
+  return !!(ctx.bring || ctx.pendingSearch || ctx.lead || (ctx.flat && !ctx.flat.parked))
+}
+
+function end(bot, ctx, o, result) {
+  const n = o.steps.length
+  console.log(`llm order end text="${o.text}" result=${result} step=${Math.min(o.i + 1, n)}/${n} dur=${Math.floor((Date.now() - o.at) / 1000)}s`)
+  if (ctx.llmOrder === o) ctx.llmOrder = null
+  const why = failReason(result)
+  if (result === 'done') chatStep(bot, ctx, `done: ${o.text}`.slice(0, 250))
+  else if (why !== null) chatStep(bot, ctx, `plan stopped at ${label(o.steps[o.i])}: ${why || 'failed'}`.slice(0, 250))
+}
+
+function startStep(bot, ctx, o, s, now) {
+  o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0 }
+  const order = ORDER_STEPS[s.step]
+  if (order) {
+    o.feeding = true
+    try { o.feed(order.chat(s)) } finally { o.feeding = false }
+    // No order object after the line = refused (its reply already chatted
+    // why) — except find, whose instant answer leads or only announces.
+    if (!orderBusy(ctx) && s.step !== 'find' && s.step !== 'share') return end(bot, ctx, o, 'failed:refused')
+    return
+  }
+  if (!ctx.work && o.ticker && typeof o.ticker.work === 'function') o.ticker.work()
+  ctx.taskPlanStep = s.step
+}
+
+// Every tick (index.js), cheap: no plan, no work.
+function tick(bot, ctx, now = Date.now()) {
+  const o = ctx && ctx.llmOrder
+  if (!o) return
+  const s = o.steps[o.i]
+  if (!s) return end(bot, ctx, o, 'done')
+  if (!o.cur) return startStep(bot, ctx, o, s, now)
+  const c = o.cur
+  if (ctx.paused) return end(bot, ctx, o, 'stop')
+  if (now - c.at > STEP_MS) return end(bot, ctx, o, 'failed:timeout')
+  const next = () => { o.i++; o.cur = null }
+  if (ORDER_STEPS[s.step]) {
+    if (!orderBusy(ctx)) next()
+    return
+  }
+  if (!ctx.work) return end(bot, ctx, o, 'mode')
+  const ours = ctx.step === s.step && (stepGen(ctx) !== c.gen || !isFinished(ctx.stepStatus))
+  if (ours) {
+    c.seen = true
+    c.status = ctx.stepStatus
+    if (isFinished(c.status)) return c.status === 'done' ? next() : end(bot, ctx, o, c.status)
+    return
+  }
+  if (c.seen) {
+    // Left the step: finished between two reads, else a safety/night step
+    // took the body — pin it again for when that ends.
+    if (isFinished(c.status)) return c.status === 'done' ? next() : end(bot, ctx, o, c.status)
+    c.seen = false
+    c.gen = stepGen(ctx)
+    ctx.taskPlanStep = s.step
+    return
+  }
+  if (ctx.taskPlanStep !== s.step) {
+    if (++c.miss >= MISS_TICKS) return end(bot, ctx, o, 'failed:not possible now')
+    ctx.taskPlanStep = s.step
+  }
+}
+
+// Status line: the active plan step and its done-when text.
+function statusLine(ctx) {
+  const o = ctx && ctx.llmOrder
+  if (!o) return ctx && ctx.llmAsk ? `plan: asking about "${ctx.llmAsk.text}"` : null
+  const s = o.steps[o.i]
+  if (!s) return null
+  return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
+}
+
+module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS }

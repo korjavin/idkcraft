@@ -23,6 +23,7 @@ const buildMod = require('./behaviours/build')
 const homeMod = require('./behaviours/home')
 const taskMod = require('./task')
 const residence = require('./residence')
+const llmOrders = require('./llm-orders')
 
 // How long a recover outcome stays reportable in status (01 body-2): the
 // stamp never clears, so without a window every status would cite it.
@@ -689,6 +690,11 @@ function createOrders(box) {
         const tl = taskMod.taskLine(ctx)
         if (tl) lines.push(tl)
       } catch (_) { /* task line best-effort */ }
+      // LLM order plan (vf8e.6): the active step and its done-when text.
+      try {
+        const pl = llmOrders.statusLine(ctx)
+        if (pl) lines.push(pl)
+      } catch (_) { /* plan line best-effort */ }
       // Park line (vmzq.3): the parked task with the diagnosis it parked
       // with (persisted on the episode, so it survives a restart).
       try {
