@@ -110,18 +110,27 @@ describe('vmzq.51: the low-hp castle gate releases after a bounded stall', () =>
     })
   })
 
-  it('a silence past the gap restarts the window instead of opening (fight/follow)', async () => {
+  it('a silence past the gap pauses the window: no opening on the stale stamp, no restart (8qz6)', async () => {
     await quietAsync(async () => {
       const gated = goalBot({ items: [...TOOLS], health: 5, food: 10 })
       const c = { castle: castleState(), home: { site: { x: 0, y: 64, z: 0 }, built: true } }
+      const facts = { time: 'day', castle: 'stone-batch', health: 5, food: 10 }
+      const MIN = 60 * 1000
       await goal.decide(gated, c)
-      // Fight owned the body for 10 min (no decide ticks): the stamp is old
-      // but the gating was not continuous — the window restarts, no opening.
-      c.lowHpGateSince = Date.now() - goal.LOW_HP_GATE_MS - 1
-      c.lowHpGateLast = Date.now() - 10 * 60 * 1000
+      // 3 min gated on work ticks, then the owner's 'follow me' owned the
+      // body for 10 min (no decide ticks): the stamp is 13 min old but only
+      // 3 min were gated — the window stays shut and keeps those 3 min.
+      c.lowHpGateSince = Date.now() - 13 * MIN
+      c.lowHpGateLast = Date.now() - 10 * MIN
       await goal.decide(gated, c)
-      assert.ok(Date.now() - c.lowHpGateSince < 5000, 'stale stamp re-arms')
-      assert.equal(goal.MENU.castle.feasible({ time: 'day', castle: 'stone-batch', health: 5, food: 10 }, gated, c), false)
+      const served = Date.now() - c.lowHpGateSince
+      assert.ok(served >= 3 * MIN - 5000 && served < 3 * MIN + 5000, `3 gated min kept (${served} ms)`)
+      assert.equal(goal.MENU.castle.feasible(facts, gated, c), false, 'no opening on the stale stamp')
+      // 2.5 more gated min on work ticks: the 5-min window opens.
+      c.lowHpGateSince -= 2.5 * MIN
+      c.lowHpGateLast = Date.now()
+      await goal.decide(gated, c)
+      assert.equal(goal.MENU.castle.feasible(facts, gated, c), true, 'follow stretches do not restart the clock')
     })
   })
 })
