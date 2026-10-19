@@ -434,9 +434,10 @@ REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base 
 sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical flow, stuck-baseline.json
 ```
 
-**Merge gate** (CLAUDE.md "v2 merge gate"): a v2 PR is judged on ONE throughput
-verdict line (castle cells/90 min, house done-seconds, deaths/night), not on
-stuck spots. The v2 stuck-run above is a regression check only (not worse).
+**Merge gate** (CLAUDE.md "v2 merge gate"): v2 PRs run no rig legs; the batch on
+master judges the lay/mine pair, the 90-min castle throughput (cells/90 min,
+house done-seconds, deaths/night) and the v2 stuck-run vs the recorded
+baselines, not on stuck spots. The v2 stuck-run above is a regression check only (not worse).
 
 - **Image** (idkcraft-neuc.23, 6x7.28): `client.sh` defaults to
   `idkcraft-baritone:<git rev-parse --short=8 HEAD:baritone>` of the checkout
@@ -1089,7 +1090,7 @@ and the fixture cache without network).
 ### Rig speed: component rigs + `CASTLE_TICK_RATE` (idkcraft-neuc.60)
 
 Two 10-minute component rigs replace "wait 90 min for one noisy castle
-number" for a v2 PR's per-component signal:
+number" for the batch's per-component signal (v2 PRs quote no lines; CLAUDE.md "v2 merge gate"):
 
 ```sh
 B="CASTLE_BODY=baritone CASTLE_PADSPOT=250,350 CASTLE_RIG_ID=auto"   # image: client.sh default (tree-hash tag)
