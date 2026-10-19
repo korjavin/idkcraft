@@ -305,8 +305,8 @@ function nearCastle(bot, ctx) {
 // bridged the fence/moat with throwaway dirt/cobble. Within
 // CASTLE_ROCK_RANGE of ANY known castle centre (own, in progress too, and
 // every peer's: castle.anyCastle over ctx.knownCastles) allow1by1towers is
-// false, except the castle and house build steps by the OWN castle (their
-// approaches need throwaway towers; v1's inCastleApron exemption), so the
+// false, except the own castle step (the lay itself places) and the house
+// build by the OWN castle (nearAnyCastle below), so the
 // bridge sends allowPlace=false (bridge/index.js movementsToSettings).
 // Explicit places go through bot.placeBlock, not Baritone. Pit recovery
 // keeps allowBreak plus the recover prims.
@@ -316,10 +316,14 @@ let placeNear
 function nearAnyCastle(bot, ctx) {
   try {
     const p = bodyPos(bot)
-    // The own castle's lay and house build keep their approaches (v1's
-    // inCastleApron exemption; a peer castle keeps the guard): rig lay
-    // 76.4 -> 34.1 with the castle step guarded too (build-stall).
-    return !!castle.anyCastle(ctx, (c, own) => !(own && (ctx.step === 'castle' || ctx.step === 'build')) && inRockRange(p, c))
+    // The own castle step always keeps allowPlace: the v2 lay is Baritone's
+    // builder ("Starting layer 0"), which places the plan cells itself —
+    // guarded by a castle in range it lays nothing (rig lay 76.4 -> 34.1
+    // own-guarded; 8.0 with a peer castle in range, the rigs' shared memory
+    // dir). The house build keeps its approaches by the OWN castle only
+    // (v1's inCastleApron exemption; a peer castle keeps the guard).
+    if (ctx && ctx.step === 'castle' && ctx.castle && ctx.castle.site) return false
+    return !!castle.anyCastle(ctx, (c, own) => !(own && ctx.step === 'build') && inRockRange(p, c))
   } catch (_) { /* no castle read: far */ }
   return false
 }

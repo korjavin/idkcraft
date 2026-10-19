@@ -541,12 +541,19 @@ describe('castle break guard (g0z.55)', () => {
       ctx.knownCastles = [{ ...ctx.castle }] // memory's refresh-time copy of the own castle, since replaced (rig lay 8.0)
       assert.equal(sync(), 'true', 'own castle step, stale own copy in knownCastles')
       assert.equal(pushes, 3)
+      ctx.knownCastles = [{ ...peer, site: { x: SITE.x, y: SITE.y, z: SITE.z + 10 } }] // a peer castle 10 off the own site
+      assert.equal(sync(), 'true', 'own castle step: Baritone builder lays even with a peer castle in range')
+      assert.equal(pushes, 3)
+      ctx.knownCastles = []
       ctx.step = 'castlefetch'
       assert.equal(sync(), 'false', 'other steps by the own castle')
       assert.equal(pushes, 4)
       pushes = 2
       ctx.step = 'build' // the house build keeps its throwaway towers by a castle
       assert.equal(sync(), 'true', 'house build step by the own castle')
+      ctx.knownCastles = [{ ...ctx.castle }] // memory's refresh-time copy of the own castle (castle.anyCastle dedupes by site)
+      assert.equal(sync(), 'true', 'house build step, stale own copy is not a peer')
+      ctx.knownCastles = []
       assert.equal(pushes, 3)
       ctx.castle = null; ctx.knownCastles = [peer] // a peer castle keeps the guard on the build step
       assert.equal(sync(), 'false', 'house build step by a peer castle')
