@@ -1740,6 +1740,10 @@ async function main() {
       site: { ...site }, built: true, v: 2,
       interior: { min: { x: site.x + 1, y: site.y, z: site.z + 1 }, max: { x: site.x + 5, y: site.y + 1, z: site.z + 4 } },
       door: { x: site.x + 3, y: site.y, z: site.z },
+      // The raised table's claim, as build.js sets it on a finished prod
+      // house: without it furnace.js finds no table to craft the home
+      // furnace and the tidy torch fetch fails smelt-no-table (rig only).
+      table: new Vec3(site.x + 5, site.y, site.z + 1),
     }
     tickCtx().paused = false
     origLog(`CASTLE-RIG start house: built house ${site.x} ${site.y} ${site.z} is the home (tidy ${process.env.CASTLE_TIDY_MS || 'default'} ms)`)

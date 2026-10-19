@@ -1040,16 +1040,18 @@ function tidyDue(st, now = Date.now()) {
   if (!st || !st.site || st.phase !== 'complete' || st.parked || !(ms > 0)) return false
   return now - (typeof st.visitedAt === 'number' ? st.visitedAt : 0) > ms
 }
-function noteVisit(bot, ctx, st, now) {
+function nearSite(bot, st) {
   try {
     const bp = bot && bot.entity && bot.entity.position
-    if (!bp || typeof bp.x !== 'number') return
+    if (!bp || typeof bp.x !== 'number') return false
     const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-    if (Math.hypot(bp.x - (st.site.x + w / 2), bp.z - (st.site.z + d / 2)) <= TIDY_VISIT_DIST) {
-      st.visitedAt = now
-      ctx.tidyLegMs = 0
-    }
-  } catch (_) { /* visit best-effort */ }
+    return Math.hypot(bp.x - (st.site.x + w / 2), bp.z - (st.site.z + d / 2)) <= TIDY_VISIT_DIST
+  } catch (_) { return false }
+}
+function noteVisit(bot, ctx, st, now) {
+  if (!nearSite(bot, st)) return
+  st.visitedAt = now
+  ctx.tidyLegMs = 0
 }
 
 // Dry decor kinds (g0z.49): every castlefetch leg that comes up dry adds
@@ -1093,7 +1095,7 @@ function menuFact(bot, ctx, now = Date.now()) {
       st.visitedAt = now
       ctx.tidyLegMs = 0
       if (owed) ctx.castleWord = null
-    } else if (owed && failed && ctx.step === 'castlefetch' && !siteLoaded(bot, st)) ctx.castleWord = null
+    } else if (owed && failed && ctx.step === 'castlefetch' && !nearSite(bot, st)) ctx.castleWord = null
   } else ctx.tidyLegMs = 0 // a fresh trip clock for every due window (stop/forget/new castle)
   ctx.tidyTickAt = now
   try {
