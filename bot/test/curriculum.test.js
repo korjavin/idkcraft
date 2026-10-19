@@ -44,12 +44,20 @@ describe('curriculum harvest (idkcraft-vf8e.9)', () => {
     assert.deepEqual(list.map((c) => [c.family, c.reason, c.count, c.score]), [
       ['page', 'pillar_up:failed:place-error', 2, 6],
       ['bring', 'bone:no-recipe-no-source', 2, 4],
-      ['page', 'sidestep:failed:no-progress', 1, 3], // the newer of the two count-1 pages first
+      ['page', 'pillar_up:failed:no-scaffold', 1, 3], // equal score: newest first
+      ['page', 'sidestep:failed:no-progress', 1, 3],
       ['page', 'sidestep:failed:no-progress', 1, 3],
       ['bring', 'andesite:need-diorite', 1, 2],
     ])
-    assert.equal(list[2].cell, '-11,8,-11')
-    assert.equal(list[3].cell, '-6,8,-6') // the paged-then-done episode counts too
+    assert.equal(list[3].cell, '-11,8,-11')
+    assert.equal(list[4].cell, '-6,8,-6') // the paged-then-done episode counts too
+  })
+
+  it('a paged episode with no terminal line still counts; the next episode starts clean', () => {
+    const c = find('pillar_up:failed:no-scaffold')
+    assert.deepEqual([c.cell, c.chain, c.lastSeen], ['25,8,25', 'pillar_up>call_player', '2026-10-18 12:30:06'])
+    // 13:00 (sidestep, done, never paged) is no page.
+    assert.equal(list.some((x) => x.lastSeen.startsWith('2026-10-18 13:')), false)
   })
 
   it('folds same-cell episodes and keeps the newest facts', () => {
@@ -79,9 +87,9 @@ describe('curriculum harvest (idkcraft-vf8e.9)', () => {
     withDir((dir, out) => {
       assert.equal(main(['harvest', DUMP]), 0)
       const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
-      assert.equal(saved.length, 5)
+      assert.equal(saved.length, 6)
       assert.match(out[0], /^#\s+sig\s+family\s+count\s+score/)
-      assert.match(out.at(-1), /^harvest events=8 signatures=5 page=3 bring=2 proposable=4 days=7/)
+      assert.match(out.at(-1), /^harvest events=9 signatures=6 page=4 bring=2 proposable=5 days=7/)
     })
   })
 })

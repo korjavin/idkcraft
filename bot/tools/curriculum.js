@@ -66,6 +66,15 @@ function parse(text, env = process.env) {
   const who = (n) => (n.startsWith(swarm) ? 'swarm' : n)
   const eps = new Map()
   const out = []
+  const page = (name, ep, reason, at, day, pos) => {
+    // The facts of the last choice near the end pos (call_player's own
+    // line carries none); none within a cell = no kit, not proposable.
+    const f = ep.facts && ep.facts.pos && pos && Math.hypot(ep.facts.pos[0] - pos[0], ep.facts.pos[2] - pos[2]) <= CELL ? ep.facts : null
+    out.push({
+      family: 'page', reason: ep.fail || reason, bot: who(name), at, day, pos,
+      facts: f ? f.text : null, from: f ? f.pos : null, next: f ? f.next : null, chain: ep.chain.join('>') || reason.split(':')[0],
+    })
+  }
   for (const line of String(text).split('\n')) {
     const m = TS.exec(line)
     if (!m) continue
@@ -80,8 +89,17 @@ function parse(text, env = process.env) {
     const a = RECOVER.exec(msg)
     if (!a || !keep(name)) continue
     const [, action, outcome, posText, rest] = a
-    const ep = eps.get(name) || { chain: [], paged: false, fail: null }
-    eps.set(name, ep)
+    let ep = eps.get(name)
+    // A first choice (facts last=none: recover.js starts every episode with
+    // rec.last null) opens a new episode. The old one ended without a
+    // terminal line (clearStuck on an order, a restart): a paged one still
+    // counts, where it was last seen.
+    if (ep && outcome === 'chosen' && / last=none /.test(rest)) {
+      if (ep.paged) page(name, ep, 'call_player:cleared', ep.at, ep.day, ep.pos)
+      ep = null
+    }
+    if (!ep) eps.set(name, (ep = { chain: [], paged: false, fail: null }))
+    Object.assign(ep, { at, day, pos: xyz(posText) })
     if (outcome === 'chosen') {
       ep.chain.push(action)
       if (action === 'call_player') ep.paged = true
@@ -92,17 +110,10 @@ function parse(text, env = process.env) {
       ep.fail = `${action}:${outcome}`
     } else if (outcome === 'done' || outcome === 'gave-up' || outcome === 'drop-goal') {
       eps.delete(name)
-      if (!ep.paged && outcome !== 'gave-up') continue
-      const pos = xyz(posText)
-      // The facts of the last choice near the end pos (call_player's own
-      // line carries none); none within a cell = no kit, not proposable.
-      const f = ep.facts && ep.facts.pos && pos && Math.hypot(ep.facts.pos[0] - pos[0], ep.facts.pos[2] - pos[2]) <= CELL ? ep.facts : null
-      out.push({
-        family: 'page', reason: ep.fail || `${action}:${outcome}`, bot: who(name), at, day, pos,
-        facts: f ? f.text : null, from: f ? f.pos : null, next: f ? f.next : null, chain: ep.chain.join('>') || action,
-      })
+      if (ep.paged || outcome === 'gave-up') page(name, ep, `${action}:${outcome}`, at, day, ep.pos)
     }
   }
+  for (const [name, ep] of eps) if (ep.paged) page(name, ep, 'call_player:cleared', ep.at, ep.day, ep.pos)
   return out
 }
 

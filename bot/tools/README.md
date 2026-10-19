@@ -719,12 +719,12 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
   the spot once WITHOUT a skill. It must be RED (unreached, a page or a refusal). If it is not,
   the candidate is not-reproduced and no model tokens are spent.
 
-Real harvest (2026-10-12..19 prod dump, default feed IdkBotV2): 206 events, 152 signatures
-(148 page, 4 bring), 115 proposable. Top 10 are all pages: counts 20, 8, 7, 6, 6, 3, 2, 2, 2, 2.
+Real harvest (2026-10-12..19 prod dump, default feed IdkBotV2): 206 events, 151 signatures
+(147 page, 4 bring), 115 proposable. Top 10 are all pages: counts 20, 8, 7, 6, 6, 3, 2, 2, 2, 2.
 Seven are `sidestep:failed:no-progress` and three are `call_player:gave-up`. 3 of the 10 are
 proposable; the other 7 are `no-dir` (v2 logs no `next`). The 4 bring signatures, all
 proposable: `bone` and `sapling` with no recipe, `andesite` needing diorite, `diorite` needing
-quartz. With `CURRICULUM_BOTS=all`: 917 events, 696 signatures (691 page, 5 bring), 637
+quartz. With `CURRICULUM_BOTS=all`: 918 events, 695 signatures (690 page, 5 bring), 637
 proposable.
 
 ## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
