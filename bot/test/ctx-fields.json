@@ -155,10 +155,17 @@
       "src/behaviours/castlefetch.js",
       "src/chat.js",
       "src/index.js",
+      "src/llm-orders.js",
       "src/orders.js",
       "src/task.js"
     ],
     "owner": "src/orders.js"
+  },
+  "bringEnd": {
+    "writers": [
+      "src/behaviours/bringbase.js"
+    ],
+    "owner": "src/behaviours/bringbase.js"
   },
   "buildAnchor": {
     "writers": [
@@ -847,6 +854,12 @@
     ],
     "owner": "src/orders.js"
   },
+  "flatEnd": {
+    "writers": [
+      "src/behaviours/flat.js"
+    ],
+    "owner": "src/behaviours/flat.js"
+  },
   "flatGuardFn": {
     "writers": [
       "src/behaviours/flat.js"
@@ -1260,6 +1273,12 @@
       "src/task.js"
     ],
     "owner": "src/orders.js"
+  },
+  "leadEnd": {
+    "writers": [
+      "src/behaviours/lead.js"
+    ],
+    "owner": "src/behaviours/lead.js"
   },
   "leadTargetGone": {
     "writers": [
