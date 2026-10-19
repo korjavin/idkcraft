@@ -1862,6 +1862,21 @@
     ],
     "owner": "src/task.js"
   },
+  "tidyFetchSpent": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js",
+    "note": "one off-site repair fetch per tidy window (g0z.62): castle.menuFact stamps the window's st.visitedAt when the off-site castlefetch fails; while it matches and the bot is away, a complete castle words tidy/done even if still loaded."
+  },
+  "tidyLegMs": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/chat.js"
+    ],
+    "owner": "src/behaviours/castle.js",
+    "note": "tidy trip clock (g0z.62): castle.menuFact accumulates gocastle/castle leg time while a tidy is due and zeroes it on a visit, a park or no tidy due; chat 'castle tidy' zeroes it so a forced trip gets the full TIDY_TRIP_MS."
+  },
   "underFireLogged": {
     "writers": [
       "src/index.js"

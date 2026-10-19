@@ -300,6 +300,11 @@ const START = process.env.CASTLE_START || ''
 const START_CELL = process.env.CASTLE_START_CELL || ''
 startPlan({ x: 0, y: 0, z: 0 }, START, START_CELL) // validate up front
 if (START && SEED !== 'complete') throw new Error('CASTLE_START needs CASTLE_SEED=complete')
+// Tidy house (g0z.62, CASTLE_START_HOUSE=1, needs CASTLE_START): a built rig
+// house at the start spot is the home, so the castle is not — only the tidy
+// cadence (CASTLE_TIDY_MS) walks the bot back to repair and sweep.
+const START_HOUSE = process.env.CASTLE_START_HOUSE === '1'
+if (START_HOUSE && !START) throw new Error('CASTLE_START_HOUSE=1 needs CASTLE_START')
 // Apron diff (g0z.64, needs CASTLE_SEED=complete): v2 places through
 // Baritone in the client, so its throwaway towers/bridges never reach
 // placedByBot (the bridge emits no blockUpdate) and apron-litter cannot see
@@ -1722,6 +1727,26 @@ async function main() {
     }
     tickCtx().paused = false
     origLog(`CASTLE-RIG start ${start.x} ${start.y} ${start.z} (site +${start.d.join(',')})${start.cell ? `, sealed in ${start.cell}` : ', bare pocket'}`)
+  }
+  if (START_HOUSE) {
+    const site = { x: start.x + 2, y: start.y, z: start.z + 2 }
+    tickCtx().paused = true
+    try {
+      await require('./raise-house').raiseHouse(rcon, site)
+      for (const c of rigHouseCommands(site, 'clean')) await rcon(c)
+    } catch (e) { fail('start-house', e.message) }
+    await rcon(`tp ${FOLLOWER} ${site.x + 3.5} ${site.y} ${site.z - 1.5}`).catch((e) => fail('start-house', e.message))
+    tickCtx().home = {
+      site: { ...site }, built: true, v: 2,
+      interior: { min: { x: site.x + 1, y: site.y, z: site.z + 1 }, max: { x: site.x + 5, y: site.y + 1, z: site.z + 4 } },
+      door: { x: site.x + 3, y: site.y, z: site.z },
+      // The raised table's claim, as build.js sets it on a finished prod
+      // house: without it furnace.js finds no table to craft the home
+      // furnace and the tidy torch fetch fails smelt-no-table (rig only).
+      table: new Vec3(site.x + 5, site.y, site.z + 1),
+    }
+    tickCtx().paused = false
+    origLog(`CASTLE-RIG start house: built house ${site.x} ${site.y} ${site.z} is the home (tidy ${process.env.CASTLE_TIDY_MS || 'default'} ms)`)
   }
   let apronSnap = null
   if (APRON_DIFF) {

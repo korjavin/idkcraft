@@ -160,7 +160,7 @@ describe('castle order chat (g0z.3)', () => {
     bot._tickerCtx.placedByBot = new Set([`${SITE.x - 1},${SITE.y},${SITE.z}`])
     handleChat(bot, ticker, 'Steve', 'castle')
     const line = bot.chats.pop()
-    assert.match(line, /^castle at 100 64 200: 100% \(.*\); now: waiting for its turn; blocked 0; yard litter 1$/)
+    assert.match(line, /^castle at 100 64 200: 100% \(.*\); now: waiting for its turn; blocked 0; yard litter 1; last visit never; next tidy now$/)
     assert.ok(line.length <= 256)
   })
 })
@@ -400,7 +400,7 @@ describe('castle arbiter step (g0z.3)', () => {
     const bot = makeBot()
     const real = bot.blockAt
     bot.blockAt = () => null // chunks gone (bot far away)
-    assert.equal(goal.goalFacts(bot, { castle: castleState({ phase: 'complete' }) }).castle, 'done', 'complete stays done far away')
+    assert.equal(goal.goalFacts(bot, { castle: castleState({ phase: 'complete', visitedAt: Date.now() }) }).castle, 'done', 'complete stays done far away (g0z.62: visited recently)')
     // Mid-build: the last on-site word holds (stock re-read), not a fresh stone guess.
     const ctx = { castle: castleState() }
     bot.blockAt = real

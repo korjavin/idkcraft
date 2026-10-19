@@ -19,7 +19,7 @@ const COMMANDS = [
   { names: ['status'], usage: 'status', what: 'reports what the bot does, who chose it and why, what blocks it', example: 'status' },
   { names: ['find me'], usage: 'find me <block>', what: 'finds the nearest block within 48 blocks and leads you there', example: 'find me iron' },
   { names: ['build here'], usage: 'build here', what: 'moves the house site next to you and builds there', example: 'build here' },
-  { names: ['build castle', 'castle'], usage: 'build castle | castle [stop|go|repair|forget|upgrade]', what: 'builds a stone castle over many hours; castle reports progress, stop/go park and resume, repair fixes damage, forget drops it, upgrade adds stairs', example: 'build castle' },
+  { names: ['build castle', 'castle'], usage: 'build castle | castle [stop|go|repair|tidy|forget|upgrade]', what: 'builds a stone castle over many hours; castle reports progress, stop/go park and resume, repair fixes damage, tidy revisits, forget drops it, upgrade adds stairs', example: 'build castle' },
   { names: ['bring me'], usage: 'bring me <item> [count]', what: 'brings an item from pack or chest, or digs blocks, to your feet', example: 'bring me coal 5' },
   { names: ['bring me food', 'bring me meat', 'bring me something to eat'], usage: 'bring me food [count]', what: 'brings food from inventory or hunts animals', example: 'bring me food 3' },
   { names: ['autonomous'], usage: 'autonomous on|off', what: 'stay and work with nobody online (free brain only)', example: 'autonomous on' },

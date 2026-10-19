@@ -32,7 +32,7 @@ function castleBot({ items = [], chest = [] } = {}) {
   const name = (p) => set.has(k3(p.x, p.y, p.z)) ? set.get(k3(p.x, p.y, p.z)) : (Math.floor(p.y) < SITE.y ? 'dirt' : 'air')
   const calls = { places: [], digs: [], withdraw: [], gather: 0, goals: [] }
   const byName = { chest: { id: 2 } }
-  for (const n of ['blast_furnace', 'iron_ingot', 'raw_iron', 'furnace', 'smooth_stone', 'stone', 'cobblestone', 'coal', 'oak_planks', 'oak_log']) byName[n] = {}
+  for (const n of ['blast_furnace', 'iron_ingot', 'raw_iron', 'furnace', 'smooth_stone', 'stone', 'cobblestone', 'coal', 'oak_planks', 'oak_log', 'charcoal', 'torch', 'stick']) byName[n] = {}
   const bot = {
     username: 'IdkBot',
     calls,
@@ -433,5 +433,89 @@ describe('stockpile blast-ladder keep (g0z.51)', () => {
   it('no castle: the stock banks', () => {
     const bot = packBot([{ name: 'raw_iron', count: 5 }], false)
     assert.equal(banked(stockpile.depositPlan(bot, { home: null }), 'raw_iron'), 5)
+  })
+})
+
+// idkcraft-g0z.62: a tidy repair owed torches with no coal anywhere and
+// failed castlefetch-no-torch every visit. The torch rung smelts a pack log
+// into charcoal at the castle furnace (light.js 33vm's path), then crafts.
+describe('castle torch charcoal rung (g0z.62)', () => {
+  const real = { ...fetch.deps }
+  afterEach(() => { Object.assign(fetch.deps, real) })
+  const run = async (bot, ctx, until, n = 60) => {
+    for (let i = 0; i < n && !until(); i++) { fetch(bot, ctx); await settle(); await settle() }
+  }
+  function torchBot(items) {
+    const bot = castleBot({ items, chest: [] })
+    closeDecor(bot)
+    const cell = blueprint.absPlan(SITE, 0, 2).cells.find((c) => c.kind === 'torch')
+    bot.set.delete(k3(cell.x, cell.y, cell.z))
+    return bot
+  }
+  const torchCraft = (items, calls) => (b, c, names, n) => {
+    calls.push([names, n])
+    if (names[0] === 'torch' && count(items, 'charcoal') + count(items, 'coal') >= 1) {
+      take(items, count(items, 'charcoal') > 0 ? 'charcoal' : 'coal', 1)
+      give(items, 'torch', 4)
+      return { done: true }
+    }
+    return { done: false }
+  }
+
+  it('no coal, logs on hand: one log smelts to charcoal, the torch is crafted, done', async () => {
+    const items = [{ name: 'oak_log', count: 3 }, { name: 'oak_planks', count: 4 }, { name: 'stick', count: 4 }]
+    const bot = torchBot(items)
+    const ctx = { castle: completeState() }
+    assert.equal(castleMod.menuFact(bot, ctx), 'torch-none')
+    const { fn, jobs } = fakeFurnace(bot, items, [])
+    fetch.deps.driveFurnace = fn
+    const crafts = []
+    fetch.deps.craftItem = torchCraft(items, crafts)
+    fetch.deps.gather = () => { bot.calls.gather++ }
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(jobs, [{ input: 'oak_log', output: 'charcoal', count: 1 }])
+    assert.equal(count(items, 'torch'), 4)
+    assert.equal(count(items, 'oak_log'), 2)
+    assert.equal(bot.calls.gather, 0)
+    assert.equal(ctx.furnaceJob, null)
+  })
+
+  it('charcoal alone funds the craft (never held back by the coal reserve)', async () => {
+    const items = [{ name: 'charcoal', count: 1 }, { name: 'stick', count: 4 }]
+    const bot = torchBot(items)
+    const ctx = { castle: completeState() }
+    const { fn, jobs } = fakeFurnace(bot, items, [])
+    fetch.deps.driveFurnace = fn
+    fetch.deps.craftItem = torchCraft(items, [])
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(jobs, [])
+    assert.equal(count(items, 'torch'), 4)
+  })
+
+  it('no coal and no logs: failed:castlefetch-no-torch as before, no smelt', async () => {
+    const items = [{ name: 'stick', count: 4 }, { name: 'coal', count: 2 }]
+    const bot = torchBot(items)
+    const ctx = { castle: completeState() }
+    const { fn, jobs } = fakeFurnace(bot, items, [])
+    fetch.deps.driveFurnace = fn
+    fetch.deps.craftItem = torchCraft(items, [])
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-torch')
+    assert.deepEqual(jobs, [])
+    assert.equal(count(items, 'coal'), 2, 'the coal reserve stands')
+  })
+
+  it('logs on hand but the home furnace far away: fails no-torch, never walks home mid-fetch', async () => {
+    const items = [{ name: 'oak_log', count: 3 }, { name: 'stick', count: 4 }]
+    const bot = torchBot(items)
+    const ctx = { castle: completeState(), home: { site: { x: SITE.x + 120, y: 64, z: SITE.z } } }
+    const { fn, jobs } = fakeFurnace(bot, items, [])
+    fetch.deps.driveFurnace = fn
+    fetch.deps.craftItem = torchCraft(items, [])
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-torch')
+    assert.deepEqual(jobs, [])
   })
 })
