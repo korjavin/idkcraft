@@ -192,6 +192,54 @@ describe('llm orders: flag on', () => {
     assert.equal(ctx.taskPlanStep, 'light', 're-pinned once the night step ended')
   })
 
+  it('a find step is done only when its lead arrives; a lead that gives up stops the plan', async () => {
+    const leadMod = require('../src/behaviours/lead')
+    for (const arrive of [true, false]) {
+      const bot = mockBot()
+      const ticker = tickerFor(bot)
+      const c = bot._tickerCtx
+      answer = '{"plan":[{"step":"find","item":"iron_ore"}]}'
+      handleChat(bot, ticker, 'P', 'where is iron')
+      await flush()
+      // The find answer led (stands in for findNearest on the mock world).
+      c.lead = arrive
+        ? { name: 'iron_ore', pos: { x: 0, y: 64, z: 0 }, by: 'P' }
+        : { name: 'iron_ore', pos: { x: 40, y: 64, z: 0 }, by: 'P', waiting: true, waitTicks: leadMod.WAIT_BUDGET_TICKS }
+      llmOrders.tick(bot, c)
+      assert.ok(c.llmOrder && c.llmOrder.cur, String(bot.lines))
+      leadMod(bot, c, null, {})
+      assert.equal(c.lead, null)
+      llmOrders.tick(bot, c)
+      llmOrders.tick(bot, c)
+      assert.equal(c.llmOrder, null)
+      assert.ok(bot.lines.includes(arrive ? 'done: where is iron' : 'plan stopped at find iron_ore: refused'), String(bot.lines))
+    }
+  })
+
+  it('the arbiter re-deciding away re-pins a bounded number of times, then stops', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"light"}]}'
+    handleChat(bot, ticker, 'P', 'light up the house')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    let ended = false
+    for (let i = 0; i < 6 && !ended; i++) {
+      ctx.taskPlanStep = null
+      ctx.step = 'light'
+      ctx.stepStatus = 'running'
+      ctx.stepGen = (ctx.stepGen | 0) + 1
+      llmOrders.tick(bot, ctx)
+      ctx.step = 'gather' // a text move: decide() picked another MENU step
+      ctx.stepGen++
+      llmOrders.tick(bot, ctx)
+      ended = ctx.llmOrder === null
+    }
+    assert.ok(ended)
+    assert.ok(bot.lines.includes('plan stopped at light: preempted'), String(bot.lines))
+  })
+
   it('another owner order cancels the plan; status and chatter do not', async () => {
     const bot = mockBot()
     const ticker = tickerFor(bot)
