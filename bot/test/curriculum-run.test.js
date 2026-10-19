@@ -113,6 +113,15 @@ describe('curriculum.sh night (idkcraft-vf8e.10)', () => {
     assert.match(r.out, /not-reproduced/)
   })
 
+  it('a night with 0 signatures prints the per-family counts it saw (idkcraft-vf8e.16)', () => {
+    const t = setup()
+    const r = runNight(t, { dump: path.join(__dirname, 'fixtures', 'curriculum-dump-nopage.txt') })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, /harvest events=0 signatures=0 page=0 bring=0 proposable=0 days=7 parsed=3\/3 recover=2 refusals=0/)
+    assert.match(r.out, /harvest why: recover=2 but 0 page events \(no call_player\/gave-up episode\); bring=excluded/)
+    assert.match(r.out, /CURRICULUM night=\d{4}-\d\d-\d\d tried=0 green=0 red=0 skipped=0 cost=\$0\.00/)
+  })
+
   it('a failed pre-run never reads last night pre.json', () => {
     const t = setup()
     const top = CURRICULUM.rank(CURRICULUM.parse(fs.readFileSync(DUMP, 'utf8'), {}), 7).find((c) => c.proposable)

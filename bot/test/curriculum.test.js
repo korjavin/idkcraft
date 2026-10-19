@@ -94,6 +94,88 @@ describe('curriculum harvest (idkcraft-vf8e.9)', () => {
   })
 })
 
+describe('curriculum docker timestamps + empty-night why (idkcraft-vf8e.16)', () => {
+  const { survey } = require('../tools/curriculum')
+  const NOPAGE = path.join(__dirname, 'fixtures', 'curriculum-dump-nopage.txt')
+  const nopage = fs.readFileSync(NOPAGE, 'utf8')
+  const RAW = path.join(__dirname, 'fixtures', 'curriculum-dump-raw.txt')
+  const rawText = fs.readFileSync(RAW, 'utf8')
+  // `docker logs --timestamps` in front of already-stamped bot lines, with
+  // and without fractional seconds.
+  const prefixed = text.split('\n').filter((l) => l)
+    .map((l, i) => `${i % 2 ? '2026-10-18T16:00:00Z' : '2026-10-18T16:00:00.123456789Z'} ${l}`).join('\n')
+
+  it('a docker-prefixed dump of stamped lines parses exactly like the bot lines', () => {
+    assert.deepEqual(parse(prefixed, ENV), parse(text, ENV))
+    assert.deepEqual(rank(parse(prefixed, ENV), 7), list)
+  })
+
+  it('true raw lines (daemon stamp + bare stdout) date and attribute from the stamp', () => {
+    const ev = parse(rawText, ENV)
+    assert.equal(ev.length, 1)
+    assert.deepEqual([ev[0].family, ev[0].reason, ev[0].bot, ev[0].day], ['page', 'pillar_up:failed:no-scaffold', 'IdkBotV2', '2026-10-19'])
+    // A multi-bot filter cannot attribute a bare line: skipped, not mislabelled.
+    assert.equal(parse(rawText, { CURRICULUM_BOTS: 'all' }).length, 0)
+  })
+
+  it('multiplexed framing (Portainer logs API, no TTY) strips anywhere', () => {
+    const frame = (s) => {
+      const b = Buffer.from(s, 'utf8')
+      const h = Buffer.alloc(8)
+      h[0] = 1
+      h.writeUInt32BE(b.length, 4)
+      return Buffer.concat([h, b])
+    }
+    const lines = rawText.split('\n').filter((l) => l)
+    const framed = Buffer.concat([frame(`${lines[0]}\n`), frame(`${lines[1]}\n${lines[2]}\n`), frame(`${lines[3]}\n`)]).toString('utf8')
+    assert.deepEqual(parse(framed, ENV), parse(rawText, ENV))
+  })
+
+  it('survey mirrors the filter: kept lines only, refusals by chat name', () => {
+    assert.deepEqual(survey(text, ENV), { lines: 40, parsed: 31, recover: 28, refusals: 3 })
+    assert.deepEqual(survey(prefixed, ENV), survey(text, ENV))
+    assert.deepEqual(survey(nopage, ENV), { lines: 3, parsed: 3, recover: 2, refusals: 0 })
+    assert.deepEqual(survey(rawText, ENV), { lines: 4, parsed: 4, recover: 4, refusals: 0 })
+  })
+
+  it('harvest on the prefixed dump writes the same curriculum.json', () => {
+    withDir((dir, out) => {
+      const f = path.join(dir, 'prefixed.txt')
+      fs.writeFileSync(f, prefixed)
+      assert.equal(main(['harvest', f]), 0)
+      const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
+      assert.equal(saved.length, 6)
+      assert.match(out.at(-1), /^harvest events=9 signatures=6 page=4 bring=2 proposable=5 days=7 parsed=31\/40 recover=28 refusals=3 -> /)
+    })
+  })
+
+  it('harvest on the true raw dump finds the paged episode', () => {
+    withDir((dir, out) => {
+      assert.equal(main(['harvest', RAW]), 0)
+      const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
+      assert.equal(saved.length, 1)
+      assert.deepEqual([saved[0].family, saved[0].reason, saved[0].proposable], ['page', 'pillar_up:failed:no-scaffold', true])
+    })
+  })
+
+  it('a night with 0 signatures says why: recover seen, no pages, bring excluded', () => {
+    withDir((dir, out) => {
+      assert.equal(main(['harvest', NOPAGE]), 0)
+      assert.match(out.at(-2), /^harvest events=0 signatures=0 page=0 bring=0 proposable=0 days=7 parsed=3\/3 recover=2 refusals=0 -> /)
+      assert.match(out.at(-1), /^harvest why: recover=2 but 0 page events \(no call_player\/gave-up episode\); bring=excluded/)
+    })
+  })
+
+  it('a night that parsed nothing says the dump or filter is wrong', () => {
+    withDir((dir, out) => {
+      const f = path.join(dir, 'junk.txt')
+      fs.writeFileSync(f, 'hello world\nstill no timestamps\n')
+      assert.equal(main(['harvest', f]), 0)
+      assert.match(out.at(-1), /^harvest why: nothing parsed \(0 of 2 lines; wrong dump or bot filter 'IdkBotV2'\?\); bring=excluded/)
+    })
+  })
+})
+
 describe('curriculum propose (idkcraft-vf8e.9)', () => {
   const scenarioKeys = Object.keys(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'skill-scenarios.json'), 'utf8'))[0]).sort()
 

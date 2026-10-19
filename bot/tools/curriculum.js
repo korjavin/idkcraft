@@ -8,6 +8,11 @@
 //   node tools/curriculum.js propose <sig>
 //
 // Dump lines start "YYYY-MM-DD HH:MM:SS <name> <msg>" (UTC), like deaths.sh.
+// A raw `docker logs --timestamps` dump works as is (vf8e.16): the daemon's
+// leading RFC3339 timestamp and any multiplex framing are stripped, and the
+// bot's bare stdout lines (no date or name of their own) are dated from the
+// daemon stamp and attributed to the single bot in the filter. Bare lines
+// under a multi-bot filter are skipped (unattributable).
 // Families (owner 2026-10-19: the simplest first):
 //   page  — a recover episode (recover.js logRecover lines) that chose
 //           call_player or ended gave-up. Signature = last failed hand
@@ -42,12 +47,51 @@ const MAX_DIST = 16 // ponytail: a 123-block page goal is not a 90 s micro-run; 
 const TS = /^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)\S* (\S+) (.*)$/
 const RECOVER = /recover action=(\S+) source=\S+ outcome=(\S+) pos=(\S+)(.*)$/
 const REFUSAL = /<([A-Za-z0-9_]+)> can't (get|make) ([a-z0-9_]+)(?::| yet) ?(.*)$/
+// Raw `docker logs --timestamps` (timestamps=1) prefixes every line with the
+// daemon time ("2026-10-19T21:44:50.123456789Z <original line>"). The bot's
+// own stdout is bare (`recover action=...`, no date or bot name:
+// recover.js logs with plain console.log), so after the strip a raw line is
+// dated and attributed from the daemon stamp instead (vf8e.16: the vf8e.15
+// night read events=0 off such a dump and each line was rewritten by hand).
+const DOCKER_TS = /^(\d{4}-\d\d-\d\d)T(\d\d:\d\d:\d\d)(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)? (.*)$/
+// The Portainer container-logs API passes docker's multiplexed stream
+// through as is (bot2 runs without a TTY): each frame starts with an 8-byte
+// header (stream id, three zero bytes, big-endian length). Real log text
+// never holds NUL bytes, so the header pattern is safe to strip anywhere.
+const MUX = /[\x00-\x02]\x00\x00\x00[\s\S]{4}/g
+const clean = (line) => String(line).replace(/\r$/, '').replace(MUX, '')
+
+const botSpec = (env = process.env) => env.CURRICULUM_BOTS || env.BOT2_USERNAME || 'IdkBotV2'
 
 function botFilter(env = process.env) {
-  const spec = env.CURRICULUM_BOTS || env.BOT2_USERNAME || 'IdkBotV2'
+  const spec = botSpec(env)
   if (spec === 'all') return () => true
   const set = new Set(spec.split(',').map((s) => s.trim()).filter(Boolean))
   return (name) => set.has(name)
+}
+
+// The bot name for bare `docker logs --timestamps` lines: the single bot in
+// the filter. A multi-name filter (or "all") cannot attribute a bare line to
+// a bot, so those lines are skipped (null) — use the VictoriaLogs feed
+// (which prints names) for multi-bot harvests.
+const bareName = (env = process.env) => {
+  const spec = botSpec(env)
+  if (spec === 'all') return null
+  const names = spec.split(',').map((s) => s.trim()).filter(Boolean)
+  return names.length === 1 ? names[0] : null
+}
+
+// A dump line -> [day, time, name, msg] or null. Bot lines carry their own
+// stamp; bare docker lines are dated and attributed from the daemon stamp.
+function classify(line, bare) {
+  const m = TS.exec(line)
+  if (m) return [m[1], m[2], m[3], m[4]]
+  const d = DOCKER_TS.exec(line)
+  if (!d) return null
+  const m2 = TS.exec(d[3])
+  if (m2) return [m2[1], m2[2], m2[3], m2[4]]
+  if (!bare) return null
+  return [d[1], d[2], bare, d[3]]
 }
 
 const xyz = (s) => {
@@ -62,6 +106,7 @@ const words = (s) => String(s).replace(/\(.*?\)/g, ' ').replace(/\d{4}-\d\d-\d\d
 // Lines -> events [{family, reason, bot, at, day, pos, facts, next, chain, item}].
 function parse(text, env = process.env) {
   const keep = botFilter(env)
+  const bare = bareName(env)
   const swarm = env.SWARM_PREFIX || 'IdkSwarm'
   const who = (n) => (n.startsWith(swarm) ? 'swarm' : n)
   const eps = new Map()
@@ -75,10 +120,10 @@ function parse(text, env = process.env) {
       facts: f ? f.text : null, from: f ? f.pos : null, next: f ? f.next : null, chain: ep.chain.join('>') || reason.split(':')[0],
     })
   }
-  for (const line of String(text).split('\n')) {
-    const m = TS.exec(line)
-    if (!m) continue
-    const [, day, time, name, msg] = m
+  for (const raw of String(text).split('\n')) {
+    const c = classify(clean(raw), bare)
+    if (!c) continue
+    const [day, time, name, msg] = c
     const at = Date.parse(`${day}T${time}Z`)
     const r = REFUSAL.exec(msg)
     if (r) {
@@ -115,6 +160,54 @@ function parse(text, env = process.env) {
   }
   for (const [name, ep] of eps) if (ep.paged) page(name, ep, 'call_player:cleared', ep.at, ep.day, ep.pos)
   return out
+}
+
+// survey: what the dump held for this feed, for the empty-night why-line
+// (vf8e.16). Mirrors parse()'s line classification and bot filter, without
+// episode logic: lines = non-blank, parsed = kept for event detection,
+// recover = kept raw `recover action=` lines, refusals = kept refusal-shaped
+// lines (attributed by chat name, like parse).
+function survey(text, env = process.env) {
+  const keep = botFilter(env)
+  const bare = bareName(env)
+  let lines = 0
+  let parsed = 0
+  let recover = 0
+  let refusals = 0
+  for (const raw of String(text).split('\n')) {
+    const line = clean(raw)
+    if (!line.trim()) continue
+    lines++
+    const c = classify(line, bare)
+    if (!c) continue
+    const [, , name, msg] = c
+    const r = REFUSAL.exec(msg)
+    if (r) {
+      if (keep(r[1])) { parsed++; refusals++ }
+      continue
+    }
+    if (!keep(name)) continue
+    parsed++
+    if (msg.includes('recover action=')) recover++
+  }
+  return { lines, parsed, recover, refusals }
+}
+
+// whyLine: a night with 0 signatures must say why (vf8e.16) — the per-family
+// counts it saw, e.g. recover=9 page=0 bring=excluded.
+function whyLine(s, events, spec) {
+  const parts = []
+  if (s.parsed === 0) {
+    parts.push(`nothing parsed (0 of ${s.lines} lines; wrong dump or bot filter '${spec}'?)`)
+  } else {
+    const pages = events.filter((e) => e.family === 'page').length
+    if (s.recover > 0 && pages === 0) parts.push(`recover=${s.recover} but 0 page events (no call_player/gave-up episode)`)
+    else if (s.recover === 0) parts.push('no recover lines at all')
+    else parts.push(`recover=${s.recover} page=${pages}`)
+  }
+  if (s.refusals === 0) parts.push('bring=excluded (no refusal lines kept for this feed: the mc log is out of the feed by owner rule)')
+  else parts.push(`bring-refusals=${s.refusals}`)
+  return parts.join('; ')
 }
 
 function rank(events, days = 7) {
@@ -345,14 +438,17 @@ function main(argv) {
     const files = argv.slice(1)
     const days = /^\d+(\.\d+)?$/.test(files[files.length - 1]) && files.length > 1 ? Number(files.pop()) : 7
     if (!(days > 0)) { console.log('days must be > 0'); return 2 }
-    const events = parse(files.map((f) => fs.readFileSync(f, 'utf8')).join('\n'))
+    const text = files.map((f) => fs.readFileSync(f, 'utf8')).join('\n')
+    const events = parse(text)
     const list = rank(events, days)
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'curriculum.json'), JSON.stringify(list, null, 1) + '\n')
     console.log(table(list, Number(process.env.TOP || 20)))
     const fam = (f) => list.filter((c) => c.family === f)
+    const s = survey(text)
     console.log(`harvest events=${events.length} signatures=${list.length} page=${fam('page').length} bring=${fam('bring').length} ` +
-      `proposable=${list.filter((c) => c.proposable).length} days=${days} -> ${path.join(dir, 'curriculum.json')}`)
+      `proposable=${list.filter((c) => c.proposable).length} days=${days} parsed=${s.parsed}/${s.lines} recover=${s.recover} refusals=${s.refusals} -> ${path.join(dir, 'curriculum.json')}`)
+    if (list.length === 0) console.log(`harvest why: ${whyLine(s, events, botSpec())}`)
     return 0
   }
   if (cmd === 'propose' && arg) {
@@ -380,4 +476,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2))
 
-module.exports = { parse, rank, proposal, table, main, WEIGHT, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES }
+module.exports = { parse, rank, proposal, table, main, WEIGHT, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES, survey, whyLine }

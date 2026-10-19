@@ -1,0 +1,4 @@
+2026-10-19T21:45:23.123456789Z recover action=pillar_up source=fsm outcome=chosen pos=-13.5,70,9.3 facts=stuck=very-long goal=high dist=105 scaffold=186 pickaxe=yes bucket=no water=no head=free walls=1 pit=no player=far resets=0/0 last=none feet=air head=air next=-115,88,31:air
+2026-10-19T21:45:31Z recover action=pillar_up source=fsm outcome=failed:no-scaffold pos=-13.5,70,9.3
+2026-10-19T21:45:32.5Z recover action=call_player source=fsm outcome=chosen pos=-13.5,70,9.3
+2026-10-19T21:45:33Z recover action=call_player source=fsm outcome=gave-up pos=-13.5,70,9.3
