@@ -510,6 +510,101 @@ describe('skills: promoted dir (vf8e.4)', () => {
   })
 })
 
+describe('skills: digIn + use ray check (krup)', () => {
+  const digInRun = 'const r = bot.digIn(); return r === "started" || r === "busy" ? "running" : "failed:" + r.replace(":", "-")'
+  const fresh = () => ({ ticks: 0, hs: { busy: null, err: null } })
+
+  it('digIn digs the cell below on open ground, one act at a time', async () => {
+    const bot = fakeBot()
+    const sk = compiled('digin_open', digInRun)
+    const st = fresh()
+    assert.equal(sk.tick(bot, {}, st), 'running')
+    assert.equal(sk.tick(bot, {}, st), 'running', 'second call while busy stays running')
+    await flush()
+    assert.deepEqual(bot.dug, ['0,60,0'])
+  })
+
+  it('digIn keeps digging as the body falls, each cell vetoed', async () => {
+    const bot = fakeBot()
+    const sk = compiled('digin_fall', digInRun)
+    const st = fresh()
+    for (let d = 0; d < 3; d++) {
+      assert.equal(sk.tick(bot, {}, st), 'running', `dig ${d + 1}`)
+      await flush()
+      bot.entity.position = new Vec3(bot.entity.position.x, bot.entity.position.y - 1, bot.entity.position.z)
+    }
+    assert.deepEqual(bot.dug, ['0,60,0', '0,59,0', '0,58,0'])
+  })
+
+  it('digIn allows the walled-in dig that dig() refuses (below-feet)', async () => {
+    const walls = new Map([[key(1, 61, 0), 'dirt'], [key(-1, 61, 0), 'dirt'], [key(0, 61, 1), 'dirt'], [key(0, 61, -1), 'dirt']])
+    assert.equal(
+      tick(compiled('walled_dig', 'return "failed:" + bot.dig(0, 60, 0).replace(":", "-")'), fakeBot(walls)),
+      'failed:denied-below-feet', 'denyReason still refuses for generated code')
+    const bot = fakeBot(walls)
+    assert.equal(compiled('walled_digin', digInRun).tick(bot, {}, fresh()), 'running')
+    await flush()
+    assert.deepEqual(bot.dug, ['0,60,0'])
+  })
+
+  it('digIn still refuses protected ground and caps the episode depth', () => {
+    const home = { site: { x: 0, y: 61, z: 0 }, interior: { min: { x: -2, y: 60, z: -2 }, max: { x: 2, y: 63, z: 2 } } }
+    assert.equal(
+      tick(compiled('digin_home', 'return "failed:" + bot.digIn().replace(":", "-")'), fakeBot(), { home }),
+      'failed:denied-protected', 'the house floor stays refused through digInVeto')
+    const deep = { ticks: 0, hs: { busy: null, err: null, digInDigs: 5 } }
+    assert.equal(
+      tick(compiled('digin_deep', 'return "failed:" + bot.digIn().replace(":", "-")'), fakeBot(), {}, deep),
+      'failed:denied-depth')
+  })
+
+  it('a terminal tick cancels an in-flight digIn like a dig', async () => {
+    const bot = fakeBot()
+    const sk = compiled('digin_cancel', 'st.n = (st.n || 0) + 1; if (st.n === 1) { bot.digIn(); return "running" } return "done"')
+    const st = fresh()
+    assert.equal(sk.tick(bot, {}, st), 'running')
+    assert.equal(sk.tick(bot, {}, st), 'done')
+    assert.equal(bot.stopped, 1)
+    await flush()
+    assert.deepEqual(bot.dug, [])
+  })
+
+  it('a pour aims a ray-visible face into the dest and lands there', async () => {
+    const bot = fakeBot()
+    bot.heldItem = { name: 'water_bucket' }
+    const sk = compiled('pour_face', 'const r = bot.use(1, 61, 0); return r === "started" ? "running" : "failed:" + r.replace(":", "-")')
+    assert.equal(sk.tick(bot, {}, fresh()), 'running')
+    await flush()
+    assert.deepEqual(bot.used, [{ item: 'water_bucket', at: key(1, 61, 0) }])
+  })
+
+  it('a pour past an occluding wall refuses instead of landing elsewhere', async () => {
+    const bot = fakeBot(new Map([[key(0, 61, 0), 'dirt']]))
+    bot.heldItem = { name: 'water_bucket' }
+    assert.equal(
+      tick(compiled('pour_occl', 'return "failed:" + bot.use(1, 61, 0).replace(":", "-")'), bot),
+      'failed:denied-no-face')
+    await flush()
+    assert.deepEqual(bot.used, [], 'no pour on a refused aim')
+  })
+
+  it('a scoop reaches a clear target but refuses past a wall', async () => {
+    const open = fakeBot(new Map([[key(1, 61, 0), 'water']]))
+    open.heldItem = { name: 'bucket' }
+    const ok = compiled('scoop_ok', 'const r = bot.use(1, 61, 0); return r === "started" ? "running" : "failed:" + r.replace(":", "-")')
+    assert.equal(ok.tick(open, {}, fresh()), 'running')
+    await flush()
+    assert.deepEqual(open.used, [{ item: 'bucket', at: key(1, 61, 0) }])
+    const shut = fakeBot(new Map([[key(1, 62, 0), 'dirt'], [key(2, 61, 0), 'water']]))
+    shut.heldItem = { name: 'bucket' }
+    assert.equal(
+      tick(compiled('scoop_shut', 'return "failed:" + bot.use(2, 61, 0).replace(":", "-")'), shut),
+      'failed:denied-ray-miss')
+    await flush()
+    assert.deepEqual(shut.used, [])
+  })
+})
+
 // Last: the ban and the off switch are process-wide.
 describe('skills: auto-ban and chat skills off (vf8e.4)', () => {
   it(`a skill that fails ${skills.BAN_FAILS} times is banned until restart`, () => {
