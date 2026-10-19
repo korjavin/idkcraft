@@ -15,7 +15,7 @@ const itemMod = require('./bringitem')
 const {
   WANT_ORE, WANT_MAX, countDrop, refuse, done, releaseSmelt, stopGuidedWork, dropFor, requiredTier,
   PICKAXE_RANK, bestPickRank, hasPickaxe, tierArticle, tierRefusal, PREY_NAMES, PREY_DROPS,
-  animalDist, findAnimal, entityById, progressed,
+  animalDist, findAnimal, entityById, progressed, hasEmptyBucket, toWaterFill,
 } = require('./bringbase') // oqul.11: shared with bringitem; oqul.14: the tiers/hunt/progress home is bringbase
 const Vec3 = require('vec3')
 
@@ -1042,6 +1042,214 @@ async function gatherWool(bot, ctx, o, bp, grounded) {
   if (o.phase === 'pickup') { pickupFood(bot, ctx, o, bp, grounded); return }
 }
 
+// Bucket fill (idkcraft-k2ze): a 'bring me water_bucket' order whose pack
+// holds an empty bucket fills it from nearby source water, then returns
+// like any item order. Before this the order fell through to the honest
+// stub ('can't get water_bucket: no recipe, no source'), so WATER-1 LLM
+// orders went 0/5. Scoop shape mirrors gear.js runFillOp: buckets work
+// ONLY via lookAt + activateItem (placeBlock is silently ignored for
+// buckets on Paper); only level-0 still water fills, flow never does.
+const FILL_SEARCH = 32
+const FILL_REACH = 4
+const FILL_SCAN_COUNT = 64
+const FILL_WALK_TICKS = 30 // per-cell walk patience before the next cell
+const FILL_SETTLE_MS = 500 // scoop apply + client update
+const FILL_BUDGET_MS = 5 * 60 * 1000 // whole fill phase, all cells
+
+function waterBlockId(bot) {
+  try {
+    const byName = (bot.registry && bot.registry.blocksByName) || {}
+    const e = byName.water
+    if (e && typeof e.id === 'number') return e.id
+  } catch (_) { /* unresolvable */ }
+  return null
+}
+
+// Proven flow only (gear.js isFlowWater shape): unreadable cells stay
+// candidates — excluding only proven flow never strands a fill the old
+// scan would have landed.
+function isFillFlow(bot, p) {
+  try {
+    const b = bot && typeof bot.blockAt === 'function' ? bot.blockAt(p) : null
+    if (!b) return false
+    let level = null
+    if (typeof b.getProperties === 'function') {
+      const props = b.getProperties()
+      if (props && props.level != null) level = props.level
+    }
+    if (level == null && typeof b.metadata === 'number') level = b.metadata
+    if (level == null) return false
+    const n = typeof level === 'number' ? level : parseInt(level, 10)
+    return Number.isFinite(n) && n !== 0
+  } catch (_) {
+    return false
+  }
+}
+
+// Scoopable means reachable by the server raycast (revmux 02 core-1): a
+// buried aquifer behind rock never fills, so only cells without solid rock
+// above them are candidates. Air and water above pass (shore scoops and
+// submerged scoops); unreadable cells stay candidates — a miss just marks
+// the cell tried and moves on.
+function hasSolidAbove(bot, p) {
+  try {
+    const b = bot && typeof bot.blockAt === 'function' ? bot.blockAt({ x: p.x, y: p.y + 1, z: p.z }) : null
+    if (!b) return false
+    if (typeof b.boundingBox === 'string') return b.boundingBox !== 'empty'
+    const n = typeof b.name === 'string' ? b.name : ''
+    if (n === '' || n.endsWith('air')) return false
+    if (n.includes('water')) return false
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+// Nearest-first source water cells, tried ones excluded.
+function findFillWater(bot, tried) {
+  try {
+    if (!bot || typeof bot.findBlocks !== 'function') return []
+    const id = waterBlockId(bot)
+    if (id === null) return []
+    const skip = tried ? Object.keys(tried).length : 0
+    const found = bot.findBlocks({ matching: [id], maxDistance: FILL_SEARCH, count: FILL_SCAN_COUNT + skip }) || []
+    const out = []
+    for (const p of found) {
+      if (!p || typeof p.x !== 'number') continue
+      const key = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+      if (tried && tried[key]) continue
+      if (isFillFlow(bot, p)) continue
+      if (hasSolidAbove(bot, p)) continue
+      out.push({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z), key })
+    }
+    return out
+  } catch (_) {
+    return []
+  }
+}
+
+// Pack the filled buckets for the return walk; a partial says so, like the
+// chestfetch short path ('only …, coming').
+function fillGive(bot, o, have, partial) {
+  o.items = [{ name: 'water_bucket', count: Math.min(have, o.want) }]
+  o.drop = 'water_bucket'
+  o.have = have
+  o.phase = 'return'
+  o.saidWaiting = false
+  if (partial) say(bot, `only ${have} water_bucket, coming`)
+}
+
+function fillBucket(bot, ctx, o, bp) {
+  const have = countDrop(bot, 'water_bucket')
+  if (have >= o.want) {
+    fillGive(bot, o, have, false)
+    return
+  }
+  // Order-level budget (revmux 01 core-3): the per-cell patience below only
+  // counts walk ticks, and the tried set can grow cell by cell across a
+  // whole lake — cap the phase so only stop is never the only way out.
+  if (Date.now() - (o.fillStartedAt || Date.now()) > FILL_BUDGET_MS) {
+    if (have > 0) {
+      fillGive(bot, o, have, true)
+      return
+    }
+    refuse(bot, ctx, 'could not fill the bucket in time')
+    return
+  }
+  if (!hasEmptyBucket(bot)) {
+    if (have > 0) { // the empty went missing mid-order: deliver what filled
+      fillGive(bot, o, have, true)
+      return
+    }
+    refuse(bot, ctx, 'lost the bucket before it filled')
+    return
+  }
+  if (!o.fillTried || typeof o.fillTried !== 'object') o.fillTried = {}
+  if (!o.fillTarget || o.fillTried[o.fillTarget.key]) o.fillTarget = null
+  if (!o.fillTarget) {
+    const cands = findFillWater(bot, o.fillTried)
+    if (cands.length === 0) {
+      // A partial fill that ran dry still delivers (revmux 01 core-2):
+      // refusing here would strand buckets the bot just filled.
+      if (have > 0) {
+        fillGive(bot, o, have, true)
+        return
+      }
+      refuse(bot, ctx, 'no water nearby to fill the bucket')
+      return
+    }
+    o.fillTarget = cands[0]
+    o.fillTicks = 0
+  }
+  const t = o.fillTarget
+  let d = null
+  try {
+    d = typeof bp.distanceTo === 'function' ? bp.distanceTo(t) : Math.hypot(bp.x - t.x, bp.y - t.y, bp.z - t.z)
+  } catch (_) { d = null }
+  if (d !== null && d > FILL_REACH) {
+    const key = `bring-fill:${t.key}`
+    if (key !== ctx.lastGoalKey) issueGoal(bot, ctx, new goals.GoalNear(t.x, t.y, t.z, 2), key, false)
+    o.fillTicks = (o.fillTicks || 0) + 1
+    if (o.fillTicks > FILL_WALK_TICKS) { // unreachable cell: try the next one, never stall
+      o.fillTried[t.key] = true
+      o.fillTarget = null
+      o.fillTicks = 0
+      clearGoal(bot, ctx)
+    }
+    return
+  }
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  if (moving) {
+    // Arrival never comes (a GoalNear thrash on a shoreline): count it like
+    // a far tick, so the cell still gives up instead of holding the body.
+    o.fillTicks = (o.fillTicks || 0) + 1
+    if (o.fillTicks > FILL_WALK_TICKS) {
+      o.fillTried[t.key] = true
+      o.fillTarget = null
+      o.fillTicks = 0
+      clearGoal(bot, ctx)
+    }
+    return
+  }
+  clearGoal(bot, ctx)
+  if (o.fillInFlight) return // exactly one scoop at a time (dig rule)
+  if (typeof bot.activateItem !== 'function') {
+    refuse(bot, ctx, 'could not fill the bucket')
+    return
+  }
+  o.fillInFlight = true
+  void (async () => {
+    try {
+      let item = null
+      try {
+        const items = bot.inventory.items()
+        if (Array.isArray(items)) item = items.find((i) => i && i.name === 'bucket') || null
+      } catch (_) { item = null }
+      if (!item) { o.fillInFlight = false; return }
+      if (typeof bot.equip === 'function') await bot.equip(item, 'hand')
+      try { bot.lookAt(new Vec3(t.x + 0.5, t.y + 0.5, t.z + 0.5), true) } catch (_) { /* aim best-effort */ }
+      bot.activateItem()
+    } catch (_) {
+      o.fillInFlight = false
+      return // transient race: the next tick retries the same cell
+    }
+    await new Promise((resolve) => setTimeout(resolve, FILL_SETTLE_MS))
+    o.fillInFlight = false
+    if (!ctx || ctx.bring !== o) return
+    let now = 0
+    try { now = countDrop(bot, 'water_bucket') } catch (_) { now = have }
+    if (now <= have) { // flow cell or a missed raycast: next one
+      o.fillTried[t.key] = true
+      o.fillTarget = null
+      o.fillTicks = 0
+      return
+    }
+    o.fillTarget = null
+    o.fillTicks = 0
+  })()
+}
+
 // Fetch-first from the home chest (atl.14 phase 2): an order that opens
 // with no world hit checks the adopted chest before the far shells and
 // search legs. One attempt per order (o.chestTried); anything short falls
@@ -1553,6 +1761,8 @@ async function bring(bot, ctx, target, state) {
 
   if (o.phase === 'chestfetch') { chestFetch(bot, ctx, o, bp); return }
 
+  if (o.phase === 'fill') { fillBucket(bot, ctx, o, bp); return }
+
   if (o.phase === 'craft') { itemMod.craftTick(bot, ctx, o); return }
 
   if (o.phase === 'smelt') { itemMod.smeltTick(bot, ctx, o); return }
@@ -2063,6 +2273,8 @@ module.exports.SELF_SEARCH_RADIUS = SELF_SEARCH_RADIUS
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
 module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA
 module.exports.toWoolHunt = itemMod.toWoolHunt
+module.exports.toWaterFill = toWaterFill
+module.exports.hasEmptyBucket = hasEmptyBucket
 // Terminal actions for the bringitem.js bridge (deferred require back).
 module.exports.refuse = refuse
 module.exports.done = done

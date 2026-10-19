@@ -293,6 +293,24 @@ function createOrders(box) {
         ctx.paused = false
         return `checking the home chest for ${resolved.family}`
       }
+      // Bucket fill (idkcraft-k2ze): 'bring me water_bucket' with an empty
+      // bucket in the pack fills from nearby water instead of refusing
+      // with no source. The pack and chest rungs above already ran: the
+      // pack holds no fill and the chest none either (or no chest adopted).
+      if (resolved && resolved.family === 'water_bucket' && bringMod.hasEmptyBucket(bot)) {
+        if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        clearStuck()
+        homeMod.releaseMeet(bot, ctx)
+        ctx.bring = bringMod.toWaterFill(bot, {
+          kind: 'item', name: 'water_bucket', names: ['water_bucket'], want: need, by,
+          items: [], drop: 'water_bucket', have: 0,
+          phase: 'fill', announced: true,
+        })
+        ctx.paused = false
+        return 'filling a bucket for you'
+      }
       // Mob rung (did.3): wool the pack and chest could not fill comes
       // from sheep — after the chest rung, before the block path (wool
       // blocks are never diggable, so the block rung cannot serve wool).
