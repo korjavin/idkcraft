@@ -494,3 +494,50 @@ describe('skills: SKILLS_DIR load (vf8e.2)', () => {
     assert.equal(ctx.stepStatus, null, 'a new step instance starts fresh state')
   })
 })
+
+describe('skills: promoted dir (vf8e.4)', () => {
+  const fs = require('node:fs')
+  const files = fs.readdirSync(skills.PROMOTED_DIR).filter((f) => f.endsWith('.js'))
+  it('every bot/skills file carries verifiedBy {scenario, verdict, sha} and compiles', () => {
+    for (const f of files) {
+      const text = fs.readFileSync(path.join(skills.PROMOTED_DIR, f), 'utf8')
+      const meta = skills.parseHeader(text)
+      assert.equal(`${meta.name}.js`, f, 'file named after the skill')
+      const v = meta.verifiedBy
+      for (const k of ['scenario', 'verdict', 'sha']) assert.ok(v && typeof v[k] === 'string' && v[k].trim(), `${f}: verifiedBy.${k} missing (promote with tools/skill-promote.js)`)
+      assert.ok(skills.compile(f, text, { BOT_BODY: 'baritone' }).sk || meta.body === 'mineflayer', `${f} compiles`)
+    }
+  })
+})
+
+// Last: the ban and the off switch are process-wide.
+describe('skills: auto-ban and chat skills off (vf8e.4)', () => {
+  it(`a skill that fails ${skills.BAN_FAILS} times is banned until restart`, () => {
+    const logs = []
+    const orig = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      // An earlier test already failed it once: fail it until it is off.
+      for (let i = 0; i < skills.BAN_FAILS; i++) {
+        const ctx = { recovery: { action: 'ledge_fixture', st: null, status: 'running' } }
+        if (!recover.RECOVER_MENU.ledge_fixture.feasible({ walls: 0 }, ctx)) break
+        recover.run(fakeBot(new Map([[key(0, 62, 0), 'oak_planks']])), ctx)
+        assert.equal(ctx.recovery.status, 'failed:protected')
+      }
+    } finally {
+      console.log = orig
+    }
+    assert.ok(logs.some((l) => /^skill ledge_fixture banned fails=3/.test(l)), logs.join('\n'))
+    assert.equal(recover.RECOVER_MENU.ledge_fixture.feasible({ walls: 0 }, { recovery: {} }), false, 'a new episode does not offer it')
+    assert.match(skills.state(), /banned=.*\bledge_fixture\b/)
+  })
+
+  it('chat skills off takes every skill off the menus', () => {
+    const { handleChat } = require('../src/index')
+    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'day' }), true)
+    const bot = fakeBot()
+    handleChat(bot, null, 'Steve', 'skills off')
+    assert.deepEqual(bot.chats, ['skills: off (until restart)'])
+    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'day' }), false)
+  })
+})

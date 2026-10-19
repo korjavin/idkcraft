@@ -131,7 +131,8 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `BRAIN_TIMEOUT_MS`: Per-call deadline for the remote brain (default `3000`)
   - `BOT_LEAVE_AFTER_MS`: Nobody-online grace in ms before the bot quits and re-polls the server ping (default `60000`; `0` = always on)
   - `BOT_AUTONOMOUS`: stay and work with nobody online (`1`|`true`|`yes`; `on` is NOT accepted; default empty = off; chat `autonomous on` lasts until restart)
-  - `BOT_SKILLS`: load generated skills (`bot/skills/*.js`, plus `SKILLS_DIR` on the rig) into the recover/step menus (`1`|`true`|`yes`; default empty = off, loader never called; idkcraft-vf8e.2, contract in `bot/skills/README.md`)
+  - `BOT_SKILLS`: load generated skills (`bot/skills/*.js`, plus `SKILLS_DIR` on the rig) into the recover/step menus (`1`|`true`|`yes`; default empty = off, loader never called; idkcraft-vf8e.2, contract in `bot/skills/README.md`). v1 (`bot`) only; chat `skills off` lasts until restart; a skill that fails 3 times is banned until restart (`skill <name> banned`)
+  - `BOT2_SKILLS`: the same switch for v2 (`bot2` reads it into its `BOT_SKILLS`; idkcraft-vf8e.4). Promotion: `bot/tools/skill-promote.sh` (`bot/tools/README.md`)
   - `TYPESAFE_API_KEY`: JEV secret; enables only the stall-point plan() (and manual `brain jev`)
   - `ANTHROPIC_API_KEY`: opt-in LLM stall-point planner (watchdog `plan()` only, never per tick); empty = today's planner
   - `PLANNER`: `llm` | `jev` (default `llm` when `ANTHROPIC_API_KEY` is set, else `jev`)

@@ -386,11 +386,46 @@ function compile(file, text, env) {
         const label = out === 'done' ? 'done' : (reason === 'skill-timeout' || reason === 'skill-error') ? reason : 'failed'
         metrics.skillRuns.inc({ skill: meta.name, outcome: label })
         console.log(`skill run skill=${meta.name} kind=${meta.kind} outcome=${out} ticks=${st.ticks}`)
+        noteOutcome(meta.name, out)
       }
       return out
     },
   }
   return { meta, sk }
+}
+
+// --- runtime switches (vf8e.4) ---
+
+// Chat `skills off` takes every skill off both menus until restart (like
+// `autonomous off`). A skill that ends non-done BAN_FAILS times in this
+// process is banned until restart: `skill <name> banned`.
+// ponytail: cumulative per process, not per spot; the spot bans stay in recover.js.
+const BAN_FAILS = 3
+const fails = new Map()
+const banned = new Set()
+let off = false
+
+function usable(name) {
+  return !off && !banned.has(name)
+}
+
+function noteOutcome(name, out) {
+  if (out === 'done' || banned.has(name)) return
+  const n = (fails.get(name) || 0) + 1
+  fails.set(name, n)
+  if (n >= BAN_FAILS) {
+    banned.add(name)
+    console.log(`skill ${name} banned fails=${n} last=${out}`)
+  }
+}
+
+function disable() { off = true }
+
+// Chat `skills`: 'off' | 'on n=<k> [banned=<a,b>]' | 'not loaded'.
+function state() {
+  if (!loaded) return 'not loaded'
+  if (off) return 'off (until restart)'
+  return `on n=${loaded.length}${banned.size ? ` banned=${[...banned].join(',')}` : ''}`
 }
 
 // --- registration ---
@@ -418,7 +453,7 @@ function registerRecover(sk, tables) {
     // A skill that failed (any reason) is out for the rest of the episode;
     // a throwing/looping feasible bans it too.
     feasible: (facts, ctx) => {
-      if (skillBanned(ctx, name) || recover.recoverBanned(ctx, name)) return false
+      if (!usable(name) || skillBanned(ctx, name) || recover.recoverBanned(ctx, name)) return false
       const ok = sk.feasible(facts)
       if (ok && ok.error) { banSkill(ctx, name); return false }
       return ok === true
@@ -453,7 +488,7 @@ function registerStep(sk, tables) {
   let broken = false // a throwing/looping step feasible is off for the process (logged once)
   goal.MENU[name] = {
     feasible: (facts) => {
-      if (broken) return false
+      if (broken || !usable(name)) return false
       const ok = sk.feasible(facts)
       if (ok && ok.error) broken = true
       return ok === true
@@ -531,4 +566,4 @@ function load(env = process.env, opts = {}) {
   return names
 }
 
-module.exports = { enabled, load, parseHeader, compile, registerStep, CALL_MS, TICK_BUDGET, PROMOTED_DIR }
+module.exports = { enabled, load, parseHeader, compile, registerStep, disable, state, CALL_MS, TICK_BUDGET, PROMOTED_DIR, BAN_FAILS }
