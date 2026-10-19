@@ -8,7 +8,8 @@
 //   player's own line (every chat-time guard, refusal and executor stays);
 // - work steps = goal MENU steps, pinned one at a time through
 //   ctx.taskPlanStep, the stall-planner seam decide() already honours
-//   (feasible + registered only, safety and night steps still win).
+//   (feasible + registered only); the pin is held while a night step
+//   would win (nightHold), since pinMenu checks no safety for it.
 // The task executive runs each step as usual (orders keep their watchdog and
 // park, work steps their decide/commit rules). No LLM on the tick: tick()
 // only reads ctx to move to the next step. Flag off: nothing here runs.
@@ -160,7 +161,9 @@ function ask(bot, ctx, req, fetchFn) {
     console.log(`llm order by=${req.by} text="${a.text}" outcome=${outcome} plan=${r.steps ? r.steps.map(label).join('>') : (r.error || '-')} tokens=${r.tokens || '0/0'} ms=${ms}`)
     if (r.empty) { if (req.fallback) say(req.fallback); return }
     if (!r.steps) {
-      say(req.fallback || `I can't plan that (${r.error}) — try: help`)
+      // Chatter that failed to plan stays silent (log only); an explicit
+      // `plan <order>` or a refused order gets its answer.
+      if (req.fallback || req.explicit) say(req.fallback || `I can't plan that (${r.error}) — try: help`)
       return
     }
     ctx.llmOrder = { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed, steps: r.steps, i: 0, cur: null, at: Date.now(), feeding: false }
@@ -186,6 +189,27 @@ function orderBusy(ctx) {
   return !!(ctx.bring || ctx.pendingSearch || ctx.lead || (ctx.flat && !ctx.flat.parked))
 }
 
+// A work pin has no safety check in goal.pinMenu (the stall planner's
+// one-shot), so the plan holds its pins while a night/safety step owns or
+// would take the body — it re-pins when that ends.
+const NIGHT = ['stay', 'gohome', 'shelter']
+function nightHold(bot, ctx) {
+  if (ctx.inShelter || (NIGHT.includes(ctx.step) && !isFinished(ctx.stepStatus))) return true
+  try {
+    const f = goal.goalFacts(bot, ctx)
+    return NIGHT.includes(goal.goalFsm(f, NIGHT.filter((n) => goal.MENU[n] && goal.MENU[n].feasible(f, bot, ctx))))
+  } catch (_) { return false }
+}
+
+// How the step's order ended: bringbase stamps done/refused; a bring/share
+// gone without a stamp since the step began was cancelled.
+function orderResult(ctx, s, c) {
+  if (s.step === 'find' || s.step === 'flat') return 'done'
+  const e = ctx.bringEnd
+  if (!e || !(e.at >= c.at)) return 'failed:cancelled'
+  return e.outcome === 'done' ? 'done' : 'failed:refused'
+}
+
 function end(bot, ctx, o, result) {
   const n = o.steps.length
   console.log(`llm order end text="${o.text}" result=${result} step=${Math.min(o.i + 1, n)}/${n} dur=${Math.floor((Date.now() - o.at) / 1000)}s`)
@@ -196,8 +220,9 @@ function end(bot, ctx, o, result) {
 }
 
 function startStep(bot, ctx, o, s, now) {
-  o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0 }
   const order = ORDER_STEPS[s.step]
+  if (!order && nightHold(bot, ctx)) return // wait the night out unpinned
+  o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0 }
   if (order) {
     o.feeding = true
     try { o.feed(order.chat(s)) } finally { o.feeding = false }
@@ -219,11 +244,12 @@ function tick(bot, ctx, now = Date.now()) {
   if (!o.cur) return startStep(bot, ctx, o, s, now)
   const c = o.cur
   if (ctx.paused) return end(bot, ctx, o, 'stop')
-  if (now - c.at > STEP_MS) return end(bot, ctx, o, 'failed:timeout')
+  if (!c.held && now - c.at > STEP_MS) return end(bot, ctx, o, 'failed:timeout')
   const next = () => { o.i++; o.cur = null }
   if (ORDER_STEPS[s.step]) {
-    if (!orderBusy(ctx)) next()
-    return
+    if (orderBusy(ctx)) return
+    const r = orderResult(ctx, s, c)
+    return r === 'done' ? next() : end(bot, ctx, o, r)
   }
   if (!ctx.work) return end(bot, ctx, o, 'mode')
   const ours = ctx.step === s.step && (stepGen(ctx) !== c.gen || !isFinished(ctx.stepStatus))
@@ -233,10 +259,26 @@ function tick(bot, ctx, now = Date.now()) {
     if (isFinished(c.status)) return c.status === 'done' ? next() : end(bot, ctx, o, c.status)
     return
   }
+  // Left the step and it had finished between two reads.
+  if (c.seen && isFinished(c.status)) return c.status === 'done' ? next() : end(bot, ctx, o, c.status)
+  if (nightHold(bot, ctx)) {
+    // Held: no pin (a pending one is withdrawn so the night step wins), no
+    // miss, no deadline; the step re-pins when the night ends.
+    if (ctx.taskPlanStep === s.step) ctx.taskPlanStep = null
+    c.held = true
+    c.seen = false
+    return
+  }
+  if (c.held) {
+    c.held = false
+    c.at = now
+    c.gen = stepGen(ctx)
+    c.miss = 0
+    ctx.taskPlanStep = s.step
+    return
+  }
   if (c.seen) {
-    // Left the step: finished between two reads, else a safety/night step
-    // took the body — pin it again for when that ends.
-    if (isFinished(c.status)) return c.status === 'done' ? next() : end(bot, ctx, o, c.status)
+    // Another step took the body (a fight, a castle rearm) — pin it again.
     c.seen = false
     c.gen = stepGen(ctx)
     ctx.taskPlanStep = s.step

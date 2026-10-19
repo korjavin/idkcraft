@@ -69,6 +69,7 @@ function refuse(bot, ctx, line) {
   say(bot, sub || line)
   metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
   stopGuidedWork(ctx)
+  ctx.bringEnd = { outcome: 'refused', at: Date.now() } // vf8e.6: an LLM plan reads how its bring ended
   ctx.bring = null
   releaseSmelt(ctx)
   clearGoal(bot, ctx)
@@ -77,6 +78,7 @@ function refuse(bot, ctx, line) {
 function done(bot, ctx) {
   metrics.bring.inc({ outcome: 'done', kind: bringKind(ctx) })
   stopGuidedWork(ctx)
+  ctx.bringEnd = { outcome: 'done', at: Date.now() }
   ctx.bring = null
   releaseSmelt(ctx)
   clearGoal(bot, ctx)

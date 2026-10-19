@@ -291,6 +291,9 @@ function clearPendingSearch(ctx) {
   if (ctx) ctx.pendingSearch = null
 }
 
+// vf8e.6: the owner orders that end a running LLM plan.
+const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|share|bring me(?: .*)?)$/
+
 function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
   // Hybrid worker (idkcraft-jlda.2): its chat is Baritone/console noise,
@@ -334,10 +337,14 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   // cannot parse asks the model for a plan; the plan's own re-fed lines never
   // go back to it. Flag off: llmAsk is false and nothing below changes.
   const lctx = bot._tickerCtx
-  const llmAsk = (fallback, text = msg) => !!(ticker && lctx && llmOrders.enabled() && !llmOrders.feeding(lctx) &&
+  // Peer bots (v1/v2 hear each other's lines) never spend a call.
+  const peerBot = [process.env.BOT_USERNAME, process.env.BOT2_USERNAME, process.env.BOT_PEER_USERNAME].some((n) => n && n === username)
+  const llmAsk = (fallback, text = msg, explicit = false) => !!(ticker && lctx && !peerBot && llmOrders.enabled() && !llmOrders.feeding(lctx) &&
     worker.players(bot)[playerName] &&
-    llmOrders.ask(bot, lctx, { text, by: playerName, ticker, fallback, feed: (line) => handleChat(bot, ticker, username, line, senderUuid) }))
-  if (msg === 'stop' || msg === 'follow me' || msg === 'go work' || msg === 'free') llmOrders.cancel(lctx, msg)
+    llmOrders.ask(bot, lctx, { text, by: playerName, ticker, fallback, explicit, feed: (line) => handleChat(bot, ticker, username, line, senderUuid) }))
+  // Any other owner order ends the plan (its next work step would undo a
+  // come home / go castle / flat); status, help, brain and chatter do not.
+  if (!peerBot && !llmOrders.feeding(lctx) && OWNER_ORDER.test(msg)) llmOrders.cancel(lctx, msg.split(' ')[0])
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(playerName)
     const seenEntry = worker.players(bot)[playerName]
@@ -552,7 +559,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       }
     } else if (msg.startsWith('plan ')) {
       // vf8e.6: force the planner on any line (A/B against the FSM parse).
-      llmAsk(null, msg.slice(5).trim())
+      llmAsk(null, msg.slice(5).trim(), true)
     } else {
       llmAsk(null)
     }

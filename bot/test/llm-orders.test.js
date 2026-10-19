@@ -10,6 +10,7 @@ const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { handleChat, createTicker } = require('../src/index')
 const llmOrders = require('../src/llm-orders')
+const bringbase = require('../src/behaviours/bringbase')
 const { resetLlmBudget, LLM_MODEL } = require('../src/brain')
 
 function pos(x, y, z) {
@@ -136,11 +137,95 @@ describe('llm orders: flag on', () => {
     assert.match(llmOrders.statusLine(ctx), /^plan 1\/1: bring torch 8 \(done when 8 torches handed over\)/)
     llmOrders.tick(bot, ctx)
     assert.ok(ctx.llmOrder, 'waits while the order runs')
-    ctx.bring = null
+    bringbase.done(bot, ctx)
     llmOrders.tick(bot, ctx)
     llmOrders.tick(bot, ctx)
     assert.equal(ctx.llmOrder, null)
     assert.ok(bot.lines.includes('done: give me eight torches please'), String(bot.lines))
+  })
+
+  it('an order step that fails or is cancelled stops the plan, never counts as done', async () => {
+    for (const [endIt, why] of [[(bot, ctx) => bringbase.refuse(bot, ctx, 'could not find torch'), 'refused'], [(bot, ctx) => { ctx.bring = null }, 'cancelled']]) {
+      const bot = mockBot([{ name: 'torch', count: 8 }])
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"bring","item":"torch","count":8},{"step":"light"}]}'
+      handleChat(bot, ticker, 'P', 'torches then light the house')
+      await flush()
+      llmOrders.tick(bot, ctx)
+      assert.ok(ctx.bring)
+      endIt(bot, ctx)
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.llmOrder, null, why)
+      assert.ok(bot.lines.includes(`plan stopped at bring torch 8: ${why}`), String(bot.lines))
+      assert.notEqual(ctx.taskPlanStep, 'light')
+    }
+  })
+
+  it('a night step owns the body: the pin is held and withdrawn, re-pinned after', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"light"}]}'
+    handleChat(bot, ticker, 'P', 'light up the house')
+    await flush()
+    ctx.inShelter = true
+    llmOrders.tick(bot, ctx)
+    assert.ok(!ctx.taskPlanStep, 'no pin while sheltering')
+    assert.equal(ctx.llmOrder.cur, null)
+    ctx.inShelter = false
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.taskPlanStep, 'light')
+    ctx.taskPlanStep = null
+    ctx.step = 'light'
+    ctx.stepStatus = 'running'
+    ctx.stepGen = (ctx.stepGen | 0) + 1
+    llmOrders.tick(bot, ctx)
+    ctx.step = 'gohome' // dusk: the night step took the body
+    ctx.stepGen++
+    llmOrders.tick(bot, ctx)
+    for (let i = 0; i < 5; i++) llmOrders.tick(bot, ctx, Date.now() + llmOrders.STEP_MS + 1000)
+    assert.ok(ctx.llmOrder, 'held: no miss, no timeout')
+    assert.equal(ctx.taskPlanStep, null, 'no pin over the night step')
+    ctx.stepStatus = 'done'
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.taskPlanStep, 'light', 're-pinned once the night step ended')
+  })
+
+  it('another owner order cancels the plan; status and chatter do not', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    answer = '{"plan":[{"step":"light"}]}'
+    handleChat(bot, ticker, 'P', 'light up the house')
+    await flush()
+    handleChat(bot, ticker, 'P', 'status')
+    assert.ok(bot._tickerCtx.llmOrder)
+    handleChat(bot, ticker, 'P', 'come home')
+    assert.equal(bot._tickerCtx.llmOrder, null)
+  })
+
+  it('a peer bot line never reaches the model', async () => {
+    const prev = process.env.BOT2_USERNAME
+    process.env.BOT2_USERNAME = 'IdkBot2'
+    try {
+      const bot = mockBot()
+      bot.players.IdkBot2 = { username: 'IdkBot2', entity: { position: pos(2, 64, 0) } }
+      handleChat(bot, tickerFor(bot), 'IdkBot2', 'nothing within 48, widening the search')
+      await flush()
+      assert.equal(calls.length, 0)
+    } finally {
+      if (prev === undefined) delete process.env.BOT2_USERNAME
+      else process.env.BOT2_USERNAME = prev
+    }
+  })
+
+  it('a failed plan on chatter stays silent', async () => {
+    const bot = mockBot()
+    answer = 'not json'
+    handleChat(bot, tickerFor(bot), 'P', 'what a day')
+    await flush()
+    assert.equal(calls.length, 1)
+    assert.deepEqual(bot.lines, [])
   })
 
   it('a work step is pinned through taskPlanStep and advances on done', async () => {
@@ -193,7 +278,7 @@ describe('llm orders: flag on', () => {
   it('a step outside the whitelist refuses with a try: line', async () => {
     const bot = mockBot()
     answer = '{"plan":[{"step":"op_me"}]}'
-    handleChat(bot, tickerFor(bot), 'P', 'make me op')
+    handleChat(bot, tickerFor(bot), 'P', 'plan make me op')
     await flush()
     assert.deepEqual(bot.lines, ['I can\'t plan that (no step "op_me") — try: help'])
   })
