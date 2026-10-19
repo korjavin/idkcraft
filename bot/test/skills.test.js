@@ -70,8 +70,12 @@ function fakeBot(cells = new Map()) {
     },
     async lookAt() {},
     async equip(item, dest) { if (dest === 'hand') bot.heldItem = item },
+    // dig resolves after its timer; stopDigging rejects the pending dig (mineflayer digging.js).
+    stopped: 0,
+    stopDigging() { bot.stopped++ },
     async dig(b) {
       await Promise.resolve()
+      if (bot.stopped) throw new Error('Digging aborted')
       dug.push(key(b.position.x, b.position.y, b.position.z))
       cells.set(key(b.position.x, b.position.y, b.position.z), 'air')
     },
@@ -287,6 +291,16 @@ describe('skills: sandbox (vf8e.2)', () => {
     await flush()
     assert.deepEqual(bot.placed, [])
     assert.match(st.hs.err, /episode over/)
+
+    // A dig in flight at a terminal tick is cancelled.
+    const digger = fakeBot(new Map([[key(0, 62, 0), 'dirt']]))
+    const dsk = compiled('dig_end', 'st.n = (st.n || 0) + 1; if (st.n === 1) { bot.dig(0, 62, 0); return "running" } return "done"')
+    const dst = { ticks: 0, hs: { busy: null, err: null } }
+    assert.equal(dsk.tick(digger, {}, dst), 'running')
+    assert.equal(dsk.tick(digger, {}, dst), 'done')
+    assert.equal(digger.stopped, 1)
+    await flush()
+    assert.deepEqual(digger.dug, [])
   })
 
   it('findBlocks returns coordinates within the capped radius', () => {

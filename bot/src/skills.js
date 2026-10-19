@@ -355,6 +355,9 @@ function compile(file, text, env) {
       }
       if (out !== 'running') {
         st.dead = true // an act still in flight never lands (fire live())
+        // A started dig finishes on mineflayer's timer: cancel ours (codex 03 P2).
+        // ponytail: a replaced episode (no terminal tick) keeps its dig, like a hand primitive's.
+        if (act.busy === 'dig') { try { bot.stopDigging() } catch (_) { /* best-effort */ } }
         releaseControls(bot)
         // A goal the skill left live dies with it (a stale goal re-wedges: yvi).
         if (typeof ctx.lastGoalKey === 'string' && ctx.lastGoalKey.startsWith('skill:')) {
