@@ -141,6 +141,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `GOAL_WATCHDOG_MAX_ROUNDS`: Consecutive flat rounds before park/plan-B (default `6`)
   - `GOAL_TRAVEL_GRACE_MS`: Rate-limit floor for the castlefetch travel grace (default `90000`)
   - `GOAL_PLANB_SWITCH_MS`: Plan-B goal-switch duration in ms when nobody is online (default `450000`)
+  - `CASTLE_TIDY_MS`: Owner bot walks back to its complete castle to repair/sweep once its last visit is this old (default `3600000`; `0` = off)
   - `WORKER_NAME`: Baritone worker player name (default empty = worker off, zero behaviour diff)
   - `WORKER_HOST`: Worker bridge host (default `baritone`)
   - `WORKER_PORT`: Worker bridge port (default `7777`)

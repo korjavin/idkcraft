@@ -266,6 +266,7 @@ if [ "$RIG_PLANNER" = llm ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
 fi
 if [ -n "${GOAL_WATCHDOG_MS:-}" ]; then export GOAL_WATCHDOG_MS; fi
 if [ -n "${GOAL_COMMIT_MS:-}" ]; then export GOAL_COMMIT_MS; fi
+if [ -n "${CASTLE_TIDY_MS:-}" ]; then export CASTLE_TIDY_MS; fi
 INIT_MEM="${CASTLE_INIT_MEMORY:-512M}"
 MAX_MEM="${CASTLE_MAX_MEMORY:-768M}"
 valid_mem() { _m="$1"; case "$_m" in *M|*G) _m="${_m%?}";; *) return 1;; esac; case "$_m" in ''|*[!0-9]*) return 1;; esac; }

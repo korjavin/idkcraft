@@ -107,7 +107,9 @@ describe('vmzq.50 return-to-site: displacement', () => {
     const far = goalBot({ at: pos(SPAWN.x, SPAWN.y, SPAWN.z) })
     assert.equal(goal.displacedFromCastle(far, {}), false)
     assert.equal(goal.displacedFromCastle(far, { castle: castleState({ parked: true }) }), false)
-    assert.equal(goal.displacedFromCastle(far, { castle: castleState({ phase: 'complete' }) }), false)
+    assert.equal(goal.displacedFromCastle(far, { castle: castleState({ phase: 'complete', visitedAt: Date.now() }) }), false)
+    // g0z.62: a complete castle whose tidy visit is due displaces again.
+    assert.equal(goal.displacedFromCastle(far, { castle: castleState({ phase: 'complete' }) }), true)
   })
 })
 

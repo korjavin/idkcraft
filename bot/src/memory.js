@@ -263,6 +263,9 @@ function castleOf(c) {
     // Adopted as the residence once (g0z.29): never re-selected over a home
     // the owner chose later.
     if (c.residence === true) out.residence = true
+    // Tidy visit stamp (g0z.62), clamped to now: a future stamp would
+    // silence the tidy trip.
+    if (Number.isInteger(c.visitedAt) && c.visitedAt >= 0) out.visitedAt = Math.min(c.visitedAt, Date.now())
     // Stairs relay (g0z.48): the upgrade record rides along, so a restart
     // mid-upgrade keeps reporting it (phase/blocked resume as usual).
     if (c.upgrade && typeof c.upgrade === 'object' && Number.isInteger(c.upgrade.from) && c.upgrade.from >= 1 &&

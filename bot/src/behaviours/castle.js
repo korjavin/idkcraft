@@ -1016,6 +1016,36 @@ function siteLoaded(bot, st) {
   } catch (_) { return false }
 }
 
+// Castle tidy (g0z.62): a complete castle off the loaded map read 'done'
+// forever, so nothing walked the owner back to see its damage (prod: 94
+// cells missing, 1 castle step in 3 h). st.visitedAt stamps every tick
+// the site is loaded with the bot within TIDY_VISIT_DIST of its centre;
+// past CASTLE_TIDY_MS (default 1 h, 0 = off) the far word is 'tidy' and
+// gocastle walks back. On site the real words (relay/sweep/decor/'done')
+// take over, so the trip ends by itself. TIDY_VISIT_DIST = goal.js
+// GOSITE_DIST (a require would cycle): the visit stamps exactly where the
+// return walk's displacement ends — no band where the walk stops short of
+// a visit and the bot ping-pongs at the load edge.
+const TIDY_VISIT_DIST = 64
+function tidyMs() {
+  const raw = process.env.CASTLE_TIDY_MS
+  const v = raw ? Number(raw) : NaN
+  return Number.isFinite(v) && v >= 0 ? v : 3600000
+}
+function tidyDue(st, now = Date.now()) {
+  const ms = tidyMs()
+  if (!st || !st.site || st.phase !== 'complete' || st.parked || !(ms > 0)) return false
+  return now - (typeof st.visitedAt === 'number' ? st.visitedAt : 0) > ms
+}
+function noteVisit(bot, st, now) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    if (Math.hypot(bp.x - (st.site.x + w / 2), bp.z - (st.site.z + d / 2)) <= TIDY_VISIT_DIST) st.visitedAt = now
+  } catch (_) { /* visit best-effort */ }
+}
+
 // Dry decor kinds (g0z.49): every castlefetch leg that comes up dry adds
 // its kind (noteDry), so the decor word below skips every dry kind at
 // once — with five decor kinds now, one mark per kind. A leg that got
@@ -1040,13 +1070,14 @@ function menuFact(bot, ctx, now = Date.now()) {
   if (st.parked) return 'parked'
   try {
     if (!siteLoaded(bot, st)) {
-      if (st.phase === 'complete') return 'done'
+      if (st.phase === 'complete') return tidyDue(st, now) ? 'tidy' : 'done'
       const last = ctx.castleWord
       if (last && last.kind) return stockWord(bot, last.kind, last.left)
       if (last && last.word) return last.word
       const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
       return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH)
     }
+    noteVisit(bot, st, now)
     let r = peek(bot, st, now, ctx)
     // Prep with nothing left to prep (g0z.15): the next castle tick starts
     // the body, so the word is the body's — never 'finish' at 0/240.
@@ -2260,6 +2291,8 @@ module.exports.batchOf = batchOf
 module.exports.entrance = entrance
 module.exports.SITE_WALK_DIST = SITE_WALK_DIST
 module.exports.siteLoaded = siteLoaded
+module.exports.tidyDue = tidyDue
+module.exports.tidyMs = tidyMs
 module.exports.siteDist = siteDist
 // Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
 module.exports.prepTargets = prepTargets
