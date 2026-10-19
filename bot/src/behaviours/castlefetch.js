@@ -212,16 +212,16 @@ function craftNames(bot, kind) {
 // gate and the behaviour, so the two never disagree.
 // Owed repair moved on (fqkn): a complete castle's latched repair fetch that
 // failed at the castle (the torch rung fails fast away from the home
-// furnace) gets its home try once the bot is REFAIL_DIST from that spot —
-// the 5-min hold otherwise outlived the walk home and the tidy cadence
-// walked the bot back first (rig: no-torch at the castle, every window).
-// One home try: an off-site failure drops the latch (castle.js menuFact).
-function owedMoved(bot, ctx, sf) {
+// furnace) gets its home try once the bot is off site (castle.js nearSite,
+// the radius menuFact drops the latch by) — the 5-min hold otherwise
+// outlived the walk home and the tidy cadence walked the bot back first
+// (rig: no-torch at the castle, every window). One home try: an off-site
+// failure drops the latch (castle.js menuFact).
+function owedMoved(bot, ctx) {
   try {
     const st = ctx.castle
-    if (!st || st.phase !== 'complete' || !ctx.castleWord || !ctx.castleWord.repair || !sf.pos) return false
-    const bp = bot.entity && bot.entity.position
-    return !!bp && Math.hypot(bp.x - sf.pos.x, bp.z - sf.pos.z) > require('../holds').REFAIL_DIST
+    if (!st || st.phase !== 'complete' || !ctx.castleWord || !ctx.castleWord.repair) return false
+    return !castleMod.nearSite(bot, st)
   } catch (_) { return false }
 }
 
@@ -230,7 +230,7 @@ function demand(bot, ctx) {
   // matter how the facts text moves — known=near/none flips released the
   // text-keyed goal hold every few seconds (g0z.12 rig churn).
   const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
-  if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../budget').CASTLEFETCH_RETRY_MS && !owedMoved(bot, ctx, sf)) return null
+  if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../budget').CASTLEFETCH_RETRY_MS && !owedMoved(bot, ctx)) return null
   let w = 'none'
   try { w = castleMod.menuFact(bot, ctx) } catch (_) { return null }
   let kind = null
@@ -1886,7 +1886,9 @@ function castlefetch(bot, ctx, target, state) {
   if (st.status !== NO_WOOD || !WOOD.has(d.kind)) st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
-  if (f.bankFull) { finish(bot, ctx, 'done'); return } // g0z.60: a bank batch on hand lays before any dig
+  // g0z.60: a bank batch on hand lays before any dig. Not a torch leg (fqkn):
+  // its bank draw is logs, which torchTick below smelts into the torches.
+  if (f.bankFull && d.kind !== 'torch') { finish(bot, ctx, 'done'); return }
   // idkcraft-8njf: on v2 a stairs craft that still fails after the table
   // retry mines ONE stone batch instead of failing into the 5-min hold
   // (forage -> rest -> house-build): stone is the castle's own material,

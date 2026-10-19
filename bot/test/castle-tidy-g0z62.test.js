@@ -152,6 +152,8 @@ describe('castle tidy (g0z.62)', () => {
     assert.ok(d && d.kind === 'torch' && d.short > 0, JSON.stringify(d))
     const there = makeBot({ loaded: false, at: pos(failPos.x + 5, 64, failPos.z) })
     assert.equal(fetch.demand(there, mk()), null, 'still at the fail spot: the hold stands')
+    const yard = makeBot({ loaded: false, at: pos(failPos.x + 40, 64, failPos.z) })
+    assert.equal(fetch.demand(yard, mk()), null, 'revmux 01: 40 off the fail spot but still on site — no home rung there, the hold stands')
     const plain = mk()
     plain.castleWord = { kind: 'torch', left: 3 } // an active castle's fetch keeps the bounded hold
     plain.castle.phase = 'building'

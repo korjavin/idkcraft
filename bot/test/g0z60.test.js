@@ -214,6 +214,19 @@ describe('castlefetch draws the bank chests (g0z.60)', () => {
     assert.equal(ctx.castleChestDry, null)
   })
 
+  it('fqkn: a torch leg draws a banked log and goes on to the charcoal rung, never done on the log alone', async () => {
+    word('torch')
+    const chests = { '100,64,170': [{ name: 'oak_log', count: 5 }] }
+    const items = [{ name: 'oak_planks', count: 8 }]
+    const bot = makeBot({ items, chests, at: pos(100.5, 64, 171.5) })
+    const ctx = ctxFor()
+    fetch(bot, ctx)
+    await settle(); await settle(); await settle()
+    assert.equal(count(bot, 'oak_log'), 4, 'FETCH.torch 16: one log = one charcoal = 4 torches')
+    fetch(bot, ctx)
+    assert.notEqual(ctx.stepStatus, 'done', 'a log is no torch: the smelt rung runs')
+  })
+
   it('a bank chest past the task radius is never walked to', () => {
     word('stone')
     const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }], chests: { '100,64,170': [{ name: 'cobblestone', count: 400 }] }, at: pos(300.5, 64, 400.5) })
