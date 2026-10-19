@@ -214,6 +214,21 @@ function installPlan(bot, ctx, req, steps, say) {
   return true
 }
 
+// Pin-args mirror (vf8e.17): ctx.taskPlanArgs tracks the ctx.taskPlanStep
+// pin — written and withdrawn at the same executive sites — except it
+// survives pinMenu's consume, so goalFacts keeps `pinned` (and the skill
+// wrapper its st.count/st.by) while the executive owns the step. It carries
+// the step id too: the pin alone cannot say who owns a consumed pin, and
+// goal.js must not require this module back (dependency cycle).
+function pinArgs(ctx, o, s) {
+  if (!ctx) return
+  ctx.taskPlanArgs = { step: s.step, count: s.count, by: o.by }
+}
+function dropArgs(ctx) {
+  if (!ctx) return
+  ctx.taskPlanArgs = null
+}
+
 // Owner stop / follow me / go work: the plan and any ask in flight end.
 function cancel(ctx, why = 'stop') {
   if (!ctx) return
@@ -226,8 +241,7 @@ function cancel(ctx, why = 'stop') {
   }
   ctx.llmOrder = null
   ctx.llmAsk = null
-  // A pin the arbiter never consumed must not leak args into a later run.
-  ctx.taskPlanArgs = null
+  dropArgs(ctx) // a pin the arbiter never consumed must not leak args into a later run
 }
 
 // True while the sequencer re-feeds its own chat line: the chat hooks must
@@ -277,8 +291,7 @@ function orderResult(ctx, s, c) {
 // like stop), an unconsumed pin.
 function release(ctx, o) {
   const s = o && o.cur && o.steps[o.i]
-  // A replaced or timed-out plan drops its args with its executors.
-  if (ctx) ctx.taskPlanArgs = null
+  dropArgs(ctx) // a replaced or timed-out plan drops its args with its executors
   if (!s) return
   if (!ORDER_STEPS[s.step]) {
     if (ctx.taskPlanStep === s.step) ctx.taskPlanStep = null
@@ -295,7 +308,7 @@ function release(ctx, o) {
 
 function end(bot, ctx, o, result) {
   if (result !== 'done') release(ctx, o)
-  else if (ctx) ctx.taskPlanArgs = null // release() already nulled the rest
+  else dropArgs(ctx) // release() already nulled the rest
   const n = o.steps.length
   console.log(`llm order end text="${o.text}" result=${result} step=${Math.min(o.i + 1, n)}/${n} dur=${Math.floor((Date.now() - o.at) / 1000)}s`)
   if (ctx.llmOrder === o) ctx.llmOrder = null
@@ -335,10 +348,7 @@ function startStep(bot, ctx, o, s, now) {
   }
   if (!ctx.work && o.ticker && typeof o.ticker.work === 'function') o.ticker.work()
   ctx.taskPlanStep = s.step
-  // Args travel next to the pin (vf8e.17): the skill wrapper copies them
-  // into the fresh st when its episode starts. Rewritten on every work
-  // step so a later step never reads an earlier step's count.
-  ctx.taskPlanArgs = { count: s.count, by: o.by }
+  pinArgs(ctx, o, s) // rewritten on every work step, so a later step never reads an earlier step's args
 }
 
 // Every tick (index.js), cheap: no plan, no work.
@@ -351,7 +361,7 @@ function tick(bot, ctx, now = Date.now()) {
   const c = o.cur
   if (ctx.paused) return end(bot, ctx, o, 'stop')
   if (!c.held && now - c.at > STEP_MS) return end(bot, ctx, o, 'failed:timeout')
-  const next = () => { o.i++; o.cur = null }
+  const next = () => { o.i++; o.cur = null; dropArgs(ctx) }
   if (ORDER_STEPS[s.step]) {
     if (orderBusy(ctx)) { if (ctx.lead) c.led = true; return }
     const r = orderResult(ctx, s, c)
@@ -371,6 +381,7 @@ function tick(bot, ctx, now = Date.now()) {
     // Held: no pin (a pending one is withdrawn so the night step wins), no
     // miss, no deadline; the step re-pins when the night ends.
     if (ctx.taskPlanStep === s.step) ctx.taskPlanStep = null
+    dropArgs(ctx) // withdrawn with the pin: the night step owns the body now
     c.held = true
     c.seen = false
     return
@@ -381,6 +392,7 @@ function tick(bot, ctx, now = Date.now()) {
     c.gen = stepGen(ctx)
     c.miss = 0
     ctx.taskPlanStep = s.step
+    pinArgs(ctx, o, s) // re-pinned after the night hold
     return
   }
   if (c.seen) {
@@ -398,11 +410,13 @@ function tick(bot, ctx, now = Date.now()) {
     c.seen = false
     c.gen = stepGen(ctx)
     ctx.taskPlanStep = s.step
+    pinArgs(ctx, o, s) // the flicker re-pin carries the args too
     return
   }
   if (ctx.taskPlanStep !== s.step) {
     if (++c.miss >= MISS_TICKS) return end(bot, ctx, o, 'failed:not possible now')
     ctx.taskPlanStep = s.step
+    pinArgs(ctx, o, s)
   }
 }
 

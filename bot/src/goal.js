@@ -1390,12 +1390,22 @@ function goalFacts(bot, ctx) {
   } catch (_) { /* unknown food reads full */ }
   let rearm = false
   try { rearm = require('./behaviours/equip').pickRearmDue(bot, ctx) } catch (_) { rearm = false }
-  // Order pin (vf8e.17): the plan executive's one-shot step and its count,
-  // read BEFORE pinMenu consumes the pin (decide builds facts first) — an
-  // order-only skill gates its feasible on facts.pinned === '<its name>'
-  // so it runs only when ordered, never on its own before rest.
+  // Order pin (vf8e.17): the plan executive's one-shot step and its count.
+  // Read before pinMenu consumes the pin (decide builds facts first), then
+  // kept while the executive owns the running work step — an order-only
+  // skill gates its feasible on facts.pinned === '<its name>' so it runs
+  // only when ordered (never on its own before rest) and stays feasible
+  // past the first decide instead of getting re-picked away mid-episode.
+  // The mirror (llm-orders pinArgs) tracks the pin except it survives the
+  // consume — read it, never the executive (dependency cycle).
   let pinned = 'none'
-  try { if (ctx && typeof ctx.taskPlanStep === 'string' && ctx.taskPlanStep) pinned = ctx.taskPlanStep } catch (_) { /* unpinned */ }
+  try {
+    if (ctx && typeof ctx.taskPlanStep === 'string' && ctx.taskPlanStep) pinned = ctx.taskPlanStep
+    else {
+      const a = ctx && ctx.taskPlanArgs
+      if (a && typeof a.step === 'string' && a.step) pinned = a.step
+    }
+  } catch (_) { pinned = 'none' }
   let pinCount = 0
   try {
     const n = ctx && ctx.taskPlanArgs ? ctx.taskPlanArgs.count : undefined

@@ -308,12 +308,23 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
     bot.chat(`no step "${id.slice(0, 20)}" — try: help`)
     return
   }
+  const order = llmOrders.ORDER_STEPS[id]
+  // bring/find need an item the `do` grammar cannot carry — point at the
+  // verb instead of feeding `bring me undefined` into the executive.
+  if (order && order.args.includes('item')) {
+    bot.chat(id === 'find' ? 'try: find me iron' : 'try: bring me coal')
+    return
+  }
   const step = { step: id }
   if (m[2] != null) {
+    const max = (order && order.max) || 64
     const count = Math.floor(Number(m[2]))
-    if (!(count >= 1 && count <= 64)) { bot.chat('try: do light'); return }
+    if (!(count >= 1 && count <= max)) { bot.chat('try: do light'); return }
     step.count = count
   }
+  // A valid `do` ends any running plan or pending ask first (a stale ask
+  // completing later must not clobber it); installPlan replaces the rest.
+  llmOrders.cancel(ctx, 'do')
   llmOrders.installPlan(bot, ctx, {
     text: msg, by: playerName, ticker,
     feed: (line) => handleChat(bot, ticker, username, line, senderUuid),
@@ -321,7 +332,14 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
 }
 
 // vf8e.6: the owner orders that end a running LLM plan.
-const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|share|bring me(?: .*)?|do(?: .*)?)$/
+const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|share|bring me(?: .*)?)$/
+// vf8e.17: the `do <step> [count]` grammar. Only grammar-shaped lines take
+// the deterministic verb (a valid one replaces the running plan through
+// installPlan); anything else starting with `do ` (`do you have coal`)
+// stays chatter and keeps the old path to the LLM planner. `do` is NOT in
+// OWNER_ORDER on purpose: a typo (`do lgiht`) or a refusal must never
+// cancel a running plan.
+const DO_LINE = /^do\s+[a-z0-9_]+(?:\s+\d+)?$/
 
 function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
@@ -598,8 +616,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     } else if (msg.startsWith('plan ')) {
       // vf8e.6: force the planner on any line (A/B against the FSM parse).
       llmAsk(null, msg.slice(5).trim(), true)
-    } else if (msg === 'do' || msg.startsWith('do ')) {
-      // vf8e.17: deterministic one-step plan, no model call.
+    } else if (msg === 'do' || DO_LINE.test(msg)) {
+      // vf8e.17: deterministic one-step plan, no model call. Only the
+      // grammar lands here; other `do …` lines stay chatter below.
       if (ticker && lctx && !peerBot && !llmOrders.feeding(lctx) && worker.players(bot)[playerName]) {
         doPlan(bot, ticker, lctx, playerName, username, senderUuid, msg)
       } else llmAsk(null)

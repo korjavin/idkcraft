@@ -95,7 +95,7 @@ function feasible(facts) {
 
 | fact / field | value |
 |---|---|
-| `facts.pinned` | the executive's one-shot step (`ctx.taskPlanStep`), or `'none'`. Read before the arbiter consumes the pin, so the gate above holds. |
+| `facts.pinned` | the executive's one-shot step (`ctx.taskPlanStep`), kept while the executive owns the running work step, else `'none'`. |
 | `facts.pinCount` | the pin's count (`ctx.taskPlanArgs.count`), or `0`. |
 | `st.count` / `st.by` | the order's count (1..64) and player, or `null`s without an order. |
 | `entities()` item | each entry carries `item`: the dropped-item registry name, or `null`. |
