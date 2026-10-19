@@ -187,6 +187,37 @@ describe('castle tidy (g0z.62)', () => {
     assert.equal(st.visitedAt, now + 5000)
   })
 
+  it('at the 1 h default, one off-site fetch try per tidy window — even with the castle still loaded from afar', () => {
+    const saved = process.env.CASTLE_TIDY_MS
+    delete process.env.CASTLE_TIDY_MS
+    try {
+      const t0 = Date.now()
+      const set = completeSet()
+      const torches = blueprint.absPlan(SITE, 0, 2).cells.filter((c) => c.kind === 'torch').slice(0, 3)
+      for (const c of torches) set.set(`${c.x},${c.y},${c.z}`, 'air')
+      const st = castleState({ visitedAt: t0 - 2 * H })
+      const ctx = { castle: st }
+      castleMod.menuFact(makeBot({ set }), ctx, t0) // the visit: stamps, latches torch
+      assert.equal(st.visitedAt, t0)
+      const loadedFar = makeBot({ set, at: pos(SITE.x - 90, 64, SITE.z) }) // loaded, past the visit radius
+      assert.equal(castleMod.menuFact(loadedFar, ctx, t0 + 1000), 'torch-none')
+      ctx.step = 'castlefetch'
+      ctx.stepStatus = 'failed:castlefetch-no-torch'
+      let tries = 0
+      for (let t = t0 + 2000; t < t0 + H; t += 5000) {
+        const w = castleMod.menuFact(loadedFar, ctx, t)
+        if (w !== 'done') tries++
+        ctx.stepStatus = w === 'torch-none' ? 'failed:castlefetch-no-torch' : 'running'
+      }
+      assert.equal(tries, 0, 'no second fetch word inside the window')
+      assert.equal(castleMod.menuFact(loadedFar, ctx, t0 + H + 1000), 'tidy') // the next window walks back
+      castleMod.menuFact(makeBot({ set }), ctx, t0 + H + 2000) // that visit re-opens the try
+      assert.match(castleMod.menuFact(loadedFar, ctx, t0 + H + 3000), /^torch-/)
+    } finally {
+      if (saved !== undefined) process.env.CASTLE_TIDY_MS = saved
+    }
+  })
+
   it('visitedAt persists through memory save/restore (future stamps clamp to now)', () => {
     const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'g0z62-')), 'IdkBot.json')
     const bot = { username: 'IdkBot', spawnPoint: { x: 0, y: 64, z: 0 } }

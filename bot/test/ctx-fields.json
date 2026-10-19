@@ -1818,6 +1818,13 @@
     ],
     "owner": "src/task.js"
   },
+  "tidyFetchSpent": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js",
+    "note": "one off-site repair fetch per tidy window (g0z.62): castle.menuFact stamps the window's st.visitedAt when the off-site castlefetch fails; while it matches and the bot is away, a complete castle words tidy/done even if still loaded."
+  },
   "tidyLegMs": {
     "writers": [
       "src/behaviours/castle.js",

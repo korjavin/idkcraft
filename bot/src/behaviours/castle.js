@@ -1095,9 +1095,17 @@ function menuFact(bot, ctx, now = Date.now()) {
       st.visitedAt = now
       ctx.tidyLegMs = 0
       if (owed) ctx.castleWord = null
-    } else if (owed && failed && ctx.step === 'castlefetch' && !nearSite(bot, st)) ctx.castleWord = null
+    } else if (owed && failed && ctx.step === 'castlefetch' && !nearSite(bot, st)) {
+      ctx.castleWord = null
+      ctx.tidyFetchSpent = st.visitedAt || 0 // this window's one off-site try
+    }
   } else ctx.tidyLegMs = 0 // a fresh trip clock for every due window (stop/forget/new castle)
   ctx.tidyTickAt = now
+  // Spent try: away from a complete castle the far word holds even while its
+  // chunks stay loaded (a house in view range), so the loaded branch cannot
+  // re-latch the same repair and re-run the failed fetch; a visit (a new
+  // visitedAt) opens the next window.
+  if (st.phase === 'complete' && ctx.tidyFetchSpent === (st.visitedAt || 0) && !nearSite(bot, st)) return tidyDue(st, now) ? 'tidy' : 'done'
   try {
     if (!siteLoaded(bot, st)) {
       if (st.phase === 'complete') {
