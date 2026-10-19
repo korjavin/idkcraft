@@ -127,6 +127,44 @@ describe('castle tidy (g0z.62)', () => {
     assert.equal(goal.MENU.gocastle.feasible({ castle: 'tidy', time: 'dusk', health: 20 }, bot, ctx), false)
   })
 
+  it('fqkn: an owed repair is not displacement — gocastle (and the siteFar force) never pre-empts the home fetch', () => {
+    const now = Date.now()
+    const bot = makeBot({ loaded: false, at: FAR() })
+    const ctx = { castle: castleState({ visitedAt: now - 2 * H }), castleWord: { kind: 'torch', left: 3, repair: true } }
+    const facts = { castle: 'torch-none', time: 'day', health: 20, pickaxe: 1 }
+    assert.equal(goal.MENU.castlefetch.feasible(facts, bot, ctx), true)
+    assert.equal(goal.MENU.gocastle.feasible(facts, bot, ctx), false)
+    ctx.castleWord = null // the fetch failed: the latch drops, the tidy walk follows
+    assert.equal(goal.MENU.gocastle.feasible({ ...facts, castle: 'tidy' }, bot, ctx), true)
+  })
+
+  it('fqkn: a repair fetch that failed at the castle gets its home try — the 5-min hold releases once the bot moved off', () => {
+    const fetch = require('../src/behaviours/castlefetch')
+    const now = Date.now()
+    const failPos = { x: SITE.x + 10, y: 64, z: SITE.z + 10 }
+    const mk = () => ({
+      castle: castleState({ visitedAt: now }),
+      castleWord: { kind: 'torch', left: 3, repair: true },
+      stepFail: { castlefetch: { status: 'failed:castlefetch-no-torch', at: now, pos: failPos } },
+    })
+    const home = makeBot({ loaded: false, at: FAR() })
+    const d = fetch.demand(home, mk())
+    assert.ok(d && d.kind === 'torch' && d.short > 0, JSON.stringify(d))
+    const there = makeBot({ loaded: false, at: pos(failPos.x + 5, 64, failPos.z) })
+    assert.equal(fetch.demand(there, mk()), null, 'still at the fail spot: the hold stands')
+    const yard = makeBot({ loaded: false, at: pos(failPos.x + 40, 64, failPos.z) })
+    assert.equal(fetch.demand(yard, mk()), null, 'revmux 01: 40 off the fail spot but still on site — no home rung there, the hold stands')
+    const homed = () => Object.assign(mk(), { home: { site: { x: SITE.x - 230, y: 64, z: SITE.z } } })
+    const road = makeBot({ loaded: false, at: pos(SITE.x - 70, 64, SITE.z) })
+    assert.equal(fetch.demand(road, homed()), null, 'revmux 02: off site but 160 from home — not on the road, the hold stands')
+    const hd = fetch.demand(home, homed())
+    assert.ok(hd && hd.kind === 'torch', 'at home the hold releases: ' + JSON.stringify(hd))
+    const plain = mk()
+    plain.castleWord = { kind: 'torch', left: 3 } // an active castle's fetch keeps the bounded hold
+    plain.castle.phase = 'building'
+    assert.equal(fetch.demand(home, plain), null)
+  })
+
   it('revmux 01: a failed trip leg counts as the visit — no re-walk to an unreachable castle', async () => {
     const bot = makeBot({ loaded: false, at: FAR(), items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }] })
     const ctx = { castle: castleState(), step: 'gocastle', stepStatus: 'running' }

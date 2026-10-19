@@ -177,9 +177,9 @@ function plankStack(bot) {
 // shape): walkTicks counts ticks without a WALK_GAIN closer than the leg's
 // best, so a long walk from the quarry keeps going while it closes in; a
 // stalled walk fails after WALK_STALL_TICKS, any walk after WALK_CAP_TICKS.
-function walkTo(bot, ctx, f, key, p, reason) {
+function walkTo(bot, ctx, f, key, p, reason, goal = null) {
   if (key !== ctx.lastGoalKey) {
-    issueGoal(bot, ctx, new goals.GoalNear(p.x, p.y, p.z, 3), key, false)
+    issueGoal(bot, ctx, goal || new goals.GoalNear(p.x, p.y, p.z, 3), key, false)
   }
   if (f.walkKey !== key) { f.walkKey = key; f.walkBest = Infinity; f.walkTotal = 0; f.walkTicks = 0 }
   const bp = botPos(bot)
@@ -197,8 +197,11 @@ function doCraft(bot, ctx, f) {
   if (invCount(bot, 'cobblestone') < 8) { fail(ctx, 'no-cobble'); return }
   const st = tableBlock(bot, ctx)
   if (!st) { fail(ctx, 'no-table'); return }
-  if (dist3(bp, st.pos) > craftMod.TABLE_REACH) {
-    walkTo(bot, ctx, f, `furnace-table:${st.pos.x},${st.pos.y},${st.pos.z}`, st.pos, 'table-unreachable')
+  // Reach + sight (g0z.40's gear/craftany fix, fqkn): GoalNear 3 ends outside
+  // a house wall, the table unseen — the craft then threw craft-furnace, or
+  // the walk stalled table-unreachable (rig house table, tidy torch smelt).
+  if (!craftMod.tableUsable(bot, st.block, st.pos)) {
+    walkTo(bot, ctx, f, `furnace-table:${st.pos.x},${st.pos.y},${st.pos.z}`, st.pos, 'table-unreachable', craftMod.tableGoal(bot, st.pos))
     return // walk into reach, craft on a later tick
   }
   f.walkTicks = 0; f.walkKey = null // arrival ends the leg: a later walk back starts fresh
@@ -211,6 +214,7 @@ function doCraft(bot, ctx, f) {
       await craftMod.safeCraft(bot, found[0], 1, st.block, { ctx, item: 'furnace' })
     } catch (err) {
       ctx.furnaceInFlight = false
+      try { console.log(`furnace craft failed: ${err && err.message}`) } catch (_) { /* log best-effort */ }
       fail(ctx, 'craft-furnace')
       return
     }

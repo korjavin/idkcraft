@@ -152,7 +152,7 @@ const deps = {
 const WOOD = new Set(['planks', 'door', 'fence', 'chest', 'frame', 'gate'])
 const NO_WOOD = 'no wood within 64 — drop logs in the castle chest'
 // Items one chest log funds per kind (craftTick crafts the rest).
-const LOG_YIELD = { planks: 4, frame: 1, fence: 2, door: 2, chest: 0.5, gate: 1 }
+const LOG_YIELD = { planks: 4, frame: 1, fence: 2, door: 2, chest: 0.5, gate: 1, torch: 4 } // torch: one log -> one charcoal -> 4
 
 function birchFirst(names) {
   return names.sort((a, b) => (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
@@ -178,7 +178,8 @@ function chestNames(bot, kind) {
   if (kind === 'door') return [itemNames(bot, isDoor), itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'fence') return [itemNames(bot, isFence), itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'gate') return [itemNames(bot, isGate), itemNames(bot, (n) => n.endsWith('_log'))]
-  if (kind === 'torch') return [['torch']]
+  // fqkn: logs fund torchTick's charcoal (stockpile banks the pack's logs at home).
+  if (kind === 'torch') return [['torch'], itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'chest') return [['chest'], itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'pane') return [itemNames(bot, (n) => blueprint.matches('pane', n)), ['glass'], ['sand']]
@@ -209,12 +210,32 @@ function craftNames(bot, kind) {
 // many more usable items the batch needs. Null when the castle word is not
 // a material word (none/parked/done/clear, or blocked with no gated kind). Shared by the goal
 // gate and the behaviour, so the two never disagree.
+// Owed repair moved on (fqkn): a complete castle's latched repair fetch that
+// failed at the castle (the torch rung fails fast away from the home
+// furnace) gets its home try once the bot is off site (castle.js nearSite,
+// the radius menuFact drops the latch by) — the 5-min hold otherwise
+// outlived the walk home and the tidy cadence walked the bot back first
+// (rig: no-torch at the castle, every window). One home try: an off-site
+// failure drops the latch (castle.js menuFact).
+function owedMoved(bot, ctx) {
+  try {
+    const st = ctx.castle
+    if (!st || st.phase !== 'complete' || !ctx.castleWord || !ctx.castleWord.repair) return false
+    if (castleMod.nearSite(bot, st)) return false
+    // ...and only where the home rung runs (torchTick's TORCH_HOME_DIST): a
+    // far-home castle never spends its one home try on the road.
+    const h = ctx.home && (ctx.home.furnace || ctx.home.site)
+    const bp = bot.entity && bot.entity.position
+    return !(h && bp && typeof h.x === 'number' && Math.hypot(bp.x - h.x, bp.z - h.z) > TORCH_HOME_DIST)
+  } catch (_) { return false }
+}
+
 function demand(bot, ctx) {
   // Bounded fetch hold (g0z.15): a failed leg rests CASTLEFETCH_RETRY_MS no
   // matter how the facts text moves — known=near/none flips released the
   // text-keyed goal hold every few seconds (g0z.12 rig churn).
   const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
-  if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../budget').CASTLEFETCH_RETRY_MS) return null
+  if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../budget').CASTLEFETCH_RETRY_MS && !owedMoved(bot, ctx)) return null
   let w = 'none'
   try { w = castleMod.menuFact(bot, ctx) } catch (_) { return null }
   let kind = null
@@ -1870,7 +1891,9 @@ function castlefetch(bot, ctx, target, state) {
   if (st.status !== NO_WOOD || !WOOD.has(d.kind)) st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
-  if (f.bankFull) { finish(bot, ctx, 'done'); return } // g0z.60: a bank batch on hand lays before any dig
+  // g0z.60: a bank batch on hand lays before any dig. Not a torch leg (fqkn):
+  // its bank draw is logs, which torchTick below smelts into the torches.
+  if (f.bankFull && d.kind !== 'torch') { finish(bot, ctx, 'done'); return }
   // idkcraft-8njf: on v2 a stairs craft that still fails after the table
   // retry mines ONE stone batch instead of failing into the 5-min hold
   // (forage -> rest -> house-build): stone is the castle's own material,

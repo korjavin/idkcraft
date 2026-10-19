@@ -146,8 +146,22 @@ describe('furnace craft (table-only, xg9)', () => {
     const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, inv: [{ name: 'cobblestone', count: 8 }], blocks: TABLE })
     const ctx = { home: { table: { x: 10, y: 64, z: 10 } } }
     await tick(bot, ctx)
-    assert.deepEqual(bot.calls.goals, ['GoalNear'])
+    assert.deepEqual(bot.calls.goals, ['GoalSeeTable'])
     assert.deepEqual(bot.calls.crafts, [])
+  })
+
+  it('fqkn: a table in reach but out of sight (outside the house wall) walks, never crafts blind', async () => {
+    const craftMod = require('../src/behaviours/craft')
+    const real = craftMod.tableUsable
+    try {
+      craftMod.tableUsable = () => false
+      const bot = mockBot({ at: { x: 10, y: 64, z: 8 }, inv: [{ name: 'cobblestone', count: 8 }], blocks: TABLE })
+      const ctx = { home: { table: { x: 10, y: 64, z: 10 } } }
+      await tick(bot, ctx)
+      assert.deepEqual(bot.calls.goals, ['GoalSeeTable'])
+      assert.deepEqual(bot.calls.crafts, [])
+      assert.ok(ctx.stepStatus !== 'failed:craft-furnace')
+    } finally { craftMod.tableUsable = real }
   })
 
   it('crafts one furnace at the table, table block always passed', async () => {

@@ -2377,6 +2377,7 @@ module.exports.entrance = entrance
 module.exports.SITE_WALK_DIST = SITE_WALK_DIST
 module.exports.siteLoaded = siteLoaded
 module.exports.tidyDue = tidyDue
+module.exports.nearSite = nearSite
 module.exports.tidyMs = tidyMs
 module.exports.siteDist = siteDist
 // Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
