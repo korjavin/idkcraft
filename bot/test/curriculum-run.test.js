@@ -20,6 +20,7 @@ const FAKE_PRERUN = [
   '# fake no-skill reproduction run: $1 = spots.json, $2 = out.json.',
   '# FAKE_GATE=red writes a RED row, anything else a reached row.',
   'echo "PRERUN BODY=${REPLAY_BODY:-mineflayer}" >> "${FAKE_ENV:-/dev/null}"',
+  'if [ "$FAKE_GATE" = dead ]; then echo "fake-prerun: rig dead"; exit 2; fi',
   'if [ "$FAKE_GATE" = red ]; then',
   '  printf \'[{"spot":"AUTO-fake","reached":false,"stuck":9,"eps":2,"call":1}]\' > "$2"',
   'else',
@@ -36,6 +37,7 @@ const FAKE_LOOP = [
   'mkdir -p "$d/skills"',
   'echo "$1" >> "${FAKE_MARKER:-/dev/null}"',
   'echo "LOOP BODY=${REPLAY_BODY:-mineflayer} RIG=$SKILL_LOOP_RIG SCN=$SKILL_LOOP_SCENARIOS SPOTS=$SKILL_LOOP_SPOTS" >> "${FAKE_ENV:-/dev/null}"',
+  'if [ "$FAKE_LOOP" = noresult ]; then echo "fake-loop: crashed before result"; exit 1; fi',
   "skill=\"$(SK=\"$SKILL_LOOP_SCENARIOS\" SCN=\"$1\" node -p \"JSON.parse(require('fs').readFileSync(process.env.SK,'utf8')).find((s)=>s.name===process.env.SCN).skill\")\"",
   'echo "fake-loop $1 max=$2 skill=$skill"',
   'cost="${FAKE_COST:-0.50}"',
@@ -70,7 +72,10 @@ function runNight(t, opts = {}) {
   }
   if (opts.body) env.CURRICULUM_BODY = opts.body
   if (opts.seed) fs.writeFileSync(path.join(t.dir, 'curriculum-ledger.json'), JSON.stringify(opts.seed, null, 1))
-  const r = spawnSync('sh', ['tools/curriculum.sh', DUMP], { cwd: BOT, env, encoding: 'utf8' })
+  const cwd = opts.cwd || BOT
+  const script = opts.script || 'tools/curriculum.sh'
+  const dump = opts.dump || DUMP
+  const r = spawnSync('sh', [script, dump], { cwd, env, encoding: 'utf8' })
   return { rc: r.status, out: `${r.stdout || ''}${r.stderr || ''}` }
 }
 
@@ -96,6 +101,43 @@ describe('curriculum.sh night (idkcraft-vf8e.10)', () => {
     assert.equal(all.length, 1)
     assert.deepEqual([all[0].verdict, all[0].cost, all[0].attempts], ['not-reproduced', 0, 0])
     assert.match(r.out, /CURRICULUM night=\d{4}-\d\d-\d\d tried=1 green=0 red=0 skipped=1 cost=\$0\.00/)
+  })
+
+  it('a relative dump path works from the repo root', () => {
+    const t = setup()
+    const r = runNight(t, {
+      gate: 'green', loopMode: 'green',
+      cwd: path.join(BOT, '..'), script: 'bot/tools/curriculum.sh', dump: 'bot/test/fixtures/curriculum-dump.txt',
+    })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, /not-reproduced/)
+  })
+
+  it('a failed pre-run never reads last night pre.json', () => {
+    const t = setup()
+    const top = CURRICULUM.rank(CURRICULUM.parse(fs.readFileSync(DUMP, 'utf8'), {}), 7).find((c) => c.proposable)
+    const cand = path.join(t.dir, `AUTO-${top.sig}`)
+    fs.mkdirSync(path.join(cand, 'loop'), { recursive: true })
+    fs.writeFileSync(path.join(cand, 'pre.json'), JSON.stringify([{ spot: 'AUTO-stale', reached: false, stuck: 9, eps: 2, call: 1 }]))
+    const r = runNight(t, { gate: 'dead', loopMode: 'green' })
+    assert.match(r.out, /env: pre-run failed/)
+    assert.ok(!fs.existsSync(t.marker), 'the loop never started on a stale gate')
+    assert.equal(r.rc, 2)
+  })
+
+  it('a loop that dies before result.json never re-charges last night cost', () => {
+    const t = setup()
+    const top = CURRICULUM.rank(CURRICULUM.parse(fs.readFileSync(DUMP, 'utf8'), {}), 7).find((c) => c.proposable)
+    const cand = path.join(t.dir, `AUTO-${top.sig}`)
+    fs.mkdirSync(path.join(cand, 'loop'), { recursive: true })
+    fs.writeFileSync(path.join(cand, 'loop', 'result.json'), JSON.stringify({
+      scenario: 'x', spot: 'AUTO-stale', skill: 'gen_x', green: false, attempts: 6, wall: 9, in: 100, out: 50, cost: 9.99, rows: [],
+    }))
+    const r = runNight(t, { gate: 'red', loopMode: 'noresult' })
+    assert.match(r.out, /env: loop rc 1 but no .*result\.json/)
+    assert.ok(!/RED attempts=/.test(r.out), 'no stale RED verdict')
+    assert.deepEqual(ledger(t), {}, 'stale cost never recorded')
+    assert.equal(r.rc, 2)
   })
 
   it('a GREEN prints the PROMOTE line and records cost + skill', () => {
@@ -261,6 +303,17 @@ describe('curriculum ledger helpers (idkcraft-vf8e.10)', () => {
       } finally { console.log = log }
       assert.equal(out[0], '1.50')
       assert.deepEqual(out[1].split('\n'), ['skip s1 red-recent', 'skip s2 red-stale', 'pick s3', 'skip s4 parked'])
+    })
+  })
+
+  it('gate: setup-failure notes are ENV, never RED', () => {
+    withDir((dir) => {
+      const f = (rows) => { const p = path.join(dir, 'r.json'); fs.writeFileSync(p, JSON.stringify(rows)); return p }
+      assert.equal(CURRICULUM.main(['gate', f([{ spot: 'A', reached: false, call: 1, note: 'GUIDE-BURIED' }])]), 2)
+      assert.equal(CURRICULUM.main(['gate', f([{ spot: 'A', reached: true, call: 0, note: 'GUIDE-DIED' }])]), 2)
+      // The set tracks stuck-replay.js ENV_NOTES exactly.
+      const replay = require('../tools/stuck-replay')
+      assert.deepEqual([...CURRICULUM.ENV_FAIL_NOTES].sort(), [...replay.ENV_NOTES].sort())
     })
   })
 

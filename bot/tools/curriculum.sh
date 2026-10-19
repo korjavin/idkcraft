@@ -52,9 +52,12 @@
 #   reached the cap: nothing more starts tonight).
 set -e
 HERE="$(dirname "$0")"
-cd "$HERE/.."
 DUMP="${1:-}"
 DAYS="${2:-7}"
+# Resolve before the cd below: a relative dump path is from the caller's cwd
+# (findings-1 a: `sh bot/tools/curriculum.sh bot.txt` from the repo root).
+case "$DUMP" in ''|/*) ;; *) DUMP="$(pwd)/$DUMP" ;; esac
+cd "$HERE/.."
 if [ -z "$DUMP" ] || [ ! -f "$DUMP" ]; then echo "usage: sh tools/curriculum.sh <bot-dump.txt> [days=7]"; exit 2; fi
 
 K="${CURRICULUM_K:-2}"
@@ -190,6 +193,9 @@ for SIG in $(grep '^pick ' "$PICKF" | awk '{print $2}' || true); do
   fi
   # 2. reproduction gate: one micro-run WITHOUT a skill. Anything but RED
   # is not-reproduced: the ledger records it and no model tokens are spent.
+  # Drop last night's pre.json first: a failed pre-run must read as failed,
+  # never as the previous night's RED (findings-1 c).
+  rm -f "$CAND/pre.json"
   PRC=0
   if [ -n "${CURRICULUM_PRERUN:-}" ]; then
     sh "$CURRICULUM_PRERUN" "$SPOTS" "$CAND/pre.json" >"$CAND/pre.log" 2>&1 || PRC=$?
@@ -227,6 +233,9 @@ for SIG in $(grep '^pick ' "$PICKF" | awk '{print $2}' || true); do
   # Exit 2 is an environment failure (keeper never kept, network): not RED,
   # and the cap is not spent on it.
   LOOPD="$CAND/loop"
+  # Drop last night's result.json first: a loop that dies before writing must
+  # read as env, never re-charge the previous night's cost (findings-1 c).
+  rm -f "$LOOPD/result.json"
   LRC=0
   if [ -n "${CURRICULUM_LOOP:-}" ]; then
     SKILL_LOOP_DIR="$LOOPD" SKILL_LOOP_SCENARIOS="$SCN" SKILL_LOOP_SPOTS="$SPOTS" SKILL_LOOP_RIG="$SLOT" \

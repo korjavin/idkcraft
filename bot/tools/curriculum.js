@@ -307,9 +307,15 @@ function spent() {
   return 0
 }
 
+// Setup-failure notes (findings-1 b): the arena was never tested (the guide
+// was buried or died), so the row is not a verdict on the spot. Kept equal
+// to stuck-replay.js ENV_NOTES by the runner tests — never RED, never a
+// paid loop.
+const ENV_FAIL_NOTES = new Set(['GUIDE-BURIED', 'GUIDE-DIED'])
+
 // gate <replay.json>: the reproduction gate — the no-skill micro-run must be
 // RED (unreached, or a page/refusal: calls > 0) or the candidate is
-// not-reproduced. Exit 0 = RED, 1 = not RED, 2 = unreadable.
+// not-reproduced. Exit 0 = RED, 1 = not RED, 2 = unreadable or setup failure.
 function gate(file) {
   let rows
   try { rows = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) {
@@ -318,6 +324,7 @@ function gate(file) {
   }
   const row = Array.isArray(rows) ? rows[0] : null
   if (!row) { console.log(`gate: no replay rows at ${file}`); return 2 }
+  if (ENV_FAIL_NOTES.has(row.note)) { console.log(`gate: ${row.spot} ${row.note} (setup failed, not judged) -> ENV`); return 2 }
   const red = row.reached !== true || row.call !== 0
   console.log(`gate: ${row.spot} reached=${row.reached} calls=${row.call} -> ${red ? 'RED' : 'NOT-RED'}`)
   return red ? 0 : 1
@@ -373,4 +380,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2))
 
-module.exports = { parse, rank, proposal, table, main, WEIGHT, pick, record, spent, gate, readLedger }
+module.exports = { parse, rank, proposal, table, main, WEIGHT, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES }

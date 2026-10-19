@@ -751,7 +751,8 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
   never in `skill-scenarios.json`, because `skill-loop.test.js` pins that file to corpus spots.
 - Reproduction gate (printed by `propose`; the runner, vf8e.10, gives the verdict): micro-run
   the spot once WITHOUT a skill. It must be RED (unreached, a page or a refusal). If it is not,
-  the candidate is not-reproduced and no model tokens are spent.
+  the candidate is not-reproduced and no model tokens are spent. A `GUIDE-BURIED`/`GUIDE-DIED`
+  setup failure is env (not judged), never RED — the runner retries it without spending.
 
 Real harvest (2026-10-12..19 prod dump, default feed IdkBotV2): 206 events, 151 signatures
 (147 page, 4 bring), 115 proposable. Top 10 are all pages: counts 20, 8, 7, 6, 6, 3, 2, 2, 2, 2.
