@@ -1261,7 +1261,7 @@ function menuFact(bot, ctx, now = Date.now()) {
       return word
     }
     const kind = r.cell.kind
-    let left = 0
+    let left = r.cell.sill ? 1 : 0 // the off-plan sill is in no work order (lqgo revmux 01)
     if (kind === 'planks') {
       // Infill run (g0z.15): planks up to the next Fachwerk beam only, so
       // the planks fetch never crafts the held frame logs away.

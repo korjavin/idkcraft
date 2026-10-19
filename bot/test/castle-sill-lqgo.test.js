@@ -71,6 +71,11 @@ describe('lqgo v2 castle door sill', () => {
     assert.equal(denyReason(bot, b, { castle: ctx.castle, castleSill: true, castleClear: true }), null)
     // Without planks a complete castle still asks for them (castlefetch).
     assert.equal(castle.menuFact(worldBot(cells, []), { castle: st() }), 'planks-none')
+    // revmux 01: the off-plan sill counts 1, so reserve-only planks still fetch.
+    const rctx = { castle: st() }
+    const d = require('../src/behaviours/castlefetch').demand(worldBot(cells, [{ name: 'oak_planks', count: 2 }]), rctx)
+    assert.equal(rctx.castleWord.left, 1)
+    assert.ok(d && d.kind === 'planks' && d.short > 0, JSON.stringify(d))
   })
 
   it('v2: planks, laid rock or a built block is done; stone and holes are not', () => {
