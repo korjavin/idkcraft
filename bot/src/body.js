@@ -305,8 +305,9 @@ function nearCastle(bot, ctx) {
 // bridged the fence/moat with throwaway dirt/cobble. Within
 // CASTLE_ROCK_RANGE of ANY known castle centre (own, in progress too, and
 // every peer's: castle.anyCastle over ctx.knownCastles) allow1by1towers is
-// false, except the own castle step (the lay itself places) and the house
-// build by the OWN castle (nearAnyCastle below), so the
+// false, except the own lay (a builder batch in flight, or a phase still
+// being laid) and the house build (by the OWN castle, or a builder batch
+// in flight) nearAnyCastle below, so the
 // bridge sends allowPlace=false (bridge/index.js movementsToSettings).
 // Explicit places go through bot.placeBlock, not Baritone. Pit recovery
 // keeps allowBreak plus the recover prims.
@@ -322,7 +323,15 @@ function nearAnyCastle(bot, ctx) {
     // own-guarded; 8.0 with a peer castle in range, the rigs' shared memory
     // dir). The house build keeps its approaches by the OWN castle only
     // (v1's inCastleApron exemption; a peer castle keeps the guard).
-    if (ctx && ctx.step === 'castle' && ctx.castle && ctx.castle.site) return false
+    // Complete-phase own castle: only a builder batch in flight keeps it
+    // (repair re-issues the schematic). Decor, dig/air cells and the litter
+    // sweep walk guarded like v1's placeFn veto (5g43 core-1).
+    if (ctx && ctx.step === 'castle' && ctx.castle && ctx.castle.site &&
+      (ctx.castle.phase !== 'complete' || ctx.castleBuildFlight)) return false
+    // The house builder needs allowPlace for its batch whoever owns the
+    // castle in range; approach walks between batches stay guarded (5g43
+    // core-2: a peer-castle build ran the builder starved and stalled).
+    if (ctx && ctx.step === 'build' && ctx.buildCellsInFlight) return false
     return !!castle.anyCastle(ctx, (c, own) => !(own && ctx.step === 'build') && inRockRange(p, c))
   } catch (_) { /* no castle read: far */ }
   return false
