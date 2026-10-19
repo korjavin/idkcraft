@@ -2294,7 +2294,16 @@ function logRecover(bot, ctx, action, source, outcome, facts) {
   if (facts) {
     let next = '?:?'
     try {
-      const n = ctx && ctx.lastPathNext
+      let n = ctx && ctx.lastPathNext
+      // v2 (Baritone bridge) emits no path nodes, so lastPathNext stays null:
+      // fall back to the goal (stuck goal, else the live one) so the heading
+      // still reaches the log; a level goal (no y) reads the bot's own y.
+      if (!n || typeof n.x !== 'number') {
+        const g = (ctx && ctx.stuck && ctx.stuck.goal) || (bot.pathfinder && bot.pathfinder.goal)
+        if (g && typeof g.x === 'number' && typeof g.z === 'number') {
+          n = { x: g.x, y: typeof g.y === 'number' ? g.y : Math.floor(botPos(bot).y), z: g.z }
+        }
+      }
       if (n && typeof n.x === 'number') {
         next = `${n.x},${n.y},${n.z}:${blockNameOf(bot.blockAt && bot.blockAt(n))}`
       }
@@ -2828,6 +2837,7 @@ function run(bot, ctx) {
 }
 
 module.exports = {
+  logRecover,
   RECOVER_ORDER,
   RECOVER_SKILLS,
   RECOVER_MENU,
