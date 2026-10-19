@@ -1818,6 +1818,14 @@
     ],
     "owner": "src/task.js"
   },
+  "tidyLegMs": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/chat.js"
+    ],
+    "owner": "src/behaviours/castle.js",
+    "note": "tidy trip clock (g0z.62): castle.menuFact accumulates gocastle/castle leg time while a tidy is due and zeroes it on a visit, a park or no tidy due; chat 'castle tidy' zeroes it so a forced trip gets the full TIDY_TRIP_MS."
+  },
   "underFireLogged": {
     "writers": [
       "src/index.js"
