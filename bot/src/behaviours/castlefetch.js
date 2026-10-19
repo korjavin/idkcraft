@@ -869,6 +869,7 @@ function blastTick(bot, ctx, f, d, target, state) {
 // 33vm's path, the pane/blast furnace plumbing) -> craftTick next tick
 // (one charcoal + a stick = 4 torches). No log: false, the leg fails
 // castlefetch-no-torch as before.
+const TORCH_HOME_DIST = 64 // castle.js TIDY_VISIT_DIST: farther than a visit = another place
 function torchTick(bot, ctx, f, d, target, state) {
   if (ctx.bring) return true // a foreign order runs (this rung opens none)
   const dry = (why) => { castleMod.noteDry(ctx, 'torch'); finish(bot, ctx, `failed:castlefetch-${why}`) }
@@ -881,6 +882,15 @@ function torchTick(bot, ctx, f, d, target, state) {
   let log = null
   try { log = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_log')) } catch (_) { log = null }
   if (!log) return false
+  // furnace.js smelts at the HOME furnace only: away from it (a tidy visit at
+  // a far castle) the rung fails fast as no-torch instead of walking the
+  // castle->house leg mid-fetch; the owed-repair word (castle.js) brings the
+  // fetch home, where this rung runs (g0z.62 rig: furnace-unreachable x2).
+  try {
+    const h = ctx.home && (ctx.home.furnace || ctx.home.site)
+    const bp = bot.entity && bot.entity.position
+    if (h && bp && typeof h.x === 'number' && Math.hypot(bp.x - h.x, bp.z - h.z) > TORCH_HOME_DIST) return false
+  } catch (_) { /* guard best-effort: the smelt walk decides */ }
   blastSmelt(bot, ctx, f, target, state, dry, fr, { input: log.name, output: 'charcoal', count: Math.max(1, Math.min(log.count, Math.ceil(d.short / CRAFT_COUNT.torch))) })
   return true
 }

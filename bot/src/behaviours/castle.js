@@ -1081,18 +1081,28 @@ function menuFact(bot, ctx, now = Date.now()) {
   // unreachable site. Leg time only (ticks capped at 5 s), so a night
   // between legs does not eat the trip. Read here (decide's first facts
   // read), so this very tick already says 'done'.
-  if (tidyDue(st, now)) {
+  // The owed-repair trip (latched in the loaded branch below) rides the same bound, and an off-site
+  // fetch leg for it gets one try: a failure drops the latch (the next tidy
+  // visit re-reads the castle), never a fetch retried every hold.
+  const owed = st.phase === 'complete' && !!(ctx.castleWord && ctx.castleWord.repair)
+  if (tidyDue(st, now) || owed) {
     const leg = ctx.step === 'gocastle' || ctx.step === 'castle'
+    const failed = failReason(ctx.stepStatus) !== null
     if (leg) ctx.tidyLegMs = (ctx.tidyLegMs || 0) + Math.max(0, Math.min(now - (ctx.tidyTickAt || now), 5000))
-    if ((leg && failReason(ctx.stepStatus) !== null) || ctx.tidyLegMs > TIDY_TRIP_MS) {
+    if ((leg && failed) || ctx.tidyLegMs > TIDY_TRIP_MS) {
       st.visitedAt = now
       ctx.tidyLegMs = 0
-    }
+      if (owed) ctx.castleWord = null
+    } else if (owed && failed && ctx.step === 'castlefetch' && !siteLoaded(bot, st)) ctx.castleWord = null
   } else ctx.tidyLegMs = 0 // a fresh trip clock for every due window (stop/forget/new castle)
   ctx.tidyTickAt = now
   try {
     if (!siteLoaded(bot, st)) {
-      if (st.phase === 'complete') return tidyDue(st, now) ? 'tidy' : 'done'
+      if (st.phase === 'complete') {
+        const last = ctx.castleWord
+        if (last && last.repair) return stockWord(bot, last.kind, last.left) // owed repair (g0z.62): fetch it here, carry it back
+        return tidyDue(st, now) ? 'tidy' : 'done'
+      }
       const last = ctx.castleWord
       if (last && last.kind) return stockWord(bot, last.kind, last.left)
       if (last && last.word) return last.word
@@ -1223,7 +1233,11 @@ function menuFact(bot, ctx, now = Date.now()) {
         if (o.kind === kind && !done(bot, o)) left++
       }
     }
-    ctx.castleWord = { kind, left }
+    // A complete castle's open plan cell is a repair (g0z.62): latched, so
+    // off site the owed kind stays the word — castlefetch funds it at home
+    // (the home furnace, a tidy visit's torches) and the castle step walks
+    // it back. Decor and sweep words never latch.
+    ctx.castleWord = st.phase === 'complete' ? { kind, left, repair: true } : { kind, left }
     return stockWord(bot, kind, left)
   } catch (_) {
     return 'none'

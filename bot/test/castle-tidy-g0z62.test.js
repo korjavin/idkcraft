@@ -160,6 +160,33 @@ describe('castle tidy (g0z.62)', () => {
     assert.equal(ctx.tidyLegMs, 0)
   })
 
+  it('an owed repair latches: off site the kind stays the word (fetch at home, walk back); one failed off-site fetch or trip leg drops it', () => {
+    const now = Date.now()
+    const set = completeSet()
+    const torches = blueprint.absPlan(SITE, 0, 2).cells.filter((c) => c.kind === 'torch').slice(0, 3)
+    for (const c of torches) set.set(`${c.x},${c.y},${c.z}`, 'air')
+    const st = castleState({ visitedAt: now - 2 * H })
+    const ctx = { castle: st }
+    assert.match(castleMod.menuFact(makeBot({ set }), ctx, now), /^torch-/)
+    assert.equal(ctx.castleWord.repair, true)
+    const far = makeBot({ loaded: false, at: FAR() })
+    assert.equal(castleMod.menuFact(far, ctx, now + 1000), 'torch-none') // not 'done': the fetch runs at home
+    const held = makeBot({ loaded: false, at: FAR(), items: [{ name: 'torch', count: 8 }] })
+    assert.doesNotMatch(castleMod.menuFact(held, ctx, now + 2000), /none|done|tidy/) // stock in hand: walk it back
+    // An off-site fetch that fails drops the latch: 'done' (visit is fresh).
+    ctx.step = 'castlefetch'
+    ctx.stepStatus = 'failed:castlefetch-no-torch'
+    assert.equal(castleMod.menuFact(far, ctx, now + 3000), 'done')
+    // A failed walk back with the latch also drops it and stamps the visit.
+    castleMod.menuFact(makeBot({ set }), ctx, now + 4000)
+    assert.equal(ctx.castleWord.repair, true)
+    ctx.step = 'gocastle'
+    ctx.stepStatus = 'failed:cannot-reach-castle'
+    assert.equal(castleMod.menuFact(far, ctx, now + 5000), 'done')
+    assert.equal(ctx.castleWord, null)
+    assert.equal(st.visitedAt, now + 5000)
+  })
+
   it('visitedAt persists through memory save/restore (future stamps clamp to now)', () => {
     const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'g0z62-')), 'IdkBot.json')
     const bot = { username: 'IdkBot', spawnPoint: { x: 0, y: 64, z: 0 } }

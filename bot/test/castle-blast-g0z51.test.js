@@ -506,4 +506,16 @@ describe('castle torch charcoal rung (g0z.62)', () => {
     assert.deepEqual(jobs, [])
     assert.equal(count(items, 'coal'), 2, 'the coal reserve stands')
   })
+
+  it('logs on hand but the home furnace far away: fails no-torch, never walks home mid-fetch', async () => {
+    const items = [{ name: 'oak_log', count: 3 }, { name: 'stick', count: 4 }]
+    const bot = torchBot(items)
+    const ctx = { castle: completeState(), home: { site: { x: SITE.x + 120, y: 64, z: SITE.z } } }
+    const { fn, jobs } = fakeFurnace(bot, items, [])
+    fetch.deps.driveFurnace = fn
+    fetch.deps.craftItem = torchCraft(items, [])
+    await run(bot, ctx, () => ctx.stepStatus)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-torch')
+    assert.deepEqual(jobs, [])
+  })
 })
