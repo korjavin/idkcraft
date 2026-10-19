@@ -1364,6 +1364,39 @@ describe('rw4.19 interior clear cells', () => {
     assert.equal(build.entranceHoled(bot, ctx, table), false)
   })
 
+  it('z8e7: build.js refillCastleVetoed stays in step with MENU.build (castleFirst + houseStep unlock + castleParkLeash, radius 64)', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    paintHouse(world, home)
+    for (const c of BLUEPRINT_V2) if (c.kind === 'clear') world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    world.set(s.x + 4, s.y - 1, s.z + 1, 'air') // the re-opened house owes a floor cell
+    const spot = pos(s.x + 5, s.y, s.z + 1)
+    const facts = { planks: 64, table: 1, door: 1, time: 'day' }
+    const R = require('../src/behaviours/explore').TASK_SEARCH_RADIUS
+    const unlock = { id: 1, generation: 1, commit: { goalId: 1, generation: 1, until: Date.now() + 1e6, unlock: { houseStep: 'build' } } }
+    const at = (dx, extra) => ({ site: { x: s.x + dx, y: s.y, z: s.z }, phase: 'body', parked: false, ...extra })
+    const cases = {
+      'no castle': undefined,
+      'no site': { phase: 'body', parked: false },
+      'active': at(30),
+      'parked': at(30, { parked: true }),
+      'complete': at(30, { phase: 'complete' }),
+      'active + unlock': at(30, { unlock: true }),
+      'auto-parked at the radius': at(R, { parked: true, taskPark: { auto: true } }),
+      'auto-parked past the radius': at(R + 1, { parked: true, taskPark: { auto: true } }),
+      'auto-parked past the radius, complete': at(R + 1, { phase: 'complete', taskPark: { auto: true } }),
+      'auto-parked past the radius + unlock': at(R + 1, { parked: true, taskPark: { auto: true }, unlock: true }),
+      'owner-parked past the radius': at(R + 1, { parked: true, taskPark: { auto: false } }),
+    }
+    for (const [name, spec] of Object.entries(cases)) {
+      const { unlock: u, ...castle } = spec || {}
+      const ctx = { home, buildSkip: [], castle: spec && castle, goal: u ? unlock : undefined }
+      assert.equal(build.entranceHoled(bot, ctx, spot), goal.MENU.build.feasible(facts, bot, ctx), name)
+    }
+  })
+
   it('(c) air, flora and furnishings in clear cells are done without a dig', () => {
     const world = makeWorld()
     const bot = mockBot(world)
