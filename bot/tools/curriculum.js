@@ -94,7 +94,7 @@ function parse(text, env = process.env) {
     // rec.last null) opens a new episode. The old one ended without a
     // terminal line (clearStuck on an order, a restart): a paged one still
     // counts, where it was last seen.
-    if (ep && outcome === 'chosen' && / last=none /.test(rest)) {
+    if (ep && / last=none /.test(rest)) { // chosen, or an entry drop-goal (its only line)
       if (ep.paged) page(name, ep, 'call_player:cleared', ep.at, ep.day, ep.pos)
       ep = null
     }
