@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voyager для idkcraft</title>
+<style>
+  body { background: var(--agterm-background, Canvas); color: var(--agterm-foreground, CanvasText);
+         font: 15px/1.55 -apple-system, "SF Pro Text", system-ui, sans-serif; margin: 0; }
+  .page { --fg: var(--agterm-foreground, CanvasText); --ok: var(--agterm-color-2, green);
+          --bad: var(--agterm-color-1, red); --acc: var(--agterm-color-4, royalblue);
+          --warn: var(--agterm-color-3, goldenrod); --mag: var(--agterm-color-5, purple);
+          --cyan: var(--agterm-color-6, teal);
+          --card: color-mix(in srgb, var(--fg) 6%, transparent);
+          --line: color-mix(in srgb, var(--fg) 18%, transparent);
+          --dim: color-mix(in srgb, var(--fg) 60%, transparent);
+          max-width: 980px; margin: 0 auto; padding: 28px 22px 60px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 38px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 18px 0 6px; }
+  .sub { color: var(--dim); margin: 0 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  @media (max-width: 720px) { .grid3, .grid2 { grid-template-columns: 1fr; } }
+  .role { border-top: 4px solid var(--acc); }
+  .role.c { border-top-color: var(--mag); } .role.a { border-top-color: var(--acc); } .role.k { border-top-color: var(--ok); }
+  .role .tag { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; }
+  code { font: 13px ui-monospace, Menlo, monospace; background: var(--card); padding: 1px 5px; border-radius: 4px; }
+  pre { font: 13px/1.45 ui-monospace, Menlo, monospace; background: var(--card); border: 1px solid var(--line);
+        border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  .pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); }
+  .pill.done { color: var(--ok); border-color: var(--ok); } .pill.run { color: var(--acc); border-color: var(--acc); }
+  .pill.wait { color: var(--dim); }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { fill: var(--fg); font: 13px -apple-system, system-ui, sans-serif; }
+  svg .small { font-size: 11px; fill: var(--dim); }
+  svg .box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+  svg .arrow { stroke: var(--fg); stroke-width: 1.4; fill: none; opacity: .7; }
+  svg .retry { stroke: var(--bad); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+  svg .good  { stroke: var(--ok); stroke-width: 1.6; fill: none; }
+  .quote { border-left: 3px solid var(--acc); padding: 4px 12px; color: var(--dim); margin: 10px 0; }
+  ul { padding-left: 20px; } li { margin: 3px 0; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>Voyager: бот, который сам пишет себе навыки</h1>
+<p class="sub">Что это за идея, почему она работает и как мы переносим её в idkcraft (эпик vf8e)</p>
+
+<div class="card">
+  <b>Коротко.</b> Voyager (NVIDIA и Caltech, 2023) — агент для Minecraft на GPT-4. Веса модели он не обучает.
+  Вместо этого он <b>пишет программы</b>: на каждую новую задачу LLM пишет JavaScript-функцию для mineflayer
+  (той же библиотеки, на которой сделан наш бот). Код запускается в игре, ошибки и результат возвращаются модели,
+  и она правит код, пока задача не будет выполнена. Удачная функция кладётся в <b>библиотеку навыков</b> и
+  дальше используется как кирпичик для более сложных навыков. Бот «учится» тем, что копит проверенный код.
+</div>
+
+<h2>1. Три роли и библиотека</h2>
+<div class="grid3">
+  <div class="card role c"><div class="tag">Curriculum — «учитель»</div>
+    <h3>Что делать дальше?</h3>
+    Смотрит на инвентарь, биом, список уже освоенного и проваленного и предлагает следующую задачу:
+    «добудь 3 железа», «сделай каменную кирку». Задача должна быть чуть сложнее того, что бот уже умеет.</div>
+  <div class="card role a"><div class="tag">Action agent — «программист»</div>
+    <h3>Как это сделать?</h3>
+    Пишет одну функцию <code>async function mineIron(bot)</code> поверх mineflayer, pathfinder и
+    collectblock. В подсказку ему кладут пять самых похожих навыков из библиотеки, чтобы он их вызывал,
+    а не писал всё с нуля.</div>
+  <div class="card role k"><div class="tag">Critic — «проверяющий»</div>
+    <h3>Получилось?</h3>
+    Ещё один вызов GPT-4 по инвентарю и событиям решает, выполнена ли задача. Если нет, объясняет, чего
+    не хватает. Например: «кирки нет, сначала скрафти палки».</div>
+</div>
+<div class="card"><b>Skill library.</b> Векторная база: описание навыка → его код. Проверенный критиком навык
+  записывается туда навсегда. Сложные навыки вызывают простые (<code>craftIronPickaxe</code> вызывает
+  <code>mineIron</code> и <code>smeltOre</code>), поэтому библиотека растёт как дерево. Отсюда и название:
+  бот уходит всё дальше по технологическому дереву Minecraft.</div>
+
+<h2>2. Цикл обучения</h2>
+<svg viewBox="0 0 940 400" role="img" aria-label="Цикл Voyager">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--agterm-foreground, CanvasText); opacity:.7"/></marker>
+    <marker id="arR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--agterm-color-1, red)"/></marker>
+    <marker id="arG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--agterm-color-2, green)"/></marker>
+  </defs>
+  <!-- curriculum -->
+  <rect class="box" x="20" y="30" width="170" height="70" rx="10" style="stroke: var(--agterm-color-5, purple)"/>
+  <text x="105" y="60" text-anchor="middle">① Curriculum</text>
+  <text x="105" y="80" text-anchor="middle" class="small">«добудь 3 железа»</text>
+  <!-- retrieve -->
+  <rect class="box" x="250" y="30" width="190" height="70" rx="10"/>
+  <text x="345" y="60" text-anchor="middle">② Достать 5 похожих</text>
+  <text x="345" y="80" text-anchor="middle" class="small">навыков из библиотеки</text>
+  <!-- action -->
+  <rect class="box" x="500" y="30" width="190" height="70" rx="10" style="stroke: var(--agterm-color-4, blue)"/>
+  <text x="595" y="60" text-anchor="middle">③ Action agent</text>
+  <text x="595" y="80" text-anchor="middle" class="small">пишет async function(bot)</text>
+  <!-- env -->
+  <rect class="box" x="740" y="30" width="180" height="70" rx="10"/>
+  <text x="830" y="60" text-anchor="middle">④ Запуск в игре</text>
+  <text x="830" y="80" text-anchor="middle" class="small">mineflayer выполняет код</text>
+  <!-- critic -->
+  <rect class="box" x="740" y="200" width="180" height="70" rx="10" style="stroke: var(--agterm-color-2, green)"/>
+  <text x="830" y="230" text-anchor="middle">⑤ Critic</text>
+  <text x="830" y="250" text-anchor="middle" class="small">задача выполнена?</text>
+  <!-- library -->
+  <rect class="box" x="360" y="300" width="230" height="70" rx="10" style="stroke: var(--agterm-color-2, green)"/>
+  <text x="475" y="330" text-anchor="middle">⑥ Skill library +1</text>
+  <text x="475" y="350" text-anchor="middle" class="small">код сохранён навсегда</text>
+
+  <line class="arrow" x1="190" y1="65" x2="246" y2="65" marker-end="url(#ar)"/>
+  <line class="arrow" x1="440" y1="65" x2="496" y2="65" marker-end="url(#ar)"/>
+  <line class="arrow" x1="690" y1="65" x2="736" y2="65" marker-end="url(#ar)"/>
+  <line class="arrow" x1="830" y1="100" x2="830" y2="196" marker-end="url(#ar)"/>
+  <text x="840" y="145" class="small">лог чата, ошибки,</text>
+  <text x="840" y="160" class="small">инвентарь</text>
+  <!-- retry -->
+  <path class="retry" d="M740,235 C640,235 595,190 595,104" marker-end="url(#arR)"/>
+  <text x="560" y="175" class="small" style="fill: var(--agterm-color-1, red)">нет → исправь код</text>
+  <text x="560" y="190" class="small" style="fill: var(--agterm-color-1, red)">(до 4 попыток)</text>
+  <!-- success -->
+  <path class="good" d="M830,270 C830,335 700,335 594,335" marker-end="url(#arG)"/>
+  <text x="700" y="320" class="small" style="fill: var(--agterm-color-2, green)">да</text>
+  <!-- back to curriculum -->
+  <path class="arrow" d="M360,335 C150,335 105,250 105,104" marker-end="url(#ar)"/>
+  <text x="120" y="250" class="small">следующая задача,</text>
+  <text x="120" y="265" class="small">чуть сложнее</text>
+  <text x="120" y="290" class="small" style="fill: var(--agterm-color-1, red)">4 провала → в список</text>
+  <text x="120" y="305" class="small" style="fill: var(--agterm-color-1, red)">«проваленное», позже</text>
+</svg>
+
+<h3>Как выглядит «навык»</h3>
+<pre>// написано моделью, проверено критиком, лежит в библиотеке
+async function craftStonePickaxe(bot) {
+  await mineBlock(bot, "cobblestone", 3);      // ← навык из библиотеки
+  await craftItem(bot, "stick", 1);            // ← навык из библиотеки
+  const table = await placeCraftingTable(bot); // ← навык из библиотеки
+  await craftItem(bot, "stone_pickaxe", 1, table);
+  bot.chat("stone pickaxe ready");
+}</pre>
+<p>Именно в этом сила идеи. Действие записано кодом, а не нажатиями клавиш, поэтому его можно переиспользовать,
+комбинировать и читать. Вызовы проверенных навыков выглядят у модели как новые слова языка.</p>
+
+<h2>3. Что показали авторы</h2>
+<div class="grid2">
+  <div class="card"><h3>Результаты</h3>
+    <ul>
+      <li>В 3,3 раза больше уникальных предметов, чем у прежних LLM-агентов.</li>
+      <li>До каменных и железных инструментов в 9–15 раз быстрее.</li>
+      <li>Единственный из сравнённых агентов, который добрался до алмазных инструментов.</li>
+      <li>Библиотека переносится в новый мир, и там он решает новые задачи без повторного обучения.</li>
+    </ul></div>
+  <div class="card"><h3>Абляции: что важно</h3>
+    <ul>
+      <li><b>Без критика</b> результат падает сильнее всего. Модель уверенно врёт себе, что задача выполнена.</li>
+      <li><b>Без библиотеки</b> прогресс выходит на плато: каждое умение каждый раз пишется заново.</li>
+      <li><b>Без обратной связи от среды</b> (ошибки, лог) код не чинится.</li>
+      <li><b>GPT-3.5 вместо GPT-4</b> не справляется: нужна сильная модель.</li>
+    </ul></div>
+</div>
+
+<h2>4. Где Voyager слаб и почему нельзя взять как есть</h2>
+<table>
+  <tr><th>Проблема</th><th>У Voyager</th><th>Почему важно нам</th></tr>
+  <tr><td class="bad">Цена</td><td>GPT-4 на каждую попытку, никакого лимита (160 итераций × 4 попытки)</td><td>Нужен потолок токенов в час — уже сделали (vf8e.5)</td></tr>
+  <tr><td class="bad">Задержка</td><td>Минуты на шаг</td><td>vhlb.1 уже показал: вызовы модели на каждом тике пользы не дают. В живом тике модели не будет</td></tr>
+  <tr><td class="bad">Безопасность</td><td>Код выполняется прямо в процессе бота без песочницы; мирный режим; других игроков нет</td><td>На проде играют дети, стоят постройки владельца, есть защищённые блоки</td></tr>
+  <tr><td class="warn">Проверка</td><td>Критик — тоже LLM, угадывает по инвентарю</td><td>У нас есть настоящие стенды (rig) с вердиктами — проверка куда сильнее</td></tr>
+  <tr><td class="warn">Цель</td><td>Куррикулум гонится за новизной: новые предметы</td><td>Наша цель — достроить замок без присмотра, а не собрать коллекцию</td></tr>
+  <tr><td class="warn">Заброшен</td><td>Последний коммит 2023-07, MC 1.19, только OpenAI</td><td>С нашим миром на Paper 26.1 не запустится. Переносим идею на наш стек, а не сам код</td></tr>
+</table>
+
+<h2>5. Voyager поверх idkcraft: что уже есть</h2>
+<table>
+  <tr><th>Часть Voyager</th><th>Что у нас уже есть</th><th>Чего не хватало</th></tr>
+  <tr><td>mineflayer + pathfinder</td><td class="ok">Те же примитивы, плюс тело Baritone в v2 (<code>#goto</code>, <code>#mine</code>, <code>#build</code>)</td><td>—</td></tr>
+  <tr><td>Skill library</td><td class="ok"><code>BEHAVIOURS</code> (~40 поведений) и <code>RECOVER_MENU</code>, но всё написано руками</td><td>Хранилище навыков, которые пишет модель, и загрузчик → <b>vf8e.2</b></td></tr>
+  <tr><td>Поиск навыков</td><td class="ok">Меню целей в goal.js и <code>plan()</code> в точке застревания</td><td>Меню читает описания навыков. Навыков ≤ 50, векторная база не нужна</td></tr>
+  <tr><td>Action agent</td><td class="ok">LLM-планировщик через Anthropic Messages API, ключ в stash</td><td>Цикл «написал код → запустил → увидел ошибку → исправил» → <b>vf8e.3</b></td></tr>
+  <tr><td>Critic</td><td class="ok">Стенды: stuck-run, castle-rig, work-rig, ночь, component-baseline</td><td>Быстрый стенд на одну попытку (~2–3 мин) → <b>vf8e.1</b> ✓</td></tr>
+  <tr><td>Песочница</td><td class="bad">Нет</td><td><code>node:vm</code> и фасад, который пропускает только разрешённое → <b>vf8e.2</b></td></tr>
+  <tr><td>Бюджет</td><td class="bad">Нет</td><td>Потолок токенов в час и счётчики → <b>vf8e.5</b> ✓</td></tr>
+  <tr><td>Curriculum</td><td>Приказы только зашитые: castle / house / flat / bring</td><td>Свободный приказ → план из готовых шагов → <b>vf8e.6</b></td></tr>
+</table>
+
+<h2>6. Наш цикл: учимся офлайн, на проде — только проверенное</h2>
+<p>Главное отличие от Voyager: <b>учёба отделена от прода</b>. Модель пишет и чинит навыки только на ноутбучном
+стенде. В игру с детьми попадает лишь то, что прошло стенд, ревью и обычный PR.</p>
+<svg viewBox="0 0 940 330" role="img" aria-label="Цикл idkcraft">
+  <defs>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--agterm-foreground, CanvasText); opacity:.7"/></marker>
+    <marker id="bR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--agterm-color-1, red)"/></marker>
+  </defs>
+  <!-- offline zone -->
+  <rect x="10" y="10" width="560" height="310" rx="14" style="fill:none; stroke: var(--agterm-color-4, blue); stroke-dasharray: 6 5; opacity:.8"/>
+  <text x="24" y="32" style="fill: var(--agterm-color-4, blue)">Ноутбук, офлайн (никогда не прод)</text>
+  <!-- prod zone -->
+  <rect x="600" y="10" width="330" height="310" rx="14" style="fill:none; stroke: var(--agterm-color-2, green); stroke-dasharray: 6 5; opacity:.8"/>
+  <text x="614" y="32" style="fill: var(--agterm-color-2, green)">Путь в прод (как любой PR)</text>
+
+  <rect class="box" x="30" y="55" width="200" height="66" rx="10"/>
+  <text x="130" y="82" text-anchor="middle">Застревание / сабботаж</text>
+  <text x="130" y="101" text-anchor="middle" class="small">напр. water_up, shelter dig-in</text>
+
+  <rect class="box" x="330" y="55" width="220" height="66" rx="10" style="stroke: var(--agterm-color-4, blue)"/>
+  <text x="440" y="82" text-anchor="middle">LLM пишет bot/skills/x.js</text>
+  <text x="440" y="101" text-anchor="middle" class="small">Messages API, лимит токенов</text>
+
+  <rect class="box" x="330" y="200" width="220" height="70" rx="10" style="stroke: var(--agterm-color-2, green)"/>
+  <text x="440" y="228" text-anchor="middle">Микро-стенд (vf8e.1)</text>
+  <text x="440" y="247" text-anchor="middle" class="small">1 сценарий → вердикт, ~2–3 мин</text>
+
+  <rect class="box" x="30" y="200" width="200" height="70" rx="10"/>
+  <text x="130" y="228" text-anchor="middle">Песочница node:vm</text>
+  <text x="130" y="247" text-anchor="middle" class="small">фасад: не бросать вещи, canBreak</text>
+
+  <line class="arrow" x1="230" y1="88" x2="326" y2="88" marker-end="url(#b)"/>
+  <line class="arrow" x1="440" y1="121" x2="440" y2="196" marker-end="url(#b)"/>
+  <text x="450" y="160" class="small">запуск</text>
+  <path class="retry" d="M330,235 C280,235 280,160 330,110" marker-end="url(#bR)" style="display:none"/>
+  <path class="retry" d="M550,235 C600,180 600,130 552,100" marker-end="url(#bR)"/>
+  <text x="472" y="180" class="small" style="fill: var(--agterm-color-1, red)">красный: ошибка</text>
+  <text x="472" y="194" class="small" style="fill: var(--agterm-color-1, red)">+ лог → исправь</text>
+  <line class="arrow" x1="330" y1="235" x2="234" y2="235" marker-end="url(#b)"/>
+  <text x="250" y="226" class="small">внутри</text>
+
+  <!-- promotion -->
+  <rect class="box" x="620" y="55" width="290" height="58" rx="10"/>
+  <text x="765" y="80" text-anchor="middle">Зелёный → авто-PR (vf8e.4)</text>
+  <text x="765" y="98" text-anchor="middle" class="small">навык + вердикты + полный stuck-baseline</text>
+  <rect class="box" x="620" y="135" width="290" height="50" rx="10"/>
+  <text x="765" y="165" text-anchor="middle">revmux-ревью → мерж → образ</text>
+  <rect class="box" x="620" y="207" width="290" height="58" rx="10" style="stroke: var(--agterm-color-2, green)"/>
+  <text x="765" y="232" text-anchor="middle">Прод: только промоутнутые</text>
+  <text x="765" y="250" text-anchor="middle" class="small">и только при BOT_SKILLS=1</text>
+  <path class="arrow" d="M550,235 C575,235 575,84 616,84" marker-end="url(#b)" style="stroke: var(--agterm-color-2, green)"/>
+  <text x="575" y="300" class="small" style="fill: var(--agterm-color-2, green)">зелёный</text>
+  <line class="arrow" x1="765" y1="113" x2="765" y2="131" marker-end="url(#b)"/>
+  <line class="arrow" x1="765" y1="185" x2="765" y2="203" marker-end="url(#b)"/>
+  <text x="625" y="295" class="small">выкл по умолчанию: текущий бот не меняется</text>
+</svg>
+
+<h3>И вторая половина — приказы словами (vf8e.6)</h3>
+<svg viewBox="0 0 940 120" role="img" aria-label="LLM orders">
+  <defs><marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--agterm-foreground, CanvasText); opacity:.7"/></marker></defs>
+  <rect class="box" x="10" y="25" width="210" height="70" rx="10"/>
+  <text x="115" y="54" text-anchor="middle">Владелец в чате:</text>
+  <text x="115" y="74" text-anchor="middle" class="small">«построй мост к деревне»</text>
+  <rect class="box" x="260" y="25" width="200" height="70" rx="10" style="stroke: var(--agterm-color-5, purple)"/>
+  <text x="360" y="54" text-anchor="middle">LLM = curriculum</text>
+  <text x="360" y="74" text-anchor="middle" class="small">BOT_LLM_ORDERS=1</text>
+  <rect class="box" x="500" y="25" width="200" height="70" rx="10"/>
+  <text x="600" y="50" text-anchor="middle">План из готового:</text>
+  <text x="600" y="68" text-anchor="middle" class="small">шаги + навыки +</text>
+  <text x="600" y="83" text-anchor="middle" class="small">команды Baritone</text>
+  <rect class="box" x="740" y="25" width="190" height="70" rx="10" style="stroke: var(--agterm-color-2, green)"/>
+  <text x="835" y="54" text-anchor="middle">Task executive</text>
+  <text x="835" y="74" text-anchor="middle" class="small">исполняет, следит за ходом</text>
+  <line class="arrow" x1="220" y1="60" x2="256" y2="60" marker-end="url(#c)"/>
+  <line class="arrow" x1="460" y1="60" x2="496" y2="60" marker-end="url(#c)"/>
+  <line class="arrow" x1="700" y1="60" x2="736" y2="60" marker-end="url(#c)"/>
+</svg>
+<p>Модель не пишет здесь код и не сидит в тике. Один раз на приказ она раскладывает свободную фразу
+на последовательность того, что бот уже умеет. Исполняет всё обычный проверенный механизм.</p>
+
+<h2>7. Где мы сейчас</h2>
+<table>
+  <tr><th>Бид</th><th>Что</th><th>Статус</th></tr>
+  <tr><td>vf8e.1</td><td>Микро-стенд «keep mode»: сервер не перезапускается, одна попытка ≈ 2–3 мин, сабботаж-сценарии</td><td><span class="pill done">смержен #583</span></td></tr>
+  <tr><td>vf8e.5</td><td>Защита: лимит LLM-токенов в час, счётчики, kill-switch</td><td><span class="pill done">смержен #585</span></td></tr>
+  <tr><td>vf8e.2</td><td>Рантайм навыков: <code>bot/skills/*.js</code> в песочнице <code>node:vm</code> за флагом <code>BOT_SKILLS=1</code></td><td><span class="pill run">в работе</span></td></tr>
+  <tr><td>vf8e.6</td><td>Приказы словами → план из готовых шагов, A/B против FSM</td><td><span class="pill run">в работе</span></td></tr>
+  <tr><td>vf8e.3</td><td>Спайк: модель заново выводит 3 примитива (water_up, цепочка dig_step, shelter dig-in), с цифрами: попытки, время, токены</td><td><span class="pill wait">после .2</span></td></tr>
+  <tr><td>vf8e.4</td><td>Промоушн: зелёный навык превращается в PR</td><td><span class="pill wait">после .3</span></td></tr>
+</table>
+
+<div class="card"><b>Контрольная точка.</b> vf8e.3 даёт главную цифру: сколько стоит навык, который модель
+пишет сама, против нашего нынешнего пути «бид → разработчик → ревью → стенд → PR» для такого же фикса.
+Если выходит дешевле и не хуже, переходим к промоушну. Если нет, мы потратили немного и знаем почему.</div>
+
+<div class="card"><b>Твои решения от 18.10:</b> цикл крутится на нашем Messages-API-коде с ключом из stash,
+а не через <code>claude -p</code>. Навыки разрешены и для восстановления, и для шагов цели. Учёба идёт на
+ноутбуке. Бюджет: 3 задачи × до 6 попыток с отчётом по токенам.</div>
+
+<p class="quote">«Что работает — продолжает работать.» Всё новое стоит за флагами, выключенными по умолчанию:
+текущий бот байт-в-байт тот же, пока флаг не включён.</p>
+
+</div>
+</body>
+</html>

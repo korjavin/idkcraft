@@ -62,6 +62,7 @@ Because Nintendo Switch restricts direct IP entry and disables LAN broadcast dis
 - `docker-compose.yml`: the stack: `mc` (Paper + Geyser), `bot`, `baritone`, `bot2`, `body2`, `swarm1`..`swarm32`.
 - `bot/`: bot runtime (`bot/src`), tests, and rigs/tools (see [bot/tools/README.md](bot/tools/README.md)).
 - `baritone/`: Baritone worker/pilot image.
+- `docs/voyager.html`: explainer page for the Voyager-style skill-learning loop (epic vf8e), in Russian; open in a browser.
 - `.github/workflows/deploy.yml`: GitOps workflow (see Deploy).
 
 Environment variables are listed in [CLAUDE.md](CLAUDE.md) (Shared Contract) and `.env.example`.
