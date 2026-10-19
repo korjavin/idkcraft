@@ -104,9 +104,13 @@ const BLUEPRINT_V2 = (() => {
   // dip stranded bed placement (rig-proven: air under A-foot); the door
   // hangs on the block below like a bed, so its dip strands it the same
   // way (rig-proven: air under (3,0) refused the door 3x). Bed cells
-  // pinned to beds.cellsOf.
+  // pinned to beds.cellsOf. bed: the z591 sill rule (idkcraft-8542) — on
+  // v2 natural ground under a bed half is swapped for a plank while no bed
+  // stands there (a bed pops when v2 mines its dirt from below); a standing
+  // bed keeps its floor (never popped for it), and isComplete keeps the old
+  // solid-ground rule (best effort: a re-opened house never waits on it).
   for (const [dx, dz] of [[1, 4], [2, 4], [4, 4], [5, 4]]) {
-    plan.push({ dx, dy: -1, dz, kind: 'fill' })
+    plan.push({ dx, dy: -1, dz, kind: 'fill', bed: true })
   }
   // The door's sill (idkcraft-z591): on the v2 body natural ground never
   // counts as done here. Baritone break bans are names only; v2 hard-bans
@@ -315,14 +319,19 @@ function cellLoaded(bot, home, cell) {
   }
 }
 
+function fillGround(bot, home, cell, name) {
+  return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
+}
+
 function cellDone(bot, home, cell) {
   const name = blockNameAt(bot, cellAbs(home, cell))
   if (name == null) return false
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
   if (cell.kind === 'fill') {
-    if (cell.sill && process.env.BOT_BODY === 'baritone' && NATURAL_SOLID.has(name) && !SILL_KEEP.has(name)) return false
-    return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
+    if ((cell.sill || cell.bed) && process.env.BOT_BODY === 'baritone' && NATURAL_SOLID.has(name) && !SILL_KEEP.has(name) &&
+      !(cell.bed && String(blockNameAt(bot, cellAbs(home, cell).offset(0, 1, 0))).endsWith('_bed'))) return false
+    return fillGround(bot, home, cell, name)
   }
   // Clear (rw4.19): only natural ground with collision is a leftover; air,
   // flora and anything we put there (beds, chest, furnace, table) is done.
@@ -350,7 +359,7 @@ function isComplete(bot, home) {
     for (const cell of plan) {
       if (cell.kind === 'clear' || cell.floor) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
-      if (!cellDone(bot, home, cell)) return false
+      if (cell.bed ? !fillGround(bot, home, cell, blockNameAt(bot, cellAbs(home, cell))) : !cellDone(bot, home, cell)) return false
     }
     return true
   } catch (_) { return false }
@@ -424,14 +433,15 @@ function clearOwed(bot, home, skipped) {
 // revalidation re-opens it so build refills it before any walk drops
 // through, and the interior walks fail soft (entrance-holed) meanwhile. On
 // v2 the door sill (z591) re-opens too: it is placed from the doorstep,
-// outside the door. Bed floor cells never re-open: the beds stand on them
-// and the builder batch cannot reach behind the door. Skips do not count
+// outside the door. On v2 an empty bed slot's floor (8542) re-opens too, or
+// the index.js flip ends the build before the per-cell swap reaches it (gallery
+// rig); a standing bed reads done, so it is never popped. Skips do not count
 // (the clearOwed rule: a refused fill waits for the 1h skip retry).
 function holeOwed(bot, home, skipped) {
   try {
     if (!home || !home.site || home.v !== 2) return false
     const skip = new Set(Array.isArray(skipped) ? skipped : [])
-    return blueprintFor(home).some((c, i) => c.kind === 'fill' && (c.dz === -1 || c.floor || (c.sill && process.env.BOT_BODY === 'baritone')) && !skip.has(i) &&
+    return blueprintFor(home).some((c, i) => c.kind === 'fill' && (c.dz === -1 || c.floor || ((c.sill || c.bed) && process.env.BOT_BODY === 'baritone')) && !skip.has(i) &&
       cellLoaded(bot, home, c) && !cellDone(bot, home, c))
   } catch (_) { return false }
 }
@@ -706,6 +716,9 @@ function builderCells(bot, home, skipped) {
       if (!BUILDER_KINDS.has(cell.kind) || cell.floor || skip.has(i)) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
       if (!cellLoaded(bot, home, cell) || cellDone(bot, home, cell)) continue
+      // 8542: BuilderProcess never swapped bed-floor dirt (gallery rig: 3x
+      // build-stall on both cells); the per-cell path digs it, the batch fills the hole.
+      if (cell.bed && NATURAL_SOLID.has(blockNameAt(bot, cellAbs(home, cell)))) continue
       cells.push({ idx: i, dx: cell.dx, dy: cell.dy, dz: cell.dz, block: item.name })
     }
     if (cells.length === 0) return null
@@ -1183,7 +1196,7 @@ function build(bot, ctx, target, state) {
           // cell above it — GoalPlaceBlock's bridge side pick aims at a wall
           // column, and sight is not needed (place.once checks reach only,
           // baritone/bridge/PROTOCOL.md dig/place table).
-          : cell.floor ? new goals.GoalNear(p.x, p.y + 1, p.z, 2)
+          : (cell.floor || cell.bed) ? new goals.GoalNear(p.x, p.y + 1, p.z, 2) // 8542: bed floor under the roof too
           : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
     } catch (_) { /* retry next tick */ }
     return
@@ -1284,7 +1297,7 @@ function build(bot, ctx, target, state) {
       // rule is checked without the home (digClear precedent).
       // ponytail: natural names only; Baritone scaffolds cobble when it
       // holds no dirt, and foreign cobble here still refuses — widen if seen.
-      const ground = cell.kind === 'planks' && NATURAL_SOLID.has(occupier)
+      const ground = (cell.kind === 'planks' || cell.bed) && NATURAL_SOLID.has(occupier) // 8542: bed floor too
       if (occupier != null && wantItem(cell)(occupier)) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
       } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell) ||
@@ -1364,6 +1377,7 @@ module.exports.houseTableOwed = houseTableOwed
 module.exports.houseTableAt = houseTableAt
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
+module.exports.SILL_KEEP = SILL_KEEP
 module.exports.cellLoaded = cellLoaded
 module.exports.builderCells = builderCells
 module.exports.builderBatch = builderBatch

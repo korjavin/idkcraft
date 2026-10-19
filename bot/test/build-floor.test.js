@@ -87,10 +87,10 @@ describe('1c4 floor cells sit under the jr2.2 bed halves, table still first', ()
   it('plan[0] is the table, plan[1..5] the dy -1 bedroom floor', () => {
     assert.deepEqual(BLUEPRINT_V2[0], { dx: 5, dy: 0, dz: 1, kind: 'table' })
     assert.deepEqual(BLUEPRINT_V2.slice(1, 6), [
-      { dx: 1, dy: -1, dz: 4, kind: 'fill' },
-      { dx: 2, dy: -1, dz: 4, kind: 'fill' },
-      { dx: 4, dy: -1, dz: 4, kind: 'fill' },
-      { dx: 5, dy: -1, dz: 4, kind: 'fill' },
+      { dx: 1, dy: -1, dz: 4, kind: 'fill', bed: true },
+      { dx: 2, dy: -1, dz: 4, kind: 'fill', bed: true },
+      { dx: 4, dy: -1, dz: 4, kind: 'fill', bed: true },
+      { dx: 5, dy: -1, dz: 4, kind: 'fill', bed: true },
       { dx: 3, dy: -1, dz: 0, kind: 'fill', sill: true },
     ])
   })
@@ -201,6 +201,39 @@ describe('1c4 build lays the floor before the walls', () => {
     assert.equal(world.get(s.x + 1, s.y - 1, s.z + 4), 'oak_planks')
     assert.equal(ctx.buildFails, 0)
     assert.deepEqual(ctx.buildSkip, [])
+  })
+
+  it('8542 v2: dirt under an empty bed slot is dug and planked per-cell, never batched', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const world = makeWorld()
+      const bot = mockBot(world, { items: [{ name: 'oak_planks', count: 40 }], at: pos(9, 64, 4) }) // beside, never on it (selftrap)
+      bot.buildCells = () => { throw new Error('dirt bed floor must not reach the builder') }
+      let attempts = 0
+      bot.placeBlock = async (ref, face) => {
+        attempts++
+        if (attempts === 1) throw new Error('occupied') // the dirt is still there
+        const rp = (ref && ref.position) || ref
+        world.set(rp.x + face.x, rp.y + face.y, rp.z + face.z, bot.held)
+      }
+      const home = goal.siteFor(bot, pos(0, 64, 0))
+      const s = home.site
+      paintHouse(world, home)
+      world.set(s.x + 1, s.y - 1, s.z + 4, 'dirt') // A-foot slot, no bed above
+      const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+      assert.equal(build.nextCellIdx(bot, home, []), 1)
+      build(bot, ctx, null, null) // approach
+      assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear', 'stands in the bedroom like a floor hole (revmux 03), not GoalPlaceBlock')
+      build(bot, ctx, null, null) // refuse -> dig -> retry lands
+      await settle()
+      assert.deepEqual(bot.calls.digs, ['dirt'])
+      assert.equal(world.get(s.x + 1, s.y - 1, s.z + 4), 'oak_planks')
+      assert.deepEqual(ctx.buildSkip, [])
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
   })
 
   it('all five dips patch and the house completes with no skips', async () => {

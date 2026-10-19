@@ -1001,6 +1001,9 @@ function seedCastleCells(st) {
   }
   const door = cells.find((c) => c.kind === 'door')
   out.push({ x: door.x, y: door.y + 1, z: door.z, kind: 'extra', block: `oak_door[half=upper,facing=${f}]` })
+  // lqgo: the door sill as v2 lays it (planks), so the seed is not a swap leg;
+  // CASTLE_SILL=dirt keeps the pre-lqgo natural sill (the swap leg).
+  out.push({ x: door.x, y: door.y - 1, z: door.z, kind: 'extra', block: process.env.CASTLE_SILL === 'dirt' ? 'dirt' : 'oak_planks' })
   const home = residence.castleHome(st)
   for (const b of residence.CASTLE.beds(home)) {
     out.push({ x: b.foot.x, y: b.foot.y, z: b.foot.z, kind: 'extra', block: `red_bed[part=foot,facing=${FACING[b.facing]}]` })

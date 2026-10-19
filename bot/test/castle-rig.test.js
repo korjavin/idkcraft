@@ -889,14 +889,14 @@ describe('castle-replay.js seeded castle (idkcraft-g0z.33)', () => {
     const plan = castle.absPlan(st.site, 0, 2).cells
     const placed = cells.filter((c) => castle.isPlaceTarget(c.kind) && c.kind !== 'extra')
     assert.equal(placed.length, 1722)
-    assert.equal(cells.length, plan.length + 6)
+    assert.equal(cells.length, plan.length + 7) // + the lqgo planks sill under the gate
     // Clear cells first, so no air setblock lands on a placed block.
     const firstPlace = cells.findIndex((c) => c.kind !== 'air' && c.kind !== 'dig')
     assert.ok(cells.slice(firstPlace).every((c) => c.kind !== 'air' && c.kind !== 'dig'))
     // Every painted block reads back as its plan kind.
     for (const c of placed) assert.ok(seedMatches(c, c.block.split('[')[0]), `${c.kind} ${c.block}`)
     const extra = cells.filter((c) => c.kind === 'extra').map((c) => c.block)
-    assert.deepEqual(extra.map((b) => b.split('[')[0]), ['oak_door', 'red_bed', 'red_bed', 'red_bed', 'red_bed', 'crafting_table'])
+    assert.deepEqual(extra.map((b) => b.split('[')[0]), ['oak_door', 'oak_planks', 'red_bed', 'red_bed', 'red_bed', 'red_bed', 'crafting_table'])
     assert.ok(seedMatches({ kind: 'extra', block: 'red_bed[part=foot,facing=south]' }, 'red_bed'))
     assert.ok(!seedMatches({ kind: 'extra', block: 'crafting_table' }, 'air'))
   })

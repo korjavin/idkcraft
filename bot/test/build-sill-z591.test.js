@@ -62,9 +62,9 @@ describe('z591 v2 door sill', () => {
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), false)
     assert.equal(build.isComplete(bot, h), false)
     assert.equal(build.holeOwed(bot, h, []), true)
-    assert.equal(build.holeOwed(bot, h, [SILL]), false, 'a skipped sill never re-opens')
+    assert.equal(build.holeOwed(bot, h, [SILL, 1, 2, 3, 4]), false, 'a skipped sill never re-opens (bed floor skipped too, 8542)')
     const batch = build.builderCells(bot, h, [])
-    assert.deepEqual(batch.cells.map((c) => c.idx), [SILL])
+    assert.deepEqual(batch.cells.map((c) => c.idx), [SILL], 'the sill (dirt bed floor goes per-cell, 8542)')
     assert.equal(batch.cells[0].block, 'oak_planks')
     world.set(3, 63, 0, 'stone')
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), false, 'any natural ground')
@@ -75,9 +75,9 @@ describe('z591 v2 door sill', () => {
     world.set(3, 63, 0, 'spruce_planks')
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), true, 'any planks variant')
     assert.equal(build.isComplete(bot, h), true)
-    assert.equal(build.holeOwed(bot, h, []), false)
-    // the other floor cells keep the solid-ground rule
-    assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[1]), true)
+    assert.equal(build.holeOwed(bot, h, [1, 2, 3, 4]), false, 'the planked sill owes nothing (dirt bed floor is 8542, skipped here)')
+    // the interior floor keeps the solid-ground rule
+    assert.equal(build.cellDone(bot, h, BLUEPRINT_V2.find((c) => c.floor)), true)
   })
 
   it('v1: a dirt sill stays done, nothing re-opens', () => {
@@ -89,5 +89,49 @@ describe('z591 v2 door sill', () => {
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), true)
     assert.equal(build.isComplete(bot, h), true)
     assert.equal(build.holeOwed(bot, h, []), false)
+  })
+})
+
+// idkcraft-8542: the bed floor gets the sill rule while no bed stands on it.
+describe('8542 v2 bed floor', () => {
+  const BED = [1, 2, 3, 4]
+  it('the four bed floor cells, indices unchanged', () => {
+    assert.deepEqual(BED.map((i) => BLUEPRINT_V2[i]), [[1, 4], [2, 4], [4, 4], [5, 4]].map(([dx, dz]) => ({ dx, dy: -1, dz, kind: 'fill', bed: true })))
+    assert.equal(BLUEPRINT_V2.filter((c) => c.bed).length, 4)
+  })
+
+  it('v2: dirt with no bed above is undone and dug per-cell; a standing bed keeps it; holeOwed holds it, isComplete does not', () => {
+    process.env.BOT_BODY = 'baritone'
+    const world = makeWorld()
+    paint(world)
+    world.set(3, 63, 0, 'oak_planks') // the door sill laid
+    const bot = mockBot(world)
+    const h = home()
+    for (const i of BED) assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[i]), false, `bed floor ${i}`)
+    // BuilderProcess never swapped this dirt (gallery rig: build-stall x3), so
+    // the batch skips it and the per-cell place path digs + lays it.
+    assert.equal(build.builderCells(bot, h, []), null, 'dirt bed floor never batched')
+    assert.equal(BED.includes(build.nextCellIdx(bot, h, [])), true, 'a building house swaps it per-cell')
+    assert.equal(build.isComplete(bot, h), true, 'best effort: the old solid-ground rule')
+    assert.equal(build.holeOwed(bot, h, []), true, 'holds the house open until swapped (else the index.js flip ends build first)')
+    assert.equal(build.holeOwed(bot, h, BED), false, 'skipped bed floor never re-opens')
+    world.set(1, 64, 4, 'red_bed')
+    assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[1]), true, 'a standing bed is never popped for its floor')
+    world.set(2, 63, 4, 'oak_planks')
+    world.set(4, 63, 4, 'granite')
+    assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[2]), true)
+    assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[3]), true, 'laid rock stays')
+    world.set(5, 63, 4, 'air')
+    assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[4]), false)
+    assert.deepEqual(build.builderCells(bot, h, []).cells.map((c) => c.idx), [4], 'a dug (air) bed floor is batched')
+    assert.equal(build.isComplete(bot, h), false, 'a hole still holds it')
+  })
+
+  it('v1: dirt bed floor stays done', () => {
+    delete process.env.BOT_BODY
+    const world = makeWorld()
+    paint(world)
+    const bot = mockBot(world)
+    for (const i of BED) assert.equal(build.cellDone(bot, home(), BLUEPRINT_V2[i]), true)
   })
 })
