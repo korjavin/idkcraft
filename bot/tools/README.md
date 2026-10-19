@@ -675,6 +675,40 @@ Notes on the gates:
 - **Decision rule.** Met: 2/3 green within 6 attempts, and no regression on the three gates.
   vf8e.4 and vf8e.6 proceed.
 
+## Skill promotion (`skill-promote.js`, idkcraft-vf8e.4)
+
+A green skill reaches prod only as a generated PR with the same gates as a hand movement PR.
+
+```sh
+# 1. fresh verdict on this tree and body, no model call (the file is attempt 1)
+REPLAY_BODY=baritone SKILL_LOOP_VERIFY=<work>/skills/<name>.js SKILL_LOOP_DIR=<new dir> \
+  node bot/tools/skill-loop.js <scenario> 1
+# 2. promote one or more verified skills (from a committed tree)
+REPLAY_BODY=baritone node bot/tools/skill-promote.js <bead> <new dir>/skills/<name>.js...
+```
+
+`skill-promote.js`:
+
+1. Refuses unless `<dir>/result.json` is green for that skill, with a clean `sha` and the
+   `body` the gates run on (`REPLAY_BODY`), and the green attempt's log shows
+   `skill run skill=<name> ... outcome=done`. A green run that never needed the skill proves
+   nothing (v2 on S6-LEAD never wedges, so `gen_brow_step` stays unpromoted).
+2. Copies the skill to `bot/skills/<name>.js` with `verifiedBy {scenario, verdict, sha, body}`
+   and `bead` in the header.
+3. Runs the gates with the copies loaded from `bot/skills` (`BOT_SKILLS=1`, no `SKILLS_DIR`):
+   the full `stuck-run.sh` on the caller's `REPLAY_BODY` (exit != 0 = refused, no PR), then
+   `CASTLE_BODY=baritone CASTLE_PADSPOT=250,350` (the baseline's setup) with one `lay` leg and
+   three `mine` legs, quoted with the mean vs `component-baseline.json` (more than 15% down =
+   `REGRESSION`; review judges). A skills-loaded leg is never cached as master's before
+   (`castle-before.js` gate knobs). `RIG_LOCK_WAIT`/`CASTLE_LOCK_WAIT` default to 7200.
+4. Branch `<bead>-skill-<names>`, commit, push, draft PR labelled `generated-skill`. The body
+   carries the micro-rig verdicts, the stuck-run table and exit, the two component lines and the
+   branch's commit subjects, local paths scrubbed.
+
+The tool takes about the stuck-run plus four 10-minute component rigs. A refusal leaves the
+copies in `bot/skills/` to inspect. Prod switches (`BOT_SKILLS`/`BOT2_SKILLS`, chat
+`skills off`, the 3-fail auto-ban): `bot/skills/README.md`.
+
 ## Curriculum (`curriculum.js`, idkcraft-vf8e.9)
 
 What the skill loop learns next is prod's failure log ranked by what the owner sees, not
