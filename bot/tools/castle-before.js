@@ -68,6 +68,8 @@ const GATE_DEFAULTS = {
   CASTLE_BURY: ['', '0'], CASTLE_PIT: ['', '0'], CASTLE_SAND: ['', '0'], CASTLE_FAR: ['', '0'],
   CASTLE_PAD: [''], GOAL_WATCHDOG_MS: [''], GOAL_COMMIT_MS: [''], CASTLE_BASELINE_RATE: [''],
   CASTLE_INIT_MEMORY: [''], CASTLE_MAX_MEMORY: [''], BARITONE_MEM: [''], CASTLE_VIEW_DISTANCE: [''], CASTLE_SIM_DISTANCE: [''],
+  // vf8e.4: a skills-loaded leg (skill-promote.js) is never master's before.
+  BOT_SKILLS: ['', '0'], SKILLS_DIR: [''],
 }
 const COMPONENT_KIT = { lay: 'lay', mine: 'pick' }
 

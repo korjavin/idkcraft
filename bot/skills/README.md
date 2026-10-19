@@ -37,7 +37,19 @@ function run(bot, st) {
 | `body` | no | `any` (default), `mineflayer` or `baritone`; a skill for the other body is skipped at load |
 | `before` | no | step only: the hand step this skill goes ahead of in `STEP_ORDER` (default `rest`). Must sit after `shelter`; a higher or unknown name falls back to `rest` with a log line, so the night safety steps (`stay`, `gohome`, `shelter`) always come first |
 | `verb` | no | chat verb (`stuck, trying <verb>` / `next: <verb>`); default: the name with spaces |
-| `verifiedBy`, `bead` | no | provenance; promotion (vf8e.4) fills them |
+| `verifiedBy`, `bead` | promoted: yes | provenance `{scenario, verdict, sha, body}` + the promotion bead; `tools/skill-promote.js` fills them and `npm test` fails on a `bot/skills/` file without them |
+
+## Promotion and prod switches (vf8e.4)
+
+- A skill gets here only through `node tools/skill-promote.js <bead> <work-dir>/skills/<name>.js...`
+  (manual: `bot/tools/README.md`): micro-rig verdict, full stuck-run and the v2 component gates
+  in a generated PR labelled `generated-skill`, reviewed like a hand movement PR.
+- Prod: `BOT_SKILLS=1` on `bot`, `BOT2_SKILLS=1` on `bot2` (compose maps it to its `BOT_SKILLS`).
+- Chat `skills` reports `on n=<k>` (`banned=<names>` once any is), `skills off` takes every
+  skill off both menus until restart.
+- Auto-ban: a skill that ends non-done (`failed:*`, `skill-timeout`, `skill-error`) 3 times in
+  one process is off the menus until restart, logged `skill <name> banned fails=3 last=<outcome>`.
+- Rollback = flag off.
 
 No `require`, no `module.exports`: the file is a plain script that defines two
 top-level functions.

@@ -36,6 +36,10 @@ const MODEL = process.env.SKILL_LOOP_MODEL || 'claude-opus-5-5'
 // (first live attempt: answer cut at max_tokens after 164 s).
 const EFFORT = process.env.SKILL_LOOP_EFFORT || 'medium'
 const MAX_TOKENS = 32000
+// vf8e.4: SKILL_LOOP_VERIFY=<skill.js> re-verifies a written skill — no
+// model call, the file is attempt 1 — on this tree and REPLAY_BODY, for a
+// fresh result.json (sha, body) that skill-promote.js reads.
+const VERIFY = process.env.SKILL_LOOP_VERIFY || ''
 // $ per 1M tokens in/out (claude-api skill table, 2026-10-06).
 const PRICE = { 'claude-opus-5-5': [4, 20], 'claude-sonnet-5-5': [2, 10], 'claude-haiku-5-5': [0.1, 0.5] }
 
@@ -155,10 +159,12 @@ async function main() {
   const base = JSON.parse(fs.readFileSync(path.join(__dirname, 'stuck-spots.json'), 'utf8')).find((s) => s.name === sc.spot)
   if (!base) { console.log(`spot ${sc.spot} not in stuck-spots.json`); return 2 }
   const spot = { ...base, sabotage: sc.sabotage }
-  const key = apiKey()
-  if (!key) { console.log('no ANTHROPIC_API_KEY (stash secrets/minecraft/anthropic-api-key)'); return 2 }
+  const key = VERIFY ? '' : apiKey()
+  if (!key && !VERIFY) { console.log('no ANTHROPIC_API_KEY (stash secrets/minecraft/anthropic-api-key)'); return 2 }
   const work = process.env.SKILL_LOOP_DIR || path.join('/tmp/idkcraft-skill-loop', sc.name)
   const skillsDir = path.join(work, 'skills')
+  // Read before the wipe: the file may live in this very skills dir.
+  const verifyText = VERIFY ? fs.readFileSync(VERIFY, 'utf8') : ''
   fs.rmSync(skillsDir, { recursive: true, force: true })
   fs.mkdirSync(skillsDir, { recursive: true })
   const spotsFile = path.join(work, 'spots.json')
@@ -195,7 +201,9 @@ async function main() {
       }
       let data
       try {
-        data = await brain.llmCall({ use: 'skill', apiKey: key, body })
+        data = VERIFY
+          ? { usage: {}, content: [{ type: 'text', text: verifyText }] }
+          : await brain.llmCall({ use: 'skill', apiKey: key, body })
       } catch (e) {
         const msg = String((e && e.message) || e)
         if (msg.startsWith('llm budget')) { envFail = `llm: ${msg}`; break }
@@ -248,7 +256,9 @@ async function main() {
   const tin = rows.reduce((a, r) => a + r.in, 0)
   const tout = rows.reduce((a, r) => a + r.out, 0)
   const wall = Math.round((Date.now() - t0) / 1000)
-  const result = { scenario: sc.name, spot: sc.spot, sabotage: sc.sabotage, skill: sc.skill, model: MODEL, effort: EFFORT, green, envFail, attempts: rows.length, wall, in: tin, out: tout, cost: +cost(tin, tout).toFixed(3), rows }
+  let sha = '?'
+  try { sha = execFileSync('git', ['-C', BOT, 'describe', '--always', '--dirty', '--abbrev=8'], { encoding: 'utf8' }).trim() } catch (_) { sha = '?' }
+  const result = { scenario: sc.name, spot: sc.spot, sabotage: sc.sabotage, skill: sc.skill, model: VERIFY ? 'verify' : MODEL, effort: EFFORT, body: process.env.REPLAY_BODY || 'mineflayer', sha, green, envFail, attempts: rows.length, wall, in: tin, out: tout, cost: +cost(tin, tout).toFixed(3), rows }
   fs.writeFileSync(path.join(work, 'result.json'), JSON.stringify(result, null, 2))
   if (envFail) console.log(`skill-loop ${sc.name}: environment failure: ${envFail}`)
   console.log(`SKILL-LOOP ${sc.name} ${green ? 'GREEN' : 'RED'} attempts=${rows.length} wall=${wall}s in=${tin} out=${tout} cost=$${result.cost.toFixed(2)} (${work}/result.json)`)

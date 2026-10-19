@@ -542,6 +542,15 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         if (!m[1]) bot.chat(`autonomous is ${bot._tickerCtx && bot._tickerCtx.autonomous ? 'on' : 'off'}`)
         else bot.chat(ticker.setAutonomous(m[1] === 'on'))
       }
+    } else if (msg === 'skills' || msg.startsWith('skills ')) {
+      // vf8e.4: runtime kill switch for generated skills, until restart.
+      const skills = require('./skills')
+      const arg = msg.slice(6).trim()
+      if (arg === 'off') {
+        skills.disable()
+        console.log(`skills off by=${playerName}`)
+      }
+      bot.chat(arg === '' || arg === 'off' ? `skills: ${skills.state()}` : 'try: skills off')
     } else if (msg === 'bring me' || msg.startsWith('bring me ')) {
       const m = msg.match(/^bring me\s+(.+?)(?:\s+(\d+))?$/)
       if (!m) {

@@ -29,6 +29,8 @@ const COMMANDS = [
   { names: ['brain'], usage: 'brain [laya|jev|off]', what: 'switches the remote brain, or reports it', example: 'brain laya' },
   // vf8e.6: listed only with BOT_LLM_ORDERS on (flag-off help is unchanged).
   { names: ['plan'], usage: 'plan <order>', what: 'asks the LLM to plan any order from the bot\'s steps (unknown orders plan by themselves too)', example: 'plan light up the house', on: () => require('./llm-orders').enabled() },
+  // vf8e.4: listed only with BOT_SKILLS on.
+  { names: ['skills'], usage: 'skills [off]', what: 'shows the generated skills state; off takes them off the menus until restart', example: 'skills off', on: () => require('./skills').enabled(process.env) },
 ]
 
 // The commands help shows now: an entry with on() only while it is on.

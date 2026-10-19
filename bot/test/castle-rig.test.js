@@ -1220,7 +1220,7 @@ describe('castle-before.js shared before cache', () => {
     assert.equal(cb.storeEntry({ ...ok, env: { ...env, CASTLE_DIAG: '1' } }), null, 'DIAG leg')
     assert.equal(cb.storeEntry({ ...ok, env: { ...env, CASTLE_COMPONENT: '' } }), null, 'no component')
     assert.equal(cb.storeEntry({ ...ok, record: { ...record, tag: 'old' } }), null, 'stale record file')
-    for (const k of [{ CASTLE_NIGHT: '1' }, { CASTLE_KIT: 'empty' }, { CASTLE_BLOCKED: '4' }, { CASTLE_PAD: '1,2' }, { RIG_PLANNER: 'stub' }, { GOAL_WATCHDOG_MS: '1' }, { CASTLE_MAX_MEMORY: '2G' }, { BARITONE_MEM: '3g' }, { CASTLE_DAYLOCK: '0' }, { CASTLE_BASELINE_RATE: '20' }, { CASTLE_FAR: '40' }]) {
+    for (const k of [{ CASTLE_NIGHT: '1' }, { CASTLE_KIT: 'empty' }, { CASTLE_BLOCKED: '4' }, { CASTLE_PAD: '1,2' }, { RIG_PLANNER: 'stub' }, { GOAL_WATCHDOG_MS: '1' }, { CASTLE_MAX_MEMORY: '2G' }, { BARITONE_MEM: '3g' }, { CASTLE_DAYLOCK: '0' }, { CASTLE_BASELINE_RATE: '20' }, { CASTLE_FAR: '40' }, { BOT_SKILLS: '1' }, { SKILLS_DIR: '/x' }]) {
       assert.equal(cb.storeEntry({ ...ok, env: { ...env, ...k } }), null, `off-gate ${JSON.stringify(k)} must not cache`)
       assert.deepEqual(cb.offGate({ ...env, ...k }), Object.keys(k))
     }
