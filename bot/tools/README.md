@@ -675,6 +675,58 @@ Notes on the gates:
 - **Decision rule.** Met: 2/3 green within 6 attempts, and no regression on the three gates.
   vf8e.4 and vf8e.6 proceed.
 
+## Curriculum (`curriculum.js`, idkcraft-vf8e.9)
+
+What the skill loop learns next is prod's failure log ranked by what the owner sees, not
+Voyager's novelty list. Offline: the tool reads dump files only (no host, token or container
+id in it).
+
+```sh
+node bot/tools/curriculum.js harvest bot.txt mc.txt [days=7]   # table + curriculum.json
+node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spots.json + scenario.json
+```
+
+- Input lines are `YYYY-MM-DD HH:MM:SS <name> <msg>` (UTC), as for `deaths.sh`. The bot dump
+  is the VictoriaLogs query `container_name:idkcraft-bot2 "recover action="`, printed as
+  `_time <bot name> _msg` (wider: `idkcraft-bot*`/`idkcraft-swarm*` plus `CURRICULUM_BOTS`).
+  The mc dump is `container_name:idkcraft-mc ("can't make" or "can't get")`. A raw shipped mc
+  line works as is, because the bot name is read from `<Name>`. Strip IPs as session-review
+  does. Credentials: see "Deaths per day".
+- Families (owner 2026-10-19: the simplest first):
+  - `page`: a recover episode that chose `call_player` or ended `gave-up`. The reason is the
+    last failed hand primitive plus its outcome. The position is the end pos in an 8-block cell.
+  - `bring`: a bring order refused for a recipe gap: the bot's own chat line
+    `can't get <item>: no recipe, no source` or `can't make <item>: need …|no recipe|crafting failed`.
+    The bot never logs its own chat, so these come from the mc log.
+  - step-fail, park and `castlefetch-*` are vf8e.11.
+- Rank = count x weight (page 3, bring 2). `days` counts back from the newest line in the dump.
+- Bots: `CURRICULUM_BOTS` is a comma list or `all`. The default is `BOT2_USERNAME`, else
+  `IdkBotV2` (the owner's feed). `SWARM_PREFIX` names fold into one `swarm` bot.
+- Output goes to `CURRICULUM_DIR` (default `/tmp/idkcraft-curriculum`). `TOP` sets the number of
+  table rows (default 20).
+- `propose` for a page writes a follow spot:
+  - spawn = the prod end pos; goal = pos + unit(next - pos) x dist (capped at 16), with y +3, -3
+    or 0 from `goal=high|low|level`.
+  - `secs` 90; scaffold, pickaxe and bucket come from the facts.
+  - A level page whose `next` is unknown (`?:?`, every v2 line) or under half a block away has
+    no heading, so it reads `no-dir` and is not proposable.
+- `propose` for a bring writes an order spot on the vf8e.6 order flat: `bring me <item>`,
+  expect `here is`, fail on the refusal lines, standard kit. Its scenario kind is `step`: there
+  is no order-skill kind yet, so vf8e.10 decides how it runs.
+- Scenarios carry `sabotage: null`: prod failed with the full menu. They live in the work dir,
+  never in `skill-scenarios.json`, because `skill-loop.test.js` pins that file to corpus spots.
+- Reproduction gate (printed by `propose`; the runner, vf8e.10, gives the verdict): micro-run
+  the spot once WITHOUT a skill. It must be RED (unreached, a page or a refusal). If it is not,
+  the candidate is not-reproduced and no model tokens are spent.
+
+Real harvest (2026-10-12..19 prod dump, default feed IdkBotV2): 206 events, 151 signatures
+(147 page, 4 bring), 115 proposable. Top 10 are all pages: counts 20, 8, 7, 6, 6, 3, 2, 2, 2, 2.
+Seven are `sidestep:failed:no-progress` and three are `call_player:gave-up`. 3 of the 10 are
+proposable; the other 7 are `no-dir` (v2 logs no `next`). The 4 bring signatures, all
+proposable: `bone` and `sapling` with no recipe, `andesite` needing diorite, `diorite` needing
+quartz. With `CURRICULUM_BOTS=all`: 918 events, 695 signatures (690 page, 5 bring), 637
+proposable.
+
 ## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
 
 ```sh
