@@ -9,7 +9,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { compareBaseline, pickBrain, gateCode, makeExitGuard, matchOrderLine, loadSpots, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify } = require('../tools/stuck-replay')
+const { compareBaseline, pickBrain, gateCode, makeExitGuard, matchOrderLine, loadSpots, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify, readVerifyCells, verifyBlocks, applyVerify } = require('../tools/stuck-replay')
 
 const TOOLS = path.join(__dirname, '..', 'tools')
 
@@ -1393,6 +1393,113 @@ describe('honest build verdict (idkcraft-vmzq.1)', () => {
       if (saved === undefined) delete process.argv[2]
       else process.argv[2] = saved
       fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('world verdict for planted things (idkcraft-vf8e.18)', () => {
+  const TREES = ['oak_sapling', 'birch_sapling', 'spruce_sapling', 'dark_oak_sapling', 'acacia_sapling', 'jungle_sapling', 'cherry_sapling']
+  const spec = () => ({ blocks: TREES.slice(), around: 'goal', radius: 3, dy: 1, min: 10, gap: 2 })
+  const cell = (dx, dy, dz, name = 'oak_sapling') => ({ dx, dy, dz, name })
+  // 10 saplings pitch-2 staggered in a 7x7: every pair sits at Chebyshev >= 2.
+  const ten = () => [[-3, -3], [-1, -3], [1, -3], [3, -3], [-3, -1], [-1, -1], [1, -1], [3, -1], [-3, 1], [-1, 1]]
+    .map(([dx, dz]) => cell(dx, 0, dz))
+
+  it('10 saplings pitch-2 staggered in a 7x7 verify ok', () => {
+    assert.deepEqual(verifyBlocks(ten(), spec()), { ok: true, found: 10, min: 10, close: 0 })
+  })
+
+  it('9 saplings demote: PARTIAL found=9/10', () => {
+    const v = verifyBlocks(ten().slice(0, 9), spec())
+    assert.deepEqual(v, { ok: false, found: 9, min: 10, close: 0 })
+    assert.deepEqual(applyVerify(true, v), { reached: false, note: 'PARTIAL found=9/10 close=0' })
+  })
+
+  it('two orthogonally adjacent saplings demote: PARTIAL close=1', () => {
+    const cells = ten().slice(0, 9)
+    cells.push(cell(-2, 0, 1)) // touches (-3,1) only: Chebyshev 1 < gap 2
+    const v = verifyBlocks(cells, spec())
+    assert.deepEqual(v, { ok: false, found: 10, min: 10, close: 1 })
+    assert.deepEqual(applyVerify(true, v), { reached: false, note: 'PARTIAL found=10/10 close=1' })
+  })
+
+  it('gap 1 accepts adjacency; unwanted blocks never count', () => {
+    const cells = ten().slice(0, 9)
+    cells.push(cell(-2, 0, 1))
+    cells.push(cell(0, 0, 0, 'stone'))
+    cells.push(cell(1, 0, 1, 'dirt'))
+    assert.deepEqual(verifyBlocks(cells, { ...spec(), gap: 1 }), { ok: true, found: 10, min: 10, close: 0 })
+  })
+
+  it('readVerifyCells reads the box only: outside radius/dy never verdict', () => {
+    const map = new Map()
+    const put = (dx, dy, dz, name) => map.set(`${dx},${dy},${dz}`, { name })
+    put(0, 0, 0, 'oak_sapling') // in
+    put(3, 1, -3, 'birch_sapling') // box corner, in
+    put(4, 0, 0, 'oak_sapling') // outside radius
+    put(0, 2, 0, 'oak_sapling') // outside dy
+    put(0, 0, 1, 'stone') // in box, unwanted
+    const asked = []
+    const cells = readVerifyCells((dx, dy, dz) => {
+      asked.push([dx, dy, dz])
+      return map.get(`${dx},${dy},${dz}`) || null
+    }, spec())
+    assert.equal(asked.length, 7 * 7 * 3, 'the whole 7x7x3 box, nothing else')
+    for (const [dx, dy, dz] of asked) {
+      assert.ok(Math.abs(dx) <= 3 && Math.abs(dz) <= 3 && Math.abs(dy) <= 1, `in-box read ${dx},${dy},${dz}`)
+    }
+    assert.equal(cells.length, 3, '2 saplings + 1 stone')
+    assert.deepEqual(verifyBlocks(cells, { ...spec(), min: 2 }), { ok: true, found: 2, min: 2, close: 0 })
+  })
+
+  it('applyVerify only demotes: the chat verdict stays required', () => {
+    assert.deepEqual(applyVerify(true, { ok: true, found: 10, min: 10, close: 0 }), { reached: true, note: null })
+    assert.deepEqual(applyVerify(true, { ok: false, found: 9, min: 10, close: 0 }), { reached: false, note: 'PARTIAL found=9/10 close=0' })
+    assert.deepEqual(applyVerify(false, { ok: false, found: 0, min: 10, close: 0 }), { reached: false, note: null })
+    assert.deepEqual(applyVerify(false, null), { reached: false, note: null })
+  })
+
+  it('loadSpots parses verify on order spots, rejects bad shapes naming the spot', () => {
+    const os = require('node:os')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plant-spots-'))
+    const saved = process.argv[2]
+    const order = { mode: 'order', order: 'bring me oak_sapling 10', expect: ['here are '], fail: ['could not '] }
+    const load = (spot) => {
+      const f = path.join(dir, 'v.json')
+      fs.writeFileSync(f, JSON.stringify([{ name: 'PARK-1', spawn: [0, 64, 0], goal: [1, 64, 0], ...spot }]))
+      process.argv[2] = f
+      return loadSpots()
+    }
+    const good = { blocks: ['oak_sapling'], around: 'goal', radius: 3, dy: 1, min: 10, gap: 2 }
+    try {
+      assert.deepEqual(load({ ...order, verify: good })[0].verify, good)
+      assert.deepEqual(load({ ...order, verify: { blocks: ['oak_sapling'], around: [1, 64, 0], min: 10 } })[0].verify,
+        { blocks: ['oak_sapling'], around: [1, 64, 0], radius: 3, dy: 1, min: 10, gap: 2 }, 'radius/dy/gap default to 3/1/2')
+      assert.equal(load({ ...order })[0].verify, null, 'off unless asked')
+      assert.throws(() => load({ verify: good }), /PARK-1.*mode=order/, 'follow spot names the spot')
+      assert.throws(() => load({ ...order, verify: { ...good, min: 0 } }), /PARK-1.*min/, 'min<1')
+      assert.throws(() => load({ ...order, verify: { ...good, radius: 17 } }), /PARK-1.*radius/, 'radius>16')
+      assert.throws(() => load({ ...order, verify: { ...good, blocks: ['not_a_block'] } }), /PARK-1.*unknown block/, 'unknown block')
+      assert.throws(() => load({ ...order, verify: { ...good, around: 'home' } }), /PARK-1.*around/, 'bad around')
+      assert.throws(() => load({ ...order, verify: { ...good, gap: 0 } }), /PARK-1.*gap/, 'gap<1')
+      assert.throws(() => load({ ...order, verify: true }), /PARK-1/, 'non-object')
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('existing spot files parse unchanged (no verify anywhere)', () => {
+    const saved = process.argv[2]
+    try {
+      for (const f of ['stuck-spots.json', 'task-spots.json', 'llm-order-spots.json']) {
+        process.argv[2] = path.join(TOOLS, f)
+        for (const s of loadSpots()) assert.equal(s.verify, null, `${f}:${s.name} carries no verify`)
+      }
+    } finally {
+      if (saved === undefined) delete process.argv[2]
+      else process.argv[2] = saved
     }
   })
 })

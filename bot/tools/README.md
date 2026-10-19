@@ -377,6 +377,33 @@ walked 61-64 blocks, i.e. to the goal); MINE-10 is an order spot with a
 `count`/`item` judge: peak `item` held by follower+guide >= `count` (the bot
 hands finds to the guide), instead of a chat marker.
 
+## Planted-thing verdict (`verify`, idkcraft-vf8e.18)
+
+An order spot may carry a data-driven world check for "build/plant
+something" orders — the mirror of `verifyBuild` over any block list, not
+the house blueprint:
+
+```json
+{"name": "PARK-1", "mode": "order", "spawn": [0, 64, 0], "goal": [1, 64, 0],
+ "order": "plant the park", "expect": ["park done"], "fail": ["could not "],
+ "verify": {"blocks": ["oak_sapling", "birch_sapling"], "around": "goal",
+  "radius": 3, "dy": 1, "min": 10, "gap": 2}}
+```
+
+After the chat verdict (at the terminal verdict, where `applyBuildVerify`
+runs) the replay counts wanted `blocks` in the box `|dx|,|dz| <= radius`,
+`|dy| <= dy` around `around` (`"goal"` = the spot goal, else `[x, y, z]`)
+from the follower's world and demotes a chat-done to `reached: false` with
+note `PARTIAL found=<n>/<min> close=<pairs>` when fewer than `min` stand or
+any pair sits at Chebyshev distance `< gap` (gap 2 = no two in touching
+cells, the "trees can grow" rule; gap 1 = any). The reached-by-chat verdict
+stays required: `verify` only demotes, never promotes. Order mode only;
+`blocks` must name real blocks, `min >= 1`, `radius <= 16` — anything else
+throws naming the spot. `radius`/`dy`/`gap` default to 3/1/2. The row keeps
+`verifyFound`/`verifyMin`/`verifyClose` next to the note, so the replay
+table and the skill-loop feedback show the demotion (`rowGreen` reads it RED
+with no change).
+
 ## LLM orders A/B (`llm-order-spots.json`, idkcraft-vf8e.6)
 
 Three free-form orders the FSM refuses or ignores (TORCH-8, WATER-1,
