@@ -49,6 +49,14 @@ const VERIFY = process.env.SKILL_LOOP_VERIFY || ''
 // $ per 1M tokens in/out (claude-api skill table, 2026-10-06).
 const PRICE = { 'claude-opus-5-5': [4, 20], 'claude-sonnet-5-5': [2, 10], 'claude-haiku-5-5': [0.1, 0.5] }
 
+// Curriculum GREEN (revmux 01 core-3): proposed AUTO spots have no baseline
+// entry, so the replay row decides, not the exit code — reached with no page.
+// curriculum.js gate() is the mirror image (RED = !rowGreen); the runner
+// tests pin the two together.
+function rowGreen(row) {
+  return !!row && row.reached === true && row.call === 0
+}
+
 // idkcraft-vf8e.10: the nightly curriculum runner (tools/curriculum.sh)
 // points the loop at a proposed scenario + spots file. Defaults keep
 // `node tools/skill-loop.js water-climb 6` on the committed table.
@@ -315,7 +323,7 @@ async function main() {
           const crow = readRow(path.join(work, `replay-${n}.json`))
           row.verdict = crow ? rowText(crow) : '(no replay row)'
           if (!crow) envFail = `no replay row in replay-${n}.json (rc ${r.status})`
-          else if (crow.reached === true && crow.call === 0) green = true
+          else if (rowGreen(crow)) green = true
         } else {
           row.verdict = verdictLine(out)
           if (r.status === 0) green = true
@@ -345,4 +353,4 @@ async function main() {
 
 if (require.main === module) main().then((rc) => process.exit(rc), (e) => { console.log(e && e.stack ? e.stack : e); process.exit(2) })
 
-module.exports = { extractCode, feedback, verdictLine, cost, check, loopFiles, readRow, rowText }
+module.exports = { extractCode, feedback, verdictLine, cost, check, loopFiles, readRow, rowText, rowGreen }

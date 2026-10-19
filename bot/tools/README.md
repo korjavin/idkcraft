@@ -789,8 +789,14 @@ sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orches
   an owner play session / overnight. There is no scheduler and the night job never opens
   PRs: a GREEN candidate ends with a `PROMOTE:` line (the vf8e.4 `skill-promote.js`
   command with scenario, spot and result paths), and the morning promotion runs it by
-  hand — its PR carries the verdict lines and adds the `AUTO-<sig>` spot + baseline
-  entry to the corpus.
+  hand — its PR carries the verdict lines. The promoter also copies the `AUTO-<sig>`
+  spot from the printed spot path into `stuck-spots.json` and records its baseline
+  entry (corpus rule: one without the other fails the gate or `npm test`); the
+  promote script does not do that step itself.
+- Body: the harvest feeds bot2 stalls by default, so set `CURRICULUM_BODY=baritone`
+  for a bot2 night — the keeper, the pre-run and the loop then verify on the v2
+  body. Empty (default) is the mineflayer replay. The ledger records the body and
+  the promotion refuses a body mismatch.
 - Rig slot: one (`CURRICULUM_RIG_ID`, default the default rig); `RIG_LOCK_WAIT`
   (default 7200) bounds the keeper boot's wait for a busy rig, then the night is
   skipped (exit 2). Key: `ANTHROPIC_API_KEY` or the stash, never printed.

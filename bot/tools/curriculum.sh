@@ -29,6 +29,9 @@
 #   CURRICULUM_MAX_ATTEMPTS (default 6): skill-loop attempts per scenario.
 #   CURRICULUM_RIG_ID (default 0 = the default rig): the ONE rig slot; inner
 #     runs serialise on it, never in parallel.
+#   CURRICULUM_BODY (default empty = mineflayer replay): export REPLAY_BODY
+#     for the keeper, the pre-run and the loop — set baritone when the
+#     harvest feeds bot2 stalls, so the gate and the skill verify on v2.
 #   RIG_LOCK_WAIT (default 7200): how long the keeper boot waits for a busy
 #     rig; then the night is skipped (exit 2).
 #   REPLAY_KEEP_IDLE (default 1800): keeper idle teardown, see stuck-run.sh.
@@ -66,6 +69,12 @@ case "$CAP" in ''|*[!0-9.]*|*.*.*) echo "curriculum: CURRICULUM_USD_PER_DAY must
 
 # The reproduction gate runs WITHOUT skills: never let an operator export leak in.
 unset SKILLS_DIR REPLAY_SKILLS_DIR BOT_SKILLS
+# Body (revmux 01 core-2): the harvest feeds bot2 stalls by default, so the
+# gate and the loop run on the v2 Baritone body when the operator asks —
+# CURRICULUM_BODY=baritone. Empty (default) is today's mineflayer replay.
+# The loop inherits it and records it in result.json; the ledger records it
+# too, and the morning promotion (vf8e.4) refuses a body mismatch.
+if [ -n "${CURRICULUM_BODY:-}" ]; then export REPLAY_BODY="$CURRICULUM_BODY"; fi
 
 KEEPER=""
 on_exit() {
@@ -248,7 +257,15 @@ for SIG in $(grep '^pick ' "$PICKF" | awk '{print $2}' || true); do
     nred=$((nred + 1))
     echo "CURRICULUM $SIG RED attempts=$ATTN cost=\$$COST (see $RES)"
   else
-    echo "CURRICULUM $SIG env: skill-loop exit $LRC ($(tail -n 1 "$CAND/loop.log")) — not RED, cap unspent"
+    # Exit 2 is an environment failure: never RED, reds is not bumped. But
+    # dollars actually spent (paid attempts before the failure) still reach
+    # the ledger, or the $ cap goes blind (revmux 01 core-1).
+    if awk "BEGIN{exit !($COST > 0)}"; then
+      node tools/curriculum.js record "$SIG" env "$RES"
+      echo "CURRICULUM $SIG env: skill-loop exit $LRC ($(tail -n 1 "$CAND/loop.log")) — not RED, spend \$$COST recorded"
+    else
+      echo "CURRICULUM $SIG env: skill-loop exit $LRC ($(tail -n 1 "$CAND/loop.log")) — not RED, cap unspent"
+    fi
     ENVFAIL=1
     skipped=$((skipped + 1))
   fi

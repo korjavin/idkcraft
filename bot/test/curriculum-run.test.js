@@ -19,6 +19,7 @@ const FAKE_PRERUN = [
   '#!/bin/sh',
   '# fake no-skill reproduction run: $1 = spots.json, $2 = out.json.',
   '# FAKE_GATE=red writes a RED row, anything else a reached row.',
+  'echo "PRERUN BODY=${REPLAY_BODY:-mineflayer}" >> "${FAKE_ENV:-/dev/null}"',
   'if [ "$FAKE_GATE" = red ]; then',
   '  printf \'[{"spot":"AUTO-fake","reached":false,"stuck":9,"eps":2,"call":1}]\' > "$2"',
   'else',
@@ -34,10 +35,11 @@ const FAKE_LOOP = [
   'd="$SKILL_LOOP_DIR"',
   'mkdir -p "$d/skills"',
   'echo "$1" >> "${FAKE_MARKER:-/dev/null}"',
+  'echo "LOOP BODY=${REPLAY_BODY:-mineflayer} RIG=$SKILL_LOOP_RIG SCN=$SKILL_LOOP_SCENARIOS SPOTS=$SKILL_LOOP_SPOTS" >> "${FAKE_ENV:-/dev/null}"',
   "skill=\"$(SK=\"$SKILL_LOOP_SCENARIOS\" SCN=\"$1\" node -p \"JSON.parse(require('fs').readFileSync(process.env.SK,'utf8')).find((s)=>s.name===process.env.SCN).skill\")\"",
   'echo "fake-loop $1 max=$2 skill=$skill"',
   'cost="${FAKE_COST:-0.50}"',
-  'if [ "$FAKE_LOOP" = env ]; then printf \'{"scenario":"%s","spot":"AUTO-fake","skill":"%s","green":false,"attempts":0,"wall":1,"in":0,"out":0,"cost":0.00,"rows":[]}\' "$1" "$skill" > "$d/result.json"; echo "fake-loop: environment failure"; exit 2; fi',
+  'if [ "$FAKE_LOOP" = env ]; then printf \'{"scenario":"%s","spot":"AUTO-fake","skill":"%s","green":false,"attempts":2,"wall":9,"in":100,"out":50,"cost":%s,"rows":[]}\' "$1" "$skill" "$cost" > "$d/result.json"; echo "fake-loop: environment failure"; exit 2; fi',
   'if [ "$FAKE_LOOP" = green ]; then green=true; rc=0; else green=false; rc=1; fi',
   'if [ "$green" = true ]; then printf "/* skill fake */\\n" > "$d/skills/$skill.js"; fi',
   "printf '{\"scenario\":\"%s\",\"spot\":\"AUTO-fake\",\"skill\":\"%s\",\"green\":%s,\"attempts\":2,\"wall\":9,\"in\":100,\"out\":50,\"cost\":%s,\"rows\":[]}' \"$1\" \"$skill\" \"$green\" \"$cost\" > \"$d/result.json\"",
@@ -48,7 +50,7 @@ function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curriculum-night-'))
   fs.writeFileSync(path.join(dir, 'prerun.sh'), FAKE_PRERUN)
   fs.writeFileSync(path.join(dir, 'loop.sh'), FAKE_LOOP)
-  return { dir, prerun: path.join(dir, 'prerun.sh'), loop: path.join(dir, 'loop.sh'), marker: path.join(dir, 'loop-marker') }
+  return { dir, prerun: path.join(dir, 'prerun.sh'), loop: path.join(dir, 'loop.sh'), marker: path.join(dir, 'loop-marker'), seen: path.join(dir, 'seen-env') }
 }
 
 function runNight(t, opts = {}) {
@@ -64,7 +66,9 @@ function runNight(t, opts = {}) {
     FAKE_LOOP: opts.loopMode || 'green',
     FAKE_COST: opts.cost || '0.50',
     FAKE_MARKER: t.marker,
+    FAKE_ENV: t.seen,
   }
+  if (opts.body) env.CURRICULUM_BODY = opts.body
   if (opts.seed) fs.writeFileSync(path.join(t.dir, 'curriculum-ledger.json'), JSON.stringify(opts.seed, null, 1))
   const r = spawnSync('sh', ['tools/curriculum.sh', DUMP], { cwd: BOT, env, encoding: 'utf8' })
   return { rc: r.status, out: `${r.stdout || ''}${r.stderr || ''}` }
@@ -122,14 +126,42 @@ describe('curriculum.sh night (idkcraft-vf8e.10)', () => {
     assert.match(r.out, /cost=\$0\.50/)
   })
 
-  it('loop exit 2 is not RED and spends no cap', () => {
+  it('loop exit 2 is not RED, but paid spend still reaches the ledger', () => {
     const t = setup()
-    const r = runNight(t, { gate: 'red', loopMode: 'env' })
+    const r = runNight(t, { gate: 'red', loopMode: 'env', cost: '0.75' })
     assert.match(r.out, /CURRICULUM [0-9a-f]{8} RED: gate:/)
-    assert.match(r.out, /env: skill-loop exit 2/)
+    assert.match(r.out, /env: skill-loop exit 2.*not RED, spend \$0\.75 recorded/)
     assert.ok(!/CURRICULUM [0-9a-f]{8} (GREEN|RED) attempts=/.test(r.out), 'no loop verdict')
-    assert.deepEqual(ledger(t), {}, 'no ledger entry on env failure')
+    const m = /CURRICULUM ([0-9a-f]{8}) env: skill-loop/.exec(r.out)
+    const e = ledger(t)[m[1]]
+    assert.deepEqual([e.verdict, e.cost, e.attempts, e.reds, e.envs], ['env', 0.75, 2, 0, 1])
+    assert.match(r.out, /cost=\$0\.75/)
     assert.equal(r.rc, 2)
+  })
+
+  it('loop exit 2 with no spend records nothing', () => {
+    const t = setup()
+    const r = runNight(t, { gate: 'red', loopMode: 'env', cost: '0.00' })
+    assert.match(r.out, /not RED, cap unspent/)
+    assert.deepEqual(ledger(t), {}, 'no ledger entry on cost-free env failure')
+    assert.equal(r.rc, 2)
+  })
+
+  it('CURRICULUM_BODY reaches the keeper runs and the loop; default is mineflayer', () => {
+    const t = setup()
+    const r = runNight(t, { gate: 'red', loopMode: 'green', body: 'baritone' })
+    assert.equal(r.rc, 0)
+    const seen = fs.readFileSync(t.seen, 'utf8')
+    assert.match(seen, /PRERUN BODY=baritone/)
+    assert.match(seen, /LOOP BODY=baritone RIG=0 SCN=.*AUTO-.*scenario\.json SPOTS=.*AUTO-.*spots\.json/)
+    assert.equal(Object.values(ledger(t))[0].body, 'baritone')
+    const t2 = setup()
+    const r2 = runNight(t2, { gate: 'red', loopMode: 'green' })
+    assert.equal(r2.rc, 0)
+    const seen2 = fs.readFileSync(t2.seen, 'utf8')
+    assert.match(seen2, /PRERUN BODY=mineflayer/)
+    assert.match(seen2, /LOOP BODY=mineflayer RIG=0/)
+    assert.equal(Object.values(ledger(t2))[0].body, 'mineflayer')
   })
 
   it('the 7-day retry re-picks grown RED, parks at 3 REDs, skips recent', () => {
@@ -192,6 +224,9 @@ describe('curriculum ledger helpers (idkcraft-vf8e.10)', () => {
       assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'GREEN:unpromoted', res, '/w/skills/gen_x.js']), 0)
       e = CURRICULUM.readLedger()['ab12cd34']
       assert.deepEqual([e.verdict, e.reds, e.skillPath], ['GREEN:unpromoted', 2, '/w/skills/gen_x.js'])
+      assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'env', res]), 0)
+      e = CURRICULUM.readLedger()['ab12cd34']
+      assert.deepEqual([e.verdict, e.cost, e.reds, e.envs], ['env', 1.25, 2, 1])
       assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'bogus']), 2)
       assert.match(out.join('\n'), /ledger ab12cd34: RED attempts=6 cost=\$1\.25 reds=1/)
     })
@@ -203,22 +238,46 @@ describe('curriculum ledger helpers (idkcraft-vf8e.10)', () => {
         { sig: 's1', family: 'page', reason: 'r1', count: 3, score: 9, bots: ['b'], lastSeen: '2026-10-18 10:00:00', cell: 'c', proposable: true },
         { sig: 's2', family: 'page', reason: 'r2', count: 2, score: 6, bots: ['b'], lastSeen: '2026-10-18 10:00:00', cell: 'c', proposable: true },
         { sig: 's3', family: 'page', reason: 'r3', count: 1, score: 3, bots: ['b'], lastSeen: '2026-10-18 10:00:00', cell: 'c', proposable: true },
+        { sig: 's4', family: 'page', reason: 'r4', count: 1, score: 2, bots: ['b'], lastSeen: '2026-10-18 10:00:00', cell: 'c', proposable: true },
       ]
       fs.writeFileSync(path.join(dir, 'curriculum.json'), JSON.stringify(list))
       const today = new Date().toISOString().slice(0, 10)
       fs.writeFileSync(path.join(dir, 'curriculum-ledger.json'), JSON.stringify({
         s1: { date: today, verdict: 'RED', attempts: 6, cost: 1.5, count: 3, reds: 1 },
         s2: { date: daysAgo(9), verdict: 'RED', attempts: 6, cost: 9.99, count: 2, reds: 1 },
+        s3: { date: daysAgo(1), verdict: 'env', attempts: 2, cost: 0.75, count: 1, reds: 0, envs: 1 },
+        s4: { date: daysAgo(1), verdict: 'env', attempts: 2, cost: 0.75, count: 1, reds: 0, envs: 3 },
       }))
       const log = console.log
       const out = []
       console.log = (...a) => out.push(a.join(' '))
       try {
         assert.equal(CURRICULUM.main(['spent']), 0)
-        assert.equal(CURRICULUM.main(['pick', '3']), 0)
+        assert.equal(CURRICULUM.main(['pick', '4']), 0)
       } finally { console.log = log }
       assert.equal(out[0], '1.50')
-      assert.deepEqual(out[1].split('\n'), ['skip s1 red-recent', 'skip s2 red-stale', 'pick s3'])
+      assert.deepEqual(out[1].split('\n'), ['skip s1 red-recent', 'skip s2 red-stale', 'pick s3', 'skip s4 parked'])
+    })
+  })
+
+  it('gate RED and rowGreen GREEN agree on every row shape', () => {
+    withDir((dir) => {
+      const rows = [
+        { spot: 'A', reached: true, stuck: 0, eps: 0, call: 0 },
+        { spot: 'A', reached: true, stuck: 4, eps: 2, call: 1 },
+        { spot: 'A', reached: false, stuck: 9, eps: 2, call: 1 },
+        { spot: 'A', reached: false, stuck: 0, eps: 0, call: 0 },
+      ]
+      for (const row of rows) {
+        const p = path.join(dir, 'r.json')
+        fs.writeFileSync(p, JSON.stringify([row]))
+        const log = console.log
+        console.log = () => {}
+        let rc
+        try { rc = CURRICULUM.main(['gate', p]) } finally { console.log = log }
+        assert.equal(rc === 0, !LOOP.rowGreen(row), `gate/rowGreen agree on ${JSON.stringify(row)}`)
+      }
+      assert.equal(LOOP.rowGreen(null), false)
     })
   })
 })

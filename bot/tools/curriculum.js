@@ -235,7 +235,10 @@ function pick(top = 2) {
     const e = ledger[c.sig]
     if (!e) { out.push(`pick ${c.sig}`); continue }
     if (String(e.verdict || '').toUpperCase().startsWith('GREEN')) { out.push(`skip ${c.sig} done`); continue }
-    if ((e.reds || 0) >= MAX_REDS) { out.push(`skip ${c.sig} parked`); continue }
+    if ((e.reds || 0) >= MAX_REDS || (e.envs || 0) >= MAX_REDS) { out.push(`skip ${c.sig} parked`); continue }
+    // env never reached a verdict: the candidate was never really tried,
+    // so it is picked again right away (its strike count parks it above).
+    if (String(e.verdict || '').toUpperCase() === 'ENV') { out.push(`pick ${c.sig}`); continue }
     if (String(e.verdict || '').toUpperCase().startsWith('RED')) {
       if (ageDays(e.date) > RETRY_DAYS && c.count > (e.count || 0)) { out.push(`pick ${c.sig}`); continue }
       out.push(`skip ${c.sig} ${ageDays(e.date) > RETRY_DAYS ? 'red-stale' : 'red-recent'}`)
@@ -248,11 +251,14 @@ function pick(top = 2) {
 }
 
 // record <sig> <verdict> [result.json] [skillPath]: verdict is RED,
-// GREEN:unpromoted or not-reproduced; attempts/cost come from the loop's
-// result.json (the PRICE table there — never re-estimated), 0 without one.
+// GREEN:unpromoted, not-reproduced or env; attempts/cost come from the
+// loop's result.json (the PRICE table there — never re-estimated), 0
+// without one. env (revmux 01 core-1) is a loop exit 2 AFTER paid attempts:
+// never RED and reds is not bumped, but the real dollars reach the ledger
+// or the $ cap goes blind. body defaults to the run's REPLAY_BODY.
 function record(sig, verdict, resultFile, skillPath) {
-  if (!sig || !['RED', 'GREEN:unpromoted', 'not-reproduced'].includes(verdict)) {
-    console.log('usage: node tools/curriculum.js record <sig> <RED|GREEN:unpromoted|not-reproduced> [result.json] [skill.js]')
+  if (!sig || !['RED', 'GREEN:unpromoted', 'not-reproduced', 'env'].includes(verdict)) {
+    console.log('usage: node tools/curriculum.js record <sig> <RED|GREEN:unpromoted|not-reproduced|env> [result.json] [skill.js]')
     return 2
   }
   let list = []
@@ -275,6 +281,8 @@ function record(sig, verdict, resultFile, skillPath) {
     resultJson: resultFile || prev.resultJson || null,
     count: c ? c.count : (prev.count || 0),
     reds: (prev.reds || 0) + (verdict === 'RED' ? 1 : 0),
+    envs: (prev.envs || 0) + (verdict === 'env' ? 1 : 0),
+    body: process.env.REPLAY_BODY || prev.body || 'mineflayer',
   }
   fs.mkdirSync(DIR(), { recursive: true })
   fs.writeFileSync(LEDGER(), JSON.stringify(ledger, null, 1) + '\n')
