@@ -544,7 +544,9 @@ function craftTick(bot, ctx, f, d) {
   if (names.length === 0 || f.craftOut) return false
   if (d.kind === 'banner' && !bannerSelf(bot, ctx)) return false // beds first: the wool is theirs
   if (d.kind === 'stairs' && stairsCobbleShort(bot)) return false // dig first (stairsDig); the scaffold/shelter reserve stays
-  if (d.kind === 'torch' && countItems(bot, (n) => n === 'coal' || n === 'charcoal') <= require('./light').COAL_RESERVE) return false // smelting's coal floor
+  // Smelting's coal floor; charcoal is always spendable (light.js 33vm, g0z.62's torchTick smelts it).
+  // ponytail: craftany may still pick the coal recipe when both are held — a reserve leak of one coal per 4 torches.
+  if (d.kind === 'torch' && require('./light').spendableFuel(countItems(bot, (n) => n === 'coal'), countItems(bot, (n) => n === 'charcoal')) <= 0) return false
   let r = null
   try { r = deps.craftItem(bot, ctx, names, CRAFT_COUNT[d.kind] || 1) } catch (_) { r = { done: false } }
   if (r === 'running') return true
@@ -861,6 +863,28 @@ function blastTick(bot, ctx, f, d, target, state) {
 
 // One blast smelt rung: fuel, the station's 8 on a no-cobble retry, then
 // the counted run (smeltTick settles it; done re-arms the craft).
+// Torch world source (g0z.62: a tidy repair owed 3 torches with no coal
+// anywhere and failed every visit). Reached once the chest and the craft
+// came up short: logs on hand -> charcoal at the castle furnace (light.js
+// 33vm's path, the pane/blast furnace plumbing) -> craftTick next tick
+// (one charcoal + a stick = 4 torches). No log: false, the leg fails
+// castlefetch-no-torch as before.
+function torchTick(bot, ctx, f, d, target, state) {
+  if (ctx.bring) return true // a foreign order runs (this rung opens none)
+  const dry = (why) => { castleMod.noteDry(ctx, 'torch'); finish(bot, ctx, `failed:castlefetch-${why}`) }
+  const fr = ctx.furnace
+  if (fr && !fr.settled && fr.job && fr.job.output === 'charcoal') { // a preempted smelt resumes (paneTick shape)
+    f.smelting = true
+    f.smeltJob = { input: fr.job.input, output: 'charcoal' }
+  }
+  if (f.smelting) { smeltTick(bot, ctx, f, dry); return true }
+  let log = null
+  try { log = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_log')) } catch (_) { log = null }
+  if (!log) return false
+  blastSmelt(bot, ctx, f, target, state, dry, fr, { input: log.name, output: 'charcoal', count: Math.max(1, Math.min(log.count, Math.ceil(d.short / CRAFT_COUNT.torch))) })
+  return true
+}
+
 function blastSmelt(bot, ctx, f, target, state, dry, fr, job) {
   if (fuelTick(bot, ctx, f, target, state, job.count, dry)) return
   if (f.cobble && blastNeed(bot).cobble < 8) { cobbleTick(bot, ctx, f, target, state, dry, 8, 'blast_furnace'); return } // the station's 8 (pane rung, blast dry kind)
@@ -1895,6 +1919,7 @@ function castlefetch(bot, ctx, target, state) {
   if (d.kind === 'banner' && bannerSelf(bot, ctx)) { bannerTick(bot, ctx, f, d); return }
   if (d.kind === 'pane') { paneTick(bot, ctx, f, d, target, state); return }
   if (d.kind === 'blast_furnace') { blastTick(bot, ctx, f, d, target, state); return }
+  if (d.kind === 'torch' && torchTick(bot, ctx, f, d, target, state)) return
   castleMod.noteDry(ctx, d.kind) // the decor word tries the next open kind (castle menuFact)
   finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, banner without chest stock (beds first)
 }
