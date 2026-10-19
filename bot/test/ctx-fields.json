@@ -1854,6 +1854,12 @@
     ],
     "owner": "src/task.js"
   },
+  "taskPlanArgs": {
+    "writers": [
+      "src/llm-orders.js"
+    ],
+    "owner": "src/llm-orders.js"
+  },
   "taskPlanStep": {
     "writers": [
       "src/goal.js",

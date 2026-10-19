@@ -291,8 +291,37 @@ function clearPendingSearch(ctx) {
   if (ctx) ctx.pendingSearch = null
 }
 
+// Deterministic order (vf8e.17): `do <step> [count]` runs one whitelisted
+// step through the SAME plan executive as an LLM plan (installPlan + tick),
+// with no Messages call — the rig's path (no API key there) and the
+// owner's deterministic path in prod. Accepts ORDER_STEPS and workSteps()
+// (hand work steps and loaded skill steps: `do gather`, `do light`,
+// `do gen_park 3`); anything else refuses with the whitelist line. Roster
+// players only, never a peer bot line; swarm helpers never reach here (the
+// stop/flat allowlist above). While following it answers the same path an
+// LLM plan would (the executive owns work mode from here on).
+function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
+  const m = /^do\s+([a-z0-9_]+)(?:\s+(\d+))?$/.exec(msg)
+  if (!m) { bot.chat('try: do light'); return }
+  const id = m[1]
+  if (!llmOrders.ORDER_STEPS[id] && !llmOrders.workSteps().includes(id)) {
+    bot.chat(`no step "${id.slice(0, 20)}" — try: help`)
+    return
+  }
+  const step = { step: id }
+  if (m[2] != null) {
+    const count = Math.floor(Number(m[2]))
+    if (!(count >= 1 && count <= 64)) { bot.chat('try: do light'); return }
+    step.count = count
+  }
+  llmOrders.installPlan(bot, ctx, {
+    text: msg, by: playerName, ticker,
+    feed: (line) => handleChat(bot, ticker, username, line, senderUuid),
+  }, [step])
+}
+
 // vf8e.6: the owner orders that end a running LLM plan.
-const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|share|bring me(?: .*)?)$/
+const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|share|bring me(?: .*)?|do(?: .*)?)$/
 
 function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
@@ -569,6 +598,11 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     } else if (msg.startsWith('plan ')) {
       // vf8e.6: force the planner on any line (A/B against the FSM parse).
       llmAsk(null, msg.slice(5).trim(), true)
+    } else if (msg === 'do' || msg.startsWith('do ')) {
+      // vf8e.17: deterministic one-step plan, no model call.
+      if (ticker && lctx && !peerBot && !llmOrders.feeding(lctx) && worker.players(bot)[playerName]) {
+        doPlan(bot, ticker, lctx, playerName, username, senderUuid, msg)
+      } else llmAsk(null)
     } else {
       llmAsk(null)
     }

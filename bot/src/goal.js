@@ -1390,7 +1390,18 @@ function goalFacts(bot, ctx) {
   } catch (_) { /* unknown food reads full */ }
   let rearm = false
   try { rearm = require('./behaviours/equip').pickRearmDue(bot, ctx) } catch (_) { rearm = false }
-  return { rearm, time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, tableOwed, houseTable, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle }
+  // Order pin (vf8e.17): the plan executive's one-shot step and its count,
+  // read BEFORE pinMenu consumes the pin (decide builds facts first) — an
+  // order-only skill gates its feasible on facts.pinned === '<its name>'
+  // so it runs only when ordered, never on its own before rest.
+  let pinned = 'none'
+  try { if (ctx && typeof ctx.taskPlanStep === 'string' && ctx.taskPlanStep) pinned = ctx.taskPlanStep } catch (_) { /* unpinned */ }
+  let pinCount = 0
+  try {
+    const n = ctx && ctx.taskPlanArgs ? ctx.taskPlanArgs.count : undefined
+    pinCount = typeof n === 'number' && n >= 1 && n <= 64 ? Math.floor(n) : 0
+  } catch (_) { /* no count */ }
+  return { rearm, time, logs, planks, maxPlanks, table, door, sword, pickaxe, pickWord, cobble, sticks, coal, charcoal, torches, scaffold, home, unlit, tablePlaced, tableOwed, houseTable, inside, health, food, known, haul, player, chest, chestTodo, surplus, chestParked, ironOre, ingots, diamonds, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, furnaceItem, furnace, gearHandover, gear, beds, castle, pinned, pinCount }
 }
 
 // Bucket thresholds for the state text (single source; the criteria below
