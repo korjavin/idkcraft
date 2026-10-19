@@ -640,6 +640,11 @@ function gocastleGo(facts, bot, ctx) {
   try {
     if (!displacedFromCastle(bot, ctx)) return false
     if (!registered('gocastle')) return false
+    // Owed repair first (fqkn): a complete castle's latched repair (castle.js)
+    // is funded where the bot is — while that fetch can run, the tidy walk
+    // (and siteFarFor's force, which reads this) waits; stock in hand or a
+    // failed fetch (the latch drops) lets the walk back go.
+    if (!castleFirst(ctx) && ctx.castleWord && ctx.castleWord.repair && castleFetchGo(facts, bot, ctx)) return false
     // Threat gate (vmzq.49 R1): low and foodless INTO mobs does not
     // travel — flee/recover first. Quiet travel stays legal (a fresh
     // respawn is full-hp anyway; the gate only bites a walk that has

@@ -127,6 +127,17 @@ describe('castle tidy (g0z.62)', () => {
     assert.equal(goal.MENU.gocastle.feasible({ castle: 'tidy', time: 'dusk', health: 20 }, bot, ctx), false)
   })
 
+  it('fqkn: an owed repair is not displacement — gocastle (and the siteFar force) never pre-empts the home fetch', () => {
+    const now = Date.now()
+    const bot = makeBot({ loaded: false, at: FAR() })
+    const ctx = { castle: castleState({ visitedAt: now - 2 * H }), castleWord: { kind: 'torch', left: 3, repair: true } }
+    const facts = { castle: 'torch-none', time: 'day', health: 20, pickaxe: 1 }
+    assert.equal(goal.MENU.castlefetch.feasible(facts, bot, ctx), true)
+    assert.equal(goal.MENU.gocastle.feasible(facts, bot, ctx), false)
+    ctx.castleWord = null // the fetch failed: the latch drops, the tidy walk follows
+    assert.equal(goal.MENU.gocastle.feasible({ ...facts, castle: 'tidy' }, bot, ctx), true)
+  })
+
   it('revmux 01: a failed trip leg counts as the visit — no re-walk to an unreachable castle', async () => {
     const bot = makeBot({ loaded: false, at: FAR(), items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }] })
     const ctx = { castle: castleState(), step: 'gocastle', stepStatus: 'running' }
