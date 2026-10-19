@@ -22,6 +22,7 @@ const goal = require('./goal')
 const metrics = require('./metrics')
 const { STEP_EFFECT_TEXT } = require('./plan-consts')
 const { isFinished, failReason, stepGen, chatStep } = require('./step')
+const { WANT_MAX } = require('./behaviours/bringbase')
 
 const ORDER_TIMEOUT_MS = 20000
 const STEP_MS = 10 * 60 * 1000 // one plan step's deadline
@@ -29,9 +30,11 @@ const PLAN_MAX = 6
 const MISS_TICKS = 3 // pin consumed without the step starting = not possible now
 
 const ORDER_STEPS = {
-  bring: { args: 'item, count', what: 'gets an item to the player: from the pack, the home chest, by crafting or smelting it, mining the block, shearing sheep or hunting for food', chat: (s) => `bring me ${s.item}${s.count ? ` ${s.count}` : ''}` },
+  // codex: max = the executor's own clamp (bring WANT_MAX, flat FLAT_MAX_RADIUS) so a
+  // bigger count refuses instead of silently delivering less and reporting done.
+  bring: { args: 'item, count', max: WANT_MAX, what: `gets an item to the player (count at most ${WANT_MAX}): from the pack, the home chest, by crafting or smelting it, mining the block, shearing sheep or hunting for food`, chat: (s) => `bring me ${s.item}${s.count ? ` ${s.count}` : ''}` },
   find: { args: 'item', what: 'finds the nearest block of that name and leads the player to it', chat: (s) => `find me ${s.item}` },
-  flat: { args: 'count', what: 'levels the ground around the player, count = radius', chat: (s) => `flat ${s.count || 8}` },
+  flat: { args: 'count', max: 64, what: 'levels the ground around the player, count = radius', chat: (s) => `flat ${s.count || 8}` },
   share: { args: '', what: 'hands the player everything carried except tools, weapons and armour', chat: () => 'share' },
 }
 // Work steps the plan may pin: not the night/safety steps (the FSM owns
@@ -92,7 +95,7 @@ function validatePlan(ans, works = workSteps()) {
     }
     if (ORDER_STEPS[id] && ORDER_STEPS[id].args.includes('count') && r.count != null) {
       const c = Math.floor(Number(r.count))
-      if (!(c >= 1 && c <= 64)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
+      if (!(c >= 1 && c <= ORDER_STEPS[id].max)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
       s.count = c
     }
     steps.push(s)

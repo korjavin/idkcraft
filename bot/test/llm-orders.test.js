@@ -106,6 +106,10 @@ describe('llm orders: plan validation', () => {
       [{ step: 'bring', item: 'water_bucket', count: 2, done: 'two buckets' }])
     assert.ok(llmOrders.validatePlan({ plan: [{ step: 'bring', item: 'a;b' }] }, works).error)
     assert.ok(llmOrders.validatePlan({ plan: [{ step: 'bring', item: 'torch', count: 500 }] }, works).error)
+    // codex: bring clamps to WANT_MAX (16) — 32 refuses, never delivers 16 and says done
+    assert.match(llmOrders.validatePlan({ plan: [{ step: 'bring', item: 'torch', count: 32 }] }, works).error, /bring count 32/)
+    assert.equal(llmOrders.validatePlan({ plan: [{ step: 'bring', item: 'torch', count: 16 }] }, works).steps[0].count, 16)
+    assert.equal(llmOrders.validatePlan({ plan: [{ step: 'flat', count: 32 }] }, works).steps[0].count, 32)
     assert.ok(llmOrders.validatePlan({ plan: [{ step: 'bring' }] }, works).error)
   })
   it('empty plan and junk', () => {
