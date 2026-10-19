@@ -201,6 +201,135 @@ function proposal(c) {
 const GATE = 'gate: micro-run the spot once WITHOUT a skill (vf8e.10 runner); it must be RED (unreached / page / refusal) ' +
   'or the candidate is not-reproduced and no model tokens are spent (stale terrain, mobs, protected blocks, a player)'
 
+// --- Nightly runner support (idkcraft-vf8e.10, tools/curriculum.sh) ---
+// Ledger: <CURRICULUM_DIR>/curriculum-ledger.json (work root, never in git):
+// sig -> {date, verdict, attempts, cost, skillPath, resultJson, count, reds}.
+// count = harvest count at record time (the 7-day retry compares growth);
+// reds = lifetime RED runs (3 parks the signature for a human look).
+const LEDGER = () => path.join(DIR(), 'curriculum-ledger.json')
+const today = () => new Date().toISOString().slice(0, 10)
+const ageDays = (date) => (Date.parse(`${today()}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86400e3
+const RETRY_DAYS = 7
+const MAX_REDS = 3
+
+function readLedger() {
+  try {
+    const l = JSON.parse(fs.readFileSync(LEDGER(), 'utf8'))
+    return l && typeof l === 'object' && !Array.isArray(l) ? l : {}
+  } catch (_) { return {} }
+}
+
+// Top-k pick: proposable signatures not in the ledger, or RED older than 7
+// days with a grown count (Voyager's failed-list retry). Prints
+// `pick <sig>` lines plus `skip <sig> <reason>` for the runner's log.
+function pick(top = 2) {
+  let file = path.join(DIR(), 'curriculum.json')
+  let list
+  try { list = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (_) { console.log(`no ${file}: run harvest first`); return 2 }
+  if (!Array.isArray(list)) { console.log(`${file}: not a list`); return 2 }
+  const ledger = readLedger()
+  const out = []
+  for (const c of list) {
+    if (out.filter((l) => l.startsWith('pick ')).length >= top) break
+    if (!c || !c.proposable || !c.sig) continue
+    const e = ledger[c.sig]
+    if (!e) { out.push(`pick ${c.sig}`); continue }
+    if (String(e.verdict || '').toUpperCase().startsWith('GREEN')) { out.push(`skip ${c.sig} done`); continue }
+    if ((e.reds || 0) >= MAX_REDS || (e.envs || 0) >= MAX_REDS) { out.push(`skip ${c.sig} parked`); continue }
+    // env never reached a verdict: the candidate was never really tried,
+    // so it is picked again right away (its strike count parks it above).
+    if (String(e.verdict || '').toUpperCase() === 'ENV') { out.push(`pick ${c.sig}`); continue }
+    if (String(e.verdict || '').toUpperCase().startsWith('RED')) {
+      if (ageDays(e.date) > RETRY_DAYS && c.count > (e.count || 0)) { out.push(`pick ${c.sig}`); continue }
+      out.push(`skip ${c.sig} ${ageDays(e.date) > RETRY_DAYS ? 'red-stale' : 'red-recent'}`)
+      continue
+    }
+    out.push(`skip ${c.sig} ${String(e.verdict || 'unknown').toLowerCase()}`)
+  }
+  console.log(out.join('\n'))
+  return 0
+}
+
+// record <sig> <verdict> [result.json] [skillPath]: verdict is RED,
+// GREEN:unpromoted, not-reproduced or env; attempts/cost come from the
+// loop's result.json (the PRICE table there — never re-estimated), 0
+// without one. env (revmux 01 core-1) is a loop exit 2 AFTER paid attempts:
+// never RED and reds is not bumped, but the real dollars reach the ledger
+// or the $ cap goes blind. body defaults to the run's REPLAY_BODY.
+function record(sig, verdict, resultFile, skillPath) {
+  if (!sig || !['RED', 'GREEN:unpromoted', 'not-reproduced', 'env'].includes(verdict)) {
+    console.log('usage: node tools/curriculum.js record <sig> <RED|GREEN:unpromoted|not-reproduced|env> [result.json] [skill.js]')
+    return 2
+  }
+  let list = []
+  try { list = JSON.parse(fs.readFileSync(path.join(DIR(), 'curriculum.json'), 'utf8')) } catch (_) { /* count unknown */ }
+  const c = Array.isArray(list) ? list.find((x) => x && x.sig === sig) : null
+  let attempts = 0
+  let cost = 0
+  if (resultFile) {
+    try {
+      const r = JSON.parse(fs.readFileSync(resultFile, 'utf8'))
+      attempts = r.attempts || 0
+      cost = Number(r.cost) || 0
+    } catch (e) { console.log(`no result at ${resultFile}: ${String((e && e.message) || e).slice(0, 120)}`); return 2 }
+  }
+  const ledger = readLedger()
+  const prev = ledger[sig] || {}
+  // Same-day re-record (an env entry retried tonight, or two runs in one
+  // UTC day): add, don't overwrite, or the earlier spend hides from the $
+  // cap (revmux 02 core-1). The entry then totals today for the signature;
+  // each run's own cost stays on its CURRICULUM line.
+  const sameDay = prev.date === today()
+  ledger[sig] = {
+    date: today(), verdict,
+    attempts: attempts + (sameDay ? prev.attempts || 0 : 0),
+    cost: cost + (sameDay ? prev.cost || 0 : 0),
+    skillPath: skillPath || prev.skillPath || null,
+    resultJson: resultFile || prev.resultJson || null,
+    count: c ? c.count : (prev.count || 0),
+    reds: (prev.reds || 0) + (verdict === 'RED' ? 1 : 0),
+    envs: (prev.envs || 0) + (verdict === 'env' ? 1 : 0),
+    body: process.env.REPLAY_BODY || prev.body || 'mineflayer',
+  }
+  fs.mkdirSync(DIR(), { recursive: true })
+  fs.writeFileSync(LEDGER(), JSON.stringify(ledger, null, 1) + '\n')
+  console.log(`ledger ${sig}: ${verdict} attempts=${attempts} cost=$${cost.toFixed(2)} reds=${ledger[sig].reds}`)
+  return 0
+}
+
+// spent: today's ledger USD sum (the CURRICULUM_USD_PER_DAY cap compares it
+// before STARTING each scenario). Prints a number with 2 decimals.
+function spent() {
+  const ledger = readLedger()
+  const t = today()
+  const sum = Object.values(ledger).reduce((a, e) => a + (e && e.date === t ? Number(e.cost) || 0 : 0), 0)
+  console.log(sum.toFixed(2))
+  return 0
+}
+
+// Setup-failure notes (findings-1 b): the arena was never tested (the guide
+// was buried or died), so the row is not a verdict on the spot. Kept equal
+// to stuck-replay.js ENV_NOTES by the runner tests — never RED, never a
+// paid loop.
+const ENV_FAIL_NOTES = new Set(['GUIDE-BURIED', 'GUIDE-DIED'])
+
+// gate <replay.json>: the reproduction gate — the no-skill micro-run must be
+// RED (unreached, or a page/refusal: calls > 0) or the candidate is
+// not-reproduced. Exit 0 = RED, 1 = not RED, 2 = unreadable or setup failure.
+function gate(file) {
+  let rows
+  try { rows = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) {
+    console.log(`gate: no replay rows at ${file}: ${String((e && e.message) || e).slice(0, 120)}`)
+    return 2
+  }
+  const row = Array.isArray(rows) ? rows[0] : null
+  if (!row) { console.log(`gate: no replay rows at ${file}`); return 2 }
+  if (ENV_FAIL_NOTES.has(row.note)) { console.log(`gate: ${row.spot} ${row.note} (setup failed, not judged) -> ENV`); return 2 }
+  const red = row.reached !== true || row.call !== 0
+  console.log(`gate: ${row.spot} reached=${row.reached} calls=${row.call} -> ${red ? 'RED' : 'NOT-RED'}`)
+  return red ? 0 : 1
+}
+
 function table(list, top = 20) {
   const rows = [['#', 'sig', 'family', 'count', 'score', 'bots', 'lastSeen', 'cell', 'propose', 'reason']]
   list.slice(0, top).forEach((c, i) => rows.push([i + 1, c.sig, c.family, c.count, c.score, c.bots.join(','), c.lastSeen, c.cell, c.proposable ? 'yes' : c.why, c.reason]))
@@ -241,10 +370,14 @@ function main(argv) {
     console.log(GATE)
     return 0
   }
-  console.log('usage: node tools/curriculum.js harvest <dump.txt...> [days=7] | propose <sig>')
+  if (cmd === 'pick') return pick(Number(arg || 2) >= 1 ? Number(arg || 2) : 2)
+  if (cmd === 'record') return record(argv[1], argv[2], argv[3], argv[4])
+  if (cmd === 'spent') return spent()
+  if (cmd === 'gate') return gate(arg)
+  console.log('usage: node tools/curriculum.js harvest <dump.txt...> [days=7] | propose <sig> | pick [k=2] | record <sig> <verdict> [result.json] [skill.js] | spent | gate <replay.json>')
   return 2
 }
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2))
 
-module.exports = { parse, rank, proposal, table, main, WEIGHT }
+module.exports = { parse, rank, proposal, table, main, WEIGHT, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES }
