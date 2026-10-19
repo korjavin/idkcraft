@@ -1354,6 +1354,12 @@ describe('rw4.19 interior clear cells', () => {
     castle.parked = true // the castle releases the house: the refill can run, the walks wait again
     assert.equal(build.entranceHoled(bot, ctx, table), true)
     assert.equal(furnace.tableBlock(bot, ctx), null)
+    // revmux 01 minor: an auto-parked castle past 64 from home keeps the
+    // build vetoed (castleParkLeash), so no wait either.
+    ctx.castle = { ...castle, site: { x: s.x + 100, y: s.y, z: s.z }, taskPark: { auto: true } }
+    assert.equal(goal.MENU.build.feasible({ planks: 64, table: 1, door: 1, time: 'day' }, bot, ctx), false, 'setup: the leash vetoes')
+    assert.equal(build.entranceHoled(bot, ctx, table), false)
+    ctx.castle = castle
     ctx.home = { ...home, parked: true } // a parked house vetoes the refill too
     assert.equal(build.entranceHoled(bot, ctx, table), false)
   })

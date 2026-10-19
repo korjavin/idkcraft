@@ -454,13 +454,18 @@ function entranceHoled(bot, ctx, pos) {
     return holeOwed(bot, ctx.home, ctx.buildSkip)
   } catch (_) { return false }
 }
-// vetoes.castleFirst(ctx, 'build') inlined: requiring vetoes (-> explore ->
-// castle -> build) closes a require cycle. Keep in step with
-// explore.castleActive and the houseStep unlock.
+// MENU.build's castle vetoes inlined: vetoes.castleFirst(ctx, 'build') and
+// goal.castleParkLeash (an auto-parked castle past explore.TASK_SEARCH_RADIUS
+// = 64 from home). Requiring vetoes/explore closes a require cycle (-> castle
+// -> build), so keep this in step with explore.castleActive by hand.
 function refillCastleVetoed(ctx) {
-  if (require('../goal-unlock').goalUnlock(ctx, 'houseStep') === 'build') return false
   const st = ctx.castle
-  return !!(st && st.site && typeof st.site.x === 'number' && !st.parked && st.phase !== 'complete')
+  if (!st || !st.site || typeof st.site.x !== 'number') return false
+  const h = ctx.home && ctx.home.site
+  if (st.taskPark && st.taskPark.auto === true && h && typeof h.x === 'number' &&
+    Math.hypot(h.x - st.site.x, h.z - st.site.z) > 64) return true
+  if (require('../goal-unlock').goalUnlock(ctx, 'houseStep') === 'build') return false
+  return !st.parked && st.phase !== 'complete'
 }
 
 // The house table cell (plan[0]) is loaded, empty and not given up
