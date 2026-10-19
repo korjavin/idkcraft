@@ -251,6 +251,29 @@ describe('llm orders: flag on', () => {
     }
   })
 
+  it('a timed-out order step drops its bring; a replaced plan drops the old one', async () => {
+    const bot = mockBot([{ name: 'torch', count: 8 }])
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"bring","item":"torch","count":8}]}'
+    handleChat(bot, ticker, 'P', 'torches please')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    assert.ok(ctx.bring)
+    llmOrders.tick(bot, ctx, Date.now() + llmOrders.STEP_MS + 1000)
+    assert.equal(ctx.llmOrder, null)
+    assert.equal(ctx.bring, null, 'timeout released the bring')
+    handleChat(bot, ticker, 'P', 'torches again')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    assert.ok(ctx.bring)
+    answer = '{"plan":[{"step":"light"}]}'
+    handleChat(bot, ticker, 'P', 'actually light the house')
+    await flush()
+    assert.equal(ctx.bring, null, 'replacement released the old bring')
+    assert.equal(ctx.llmOrder.steps[0].step, 'light')
+  })
+
   it('another owner order cancels the plan; status and chatter do not', async () => {
     const bot = mockBot()
     const ticker = tickerFor(bot)

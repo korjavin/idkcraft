@@ -166,6 +166,7 @@ function ask(bot, ctx, req, fetchFn) {
       if (req.fallback || req.explicit) say(req.fallback || `I can't plan that (${r.error}) — try: help`)
       return
     }
+    if (ctx.llmOrder) { release(ctx, ctx.llmOrder); console.log(`llm order end text="${ctx.llmOrder.text}" result=replaced`) }
     ctx.llmOrder = { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed, steps: r.steps, i: 0, cur: null, at: Date.now(), feeding: false }
     say(`plan: ${r.steps.map(label).join(', then ')}`.slice(0, 250))
   })()
@@ -216,7 +217,28 @@ function orderResult(ctx, s, c) {
   return e.outcome === 'done' ? 'done' : 'failed:refused'
 }
 
+// Drop what the plan's current step still owns, so a timed-out or replaced
+// plan leaves no executor running (codex P2): the bring (counted cancelled,
+// as every order drop does), the lead and its far search, the flat (parked,
+// like stop), an unconsumed pin.
+function release(ctx, o) {
+  const s = o && o.cur && o.steps[o.i]
+  if (!s) return
+  if (!ORDER_STEPS[s.step]) {
+    if (ctx.taskPlanStep === s.step) ctx.taskPlanStep = null
+    return
+  }
+  if (ctx.bring) {
+    try { metrics.bring.inc({ outcome: 'cancelled', kind: ctx.bring.kind || 'block' }) } catch (_) { /* metric best-effort */ }
+    ctx.bring = null
+    try { require('./behaviours/bring').clearSearchLeg(ctx) } catch (_) { /* leg best-effort */ }
+  }
+  if (s.step === 'find' && (ctx.lead || ctx.pendingSearch) && o.ticker && typeof o.ticker.clearLead === 'function') o.ticker.clearLead()
+  if (s.step === 'flat' && ctx.flat) ctx.flat.parked = true
+}
+
 function end(bot, ctx, o, result) {
+  if (result !== 'done') release(ctx, o)
   const n = o.steps.length
   console.log(`llm order end text="${o.text}" result=${result} step=${Math.min(o.i + 1, n)}/${n} dur=${Math.floor((Date.now() - o.at) / 1000)}s`)
   if (ctx.llmOrder === o) ctx.llmOrder = null
