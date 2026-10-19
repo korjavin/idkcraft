@@ -751,7 +751,8 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
   never in `skill-scenarios.json`, because `skill-loop.test.js` pins that file to corpus spots.
 - Reproduction gate (printed by `propose`; the runner, vf8e.10, gives the verdict): micro-run
   the spot once WITHOUT a skill. It must be RED (unreached, a page or a refusal). If it is not,
-  the candidate is not-reproduced and no model tokens are spent.
+  the candidate is not-reproduced and no model tokens are spent. A `GUIDE-BURIED`/`GUIDE-DIED`
+  setup failure is env (not judged), never RED — the runner retries it without spending.
 
 Real harvest (2026-10-12..19 prod dump, default feed IdkBotV2): 206 events, 151 signatures
 (147 page, 4 bring), 115 proposable. Top 10 are all pages: counts 20, 8, 7, 6, 6, 3, 2, 2, 2, 2.
@@ -760,6 +761,48 @@ proposable; the other 7 are `no-dir` (v2 logs no `next`). The 4 bring signatures
 proposable: `bone` and `sapling` with no recipe, `andesite` needing diorite, `diorite` needing
 quartz. With `CURRICULUM_BOTS=all`: 918 events, 695 signatures (690 page, 5 bring), 637
 proposable.
+
+### Nightly runner (`curriculum.sh`, idkcraft-vf8e.10)
+
+The curriculum names what to learn; the runner closes the loop overnight on the laptop rig
+(learning never runs on prod): harvest -> pick the top `CURRICULUM_K` (default 2) signatures
+that are not in the ledger, or RED in the ledger older than 7 days with a grown count ->
+`propose` each into `AUTO-<sig>/` -> one keeper per candidate (`REPLAY_KEEP=1`,
+fresh world) -> pre-run WITHOUT skills on it (not RED = `not-reproduced` in the ledger,
+no model tokens spent) -> RED = `skill-loop.js <name> 6` with `SKILL_LOOP_SCENARIOS` /
+`SKILL_LOOP_SPOTS` pointing at the proposed files and `SKILL_LOOP_RIG` at the keeper
+(proposed spots have no baseline entry, so the replay row decides: reached with no page
+is green) -> ledger `curriculum-ledger.json` in the work root (never in git). The keeper
+is torn down after each candidate; the night ends with one line per candidate plus
+`CURRICULUM night=<date> tried=<n> green=<n> red=<n> skipped=<n> cost=$<usd>`.
+
+```sh
+sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orchestrator
+```
+
+- Caps: `CURRICULUM_USD_PER_DAY` (default 30) refuses to START a scenario once today's
+  ledger sum reaches it (exit 3 = budget); 6 attempts per scenario
+  (`CURRICULUM_MAX_ATTEMPTS`); `LLM_TOKENS_PER_HOUR` still applies inside the loop; 3
+  lifetime RED runs parks the signature for a human look. Costs come from the loop's
+  `result.json` (the PRICE table there), never re-estimated; a loop exit 2 (keeper never
+  kept, network) is not RED and spends no cap.
+- Schedule stays manual (owner 2026-10-19): started by hand or by the orchestrator before
+  an owner play session / overnight. There is no scheduler and the night job never opens
+  PRs: a GREEN candidate ends with a `PROMOTE:` line (the vf8e.4 `skill-promote.js`
+  command with scenario, spot and result paths), and the morning promotion runs it by
+  hand — its PR carries the verdict lines. The promoter also copies the `AUTO-<sig>`
+  spot from the printed spot path into `stuck-spots.json` and records its baseline
+  entry (corpus rule: one without the other fails the gate or `npm test`); the
+  promote script does not do that step itself.
+- Body: the harvest feeds bot2 stalls by default, so set `CURRICULUM_BODY=baritone`
+  for a bot2 night — the keeper, the pre-run and the loop then verify on the v2
+  body. Empty (default) is the mineflayer replay. The ledger records the body and
+  the promotion refuses a body mismatch.
+- Rig slot: one (`CURRICULUM_RIG_ID`, default the default rig); `RIG_LOCK_WAIT`
+  (default 7200) bounds the keeper boot's wait for a busy rig, then the night is
+  skipped (exit 2). Key: `ANTHROPIC_API_KEY` or the stash, never printed.
+- Exits: 0 = night done (loop REDs are ledger data, not failures), 2 = environment
+  failure with no loop verdict, 3 = budget.
 
 ## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
 
