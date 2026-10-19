@@ -65,6 +65,10 @@ const NEAR_PLAYER = 8
 const PIT_GOAL_INSIDE = 24
 
 const RECOVER_ORDER = ['pillar_up', 'dig_up', 'water_up', 'dig_pillar', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
+// Generated skills (vf8e.2, src/skills.js): appended to RECOVER_ORDER/MENU/
+// CRITERIA only under BOT_SKILLS=1; empty otherwise, so every line reading
+// it is a no-op with the flag off.
+const RECOVER_SKILLS = new Set()
 
 // Menu shaping (y34: laya answers dig_step on 549/603 prod stuck menus where
 // the FSM says hop_step/sidestep - digging where a hop would do). Where a hop
@@ -860,6 +864,9 @@ function recoverFsm(facts, names) {
   // hop still mounts first and a just-failed hop escalates here, never
   // repeats (the done-ban already bars sidestep from the menu itself).
   if (facts.boxed && !facts.water && facts.pickaxe && facts.shuffleOut && pick('dig_step')) return 'dig_step'
+  // vf8e.2: a feasible skill (its own gate is narrow by contract) goes
+  // after every hand escape and before the generic fallbacks.
+  for (const n of RECOVER_SKILLS) if (pick(n)) return n
   if (pick('dig_through')) return 'dig_through'
   if (pick('call_player')) return 'call_player'
   return 'wait'
@@ -2819,6 +2826,7 @@ function run(bot, ctx) {
 
 module.exports = {
   RECOVER_ORDER,
+  RECOVER_SKILLS,
   RECOVER_MENU,
   RECOVER_INSTRUCTIONS,
   RECOVER_CRITERIA,

@@ -41,6 +41,7 @@ const taskMod = require('./task')
 const recover = require('./behaviours/recover')
 // The table lives in behaviours/index.js (oqul.3); same object re-exported.
 const { BEHAVIOURS } = require('./behaviours/index')
+const skills = require('./skills')
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
 // up every 10 s just to re-scan the player list is plenty.
@@ -97,6 +98,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // Hybrid worker (idkcraft-jlda.2): env read once here; empty WORKER_NAME
   // leaves every worker export a no-op (zero behaviour diff).
   try { worker.configure(process.env) } catch (_) { /* worker best-effort */ }
+  // Generated skills (vf8e.2): BOT_SKILLS=1 only; off = loader never called.
+  if (skills.enabled(process.env)) {
+    try { skills.load(process.env) } catch (e) { console.log(`skills load failed: ${(e && e.message) || e}`) }
+  }
   // Greeting gesture (v92): injectable for fake-clock tests, real otherwise.
   const greet = greeter || createGreeter()
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
