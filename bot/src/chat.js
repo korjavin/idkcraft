@@ -763,6 +763,7 @@ function castleChat(bot, ticker, playerName, cmd) {
     try { taskMod.clearTaskParks(ctx) } catch (_) { /* resume best-effort */ }
     st.parked = false
     st.visitedAt = 0
+    ctx.tidyLegMs = 0 // revmux 03: a forced trip gets the full TIDY_TRIP_MS
     ticker.saveMemory()
     ticker.work()
     return 'castle: going to tidy it'

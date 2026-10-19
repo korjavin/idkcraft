@@ -1073,7 +1073,7 @@ function noteDry(ctx, kind) {
 function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
-  if (st.parked) return 'parked'
+  if (st.parked) { ctx.tidyLegMs = 0; return 'parked' }
   // Tidy bound (g0z.62 revmux 01/02): the watchdog never watches a
   // complete castle, so a failed trip leg — or TIDY_TRIP_MS of leg time
   // without arriving (a walk that moves but never closes in) — counts as
@@ -1088,7 +1088,7 @@ function menuFact(bot, ctx, now = Date.now()) {
       st.visitedAt = now
       ctx.tidyLegMs = 0
     }
-  }
+  } else ctx.tidyLegMs = 0 // a fresh trip clock for every due window (stop/forget/new castle)
   ctx.tidyTickAt = now
   try {
     if (!siteLoaded(bot, st)) {

@@ -146,6 +146,11 @@ describe('castle tidy (g0z.62)', () => {
     for (const end = t + 2 * 60000; t < end; t += 1000) castleMod.menuFact(bot, ctx, t)
     assert.equal(castleMod.menuFact(bot, ctx, t), 'done')
     assert.ok(ctx.castle.visitedAt > t0 + 19 * 60000)
+    // revmux 03: a stop/go cycle hands the next trip a fresh clock.
+    ctx.tidyLegMs = 5 * 60000
+    ctx.castle.parked = true
+    assert.equal(castleMod.menuFact(bot, ctx, t), 'parked')
+    assert.equal(ctx.tidyLegMs, 0)
   })
 
   it('visitedAt persists through memory save/restore (future stamps clamp to now)', () => {
