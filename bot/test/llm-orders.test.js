@@ -18,6 +18,12 @@ function pos(x, y, z) {
   return p
 }
 
+// Fake of the mineflayer Bot surface (github.com/PrismarineJS/mineflayer docs/api.md)
+// that llm-orders/chat touch: bot.username, bot.entities, bot.health, bot.food,
+// bot.entity.position/onGround, bot.registry.blocksByName/itemsByName (minecraft-data),
+// bot.players[name].entity, bot.inventory.items(), bot.toss(), bot.chat(); plus
+// bot.pathfinder.goal/setGoal()/isMoving() from mineflayer-pathfinder. No events are
+// emitted — chat is driven by calling handleChat directly, like the 'chat' event handler.
 function mockBot(items = []) {
   const lines = []
   const itemsByName = { torch: { id: 1 }, coal: { id: 2 }, stick: { id: 3 } }
@@ -57,6 +63,12 @@ beforeEach(() => {
   calls = []
   answer = '{"plan":[]}'
   origFetch = globalThis.fetch
+  // Fake of the Anthropic Messages API (docs.anthropic.com/en/api/messages):
+  // brain.llmCall POSTs https://api.anthropic.com/v1/messages with headers
+  // x-api-key, anthropic-version: 2023-06-01 and content-type: application/json,
+  // JSON body {model, max_tokens, system, messages}. The reply mirrors the real
+  // 200 response: {id, type:'message', role:'assistant', model,
+  // content:[{type:'text', text}], stop_reason, usage:{input_tokens, output_tokens}}.
   globalThis.fetch = async (url, init) => {
     calls.push(JSON.parse(init.body))
     return {
