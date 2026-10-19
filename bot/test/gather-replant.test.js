@@ -8,6 +8,15 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
+// revmux 01 core-6: stub the staged far search BEFORE gather loads —
+// gather destructures scout at require time, so the wrappers must be in
+// place first. Null ctl entries call through to the real search.
+const scout = require('../src/behaviours/scout')
+const origStartFar = scout.startFarSearch
+const origStepFar = scout.stepFarSearch
+const farCtl = { start: null, step: null }
+scout.startFarSearch = (...a) => (farCtl.start ? farCtl.start(...a) : origStartFar(...a))
+scout.stepFarSearch = (...a) => (farCtl.step ? farCtl.step(...a) : origStepFar(...a))
 const gather = require('../src/behaviours/gather')
 const resources = require('../src/resources')
 const { NEED_LOGS } = require('../src/budget')
@@ -26,7 +35,7 @@ function pos(x, y, z) {
 const LOGREG = { oak_log: 17, oak_leaves: 18, stone: 1, dirt: 2 }
 const FIND_MD = 48
 
-function mockBot({ names = {}, items = [], syncHits = null } = {}) {
+function mockBot({ names = {}, items = [], syncHits = null, stubbornDig = false } = {}) {
   const lines = []
   const blocksByName = {}
   for (const [name, id] of Object.entries(LOGREG)) blocksByName[name] = { id }
@@ -79,7 +88,7 @@ function mockBot({ names = {}, items = [], syncHits = null } = {}) {
     dig: async (block) => {
       bot.digCalls++
       const bp = block && block.position
-      if (bp) names[`${bp.x},${bp.y},${bp.z}`] = 'air' // chopped: loaded, stale
+      if (bp && !stubbornDig) names[`${bp.x},${bp.y},${bp.z}`] = 'air' // chopped: loaded, stale
       bot._items.push({ name: 'oak_log', count: 1 })
     },
     equip: async (item) => { bot.equipped = item && item.name },
@@ -116,9 +125,12 @@ function homeCtx(over = {}) {
 }
 
 // Drive the step; teleport along gather walks, hold still for digs/pickup.
-async function drive(bot, ctx, maxTicks = 1200) {
+// onTick runs after gather each tick, before dig landings flush (lets a
+// test steal the body mid-dig like fight does).
+async function drive(bot, ctx, maxTicks = 1200, onTick = null) {
   for (let i = 0; i < maxTicks; i++) {
     gather(bot, ctx, null, {})
+    if (onTick) onTick(bot, ctx, i)
     await new Promise((resolve) => setImmediate(resolve)) // flush dig landings
     const g = ctx.gather
     if (!g || g.final) break
@@ -168,6 +180,106 @@ describe('gather replant (idkcraft-gc3j)', () => {
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.placeCalls, 0)
     assert.equal(bot._items.filter((it) => it.name === 'oak_sapling').length, 1)
+    // revmux 01 core-1: the hike out taught the stand — an un-dug upper
+    // log of the last trunk is in memory now (arrival scan) ...
+    assert.ok(memCells(ctx).has('224,65,0'), `stand noted: ${[...memCells(ctx)].slice(0, 8)}`)
+    // ... while the dug stumps left it again (revmux 01 core-5).
+    assert.ok(!memCells(ctx).has('200,64,0'), 'dug stump forgotten')
+  })
+
+  function memCells(ctx) {
+    const out = new Set()
+    try {
+      for (const r of ctx.resources.items.values()) out.add(`${r.x},${r.y},${r.z}`)
+    } catch (_) { /* empty */ }
+    return out
+  }
+
+  it('a loaded-stale far point is forgotten, not re-walked', async () => {
+    // revmux 01 core-5: the memory cell reads back as air (loaded) — the
+    // retry must come from live ground, never the dead cell.
+    const names = { '150,64,0': 'air' }
+    grove(names, 200)
+    const bot = mockBot({ names, items: [] })
+    const ctx = homeCtx()
+    resources.noteSpots(ctx, [
+      { x: 150, y: 64, z: 0, name: 'oak_log' },
+      { x: 200, y: 64, z: 0, name: 'oak_log' },
+    ], Date.now())
+    await drive(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(!memCells(ctx).has('150,64,0'), 'stale far cell forgotten')
+  })
+
+  it('a stolen body keeps its sword: no replant after fight takes over', async () => {
+    // revmux 01 core-4: fight re-issues the goal mid-dig — the landing must
+    // not equip a sapling over the sword.
+    const names = {}
+    grove(names, 10)
+    const bot = mockBot({ names, items: [{ name: 'oak_sapling', count: 1 }] })
+    const ctx = homeCtx()
+    let steals = 0
+    await drive(bot, ctx, 1200, (b, c) => {
+      // Every landing happens under a foreign goal: no landing may plant.
+      if (c.gather && c.digInFlight) {
+        steals++
+        c.lastGoalKey = 'fight:zombie' // fight took the body mid-dig
+      }
+    })
+    assert.ok(steals > 0, 'steals fired')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.placeCalls, 0)
+    assert.equal(bot.equipped, null)
+  })
+
+  it('an interrupted dig leaves the log standing: no replant onto wood', async () => {
+    // revmux 01 core-4: the dig resolved without clearing the cell — the
+    // stump is not air, so no sapling is placed onto the standing log.
+    const names = {}
+    grove(names, 10)
+    const bot = mockBot({ names, items: [{ name: 'oak_sapling', count: 3 }], stubbornDig: true })
+    const ctx = homeCtx()
+    await drive(bot, ctx, 60)
+    assert.ok(bot.digCalls > 0, 'digs happened')
+    assert.equal(bot.placeCalls, 0)
+  })
+
+  it('the searchfar call site notes live hits and never the protected cell', async () => {
+    // revmux 01 core-6: empty near search, a staged search whose shells hold
+    // two live trunks and one leafless (protected) pillar. Deleting the
+    // noteFarWood call, or an exclude without the guard, fails this.
+    const names = {}
+    for (const x of [100, 108]) {
+      names[`${x},63,0`] = 'dirt'
+      names[`${x},64,0`] = 'oak_log'
+      names[`${x},65,0`] = 'oak_log'
+      names[`${x},66,0`] = 'oak_log'
+      names[`${x + 1},66,0`] = 'oak_leaves'
+    }
+    names['104,63,0'] = 'dirt'
+    names['104,64,0'] = 'oak_log'
+    names['104,65,0'] = 'oak_log' // no leaves: an owner pillar, protected
+    const bot = mockBot({ names, items: [] })
+    const ctx = homeCtx()
+    const hits = new Map([
+      ['100,64,0', { x: 100, y: 64, z: 0 }],
+      ['104,64,0', { x: 104, y: 64, z: 0 }],
+      ['108,64,0', { x: 108, y: 64, z: 0 }],
+    ])
+    farCtl.start = () => ({ hits, queue: [], at: 0, origin: { x: 0, y: 64, z: 0 }, edge: 160 })
+    farCtl.step = () => ({ done: true, result: { position: pos(108, 64, 0), name: 'oak_log' }, edge: 160 })
+    try {
+      // Three ticks only: start, complete+note+commit — asserted before any
+      // walk arrival scan can add its own cells.
+      await drive(bot, ctx, 3)
+    } finally {
+      farCtl.start = null
+      farCtl.step = null
+    }
+    assert.match(ctx.lastGoalKey, /^gather:108,64,0$/, 'walks the live far hit, not the pillar')
+    assert.ok(memCells(ctx).has('100,64,0'), 'live far hit noted')
+    assert.ok(memCells(ctx).has('108,64,0'), 'walk target noted')
+    assert.ok(!memCells(ctx).has('104,64,0'), 'protected cell never noted')
   })
 
   it('a stump inside the house footprint is not replanted', async () => {

@@ -1498,6 +1498,7 @@
       "src/behaviours/beds.js",
       "src/behaviours/build.js",
       "src/behaviours/flat.js",
+      "src/behaviours/gather.js",
       "src/behaviours/light.js",
       "src/behaviours/sitebed.js"
     ],
