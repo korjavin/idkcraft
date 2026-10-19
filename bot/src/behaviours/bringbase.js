@@ -214,8 +214,34 @@ function progressed(bp, last, grounded) {
   return !!grounded && Math.floor(bp.y) !== Math.floor(last.y)
 }
 
+function hasEmptyBucket(bot) {
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    if (Array.isArray(items)) return items.some((i) => i && i.name === 'bucket' && (typeof i.count !== 'number' || i.count > 0))
+  } catch (_) { /* unscannable */ }
+  return false
+}
+
+// The water-bucket fill opener (idkcraft-k2ze): an item order that fills an
+// empty from nearby source water instead of digging. Lives here (not
+// bring.js) so bringitem.js can reach it without a require cycle back into
+// bring.js (the did.4 load direction).
+function toWaterFill(bot, o) {
+  o.kind = 'item'
+  o.phase = 'fill'
+  o.items = []
+  o.drop = 'water_bucket'
+  o.have = 0
+  o.fillTried = {}
+  o.fillTarget = null
+  o.fillTicks = 0
+  o.fillStartedAt = Date.now()
+  return o
+}
+
 module.exports = {
   WANT_ORE, WANT_MAX, countDrop, bringKind, refuse, done, releaseSmelt, stopGuidedWork,
   dropFor, PICKAXE_RANK, requiredTier, bestPickRank, hasPickaxe, tierArticle, tierRefusal,
   PREY_NAMES, PREY_DROPS, animalDist, findAnimal, entityById, progressed,
+  hasEmptyBucket, toWaterFill,
 }

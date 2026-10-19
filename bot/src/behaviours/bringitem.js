@@ -19,7 +19,7 @@ const woolMod = require('./wool')
 const bedMod = require('./bed')
 const { countItems } = require('../perception')
 const { say } = require('./util')
-const { WANT_ORE, WANT_MAX, refuse, done, countDrop, hasPickaxe, tierRefusal } = require('./bringbase')
+const { WANT_ORE, WANT_MAX, refuse, done, countDrop, hasPickaxe, tierRefusal, hasEmptyBucket, toWaterFill } = require('./bringbase')
 
 // Deferred require, same cycle as bring.js had: craftany->craft->goal
 // closes the loop back through forage/deliver->bring, so a top-level
@@ -701,6 +701,16 @@ function orderCraftNames(names) {
 // gap opens a sub-order (beds pick their colour first), a furnace-gated
 // gap refuses with the smelting line, anything else keeps planCraft's line.
 function enterCraftOrRefuse(bot, ctx, o) {
+  // Bucket fill (idkcraft-k2ze, revmux 01 core-1): a water-bucket order that
+  // fell through the home chest (empty, or the chest was lost mid-order)
+  // fills from nearby water when the pack holds an empty — before the craft
+  // ladder refuses with no recipe. The chest keeps priority: this only runs
+  // after the chest came up short.
+  if (o && Array.isArray(o.names) && o.names.length === 1 && o.names[0] === 'water_bucket' && hasEmptyBucket(bot)) {
+    toWaterFill(bot, o)
+    say(bot, 'filling a bucket for you')
+    return
+  }
   const direct = smeltDirect(o)
   // A direct smelt order gives what the furnace landed: no second lap.
   if (direct && (o.smeltRuns || 0) > 0) { giveOrRefuse(bot, ctx, o, `could not smelt ${direct}`); return }
