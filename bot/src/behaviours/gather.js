@@ -11,7 +11,8 @@ const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS } = require('../budget')
 const { gatherFailedHolds } = require('../holds')
 const { countItems } = require('../perception')
-const { say, clearGoal, issueGoal, denyReason, logDeny, protectedReason } = require('./util')
+const { say, clearGoal, issueGoal, denyReason, logDeny, protectedReason, inHouseFootprint } = require('./util')
+const buildMod = require('./build')
 const Vec3 = require('vec3')
 
 // gather: chop the nearest trees until NEED_LOGS logs are on hand. One
@@ -55,6 +56,15 @@ const PROGRESS_INTERVAL_MS = 10_000 // same cadence as lead.js progress lines
 // ponytail: a +3 tree up a long walkable slope that times out is dropped
 // too; it only costs that tree (scaffold=0 only), the next one is tried.
 const CLIFF_DY = 3
+// idkcraft-gc3j: replant + far-wood memory. A felled tree near home gets a
+// sapling on the stump cell (pack stock, fed by leaf drops); far-search log
+// hits are noted into resource memory (persisted to the memory file like
+// finds) so gather routes there when the near search is empty. The
+// protected-log rule is untouched — denyReason still refuses non-tree logs
+// before any dig, replant only ever places.
+const REPLANT_HOME_RADIUS = 160 // the home wood stand: the far search reach
+const FAR_NOTE_MAX = 16 // one stand, not the forest: memory stays mixed-use
+const SAPLING_SOIL = new Set(['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'moss_block', 'mud', 'podzol', 'mycelium', 'farmland'])
 
 function scaffoldCount(bot) {
   return countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
@@ -94,6 +104,87 @@ function logIds(bot) {
 function asVec3(p) {
   if (!p || typeof p.floored === 'function') return p
   return new Vec3(p.x, p.y, p.z)
+}
+
+function isSapling(name) {
+  return typeof name === 'string' && (name.endsWith('_sapling') || name === 'mangrove_propagule')
+}
+
+function isWoodyName(name) {
+  return typeof name === 'string' &&
+    ((name.endsWith('_log') && !name.startsWith('stripped_')) || name.endsWith('_stem') || name.endsWith('_hyphae'))
+}
+
+function cellNameAt(bot, x, y, z) {
+  try {
+    const b = bot.blockAt && bot.blockAt(new Vec3(Math.floor(x), Math.floor(y), Math.floor(z)))
+    return b && b.name
+  } catch (_) { return null }
+}
+
+function findSapling(bot) {
+  try {
+    const items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
+    if (!Array.isArray(items)) return null
+    return items.find((it) => it && isSapling(it.name)) || null
+  } catch (_) { return null }
+}
+
+// One best-effort replant (gc3j): equip a pack sapling and lay it on the
+// stump cell the dig just opened. Never writes stepStatus, never throws,
+// never retries — a refusal just leaves this stump bare. Near-home only
+// (the home wood stand), outside the house footprint and off banned ground
+// (danger, castle frame); soil under the stump must take a sapling.
+function tryReplant(bot, ctx, g, stump, banned) {
+  try {
+    if (!stump || !g || g.plantInFlight) return
+    if (typeof bot.equip !== 'function' || typeof bot.placeBlock !== 'function') return
+    const home = ctx && ctx.home
+    if (!home || !home.site || typeof home.site.x !== 'number') return
+    if (Math.hypot(stump.x - home.site.x, stump.z - home.site.z) > REPLANT_HOME_RADIUS) return
+    if (inHouseFootprint(home, stump)) return
+    if (typeof banned === 'function' && banned(stump)) return
+    if (!SAPLING_SOIL.has(cellNameAt(bot, stump.x, stump.y - 1, stump.z))) return
+    const sapling = findSapling(bot)
+    if (!sapling) return
+    const ref = buildMod.findRef(bot, stump)
+    if (!ref) return
+    g.plantInFlight = true
+    ;(async () => {
+      try {
+        await bot.equip(sapling, 'hand')
+        await bot.placeBlock(ref.ref, ref.face)
+        g.replanted = (g.replanted || 0) + 1
+        try { console.log(`gather: replanted ${sapling.name} at ${stump.x} ${stump.y} ${stump.z}`) } catch (_) { /* log best-effort */ }
+      } catch (_) { /* one attempt: the stump stays bare */ }
+      finally { g.plantInFlight = false }
+    })().catch(() => { g.plantInFlight = false })
+  } catch (_) { /* replant best-effort */ }
+}
+
+// Far-search hits into resource memory (gc3j): the staged search read
+// these trunks but only one becomes the walk target — the rest would be
+// re-scanned (or forgotten over a restart) otherwise. Nearest
+// FAR_NOTE_MAX live logs only, never skipped/protected/banned cells, so a
+// deforested home range accumulates the stands its searches have seen and
+// the memory leg routes there when the near search is empty. Returns the
+// noted count. Pure enough to unit-test through module.exports.
+function noteFarWood(bot, ctx, bp, search, exclude) {
+  try {
+    const hits = search && search.hits instanceof Map ? [...search.hits.values()] : []
+    if (hits.length === 0) return 0
+    const spots = []
+    for (const q of hits) {
+      if (!q || typeof q.x !== 'number' || typeof q.y !== 'number' || typeof q.z !== 'number') continue
+      if (exclude && exclude(q)) continue
+      const name = cellNameAt(bot, q.x, q.y, q.z)
+      if (typeof name !== 'string' || !name.endsWith('_log')) continue
+      spots.push({ x: Math.floor(q.x), y: Math.floor(q.y), z: Math.floor(q.z), name })
+    }
+    if (spots.length === 0) return 0
+    spots.sort((a, b) => dist(a, bp) - dist(b, bp))
+    return resources.noteSpots(ctx, spots.slice(0, FAR_NOTE_MAX), Date.now())
+  } catch (_) { return 0 }
 }
 
 // Commit a walk target: shared init for the sync-48 hit, a resource-memory
@@ -368,6 +459,9 @@ function gather(bot, ctx, target, state) {
       if (!r.done) return
       const search = g.search
       g.search = null
+      // gc3j: the shells saw more trunks than the one walk target — note
+      // them into resource memory (persisted like finds) before picking.
+      noteFarWood(bot, ctx, bp, search, exclude)
       const hit = r.result && r.result !== 'unknown' ? r.result : null
       if (hit && hit.position && !exclude(hit.position)) {
         commitTarget(g, bp, hit.position, hit.name, true)
@@ -602,10 +696,21 @@ function gather(bot, ctx, target, state) {
     }
     ctx.digInFlight = true
     const block = g.block
+    // gc3j: stump for the replant — the bottom log only (nothing woody
+    // under it). Consumed when the dig lands; any other log leaves no stump.
+    let stump = null
+    try {
+      const sp = block && block.position
+      if (sp && typeof sp.x === 'number' && isWoodyName(block.name) &&
+        !isWoodyName(cellNameAt(bot, sp.x, sp.y - 1, sp.z))) {
+        stump = { x: Math.floor(sp.x), y: Math.floor(sp.y), z: Math.floor(sp.z) }
+      }
+    } catch (_) { stump = null }
     const run = async () => {
       try { await bot.dig(block) } catch (_) { /* gone or interrupted: pickup anyway */ }
       ctx.digInFlight = false
       g.phase = 'pickup'
+      tryReplant(bot, ctx, g, stump, banned)
     }
     void run()
     return
@@ -625,3 +730,5 @@ function gather(bot, ctx, target, state) {
 
 module.exports = gather
 module.exports.taskFar = taskFar
+module.exports.noteFarWood = noteFarWood
+module.exports.tryReplant = tryReplant
