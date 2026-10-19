@@ -1,0 +1,8 @@
+[
+  {"name": "water-climb", "spot": "DUGPIT-BARE", "sabotage": "water_up", "kind": "recover", "skill": "gen_bare_pit_climb", "bead": "idkcraft-jsf.2/idkcraft-jsf.7",
+   "task": "The bot is stuck at the bottom of a 1-wide pit about 5 blocks deep (obsidian walls, bedrock floor). It carries 2 water_bucket and nothing else: no pickaxe, no blocks to place. The goal is on the rim above. The hand recovery that used to solve this is gone from the menu. Write a recover skill that gets the bot out of this pit and keeps both buckets (pick the water back up)."},
+  {"name": "brow-step", "spot": "S6-LEAD", "sabotage": "dig_step", "kind": "recover", "skill": "gen_brow_step", "bead": "idkcraft-6x7.4/idkcraft-au4j",
+   "task": "The bot walks a 'find me emerald_block' order out of a dirt hollow and wedges under a dirt brow: the goal is above and ahead, the cell above its head is solid, and digging straight up (dig_up) fails without progress. The hand primitive that rescued this is gone from the menu. Write a recover skill that gets the bot up and out toward the goal so the order can finish, without paging the player."},
+  {"name": "night-dig-in", "spot": "SPAWN-BARE", "sabotage": "shelter", "kind": "step", "skill": "gen_night_dig_in", "bead": "idkcraft-ed88",
+   "task": "It is night. The bot's home is built but far away (too far to walk at night), it stands on open ground near spawn and carries nothing: no pickaxe, no blocks. The night shelter step is gone from the menu. Write a goal step skill that, at night when the bot is not inside, encloses the bot in solid blocks (all four sides at feet and head height, plus the cell above the head) within 25 seconds, and then holds still inside until dawn."}
+]

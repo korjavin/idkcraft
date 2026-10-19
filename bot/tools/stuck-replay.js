@@ -308,10 +308,11 @@ function loadSpots() {
     // removed for this spot's window only, so a scenario can require a NEW
     // skill instead of the hand primitive (the README's hand sabotages,
     // as data). Validated against the shipped menu: a typo fails loud.
+    // vf8e.3: or a goal MENU step (the shelter scenario needs a new step).
     let sabotage = null
     if (s.sabotage != null) {
-      if (typeof s.sabotage !== 'string' || !Object.hasOwn(require('../src/behaviours/recover').RECOVER_MENU, s.sabotage)) {
-        throw new Error(`spots[${i}]: bad sabotage (want a RECOVER_MENU primitive name)`)
+      if (typeof s.sabotage !== 'string' || !(Object.hasOwn(require('../src/behaviours/recover').RECOVER_MENU, s.sabotage) || Object.hasOwn(require('../src/goal').MENU, s.sabotage))) {
+        throw new Error(`spots[${i}]: bad sabotage (want a RECOVER_MENU primitive or goal MENU step name)`)
       }
       sabotage = s.sabotage
     }
@@ -327,6 +328,15 @@ function sabotageMenu(menu, name) {
   const saved = menu[name]
   delete menu[name]
   return () => { menu[name] = saved }
+}
+
+// A goal step is never deleted (index.js reads goal.MENU.shelter unguarded):
+// its feasible reads false for the window instead (vf8e.3).
+function sabotageStep(menu, name) {
+  if (!name || !Object.hasOwn(menu, name)) return () => {}
+  const saved = menu[name].feasible
+  menu[name].feasible = () => false
+  return () => { menu[name].feasible = saved }
 }
 
 // Order-spot chat verdict (idkcraft-6x7.7): pure, unit-tested. Matches one
@@ -879,8 +889,9 @@ async function main() {
         throw new Error(`spot ${s.name}: work chat failed: ${e && e.message ? e.message : e}`)
       }
     }
-    const unSabotage = sabotageMenu(recover.RECOVER_MENU, s.sabotage)
-    if (s.sabotage) console.log(`sabotage ${s.name}: ${s.sabotage} removed from RECOVER_MENU for this window`)
+    const isPrim = !!s.sabotage && Object.hasOwn(recover.RECOVER_MENU, s.sabotage)
+    const unSabotage = isPrim ? sabotageMenu(recover.RECOVER_MENU, s.sabotage) : sabotageStep(require('../src/goal').MENU, s.sabotage)
+    if (s.sabotage) console.log(`sabotage ${s.name}: ${s.sabotage} ${isPrim ? 'removed from RECOVER_MENU' : 'goal step infeasible'} for this window`)
     if (c) c.paused = false
     // Order spots (idkcraft-6x7.7): the guide chats the work order at window
     // start, like a player would — the follower takes it through the real
@@ -1095,4 +1106,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { sabotageMenu, verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify }
+module.exports = { sabotageMenu, sabotageStep, verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify }
