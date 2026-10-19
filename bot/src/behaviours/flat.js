@@ -818,6 +818,10 @@ function finish(bot, ctx, f, why) {
   else say(bot, line)
   console.log(`flat finish filled=${f.filled} shaved=${f.shaved} supports=${f.supports} left=${left} why=${why || 'done'} skip=${JSON.stringify(f.skip)} steal=${f.steal && f.tile ? f.tile.i + 1 : (again ? 'scan' : 'none')}`)
   clearGoal(bot, ctx)
+  // vf8e.6: an LLM plan reads it. A steal round ending 'nothing to steal'
+  // follows a clean home strip: done.
+  const clean = (why == null || (f.steal && why === 'nothing to steal')) && !f.abortWhy
+  ctx.flatEnd = { outcome: clean ? 'done' : 'failed', at: Date.now() }
   ctx.flat = null
   if (again) {
     // Same key (cx,cz,r): a relay/re-flat of this square resumes the steal.

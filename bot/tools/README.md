@@ -377,6 +377,22 @@ walked 61-64 blocks, i.e. to the goal); MINE-10 is an order spot with a
 `count`/`item` judge: peak `item` held by follower+guide >= `count` (the bot
 hands finds to the guide), instead of a chat marker.
 
+## LLM orders A/B (`llm-order-spots.json`, idkcraft-vf8e.6)
+
+Three free-form orders the FSM refuses or ignores (TORCH-8, WATER-1,
+LIGHT-HOUSE) plus MINE-10/MINE-7 forced through the planner (`plan bring me
+…`), judged like task-spots (markers / `count`). `BOT_LLM_ORDERS=1` loads the
+key from stash like `REPLAY_PLANNER=llm`; without it the same file is the
+FSM side (the new orders fail/time out, the MINE pair refuses `plan`):
+
+```sh
+BOT_LLM_ORDERS=1 REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base bot/tools/llm-order-spots.json
+REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base bot/tools/task-spots.json   # FSM MINE-10/MINE-7
+```
+
+An order spot may carry `home` (injected built home, as night spots do);
+the window cut drops `llmOrder`/`llmAsk`/`taskPlanStep`.
+
 ## Worker runs (`REPLAY_WORKER=1`, idkcraft-jlda.3)
 
 Runs the head with the Baritone worker beside it — the measurable harness

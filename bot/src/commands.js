@@ -27,16 +27,24 @@ const COMMANDS = [
   { names: ['flat', 'make flat', 'flatten'], usage: 'flat [radius] [x z]', what: 'fills holes and shaves bumps around you (or around column x z) to level ground', example: 'flat 16' },
   { names: ['help'], usage: 'help [command]', what: 'lists commands, or explains one in detail', example: 'help find me' },
   { names: ['brain'], usage: 'brain [laya|jev|off]', what: 'switches the remote brain, or reports it', example: 'brain laya' },
+  // vf8e.6: listed only with BOT_LLM_ORDERS on (flag-off help is unchanged).
+  { names: ['plan'], usage: 'plan <order>', what: 'asks the LLM to plan any order from the bot\'s steps (unknown orders plan by themselves too)', example: 'plan light up the house', on: () => require('./llm-orders').enabled() },
 ]
+
+// The commands help shows now: an entry with on() only while it is on.
+function visibleCommands() {
+  return COMMANDS.filter((c) => !c.on || c.on())
+}
 
 // Exact alias match first, then a single prefix match ('help find' -> the
 // find me entry). Ambiguous or unknown topics return null.
 function lookupCommand(topic) {
   const t = String(topic || '').toLowerCase().trim()
   if (!t) return null
-  const exact = COMMANDS.find((c) => c.names.some((n) => n === t))
+  const cmds = visibleCommands()
+  const exact = cmds.find((c) => c.names.some((n) => n === t))
   if (exact) return exact
-  const prefixed = COMMANDS.filter((c) => c.names.some((n) => n.startsWith(t)))
+  const prefixed = cmds.filter((c) => c.names.some((n) => n.startsWith(t)))
   return prefixed.length === 1 ? prefixed[0] : null
 }
 
@@ -51,7 +59,7 @@ function detailLine(cmd) {
 // finished line never exceeds CHAT_LIMIT even on overflow pages.
 const PAGE_OVERHEAD = 43
 function helpPages() {
-  const names = COMMANDS.flatMap((c) => c.names)
+  const names = visibleCommands().flatMap((c) => c.names)
   const pages = []
   let cur = []
   let len = 0
@@ -82,4 +90,4 @@ function helpReply(page) {
   return pages[page - 1]
 }
 
-module.exports = { COMMANDS, CHAT_LIMIT, lookupCommand, detailLine, helpPages, helpReply }
+module.exports = { COMMANDS, CHAT_LIMIT, visibleCommands, lookupCommand, detailLine, helpPages, helpReply }

@@ -27,11 +27,29 @@ describe("help command (idkcraft-kae)", () => {
     const pages = helpPages()
     for (const p of pages) assert.ok(p.length <= CHAT_LIMIT, `help page is ${p.length} chars`)
     const all = pages.join('\n')
-    for (const cmd of COMMANDS) {
+    for (const cmd of COMMANDS.filter((c) => !c.on)) {
       for (const n of cmd.names) assert.ok(all.includes(n), `help lists ${n}`)
     }
     assert.ok(pages[pages.length - 1].includes('help <command>'))
     if (pages.length > 1) assert.ok(pages[0].includes('say help 2'))
+  })
+
+  it("'plan' is in help only with BOT_LLM_ORDERS on (vf8e.6)", () => {
+    const saved = { on: process.env.BOT_LLM_ORDERS, key: process.env.ANTHROPIC_API_KEY }
+    try {
+      delete process.env.BOT_LLM_ORDERS
+      assert.ok(!helpPages().join('\n').includes('plan'))
+      assert.equal(lookupCommand('plan'), null)
+      process.env.BOT_LLM_ORDERS = '1'
+      process.env.ANTHROPIC_API_KEY = 'test-key'
+      assert.ok(helpPages().join('\n').includes('plan'))
+      assert.equal(lookupCommand('plan').usage, 'plan <order>')
+    } finally {
+      for (const [k, v] of [['BOT_LLM_ORDERS', saved.on], ['ANTHROPIC_API_KEY', saved.key]]) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
   })
 
   it("'help status' reports the what/who-chose/why/blocks rewrite (gwvg A8)", () => {

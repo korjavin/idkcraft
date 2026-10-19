@@ -90,6 +90,7 @@ function madeProgress(order, bp, grounded) {
 
 function finish(bot, ctx, message) {
   bot.chat(`${message}; following you again`)
+  ctx.leadEnd = { outcome: message.startsWith('here:') ? 'done' : 'failed', at: Date.now() } // vf8e.6: an LLM plan reads it
   ctx.lead = null
 }
 

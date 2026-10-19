@@ -11,6 +11,7 @@ const { limitChat } = require('./chat-limit')
 const { UNSEEN_HOME_TICKS } = stuck
 const body = require('./body')
 const { handleChat, advancePendingSearch, clearPendingSearch, wakeBody } = require('./chat')
+const llmOrders = require('./llm-orders')
 const { createOrders } = require('./orders')
 const { eatReflex, EDIBLE_FOODS, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard } = require('./reflexes')
 const { createGreeter } = require('./greet')
@@ -523,6 +524,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     try { doors.doorReflex(bot, ctx) } catch (_) { /* doors best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
     try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; ctx.gocastle = null; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
+    // LLM order plan (vf8e.6): ctx reads only, next step's chat line or pin;
+    // a no-op without a plan (BOT_LLM_ORDERS off never makes one).
+    try { llmOrders.tick(bot, ctx) } catch (_) { /* plan never breaks the tick */ }
     // Body lease (idkcraft-6x7.3): the tick's owner, computed once here —
     // after the far-search await (a setLead mid-await takes the body this
     // tick) and before any dispatch. A switch runs the single cleanup and
