@@ -2258,7 +2258,8 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
         }
       }
       ctx.stepFail[prev] = rec
-      if (prev === 'gohome') noteGohomeFail(ctx, bot, status)    } catch (_) { /* guard best-effort */ }
+      if (prev === 'gohome') noteGohomeFail(ctx, bot, status)
+    } catch (_) { /* guard best-effort */ }
   } else if (finished && prev && status === 'done') {
     if (ctx.goalText === text && doneHoldable(prev)) {
       // Done with no visible effect holds like a failure (h9z): a step that

@@ -32,6 +32,13 @@ function completeSet() {
   return set
 }
 // loaded=false: every blockAt is null (chunks unloaded).
+// Mirrors only what castle.js menuFact/castleGo and chat.js read, per the
+// installed contracts: mineflayer 4.39 docs/api.md — bot.entity.position (Vec3),
+// inventory.items() -> Item[], time.timeOfDay/day, chat(message);
+// blockAt(point) -> Block | null when the chunk is not loaded (prismarine-block:
+// name, integer position, boundingBox 'block'|'empty'). mineflayer-pathfinder
+// readme: setGoal(goal), isMoving(), stop(), setMovements(movements); the
+// tests never move the bot, so isMoving is always false.
 function makeBot({ set = completeSet(), loaded = true, at = pos(SITE.x - 4, 64, SITE.z - 4), items = [] } = {}) {
   return {
     username: 'IdkBot',
@@ -46,7 +53,7 @@ function makeBot({ set = completeSet(), loaded = true, at = pos(SITE.x - 4, 64, 
       if (!loaded) return null
       const k = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
       const name = set.has(k) ? set.get(k) : (Math.floor(p.y) <= 63 ? 'dirt' : 'air')
-      return { name, position: p, boundingBox: name === 'air' ? 'empty' : 'block' }
+      return { name, position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)), boundingBox: name === 'air' ? 'empty' : 'block' }
     },
     pathfinder: { isMoving: () => false, setGoal() {}, stop() {}, goal: null, movements: null, setMovements() {} },
     clearControlStates() {},
