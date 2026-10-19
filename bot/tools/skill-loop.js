@@ -12,7 +12,9 @@
 //
 // Scenarios: tools/skill-scenarios.json. Key: ANTHROPIC_API_KEY, else stash
 // secrets/minecraft/anthropic-api-key (never printed). Every call goes
-// through brain.llmCall (vf8e.5: usage metrics + LLM_TOKENS_PER_HOUR cap).
+// through brain.llmCall (vf8e.5: usage metrics + LLM_TOKENS_PER_HOUR cap,
+// default 200k/h; the spike's heaviest scenario used ~95k. A longer run
+// that hits it ends as exit 2 — raise it, or LLM_TOKENS_PER_HOUR=0 = off).
 // Model SKILL_LOOP_MODEL (default claude-opus-5-5), effort SKILL_LOOP_EFFORT
 // (default medium), max_tokens 32000 (thinking included). Work dir SKILL_LOOP_DIR (default /tmp/idkcraft-skill-loop/
 // <scenario>): skills/, spots.json, keeper.log, attempt-N.log, result.json.
@@ -81,7 +83,7 @@ function factsDoc(kind) {
   const ret = src.slice(src.lastIndexOf('return {'))
   return 'feasible(facts) receives goal.js goalFacts(bot, ctx). Its keys:\n' + ret +
     "\ntime is 'day'|'dusk'|'night' (goal.js timeWord below); inside is 'yes'|'no'; home is 'none'|'site'|'built'; pickaxe/sword/scaffold/logs/planks are counts.\n" +
-    g.timeWord.toString() + '\n\nHand steps (name: criterion) — the FSM tries them in this order and a step skill comes just before rest:\n' +
+    g.timeWord.toString() + '\n\nHand steps (name: criterion) — the FSM tries them in this order and a step skill comes just before rest, unless its header `before` names a later hand step (never at or above shelter):\n' +
     g.STEP_ORDER.map((n) => `${n}: ${g.STEP_CRITERIA[n] || ''}`).join('\n')
 }
 
