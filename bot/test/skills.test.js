@@ -9,6 +9,7 @@
 const { describe, it, before } = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const { spawnSync } = require('node:child_process')
 const { Vec3 } = require('vec3')
 const skills = require('../src/skills')
 const recover = require('../src/behaviours/recover')
@@ -215,7 +216,7 @@ describe('skills: sandbox (vf8e.2)', () => {
     bot.pathfinder.calls = 0
     const set = bot.pathfinder.setGoal
     bot.pathfinder.setGoal = function (g) { set(g); this.calls++ }
-    const sk = compiled('walker', 'const a = bot.goto(5, 61, 0); const b = bot.goto(5, 61, 0); st.n = (st.n || 0) + 1; ' +
+    const sk = compiled('walker', 'const a = bot.goto(5, 61, 0); const b = bot.goto(5.7, 61.2, 0.4); st.n = (st.n || 0) + 1; ' +
       'if (st.n >= 3) return "done"; return a === (st.n === 1 ? "started" : "moving") && b === "moving" ? "running" : "failed:" + a + "-" + b')
     const ctx = { lastGoalKey: 'idle' }
     const st = { ticks: 0, hs: { busy: null, err: null } }
@@ -238,8 +239,8 @@ describe('skills: sandbox (vf8e.2)', () => {
     const bot = fakeBot()
     bot.items = [{ name: 'cobblestone', count: 4 }]
     const one = (x, y, z, item, ctx = {}) => tick(compiled('placer',
-      `return "failed:" + bot.place(${x}, ${y}, ${z}, ${JSON.stringify(item)}).replace(":", "-")`), bot, ctx)
-    assert.equal(one(0, 61, 2, 'cobblestone'), 'failed:started', 'air cell over dirt: placed against the floor')
+      `const r = bot.place(${x}, ${y}, ${z}, ${JSON.stringify(item)}); return r === "started" ? "running" : "failed:" + r.replace(":", "-")`), bot, ctx)
+    assert.equal(one(0, 61, 2, 'cobblestone'), 'running', 'air cell over dirt: placed against the floor')
     await flush()
     assert.deepEqual(bot.placed, [{ at: key(0, 61, 2), item: 'cobblestone' }])
     assert.equal(one(0, 60, 3, 'cobblestone'), 'failed:denied-occupied')
@@ -250,6 +251,42 @@ describe('skills: sandbox (vf8e.2)', () => {
     assert.equal(one(7, 61, 1, 'cobblestone', apron), 'failed:denied-place-protected', 'complete castle apron')
     assert.equal(one(0, 70, 0, 'cobblestone'), 'failed:denied-no-reference', 'mid-air: no solid neighbour')
     assert.equal(bot.placed.length, 1)
+  })
+
+  it('codex 03: rejected skill promises never crash, thrown getters stay timed, a lost episode never lands its place', async () => {
+    const bot = fakeBot()
+    // A child process (node:test has its own rejection hook): skill-realm
+    // rejections are swallowed, a host rejection still kills the process.
+    const child = (hostReject) => spawnSync(process.execPath, ['-e', `
+      const skills = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'skills'))})
+      const { sk } = skills.compile('a.js', '/* skill {"name": "async_throw", "description": "x", "kind": "recover"} */\\n' +
+        'function feasible() { return true }\\nfunction run() { Promise.reject(new Error("stray")); return (async () => { throw new Error("oops") })() }\\n', {})
+      sk.reset()
+      const out = sk.tick({ setControlState() {} }, {}, { ticks: 0, hs: { busy: null, err: null } })
+      ${hostReject ? 'Promise.reject(new Error("host"))' : ''}
+      setTimeout(() => { console.log('alive ' + out) }, 20)`], { encoding: 'utf8' })
+    const ok = child(false)
+    assert.equal(ok.status, 0, ok.stderr)
+    assert.match(ok.stdout, /alive failed:skill-error/)
+    assert.notEqual(child(true).status, 0, 'host rejections keep the default crash')
+    const t0 = Date.now()
+    assert.equal(tick(compiled('throw_getter', 'throw { get message() { while (true) {} }, get code() { while (true) {} } }'), bot), 'failed:skill-timeout')
+    assert.ok(Date.now() - t0 < 190, 'getter cut at the call timeout')
+    assert.throws(() => skills.compile('tg.js', '/* skill {"name": "top_getter", "description": "x", "kind": "recover"} */\n' +
+      'throw { get message() { while (true) {} } }\n', {}), /top-level threw/)
+    const feas = '/* skill {"name": "async_feas", "description": "x", "kind": "recover"} */\n' +
+      'async function feasible() { return true }\nfunction run() { return "done" }\n'
+    assert.equal(skills.compile('af.js', feas, {}).sk.feasible({}), false, 'a Promise is not true')
+
+    bot.items = [{ name: 'cobblestone', count: 1 }]
+    let owned = true
+    const sk = compiled('placer_lost', 'return bot.place(0, 61, 2, "cobblestone") === "started" ? "running" : "failed:x"')
+    const st = { ticks: 0, hs: { busy: null, err: null }, alive: () => owned }
+    assert.equal(sk.tick(bot, {}, st), 'running')
+    owned = false // step replaced while equip is pending
+    await flush()
+    assert.deepEqual(bot.placed, [])
+    assert.match(st.hs.err, /episode over/)
   })
 
   it('findBlocks returns coordinates within the capped radius', () => {

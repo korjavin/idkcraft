@@ -27,6 +27,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const { types } = require('node:util')
 const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const metrics = require('./metrics')
@@ -85,12 +86,16 @@ function solid(b) {
   return !!b && b.boundingBox === 'block'
 }
 
-// One in-flight async act at a time (the yvi rule: never two placements).
-function fire(hs, kind, fn) {
-  if (hs.busy) return 'busy'
-  hs.busy = kind
-  hs.err = null
-  Promise.resolve().then(fn).catch((e) => { hs.err = `${kind}: ${short(e)}` }).finally(() => { hs.busy = null })
+// One in-flight async act per skill, across episodes (the yvi rule: never
+// two placements). `live()` throws once the episode lost the body (step
+// replaced, recovery over, terminal tick): an act never lands after that.
+function fire(c, kind, fn) {
+  const act = c.act
+  if (act.busy) return 'busy'
+  act.busy = kind
+  c.hs.err = null
+  const live = () => { if (!c.alive()) throw new Error('episode over') }
+  Promise.resolve().then(() => fn(live)).catch((e) => { c.hs.err = `${kind}: ${short(e)}` }).finally(() => { act.busy = null })
   return 'started'
 }
 
@@ -141,7 +146,7 @@ const OPS = {
   status(c) {
     let moving = false
     try { moving = !!(c.bot.pathfinder && c.bot.pathfinder.isMoving()) } catch (_) { moving = false }
-    return { busy: c.hs.busy, err: c.hs.err, path: c.ctx.lastPathStatus || null, moving }
+    return { busy: c.act.busy, err: c.hs.err, path: c.ctx.lastPathStatus || null, moving }
   },
   dig(c, x, y, z) {
     const b = cellAt(c.bot, x, y, z)
@@ -149,7 +154,7 @@ const OPS = {
     if (!solid(b)) return 'denied:air'
     const why = denyReason(c.bot, b, c.ctx)
     if (why) { logDeny(b, why); return `denied:${why}` }
-    return fire(c.hs, 'dig', () => c.bot.dig(b))
+    return fire(c, 'dig', (live) => { live(); return c.bot.dig(b) })
   },
   // Place `item` INTO cell x,y,z against any solid neighbour.
   place(c, x, y, z, item) {
@@ -162,8 +167,10 @@ const OPS = {
       const ref = cellAt(c.bot, cell.x + dx, cell.y + dy, cell.z + dz)
       if (!solid(ref) || isInteractRef(ref.name)) continue
       const face = new Vec3(-dx, -dy, -dz)
-      return fire(c.hs, 'place', async () => {
+      return fire(c, 'place', async (live) => {
+        live()
         await c.bot.equip(stack, 'hand')
+        live()
         await c.bot.placeBlock(ref, face)
       })
     }
@@ -174,7 +181,9 @@ const OPS = {
   // steps' key dedupe see the skill's goal (issueGoal, like every walker).
   goto(c, x, y, z, range = 1) {
     const r = Math.max(0, num(range))
-    const key = `skill:${c.name}:${num(x)},${num(y)},${num(z)},${r}`
+    // The cell, like GoalNear (floors): a float target (pos()/entities()) keeps one key (revmux 03).
+    x = Math.floor(num(x)); y = Math.floor(num(y)); z = Math.floor(num(z))
+    const key = `skill:${c.name}:${x},${y},${z},${r}`
     // Own goal object, per episode: a raw-setGoal walker (castle, build)
     // may have replaced it under a stale key (revmux 02).
     if (c.hs.goalKey === key && c.bot.pathfinder.goal === c.hs.goal) return 'moving'
@@ -203,7 +212,7 @@ const OPS = {
     if (dest !== 'hand' && dest !== 'off-hand') throw new Error('bad dest')
     const stack = c.bot.inventory.items().find((it) => it.name === item)
     if (!stack) return 'denied:no-item'
-    return fire(c.hs, 'equip', () => c.bot.equip(stack, dest))
+    return fire(c, 'equip', (live) => { live(); return c.bot.equip(stack, dest) })
   },
 }
 
@@ -228,6 +237,30 @@ const PRELUDE = `(function (host, ops) {
   globalThis.bot = Object.freeze(f)
 })`
 
+// Body -> script source whose completion value is always a primitive.
+function guarded(body) {
+  return `(() => { try { ${body} } catch (e) { let m = '?'; try { m = String(e && e.message).slice(0, 80) } catch (_) {} return '\\0' + m } })()`
+}
+
+// A rejected skill-realm promise (async run/feasible, a stray
+// Promise.reject) is the skill's problem, not a process crash: swallowed
+// here, every other rejection rethrown as Node's default would. Installed
+// only when skills load, so the flag-off process is untouched.
+const SKILL_PROMISES = new Set()
+function skillPromise(p) {
+  for (let o = p, i = 0; o && i < 16; i++) {
+    if (types.isProxy(o)) return true // host promises are never proxied
+    o = Object.getPrototypeOf(o)
+    if (SKILL_PROMISES.has(o)) return true
+    if (o === Promise.prototype) return false
+  }
+  return true // no host Promise.prototype on the chain: not ours
+}
+function onRejection(reason, p) {
+  if (skillPromise(p)) { console.log('skill unhandled-rejection swallowed'); return }
+  throw reason
+}
+
 function compile(file, text, env) {
   const meta = parseHeader(text)
   const want = env && env.BOT_BODY === 'baritone' ? 'baritone' : 'mineflayer'
@@ -237,7 +270,8 @@ function compile(file, text, env) {
     codeGeneration: { strings: false, wasm: false },
     microtaskMode: 'afterEvaluate',
   })
-  let cur = null // { bot, ctx, hs } while run() runs; feasible() reads facts only
+  let cur = null // { bot, ctx, hs, act, alive } while run() runs; feasible() reads facts only
+  const act = { busy: null } // per skill, outlives an episode while an act is in flight
   const host = (op, argsJson) => {
     try {
       if (!cur) return '{"err":"inactive"}'
@@ -249,23 +283,37 @@ function compile(file, text, env) {
     }
   }
   vm.runInContext(PRELUDE, g, { timeout: CALL_MS })(host, FACADE_OPS)
-  new vm.Script(text, { filename: file }).runInContext(g, { timeout: CALL_MS })
-  if (vm.runInContext('typeof feasible === "function" && typeof run === "function"', g, { timeout: CALL_MS }) !== true) throw new Error('feasible/run missing')
-  // The host never touches a context property (a skill getter/setter on a
-  // global would run outside the timeout and wedge the tick, security
-  // review 03): input is a literal in the script source, output is the
-  // script's completion value, coerced to a primitive inside the context.
-  const runScript = new vm.Script('(() => { const o = run(bot, __st); return typeof o === "string" ? o : null })()')
-  const resetScript = new vm.Script('globalThis.__st = {}; null')
+  SKILL_PROMISES.add(vm.runInContext('Promise.prototype', g)) // intrinsic, before skill code
+  if (!process.listeners('unhandledRejection').includes(onRejection)) process.on('unhandledRejection', onRejection)
+  const script = new vm.Script(text, { filename: file }) // a SyntaxError here is host-realm
+  const t0 = Date.now()
+  let ok
+  try {
+    script.runInContext(g, { timeout: CALL_MS })
+    ok = vm.runInContext('typeof feasible === "function" && typeof run === "function"', g, { timeout: CALL_MS })
+  } catch (_) { // never read a context-thrown value on the host (getters)
+    throw new Error(Date.now() - t0 >= CALL_MS ? 'top-level timed out' : 'top-level threw')
+  }
+  if (ok !== true) throw new Error('feasible/run missing')
+  // The host never touches a context object (a skill getter/setter/Proxy
+  // would run outside the timeout and wedge the tick, security review 03):
+  // input is a literal in the script source, output is the script's
+  // completion value, and throws are flattened to a '\0msg' string inside
+  // the timed script.
+  const runScript = new vm.Script(guarded('const o = run(bot, __st); return typeof o === "string" ? o : null'))
+  const resetScript = new vm.Script(guarded('globalThis.__st = {}; return null'))
 
   // -> { out } | { error: 'skill-timeout' | 'skill-error', msg }
-  function call(script, c) {
+  function call(scr, c) {
     cur = c
+    const t = Date.now()
     try {
-      return { out: script.runInContext(g, { timeout: CALL_MS }) }
-    } catch (e) {
-      const timeout = !!e && (e.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT' || /timed out/.test(String(e.message)))
-      return { error: timeout ? 'skill-timeout' : 'skill-error', msg: short(e) }
+      const out = scr.runInContext(g, { timeout: CALL_MS })
+      if (typeof out === 'string' && out[0] === '\0') return { error: 'skill-error', msg: out.slice(1) }
+      return { out }
+    } catch (_) {
+      // Only the timeout (host error) or a context overflow lands here; no property reads.
+      return Date.now() - t >= CALL_MS ? { error: 'skill-timeout', msg: `timed out after ${CALL_MS}ms` } : { error: 'skill-error', msg: 'threw' }
     } finally {
       cur = null
     }
@@ -278,7 +326,8 @@ function compile(file, text, env) {
       let json = '{}'
       try { json = JSON.stringify(facts) || '{}' } catch (_) { json = '{}' }
       // ponytail: one compile per feasible call (facts are a few KB).
-      const r = call(new vm.Script(`!!feasible(JSON.parse(${JSON.stringify(json)}))`), null)
+      // Strictly `true`: an async feasible (a Promise) is not feasible.
+      const r = call(new vm.Script(guarded(`return feasible(JSON.parse(${JSON.stringify(json)})) === true`)), null)
       if (r.error) {
         console.log(`skill feasible-error skill=${meta.name} outcome=${r.error} msg=${JSON.stringify(r.msg)}`)
         return { error: r.error }
@@ -294,7 +343,8 @@ function compile(file, text, env) {
       if (++st.ticks > TICK_BUDGET[meta.kind]) {
         out = 'failed:skill-timeout'
       } else {
-        const r = call(runScript, { bot, ctx, hs: st.hs, name: meta.name })
+        const alive = () => !st.dead && (!st.alive || st.alive())
+        const r = call(runScript, { bot, ctx, hs: st.hs, act, alive, name: meta.name })
         if (r.error) {
           out = `failed:${r.error}`
           console.log(`skill error skill=${meta.name} outcome=${r.error} msg=${JSON.stringify(r.msg)}`)
@@ -304,6 +354,7 @@ function compile(file, text, env) {
         }
       }
       if (out !== 'running') {
+        st.dead = true // an act still in flight never lands (fire live())
         releaseControls(bot)
         // A goal the skill left live dies with it (a stale goal re-wedges: yvi).
         if (typeof ctx.lastGoalKey === 'string' && ctx.lastGoalKey.startsWith('skill:')) {
@@ -352,7 +403,12 @@ function registerRecover(sk, tables) {
     },
     run: (bot, ctx) => {
       const rec = ctx.recovery
-      if (!rec.st) { rec.st = { skill: name, ticks: 0, hs: { busy: null, err: null } }; sk.reset() }
+      if (!rec.st) {
+        const st = { skill: name, ticks: 0, hs: { busy: null, err: null } }
+        st.alive = () => ctx.recovery === rec && rec.st === st && rec.action === name
+        rec.st = st
+        sk.reset()
+      }
       const out = sk.tick(bot, ctx, rec.st)
       if (out !== 'running' && out !== 'done') banSkill(ctx, name)
       return out
@@ -393,6 +449,8 @@ function registerStep(sk, tables) {
     let st = stepState.get(ctx)
     if (!st || st.gen !== gen || st.skill !== name) {
       st = { gen, skill: name, ticks: 0, hs: { busy: null, err: null }, over: false }
+      const me = st
+      me.alive = () => stepState.get(ctx) === me && stepGen(ctx) === gen && ctx.step === name
       stepState.set(ctx, st)
       sk.reset()
     }
