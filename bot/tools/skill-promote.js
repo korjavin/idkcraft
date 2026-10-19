@@ -136,7 +136,10 @@ function main() {
   delete env.REPLAY_KEEP
   const st = sh('sh', ['tools/stuck-run.sh'], env)
   const stuck = { rc: st.rc, body: process.env.REPLAY_BODY || 'mineflayer', lines: stuckLines(st.out) }
-  console.log(stuck.lines.join('\n'))
+  // The raw gate output stays on disk: the quoted lines are a filter.
+  const rawLog = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'skill-promote-stuck-')), 'stuck-run.log')
+  fs.writeFileSync(rawLog, st.out)
+  console.log(`${stuck.lines.join('\n')}\nskill-promote: full stuck-run output ${rawLog}`)
   if (st.rc !== 0) { console.log(`skill-promote: stuck-run exit ${st.rc} — refused (copies left in bot/skills)`); return 1 }
   // The baseline's settings (component-baseline.json setup); mine is judged
   // on the mean of 3 legs (one leg's within/OUTSIDE is noise).
