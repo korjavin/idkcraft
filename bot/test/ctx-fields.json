@@ -155,10 +155,17 @@
       "src/behaviours/castlefetch.js",
       "src/chat.js",
       "src/index.js",
+      "src/llm-orders.js",
       "src/orders.js",
       "src/task.js"
     ],
     "owner": "src/orders.js"
+  },
+  "bringEnd": {
+    "writers": [
+      "src/behaviours/bringbase.js"
+    ],
+    "owner": "src/behaviours/bringbase.js"
   },
   "buildAnchor": {
     "writers": [
@@ -470,6 +477,12 @@
     ],
     "owner": "src/behaviours/castlefetch.js"
   },
+  "castleFetchMine": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
   "castleFlight": {
     "writers": [
       "src/behaviours/castle.js"
@@ -579,6 +592,12 @@
       "src/orders.js"
     ],
     "owner": "src/behaviours/castle.js"
+  },
+  "castleStairsMines": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
   },
   "castleStoneAsked": {
     "writers": [
@@ -737,12 +756,6 @@
     ],
     "owner": "src/doors.js"
   },
-  "gateFeetSince": {
-    "writers": [
-      "src/doors.js"
-    ],
-    "owner": "src/doors.js"
-  },
   "eatInFlight": {
     "writers": [
       "src/reflexes.js"
@@ -840,6 +853,12 @@
       "src/orders.js"
     ],
     "owner": "src/orders.js"
+  },
+  "flatEnd": {
+    "writers": [
+      "src/behaviours/flat.js"
+    ],
+    "owner": "src/behaviours/flat.js"
   },
   "flatGuardFn": {
     "writers": [
@@ -948,6 +967,12 @@
       "src/behaviours/furnace.js"
     ],
     "owner": "src/behaviours/furnace.js"
+  },
+  "gateFeetSince": {
+    "writers": [
+      "src/doors.js"
+    ],
+    "owner": "src/doors.js"
   },
   "gather": {
     "writers": [
@@ -1132,6 +1157,12 @@
     ],
     "owner": "src/stuck.js"
   },
+  "knownCastles": {
+    "writers": [
+      "src/memory.js"
+    ],
+    "owner": "src/memory.js"
+  },
   "lastDecision": {
     "writers": [
       "src/index.js"
@@ -1243,6 +1274,12 @@
     ],
     "owner": "src/orders.js"
   },
+  "leadEnd": {
+    "writers": [
+      "src/behaviours/lead.js"
+    ],
+    "owner": "src/behaviours/lead.js"
+  },
   "leadTargetGone": {
     "writers": [
       "src/chat.js",
@@ -1343,6 +1380,18 @@
     ],
     "owner": "src/behaviours/light.js"
   },
+  "llmAsk": {
+    "writers": [
+      "src/llm-orders.js"
+    ],
+    "owner": "src/llm-orders.js"
+  },
+  "llmOrder": {
+    "writers": [
+      "src/llm-orders.js"
+    ],
+    "owner": "src/llm-orders.js"
+  },
   "lowHpGateLast": {
     "writers": [
       "src/goal.js"
@@ -1396,12 +1445,6 @@
       "src/index.js"
     ],
     "owner": "src/index.js"
-  },
-  "knownCastles": {
-    "writers": [
-      "src/memory.js"
-    ],
-    "owner": "src/memory.js"
   },
   "paused": {
     "writers": [
@@ -1814,6 +1857,7 @@
   "taskPlanStep": {
     "writers": [
       "src/goal.js",
+      "src/llm-orders.js",
       "src/task.js"
     ],
     "owner": "src/task.js"
