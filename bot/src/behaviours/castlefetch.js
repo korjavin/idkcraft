@@ -221,7 +221,12 @@ function owedMoved(bot, ctx) {
   try {
     const st = ctx.castle
     if (!st || st.phase !== 'complete' || !ctx.castleWord || !ctx.castleWord.repair) return false
-    return !castleMod.nearSite(bot, st)
+    if (castleMod.nearSite(bot, st)) return false
+    // ...and only where the home rung runs (torchTick's TORCH_HOME_DIST): a
+    // far-home castle never spends its one home try on the road.
+    const h = ctx.home && (ctx.home.furnace || ctx.home.site)
+    const bp = bot.entity && bot.entity.position
+    return !(h && bp && typeof h.x === 'number' && Math.hypot(bp.x - h.x, bp.z - h.z) > TORCH_HOME_DIST)
   } catch (_) { return false }
 }
 
