@@ -463,7 +463,14 @@ function registerStep(sk, tables) {
   }
   // Before rest ("nothing else fits"): the FSM reaches a skill only when no
   // hand step is feasible; the model sees it on every menu it is on.
-  const at = STEP_ORDER.indexOf('rest')
+  // vf8e.3: header `before` moves it ahead of a named hand step (a night
+  // step must outrank gather), never at or above shelter: the night safety
+  // steps stay first. An unknown or too-high name falls back to rest.
+  let at = STEP_ORDER.indexOf(sk.meta.before)
+  if (at <= STEP_ORDER.indexOf('shelter')) {
+    if (sk.meta.before !== undefined) console.error(`skill ${name}: before=${sk.meta.before} refused, placed before rest`)
+    at = STEP_ORDER.indexOf('rest')
+  }
   STEP_ORDER.splice(at < 0 ? STEP_ORDER.length : at, 0, name)
   goal.STEP_CRITERIA[name] = sk.meta.description
   BEHAVIOURS[name] = (bot, ctx) => {
@@ -524,4 +531,4 @@ function load(env = process.env, opts = {}) {
   return names
 }
 
-module.exports = { enabled, load, parseHeader, compile, CALL_MS, TICK_BUDGET, PROMOTED_DIR }
+module.exports = { enabled, load, parseHeader, compile, registerStep, CALL_MS, TICK_BUDGET, PROMOTED_DIR }

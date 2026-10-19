@@ -35,6 +35,7 @@ function run(bot, st) {
 | `description` | yes | the menu criterion text: the model reads it in the recover/step menu and in `plan()` |
 | `kind` | yes | `recover` (stuck-recovery primitive) or `step` (goal step) |
 | `body` | no | `any` (default), `mineflayer` or `baritone`; a skill for the other body is skipped at load |
+| `before` | no | step only: the hand step this skill goes ahead of in `STEP_ORDER` (default `rest`). Must sit after `shelter`; a higher or unknown name falls back to `rest` with a log line, so the night safety steps (`stay`, `gohome`, `shelter`) always come first |
 | `verb` | no | chat verb (`stuck, trying <verb>` / `next: <verb>`); default: the name with spaces |
 | `verifiedBy`, `bead` | no | provenance; promotion (vf8e.4) fills them |
 
@@ -57,7 +58,7 @@ top-level functions.
   the rest of the episode. It also joins the cross-episode spot bans like a
   hand shuffle (`RECOVER_BANNABLE` + `RECOVER_SHUFFLE`): 3 same-spot fails,
   or 3 flat dones while boxed in, take it off the menu at that spot.
-- **step**: `MENU[name]`, inserted before `rest` in `STEP_ORDER`,
+- **step**: `MENU[name]`, inserted before `rest` (or the header's `before`) in `STEP_ORDER`, which the FSM walks in priority order,
   `STEP_CRITERIA[name] = description`, plus `BEHAVIOURS[name]`, so
   `goal.registered()` admits it. It finishes through `step.js`
   (`stepDone`/`stepFailed`).

@@ -370,6 +370,20 @@ describe('skills: sandbox (vf8e.2)', () => {
     assert.equal(skills.compile('v2_only.js', v2only, {}).skip, 'body=baritone')
     assert.equal(skills.compile('v2_only.js', v2only, { BOT_BODY: 'baritone' }).skip, undefined)
   })
+
+  it('vf8e.3: a step skill header `before` places it ahead of a hand step, never above shelter', () => {
+    const place = (before) => {
+      const order = STEP_ORDER.slice()
+      const meta = { verb: 'x', description: 'd', ...(before === undefined ? {} : { before }) }
+      skills.registerStep({ name: 'gen_t', meta, feasible: () => false }, { goal: { MENU: {}, STEP_CRITERIA: {} }, STEP_ORDER: order, BEHAVIOURS: {} })
+      return order[order.indexOf('gen_t') + 1]
+    }
+    assert.equal(place(), 'rest')
+    assert.equal(place('gocastle'), 'gocastle')
+    assert.equal(place('shelter'), 'rest', 'night safety steps stay first')
+    assert.equal(place('stay'), 'rest')
+    assert.equal(place('nope'), 'rest')
+  })
 })
 
 describe('skills: SKILLS_DIR load (vf8e.2)', () => {
