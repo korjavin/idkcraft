@@ -214,6 +214,7 @@ function doCraft(bot, ctx, f) {
       await craftMod.safeCraft(bot, found[0], 1, st.block, { ctx, item: 'furnace' })
     } catch (err) {
       ctx.furnaceInFlight = false
+      try { console.log(`furnace craft failed: ${err && err.message}`) } catch (_) { /* log best-effort */ }
       fail(ctx, 'craft-furnace')
       return
     }

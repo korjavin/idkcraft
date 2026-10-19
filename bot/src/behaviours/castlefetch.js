@@ -152,7 +152,7 @@ const deps = {
 const WOOD = new Set(['planks', 'door', 'fence', 'chest', 'frame', 'gate'])
 const NO_WOOD = 'no wood within 64 — drop logs in the castle chest'
 // Items one chest log funds per kind (craftTick crafts the rest).
-const LOG_YIELD = { planks: 4, frame: 1, fence: 2, door: 2, chest: 0.5, gate: 1 }
+const LOG_YIELD = { planks: 4, frame: 1, fence: 2, door: 2, chest: 0.5, gate: 1, torch: 4 } // torch: one log -> one charcoal -> 4
 
 function birchFirst(names) {
   return names.sort((a, b) => (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
@@ -178,7 +178,8 @@ function chestNames(bot, kind) {
   if (kind === 'door') return [itemNames(bot, isDoor), itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'fence') return [itemNames(bot, isFence), itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'gate') return [itemNames(bot, isGate), itemNames(bot, (n) => n.endsWith('_log'))]
-  if (kind === 'torch') return [['torch']]
+  // fqkn: logs fund torchTick's charcoal (stockpile banks the pack's logs at home).
+  if (kind === 'torch') return [['torch'], itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'chest') return [['chest'], itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'pane') return [itemNames(bot, (n) => blueprint.matches('pane', n)), ['glass'], ['sand']]
