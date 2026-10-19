@@ -721,12 +721,39 @@ node bot/tools/curriculum.js harvest bot.txt mc.txt [days=7]   # table + curricu
 node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spots.json + scenario.json
 ```
 
-- Input lines are `YYYY-MM-DD HH:MM:SS <name> <msg>` (UTC), as for `deaths.sh`. The bot dump
-  is the VictoriaLogs query `container_name:idkcraft-bot2 "recover action="`, printed as
-  `_time <bot name> _msg` (wider: `idkcraft-bot*`/`idkcraft-swarm*` plus `CURRICULUM_BOTS`).
+- Input lines are `YYYY-MM-DD HH:MM:SS <name> <msg>` (UTC), as for `deaths.sh`. A raw
+  `docker logs --timestamps` dump works as is (vf8e.16: the vf8e.15 night read events=0
+  off such a dump and each line was rewritten by hand): the daemon's leading RFC3339
+  timestamp and any multiplex framing are stripped, and the bot's bare stdout lines (no
+  date or name of their own — the bot logs with plain `console.log`) are dated from the
+  daemon stamp and attributed to the single bot in the filter. Bare lines under a
+  multi-bot filter (`CURRICULUM_BOTS=all` or a list) are skipped, not mislabelled — use
+  the VictoriaLogs feed below for multi-bot harvests. The 7-day bot2 feed comes from the
+  Portainer container-logs API (keys from stash, never pasted: `portainer-url`,
+  `portainer-api-key` — see "Deaths per day"; `<endpoint-id>` is the prod endpoint's
+  id; bot2 runs without a TTY, so the response is docker's multiplexed stream and the
+  tool demuxes it itself):
+  ```sh
+  SINCE=$(date -u -d '7 days ago' +%s)   # macOS: date -u -v-7d +%s
+  curl -s -H "X-API-Key: $K" \
+    "$U/api/endpoints/<endpoint-id>/docker/containers/idkcraft-bot2/logs?stdout=1&stderr=1&timestamps=1&since=$SINCE" \
+    > bot2-7d.txt
+  node bot/tools/curriculum.js harvest bot2-7d.txt   # days defaults to 7
+  ```
+  The VictoriaLogs alternative is the query `container_name:idkcraft-bot2 "recover action="`,
+  printed as `_time <bot name> _msg` (wider: `idkcraft-bot*`/`idkcraft-swarm*` plus
+  `CURRICULUM_BOTS`).
   The mc dump is `container_name:idkcraft-mc ("can't make" or "can't get")`. A raw shipped mc
   line works as is, because the bot name is read from `<Name>`. Strip IPs as session-review
   does. Credentials: see "Deaths per day".
+- A night with 0 signatures says why (vf8e.16): the harvest line carries `parsed=<k>/<n>`
+  (kept lines for this feed's bot filter), `recover=<n>` (kept raw `recover action=` lines)
+  and `refusals=<n>`, and a `harvest why:` line names the per-family outcome — e.g.
+  `recover=9 but 0 page events (no call_player/gave-up episode); bring=excluded (no refusal
+  lines kept for this feed: the mc log is out of the feed by owner rule)`. That is the
+  vf8e.15 night: 9 recover lines, none paged, bring unfed. When nothing parsed at all the
+  line says so (`nothing parsed (0 of N lines; wrong dump or bot filter '…'?)`) instead of
+  blaming the feed.
 - Families (owner 2026-10-19: the simplest first):
   - `page`: a recover episode that chose `call_player` or ended `gave-up`. The reason is the
     last failed hand primitive plus its outcome. The position is the end pos in an 8-block cell.

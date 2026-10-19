@@ -14,6 +14,9 @@
 # Usage: sh tools/curriculum.sh <bot-dump.txt> [days=7]
 #   (the script cds to bot/ itself, so run it from anywhere as
 #   sh bot/tools/curriculum.sh <dump>)
+#   The dump may be raw `docker logs --timestamps` output (timestamps=1):
+#   curriculum.js strips the daemon prefix itself (vf8e.16: the vf8e.15 night
+#   read events=0 off such a dump and each line was rewritten by hand).
 #
 # Rig use: one keeper PER CANDIDATE on the one slot — boot (fresh world),
 # pre-run + skill loop as inner runs on it, tear it down afterwards
