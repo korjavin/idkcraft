@@ -23,8 +23,25 @@ const FIXTURES = path.join(__dirname, 'fixtures', 'skills')
 function key(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
 
 // Open ground: dirt at y<=60, air above, `cells` overrides.
+// Mirrors only what skills.js OPS touch, per the installed contracts:
+// mineflayer 4.39 docs/api.md — bot.entity/entities/health/food/time.timeOfDay/
+// inventory.items(); blockAt(point) -> Block|null (prismarine-block:
+// boundingBox 'block'|'empty', integer position); findBlocks({matching(block),
+// maxDistance, count}) -> Vec3 coordinates, not blocks; setControlState;
+// lookAt(point, force) / equip(item, destination) / dig(block) /
+// placeBlock(referenceBlock, faceVector) -> Promise (the block lands at
+// ref.position + face). mineflayer-pathfinder readme + index.js: setGoal(goal)
+// (null stops), isMoving(), and `goal` is a read-only getter over the last
+// setGoal (index.js defineProperties) — so the fake has no writable goal.
 function fakeBot(cells = new Map()) {
   const dug = []
+  const placed = []
+  const cellName = (x, y, z) => cells.get(key(x, y, z)) || (Math.floor(y) <= 60 ? 'dirt' : 'air')
+  const block = (x, y, z) => {
+    const n = cellName(x, y, z)
+    return { name: n, position: new Vec3(Math.floor(x), Math.floor(y), Math.floor(z)), boundingBox: n === 'air' ? 'empty' : 'block' }
+  }
+  let goal = null
   const bot = {
     username: 'IdkBot',
     players: {},
@@ -33,25 +50,42 @@ function fakeBot(cells = new Map()) {
     food: 20,
     time: { timeOfDay: 1000 },
     entity: { position: new Vec3(0.5, 61, 0.5), onGround: true },
-    inventory: { items: () => [] },
+    items: [],
+    inventory: { items: () => bot.items },
+    heldItem: null,
     controls: {},
     setControlState(c, v) { this.controls[c] = !!v },
     getControlState(c) { return !!this.controls[c] },
     clearControlStates() { this.controls = {} },
-    blockAt(p) {
-      const k = key(p.x, p.y, p.z)
-      const n = cells.get(k) || (Math.floor(p.y) <= 60 ? 'dirt' : 'air')
-      return { name: n, position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)), boundingBox: n === 'air' ? 'empty' : 'block' }
+    blockAt(p) { return block(p.x, p.y, p.z) },
+    findBlocks({ matching, maxDistance = 16, count = 1 }) {
+      const o = bot.entity.position.floored()
+      const out = []
+      for (const [k] of cells) {
+        const [x, y, z] = k.split(',').map(Number)
+        if (o.distanceTo(new Vec3(x, y, z)) <= maxDistance && matching(block(x, y, z))) out.push(new Vec3(x, y, z))
+      }
+      return out.sort((a, b) => o.distanceTo(a) - o.distanceTo(b)).slice(0, count)
     },
+    async lookAt() {},
+    async equip(item, dest) { if (dest === 'hand') bot.heldItem = item },
     async dig(b) {
       await Promise.resolve()
       dug.push(key(b.position.x, b.position.y, b.position.z))
       cells.set(key(b.position.x, b.position.y, b.position.z), 'air')
     },
-    pathfinder: { goal: null, setGoal(g) { this.goal = g }, isMoving: () => false },
+    async placeBlock(ref, face) {
+      await Promise.resolve()
+      const at = ref.position.plus(face)
+      if (!bot.heldItem) throw new Error('must be holding an item to place')
+      placed.push({ at: key(at.x, at.y, at.z), item: bot.heldItem.name })
+      cells.set(key(at.x, at.y, at.z), bot.heldItem.name)
+    },
+    pathfinder: { setGoal(g) { goal = g }, get goal() { return goal }, isMoving: () => false },
     chats: [],
     chat(m) { this.chats.push(String(m)) },
     dug,
+    placed,
   }
   return bot
 }
@@ -179,7 +213,8 @@ describe('skills: sandbox (vf8e.2)', () => {
   it('goto is idempotent under a skill: key, and a terminal tick clears the goal it left', () => {
     const bot = fakeBot()
     bot.pathfinder.calls = 0
-    bot.pathfinder.setGoal = function (g) { this.goal = g; this.calls++ }
+    const set = bot.pathfinder.setGoal
+    bot.pathfinder.setGoal = function (g) { set(g); this.calls++ }
     const sk = compiled('walker', 'const a = bot.goto(5, 61, 0); const b = bot.goto(5, 61, 0); st.n = (st.n || 0) + 1; ' +
       'if (st.n >= 3) return "done"; return a === (st.n === 1 ? "started" : "moving") && b === "moving" ? "running" : "failed:" + a + "-" + b')
     const ctx = { lastGoalKey: 'idle' }
@@ -188,7 +223,7 @@ describe('skills: sandbox (vf8e.2)', () => {
     assert.equal(sk.tick(bot, ctx, st), 'running')
     assert.equal(bot.pathfinder.calls, 1, 'one setGoal for an unchanged target')
     assert.equal(ctx.lastGoalKey, 'skill:walker:5,61,0,1')
-    bot.pathfinder.goal = { foreign: true } // a raw-setGoal walker took the body under the stale key
+    set({ foreign: true }) // a raw-setGoal walker took the body under the stale key
     const st2 = { ticks: 0, hs: { busy: null, err: null } }
     sk.reset()
     assert.equal(sk.tick(bot, ctx, st2), 'running')
@@ -197,6 +232,57 @@ describe('skills: sandbox (vf8e.2)', () => {
     assert.equal(sk.tick(bot, ctx, st2), 'done')
     assert.equal(bot.pathfinder.goal, null, 'terminal tick drops the skill goal')
     assert.equal(ctx.lastGoalKey, '')
+  })
+
+  it('place lands the held item in the cell against a solid ref; occupied/yard/apron/no-item are refused', async () => {
+    const bot = fakeBot()
+    bot.items = [{ name: 'cobblestone', count: 4 }]
+    const one = (x, y, z, item, ctx = {}) => tick(compiled('placer',
+      `return "failed:" + bot.place(${x}, ${y}, ${z}, ${JSON.stringify(item)}).replace(":", "-")`), bot, ctx)
+    assert.equal(one(0, 61, 2, 'cobblestone'), 'failed:started', 'air cell over dirt: placed against the floor')
+    await flush()
+    assert.deepEqual(bot.placed, [{ at: key(0, 61, 2), item: 'cobblestone' }])
+    assert.equal(one(0, 60, 3, 'cobblestone'), 'failed:denied-occupied')
+    assert.equal(one(0, 61, 4, 'dirt'), 'failed:denied-no-item')
+    const site = { x: 10, y: 61, z: 0 }
+    assert.equal(one(10, 61, 1, 'cobblestone', { castle: { site, rot: 0 } }), 'failed:denied-place-protected', 'yard ring')
+    const apron = { castle: { site, rot: 0, phase: 'complete' } }
+    assert.equal(one(7, 61, 1, 'cobblestone', apron), 'failed:denied-place-protected', 'complete castle apron')
+    assert.equal(one(0, 70, 0, 'cobblestone'), 'failed:denied-no-reference', 'mid-air: no solid neighbour')
+    assert.equal(bot.placed.length, 1)
+  })
+
+  it('findBlocks returns coordinates within the capped radius', () => {
+    const bot = fakeBot(new Map([[key(3, 61, 0), 'oak_log'], [key(40, 61, 0), 'oak_log']]))
+    const sk = compiled('finder', 'const r = bot.findBlocks(["oak_log"], 99, 99); return "failed:n" + r.length + "-x" + r[0].x')
+    assert.equal(tick(sk, bot), 'failed:n1-x3', 'maxDistance capped at 32')
+    assert.equal(tick(compiled('finder2', 'try { bot.findBlocks(new Array(65).fill("a")) } catch (e) { return "failed:refused" } return "done"'), bot), 'failed:refused')
+  })
+
+  it('a hostile skill cannot run code outside the call timeout or reach the host', () => {
+    const bot = fakeBot()
+    // A getter/setter on the globals the runtime used to read: never touched by the host.
+    const getter = compiled('out_getter', 'Object.defineProperty(globalThis, "__out", { get() { while (true) {} } }); return "done"')
+    assert.equal(tick(getter, bot), 'done')
+    const st = compiled('st_setter', 'Object.defineProperty(globalThis, "__st", { set() { while (true) {} }, get() { return {} } }); return "running"')
+    assert.equal(tick(st, bot), 'running')
+    const t0 = Date.now()
+    st.reset() // cut at the call timeout, never thrown into the tick
+    assert.ok(Date.now() - t0 < 190)
+    // A Proxy / object return never reaches host string checks.
+    assert.equal(tick(compiled('proxy_ret', 'return new Proxy({}, { get() { while (true) {} } })'), bot), 'failed:skill-error')
+    assert.equal(tick(compiled('async_ret', 'return (async () => "done")()'), bot), 'failed:skill-error')
+    // feasible/run getters at load run under the timeout.
+    assert.throws(() => skills.compile('lg.js', '/* skill {"name": "load_getter", "description": "x", "kind": "recover"} */\n' +
+      'Object.defineProperty(globalThis, "feasible", { get() { while (true) {} } })\nfunction run() { return "done" }\n', {}), /timed out/)
+    // Bad numbers and a hostile toJSON stay inside the context.
+    assert.equal(tick(compiled('nan_dig', 'try { bot.dig(NaN, 0, Infinity) } catch (e) { return "failed:" + (/bad number/.test(e.message) ? "nan" : "other") } return "done"'), bot), 'failed:nan')
+    assert.equal(tick(compiled('far_dig', 'return "failed:" + bot.dig(1e15, 61, 0).replace(":", "-")'), Object.assign(bot, { blockAt: () => null })), 'failed:denied-unloaded')
+    assert.equal(tick(compiled('tojson', 'try { bot.dig({ toJSON() { return process } }, 0, 0) } catch (e) { return "failed:caught" } return "done"'), fakeBot()), 'failed:caught')
+    // Error.prepareStackTrace in the context gets no host-realm function or receiver.
+    const foreign = '(v) => (typeof v === "function" || (v && typeof v === "object")) && !(v instanceof Object)'
+    assert.equal(tick(compiled('pst', `const fr = ${foreign}; Error.prepareStackTrace = (e, cs) => cs.some((c) => fr(c.getFunction()) || fr(c.getThis())) ? "host" : "none"; ` +
+      'let s; try { bot.dig("x") } catch (e) { s = e.stack } return "failed:" + s'), fakeBot()), 'failed:none')
   })
 
   it('a looping feasible is an error, not a hang', () => {

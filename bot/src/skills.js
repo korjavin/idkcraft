@@ -20,6 +20,9 @@
 // Movements (never a new one). No toss/drop, no chat.
 // ponytail: node:vm is a guard rail for our own generated code, not a
 // boundary against hostile code; promotion (vf8e.4) keeps revmux review.
+// Known ceiling: no heap cap — a skill allocating GBs inside its 50 ms can
+// OOM the process (container restart); isolated-vm's memoryLimit is the
+// upgrade if skills ever come from outside our own pipeline.
 
 const fs = require('node:fs')
 const path = require('node:path')
@@ -104,7 +107,7 @@ const OPS = {
     return b ? { name: b.name, solid: solid(b), x: b.position.x, y: b.position.y, z: b.position.z } : null
   },
   findBlocks(c, names, maxDistance = 16, count = 16) {
-    if (!Array.isArray(names)) throw new Error('names must be an array')
+    if (!Array.isArray(names) || names.length > 64) throw new Error('names must be an array of <=64')
     const want = new Set(names.map(String))
     const found = c.bot.findBlocks({ matching: (b) => !!b && want.has(b.name), maxDistance: Math.min(num(maxDistance), 32), count: Math.min(num(count), 64) }) || []
     return found.map((p) => ({ x: p.x, y: p.y, z: p.z }))
@@ -247,17 +250,19 @@ function compile(file, text, env) {
   }
   vm.runInContext(PRELUDE, g, { timeout: CALL_MS })(host, FACADE_OPS)
   new vm.Script(text, { filename: file }).runInContext(g, { timeout: CALL_MS })
-  if (vm.runInContext('typeof feasible === "function" && typeof run === "function"', g) !== true) throw new Error('feasible/run missing')
-  const feasibleScript = new vm.Script('globalThis.__out = !!feasible(JSON.parse(globalThis.__in))')
-  const runScript = new vm.Script('globalThis.__out = run(bot, globalThis.__st)')
-  const resetScript = new vm.Script('globalThis.__st = {}')
+  if (vm.runInContext('typeof feasible === "function" && typeof run === "function"', g, { timeout: CALL_MS }) !== true) throw new Error('feasible/run missing')
+  // The host never touches a context property (a skill getter/setter on a
+  // global would run outside the timeout and wedge the tick, security
+  // review 03): input is a literal in the script source, output is the
+  // script's completion value, coerced to a primitive inside the context.
+  const runScript = new vm.Script('(() => { const o = run(bot, __st); return typeof o === "string" ? o : null })()')
+  const resetScript = new vm.Script('globalThis.__st = {}; null')
 
   // -> { out } | { error: 'skill-timeout' | 'skill-error', msg }
   function call(script, c) {
     cur = c
     try {
-      script.runInContext(g, { timeout: CALL_MS })
-      return { out: g.__out }
+      return { out: script.runInContext(g, { timeout: CALL_MS }) }
     } catch (e) {
       const timeout = !!e && (e.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT' || /timed out/.test(String(e.message)))
       return { error: timeout ? 'skill-timeout' : 'skill-error', msg: short(e) }
@@ -272,15 +277,16 @@ function compile(file, text, env) {
     feasible(facts) {
       let json = '{}'
       try { json = JSON.stringify(facts) || '{}' } catch (_) { json = '{}' }
-      g.__in = json
-      const r = call(feasibleScript, null)
+      // ponytail: one compile per feasible call (facts are a few KB).
+      const r = call(new vm.Script(`!!feasible(JSON.parse(${JSON.stringify(json)}))`), null)
       if (r.error) {
         console.log(`skill feasible-error skill=${meta.name} outcome=${r.error} msg=${JSON.stringify(r.msg)}`)
         return { error: r.error }
       }
       return r.out === true
     },
-    reset() { resetScript.runInContext(g, { timeout: CALL_MS }) },
+    // A failing reset (skill setter on __st) only leaves run() its old state.
+    reset() { call(resetScript, null) },
     // One tick: 'running' | 'done' | 'failed:<reason>'. Terminal outcomes
     // count, log and release the controls the skill may hold.
     tick(bot, ctx, st) {
