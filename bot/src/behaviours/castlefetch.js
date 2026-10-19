@@ -209,12 +209,27 @@ function craftNames(bot, kind) {
 // many more usable items the batch needs. Null when the castle word is not
 // a material word (none/parked/done/clear, or blocked with no gated kind). Shared by the goal
 // gate and the behaviour, so the two never disagree.
+// Owed repair moved on (fqkn): a complete castle's latched repair fetch that
+// failed at the castle (the torch rung fails fast away from the home
+// furnace) gets its home try once the bot is REFAIL_DIST from that spot —
+// the 5-min hold otherwise outlived the walk home and the tidy cadence
+// walked the bot back first (rig: no-torch at the castle, every window).
+// One home try: an off-site failure drops the latch (castle.js menuFact).
+function owedMoved(bot, ctx, sf) {
+  try {
+    const st = ctx.castle
+    if (!st || st.phase !== 'complete' || !ctx.castleWord || !ctx.castleWord.repair || !sf.pos) return false
+    const bp = bot.entity && bot.entity.position
+    return !!bp && Math.hypot(bp.x - sf.pos.x, bp.z - sf.pos.z) > require('../holds').REFAIL_DIST
+  } catch (_) { return false }
+}
+
 function demand(bot, ctx) {
   // Bounded fetch hold (g0z.15): a failed leg rests CASTLEFETCH_RETRY_MS no
   // matter how the facts text moves — known=near/none flips released the
   // text-keyed goal hold every few seconds (g0z.12 rig churn).
   const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
-  if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../budget').CASTLEFETCH_RETRY_MS) return null
+  if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../budget').CASTLEFETCH_RETRY_MS && !owedMoved(bot, ctx, sf)) return null
   let w = 'none'
   try { w = castleMod.menuFact(bot, ctx) } catch (_) { return null }
   let kind = null

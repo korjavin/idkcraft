@@ -138,6 +138,26 @@ describe('castle tidy (g0z.62)', () => {
     assert.equal(goal.MENU.gocastle.feasible({ ...facts, castle: 'tidy' }, bot, ctx), true)
   })
 
+  it('fqkn: a repair fetch that failed at the castle gets its home try — the 5-min hold releases once the bot moved off', () => {
+    const fetch = require('../src/behaviours/castlefetch')
+    const now = Date.now()
+    const failPos = { x: SITE.x + 10, y: 64, z: SITE.z + 10 }
+    const mk = () => ({
+      castle: castleState({ visitedAt: now }),
+      castleWord: { kind: 'torch', left: 3, repair: true },
+      stepFail: { castlefetch: { status: 'failed:castlefetch-no-torch', at: now, pos: failPos } },
+    })
+    const home = makeBot({ loaded: false, at: FAR() })
+    const d = fetch.demand(home, mk())
+    assert.ok(d && d.kind === 'torch' && d.short > 0, JSON.stringify(d))
+    const there = makeBot({ loaded: false, at: pos(failPos.x + 5, 64, failPos.z) })
+    assert.equal(fetch.demand(there, mk()), null, 'still at the fail spot: the hold stands')
+    const plain = mk()
+    plain.castleWord = { kind: 'torch', left: 3 } // an active castle's fetch keeps the bounded hold
+    plain.castle.phase = 'building'
+    assert.equal(fetch.demand(home, plain), null)
+  })
+
   it('revmux 01: a failed trip leg counts as the visit — no re-walk to an unreachable castle', async () => {
     const bot = makeBot({ loaded: false, at: FAR(), items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }] })
     const ctx = { castle: castleState(), step: 'gocastle', stepStatus: 'running' }
