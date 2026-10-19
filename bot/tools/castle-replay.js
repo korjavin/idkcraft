@@ -152,7 +152,7 @@ if (!['', 'clean', 'bump', 'pit', 'gallery'].includes(HOUSE) || (HOUSE && !BARE)
 }
 const SAND = process.env.CASTLE_SAND === '1'
 // Repair run (g0z.56, needs CASTLE_SEED=complete): after adoption the
-// acceptance's 20 cells are knocked out (repairCells), wood = 16 oak_log in
+// acceptance's 22 cells are knocked out (repairCells), wood = 16 oak_log in
 // the castle chest, nowood = an empty chest and every log within
 // NOWOOD_RADIUS cleared; the guide chats `castle repair`.
 const REPAIR = process.env.CASTLE_REPAIR || ''
@@ -160,8 +160,10 @@ if (!['', 'wood', 'nowood'].includes(REPAIR) || (REPAIR && SEED !== 'complete'))
   throw new Error(`CASTLE_REPAIR: want ''|wood|nowood with CASTLE_SEED=complete, got ${JSON.stringify(REPAIR)}`)
 }
 const NOWOOD_RADIUS = 72
-// The 20 knocked-out cells (g0z.56 acceptance): a fence row (12), the
-// door, 4 ground-floor wall cells, 3 torches. Pure (unit-tested).
+// The 22 knocked-out cells (g0z.56 acceptance, vf8e.8 adds 2 stairs):
+// a fence row (12), the door, 4 ground-floor wall cells, 3 torches, 2
+// stairs (v3 only — earlier blueprints have no stairs cells, still 20).
+// Pure (unit-tested).
 function repairCells(st) {
   const cells = require('../src/castle').absPlan(st.site, st.rot, st.blueprintVersion).cells
   return [
@@ -169,6 +171,7 @@ function repairCells(st) {
     ...cells.filter((c) => c.kind === 'door'),
     ...cells.filter((c) => c.kind === 'stone' && c.y === st.site.y + 1).slice(0, 4),
     ...cells.filter((c) => c.kind === 'torch').slice(0, 3),
+    ...cells.filter((c) => c.kind === 'stairs').slice(0, 2),
   ]
 }
 // Litter sweep (g0z.61, CASTLE_LITTER=1, needs CASTLE_SEED=complete): after

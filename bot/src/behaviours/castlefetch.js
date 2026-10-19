@@ -187,7 +187,10 @@ function chestNames(bot, kind) {
   if (kind === 'bookshelf') return [['bookshelf'], ['book']]
   if (kind === 'enchanting_table') return [['enchanting_table']]
   if (kind === 'blast_furnace') return [['blast_furnace'], ['iron_ingot'], ['raw_iron'], ['smooth_stone'], ['stone'], ['cobblestone']]
-  if (kind === 'stairs') return [itemNames(bot, (n) => n.endsWith('_stairs'))]
+  // vf8e.8: stairs fund their table like every wood kind (g0z.56) — the
+  // finished stairs first, then ONE table's worth (a table, else planks,
+  // else a log); drawChest sizes the fund to the table, not the need.
+  if (kind === 'stairs') return [itemNames(bot, (n) => n.endsWith('_stairs')), ['crafting_table'], itemNames(bot, (n) => n.endsWith('_planks')), itemNames(bot, (n) => n.endsWith('_log'))]
   return []
 }
 
@@ -459,11 +462,16 @@ function chestTick(bot, ctx, f, d) {
   // ping-pong). The owner's footprint chest draws the whole short, as before.
   const need0 = bank ? Math.min(d.short, bankCap(bot, d.kind)) : d.short
   flight(ctx, async () => {
-    const left = await drawChest(bot, ctx, d, at, need0)
+    const dr = await drawChest(bot, ctx, d, at, need0)
+    const left = dr.left
     if (!bank) return
-    try { console.log(`castlefetch ${d.kind}: drew ${Math.max(0, Math.round(need0 - left))} of ${need0} from the bank chest at ${k}`) } catch (_) { /* log best-effort */ }
-    if (left > 0) markChestDry(ctx, d.kind, k) // drained: no walk back to it within CHEST_DRY_MS
-    else f.bankFull = true // a full bank batch: the leg lays it instead of digging the rest
+    // A stairs table fund is not the need: it never dry-marks the bank
+    // (revmux 01 core-3 — the need line below would read 'drew 0 of N'
+    // for a chest that just gave the table).
+    const fund = dr.fund | 0
+    try { console.log(`castlefetch ${d.kind}: drew ${Math.max(0, Math.round(need0 - left))} of ${need0}${fund ? ` plus table fund x${fund}` : ''} from the bank chest at ${k}`) } catch (_) { /* log best-effort */ }
+    if (left > 0 && !fund) markChestDry(ctx, d.kind, k) // drained: no walk back to it within CHEST_DRY_MS
+    else if (left <= 0) f.bankFull = true // a full bank batch: the leg lays it instead of digging the rest
   }, CHEST_TIMEOUT_MS, () => { if (bank) markChestDry(ctx, d.kind, k) })
   return true
 }
@@ -511,11 +519,54 @@ function pickChest(bot, ctx, f, kind) {
   return best
 }
 
+// The pack already funds a stairs table (vf8e.8): its own table, 4
+// planks-worth of wood, or a standing table in reach (craftany's
+// tablePathOf shape) — the chest's table/planks/log stay where they are,
+// never pulled from the bank for a table the bot can walk to.
+function stairsTableFunded(bot, ctx) {
+  if (countItems(bot, (n) => n === 'crafting_table') > 0) return true
+  if (countItems(bot, (n) => n.endsWith('_planks')) + 4 * countItems(bot, (n) => n.endsWith('_log')) >= 4) return true
+  try { if (require('./craftany').standingTable(bot, ctx)) return true } catch (_) { /* unreadable claim: draw */ }
+  return false
+}
+
+// The stairs table is still unfunded (vf8e.8): the craft failed out on
+// the table (f.tableRetry latched by a 'crafting table' line) and the
+// pack holds no table, no 4 planks-worth, no reachable standing table.
+// v2 only after the 8njf stone batch (ctx.castleStairsMines > 0) —
+// stone first, then the log.
+function stairsTableBroke(bot, ctx, f) {
+  if (!f.craftOut || !f.tableRetry) return false
+  if (process.env.BOT_BODY === 'baritone' && !(ctx.castleStairsMines > 0)) return false
+  return !stairsTableFunded(bot, ctx)
+}
+
 // One chest's withdraw for the demand: the kind's lists in order (finished
 // item first, then its raw stock). Returns the need left (> 0: short).
 async function drawChest(bot, ctx, d, at, need) {
+  let fund = 0 // stairs table-fund items drawn (not the need — chestTick's bank log/dry-mark read it)
   for (const names of chestNames(bot, d.kind)) {
     if (need <= 0 || names.length === 0) break
+    // Stairs table fund (vf8e.8): the stairs recipe needs a table the
+    // pack may not hold — draw ONE table's worth (a table, else the
+    // missing planks up to 4, else 1 log), never the stairs need. The
+    // finished-stairs list above still draws the need as before, and a
+    // funded pack skips the fund (never the bank's keep for a table the
+    // bot can already make or walk to).
+    if (d.kind === 'stairs' && !names.some((n) => n.endsWith('_stairs'))) {
+      if (!stairsTableFunded(bot, ctx)) {
+        const missing = Math.max(0, 4 - countItems(bot, (n) => n.endsWith('_planks')) - 4 * countItems(bot, (n) => n.endsWith('_log')))
+        const want = names[0] === 'crafting_table' ? 1 : names.some((n) => n.endsWith('_planks')) ? missing : 1
+        if (want > 0) {
+          const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
+          if (r && r.got > 0) {
+            fund += r.got
+            try { console.log(`castlefetch stairs: drew table fund ${r.name} x${r.got} from the chest`) } catch (_) { /* log best-effort */ }
+          }
+        }
+      }
+      continue
+    }
     // Planks' second list is logs: one log is four planks; panes' is
     // glass: six glass are sixteen panes (one craft).
     // g0z.56: a log also makes 2 fences or doors, half a chest.
@@ -556,7 +607,7 @@ async function drawChest(bot, ctx, d, at, need) {
     const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
     need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
   }
-  return need
+  return { left: need, fund }
 }
 
 // Source 2: craft from the pack. Returns true while it owns the tick.
@@ -1888,7 +1939,7 @@ function castlefetch(bot, ctx, target, state) {
     finish(bot, ctx, 'done')
     return
   }
-  if (st.status !== NO_WOOD || !WOOD.has(d.kind)) st.status = `fetching ${d.kind}`
+  if (st.status !== NO_WOOD || !(WOOD.has(d.kind) || d.kind === 'stairs')) st.status = `fetching ${d.kind}`
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
   // g0z.60: a bank batch on hand lays before any dig. Not a torch leg (fqkn):
@@ -1946,6 +1997,43 @@ function castlefetch(bot, ctx, target, state) {
         try { console.log(`castlefetch ${d.kind}: ${NO_WOOD}`) } catch (_) { /* log best-effort */ }
       }
       ctx.castleFetch = null
+    }
+    return
+  }
+  if (d.kind === 'stairs' && stairsTableBroke(bot, ctx, f)) {
+    // vf8e.8: the table craft is still out and the pack holds no wood —
+    // chop the table's log through the wood route's load (its surplus
+    // funds the castle's planks/door kinds later). A full load on hand
+    // means the table failed for another reason: fail into the hold,
+    // never castlefetch-craft-stairs (no new failed: string, v2 gate).
+    // A table known at leg start may die mid-leg (craftany deadToday):
+    // the fund was skipped, the retry failed, and the chest still holds
+    // the wood. Re-open the chest source once per leg before chopping —
+    // but only when a chest was actually visited (revmux 01 core-1).
+    if (!f.fundRetry && f.chestTried && f.chestTried.size > 0) {
+      f.fundRetry = true
+      f.chestDone = false
+      f.chest = null
+      f.chestWalk = null
+      f.chestTried = new Set()
+      return
+    }
+    if (countItems(bot, (n) => n.endsWith('_log')) >= require('../budget').NEED_LOGS) {
+      finish(bot, ctx, 'failed:castlefetch-no-stairs')
+      return
+    }
+    deps.gather(bot, ctx, target, state)
+    if (isFinished(ctx.stepStatus)) {
+      // Honest ceiling: no trees anywhere near — name it once (a log in
+      // the castle chest funds the stairs through the table fund next
+      // leg) and fail into the hold as before.
+      if (failReason(ctx.stepStatus) === 'no-trees') {
+        if (st.status !== NO_WOOD) {
+          st.status = NO_WOOD
+          try { console.log(`castlefetch stairs: ${NO_WOOD}`) } catch (_) { /* log best-effort */ }
+        }
+        finish(bot, ctx, 'failed:castlefetch-no-stairs')
+      } else ctx.castleFetch = null
     }
     return
   }

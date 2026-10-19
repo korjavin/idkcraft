@@ -219,11 +219,11 @@ describe('castle repair (g0z.56)', () => {
 })
 
 describe('castle rig repair seed (g0z.56)', () => {
-  it('knocks out the acceptance 20 cells on the current blueprint', () => {
+  it('knocks out the acceptance 22 cells on the current blueprint', () => {
     const { repairCells } = require('../tools/castle-replay')
     const cells = repairCells({ site: SITE, rot: 0, blueprintVersion: blueprint.BLUEPRINT_VERSION })
     const by = {}
     for (const c of cells) by[c.kind] = (by[c.kind] || 0) + 1
-    assert.deepEqual(by, { fence: 12, door: 1, stone: 4, torch: 3 })
+    assert.deepEqual(by, { fence: 12, door: 1, stone: 4, torch: 3, stairs: 2 })
   })
 })
