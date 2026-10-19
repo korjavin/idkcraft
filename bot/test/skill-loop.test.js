@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { extractCode, verdictLine, cost, check } = require('../tools/skill-loop')
+const { extractCode, verdictLine, cost, check, rowGreen } = require('../tools/skill-loop')
 const scenarios = require('../tools/skill-scenarios.json')
 const spots = require('../tools/stuck-spots.json')
 const { RECOVER_MENU } = require('../src/behaviours/recover')
@@ -40,6 +40,14 @@ describe('skill-loop (idkcraft-vf8e.3)', () => {
     } finally {
       RECOVER_SKILLS.delete('gen_t')
     }
+  })
+
+  it('a verify-demoted row reads RED (idkcraft-vf8e.18)', () => {
+    // applyVerify demotes a chat-done the world rejects to reached=false +
+    // a PARTIAL note; rowGreen needs no change — reached=false is already
+    // RED. Pinned so a refactor keeps the demotion red.
+    assert.equal(rowGreen({ spot: 'PARK-1', reached: false, stuck: 0, eps: 0, call: 0, note: 'PARTIAL found=9/10 close=0' }), false)
+    assert.equal(rowGreen({ spot: 'PARK-1', reached: true, stuck: 0, eps: 0, call: 0, note: '' }), true)
   })
 
   it('every scenario names a corpus spot, a real sabotage target and a free skill name', () => {
