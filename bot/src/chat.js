@@ -784,6 +784,8 @@ function castleChat(bot, ticker, playerName, cmd) {
     // g0z.62: 'castle go' plus a stale visit stamp — the tidy trip starts
     // on the next day tick instead of after CASTLE_TIDY_MS.
     if (st.phase !== 'complete') return 'the castle is not finished yet — say castle go to resume'
+    // The trip rides the cadence (tidyDue): with CASTLE_TIDY_MS=0 a stale stamp starts nothing, so say so.
+    if (!(castleMod.tidyMs() > 0)) return 'castle tidy is off (CASTLE_TIDY_MS=0) — bring me near the castle and say castle repair'
     try { taskMod.clearTaskParks(ctx) } catch (_) { /* resume best-effort */ }
     st.parked = false
     st.visitedAt = 0

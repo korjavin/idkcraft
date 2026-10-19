@@ -251,5 +251,18 @@ describe('castle tidy (g0z.62)', () => {
     ctx.castle.phase = 'body'
     handleChat(bot, ticker, 'Steve', 'castle tidy')
     assert.equal(bot.chats.pop(), 'the castle is not finished yet — say castle go to resume')
+    // codex 04: the cadence off -> no trip can start, so no false promise.
+    ctx.castle.phase = 'complete'
+    ctx.castle.visitedAt = 123
+    const saved = process.env.CASTLE_TIDY_MS
+    process.env.CASTLE_TIDY_MS = '0'
+    try {
+      handleChat(bot, ticker, 'Steve', 'castle tidy')
+      assert.match(bot.chats.pop(), /^castle tidy is off/)
+      assert.equal(ctx.castle.visitedAt, 123)
+    } finally {
+      if (saved === undefined) delete process.env.CASTLE_TIDY_MS
+      else process.env.CASTLE_TIDY_MS = saved
+    }
   })
 })
