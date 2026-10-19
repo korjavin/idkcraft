@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { sabotageMenu, loadSpots } = require('../tools/stuck-replay')
+const { sabotageMenu, sabotageStep, loadSpots } = require('../tools/stuck-replay')
 const { RECOVER_MENU } = require('../src/behaviours/recover')
 
 // idkcraft-vf8e.1: the per-spot sabotage knob drops one RECOVER_MENU
@@ -19,6 +19,15 @@ describe('stuck-replay sabotage knob (idkcraft-vf8e.1)', () => {
     assert.equal(RECOVER_MENU.water_up, orig)
   })
 
+  it('a goal step stays in MENU but reads infeasible until the undo (vf8e.3)', () => {
+    const { MENU } = require('../src/goal')
+    const orig = MENU.shelter.feasible
+    const undo = sabotageStep(MENU, 'shelter')
+    assert.equal(MENU.shelter.feasible({ inside: 'no', time: 'night' }), false)
+    undo()
+    assert.equal(MENU.shelter.feasible, orig)
+  })
+
   it('loadSpots accepts a menu name and rejects anything else', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sabotage-spots-'))
     const saved = process.argv[2]
@@ -30,6 +39,7 @@ describe('stuck-replay sabotage knob (idkcraft-vf8e.1)', () => {
     }
     try {
       assert.equal(load('water_up')[0].sabotage, 'water_up')
+      assert.equal(load('shelter')[0].sabotage, 'shelter') // vf8e.3: a goal step
       assert.equal(load(undefined)[0].sabotage, null)
       for (const bad of ['water-up', 'constructor', 7]) assert.throws(() => load(bad), /bad sabotage/)
     } finally {

@@ -579,7 +579,9 @@ idkcraft-vf8e.2).
 Sabotage knob: `"sabotage": "<primitive>"` on a spot removes that
 `RECOVER_MENU` entry for its window only (validated against the menu), so
 a scenario can demand a new skill instead of the hand primitive — the
-hand sabotages above, as data. Any mode, gate runs included; the corpus
+hand sabotages above, as data. A goal `MENU` step name (`"shelter"`,
+idkcraft-vf8e.3) is made infeasible for the window instead (kept in the
+menu: index.js reads `MENU.shelter.feasible` directly). Any mode, gate runs included; the corpus
 carries none.
 
 Measured (2026-10-18, v1, DUGPIT-BARE on a kept rig): runs 2 and 3
@@ -590,6 +592,88 @@ REGRESSION (unreached (was reached))`, exit 1 in 105 s — the
 `BUCKETS_NEEDED=3` outcome. Inner runs inherit the rig's world, so the
 follower's inventory from the last run is still there until the kit's
 `clear`.
+
+## Skill loop (`skill-loop.js`, idkcraft-vf8e.3)
+
+A Voyager-style loop on our stack. A scenario (`skill-scenarios.json`) is a corpus spot plus
+a sabotaged hand primitive or goal step. The model writes the missing skill. The micro-rig
+is the critic: one Messages API call per attempt (our own loop through `brain.llmCall`, so
+the vf8e.5 budget applies; no `claude -p`), then one inner micro-run, green = exit 0.
+
+```sh
+node bot/tools/skill-loop.js water-climb 6   # key: ANTHROPIC_API_KEY or stash; never printed
+```
+
+- Work dir `SKILL_LOOP_DIR` (default `/tmp/idkcraft-skill-loop/<scenario>`) holds:
+  `attempt-N.js` / `.log`, `result.json`.
+- Knobs: `SKILL_LOOP_MODEL` (default `claude-opus-5-5`), `SKILL_LOOP_EFFORT` (default
+  `medium`), max_tokens 32000.
+- A green skill stays in `<work dir>/skills/` and is not promoted (vf8e.4).
+
+### Spike numbers (2026-10-19, v1, laptop rig, claude-opus-5-5 effort medium)
+
+| scenario (spot, sabotage) | attempts | wall | tokens in/out | cost | verdict |
+|---|---|---|---|---|---|
+| water-climb (DUGPIT-BARE, `water_up`) | 3 (1 = network `fetch failed`, 300 s) | 825 s | 16,325 / 18,709 | $0.44 | GREEN |
+| brow-step (S6-LEAD, `dig_step`) | 1 | 388 s | 7,449 / 7,358 | $0.18 | GREEN |
+| night-dig-in (SPAWN-BARE, `shelter`) | 6 | 1203 s | 50,223 / 44,518 | $1.09 | RED |
+
+Result: 2/3 green within 6 attempts, $1.71 for the run above. The whole spike, including
+the pre-fix run and the discarded attempts, cost about $3.86.
+
+The first run, on the runtime as merged, went 0 for 2:
+
+- water-climb was RED after 6 attempts (54,758 / 65,807 tokens, $1.53).
+- brow-step's skill was never offered.
+
+Each gap below is a runtime fix in this PR. All of them are no-ops with `BOT_SKILLS` off.
+
+- **Buckets.** Pouring needs look-at plus use-item (`waterup.js`); `place()` cannot pour.
+  The new facade act `use(x,y,z)` covers a held bucket only.
+- **9sh page rule.** The rule (`recoverFsm`: `dig_up` failed, no hand climber) paged
+  `call_player` before the skills loop could run. A feasible skill now blocks the early page.
+- **Step order.** A step skill was inserted before `rest`, so the FSM always picked
+  `gather` first at night. The header `before` now places it ahead of a named hand step,
+  never at or above `shelter`.
+- **Effort.** `effort: high` used the whole 16k max_tokens on thinking (164 s, no answer).
+  The defaults are now medium and 32k.
+
+night-dig-in stays RED for a structural reason:
+
+- The hand dig-in uses its own veto (`digInVeto`).
+- The facade `dig` goes through `util.denyReason`. Its `below-feet` self-trap rule refuses
+  digging under a walled bot, which is the core move of a dig-in.
+- Attempts 3-6 hit `dig-denied` and then `no-spot`.
+- This spike does not loosen a safety rule for generated code. A step-skill dig-in needs a
+  facade dig-in act first.
+
+Human pipeline cost of the same fixes (git and revmux archives; developer tokens were not
+recorded per bead):
+
+| fix | PRs | diff | calendar | revmux |
+|---|---|---|---|---|
+| water_up (jsf.2/.3/.6/.7) | 4 (+ neuc.34) | +3,224/-61 | ~4 days | ~9 rounds, ~4.9M cache-read |
+| dig_step S6 rescue (au4j, 6x7.11) | 2 | +215/-28 | ~15 h | 3 rounds, ~1.6M cache-read |
+| shelter dig-in (ed88, hoy7, bn4d) | 3 | +824/-30 | ed88 7.8 h; thread 15 days | ed88: 3 rounds, ~4.4M cache-read |
+
+Gates with the two green skills loaded (`BOT_SKILLS=1`, no sabotage; `skills loaded n=2` in
+each bot log):
+
+| gate | result | verdict |
+|---|---|---|
+| full `stuck-run.sh` | `baseline: 32/32 ok, 0 improved, 0 regressed`, exit 0 | no regression |
+| lay (v2, 10 game-min) | 75.4/game-min, baseline 76.5 (-1%) | within |
+| mine (v2, 10 game-min, 3 runs) | 20.0, 35.3, 30.0 = mean 28.4, baseline 29.4 (-3%) | within |
+| `work-rig.sh 20` | nights=5 slept=5 inside=4 deaths=1 banked=18/h | report only (no recorded baseline) |
+
+Notes on the gates:
+
+- **mine.** A single mine run is too noisy to judge alone. The 20.0 run had no recover episode
+  at all, and the cached master run at the base sha read 37.2 (+27%).
+- **Skills in the corpus.** In all 32 spots, the only skill run was `gen_brow_step` once in
+  the DUGPIT area: `failed:no-dir` in 5 ticks, then the hand chain went on.
+- **Decision rule.** Met: 2/3 green within 6 attempts, and no regression on the three gates.
+  vf8e.4 and vf8e.6 proceed.
 
 ## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
 

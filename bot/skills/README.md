@@ -35,6 +35,7 @@ function run(bot, st) {
 | `description` | yes | the menu criterion text: the model reads it in the recover/step menu and in `plan()` |
 | `kind` | yes | `recover` (stuck-recovery primitive) or `step` (goal step) |
 | `body` | no | `any` (default), `mineflayer` or `baritone`; a skill for the other body is skipped at load |
+| `before` | no | step only: the hand step this skill goes ahead of in `STEP_ORDER` (default `rest`). Must sit after `shelter`; a higher or unknown name falls back to `rest` with a log line, so the night safety steps (`stay`, `gohome`, `shelter`) always come first |
 | `verb` | no | chat verb (`stuck, trying <verb>` / `next: <verb>`); default: the name with spaces |
 | `verifiedBy`, `bead` | no | provenance; promotion (vf8e.4) fills them |
 
@@ -57,7 +58,7 @@ top-level functions.
   the rest of the episode. It also joins the cross-episode spot bans like a
   hand shuffle (`RECOVER_BANNABLE` + `RECOVER_SHUFFLE`): 3 same-spot fails,
   or 3 flat dones while boxed in, take it off the menu at that spot.
-- **step**: `MENU[name]`, inserted before `rest` in `STEP_ORDER`,
+- **step**: `MENU[name]`, inserted before `rest` (or the header's `before`) in `STEP_ORDER`, which the FSM walks in priority order,
   `STEP_CRITERIA[name] = description`, plus `BEHAVIOURS[name]`, so
   `goal.registered()` admits it. It finishes through `step.js`
   (`stepDone`/`stepFailed`).
@@ -98,6 +99,12 @@ ticks.
 - `place(x, y, z, item)` places INTO that cell against a solid neighbour. It
   refuses the castle yard ring and apron (`denied:place-protected`) and never
   clicks a GUI block.
+- `use(x, y, z)` uses the held bucket on that cell (look at its centre,
+  then the server's use-item raycast): a held `water_bucket` pours, a held
+  `bucket` scoops a water source. `place()` cannot pour. It refuses any other
+  held item (`denied:not-a-bucket`), a cell farther than 4.5 from the eyes
+  (`denied:out-of-reach`) and the castle yard ring/apron
+  (`denied:use-protected`). `equip` the bucket first.
 - `goto(x, y, z, range=1)` sets a pathfinder `GoalNear` on the live Movements
   after `body.movementsFor`. It never builds a new `Movements`. The goal is
   issued under a `skill:` goal key. It is idempotent: the same target with a
