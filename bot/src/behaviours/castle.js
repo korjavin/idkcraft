@@ -32,7 +32,7 @@ const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.j
 const build = require('./build')
 const flat = require('./flat')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
-const { stepFailed, stepGen } = require('../step')
+const { stepFailed, stepGen, failReason } = require('../step')
 const worker = require('../worker')
 
 const STRIKES = 3
@@ -1016,6 +1016,44 @@ function siteLoaded(bot, st) {
   } catch (_) { return false }
 }
 
+// Castle tidy (g0z.62): a complete castle off the loaded map read 'done'
+// forever, so nothing walked the owner back to see its damage (prod: 94
+// cells missing, 1 castle step in 3 h). st.visitedAt stamps every tick
+// the site is loaded with the bot within TIDY_VISIT_DIST of its centre;
+// past CASTLE_TIDY_MS (default 1 h, 0 = off) the far word is 'tidy' and
+// gocastle walks back. On site the real words (relay/sweep/decor/'done')
+// take over, so the trip ends by itself. TIDY_VISIT_DIST = goal.js
+// GOSITE_DIST (a require would cycle): the visit stamps exactly where the
+// return walk's displacement ends — no band where the walk stops short of
+// a visit and the bot ping-pongs at the load edge.
+const TIDY_VISIT_DIST = 64
+// ponytail: a flat 10-min cap on the walk back (230 blocks walk in ~2);
+// make it distance-scaled if a castle ever sits a far-leg away.
+const TIDY_TRIP_MS = 10 * 60 * 1000
+function tidyMs() {
+  const raw = process.env.CASTLE_TIDY_MS
+  const v = raw ? Number(raw) : NaN
+  return Number.isFinite(v) && v >= 0 ? v : 3600000
+}
+function tidyDue(st, now = Date.now()) {
+  const ms = tidyMs()
+  if (!st || !st.site || st.phase !== 'complete' || st.parked || !(ms > 0)) return false
+  return now - (typeof st.visitedAt === 'number' ? st.visitedAt : 0) > ms
+}
+function nearSite(bot, st) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return false
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    return Math.hypot(bp.x - (st.site.x + w / 2), bp.z - (st.site.z + d / 2)) <= TIDY_VISIT_DIST
+  } catch (_) { return false }
+}
+function noteVisit(bot, ctx, st, now) {
+  if (!nearSite(bot, st)) return
+  st.visitedAt = now
+  ctx.tidyLegMs = 0
+}
+
 // Dry decor kinds (g0z.49): every castlefetch leg that comes up dry adds
 // its kind (noteDry), so the decor word below skips every dry kind at
 // once — with five decor kinds now, one mark per kind. A leg that got
@@ -1037,16 +1075,51 @@ function noteDry(ctx, kind) {
 function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
-  if (st.parked) return 'parked'
+  if (st.parked) { ctx.tidyLegMs = 0; return 'parked' }
+  // Tidy bound (g0z.62 revmux 01/02): the watchdog never watches a
+  // complete castle, so a failed trip leg — or TIDY_TRIP_MS of leg time
+  // without arriving (a walk that moves but never closes in) — counts as
+  // the visit: one try per CASTLE_TIDY_MS, never a day of re-walks to an
+  // unreachable site. Leg time only (ticks capped at 5 s), so a night
+  // between legs does not eat the trip. Read here (decide's first facts
+  // read), so this very tick already says 'done'.
+  // The owed-repair trip (latched in the loaded branch below) rides the same bound, and an off-site
+  // fetch leg for it gets one try: a failure drops the latch (the next tidy
+  // visit re-reads the castle), never a fetch retried every hold.
+  const owed = st.phase === 'complete' && !!(ctx.castleWord && ctx.castleWord.repair)
+  if (tidyDue(st, now) || owed) {
+    const leg = ctx.step === 'gocastle' || ctx.step === 'castle'
+    const failed = failReason(ctx.stepStatus) !== null
+    if (leg) ctx.tidyLegMs = (ctx.tidyLegMs || 0) + Math.max(0, Math.min(now - (ctx.tidyTickAt || now), 5000))
+    if ((leg && failed) || ctx.tidyLegMs > TIDY_TRIP_MS) {
+      st.visitedAt = now
+      ctx.tidyLegMs = 0
+      if (owed) ctx.castleWord = null
+    } else if (owed && failed && ctx.step === 'castlefetch' && !nearSite(bot, st)) {
+      ctx.castleWord = null
+      ctx.tidyFetchSpent = st.visitedAt || 0 // this window's one off-site try
+    }
+  } else ctx.tidyLegMs = 0 // a fresh trip clock for every due window (stop/forget/new castle)
+  ctx.tidyTickAt = now
+  // Spent try: away from a complete castle the far word holds even while its
+  // chunks stay loaded (a house in view range), so the loaded branch cannot
+  // re-latch the same repair and re-run the failed fetch; a visit (a new
+  // visitedAt) opens the next window.
+  if (st.phase === 'complete' && ctx.tidyFetchSpent === (st.visitedAt || 0) && !nearSite(bot, st)) return tidyDue(st, now) ? 'tidy' : 'done'
   try {
     if (!siteLoaded(bot, st)) {
-      if (st.phase === 'complete') return 'done'
+      if (st.phase === 'complete') {
+        const last = ctx.castleWord
+        if (last && last.repair) return stockWord(bot, last.kind, last.left) // owed repair (g0z.62): fetch it here, carry it back
+        return tidyDue(st, now) ? 'tidy' : 'done'
+      }
       const last = ctx.castleWord
       if (last && last.kind) return stockWord(bot, last.kind, last.left)
       if (last && last.word) return last.word
       const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
       return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH)
     }
+    noteVisit(bot, ctx, st, now)
     let r = peek(bot, st, now, ctx)
     // Prep with nothing left to prep (g0z.15): the next castle tick starts
     // the body, so the word is the body's — never 'finish' at 0/240.
@@ -1170,7 +1243,11 @@ function menuFact(bot, ctx, now = Date.now()) {
         if (o.kind === kind && !done(bot, o)) left++
       }
     }
-    ctx.castleWord = { kind, left }
+    // A complete castle's open plan cell is a repair (g0z.62): latched, so
+    // off site the owed kind stays the word — castlefetch funds it at home
+    // (the home furnace, a tidy visit's torches) and the castle step walks
+    // it back. Decor and sweep words never latch.
+    ctx.castleWord = st.phase === 'complete' ? { kind, left, repair: true } : { kind, left }
     return stockWord(bot, kind, left)
   } catch (_) {
     return 'none'
@@ -2260,6 +2337,8 @@ module.exports.batchOf = batchOf
 module.exports.entrance = entrance
 module.exports.SITE_WALK_DIST = SITE_WALK_DIST
 module.exports.siteLoaded = siteLoaded
+module.exports.tidyDue = tidyDue
+module.exports.tidyMs = tidyMs
 module.exports.siteDist = siteDist
 // Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
 module.exports.prepTargets = prepTargets

@@ -727,7 +727,15 @@ function castleChat(bot, ticker, playerName, cmd) {
       } catch (_) { /* count best-effort */ }
     }
     const upgrading = upgradeLine(bot, st, loaded)
-    const tail = `now: ${st.parked ? 'parked — say castle go' : (upgrading || st.status || 'waiting for its turn')}; blocked ${blocked}${yard}`
+    // Tidy cadence (g0z.62): when the complete castle was last seen on site.
+    let visit = ''
+    if (st.phase === 'complete') {
+      const ms = castleMod.tidyMs()
+      const ago = typeof st.visitedAt === 'number' && st.visitedAt > 0 ? Math.floor((now - st.visitedAt) / 60000) : null
+      const next = ms > 0 ? (ago === null ? 'now' : `in ${Math.max(0, Math.ceil((st.visitedAt + ms - now) / 60000))} min`) : 'off'
+      visit = `; last visit ${ago === null ? 'never' : `${ago} min ago`}; next tidy ${next}`
+    }
+    const tail = `now: ${st.parked ? 'parked — say castle go' : (upgrading || st.status || 'waiting for its turn')}; blocked ${blocked}${yard}${visit}`
     if (!loaded) return `castle at ${at(st.site)}: too far to count; ${tail}`
     const by = castleMod.progressByKind(bot, st)
     let done = 0
@@ -781,6 +789,20 @@ function castleChat(bot, ticker, playerName, cmd) {
     ticker.work()
     return 'castle resumed'
   }
+  if (cmd === 'castle tidy') {
+    // g0z.62: 'castle go' plus a stale visit stamp — the tidy trip starts
+    // on the next day tick instead of after CASTLE_TIDY_MS.
+    if (st.phase !== 'complete') return 'the castle is not finished yet — say castle go to resume'
+    // The trip rides the cadence (tidyDue): with CASTLE_TIDY_MS=0 a stale stamp starts nothing, so say so.
+    if (!(castleMod.tidyMs() > 0)) return 'castle tidy is off (CASTLE_TIDY_MS=0) — bring me near the castle and say castle repair'
+    try { taskMod.clearTaskParks(ctx) } catch (_) { /* resume best-effort */ }
+    st.parked = false
+    st.visitedAt = 0
+    ctx.tidyLegMs = 0 // revmux 03: a forced trip gets the full TIDY_TRIP_MS
+    ticker.saveMemory()
+    ticker.work()
+    return 'castle: going to tidy it'
+  }
   if (cmd === 'castle forget') {
     ticker.setCastle(null)
     return `castle at ${at(st.site)} forgotten — the blocks stay`
@@ -807,7 +829,7 @@ function castleChat(bot, ticker, playerName, cmd) {
     ticker.work()
     return `upgrading the castle to stair blocks: ~${stairsTotal(st)} steps, I keep sleeping inside`
   }
-  return 'try: castle, castle stop, castle go, castle repair, castle forget, castle upgrade'
+  return 'try: castle, castle stop, castle go, castle repair, castle tidy, castle forget, castle upgrade'
 }
 
 // jr2.2: an order takes the body even at night — the server ignores

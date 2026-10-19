@@ -526,7 +526,7 @@ function castleGo(facts, ctx, bot = null) {
   if (typeof w !== 'string' || facts.time !== 'day') return false
   if (!registered('castle')) return false
   if (lowHpGated(bot, facts, ctx)) return false // vmzq.49: eat first, then climb (.51: bounded)
-  if (w === 'clear' || w === 'finish' || w.endsWith('-batch')) return true
+  if (w === 'clear' || w === 'finish' || w === 'tidy' || w.endsWith('-batch')) return true // g0z.62: 'tidy' = walk back to the complete castle
   return w.endsWith('-some') && !!ctx && ctx.step === 'castle' && ctx.stepStatus === 'running'
 }
 
@@ -577,7 +577,9 @@ function displacedFromCastle(bot, ctx) {
   try {
     const st = ctx && ctx.castle
     if (!st || !st.site || typeof st.site.x !== 'number') return false
-    if (!castleFirst(ctx)) return false // active castle only (unfinished, unparked)
+    // Active castle only (unfinished, unparked) — or a complete one whose
+    // tidy visit is due (g0z.62: castle.js tidyDue, the 'tidy' word).
+    if (!castleFirst(ctx) && !tidyDue(st)) return false
     const bp = bot && bot.entity && bot.entity.position
     if (!bp || typeof bp.x !== 'number') return false
     const c = castleSiteCentre(st)
@@ -624,12 +626,15 @@ function threatNear(bot) {
 function duskClimbOut(facts, bot, ctx) {
   try {
     if (!facts || facts.time !== 'dusk') return false
-    if (!displacedFromCastle(bot, ctx) || !needsClimb(bot)) return false
+    if (!castleFirst(ctx) || !displacedFromCastle(bot, ctx) || !needsClimb(bot)) return false // tidy is day only
     if (lowHpGated(bot, facts, ctx) && threatNear(bot)) return false
     return !failHolds(ctx, 'gocastle', goalText(facts, ctx && ctx.home), bot)
   } catch (_) {
     return false
   }
+}
+function tidyDue(st) {
+  try { return require('./behaviours/castle').tidyDue(st) } catch (_) { return false }
 }
 function gocastleGo(facts, bot, ctx) {
   try {
@@ -642,7 +647,7 @@ function gocastleGo(facts, bot, ctx) {
     if (lowHpGated(bot, facts, ctx) && threatNear(bot)) return false
     const t = facts && facts.time
     if (t === 'day') return true
-    return t === 'dusk' && needsClimb(bot)
+    return t === 'dusk' && castleFirst(ctx) && needsClimb(bot) // the tidy trip is day only
   } catch (_) {
     return false
   }
@@ -1606,7 +1611,7 @@ const STEP_CRITERIA = {
   beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word or blocked with its kind short and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
-  castle: 'castle is clear, finish, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
+  castle: 'castle is clear, finish, tidy, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
   sitebed: 'time is day or dusk and the pack holds a bed while a castle is active: place the bed outside the site and set the spawn',
   equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
@@ -1742,7 +1747,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (castleBandHome(bot, ctx)) return 'shelter: not by the castle, going in'
       return 'shelter: home is close'
     case 'gocastle':
-      if (!ctx || !ctx.castle || !ctx.castle.site || ctx.castle.parked || ctx.castle.phase === 'complete') return 'gocastle: no active castle'
+      if (!ctx || !ctx.castle || !ctx.castle.site || ctx.castle.parked || (ctx.castle.phase === 'complete' && !tidyDue(ctx.castle))) return 'gocastle: no active castle'
       if (facts.time !== 'day' && facts.time !== 'dusk') return 'gocastle: daytime job'
       if (!displacedFromCastle(bot, ctx)) return 'gocastle: already at the site'
       if (lowHpGated(bot, facts, ctx) && threatNear(bot)) return 'gocastle: too hurt to travel (low health, no food, hostile near)'

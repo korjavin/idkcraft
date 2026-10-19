@@ -239,7 +239,8 @@ describe('castle decor behaviour (g0z.31)', () => {
 
   it('off site a complete castle reads done (no yank-back for cosmetics)', () => {
     const bot = castleBot({ items: [{ name: 'glass_pane', count: 16 }], loaded: false })
-    assert.equal(castleMod.menuFact(bot, { castle: completeState() }), 'done')
+    // g0z.62: a fresh visit stamp — a stale one words 'tidy' (the repair trip).
+    assert.equal(castleMod.menuFact(bot, { castle: { ...completeState(), visitedAt: Date.now() } }), 'done')
   })
 
   it('all windows glazed: done; an owner block in a window is left alone', () => {

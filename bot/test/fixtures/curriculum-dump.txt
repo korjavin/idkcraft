@@ -1,0 +1,40 @@
+2026-10-10 08:00:00 IdkBotV2 recover action=dig_up source=fsm outcome=chosen pos=100.5,60,100.5 facts=stuck=fresh goal=high dist=5 scaffold=0 pickaxe=yes bucket=no water=no head=blocked walls=3 pit=yes player=far resets=0/0 last=none feet=air head=air next=101.5,61,100.5:air
+2026-10-10 08:00:10 IdkBotV2 recover action=dig_up source=fsm outcome=failed:no-progress pos=100.5,60,100.5
+2026-10-10 08:00:11 IdkBotV2 recover action=call_player source=fsm outcome=chosen pos=100.5,60,100.5
+2026-10-10 08:00:12 IdkBotV2 recover action=call_player source=fsm outcome=gave-up pos=100.5,60,100.5
+2026-10-18 09:00:00 IdkBotV2 recover action=pillar_up source=fsm outcome=chosen pos=10.5,64,20.5 facts=stuck=fresh goal=high dist=6 scaffold=12 pickaxe=no bucket=yes water=no head=free walls=3 pit=yes player=far resets=0/0 last=none feet=air head=air next=11.5,65,20.5:air
+2026-10-18 09:00:05 IdkBotV2 recover action=pillar_up source=fsm outcome=failed:place-error pos=10.5,64,20.5
+2026-10-18 09:00:06 IdkBotV2 recover action=wait source=fsm outcome=chosen pos=10.5,64,20.5 facts=stuck=long goal=high dist=6 scaffold=12 pickaxe=no bucket=yes water=no head=free walls=3 pit=yes player=far resets=0/0 last=pillar_up:failed:place-error feet=air head=air next=11.5,65,20.5:air
+2026-10-18 09:00:16 IdkBotV2 recover action=wait source=fsm outcome=failed:no-progress pos=10.5,64,20.5
+2026-10-18 09:00:17 IdkBotV2 recover action=call_player source=fsm outcome=chosen pos=10.5,64,20.5
+2026-10-18 09:00:18 IdkBotV2 recover action=call_player source=fsm outcome=gave-up pos=10.5,64,20.5
+2026-10-18 10:00:00 IdkBotV2 recover action=pillar_up source=fsm outcome=chosen pos=12.5,65,22.5 facts=stuck=fresh goal=high dist=7 scaffold=10 pickaxe=no bucket=yes water=no head=free walls=3 pit=yes player=far resets=0/0 last=none feet=air head=air next=13.5,64,22.5:air
+2026-10-18 10:00:05 IdkBotV2 recover action=pillar_up source=fsm outcome=failed:place-error pos=12.5,65,22.5
+2026-10-18 10:00:06 IdkBotV2 recover action=call_player source=jev outcome=chosen pos=12.5,65,22.5 facts=stuck=long goal=high dist=7 scaffold=10 pickaxe=no bucket=yes water=no head=free walls=3 pit=yes player=far resets=0/0 last=pillar_up:failed:place-error feet=air head=air next=13.5,64,22.5:air
+2026-10-18 10:00:07 IdkBotV2 recover action=call_player source=jev outcome=failed:no-player pos=12.5,65,22.5
+2026-10-18 10:00:08 IdkBotV2 recover action=call_player source=fsm outcome=gave-up pos=12.5,65,22.5
+2026-10-18 11:00:00 IdkBotV2 recover action=sidestep source=fsm outcome=chosen pos=-40.5,70,-40.5 facts=stuck=fresh goal=low dist=4 scaffold=64 pickaxe=yes bucket=no water=no head=free walls=1 pit=no player=near resets=0/0 last=none feet=? head=? next=-44.5,69,-40.5:air
+2026-10-18 11:00:05 IdkBotV2 recover action=sidestep source=fsm outcome=failed:no-progress pos=-40.5,70,-40.5
+2026-10-18 11:00:06 IdkBotV2 recover action=call_player source=fsm outcome=chosen pos=-40.5,70,-40.5
+2026-10-18 11:00:07 IdkBotV2 recover action=call_player source=fsm outcome=done pos=-40.5,70,-40.5
+2026-10-18 12:00:00 IdkBotV2 recover action=sidestep source=fsm outcome=chosen pos=-80.5,70,-80.5 facts=stuck=fresh goal=level dist=3 scaffold=0 pickaxe=no bucket=no water=no head=free walls=0 pit=no player=far resets=0/0 last=none feet=? head=? next=?:?
+2026-10-18 12:00:05 IdkBotV2 recover action=sidestep source=fsm outcome=failed:no-progress pos=-80.5,70,-80.5
+2026-10-18 12:00:06 IdkBotV2 recover action=call_player source=fsm outcome=chosen pos=-80.5,70,-80.5
+2026-10-18 12:00:07 IdkBotV2 recover action=call_player source=fsm outcome=gave-up pos=-80.5,70,-80.5
+2026-10-18 12:30:00 IdkBotV2 recover action=pillar_up source=fsm outcome=chosen pos=200.5,64,200.5 facts=stuck=fresh goal=high dist=4 scaffold=0 pickaxe=no bucket=no water=no head=free walls=3 pit=yes player=near resets=0/0 last=none feet=air head=air next=200.5,65,201.5:air
+2026-10-18 12:30:05 IdkBotV2 recover action=pillar_up source=fsm outcome=failed:no-scaffold pos=200.5,64,200.5
+2026-10-18 12:30:06 IdkBotV2 recover action=call_player source=fsm outcome=chosen pos=200.5,64,200.5
+2026-10-18 13:00:00 IdkBotV2 recover action=sidestep source=fsm outcome=chosen pos=0.5,64,0.5 facts=stuck=fresh goal=level dist=3 scaffold=0 pickaxe=no bucket=no water=no head=free walls=0 pit=no player=far resets=0/0 last=none feet=air head=air next=1.5,64,0.5:air
+2026-10-18 13:00:03 IdkBotV2 recover action=sidestep source=fsm outcome=done pos=2.5,64,0.5
+2026-10-18 14:00:00 IdkBot recover action=dig_up source=fsm outcome=chosen pos=10.5,64,20.5 facts=stuck=fresh goal=high dist=6 scaffold=12 pickaxe=yes bucket=no water=no head=blocked walls=3 pit=yes player=far resets=0/0 last=none feet=air head=air next=11.5,65,20.5:air
+2026-10-18 14:00:05 IdkBot recover action=dig_up source=fsm outcome=failed:no-progress pos=10.5,64,20.5
+2026-10-18 14:00:06 IdkBot recover action=call_player source=fsm outcome=gave-up pos=10.5,64,20.5
+2026-10-18 15:00:00 IdkSwarm3 recover action=dig_up source=fsm outcome=chosen pos=10.5,64,20.5 facts=stuck=fresh goal=high dist=6 scaffold=12 pickaxe=yes bucket=no water=no head=blocked walls=3 pit=yes player=far resets=0/0 last=none feet=air head=air next=11.5,65,20.5:air
+2026-10-18 15:00:05 IdkSwarm3 recover action=dig_up source=fsm outcome=failed:no-progress pos=10.5,64,20.5
+2026-10-18 15:00:06 IdkSwarm3 recover action=call_player source=fsm outcome=gave-up pos=10.5,64,20.5
+2026-10-18 16:00:00 mc >....2026-10-18T16:00:01Z [16:00:01 INFO]: [Not Secure] <SomePlayer> bring me bones
+2026-10-18 16:00:01 mc >....2026-10-18T16:00:01Z [16:00:01 INFO]: [Not Secure] <IdkBotV2> can't get bone: no recipe, no source
+2026-10-18 16:05:00 IdkBotV2 [Not Secure] <IdkBotV2> can't get bone: no recipe, no source2026-10-18T16:05:00Z
+2026-10-18 16:10:00 mc [Not Secure] <IdkBotV2> can't make andesite: need 1 diorite (have 0)
+2026-10-18 16:20:00 mc [Not Secure] <IdkBot> can't get dragon_egg: no recipe, no source
+2026-10-18 16:30:00 mc [Not Secure] <IdkBotV2> could not get 3 wool for the bed in time
