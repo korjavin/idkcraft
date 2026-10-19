@@ -1195,7 +1195,7 @@ function build(bot, ctx, target, state) {
           // cell above it — GoalPlaceBlock's bridge side pick aims at a wall
           // column, and sight is not needed (place.once checks reach only,
           // baritone/bridge/PROTOCOL.md dig/place table).
-          : cell.floor ? new goals.GoalNear(p.x, p.y + 1, p.z, 2)
+          : (cell.floor || cell.bed) ? new goals.GoalNear(p.x, p.y + 1, p.z, 2) // 8542: bed floor under the roof too
           : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
     } catch (_) { /* retry next tick */ }
     return

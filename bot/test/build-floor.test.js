@@ -224,6 +224,7 @@ describe('1c4 build lays the floor before the walls', () => {
       const ctx = { home, step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
       assert.equal(build.nextCellIdx(bot, home, []), 1)
       build(bot, ctx, null, null) // approach
+      assert.equal(bot.calls.goals[0].constructor.name, 'GoalNear', 'stands in the bedroom like a floor hole (revmux 03), not GoalPlaceBlock')
       build(bot, ctx, null, null) // refuse -> dig -> retry lands
       await settle()
       assert.deepEqual(bot.calls.digs, ['dirt'])
