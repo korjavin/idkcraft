@@ -740,6 +740,22 @@ an unpinned pick can put the cell under a lake (padspot 250,350 is dry):
 CASTLE_PADSPOT=250,350 CASTLE_SEED=complete CASTLE_BODY=baritone CASTLE_START=50,-5,31 CASTLE_START_CELL=cobble sh bot/tools/castle-rig.sh --night 18
 ```
 
+Apron diff (g0z.64): `CASTLE_APRON_DIFF=1` (with `CASTLE_SEED=complete`)
+clones the apron box (16 around the site, y -4..+16) into the deepslate
+under the site after the start spot and, at the window end, bisects
+`execute if blocks` to the changed cells. The verdict adds
+`, apron-throwaway=<t>, apron-new=<n>(<names>), apron-changed=<m>`: new = cells air at the snapshot,
+solid now and on no plan/decor cell (tree growth and work blocks too);
+throwaway = those of Baritone's throwaway kinds (dirt + castle stone) — v2's
+towers and bridges, the gate count (they never reach `placedByBot`, so
+`apron-litter` misses them).
+The g0z.64 acceptance starts the bot south of the fence, the far side from
+the gate:
+
+```sh
+CASTLE_PADSPOT=250,350 CASTLE_SEED=complete CASTLE_BODY=baritone CASTLE_START=15,0,32 CASTLE_APRON_DIFF=1 sh bot/tools/castle-rig.sh --night 75
+```
+
 Interrupts clean up after themselves: `kill -INT`/`-TERM` (or Ctrl-C)
 kills every descendant (server client, node, tee), `docker rm -f`s this
 slot's container and drops the lock, exit 130 — the next run on the slot

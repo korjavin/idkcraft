@@ -278,25 +278,52 @@ function castleNamesGuard(bot, near) {
     castleNames = { byName, fn: () => 0, near: lists(bulk), far: lists(far) } // fn: names only, no per-cell cost
   }
   // One fn object rides the Movements; the bridge reads its lists per sync.
-  const flip = castleNames.isNear !== undefined && castleNames.isNear !== !!near
+  // A flip mid-goal re-pushes in movementsFor (one push with the place flip).
+  castleNames.flipped = castleNames.isNear !== undefined && castleNames.isNear !== !!near
   castleNames.isNear = !!near
   Object.assign(castleNames.fn, near ? castleNames.near : castleNames.far)
-  // The bridge syncs settings on setGoal/setMovements only: a walk that
-  // crosses the range mid-goal re-pushes now (diffed: just the two lists).
-  if (flip) {
-    try { bot.pathfinder.setMovements(bot.pathfinder.movements) } catch (_) { /* next setGoal syncs */ }
-  }
   return castleNames.fn
+}
+
+function inRockRange(p, c) {
+  if (!p || !c || !c.site || typeof c.site.x !== 'number') return false
+  const { w, d } = castle.siteDimensions(c.rot | 0, c.blueprintVersion)
+  return Math.hypot(p.x - (c.site.x + w / 2), p.z - (c.site.z + d / 2)) <= CASTLE_ROCK_RANGE
 }
 
 function nearCastle(bot, ctx) {
   try {
+    return inRockRange(bodyPos(bot), ctx && ctx.castle) // own castle only: no peerCastle (v1 phase-out)
+  } catch (_) { /* no castle read: far */ }
+  return false
+}
+
+// Castle place guard, v2 (idkcraft-g0z.64): the v1 place guard is a
+// per-cell exclusionAreasPlace fn the bridge cannot map (PROTOCOL.md
+// "Unmapped ceilings"), and since the g0z.55 break ban Baritone's cheapest
+// way into or over a castle is to PLACE — it towered to the windows and
+// bridged the fence/moat with throwaway dirt/cobble. Within
+// CASTLE_ROCK_RANGE of ANY known castle centre (own, in progress too, and
+// every peer's: castle.anyCastle over ctx.knownCastles) allow1by1towers is
+// false, except the own castle step (the lay itself places) and the house
+// build by the OWN castle (nearAnyCastle below), so the
+// bridge sends allowPlace=false (bridge/index.js movementsToSettings).
+// Explicit places go through bot.placeBlock, not Baritone. Pit recovery
+// keeps allowBreak plus the recover prims.
+// ponytail: a radius, not the apron (Baritone takes a boolean); a mod-side
+// place-box hook if v2 must tower near a castle for anything.
+let placeNear
+function nearAnyCastle(bot, ctx) {
+  try {
     const p = bodyPos(bot)
-    if (!p) return false
-    const c = ctx && ctx.castle // own castle only: no peerCastle (v1 phase-out)
-    if (!c || !c.site || typeof c.site.x !== 'number') return false
-    const { w, d } = castle.siteDimensions(c.rot | 0, c.blueprintVersion)
-    return Math.hypot(p.x - (c.site.x + w / 2), p.z - (c.site.z + d / 2)) <= CASTLE_ROCK_RANGE
+    // The own castle step always keeps allowPlace: the v2 lay is Baritone's
+    // builder ("Starting layer 0"), which places the plan cells itself —
+    // guarded by a castle in range it lays nothing (rig lay 76.4 -> 34.1
+    // own-guarded; 8.0 with a peer castle in range, the rigs' shared memory
+    // dir). The house build keeps its approaches by the OWN castle only
+    // (v1's inCastleApron exemption; a peer castle keeps the guard).
+    if (ctx && ctx.step === 'castle' && ctx.castle && ctx.castle.site) return false
+    return !!castle.anyCastle(ctx, (c, own) => !(own && ctx.step === 'build') && inRockRange(p, c))
   } catch (_) { /* no castle read: far */ }
   return false
 }
@@ -325,7 +352,11 @@ function movementsFor(owner, bot, ctx, extra) {
     }
   } catch (_) { /* policy best-effort: defaults stand */ }
   const keepStone = castleStone(bot, ctx)
-  const v2Guard = process.env.BOT_BODY === 'baritone' ? castleNamesGuard(bot, nearCastle(bot, ctx)) : null
+  const v2 = process.env.BOT_BODY === 'baritone'
+  const v2Guard = v2 ? castleNamesGuard(bot, nearCastle(bot, ctx)) : null
+  const noPlace = v2 && nearAnyCastle(bot, ctx)
+  const flip = v2 && ((placeNear !== undefined && placeNear !== noPlace) || !!(v2Guard && castleNames.flipped))
+  if (v2) placeNear = noPlace
   for (const mov of movs) {
     try {
       if (v2Guard && Array.isArray(mov.exclusionAreasBreak) && !mov.exclusionAreasBreak.includes(v2Guard)) mov.exclusionAreasBreak.push(v2Guard)
@@ -333,9 +364,16 @@ function movementsFor(owner, bot, ctx, extra) {
       if (typeof mov.canDig === 'boolean') mov.canDig = canDig
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour
+      if (v2) mov.allow1by1towers = !noPlace
       danger.addPathCost(mov, ctx, bot) // zj2p: once per Movements, reads ctx live
       swim.addNightWaterCost(mov, bot, ctx) // vmzq.44: once per Movements, reads the bot clock + live owner
     } catch (_) { /* apply best-effort */ }
+  }
+  // The bridge syncs settings on setGoal/setMovements only: a walk that
+  // crosses either range mid-goal re-pushes now, once, after the flags are
+  // set (diffed: just allowPlace / the two break lists).
+  if (flip) {
+    try { bot.pathfinder.setMovements(bot.pathfinder.movements) } catch (_) { /* next setGoal syncs */ }
   }
 }
 

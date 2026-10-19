@@ -512,4 +512,62 @@ describe('castle break guard (g0z.55)', () => {
       assert.ok(sync().avoid.includes('granite'), 'peer castle only: avoid only')
     })
   })
+
+  it('v2 place guard (g0z.64): allowPlace false within 48 of any known castle centre (a peer one with ctx.castle = null), true at 60; the flip re-pushes once', () => {
+    withBody('baritone', () => {
+      const bot = v2Bot()
+      const peer = { site: SITE, rot: 0, blueprintVersion: 3, phase: 'complete' }
+      const ctx = { castle: null, knownCastles: [peer] }
+      const { w, d } = castle.siteDimensions(0, 3)
+      const cx = SITE.x + w / 2, cz = SITE.z + d / 2
+      const sync = () => { body.movementsFor('work', bot, ctx); return movementsToSettings(bot.pathfinder.movements, registry).allowPlace }
+      bot.entity = { position: { x: cx + 48, y: 65, z: cz } }
+      assert.equal(sync(), 'false', '48 from a peer castle centre')
+      let pushes = 0
+      bot.pathfinder.setMovements = () => { pushes++ }
+      sync()
+      assert.equal(pushes, 0, 'no flip, no push')
+      bot.entity.position = { x: cx + 60, y: 65, z: cz }
+      assert.equal(sync(), 'true', '60 off')
+      assert.equal(pushes, 1, 'crossing out re-pushes once')
+      sync()
+      assert.equal(pushes, 1, 'still far: no push')
+      ctx.knownCastles = []
+      ctx.castle = { site: SITE, rot: 0, blueprintVersion: 3, phase: 'build' } // own, in progress
+      bot.entity.position = { x: cx, y: 65, z: cz + 40 }
+      assert.equal(sync(), 'false', 'own castle in progress')
+      assert.equal(pushes, 2)
+      ctx.step = 'castle' // the own lay keeps its approaches
+      ctx.knownCastles = [{ ...ctx.castle }] // memory's refresh-time copy of the own castle, since replaced (rig lay 8.0)
+      assert.equal(sync(), 'true', 'own castle step, stale own copy in knownCastles')
+      assert.equal(pushes, 3)
+      ctx.knownCastles = [{ ...peer, site: { x: SITE.x, y: SITE.y, z: SITE.z + 10 } }] // a peer castle 10 off the own site
+      assert.equal(sync(), 'true', 'own castle step: Baritone builder lays even with a peer castle in range')
+      assert.equal(pushes, 3)
+      ctx.knownCastles = []
+      ctx.step = 'castlefetch'
+      assert.equal(sync(), 'false', 'other steps by the own castle')
+      assert.equal(pushes, 4)
+      pushes = 2
+      ctx.step = 'build' // the house build keeps its throwaway towers by a castle
+      assert.equal(sync(), 'true', 'house build step by the own castle')
+      ctx.knownCastles = [{ ...ctx.castle }] // memory's refresh-time copy of the own castle (castle.anyCastle dedupes by site)
+      assert.equal(sync(), 'true', 'house build step, stale own copy is not a peer')
+      ctx.knownCastles = []
+      assert.equal(pushes, 3)
+      ctx.castle = null; ctx.knownCastles = [peer] // a peer castle keeps the guard on the build step
+      assert.equal(sync(), 'false', 'house build step by a peer castle')
+      assert.equal(pushes, 4)
+    })
+  })
+
+  it('v1 (mineflayer body): allow1by1towers untouched near a castle', () => {
+    withBody(null, () => {
+      const bot = v2Bot()
+      bot.pathfinder.movements.allow1by1towers = true
+      bot.entity = { position: { x: SITE.x, y: 65, z: SITE.z } }
+      body.movementsFor('work', bot, { castle: { site: SITE, rot: 0, blueprintVersion: 3, phase: 'complete' } })
+      assert.equal(bot.pathfinder.movements.allow1by1towers, true)
+    })
+  })
 })
