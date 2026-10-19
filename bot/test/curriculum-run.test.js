@@ -1,0 +1,268 @@
+'use strict'
+// idkcraft-vf8e.10: tools/curriculum.sh pick/gate/ledger/cap end to end with
+// a stubbed rig (CURRICULUM_PRERUN) and a stubbed skill loop
+// (CURRICULUM_LOOP), plus unit tests for the new curriculum.js subcommands
+// and the skill-loop.js curriculum env knob. No Docker, no model calls.
+const { describe, it } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const { spawnSync } = require('node:child_process')
+
+const BOT = path.join(__dirname, '..')
+const DUMP = path.join(__dirname, 'fixtures', 'curriculum-dump.txt')
+const CURRICULUM = require('../tools/curriculum')
+const LOOP = require('../tools/skill-loop')
+
+const FAKE_PRERUN = [
+  '#!/bin/sh',
+  '# fake no-skill reproduction run: $1 = spots.json, $2 = out.json.',
+  '# FAKE_GATE=red writes a RED row, anything else a reached row.',
+  'if [ "$FAKE_GATE" = red ]; then',
+  '  printf \'[{"spot":"AUTO-fake","reached":false,"stuck":9,"eps":2,"call":1}]\' > "$2"',
+  'else',
+  '  printf \'[{"spot":"AUTO-fake","reached":true,"stuck":0,"eps":0,"call":0}]\' > "$2"',
+  'fi',
+  'exit 0',
+].join('\n')
+
+const FAKE_LOOP = [
+  '#!/bin/sh',
+  '# fake skill loop: $1 = scenario name, $2 = max attempts.',
+  '# FAKE_LOOP=green|red|env, FAKE_COST; writes SKILL_LOOP_DIR/result.json.',
+  'd="$SKILL_LOOP_DIR"',
+  'mkdir -p "$d/skills"',
+  'echo "$1" >> "${FAKE_MARKER:-/dev/null}"',
+  "skill=\"$(SK=\"$SKILL_LOOP_SCENARIOS\" SCN=\"$1\" node -p \"JSON.parse(require('fs').readFileSync(process.env.SK,'utf8')).find((s)=>s.name===process.env.SCN).skill\")\"",
+  'echo "fake-loop $1 max=$2 skill=$skill"',
+  'cost="${FAKE_COST:-0.50}"',
+  'if [ "$FAKE_LOOP" = env ]; then printf \'{"scenario":"%s","spot":"AUTO-fake","skill":"%s","green":false,"attempts":0,"wall":1,"in":0,"out":0,"cost":0.00,"rows":[]}\' "$1" "$skill" > "$d/result.json"; echo "fake-loop: environment failure"; exit 2; fi',
+  'if [ "$FAKE_LOOP" = green ]; then green=true; rc=0; else green=false; rc=1; fi',
+  'if [ "$green" = true ]; then printf "/* skill fake */\\n" > "$d/skills/$skill.js"; fi',
+  "printf '{\"scenario\":\"%s\",\"spot\":\"AUTO-fake\",\"skill\":\"%s\",\"green\":%s,\"attempts\":2,\"wall\":9,\"in\":100,\"out\":50,\"cost\":%s,\"rows\":[]}' \"$1\" \"$skill\" \"$green\" \"$cost\" > \"$d/result.json\"",
+  'exit "$rc"',
+].join('\n')
+
+function setup() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curriculum-night-'))
+  fs.writeFileSync(path.join(dir, 'prerun.sh'), FAKE_PRERUN)
+  fs.writeFileSync(path.join(dir, 'loop.sh'), FAKE_LOOP)
+  return { dir, prerun: path.join(dir, 'prerun.sh'), loop: path.join(dir, 'loop.sh'), marker: path.join(dir, 'loop-marker') }
+}
+
+function runNight(t, opts = {}) {
+  const env = {
+    ...process.env,
+    CURRICULUM_NO_KEEPER: '1',
+    CURRICULUM_K: String(opts.k || 1),
+    CURRICULUM_DIR: t.dir,
+    CURRICULUM_PRERUN: t.prerun,
+    CURRICULUM_LOOP: t.loop,
+    CURRICULUM_USD_PER_DAY: opts.cap || '30',
+    FAKE_GATE: opts.gate || 'red',
+    FAKE_LOOP: opts.loopMode || 'green',
+    FAKE_COST: opts.cost || '0.50',
+    FAKE_MARKER: t.marker,
+  }
+  if (opts.seed) fs.writeFileSync(path.join(t.dir, 'curriculum-ledger.json'), JSON.stringify(opts.seed, null, 1))
+  const r = spawnSync('sh', ['tools/curriculum.sh', DUMP], { cwd: BOT, env, encoding: 'utf8' })
+  return { rc: r.status, out: `${r.stdout || ''}${r.stderr || ''}` }
+}
+
+function ledger(t) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(t.dir, 'curriculum-ledger.json'), 'utf8'))
+  } catch (_) {
+    return {}
+  }
+}
+
+const daysAgo = (n) => new Date(Date.now() - n * 86400e3).toISOString().slice(0, 10)
+
+describe('curriculum.sh night (idkcraft-vf8e.10)', () => {
+  it('not-reproduced spends nothing and never starts the loop', () => {
+    const t = setup()
+    const r = runNight(t, { gate: 'green', loopMode: 'green' })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, /not-reproduced/)
+    assert.ok(!r.out.includes('PROMOTE:'), 'no promotion without reproduction')
+    assert.ok(!fs.existsSync(t.marker), 'the loop never started')
+    const all = Object.values(ledger(t))
+    assert.equal(all.length, 1)
+    assert.deepEqual([all[0].verdict, all[0].cost, all[0].attempts], ['not-reproduced', 0, 0])
+    assert.match(r.out, /CURRICULUM night=\d{4}-\d\d-\d\d tried=1 green=0 red=0 skipped=1 cost=\$0\.00/)
+  })
+
+  it('a GREEN prints the PROMOTE line and records cost + skill', () => {
+    const t = setup()
+    const r = runNight(t, { gate: 'red', loopMode: 'green', cost: '1.09' })
+    assert.equal(r.rc, 0)
+    const m = /CURRICULUM ([0-9a-f]{8}) GREEN attempts=2 cost=\$1\.09/.exec(r.out)
+    assert.ok(m, `GREEN line:\n${r.out}`)
+    assert.match(r.out, new RegExp(`PROMOTE: node tools/skill-promote\\.js idkcraft-vf8e\\.9 .*/loop/skills/gen_${m[1]}\\.js`))
+    const e = ledger(t)[m[1]]
+    assert.deepEqual([e.verdict, e.cost, e.attempts], ['GREEN:unpromoted', 1.09, 2])
+    assert.ok(e.skillPath.endsWith(`gen_${m[1]}.js`) && e.resultJson.endsWith('result.json'))
+    assert.match(r.out, /tried=1 green=1 red=0 skipped=0 cost=\$1\.09/)
+  })
+
+  it('the $ cap refuses to start the next scenario (exit 3)', () => {
+    const t = setup()
+    // The harvest top (pillar place-error, count 2) is RED from today at
+    // $0.60: it is skipped as recent, the next pick runs GREEN at $0.50,
+    // and the night then owns $1.10 >= the $1.00 cap.
+    const top = CURRICULUM.rank(CURRICULUM.parse(fs.readFileSync(DUMP, 'utf8'), {}), 7)[0]
+    const seed = { [top.sig]: { date: daysAgo(0), verdict: 'RED', attempts: 6, cost: 0.6, skillPath: null, resultJson: null, count: top.count, reds: 1 } }
+    const r = runNight(t, { k: 3, gate: 'red', loopMode: 'green', cost: '0.50', cap: '1.00', seed })
+    assert.equal(r.rc, 3)
+    assert.equal((r.out.match(/PROMOTE: /g) || []).length, 1)
+    assert.match(r.out, /budget: today \$1\.10 >= \$1\.00 cap — refusing to start \(exit 3\)/)
+    assert.ok(!fs.existsSync(path.join(t.dir, 'curriculum-ledger.json')) || ledger(t)[top.sig].cost === 0.6, 'the refused candidate is not recorded')
+    assert.match(r.out, /cost=\$0\.50/)
+  })
+
+  it('loop exit 2 is not RED and spends no cap', () => {
+    const t = setup()
+    const r = runNight(t, { gate: 'red', loopMode: 'env' })
+    assert.match(r.out, /CURRICULUM [0-9a-f]{8} RED: gate:/)
+    assert.match(r.out, /env: skill-loop exit 2/)
+    assert.ok(!/CURRICULUM [0-9a-f]{8} (GREEN|RED) attempts=/.test(r.out), 'no loop verdict')
+    assert.deepEqual(ledger(t), {}, 'no ledger entry on env failure')
+    assert.equal(r.rc, 2)
+  })
+
+  it('the 7-day retry re-picks grown RED, parks at 3 REDs, skips recent', () => {
+    const t = setup()
+    const list = CURRICULUM.rank(CURRICULUM.parse(fs.readFileSync(DUMP, 'utf8'), {}), 7)
+    const prop = list.filter((c) => c.proposable)
+    // prop[0]: pillar place-error (count 2); prop[1]: bone (count 2);
+    // prop[2]: pillar no-scaffold (count 1).
+    const seed = {
+      [prop[0].sig]: { date: daysAgo(8), verdict: 'RED', attempts: 6, cost: 0.5, skillPath: null, resultJson: null, count: 1, reds: 1 },
+      [prop[1].sig]: { date: daysAgo(1), verdict: 'RED', attempts: 6, cost: 0.5, skillPath: null, resultJson: null, count: 2, reds: 1 },
+      [prop[2].sig]: { date: daysAgo(9), verdict: 'RED', attempts: 6, cost: 0.5, skillPath: null, resultJson: null, count: 1, reds: 3 },
+    }
+    const r = runNight(t, { k: 2, gate: 'red', loopMode: 'red', seed })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, new RegExp(`CURRICULUM ${prop[0].sig} RED`))
+    assert.ok(!r.out.includes(`CURRICULUM ${prop[1].sig} RED`), 'recent RED is not retried')
+    assert.match(r.out, new RegExp(`CURRICULUM ${prop[1].sig} skipped: red-recent`))
+    assert.match(r.out, new RegExp(`CURRICULUM ${prop[2].sig} skipped: parked`))
+    assert.equal(ledger(t)[prop[0].sig].reds, 2)
+    assert.match(r.out, /tried=2 green=0 red=2 skipped=2 cost=\$1\.00/)
+  })
+})
+
+describe('curriculum ledger helpers (idkcraft-vf8e.10)', () => {
+  function withDir(fn) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curriculum-unit-'))
+    const saved = process.env.CURRICULUM_DIR
+    const log = console.log
+    const out = []
+    process.env.CURRICULUM_DIR = dir
+    console.log = (...a) => out.push(a.join(' '))
+    try { return fn(dir, out) } finally {
+      console.log = log
+      if (saved === undefined) delete process.env.CURRICULUM_DIR
+      else process.env.CURRICULUM_DIR = saved
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('gate: RED on unreached or paged rows, NOT-RED on clean reached', () => {
+    withDir((dir) => {
+      const f = (rows) => { const p = path.join(dir, 'r.json'); fs.writeFileSync(p, JSON.stringify(rows)); return p }
+      assert.equal(CURRICULUM.main(['gate', f([{ spot: 'A', reached: false, call: 0 }])]), 0)
+      assert.equal(CURRICULUM.main(['gate', f([{ spot: 'A', reached: true, call: 1 }])]), 0)
+      assert.equal(CURRICULUM.main(['gate', f([{ spot: 'A', reached: true, call: 0 }])]), 1)
+      assert.equal(CURRICULUM.main(['gate', path.join(dir, 'missing.json')]), 2)
+    })
+  })
+
+  it('record: RED accumulates lifetime reds, costs come from result.json only', () => {
+    withDir((dir, out) => {
+      fs.writeFileSync(path.join(dir, 'curriculum.json'), JSON.stringify([{ sig: 'ab12cd34', count: 5 }]))
+      const res = path.join(dir, 'result.json')
+      fs.writeFileSync(res, JSON.stringify({ attempts: 6, cost: 1.25 }))
+      assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'RED', res]), 0)
+      assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'RED', res]), 0)
+      let e = CURRICULUM.readLedger()['ab12cd34']
+      assert.deepEqual([e.verdict, e.attempts, e.cost, e.count, e.reds], ['RED', 6, 1.25, 5, 2])
+      assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'GREEN:unpromoted', res, '/w/skills/gen_x.js']), 0)
+      e = CURRICULUM.readLedger()['ab12cd34']
+      assert.deepEqual([e.verdict, e.reds, e.skillPath], ['GREEN:unpromoted', 2, '/w/skills/gen_x.js'])
+      assert.equal(CURRICULUM.main(['record', 'ab12cd34', 'bogus']), 2)
+      assert.match(out.join('\n'), /ledger ab12cd34: RED attempts=6 cost=\$1\.25 reds=1/)
+    })
+  })
+
+  it('spent sums only today, pick skips GREEN and stale RED', () => {
+    withDir((dir) => {
+      const list = [
+        { sig: 's1', family: 'page', reason: 'r1', count: 3, score: 9, bots: ['b'], lastSeen: '2026-10-18 10:00:00', cell: 'c', proposable: true },
+        { sig: 's2', family: 'page', reason: 'r2', count: 2, score: 6, bots: ['b'], lastSeen: '2026-10-18 10:00:00', cell: 'c', proposable: true },
+        { sig: 's3', family: 'page', reason: 'r3', count: 1, score: 3, bots: ['b'], lastSeen: '2026-10-18 10:00:00', cell: 'c', proposable: true },
+      ]
+      fs.writeFileSync(path.join(dir, 'curriculum.json'), JSON.stringify(list))
+      const today = new Date().toISOString().slice(0, 10)
+      fs.writeFileSync(path.join(dir, 'curriculum-ledger.json'), JSON.stringify({
+        s1: { date: today, verdict: 'RED', attempts: 6, cost: 1.5, count: 3, reds: 1 },
+        s2: { date: daysAgo(9), verdict: 'RED', attempts: 6, cost: 9.99, count: 2, reds: 1 },
+      }))
+      const log = console.log
+      const out = []
+      console.log = (...a) => out.push(a.join(' '))
+      try {
+        assert.equal(CURRICULUM.main(['spent']), 0)
+        assert.equal(CURRICULUM.main(['pick', '3']), 0)
+      } finally { console.log = log }
+      assert.equal(out[0], '1.50')
+      assert.deepEqual(out[1].split('\n'), ['skip s1 red-recent', 'skip s2 red-stale', 'pick s3'])
+    })
+  })
+})
+
+describe('skill-loop curriculum env (idkcraft-vf8e.10)', () => {
+  it('defaults keep water-climb on the committed tables', () => {
+    const d = LOOP.loopFiles({})
+    assert.ok(d.scenarios.endsWith('skill-scenarios.json'))
+    assert.ok(d.spots.endsWith('stuck-spots.json'))
+    assert.deepEqual([d.rig, d.curriculum], ['', false])
+  })
+
+  it('SKILL_LOOP_* overrides point at the proposed files + kept rig', () => {
+    const d = LOOP.loopFiles({ SKILL_LOOP_SCENARIOS: '/w/scenario.json', SKILL_LOOP_SPOTS: '/w/spots.json', SKILL_LOOP_RIG: '0' })
+    assert.deepEqual([d.scenarios, d.spots, d.rig, d.curriculum], ['/w/scenario.json', '/w/spots.json', '0', true])
+  })
+
+  it('readRow/rowText judge the replay row, not the exit code', () => {
+    assert.equal(LOOP.readRow('/nonexistent.json'), null)
+    const row = { spot: 'AUTO-ab12', reached: true, stuck: 2, eps: 1, call: 0 }
+    assert.match(LOOP.rowText(row), /AUTO-ab12: reached=true stuck=2 eps=1 calls=0/)
+  })
+
+  it('main reads the custom files: unknown scenario is usage, unknown spot names its file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-loop-env-'))
+    try {
+      const scn = path.join(dir, 'scenario.json')
+      const spots = path.join(dir, 'spots.json')
+      fs.writeFileSync(scn, JSON.stringify([{ name: 'auto-x', spot: 'AUTO-x', sabotage: null, skill: 'gen_x', kind: 'recover', task: 't' }]))
+      fs.writeFileSync(spots, JSON.stringify([]))
+      const run = (env, args) => spawnSync('node', ['tools/skill-loop.js', ...args], { cwd: BOT, env: { ...process.env, ...env }, encoding: 'utf8' })
+      const clean = { SKILL_LOOP_SCENARIOS: scn, SKILL_LOOP_SPOTS: spots }
+      let r = run(clean, ['water-climb', '6'])
+      assert.equal(r.status, 2)
+      assert.match(`${r.stdout}`, /usage: node tools\/skill-loop\.js/)
+      r = run(clean, ['auto-x', '6'])
+      assert.equal(r.status, 2)
+      assert.match(`${r.stdout}`, new RegExp(`spot AUTO-x not in ${spots}`))
+      // Default path unchanged: unknown name is still usage, before any key/rig work.
+      r = run({}, ['no-such-scenario', '6'])
+      assert.equal(r.status, 2)
+      assert.match(`${r.stdout}`, /usage: node tools\/skill-loop\.js/)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

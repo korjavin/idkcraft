@@ -20,6 +20,12 @@
 // <scenario>): skills/, spots.json, keeper.log, attempt-N.log, result.json.
 // The keeper boots under RIG_LOCK_WAIT (default 7200 s: the laptop slot is
 // shared) and is torn down when the loop ends, green or not.
+// Curriculum mode (idkcraft-vf8e.10, tools/curriculum.sh): SKILL_LOOP_SCENARIOS
+// + SKILL_LOOP_SPOTS point at a proposed scenario.json + spots.json (default
+// the committed tables), and SKILL_LOOP_RIG=<slot> reuses the runner's kept
+// rig instead of booting. Proposed spots have no baseline entry, so inner
+// runs record without judging (REPLAY_BASELINE_OFF=1) and the replay row
+// decides: reached with no page is green.
 // Output: one row per attempt plus
 //   SKILL-LOOP <scenario> GREEN|RED attempts=<n> wall=<s>s in=<t> out=<t> cost=$<usd>
 // Exit 0 green, 1 red after max attempts, 2 environment failure.
@@ -42,6 +48,35 @@ const MAX_TOKENS = 32000
 const VERIFY = process.env.SKILL_LOOP_VERIFY || ''
 // $ per 1M tokens in/out (claude-api skill table, 2026-10-06).
 const PRICE = { 'claude-opus-5-5': [4, 20], 'claude-sonnet-5-5': [2, 10], 'claude-haiku-5-5': [0.1, 0.5] }
+
+// idkcraft-vf8e.10: the nightly curriculum runner (tools/curriculum.sh)
+// points the loop at a proposed scenario + spots file. Defaults keep
+// `node tools/skill-loop.js water-climb 6` on the committed table.
+// SKILL_LOOP_RIG=<slot> reuses the runner's kept rig: no boot, attempt 0 is
+// an inner run without a skill on it, no teardown.
+function loopFiles(env = process.env) {
+  return {
+    scenarios: env.SKILL_LOOP_SCENARIOS || path.join(__dirname, 'skill-scenarios.json'),
+    spots: env.SKILL_LOOP_SPOTS || path.join(__dirname, 'stuck-spots.json'),
+    rig: env.SKILL_LOOP_RIG || '',
+    curriculum: Boolean(env.SKILL_LOOP_SPOTS),
+  }
+}
+
+// Curriculum rows (proposed AUTO spots) have no baseline entry, so the exit
+// code never goes green: the replay JSON is the verdict — reached with no
+// page. Null when the file is missing or unparsable.
+function readRow(file) {
+  try {
+    const rows = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return Array.isArray(rows) ? rows[0] || null : null
+  } catch (_) { return null }
+}
+
+function rowText(row) {
+  return `${row.spot}: reached=${row.reached} stuck=${row.stuck} eps=${row.eps} calls=${row.call}` +
+    (row.orderLine ? ` order=${JSON.stringify(String(row.orderLine).slice(0, 120))}` : '')
+}
 
 function cost(tin, tout, model = MODEL) {
   const p = PRICE[model]
@@ -154,10 +189,13 @@ function stopKeeper(k) {
 async function main() {
   const [name, maxArg] = process.argv.slice(2)
   const max = Number(maxArg || 6)
-  const sc = JSON.parse(fs.readFileSync(path.join(__dirname, 'skill-scenarios.json'), 'utf8')).find((s) => s.name === name)
+  const files = loopFiles()
+  const scList = JSON.parse(fs.readFileSync(files.scenarios, 'utf8'))
+  const sc = (Array.isArray(scList) ? scList : []).find((s) => s && s.name === name)
   if (!sc || !(max >= 1)) { console.log('usage: node tools/skill-loop.js <scenario> [max-attempts=6]'); return 2 }
-  const base = JSON.parse(fs.readFileSync(path.join(__dirname, 'stuck-spots.json'), 'utf8')).find((s) => s.name === sc.spot)
-  if (!base) { console.log(`spot ${sc.spot} not in stuck-spots.json`); return 2 }
+  const spotList = JSON.parse(fs.readFileSync(files.spots, 'utf8'))
+  const base = (Array.isArray(spotList) ? spotList : []).find((s) => s && s.name === sc.spot)
+  if (!base) { console.log(`spot ${sc.spot} not in ${files.spots}`); return 2 }
   const spot = { ...base, sabotage: sc.sabotage }
   const key = VERIFY ? '' : apiKey()
   if (!key && !VERIFY) { console.log('no ANTHROPIC_API_KEY (stash secrets/minecraft/anthropic-api-key)'); return 2 }
@@ -183,13 +221,41 @@ async function main() {
   try {
     const keeperLog = path.join(work, 'keeper.log')
     fs.writeFileSync(keeperLog, '')
-    console.log(`skill-loop ${sc.name}: booting the keeper (RIG_LOCK_WAIT=${env.RIG_LOCK_WAIT || 7200}) — attempt 0 is the run without a skill`)
-    const kp = await startKeeper({ ...env, REPLAY_KEEP: '1', RIG_ID: env.RIG_ID || 'auto', RIG_LOCK_WAIT: env.RIG_LOCK_WAIT || '7200', REPLAY_KEEP_IDLE: env.REPLAY_KEEP_IDLE || '900' }, spotsFile, keeperLog)
-    keeper = kp.k
-    const bootSecs = Math.round((Date.now() - t0) / 1000)
-    let prev = { n: 0, code: null, verdict: verdictLine(kp.out), log: feedback(kp.out, sc.spot) }
-    console.log(`attempt 0 (no skill, keeper boot+run ${bootSecs}s): ${prev.verdict}`)
-    for (let n = 1; n <= max && !green; n++) {
+    let kp
+    let prev
+    if (files.rig) {
+      // The curriculum runner's keeper is already up on this slot: attempt
+      // 0 is an inner run without a skill (no skills dir), judged from the
+      // replay row for proposed spots (they have no baseline entry, so the
+      // exit code never goes green). Nothing is booted or torn down here.
+      console.log(`skill-loop ${sc.name}: kept rig ${files.rig} (curriculum) — attempt 0 is the run without a skill`)
+      const inner0 = { ...env, REPLAY_KEEP: '1', RIG_ID: files.rig, REPLAY_OUT: path.join(work, 'replay-0.json') }
+      delete inner0.REPLAY_SKILLS_DIR
+      if (files.curriculum) inner0.REPLAY_BASELINE_OFF = '1'
+      const r0 = spawnSync('sh', ['tools/stuck-run.sh', 'paper-base', spotsFile], { cwd: BOT, env: inner0, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+      const out0 = `${r0.stdout || ''}${r0.stderr || ''}`
+      fs.writeFileSync(path.join(work, 'attempt-0.log'), out0)
+      kp = { k: null, rig: files.rig, out: out0 }
+      if (!/^micro-run: /m.test(out0)) {
+        envFail = `no kept rig ${files.rig} (rc ${r0.status})`
+        prev = { n: 0, code: null, verdict: verdictLine(out0), log: feedback(out0, sc.spot) }
+      } else if (files.curriculum) {
+        const row0 = readRow(path.join(work, 'replay-0.json'))
+        prev = { n: 0, code: null, verdict: row0 ? rowText(row0) : '(no replay row)', log: feedback(out0, sc.spot) }
+        if (!row0) envFail = `no replay row in replay-0.json (rc ${r0.status})`
+      } else {
+        prev = { n: 0, code: null, verdict: verdictLine(out0), log: feedback(out0, sc.spot) }
+      }
+      console.log(`attempt 0 (no skill): ${prev.verdict}`)
+    } else {
+      console.log(`skill-loop ${sc.name}: booting the keeper (RIG_LOCK_WAIT=${env.RIG_LOCK_WAIT || 7200}) — attempt 0 is the run without a skill`)
+      kp = await startKeeper({ ...env, REPLAY_KEEP: '1', RIG_ID: env.RIG_ID || 'auto', RIG_LOCK_WAIT: env.RIG_LOCK_WAIT || '7200', REPLAY_KEEP_IDLE: env.REPLAY_KEEP_IDLE || '900' }, spotsFile, keeperLog)
+      keeper = kp.k
+      const bootSecs = Math.round((Date.now() - t0) / 1000)
+      prev = { n: 0, code: null, verdict: verdictLine(kp.out), log: feedback(kp.out, sc.spot) }
+      console.log(`attempt 0 (no skill, keeper boot+run ${bootSecs}s): ${prev.verdict}`)
+    }
+    for (let n = 1; n <= max && !green && !envFail; n++) {
       const ta = Date.now()
       const body = {
         model: MODEL,
@@ -228,9 +294,11 @@ async function main() {
       } else {
         fs.writeFileSync(file, code)
         const tr = Date.now()
+        const inner = { ...env, REPLAY_KEEP: '1', RIG_ID: kp.rig, REPLAY_OUT: path.join(work, `replay-${n}.json`) }
+        if (files.curriculum) inner.REPLAY_BASELINE_OFF = '1'
         const r = spawnSync('sh', ['tools/stuck-run.sh', 'paper-base', spotsFile], {
           cwd: BOT,
-          env: { ...env, REPLAY_KEEP: '1', RIG_ID: kp.rig, REPLAY_OUT: path.join(work, `replay-${n}.json`) },
+          env: inner,
           encoding: 'utf8',
           maxBuffer: 256 * 1024 * 1024,
         })
@@ -238,11 +306,21 @@ async function main() {
         const out = `${r.stdout || ''}${r.stderr || ''}`
         fs.writeFileSync(path.join(work, `attempt-${n}.log`), out)
         row.rc = r.status
-        row.verdict = verdictLine(out)
         log = feedback(out, sc.spot)
-        if (!/^micro-run: /m.test(out)) { envFail = `inner run did not reach the kept rig (rc ${r.status})`; }
-        else if (r.status === 0) green = true
-        else if (r.status === 2) envFail = `inner run env failure: ${row.verdict}`
+        if (!/^micro-run: /m.test(out)) {
+          row.verdict = verdictLine(out)
+          envFail = `inner run did not reach the kept rig (rc ${r.status})`
+        } else if (files.curriculum) {
+          // Proposed spots have no baseline entry: the replay row decides.
+          const crow = readRow(path.join(work, `replay-${n}.json`))
+          row.verdict = crow ? rowText(crow) : '(no replay row)'
+          if (!crow) envFail = `no replay row in replay-${n}.json (rc ${r.status})`
+          else if (crow.reached === true && crow.call === 0) green = true
+        } else {
+          row.verdict = verdictLine(out)
+          if (r.status === 0) green = true
+          else if (r.status === 2) envFail = `inner run env failure: ${row.verdict}`
+        }
       }
       console.log(`attempt ${n}: in=${row.in} out=${row.out} llm=${llmSecs}s rig=${row.rigSecs}s rc=${row.rc} ${row.verdict}`)
       if (envFail) break
@@ -267,4 +345,4 @@ async function main() {
 
 if (require.main === module) main().then((rc) => process.exit(rc), (e) => { console.log(e && e.stack ? e.stack : e); process.exit(2) })
 
-module.exports = { extractCode, feedback, verdictLine, cost, check }
+module.exports = { extractCode, feedback, verdictLine, cost, check, loopFiles, readRow, rowText }

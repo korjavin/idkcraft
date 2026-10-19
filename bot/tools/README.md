@@ -761,6 +761,42 @@ proposable: `bone` and `sapling` with no recipe, `andesite` needing diorite, `di
 quartz. With `CURRICULUM_BOTS=all`: 918 events, 695 signatures (690 page, 5 bring), 637
 proposable.
 
+### Nightly runner (`curriculum.sh`, idkcraft-vf8e.10)
+
+The curriculum names what to learn; the runner closes the loop overnight on the laptop rig
+(learning never runs on prod): harvest -> pick the top `CURRICULUM_K` (default 2) signatures
+that are not in the ledger, or RED in the ledger older than 7 days with a grown count ->
+`propose` each into `AUTO-<sig>/` -> one keeper per candidate (`REPLAY_KEEP=1`,
+fresh world) -> pre-run WITHOUT skills on it (not RED = `not-reproduced` in the ledger,
+no model tokens spent) -> RED = `skill-loop.js <name> 6` with `SKILL_LOOP_SCENARIOS` /
+`SKILL_LOOP_SPOTS` pointing at the proposed files and `SKILL_LOOP_RIG` at the keeper
+(proposed spots have no baseline entry, so the replay row decides: reached with no page
+is green) -> ledger `curriculum-ledger.json` in the work root (never in git). The keeper
+is torn down after each candidate; the night ends with one line per candidate plus
+`CURRICULUM night=<date> tried=<n> green=<n> red=<n> skipped=<n> cost=$<usd>`.
+
+```sh
+sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orchestrator
+```
+
+- Caps: `CURRICULUM_USD_PER_DAY` (default 30) refuses to START a scenario once today's
+  ledger sum reaches it (exit 3 = budget); 6 attempts per scenario
+  (`CURRICULUM_MAX_ATTEMPTS`); `LLM_TOKENS_PER_HOUR` still applies inside the loop; 3
+  lifetime RED runs parks the signature for a human look. Costs come from the loop's
+  `result.json` (the PRICE table there), never re-estimated; a loop exit 2 (keeper never
+  kept, network) is not RED and spends no cap.
+- Schedule stays manual (owner 2026-10-19): started by hand or by the orchestrator before
+  an owner play session / overnight. There is no scheduler and the night job never opens
+  PRs: a GREEN candidate ends with a `PROMOTE:` line (the vf8e.4 `skill-promote.js`
+  command with scenario, spot and result paths), and the morning promotion runs it by
+  hand — its PR carries the verdict lines and adds the `AUTO-<sig>` spot + baseline
+  entry to the corpus.
+- Rig slot: one (`CURRICULUM_RIG_ID`, default the default rig); `RIG_LOCK_WAIT`
+  (default 7200) bounds the keeper boot's wait for a busy rig, then the night is
+  skipped (exit 2). Key: `ANTHROPIC_API_KEY` or the stash, never printed.
+- Exits: 0 = night done (loop REDs are ledger data, not failures), 2 = environment
+  failure with no loop verdict, 3 = budget.
+
 ## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
 
 ```sh
