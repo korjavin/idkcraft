@@ -62,7 +62,7 @@ describe('z591 v2 door sill', () => {
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), false)
     assert.equal(build.isComplete(bot, h), false)
     assert.equal(build.holeOwed(bot, h, []), true)
-    assert.equal(build.holeOwed(bot, h, [SILL]), false, 'a skipped sill never re-opens')
+    assert.equal(build.holeOwed(bot, h, [SILL, 1, 2, 3, 4]), false, 'a skipped sill never re-opens (bed floor skipped too, 8542)')
     const batch = build.builderCells(bot, h, [])
     assert.deepEqual(batch.cells.map((c) => c.idx), [SILL], 'the sill (dirt bed floor goes per-cell, 8542)')
     assert.equal(batch.cells[0].block, 'oak_planks')
@@ -75,7 +75,7 @@ describe('z591 v2 door sill', () => {
     world.set(3, 63, 0, 'spruce_planks')
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), true, 'any planks variant')
     assert.equal(build.isComplete(bot, h), true)
-    assert.equal(build.holeOwed(bot, h, []), false)
+    assert.equal(build.holeOwed(bot, h, [1, 2, 3, 4]), false, 'the planked sill owes nothing (dirt bed floor is 8542, skipped here)')
     // the interior floor keeps the solid-ground rule
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2.find((c) => c.floor)), true)
   })
@@ -100,7 +100,7 @@ describe('8542 v2 bed floor', () => {
     assert.equal(BLUEPRINT_V2.filter((c) => c.bed).length, 4)
   })
 
-  it('v2: dirt with no bed above is undone and dug per-cell; a standing bed keeps it; never re-opens or holds isComplete', () => {
+  it('v2: dirt with no bed above is undone and dug per-cell; a standing bed keeps it; holeOwed holds it, isComplete does not', () => {
     process.env.BOT_BODY = 'baritone'
     const world = makeWorld()
     paint(world)
@@ -113,7 +113,8 @@ describe('8542 v2 bed floor', () => {
     assert.equal(build.builderCells(bot, h, []), null, 'dirt bed floor never batched')
     assert.equal(BED.includes(build.nextCellIdx(bot, h, [])), true, 'a building house swaps it per-cell')
     assert.equal(build.isComplete(bot, h), true, 'best effort: the old solid-ground rule')
-    assert.equal(build.holeOwed(bot, h, []), false, 'a built house never re-opens for it')
+    assert.equal(build.holeOwed(bot, h, []), true, 'holds the house open until swapped (else the index.js flip ends build first)')
+    assert.equal(build.holeOwed(bot, h, BED), false, 'skipped bed floor never re-opens')
     world.set(1, 64, 4, 'red_bed')
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[1]), true, 'a standing bed is never popped for its floor')
     world.set(2, 63, 4, 'oak_planks')

@@ -433,14 +433,15 @@ function clearOwed(bot, home, skipped) {
 // revalidation re-opens it so build refills it before any walk drops
 // through, and the interior walks fail soft (entrance-holed) meanwhile. On
 // v2 the door sill (z591) re-opens too: it is placed from the doorstep,
-// outside the door. Bed floor cells never re-open: the beds stand on them
-// and the builder batch cannot reach behind the door. Skips do not count
+// outside the door. On v2 an empty bed slot's floor (8542) re-opens too, or
+// the index.js flip ends the build before the per-cell swap reaches it (gallery
+// rig); a standing bed reads done, so it is never popped. Skips do not count
 // (the clearOwed rule: a refused fill waits for the 1h skip retry).
 function holeOwed(bot, home, skipped) {
   try {
     if (!home || !home.site || home.v !== 2) return false
     const skip = new Set(Array.isArray(skipped) ? skipped : [])
-    return blueprintFor(home).some((c, i) => c.kind === 'fill' && (c.dz === -1 || c.floor || (c.sill && process.env.BOT_BODY === 'baritone')) && !skip.has(i) &&
+    return blueprintFor(home).some((c, i) => c.kind === 'fill' && (c.dz === -1 || c.floor || ((c.sill || c.bed) && process.env.BOT_BODY === 'baritone')) && !skip.has(i) &&
       cellLoaded(bot, home, c) && !cellDone(bot, home, c))
   } catch (_) { return false }
 }
