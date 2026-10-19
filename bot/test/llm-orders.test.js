@@ -169,11 +169,23 @@ describe('llm orders: flag on', () => {
     answer = '{"plan":[{"step":"light"}]}'
     handleChat(bot, ticker, 'P', 'light up the house')
     await flush()
-    ctx.inShelter = true
-    llmOrders.tick(bot, ctx)
-    assert.ok(!ctx.taskPlanStep, 'no pin while sheltering')
-    assert.equal(ctx.llmOrder.cur, null)
+    const goal = require('../src/goal')
+    const origFacts = goal.goalFacts
+    goal.goalFacts = (b, c) => ({ ...origFacts(b, c), time: 'night' })
+    try {
+      ctx.inShelter = true
+      llmOrders.tick(bot, ctx)
+      assert.ok(!ctx.taskPlanStep, 'no pin while sheltering at night')
+      assert.equal(ctx.llmOrder.cur, null)
+      llmOrders.tick(bot, ctx, Date.now() + llmOrders.STEP_MS + 1000)
+      assert.ok(bot.lines.includes('plan stopped at light: timeout'), 'the unpinned wait is bounded too')
+    } finally {
+      goal.goalFacts = origFacts
+    }
     ctx.inShelter = false
+    answer = '{"plan":[{"step":"light"}]}'
+    handleChat(bot, ticker, 'P', 'light up the house')
+    await flush()
     llmOrders.tick(bot, ctx)
     assert.equal(ctx.taskPlanStep, 'light')
     ctx.taskPlanStep = null
@@ -201,10 +213,12 @@ describe('llm orders: flag on', () => {
       answer = '{"plan":[{"step":"find","item":"iron_ore"}]}'
       handleChat(bot, ticker, 'P', 'where is iron')
       await flush()
-      // The find answer led (stands in for findNearest on the mock world).
-      c.lead = arrive
-        ? { name: 'iron_ore', pos: { x: 0, y: 64, z: 0 }, by: 'P' }
-        : { name: 'iron_ore', pos: { x: 40, y: 64, z: 0 }, by: 'P', waiting: true, waitTicks: leadMod.WAIT_BUDGET_TICKS }
+      // The fed find line leads (stands in for findNearest on the mock world).
+      c.llmOrder.feed = () => {
+        c.lead = arrive
+          ? { name: 'iron_ore', pos: { x: 0, y: 64, z: 0 }, by: 'P' }
+          : { name: 'iron_ore', pos: { x: 40, y: 64, z: 0 }, by: 'P', waiting: true, waitTicks: leadMod.WAIT_BUDGET_TICKS }
+      }
       llmOrders.tick(bot, c)
       assert.ok(c.llmOrder && c.llmOrder.cur, String(bot.lines))
       leadMod(bot, c, null, {})
@@ -273,6 +287,58 @@ describe('llm orders: flag on', () => {
     await flush()
     assert.equal(ctx.bring, null, 'replacement released the old bring')
     assert.equal(ctx.llmOrder.steps[0].step, 'light')
+  })
+
+  it('a daytime come-home hold does not block a work step (codex P2)', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    const goal = require('../src/goal')
+    const origFacts = goal.goalFacts
+    goal.goalFacts = (b, c) => ({ ...origFacts(b, c), time: 'day' })
+    try {
+      answer = '{"plan":[{"step":"light"}]}'
+      handleChat(bot, ticker, 'P', 'light up the house')
+      await flush()
+      ctx.inShelter = true // arriveMeet's daytime hold
+      ctx.work = false
+      ctx.step = 'stay' // stale: no goal arbiter outside work mode
+      ctx.stepStatus = 'running'
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.taskPlanStep, 'light')
+    } finally {
+      goal.goalFacts = origFacts
+    }
+  })
+
+  it('a refused fed order is not accepted on an unrelated running bring (codex P2)', async () => {
+    const bot = mockBot([{ name: 'torch', count: 8 }])
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    handleChat(bot, ticker, 'P', 'bring me torch 8') // the owner's own bring
+    const own = ctx.bring
+    assert.ok(own)
+    answer = '{"plan":[{"step":"bring","item":"zzz_thing","count":1}]}'
+    handleChat(bot, ticker, 'P', 'plan get me the thing')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.llmOrder, null)
+    assert.ok(bot.lines.includes('plan stopped at bring zzz_thing 1: refused'), String(bot.lines))
+    assert.equal(ctx.bring, own, 'the unrelated bring keeps running')
+  })
+
+  it('cancel withdraws an unconsumed work pin (codex P2)', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"light"}]}'
+    handleChat(bot, ticker, 'P', 'light up the house')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.taskPlanStep, 'light')
+    handleChat(bot, ticker, 'P', 'find me iron')
+    assert.equal(ctx.llmOrder, null)
+    assert.ok(!ctx.taskPlanStep)
   })
 
   it('another owner order cancels the plan; status and chatter do not', async () => {

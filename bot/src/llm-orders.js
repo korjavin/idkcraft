@@ -175,7 +175,13 @@ function ask(bot, ctx, req, fetchFn) {
 // Owner stop / follow me / go work: the plan and any ask in flight end.
 function cancel(ctx, why = 'stop') {
   if (!ctx) return
-  if (ctx.llmOrder) console.log(`llm order end text="${ctx.llmOrder.text}" result=${why} step=${ctx.llmOrder.i + 1}/${ctx.llmOrder.steps.length}`)
+  const o = ctx.llmOrder
+  if (o) {
+    console.log(`llm order end text="${o.text}" result=${why} step=${o.i + 1}/${o.steps.length}`)
+    // A pin the arbiter has not consumed yet would still force the step.
+    const s = o.steps[o.i]
+    if (s && ctx.taskPlanStep === s.step) ctx.taskPlanStep = null
+  }
   ctx.llmOrder = null
   ctx.llmAsk = null
 }
@@ -195,9 +201,13 @@ function orderBusy(ctx) {
 // would take the body — it re-pins when that ends.
 const NIGHT = ['stay', 'gohome', 'shelter']
 function nightHold(bot, ctx) {
-  if (ctx.inShelter || (NIGHT.includes(ctx.step) && !isFinished(ctx.stepStatus))) return true
+  // ctx.step is the goal arbiter's only in work mode (stale otherwise).
+  if (ctx.work && NIGHT.includes(ctx.step) && !isFinished(ctx.stepStatus)) return true
   try {
     const f = goal.goalFacts(bot, ctx)
+    // A daytime `come home` hold also sets inShelter: that is an owner
+    // order the plan replaces (ticker.work releases it), not night safety.
+    if (ctx.inShelter && f.time !== 'day') return true
     return NIGHT.includes(goal.goalFsm(f, NIGHT.filter((n) => goal.MENU[n] && goal.MENU[n].feasible(f, bot, ctx))))
   } catch (_) { return false }
 }
@@ -249,15 +259,31 @@ function end(bot, ctx, o, result) {
 
 function startStep(bot, ctx, o, s, now) {
   const order = ORDER_STEPS[s.step]
-  if (!order && nightHold(bot, ctx)) return // wait the night out unpinned
+  if (!order && nightHold(bot, ctx)) {
+    // Wait the night out unpinned, bounded like a running step.
+    if (o.waitAt == null) o.waitAt = now
+    else if (now - o.waitAt > STEP_MS) return end(bot, ctx, o, 'failed:timeout')
+    return
+  }
+  o.waitAt = null
   o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, led: false }
   if (order) {
+    // Accepted = the line created (or resumed) its own executor; an
+    // unrelated order already running is not this step's (codex P2).
+    const before = { bring: ctx.bring, lead: ctx.lead, ps: ctx.pendingSearch, flat: ctx.flat, parked: !!(ctx.flat && ctx.flat.parked) }
     o.feeding = true
     try { o.feed(order.chat(s)) } finally { o.feeding = false }
-    // No order object after the line = refused (its reply already chatted
-    // why: unknown, nothing found, too deep, nothing to share).
+    const made = (ctx.bring && ctx.bring !== before.bring) || (ctx.lead && ctx.lead !== before.lead) ||
+      (ctx.pendingSearch && ctx.pendingSearch !== before.ps) ||
+      (ctx.flat && !ctx.flat.parked && (ctx.flat !== before.flat || before.parked))
+    if (!made) {
+      // Refused (its reply already chatted why: unknown, nothing found, too
+      // deep, nothing to share). o.cur dropped first: end() must not
+      // release the unrelated order that may be running.
+      o.cur = null
+      return end(bot, ctx, o, 'failed:refused')
+    }
     if (ctx.lead) o.cur.led = true
-    if (!orderBusy(ctx)) return end(bot, ctx, o, 'failed:refused')
     return
   }
   if (!ctx.work && o.ticker && typeof o.ticker.work === 'function') o.ticker.work()
