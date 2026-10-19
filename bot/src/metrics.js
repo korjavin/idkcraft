@@ -146,6 +146,12 @@ const recover = new client.Counter({
   help: 'Recovery menu (ef3 stuck episodes) by primitive, choice source and outcome (chosen|done|failed|gave-up)',
   labelNames: ['action', 'source', 'outcome']
 })
+// Generated skills (idkcraft-vf8e.2): terminal runs only, BOT_SKILLS=1.
+const skillRuns = new client.Counter({
+  name: 'idkcraft_bot_skill_runs_total',
+  help: 'Sandboxed skill runs by skill and outcome (done|failed|skill-timeout|skill-error)',
+  labelNames: ['skill', 'outcome']
+})
 // Task executive (idkcraft-vmzq.2/.3): progress invariant gauges per task
 // (castle|house). stall_seconds is the wall time since progress; stall_total
 // counts L1/L2/L3 escalations by task and level.
@@ -197,4 +203,4 @@ const llmCalls = new client.Counter({
   help: 'Anthropic Messages API calls by use and outcome (budget = skipped, LLM_TOKENS_PER_HOUR spent)',
   labelNames: ['use', 'outcome']
 })
-module.exports = { client, llmTokens, llmCalls, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, workerJobs, goalSteps, stepStaleCompletions, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, goalWatchdogTotal, setVitals, serve }
+module.exports = { client, llmTokens, llmCalls, online, autonomous, searchDuration, routes, brainRequests, brainDuration, disagreements, decisions, tickDuration, events, bring, workerJobs, goalSteps, stepStaleCompletions, goalStep, goalDisagreements, goalChoiceDuration, escalation, recover, skillRuns, light, gearForged, gearGiven, taskProgress, taskTotal, taskStallSeconds, taskStallTotal, taskPlanTotal, goalWatchdogTotal, setVitals, serve }
