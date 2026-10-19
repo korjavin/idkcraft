@@ -1328,6 +1328,75 @@ describe('rw4.19 interior clear cells', () => {
     assert.equal(castlefetch.pickChest(bot, ctx, {}, 'stone'), null, 'the home chest is no source')
   })
 
+  it('8qz6: castle-first or a parked house vetoes the refill, so a holed house keeps its table and chest (no castlefetch-no-stairs deadlock)', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    paintHouse(world, home)
+    for (const c of BLUEPRINT_V2) if (c.kind === 'clear') world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    const table = pos(s.x + 5, s.y, s.z + 1)
+    const chest = pos(s.x + 5, s.y, s.z + 2)
+    world.set(chest.x, chest.y, chest.z, 'chest')
+    home.table = table
+    home.chest = chest
+    world.set(s.x + 4, s.y - 1, s.z + 1, 'air') // one air floor cell: the re-opened house owes it
+    bot.entity.position = pos(s.x + 20, s.y, s.z)
+    const castle = { site: { x: s.x + 30, y: s.y, z: s.z }, phase: 'body', parked: false }
+    const ctx = { home, buildSkip: [], castle }
+    const furnace = require('../src/behaviours/furnace')
+    const castlefetch = require('../src/behaviours/castlefetch')
+    assert.equal(build.holeOwed(bot, home, []), true, 'setup: the hole is owed')
+    assert.equal(goal.MENU.build.feasible({ planks: 64, table: 1, door: 1, time: 'day' }, bot, ctx), false, 'setup: castle first vetoes the refill')
+    assert.equal(build.entranceHoled(bot, ctx, table), false, 'no wait on a refill that cannot run')
+    assert.deepEqual(furnace.tableBlock(bot, ctx).pos, table, 'craftany (castlefetch stairs) gets the house table')
+    assert.equal(castlefetch.pickChest(bot, ctx, {}, 'stone').k, `${chest.x},${chest.y},${chest.z}`, 'the home chest serves')
+    castle.parked = true // the castle releases the house: the refill can run, the walks wait again
+    assert.equal(build.entranceHoled(bot, ctx, table), true)
+    assert.equal(furnace.tableBlock(bot, ctx), null)
+    // revmux 01 minor: an auto-parked castle past 64 from home keeps the
+    // build vetoed (castleParkLeash), so no wait either.
+    ctx.castle = { ...castle, site: { x: s.x + 100, y: s.y, z: s.z }, taskPark: { auto: true } }
+    assert.equal(goal.MENU.build.feasible({ planks: 64, table: 1, door: 1, time: 'day' }, bot, ctx), false, 'setup: the leash vetoes')
+    assert.equal(build.entranceHoled(bot, ctx, table), false)
+    ctx.castle = castle
+    ctx.home = { ...home, parked: true } // a parked house vetoes the refill too
+    assert.equal(build.entranceHoled(bot, ctx, table), false)
+  })
+
+  it('z8e7: build.js refillCastleVetoed stays in step with MENU.build (castleFirst + houseStep unlock + castleParkLeash, radius 64)', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    paintHouse(world, home)
+    for (const c of BLUEPRINT_V2) if (c.kind === 'clear') world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    world.set(s.x + 4, s.y - 1, s.z + 1, 'air') // the re-opened house owes a floor cell
+    const spot = pos(s.x + 5, s.y, s.z + 1)
+    const facts = { planks: 64, table: 1, door: 1, time: 'day' }
+    const R = require('../src/behaviours/explore').TASK_SEARCH_RADIUS
+    const unlock = { id: 1, generation: 1, commit: { goalId: 1, generation: 1, until: Date.now() + 1e6, unlock: { houseStep: 'build' } } }
+    const at = (dx, extra) => ({ site: { x: s.x + dx, y: s.y, z: s.z }, phase: 'body', parked: false, ...extra })
+    const cases = {
+      'no castle': undefined,
+      'no site': { phase: 'body', parked: false },
+      'active': at(30),
+      'parked': at(30, { parked: true }),
+      'complete': at(30, { phase: 'complete' }),
+      'active + unlock': at(30, { unlock: true }),
+      'auto-parked at the radius': at(R, { parked: true, taskPark: { auto: true } }),
+      'auto-parked past the radius': at(R + 1, { parked: true, taskPark: { auto: true } }),
+      'auto-parked past the radius, complete': at(R + 1, { phase: 'complete', taskPark: { auto: true } }),
+      'auto-parked past the radius + unlock': at(R + 1, { parked: true, taskPark: { auto: true }, unlock: true }),
+      'owner-parked past the radius': at(R + 1, { parked: true, taskPark: { auto: false } }),
+    }
+    for (const [name, spec] of Object.entries(cases)) {
+      const { unlock: u, ...castle } = spec || {}
+      const ctx = { home, buildSkip: [], castle: spec && castle, goal: u ? unlock : undefined }
+      assert.equal(build.entranceHoled(bot, ctx, spot), goal.MENU.build.feasible(facts, bot, ctx), name)
+    }
+  })
+
   it('(c) air, flora and furnishings in clear cells are done without a dig', () => {
     const world = makeWorld()
     const bot = mockBot(world)

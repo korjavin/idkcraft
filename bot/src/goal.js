@@ -2158,16 +2158,21 @@ function lowHpClock(bot, ctx, facts) {
   // Low-hp gate clock (idkcraft-vmzq.51): arms on the raw pack check while
   // gated, clears on food or healing — the gates above read it, probes
   // never arm it (the write lives on the decide path only). A silence past
-  // LOW_HP_GAP_MS restarts the window (revmux 01 minor): decide runs on
-  // work ticks only, so after a fight/follow/pause stretch the gating was
-  // not continuous — opening on the stale stamp would skip the stand-down
-  // on the first tick back (the run8 shape .49 gated against).
+  // LOW_HP_GAP_MS pauses the window (revmux 01 minor; 8qz6): decide runs on
+  // work ticks only, so a fight/follow/pause stretch is not gated time —
+  // opening on the stale stamp would skip the stand-down on the first tick
+  // back (the run8 shape .49 gated against). Only work-tick time counts.
   try {
     if (ctx) {
       if (lowHpNoFood(bot, facts)) {
         const last = ctx.lowHpGateLast
-        if (typeof ctx.lowHpGateSince !== 'number' || typeof last !== 'number' || Date.now() - last > LOW_HP_GAP_MS) {
+        if (typeof ctx.lowHpGateSince !== 'number' || typeof last !== 'number') {
           ctx.lowHpGateSince = Date.now()
+        } else if (Date.now() - last > LOW_HP_GAP_MS) {
+          // idkcraft-8qz6: pause, not restart — keep the gated time already
+          // served. Prod: each owner 'follow me' >60 s restarted the 5-min
+          // window, so it never opened.
+          ctx.lowHpGateSince = Date.now() - Math.max(0, last - ctx.lowHpGateSince)
         }
         ctx.lowHpGateLast = Date.now()
       } else {
