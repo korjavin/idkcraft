@@ -280,6 +280,17 @@ function onRejection(reason, p) {
   throw reason
 }
 
+// The vm watchdog fires on its own clock, a hair before CALL_MS of
+// Date.now() under load (probe: 49.3 ms -> elapsed 49), so elapsed wall time
+// called a real timeout skill-error (vf8e.14). Classify by the thrown code,
+// read without running skill code: no Proxy, own data descriptor only (a
+// getter is never invoked).
+function timedOut(e) {
+  if (!e || typeof e !== 'object' || types.isProxy(e)) return false
+  const d = Object.getOwnPropertyDescriptor(e, 'code')
+  return !!d && d.value === 'ERR_SCRIPT_EXECUTION_TIMEOUT'
+}
+
 function compile(file, text, env) {
   const meta = parseHeader(text)
   const want = env && env.BOT_BODY === 'baritone' ? 'baritone' : 'mineflayer'
@@ -305,13 +316,12 @@ function compile(file, text, env) {
   SKILL_PROMISES.add(vm.runInContext('Promise.prototype', g)) // intrinsic, before skill code
   if (!process.listeners('unhandledRejection').includes(onRejection)) process.on('unhandledRejection', onRejection)
   const script = new vm.Script(text, { filename: file }) // a SyntaxError here is host-realm
-  const t0 = Date.now()
   let ok
   try {
     script.runInContext(g, { timeout: CALL_MS })
     ok = vm.runInContext('typeof feasible === "function" && typeof run === "function"', g, { timeout: CALL_MS })
-  } catch (_) { // never read a context-thrown value on the host (getters)
-    throw new Error(Date.now() - t0 >= CALL_MS ? 'top-level timed out' : 'top-level threw')
+  } catch (e) { // only timedOut() looks at a context-thrown value (getters)
+    throw new Error(timedOut(e) ? 'top-level timed out' : 'top-level threw')
   }
   if (ok !== true) throw new Error('feasible/run missing')
   // The host never touches a context object (a skill getter/setter/Proxy
@@ -325,14 +335,13 @@ function compile(file, text, env) {
   // -> { out } | { error: 'skill-timeout' | 'skill-error', msg }
   function call(scr, c) {
     cur = c
-    const t = Date.now()
     try {
       const out = scr.runInContext(g, { timeout: CALL_MS })
       if (typeof out === 'string' && out[0] === '\0') return { error: 'skill-error', msg: out.slice(1) }
       return { out }
-    } catch (_) {
-      // Only the timeout (host error) or a context overflow lands here; no property reads.
-      return Date.now() - t >= CALL_MS ? { error: 'skill-timeout', msg: `timed out after ${CALL_MS}ms` } : { error: 'skill-error', msg: 'threw' }
+    } catch (e) {
+      // Only the timeout or a context overflow lands here; timedOut() runs no skill code.
+      return timedOut(e) ? { error: 'skill-timeout', msg: `timed out after ${CALL_MS}ms` } : { error: 'skill-error', msg: 'threw' }
     } finally {
       cur = null
     }
