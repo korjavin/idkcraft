@@ -27,7 +27,6 @@ const ORDER_TIMEOUT_MS = 20000
 const STEP_MS = 10 * 60 * 1000 // one plan step's deadline
 const PLAN_MAX = 6
 const MISS_TICKS = 3 // pin consumed without the step starting = not possible now
-const REPIN_MAX = 2 // goal re-decides away from a running pinned step
 
 const ORDER_STEPS = {
   bring: { args: 'item, count', what: 'gets an item to the player: from the pack, the home chest, by crafting or smelting it, mining the block, shearing sheep or hunting for food', chat: (s) => `bring me ${s.item}${s.count ? ` ${s.count}` : ''}` },
@@ -202,6 +201,10 @@ function nightHold(bot, ctx) {
   } catch (_) { return false }
 }
 
+function stillFeasible(bot, ctx, step) {
+  try { return !!(goal.MENU[step] && goal.MENU[step].feasible(goal.goalFacts(bot, ctx), bot, ctx) && goal.registered(step)) } catch (_) { return false }
+}
+
 // How the step's order ended: bringbase/lead/flat stamp done or a failure
 // at their single end points; gone without a stamp since the step began =
 // cancelled. A find that never led (nothing found, too deep) = refused.
@@ -225,7 +228,7 @@ function end(bot, ctx, o, result) {
 function startStep(bot, ctx, o, s, now) {
   const order = ORDER_STEPS[s.step]
   if (!order && nightHold(bot, ctx)) return // wait the night out unpinned
-  o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, repins: 0, led: false }
+  o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, led: false }
   if (order) {
     o.feeding = true
     try { o.feed(order.chat(s)) } finally { o.feeding = false }
@@ -282,11 +285,14 @@ function tick(bot, ctx, now = Date.now()) {
     return
   }
   if (c.seen) {
-    // Another step took the body. A retreat (non-MENU ctx.step) re-pins
-    // freely; the goal arbiter re-deciding away (textForce releases a
-    // task-plan pick on every text move) re-pins at most REPIN_MAX times —
-    // never a standing pin over the arbiter.
-    if (goal.MENU[ctx.step] && ++c.repins > REPIN_MAX) return end(bot, ctx, o, 'failed:preempted')
+    // Another step took the body. A retreat (non-MENU ctx.step) re-pins;
+    // the goal arbiter re-deciding away (textForce releases a task-plan
+    // pick on every text move, `known` flickers every 1-3 s) re-pins only
+    // while the step is still feasible — a step whose work is gone ends
+    // honestly, and a flicker never kills a live one (revmux 02/03: a count
+    // cap did). ponytail: bounded by feasibility, the step's own done/failed
+    // and STEP_MS; vouch llm pins in goal.textForce if the restarts cost.
+    if (goal.MENU[ctx.step] && !stillFeasible(bot, ctx, s.step)) return end(bot, ctx, o, 'failed:not possible now')
     c.seen = false
     c.gen = stepGen(ctx)
     ctx.taskPlanStep = s.step

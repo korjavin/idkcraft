@@ -216,28 +216,39 @@ describe('llm orders: flag on', () => {
     }
   })
 
-  it('the arbiter re-deciding away re-pins a bounded number of times, then stops', async () => {
-    const bot = mockBot()
-    const ticker = tickerFor(bot)
-    const ctx = bot._tickerCtx
-    answer = '{"plan":[{"step":"light"}]}'
-    handleChat(bot, ticker, 'P', 'light up the house')
-    await flush()
-    llmOrders.tick(bot, ctx)
-    let ended = false
-    for (let i = 0; i < 6 && !ended; i++) {
-      ctx.taskPlanStep = null
-      ctx.step = 'light'
-      ctx.stepStatus = 'running'
-      ctx.stepGen = (ctx.stepGen | 0) + 1
+  it('the arbiter re-deciding away re-pins while the step is feasible, ends when its work is gone', async () => {
+    const goal = require('../src/goal')
+    const orig = goal.MENU.light.feasible
+    let feasible = true
+    goal.MENU.light.feasible = () => feasible
+    try {
+      const bot = mockBot()
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"light"}]}'
+      handleChat(bot, ticker, 'P', 'light up the house')
+      await flush()
       llmOrders.tick(bot, ctx)
-      ctx.step = 'gather' // a text move: decide() picked another MENU step
-      ctx.stepGen++
-      llmOrders.tick(bot, ctx)
-      ended = ctx.llmOrder === null
+      const flicker = () => {
+        ctx.taskPlanStep = null
+        ctx.step = 'light'
+        ctx.stepStatus = 'running'
+        ctx.stepGen = (ctx.stepGen | 0) + 1
+        llmOrders.tick(bot, ctx)
+        ctx.step = 'gather' // a text move: decide() picked another MENU step
+        ctx.stepGen++
+        llmOrders.tick(bot, ctx)
+      }
+      for (let i = 0; i < 6; i++) flicker()
+      assert.ok(ctx.llmOrder, 'a flicker never kills a live step')
+      assert.equal(ctx.taskPlanStep, 'light')
+      feasible = false
+      flicker()
+      assert.equal(ctx.llmOrder, null)
+      assert.ok(bot.lines.includes('plan stopped at light: not possible now'), String(bot.lines))
+    } finally {
+      goal.MENU.light.feasible = orig
     }
-    assert.ok(ended)
-    assert.ok(bot.lines.includes('plan stopped at light: preempted'), String(bot.lines))
   })
 
   it('another owner order cancels the plan; status and chatter do not', async () => {
