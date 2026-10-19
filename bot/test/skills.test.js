@@ -547,6 +547,14 @@ describe('skills: digIn + use ray check (krup)', () => {
     assert.deepEqual(bot.dug, ['0,60,0'])
   })
 
+  it('the first digIn refuses a column with an open pit wall', () => {
+    const bot = fakeBot(new Map([[key(1, 58, 0), 'air']]))
+    assert.equal(
+      tick(compiled('digin_open_side', 'return "failed:" + bot.digIn().replace(":", "-")'), bot),
+      'failed:denied-open-side', 'the fresh column needs standing walls')
+    assert.deepEqual(bot.dug, [])
+  })
+
   it('digIn still refuses protected ground and caps the episode depth', () => {
     const home = { site: { x: 0, y: 61, z: 0 }, interior: { min: { x: -2, y: 60, z: -2 }, max: { x: 2, y: 63, z: 2 } } }
     assert.equal(
@@ -576,6 +584,19 @@ describe('skills: digIn + use ray check (krup)', () => {
     assert.equal(sk.tick(bot, {}, fresh()), 'running')
     await flush()
     assert.deepEqual(bot.used, [{ item: 'water_bucket', at: key(1, 61, 0) }])
+    assert.deepEqual(bot.looked, new Vec3(1.5, 61, 0.5), 'aims the verified face, not the cell centre')
+  })
+
+  it('a pour that loses its face after the look never activates', async () => {
+    const bot = fakeBot()
+    bot.heldItem = { name: 'water_bucket' }
+    bot.lookAt = async (p) => { bot.looked = p; bot.entity.position = new Vec3(10.5, 61, 10.5) }
+    const st = fresh()
+    const sk = compiled('pour_stale', 'const r = bot.use(1, 61, 0); return r === "started" ? "running" : "failed:" + r.replace(":", "-")')
+    assert.equal(sk.tick(bot, {}, st), 'running')
+    await flush()
+    assert.deepEqual(bot.used, [], 'no pour on a stale aim')
+    assert.match(st.hs.err || '', /ray-miss/)
   })
 
   it('a pour past an occluding wall refuses instead of landing elsewhere', async () => {
