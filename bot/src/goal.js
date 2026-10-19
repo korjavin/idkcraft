@@ -2128,10 +2128,15 @@ function menuNames(facts, bot, ctx, text) {
 // find edge flips near/none every 1-3 s, 347 switches/h): the leg reads
 // the text with its pick-time known word, so a known-only flip is no move
 // at all — the leg runs to done/failed and re-picks honestly. A pick this
-// rule cannot vouch for (an order/retreat moved ctx.step, a task-plan pin
-// whose bound must still release it on a text move, a legacy ctx) keeps
-// the old rule: any move re-decides. One evaluation per move: the last
-// held text is the reference until the next pick (old: one re-decide per move).
+// rule cannot vouch for (an order/retreat moved ctx.step, a legacy ctx)
+// keeps the old rule: any move re-decides. One evaluation per move: the
+// last held text is the reference until the next pick (old: one re-decide
+// per move). A task-plan pick the executive still owns (vf8e.17: its pin is
+// on it — taskPlanStep, or the pinArgs mirror past the consume) is vouched
+// too: every text move re-picked it, and each re-pick restarted the skill
+// episode (fresh st + sk.reset), so an ordered multi-tick skill never
+// finished. Word forces above still cut through, and anything unowned
+// keeps the old rule.
 function textForce(prev, facts, bot, ctx, status, text) {
   let seen = text
   if (prev === 'forage' || prev === 'explore') {
@@ -2141,7 +2146,11 @@ function textForce(prev, facts, bot, ctx, status, text) {
   if (seen === (typeof ctx.heldText === 'string' ? ctx.heldText : ctx.goalText)) return false
   if (FORCES.some((f) => f.kind === 'word' && f.fires(prev, facts, ctx, status, bot, text))) return true
   const pick = ctx.stepPick
-  if (!pick || pick.step !== prev || pick.source === 'task-plan' || typeof pick.fsm !== 'string') return true
+  if (!pick || pick.step !== prev || typeof pick.fsm !== 'string') return true
+  if (pick.source === 'task-plan' && facts.pinned === prev) {
+    ctx.heldText = seen
+    return false
+  }
   const names = menuNames(facts, bot, ctx, text)
   if (!names.includes(prev) || goalFsm(facts, names) !== pick.fsm) return true
   // rest never finishes (rest.js roams, no done/failed): a model rest over
@@ -2727,4 +2736,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome }
+module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce }

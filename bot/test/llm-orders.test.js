@@ -576,6 +576,44 @@ describe('llm orders: deterministic do <step> (vf8e.17)', () => {
     assert.equal(calls.length, 1, 'only the first ask called the model')
   })
 
+  it('textForce vouches an owned task-plan step through a text move; safety still cuts through', () => {
+    const owned = (extra = {}) => ({
+      goalText: 'time=day known=none',
+      heldText: null,
+      stepPick: { step: 'stroll_fixture', source: 'task-plan', fsm: 'gather', why: 'task-plan', at: 1 },
+      taskPlanArgs: { step: 'stroll_fixture', count: 3, by: 'P' },
+      ...extra,
+    })
+    const bot = mockBot()
+    // Owned through the mirror (pin consumed): no re-decide on a flicker.
+    assert.equal(goal.textForce('stroll_fixture', { pinned: 'stroll_fixture' }, bot, owned(), null, 'time=day known=near'), false)
+    // Owned through the live pin: same.
+    assert.equal(goal.textForce('stroll_fixture', { pinned: 'stroll_fixture' }, bot,
+      owned({ taskPlanStep: 'stroll_fixture', taskPlanArgs: null }), null, 'time=day known=near'), false)
+    // A word flip still releases the owned step (night safety owns the dark).
+    assert.equal(goal.textForce('stroll_fixture', { pinned: 'stroll_fixture', time: 'night' }, bot,
+      owned(), null, 'time=night known=near'), true)
+    // No pick on record: the old rule.
+    assert.equal(goal.textForce('stroll_fixture', { pinned: 'none' }, bot, { goalText: 'time=day' }, null, 'time=day known=near'), true)
+  })
+
+  it('do replaces a running order step and drops its executor', async () => {
+    const bot = mockBot([{ name: 'torch', count: 8 }])
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"bring","item":"torch","count":8}]}'
+    handleChat(bot, ticker, 'P', 'torches please')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    assert.ok(ctx.bring, 'the order step runs')
+    handleChat(bot, ticker, 'P', 'do light')
+    assert.equal(ctx.bring, null, 'the old bring executor is released, not orphaned')
+    assert.equal(ctx.llmOrder.text, 'do light')
+    assert.ok(bot.lines.includes('plan: light'), String(bot.lines))
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.taskPlanStep, 'light')
+  })
+
   it("advancing to the next step drops the previous step's args first", async () => {
     const bot = mockBot()
     const ticker = tickerFor(bot)

@@ -1382,6 +1382,7 @@
   },
   "llmAsk": {
     "writers": [
+      "src/chat.js",
       "src/llm-orders.js"
     ],
     "owner": "src/llm-orders.js"

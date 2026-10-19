@@ -322,9 +322,11 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
     if (!(count >= 1 && count <= max)) { bot.chat('try: do light'); return }
     step.count = count
   }
-  // A valid `do` ends any running plan or pending ask first (a stale ask
-  // completing later must not clobber it); installPlan replaces the rest.
-  llmOrders.cancel(ctx, 'do')
+  // A valid `do` clears a pending ask first (its late answer must not
+  // clobber the install); installPlan then releases and replaces a running
+  // plan itself — cancel() would drop the plan without releasing its
+  // bring/lead/flat executor.
+  ctx.llmAsk = null
   llmOrders.installPlan(bot, ctx, {
     text: msg, by: playerName, ticker,
     feed: (line) => handleChat(bot, ticker, username, line, senderUuid),
