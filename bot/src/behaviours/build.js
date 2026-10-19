@@ -440,8 +440,27 @@ function holeOwed(bot, home, skipped) {
 // the house footprint while holeOwed — the walk would cross the hole. The
 // callers fail soft (entrance-holed) or pick another source; the re-opened
 // build refills first.
+// idkcraft-8qz6: only while that refill can run. Castle-first or a parked
+// house vetoes the build step (goal.js MENU.build), so the wait never ends:
+// prod hid the house table from castlefetch's stairs craft for hours
+// (castlefetch-no-stairs, castle flat). Then the walks go as before mlob.
+// ponytail: walks may cross the hole while the build is vetoed; a refill
+// exemption from castle-first (pack has no planks on that prod shape) is
+// the upgrade if a fall shows up.
 function entranceHoled(bot, ctx, pos) {
-  try { return !!(ctx && inHouseFootprint(ctx.home, pos)) && holeOwed(bot, ctx.home, ctx.buildSkip) } catch (_) { return false }
+  try {
+    if (!(ctx && inHouseFootprint(ctx.home, pos))) return false
+    if (ctx.home.parked || refillCastleVetoed(ctx)) return false
+    return holeOwed(bot, ctx.home, ctx.buildSkip)
+  } catch (_) { return false }
+}
+// vetoes.castleFirst(ctx, 'build') inlined: requiring vetoes (-> explore ->
+// castle -> build) closes a require cycle. Keep in step with
+// explore.castleActive and the houseStep unlock.
+function refillCastleVetoed(ctx) {
+  if (require('../goal-unlock').goalUnlock(ctx, 'houseStep') === 'build') return false
+  const st = ctx.castle
+  return !!(st && st.site && typeof st.site.x === 'number' && !st.parked && st.phase !== 'complete')
 }
 
 // The house table cell (plan[0]) is loaded, empty and not given up

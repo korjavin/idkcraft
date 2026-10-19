@@ -1328,6 +1328,36 @@ describe('rw4.19 interior clear cells', () => {
     assert.equal(castlefetch.pickChest(bot, ctx, {}, 'stone'), null, 'the home chest is no source')
   })
 
+  it('8qz6: castle-first or a parked house vetoes the refill, so a holed house keeps its table and chest (no castlefetch-no-stairs deadlock)', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const home = goal.siteFor(bot, pos(0, 64, 0))
+    const s = home.site
+    paintHouse(world, home)
+    for (const c of BLUEPRINT_V2) if (c.kind === 'clear') world.set(s.x + c.dx, s.y + c.dy, s.z + c.dz, 'air')
+    const table = pos(s.x + 5, s.y, s.z + 1)
+    const chest = pos(s.x + 5, s.y, s.z + 2)
+    world.set(chest.x, chest.y, chest.z, 'chest')
+    home.table = table
+    home.chest = chest
+    world.set(s.x + 4, s.y - 1, s.z + 1, 'air') // one air floor cell: the re-opened house owes it
+    bot.entity.position = pos(s.x + 20, s.y, s.z)
+    const castle = { site: { x: s.x + 30, y: s.y, z: s.z }, phase: 'body', parked: false }
+    const ctx = { home, buildSkip: [], castle }
+    const furnace = require('../src/behaviours/furnace')
+    const castlefetch = require('../src/behaviours/castlefetch')
+    assert.equal(build.holeOwed(bot, home, []), true, 'setup: the hole is owed')
+    assert.equal(goal.MENU.build.feasible({ planks: 64, table: 1, door: 1, time: 'day' }, bot, ctx), false, 'setup: castle first vetoes the refill')
+    assert.equal(build.entranceHoled(bot, ctx, table), false, 'no wait on a refill that cannot run')
+    assert.deepEqual(furnace.tableBlock(bot, ctx).pos, table, 'craftany (castlefetch stairs) gets the house table')
+    assert.equal(castlefetch.pickChest(bot, ctx, {}, 'stone').k, `${chest.x},${chest.y},${chest.z}`, 'the home chest serves')
+    castle.parked = true // the castle releases the house: the refill can run, the walks wait again
+    assert.equal(build.entranceHoled(bot, ctx, table), true)
+    assert.equal(furnace.tableBlock(bot, ctx), null)
+    ctx.home = { ...home, parked: true } // a parked house vetoes the refill too
+    assert.equal(build.entranceHoled(bot, ctx, table), false)
+  })
+
   it('(c) air, flora and furnishings in clear cells are done without a dig', () => {
     const world = makeWorld()
     const bot = mockBot(world)
