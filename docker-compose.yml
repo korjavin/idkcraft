@@ -148,6 +148,7 @@ services:
       BOT_FOLLOW: ${BOT_FOLLOW:-}
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
+      BOT_SKILLS: ${BOT_SKILLS:-} # vf8e.2: promoted skills, off by default
       BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
       BRAIN_URL: ${BRAIN_URL:-}
       BRAIN_TIMEOUT_MS: ${BRAIN_TIMEOUT_MS:-3000}
@@ -241,6 +242,7 @@ services:
       BOT_FOLLOW: ${BOT_FOLLOW:-}
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
+      BOT_SKILLS: ${BOT_SKILLS:-} # vf8e.2: promoted skills, off by default
       BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
       BRAIN_URL: ${BRAIN_URL:-}
       BRAIN_TIMEOUT_MS: ${BRAIN_TIMEOUT_MS:-3000}
