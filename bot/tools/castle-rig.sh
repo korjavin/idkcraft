@@ -53,7 +53,8 @@
 #   doorstep + one floor cell gone, a west ramp back up (prod's terrain);
 #   --night prod's verdict adds falls=<server fall-death messages>),
 #   CASTLE_SILL (''|dirt — z591: with CASTLE_HOUSE, natural dirt under the
-#   standing door instead of the planks sill, so the build swaps it),
+#   standing door instead of the planks sill, so the build swaps it; lqgo:
+#   with CASTLE_SEED=complete the same under the castle gate door),
 #   CASTLE_BODY (''|baritone — g0z.56: the builder runs on the v2 Baritone
 #   body, client image BARITONE_IMAGE, default client.sh tree-hash tag),
 #   CASTLE_REPAIR (''|wood|nowood, needs CASTLE_SEED=complete — g0z.56:

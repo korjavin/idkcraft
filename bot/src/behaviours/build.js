@@ -715,6 +715,9 @@ function builderCells(bot, home, skipped) {
       if (!BUILDER_KINDS.has(cell.kind) || cell.floor || skip.has(i)) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
       if (!cellLoaded(bot, home, cell) || cellDone(bot, home, cell)) continue
+      // 8542: BuilderProcess never swapped bed-floor dirt (gallery rig: 3x
+      // build-stall on both cells); the per-cell path digs it, the batch fills the hole.
+      if (cell.bed && NATURAL_SOLID.has(blockNameAt(bot, cellAbs(home, cell)))) continue
       cells.push({ idx: i, dx: cell.dx, dy: cell.dy, dz: cell.dz, block: item.name })
     }
     if (cells.length === 0) return null
@@ -1293,7 +1296,7 @@ function build(bot, ctx, target, state) {
       // rule is checked without the home (digClear precedent).
       // ponytail: natural names only; Baritone scaffolds cobble when it
       // holds no dirt, and foreign cobble here still refuses — widen if seen.
-      const ground = cell.kind === 'planks' && NATURAL_SOLID.has(occupier)
+      const ground = (cell.kind === 'planks' || cell.bed) && NATURAL_SOLID.has(occupier) // 8542: bed floor too
       if (occupier != null && wantItem(cell)(occupier)) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
       } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell) ||

@@ -64,7 +64,7 @@ describe('z591 v2 door sill', () => {
     assert.equal(build.holeOwed(bot, h, []), true)
     assert.equal(build.holeOwed(bot, h, [SILL]), false, 'a skipped sill never re-opens')
     const batch = build.builderCells(bot, h, [])
-    assert.deepEqual(batch.cells.map((c) => c.idx), [1, 2, 3, 4, SILL], 'the sill, plus the bed floor with no beds yet (8542)')
+    assert.deepEqual(batch.cells.map((c) => c.idx), [SILL], 'the sill (dirt bed floor goes per-cell, 8542)')
     assert.equal(batch.cells[0].block, 'oak_planks')
     world.set(3, 63, 0, 'stone')
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[SILL]), false, 'any natural ground')
@@ -100,7 +100,7 @@ describe('8542 v2 bed floor', () => {
     assert.equal(BLUEPRINT_V2.filter((c) => c.bed).length, 4)
   })
 
-  it('v2: dirt with no bed above is undone and batched; a standing bed keeps it; never re-opens or holds isComplete', () => {
+  it('v2: dirt with no bed above is undone and dug per-cell; a standing bed keeps it; never re-opens or holds isComplete', () => {
     process.env.BOT_BODY = 'baritone'
     const world = makeWorld()
     paint(world)
@@ -108,8 +108,10 @@ describe('8542 v2 bed floor', () => {
     const bot = mockBot(world)
     const h = home()
     for (const i of BED) assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[i]), false, `bed floor ${i}`)
-    assert.deepEqual(build.builderCells(bot, h, []).cells.map((c) => c.idx), BED)
-    assert.equal(build.nextCellIdx(bot, h, []) >= 0, true, 'a building house swaps it')
+    // BuilderProcess never swapped this dirt (gallery rig: build-stall x3), so
+    // the batch skips it and the per-cell place path digs + lays it.
+    assert.equal(build.builderCells(bot, h, []), null, 'dirt bed floor never batched')
+    assert.equal(BED.includes(build.nextCellIdx(bot, h, [])), true, 'a building house swaps it per-cell')
     assert.equal(build.isComplete(bot, h), true, 'best effort: the old solid-ground rule')
     assert.equal(build.holeOwed(bot, h, []), false, 'a built house never re-opens for it')
     world.set(1, 64, 4, 'red_bed')
@@ -120,6 +122,7 @@ describe('8542 v2 bed floor', () => {
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[3]), true, 'laid rock stays')
     world.set(5, 63, 4, 'air')
     assert.equal(build.cellDone(bot, h, BLUEPRINT_V2[4]), false)
+    assert.deepEqual(build.builderCells(bot, h, []).cells.map((c) => c.idx), [4], 'a dug (air) bed floor is batched')
     assert.equal(build.isComplete(bot, h), false, 'a hole still holds it')
   })
 
