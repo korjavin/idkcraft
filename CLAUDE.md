@@ -191,8 +191,10 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
 - Risky files: the review archive is **mandatory** for merge.
 - Stuck oracle (idkcraft-6x7.4), **batched** (owner 2026-10-03): PRs do NOT run
   `sh bot/tools/stuck-run.sh` and do not add spots — the rig run is too slow per PR. After a batch
-  of risky merges (default: every 3, or before an owner play session; the orchestrator holds the 4th
-  risky/v2 merge until it is green — curator 2026-10-17: a 13-PR batch hid #519 for 8 merges) one `stuck-run.sh` runs on
+  of risky merges (default: every 3, or before an owner play session. Risky and v2 merges share ONE
+  count; at 3 the batch takes the rig next — developer rigs wait on `RIG_LOCK_WAIT` — and no further
+  risky/v2 PR merges until it is green; the status board carries `risky+v2 since batch: N/3` —
+  curator 2026-10-17: a 13-PR batch hid #519; 2026-10-19: two counters let 6 through) one `stuck-run.sh` runs on
   `master`, judged against `stuck-baseline.json`; exit 1 (regression) → bisect within the batch
   and file a P1 bead; exit 2 is an environment failure, fix the rig, not the code. The script
   holds its own rig lock (busy = exit 2; `RIG_LOCK_WAIT=<secs>` to wait). Accepted risk: a
