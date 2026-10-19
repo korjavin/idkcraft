@@ -19,13 +19,28 @@ const RESULT = {
 
 describe('skill-promote (vf8e.4)', () => {
   it('takes the green row verdict without local paths', () => {
-    const g = p.greenVerdict(RESULT, 'gen_x')
+    const g = p.greenVerdict(RESULT, 'gen_x', 'baritone')
     assert.equal(g.verdict, 'baseline: 1/1 ok, 0 improved, 0 regressed, 0 env (stuck-baseline.json) | micro-run: exit 0 in 80s')
   })
 
-  it('refuses a red result or another skill', () => {
-    assert.match(p.greenVerdict({ ...RESULT, green: false }, 'gen_x'), /not green/)
-    assert.match(p.greenVerdict(RESULT, 'gen_y'), /not gen_y/)
+  it('refuses a red result, another skill, a missing/dirty sha or another body', () => {
+    assert.match(p.greenVerdict({ ...RESULT, green: false }, 'gen_x', 'baritone'), /not green/)
+    assert.match(p.greenVerdict(RESULT, 'gen_y', 'baritone'), /not gen_y/)
+    for (const sha of [undefined, '?', 'c9a98c94-dirty']) assert.match(p.greenVerdict({ ...RESULT, sha }, 'gen_x', 'baritone'), /re-verify/, String(sha))
+    assert.match(p.greenVerdict(RESULT, 'gen_x', 'mineflayer'), /verified on body baritone/)
+  })
+
+  it('a green run must show the skill done in its bot log', () => {
+    assert.equal(p.ranDone('skills loaded n=1\nskill run skill=gen_x kind=recover outcome=done ticks=19\n', 'gen_x'), true)
+    assert.equal(p.ranDone('skill run skill=gen_x kind=recover outcome=failed:no-dir ticks=5\n', 'gen_x'), false)
+    assert.equal(p.ranDone('skills loaded n=1 names=gen_x\n', 'gen_x'), false, 'never chosen (v2 S6-LEAD)')
+  })
+
+  it('mine is judged on the mean of its legs vs the v2 baseline', () => {
+    const comps = [20, 35.3, 30].map((r) => ({ kind: 'mine', line: `mine-rate ${r}/game-min: banked=+1` }))
+    assert.equal(p.meanLine(comps, 'mine', 29.4), 'mine mean 28.4 over 3 legs (20, 35.3, 30), baseline 29.4 (-3%, within)')
+    assert.match(p.meanLine(comps.slice(0, 1), 'mine', 29.4), /-32%, REGRESSION/)
+    assert.equal(p.meanLine([], 'lay', 76.5), 'lay mean: no rate')
   })
 
   it('writes verifiedBy and bead into the header, body untouched', () => {

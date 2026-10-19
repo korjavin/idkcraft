@@ -38,7 +38,7 @@ const EFFORT = process.env.SKILL_LOOP_EFFORT || 'medium'
 const MAX_TOKENS = 32000
 // vf8e.4: SKILL_LOOP_VERIFY=<skill.js> re-verifies a written skill — no
 // model call, the file is attempt 1 — on this tree and REPLAY_BODY, for a
-// fresh result.json (sha, body) that skill-promote.sh reads.
+// fresh result.json (sha, body) that skill-promote.js reads.
 const VERIFY = process.env.SKILL_LOOP_VERIFY || ''
 // $ per 1M tokens in/out (claude-api skill table, 2026-10-06).
 const PRICE = { 'claude-opus-5-5': [4, 20], 'claude-sonnet-5-5': [2, 10], 'claude-haiku-5-5': [0.1, 0.5] }
@@ -163,6 +163,8 @@ async function main() {
   if (!key && !VERIFY) { console.log('no ANTHROPIC_API_KEY (stash secrets/minecraft/anthropic-api-key)'); return 2 }
   const work = process.env.SKILL_LOOP_DIR || path.join('/tmp/idkcraft-skill-loop', sc.name)
   const skillsDir = path.join(work, 'skills')
+  // Read before the wipe: the file may live in this very skills dir.
+  const verifyText = VERIFY ? fs.readFileSync(VERIFY, 'utf8') : ''
   fs.rmSync(skillsDir, { recursive: true, force: true })
   fs.mkdirSync(skillsDir, { recursive: true })
   const spotsFile = path.join(work, 'spots.json')
@@ -200,7 +202,7 @@ async function main() {
       let data
       try {
         data = VERIFY
-          ? { usage: {}, content: [{ type: 'text', text: fs.readFileSync(VERIFY, 'utf8') }] }
+          ? { usage: {}, content: [{ type: 'text', text: verifyText }] }
           : await brain.llmCall({ use: 'skill', apiKey: key, body })
       } catch (e) {
         const msg = String((e && e.message) || e)

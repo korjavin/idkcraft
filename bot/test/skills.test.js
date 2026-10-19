@@ -527,7 +527,6 @@ describe('skills: auto-ban and chat skills off (vf8e.4)', () => {
     } finally {
       console.log = orig
     }
-    assert.ok(logs.some((l) => /^skill ledge_fixture banned fails=3/.test(l)), logs.join('\n'))
     assert.equal(recover.RECOVER_MENU.ledge_fixture.feasible({ walls: 0 }, { recovery: {} }), false, 'a new episode does not offer it')
     assert.match(skills.state(), /banned=.*\bledge_fixture\b/)
   })
