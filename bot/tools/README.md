@@ -1129,7 +1129,7 @@ gate leg. A DIAG line is never quoted in a PR body as before/after; only
 the 10-game-min lines are gate legs.
 
 **Shared before (idkcraft-6x7.27).** The two before legs measure
-origin/master, the same commit for every PR between merges, so they run
+origin/master, the same commit for every batch run between merges, so they run
 once per master sha. A 10-min component leg that exits 0 from a clean tree
 (tracked files) whose HEAD equals `origin/master` (after a `git fetch`)
 writes its record + component line through to
@@ -1182,7 +1182,7 @@ fetch: ticks=3436 stone=+290 (11.9 s/stone, component 3.8) legs=12 finished=1 cu
   minutes from the window open (list capped at 5). `fetch: -` = no
   castlefetch at all. Promote to a gate only when two runs show it stable.
 
-so a PR quotes `before -> after` per component straight from its two
+so the batch run quotes `before -> after` per component straight from its two
 lines. Re-record a baseline (lay: two master runs, each within ±20% of the
 `rate`; mine: `rate` = mean of 3 pairs, spread noted; `npm test` enforces it) in the PR that moves it on purpose.
 Pre-existing `CASTLE_*` knobs stay usable but change what the line means;
