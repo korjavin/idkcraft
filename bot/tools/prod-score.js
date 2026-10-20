@@ -18,7 +18,7 @@ const LINE = /^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)\s+(.*)$/
 const top = (o, n) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k}:${v}`).join(',') || 'none'
 const pct = (n, t) => (t ? Math.round((n / t) * 100) : 0)
 
-function scoreBlock(label, rows, carryN) {
+function scoreBlock(label, rows, carryN, lastN) {
   resetSeen()
   const a = { placed: [], ticks: [], share: {}, active: false, legs: 0, stone: 0, blocks: 0, wall: 0, dead: 0, fin: 0, skillRun: 0, skillBan: 0, dig: 0, walk: 0, stall: 0, miss: 0, slow: 0, deaths: 0 }
   if (carryN != null) a.placed.push({ at: rows[0].at, n: carryN }) // a day without a change prints no castle line
@@ -62,6 +62,7 @@ function scoreBlock(label, rows, carryN) {
   }
   const t = rows.length ? rows[rows.length - 1].at - rows[0].at : 0
   const ns = a.placed.map((p) => p.n)
+  if (ns.length) lastN.n = ns[ns.length - 1]
   const min = ns.length ? Math.min(...ns) : '-'
   const max = ns.length ? Math.max(...ns) : '-'
   // flat: equal-n castle lines spanning >= 10 min; dominant decision step inside the longest
@@ -113,9 +114,9 @@ function score(text, { day = false } = {}) {
   }
   let carry = null
   return [...groups].map(([k, rows]) => {
-    const out = scoreBlock(k, rows, carry)
-    const last = /placed=\S+->(\d+)/.exec(out)
-    if (last) carry = +last[1] // max, not last n: castle n only grows within a castle
+    const lastN = {}
+    const out = scoreBlock(k, rows, carry, lastN)
+    carry = lastN.n != null ? lastN.n : carry // the last printed n (a regress lowers it)
     return out
   }).join('\n')
 }
