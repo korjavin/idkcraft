@@ -114,14 +114,16 @@ ticks.
   under the body is stone (the stone stance — do not relocate first, just
   call it where you stand), digs the veto-steered descent, falls in and caps
   overhead from the dug dirt. `denyReason` stays unchanged; every dig and
-  the cap runs the hand vetoes inside. No arguments. Call it every tick: it
-  answers `'started'` while the maneuver runs (meanwhile every other act
-  answers `'busy'`), `'done'` once the pit is capped, or
+  the cap runs the hand vetoes inside. No arguments. Call it every tick and
+  nothing else until it answers `'done'`: while it runs `dig`/`place`/`use`/
+  `equip` answer `'busy'`, and `goto()`/`control()` would fight the
+  maneuver's own walk to the column and forward steps into the pit. It
+  answers `'started'` while running, `'done'` once the pit is capped, or
   `'denied:dig-in-<reason>'` when the ground refuses (stone with no dirt
   column in reach, protected ground, no cap material). Recipe for a night
   dig-in: call `digIn()` until it answers `'done'`, then `stop()`, release
   the controls and hold still till dawn (`'done'` when `time()` leaves the
-  night range). Do not dig, place or walk yourself around it.
+  night range).
 - `place(x, y, z, item)` places INTO that cell against a solid neighbour. It
   refuses the castle yard ring and apron (`denied:place-protected`) and never
   clicks a GUI block.

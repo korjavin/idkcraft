@@ -22,9 +22,10 @@
 // face into the checked cell (never where the server ray lands unchecked),
 // goto = body.js movementsFor on the live Movements (never a new one). No
 // toss/drop, no chat. digIn takes no skill-controlled args and advances one
-// tick per call on per-episode state; while it runs every other act answers
-// 'busy', and a terminal tick cancels its dig and drops its walk goal like
-// any hand primitive's.
+// tick per call on per-episode state; while it runs the firing acts
+// (dig/place/use/equip) answer 'busy', a replaced episode's leftover busy
+// releases on its first act, and a terminal tick cancels its dig and drops
+// its walk goal like any hand primitive's.
 // ponytail: node:vm is a guard rail for our own generated code, not a
 // boundary against hostile code; promotion (vf8e.4) keeps revmux review.
 // Known ceiling: no heap cap — a skill allocating GBs inside its 50 ms can
@@ -193,6 +194,10 @@ function solid(b) {
 // replaced, recovery over, terminal tick): an act never lands after that.
 function fire(c, kind, fn) {
   const act = c.act
+  // krup: a replaced episode has no terminal tick, so a maneuver busy it
+  // inherits must not wedge it: the flag belongs to a dead episode when
+  // this one never started a maneuver of its own (hs is per-episode).
+  if (act.busy === 'digIn' && !c.hs.digInSt) act.busy = null
   if (act.busy) return 'busy'
   act.busy = kind
   c.hs.err = null
@@ -274,6 +279,9 @@ const OPS = {
   // 'started' = maneuver running (call again next tick); any other act
   // while it runs answers 'busy' (the yvi rule: never two placements).
   digIn(c) {
+    // No stale-busy release here: entry with busy === 'digIn' proceeds
+    // either way (the release lives in fire(), where a foreign busy
+    // would wedge the episode).
     if (c.act.busy && c.act.busy !== 'digIn') return 'busy'
     let out
     try {

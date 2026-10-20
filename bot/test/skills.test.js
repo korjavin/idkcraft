@@ -635,6 +635,36 @@ describe('skills: digIn + use ray check (krup)', () => {
     assert.deepEqual(bot.placed, [{ at: key(0, 61, 2), item: 'cobblestone' }])
   })
 
+  it('a replaced episode does not inherit maneuver busy', async () => {
+    const bot = fakeBot()
+    bot.items = [{ name: 'cobblestone', count: 4 }]
+    const sk = compiled('digin_replaced',
+      'st.n = (st.n || 0) + 1; ' +
+      'if (st.n === 1) { bot.digIn(); return "running" } ' +
+      'if (st.n === 2) { st.r = bot.place(0, 61, 2, "cobblestone"); return "running" } ' +
+      'return "failed:place-" + st.r')
+    assert.equal(sk.tick(bot, {}, fresh()), 'running', 'first episode starts the maneuver')
+    // No terminal tick: the arbiter replaces the episode outright.
+    assert.equal(sk.tick(bot, {}, fresh()), 'running', 'fresh episode keeps running')
+    await flush()
+    assert.equal(sk.tick(bot, {}, fresh()), 'failed:place-started', 'fresh episode fired through the leftover busy')
+    assert.deepEqual(bot.placed, [{ at: key(0, 61, 2), item: 'cobblestone' }])
+  })
+
+  it('a terminal tick drops a live dig-in walk goal', async () => {
+    const bot = fakeBot(new Map([[key(0, 60, 0), 'stone']]))
+    const sk = compiled('digin_walkend', 'st.n = (st.n || 0) + 1; if (st.n === 1) { bot.digIn(); return "running" } return "done"')
+    const st = fresh()
+    const ctx = {}
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    assert.equal(ctx.lastGoalKey, 'dig-in-walk')
+    assert.ok(bot.pathfinder.goal, 'walk goal live')
+    assert.equal(sk.tick(bot, ctx, st), 'done')
+    assert.equal(bot.pathfinder.goal, null, 'walk goal dropped with the episode')
+    assert.equal(ctx.lastGoalKey, '', 'walk key cleared')
+    await flush()
+  })
+
   it('a pour aims a ray-visible face into the dest and lands there', async () => {
     const bot = fakeBot()
     bot.heldItem = { name: 'water_bucket' }
