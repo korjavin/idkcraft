@@ -243,14 +243,14 @@ function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 
 // Bounded retry (vmzq.27 revmux 01): after this many blocks the hole
 // (see blockCell) retires.
 const MAX_HOLE_TRIES = 8
-// Builder refusals (idkcraft-synq): a 'build-miss' block means Baritone
-// refused the cell in 3 consecutive batches with material on hand. The
-// batch now lays bottom-up on vetted stand floors (castleBuilderCells), so
-// a refused cell is not waiting on an unlaid floor — retrying it through
-// the full 8-try ladder only re-stalls the batch. It gets one retry window
-// (try 1, back off, try 2) and then retires with its reason, still
-// reported by holesOf/sayHoles; a rebuild (cancel + build) un-retires.
-const BUILD_MISS_TRIES = 2
+// Builder refusals (idkcraft-synq, revmux 01 core-3): a 'build-miss' block
+// means Baritone refused the cell in STRIKES consecutive batches with
+// material on hand AND its stand floor laid (strikeMisses skips collateral
+// whose floor is still unlaid). There is nothing a retry would heal that
+// three refusals did not already test, so the cell retires on its first
+// block — one build-miss line ever, still reported by holesOf/sayHoles;
+// a rebuild (cancel + build) un-retires.
+const BUILD_MISS_TRIES = 1
 
 function bodyPos(bot) {
   const p = bot.entity && bot.entity.position
@@ -2146,13 +2146,20 @@ function castleBuilderBatch(bot, ctx, st, c) {
   // idx only, so two refused cells would reset each other forever. At
   // STRIKES the cell enters the usual backoff/retire machinery instead of
   // re-batching forever. Starved misses fetch, never strike.
+  // Synq core-1: only genuinely-attempted cells strike. A cell whose
+  // stand floor is still unlaid at strike time was never reached by the
+  // layered builder — collateral of the stall, not a refusal — so it must
+  // not burn the one-shot build-miss ladder (revmux 01 core-1).
   const strikeMisses = () => {
     try {
       if (!st.batchStrikes || typeof st.batchStrikes !== 'object') st.batchStrikes = {}
       const now = Date.now()
+      const plan = blueprint.absPlan(st.site, st.rot | 0, st.blueprintVersion)
       for (const o of flightCells) {
         if (done(bot, o)) { delete st.batchStrikes[bkey(st, o.idx)]; continue }
         if (usable(bot, o.kind, ctx) <= 0) continue
+        const below = plan.at.get(`${o.x},${o.y - 1},${o.z}`)
+        if (below && blueprint.isPlaceTarget(below.kind) && !done(bot, below)) continue
         const k = bkey(st, o.idx)
         const n = (st.batchStrikes[k] = (st.batchStrikes[k] | 0) + 1)
         if (n >= STRIKES) {
