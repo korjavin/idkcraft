@@ -2361,15 +2361,18 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
     } else if (ctx.stepFail && typeof ctx.stepFail === 'object') {
       // A success retires its own hold: tomorrow's identical failure re-arms
       // from scratch instead of inheriting a stale record (round-1 major).
-      // prkh (revmux 02 core-1): a castlefetch success retires only its
-      // own kind — a fence relay must not erase a still-failing stone hold.
+      // prkh (revmux 02 core-1, fixed by 03 core-1): a castlefetch success
+      // retires only ITS leg kind (the done stamp — decide() re-computes
+      // the word before this runs, so the fresh word must not decide).
+      // Unknown done kind + a kinds map: keep the map, never erase.
       try {
         const rec = prev === 'castlefetch' ? ctx.stepFail[prev] : null
-        const kind = ctx && ctx.castleWord && ctx.castleWord.kind
-        if (rec && rec.kinds && typeof kind === 'string' && kind) {
-          delete rec.kinds[kind]
+        const doneKind = ctx && typeof ctx.castleFetchDoneKind === 'string' ? ctx.castleFetchDoneKind : null
+        if (ctx) ctx.castleFetchDoneKind = null
+        if (rec && rec.kinds && typeof rec.kinds === 'object' && doneKind) {
+          delete rec.kinds[doneKind]
           if (Object.keys(rec.kinds).length === 0) delete ctx.stepFail[prev]
-        } else delete ctx.stepFail[prev]
+        } else if (!(rec && rec.kinds && typeof rec.kinds === 'object')) delete ctx.stepFail[prev]
       } catch (_) { /* guard best-effort */ }
     }
   }

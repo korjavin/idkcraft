@@ -431,12 +431,18 @@ function finish(bot, ctx, status) {
   }
   if (status === 'done') stepDone(ctx)
   else stepFailed(ctx, failReason(status) || status)
-  // prkh: the fetch hold parks one KIND, not the step — stamp the failed
-  // kind for the hold record (goal.js recordOutcome copies it), so a later
-  // fence word still fetches from the chest while stone stays parked.
-  if (status !== 'done') {
-    try { if (f && typeof f.kind === 'string') ctx.castleFetchFailKind = f.kind } catch (_) { /* stamp best-effort */ }
-  }
+  // prkh: the fetch hold parks one kind — stamp the leg kind for the hold
+  // record (goal.js recordOutcome copies it), so a later fence word still
+  // fetches from the chest while stone stays parked. Failed kinds merge
+  // into the map; a done kind retires only itself (revmux 03 core-1: the
+  // word is already re-computed by then, so the leg's own kind is what
+  // decides — never the fresh word).
+  try {
+    if (f && typeof f.kind === 'string') {
+      if (status === 'done') ctx.castleFetchDoneKind = f.kind
+      else ctx.castleFetchFailKind = f.kind
+    }
+  } catch (_) { /* stamp best-effort */ }
   ctx.castleFetch = null
   ctx.furnaceJob = null // g0z.38: a pane leg's job never outlives it (gear's iron smelt)
   clearGoal(bot, ctx)
@@ -2332,7 +2338,7 @@ function castlefetch(bot, ctx, target, state) {
     // prkh (revmux 01 core-1): a new leg owns no failure yet — drop any
     // stamp an unrecorded reset left behind, so an unstamped failure below
     // falls back to the kindless hold-all.
-    try { ctx.castleFetchFailKind = null } catch (_) { /* stamp best-effort */ }
+    try { ctx.castleFetchFailKind = null; ctx.castleFetchDoneKind = null } catch (_) { /* stamp best-effort */ }
   }
   // Batch yield (idkcraft-vmzq.20): a leg that reached a layable batch but
   // not its full target hands over after LEG_MAX_MS, so the castle lays

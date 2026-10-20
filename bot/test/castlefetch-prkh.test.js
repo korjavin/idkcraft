@@ -169,22 +169,38 @@ describe('prkh per-kind fetch hold', () => {
     assert.equal(fetch.holdFor(bot, ctx, 'pane'), false, 'an unfailed kind runs')
   })
 
-  it('a done leg retires only its own kind: fence done, stone still held (revmux 02 core-1)', () => {
+  it('a done leg retires only its own kind: fence done, stone still held (revmux 02 core-1, 03 core-1)', () => {
     const bot = makeBot()
     const ctx = { castle: castleState() }
     ctx.castleFetchFailKind = 'stone'
     ctx.castleWord = { kind: 'stone', left: 75 }
     goal.recordOutcome(bot, ctx, {}, 'castlefetch', 'failed:castlefetch-unreachable', true, 'castle=stone-none')
-    ctx.castleWord = { kind: 'fence', left: 9 }
-    goal.recordOutcome(bot, ctx, {}, 'castlefetch', 'done', true, 'castle=fence-none')
+    // The fence relays; decide() re-computes the word as stone BEFORE
+    // recordOutcome runs, so only the leg's done stamp may retire fence.
+    ctx.castleFetchDoneKind = 'fence'
+    ctx.castleWord = { kind: 'stone', left: 75 }
+    goal.recordOutcome(bot, ctx, {}, 'castlefetch', 'done', true, 'castle=stone-none')
     assert.ok(ctx.stepFail.castlefetch, 'the stone hold survives the relay')
     assert.deepEqual(Object.keys(ctx.stepFail.castlefetch.kinds), ['stone'])
+    assert.equal(ctx.castleFetchDoneKind, null, 'done stamp consumed')
     assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'stone honestly parked')
     assert.equal(fetch.holdFor(bot, ctx, 'fence'), false, 'fence free')
     // The last kind done clears the slot, as before (re-arm from scratch).
-    ctx.castleWord = { kind: 'stone', left: 75 }
+    ctx.castleFetchDoneKind = 'stone'
     goal.recordOutcome(bot, ctx, {}, 'castlefetch', 'done', true, 'castle=stone-none')
     assert.equal(ctx.stepFail.castlefetch, undefined, 'empty map deletes the record')
+  })
+
+  it('a done leg with no stamp keeps the kinds map (revmux 03 core-1)', () => {
+    const bot = makeBot()
+    const ctx = { castle: castleState() }
+    ctx.castleFetchFailKind = 'stone'
+    goal.recordOutcome(bot, ctx, {}, 'castlefetch', 'failed:castlefetch-unreachable', true, 'castle=stone-none')
+    // No done leg ran (demand-null done, gather-done mid-leg): the stamp
+    // is absent, so the stone hold must survive untouched.
+    goal.recordOutcome(bot, ctx, {}, 'castlefetch', 'done', true, 'castle=stone-none')
+    assert.deepEqual(Object.keys(ctx.stepFail.castlefetch.kinds), ['stone'])
+    assert.equal(fetch.holdFor(bot, ctx, 'stone'), true)
   })
 
   it('a new leg drops a leftover stamp', async () => {
@@ -192,10 +208,11 @@ describe('prkh per-kind fetch hold', () => {
     fetch.deps.craftItem = () => ({ done: false })
     fetch.deps.gather = (bot, ctx) => { ctx.stepStatus = 'running' }
     const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
-    const ctx = { castle: castleState(), castleFetchFailKind: 'stone' }
+    const ctx = { castle: castleState(), castleFetchFailKind: 'stone', castleFetchDoneKind: 'fence' }
     fetch(bot, ctx)
     await settle(); await settle()
-    assert.equal(ctx.castleFetchFailKind, null, 'leg start clears the stamp')
+    assert.equal(ctx.castleFetchFailKind, null, 'leg start clears the fail stamp')
+    assert.equal(ctx.castleFetchDoneKind, null, 'leg start clears the done stamp')
   })
 
   it('a blocked fence word proceeds under a stone hold', () => {
