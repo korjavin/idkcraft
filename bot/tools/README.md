@@ -849,6 +849,24 @@ sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orches
   spot from the printed spot path into `stuck-spots.json` and records its baseline
   entry (corpus rule: one without the other fails the gate or `npm test`); the
   promote script does not do that step itself.
+- Hand-written goals (idkcraft-vf8e.20): `CURRICULUM_GOALS=<dir>[,<dir>...]`
+  (no spaces), each dir holding `scenario.json` + `spots.json` in `propose()`
+  shape (e.g. `bot/tools/goals/park`; the vf8e.19 park goal will live there).
+  Every valid dir becomes a pick named after its basename and runs FIRST,
+  before the harvested top-K, through the same per-candidate block (keeper
+  boot, reproduction gate, loop, ledger, `PROMOTE` line, cap); `propose` is
+  skipped for it — the two files are copied into `$WORK/GOAL-<name>/`. A goal
+  dir missing either file is skipped (`CURRICULUM GOAL-<name> skipped: no
+  goal files`), never an environment failure. The ledger key is
+  `GOAL-<name>` and the 7-day RED-retry rule applies as for signatures
+  (recent RED / GREEN-done / parked at 3 REDs skip the goal). Scenario
+  entries need `name` / `skill` / `bead` (the loop stub is called with the
+  scenario name; `record` falls back to count 0 with no harvest entry).
+  `CURRICULUM_K=0` with goals set runs goals only: no dump needed
+  (`CURRICULUM_K=0 CURRICULUM_GOALS=<dir> sh bot/tools/curriculum.sh -`).
+  `DUMP` stays required whenever `K>0`. Relative goal dirs resolve from the
+  caller's cwd, like `DUMP`; a goal whose `scenario.json` is missing,
+  unparsable, or lacks `name` / `skill` / `bead` is skipped, never fatal.
 - Body: the harvest feeds bot2 stalls by default, so set `CURRICULUM_BODY=baritone`
   for a bot2 night — the keeper, the pre-run and the loop then verify on the v2
   body. Empty (default) is the mineflayer replay. The ledger records the body and
