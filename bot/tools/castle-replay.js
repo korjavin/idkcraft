@@ -2477,7 +2477,10 @@ async function main() {
     const box = apronBox(apronSnap)
     const bp = require('../src/castle')
     const v = apronSnap.blueprintVersion
-    const plan = new Set([...bp.absPlan(apronSnap.site, 0, v).cells, ...bp.decorPlan(apronSnap.site, 0, v).cells].map((c) => `${c.x},${c.y},${c.z}`))
+    // Place cells only: dig (dry moat, must end as air) and air (doorways,
+    // windows) cells are not excluded, so throwaway bridged into them
+    // counts toward apron-throwaway (5g43 body-1).
+    const plan = new Set([...bp.absPlan(apronSnap.site, 0, v).cells.filter((c) => bp.isPlaceTarget(c.kind)), ...bp.decorPlan(apronSnap.site, 0, v).cells].map((c) => `${c.x},${c.y},${c.z}`))
     await rcon(`forceload add ${box.x1} ${box.z1} ${box.x2} ${box.z2}`).catch((e) => fail('apron-diff', e.message))
     await sleep(3000)
     const changed = await apronChanged(rcon, box).catch((e) => fail('apron-diff', e.message))
