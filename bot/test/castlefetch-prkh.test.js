@@ -215,6 +215,27 @@ describe('prkh per-kind fetch hold', () => {
     assert.equal(ctx.castleFetchDoneKind, null, 'leg start clears the done stamp')
   })
 
+  it('qxql.3: a leg re-opened past RESTART_MAX with no progress fails once and holds its kind', async () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'fence', left: 6 }; return 'fence-none' }
+    fetch.deps.craftItem = () => ({ done: false })
+    fetch.deps.gather = (bot, ctx) => { ctx.stepStatus = 'running' }
+    const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
+    const ctx = { castle: castleState() }
+    for (let i = 0; i < fetch.RESTART_MAX; i++) {
+      fetch(bot, ctx)
+      await settle(); await settle()
+      assert.equal(ctx.stepStatus, 'running', `start ${i + 1} still fetches`)
+      ctx.castleFetch = null // the goal re-decide drops the leg (goal.js re-pick)
+    }
+    fetch(bot, ctx)
+    await settle(); await settle()
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-fence')
+    assert.equal(ctx.castleFetchFailKind, 'fence', 'the dead kind is stamped for the per-kind hold')
+    goal.recordOutcome(bot, ctx, {}, 'castlefetch', ctx.stepStatus, true, 'castle=fence-none')
+    assert.equal(fetch.holdFor(bot, ctx, 'fence'), true, 'fence parked')
+    assert.equal(fetch.holdFor(bot, ctx, 'stone'), false, 'stone still runs')
+  })
+
   it('a blocked fence word proceeds under a stone hold', () => {
     castleMod.menuFact = () => 'blocked'
     const ctx = heldCtx('stone')

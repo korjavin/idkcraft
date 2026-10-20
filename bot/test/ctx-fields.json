@@ -472,7 +472,7 @@
       "src/behaviours/castlefetch.js"
     ],
     "owner": "src/behaviours/castlefetch.js",
-    "note": "dead-leg streak (qxql.3): { kind, short, inv, n } — consecutive leg starts of one kind with the same need and an unchanged pack; past RESTART_MAX the leg fails once into the per-kind hold."
+    "note": "dead-leg streak (qxql.3): { kind, short, inv, n, at } — consecutive leg starts (each within 30 s of the last) of one kind with the same need and an unchanged pack; past RESTART_MAX the leg fails once into the per-kind hold."
   },
   "castleFetchFailKind": {
     "writers": [

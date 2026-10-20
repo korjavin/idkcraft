@@ -302,14 +302,18 @@ function holdFor(bot, ctx, kind) {
 // (failed:castlefetch-no-<kind>, the shape the fall-through already uses)
 // and the per-kind hold (prkh) parks only that kind.
 // ponytail: the pack signature is the sum of item counts — any gain or
-// spend (logs chopped, cobble dug, a craft) breaks the streak.
+// spend (logs chopped, cobble dug, a craft) breaks the streak. A start more
+// than RESTART_GAP_MS after the last one breaks it too: a dead leg re-opens
+// within seconds, a long walk cut before its first dig does not.
 const RESTART_MAX = 3
+const RESTART_GAP_MS = 30 * 1000
 function deadRestart(bot, ctx, d) {
   let inv = 0
   try { for (const it of bot.inventory.items() || []) inv += (it && it.count) | 0 } catch (_) { return false }
   const r = ctx.castleFetchRestarts
-  if (r && r.kind === d.kind && r.short === d.short && r.inv === inv) r.n++
-  else ctx.castleFetchRestarts = { kind: d.kind, short: d.short, inv, n: 1 }
+  const now = Date.now()
+  if (r && r.kind === d.kind && r.short === d.short && r.inv === inv && now - r.at <= RESTART_GAP_MS) { r.n++; r.at = now }
+  else ctx.castleFetchRestarts = { kind: d.kind, short: d.short, inv, n: 1, at: now }
   if (ctx.castleFetchRestarts.n <= RESTART_MAX) return false
   ctx.castleFetchRestarts = null
   return true
@@ -2452,16 +2456,17 @@ function castlefetch(bot, ctx, target, state) {
   let f = ctx.castleFetch
   if (!f || f.kind !== d.kind) {
     f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: blocksOnHand(bot), haul: d.short }
-    try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
     // prkh (revmux 01 core-1): a new leg owns no failure yet — drop any
     // stamp an unrecorded reset left behind, so an unstamped failure below
     // falls back to the kindless hold-all.
     try { ctx.castleFetchFailKind = null; ctx.castleFetchDoneKind = null } catch (_) { /* stamp best-effort */ }
     if (deadRestart(bot, ctx, d)) {
       try { console.log(`castlefetch ${d.kind}: leg restarted ${RESTART_MAX}x with no progress, holding the kind`) } catch (_) { /* log best-effort */ }
+      if (d.kind === 'fence' || d.kind === 'gate') castleMod.noteDry(ctx, d.kind) // the decor word skips it (dry() shape)
       finish(bot, ctx, `failed:castlefetch-no-${d.kind}`)
       return
     }
+    try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
   }
   // Batch yield (idkcraft-vmzq.20): a leg that reached a layable batch but
   // not its full target hands over after LEG_MAX_MS, so the castle lays
