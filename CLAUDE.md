@@ -65,6 +65,7 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
   cd bot && npm ci && npm test
   ```
   No Minecraft client is needed for tests — the bot test suite includes a fake-player end-to-end harness.
+- Prod signals: `node bot/tools/prod-score.js <pulled-log.txt> --day` (idkcraft-qxql.6).
 - **Local stack:**
   ```bash
   docker compose up
@@ -193,33 +194,23 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   (one agent, `--no-synthesis`). Check a pick: `git diff --no-ext-diff origin/master...HEAD | sh .revmux/review.sh --pick`. Compose/Dockerfile/CI/env/.revmux-only diffs get `--lenses tests` automatically
   (`LENSES=` overrides).
 - Risky files: the review archive is **mandatory** for merge.
-- Stuck oracle (idkcraft-6x7.4), **batched** (owner 2026-10-03): PRs do NOT run
-  `sh bot/tools/stuck-run.sh` and do not add spots — the rig run is too slow per PR. After a batch
-  of risky merges (default: every 3, or before an owner play session; the orchestrator holds the 4th
-  risky/v2 merge until it is green — curator 2026-10-17: a 13-PR batch hid #519 for 8 merges) one `stuck-run.sh` runs on
-  `master`, judged against `stuck-baseline.json`; exit 1 (regression) → bisect within the batch
-  and file a P1 bead; exit 2 is an environment failure, fix the rig, not the code. The script
-  holds its own rig lock (busy = exit 2; `RIG_LOCK_WAIT=<secs>` to wait). Accepted risk: a
-  regression can reach prod before its batch run. A movement PR lists its prod coords in the PR
-  body; a batch task adds them to `bot/tools/stuck-spots.json` (with `bead`) plus the measured
-  entry in `bot/tools/stuck-baseline.json` — one without the other fails the gate or `npm test`.
-  `STUCKRUN=<file>` stays optional for review rounds. Manual: `bot/tools/README.md`.
-- v2 merge gate (owner 2026-10-20, batch-only): a PR touching v2 behaviour
-  (`bot/src/bridge/*`, `baritone/*`, or a `BOT_BODY=baritone` branch in `bot/src`) runs no rig
-  legs and quotes no before/after lines. The batch (every 3 v2/risky merges or before an owner
-  play session, on `master`) runs `stuck-run.sh` (exit 1 vs baseline) and its v2 leg
-  (`REPLAY_BODY=baritone`, not-worse vs `stuck-baseline-v2.json`), the lay/mine pair
-  (`CASTLE_BODY=baritone CASTLE_PADSPOT=250,350`; mine judged on the mean of 3 pairs) and
-  the full 90-min castle rig (`CASTLE_BODY=baritone sh bot/tools/castle-rig.sh 90`); the lay/mine
-  and castle legs are judged vs their recorded baselines (`bot/tools/component-baseline.json`
-  for lay/mine), OUTSIDE ±20% downward = regression -> bisect within the batch + P1 bead. A PR whose acceptance criterion is itself a rig number runs
-  that scenario once and quotes its verdict line. House done-seconds + fail
-  top-3 (`sh bot/tools/work-rig.sh 20`) and deaths per night (`castle-rig.sh --night`) stay
-  optional verdicts.
-  `REPLAY_BODY=baritone` stuck-run is a regression check only (not worse), never the reason to
-  merge; v1 `stuck-run.sh` is unchanged and frozen (v1 is phased out). Stall-point beads
-  (neuc.29/.31/.48/.49, umou, sfmk) are deferred "postponed: structural plan" until the
-  mine/recover/build beads land.
+- Merge gate (owner 2026-10-20, prod-first): a PR is mergeable when `cd bot && npm test` is green,
+  the revmux archive exists (risky profile for the risky files above) and the PR body names the
+  **prod log signals** it moves — from the list in the idkcraft-qxql epic (S1 castle
+  `<n>/<total>` growth/day, S2 castlefetch legs/finished/cut-by, S3 stone/h and s/stone from
+  `leg over` lines, S4 step share incl. house chain and idle+stay, S5 top `failed:<reason>`,
+  S6 flat windows, S7 build-stall/build-miss, S8 dig slow/`body.stats`) — with the expected
+  direction and, when the bead gives one, the prod before-day numbers. The verdict is read
+  **after deploy** by the prod log review (idkcraft-qxql.7, `bot/tools/prod-score.js` over a
+  pulled bot2 log; pull recipe in `.claude/skills/idkcraft-session-review`): a signal that moved
+  the wrong way reopens the bead (P1 if S1 growth/day fell). No new `failed:<reason>` string
+  without naming the signal it moves.
+- Rigs are optional developer tools, never a gate: `bot/tools/castle-rig.sh` (incl.
+  `CASTLE_COMPONENT=lay|mine`, `--night`, 90-min), `bot/tools/stuck-run.sh`, `work-rig.sh` and
+  their baseline json files may be run to convince yourself before a PR; nobody waits for them,
+  no PR quotes them as acceptance, no batch run after N merges. A movement PR still lists its
+  prod coords in the PR body (for a later rig scenario if someone wants one).
+  `REPLAY_BODY=baritone` / v1 `stuck-run.sh` are frozen with v1 (owner 2026-10-20: v1 gets no time).
 - Rounds 2+ only after a critical/major was fixed: `PREV=<round-1 findings.json> REVIEWED_SHA=<sha>
   .revmux/review.sh <bead> 02-after-fix` (scope = the fix delta, one-agent `idkcraft` profile unless one is passed). Minors are fixed in the same commit
   and never trigger another round. Max 3 rounds (the script refuses a 4th); whatever is still gating is outstanding in the handoff.
