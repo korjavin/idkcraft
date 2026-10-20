@@ -97,6 +97,15 @@ function stateText(bot, ctx) {
   try { return goal.goalText(goal.goalFacts(bot, ctx), ctx.home) } catch (_) { return 'unknown' }
 }
 
+// Prototype-safe whitelist read (vf8e.17 verifier): chat and model ids
+// match [a-z0-9_]+, so `do constructor` / {"step":"__proto__"} hit inherited
+// Object members on a plain ORDER_STEPS[id] lookup — and `.args` of that
+// throws inside the chat handler, which has no try/catch. Only own entries
+// count (the skills.js Object.hasOwn(OPS, op) precedent).
+function orderStep(id) {
+  return Object.hasOwn(ORDER_STEPS, id) ? ORDER_STEPS[id] : null
+}
+
 // Model answer -> { steps } | { error } | { empty: true }. The whitelist is
 // the safety: an id outside it refuses the whole plan.
 function validatePlan(ans, works = workSteps()) {
@@ -107,21 +116,22 @@ function validatePlan(ans, works = workSteps()) {
   const steps = []
   for (const r of raw) {
     const id = r && typeof r.step === 'string' ? r.step.toLowerCase().trim() : ''
-    if (!ORDER_STEPS[id] && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"` }
+    const knownOrder = orderStep(id)
+    if (!knownOrder && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"` }
     const s = { step: id, done: typeof r.done === 'string' ? r.done.replace(/\s+/g, ' ').trim().slice(0, 80) : '' }
-    if (ORDER_STEPS[id] && ORDER_STEPS[id].args.includes('item')) {
+    if (knownOrder && knownOrder.args.includes('item')) {
       const item = String(r.item || '').toLowerCase().trim().replace(/\s+/g, '_')
       if (!/^[a-z0-9_]{1,40}$/.test(item)) return { error: `${id} needs an item` }
       s.item = item
     }
-    if (ORDER_STEPS[id] && ORDER_STEPS[id].args.includes('count') && r.count != null) {
+    if (knownOrder && knownOrder.args.includes('count') && r.count != null) {
       const c = Math.floor(Number(r.count))
-      if (!(c >= 1 && c <= ORDER_STEPS[id].max)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
+      if (!(c >= 1 && c <= knownOrder.max)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
       s.count = c
     }
     // A work step keeps a 1..64 count when the model gives one (vf8e.17):
     // hand steps ignore it at execution, skill steps read st.count.
-    if (!ORDER_STEPS[id] && r.count != null) {
+    if (!knownOrder && r.count != null) {
       const c = Math.floor(Number(r.count))
       if (!(c >= 1 && c <= 64)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
       s.count = c
@@ -204,6 +214,8 @@ function ask(bot, ctx, req, fetchFn) {
 // Install validated plan steps as the running order (vf8e.17): ask()'s
 // tail and the deterministic `do` verb share it. Replaces any running
 // plan and chats the plan line. No model call, no token or metric touch.
+// Steps must already be whitelisted (validatePlan/doPlan): the executive
+// below (startStep/tick/release) reads ORDER_STEPS by id without re-check.
 function installPlan(bot, ctx, req, steps, say) {
   if (!ctx || !Array.isArray(steps) || !steps.length) return false
   if (ctx.llmOrder) { release(ctx, ctx.llmOrder); console.log(`llm order end text="${ctx.llmOrder.text}" result=replaced`) }
@@ -429,4 +441,4 @@ function statusLine(ctx) {
   return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
 }
 
-module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS }
+module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS }

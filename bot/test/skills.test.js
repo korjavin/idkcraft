@@ -565,10 +565,50 @@ describe('skills: order-only step skills (vf8e.17)', () => {
       tables.BEHAVIOURS.args_echo(fakeBot(), ctx)
       return ctx.stepStatus
     }
-    assert.equal(runIt({ count: 3, by: 'steve' }), 'failed:count-3-by-steve')
+    assert.equal(runIt({ step: 'args_echo', count: 3, by: 'steve' }), 'failed:count-3-by-steve')
     assert.equal(runIt(undefined), 'failed:count-null-by-none')
-    assert.equal(runIt({ count: 999, by: 'steve' }), 'failed:count-null-by-steve', 'out-of-range count never reaches the skill')
-    assert.equal(runIt({ count: 2, by: 'x'.repeat(40) }), 'failed:count-2-by-none', 'an overlong name never reaches the skill')
+    assert.equal(runIt({ step: 'args_echo', count: 999, by: 'steve' }), 'failed:count-null-by-steve', 'out-of-range count never reaches the skill')
+    assert.equal(runIt({ step: 'args_echo', count: 2, by: 'x'.repeat(40) }), 'failed:count-2-by-none', 'an overlong name never reaches the skill')
+  })
+
+  it('a same-step re-order with new args restarts the episode (codex P2)', () => {
+    const echoSrc = '/* skill {"name": "args_reorder", "description": "echo order args twice", "kind": "step"} */\n' +
+      'function feasible(facts) { return facts.pinned === "args_reorder" }\n' +
+      'function run(bot, st) { st.n = (st.n || 0) + 1; if (st.n < 2) return "running"; return "failed:count-" + st.count }\n'
+    const { sk } = skills.compile('args_reorder.js', echoSrc, {})
+    sk.reset()
+    const tables = { goal: { MENU: {}, STEP_CRITERIA: {} }, STEP_ORDER: STEP_ORDER.slice(), BEHAVIOURS: {} }
+    skills.registerStep(sk, tables)
+    // One episode across both orders (same step, same gen): do gen_park 2,
+    // then do gen_park 9 while it still runs.
+    const ctx = { stepGen: 7, stepStatus: null, step: 'args_reorder', taskPlanArgs: { step: 'args_reorder', count: 2, by: 'steve' } }
+    tables.BEHAVIOURS.args_reorder(fakeBot(), ctx)
+    assert.equal(ctx.stepStatus, null, 'first tick runs')
+    ctx.taskPlanArgs = { step: 'args_reorder', count: 9, by: 'steve' } // the re-order
+    tables.BEHAVIOURS.args_reorder(fakeBot(), ctx)
+    assert.equal(ctx.stepStatus, null, 'rebuilt on the new args, running again — not terminal on the stale count')
+    tables.BEHAVIOURS.args_reorder(fakeBot(), ctx)
+    assert.equal(ctx.stepStatus, 'failed:count-9', 'the episode carries the new count')
+  })
+
+  it("a skill never inherits another step's args (codex P2)", () => {
+    const echoSrc = '/* skill {"name": "args_other", "description": "echo order args guarded", "kind": "step"} */\n' +
+      'function feasible(facts) { return true }\n' +
+      'function run(bot, st) { return "failed:count-" + st.count + "-by-" + (st.by === null ? "none" : st.by) }\n'
+    const { sk } = skills.compile('args_other.js', echoSrc, {})
+    sk.reset()
+    const tables = { goal: { MENU: {}, STEP_CRITERIA: {} }, STEP_ORDER: STEP_ORDER.slice(), BEHAVIOURS: {} }
+    skills.registerStep(sk, tables)
+    const runIt = (args) => {
+      const ctx = { stepGen: 11, stepStatus: null, step: 'args_other', taskPlanArgs: args }
+      tables.BEHAVIOURS.args_other(fakeBot(), ctx)
+      return ctx.stepStatus
+    }
+    // A degraded pin for another step (the arbiter did not apply it) while
+    // this autonomous skill is picked: it must see nulls, not light's args.
+    assert.equal(runIt({ step: 'light', count: 3, by: 'steve' }), 'failed:count-null-by-none')
+    assert.equal(runIt({ step: 'args_other', count: 3, by: 'steve' }), 'failed:count-3-by-steve')
+    assert.equal(runIt(undefined), 'failed:count-null-by-none')
   })
 })
 

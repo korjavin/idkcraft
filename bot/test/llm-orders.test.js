@@ -561,6 +561,30 @@ describe('llm orders: deterministic do <step> (vf8e.17)', () => {
     assert.equal(ctx.taskPlanStep, 'light')
   })
 
+  it('do with an inherited member name refuses instead of throwing (verifier SECURITY)', async () => {
+    // chatbot ids match [a-z0-9_]+, so constructor/__proto__/toString hit
+    // inherited Object members on a plain lookup — and `.args` of that
+    // threw uncaught in the chat handler, killing the bot.
+    // Chat lowercases the line first, so `do toString` refuses as `tostring`.
+    for (const [said, want] of [['constructor', 'constructor'], ['__proto__', '__proto__'], ['toString', 'tostring']]) {
+      const bot = mockBot()
+      assert.doesNotThrow(() => handleChat(bot, tickerFor(bot), 'P', `do ${said}`), `do ${said} must not throw`)
+      assert.deepEqual(bot.lines, [`no step "${want}" — try: help`], `do ${said}`)
+      assert.ok(!bot._tickerCtx.llmOrder, `do ${said} installs nothing`)
+    }
+    assert.equal(calls.length, 0)
+    // The model path refuses the same way, without throwing (validatePlan
+    // lowercases the id itself).
+    for (const id of ['constructor', '__proto__', 'tostring']) {
+      assert.match(llmOrders.validatePlan({ plan: [{ step: id }] }, llmOrders.workSteps()).error, new RegExp(`no step "${id}"`))
+    }
+    answer = '{"plan":[{"step":"__proto__"}]}'
+    const bot = mockBot()
+    handleChat(bot, tickerFor(bot), 'P', 'plan be evil')
+    await flush()
+    assert.deepEqual(bot.lines, ['I can\'t plan that (no step "__proto__") — try: help'])
+  })
+
   it('do preempts a pending ask: the stale answer never clobbers it', async () => {
     const bot = mockBot()
     const ticker = tickerFor(bot)

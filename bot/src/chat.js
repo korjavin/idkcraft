@@ -304,11 +304,14 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
   const m = /^do\s+([a-z0-9_]+)(?:\s+(\d+))?$/.exec(msg)
   if (!m) { bot.chat('try: do light'); return }
   const id = m[1]
-  if (!llmOrders.ORDER_STEPS[id] && !llmOrders.workSteps().includes(id)) {
+  // Prototype-safe (vf8e.17 verifier): a plain ORDER_STEPS[id] lookup hits
+  // inherited members (`do constructor`), and `.args` of that throws
+  // uncaught in the chat handler. Only own entries count.
+  const order = llmOrders.orderStep(id)
+  if (!order && !llmOrders.workSteps().includes(id)) {
     bot.chat(`no step "${id.slice(0, 20)}" — try: help`)
     return
   }
-  const order = llmOrders.ORDER_STEPS[id]
   // bring/find need an item the `do` grammar cannot carry — point at the
   // verb instead of feeding `bring me undefined` into the executive.
   if (order && order.args.includes('item')) {
