@@ -1,4 +1,6 @@
-# Stuck oracle: the pre-merge gate for movement code
+# Stuck oracle: optional developer tool for movement code
+
+Optional developer tool, not a merge gate (owner 2026-10-20, prod-first: CLAUDE.md "Merge gate").
 
 `stuck-run.sh` + `stuck-replay.js` replay the known prod stuck spots on a
 pristine prod-world snapshot with the REAL bot stack and judge the run
@@ -466,10 +468,9 @@ REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base 
 sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical flow, stuck-baseline.json
 ```
 
-**Merge gate** (CLAUDE.md "v2 merge gate"): v2 PRs run no rig legs; the batch on
-master judges the lay/mine pair, the 90-min castle throughput (cells/90 min,
-house done-seconds, deaths/night) and the v2 stuck-run vs the recorded
-baselines, not on stuck spots. The v2 stuck-run above is a regression check only (not worse).
+**Optional developer tool** (CLAUDE.md "Merge gate", owner 2026-10-20): no rig leg is a merge
+gate and there is no batch run; the lay/mine pair, 90-min castle and v2 stuck-run may be run
+to convince yourself. Judgement is by prod log signals after deploy.
 
 - **Image** (idkcraft-neuc.23, 6x7.28): `client.sh` defaults to
   `idkcraft-baritone:<git rev-parse --short=8 HEAD:baritone>` of the checkout
@@ -1224,7 +1225,7 @@ and the fixture cache without network).
 ### Rig speed: component rigs + `CASTLE_TICK_RATE` (idkcraft-neuc.60)
 
 Two 10-minute component rigs replace "wait 90 min for one noisy castle
-number" for the batch's per-component signal (v2 PRs quote no lines; CLAUDE.md "v2 merge gate"):
+number" as an optional per-component signal (not a gate; CLAUDE.md "Merge gate"):
 
 ```sh
 B="CASTLE_BODY=baritone CASTLE_PADSPOT=250,350 CASTLE_RIG_ID=auto"   # image: client.sh default (tree-hash tag)
