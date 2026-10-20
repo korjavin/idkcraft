@@ -9,7 +9,8 @@ const blueprint = require('../castle')
 const exploreMod = require('./explore')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS } = require('../budget')
-const { gatherFailedHolds } = require('../holds')
+const { gatherFailedHolds, farStartOk, LATE_DAY_TICKS } = require('../holds')
+const { stepFailed, failReason } = require('../step') // oqul.4 twin: status writes go through step.js
 const { countItems } = require('../perception')
 const { say, clearGoal, issueGoal, denyReason, logDeny, protectedReason, inHouseFootprint } = require('./util')
 const buildMod = require('./build')
@@ -41,16 +42,8 @@ const FIND_COUNT = 256 // g0z.12: 70 castle beams must not crowd out the nearest
 // gather) so the arbiter's gohome/shelter takes over. Morning retries resume
 // from the nearer stance (sync-48 or a nearer memory point).
 const FAR_START_BLOCKS = 64 // the bead's number: past it is a walk-out
-// Last sixth of the day reads as near-dusk: a far round trip (walk out,
-// chop a load, walk back) needs most of the daylight.
-const LATE_DAY_TICKS = 10000 // dusk opens at 12000, night past 13000
-function farStartOk(bot) {
-  try {
-    const t = bot && bot.time && bot.time.timeOfDay
-    if (typeof t !== 'number' || !(t >= 0)) return true // no clock: allow
-    return t < LATE_DAY_TICKS
-  } catch (_) { return true }
-}
+// Daylight rule (LATE_DAY_TICKS, farStartOk) lives in holds.js: the dusk
+// hold release reads the same rule with no import cycle.
 // Anchor distance (revmux 01 core-2): a >64-block walk-out is measured from
 // the task anchor (home), not from the body — chained <=64 hops from a far
 // stand and stand-side chops still leave the bot 130+ out at dusk, which is
@@ -359,7 +352,7 @@ function failFinal(bot, ctx, g, logs, final, search = null) {
   // The radius the give-up line names, for the watchdog narration to echo.
   if (final === 'failed:no-trees') g.farRadius = searchRadius(search)
   g.failPos = bodyPos(bot)
-  ctx.stepStatus = g.final
+  stepFailed(ctx, failReason(g.final)) // same string, via step.js (house convention)
   say(bot, finalLine(g, final, search))
   clearGoal(bot, ctx)
 }

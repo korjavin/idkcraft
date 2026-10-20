@@ -216,6 +216,72 @@ describe('gather far walk-out dusk guard (idkcraft-p9lx)', () => {
     assert.equal(bot.calls.setGoal, 1, 'walk re-issued to the stand')
   })
 
+  it('evening refusal releases at dawn from the same spot: morning retry walks out', () => {
+    // Verifier GAP #614: the dusk hold parked gather till relocation, so a
+    // bot refused at home stayed held after dawn. Same ctx, same spot,
+    // same log count — only the clock moves.
+    const bot = mockBot({ timeOfDay: 11000 })
+    const ctx = freshCtx()
+    resources.noteSpots(ctx, [{ x: 120, y: 64, z: 0, name: 'oak_log' }], Date.now())
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:dusk', 'evening refusal first')
+    bot.time = { timeOfDay: 6000 } // dawn, same stance
+    gather(bot, ctx, null, {})
+    // The arbiter owns the 'running' reset on re-pick; the behaviour shows
+    // the release by committing fresh (final cleared, target walked).
+    assert.equal(ctx.gather.final, null, 'dawn releases the dusk hold')
+    assert.ok(ctx.gather.pos, 'target committed on retry')
+    assert.ok(
+      bot.lines.some((l) => /^going for oak_log, 120 blocks away$/.test(l)),
+      `morning walk-out line: ${bot.lines}`,
+    )
+  })
+
+  it('dusk refusal still holds at night from the same spot', () => {
+    const bot = mockBot({ timeOfDay: 11000 })
+    const ctx = freshCtx()
+    resources.noteSpots(ctx, [{ x: 120, y: 64, z: 0, name: 'oak_log' }], Date.now())
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:dusk')
+    bot.time = { timeOfDay: 13000 } // night, same stance
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:dusk', 'no dawn, no release')
+    assert.ok(!bot.lines.some((l) => /^going for /.test(l)), `walk-out line: ${bot.lines}`)
+  })
+
+  it('far stand at 09:59 commits: pins the late-day threshold from below', () => {
+    // Mutating LATE_DAY_TICKS 10000 -> 9000 must fail this test.
+    const bot = mockBot({ timeOfDay: 9999 })
+    const ctx = freshCtx()
+    resources.noteSpots(ctx, [{ x: 120, y: 64, z: 0, name: 'oak_log' }], Date.now())
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running')
+    assert.ok(
+      bot.lines.some((l) => /^going for oak_log, 120 blocks away$/.test(l)),
+      `walk-out line: ${bot.lines}`,
+    )
+  })
+
+  it('far stand at exactly 10000 refuses: pins the strict <', () => {
+    // Mutating farStartOk's `<` to `<=` must fail this test.
+    const bot = mockBot({ timeOfDay: 10000 })
+    const ctx = freshCtx()
+    resources.noteSpots(ctx, [{ x: 120, y: 64, z: 0, name: 'oak_log' }], Date.now())
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:dusk')
+    assert.ok(!bot.lines.some((l) => /^going for /.test(l)), `walk-out line: ${bot.lines}`)
+  })
+
+  it('80-block hop refused late: pins FAR_START_BLOCKS from above', () => {
+    // Mutating FAR_START_BLOCKS 64 -> 100 must fail this test.
+    const bot = mockBot({ timeOfDay: 11000 })
+    const ctx = freshCtx()
+    resources.noteSpots(ctx, [{ x: 80, y: 64, z: 0, name: 'oak_log' }], Date.now())
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'failed:dusk')
+    assert.ok(!bot.lines.some((l) => /^going for /.test(l)), `walk-out line: ${bot.lines}`)
+  })
+
   it('no clock reads as open daylight (fail-open, the old behaviour)', () => {
     const bot = mockBot() // no time field, like the older mocks
     const ctx = freshCtx()
