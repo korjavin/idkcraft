@@ -617,9 +617,12 @@ node bot/tools/skill-loop.js water-climb 6   # key: ANTHROPIC_API_KEY or stash; 
 | water-climb (DUGPIT-BARE, `water_up`) | 3 (1 = network `fetch failed`, 300 s) | 825 s | 16,325 / 18,709 | $0.44 | GREEN |
 | brow-step (S6-LEAD, `dig_step`) | 1 | 388 s | 7,449 / 7,358 | $0.18 | GREEN |
 | night-dig-in (SPAWN-BARE, `shelter`) | 6 | 1203 s | 50,223 / 44,518 | $1.09 | RED |
+| night-dig-in, krup re-run (SPAWN-BARE, `shelter`, facade digIn maneuver) | 1 | 232 s | 6,789 / 1,011 | $0.05 | GREEN |
 
 Result: 2/3 green within 6 attempts, $1.71 for the run above. The whole spike, including
-the pre-fix run and the discarded attempts, cost about $3.86.
+the pre-fix run and the discarded attempts, cost about $3.86. krup follow-up
+(2026-10-20, serial laptop rig): night-dig-in GREEN on attempt 1 with the facade
+digIn maneuver — `SPAWN-BARE true 0 0 false 90 8.8 CLOSED 14s` — 3/3.
 
 The first run, on the runtime as merged, went 0 for 2:
 
@@ -638,14 +641,20 @@ Each gap below is a runtime fix in this PR. All of them are no-ops with `BOT_SKI
 - **Effort.** `effort: high` used the whole 16k max_tokens on thinking (164 s, no answer).
   The defaults are now medium and 32k.
 
-night-dig-in stays RED for a structural reason:
+night-dig-in stayed RED for a structural reason, resolved by krup:
 
 - The hand dig-in uses its own veto (`digInVeto`).
 - The facade `dig` goes through `util.denyReason`. Its `below-feet` self-trap rule refuses
   digging under a walled bot, which is the core move of a dig-in.
 - Attempts 3-6 hit `dig-denied` and then `no-spot`.
 - This spike does not loosen a safety rule for generated code. A step-skill dig-in needs a
-  facade dig-in act first.
+  facade dig-in act first — delivered as `digIn()` (krup), which drives the whole hand
+  maneuver (`recover.digInRun`): spot walk, veto-steered descent, cap. A per-cell
+  veto-guarded dig was tried first and went 6/6 RED on the rig (the model descended
+  to y50 but never composed spot-find + cap inside the 25 s close budget), and a
+  hand-written recipe died instantly on the spawn stone (`undiggable:stone` — the
+  stone stance needs the hand's own walk). The maneuver re-run went GREEN on
+  attempt 1 (`CLOSED 14s`).
 
 Human pipeline cost of the same fixes (git and revmux archives; developer tokens were not
 recorded per bead):
