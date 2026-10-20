@@ -294,7 +294,10 @@ const OPS = {
     let out
     try {
       const st = c.hs.digInSt || (c.hs.digInSt = {})
-      out = require('./behaviours/recover').digInRun(c.bot, c.ctx || {}, st)
+      // vf8e.21: the maneuver's cap leg (equip -> place, unabortable)
+      // carries the episode liveness with it — a dead episode never lands
+      // its cap (the fire() live() shape).
+      out = require('./behaviours/recover').digInRun(c.bot, c.ctx || {}, st, c.alive)
     } catch (_) { out = 'failed:maneuver-error' }
     if (out === 'running') { c.act.busy = 'digIn'; return 'started' }
     c.act.busy = null

@@ -720,6 +720,70 @@ describe('skills: digIn + use ray check (krup)', () => {
   })
 })
 
+describe('skills: digIn cap episode guard (vf8e.21)', () => {
+  const fresh = () => ({ ticks: 0, hs: { busy: null, err: null } })
+  async function fall(bot) {
+    await flush()
+    bot.entity.position = new Vec3(bot.entity.position.x, bot.entity.position.y - 1, bot.entity.position.z)
+  }
+  // Four digIn() calls to the cap, then done: the 5th tick ends the
+  // episode with the cap in flight. The equip gate holds the cap leg on
+  // the await so the test controls which side of the terminal it lands.
+  const QUIT_AT_CAP = 'st.n = (st.n || 0) + 1; ' +
+    'if (st.n <= 4) { const r = bot.digIn(); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-") } ' +
+    'return "done"'
+  function gated(bot) {
+    let release = null
+    const gate = new Promise((r) => { release = r })
+    const equip = bot.equip.bind(bot)
+    bot.equip = async (item, dest) => { await gate; return equip(item, dest) }
+    return () => release()
+  }
+
+  it('a cap whose episode ends mid-flight never lands', async () => {
+    const bot = fakeBot()
+    bot.items = [{ name: 'dirt', count: 3 }]
+    const release = gated(bot)
+    const sk = compiled('digin_capdead', QUIT_AT_CAP)
+    const st = fresh()
+    const ctx = {}
+    assert.equal(sk.tick(bot, ctx, st), 'running') // dig 1
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running') // dig 2
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running') // dig 3
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running') // cap launched, held on the equip
+    assert.equal(sk.tick(bot, ctx, st), 'done') // terminal tick with the cap in flight
+    release()
+    await flush()
+    assert.deepEqual(bot.placed, [], 'a dead episode never lands its cap')
+  })
+
+  it('a cap whose episode is replaced mid-flight never lands', async () => {
+    const bot = fakeBot()
+    bot.items = [{ name: 'dirt', count: 3 }]
+    const release = gated(bot)
+    const sk = compiled('digin_capreplaced',
+      'const r = bot.digIn(); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-")')
+    const st = fresh()
+    let live = true
+    st.alive = () => live // the arbiter's ownership hook, flipped on replace
+    const ctx = {}
+    assert.equal(sk.tick(bot, ctx, st), 'running') // dig 1
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running') // dig 2
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running') // dig 3
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running') // cap launched, held on the equip
+    live = false // the episode is replaced outright: no terminal tick
+    release()
+    await flush()
+    assert.deepEqual(bot.placed, [], 'a replaced episode never lands its cap')
+  })
+})
+
 describe('skills: order-only step skills (vf8e.17)', () => {
   it('stepSkills() reports the loaded step skills, never recover ones', () => {
     assert.deepEqual(skills.stepSkills(), ['broken_step_fixture', 'stroll_fixture'])
