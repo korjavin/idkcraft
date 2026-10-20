@@ -1214,7 +1214,7 @@ function scoreboardLine({ done, total, kit, steps, series, events, fetchS, banke
   for (let i = 1; i < series.length; i++) {
     const a = series[i - 1].done
     const b = series[i].done
-    if (typeof a !== 'number' || typeof b !== 'number') { flush(i - 1); continue }
+    if (typeof a !== 'number' || typeof b !== 'number' || a >= total) { flush(i - 1); continue } // finished: the flat tail is not a stall
     if (b > a) flush(i - 1)
     else if (from == null) from = i - 1
   }
@@ -1225,7 +1225,8 @@ function scoreboardLine({ done, total, kit, steps, series, events, fetchS, banke
   let judge = 'baseline n/a'
   if (kit === 'empty' && baseline && baseline.total > 0) {
     const floor = Math.round((baseline.mean - baseline.spread) / baseline.total * 100)
-    judge = `${pct >= floor ? 'PASS' : 'REGRESSION'} (floor ${floor}% = mean ${baseline.mean} - spread ${baseline.spread} of ${baseline.total})`
+    // judged on cells (scaled), not the rounded percents
+    judge = `${done / total >= (baseline.mean - baseline.spread) / baseline.total ? 'PASS' : 'REGRESSION'} (floor ${floor}% = mean ${baseline.mean} - spread ${baseline.spread} of ${baseline.total})`
   }
   return `scoreboard: ${lead}, ${share}, ${eff}, ${stallTxt}, holes=${holes == null ? '-' : holes}, ${judge}, gates A>=59%@90 B=100%@240`
 }
@@ -2049,7 +2050,8 @@ async function main() {
       s.done = st && st.progress && typeof st.progress.done === 'number' ? st.progress.done : null
       s.total = st && st.progress && typeof st.progress.total === 'number' ? st.progress.total : null
       s.phase = st && st.phase
-      s.holes = st && st.blocked ? Object.keys(st.blocked).length : 0
+      // like holesOf (behaviours/castle.js): current blueprint only, no first-try no-ref
+      s.holes = st && st.blocked ? Object.entries(st.blocked).filter(([k, e]) => k.startsWith(`${st.blueprintVersion}:`) && !(e && e.why === 'no-ref' && e.tries < 2)).length : 0
       s.step = c && c.step
       s.status = c && c.stepStatus
     } catch (_) { /* sample best-effort */ }

@@ -1178,6 +1178,9 @@ describe('castle-replay scoreboardLine (idkcraft-qxql.4)', () => {
     assert.match(l, /holes=3/)
     assert.match(l, /PASS \(floor 23%/)
     assert.match(scoreboardLine({ ...args, done: 400 }), /REGRESSION/)
+    assert.match(scoreboardLine({ ...args, done: 470 }), /REGRESSION/) // rounds to the floor's 23% but is below the min
+    const fin = series.map((s) => ({ ...s, done: 2048 }))
+    assert.match(scoreboardLine({ ...args, done: 2048, series: fin }), /stalls=0/)
   })
   it('seeded kit prints seeded= and no judge; no baseline is n/a', () => {
     const l = scoreboardLine({ ...args, kit: 'seeded' })
