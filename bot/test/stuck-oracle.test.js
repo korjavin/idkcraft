@@ -1030,15 +1030,24 @@ describe('prep arenas (idkcraft-jsf.7)', () => {
     }
     try {
       assert.deepEqual(load(['fill 0 0 0 1 1 1 air', 'setblock 0 0 0 stone'])[0].prep, ['fill 0 0 0 1 1 1 air', 'setblock 0 0 0 stone'])
+      assert.deepEqual(load(['place feature minecraft:oak 0 64 0'])[0].prep, ['place feature minecraft:oak 0 64 0'])
       assert.deepEqual(load(undefined)[0].prep, [])
       for (const bad of [['give @a water_bucket 1'], ['op X'], ['tp X 0 0 0'], [' fill 0 0 0 1 1 1 air'], [7], 'fill 0 0 0 1 1 1 air']) {
-        assert.throws(() => load(bad), /bad prep|fill\/setblock only/, JSON.stringify(bad))
+        assert.throws(() => load(bad), /bad prep|fill\/setblock/, JSON.stringify(bad))
       }
     } finally {
       if (saved === undefined) delete process.argv[2]
       else process.argv[2] = saved
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  it('rcon asserts the place result (a rejected oak fails the trial, never the skill)', () => {
+    const replay = fs.readFileSync(path.join(TOOLS, 'stuck-replay.js'), 'utf8')
+    const at = replay.indexOf("cmd.startsWith('place ')")
+    assert.ok(at >= 0, 'place has an rcon result check')
+    const check = replay.slice(at, at + 120)
+    assert.match(check, /\^Placed/, `start-anchored ("Failed to place" must not match): ${check}`)
   })
 
   it('prep runs after both tps and before the kit', () => {
@@ -1406,12 +1415,12 @@ describe('world verdict for planted things (idkcraft-vf8e.18)', () => {
     .map(([dx, dz]) => cell(dx, 0, dz))
 
   it('10 saplings pitch-2 staggered in a 7x7 verify ok', () => {
-    assert.deepEqual(verifyBlocks(ten(), spec()), { ok: true, found: 10, min: 10, close: 0 })
+    assert.deepEqual(verifyBlocks(ten(), spec()), { ok: true, found: 10, min: 10, close: 0, off: 0 })
   })
 
   it('9 saplings demote: PARTIAL found=9/10', () => {
     const v = verifyBlocks(ten().slice(0, 9), spec())
-    assert.deepEqual(v, { ok: false, found: 9, min: 10, close: 0 })
+    assert.deepEqual(v, { ok: false, found: 9, min: 10, close: 0, off: 0 })
     assert.deepEqual(applyVerify(true, v), { reached: false, note: 'PARTIAL found=9/10 close=0' })
   })
 
@@ -1419,7 +1428,7 @@ describe('world verdict for planted things (idkcraft-vf8e.18)', () => {
     const cells = ten().slice(0, 9)
     cells.push(cell(-2, 0, 1)) // touches (-3,1) only: Chebyshev 1 < gap 2
     const v = verifyBlocks(cells, spec())
-    assert.deepEqual(v, { ok: false, found: 10, min: 10, close: 1 })
+    assert.deepEqual(v, { ok: false, found: 10, min: 10, close: 1, off: 0 })
     assert.deepEqual(applyVerify(true, v), { reached: false, note: 'PARTIAL found=10/10 close=1' })
   })
 
@@ -1428,7 +1437,32 @@ describe('world verdict for planted things (idkcraft-vf8e.18)', () => {
     cells.push(cell(-2, 0, 1))
     cells.push(cell(0, 0, 0, 'stone'))
     cells.push(cell(1, 0, 1, 'dirt'))
-    assert.deepEqual(verifyBlocks(cells, { ...spec(), gap: 1 }), { ok: true, found: 10, min: 10, close: 0 })
+    assert.deepEqual(verifyBlocks(cells, { ...spec(), gap: 1 }), { ok: true, found: 10, min: 10, close: 0, off: 0 })
+  })
+
+  it('a square pitch-2 grid fails the checkerboard: off-lattice counts as fail', () => {
+    // GAP #617: gap>=2 alone passes this (found=16 close=0) — the lattice must reject it.
+    const cells = []
+    for (const dx of [-3, -1, 1, 3]) for (const dz of [-3, -1, 1, 3]) cells.push(cell(dx, 0, dz))
+    const v = verifyBlocks(cells, { ...spec(), min: 10, lattice: 'checkerboard' })
+    assert.equal(v.found, 16)
+    assert.equal(v.close, 0)
+    assert.equal(v.off, 16, 'every square-grid cell is off the checkerboard')
+    assert.deepEqual(applyVerify(true, v), { reached: false, note: 'PARTIAL found=16/10 close=0 off=16' })
+  })
+
+  it('the r=3 checkerboard passes: anchor plus (±2,±2)', () => {
+    const cells = [[-2, -2], [-2, 2], [0, 0], [2, -2], [2, 2]].map(([dx, dz]) => cell(dx, 0, dz))
+    const v = verifyBlocks(cells, { ...spec(), min: 5, lattice: 'checkerboard' })
+    assert.deepEqual(v, { ok: true, found: 5, min: 5, close: 0, off: 0 })
+  })
+
+  it('one off-lattice sapling fails the checkerboard (counted, not ignored)', () => {
+    const cells = [[-2, -2], [-2, 2], [0, 0], [2, -2], [2, 2]].map(([dx, dz]) => cell(dx, 0, dz))
+    cells.push(cell(2, 0, 0)) // even offsets but (1+0) odd: between lattice points
+    const v = verifyBlocks(cells, { ...spec(), min: 5, lattice: 'checkerboard' })
+    assert.deepEqual(v, { ok: false, found: 6, min: 5, close: 0, off: 1 })
+    assert.deepEqual(applyVerify(true, v), { reached: false, note: 'PARTIAL found=6/5 close=0 off=1' })
   })
 
   it('readVerifyCells reads the box only: outside radius/dy never verdict', () => {
@@ -1449,7 +1483,7 @@ describe('world verdict for planted things (idkcraft-vf8e.18)', () => {
       assert.ok(Math.abs(dx) <= 3 && Math.abs(dz) <= 3 && Math.abs(dy) <= 1, `in-box read ${dx},${dy},${dz}`)
     }
     assert.equal(cells.length, 3, '2 saplings + 1 stone')
-    assert.deepEqual(verifyBlocks(cells, { ...spec(), min: 2 }), { ok: true, found: 2, min: 2, close: 0 })
+    assert.deepEqual(verifyBlocks(cells, { ...spec(), min: 2 }), { ok: true, found: 2, min: 2, close: 0, off: 0 })
   })
 
   it('applyVerify only demotes: the chat verdict stays required', () => {
@@ -1483,6 +1517,9 @@ describe('world verdict for planted things (idkcraft-vf8e.18)', () => {
       assert.throws(() => load({ ...order, verify: { ...good, around: 'home' } }), /PARK-1.*around/, 'bad around')
       assert.throws(() => load({ ...order, verify: { ...good, gap: 0 } }), /PARK-1.*gap/, 'gap<1')
       assert.throws(() => load({ ...order, verify: true }), /PARK-1/, 'non-object')
+      assert.deepEqual(load({ ...order, verify: { ...good, lattice: 'checkerboard' } })[0].verify,
+        { ...good, lattice: 'checkerboard' }, 'lattice passes through')
+      assert.throws(() => load({ ...order, verify: { ...good, lattice: 'square' } }), /PARK-1.*lattice/, 'bad lattice value')
     } finally {
       if (saved === undefined) delete process.argv[2]
       else process.argv[2] = saved

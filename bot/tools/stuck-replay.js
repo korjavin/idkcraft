@@ -136,7 +136,11 @@ async function rcon(cmd) {
       // fill/setblock: an unchanged region ("No blocks were filled" / "Could
       // not set the block") is the idempotent re-run, not a failure; an
       // unloaded chunk or an oversized box is.
-      ((cmd.startsWith('fill ') || cmd.startsWith('setblock ')) && !/Successfully filled|No blocks were filled|Changed the block|Could not set the block/.test(out))) {
+      ((cmd.startsWith('fill ') || cmd.startsWith('setblock ')) && !/Successfully filled|No blocks were filled|Changed the block|Could not set the block/.test(out)) ||
+      // place (idkcraft-vf8e.19): success reads Placed "<feature>" at x, y,
+      // z (commands.place.feature.success); failure reads Failed to place
+      // (which also contains "place", so the match is start-anchored).
+      (cmd.startsWith('place ') && !/^Placed "/.test(out))) {
     throw new Error(`rcon failed [${cmd}]: ${out.trim().slice(0, 160)}`)
   }
   return String(stdout)
@@ -236,14 +240,15 @@ function loadSpots() {
     }
     // Rig-built arena (idkcraft-jsf.7): rcon commands run after both tps
     // (chunks loaded) and before the kit, every trial, on the disposable
-    // copy. World edits only — fill/setblock; a give/op/tp here would
-    // smuggle kit or state past the per-spot contract.
+    // copy. World edits only — fill/setblock/place (place grows the
+    // vf8e.19 park oaks); a give/op/tp here would smuggle kit or state
+    // past the per-spot contract.
     let prep = []
     if (s.prep != null) {
       if (!Array.isArray(s.prep) || s.prep.length > 32) throw new Error(`spots[${i}]: bad prep (want <=32 commands)`)
       for (const c of s.prep) {
-        if (typeof c !== 'string' || c.length > 256 || !/^(fill|setblock) /.test(c)) {
-          throw new Error(`spots[${i}]: prep allows fill/setblock only`)
+        if (typeof c !== 'string' || c.length > 256 || !/^(fill|setblock|place) /.test(c)) {
+          throw new Error(`spots[${i}]: prep allows fill/setblock/place only`)
         }
       }
       prep = s.prep.slice()
@@ -452,7 +457,7 @@ function parseVerify(v, i, name) {
   const bad = (why) => { throw new Error(`spots[${i}] (${name}): bad verify (${why})`) }
   if (!v || typeof v !== 'object' || Array.isArray(v)) bad('want {blocks, around, radius, dy, min, gap}')
   for (const k of Object.keys(v)) {
-    if (!['blocks', 'around', 'radius', 'dy', 'min', 'gap'].includes(k)) bad(`unknown key ${JSON.stringify(k)}`)
+    if (!['blocks', 'around', 'radius', 'dy', 'min', 'gap', 'lattice'].includes(k)) bad(`unknown key ${JSON.stringify(k)}`)
   }
   if (!Array.isArray(v.blocks) || v.blocks.length === 0 || v.blocks.length > 64) bad('blocks: non-empty array (<=64)')
   for (const b of v.blocks) {
@@ -470,7 +475,8 @@ function parseVerify(v, i, name) {
   if (!Number.isInteger(v.min) || v.min < 1) bad('min: integer >= 1')
   const gap = v.gap == null ? 2 : v.gap
   if (!Number.isInteger(gap) || gap < 1) bad('gap: integer >= 1')
-  return { blocks: v.blocks.slice(), around: isGoal ? 'goal' : v.around.slice(), radius, dy, min: v.min, gap }
+  if (v.lattice != null && v.lattice !== 'checkerboard') bad('lattice: want "checkerboard"')
+  return { blocks: v.blocks.slice(), around: isGoal ? 'goal' : v.around.slice(), radius, dy, min: v.min, gap, ...(v.lattice ? { lattice: v.lattice } : {}) }
 }
 
 // World read for the plant verdict (idkcraft-vf8e.18): pure over the
@@ -496,6 +502,13 @@ function readVerifyCells(readAt, spec) {
 // every pair of found cells sits at Chebyshev distance >= gap (gap 2 = no
 // two in touching cells, the "trees can grow" rule; gap 1 = any).
 // close = violating pairs.
+// Checkerboard (idkcraft-vf8e.19, GAP #617): with spec.lattice set, every
+// found cell must also sit on the lattice — dx,dz both even with
+// (dx/2+dz/2) even — relative to the box centre (the park anchor).
+// off = violating cells; they count as a fail (ok false), never ignored.
+function onChecker(dx, dz) {
+  return dx % 2 === 0 && dz % 2 === 0 && Math.abs(dx / 2 + dz / 2) % 2 === 0
+}
 function verifyBlocks(cells, spec) {
   const want = new Set(spec.blocks)
   const found = cells.filter((c) => want.has(c.name))
@@ -507,13 +520,17 @@ function verifyBlocks(cells, spec) {
       if (d < gap) close++
     }
   }
-  return { ok: found.length >= spec.min && close === 0, found: found.length, min: spec.min, close }
+  const off = spec.lattice === 'checkerboard' ? found.filter((c) => !onChecker(c.dx, c.dz)).length : 0
+  return { ok: found.length >= spec.min && close === 0 && off === 0, found: found.length, min: spec.min, close, off }
 }
 
 // Honest plant verdict (idkcraft-vf8e.18): pure, unit-tested. The
 // reached-by-chat verdict stays required: verify only demotes.
 function applyVerify(reached, v) {
-  if (reached && v && !v.ok) return { reached: false, note: `PARTIAL found=${v.found}/${v.min} close=${v.close}` }
+  if (reached && v && !v.ok) {
+    const off = v.off || 0
+    return { reached: false, note: `PARTIAL found=${v.found}/${v.min} close=${v.close}` + (off > 0 ? ` off=${off}` : '') }
+  }
   return { reached, note: null }
 }
 
@@ -1157,7 +1174,7 @@ async function main() {
     if (WORKER) {
       try { workerOnline = !!(follower.players && follower.players[WORKER]) } catch (_) { /* sampling best-effort */ }
     }
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(WORKER ? { worker: workerOnline } : {}), ...(plans > 0 ? { plans, planMs, planErr } : {}), ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}), ...(verifyVerdict ? { verifyFound: verifyVerdict.found, verifyMin: verifyVerdict.min, verifyClose: verifyVerdict.close } : {}), ...(s.sabotage ? { sabotage: s.sabotage } : {}) })
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(WORKER ? { worker: workerOnline } : {}), ...(plans > 0 ? { plans, planMs, planErr } : {}), ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}), ...(verifyVerdict ? { verifyFound: verifyVerdict.found, verifyMin: verifyVerdict.min, verifyClose: verifyVerdict.close, verifyOff: verifyVerdict.off } : {}), ...(s.sabotage ? { sabotage: s.sabotage } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}${plans > 0 ? ` plans=${plans} planMs=${planMs} planErr=${planErr}` : ''}`)
     // Bucket spots (idkcraft-jsf.7): water_up must bring both buckets back

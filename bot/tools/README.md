@@ -301,9 +301,10 @@ S6-LEAD by the lost order (`reached`).
   send the bot hunting a second vein 15+ blocks off-terrain — slower and
   flakier, for no extra shaft-loop coverage (the atl.17/atl.20 below-feet
   stance is exercised by the first ore).
-- `prep` (idkcraft-jsf.7): optional list of rcon world edits — `fill`/
-  `setblock` only (no `give`/`op`/`tp`: kit and state stay in the spot
-  contract) — run every trial after both tps (chunks loaded) and before
+- `prep` (idkcraft-jsf.7, `place` idkcraft-vf8e.19): optional list of rcon
+  world edits — `fill`/`setblock`/`place` only (no `give`/`op`/`tp`: kit and
+  state stay in the spot contract) — run every trial after both tps (chunks
+  loaded) and before
   the kit. A failed command exits 2 (`No blocks were filled` is the
   idempotent re-run, not a failure). It builds a fixture the pristine
   map lacks, on the disposable copy only — never on `world.tar`.
@@ -396,13 +397,17 @@ runs) the replay counts wanted `blocks` in the box `|dx|,|dz| <= radius`,
 from the follower's world and demotes a chat-done to `reached: false` with
 note `PARTIAL found=<n>/<min> close=<pairs>` when fewer than `min` stand or
 any pair sits at Chebyshev distance `< gap` (gap 2 = no two in touching
-cells, the "trees can grow" rule; gap 1 = any). The reached-by-chat verdict
+cells, the "trees can grow" rule; gap 1 = any). With `"lattice":
+"checkerboard"` (GAP #617) every wanted cell must also sit on the
+pitch-2 checkerboard relative to the box centre — dx,dz both even with
+(dx/2 + dz/2) even — and an off-lattice cell counts as a fail, never
+ignored (the note gains `off=<k>`). The reached-by-chat verdict
 stays required: `verify` only demotes, never promotes. Order mode only;
 `blocks` must name real blocks, `min >= 1`, `radius <= 16` — anything else
 throws naming the spot. `radius`/`dy`/`gap` default to 3/1/2. The row keeps
-`verifyFound`/`verifyMin`/`verifyClose` next to the note, so the replay
-table and the skill-loop feedback show the demotion (`rowGreen` reads it RED
-with no change).
+`verifyFound`/`verifyMin`/`verifyClose`/`verifyOff` next to the note, so the
+replay table and the skill-loop feedback show the demotion (`rowGreen` reads
+it RED with no change).
 
 ## LLM orders A/B (`llm-order-spots.json`, idkcraft-vf8e.6)
 
@@ -876,6 +881,24 @@ sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orches
   `DUMP` stays required whenever `K>0`. Relative goal dirs resolve from the
   caller's cwd, like `DUMP`; a goal whose `scenario.json` is missing,
   unparsable, or lacks `name` / `skill` / `bead` is skipped, never fatal.
+- Targeted goal (hand-written), e.g. the vf8e.19 park (`bot/tools/goals/park`):
+  `scenario.json` (one entry per spot: same skill, `kind: step`, `sabotage: null`)
+  + `spots.json` (order spots on the vf8e.6 order flat). Run one scenario at a
+  time with the env pair `SKILL_LOOP_SCENARIOS=<dir>/scenario.json` +
+  `SKILL_LOOP_SPOTS=<dir>/spots.json` on the v2 body (`REPLAY_BODY=baritone
+  node tools/skill-loop.js <name> 6` — v1 is deprecated, the prod target is
+  bot2 only): the loop boots its own keeper when `SKILL_LOOP_RIG` is empty,
+  the spots have no baseline entry so `REPLAY_BASELINE_OFF=1` rides along and
+  the replay row decides — `reached` with no page (`call === 0`) is GREEN. GREEN ends with a
+  `PROMOTE:` line (`node tools/skill-promote.js <bead> <work>/skills/<name>.js`);
+  promotion runs by hand in the morning — the generated skill is never
+  committed by the goal PR. The park's lattice is a checkerboard (GAP #617,
+  the owner's call): saplings sit on the pitch-2 grid relative to the park
+  anchor — dx,dz both even — and only on cells with (dx/2 + dz/2) even
+  (diagonal neighbours at (2,2), orthogonal at 4; Chebyshev gap 2 holds),
+  so a plain square pitch-2 grid fails the world verdict. For `do gen_park 4`
+  that is 13 cells on the 9x9 square (the verify box grows to radius 4 so the
+  ±4 ring counts); KIT needs 10 of them standing, GATHER 8.
 - Body: the harvest feeds bot2 stalls by default, so set `CURRICULUM_BODY=baritone`
   for a bot2 night — the keeper, the pre-run and the loop then verify on the v2
   body. Empty (default) is the mineflayer replay. The ledger records the body and
