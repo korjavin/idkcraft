@@ -34,11 +34,12 @@ describe('prkh rig scenario', () => {
     assert.equal(stoneheldAt([]), null)
   })
 
-  // idkcraft-awt9: the dead-quarry water stays below the floor (buried
-  // top at site.y - 1). A top at site.y + 1 flooded the pad surface and
-  // the gate approach, stalling Baritone's chest walk (noPath) so the v2
-  // fence leg failed no-trees without drawing the stocked chest.
-  it('buries the dead-quarry water top below the floor, one column per probe', () => {
+  // idkcraft-awt9: the dead-quarry water sits wholly below the surface
+  // block (top at site.y - 2, surface intact). A top at site.y + 1 flooded
+  // the pad surface and the gate approach, stalling Baritone's chest walk
+  // (noPath) so the v2 fence leg failed no-trees without drawing the
+  // stocked chest.
+  it('buries the dead-quarry water below the surface block, one column per probe', () => {
     const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: blueprint.BLUEPRINT_VERSION }
     const fills = quarryDeadFills(st)
     assert.ok(fills.length > 16, `want quarry sides + pit spots, got ${fills.length}`)
@@ -48,7 +49,7 @@ describe('prkh rig scenario', () => {
       const [, x0, yTop, z0, x1, yBot, z1] = m.map(Number)
       assert.equal(x0, x1, `not a single column: ${cmd}`)
       assert.equal(z0, z1, `not a single column: ${cmd}`)
-      assert.equal(yTop, st.site.y - 1, `water top floods the surface: ${cmd}`)
+      assert.equal(yTop, st.site.y - 2, `water touches the surface block: ${cmd}`)
       assert.equal(yBot, st.site.y - 9, `probe column too short to stay wet: ${cmd}`)
     }
   })

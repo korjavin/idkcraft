@@ -190,19 +190,20 @@ function stoneheldAt(series) {
 // quarry/pit probes die wet-at-probe (aquifer shape, prod castle-8: sides
 // 0/1 unusable) and no stone is ever exposed.
 //
-// idkcraft-awt9: the fill top sits one BELOW the floor (site.y - 1), never
-// above it. A top at site.y + 1 flooded the pad surface and the gate
-// approach (43 columns plus flow): Baritone's chest walk stalled in the
-// water and went noPath while v1 swam through, so the v2 fence leg failed
-// no-trees without ever drawing the stocked chest. The probes still die
-// wet — the top-down scan reads air/dirt first, then the buried water.
-// Pure (unit-tested).
+// idkcraft-awt9: the fill sits wholly BELOW the surface block (top at
+// site.y - 2), never at or above it. A top at site.y + 1 flooded the pad
+// surface and the gate approach (43 columns plus flow): Baritone's chest
+// walk stalled in the water and went noPath while v1 swam through, so the
+// v2 fence leg failed no-trees without ever drawing the stocked chest.
+// The surface block stays intact — no open holes, no flow — and the probes
+// still die wet: the top-down scan reads air/dirt first, then the buried
+// water. Pure (unit-tested).
 function quarryDeadFills(st) {
   const cf = require('../src/behaviours/castlefetch')
   const origins = []
   for (let ring = 0; ring < 2; ring++) for (let s = 0; s < 4; s++) origins.push(cf.quarrySide(st, s, ring))
   for (const o of cf.pitSpots(st)) origins.push(o)
-  return origins.map((o) => `fill ${o.x} ${st.site.y - 1} ${o.z} ${o.x} ${st.site.y - 9} ${o.z} minecraft:water`)
+  return origins.map((o) => `fill ${o.x} ${st.site.y - 2} ${o.z} ${o.x} ${st.site.y - 9} ${o.z} minecraft:water`)
 }
 const QUARRY = process.env.CASTLE_QUARRY || ''
 if (!['', 'dead'].includes(QUARRY) || (QUARRY && SEED !== 'complete')) {
