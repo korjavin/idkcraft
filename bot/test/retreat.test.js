@@ -5,7 +5,7 @@
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
-const { RETREAT_ORDER, feasibleRetreat, chooseRetreat, retreat, pillar, mobPressure, MOB_CROWD_N } = require('../src/behaviours/retreat')
+const { RETREAT_ORDER, feasibleRetreat, chooseRetreat, retreat, pillar, mobPressure, MOB_CROWD_N, rangedNearCount, retreatFallback } = require('../src/behaviours/retreat')
 const { hybridBrain, stubBrain } = require('../src/brain')
 const { createTicker, BEHAVIOURS } = require('../src/index')
 
@@ -124,8 +124,15 @@ describe('mob pressure predicate (neuc.65.7)', () => {
   const st = (over) => ({ bot_health: 20, hostile_distance: 5, nearby_hostiles: 1, ...over })
   const open = { hurtFresh: true, sheltered: false, ordered: false, protectedTarget: false }
 
-  it('ranged hits with no fight fact divert (trident/skeleton shape)', () => {
-    assert.equal(mobPressure(st({ hostile_distance: null, nearby_hostiles: 2 }), open), true)
+  it('ranged hits with no fight fact divert only with a shooter near (revmux 02 core-2)', () => {
+    assert.equal(mobPressure(st({ hostile_distance: null, nearby_hostiles: 2 }), { ...open, rangedNear: 2 }), true)
+  })
+
+  it('hits with no fact and no shooter near do not divert (fall + creeper shape)', () => {
+    // The snap count mixes in creepers/endermen and melee walkers that
+    // fight.js owns — breaking contact blind over a fall or a milling
+    // creeper wastes the escape. Only a nearby shooter justifies it.
+    assert.equal(mobPressure(st({ hostile_distance: null, nearby_hostiles: 2 }), { ...open, rangedNear: 0 }), false)
   })
 
   it('a healthy pack diverts (death-3 shape: 6 near, fact live)', () => {
@@ -144,7 +151,7 @@ describe('mob pressure predicate (neuc.65.7)', () => {
 
   it('no fresh hurt, no divert (old bruises do not route)', () => {
     assert.equal(mobPressure(st({ nearby_hostiles: 6 }), { ...open, hurtFresh: false }), false)
-    assert.equal(mobPressure(st({ hostile_distance: null, nearby_hostiles: 2 }), { ...open, hurtFresh: false }), false)
+    assert.equal(mobPressure(st({ hostile_distance: null, nearby_hostiles: 2 }), { ...open, hurtFresh: false, rangedNear: 2 }), false)
   })
 
   it('no hostiles near, no divert', () => {
@@ -162,6 +169,94 @@ describe('mob pressure predicate (neuc.65.7)', () => {
     assert.equal(mobPressure(null, open), false)
     assert.equal(mobPressure(st({ nearby_hostiles: 6 }), null), false)
     assert.equal(mobPressure(st({ nearby_hostiles: 6 }), {}), false)
+  })
+})
+
+describe('ranged-nearby scan (neuc.65.7 revmux 02 core-2)', () => {
+  function mob(id, name, x, y, z) {
+    return { id, name, type: 'mob', position: pos(x, y, z), isValid: true }
+  }
+
+  it('counts only shooter kinds within 16 (skeleton yes, zombie/creeper/drowned no)', () => {
+    const bot = fieldBot({
+      entities: {
+        1: mob(1, 'skeleton', 14, 64, 0), // shooter at range: counts
+        2: mob(2, 'zombie', 5, 64, 0), // melee walker: fight.js owns it
+        3: mob(3, 'creeper', 6, 64, 0), // snap filler, never shoots
+        4: mob(4, 'drowned', 12, 64, 0), // melee read: no held-item proof of a trident
+        5: mob(5, 'enderman', 10, 64, 0), // snap filler, never shoots
+      },
+    })
+    assert.equal(rangedNearCount(bot), 1)
+  })
+
+  it('counts the full shooter set (pillager/witch/blaze/stray/bogged/ghast)', () => {
+    const bot = fieldBot({
+      entities: {
+        1: mob(1, 'pillager', 15, 64, 0),
+        2: mob(2, 'witch', 15, 64, 1),
+        3: mob(3, 'blaze', 15, 64, 2),
+      },
+    })
+    assert.equal(rangedNearCount(bot), 3)
+  })
+
+  it('ignores beyond-16 shooters, players, and entities without position', () => {
+    const bot = fieldBot({
+      entities: {
+        1: mob(1, 'skeleton', 17, 64, 0), // outside the snap radius
+        2: { id: 2, name: 'skeleton', type: 'player', position: pos(5, 64, 0) },
+        3: { id: 3, name: 'skeleton', type: 'mob', position: null },
+      },
+    })
+    assert.equal(rangedNearCount(bot), 0)
+  })
+
+  it('null-safe: missing bot or entity returns 0', () => {
+    assert.equal(rangedNearCount(null), 0)
+    assert.equal(rangedNearCount({}), 0)
+  })
+})
+
+describe('retreat fallback (neuc.65.7 revmux 02 core-3)', () => {
+  it('pillars directly when the chain declines on a live fight', () => {
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const ctx = freshCtx()
+    const r = retreatFallback(bot, ctx, {})
+    assert.deepEqual(r, { action: 'pillar', source: 'retreat-fallback', model: null })
+    assert.equal(ctx.retreat && ctx.retreat.action, 'pillar')
+    assert.equal(ctx.recovery && ctx.recovery.action, 'pillar_up')
+    assert.ok(bot.calls.chats.some((l) => l.includes('retreating: pillaring up (retreat-fallback)')))
+  })
+
+  it('no scaffold, no fallback (pillar-up cannot run)', () => {
+    const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } })
+    assert.ok(!feasibleRetreat(bot, freshCtx(), STATE).includes('pillar'), 'fixture: pillar infeasible')
+    assert.equal(retreatFallback(bot, freshCtx(), {}), null)
+  })
+
+  it('head blocked, no fallback (consistency with the honest gate)', () => {
+    const ground = new Set()
+    for (let x = -4; x <= 4; x++) {
+      for (let z = -4; z <= 4; z++) ground.add(key(x, 63, z))
+    }
+    ground.add(key(0, 65, 0)) // ceiling over the head
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], solids: ground, entities: { 1: zombie(1, 2, 64, 0) } })
+    assert.ok(!feasibleRetreat(bot, freshCtx(), STATE).includes('pillar'), 'fixture: pillar infeasible')
+    assert.equal(retreatFallback(bot, freshCtx(), {}), null)
+  })
+
+  it('threatened player online: the chain veto stands, no fallback', () => {
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const st = { hostile_near_player: true, distance_to_player: 4 }
+    assert.equal(retreatFallback(bot, freshCtx(), st), null)
+  })
+
+  it('a failed pillar re-arms the chain instead of looping the fallback', () => {
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const ctx = freshCtx()
+    ctx.retreatFailed = 'pillar'
+    assert.equal(retreatFallback(bot, ctx, {}), null)
   })
 })
 
@@ -200,10 +295,13 @@ describe('mob pressure end to end (neuc.65.7)', () => {
     }
   })
 
-  it('ranged hits with no fact: pillars instead of standing (death-2 shape)', async () => {
+  it('ranged hits with no fact: pillars instead of standing (skeleton shape, revmux 02 core-2)', async () => {
+    // Two skeleton archers outside the hostile fact: the ranged shape breaks
+    // contact via pillar. Drowned read melee now (pinned below); their
+    // water-written-off shape routes via underFire, kind-agnostic.
     const bot = fieldBot({
       items: [{ name: 'dirt', count: 5 }],
-      entities: { 1: drowned(1, 10, 64, 0), 2: drowned(2, 11, 64, 0) },
+      entities: { 1: skeleton(1, 10, 64, 0), 2: skeleton(2, 11, 64, 0) },
       health: 20,
     })
     bot.players = {}
@@ -211,6 +309,34 @@ describe('mob pressure end to end (neuc.65.7)', () => {
     try {
       const r = await ticker.tick()
       assert.equal(r.decision.action, 'pillar', `ranged pressure breaks line of sight, got ${r.decision && r.decision.action}`)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('declined chain falls back to pillar on a live fight (revmux 02 core-3)', async () => {
+    // A pack the model declines to escape: the old code fell through to
+    // goal.decide and the bot died standing. A wrong pillar costs ticks; a
+    // wrong stand costs the bot — bias to action when scaffold stands.
+    const bot = fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: { 1: zombie(1, 4, 64, 0), 2: zombie(2, 5, 64, 0), 3: zombie(3, 6, 64, 0) },
+      health: 20,
+    })
+    bot.players = {}
+    const declining = {
+      async decide() { return { action: 'fight', sprint: false, source: 'stub' } },
+      async ask() { return 'no' },
+    }
+    const ticker = createTicker({ bot, brain: declining, tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.home = { built: true, site: { x: 5, y: 64, z: 5 } }
+    ctx.lastHurtAt = Date.now()
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'pillar', `declined chain must bias to pillar, got ${r.decision && r.decision.action}`)
+      assert.ok(bot.calls.chats.some((l) => l.includes('retreating: pillaring up (retreat-fallback)')), `fallback chatted, got: ${bot.calls.chats.join(' | ')}`)
     } finally {
       ticker.destroy()
     }
@@ -286,6 +412,31 @@ describe('low-hp divert (neuc.65.7 leg-1 deaths 1-3)', () => {
     try {
       const r = await ticker.tick()
       assert.equal(r.decision.action, 'retreat', `weak bot breaks contact, got ${r.decision && r.decision.action}`)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('low-hp non-fight tick falls back when the chain declines (stub is silent, revmux 02 core-3)', async () => {
+    // hp<6 with a hostile fact that the stub cannot voice: the brain rests
+    // while the mob chews. A declined chain must still bias to pillar —
+    // the fallback treats lowHp like a live fight.
+    const bot = fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: { 1: zombie(1, 2, 64, 0) },
+      health: 5,
+    })
+    bot.players = {}
+    const declining = {
+      async decide() { return { action: 'rest', sprint: false, source: 'stub' } },
+      async ask() { return 'no' },
+    }
+    const ticker = createTicker({ bot, brain: declining, tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'pillar', `silent weak bot must bias to pillar, got ${r.decision && r.decision.action}`)
+      assert.ok(bot.calls.chats.some((l) => l.includes('retreating: pillaring up (retreat-fallback)')))
     } finally {
       ticker.destroy()
     }

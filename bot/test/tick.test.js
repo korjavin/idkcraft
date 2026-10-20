@@ -1512,6 +1512,33 @@ describe('work mode (epic rw4)', () => {
       }
     })
 
+    it('doorway legs keep their ticks: no pressure divert mid open/enter/close (revmux 02 core-1)', async () => {
+      // A pack chewing the bot AT the door: diverting mid open/enter/close
+      // strands an open door. The gohome walk leg owns door ticks (the walk
+      // leg itself still diverts — death-1 shape), so pressure waits.
+      for (const phase of ['open', 'enter', 'close']) {
+        const bot = nightWalkBot()
+        bot.entities = { 1: zombie(1, 4), 2: zombie(2, 5), 3: zombie(3, 6) }
+        const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+        ticker.work()
+        const ctx = nightWalkCtx(bot)
+        ctx.gohome.phase = phase
+        ctx.lastHurtAt = Date.now()
+        lines.length = 0
+        const origFight = BEHAVIOURS.fight
+        let fightRan = 0
+        BEHAVIOURS.fight = () => { fightRan++ }
+        try {
+          await ticker.tick()
+          assert.equal(fightRan, 1, `phase ${phase}: the fight owns the doorway tick`)
+          assert.ok(!lines.some((l) => l.includes('mob-pressure:') || l.includes('taking-fire:') || l.includes('low-hp:')), `phase ${phase}: no escape divert at the door, got: ${lines.join(' | ')}`)
+        } finally {
+          BEHAVIOURS.fight = origFight
+          ticker.destroy()
+        }
+      }
+    })
+
     it('holds across ticks while the walk re-stamps; logs the edge once', async () => {
       const bot = nightWalkBot()
       bot.entities = { 1: zombie(1, 2), 2: zombie(2, -2), 3: zombie(3, 0) } // 3 adjacent hostiles, brain still says fight
@@ -4480,6 +4507,51 @@ describe('eat reflex', () => {
     const state = { hostile: zombie(1, 1), hostile_distance: 1 }
     const res = eatReflex(bot, ctx, state)
     assert.equal(res, false)
+    assert.equal(bot.consumeCalls, 0)
+  })
+
+  it('unreachable attacker + fresh hurt suppresses the eat (no live fact, revmux 02 core-4)', () => {
+    // Behind walls the hostile fact lapses but the danger stands: arrows
+    // across a gap, or a written-off pursuit id, while the bot still hurts
+    // means the fight is unresolved — the food waits.
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const fresh = { eatInFlight: false, reflexSwung: false, lastHurtAt: Date.now() }
+    assert.equal(eatReflex(bot, fresh, { hostile: null, hostile_reachable: false }), false)
+    assert.equal(bot.consumeCalls, 0)
+  })
+
+  it('written-off pursuit id + fresh hurt suppresses the eat (stale id, revmux 02 core-4)', () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, lastHurtAt: Date.now(), fightGivenUpId: 5 }
+    assert.equal(eatReflex(bot, ctx, { hostile: null }), false)
+    assert.equal(bot.consumeCalls, 0)
+  })
+
+  it('stale hurt + written-off id still eats (resolved fight tops up)', async () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, lastHurtAt: Date.now() - 30000, fightGivenUpId: 5 }
+    assert.equal(eatReflex(bot, ctx, { hostile: null, hostile_reachable: false }), true)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+  })
+
+  it('shelter with no danger still eats (refuge top-up, revmux 02 core-4)', async () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, inShelter: true }
+    assert.equal(eatReflex(bot, ctx, {}), true)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+  })
+
+  it('shelter intruder fight suppresses the eat (combat inside, revmux 02 core-4)', () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, inShelter: true, intruderFight: true }
+    assert.equal(eatReflex(bot, ctx, {}), false)
     assert.equal(bot.consumeCalls, 0)
   })
 

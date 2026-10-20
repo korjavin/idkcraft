@@ -90,6 +90,15 @@ function eatReflex(bot, ctx, state) {
   // ~1hp/4s never outpaces a fight anyway — the fight owns the ticks.
   const hostile = state && state.hostile
   if (hostile && hostile.isValid !== false) return false
+  // Unreachable/intruder suppression (neuc.65.7 revmux 02 core-4): behind
+  // walls the fact lapses but the danger stands — an unreachable fact or a
+  // written-off pursuit id while the bot still hurts means the fight is
+  // unresolved, and an intruder being fought means combat inside the
+  // shelter. New eats wait; the fact-live gate above already covers the
+  // visible fight. Hurt-fresh window matches index HURT_FRESH_MS.
+  const combatHurt = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < 5000
+  if (combatHurt && state && (state.hostile_reachable === false || (ctx && ctx.fightGivenUpId != null))) return false
+  if (ctx.inShelter && ctx.intruderFight) return false
   if (!bot.inventory || typeof bot.inventory.items !== 'function') return false
   let items
   try { items = bot.inventory.items() } catch (_) { return false }

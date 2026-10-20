@@ -478,23 +478,31 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // read any bystander as a protectee. threatensPlayer scans any mob
       // inside the stub's own threat radius (6), not just state.hostile.
       const protectedTarget = threatensPlayer(bot, target)
-      const underFire = !ctx.inShelter && !ctx.lead && !ctx.bring && !protectedTarget &&
+      // Doorway legs (neuc.65.7 revmux 02 core-1): mid open/enter/close the
+      // door stands open — an escape divert then strands it that way. The
+      // walk leg (phase walk) still diverts; only the door ticks wait.
+      const gh = ctx.gohome
+      const doorway = !!gh && (gh.phase === 'open' || gh.phase === 'enter' || gh.phase === 'close')
+      const underFire = !doorway && !ctx.inShelter && !ctx.lead && !ctx.bring && !protectedTarget &&
         state.hostile_reachable === false &&
         typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
       // Mob pressure (neuc.65.7): hits the stub cannot answer with fight —
-      // a ranged barrage (trident/skeleton outside the hostile fact) or a
-      // pack converging on a healthy bot (the hp<6 chain fires too late to
+      // a ranged barrage (a shooter outside the hostile fact) or a pack
+      // converging on a healthy bot (the hp<6 chain fires too late to
       // outrun the DPS race). Routes those fight ticks into the work block
-      // so the divert below breaks contact via the retreat chain.
+      // so the divert below breaks contact via the retreat chain. The
+      // ranged shape needs a shooter near (scanned lazily: only this shape
+      // reads it); the pack shape never does.
       const mobPress = retreatMod.mobPressure(state, {
         hurtFresh, sheltered: ctx.inShelter,
-        ordered: !!(ctx.lead || ctx.bring || ctx.comehome || ctx.gocastle), protectedTarget,
+        ordered: !!(ctx.lead || ctx.bring || ctx.comehome || ctx.gocastle || doorway), protectedTarget,
+        rangedNear: (hurtFresh && state.hostile_distance == null) ? retreatMod.rangedNearCount(bot) : 0,
       })
       if (!hurtFresh) { ctx.underFireLogged = false; ctx.mobPressLogged = false }
       if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert || mobPress)) {
         const held = adoptGate(calledBrain)
         if (held) return held
-        return await workTick(target, state, decision, calledBrain, underFire, nightGraceHold, mobPress)
+        return await workTick(target, state, decision, calledBrain, underFire, nightGraceHold, mobPress, doorway)
       }
       applyDecision(decision, target, state)
       // Non-chain dispatch releases retreat ownership (see goal path).
@@ -1113,7 +1121,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     }
   }
 
-  async function workTick(target, state, decision, calledBrain, underFire, nightGraceHold, mobPress) {
+  async function workTick(target, state, decision, calledBrain, underFire, nightGraceHold, mobPress, doorway) {
     // Retreat chain (1tj): a vetoed follow at low health with a hostile
     // on the bot means the FSM idles and the bot dies standing (gat).
     // 0ay extends it to taking fire from an unreachable hostile (the
@@ -1134,7 +1142,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // no crowd and no ranged shape for mobPress. hp<6 with a hostile fact
     // breaks contact via the chain instead. At hp<6 the stub never answers
     // fight, so no 479 routing is needed — work ticks already land here.
-    const lowHp = !ctx.inShelter && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle &&
+    const lowHp = !doorway && !ctx.inShelter && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle &&
       !threatensPlayer(bot, target) && isHard(state) === 'low-health-hostile'
     if (!lowHp) ctx.lowHpLogged = false
     if (underFire || mobPress || lowHp || retreatHeld) {
@@ -1164,6 +1172,27 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         ctx.step = retreat.action
         applyDecision(rd, target, state)
         return { decision: rd, calledBrain }
+      } else if (decision.action === 'fight' || lowHp) {
+        // Fight fallback (neuc.65.7 revmux 02 core-3): the chain said null
+        // on a live fight — the old fall-through to goal.decide stood and
+        // died. Bias to action: pillar directly when the honest gates
+        // allow (scaffold + headroom); otherwise fall through as before.
+        // Combat ticks only (a fight decision, or hp<6 with a hostile fact
+        // that the stub cannot voice): a healthy non-fight tick keeps the
+        // arbiter's decline (0ay latch), the danger signal is weaker there.
+        const fb = retreatMod.retreatFallback(bot, ctx, state)
+        if (fb) {
+          if (ctx.paused || !ctx.work) {
+            stopOnce()
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+          }
+          console.log('retreat fallback=pillar: chain declined on a live fight, biasing to action')
+          const fd = { action: fb.action, sprint: false, source: fb.source }
+          if (ctx.step !== fb.action) stepMod.nextStepGen(ctx) // oqul.7
+          ctx.step = fb.action
+          applyDecision(fd, target, state)
+          return { decision: fd, calledBrain }
+        }
       }
     }
     const brainFight = decision // lph3: the fight the grace hold preempts (for the fallback below)

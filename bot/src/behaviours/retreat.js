@@ -236,6 +236,9 @@ async function chooseRetreat(brain, bot, ctx, state, now = Date.now()) {
   try {
     const bp = botPos(bot)
     const near = nearestHostile(bot, bp)
+    // Pillar-first vs shooters only (revmux 02 core-2): arrows keep landing
+    // during a run. Drowned read melee here — no held-item read proves a
+    // trident, and the common rig shape is chewing at fact range.
     if (near && RANGED_HOSTILES.has(near.name || '') && names.includes('pillar')) {
       names = ['pillar', ...names.filter((n) => n !== 'pillar')]
     }
@@ -366,21 +369,65 @@ function pillar(bot, ctx) {
 }
 
 // Mob pressure (idkcraft-neuc.65.7): hits the stub cannot answer with fight.
-// A ranged barrage (trident/skeleton outside the 8-block hostile fact) and a
-// pack converging on a healthy bot (facts live, but the hp<6 chain fires too
+// A ranged barrage (a shooter outside the 8-block hostile fact) and a pack
+// converging on a healthy bot (facts live, but the hp<6 chain fires too
 // late to outrun the DPS race) both killed walking/chopping bots in the
-// deforested-home rig with zero response. Hurt + hostiles near + (no fact to
-// fight | crowd) diverts the tick to the chain (index.js), which picks
-// run/pillar/gohome. A single reachable mob keeps fighting; stale hurt,
-// shelter, orders and threatened players keep their ticks. The crowd number
-// is H2's pack size (brain.js isHard).
+// deforested-home rig with zero response. Hurt + hostiles near + (shooter
+// near with no fact to fight | crowd) diverts the tick to the chain
+// (index.js), which picks run/pillar/gohome. A single reachable mob keeps
+// fighting; stale hurt, shelter, orders (incl. gohome doorway legs) and
+// threatened players keep their ticks. The crowd number is H2's pack size
+// (brain.js isHard).
 const MOB_CROWD_N = 3
+// Ranged-nearby scan (neuc.65.7 revmux 02 core-2): the snap count mixes in
+// creepers/endermen/guardians and melee walkers that fight.js owns — none of
+// them justify breaking contact blind. Only true shooter kinds (bow /
+// crossbow / potion / fireball, the RANGED set above) count. Drowned read
+// melee: no held-item read proves a trident, and their written-off water
+// shape already diverts via underFire, kind-agnostic (index.js). Radius 16
+// matches the snap. Best-effort 0.
+const RANGED_SIGHT = 16
+function rangedNearCount(bot) {
+  let n = 0
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp) return 0
+    for (const e of Object.values(bot.entities || {})) {
+      if (!e || e.type === 'player' || !e.position) continue
+      if (!RANGED_HOSTILES.has(e.name || '')) continue
+      let d = null
+      try { d = e.position.distanceTo(bp) } catch (_) { continue }
+      if (typeof d === 'number' && d < RANGED_SIGHT) n++
+    }
+  } catch (_) { /* best-effort 0 */ }
+  return n
+}
 function mobPressure(state, flags) {
   if (!state || !flags || !flags.hurtFresh) return false
   if (flags.sheltered || flags.ordered || flags.protectedTarget) return false
   if (typeof state.nearby_hostiles !== 'number' || state.nearby_hostiles <= 0) return false
-  if (state.hostile_distance == null) return true // ranged: hits, no fact to fight
+  // Ranged: hits with no fact to fight, but only with a shooter near — a
+  // fall or a milling creeper must not break contact (revmux 02 core-2).
+  if (state.hostile_distance == null) return (flags.rangedNear | 0) > 0
   return state.nearby_hostiles >= MOB_CROWD_N // pack: never trade into 3+
 }
 
-module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, HOME_WALK_RANGE, RETREAT_HOLD_MS, RETREAT_RELEASE_HP, RETREAT_RELEASE_DIST, feasibleRetreat, chooseRetreat, retreat, pillar, beginPillar, latchRetreat, latchedAction, retreatLatched, retreatClear, mobPressure, MOB_CROWD_N }
+// Fight fallback (neuc.65.7 revmux 02 core-3): when the chain returns null
+// on a live fight the caller falls through to goal.decide — the old stand-
+// and-die. Bias to action: a wrong pillar costs ticks, a wrong stand costs
+// the bot. Skips the declined stamp (the divert's fresh-hurt/low-hp signal
+// is newer than the decline), but keeps the honest gates — no scaffold or
+// headroom means pillar-up cannot run — the chain veto for a threatened
+// player, and the loop guard (a failed pillar re-arms the chain, never
+// retries here). Returns the pick like chooseRetreat, or null.
+function retreatFallback(bot, ctx, state) {
+  if (ctx && ctx.retreatFailed === 'pillar') return null
+  if (state && state.hostile_near_player && typeof state.distance_to_player === 'number') return null
+  let f = null
+  try { f = facts(bot, ctx) } catch (_) { return null }
+  if (!f) return null
+  if ((f.scaffold || 0) <= 0 || f.headBlocked) return null
+  return pick(bot, ctx, 'pillar', 'retreat-fallback', null)
+}
+
+module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, HOME_WALK_RANGE, RETREAT_HOLD_MS, RETREAT_RELEASE_HP, RETREAT_RELEASE_DIST, feasibleRetreat, chooseRetreat, retreat, pillar, beginPillar, latchRetreat, latchedAction, retreatLatched, retreatClear, mobPressure, MOB_CROWD_N, rangedNearCount, retreatFallback }
