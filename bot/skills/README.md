@@ -132,16 +132,37 @@ only one runs at a time. Poll `status().busy` and `status().err` on later
 ticks.
 
 - `dig(x, y, z)` goes through `util.denyReason`: the protected/foreign-block
-  and self-trap rules every hand dig uses.
+  and self-trap rules every hand dig uses. It cannot dig down once the bot
+  is walled in (the `below-feet` trap rule) — that move is `digIn`.
+- `digIn()` runs the hand dig-in maneuver (`recover.digInRun`), one tick per
+  call: it walks to the nearest hand-diggable column itself when the ground
+  under the body is stone (the stone stance — do not relocate first, just
+  call it where you stand), digs the veto-steered descent, falls in and caps
+  overhead from the dug dirt. `denyReason` stays unchanged; every dig and
+  the cap runs the hand vetoes inside. No arguments. Call it every tick and
+  nothing else until it answers `'done'`: while it runs `dig`/`place`/`use`/
+  `equip` answer `'busy'`, and `goto()`/`control()` would fight the
+  maneuver's own walk to the column and forward steps into the pit. It
+  answers `'started'` while running, `'done'` once the pit is capped, or
+  `'denied:dig-in-<reason>'` when the ground refuses (stone with no dirt
+  column in reach, protected ground, no cap material). Recipe for a night
+  dig-in: call `digIn()` until it answers `'done'`, then `stop()`, release
+  the controls and hold still till dawn (`'done'` when `time()` leaves the
+  night range).
 - `place(x, y, z, item)` places INTO that cell against a solid neighbour. It
   refuses the castle yard ring and apron (`denied:place-protected`) and never
   clicks a GUI block.
-- `use(x, y, z)` uses the held bucket on that cell (look at its centre,
-  then the server's use-item raycast): a held `water_bucket` pours, a held
-  `bucket` scoops a water source. `place()` cannot pour. It refuses any other
-  held item (`denied:not-a-bucket`), a cell farther than 4.5 from the eyes
-  (`denied:out-of-reach`) and the castle yard ring/apron
-  (`denied:use-protected`). `equip` the bucket first.
+- `use(x, y, z)` uses the held bucket on that cell: a held `water_bucket`
+  pours, a held `bucket` scoops a water source. `place()` cannot pour. It
+  refuses any other held item (`denied:not-a-bucket`), a cell farther than
+  4.5 from the eyes (`denied:out-of-reach`) and the castle yard ring/apron
+  (`denied:use-protected`). `equip` the bucket first. A pour aims at a
+  ray-visible solid face INTO the cell (re-verified after the look, since
+  the body moves between the check and the pour) and refuses with
+  `denied:no-face` when no face is visible — the water always lands in the
+  checked cell, never where a stale or occluded server ray lands. A scoop
+  refuses with `denied:ray-miss` when a solid stands between the eyes and
+  the target.
 - `goto(x, y, z, range=1)` sets a pathfinder `GoalNear` on the live Movements
   after `body.movementsFor`. It never builds a new `Movements`. The goal is
   issued under a `skill:` goal key. It is idempotent: the same target with a

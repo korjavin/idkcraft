@@ -15,9 +15,17 @@
 // JSON strings — no host object, function or error ever crosses, so the
 // classic `x.constructor.constructor('return process')` escape has nothing
 // to climb. Every act goes through the hand guards: dig = denyReason
-// (protectedReason + selftrap rules), place = the castle yard/apron refusal
-// and never against a GUI block, goto = body.js movementsFor on the live
-// Movements (never a new one). No toss/drop, no chat.
+// (protectedReason + selftrap rules), digIn = recover.digInRun (the whole
+// hand dig-in maneuver: spot walk, veto-steered descent, cap — every dig
+// and the cap vetted inside, no denyReason loosening), place = the castle
+// yard/apron refusal and never against a GUI block, use = a ray-visible
+// face into the checked cell (never where the server ray lands unchecked),
+// goto = body.js movementsFor on the live Movements (never a new one). No
+// toss/drop, no chat. digIn takes no skill-controlled args and advances one
+// tick per call on per-episode state; while it runs the firing acts
+// (dig/place/use/equip) answer 'busy', a replaced episode's leftover busy
+// releases on its first act, and a terminal tick cancels its dig and drops
+// its walk goal like any hand primitive's.
 // ponytail: node:vm is a guard rail for our own generated code, not a
 // boundary against hostile code; promotion (vf8e.4) keeps revmux review.
 // Known ceiling: no heap cap — a skill allocating GBs inside its 50 ms can
@@ -48,7 +56,102 @@ const KINDS = new Set(['recover', 'step'])
 const BODIES = new Set(['any', 'mineflayer', 'baritone'])
 const CONTROLS = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
 const FACADE_OPS = ['pos', 'blockAt', 'findBlocks', 'inventory', 'count', 'health', 'food', 'time', 'entities', 'status',
-  'dig', 'place', 'use', 'goto', 'stop', 'control', 'lookAt', 'equip']
+  'dig', 'digIn', 'place', 'use', 'goto', 'stop', 'control', 'lookAt', 'equip']
+
+// Standing eye height for the server use-raycast (waterup.js EYE_HEIGHT).
+const EYE_HEIGHT = 1.62
+const USE_REACH = 4.5
+
+function eyePos(bot) {
+  const p = botPos(bot)
+  if (!p) return null
+  return { x: p.x, y: p.y + EYE_HEIGHT, z: p.z }
+}
+
+// First solid cell along the eye->aim ray (waterup.js rayFace: a voxel walk
+// over bot.blockAt, no world-raycast API dependency). Water is transparent,
+// unknown cells read clear. `through` (a {x,y,z} cell) stops the walk with
+// null on entry: the ray reached the checked cell. Returns { x, y, z, face }
+// of entry, or null when the ray reaches the aim inside air.
+function rayWalk(bot, eye, aim, through) {
+  const dir = { x: aim.x - eye.x, y: aim.y - eye.y, z: aim.z - eye.z }
+  const len = Math.hypot(dir.x, dir.y, dir.z)
+  if (len < 1e-6) return null
+  const dx = dir.x / len
+  const dy = dir.y / len
+  const dz = dir.z / len
+  let cx = Math.floor(eye.x)
+  let cy = Math.floor(eye.y)
+  let cz = Math.floor(eye.z)
+  const stepX = dx > 0 ? 1 : -1
+  const stepY = dy > 0 ? 1 : -1
+  const stepZ = dz > 0 ? 1 : -1
+  const tDX = dx !== 0 ? Math.abs(1 / dx) : Infinity
+  const tDY = dy !== 0 ? Math.abs(1 / dy) : Infinity
+  const tDZ = dz !== 0 ? Math.abs(1 / dz) : Infinity
+  let tMX = dx !== 0 ? (stepX > 0 ? cx + 1 - eye.x : eye.x - cx) * tDX : Infinity
+  let tMY = dy !== 0 ? (stepY > 0 ? cy + 1 - eye.y : eye.y - cy) * tDY : Infinity
+  let tMZ = dz !== 0 ? (stepZ > 0 ? cz + 1 - eye.z : eye.z - cz) * tDZ : Infinity
+  for (let i = 0; i < 64; i++) {
+    let t = Infinity
+    let face = [0, 0, 0]
+    if (tMX <= tMY && tMX <= tMZ) { cx += stepX; t = tMX; tMX += tDX; face = [-stepX, 0, 0] }
+    else if (tMY <= tMZ) { cy += stepY; t = tMY; tMY += tDY; face = [0, -stepY, 0] }
+    else { cz += stepZ; t = tMZ; tMZ += tDZ; face = [0, 0, -stepZ] }
+    if (t > len + 1e-4) return null
+    if (through && cx === through.x && cy === through.y && cz === through.z) return null
+    let b = null
+    try { b = bot.blockAt(new Vec3(cx, cy, cz)) } catch (_) { b = null }
+    if (solid(b)) return { x: cx, y: cy, z: cz, face }
+  }
+  return null
+}
+
+// The aimed face pours only when the server ray would first-hit it
+// (waterup.js faceVisible): the eye->face-center ray must enter the ref
+// through that exact face, inside use reach. A backface or a
+// neighbour-occluded face sends the water to a cell the skill never
+// checked — or into an occupied cell, which eats the bucket. The aim sits
+// exactly on the face plane, so the walk runs half a block past it: without
+// the overshoot the ref entry lands at t == len and float noise reads it as
+// past the end.
+function faceVisible(bot, eye, ref, face) {
+  const aim = { x: ref.x + 0.5 + face[0] * 0.5, y: ref.y + 0.5 + face[1] * 0.5, z: ref.z + 0.5 + face[2] * 0.5 }
+  if (Math.hypot(aim.x - eye.x, aim.y - eye.y, aim.z - eye.z) > USE_REACH) return false
+  const len = Math.hypot(aim.x - eye.x, aim.y - eye.y, aim.z - eye.z) || 1
+  const past = {
+    x: aim.x + (aim.x - eye.x) / len * 0.5,
+    y: aim.y + (aim.y - eye.y) / len * 0.5,
+    z: aim.z + (aim.z - eye.z) / len * 0.5,
+  }
+  const hit = rayWalk(bot, eye, past, null)
+  return !!hit
+    && hit.x === ref.x && hit.y === ref.y && hit.z === ref.z
+    && hit.face[0] === face[0] && hit.face[1] === face[1] && hit.face[2] === face[2]
+}
+
+const USE_FACES = [[0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+
+// Solid neighbours of dest with a front face into dest, squarest first
+// (waterup.js faceRefs: a backface normal points away from the eye and can
+// never pour). ref.position is the host Block position, never skill input.
+function pourFaces(bot, dest, eye) {
+  const out = []
+  for (const face of USE_FACES) {
+    let ref = null
+    try { ref = bot.blockAt(new Vec3(dest.x - face[0], dest.y - face[1], dest.z - face[2])) } catch (_) { ref = null }
+    if (!solid(ref) || !ref.position) continue
+    const rp = { x: ref.position.x, y: ref.position.y, z: ref.position.z }
+    const aim = { x: rp.x + 0.5 + face[0] * 0.5, y: rp.y + 0.5 + face[1] * 0.5, z: rp.z + 0.5 + face[2] * 0.5 }
+    const toEye = { x: eye.x - aim.x, y: eye.y - aim.y, z: eye.z - aim.z }
+    const len = Math.hypot(toEye.x, toEye.y, toEye.z) || 1
+    const cos = (face[0] * toEye.x + face[1] * toEye.y + face[2] * toEye.z) / len
+    if (cos <= 0) continue
+    out.push({ ref: rp, face, cos })
+  }
+  out.sort((a, b) => b.cos - a.cos)
+  return out
+}
 
 function enabled(env) {
   const raw = String((env && env.BOT_SKILLS) || '').trim().toLowerCase()
@@ -91,6 +194,10 @@ function solid(b) {
 // replaced, recovery over, terminal tick): an act never lands after that.
 function fire(c, kind, fn) {
   const act = c.act
+  // krup: a replaced episode has no terminal tick, so a maneuver busy it
+  // inherits must not wedge it: the flag belongs to a dead episode when
+  // this one never started a maneuver of its own (hs is per-episode).
+  if (act.busy === 'digIn' && !c.hs.digInSt) act.busy = null
   if (act.busy) return 'busy'
   act.busy = kind
   c.hs.err = null
@@ -164,6 +271,36 @@ const OPS = {
     if (why) { logDeny(b, why); return `denied:${why}` }
     return fire(c, 'dig', (live) => { live(); return c.bot.dig(b) })
   },
+  // Dig-in (krup): the hand dig-in maneuver for generated shelter skills,
+  // driven one tick per call. dig() goes through denyReason, whose
+  // below-feet self-trap rule refuses digging down once the bot is walled
+  // in — the core dig-in move — so the night-dig-in skill could never dig
+  // down, and a per-cell veto-guarded dig proved insufficient on the rig
+  // (6/6 RED: the model descended but never composed spot-find + cap in
+  // budget). digIn() instead advances recover.digInRun on a per-episode
+  // state: walk to the nearest hand-dig column (the hand's stone stance),
+  // veto-steered descent, fall-in, cap from dug dirt. denyReason stays
+  // untouched for generated code; every dig and the cap runs the hand
+  // vetoes (digInVeto incl. protectedReason) inside digInRun. No coords, no
+  // skill-controlled values anywhere near a block. Call it every tick until
+  // it answers 'done' (pitted and capped), then hold still till dawn.
+  // 'started' = maneuver running (call again next tick); any other act
+  // while it runs answers 'busy' (the yvi rule: never two placements).
+  digIn(c) {
+    // No stale-busy release here: entry with busy === 'digIn' proceeds
+    // either way (the release lives in fire(), where a foreign busy
+    // would wedge the episode).
+    if (c.act.busy && c.act.busy !== 'digIn') return 'busy'
+    let out
+    try {
+      const st = c.hs.digInSt || (c.hs.digInSt = {})
+      out = require('./behaviours/recover').digInRun(c.bot, c.ctx || {}, st)
+    } catch (_) { out = 'failed:maneuver-error' }
+    if (out === 'running') { c.act.busy = 'digIn'; return 'started' }
+    c.act.busy = null
+    if (out === 'done') return 'done'
+    return `denied:dig-in-${typeof out === 'string' && out.startsWith('failed:') ? out.slice(7) : 'maneuver-error'}`
+  },
   // Place `item` INTO cell x,y,z against any solid neighbour.
   place(c, x, y, z, item) {
     const cell = { x: Math.floor(num(x)), y: Math.floor(num(y)), z: Math.floor(num(z)) }
@@ -220,14 +357,41 @@ const OPS = {
   // server raycast — waterup.js); place() cannot pour (spike: 6/6 attempts
   // failed no-water-placed). Bucket-only, in reach, never into the castle
   // yard ring/apron (the place() refusal).
+  // krup: the old code aimed at the checked cell's centre but activateItem
+  // pours where the SERVER ray lands — a stale aim (the body falls/swims
+  // between the check and the activate) or an occluded one lands the water
+  // in a cell the skill never checked, or into an occupied cell, which eats
+  // the bucket. A pour now aims at a ray-visible solid face INTO the dest
+  // (waterup.js faceVisible over the live eye) and re-verifies after the
+  // lookAt, refusing instead of pouring unchecked. A scoop refuses when a
+  // solid stands between the eye and the target.
   // ponytail: bucket items only; widen the set when a skill needs another use.
   use(c, x, y, z) {
     const cell = { x: Math.floor(num(x)), y: Math.floor(num(y)), z: Math.floor(num(z)) }
     const held = c.bot.heldItem && c.bot.heldItem.name
     if (held !== 'water_bucket' && held !== 'bucket') return 'denied:not-a-bucket'
     const p = botPos(c.bot)
-    if (!p || Math.hypot(cell.x + 0.5 - p.x, cell.y + 0.5 - (p.y + 1.62), cell.z + 0.5 - p.z) > 4.5) return 'denied:out-of-reach'
+    if (!p || Math.hypot(cell.x + 0.5 - p.x, cell.y + 0.5 - (p.y + EYE_HEIGHT), cell.z + 0.5 - p.z) > USE_REACH) return 'denied:out-of-reach'
     if ((c.ctx.castle && castle.yardRing(c.ctx.castle, cell)) || castle.inCastleApron(c.ctx, cell)) return 'denied:use-protected'
+    const eye = eyePos(c.bot)
+    if (!eye) return 'denied:no-pos'
+    if (held === 'water_bucket') {
+      const picked = pourFaces(c.bot, cell, eye).find((f) => faceVisible(c.bot, eye, f.ref, f.face))
+      if (!picked) return 'denied:no-face'
+      const aim = new Vec3(
+        picked.ref.x + 0.5 + picked.face[0] * 0.5,
+        picked.ref.y + 0.5 + picked.face[1] * 0.5,
+        picked.ref.z + 0.5 + picked.face[2] * 0.5)
+      return fire(c, 'use', async (live) => {
+        live()
+        await c.bot.lookAt(aim, true)
+        live()
+        const eye2 = eyePos(c.bot)
+        if (!eye2 || !faceVisible(c.bot, eye2, picked.ref, picked.face)) throw new Error('ray-miss')
+        c.bot.activateItem()
+      })
+    }
+    if (rayWalk(c.bot, eye, { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 }, cell)) return 'denied:ray-miss'
     return fire(c, 'use', async (live) => {
       live()
       await c.bot.lookAt(new Vec3(cell.x + 0.5, cell.y + 0.5, cell.z + 0.5), true)
@@ -409,10 +573,16 @@ function compile(file, text, env) {
         st.dead = true // an act still in flight never lands (fire live())
         // A started dig finishes on mineflayer's timer: cancel ours (codex 03 P2).
         // ponytail: a replaced episode (no terminal tick) keeps its dig, like a hand primitive's.
-        if (act.busy === 'dig') { try { bot.stopDigging() } catch (_) { /* best-effort */ } }
+        // krup: the dig-in maneuver digs through the same bot.dig timer and
+        // walks under a dig-in-walk goal: both die with the episode, and its
+        // busy unlocks the next episode's acts.
+        if (act.busy === 'dig' || act.busy === 'digIn') {
+          try { bot.stopDigging() } catch (_) { /* best-effort */ }
+          act.busy = null
+        }
         releaseControls(bot)
         // A goal the skill left live dies with it (a stale goal re-wedges: yvi).
-        if (typeof ctx.lastGoalKey === 'string' && ctx.lastGoalKey.startsWith('skill:')) {
+        if (typeof ctx.lastGoalKey === 'string' && (ctx.lastGoalKey.startsWith('skill:') || ctx.lastGoalKey === 'dig-in-walk')) {
           try { clearGoal(bot, ctx) } catch (_) { /* best-effort */ }
         }
         const reason = failReason(out)

@@ -516,6 +516,210 @@ describe('skills: promoted dir (vf8e.4)', () => {
   })
 })
 
+describe('skills: digIn + use ray check (krup)', () => {
+  const fresh = () => ({ ticks: 0, hs: { busy: null, err: null } })
+  // The maneuver advances one digIn() per tick; the fake has no gravity, so
+  // the test falls the body itself after each landed dig.
+  async function fall(bot) {
+    await flush()
+    bot.entity.position = new Vec3(bot.entity.position.x, bot.entity.position.y - 1, bot.entity.position.z)
+  }
+  const relay = 'const r = bot.digIn(); return r === "started" ? "running" : r === "done" ? "done" : "failed:" + r.replace(/:/g, "-")'
+
+  it('digIn runs the hand maneuver to a capped pit', async () => {
+    const bot = fakeBot()
+    bot.items = [{ name: 'dirt', count: 3 }]
+    const sk = compiled('digin_pit', relay)
+    const st = fresh()
+    const ctx = {}
+    assert.equal(sk.tick(bot, ctx, st), 'running') // dig 1
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running') // dig 2
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running') // dig 3
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running') // cap
+    await flush()
+    assert.equal(sk.tick(bot, ctx, st), 'done')
+    assert.deepEqual(bot.dug, ['0,60,0', '0,59,0', '0,58,0'])
+    assert.deepEqual(bot.placed, [{ at: key(0, 60, 0), item: 'dirt' }])
+  })
+
+  it('digIn walks to diggable ground first (stone stance)', async () => {
+    const bot = fakeBot(new Map([[key(0, 60, 0), 'stone']]))
+    const sk = compiled('digin_walk', relay)
+    const st = fresh()
+    const ctx = {}
+    assert.equal(sk.tick(bot, ctx, st), 'running', 'vetoed on stone, walks')
+    assert.equal(ctx.lastGoalKey, 'dig-in-walk')
+    bot.entity.position = new Vec3(-0.5, 61, 0.5) // arrive at the walk target
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    assert.equal(sk.tick(bot, ctx, st), 'running', 'digs the new column')
+    await flush()
+    assert.deepEqual(bot.dug, ['-1,60,0'])
+  })
+
+  it('digIn refuses stone with no dirt column in reach', () => {
+    const cells = new Map()
+    for (let dx = -8; dx <= 8; dx++) for (let dz = -8; dz <= 8; dz++) cells.set(key(dx, 60, dz), 'stone')
+    const bot = fakeBot(cells)
+    const sk = compiled('digin_stone', 'return "failed:" + bot.digIn().replace(/:/g, "-")')
+    assert.equal(sk.tick(bot, {}, fresh()), 'failed:denied-dig-in-undiggable-stone')
+    assert.deepEqual(bot.dug, [])
+    assert.equal(sk.tick(bot, {}, fresh()), 'failed:denied-dig-in-undiggable-stone', 'no stuck busy')
+  })
+
+  it('digIn descends walled-in where dig() refuses (below-feet)', async () => {
+    const walls = new Map([[key(1, 61, 0), 'dirt'], [key(-1, 61, 0), 'dirt'], [key(0, 61, 1), 'dirt'], [key(0, 61, -1), 'dirt']])
+    assert.equal(
+      tick(compiled('walled_dig', 'return "failed:" + bot.dig(0, 60, 0).replace(":", "-")'), fakeBot(walls)),
+      'failed:denied-below-feet', 'denyReason still refuses for generated code')
+    const bot = fakeBot(walls)
+    bot.items = [{ name: 'dirt', count: 3 }]
+    const sk = compiled('walled_maneuver', relay)
+    const st = fresh()
+    const ctx = {}
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    await fall(bot)
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    await flush()
+    assert.equal(sk.tick(bot, ctx, st), 'done')
+    assert.deepEqual(bot.dug, ['0,60,0', '0,59,0', '0,58,0'])
+  })
+
+  it('a maneuver with no cap material fails loudly', async () => {
+    const bot = fakeBot()
+    const sk = compiled('digin_nocap', relay)
+    const st = fresh()
+    const ctx = {}
+    for (let i = 0; i < 3; i++) { assert.equal(sk.tick(bot, ctx, st), 'running'); await fall(bot) }
+    let out = 'running'
+    for (let i = 0; i < 8 && out === 'running'; i++) out = sk.tick(bot, ctx, st)
+    assert.equal(out, 'failed:denied-dig-in-no-cap')
+  })
+
+  it('digIn digs outside the house footprint instead of through the floor', async () => {
+    const home = { site: { x: 0, y: 61, z: 0 }, interior: { min: { x: -2, y: 60, z: -2 }, max: { x: 2, y: 63, z: 2 } } }
+    const bot = fakeBot()
+    const sk = compiled('digin_home', relay)
+    const st = fresh()
+    const ctx = { home }
+    assert.equal(sk.tick(bot, ctx, st), 'running', 'vetoed at home, walks out')
+    assert.equal(ctx.lastGoalKey, 'dig-in-walk')
+    bot.entity.position = new Vec3(-5.5, 61, 0.5) // arrive outside the apron
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    assert.equal(sk.tick(bot, ctx, st), 'running', 'digs the new column')
+    await flush()
+    assert.deepEqual(bot.dug, ['-6,60,0'])
+  })
+
+  it('other acts answer busy mid-maneuver and a terminal tick releases everything', async () => {
+    const bot = fakeBot()
+    bot.items = [{ name: 'cobblestone', count: 4 }]
+    const both = compiled('digin_busy',
+      'const d = bot.digIn(); const r = bot.place(0, 61, 2, "cobblestone"); ' +
+      'return d === "started" && r === "busy" ? "running" : "failed:" + d + "-" + r.replace(/:/g, "-")')
+    assert.equal(both.tick(bot, {}, fresh()), 'running', 'place waits while the maneuver digs')
+    const ender = compiled('digin_end',
+      'st.n = (st.n || 0) + 1; ' +
+      'if (st.n === 1) { bot.digIn(); return "running" } ' +
+      'if (st.n === 2) return "done"; ' +
+      'const r = bot.place(0, 61, 2, "cobblestone"); const d = bot.digIn(); ' +
+      'return r === "started" && d === "busy" ? "running" : "failed:" + r.replace(/:/g, "-") + "-" + d')
+    const st2 = fresh()
+    assert.equal(ender.tick(bot, {}, st2), 'running')
+    assert.equal(ender.tick(bot, {}, st2), 'done')
+    assert.equal(bot.stopped, 1, 'in-flight dig cancelled')
+    await flush()
+    assert.deepEqual(bot.dug, [])
+    assert.equal(ender.tick(bot, {}, fresh()), 'running', 'terminal tick unlocked the acts')
+    await flush()
+    assert.deepEqual(bot.placed, [{ at: key(0, 61, 2), item: 'cobblestone' }])
+  })
+
+  it('a replaced episode does not inherit maneuver busy', async () => {
+    const bot = fakeBot()
+    bot.items = [{ name: 'cobblestone', count: 4 }]
+    const sk = compiled('digin_replaced',
+      'st.n = (st.n || 0) + 1; ' +
+      'if (st.n === 1) { bot.digIn(); return "running" } ' +
+      'if (st.n === 2) { st.r = bot.place(0, 61, 2, "cobblestone"); return "running" } ' +
+      'return "failed:place-" + st.r')
+    assert.equal(sk.tick(bot, {}, fresh()), 'running', 'first episode starts the maneuver')
+    // No terminal tick: the arbiter replaces the episode outright.
+    assert.equal(sk.tick(bot, {}, fresh()), 'running', 'fresh episode keeps running')
+    await flush()
+    assert.equal(sk.tick(bot, {}, fresh()), 'failed:place-started', 'fresh episode fired through the leftover busy')
+    assert.deepEqual(bot.placed, [{ at: key(0, 61, 2), item: 'cobblestone' }])
+  })
+
+  it('a terminal tick drops a live dig-in walk goal', async () => {
+    const bot = fakeBot(new Map([[key(0, 60, 0), 'stone']]))
+    const sk = compiled('digin_walkend', 'st.n = (st.n || 0) + 1; if (st.n === 1) { bot.digIn(); return "running" } return "done"')
+    const st = fresh()
+    const ctx = {}
+    assert.equal(sk.tick(bot, ctx, st), 'running')
+    assert.equal(ctx.lastGoalKey, 'dig-in-walk')
+    assert.ok(bot.pathfinder.goal, 'walk goal live')
+    assert.equal(sk.tick(bot, ctx, st), 'done')
+    assert.equal(bot.pathfinder.goal, null, 'walk goal dropped with the episode')
+    assert.equal(ctx.lastGoalKey, '', 'walk key cleared')
+    await flush()
+  })
+
+  it('a pour aims a ray-visible face into the dest and lands there', async () => {
+    const bot = fakeBot()
+    bot.heldItem = { name: 'water_bucket' }
+    const sk = compiled('pour_face', 'const r = bot.use(1, 61, 0); return r === "started" ? "running" : "failed:" + r.replace(":", "-")')
+    assert.equal(sk.tick(bot, {}, fresh()), 'running')
+    await flush()
+    assert.deepEqual(bot.used, [{ item: 'water_bucket', at: key(1, 61, 0) }])
+    assert.deepEqual(bot.looked, new Vec3(1.5, 61, 0.5), 'aims the verified face, not the cell centre')
+  })
+
+  it('a pour that loses its face after the look never activates', async () => {
+    const bot = fakeBot()
+    bot.heldItem = { name: 'water_bucket' }
+    bot.lookAt = async (p) => { bot.looked = p; bot.entity.position = new Vec3(10.5, 61, 10.5) }
+    const st = fresh()
+    const sk = compiled('pour_stale', 'const r = bot.use(1, 61, 0); return r === "started" ? "running" : "failed:" + r.replace(":", "-")')
+    assert.equal(sk.tick(bot, {}, st), 'running')
+    await flush()
+    assert.deepEqual(bot.used, [], 'no pour on a stale aim')
+    assert.match(st.hs.err || '', /ray-miss/)
+  })
+
+  it('a pour past an occluding wall refuses instead of landing elsewhere', async () => {
+    const bot = fakeBot(new Map([[key(0, 61, 0), 'dirt']]))
+    bot.heldItem = { name: 'water_bucket' }
+    assert.equal(
+      tick(compiled('pour_occl', 'return "failed:" + bot.use(1, 61, 0).replace(":", "-")'), bot),
+      'failed:denied-no-face')
+    await flush()
+    assert.deepEqual(bot.used, [], 'no pour on a refused aim')
+  })
+
+  it('a scoop reaches a clear target but refuses past a wall', async () => {
+    const open = fakeBot(new Map([[key(1, 61, 0), 'water']]))
+    open.heldItem = { name: 'bucket' }
+    const ok = compiled('scoop_ok', 'const r = bot.use(1, 61, 0); return r === "started" ? "running" : "failed:" + r.replace(":", "-")')
+    assert.equal(ok.tick(open, {}, fresh()), 'running')
+    await flush()
+    assert.deepEqual(open.used, [{ item: 'bucket', at: key(1, 61, 0) }])
+    const shut = fakeBot(new Map([[key(1, 62, 0), 'dirt'], [key(2, 61, 0), 'water']]))
+    shut.heldItem = { name: 'bucket' }
+    assert.equal(
+      tick(compiled('scoop_shut', 'return "failed:" + bot.use(2, 61, 0).replace(":", "-")'), shut),
+      'failed:denied-ray-miss')
+    await flush()
+    assert.deepEqual(shut.used, [])
+  })
+})
+
 describe('skills: order-only step skills (vf8e.17)', () => {
   it('stepSkills() reports the loaded step skills, never recover ones', () => {
     assert.deepEqual(skills.stepSkills(), ['broken_step_fixture', 'stroll_fixture'])
