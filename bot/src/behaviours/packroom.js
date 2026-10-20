@@ -172,7 +172,7 @@ function chestSlot(ctx, c) {
     const h = ctx && ctx.home && ctx.home.chest
     if (h && c && c.x === h.x && c.y === h.y && c.z === h.z) return 'home'
     const s = ctx && ctx.castle && ctx.castle.siteChest
-    if (s && c && c.x === s.x && c.y === s.y && c.z === s.z) return 'castle'
+    if (s && c && c.x === s.x && c.y === s.y && c.z === s.z) return 'site'
     const st = ctx && ctx.castle
     if (st && st.site && c && typeof c.x === 'number') {
       if (require('../castle').onSite(st, c, 0, 0)) return 'castle'

@@ -66,7 +66,7 @@ describe('situation text', () => {
     const bot = mockBot()
     const ctx = { chestLast: { castle: { contents: { cobblestone: 64 }, at: Date.now() }, home: { contents: {}, at: Date.now() } } }
     const text = situationText(bot, ctx)
-    assert.match(text, /^chests: castle=\[cobblestone 64\] home=\[empty\]$/m)
+    assert.match(text, /^chests: castle=\[cobblestone 64\] site=\[unknown\] home=\[empty\]$/m)
   })
 
   it('a blocked castle word rides along for the model', () => {
@@ -93,7 +93,11 @@ describe('situation text', () => {
     res = await packroom.withChest(bot, ctx, async () => 'ok', new Vec3(101, 64, 100))
     assert.equal(res.status, 'ok')
     assert.deepEqual(ctx.chestLast.castle.contents, { cobblestone: 64 })
-    assert.match(situationText(bot, ctx), /^chests: castle=\[cobblestone 64\] home=\[cobblestone 64\]$/m)
+    ctx.castle.siteChest = new Vec3(102, 64, 100)
+    res = await packroom.withChest(bot, ctx, async () => 'ok', new Vec3(102, 64, 100))
+    assert.equal(res.status, 'ok')
+    assert.deepEqual(ctx.chestLast.site.contents, { cobblestone: 64 })
+    assert.match(situationText(bot, ctx), /^chests: castle=\[cobblestone 64\] site=\[cobblestone 64\] home=\[cobblestone 64\]$/m)
   })
 
   it('a null-everything ctx yields all-unknown without throwing', () => {

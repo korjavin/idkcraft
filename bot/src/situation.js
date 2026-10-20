@@ -110,8 +110,9 @@ function chestsSection(ctx) {
   try {
     const last = ctx && ctx.chestLast
     const castle = fmtChest(last && last.castle && last.castle.contents) || 'unknown'
+    const site = fmtChest(last && last.site && last.site.contents) || 'unknown'
     const home = fmtChest(last && last.home && last.home.contents) || 'unknown'
-    return `chests: castle=[${castle}] home=[${home}]`
+    return `chests: castle=[${castle}] site=[${site}] home=[${home}]`
   } catch (_) { return 'chests: unknown' }
 }
 
