@@ -9,6 +9,21 @@ const { failReason } = require('./step')
 // REFAIL_DIST of the failure point (failHolds in goal.js reads it too).
 const REFAIL_DIST = 32
 
+// Daylight rule for the far walk-out guard (idkcraft-p9lx): a >64-block
+// leg needs most of the day. Lives here, not in gather.js, so the hold
+// below and the commit guard read one rule with no import cycle (a static
+// cycle detector pins holds<->gather).
+// Last sixth of the day reads as near-dusk: dusk opens at 12000, night
+// past 13000.
+const LATE_DAY_TICKS = 10000
+function farStartOk(bot) {
+  try {
+    const t = bot && bot.time && bot.time.timeOfDay
+    if (typeof t !== 'number' || !(t >= 0)) return true // no clock: allow
+    return t < LATE_DAY_TICKS
+  } catch (_) { return true }
+}
+
 // Shared gather-failure hold (idkcraft-gyw): the behaviour latch and the
 // menu gate above read one rule. A failed gather holds while the log count
 // stands AND the body stays within REFAIL_DIST of the failure point;
@@ -16,9 +31,12 @@ const REFAIL_DIST = 32
 // other wood). Same distance rule as failHolds, one place. An unknown
 // failure point (legacy ctx, missing body) holds: the atl.4 livelock guard
 // stays for everything that never recorded where it failed.
+// A dusk refusal (p9lx) holds for the night, not until relocation —
+// daylight re-releases the step from the same spot.
 function gatherFailedHolds(g, logs, bot) {
   try {
     if (!g || failReason(g.final) === null) return false
+    if (g.final === 'failed:dusk' && g.atLogs === logs && farStartOk(bot)) return false
     if (g.atLogs !== logs) return false
     const fp = g.failPos
     if (!fp || typeof fp.x !== 'number') return true
@@ -30,4 +48,4 @@ function gatherFailedHolds(g, logs, bot) {
   }
 }
 
-module.exports = { REFAIL_DIST, gatherFailedHolds }
+module.exports = { REFAIL_DIST, gatherFailedHolds, farStartOk, LATE_DAY_TICKS }

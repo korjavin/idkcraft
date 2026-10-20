@@ -9,7 +9,8 @@ const blueprint = require('../castle')
 const exploreMod = require('./explore')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS } = require('../budget')
-const { gatherFailedHolds } = require('../holds')
+const { gatherFailedHolds, farStartOk, LATE_DAY_TICKS } = require('../holds')
+const { stepFailed, failReason } = require('../step') // oqul.4 twin: status writes go through step.js
 const { countItems } = require('../perception')
 const { say, clearGoal, issueGoal, denyReason, logDeny, protectedReason, inHouseFootprint } = require('./util')
 const buildMod = require('./build')
@@ -30,6 +31,46 @@ const Vec3 = require('vec3')
 // house, gate the blueprint blocks via movements.blocksCantBreak (bead .4).
 const FIND_RADIUS = 48
 const FIND_COUNT = 256 // g0z.12: 70 castle beams must not crowd out the nearest real trees
+// idkcraft-p9lx: far walk-out dusk guard. A >64-block walk-out started near
+// dusk or at night cannot work a load and return before dark: dusk catches
+// the bot mid-map and the night is sheltered in the open (rig: a day
+// creeper kill 127 blocks out and a night shelter kill 134 out, 8 deaths,
+// never 14 logs — each death wipes the partial load, so beds:no-planks
+// never clears). Distance is anchor-measured (home): far/memory targets
+// past 64 commit only in open daylight, and any walk with body or target
+// past 64 fails out at dusk/night (failFinal clears the goal and holds
+// gather) so the arbiter's gohome/shelter takes over. Morning retries resume
+// from the nearer stance (sync-48 or a nearer memory point).
+const FAR_START_BLOCKS = 64 // the bead's number: past it is a walk-out
+// Daylight rule (LATE_DAY_TICKS, farStartOk) lives in holds.js: the dusk
+// hold release reads the same rule with no import cycle.
+// Anchor distance (revmux 01 core-2): a >64-block walk-out is measured from
+// the task anchor (home), not from the body — chained <=64 hops from a far
+// stand and stand-side chops still leave the bot 130+ out at dusk, which is
+// what killed it in the rig. No anchor (and no body) reads near: allow.
+function anchorDist(bot, ctx, bp, p) {
+  try {
+    if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') return 0
+    let ref = bp
+    try {
+      // Revmux 02 core-2: a world-spawn anchor is no shelter — a homeless
+      // bot measures from the body (round-1 semantics), not from spawn.
+      const a = exploreMod.anchorOf(bot, ctx)
+      if (a && typeof a.x === 'number' && typeof a.z === 'number' &&
+        (a.label === 'home' || a.label === 'castle')) ref = a
+    } catch (_) { /* body fallback */ }
+    if (!ref || typeof ref.x !== 'number' || typeof ref.z !== 'number') return 0
+    return Math.hypot(p.x - ref.x, p.z - ref.z)
+  } catch (_) { return 0 }
+}
+// A >64-block (horizontal, anchor-measured) walk-out that would run in the
+// dark.
+function farLate(bot, ctx, bp, target) {
+  try {
+    if (!target || typeof target.x !== 'number' || typeof target.z !== 'number') return false
+    return anchorDist(bot, ctx, bp, target) > FAR_START_BLOCKS && !farStartOk(bot)
+  } catch (_) { return false }
+}
 const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
 const REISSUE_TICKS = 2 // idle-executor no-displacement ticks before the walk
 // goal is refreshed (idkcraft-6x7.14): the executor stands with ZERO
@@ -311,7 +352,7 @@ function failFinal(bot, ctx, g, logs, final, search = null) {
   // The radius the give-up line names, for the watchdog narration to echo.
   if (final === 'failed:no-trees') g.farRadius = searchRadius(search)
   g.failPos = bodyPos(bot)
-  ctx.stepStatus = g.final
+  stepFailed(ctx, failReason(g.final)) // same string, via step.js (house convention)
   say(bot, finalLine(g, final, search))
   clearGoal(bot, ctx)
 }
@@ -333,6 +374,12 @@ function searchRadius(search) {
 // logs seen but unusable (banned, protected, skipped).
 function finalLine(g, final, search) {
   if (final === 'failed:pack-full') return 'pack full, banking first'
+  // Revmux 02 core-3: the time guard fails out as dusk, not no-trees —
+  // castlefetch marks NO_WOOD on an exact no-trees and the owner would be
+  // told there is no wood. Holds, menus and narration read any failed:
+  // reason generically, so the distinct reason changes nothing but the
+  // wording and the NO_WOOD mark.
+  if (final === 'failed:dusk') return 'too late to walk out for wood'
   if (final !== 'failed:no-trees') return 'cannot reach the trees'
   const radius = searchRadius(search)
   if (radius === 48) return 'no trees within 48 blocks'
@@ -481,9 +528,14 @@ function gather(bot, ctx, target, state) {
       // them into resource memory (persisted like finds) before picking.
       noteFarWood(bot, ctx, bp, search, exclude)
       const hit = r.result && r.result !== 'unknown' ? r.result : null
-      if (hit && hit.position && !exclude(hit.position)) {
+      if (hit && hit.position && !exclude(hit.position) && !farLate(bot, ctx, bp, hit.position)) {
         commitTarget(g, bp, hit.position, hit.name, true)
         say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
+      } else if (hit && hit.position && !exclude(hit.position)) {
+        // p9lx: far stand refused for time — same handoff as an empty
+        // search (the hold parks gather near home till dawn) under its own
+        // reason, so no stranded record and no castlefetch NO_WOOD mark.
+        failFinal(bot, ctx, g, logs, 'failed:dusk')
       } else {
         // Honest word (vmzq.65): unreachable only when a trunk was walked
         // to and struck — the streak counts stall strikes (banned sync
@@ -542,7 +594,12 @@ function gather(bot, ctx, target, state) {
       const mem = names.length > 0
         ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || banned(it) || farReject(bot, ctx, g, bp, it))
         : null
-      if (mem) {
+      if (mem && farLate(bot, ctx, bp, mem)) {
+        // p9lx: remembered stand refused for time — same handoff as an
+        // empty search under its own reason (see the far-search twin).
+        failFinal(bot, ctx, g, logs, 'failed:dusk')
+        return
+      } else if (mem) {
         commitTarget(g, bp, { x: mem.x, y: mem.y, z: mem.z }, mem.name, true)
         say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
       } else {
@@ -572,6 +629,20 @@ function gather(bot, ctx, target, state) {
     say(bot, `chopping ${g.name} ${logs}/${NEED_LOGS}`)
   }
   if (g.phase === 'walk') {
+    // p9lx: a walk-out caught by dusk/night fails out — body or target over
+    // 64 from the anchor in the dark is the death march, not the trip
+    // (revmux 01 core-2: chained hops and stand-side chops, core-3: the
+    // failFinal clears the far goal, so the body stops now instead of
+    // marching on till a later tick). The hold parks gather near the abort
+    // point; the arbiter's gohome/shelter takes over, dawn retries from
+    // the nearer stance. Anchor-near (64 or less both ends) finishes.
+    if (g.pos && !farStartOk(bot) &&
+      (anchorDist(bot, ctx, bp, g.pos) > FAR_START_BLOCKS || anchorDist(bot, ctx, bp, bp) > FAR_START_BLOCKS)) {
+      g.pos = null
+      g.far = false
+      failFinal(bot, ctx, g, logs, 'failed:dusk')
+      return
+    }
     const key = `gather:${g.pos.x},${g.pos.y},${g.pos.z}`
     if (key !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalNear(g.pos.x, g.pos.y, g.pos.z, 2), false)
