@@ -1042,6 +1042,14 @@ describe('prep arenas (idkcraft-jsf.7)', () => {
     }
   })
 
+  it('rcon asserts the place result (a rejected oak fails the trial, never the skill)', () => {
+    const replay = fs.readFileSync(path.join(TOOLS, 'stuck-replay.js'), 'utf8')
+    const at = replay.indexOf("cmd.startsWith('place ')")
+    assert.ok(at >= 0, 'place has an rcon result check')
+    const check = replay.slice(at, at + 120)
+    assert.match(check, /\^Placed/, `start-anchored ("Failed to place" must not match): ${check}`)
+  })
+
   it('prep runs after both tps and before the kit', () => {
     const replay = fs.readFileSync(path.join(TOOLS, 'stuck-replay.js'), 'utf8')
     const at = (needle) => { const i = replay.indexOf(needle); assert.ok(i >= 0, needle); return i }

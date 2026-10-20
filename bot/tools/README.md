@@ -881,10 +881,11 @@ sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orches
   `scenario.json` (one entry per spot: same skill, `kind: step`, `sabotage: null`)
   + `spots.json` (order spots on the vf8e.6 order flat). Run one scenario at a
   time with the env pair `SKILL_LOOP_SCENARIOS=<dir>/scenario.json` +
-  `SKILL_LOOP_SPOTS=<dir>/spots.json` (`node tools/skill-loop.js <name> 6`):
-  the loop boots its own keeper when `SKILL_LOOP_RIG` is empty, the spots have
-  no baseline entry so `REPLAY_BASELINE_OFF=1` rides along and the replay row
-  decides — `reached` with no page (`call === 0`) is GREEN. GREEN ends with a
+  `SKILL_LOOP_SPOTS=<dir>/spots.json` on the v2 body (`REPLAY_BODY=baritone
+  node tools/skill-loop.js <name> 6` — v1 is deprecated, the prod target is
+  bot2 only): the loop boots its own keeper when `SKILL_LOOP_RIG` is empty,
+  the spots have no baseline entry so `REPLAY_BASELINE_OFF=1` rides along and
+  the replay row decides — `reached` with no page (`call === 0`) is GREEN. GREEN ends with a
   `PROMOTE:` line (`node tools/skill-promote.js <bead> <work>/skills/<name>.js`);
   promotion runs by hand in the morning — the generated skill is never
   committed by the goal PR.

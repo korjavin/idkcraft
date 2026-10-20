@@ -136,7 +136,11 @@ async function rcon(cmd) {
       // fill/setblock: an unchanged region ("No blocks were filled" / "Could
       // not set the block") is the idempotent re-run, not a failure; an
       // unloaded chunk or an oversized box is.
-      ((cmd.startsWith('fill ') || cmd.startsWith('setblock ')) && !/Successfully filled|No blocks were filled|Changed the block|Could not set the block/.test(out))) {
+      ((cmd.startsWith('fill ') || cmd.startsWith('setblock ')) && !/Successfully filled|No blocks were filled|Changed the block|Could not set the block/.test(out)) ||
+      // place (idkcraft-vf8e.19): success reads Placed "<feature>" at x, y,
+      // z (commands.place.feature.success); failure reads Failed to place
+      // (which also contains "place", so the match is start-anchored).
+      (cmd.startsWith('place ') && !/^Placed "/.test(out))) {
     throw new Error(`rcon failed [${cmd}]: ${out.trim().slice(0, 160)}`)
   }
   return String(stdout)
