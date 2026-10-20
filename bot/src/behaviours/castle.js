@@ -240,7 +240,21 @@ function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 
 // instead of holding the moat and 'complete' forever. ~35 min of rare
 // retries first (backoffs 30s..600s), covering a play session in which the
 // owner might clear the cell. Rebuild (cancel + build) un-retires.
+// Bounded retry (vmzq.27 revmux 01): after this many blocks the hole
+// (see blockCell) retires.
 const MAX_HOLE_TRIES = 8
+// Builder refusals (idkcraft-synq, revmux 01 core-3): a 'build-miss' block
+// means Baritone refused the cell in STRIKES consecutive batches with
+// material on hand on the layer it was laying (strikeMisses). There is
+// nothing a retry would heal that three refusals did not already test, so
+// the cell retires on its first block — one build-miss line ever, still
+// reported by holesOf/sayHoles; a rebuild (cancel + build) un-retires.
+// 'build-miss-wide' is the batch-wide wedge fallback (revmux 03): not
+// cell-specific, so it rides the ordinary 8-try ladder instead.
+const BUILD_MISS_TRIES = 1
+// A strike set bigger than this is a batch-wide wedge, not cell-specific
+// evidence (revmux 03 core-1) — a wedged body refuses every cell alike.
+const STRIKE_WIDE_CAP = 8
 
 function bodyPos(bot) {
   const p = bot.entity && bot.entity.position
@@ -254,8 +268,9 @@ function blockCell(ctx, st, c, why, now) {
   e.until = now + backoffMs(e.tries)
   e.why = String(why)
   // Bounded retry (revmux 01): the MAX_HOLE_TRIES-th block retires the
-  // hole — still reported, never picked or waited on again.
-  if (e.tries >= MAX_HOLE_TRIES) e.retired = true
+  // hole — still reported, never picked or waited on again. Builder
+  // refusals retire faster (idkcraft-synq BUILD_MISS_TRIES above).
+  if (e.tries >= (why === 'build-miss' ? BUILD_MISS_TRIES : MAX_HOLE_TRIES)) e.retired = true
   st.blocked[k] = e
   ctx.castleFails = null
   ctx.castleCell = null
@@ -2049,21 +2064,43 @@ function takeName(h) {
 function castleBuilderCells(bot, ctx, st) {
   try {
     if (!st || !st.site || st.phase === 'prep') return null
-    const { cells } = blueprint.absPlan(st.site, st.rot | 0, st.blueprintVersion)
+    const { cells, at } = blueprint.absPlan(st.site, st.rot | 0, st.blueprintVersion)
     const blocked = st.blocked || {}
+    const now = Date.now()
     const held = {}
+    const batched = new Set()
     const out = []
-    for (const c of cells) {
+    // Bottom-up (idkcraft-synq): plan order interleaves tower tops ahead
+    // of their stand floors (dy14 stone idx~1039 before dy2 walls idx~1193
+    // and dy8-11 planks floors idx~1460+), so a plan-ordered batch asks
+    // Baritone for cells whose floor is still unlaid — and possibly unheld,
+    // hence never in the same batch. The layers skip, the same cells miss
+    // every pass (build-miss), and the 90 s watchdog stalls the whole
+    // batch. Select lowest-first, like the tower's own lay order.
+    const order = cells.map((c, i) => i).sort((a, b) => (cells[a].y - cells[b].y) || (a - b))
+    for (const i of order) {
+      const c = cells[i]
       if (out.length >= CASTLE_BUILDER_BATCH) break
       if (!CASTLE_BUILDER_KINDS.has(c.kind) || c.prep) continue
       if (done(bot, c)) continue
       const b = blocked[bkey(st, c.idx)]
-      if (b && (b.retired || b.until > Date.now())) continue
+      if (b && (b.retired || b.until > now)) continue
+      // Stand-floor gate (idkcraft-synq): a cell whose plan cell below is
+      // an unlaid place target that is NOT itself in this batch (unheld
+      // kind, or blocked/backing off) stays out — batching it can only end
+      // in a skipped layer and a strike. It falls through to the per-cell
+      // path, which names the missing floor (failed:no-<kind> fetch word)
+      // instead of wedging the builder; once the floor lays, the cell
+      // batches. Below-supports are only ever stone/planks/frame (never
+      // door/stairs), so no deferral deadlock.
+      const below = at.get(`${c.x},${c.y - 1},${c.z}`)
+      if (below && blueprint.isPlaceTarget(below.kind) && !done(bot, below) && !batched.has(below.idx)) continue
       // Held kinds only: an unheld kind falls through to work()'s material
       // path (failed:no-<kind>) so castlefetch fetches it as today.
       if (held[c.kind] === undefined) held[c.kind] = heldStacks(bot, c.kind, usable(bot, c.kind, ctx), ctx)
       const block = takeName(held[c.kind])
       if (!block) continue
+      batched.add(c.idx)
       out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, idx: c.idx, block })
     }
     if (out.length === 0) return null
@@ -2113,13 +2150,40 @@ function castleBuilderBatch(bot, ctx, st, c) {
   // idx only, so two refused cells would reset each other forever. At
   // STRIKES the cell enters the usual backoff/retire machinery instead of
   // re-batching forever. Starved misses fetch, never strike.
+  // Synq core-1 (revmux 02/03): strike only the layer Baritone was on.
+  // The builder lays bottom-up inside the batch, so the lowest unfinished
+  // batch layer is the one it attempted; higher layers — even with their
+  // floors long laid — are collateral of the stall and must not burn the
+  // one-shot build-miss ladder. Starved kinds never strike. A batch-wide
+  // wedge (more than a handful striking at once — a wedged body or a cold
+  // cache refuses every cell alike) is not cell-specific evidence either:
+  // it falls back to the ordinary backoff ladder under a distinct why, so
+  // a transient cannot permanently retire a whole course, while a truly
+  // dead layer still retires through it.
   const strikeMisses = () => {
     try {
       if (!st.batchStrikes || typeof st.batchStrikes !== 'object') st.batchStrikes = {}
       const now = Date.now()
+      let lowY = Infinity
       for (const o of flightCells) {
         if (done(bot, o)) { delete st.batchStrikes[bkey(st, o.idx)]; continue }
+        if (o.y < lowY) lowY = o.y
+      }
+      const set = []
+      for (const o of flightCells) {
+        if (done(bot, o)) continue
+        if (o.y !== lowY) continue
         if (usable(bot, o.kind, ctx) <= 0) continue
+        set.push(o)
+      }
+      if (set.length > STRIKE_WIDE_CAP) {
+        for (const o of set) {
+          delete st.batchStrikes[bkey(st, o.idx)]
+          blockCell(ctx, st, o, 'build-miss-wide', now)
+        }
+        return
+      }
+      for (const o of set) {
         const k = bkey(st, o.idx)
         const n = (st.batchStrikes[k] = (st.batchStrikes[k] | 0) + 1)
         if (n >= STRIKES) {
@@ -2133,8 +2197,16 @@ function castleBuilderBatch(bot, ctx, st, c) {
     bot.buildCells(name, batch.origin, flightCells.map((o) => ({
       dx: o.x - st.site.x, dy: o.y - st.site.y, dz: o.z - st.site.z, block: o.block,
     })), { forbid, isSame: castleSame }).then(
-      () => {
+      (res) => {
         ctx.castleBuildFlight = false
+        // Placed growth resets suspicion (revmux 03 core-1): strikes count
+        // CONSECUTIVE no-progress refusals — a batch that laid anything
+        // proves the builder is reaching its layer, so old strikes drop
+        // and only this batch's misses strike below.
+        if (res && typeof res.placed === 'number' && res.placed > 0 &&
+          st.batchStrikes && typeof st.batchStrikes === 'object') {
+          for (const k of Object.keys(st.batchStrikes)) delete st.batchStrikes[k]
+        }
         // A starved resolve fetches more material and retries the whole
         // batch — it never strikes (round-2 core-2): the misses were not
         // attempted, and a stale preemption must not poison live cells.
@@ -2168,7 +2240,18 @@ function castleBuilderBatch(bot, ctx, st, c) {
           ctx.castleBuildFlight = false
           return
         }
-        if (err && err.message === 'build-stall' && gen === stepGen(ctx)) strikeMisses()
+        if (err && err.message === 'build-stall' && gen === stepGen(ctx)) {
+          // Growth reset (codex P2 on PR #631): the watchdog fires 90 s
+          // after the LAST placement, so a rejected batch may still have
+          // laid cells. Strikes count consecutive no-progress refusals —
+          // any cell this batch placed clears the stale suspicion before
+          // this batch's misses strike below.
+          if (flightCells.some((o) => { try { return done(bot, o) } catch (_) { return false } }) &&
+            st.batchStrikes && typeof st.batchStrikes === 'object') {
+            for (const k of Object.keys(st.batchStrikes)) delete st.batchStrikes[k]
+          }
+          strikeMisses()
+        }
         settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
       },
     )
@@ -2343,6 +2426,8 @@ module.exports = castle
 module.exports.holesOf = holesOf
 module.exports.sayHoles = sayHoles
 module.exports.MAX_HOLE_TRIES = MAX_HOLE_TRIES
+module.exports.BUILD_MISS_TRIES = BUILD_MISS_TRIES
+module.exports.STRIKE_WIDE_CAP = STRIKE_WIDE_CAP
 module.exports.guardCastle = guardCastle
 module.exports.backoffMs = backoffMs
 module.exports.STRIKES = STRIKES
