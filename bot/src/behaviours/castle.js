@@ -2240,7 +2240,18 @@ function castleBuilderBatch(bot, ctx, st, c) {
           ctx.castleBuildFlight = false
           return
         }
-        if (err && err.message === 'build-stall' && gen === stepGen(ctx)) strikeMisses()
+        if (err && err.message === 'build-stall' && gen === stepGen(ctx)) {
+          // Growth reset (codex P2 on PR #631): the watchdog fires 90 s
+          // after the LAST placement, so a rejected batch may still have
+          // laid cells. Strikes count consecutive no-progress refusals —
+          // any cell this batch placed clears the stale suspicion before
+          // this batch's misses strike below.
+          if (flightCells.some((o) => { try { return done(bot, o) } catch (_) { return false } }) &&
+            st.batchStrikes && typeof st.batchStrikes === 'object') {
+            for (const k of Object.keys(st.batchStrikes)) delete st.batchStrikes[k]
+          }
+          strikeMisses()
+        }
         settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
       },
     )

@@ -80,6 +80,11 @@ function mockBot(world, { items = KIT, withBuilder = true, buildScript = 'ok' } 
         for (const c of half) world.set(origin.x + c.dx, origin.y + c.dy, origin.z + c.dz, c.block)
         return { placed: half.length, missing: cells.length - half.length }
       }
+      if (buildScript === 'stall-after-partial') { // laid half, then wedged
+        const half = cells.slice(0, Math.ceil(cells.length / 2))
+        for (const c of half) world.set(origin.x + c.dx, origin.y + c.dy, origin.z + c.dz, c.block)
+        throw new Error('build-stall')
+      }
       for (const c of cells) world.set(origin.x + c.dx, origin.y + c.dy, origin.z + c.dz, c.block)
       return { placed: cells.length, missing: 0 }
     }
@@ -483,6 +488,26 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     }
     const left = Object.values(ctx.castle.batchStrikes || {})
     assert.ok(left.every((n) => n <= 1), `strikes reset by growth: ${JSON.stringify(ctx.castle.batchStrikes)}`)
+  })
+
+  it('a stall after placement resets stale strikes: no retire on progress', async () => {
+    const world = makeWorld()
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    const open = plan.filter((c) => c.kind === 'stone').slice(0, 2)
+    paintAll(world, { except: (c) => open.includes(c) })
+    const bot = mockBot(world, { buildScript: 'stall-after-partial' })
+    bot.entity.position = { x: open[0].x + 2.5, y: open[0].y, z: open[0].z + 0.5 }
+    const ver = blueprint.blueprintOf(3).version
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    // Two stale strikes behind each cell; the batch lays one, then wedges.
+    ctx.castle.batchStrikes = Object.fromEntries(open.map((c) => [`${ver}:${c.idx}`, 2]))
+    await run(bot, ctx, 1)
+    assert.equal(ctx.stepStatus, 'failed:build-stall', 'the stall still fails the step')
+    for (const c of open) {
+      assert.ok(!ctx.castle.blocked[`${ver}:${c.idx}`], `${c.idx} not blocked after a growing batch`)
+    }
+    const left = Object.values(ctx.castle.batchStrikes || {})
+    assert.ok(left.length > 0 && left.every((n) => n <= 1), `strikes reset by growth: ${JSON.stringify(ctx.castle.batchStrikes)}`)
   })
 
   it('a batch-wide wedge rides the backoff ladder, never the one-shot', async () => {
