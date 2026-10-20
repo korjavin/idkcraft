@@ -96,7 +96,9 @@ describe('qxql.13 day shelter', () => {
   // table-unreachable, gocastle fails cannot-reach-castle. The kind parks
   // in the per-kind hold and the stall sheds to day work, never shelter.
   it('wood-starved stall parks the kind and sheds to day work', async () => {
-    const bot = testBot({ timeOfDay: 6000 })
+    // Displaced like prod (bot ~140 out, site-far) so gocastle is feasible
+    // before it fails — otherwise the failure stamps nothing that gates.
+    const bot = testBot({ timeOfDay: 6000, at: pos(-140, 64, -30) })
     const ctx = castleCtx({ site: pos(500, 64, 500), built: true })
     const facts = goalFacts(bot, ctx)
     assert.equal(facts.time, 'day')
@@ -118,13 +120,13 @@ describe('qxql.13 day shelter', () => {
     ctx.step = 'gocastle'
     ctx.stepStatus = 'failed:cannot-reach-castle'
     const d = await decide(bot, ctx)
-    // An idle shed (shelter/rest/stay/idle) is the bead's complaint; the
-    // stall must shed to work. (Here: explore — gather's castle-chop
-    // clause yields while the kind is held, the built home is not
-    // blocked, so the bounded spiral is the work.)
+    // An idle shed is the bead's complaint, and re-picking a just-failed
+    // step is the livelock: the stall must shed to other work. (Here:
+    // explore — gather's castle-chop clause yields while the kind is
+    // held, the built home is not blocked, so the bounded spiral runs.)
     assert.ok(
-      !['shelter', 'rest', 'stay', 'idle'].includes(d.action),
-      `stall must shed to work, got ${d.action}`,
+      !['gocastle', 'castlefetch', 'shelter', 'rest', 'stay', 'idle'].includes(d.action),
+      `stall must shed to other work, got ${d.action}`,
     )
   })
 })
