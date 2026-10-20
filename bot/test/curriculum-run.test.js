@@ -59,7 +59,7 @@ function runNight(t, opts = {}) {
   const env = {
     ...process.env,
     CURRICULUM_NO_KEEPER: '1',
-    CURRICULUM_K: String(opts.k || 1),
+    CURRICULUM_K: String(opts.k === undefined ? 1 : opts.k),
     CURRICULUM_DIR: t.dir,
     CURRICULUM_PRERUN: t.prerun,
     CURRICULUM_LOOP: t.loop,
@@ -71,6 +71,7 @@ function runNight(t, opts = {}) {
     FAKE_ENV: t.seen,
   }
   if (opts.body) env.CURRICULUM_BODY = opts.body
+  if (opts.goals) env.CURRICULUM_GOALS = opts.goals
   if (opts.seed) fs.writeFileSync(path.join(t.dir, 'curriculum-ledger.json'), JSON.stringify(opts.seed, null, 1))
   const cwd = opts.cwd || BOT
   const script = opts.script || 'tools/curriculum.sh'
@@ -389,5 +390,162 @@ describe('skill-loop curriculum env (idkcraft-vf8e.10)', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('curriculum.sh hand-written goals (idkcraft-vf8e.20)', () => {
+  const NOPAGE = path.join(__dirname, 'fixtures', 'curriculum-dump-nopage.txt')
+
+  // A goal dir as bot/tools/goals/park will hold it (vf8e.19): scenario.json
+  // + spots.json in propose() shape. Built in tmp: goals/park may not exist.
+  function makeGoal(dir, name = 'park') {
+    const g = path.join(dir, name)
+    fs.mkdirSync(g, { recursive: true })
+    fs.writeFileSync(path.join(g, 'scenario.json'), JSON.stringify([{
+      name, spot: `GOAL-${name}`, sabotage: null, skill: 'gen_park',
+      bead: 'idkcraft-vf8e.19', kind: 'recover',
+      task: 'hand-written curriculum goal: park the bot without paging',
+    }], null, 1) + '\n')
+    fs.writeFileSync(path.join(g, 'spots.json'), JSON.stringify([{
+      name: `GOAL-${name}`, spawn: [59.5, 64, -205.5], goal: [62.5, 64, -205.5],
+      secs: 90, scaffold: 64, pickaxe: true, bead: 'idkcraft-vf8e.19',
+    }], null, 1) + '\n')
+    return g
+  }
+
+  it('record accepts a GOAL-* key with no harvest entry (count falls back to 0)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curriculum-unit-'))
+    const saved = process.env.CURRICULUM_DIR
+    process.env.CURRICULUM_DIR = dir
+    const log = console.log
+    console.log = () => {}
+    try {
+      assert.equal(CURRICULUM.main(['record', 'GOAL-park', 'RED']), 0)
+    } finally {
+      console.log = log
+      if (saved === undefined) delete process.env.CURRICULUM_DIR
+      else process.env.CURRICULUM_DIR = saved
+    }
+    try {
+      const e = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum-ledger.json'), 'utf8'))['GOAL-park']
+      assert.deepEqual([e.verdict, e.reds, e.count], ['RED', 1, 0])
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a goal runs through the same block: GOAL-<name> ledger row, copied files, PROMOTE on GREEN', () => {
+    const t = setup()
+    const g = makeGoal(t.dir)
+    const r = runNight(t, { dump: NOPAGE, goals: g, gate: 'red', loopMode: 'green', cost: '0.50' })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, /CURRICULUM GOAL-park RED: gate:/)
+    assert.match(r.out, /CURRICULUM GOAL-park GREEN attempts=2 cost=\$0\.50/)
+    assert.match(r.out, /PROMOTE: node tools\/skill-promote\.js idkcraft-vf8e\.19 .*GOAL-park\/loop\/skills\/gen_park\.js/)
+    assert.match(r.out, /tried=1 green=1 red=0 skipped=0 cost=\$0\.50/)
+    const e = ledger(t)['GOAL-park']
+    assert.deepEqual([e.verdict, e.cost, e.attempts], ['GREEN:unpromoted', 0.5, 2])
+    // The loop saw the copies under $WORK, never the source dir.
+    const copied = path.join(t.dir, 'GOAL-park')
+    assert.equal(fs.readFileSync(path.join(copied, 'scenario.json'), 'utf8'), fs.readFileSync(path.join(g, 'scenario.json'), 'utf8'))
+    assert.equal(fs.readFileSync(path.join(copied, 'spots.json'), 'utf8'), fs.readFileSync(path.join(g, 'spots.json'), 'utf8'))
+    const seen = fs.readFileSync(t.seen, 'utf8')
+    assert.ok(seen.includes(`SCN=${copied}/scenario.json`), `loop scenarios at the copy:\n${seen}`)
+    assert.ok(seen.includes(`SPOTS=${copied}/spots.json`), `loop spots at the copy:\n${seen}`)
+    assert.equal(fs.readFileSync(t.marker, 'utf8').trim(), 'park')
+  })
+
+  it('goals run before harvested picks', () => {
+    const t = setup()
+    const g = makeGoal(t.dir)
+    const r = runNight(t, { goals: g, gate: 'red', loopMode: 'green' })
+    assert.equal(r.rc, 0)
+    const m = /CURRICULUM ([0-9a-f]{8}) RED:/.exec(r.out)
+    assert.ok(m, `a harvested signature also ran:\n${r.out}`)
+    assert.ok(r.out.indexOf('CURRICULUM GOAL-park') !== -1 && r.out.indexOf('CURRICULUM GOAL-park') < r.out.indexOf(m[0]))
+    assert.match(r.out, /tried=2 green=2 red=0 skipped=0 cost=\$1\.00/)
+  })
+
+  it('the $ cap refuses to start the goal (exit 3)', () => {
+    const t = setup()
+    const g = makeGoal(t.dir)
+    const seed = { old: { date: daysAgo(0), verdict: 'RED', attempts: 6, cost: 30, skillPath: null, resultJson: null, count: 1, reds: 1 } }
+    const r = runNight(t, { dump: NOPAGE, goals: g, gate: 'red', loopMode: 'green', cap: '30.00', seed })
+    assert.equal(r.rc, 3)
+    assert.match(r.out, /CURRICULUM GOAL-park budget: today \$30\.00 >= \$30\.00 cap — refusing to start \(exit 3\)/)
+    assert.ok(!fs.existsSync(t.marker), 'the loop never started')
+    assert.ok(!ledger(t)['GOAL-park'], 'the refused goal is not recorded')
+  })
+
+  it('a goal dir missing files is skipped, never env; the other goal still runs', () => {
+    const t = setup()
+    const g = makeGoal(t.dir)
+    const bad = path.join(t.dir, 'broken')
+    fs.mkdirSync(bad, { recursive: true })
+    fs.writeFileSync(path.join(bad, 'spots.json'), JSON.stringify([]))
+    const r = runNight(t, { dump: NOPAGE, goals: `${g},${bad}`, gate: 'red', loopMode: 'green', cost: '0.50' })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, /CURRICULUM GOAL-broken skipped: no goal files/)
+    assert.match(r.out, /CURRICULUM GOAL-park GREEN attempts=2 cost=\$0\.50/)
+    assert.equal(ledger(t)['GOAL-park'].verdict, 'GREEN:unpromoted')
+    assert.ok(!ledger(t)['GOAL-broken'], 'nothing recorded for the skipped goal')
+    assert.match(r.out, /tried=1 green=1 red=0 skipped=1 cost=\$0\.50/)
+  })
+
+  it('a relative goal path resolves from the caller cwd, like DUMP (revmux 01 core-1)', () => {
+    const t = setup()
+    makeGoal(t.dir) // t.dir/park
+    const r = runNight(t, {
+      dump: NOPAGE, goals: 'park', gate: 'red', loopMode: 'green',
+      cwd: t.dir, script: path.join(BOT, 'tools/curriculum.sh'),
+    })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, /CURRICULUM GOAL-park GREEN attempts=2 cost=\$0\.50/)
+  })
+
+  it('a present but malformed scenario.json is skipped, never fatal (revmux 01 core-2)', () => {
+    const t = setup()
+    const g = makeGoal(t.dir)
+    fs.writeFileSync(path.join(g, 'scenario.json'), '[]\n')
+    const r = runNight(t, { dump: NOPAGE, goals: g, gate: 'red', loopMode: 'green' })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, /CURRICULUM GOAL-park skipped: bad goal files/)
+    assert.deepEqual(ledger(t), {}, 'nothing recorded for the malformed goal')
+    assert.ok(!fs.existsSync(t.marker), 'the loop never started')
+    assert.match(r.out, /tried=0 green=0 red=0 skipped=1 cost=\$0\.00/)
+  })
+
+  it('CURRICULUM_K=0 with goals runs goals only and needs no dump', () => {
+    const t = setup()
+    const g = makeGoal(t.dir)
+    const r = runNight(t, { k: 0, dump: path.join(t.dir, 'no-such-dump.txt'), goals: g, gate: 'red', loopMode: 'green' })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, /CURRICULUM GOAL-park GREEN attempts=2 cost=\$0\.50/)
+    assert.ok(!r.out.includes('harvest events='), 'no harvest on a goals-only night')
+  })
+
+  it('DUMP stays required when K>0', () => {
+    const t = setup()
+    const g = makeGoal(t.dir)
+    const r = runNight(t, { dump: path.join(t.dir, 'no-such-dump.txt'), goals: g })
+    assert.equal(r.rc, 2)
+    assert.match(r.out, /usage: sh tools\/curriculum\.sh/)
+  })
+
+  it('a recent RED goal is skipped; a week-old RED goal is retried', () => {
+    const t = setup()
+    const g = makeGoal(t.dir)
+    const seed = { 'GOAL-park': { date: daysAgo(0), verdict: 'RED', attempts: 2, cost: 0.5, skillPath: null, resultJson: null, count: 0, reds: 1 } }
+    const r = runNight(t, { dump: NOPAGE, goals: g, gate: 'red', loopMode: 'green', seed })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, /CURRICULUM GOAL-park skipped: red-recent/)
+    assert.ok(!fs.existsSync(t.marker), 'the loop never started')
+    const t2 = setup()
+    const g2 = makeGoal(t2.dir)
+    const seed2 = { 'GOAL-park': { date: daysAgo(8), verdict: 'RED', attempts: 2, cost: 0.5, skillPath: null, resultJson: null, count: 0, reds: 1 } }
+    const r2 = runNight(t2, { dump: NOPAGE, goals: g2, gate: 'red', loopMode: 'green', seed: seed2 })
+    assert.equal(r2.rc, 0)
+    assert.match(r2.out, /CURRICULUM GOAL-park GREEN/)
+    assert.deepEqual([ledger(t2)['GOAL-park'].verdict, ledger(t2)['GOAL-park'].reds], ['GREEN:unpromoted', 1])
   })
 })

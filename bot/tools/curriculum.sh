@@ -25,8 +25,17 @@
 #
 # Env:
 #   CURRICULUM_DIR (default /tmp/idkcraft-curriculum): work root — harvest
-#     output, AUTO-<sig>/ work dirs, curriculum-ledger.json (never in git).
-#   CURRICULUM_K (default 2): signatures attempted per run.
+#     output, AUTO-<sig>/ and GOAL-<name>/ work dirs, curriculum-ledger.json
+#     (never in git).
+#   CURRICULUM_K (default 2): signatures attempted per run. 0 with
+#     CURRICULUM_GOALS set is a goals-only night (no dump needed:
+#     sh tools/curriculum.sh -).
+#   CURRICULUM_GOALS (default empty = off): comma-separated goal dirs, each
+#     holding scenario.json + spots.json (e.g. bot/tools/goals/park).
+#     Every valid dir becomes a pick named after its basename and runs
+#     FIRST, through the same keeper/gate/loop/ledger/PROMOTE/cap block as
+#     harvested signatures (propose is skipped for it). A dir missing
+#     either file is skipped, never an env failure. Ledger key GOAL-<name>.
 #   CURRICULUM_USD_PER_DAY (default 30): refuse to START a scenario once
 #     today's ledger sum reaches it (exit 3 = budget).
 #   CURRICULUM_MAX_ATTEMPTS (default 6): skill-loop attempts per scenario.
@@ -60,8 +69,23 @@ DAYS="${2:-7}"
 # Resolve before the cd below: a relative dump path is from the caller's cwd
 # (findings-1 a: `sh bot/tools/curriculum.sh bot.txt` from the repo root).
 case "$DUMP" in ''|/*) ;; *) DUMP="$(pwd)/$DUMP" ;; esac
+# Resolve before the cd below: relative goal dirs are from the caller's cwd,
+# like DUMP (revmux 01 core-1: CURRICULUM_GOALS=bot/tools/goals/park from the
+# repo root otherwise reads as bot/bot/... and skips as "no goal files").
+if [ -n "${CURRICULUM_GOALS:-}" ]; then
+  GOABS=""
+  GOIFS="$IFS"; IFS=','
+  for GO in $CURRICULUM_GOALS; do
+    case "$GO" in ''|/*) ;; *) GO="$(pwd)/$GO" ;; esac
+    GOABS="${GOABS:+$GOABS,}$GO"
+  done
+  IFS="$GOIFS"
+  CURRICULUM_GOALS="$GOABS"
+fi
 cd "$HERE/.."
-if [ -z "$DUMP" ] || [ ! -f "$DUMP" ]; then echo "usage: sh tools/curriculum.sh <bot-dump.txt> [days=7]"; exit 2; fi
+if [ -z "$DUMP" ] || [ ! -f "$DUMP" ]; then
+  if [ "${CURRICULUM_K:-2}" = 0 ] && [ -n "${CURRICULUM_GOALS:-}" ]; then :; else echo "usage: sh tools/curriculum.sh <bot-dump.txt> [days=7]"; exit 2; fi
+fi
 
 K="${CURRICULUM_K:-2}"
 WORK="${CURRICULUM_DIR:-/tmp/idkcraft-curriculum}"
@@ -137,13 +161,67 @@ if [ -z "${CURRICULUM_LOOP:-}" ]; then
 fi
 
 # 1. harvest, then the top-K pick (ledger rules live in curriculum.js).
-node tools/curriculum.js harvest "$DUMP" "$DAYS" || exit 2
-node tools/curriculum.js pick "$K" > "$PICKF" || exit 2
+# CURRICULUM_K=0 with goals set is a goals-only night: no dump needed, no
+# harvest, no harvested picks (idkcraft-vf8e.20).
+GOALS_ONLY=0
+if [ "$K" = 0 ] && [ -n "${CURRICULUM_GOALS:-}" ]; then GOALS_ONLY=1; fi
+if [ "$GOALS_ONLY" = 1 ]; then
+  : > "$PICKF"
+else
+  node tools/curriculum.js harvest "$DUMP" "$DAYS" || exit 2
+  node tools/curriculum.js pick "$K" > "$PICKF" || exit 2
+fi
 NSKIP0=$(grep -c '^skip ' "$PICKF" || true)
 grep '^skip ' "$PICKF" | while read -r _ s why; do echo "CURRICULUM $s skipped: $why"; done
+skipped=$NSKIP0
+# Hand-written goals (idkcraft-vf8e.20): CURRICULUM_GOALS=<dir>[,<dir>...],
+# each holding scenario.json + spots.json (e.g. bot/tools/goals/park).
+# Every valid dir is prepended as a pick named after its basename and runs
+# FIRST through the same block below (propose is skipped for it: the two
+# files are copied into $WORK/GOAL-<name>/). A dir missing either file is
+# skipped: no goal files, never an env failure. Ledger key GOAL-<name>;
+# the 7-day RED-retry rule applies as for signatures. Unset = tonight runs
+# exactly as before.
+GOALPICKS=""
+if [ -n "${CURRICULUM_GOALS:-}" ]; then
+  OLDIFS="$IFS"; IFS=','
+  for GDIR in $CURRICULUM_GOALS; do
+    [ -n "$GDIR" ] || continue
+    GNAME="${GDIR%/}"; GNAME="${GNAME##*/}"
+    GKEY="GOAL-$GNAME"
+    if [ ! -f "$GDIR/scenario.json" ] || [ ! -f "$GDIR/spots.json" ]; then
+      echo "CURRICULUM $GKEY skipped: no goal files"
+      skipped=$((skipped + 1))
+      continue
+    fi
+    # A present but malformed scenario.json must skip like a missing one:
+    # NAME/SKILL extraction below would abort the whole night under set -e
+    # (revmux 01 core-2), before any harvested pick runs.
+    if ! node -e "const s=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); if(!Array.isArray(s)||!s[0]||!s[0].name||!s[0].skill||!s[0].bead)process.exit(1)" "$GDIR/scenario.json" 2>/dev/null; then
+      echo "CURRICULUM $GKEY skipped: bad goal files"
+      skipped=$((skipped + 1))
+      continue
+    fi
+    DEC="$(GOALKEY="$GKEY" node -p "const c = require('./tools/curriculum.js'); const e = c.readLedger()[process.env.GOALKEY]; let d = 'pick'; if (e) { const v = String(e.verdict || '').toUpperCase(); const age = (Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z') - Date.parse(e.date + 'T00:00:00Z')) / 86400e3; if (v.indexOf('GREEN') === 0) { d = 'skip done'; } else if ((e.reds || 0) >= 3 || (e.envs || 0) >= 3) { d = 'skip parked'; } else if (v === 'ENV') { d = 'pick'; } else if (v === 'RED') { d = age > 7 ? 'pick' : 'skip red-recent'; } else { d = 'skip ' + String(e.verdict || 'unknown').toLowerCase(); } } d")"
+    if [ "$DEC" != pick ]; then
+      echo "CURRICULUM $GKEY skipped: ${DEC#skip }"
+      skipped=$((skipped + 1))
+      continue
+    fi
+    mkdir -p "$WORK/$GKEY"
+    cp "$GDIR/scenario.json" "$WORK/$GKEY/scenario.json"
+    cp "$GDIR/spots.json" "$WORK/$GKEY/spots.json"
+    GOALPICKS="${GOALPICKS:+$GOALPICKS
+}pick $GKEY"
+  done
+  IFS="$OLDIFS"
+  if [ -n "$GOALPICKS" ]; then
+    { printf '%s\n' "$GOALPICKS"; cat "$PICKF"; } > "$PICKF.goals" && mv "$PICKF.goals" "$PICKF"
+  fi
+fi
 TOTAL=$(grep -c '^pick ' "$PICKF" || true)
 if [ "$TOTAL" = 0 ]; then
-  echo "CURRICULUM night=$NIGHT tried=0 green=0 red=0 skipped=$NSKIP0 cost=\$0.00"
+  echo "CURRICULUM night=$NIGHT tried=0 green=0 red=0 skipped=$skipped cost=\$0.00"
   exit 0
 fi
 
@@ -160,7 +238,6 @@ fi
 tried=0
 ngreen=0
 nred=0
-skipped=$NSKIP0
 session="0.00"
 ENVFAIL=0
 BUDGET=0
@@ -174,12 +251,21 @@ for SIG in $(grep '^pick ' "$PICKF" | awk '{print $2}' || true); do
     BUDGET=1
     break
   fi
-  CAND="$WORK/AUTO-$SIG"
-  if ! node tools/curriculum.js propose "$SIG" >"$WORK/.propose-$SIG.log" 2>&1; then
-    echo "CURRICULUM $SIG skipped: propose failed ($(tail -n 1 "$WORK/.propose-$SIG.log"))"
-    skipped=$((skipped + 1))
-    continue
-  fi
+  case "$SIG" in
+    GOAL-*)
+      # Hand-written goal (idkcraft-vf8e.20): files already copied into
+      # $WORK/GOAL-<name>/ above; propose is skipped for it.
+      CAND="$WORK/$SIG"
+      ;;
+    *)
+      CAND="$WORK/AUTO-$SIG"
+      if ! node tools/curriculum.js propose "$SIG" >"$WORK/.propose-$SIG.log" 2>&1; then
+        echo "CURRICULUM $SIG skipped: propose failed ($(tail -n 1 "$WORK/.propose-$SIG.log"))"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      ;;
+  esac
   SCN="$CAND/scenario.json"
   SPOTS="$CAND/spots.json"
   NAME="$(node -p "JSON.parse(require('fs').readFileSync('$SCN','utf8'))[0].name")"
