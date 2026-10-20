@@ -1261,6 +1261,7 @@
   },
   "lastPathStatus": {
     "writers": [
+      "src/behaviours/castlefetch.js",
       "src/behaviours/forage.js",
       "src/behaviours/gather.js",
       "src/index.js"
