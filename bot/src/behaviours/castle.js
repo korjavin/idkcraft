@@ -240,7 +240,17 @@ function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 
 // instead of holding the moat and 'complete' forever. ~35 min of rare
 // retries first (backoffs 30s..600s), covering a play session in which the
 // owner might clear the cell. Rebuild (cancel + build) un-retires.
+// Bounded retry (vmzq.27 revmux 01): after this many blocks the hole
+// (see blockCell) retires.
 const MAX_HOLE_TRIES = 8
+// Builder refusals (idkcraft-synq): a 'build-miss' block means Baritone
+// refused the cell in 3 consecutive batches with material on hand. The
+// batch now lays bottom-up on vetted stand floors (castleBuilderCells), so
+// a refused cell is not waiting on an unlaid floor — retrying it through
+// the full 8-try ladder only re-stalls the batch. It gets one retry window
+// (try 1, back off, try 2) and then retires with its reason, still
+// reported by holesOf/sayHoles; a rebuild (cancel + build) un-retires.
+const BUILD_MISS_TRIES = 2
 
 function bodyPos(bot) {
   const p = bot.entity && bot.entity.position
@@ -254,8 +264,9 @@ function blockCell(ctx, st, c, why, now) {
   e.until = now + backoffMs(e.tries)
   e.why = String(why)
   // Bounded retry (revmux 01): the MAX_HOLE_TRIES-th block retires the
-  // hole — still reported, never picked or waited on again.
-  if (e.tries >= MAX_HOLE_TRIES) e.retired = true
+  // hole — still reported, never picked or waited on again. Builder
+  // refusals retire faster (idkcraft-synq BUILD_MISS_TRIES above).
+  if (e.tries >= (why === 'build-miss' ? BUILD_MISS_TRIES : MAX_HOLE_TRIES)) e.retired = true
   st.blocked[k] = e
   ctx.castleFails = null
   ctx.castleCell = null
@@ -2049,21 +2060,43 @@ function takeName(h) {
 function castleBuilderCells(bot, ctx, st) {
   try {
     if (!st || !st.site || st.phase === 'prep') return null
-    const { cells } = blueprint.absPlan(st.site, st.rot | 0, st.blueprintVersion)
+    const { cells, at } = blueprint.absPlan(st.site, st.rot | 0, st.blueprintVersion)
     const blocked = st.blocked || {}
+    const now = Date.now()
     const held = {}
+    const batched = new Set()
     const out = []
-    for (const c of cells) {
+    // Bottom-up (idkcraft-synq): plan order interleaves tower tops ahead
+    // of their stand floors (dy14 stone idx~1039 before dy2 walls idx~1193
+    // and dy8-11 planks floors idx~1460+), so a plan-ordered batch asks
+    // Baritone for cells whose floor is still unlaid — and possibly unheld,
+    // hence never in the same batch. The layers skip, the same cells miss
+    // every pass (build-miss), and the 90 s watchdog stalls the whole
+    // batch. Select lowest-first, like the tower's own lay order.
+    const order = cells.map((c, i) => i).sort((a, b) => (cells[a].y - cells[b].y) || (a - b))
+    for (const i of order) {
+      const c = cells[i]
       if (out.length >= CASTLE_BUILDER_BATCH) break
       if (!CASTLE_BUILDER_KINDS.has(c.kind) || c.prep) continue
       if (done(bot, c)) continue
       const b = blocked[bkey(st, c.idx)]
-      if (b && (b.retired || b.until > Date.now())) continue
+      if (b && (b.retired || b.until > now)) continue
+      // Stand-floor gate (idkcraft-synq): a cell whose plan cell below is
+      // an unlaid place target that is NOT itself in this batch (unheld
+      // kind, or blocked/backing off) stays out — batching it can only end
+      // in a skipped layer and a strike. It falls through to the per-cell
+      // path, which names the missing floor (failed:no-<kind> fetch word)
+      // instead of wedging the builder; once the floor lays, the cell
+      // batches. Below-supports are only ever stone/planks/frame (never
+      // door/stairs), so no deferral deadlock.
+      const below = at.get(`${c.x},${c.y - 1},${c.z}`)
+      if (below && blueprint.isPlaceTarget(below.kind) && !done(bot, below) && !batched.has(below.idx)) continue
       // Held kinds only: an unheld kind falls through to work()'s material
       // path (failed:no-<kind>) so castlefetch fetches it as today.
       if (held[c.kind] === undefined) held[c.kind] = heldStacks(bot, c.kind, usable(bot, c.kind, ctx), ctx)
       const block = takeName(held[c.kind])
       if (!block) continue
+      batched.add(c.idx)
       out.push({ x: c.x, y: c.y, z: c.z, kind: c.kind, idx: c.idx, block })
     }
     if (out.length === 0) return null
@@ -2343,6 +2376,7 @@ module.exports = castle
 module.exports.holesOf = holesOf
 module.exports.sayHoles = sayHoles
 module.exports.MAX_HOLE_TRIES = MAX_HOLE_TRIES
+module.exports.BUILD_MISS_TRIES = BUILD_MISS_TRIES
 module.exports.guardCastle = guardCastle
 module.exports.backoffMs = backoffMs
 module.exports.STRIKES = STRIKES

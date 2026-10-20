@@ -379,3 +379,87 @@ describe('castle builder over the fake body (idkcraft-cu1a repro)', () => {
     }
   })
 })
+
+describe('castle builder bottom-up (idkcraft-synq)', () => {
+  // Prod 2026-10-20: the same tower-top cells missed every pass while the
+  // batch kept firing plan-ordered (dy14 stone idx~1039 ahead of dy2 walls
+  // idx~1193 and dy8-11 planks floors idx~1460+). The tops have no stand
+  // floor yet — possibly unheld, hence never in the same batch — the
+  // layers skip, the watchdog stalls, the step fails, repeat.
+  it('batches lowest-first so stand floors precede their tops', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 3 }
+    const batch = castle.castleBuilderCells(bot, { castleCarry: null }, st)
+    assert.ok(batch && batch.cells.length > 0, 'a batch is selected')
+    const ys = batch.cells.map((c) => {
+      const at = blueprint.absPlan(st.site, st.rot, 3).at.get(`${c.x},${c.y},${c.z}`)
+      return at ? at.y : null
+    })
+    assert.ok(ys.every((y) => typeof y === 'number'), 'every batch cell is on the plan')
+    assert.ok(ys.every((y, i) => i === 0 || y >= ys[i - 1]), 'non-decreasing y')
+    // Every batched cell stands on a laid plan cell, natural ground, or a
+    // cell batched before it — never on an unlaid plan cell outside the
+    // batch.
+    const plan = blueprint.absPlan(st.site, st.rot, 3)
+    const inBatch = new Set(batch.cells.map((c) => `${c.x},${c.y},${c.z}`))
+    for (const c of batch.cells) {
+      const below = plan.at.get(`${c.x},${c.y - 1},${c.z}`)
+      if (!below || !blueprint.isPlaceTarget(below.kind)) continue
+      const n = world.blockAt(below).name
+      assert.ok(blueprint.matches(below.kind, n) || inBatch.has(`${below.x},${below.y},${below.z}`),
+        `batched ${c.x},${c.y},${c.z} stands on unlaid ${below.x},${below.y},${below.z}`)
+    }
+  })
+
+  it('a top whose stand floor is unheld stays out: null batch, no wedge', async () => {
+    const world = makeWorld()
+    // Everything stands except one planks floor cell and the torch above
+    // it — and the pack holds no planks, so the floor can never batch.
+    // (Below-supports of builder cells are only ever stone/planks/frame;
+    // torches on planks are the direct-above pair in the plan.)
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    const floor = plan.find((c) => c.kind === 'planks' && !c.prep &&
+      plan.some((d) => d.kind === 'torch' && d.x === c.x && d.y === c.y + 1 && d.z === c.z))
+    assert.ok(floor, 'a planks floor with a torch above exists')
+    const top = plan.find((d) => d.kind === 'torch' && d.x === floor.x && d.y === floor.y + 1 && d.z === floor.z)
+    paintAll(world, { except: (c) => c === floor || c === top })
+    const bot = mockBot(world, { items: [{ name: 'cobblestone', count: 500 }, { name: 'torch', count: 64 }] })
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 3 }
+    const batch = castle.castleBuilderCells(bot, { castleCarry: null }, st)
+    assert.equal(batch, null, 'the unfunded top never enters a schematic')
+    // ...and the step names the missing floor (fetch word) instead of
+    // stalling the builder on it.
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    for (let i = 0; i < 3; i++) {
+      castle(bot, ctx)
+      await settle()
+    }
+    assert.equal(bot.calls.builds.length, 0, 'no schematic fired at the gap')
+    assert.ok((ctx.stepStatus || '').startsWith('failed:no-'), `fetch word, got ${ctx.stepStatus}`)
+  })
+
+  it('a refused cell retires after one retry window, still reported', async () => {
+    const world = makeWorld()
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    const open = plan.filter((c) => c.kind === 'stone').slice(0, 2)
+    paintAll(world, { except: (c) => open.includes(c) })
+    const bot = mockBot(world, { buildScript: 'stall' })
+    const ver = blueprint.blueprintOf(3).version
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, blocked: {} } }
+    // One strike cycle already behind each cell (try 1, backoff expired).
+    for (const c of open) ctx.castle.blocked[`${ver}:${c.idx}`] = { tries: 1, until: Date.now() - 1, why: 'build-miss' }
+    const cap = capture()
+    try {
+      await run(bot, ctx, 4)
+    } finally {
+      cap.release()
+    }
+    for (const c of open) {
+      const e = ctx.castle.blocked[`${ver}:${c.idx}`]
+      assert.ok(e && e.retired, `${c.idx} retired: ${JSON.stringify(e)}`)
+      assert.equal(e.tries, castle.BUILD_MISS_TRIES)
+    }
+    assert.ok(cap.logged.some((m) => m.includes('build-miss') && m.includes('retired')), 'retire line logged')
+  })
+})
