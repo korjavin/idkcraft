@@ -184,7 +184,11 @@ function repairCells(st) {
 // rot); throws when the blueprint has no spot (unit-tested).
 const LITTER = process.env.CASTLE_LITTER === '1'
 const LITTER_PASS = 27 // of 30 items
-const LITTER_BY_S = 15 * 60 // 15 game-min (tick rate 1)
+// idkcraft-akze: the tidy scenario (CASTLE_REPAIR, g0z.62 cadence) starts
+// the sweep only once the relay completes — 10+ min in — so the g0z.61
+// 900 s bar never fits it. There the sweep is judged at window end, like
+// repair; the standalone litter rig keeps its 15-min bar.
+const LITTER_BY_S = process.env.CASTLE_REPAIR ? null : 15 * 60 // null = window end (tidy); 15 game-min (tick rate 1)
 if (LITTER && SEED !== 'complete') throw new Error('CASTLE_LITTER=1 needs CASTLE_SEED=complete')
 function litterSeeds(st) {
   const bp = require('../src/castle')
@@ -1690,6 +1694,18 @@ async function main() {
     })
     if (miss.length) fail('repair-seed', `${miss.length} knocked cells not air`)
     tickCtx().paused = false
+    // idkcraft-akze: the knockdown is rig action, not bot damage — reset the
+    // bot's regress high-water so the first post-seed scan baselines instead
+    // of logging the seed as regress. Deterministic (not wall-clock): the
+    // away-gap re-baseline in progress() stays as the backstop. Dig cells
+    // re-register on scan (still air), so clearing idx is safe.
+    try {
+      const c = tickCtx()
+      if (c) {
+        const sig = c.castleDug && c.castleDug.sig
+        c.castleDug = { sig, idx: new Set(), high: 0, was: new Set(), lastScan: Date.now() }
+      }
+    } catch (_) { /* baseline best-effort: the away gap covers it */ }
     origLog(`CASTLE-RIG repair seed: ${knocked.length} cells knocked out (${knocked.map((c) => c.kind).join(',')}), chest ${REPAIR === 'wood' ? '16 oak_log' : `empty, logs cleared within ${NOWOOD_RADIUS}`}`)
   }
   let litterSeed = null
@@ -2611,8 +2627,9 @@ async function main() {
     litterTag = `, litter=${swept}/${litterSeed.litter.length}@${litterT == null ? '-' : `${litterT}s`}, player=${intact.length}/${litterSeed.player.length}, regress=${regress}`
     const broken = litterSeed.player.filter((o) => !intact.includes(o)).map((o) => o.what)
     const left = litterSeed.litter.filter((o) => !o.cells.every((c) => nameAt(c) === 'air')).map((o) => `${o.what}@${o.cells[0].x},${o.cells[0].y},${o.cells[0].z}`)
-    const pass = litterT != null && litterT <= LITTER_BY_S && broken.length === 0 && regress === 0 && done === total
-    litterV = `CASTLE-RIG litter: ${pass ? 'PASS' : 'FAIL'} (>= ${LITTER_PASS}/${litterSeed.litter.length} swept by ${LITTER_BY_S}s: ${litterT == null ? 'never' : `${litterT}s`}; player intact ${intact.length}/${litterSeed.player.length}${broken.length ? ` broken=${broken.join(',')}` : ''}; plan ${done}/${total}, regress=${regress}${left.length ? `; left ${left.slice(0, 6).join(' ')}` : ''})`
+    const litterByS = LITTER_BY_S == null ? MINS * 60 : LITTER_BY_S // tidy: judged at window end
+    const pass = litterT != null && litterT <= litterByS && broken.length === 0 && regress === 0 && done === total
+    litterV = `CASTLE-RIG litter: ${pass ? 'PASS' : 'FAIL'} (>= ${LITTER_PASS}/${litterSeed.litter.length} swept by ${litterByS}s: ${litterT == null ? 'never' : `${litterT}s`}; player intact ${intact.length}/${litterSeed.player.length}${broken.length ? ` broken=${broken.join(',')}` : ''}; plan ${done}/${total}, regress=${regress}${left.length ? `; left ${left.slice(0, 6).join(' ')}` : ''})`
   }
   const nightTag = (night ? night.tag() : '') + seedTag + startTag + paneTag + fenceTag + atticTag + blastTag + furnaceTag + upgradeTag + repairTag + litterTag + (resNights ? resNights.tag() : '') + (idle ? idle.tag() : '') + apronTag
   const line = `castle ${done}/${total} in ${MINS} min, flips=${seen.flips}, deaths=${deaths}, top-steps=${top(seen.steps, 4)}, top-fail=${top(seen.fails, 3)}, watchdog=${seen.wdCalls}, first=${first}, choices=${top(seen.wdChoices, 3)}, outcomes=progress:${seen.outcomes.progress},flat:${seen.outcomes.flat},preempted:${seen.outcomes.preempted}${farTag}${buryTag}${pitTag}${nightTag}${tickTag}`
