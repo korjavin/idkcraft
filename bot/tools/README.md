@@ -1316,6 +1316,30 @@ fetch: ticks=3436 stone=+290 (11.9 s/stone, component 3.8) legs=12 finished=1 cu
   minutes from the window open (list capped at 5). `fetch: -` = no
   castlefetch at all. Promote to a gate only when two runs show it stable.
 
+### Completion scoreboard (idkcraft-qxql.4, folds in rjvc)
+
+Every run also prints a `scoreboard:` line (and stores it in the CASTLE_OUT
+record) after the fetch line; the existing verdict fields are unchanged:
+
+```
+scoreboard: unaided=621/2048 (30%), share=castle:40,castlefetch:17,gather:34,other:9, fetch-eff=18/76 4.8s/stone, stalls=3 longest=25min (castle:15,castle:10,castle:25), holes=127, PASS (floor 23% = mean 539 - spread 59 of 2048), gates A>=59%@90 B=100%@240
+```
+
+- `unaided=` laid/total when `CASTLE_KIT=empty`, `seeded=` for any other kit.
+- `share=` the `top-steps` decision counts as percent of all ticks.
+- `fetch-eff=` finished legs / legs and s/stone (the fetch-line numbers).
+- `stalls=` windows >= 5 game-min with no laid delta; `longest` in minutes;
+  the parenthesis is the step held most in each window (first 6).
+- `holes=` blocked castle cells (`ctx.castle.blocked`) at the last sample.
+- Judge: `castle-baseline.json` (v2, keyed by window minutes, so 90 only):
+  PASS when unaided pct >= (mean - spread) pct, else REGRESSION; other
+  windows or kits print `baseline n/a`. Re-record (>= 3 quiet runs, mean and
+  spread = mean - min; `npm test` checks the arithmetic) in the PR that
+  moves the band on purpose. The batch 90-min run judges against it.
+- Gate A/B of the epic are printed as targets, not enforced. Gate B is the
+  240-min done run: `CASTLE_BODY=baritone CASTLE_PADSPOT=250,350 sh bot/tools/castle-rig.sh 240`
+  (`CASTLE_KIT=empty` is the default; `cycles.sh N 240` loops it).
+
 so the batch run quotes `before -> after` per component straight from its two
 lines. Re-record a baseline (lay: two master runs, each within ±20% of the
 `rate`; mine: `rate` = mean of 3 pairs, spread noted; `npm test` enforces it) in the PR that moves it on purpose.

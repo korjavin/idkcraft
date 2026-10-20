@@ -1183,6 +1183,53 @@ function fetchLine({ series, events, ticks, ratio, mineBase }) {
   return `fetch: ticks=${ticks || 0} stone=+${banked} (${per} s/stone, component ${comp}) legs=${starts} finished=${fin} cut=${nCut} cut-by=${by} far=${far} dead=${deadMin}min${ranges ? ` (t=${ranges}${dead.length > 5 ? ',...' : ''})` : ''}`
 }
 
+// idkcraft-qxql.4: completion scoreboard, pure (unit-tested). One line:
+// unaided=/seeded= pct, step share, fetch efficiency, stalls (>= 5 game-min
+// with no laid delta, with the step held), holes, baseline PASS/REGRESSION
+// and the epic's gate targets. baseline = castle-baseline.json v2[mins] or null.
+function scoreboardLine({ done, total, kit, steps, series, events, fetchS, banked, ratio, holes, baseline }) {
+  const pct = total > 0 ? Math.round(done / total * 100) : 0
+  const lead = `${kit === 'empty' ? 'unaided' : 'seeded'}=${done}/${total} (${pct}%)`
+  const st = steps || {}
+  const sum = Object.values(st).reduce((n, v) => n + v, 0)
+  const sh = (k) => (sum ? Math.round((st[k] || 0) / sum * 100) : 0)
+  const other = sum ? 100 - sh('castle') - sh('castlefetch') - sh('gather') : 0
+  const share = `share=castle:${sh('castle')},castlefetch:${sh('castlefetch')},gather:${sh('gather')},other:${other}`
+  const fin = (events || []).filter((e) => e.ev === 'finish').length
+  const legs = (events || []).filter((e) => e.ev === 'start').length
+  const per = banked > 0 ? (fetchS * ratio / banked).toFixed(1) : '-'
+  const eff = `fetch-eff=${fin}/${legs} ${per}s/stone`
+  const stalls = []
+  let from = null // sample index where the current flat run began
+  const flush = (to) => {
+    if (from == null) return
+    const min = (series[to].t - series[from].t) / 60 * ratio
+    if (min >= 5) {
+      const held = {}
+      for (let i = from; i <= to; i++) held[series[i].step || '?'] = (held[series[i].step || '?'] || 0) + 1
+      stalls.push({ min, step: Object.entries(held).sort((a, b) => b[1] - a[1])[0][0] })
+    }
+    from = null
+  }
+  for (let i = 1; i < series.length; i++) {
+    const a = series[i - 1].done
+    const b = series[i].done
+    if (typeof a !== 'number' || typeof b !== 'number') { flush(i - 1); continue }
+    if (b > a) flush(i - 1)
+    else if (from == null) from = i - 1
+  }
+  if (series.length) flush(series.length - 1)
+  const longest = stalls.reduce((m, s) => Math.max(m, s.min), 0)
+  const held = stalls.slice(0, 6).map((s) => `${s.step}:${Math.round(s.min)}`).join(',')
+  const stallTxt = `stalls=${stalls.length} longest=${Math.round(longest)}min${held ? ` (${held})` : ''}`
+  let judge = 'baseline n/a'
+  if (kit === 'empty' && baseline && baseline.total > 0) {
+    const floor = Math.round((baseline.mean - baseline.spread) / baseline.total * 100)
+    judge = `${pct >= floor ? 'PASS' : 'REGRESSION'} (floor ${floor}% = mean ${baseline.mean} - spread ${baseline.spread} of ${baseline.total})`
+  }
+  return `scoreboard: ${lead}, ${share}, ${eff}, ${stallTxt}, holes=${holes == null ? '-' : holes}, ${judge}, gates A>=59%@90 B=100%@240`
+}
+
 async function rcon(cmd) {
   const { stdout } = await execFileAsync('docker', ['exec', CONTAINER, 'rcon-cli', cmd])
   const out = String(stdout)
@@ -2002,6 +2049,7 @@ async function main() {
       s.done = st && st.progress && typeof st.progress.done === 'number' ? st.progress.done : null
       s.total = st && st.progress && typeof st.progress.total === 'number' ? st.progress.total : null
       s.phase = st && st.phase
+      s.holes = st && st.blocked ? Object.keys(st.blocked).length : 0
       s.step = c && c.step
       s.status = c && c.stepStatus
     } catch (_) { /* sample best-effort */ }
@@ -2784,7 +2832,16 @@ async function main() {
   let mineBase = null
   try { mineBase = JSON.parse(fs.readFileSync(path.join(__dirname, 'component-baseline.json'), 'utf8'))[process.env.BOT_BODY === 'baritone' ? 'v2' : 'v1'].mine || null } catch (_) { mineBase = null }
   const fetchTxt = fetchLine({ series, events: seen.fetchEv.map((e) => ({ ...e, t: (e.at - t0) / 1000 })), ticks: seen.steps.castlefetch, ratio: wallMin > 0 ? gameMin / wallMin : 1, mineBase })
+  let castleBase = null
+  try { castleBase = JSON.parse(fs.readFileSync(path.join(__dirname, 'castle-baseline.json'), 'utf8')).v2[String(MINS)] || null } catch (_) { castleBase = null }
+  const ratio = wallMin > 0 ? gameMin / wallMin : 1
+  const bk = bankedOf(series)
+  const scoreTxt = scoreboardLine({
+    done, total, kit: KIT, steps: seen.steps, series, events: seen.fetchEv, fetchS: bk.fetchS, banked: bk.banked, ratio,
+    holes: series.length ? series[series.length - 1].holes : null, baseline: process.env.BOT_BODY === 'baritone' ? castleBase : null,
+  })
   const record = {
+    scoreboard: scoreTxt,
     date: new Date().toISOString(), mins: MINS, done, total, flips: seen.flips, deaths,
     steps: seen.steps, fails: seen.fails, pad: { x0, x1, z0, z1, top: gy, cx: bx, cz: bz, span: brel ? brel.span : null },
     tag: TAG, gitsha: process.env.CASTLE_GITSHA || '?', log: LOGFILE,
@@ -2802,6 +2859,7 @@ async function main() {
   origLog(line)
   if (compLine) origLog(compLine)
   origLog(fetchTxt)
+  origLog(scoreTxt)
   const idleV = idle ? idle.verdict(deaths - idleForced, resNights ? resNights.nights : []) : null
   if (idleV) origLog(idleV.line)
   if (litterV) origLog(litterV)
@@ -2816,4 +2874,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { apronBox, apronCloneCmds, apronChanged, componentLine, baselineFor, fetchLine, bankedOf, repairCells, prkhCells, quarryDeadFills, stoneheldAt, litterSeeds, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { apronBox, apronCloneCmds, apronChanged, componentLine, baselineFor, fetchLine, scoreboardLine, bankedOf, repairCells, prkhCells, quarryDeadFills, stoneheldAt, litterSeeds, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }

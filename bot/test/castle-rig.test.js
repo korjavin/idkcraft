@@ -1159,6 +1159,40 @@ describe('castle rig speed (idkcraft-neuc.60)', () => {
   })
 })
 
+describe('castle-replay scoreboardLine (idkcraft-qxql.4)', () => {
+  const { scoreboardLine } = require('../tools/castle-replay.js')
+  const base = { total: 2048, mean: 539, spread: 59 }
+  // 60 s samples: 10 min of laying, 6 min flat in castlefetch, laying again
+  const series = []
+  for (let i = 0; i <= 20; i++) series.push({ t: i * 60, done: i <= 10 ? i * 10 : i <= 16 ? 100 : 100 + (i - 16) * 5, step: i > 10 && i <= 16 ? 'castlefetch' : 'castle' })
+  const args = {
+    done: 620, total: 2048, kit: 'empty', steps: { castle: 40, castlefetch: 20, gather: 30, build: 10 },
+    series, events: [{ ev: 'start' }, { ev: 'start' }, { ev: 'finish' }], fetchS: 100, banked: 50, ratio: 1, holes: 3, baseline: base,
+  }
+  it('prints every field and judges against the baseline floor', () => {
+    const l = scoreboardLine(args)
+    assert.match(l, /unaided=620\/2048 \(30%\)/)
+    assert.match(l, /share=castle:40,castlefetch:20,gather:30,other:10/)
+    assert.match(l, /fetch-eff=1\/2 2\.0s\/stone/)
+    assert.match(l, /stalls=1 longest=6min \(castlefetch:6\)/)
+    assert.match(l, /holes=3/)
+    assert.match(l, /PASS \(floor 23%/)
+    assert.match(scoreboardLine({ ...args, done: 400 }), /REGRESSION/)
+  })
+  it('seeded kit prints seeded= and no judge; no baseline is n/a', () => {
+    const l = scoreboardLine({ ...args, kit: 'seeded' })
+    assert.match(l, /seeded=620\/2048/)
+    assert.match(l, /baseline n\/a/)
+    assert.match(scoreboardLine({ ...args, baseline: null }), /baseline n\/a/)
+  })
+  it('castle-baseline.json: v2.90 mean of runs, spread = mean - min', () => {
+    const b = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'castle-baseline.json'), 'utf8')).v2['90']
+    assert.ok(b.runs.length >= 3)
+    assert.ok(Math.abs(b.runs.reduce((a, r) => a + r, 0) / b.runs.length - b.mean) <= 1)
+    assert.equal(b.spread, Math.round(b.mean - Math.min(...b.runs)))
+  })
+})
+
 // idkcraft-6x7.27: shared BEFORE cache — key, staleness and write-through
 // rules are pure, fed shas/dates (no docker, no git).
 describe('castle-before.js shared before cache', () => {

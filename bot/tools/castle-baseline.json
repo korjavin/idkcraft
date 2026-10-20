@@ -1,0 +1,10 @@
+{
+  "_": "idkcraft-qxql.4 / rjvc: unaided castle90 (CASTLE_KIT=empty, CASTLE_BODY=baritone, CASTLE_PADSPOT=250,350, quiet box). runs = cells laid of total; mean = their mean; spread = mean - min. PASS when laid pct >= (mean - spread) pct. Re-record when a merge moves the band on purpose.",
+  "v2": {
+    "90": { "total": 2048, "runs": [535, 480, 520, 621], "mean": 539, "spread": 59 }
+  },
+  "gates": {
+    "A": "castle90 >= 1200/2048 (59%) unaided, fetch finished-legs >= 70%, stone banked >= 500, gather <= 5% of ticks",
+    "B": "castle-rig.sh 240 (CASTLE_KIT=empty) prints 2048/2048 in 2 of 2 runs"
+  }
+}
