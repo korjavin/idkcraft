@@ -177,6 +177,38 @@ describe('castlefetch chest planks fund the fence leg (szr1)', () => {
     ])
   })
 
+  it('mixed-short stacks never sum to funded: one variant draws, logs still run (send-back 1)', async () => {
+    // Pack 3 birch + 3 oak, chest 3 + 3, fence left 2, no logs anywhere:
+    // summing the mixed dregs zeroes the need and skips the logs list
+    // while no variant crafts (needs 4 of one wood). The fix funds the
+    // best single variant only, so the need survives and the logs list
+    // (table/stick fund) still runs.
+    const calls = []
+    stockpile.withdrawAnyFromChest = async (b, c, names, n) => {
+      calls.push([names, n])
+      return { got: 0, name: null }
+    }
+    const items = [
+      { name: 'stone_pickaxe', count: 1 },
+      { name: 'birch_planks', count: 3 },
+      { name: 'oak_planks', count: 3 },
+    ]
+    const chest = [{ name: 'birch_planks', count: 3 }, { name: 'oak_planks', count: 3 }]
+    const { bot, ctx } = (() => {
+      castleMod.menuFact = (b, c) => { c.castleWord = { kind: 'fence', left: 2 }; return 'fence-none' }
+      fetch.deps.craftItem = () => 'running'
+      fetch.deps.gather = (b, c) => { c.stepStatus = 'running' }
+      const set = new Map([[`${SITE.x},${SITE.y},${SITE.z}`, 'chest']])
+      const b = makeBot({ items, set, chest, at: pos(SITE.x + 1.5, 64, SITE.z - 0.5) })
+      return { bot: b, ctx: { castle: castleState() } }
+    })()
+    fetch(bot, ctx)
+    await settle(); await settle(); await settle()
+    const plankCalls = calls.filter(([[n]]) => n.endsWith('_planks'))
+    assert.equal(plankCalls.length, 1, `one variant draws, never a mix: ${JSON.stringify(calls)}`)
+    assert.ok(calls.some(([[n]]) => n.endsWith('_log')), `logs list still runs: ${JSON.stringify(calls)}`)
+  })
+
   it('a fund shortfall after a bank draw keeps done: the next draw heals it (core-3)', async () => {
     castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'fence', left: 6 }; return 'fence-none' }
     // Short of planks but structurally fine: 'done' re-picks and the next

@@ -637,20 +637,36 @@ async function drawChest(bot, ctx, d, at, need) {
     // withdraw what the pack holds.
     const bookWant = book ? Math.max(0, BOOKS_PER_SHELF * Math.ceil(need) - countItems(bot, (n) => n === 'book')) : need
     if (plankLogs) {
-      // One wood per withdraw (szr1 core-2): the withdraw walks chest
-      // slots, not the names order, so one multi-wood call would fund a
-      // mix no exact-wood craft can use — and one call per registry wood
-      // would open the chest ~12 times. Peek once, then complete the pack
-      // wood first (names arrive in planksFirst order), then the rest,
-      // until the need is met — never a mixed fund. An unreadable chest
-      // keeps the legacy full loop (same opens as before).
+      // Best single variant (send-back 1, codex P2): exact-wood crafts
+      // cannot mix, so mixed-short stacks (3 birch + 3 oak) must not each
+      // shave the shared need — that reads as funded (need <= 0 skips the
+      // logs list) while no variant crafts, the same livelock. Fund ONE
+      // wood only: the variant with the biggest pack+chest fund, pack
+      // first on ties (names arrive in planksFirst order); draw it only
+      // when the chest holds it, else the logs list below funds the table
+      // from convertible stock. One peek + one withdraw (szr1 core-2).
+      // An unreadable chest keeps the legacy full loop.
       let counts = null
       try { counts = await stockpileMod.chestCounts(bot, ctx, names, at) } catch (_) { counts = null }
-      const order = counts ? names.filter((n) => (counts[n] | 0) > 0) : names
-      for (const name of order) {
-        if (need <= 0) break
-        const pr = await stockpileMod.withdrawAnyFromChest(bot, ctx, [name], Math.ceil(need / LOG_YIELD[d.kind]) * 4, at)
-        need -= (pr && pr.got ? pr.got : 0) * (LOG_YIELD[d.kind] / 4)
+      if (!counts) {
+        for (const name of names) {
+          if (need <= 0) break
+          const pr = await stockpileMod.withdrawAnyFromChest(bot, ctx, [name], Math.ceil(need / LOG_YIELD[d.kind]) * 4, at)
+          need -= (pr && pr.got ? pr.got : 0) * (LOG_YIELD[d.kind] / 4)
+        }
+      } else {
+        const have = (n) => countItems(bot, (x) => x === n)
+        const wantFull = Math.ceil(need / LOG_YIELD[d.kind]) * 4
+        let best = null, bestFund = -1
+        for (const name of names) {
+          if ((counts[name] | 0) <= 0) continue
+          const fund = have(name) + counts[name]
+          if (fund > bestFund) { bestFund = fund; best = name }
+        }
+        if (best) {
+          const pr = await stockpileMod.withdrawAnyFromChest(bot, ctx, [best], wantFull, at)
+          need -= (pr && pr.got ? pr.got : 0) * (LOG_YIELD[d.kind] / 4)
+        }
       }
     } else {
       const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
