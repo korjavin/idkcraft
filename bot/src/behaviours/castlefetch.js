@@ -303,7 +303,7 @@ function holdFor(bot, ctx, kind) {
 // and the per-kind hold (prkh) parks only that kind.
 // ponytail: the pack signature is the sum of item counts — any gain or
 // spend (logs chopped, cobble dug, a craft) breaks the streak. A start more
-// than RESTART_GAP_MS after the last one breaks it too: a dead leg re-opens
+// than RESTART_GAP_MS after the last leg's last tick breaks it too: a dead leg re-opens
 // within seconds, a long walk cut before its first dig does not.
 const RESTART_MAX = 3
 const RESTART_GAP_MS = 30 * 1000
@@ -2462,12 +2462,14 @@ function castlefetch(bot, ctx, target, state) {
     try { ctx.castleFetchFailKind = null; ctx.castleFetchDoneKind = null } catch (_) { /* stamp best-effort */ }
     if (deadRestart(bot, ctx, d)) {
       try { console.log(`castlefetch ${d.kind}: leg restarted ${RESTART_MAX}x with no progress, holding the kind`) } catch (_) { /* log best-effort */ }
-      if (d.kind === 'fence' || d.kind === 'gate') castleMod.noteDry(ctx, d.kind) // the decor word skips it (dry() shape)
+      castleMod.noteDry(ctx, d.kind) // the decor word tries the next open kind (the fall-through's shape)
       finish(bot, ctx, `failed:castlefetch-no-${d.kind}`)
       return
     }
     try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
   }
+  // qxql.3: the restart gap runs from this leg's last tick, not its start.
+  if (ctx.castleFetchRestarts && ctx.castleFetchRestarts.kind === f.kind) ctx.castleFetchRestarts.at = Date.now()
   // Batch yield (idkcraft-vmzq.20): a leg that reached a layable batch but
   // not its full target hands over after LEG_MAX_MS, so the castle lays
   // the partial instead of starving behind an 80-cobble fetch (rig: the

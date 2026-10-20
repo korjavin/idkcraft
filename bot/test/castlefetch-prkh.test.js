@@ -231,6 +231,7 @@ describe('prkh per-kind fetch hold', () => {
     await settle(); await settle()
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-fence')
     assert.equal(ctx.castleFetchFailKind, 'fence', 'the dead kind is stamped for the per-kind hold')
+    assert.ok(ctx.castleFetchDry && ctx.castleFetchDry.has('fence'), 'the decor word skips the dead kind')
     goal.recordOutcome(bot, ctx, {}, 'castlefetch', ctx.stepStatus, true, 'castle=fence-none')
     assert.equal(fetch.holdFor(bot, ctx, 'fence'), true, 'fence parked')
     assert.equal(fetch.holdFor(bot, ctx, 'stone'), false, 'stone still runs')

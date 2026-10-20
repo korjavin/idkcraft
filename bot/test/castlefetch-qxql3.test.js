@@ -33,4 +33,14 @@ describe('qxql.3 dead castlefetch restarts', () => {
     assert.equal(fetch.deadRestart(bot, ctx, { kind: 'planks', short: 29 }), false)
     assert.equal(fetch.deadRestart(bot, ctx, { kind: 'stone', short: 29 }), false)
   })
+
+  it('a start more than 30 s after the last tick breaks the streak', () => {
+    const ctx = {}
+    const bot = botWith([])
+    const d = { kind: 'stairs', short: 1 }
+    for (let i = 0; i < fetch.RESTART_MAX; i++) fetch.deadRestart(bot, ctx, d)
+    ctx.castleFetchRestarts.at -= 31 * 1000
+    assert.equal(fetch.deadRestart(bot, ctx, d), false)
+    assert.equal(ctx.castleFetchRestarts.n, 1)
+  })
 })
