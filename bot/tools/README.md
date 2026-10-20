@@ -1555,6 +1555,33 @@ Credentials: the Portainer url/api-key and the Grafana sa-token live in stash
 is the `monitoring` stack's `GRAFANA_HOST` env. Never paste them into the
 repo, a bead or a PR.
 
+## Prod scoreboard (`prod-score.js`, idkcraft-qxql.6)
+
+`node bot/tools/prod-score.js <log.txt> [--day]`: the epic's prod signals
+S1-S9 from a pulled bot2 log, one block per UTC day (`--day`) or for the whole
+file. Pull the log with the idkcraft-session-review skill recipe
+(`container_name:idkcraft-bot2`, a UTC window), one `YYYY-MM-DD HH:MM:SS <msg>`
+line per message, no bot-name column. It feeds the messages to
+`castle-replay.js` `classify()` (leg cuts, failure reasons); a `spawned as`
+line (v2 restart) drops an open leg. Block lines:
+
+- `placed=min->max (+growth)` (S1, `castle n/total`)
+- `share=` percent of decision ticks while a castle order is active (S4);
+  house = gather, craft, build, beds, light, stockpile
+- `fetch:` legs started (any kind), done legs, cut-by histogram (S2), stone
+  gained and s/stone from stone `leg over` blocks=/wall= (S3)
+- `walk/dig` tick ratio, `dead` legs (no stock gained), `top-fail` (S5),
+  `flat` runs of one `castle n` lasting >= 10 min and the longest as
+  `<min>@<dominant step>` (S6)
+- `holes:` build-stall, build-miss (`castle blocked`), dig slow per hour
+  (S7/S8), `skills=<runs>/<bans>` (`skill run` / `skill <name> banned` lines)
+- `deaths` (S9)
+
+No baseline file and no PASS/REGRESSION rule: a PR quotes the block for the 24
+h before and the first 24 h after its deploy (min 6 h each side) and the
+reviewer (idkcraft-qxql.7) compares. Daytime/bot-online filtering is not done
+here; pull windows that are.
+
 `deaths-baseline.json` holds the BEFORE row (10-15..17, old death lines: no
 step/kit facts). Re-measure 3 prod days after the enriched line deploys and
 replace it.
