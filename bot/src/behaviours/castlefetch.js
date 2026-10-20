@@ -639,10 +639,15 @@ async function drawChest(bot, ctx, d, at, need) {
     if (plankLogs) {
       // One wood per withdraw (szr1 core-2): the withdraw walks chest
       // slots, not the names order, so one multi-wood call would fund a
-      // mix no exact-wood craft can use. Complete the pack wood first
-      // (names arrive in planksFirst order), then the rest, until the
-      // need is met — never a mixed fund.
-      for (const name of names) {
+      // mix no exact-wood craft can use — and one call per registry wood
+      // would open the chest ~12 times. Peek once, then complete the pack
+      // wood first (names arrive in planksFirst order), then the rest,
+      // until the need is met — never a mixed fund. An unreadable chest
+      // keeps the legacy full loop (same opens as before).
+      let counts = null
+      try { counts = await stockpileMod.chestCounts(bot, ctx, names, at) } catch (_) { counts = null }
+      const order = counts ? names.filter((n) => (counts[n] | 0) > 0) : names
+      for (const name of order) {
         if (need <= 0) break
         const pr = await stockpileMod.withdrawAnyFromChest(bot, ctx, [name], Math.ceil(need / LOG_YIELD[d.kind]) * 4, at)
         need -= (pr && pr.got ? pr.got : 0) * (LOG_YIELD[d.kind] / 4)
@@ -2308,7 +2313,19 @@ function castlefetch(bot, ctx, target, state) {
   if (craftTick(bot, ctx, f, d)) return
   // g0z.60: a bank batch on hand lays before any dig. Not a torch leg (fqkn):
   // its bank draw is logs, which torchTick below smelts into the torches.
-  if (f.bankFull && d.kind !== 'torch') { finish(bot, ctx, 'done'); return }
+  // szr1 core-3: but a draw the pack cannot craft (craftOut latched: no
+  // table, no reach) must not read 'done' — the next leg would re-pick and
+  // drain the chest every few seconds. Fail so the hold parks it instead
+  // (the same hole the g0z.60 logs shape had; plank-stocked chests reach it).
+  if (f.bankFull && d.kind !== 'torch') {
+    if (f.craftOut) {
+      if (d.kind === 'fence' || d.kind === 'gate') castleMod.noteDry(ctx, d.kind)
+      finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
+      return
+    }
+    finish(bot, ctx, 'done')
+    return
+  }
   // idkcraft-8njf: on v2 a stairs craft that still fails after the table
   // retry mines ONE stone batch instead of failing into the 5-min hold
   // (forage -> rest -> house-build): stone is the castle's own material,
