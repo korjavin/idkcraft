@@ -209,18 +209,22 @@ const QUARRY = process.env.CASTLE_QUARRY || ''
 if (!['', 'dead'].includes(QUARRY) || (QUARRY && SEED !== 'complete')) {
   throw new Error(`CASTLE_QUARRY: want ''|dead with CASTLE_SEED=complete, got ${JSON.stringify(QUARRY)}`)
 }
-// Gate-approach pond (idkcraft-6fc1, needs CASTLE_SEED=complete): a sunken
-// pit across the walkway outside the gate gap — x -5..+5 at t = 1..2 out,
-// lid opened at pad top, water surface one below grade (down to site.y -
-// 6). Still surface water does NOT obstruct (rig: Baritone swims it and
-// relays first leg) and water shafts swim up trivially; what stalls is the
-// climb-out — straight dirt walls one above the surface, v1 swim-jumps out
-// while Baritone bobs against the wall into the stall clock and noPaths.
-// Rotation-safe (gate-gap/entrance/door plan offsets); the box never touches
-// a plan cell or the spawn (unit-tested). Pair with REPAIR=prkh (the stocked
-// chest) + QUARRY=dead (fast stone legs): master noPaths the walk and fails
-// the fence no-trees; the fix sidesteps the dry ends and relays. Pure
-// (unit-tested).
+// Gate-approach pond (idkcraft-6fc1, needs CASTLE_SEED=complete): turbulent
+// soup across the walkway outside the gate gap — a still-water base box
+// (x -5..+5, t = 1..5, surface at pad top down to site.y - 6) punched by
+// deep columns (x -4..+4 step 2, t = 2..4, top site.y + 1 down to site.y -
+// 9) and their spreading flow. Rig lesson (three negatives): short crossings
+// NEVER stall Baritone — still boxes swim through, shafts swim up, sunken
+// pits walk around — and dry-spawn ponds get avoided outright. What stalls
+// is starting WET with no dry plan: the spawn stands inside the soup, so
+// the first chest walk starts treading broken water (holes + cross-flow,
+// vertical cycling with no horizontal progress) into the stall clock and
+// noPaths, while v1 swims the same soup out. Dry land past the ends stays
+// within the fix's sidestep (r 8/12). Rotation-safe (gate-gap/entrance/door
+// plan offsets); soup never touches a plan cell (unit-tested). Pair with
+// REPAIR=prkh (the stocked chest) + QUARRY=dead (fast stone legs): master
+// noPaths the walk and fails the fence no-trees; the fix sidesteps the dry
+// ends and relays. Pure (unit-tested).
 const CHESTWATER = process.env.CASTLE_CHESTWATER || ''
 if (!['', '1'].includes(CHESTWATER) || (CHESTWATER && SEED !== 'complete')) {
   throw new Error(`CASTLE_CHESTWATER: want ''|1 with CASTLE_SEED=complete, got ${JSON.stringify(process.env.CASTLE_CHESTWATER)}`)
@@ -243,22 +247,31 @@ function chestwaterFills(st) {
   if ((ax === 0 && az === 0) || (ax !== 0 && az !== 0)) throw new Error('chestwaterFills: door/entrance off the walkway axis')
   const gx = st.site.x + gap.dx
   const gz = st.site.z + gap.dz
+  const at = (t, w) => [gx + ax * t + (ax === 0 ? w : 0), gz + az * t + (az === 0 ? w : 0)]
+  // Still-water base: x -5..+5, t = 1..5, surface at pad top (site.y - 1).
   const xs = []
   const zs = []
-  for (const t of [1, 2]) {
+  for (let t = 1; t <= 5; t++) {
     for (let w = -5; w <= 5; w++) {
-      xs.push(gx + ax * t + (ax === 0 ? w : 0))
-      zs.push(gz + az * t + (az === 0 ? w : 0))
+      const [x, z] = at(t, w)
+      xs.push(x)
+      zs.push(z)
     }
   }
   const x0 = Math.min(...xs)
   const x1 = Math.max(...xs)
   const z0 = Math.min(...zs)
   const z1 = Math.max(...zs)
-  return [
-    `fill ${x0} ${st.site.y - 1} ${z0} ${x1} ${st.site.y - 1} ${z1} minecraft:air`,
-    `fill ${x0} ${st.site.y - 2} ${z0} ${x1} ${st.site.y - 6} ${z1} minecraft:water`,
-  ]
+  const cmds = [`fill ${x0} ${st.site.y - 1} ${z0} ${x1} ${st.site.y - 6} ${z1} minecraft:water`]
+  // Turbulence columns through the base into the terrain, tops two above
+  // the pad so they fountain and spread.
+  for (const t of [2, 3, 4]) {
+    for (const w of [-4, -2, 0, 2, 4]) {
+      const [x, z] = at(t, w)
+      cmds.push(`fill ${x} ${st.site.y + 1} ${z} ${x} ${st.site.y - 9} ${z} minecraft:water`)
+    }
+  }
+  return cmds
 }
 // Stone re-knock (idkcraft-prkh): mid-run rcon knock-out of these plan
 // kinds (stone), once the torch fetch has failed into its hold — the word

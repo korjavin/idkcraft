@@ -64,49 +64,60 @@ describe('prkh rig scenario', () => {
     assert.ok(script.includes('CASTLE_CHESTWATER="${CASTLE_CHESTWATER:-}"'), 'chestwater not exported')
   })
 
-  // idkcraft-6fc1: a sunken pit across the gate-approach walkway, outside
-  // the fence line — lid opened at pad top, water a block below grade, so
-  // the climb-out is the obstacle. Rotation-safe; the box never touches a
-  // plan cell (damage) or the spawn (the bot must walk the approach).
-  it('sinks the gate approach outside the fence line on every rotation', () => {
+  // idkcraft-6fc1: turbulent soup across the gate-approach walkway — a
+  // still-water base box punched by deep columns, the spawn inside it (the
+  // first chest walk starts treading broken water). Rotation-safe; the soup
+  // never touches a plan cell (damage).
+  it('soups the gate approach outside the fence line on every rotation', () => {
     for (const rot of [0, 1, 2, 3]) {
       const st = { site: { x: 0, y: 64, z: 0 }, rot, blueprintVersion: blueprint.BLUEPRINT_VERSION }
       const fills = chestwaterFills(st)
-      assert.equal(fills.length, 2, `lid + body, rot ${rot}`)
-      const lid = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:air$/.exec(fills[0])
-      const body = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:water$/.exec(fills[1])
-      assert.ok(lid, `unparseable lid: ${fills[0]}`)
-      assert.ok(body, `unparseable body: ${fills[1]}`)
-      const [x0, yLid, z0, x1, yLid1, z1] = lid.slice(1).map(Number)
-      const [wx0, yTop, wz0, wx1, yBot, wz1] = body.slice(1).map(Number)
-      assert.equal(yLid, st.site.y - 1, `lid off the pad top, rot ${rot}`)
-      assert.equal(yLid1, yLid, `lid one layer, rot ${rot}`)
-      assert.equal(yTop, st.site.y - 2, `surface not a block below grade, rot ${rot}`)
-      assert.equal(yBot, st.site.y - 6, `pit through the pad base, rot ${rot}`)
-      assert.deepEqual([wx0, wz0, wx1, wz1], [x0, z0, x1, z1], `body under the lid, rot ${rot}`)
-      assert.ok(Math.max(x1 - x0, z1 - z0) + 1 >= 11 && Math.min(x1 - x0, z1 - z0) + 1 >= 2,
+      assert.equal(fills.length, 16, `base box + 15 columns, rot ${rot}`)
+      const box = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:water$/.exec(fills[0])
+      assert.ok(box, `unparseable box: ${fills[0]}`)
+      const [x0, yTop, z0, x1, yBot, z1] = box.slice(1).map(Number)
+      assert.equal(yTop, st.site.y - 1, `surface off the pad top, rot ${rot}`)
+      assert.equal(yBot, st.site.y - 6, `base through the pad, rot ${rot}`)
+      assert.ok(Math.max(x1 - x0, z1 - z0) + 1 >= 11 && Math.min(x1 - x0, z1 - z0) + 1 >= 5,
         `a crossing, not a puddle, rot ${rot}`)
+      const cols = fills.slice(1).map((cmd) => {
+        const m = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:water$/.exec(cmd)
+        assert.ok(m, `unparseable fill: ${cmd}`)
+        const [cx0, cyTop, cz0, cx1, cyBot, cz1] = m.slice(1).map(Number)
+        assert.equal(cx0, cx1, `not a single column: ${cmd}`)
+        assert.equal(cz0, cz1, `not a single column: ${cmd}`)
+        assert.equal(cyTop, st.site.y + 1, `column top off the fountain, rot ${rot}`)
+        assert.equal(cyBot, st.site.y - 9, `column too shallow, rot ${rot}`)
+        assert.ok(cx0 >= x0 && cx0 <= x1 && cz0 >= z0 && cz0 <= z1, `column outside the base, rot ${rot}`)
+        return [cx0, cz0]
+      })
+      assert.equal(cols.length, 15, `column count, rot ${rot}`)
       const plan = new Set(blueprint.absPlan(st.site, rot, blueprint.BLUEPRINT_VERSION).cells.map((c) => `${c.x},${c.z}`))
       let overlap = 0
       for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) if (plan.has(`${x},${z}`)) overlap++
-      assert.equal(overlap, 0, `pit under the castle, rot ${rot}`)
-      // The box straddles the walkway axis (no dry walk through the middle).
+      assert.equal(overlap, 0, `soup under the castle, rot ${rot}`)
+      // The walk line runs through the box (no dry walk down the middle).
       const gap = blueprint.rotatePlan([{ dx: 15, dy: 0, dz: 0 }], rot, blueprint.BLUEPRINT_VERSION)[0]
       const ent = blueprint.rotatePlan([{ dx: 15, dy: 0, dz: 5 }], rot, blueprint.BLUEPRINT_VERSION)[0]
       const door = blueprint.rotatePlan([{ dx: 15, dy: 0, dz: 7 }], rot, blueprint.BLUEPRINT_VERSION)[0]
-      const ax = Math.abs(ent.dx - door.dx) >= Math.abs(ent.dz - door.dz) ? Math.sign(ent.dx - door.dx) : 0
-      const az = Math.abs(ent.dx - door.dx) >= Math.abs(ent.dz - door.dz) ? 0 : Math.sign(ent.dz - door.dz)
-      // The walk line's constant coordinate runs through the box.
-      if (ax !== 0) assert.ok(z0 <= st.site.z + gap.dz && st.site.z + gap.dz <= z1, `pit off the walkway, rot ${rot}`)
-      else assert.ok(x0 <= st.site.x + gap.dx && st.site.x + gap.dx <= x1, `pit off the walkway, rot ${rot}`)
+      const alongX = Math.abs(ent.dx - door.dx) > Math.abs(ent.dz - door.dz)
+      if (alongX) assert.ok(z0 <= st.site.z + gap.dz && st.site.z + gap.dz <= z1, `soup off the walkway, rot ${rot}`)
+      else assert.ok(x0 <= st.site.x + gap.dx && st.site.x + gap.dx <= x1, `soup off the walkway, rot ${rot}`)
     }
-    // The seed's rot-0 spawn (gate.x + 2.5, gate.z - 3.5) stands clear.
+    // The seed's rot-0 spawn (gate.x + 2.5, gate.z - 3.5) stands INSIDE the
+    // soup (first walk starts wet) but clear of every column shaft.
     const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: blueprint.BLUEPRINT_VERSION }
     const gap = blueprint.rotatePlan([{ dx: 15, dy: 0, dz: 0 }], 0, blueprint.BLUEPRINT_VERSION)[0]
     const spawn = { x: st.site.x + gap.dx + 2.5, z: st.site.z + gap.dz - 3.5 }
-    const lid = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) /.exec(chestwaterFills(st)[0])
-    const [x0, , z0, x1, , z1] = lid.slice(1).map(Number)
-    assert.ok(spawn.x < x0 - 1 || spawn.x > x1 + 1 || spawn.z < z0 - 1 || spawn.z > z1 + 1,
-      `spawn inside the pit (${spawn.x},${spawn.z} vs ${x0}..${x1} ${z0}..${z1})`)
+    const box = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:water$/.exec(chestwaterFills(st)[0])
+    assert.ok(box, `unparseable box: ${chestwaterFills(st)[0]}`)
+    const [x0, , z0, x1, , z1] = box.slice(1).map(Number)
+    assert.ok(spawn.x >= x0 && spawn.x <= x1 + 1 && spawn.z >= z0 && spawn.z <= z1 + 1,
+      `spawn outside the soup (${spawn.x},${spawn.z} vs ${x0}..${x1} ${z0}..${z1})`)
+    for (const cmd of chestwaterFills(st).slice(1)) {
+      const m = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:water$/.exec(cmd)
+      const d = Math.hypot(Number(m[1]) - spawn.x, Number(m[3]) - spawn.z)
+      assert.ok(d > 0.6, `column shaft at the spawn (${cmd})`)
+    }
   })
 })

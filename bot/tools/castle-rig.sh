@@ -72,9 +72,9 @@
 #   CASTLE_QUARRY (''|dead, needs CASTLE_SEED=complete — idkcraft-prkh:
 #   water-fill every quarry/pit probe column + sweep exposed stone, so all
 #   stone legs fail fast),
-#   CASTLE_CHESTWATER (''|1, needs CASTLE_SEED=complete — idkcraft-6fc1: a
-#   sunken pit across the gate-approach walkway (the spawn stands clear),
-#   water a block below grade; pair with CASTLE_REPAIR=prkh),
+#   CASTLE_CHESTWATER (''|1, needs CASTLE_SEED=complete — idkcraft-6fc1:
+#   turbulent soup across the gate-approach walkway (the spawn stands in
+#   it); pair with CASTLE_REPAIR=prkh),
 #   CASTLE_REKNOCK (comma plan kinds, needs CASTLE_SEED=complete —
 #   idkcraft-prkh: knocked out mid-run once the torch fetch fails, e.g.
 #   stone),
