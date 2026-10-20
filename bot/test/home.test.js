@@ -641,16 +641,75 @@ describe('rw4.10 shelter run (flat legs sprint, night ticks stamped)', () => {
     body.movementsFor('work', bot, ctx, { sprint: true }) // post-dispatch refresh
     assert.equal(ctx.movements.allowSprinting, true)
   })
-  it('off-walk ticks do not refresh the stamp', () => {
-    const bot = mockBot({ at: { ...FAR }, timeOfDay: 15000 })
+  it('dusk walk stamps too (gohome owns dusk, same exposure)', () => {
+    const bot = mockBot({ at: { ...FAR }, timeOfDay: 12500 })
     const ctx = walkCtx()
+    steadyWalk(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk')
+    assert.equal(typeof ctx.shelterRun, 'number')
+    assert.ok(Date.now() - ctx.shelterRun < home.SHELTER_RUN_FRESH_MS)
+  })
+})
+
+describe('neuc.65.7 night-entry fight hold (door legs stamp, drags walk back)', () => {
+  const DRAG = { x: OUTSIDE.x, y: OUTSIDE.y, z: OUTSIDE.z - 8 } // knocked/fled 8 off the door
+  // A phase-preset ctx: the walk already arrived, the door work is running.
+  function doorCtx(phase, extra) {
+    return Object.assign({
+      home: ctxHome(),
+      movements: { allowSprinting: false, allowParkour: true },
+      gohome: { phase, stalls: 0, fails: 0, lastPos: null, lastToggle: 0, legIdx: 0, legTicks: 0, legPos: null, legStall: 0, backing: 0 },
+    }, extra)
+  }
+  it('open at night stamps a fresh shelterRun (fight cannot drag the body off the door)', () => {
+    const bot = mockBot({ at: { ...OUTSIDE }, timeOfDay: 15000 })
+    const ctx = doorCtx('open', { shelterRun: Date.now() - 10000 }) // stale walk stamp
     home.gohome(bot, ctx)
-    const stamp = ctx.shelterRun
-    assert.equal(typeof stamp, 'number')
-    bot.entity.position = { ...OUTSIDE }
-    home.gohome(bot, ctx) // arrived -> open leg, no walk
     assert.equal(ctx.gohome.phase, 'open')
-    assert.equal(ctx.shelterRun, stamp)
+    assert.equal(typeof ctx.shelterRun, 'number')
+    assert.ok(Date.now() - ctx.shelterRun < home.SHELTER_RUN_FRESH_MS)
+  })
+  it('enter at night stamps a fresh shelterRun', () => {
+    const bot = mockBot({ at: { ...OUTSIDE }, timeOfDay: 15000, doorOpen: true })
+    const ctx = doorCtx('enter', { shelterRun: Date.now() - 10000 })
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'enter')
+    assert.equal(typeof ctx.shelterRun, 'number')
+    assert.ok(Date.now() - ctx.shelterRun < home.SHELTER_RUN_FRESH_MS)
+  })
+  it('close at night stamps a fresh shelterRun', () => {
+    const bot = mockBot({ at: { ...INSIDE }, timeOfDay: 15000, doorOpen: true })
+    const ctx = doorCtx('close', { shelterRun: Date.now() - 10000 })
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'close')
+    assert.equal(typeof ctx.shelterRun, 'number')
+    assert.ok(Date.now() - ctx.shelterRun < home.SHELTER_RUN_FRESH_MS)
+  })
+  it('open dragged off the door walks back instead of toggling from range', () => {
+    const bot = mockBot({ at: { ...DRAG }, timeOfDay: 15000 })
+    const ctx = doorCtx('open')
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'walk') // re-approach, not a ranged toggle
+    assert.equal(bot.calls.activates, 0)
+    assert.equal(ctx.stepStatus, 'running')
+  })
+  it('open at the door still toggles (no false re-approach)', () => {
+    const bot = mockBot({ at: { ...OUTSIDE }, timeOfDay: 15000 })
+    const ctx = doorCtx('open')
+    home.gohome(bot, ctx)
+    assert.equal(ctx.gohome.phase, 'open')
+    assert.equal(bot.calls.activates, 1)
+  })
+  it('close that never shuts fails door-stuck within ~10 ticks (capped like open)', () => {
+    const bot = mockBot({ at: { ...INSIDE }, timeOfDay: 15000, doorOpen: true })
+    bot.activateBlock = async () => {} // the toggle never lands
+    const ctx = { home: ctxHome() }
+    home.gohome(bot, ctx) // inside -> close
+    assert.equal(ctx.gohome.phase, 'close')
+    let ticks = 0
+    while (ctx.stepStatus === 'running' && ticks < 30) { home.gohome(bot, ctx); ticks++ }
+    assert.equal(ctx.stepStatus, 'failed:door-stuck')
+    assert.ok(ticks <= 12, `failed after ${ticks} ticks`)
   })
 })
 

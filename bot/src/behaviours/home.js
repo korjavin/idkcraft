@@ -459,6 +459,21 @@ const SHELTER_RUN_FRESH_MS = 2500
 // so the night step (shelter/gohome/stay) runs first and digs now. One
 // shot per respawn: each death re-stamps, each dawn lets it go stale. The
 // window covers a walk (15 s) + pillar (~10 s) + dig-in (~5 s) + cap lag.
+// Night-entry fight hold (idkcraft-neuc.65.7): the atl.12 shelter-run gate
+// holds fight preemption while the stamp is fresh. The walk stamped it,
+// but the doorstep legs (open/enter/close) did not — 2.5 s into the door
+// work the stamp went stale, fight pursuit dragged the body off the door,
+// and the open leg toggled from range (or the enter legs sneak-walked
+// back through the pack): night-1 gohome died 4-16 blocks out instead of
+// getting inside. Every dusk/night gohome tick stamps, whatever the phase;
+// dusk stamps too because gohome owns dusk (the menu) and the march home
+// is the same exposure. A stalled door leg still fails out on its own cap
+// (OPEN_TICKS / DOOR_LEG_TICKS), so the hold is bounded by the latch.
+function stampShelterRun(bot, ctx) {
+  try {
+    if (factsTime(bot) !== 'day') ctx.shelterRun = Date.now()
+  } catch (_) { /* unknown time: no stamp (fail closed) */ }
+}
 const NIGHT_GRACE_MS = 60000
 function nightGrace(bot, ctx) {
   try {
@@ -575,6 +590,7 @@ function gohomeTick(bot, ctx, target, state) {
     ctx.lastGoalKey = '' // fresh walk must replan, not latch-skip (live 8kc)
     ensureNight(bot, ctx) // the night begins when the bot heads home
   }
+  stampShelterRun(bot, ctx) // every dusk/night entry tick holds fight, whatever the phase
   const st = ctx.gohome
   const out = outsidePos(home)
   const inn = insidePos(home)
@@ -600,10 +616,7 @@ function gohomeTick(bot, ctx, target, state) {
     if (!bp) return
     const res = worker.walkTick(bot, ctx, st, bp, nearOut(out, 1, false))
     if (res === 'walk') {
-      try {
-        if (factsTime(bot) === 'night') ctx.shelterRun = Date.now()
-      } catch (_) { /* unknown time: no stamp (fail closed) */ }
-      return
+      return // stamped at the tick top (night-entry fight hold)
     }
     if (res === 'done') {
       st.guided = null
@@ -682,12 +695,9 @@ function gohomeTick(bot, ctx, target, state) {
     else {
       // rw4.10: the walk home runs far flat legs (48 blocks take ~11 s
       // sprinted; fight churn on the way killed prod 7 times in 3.5 min),
-      // and every night walk tick stamps the shelter run for dispatch
-      // (atl.12) — gait-independent: rough legs walk but still count.
+      // gait-independent: rough legs walk but still count. The shelter-run
+      // stamp is at the tick top (night-entry fight hold).
       // (rw4.10 sprint runs in movementsFor off the stash above.)
-      try {
-        if (factsTime(bot) === 'night') ctx.shelterRun = Date.now()
-      } catch (_) { /* unknown time: no stamp (fail closed) */ }
       return
     }
   }
@@ -695,6 +705,19 @@ function gohomeTick(bot, ctx, target, state) {
     // No-dig released: the phase moved (the walk borrow is walk-scoped).
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
     if (doorGone(bot, home)) { failGoneDoor(bot, ctx, st, home, 'gohome-open'); return }
+    // Dragged off the door (fight/flee preemption, knockback): walk back
+    // instead of toggling from range — a ranged toggle never lands and the
+    // leg fails door-stuck out in the open (neuc.65.7). Inside skips the
+    // check (a lagged first tick still enters).
+    const bpOpen = botPos(bot)
+    if (bpOpen && !isInside(bot, home) && !nearOut(out, 1, false)(bpOpen)) {
+      st.phase = 'walk'
+      st.stalls = 0
+      st.lastPos = null
+      ctx.stepStatus = 'running'
+      ctx.lastGoalKey = '' // re-approach must replan, not latch-skip
+      return
+    }
     const door = doorBlock(bot, home)
     if (!door || doorOpen(door)) st.phase = 'enter'
     else if ((st.openTicks = (st.openTicks || 0) + 1) > OPEN_TICKS) {
@@ -735,6 +758,14 @@ function gohomeTick(bot, ctx, target, state) {
         ctx.gohomeSaidDay = mcDay
         try { bot.chat('home for the night') } catch (_) { /* chat best-effort */ }
       }
+      return
+    }
+    // Uncapped before neuc.65.7: a door that never reads shut toggled all
+    // night with the new tick-top fight hold armed (revmux 01 minor). Same
+    // cap as open: fail out and let the latch hand the night to shelter.
+    if ((st.closeTicks = (st.closeTicks || 0) + 1) > OPEN_TICKS) {
+      st.phase = 'failed'
+      ctx.stepStatus = 'failed:door-stuck'
       return
     }
     tryToggle(bot, ctx, st, door)
