@@ -126,7 +126,9 @@ function findSapling(bot) {
   try {
     const items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
     if (!Array.isArray(items)) return null
-    return items.find((it) => it && isSapling(it.name)) || null
+    // revmux verify #610 (codex P2): a lone dark_oak_sapling never grows
+    // (2x2 only) — planting it wastes the item, so it is never picked.
+    return items.find((it) => it && isSapling(it.name) && it.name !== 'dark_oak_sapling') || null
   } catch (_) { return null }
 }
 
@@ -162,6 +164,13 @@ function tryReplant(bot, ctx, g, stump, banned, digKey) {
     ;(async () => {
       try {
         await bot.equip(sapling, 'hand')
+        // revmux verify #610 (codex P2): the world and the body can change
+        // hands across the equip await — re-pin ownership and the open
+        // stump (air over plantable soil) before placing, or the flight
+        // swaps a fighter's sword for a sapling onto a taken cell.
+        if ((ctx && ctx.lastGoalKey) !== digKey) return
+        if (cellNameAt(bot, stump.x, stump.y, stump.z) !== 'air') return
+        if (!SAPLING_SOIL.has(cellNameAt(bot, stump.x, stump.y - 1, stump.z))) return
         await bot.placeBlock(ref.ref, ref.face)
         g.replanted = (g.replanted || 0) + 1
         try { console.log(`gather: replanted ${sapling.name} at ${stump.x} ${stump.y} ${stump.z}`) } catch (_) { /* log best-effort */ }

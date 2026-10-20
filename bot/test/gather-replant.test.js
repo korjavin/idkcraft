@@ -35,7 +35,7 @@ function pos(x, y, z) {
 const LOGREG = { oak_log: 17, oak_leaves: 18, stone: 1, dirt: 2 }
 const FIND_MD = 48
 
-function mockBot({ names = {}, items = [], syncHits = null, stubbornDig = false } = {}) {
+function mockBot({ names = {}, items = [], syncHits = null, stubbornDig = false, onEquip = null } = {}) {
   const lines = []
   const blocksByName = {}
   for (const [name, id] of Object.entries(LOGREG)) blocksByName[name] = { id }
@@ -91,16 +91,20 @@ function mockBot({ names = {}, items = [], syncHits = null, stubbornDig = false 
       if (bp && !stubbornDig) names[`${bp.x},${bp.y},${bp.z}`] = 'air' // chopped: loaded, stale
       bot._items.push({ name: 'oak_log', count: 1 })
     },
-    equip: async (item) => { bot.equipped = item && item.name },
+    equip: async (item) => {
+      bot.equipped = item && item.name
+      if (onEquip) await onEquip(item) // state can change across the await
+    },
     placeBlock: async (ref, face) => {
       bot.placeCalls++
       const rp = ref && ref.position
       const cell = rp ? `${rp.x + face.x},${rp.y + face.y},${rp.z + face.z}` : null
-      // A real placement consumes one pack sapling into the world cell.
-      const i = bot._items.findIndex((it) => it && it.name && it.name.endsWith('_sapling'))
-      if (i === -1) throw new Error('no sapling')
+      // A real placement consumes one of the EQUIPPED stack into the cell.
+      const want = bot.equipped
+      const i = bot._items.findIndex((it) => it && it.name === want)
+      if (i === -1) throw new Error(`no ${want}`)
       bot._items.splice(i, 1)
-      if (cell) names[cell] = 'oak_sapling'
+      if (cell) names[cell] = want
     },
     chat(line) { lines.push(String(line)) },
   }
@@ -230,6 +234,74 @@ describe('gather replant (idkcraft-gc3j)', () => {
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.placeCalls, 0)
     assert.equal(bot.equipped, null)
+  })
+
+  it('a steal across the equip await aborts the place', async () => {
+    // revmux verify #610 (codex P2): fight takes the body between equip
+    // and place — the re-check pins the dig goal, so no sapling lands.
+    const names = {}
+    grove(names, 10)
+    const bot = mockBot({
+      names,
+      items: [{ name: 'oak_sapling', count: 1 }],
+      onEquip: async () => { ctx.lastGoalKey = 'fight:zombie' },
+    })
+    const ctx = homeCtx()
+    await drive(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.equipped, 'oak_sapling')
+    assert.equal(bot.placeCalls, 0)
+  })
+
+  it('a filled stump across the equip await aborts the place', async () => {
+    // revmux verify #610 (codex P2): dirt lands in the first stump hole
+    // between equip and place — the air re-check refuses onto the taken
+    // cell (later stumps still plant, so the haul is unaffected).
+    const names = {}
+    grove(names, 10)
+    let poisoned = false
+    const bot = mockBot({
+      names,
+      items: [{ name: 'oak_sapling', count: 3 }],
+      onEquip: async () => {
+        if (!poisoned) {
+          poisoned = true
+          names['10,64,0'] = 'dirt'
+        }
+      },
+    })
+    const ctx = homeCtx()
+    await drive(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(names['10,64,0'], 'dirt', 'taken stump never planted over')
+    assert.ok(poisoned, 'poison fired')
+  })
+
+  it('a dark-oak-only pack never replants (2x2-only sapling)', async () => {
+    // revmux verify #610 (codex P2): a lone dark oak never grows — planting
+    // it wastes the item, so the loop leaves the pack alone.
+    const names = {}
+    grove(names, 10)
+    const bot = mockBot({ names, items: [{ name: 'dark_oak_sapling', count: 3 }] })
+    const ctx = homeCtx()
+    await drive(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.placeCalls, 0)
+    assert.equal(bot._items.filter((it) => it.name === 'dark_oak_sapling').length, 1)
+  })
+
+  it('a mixed pack plants the lone-grower, never the dark oak', async () => {
+    const names = {}
+    grove(names, 10)
+    const bot = mockBot({
+      names,
+      items: [{ name: 'dark_oak_sapling', count: 1 }, { name: 'oak_sapling', count: 1 }],
+    })
+    const ctx = homeCtx()
+    await drive(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(bot.equipped, 'oak_sapling')
+    assert.ok(bot._items.some((it) => it.name === 'dark_oak_sapling'), 'dark oak stays packed')
   })
 
   it('an interrupted dig leaves the log standing: no replant onto wood', async () => {
