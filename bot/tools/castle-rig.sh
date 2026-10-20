@@ -29,7 +29,9 @@
 #   blast is g0z.51's self-source kit: 5 raw iron + coal + cobble + a stone
 #   kit + bread — the finished block is NOT carried, the ladder smelts and
 #   crafts it; pair with CASTLE_SEED=complete +
-#   CASTLE_SEED_DECOR_EXCEPT=blast_furnace (ladder measured alone),
+#   CASTLE_SEED_DECOR_EXCEPT=blast_furnace (ladder measured alone);
+#   woodmix is szr1's prod mixed pack: 1 oak log + 1 oak plank, stone
+#   pick/sword + bread, no table — pair with CASTLE_REPAIR=planks,
 #   CASTLE_SEED (''|complete — g0z.33: complete rcon-places the whole v2
 #   castle (1722/1722 + beds + table) on the pad instead of ordering one,
 #   the bot adopts it as its residence (memory home kind=castle) and the
@@ -57,9 +59,11 @@
 #   with CASTLE_SEED=complete the same under the castle gate door),
 #   CASTLE_BODY (''|baritone — g0z.56: the builder runs on the v2 Baritone
 #   body, client image BARITONE_IMAGE, default client.sh tree-hash tag),
-#   CASTLE_REPAIR (''|wood|nowood, needs CASTLE_SEED=complete — g0z.56:
+#   CASTLE_REPAIR (''|wood|nowood|planks, needs CASTLE_SEED=complete — g0z.56:
 #   after adoption knock out 22 plan cells (12 fence, the door, 4 wall,
-#   3 torches, 2 stairs), wood = 16 oak_log in the castle chest; the guide chats
+#   3 torches, 2 stairs), wood = 16 oak_log in the castle chest, nowood =
+#   an empty chest and every log within 72 cleared, planks = the nowood
+#   clearing plus 48 oak_planks in the castle chest (szr1); the guide chats
 #   `castle repair`; the verdict adds repair=<relaid>/22@<s>, regress=<n>
 #   after the full relay and nowood@<s> (the shortfall status)),
 #   CASTLE_LITTER (''|1, needs CASTLE_SEED=complete — g0z.61: after adoption
@@ -218,12 +222,12 @@ DIAG=; if [ -n "$COMPONENT" ] && [ "$MINS" -lt 10 ]; then
 fi
 export CASTLE_DIAG="$DIAG"
 KIT="${CASTLE_KIT:-empty}"
-case "$KIT" in empty|seeded|junk|valuables|stairs|blast|lay|pick) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs|blast|lay|pick, got '$KIT'"; exit 2 ;; esac
+case "$KIT" in empty|seeded|junk|valuables|stairs|blast|woodmix|lay|pick) ;; *) echo "CASTLE_KIT: want empty|seeded|junk|valuables|stairs|blast|woodmix|lay|pick, got '$KIT'"; exit 2 ;; esac
 SEED="${CASTLE_SEED:-}"
 case "$SEED" in ''|complete) ;; *) echo "CASTLE_SEED: want ''|complete, got '$SEED'"; exit 2 ;; esac
 SEED_VERSION="${CASTLE_SEED_VERSION:-}"
 case "$SEED_VERSION" in ''|1|2|3) ;; *) echo "CASTLE_SEED_VERSION: want ''|1|2|3, got '$SEED_VERSION'"; exit 2 ;; esac
-case "${CASTLE_REPAIR:-}" in ''|wood|nowood) ;; *) echo "CASTLE_REPAIR: want ''|wood|nowood, got '$CASTLE_REPAIR'"; exit 2 ;; esac
+case "${CASTLE_REPAIR:-}" in ''|wood|nowood|planks) ;; *) echo "CASTLE_REPAIR: want ''|wood|nowood|planks, got '$CASTLE_REPAIR'"; exit 2 ;; esac
 [ -z "${CASTLE_REPAIR:-}" ] || [ "$SEED" = complete ] || { echo "CASTLE_REPAIR needs CASTLE_SEED=complete"; exit 2; }
 case "${CASTLE_LITTER:-}" in ''|1) ;; *) echo "CASTLE_LITTER: want ''|1, got '$CASTLE_LITTER'"; exit 2 ;; esac
 [ -z "${CASTLE_LITTER:-}" ] || [ "$SEED" = complete ] || { echo "CASTLE_LITTER needs CASTLE_SEED=complete"; exit 2; }

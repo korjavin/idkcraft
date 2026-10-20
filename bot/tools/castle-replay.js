@@ -154,10 +154,12 @@ const SAND = process.env.CASTLE_SAND === '1'
 // Repair run (g0z.56, needs CASTLE_SEED=complete): after adoption the
 // acceptance's 22 cells are knocked out (repairCells), wood = 16 oak_log in
 // the castle chest, nowood = an empty chest and every log within
-// NOWOOD_RADIUS cleared; the guide chats `castle repair`.
+// NOWOOD_RADIUS cleared, planks = the nowood clearing plus 48 oak_planks
+// in the castle chest (szr1: banked-planks refill with no logs anywhere);
+// the guide chats `castle repair`.
 const REPAIR = process.env.CASTLE_REPAIR || ''
-if (!['', 'wood', 'nowood'].includes(REPAIR) || (REPAIR && SEED !== 'complete')) {
-  throw new Error(`CASTLE_REPAIR: want ''|wood|nowood with CASTLE_SEED=complete, got ${JSON.stringify(REPAIR)}`)
+if (!['', 'wood', 'nowood', 'planks'].includes(REPAIR) || (REPAIR && SEED !== 'complete')) {
+  throw new Error(`CASTLE_REPAIR: want ''|wood|nowood|planks with CASTLE_SEED=complete, got ${JSON.stringify(REPAIR)}`)
 }
 const NOWOOD_RADIUS = 72
 // The 22 knocked-out cells (g0z.56 acceptance, vf8e.8 adds 2 stairs):
@@ -1521,6 +1523,17 @@ async function main() {
     }
     origLog('CASTLE-RIG kit=blast (5 raw iron, 16 coal, 48 cobble, stone pick+sword, 32 bread)')
   }
+  // Woodmix kit (szr1): the prod mixed pack — 1 oak log + 1 oak plank, no
+  // table: every wood variant ties uncoverable, so master names the nether
+  // tie-break. Pair with CASTLE_REPAIR=planks (chest planks, no logs within
+  // reach): the branch withdraws the planks and lays while master loops.
+  if (KIT === 'woodmix') {
+    for (const [item, count] of [['oak_log', 1], ['oak_planks', 1],
+      ['stone_pickaxe', 1], ['stone_sword', 1], ['bread', 32]]) {
+      await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
+    }
+    origLog('CASTLE-RIG kit=woodmix (1 oak log + 1 oak plank, stone pick+sword, 32 bread, no table)')
+  }
   await sleep(3000) // chunks in, both landed
   // Seeded complete castle (g0z.33): site SW corner so the 31x27 castle
   // centres on the pad, floor on the pad top + 1 (siteEval's median + 1).
@@ -1676,8 +1689,8 @@ async function main() {
     if (REPAIR === 'wood') {
       await rcon(`item replace block ${chest.x} ${chest.y} ${chest.z} container.0 with minecraft:oak_log 16`).catch((e) => fail('repair-seed', e.message))
     } else {
-      // No wood within reach: every log in a NOWOOD_RADIUS square, one
-      // y layer per fill (the 32768-block cap).
+      // No wood within reach (nowood, and planks below): every log in a
+      // NOWOOD_RADIUS square, one y layer per fill (the 32768-block cap).
       const cx = st.site.x + 15
       const cz = st.site.z + 13
       for (let y = gy - 12; y <= gy + 30; y++) {
@@ -1686,6 +1699,9 @@ async function main() {
       // The fill took the castle's own Fachwerk beams too: lay them back.
       for (const c of seedCastleCells(st)) {
         if (c.kind === 'frame') await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${c.block}`).catch((e) => fail('repair-seed', e.message))
+      }
+      if (REPAIR === 'planks') {
+        await rcon(`item replace block ${chest.x} ${chest.y} ${chest.z} container.0 with minecraft:oak_planks 48`).catch((e) => fail('repair-seed', e.message))
       }
     }
     await sleep(2000)
@@ -1706,7 +1722,7 @@ async function main() {
         c.castleDug = { sig, idx: new Set(), high: 0, was: new Set(), lastScan: Date.now() }
       }
     } catch (_) { /* baseline best-effort: the away gap covers it */ }
-    origLog(`CASTLE-RIG repair seed: ${knocked.length} cells knocked out (${knocked.map((c) => c.kind).join(',')}), chest ${REPAIR === 'wood' ? '16 oak_log' : `empty, logs cleared within ${NOWOOD_RADIUS}`}`)
+    origLog(`CASTLE-RIG repair seed: ${knocked.length} cells knocked out (${knocked.map((c) => c.kind).join(',')}), chest ${REPAIR === 'wood' ? '16 oak_log' : REPAIR === 'planks' ? `48 oak_planks, logs cleared within ${NOWOOD_RADIUS}` : `empty, logs cleared within ${NOWOOD_RADIUS}`}`)
   }
   let litterSeed = null
   if (LITTER) {
