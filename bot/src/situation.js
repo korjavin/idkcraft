@@ -52,7 +52,9 @@ function castleSection(bot, ctx) {
       const cw = ctx.castleWord
       if (cw && typeof cw.kind === 'string' && cw.kind) {
         let have = '?'
-        try { have = String(require('./behaviours/castle').usable(bot, cw.kind)) } catch (_) { /* have best-effort */ }
+        // ctx passed (codex review): without it the protected castleCarry
+        // stacks (owner chest relocation) count as spendable.
+        try { have = String(require('./behaviours/castle').usable(bot, cw.kind, ctx)) } catch (_) { /* have best-effort */ }
         // The gated-kind word ('blocked', castle.js:1212) rides along: the
         // model must tell it from an ordinary open need.
         const pre = cw.word ? `${cw.word} ` : ''
@@ -66,16 +68,24 @@ function castleSection(bot, ctx) {
     } catch (_) { /* progress best-effort */ }
     let phase = 'unknown'
     try { if (typeof st.phase === 'string' && st.phase) phase = st.phase } catch (_) { /* phase best-effort */ }
+    // Unread cells read as undone (codex review): far from the site a
+    // complete castle would report full bill-of-materials deficits, so the
+    // per-kind scan runs only while the site is loaded — otherwise unknown.
     let missing = 'unknown'
     try {
-      const rows = require('./behaviours/castle').progressByKind(bot, st)
-      const open = Object.entries(rows || {})
-        .map(([k, v]) => [k, (v && v.total | 0) - (v && v.done | 0)])
-        .filter(([, n]) => n > 0)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([k, n]) => `${k}:${n}`)
-      if (open.length > 0) missing = open.join(',')
+      const castle = require('./behaviours/castle')
+      let loaded = false
+      try { loaded = typeof castle.siteLoaded === 'function' ? castle.siteLoaded(bot, st) === true : false } catch (_) { loaded = false }
+      if (loaded) {
+        const rows = castle.progressByKind(bot, st)
+        const open = Object.entries(rows || {})
+          .map(([k, v]) => [k, (v && v.total | 0) - (v && v.done | 0)])
+          .filter(([, n]) => n > 0)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([k, n]) => `${k}:${n}`)
+        missing = open.length > 0 ? open.join(',') : 'none'
+      }
     } catch (_) { /* missing best-effort */ }
     return `castle: ${word} ${prog} phase=${phase} missing=${missing}`
   } catch (_) { return 'castle: unknown' }
@@ -191,7 +201,10 @@ function worldSection(bot, ctx) {
 }
 
 // <= ~40 lines of text, one section per line group. Read-only over
-// ctx/bot/memory; safe on null-everything.
+// ctx/bot/memory; safe on null-everything. Hard-capped (codex review): the
+// sections are bounded by construction, but the prompt section never grows
+// past SITUATION_MAX chars no matter what the pack or the ring hold.
+const SITUATION_MAX = 4000
 function situationText(bot, ctx) {
   const lines = []
   try { lines.push(castleSection(bot, ctx)) } catch (_) { lines.push('castle: unknown') }
@@ -201,7 +214,7 @@ function situationText(bot, ctx) {
   try { lines.push(holdsSection(ctx)) } catch (_) { lines.push('holds: unknown') }
   try { lines.push(ownerSection(ctx)) } catch (_) { lines.push('owner: unknown') }
   try { lines.push(worldSection(bot, ctx)) } catch (_) { lines.push('world: unknown') }
-  return lines.join('\n')
+  return lines.join('\n').slice(0, SITUATION_MAX)
 }
 
-module.exports = { situationText, inventoryText, pushOrderLog }
+module.exports = { situationText, inventoryText, pushOrderLog, SITUATION_MAX }

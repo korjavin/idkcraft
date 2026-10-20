@@ -100,6 +100,38 @@ describe('situation text', () => {
     assert.match(situationText(bot, ctx), /^chests: castle=\[cobblestone 64\] site=\[cobblestone 64\] home=\[cobblestone 64\]$/m)
   })
 
+  it('an unloaded complete castle reports unknown, not fake deficits', () => {
+    const bot = mockBot() // no blockAt: the site is unreadable from here
+    const ctx = {
+      castle: { site: { x: 10, y: 64, z: 10 }, rot: 0, blueprintVersion: 3, phase: 'complete', progress: { done: 2048, total: 2048 } },
+      castleWord: { word: 'done' },
+    }
+    const text = situationText(bot, ctx)
+    assert.match(text, /phase=complete missing=unknown/)
+    assert.doesNotMatch(text, /stone:\d+/)
+  })
+
+  it('protected castleCarry stacks do not count as spendable', () => {
+    const bot = mockBot([{ name: 'cobblestone', count: 64 }])
+    const ctx = {
+      castle: { site: { x: 10, y: 64, z: 10 }, rot: 0, blueprintVersion: 3, phase: 'body' },
+      castleWord: { kind: 'stone', left: 16 },
+      castleCarry: { items: [{ name: 'cobblestone', count: 64 }] },
+    }
+    assert.match(situationText(bot, ctx), /stone left=16 have=0/)
+  })
+
+  it('output never exceeds the global cap', () => {
+    const { SITUATION_MAX } = require('../src/situation')
+    const items = []
+    for (let i = 0; i < 300; i++) items.push({ name: `item_${i}`, count: 64 })
+    const bot = mockBot(items)
+    const ctx = { orderLog: Array.from({ length: 5 }, () => ({ line: 'x'.repeat(200), at: Date.now() })) }
+    const text = situationText(bot, ctx)
+    assert.ok(text.length <= SITUATION_MAX, `capped at ${SITUATION_MAX}, got ${text.length}`)
+    assert.ok(text.length === SITUATION_MAX, 'the cap binds on a pathological pack')
+  })
+
   it('a null-everything ctx yields all-unknown without throwing', () => {
     const text = situationText(null, null)
     assert.doesNotThrow(() => situationText({}, {}))
