@@ -942,6 +942,308 @@ function blastTick(bot, ctx, f, d, target, state) {
 // (one charcoal + a stick = 4 torches). No log: false, the leg fails
 // castlefetch-no-torch as before.
 const TORCH_HOME_DIST = 64 // castle.js TIDY_VISIT_DIST: farther than a visit = another place
+// Field charcoal (idkcraft-akze): the rung below only smelts at the home
+// furnace, but a tidy visit pins the bot at a far castle by day (gohome is
+// night-only, and the owed home try only fires off site near home — the bot
+// never leaves while the torch demand is open), so the leg failed no-torch
+// every window and the relay word never advanced to the sweep. With a log,
+// cobble for a furnace and fuel on hand, smelt the charcoal in a field
+// furnace placed beside the body instead: plan/decor cells are never built
+// on, and the furnace is dug up right after (an unbroken extra reads as
+// neither regress nor litter, but untidy is untidy). craftTick then crafts
+// the torches at the castle table like the home path.
+const FIELD_FURNACE_TICKS = 180 // place + one cook + break, inside LEG_MAX_MS
+const FIELD_PLACE_TRIES = 3
+const FIELD_SMELT_POLLS = 40
+const FIELD_DEAD_MS = 30 * 60 * 1000 // a given-up rung rests this long per site, then retries
+const FIELD_RECLAIM_REACH = 5 // dig reach for an orphaned field furnace
+function fieldSleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
+function fieldSiteKey(ctx) {
+  try {
+    const st = ctx && ctx.castle
+    if (st && st.site && typeof st.site.x === 'number') return `${st.site.x},${st.site.y},${st.site.z}:${st.rot | 0}:${st.blueprintVersion | 0}`
+  } catch (_) { /* key best-effort */ }
+  return null
+}
+function poisonField(ctx) {
+  try {
+    const site = fieldSiteKey(ctx)
+    if (site) ctx.castleFieldDead = { site, at: Date.now() }
+  } catch (_) { /* latch best-effort */ }
+}
+// A safe field-furnace cell beside the body: air with solid footing that is
+// no castle plan/decor cell (the relay must still lay there). The ground
+// below may be anything solid — placing on it breaks nothing.
+function fieldSpot(bot, ctx) {
+  try {
+    const bp = bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return null
+    const st = ctx && ctx.castle
+    let at = null
+    let dt = null
+    if (st && st.site && typeof st.site.x === 'number') {
+      try { at = blueprint.absPlan(st.site, st.rot | 0, st.blueprintVersion).at } catch (_) { at = null }
+      try { dt = blueprint.decorPlan(st.site, st.rot | 0, st.blueprintVersion).at } catch (_) { dt = null }
+    }
+    const bx = Math.floor(bp.x)
+    const by = Math.floor(bp.y)
+    const bz = Math.floor(bp.z)
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = bx + dx
+      const z = bz + dz
+      let below = null
+      let cell = null
+      try {
+        below = bot.blockAt(new Vec3(x, by - 1, z))
+        cell = bot.blockAt(new Vec3(x, by, z))
+      } catch (_) { below = null; cell = null }
+      // Solid footing only (tablespot's rule): water, snow and flora are
+      // non-air but take no placement. Fail-open on an unknown shape — old
+      // test doubles carry no boundingBox.
+      if (!below || !below.position || !below.name || below.name === 'air') continue
+      if (below.boundingBox != null && below.boundingBox !== 'block') continue
+      if (!cell || (cell.name !== 'air' && cell.name !== 'cave_air' && cell.name !== 'void_air')) continue
+      const k = `${x},${by},${z}`
+      if (at && at.has(k)) continue
+      if (dt && dt.has(k)) continue
+      return { x, y: by, z }
+    }
+    return null
+  } catch (_) { return null }
+}
+function fieldTorchTick(bot, ctx, f, d, dry, log, target, state) {
+  // A given-up smelt poisons the rung (three refused opens/a stalled cook is
+  // a persistent signal, not a blip): without this the next tick starts a
+  // fresh field cycle and the leg loops place -> fail -> dig -> place,
+  // burning cobble and never failing. Latched on ctx, site-keyed, for
+  // FIELD_DEAD_MS (a new site, or a later visit after expiry, retries).
+  if (ctx.castleFieldDead && ctx.castleFieldDead.site === fieldSiteKey(ctx) &&
+      Date.now() - ctx.castleFieldDead.at < FIELD_DEAD_MS) return false
+  const fl = f.field || (f.field = { phase: 'furnace', ticks: 0, tries: 0, flight: false, dead: false, at: null })
+  fl.ticks = (fl.ticks | 0) + 1
+  if (fl.dead || fl.ticks > FIELD_FURNACE_TICKS) {
+    f.field = null
+    // Poison on the way out (give-up and timeout alike): the next tick must
+    // fail the leg, not start a fresh field cycle that stacks another
+    // furnace. Site-keyed with expiry, so a later visit retries.
+    poisonField(ctx)
+    if (fl.dead) {
+      try { console.log('castlefetch torch: field smelt abandoned, the furnace may stand') } catch (_) { /* log best-effort */ }
+    }
+    return false
+  }
+  if (fl.flight) return true
+  // Fuel first (blastSmelt shape) — but only before anything is loaded: once
+  // the log and fuel sit in the furnace (smelt/break), the pack may read
+  // empty and fuelTick would hijack the tick into crafting or gathering.
+  if (fl.phase === 'furnace' || fl.phase === 'place') {
+    // One log and no other fuel smelts nothing (the log is the charcoal
+    // input; fuel must come from elsewhere): fail instead of burning the
+    // only log into planks and then placing a furnace that can never smelt.
+    const logs = countItems(bot, (n) => n.endsWith('_log'))
+    const fuel = countItems(bot, (n) => n === 'coal' || n === 'charcoal' || n.endsWith('_planks'))
+    if (logs <= 1 && fuel <= 0) return false
+    if (fuelTick(bot, ctx, f, target, state, 1, dry)) return true
+  }
+  if (fl.phase === 'furnace') {
+    let item = null
+    try { item = (bot.inventory.items() || []).find((i) => i && i.name === 'furnace') || null } catch (_) { item = null }
+    // Reclaim an orphaned field furnace first (a step switch mid-cycle left
+    // it standing): dig it instead of stacking another one. The drop may
+    // restock the item; either way the extra is gone.
+    if (!item && ctx.castleFieldFurnace && typeof ctx.castleFieldFurnace.x === 'number') {
+      const rec = ctx.castleFieldFurnace
+      let fb = null
+      try { fb = bot.blockAt(new Vec3(rec.x, rec.y, rec.z)) } catch (_) { fb = null }
+      if (fb && fb.name === 'furnace' && fb.position) {
+        try {
+          const bp = bot.entity && bot.entity.position
+          const d = bp && Math.hypot(bp.x - rec.x, bp.z - rec.z)
+          if (d != null && d <= FIELD_RECLAIM_REACH) {
+            fl.phase = 'reclaim'
+            fl.tries = 0
+          } else { try { ctx.castleFieldFurnace = null } catch (_) { /* track best-effort */ } }
+        } catch (_) { /* reclaim best-effort */ }
+      } else { try { ctx.castleFieldFurnace = null } catch (_) { /* track best-effort */ } }
+    }
+    try { item = item || (bot.inventory.items() || []).find((i) => i && i.name === 'furnace') || null } catch (_) { /* recheck best-effort */ }
+    if (!item && fl.phase === 'furnace') {
+      if (countItems(bot, (n) => n === 'cobblestone') < 8) return false
+      let r = null
+      try { r = deps.craftItem(bot, ctx, ['furnace'], 1) } catch (_) { r = null }
+      if (r === 'running') return true
+      if (!(r && r.done)) return false
+      try { item = (bot.inventory.items() || []).find((i) => i && i.name === 'furnace') || null } catch (_) { item = null }
+      if (!item) return false
+      fl.phase = 'place'
+      fl.tries = 0
+    } else if (fl.phase === 'furnace') {
+      fl.phase = 'place'
+      fl.tries = 0
+    }
+    // A reclaim phase set above falls through to its own block below.
+  }
+  if (fl.phase === 'reclaim') {
+    const rec = ctx.castleFieldFurnace
+    if (!rec || typeof rec.x !== 'number') { fl.phase = 'furnace'; return true }
+    fl.flight = true
+    void (async () => {
+      try {
+        if (fl.dead) return
+        let fb = null
+        try { fb = bot.blockAt(new Vec3(rec.x, rec.y, rec.z)) } catch (_) { fb = null }
+        if (fb && fb.name === 'furnace') {
+          try {
+            const items = (bot.inventory.items() || [])
+            const pick = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
+            if (pick && bot.equip) await bot.equip(pick, 'hand')
+          } catch (_) { /* dig decides */ }
+          await bot.dig(fb)
+        }
+        try { ctx.castleFieldFurnace = null } catch (_) { /* track best-effort */ }
+        fl.phase = 'furnace'
+        fl.tries = 0
+        try { console.log(`castlefetch torch: orphaned field furnace at ${rec.x} ${rec.y} ${rec.z} reclaimed`) } catch (_) { /* log best-effort */ }
+      } catch (e) {
+        fl.tries = (fl.tries | 0) + 1
+        if (fl.tries >= FIELD_PLACE_TRIES) { try { ctx.castleFieldFurnace = null } catch (_) { /* track best-effort */ } fl.phase = 'furnace' }
+      } finally {
+        if (f.field === fl) fl.flight = false
+      }
+    })()
+    return true
+  }
+  if (fl.phase === 'place') {
+    const spot = fieldSpot(bot, ctx)
+    if (!spot) return false // no safe cell: no-torch as before
+    fl.flight = true
+    void (async () => {
+      try {
+        if (fl.dead) return
+        let item = null
+        try { item = (bot.inventory.items() || []).find((i) => i && i.name === 'furnace') || null } catch (_) { item = null }
+        if (!item) throw new Error('no-furnace-item')
+        if (bot.equip) { try { await bot.equip(item, 'hand') } catch (_) { /* held already or bust: placement decides */ } }
+        let ref = null
+        try { ref = bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z)) } catch (_) { ref = null }
+        if (!ref || !ref.position) throw new Error('no-spot')
+        await bot.placeBlock(ref, new Vec3(0, 1, 0))
+        let at = null
+        try { at = bot.blockAt(new Vec3(spot.x, spot.y, spot.z)) } catch (_) { at = null }
+        if (!at || at.name !== 'furnace') throw new Error('furnace-place')
+        fl.at = { x: spot.x, y: spot.y, z: spot.z }
+        fl.phase = 'smelt'
+        fl.tries = 0
+        try { if (log && typeof log.name === 'string') fl.logName = log.name } catch (_) { /* name best-effort */ }
+        // Track the placed furnace on ctx (not the leg): a step switch
+        // mid-cycle orphans it, and the next torch leg reclaims it instead
+        // of stacking another one.
+        try { ctx.castleFieldFurnace = { ...fl.at } } catch (_) { /* track best-effort */ }
+        try { console.log(`castlefetch torch: field furnace placed at ${spot.x} ${spot.y} ${spot.z}`) } catch (_) { /* log best-effort */ }
+      } catch (e) {
+        fl.tries = (fl.tries | 0) + 1
+        if (fl.tries >= FIELD_PLACE_TRIES) fl.dead = true
+      } finally {
+        if (f.field === fl) fl.flight = false
+      }
+    })()
+    return true
+  }
+  if (fl.phase === 'smelt') {
+    if (!fl.at) { fl.dead = true; return true }
+    fl.flight = true
+    void (async () => {
+      let win = null
+      try {
+        if (fl.dead) return
+        let fb = null
+        try { fb = bot.blockAt(new Vec3(fl.at.x, fl.at.y, fl.at.z)) } catch (_) { fb = null }
+        if (!fb || fb.name !== 'furnace') throw new Error('furnace-gone')
+        const craftMod = require('./craft')
+        win = await bot.openFurnace(fb)
+        // The log may already sit in the furnace (putInput ran on an earlier
+        // try): use the stored name, not the pack scan.
+        const logName = (fl.logName && typeof fl.logName === 'string') ? fl.logName : (log && log.name)
+        const logId = (typeof logName === 'string' && logName) ? craftMod.itemId(bot, logName) : null
+        if (logId == null) throw new Error('no-log-id')
+        await win.putInput(logId, null, 1)
+        let fuelId = null
+        try {
+          if (countItems(bot, (n) => n === 'coal') > 0) fuelId = craftMod.itemId(bot, 'coal')
+          else {
+            const pl = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_planks'))
+            if (pl) fuelId = craftMod.itemId(bot, pl.name)
+          }
+        } catch (_) { fuelId = null }
+        if (fuelId == null) throw new Error('no-fuel-id')
+        await win.putFuel(fuelId, null, 1)
+        let smelted = false
+        for (let i = 0; i < FIELD_SMELT_POLLS && !fl.dead; i++) {
+          await fieldSleep(500)
+          let o = null
+          try { o = win.outputItem && win.outputItem() } catch (_) { o = null }
+          if (o && o.name === 'charcoal' && (o.count | 0) > 0) { smelted = true; break }
+        }
+        if (!smelted) throw new Error('smelt-stalled')
+        await win.takeOutput()
+        fl.phase = 'break'
+        fl.tries = 0
+        fl.smelted = true
+        try { console.log('castlefetch torch: field charcoal smelted') } catch (_) { /* log best-effort */ }
+      } catch (e) {
+        fl.tries = (fl.tries | 0) + 1
+        if (fl.tries >= FIELD_PLACE_TRIES) {
+          // Give up smelting, but still dig the furnace up when it stands:
+          // an abandoned extra reads verdict-neutral, yet untidy is untidy,
+          // and the next leg must not stack another one on top.
+          if (fl.at) { fl.phase = 'break'; fl.tries = 0 }
+          else fl.dead = true
+        }
+      } finally {
+        try { if (win && bot.closeWindow) await bot.closeWindow(win) } catch (_) { /* close best-effort */ }
+        if (f.field === fl) fl.flight = false
+      }
+    })()
+    return true
+  }
+  if (fl.phase === 'break') {
+    if (!fl.at) { f.field = null; return true } // defensive: nothing placed, nothing to re-arm
+    fl.flight = true
+    void (async () => {
+      try {
+        if (fl.dead) return
+        let fb = null
+        try { fb = bot.blockAt(new Vec3(fl.at.x, fl.at.y, fl.at.z)) } catch (_) { fb = null }
+        if (fb && fb.name === 'furnace') {
+          // A pick best-effort (a bare hand clears it too, just slower).
+          try {
+            const items = (bot.inventory.items() || [])
+            const pick = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
+            if (pick && bot.equip) await bot.equip(pick, 'hand')
+          } catch (_) { /* dig decides */ }
+          await bot.dig(fb)
+        }
+        let after = null
+        try { after = bot.blockAt(new Vec3(fl.at.x, fl.at.y, fl.at.z)) } catch (_) { after = null }
+        if (after && after.name !== 'air' && after.name !== 'cave_air' && after.name !== 'void_air') throw new Error('furnace-break')
+        try { console.log(`castlefetch torch: field furnace at ${fl.at.x} ${fl.at.y} ${fl.at.z} broken`) } catch (_) { /* log best-effort */ }
+        try { ctx.castleFieldFurnace = null } catch (_) { /* track best-effort */ }
+        f.field = null
+        if (fl.smelted) f.craftOut = false // charcoal in the pack: craftTick crafts next tick
+        // A given-up smelt poisons the rung (site-keyed, expires): fail the
+        // leg instead of re-placing on the next tick.
+        else poisonField(ctx)
+      } catch (e) {
+        fl.tries = (fl.tries | 0) + 1
+        if (fl.tries >= FIELD_PLACE_TRIES) fl.dead = true
+      } finally {
+        if (f.field === fl) fl.flight = false
+      }
+    })()
+    return true
+  }
+  return false
+}
 function torchTick(bot, ctx, f, d, target, state) {
   if (ctx.bring) return true // a foreign order runs (this rung opens none)
   const dry = (why) => { castleMod.noteDry(ctx, 'torch'); finish(bot, ctx, `failed:castlefetch-${why}`) }
@@ -951,18 +1253,24 @@ function torchTick(bot, ctx, f, d, target, state) {
     f.smeltJob = { input: fr.job.input, output: 'charcoal' }
   }
   if (f.smelting) { smeltTick(bot, ctx, f, dry); return true }
-  let log = null
-  try { log = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_log')) } catch (_) { log = null }
-  if (!log) return false
   // furnace.js smelts at the HOME furnace only: away from it (a tidy visit at
-  // a far castle) the rung fails fast as no-torch instead of walking the
-  // castle->house leg mid-fetch; the owed-repair word (castle.js) brings the
-  // fetch home, where this rung runs (g0z.62 rig: furnace-unreachable x2).
+  // a far castle) the field furnace below smelts the charcoal on site instead
+  // of walking the castle->house leg mid-fetch; the home path (blastSmelt)
+  // still runs whenever the bot is near home (g0z.62 rig).
+  let far = false
   try {
     const h = ctx.home && (ctx.home.furnace || ctx.home.site)
     const bp = bot.entity && bot.entity.position
-    if (h && bp && typeof h.x === 'number' && Math.hypot(bp.x - h.x, bp.z - h.z) > TORCH_HOME_DIST) return false
+    far = !!(h && bp && typeof h.x === 'number' && Math.hypot(bp.x - h.x, bp.z - h.z) > TORCH_HOME_DIST)
   } catch (_) { /* guard best-effort: the smelt walk decides */ }
+  // An active field cycle owns the tick even when the pack log is gone (the
+  // last log may already sit in the furnace): otherwise the break phase
+  // never runs and the furnace stands. The smelt uses its stored log name.
+  if (far && f.field) return fieldTorchTick(bot, ctx, f, d, dry, null, target, state)
+  let log = null
+  try { log = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_log')) } catch (_) { log = null }
+  if (!log) return false
+  if (far) return fieldTorchTick(bot, ctx, f, d, dry, log, target, state)
   blastSmelt(bot, ctx, f, target, state, dry, fr, { input: log.name, output: 'charcoal', count: Math.max(1, Math.min(log.count, Math.ceil(d.short / CRAFT_COUNT.torch))) })
   return true
 }
@@ -2063,6 +2371,9 @@ function castlefetch(bot, ctx, target, state) {
 module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.pickChest = pickChest
+module.exports.torchTick = torchTick
+module.exports.fieldSpot = fieldSpot
+module.exports.TORCH_HOME_DIST = TORCH_HOME_DIST
 module.exports.stairsCobbleShort = stairsCobbleShort
 module.exports.QUARRY_ADAPT = QUARRY_ADAPT
 module.exports.quarrySide = quarrySide

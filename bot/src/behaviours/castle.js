@@ -41,6 +41,7 @@ const BACKOFF_MAX_MS = 600000
 // ponytail: the scan resumes from a cursor (the first undone cell); a full
 // rescan from 0 every 30 s repairs cells mobs/players broke below it.
 const FULL_RESCAN_MS = 30000
+const CASTLE_AWAY_MS = 5 * 60 * 1000 // idkcraft-akze: no scan for this long = the bot was away (unloaded); the high-water re-baselines on return instead of logging the away knock as regress
 const DIG_APPROACH = 2 // GoalNear range: stops inside REACH_DIG (flat round-2 lesson)
 const SIDESTEPS = [[1, 0], [0, 1], [-1, 0], [0, -1]]
 const AIR = new Set(['air', 'cave_air', 'void_air'])
@@ -1325,10 +1326,25 @@ function progress(bot, st, cells, ctx) {
   st.progress = { done: n, total }
   // uh28: a drop below the high-water mark names the cells that were laid
   // last scan and are not now, once per drop.
+  // idkcraft-akze: after an away gap (no scan for a while — the bot was off
+  // site and unloaded) the high-water re-baselines instead of logging. The
+  // repair seed knocks 22 original cells while the bot is at the start
+  // house; the world took unlaid work, not damage under our watch. A drop
+  // between consecutive loaded scans (the bot present, ~FULL_RESCAN_MS
+  // apart) still names the lost cells.
   const cd = ctx.castleDug
   cd.was = now
+  let gapAway = false
+  try {
+    const nowMs = Date.now()
+    if (typeof cd.lastScan === 'number' && nowMs - cd.lastScan > CASTLE_AWAY_MS) {
+      cd.high = n // re-baseline: no regress line for the away knock
+      gapAway = true
+    }
+    cd.lastScan = nowMs
+  } catch (_) { /* clock best-effort: the gap check stands down */ }
   if (n >= cd.high) cd.high = n
-  else if (lost.length) console.log(`castle regress ${n} missing=${lost.slice(0, 10).map((c) => `${c.kind}@${c.x},${c.y},${c.z}`).join(' ')}`)
+  else if (!gapAway && lost.length) console.log(`castle regress ${n} missing=${lost.slice(0, 10).map((c) => `${c.kind}@${c.x},${c.y},${c.z}`).join(' ')}`)
   if (ctx.castleProgressLog !== n) {
     ctx.castleProgressLog = n
     console.log(`castle ${n}/${total}`)
