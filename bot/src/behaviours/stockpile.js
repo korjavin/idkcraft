@@ -53,6 +53,10 @@ const PANE_GLASS_KEEP = 18
 // Attic shelves (g0z.49): books per open shelf cell (the table recipe;
 // mirrors castlefetch BOOKS_PER_SHELF).
 const SHELF_BOOK_KEEP = 3
+// Replant reserve (idkcraft-gc3j): gather replants a pack sapling on each
+// felled home stump — banking every sapling would starve the loop, so the
+// first SAPLING_KEEP stay packed (any type) and only the surplus banks.
+const SAPLING_KEEP = 8
 // Blast ladder (g0z.51): the recipe stock stays packed only while a blast
 // decor cell is open, capped (5 iron + the 3 smooth chain + the recipe
 // furnace); the rest banks like junk. Cobble keeps the rung gate's 35 =
@@ -362,6 +366,7 @@ function depositPlan(bot, ctx) {
   let paneKeep = null
   let shelfBookKeep = 0
   let blastKeep = null
+  let saplingKeep = SAPLING_KEEP // gc3j: unconditional, no castle read
   let decorKeep = null // g0z.45: open decor demand per kind (pane/banner/fence), the pack keep bound
   try {
     const far = { blockAt: (p) => bot.blockAt(p) || { name: 'air' } }
@@ -446,6 +451,14 @@ function depositPlan(bot, ctx) {
     if (blastKeep && blastKeep[i.name] > 0) {
       const k = Math.min(blastKeep[i.name], n)
       blastKeep[i.name] -= k
+      n -= k
+      if (n <= 0) continue
+    }
+    // Replant reserve (gc3j): the first SAPLING_KEEP saplings (any type)
+    // stay packed for gather's stump replant; the surplus banks as before.
+    if (saplingKeep > 0 && (i.name.endsWith('_sapling') || i.name === 'mangrove_propagule')) {
+      const k = Math.min(saplingKeep, n)
+      saplingKeep -= k
       n -= k
       if (n <= 0) continue
     }
@@ -1967,6 +1980,7 @@ module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2
 module.exports.spotsFor = spotsFor
 module.exports.FOOD_KEEP = FOOD_KEEP
 module.exports.SCAFFOLD_KEEP = SCAFFOLD_KEEP
+module.exports.SAPLING_KEEP = SAPLING_KEEP
 module.exports.BLAST_COBBLE_KEEP = BLAST_COBBLE_KEEP
 module.exports.GEAR_RESERVE_PLANKS = GEAR_RESERVE_PLANKS
 module.exports.GEAR_RESERVE_COBBLE = GEAR_RESERVE_COBBLE
