@@ -209,15 +209,15 @@ const QUARRY = process.env.CASTLE_QUARRY || ''
 if (!['', 'dead'].includes(QUARRY) || (QUARRY && SEED !== 'complete')) {
   throw new Error(`CASTLE_QUARRY: want ''|dead with CASTLE_SEED=complete, got ${JSON.stringify(QUARRY)}`)
 }
-// Gate-approach pond (idkcraft-6fc1, needs CASTLE_SEED=complete): deep
-// single-column water holes across the walkway outside the gate gap (the
-// awt9 flood's mechanism, localized) — x -4..+4 step 2 at t = 1..2 out,
-// top site.y + 1 down to site.y - 9, plus their natural flow. A still-water
-// box does NOT obstruct (rig: Baritone swims 4-6 blocks of still water and
-// relays first leg); a 1-wide 11-deep hole drops the walker in with dry
-// ground between, and the flow pushes threaders in. v1 swims up and out.
-// Rotation-safe (gate-gap/entrance/door plan offsets); no column touches a
-// plan cell or the spawn (unit-tested). Pair with REPAIR=prkh (the stocked
+// Gate-approach pond (idkcraft-6fc1, needs CASTLE_SEED=complete): a sunken
+// pit across the walkway outside the gate gap — x -5..+5 at t = 1..2 out,
+// lid opened at pad top, water surface one below grade (down to site.y -
+// 6). Still surface water does NOT obstruct (rig: Baritone swims it and
+// relays first leg) and water shafts swim up trivially; what stalls is the
+// climb-out — straight dirt walls one above the surface, v1 swim-jumps out
+// while Baritone bobs against the wall into the stall clock and noPaths.
+// Rotation-safe (gate-gap/entrance/door plan offsets); the box never touches
+// a plan cell or the spawn (unit-tested). Pair with REPAIR=prkh (the stocked
 // chest) + QUARRY=dead (fast stone legs): master noPaths the walk and fails
 // the fence no-trees; the fix sidesteps the dry ends and relays. Pure
 // (unit-tested).
@@ -243,15 +243,22 @@ function chestwaterFills(st) {
   if ((ax === 0 && az === 0) || (ax !== 0 && az !== 0)) throw new Error('chestwaterFills: door/entrance off the walkway axis')
   const gx = st.site.x + gap.dx
   const gz = st.site.z + gap.dz
-  const cmds = []
+  const xs = []
+  const zs = []
   for (const t of [1, 2]) {
-    for (const w of [-4, -2, 0, 2, 4]) {
-      const x = gx + ax * t + (ax === 0 ? w : 0)
-      const z = gz + az * t + (az === 0 ? w : 0)
-      cmds.push(`fill ${x} ${st.site.y + 1} ${z} ${x} ${st.site.y - 9} ${z} minecraft:water`)
+    for (let w = -5; w <= 5; w++) {
+      xs.push(gx + ax * t + (ax === 0 ? w : 0))
+      zs.push(gz + az * t + (az === 0 ? w : 0))
     }
   }
-  return cmds
+  const x0 = Math.min(...xs)
+  const x1 = Math.max(...xs)
+  const z0 = Math.min(...zs)
+  const z1 = Math.max(...zs)
+  return [
+    `fill ${x0} ${st.site.y - 1} ${z0} ${x1} ${st.site.y - 1} ${z1} minecraft:air`,
+    `fill ${x0} ${st.site.y - 2} ${z0} ${x1} ${st.site.y - 6} ${z1} minecraft:water`,
+  ]
 }
 // Stone re-knock (idkcraft-prkh): mid-run rcon knock-out of these plan
 // kinds (stone), once the torch fetch has failed into its hold — the word
@@ -1866,7 +1873,7 @@ async function main() {
     }
     await sleep(2000)
     tickCtx().paused = false
-    origLog(`CASTLE-RIG chestwater pond: ${fills.length} columns (${fills[0]} ...)`)
+    origLog(`CASTLE-RIG chestwater pond: ${fills.join(' + ')}`)
   }
   let litterSeed = null
   if (LITTER) {
