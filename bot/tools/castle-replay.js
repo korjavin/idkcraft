@@ -209,6 +209,50 @@ const QUARRY = process.env.CASTLE_QUARRY || ''
 if (!['', 'dead'].includes(QUARRY) || (QUARRY && SEED !== 'complete')) {
   throw new Error(`CASTLE_QUARRY: want ''|dead with CASTLE_SEED=complete, got ${JSON.stringify(QUARRY)}`)
 }
+// Gate-approach pond (idkcraft-6fc1, needs CASTLE_SEED=complete): deep
+// single-column water holes across the walkway outside the gate gap (the
+// awt9 flood's mechanism, localized) — x -4..+4 step 2 at t = 1..2 out,
+// top site.y + 1 down to site.y - 9, plus their natural flow. A still-water
+// box does NOT obstruct (rig: Baritone swims 4-6 blocks of still water and
+// relays first leg); a 1-wide 11-deep hole drops the walker in with dry
+// ground between, and the flow pushes threaders in. v1 swims up and out.
+// Rotation-safe (gate-gap/entrance/door plan offsets); no column touches a
+// plan cell or the spawn (unit-tested). Pair with REPAIR=prkh (the stocked
+// chest) + QUARRY=dead (fast stone legs): master noPaths the walk and fails
+// the fence no-trees; the fix sidesteps the dry ends and relays. Pure
+// (unit-tested).
+const CHESTWATER = process.env.CASTLE_CHESTWATER || ''
+if (!['', '1'].includes(CHESTWATER) || (CHESTWATER && SEED !== 'complete')) {
+  throw new Error(`CASTLE_CHESTWATER: want ''|1 with CASTLE_SEED=complete, got ${JSON.stringify(process.env.CASTLE_CHESTWATER)}`)
+}
+function chestwaterFills(st) {
+  const bp = require('../src/castle')
+  const rot = st.rot | 0
+  const ver = st.blueprintVersion
+  // Plan offsets (FULL_*): the gate gap (15,0,0) sits on the walkway axis
+  // through the entrance (15,0,5) and the door (15,0,7); the pond runs
+  // outward from the gap. Rotated like the seed (rotatePlan convention).
+  const gap = bp.rotatePlan([{ dx: 15, dy: 0, dz: 0 }], rot, ver)[0]
+  const ent = bp.rotatePlan([{ dx: 15, dy: 0, dz: 5 }], rot, ver)[0]
+  const door = bp.rotatePlan([{ dx: 15, dy: 0, dz: 7 }], rot, ver)[0]
+  if (!gap || !ent || !door) throw new Error('chestwaterFills: plan offsets missing')
+  const dx = ent.dx - door.dx
+  const dz = ent.dz - door.dz
+  const ax = Math.abs(dx) >= Math.abs(dz) ? Math.sign(dx) : 0
+  const az = Math.abs(dx) >= Math.abs(dz) ? 0 : Math.sign(dz)
+  if ((ax === 0 && az === 0) || (ax !== 0 && az !== 0)) throw new Error('chestwaterFills: door/entrance off the walkway axis')
+  const gx = st.site.x + gap.dx
+  const gz = st.site.z + gap.dz
+  const cmds = []
+  for (const t of [1, 2]) {
+    for (const w of [-4, -2, 0, 2, 4]) {
+      const x = gx + ax * t + (ax === 0 ? w : 0)
+      const z = gz + az * t + (az === 0 ? w : 0)
+      cmds.push(`fill ${x} ${st.site.y + 1} ${z} ${x} ${st.site.y - 9} ${z} minecraft:water`)
+    }
+  }
+  return cmds
+}
 // Stone re-knock (idkcraft-prkh): mid-run rcon knock-out of these plan
 // kinds (stone), once the torch fetch has failed into its hold — the word
 // jumps back to stone while the torch hold still stands.
@@ -1857,6 +1901,21 @@ async function main() {
     tickCtx().paused = false
     origLog(`CASTLE-RIG quarry dead: ${fills.length} probe columns water-filled, exposed stone swept in +-32 (footprint kept)`)
   }
+  // Gate-approach pond (idkcraft-6fc1): deep columns across the walkway
+  // outside the gate gap, after the quarry sweep (untouched by it — water,
+  // not stone). The spawn stands clear of every column on equal settings.
+  if (CHESTWATER === '1') {
+    const st = tickCtx().castle
+    if (!st || !st.site) fail('chestwater', 'no castle site')
+    const fills = chestwaterFills(st)
+    tickCtx().paused = true
+    for (const cmd of fills) {
+      await rcon(cmd).catch((e) => fail('chestwater', e.message))
+    }
+    await sleep(2000)
+    tickCtx().paused = false
+    origLog(`CASTLE-RIG chestwater pond: ${fills.length} columns (${fills[0]} ...)`)
+  }
   let litterSeed = null
   if (LITTER) {
     litterSeed = litterSeeds(tickCtx().castle)
@@ -2876,4 +2935,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { apronBox, apronCloneCmds, apronChanged, componentLine, baselineFor, fetchLine, scoreboardLine, bankedOf, repairCells, prkhCells, quarryDeadFills, stoneheldAt, litterSeeds, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { apronBox, apronCloneCmds, apronChanged, componentLine, baselineFor, fetchLine, scoreboardLine, bankedOf, repairCells, prkhCells, quarryDeadFills, chestwaterFills, stoneheldAt, litterSeeds, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
