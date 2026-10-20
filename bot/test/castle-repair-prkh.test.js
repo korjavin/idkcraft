@@ -8,7 +8,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { prkhCells, stoneheldAt } = require('../tools/castle-replay')
+const { prkhCells, quarryDeadFills, stoneheldAt } = require('../tools/castle-replay')
 const blueprint = require('../src/castle')
 
 describe('prkh rig scenario', () => {
@@ -32,6 +32,25 @@ describe('prkh rig scenario', () => {
       at(45, 'failed:castlefetch-unreachable', null, 'stone'),
     ]), null, 'torch hold / kindless record under a stone word: no tag')
     assert.equal(stoneheldAt([]), null)
+  })
+
+  // idkcraft-awt9: the dead-quarry water stays below the floor (buried
+  // top at site.y - 1). A top at site.y + 1 flooded the pad surface and
+  // the gate approach, stalling Baritone's chest walk (noPath) so the v2
+  // fence leg failed no-trees without drawing the stocked chest.
+  it('buries the dead-quarry water top below the floor, one column per probe', () => {
+    const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: blueprint.BLUEPRINT_VERSION }
+    const fills = quarryDeadFills(st)
+    assert.ok(fills.length > 16, `want quarry sides + pit spots, got ${fills.length}`)
+    for (const cmd of fills) {
+      const m = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:water$/.exec(cmd)
+      assert.ok(m, `unparseable fill: ${cmd}`)
+      const [, x0, yTop, z0, x1, yBot, z1] = m.map(Number)
+      assert.equal(x0, x1, `not a single column: ${cmd}`)
+      assert.equal(z0, z1, `not a single column: ${cmd}`)
+      assert.equal(yTop, st.site.y - 1, `water top floods the surface: ${cmd}`)
+      assert.equal(yBot, st.site.y - 9, `probe column too short to stay wet: ${cmd}`)
+    }
   })
 
   it('wires the new knobs through castle-rig.sh', () => {
