@@ -64,31 +64,47 @@ describe('prkh rig scenario', () => {
     assert.ok(script.includes('CASTLE_CHESTWATER="${CASTLE_CHESTWATER:-}"'), 'chestwater not exported')
   })
 
-  // idkcraft-6fc1: one water box across the gate-approach walkway, outside
-  // the fence line, so the v2 chest walk crosses open water. Rotation-safe;
-  // never touches a plan cell (a pond over the castle would be damage).
-  it('ponds the gate approach outside the fence line on every rotation', () => {
+  // idkcraft-6fc1: deep single-column water holes across the gate-approach
+  // walkway, outside the fence line. Rotation-safe; no column touches a plan
+  // cell (a hole under the castle would be damage) or the spawn (the bot
+  // must walk the approach, not start trapped).
+  it('holes the gate approach outside the fence line on every rotation', () => {
     for (const rot of [0, 1, 2, 3]) {
       const st = { site: { x: 0, y: 64, z: 0 }, rot, blueprintVersion: blueprint.BLUEPRINT_VERSION }
       const fills = chestwaterFills(st)
-      assert.equal(fills.length, 1, `one box, rot ${rot}`)
-      const m = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:water$/.exec(fills[0])
-      assert.ok(m, `unparseable fill: ${fills[0]}`)
-      const [x0, yTop, z0, x1, yBot, z1] = m.slice(1).map(Number)
-      assert.equal(yTop, st.site.y + 1, `no surface flood, rot ${rot}`)
-      assert.equal(yBot, st.site.y - 6, `too shallow to swim, rot ${rot}`)
-      assert.ok((x1 - x0 + 1) * (z1 - z0 + 1) <= 64, `a strip, not a lake, rot ${rot}`)
+      assert.equal(fills.length, 10, `two rows of five, rot ${rot}`)
+      const cols = fills.map((cmd) => {
+        const m = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:water$/.exec(cmd)
+        assert.ok(m, `unparseable fill: ${cmd}`)
+        const [x0, yTop, z0, x1, yBot, z1] = m.slice(1).map(Number)
+        assert.equal(x0, x1, `not a single column: ${cmd}`)
+        assert.equal(z0, z1, `not a single column: ${cmd}`)
+        assert.equal(yTop, st.site.y + 1, `no surface flood, rot ${rot}`)
+        assert.equal(yBot, st.site.y - 9, `too shallow to trap, rot ${rot}`)
+        return [x0, z0]
+      })
       const plan = new Set(blueprint.absPlan(st.site, rot, blueprint.BLUEPRINT_VERSION).cells.map((c) => `${c.x},${c.z}`))
-      let overlap = 0
-      for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) if (plan.has(`${x},${z}`)) overlap++
-      assert.equal(overlap, 0, `pond over the castle, rot ${rot}`)
-      // The strip straddles the walkway: the gate-gap axis runs through it.
+      for (const [x, z] of cols) assert.ok(!plan.has(`${x},${z}`), `hole under the castle at ${x},${z}, rot ${rot}`)
+      // The walkway centre is holed on both rows (no straight dry crossing).
       const gap = blueprint.rotatePlan([{ dx: 15, dy: 0, dz: 0 }], rot, blueprint.BLUEPRINT_VERSION)[0]
-      const onAxis = []
-      for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) {
-        if (x === st.site.x + gap.dx || z === st.site.z + gap.dz) onAxis.push([x, z])
+      const ent = blueprint.rotatePlan([{ dx: 15, dy: 0, dz: 5 }], rot, blueprint.BLUEPRINT_VERSION)[0]
+      const door = blueprint.rotatePlan([{ dx: 15, dy: 0, dz: 7 }], rot, blueprint.BLUEPRINT_VERSION)[0]
+      const ax = Math.abs(ent.dx - door.dx) >= Math.abs(ent.dz - door.dz) ? Math.sign(ent.dx - door.dx) : 0
+      const az = Math.abs(ent.dx - door.dx) >= Math.abs(ent.dz - door.dz) ? 0 : Math.sign(ent.dz - door.dz)
+      for (const t of [1, 2]) {
+        assert.ok(cols.some(([x, z]) => x === st.site.x + gap.dx + ax * t && z === st.site.z + gap.dz + az * t),
+          `walkway centre dry at t=${t}, rot ${rot}`)
       }
-      assert.ok(onAxis.length >= 6, `pond off the walkway, rot ${rot}`)
+    }
+    // The seed's rot-0 spawn (gate.x + 2.5, gate.z - 3.5) stands clear.
+    const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: blueprint.BLUEPRINT_VERSION }
+    const gap = blueprint.rotatePlan([{ dx: 15, dy: 0, dz: 0 }], 0, blueprint.BLUEPRINT_VERSION)[0]
+    const spawn = { x: st.site.x + gap.dx + 2.5, z: st.site.z + gap.dz - 3.5 }
+    for (const cmd of chestwaterFills(st)) {
+      const m = /^fill (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) minecraft:water$/.exec(cmd)
+      assert.ok(m, `unparseable fill: ${cmd}`)
+      const d = Math.hypot(Number(m[1]) - spawn.x, Number(m[3]) - spawn.z)
+      assert.ok(d > 1.2, `column at the spawn (${cmd})`)
     }
   })
 })
