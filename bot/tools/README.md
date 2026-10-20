@@ -779,17 +779,21 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
   # or in one go (fetches into the work root, then harvests):
   sh bot/tools/curriculum.sh vlogs 7
   ```
-  The feed query is `compose_service:bot2 "recover action=" _time:7d`
-  (`CURRICULUM_FEED_SERVICE` / `CURRICULUM_FEED_QUERY` widen it to
-  `idkcraft-bot*`/`idkcraft-swarm*` plus `CURRICULUM_BOTS`); lines print as
-  `_time <bot name> _msg` with the name from `CURRICULUM_FEED_BOT` (default
-  `BOT2_USERNAME`, else `IdkBotV2`). Credentials: stash key NAMES only, values
-  from env or kv at runtime (never pasted) — `secrets/grafana-kfamcloud-sa-token`
-  plus the Portainer pair `secrets/kfamcloud-portainer-url` /
-  `secrets/kfamcloud-portainer-api-key` for the `monitoring` stack's
-  `GRAFANA_HOST`; direct env (`CURRICULUM_LOGS_URL` + `CURRICULUM_GRAFANA_TOKEN`,
-  or `CURRICULUM_GRAFANA_HOST`, or `CURRICULUM_PORTAINER_URL` /
-  `CURRICULUM_PORTAINER_API_KEY`) skips kv. Exit 2 when the feed is unreachable.
+  The feed is single-service: `compose_service:bot2 "recover action=" _time:7d`
+  (`CURRICULUM_FEED_SERVICE` retargets it to one other service, e.g. `bot`);
+  every line is labelled `CURRICULUM_FEED_BOT` (default `BOT2_USERNAME`, else
+  `IdkBotV2`), so a multi-service query would misattribute — don't widen it.
+  `CURRICULUM_FEED_QUERY` overrides the whole query (escape hatch). A feed that
+  hits `CURRICULUM_FEED_LIMIT` (default 50000) warns `hit limit=N, window
+  truncated` on stderr. Credentials: stash key NAMES only, values from env or
+  kv at runtime (never pasted) — `secrets/idkcraft-grafana-token` plus the
+  Portainer pair `secrets/idkcraft-portainer-url` /
+  `secrets/idkcraft-portainer-api-key` for the `monitoring` stack's
+  `GRAFANA_HOST` (one-time owner step: create the three keys with the prod
+  monitoring values); direct env (`CURRICULUM_LOGS_URL` +
+  `CURRICULUM_GRAFANA_TOKEN`, or `CURRICULUM_GRAFANA_HOST`, or
+  `CURRICULUM_PORTAINER_URL` / `CURRICULUM_PORTAINER_API_KEY`) skips kv. Exit 2
+  when the feed is unreachable.
   The docker-log fallback is the Portainer container-logs API dump
   (`<endpoint-id>` is the prod endpoint's id; bot2 runs without a TTY, so the
   response is docker's multiplexed stream and the tool demuxes it itself):

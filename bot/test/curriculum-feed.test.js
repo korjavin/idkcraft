@@ -55,8 +55,8 @@ const FAKE_KV = [
   'if [ "$1" = get ]; then',
   '  case "$2" in',
   "    *portainer-url) printf 'https://grafana.invalid/' ;;",
-  "    *api-key) printf 'PKEY' ;;",
-  "    *sa-token) printf 'TOKEN' ;;",
+  "    *portainer-api-key) printf 'PKEY' ;;",
+  "    *grafana-token) printf 'TOKEN' ;;",
   '  esac',
   'fi',
   'exit 0',
@@ -140,6 +140,7 @@ describe('curriculum-feed.sh (idkcraft-b64i)', () => {
     assert.equal(lines.length, 4)
     assert.ok(lines.every((l) => l.startsWith('2026-10-19 21:45:') && l.includes(' IdkBotV2 recover action=')))
     assert.match(r.err, /curriculum-feed: service feed lines=4/)
+    assert.ok(!r.err.includes('hit limit'), 'no truncation warning under the limit')
     const list = harvestLines(t, r.out)
     assert.equal(list.length, 1)
     assert.deepEqual([list[0].family, list[0].reason, list[0].proposable], ['page', 'pillar_up:failed:no-scaffold', true])
@@ -181,7 +182,7 @@ describe('curriculum-feed.sh (idkcraft-b64i)', () => {
     delete env.CURRICULUM_GRAFANA_TOKEN
     const r = spawnSync('sh', ['tools/curriculum-feed.sh', '7'], { cwd: BOT, env, encoding: 'utf8' })
     assert.equal(r.status, 2)
-    assert.match(`${r.stdout}${r.stderr}`, /secrets\/kfamcloud-portainer-url/)
+    assert.match(`${r.stdout}${r.stderr}`, /secrets\/idkcraft-portainer-url/)
   })
 
   it('a dead feed and a probe failure both exit 2', () => {
@@ -196,6 +197,13 @@ describe('curriculum-feed.sh (idkcraft-b64i)', () => {
     const t = setup()
     assert.equal(runFeed(t, '0').rc, 2)
     assert.equal(runFeed(t, 'soon').rc, 2)
+  })
+
+  it('a feed that hits the limit warns that the window is truncated', () => {
+    const t = setup()
+    const r = runFeed(t, '7', { CURRICULUM_FEED_LIMIT: '4' })
+    assert.equal(r.rc, 0)
+    assert.match(r.err, /curriculum-feed: hit limit=4, window truncated/)
   })
 })
 

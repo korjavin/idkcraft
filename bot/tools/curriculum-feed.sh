@@ -22,8 +22,11 @@
 # the harvest only reads recover episodes).
 #
 # Env (secrets resolve at runtime and never print; stash KEY NAMES only in
-# here, values come from env or kv — never paste them into the repo):
-#   CURRICULUM_FEED_SERVICE (default bot2): the compose_service value.
+# here, values come from env or kv — never paste them into the repo, no
+# hostnames or domain labels anywhere below):
+#   CURRICULUM_FEED_SERVICE (default bot2): the compose_service value. The
+#     feed is single-service: every line is labelled CURRICULUM_FEED_BOT, so
+#     a multi-service query would misattribute — don't widen it.
 #   CURRICULUM_FEED_BOT (default BOT2_USERNAME, else IdkBotV2).
 #   CURRICULUM_FEED_QUERY: full LogsQL query (default built from the two
 #     above); CURRICULUM_FEED_LIMIT (default 50000).
@@ -31,11 +34,12 @@
 #   CURRICULUM_GRAFANA_HOST / CURRICULUM_GRAFANA_TOKEN: skip Portainer/kv.
 #   CURRICULUM_PORTAINER_URL / CURRICULUM_PORTAINER_API_KEY: skip kv.
 #   CURRICULUM_KV (default ~/.local/bin/kv),
-#   CURRICULUM_PORTAINER_URL_KEY (default secrets/kfamcloud-portainer-url),
+#   CURRICULUM_PORTAINER_URL_KEY (default secrets/idkcraft-portainer-url),
 #   CURRICULUM_PORTAINER_API_KEY_KEY
-#     (default secrets/kfamcloud-portainer-api-key),
-#   CURRICULUM_GRAFANA_TOKEN_KEY
-#     (default secrets/grafana-kfamcloud-sa-token).
+#     (default secrets/idkcraft-portainer-api-key),
+#   CURRICULUM_GRAFANA_TOKEN_KEY (default secrets/idkcraft-grafana-token).
+#   One-time owner step: create those three stash keys with the prod
+#   monitoring values (Grafana SA token, prod Portainer URL + API key).
 #   CURRICULUM_FEED_CURL (default curl): stub seam for tests.
 #   CURRICULUM_LOGS_SCHEME (default https).
 #
@@ -61,14 +65,14 @@ TOKEN="${CURRICULUM_GRAFANA_TOKEN:-}"
 if [ -z "$LOGS" ]; then
   PURL="${CURRICULUM_PORTAINER_URL:-}"
   if [ -z "$PURL" ]; then
-    PURL="$(kvget "${CURRICULUM_PORTAINER_URL_KEY:-secrets/kfamcloud-portainer-url}" | sed 's:/*$::')"
+    PURL="$(kvget "${CURRICULUM_PORTAINER_URL_KEY:-secrets/idkcraft-portainer-url}" | sed 's:/*$::')"
   fi
   PKEY="${CURRICULUM_PORTAINER_API_KEY:-}"
   if [ -z "$PKEY" ]; then
-    PKEY="$(kvget "${CURRICULUM_PORTAINER_API_KEY_KEY:-secrets/kfamcloud-portainer-api-key}")"
+    PKEY="$(kvget "${CURRICULUM_PORTAINER_API_KEY_KEY:-secrets/idkcraft-portainer-api-key}")"
   fi
   if [ -z "$PURL" ] || [ -z "$PKEY" ]; then
-    echo "curriculum-feed: portainer keys unreachable (stash ${CURRICULUM_PORTAINER_URL_KEY:-secrets/kfamcloud-portainer-url} / ${CURRICULUM_PORTAINER_API_KEY_KEY:-secrets/kfamcloud-portainer-api-key}, or env CURRICULUM_PORTAINER_URL / CURRICULUM_PORTAINER_API_KEY)" >&2
+    echo "curriculum-feed: portainer keys unreachable (stash ${CURRICULUM_PORTAINER_URL_KEY:-secrets/idkcraft-portainer-url} / ${CURRICULUM_PORTAINER_API_KEY_KEY:-secrets/idkcraft-portainer-api-key}, or env CURRICULUM_PORTAINER_URL / CURRICULUM_PORTAINER_API_KEY)" >&2
     exit 2
   fi
   GHOST="${CURRICULUM_GRAFANA_HOST:-}"
@@ -85,9 +89,9 @@ for s in stacks if isinstance(stacks, list) else []:
       sys.exit(0)')"
   fi
   if [ -z "$GHOST" ]; then echo "curriculum-feed: GRAFANA_HOST not found via portainer" >&2; exit 2; fi
-  if [ -z "$TOKEN" ]; then TOKEN="$(kvget "${CURRICULUM_GRAFANA_TOKEN_KEY:-secrets/grafana-kfamcloud-sa-token}")"; fi
+  if [ -z "$TOKEN" ]; then TOKEN="$(kvget "${CURRICULUM_GRAFANA_TOKEN_KEY:-secrets/idkcraft-grafana-token}")"; fi
   if [ -z "$TOKEN" ]; then
-    echo "curriculum-feed: grafana token unreachable (stash ${CURRICULUM_GRAFANA_TOKEN_KEY:-secrets/grafana-kfamcloud-sa-token}, or env CURRICULUM_GRAFANA_TOKEN)" >&2
+    echo "curriculum-feed: grafana token unreachable (stash ${CURRICULUM_GRAFANA_TOKEN_KEY:-secrets/idkcraft-grafana-token}, or env CURRICULUM_GRAFANA_TOKEN)" >&2
     exit 2
   fi
   LOGS="$SCHEME://$GHOST/api/datasources/proxy/uid/PD775F2863313E6C7/select/logsql/query"
@@ -118,9 +122,15 @@ rm -f "$BODY.code"
 
 # _time -> "YYYY-MM-DD HH:MM:SS", one harvest line per log line. A _msg with
 # an embedded newline would forge a line: keep the first physical line only.
-BOT="$BOT" python3 - "$BODY" <<'EOF'
+# A feed that hits CURRICULUM_FEED_LIMIT is truncated: say so on stderr, or
+# the harvest is quietly incomplete.
+BOT="$BOT" LIMIT="$LIMIT" python3 - "$BODY" <<'EOF'
 import json,os,sys
 bot = os.environ["BOT"]
+try:
+  lim = int(os.environ.get("LIMIT") or 0)
+except ValueError:
+  lim = 0
 n = 0
 with open(sys.argv[1]) as fh:
   for line in fh:
@@ -140,4 +150,6 @@ with open(sys.argv[1]) as fh:
     print("%s %s %s %s" % (t[0:10], t[11:19], bot, msg))
     n += 1
 print("curriculum-feed: service feed lines=%d" % n, file=sys.stderr)
+if lim and n >= lim:
+  print("curriculum-feed: hit limit=%d, window truncated" % lim, file=sys.stderr)
 EOF
