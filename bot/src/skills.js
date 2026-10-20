@@ -55,7 +55,7 @@ const REASON_RE = /^failed:[a-z0-9-]{1,40}$/
 const KINDS = new Set(['recover', 'step'])
 const BODIES = new Set(['any', 'mineflayer', 'baritone'])
 const CONTROLS = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
-const FACADE_OPS = ['pos', 'blockAt', 'findBlocks', 'inventory', 'count', 'health', 'food', 'time', 'entities', 'status',
+const FACADE_OPS = ['pos', 'blockAt', 'findBlocks', 'inventory', 'count', 'health', 'food', 'time', 'entities', 'drops', 'status',
   'dig', 'digIn', 'place', 'use', 'goto', 'stop', 'control', 'lookAt', 'equip']
 
 // Standing eye height for the server use-raycast (waterup.js EYE_HEIGHT).
@@ -208,6 +208,18 @@ function fire(c, kind, fn) {
 
 const PLACE_REFS = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]]
 
+// One entity's dropped-stack name, both bodies: v1 reads mineflayer's
+// getDroppedItem(), v2 reads the folded item field the bridge carries
+// from the mod's entities.list (idkcraft-poyd). Null for anything that is
+// not a named drop.
+function dropName(e) {
+  try {
+    const d = e.getDroppedItem && e.getDroppedItem()
+    if (d && typeof d.name === 'string') return d.name
+  } catch (_) { /* unreadable drop reads null */ }
+  return (e && typeof e.item === 'string' && e.item) ? e.item : null
+}
+
 // Host side of the bridge: op name + plain args -> plain JSON value.
 const OPS = {
   pos(c) {
@@ -254,6 +266,45 @@ const OPS = {
         if (d && typeof d.name === 'string') item = d.name
       } catch (_) { /* unreadable drop reads null */ }
       out.push({ name: e.name || null, type: e.type || null, username: e.username || null, item, x: e.position.x, y: e.position.y, z: e.position.z })
+      if (out.length >= 32) break
+    }
+    return out
+  },
+  // idkcraft-poyd: the cheap per-tick drop watch for gather skills. A
+  // skill that scans entities() twice a tick (players, then drops) pays
+  // two full-fold scans inside its 50 ms; drops() scans once per tick —
+  // the first call rebuilds the rows from the folded entities (refreshed
+  // by the body's own poll, never an RPC here) and caches them on the
+  // episode, later calls this tick only filter. Read-only: digging and
+  // placing still go through the denyReason guards, unchanged.
+  drops(c, item, radius = 16) {
+    let want = null
+    if (item !== undefined && item !== null) {
+      const names = Array.isArray(item) ? item : [item]
+      if (names.length > 64) throw new Error('names must be an array of <=64')
+      want = new Set(names.map(String))
+    }
+    const r = Math.min(num(radius), 32)
+    const p = botPos(c.bot)
+    if (!p) return []
+    const hs = c.hs || {}
+    let rows = hs.dropRows
+    if (!Array.isArray(rows) || hs.dropTick !== c.tickNo) {
+      rows = []
+      for (const e of Object.values(c.bot.entities || {})) {
+        if (!e || e === c.bot.entity || !e.position) continue
+        const name = dropName(e)
+        if (!name) continue
+        rows.push({ item: name, x: e.position.x, y: e.position.y, z: e.position.z })
+      }
+      hs.dropTick = c.tickNo
+      hs.dropRows = rows
+    }
+    const out = []
+    for (const d of rows) {
+      if (want && !want.has(d.item)) continue
+      if (Math.hypot(d.x - p.x, d.y - p.y, d.z - p.z) > r) continue
+      out.push(d)
       if (out.length >= 32) break
     }
     return out
@@ -563,7 +614,7 @@ function compile(file, text, env) {
         out = 'failed:skill-timeout'
       } else {
         const alive = () => !st.dead && (!st.alive || st.alive())
-        const r = call(runScript, { bot, ctx, hs: st.hs, act, alive, name: meta.name })
+        const r = call(runScript, { bot, ctx, hs: st.hs, act, alive, name: meta.name, tickNo: st.ticks })
         if (r.error) {
           out = `failed:${r.error}`
           console.log(`skill error skill=${meta.name} outcome=${r.error} msg=${JSON.stringify(r.msg)}`)

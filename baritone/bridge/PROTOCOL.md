@@ -396,7 +396,7 @@ round, `handleBridgeEvent` first in the adapter's event router).
 
 | method | params | result | mineflayer surface |
 |---|---|---|---|
-| `entities.list` | — | `{entities:[{id,uuid,type,name?,displayName,kind,pos{x,y,z},vel{x,y,z},yaw,pitch,health?,onGround,pose,self?}]}` | `bot.entities[id]` |
+| `entities.list` | — | `{entities:[{id,uuid,type,name?,displayName,kind,pos{x,y,z},vel{x,y,z},yaw,pitch,health?,onGround,pose,self?,item?}]}` | `bot.entities[id]` |
 | `roster.get` | — | `{players:[{name,uuid,ping,gameMode}]}` | `bot.players[name]` |
 
 `type` is `'player'` or the mob registry id (e.g. `'zombie'`);
@@ -405,6 +405,9 @@ round, `handleBridgeEvent` first in the adapter's event router).
 (MONSTER→hostile, MISC→other, players→player, rest→animal);
 `gameMode` is the numeric mode id (null when the entry carries none);
 `self:true` tags the local player when the client world lists it.
+`item` is the dropped stack's item registry path (e.g. `oak_sapling`),
+present only on item entities (idkcraft-poyd: the skill drop watch —
+the Node fold carries it as `entity.item` + `getDroppedItem()`).
 
 Events: `player.joined {name,uuid}` / `player.left {name,uuid}` (tab-list
 diff per client tick), `entity.gone {id}` (best-effort; the list diff is

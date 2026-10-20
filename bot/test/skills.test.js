@@ -820,6 +820,36 @@ describe('skills: order-only step skills (vf8e.17)', () => {
     assert.equal(tick(sk, bot), 'done')
   })
 
+  it('drops() watches named drops and scans the fold once per tick', () => {
+    const bot = fakeBot()
+    const backing = {
+      1: { name: 'Item', type: 'object', position: new Vec3(2, 61, 0.5), getDroppedItem: () => ({ name: 'oak_sapling', count: 1 }) },
+      2: { name: 'Item', type: 'object', position: new Vec3(4, 61, 0.5), getDroppedItem: () => ({ name: 'stick', count: 2 }) },
+      // v2 fold shape without the method (bridge carries the item field)
+      4: { name: 'item', type: 'object', position: new Vec3(3, 61, 1.5), item: 'birch_sapling' },
+      3: { name: 'Zombie', type: 'hostile', position: new Vec3(3, 61, 0.5) },
+    }
+    // The bot's own entry never reads as a drop, even when it carries one.
+    bot.entity.getDroppedItem = () => ({ name: 'oak_sapling', count: 1 })
+    let reads = 0
+    Object.defineProperty(bot, 'entities', { configurable: true, get() { reads++; return backing } })
+    const sk = compiled('drops_watch',
+      'const all = bot.drops(); const saps = bot.drops("oak_sapling"); const pair = bot.drops(["oak_sapling", "stick"]); ' +
+      'const near = bot.drops(null, 2); const none = bot.drops("diamond"); const birch = bot.drops("birch_sapling"); ' +
+      'if (all.length !== 3) return "failed:all-" + all.length; ' +
+      'if (saps.length !== 1 || saps[0].item !== "oak_sapling") return "failed:saps"; ' +
+      'if (pair.length !== 2) return "failed:pair"; ' +
+      'if (near.length !== 1 || near[0].item !== "oak_sapling") return "failed:near"; ' +
+      'if (none.length !== 0) return "failed:none"; ' +
+      'if (birch.length !== 1 || typeof birch[0].x !== "number") return "failed:birch"; ' +
+      'return "done"')
+    const st = { ticks: 0, hs: { busy: null, err: null } }
+    assert.equal(tick(sk, bot, {}, st), 'done')
+    assert.equal(reads, 1, 'five drops() calls in one tick pay one fold scan')
+    assert.equal(tick(sk, bot, {}, st), 'done')
+    assert.equal(reads, 2, 'the next tick re-scans')
+  })
+
   it('an ordered run reads st.count/st.by; anything else reads nulls', () => {
     const echoSrc = '/* skill {"name": "args_echo", "description": "echo order args", "kind": "step"} */\n' +
       'function feasible(facts) { return facts.pinned === "args_echo" }\n' +

@@ -79,11 +79,19 @@ function setVec(v, p) {
   if (typeof p.z === 'number') v.z = p.z
 }
 
+// idkcraft-poyd: the wire names the dropped stack (item registry path) on
+// item entities; the fold carries it as entity.item plus a mineflayer-shaped
+// getDroppedItem() so the skill facade reads drops on both bodies.
+function dropItemOf(w) {
+  return (w && typeof w.item === 'string' && w.item) ? w.item : null
+}
+
 function makeEntity(bot, w) {
   const type = entityTypeOf(bot, w)
   const name = type === 'player' ? 'player' : String(w.type || 'unknown')
   const dims = dimsFor(bot, name, type)
   const displayName = w.displayName || w.name || name
+  const dropItem = dropItemOf(w)
   const e = {
     id: w.id,
     uuid: w.uuid || null,
@@ -106,6 +114,10 @@ function makeEntity(bot, w) {
     metadata: [], // ponytail: raw metadata streaming is later work; wool reads fail open on []
   }
   if (type === 'player') e.username = w.name || null
+  if (dropItem) {
+    e.item = dropItem
+    e.getDroppedItem = () => ({ name: dropItem })
+  }
   return e
 }
 
@@ -113,6 +125,16 @@ function makeEntity(bot, w) {
 // holds them across ticks); scalars overwrite when the wire carries them.
 function updateEntity(e, w) {
   if (w.uuid && !e.uuid) e.uuid = w.uuid
+  const dropItem = dropItemOf(w)
+  if (dropItem) {
+    if (e.item !== dropItem) {
+      e.item = dropItem
+      e.getDroppedItem = () => ({ name: dropItem })
+    }
+  } else if ('item' in e) {
+    delete e.item
+    delete e.getDroppedItem
+  }
   setVec(e.position, w.pos)
   setVec(e.velocity, w.vel)
   if (typeof w.yaw === 'number') e.yaw = w.yaw
