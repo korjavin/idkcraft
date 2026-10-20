@@ -30,6 +30,33 @@ const Vec3 = require('vec3')
 // house, gate the blueprint blocks via movements.blocksCantBreak (bead .4).
 const FIND_RADIUS = 48
 const FIND_COUNT = 256 // g0z.12: 70 castle beams must not crowd out the nearest real trees
+// idkcraft-p9lx: far walk-out dusk guard. A >64-block walk-out started near
+// dusk or at night cannot work a load and return before dark: dusk catches
+// the bot mid-map and the night is sheltered in the open (rig: a day
+// creeper kill 127 blocks out and a night shelter kill 134 out, 8 deaths,
+// never 14 logs — each death wipes the partial load, so beds:no-planks
+// never clears). Far/memory targets past FAR_START_BLOCKS commit only in
+// open daylight; a running far walk drops its target at dusk/night so the
+// arbiter's gohome/shelter takes over from closer in. Morning retries resume
+// from the nearer stance (sync-48 or a nearer memory point).
+const FAR_START_BLOCKS = 64 // the bead's number: past it is a walk-out
+// Last sixth of the day reads as near-dusk: a far round trip (walk out,
+// chop a load, walk back) needs most of the daylight.
+const LATE_DAY_TICKS = 10000 // dusk opens at 12000, night past 13000
+function farStartOk(bot) {
+  try {
+    const t = bot && bot.time && bot.time.timeOfDay
+    if (typeof t !== 'number' || !(t >= 0)) return true // no clock: allow
+    return t < LATE_DAY_TICKS
+  } catch (_) { return true }
+}
+// A >64-block (horizontal) walk-out that would start in the dark.
+function farLate(bot, bp, target) {
+  try {
+    if (!target || typeof target.x !== 'number' || !bp || typeof bp.x !== 'number') return false
+    return Math.hypot(target.x - bp.x, target.z - bp.z) > FAR_START_BLOCKS && !farStartOk(bot)
+  } catch (_) { return false }
+}
 const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
 const REISSUE_TICKS = 2 // idle-executor no-displacement ticks before the walk
 // goal is refreshed (idkcraft-6x7.14): the executor stands with ZERO
@@ -481,9 +508,15 @@ function gather(bot, ctx, target, state) {
       // them into resource memory (persisted like finds) before picking.
       noteFarWood(bot, ctx, bp, search, exclude)
       const hit = r.result && r.result !== 'unknown' ? r.result : null
-      if (hit && hit.position && !exclude(hit.position)) {
+      if (hit && hit.position && !exclude(hit.position) && !farLate(bot, bp, hit.position)) {
         commitTarget(g, bp, hit.position, hit.name, true)
         say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
+      } else if (hit && hit.position && !exclude(hit.position)) {
+        // p9lx: far stand refused for time — same handoff as an empty
+        // search (the hold parks gather near home till dawn), but not an
+        // empty search: no stranded record, so the task leash stays.
+        failFinal(bot, ctx, g, logs, 'failed:no-trees')
+        g.farEmpty = false
       } else {
         // Honest word (vmzq.65): unreachable only when a trunk was walked
         // to and struck — the streak counts stall strikes (banned sync
@@ -542,7 +575,13 @@ function gather(bot, ctx, target, state) {
       const mem = names.length > 0
         ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || banned(it) || farReject(bot, ctx, g, bp, it))
         : null
-      if (mem) {
+      if (mem && farLate(bot, bp, mem)) {
+        // p9lx: remembered stand refused for time — same handoff as an
+        // empty search, no stranded record (see the far-search twin).
+        failFinal(bot, ctx, g, logs, 'failed:no-trees')
+        g.farEmpty = false
+        return
+      } else if (mem) {
         commitTarget(g, bp, { x: mem.x, y: mem.y, z: mem.z }, mem.name, true)
         say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
       } else {
@@ -572,6 +611,15 @@ function gather(bot, ctx, target, state) {
     say(bot, `chopping ${g.name} ${logs}/${NEED_LOGS}`)
   }
   if (g.phase === 'walk') {
+    // p9lx: a far walk-out caught by dusk/night drops its target — over 64
+    // blocks remaining in the dark is the death march, not the trip. The
+    // arbiter's gohome/shelter takes over from here; dawn retries from the
+    // nearer stance. Nearly-there (64 or less left) finishes the chop.
+    if (g.far && g.pos && farLate(bot, bp, g.pos)) {
+      g.pos = null
+      g.far = false
+      return
+    }
     const key = `gather:${g.pos.x},${g.pos.y},${g.pos.z}`
     if (key !== ctx.lastGoalKey) {
       bot.pathfinder.setGoal(new goals.GoalNear(g.pos.x, g.pos.y, g.pos.z, 2), false)
