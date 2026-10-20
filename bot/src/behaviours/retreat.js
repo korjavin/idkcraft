@@ -26,6 +26,12 @@ const recover = require('./recover')
 // Question order = owner list (1tj notes). Feasibility, not priority:
 // the model answers each question, the code never skips one for it.
 const RETREAT_ORDER = ['retreat', 'pillar', 'gohome']
+// Ranged attackers out-shoot a run (neuc.65.7 leg-1 death 4: a skeleton
+// pack at dusk killed a running bot in the open) — breaking line of sight
+// (pillar) first wins when the scaffold stands. Melee keeps run-first; the
+// ambiguous drowned (melee or trident, no held-item read) reads melee so a
+// winnable run is never stranded behind a pillar.
+const RANGED_HOSTILES = new Set(['skeleton', 'stray', 'bogged', 'pillager', 'witch', 'blaze', 'ghast'])
 const RETREAT_INSTRUCTIONS = 'The bot is losing a fight alone. Answer yes (take it) or no (skip it)'
 // 0ay premise for healthy callers (taking fire from an unreachable
 // hostile): the low-hp wording above is validated for 1tj and stays
@@ -201,10 +207,13 @@ async function chooseRetreat(brain, bot, ctx, state, now = Date.now()) {
     if (Number.isNaN(runHp) || runHp < 6) latchRetreat(ctx, ctx.retreat.action, now) // danger persists: hold past this sighting
     return { action: ctx.retreat.action, source: ctx.retreat.source || 'retreat', model: ctx.retreat.model || null }
   }
-  // Alone-only: with a player online the normal flow (and laya's follow)
-  // owns the body — the veto that calls us already implies this, belt and
-  // suspenders for direct callers.
-  if (state && typeof state.distance_to_player === 'number') {
+  // Threat-based (idkcraft-neuc.65.7): with a threatened player online the
+  // normal flow (fight/follow protection) owns the body — a visible but
+  // unthreatened bystander (the rig puppet 45+ blocks out) no longer vetoes
+  // the chain while the mob chews the bot. hostile_near_player is the
+  // stub's own threat radius (6); with no fight fact it reads false and the
+  // chain proceeds. Belt and suspenders for direct callers.
+  if (state && state.hostile_near_player && typeof state.distance_to_player === 'number') {
     if (ctx) ctx.retreat = null
     if (ctx) ctx.retreatLatch = null
     return null
@@ -223,7 +232,14 @@ async function chooseRetreat(brain, bot, ctx, state, now = Date.now()) {
     try { if (ctx) ctx.retreatAskedKey = null } catch (_) { /* stamp best-effort */ }
     return { action: held, source: 'retreat-hold', model: null }
   }
-  const names = feasibleRetreat(bot, ctx, state)
+  let names = feasibleRetreat(bot, ctx, state)
+  try {
+    const bp = botPos(bot)
+    const near = nearestHostile(bot, bp)
+    if (near && RANGED_HOSTILES.has(near.name || '') && names.includes('pillar')) {
+      names = ['pillar', ...names.filter((n) => n !== 'pillar')]
+    }
+  } catch (_) { /* order best-effort: the owner order stands */ }
   if (names.length === 0) {
     if (ctx) ctx.retreat = null
     return null
@@ -349,4 +365,22 @@ function pillar(bot, ctx) {
   if (ctx && ctx.retreat) ctx.recovery = null
 }
 
-module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, HOME_WALK_RANGE, RETREAT_HOLD_MS, RETREAT_RELEASE_HP, RETREAT_RELEASE_DIST, feasibleRetreat, chooseRetreat, retreat, pillar, beginPillar, latchRetreat, latchedAction, retreatLatched, retreatClear }
+// Mob pressure (idkcraft-neuc.65.7): hits the stub cannot answer with fight.
+// A ranged barrage (trident/skeleton outside the 8-block hostile fact) and a
+// pack converging on a healthy bot (facts live, but the hp<6 chain fires too
+// late to outrun the DPS race) both killed walking/chopping bots in the
+// deforested-home rig with zero response. Hurt + hostiles near + (no fact to
+// fight | crowd) diverts the tick to the chain (index.js), which picks
+// run/pillar/gohome. A single reachable mob keeps fighting; stale hurt,
+// shelter, orders and threatened players keep their ticks. The crowd number
+// is H2's pack size (brain.js isHard).
+const MOB_CROWD_N = 3
+function mobPressure(state, flags) {
+  if (!state || !flags || !flags.hurtFresh) return false
+  if (flags.sheltered || flags.ordered || flags.protectedTarget) return false
+  if (typeof state.nearby_hostiles !== 'number' || state.nearby_hostiles <= 0) return false
+  if (state.hostile_distance == null) return true // ranged: hits, no fact to fight
+  return state.nearby_hostiles >= MOB_CROWD_N // pack: never trade into 3+
+}
+
+module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, HOME_WALK_RANGE, RETREAT_HOLD_MS, RETREAT_RELEASE_HP, RETREAT_RELEASE_DIST, feasibleRetreat, chooseRetreat, retreat, pillar, beginPillar, latchRetreat, latchedAction, retreatLatched, retreatClear, mobPressure, MOB_CROWD_N }

@@ -230,4 +230,23 @@ function buildState(bot, target, lastTargetPos, fightGivenUpId = null) {
   return state
 }
 
-module.exports = { findTarget, resolvePlayer, buildState, stateKey, HOSTILE_NAMES, isFightTarget, findCreeper, snapHostiles, countItems, wornItems }
+// Any fight-target mob inside the player's threat radius (FIGHT_RANGE_PLAYER,
+// the radius the stub's hostile_near_player uses). state.hostile_near_player
+// only sees the nearest-to-bot mob, so a second mob chewing the visible
+// player while the bot engages the first would read unprotected — the
+// night-walk holds and the retreat divert (neuc.65.7) read this instead.
+function threatensPlayer(bot, target) {
+  try {
+    const tp = target && target.position
+    if (!tp || typeof tp.x !== 'number') return false
+    for (const entity of Object.values((bot && bot.entities) || {})) {
+      if (!isFightTarget(entity, tp, null)) continue
+      let d = null
+      try { d = entity.position.distanceTo(tp) } catch (_) { continue }
+      if (typeof d === 'number' && d <= FIGHT_RANGE_PLAYER) return true
+    }
+  } catch (_) { /* scan best-effort: unprotected */ }
+  return false
+}
+
+module.exports = { findTarget, resolvePlayer, buildState, stateKey, HOSTILE_NAMES, isFightTarget, findCreeper, snapHostiles, countItems, wornItems, threatensPlayer }

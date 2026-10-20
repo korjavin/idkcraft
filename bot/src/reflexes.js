@@ -19,8 +19,14 @@ fightMod.equipGear = function(bot) {
 
 // Eat reflex (3nt.22): natural regen needs food >= 18. Consumes the best
 // edible item from inventory on the every-tick seam when food < 18 and no
-// hostile is within swing reach. Equips food to hand, consumes, then
-// restores gear via fightMod.equipGear.
+// hostile fact is live. Equips food to hand, consumes, then restores gear
+// via fightMod.equipGear. A consume that never settles times out after
+// EAT_TIMEOUT_MS (ctx.eatTimeoutMs overrides for tests) instead of pinning
+// the equip guard forever.
+// A consume that never settles must not pin the equip guard (and the
+// sword) off for the whole fight (neuc.65.7 leg-2 death 2).
+const EAT_TIMEOUT_MS = 5000
+
 const EDIBLE_FOODS = new Set([
   'bread',
   'cooked_beef',
@@ -78,14 +84,12 @@ function eatReflex(bot, ctx, state) {
   if (ctx.eatInFlight) return false
   if (typeof bot.food !== 'number' || bot.food >= 18) return false
   if (ctx.reflexSwung) return false
+  // No new eat starts while any hostile fact is live (neuc.65.7 leg-2
+  // death 2): the old swing-reach gate let an eat start mid-approach, the
+  // consume stalled, and the bot bread-fought a skeleton to death. Regen at
+  // ~1hp/4s never outpaces a fight anyway — the fight owns the ticks.
   const hostile = state && state.hostile
-  if (hostile && hostile.isValid !== false) {
-    let d = typeof state.hostile_distance === 'number' ? state.hostile_distance : null
-    if (d === null) {
-      try { d = bot.entity.position.distanceTo(hostile.position) } catch (_) {}
-    }
-    if (typeof d === 'number' && d <= fightMod.SWING_RANGE) return false
-  }
+  if (hostile && hostile.isValid !== false) return false
   if (!bot.inventory || typeof bot.inventory.items !== 'function') return false
   let items
   try { items = bot.inventory.items() } catch (_) { return false }
@@ -96,15 +100,25 @@ function eatReflex(bot, ctx, state) {
 
   ctx.eatInFlight = true
   const prevFood = bot.food
+  const timeoutMs = (ctx && typeof ctx.eatTimeoutMs === 'number') ? ctx.eatTimeoutMs : EAT_TIMEOUT_MS
   const doEat = async () => {
+    let timer = null
     try {
       if (typeof bot.equip === 'function') {
         try { await bot.equip(foodItem, 'hand') } catch (_) {}
       }
-      await bot.consume()
-      console.log(`eat ${foodItem.name} food=${prevFood}`)
+      const meal = bot.consume()
+      if (meal && typeof meal.catch === 'function') meal.catch(() => {}) // settle via the race below, never unhandled
+      let timedOut = false
+      const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => { timedOut = true; resolve() }, timeoutMs)
+        if (timer && typeof timer.unref === 'function') timer.unref()
+      })
+      await Promise.race([meal, timeout])
+      console.log(timedOut ? `eat ${foodItem.name} food=${prevFood} timed-out` : `eat ${foodItem.name} food=${prevFood}`)
     } catch (_) {
     } finally {
+      if (timer) clearTimeout(timer)
       ctx.eatInFlight = false
       try { fightMod.equipGear(bot) } catch (_) {}
     }
