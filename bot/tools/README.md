@@ -769,21 +769,37 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
   date or name of their own — the bot logs with plain `console.log`) are dated from the
   daemon stamp and attributed to the single bot in the filter. Bare lines under a
   multi-bot filter (`CURRICULUM_BOTS=all` or a list) are skipped, not mislabelled — use
-  the VictoriaLogs feed below for multi-bot harvests. The 7-day bot2 feed comes from the
-  Portainer container-logs API (keys from stash, never pasted: `portainer-url`,
-  `portainer-api-key` — see "Deaths per day"; `<endpoint-id>` is the prod endpoint's
-  id; bot2 runs without a TTY, so the response is docker's multiplexed stream and the
-  tool demuxes it itself):
+  the VictoriaLogs feed below for multi-bot harvests. The 7-day bot2 feed comes from
+  VictoriaLogs (idkcraft-b64i: redeploys wipe docker logs — on 2026-10-19/20 ~12
+  redeploys left minutes of bot2 log per container — while VictoriaLogs keeps every
+  idkcraft container >= 29 days):
+  ```sh
+  sh bot/tools/curriculum-feed.sh 7 > bot2-7d.txt   # LogsQL over the last 7 days
+  node bot/tools/curriculum.js harvest bot2-7d.txt   # days defaults to 7
+  # or in one go (fetches into the work root, then harvests):
+  sh bot/tools/curriculum.sh vlogs 7
+  ```
+  The feed query is `compose_service:bot2 "recover action=" _time:7d`
+  (`CURRICULUM_FEED_SERVICE` / `CURRICULUM_FEED_QUERY` widen it to
+  `idkcraft-bot*`/`idkcraft-swarm*` plus `CURRICULUM_BOTS`); lines print as
+  `_time <bot name> _msg` with the name from `CURRICULUM_FEED_BOT` (default
+  `BOT2_USERNAME`, else `IdkBotV2`). Credentials: stash key NAMES only, values
+  from env or kv at runtime (never pasted) — `secrets/grafana-kfamcloud-sa-token`
+  plus the Portainer pair `secrets/kfamcloud-portainer-url` /
+  `secrets/kfamcloud-portainer-api-key` for the `monitoring` stack's
+  `GRAFANA_HOST`; direct env (`CURRICULUM_LOGS_URL` + `CURRICULUM_GRAFANA_TOKEN`,
+  or `CURRICULUM_GRAFANA_HOST`, or `CURRICULUM_PORTAINER_URL` /
+  `CURRICULUM_PORTAINER_API_KEY`) skips kv. Exit 2 when the feed is unreachable.
+  The docker-log fallback is the Portainer container-logs API dump
+  (`<endpoint-id>` is the prod endpoint's id; bot2 runs without a TTY, so the
+  response is docker's multiplexed stream and the tool demuxes it itself):
   ```sh
   SINCE=$(date -u -d '7 days ago' +%s)   # macOS: date -u -v-7d +%s
   curl -s -H "X-API-Key: $K" \
     "$U/api/endpoints/<endpoint-id>/docker/containers/idkcraft-bot2/logs?stdout=1&stderr=1&timestamps=1&since=$SINCE" \
     > bot2-7d.txt
-  node bot/tools/curriculum.js harvest bot2-7d.txt   # days defaults to 7
+  node bot/tools/curriculum.js harvest bot2-7d.txt
   ```
-  The VictoriaLogs alternative is the query `container_name:idkcraft-bot2 "recover action="`,
-  printed as `_time <bot name> _msg` (wider: `idkcraft-bot*`/`idkcraft-swarm*` plus
-  `CURRICULUM_BOTS`).
   The mc dump is `container_name:idkcraft-mc ("can't make" or "can't get")`. A raw shipped mc
   line works as is, because the bot name is read from `<Name>`. Strip IPs as session-review
   does. Credentials: see "Deaths per day".
@@ -847,6 +863,7 @@ is torn down after each candidate; the night ends with one line per candidate pl
 
 ```sh
 sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orchestrator
+sh bot/tools/curriculum.sh vlogs [days=7]     # the VictoriaLogs bot2 feed (idkcraft-b64i)
 ```
 
 - Caps: `CURRICULUM_USD_PER_DAY` (default 30) refuses to START a scenario once today's

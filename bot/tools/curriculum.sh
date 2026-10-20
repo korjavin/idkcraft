@@ -11,9 +11,14 @@
 # play session / overnight — there is no scheduler; the laptop sleeps and
 # the owner decides.
 #
-# Usage: sh tools/curriculum.sh <bot-dump.txt> [days=7]
+# Usage: sh tools/curriculum.sh <bot-dump.txt|vlogs> [days=7]
 #   (the script cds to bot/ itself, so run it from anywhere as
 #   sh bot/tools/curriculum.sh <dump>)
+#   `vlogs` fetches the bot2 feed from VictoriaLogs (tools/curriculum-feed.sh,
+#   LogsQL over the last N days for compose_service=bot2) into the work root
+#   and harvests it — the feed that survives container re-creation. A dump
+#   file is the docker-log fallback (docker logs --timestamps, or the
+#   Portainer container-logs API dump).
 #   The dump may be raw `docker logs --timestamps` output (timestamps=1):
 #   curriculum.js strips the daemon prefix itself (vf8e.16: the vf8e.15 night
 #   read events=0 off such a dump and each line was rewritten by hand).
@@ -68,7 +73,7 @@ DUMP="${1:-}"
 DAYS="${2:-7}"
 # Resolve before the cd below: a relative dump path is from the caller's cwd
 # (findings-1 a: `sh bot/tools/curriculum.sh bot.txt` from the repo root).
-case "$DUMP" in ''|/*) ;; *) DUMP="$(pwd)/$DUMP" ;; esac
+case "$DUMP" in vlogs) ;; ''|/*) ;; *) DUMP="$(pwd)/$DUMP" ;; esac
 # Resolve before the cd below: relative goal dirs are from the caller's cwd,
 # like DUMP (revmux 01 core-1: CURRICULUM_GOALS=bot/tools/goals/park from the
 # repo root otherwise reads as bot/bot/... and skips as "no goal files").
@@ -83,7 +88,7 @@ if [ -n "${CURRICULUM_GOALS:-}" ]; then
   CURRICULUM_GOALS="$GOABS"
 fi
 cd "$HERE/.."
-if [ -z "$DUMP" ] || [ ! -f "$DUMP" ]; then
+if [ "$DUMP" = vlogs ]; then :; elif [ -z "$DUMP" ] || [ ! -f "$DUMP" ]; then
   if [ "${CURRICULUM_K:-2}" = 0 ] && [ -n "${CURRICULUM_GOALS:-}" ]; then :; else echo "usage: sh tools/curriculum.sh <bot-dump.txt> [days=7]"; exit 2; fi
 fi
 
@@ -165,6 +170,15 @@ fi
 # harvest, no harvested picks (idkcraft-vf8e.20).
 GOALS_ONLY=0
 if [ "$K" = 0 ] && [ -n "${CURRICULUM_GOALS:-}" ]; then GOALS_ONLY=1; fi
+# The VictoriaLogs feed (idkcraft-b64i): `vlogs` fetches the bot2 lines that
+# survive redeploys into the work root and harvests them (exit 2 when the
+# feed is unreachable — environment, never a verdict). Skipped on a
+# goals-only night (no harvest there).
+if [ "$DUMP" = vlogs ] && [ "$GOALS_ONLY" != 1 ]; then
+  DUMP="$WORK/feed-${CURRICULUM_FEED_SERVICE:-bot2}-$DAYS.txt"
+  echo "curriculum: fetching the VictoriaLogs feed (service ${CURRICULUM_FEED_SERVICE:-bot2}, last $DAYS days) -> $DUMP"
+  sh tools/curriculum-feed.sh "$DAYS" >"$DUMP" || exit 2
+fi
 if [ "$GOALS_ONLY" = 1 ]; then
   : > "$PICKF"
 else

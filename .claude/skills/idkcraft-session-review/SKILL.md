@@ -11,10 +11,12 @@ The owner plays on the prod server and reports a symptom in one sentence ("I sai
 
 ```bash
 KV=~/.local/bin/kv
-key(){ $KV ls secrets | python3 -c "import json,sys;print([k['key'] for k in json.load(sys.stdin) if all(w in k['key'] for w in sys.argv[1:])][0])" "$@"; }
-T=$($KV get "$(key grafana sa-token)")   # Grafana service-account token (Bearer)
+# Explicit stash keys (idkcraft-b64i: the old generic word-matcher picked the
+# wrong Portainer key — several hosts have portainer keys; only these two
+# reach the prod monitoring stack). Never echo the values.
+T=$($KV get "secrets/grafana-kfamcloud-sa-token")   # Grafana service-account token (Bearer)
 # Grafana host = GRAFANA_HOST env of the Portainer stack "monitoring":
-U=$($KV get "$(key portainer-url)" | sed 's:/*$::'); K=$($KV get "$(key portainer-api-key)")
+U=$($KV get "secrets/kfamcloud-portainer-url" | sed 's:/*$::'); K=$($KV get "secrets/kfamcloud-portainer-api-key")
 G=https://$(curl -s -H "X-API-Key: $K" "$U/api/stacks" | python3 -c 'import json,sys
 for s in json.load(sys.stdin):
   for e in s.get("Env") or []:
