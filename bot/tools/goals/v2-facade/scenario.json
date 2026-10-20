@@ -1,0 +1,11 @@
+[
+  {
+    "name": "v2-facade",
+    "spot": "V2FACADE-1",
+    "sabotage": null,
+    "kind": "step",
+    "skill": "gen_v2_facade",
+    "bead": "idkcraft-vf8e.21",
+    "task": "Rig proof that the skill facade works on the v2 (Baritone) body, for park (vf8e.19). A hand-written step skill (tools/goals/v2-facade/gen_v2_facade.js, verified with SKILL_LOOP_VERIFY) walks 10+ blocks to the prep oak via facade goto, breaks a leaf block via facade dig, and plants a sapling via facade place. GREEN = the order completes (done: do gen_v2_facade) and the world verdict finds the sapling. Protected-block guards are unchanged; if the native path already works, this scenario is the proof and no facade change ships."
+  }
+]

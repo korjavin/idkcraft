@@ -1244,7 +1244,10 @@ function digInWalk(bot, ctx, w) {
   bot.pathfinder.setGoal(new goals.GoalBlock(w.x, w.y, w.z))
   if (ctx) ctx.lastGoalKey = 'dig-in-walk'
 }
-function digInRun(bot, ctx, st) {
+// alive (optional, vf8e.21): the driving episode's liveness predicate —
+// the facade passes its own, the hand driver passes none (always live).
+// The cap leg checks it after the equip await and never lands a dead cap.
+function digInRun(bot, ctx, st, alive) {
   const bp = botPos(bot)
   if (!bp) return 'failed:no-pos'
   if (st.floor0 == null) { st.floor0 = Math.floor(bp.y); st.waited = 0; st.steer = 0; st.capWait = 0; st.airborne = 0 }
@@ -1360,9 +1363,14 @@ function digInRun(bot, ctx, st) {
   }
   if (!ref || typeof bot.placeBlock !== 'function') return 'failed:no-cap-ref'
   st.capInFlight = true
+  // vf8e.21: the equip await can outlive the episode (a terminal tick or a
+  // replaced episode while it is in flight). A place cannot be aborted like
+  // a dig (stopDigging), so the cap re-checks episode liveness after the
+  // await — the fire() live() shape — and never lands a dead cap.
   void (async () => {
     try {
       if (typeof bot.equip === 'function') await bot.equip(item, 'hand')
+      if (alive && !alive()) return
       await bot.placeBlock(ref, face)
     } catch (_) { st.capError = true } finally { st.capInFlight = false }
   })()
