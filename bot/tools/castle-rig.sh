@@ -59,13 +59,22 @@
 #   with CASTLE_SEED=complete the same under the castle gate door),
 #   CASTLE_BODY (''|baritone — g0z.56: the builder runs on the v2 Baritone
 #   body, client image BARITONE_IMAGE, default client.sh tree-hash tag),
-#   CASTLE_REPAIR (''|wood|nowood|planks, needs CASTLE_SEED=complete — g0z.56:
+#   CASTLE_REPAIR (''|wood|nowood|planks|prkh, needs CASTLE_SEED=complete — g0z.56:
 #   after adoption knock out 22 plan cells (12 fence, the door, 4 wall,
 #   3 torches, 2 stairs), wood = 16 oak_log in the castle chest, nowood =
 #   an empty chest and every log within 72 cleared, planks = the nowood
-#   clearing plus 48 oak_planks in the castle chest (szr1); the guide chats
-#   `castle repair`; the verdict adds repair=<relaid>/22@<s>, regress=<n>
-#   after the full relay and nowood@<s> (the shortfall status)),
+#   clearing plus 48 oak_planks in the castle chest (szr1); prkh = the
+#   fence-and-torch knock (12 fence + 3 torch) with the planks chest and
+#   clearing (idkcraft-prkh: stone comes mid-run via CASTLE_REKNOCK while
+#   the quarry is dead); the guide chats `castle repair`; the verdict adds
+#   repair=<relaid>/22@<s>, regress=<n> after the full relay, nowood@<s>
+#   (the shortfall status) and stoneheld@<s> (first parked stone fetch)),
+#   CASTLE_QUARRY (''|dead, needs CASTLE_SEED=complete — idkcraft-prkh:
+#   water-fill every quarry/pit probe column + sweep exposed stone, so all
+#   stone legs fail fast),
+#   CASTLE_REKNOCK (comma plan kinds, needs CASTLE_SEED=complete —
+#   idkcraft-prkh: knocked out mid-run once the torch fetch fails, e.g.
+#   stone),
 #   CASTLE_LITTER (''|1, needs CASTLE_SEED=complete — g0z.61: after adoption
 #   30 litter items (yard pillars incl. a window tower, moat bridge cells,
 #   pillars 2..14 out) + 5 player structures; the verdict adds
@@ -227,7 +236,8 @@ SEED="${CASTLE_SEED:-}"
 case "$SEED" in ''|complete) ;; *) echo "CASTLE_SEED: want ''|complete, got '$SEED'"; exit 2 ;; esac
 SEED_VERSION="${CASTLE_SEED_VERSION:-}"
 case "$SEED_VERSION" in ''|1|2|3) ;; *) echo "CASTLE_SEED_VERSION: want ''|1|2|3, got '$SEED_VERSION'"; exit 2 ;; esac
-case "${CASTLE_REPAIR:-}" in ''|wood|nowood|planks) ;; *) echo "CASTLE_REPAIR: want ''|wood|nowood|planks, got '$CASTLE_REPAIR'"; exit 2 ;; esac
+case "${CASTLE_REPAIR:-}" in ''|wood|nowood|planks|prkh) ;; *) echo "CASTLE_REPAIR: want ''|wood|nowood|planks|prkh, got '$CASTLE_REPAIR'"; exit 2 ;; esac
+case "${CASTLE_QUARRY:-}" in ''|dead) ;; *) echo "CASTLE_QUARRY: want ''|dead, got '$CASTLE_QUARRY'"; exit 2 ;; esac
 [ -z "${CASTLE_REPAIR:-}" ] || [ "$SEED" = complete ] || { echo "CASTLE_REPAIR needs CASTLE_SEED=complete"; exit 2; }
 case "${CASTLE_LITTER:-}" in ''|1) ;; *) echo "CASTLE_LITTER: want ''|1, got '$CASTLE_LITTER'"; exit 2 ;; esac
 [ -z "${CASTLE_LITTER:-}" ] || [ "$SEED" = complete ] || { echo "CASTLE_LITTER needs CASTLE_SEED=complete"; exit 2; }
@@ -459,7 +469,7 @@ if [ "${CASTLE_BODY:-}" = baritone ]; then
   export BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT="$MOD_PORT" BRIDGE_CONSOLE_PORT="$BODY_CONSOLE_PORT"
 fi
 export CASTLE_COMPONENT="$COMPONENT" CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_LITTER="${CASTLE_LITTER:-}" CASTLE_REPAIR="${CASTLE_REPAIR:-}" CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_SEED_VERSION="$SEED_VERSION" CASTLE_SEED_DECOR_EXCEPT="${CASTLE_SEED_DECOR_EXCEPT:-}" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
+export CASTLE_LITTER="${CASTLE_LITTER:-}" CASTLE_REPAIR="${CASTLE_REPAIR:-}" CASTLE_QUARRY="${CASTLE_QUARRY:-}" CASTLE_REKNOCK="${CASTLE_REKNOCK:-}" CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_SEED_VERSION="$SEED_VERSION" CASTLE_SEED_DECOR_EXCEPT="${CASTLE_SEED_DECOR_EXCEPT:-}" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in

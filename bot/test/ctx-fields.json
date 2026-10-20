@@ -451,6 +451,14 @@
     ],
     "owner": "src/behaviours/castlefetch.js"
   },
+  "castleFetchDoneKind": {
+    "writers": [
+      "src/behaviours/castlefetch.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js",
+    "note": "done leg kind (prkh): stamped by castlefetch.finish on a done leg, consumed by goal.recordOutcome to retire only that kind from the kinds map; cleared at leg start."
+  },
   "castleFetchDry": {
     "writers": [
       "src/behaviours/castle.js",
@@ -458,6 +466,14 @@
     ],
     "owner": "src/behaviours/castlefetch.js",
     "note": "dry decor kinds (g0z.49): a Set of kinds whose fetch leg came up dry, or null when clean. castlefetch adds via castle.noteDry and clears on a leg that got stock; castle.menuFact reads it for the decor word and clears it when every open kind is dry (retry the first, restart the cycle)."
+  },
+  "castleFetchFailKind": {
+    "writers": [
+      "src/behaviours/castlefetch.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js",
+    "note": "failed leg kind (prkh): stamped by castlefetch.finish and the gather-ended legs on failure, consumed by goal.recordOutcome into the stepFail.castlefetch.kinds map; cleared at leg start."
   },
   "castleFetchFlight": {
     "writers": [
@@ -478,6 +494,18 @@
     "owner": "src/behaviours/castlefetch.js"
   },
   "castleFetchMine": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleFieldDead": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleFieldFurnace": {
     "writers": [
       "src/behaviours/castlefetch.js"
     ],
@@ -1884,6 +1912,12 @@
     ],
     "owner": "src/behaviours/castle.js",
     "note": "tidy trip clock (g0z.62): castle.menuFact accumulates gocastle/castle leg time while a tidy is due and zeroes it on a visit, a park or no tidy due; chat 'castle tidy' zeroes it so a forced trip gets the full TIDY_TRIP_MS."
+  },
+  "tidyTickAt": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
   },
   "underFireLogged": {
     "writers": [

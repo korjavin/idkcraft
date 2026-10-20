@@ -158,9 +158,46 @@ const SAND = process.env.CASTLE_SAND === '1'
 // in the castle chest (szr1: banked-planks refill with no logs anywhere);
 // the guide chats `castle repair`.
 const REPAIR = process.env.CASTLE_REPAIR || ''
-if (!['', 'wood', 'nowood', 'planks'].includes(REPAIR) || (REPAIR && SEED !== 'complete')) {
-  throw new Error(`CASTLE_REPAIR: want ''|wood|nowood|planks with CASTLE_SEED=complete, got ${JSON.stringify(REPAIR)}`)
+if (!['', 'wood', 'nowood', 'planks', 'prkh'].includes(REPAIR) || (REPAIR && SEED !== 'complete')) {
+  throw new Error(`CASTLE_REPAIR: want ''|wood|nowood|planks|prkh with CASTLE_SEED=complete, got ${JSON.stringify(REPAIR)}`)
 }
+// idkcraft-prkh: the fence-and-torch knock — 12 fence + 3 torch cells, the
+// chest stocked with planks and every log within NOWOOD_RADIUS cleared
+// (the planks shape). Stone is knocked mid-run by CASTLE_REKNOCK instead,
+// while the quarry is dead (CASTLE_QUARRY=dead): the fence relays from the
+// chest while stone stays honestly parked.
+function prkhCells(st) {
+  const cells = require('../src/castle').absPlan(st.site, st.rot, st.blueprintVersion).cells
+  return [
+    ...cells.filter((c) => c.kind === 'fence').slice(0, 12),
+    ...cells.filter((c) => c.kind === 'torch').slice(0, 3),
+  ]
+}
+// First series second a STAMPED stone fetch failure parks the word
+// (idkcraft-prkh verdict tag): kind-only, so a torch hold under a stone
+// word never misattributes. The master leg (no stamps) reads '-' while
+// its kindless stone failures still show in top-fail. Pure (unit-tested).
+function stoneheldAt(series) {
+  for (const s of series || []) {
+    const cf = s && s.castleFail
+    if (cf && typeof cf.status === 'string' && cf.status.startsWith('failed:castlefetch-') &&
+      cf.kind === 'stone') return s.t
+  }
+  return null
+}
+// Dead quarry (idkcraft-prkh, needs CASTLE_SEED=complete): water-fill the
+// probe column of every trench side and pit spot below the surface, so the
+// quarry/pit probes die wet-at-probe (aquifer shape, prod castle-8: sides
+// 0/1 unusable) and no stone is ever exposed.
+const QUARRY = process.env.CASTLE_QUARRY || ''
+if (!['', 'dead'].includes(QUARRY) || (QUARRY && SEED !== 'complete')) {
+  throw new Error(`CASTLE_QUARRY: want ''|dead with CASTLE_SEED=complete, got ${JSON.stringify(QUARRY)}`)
+}
+// Stone re-knock (idkcraft-prkh): mid-run rcon knock-out of these plan
+// kinds (stone), once the torch fetch has failed into its hold — the word
+// jumps back to stone while the torch hold still stands.
+const REKNOCK = (process.env.CASTLE_REKNOCK || '').split(',').map((s) => s.trim()).filter(Boolean)
+if (REKNOCK.length && SEED !== 'complete') throw new Error(`CASTLE_REKNOCK needs CASTLE_SEED=complete, got ${JSON.stringify(process.env.CASTLE_REKNOCK)}`)
 const NOWOOD_RADIUS = 72
 // The 22 knocked-out cells (g0z.56 acceptance, vf8e.8 adds 2 stairs):
 // a fence row (12), the door, 4 ground-floor wall cells, 3 torches, 2
@@ -1678,11 +1715,11 @@ async function main() {
   let knocked = []
   if (REPAIR) {
     const st = tickCtx().castle
-    knocked = repairCells(st)
+    knocked = REPAIR === 'prkh' ? prkhCells(st) : repairCells(st)
     tickCtx().paused = true // no relay before the readback (the nowood fills take seconds)
     const door = knocked.find((c) => c.kind === 'door')
     // Upper door half first: no dropped door item to hand the bot.
-    await rcon(`setblock ${door.x} ${door.y + 1} ${door.z} minecraft:air`).catch((e) => fail('repair-seed', e.message))
+    if (door) await rcon(`setblock ${door.x} ${door.y + 1} ${door.z} minecraft:air`).catch((e) => fail('repair-seed', e.message))
     for (const c of knocked) await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:air`).catch((e) => fail('repair-seed', e.message))
     await rcon(`kill @e[type=minecraft:item,x=${st.site.x + 15},y=${st.site.y},z=${st.site.z + 13},distance=..40]`).catch(() => {})
     const chest = require('../src/castle').absPlan(st.site, st.rot, st.blueprintVersion).cells.find((c) => c.kind === 'chest')
@@ -1700,7 +1737,7 @@ async function main() {
       for (const c of seedCastleCells(st)) {
         if (c.kind === 'frame') await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:${c.block}`).catch((e) => fail('repair-seed', e.message))
       }
-      if (REPAIR === 'planks') {
+      if (REPAIR === 'planks' || REPAIR === 'prkh') {
         await rcon(`item replace block ${chest.x} ${chest.y} ${chest.z} container.0 with minecraft:oak_planks 48`).catch((e) => fail('repair-seed', e.message))
       }
     }
@@ -1722,7 +1759,42 @@ async function main() {
         c.castleDug = { sig, idx: new Set(), high: 0, was: new Set(), lastScan: Date.now() }
       }
     } catch (_) { /* baseline best-effort: the away gap covers it */ }
-    origLog(`CASTLE-RIG repair seed: ${knocked.length} cells knocked out (${knocked.map((c) => c.kind).join(',')}), chest ${REPAIR === 'wood' ? '16 oak_log' : REPAIR === 'planks' ? `48 oak_planks, logs cleared within ${NOWOOD_RADIUS}` : `empty, logs cleared within ${NOWOOD_RADIUS}`}`)
+    origLog(`CASTLE-RIG repair seed: ${knocked.length} cells knocked out (${knocked.map((c) => c.kind).join(',')}), chest ${REPAIR === 'wood' ? '16 oak_log' : REPAIR === 'planks' || REPAIR === 'prkh' ? `48 oak_planks, logs cleared within ${NOWOOD_RADIUS}` : `empty, logs cleared within ${NOWOOD_RADIUS}`}`)
+  }
+  // Dead quarry (idkcraft-prkh): water-fill the probe column of every
+  // trench side and pit spot below the surface, so every probe dies wet.
+  if (QUARRY === 'dead') {
+    const st = tickCtx().castle
+    if (!st || !st.site) fail('quarry', 'no castle site')
+    const cf = require('../src/behaviours/castlefetch')
+    const origins = []
+    for (let ring = 0; ring < 2; ring++) for (let s = 0; s < 4; s++) origins.push(cf.quarrySide(st, s, ring))
+    for (const o of cf.pitSpots(st)) origins.push(o)
+    tickCtx().paused = true
+    for (const o of origins) {
+      await rcon(`fill ${o.x} ${st.site.y + 1} ${o.z} ${o.x} ${st.site.y - 9} ${o.z} minecraft:water`).catch((e) => fail('quarry', e.message))
+    }
+    // No exposed stone in the pick window (site.y-2..+3, ±32): stone family
+    // to dirt outside the footprint, so neither the pick nor the v2 mine
+    // finds any. Four boxes around the footprint (never the castle itself).
+    const bp = require('../src/castle')
+    const fam = Array.isArray(bp.STONE_ITEMS) && bp.STONE_ITEMS.length > 0 ? bp.STONE_ITEMS : ['stone', 'cobblestone']
+    const { w, d } = bp.siteDimensions(st.rot | 0, st.blueprintVersion)
+    const m = 2
+    const boxes = [
+      [st.site.x - 32, st.site.z - 32, st.site.x + w + 31, st.site.z - m - 1],
+      [st.site.x - 32, st.site.z + d + m, st.site.x + w + 31, st.site.z + 32],
+      [st.site.x - 32, st.site.z - m - 1, st.site.x - m - 1, st.site.z + d + m],
+      [st.site.x + w + m, st.site.z - m - 1, st.site.x + w + 31, st.site.z + d + m],
+    ]
+    for (const [x0, z0, x1, z1] of boxes) {
+      for (const name of fam) {
+        await rcon(`fill ${x0} ${st.site.y - 2} ${z0} ${x1} ${st.site.y + 3} ${z1} minecraft:dirt replace minecraft:${name}`).catch((e) => fail('quarry', e.message))
+      }
+    }
+    await sleep(2000)
+    tickCtx().paused = false
+    origLog(`CASTLE-RIG quarry dead: ${origins.length} probe columns water-filled, exposed stone swept in +-32 (footprint kept)`)
   }
   let litterSeed = null
   if (LITTER) {
@@ -1984,6 +2056,9 @@ async function main() {
       const c = follower._tickerCtx
       const f = c && c.castleFetch
       if (f) s.fetch = { kind: f.kind, quarry: !!(f.target && f.target.quarry), skips: f.skips || 0, dead: (f.quarry && f.quarry.dead) || [] }
+      const sf = c && c.stepFail && c.stepFail.castlefetch
+      if (sf && typeof sf.status === 'string') s.castleFail = { status: sf.status, kind: typeof sf.kind === 'string' ? sf.kind : null }
+      if (c && c.castleWord && typeof c.castleWord.kind === 'string') s.cword = c.castleWord.kind
     } catch (_) { /* fetch best-effort */ }
     if (knocked.length) {
       // g0z.56: knocked cells laid back (read on the follower), the first
@@ -2117,8 +2192,43 @@ async function main() {
   let idleDeathAt = 0
   let idleForced = 0
   let idlePosAt = 0
+  let reknockAt = 0 // idkcraft-prkh: the mid-run stone knock-out second
   while (Date.now() < endAt) {
     await sleep(15000)
+    // Stone re-knock (idkcraft-prkh): once a torch fetch has failed into
+    // its hold (the fence already relayed from the chest), knock out the
+    // REKNOCK plan kinds — the word jumps back to stone while the torch
+    // hold still stands.
+    if (REKNOCK.length && !reknockAt) {
+      let torchHeld = false
+      try {
+        const sf = follower._tickerCtx && follower._tickerCtx.stepFail && follower._tickerCtx.stepFail.castlefetch
+        torchHeld = !!sf && typeof sf.status === 'string' && sf.status === 'failed:castlefetch-no-torch'
+      } catch (_) { torchHeld = false }
+      if (torchHeld) {
+        const st = follower._tickerCtx && follower._tickerCtx.castle
+        if (!st || !st.site) fail('reknock', 'no castle site')
+        const cells = require('../src/castle').absPlan(st.site, st.rot, st.blueprintVersion).cells
+        const targets = []
+        for (const kind of REKNOCK) for (const c of cells.filter((c) => c.kind === kind).slice(0, 4)) targets.push(c)
+        if (!targets.length) fail('reknock', `no ${REKNOCK.join(',')} cells on the plan`)
+        tickCtx().paused = true
+        for (const c of targets) await rcon(`setblock ${c.x} ${c.y} ${c.z} minecraft:air`).catch((e) => fail('reknock', e.message))
+        await rcon(`kill @e[type=minecraft:item,x=${st.site.x + 15},y=${st.site.y},z=${st.site.z + 13},distance=..40]`).catch(() => {})
+        await sleep(2000)
+        try {
+          const c = tickCtx()
+          if (c) {
+            const sig = c.castleDug && c.castleDug.sig
+            c.castleDug = { sig, idx: new Set(), high: 0, was: new Set(), lastScan: Date.now() }
+          }
+        } catch (_) { /* baseline best-effort: the away gap covers it */ }
+        tickCtx().paused = false
+        for (const c of targets) knocked.push(c)
+        reknockAt = Date.now()
+        origLog(`CASTLE-RIG reknock: at ${(reknockAt - t0) / 1000 | 0}s ${targets.length} cells knocked out (${targets.map((c) => c.kind).join(',')}), knocked now ${knocked.length}`)
+      }
+    }
     if (IDLE_DEATH > 0 && !idleDeathAt && Date.now() - t0 >= IDLE_DEATH * 60000) {
       idleDeathAt = Date.now()
       if (!worldSpawn) fail('idle-death', 'world spawn never read')
@@ -2628,7 +2738,10 @@ async function main() {
   if (knocked.length) {
     const relaid = series.length ? series[series.length - 1].relaid : 0
     const after = repairT == null ? 0 : seen.regressAt.filter((at) => at > t0 + repairT * 1000).length
-    repairTag = `, repair=${relaid}/${knocked.length}@${repairT == null ? '-' : `${repairT}s`}, regress=${after}, nowood@${nowoodT == null ? '-' : `${nowoodT}s`}`
+    // prkh: first second a stone fetch failure parks the word (kinded on
+    // the branch, word-attributed on master) — the verdict names the gap.
+    const stoneheldT = stoneheldAt(series)
+    repairTag = `, repair=${relaid}/${knocked.length}@${repairT == null ? '-' : `${repairT}s`}, regress=${after}, nowood@${nowoodT == null ? '-' : `${nowoodT}s`}, stoneheld@${stoneheldT == null ? '-' : `${stoneheldT}s`}`
   }
   // g0z.58: regress counts the whole window (a v2 tunnel through the wall
   // logs one), escaped/home are seconds from window open.
@@ -2690,4 +2803,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { apronBox, apronCloneCmds, apronChanged, componentLine, baselineFor, fetchLine, bankedOf, repairCells, litterSeeds, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { apronBox, apronCloneCmds, apronChanged, componentLine, baselineFor, fetchLine, bankedOf, repairCells, prkhCells, stoneheldAt, litterSeeds, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
