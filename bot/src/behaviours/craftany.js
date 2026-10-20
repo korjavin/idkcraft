@@ -151,14 +151,23 @@ function gapOf(needs, pack, times) {
 // not iron, on a bare log). Full ties keep the later variant: the
 // registry lists the overworld default last (cobble after deepslate and
 // blackstone, oak after every wood — assayed across stone/wooden tools).
+// Nether-last (idkcraft-szr1): the wood candidates sort birch-first then
+// A-Z, so the nether woods (crimson, warped) win every full tie — and the
+// refusal names an unobtainable gap ("need 1 warped_stem") while the
+// overworld stands equally short. Gather chops overworld logs, never
+// nether stems, so a nether-named gap can never refill: among full ties
+// the overworld variant wins and the refusal names the fetchable gap.
+const NETHER_WOOD = /^(warped|crimson)_/
 function gapCmp(a, b) {
   const sub = (m) => m.missing.filter((e) => isSubstitutable(e.name)).length
   const units = (m) => m.missing.reduce((n, e) => n + Math.max(0, e.need - e.have), 0)
   const has = (m) => m.missing.reduce((n, e) => n + Math.min(e.have, e.need), 0)
+  const nether = (m) => m.missing.filter((e) => NETHER_WOOD.test(e.name)).length + (NETHER_WOOD.test(m.target) ? 1 : 0)
   if (sub(a) !== sub(b)) return sub(a) - sub(b)
   if (units(a) !== units(b)) return units(a) - units(b)
   if (has(a) !== has(b)) return has(b) - has(a)
   if (matRank(a.target) !== matRank(b.target)) return matRank(a.target) - matRank(b.target)
+  if (nether(a) !== nether(b)) return nether(a) - nether(b)
   return 0
 }
 

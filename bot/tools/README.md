@@ -1058,6 +1058,18 @@ regress=<n after the full relay>, nowood@<s>` (first 'no wood' status).
 CASTLE_SEED=complete CASTLE_REPAIR=wood CASTLE_BODY=baritone CASTLE_KIT=blast sh bot/tools/castle-rig.sh 30
 ```
 
+Woodless relay (szr1): `CASTLE_REPAIR=planks` keeps the nowood clearing
+but stocks 48 oak_planks in the castle chest (banked-planks refill with no
+logs anywhere); `CASTLE_KIT=woodmix` carries the prod mixed pack (1 oak log
++ 1 oak plank, stone pick/sword + bread, no table), whose every wood variant
+ties uncoverable. Master names the nether tie-break and loops the hold
+(`repair=0/22`); the branch withdraws the chest planks and relays. The
+verdict line is the same `repair=`/`regress=`/`nowood@` shape:
+
+```sh
+CASTLE_LOCK_WAIT=7200 CASTLE_SEED=complete CASTLE_REPAIR=planks CASTLE_KIT=woodmix sh bot/tools/castle-rig.sh 20
+```
+
 Start spot (g0z.58): `CASTLE_START="dx,dy,dz"` (off the seeded site's SW
 corner) lands the builder in a 1x2 air pocket there after adoption; prod's
 g0z.55 tunnel start is `50,-5,31`. `CASTLE_START_CELL=cobble|planks` walls

@@ -158,6 +158,28 @@ function birchFirst(names) {
   return names.sort((a, b) => (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
 }
 
+// Chest planks complete the pack's majority wood first (szr1): exact-wood
+// crafts cannot mix woods, so drawing the held wood's planks tops up a
+// started fund while a new wood starts one. The rest keeps registry order.
+function planksFirst(bot, names) {
+  let held = null
+  try {
+    held = {}
+    for (const it of bot.inventory.items() || []) {
+      if (it && typeof it.name === 'string' && it.name.endsWith('_planks')) held[it.name] = (held[it.name] || 0) + (it.count || 0)
+    }
+  } catch (_) { held = null }
+  if (!held) return birchFirst(names)
+  return names.sort((a, b) => ((held[b] || 0) - (held[a] || 0)) || (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
+}
+
+// Finished items first, then chest planks (pack wood first), then logs.
+function woodLists(bot, finished) {
+  const planks = planksFirst(bot, itemNames(bot, (n) => n.endsWith('_planks')))
+  const logs = itemNames(bot, (n) => n.endsWith('_log'))
+  return planks.length > 0 ? [finished, planks, logs] : [finished, logs]
+}
+
 function itemNames(bot, test) {
   const by = (bot && bot.registry && bot.registry.itemsByName) || {}
   return birchFirst(Object.keys(by).filter(test))
@@ -175,9 +197,15 @@ function chestNames(bot, kind) {
   if (kind === 'planks') return [itemNames(bot, (n) => n.endsWith('_planks')), itemNames(bot, (n) => n.endsWith('_log'))]
   // g0z.56: logs dropped in the chest fund the wood kinds too (the
   // owner's repair shortcut; craftTick turns them into the item).
-  if (kind === 'door') return [itemNames(bot, isDoor), itemNames(bot, (n) => n.endsWith('_log'))]
-  if (kind === 'fence') return [itemNames(bot, isFence), itemNames(bot, (n) => n.endsWith('_log'))]
-  if (kind === 'gate') return [itemNames(bot, isGate), itemNames(bot, (n) => n.endsWith('_log'))]
+  // szr1: banked/owner-dropped planks fund them directly (stockpile banks
+  // the pack's surplus planks, so a chest can hold planks with no logs in
+  // it — and a treeless world still refills). Logs stay last: a log also
+  // funds the table and the sticks. No planks in the registry: the lists
+  // stay as they were (an empty middle list would trip drawChest's
+  // empty-break and skip the logs behind it).
+  if (kind === 'door') return woodLists(bot, itemNames(bot, isDoor))
+  if (kind === 'fence') return woodLists(bot, itemNames(bot, isFence))
+  if (kind === 'gate') return woodLists(bot, itemNames(bot, isGate))
   // fqkn: logs fund torchTick's charcoal (stockpile banks the pack's logs at home).
   if (kind === 'torch') return [['torch'], itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
@@ -571,6 +599,10 @@ async function drawChest(bot, ctx, d, at, need) {
     // glass: six glass are sixteen panes (one craft).
     // g0z.56: a log also makes 2 fences or doors, half a chest.
     const logs = names.some((n) => n.endsWith('_log')) ? (LOG_YIELD[d.kind] || 0) : 0
+    // szr1: a planks list for a log-yield kind (door/fence/gate chest
+    // stock) draws one log's planks per log the kind would have drawn —
+    // same fund, direct stock. The planks kind itself keeps its 1:1 list.
+    const plankLogs = !logs && d.kind !== 'planks' && names.length > 0 && names.every((n) => n.endsWith('_planks')) && (LOG_YIELD[d.kind] || 0) > 0
     const glass = d.kind === 'pane' && names[0] === 'glass'
     // Banners' is wool (g0z.35): six per banner, only once the beds stand.
     const wool = d.kind === 'banner' && names[0].endsWith('_wool')
@@ -604,8 +636,42 @@ async function drawChest(bot, ctx, d, at, need) {
     // Books already packed cover shelves too (revmux 01 minor): never
     // withdraw what the pack holds.
     const bookWant = book ? Math.max(0, BOOKS_PER_SHELF * Math.ceil(need) - countItems(bot, (n) => n === 'book')) : need
-    const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
-    need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
+    if (plankLogs) {
+      // Best single variant (send-back 1, codex P2): exact-wood crafts
+      // cannot mix, so mixed-short stacks (3 birch + 3 oak) must not each
+      // shave the shared need — that reads as funded (need <= 0 skips the
+      // logs list) while no variant crafts, the same livelock. Fund ONE
+      // wood only: the variant with the biggest pack+chest fund, pack
+      // first on ties (names arrive in planksFirst order); draw it only
+      // when the chest holds it, else the logs list below funds the table
+      // from convertible stock. One peek + one withdraw (szr1 core-2).
+      // An unreadable chest keeps the legacy full loop.
+      let counts = null
+      try { counts = await stockpileMod.chestCounts(bot, ctx, names, at) } catch (_) { counts = null }
+      if (!counts) {
+        for (const name of names) {
+          if (need <= 0) break
+          const pr = await stockpileMod.withdrawAnyFromChest(bot, ctx, [name], Math.ceil(need / LOG_YIELD[d.kind]) * 4, at)
+          need -= (pr && pr.got ? pr.got : 0) * (LOG_YIELD[d.kind] / 4)
+        }
+      } else {
+        const have = (n) => countItems(bot, (x) => x === n)
+        const wantFull = Math.ceil(need / LOG_YIELD[d.kind]) * 4
+        let best = null, bestFund = -1
+        for (const name of names) {
+          if ((counts[name] | 0) <= 0) continue
+          const fund = have(name) + counts[name]
+          if (fund > bestFund) { bestFund = fund; best = name }
+        }
+        if (best) {
+          const pr = await stockpileMod.withdrawAnyFromChest(bot, ctx, [best], wantFull, at)
+          need -= (pr && pr.got ? pr.got : 0) * (LOG_YIELD[d.kind] / 4)
+        }
+      }
+    } else {
+      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
+      need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
+    }
   }
   return { left: need, fund }
 }
@@ -631,6 +697,7 @@ function craftTick(bot, ctx, f, d) {
     // (warped_fence) — name the real gap instead.
     const woodless = WOOD.has(d.kind) && countItems(bot, (n) => n.endsWith('_planks') || n.endsWith('_log')) === 0
     const line = woodless ? `can't craft ${d.kind}: no planks or logs` : r.line
+    f.craftLine = line // szr1 core-3: the bankFull gate reads the latest failure
     try { console.log(`castlefetch ${d.kind}: craft failed: ${line}`) } catch (_) { /* log best-effort */ }
     // idkcraft-8njf: a table failure gets one fresh craft run per leg. The
     // walk give-up latched that table dead for the day (craftany deadToday)
@@ -2263,7 +2330,23 @@ function castlefetch(bot, ctx, target, state) {
   if (craftTick(bot, ctx, f, d)) return
   // g0z.60: a bank batch on hand lays before any dig. Not a torch leg (fqkn):
   // its bank draw is logs, which torchTick below smelts into the torches.
-  if (f.bankFull && d.kind !== 'torch') { finish(bot, ctx, 'done'); return }
+  // Stairs keep the old shape (8njf/vf8e.8 own its table-broke mine batch).
+  // szr1 core-3: but a draw the pack cannot craft for structural reasons
+  // (no table, no wood at all) must not read 'done' — the next leg would
+  // re-pick and drain the chest every few seconds. Fail so the hold parks
+  // it instead (the same hole the g0z.60 logs shape had; plank-stocked
+  // chests reach it). A fund shortfall ('can't make ... need ...') keeps
+  // 'done': the next draw heals it (the door's 4-plank first draw crafts
+  // on the second).
+  if (f.bankFull && d.kind !== 'torch' && d.kind !== 'stairs') {
+    if (f.craftOut && !/^can't make /.test(f.craftLine || '')) {
+      if (d.kind === 'fence' || d.kind === 'gate') castleMod.noteDry(ctx, d.kind)
+      finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
+      return
+    }
+    finish(bot, ctx, 'done')
+    return
+  }
   // idkcraft-8njf: on v2 a stairs craft that still fails after the table
   // retry mines ONE stone batch instead of failing into the 5-min hold
   // (forage -> rest -> house-build): stone is the castle's own material,
