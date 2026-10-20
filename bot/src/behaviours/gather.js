@@ -35,9 +35,10 @@ const FIND_COUNT = 256 // g0z.12: 70 castle beams must not crowd out the nearest
 // the bot mid-map and the night is sheltered in the open (rig: a day
 // creeper kill 127 blocks out and a night shelter kill 134 out, 8 deaths,
 // never 14 logs — each death wipes the partial load, so beds:no-planks
-// never clears). Far/memory targets past FAR_START_BLOCKS commit only in
-// open daylight; a running far walk drops its target at dusk/night so the
-// arbiter's gohome/shelter takes over from closer in. Morning retries resume
+// never clears). Distance is anchor-measured (home): far/memory targets
+// past 64 commit only in open daylight, and any walk with body or target
+// past 64 fails out at dusk/night (failFinal clears the goal and holds
+// gather) so the arbiter's gohome/shelter takes over. Morning retries resume
 // from the nearer stance (sync-48 or a nearer memory point).
 const FAR_START_BLOCKS = 64 // the bead's number: past it is a walk-out
 // Last sixth of the day reads as near-dusk: a far round trip (walk out,
@@ -50,11 +51,28 @@ function farStartOk(bot) {
     return t < LATE_DAY_TICKS
   } catch (_) { return true }
 }
-// A >64-block (horizontal) walk-out that would start in the dark.
-function farLate(bot, bp, target) {
+// Anchor distance (revmux 01 core-2): a >64-block walk-out is measured from
+// the task anchor (home), not from the body — chained <=64 hops from a far
+// stand and stand-side chops still leave the bot 130+ out at dusk, which is
+// what killed it in the rig. No anchor (and no body) reads near: allow.
+function anchorDist(bot, ctx, bp, p) {
   try {
-    if (!target || typeof target.x !== 'number' || !bp || typeof bp.x !== 'number') return false
-    return Math.hypot(target.x - bp.x, target.z - bp.z) > FAR_START_BLOCKS && !farStartOk(bot)
+    if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') return 0
+    let ref = bp
+    try {
+      const a = exploreMod.anchorOf(bot, ctx)
+      if (a && typeof a.x === 'number' && typeof a.z === 'number') ref = a
+    } catch (_) { /* body fallback */ }
+    if (!ref || typeof ref.x !== 'number' || typeof ref.z !== 'number') return 0
+    return Math.hypot(p.x - ref.x, p.z - ref.z)
+  } catch (_) { return 0 }
+}
+// A >64-block (horizontal, anchor-measured) walk-out that would run in the
+// dark.
+function farLate(bot, ctx, bp, target) {
+  try {
+    if (!target || typeof target.x !== 'number' || typeof target.z !== 'number') return false
+    return anchorDist(bot, ctx, bp, target) > FAR_START_BLOCKS && !farStartOk(bot)
   } catch (_) { return false }
 }
 const STALL_TICKS = 10 // no-displacement walk ticks before a tree is skipped
@@ -508,7 +526,7 @@ function gather(bot, ctx, target, state) {
       // them into resource memory (persisted like finds) before picking.
       noteFarWood(bot, ctx, bp, search, exclude)
       const hit = r.result && r.result !== 'unknown' ? r.result : null
-      if (hit && hit.position && !exclude(hit.position) && !farLate(bot, bp, hit.position)) {
+      if (hit && hit.position && !exclude(hit.position) && !farLate(bot, ctx, bp, hit.position)) {
         commitTarget(g, bp, hit.position, hit.name, true)
         say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
       } else if (hit && hit.position && !exclude(hit.position)) {
@@ -575,7 +593,7 @@ function gather(bot, ctx, target, state) {
       const mem = names.length > 0
         ? resources.nearest(ctx, bp, names, (it) => g.skip.has(keyOf(it)) || banned(it) || farReject(bot, ctx, g, bp, it))
         : null
-      if (mem && farLate(bot, bp, mem)) {
+      if (mem && farLate(bot, ctx, bp, mem)) {
         // p9lx: remembered stand refused for time — same handoff as an
         // empty search, no stranded record (see the far-search twin).
         failFinal(bot, ctx, g, logs, 'failed:no-trees')
@@ -611,13 +629,19 @@ function gather(bot, ctx, target, state) {
     say(bot, `chopping ${g.name} ${logs}/${NEED_LOGS}`)
   }
   if (g.phase === 'walk') {
-    // p9lx: a far walk-out caught by dusk/night drops its target — over 64
-    // blocks remaining in the dark is the death march, not the trip. The
-    // arbiter's gohome/shelter takes over from here; dawn retries from the
-    // nearer stance. Nearly-there (64 or less left) finishes the chop.
-    if (g.far && g.pos && farLate(bot, bp, g.pos)) {
+    // p9lx: a walk-out caught by dusk/night fails out — body or target over
+    // 64 from the anchor in the dark is the death march, not the trip
+    // (revmux 01 core-2: chained hops and stand-side chops, core-3: the
+    // failFinal clears the far goal, so the body stops now instead of
+    // marching on till a later tick). The hold parks gather near the abort
+    // point; the arbiter's gohome/shelter takes over, dawn retries from
+    // the nearer stance. Anchor-near (64 or less both ends) finishes.
+    if (g.pos && !farStartOk(bot) &&
+      (anchorDist(bot, ctx, bp, g.pos) > FAR_START_BLOCKS || anchorDist(bot, ctx, bp, bp) > FAR_START_BLOCKS)) {
       g.pos = null
       g.far = false
+      failFinal(bot, ctx, g, logs, 'failed:no-trees')
+      g.farEmpty = false
       return
     }
     const key = `gather:${g.pos.x},${g.pos.y},${g.pos.z}`
