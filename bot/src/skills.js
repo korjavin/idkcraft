@@ -15,13 +15,16 @@
 // JSON strings — no host object, function or error ever crosses, so the
 // classic `x.constructor.constructor('return process')` escape has nothing
 // to climb. Every act goes through the hand guards: dig = denyReason
-// (protectedReason + selftrap rules), digIn = recover.digInVeto (the hand
-// dig-in's own veto, no denyReason loosening), place = the castle yard/apron
-// refusal and never against a GUI block, use = a ray-visible face into the
-// checked cell (never where the server ray lands unchecked), goto =
-// body.js movementsFor on the live Movements (never a new one). No
-// toss/drop, no chat. digIn takes no skill-controlled args: the only cell
-// it can ever dig is the one under the live body.
+// (protectedReason + selftrap rules), digIn = recover.digInRun (the whole
+// hand dig-in maneuver: spot walk, veto-steered descent, cap — every dig
+// and the cap vetted inside, no denyReason loosening), place = the castle
+// yard/apron refusal and never against a GUI block, use = a ray-visible
+// face into the checked cell (never where the server ray lands unchecked),
+// goto = body.js movementsFor on the live Movements (never a new one). No
+// toss/drop, no chat. digIn takes no skill-controlled args and advances one
+// tick per call on per-episode state; while it runs every other act answers
+// 'busy', and a terminal tick cancels its dig and drops its walk goal like
+// any hand primitive's.
 // ponytail: node:vm is a guard rail for our own generated code, not a
 // boundary against hostile code; promotion (vf8e.4) keeps revmux review.
 // Known ceiling: no heap cap — a skill allocating GBs inside its 50 ms can
@@ -54,9 +57,6 @@ const CONTROLS = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 
 const FACADE_OPS = ['pos', 'blockAt', 'findBlocks', 'inventory', 'count', 'health', 'food', 'time', 'entities', 'status',
   'dig', 'digIn', 'place', 'use', 'goto', 'stop', 'control', 'lookAt', 'equip']
 
-// Dig-in depth bound per episode, like the hand's dig-refused bound
-// (recover.js DIG_IN_DEPTH (3) + 2 — the hand digs extra=0 columns).
-const DIGIN_MAX_DIGS = 5
 // Standing eye height for the server use-raycast (waterup.js EYE_HEIGHT).
 const EYE_HEIGHT = 1.62
 const USE_REACH = 4.5
@@ -258,30 +258,32 @@ const OPS = {
     if (why) { logDeny(b, why); return `denied:${why}` }
     return fire(c, 'dig', (live) => { live(); return c.bot.dig(b) })
   },
-  // Dig-in (krup): the hand dig-in's per-cell dig for generated shelter
-  // skills. dig() goes through denyReason, whose below-feet self-trap rule
-  // refuses exactly this move once the bot is walled in — the core dig-in
-  // move — so the night-dig-in skill could never dig down. digIn() instead
-  // guards the cell under the live body with recover.digInVeto (hand-dig +
-  // gravity + protectedReason + fluid + floor + walls, the same veto the
-  // hand dig-in steers by); denyReason stays untouched for generated code.
-  // No coords: the only diggable cell is under the body, so no
-  // skill-controlled value ever selects a block. c.hs counts the episode's
-  // digs (fresh = the whole column must take the descent, like the hand).
+  // Dig-in (krup): the hand dig-in maneuver for generated shelter skills,
+  // driven one tick per call. dig() goes through denyReason, whose
+  // below-feet self-trap rule refuses digging down once the bot is walled
+  // in — the core dig-in move — so the night-dig-in skill could never dig
+  // down, and a per-cell veto-guarded dig proved insufficient on the rig
+  // (6/6 RED: the model descended but never composed spot-find + cap in
+  // budget). digIn() instead advances recover.digInRun on a per-episode
+  // state: walk to the nearest hand-dig column (the hand's stone stance),
+  // veto-steered descent, fall-in, cap from dug dirt. denyReason stays
+  // untouched for generated code; every dig and the cap runs the hand
+  // vetoes (digInVeto incl. protectedReason) inside digInRun. No coords, no
+  // skill-controlled values anywhere near a block. Call it every tick until
+  // it answers 'done' (pitted and capped), then hold still till dawn.
+  // 'started' = maneuver running (call again next tick); any other act
+  // while it runs answers 'busy' (the yvi rule: never two placements).
   digIn(c) {
-    const p = botPos(c.bot)
-    if (!p) return 'denied:no-pos'
-    const b = cellAt(c.bot, Math.floor(p.x), Math.floor(p.y) - 1, Math.floor(p.z))
-    if (!b) return 'denied:unloaded'
-    if (!solid(b)) return 'denied:air'
-    const fresh = !(c.hs.digInDigs > 0)
-    let veto = null
+    if (c.act.busy && c.act.busy !== 'digIn') return 'busy'
+    let out
     try {
-      veto = require('./behaviours/recover').digInVeto(c.bot, c.ctx, 0, 0, 0, fresh)
-    } catch (_) { return 'denied:veto-error' }
-    if (veto) { logDeny(b, veto); return `denied:${veto}` }
-    if ((c.hs.digInDigs | 0) >= DIGIN_MAX_DIGS) return 'denied:depth'
-    return fire(c, 'digIn', (live) => { live(); c.hs.digInDigs = (c.hs.digInDigs | 0) + 1; return c.bot.dig(b) })
+      const st = c.hs.digInSt || (c.hs.digInSt = {})
+      out = require('./behaviours/recover').digInRun(c.bot, c.ctx || {}, st)
+    } catch (_) { out = 'failed:maneuver-error' }
+    if (out === 'running') { c.act.busy = 'digIn'; return 'started' }
+    c.act.busy = null
+    if (out === 'done') return 'done'
+    return `denied:dig-in-${typeof out === 'string' && out.startsWith('failed:') ? out.slice(7) : 'maneuver-error'}`
   },
   // Place `item` INTO cell x,y,z against any solid neighbour.
   place(c, x, y, z, item) {
@@ -539,11 +541,16 @@ function compile(file, text, env) {
         st.dead = true // an act still in flight never lands (fire live())
         // A started dig finishes on mineflayer's timer: cancel ours (codex 03 P2).
         // ponytail: a replaced episode (no terminal tick) keeps its dig, like a hand primitive's.
-        // krup: digIn digs through the same bot.dig timer, so it cancels too.
-        if (act.busy === 'dig' || act.busy === 'digIn') { try { bot.stopDigging() } catch (_) { /* best-effort */ } }
+        // krup: the dig-in maneuver digs through the same bot.dig timer and
+        // walks under a dig-in-walk goal: both die with the episode, and its
+        // busy unlocks the next episode's acts.
+        if (act.busy === 'dig' || act.busy === 'digIn') {
+          try { bot.stopDigging() } catch (_) { /* best-effort */ }
+          act.busy = null
+        }
         releaseControls(bot)
         // A goal the skill left live dies with it (a stale goal re-wedges: yvi).
-        if (typeof ctx.lastGoalKey === 'string' && ctx.lastGoalKey.startsWith('skill:')) {
+        if (typeof ctx.lastGoalKey === 'string' && (ctx.lastGoalKey.startsWith('skill:') || ctx.lastGoalKey === 'dig-in-walk')) {
           try { clearGoal(bot, ctx) } catch (_) { /* best-effort */ }
         }
         const reason = failReason(out)

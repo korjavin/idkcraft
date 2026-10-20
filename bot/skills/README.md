@@ -109,16 +109,19 @@ ticks.
 - `dig(x, y, z)` goes through `util.denyReason`: the protected/foreign-block
   and self-trap rules every hand dig uses. It cannot dig down once the bot
   is walled in (the `below-feet` trap rule) — that move is `digIn`.
-- `digIn()` digs the cell straight under the body, guarded by the hand
-  dig-in's own veto (`recover.digInVeto`: hand-diggable, no gravity/fluid,
-  protected blocks stay refused, the floor and pit walls must stand) instead
-  of `denyReason`, which stays unchanged. No arguments: the only diggable
-  cell is the one under the body. At most 5 digs per episode. The dug dirt
-  lands in the inventory — `place()` it over the head to cap. Recipe for a
-  night dig-in: `digIn` until 3 down (poll `status()`, let the body fall in
-  between digs — a short `control('forward', true)` pulse if it hangs on a
-  neighbour's edge), then `place` dirt into the cell above the head against
-  a pit wall, then hold still.
+- `digIn()` runs the hand dig-in maneuver (`recover.digInRun`), one tick per
+  call: it walks to the nearest hand-diggable column itself when the ground
+  under the body is stone (the stone stance — do not relocate first, just
+  call it where you stand), digs the veto-steered descent, falls in and caps
+  overhead from the dug dirt. `denyReason` stays unchanged; every dig and
+  the cap runs the hand vetoes inside. No arguments. Call it every tick: it
+  answers `'started'` while the maneuver runs (meanwhile every other act
+  answers `'busy'`), `'done'` once the pit is capped, or
+  `'denied:dig-in-<reason>'` when the ground refuses (stone with no dirt
+  column in reach, protected ground, no cap material). Recipe for a night
+  dig-in: call `digIn()` until it answers `'done'`, then `stop()`, release
+  the controls and hold still till dawn (`'done'` when `time()` leaves the
+  night range). Do not dig, place or walk yourself around it.
 - `place(x, y, z, item)` places INTO that cell against a solid neighbour. It
   refuses the castle yard ring and apron (`denied:place-protected`) and never
   clicks a GUI block.
