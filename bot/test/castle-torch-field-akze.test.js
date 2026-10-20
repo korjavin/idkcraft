@@ -268,6 +268,41 @@ describe('castlefetch torch field furnace (idkcraft-akze)', () => {
     assert.equal(world.get(at.x + 1, at.y, at.z) !== 'furnace', true, 'no furnace is placed for a smelt that cannot run')
   })
 
+  it('a satisfied demand holds the leg open until the field furnace is dug', async () => {
+    // Send-back 1: craftTick runs before torchTick, so crafted torches can
+    // satisfy the demand while the furnace still waits for its break phase.
+    // The leg must break it first, not finish with it standing.
+    const world = makeWorld()
+    const at = { x: SITE.x + 15, y: SITE.y, z: SITE.z + 13 }
+    world.set(at.x + 1, at.y, at.z, 'furnace') // standing from the smelt
+    const items = [
+      { name: 'torch', count: 4 }, // demand already satisfied
+      { name: 'stone_pickaxe', count: 1 },
+    ]
+    const bot = makeBot(world, items, at)
+    const castleBeh = require('../src/behaviours/castle')
+    const realMenuFact = castleBeh.menuFact
+    castleBeh.menuFact = () => 'torch-none'
+    const ctx = makeCtx()
+    ctx.castleWord = { kind: 'torch', left: 0 }
+    ctx.castleFieldFurnace = { x: at.x + 1, y: at.y, z: at.z }
+    ctx.castleFetch = {
+      kind: 'torch', chestDone: true, craftOut: false, t0: Date.now(), haul: 3,
+      field: { phase: 'break', ticks: 0, tries: 0, flight: false, dead: false, at: { x: at.x + 1, y: at.y, z: at.z }, smelted: true },
+    }
+    try {
+      fetch(bot, ctx, null, null)
+      assert.equal(ctx.stepStatus, undefined, 'the leg stays open while its own furnace stands')
+      await new Promise((r) => setTimeout(r, 100))
+      assert.equal(world.get(at.x + 1, at.y, at.z) !== 'furnace', true, 'the break runs before the leg finishes')
+      fetch(bot, ctx, null, null)
+      await new Promise((r) => setTimeout(r, 50))
+      assert.equal(ctx.stepStatus, 'done', 'finishes once the furnace is gone')
+    } finally {
+      castleBeh.menuFact = realMenuFact
+    }
+  })
+
   it('no safe cell beside the body falls back to no-torch (the old path)', () => {
     const world = makeWorld()
     const at = { x: SITE.x + 15, y: SITE.y, z: SITE.z + 13 }

@@ -2216,7 +2216,18 @@ function castlefetch(bot, ctx, target, state) {
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') { finish(bot, ctx, 'done'); return }
   const d = demand(bot, ctx)
-  if (!d || d.short <= 0) { finish(bot, ctx, 'done'); return }
+  if (!d || d.short <= 0) {
+    // idkcraft-akze send-back 1: a torch leg whose own field furnace still
+    // stands (or is mid-place) must not finish here — craftTick runs before
+    // torchTick, so freshly crafted torches satisfy the demand while the
+    // furnace waits for its break phase. Drive the break through torchTick;
+    // a refused break (dead/poisoned) falls through and finishes below.
+    const cfl = ctx.castleFetch && ctx.castleFetch.field
+    if (d && d.kind === 'torch' && cfl && (cfl.at || cfl.flight)) {
+      if (torchTick(bot, ctx, ctx.castleFetch, d, target, state)) return
+    }
+    finish(bot, ctx, 'done'); return
+  }
   let f = ctx.castleFetch
   if (!f || f.kind !== d.kind) {
     f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: blocksOnHand(bot), haul: d.short }

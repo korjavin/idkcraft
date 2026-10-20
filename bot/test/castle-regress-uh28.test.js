@@ -33,4 +33,28 @@ describe('castle progress regress log (uh28)', () => {
     assert.match(reg[0], /^castle regress 2 missing=(stone@\d+,65,7 ?){10}$/)
     assert.match(reg[1], /^castle regress 2 missing=stone@13,65,7$/)
   })
+
+  it('re-baselines the high-water after an away gap (no regress for the knock)', () => {
+    // idkcraft-akze: the repair seed knocks laid cells while the bot is off
+    // site (unloaded); the next loaded scan must re-baseline the high-water
+    // to the post-gap count instead of logging the knock as regress.
+    const cells = []
+    for (let i = 0; i < 14; i++) cells.push({ idx: i, kind: 'stone', x: i, y: 65, z: 7 })
+    const world = new Map(cells.map((c) => [`${c.x},${c.y},${c.z}`, 'stone']))
+    const bot = { blockAt: (p) => ({ name: world.get(`${p.x},${p.y},${p.z}`) || 'air' }) }
+    const st = { site: { x: 0, y: 64, z: 0 }, rot: 0 }
+    const ctx = {}
+    const lines = []
+    const orig = console.log
+    console.log = (m) => lines.push(String(m))
+    try {
+      castle.progress(bot, st, cells, ctx) // 14/14, high-water = 14
+      for (let i = 0; i < 12; i++) world.delete(`${i},65,7`) // the away knock
+      ctx.castleDug.lastScan = Date.now() - 3600 * 1000 // bot was away (unloaded)
+      castle.progress(bot, st, cells, ctx)
+    } finally { console.log = orig }
+    assert.equal(ctx.castleDug.high, 2, 'high-water re-baselines to the post-gap count')
+    const reg = lines.filter((l) => l.startsWith('castle regress'))
+    assert.equal(reg.length, 0, 'no regress line for an away-gap knock')
+  })
 })
