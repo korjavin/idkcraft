@@ -1066,8 +1066,24 @@ ties uncoverable. Master names the nether tie-break and loops the hold
 (`repair=0/22`); the branch withdraws the chest planks and relays. The
 verdict line is the same `repair=`/`regress=`/`nowood@` shape:
 
+Parked stone (prkh): `CASTLE_REPAIR=prkh` knocks 12 fence + 3 torch with the
+planks chest and clearing (no stone, no stairs); `CASTLE_QUARRY=dead`
+water-fills every quarry/pit probe column and sweeps exposed stone, and
+`CASTLE_REKNOCK=stone` knocks 4 wall cells mid-run once the torch fetch
+fails. The fence relays from the chest while stone stays honestly parked
+(no gather-chop); the verdict adds `stoneheld@<s>` (first parked stone
+fetch). Master blocks the fence on the stale torch hold and chops;
+the branch relays and parks. Torch stands in for stone in the rig (same
+per-kind hold path): in a castle still under construction a fence word can
+only coexist with a stone hold through a `blocked` word, which the unit
+tests cover.
+
 ```sh
 CASTLE_LOCK_WAIT=7200 CASTLE_SEED=complete CASTLE_REPAIR=planks CASTLE_KIT=woodmix sh bot/tools/castle-rig.sh 20
+```
+
+```sh
+CASTLE_LOCK_WAIT=7200 CASTLE_SEED=complete CASTLE_REPAIR=prkh CASTLE_QUARRY=dead CASTLE_REKNOCK=stone CASTLE_BODY=baritone sh bot/tools/castle-rig.sh 10
 ```
 
 Start spot (g0z.58): `CASTLE_START="dx,dy,dz"` (off the seeded site's SW

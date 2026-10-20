@@ -261,12 +261,27 @@ function owedMoved(bot, ctx) {
   } catch (_) { return false }
 }
 
+// True while a fetch failure parks KIND (prkh): the hold is per kind, so
+// a stone-unreachable leg parks stone while a fence word still fetches
+// from the chest. A hold with no kind on it (legacy records) still parks
+// everything. The owed-repair home try (owedMoved) is exempt, as before.
+function holdFor(bot, ctx, kind) {
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+    if (!sf || typeof sf.at !== 'number') return false
+    if (Date.now() - sf.at > require('../budget').CASTLEFETCH_RETRY_MS) return false
+    if (sf.kind && sf.kind !== kind) return false
+    return !owedMoved(bot, ctx)
+  } catch (_) {
+    return false
+  }
+}
+
 function demand(bot, ctx) {
   // Bounded fetch hold (g0z.15): a failed leg rests CASTLEFETCH_RETRY_MS no
   // matter how the facts text moves — known=near/none flips released the
   // text-keyed goal hold every few seconds (g0z.12 rig churn).
-  const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
-  if (sf && typeof sf.at === 'number' && Date.now() - sf.at <= require('../budget').CASTLEFETCH_RETRY_MS && !owedMoved(bot, ctx)) return null
+  // prkh: per kind (holdFor) — a stone hold never blocks a fence word.
   let w = 'none'
   try { w = castleMod.menuFact(bot, ctx) } catch (_) { return null }
   let kind = null
@@ -283,6 +298,7 @@ function demand(bot, ctx) {
     kind = m[1]
     word = m[2]
   }
+  if (holdFor(bot, ctx, kind)) return null
   const cw = ctx && ctx.castleWord
   const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
   const target = Math.min(FETCH[kind], left)
@@ -407,6 +423,12 @@ function finish(bot, ctx, status) {
   }
   if (status === 'done') stepDone(ctx)
   else stepFailed(ctx, failReason(status) || status)
+  // prkh: the fetch hold parks one KIND, not the step — stamp the failed
+  // kind for the hold record (goal.js recordOutcome copies it), so a later
+  // fence word still fetches from the chest while stone stays parked.
+  if (status !== 'done') {
+    try { if (f && typeof f.kind === 'string') ctx.castleFetchFailKind = f.kind } catch (_) { /* stamp best-effort */ }
+  }
   ctx.castleFetch = null
   ctx.furnaceJob = null // g0z.38: a pane leg's job never outlives it (gear's iron smelt)
   clearGoal(bot, ctx)
@@ -2299,6 +2321,10 @@ function castlefetch(bot, ctx, target, state) {
   if (!f || f.kind !== d.kind) {
     f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: blocksOnHand(bot), haul: d.short }
     try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
+    // prkh (revmux 01 core-1): a new leg owns no failure yet — drop any
+    // stamp an unrecorded reset left behind, so an unstamped failure below
+    // falls back to the kindless hold-all.
+    try { ctx.castleFetchFailKind = null } catch (_) { /* stamp best-effort */ }
   }
   // Batch yield (idkcraft-vmzq.20): a leg that reached a layable batch but
   // not its full target hands over after LEG_MAX_MS, so the castle lays
@@ -2398,6 +2424,11 @@ function castlefetch(bot, ctx, target, state) {
         st.status = NO_WOOD
         try { console.log(`castlefetch ${d.kind}: ${NO_WOOD}`) } catch (_) { /* log best-effort */ }
       }
+      // prkh: a gather-ended leg stamps its kind like finish() — the hold
+      // parks this kind, never the whole step.
+      if (failReason(ctx.stepStatus) !== null) {
+        try { ctx.castleFetchFailKind = d.kind } catch (_) { /* stamp best-effort */ }
+      }
       ctx.castleFetch = null
     }
     return
@@ -2450,7 +2481,14 @@ function castlefetch(bot, ctx, target, state) {
           try { console.log(`castlefetch stairs: ${NO_WOOD}`) } catch (_) { /* log best-effort */ }
         }
         finish(bot, ctx, 'failed:castlefetch-no-stairs')
-      } else ctx.castleFetch = null
+      } else {
+        // prkh: a gather-ended leg stamps its kind like finish() — the
+        // hold parks this kind, never the whole step.
+        if (failReason(ctx.stepStatus) !== null) {
+          try { ctx.castleFetchFailKind = d.kind } catch (_) { /* stamp best-effort */ }
+        }
+        ctx.castleFetch = null
+      }
     }
     return
   }
@@ -2485,6 +2523,7 @@ module.exports.PIT_DEPTH = PIT_DEPTH
 module.exports.PIT_ROOM = PIT_ROOM
 module.exports.digTick = digTick
 module.exports.demand = demand
+module.exports.holdFor = holdFor
 module.exports.roomForDrop = roomForDrop
 module.exports.castleChest = castleChest
 module.exports.onSite = onSite

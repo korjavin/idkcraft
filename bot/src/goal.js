@@ -386,7 +386,16 @@ const MENU = {
         // pickaxe/table chain; castlefetch/castle outrank this when they can
         // run. Torch excluded (it wants coal, not logs); blocked/clear/
         // finish/batch words never reach here.
-        if (typeof facts.castle === 'string' && /^(stone|planks|frame|door|fence|chest)-(none|some)$/.test(facts.castle) && (facts.logs || 0) < NEED_LOGS) return true
+        // prkh: a fetch-held word never chops — with the quarry dead the
+        // chop only finds protected castle/house logs (prod: 19 gather
+        // steps with zero gain), so the bot parks honestly instead.
+        if (typeof facts.castle === 'string' && /^(stone|planks|frame|door|fence|chest)-(none|some)$/.test(facts.castle) && (facts.logs || 0) < NEED_LOGS) {
+          try {
+            const kind = facts.castle.slice(0, facts.castle.lastIndexOf('-'))
+            if (require('./behaviours/castlefetch').holdFor(bot, ctx, kind)) return false
+          } catch (_) { /* hold unreadable: chop as before */ }
+          return true
+        }
         return false
       }
       const total = facts.planks + facts.logs * 4
@@ -1587,6 +1596,15 @@ function failHolds(ctx, name, text, bot) {
   try {
     if (SELF_ADVANCING[name]) return false
     const sf = ctx && ctx.stepFail && ctx.stepFail[name]
+    // prkh: the fetch hold parks one kind — a hold for another kind never
+    // holds this menu entry (the blocked word keeps 'blocked' while its
+    // gated kind flips, so the kind — not the text — decides here).
+    if (name === 'castlefetch' && sf && typeof sf.kind === 'string' && sf.kind) {
+      try {
+        const cw = ctx && ctx.castleWord
+        if (cw && typeof cw.kind === 'string' && cw.kind && cw.kind !== sf.kind) return false
+      } catch (_) { /* kind unreadable: hold stands */ }
+    }
     if (!sf || sf.text !== text) return false
     if (!sf.pos) return true
     const bp = bot && bot.entity && bot.entity.position
@@ -1878,6 +1896,15 @@ function stepWhy(name, facts, bot, ctx, text) {
         if (!/-(none|some|batch)$/.test(w)) return 'castlefetch: no material owed'
         kind = w.slice(0, w.lastIndexOf('-'))
       }
+      // prkh: name the parked kind — the honest gap in the rest line while
+      // the quarry is dead (a fence relay still reads 'ready' above).
+      try {
+        const cf = require('./behaviours/castlefetch')
+        if (kind && cf.holdFor(bot, ctx, kind)) {
+          const st = ctx && ctx.stepFail && ctx.stepFail.castlefetch && ctx.stepFail.castlefetch.status
+          return `castlefetch: ${kind} fetch held${st ? ` (${st})` : ''}`
+        }
+      } catch (_) { /* hold unreadable: the lines below decide */ }
       if (needsDigNoPick(kind, facts, bot)) return 'castlefetch: no pickaxe'
       return 'castlefetch: batch on hand'
     }
@@ -2282,6 +2309,16 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
       const old = ctx.stepFail[prev]
       const bp = bot && bot.entity && bot.entity.position
       const rec = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null, at: Date.now() }
+      // prkh: the fetch hold parks one kind — carry the failed kind the
+      // behaviour stamped (castlefetchFailKind), so other kinds still run.
+      // Consumed (revmux 01 core-1): an unstamped later failure must fall
+      // back to the kindless hold-all, never inherit a stale kind.
+      if (prev === 'castlefetch') {
+        try {
+          if (typeof ctx.castleFetchFailKind === 'string' && ctx.castleFetchFailKind) rec.kind = ctx.castleFetchFailKind
+          ctx.castleFetchFailKind = null
+        } catch (_) { /* kind best-effort */ }
+      }
       // Consecutive-cause counter (67z3): the failed-build hold counts
       // repeats with the same cause (new resources, a placed cell, or a
       // validated site re-arm).
@@ -2736,4 +2773,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce }
+module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome }
