@@ -75,6 +75,11 @@ function mockBot(world, { items = KIT, withBuilder = true, buildScript = 'ok' } 
         for (let i = items.length - 1; i >= 0; i--) if (names.has(items[i].name)) items.splice(i, 1)
         return { placed: 0, missing: cells.length }
       }
+      if (buildScript === 'partial') { // laid half the batch, refused the rest
+        const half = cells.slice(0, Math.ceil(cells.length / 2))
+        for (const c of half) world.set(origin.x + c.dx, origin.y + c.dy, origin.z + c.dz, c.block)
+        return { placed: half.length, missing: cells.length - half.length }
+      }
       for (const c of cells) world.set(origin.x + c.dx, origin.y + c.dy, origin.z + c.dz, c.block)
       return { placed: cells.length, missing: 0 }
     }
@@ -459,6 +464,43 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
       assert.equal(e.tries, castle.BUILD_MISS_TRIES)
     }
     assert.ok(cap.logged.some((m) => m.includes('build-miss') && m.includes('retired')), 'retire line logged')
+  })
+
+  it('placed growth resets suspicion: stale strikes do not retire', async () => {
+    const world = makeWorld()
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    const open = plan.filter((c) => c.kind === 'stone').slice(0, 2)
+    paintAll(world, { except: (c) => open.includes(c) })
+    const bot = mockBot(world, { buildScript: 'partial' })
+    bot.entity.position = { x: open[0].x + 2.5, y: open[0].y, z: open[0].z + 0.5 }
+    const ver = blueprint.blueprintOf(3).version
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    // Two stale strikes behind each cell; the batch lays half its cells.
+    ctx.castle.batchStrikes = Object.fromEntries(open.map((c) => [`${ver}:${c.idx}`, 2]))
+    await run(bot, ctx, 1)
+    for (const c of open) {
+      assert.ok(!ctx.castle.blocked[`${ver}:${c.idx}`], `${c.idx} not blocked after a growing batch`)
+    }
+    const left = Object.values(ctx.castle.batchStrikes || {})
+    assert.ok(left.every((n) => n <= 1), `strikes reset by growth: ${JSON.stringify(ctx.castle.batchStrikes)}`)
+  })
+
+  it('a batch-wide wedge rides the backoff ladder, never the one-shot', async () => {
+    const world = makeWorld()
+    // A whole lowest course refused at once: not cell-specific evidence.
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    const open = plan.filter((c) => c.kind === 'stone' && c.dy === 0).slice(0, castle.STRIKE_WIDE_CAP + 4)
+    assert.ok(open.length > castle.STRIKE_WIDE_CAP, 'wider than the cap')
+    paintAll(world, { except: (c) => open.includes(c) })
+    const bot = mockBot(world, { buildScript: 'stall' })
+    bot.entity.position = { x: open[0].x + 2.5, y: open[0].y, z: open[0].z + 0.5 }
+    const ver = blueprint.blueprintOf(3).version
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    await run(bot, ctx, 2)
+    for (const c of open) {
+      const e = ctx.castle.blocked[`${ver}:${c.idx}`]
+      assert.ok(e && !e.retired && e.why === 'build-miss-wide', `${c.idx} backed off, not retired: ${JSON.stringify(e)}`)
+    }
   })
 
   it('a top whose floor is still unlaid never strikes: no collateral retire', async () => {
