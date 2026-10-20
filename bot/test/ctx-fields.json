@@ -467,6 +467,13 @@
     "owner": "src/behaviours/castlefetch.js",
     "note": "dry decor kinds (g0z.49): a Set of kinds whose fetch leg came up dry, or null when clean. castlefetch adds via castle.noteDry and clears on a leg that got stock; castle.menuFact reads it for the decor word and clears it when every open kind is dry (retry the first, restart the cycle)."
   },
+  "castleFetchRestarts": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js",
+    "note": "dead-leg streak (qxql.3): { kind, short, inv, n, at } — consecutive leg starts (each within 30 s of the last) of one kind with the same need and an unchanged pack; past RESTART_MAX the leg fails once into the per-kind hold."
+  },
   "castleFetchFailKind": {
     "writers": [
       "src/behaviours/castlefetch.js",
