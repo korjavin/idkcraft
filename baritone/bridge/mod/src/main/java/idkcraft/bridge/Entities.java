@@ -22,6 +22,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.entity.player.Player;
@@ -46,9 +47,11 @@ import net.minecraft.world.entity.player.Player;
  *
  * <p>Wire shapes (see PROTOCOL.md, entities section):
  * entities.list {@code -> {entities:[{id,uuid,type,name?,displayName,kind,
- * pos{x,y,z},vel{x,y,z},yaw,pitch,health?,onGround,pose,self?}]}} where type
+ * pos{x,y,z},vel{x,y,z},yaw,pitch,health?,onGround,pose,self?,item?}]}} where type
  * is 'player' or the mob registry id (e.g. 'zombie') and kind is
- * player|hostile|animal|other from the client's MobCategory.
+ * player|hostile|animal|other from the client's MobCategory. {@code item} is
+ * the dropped stack's item registry path (e.g. 'oak_sapling'), present only
+ * on item entities (idkcraft-poyd: the skill drop watch).
  * roster.get {@code -> {players:[{name,uuid,ping,gameMode}]}} with the
  * numeric mode id (null when the entry carries none).
  * yaw/pitch ride the mineflayer convention (radians, like state.get —
@@ -136,6 +139,7 @@ public final class Entities {
         Set<Integer> ids = new HashSet<>();
         Entity self = client.player;
         Registry<EntityType<?>> entityTypes = level.registryAccess().lookupOrThrow(Registries.ENTITY_TYPE);
+        Registry<net.minecraft.world.item.Item> items = level.registryAccess().lookupOrThrow(Registries.ITEM);
         for (Entity e : level.entitiesForRendering()) {
             if (e == null) {
                 continue;
@@ -157,6 +161,15 @@ public final class Entities {
             m.put("yaw", BridgeServer.mineflayerYaw(e.getYRot()));
             m.put("pitch", BridgeServer.mineflayerPitch(e.getXRot()));
             m.put("health", e instanceof LivingEntity ? ((LivingEntity) e).getHealth() : null);
+            // idkcraft-poyd: dropped-stack identity for the skill drop
+            // watch — the item registry path (e.g. 'oak_sapling'), so a v2
+            // skill can tell sapling drops from every other entity.
+            if (e instanceof ItemEntity drop) {
+                Identifier itemId = items.getKey(drop.getItem().getItem());
+                if (itemId != null) {
+                    m.put("item", itemId.getPath());
+                }
+            }
             m.put("onGround", e.onGround());
             m.put("pose", e.getPose().name().toLowerCase(Locale.ROOT));
             if (e == self) {

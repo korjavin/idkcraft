@@ -78,6 +78,25 @@ function rosterEntry(o = {}) {
   }
 }
 
+// idkcraft-poyd: the mod names the dropped stack on item entities.
+function wireDrop(o = {}) {
+  return {
+    id: o.id ?? 50,
+    uuid: o.uuid || '55555555-5555-5555-5555-555555555555',
+    type: 'item',
+    displayName: o.displayName || 'Oak Sapling',
+    kind: 'other',
+    pos: { x: o.x ?? 2, y: o.y ?? 64, z: o.z ?? 1 },
+    vel: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    pitch: 0,
+    health: null,
+    onGround: true,
+    pose: 'standing',
+    ...(o.item ? { item: o.item } : {}),
+  }
+}
+
 async function foldBot(state = {}) {
   const transport = new FakeTransport({
     pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true },
@@ -152,6 +171,26 @@ describe('entities.list fold (bot.entities, mineflayer-shaped)', () => {
     transport.state.entities = [wirePlayer(), wireMob(), wireMob({ id: 43, type: 'creeper', displayName: 'Creeper' })]
     await bot.refresh()
     assert.deepEqual(spawned, [43])
+  })
+
+  it('folds the wire drop name as item + getDroppedItem() (poyd drop watch)', async () => {
+    transport.state.entities = [wirePlayer(), wireDrop({ item: 'oak_sapling' })]
+    await bot.refresh()
+    const drop = bot.entities['50']
+    assert.equal(drop.item, 'oak_sapling')
+    assert.equal(typeof drop.getDroppedItem, 'function')
+    assert.equal(drop.getDroppedItem().name, 'oak_sapling')
+  })
+
+  it('clears the drop name when the wire stops sending it', async () => {
+    transport.state.entities = [wirePlayer(), wireDrop({ item: 'oak_sapling' })]
+    await bot.refresh()
+    const drop = bot.entities['50']
+    assert.equal(drop.item, 'oak_sapling')
+    transport.state.entities = [wirePlayer(), wireDrop()]
+    await bot.refresh()
+    assert.ok(!('item' in drop), 'no stale drop name on the reused entity')
+    assert.equal(drop.getDroppedItem, undefined)
   })
 
   it('takes non-player types from the registry, kind bucket as fallback', async () => {

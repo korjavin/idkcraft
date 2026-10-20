@@ -124,7 +124,8 @@ Read:
 - `findBlocks(names, maxDistance<=32, count<=64)` returns `[{x, y, z}]`.
 - `inventory()` returns `{name: count}`. `count(name)` returns a number.
 - `health()`, `food()`, `time()` (timeOfDay).
-- `entities(radius<=32)` returns `[{name, type, username, item, x, y, z}]` (`item` is the dropped-item registry name, else `null`).
+- `entities(radius<=32)` returns `[{name, type, username, item, x, y, z}]` (`item` is the dropped-item registry name, else `null` — on the baritone body it rides the mod's `entities.list` item field, idkcraft-poyd).
+- `drops([name|names], [radius<=32])` returns `[{item, x, y, z}]`: the cheap per-tick drop watch (idkcraft-poyd). The first call each tick scans the folded entities once and caches the rows on the episode; later calls that tick only filter — a gather skill that also scans players pays one scan, never one per call, and never an RPC. Omit the name to watch every drop, or pass one name (or an array of up to 64) to watch only those stacks.
 - `status()` returns `{busy, err, path, moving}`.
 
 Act. Each async act returns `'started'`, `'busy'` or `'denied:<reason>'`, and
