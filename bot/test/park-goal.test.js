@@ -2,9 +2,9 @@
 
 // idkcraft-vf8e.19: the hand-written park curriculum goal stays runnable —
 // both goal files parse with the replay's spot parser, the verify fields
-// carry the bead's contract (>=10 / >=8 saplings, gap 2), and the r=3
-// lattice fits the verdict box. The rig (REPLAY_BODY=baritone) is the
-// verdict; this is the fast rot gate.
+// carry the bead's contract (GAP #617 checkerboard, 5 saplings, gap 2),
+// and the r=3 checkerboard fits the verdict box. The rig
+// (REPLAY_BODY=baritone) is the verdict; this is the fast rot gate.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -33,16 +33,14 @@ function loadViaParser() {
   }
 }
 
-// The pitch-2 staggered lattice the task text specifies: rows every 2
-// blocks, alternate rows shifted by 1, skipping cells that would fall
-// outside the square.
+// The pitch-2 checkerboard the task text specifies (GAP #617): grid cells
+// with even dx,dz from the anchor, only where (dx/2+dz/2) is even.
 function lattice(cx, cz, r) {
   const cells = []
-  let row = 0
-  for (let dz = -r; dz <= r; dz += 2, row++) {
-    for (let dx = -r; dx <= r; dx += 2) {
-      const x = cx + dx + (row % 2 === 1 ? 1 : 0)
-      if (Math.abs(x - cx) <= r) cells.push([x, cz + dz])
+  for (let dz = -r; dz <= r; dz++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (dx % 2 !== 0 || dz % 2 !== 0) continue
+      if (Math.abs(dx / 2 + dz / 2) % 2 === 0) cells.push([cx + dx, cz + dz])
     }
   }
   return cells
@@ -68,8 +66,8 @@ describe('park curriculum goal (vf8e.19)', () => {
     const { scenarios } = readGoals()
     for (const sc of scenarios) {
       for (const clause of [
-        'do gen_park', 'st.count', 'entities()', 'every 2 blocks', 'shifted by 1',
-        'skipping cells that would fall outside the square',
+        'do gen_park', 'st.count', 'entities()', 'checkerboard',
+        'both even', '(dx/2 + dz/2) is even',
         'Chebyshev', 'grass_block', 'never dig below the surface',
         "facts.pinned === 'gen_park'", "'day'", 'castle', 'no chat',
         "'done'", "'failed:no-saplings'",
@@ -103,9 +101,10 @@ describe('park curriculum goal (vf8e.19)', () => {
       assert.equal(s.verify.radius, 3)
       assert.equal(s.verify.dy, 1)
       assert.equal(s.verify.gap, 2)
+      assert.equal(s.verify.lattice, 'checkerboard', 'GAP #617: the lattice, not just the gap')
     }
-    assert.equal(kit.verify.min, 10)
-    assert.equal(gather.verify.min, 8)
+    assert.equal(kit.verify.min, 5, 'r=3 checkerboard yields 5 cells')
+    assert.equal(gather.verify.min, 5, 'r=3 checkerboard yields 5 cells')
     assert.equal(kit.secs, 300)
     assert.equal(gather.secs, 600)
   })
@@ -129,13 +128,14 @@ describe('park curriculum goal (vf8e.19)', () => {
     }
   })
 
-  it('the r=3 lattice fits the verdict box with room for the kit', () => {
+  it('the r=3 checkerboard fits the verdict box with room for the kit', () => {
     const parsed = loadViaParser()
     const kit = parsed.find((s) => s.name === 'PARK-KIT')
     const cx = Math.floor(kit.goal[0])
     const cz = Math.floor(kit.goal[2])
     const cells = lattice(cx, cz, 3)
-    assert.equal(cells.length, 14, 'r=3 plants 14 (kit carries 16)')
+    assert.deepEqual(cells.sort(), [[cx - 2, cz - 2], [cx - 2, cz + 2], [cx, cz], [cx + 2, cz - 2], [cx + 2, cz + 2]].sort(),
+      'r=3 checkerboard: the anchor plus (±2,±2)')
     assert.ok(cells.length >= kit.verify.min, 'the lattice clears min even with no loss')
     for (const [x, z] of cells) {
       assert.ok(Math.abs(x - cx) <= 3 && Math.abs(z - cz) <= 3, `lattice cell in the verify box: ${x},${z}`)

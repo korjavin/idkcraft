@@ -397,13 +397,17 @@ runs) the replay counts wanted `blocks` in the box `|dx|,|dz| <= radius`,
 from the follower's world and demotes a chat-done to `reached: false` with
 note `PARTIAL found=<n>/<min> close=<pairs>` when fewer than `min` stand or
 any pair sits at Chebyshev distance `< gap` (gap 2 = no two in touching
-cells, the "trees can grow" rule; gap 1 = any). The reached-by-chat verdict
+cells, the "trees can grow" rule; gap 1 = any). With `"lattice":
+"checkerboard"` (GAP #617) every wanted cell must also sit on the
+pitch-2 checkerboard relative to the box centre — dx,dz both even with
+(dx/2 + dz/2) even — and an off-lattice cell counts as a fail, never
+ignored (the note gains `off=<k>`). The reached-by-chat verdict
 stays required: `verify` only demotes, never promotes. Order mode only;
 `blocks` must name real blocks, `min >= 1`, `radius <= 16` — anything else
 throws naming the spot. `radius`/`dy`/`gap` default to 3/1/2. The row keeps
-`verifyFound`/`verifyMin`/`verifyClose` next to the note, so the replay
-table and the skill-loop feedback show the demotion (`rowGreen` reads it RED
-with no change).
+`verifyFound`/`verifyMin`/`verifyClose`/`verifyOff` next to the note, so the
+replay table and the skill-loop feedback show the demotion (`rowGreen` reads
+it RED with no change).
 
 ## LLM orders A/B (`llm-order-spots.json`, idkcraft-vf8e.6)
 
@@ -888,7 +892,12 @@ sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orches
   the replay row decides — `reached` with no page (`call === 0`) is GREEN. GREEN ends with a
   `PROMOTE:` line (`node tools/skill-promote.js <bead> <work>/skills/<name>.js`);
   promotion runs by hand in the morning — the generated skill is never
-  committed by the goal PR.
+  committed by the goal PR. The park's lattice is a checkerboard (GAP #617,
+  the owner's call): saplings sit on the pitch-2 grid relative to the park
+  anchor — dx,dz both even — and only on cells with (dx/2 + dz/2) even
+  (diagonal neighbours at (2,2), orthogonal at 4; Chebyshev gap 2 holds),
+  so a plain square pitch-2 grid fails the world verdict. For `do gen_park 3`
+  that is 5 cells: the anchor itself plus (±2,±2).
 - Body: the harvest feeds bot2 stalls by default, so set `CURRICULUM_BODY=baritone`
   for a bot2 night — the keeper, the pre-run and the loop then verify on the v2
   body. Empty (default) is the mineflayer replay. The ledger records the body and
