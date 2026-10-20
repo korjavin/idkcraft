@@ -236,14 +236,15 @@ function loadSpots() {
     }
     // Rig-built arena (idkcraft-jsf.7): rcon commands run after both tps
     // (chunks loaded) and before the kit, every trial, on the disposable
-    // copy. World edits only — fill/setblock; a give/op/tp here would
-    // smuggle kit or state past the per-spot contract.
+    // copy. World edits only — fill/setblock/place (place grows the
+    // vf8e.19 park oaks); a give/op/tp here would smuggle kit or state
+    // past the per-spot contract.
     let prep = []
     if (s.prep != null) {
       if (!Array.isArray(s.prep) || s.prep.length > 32) throw new Error(`spots[${i}]: bad prep (want <=32 commands)`)
       for (const c of s.prep) {
-        if (typeof c !== 'string' || c.length > 256 || !/^(fill|setblock) /.test(c)) {
-          throw new Error(`spots[${i}]: prep allows fill/setblock only`)
+        if (typeof c !== 'string' || c.length > 256 || !/^(fill|setblock|place) /.test(c)) {
+          throw new Error(`spots[${i}]: prep allows fill/setblock/place only`)
         }
       }
       prep = s.prep.slice()

@@ -1030,9 +1030,10 @@ describe('prep arenas (idkcraft-jsf.7)', () => {
     }
     try {
       assert.deepEqual(load(['fill 0 0 0 1 1 1 air', 'setblock 0 0 0 stone'])[0].prep, ['fill 0 0 0 1 1 1 air', 'setblock 0 0 0 stone'])
+      assert.deepEqual(load(['place feature minecraft:oak 0 64 0'])[0].prep, ['place feature minecraft:oak 0 64 0'])
       assert.deepEqual(load(undefined)[0].prep, [])
       for (const bad of [['give @a water_bucket 1'], ['op X'], ['tp X 0 0 0'], [' fill 0 0 0 1 1 1 air'], [7], 'fill 0 0 0 1 1 1 air']) {
-        assert.throws(() => load(bad), /bad prep|fill\/setblock only/, JSON.stringify(bad))
+        assert.throws(() => load(bad), /bad prep|fill\/setblock/, JSON.stringify(bad))
       }
     } finally {
       if (saved === undefined) delete process.argv[2]

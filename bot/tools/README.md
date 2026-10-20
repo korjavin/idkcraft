@@ -301,9 +301,10 @@ S6-LEAD by the lost order (`reached`).
   send the bot hunting a second vein 15+ blocks off-terrain — slower and
   flakier, for no extra shaft-loop coverage (the atl.17/atl.20 below-feet
   stance is exercised by the first ore).
-- `prep` (idkcraft-jsf.7): optional list of rcon world edits — `fill`/
-  `setblock` only (no `give`/`op`/`tp`: kit and state stay in the spot
-  contract) — run every trial after both tps (chunks loaded) and before
+- `prep` (idkcraft-jsf.7, `place` idkcraft-vf8e.19): optional list of rcon
+  world edits — `fill`/`setblock`/`place` only (no `give`/`op`/`tp`: kit and
+  state stay in the spot contract) — run every trial after both tps (chunks
+  loaded) and before
   the kit. A failed command exits 2 (`No blocks were filled` is the
   idempotent re-run, not a failure). It builds a fixture the pristine
   map lacks, on the disposable copy only — never on `world.tar`.
@@ -876,6 +877,17 @@ sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orches
   `DUMP` stays required whenever `K>0`. Relative goal dirs resolve from the
   caller's cwd, like `DUMP`; a goal whose `scenario.json` is missing,
   unparsable, or lacks `name` / `skill` / `bead` is skipped, never fatal.
+- Targeted goal (hand-written), e.g. the vf8e.19 park (`bot/tools/goals/park`):
+  `scenario.json` (one entry per spot: same skill, `kind: step`, `sabotage: null`)
+  + `spots.json` (order spots on the vf8e.6 order flat). Run one scenario at a
+  time with the env pair `SKILL_LOOP_SCENARIOS=<dir>/scenario.json` +
+  `SKILL_LOOP_SPOTS=<dir>/spots.json` (`node tools/skill-loop.js <name> 6`):
+  the loop boots its own keeper when `SKILL_LOOP_RIG` is empty, the spots have
+  no baseline entry so `REPLAY_BASELINE_OFF=1` rides along and the replay row
+  decides — `reached` with no page (`call === 0`) is GREEN. GREEN ends with a
+  `PROMOTE:` line (`node tools/skill-promote.js <bead> <work>/skills/<name>.js`);
+  promotion runs by hand in the morning — the generated skill is never
+  committed by the goal PR.
 - Body: the harvest feeds bot2 stalls by default, so set `CURRICULUM_BODY=baritone`
   for a bot2 night — the keeper, the pre-run and the loop then verify on the v2
   body. Empty (default) is the mineflayer replay. The ledger records the body and

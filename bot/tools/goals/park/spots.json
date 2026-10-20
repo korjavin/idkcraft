@@ -1,0 +1,46 @@
+[
+  {
+    "name": "PARK-KIT",
+    "mode": "order",
+    "spawn": [59.5, 64, -205.5],
+    "goal": [62.5, 64, -205.5],
+    "order": "do gen_park 3",
+    "expect": ["done: do gen_park"],
+    "fail": ["no step ", "plan stopped at ", "I can't plan that", "can't "],
+    "secs": 300,
+    "scaffold": 0,
+    "pickaxe": false,
+    "kit": ["oak_sapling 16", "dirt 16"],
+    "prep": [
+      "fill 55 63 -212 69 63 -198 grass_block",
+      "fill 55 64 -212 69 72 -198 air"
+    ],
+    "verify": {"blocks": ["oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling", "acacia_sapling", "dark_oak_sapling", "cherry_sapling"], "around": "goal", "radius": 3, "dy": 1, "min": 10, "gap": 2},
+    "bead": "idkcraft-vf8e.19"
+  },
+  {
+    "name": "PARK-GATHER",
+    "mode": "order",
+    "spawn": [59.5, 64, -205.5],
+    "goal": [62.5, 64, -205.5],
+    "order": "do gen_park 3",
+    "expect": ["done: do gen_park"],
+    "fail": ["no step ", "plan stopped at ", "I can't plan that", "can't "],
+    "secs": 600,
+    "scaffold": 0,
+    "pickaxe": false,
+    "kit": ["iron_axe 1", "dirt 16"],
+    "prep": [
+      "fill 55 63 -212 69 63 -198 grass_block",
+      "fill 55 64 -212 69 72 -198 air",
+      "place feature minecraft:oak 56 64 -210",
+      "place feature minecraft:oak 56 64 -201",
+      "place feature minecraft:oak 68 64 -210",
+      "place feature minecraft:oak 68 64 -201",
+      "place feature minecraft:oak 56 64 -205",
+      "place feature minecraft:oak 68 64 -206"
+    ],
+    "verify": {"blocks": ["oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling", "acacia_sapling", "dark_oak_sapling", "cherry_sapling"], "around": "goal", "radius": 3, "dy": 1, "min": 8, "gap": 2},
+    "bead": "idkcraft-vf8e.19"
+  }
+]
