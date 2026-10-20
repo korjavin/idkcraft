@@ -152,7 +152,8 @@ describe('stall-point planner (vmzq.5)', () => {
     assert.equal(parkChats(bot).length, 0)
     // The request carries the goal/situation/history object state.
     const req = calls[0]
-    assert.deepEqual(Object.keys(req.state).sort(), ['attempts', 'blocked_on', 'facts', 'goal', 'inventory', 'progress', 'recent', 'since_min', 'target', 'world', 'world_legend'])
+    assert.deepEqual(Object.keys(req.state).sort(), ['attempts', 'blocked_on', 'facts', 'goal', 'inventory', 'progress', 'recent', 'since_min', 'situation', 'target', 'world', 'world_legend'])
+    assert.match(req.state.situation, /^castle:/m) // qxql.9: the LLM reads the situation next to facts
     assert.equal(req.state.goal, 'build castle')
     assert.equal(req.state.progress, '8/1722')
     assert.equal(req.state.since_min, 45)
