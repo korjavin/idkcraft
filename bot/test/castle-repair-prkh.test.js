@@ -21,19 +21,16 @@ describe('prkh rig scenario', () => {
     assert.ok(knocked.every((c) => typeof c.x === 'number' && typeof c.y === 'number' && typeof c.z === 'number'))
   })
 
-  it('names the first parked stone fetch, kinded or word-attributed', () => {
+  it('names the first stamped stone fetch; a torch hold under a stone word never misattributes', () => {
     const at = (t, status, kind, cword) => ({ t, castleFail: status ? { status, kind } : undefined, cword })
     assert.equal(stoneheldAt([
       at(15, 'failed:castlefetch-no-torch', 'torch', 'torch'),
       at(30, 'failed:castlefetch-no-stone', 'stone', 'stone'),
     ]), 30, 'kinded stone failure')
     assert.equal(stoneheldAt([
-      at(30, 'failed:castlefetch-unreachable', null, 'stone'),
-    ]), 30, 'kindless record attributed by the word')
-    assert.equal(stoneheldAt([
-      at(15, 'failed:castlefetch-no-torch', 'torch', 'torch'),
-      at(30, 'failed:castlefetch-no-torch', null, 'torch'),
-    ]), null, 'no stone failure: no tag')
+      at(30, 'failed:castlefetch-no-torch', 'torch', 'stone'),
+      at(45, 'failed:castlefetch-unreachable', null, 'stone'),
+    ]), null, 'torch hold / kindless record under a stone word: no tag')
     assert.equal(stoneheldAt([]), null)
   })
 

@@ -173,14 +173,15 @@ function prkhCells(st) {
     ...cells.filter((c) => c.kind === 'torch').slice(0, 3),
   ]
 }
-// First series second a stone fetch failure parks the word (idkcraft-prkh
-// verdict tag): kinded on the branch, word-attributed where the record
-// carries no kind. Pure (unit-tested).
+// First series second a STAMPED stone fetch failure parks the word
+// (idkcraft-prkh verdict tag): kind-only, so a torch hold under a stone
+// word never misattributes. The master leg (no stamps) reads '-' while
+// its kindless stone failures still show in top-fail. Pure (unit-tested).
 function stoneheldAt(series) {
   for (const s of series || []) {
     const cf = s && s.castleFail
     if (cf && typeof cf.status === 'string' && cf.status.startsWith('failed:castlefetch-') &&
-      (cf.kind === 'stone' || (cf.kind == null && s.cword === 'stone'))) return s.t
+      cf.kind === 'stone') return s.t
   }
   return null
 }
