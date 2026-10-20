@@ -1,8 +1,10 @@
-/* skill {"name": "stroll_fixture", "description": "fixture step: time is day — stand still one tick", "kind": "step", "body": "any", "verifiedBy": null, "bead": "idkcraft-vf8e.2"} */
-// Test fixture (skills.test.js): a goal-step skill loaded from SKILLS_DIR.
+/* skill {"name": "stroll_fixture", "description": "fixture step: ordered only — stand still one tick", "kind": "step", "body": "any", "verifiedBy": null, "bead": "idkcraft-vf8e.17"} */
+// Test fixture (skills.test.js, llm-orders.test.js): an order-only goal-step
+// skill. It runs only when the plan executive pins it (do <name> or an LLM
+// plan) — never on its own before rest.
 
 function feasible(facts) {
-  return facts.time === 'day'
+  return facts.pinned === 'stroll_fixture'
 }
 
 function run(bot, st) {

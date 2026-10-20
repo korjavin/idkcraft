@@ -58,7 +58,9 @@ top-level functions.
   `goalFacts`), as JSON. It has no facade. Keep it narrow: it is the only gate.
 - `run(bot, st)` runs once per tick. `bot` is the facade below; `st` is a
   per-episode object (recover: one stuck episode, step: one step instance)
-  that persists between ticks.
+  that persists between ticks. An ordered step run also sees `st.count`
+  (the order's count, 1..64, or `null`) and `st.by` (the ordering player,
+  or `null`); a run the FSM picks on its own always sees `null`s.
 
 ## Where it plugs in
 
@@ -74,6 +76,29 @@ top-level functions.
   `STEP_CRITERIA[name] = description`, plus `BEHAVIOURS[name]`, so
   `goal.registered()` admits it. It finishes through `step.js`
   (`stepDone`/`stepFailed`).
+
+## Order-only skills (vf8e.17)
+
+A step skill reaches a chat order through the plan executive — no hand FSM
+order, no new skill kind. Say `do <name> [count]` (deterministic, no LLM
+call) or let an LLM plan pin it: the executive pins the step one at a time
+through `ctx.taskPlanStep` (args in `ctx.taskPlanArgs`), the arbiter consumes
+the pin, and the wrapper copies the args into the fresh `st`.
+
+Recipe (e.g. a skill that plants parks only when taught and ordered):
+
+```js
+function feasible(facts) {
+  return facts.pinned === 'gen_park' // only when ordered — never on its own
+}
+```
+
+| fact / field | value |
+|---|---|
+| `facts.pinned` | the executive's one-shot step (`ctx.taskPlanStep`), kept while the executive owns the running work step, else `'none'`. |
+| `facts.pinCount` | the pin's count (`ctx.taskPlanArgs.count`), or `0`. |
+| `st.count` / `st.by` | the order's count (1..64) and player, or `null`s without an order. |
+| `entities()` item | each entry carries `item`: the dropped-item registry name, or `null`. |
 
 ## Sandbox and limits
 
@@ -99,7 +124,7 @@ Read:
 - `findBlocks(names, maxDistance<=32, count<=64)` returns `[{x, y, z}]`.
 - `inventory()` returns `{name: count}`. `count(name)` returns a number.
 - `health()`, `food()`, `time()` (timeOfDay).
-- `entities(radius<=32)` returns `[{name, type, username, x, y, z}]`.
+- `entities(radius<=32)` returns `[{name, type, username, item, x, y, z}]` (`item` is the dropped-item registry name, else `null`).
 - `status()` returns `{busy, err, path, moving}`.
 
 Act. Each async act returns `'started'`, `'busy'` or `'denied:<reason>'`, and
