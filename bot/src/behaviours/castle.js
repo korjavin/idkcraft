@@ -2146,20 +2146,24 @@ function castleBuilderBatch(bot, ctx, st, c) {
   // idx only, so two refused cells would reset each other forever. At
   // STRIKES the cell enters the usual backoff/retire machinery instead of
   // re-batching forever. Starved misses fetch, never strike.
-  // Synq core-1: only genuinely-attempted cells strike. A cell whose
-  // stand floor is still unlaid at strike time was never reached by the
-  // layered builder — collateral of the stall, not a refusal — so it must
-  // not burn the one-shot build-miss ladder (revmux 01 core-1).
+  // Synq core-1 (revmux 02): strike only the layer Baritone was on. The
+  // builder lays bottom-up inside the batch, so the lowest unfinished
+  // batch layer is the one it attempted; higher layers — even with their
+  // floors long laid — are collateral of the stall and must not burn the
+  // one-shot build-miss ladder. Starved kinds never strike.
   const strikeMisses = () => {
     try {
       if (!st.batchStrikes || typeof st.batchStrikes !== 'object') st.batchStrikes = {}
       const now = Date.now()
-      const plan = blueprint.absPlan(st.site, st.rot | 0, st.blueprintVersion)
+      let lowY = Infinity
       for (const o of flightCells) {
         if (done(bot, o)) { delete st.batchStrikes[bkey(st, o.idx)]; continue }
+        if (o.y < lowY) lowY = o.y
+      }
+      for (const o of flightCells) {
+        if (done(bot, o)) continue
+        if (o.y !== lowY) continue
         if (usable(bot, o.kind, ctx) <= 0) continue
-        const below = plan.at.get(`${o.x},${o.y - 1},${o.z}`)
-        if (below && blueprint.isPlaceTarget(below.kind) && !done(bot, below)) continue
         const k = bkey(st, o.idx)
         const n = (st.batchStrikes[k] = (st.batchStrikes[k] | 0) + 1)
         if (n >= STRIKES) {
