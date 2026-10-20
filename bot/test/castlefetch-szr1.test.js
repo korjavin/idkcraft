@@ -141,7 +141,7 @@ describe('castlefetch chest planks fund the fence leg (szr1)', () => {
 
   it('an unreadable chest keeps the legacy full loop (same opens as before)', async () => {
     const calls = []
-    stockpile.chestCounts = async () => { throw new Error('unreadable') }
+    stockpile.chestCounts = async () => null // non-ok open: null, not {} (core-2)
     stockpile.withdrawAnyFromChest = async (b, c, names, n) => {
       calls.push([names, n])
       return { got: 0, name: null }
@@ -175,6 +175,25 @@ describe('castlefetch chest planks fund the fence leg (szr1)', () => {
       [['birch_fence', 'oak_fence'], 6],
       [['oak_planks'], 12],
     ])
+  })
+
+  it('a fund shortfall after a bank draw keeps done: the next draw heals it (core-3)', async () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'fence', left: 6 }; return 'fence-none' }
+    // Short of planks but structurally fine: 'done' re-picks and the next
+    // draw tops up (the door's 4-plank first draw crafts on the second).
+    fetch.deps.craftItem = () => ({ done: false, line: "can't make oak_fence: need 4 oak_planks (have 1)" })
+    fetch.deps.gather = (bot, ctx) => { ctx.stepStatus = 'running' }
+    const homeChest = pos(SITE.x + 1.5, 64, SITE.z - 0.5)
+    const set = new Map([[`${SITE.x + 1},${SITE.y},${SITE.z - 1}`, 'chest']])
+    const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }], set, at: pos(SITE.x + 1.5, 64, SITE.z - 0.5), chest: [{ name: 'oak_planks', count: 200 }] })
+    const ctx = { castle: castleState(), home: { site: pos(SITE.x - 40, 64, SITE.z), chest: homeChest } }
+    fetch(bot, ctx)
+    await settle(); await settle(); await settle()
+    fetch(bot, ctx)
+    await settle(); await settle()
+    fetch(bot, ctx)
+    await settle(); await settle()
+    assert.equal(ctx.stepStatus, 'done')
   })
 
   it('a bank draw the pack cannot craft fails into the hold instead of draining the chest (core-3)', async () => {

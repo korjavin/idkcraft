@@ -855,9 +855,12 @@ async function depositToChest(bot, ctx, names) {
 
 // Count stacks in the adopted chest without withdrawing (did.4: the bed
 // colour/wood argmax needs chest counts before it draws). One window;
-// {name: count} over names (all stacks when names is null). A vanished
-// chest reads empty — the caller falls back to the pack. `at` pins the
-// chest (szr1: castlefetch peeks a footprint/bank chest, not the home one).
+// {name: count} over names (all stacks when names is null), or null when
+// the chest cannot be opened (szr1 core-2: castlefetch must tell an
+// unreadable chest from an empty one — an empty peek skips the withdraws,
+// an unreadable one keeps the legacy full loop). A vanished chest reads
+// null — the caller falls back to the pack. `at` pins the chest (szr1:
+// castlefetch peeks a footprint/bank chest, not the home one).
 async function chestCounts(bot, ctx, names, at = null) {
   const want = Array.isArray(names) ? new Set(names) : null
   try {
@@ -873,9 +876,9 @@ async function chestCounts(bot, ctx, names, at = null) {
       }
       return out
     }, at)
-    return res && res.status === 'ok' ? res.value : {}
+    return res && res.status === 'ok' ? res.value : null
   } catch (_) {
-    return {}
+    return null
   }
 }
 

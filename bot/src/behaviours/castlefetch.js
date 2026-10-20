@@ -681,6 +681,7 @@ function craftTick(bot, ctx, f, d) {
     // (warped_fence) — name the real gap instead.
     const woodless = WOOD.has(d.kind) && countItems(bot, (n) => n.endsWith('_planks') || n.endsWith('_log')) === 0
     const line = woodless ? `can't craft ${d.kind}: no planks or logs` : r.line
+    f.craftLine = line // szr1 core-3: the bankFull gate reads the latest failure
     try { console.log(`castlefetch ${d.kind}: craft failed: ${line}`) } catch (_) { /* log best-effort */ }
     // idkcraft-8njf: a table failure gets one fresh craft run per leg. The
     // walk give-up latched that table dead for the day (craftany deadToday)
@@ -2313,12 +2314,16 @@ function castlefetch(bot, ctx, target, state) {
   if (craftTick(bot, ctx, f, d)) return
   // g0z.60: a bank batch on hand lays before any dig. Not a torch leg (fqkn):
   // its bank draw is logs, which torchTick below smelts into the torches.
-  // szr1 core-3: but a draw the pack cannot craft (craftOut latched: no
-  // table, no reach) must not read 'done' — the next leg would re-pick and
-  // drain the chest every few seconds. Fail so the hold parks it instead
-  // (the same hole the g0z.60 logs shape had; plank-stocked chests reach it).
-  if (f.bankFull && d.kind !== 'torch') {
-    if (f.craftOut) {
+  // Stairs keep the old shape (8njf/vf8e.8 own its table-broke mine batch).
+  // szr1 core-3: but a draw the pack cannot craft for structural reasons
+  // (no table, no wood at all) must not read 'done' — the next leg would
+  // re-pick and drain the chest every few seconds. Fail so the hold parks
+  // it instead (the same hole the g0z.60 logs shape had; plank-stocked
+  // chests reach it). A fund shortfall ('can't make ... need ...') keeps
+  // 'done': the next draw heals it (the door's 4-plank first draw crafts
+  // on the second).
+  if (f.bankFull && d.kind !== 'torch' && d.kind !== 'stairs') {
+    if (f.craftOut && !/^can't make /.test(f.craftLine || '')) {
       if (d.kind === 'fence' || d.kind === 'gate') castleMod.noteDry(ctx, d.kind)
       finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
       return
