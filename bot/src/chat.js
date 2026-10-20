@@ -17,6 +17,7 @@ const worker = require('./worker')
 const castleMod = require('./behaviours/castle')
 const taskMod = require('./task')
 const llmOrders = require('./llm-orders')
+const { pushOrderLog } = require('./situation')
 const Vec3 = require('vec3')
 
 // Targets declined as too deep, held per player for an explicit 'lead
@@ -391,12 +392,21 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   const lctx = bot._tickerCtx
   // Peer bots (v1/v2 hear each other's lines) never spend a call.
   const peerBot = [process.env.BOT_USERNAME, process.env.BOT2_USERNAME, process.env.BOT_PEER_USERNAME].some((n) => n && n === username)
-  const llmAsk = (fallback, text = msg, explicit = false) => !!(ticker && lctx && !peerBot && llmOrders.enabled() && !llmOrders.feeding(lctx) &&
-    worker.players(bot)[playerName] &&
-    llmOrders.ask(bot, lctx, { text, by: playerName, ticker, fallback, explicit, feed: (line) => handleChat(bot, ticker, username, line, senderUuid) }))
+  const llmAsk = (fallback, text = msg, explicit = false) => {
+    if (!(ticker && lctx && !peerBot && llmOrders.enabled() && !llmOrders.feeding(lctx) && worker.players(bot)[playerName])) return false
+    const fired = llmOrders.ask(bot, lctx, { text, by: playerName, ticker, fallback, explicit, feed: (line) => handleChat(bot, ticker, username, line, senderUuid) })
+    // qxql.9 owner ring: the order the model reads. OWNER_ORDER lines are
+    // pushed by the cancel branch below, so only other fired asks push here
+    // (explicit `plan <order>`, unknown-bring names and roster chatter).
+    if (fired && !(text === msg && OWNER_ORDER.test(msg))) { try { pushOrderLog(lctx, text) } catch (_) { /* ring best-effort */ } }
+    return !!fired
+  }
   // Any other owner order ends the plan (its next work step would undo a
   // come home / go castle / flat); status, help, brain and chatter do not.
-  if (!peerBot && !llmOrders.feeding(lctx) && OWNER_ORDER.test(msg)) llmOrders.cancel(lctx, msg.split(' ')[0])
+  if (!peerBot && !llmOrders.feeding(lctx) && OWNER_ORDER.test(msg)) {
+    try { pushOrderLog(lctx, msg) } catch (_) { /* ring best-effort */ }
+    llmOrders.cancel(lctx, msg.split(' ')[0])
+  }
   if (msg === 'follow me') {
     if (ticker) ticker.setFollow(playerName)
     const seenEntry = worker.players(bot)[playerName]

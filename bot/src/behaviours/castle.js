@@ -2352,6 +2352,7 @@ module.exports.FULL_RESCAN_MS = FULL_RESCAN_MS
 module.exports.isMaterial = (name, st) => typeof name === 'string' && Object.entries(ITEM).some(([kind, want]) =>
   want(name) && (!st || kind in blueprint.billOfMaterials(blueprint.blueprintOf(st.blueprintVersion).PLAN) ||
     (blueprint.DECOR[blueprint.blueprintOf(st.blueprintVersion).version] || []).some((c) => c.kind === kind)))
+module.exports.siteLoaded = siteLoaded
 module.exports.menuFact = menuFact
 module.exports.litterTargets = litterTargets
 module.exports.scaffoldShape = scaffoldShape

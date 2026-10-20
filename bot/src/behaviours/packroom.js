@@ -150,13 +150,51 @@ async function withChest(bot, ctx, fn, at = null) {
   try {
     const window = await bot.openChest(block)
     try {
-      return { status: 'ok', value: await fn(window) }
+      const value = await fn(window)
+      // qxql.9 last-read cache for situationText (read-only there, never a
+      // re-open): snapshot the open window's contents, tagged home/castle by
+      // position. Runs only on an already-open chest, one sync list call.
+      try { noteChestRead(ctx, c, window) } catch (_) { /* cache best-effort */ }
+      return { status: 'ok', value }
     } finally {
       try { window.close() } catch (_) { /* close best-effort */ }
     }
   } catch (_) {
     return { status: 'error' }
   }
+}
+
+// Which chest did withChest just open: the adopted home chest, the castle
+// siteChest, or a footprint chest on the castle site (castlefetch's owner
+// chest). Anything else is not a situation source and is not cached.
+function chestSlot(ctx, c) {
+  try {
+    const h = ctx && ctx.home && ctx.home.chest
+    if (h && c && c.x === h.x && c.y === h.y && c.z === h.z) return 'home'
+    const s = ctx && ctx.castle && ctx.castle.siteChest
+    if (s && c && c.x === s.x && c.y === s.y && c.z === s.z) return 'site'
+    const st = ctx && ctx.castle
+    if (st && st.site && c && typeof c.x === 'number') {
+      if (require('../castle').onSite(st, c, 0, 0)) return 'castle'
+    }
+  } catch (_) { /* unreadable: no slot */ }
+  return null
+}
+
+function noteChestRead(ctx, c, window) {
+  if (!ctx || typeof ctx !== 'object') return
+  const slot = chestSlot(ctx, c)
+  if (!slot) return
+  const stacks = window && typeof window.containerItems === 'function' ? window.containerItems() : []
+  const contents = {}
+  if (Array.isArray(stacks)) {
+    for (const s of stacks) {
+      if (!s || typeof s.name !== 'string') continue
+      contents[s.name] = (contents[s.name] || 0) + (typeof s.count === 'number' ? s.count : 1)
+    }
+  }
+  if (!ctx.chestLast || typeof ctx.chestLast !== 'object') ctx.chestLast = {}
+  ctx.chestLast[slot] = { contents, at: Date.now() }
 }
 
 // Withdraw up to count of name from the adopted chest. { got } — 0 when the

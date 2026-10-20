@@ -20,6 +20,7 @@
 
 const brain = require('./brain')
 const goal = require('./goal')
+const { situationText } = require('./situation')
 const metrics = require('./metrics')
 const { STEP_EFFECT_TEXT } = require('./plan-consts')
 const { isFinished, failReason, stepGen, chatStep } = require('./step')
@@ -85,17 +86,8 @@ function stepList() {
   return lines.join('\n')
 }
 
-function inventoryText(bot) {
-  try {
-    const n = {}
-    for (const i of bot.inventory.items()) n[i.name] = (n[i.name] || 0) + i.count
-    return Object.entries(n).map(([k, v]) => `${k} ${v}`).join(', ') || 'empty'
-  } catch (_) { return 'unknown' }
-}
-
-function stateText(bot, ctx) {
-  try { return goal.goalText(goal.goalFacts(bot, ctx), ctx.home) } catch (_) { return 'unknown' }
-}
+// situationText (situation.js) replaced stateText+inventoryText (qxql.9):
+// the model sees castle progress, chests, holds and the owner ring.
 
 // Prototype-safe whitelist read (vf8e.17 verifier): chat and model ids
 // match [a-z0-9_]+, so `do constructor` / {"step":"__proto__"} hit inherited
@@ -147,7 +139,7 @@ function label(s) {
 
 // One Messages-API call -> { steps|error|empty, tokens }.
 async function planOrder(bot, ctx, text, fetchFn) {
-  const user = `Order from the player: "${text}"\n\nBot state: ${stateText(bot, ctx)}\nInventory: ${inventoryText(bot)}\n\nSteps (id(args): what it does):\n${stepList()}`
+  const user = `Order from the player: "${text}"\n\nSituation:\n${situationText(bot, ctx)}\n\nSteps (id(args): what it does):\n${stepList()}`
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
   let data
