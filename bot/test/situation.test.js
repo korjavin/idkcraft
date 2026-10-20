@@ -62,6 +62,40 @@ describe('situation text', () => {
     assert.ok(text.split('\n').length <= 40, 'prompt stays short')
   })
 
+  it('the chests section shows the cached last reads', () => {
+    const bot = mockBot()
+    const ctx = { chestLast: { castle: { contents: { cobblestone: 64 }, at: Date.now() }, home: { contents: {}, at: Date.now() } } }
+    const text = situationText(bot, ctx)
+    assert.match(text, /^chests: castle=\[cobblestone 64\] home=\[empty\]$/m)
+  })
+
+  it('a blocked castle word rides along for the model', () => {
+    const bot = mockBot()
+    const ctx = {
+      castle: { site: { x: 10, y: 64, z: 10 }, rot: 0, phase: 'body', progress: { done: 1, total: 8 } },
+      castleWord: { word: 'blocked', kind: 'stone', left: 16 },
+    }
+    assert.match(situationText(bot, ctx), /^castle: blocked stone left=16/m)
+  })
+
+  it('withChest caches the last home/castle reads for the chests section', async () => {
+    const packroom = require('../src/behaviours/packroom')
+    const Vec3 = require('vec3')
+    const win = (items) => ({ containerItems: () => items, close() {} })
+    const bot = {
+      blockAt: () => ({ name: 'chest' }),
+      openChest: async () => win([{ name: 'cobblestone', count: 64 }]),
+    }
+    const ctx = { home: { chest: new Vec3(2, 64, 0) }, castle: { site: new Vec3(100, 64, 100), rot: 0, blueprintVersion: 3 } }
+    let res = await packroom.withChest(bot, ctx, async () => 'ok')
+    assert.equal(res.status, 'ok')
+    assert.deepEqual(ctx.chestLast.home.contents, { cobblestone: 64 })
+    res = await packroom.withChest(bot, ctx, async () => 'ok', new Vec3(101, 64, 100))
+    assert.equal(res.status, 'ok')
+    assert.deepEqual(ctx.chestLast.castle.contents, { cobblestone: 64 })
+    assert.match(situationText(bot, ctx), /^chests: castle=\[cobblestone 64\] home=\[cobblestone 64\]$/m)
+  })
+
   it('a null-everything ctx yields all-unknown without throwing', () => {
     const text = situationText(null, null)
     assert.doesNotThrow(() => situationText({}, {}))

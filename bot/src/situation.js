@@ -5,10 +5,10 @@
 // inventory, holds/failures, last owner orders, world. Called only inside
 // llm-orders planOrder and task planState (never the tick path); every
 // section degrades to 'unknown' so prod's many null ctx fields never throw.
-// No new state except the owner order ring (ctx.orderLog, capped, no
+// No new state here except the owner order ring (ctx.orderLog, capped, no
 // persistence). Chest sections expose cached reads only, never open a chest:
-// castlefetch (qxql.3 owns the write side) keeps its last read, the home
-// chest reads from memory when present, otherwise 'unknown'.
+// packroom.withChest snapshots every opened chest into ctx.chestLast.home /
+// .castle (tagged by position); unopened chests read 'unknown'.
 
 const worker = require('./worker')
 const { timeWord } = require('./site')
@@ -53,7 +53,10 @@ function castleSection(bot, ctx) {
       if (cw && typeof cw.kind === 'string' && cw.kind) {
         let have = '?'
         try { have = String(require('./behaviours/castle').usable(bot, cw.kind)) } catch (_) { /* have best-effort */ }
-        word = `${cw.kind} left=${cw.left} have=${have}`
+        // The gated-kind word ('blocked', castle.js:1212) rides along: the
+        // model must tell it from an ordinary open need.
+        const pre = cw.word ? `${cw.word} ` : ''
+        word = `${pre}${cw.kind} left=${cw.left} have=${have}`
       } else if (cw && typeof cw.word === 'string' && cw.word) word = cw.word
     } catch (_) { /* word best-effort */ }
     let prog = '?/?'
@@ -105,8 +108,9 @@ function fmtChest(v) {
 
 function chestsSection(ctx) {
   try {
-    const castle = fmtChest(ctx && (ctx.castleChestLast || ctx.lastCastleChest || ctx.castleChestContents)) || 'unknown'
-    const home = fmtChest(ctx && (ctx.homeChestLast || ctx.lastHomeChest || ctx.homeChestContents)) || 'unknown'
+    const last = ctx && ctx.chestLast
+    const castle = fmtChest(last && last.castle && last.castle.contents) || 'unknown'
+    const home = fmtChest(last && last.home && last.home.contents) || 'unknown'
     return `chests: castle=[${castle}] home=[${home}]`
   } catch (_) { return 'chests: unknown' }
 }
