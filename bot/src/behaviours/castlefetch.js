@@ -158,6 +158,28 @@ function birchFirst(names) {
   return names.sort((a, b) => (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
 }
 
+// Chest planks complete the pack's majority wood first (szr1): exact-wood
+// crafts cannot mix woods, so drawing the held wood's planks tops up a
+// started fund while a new wood starts one. The rest keeps registry order.
+function planksFirst(bot, names) {
+  let held = null
+  try {
+    held = {}
+    for (const it of bot.inventory.items() || []) {
+      if (it && typeof it.name === 'string' && it.name.endsWith('_planks')) held[it.name] = (held[it.name] || 0) + (it.count || 0)
+    }
+  } catch (_) { held = null }
+  if (!held) return birchFirst(names)
+  return names.sort((a, b) => ((held[b] || 0) - (held[a] || 0)) || (b.startsWith('birch_') ? 1 : 0) - (a.startsWith('birch_') ? 1 : 0) || a.localeCompare(b))
+}
+
+// Finished items first, then chest planks (pack wood first), then logs.
+function woodLists(bot, finished) {
+  const planks = planksFirst(bot, itemNames(bot, (n) => n.endsWith('_planks')))
+  const logs = itemNames(bot, (n) => n.endsWith('_log'))
+  return planks.length > 0 ? [finished, planks, logs] : [finished, logs]
+}
+
 function itemNames(bot, test) {
   const by = (bot && bot.registry && bot.registry.itemsByName) || {}
   return birchFirst(Object.keys(by).filter(test))
@@ -175,9 +197,15 @@ function chestNames(bot, kind) {
   if (kind === 'planks') return [itemNames(bot, (n) => n.endsWith('_planks')), itemNames(bot, (n) => n.endsWith('_log'))]
   // g0z.56: logs dropped in the chest fund the wood kinds too (the
   // owner's repair shortcut; craftTick turns them into the item).
-  if (kind === 'door') return [itemNames(bot, isDoor), itemNames(bot, (n) => n.endsWith('_log'))]
-  if (kind === 'fence') return [itemNames(bot, isFence), itemNames(bot, (n) => n.endsWith('_log'))]
-  if (kind === 'gate') return [itemNames(bot, isGate), itemNames(bot, (n) => n.endsWith('_log'))]
+  // szr1: banked/owner-dropped planks fund them directly (stockpile banks
+  // the pack's surplus planks, so a chest can hold planks with no logs in
+  // it — and a treeless world still refills). Logs stay last: a log also
+  // funds the table and the sticks. No planks in the registry: the lists
+  // stay as they were (an empty middle list would trip drawChest's
+  // empty-break and skip the logs behind it).
+  if (kind === 'door') return woodLists(bot, itemNames(bot, isDoor))
+  if (kind === 'fence') return woodLists(bot, itemNames(bot, isFence))
+  if (kind === 'gate') return woodLists(bot, itemNames(bot, isGate))
   // fqkn: logs fund torchTick's charcoal (stockpile banks the pack's logs at home).
   if (kind === 'torch') return [['torch'], itemNames(bot, (n) => n.endsWith('_log'))]
   if (kind === 'frame') return [itemNames(bot, (n) => n.endsWith('_log'))]
@@ -571,6 +599,10 @@ async function drawChest(bot, ctx, d, at, need) {
     // glass: six glass are sixteen panes (one craft).
     // g0z.56: a log also makes 2 fences or doors, half a chest.
     const logs = names.some((n) => n.endsWith('_log')) ? (LOG_YIELD[d.kind] || 0) : 0
+    // szr1: a planks list for a log-yield kind (door/fence/gate chest
+    // stock) draws one log's planks per log the kind would have drawn —
+    // same fund, direct stock. The planks kind itself keeps its 1:1 list.
+    const plankLogs = !logs && d.kind !== 'planks' && names.length > 0 && names.every((n) => n.endsWith('_planks')) && (LOG_YIELD[d.kind] || 0) > 0
     const glass = d.kind === 'pane' && names[0] === 'glass'
     // Banners' is wool (g0z.35): six per banner, only once the beds stand.
     const wool = d.kind === 'banner' && names[0].endsWith('_wool')
@@ -604,8 +636,21 @@ async function drawChest(bot, ctx, d, at, need) {
     // Books already packed cover shelves too (revmux 01 minor): never
     // withdraw what the pack holds.
     const bookWant = book ? Math.max(0, BOOKS_PER_SHELF * Math.ceil(need) - countItems(bot, (n) => n === 'book')) : need
-    const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
-    need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
+    if (plankLogs) {
+      // One wood per withdraw (szr1 core-2): the withdraw walks chest
+      // slots, not the names order, so one multi-wood call would fund a
+      // mix no exact-wood craft can use. Complete the pack wood first
+      // (names arrive in planksFirst order), then the rest, until the
+      // need is met — never a mixed fund.
+      for (const name of names) {
+        if (need <= 0) break
+        const pr = await stockpileMod.withdrawAnyFromChest(bot, ctx, [name], Math.ceil(need / LOG_YIELD[d.kind]) * 4, at)
+        need -= (pr && pr.got ? pr.got : 0) * (LOG_YIELD[d.kind] / 4)
+      }
+    } else {
+      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
+      need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
+    }
   }
   return { left: need, fund }
 }
