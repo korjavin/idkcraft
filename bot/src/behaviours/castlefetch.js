@@ -303,8 +303,9 @@ function holdFor(bot, ctx, kind) {
 // and the per-kind hold (prkh) parks only that kind.
 // ponytail: the pack signature is the sum of item counts — any gain or
 // spend (logs chopped, cobble dug, a craft) breaks the streak. A start more
-// than RESTART_GAP_MS after the last leg's last tick breaks it too: a dead leg re-opens
-// within seconds, a long walk cut before its first dig does not.
+// than RESTART_GAP_MS after the last leg's last tick breaks it too (the
+// leg was off the body: night, a fight). A walk cut 4x in a row with not
+// one item gained counts as dead too — that is the loop this stops.
 const RESTART_MAX = 3
 const RESTART_GAP_MS = 30 * 1000
 function deadRestart(bot, ctx, d) {

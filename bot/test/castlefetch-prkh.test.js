@@ -225,6 +225,12 @@ describe('prkh per-kind fetch hold', () => {
       fetch(bot, ctx)
       await settle(); await settle()
       assert.equal(ctx.stepStatus, 'running', `start ${i + 1} still fetches`)
+      if (i === 0) {
+        // A leg that ran past the gap: its next tick re-stamps the streak.
+        ctx.castleFetchRestarts.at -= 40 * 1000
+        fetch(bot, ctx)
+        await settle(); await settle()
+      }
       ctx.castleFetch = null // the goal re-decide drops the leg (goal.js re-pick)
     }
     fetch(bot, ctx)
