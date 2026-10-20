@@ -1572,7 +1572,8 @@ line (v2 restart) drops an open leg. Block lines:
 - `walk/dig` tick ratio, `dead` legs (no stock gained), `top-fail` (S5),
   `flat` runs of one `castle n` lasting >= 10 min and the longest as
   `<min>@<dominant step>` (S6)
-- `holes:` build-stall, build-miss (`castle blocked`), dig slow per hour (S7/S8)
+- `holes:` build-stall, build-miss (`castle blocked`), dig slow per hour
+  (S7/S8), `skills=<runs>/<bans>` (`skill run` / `skill <name> banned` lines)
 - `deaths` (S9)
 
 No baseline file and no PASS/REGRESSION rule: a PR quotes the block for the 24

@@ -18,12 +18,13 @@ const LINE = /^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)\s+(.*)$/
 const top = (o, n) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k}:${v}`).join(',') || 'none'
 const pct = (n, t) => (t ? Math.round((n / t) * 100) : 0)
 
-function scoreBlock(label, rows) {
+function scoreBlock(label, rows, carryN) {
   resetSeen()
-  const a = { placed: [], ticks: [], share: {}, active: false, legs: 0, stone: 0, blocks: 0, wall: 0, dead: 0, fin: 0, dig: 0, walk: 0, stall: 0, miss: 0, slow: 0, deaths: 0 }
+  const a = { placed: [], ticks: [], share: {}, active: false, legs: 0, stone: 0, blocks: 0, wall: 0, dead: 0, fin: 0, skillRun: 0, skillBan: 0, dig: 0, walk: 0, stall: 0, miss: 0, slow: 0, deaths: 0 }
+  if (carryN != null) a.placed.push({ at: rows[0].at, n: carryN }) // a day without a change prints no castle line
   for (const { at, msg } of rows) {
     if (msg.startsWith('spawned as ')) seen.leg = null // v2 restart: an open leg died with the process
-    if (msg.startsWith('goal step=')) a.active = / castle=\S+/.test(msg)
+    if (msg.startsWith('goal step=')) a.active = / castle=(?!parked\b|done\b)\S+/.test(msg)
     // classify() only tracks stone legs; every kind is a leg for the scoreboard
     const k = /^castlefetch (\S+): (need \d+ more|leg over \()/.exec(msg)
     const cm = /^castle (\d+)\/(\d+)$/.exec(msg)
@@ -46,14 +47,17 @@ function scoreBlock(label, rows) {
         if (k[2] === 'leg over (' && /\(done\)/.test(msg)) a.fin++
         a.dig += +lo[1]
         a.walk += +lo[2]
-        if (!/^\+[1-9]\d*$/.test(lo[3])) a.dead++ // dead leg: no stock gained
-        else if (k[1] === 'stone') { a.blocks += +lo[3]; a.wall += +lo[4] }
+        const gain = /^\+[1-9]\d*$/.test(lo[3])
+        if (!gain) a.dead++ // dead leg: no stock gained
+        if (k[1] === 'stone') { a.wall += +lo[4]; if (gain) a.blocks += +lo[3] } // dead legs cost wall time too
       }
       classify(msg.replace(/^castlefetch \S+:/, 'castlefetch stone:'), at)
     } else classify(msg, at)
     if (msg.startsWith('build-stall ')) a.stall++
     else if (msg.startsWith('castle blocked ')) a.miss++
     else if (msg.startsWith('dig slow ')) a.slow++
+    else if (msg.startsWith('skill run ')) a.skillRun++
+    else if (/^skill \S+ banned /.test(msg)) a.skillBan++
     else if (msg.startsWith('death health=')) a.deaths++
   }
   const t = rows.length ? rows[rows.length - 1].at - rows[0].at : 0
@@ -66,7 +70,8 @@ function scoreBlock(label, rows) {
   for (let i = 0; i < a.placed.length;) {
     let j = i
     while (j + 1 < a.placed.length && a.placed[j + 1].n === a.placed[i].n) j++
-    const end = j + 1 < a.placed.length ? a.placed[j + 1].at : a.placed[j].at
+    // castle n/total prints only on change: the last run lasts to the window end
+    const end = j + 1 < a.placed.length ? a.placed[j + 1].at : rows[rows.length - 1].at
     const span = end - a.placed[i].at
     if (span >= FLAT_MS) {
       flat++
@@ -92,7 +97,7 @@ function scoreBlock(label, rows) {
     `share=${sh('castle')},${sh('castlefetch')},${sh('house')},${sh('idle+stay')},${sh('other')}`,
     `fetch: legs=${a.legs} finished=${fin} cut-by=${top(cuts, 4)} stone=+${a.blocks} ${per} s/stone`,
     `walk/dig=${a.dig ? (a.walk / a.dig).toFixed(2) : '-'} dead=${a.dead} top-fail=${top(seen.fails, 3)} flat=${flat} longest=${lstr}`,
-    `holes: build-stall=${a.stall} build-miss=${a.miss} dig-slow/h=${t ? (a.slow / (t / 3600000)).toFixed(1) : '-'}`,
+    `holes: build-stall=${a.stall} build-miss=${a.miss} dig-slow/h=${t ? (a.slow / (t / 3600000)).toFixed(1) : '-'} skills=${a.skillRun}/${a.skillBan}`,
     `deaths=${a.deaths}`,
   ].join('\n')
 }
@@ -106,7 +111,13 @@ function score(text, { day = false } = {}) {
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push({ at: Date.parse(`${m[1]}T${m[2]}Z`), msg: m[3] })
   }
-  return [...groups].map(([k, rows]) => scoreBlock(k, rows)).join('\n')
+  let carry = null
+  return [...groups].map(([k, rows]) => {
+    const out = scoreBlock(k, rows, carry)
+    const last = /placed=\S+->(\d+)/.exec(out)
+    if (last) carry = +last[1] // max, not last n: castle n only grows within a castle
+    return out
+  }).join('\n')
 }
 
 if (require.main === module) {

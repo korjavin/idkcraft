@@ -24,6 +24,8 @@ const fixture = [
   L('23:02:11', 'step failed:no-planks'),
   L('23:02:12', 'build-stall castle: 3 cells unplaced e.g. 1,2,3'),
   L('23:02:13', 'castle blocked 1 2 3 stone (x) try 1, retry in 5s'),
+  L('23:02:14', 'skill run skill=mine-x kind=a outcome=done ticks=3'),
+  L('23:02:14', 'skill mine-x banned fails=3 last=failed'),
   L('23:02:14', 'dig slow stone expect=10 ticks=30 client=1 wall=1 rpc=1'),
   L('23:20:00', 'castle 100/2048'),
   L('23:30:00', 'castle 130/2048'),
@@ -37,12 +39,30 @@ test('prod-score: whole-file block', () => {
   assert.match(out, /share=castle:25,castlefetch:25,house:25,idle\+stay:25,other:0/)
   assert.match(out, /fetch: legs=3 finished=1 cut-by=force=castle-word:1 stone=\+20 3\.0 s\/stone/)
   assert.match(out, /walk\/dig=2\.17 dead=1 top-fail=no-planks:2 flat=2 longest=40@/)
-  assert.match(out, /build-stall=1 build-miss=1 /)
+  assert.match(out, /build-stall=1 build-miss=1 dig-slow\/h=\S+ skills=1\/1/)
   assert.match(out, /deaths=1/)
+})
+
+test('prod-score: a stall running to the window end and across a quiet day counts', () => {
+  const log = [
+    L('08:00:00', 'castle 1500/2048'),
+    L('20:00:00', 'decision source=fsm action=gather sprint=false dist=none'),
+    L('01:00:00', 'decision source=fsm action=gather sprint=false dist=none', '2026-10-20'),
+  ].join('\n')
+  assert.match(score(log), /placed=1500->1500 \(\+0\)[\s\S]*flat=1 longest=1020@gather/)
+  assert.match(score(log, { day: true }), /== 2026-10-19[\s\S]*flat=1 longest=720@gather[\s\S]*== 2026-10-20\nplaced=1500->1500/)
+})
+
+test('prod-score: parked castle is not an active order', () => {
+  const log = [
+    L('08:00:00', 'goal step=idle prev=gather source=fsm fsm=idle why=x menu=a facts=day castle=parked'),
+    L('08:00:01', 'decision source=fsm action=gather sprint=false dist=none'),
+  ].join('\n')
+  assert.match(score(log), /share=castle:0,castlefetch:0,house:0,idle\+stay:0,other:0/)
 })
 
 test('prod-score: --day splits at UTC midnight', () => {
   const out = score(fixture, { day: true })
   assert.match(out, /== 2026-10-19\nplaced=100->130 \(\+30\)/)
-  assert.match(out, /== 2026-10-20\nplaced=150->150 \(\+0\)/)
+  assert.match(out, /== 2026-10-20\nplaced=130->150 \(\+20\)/)
 })
