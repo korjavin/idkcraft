@@ -896,8 +896,9 @@ sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orches
   the owner's call): saplings sit on the pitch-2 grid relative to the park
   anchor — dx,dz both even — and only on cells with (dx/2 + dz/2) even
   (diagonal neighbours at (2,2), orthogonal at 4; Chebyshev gap 2 holds),
-  so a plain square pitch-2 grid fails the world verdict. For `do gen_park 3`
-  that is 5 cells: the anchor itself plus (±2,±2).
+  so a plain square pitch-2 grid fails the world verdict. For `do gen_park 4`
+  that is 13 cells on the 9x9 square (the verify box grows to radius 4 so the
+  ±4 ring counts); KIT needs 10 of them standing, GATHER 8.
 - Body: the harvest feeds bot2 stalls by default, so set `CURRICULUM_BODY=baritone`
   for a bot2 night — the keeper, the pre-run and the loop then verify on the v2
   body. Empty (default) is the mineflayer replay. The ledger records the body and

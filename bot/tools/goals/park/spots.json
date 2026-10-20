@@ -4,7 +4,7 @@
     "mode": "order",
     "spawn": [59.5, 64, -205.5],
     "goal": [62.5, 64, -205.5],
-    "order": "do gen_park 3",
+    "order": "do gen_park 4",
     "expect": ["done: do gen_park"],
     "fail": ["no step ", "plan stopped at ", "I can't plan that", "can't "],
     "secs": 300,
@@ -15,7 +15,7 @@
       "fill 55 63 -212 69 63 -198 grass_block",
       "fill 55 64 -212 69 72 -198 air"
     ],
-    "verify": {"blocks": ["oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling", "acacia_sapling", "dark_oak_sapling", "cherry_sapling"], "around": "goal", "radius": 3, "dy": 1, "min": 5, "gap": 2, "lattice": "checkerboard"},
+    "verify": {"blocks": ["oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling", "acacia_sapling", "dark_oak_sapling", "cherry_sapling"], "around": "goal", "radius": 4, "dy": 1, "min": 10, "gap": 2, "lattice": "checkerboard"},
     "bead": "idkcraft-vf8e.19"
   },
   {
@@ -23,7 +23,7 @@
     "mode": "order",
     "spawn": [59.5, 64, -205.5],
     "goal": [62.5, 64, -205.5],
-    "order": "do gen_park 3",
+    "order": "do gen_park 4",
     "expect": ["done: do gen_park"],
     "fail": ["no step ", "plan stopped at ", "I can't plan that", "can't "],
     "secs": 600,
@@ -40,7 +40,7 @@
       "place feature minecraft:oak 56 64 -205",
       "place feature minecraft:oak 68 64 -206"
     ],
-    "verify": {"blocks": ["oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling", "acacia_sapling", "dark_oak_sapling", "cherry_sapling"], "around": "goal", "radius": 3, "dy": 1, "min": 5, "gap": 2, "lattice": "checkerboard"},
+    "verify": {"blocks": ["oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling", "acacia_sapling", "dark_oak_sapling", "cherry_sapling"], "around": "goal", "radius": 4, "dy": 1, "min": 8, "gap": 2, "lattice": "checkerboard"},
     "bead": "idkcraft-vf8e.19"
   }
 ]
