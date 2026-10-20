@@ -498,3 +498,281 @@ describe('llm orders: flag on', () => {
     assert.equal(calls.length, 0)
   })
 })
+
+// Deterministic `do <step> [count]` (vf8e.17): one-step plan through the
+// same executive, no Messages call. Runs after every block above: the
+// before() loads the fixture skills into this process's tables, which the
+// earlier flag-off/prompt tests must never see (skills.test.js order rule).
+describe('llm orders: deterministic do <step> (vf8e.17)', () => {
+  const path = require('node:path')
+  const skills = require('../src/skills')
+  const goal = require('../src/goal')
+  const { llmCalls } = require('../src/metrics')
+  const FIXTURES = path.join(__dirname, 'fixtures', 'skills')
+  let fixturesLoaded = false
+  beforeEach(() => {
+    if (!fixturesLoaded) {
+      fixturesLoaded = true
+      process.env.BOT_SKILLS = '1'
+      skills.load({ BOT_SKILLS: '1', SKILLS_DIR: FIXTURES }, { force: true, promotedDir: path.join(FIXTURES, 'none') })
+    }
+  })
+
+  it('do light chats plan: light, runs the step, done: do light — no model call', async () => {
+    const bot = mockBot([{ name: 'torch', count: 8 }])
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    const before = await llmCalls.get()
+    handleChat(bot, ticker, 'P', 'do light')
+    await flush()
+    assert.equal(calls.length, 0, 'no Messages call')
+    assert.ok(bot.lines.includes('plan: light'), String(bot.lines))
+    assert.ok(ctx.llmOrder, 'one-step plan installed')
+    assert.deepEqual(ctx.llmOrder.steps, [{ step: 'light' }])
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.work, true, 'work mode on for the pinned step')
+    assert.equal(ctx.taskPlanStep, 'light')
+    assert.deepEqual(ctx.taskPlanArgs, { step: 'light', count: undefined, by: 'P' })
+    ctx.taskPlanStep = null // decide() consumed it and picked the step
+    ctx.step = 'light'
+    ctx.stepStatus = 'running'
+    ctx.stepGen = (ctx.stepGen | 0) + 1
+    llmOrders.tick(bot, ctx)
+    assert.ok(ctx.llmOrder)
+    ctx.stepStatus = 'done'
+    llmOrders.tick(bot, ctx)
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.llmOrder, null)
+    assert.ok(bot.lines.includes('done: do light'), String(bot.lines))
+    assert.deepEqual(await llmCalls.get(), before, 'metrics llmCalls unchanged')
+  })
+
+  it('do while following takes the same path as an LLM plan (work mode on, pinned)', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    handleChat(bot, ticker, 'P', 'follow me')
+    assert.ok(bot.lines.includes('Following P'))
+    handleChat(bot, ticker, 'P', 'do light')
+    await flush()
+    assert.ok(bot.lines.includes('plan: light'), String(bot.lines))
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.work, true)
+    assert.equal(ctx.taskPlanStep, 'light')
+  })
+
+  it('do with an inherited member name refuses instead of throwing (verifier SECURITY)', async () => {
+    // chatbot ids match [a-z0-9_]+, so constructor/__proto__/toString hit
+    // inherited Object members on a plain lookup — and `.args` of that
+    // threw uncaught in the chat handler, killing the bot.
+    // Chat lowercases the line first, so `do toString` refuses as `tostring`.
+    for (const [said, want] of [['constructor', 'constructor'], ['__proto__', '__proto__'], ['toString', 'tostring']]) {
+      const bot = mockBot()
+      assert.doesNotThrow(() => handleChat(bot, tickerFor(bot), 'P', `do ${said}`), `do ${said} must not throw`)
+      assert.deepEqual(bot.lines, [`no step "${want}" — try: help`], `do ${said}`)
+      assert.ok(!bot._tickerCtx.llmOrder, `do ${said} installs nothing`)
+    }
+    assert.equal(calls.length, 0)
+    // The model path refuses the same way, without throwing (validatePlan
+    // lowercases the id itself).
+    for (const id of ['constructor', '__proto__', 'tostring']) {
+      assert.match(llmOrders.validatePlan({ plan: [{ step: id }] }, llmOrders.workSteps()).error, new RegExp(`no step "${id}"`))
+    }
+    answer = '{"plan":[{"step":"__proto__"}]}'
+    const bot = mockBot()
+    handleChat(bot, tickerFor(bot), 'P', 'plan be evil')
+    await flush()
+    assert.deepEqual(bot.lines, ['I can\'t plan that (no step "__proto__") — try: help'])
+  })
+
+  it('do preempts a pending ask: the stale answer never clobbers it', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"bring","item":"torch","count":8}]}'
+    handleChat(bot, ticker, 'P', 'get me eight torches please') // ask in flight
+    assert.ok(ctx.llmAsk, 'ask pending')
+    handleChat(bot, ticker, 'P', 'do light') // a valid do ends it
+    assert.equal(ctx.llmAsk, null, 'pending ask cleared')
+    await flush()
+    assert.ok(bot.lines.includes('plan: light'), String(bot.lines))
+    assert.equal(ctx.llmOrder.text, 'do light', 'the stale answer did not replace it')
+    assert.equal(calls.length, 1, 'only the first ask called the model')
+  })
+
+  it('textForce vouches an owned task-plan step through a text move; safety still cuts through', () => {
+    const owned = (extra = {}) => ({
+      goalText: 'time=day known=none',
+      heldText: null,
+      stepPick: { step: 'stroll_fixture', source: 'task-plan', fsm: 'gather', why: 'task-plan', at: 1 },
+      taskPlanArgs: { step: 'stroll_fixture', count: 3, by: 'P' },
+      ...extra,
+    })
+    const bot = mockBot()
+    // Owned through the mirror (pin consumed): no re-decide on a flicker.
+    assert.equal(goal.textForce('stroll_fixture', { pinned: 'stroll_fixture' }, bot, owned(), null, 'time=day known=near'), false)
+    // Owned through the live pin: same.
+    assert.equal(goal.textForce('stroll_fixture', { pinned: 'stroll_fixture' }, bot,
+      owned({ taskPlanStep: 'stroll_fixture', taskPlanArgs: null }), null, 'time=day known=near'), false)
+    // A word flip still releases the owned step (night safety owns the dark).
+    assert.equal(goal.textForce('stroll_fixture', { pinned: 'stroll_fixture', time: 'night' }, bot,
+      owned(), null, 'time=night known=near'), true)
+    // No pick on record: the old rule.
+    assert.equal(goal.textForce('stroll_fixture', { pinned: 'none' }, bot, { goalText: 'time=day' }, null, 'time=day known=near'), true)
+  })
+
+  it('do replaces a running order step and drops its executor', async () => {
+    const bot = mockBot([{ name: 'torch', count: 8 }])
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"bring","item":"torch","count":8}]}'
+    handleChat(bot, ticker, 'P', 'torches please')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    assert.ok(ctx.bring, 'the order step runs')
+    handleChat(bot, ticker, 'P', 'do light')
+    assert.equal(ctx.bring, null, 'the old bring executor is released, not orphaned')
+    assert.equal(ctx.llmOrder.text, 'do light')
+    assert.ok(bot.lines.includes('plan: light'), String(bot.lines))
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.taskPlanStep, 'light')
+  })
+
+  it("advancing to the next step drops the previous step's args first", async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"light","count":5},{"step":"gather","count":2}]}'
+    handleChat(bot, ticker, 'P', 'light then gather')
+    await flush()
+    llmOrders.tick(bot, ctx) // starts light
+    assert.deepEqual(ctx.taskPlanArgs, { step: 'light', count: 5, by: 'P' })
+    ctx.taskPlanStep = null // decide() consumed it and picked the step
+    ctx.step = 'light'
+    ctx.stepStatus = 'running'
+    ctx.stepGen = (ctx.stepGen | 0) + 1
+    llmOrders.tick(bot, ctx)
+    ctx.stepStatus = 'done'
+    llmOrders.tick(bot, ctx) // light done -> advance, args dropped, nothing started
+    assert.equal(ctx.taskPlanArgs, null, "the previous step's args never reach the next step")
+    llmOrders.tick(bot, ctx) // starts gather with its own args
+    assert.deepEqual(ctx.taskPlanArgs, { step: 'gather', count: 2, by: 'P' })
+  })
+
+  it('non-grammar do lines stay chatter: they reach the model and never cancel a plan', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    handleChat(bot, ticker, 'P', 'do light')
+    await flush()
+    assert.ok(ctx.llmOrder, 'do plan installed')
+    handleChat(bot, ticker, 'P', 'do you have coal')
+    await flush()
+    assert.equal(ctx.llmOrder.text, 'do light', 'chatter never cancels the plan')
+    assert.equal(calls.length, 1, 'chatter reached the model')
+    assert.deepEqual(bot.lines.filter((l) => l.startsWith('plan: ')), ['plan: light'])
+  })
+
+  it('an owned multi-tick skill stays feasible after the pin is consumed', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    handleChat(bot, ticker, 'P', 'do stroll_fixture 3')
+    await flush()
+    llmOrders.tick(bot, ctx) // pins the skill with its args
+    assert.equal(ctx.taskPlanStep, 'stroll_fixture')
+    // decide() consumed the pin and picked the step; the episode runs on:
+    ctx.taskPlanStep = null
+    ctx.step = 'stroll_fixture'
+    ctx.stepStatus = 'running'
+    ctx.stepGen = (ctx.stepGen | 0) + 1
+    llmOrders.tick(bot, ctx)
+    assert.ok(ctx.llmOrder, 'still owned')
+    const facts = goal.goalFacts(bot, ctx)
+    assert.equal(facts.pinned, 'stroll_fixture', 'owned, not consumed')
+    assert.ok(goal.MENU.stroll_fixture.feasible(facts), 'stays feasible past the first decide')
+    // the arbiter flickers away mid-episode: the owned step re-pins,
+    // the plan is not reported done on unfinished work:
+    ctx.step = 'gather'
+    ctx.stepGen++
+    llmOrders.tick(bot, ctx)
+    llmOrders.tick(bot, ctx)
+    assert.ok(ctx.llmOrder, 're-pinned, not done')
+    assert.equal(ctx.taskPlanStep, 'stroll_fixture')
+  })
+
+  it('do refuses unknown and non-work steps with the whitelist line, silently for strangers and peers', async () => {
+    for (const [line, want] of [
+      ['do nosuch', 'no step "nosuch" — try: help'],
+      ['do shelter', 'no step "shelter" — try: help'],
+      ['do bring', 'try: bring me coal'],
+      ['do find', 'try: find me iron'],
+      ['do', 'try: do light'],
+      ['do light 99', 'try: do light'],
+    ]) {
+      const bot = mockBot()
+      handleChat(bot, tickerFor(bot), 'P', line)
+      await flush()
+      assert.deepEqual(bot.lines, [want], line)
+      assert.ok(!bot._tickerCtx.llmOrder && !bot._tickerCtx.llmAsk, line)
+    }
+    assert.equal(calls.length, 0)
+    const stranger = mockBot()
+    handleChat(stranger, tickerFor(stranger), 'Stranger', 'do light')
+    await flush()
+    assert.deepEqual(stranger.lines, [])
+    assert.ok(!stranger._tickerCtx.llmOrder)
+    const prev = process.env.BOT2_USERNAME
+    process.env.BOT2_USERNAME = 'IdkBot2'
+    try {
+      const peer = mockBot()
+      peer.players.IdkBot2 = { username: 'IdkBot2', entity: { position: { x: 2, y: 64, z: 0 } } }
+      handleChat(peer, tickerFor(peer), 'IdkBot2', 'do light')
+      await flush()
+      assert.deepEqual(peer.lines, [], 'a peer bot line never orders')
+      assert.ok(!peer._tickerCtx.llmOrder)
+    } finally {
+      if (prev === undefined) delete process.env.BOT2_USERNAME
+      else process.env.BOT2_USERNAME = prev
+    }
+    assert.equal(calls.length, 0)
+  })
+
+  it('do stroll_fixture 3 pins the skill with count and by; facts carry the pin', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    handleChat(bot, ticker, 'P', 'do stroll_fixture 3')
+    await flush()
+    assert.equal(calls.length, 0, 'no Messages call')
+    assert.ok(bot.lines.includes('plan: stroll_fixture 3'), String(bot.lines))
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.taskPlanStep, 'stroll_fixture')
+    assert.deepEqual(ctx.taskPlanArgs, { step: 'stroll_fixture', count: 3, by: 'P' })
+    const facts = goal.goalFacts(bot, ctx)
+    assert.equal(facts.pinned, 'stroll_fixture')
+    assert.equal(facts.pinCount, 3)
+  })
+
+  it('a work step keeps a 1..64 count from a stubbed model answer; the prompt names skill steps', () => {
+    const works = llmOrders.workSteps()
+    assert.ok(works.includes('stroll_fixture'), 'loaded skill joins workSteps()')
+    assert.deepEqual(llmOrders.validatePlan({ plan: [{ step: 'stroll_fixture', count: 3 }] }, works).steps,
+      [{ step: 'stroll_fixture', count: 3, done: '' }])
+    assert.equal(llmOrders.validatePlan({ plan: [{ step: 'light', count: 5 }] }, works).steps[0].count, 5)
+    assert.ok(llmOrders.validatePlan({ plan: [{ step: 'light', count: 99 }] }, works).error)
+    const list = llmOrders.stepList()
+    assert.match(list, /^stroll_fixture: fixture step: ordered only/m)
+  })
+
+  it('BOT_SKILLS off: workSteps/stepList ignore loaded skills', () => {
+    const saved = process.env.BOT_SKILLS
+    delete process.env.BOT_SKILLS
+    try {
+      assert.ok(!llmOrders.workSteps().includes('stroll_fixture'))
+      assert.doesNotMatch(llmOrders.stepList(), /^stroll_fixture:/m)
+    } finally {
+      process.env.BOT_SKILLS = saved
+    }
+  })
+})

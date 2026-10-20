@@ -558,6 +558,20 @@ describe('castle break guard (g0z.55)', () => {
       ctx.castle = null; ctx.knownCastles = [peer] // a peer castle keeps the guard on the build step
       assert.equal(sync(), 'false', 'house build step by a peer castle')
       assert.equal(pushes, 4)
+      ctx.buildCellsInFlight = true // the builder batch places whoever owns the castle in range (5g43 core-2)
+      assert.equal(sync(), 'true', 'house build batch in flight by a peer castle')
+      assert.equal(pushes, 5)
+      ctx.buildCellsInFlight = false
+      assert.equal(sync(), 'false', 'between batches the guard is back on')
+      assert.equal(pushes, 6)
+      ctx.castle = { site: SITE, rot: 0, blueprintVersion: 3, phase: 'complete' } // own, complete
+      ctx.knownCastles = []
+      ctx.step = 'castle'
+      assert.equal(sync(), 'false', 'complete own castle step without a builder batch: decor/sweep walks guarded (5g43 core-1)')
+      assert.equal(pushes, 7)
+      ctx.castleBuildFlight = true // complete-phase repair re-issues the schematic
+      assert.equal(sync(), 'true', 'complete own castle step with a builder batch in flight')
+      assert.equal(pushes, 8)
     })
   })
 

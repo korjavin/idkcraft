@@ -1437,3 +1437,25 @@ describe('stockpile bootstrap (g0z.26 R2, revmux 01 major)', () => {
     assert.equal(plan && plan.kind, 'log', 'the quest chops')
   })
 })
+
+describe('sapling replant reserve (idkcraft-gc3j)', () => {
+  // gather replants a pack sapling on each felled home stump — the deposit
+  // plan must leave the reserve packed and bank only the surplus.
+  const planBot = (inv) => ({ inventory: { items: () => inv } })
+  const banked = (plan, name) => plan.filter((p) => p.name === name).reduce((n, p) => n + p.count, 0)
+  it('keeps 8 saplings packed, banks the surplus', () => {
+    const plan = stockpile.depositPlan(planBot([{ name: 'oak_sapling', count: 10 }]), { home: null })
+    assert.equal(banked(plan, 'oak_sapling'), 2)
+  })
+  it('a short pack keeps every sapling', () => {
+    const plan = stockpile.depositPlan(planBot([{ name: 'oak_sapling', count: 5 }]), { home: null })
+    assert.equal(banked(plan, 'oak_sapling'), 0)
+  })
+  it('mangrove propagules draw from the same reserve', () => {
+    const plan = stockpile.depositPlan(planBot([
+      { name: 'oak_sapling', count: 6 },
+      { name: 'mangrove_propagule', count: 4 },
+    ]), { home: null })
+    assert.equal(banked(plan, 'oak_sapling') + banked(plan, 'mangrove_propagule'), 2)
+  })
+})

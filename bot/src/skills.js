@@ -245,7 +245,15 @@ const OPS = {
     for (const e of Object.values(c.bot.entities || {})) {
       if (!e || e === c.bot.entity || !e.position) continue
       if (Math.hypot(e.position.x - p.x, e.position.y - p.y, e.position.z - p.z) > r) continue
-      out.push({ name: e.name || null, type: e.type || null, username: e.username || null, x: e.position.x, y: e.position.y, z: e.position.z })
+      // vf8e.17: the dropped-item registry name (mineflayer
+      // entity.getDroppedItem()), so a skill can walk to sapling drops
+      // rather than every drop; null for every other entity.
+      let item = null
+      try {
+        const d = e.getDroppedItem && e.getDroppedItem()
+        if (d && typeof d.name === 'string') item = d.name
+      } catch (_) { /* unreadable drop reads null */ }
+      out.push({ name: e.name || null, type: e.type || null, username: e.username || null, item, x: e.position.x, y: e.position.y, z: e.position.z })
       if (out.length >= 32) break
     }
     return out
@@ -494,7 +502,23 @@ function compile(file, text, env) {
   // completion value, and throws are flattened to a '\0msg' string inside
   // the timed script.
   const runScript = new vm.Script(guarded('const o = run(bot, __st); return typeof o === "string" ? o : null'))
-  const resetScript = new vm.Script(guarded('globalThis.__st = {}; return null'))
+  // Order args (vf8e.17): seeded into a FRESH __st at episode start so
+  // run(bot, st) reads st.count/st.by. The init is a JSON literal of
+  // validated primitives — no host object is ever read, like every other
+  // input (a skill setter on __st still only wedges its own call).
+  function resetScriptFor(args) {
+    let count = null
+    let by = null
+    try {
+      if (args && typeof args === 'object') {
+        if (typeof args.count === 'number' && args.count >= 1 && args.count <= 64) count = Math.floor(args.count)
+        // Player names vary by platform (Bedrock tags carry spaces): keep
+        // any short string, so an odd name degrades to null, never garbage.
+        if (typeof args.by === 'string' && args.by.length >= 1 && args.by.length <= 32) by = args.by
+      }
+    } catch (_) { count = null; by = null }
+    return new vm.Script(guarded(`globalThis.__st = ${JSON.stringify({ count, by })}; return null`))
+  }
 
   // -> { out } | { error: 'skill-timeout' | 'skill-error', msg }
   function call(scr, c) {
@@ -527,7 +551,7 @@ function compile(file, text, env) {
       return r.out === true
     },
     // A failing reset (skill setter on __st) only leaves run() its old state.
-    reset() { call(resetScript, null) },
+    reset(args) { call(resetScriptFor(args), null) },
     // One tick: 'running' | 'done' | 'failed:<reason>'. Terminal outcomes
     // count, log and release the controls the skill may hold.
     tick(bot, ctx, st) {
@@ -600,6 +624,18 @@ function noteOutcome(name, out) {
 
 function disable() { off = true }
 
+// Step-kind names from the last load (vf8e.17: llm-orders workSteps/do):
+// a loaded name the loader registered into the goal MENU. Recover skills
+// never sit there, and a taken name never loads, so no kind table is
+// needed — and a force reload re-derives the same list. [] until loaded.
+function stepSkills() {
+  if (!loaded) return []
+  let menu = null
+  try { menu = require('./goal').MENU } catch (_) { return [] }
+  if (!menu) return []
+  return loaded.filter((n) => !!menu[n])
+}
+
 // Chat `skills`: 'off' | 'on n=<k> [banned=<a,b>]' | 'not loaded'.
 function state() {
   if (!loaded) return 'not loaded'
@@ -660,6 +696,23 @@ function registerRecover(sk, tables) {
 // Step state per ctx, keyed to the step instance (step.js stepGen).
 const stepState = new WeakMap()
 
+// Order args for one step skill (vf8e.17): the plan executive's count/who
+// when they belong to THIS skill (ctx.taskPlanArgs.step === name), else
+// nulls — a degraded pin the arbiter did not apply must never leak another
+// step's args into an autonomous pick (codex P2).
+function orderArgs(ctx, name) {
+  let count = null
+  let by = null
+  try {
+    const a = ctx && ctx.taskPlanArgs
+    if (a && typeof a === 'object' && a.step === name) {
+      if (typeof a.count === 'number' && a.count >= 1 && a.count <= 64) count = Math.floor(a.count)
+      if (typeof a.by === 'string' && a.by.length >= 1 && a.by.length <= 32) by = a.by
+    }
+  } catch (_) { count = null; by = null }
+  return { count, by }
+}
+
 function registerStep(sk, tables) {
   const { goal, STEP_ORDER, BEHAVIOURS } = tables
   const name = sk.name
@@ -689,13 +742,16 @@ function registerStep(sk, tables) {
   goal.STEP_CRITERIA[name] = sk.meta.description
   BEHAVIOURS[name] = (bot, ctx) => {
     const gen = stepGen(ctx)
+    const args = orderArgs(ctx, name)
     let st = stepState.get(ctx)
-    if (!st || st.gen !== gen || st.skill !== name) {
-      st = { gen, skill: name, ticks: 0, hs: { busy: null, err: null }, over: false }
+    // A same-step re-order with new args (do gen_park 2, then do gen_park 9)
+    // restarts the episode: the old st.count is stale (codex P2).
+    if (!st || st.gen !== gen || st.skill !== name || st.count !== args.count || st.by !== args.by) {
+      st = { gen, skill: name, ticks: 0, hs: { busy: null, err: null }, over: false, count: args.count, by: args.by }
       const me = st
       me.alive = () => stepState.get(ctx) === me && stepGen(ctx) === gen && ctx.step === name
       stepState.set(ctx, st)
-      sk.reset()
+      sk.reset({ count: args.count, by: args.by })
     }
     if (st.over) return // finished; decide() re-picks next tick
     const out = sk.tick(bot, ctx, st)
@@ -745,4 +801,4 @@ function load(env = process.env, opts = {}) {
   return names
 }
 
-module.exports = { enabled, load, parseHeader, compile, registerStep, disable, state, CALL_MS, TICK_BUDGET, PROMOTED_DIR, BAN_FAILS }
+module.exports = { enabled, load, parseHeader, compile, registerStep, disable, state, stepSkills, CALL_MS, TICK_BUDGET, PROMOTED_DIR, BAN_FAILS }

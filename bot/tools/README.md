@@ -377,6 +377,33 @@ walked 61-64 blocks, i.e. to the goal); MINE-10 is an order spot with a
 `count`/`item` judge: peak `item` held by follower+guide >= `count` (the bot
 hands finds to the guide), instead of a chat marker.
 
+## Planted-thing verdict (`verify`, idkcraft-vf8e.18)
+
+An order spot may carry a data-driven world check for "build/plant
+something" orders — the mirror of `verifyBuild` over any block list, not
+the house blueprint:
+
+```json
+{"name": "PARK-1", "mode": "order", "spawn": [0, 64, 0], "goal": [1, 64, 0],
+ "order": "plant the park", "expect": ["park done"], "fail": ["could not "],
+ "verify": {"blocks": ["oak_sapling", "birch_sapling"], "around": "goal",
+  "radius": 3, "dy": 1, "min": 10, "gap": 2}}
+```
+
+After the chat verdict (at the terminal verdict, where `applyBuildVerify`
+runs) the replay counts wanted `blocks` in the box `|dx|,|dz| <= radius`,
+`|dy| <= dy` around `around` (`"goal"` = the spot goal, else `[x, y, z]`)
+from the follower's world and demotes a chat-done to `reached: false` with
+note `PARTIAL found=<n>/<min> close=<pairs>` when fewer than `min` stand or
+any pair sits at Chebyshev distance `< gap` (gap 2 = no two in touching
+cells, the "trees can grow" rule; gap 1 = any). The reached-by-chat verdict
+stays required: `verify` only demotes, never promotes. Order mode only;
+`blocks` must name real blocks, `min >= 1`, `radius <= 16` — anything else
+throws naming the spot. `radius`/`dy`/`gap` default to 3/1/2. The row keeps
+`verifyFound`/`verifyMin`/`verifyClose` next to the note, so the replay
+table and the skill-loop feedback show the demotion (`rowGreen` reads it RED
+with no change).
+
 ## LLM orders A/B (`llm-order-spots.json`, idkcraft-vf8e.6)
 
 Three free-form orders the FSM refuses or ignores (TORCH-8, WATER-1,
@@ -434,9 +461,10 @@ REPLAY_BODY=baritone REPLAY_BASELINE_OFF=1 sh bot/tools/stuck-run.sh paper-base 
 sh bot/tools/stuck-run.sh   # v1 (`BOT_BODY` unset): unchanged, byte-identical flow, stuck-baseline.json
 ```
 
-**Merge gate** (CLAUDE.md "v2 merge gate"): a v2 PR is judged on ONE throughput
-verdict line (castle cells/90 min, house done-seconds, deaths/night), not on
-stuck spots. The v2 stuck-run above is a regression check only (not worse).
+**Merge gate** (CLAUDE.md "v2 merge gate"): v2 PRs run no rig legs; the batch on
+master judges the lay/mine pair, the 90-min castle throughput (cells/90 min,
+house done-seconds, deaths/night) and the v2 stuck-run vs the recorded
+baselines, not on stuck spots. The v2 stuck-run above is a regression check only (not worse).
 
 - **Image** (idkcraft-neuc.23, 6x7.28): `client.sh` defaults to
   `idkcraft-baritone:<git rev-parse --short=8 HEAD:baritone>` of the checkout
@@ -729,12 +757,39 @@ node bot/tools/curriculum.js harvest bot.txt mc.txt [days=7]   # table + curricu
 node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spots.json + scenario.json
 ```
 
-- Input lines are `YYYY-MM-DD HH:MM:SS <name> <msg>` (UTC), as for `deaths.sh`. The bot dump
-  is the VictoriaLogs query `container_name:idkcraft-bot2 "recover action="`, printed as
-  `_time <bot name> _msg` (wider: `idkcraft-bot*`/`idkcraft-swarm*` plus `CURRICULUM_BOTS`).
+- Input lines are `YYYY-MM-DD HH:MM:SS <name> <msg>` (UTC), as for `deaths.sh`. A raw
+  `docker logs --timestamps` dump works as is (vf8e.16: the vf8e.15 night read events=0
+  off such a dump and each line was rewritten by hand): the daemon's leading RFC3339
+  timestamp and any multiplex framing are stripped, and the bot's bare stdout lines (no
+  date or name of their own — the bot logs with plain `console.log`) are dated from the
+  daemon stamp and attributed to the single bot in the filter. Bare lines under a
+  multi-bot filter (`CURRICULUM_BOTS=all` or a list) are skipped, not mislabelled — use
+  the VictoriaLogs feed below for multi-bot harvests. The 7-day bot2 feed comes from the
+  Portainer container-logs API (keys from stash, never pasted: `portainer-url`,
+  `portainer-api-key` — see "Deaths per day"; `<endpoint-id>` is the prod endpoint's
+  id; bot2 runs without a TTY, so the response is docker's multiplexed stream and the
+  tool demuxes it itself):
+  ```sh
+  SINCE=$(date -u -d '7 days ago' +%s)   # macOS: date -u -v-7d +%s
+  curl -s -H "X-API-Key: $K" \
+    "$U/api/endpoints/<endpoint-id>/docker/containers/idkcraft-bot2/logs?stdout=1&stderr=1&timestamps=1&since=$SINCE" \
+    > bot2-7d.txt
+  node bot/tools/curriculum.js harvest bot2-7d.txt   # days defaults to 7
+  ```
+  The VictoriaLogs alternative is the query `container_name:idkcraft-bot2 "recover action="`,
+  printed as `_time <bot name> _msg` (wider: `idkcraft-bot*`/`idkcraft-swarm*` plus
+  `CURRICULUM_BOTS`).
   The mc dump is `container_name:idkcraft-mc ("can't make" or "can't get")`. A raw shipped mc
   line works as is, because the bot name is read from `<Name>`. Strip IPs as session-review
   does. Credentials: see "Deaths per day".
+- A night with 0 signatures says why (vf8e.16): the harvest line carries `parsed=<k>/<n>`
+  (kept lines for this feed's bot filter), `recover=<n>` (kept raw `recover action=` lines)
+  and `refusals=<n>`, and a `harvest why:` line names the per-family outcome — e.g.
+  `recover=9 but 0 page events (no call_player/gave-up episode); bring=excluded (no refusal
+  lines kept for this feed: the mc log is out of the feed by owner rule)`. That is the
+  vf8e.15 night: 9 recover lines, none paged, bring unfed. When nothing parsed at all the
+  line says so (`nothing parsed (0 of N lines; wrong dump or bot filter '…'?)`) instead of
+  blaming the feed.
 - Families (owner 2026-10-19: the simplest first):
   - `page`: a recover episode that chose `call_player` or ended `gave-up`. The reason is the
     last failed hand primitive plus its outcome. The position is the end pos in an 8-block cell.
@@ -760,7 +815,8 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
   never in `skill-scenarios.json`, because `skill-loop.test.js` pins that file to corpus spots.
 - Reproduction gate (printed by `propose`; the runner, vf8e.10, gives the verdict): micro-run
   the spot once WITHOUT a skill. It must be RED (unreached, a page or a refusal). If it is not,
-  the candidate is not-reproduced and no model tokens are spent.
+  the candidate is not-reproduced and no model tokens are spent. A `GUIDE-BURIED`/`GUIDE-DIED`
+  setup failure is env (not judged), never RED — the runner retries it without spending.
 
 Real harvest (2026-10-12..19 prod dump, default feed IdkBotV2): 206 events, 151 signatures
 (147 page, 4 bring), 115 proposable. Top 10 are all pages: counts 20, 8, 7, 6, 6, 3, 2, 2, 2, 2.
@@ -769,6 +825,66 @@ proposable; the other 7 are `no-dir` (v2 logs no `next`). The 4 bring signatures
 proposable: `bone` and `sapling` with no recipe, `andesite` needing diorite, `diorite` needing
 quartz. With `CURRICULUM_BOTS=all`: 918 events, 695 signatures (690 page, 5 bring), 637
 proposable.
+
+### Nightly runner (`curriculum.sh`, idkcraft-vf8e.10)
+
+The curriculum names what to learn; the runner closes the loop overnight on the laptop rig
+(learning never runs on prod): harvest -> pick the top `CURRICULUM_K` (default 2) signatures
+that are not in the ledger, or RED in the ledger older than 7 days with a grown count ->
+`propose` each into `AUTO-<sig>/` -> one keeper per candidate (`REPLAY_KEEP=1`,
+fresh world) -> pre-run WITHOUT skills on it (not RED = `not-reproduced` in the ledger,
+no model tokens spent) -> RED = `skill-loop.js <name> 6` with `SKILL_LOOP_SCENARIOS` /
+`SKILL_LOOP_SPOTS` pointing at the proposed files and `SKILL_LOOP_RIG` at the keeper
+(proposed spots have no baseline entry, so the replay row decides: reached with no page
+is green) -> ledger `curriculum-ledger.json` in the work root (never in git). The keeper
+is torn down after each candidate; the night ends with one line per candidate plus
+`CURRICULUM night=<date> tried=<n> green=<n> red=<n> skipped=<n> cost=$<usd>`.
+
+```sh
+sh bot/tools/curriculum.sh bot.txt [days=7]   # laptop, by hand or by the orchestrator
+```
+
+- Caps: `CURRICULUM_USD_PER_DAY` (default 30) refuses to START a scenario once today's
+  ledger sum reaches it (exit 3 = budget); 6 attempts per scenario
+  (`CURRICULUM_MAX_ATTEMPTS`); `LLM_TOKENS_PER_HOUR` still applies inside the loop; 3
+  lifetime RED runs parks the signature for a human look. Costs come from the loop's
+  `result.json` (the PRICE table there), never re-estimated; a loop exit 2 (keeper never
+  kept, network) is not RED and spends no cap.
+- Schedule stays manual (owner 2026-10-19): started by hand or by the orchestrator before
+  an owner play session / overnight. There is no scheduler and the night job never opens
+  PRs: a GREEN candidate ends with a `PROMOTE:` line (the vf8e.4 `skill-promote.js`
+  command with scenario, spot and result paths), and the morning promotion runs it by
+  hand — its PR carries the verdict lines. The promoter also copies the `AUTO-<sig>`
+  spot from the printed spot path into `stuck-spots.json` and records its baseline
+  entry (corpus rule: one without the other fails the gate or `npm test`); the
+  promote script does not do that step itself.
+- Hand-written goals (idkcraft-vf8e.20): `CURRICULUM_GOALS=<dir>[,<dir>...]`
+  (no spaces), each dir holding `scenario.json` + `spots.json` in `propose()`
+  shape (e.g. `bot/tools/goals/park`; the vf8e.19 park goal will live there).
+  Every valid dir becomes a pick named after its basename and runs FIRST,
+  before the harvested top-K, through the same per-candidate block (keeper
+  boot, reproduction gate, loop, ledger, `PROMOTE` line, cap); `propose` is
+  skipped for it — the two files are copied into `$WORK/GOAL-<name>/`. A goal
+  dir missing either file is skipped (`CURRICULUM GOAL-<name> skipped: no
+  goal files`), never an environment failure. The ledger key is
+  `GOAL-<name>` and the 7-day RED-retry rule applies as for signatures
+  (recent RED / GREEN-done / parked at 3 REDs skip the goal). Scenario
+  entries need `name` / `skill` / `bead` (the loop stub is called with the
+  scenario name; `record` falls back to count 0 with no harvest entry).
+  `CURRICULUM_K=0` with goals set runs goals only: no dump needed
+  (`CURRICULUM_K=0 CURRICULUM_GOALS=<dir> sh bot/tools/curriculum.sh -`).
+  `DUMP` stays required whenever `K>0`. Relative goal dirs resolve from the
+  caller's cwd, like `DUMP`; a goal whose `scenario.json` is missing,
+  unparsable, or lacks `name` / `skill` / `bead` is skipped, never fatal.
+- Body: the harvest feeds bot2 stalls by default, so set `CURRICULUM_BODY=baritone`
+  for a bot2 night — the keeper, the pre-run and the loop then verify on the v2
+  body. Empty (default) is the mineflayer replay. The ledger records the body and
+  the promotion refuses a body mismatch.
+- Rig slot: one (`CURRICULUM_RIG_ID`, default the default rig); `RIG_LOCK_WAIT`
+  (default 7200) bounds the keeper boot's wait for a busy rig, then the night is
+  skipped (exit 2). Key: `ANTHROPIC_API_KEY` or the stash, never printed.
+- Exits: 0 = night done (loop REDs are ledger data, not failures), 2 = environment
+  failure with no loop verdict, 3 = budget.
 
 ## Castle throughput rig (`castle-rig.sh`, idkcraft-vmzq.20)
 
@@ -906,11 +1022,11 @@ stairs cell) next to the residence nights:
 CASTLE_SEED=complete CASTLE_SEED_VERSION=2 CASTLE_KIT=stairs CASTLE_RIG_ID=auto sh bot/tools/castle-rig.sh --night 68
 ```
 
-Repair relay (g0z.56): `CASTLE_REPAIR=wood|nowood` knocks out 20 plan
+Repair relay (g0z.56, vf8e.8): `CASTLE_REPAIR=wood|nowood` knocks out 22 plan
 cells of the seeded castle after adoption (12 fence, the door, 4 wall, 3
-torches); `wood` puts 16 oak_log in the castle chest, `nowood` leaves it
+torches, 2 stairs); `wood` puts 16 oak_log in the castle chest, `nowood` leaves it
 empty and clears every log within 72. The guide chats `castle repair`
-(the reply is logged). The verdict adds `, repair=<relaid>/20@<s>,
+(the reply is logged). The verdict adds `, repair=<relaid>/22@<s>,
 regress=<n after the full relay>, nowood@<s>` (first 'no wood' status).
 `CASTLE_BODY=baritone` runs the builder on the v2 body (client image
 `BARITONE_IMAGE`, ports 7850/7851 + 2 x slot index):
@@ -1055,7 +1171,7 @@ and the fixture cache without network).
 ### Rig speed: component rigs + `CASTLE_TICK_RATE` (idkcraft-neuc.60)
 
 Two 10-minute component rigs replace "wait 90 min for one noisy castle
-number" for a v2 PR's per-component signal:
+number" for the batch's per-component signal (v2 PRs quote no lines; CLAUDE.md "v2 merge gate"):
 
 ```sh
 B="CASTLE_BODY=baritone CASTLE_PADSPOT=250,350 CASTLE_RIG_ID=auto"   # image: client.sh default (tree-hash tag)
@@ -1094,7 +1210,7 @@ gate leg. A DIAG line is never quoted in a PR body as before/after; only
 the 10-game-min lines are gate legs.
 
 **Shared before (idkcraft-6x7.27).** The two before legs measure
-origin/master, the same commit for every PR between merges, so they run
+origin/master, the same commit for every batch run between merges, so they run
 once per master sha. A 10-min component leg that exits 0 from a clean tree
 (tracked files) whose HEAD equals `origin/master` (after a `git fetch`)
 writes its record + component line through to
@@ -1147,7 +1263,7 @@ fetch: ticks=3436 stone=+290 (11.9 s/stone, component 3.8) legs=12 finished=1 cu
   minutes from the window open (list capped at 5). `fetch: -` = no
   castlefetch at all. Promote to a gate only when two runs show it stable.
 
-so a PR quotes `before -> after` per component straight from its two
+so the batch run quotes `before -> after` per component straight from its two
 lines. Re-record a baseline (lay: two master runs, each within ±20% of the
 `rate`; mine: `rate` = mean of 3 pairs, spread noted; `npm test` enforces it) in the PR that moves it on purpose.
 Pre-existing `CASTLE_*` knobs stay usable but change what the line means;

@@ -480,8 +480,14 @@ describe('skills: SKILLS_DIR load (vf8e.2)', () => {
 
   it('a step skill is registered for the goal arbiter and finishes through step.js', () => {
     assert.equal(goal.registered('stroll_fixture'), true)
-    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'day' }), true)
+    // vf8e.17: order-only — feasible only under its own pin, day or night,
+    // so the FSM never picks it unpinned (never before rest on its own).
+    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'day' }), false)
     assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'night' }), false)
+    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'day', pinned: 'none' }), false)
+    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'day', pinned: 'light' }), false)
+    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'day', pinned: 'stroll_fixture' }), true)
+    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'night', pinned: 'stroll_fixture' }), true)
     assert.match(goal.STEP_CRITERIA.stroll_fixture, /fixture step/)
     const ctx = { stepGen: 3, stepStatus: null, step: 'stroll_fixture' }
     BEHAVIOURS.stroll_fixture(fakeBot(), ctx)
@@ -714,6 +720,102 @@ describe('skills: digIn + use ray check (krup)', () => {
   })
 })
 
+describe('skills: order-only step skills (vf8e.17)', () => {
+  it('stepSkills() reports the loaded step skills, never recover ones', () => {
+    assert.deepEqual(skills.stepSkills(), ['broken_step_fixture', 'stroll_fixture'])
+  })
+
+  it('the arbiter never picks the fixture unpinned, over real decide ticks', async () => {
+    const bot = fakeBot()
+    const ctx = { work: true }
+    const cap = []
+    const orig = console.log
+    console.log = (m) => cap.push(String(m))
+    try {
+      const picks = []
+      for (let i = 0; i < 5; i++) {
+        await goal.decide(bot, ctx)
+        picks.push(ctx.step)
+      }
+      assert.equal(picks.length, 5)
+      assert.ok(picks.every((p) => typeof p === 'string'), `decided: ${picks.join(',')}`)
+      assert.ok(!picks.includes('stroll_fixture'), `unpinned picks: ${picks.join(',')}`)
+    } finally {
+      console.log = orig
+    }
+  })
+
+  it('entities() carries the dropped-item name, null otherwise', () => {
+    const bot = fakeBot()
+    bot.entities = {
+      1: { name: 'Item', type: 'object', position: new Vec3(2, 61, 0), getDroppedItem: () => ({ name: 'oak_sapling', count: 1 }) },
+      2: { name: 'Zombie', type: 'hostile', position: new Vec3(3, 61, 0) },
+    }
+    const sk = compiled('ent_item', 'const es = bot.entities(16); const drop = es.find((e) => e.item); ' +
+      'return drop && drop.item === "oak_sapling" && es.every((e) => "item" in e) ? "done" : "failed:no-item"')
+    assert.equal(tick(sk, bot), 'done')
+  })
+
+  it('an ordered run reads st.count/st.by; anything else reads nulls', () => {
+    const echoSrc = '/* skill {"name": "args_echo", "description": "echo order args", "kind": "step"} */\n' +
+      'function feasible(facts) { return facts.pinned === "args_echo" }\n' +
+      'function run(bot, st) { return "failed:count-" + st.count + "-by-" + (st.by === null ? "none" : st.by) }\n'
+    const { sk } = skills.compile('args_echo.js', echoSrc, {})
+    sk.reset()
+    const tables = { goal: { MENU: {}, STEP_CRITERIA: {} }, STEP_ORDER: STEP_ORDER.slice(), BEHAVIOURS: {} }
+    skills.registerStep(sk, tables)
+    const runIt = (args) => {
+      const ctx = { stepGen: 7, stepStatus: null, step: 'args_echo', taskPlanArgs: args }
+      tables.BEHAVIOURS.args_echo(fakeBot(), ctx)
+      return ctx.stepStatus
+    }
+    assert.equal(runIt({ step: 'args_echo', count: 3, by: 'steve' }), 'failed:count-3-by-steve')
+    assert.equal(runIt(undefined), 'failed:count-null-by-none')
+    assert.equal(runIt({ step: 'args_echo', count: 999, by: 'steve' }), 'failed:count-null-by-steve', 'out-of-range count never reaches the skill')
+    assert.equal(runIt({ step: 'args_echo', count: 2, by: 'x'.repeat(40) }), 'failed:count-2-by-none', 'an overlong name never reaches the skill')
+  })
+
+  it('a same-step re-order with new args restarts the episode (codex P2)', () => {
+    const echoSrc = '/* skill {"name": "args_reorder", "description": "echo order args twice", "kind": "step"} */\n' +
+      'function feasible(facts) { return facts.pinned === "args_reorder" }\n' +
+      'function run(bot, st) { st.n = (st.n || 0) + 1; if (st.n < 2) return "running"; return "failed:count-" + st.count }\n'
+    const { sk } = skills.compile('args_reorder.js', echoSrc, {})
+    sk.reset()
+    const tables = { goal: { MENU: {}, STEP_CRITERIA: {} }, STEP_ORDER: STEP_ORDER.slice(), BEHAVIOURS: {} }
+    skills.registerStep(sk, tables)
+    // One episode across both orders (same step, same gen): do gen_park 2,
+    // then do gen_park 9 while it still runs.
+    const ctx = { stepGen: 7, stepStatus: null, step: 'args_reorder', taskPlanArgs: { step: 'args_reorder', count: 2, by: 'steve' } }
+    tables.BEHAVIOURS.args_reorder(fakeBot(), ctx)
+    assert.equal(ctx.stepStatus, null, 'first tick runs')
+    ctx.taskPlanArgs = { step: 'args_reorder', count: 9, by: 'steve' } // the re-order
+    tables.BEHAVIOURS.args_reorder(fakeBot(), ctx)
+    assert.equal(ctx.stepStatus, null, 'rebuilt on the new args, running again — not terminal on the stale count')
+    tables.BEHAVIOURS.args_reorder(fakeBot(), ctx)
+    assert.equal(ctx.stepStatus, 'failed:count-9', 'the episode carries the new count')
+  })
+
+  it("a skill never inherits another step's args (codex P2)", () => {
+    const echoSrc = '/* skill {"name": "args_other", "description": "echo order args guarded", "kind": "step"} */\n' +
+      'function feasible(facts) { return true }\n' +
+      'function run(bot, st) { return "failed:count-" + st.count + "-by-" + (st.by === null ? "none" : st.by) }\n'
+    const { sk } = skills.compile('args_other.js', echoSrc, {})
+    sk.reset()
+    const tables = { goal: { MENU: {}, STEP_CRITERIA: {} }, STEP_ORDER: STEP_ORDER.slice(), BEHAVIOURS: {} }
+    skills.registerStep(sk, tables)
+    const runIt = (args) => {
+      const ctx = { stepGen: 11, stepStatus: null, step: 'args_other', taskPlanArgs: args }
+      tables.BEHAVIOURS.args_other(fakeBot(), ctx)
+      return ctx.stepStatus
+    }
+    // A degraded pin for another step (the arbiter did not apply it) while
+    // this autonomous skill is picked: it must see nulls, not light's args.
+    assert.equal(runIt({ step: 'light', count: 3, by: 'steve' }), 'failed:count-null-by-none')
+    assert.equal(runIt({ step: 'args_other', count: 3, by: 'steve' }), 'failed:count-3-by-steve')
+    assert.equal(runIt(undefined), 'failed:count-null-by-none')
+  })
+})
+
 // Last: the ban and the off switch are process-wide.
 describe('skills: auto-ban and chat skills off (vf8e.4)', () => {
   it(`a skill that fails ${skills.BAN_FAILS} times is banned until restart`, () => {
@@ -737,10 +839,12 @@ describe('skills: auto-ban and chat skills off (vf8e.4)', () => {
 
   it('chat skills off takes every skill off the menus', () => {
     const { handleChat } = require('../src/index')
-    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'day' }), true)
+    // vf8e.17: the fixture is order-only — gate on its pin for this check.
+    const pinned = { time: 'day', pinned: 'stroll_fixture' }
+    assert.equal(goal.MENU.stroll_fixture.feasible(pinned), true)
     const bot = fakeBot()
     handleChat(bot, null, 'Steve', 'skills off')
     assert.deepEqual(bot.chats, ['skills: off (until restart)'])
-    assert.equal(goal.MENU.stroll_fixture.feasible({ time: 'day' }), false)
+    assert.equal(goal.MENU.stroll_fixture.feasible(pinned), false)
   })
 })

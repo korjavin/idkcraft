@@ -58,9 +58,9 @@
 #   CASTLE_BODY (''|baritone — g0z.56: the builder runs on the v2 Baritone
 #   body, client image BARITONE_IMAGE, default client.sh tree-hash tag),
 #   CASTLE_REPAIR (''|wood|nowood, needs CASTLE_SEED=complete — g0z.56:
-#   after adoption knock out 20 plan cells (12 fence, the door, 4 wall,
-#   3 torches), wood = 16 oak_log in the castle chest; the guide chats
-#   `castle repair`; the verdict adds repair=<relaid>/20@<s>, regress=<n>
+#   after adoption knock out 22 plan cells (12 fence, the door, 4 wall,
+#   3 torches, 2 stairs), wood = 16 oak_log in the castle chest; the guide chats
+#   `castle repair`; the verdict adds repair=<relaid>/22@<s>, regress=<n>
 #   after the full relay and nowood@<s> (the shortfall status)),
 #   CASTLE_LITTER (''|1, needs CASTLE_SEED=complete — g0z.61: after adoption
 #   30 litter items (yard pillars incl. a window tower, moat bridge cells,

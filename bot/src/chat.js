@@ -291,8 +291,60 @@ function clearPendingSearch(ctx) {
   if (ctx) ctx.pendingSearch = null
 }
 
+// Deterministic order (vf8e.17): `do <step> [count]` runs one whitelisted
+// step through the SAME plan executive as an LLM plan (installPlan + tick),
+// with no Messages call — the rig's path (no API key there) and the
+// owner's deterministic path in prod. Accepts ORDER_STEPS and workSteps()
+// (hand work steps and loaded skill steps: `do gather`, `do light`,
+// `do gen_park 3`); anything else refuses with the whitelist line. Roster
+// players only, never a peer bot line; swarm helpers never reach here (the
+// stop/flat allowlist above). While following it answers the same path an
+// LLM plan would (the executive owns work mode from here on).
+function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
+  const m = /^do\s+([a-z0-9_]+)(?:\s+(\d+))?$/.exec(msg)
+  if (!m) { bot.chat('try: do light'); return }
+  const id = m[1]
+  // Prototype-safe (vf8e.17 verifier): a plain ORDER_STEPS[id] lookup hits
+  // inherited members (`do constructor`), and `.args` of that throws
+  // uncaught in the chat handler. Only own entries count.
+  const order = llmOrders.orderStep(id)
+  if (!order && !llmOrders.workSteps().includes(id)) {
+    bot.chat(`no step "${id.slice(0, 20)}" — try: help`)
+    return
+  }
+  // bring/find need an item the `do` grammar cannot carry — point at the
+  // verb instead of feeding `bring me undefined` into the executive.
+  if (order && order.args.includes('item')) {
+    bot.chat(id === 'find' ? 'try: find me iron' : 'try: bring me coal')
+    return
+  }
+  const step = { step: id }
+  if (m[2] != null) {
+    const max = (order && order.max) || 64
+    const count = Math.floor(Number(m[2]))
+    if (!(count >= 1 && count <= max)) { bot.chat('try: do light'); return }
+    step.count = count
+  }
+  // A valid `do` clears a pending ask first (its late answer must not
+  // clobber the install); installPlan then releases and replaces a running
+  // plan itself — cancel() would drop the plan without releasing its
+  // bring/lead/flat executor.
+  ctx.llmAsk = null
+  llmOrders.installPlan(bot, ctx, {
+    text: msg, by: playerName, ticker,
+    feed: (line) => handleChat(bot, ticker, username, line, senderUuid),
+  }, [step])
+}
+
 // vf8e.6: the owner orders that end a running LLM plan.
 const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|share|bring me(?: .*)?)$/
+// vf8e.17: the `do <step> [count]` grammar. Only grammar-shaped lines take
+// the deterministic verb (a valid one replaces the running plan through
+// installPlan); anything else starting with `do ` (`do you have coal`)
+// stays chatter and keeps the old path to the LLM planner. `do` is NOT in
+// OWNER_ORDER on purpose: a typo (`do lgiht`) or a refusal must never
+// cancel a running plan.
+const DO_LINE = /^do\s+[a-z0-9_]+(?:\s+\d+)?$/
 
 function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
@@ -569,6 +621,12 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     } else if (msg.startsWith('plan ')) {
       // vf8e.6: force the planner on any line (A/B against the FSM parse).
       llmAsk(null, msg.slice(5).trim(), true)
+    } else if (msg === 'do' || DO_LINE.test(msg)) {
+      // vf8e.17: deterministic one-step plan, no model call. Only the
+      // grammar lands here; other `do …` lines stay chatter below.
+      if (ticker && lctx && !peerBot && !llmOrders.feeding(lctx) && worker.players(bot)[playerName]) {
+        doPlan(bot, ticker, lctx, playerName, username, senderUuid, msg)
+      } else llmAsk(null)
     } else {
       llmAsk(null)
     }

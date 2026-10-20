@@ -30,6 +30,13 @@
 // still show one): the verdict counts placed blueprint cells and
 // requires an empty skip list — a done marker over skipped or missing
 // cells reports PARTIAL, not reached.
+// verify (idkcraft-vf8e.18, optional, any order spot): a data-driven world
+// check for "build/plant something" orders, the mirror of verifyBuild over
+// any block list: {"blocks": [...], "around": [x,y,z] | "goal", "radius": 3,
+// "dy": 1, "min": 10, "gap": 2}. After the chat verdict the replay counts
+// wanted blocks in the box and demotes a chat-done below min or with
+// touching cells (Chebyshev < gap) to PARTIAL found=<n>/<min> close=<pairs>.
+// The chat verdict stays required: verify only demotes, never promotes.
 // Shelter spots (idkcraft-ed88, mode=shelter, home:[x,y,z]) run the night
 // shelter step alone: reached = enclosed within the close budget (15 s
 // default, closeSecs overrides — idkcraft-hoy7) and alive at the end.
@@ -308,6 +315,17 @@ function loadSpots() {
       }
       count = s.count
     }
+    // World verdict for planted things (idkcraft-vf8e.18): an order spot
+    // may carry a data-driven world check (mirror of verifyBuild, but over
+    // any block list, not the house blueprint): after the chat verdict the
+    // replay counts wanted blocks in a box around `around` ("goal" = the
+    // spot goal) and demotes a chat-done below min or with touching cells
+    // to PARTIAL. Order mode only; a bad shape throws loud.
+    let verify = null
+    if (s.verify != null) {
+      if (mode !== 'order') throw new Error(`spots[${i}] (${s.name}): verify needs mode=order`)
+      verify = parseVerify(s.verify, i, s.name)
+    }
     // Sabotage knob (idkcraft-vf8e.1): the named RECOVER_MENU primitive is
     // removed for this spot's window only, so a scenario can require a NEW
     // skill instead of the hand primitive (the README's hand sabotages,
@@ -320,7 +338,7 @@ function loadSpots() {
       }
       sabotage = s.sabotage
     }
-    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, after, danger, home, closeSecs, kit, verifyBuild, count, item: s.item, sabotage }
+    return { name: s.name, spawn: s.spawn, goal: s.goal, secs, scaffold, pickaxe, bucket, bead, mode, order, expect, fail, house, prep, after, danger, home, closeSecs, kit, verifyBuild, count, item: s.item, sabotage, verify }
   })
 }
 
@@ -416,6 +434,86 @@ function verifyHouse(bot, home, buildSkip, buildMod) {
 // over skipped or missing cells is PARTIAL, not reached.
 function applyBuildVerify(reached, v) {
   if (reached && v && !v.ok) return { reached: false, note: `PARTIAL ${v.placed}/${v.total} skip=${v.skipped}` }
+  return { reached, note: null }
+}
+
+// World verdict for planted things (idkcraft-vf8e.18): the spot parser for
+// the data-driven check above. Pure over the raw value, unit-tested via
+// loadSpots. radius/dy/gap default to the park shape (3/1/2); blocks,
+// around and min have no sensible default and stay required. Every throw
+// names the spot (spots[i] alone buries which order broke in a big file).
+function knownBlockName(name) {
+  try {
+    // The pinned MC version's block registry (docker-compose VERSION).
+    return !!require('minecraft-data')('26.1.2').blocksByName[name]
+  } catch (_) { return /^[a-z_]+$/.test(name) } // no registry here: shape check only
+}
+function parseVerify(v, i, name) {
+  const bad = (why) => { throw new Error(`spots[${i}] (${name}): bad verify (${why})`) }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) bad('want {blocks, around, radius, dy, min, gap}')
+  for (const k of Object.keys(v)) {
+    if (!['blocks', 'around', 'radius', 'dy', 'min', 'gap'].includes(k)) bad(`unknown key ${JSON.stringify(k)}`)
+  }
+  if (!Array.isArray(v.blocks) || v.blocks.length === 0 || v.blocks.length > 64) bad('blocks: non-empty array (<=64)')
+  for (const b of v.blocks) {
+    if (typeof b !== 'string' || !/^[a-z_]+$/.test(b)) bad(`blocks: bad name ${JSON.stringify(b)}`)
+    if (!knownBlockName(b)) bad(`blocks: unknown block ${JSON.stringify(b)}`)
+  }
+  const isGoal = v.around === 'goal'
+  if (!isGoal && (!Array.isArray(v.around) || v.around.length !== 3 || !v.around.every(Number.isFinite))) {
+    bad('around: "goal" or [x, y, z]')
+  }
+  const radius = v.radius == null ? 3 : v.radius
+  if (!Number.isInteger(radius) || radius < 0 || radius > 16) bad('radius: integer 0..16')
+  const dy = v.dy == null ? 1 : v.dy
+  if (!Number.isInteger(dy) || dy < 0 || dy > 16) bad('dy: integer 0..16')
+  if (!Number.isInteger(v.min) || v.min < 1) bad('min: integer >= 1')
+  const gap = v.gap == null ? 2 : v.gap
+  if (!Number.isInteger(gap) || gap < 1) bad('gap: integer >= 1')
+  return { blocks: v.blocks.slice(), around: isGoal ? 'goal' : v.around.slice(), radius, dy, min: v.min, gap }
+}
+
+// World read for the plant verdict (idkcraft-vf8e.18): pure over the
+// injected readAt — every cell |dx|,|dz| <= radius, |dy| <= dy around the
+// centre. Unreadable cells read missing (never wanted). Cells outside the
+// box are never read, so they cannot verdict.
+function readVerifyCells(readAt, spec) {
+  const cells = []
+  for (let dx = -spec.radius; dx <= spec.radius; dx++) {
+    for (let dz = -spec.radius; dz <= spec.radius; dz++) {
+      for (let dy = -spec.dy; dy <= spec.dy; dy++) {
+        let b = null
+        try { b = readAt(dx, dy, dz) } catch (_) { b = null }
+        if (b && typeof b.name === 'string') cells.push({ dx, dy, dz, name: b.name })
+      }
+    }
+  }
+  return cells
+}
+
+// Plant verdict (idkcraft-vf8e.18): pure over the world-read cells and the
+// spot spec. found = cells whose block is wanted; ok = found >= min AND
+// every pair of found cells sits at Chebyshev distance >= gap (gap 2 = no
+// two in touching cells, the "trees can grow" rule; gap 1 = any).
+// close = violating pairs.
+function verifyBlocks(cells, spec) {
+  const want = new Set(spec.blocks)
+  const found = cells.filter((c) => want.has(c.name))
+  const gap = spec.gap == null ? 1 : spec.gap
+  let close = 0
+  for (let a = 0; a < found.length; a++) {
+    for (let b = a + 1; b < found.length; b++) {
+      const d = Math.max(Math.abs(found[a].dx - found[b].dx), Math.abs(found[a].dy - found[b].dy), Math.abs(found[a].dz - found[b].dz))
+      if (d < gap) close++
+    }
+  }
+  return { ok: found.length >= spec.min && close === 0, found: found.length, min: spec.min, close }
+}
+
+// Honest plant verdict (idkcraft-vf8e.18): pure, unit-tested. The
+// reached-by-chat verdict stays required: verify only demotes.
+function applyVerify(reached, v) {
+  if (reached && v && !v.ok) return { reached: false, note: `PARTIAL found=${v.found}/${v.min} close=${v.close}` }
   return { reached, note: null }
 }
 
@@ -1020,6 +1118,23 @@ async function main() {
       reached = v.reached
       buildNote = v.note
     }
+    // World verdict for planted things (idkcraft-vf8e.18): at the terminal
+    // verdict, where applyBuildVerify runs, read the box around the centre
+    // from the follower's world and demote a chat-done the world rejects.
+    let verifyNote = null
+    let verifyVerdict = null
+    if (s.mode === 'order' && s.verify && reached) {
+      const ax = s.verify.around === 'goal' ? s.goal : s.verify.around
+      const f0 = follower.entity.position.floored()
+      f0.x = Math.floor(ax[0]); f0.y = Math.floor(ax[1]); f0.z = Math.floor(ax[2])
+      const cells = readVerifyCells((dx, dy, dz) => {
+        try { return follower.blockAt(f0.offset(dx, dy, dz)) } catch (_) { return null }
+      }, s.verify)
+      verifyVerdict = verifyBlocks(cells, s.verify)
+      const v = applyVerify(reached, verifyVerdict)
+      reached = v.reached
+      verifyNote = v.note
+    }
     const secs = (Date.now() - t0) / 1000
     const stuck = resets.stuck || 0
     const call = chats.filter((m) => m.includes("I'm stuck at")).length
@@ -1034,7 +1149,7 @@ async function main() {
       : s.mode === 'shelter'
         ? (closedAt === null ? `OPEN at ${(() => { try { return follower.entity.position.floored().toArray().join(' ') } catch (_) { return '?' } })()}` : `CLOSED ${closedAt.toFixed(0)}s`)
         : ''
-    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : (buildNote || onote || (s.danger.length > 0 ? `minDanger ${minDanger.toFixed(1)}` : '')))
+    const note = died ? 'DIED' : (guideDied ? 'GUIDE-DIED' : (buildNote || verifyNote || onote || (s.danger.length > 0 ? `minDanger ${minDanger.toFixed(1)}` : '')))
     if (s.danger.length > 0 && c) c.danger = { spots: [] } // seeded marks never leak into later spots
     // Worker flag (idkcraft-jlda.3): in the tab list at the window end.
     // Head-only rows carry no field (byte-identical flow).
@@ -1042,7 +1157,7 @@ async function main() {
     if (WORKER) {
       try { workerOnline = !!(follower.players && follower.players[WORKER]) } catch (_) { /* sampling best-effort */ }
     }
-    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(WORKER ? { worker: workerOnline } : {}), ...(plans > 0 ? { plans, planMs, planErr } : {}), ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}), ...(s.sabotage ? { sabotage: s.sabotage } : {}) })
+    rows.push({ spot: s.name, reached, stuck, eps: stuckEps.length, by: stuckEps, call, secs: +secs.toFixed(0), maxDisp: +maxDisp.toFixed(1), minDist: +minDist.toFixed(1), minGuide: +minGuide.toFixed(1), ...(s.danger.length > 0 ? { minDanger: +minDanger.toFixed(1) } : {}), note, bead: s.bead || undefined, ...(WORKER ? { worker: workerOnline } : {}), ...(plans > 0 ? { plans, planMs, planErr } : {}), ...(s.mode === 'order' ? { order: s.order, orderLine: orderLine || null } : {}), ...(buildVerdict ? { placed: buildVerdict.placed, planTotal: buildVerdict.total, skipped: buildVerdict.skipped } : {}), ...(verifyVerdict ? { verifyFound: verifyVerdict.found, verifyMin: verifyVerdict.min, verifyClose: verifyVerdict.close } : {}), ...(s.sabotage ? { sabotage: s.sabotage } : {}) })
     console.log(`${s.name.padEnd(9)} ${String(reached).padEnd(7)} ${String(stuck).padEnd(6)} ` +
       `${String(stuckEps.length).padEnd(4)} ${String(call > 0).padEnd(6)} ${String(secs.toFixed(0)).padEnd(6)} ${maxDisp.toFixed(1).padEnd(8)} ${note}${plans > 0 ? ` plans=${plans} planMs=${planMs} planErr=${planErr}` : ''}`)
     // Bucket spots (idkcraft-jsf.7): water_up must bring both buckets back
@@ -1112,4 +1227,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('REPLAY-ERROR', e && e.message ? e.message : e); process.exit(2) })
 }
 
-module.exports = { sabotageMenu, sabotageStep, verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify }
+module.exports = { sabotageMenu, sabotageStep, verifyHeadroom, compareBaseline, loadBaseline, pickBrain, loadSpots, gateCode, ENV_NOTES, makeExitGuard, matchOrderLine, windowReached, enclosed, shelterReached, SHELTER_CLOSE_SECS, verifyHouse, applyBuildVerify, readVerifyCells, verifyBlocks, applyVerify }

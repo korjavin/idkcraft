@@ -15,7 +15,8 @@
 // only reads ctx to move to the next step. Flag off: nothing here runs.
 // ponytail: raw Baritone #commands are not plan steps — on v2 bring/flat
 // already drive #mine/#goto over the bridge with the protected-block guards;
-// a raw #mine would bypass them. Skills (vf8e.2) join when they enter MENU.
+// a raw #mine would bypass them. Loaded step skills (vf8e.17) join
+// workSteps() once they sit in MENU; `do <step>` installs without a call.
 
 const brain = require('./brain')
 const goal = require('./goal')
@@ -38,7 +39,8 @@ const ORDER_STEPS = {
   share: { args: '', what: 'hands the player everything carried except tools, weapons and armour', chat: () => 'share' },
 }
 // Work steps the plan may pin: not the night/safety steps (the FSM owns
-// them), not deliver/rest/castle internals.
+// them), not deliver/rest/castle internals. Loaded step skills join below
+// (skillSteps): they sit in goal.MENU and are registered like hand steps.
 const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stockpile', 'gear', 'forage', 'explore']
 
 const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their companion bot. ' +
@@ -51,15 +53,34 @@ function enabled(env = process.env) {
   return /^(1|true|yes)$/i.test(String(env.BOT_LLM_ORDERS || '')) && !!env.ANTHROPIC_API_KEY
 }
 
+// Loaded step skills that sit in goal.MENU and are registered (vf8e.17):
+// skills.js reports its last load; the ticker loads at startup when
+// BOT_SKILLS is on, so this is a cache read in prod, never a load. Flag
+// off (or not loaded yet): no skill joins, the lists stay byte-identical.
+function skillSteps() {
+  let skills = null
+  try { skills = require('./skills') } catch (_) { return [] }
+  try { if (!skills.enabled(process.env)) return [] } catch (_) { return [] }
+  let names = null
+  try { names = skills.stepSkills() } catch (_) { return [] }
+  if (!Array.isArray(names)) return []
+  return names.filter((n) => goal.MENU[n] && goal.registered(n))
+}
+
 function workSteps() {
-  return WORK_STEPS.filter((n) => goal.MENU[n] && goal.registered(n))
+  const base = WORK_STEPS.filter((n) => goal.MENU[n] && goal.registered(n))
+  for (const n of skillSteps()) if (!base.includes(n)) base.push(n)
+  return base
 }
 
 function stepList() {
   const lines = Object.entries(ORDER_STEPS).map(([id, s]) => `${id}(${s.args}): ${s.what}`)
   for (const id of workSteps()) {
+    // A skill has no STEP_EFFECT_TEXT: fall back to its header description
+    // (goal.STEP_CRITERIA), so the model still sees what it does.
+    const effect = STEP_EFFECT_TEXT[id] || goal.STEP_CRITERIA[id] || id
     const when = goal.STEP_CRITERIA[id] ? ` (runs when: ${goal.STEP_CRITERIA[id].split(':')[0]})` : ''
-    lines.push(`${id}: ${STEP_EFFECT_TEXT[id] || id}${when}`)
+    lines.push(`${id}: ${effect}${when}`)
   }
   return lines.join('\n')
 }
@@ -76,6 +97,15 @@ function stateText(bot, ctx) {
   try { return goal.goalText(goal.goalFacts(bot, ctx), ctx.home) } catch (_) { return 'unknown' }
 }
 
+// Prototype-safe whitelist read (vf8e.17 verifier): chat and model ids
+// match [a-z0-9_]+, so `do constructor` / {"step":"__proto__"} hit inherited
+// Object members on a plain ORDER_STEPS[id] lookup — and `.args` of that
+// throws inside the chat handler, which has no try/catch. Only own entries
+// count (the skills.js Object.hasOwn(OPS, op) precedent).
+function orderStep(id) {
+  return Object.hasOwn(ORDER_STEPS, id) ? ORDER_STEPS[id] : null
+}
+
 // Model answer -> { steps } | { error } | { empty: true }. The whitelist is
 // the safety: an id outside it refuses the whole plan.
 function validatePlan(ans, works = workSteps()) {
@@ -86,16 +116,24 @@ function validatePlan(ans, works = workSteps()) {
   const steps = []
   for (const r of raw) {
     const id = r && typeof r.step === 'string' ? r.step.toLowerCase().trim() : ''
-    if (!ORDER_STEPS[id] && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"` }
+    const knownOrder = orderStep(id)
+    if (!knownOrder && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"` }
     const s = { step: id, done: typeof r.done === 'string' ? r.done.replace(/\s+/g, ' ').trim().slice(0, 80) : '' }
-    if (ORDER_STEPS[id] && ORDER_STEPS[id].args.includes('item')) {
+    if (knownOrder && knownOrder.args.includes('item')) {
       const item = String(r.item || '').toLowerCase().trim().replace(/\s+/g, '_')
       if (!/^[a-z0-9_]{1,40}$/.test(item)) return { error: `${id} needs an item` }
       s.item = item
     }
-    if (ORDER_STEPS[id] && ORDER_STEPS[id].args.includes('count') && r.count != null) {
+    if (knownOrder && knownOrder.args.includes('count') && r.count != null) {
       const c = Math.floor(Number(r.count))
-      if (!(c >= 1 && c <= ORDER_STEPS[id].max)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
+      if (!(c >= 1 && c <= knownOrder.max)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
+      s.count = c
+    }
+    // A work step keeps a 1..64 count when the model gives one (vf8e.17):
+    // hand steps ignore it at execution, skill steps read st.count.
+    if (!knownOrder && r.count != null) {
+      const c = Math.floor(Number(r.count))
+      if (!(c >= 1 && c <= 64)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
       s.count = c
     }
     steps.push(s)
@@ -169,10 +207,38 @@ function ask(bot, ctx, req, fetchFn) {
       if (req.fallback || req.explicit) say(req.fallback || `I can't plan that (${r.error}) — try: help`)
       return
     }
-    if (ctx.llmOrder) { release(ctx, ctx.llmOrder); console.log(`llm order end text="${ctx.llmOrder.text}" result=replaced`) }
-    ctx.llmOrder = { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed, steps: r.steps, i: 0, cur: null, at: Date.now(), feeding: false }
-    say(`plan: ${r.steps.map(label).join(', then ')}`.slice(0, 250))
+    installPlan(bot, ctx, { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed }, r.steps, say)
   })()
+}
+
+// Install validated plan steps as the running order (vf8e.17): ask()'s
+// tail and the deterministic `do` verb share it. Replaces any running
+// plan and chats the plan line. No model call, no token or metric touch.
+// Steps must already be whitelisted (validatePlan/doPlan): the executive
+// below (startStep/tick/release) reads ORDER_STEPS by id without re-check.
+function installPlan(bot, ctx, req, steps, say) {
+  if (!ctx || !Array.isArray(steps) || !steps.length) return false
+  if (ctx.llmOrder) { release(ctx, ctx.llmOrder); console.log(`llm order end text="${ctx.llmOrder.text}" result=replaced`) }
+  ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false }
+  const line = `plan: ${steps.map(label).join(', then ')}`.slice(0, 250)
+  if (typeof say === 'function') say(line)
+  else { try { bot.chat(line) } catch (_) { /* chat best-effort */ } }
+  return true
+}
+
+// Pin-args mirror (vf8e.17): ctx.taskPlanArgs tracks the ctx.taskPlanStep
+// pin — written and withdrawn at the same executive sites — except it
+// survives pinMenu's consume, so goalFacts keeps `pinned` (and the skill
+// wrapper its st.count/st.by) while the executive owns the step. It carries
+// the step id too: the pin alone cannot say who owns a consumed pin, and
+// goal.js must not require this module back (dependency cycle).
+function pinArgs(ctx, o, s) {
+  if (!ctx) return
+  ctx.taskPlanArgs = { step: s.step, count: s.count, by: o.by }
+}
+function dropArgs(ctx) {
+  if (!ctx) return
+  ctx.taskPlanArgs = null
 }
 
 // Owner stop / follow me / go work: the plan and any ask in flight end.
@@ -187,6 +253,7 @@ function cancel(ctx, why = 'stop') {
   }
   ctx.llmOrder = null
   ctx.llmAsk = null
+  dropArgs(ctx) // a pin the arbiter never consumed must not leak args into a later run
 }
 
 // True while the sequencer re-feeds its own chat line: the chat hooks must
@@ -236,6 +303,7 @@ function orderResult(ctx, s, c) {
 // like stop), an unconsumed pin.
 function release(ctx, o) {
   const s = o && o.cur && o.steps[o.i]
+  dropArgs(ctx) // a replaced or timed-out plan drops its args with its executors
   if (!s) return
   if (!ORDER_STEPS[s.step]) {
     if (ctx.taskPlanStep === s.step) ctx.taskPlanStep = null
@@ -252,6 +320,7 @@ function release(ctx, o) {
 
 function end(bot, ctx, o, result) {
   if (result !== 'done') release(ctx, o)
+  else dropArgs(ctx) // release() already nulled the rest
   const n = o.steps.length
   console.log(`llm order end text="${o.text}" result=${result} step=${Math.min(o.i + 1, n)}/${n} dur=${Math.floor((Date.now() - o.at) / 1000)}s`)
   if (ctx.llmOrder === o) ctx.llmOrder = null
@@ -291,6 +360,7 @@ function startStep(bot, ctx, o, s, now) {
   }
   if (!ctx.work && o.ticker && typeof o.ticker.work === 'function') o.ticker.work()
   ctx.taskPlanStep = s.step
+  pinArgs(ctx, o, s) // rewritten on every work step, so a later step never reads an earlier step's args
 }
 
 // Every tick (index.js), cheap: no plan, no work.
@@ -303,7 +373,7 @@ function tick(bot, ctx, now = Date.now()) {
   const c = o.cur
   if (ctx.paused) return end(bot, ctx, o, 'stop')
   if (!c.held && now - c.at > STEP_MS) return end(bot, ctx, o, 'failed:timeout')
-  const next = () => { o.i++; o.cur = null }
+  const next = () => { o.i++; o.cur = null; dropArgs(ctx) }
   if (ORDER_STEPS[s.step]) {
     if (orderBusy(ctx)) { if (ctx.lead) c.led = true; return }
     const r = orderResult(ctx, s, c)
@@ -323,6 +393,7 @@ function tick(bot, ctx, now = Date.now()) {
     // Held: no pin (a pending one is withdrawn so the night step wins), no
     // miss, no deadline; the step re-pins when the night ends.
     if (ctx.taskPlanStep === s.step) ctx.taskPlanStep = null
+    dropArgs(ctx) // withdrawn with the pin: the night step owns the body now
     c.held = true
     c.seen = false
     return
@@ -333,6 +404,7 @@ function tick(bot, ctx, now = Date.now()) {
     c.gen = stepGen(ctx)
     c.miss = 0
     ctx.taskPlanStep = s.step
+    pinArgs(ctx, o, s) // re-pinned after the night hold
     return
   }
   if (c.seen) {
@@ -350,11 +422,13 @@ function tick(bot, ctx, now = Date.now()) {
     c.seen = false
     c.gen = stepGen(ctx)
     ctx.taskPlanStep = s.step
+    pinArgs(ctx, o, s) // the flicker re-pin carries the args too
     return
   }
   if (ctx.taskPlanStep !== s.step) {
     if (++c.miss >= MISS_TICKS) return end(bot, ctx, o, 'failed:not possible now')
     ctx.taskPlanStep = s.step
+    pinArgs(ctx, o, s)
   }
 }
 
@@ -367,4 +441,4 @@ function statusLine(ctx) {
   return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
 }
 
-module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS }
+module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS }
