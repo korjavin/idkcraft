@@ -103,9 +103,9 @@ const CHEST_TIMEOUT_MS = 15000
 // across water the v1 pathfinder swims, and the leg used to burn its whole
 // walk patience and fall through to gather/no-trees with the chest full.
 // Retry 1 re-issues the walk from the live feet (a fresh Baritone plan);
-// retries 2+ route past a perpendicular staging cell (the pond's dry end)
-// before re-approaching the chest. Bounded per chest: the stalled abandon
-// below owns the give-up, as before.
+// retries 2+ sidestep perpendicular from the live feet (dry land at the
+// pond's near end) before re-approaching the chest. Bounded per chest: the
+// stalled abandon below owns the give-up, as before.
 const CHEST_RETRIES = 3
 const CHEST_VIA_REACH = 1.5
 // Quarry (g0z.15, owner 2026-10-02): no exposed stone by the site -> an
@@ -497,10 +497,13 @@ function near(bot, p, reach) {
   return !!bp && Math.hypot(bp.x - (p.x + 0.5), bp.y - (p.y + 0.5), bp.z - (p.z + 0.5)) <= reach
 }
 
-// Perpendicular staging past mid-leg (idkcraft-6fc1): retry 2 stands 6
-// past the leg's midpoint on one side, retry 3 stands 9 on the other, so a
-// water strip across the approach is rounded at its dry end. Pure geometry
-// over {x,y,z}; the walk call floors it. Never throws.
+// Sidestep staging at the feet (idkcraft-6fc1, revmux 01 major): the water
+// sits at the body (the rig pond, prod's stuck-in-water), so mid-leg
+// staging lands past it — inside the castle, past the same crossing.
+// Stand perpendicular from the live feet instead (retry 2: 8, retry 3:
+// 12, alternating sides): dry land at the pond's near end, then the chest
+// approach re-plans around it. y-agnostic (the walk goes GoalNearXZ): a
+// sunk body's y would bury an xyz target. Pure geometry; never throws.
 function chestVia(bp, at, n) {
   try {
     if (!bp || !at || typeof bp.x !== 'number' || typeof at.x !== 'number' ||
@@ -509,13 +512,13 @@ function chestVia(bp, at, n) {
     const dz = at.z - bp.z
     const len = Math.hypot(dx, dz)
     if (!(len > 1)) return null
-    const r = 3 * (n | 0)
+    const r = 4 * (n | 0)
     if (!(r > 0)) return null
     const s = (n | 0) % 2 === 0 ? 1 : -1
     return {
-      x: (bp.x + at.x) / 2 + (-dz / len) * r * s,
+      x: bp.x + (-dz / len) * r * s,
       y: typeof bp.y === 'number' ? bp.y : at.y,
-      z: (bp.z + at.z) / 2 + (dx / len) * r * s,
+      z: bp.z + (dx / len) * r * s,
     }
   } catch (_) { return null }
 }
@@ -558,7 +561,8 @@ function chestTick(bot, ctx, f, d) {
         (ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout')) {
         f.chestVia = null // dead staging: the chest walk below re-decides
       } else {
-        walkTo(bot, ctx, f.chestViaKey, new Vec3(Math.floor(f.chestVia.x), Math.floor(f.chestVia.y), Math.floor(f.chestVia.z)), 1)
+        // xz: the staging is a routing point, y-agnostic (revmux 01 major).
+        walkTo(bot, ctx, f.chestViaKey, new Vec3(Math.floor(f.chestVia.x), Math.floor(f.chestVia.y), Math.floor(f.chestVia.z)), 2, true)
         // Bounded even if the bridge goes silent (its stall clock always
         // verdicts a live walk, but a paused body never does): the via
         // shares the chest's patience shape on its own dist series.
@@ -579,7 +583,7 @@ function chestTick(bot, ctx, f, d) {
           f.chestViaKey = `${key}#via${n}`
           f.chestViaWalk = null
           try { console.log(`castlefetch ${d.kind}: chest walk noPath, detour ${n}/${CHEST_RETRIES} via ${Math.floor(cell.x)},${Math.floor(cell.z)}`) } catch (_) { /* log best-effort */ }
-          walkTo(bot, ctx, f.chestViaKey, new Vec3(Math.floor(cell.x), Math.floor(cell.y), Math.floor(cell.z)), 1)
+          walkTo(bot, ctx, f.chestViaKey, new Vec3(Math.floor(cell.x), Math.floor(cell.y), Math.floor(cell.z)), 2, true)
           try { ctx.lastPathStatus = 'none' } catch (_) { /* verdict best-effort */ }
           f.chestWalk = null
           return true

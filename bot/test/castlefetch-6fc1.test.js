@@ -73,7 +73,7 @@ function makeBot({ items = [], chest = [] } = {}) {
       isMoving: () => false,
       goal: null,
       setGoal(g) {
-        calls.goals.push(`${g && g.constructor ? g.constructor.name : '?'}@${g && g.x},${g && g.y},${g && g.z}`)
+        calls.goals.push({ kind: g && g.constructor ? g.constructor.name : '?', x: g && g.x, y: g && g.y, z: g && g.z })
         bot.pathfinder.goal = g
       },
       stop() {},
@@ -136,11 +136,17 @@ describe('castlefetch v2 chest-walk noPath retries (6fc1)', () => {
     t.tick() // retry 2: staging detour
     const via = t.keys().find((k) => /#via2$/.test(k))
     assert.ok(via, `retry detours past staging: ${t.keys()}`)
-    // Walk the staging: the issued goal targets the floored cell.
+    // Walk the staging: the issued XZ goal targets the floored cell, and it
+    // must sit on the near side (no further from the feet than the chest —
+    // a detour past the obstacle proves nothing).
     const g = t.bot.calls.goals[t.bot.calls.goals.length - 1]
-    const m = /@(-?\d+),(-?\d+),(-?\d+)$/.exec(g)
-    assert.ok(m, `staging goal has coords: ${g}`)
-    t.move(Number(m[1]) + 0.5, Number(m[2]), Number(m[3]) + 0.5)
+    assert.equal(g.kind, 'GoalNearXZ', `staging walks y-agnostic: ${g.kind}`)
+    const bx = FAR.x
+    const bz = FAR.z
+    assert.ok(Math.hypot(g.x - bx, g.z - bz) > 1, `staging leaves the feet: ${g.x},${g.z}`)
+    assert.ok(Math.hypot(g.x - bx, g.z - bz) < Math.hypot(CHEST.x - bx, CHEST.z - bz),
+      `staging stays on the near side: ${g.x},${g.z}`)
+    t.move(g.x + 0.5, 64, g.z + 0.5)
     t.tick() // arrival drops back to the chest approach
     assert.equal(t.bot.calls.goals.length >= 3, true)
     // Into chest reach: the draw relays the planks.
@@ -193,15 +199,19 @@ describe('castlefetch v2 chest-walk noPath retries (6fc1)', () => {
     assert.equal(t.gathered(), 1, 'budget spent: the old gather fallthrough owns the give-up')
   })
 
-  it('chestVia stands past mid-leg, alternating sides', () => {
+  it('chestVia sidesteps at the feet, alternating sides, never past the chest', () => {
     const bp = { x: 0, y: 64, z: 0 }
     const at = { x: 0, y: 64, z: 20 }
     const v2 = fetch.chestVia(bp, at, 2)
     const v3 = fetch.chestVia(bp, at, 3)
-    assert.equal(v2.z, 10)
-    assert.equal(v3.z, 10)
-    assert.ok(Math.abs(v2.x) === 6 && Math.abs(v3.x) === 9, `widening offsets: ${v2.x},${v3.x}`)
+    assert.equal(v2.z, 0, 'anchored at the feet, not mid-leg')
+    assert.equal(v3.z, 0)
+    assert.ok(Math.abs(v2.x) === 8 && Math.abs(v3.x) === 12, `widening sidesteps: ${v2.x},${v3.x}`)
     assert.ok(v2.x * v3.x < 0, 'alternating sides')
+    for (const v of [v2, v3]) {
+      assert.ok(Math.hypot(v.x - bp.x, v.z - bp.z) < Math.hypot(at.x - bp.x, at.z - bp.z),
+        `near side only: ${v.x},${v.z}`)
+    }
     assert.equal(fetch.chestVia(null, at, 2), null)
     assert.equal(fetch.chestVia(bp, bp, 2), null, 'degenerate leg: direct re-issue, never a waypoint')
     assert.equal(fetch.CHEST_RETRIES, 3)
