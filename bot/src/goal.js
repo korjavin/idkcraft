@@ -2054,6 +2054,14 @@ function textWord(text, key) {
 }
 const wordFlipped = (keys) => (prev, facts, ctx, status, bot, text) =>
   !!ctx && typeof ctx.goalText === 'string' && keys.some((k) => textWord(ctx.goalText, k) !== textWord(text, k))
+// Fetch-leg commitment (idkcraft-qxql.1): a running stone/planks castlefetch
+// leg owns the body until it ends itself (haul reached, LEG_MAX_MS yield,
+// pack full, failure). The castle word flips to <kind>-batch at BATCH=16, so
+// without this a 78-stone leg was cut at 16 and re-walked to the quarry
+// (castle90: 55 of 76 legs cut). Safety words (time/health/food) and kit
+// still cut it.
+const fetchLegCommitted = (prev, ctx, status) => prev === 'castlefetch' && status === 'running' &&
+  !!ctx && !!ctx.castleFetch && (ctx.castleFetch.kind === 'stone' || ctx.castleFetch.kind === 'planks')
 const FORCES = [
   // A chain-owned step (retreat/pillar, index.js sets ctx.step outside
   // decide) is never held: it re-decides into a goal step.
@@ -2134,7 +2142,8 @@ const FORCES = [
   { name: 'health', bead: 'idkcraft-rw4.6', kind: 'word', fires: wordFlipped(['health']) },
   { name: 'food', bead: 'idkcraft-rw4.6', kind: 'word', fires: wordFlipped(['food']) },
   // Castle word flip (the castlefetch->castle handoff and back).
-  { name: 'castle-word', bead: 'idkcraft-g0z.3', kind: 'word', fires: wordFlipped(['castle']) },
+  { name: 'castle-word', bead: 'idkcraft-g0z.3', kind: 'word',
+    fires: (prev, facts, ctx, status, bot, text) => !fetchLegCommitted(prev, ctx, status) && wordFlipped(['castle'])(prev, facts, ctx, status, bot, text) },
   // Kit words (sword/pickaxe/blocks mid-castle).
   { name: 'kit', bead: 'idkcraft-rwuu', kind: 'word', fires: wordFlipped(['sword', 'pickaxe', 'blocks']) },
 ]
@@ -2180,6 +2189,11 @@ function textForce(prev, facts, bot, ctx, status, text) {
   }
   if (seen === (typeof ctx.heldText === 'string' ? ctx.heldText : ctx.goalText)) return false
   if (FORCES.some((f) => f.kind === 'word' && f.fires(prev, facts, ctx, status, bot, text))) return true
+  // qxql.1: the FSM answer moving to castle mid-leg is the same cut.
+  if (fetchLegCommitted(prev, ctx, status)) {
+    ctx.heldText = seen
+    return false
+  }
   const pick = ctx.stepPick
   if (!pick || pick.step !== prev || typeof pick.fsm !== 'string') return true
   if (pick.source === 'task-plan' && facts.pinned === prev) {

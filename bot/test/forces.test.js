@@ -95,6 +95,18 @@ describe('FORCES table (vmzq.62)', () => {
     assert.equal(fire('order', { prev: 'castle', ctx: { goalText: BASE } }), false)
   })
 
+  it('castle-word does not cut a running stone/planks fetch leg (qxql.1); a finished leg or another kind does', () => {
+    const flip = { goalText: `${BASE} castle=stone` }
+    const next = `${BASE} castle=stone-batch`
+    for (const kind of ['stone', 'planks']) {
+      assert.equal(fire('castle-word', { prev: 'castlefetch', ctx: { ...flip, castleFetch: { kind } }, text: next }), false, kind)
+    }
+    assert.equal(fire('castle-word', { prev: 'castlefetch', status: 'done', ctx: { ...flip, castleFetch: { kind: 'stone' } }, text: next }), true)
+    assert.equal(fire('castle-word', { prev: 'castlefetch', ctx: { ...flip, castleFetch: { kind: 'torch' } }, text: next }), true)
+    assert.equal(fire('castle-word', { prev: 'castlefetch', ctx: flip, text: next }), true)
+    assert.equal(fire('time', { prev: 'castlefetch', ctx: { goalText: BASE, castleFetch: { kind: 'stone' } }, text: BASE.replace('time=day', 'time=dusk') }), true)
+  })
+
   const words = [
     ['time', BASE, BASE.replace('time=day', 'time=dusk')],
     ['health', BASE, BASE.replace('health=ok', 'health=low')],
