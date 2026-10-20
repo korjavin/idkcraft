@@ -72,6 +72,9 @@
 #   CASTLE_QUARRY (''|dead, needs CASTLE_SEED=complete — idkcraft-prkh:
 #   water-fill every quarry/pit probe column + sweep exposed stone, so all
 #   stone legs fail fast),
+#   CASTLE_CHESTWATER (''|1, needs CASTLE_SEED=complete — idkcraft-6fc1: deep
+#   water columns across the gate-approach walkway (the spawn stands clear),
+#   so the v2 chest walk crosses broken water; pair with CASTLE_REPAIR=prkh),
 #   CASTLE_REKNOCK (comma plan kinds, needs CASTLE_SEED=complete —
 #   idkcraft-prkh: knocked out mid-run once the torch fetch fails, e.g.
 #   stone),
@@ -238,6 +241,8 @@ SEED_VERSION="${CASTLE_SEED_VERSION:-}"
 case "$SEED_VERSION" in ''|1|2|3) ;; *) echo "CASTLE_SEED_VERSION: want ''|1|2|3, got '$SEED_VERSION'"; exit 2 ;; esac
 case "${CASTLE_REPAIR:-}" in ''|wood|nowood|planks|prkh) ;; *) echo "CASTLE_REPAIR: want ''|wood|nowood|planks|prkh, got '$CASTLE_REPAIR'"; exit 2 ;; esac
 case "${CASTLE_QUARRY:-}" in ''|dead) ;; *) echo "CASTLE_QUARRY: want ''|dead, got '$CASTLE_QUARRY'"; exit 2 ;; esac
+case "${CASTLE_CHESTWATER:-}" in ''|1) ;; *) echo "CASTLE_CHESTWATER: want ''|1, got '$CASTLE_CHESTWATER'"; exit 2 ;; esac
+[ -z "${CASTLE_CHESTWATER:-}" ] || [ "$SEED" = complete ] || { echo "CASTLE_CHESTWATER needs CASTLE_SEED=complete"; exit 2; }
 [ -z "${CASTLE_REPAIR:-}" ] || [ "$SEED" = complete ] || { echo "CASTLE_REPAIR needs CASTLE_SEED=complete"; exit 2; }
 case "${CASTLE_LITTER:-}" in ''|1) ;; *) echo "CASTLE_LITTER: want ''|1, got '$CASTLE_LITTER'"; exit 2 ;; esac
 [ -z "${CASTLE_LITTER:-}" ] || [ "$SEED" = complete ] || { echo "CASTLE_LITTER needs CASTLE_SEED=complete"; exit 2; }
@@ -469,7 +474,7 @@ if [ "${CASTLE_BODY:-}" = baritone ]; then
   export BOT_BODY=baritone BRIDGE_HOST=localhost BRIDGE_PORT="$MOD_PORT" BRIDGE_CONSOLE_PORT="$BODY_CONSOLE_PORT"
 fi
 export CASTLE_COMPONENT="$COMPONENT" CASTLE_MINS="$MINS" CASTLE_CONTAINER="$CONTAINER" CASTLE_PORT="$RIG_PORT" CASTLE_GITSHA="$GITSHA"
-export CASTLE_LITTER="${CASTLE_LITTER:-}" CASTLE_REPAIR="${CASTLE_REPAIR:-}" CASTLE_QUARRY="${CASTLE_QUARRY:-}" CASTLE_REKNOCK="${CASTLE_REKNOCK:-}" CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_SEED_VERSION="$SEED_VERSION" CASTLE_SEED_DECOR_EXCEPT="${CASTLE_SEED_DECOR_EXCEPT:-}" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
+export CASTLE_LITTER="${CASTLE_LITTER:-}" CASTLE_REPAIR="${CASTLE_REPAIR:-}" CASTLE_QUARRY="${CASTLE_QUARRY:-}" CASTLE_CHESTWATER="${CASTLE_CHESTWATER:-}" CASTLE_REKNOCK="${CASTLE_REKNOCK:-}" CASTLE_IDLE="$IDLE" CASTLE_IDLE_DEATH="$IDLE_DEATH" CASTLE_SAND="${CASTLE_SAND:-}" CASTLE_SEED="$SEED" CASTLE_SEED_VERSION="$SEED_VERSION" CASTLE_SEED_DECOR_EXCEPT="${CASTLE_SEED_DECOR_EXCEPT:-}" CASTLE_KIT="$KIT" CASTLE_TICKRATE="$TICKRATE" CASTLE_BLOCKED="$BLOCKED" CASTLE_NIGHT="$NIGHT"
 # Absolute: node runs from bot/ after the cd below, so a relative default
 # would point at bot/bot/tools/ and every checkpoint would throw.
 case "${CASTLE_OUT:-}" in

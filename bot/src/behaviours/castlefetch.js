@@ -99,6 +99,15 @@ const STONE_FAMILY = Array.isArray(blueprint.STONE_ITEMS) && blueprint.STONE_ITE
 const CHEST_REACH = stockpileMod.INTERACT_REACH
 const CHEST_WAITS = 30 // ticks without closing in on the chest
 const CHEST_TIMEOUT_MS = 15000
+// v2 chest-walk retry budget (idkcraft-6fc1): Baritone verdicts noPath
+// across water the v1 pathfinder swims, and the leg used to burn its whole
+// walk patience and fall through to gather/no-trees with the chest full.
+// Retry 1 re-issues the walk from the live feet (a fresh Baritone plan);
+// retries 2+ sidestep perpendicular from the live feet (dry land at the
+// pond's near end) before re-approaching the chest. Bounded per chest: the
+// stalled abandon below owns the give-up, as before.
+const CHEST_RETRIES = 3
+const CHEST_VIA_REACH = 1.5
 // Quarry (g0z.15, owner 2026-10-02): no exposed stone by the site -> an
 // open trench next to it, a staircase down QUARRY_DEPTH below the site's
 // ground, then level, QUARRY_W wide, cut top-down (dirt included).
@@ -488,6 +497,32 @@ function near(bot, p, reach) {
   return !!bp && Math.hypot(bp.x - (p.x + 0.5), bp.y - (p.y + 0.5), bp.z - (p.z + 0.5)) <= reach
 }
 
+// Sidestep staging at the feet (idkcraft-6fc1, revmux 01 major): the water
+// sits at the body (the rig pond, prod's stuck-in-water), so mid-leg
+// staging lands past it — inside the castle, past the same crossing.
+// Stand perpendicular from the live feet instead (retry 2: 8, retry 3:
+// 12, alternating sides): dry land at the pond's near end, then the chest
+// approach re-plans around it. y-agnostic (the walk goes GoalNearXZ): a
+// sunk body's y would bury an xyz target. Pure geometry; never throws.
+function chestVia(bp, at, n) {
+  try {
+    if (!bp || !at || typeof bp.x !== 'number' || typeof at.x !== 'number' ||
+      typeof bp.z !== 'number' || typeof at.z !== 'number') return null
+    const dx = at.x - bp.x
+    const dz = at.z - bp.z
+    const len = Math.hypot(dx, dz)
+    if (!(len > 1)) return null
+    const r = 4 * (n | 0)
+    if (!(r > 0)) return null
+    const s = (n | 0) % 2 === 0 ? 1 : -1
+    return {
+      x: bp.x + (-dz / len) * r * s,
+      y: typeof bp.y === 'number' ? bp.y : at.y,
+      z: bp.z + (dx / len) * r * s,
+    }
+  } catch (_) { return null }
+}
+
 // Source 1: the castle chest. Returns true while it owns the tick.
 function chestTick(bot, ctx, f, d) {
   if (f.chestDone) return false
@@ -504,11 +539,72 @@ function chestTick(bot, ctx, f, d) {
   if (!f.chest) {
     f.chest = pickChest(bot, ctx, f, d.kind)
     f.chestWalk = null
+    f.chestKey = null // 6fc1: a new chest owns a fresh walk + retry budget
+    f.chestRetries = 0
+    f.chestVia = null
+    f.chestViaWalk = null
   }
   if (!f.chest) { f.chestDone = true; return false }
   const { at, k, bank } = f.chest
   if (!near(bot, at, CHEST_REACH)) {
-    walkTo(bot, ctx, `castlefetch-chest:${k}`, at, 2)
+    const v2 = process.env.BOT_BODY === 'baritone'
+    const key = `castlefetch-chest:${k}`
+    // A staging detour in flight: walk it first; arrival drops back to the
+    // chest approach, a dead staging spends its retry and falls through.
+    if (f.chestVia) {
+      const bp = bodyPos(bot)
+      const vd = bp ? Math.hypot(bp.x - f.chestVia.x, bp.z - f.chestVia.z) : Infinity
+      if (vd <= CHEST_VIA_REACH) {
+        f.chestVia = null
+        f.chestWalk = null
+      } else if (v2 && ctx.lastGoalKey === f.chestViaKey &&
+        (ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout')) {
+        f.chestVia = null // dead staging: the chest walk below re-decides
+      } else {
+        // xz: the staging is a routing point, y-agnostic (revmux 01 major).
+        walkTo(bot, ctx, f.chestViaKey, new Vec3(Math.floor(f.chestVia.x), Math.floor(f.chestVia.y), Math.floor(f.chestVia.z)), 2, true)
+        // Bounded even if the bridge goes silent (its stall clock always
+        // verdicts a live walk, but a paused body never does): the via
+        // shares the chest's patience shape on its own dist series.
+        if (stalled(f.chestViaWalk || (f.chestViaWalk = {}), vd, CHEST_WAITS)) f.chestVia = null
+        return true
+      }
+    }
+    // v2 noPath on OUR walk (6fc1): the verdict is attributed by key (the
+    // anchor below zeroes it on every issue we send, gather's shape), so a
+    // stale or foreign verdict never spends the budget.
+    if (v2 && f.chestKey != null && ctx.lastGoalKey === f.chestKey &&
+      ctx.lastPathStatus === 'noPath' && (f.chestRetries | 0) < CHEST_RETRIES) {
+      const n = (f.chestRetries = (f.chestRetries | 0) + 1)
+      if (n > 1) {
+        const cell = chestVia(bodyPos(bot), at, n)
+        if (cell) {
+          f.chestVia = cell
+          f.chestViaKey = `${key}#via${n}`
+          f.chestViaWalk = null
+          try { console.log(`castlefetch ${d.kind}: chest walk noPath, detour ${n}/${CHEST_RETRIES} via ${Math.floor(cell.x)},${Math.floor(cell.z)}`) } catch (_) { /* log best-effort */ }
+          walkTo(bot, ctx, f.chestViaKey, new Vec3(Math.floor(cell.x), Math.floor(cell.y), Math.floor(cell.z)), 2, true)
+          try { ctx.lastPathStatus = 'none' } catch (_) { /* verdict best-effort */ }
+          f.chestWalk = null
+          return true
+        }
+      } else {
+        try { console.log(`castlefetch ${d.kind}: chest walk noPath, retry ${n}/${CHEST_RETRIES} from the live feet`) } catch (_) { /* log best-effort */ }
+      }
+      const rkey = `${key}#r${n}`
+      walkTo(bot, ctx, rkey, at, 2)
+      f.chestKey = rkey
+      try { ctx.lastPathStatus = 'none' } catch (_) { /* verdict best-effort */ }
+      f.chestWalk = null
+      return true
+    }
+    walkTo(bot, ctx, key, at, 2)
+    if (v2 && ctx.lastGoalKey === key && f.chestKey !== key) {
+      // Our issue just went out (first, steal-return, or re-approach):
+      // anchor the verdict so only a fresh noPath retries.
+      f.chestKey = key
+      try { ctx.lastPathStatus = 'none' } catch (_) { /* verdict best-effort */ }
+    }
     // Stalled walk only (a far chest stays walkable while the bot closes in).
     const bp = bodyPos(bot)
     const dd = bp ? Math.hypot(bp.x - at.x, bp.y - at.y, bp.z - at.z) : Infinity
@@ -519,6 +615,7 @@ function chestTick(bot, ctx, f, d) {
     return true
   }
   f.chest = null // one withdraw per chest per leg: the next tick picks the next chest
+  f.chestVia = null // 6fc1: in reach — the detour served its purpose
   ctx.castleFetchFlight = 'chest' // time-split label: in-flight ticks bucket below
   // A bank chest draws one batch, never past stockpile's castle keep
   // (FETCH + reserve = STONE_KEEP 88; planks 34 < PLANK_KEEP 64): what it
@@ -2478,6 +2575,10 @@ function castlefetch(bot, ctx, target, state) {
       f.chest = null
       f.chestWalk = null
       f.chestTried = new Set()
+      f.chestKey = null // 6fc1: the re-opened round owns a fresh budget
+      f.chestRetries = 0
+      f.chestVia = null
+      f.chestViaWalk = null
       return
     }
     if (countItems(bot, (n) => n.endsWith('_log')) >= require('../budget').NEED_LOGS) {
@@ -2540,6 +2641,8 @@ module.exports.demand = demand
 module.exports.holdFor = holdFor
 module.exports.roomForDrop = roomForDrop
 module.exports.castleChest = castleChest
+module.exports.chestVia = chestVia
+module.exports.CHEST_RETRIES = CHEST_RETRIES
 module.exports.onSite = onSite
 module.exports.deps = deps
 module.exports.FETCH = FETCH
