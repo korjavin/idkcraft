@@ -294,6 +294,27 @@ function holdFor(bot, ctx, kind) {
   }
 }
 
+// Dead micro-leg (qxql.3): a leg of one kind re-opened with the same need
+// and not one item changed in the pack since the last start made no
+// progress — each re-pick (goal re-decide nulls ctx.castleFetch) used to
+// log a fresh 'need N more' forever (castle90: stairs need 1 x36). Past
+// RESTART_MAX such starts the leg fails once with the kind's own gap
+// (failed:castlefetch-no-<kind>, the shape the fall-through already uses)
+// and the per-kind hold (prkh) parks only that kind.
+// ponytail: the pack signature is the sum of item counts — any gain or
+// spend (logs chopped, cobble dug, a craft) breaks the streak.
+const RESTART_MAX = 3
+function deadRestart(bot, ctx, d) {
+  let inv = 0
+  try { for (const it of bot.inventory.items() || []) inv += (it && it.count) | 0 } catch (_) { return false }
+  const r = ctx.castleFetchRestarts
+  if (r && r.kind === d.kind && r.short === d.short && r.inv === inv) r.n++
+  else ctx.castleFetchRestarts = { kind: d.kind, short: d.short, inv, n: 1 }
+  if (ctx.castleFetchRestarts.n <= RESTART_MAX) return false
+  ctx.castleFetchRestarts = null
+  return true
+}
+
 function demand(bot, ctx) {
   // Bounded fetch hold (g0z.15): a failed leg rests CASTLEFETCH_RETRY_MS no
   // matter how the facts text moves — known=near/none flips released the
@@ -2436,6 +2457,11 @@ function castlefetch(bot, ctx, target, state) {
     // stamp an unrecorded reset left behind, so an unstamped failure below
     // falls back to the kindless hold-all.
     try { ctx.castleFetchFailKind = null; ctx.castleFetchDoneKind = null } catch (_) { /* stamp best-effort */ }
+    if (deadRestart(bot, ctx, d)) {
+      try { console.log(`castlefetch ${d.kind}: leg restarted ${RESTART_MAX}x with no progress, holding the kind`) } catch (_) { /* log best-effort */ }
+      finish(bot, ctx, `failed:castlefetch-no-${d.kind}`)
+      return
+    }
   }
   // Batch yield (idkcraft-vmzq.20): a leg that reached a layable batch but
   // not its full target hands over after LEG_MAX_MS, so the castle lays
@@ -2639,6 +2665,8 @@ module.exports.PIT_ROOM = PIT_ROOM
 module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.holdFor = holdFor
+module.exports.deadRestart = deadRestart
+module.exports.RESTART_MAX = RESTART_MAX
 module.exports.roomForDrop = roomForDrop
 module.exports.castleChest = castleChest
 module.exports.chestVia = chestVia
