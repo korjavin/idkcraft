@@ -263,15 +263,23 @@ function owedMoved(bot, ctx) {
 
 // True while a fetch failure parks KIND (prkh): the hold is per kind, so
 // a stone-unreachable leg parks stone while a fence word still fetches
-// from the chest. A hold with no kind on it (legacy records) still parks
-// everything. The owed-repair home try (owedMoved) is exempt, as before.
+// from the chest. Holds accumulate in a kinds map (revmux 02 core-1), so a
+// later kind's failure or success never erases a still-failing kind; a
+// hold with no kind on it (legacy records) still parks everything. The
+// owed-repair home try (owedMoved) is exempt, as before.
 function holdFor(bot, ctx, kind) {
   try {
     const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
     if (!sf || typeof sf.at !== 'number') return false
-    if (Date.now() - sf.at > require('../budget').CASTLEFETCH_RETRY_MS) return false
+    if (owedMoved(bot, ctx)) return false
+    const window = require('../budget').CASTLEFETCH_RETRY_MS
+    const kinds = sf.kinds
+    if (kinds && typeof kinds === 'object') {
+      const at = kinds[kind]
+      return typeof at === 'number' && Date.now() - at <= window
+    }
     if (sf.kind && sf.kind !== kind) return false
-    return !owedMoved(bot, ctx)
+    return Date.now() - sf.at <= window
   } catch (_) {
     return false
   }

@@ -1599,10 +1599,18 @@ function failHolds(ctx, name, text, bot) {
     // prkh: the fetch hold parks one kind — a hold for another kind never
     // holds this menu entry (the blocked word keeps 'blocked' while its
     // gated kind flips, so the kind — not the text — decides here).
-    if (name === 'castlefetch' && sf && typeof sf.kind === 'string' && sf.kind) {
+    // revmux 02 core-1: consult the kinds map when present.
+    if (name === 'castlefetch' && sf) {
       try {
         const cw = ctx && ctx.castleWord
-        if (cw && typeof cw.kind === 'string' && cw.kind && cw.kind !== sf.kind) return false
+        const wkind = cw && typeof cw.kind === 'string' && cw.kind ? cw.kind : null
+        if (wkind) {
+          const kinds = sf.kinds
+          if (kinds && typeof kinds === 'object') {
+            const at = kinds[wkind]
+            if (!(typeof at === 'number' && Date.now() - at <= CASTLEFETCH_RETRY_MS)) return false
+          } else if (typeof sf.kind === 'string' && sf.kind && sf.kind !== wkind) return false
+        }
       } catch (_) { /* kind unreadable: hold stands */ }
     }
     if (!sf || sf.text !== text) return false
@@ -2313,9 +2321,16 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
       // behaviour stamped (castlefetchFailKind), so other kinds still run.
       // Consumed (revmux 01 core-1): an unstamped later failure must fall
       // back to the kindless hold-all, never inherit a stale kind.
+      // Merged (revmux 02 core-1): holds accumulate per kind — a later
+      // kind's failure or success must not erase a still-failing kind.
       if (prev === 'castlefetch') {
         try {
-          if (typeof ctx.castleFetchFailKind === 'string' && ctx.castleFetchFailKind) rec.kind = ctx.castleFetchFailKind
+          const prior = (ctx.stepFail && ctx.stepFail[prev]) || {}
+          const stamp = ctx.castleFetchFailKind
+          if (typeof stamp === 'string' && stamp) {
+            rec.kind = stamp
+            rec.kinds = { ...((prior && prior.kinds) || {}), [stamp]: Date.now() }
+          }
           ctx.castleFetchFailKind = null
         } catch (_) { /* kind best-effort */ }
       }
@@ -2346,7 +2361,16 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
     } else if (ctx.stepFail && typeof ctx.stepFail === 'object') {
       // A success retires its own hold: tomorrow's identical failure re-arms
       // from scratch instead of inheriting a stale record (round-1 major).
-      try { delete ctx.stepFail[prev] } catch (_) { /* guard best-effort */ }
+      // prkh (revmux 02 core-1): a castlefetch success retires only its
+      // own kind — a fence relay must not erase a still-failing stone hold.
+      try {
+        const rec = prev === 'castlefetch' ? ctx.stepFail[prev] : null
+        const kind = ctx && ctx.castleWord && ctx.castleWord.kind
+        if (rec && rec.kinds && typeof kind === 'string' && kind) {
+          delete rec.kinds[kind]
+          if (Object.keys(rec.kinds).length === 0) delete ctx.stepFail[prev]
+        } else delete ctx.stepFail[prev]
+      } catch (_) { /* guard best-effort */ }
     }
   }
   // Pack-full pierce latch (vmzq.19 R4, round-3 major): a finished banking
