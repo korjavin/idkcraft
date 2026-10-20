@@ -88,8 +88,9 @@ describe('gather far walk-out dusk guard (idkcraft-p9lx)', () => {
     const ctx = freshCtx()
     resources.noteSpots(ctx, [{ x: 120, y: 64, z: 0, name: 'oak_log' }], Date.now())
     gather(bot, ctx, null, {})
-    assert.equal(ctx.stepStatus, 'failed:no-trees')
+    assert.equal(ctx.stepStatus, 'failed:dusk')
     assert.ok(!bot.lines.some((l) => /^going for /.test(l)), `walk-out line: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'too late to walk out for wood'), `dusk line: ${bot.lines}`)
     assert.ok(!ctx.gather.pos, 'no target committed')
     assert.equal(ctx.gather.farEmpty, false, 'refused for time, not an empty search')
   })
@@ -115,8 +116,9 @@ describe('gather far walk-out dusk guard (idkcraft-p9lx)', () => {
       skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1,
     }
     gather(bot, ctx, null, {})
-    assert.equal(ctx.stepStatus, 'failed:no-trees')
+    assert.equal(ctx.stepStatus, 'failed:dusk')
     assert.ok(!bot.lines.some((l) => /^going for /.test(l)), `walk-out line: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'too late to walk out for wood'), `dusk line: ${bot.lines}`)
     assert.ok(!ctx.gather.pos, 'no target committed')
     assert.equal(ctx.gather.farEmpty, false, 'refused for time, not an empty search')
   })
@@ -148,7 +150,7 @@ describe('gather far walk-out dusk guard (idkcraft-p9lx)', () => {
     gather(bot, ctx, null, {})
     assert.equal(ctx.gather.pos, null, 'far target dropped')
     assert.equal(ctx.gather.far, false)
-    assert.equal(ctx.stepStatus, 'failed:no-trees', 'hold parks gather for gohome/shelter')
+    assert.equal(ctx.stepStatus, 'failed:dusk', 'hold parks gather for gohome/shelter')
     assert.equal(bot.pathfinder.goal, null, 'far goal cleared: the body stops now')
     assert.equal(ctx.gather.farEmpty, false, 'aborted for time, not an empty search')
   })
@@ -161,10 +163,25 @@ describe('gather far walk-out dusk guard (idkcraft-p9lx)', () => {
     ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
     resources.noteSpots(ctx, [{ x: 133, y: 64, z: 0, name: 'oak_log' }], Date.now())
     gather(bot, ctx, null, {})
-    assert.equal(ctx.stepStatus, 'failed:no-trees')
+    assert.equal(ctx.stepStatus, 'failed:dusk')
     assert.ok(!bot.lines.some((l) => /^going for /.test(l)), `walk-out line: ${bot.lines}`)
     assert.ok(!ctx.gather.pos, 'no target committed')
     assert.equal(ctx.gather.farEmpty, false, 'refused for time, not leash-filtered')
+  })
+
+  it('spawn anchor is no shelter: homeless bot measures the 20-block hop from the body', () => {
+    const bot = mockBot({ timeOfDay: 11000 })
+    bot.players = { Steve: {} } // someone online: no alone-idle task leash
+    bot.spawnPoint = { x: 0, y: 64, z: 0 }
+    bot.entity.position = pos(80, 64, 0)
+    const ctx = freshCtx()
+    resources.noteSpots(ctx, [{ x: 100, y: 64, z: 0, name: 'oak_log' }], Date.now())
+    gather(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'running', '20 from the body commits even late')
+    assert.ok(
+      bot.lines.some((l) => /^going for oak_log, 20 blocks away$/.test(l)),
+      `walk-out line: ${bot.lines}`,
+    )
   })
 
   it('stand-side walk fails out at dusk: body 100 from home, 10 left to the tree', () => {
@@ -180,7 +197,7 @@ describe('gather far walk-out dusk guard (idkcraft-p9lx)', () => {
       lastFound: [{ x: 110, y: 64, z: 0 }],
     }
     gather(bot, ctx, null, {})
-    assert.equal(ctx.stepStatus, 'failed:no-trees', 'body past 64 fails out even near the tree')
+    assert.equal(ctx.stepStatus, 'failed:dusk', 'body past 64 fails out even near the tree')
     assert.equal(bot.pathfinder.goal, null, 'goal cleared')
   })
 

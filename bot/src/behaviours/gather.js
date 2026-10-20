@@ -60,8 +60,11 @@ function anchorDist(bot, ctx, bp, p) {
     if (!p || typeof p.x !== 'number' || typeof p.z !== 'number') return 0
     let ref = bp
     try {
+      // Revmux 02 core-2: a world-spawn anchor is no shelter — a homeless
+      // bot measures from the body (round-1 semantics), not from spawn.
       const a = exploreMod.anchorOf(bot, ctx)
-      if (a && typeof a.x === 'number' && typeof a.z === 'number') ref = a
+      if (a && typeof a.x === 'number' && typeof a.z === 'number' &&
+        (a.label === 'home' || a.label === 'castle')) ref = a
     } catch (_) { /* body fallback */ }
     if (!ref || typeof ref.x !== 'number' || typeof ref.z !== 'number') return 0
     return Math.hypot(p.x - ref.x, p.z - ref.z)
@@ -378,6 +381,12 @@ function searchRadius(search) {
 // logs seen but unusable (banned, protected, skipped).
 function finalLine(g, final, search) {
   if (final === 'failed:pack-full') return 'pack full, banking first'
+  // Revmux 02 core-3: the time guard fails out as dusk, not no-trees —
+  // castlefetch marks NO_WOOD on an exact no-trees and the owner would be
+  // told there is no wood. Holds, menus and narration read any failed:
+  // reason generically, so the distinct reason changes nothing but the
+  // wording and the NO_WOOD mark.
+  if (final === 'failed:dusk') return 'too late to walk out for wood'
   if (final !== 'failed:no-trees') return 'cannot reach the trees'
   const radius = searchRadius(search)
   if (radius === 48) return 'no trees within 48 blocks'
@@ -531,10 +540,9 @@ function gather(bot, ctx, target, state) {
         say(bot, `going for ${g.name}, ${Math.round(dist(g.pos, bp))} blocks away`)
       } else if (hit && hit.position && !exclude(hit.position)) {
         // p9lx: far stand refused for time — same handoff as an empty
-        // search (the hold parks gather near home till dawn), but not an
-        // empty search: no stranded record, so the task leash stays.
-        failFinal(bot, ctx, g, logs, 'failed:no-trees')
-        g.farEmpty = false
+        // search (the hold parks gather near home till dawn) under its own
+        // reason, so no stranded record and no castlefetch NO_WOOD mark.
+        failFinal(bot, ctx, g, logs, 'failed:dusk')
       } else {
         // Honest word (vmzq.65): unreachable only when a trunk was walked
         // to and struck — the streak counts stall strikes (banned sync
@@ -595,9 +603,8 @@ function gather(bot, ctx, target, state) {
         : null
       if (mem && farLate(bot, ctx, bp, mem)) {
         // p9lx: remembered stand refused for time — same handoff as an
-        // empty search, no stranded record (see the far-search twin).
-        failFinal(bot, ctx, g, logs, 'failed:no-trees')
-        g.farEmpty = false
+        // empty search under its own reason (see the far-search twin).
+        failFinal(bot, ctx, g, logs, 'failed:dusk')
         return
       } else if (mem) {
         commitTarget(g, bp, { x: mem.x, y: mem.y, z: mem.z }, mem.name, true)
@@ -640,8 +647,7 @@ function gather(bot, ctx, target, state) {
       (anchorDist(bot, ctx, bp, g.pos) > FAR_START_BLOCKS || anchorDist(bot, ctx, bp, bp) > FAR_START_BLOCKS)) {
       g.pos = null
       g.far = false
-      failFinal(bot, ctx, g, logs, 'failed:no-trees')
-      g.farEmpty = false
+      failFinal(bot, ctx, g, logs, 'failed:dusk')
       return
     }
     const key = `gather:${g.pos.x},${g.pos.y},${g.pos.z}`
