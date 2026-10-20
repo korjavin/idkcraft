@@ -189,6 +189,22 @@ function stoneheldAt(series) {
 // probe column of every trench side and pit spot below the surface, so the
 // quarry/pit probes die wet-at-probe (aquifer shape, prod castle-8: sides
 // 0/1 unusable) and no stone is ever exposed.
+//
+// idkcraft-awt9: the fill sits wholly BELOW the surface block (top at
+// site.y - 2), never at or above it. A top at site.y + 1 flooded the pad
+// surface and the gate approach (43 columns plus flow): Baritone's chest
+// walk stalled in the water and went noPath while v1 swam through, so the
+// v2 fence leg failed no-trees without ever drawing the stocked chest.
+// The surface block stays intact — no open holes, no flow — and the probes
+// still die wet: the top-down scan reads air/dirt first, then the buried
+// water. Pure (unit-tested).
+function quarryDeadFills(st) {
+  const cf = require('../src/behaviours/castlefetch')
+  const origins = []
+  for (let ring = 0; ring < 2; ring++) for (let s = 0; s < 4; s++) origins.push(cf.quarrySide(st, s, ring))
+  for (const o of cf.pitSpots(st)) origins.push(o)
+  return origins.map((o) => `fill ${o.x} ${st.site.y - 2} ${o.z} ${o.x} ${st.site.y - 9} ${o.z} minecraft:water`)
+}
 const QUARRY = process.env.CASTLE_QUARRY || ''
 if (!['', 'dead'].includes(QUARRY) || (QUARRY && SEED !== 'complete')) {
   throw new Error(`CASTLE_QUARRY: want ''|dead with CASTLE_SEED=complete, got ${JSON.stringify(QUARRY)}`)
@@ -1766,13 +1782,10 @@ async function main() {
   if (QUARRY === 'dead') {
     const st = tickCtx().castle
     if (!st || !st.site) fail('quarry', 'no castle site')
-    const cf = require('../src/behaviours/castlefetch')
-    const origins = []
-    for (let ring = 0; ring < 2; ring++) for (let s = 0; s < 4; s++) origins.push(cf.quarrySide(st, s, ring))
-    for (const o of cf.pitSpots(st)) origins.push(o)
+    const fills = quarryDeadFills(st)
     tickCtx().paused = true
-    for (const o of origins) {
-      await rcon(`fill ${o.x} ${st.site.y + 1} ${o.z} ${o.x} ${st.site.y - 9} ${o.z} minecraft:water`).catch((e) => fail('quarry', e.message))
+    for (const cmd of fills) {
+      await rcon(cmd).catch((e) => fail('quarry', e.message))
     }
     // No exposed stone in the pick window (site.y-2..+3, ±32): stone family
     // to dirt outside the footprint, so neither the pick nor the v2 mine
@@ -1794,7 +1807,7 @@ async function main() {
     }
     await sleep(2000)
     tickCtx().paused = false
-    origLog(`CASTLE-RIG quarry dead: ${origins.length} probe columns water-filled, exposed stone swept in +-32 (footprint kept)`)
+    origLog(`CASTLE-RIG quarry dead: ${fills.length} probe columns water-filled, exposed stone swept in +-32 (footprint kept)`)
   }
   let litterSeed = null
   if (LITTER) {
@@ -2803,4 +2816,4 @@ if (require.main === module) {
     process.exit(2)
   })
 }
-module.exports = { apronBox, apronCloneCmds, apronChanged, componentLine, baselineFor, fetchLine, bankedOf, repairCells, prkhCells, stoneheldAt, litterSeeds, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
+module.exports = { apronBox, apronCloneCmds, apronChanged, componentLine, baselineFor, fetchLine, bankedOf, repairCells, prkhCells, quarryDeadFills, stoneheldAt, litterSeeds, startPlan, createIdleTrack, IDLE_MAXDIST, IDLE_HOME, idleRespawnPoint, prodSpawnPoint, hookBotClock, rigHouseCommands, isFallDeath, createDropTrack, classify, seen, resetSeen, pickBlockedSeeds, createResidenceNights, seedCastleCells, seedMatches, parseSeedVersion, pickPadSpot, createTimeResync, timeDrift, createNightDriver, landingY, padFloats, acceptLanding, floatingPad }
