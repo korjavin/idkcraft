@@ -218,6 +218,59 @@ describe('ranged-nearby scan (neuc.65.7 revmux 02 core-2)', () => {
   })
 })
 
+describe('ranged pillar cap (neuc.65.7 revmux 03 R3-4)', () => {
+  function shooterBot() {
+    return fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: {
+        1: { id: 1, name: 'skeleton', type: 'mob', position: pos(12, 64, 0), isValid: true },
+      },
+      health: 20,
+    })
+  }
+  const home = { site: { x: 10, y: 64, z: 0 }, built: true }
+  const far = { bot_health: 20, hostile_distance: null, nearby_hostiles: 1 }
+
+  it('one rise per column per minute against a still-far shooter', async () => {
+    // A skeleton at 12 keeps hitting across pillar episodes: the first
+    // pick rises, the next picks from the same column must not re-pillar —
+    // one block never breaks archer line of sight, it only spends scaffold.
+    const bot = shooterBot()
+    const ctx = freshCtx(home)
+    const r1 = await chooseRetreat(null, bot, ctx, far)
+    assert.equal(r1 && r1.action, 'pillar', `first pick rises, got ${JSON.stringify(r1)}`)
+    ctx.stepStatus = 'done' // the episode completed: the next divert tick decides fresh (the hold branch would return the running pick)
+    const r2 = await chooseRetreat(null, bot, ctx, far)
+    assert.equal(r2 && r2.action, 'gohome', `second pick from the same column walks, got ${JSON.stringify(r2)}`)
+    ctx.stepStatus = 'done'
+    const r3 = await chooseRetreat(null, bot, ctx, far)
+    assert.equal(r3 && r3.action, 'gohome', `third pick still walks, got ${JSON.stringify(r3)}`)
+  })
+
+  it('cap releases on movement, closing, or age', async () => {
+    const t0 = Date.now()
+    const bot = shooterBot()
+    const ctx = freshCtx(home)
+    assert.equal((await chooseRetreat(null, bot, ctx, far, t0)).action, 'pillar')
+    ctx.stepStatus = 'done' // episode over: decide fresh below
+    bot.entity.position = pos(5.5, 64, 0.5) // walked a block: re-arm
+    assert.equal((await chooseRetreat(null, bot, ctx, far, t0 + 1000)).action, 'pillar')
+    ctx.stepStatus = 'done'
+    bot.entity.position = pos(0.5, 64, 0.5)
+    const ctx2 = freshCtx(home)
+    assert.equal((await chooseRetreat(null, bot, ctx2, far, t0)).action, 'pillar')
+    ctx2.stepStatus = 'done'
+    assert.equal((await chooseRetreat(null, bot, ctx2, far, t0 + 61000)).action, 'pillar', 'minute-old stamp re-arms')
+    const ctx3 = freshCtx(home)
+    assert.equal((await chooseRetreat(null, bot, ctx3, far, t0)).action, 'pillar')
+    ctx3.stepStatus = 'done'
+    assert.equal(
+      (await chooseRetreat(null, bot, ctx3, { ...far, hostile_distance: 4 }, t0 + 1000)).action,
+      'retreat', 'closed to a fact: melee rules, run first'
+    )
+  })
+})
+
 describe('retreat fallback (neuc.65.7 revmux 02 core-3)', () => {
   it('pillars directly when the chain declines on a live fight', () => {
     const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
@@ -310,6 +363,38 @@ describe('mob pressure end to end (neuc.65.7)', () => {
       const r = await ticker.tick()
       assert.equal(r.decision.action, 'pillar', `ranged pressure breaks line of sight, got ${r.decision && r.decision.action}`)
     } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('empty chain on a live fight fights explicitly instead of working (revmux 03 R3-1)', async () => {
+    // A pack at 7-8 blocks with no scaffold and no near home: the chain is
+    // empty, so the old fall-through let goal.decide pick forage and the
+    // bot chopped while the pack closed. No escape feasible means fight.
+    const bot = fieldBot({
+      entities: { 1: zombie(1, 7, 64, 0), 2: zombie(2, 8, 64, 0), 3: zombie(3, 8, 64, 1) },
+      health: 20,
+    })
+    bot.players = {}
+    const ticker = createTicker({ bot, brain: fightMock(), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.home = null // no home in range: gohome infeasible, chain empty
+    ctx.lastHurtAt = Date.now()
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    const origLog = console.log
+    const logged = []
+    console.log = (l) => { logged.push(String(l)) }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight', `no escape feasible must fight, got ${r.decision && r.decision.action}`)
+      assert.equal(fightRan, 1, 'the brain fight runs instead of goal work')
+      assert.ok(logged.some((l) => l.includes('retreat none feasible')), `explicit-fight logged, got: ${logged.join(' | ')}`)
+    } finally {
+      BEHAVIOURS.fight = origFight
+      console.log = origLog
       ticker.destroy()
     }
   })
@@ -438,6 +523,32 @@ describe('low-hp divert (neuc.65.7 leg-1 deaths 1-3)', () => {
       assert.equal(r.decision.action, 'pillar', `silent weak bot must bias to pillar, got ${r.decision && r.decision.action}`)
       assert.ok(bot.calls.chats.some((l) => l.includes('retreating: pillaring up (retreat-fallback)')))
     } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('low-hp empty chain with a silent stub fights instead of gathering (revmux 03 R3-1)', async () => {
+    // hp 5 with a live fact at 7 (retreat needs <=6), no scaffold, no home:
+    // the chain is empty and the stub is silent, so goal.decide picked
+    // gather and the bot chopped while chewed. The divert already decided
+    // this tick is combat — fight explicitly.
+    const bot = fieldBot({
+      entities: { 1: zombie(1, 7, 64, 0) },
+      health: 5,
+    })
+    bot.players = {}
+    const restBrain = { async decide() { return { action: 'rest', sprint: false, source: 'stub' } } }
+    const ticker = createTicker({ bot, brain: restBrain, tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight', `weak chewed bot must fight, got ${r.decision && r.decision.action}`)
+      assert.equal(fightRan, 1, 'the synthetic fight runs instead of goal work')
+    } finally {
+      BEHAVIOURS.fight = origFight
       ticker.destroy()
     }
   })

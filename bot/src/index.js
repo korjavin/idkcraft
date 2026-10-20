@@ -483,6 +483,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // walk leg (phase walk) still diverts; only the door ticks wait.
       const gh = ctx.gohome
       const doorway = !!gh && (gh.phase === 'open' || gh.phase === 'enter' || gh.phase === 'close')
+      // Fresh walk (neuc.65.7 revmux 03 R3-3): a fresh shelterRun means the
+      // walk holds fight preemption — the bot is already moving door-bound
+      // at full speed, so the walk IS the escape. A pack divert would run
+      // it off its line and oscillate back into the pack (round-2 core-1).
+      const runFreshMs = homeMod.SHELTER_RUN_FRESH_MS || 0
+      const runFresh = typeof ctx.shelterRun === 'number' && (Date.now() - ctx.shelterRun) < runFreshMs
       const underFire = !doorway && !ctx.inShelter && !ctx.lead && !ctx.bring && !protectedTarget &&
         state.hostile_reachable === false &&
         typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
@@ -495,7 +501,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // reads it); the pack shape never does.
       const mobPress = retreatMod.mobPressure(state, {
         hurtFresh, sheltered: ctx.inShelter,
-        ordered: !!(ctx.lead || ctx.bring || ctx.comehome || ctx.gocastle || doorway), protectedTarget,
+        ordered: !!(ctx.lead || ctx.bring || ctx.comehome || ctx.gocastle || doorway || runFresh), protectedTarget,
         rangedNear: (hurtFresh && state.hostile_distance == null) ? retreatMod.rangedNearCount(bot) : 0,
       })
       if (!hurtFresh) { ctx.underFireLogged = false; ctx.mobPressLogged = false }
@@ -1173,13 +1179,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         applyDecision(rd, target, state)
         return { decision: rd, calledBrain }
       } else if (decision.action === 'fight' || lowHp) {
-        // Fight fallback (neuc.65.7 revmux 02 core-3): the chain said null
-        // on a live fight — the old fall-through to goal.decide stood and
-        // died. Bias to action: pillar directly when the honest gates
-        // allow (scaffold + headroom); otherwise fall through as before.
-        // Combat ticks only (a fight decision, or hp<6 with a hostile fact
-        // that the stub cannot voice): a healthy non-fight tick keeps the
-        // arbiter's decline (0ay latch), the danger signal is weaker there.
+        // Fight fallback (neuc.65.7 revmux 02 core-3, 03 R3-1): the chain
+        // said null on a combat tick — the old fall-through to goal.decide
+        // stood and died (round-2 core-3: pack at 7-8 with no scaffold or
+        // home, pit walls, low-hp grind). Bias to action: pillar directly
+        // when the honest gates allow (scaffold + headroom). A healthy
+        // non-fight tick keeps the arbiter's decline (0ay latch).
         const fb = retreatMod.retreatFallback(bot, ctx, state)
         if (fb) {
           if (ctx.paused || !ctx.work) {
@@ -1192,6 +1197,24 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           ctx.step = fb.action
           applyDecision(fd, target, state)
           return { decision: fd, calledBrain }
+        }
+        // No escape feasible on a combat tick (the chain menu is empty and
+        // the fallback needs scaffold the bot lacks): fight explicitly
+        // instead of letting goal.decide work while chewed. The divert
+        // already decided this tick is combat. The brain's fight when it
+        // said so, else a synthetic one for the low-hp the stub cannot
+        // voice (lowHp carries a live hostile fact).
+        const fightFallback = decision.action === 'fight' ? decision
+          : lowHp ? { action: 'fight', sprint: false, source: 'retreat-fallback' } : null
+        if (fightFallback) {
+          if (ctx.paused || !ctx.work) {
+            stopOnce()
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+          }
+          console.log('retreat none feasible: fighting instead')
+          applyDecision(fightFallback, target, state)
+          if (!ctx.paused) ctx.retreat = null
+          return { decision: fightFallback, calledBrain }
         }
       }
     }

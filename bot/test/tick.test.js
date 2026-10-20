@@ -1539,6 +1539,32 @@ describe('work mode (epic rw4)', () => {
       }
     })
 
+    it('fresh walk holds through a pack: the walk IS the escape (revmux 03 R3-3)', async () => {
+      // A fresh shelterRun means the walk holds fight preemption — the bot
+      // is already moving door-bound at full speed. A pack divert would run
+      // it off its line and oscillate back into the pack (round-2 core-1).
+      const bot = nightWalkBot()
+      bot.entities = { 1: zombie(1, 4), 2: zombie(2, 5), 3: zombie(3, 6) }
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.shelterRun = Date.now() // fresh: the walk owns this tick
+      ctx.lastHurtAt = Date.now()
+      lines.length = 0
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'gohome', `fresh walk keeps walking, got ${r.decision && r.decision.action}`)
+        assert.equal(fightRan, 0, 'fight never runs across a held walk')
+        assert.ok(!lines.some((l) => l.includes('mob-pressure:')), `no pressure divert on a fresh walk, got: ${lines.join(' | ')}`)
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
     it('holds across ticks while the walk re-stamps; logs the edge once', async () => {
       const bot = nightWalkBot()
       bot.entities = { 1: zombie(1, 2), 2: zombie(2, -2), 3: zombie(3, 0) } // 3 adjacent hostiles, brain still says fight
@@ -4552,6 +4578,26 @@ describe('eat reflex', () => {
     const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
     const ctx = { eatInFlight: false, reflexSwung: false, inShelter: true, intruderFight: true }
     assert.equal(eatReflex(bot, ctx, {}), false)
+    assert.equal(bot.consumeCalls, 0)
+  })
+
+  it('sheltered bot with a live fact but no intruder eats (walls protect, revmux 03 R3-2)', async () => {
+    // Round-2 core-4: zombies at the door are almost always within 8, so a
+    // fact-live gate starves a sheltering bot all night. The mob is outside
+    // the walls — the refuge tops up; the intruder case above still refuses.
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 15, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, inShelter: true }
+    assert.equal(eatReflex(bot, ctx, { hostile: zombie(1, 4), hostile_distance: 4 }), true)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+  })
+
+  it('sheltered intruder with a live fact still refuses (combat inside, revmux 03 R3-2)', () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 15, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, inShelter: true, intruderFight: true }
+    assert.equal(eatReflex(bot, ctx, { hostile: zombie(1, 1), hostile_distance: 1 }), false)
     assert.equal(bot.consumeCalls, 0)
   })
 

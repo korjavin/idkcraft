@@ -186,6 +186,31 @@ function pick(bot, ctx, action, source, model) {
   return { action, source, model }
 }
 
+// Ranged-shape pillar cap (neuc.65.7 revmux 03 R3-4): one rise per column
+// per minute against a still-far shooter (round-2 core-2 repeat half). The
+// stamp records the picked column; spend reads it — same column, fresh
+// stamp, still no fact means another pillar would just spend scaffold.
+const RANGED_PILLAR_MS = 60000
+function rangedPillarSpent(ctx, bot, now) {
+  try {
+    const s = ctx && ctx.rangedPillar
+    if (!s || typeof s.at !== 'number' || (now - s.at) > RANGED_PILLAR_MS) return false
+    const bp = botPos(bot)
+    if (!bp) return false
+    return Math.floor(bp.x) === s.x && Math.floor(bp.z) === s.z
+  } catch (_) { return false }
+}
+function pickStamped(bot, ctx, action, source, model, state, now) {
+  const r = pick(bot, ctx, action, source, model)
+  if (r && action === 'pillar' && state && hostileDist(state) === null && ctx) {
+    try {
+      const bp = botPos(bot)
+      if (bp) ctx.rangedPillar = { x: Math.floor(bp.x), z: Math.floor(bp.z), at: now }
+    } catch (_) { /* best-effort: no cap without a position */ }
+  }
+  return r
+}
+
 // Yes/no chain over the feasible options in owner order. Returns the pick
 // { action, source, model } or null (caller keeps the veto-fsm decision).
 // Asks at most once per situation: an all-declined chain stamps
@@ -242,6 +267,14 @@ async function chooseRetreat(brain, bot, ctx, state, now = Date.now()) {
     if (near && RANGED_HOSTILES.has(near.name || '') && names.includes('pillar')) {
       names = ['pillar', ...names.filter((n) => n !== 'pillar')]
     }
+    // Ranged-shape pillar cap (neuc.65.7 revmux 03 R3-4): one rise per
+    // column per minute against a still-far shooter. A second pillar from
+    // the same spot never breaks archer line of sight — it only spends
+    // scaffold. Moving blocks, closing to a fact, or stamp age re-arms;
+    // the pick stamps below (pickStamped), the decline path never does.
+    if (hostileDist(state) === null && names.includes('pillar') && rangedPillarSpent(ctx, bot, now)) {
+      names = names.filter((n) => n !== 'pillar')
+    }
   } catch (_) { /* order best-effort: the owner order stands */ }
   if (names.length === 0) {
     if (ctx) ctx.retreat = null
@@ -252,9 +285,9 @@ async function chooseRetreat(brain, bot, ctx, state, now = Date.now()) {
   // option there is nothing else to ask.
   const failed = ctx && ctx.retreatFailed
   const askNames = (failed && names.length > 1) ? names.filter((n) => n !== failed) : names
-  if (askNames.length === 1) return pick(bot, ctx, askNames[0], 'only-option', null)
+  if (askNames.length === 1) return pickStamped(bot, ctx, askNames[0], 'only-option', null, state, now)
   const model = (brain && (brain.source || brain.name || 'model')) || 'model'
-  if (!brain || typeof brain.ask !== 'function') return pick(bot, ctx, askNames[0], 'fsm', null)
+  if (!brain || typeof brain.ask !== 'function') return pickStamped(bot, ctx, askNames[0], 'fsm', null, state, now)
   const hd = hostileDist(state)
   const hp = state && typeof state.bot_health === 'number' ? Math.round(state.bot_health) : '?'
   const n = state && typeof state.nearby_hostiles === 'number' ? state.nearby_hostiles : '?'
@@ -280,7 +313,7 @@ async function chooseRetreat(brain, bot, ctx, state, now = Date.now()) {
       label = await brain.ask({ state: text, instructions, criteria, situation: text })
       heard = true
     } catch (_) { label = null }
-    if (label === opt) return pick(bot, ctx, opt, model, model)
+    if (label === opt) return pickStamped(bot, ctx, opt, model, model, state, now)
     if (label !== 'no') {
       try { console.error(`brain disagree source=${model} model=${label} fsm=none reason=retreat facts=${text}`) } catch (_) { /* log best-effort */ }
     }
