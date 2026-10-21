@@ -1900,6 +1900,9 @@ function pickPit(bot, ctx, f) {
 function pickQuarry(bot, ctx, f) {
   const st = ctx.castle
   const q = f.quarry || (f.quarry = { dead: [], level: [null, null, null, null, null, null, null, null], said: [] })
+  // qxql.14: sides that die during this call (the 'unusable' lines below) —
+  // the take-over side logs the named recovery line on its return.
+  const deadThisCall = q.dead.length
   const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
   const wet = (b) => !!b && LIQUID.has(b.name)
   const open = (b) => !!b && (AIRISH.has(b.name) || b.boundingBox === 'empty') && !wet(b)
@@ -2005,6 +2008,13 @@ function pickQuarry(bot, ctx, f) {
           let stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
           if (!open(at(stance.x, stance.y, stance.z)) || !open(at(stance.x, stance.y + 1, stance.z))) stance = null
           else if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
+          // qxql.14: a side died earlier this call and another takes over —
+          // the named recovery line for every 'quarry side N unusable'
+          // above (synq AC, deferred from #631). Fires even when the
+          // take-over side is latched (no 'live' line then).
+          if (q.dead.length > deadThisCall) {
+            try { console.log(`castlefetch quarry recovery: ${tag} takes over`) } catch (_) { /* log best-effort */ }
+          }
           return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0, stance }
         }
       }
@@ -2108,6 +2118,13 @@ function digTick(bot, ctx, f, d) {
     }
     if (!f.qTarget) {
       try { f.qTarget = pickQuarry(bot, ctx, f) } catch (_) { f.qTarget = null }
+      // qxql.14: every 'quarry side N unusable' is followed within the leg
+      // by a named recovery line (synq AC, deferred from #631) — on v2 the
+      // mine arms in place when no vetted stance exists.
+      if (!f.qTarget && !f.qRecoverySaid) {
+        f.qRecoverySaid = true
+        try { console.log('castlefetch quarry recovery: all sides dead/dug, mining in place') } catch (_) { /* log best-effort */ }
+      }
     }
     const qt = f.qTarget
     if (qt && qt.stance) {
@@ -2286,7 +2303,15 @@ function digTick(bot, ctx, f, d) {
       // site trench instead would walk the bot back to the dead ground the
       // window was bought to escape. An already-running trench keeps going.
       const farLatched = !!(f.farCandidate && typeof f.farCandidate.x === 'number')
-      if (farLatched && !f.quarry) { finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
+      if (farLatched && !f.quarry) {
+        // qxql.14: far-candidate ground dry — the recovery is the named
+        // fail into the hold, not a silent walk back to dead ground.
+        if (!f.qRecoverySaid) {
+          f.qRecoverySaid = true
+          try { console.log('castlefetch quarry recovery: far candidate dry, failing no-stone into hold') } catch (_) { /* log best-effort */ }
+        }
+        finish(bot, ctx, 'failed:castlefetch-no-stone'); return
+      }
       // No exposed stone by the site: quarry it, and ask the owner once
       // per site per session (owner 2026-10-02: the chest is the shortcut).
       const key = `${st.site.x},${st.site.y},${st.site.z}`
@@ -2299,9 +2324,23 @@ function digTick(bot, ctx, f, d) {
       // out this leg (and no exposed stone was found above) — quarry down
       // instead. On a live pad pickQuarry always returns, so this never
       // runs and the trench path stays master-identical by construction.
+      // qxql.14: the starved handover is the named recovery line for every
+      // 'quarry side N unusable' above (synq AC, deferred from #631).
+      if (!t && !f.qRecoverySaid) {
+        f.qRecoverySaid = true
+        try { console.log('castlefetch quarry recovery: all sides dead/dug, trying pit') } catch (_) { /* log best-effort */ }
+      }
       if (!t) t = pickPit(bot, ctx, f)
     }
-    if (!t) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
+    if (!t) {
+      // qxql.14: pit dead too — the recovery is the named fail into the
+      // per-kind hold, never a silent leg end or an unreachable detour.
+      if (!f.pitRecoverySaid) {
+        f.pitRecoverySaid = true
+        try { console.log('castlefetch quarry recovery: pit dead, failing no-stone into hold') } catch (_) { /* log best-effort */ }
+      }
+      spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-no-stone'); return
+    }
     f.target = t
   }
   const b = targetAt(t)
