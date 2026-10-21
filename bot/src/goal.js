@@ -355,15 +355,17 @@ const MENU = {
     // Castle bank (idkcraft-qxql.12): deposit the castle kinds carried
     // above the kit keep into the castle chest — the step the chooser
     // picks to stock the castle (castlefetch fetches, equip/gather source;
-    // this step only moves items). Day only, castle order active, the
-    // footprint chest known, and a real surplus on hand. After castle in
-    // STEP_ORDER so the FSM takes it only when nothing above can run —
-    // never a hard-coded feeding loop, the LLM sequences the work.
+    // this step only moves items). Pinned only: the FSM never takes it on
+    // its own (no hard-coded feeding loop — revmux 01-review body-1: an
+    // unpinned bank outranked equip/gather and re-failed a full chest on
+    // every text change). Day only, castle order active, the footprint
+    // chest known, and a real surplus on hand.
     feasible: (facts, bot, ctx) => {
+      if (!facts || facts.pinned !== 'bank') return false
       if (facts.time !== 'day') return false
       if (lowHpGated(bot, facts, ctx)) return false
       if (!castleFirst(ctx)) return false
-      if (!facts || facts.castle === 'none' || facts.castle === 'done' || facts.castle === 'parked') return false
+      if (facts.castle === 'none' || facts.castle === 'done' || facts.castle === 'parked') return false
       try {
         if (!require('./behaviours/castlefetch').castleChest(bot, ctx && ctx.castle)) return false
       } catch (_) { return false }
@@ -1941,6 +1943,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'castlefetch: batch on hand'
     }
     case 'bank': {
+      if (!facts || facts.pinned !== 'bank') return 'bank: waiting for the plan pin'
       if (facts.time !== 'day') return 'bank: daytime job'
       if (lowHpGated(bot, facts, ctx)) return 'bank: eating first (low health, no food)'
       if (!castleFirst(ctx)) return 'bank: no castle ordered'

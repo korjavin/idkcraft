@@ -126,7 +126,12 @@ function bank(bot, ctx) {
   if (plan.length === 0) { stepDone(ctx, gen); return }
   if (!near(bot, at, INTERACT_REACH)) {
     const key = `bank:${at.x},${at.y},${at.z}`
-    if (ctx.lastGoalKey !== key) {
+    // Re-issue when our goal is gone (the castlefetch walkTo shape: a
+    // second run to the same chest with a cleared goal must walk again,
+    // not stand on a stale lastGoalKey until the stall gives up).
+    let ours = false
+    try { ours = !!ctx.bankGoal && bot.pathfinder.goal === ctx.bankGoal } catch (_) { ours = false }
+    if (ctx.lastGoalKey !== key || !ours) {
       try {
         ctx.bankGoal = new goals.GoalNear(at.x, at.y, at.z, 2)
         bot.pathfinder.setGoal(ctx.bankGoal)
@@ -141,7 +146,7 @@ function bank(bot, ctx) {
     const dd = bp ? Math.hypot(bp.x - at.x, bp.y - at.y, bp.z - at.z) : Infinity
     if (!near(bot, at, INTERACT_REACH)) {
       const w = ctx.bankWalk || (ctx.bankWalk = {})
-      if (stalled(w, dd, CHEST_WAITS)) { done('no-chest'); return }
+      if (stalled(w, dd, CHEST_WAITS)) { done('walk-stall'); return }
       return
     }
   }
@@ -168,16 +173,15 @@ function bank(bot, ctx) {
       if (!res || res.status === 'gone') { done('no-chest'); return }
       if (res.status === 'unknown') {
         try { ctx.lastGoalKey = null } catch (_) { /* retry best-effort */ }
-        ctx.stepStatus = 'running'
         return
       }
-      if (res.status !== 'ok') { done(banked > 0 ? 'done' : 'chest-full'); return }
+      if (res.status !== 'ok') { done(banked > 0 ? 'done' : 'chest-open'); return }
       if (banked <= 0) { done('chest-full'); return }
       try { console.log(`bank: deposited ${names.join(', ')} into the castle chest`) } catch (_) { /* log best-effort */ }
       done('done')
     } catch (_) {
       try { ctx.bankInFlight = false } catch (_) { /* flag best-effort */ }
-      done('chest-full')
+      done('chest-open')
     }
   })()
 }

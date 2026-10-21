@@ -25,7 +25,7 @@ function idOf(name) { return IDS[name] || (IDS[name] = Object.keys(IDS).length +
 function mockBot({ inv = [], at = pos(1, 64, 0), chest = true, chestCap = Infinity, openErr = false } = {}) {
   const store = {}
   let takes = 0
-  const pathfinder = { goals: [], setGoal(g) { this.goals.push(g) }, isMoving: () => false }
+  const pathfinder = { goals: [], goal: null, setGoal(g) { this.goals.push(g); this.goal = g }, isMoving: () => false }
   const itemsByName = new Proxy({}, { get: (_, n) => (typeof n === 'string' ? { id: idOf(n) } : undefined) })
   const bot = {
     inv, store, pathfinder,
@@ -167,26 +167,42 @@ describe('bank behaviour (idkcraft-qxql.12)', () => {
     assert.equal(ctx.stepStatus, 'failed:chest-full')
   })
 
-  it('a blocked lid fails chest-full, never withdraws', async () => {
+  it('a blocked lid fails chest-open, never withdraws', async () => {
     const bot = mockBot({ inv: [{ name: 'cobblestone', count: 100 }], openErr: true })
     const ctx = ctxWithCastle()
     await bankRun(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:chest-full')
+    assert.equal(ctx.stepStatus, 'failed:chest-open')
     assert.equal(packCount(bot, 'cobblestone'), 100)
+  })
+
+  it('walks from afar, re-issues a cleared goal, stalls to walk-stall', async () => {
+    const bot = mockBot({ inv: [{ name: 'cobblestone', count: 100 }], at: pos(20, 64, 0) })
+    const ctx = ctxWithCastle()
+    bank(bot, ctx)
+    assert.equal(bot.pathfinder.goals.length, 1, 'tick 1 issues the walk')
+    assert.equal(ctx.stepStatus, undefined, 'no verdict while walking')
+    bot.pathfinder.goal = null // reflex cleared the goal, key standing
+    bank(bot, ctx)
+    assert.equal(bot.pathfinder.goals.length, 2, 'a cleared goal is re-issued, never stood on')
+    for (let i = 0; i < 31; i++) bank(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:walk-stall', 'no progress gives up at the chest, not at a missing one')
+    assert.equal(packCount(bot, 'cobblestone'), 100, 'a stall moves nothing')
   })
 })
 
 describe('bank goal menu (idkcraft-qxql.12)', () => {
   const facts = (over = {}) => ({
-    time: 'day', health: 20, food: 20, castle: 'stone-some',
+    time: 'day', health: 20, food: 20, castle: 'stone-some', pinned: 'bank',
     ...over,
   })
 
-  it('MENU.bank needs day, an active castle, a known chest and a surplus', () => {
+  it('MENU.bank needs the pin, day, an active castle, a known chest and a surplus', () => {
     const rich = mockBot({ inv: [{ name: 'cobblestone', count: 100 }] })
     const poor = mockBot({ inv: [{ name: 'cobblestone', count: 10 }] })
     const ctx = ctxWithCastle()
     assert.equal(goal.MENU.bank.feasible(facts(), rich, ctx), true)
+    assert.equal(goal.MENU.bank.feasible(facts({ pinned: 'none' }), rich, ctx), false, 'unpinned: the FSM never takes it on its own')
+    assert.equal(goal.MENU.bank.feasible(facts({ pinned: 'craft' }), rich, ctx), false)
     assert.equal(goal.MENU.bank.feasible(facts({ time: 'night' }), rich, ctx), false)
     assert.equal(goal.MENU.bank.feasible(facts({ castle: 'none' }), rich, ctx), false)
     assert.equal(goal.MENU.bank.feasible(facts({ castle: 'done' }), rich, ctx), false)
@@ -210,6 +226,10 @@ describe('bank goal menu (idkcraft-qxql.12)', () => {
     assert.match(
       goal.stepWhy('bank', facts({ time: 'night' }), bot, ctxWithCastle(), 'time=night'),
       /daytime job/
+    )
+    assert.match(
+      goal.stepWhy('bank', facts({ pinned: 'none' }), bot, ctxWithCastle(), 'time=day'),
+      /waiting for the plan pin/
     )
   })
 
