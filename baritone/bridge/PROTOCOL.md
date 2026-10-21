@@ -321,6 +321,7 @@ settings.txt baseline):
 | Movements | Baritone setting |
 |---|---|
 | canDig | allowBreak |
+| canDig=false | allowBreakAnyway (leaves only, 7lb2: breakable even with allowBreak=false; omitted when no leaves known) |
 | allowSprinting | allowSprint |
 | allowParkour | allowParkour |
 | allow1by1towers | allowPlace |
