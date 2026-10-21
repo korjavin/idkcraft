@@ -131,7 +131,10 @@ describe('vmzq.17 gather chops the castle chain', () => {
 
   it('built home + beds both + stone-none + no logs: gather feasible (the pickaxe chain)', () => {
     assert.equal(F('gather', facts(), null, { home: builtHome() }), true)
-    assert.ok(goal.STEP_CRITERIA.gather.includes('castle'), 'the model menu names the castle chain (revmux 01 body-2)')
+    // qxql.2: the castle wood clause moved from gather to castlefetch (the
+    // house steps never chop for the castle; castlefetch's wood leg does).
+    assert.ok(!goal.STEP_CRITERIA.gather.includes('castle'), 'the house gather menu names no castle chain')
+    assert.ok(goal.STEP_CRITERIA.castlefetch.includes('logs is none or few'), 'the castle menu names the wood chop')
   })
 
   it('stays narrow: batch/clear/blocked words and full loads never farm', () => {

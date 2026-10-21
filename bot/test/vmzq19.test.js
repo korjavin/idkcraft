@@ -539,7 +539,7 @@ describe('vmzq.19 R2 minor 3: an L2 castle park leashes far beds/build side work
 })
 
 describe('vmzq.19 empty kit at the site with an unbuilt far house: progress rises', () => {
-  it('gather->craft->equip->castlefetch->castle lays blocks, never beds/build', async () => {
+  it('qxql.2: no house bootstrap — rest, then equip->castlefetch->castle lays blocks, never gather/craft/beds/build', async () => {
     await quiet(async () => {
       // World: flat dirt, site loaded, the far house unbuilt (bare ground).
       const cells = new Map()
@@ -595,10 +595,11 @@ describe('vmzq.19 empty kit at the site with an unbuilt far house: progress rise
         return a
       }
       assert.equal(goal.goalFacts(bot, ctx).castle, 'stone-none')
-      assert.equal(await pick(), 'gather', 'empty kit chops first')
-      items.push({ name: 'oak_log', count: 14 })
-      assert.equal(await pick(), 'craft')
-      items.length = 0
+      // qxql.2: no house bootstrap under a castle order — the empty kit
+      // rests (the LLM chooser owns the next pick); the kit arrives whole.
+      assert.equal(await pick(), 'rest', 'empty kit rests instead of chopping for the house')
+      assert.equal(goal.stepWhy('gather', goal.goalFacts(bot, ctx), bot, ctx, ''), 'gather: castle comes first')
+      assert.equal(goal.stepWhy('craft', goal.goalFacts(bot, ctx), bot, ctx, ''), 'craft: castle comes first')
       items.push({ name: 'oak_planks', count: 32 }, { name: 'crafting_table', count: 1 }, { name: 'stick', count: 4 })
       assert.equal(await pick(), 'equip', 'arms the kit instead of founding the house')
       items.push({ name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: 32 })
@@ -609,7 +610,7 @@ describe('vmzq.19 empty kit at the site with an unbuilt far house: progress rise
       items.push({ name: 'cobblestone', count: 16 })
       ctx.stepStatus = 'done' // the fetch behaviour ends at its target
       assert.equal(await pick(), 'castle')
-      assert.ok(!seen.includes('beds') && !seen.includes('build'), `house steps never picked: ${seen.join(',')}`)
+      assert.ok(!seen.includes('beds') && !seen.includes('build') && !seen.includes('gather') && !seen.includes('craft'), `house steps never picked: ${seen.join(',')}`)
       // Lay: progress rises from 0.
       const settle = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)) }
       for (let i = 0; i < 30; i++) { castle(bot, ctx); await settle() }

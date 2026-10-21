@@ -125,13 +125,15 @@ describe('llm budget (vf8e.5)', () => {
     }
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     ticker.setCastle({ site: { x: 100, y: 64, z: 200 }, rot: 0, phase: 'body', blocked: {}, parked: false, progress: { done: 8, total: 1722 } })
+    // qxql.2: the stall stands with the house built, so the veto leaves a menu.
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: true, v: 2 })
     ticker.work()
     const ctx = bot._tickerCtx
     ctx.castleWord = { kind: 'stone', left: 80 }
     ctx.step = 'castlefetch'
     ctx.stepStatus = 'running'
     ctx.stepPick = { step: 'castlefetch', at: Date.now() - 5000, source: 'goal-fsm', why: 'fetch stone' }
-    // This castle menu has one option, which answers without a call; widen it
+    // This castle menu answers without a call on a single option; widen it
     // so the paid path (and the budget check) actually runs.
     ctx.brain = { plan: (req) => p.plan({ ...req, criteria: { ...req.criteria, forage: 'x' } }) }
     let t = 1000000000000

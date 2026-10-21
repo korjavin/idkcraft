@@ -43,6 +43,9 @@ function castleCtx(bot, { done = 8, total = 1722, phase = 'body', kind = 'stone'
   const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
   const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, phase, blocked: {}, parked: false, progress: { done, total } }
   ticker.setCastle(st)
+  // qxql.2: the stall stands with the house built (batch-9 end state), so
+  // the house-chain veto leaves the planner a menu (gather-for-castle).
+  ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: true, v: 2 })
   ticker.work()
   const ctx = bot._tickerCtx
   ctx.castleWord = { kind, left }

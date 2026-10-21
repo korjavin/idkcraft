@@ -136,8 +136,12 @@ const MENU = {
     // Wood ceiling (g0z.26): past the cap a full load no longer converts —
     // the planks would pile past what the castle needs (prod: 700 in 11
     // slots). Table/door branches are unaffected (they spend planks).
-    feasible: (facts, bot, ctx) => !(ctx && ctx.home && ctx.home.parked) && ((facts.logs >= NEED_LOGS && !woodCapped(bot, ctx) && !String(facts.castle).startsWith('frame-') &&
-      !(facts.castle === 'blocked' && ctx && ctx.castleWord && ctx.castleWord.kind === 'frame')) || (facts.maxPlanks >= 4 && facts.table === 0 && ((!facts.tablePlaced && !facts.houseTable) || facts.tableOwed)) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced)),
+    feasible: (facts, bot, ctx) => {
+      if (ctx && ctx.home && ctx.home.parked) return false
+      if (houseChainVetoed(ctx)) return false // qxql.2: the castle is the project — the home table/door/planks wait
+      return ((facts.logs >= NEED_LOGS && !woodCapped(bot, ctx) && !String(facts.castle).startsWith('frame-') &&
+        !(facts.castle === 'blocked' && ctx && ctx.castleWord && ctx.castleWord.kind === 'frame')) || (facts.maxPlanks >= 4 && facts.table === 0 && ((!facts.tablePlaced && !facts.houseTable) || facts.tableOwed)) || (facts.maxPlanks >= 6 && facts.door === 0 && facts.tablePlaced))
+    },
     chat: () => 'on my own: crafting planks and tools',
     verb: 'crafting',
   },
@@ -364,6 +368,7 @@ const MENU = {
     // failure point releases — new ground may hold nearer trees.
     feasible: (facts, bot, ctx) => {
       if (ctx && ctx.home && ctx.home.parked) return false
+      if (houseChainVetoed(ctx)) return false // qxql.2: the castle is the project — castle wood rides castlefetch, not the house load
       if (nightHurt(facts)) return false
       try {
         if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
@@ -759,6 +764,24 @@ function castleParkLeash(ctx) {
     const h = ctx && ctx.home && ctx.home.site
     if (!h || typeof h.x !== 'number') return false
     return Math.hypot(h.x - st.site.x, h.z - st.site.z) > require('./behaviours/explore').TASK_SEARCH_RADIUS
+  } catch (_) {
+    return false
+  }
+}
+
+// House-chain veto (idkcraft-qxql.2): while an unfinished, unparked castle
+// stands, the HOME gather/craft wait — the castle is the project (g0z epic;
+// night shelter at the castle exists, g0z.21). Castle wood comes through
+// castlefetch's wood leg (szr1/awt9: chest planks first, then chop), never
+// the house steps. Work-mode house (no castle) is unchanged, and a built
+// home keeps its top-ups; build/beds carry their own castleFirst vetoes.
+// The watchdog's explicit houseStep unlock still lifts build/beds past
+// this — this veto names only the unbuilt-home house steps.
+function houseChainVetoed(ctx) {
+  try {
+    if (!castleFirst(ctx)) return false
+    const home = ctx && ctx.home
+    return !home || home.built !== true
   } catch (_) {
     return false
   }
@@ -1657,12 +1680,12 @@ function goalFsm(facts, feasibleNames) {
 // one BEHAVIOURS line each (rw4.4/4.5); unregistered steps never reach ask().
 const ASK_INSTRUCTIONS = 'Pick the next step: build and keep the home, or forage and deliver resources'
 const STEP_CRITERIA = {
-  gather: 'logs is none or few and home is not built, or home is built and beds is none or one and logs is none or few, or castle is a -none or -some word other than torch and logs is none or few: chop trees',
+  gather: 'logs is none or few and home is not built, or home is built and beds is none or one and logs is none or few: chop trees',
   craft: 'logs is enough or planks are few or table is no or door is no: craft planks, table and door',
   build: 'planks are enough and home is site: place the house blocks',
   beds: 'beds is none or one and time is day and home is built: gather wool, craft the bedroom beds and place them',
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
-  castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word or blocked with its kind short and time is day: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
+  castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word or blocked with its kind short and time is day, or castle is a -none or -some word and logs is none or few: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
   castle: 'castle is clear, finish, tidy, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
   sitebed: 'time is day or dusk and the pack holds a bed while a castle is active: place the bed outside the site and set the spawn',
   equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
@@ -1806,6 +1829,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'gocastle: dusk shelters' // dusk on the surface (the climb leg is the only dusk run)
     case 'craft':
       if (ctx && ctx.home && ctx.home.parked) return 'craft: house parked'
+      if (houseChainVetoed(ctx)) return 'craft: castle comes first'
       if (facts.table === 0 && facts.tableOwed) return `craft: need 4 planks for the house table, have ${facts.maxPlanks}`
       if ((facts.table > 0 || facts.tablePlaced || facts.houseTable) && facts.door > 0) return 'craft: nothing to craft'
       if (facts.door === 0 && facts.tablePlaced) return `craft: need 6 planks for the door, have ${facts.maxPlanks}`
@@ -1918,6 +1942,7 @@ function stepWhy(name, facts, bot, ctx, text) {
     }
     case 'gather':
       if (ctx && ctx.home && ctx.home.parked) return 'gather: house parked'
+      if (houseChainVetoed(ctx)) return 'gather: castle comes first'
       if (nightHurt(facts)) return 'gather: hurt at night, waiting for dawn'
       if (facts.home === 'built') return 'gather: home built'
       return 'gather: load full'
