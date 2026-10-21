@@ -25,11 +25,23 @@ const metrics = require('./metrics')
 const { STEP_EFFECT_TEXT } = require('./plan-consts')
 const { isFinished, failReason, stepGen, chatStep } = require('./step')
 const { WANT_MAX } = require('./behaviours/bringbase')
+const worker = require('./worker')
 
 const ORDER_TIMEOUT_MS = 20000
 const STEP_MS = 10 * 60 * 1000 // one plan step's deadline
 const PLAN_MAX = 6
 const MISS_TICKS = 3 // pin consumed without the step starting = not possible now
+
+// LLM activity chooser (idkcraft-qxql.10): at a nothing-useful FSM pick the
+// bot asks the model for 1-3 steps of useful work over the work whitelist.
+// On whenever ANTHROPIC_API_KEY is set; LLM_CHOOSE=0 turns it off (the
+// PLANNER default in brain.js:381). Rate-limited, never per tick; shares the
+// llmCall token budget. Flat stays out (owner default); player-directed
+// orders (bring/find/share) need a player.
+const CHOOSE_MIN_MS_DEFAULT = 300000 // 5-min pause
+const CHOOSE_WAIT_MAX_MS = 30 * 60 * 1000
+const CHOOSE_MAX_STEPS = 3
+const HOUSE_CHAIN = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stockpile']
 
 const ORDER_STEPS = {
   // codex: max = the executor's own clamp (bring WANT_MAX, flat FLAT_MAX_RADIUS) so a
@@ -53,6 +65,24 @@ const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their c
 function enabled(env = process.env) {
   return /^(1|true|yes)$/i.test(String(env.BOT_LLM_ORDERS || '')) && !!env.ANTHROPIC_API_KEY
 }
+
+// Chooser flag (qxql.10): on whenever the key is present, LLM_CHOOSE=0 off.
+function chooseEnabled(env = process.env) {
+  return !!env.ANTHROPIC_API_KEY && String(env.LLM_CHOOSE || '') !== '0'
+}
+
+function chooseMinMs(env = process.env) {
+  const n = Number(env.LLM_CHOOSE_MIN_MS)
+  return Number.isFinite(n) && n >= 0 ? n : CHOOSE_MIN_MS_DEFAULT
+}
+
+const CHOOSE_SYSTEM = 'You pick useful work for a Minecraft companion bot for the next ~10 minutes. ' +
+  'Use only the listed step ids, in the order they must run. ' +
+  'Answer JSON only, no prose: {"plan":[{"step":"<id>","count":<n>,"done":"<what is true when this step is done>"}],"why":"<one-line reason>","need":"<capability the bot lacks>"}. ' +
+  'Leave out count when the step takes none. At most ' + CHOOSE_MAX_STEPS + ' steps; use the fewest. ' +
+  'Prefer what the castle is missing when a castle order exists. ' +
+  'Do not strip the area bare — gather only what a named need consumes. ' +
+  'Answer {"plan":[],"need":"<capability the bot lacks>"} when no listed step helps.'
 
 // Loaded step skills that sit in goal.MENU and are registered (vf8e.17):
 // skills.js reports its last load; the ticker loads at startup when
@@ -86,6 +116,22 @@ function stepList() {
   return lines.join('\n')
 }
 
+// Chooser whitelist: work steps only (flat stays out per owner default;
+// bring/find/share need a player). Same line shape as stepList.
+function chooseStepList() {
+  const lines = []
+  for (const id of workSteps()) {
+    const effect = STEP_EFFECT_TEXT[id] || goal.STEP_CRITERIA[id] || id
+    const when = goal.STEP_CRITERIA[id] ? ` (runs when: ${goal.STEP_CRITERIA[id].split(':')[0]})` : ''
+    lines.push(`${id}: ${effect}${when}`)
+  }
+  return lines.join('\n')
+}
+
+function cleanShort(v, max = 80) {
+  return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : ''
+}
+
 // situationText (situation.js) replaced stateText+inventoryText (qxql.9):
 // the model sees castle progress, chests, holds and the owner ring.
 
@@ -98,39 +144,46 @@ function orderStep(id) {
   return Object.hasOwn(ORDER_STEPS, id) ? ORDER_STEPS[id] : null
 }
 
-// Model answer -> { steps } | { error } | { empty: true }. The whitelist is
-// the safety: an id outside it refuses the whole plan.
-function validatePlan(ans, works = workSteps()) {
+// Model answer -> { steps, why, need } | { error, why, need } | { empty, why, need }.
+// The whitelist is the safety: an id outside it refuses the whole plan.
+// opts: { maxSteps (default PLAN_MAX), allowOrders (default true — the
+// chooser passes false so bring/find/flat/share never validate) }.
+function validatePlan(ans, works = workSteps(), opts = {}) {
+  const why = cleanShort(ans && ans.why, 80)
+  const need = cleanShort(ans && ans.need, 80)
+  const maxSteps = opts && typeof opts.maxSteps === 'number' ? opts.maxSteps : PLAN_MAX
+  const allowOrders = !opts || opts.allowOrders !== false
   const raw = ans && Array.isArray(ans.plan) ? ans.plan : null
-  if (!raw) return { error: 'no plan' }
-  if (raw.length === 0) return { empty: true }
-  if (raw.length > PLAN_MAX) return { error: `plan too long (${raw.length})` }
+  if (!raw) return { error: 'no plan', why, need }
+  if (raw.length === 0) return { empty: true, why, need }
+  if (raw.length > maxSteps) return { error: `plan too long (${raw.length})`, why, need }
   const steps = []
   for (const r of raw) {
     const id = r && typeof r.step === 'string' ? r.step.toLowerCase().trim() : ''
     const knownOrder = orderStep(id)
-    if (!knownOrder && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"` }
+    if (knownOrder && !allowOrders) return { error: `no step "${id.slice(0, 20)}"`, why, need }
+    if (!knownOrder && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"`, why, need }
     const s = { step: id, done: typeof r.done === 'string' ? r.done.replace(/\s+/g, ' ').trim().slice(0, 80) : '' }
     if (knownOrder && knownOrder.args.includes('item')) {
       const item = String(r.item || '').toLowerCase().trim().replace(/\s+/g, '_')
-      if (!/^[a-z0-9_]{1,40}$/.test(item)) return { error: `${id} needs an item` }
+      if (!/^[a-z0-9_]{1,40}$/.test(item)) return { error: `${id} needs an item`, why, need }
       s.item = item
     }
     if (knownOrder && knownOrder.args.includes('count') && r.count != null) {
       const c = Math.floor(Number(r.count))
-      if (!(c >= 1 && c <= knownOrder.max)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
+      if (!(c >= 1 && c <= knownOrder.max)) return { error: `${id} count ${String(r.count).slice(0, 8)}`, why, need }
       s.count = c
     }
     // A work step keeps a 1..64 count when the model gives one (vf8e.17):
     // hand steps ignore it at execution, skill steps read st.count.
     if (!knownOrder && r.count != null) {
       const c = Math.floor(Number(r.count))
-      if (!(c >= 1 && c <= 64)) return { error: `${id} count ${String(r.count).slice(0, 8)}` }
+      if (!(c >= 1 && c <= 64)) return { error: `${id} count ${String(r.count).slice(0, 8)}`, why, need }
       s.count = c
     }
     steps.push(s)
   }
-  return { steps }
+  return { steps, why, need }
 }
 
 function label(s) {
@@ -168,17 +221,122 @@ async function planOrder(bot, ctx, text, fetchFn) {
   return { ...validatePlan(ans), tokens }
 }
 
+// One chooser call -> { steps|error|empty, why, need, tokens }.
+async function planChoose(bot, ctx, regime, fetchFn) {
+  const user = `Choose work: ${regime}\n\nSituation:\n${situationText(bot, ctx)}\n\nSteps (id: what it does):\n${chooseStepList()}`
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
+  let data
+  try {
+    data = await brain.llmCall({
+      use: 'choose',
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      signal: ac.signal,
+      fetchFn,
+      body: {
+        model: process.env.LLM_MODEL || brain.LLM_MODEL,
+        max_tokens: 500,
+        thinking: { type: 'disabled' },
+        system: CHOOSE_SYSTEM,
+        messages: [{ role: 'user', content: user }],
+      },
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+  const u = (data && data.usage) || {}
+  const tokens = `${u.input_tokens | 0}/${u.output_tokens | 0}`
+  const out = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+  let ans = null
+  try { ans = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch (_) { ans = null }
+  return { ...validatePlan(ans, workSteps(), { maxSteps: CHOOSE_MAX_STEPS, allowOrders: false }), tokens }
+}
+
+// Castle order active for the chooser regime: a castle site exists and the
+// menu word is not none/done. Best-effort, never throws.
+function castleActive(ctx, facts) {
+  try {
+    if (!ctx || !ctx.castle || !ctx.castle.site) return false
+    const w = facts && facts.castle
+    if (w === 'none' || w === 'done') return false
+    return true
+  } catch (_) { return false }
+}
+
+// Roster player online (not a peer bot): the chooser chats plan: only then,
+// else log only. Mirrors task.ownerOnline without requiring task (cycle).
+function rosterOnline(bot) {
+  try {
+    const e = process.env
+    const bots = [e.BOT_USERNAME, e.BOT2_USERNAME, e.BOT_PEER_USERNAME].filter(Boolean)
+    return Object.keys(worker.players(bot) || {}).some((n) => !bots.includes(n))
+  } catch (_) { return false }
+}
+
+// Trigger predicate (qxql.10): the FSM's pick is nothing-useful, the bot is
+// in work mode with no plan running or asking, and the rate limit allows it.
+// Pure except for the flag/env read; never throws.
+function shouldChoose(pick, ctx, facts, now = Date.now()) {
+  try {
+    if (!chooseEnabled()) return false
+    if (!ctx || !ctx.work || ctx.paused) return false
+    if (ctx.llmOrder || ctx.llmAsk) return false
+    if (typeof pick !== 'string' || !pick) return false
+    const t = now == null ? Date.now() : now
+    const min = chooseMinMs()
+    const wait = (ctx && typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0) ? ctx.llmChooseWait : min
+    const at = (ctx && typeof ctx.llmChooseAt === 'number') ? ctx.llmChooseAt : 0
+    if (!(t - at >= wait)) return false
+    const time = (facts && facts.time) || 'day'
+    if (pick === 'idle' || pick === 'explore') return true
+    if ((pick === 'stay' || pick === 'rest') && time === 'day') return true
+    if (HOUSE_CHAIN.includes(pick) && castleActive(ctx, facts)) return true
+    return false
+  } catch (_) { return false }
+}
+
 // Chat entry: ask for a plan, never blocking the chat handler. One ask in
 // flight (ctx.llmAsk); a running plan (ctx.llmOrder) is replaced only by a
 // valid new plan — chatter answered {"plan":[]} leaves it alone.
 // req = { text, by, ticker, feed(line), fallback } — fallback is the FSM's
 // own refusal, chatted when no plan comes back.
+// Chooser: req.choose = { regime, trigger }; text = `choose work: ${regime}`,
+// by is forced to 'self', the plan: line chats only with a roster player
+// online (else log only), and every call logs an `llm choose` line.
 function ask(bot, ctx, req, fetchFn) {
   if (!ctx || ctx.llmAsk) return false
+  const isChoose = !!(req && req.choose)
   const a = { text: String(req.text).slice(0, 200), at: Date.now() }
   ctx.llmAsk = a
+  if (isChoose) {
+    const min = chooseMinMs()
+    if (typeof ctx.llmChooseWait !== 'number' || ctx.llmChooseWait < 0) ctx.llmChooseWait = min
+    ctx.llmChooseAt = a.at
+  }
   const say = (line) => { try { bot.chat(line) } catch (_) { /* chat best-effort */ } }
   return (async () => {
+    if (isChoose) {
+      const regime = (req.choose && req.choose.regime) || 'no-order'
+      const trigger = (req.choose && req.choose.trigger) || '?'
+      let r
+      try {
+        r = await planChoose(bot, ctx, regime, fetchFn)
+      } catch (err) {
+        const msg = String(err && err.message ? err.message : err)
+        r = { error: err && err.name === 'TimeoutError' ? 'timeout' : msg.startsWith('llm budget') ? 'budget' : msg.slice(0, 40), outcome: msg.startsWith('llm budget') ? 'budget' : 'error', why: '', need: '' }
+      }
+      if (ctx.llmAsk !== a) return // cancelled mid-ask (stop / follow me / go work)
+      ctx.llmAsk = null
+      const ms = Date.now() - a.at
+      const outcome = r.steps ? 'ok' : r.empty ? 'empty' : (r.outcome || 'invalid')
+      try { metrics.llmCalls.inc({ use: 'choose', outcome }) } catch (_) { /* metric best-effort */ }
+      const plan = r.steps ? r.steps.map(label).join('>') : '-'
+      console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${r.need || ''}" why="${r.why || ''}" tokens=${r.tokens || '0/0'} ms=${ms}`)
+      if (!r.steps) return // fallback: the FSM pick stands, log only
+      const sayChoose = rosterOnline(bot) ? say : () => {}
+      installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null }, r.steps, sayChoose)
+      return
+    }
     let r
     try {
       r = await planOrder(bot, ctx, a.text, fetchFn)
@@ -313,6 +471,17 @@ function release(ctx, o) {
 function end(bot, ctx, o, result) {
   if (result !== 'done') release(ctx, o)
   else dropArgs(ctx) // release() already nulled the rest
+  // Chooser backoff (qxql.10): a failed plan doubles the wait up to 30 min,
+  // done resets it to the floor. Other endings keep the current wait.
+  try {
+    if (o && typeof o.text === 'string' && o.text.startsWith('choose work:') && ctx) {
+      const min = chooseMinMs()
+      const cur = typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0 ? ctx.llmChooseWait : min
+      if (typeof result === 'string' && result.startsWith('failed:')) ctx.llmChooseWait = Math.min(cur * 2, CHOOSE_WAIT_MAX_MS)
+      else if (result === 'done') ctx.llmChooseWait = min
+      else ctx.llmChooseWait = cur
+    }
+  } catch (_) { /* backoff best-effort */ }
   const n = o.steps.length
   console.log(`llm order end text="${o.text}" result=${result} step=${Math.min(o.i + 1, n)}/${n} dur=${Math.floor((Date.now() - o.at) / 1000)}s`)
   if (ctx.llmOrder === o) ctx.llmOrder = null
@@ -433,4 +602,4 @@ function statusLine(ctx) {
   return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
 }
 
-module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS }
+module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN }
