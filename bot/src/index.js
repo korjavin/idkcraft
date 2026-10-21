@@ -1164,6 +1164,22 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       if (!ctx.paused) ctx.retreat = null
       return { decision: brainFight, calledBrain }
     }
+    // LLM activity chooser (qxql.10): at a nothing-useful goal pick, ask the
+    // model for 1-3 steps of useful work. Rate-limited, never per tick;
+    // safety steps never preempted (the predicate fires only on the listed
+    // picks). Here — not in goal.js — because llm-orders requires goal and
+    // the require graph must stay acyclic (structure-deps).
+    try {
+      const pick = decision && decision.action
+      if (pick) {
+        let facts = null
+        try { facts = goal.goalFacts(bot, ctx) } catch (_) { facts = null }
+        if (facts && llmOrders.shouldChoose(pick, ctx, facts)) {
+          const regime = llmOrders.castleActive(ctx, facts) ? 'castle-stalled' : 'no-order'
+          llmOrders.ask(bot, ctx, { text: `choose work: ${regime}`, by: 'self', ticker: null, feed: null, fallback: null, explicit: false, choose: { regime, trigger: pick } })
+        }
+      }
+    } catch (_) { /* chooser never breaks the tick */ }
     // Lease refresh with the fresh step (a gohome walk plans no-dig); same owner, no cleanup.
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'work') } catch (_) { /* lease best-effort */ }
     applyDecision(decision, target, state)
