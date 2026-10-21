@@ -847,6 +847,8 @@ describe('vmzq.28 option labels (goal effect + pickaxe gate + flat summary)', ()
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, phase: 'body', blocked: {}, parked: false, progress: { done: 8, total: 1722 } }
     ticker.setCastle(st)
+    // qxql.2: the house stands (batch-9 end state), so the veto spares gather.
+    ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: true, v: 2 })
     ticker.work()
     const ctx = bot._tickerCtx
     ctx.castleWord = word || { kind: 'stone', left: 80 }

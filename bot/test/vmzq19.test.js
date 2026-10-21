@@ -595,7 +595,11 @@ describe('vmzq.19 empty kit at the site with an unbuilt far house: progress rise
         return a
       }
       assert.equal(goal.goalFacts(bot, ctx).castle, 'stone-none')
+      // qxql.2 core-1: no injection — the empty kit chops first (kit path),
+      // the chopped load crafts, and only the crafted kit arms equip.
       assert.equal(await pick(), 'gather', 'empty kit chops first')
+      // Craft names the veto while there is nothing to convert yet.
+      assert.equal(goal.stepWhy('craft', goal.goalFacts(bot, ctx), bot, ctx, ''), 'craft: castle comes first')
       items.push({ name: 'oak_log', count: 14 })
       assert.equal(await pick(), 'craft')
       items.length = 0

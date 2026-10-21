@@ -49,10 +49,13 @@ function makeBot({ timeOfDay = 6000, items = null, players = null } = {}) {
   }
 }
 
-function castleCtx(bot, { done = 8, total = 1722, phase = 'body', kind = 'stone', left = 80 } = {}) {
+function castleCtx(bot, { done = 8, total = 1722, phase = 'body', kind = 'stone', left = 80, home = null } = {}) {
   const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
   const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, phase, blocked: {}, parked: false, progress: { done, total } }
   ticker.setCastle(st)
+  // qxql.2: opt-in built home (batch-9 end state). Homeless by default: the
+  // house-chain veto leaves those stalls the bare castle menu.
+  if (home) ticker.setHome(home)
   ticker.work()
   const ctx = bot._tickerCtx
   ctx.castleWord = { kind, left }
@@ -69,6 +72,10 @@ function houseCtx(bot) {
   ticker.work()
   return { ticker, ctx: bot._tickerCtx }
 }
+
+// qxql.2: the house standing while the castle stalls (batch-9 end state) —
+// the veto spares built-home top-ups, so the planner keeps its menu.
+const BUILT_HOME = { site: { x: 0, y: 64, z: 0 }, built: true, v: 2 }
 
 // Advance the fake clock in 10 s steps (the per-tick clamp bills fully).
 function advance(bot, ctx, t0, seconds, every = null) {
@@ -213,7 +220,7 @@ describe('goal watchdog env (vmzq.21)', () => {
   it('GOAL_WATCHDOG_MS=0 keeps the shipped one-shot ladder (acceptance 5)', async () => {
     process.env.GOAL_WATCHDOG_MS = '0'
     const bot = makeBot()
-    const { ctx } = castleCtx(bot)
+    const { ctx } = castleCtx(bot, { home: BUILT_HOME })
     const { calls, brain } = answerBrain('gather')
     ctx.brain = brain
     const t0 = 1000000000000
@@ -281,7 +288,7 @@ describe('run-4 fixture: flat cells, oscillating stone, alternating steps (accep
     assert.equal(wdLogs().length, 1, 'ONE goal watchdog line')
     assert.match(
       wdLogs()[0],
-      /^goal watchdog kind=castle id=castle-1 progress=8\/1722 stall=70s round=1 step=castlefetch options=castlefetch,gather,park choice=castlefetch conf=0\.90 source=jev why=step=castlefetch running/,
+      /^goal watchdog kind=castle id=castle-1 progress=8\/1722 stall=70s round=1 step=castlefetch options=castlefetch,park choice=castlefetch conf=0\.90 source=jev why=step=castlefetch running/,
     )
     assert.equal(await watchdogCounter('castle', 'castlefetch', 'jev'), before + 1)
     // The request: goal + history=[] + situation + options, watchdog words.
@@ -292,7 +299,9 @@ describe('run-4 fixture: flat cells, oscillating stone, alternating steps (accep
     assert.match(req.state.facts, /time=day/)
     assert.equal(req.instructions, taskMod.PLAN_INSTRUCTIONS)
     assert.notEqual(req.instructions, goal.ASK_INSTRUCTIONS, 'watchdog words, not the tick words')
-    assert.deepEqual(Object.keys(req.criteria), ['castlefetch', 'gather', 'park'])
+    // qxql.2: a batch word never chops and the homeless budget waits, so
+    // the stall menu is the castle leg plus the park fork.
+    assert.deepEqual(Object.keys(req.criteria), ['castlefetch', 'park'])
     assert.equal(req.criteria.park, taskMod.PLAN_PARK_CRITERION)
     // The same-step answer applies as a commit (no same-step park).
     const commit = ctx.goal && ctx.goal.commit
@@ -763,7 +772,7 @@ describe('watchdog consume paths', () => {
 
   it('a held step is offered as a retry and applies past the hold', async () => {
     const bot = makeBot()
-    const { ctx } = castleCtx(bot)
+    const { ctx } = castleCtx(bot, { home: BUILT_HOME })
     const facts = goal.goalFacts(bot, ctx)
     const text = goal.goalText(facts, ctx.home)
     ctx.stepFail = { gather: { status: 'failed:no-trees', text, pos: null, at: Date.now() } }
@@ -917,7 +926,7 @@ describe('rounds, park and backoff (acceptance 4)', () => {
 
   it('an llm answer logs its reason on the watchdog line and chats it once (vhlb.2)', async () => {
     const bot = makeBot()
-    const { ctx } = castleCtx(bot)
+    const { ctx } = castleCtx(bot, { home: BUILT_HOME })
     ctx.brain = { plan: async () => ({ step: 'gather', confidence: null, probabilities: null, source: 'llm', reason: 'stone is "out", get more' }) }
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
@@ -1141,7 +1150,7 @@ describe('plan-B when the owner is offline (owner 2026-10-07)', () => {
 
   it('a degraded pin neither churns nor asks; a pinable one still forces on static facts (revmux 01 core-3)', async () => {
     const bot = makeBot()
-    const { ctx } = castleCtx(bot)
+    const { ctx } = castleCtx(bot, { home: BUILT_HOME })
     const asks = []
     const { brain } = answerBrain('gather')
     brain.ask = async (q) => {
@@ -1293,7 +1302,7 @@ describe('deterministic fallback (vmzq.28)', () => {
 
   it('first low-conf backs off, second applies the top fresh step (not the stalling one)', async () => {
     const bot = makeBot()
-    const { ctx } = castleCtx(bot)
+    const { ctx } = castleCtx(bot, { home: BUILT_HOME })
     const t0 = 1000000000000
     const first = await firedAnswer(bot, ctx, t0, lowConf('gather'))
     assert.equal(wdLogs().length, 1)
@@ -1355,7 +1364,7 @@ describe('deterministic fallback (vmzq.28)', () => {
 
   it('a confident JEV choice clears the streak', async () => {
     const bot = makeBot()
-    const { ctx } = castleCtx(bot)
+    const { ctx } = castleCtx(bot, { home: BUILT_HOME })
     const t0 = 1000000000000
     const first = await firedAnswer(bot, ctx, t0, lowConf('gather'))
     assert.equal(ctx.task.castle.wd.lowConf, 1)
@@ -1378,7 +1387,7 @@ describe('deterministic fallback (vmzq.28)', () => {
 
   it('fallback #2 skips the option fallback #1 proved flat', async () => {
     const bot = makeBot()
-    const { ctx } = castleCtx(bot)
+    const { ctx } = castleCtx(bot, { home: BUILT_HOME })
     const t0 = 1000000000000
     const first = await firedAnswer(bot, ctx, t0, lowConf('gather'))
     const t2 = await fireNext(bot, ctx, first.t, lowConf('gather'))
@@ -1396,9 +1405,11 @@ describe('deterministic fallback (vmzq.28)', () => {
     assert.ok(wdLogs()[2].includes('choice=none'), JSON.stringify(wdLogs()))
     await fireNext(bot, ctx, t3, lowConf('gather'))
     assert.ok(wdLogs()[3].includes('source=fallback'), JSON.stringify(wdLogs()))
-    // vmzq.35: the flat gather still sorts behind any fresh option, but the
-    // only other one is the stalling castlefetch — never re-picked (no-op).
-    assert.ok(wdLogs()[3].includes('choice=gather'), `never the stalling step: ${JSON.stringify(wdLogs())}`)
+    // vmzq.35: the flat gather sorts behind fresh options, and the stalling
+    // castlefetch is never re-picked (no-op). On the built home the fresh
+    // explore-far outranks the flat gather.
+    assert.ok(wdLogs()[3].includes('choice=explore-far'), `flat gather skipped for a fresh option: ${JSON.stringify(wdLogs())}`)
+    assert.ok(!/choice=castlefetch[, ]/.test(wdLogs()[3]), `never the stalling step: ${JSON.stringify(wdLogs())}`)
   })
 })
 

@@ -37,10 +37,12 @@ function makeBot({ timeOfDay = 6000, items = null } = {}) {
 
 // Opening shape: castle goal, stone demand, the gather step holding the
 // body (the bead's r1/r2: choice=gather while the demand sits flat).
+// qxql.2: the house stands (batch-9 end state), so the veto spares gather.
 function castleCtx(bot, { done = 0, total = 1722, phase = 'body', kind = 'stone', left = 80 } = {}) {
   const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
   const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, phase, blocked: {}, parked: false, progress: { done, total } }
   ticker.setCastle(st)
+  ticker.setHome({ site: { x: 0, y: 64, z: 0 }, built: true, v: 2 })
   ticker.work()
   const ctx = bot._tickerCtx
   ctx.castleWord = { kind, left }
@@ -224,8 +226,9 @@ describe('enabling credit (idkcraft-m1yb)', () => {
 
   it('a truly flat opening still fires, and the window snapshot carries enabling', async () => {
     // Empty kit held static: nothing grows, so the verdict stays flat.
-    // (The menu stays offerable on an empty kit — gather+park — so the
-    // fire pins the verdict, not the table.)
+    // (The menu stays offerable on an empty kit — gather rides the
+    // castle-chop clause on the built home — so the fire pins the
+    // verdict, not the table.)
     const bot = makeBot({ items: [] })
     const { ctx } = castleCtx(bot)
     const { calls, brain } = answerBrain('gather')
