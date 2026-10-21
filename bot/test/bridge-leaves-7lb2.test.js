@@ -8,11 +8,16 @@
 // banned so walks still never tunnel hills (vmzq.50).
 //
 // The FakeTransport cannot simulate real Baritone pathing through a crown,
-// so the 60-tick regression below reproduces the prod tick SHAPE (a flee
-// re-issue answered noPath every round) and asserts the fixed precondition:
-// the #set stream carries the leaves exception from the first push and
-// never globally enables break. Before the fix it fails: the stream is a
-// bare `allowBreak false` with no exception.
+// so no in-harness test can assert the outcome half of the bead's criterion
+// 2 (movement, a dig, or an honest fail against a real crown). What the
+// harness CAN pin is this fix's precondition: across 60 flee re-issues
+// answered noPath every round (the prod 06:49:30–06:51:08 tick shape), the
+// #set stream must carry the leaves exception from the first push and never
+// globally enable break. Before the fix it fails: the stream is a bare
+// `allowBreak false` with no exception. The outcome half stays open: it is
+// covered by prod log signals (named in the PR body), and the non-leaves
+// v2 noPath loop (the bead's fix option 2, medium confidence the
+// obstruction was leaves at all) needs an owner decision + follow-up bead.
 'use strict'
 
 const { describe, it } = require('node:test')
@@ -80,7 +85,7 @@ describe('7lb2: no-dig walks keep leaves breakable (allowBreakAnyway)', () => {
     assert.deepEqual(movementsToSettings({ canDig: false }, null), { allowBreak: 'false' })
   })
 
-  it('60 flee re-issues under noPath keep the leaves exception, never allowBreak true', async () => {
+  it('precondition across 60 noPath re-issues: leaves exception from push 1, never allowBreak true', async () => {
     const { transport, bot } = leafBot()
     const seen = []
     bot.on('path_update', (r) => seen.push(r && r.status))
