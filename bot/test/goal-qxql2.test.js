@@ -99,6 +99,13 @@ describe('qxql.2 house chain veto while a castle order is active', () => {
     const done = { ...empty, pickaxe: 1, sword: 1, scaffold: 32 }
     assert.equal(goal.MENU.craft.feasible(done, bot, ctx), false, 'a finished kit waits out the castle')
     assert.equal(goal.stepWhy('craft', done, bot, ctx, ''), 'craft: castle comes first')
+    // Discriminating (revmux 02 minor): a chopped load on a finished kit
+    // must not convert — the batch is home-budget, veto or no veto aside.
+    assert.equal(goal.MENU.craft.feasible({ ...done, logs: 14 }, bot, ctx), false, 'no batch on a finished kit')
+    // The vetoed path excludes the door branch even mid-bootstrap: a
+    // placed table plus planks must not mint the house door under a castle.
+    const doorKit = { time: 'day', logs: 0, planks: 6, maxPlanks: 6, table: 0, door: 0, home: 'site', beds: 'both', castle: 'stone-none', health: 20, food: 20, tablePlaced: true, tableOwed: false }
+    assert.equal(goal.MENU.craft.feasible(doorKit, bot, ctx), false, 'no house door while the kit is incomplete')
   })
 
   it('work-mode house (no castle): gather and craft run as before', () => {
