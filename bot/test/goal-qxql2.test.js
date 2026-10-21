@@ -70,15 +70,35 @@ async function quiet(fn) {
 }
 
 describe('qxql.2 house chain veto while a castle order is active', () => {
-  it('unbuilt home + active castle: gather and craft infeasible, named as castle-first', () => {
+  it('unbuilt home + active castle: the home-budget chop waits, named as castle-first', () => {
     const ctx = { home: unbuiltHome(), castle: castleState() }
     const bot = makeBot()
-    const gatherFacts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 1, home: 'site', beds: 'both', castle: 'stone-none', health: 20, food: 20 }
+    // stone-batch never chops (the kit clause is -none/-some only), so a
+    // short load reads pure home-budget here — and the castle owns the work.
+    const gatherFacts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 1, home: 'site', beds: 'both', castle: 'stone-batch', health: 20, food: 20 }
     assert.equal(goal.MENU.gather.feasible(gatherFacts, bot, ctx), false, 'no house gather under a castle order')
     assert.equal(goal.stepWhy('gather', gatherFacts, bot, ctx, ''), 'gather: castle comes first')
-    const craftFacts = { ...gatherFacts, logs: 14, table: 0, door: 1, maxPlanks: 0 }
-    assert.equal(goal.MENU.craft.feasible(craftFacts, bot, ctx), false, 'no house craft under a castle order')
-    assert.equal(goal.stepWhy('craft', craftFacts, bot, ctx, ''), 'craft: castle comes first')
+  })
+
+  it('unbuilt home + active castle: the kit path still bootstraps (chop, batch, table)', () => {
+    const ctx = { home: unbuiltHome(), castle: castleState() }
+    const bot = makeBot()
+    const empty = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 1, home: 'site', beds: 'both', castle: 'stone-none', health: 20, food: 20 }
+    // Core-1: an empty kit chops the castle chain — the old starvation shape.
+    assert.equal(goal.MENU.gather.feasible(empty, bot, ctx), true, 'empty kit chops the castle chain')
+    assert.equal(goal.stepWhy('gather', empty, bot, ctx, ''), null)
+    // A chopped load converts while the kit is incomplete (pickaxe missing,
+    // planks-equivalent on hand).
+    const load = { ...empty, logs: 14 }
+    assert.equal(goal.MENU.craft.feasible(load, bot, ctx), true, 'a chopped load converts for the kit')
+    // The table branch arms equip while the pickaxe is still missing (rock
+    // on hand for the head, planks for sticks, no table standing anywhere).
+    const planks = { ...empty, maxPlanks: 4, planks: 4, cobble: 3 }
+    assert.equal(goal.MENU.craft.feasible(planks, bot, ctx), true, 'the table branch runs while the kit is incomplete')
+    // A finished kit reads as home-budget and waits.
+    const done = { ...empty, pickaxe: 1, sword: 1, scaffold: 32 }
+    assert.equal(goal.MENU.craft.feasible(done, bot, ctx), false, 'a finished kit waits out the castle')
+    assert.equal(goal.stepWhy('craft', done, bot, ctx, ''), 'craft: castle comes first')
   })
 
   it('work-mode house (no castle): gather and craft run as before', () => {
@@ -131,7 +151,7 @@ describe('qxql.2 castle order + both holds yields no house step', () => {
       }
       const d = await goal.decide(bot, ctx)
       assert.equal(d.action, 'rest', `both holds: no house step, got ${d.action}`)
-      assert.ok(ctx.restWhy.includes('gather: castle comes first'), `rest names the gather veto: ${ctx.restWhy}`)
+      assert.ok(ctx.restWhy.includes('gather: stone fetch held'), `rest names the gather park: ${ctx.restWhy}`)
       assert.ok(ctx.restWhy.includes('craft: castle comes first'), `rest names the craft veto: ${ctx.restWhy}`)
     })
   })

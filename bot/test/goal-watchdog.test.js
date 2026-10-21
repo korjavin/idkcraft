@@ -299,8 +299,8 @@ describe('run-4 fixture: flat cells, oscillating stone, alternating steps (accep
     assert.match(req.state.facts, /time=day/)
     assert.equal(req.instructions, taskMod.PLAN_INSTRUCTIONS)
     assert.notEqual(req.instructions, goal.ASK_INSTRUCTIONS, 'watchdog words, not the tick words')
-    // qxql.2: no house gather in a homeless castle stall — the menu is the
-    // castle legs plus the park fork.
+    // qxql.2: a batch word never chops and the homeless budget waits, so
+    // the stall menu is the castle leg plus the park fork.
     assert.deepEqual(Object.keys(req.criteria), ['castlefetch', 'park'])
     assert.equal(req.criteria.park, taskMod.PLAN_PARK_CRITERION)
     // The same-step answer applies as a commit (no same-step park).
