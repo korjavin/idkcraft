@@ -100,4 +100,50 @@ describe('qxql.14 quarry-side recovery line', () => {
     assert.ok(!lines.some((m) => m.includes('castlefetch quarry recovery:')), `no recovery on a live pad, got: ${lines.join(' | ')}`)
     assert.ok(f.target && f.target.quarry, 'first pick is still a trench cell')
   })
+
+  it('mixed ground: a dead side is followed by the take-over side recovery (latched, no live line)', () => {
+    // Side 0 drowns at the probe; side 1 is latched (no 'live' line on a
+    // re-probe) and must still name the recovery.
+    const set = new Map()
+    const st = castleState()
+    const o0 = fetch.quarrySide(st, 0, 0)
+    for (let y = SITE.y - 8; y <= SITE.y + 3; y++) set.set(`${o0.x},${y},${o0.z}`, 'water')
+    st.quarryBase = [null, SITE.y, null, null, null, null, null, null]
+    const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }], set })
+    const ctx = { castle: st }
+    let cell = null
+    const lines = quiet(() => { cell = fetch.pickQuarry(bot, ctx, { skip: new Set() }) })
+    const unusable = lines.findIndex((m) => m.includes('quarry side 0 unusable'))
+    assert.ok(unusable >= 0, `side 0 logs unusable, got: ${lines.join(' | ')}`)
+    const takesOver = lines.findIndex((m) => m.includes('castlefetch quarry recovery: side 1 takes over'))
+    assert.ok(takesOver > unusable, `side 1 names the take-over after the unusable line, got: ${lines.join(' | ')}`)
+    assert.ok(cell && cell.quarry && !cell.pit, 'the take-over cell is a trench cell')
+  })
+
+  it('v2 body: a dead quarry arms in place behind the named recovery line', () => {
+    // bot2 runs the Baritone body: pickQuarry drowns every side and the
+    // mine arms in place — the recovery line is what the prod review reads.
+    const set = new Map()
+    const st = castleState()
+    for (let ring = 0; ring < 2; ring++) {
+      for (let s = 0; s < 4; s++) {
+        const o = fetch.quarrySide(st, s, ring)
+        for (let y = SITE.y - 8; y <= SITE.y + 3; y++) set.set(`${o.x},${y},${o.z}`, 'water')
+      }
+    }
+    const bot = makeBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      set,
+      at: pos(SITE.x - 10, SITE.y, SITE.z - 10), // outside the site guard: no walk-out, straight to the arm
+    })
+    bot.mine = () => new Promise(() => {}) // never settles: the arm owns the tick
+    const ctx = { castle: st }
+    const f = { kind: 'stone', skip: new Set(), target: null }
+    const lines = quiet(() => fetch.digTick(bot, ctx, f))
+    const unusable = lines.findIndex((m) => m.includes('unusable'))
+    assert.ok(unusable >= 0, `quarry sides log unusable, got: ${lines.join(' | ')}`)
+    const recovery = lines.findIndex((m) => m.includes('castlefetch quarry recovery: all sides dead/dug, mining in place'))
+    assert.ok(recovery > unusable, `the in-place arm follows the unusable lines, got: ${lines.join(' | ')}`)
+    assert.equal(ctx.castleFetchInFlight, true, 'the mine owns the tick after the recovery line')
+  })
 })

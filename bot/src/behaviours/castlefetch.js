@@ -1900,6 +1900,9 @@ function pickPit(bot, ctx, f) {
 function pickQuarry(bot, ctx, f) {
   const st = ctx.castle
   const q = f.quarry || (f.quarry = { dead: [], level: [null, null, null, null, null, null, null, null], said: [] })
+  // qxql.14: sides that die during this call (the 'unusable' lines below) —
+  // the take-over side logs the named recovery line on its return.
+  const deadThisCall = q.dead.length
   const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
   const wet = (b) => !!b && LIQUID.has(b.name)
   const open = (b) => !!b && (AIRISH.has(b.name) || b.boundingBox === 'empty') && !wet(b)
@@ -2005,6 +2008,13 @@ function pickQuarry(bot, ctx, f) {
           let stance = { x: o.x + o.dx * (i - 1) + o.lx * l, y: i === 0 ? base : trenchFloor(st, i - 1, base), z: o.z + o.dz * (i - 1) + o.lz * l }
           if (!open(at(stance.x, stance.y, stance.z)) || !open(at(stance.x, stance.y + 1, stance.z))) stance = null
           else if (Math.hypot(stance.x - x, stance.y + EYE - (y + 0.5), stance.z - z) > DIG_REACH + 0.5) { f.skip.add(k); continue }
+          // qxql.14: a side died earlier this call and another takes over —
+          // the named recovery line for every 'quarry side N unusable'
+          // above (synq AC, deferred from #631). Fires even when the
+          // take-over side is latched (no 'live' line then).
+          if (q.dead.length > deadThisCall) {
+            try { console.log(`castlefetch quarry recovery: ${tag} takes over`) } catch (_) { /* log best-effort */ }
+          }
           return { x, y, z, k, d: 0, waits: 0, quarry: true, tries: 0, stance }
         }
       }
