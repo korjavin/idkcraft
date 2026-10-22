@@ -4,7 +4,8 @@
 // Unit pins: leaf matcher on registry names, feasibility predicate
 // (feasible: leaves near + room + day + no castle; infeasible: night
 // with castle / full pack / no leaves), done/failed stepStatus paths
-// with the prod signal line, canopy + placed-leaf guards (revmux 01).
+// with the prod signal line, canopy + placed-leaf guards (revmux 01),
+// honest drop pickup + pre-cap hedge filter (revmux 02).
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -13,15 +14,22 @@ const { MENU, STEP_ORDER, STEP_CRITERIA, stepWhy, decide } = require('../src/goa
 
 const LEAF_IDS = { oak_leaves: 18, birch_leaves: 19, oak_log: 17, stone: 1 }
 
+// Honest drops (revmux 02 core-2): the mock dig spawns a drop entity at
+// the dug cell instead of crediting the inventory — the behaviour only
+// banks what its pickup walk vacuums, like the live bot.
+const PICKUP_VACUUM = 1.5
+
 function mockBot({ leaves = [{ x: 5, y: 64, z: 0 }], items = [], castle = null } = {}) {
   const world = new Map()
   for (const p of leaves) world.set(`${p.x},${p.y},${p.z}`, p.persistent ? { name: 'oak_leaves', persistent: true } : 'oak_leaves')
   const inv = items.slice()
   const goals = []
+  const drops = []
   const bot = {
     inv,
     world,
     goals,
+    drops,
     entity: { position: { x: 0, y: 64, z: 0 }, onGround: true },
     time: { timeOfDay: 6000 },
     spawnPoint: { x: 0, y: 64, z: 0 },
@@ -37,7 +45,7 @@ function mockBot({ leaves = [{ x: 5, y: 64, z: 0 }], items = [], castle = null }
       bestHarvestTool: () => null,
     },
     inventory: { items: () => inv },
-    findBlocks: ({ matching, maxDistance, count }) => {
+    findBlocks: ({ matching, maxDistance, count, useExtraInfo }) => {
       const out = []
       const bp = bot.entity.position
       for (const [key, cell] of world) {
@@ -46,6 +54,10 @@ function mockBot({ leaves = [{ x: 5, y: 64, z: 0 }], items = [], castle = null }
         const [x, y, z] = key.split(',').map(Number)
         if (!matching.includes(LEAF_IDS[name])) continue
         if (Math.hypot(x - bp.x, y - bp.y, z - bp.z) > maxDistance) continue
+        if (typeof useExtraInfo === 'function') {
+          const persistent = !!cell && typeof cell === 'object' && cell.persistent === true
+          if (!useExtraInfo({ name, getProperties: () => ({ persistent }) })) continue
+        }
         out.push({ x, y, z })
         if (out.length >= (count || 16)) break
       }
@@ -75,12 +87,27 @@ function mockBot({ leaves = [{ x: 5, y: 64, z: 0 }], items = [], castle = null }
     },
     dig: async (block) => {
       const pos = block.position || block
-      world.set(`${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`, 'air')
-      inv.push({ name: 'oak_sapling', count: 1 })
+      const x = Math.floor(pos.x)
+      const y = Math.floor(pos.y)
+      const z = Math.floor(pos.z)
+      world.set(`${x},${y},${z}`, 'air')
+      drops.push({ x: x + 0.5, y, z: z + 0.5, name: 'oak_sapling', count: 1 })
     },
     chat: () => {},
   }
   return bot
+}
+
+// The engine vacuums drops near the body between ticks.
+function settleDrops(bot) {
+  const bp = bot.entity.position
+  bot.drops = bot.drops.filter((d) => {
+    if (Math.hypot(d.x - bp.x, d.y - bp.y, d.z - bp.z) <= PICKUP_VACUUM) {
+      bot.inv.push({ name: d.name, count: d.count })
+      return false
+    }
+    return true
+  })
 }
 
 function ctxOf(castle = null) {
@@ -146,14 +173,17 @@ describe('reforest feasibility', () => {
 
   it('infeasible with only placed leaves around (hedges are never targets)', () => {
     const bot = mockBot({ leaves: [{ x: 3, y: 64, z: 0, persistent: true }] })
-    assert.equal(reforest.isPersistentLeaf(bot, { x: 3, y: 64, z: 0 }), true)
-    assert.equal(reforest.isPersistentLeaf(bot, { x: 9, y: 64, z: 0 }), false)
-    assert.equal(reforest.reforestFeasible(day, bot, ctxOf()), true) // scan sees the cell...
-    const ctx = ctxOf()
-    reforest(bot, ctx) // ...but find skips it and fails honestly
-    reforest(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:no-leaves')
-    assert.ok(!bot.goals.includes('GoalNear'), 'no walk goal ever issued at the hedge')
+    // The scan refuses the hedge before the cap, so the menu reads
+    // infeasible instead of re-picking into an instant fail.
+    assert.equal(reforest.leavesNear(bot, 32, null).length, 0)
+    assert.equal(reforest.reforestFeasible(day, bot, ctxOf()), false)
+    assert.equal(MENU.reforest.feasible(day, bot, ctxOf()), false)
+  })
+
+  it('infeasible with only canopy above reach (the walk must never tower)', () => {
+    const bot = mockBot({ leaves: [{ x: 0, y: 71, z: 0 }] })
+    assert.equal(reforest.beatablesNear(bot, 32, null).length, 0)
+    assert.equal(reforest.reforestFeasible(day, bot, ctxOf()), false)
   })
 })
 
@@ -215,12 +245,15 @@ describe('reforest execution', () => {
       await tick()
       assert.equal(ctx.reforest.leaves, 1)
       assert.equal(ctx.reforest.phase, 'pickup')
+      assert.equal(bot.drops.length, 1, 'the dig drops a sapling entity, not inventory')
+      settleDrops(bot) // the body stands on the column: the drop vacuums in
       assert.equal(bot.inv.filter((i) => i.name === 'oak_sapling').length, 1)
       // Pickup walks the dug column (XZ), never the empty canopy cell.
       reforest(bot, ctx)
       assert.equal(bot.goals[bot.goals.length - 1], 'GoalNearXZ')
+      assert.equal(bot.pathfinder.goal.rangeSq, reforest.PICKUP_RANGE * reforest.PICKUP_RANGE)
       bot.entity.position = { x: 5, y: 64, z: 0 }
-      for (let i = 0; i < 5; i++) reforest(bot, ctx)
+      for (let i = 0; i < 4; i++) { reforest(bot, ctx); settleDrops(bot) }
       assert.equal(ctx.stepStatus, 'failed:no-leaves')
     } finally {
       console.log = orig
@@ -228,6 +261,26 @@ describe('reforest execution', () => {
     const prod = lines.filter((l) => l.startsWith('reforest leaves='))
     assert.equal(prod.length, 1)
     assert.match(prod[0], /^reforest leaves=1 saplings=\+1 fail=no-leaves$/)
+  })
+
+  it('a far pickup stays out until the walk closes the column', async () => {
+    const bot = mockBot()
+    const ctx = ctxOf()
+    reforest(bot, ctx) // find
+    reforest(bot, ctx) // walk issues
+    bot.entity.position = { x: 5, y: 64, z: 0 }
+    reforest(bot, ctx) // dig phase
+    reforest(bot, ctx) // dig fires
+    await tick()
+    await tick()
+    // The drop waits 5 blocks out: no vacuum, no exit.
+    bot.entity.position = { x: 0, y: 64, z: 0 }
+    settleDrops(bot)
+    assert.equal(bot.inv.filter((i) => i.name === 'oak_sapling').length, 0)
+    assert.equal(bot.drops.length, 1)
+    reforest(bot, ctx) // pickup: heads for the column
+    assert.equal(ctx.reforest.phase, 'pickup')
+    assert.equal(ctx.stepStatus, 'running')
   })
 
   it('prefers feet-level leaves over a nearer canopy and walks range 4', () => {
@@ -243,6 +296,33 @@ describe('reforest execution', () => {
       const goal = bot.pathfinder.goal
       assert.equal(goal && goal.constructor && goal.constructor.name, 'GoalNear')
       assert.equal(goal.rangeSq, reforest.WALK_RANGE * reforest.WALK_RANGE)
+    })
+  })
+
+  it('a high-only canopy issues no walk goal and fails honestly', () => {
+    quiet(() => {
+      const bot = mockBot({ leaves: [{ x: 0, y: 71, z: 0 }] })
+      const ctx = ctxOf()
+      reforest(bot, ctx) // find: nothing beatable
+      reforest(bot, ctx)
+      assert.equal(ctx.stepStatus, 'failed:no-leaves')
+      assert.ok(!bot.goals.includes('GoalNear'), 'no tower walk ever issued')
+    })
+  })
+
+  it('a hedge does not hide the natural stand behind it', () => {
+    quiet(() => {
+      const leaves = [{ x: 20, y: 64, z: 0 }]
+      for (let i = 1; i <= 17; i++) leaves.push({ x: i, y: 64, z: 1, persistent: true })
+      const bot = mockBot({ leaves })
+      const ctx = ctxOf()
+      // 17 placed cells nearer than the tree: the pre-cap filter still
+      // surfaces the natural leaf.
+      reforest(bot, ctx)
+      assert.deepEqual(
+        { x: Math.floor(ctx.reforest.pos.x), y: Math.floor(ctx.reforest.pos.y), z: Math.floor(ctx.reforest.pos.z) },
+        { x: 20, y: 64, z: 0 },
+      )
     })
   })
 

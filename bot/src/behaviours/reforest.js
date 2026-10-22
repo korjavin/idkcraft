@@ -26,8 +26,9 @@ const WALK_STALL_TICKS = 10 // no-displacement walk ticks before a leaf is struc
 const PICKUP_TICKS = 4 // settle ticks on the dug column while drops vacuum in
 const UNREACHABLE_STRIKES = 3 // struck leaves before failed:unreachable
 const WALK_RANGE = 4 // walk goal range: a 3D sphere, so feet-level leaves satisfy it without climbing
-const PICKUP_RANGE = 2 // pickup goal range on the dug column (XZ only: drops fall to the ground)
-const LOW_DY = 4 // canopy guard (revmux 01 core-1): leaves more than 4 above the feet need a tower, not an idle beat
+const PICKUP_RANGE = 1 // pickup goal range on the dug column (XZ only: drops fall to the ground)
+const PICKUP_CLOSE = 1.2 // column-centre distance that vacuums the drops (item pickup is ~1.4)
+const LOW_DY = 4 // canopy guard (revmux 01 core-1/02): leaves more than 4 above the feet need a tower, not an idle beat
 
 function isLeafName(name) {
   return typeof name === 'string' && name.endsWith('_leaves')
@@ -78,13 +79,28 @@ function keyOf(p) {
 // Nearest live leaves within radius, honouring a trip skip set. Pure
 // scan, no ctx writes — goal.js feasible() shares it. Sorted by 3D
 // distance (revmux 01 core-1): a horizontal sort puts an overhead canopy
-// leaf first and the walk then towers for it.
+// leaf first and the walk then towers for it. Placed leaves never leave
+// the scan (revmux 02 core-1): the persistent refusal rides
+// `useExtraInfo`, so a hedge cannot crowd natural leaves past the count
+// cap — findBlocks matchers that ignore it keep the per-candidate guard.
 function leavesNear(bot, radius, skip) {
+  let notPlaced = null
+  try {
+    notPlaced = (b) => {
+      if (!b || typeof b.name !== 'string' || !isLeafName(b.name)) return false
+      const props = typeof b.getProperties === 'function' && b.getProperties()
+      return !(props && props.persistent === true)
+    }
+  } catch (_) {
+    notPlaced = null
+  }
   try {
     const ids = leafIds(bot)
     if (ids.length === 0) return []
     if (typeof bot.findBlocks !== 'function') return []
-    const found = bot.findBlocks({ matching: ids, maxDistance: radius, count: 16 }) || []
+    const opts = { matching: ids, maxDistance: radius, count: 16 }
+    if (notPlaced) opts.useExtraInfo = notPlaced
+    const found = bot.findBlocks(opts) || []
     const bp = botPos(bot)
     const open = found.filter((p) => !(skip && typeof skip.has === 'function' && skip.has(keyOf(p))))
     open.sort((a, b) => {
@@ -97,6 +113,19 @@ function leavesNear(bot, radius, skip) {
       }
     })
     return open
+  } catch (_) {
+    return []
+  }
+}
+
+// Beatable leaves (revmux 02 core-3): feet-level, natural cells the walk
+// can reach without towering. Single source for the find pick and the
+// feasibility gate, so no-leaves means the same set both places.
+function beatablesNear(bot, radius, skip) {
+  try {
+    const bp = botPos(bot)
+    if (!bp) return []
+    return leavesNear(bot, radius, skip).filter((p) => Math.abs(p.y - bp.y) <= LOW_DY)
   } catch (_) {
     return []
   }
@@ -117,8 +146,9 @@ function isPersistentLeaf(bot, p) {
 
 // Feasibility predicate (bead acceptance pin): day, no active castle
 // order (a castle would lose body time — qxql.2), pack room for the
-// pickups, and leaves in reach. Unscannable bots read infeasible so the
-// menu never changes for them.
+// pickups, and a beatable leaf in reach (the same set the find pick
+// takes, so the menu never promises what the step cannot do).
+// Unscannable bots read infeasible so the menu never changes for them.
 function reforestFeasible(facts, bot, ctx) {
   try {
     if (!facts || facts.time !== 'day') return false
@@ -132,7 +162,7 @@ function reforestFeasible(facts, bot, ctx) {
     } catch (_) {
       return false
     }
-    return leavesNear(bot, REFOREST_RADIUS, null).length > 0
+    return beatablesNear(bot, REFOREST_RADIUS, null).length > 0
   } catch (_) {
     return false
   }
@@ -222,28 +252,23 @@ function reforest(bot, ctx, target, state) {
   if (r.phase === 'find') {
     let found = []
     try {
-      found = leavesNear(bot, REFOREST_RADIUS, r.skip)
+      found = beatablesNear(bot, REFOREST_RADIUS, r.skip)
     } catch (_) {
       found = []
     }
-    // Feet-level leaves first (canopy guard): the walk must never tower.
-    // Placed leaves are skipped trip-scoped, never struck.
-    let low = null
-    let high = null
+    // First beater wins; a useExtraInfo-blind scan can still surface a
+    // placed cell, which is skipped trip-scoped, never struck.
+    let pick = null
     for (const p of found) {
       if (isPersistentLeaf(bot, p)) {
         skipNoStrike(ctx, r, p)
         continue
       }
-      if (Math.abs(p.y - bp.y) <= LOW_DY) {
-        if (!low) low = p
-      } else if (!high) {
-        high = p
-      }
+      pick = p
+      break
     }
-    const pick = low || high
     if (!pick) {
-      // All persistent (or nothing): no natural leaves to beat.
+      // Nothing beatable (no low natural leaves): fail, never tower.
       finish(bot, ctx, r, r.streak > 0 ? 'unreachable' : 'no-leaves')
       return
     }
@@ -395,8 +420,10 @@ function reforest(bot, ctx, target, state) {
 
   if (r.phase === 'pickup') {
     // The dug cell's drops fall to the ground and vacuum in by proximity —
-    // walk the dug column (XZ only, never the empty canopy cell above), then
-    // take the next leaf. The inventory count at finish is the truth.
+    // walk onto the dug column (XZ only, never the empty canopy cell
+    // above), then take the next leaf. The inventory count at finish is
+    // the truth. The give-up tick bound keeps a scattered drop from
+    // holding the step, like forage's replan.
     const key = `reforest-pickup:${Math.floor(r.pos.x)},${Math.floor(r.pos.y)},${Math.floor(r.pos.z)}`
     if (key !== ctx.lastGoalKey) {
       issueGoal(bot, ctx, new goals.GoalNearXZ(r.pos.x, r.pos.z, PICKUP_RANGE), key, false)
@@ -406,11 +433,11 @@ function reforest(bot, ctx, target, state) {
     r.pickupTicks = (r.pickupTicks || 0) + 1
     let d = null
     try {
-      d = Math.hypot(bp.x - r.pos.x, bp.z - r.pos.z)
+      d = Math.hypot(bp.x - (Math.floor(r.pos.x) + 0.5), bp.z - (Math.floor(r.pos.z) + 0.5))
     } catch (_) {
       d = null
     }
-    if ((d !== null && d <= PICKUP_RANGE + 1) || r.pickupTicks >= PICKUP_TICKS) {
+    if ((d !== null && d <= PICKUP_CLOSE) || r.pickupTicks >= PICKUP_TICKS) {
       r.pos = null
       r.phase = 'find'
     }
@@ -429,6 +456,7 @@ module.exports.isPersistentLeaf = isPersistentLeaf
 module.exports.isSaplingName = isSaplingName
 module.exports.countSaplings = countSaplings
 module.exports.leavesNear = leavesNear
+module.exports.beatablesNear = beatablesNear
 module.exports.reforestFeasible = reforestFeasible
 module.exports.REFOREST_RADIUS = REFOREST_RADIUS
 module.exports.REFOREST_MAX_LEAVES = REFOREST_MAX_LEAVES
