@@ -41,6 +41,9 @@ const PLANT_FAIL_MAX = 8 // walk/place failures before the tail ends with what i
 const PLANT_REACH = 4.5 // place reach: arrival stops the walk, like canDigBlock for digs
 const PLANT_UP = 8 // surface scan above the feet for a random (x,z) ...
 const PLANT_DOWN = 24 // ... and below: top-down takes the surface first, so hilltops and rims plant, never cave floors
+// Deterministic feasibility probe (core-2): fixed offsets, not random
+// samples, so the menu does not flicker between ticks.
+const PLANT_PROBE = [[10, 0], [-10, 0], [0, 10], [0, -10], [14, 14], [14, -14], [-14, 14], [-14, -14], [22, 7], [-22, 7], [7, 22], [7, -22]]
 
 // Plantable soil (lc55): gather's SAPLING_SOIL minus the cells the shared
 // guard refuses anyway (moss_block, farmland read 'protected' — a mossy or
@@ -137,7 +140,11 @@ function plantSpotOk(bot, ctx, x, y, z) {
       if (inHouseFootprint(ctx && ctx.home, spot)) return false
     } catch (_) { return false }
     try {
-      if (require('../castle').inFootprint(ctx && ctx.castle, spot)) return false
+      // Every known castle (core-3): the own one plus the read-only peer
+      // records bot2 lives beside (ctx.knownCastles) — footprint and yard
+      // ring alike, so no courtyard or fence line takes a sapling.
+      const castleMod = require('../castle')
+      if (castleMod.anyCastle(ctx, (c) => castleMod.inFootprint(c, spot) || castleMod.yardRing(c, spot))) return false
     } catch (_) { return false }
     try {
       if (require('../danger').near(ctx, spot)) return false
@@ -150,6 +157,26 @@ function plantSpotOk(bot, ctx, x, y, z) {
   } catch (_) { return false }
 }
 
+// Surface scan of one (x,z) column: the first vetted spot top-down, or
+// null. Stops at the first non-air, non-leaf cell (core-4): below the
+// surface is ground, not spots — a stone cap over a dirt pocket reads as
+// a rejected column, never a cave planting. Tried cells are skipped, not
+// fatal, so one dead row does not lose the column.
+function surfaceSpotAt(bot, ctx, x, z, tried) {
+  try {
+    const bp = botPos(bot)
+    if (!bp) return null
+    const y0 = Math.floor(bp.y)
+    for (let y = y0 + PLANT_UP; y >= y0 - PLANT_DOWN; y--) {
+      if (tried && typeof tried.has === 'function' && tried.has(`${x},${y},${z}`)) continue
+      const name = cellNameAt(bot, x, y, z)
+      if (name !== 'air' && !isLeafName(name)) break
+      if (plantSpotOk(bot, ctx, x, y, z)) return { x, y, z }
+    }
+  } catch (_) { /* no spot */ }
+  return null
+}
+
 // Random vetted spot within the disc around the body, or null. Bounded
 // tries; tried (walk/place-failed cells) never re-issue. rnd defaults to
 // Math.random and is injectable for the unit pins.
@@ -158,27 +185,60 @@ function pickPlantSpot(bot, ctx, tried, rnd) {
   try {
     const bp = botPos(bot)
     if (!bp) return null
-    const y0 = Math.floor(bp.y)
     for (let t = 0; t < PLANT_PICK_TRIES; t++) {
       const a = rand() * Math.PI * 2
       const rr = PLANT_RADIUS * Math.sqrt(rand())
-      const x = Math.floor(bp.x + Math.cos(a) * rr)
-      const z = Math.floor(bp.z + Math.sin(a) * rr)
-      for (let y = y0 + PLANT_UP; y >= y0 - PLANT_DOWN; y--) {
-        if (tried && typeof tried.has === 'function' && tried.has(`${x},${y},${z}`)) continue
-        if (plantSpotOk(bot, ctx, x, y, z)) return { x, y, z }
-      }
+      const spot = surfaceSpotAt(bot, ctx, Math.floor(bp.x + Math.cos(a) * rr), Math.floor(bp.z + Math.sin(a) * rr), tried)
+      if (spot) return spot
     }
   } catch (_) { /* no spot */ }
   return null
 }
 
-// The tail's give-up verdict: a step that planted keeps done (the work
-// happened); one that planted nothing keeps the leaf verdict it came
-// with, so empty steps read exactly as before.
+// Planting feasibility (core-2): a plantable sapling in the pack and a
+// vetted spot on the deterministic probe columns — so banked saplings
+// plant even where no leaves stand. Fixed offsets keep the menu stable
+// across ticks; the tail still samples the full disc.
+function plantFeasible(bot, ctx) {
+  try {
+    if (!firstSapling(bot)) return false
+    const bp = botPos(bot)
+    if (!bp) return false
+    const x0 = Math.floor(bp.x)
+    const z0 = Math.floor(bp.z)
+    for (const [dx, dz] of PLANT_PROBE) {
+      if (surfaceSpotAt(bot, ctx, x0 + dx, z0 + dz, null)) return true
+    }
+  } catch (_) { /* infeasible */ }
+  return false
+}
+
+// The tail's give-up verdict: a step that planted — or beat leaves —
+// keeps done (the work happened); one that did neither keeps the leaf
+// verdict it came with, so empty steps read exactly as before.
 function plantEndReason(r) {
   if ((r.planted || 0) > 0) return null
+  if ((r.leaves || 0) > 0) return null
   return r.streak > 0 ? 'unreachable' : 'no-leaves'
+}
+
+// The beat ends (empty scan, leaf cap, wall cap, unreachable strikes)
+// with saplings banked: plant them instead of ending the step (core-1).
+// Returns true when the tail takes over, false when the step should
+// finish as before. Stamps the tail's own time budget once.
+function enterPlantTail(bot, r) {
+  try {
+    if ((r.planted || 0) >= PLANT_MAX || (r.plantFails || 0) >= PLANT_FAIL_MAX) return false
+    if (countSaplings(bot) <= 0) return false
+  } catch (_) { return false }
+  if (!r.plantStartedAt) {
+    try {
+      r.plantStartedAt = Date.now()
+    } catch (_) { /* stamp best-effort */ }
+  }
+  r.spot = null
+  r.phase = 'plant-pick'
+  return true
 }
 
 // Skip without planting: a property of the spot (unreachable, refused),
@@ -266,7 +326,9 @@ function isPersistentLeaf(bot, p) {
 // Feasibility predicate (bead acceptance pin): day, no active castle
 // order (a castle would lose body time — qxql.2), pack room for the
 // pickups, and a beatable leaf in reach (the same set the find pick
-// takes, so the menu never promises what the step cannot do).
+// takes, so the menu never promises what the step cannot do) — or, with
+// no leaves around, banked saplings and a vetted plant spot (the tail
+// picks up what the menu promises).
 // Unscannable bots read infeasible so the menu never changes for them.
 function reforestFeasible(facts, bot, ctx) {
   try {
@@ -281,7 +343,14 @@ function reforestFeasible(facts, bot, ctx) {
     } catch (_) {
       return false
     }
-    return beatablesNear(bot, REFOREST_RADIUS, null).length > 0
+    if (beatablesNear(bot, REFOREST_RADIUS, null).length > 0) return true
+    // Banked saplings plant even where no leaves stand (core-2): the step
+    // is picked for the tail when a vetted spot exists.
+    try {
+      return plantFeasible(bot, ctx)
+    } catch (_) {
+      return false
+    }
   } catch (_) {
     return false
   }
@@ -294,13 +363,16 @@ function asVec3(p) {
 
 function finish(bot, ctx, r, reason) {
   const leaves = (r && r.leaves) || 0
+  const planted = (r && r.planted) || 0
+  // saplings=+k banks the step's beats even when the tail plants them the
+  // same step (body-3): without the add-back a bank-3-plant-3 step would
+  // read +0.
   let gain = 0
   try {
-    gain = Math.max(0, countSaplings(bot) - ((r && r.saplings0) || 0))
+    gain = Math.max(0, countSaplings(bot) - ((r && r.saplings0) || 0) + planted)
   } catch (_) {
     gain = 0
   }
-  const planted = (r && r.planted) || 0
   try {
     clearGoal(bot, ctx)
   } catch (_) { /* goal best-effort */ }
@@ -346,16 +418,28 @@ function reforest(bot, ctx, target, state) {
     } catch (_) {
       saplings0 = 0
     }
-    ctx.reforest = { phase: 'find', pos: null, block: null, skip: new Set(), streak: 0, stalls: 0, lastPos: null, leaves: 0, saplings0, startedAt: Date.now(), pickupTicks: 0, planted: 0, plantFails: 0, triedPlant: new Set(), plantInFlight: false, spot: null, plantKey: null, plantStalls: 0, plantLast: null }
+    ctx.reforest = { phase: 'find', pos: null, block: null, skip: new Set(), streak: 0, stalls: 0, lastPos: null, leaves: 0, saplings0, startedAt: Date.now(), pickupTicks: 0, planted: 0, plantFails: 0, triedPlant: new Set(), plantInFlight: false, spot: null, plantKey: null, plantStalls: 0, plantLast: null, plantStartedAt: null }
   }
   const r = ctx.reforest
   const bp = botPos(bot)
   if (!bp) return
-  // Caps: a beaten-leaf count or a wall-time bound ends the phase with
-  // done — never an infinite beat loop.
+  // Caps: a beaten-leaf count or a wall-time bound ends the beat — never
+  // an infinite beat loop — while the plant tail runs on its own count
+  // and time budget (core-1): a dense forest beats its 8 leaves and then
+  // plants, instead of finishing with planted=0.
+  const planting = r.phase === 'plant-pick' || r.phase === 'plant-walk' || r.phase === 'plant-place'
   try {
-    if (r.leaves >= REFOREST_MAX_LEAVES || Date.now() - r.startedAt >= REFOREST_MAX_MS) {
-      finish(bot, ctx, r, null)
+    if (planting) {
+      if ((r.planted || 0) >= PLANT_MAX || (r.plantFails || 0) >= PLANT_FAIL_MAX ||
+        (r.plantStartedAt && Date.now() - r.plantStartedAt >= REFOREST_MAX_MS)) {
+        finish(bot, ctx, r, plantEndReason(r))
+        return
+      }
+    } else if (r.leaves >= REFOREST_MAX_LEAVES || Date.now() - r.startedAt >= REFOREST_MAX_MS) {
+      if (!enterPlantTail(bot, r)) {
+        finish(bot, ctx, r, null)
+        return
+      }
       return
     }
   } catch (_) { /* cap unreadable: run */ }
@@ -390,12 +474,10 @@ function reforest(bot, ctx, target, state) {
     if (!pick) {
       // Nothing beatable (no low natural leaves): the plant tail (lc55)
       // when saplings are banked — never tower, never an endless phase.
-      if ((r.planted || 0) < PLANT_MAX && (r.plantFails || 0) < PLANT_FAIL_MAX && countSaplings(bot) > 0) {
-        r.phase = 'plant-pick'
-        r.spot = null
+      if (!enterPlantTail(bot, r)) {
+        finish(bot, ctx, r, r.streak > 0 ? 'unreachable' : 'no-leaves')
         return
       }
-      finish(bot, ctx, r, r.streak > 0 ? 'unreachable' : 'no-leaves')
       return
     }
     r.pos = asVec3(pick)
@@ -439,7 +521,9 @@ function reforest(bot, ctx, target, state) {
       strike(ctx, r, r.pos)
       if (r.streak >= UNREACHABLE_STRIKES) {
         say(bot, 'cannot reach the leaves')
-        finish(bot, ctx, r, 'unreachable')
+        // Banked saplings still plant (core-1): the tail keeps the
+        // unreachable verdict when it plants nothing.
+        if (!enterPlantTail(bot, r)) finish(bot, ctx, r, 'unreachable')
       }
       return
     }
@@ -456,7 +540,9 @@ function reforest(bot, ctx, target, state) {
       strike(ctx, r, r.pos)
       if (r.streak >= UNREACHABLE_STRIKES) {
         say(bot, 'cannot reach the leaves')
-        finish(bot, ctx, r, 'unreachable')
+        // Banked saplings still plant (core-1): the tail keeps the
+        // unreachable verdict when it plants nothing.
+        if (!enterPlantTail(bot, r)) finish(bot, ctx, r, 'unreachable')
       }
       return
     }
@@ -502,7 +588,7 @@ function reforest(bot, ctx, target, state) {
     if (ctx.digInFlight) return
     if (typeof bot.dig !== 'function') {
       strike(ctx, r, r.pos)
-      if (r.streak >= UNREACHABLE_STRIKES) finish(bot, ctx, r, 'unreachable')
+      if (r.streak >= UNREACHABLE_STRIKES && !enterPlantTail(bot, r)) finish(bot, ctx, r, 'unreachable')
       return
     }
     let block = r.block
@@ -758,7 +844,9 @@ module.exports.PICKUP_RANGE = PICKUP_RANGE
 module.exports.LOW_DY = LOW_DY
 module.exports.firstSapling = firstSapling
 module.exports.plantSpotOk = plantSpotOk
+module.exports.surfaceSpotAt = surfaceSpotAt
 module.exports.pickPlantSpot = pickPlantSpot
+module.exports.plantFeasible = plantFeasible
 module.exports.PLANT_RADIUS = PLANT_RADIUS
 module.exports.PLANT_MAX = PLANT_MAX
 module.exports.PLANT_PICK_TRIES = PLANT_PICK_TRIES
