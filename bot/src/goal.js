@@ -492,6 +492,21 @@ const MENU = {
     chat: () => 'on my own: foraging resources',
     verb: 'foraging',
   },
+  reforest: {
+    // Idle sapling farming (idkcraft-6p4l): beat nearby leaves and bank
+    // the saplings. Day only, never under an active castle order (it
+    // would steal body time from the castle — qxql.2), pack room for the
+    // pickups, and leaves in reach (the behaviour's own registry scan).
+    feasible: (facts, bot, ctx) => {
+      try {
+        return require('./behaviours/reforest').reforestFeasible(facts, bot, ctx)
+      } catch (_) {
+        return false
+      }
+    },
+    chat: () => 'on my own: beating leaves for saplings',
+    verb: 'beating leaves',
+  },
   explore: {
     // Blind search once the house stands; pre-house gaps rest (rw4 owns the
     // body until built) — except the stranded hard state (gyw): a
@@ -1725,6 +1740,7 @@ const STEP_CRITERIA = {
   stockpile: 'chest is no, surplus is yes, or handover is waiting: place the home chest (or a site chest) and bank the surplus',
   gear: 'gear is ready, want, or wait: forge better tools',
   forage: 'known is near: walk to the remembered find and dig it',
+  reforest: 'leaves are near and the pack has room and time is day and no castle order runs: beat nearby leaves and bank the dropped saplings',
   explore: 'known is none: walk the visited boundary',
   stay: 'inside is yes and time is dusk or night: wait inside',
   rest: 'nothing else fits: rest near home',
@@ -2030,6 +2046,19 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (castleBlocked(facts)) return 'forage: castle blocked, waiting at the site'
       if (facts.known !== 'near') return 'forage: nothing known nearby'
       return 'forage: known find unreachable'
+    case 'reforest': {
+      if (castleFirst(ctx, 'reforest')) return 'reforest: castle comes first'
+      if (nightHurt(facts)) return 'reforest: hurt at night, waiting for dawn'
+      if (facts.time !== 'day') return 'reforest: waiting for daylight'
+      let full = false
+      try {
+        full = !!require('./behaviours/stockpile').packFull(bot, ctx)
+      } catch (_) {
+        full = false
+      }
+      if (full) return 'reforest: pack is full'
+      return 'reforest: no leaves nearby'
+    }
     case 'explore':
       if (taskParked(ctx)) return 'explore: parked, staying near home'
       if (facts.home !== 'built') return 'explore: house not built yet'
@@ -2730,6 +2759,9 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
     try { forageMod.bankPartial(bot, ctx) } catch (_) { /* haul best-effort */ }
     ctx.forage = null
   }
+  // A fresh reforest pick restarts the beat (6p4l): a resumed stale
+  // walk would chase a decayed leaf while the scan stands elsewhere.
+  if (choice.step === 'reforest' && choice.step !== prev) ctx.reforest = null
   // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
   // an order-interrupted night would otherwise hold on open ground. The
   // interrupted gohome walk resets too, so the next march starts from the

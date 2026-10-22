@@ -1899,7 +1899,7 @@ function commitTickTop(bot, ctx, now) {
     }
     // Prerequisite gone: a fetch pinned with a full pack cannot pick up
     // (and must not scatter drops) — release to the honest bank leg.
-    if (c.step === 'castlefetch' || c.step === 'gather' || c.step === 'forage') {
+    if (c.step === 'castlefetch' || c.step === 'gather' || c.step === 'forage' || c.step === 'reforest') {
       let full = false
       try {
         full = !!require('./goal').packFull(bot, ctx)

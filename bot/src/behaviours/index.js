@@ -35,6 +35,7 @@ const BEHAVIOURS = {
   light: require('./light'),
   explore: require('./explore'),
   forage: require('./forage'),
+  reforest: require('./reforest'),
   deliver: require('./deliver'),
   stockpile: require('./stockpile'),
   gear: require('./gear'),
