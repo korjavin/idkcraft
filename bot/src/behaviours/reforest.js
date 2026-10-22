@@ -191,6 +191,15 @@ function pickPlantSpot(bot, ctx, tried, rnd) {
       const spot = surfaceSpotAt(bot, ctx, Math.floor(bp.x + Math.cos(a) * rr), Math.floor(bp.z + Math.sin(a) * rr), tried)
       if (spot) return spot
     }
+    // Fallback over the feasibility probe columns (round-2 minor): what
+    // the menu vetted, the tail can reach — no instant failed:no-leaves
+    // on sparse ground when random sampling misses.
+    const x0 = Math.floor(bp.x)
+    const z0 = Math.floor(bp.z)
+    for (const [dx, dz] of PLANT_PROBE) {
+      const spot = surfaceSpotAt(bot, ctx, x0 + dx, z0 + dz, tried)
+      if (spot) return spot
+    }
   } catch (_) { /* no spot */ }
   return null
 }
@@ -430,6 +439,10 @@ function reforest(bot, ctx, target, state) {
   const planting = r.phase === 'plant-pick' || r.phase === 'plant-walk' || r.phase === 'plant-place'
   try {
     if (planting) {
+      // A placement flight still in the air lands first (verifier minor
+      // 1): finishing on the deadline tick would print planted one short
+      // of what the flight then plants.
+      if (r.plantInFlight) return
       if ((r.planted || 0) >= PLANT_MAX || (r.plantFails || 0) >= PLANT_FAIL_MAX ||
         (r.plantStartedAt && Date.now() - r.plantStartedAt >= REFOREST_MAX_MS)) {
         finish(bot, ctx, r, plantEndReason(r))
@@ -802,12 +815,14 @@ function reforest(bot, ctx, target, state) {
         } catch (_) { /* log best-effort */ }
       } catch (_) { /* one attempt: the spot stays bare */ }
       finally {
+        // The cell is spent either way (verifier minor 2): a refusal left
+        // unbanned would burn the fail budget on one stubborn cell instead
+        // of moving to the next probe column.
+        try {
+          if (!r.triedPlant) r.triedPlant = new Set()
+          r.triedPlant.add(`${s.x},${s.y},${s.z}`)
+        } catch (_) { /* skip best-effort */ }
         if ((r.planted || 0) === had) r.plantFails = (r.plantFails || 0) + 1
-        else if (r.triedPlant) {
-          try {
-            r.triedPlant.add(`${s.x},${s.y},${s.z}`)
-          } catch (_) { /* skip best-effort */ }
-        }
         r.plantInFlight = false
         ctx.placeInFlight = false
         r.spot = null

@@ -585,6 +585,15 @@ describe('reforest plant spot picker', () => {
     assert.equal(reforest.pickPlantSpot(mockBot(), ctxOf(), new Set()), null)
   })
 
+  it('sparse ground falls back to the feasibility probe columns', () => {
+    // Soil only under the first probe column: random sampling with a
+    // missing rng misses it, the fallback still plants what the menu saw.
+    const bot = plantBot({ names: { '10,63,0': 'dirt' }, items: [{ name: 'oak_sapling', count: 1 }] })
+    assert.equal(reforest.plantFeasible(bot, plantCtx()), true)
+    const spot = reforest.pickPlantSpot(bot, plantCtx(), new Set(), () => 0.999)
+    assert.deepEqual(spot, { x: 10, y: 64, z: 0 })
+  })
+
   it('rejects peer-known castles and their yard ring', () => {
     const st = { site: { x: 0, y: 60, z: 0 }, rot: 0 }
     const bot = plantBot()
@@ -880,6 +889,93 @@ describe('reforest plant tail execution', () => {
     assert.equal(bot.placeCalls, 0, 'every attempt meets a taken cell')
     assert.equal(ctx.stepStatus, 'failed:no-leaves')
     assert.equal(bot._items.reduce((n, it) => n + it.count, 0), 3, 'no sapling spent on taken cells')
+  })
+
+  it('a deadline tick waits for the in-flight planting', async () => {
+    const lines = []
+    const orig = console.log
+    console.log = (...a) => { lines.push(a.join(' ')) }
+    try {
+      const bot = plantBot({ items: [{ name: 'oak_sapling', count: 1 }] })
+      const rawPlace = bot.placeBlock
+      let release = null
+      bot.placeBlock = (...a) => new Promise((resolve, reject) => {
+        release = () => rawPlace(...a).then(resolve, reject)
+      })
+      const ctx = plantCtx()
+      let fired = false
+      for (let i = 0; i < 400 && ctx.stepStatus === 'running' && !fired; i++) {
+        reforest(bot, ctx)
+        await tick()
+        await tick()
+        const r = ctx.reforest
+        if (r && r.plantInFlight) fired = true
+        else if (r && r.phase === 'plant-walk' && r.spot) {
+          bot.entity.position = { x: r.spot.x + 1, y: r.spot.y, z: r.spot.z }
+          bot._moving = false
+        }
+      }
+      assert.ok(fired, 'flight fired')
+      assert.ok(release, 'flight held')
+      // The tail budget expires mid-flight: the step must wait, not finish.
+      ctx.reforest.plantStartedAt = Date.now() - reforest.REFOREST_MAX_MS - 1000
+      reforest(bot, ctx)
+      await tick()
+      assert.equal(ctx.stepStatus, 'running', 'deadline waits for the landing')
+      release()
+      await tick()
+      await tick()
+      reforest(bot, ctx) // plant-pick: pack empty now
+      assert.equal(ctx.stepStatus, 'done')
+      assert.equal(bot.placeCalls, 1)
+    } finally {
+      console.log = orig
+    }
+    assert.match(lines.find((l) => l.startsWith('reforest leaves=')),
+      /^reforest leaves=0 saplings=\+0 fail=- planted=1$/)
+  })
+
+  it('a refused planting bans its cell and moves on', async () => {
+    const lines = []
+    const orig = console.log
+    console.log = (...a) => { lines.push(a.join(' ')) }
+    try {
+      const bot = plantBot({ items: [{ name: 'oak_sapling', count: 1 }] })
+      const rawPlace = bot.placeBlock
+      let refused = null
+      bot.placeBlock = async (ref, face) => {
+        const rp = ref && ref.position
+        const cell = rp ? `${rp.x + face.x},${rp.y + face.y},${rp.z + face.z}` : null
+        if (!refused) {
+          refused = cell // first attempt refused, never retried
+          throw new Error('refused')
+        }
+        return rawPlace(ref, face)
+      }
+      const ctx = plantCtx()
+      let seenTried = null
+      for (let i = 0; i < 600 && ctx.stepStatus === 'running'; i++) {
+        reforest(bot, ctx)
+        await tick()
+        await tick()
+        const r = ctx.reforest
+        if (r && r.plantFails >= 1 && seenTried === null && r.spot === null && r.phase === 'plant-pick') {
+          seenTried = new Set(r.triedPlant)
+        }
+        if (r && r.phase === 'plant-walk' && r.spot) {
+          bot.entity.position = { x: r.spot.x + 1, y: r.spot.y, z: r.spot.z }
+          bot._moving = false
+        }
+      }
+      assert.equal(ctx.stepStatus, 'done')
+      assert.ok(refused, 'a refusal happened')
+      assert.ok(seenTried && seenTried.has(refused), `refused cell ${refused} banned`)
+      assert.notEqual(bot.names[refused], 'oak_sapling', 'refused cell never planted over')
+    } finally {
+      console.log = orig
+    }
+    assert.match(lines.find((l) => l.startsWith('reforest leaves=')),
+      /^reforest leaves=0 saplings=\+0 fail=- planted=1$/)
   })
 })
 
