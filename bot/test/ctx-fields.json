@@ -793,7 +793,8 @@
       "src/behaviours/deep.js",
       "src/behaviours/flat.js",
       "src/behaviours/forage.js",
-      "src/behaviours/gather.js"
+      "src/behaviours/gather.js",
+      "src/behaviours/reforest.js"
     ],
     "owner": "src/behaviours/flat.js"
   },
@@ -1303,6 +1304,7 @@
       "src/behaviours/castlefetch.js",
       "src/behaviours/forage.js",
       "src/behaviours/gather.js",
+      "src/behaviours/reforest.js",
       "src/index.js"
     ],
     "owner": "src/behaviours/forage.js"
@@ -1627,6 +1629,13 @@
       "src/reflexes.js"
     ],
     "owner": "src/reflexes.js"
+  },
+  "reforest": {
+    "writers": [
+      "src/behaviours/reforest.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/reforest.js"
   },
   "repeatGaveUpPage": {
     "writers": [
