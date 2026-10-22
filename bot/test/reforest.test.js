@@ -46,7 +46,8 @@ function mockBot({ leaves = [{ x: 5, y: 64, z: 0 }], items = [], castle = null }
     },
     inventory: { items: () => inv },
     findBlocks: ({ matching, maxDistance, count, useExtraInfo }) => {
-      const out = []
+      // Like the live scan: nearest first, the count cap applies last.
+      const cands = []
       const bp = bot.entity.position
       for (const [key, cell] of world) {
         const name = typeof cell === 'string' ? cell : cell.name
@@ -58,10 +59,12 @@ function mockBot({ leaves = [{ x: 5, y: 64, z: 0 }], items = [], castle = null }
           const persistent = !!cell && typeof cell === 'object' && cell.persistent === true
           if (!useExtraInfo({ name, getProperties: () => ({ persistent }) })) continue
         }
-        out.push({ x, y, z })
-        if (out.length >= (count || 16)) break
+        cands.push({ x, y, z })
       }
-      return out
+      cands.sort((a, b) =>
+        Math.hypot(a.x - bp.x, a.y - bp.y, a.z - bp.z) -
+        Math.hypot(b.x - bp.x, b.y - bp.y, b.z - bp.z))
+      return cands.slice(0, count || 16)
     },
     blockAt: (p) => {
       const x = Math.floor(p.x)
@@ -312,8 +315,11 @@ describe('reforest execution', () => {
 
   it('a hedge does not hide the natural stand behind it', () => {
     quiet(() => {
-      const leaves = [{ x: 20, y: 64, z: 0 }]
+      // The hedge is inserted first (and nearer): without the pre-cap
+      // filter the natural leaf never survives the count cap.
+      const leaves = []
       for (let i = 1; i <= 17; i++) leaves.push({ x: i, y: 64, z: 1, persistent: true })
+      leaves.push({ x: 20, y: 64, z: 0 })
       const bot = mockBot({ leaves })
       const ctx = ctxOf()
       // 17 placed cells nearer than the tree: the pre-cap filter still
