@@ -23,8 +23,11 @@ const REFOREST_RADIUS = 32 // bead: feasible iff *_leaves within ~32 blocks
 const REFOREST_MAX_LEAVES = 8 // beaten-leaf cap per step, then done
 const REFOREST_MAX_MS = 180000 // wall-time cap per step (3 min), then done
 const WALK_STALL_TICKS = 10 // no-displacement walk ticks before a leaf is struck
-const PICKUP_TICKS = 4 // settle ticks on the dug cell while drops vacuum in
+const PICKUP_TICKS = 4 // settle ticks on the dug column while drops vacuum in
 const UNREACHABLE_STRIKES = 3 // struck leaves before failed:unreachable
+const WALK_RANGE = 4 // walk goal range: a 3D sphere, so feet-level leaves satisfy it without climbing
+const PICKUP_RANGE = 2 // pickup goal range on the dug column (XZ only: drops fall to the ground)
+const LOW_DY = 4 // canopy guard (revmux 01 core-1): leaves more than 4 above the feet need a tower, not an idle beat
 
 function isLeafName(name) {
   return typeof name === 'string' && name.endsWith('_leaves')
@@ -73,7 +76,9 @@ function keyOf(p) {
 }
 
 // Nearest live leaves within radius, honouring a trip skip set. Pure
-// scan, no ctx writes — goal.js feasible() shares it.
+// scan, no ctx writes — goal.js feasible() shares it. Sorted by 3D
+// distance (revmux 01 core-1): a horizontal sort puts an overhead canopy
+// leaf first and the walk then towers for it.
 function leavesNear(bot, radius, skip) {
   try {
     const ids = leafIds(bot)
@@ -85,7 +90,8 @@ function leavesNear(bot, radius, skip) {
     open.sort((a, b) => {
       try {
         if (!bp) return 0
-        return Math.hypot(a.x - bp.x, a.z - bp.z) - Math.hypot(b.x - bp.x, b.z - bp.z)
+        return Math.hypot(a.x - bp.x, a.y - bp.y, a.z - bp.z) -
+          Math.hypot(b.x - bp.x, b.y - bp.y, b.z - bp.z)
       } catch (_) {
         return 0
       }
@@ -93,6 +99,19 @@ function leavesNear(bot, radius, skip) {
     return open
   } catch (_) {
     return []
+  }
+}
+
+// Player-placed leaves (revmux 01 core-2): natural leaves decay
+// (persistent=false), placed ones do not — hedges and roofs near home
+// must never become idle-beat targets.
+function isPersistentLeaf(bot, p) {
+  try {
+    const b = bot.blockAt && bot.blockAt(asVec3(p))
+    const props = b && typeof b.getProperties === 'function' && b.getProperties()
+    return !!(props && props.persistent === true)
+  } catch (_) {
+    return false
   }
 }
 
@@ -116,18 +135,6 @@ function reforestFeasible(facts, bot, ctx) {
     return leavesNear(bot, REFOREST_RADIUS, null).length > 0
   } catch (_) {
     return false
-  }
-}
-
-function dist(a, b) {
-  try {
-    if (!a || !b) return null
-    if (typeof a.distanceTo === 'function') return a.distanceTo(b)
-  } catch (_) { /* fall through */ }
-  try {
-    return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
-  } catch (_) {
-    return null
   }
 }
 
@@ -163,6 +170,17 @@ function strike(ctx, r, p) {
     if (p && typeof p.x === 'number') r.skip.add(keyOf(p))
   } catch (_) { /* skip best-effort */ }
   r.streak = (r.streak || 0) + 1
+  r.pos = null
+  r.phase = 'find'
+}
+
+// Skip without a strike: a property of the cell (placed, denied), not of
+// the trip — beating the strike budget for it would fail reachable ground.
+function skipNoStrike(ctx, r, p) {
+  try {
+    if (!r.skip) r.skip = new Set()
+    if (p && typeof p.x === 'number') r.skip.add(keyOf(p))
+  } catch (_) { /* skip best-effort */ }
   r.pos = null
   r.phase = 'find'
 }
@@ -208,11 +226,28 @@ function reforest(bot, ctx, target, state) {
     } catch (_) {
       found = []
     }
-    if (found.length === 0) {
+    // Feet-level leaves first (canopy guard): the walk must never tower.
+    // Placed leaves are skipped trip-scoped, never struck.
+    let low = null
+    let high = null
+    for (const p of found) {
+      if (isPersistentLeaf(bot, p)) {
+        skipNoStrike(ctx, r, p)
+        continue
+      }
+      if (Math.abs(p.y - bp.y) <= LOW_DY) {
+        if (!low) low = p
+      } else if (!high) {
+        high = p
+      }
+    }
+    const pick = low || high
+    if (!pick) {
+      // All persistent (or nothing): no natural leaves to beat.
       finish(bot, ctx, r, r.streak > 0 ? 'unreachable' : 'no-leaves')
       return
     }
-    r.pos = asVec3(found[0])
+    r.pos = asVec3(pick)
     try {
       const b = bot.blockAt && bot.blockAt(r.pos)
       r.block = b && isLeafName(b.name) ? b : null
@@ -232,7 +267,7 @@ function reforest(bot, ctx, target, state) {
     }
     const key = `reforest:${Math.floor(r.pos.x)},${Math.floor(r.pos.y)},${Math.floor(r.pos.z)}`
     if (key !== ctx.lastGoalKey) {
-      issueGoal(bot, ctx, new goals.GoalNear(r.pos.x, r.pos.y, r.pos.z, 2), key, false)
+      issueGoal(bot, ctx, new goals.GoalNear(r.pos.x, r.pos.y, r.pos.z, WALK_RANGE), key, false)
       try {
         ctx.lastPathStatus = 'none'
       } catch (_) { /* verdict best-effort */ }
@@ -286,17 +321,26 @@ function reforest(bot, ctx, target, state) {
       r.phase = 'find'
       return
     }
-    if (!bot.pathfinder || !bot.pathfinder.isMoving()) {
-      let diggable = true
+    if (isPersistentLeaf(bot, r.pos)) {
+      // Placed after the scan (or a hedge the scan could not tell): skip
+      // trip-scoped, never struck.
+      skipNoStrike(ctx, r, r.pos)
+      return
+    }
+    let diggable = true
+    try {
+      diggable = typeof bot.canDigBlock === 'function' ? bot.canDigBlock(block) : true
+    } catch (_) {
+      diggable = false
+    }
+    // In reach already: stop the walk and dig (revmux 01 core-1) — waiting
+    // for the executor to settle first would pillar under a canopy leaf.
+    if (diggable) {
       try {
-        diggable = typeof bot.canDigBlock === 'function' ? bot.canDigBlock(block) : true
-      } catch (_) {
-        diggable = false
-      }
-      if (diggable) {
-        r.phase = 'dig'
-        r.block = block
-      }
+        clearGoal(bot, ctx)
+      } catch (_) { /* goal best-effort */ }
+      r.phase = 'dig'
+      r.block = block
     }
     return
   }
@@ -350,22 +394,23 @@ function reforest(bot, ctx, target, state) {
   }
 
   if (r.phase === 'pickup') {
-    // The dug cell's drops vacuum in by proximity — stand on it briefly,
-    // then take the next leaf. The inventory count at finish is the truth.
+    // The dug cell's drops fall to the ground and vacuum in by proximity —
+    // walk the dug column (XZ only, never the empty canopy cell above), then
+    // take the next leaf. The inventory count at finish is the truth.
     const key = `reforest-pickup:${Math.floor(r.pos.x)},${Math.floor(r.pos.y)},${Math.floor(r.pos.z)}`
     if (key !== ctx.lastGoalKey) {
-      issueGoal(bot, ctx, new goals.GoalNear(r.pos.x, r.pos.y, r.pos.z, 1), key, false)
+      issueGoal(bot, ctx, new goals.GoalNearXZ(r.pos.x, r.pos.z, PICKUP_RANGE), key, false)
       r.pickupTicks = 0
       return
     }
     r.pickupTicks = (r.pickupTicks || 0) + 1
     let d = null
     try {
-      d = dist(bp, r.pos)
+      d = Math.hypot(bp.x - r.pos.x, bp.z - r.pos.z)
     } catch (_) {
       d = null
     }
-    if ((d !== null && d <= 2) || r.pickupTicks >= PICKUP_TICKS) {
+    if ((d !== null && d <= PICKUP_RANGE + 1) || r.pickupTicks >= PICKUP_TICKS) {
       r.pos = null
       r.phase = 'find'
     }
@@ -380,6 +425,7 @@ module.exports = reforest
 module.exports.leafNames = leafNames
 module.exports.leafIds = leafIds
 module.exports.isLeafName = isLeafName
+module.exports.isPersistentLeaf = isPersistentLeaf
 module.exports.isSaplingName = isSaplingName
 module.exports.countSaplings = countSaplings
 module.exports.leavesNear = leavesNear
@@ -390,3 +436,6 @@ module.exports.REFOREST_MAX_MS = REFOREST_MAX_MS
 module.exports.WALK_STALL_TICKS = WALK_STALL_TICKS
 module.exports.PICKUP_TICKS = PICKUP_TICKS
 module.exports.UNREACHABLE_STRIKES = UNREACHABLE_STRIKES
+module.exports.WALK_RANGE = WALK_RANGE
+module.exports.PICKUP_RANGE = PICKUP_RANGE
+module.exports.LOW_DY = LOW_DY
