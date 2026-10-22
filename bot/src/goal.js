@@ -1766,7 +1766,7 @@ const STEP_CRITERIA = {
   stockpile: 'chest is no, surplus is yes, or handover is waiting: place the home chest (or a site chest) and bank the surplus',
   gear: 'gear is ready, want, or wait: forge better tools',
   forage: 'known is near: walk to the remembered find and dig it',
-  reforest: 'leaves are near and the pack has room and time is day and no castle order runs: beat nearby leaves and bank the dropped saplings',
+  reforest: 'leaves are near, or banked saplings with a vetted spot, and the pack has room and time is day and no castle order runs: beat nearby leaves, bank the dropped saplings, then plant them',
   explore: 'known is none: walk the visited boundary',
   stay: 'inside is yes and time is dusk or night: wait inside',
   rest: 'nothing else fits: rest near home',
