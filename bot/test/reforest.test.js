@@ -1,11 +1,14 @@
 'use strict'
 
 // Reforest-1 (idkcraft-6p4l): beat leaves, bank saplings on idle.
+// Reforest-2 (idkcraft-lc55): plant the banked saplings at random vetted
+// spots once the leaves run out (same step, capped tail).
 // Unit pins: leaf matcher on registry names, feasibility predicate
 // (feasible: leaves near + room + day + no castle; infeasible: night
 // with castle / full pack / no leaves), done/failed stepStatus paths
 // with the prod signal line, canopy + placed-leaf guards (revmux 01),
-// honest drop pickup + pre-cap hedge filter (revmux 02).
+// honest drop pickup + pre-cap hedge filter (revmux 02), spot-picker
+// vetoes, per-step planting cap, per-plant prod lines.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -263,7 +266,7 @@ describe('reforest execution', () => {
     }
     const prod = lines.filter((l) => l.startsWith('reforest leaves='))
     assert.equal(prod.length, 1)
-    assert.match(prod[0], /^reforest leaves=1 saplings=\+1 fail=no-leaves$/)
+    assert.match(prod[0], /^reforest leaves=1 saplings=\+1 fail=no-leaves planted=0$/)
   })
 
   it('a far pickup stays out until the walk closes the column', async () => {
@@ -342,7 +345,7 @@ describe('reforest execution', () => {
       assert.equal(ctx.stepStatus, 'done')
     })
     assert.match(logged.find((l) => l.startsWith('reforest leaves=')),
-      /^reforest leaves=0 saplings=\+0 fail=-$/)
+      /^reforest leaves=0 saplings=\+0 fail=- planted=0$/)
   })
 
   it('fails pack-full when the pack fills mid-step, keeping the banked saplings', async () => {
@@ -362,7 +365,7 @@ describe('reforest execution', () => {
       console.log = orig
     }
     assert.match(lines.find((l) => l.startsWith('reforest leaves=')),
-      /^reforest leaves=0 saplings=\+0 fail=pack-full$/)
+      /^reforest leaves=0 saplings=\+0 fail=pack-full planted=0$/)
   })
 
   it('failed:unreachable comes from the strike cap, not the empty scan', () => {
@@ -386,7 +389,7 @@ describe('reforest execution', () => {
       console.log = orig
     }
     assert.match(lines.find((l) => l.startsWith('reforest leaves=')),
-      /^reforest leaves=0 saplings=\+0 fail=unreachable$/)
+      /^reforest leaves=0 saplings=\+0 fail=unreachable planted=0$/)
   })
 
   it('a wedged walk stalls out on displacement, striking at the tick bound', () => {
@@ -407,3 +410,288 @@ describe('reforest execution', () => {
     })
   })
 })
+
+// Reforest-2 planting (idkcraft-lc55): the plant tail once the leaves run
+// out. The world is a dirt field (soil + air + headroom everywhere), so
+// every vetted spot plants; each veto is pinned by breaking one gate at a
+// time. The mock placement consumes one equipped item into the cell, like
+// the live server.
+function plantWorld() {
+  const names = {}
+  for (let x = -40; x <= 40; x++) {
+    for (let z = -40; z <= 40; z++) names[`${x},63,${z}`] = 'dirt'
+  }
+  return names
+}
+
+function plantBot({ names = plantWorld(), items = [], onEquip = null } = {}) {
+  const goals = []
+  const bot = {
+    names,
+    goals,
+    placeCalls: 0,
+    equipped: null,
+    _items: items,
+    entity: { position: { x: 0, y: 64, z: 0 }, onGround: true },
+    registry: { blocksByName: { oak_leaves: { id: 18 }, dirt: { id: 2 } } },
+    pathfinder: {
+      goal: null,
+      setGoal: (g) => { goals.push(g && g.constructor && g.constructor.name); bot.pathfinder.goal = g },
+      isMoving: () => !!bot._moving,
+    },
+    inventory: { items: () => bot._items },
+    findBlocks: () => [], // no leaves: the step starts in the plant tail
+    blockAt: (p) => {
+      const x = Math.floor(p.x)
+      const y = Math.floor(p.y)
+      const z = Math.floor(p.z)
+      const name = names[`${x},${y},${z}`] || 'air'
+      return { name, position: { x, y, z }, getProperties: () => ({ persistent: false }) }
+    },
+    canDigBlock: () => true,
+    dig: async () => {},
+    equip: async (item) => {
+      bot.equipped = item && item.name
+      if (onEquip) await onEquip(item)
+    },
+    placeBlock: async (ref, face) => {
+      bot.placeCalls++
+      const rp = ref && ref.position
+      const want = bot.equipped
+      const i = bot._items.findIndex((it) => it && it.name === want)
+      if (i === -1) throw new Error(`no ${want}`)
+      bot._items[i].count -= 1
+      if (bot._items[i].count <= 0) bot._items.splice(i, 1)
+      if (rp) names[`${rp.x + face.x},${rp.y + face.y},${rp.z + face.z}`] = want
+    },
+    chat: () => {},
+  }
+  return bot
+}
+
+function plantCtx(over = {}) {
+  return { lastGoalKey: '', lastPathStatus: 'none', stepStatus: 'running', ...over }
+}
+
+// Drive the tail; teleport along plant walks like the replant drive.
+async function drivePlant(bot, ctx, maxTicks = 400) {
+  for (let i = 0; i < maxTicks; i++) {
+    reforest(bot, ctx)
+    await tick()
+    await tick() // flush place flights
+    if (ctx.stepStatus !== 'running') break
+    const r = ctx.reforest
+    if (r && r.phase === 'plant-walk' && r.spot) {
+      bot.entity.position = { x: r.spot.x + 1, y: r.spot.y, z: r.spot.z }
+      bot._moving = false
+    }
+  }
+  await tick()
+  await tick()
+}
+
+describe('reforest plant spot picker', () => {
+  it('accepts soil + air + headroom inside the radius', () => {
+    assert.equal(reforest.plantSpotOk(plantBot(), plantCtx(), 5, 64, 0), true)
+  })
+
+  it('rejects missing soil, wrong soil and blocked headroom', () => {
+    const bot = plantBot()
+    assert.equal(reforest.plantSpotOk(bot, plantCtx(), 5, 70, 0), false, 'air below is no soil')
+    const stone = plantBot()
+    stone.names['6,63,0'] = 'stone'
+    assert.equal(reforest.plantSpotOk(stone, plantCtx(), 6, 64, 0), false, 'stone takes no sapling')
+    const capped = plantBot()
+    capped.names['7,65,0'] = 'oak_leaves'
+    assert.equal(reforest.plantSpotOk(capped, plantCtx(), 7, 64, 0), false, 'canopy overhead wastes the item')
+  })
+
+  it('rejects outside the radius and inside the body cells', () => {
+    const bot = plantBot()
+    assert.equal(reforest.plantSpotOk(bot, plantCtx(), 31, 64, 0), false, 'past 30 blocks')
+    assert.equal(reforest.plantSpotOk(bot, plantCtx(), 0, 64, 0), false, 'own feet cell')
+    assert.equal(reforest.plantSpotOk(bot, plantCtx(), 0, 65, 0), false, 'own head cell')
+  })
+
+  it('rejects the house footprint', () => {
+    const bot = plantBot()
+    const ctx = plantCtx({
+      home: {
+        site: { x: 0, y: 64, z: 0 },
+        interior: { min: { x: 3, y: 63, z: -2 }, max: { x: 9, y: 67, z: 2 } },
+      },
+    })
+    assert.equal(reforest.plantSpotOk(bot, ctx, 5, 64, 0), false)
+  })
+
+  it('the shared guard protects footprint soil (the wired gate)', () => {
+    const { protectedReason } = require('../src/behaviours/util')
+    const bot = plantBot()
+    const ctx = plantCtx({
+      home: {
+        site: { x: 0, y: 64, z: 0 },
+        interior: { min: { x: 3, y: 63, z: -2 }, max: { x: 9, y: 67, z: 2 } },
+      },
+    })
+    const soil = { name: 'dirt', position: { x: 5, y: 63, z: 0 }, getProperties: () => null }
+    assert.equal(protectedReason(bot, soil, ctx), 'protected')
+  })
+
+  it('rejects the castle footprint', () => {
+    const castle = require('../src/castle')
+    const bot = plantBot()
+    const st = { site: { x: 0, y: 60, z: 0 }, rot: 0 }
+    assert.equal(castle.inFootprint(st, { x: 2, y: 64, z: 2 }), true, 'fixture sits inside the box')
+    assert.equal(reforest.plantSpotOk(bot, plantCtx({ castle: st }), 2, 64, 2), false)
+    assert.equal(reforest.plantSpotOk(bot, plantCtx(), 2, 64, 2), true, 'same ground without a castle plants')
+  })
+
+  it('rejects danger-marked ground', () => {
+    const danger = require('../src/danger')
+    const bot = plantBot()
+    const ctx = plantCtx()
+    danger.mark(ctx, { x: 5, y: 64, z: 0 }, Date.now())
+    assert.equal(reforest.plantSpotOk(bot, ctx, 5, 64, 0), false)
+    assert.equal(reforest.plantSpotOk(bot, plantCtx(), 5, 64, 0), true, 'unmarked ground plants')
+  })
+
+  it('firstSapling skips the lone dark oak, like gather', () => {
+    assert.equal(reforest.firstSapling(plantBot()), null)
+    assert.equal(reforest.firstSapling(plantBot({ items: [{ name: 'dark_oak_sapling', count: 3 }] })), null)
+    const mixed = plantBot({ items: [{ name: 'dark_oak_sapling', count: 1 }, { name: 'oak_sapling', count: 1 }] })
+    assert.equal(reforest.firstSapling(mixed).name, 'oak_sapling')
+  })
+
+  it('sampled spots stay within the radius', () => {
+    const bot = plantBot()
+    for (let i = 0; i < 200; i++) {
+      const spot = reforest.pickPlantSpot(bot, plantCtx(), new Set())
+      assert.ok(spot, `sample ${i} finds a spot on open dirt`)
+      assert.ok(Math.hypot(spot.x - 0, spot.z - 0) <= reforest.PLANT_RADIUS, `sample ${i} within 30: ${spot.x},${spot.z}`)
+    }
+  })
+
+  it('the sampler takes an injectable rng', () => {
+    const bot = plantBot()
+    const seq = [0, 0.25] // angle 0, radius 30*sqrt(0.25) = 15: exact in fp
+    let i = 0
+    const spot = reforest.pickPlantSpot(bot, plantCtx(), new Set(), () => seq[(i++) % seq.length])
+    assert.deepEqual(spot, { x: 15, y: 64, z: 0 })
+  })
+
+  it('no soil anywhere reads no spot', () => {
+    assert.equal(reforest.pickPlantSpot(mockBot(), ctxOf(), new Set()), null)
+  })
+})
+
+describe('reforest plant tail execution', () => {
+  it('plants to the per-step cap, then done with the prod lines', async () => {
+    const lines = []
+    const orig = console.log
+    console.log = (...a) => { lines.push(a.join(' ')) }
+    let bot = null
+    try {
+      bot = plantBot({ items: [{ name: 'oak_sapling', count: 20 }] })
+      const ctx = plantCtx()
+      await drivePlant(bot, ctx)
+      assert.equal(ctx.stepStatus, 'done')
+      assert.equal(ctx.reforest, null)
+      assert.equal(bot.placeCalls, reforest.PLANT_MAX)
+    } finally {
+      console.log = orig
+    }
+    const plants = lines.filter((l) => l.startsWith('reforest plant '))
+    assert.equal(plants.length, reforest.PLANT_MAX)
+    for (const l of plants) assert.match(l, /^reforest plant oak_sapling at -?\d+,64,-?\d+$/)
+    const summary = lines.filter((l) => l.startsWith('reforest leaves='))
+    assert.equal(summary.length, 1)
+    assert.match(summary[0], /^reforest leaves=0 saplings=\+0 fail=- planted=8$/)
+    assert.equal(bot._items.reduce((n, it) => n + it.count, 0), 20 - reforest.PLANT_MAX)
+  })
+
+  it('an empty pack plants nothing and keeps the leaf verdict', async () => {
+    const lines = []
+    const orig = console.log
+    console.log = (...a) => { lines.push(a.join(' ')) }
+    try {
+      const bot = plantBot({ items: [] })
+      const ctx = plantCtx()
+      await drivePlant(bot, ctx)
+      assert.equal(ctx.stepStatus, 'failed:no-leaves')
+    } finally {
+      console.log = orig
+    }
+    assert.equal(lines.filter((l) => l.startsWith('reforest plant ')).length, 0)
+    assert.match(lines.find((l) => l.startsWith('reforest leaves=')),
+      /^reforest leaves=0 saplings=\+0 fail=no-leaves planted=0$/)
+  })
+
+  it('a dark-oak-only pack never plants', async () => {
+    const bot = plantBot({ items: [{ name: 'dark_oak_sapling', count: 3 }] })
+    const ctx = plantCtx()
+    await quietDrive(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-leaves')
+    assert.equal(bot.placeCalls, 0)
+    assert.equal(bot._items.filter((it) => it.name === 'dark_oak_sapling').length, 1)
+  })
+
+  it('unreachable walks burn the fail budget, never the leaf strikes', async () => {
+    const orig = console.log
+    console.log = () => {}
+    try {
+      const bot = plantBot({ items: [{ name: 'oak_sapling', count: 3 }] })
+      const ctx = plantCtx()
+      for (let i = 0; i < 400 && ctx.stepStatus === 'running'; i++) {
+        reforest(bot, ctx)
+        await tick()
+        await tick()
+        if (ctx.lastGoalKey.startsWith('reforest-plant:')) ctx.lastPathStatus = 'noPath'
+      }
+      assert.equal(ctx.stepStatus, 'failed:no-leaves')
+      assert.equal(bot.placeCalls, 0)
+    } finally {
+      console.log = orig
+    }
+  })
+
+  it('a steal across the equip await aborts the place', async () => {
+    const bot = plantBot({
+      items: [{ name: 'oak_sapling', count: 3 }],
+      onEquip: async () => { ctx.lastGoalKey = 'fight:zombie' },
+    })
+    const ctx = plantCtx()
+    await quietDrive(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:no-leaves')
+    assert.equal(bot.placeCalls, 0)
+    assert.equal(bot.equipped, 'oak_sapling')
+  })
+
+  it('a taken spot across the equip await is never planted over', async () => {
+    const names = plantWorld()
+    const bot = plantBot({
+      names,
+      items: [{ name: 'oak_sapling', count: 3 }],
+      onEquip: async () => {
+        const s = ctx.reforest && ctx.reforest.spot
+        // Stone kills the whole column (no soil at any row), so the
+        // re-veto refuses and no later pick plants over it either.
+        if (s) names[`${s.x},${s.y},${s.z}`] = 'stone'
+      },
+    })
+    const ctx = plantCtx()
+    await quietDrive(bot, ctx)
+    assert.equal(bot.placeCalls, 0, 'every attempt meets a taken cell')
+    assert.equal(ctx.stepStatus, 'failed:no-leaves')
+    assert.equal(bot._items.reduce((n, it) => n + it.count, 0), 3, 'no sapling spent on taken cells')
+  })
+})
+
+async function quietDrive(bot, ctx) {
+  const orig = console.log
+  console.log = () => {}
+  try {
+    await drivePlant(bot, ctx)
+  } finally {
+    console.log = orig
+  }
+}

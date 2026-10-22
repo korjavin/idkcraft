@@ -1589,6 +1589,7 @@
       "src/behaviours/flat.js",
       "src/behaviours/gather.js",
       "src/behaviours/light.js",
+      "src/behaviours/reforest.js",
       "src/behaviours/sitebed.js"
     ],
     "owner": "src/behaviours/build.js"
