@@ -30,6 +30,7 @@ const BEHAVIOURS = {
   build: require('./build'),
   castle: castleMod,
   castlefetch: require('./castlefetch'),
+  bank: require('./bank'),
   sitebed: require('./sitebed'),
   beds: require('./beds'),
   light: require('./light'),

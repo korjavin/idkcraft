@@ -243,6 +243,20 @@ function movementsToSettings(m, registry) {
   if (!m || typeof m !== 'object') return {}
   const desired = {}
   if (typeof m.canDig === 'boolean') desired.allowBreak = String(m.canDig)
+  // idkcraft-7lb2: a no-dig walk (canDig=false) used to cross as a bare
+  // `allowBreak false`, and a crown between the body and its goal answered
+  // noPath forever while the bridge still reported moving=true (prod
+  // 2026-10-21 06:49:30–06:51:08, creeper dist glued at 6.0). Stock
+  // Baritone 1.18.0 breaks `allowBreakAnyway` blocks even with
+  // allowBreak=false (Settings.java), so leaves — and only leaves — ride
+  // it: dirt/stone stay banned and no-dig walks still never tunnel hills
+  // (vmzq.50). Unknown/empty registries omit the key (no `#set` spelling
+  // clears a list); with allowBreak=true the exception is moot.
+  if (m.canDig === false) {
+    const byName = (registry && registry.blocksByName) || {}
+    const leaves = Object.keys(byName).filter((n) => n.endsWith('_leaves')).sort()
+    if (leaves.length > 0) desired.allowBreakAnyway = leaves.join(',')
+  }
   if (typeof m.allowSprinting === 'boolean') desired.allowSprint = String(m.allowSprinting)
   if (typeof m.allowParkour === 'boolean') desired.allowParkour = String(m.allowParkour)
   if (typeof m.allow1by1towers === 'boolean') desired.allowPlace = String(m.allow1by1towers)
