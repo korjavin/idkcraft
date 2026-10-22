@@ -362,6 +362,31 @@ const MENU = {
     chat: () => 'on my own: building the castle',
     verb: 'building the castle',
   },
+  bank: {
+    // Castle bank (idkcraft-qxql.12): deposit the castle kinds carried
+    // above the kit keep into the castle chest — the step the chooser
+    // picks to stock the castle (castlefetch fetches, equip/gather source;
+    // this step only moves items). Pinned only: the FSM never takes it on
+    // its own (no hard-coded feeding loop — revmux 01-review body-1: an
+    // unpinned bank outranked equip/gather and re-failed a full chest on
+    // every text change). Day only, castle order active, the footprint
+    // chest known, and a real surplus on hand.
+    feasible: (facts, bot, ctx) => {
+      if (!facts || facts.pinned !== 'bank') return false
+      if (facts.time !== 'day') return false
+      if (lowHpGated(bot, facts, ctx)) return false
+      if (!castleFirst(ctx)) return false
+      if (facts.castle === 'none' || facts.castle === 'done' || facts.castle === 'parked') return false
+      try {
+        if (!require('./behaviours/castlefetch').castleChest(bot, ctx && ctx.castle)) return false
+      } catch (_) { return false }
+      try {
+        return require('./behaviours/bank').surplus(bot, ctx).length > 0
+      } catch (_) { return false }
+    },
+    chat: () => 'on my own: banking castle material in the castle chest',
+    verb: 'banking castle material',
+  },
   gather: {
     // Only while material is still missing: plank-equivalent on hand vs the
     // house budget (table 4 + door 6 + NEED_PLANKS planks), and never once
@@ -1716,6 +1741,7 @@ const STEP_CRITERIA = {
   light: 'unlit is few or many and time is day and home is built: place torches around the house',
   castlefetch: 'castle is stone-none, planks-none, frame-none, torch-none, door-none, fence-none, chest-none or a -some word or blocked with its kind short and time is day, or castle is a -none or -some word and logs is none or few: fetch castle material from the castle chest, craft it, or dig stone and chop logs',
   castle: 'castle is clear, finish, tidy, stone-batch, planks-batch, frame-batch, torch-batch, door-batch, fence-batch or chest-batch and time is day: lay the next castle blocks',
+  bank: 'castle is ordered and time is day and the pack holds castle material above its kit keep: bank the surplus in the castle chest',
   sitebed: 'time is day or dusk and the pack holds a bed while a castle is active: place the bed outside the site and set the spawn',
   equip: 'sword is no, pickaxe is no or wood, or blocks is low: craft tools and dig blocks',
   gohome: 'time is dusk or night and home is built and inside is no: go inside',
@@ -1969,6 +1995,17 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (needsDigNoPick(kind, facts, bot)) return 'castlefetch: no pickaxe'
       return 'castlefetch: batch on hand'
     }
+    case 'bank': {
+      if (!facts || facts.pinned !== 'bank') return 'bank: waiting for the plan pin'
+      if (facts.time !== 'day') return 'bank: daytime job'
+      if (lowHpGated(bot, facts, ctx)) return 'bank: eating first (low health, no food)'
+      if (!castleFirst(ctx)) return 'bank: no castle ordered'
+      if (!facts || facts.castle === 'none' || facts.castle === 'done' || facts.castle === 'parked') return 'bank: no castle ordered'
+      try {
+        if (!require('./behaviours/castlefetch').castleChest(bot, ctx && ctx.castle)) return 'bank: no castle chest'
+      } catch (_) { return 'bank: no castle chest' }
+      return 'bank: nothing above the kit keep'
+    }
     case 'gather':
       if (ctx && ctx.home && ctx.home.parked) return 'gather: house parked'
       // A fetch-held kind parks the chop too (prkh): name the park, not the load.
@@ -2054,7 +2091,7 @@ function restWhy(facts, bot, ctx, names, upto) {
     if (n === 'rest') continue
     if (upto && n === upto) break
     // No castle ordered: no castle reason (the rest line stays as it was).
-    if ((n === 'castle' || n === 'castlefetch') && (!facts || !facts.castle || facts.castle === 'none')) continue
+    if ((n === 'castle' || n === 'castlefetch' || n === 'bank') && (!facts || !facts.castle || facts.castle === 'none')) continue
     let on = false
     try {
       on = registered(n)
@@ -2719,6 +2756,7 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
   if (choice.step === 'equip' && choice.step !== prev) ctx.equip = {}
   if (choice.step === 'gear' && choice.step !== prev) ctx.gearRun = {}
   if (choice.step === 'castlefetch' && choice.step !== prev) ctx.castleFetch = null
+  if (choice.step === 'bank' && choice.step !== prev) { ctx.bank = null; ctx.bankWalk = null }
   // A fresh return leg restarts its walk (vmzq.50): stall patience spent
   // by an interrupted leg must not fail the new one on arrival day.
   if (choice.step === 'gocastle' && choice.step !== prev) ctx.gosite = null

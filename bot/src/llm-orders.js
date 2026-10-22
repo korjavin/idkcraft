@@ -54,7 +54,7 @@ const ORDER_STEPS = {
 // Work steps the plan may pin: not the night/safety steps (the FSM owns
 // them), not deliver/rest/castle internals. Loaded step skills join below
 // (skillSteps): they sit in goal.MENU and are registered like hand steps.
-const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stockpile', 'gear', 'forage', 'explore']
+const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stockpile', 'bank', 'gear', 'forage', 'explore']
 
 const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their companion bot. ' +
   'Use only the listed step ids, in the order they must run. Item and block names are Minecraft registry ids (torch, water_bucket, iron_ore). ' +
