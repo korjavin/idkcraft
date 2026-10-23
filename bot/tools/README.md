@@ -852,13 +852,15 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
   corpus arena with the corpus expect/fail tables; shelter → the night dig-in arena. The
   `kind: step` scenario names the `failed:<reason>` and the facts line (the skill header
   `before` names the failed step, after shelter).
-- `propose` for a park writes a `build castle` spot on the vf8e.6 order flat: the order
-  founds a site and works, so the castlefetch step (and a skill for it) runs. Markers are
-  the castle terminal chats — `castle done at ` ends it, the arrival/search refusals fail
-  it — because the console leg lines never reach the order gate (revmux 01). The prep
-  rebuilds the plan world slice logged at the park (`plan world dy+2..-2`, codes to fill
-  runs around spawn, like the DUGPIT prep — the first voxel-slice arena). No slice, no
-  vehicle, or a >32-fill prep reads `no-slice` / `no-vehicle` / `prep-too-big`.
+- `propose` for a park reads `no-verdict` (all of them) or `no-vehicle` (a park whose
+  diagnosis names no `castlefetch-*`). The skill would run — `build castle` founds a site
+  and works (revmux 01) — but no in-window outcome judges a fetch (revmux 02): the only
+  terminal chat is `castle done at ` (a whole castle takes hours), the leg lines are
+  console (the order gate only reads chat), and the L1/L2 park chats need 15/45 min. The
+  family unparks when the runner reads console lines or a short castle plan exists. The
+  `plan world dy+2..-2` slice still parses onto each park event, and `sliceToPrep` (codes
+  to fill runs around spawn, like the DUGPIT prep) lands tested for the arena when the
+  verdict path does.
 - Scenarios carry `sabotage: null`: prod failed with the full menu. They live in the work dir,
   never in `skill-scenarios.json`, because `skill-loop.test.js` pins that file to corpus spots.
 - Reproduction gate (printed by `propose`; the runner, vf8e.10, gives the verdict): micro-run

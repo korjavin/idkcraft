@@ -266,10 +266,12 @@ describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
     for (const e of ev.filter((e) => e.family === 'step-fail')) assert.match(e.facts, /^time=(day|night) /)
   })
 
-  it('ranks park above step-fail by count x weight; body-owning orders park', () => {
+  it('ranks park above step-fail by count x weight; only menu-running vehicles propose', () => {
+    // Park never proposes for now (revmux 02: no in-window outcome judges a
+    // fetch), and body-owning orders park too.
     assert.deepEqual(sfList.map((c) => [c.family, c.reason, c.count, c.score, c.proposable ? 'yes' : c.why]), [
-      ['park', 'castlefetch-no-stone', 3, 6, 'yes'],
-      ['park', 'castlefetch-unreachable', 2, 4, 'yes'],
+      ['park', 'castlefetch-no-stone', 3, 6, 'no-verdict'],
+      ['park', 'castlefetch-unreachable', 2, 4, 'no-verdict'],
       ['step-fail', 'gather:no-trees', 2, 4, 'yes'],
       ['step-fail', 'explore:no-progress', 1, 2, 'no-order'],
       ['step-fail', 'shelter:no-cover', 1, 2, 'yes'],
@@ -332,40 +334,19 @@ describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
     assert.match(scenario.task, /before.*rest/)
   })
 
-  it('a castlefetch stall replays build castle on the slice arena (v2)', () => {
-    const { rc, spot, scenario } = sfPropose(sfFind('castlefetch-no-stone'))
-    assert.equal(rc, 0)
-    assert.equal(spot.mode, 'order')
-    assert.equal(spot.order, 'build castle')
-    // The castle terminal chats: only `castle done at ` ends the run, the
-    // arrival/search refusals fail it (the console leg lines never reach
-    // the order gate, revmux 01).
-    assert.deepEqual(spot.expect, ['castle done at '])
-    assert.deepEqual(spot.fail, ['cannot reach the castle', 'I found no castle spot'])
-    assert.ok(spot.prep.length >= 1 && spot.prep.length <= 32)
-    assert.ok(spot.prep.every((c) => /^(fill|setblock|place) /.test(c)))
-    assert.equal(matchOrderLine('castle done at 1 2 3', spot.expect, spot.fail), 'expect')
-    assert.equal(matchOrderLine('cannot reach the castle', spot.expect, spot.fail), 'fail')
-    assert.equal(matchOrderLine('I found no castle spot within 48 blocks — mostly water (3 of 9 spots); try another area', spot.expect, spot.fail), 'fail')
-    assert.equal(matchOrderLine('castle site ready, starting to build', spot.expect, spot.fail), null)
-    assert.equal(matchOrderLine('building the castle here at 1 2 3 (~400 blocks)', spot.expect, spot.fail), null)
-    assert.equal(matchOrderLine('no stone near the castle at 1 2: quarrying it; drop cobblestone into a chest on the castle site to speed it up', spot.expect, spot.fail), null)
-    assert.equal(matchOrderLine('at the castle', spot.expect, spot.fail), null)
-    assert.equal(scenario.kind, 'step')
-    assert.match(scenario.task, /failed:castlefetch-no-stone/)
-    assert.match(scenario.task, /fetch kind stone/)
-    assert.match(scenario.task, /before.*castlefetch/)
-    assert.match(scenario.task, /CURRICULUM_BODY=baritone/)
-  })
-
-  it('a kindless castlefetch stall still proposes; a non-castlefetch park stays parked', () => {
-    const { rc, spot, scenario } = sfPropose(sfFind('castlefetch-unreachable'))
-    assert.equal(rc, 0)
-    assert.equal(spot.order, 'build castle')
-    assert.match(scenario.task, /failed:castlefetch-unreachable/)
+  it('a castlefetch stall stays parked: no in-window outcome judges a fetch', () => {
+    // Revmux 02: `castle done at ` takes hours, the leg lines are console,
+    // L1/L2 need 15/45 min — the order gate would read every run TIMEOUT,
+    // so the family waits on runner console-line verdicts (or a short plan).
+    for (const reason of ['castlefetch-no-stone', 'castlefetch-unreachable']) {
+      const c = sfFind(reason)
+      assert.equal(c.proposable, false)
+      assert.equal(c.why, 'no-verdict')
+      assert.equal(proposal(c).why, 'no-verdict')
+    }
     const inline = (lines) => rank(parse(lines.join('\n'), ENV), 7)
     const noSlice = inline(['2026-10-20 12:00:00 IdkBotV2 castlefetch failed:castlefetch-no-stone'])
-    assert.equal(proposal(noSlice[0]).why, 'no-slice')
+    assert.equal(proposal(noSlice[0]).why, 'no-verdict')
     const other = inline(['2026-10-20 12:00:00 IdkBotV2 task house 1/10 parked #1 why=no wood found nearby'])
     assert.equal(other[0].family, 'park')
     assert.equal(proposal(other[0]).why, 'no-vehicle')
@@ -376,7 +357,7 @@ describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
       assert.equal(main(['harvest', SF]), 0)
       const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
       assert.equal(saved.length, 7)
-      assert.match(out.at(-1), /^harvest events=11 signatures=7 page=0 bring=0 stepfail=5 park=2 proposable=5 days=7 /)
+      assert.match(out.at(-1), /^harvest events=11 signatures=7 page=0 bring=0 stepfail=5 park=2 proposable=3 days=7 /)
     })
   })
 })

@@ -1577,9 +1577,12 @@ describe('AUTO order spots (idkcraft-vf8e.11)', () => {
   }
 
   it('AUTO spots load and their markers judge the pinned corpus lines', () => {
+    // Only menu-running vehicles propose (revmux 01+02): gather/build run
+    // the goal menu under `build here`, shelter judges enclosed; parks and
+    // body-owning orders stay parked.
     const { dir, out } = autoSpots()
     try {
-      assert.equal(out.length, 5)
+      assert.equal(out.length, 3)
       const find = (reason) => out.find((o) => o.reason === reason).spot
       const gather = find('gather:no-trees')
       assert.equal(matchOrderLine(`got ${NEED} logs`, gather.expect, gather.fail), 'expect')
@@ -1589,16 +1592,6 @@ describe('AUTO order spots (idkcraft-vf8e.11)', () => {
       assert.equal(matchOrderLine('home done at -144 72 -77', build.expect, build.fail), 'expect')
       assert.equal(matchOrderLine("I can't see you, come closer", build.expect, build.fail), 'fail')
       assert.equal(matchOrderLine('building a home at -144 72 -77', build.expect, build.fail), null)
-      // `build castle` founds a site and works, so the castlefetch step runs
-      // (revmux 01): only the castle terminal chats judge.
-      const castle = find('castlefetch-no-stone')
-      assert.equal(castle.order, 'build castle')
-      assert.equal(matchOrderLine('castle done at 1 2 3', castle.expect, castle.fail), 'expect')
-      assert.equal(matchOrderLine('cannot reach the castle', castle.expect, castle.fail), 'fail')
-      assert.equal(matchOrderLine('I found no castle spot within 48 blocks — mostly water (3 of 9 spots); try another area', castle.expect, castle.fail), 'fail')
-      assert.equal(matchOrderLine('castle site ready, starting to build', castle.expect, castle.fail), null)
-      assert.equal(matchOrderLine('no stone near the castle at 1 2: quarrying it; drop cobblestone into a chest on the castle site to speed it up', castle.expect, castle.fail), null)
-      assert.equal(matchOrderLine('at the castle', castle.expect, castle.fail), null)
       const shelter = find('shelter:no-cover')
       assert.equal(shelter.mode, 'shelter')
       assert.equal(shelter.order, null) // shelter judges enclosed, never chat

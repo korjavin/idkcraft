@@ -30,11 +30,12 @@
 //           `no-order` (revmux 01: orders that own the body could never
 //           run the skill).
 //   park (vf8e.11) — a castlefetch-* leg failure (`castlefetch <kind>:
-//           leg over (failed:...)`, `castlefetch failed:...`, a castlefetch
-//           step-fail) or a park line (`goal park ...`, `task ... parked ...`)
-//           whose diagnosis names one. Signature = the castlefetch reason.
-//           Other parks stay parked (no vehicle). v2 body: run the night
-//           with CURRICULUM_BODY=baritone (README "Body").
+//           leg over (failed:...)`, `castlefetch failed:...`) or a park line
+//           (`goal park ...`, `task ... parked ...`) whose diagnosis names
+//           one. Signature = the castlefetch reason. All of them read
+//           `no-verdict` for now (revmux 02: no in-window outcome judges a
+//           fetch — `castle done at ` takes hours, leg lines are console,
+//           L1/L2 need 15/45 min); other parks read `no-vehicle`.
 // Rank = count x weight (page 3, bring 2, step-fail 2, park 2). Bots: CURRICULUM_BOTS = comma
 // list or "all" (default BOT2_USERNAME, else IdkBotV2 — the owner's feed);
 // SWARM_PREFIX names fold into one "swarm" bot like deaths.sh. days counts
@@ -378,12 +379,6 @@ const STEP_VEHICLES = {
   }),
 }
 
-// Slice arena (vf8e.11): the vf8e.6 order flat, the prod slice rebuilt around
-// it. SLICE_BASE is the floored spawn: slice (dx,dy,dz) -> base+(dx,dy,dz).
-const SLICE_SPAWN = [59.5, 64, -205.5]
-const SLICE_GOAL = [62.5, 64, -205.5]
-const SLICE_BASE = [59, 64, -206]
-
 // Voxel codes (stall-state.js LEGEND) -> prep block. '?' (prod-unloaded) is
 // skipped: the rig leaves prod-unknown cells alone. Bed/door ride as solid
 // stand-ins (a fill cannot place their two-cell shapes).
@@ -497,44 +492,20 @@ function proposeStepFail(c, name, base) {
   }
 }
 
-// A park candidate -> `build castle` on the slice arena (vf8e.11) or
-// {why}. `build castle` founds a site and works (chat.js startCastle), so
-// the goal menu — and a castlefetch step skill — runs before the verdict;
-// a lead/find order would own the body past it (revmux 01). The founding
-// starts at the guide and takes the speaker-front site first, searching
-// outward when the slice does not fit. Markers are the castle terminal
-// chats (console leg lines never reach the order gate): `castle done at `
-// ends it, the arrival/search refusals fail it, anything else (quarry
-// fallback, site-ready, L1 — the L1/L2 park chats need 15/45 min, far past
-// the window) rides to TIMEOUT, which the gate reads RED. v2 only: run
-// the night with CURRICULUM_BODY=baritone (the keeper, kept rig, and loop
-// all follow REPLAY_BODY; the ledger records the body).
+// A park candidate (vf8e.11): proposable=false until the runner can judge
+// a fetch. `build castle` founds a site and works, so the skill WOULD run
+// (revmux 01) — but no in-window outcome judges it (revmux 02): the only
+// terminal chat is `castle done at ` (a whole castle takes hours, far past
+// any window), the leg lines are console (the order gate only reads chat),
+// the L1/L2 park chats need 15/45 min, and the gate's terminal signals
+// (stuck/eps/call/low-disp) do not fire on a walking, digging, failing
+// fetch. So castlefetch parks read `no-verdict` until the runner reads
+// console lines or a short castle plan exists; anything else reads
+// `no-vehicle`. The slice builder (sliceToPrep) lands tested now and wires
+// up when the verdict path does.
 function proposePark(c, name, base) {
   if (!String(c.reason || '').startsWith('castlefetch-')) return { why: 'no-vehicle' }
-  if (!c.slice) return { why: 'no-slice' }
-  let prep
-  try {
-    prep = sliceToPrep(c.slice, SLICE_BASE)
-  } catch (e) {
-    return { why: /too big/.test(String((e && e.message) || e)) ? 'prep-too-big' : 'bad-slice' }
-  }
-  const kind = c.fetch || fetchKind(c.reason)
-  return {
-    spot: {
-      name, mode: 'order', spawn: SLICE_SPAWN, goal: SLICE_GOAL, order: 'build castle',
-      expect: ['castle done at '], fail: ['cannot reach the castle', 'I found no castle spot'],
-      prep, secs: 300, scaffold: 64, pickaxe: true, bead: BEAD11,
-    },
-    scenario: {
-      ...base, bead: BEAD11, kind: 'step',
-      task: `In prod a castlefetch leg failed ${c.count}x (last ${c.lastSeen} UTC, bots ${c.bots.join(',')}): failed:${c.reason}${kind ? ` (fetch kind ${kind})` : ''}. ` +
-        `The arena rebuilds the prod voxel slice around spawn. The bot gets the order 'build castle' here with a pickaxe and 64 dirt: ` +
-        `it founds the site and works, so the castlefetch step runs. ` +
-        `Write a goal step skill that unstalls the fetch so the order ends 'castle done at ', not a fail marker. ` +
-        `Set the skill header 'before' to 'castlefetch' (it must sit after shelter). ` +
-        `Run this candidate on the v2 body (CURRICULUM_BODY=baritone): prod runs it there.`,
-    },
-  }
+  return { why: 'no-verdict' }
 }
 
 // candidate -> {spot, scenario} or {why}.
