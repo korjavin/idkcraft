@@ -1276,6 +1276,73 @@ describe('skills: craft + withdraw facade (vf8e.12)', () => {
       restore()
     }
   })
+
+  it('a run that crosses the wood ceiling mid-run still ends done', () => {
+    const calls = []
+    const restore = stubDeps((bot, ctx, name, count) => {
+      calls.push([name, count])
+      ctx.craftany = ctx.craftany || { key: `${name}x${count}`, plan: {} }
+      return calls.length < 2 ? 'running' : { done: true, target: name }
+    })
+    try {
+      const bot = fakeBot()
+      bot.items = [{ name: 'oak_planks', count: 60 }]
+      const ctx = { home: { built: true } }
+      const sk = compiled('craft_crosscap', 'const r = bot.craft("oak_planks", 1); return r === "started" ? "running" : r === "done" ? "done" : "failed:" + r.replace(/:/g, "-")')
+      const st = fresh()
+      assert.equal(sk.tick(bot, ctx, st), 'running')
+      bot.items = [{ name: 'oak_planks', count: 70 }] // the run lands past the ceiling
+      assert.equal(sk.tick(bot, ctx, st), 'done', 'gated at open, not on continuation ticks')
+      assert.deepEqual(calls, [['oak_planks', 1], ['oak_planks', 1]])
+    } finally {
+      restore()
+    }
+  })
+
+  it('craft runs through a leftover digIn busy from a replaced episode', async () => {
+    const restore = stubDeps((bot, ctx) => {
+      ctx.craftany = ctx.craftany || { key: 'stickx1', plan: {} }
+      return 'running'
+    })
+    try {
+      const bot = chestBot()
+      const sk = compiled('craft_aftermv',
+        'st.n = (st.n || 0) + 1; ' +
+        'if (st.n === 1) { const r = bot.digIn(); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-") } ' +
+        'const r = bot.craft("stick", 1); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-")')
+      const st = fresh()
+      assert.equal(sk.tick(bot, {}, st), 'running', 'first episode starts the maneuver')
+      // No terminal tick: the episode is replaced outright.
+      assert.equal(sk.tick(bot, {}, fresh()), 'running', 'the next episode crafts through the leftover digIn busy')
+    } finally {
+      restore()
+    }
+    await flush()
+  })
+
+  it('a terminal tick drops pack-table walk goals of an episode that crafted', () => {
+    for (const [tag, key] of [['t', 'equip-table:5,60,0'], ['c', 'equip-castle-table:5,60,0']]) {
+      const restore = stubDeps((bot, ctx) => {
+        ctx.craftany = ctx.craftany || { key: 'stickx1', plan: {} }
+        ctx.lastGoalKey = key
+        try { bot.pathfinder.setGoal({ table: true }) } catch (_) { /* best-effort */ }
+        return 'running'
+      })
+      try {
+        const bot = fakeBot()
+        const sk = compiled(`craft_walkeq${tag}`,
+          'st.n = (st.n || 0) + 1; if (st.n === 1) { const r = bot.craft("stick", 1); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-") } return "done"')
+        const ctx = {}
+        const st = fresh()
+        assert.equal(sk.tick(bot, ctx, st), 'running')
+        assert.equal(sk.tick(bot, ctx, st), 'done')
+        assert.equal(bot.pathfinder.goal, null, `${key} dropped with the episode`)
+        assert.equal(ctx.lastGoalKey, '')
+      } finally {
+        restore()
+      }
+    }
+  })
 })
 
 // Last: the ban and the off switch are process-wide.

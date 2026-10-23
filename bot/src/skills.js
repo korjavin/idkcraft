@@ -513,13 +513,15 @@ const OPS = {
   // gear op is consumed here, so the episode still ends terminal). While it runs every other firing act
   // answers 'busy' — call craft() every tick and nothing else until it
   // ends, the digIn shape. Bank keeps: a _planks target past the wood
-  // ceiling (packroom PLANK_KEEP, the craft.js conversion gate) is
-  // refused, never burned. The table placement runs the hand path, so
+  // ceiling at open (packroom PLANK_KEEP, the craft.js conversion gate)
+  // is refused, never burned; a run that crosses it mid-run still ends
+  // done. The table placement runs the hand path, so
   // the protected-block rules hold without a sandbox copy.
   craft(c, item, n = 1) {
     if (typeof item !== 'string' || !item) throw new Error('bad item')
     n = Math.floor(num(n))
     if (!(n >= 1 && n <= 64)) throw new Error('bad count')
+    if (c.act.busy === 'digIn' && !c.hs.digInSt) c.act.busy = null // verifier major 2: fire()'s release, mirrored (craft never goes through fire)
     if (c.act.busy && c.act.busy !== 'craft') return 'busy'
     // A gear op this episode launched failed between ticks (failed:gear-*
     // on the shared status): consume it here so the episode ends through
@@ -542,11 +544,15 @@ const OPS = {
       c.hs.craft.any = null
       return 'denied:craft-failed'
     }
-    try {
-      if (item.endsWith('_planks') && require('./behaviours/packroom').woodCapped(c.bot, c.ctx)) return 'denied:wood-capped'
-    } catch (_) { /* unreadable inventory reads empty: craft anyway */ }
     const key = `${item}x${n}`
-    if (!c.hs.craft || c.hs.craft.key !== key) c.hs.craft = { key, any: null }
+    if (!c.hs.craft || c.hs.craft.key !== key) {
+      // Gate once, at open (verifier minor 1): a multi-tick run that lands
+      // past the ceiling finishes 'done' instead of misreporting capped.
+      try {
+        if (item.endsWith('_planks') && require('./behaviours/packroom').woodCapped(c.bot, c.ctx)) return 'denied:wood-capped'
+      } catch (_) { /* unreadable inventory reads empty: craft anyway */ }
+      c.hs.craft = { key, any: null }
+    }
     const ep = c.hs.craft
     const ctx = c.ctx
     const keep = ctx.craftany
@@ -818,9 +824,12 @@ function compile(file, text, env) {
         }
         releaseControls(bot)
         // A goal the skill left live dies with it (a stale goal re-wedges: yvi).
-        // A craft table walk (craftany-table:*) dies only with an episode
-        // that crafted (core-6): a stale hand key is never ours to clear.
-        const craftWalk = !!(st.hs && st.hs.craft) && typeof ctx.lastGoalKey === 'string' && ctx.lastGoalKey.startsWith('craftany-table:')
+        // A craft table walk (craftany-table:*, plus the pack-table path's
+        // equip-table:*/equip-castle-table:* from tablespot.js) dies only
+        // with an episode that crafted (core-6, verifier major 3): a stale
+        // hand key is never ours to clear.
+        const craftWalk = !!(st.hs && st.hs.craft) && typeof ctx.lastGoalKey === 'string'
+          && (ctx.lastGoalKey.startsWith('craftany-table:') || ctx.lastGoalKey.startsWith('equip-table:') || ctx.lastGoalKey.startsWith('equip-castle-table:'))
         if (typeof ctx.lastGoalKey === 'string' && (ctx.lastGoalKey.startsWith('skill:') || ctx.lastGoalKey === 'dig-in-walk' || craftWalk)) {
           try { clearGoal(bot, ctx) } catch (_) { /* best-effort */ }
         }
