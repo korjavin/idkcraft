@@ -181,7 +181,9 @@ ticks.
   `'denied:table-unreachable'` (the table walk gave up) /
   `'denied:no-mats'` (the pack is short) / `'denied:craft-failed'` (the
   recipe or the gear op failed — a failed gear op is consumed here, so the
-  episode still ends terminal), `'denied:wood-capped'` for a `_planks`
+  episode still ends terminal; a previous episode's failure is counted and
+  released at the next dispatch instead — step skills still end via decide
+  first, the step-failure parking is unchanged), `'denied:wood-capped'` for a `_planks`
   target past the wood ceiling (packroom `PLANK_KEEP`, across woods like
   the hand gate). While it runs every other firing act answers `'busy'` —
   call it every tick and nothing else, the `digIn` shape; a replaced

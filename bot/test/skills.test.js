@@ -1196,6 +1196,64 @@ describe('skills: craft + withdraw facade (vf8e.12)', () => {
     await flush()
   })
 
+  it('a previous episode gear failure is counted and released at the next dispatch', async () => {
+    const restore = stubDeps((bot, ctx) => {
+      ctx.craftany = ctx.craftany || { key: 'stickx1', plan: {} }
+      return 'running'
+    }, async () => ({ got: 1, name: 'oak_planks' }))
+    try {
+      const src = '/* skill {"name": "craft_prev", "description": "d", "kind": "recover"} */\n' +
+        'function feasible() { return true }\n' +
+        'function run(bot, st) { st.n = (st.n || 0) + 1; ' +
+        'if (st.n === 1) { const r = bot.craft("stick", 1); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-") } ' +
+        'const r = bot.withdraw({x: 0, y: 61, z: 2}, "oak_planks", 1); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-") }\n'
+      const { sk } = skills.compile('craft_prev.js', src, {})
+      sk.reset()
+      const tables = {
+        recover: { RECOVER_BANNABLE: new Set(), RECOVER_SHUFFLE: new Set(), RECOVER_MENU: {}, RECOVER_ORDER: [], RECOVER_CRITERIA: {}, RECOVER_SKILLS: new Set() },
+        BEHAVIOURS: {},
+      }
+      skills.registerRecover(sk, tables)
+      const run = tables.recover.RECOVER_MENU.craft_prev.run
+      // Episode 1 starts a craft run through the tick path.
+      assert.equal(sk.tick(chestBot(), {}, fresh()), 'running')
+      // No terminal tick: the episode is replaced, then its gear op fails.
+      const bot2 = chestBot()
+      bot2.controls.forward = true
+      const ctx2 = { recovery: {}, stepStatus: 'failed:gear-stick', lastGoalKey: 'skill:craft_prev:0,0,0,1' }
+      try { bot2.pathfinder.setGoal({ table: true }) } catch (_) { /* best-effort */ }
+      const rec2 = ctx2.recovery
+      const st2 = { skill: 'craft_prev', ticks: 0, hs: { busy: null, err: null } }
+      st2.alive = () => ctx2.recovery === rec2 && rec2.st === st2 && rec2.action === 'craft_prev'
+      rec2.st = st2
+      rec2.action = 'craft_prev'
+      assert.equal(run(bot2, ctx2), 'running', 'the next episode draws through the released busy')
+      assert.equal(bot2.controls.forward, false, 'held controls released')
+      assert.equal(bot2.pathfinder.goal, null, 'the skill walk goal dropped')
+      assert.equal(ctx2.lastGoalKey, '', 'the walk key cleared')
+      assert.equal(ctx2.stepStatus, 'failed:gear-stick', 'the step failure still flows to recover as before')
+      await flush()
+      // Same-episode live runs still go through craft(), never the wrapper.
+      const bot3 = chestBot()
+      bot3.controls.forward = true
+      const ctx3 = { recovery: {}, lastGoalKey: 'skill:craft_prev:0,0,0,1' }
+      try { bot3.pathfinder.setGoal({ table: true }) } catch (_) { /* best-effort */ }
+      const rec3 = ctx3.recovery
+      const st3 = { skill: 'craft_prev', ticks: 0, hs: { busy: null, err: null } }
+      st3.alive = () => ctx3.recovery === rec3 && rec3.st === st3 && rec3.action === 'craft_prev'
+      rec3.st = st3
+      rec3.action = 'craft_prev'
+      sk.reset()
+      assert.equal(run(bot3, ctx3), 'running', 'a fresh episode starts its run')
+      ctx3.stepStatus = 'failed:gear-stick' // the live op fails between ticks
+      assert.equal(run(bot3, ctx3), 'failed:busy', 'the live run holds the body; the entry guard stands aside')
+      assert.equal(ctx3.stepStatus, 'failed:gear-stick', 'nothing nulled the step failure')
+    } finally {
+      restore()
+    }
+    await flush()
+  })
+
   it('a withdraw window in flight survives the terminal tick, then frees the next draw', async () => {
     let release = null
     const gate = new Promise((r) => { release = r })

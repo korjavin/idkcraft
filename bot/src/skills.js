@@ -212,6 +212,32 @@ function fire(c, kind, fn) {
   return 'started'
 }
 
+// A gear op a previous episode launched failed between ticks (revmux
+// 02-after-fix minor): the current episode never started a run, so
+// craft()'s entry guard cannot see it — but the skill still held controls
+// and walk goals, and the auto-ban never counted it. Count it and release
+// here; the status itself still flows to decide()/recover as before.
+// Skipped when the current episode holds a live run (craft() consumes it),
+// when nothing of ours is in flight, and on a clean status.
+function prevEpisodeGearFail(c, name, kind) {
+  try {
+    const s = c.ctx.stepStatus
+    if (typeof s !== 'string' || !s.startsWith('failed:gear-')) return
+    if (c.hs.craft && c.hs.craft.any) return
+    if (!c.act.craftLive) return
+    c.act.craftLive = false
+    if (c.act.busy === 'craft') c.act.busy = null
+    releaseControls(c.bot)
+    const k = c.ctx.lastGoalKey
+    if (typeof k === 'string' && (k.startsWith('skill:') || k === 'dig-in-walk' || k.startsWith('craftany-table:'))) {
+      try { clearGoal(c.bot, c.ctx) } catch (_) { /* best-effort */ }
+    }
+    try { metrics.skillRuns.inc({ skill: name, outcome: 'failed' }) } catch (_) { /* metric best-effort */ }
+    try { console.log(`skill gear-fail consumed skill=${name} kind=${kind} status=${s}`) } catch (_) { /* log best-effort */ }
+    noteOutcome(name, 'failed:denied-craft-failed')
+  } catch (_) { /* cleanup best-effort */ }
+}
+
 const PLACE_REFS = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]]
 
 // One entity's dropped-stack name, both bodies: v1 reads mineflayer's
@@ -498,17 +524,24 @@ const OPS = {
     // A gear op this episode launched failed between ticks (failed:gear-*
     // on the shared status): consume it here so the episode ends through
     // the terminal path (ban counting, control release) instead of ending
-    // the whole step from outside (core-4). The first call defers to
+    // the whole step from outside (core-4). A previous episode's failure
+    // is the wrapper's (prevEpisodeGearFail): without a live run of our
+    // own the status is not ours to null. The first call defers to
     // craftItem's own stale-snapshot, like the hand open.
+    let liveRun = false
+    let failedGear = false
     try {
-      const s = c.ctx.stepStatus
-      if (c.hs.craft && c.hs.craft.any && typeof s === 'string' && s.startsWith('failed:gear-')) {
-        c.ctx.stepStatus = null
-        c.act.busy = null
-        c.hs.craft.any = null
-        return 'denied:craft-failed'
-      }
-    } catch (_) { /* unreadable status: craft anyway */ }
+      liveRun = !!(c.hs.craft && c.hs.craft.any)
+      failedGear = typeof c.ctx.stepStatus === 'string' && c.ctx.stepStatus.startsWith('failed:gear-')
+    } catch (_) { liveRun = false; failedGear = false }
+    if (!liveRun && !failedGear) c.act.craftLive = false // the old run ended clean: nothing of ours can still fail
+    if (liveRun && failedGear) {
+      c.ctx.stepStatus = null
+      c.act.busy = null
+      c.act.craftLive = false
+      c.hs.craft.any = null
+      return 'denied:craft-failed'
+    }
     try {
       if (item.endsWith('_planks') && require('./behaviours/packroom').woodCapped(c.bot, c.ctx)) return 'denied:wood-capped'
     } catch (_) { /* unreadable inventory reads empty: craft anyway */ }
@@ -527,8 +560,9 @@ const OPS = {
       ep.any = ctx.craftany
       ctx.craftany = keep
     }
-    if (out === 'running') { c.act.busy = 'craft'; return 'started' }
+    if (out === 'running') { c.act.busy = 'craft'; c.act.craftLive = true; return 'started' }
     c.act.busy = null
+    c.act.craftLive = false
     ep.any = null
     if (out && out.done) return 'done'
     const line = (out && typeof out.line === 'string' && out.line) || ''
@@ -756,9 +790,18 @@ function compile(file, text, env) {
           out = r.out
           if (out !== 'running' && out !== 'done' && !(typeof out === 'string' && REASON_RE.test(out))) out = 'failed:skill-error'
         }
+        // A previous episode's gear op failed between ticks and this tick
+        // stayed running (revmux 02-after-fix minor): the current episode
+        // never started a run, so craft()'s entry guard cannot see it — but
+        // the skill still held controls and walk goals, and the auto-ban
+        // never counted it. Count it and release here; terminal outcomes
+        // count through the normal path, so this runs only for 'running'.
+        // The status itself still flows to decide()/recover as before.
+        if (out === 'running') prevEpisodeGearFail({ bot, ctx, hs: st.hs, act }, meta.name, meta.kind)
       }
       if (out !== 'running') {
         st.dead = true // an act still in flight never lands (fire live())
+        act.craftLive = false // the run ended terminal: a later failure is the step's, not the auto-ban's
         // A started dig finishes on mineflayer's timer: cancel ours (codex 03 P2).
         // ponytail: a replaced episode (no terminal tick) keeps its dig, like a hand primitive's.
         // krup: the dig-in maneuver digs through the same bot.dig timer and
@@ -997,4 +1040,4 @@ function load(env = process.env, opts = {}) {
   return names
 }
 
-module.exports = { enabled, load, parseHeader, compile, registerStep, disable, state, stepSkills, CALL_MS, TICK_BUDGET, PROMOTED_DIR, BAN_FAILS, deps }
+module.exports = { enabled, load, parseHeader, compile, registerStep, registerRecover, disable, state, stepSkills, CALL_MS, TICK_BUDGET, PROMOTED_DIR, BAN_FAILS, deps }
