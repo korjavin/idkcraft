@@ -174,6 +174,28 @@ ticks.
   is `control('jump', true)`.
 - `lookAt(x, y, z)`.
 - `equip(item, 'hand'|'off-hand')`.
+- `craft(item, n=1)` runs one craftany tick per call: the hand plan, table
+  walk/place and gear ops (per-episode run state, shared body goals).
+  `'started'` while it advances, `'done'` once the product lands,
+  `'denied:no-table'` / `'denied:no-mats'` / `'denied:craft-failed'` when
+  the pack cannot fund it, `'denied:wood-capped'` for a `_planks` target
+  past the wood ceiling (packroom `PLANK_KEEP`). While it runs every other
+  firing act answers `'busy'` — call it every tick and nothing else, the
+  `digIn` shape.
+- `withdraw(chest, item, n=1)` opens one chest window through stockpile's
+  `withdrawAnyFromChest` (the castlefetch draw call). `chest` is an
+  `{x,y,z}` cell (or `x, y, z, item, n`): it must be a chest block in open
+  reach (`INTERACT_REACH`) — walk there with `goto()` first. On a built home,
+  planks past `PLANK_KEEP` and logs past `LOG_KEEP` are refused
+  (`denied:bank-keep`).
+  No dig runs, so the protection rules are untouched by construction.
+  `'started'`, then `'busy'` while open (poll `status()`); an empty or gone
+  chest lands in `status().err`. Count the pack before/after for the got.
+
+Resource-chain recipe (a castle stairs leg whose table sits in the chest):
+`goto()` the chest, `withdraw()` the table (or the wood), `craft()` the
+stairs, `place()` them — `count()`/`inventory()` before and after each act
+tell what landed.
 
 There is no toss, drop or chat, so a skill can never drop items or talk. On
 a terminal outcome the runtime releases every control and clears a goal the

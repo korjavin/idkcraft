@@ -910,6 +910,206 @@ describe('skills: order-only step skills (vf8e.17)', () => {
   })
 })
 
+describe('skills: craft + withdraw facade (vf8e.12)', () => {
+  const fresh = () => ({ ticks: 0, hs: { busy: null, err: null } })
+  function stubDeps(craftFn, withdrawFn) {
+    const d = skills.deps
+    const keep = { craftItem: d.craftItem, withdraw: d.withdraw }
+    if (craftFn) d.craftItem = craftFn
+    if (withdrawFn) d.withdraw = withdrawFn
+    return () => { d.craftItem = keep.craftItem; d.withdraw = keep.withdraw }
+  }
+  function chestBot() {
+    return fakeBot(new Map([[key(0, 61, 2), 'chest']]))
+  }
+
+  it('bot.craft and bot.withdraw are facade functions', () => {
+    const bot = fakeBot()
+    assert.equal(tick(compiled('facade_fns', 'return typeof bot.craft === "function" && typeof bot.withdraw === "function" ? "done" : "failed:missing"'), bot), 'done')
+  })
+
+  it('craft advances one craftany tick per call and restores the hand run slot', () => {
+    const calls = []
+    const restore = stubDeps((bot, ctx, name, count) => {
+      calls.push([name, count])
+      ctx.craftany = ctx.craftany || { key: `${name}x${count}`, plan: {} }
+      return calls.length < 2 ? 'running' : { done: true, target: name }
+    })
+    try {
+      const bot = fakeBot()
+      const sk = compiled('craft_run', 'const r = bot.craft("stick", 4); return r === "started" ? "running" : r === "done" ? "done" : "failed:" + r.replace(/:/g, "-")')
+      const hand = { key: 'hand-plan' }
+      const ctx = { craftany: hand }
+      const st = fresh()
+      assert.equal(sk.tick(bot, ctx, st), 'running')
+      assert.deepEqual(ctx.craftany, hand, 'the hand run slot is restored every tick')
+      assert.equal(sk.tick(bot, ctx, st), 'done', 'the landed product ends the act')
+      assert.deepEqual(calls, [['stick', 4], ['stick', 4]])
+      assert.deepEqual(ctx.craftany, hand)
+    } finally {
+      restore()
+    }
+  })
+
+  it('craft maps hand refusals to denied lines', () => {
+    const lines = ['need a crafting table', "can't make stick: need 2 oak_planks (have 0)", 'boom']
+    const want = ['failed:denied-no-table', 'failed:denied-no-mats', 'failed:denied-craft-failed']
+    lines.forEach((line, i) => {
+      const restore = stubDeps(() => ({ done: false, line }))
+      try {
+        assert.equal(tick(compiled(`craft_map${i}`, 'return "failed:" + bot.craft("stick", 1).replace(/:/g, "-")'), fakeBot()), want[i], line)
+      } finally {
+        restore()
+      }
+    })
+    const restore = stubDeps(() => { throw new Error('no registry') })
+    try {
+      assert.equal(tick(compiled('craft_throw', 'return "failed:" + bot.craft("stick", 1).replace(/:/g, "-")'), fakeBot()), 'failed:denied-craft-failed')
+    } finally {
+      restore()
+    }
+  })
+
+  it('craft refuses a planks target past the wood ceiling but converts logs below it', () => {
+    let calls = 0
+    const restore = stubDeps(() => { calls++; return { done: true } })
+    try {
+      const capped = fakeBot()
+      capped.items = [{ name: 'oak_planks', count: 64 }]
+      assert.equal(
+        tick(compiled('craft_cap', 'return "failed:" + bot.craft("oak_planks", 1).replace(/:/g, "-")'), capped, { home: { built: true } }),
+        'failed:denied-wood-capped')
+      assert.equal(calls, 0, 'the ceiling refuses before craftany plans')
+      const open = fakeBot()
+      open.items = [{ name: 'oak_log', count: 4 }]
+      assert.equal(
+        tick(compiled('craft_logs', 'const r = bot.craft("oak_planks", 1); return r === "done" ? "done" : "failed:" + r.replace(/:/g, "-")'), open, { home: { built: true } }),
+        'done')
+    } finally {
+      restore()
+    }
+  })
+
+  it('other firing acts answer busy while craft runs, and the next episode runs free', () => {
+    const restore = stubDeps(() => 'running')
+    try {
+      const bot = chestBot()
+      const sk = compiled('craft_busy',
+        'st.n = (st.n || 0) + 1; ' +
+        'if (st.n === 1) { const r = bot.craft("stick", 1); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-") } ' +
+        'if (st.n === 2) { const r = bot.withdraw({x: 0, y: 61, z: 2}, "oak_planks", 1); return r === "busy" ? "running" : "failed:" + r.replace(/:/g, "-") } ' +
+        'return "done"')
+      const st = fresh()
+      assert.equal(sk.tick(bot, {}, st), 'running')
+      assert.equal(sk.tick(bot, {}, st), 'running', 'withdraw waits while craft holds the body')
+      assert.equal(sk.tick(bot, {}, st), 'done', 'a terminal tick releases the craft busy')
+      sk.reset()
+      const st2 = fresh()
+      const sk2 = compiled('craft_free', 'const r = bot.craft("stick", 1); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-")')
+      assert.equal(sk2.tick(bot, {}, st2), 'running', 'a fresh episode crafts again')
+    } finally {
+      restore()
+    }
+  })
+
+  it('withdraw refuses a missing chest, a far chest and a full keep', () => {
+    const far = fakeBot(new Map([[key(10, 61, 0), 'chest']]))
+    const one = (bot, chest, item, n, ctx = {}) => tick(compiled('wd_one',
+      `const r = bot.withdraw(${JSON.stringify(chest)}, ${JSON.stringify(item)}, ${n}); return "failed:" + r.replace(/:/g, "-")`), bot, ctx)
+    assert.equal(one(fakeBot(), { x: 0, y: 61, z: 2 }, 'oak_planks', 1), 'failed:denied-not-a-chest')
+    assert.equal(one(far, { x: 10, y: 61, z: 0 }, 'oak_planks', 1), 'failed:denied-out-of-reach')
+    const full = chestBot()
+    full.items = [{ name: 'oak_planks', count: 64 }]
+    assert.equal(one(full, { x: 0, y: 61, z: 2 }, 'oak_planks', 1, { home: { built: true } }), 'failed:denied-bank-keep')
+  })
+
+  it('withdraw validates args like every other act', () => {
+    const bot = chestBot()
+    const bad = (expr) => tick(compiled('wd_bad', `try { bot.${expr}; return "failed:no-throw" } catch (e) { return "failed:threw" }`), bot)
+    assert.equal(bad('withdraw({x: 0, y: 61, z: 2}, "", 1)'), 'failed:threw')
+    assert.equal(bad('withdraw({x: 0, y: 61, z: 2}, "oak_planks", 0)'), 'failed:threw')
+    assert.equal(bad('craft("stick", 0)'), 'failed:threw')
+    assert.equal(bad('craft("", 1)'), 'failed:threw')
+    assert.equal(tick(compiled('wd_uncaught', 'bot.craft("stick", 0); return "done"'), bot), 'failed:skill-error')
+  })
+
+  it('withdraw takes x, y, z cells too', async () => {
+    const draws = []
+    const restore = stubDeps(null, async (bot, ctx, names, count, at) => {
+      draws.push([names, count, { x: at.x, y: at.y, z: at.z }])
+      return { got: 1, name: names[0] }
+    })
+    try {
+      const bot = chestBot()
+      const sk = compiled('wd_xyz', 'const r = bot.withdraw(0, 61, 2, "oak_planks", 1); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-")')
+      assert.equal(sk.tick(bot, {}, fresh()), 'running')
+      await flush()
+      assert.deepEqual(draws, [[['oak_planks'], 1, { x: 0, y: 61, z: 2 }]])
+    } finally {
+      restore()
+    }
+    await flush()
+  })
+
+  it('withdraw opens one window; an empty chest lands in status().err', async () => {
+    const draws = []
+    const restore = stubDeps(null, async (bot, ctx, names, count, at) => {
+      draws.push([names, count, { x: at.x, y: at.y, z: at.z }])
+      return { got: 2, name: names[0] }
+    })
+    try {
+      const bot = chestBot()
+      const sk = compiled('wd_ok',
+        'st.n = (st.n || 0) + 1; ' +
+        'if (st.n === 1) { const r = bot.withdraw({x: 0, y: 61, z: 2}, "oak_planks", 2); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-") } ' +
+        'const s = bot.status(); return s.busy === null && s.err === null ? "done" : "failed:busy-" + s.busy + "-err-" + s.err')
+      const st = fresh()
+      assert.equal(sk.tick(bot, {}, st), 'running')
+      await flush()
+      assert.deepEqual(draws, [[['oak_planks'], 2, { x: 0, y: 61, z: 2 }]])
+      assert.equal(sk.tick(bot, {}, st), 'done', 'the window op clears busy with no err')
+    } finally {
+      restore()
+    }
+    const restore2 = stubDeps(null, async () => ({ got: 0, name: null }))
+    try {
+      const bot = chestBot()
+      const sk = compiled('wd_empty',
+        'st.n = (st.n || 0) + 1; ' +
+        'if (st.n === 1) { const r = bot.withdraw({x: 0, y: 61, z: 2}, "oak_planks", 2); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-") } ' +
+        'const s = bot.status(); return s.err && s.err.indexOf("withdraw") === 0 ? "done" : "failed:err-" + s.err')
+      const st = fresh()
+      assert.equal(sk.tick(bot, {}, st), 'running')
+      await flush()
+      assert.equal(sk.tick(bot, {}, st), 'done', 'an empty chest surfaces, never spins')
+    } finally {
+      restore2()
+    }
+  })
+
+  it('a terminal tick releases a withdraw busy like any firing act', async () => {
+    let release = null
+    const gate = new Promise((r) => { release = r })
+    const restore = stubDeps(null, async () => { await gate; return { got: 1, name: 'oak_planks' } })
+    try {
+      const bot = chestBot()
+      const sk = compiled('wd_end',
+        'st.n = (st.n || 0) + 1; ' +
+        'if (st.n === 1) { const r = bot.withdraw({x: 0, y: 61, z: 2}, "oak_planks", 1); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-") } ' +
+        'return "done"')
+      const st = fresh()
+      assert.equal(sk.tick(bot, {}, st), 'running')
+      assert.equal(sk.tick(bot, {}, st), 'done', 'terminal tick with the window in flight')
+      release()
+      await flush()
+      const sk2 = compiled('wd_again', 'const r = bot.withdraw({x: 0, y: 61, z: 2}, "oak_planks", 1); return r === "started" ? "running" : "failed:" + r.replace(/:/g, "-")')
+      assert.equal(sk2.tick(bot, {}, fresh()), 'running', 'a fresh episode withdraws again')
+    } finally {
+      restore()
+    }
+  })
+})
+
 // Last: the ban and the off switch are process-wide.
 describe('skills: auto-ban and chat skills off (vf8e.4)', () => {
   it(`a skill that fails ${skills.BAN_FAILS} times is banned until restart`, () => {

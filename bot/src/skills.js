@@ -21,11 +21,16 @@
 // yard/apron refusal and never against a GUI block, use = a ray-visible
 // face into the checked cell (never where the server ray lands unchecked),
 // goto = body.js movementsFor on the live Movements (never a new one). No
-// toss/drop, no chat. digIn takes no skill-controlled args and advances one
-// tick per call on per-episode state; while it runs the firing acts
-// (dig/place/use/equip) answer 'busy', a replaced episode's leftover busy
-// releases on its first act, and a terminal tick cancels its dig and drops
-// its walk goal like any hand primitive's.
+// toss/drop, no chat. craft = one craftany tick per call (the hand
+// plan/walk/table/gear path on per-episode run state over the shared body
+// goals), withdraw = one stockpile chest window (the castlefetch draw
+// call); neither adds inventory logic in the sandbox, both respect the
+// bank keeps and the protection rules by routing through the hand code.
+// digIn takes no skill-controlled args and advances one tick per call on
+// per-episode state; while it (or craft/withdraw) runs the firing acts
+// (dig/place/use/equip/craft/withdraw) answer 'busy', a replaced episode's
+// leftover busy releases on its first act, and a terminal tick cancels its
+// dig and drops its walk goal like any hand primitive's.
 // ponytail: node:vm is a guard rail for our own generated code, not a
 // boundary against hostile code; promotion (vf8e.4) keeps revmux review.
 // Known ceiling: no heap cap — a skill allocating GBs inside its 50 ms can
@@ -56,7 +61,7 @@ const KINDS = new Set(['recover', 'step'])
 const BODIES = new Set(['any', 'mineflayer', 'baritone'])
 const CONTROLS = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
 const FACADE_OPS = ['pos', 'blockAt', 'findBlocks', 'inventory', 'count', 'health', 'food', 'time', 'entities', 'drops', 'status',
-  'dig', 'digIn', 'place', 'use', 'goto', 'stop', 'control', 'lookAt', 'equip']
+  'dig', 'digIn', 'place', 'use', 'goto', 'stop', 'control', 'lookAt', 'equip', 'craft', 'withdraw']
 
 // Standing eye height for the server use-raycast (waterup.js EYE_HEIGHT).
 const EYE_HEIGHT = 1.62
@@ -218,6 +223,14 @@ function dropName(e) {
     if (d && typeof d.name === 'string') return d.name
   } catch (_) { /* unreadable drop reads null */ }
   return (e && typeof e.item === 'string' && e.item) ? e.item : null
+}
+
+// Seams for unit tests (craftany needs a recipe registry, stockpile a
+// chest window); production reads the real modules lazily, the
+// castlefetch deps shape.
+const deps = {
+  craftItem: (...a) => require('./behaviours/craftany')(...a),
+  withdraw: (...a) => require('./behaviours/stockpile').withdrawAnyFromChest(...a),
 }
 
 // Host side of the bridge: op name + plain args -> plain JSON value.
@@ -459,6 +472,99 @@ const OPS = {
     if (!stack) return 'denied:no-item'
     return fire(c, 'equip', (live) => { live(); return c.bot.equip(stack, dest) })
   },
+  // Craft (vf8e.12): one craftany tick per call. The plan, the table
+  // walk/place and the gear ops all run inside the existing craftItem, so
+  // no recipe or inventory logic lives in the sandbox. Per-episode run
+  // state: the hand run slot (ctx.craftany) is swapped for the episode's
+  // own and restored before returning, while the shared body state (walk
+  // goals, gearInFlight, stepStatus) stays on the real ctx. 'started'
+  // while the run advances, 'done' once the product lands,
+  // 'denied:no-table' when no table is reachable, 'denied:no-mats' when
+  // the pack cannot fund the recipe. While it runs every other firing act
+  // answers 'busy' — call craft() every tick and nothing else until it
+  // ends, the digIn shape. Bank keeps: a _planks target past the wood
+  // ceiling (packroom PLANK_KEEP, the craft.js conversion gate) is
+  // refused, never burned. The table placement runs the hand path, so
+  // the protected-block rules hold without a sandbox copy.
+  craft(c, item, n = 1) {
+    if (typeof item !== 'string' || !item) throw new Error('bad item')
+    n = Math.floor(num(n))
+    if (!(n >= 1 && n <= 64)) throw new Error('bad count')
+    if (c.act.busy && c.act.busy !== 'craft') return 'busy'
+    try {
+      if (item.endsWith('_planks') && require('./behaviours/packroom').woodCapped(c.bot, c.ctx)) return 'denied:wood-capped'
+    } catch (_) { /* unreadable inventory reads empty: craft anyway */ }
+    const key = `${item}x${n}`
+    if (!c.hs.craft || c.hs.craft.key !== key) c.hs.craft = { key, any: null }
+    const ep = c.hs.craft
+    const ctx = c.ctx
+    const keep = ctx.craftany
+    ctx.craftany = ep.any || null
+    let out
+    try {
+      out = deps.craftItem(c.bot, ctx, item, n)
+    } catch (_) {
+      out = { done: false, line: 'craft threw' }
+    } finally {
+      ep.any = ctx.craftany
+      ctx.craftany = keep
+    }
+    if (out === 'running') { c.act.busy = 'craft'; return 'started' }
+    c.act.busy = null
+    ep.any = null
+    if (out && out.done) return 'done'
+    const line = (out && typeof out.line === 'string' && out.line) || ''
+    if (/crafting table/i.test(line)) return 'denied:no-table'
+    if (/can't make/i.test(line) || /need .*have/i.test(line)) return 'denied:no-mats'
+    return 'denied:craft-failed'
+  },
+  // Withdraw (vf8e.12): one chest window through stockpile's
+  // withdrawAnyFromChest — the same call castlefetch draws its bank
+  // batches with — so no window or inventory logic lives in the sandbox.
+  // withdraw(chest, item, n): chest is an {x,y,z} cell (or x, y, z, item,
+  // n). The cell must be a chest block in open reach (INTERACT_REACH):
+  // walk there with goto() first. Bank keeps: planks past PLANK_KEEP and
+  // logs past LOG_KEEP are refused, so a skill never overfills the pack
+  // the stockpile just banked down. No dig runs — the protection rules
+  // are untouched by construction. One async window under fire():
+  // 'started', then 'busy' while open (poll status()); an empty or gone
+  // chest lands in status().err. Count the pack before/after for the got.
+  withdraw(c, ...a) {
+    let x, y, z, item, n
+    if (a.length > 0 && a[0] && typeof a[0] === 'object') {
+      x = a[0].x; y = a[0].y; z = a[0].z; item = a[1]; n = a[2]
+    } else {
+      x = a[0]; y = a[1]; z = a[2]; item = a[3]; n = a[4]
+    }
+    x = Math.floor(num(x)); y = Math.floor(num(y)); z = Math.floor(num(z))
+    if (typeof item !== 'string' || !item) throw new Error('bad item')
+    n = n === undefined ? 1 : Math.floor(num(n))
+    if (!(n >= 1 && n <= 64)) throw new Error('bad count')
+    const packroom = require('./behaviours/packroom')
+    let room = n
+    try {
+      // The ceiling binds on a built home only (the woodCapped shape):
+      // pre-house the budget needs every plank packed.
+      const built = !!(c.ctx && c.ctx.home && c.ctx.home.built)
+      let pack = 0
+      for (const it of c.bot.inventory.items()) if (it && it.name === item) pack += it.count || 0
+      if (built && item.endsWith('_planks')) room = Math.min(n, packroom.PLANK_KEEP - pack)
+      else if (built && item.endsWith('_log')) room = Math.min(n, packroom.LOG_KEEP - pack)
+    } catch (_) { room = n }
+    if (room <= 0) return 'denied:bank-keep'
+    const at = new Vec3(x, y, z)
+    let block = null
+    try { block = c.bot.blockAt(at) } catch (_) { block = null }
+    if (!block) return 'denied:unloaded'
+    if (block.name !== 'chest') return 'denied:not-a-chest'
+    const p = botPos(c.bot)
+    if (!p || Math.hypot(p.x - (x + 0.5), p.y - (y + 0.5), p.z - (z + 0.5)) > packroom.INTERACT_REACH) return 'denied:out-of-reach'
+    return fire(c, 'withdraw', async (live) => {
+      live()
+      const r = await deps.withdraw(c.bot, c.ctx, [item], room, at)
+      if (!r || !(r.got > 0)) throw new Error('empty-or-gone')
+    })
+  },
 }
 
 function releaseControls(bot) {
@@ -630,7 +736,9 @@ function compile(file, text, env) {
         // krup: the dig-in maneuver digs through the same bot.dig timer and
         // walks under a dig-in-walk goal: both die with the episode, and its
         // busy unlocks the next episode's acts.
-        if (act.busy === 'dig' || act.busy === 'digIn') {
+        if (act.busy === 'craft' || act.busy === 'withdraw') {
+          act.busy = null // no dig timer behind them: the window/op dies with the episode (fire live())
+        } else if (act.busy === 'dig' || act.busy === 'digIn') {
           try { bot.stopDigging() } catch (_) { /* best-effort */ }
           act.busy = null
         }
@@ -855,4 +963,4 @@ function load(env = process.env, opts = {}) {
   return names
 }
 
-module.exports = { enabled, load, parseHeader, compile, registerStep, disable, state, stepSkills, CALL_MS, TICK_BUDGET, PROMOTED_DIR, BAN_FAILS }
+module.exports = { enabled, load, parseHeader, compile, registerStep, disable, state, stepSkills, CALL_MS, TICK_BUDGET, PROMOTED_DIR, BAN_FAILS, deps }
