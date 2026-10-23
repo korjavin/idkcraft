@@ -270,17 +270,169 @@ function owedMoved(bot, ctx) {
   } catch (_) { return false }
 }
 
+// Same-day park key (idkcraft-dlpo): the MC day when readable (prod),
+// else the UTC calendar date. Counts and parks key on this, so a new day
+// unparks by construction.
+function parkDay(bot) {
+  try {
+    const d = bot && bot.time && bot.time.day
+    if (typeof d === 'number') return `mc:${d}`
+  } catch (_) { /* date below */ }
+  try {
+    return `date:${new Date(Date.now()).toISOString().slice(0, 10)}`
+  } catch (_) {
+    return 'date:unknown'
+  }
+}
+
+function parkLimit() {
+  try {
+    const n = require('../budget').CASTLEFETCH_PARK_FAILS
+    if (typeof n === 'number' && n >= 1) return n
+  } catch (_) { /* default below */ }
+  return 3
+}
+
+// Drop parked/count entries from a previous day (idkcraft-dlpo unpark:
+// next day). Keeps the time-based hold fields (at/kind/kinds) untouched.
+function sweepParked(ctx, bot) {
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+    if (!sf || typeof sf !== 'object') return
+    const today = parkDay(bot)
+    let changed = false
+    if (sf.parked && typeof sf.parked === 'object') {
+      for (const k of Object.keys(sf.parked)) {
+        if (sf.parked[k] !== today) { delete sf.parked[k]; changed = true }
+      }
+      if (Object.keys(sf.parked).length === 0) delete sf.parked
+      else if (changed) { /* keep today's parks */ }
+    }
+    if (sf.counts && typeof sf.counts === 'object') {
+      for (const k of Object.keys(sf.counts)) {
+        const e = sf.counts[k]
+        if (!e || typeof e !== 'object' || e.day !== today) { delete sf.counts[k]; changed = true }
+      }
+      if (Object.keys(sf.counts).length === 0) delete sf.counts
+    }
+    if (changed) {
+      try {
+        if (Object.keys(sf).length === 0) delete ctx.stepFail.castlefetch
+        else if (typeof sf.at !== 'number' && !sf.kinds && !sf.kind && !sf.parked && !sf.counts) delete ctx.stepFail.castlefetch
+      } catch (_) { /* record best-effort */ }
+    }
+  } catch (_) { /* sweep best-effort */ }
+}
+
+// True while KIND is same-day parked (idkcraft-dlpo): N fails on the same
+// day park the kind, whatever the retry clock says.
+function isParked(ctx, bot, kind) {
+  try {
+    if (!kind) return false
+    sweepParked(ctx, bot)
+    const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+    const p = sf && sf.parked
+    return !!(p && typeof p === 'object' && p[kind] === parkDay(bot))
+  } catch (_) {
+    return false
+  }
+}
+
+// Count one same-day failure for KIND; park at the limit with a parked
+// line. Returns true when this call newly parked the kind. Unstamped
+// (kindless) failures are uncountable and never park.
+function noteFail(ctx, bot, kind) {
+  try {
+    if (!ctx || typeof kind !== 'string' || !kind) return false
+    sweepParked(ctx, bot)
+    if (isParked(ctx, bot, kind)) return false
+    if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
+    const sf = ctx.stepFail.castlefetch || (ctx.stepFail.castlefetch = {})
+    const today = parkDay(bot)
+    if (!sf.counts || typeof sf.counts !== 'object') sf.counts = {}
+    const e = (sf.counts[kind] && typeof sf.counts[kind] === 'object' && sf.counts[kind].day === today)
+      ? sf.counts[kind]
+      : (sf.counts[kind] = { day: today, n: 0 })
+    e.n = (e.n | 0) + 1
+    const limit = parkLimit()
+    if (e.n >= limit) {
+      if (!sf.parked || typeof sf.parked !== 'object') sf.parked = {}
+      if (sf.parked[kind] !== today) {
+        sf.parked[kind] = today
+        try { console.log(`castlefetch ${kind}: parked for the day after ${e.n} fails (${today})`) } catch (_) { /* log best-effort */ }
+        return true
+      }
+    }
+    return false
+  } catch (_) {
+    return false
+  }
+}
+
+// A leg that got stock retires the kind's park (obtainable again).
+function unparkKind(ctx, kind, why) {
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+    if (!sf || typeof sf !== 'object' || typeof kind !== 'string' || !kind) return false
+    const wasParked = !!(sf.parked && typeof sf.parked === 'object' && sf.parked[kind])
+    let out = wasParked
+    if (sf.parked && typeof sf.parked === 'object' && sf.parked[kind]) delete sf.parked[kind]
+    if (sf.counts && typeof sf.counts === 'object' && sf.counts[kind]) { delete sf.counts[kind]; out = true }
+    if (sf.parked && typeof sf.parked === 'object' && Object.keys(sf.parked).length === 0) delete sf.parked
+    if (sf.counts && typeof sf.counts === 'object' && Object.keys(sf.counts).length === 0) delete sf.counts
+    if (out) {
+      // The unpark line fires only for a real park; a retired bare count
+      // stays silent.
+      if (wasParked) {
+        try { console.log(`castlefetch ${kind}: unparked (${why || 'stock'})`) } catch (_) { /* log best-effort */ }
+      }
+      if (Object.keys(sf).length === 0) delete ctx.stepFail.castlefetch
+    }
+    return out
+  } catch (_) {
+    return false
+  }
+}
+
+// A bank deposit may have restocked the chests (owner or the bot's own
+// banking trip): every parked kind gets a fresh look.
+function unparkAll(ctx, why) {
+  try {
+    const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+    if (!sf || typeof sf !== 'object') return false
+    const parked = (sf.parked && typeof sf.parked === 'object') ? sf.parked : {}
+    const counts = (sf.counts && typeof sf.counts === 'object') ? sf.counts : {}
+    const kinds = new Set([...Object.keys(parked), ...Object.keys(counts)])
+    if (kinds.size === 0) return false
+    const wasParked = Object.keys(parked).length > 0
+    delete sf.parked
+    delete sf.counts
+    // The unpark line fires only for a real park; retired bare counts stay
+    // silent.
+    if (wasParked) {
+      try { console.log(`castlefetch: unparked after ${why || 'bank deposit'} (${[...kinds].join(',')})`) } catch (_) { /* log best-effort */ }
+    }
+    if (Object.keys(sf).length === 0) delete ctx.stepFail.castlefetch
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 // True while a fetch failure parks KIND (prkh): the hold is per kind, so
 // a stone-unreachable leg parks stone while a fence word still fetches
 // from the chest. Holds accumulate in a kinds map (revmux 02 core-1), so a
 // later kind's failure or success never erases a still-failing kind; a
 // hold with no kind on it (legacy records) still parks everything. The
 // owed-repair home try (owedMoved) is exempt, as before.
+// dlpo: a same-day parked kind (N fails, counts) also parks here, past
+// the retry window — same exemption.
 function holdFor(bot, ctx, kind) {
   try {
+    if (owedMoved(bot, ctx)) return false
+    if (isParked(ctx, bot, kind)) return true
     const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
     if (!sf || typeof sf.at !== 'number') return false
-    if (owedMoved(bot, ctx)) return false
     const window = require('../budget').CASTLEFETCH_RETRY_MS
     const kinds = sf.kinds
     if (kinds && typeof kinds === 'object') {
@@ -2712,6 +2864,12 @@ module.exports.PIT_ROOM = PIT_ROOM
 module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.holdFor = holdFor
+module.exports.isParked = isParked
+module.exports.noteFail = noteFail
+module.exports.unparkKind = unparkKind
+module.exports.unparkAll = unparkAll
+module.exports.sweepParked = sweepParked
+module.exports.parkDay = parkDay
 module.exports.deadRestart = deadRestart
 module.exports.RESTART_MAX = RESTART_MAX
 module.exports.roomForDrop = roomForDrop

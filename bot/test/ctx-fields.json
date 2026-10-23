@@ -1841,6 +1841,7 @@
   },
   "stepFail": {
     "writers": [
+      "src/behaviours/castlefetch.js",
       "src/behaviours/stockpile.js",
       "src/chat.js",
       "src/goal.js",
