@@ -1886,6 +1886,7 @@
       "src/goal.js",
       "src/index.js",
       "src/orders.js",
+      "src/skills.js",
       "src/step.js"
     ],
     "owner": "src/behaviours/home.js"

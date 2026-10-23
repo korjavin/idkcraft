@@ -203,6 +203,7 @@ function fire(c, kind, fn) {
   // inherits must not wedge it: the flag belongs to a dead episode when
   // this one never started a maneuver of its own (hs is per-episode).
   if (act.busy === 'digIn' && !c.hs.digInSt) act.busy = null
+  if (act.busy === 'craft' && !c.hs.craft) act.busy = null // vf8e.12 core-1: a replaced episode's run never ends
   if (act.busy) return 'busy'
   act.busy = kind
   c.hs.err = null
@@ -354,6 +355,7 @@ const OPS = {
     // No stale-busy release here: entry with busy === 'digIn' proceeds
     // either way (the release lives in fire(), where a foreign busy
     // would wedge the episode).
+    if (c.act.busy === 'craft' && !c.hs.craft) c.act.busy = null // vf8e.12 core-1: a replaced episode's run
     if (c.act.busy && c.act.busy !== 'digIn') return 'busy'
     let out
     try {
@@ -479,8 +481,10 @@ const OPS = {
   // own and restored before returning, while the shared body state (walk
   // goals, gearInFlight, stepStatus) stays on the real ctx. 'started'
   // while the run advances, 'done' once the product lands,
-  // 'denied:no-table' when no table is reachable, 'denied:no-mats' when
-  // the pack cannot fund the recipe. While it runs every other firing act
+  // 'denied:no-table' when no table is reachable, 'denied:table-unreachable'
+  // when the table walk gives up, 'denied:no-mats' when the pack is short,
+  // 'denied:craft-failed' when the recipe or the gear op fails (a failed
+  // gear op is consumed here, so the episode still ends terminal). While it runs every other firing act
   // answers 'busy' — call craft() every tick and nothing else until it
   // ends, the digIn shape. Bank keeps: a _planks target past the wood
   // ceiling (packroom PLANK_KEEP, the craft.js conversion gate) is
@@ -491,6 +495,20 @@ const OPS = {
     n = Math.floor(num(n))
     if (!(n >= 1 && n <= 64)) throw new Error('bad count')
     if (c.act.busy && c.act.busy !== 'craft') return 'busy'
+    // A gear op this episode launched failed between ticks (failed:gear-*
+    // on the shared status): consume it here so the episode ends through
+    // the terminal path (ban counting, control release) instead of ending
+    // the whole step from outside (core-4). The first call defers to
+    // craftItem's own stale-snapshot, like the hand open.
+    try {
+      const s = c.ctx.stepStatus
+      if (c.hs.craft && c.hs.craft.any && typeof s === 'string' && s.startsWith('failed:gear-')) {
+        c.ctx.stepStatus = null
+        c.act.busy = null
+        c.hs.craft.any = null
+        return 'denied:craft-failed'
+      }
+    } catch (_) { /* unreadable status: craft anyway */ }
     try {
       if (item.endsWith('_planks') && require('./behaviours/packroom').woodCapped(c.bot, c.ctx)) return 'denied:wood-capped'
     } catch (_) { /* unreadable inventory reads empty: craft anyway */ }
@@ -514,8 +532,10 @@ const OPS = {
     ep.any = null
     if (out && out.done) return 'done'
     const line = (out && typeof out.line === 'string' && out.line) || ''
+    if (/can't reach/i.test(line)) return 'denied:table-unreachable'
     if (/crafting table/i.test(line)) return 'denied:no-table'
-    if (/can't make/i.test(line) || /need .*have/i.test(line)) return 'denied:no-mats'
+    if (/no recipe/i.test(line) || /crafting failed/i.test(line)) return 'denied:craft-failed'
+    if (/can't make/i.test(line)) return 'denied:no-mats'
     return 'denied:craft-failed'
   },
   // Withdraw (vf8e.12): one chest window through stockpile's
@@ -523,9 +543,9 @@ const OPS = {
   // batches with — so no window or inventory logic lives in the sandbox.
   // withdraw(chest, item, n): chest is an {x,y,z} cell (or x, y, z, item,
   // n). The cell must be a chest block in open reach (INTERACT_REACH):
-  // walk there with goto() first. Bank keeps: planks past PLANK_KEEP and
-  // logs past LOG_KEEP are refused, so a skill never overfills the pack
-  // the stockpile just banked down. No dig runs — the protection rules
+  // walk there with goto() first. Bank keeps (across woods, the surplusWood
+  // shape): planks past PLANK_KEEP and logs past LOG_KEEP are refused, so
+  // a skill never overfills the pack the stockpile just banked down. No dig runs — the protection rules
   // are untouched by construction. One async window under fire():
   // 'started', then 'busy' while open (poll status()); an empty or gone
   // chest lands in status().err. Count the pack before/after for the got.
@@ -544,12 +564,20 @@ const OPS = {
     let room = n
     try {
       // The ceiling binds on a built home only (the woodCapped shape):
-      // pre-house the budget needs every plank packed.
+      // pre-house the budget needs every plank packed. Cross-wood
+      // ceilings (the surplusWood shape): every _planks stack counts
+      // against the one PLANK_KEEP, every _log against the one LOG_KEEP.
       const built = !!(c.ctx && c.ctx.home && c.ctx.home.built)
+      const planks = item.endsWith('_planks')
+      const logs = !planks && item.endsWith('_log')
       let pack = 0
-      for (const it of c.bot.inventory.items()) if (it && it.name === item) pack += it.count || 0
-      if (built && item.endsWith('_planks')) room = Math.min(n, packroom.PLANK_KEEP - pack)
-      else if (built && item.endsWith('_log')) room = Math.min(n, packroom.LOG_KEEP - pack)
+      for (const it of c.bot.inventory.items()) {
+        if (!it || typeof it.name !== 'string') continue
+        if (planks && it.name.endsWith('_planks')) pack += it.count || 0
+        else if (logs && it.name.endsWith('_log')) pack += it.count || 0
+      }
+      if (built && planks) room = Math.min(n, packroom.PLANK_KEEP - pack)
+      else if (built && logs) room = Math.min(n, packroom.LOG_KEEP - pack)
     } catch (_) { room = n }
     if (room <= 0) return 'denied:bank-keep'
     const at = new Vec3(x, y, z)
@@ -736,15 +764,21 @@ function compile(file, text, env) {
         // krup: the dig-in maneuver digs through the same bot.dig timer and
         // walks under a dig-in-walk goal: both die with the episode, and its
         // busy unlocks the next episode's acts.
-        if (act.busy === 'craft' || act.busy === 'withdraw') {
-          act.busy = null // no dig timer behind them: the window/op dies with the episode (fire live())
+        if (act.busy === 'craft') {
+          act.busy = null // the gear op completes into the shared status, where the next craft tick consumes it
         } else if (act.busy === 'dig' || act.busy === 'digIn') {
+          // withdraw keeps its busy across the terminal tick and fire()'s
+          // finally frees it (core-2, the place/use shape): the chest
+          // window may still be open, and a second draw must wait for it.
           try { bot.stopDigging() } catch (_) { /* best-effort */ }
           act.busy = null
         }
         releaseControls(bot)
         // A goal the skill left live dies with it (a stale goal re-wedges: yvi).
-        if (typeof ctx.lastGoalKey === 'string' && (ctx.lastGoalKey.startsWith('skill:') || ctx.lastGoalKey === 'dig-in-walk')) {
+        // A craft table walk (craftany-table:*) dies only with an episode
+        // that crafted (core-6): a stale hand key is never ours to clear.
+        const craftWalk = !!(st.hs && st.hs.craft) && typeof ctx.lastGoalKey === 'string' && ctx.lastGoalKey.startsWith('craftany-table:')
+        if (typeof ctx.lastGoalKey === 'string' && (ctx.lastGoalKey.startsWith('skill:') || ctx.lastGoalKey === 'dig-in-walk' || craftWalk)) {
           try { clearGoal(bot, ctx) } catch (_) { /* best-effort */ }
         }
         const reason = failReason(out)

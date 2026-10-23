@@ -177,11 +177,16 @@ ticks.
 - `craft(item, n=1)` runs one craftany tick per call: the hand plan, table
   walk/place and gear ops (per-episode run state, shared body goals).
   `'started'` while it advances, `'done'` once the product lands,
-  `'denied:no-table'` / `'denied:no-mats'` / `'denied:craft-failed'` when
-  the pack cannot fund it, `'denied:wood-capped'` for a `_planks` target
-  past the wood ceiling (packroom `PLANK_KEEP`). While it runs every other
-  firing act answers `'busy'` — call it every tick and nothing else, the
-  `digIn` shape.
+  `'denied:no-table'` (no table to walk to) /
+  `'denied:table-unreachable'` (the table walk gave up) /
+  `'denied:no-mats'` (the pack is short) / `'denied:craft-failed'` (the
+  recipe or the gear op failed — a failed gear op is consumed here, so the
+  episode still ends terminal), `'denied:wood-capped'` for a `_planks`
+  target past the wood ceiling (packroom `PLANK_KEEP`, across woods like
+  the hand gate). While it runs every other firing act answers `'busy'` —
+  call it every tick and nothing else, the `digIn` shape; a replaced
+  episode's leftover `craft` busy releases on the next episode's first
+  firing act, like `digIn`.
 - `withdraw(chest, item, n=1)` opens one chest window through stockpile's
   `withdrawAnyFromChest` (the castlefetch draw call). `chest` is an
   `{x,y,z}` cell (or `x, y, z, item, n`): it must be a chest block in open
@@ -190,7 +195,9 @@ ticks.
   (`denied:bank-keep`).
   No dig runs, so the protection rules are untouched by construction.
   `'started'`, then `'busy'` while open (poll `status()`); an empty or gone
-  chest lands in `status().err`. Count the pack before/after for the got.
+  chest lands in `status().err`. A terminal tick with the window in flight
+  keeps `busy` until the window closes (the place/use shape). Count the
+  pack before/after for the got.
 
 Resource-chain recipe (a castle stairs leg whose table sits in the chest):
 `goto()` the chest, `withdraw()` the table (or the wood), `craft()` the
