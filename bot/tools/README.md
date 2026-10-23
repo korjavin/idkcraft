@@ -822,8 +822,17 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
   - `bring`: a bring order refused for a recipe gap: the bot's own chat line
     `can't get <item>: no recipe, no source` or `can't make <item>: need …|no recipe|crafting failed`.
     The bot never logs its own chat, so these come from the mc log.
-  - step-fail, park and `castlefetch-*` are vf8e.11.
-- Rank = count x weight (page 3, bring 2). `days` counts back from the newest line in the dump.
+  - `step-fail` (vf8e.11): a goal step that ended `failed:<reason>` (`goal ... why=step-failed
+    fail=failed:<reason> ... facts=...`). Signature = step + reason. Only steps with a corpus
+    order vehicle propose (gather/build/gohome/shelter); castlefetch failures route to park,
+    anything else reads `no-order`.
+  - `park` (vf8e.11): a `castlefetch-*` leg failure (`castlefetch <kind>: leg over (failed:...)`,
+    `castlefetch failed:...`, a castlefetch step-fail) or a park line (`goal park ...`,
+    `task ... parked ...`) whose diagnosis names one. Signature = the castlefetch reason;
+    any other park reads `no-vehicle` and stays parked. v2 body: run the night with
+    `CURRICULUM_BODY=baritone` (below).
+- Rank = count x weight (page 3, bring 2, step-fail 2, park 2). `days` counts back from the
+  newest line in the dump.
 - Bots: `CURRICULUM_BOTS` is a comma list or `all`. The default is `BOT2_USERNAME`, else
   `IdkBotV2` (the owner's feed). `SWARM_PREFIX` names fold into one `swarm` bot.
 - Output goes to `CURRICULUM_DIR` (default `/tmp/idkcraft-curriculum`). `TOP` sets the number of
@@ -837,6 +846,19 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
 - `propose` for a bring writes an order spot on the vf8e.6 order flat: `bring me <item>`,
   expect `here is`, fail on the refusal lines, standard kit. Its scenario kind is `step`: there
   is no order-skill kind yet, so vf8e.10 decides how it runs.
+- `propose` for a step-fail writes a spot on a vehicle that leaves the goal menu running,
+  so the skill runs before the verdict (revmux 01: come-home/bring/find orders own the body
+  past the verdict, so those steps read `no-order`): gather/build → `build here` on the
+  corpus arena with the corpus expect/fail tables; shelter → the night dig-in arena. The
+  `kind: step` scenario names the `failed:<reason>` and the facts line (the skill header
+  `before` names the failed step, after shelter).
+- `propose` for a park writes a `build castle` spot on the vf8e.6 order flat: the order
+  founds a site and works, so the castlefetch step (and a skill for it) runs. Markers are
+  the castle terminal chats — `castle done at ` ends it, the arrival/search refusals fail
+  it — because the console leg lines never reach the order gate (revmux 01). The prep
+  rebuilds the plan world slice logged at the park (`plan world dy+2..-2`, codes to fill
+  runs around spawn, like the DUGPIT prep — the first voxel-slice arena). No slice, no
+  vehicle, or a >32-fill prep reads `no-slice` / `no-vehicle` / `prep-too-big`.
 - Scenarios carry `sabotage: null`: prod failed with the full menu. They live in the work dir,
   never in `skill-scenarios.json`, because `skill-loop.test.js` pins that file to corpus spots.
 - Reproduction gate (printed by `propose`; the runner, vf8e.10, gives the verdict): micro-run
