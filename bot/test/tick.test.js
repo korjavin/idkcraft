@@ -732,6 +732,12 @@ describe('work mode (epic rw4)', () => {
     return { id, name: 'zombie', type: 'mob', position: p, height: 1.95 }
   }
 
+  function drowned(id, x) {
+    const p = pos(x, 64, 0)
+    p.offset = (ox, oy, oz) => pos(p.x + ox, p.y + oy, p.z + oz)
+    return { id, name: 'drowned', type: 'mob', position: p, height: 1.95 }
+  }
+
   it('(a) work + player nearby: build step, follow never runs', async () => {
     const bot = workBot()
     bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }] // geared (atl.6): gather and craft infeasible, build defaults the site (rw4.4)
@@ -1381,9 +1387,13 @@ describe('work mode (epic rw4)', () => {
       }
     })
 
-    it('visible player keeps player protection fighting (shelter hold is alone-only)', async () => {
+    it('visible player keeps player protection fighting (mob threatens them)', async () => {
+      // neuc.65.7: protection is threat-based, not presence-based — the mob
+      // must threaten the visible player (within 6, the stub's own near
+      // radius). A zombie on the player keeps fight ticks.
       const bot = nightWalkBot()
       bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot.entities = { 1: zombie(1, 9) } // 1 from the player: threatens them
       const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
       ticker.work()
       const ctx = nightWalkCtx(bot)
@@ -1395,6 +1405,160 @@ describe('work mode (epic rw4)', () => {
         const r = await ticker.tick()
         assert.equal(r.decision.action, 'fight')
         assert.equal(fightRan, 1)
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('far bystander does not disable the shelter hold (neuc.65.7 death 1)', async () => {
+      // Round-2 root cause: the rig puppet parked 45-73 blocks out kept
+      // target set, so the !target gate never held and the night walk
+      // fought (and lost) instead of walking on. A mob 68 blocks from the
+      // visible player threatens nobody — the walk holds, melee defends.
+      const bot = nightWalkBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(70) } }
+      bot.entities = { 1: zombie(1, 2) } // on the bot, 68 from the player
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.shelterRun = Date.now() + 30000
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'gohome')
+        assert.equal(fightRan, 0, 'a far bystander must not buy fight ticks')
+        assert.ok(lines.some((l) => l.includes('shelter-run: holding fight preemption')))
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('nearby player but mob far from them: the walk still holds (neuc.65.7)', async () => {
+      // Threat-based protection cuts both ways: a zombie on the bot 8 blocks
+      // from the watching player threatens the bot, not the player — the
+      // walk holds and the bot outruns it instead of stopping to fight.
+      const bot = nightWalkBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+      bot.entities = { 1: zombie(1, 2) } // on the bot, 8 from the player
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.shelterRun = Date.now() + 30000
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'gohome')
+        assert.equal(fightRan, 0)
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('taking-fire divert engages with a far bystander (neuc.65.7 death 2)', async () => {
+      // A written-off water-drowned kept hitting while the puppet watched
+      // from 45 out: underFire needed !target, so no divert ran and the bot
+      // stood chopping between re-engagements. The mob threatens the bot,
+      // not the far player — the chain runs.
+      const bot = nightWalkBot()
+      bot.players = { Steve: { username: 'Steve', entity: playerEntity(45) } }
+      bot.entities = { 1: drowned(1, 5) }
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.fightGivenUpId = 1 // fight.js wrote the wet pursuit off
+      ctx.lastHurtAt = Date.now()
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(fightRan, 0, 'written-off attacker + fresh hurt must divert, not re-fight')
+        assert.ok(lines.some((l) => l.includes('taking-fire:')), `divert logged, got: ${lines.join(' | ')}`)
+        assert.notEqual(r.decision && r.decision.action, 'fight')
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('pack pressure diverts a live fight tick to the retreat chain (neuc.65.7 death 3)', async () => {
+      // Six zombies converged on a healthy foraging bot: the stub keeps
+      // saying fight (1v1 logic) and the pack wins the DPS race. Fresh hurt
+      // with 3+ hostiles diverts to the chain even while the pursuit is live.
+      const bot = nightWalkBot()
+      bot.entities = { 1: zombie(1, 4), 2: zombie(2, 5), 3: zombie(3, 6) }
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.lastHurtAt = Date.now()
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(fightRan, 0, 'a pack must break contact, not trade')
+        assert.ok(lines.some((l) => l.includes('mob-pressure:')), `divert logged, got: ${lines.join(' | ')}`)
+        assert.notEqual(r.decision && r.decision.action, 'fight')
+      } finally {
+        BEHAVIOURS.fight = origFight
+        ticker.destroy()
+      }
+    })
+
+    it('doorway legs keep their ticks: no pressure divert mid open/enter/close (revmux 02 core-1)', async () => {
+      // A pack chewing the bot AT the door: diverting mid open/enter/close
+      // strands an open door. The gohome walk leg owns door ticks (the walk
+      // leg itself still diverts — death-1 shape), so pressure waits.
+      for (const phase of ['open', 'enter', 'close']) {
+        const bot = nightWalkBot()
+        bot.entities = { 1: zombie(1, 4), 2: zombie(2, 5), 3: zombie(3, 6) }
+        const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+        ticker.work()
+        const ctx = nightWalkCtx(bot)
+        ctx.gohome.phase = phase
+        ctx.lastHurtAt = Date.now()
+        lines.length = 0
+        const origFight = BEHAVIOURS.fight
+        let fightRan = 0
+        BEHAVIOURS.fight = () => { fightRan++ }
+        try {
+          await ticker.tick()
+          assert.equal(fightRan, 1, `phase ${phase}: the fight owns the doorway tick`)
+          assert.ok(!lines.some((l) => l.includes('mob-pressure:') || l.includes('taking-fire:') || l.includes('low-hp:')), `phase ${phase}: no escape divert at the door, got: ${lines.join(' | ')}`)
+        } finally {
+          BEHAVIOURS.fight = origFight
+          ticker.destroy()
+        }
+      }
+    })
+
+    it('fresh walk holds through a pack: the walk IS the escape (revmux 03 R3-3)', async () => {
+      // A fresh shelterRun means the walk holds fight preemption — the bot
+      // is already moving door-bound at full speed. A pack divert would run
+      // it off its line and oscillate back into the pack (round-2 core-1).
+      const bot = nightWalkBot()
+      bot.entities = { 1: zombie(1, 4), 2: zombie(2, 5), 3: zombie(3, 6) }
+      const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
+      ticker.work()
+      const ctx = nightWalkCtx(bot)
+      ctx.shelterRun = Date.now() // fresh: the walk owns this tick
+      ctx.lastHurtAt = Date.now()
+      lines.length = 0
+      const origFight = BEHAVIOURS.fight
+      let fightRan = 0
+      BEHAVIOURS.fight = () => { fightRan++ }
+      try {
+        const r = await ticker.tick()
+        assert.equal(r.decision.action, 'gohome', `fresh walk keeps walking, got ${r.decision && r.decision.action}`)
+        assert.equal(fightRan, 0, 'fight never runs across a held walk')
+        assert.ok(!lines.some((l) => l.includes('mob-pressure:')), `no pressure divert on a fresh walk, got: ${lines.join(' | ')}`)
       } finally {
         BEHAVIOURS.fight = origFight
         ticker.destroy()
@@ -2797,7 +2961,7 @@ describe('paused stop', () => {
 describe('death/respawn log lines', () => {
   const { deathLine, respawnLine, handleDeath, handleRespawn, createLifecycle } = require('../src/index')
   const { buildState } = require('../src/perception')
-  const BARE = ' time=? inside=no step=none owner=none sword=0 pickaxe=none dist_home=none dist_spawn=none'
+  const BARE = ' time=? inside=no step=none owner=none sword=0 pickaxe=none dist_home=none dist_spawn=none oxy=none hand=none'
 
   function deadBot() {
     return {
@@ -2907,7 +3071,7 @@ describe('death/respawn log lines', () => {
   })
 
   // neuc.65.1: the enriched death line parses back field by field.
-  const DEATH_RE = /^death health=(\S+) hostiles=(\d+) at (-?\d+ -?\d+ -?\d+|unknown)(?: nearest=(\S+) (\S+))? time=(day|dusk|night|\?) inside=(yes|no) step=(\S+)(?: via=(\S+))? owner=(\S+) sword=(\d+) pickaxe=(none|wood|stone\+) dist_home=(\d+|none) dist_spawn=(\d+|none)$/
+  const DEATH_RE = /^death health=(\S+) hostiles=(\d+) at (-?\d+ -?\d+ -?\d+|unknown)(?: nearest=(\S+) (\S+))? time=(day|dusk|night|\?) inside=(yes|no) step=(\S+)(?: via=(\S+))? owner=(\S+) sword=(\d+) pickaxe=(none|wood|stone\+) dist_home=(\d+|none) dist_spawn=(\d+|none) oxy=(\S+) hand=(\S+)$/
 
   function ctxBot() {
     const bot = deadBot()
@@ -2923,7 +3087,7 @@ describe('death/respawn log lines', () => {
     const line = deathLine(ctxBot())
     const m = line.match(DEATH_RE)
     assert.ok(m, line)
-    assert.deepEqual(m.slice(6), ['night', 'yes', 'gather', 'retreat', 'roam', '1', 'stone+', '20', '106'])
+    assert.deepEqual(m.slice(6), ['night', 'yes', 'gather', 'retreat', 'roam', '1', 'stone+', '20', '106', 'none', 'none'])
   })
 
   it('enriched death line: day reads ctx.home, one step when goal and step agree', () => {
@@ -2934,7 +3098,46 @@ describe('death/respawn log lines', () => {
     bot.inventory = { items: () => [] }
     const m = deathLine(bot).match(DEATH_RE)
     assert.ok(m, deathLine(bot))
-    assert.deepEqual(m.slice(6), ['day', 'no', 'gather', undefined, 'roam', '0', 'none', '30', '131'])
+    assert.deepEqual(m.slice(6), ['day', 'no', 'gather', undefined, 'roam', '0', 'none', '30', '131', 'none', 'none'])
+  })
+
+  it('enriched death line carries oxygen and wielded item when known (neuc.65.7)', async () => {
+    // Round-2 forensics: the three rig deaths needed a drowning-vs-mob and
+    // a fists-vs-sword read the line could not give. Oxygen (breath state)
+    // and the wielded item ride the line now, unknown-safe.
+    const bot = deadBot()
+    bot.oxygenLevel = 7
+    bot.heldItem = { name: 'stone_sword' }
+    const m = deathLine(bot).match(DEATH_RE)
+    assert.ok(m, deathLine(bot))
+    assert.deepEqual(m.slice(-2), ['7', 'stone_sword'])
+  })
+
+  it('hp drops log the trajectory for death forensics (neuc.65.7)', async () => {
+    // Round-2 legs could not tell a fair 1v1 loss from entering wounded:
+    // the hp history between ticks was invisible. Every 0.5+ drop logs
+    // once (full log only — the rig KEEP/PRINT filters do not match it).
+    const lines = []
+    const orig = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      const bot = mockBot()
+      bot.health = 20
+      const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+      try {
+        await ticker.tick()
+        bot.health = 17
+        await ticker.tick()
+        assert.ok(lines.some((l) => l.includes('hurt hp=20->17')), `drop logged, got: ${lines.join(' | ')}`)
+        const n = lines.filter((l) => l.includes('hurt hp=')).length
+        await ticker.tick() // flat hp: no repeat
+        assert.equal(lines.filter((l) => l.includes('hurt hp=')).length, n, 'no log without a drop')
+      } finally {
+        ticker.destroy()
+      }
+    } finally {
+      console.log = orig
+    }
   })
 
   it('enriched death line never throws: a throwing ctx prints the unknowns', () => {
@@ -4123,15 +4326,19 @@ describe('eat reflex', () => {
     assert.deepEqual(eatLines(), [])
   })
 
-  it('hostile at 5 blocks -> consume called', async () => {
+  it('hostile fact live at 5 blocks -> not called (fight owns the ticks)', async () => {
+    // neuc.65.7 leg-2 death 2: the bot ate mid-approach (fact live, beyond
+    // swing reach), the consume stalled, and it bread-fought a skeleton to
+    // death. No new eat starts while any hostile fact is live — regen at
+    // 1hp/4s never outpaces a fight anyway.
     const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
     bot.entities = { 1: zombie(1, 5) }
     const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
     await ticker.tick()
     await new Promise((resolve) => setImmediate(resolve))
-    assert.equal(bot.consumeCalls, 1)
-    assert.deepEqual(eatLines(), ['eat bread food=12'])
+    assert.equal(bot.consumeCalls, 0)
+    assert.deepEqual(eatLines(), [])
   })
 
   it('no edible food in inventory -> not called', async () => {
@@ -4266,6 +4473,8 @@ describe('eat reflex', () => {
   })
 
   it('fight decision does not steal hand while eat is in flight', async () => {
+    // neuc.65.7: eats no longer start with a fact live, so the eat starts
+    // clean and the zombie closes in on tick 2 — the guard still holds.
     const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }, { name: 'iron_sword', count: 1 }] })
     lines.length = 0
     let resolveConsume
@@ -4274,7 +4483,6 @@ describe('eat reflex', () => {
       return new Promise((resolve) => { resolveConsume = resolve })
     }
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    bot.entities = { 1: zombie(1, 5) }
     const brain = mockBrain({ action: 'fight', sprint: false, source: 'stub' })
     const ticker = eatTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
 
@@ -4283,6 +4491,11 @@ describe('eat reflex', () => {
     assert.equal(bot.equipCalls.length, 1)
     assert.equal(bot.equipCalls[0].item.name, 'bread')
     assert.deepEqual(eatLines(), [])
+
+    bot.entities = { 1: zombie(1, 5) } // closes in mid-bite: fight ticks now
+    await ticker.tick()
+    assert.equal(bot.consumeCalls, 1, 'no second eat with a fact live')
+    assert.equal(bot.equipCalls.length, 1, 'guard holds the sword off mid-bite')
 
     resolveConsume()
     await new Promise((resolve) => setImmediate(resolve))
@@ -4293,6 +4506,26 @@ describe('eat reflex', () => {
     assert.equal(handEquips[handEquips.length - 1].item.name, 'iron_sword')
   })
 
+  it('stuck consume times out: guard releases and gear restores (neuc.65.7 leg-2 death 2)', async () => {
+    // The leg-2 skeleton death fought 5 ticks with bread: the consume
+    // stalled on the laggy server, eatInFlight pinned the equip guard, and
+    // the restore never ran. A stuck bite now times out instead of pinning
+    // the sword off for the whole fight.
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }, { name: 'iron_sword', count: 1 }] })
+    lines.length = 0
+    bot.consume = () => { bot.consumeCalls++; return new Promise(() => {}) } // hangs
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = eatTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    bot._tickerCtx.eatTimeoutMs = 40
+    await ticker.tick()
+    assert.equal(bot.consumeCalls, 1)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.deepEqual(eatLines(), ['eat bread food=12 timed-out'])
+    const handEquips = bot.equipCalls.filter((c) => c.dest === 'hand')
+    assert.ok(handEquips.length >= 2, 'restore ran after the timeout')
+    assert.equal(handEquips[handEquips.length - 1].item.name, 'iron_sword')
+  })
+
   it('hostile-in-swing-range guard in eatReflex directly refuses eating even if reflexSwung is false', () => {
     const { eatReflex } = require('../src/index')
     const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
@@ -4300,6 +4533,71 @@ describe('eat reflex', () => {
     const state = { hostile: zombie(1, 1), hostile_distance: 1 }
     const res = eatReflex(bot, ctx, state)
     assert.equal(res, false)
+    assert.equal(bot.consumeCalls, 0)
+  })
+
+  it('unreachable attacker + fresh hurt suppresses the eat (no live fact, revmux 02 core-4)', () => {
+    // Behind walls the hostile fact lapses but the danger stands: arrows
+    // across a gap, or a written-off pursuit id, while the bot still hurts
+    // means the fight is unresolved — the food waits.
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const fresh = { eatInFlight: false, reflexSwung: false, lastHurtAt: Date.now() }
+    assert.equal(eatReflex(bot, fresh, { hostile: null, hostile_reachable: false }), false)
+    assert.equal(bot.consumeCalls, 0)
+  })
+
+  it('written-off pursuit id + fresh hurt suppresses the eat (stale id, revmux 02 core-4)', () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, lastHurtAt: Date.now(), fightGivenUpId: 5 }
+    assert.equal(eatReflex(bot, ctx, { hostile: null }), false)
+    assert.equal(bot.consumeCalls, 0)
+  })
+
+  it('stale hurt + written-off id still eats (resolved fight tops up)', async () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, lastHurtAt: Date.now() - 30000, fightGivenUpId: 5 }
+    assert.equal(eatReflex(bot, ctx, { hostile: null, hostile_reachable: false }), true)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+  })
+
+  it('shelter with no danger still eats (refuge top-up, revmux 02 core-4)', async () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, inShelter: true }
+    assert.equal(eatReflex(bot, ctx, {}), true)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+  })
+
+  it('shelter intruder fight suppresses the eat (combat inside, revmux 02 core-4)', () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 12, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, inShelter: true, intruderFight: true }
+    assert.equal(eatReflex(bot, ctx, {}), false)
+    assert.equal(bot.consumeCalls, 0)
+  })
+
+  it('sheltered bot with a live fact but no intruder eats (walls protect, revmux 03 R3-2)', async () => {
+    // Round-2 core-4: zombies at the door are almost always within 8, so a
+    // fact-live gate starves a sheltering bot all night. The mob is outside
+    // the walls — the refuge tops up; the intruder case above still refuses.
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 15, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, inShelter: true }
+    assert.equal(eatReflex(bot, ctx, { hostile: zombie(1, 4), hostile_distance: 4 }), true)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(bot.consumeCalls, 1)
+  })
+
+  it('sheltered intruder with a live fact still refuses (combat inside, revmux 03 R3-2)', () => {
+    const { eatReflex } = require('../src/index')
+    const bot = eatBot({ food: 15, items: [{ name: 'bread', count: 16 }] })
+    const ctx = { eatInFlight: false, reflexSwung: false, inShelter: true, intruderFight: true }
+    assert.equal(eatReflex(bot, ctx, { hostile: zombie(1, 1), hostile_distance: 1 }), false)
     assert.equal(bot.consumeCalls, 0)
   })
 

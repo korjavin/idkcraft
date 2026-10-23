@@ -4,7 +4,7 @@ const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { makeBrain, stubBrain, jevBrain, hybridBrain, JEV_ENDPOINT, isHard, brainTimeoutMs, planner, withPlanner } = require('./brain')
-const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHostiles } = require('./perception')
+const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHostiles, threatensPlayer } = require('./perception')
 const { makeScout } = require('./behaviours/scout')
 const stuck = require('./stuck')
 const { limitChat } = require('./chat-limit')
@@ -472,14 +472,43 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // Orders still own their ticks (no starve, no no-dig leak — same
       // gate as the atl.12 shelter hold); shelter never diverts.
       const hurtFresh = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < HURT_FRESH_MS
-      const underFire = !ctx.inShelter && !ctx.lead && !ctx.bring && !target &&
+      // Threat-based protection (neuc.65.7): a visible player no mob
+      // threatens (the rig puppet 45+ blocks out) no longer disables the
+      // night-walk holds or the taking-fire divert — the old !target proxy
+      // read any bystander as a protectee. threatensPlayer scans any mob
+      // inside the stub's own threat radius (6), not just state.hostile.
+      const protectedTarget = threatensPlayer(bot, target)
+      // Doorway legs (neuc.65.7 revmux 02 core-1): mid open/enter/close the
+      // door stands open — an escape divert then strands it that way. The
+      // walk leg (phase walk) still diverts; only the door ticks wait.
+      const gh = ctx.gohome
+      const doorway = !!gh && (gh.phase === 'open' || gh.phase === 'enter' || gh.phase === 'close')
+      // Fresh walk (neuc.65.7 revmux 03 R3-3): a fresh shelterRun means the
+      // walk holds fight preemption — the bot is already moving door-bound
+      // at full speed, so the walk IS the escape. A pack divert would run
+      // it off its line and oscillate back into the pack (round-2 core-1).
+      const runFreshMs = homeMod.SHELTER_RUN_FRESH_MS || 0
+      const runFresh = typeof ctx.shelterRun === 'number' && (Date.now() - ctx.shelterRun) < runFreshMs
+      const underFire = !doorway && !ctx.inShelter && !ctx.lead && !ctx.bring && !protectedTarget &&
         state.hostile_reachable === false &&
         typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
-      if (!hurtFresh) ctx.underFireLogged = false
-      if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
+      // Mob pressure (neuc.65.7): hits the stub cannot answer with fight —
+      // a ranged barrage (a shooter outside the hostile fact) or a pack
+      // converging on a healthy bot (the hp<6 chain fires too late to
+      // outrun the DPS race). Routes those fight ticks into the work block
+      // so the divert below breaks contact via the retreat chain. The
+      // ranged shape needs a shooter near (scanned lazily: only this shape
+      // reads it); the pack shape never does.
+      const mobPress = retreatMod.mobPressure(state, {
+        hurtFresh, sheltered: ctx.inShelter,
+        ordered: !!(ctx.lead || ctx.bring || ctx.comehome || ctx.gocastle || doorway || runFresh), protectedTarget,
+        rangedNear: (hurtFresh && state.hostile_distance == null) ? retreatMod.rangedNearCount(bot) : 0,
+      })
+      if (!hurtFresh) { ctx.underFireLogged = false; ctx.mobPressLogged = false }
+      if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert || mobPress)) {
         const held = adoptGate(calledBrain)
         if (held) return held
-        return await workTick(target, state, decision, calledBrain, underFire, nightGraceHold)
+        return await workTick(target, state, decision, calledBrain, underFire, nightGraceHold, mobPress, doorway)
       }
       applyDecision(decision, target, state)
       // Non-chain dispatch releases retreat ownership (see goal path).
@@ -504,9 +533,15 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // 0ay: tick-over-tick hp drops stamp taking-fire (unreachable archers,
     // poison, anything the FSM cannot see). The retreat trigger below reads
     // the stamp; nothing else does yet. Best-effort, never breaks the tick.
+    // neuc.65.7: every 0.5+ drop also logs the hp trajectory — round-2 legs
+    // could not tell a fair 1v1 loss from entering wounded. Full log only
+    // (the rig KEEP/PRINT filters do not match it).
     try {
       if (typeof bot.health === 'number' && typeof ctx.lastTickHp === 'number' &&
-        bot.health < ctx.lastTickHp - 0.5) ctx.lastHurtAt = Date.now()
+        bot.health < ctx.lastTickHp - 0.5) {
+        console.log(`hurt hp=${ctx.lastTickHp}->${bot.health}`)
+        ctx.lastHurtAt = Date.now()
+      }
       if (typeof bot.health === 'number') ctx.lastTickHp = bot.health
     } catch (_) { /* hurt tracking best-effort */ }
     // Hover-arrest watchdog (idkcraft-1cj): first in the tick — a pinned
@@ -875,8 +910,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // 57% gohome-active). gohome stamps ctx.shelterRun on every night
     // walk tick; while the stamp is fresh the work step below keeps
     // walking (melee reflex defends) instead of engaging, and a stalled
-    // walk lets it go stale so fight resumes. Nobody-visible only
-    // (player protection still fights), no shelter/lead/bring override:
+    // walk lets it go stale so fight resumes. Threat-based only (neuc.65.7:
+    // a mob the visible player does not threaten keeps the walk walking;
+    // player protection still fights), no shelter/lead/bring override:
     // an explicit order owns fight ticks exactly as before, so a fresh
     // stamp can neither starve an order nor leak the walk's no-dig into
     // order pathing. Dormant until rw4.10 lands (the export reads
@@ -884,8 +920,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     const runFreshMs = homeMod.SHELTER_RUN_FRESH_MS || 0
     const stampFresh = typeof ctx.shelterRun === 'number' && (Date.now() - ctx.shelterRun) < runFreshMs
     if (!stampFresh) ctx.shelterRunLogged = false
+    // Threat-based (neuc.65.7, same proxy as the runTick divert): no mob
+    // threatening the visible player keeps the walk walking.
+    const protectedTarget = threatensPlayer(bot, target)
     const shelterRun = ctx.work && !ctx.lead && !ctx.bring && !ctx.inShelter &&
-      decision.action === 'fight' && !target && stampFresh
+      decision.action === 'fight' && !protectedTarget && stampFresh
     if (shelterRun && !ctx.shelterRunLogged) {
       console.log('shelter-run: holding fight preemption, walking home')
       ctx.shelterRunLogged = true
@@ -905,7 +944,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // next tick and flip fight/shelter every other tick.
     if (typeof state.hostile_distance !== 'number') ctx.shelterReleased = false
     const nightGraceHold = ctx.work && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle && !ctx.inShelter && !ctx.shelterReleased &&
-      decision.action === 'fight' && !target && graceFresh
+      decision.action === 'fight' && !protectedTarget && graceFresh
     if (nightGraceHold && !ctx.nightGraceLogged) {
       console.log('night-grace: holding fight preemption, sheltering')
       ctx.nightGraceLogged = true
@@ -1088,7 +1127,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     }
   }
 
-  async function workTick(target, state, decision, calledBrain, underFire, nightGraceHold) {
+  async function workTick(target, state, decision, calledBrain, underFire, nightGraceHold, mobPress, doorway) {
     // Retreat chain (1tj): a vetoed follow at low health with a hostile
     // on the bot means the FSM idles and the bot dies standing (gat).
     // 0ay extends it to taking fire from an unreachable hostile (the
@@ -1101,7 +1140,18 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // and a truly clear tick (bands) releases at once.
     let retreatHeld = false
     try { retreatHeld = !ctx.inShelter && retreatMod.retreatLatched(ctx) && !retreatMod.retreatClear(bot, state) } catch (_) { retreatHeld = false }
-    if ((decision.source === 'fsm-noplayer' && !ctx.inShelter && isHard(state) === 'low-health-hostile') || underFire || retreatHeld) {
+    // Low-hp divert (neuc.65.7 leg-1 deaths 1-3): the revived 1tj trigger.
+    // vhlb.5 retired the tick ask, so decision.source is never 'fsm-noplayer'
+    // on the stub path and the first disjunct above is dead there — a weak
+    // bot with a live hostile fact idles (stub) while the arbiter keeps
+    // working it to death. Single reachable mobs grind 20->0 this way with
+    // no crowd and no ranged shape for mobPress. hp<6 with a hostile fact
+    // breaks contact via the chain instead. At hp<6 the stub never answers
+    // fight, so no 479 routing is needed — work ticks already land here.
+    const lowHp = !doorway && !ctx.inShelter && !ctx.lead && !ctx.bring && !ctx.comehome && !ctx.gocastle &&
+      !threatensPlayer(bot, target) && isHard(state) === 'low-health-hostile'
+    if (!lowHp) ctx.lowHpLogged = false
+    if (underFire || mobPress || lowHp || retreatHeld) {
       const retreat = await retreatMod.chooseRetreat(ctx.brain, bot, ctx, state)
       if (retreat) {
         if (ctx.paused || !ctx.work) {
@@ -1114,11 +1164,58 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
           console.log('taking-fire: unreachable hostile and fresh hurt, retreating')
           ctx.underFireLogged = true
         }
+        if (mobPress && !ctx.mobPressLogged) {
+          const shape = state.hostile_distance == null ? 'ranged' : 'pack'
+          console.log(`mob-pressure: ${shape} hurt with ${state.nearby_hostiles} near, retreating`)
+          ctx.mobPressLogged = true
+        }
+        if (lowHp && !ctx.lowHpLogged) {
+          console.log('low-hp: hostile on a weak bot, retreating')
+          ctx.lowHpLogged = true
+        }
         const rd = { action: retreat.action, sprint: false, source: retreat.source }
         if (ctx.step !== retreat.action) stepMod.nextStepGen(ctx) // oqul.7
         ctx.step = retreat.action
         applyDecision(rd, target, state)
         return { decision: rd, calledBrain }
+      } else if (decision.action === 'fight' || lowHp) {
+        // Fight fallback (neuc.65.7 revmux 02 core-3, 03 R3-1): the chain
+        // said null on a combat tick — the old fall-through to goal.decide
+        // stood and died (round-2 core-3: pack at 7-8 with no scaffold or
+        // home, pit walls, low-hp grind). Bias to action: pillar directly
+        // when the honest gates allow (scaffold + headroom). A healthy
+        // non-fight tick keeps the arbiter's decline (0ay latch).
+        const fb = retreatMod.retreatFallback(bot, ctx, state)
+        if (fb) {
+          if (ctx.paused || !ctx.work) {
+            stopOnce()
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+          }
+          console.log('retreat fallback=pillar: chain declined on a live fight, biasing to action')
+          const fd = { action: fb.action, sprint: false, source: fb.source }
+          if (ctx.step !== fb.action) stepMod.nextStepGen(ctx) // oqul.7
+          ctx.step = fb.action
+          applyDecision(fd, target, state)
+          return { decision: fd, calledBrain }
+        }
+        // No escape feasible on a combat tick (the chain menu is empty and
+        // the fallback needs scaffold the bot lacks): fight explicitly
+        // instead of letting goal.decide work while chewed. The divert
+        // already decided this tick is combat. The brain's fight when it
+        // said so, else a synthetic one for the low-hp the stub cannot
+        // voice (lowHp carries a live hostile fact).
+        const fightFallback = decision.action === 'fight' ? decision
+          : lowHp ? { action: 'fight', sprint: false, source: 'retreat-fallback' } : null
+        if (fightFallback) {
+          if (ctx.paused || !ctx.work) {
+            stopOnce()
+            return { decision: { action: 'idle', sprint: false, source: 'local-idle' }, calledBrain }
+          }
+          console.log('retreat none feasible: fighting instead')
+          applyDecision(fightFallback, target, state)
+          if (!ctx.paused) ctx.retreat = null
+          return { decision: fightFallback, calledBrain }
+        }
       }
     }
     const brainFight = decision // lph3: the fight the grace hold preempts (for the fallback below)
@@ -1744,7 +1841,13 @@ function deathFacts(bot, pos) {
   const dist = (a) => (pos && a && typeof a.x === 'number' ? String(Math.round(Math.hypot(a.x - pos.x, a.z - pos.z))) : 'none')
   const distHome = f(() => dist(home.site), 'none')
   const distSpawn = f(() => dist(bot.spawnPoint), 'none')
-  return ` time=${word || '?'} inside=${inside} step=${stepWord} owner=${owner} sword=${sword} pickaxe=${pickaxe} dist_home=${distHome} dist_spawn=${distSpawn}`
+  // neuc.65.7 forensics: the rig deaths needed a drowning-vs-mob read
+  // (breath state at death) and a fists-vs-sword read (wielded item), and
+  // the line had neither. Appended at the end: prefix-identical, the
+  // session-review and deaths.sh greps parse by name, not position.
+  const oxy = f(() => (bot && typeof bot.oxygenLevel === 'number' ? bot.oxygenLevel : null), null)
+  const hand = f(() => (bot && bot.heldItem && typeof bot.heldItem.name === 'string' ? bot.heldItem.name : null), null)
+  return ` time=${word || '?'} inside=${inside} step=${stepWord} owner=${owner} sword=${sword} pickaxe=${pickaxe} dist_home=${distHome} dist_spawn=${distSpawn} oxy=${oxy == null ? 'none' : oxy} hand=${hand || 'none'}`
 }
 
 function respawnLine(bot) {
