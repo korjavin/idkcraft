@@ -2523,11 +2523,16 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
       ctx.stepFail[prev] = rec
       // dlpo: same-day park — N fails of one kind park it for the day
       // (counts, not time). Unstamped failures stay time-held only. Only
-      // on a complete castle (revmux 01-review core-3): build-phase
-      // stone/planks failures keep the 5-min retry, never a day park.
+      // complete-castle non-main kinds count (revmux 01-review core-3,
+      // 02-after-fix core-2): build-phase failures keep the 5-min hold,
+      // and main materials (stone/planks/stairs) keep retrying — a briefly
+      // blocked quarry or a repair-stone gap must never stall the castle
+      // for the date.
       if (prev === 'castlefetch' && typeof rec.kind === 'string' && rec.kind) {
         try {
-          if (ctx && ctx.castle && ctx.castle.phase === 'complete') require('./behaviours/castlefetch').noteFail(ctx, rec.kind)
+          const complete = ctx && ctx.castle && ctx.castle.phase === 'complete'
+          const main = rec.kind === 'stone' || rec.kind === 'planks' || rec.kind === 'stairs'
+          if (complete && !main) require('./behaviours/castlefetch').noteFail(ctx, rec.kind)
         } catch (_) { /* park best-effort */ }
       }
       if (prev === 'gohome') noteGohomeFail(ctx, bot, status)

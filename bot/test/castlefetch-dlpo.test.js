@@ -39,7 +39,9 @@ function makeBot() {
     chat(m) { this.chats.push(String(m)) },
     entity: { position: pos(SITE.x - 4, 64, SITE.z - 4), onGround: true },
     inventory: { items: () => [] },
-    time: { timeOfDay: 6000 },
+    // MC day present like in prod (revmux 02-after-fix core-1): the park
+    // key is the UTC date, so rolling the MC day must not release it.
+    time: { timeOfDay: 6000, day: 0 },
     spawnPoint: pos(0, 64, 0),
     players: {},
     registry: { blocksByName: { chest: { id: 54 } }, itemsByName: {} },
@@ -136,9 +138,12 @@ describe('dlpo same-day park', () => {
     let legs = 0
     // A full UTC date in 5-min steps: every step the kind may be fetched,
     // then fails; the 5-min hold is expired on purpose so only the park
-    // may stop the replay.
-    for (let t = T0 - 12 * 60 * 60 * 1000; t < T0 + 12 * 60 * 60 * 1000; t += 5 * 60 * 1000) {
+    // may stop the replay. The MC day rolls ~72x across the sweep (as in
+    // prod); an MC-day key would unpark and push legs far past N.
+    const start = T0 - 12 * 60 * 60 * 1000
+    for (let t = start; t < start + DAY_MS; t += 5 * 60 * 1000) {
       Date.now = () => t
+      bot.time.day = Math.floor((t - start) / (20 * 60 * 1000))
       const d = fetch.demand(bot, ctx)
       if (!d) continue
       legs++
@@ -247,5 +252,16 @@ describe('dlpo same-day park', () => {
     for (let i = 0; i < N + 2; i++) failKind(bot, ctx, 'stone')
     assert.equal(fetch.isParked(ctx, 'stone'), false, 'build-phase stone never parks')
     assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'the 5-min hold still parks it')
+  })
+
+  it('main materials keep retrying on a complete castle (revmux 02 core-2)', () => {
+    Date.now = () => T0
+    const bot = makeBot()
+    const ctx = { castle: castleState() }
+    for (const kind of ['stone', 'planks', 'stairs']) {
+      for (let i = 0; i < N + 2; i++) failKind(bot, ctx, kind)
+      assert.equal(fetch.isParked(ctx, kind), false, `${kind} never parks for the date`)
+    }
+    assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'the 5-min hold still parks stone')
   })
 })
