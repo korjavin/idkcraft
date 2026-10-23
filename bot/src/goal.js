@@ -1700,7 +1700,7 @@ function failHolds(ctx, name, text, bot) {
         // retry window; any other kind runs.
         if (wkind) {
           try {
-            if (require('./behaviours/castlefetch').isParked(ctx, bot, wkind)) return true
+            if (require('./behaviours/castlefetch').isParked(ctx, wkind)) return true
           } catch (_) { /* park unreadable: the time hold below decides */ }
           const kinds = sf.kinds
           if (kinds && typeof kinds === 'object') {
@@ -1859,7 +1859,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       const kind = w === 'blocked'
         ? (ctx && ctx.castleWord && ctx.castleWord.kind)
         : (/-((none|some|batch))$/.test(w) ? w.slice(0, w.lastIndexOf('-')) : null)
-      if (kind && require('./behaviours/castlefetch').isParked(ctx, bot, kind)) return `castlefetch: ${kind} parked for the day`
+      if (kind && require('./behaviours/castlefetch').isParked(ctx, kind)) return `castlefetch: ${kind} parked for the day`
     }
   } catch (_) { /* park unreadable: the hold below decides */ }
   try {
@@ -2522,9 +2522,13 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
       }
       ctx.stepFail[prev] = rec
       // dlpo: same-day park — N fails of one kind park it for the day
-      // (counts, not time). Unstamped failures stay time-held only.
+      // (counts, not time). Unstamped failures stay time-held only. Only
+      // on a complete castle (revmux 01-review core-3): build-phase
+      // stone/planks failures keep the 5-min retry, never a day park.
       if (prev === 'castlefetch' && typeof rec.kind === 'string' && rec.kind) {
-        try { require('./behaviours/castlefetch').noteFail(ctx, bot, rec.kind) } catch (_) { /* park best-effort */ }
+        try {
+          if (ctx && ctx.castle && ctx.castle.phase === 'complete') require('./behaviours/castlefetch').noteFail(ctx, rec.kind)
+        } catch (_) { /* park best-effort */ }
       }
       if (prev === 'gohome') noteGohomeFail(ctx, bot, status)
     } catch (_) { /* guard best-effort */ }

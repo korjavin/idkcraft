@@ -270,14 +270,12 @@ function owedMoved(bot, ctx) {
   } catch (_) { return false }
 }
 
-// Same-day park key (idkcraft-dlpo): the MC day when readable (prod),
-// else the UTC calendar date. Counts and parks key on this, so a new day
-// unparks by construction.
-function parkDay(bot) {
-  try {
-    const d = bot && bot.time && bot.time.day
-    if (typeof d === 'number') return `mc:${d}`
-  } catch (_) { /* date below */ }
+// Same-day park key (idkcraft-dlpo): the UTC calendar date. Counts and
+// parks key on this, so a new date unparks by construction. Deliberately
+// not the MC day: 24000 ticks at 20 TPS is ~20 real minutes, so an MC-day
+// key would unpark ~72x per real day and a 24h replay would open hundreds
+// of legs per kind (revmux 01-review core-1).
+function parkDay() {
   try {
     return `date:${new Date(Date.now()).toISOString().slice(0, 10)}`
   } catch (_) {
@@ -293,13 +291,13 @@ function parkLimit() {
   return 3
 }
 
-// Drop parked/count entries from a previous day (idkcraft-dlpo unpark:
+// Drop parked/count entries from a previous date (idkcraft-dlpo unpark:
 // next day). Keeps the time-based hold fields (at/kind/kinds) untouched.
-function sweepParked(ctx, bot) {
+function sweepParked(ctx) {
   try {
     const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
     if (!sf || typeof sf !== 'object') return
-    const today = parkDay(bot)
+    const today = parkDay()
     let changed = false
     if (sf.parked && typeof sf.parked === 'object') {
       for (const k of Object.keys(sf.parked)) {
@@ -325,14 +323,14 @@ function sweepParked(ctx, bot) {
 }
 
 // True while KIND is same-day parked (idkcraft-dlpo): N fails on the same
-// day park the kind, whatever the retry clock says.
-function isParked(ctx, bot, kind) {
+// date park the kind, whatever the retry clock says.
+function isParked(ctx, kind) {
   try {
     if (!kind) return false
-    sweepParked(ctx, bot)
+    sweepParked(ctx)
     const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
     const p = sf && sf.parked
-    return !!(p && typeof p === 'object' && p[kind] === parkDay(bot))
+    return !!(p && typeof p === 'object' && p[kind] === parkDay())
   } catch (_) {
     return false
   }
@@ -340,15 +338,18 @@ function isParked(ctx, bot, kind) {
 
 // Count one same-day failure for KIND; park at the limit with a parked
 // line. Returns true when this call newly parked the kind. Unstamped
-// (kindless) failures are uncountable and never park.
-function noteFail(ctx, bot, kind) {
+// (kindless) failures are uncountable and never park. Only called for a
+// complete castle (goal.js recordOutcome): build-phase stone/planks fails
+// must keep retrying on the 5-min hold, never park for the date
+// (revmux 01-review core-3).
+function noteFail(ctx, kind) {
   try {
     if (!ctx || typeof kind !== 'string' || !kind) return false
-    sweepParked(ctx, bot)
-    if (isParked(ctx, bot, kind)) return false
+    sweepParked(ctx)
+    if (isParked(ctx, kind)) return false
     if (!ctx.stepFail || typeof ctx.stepFail !== 'object') ctx.stepFail = {}
     const sf = ctx.stepFail.castlefetch || (ctx.stepFail.castlefetch = {})
-    const today = parkDay(bot)
+    const today = parkDay()
     if (!sf.counts || typeof sf.counts !== 'object') sf.counts = {}
     const e = (sf.counts[kind] && typeof sf.counts[kind] === 'object' && sf.counts[kind].day === today)
       ? sf.counts[kind]
@@ -430,7 +431,7 @@ function unparkAll(ctx, why) {
 function holdFor(bot, ctx, kind) {
   try {
     if (owedMoved(bot, ctx)) return false
-    if (isParked(ctx, bot, kind)) return true
+    if (isParked(ctx, kind)) return true
     const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
     if (!sf || typeof sf.at !== 'number') return false
     const window = require('../budget').CASTLEFETCH_RETRY_MS
