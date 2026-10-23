@@ -1841,8 +1841,8 @@
   },
   "stepFail": {
     "writers": [
-      "src/behaviours/castlefetch.js",
       "src/behaviours/stockpile.js",
+      "src/castle-park.js",
       "src/chat.js",
       "src/goal.js",
       "src/index.js",

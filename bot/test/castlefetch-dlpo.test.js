@@ -14,6 +14,8 @@
 
 const { describe, it, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
+const Vec3 = require('vec3')
+const blueprint = require('../src/castle')
 const castleMod = require('../src/behaviours/castle')
 const fetch = require('../src/behaviours/castlefetch')
 const goal = require('../src/goal')
@@ -56,6 +58,50 @@ function makeBot() {
 
 function castleState(extra) {
   return { site: { ...SITE }, rot: 0, blueprintVersion: 1, phase: 'complete', blocked: {}, parked: false, ...extra }
+}
+
+// A painted complete v2 castle (every plan cell laid, decor open) with a
+// body on site — the real menuFact words real decor kinds. Mirrors the
+// g0z.31 castleBot fixture.
+const PAINT = { stone: 'cobblestone', planks: 'oak_planks', frame: 'spruce_log', fence: 'oak_fence', door: 'oak_door', chest: 'chest', torch: 'torch', air: 'air', dig: 'air' }
+function paintedBot() {
+  const set = new Map()
+  for (const c of blueprint.absPlan(SITE, 0, 2).cells) {
+    set.set(k3(c.x, c.y, c.z), PAINT[c.kind])
+    if (c.kind === 'door') set.set(k3(c.x, c.y + 1, c.z), 'oak_door')
+  }
+  const at = (p) => {
+    const k = k3(p.x, p.y, p.z)
+    return set.has(k) ? set.get(k) : (Math.floor(p.y) < SITE.y ? 'dirt' : 'air')
+  }
+  return {
+    username: 'IdkBot',
+    chats: [],
+    chat(m) { this.chats.push(String(m)) },
+    entity: { position: new Vec3(SITE.x + 15.5, SITE.y, SITE.z + 13.5), onGround: true },
+    inventory: { items: () => [] },
+    time: { timeOfDay: 6000, day: 0 },
+    spawnPoint: new Vec3(0, 64, 0),
+    players: {},
+    registry: { blocksByName: { chest: { id: 2 } }, itemsByName: {} },
+    blockAt: (p) => {
+      const n = at(p)
+      return { name: n, position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)), boundingBox: n === 'air' ? 'empty' : 'block' }
+    },
+    findBlocks: () => [],
+    pathfinder: { isMoving: () => false, setGoal() {}, stop() {}, goal: null },
+    clearControlStates() {},
+    on() {},
+    once() {},
+  }
+}
+
+function paintedState() {
+  return { site: { ...SITE }, rot: 0, blueprintVersion: 2, phase: 'complete', blocked: {}, parked: false }
+}
+
+function k3(x, y, z) {
+  return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`
 }
 
 function bannerWord(bot, ctx) {
@@ -263,5 +309,45 @@ describe('dlpo same-day park', () => {
       assert.equal(fetch.isParked(ctx, kind), false, `${kind} never parks for the date`)
     }
     assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'the 5-min hold still parks stone')
+  })
+
+  it('a parked kinds[0] never pins the decor word (verifier major)', () => {
+    // Real menuFact on a painted complete castle (no stubs): kinds[0] is
+    // pane. Pre-fix, parking pane with every open kind dry pinned the
+    // word on pane-none with null demand, starving every obtainable kind
+    // for the date (noteDry never fires without a leg).
+    Date.now = () => T0
+    const bot = paintedBot()
+    const ctx = { castle: paintedState() }
+    const kinds = [...new Set(blueprint.decorPlan(SITE, 0, 2).cells.map((c) => c.kind))]
+    const wordKind = (w) => w.slice(0, w.lastIndexOf('-'))
+    const w0 = castleMod.menuFact(bot, ctx)
+    const k0 = wordKind(w0)
+    assert.equal(k0, kinds[0], `first decor word is kinds[0]: ${w0}`)
+    for (let i = 0; i < N; i++) failKind(bot, ctx, k0)
+    assert.equal(fetch.isParked(ctx, k0), true, `${k0} parked`)
+    for (const k of kinds) castleMod.noteDry(ctx, k)
+    expireTimeHold(ctx)
+    // The word moves past the parked kinds[0] to an obtainable kind, and
+    // demand serves it.
+    const w1 = castleMod.menuFact(bot, ctx)
+    const k1 = wordKind(w1)
+    assert.notEqual(k1, k0, `word advances past parked ${k0}: ${w1}`)
+    assert.equal(fetch.isParked(ctx, k1), false, `${k1} unparked`)
+    const d = fetch.demand(bot, ctx)
+    assert.ok(d && d.kind === k1 && d.short > 0, `demand serves ${k1}: ${JSON.stringify(d)}`)
+    // Every open kind parked: the word is the first parked one with null
+    // demand, and the rest line still names the park.
+    for (const k of kinds) {
+      if (k === k0) continue
+      for (let i = 0; i < N; i++) failKind(bot, ctx, k)
+    }
+    expireTimeHold(ctx)
+    for (const k of kinds) assert.equal(fetch.isParked(ctx, k), true, `${k} parked`)
+    const w2 = castleMod.menuFact(bot, ctx)
+    assert.equal(wordKind(w2), k0, `all parked: word is kinds[0]: ${w2}`)
+    assert.equal(fetch.demand(bot, ctx), null, 'all parked: null demand')
+    const line = goal.stepWhy('castlefetch', { castle: w2, time: 'day', health: 'ok', food: 'ok' }, bot, ctx, `castle=${w2}`)
+    assert.match(line, /parked/, `rest line names the park: ${line}`)
   })
 })
