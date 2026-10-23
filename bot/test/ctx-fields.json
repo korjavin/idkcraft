@@ -733,7 +733,8 @@
       "src/behaviours/bringitem.js",
       "src/behaviours/craftany.js",
       "src/behaviours/stockpile.js",
-      "src/orders.js"
+      "src/orders.js",
+      "src/skills.js"
     ],
     "owner": "src/behaviours/craftany.js"
   },
@@ -1886,6 +1887,7 @@
       "src/goal.js",
       "src/index.js",
       "src/orders.js",
+      "src/skills.js",
       "src/step.js"
     ],
     "owner": "src/behaviours/home.js"
