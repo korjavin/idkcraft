@@ -28,6 +28,7 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const blueprint = require('../castle')
+const park = require('../castle-park') // dlpo: same-day park state (a leaf — no cycle)
 const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.js read
 const build = require('./build')
 const flat = require('./flat')
@@ -1256,12 +1257,27 @@ function menuFact(bot, ctx, now = Date.now()) {
         if (open.length > 0) {
           const dry = dryKinds(ctx)
           const kinds = [...new Set(open.map((c) => c.kind))]
-          let kind = kinds.find((k) => !dry.has(k))
+          // dlpo: parked kinds are skipped like dry ones — a parked
+          // kinds[0] would otherwise pin the word with null demand (the
+          // hold parks it past the retry window) while noteDry never
+          // fires without a leg, so the word never advances and every
+          // obtainable kind starves for the date. Park state lives in the
+          // castle-park leaf, so no require cycle back to castlefetch.
+          const parked = (k) => { try { return !!(ctx && park.isParked(ctx, k)) } catch (_) { return false } }
+          let kind = kinds.find((k) => !dry.has(k) && !parked(k))
           if (!kind) {
-            // Every open kind dry: retry the first and restart the cycle,
-            // so each kind is retried once per cycle, never starved.
-            kind = kinds[0]
-            if (ctx) ctx.castleFetchDry = null
+            const firstUnparked = kinds.find((k) => !parked(k))
+            if (firstUnparked) {
+              // All dry or parked, some kind unparked: restart the dry
+              // cycle on the first unparked kind, so a parked kinds[0]
+              // never pins the word.
+              kind = firstUnparked
+              if (ctx) ctx.castleFetchDry = null
+            } else {
+              // Every open kind parked: word the first parked one (demand
+              // stays null, the rest line still names the park).
+              kind = kinds[0]
+            }
           }
           const left = open.filter((c) => c.kind === kind).length
           ctx.castleWord = { kind, left }

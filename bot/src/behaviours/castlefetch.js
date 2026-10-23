@@ -270,17 +270,27 @@ function owedMoved(bot, ctx) {
   } catch (_) { return false }
 }
 
+// Same-day park state (idkcraft-dlpo) lives in the castle-park leaf
+// (requires only budget): the decor selector and goal.js share it through
+// here without closing a require cycle (structure-deps counts lazy
+// requires too). The names below keep working via the destructure.
+const park = require('../castle-park')
+const { isParked, noteFail, unparkKind, unparkAll } = park
+
 // True while a fetch failure parks KIND (prkh): the hold is per kind, so
 // a stone-unreachable leg parks stone while a fence word still fetches
 // from the chest. Holds accumulate in a kinds map (revmux 02 core-1), so a
 // later kind's failure or success never erases a still-failing kind; a
 // hold with no kind on it (legacy records) still parks everything. The
 // owed-repair home try (owedMoved) is exempt, as before.
+// dlpo: a same-day parked kind (N fails, counts) also parks here, past
+// the retry window — same exemption.
 function holdFor(bot, ctx, kind) {
   try {
+    if (owedMoved(bot, ctx)) return false
+    if (isParked(ctx, kind)) return true
     const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
     if (!sf || typeof sf.at !== 'number') return false
-    if (owedMoved(bot, ctx)) return false
     const window = require('../budget').CASTLEFETCH_RETRY_MS
     const kinds = sf.kinds
     if (kinds && typeof kinds === 'object') {
@@ -2712,6 +2722,10 @@ module.exports.PIT_ROOM = PIT_ROOM
 module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.holdFor = holdFor
+module.exports.isParked = isParked
+module.exports.noteFail = noteFail
+module.exports.unparkKind = unparkKind
+module.exports.unparkAll = unparkAll
 module.exports.deadRestart = deadRestart
 module.exports.RESTART_MAX = RESTART_MAX
 module.exports.roomForDrop = roomForDrop

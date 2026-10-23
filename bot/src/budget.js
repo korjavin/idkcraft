@@ -20,6 +20,11 @@ const NEED_PLANKS_V1 = 48
 // failure, but expires — an owner restock of the castle chest moves no
 // fact, so without the expiry an idle bot by the castle never re-looks.
 const CASTLEFETCH_RETRY_MS = 5 * 60 * 1000
+// Same-day park (idkcraft-dlpo): a castlefetch kind that fails this many
+// times on the same day parks for the day (counts, not time) — the
+// per-kind hold above covers retry timing, this covers give-up. Unparks
+// next day or on a bank deposit.
+const CASTLEFETCH_PARK_FAILS = 3
 // Bounded forage hold (idkcraft-bt8s): a failed forage leg holds like any
 // failure, but time-keyed, not text-keyed — known=near/none flips move the
 // facts text every few seconds (g0z.12 rig churn, the same mechanism that
@@ -47,4 +52,4 @@ const SCAFFOLD_LOW = 16
 // many blocks is walked to, not used in place.
 const TABLE_REACH = 4
 
-module.exports = { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, SCAFFOLD_LOW, TABLE_REACH }
+module.exports = { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, SCAFFOLD_LOW, TABLE_REACH }

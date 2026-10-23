@@ -26,7 +26,7 @@ const { failReason, isFinished, nextStepGen, chatStep, STEP_CHAT_SAME_MS } = req
 
 // House budget and bounded-hold windows live in the leaf budget.js
 // (oqul.3) so behaviours read them without loading goal; re-exported here.
-const { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS } = require('./budget')
+const { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS } = require('./budget')
 // Home/site geometry and the gather retry policy live in the leaves site.js
 // and holds.js (oqul.4); the exported names are re-exported here.
 const { needPlanks, makeHome, siteFor, skySiteNear, isV2House, timeWord } = require('./site')
@@ -1696,7 +1696,12 @@ function failHolds(ctx, name, text, bot) {
       try {
         const cw = ctx && ctx.castleWord
         const wkind = cw && typeof cw.kind === 'string' && cw.kind ? cw.kind : null
+        // dlpo: a same-day parked word kind holds the menu entry past the
+        // retry window; any other kind runs.
         if (wkind) {
+          try {
+            if (require('./behaviours/castlefetch').isParked(ctx, wkind)) return true
+          } catch (_) { /* park unreadable: the time hold below decides */ }
           const kinds = sf.kinds
           if (kinds && typeof kinds === 'object') {
             const at = kinds[wkind]
@@ -1847,6 +1852,16 @@ async function chooseStep(brain, facts, feasible, home) {
 // holds other steps).
 
 function stepWhy(name, facts, bot, ctx, text) {
+  // dlpo: a same-day parked castlefetch kind names its park, not the hold.
+  try {
+    if (name === 'castlefetch' && facts && typeof facts.castle === 'string') {
+      const w = facts.castle
+      const kind = w === 'blocked'
+        ? (ctx && ctx.castleWord && ctx.castleWord.kind)
+        : (/-((none|some|batch))$/.test(w) ? w.slice(0, w.lastIndexOf('-')) : null)
+      if (kind && require('./behaviours/castlefetch').isParked(ctx, kind)) return `castlefetch: ${kind} parked for the day`
+    }
+  } catch (_) { /* park unreadable: the hold below decides */ }
   try {
     if (failHolds(ctx, name, text, bot)) {
       try {
@@ -2001,6 +2016,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       }
       // prkh: name the parked kind — the honest gap in the rest line while
       // the quarry is dead (a fence relay still reads 'ready' above).
+      // (dlpo parks return earlier, at the top of stepWhy.)
       try {
         const cf = require('./behaviours/castlefetch')
         if (kind && cf.holdFor(bot, ctx, kind)) {
@@ -2197,7 +2213,21 @@ const FORCES = [
     fires: (prev, facts, ctx) => {
       const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
       if (sf && typeof sf.at === 'number' && Date.now() - sf.at > CASTLEFETCH_RETRY_MS) {
-        delete ctx.stepFail.castlefetch
+        // dlpo: an expired time hold retires, but a same-day park survives
+        // it — the parked kind still needs its day/bank release.
+        try {
+          const keepPark = (sf.parked && typeof sf.parked === 'object' && Object.keys(sf.parked).length > 0) ||
+            (sf.counts && typeof sf.counts === 'object' && Object.keys(sf.counts).length > 0)
+          if (keepPark) {
+            delete sf.at
+            delete sf.kind
+            delete sf.kinds
+            delete sf.status
+            delete sf.text
+            delete sf.pos
+            if (Object.keys(sf).length === 0) delete ctx.stepFail.castlefetch
+          } else delete ctx.stepFail.castlefetch
+        } catch (_) { /* retire best-effort */ }
         return true
       }
       return false
@@ -2471,6 +2501,13 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
             rec.kinds = { ...((prior && prior.kinds) || {}), [stamp]: Date.now() }
           }
           ctx.castleFetchFailKind = null
+          // dlpo: the fresh record replaces the old one — carry the
+          // same-day counts/park forward (like the kinds merge above), or
+          // N never accumulates across legs. Stale days sweep on read.
+          try {
+            if (prior.counts && typeof prior.counts === 'object') rec.counts = { ...prior.counts }
+            if (prior.parked && typeof prior.parked === 'object') rec.parked = { ...prior.parked }
+          } catch (_) { /* carry best-effort */ }
         } catch (_) { /* kind best-effort */ }
       }
       // Consecutive-cause counter (67z3): the failed-build hold counts
@@ -2484,6 +2521,20 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
         }
       }
       ctx.stepFail[prev] = rec
+      // dlpo: same-day park — N fails of one kind park it for the day
+      // (counts, not time). Unstamped failures stay time-held only. Only
+      // complete-castle non-main kinds count (revmux 01-review core-3,
+      // 02-after-fix core-2): build-phase failures keep the 5-min hold,
+      // and main materials (stone/planks/stairs) keep retrying — a briefly
+      // blocked quarry or a repair-stone gap must never stall the castle
+      // for the date.
+      if (prev === 'castlefetch' && typeof rec.kind === 'string' && rec.kind) {
+        try {
+          const complete = ctx && ctx.castle && ctx.castle.phase === 'complete'
+          const main = rec.kind === 'stone' || rec.kind === 'planks' || rec.kind === 'stairs'
+          if (complete && !main) require('./behaviours/castlefetch').noteFail(ctx, rec.kind)
+        } catch (_) { /* park best-effort */ }
+      }
       if (prev === 'gohome') noteGohomeFail(ctx, bot, status)
     } catch (_) { /* guard best-effort */ }
   } else if (finished && prev && status === 'done') {
@@ -2508,11 +2559,28 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
         const rec = prev === 'castlefetch' ? ctx.stepFail[prev] : null
         const doneKind = ctx && typeof ctx.castleFetchDoneKind === 'string' ? ctx.castleFetchDoneKind : null
         if (ctx) ctx.castleFetchDoneKind = null
+        // dlpo: stock on hand unparks the kind (obtainable again).
+        if (prev === 'castlefetch' && doneKind) {
+          try { require('./behaviours/castlefetch').unparkKind(ctx, doneKind, 'stock') } catch (_) { /* unpark best-effort */ }
+        }
+        // dlpo: a park releases on day/bank, never on an unrelated done —
+        // keep the record while any parked kind or count remains.
+        let parkRemains = false
+        try {
+          const sfNow = ctx.stepFail && ctx.stepFail[prev]
+          parkRemains = !!(sfNow && ((sfNow.parked && typeof sfNow.parked === 'object' && Object.keys(sfNow.parked).length > 0) ||
+            (sfNow.counts && typeof sfNow.counts === 'object' && Object.keys(sfNow.counts).length > 0)))
+        } catch (_) { /* unreadable: no park */ }
         if (rec && rec.kinds && typeof rec.kinds === 'object' && doneKind) {
           delete rec.kinds[doneKind]
-          if (Object.keys(rec.kinds).length === 0) delete ctx.stepFail[prev]
-        } else if (!(rec && rec.kinds && typeof rec.kinds === 'object')) delete ctx.stepFail[prev]
+          if (Object.keys(rec.kinds).length === 0 && !parkRemains) delete ctx.stepFail[prev]
+        } else if (!(rec && rec.kinds && typeof rec.kinds === 'object') && !parkRemains) delete ctx.stepFail[prev]
       } catch (_) { /* guard best-effort */ }
+      // dlpo: a bank deposit may have restocked the chests — every parked
+      // kind gets a fresh look. (Not the MENU bank step, only its outcome.)
+      if (prev === 'bank') {
+        try { require('./behaviours/castlefetch').unparkAll(ctx, 'bank deposit') } catch (_) { /* unpark best-effort */ }
+      }
     }
   }
   // Pack-full pierce latch (vmzq.19 R4, round-3 major): a finished banking
@@ -2943,4 +3011,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome }
+module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome }
