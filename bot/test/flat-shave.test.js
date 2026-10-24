@@ -11,6 +11,7 @@ const flat = require('../src/behaviours/flat')
 const {
   detectBumps, isDiggable, DIG_ALLOWLIST, isStructureMarker, structureNear,
   threatenedSelf, threatenedByPlayer, resumeLine, startEpisode, liquidNear, buildSweep,
+  recheckKept, shiftBumpDone,
 } = flat
 
 function pos(x, y, z) {
@@ -975,6 +976,208 @@ describe('lone pillars are shaved (idkcraft-vewo.7)', () => {
     await drive(b.bot, b.ctx, 60)
     assert.equal(b.ctx.flat, null)
     assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'air', 'strip 1 pillar shaved')
+  })
+})
+
+describe('freeze fixes (idkcraft-xtbt)', () => {
+  let cap
+  beforeEach(() => { cap = capture() })
+  afterEach(() => { cap.release() })
+
+  async function drive(bot, ctx, n) {
+    for (let i = 0; i < n && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'shave' && f.bumps.length > 0) {
+        const h = f.bumps[0]
+        bot.entity.position = pos(h.x + 2, h.y, h.z)
+      } else if (f.phase === 'fill' && f.holes.length > 0) {
+        const h = f.holes[0]
+        bot.entity.position = pos(h.x + 2, 64, h.z)
+      }
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+  }
+
+  it('kept columns name the freezing marker in the finish line', async () => {
+    const world = makeWorld({})
+    world.set(2, 64, 1, 'dirt') // diggable bump, frozen by the neighbour
+    world.set(3, 64, 1, 'oak_planks') // the other bot's build / house wall
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    await drive(bot, ctx, 60)
+    assert.equal(ctx.flat, null, 'episode ends, no loop')
+    assert.equal(world.blockAt({ x: 2, y: 64, z: 1 }).name, 'dirt', 'marked column kept')
+    assert.equal(world.blockAt({ x: 3, y: 64, z: 1 }).name, 'oak_planks', 'house untouched')
+    assert.ok(bot.chats.some((c) => c.includes('kept by oak_planks')), bot.chats.join('\n'))
+  })
+
+  it('recheck frees a kept column once its marker is gone', () => {
+    const world = makeWorld({})
+    world.set(2, 64, 1, 'dirt') // bump, no marker anymore
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.phase = 'shave'
+    f.level = 63
+    f.bumps = []
+    f.keptCols = [{ x: 2, z: 1, marker: 'torch' }]
+    f.keptMarkers = { torch: 1 }
+    f.skip.kept = 1
+    assert.equal(recheckKept(bot, {}, f), true, 'freed column re-queues')
+    assert.equal(f.bumps.length, 1)
+    assert.equal(f.bumps[0].x, 2)
+    assert.equal(f.skip.kept, 0, 're-queued column leaves the kept count')
+    assert.deepEqual(f.keptMarkers, {}, 'marker count undone with it')
+    assert.equal(recheckKept(bot, {}, f), false, 'one re-check per episode')
+  })
+
+  it('recheck leaves a column kept while its marker stands', () => {
+    const world = makeWorld({})
+    world.set(2, 64, 1, 'dirt')
+    world.set(3, 64, 1, 'torch') // marker still there
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.phase = 'shave'
+    f.level = 63
+    f.bumps = []
+    f.keptCols = [{ x: 2, z: 1, marker: 'torch' }]
+    f.keptMarkers = { torch: 1 }
+    f.skip.kept = 1
+    assert.equal(recheckKept(bot, {}, f), false, 'nothing freed')
+    assert.equal(f.bumps.length, 0)
+    assert.equal(f.skip.kept, 1, 'stay-frozen column keeps its count')
+    assert.deepEqual(f.keptMarkers, { torch: 1 })
+  })
+
+  it('fill clean-completion re-checks shave-for-fill keeps (send-back P1)', () => {
+    // startDig sends a fill episode through the shave; keeps recorded
+    // there must not bypass the re-check when fill completes.
+    const world = makeWorld({})
+    world.set(2, 64, 1, 'dirt') // kept column, marker since gone
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: null }
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    ctx.flat = f
+    f.phase = 'fill'
+    f.level = 63
+    f.holes = []
+    f.bumps = []
+    f.keptCols = [{ x: 2, z: 1, marker: 'torch' }]
+    f.keptMarkers = { torch: 1 }
+    f.skip.kept = 1
+    bot.entity.position = pos(0, 64, 0)
+    flat(bot, ctx, null, null)
+    assert.ok(ctx.flat, 'fill end re-checks instead of finishing')
+    assert.equal(ctx.flat.bumps.length, 1, 'freed column re-queued')
+    assert.equal(ctx.flat.bumps[0].x, 2)
+    assert.equal(ctx.flat.skip.kept, 0)
+    flat(bot, ctx, null, null)
+    assert.equal(ctx.flat.phase, 'shave', 're-queued bumps take the body to the shave')
+  })
+
+  it('recheck re-frees a sweep-material column after its marker is gone (send-back P2)', () => {
+    // A cobble sweep bump frozen by a marker: the re-check must honor
+    // the same sweep-material exemption the shave gate does.
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'cobblestone') // sweep column, marker gone
+    world.set(4, 64, 0, 'dirt') // solid neighbour: no lone-pillar exemption
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.phase = 'shave'
+    f.level = 63
+    f.bumps = []
+    f.keptCols = [{ x: 3, z: 0, marker: 'torch', sweep: true }]
+    f.keptMarkers = { torch: 1 }
+    f.skip.kept = 1
+    assert.equal(recheckKept(bot, {}, f), true, 'sweep column re-frees')
+    assert.equal(f.bumps.length, 1)
+    assert.equal(f.bumps[0].sweep, true, 'sweep flag survives the re-check')
+    assert.equal(f.skip.kept, 0)
+    // Control: the same cobble column WITHOUT the sweep flag stays kept.
+    const g = startEpisode(0, 0, 4, 74, 'P')
+    g.phase = 'shave'
+    g.level = 63
+    g.bumps = []
+    g.keptCols = [{ x: 3, z: 0, marker: 'torch' }]
+    g.keptMarkers = { torch: 1 }
+    g.skip.kept = 1
+    assert.equal(recheckKept(bot, {}, g), false, 'foreign cobble stays kept')
+    assert.equal(g.bumps.length, 0)
+    assert.equal(g.skip.kept, 1)
+  })
+
+  it('sweep re-runs over newly stepped columns and regrown pillars', () => {
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'dirt') // mid-episode nub, never scanned
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.phase = 'shave'
+    f.level = 63
+    f.stepped = new Set(['3,0'])
+    f.bumpCols = new Set()
+    f.bumps = []
+    assert.equal(buildSweep(bot, f), true)
+    assert.deepEqual(f.bumps.map((b) => b.x), [3])
+    assert.equal(buildSweep(bot, f), false, 'same pass offers nothing twice')
+    // The sweep bump resolved, then a late pillar lands on a new column.
+    f.bumps.shift()
+    world.set(3, 64, 0, 'air')
+    assert.equal(buildSweep(bot, f), false, 'resolved column stays resolved')
+    world.set(4, 64, 0, 'dirt')
+    f.stepped.add('4,0')
+    assert.equal(buildSweep(bot, f), true, 'late pillar on a new column queues')
+    assert.deepEqual(f.bumps.map((b) => b.x), [4])
+    // And a pillar regrown taller on an already-swept column re-queues.
+    f.bumps.shift()
+    world.set(4, 64, 0, 'air')
+    world.set(3, 64, 0, 'dirt')
+    world.set(3, 65, 0, 'dirt')
+    assert.equal(buildSweep(bot, f), true, 'regrown taller pillar re-queues')
+    assert.equal(f.bumps[0].topY, 65)
+  })
+
+  it('cleared sweep columns are re-offered at the same height, kept ones are not (review P2)', () => {
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'dirt') // mid-episode scaffold on a stepped column
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.phase = 'shave'
+    f.level = 63
+    f.stepped = new Set(['3,0'])
+    f.bumpCols = new Set()
+    f.bumps = []
+    assert.equal(buildSweep(bot, f), true, 'first scaffold queues')
+    shiftBumpDone(f) // the real clear path: shave worked the column to the level
+    assert.equal(f.sweptN, 1)
+    world.set(3, 64, 0, 'air') // the dig removed it
+    assert.equal(buildSweep(bot, f), false, 'cleared column is not re-offered')
+    world.set(3, 64, 0, 'dirt') // rebuilt at the SAME height (other bot, recover)
+    assert.equal(buildSweep(bot, f), true, 'replacement scaffold re-queues')
+    // A kept/refused sweep bump leaves the queue WITHOUT the clear path
+    // (shiftBumpSkip drops it, sweptTops stays): never retried.
+    f.bumps.shift()
+    assert.equal(buildSweep(bot, f), false, 'kept sweep column is not retried')
+    world.set(3, 65, 0, 'dirt') // only genuinely taller regrowth re-queues
+    assert.equal(buildSweep(bot, f), true)
+  })
+
+  it('sweeps the other bot’s lone scaffold pillar (shared square, no placedByBot)', async () => {
+    const world = makeWorld({})
+    world.set(1, 64, 0, 'dirt') // one original bump: shave phase runs
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    assert.equal(ctx.flat.phase, 'shave')
+    // The other bot's recover pillar: foreign cobble, never in our
+    // placedByBot, on a column we stepped. Shape decides (vewo.7), so the
+    // sweep owns it on a shared square without cross-bot state.
+    world.set(3, 64, 0, 'cobblestone')
+    ctx.flat.stepped.add('3,0')
+    await drive(bot, ctx, 60)
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.equal(world.blockAt({ x: 1, y: 64, z: 0 }).name, 'air', 'bump shaved')
+    assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'air', 'foreign lone scaffold swept')
+    assert.ok(bot.chats.some((c) => c.includes('swept 1 leftover')), bot.chats.join('\n'))
   })
 })
 
