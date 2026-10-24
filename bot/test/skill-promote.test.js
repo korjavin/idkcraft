@@ -41,12 +41,12 @@ describe('skill-promote (vf8e.4)', () => {
     const os = require('node:os')
     const path = require('node:path')
     const log = [
-      '2026-10-20 10:00:01 IdkBotV2 skill gen_dig banned fails=3 last=failed:no-progress',
+      '2026-10-20 10:00:01 skill gen_dig banned fails=3 last=failed:no-progress',
       '2026-10-21 10:00:01 IdkBotV2 skill gen_dig banned fails=4 last=failed:no-progress',
       '2026-10-21 10:00:02 IdkBotV2 skill gen_climb banned fails=3 last=skill-timeout',
-      '2026-10-22 10:00:01 IdkBotV2 skill gen_dig banned fails=5 last=failed:no-progress',
-      '2026-10-22 10:00:02 IdkBotV2 skill run skill=gen_dig kind=step outcome=failed:no-progress ticks=9',
-      '2026-10-22 10:00:03 IdkBotV2 skills loaded n=2 names=gen_climb,gen_dig',
+      '2026-10-22 10:00:01 skill gen_dig banned fails=5 last=failed:no-progress',
+      '2026-10-22 10:00:02 skill run skill=gen_dig kind=step outcome=failed:no-progress ticks=9',
+      '2026-10-22 10:00:03 skills loaded n=2 names=gen_climb,gen_dig',
     ].join('\n')
     assert.deepEqual(p.prodBans(log), { gen_dig: ['2026-10-20', '2026-10-21', '2026-10-22'], gen_climb: ['2026-10-21'] })
     assert.deepEqual(p.demotable(p.prodBans(log)), [{ skill: 'gen_dig', days: ['2026-10-20', '2026-10-21', '2026-10-22'] }])
@@ -67,6 +67,32 @@ describe('skill-promote (vf8e.4)', () => {
       assert.equal(fs.existsSync(path.join(dir, 'gen_climb.js')), true)
       const r2 = p.demoteFromLog(log, dir)
       assert.deepEqual(r2.missing, [{ skill: 'gen_dig', days: ['2026-10-20', '2026-10-21', '2026-10-22'] }])
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('a skill clean on the newest log day is kept (codex 01-review)', () => {
+    const fs = require('node:fs')
+    const os = require('node:os')
+    const path = require('node:path')
+    const log = [
+      '2026-10-20 10:00:01 skill gen_dig banned fails=3 last=failed:no-progress',
+      '2026-10-21 10:00:01 skill gen_dig banned fails=4 last=failed:no-progress',
+      '2026-10-22 10:00:01 skill gen_dig banned fails=5 last=failed:no-progress',
+      '2026-10-23 10:00:01 skill run skill=gen_dig kind=step outcome=done ticks=9',
+      '2026-10-23 10:00:02 decision source=fsm action=gather sprint=false dist=none',
+    ].join('\n')
+    assert.equal(p.newestDay(log), '2026-10-23')
+    assert.equal(p.newestDay('no dated lines here'), null)
+    // Unanchored, the old run still reads demotable; anchored at the log end
+    // the recovered skill is kept and its file stays.
+    assert.deepEqual(p.demotable(p.prodBans(log)), [{ skill: 'gen_dig', days: ['2026-10-20', '2026-10-21', '2026-10-22'] }])
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demote-recovered-'))
+    try {
+      fs.writeFileSync(path.join(dir, 'gen_dig.js'), '// recovered\n')
+      const r = p.demoteFromLog(log, dir)
+      assert.deepEqual([r.demoted, r.missing], [[], []])
+      assert.deepEqual(r.kept, [{ skill: 'gen_dig', days: ['2026-10-20', '2026-10-21', '2026-10-22'] }])
+      assert.equal(fs.existsSync(path.join(dir, 'gen_dig.js')), true)
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 

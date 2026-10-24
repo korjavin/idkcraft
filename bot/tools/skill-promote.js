@@ -116,25 +116,41 @@ function prBody({ bead, skills, stuck, comps, commits }) {
 // as `keep`. Exit 0 (nothing to demote is also 0), 2 on usage.
 
 // Banned UTC days per skill from a pulled prod log (prod-score input shape:
-// "YYYY-MM-DD HH:MM:SS <msg>"). The name rule is the skill header's, so chat
-// `skills ...` lines and foreign paths never match.
+// "YYYY-MM-DD HH:MM:SS <msg>"). skills.js logs bare messages (no bot name,
+// like the prod-score fixture); the VictoriaLogs feed names them — both are
+// accepted. The name rule is the skill header's, so chat `skills ...` lines
+// and foreign paths never match.
 function prodBans(text) {
   const bans = {}
   for (const line of String(text).split('\n')) {
-    const m = /^(\d{4}-\d\d-\d\d) \d\d:\d\d:\d\d \S+ skill ([a-z][a-z0-9_]{1,39}) banned /.exec(line)
+    const m = /^(\d{4}-\d\d-\d\d) \d\d:\d\d:\d\d (?:\S+ )?skill ([a-z][a-z0-9_]{1,39}) banned /.exec(line)
     if (!m) continue
     ;(bans[m[2]] || (bans[m[2]] = new Set())).add(m[1])
   }
   return Object.fromEntries(Object.entries(bans).map(([k, v]) => [k, [...v].sort()]))
 }
 
+// Newest UTC day on any dated log line (ban or not), or null on a dateless
+// input. Anchors the trailing window so a skill clean on the newest log day
+// is kept even with an older 3-day run behind it.
+function newestDay(text) {
+  let newest = null
+  for (const line of String(text).split('\n')) {
+    const m = /^(\d{4}-\d\d-\d\d) \d\d:\d\d:\d\d /.exec(line)
+    if (m && (newest === null || m[1] > newest)) newest = m[1]
+  }
+  return newest
+}
+
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10)
 
-// Skills banned on each of the `days` UTC days ending at the newest banned
-// day in the input (a nightly job's trailing window: a recovered skill — no
-// ban on the newest day — is kept, never demoted for an old run).
-function demotable(bans, days = 3) {
+// Skills banned on each of the `days` UTC days ending at `through` (default:
+// the newest banned day). A nightly job passes the log's newest day, so a
+// recovered skill — no ban on the newest day — is kept, never demoted for an
+// old run.
+function demotable(bans, days = 3, through = null) {
   const all = Object.values(bans).flat()
+  if (through !== null) all.push(through)
   if (!all.length) return []
   const newest = all.sort().at(-1)
   const end = Date.parse(`${newest}T00:00:00Z`)
@@ -150,7 +166,7 @@ function demotable(bans, days = 3) {
 // skills, missing demotable skills with no file (already gone).
 function demoteFromLog(text, skillsDir, days = 3) {
   const bans = prodBans(text)
-  const table = demotable(bans, days)
+  const table = demotable(bans, days, newestDay(text))
   const demoted = []
   const missing = []
   for (const { skill, days: ds } of table) {
@@ -260,4 +276,4 @@ if (require.main === module) {
   process.exit(rc)
 }
 
-module.exports = { scrub, greenVerdict, ranDone, promoteText, stuckLines, componentLine, meanLine, prBody, prodBans, demotable, demoteFromLog, demoteMain }
+module.exports = { scrub, greenVerdict, ranDone, promoteText, stuckLines, componentLine, meanLine, prBody, prodBans, newestDay, demotable, demoteFromLog, demoteMain }

@@ -324,7 +324,11 @@ function rank(events, days = 7) {
   const by = new Map()
   for (const e of events) {
     if (!(e.at >= from)) continue
-    const key = e.family === 'page' ? `page|${e.reason}|${cellOf(e.pos)}` : e.family === 'bring' ? `bring|${e.reason}` : `${e.family}|${e.reason}`
+    // A stay fail's tier is its time (day = daytime idle, tier 0): day and
+    // night occurrences aggregate separately, so one late fail cannot demote
+    // (or promote) the other bucket with the newest event's time.
+    const key = e.family === 'page' ? `page|${e.reason}|${cellOf(e.pos)}` : e.family === 'bring' ? `bring|${e.reason}` :
+      e.family === 'step-fail' && e.step === 'stay' ? `step-fail|${e.reason}|${e.time || 'unknown'}` : `${e.family}|${e.reason}`
     let c = by.get(key)
     if (!c) by.set(key, (c = { sig: sigOf(key), family: e.family, reason: e.reason, cell: e.family === 'page' ? cellOf(e.pos) : '-', count: 0, bots: [] }))
     c.count++

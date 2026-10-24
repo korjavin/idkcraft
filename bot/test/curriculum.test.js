@@ -399,6 +399,8 @@ describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
 describe('harvest owner priorities (idkcraft-vf8e.22)', () => {
   const SFD = path.join(__dirname, 'fixtures', 'curriculum-dump-stepfail.txt')
   const sfRanked = rank(parse(fs.readFileSync(SFD, 'utf8'), ENV), 7)
+  const stayLine = (at, fail, time) =>
+    `${at} IdkBotV2 goal step=rest prev=stay source=goal-fsm fsm=stay why=step-failed fail=${fail} menu=stay,rest facts=${time} logs=none planks=none table=no home=none health=ok food=ok known=none haul=none player=near chest=none gear=none beds=none`
 
   it('owner tier: castlefetch/mine/castle-feeding above explore and night/arrival', () => {
     assert.deepEqual(Object.fromEntries(sfRanked.map((c) => [c.reason, c.tier])), {
@@ -413,11 +415,19 @@ describe('harvest owner priorities (idkcraft-vf8e.22)', () => {
   })
 
   it('step-fail facts carry day/night; a day-time stay fail is daytime idle (tier 0)', () => {
-    const line = (at, fail, time) =>
-      `${at} IdkBotV2 goal step=rest prev=stay source=goal-fsm fsm=stay why=step-failed fail=${fail} menu=stay,rest facts=${time} logs=none planks=none table=no home=none health=ok food=ok known=none haul=none player=near chest=none gear=none beds=none`
-    const ev = parse([line('2026-10-20 12:00:01', 'failed:timeout', 'time=day'), line('2026-10-20 13:00:01', 'failed:stuck', 'time=night')].join('\n'), ENV)
+    const ev = parse([stayLine('2026-10-20 12:00:01', 'failed:timeout', 'time=day'), stayLine('2026-10-20 13:00:01', 'failed:stuck', 'time=night')].join('\n'), ENV)
     assert.deepEqual(ev.map((e) => [e.reason, e.time]), [['stay:timeout', 'day'], ['stay:stuck', 'night']])
     assert.deepEqual(rank(ev, 7).map((c) => [c.reason, c.tier]), [['stay:timeout', 0], ['stay:stuck', 2]])
+  })
+
+  it('day and night stay fails with one reason aggregate separately (codex 02-review)', () => {
+    const ev = parse([
+      stayLine('2026-10-20 12:00:01', 'failed:timeout', 'time=day'),
+      stayLine('2026-10-20 12:30:01', 'failed:timeout', 'time=day'),
+      stayLine('2026-10-20 13:00:01', 'failed:timeout', 'time=night'),
+    ].join('\n'), ENV)
+    assert.deepEqual(rank(ev, 7).map((c) => [c.reason, c.time, c.count, c.tier]),
+      [['stay:timeout', 'day', 2, 0], ['stay:timeout', 'night', 1, 2]])
   })
 
   it('the harvest JSON for a prod day lists a proposable castlefetch/mine scenario above night/arrival', () => {
