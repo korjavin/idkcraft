@@ -240,16 +240,20 @@ describe('curriculum.sh night (idkcraft-vf8e.10)', () => {
     assert.match(r.out, /tried=2 green=0 red=2 skipped=2 cost=\$1\.00/)
   })
 
-  it('a castlefetch-unreachable park reports RED through the runner (idkcraft-0l0m)', () => {
+  it('a castlefetch-unreachable park never reaches the runner (idkcraft-sggu)', () => {
+    // Judging `build castle` by `castle done at ` in 300 s is RED on every
+    // run, so the signature stays honestly parked: the night spends no rig
+    // run and no paid loop on it.
     const t = setup()
     const SF = path.join(__dirname, 'fixtures', 'curriculum-dump-stepfail.txt')
     const sig = CURRICULUM.rank(CURRICULUM.parse(fs.readFileSync(SF, 'utf8'), {}), 7)
       .find((c) => c.reason === 'castlefetch-unreachable').sig
     const r = runNight(t, { dump: SF, k: 1, gate: 'red', loopMode: 'red', cost: '0.50' })
     assert.equal(r.rc, 0)
-    assert.match(r.out, new RegExp(`CURRICULUM ${sig} RED: gate:`))
-    assert.match(r.out, new RegExp(`CURRICULUM ${sig} RED attempts=2 cost=\\$0\\.50`))
-    assert.equal(ledger(t)[sig].verdict, 'RED')
+    assert.ok(!new RegExp(`CURRICULUM ${sig} `).test(r.out), `parked sig takes no verdict:\n${r.out}`)
+    assert.equal(ledger(t)[sig], undefined)
+    const ran = fs.existsSync(t.marker) ? fs.readFileSync(t.marker, 'utf8') : ''
+    assert.ok(!ran.includes(`auto-${sig}`), 'the loop never started for the parked sig')
   })
 })
 

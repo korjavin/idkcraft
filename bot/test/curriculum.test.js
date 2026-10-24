@@ -273,7 +273,7 @@ describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
     // (shelter/gohome) families at equal score.
     assert.deepEqual(sfList.map((c) => [c.family, c.reason, c.count, c.score, c.tier, c.proposable ? 'yes' : c.why]), [
       ['park', 'castlefetch-no-stone', 3, 6, 0, 'no-verdict'],
-      ['park', 'castlefetch-unreachable', 2, 4, 0, 'yes'],
+      ['park', 'castlefetch-unreachable', 2, 4, 0, 'red-parked'],
       ['step-fail', 'gather:no-trees', 2, 4, 0, 'yes'],
       ['step-fail', 'build:no-planks', 1, 2, 0, 'yes'],
       ['step-fail', 'explore:no-progress', 1, 2, 1, 'no-order'],
@@ -353,37 +353,33 @@ describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
     assert.equal(proposal(other[0]).why, 'no-vehicle')
   })
 
-  it('a castlefetch-unreachable stall proposes a short castle spot via loadSpots (idkcraft-0l0m)', () => {
+  it('a castlefetch-unreachable stall stays honestly parked: castle done takes hours, never GREEN in-window (idkcraft-sggu)', () => {
+    // Judging `build castle` by `castle done at ` inside secs:300 is RED on
+    // every run, so the paid skill loop could never go GREEN: the signature
+    // stays parked for a human look instead of burning loops.
     const c = sfFind('castlefetch-unreachable')
-    assert.equal(c.proposable, true)
-    const { rc, spot, scenario } = sfPropose(c)
-    assert.equal(rc, 0)
-    assert.equal(spot.mode, 'order')
-    assert.equal(spot.order, 'build castle')
-    assert.deepEqual(spot.expect, ['castle done at '])
-    assert.deepEqual([spot.spawn, spot.goal, spot.secs, spot.scaffold, spot.pickaxe],
-      [[59.5, 64, -205.5], [62.5, 64, -205.5], 300, 64, true])
-    // The plan-fire slice rebuilds the prod neighbourhood as prep (11 fills
-    // around the arena base).
-    assert.equal(spot.prep.length, 11)
-    assert.equal(spot.prep[0], 'fill 56 66 -209 62 66 -203 air')
-    assert.equal(scenario.kind, 'step')
-    assert.equal(scenario.bead, 'idkcraft-vf8e.11')
-    assert.match(scenario.task, /castlefetch leg failed 2x.*failed:castlefetch-unreachable/)
-    assert.match(scenario.task, /before.*castlefetch/)
-    // Chat gate verdicts the spot: delivery ends it, refusals fail it.
-    assert.equal(matchOrderLine('castle done at 60 64 -206', spot.expect, spot.fail), 'expect')
-    assert.equal(matchOrderLine("I can't see you, come closer", spot.expect, spot.fail), 'fail')
-    assert.equal(matchOrderLine('chopping stone 4/64', spot.expect, spot.fail), null)
+    assert.equal(c.proposable, false)
+    assert.equal(c.why, 'red-parked')
+    assert.equal(proposal(c).why, 'red-parked')
+    const { rc } = sfPropose(c)
+    assert.equal(rc, 1)
   })
 
-  it('a sliceless unreachable stall still proposes, without prep', () => {
+  it('a sliceless or bad-slice unreachable stall parks too, never a silent bare flat (idkcraft-sggu)', () => {
+    // The revmux 01-review minor: the old try/catch around sliceToPrep
+    // swallowed bad-slice and PREP_MAX-cap errors and proposed with no prep.
+    // There is no vehicle anymore, so a missing or malformed slice parks
+    // like the sliced one — no spot without prep is ever proposed.
     const inline = (lines) => rank(parse(lines.join('\n'), ENV), 7)
     const u = inline(['2026-10-20 12:00:00 IdkBotV2 castlefetch failed:castlefetch-unreachable'])
     assert.equal(u[0].family, 'park')
-    const p = proposal(u[0])
-    assert.ok(p.spot && p.spot.order === 'build castle')
-    assert.equal(p.spot.prep, undefined)
+    assert.equal(proposal(u[0]).why, 'red-parked')
+    const bad = inline([
+      '2026-10-20 12:00:00 IdkBotV2 plan world dy+2..-2 dy+2: a',
+      '2026-10-20 12:00:01 IdkBotV2 castlefetch failed:castlefetch-unreachable',
+    ])
+    assert.equal(bad[0].family, 'park')
+    assert.equal(proposal(bad[0]).why, 'red-parked')
   })
 
   it('harvest counts the new families', () => {
@@ -391,7 +387,7 @@ describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
       assert.equal(main(['harvest', SF]), 0)
       const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
       assert.equal(saved.length, 7)
-      assert.match(out.at(-1), /^harvest events=11 signatures=7 page=0 bring=0 stepfail=5 park=2 proposable=4 days=7 /)
+      assert.match(out.at(-1), /^harvest events=11 signatures=7 page=0 bring=0 stepfail=5 park=2 proposable=3 days=7 /)
     })
   })
 })
