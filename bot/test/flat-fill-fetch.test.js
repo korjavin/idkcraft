@@ -321,6 +321,42 @@ describe('xxmn fill-fetch: bring round', () => {
     assert.equal(fetches.length, 1, 'no chat spam')
   })
 
+  it('a stale bring landing does not touch the replacement episode', async () => {
+    // R2: a new area ordered while withdrawFill is pending — the old
+    // flight lands empty after the swap and must drop, not end the new
+    // order (same rule as step.js stale completions).
+    const world = makeWorld({})
+    world.set(-2, 63, 0, 'air') // 1 hole
+    world.set(10, 63, 0, 'chest')
+    const items = []
+    const bot = mockBot(world, { items, chestItems: [] })
+    const window = { containerItems: () => [], withdraw: async () => {}, close: () => {} }
+    let releaseChest = null
+    bot.openChest = () => new Promise((resolve) => { releaseChest = () => resolve(window) })
+    const chest = { x: 10, y: 63, z: 0 }
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P'), home: { chest } }
+    for (let i = 0; i < 150 && ctx.flat && !ctx.digInFlight; i++) {
+      const f = ctx.flat
+      if (f.phase === 'fill' && f.holes.length > 0) {
+        const h = f.holes[0]
+        bot.entity.position = pos(h.x + 2, 64, h.z)
+      } else if (f.phase === 'dig' && ctx.lastGoalKey.startsWith('flat-bring:')) {
+        bot.entity.position = pos(chest.x - 2, chest.y + 1, chest.z)
+      }
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+    assert.equal(ctx.digInFlight, true, 'bring flight dispatched and pending')
+    const replacement = startEpisode(20, 0, 4, 74, 'P2')
+    ctx.flat = replacement // new area ordered mid-flight (orders.setFlat replaces unguarded)
+    releaseChest()
+    await settle()
+    assert.equal(ctx.digInFlight, false, 'shared seam still clears')
+    assert.equal(ctx.flat, replacement, 'replacement episode survives the stale landing')
+    assert.ok(!bot.chats.some((c) => c.includes('flat done')), `no old-episode finish chat: ${bot.chats.join('\n')}`)
+    assert.equal(ctx.flatEnd, undefined, 'no old-episode flatEnd stamp')
+  })
+
   it('planBring gates chest, access and range', () => {
     const bot = mockBot(makeWorld({}), {})
     delete bot.openChest

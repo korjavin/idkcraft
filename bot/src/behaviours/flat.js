@@ -1522,6 +1522,13 @@ function bringTick(bot, ctx, f, bp) {
         console.log(`flat bring got=${got} need=${need}`)
       } catch (_) { /* chest unreadable: land with what is on hand */ }
       ctx.digInFlight = false
+      // R2: a landing from a replaced episode owns nothing — the new order
+      // owns ctx now (same rule as step.js stale completions). The shared
+      // seam still clears above; only episode state is guarded.
+      if (ctx.flat !== f) {
+        console.log('flat bring stale landing dropped')
+        return
+      }
       // R1 P1: a got=0 landing must end the restock, not resume fill into a
       // fresh pack->near->wide->bring chain (the landing resets the backstop
       // clock, so blind resume loops forever on an empty chest).
@@ -1534,6 +1541,10 @@ function bringTick(bot, ctx, f, bp) {
     })().catch(() => {
       // An unlanded flight ends the restock too — never resume blind.
       ctx.digInFlight = false
+      if (ctx.flat !== f) {
+        console.log('flat bring stale landing dropped')
+        return
+      }
       try { endDig(bot, ctx, f, countFill(bot) > 0) } catch (_) { /* end honest, one way or another */ }
     })
     return
