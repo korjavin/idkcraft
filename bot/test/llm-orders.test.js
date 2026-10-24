@@ -547,6 +547,23 @@ describe('llm orders: deterministic do <step> (vf8e.17)', () => {
     assert.deepEqual(await llmCalls.get(), before, 'metrics llmCalls unchanged')
   })
 
+  it('do reforest runs deterministically, plans validate it, the chooser lists it (95mn)', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    handleChat(bot, ticker, 'P', 'do reforest')
+    await flush()
+    assert.equal(calls.length, 0, 'no Messages call')
+    assert.ok(bot.lines.includes('plan: reforest'), String(bot.lines))
+    assert.ok(ctx.llmOrder, 'one-step plan installed')
+    assert.deepEqual(ctx.llmOrder.steps, [{ step: 'reforest' }])
+    assert.ok(llmOrders.workSteps().includes('reforest'), 'callable set')
+    assert.deepEqual(llmOrders.validatePlan({ plan: [{ step: 'reforest' }] }, llmOrders.workSteps()).steps, [{ step: 'reforest', done: '' }])
+    assert.deepEqual(llmOrders.validatePlan({ plan: [{ step: 'reforest' }] }, llmOrders.workSteps(), { allowOrders: false }).steps, [{ step: 'reforest', done: '' }])
+    assert.match(llmOrders.stepList(), /^reforest: /m)
+    assert.match(llmOrders.chooseStepList(), /^reforest: /m)
+  })
+
   it('do while following takes the same path as an LLM plan (work mode on, pinned)', async () => {
     const bot = mockBot()
     const ticker = tickerFor(bot)
