@@ -301,6 +301,26 @@ describe('xxmn fill-fetch: bring round', () => {
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 0 holes, 1 left (no fill blocks)'), bot.chats.join('\n'))
   })
 
+  it('an empty-but-reachable chest ends the episode honestly, no loop', async () => {
+    // R1 P1: a got=0 landing must end the restock, not resume fill into a
+    // fresh pack->near->wide->bring chain (BACKSTOP never fires: the clock
+    // resets each landing).
+    const world = makeWorld({})
+    world.set(-2, 63, 0, 'air') // 1 hole
+    world.set(10, 63, 0, 'chest') // in range, but holding no fill
+    const items = []
+    const bot = mockBot(world, { items, chestItems: [] })
+    const chest = { x: 10, y: 63, z: 0 }
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P'), home: { chest } }
+    await drive(bot, ctx, items, 400, chest)
+    assert.equal(ctx.flat, null, 'episode ends, no bring loop')
+    assert.ok(bot.chats.some((c) => c === 'flat done: filled 0 holes, 1 left (no fill blocks)'), bot.chats.join('\n'))
+    const landings = cap.lines.filter((l) => l.includes('flat bring got=0'))
+    assert.equal(landings.length, 1, `one bring landing, not a loop: ${landings.length}`)
+    const fetches = bot.chats.filter((c) => c === 'fetching fill from the home chest')
+    assert.equal(fetches.length, 1, 'no chat spam')
+  })
+
   it('planBring gates chest, access and range', () => {
     const bot = mockBot(makeWorld({}), {})
     delete bot.openChest
@@ -349,6 +369,41 @@ describe('xxmn bump budget', () => {
     assert.equal(world.blockAt({ x: 4, y: 64, z: 4 }).name, 'dirt', 'far edge kept')
     assert.ok(bot.chats.some((c) => c.includes('skipped 6: 6 budget')), bot.chats.join('\n'))
     assert.ok(cap.lines.some((l) => l.includes('flat bump budget')), cap.lines.join('\n'))
+  })
+
+  it('budget expiry during shave-for-fill places banked blocks first', async () => {
+    // R1 P2: budgetStop must return through the shave-for-fill transition
+    // so holes consume banked fill before anything finishes.
+    const world = makeWorld({})
+    world.set(-2, 63, 0, 'air') // 2 holes
+    world.set(-2, 63, 1, 'air')
+    const bumpCols = [[-4, -4], [4, -4], [-4, 4], [4, 4], [-4, 0], [4, 0]]
+    for (const [x, z] of bumpCols) world.set(x, 64, z, 'dirt')
+    const items = [{ name: 'dirt', count: 5 }] // banked, under FILL_RESUME
+    const bot = mockBot(world, { items })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.phase = 'shave'
+    f.level = 63
+    f.shaveForFill = true
+    f.total = 2
+    f.totalBumps = 6
+    f.holes = [
+      { x: -2, z: 0, topY: 62, att: 0, def: 0, sup: 0, occ: 0, stalls: 0, lastPos: null },
+      { x: -2, z: 1, topY: 62, att: 0, def: 0, sup: 0, occ: 0, stalls: 0, lastPos: null },
+    ]
+    f.bumps = bumpCols.map(([x, z]) => (
+      { x, z, topY: 64, y: 64, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null }
+    ))
+    f.bumpCols = new Set(bumpCols.map(([x, z]) => `${x},${z}`))
+    f.shaveTicks = SHAVE_TICKS // hilltop scale: the next shave tick trips the budget
+    const ctx = { lastGoalKey: '', flat: f }
+    await drive(bot, ctx, items, 200)
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.equal(world.blockAt({ x: -2, y: 63, z: 0 }).name, 'dirt', 'banked fill lands first hole')
+    assert.equal(world.blockAt({ x: -2, y: 63, z: 1 }).name, 'dirt', 'banked fill lands second hole')
+    assert.ok(bot.chats.some((c) => c.includes('filled 2 holes')), bot.chats.join('\n'))
+    assert.ok(bot.chats.some((c) => c.includes('skipped 6: 6 budget')), bot.chats.join('\n'))
+    assert.ok(!bot.chats.some((c) => c.includes('left (')), `no holes left: ${bot.chats.join('\n')}`)
   })
 })
 

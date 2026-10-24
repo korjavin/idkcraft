@@ -1513,17 +1513,29 @@ function bringTick(bot, ctx, f, bp) {
   try { dist = dist3(bp, b.chest) } catch (_) { dist = null }
   if (typeof dist === 'number' && dist <= INTERACT_CLOSE) {
     const need = Math.max(1, DIG_TARGET - countFill(bot))
+    const had = countFill(bot) // baseline: only a grown inventory resumes fill
     ctx.digInFlight = true
     ;(async () => {
       try {
         const res = await withdrawFill(bot, b.chest, FILL_BLOCKS, need)
         const got = res && typeof res.got === 'number' ? res.got : 0
         console.log(`flat bring got=${got} need=${need}`)
-      } catch (_) { /* chest unreadable: resume with what is on hand */ }
+      } catch (_) { /* chest unreadable: land with what is on hand */ }
       ctx.digInFlight = false
-      f.phase = 'fill'
-      f.lastProgressTick = f.ticks
-    })().catch(() => { ctx.digInFlight = false; f.phase = 'fill' })
+      // R1 P1: a got=0 landing must end the restock, not resume fill into a
+      // fresh pack->near->wide->bring chain (the landing resets the backstop
+      // clock, so blind resume loops forever on an empty chest).
+      if (countFill(bot) > had) {
+        f.phase = 'fill'
+        f.lastProgressTick = f.ticks
+      } else {
+        endDig(bot, ctx, f, countFill(bot) > 0)
+      }
+    })().catch(() => {
+      // An unlanded flight ends the restock too — never resume blind.
+      ctx.digInFlight = false
+      try { endDig(bot, ctx, f, countFill(bot) > 0) } catch (_) { /* end honest, one way or another */ }
+    })
     return
   }
   const key = `flat-bring:${b.chest.x},${b.chest.y},${b.chest.z}`
@@ -1989,7 +2001,18 @@ function shaveTick(bot, ctx, f, bp) {
   }
   // xxmn hilltop budget (nearest-first queue: the middle is flat by now):
   // far leftovers skip as 'budget', the sweep/recheck/finish below ends it.
-  if (f.bumps.length > 0 && f.shaveTicks > SHAVE_TICKS) budgetStop(bot, ctx, f)
+  if (f.bumps.length > 0 && f.shaveTicks > SHAVE_TICKS) {
+    budgetStop(bot, ctx, f)
+    // R1 P2: a shave-for-fill episode returns to its holes so banked blocks
+    // land before anything finishes — the fill phase re-decides from there
+    // (an empty hand restocks honestly, empty queues finish).
+    if (f.shaveForFill) {
+      f.shaveForFill = false
+      f.phase = 'fill'
+      f.lastProgressTick = f.ticks
+      return
+    }
+  }
   if (f.bumps.length === 0) {
     if (maybeSweep(bot, f)) return
     if (recheckKept(bot, ctx, f)) return
