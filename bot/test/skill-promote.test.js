@@ -70,6 +70,16 @@ describe('skill-promote (vf8e.4)', () => {
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 
+  it('a skill named like an Object key does not break demotion (send-back R1)', () => {
+    const log = [
+      '2026-10-20 10:00:01 skill constructor banned fails=3 last=failed:no-progress',
+      '2026-10-21 10:00:01 skill constructor banned fails=4 last=failed:no-progress',
+      '2026-10-22 10:00:01 skill constructor banned fails=5 last=failed:no-progress',
+    ].join('\n')
+    assert.deepEqual(p.prodBans(log), { constructor: ['2026-10-20', '2026-10-21', '2026-10-22'] })
+    assert.deepEqual(p.demotable(p.prodBans(log)), [{ skill: 'constructor', days: ['2026-10-20', '2026-10-21', '2026-10-22'] }])
+  })
+
   it('a skill clean on the newest log day is kept (codex 01-review)', () => {
     const fs = require('node:fs')
     const os = require('node:os')

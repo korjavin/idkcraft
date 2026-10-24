@@ -121,7 +121,10 @@ function prBody({ bead, skills, stuck, comps, commits }) {
 // accepted. The name rule is the skill header's, so chat `skills ...` lines
 // and foreign paths never match.
 function prodBans(text) {
-  const bans = {}
+  // Null-prototype: skill names come from the log, and `constructor` is a
+  // legal skill name — on a plain {} it would resolve to Object and `.add`
+  // would throw, aborting the whole demote run (send-back R1).
+  const bans = Object.create(null)
   for (const line of String(text).split('\n')) {
     const m = /^(\d{4}-\d\d-\d\d) \d\d:\d\d:\d\d (?:\S+ )?skill ([a-z][a-z0-9_]{1,39}) banned /.exec(line)
     if (!m) continue
