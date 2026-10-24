@@ -275,15 +275,22 @@ describe('prkh per-kind fetch hold', () => {
   })
 
   it('stepWhy names the parked kind', () => {
-    castleMod.menuFact = (b, c) => { c.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
-    const facts = { castle: 'stone-none', time: 'day', health: 'ok', food: 'ok', pickaxe: 1 }
+    castleMod.menuFact = (b, c) => { c.castleWord = { kind: 'stone', left: 60 }; return 'stone-some' }
+    const facts = { castle: 'stone-some', time: 'day', health: 'ok', food: 'ok', pickaxe: 1 }
     const bot = makeBot()
-    // Relocated past the failure point: the text hold releases but the
-    // bounded kind hold still parks — the line must name it, not 'batch'.
+    // At the failure point the bounded kind hold still parks — the line
+    // must name it, not 'batch'. The text moved on (none -> some) so the
+    // text gate releases and the kind hold names the gap.
+    const atSite = heldCtx('stone')
+    atSite.stepFail.castlefetch.pos = { ...SITE }
+    const line = goal.stepWhy('castlefetch', facts, bot, atSite, 'castle=stone-some')
+    assert.match(line, /stone fetch held/, `the gap is named: ${line}`)
+    // klh2: relocated past the failure point the hold parks the failed
+    // site, not the kind — the same kind runs at the new site (hop), so
+    // the menu reads ready instead of naming the hold.
     const moved = heldCtx('stone')
     moved.stepFail.castlefetch.pos = { x: 0, y: 64, z: 0 }
-    const line = goal.stepWhy('castlefetch', facts, bot, moved, 'castle=stone-none')
-    assert.match(line, /stone fetch held/, `the gap is named: ${line}`)
+    assert.equal(goal.stepWhy('castlefetch', facts, bot, moved, 'castle=stone-some'), null, 'relocated: the kind is free at the new site')
     const freeFacts = { ...facts, pickaxe: 0 }
     const free = goal.stepWhy('castlefetch', freeFacts, bot, { castle: castleState() }, 'castle=stone-none')
     assert.equal(free, 'castlefetch: no pickaxe', 'no hold: the next line below decides')

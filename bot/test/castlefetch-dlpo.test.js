@@ -119,7 +119,12 @@ function expireTimeHold(ctx) {
   if (!sf) return
   if (typeof sf.at === 'number') sf.at -= 6 * 60 * 1000
   if (sf.kinds && typeof sf.kinds === 'object') {
-    for (const k of Object.keys(sf.kinds)) sf.kinds[k] -= 6 * 60 * 1000
+    // klh2: entries are { at, pos } (legacy bare timestamps still read).
+    for (const k of Object.keys(sf.kinds)) {
+      const e = sf.kinds[k]
+      if (typeof e === 'number') sf.kinds[k] = e - 6 * 60 * 1000
+      else if (e && typeof e.at === 'number') e.at -= 6 * 60 * 1000
+    }
   }
 }
 
