@@ -237,7 +237,7 @@ describe('curriculum.sh vlogs night (idkcraft-b64i)', () => {
     const r = runNight(t)
     assert.equal(r.rc, 0)
     assert.match(r.out, /curriculum: fetching the VictoriaLogs feed \(service bot2, last 7 days\)/)
-    assert.match(r.out, /harvest events=1 signatures=1 page=1 bring=0 proposable=1/)
+    assert.match(r.out, /harvest events=1 signatures=1 page=1 bring=0 stepfail=0 park=0 proposable=1/)
     assert.match(r.out, /CURRICULUM [0-9a-f]{8} GREEN attempts=2 cost=\$0\.50/)
     assert.match(r.out, /PROMOTE: node tools\/skill-promote\.js/)
     assert.ok(fs.existsSync(path.join(t.dir, 'feed-bot2-7.txt')), 'the feed lands in the work root')

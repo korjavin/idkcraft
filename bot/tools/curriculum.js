@@ -21,23 +21,39 @@
 //           "<Bot> can't get <item>: no recipe, no source" / "<Bot> can't
 //           make <item>: need …|no recipe|crafting failed" from the mc log
 //           (the bot never logs its chat). Signature = item + reason words.
-// Rank = count x weight (page 3, bring 2). Bots: CURRICULUM_BOTS = comma
+//   step-fail (vf8e.11) — a goal step that ended failed:<reason> (goal.js
+//           `goal ... why=step-failed fail=failed:<reason> ... facts=...`).
+//           Signature = step + reason (no pos: goal lines carry none).
+//           Proposes only vehicles that leave the goal menu running
+//           (gather/build -> `build here`, shelter -> the night dig-in
+//           arena); castlefetch failures route to park, the rest read
+//           `no-order` (revmux 01: orders that own the body could never
+//           run the skill).
+//   park (vf8e.11) — a castlefetch-* leg failure (`castlefetch <kind>:
+//           leg over (failed:...)`, `castlefetch failed:...`) or a park line
+//           (`goal park ...`, `task ... parked ...`) whose diagnosis names
+//           one. Signature = the castlefetch reason. All of them read
+//           `no-verdict` for now (revmux 02: no in-window outcome judges a
+//           fetch — `castle done at ` takes hours, leg lines are console,
+//           L1/L2 need 15/45 min); other parks read `no-vehicle`.
+// Rank = count x weight (page 3, bring 2, step-fail 2, park 2). Bots: CURRICULUM_BOTS = comma
 // list or "all" (default BOT2_USERNAME, else IdkBotV2 — the owner's feed);
 // SWARM_PREFIX names fold into one "swarm" bot like deaths.sh. days counts
 // back from the newest timestamp in the dump, so a re-run is deterministic.
 // Out: <CURRICULUM_DIR, default /tmp/idkcraft-curriculum>/curriculum.json
 // plus a table; propose writes <dir>/AUTO-<sig>/{spots.json,scenario.json}.
-// ponytail: step-fail / park / castlefetch-* families are vf8e.11; the
-// signature is an 8-hex sha1 so spot and skill names are always valid.
+// ponytail: the signature is an 8-hex sha1 so spot and skill names are
+// always valid.
 
 const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 
-const WEIGHT = { page: 3, bring: 2 }
+const WEIGHT = { page: 3, bring: 2, 'step-fail': 2, park: 2 }
 const CELL = 8
 const DIR = () => process.env.CURRICULUM_DIR || '/tmp/idkcraft-curriculum'
 const BEAD = 'idkcraft-vf8e.9'
+const BEAD11 = 'idkcraft-vf8e.11'
 // Order arena for bring proposals: the vf8e.6 order spots' shaft-side flat.
 const BRING_SPAWN = [59.5, 64, -205.5]
 const BRING_GOAL = [62.5, 64, -205.5]
@@ -47,6 +63,19 @@ const MAX_DIST = 16 // ponytail: a 123-block page goal is not a 90 s micro-run; 
 const TS = /^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)\S* (\S+) (.*)$/
 const RECOVER = /recover action=(\S+) source=\S+ outcome=(\S+) pos=(\S+)(.*)$/
 const REFUSAL = /<([A-Za-z0-9_]+)> can't (get|make) ([a-z0-9_]+)(?::| yet) ?(.*)$/
+// A goal step that ended failed:<reason> (goal.js noteChoice): the NEW step
+// first, then the failed one. facts= is always last on that line.
+const STEPFAIL = /^goal step=(\S+) prev=(\S+) .*why=step-failed fail=(failed:\S+) .*facts=(.*)$/
+// Park lines (task.js parkOrder/parkTask): the diagnosis may name a
+// castlefetch-* reason — otherwise the park has no replay vehicle.
+const PARK_GOAL = /^goal park kind=(\S+) progress=(\S+) why=(.*)$/
+const PARK_TASK = /^task (\S+) (\S+) parked #\d+[^\n]*? why=(.*)$/
+// castlefetch finish(): the leg-over line carries the fetch kind, the bare
+// line only the reason. Both are park-family events (v2 body).
+const CASTLE_LEGOVER = /^castlefetch (\S+): leg over \((failed:[^)]+)\)/
+const CASTLE_FAILED = /^castlefetch (failed:castlefetch-\S+)/
+// Voxel slice at plan fire time (task.js planState): the park's arena.
+const PLAN_WORLD = /^plan world dy\+2\.\.-2 (.*)$/
 // Raw `docker logs --timestamps` (timestamps=1) prefixes every line with the
 // daemon time ("2026-10-19T21:44:50.123456789Z <original line>"). The bot's
 // own stdout is bare (`recover action=...`, no date or bot name:
@@ -103,6 +132,15 @@ const sigOf = (key) => crypto.createHash('sha1').update(key).digest('hex').slice
 const words = (s) => String(s).replace(/\(.*?\)/g, ' ').replace(/\d{4}-\d\d-\d\dT\S*/g, ' ').replace(/[^a-z_ ]+/gi, ' ')
   .trim().split(/\s+/).filter(Boolean).join('-').slice(0, 40) || 'refused'
 
+// The fetch kind behind a castlefetch-* reason (vf8e.11): `no-`, `craft-`
+// and `smelt-` reasons name it (`castlefetch-no-stone` -> stone); the rest
+// (unreachable, dig-stall, pack-full) do not — the proposal defaults those
+// to stone, the mine ladder's bottleneck.
+function fetchKind(reason) {
+  const m = /^castlefetch-(?:no|craft|smelt)-([a-z_]+)$/.exec(String(reason || ''))
+  return m ? m[1] : null
+}
+
 // Lines -> events [{family, reason, bot, at, day, pos, facts, next, chain, item}].
 function parse(text, env = process.env) {
   const keep = botFilter(env)
@@ -111,6 +149,16 @@ function parse(text, env = process.env) {
   const who = (n) => (n.startsWith(swarm) ? 'swarm' : n)
   const eps = new Map()
   const out = []
+  // Latest voxel slice in stream order (planState logs it at fire time, the
+  // park lands later): the next park events' arena. Bot-agnostic — feeds are
+  // single-bot, and a missing slice parks the candidate, never misplaces it.
+  let lastSlice = null
+  // Castlefetch legs log three lines for ONE failure: the leg-over (names
+  // the kind), the bare `castlefetch failed:` line, and on the next tick the
+  // goal step-fail. Count it once: the leg-over only stages the kind, the
+  // bare line pushes the event, the step-fail is skipped. Per bot — swarm
+  // folds share the feed but never the same leg.
+  const legKinds = new Map()
   const page = (name, ep, reason, at, day, pos) => {
     // The facts of the last choice near the end pos (call_player's own
     // line carries none); none within a cell = no kit, not proposable.
@@ -129,6 +177,56 @@ function parse(text, env = process.env) {
     if (r) {
       if (!keep(r[1])) continue
       out.push({ family: 'bring', reason: `${r[3]}:${words(r[4] || (r[2] === 'make' ? 'not yet' : 'refused'))}`, item: r[3], bot: who(r[1]), at, day })
+      continue
+    }
+    // A failed goal step (vf8e.11): step-fail. A castlefetch step-fail
+    // repeats the leg failure the bare line already counted (revmux 01),
+    // so it is skipped, never a second event.
+    const sf = STEPFAIL.exec(msg)
+    if (sf) {
+      if (!keep(name)) continue
+      const detail = sf[3].slice('failed:'.length)
+      if (sf[2] === 'castlefetch' || detail.startsWith('castlefetch-')) continue
+      out.push({ family: 'step-fail', reason: `${sf[2]}:${detail}`, step: sf[2], detail, facts: sf[4], bot: who(name), at, day })
+      continue
+    }
+    // A castlefetch leg that ended failed (vf8e.11): v2 park material. The
+    // leg-over line only stages the fetch kind; the bare line pushes the
+    // one event per failure (revmux 01).
+    const lo = CASTLE_LEGOVER.exec(msg)
+    if (lo) {
+      if (!keep(name)) continue
+      if (lo[2].startsWith('failed:')) legKinds.set(who(name), { reason: lo[2].slice('failed:'.length), kind: lo[1] })
+      continue
+    }
+    const cf = CASTLE_FAILED.exec(msg)
+    if (cf) {
+      if (!keep(name)) continue
+      const reason = cf[1].slice('failed:'.length)
+      const staged = legKinds.get(who(name))
+      legKinds.delete(who(name))
+      const kind = staged && staged.reason === reason ? staged.kind : fetchKind(reason)
+      out.push({ family: 'park', reason, step: 'castlefetch', fetch: kind, task: null, facts: null, slice: lastSlice, bot: who(name), at, day })
+      continue
+    }
+    // A parked task/goal (vf8e.11): only castlefetch parks get a vehicle
+    // (v2); any other diagnosis stays parked (no-vehicle).
+    const pg = PARK_GOAL.exec(msg) || PARK_TASK.exec(msg)
+    if (pg) {
+      if (!keep(name)) continue
+      const diag = pg[3]
+      const m = /castlefetch-[a-z0-9-]+/.exec(diag || '')
+      out.push({
+        family: 'park', reason: m ? m[0] : `${pg[1]}:${words(diag || 'unknown')}`,
+        step: null, fetch: m ? fetchKind(m[0]) : null, task: pg[1], facts: null, slice: lastSlice, bot: who(name), at, day,
+      })
+      continue
+    }
+    // A voxel slice for later parks (vf8e.11): kept, never an event.
+    const w = PLAN_WORLD.exec(msg)
+    if (w) {
+      if (!keep(name)) continue
+      lastSlice = w[1]
       continue
     }
     const a = RECOVER.exec(msg)
@@ -216,7 +314,7 @@ function rank(events, days = 7) {
   const by = new Map()
   for (const e of events) {
     if (!(e.at >= from)) continue
-    const key = e.family === 'page' ? `page|${e.reason}|${cellOf(e.pos)}` : `bring|${e.reason}`
+    const key = e.family === 'page' ? `page|${e.reason}|${cellOf(e.pos)}` : e.family === 'bring' ? `bring|${e.reason}` : `${e.family}|${e.reason}`
     let c = by.get(key)
     if (!c) by.set(key, (c = { sig: sigOf(key), family: e.family, reason: e.reason, cell: e.family === 'page' ? cellOf(e.pos) : '-', count: 0, bots: [] }))
     c.count++
@@ -224,7 +322,7 @@ function rank(events, days = 7) {
     if (!c.at || e.at >= c.at) {
       c.at = e.at
       c.lastSeen = new Date(e.at).toISOString().slice(0, 19).replace('T', ' ')
-      for (const k of ['pos', 'facts', 'from', 'next', 'chain', 'item']) if (e[k] !== undefined) c[k] = e[k]
+      for (const k of ['pos', 'facts', 'from', 'next', 'chain', 'item', 'step', 'detail', 'fetch', 'task', 'slice']) if (e[k] !== undefined) c[k] = e[k]
     }
   }
   const list = [...by.values()].map((c) => {
@@ -243,10 +341,179 @@ const fact = (text, k) => {
   return m ? m[1] : null
 }
 
+// --- vf8e.11: step-fail and park vehicles ---
+//
+// Marker tables verbatim from the corpus (bot/tools/stuck-spots.json,
+// pinned by bot/test/stuck-oracle.test.js): the same lines judge AUTO
+// spots, so a table edit here must move the corpus test too.
+const needLogs = () => {
+  try { return require('../src/budget').NEED_LOGS || 14 } catch (_) { return 14 }
+}
+
+// before hint for the skill header (skills.js: must sit after shelter — a
+// higher or unknown name falls back to rest, so the night safety steps
+// stay first). Only steps after shelter in STEP_ORDER keep their name.
+const beforeHint = (step) => {
+  try {
+    const { STEP_ORDER } = require('../src/plan-consts')
+    if (typeof step === 'string' && STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf('shelter')) return step
+  } catch (_) { /* fall through to rest */ }
+  return 'rest'
+}
+
+// Order vehicles per failed goal step (vf8e.11): the step's own order text,
+// but ONLY orders that leave the goal menu running (revmux 01): `build
+// here` founds a site and works, so a step skill runs before the verdict;
+// come-home/bring/find orders own the body past the verdict, so a skill
+// could never fire — those steps read `no-order`.
+const STEP_VEHICLES = {
+  // the gather step of a build-here (GATHER-CLIFF, idkcraft-m7ke)
+  gather: () => ({
+    order: 'build here', expect: [`got ${needLogs()} logs`], fail: ['cannot reach the trees', 'no trees within 48'],
+    arena: { spawn: [-20.5, 64, -247.5], goal: [-18.5, 64, -247.5], secs: 300, scaffold: 0, pickaxe: true },
+  }),
+  // a failed build, rebuilt (JR-BUILD, idkcraft-d7i)
+  build: () => ({
+    order: 'build here', expect: ['home done at '], fail: ["I can't see you"],
+    arena: { spawn: [-145.5, 73, -78.5], goal: [-139.5, 73, -72.5], secs: 420, scaffold: 64, pickaxe: true, kit: ['acacia_planks 107', 'crafting_table 1', 'acacia_door 1'] },
+  }),
+}
+
+// Voxel codes (stall-state.js LEGEND) -> prep block. '?' (prod-unloaded) is
+// skipped: the rig leaves prod-unknown cells alone. Bed/door ride as solid
+// stand-ins (a fill cannot place their two-cell shapes).
+const SLICE_CODES = {
+  a: 'air', s: 'stone', g: 'sand', w: 'water', l: 'lava', b: 'oak_planks',
+  d: 'oak_planks', c: 'chest', o: 'coal_ore', x: 'dirt', '@': 'air',
+}
+const PREP_MAX = 32 // loadSpots prep cap
+
+// The logged slice -> fill runs around base. Throws Error('bad slice: ...')
+// on a malformed slice, Error('prep too big: ...') past the prep cap.
+function sliceToPrep(world, base) {
+  const layers = String(world || '').split(' | ')
+  if (layers.length !== 5) throw new Error(`bad slice: want 5 layers, got ${layers.length}`)
+  const runs = [] // [x1,x2,y,z1?,...] built per row, merged below
+  layers.forEach((layer, li) => {
+    const m = /^dy([+-]?\d+): ([a-z@?/]+)$/.exec(layer.trim())
+    if (!m || Number(m[1]) !== 2 - li) throw new Error(`bad slice: layer ${li} wants dy${2 - li >= 0 ? '+' : ''}${2 - li}`)
+    const rows = m[2].split('/')
+    if (rows.length !== 7) throw new Error(`bad slice: layer ${li} wants 7 rows, got ${rows.length}`)
+    const y = base[1] + (2 - li)
+    rows.forEach((row, zi) => {
+      if (row.length !== 7 || /[^aswlgbdcox@?]/.test(row)) throw new Error(`bad slice: bad row ${JSON.stringify(row)}`)
+      let start = -1
+      for (let xi = 0; xi <= 7; xi++) {
+        const code = xi < 7 ? row[xi] : null
+        const block = code === '?' ? null : SLICE_CODES[code]
+        if (code !== null && code !== '?' && !block) throw new Error(`bad slice: unknown code ${JSON.stringify(code)}`)
+        const cur = xi < 7 && block ? block : null
+        const prev = start >= 0 ? SLICE_CODES[row[start]] : null
+        if (cur !== prev) {
+          if (start >= 0 && prev) runs.push({ x1: base[0] + start - 3, x2: base[0] + xi - 1 - 3, y, z: base[2] + zi - 3, block: prev })
+          start = cur ? xi : -1
+        }
+      }
+    })
+  })
+  // Merge across z (rows), then y (layers): same x-span + block. Runs
+  // arrive in y,z order, so consecutive same-span rows merge; the second
+  // pass merges the boxes across y the same way (the z-span rides the key,
+  // so only identical boxes merge).
+  const zMerged = []
+  {
+    const open = new Map() // key(x1,x2,y,block) -> box
+    for (const r of runs) {
+      const prev = open.get(`${r.x1},${r.x2},${r.y},${r.block}`)
+      if (prev && r.z === prev.z2 + 1) prev.z2 = r.z
+      else {
+        const box = { ...r, z1: r.z, z2: r.z }
+        open.set(`${r.x1},${r.x2},${r.y},${r.block}`, box)
+        zMerged.push(box)
+      }
+    }
+  }
+  const merged = []
+  {
+    // Layers arrive top-down (dy+2 first), so a lower layer extends y1.
+    const open = new Map() // key(x1,x2,z1,z2,block) -> box
+    for (const b of zMerged) {
+      const prev = open.get(`${b.x1},${b.x2},${b.z1},${b.z2},${b.block}`)
+      if (prev && b.y === prev.y1 - 1) prev.y1 = b.y
+      else {
+        const box = { ...b, y1: b.y, y2: b.y }
+        open.set(`${b.x1},${b.x2},${b.z1},${b.z2},${b.block}`, box)
+        merged.push(box)
+      }
+    }
+  }
+  if (merged.length > PREP_MAX) throw new Error(`prep too big: ${merged.length} fills past the ${PREP_MAX} cap`)
+  return merged.map((r) => `fill ${r.x1} ${r.y1} ${r.z1} ${r.x2} ${r.y2} ${r.z2} ${r.block}`)
+}
+
+// A step-fail candidate -> order-mode spot (vf8e.11) or {why}. Terminal
+// markers only: the corpus tables judge delivery lines, never chatter.
+function proposeStepFail(c, name, base) {
+  const bead = { ...base, bead: BEAD11 }
+  const hint = beforeHint(c.step)
+  const head = `In prod the ${c.step} step failed ${c.count}x (last ${c.lastSeen} UTC, bots ${c.bots.join(',')}): failed:${c.detail}. Facts at the failure: ${c.facts}.`
+  if (c.step === 'shelter') {
+    // Night dig-in (krup facade digIn, the hand maneuver): the shelter arena
+    // (SPAWN-BARE, idkcraft-ed88) — the only corpus spot with a dig-in
+    // verdict. No markers: shelter judges enclosed, not chat.
+    return {
+      spot: {
+        name, mode: 'shelter', spawn: [-57.5, 61, -213.5], goal: [-57.5, 90, -63.5], home: [243, 64, -214],
+        secs: 90, closeSecs: 25, scaffold: 0, pickaxe: false, bead: BEAD11,
+      },
+      scenario: {
+        ...bead, kind: 'step',
+        task: `${head} The bot stands on open ground at night, its home built but far away, carrying nothing to dig in with. ` +
+          `Write a goal step skill that calls digIn() every tick until it answers 'done', then holds still inside until dawn. ` +
+          `Set the skill header 'before' to '${hint}' (it must sit after shelter).`,
+      },
+    }
+  }
+  const v = STEP_VEHICLES[c.step] && STEP_VEHICLES[c.step]()
+  if (!v) return { why: 'no-order' }
+  return {
+    spot: {
+      name, mode: 'order', spawn: v.arena.spawn, goal: v.arena.goal, order: v.order,
+      expect: v.expect, fail: v.fail, secs: v.arena.secs, scaffold: v.arena.scaffold,
+      pickaxe: v.arena.pickaxe, ...(v.arena.kit ? { kit: v.arena.kit } : {}),
+      ...(v.arena.house ? { house: v.arena.house } : {}), bead: BEAD11,
+    },
+    scenario: {
+      ...bead, kind: 'step',
+      task: `${head} The bot gets the order '${v.order}' here on the corpus arena with the standard kit. ` +
+        `Write a goal step skill that finishes the order so it ends '${v.expect[0]}', not a fail marker. ` +
+        `Set the skill header 'before' to '${hint}' (it must sit after shelter).`,
+    },
+  }
+}
+
+// A park candidate (vf8e.11): proposable=false until the runner can judge
+// a fetch. `build castle` founds a site and works, so the skill WOULD run
+// (revmux 01) — but no in-window outcome judges it (revmux 02): the only
+// terminal chat is `castle done at ` (a whole castle takes hours, far past
+// any window), the leg lines are console (the order gate only reads chat),
+// the L1/L2 park chats need 15/45 min, and the gate's terminal signals
+// (stuck/eps/call/low-disp) do not fire on a walking, digging, failing
+// fetch. So castlefetch parks read `no-verdict` until the runner reads
+// console lines or a short castle plan exists; anything else reads
+// `no-vehicle`. The slice builder (sliceToPrep) lands tested now and wires
+// up when the verdict path does.
+function proposePark(c, name, base) {
+  if (!String(c.reason || '').startsWith('castlefetch-')) return { why: 'no-vehicle' }
+  return { why: 'no-verdict' }
+}
+
 // candidate -> {spot, scenario} or {why}.
 function proposal(c) {
   const name = `AUTO-${c.sig}`
   const base = { name: `auto-${c.sig}`, spot: name, sabotage: null, skill: `gen_${c.sig}`, bead: BEAD }
+  if (c.family === 'step-fail') return proposeStepFail(c, name, base)
+  if (c.family === 'park') return proposePark(c, name, base)
   if (c.family === 'bring') {
     const order = `bring me ${c.item}`
     return {
@@ -446,7 +713,7 @@ function main(argv) {
     console.log(table(list, Number(process.env.TOP || 20)))
     const fam = (f) => list.filter((c) => c.family === f)
     const s = survey(text)
-    console.log(`harvest events=${events.length} signatures=${list.length} page=${fam('page').length} bring=${fam('bring').length} ` +
+    console.log(`harvest events=${events.length} signatures=${list.length} page=${fam('page').length} bring=${fam('bring').length} stepfail=${fam('step-fail').length} park=${fam('park').length} ` +
       `proposable=${list.filter((c) => c.proposable).length} days=${days} parsed=${s.parsed}/${s.lines} recover=${s.recover} refusals=${s.refusals} -> ${path.join(dir, 'curriculum.json')}`)
     if (list.length === 0) console.log(`harvest why: ${whyLine(s, events, botSpec())}`)
     return 0
@@ -476,4 +743,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2))
 
-module.exports = { parse, rank, proposal, table, main, WEIGHT, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES, survey, whyLine }
+module.exports = { parse, rank, proposal, table, main, WEIGHT, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES, survey, whyLine, sliceToPrep, fetchKind, beforeHint, STEP_VEHICLES }

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { parse, rank, main } = require('../tools/curriculum')
+const { parse, rank, proposal, main } = require('../tools/curriculum')
 const { loadSpots } = require('../tools/stuck-replay')
 
 const DUMP = path.join(__dirname, 'fixtures', 'curriculum-dump.txt')
@@ -89,7 +89,7 @@ describe('curriculum harvest (idkcraft-vf8e.9)', () => {
       const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
       assert.equal(saved.length, 6)
       assert.match(out[0], /^#\s+sig\s+family\s+count\s+score/)
-      assert.match(out.at(-1), /^harvest events=9 signatures=6 page=4 bring=2 proposable=5 days=7/)
+      assert.match(out.at(-1), /^harvest events=9 signatures=6 page=4 bring=2 stepfail=0 park=0 proposable=5 days=7/)
     })
   })
 })
@@ -145,7 +145,7 @@ describe('curriculum docker timestamps + empty-night why (idkcraft-vf8e.16)', ()
       assert.equal(main(['harvest', f]), 0)
       const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
       assert.equal(saved.length, 6)
-      assert.match(out.at(-1), /^harvest events=9 signatures=6 page=4 bring=2 proposable=5 days=7 parsed=31\/40 recover=28 refusals=3 -> /)
+      assert.match(out.at(-1), /^harvest events=9 signatures=6 page=4 bring=2 stepfail=0 park=0 proposable=5 days=7 parsed=31\/40 recover=28 refusals=3 -> /)
     })
   })
 
@@ -161,7 +161,7 @@ describe('curriculum docker timestamps + empty-night why (idkcraft-vf8e.16)', ()
   it('a night with 0 signatures says why: recover seen, no pages, bring excluded', () => {
     withDir((dir, out) => {
       assert.equal(main(['harvest', NOPAGE]), 0)
-      assert.match(out.at(-2), /^harvest events=0 signatures=0 page=0 bring=0 proposable=0 days=7 parsed=3\/3 recover=2 refusals=0 -> /)
+      assert.match(out.at(-2), /^harvest events=0 signatures=0 page=0 bring=0 stepfail=0 park=0 proposable=0 days=7 parsed=3\/3 recover=2 refusals=0 -> /)
       assert.match(out.at(-1), /^harvest why: recover=2 but 0 page events \(no call_player\/gave-up episode\); bring=excluded/)
     })
   })
@@ -226,5 +226,195 @@ describe('curriculum propose (idkcraft-vf8e.9)', () => {
     assert.deepEqual(Object.keys(scenario).sort(), scenarioKeys)
     assert.deepEqual([scenario.sabotage, scenario.kind], [null, 'step'])
     assert.match(scenario.task, /'bring me bone'.*refused 2x/)
+  })
+})
+
+describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
+  const { matchOrderLine } = require('../tools/stuck-replay')
+  const SF = path.join(__dirname, 'fixtures', 'curriculum-dump-stepfail.txt')
+  const sfText = fs.readFileSync(SF, 'utf8')
+  const sfList = rank(parse(sfText, ENV), 7)
+  const sfFind = (reason) => sfList.find((c) => c.reason === reason)
+  const corpus = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'stuck-spots.json'), 'utf8'))
+  const byName = Object.fromEntries(corpus.map((s) => [s.name, s]))
+
+  function sfPropose(c) {
+    return withDir((dir, out) => {
+      main(['harvest', SF])
+      const rc = main(['propose', c.sig])
+      const work = path.join(dir, `AUTO-${c.sig}`)
+      if (rc !== 0) return { rc, out }
+      const spots = loads(path.join(work, 'spots.json'))
+      const scenario = JSON.parse(fs.readFileSync(path.join(work, 'scenario.json'), 'utf8'))[0]
+      return { rc, out, spot: spots[0], scenario }
+    })
+  }
+
+  it('parses step failures, castlefetch legs and parks with the slice attached', () => {
+    const ev = parse(sfText, ENV)
+    // One event per failure: the leg-over only stages the kind (revmux 01),
+    // and the castlefetch step-fail repeats the bare line, so it is skipped.
+    assert.equal(ev.length, 11)
+    assert.deepEqual(ev.filter((e) => e.family === 'step-fail').map((e) => e.reason),
+      ['gather:no-trees', 'gather:no-trees', 'build:no-planks', 'gohome:cannot-reach', 'shelter:no-cover', 'explore:no-progress'])
+    assert.deepEqual(ev.filter((e) => e.family === 'park').map((e) => e.reason),
+      ['castlefetch-no-stone', 'castlefetch-no-stone', 'castlefetch-no-stone',
+        'castlefetch-unreachable', 'castlefetch-unreachable'])
+    assert.deepEqual(ev.filter((e) => e.family === 'park').map((e) => e.fetch),
+      ['stone', 'stone', 'stone', null, null])
+    for (const e of ev.filter((e) => e.family === 'park')) assert.ok(e.slice && e.slice.includes('dy+2:'), 'park carries the voxel slice')
+    for (const e of ev.filter((e) => e.family === 'step-fail')) assert.match(e.facts, /^time=(day|night) /)
+  })
+
+  it('ranks park above step-fail by count x weight; only menu-running vehicles propose', () => {
+    // Park never proposes for now (revmux 02: no in-window outcome judges a
+    // fetch), and body-owning orders park too.
+    assert.deepEqual(sfList.map((c) => [c.family, c.reason, c.count, c.score, c.proposable ? 'yes' : c.why]), [
+      ['park', 'castlefetch-no-stone', 3, 6, 'no-verdict'],
+      ['park', 'castlefetch-unreachable', 2, 4, 'no-verdict'],
+      ['step-fail', 'gather:no-trees', 2, 4, 'yes'],
+      ['step-fail', 'explore:no-progress', 1, 2, 'no-order'],
+      ['step-fail', 'shelter:no-cover', 1, 2, 'yes'],
+      ['step-fail', 'gohome:cannot-reach', 1, 2, 'no-order'],
+      ['step-fail', 'build:no-planks', 1, 2, 'yes'],
+    ])
+  })
+
+  it('a gather fail replays build here on the gather corpus arena and markers', () => {
+    const { rc, spot, scenario } = sfPropose(sfFind('gather:no-trees'))
+    assert.equal(rc, 0)
+    assert.equal(spot.mode, 'order')
+    assert.equal(spot.order, 'build here')
+    assert.deepEqual([spot.spawn, spot.goal, spot.secs, spot.scaffold, spot.pickaxe],
+      [byName['GATHER-CLIFF'].spawn, byName['GATHER-CLIFF'].goal, 300, 0, true])
+    assert.deepEqual([spot.expect, spot.fail], [byName['GATHER-CLIFF'].expect, byName['GATHER-CLIFF'].fail])
+    assert.equal(spot.expect[0], `got ${require('../src/budget').NEED_LOGS} logs`)
+    // Terminal markers only: delivery lines judge, chatter does not.
+    assert.equal(matchOrderLine(`got ${require('../src/budget').NEED_LOGS} logs`, spot.expect, spot.fail), 'expect')
+    assert.equal(matchOrderLine('cannot reach the trees', spot.expect, spot.fail), 'fail')
+    assert.equal(matchOrderLine('no trees within 48 blocks (loaded area)', spot.expect, spot.fail), 'fail')
+    assert.equal(matchOrderLine('chopping acacia_log 4/14', spot.expect, spot.fail), null)
+    assert.deepEqual(Object.keys(scenario).sort(), Object.keys(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'tools', 'skill-scenarios.json'), 'utf8'))[0]).sort())
+    assert.deepEqual([scenario.sabotage, scenario.kind, scenario.bead], [null, 'step', 'idkcraft-vf8e.11'])
+    assert.match(scenario.task, /the gather step failed 2x.*failed:no-trees/)
+    assert.match(scenario.task, /Facts at the failure: time=day/)
+    assert.match(scenario.task, /before.*gather/)
+  })
+
+  it('a build fail replays build here with the seeded kit', () => {
+    const b = sfPropose(sfFind('build:no-planks'))
+    assert.equal(b.rc, 0)
+    assert.deepEqual([b.spot.expect, b.spot.fail], [byName['JR-BUILD'].expect, byName['JR-BUILD'].fail])
+    assert.deepEqual(b.spot.kit, byName['JR-BUILD'].kit)
+    assert.equal(matchOrderLine('home done at -144 72 -77', b.spot.expect, b.spot.fail), 'expect')
+    assert.equal(matchOrderLine("I can't see you, come closer", b.spot.expect, b.spot.fail), 'fail')
+    assert.equal(matchOrderLine('building a home at -144 72 -77', b.spot.expect, b.spot.fail), null)
+  })
+
+  it('a gohome fail stays parked: come home owns the body past the verdict', () => {
+    // ordersDispatch runs comehome instead of the goal menu (revmux 01), so
+    // a gohome step skill could never fire before `=home` ends the window.
+    const g = sfFind('gohome:cannot-reach')
+    assert.equal(g.proposable, false)
+    assert.equal(g.why, 'no-order')
+    assert.equal(proposal(g).why, 'no-order')
+  })
+
+  it('a shelter fail replays the night dig-in on the shelter arena (krup facade)', () => {
+    const { rc, spot, scenario } = sfPropose(sfFind('shelter:no-cover'))
+    assert.equal(rc, 0)
+    assert.equal(spot.mode, 'shelter')
+    assert.deepEqual([spot.spawn, spot.goal, spot.secs, spot.closeSecs],
+      [byName['SPAWN-BARE'].spawn, byName['SPAWN-BARE'].goal, 90, 25])
+    assert.deepEqual(spot.home, { x: 243, y: 64, z: -214 }) // loadSpots folds sites to objects
+    assert.equal(spot.order, null) // shelter judges enclosed, never chat
+    assert.equal(scenario.kind, 'step')
+    assert.match(scenario.task, /the shelter step failed 1x.*failed:no-cover/)
+    assert.match(scenario.task, /digIn\(\)/)
+    assert.match(scenario.task, /before.*rest/)
+  })
+
+  it('a castlefetch stall stays parked: no in-window outcome judges a fetch', () => {
+    // Revmux 02: `castle done at ` takes hours, the leg lines are console,
+    // L1/L2 need 15/45 min — the order gate would read every run TIMEOUT,
+    // so the family waits on runner console-line verdicts (or a short plan).
+    for (const reason of ['castlefetch-no-stone', 'castlefetch-unreachable']) {
+      const c = sfFind(reason)
+      assert.equal(c.proposable, false)
+      assert.equal(c.why, 'no-verdict')
+      assert.equal(proposal(c).why, 'no-verdict')
+    }
+    const inline = (lines) => rank(parse(lines.join('\n'), ENV), 7)
+    const noSlice = inline(['2026-10-20 12:00:00 IdkBotV2 castlefetch failed:castlefetch-no-stone'])
+    assert.equal(proposal(noSlice[0]).why, 'no-verdict')
+    const other = inline(['2026-10-20 12:00:00 IdkBotV2 task house 1/10 parked #1 why=no wood found nearby'])
+    assert.equal(other[0].family, 'park')
+    assert.equal(proposal(other[0]).why, 'no-vehicle')
+  })
+
+  it('harvest counts the new families', () => {
+    withDir((dir, out) => {
+      assert.equal(main(['harvest', SF]), 0)
+      const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
+      assert.equal(saved.length, 7)
+      assert.match(out.at(-1), /^harvest events=11 signatures=7 page=0 bring=0 stepfail=5 park=2 proposable=3 days=7 /)
+    })
+  })
+})
+
+describe('sliceToPrep (idkcraft-vf8e.11)', () => {
+  const { sliceToPrep } = require('../tools/curriculum')
+  const L = (dy, rows) => `dy${dy}: ${rows.join('/')}`
+  const air = 'aaaaaaa'
+  const world5 = (dy0rows) => [
+    L('+2', [air, air, air, air, air, air, air]),
+    L('+1', [air, air, air, air, air, air, air]),
+    L('+0', dy0rows),
+    L('-1', [air, air, air, air, air, air, air]),
+    L('-2', [air, air, air, air, air, air, air]),
+  ].join(' | ')
+
+  it('one row sssaaas -> fill runs around the base', () => {
+    assert.deepEqual(sliceToPrep(world5([air, air, air, 'sssaaas', air, air, air]), [0, 64, 0]), [
+      'fill -3 65 -3 3 66 3 air',
+      'fill -3 64 -3 3 64 -1 air',
+      'fill -3 64 0 -1 64 0 stone',
+      'fill 0 64 0 2 64 0 air',
+      'fill 3 64 0 3 64 0 stone',
+      'fill -3 64 1 3 64 3 air',
+      'fill -3 62 -3 3 63 3 air',
+    ])
+  })
+
+  it('the fixture slice rebuilds the prod neighbourhood in 11 fills', () => {
+    const text = fs.readFileSync(path.join(__dirname, 'fixtures', 'curriculum-dump-stepfail.txt'), 'utf8')
+    const slice = parse(text, ENV).find((e) => e.slice).slice
+    assert.deepEqual(sliceToPrep(slice, [59, 64, -206]), [
+      'fill 56 66 -209 62 66 -203 air',
+      'fill 56 64 -209 62 65 -209 air',
+      'fill 56 64 -208 57 65 -207 air',
+      'fill 58 65 -208 59 65 -207 stone',
+      'fill 60 65 -208 62 65 -207 air',
+      'fill 56 64 -206 62 65 -203 air',
+      'fill 58 64 -208 59 64 -208 stone',
+      'fill 60 64 -208 62 64 -208 air',
+      'fill 58 64 -207 58 64 -207 stone',
+      'fill 59 64 -207 62 64 -207 air',
+      'fill 56 62 -209 62 63 -203 stone',
+    ])
+  })
+
+  it('skips prod-unloaded cells and rejects malformed slices', () => {
+    assert.deepEqual(sliceToPrep(world5(['???aaaa', air, air, air, air, air, air]), [0, 64, 0]), [
+      'fill -3 65 -3 3 66 3 air',
+      'fill 0 64 -3 3 64 -3 air',
+      'fill -3 64 -2 3 64 3 air',
+      'fill -3 62 -3 3 63 3 air',
+    ])
+    assert.throws(() => sliceToPrep('dy+2: a', [0, 64, 0]), /bad slice/)
+    assert.throws(() => sliceToPrep(world5([air, air, air, 'zzz', air, air, air]), [0, 64, 0]), /bad slice/)
+    const checker = [0, 1, 2, 3, 4].map((li) => L(li === 0 ? '+2' : li === 1 ? '+1' : li === 2 ? '+0' : li === 3 ? '-1' : '-2',
+      [0, 1, 2, 3, 4, 5, 6].map((zi) => [0, 1, 2, 3, 4, 5, 6].map((xi) => ((xi + zi + li) % 2 ? 's' : 'a')).join('')))).join(' | ')
+    assert.throws(() => sliceToPrep(checker, [0, 64, 0]), /too big/)
   })
 })

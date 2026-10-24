@@ -1540,3 +1540,63 @@ describe('world verdict for planted things (idkcraft-vf8e.18)', () => {
     }
   })
 })
+
+describe('AUTO order spots (idkcraft-vf8e.11)', () => {
+  // The curriculum's step-fail / park proposals reuse the marker tables
+  // pinned above: the corpus lines judge the AUTO spots, never copies.
+  const os = require('node:os')
+  const curriculum = require('../tools/curriculum')
+  const NEED = require('../src/budget').NEED_LOGS
+
+  function autoSpots() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-spots-'))
+    const savedDir = process.env.CURRICULUM_DIR
+    const savedArg = process.argv[2]
+    const log = console.log
+    console.log = () => {}
+    try {
+      process.env.CURRICULUM_DIR = dir
+      const dump = path.join(__dirname, 'fixtures', 'curriculum-dump-stepfail.txt')
+      assert.equal(curriculum.main(['harvest', dump]), 0)
+      const list = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8')).filter((c) => c.proposable)
+      return {
+        dir,
+        out: list.map((c) => {
+          assert.equal(curriculum.main(['propose', c.sig]), 0)
+          process.argv[2] = path.join(dir, `AUTO-${c.sig}`, 'spots.json')
+          return { reason: c.reason, spot: loadSpots()[0] }
+        }),
+      }
+    } finally {
+      console.log = log
+      if (savedDir === undefined) delete process.env.CURRICULUM_DIR
+      else process.env.CURRICULUM_DIR = savedDir
+      if (savedArg === undefined) delete process.argv[2]
+      else process.argv[2] = savedArg
+    }
+  }
+
+  it('AUTO spots load and their markers judge the pinned corpus lines', () => {
+    // Only menu-running vehicles propose (revmux 01+02): gather/build run
+    // the goal menu under `build here`, shelter judges enclosed; parks and
+    // body-owning orders stay parked.
+    const { dir, out } = autoSpots()
+    try {
+      assert.equal(out.length, 3)
+      const find = (reason) => out.find((o) => o.reason === reason).spot
+      const gather = find('gather:no-trees')
+      assert.equal(matchOrderLine(`got ${NEED} logs`, gather.expect, gather.fail), 'expect')
+      assert.equal(matchOrderLine('cannot reach the trees', gather.expect, gather.fail), 'fail')
+      assert.equal(matchOrderLine('chopping acacia_log 4/14', gather.expect, gather.fail), null)
+      const build = find('build:no-planks')
+      assert.equal(matchOrderLine('home done at -144 72 -77', build.expect, build.fail), 'expect')
+      assert.equal(matchOrderLine("I can't see you, come closer", build.expect, build.fail), 'fail')
+      assert.equal(matchOrderLine('building a home at -144 72 -77', build.expect, build.fail), null)
+      const shelter = find('shelter:no-cover')
+      assert.equal(shelter.mode, 'shelter')
+      assert.equal(shelter.order, null) // shelter judges enclosed, never chat
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
