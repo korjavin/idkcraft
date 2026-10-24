@@ -2508,11 +2508,12 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
           const stamp = ctx.castleFetchFailKind
           if (typeof stamp === 'string' && stamp) {
             rec.kind = stamp
-            // klh2: the hold parks the failed site — carry the leg-stamped
-            // site for world-stage failures (craft/pack ends stay siteless
-            // and hold kind-wide, as before). Consumed like the kind stamp
-            // (revmux 01 core-1): a stale site must never leak into a later
-            // siteless failure.
+            // klh2: carry the leg-stamped site for world-stage failures
+            // (craft/pack ends stay siteless). The window still parks the
+            // kind kind-wide; the site marks the entry hop-eligible (a
+            // world strategy failed, so the chest strategy may still
+            // serve it). Consumed like the kind stamp (revmux 01 core-1):
+            // a stale site must never leak into a later siteless failure.
             let pos = null
             try {
               const fs = ctx.castleFetchFailSite

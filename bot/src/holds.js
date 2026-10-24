@@ -48,20 +48,4 @@ function gatherFailedHolds(g, logs, bot) {
   }
 }
 
-// Site-scoped hold (idkcraft-klh2): a fetch hold parks the failed SITE, not
-// the kind — true while the body is still at the failure point (or the site
-// or the body is unreadable: fail-safe, the atl.4 precedent). Relocation
-// past REFAIL_DIST releases the kind, so the next same-kind strategy runs
-// at the new site while the failed one stays parked.
-function siteStands(pos, bot) {
-  try {
-    if (!pos || typeof pos.x !== 'number') return true
-    const bp = bot && bot.entity && bot.entity.position
-    if (!bp || typeof bp.x !== 'number') return true
-    return Math.hypot(bp.x - pos.x, bp.z - pos.z) <= REFAIL_DIST
-  } catch (_) {
-    return true
-  }
-}
-
-module.exports = { REFAIL_DIST, gatherFailedHolds, farStartOk, LATE_DAY_TICKS, siteStands }
+module.exports = { REFAIL_DIST, gatherFailedHolds, farStartOk, LATE_DAY_TICKS }

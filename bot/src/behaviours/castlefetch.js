@@ -292,23 +292,19 @@ function holdFor(bot, ctx, kind) {
     const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
     if (!sf || typeof sf.at !== 'number') return false
     const window = require('../budget').CASTLEFETCH_RETRY_MS
-    const siteStands = require('../holds').siteStands
     const kinds = sf.kinds
     if (kinds && typeof kinds === 'object') {
+      // klh2 R2: kind-wide for the window, as before klh2 — the entry pos
+      // does NOT release on relocation (revmux 01-review: the stone world
+      // stage is castle-anchored, so a release walks back and re-fails the
+      // same ground; the hop below is the only in-window path). A legacy
+      // bare-timestamp entry reads the same way.
       const e = kinds[kind]
       const at = typeof e === 'number' ? e : (e && e.at)
-      if (!(typeof at === 'number' && Date.now() - at <= window)) return false
-      // klh2: the hold parks the failed site — a kind failed elsewhere runs.
-      // A legacy bare-timestamp entry (or a siteless one) stays kind-parked.
-      const pos = e && typeof e === 'object' ? (e.pos || null) : null
-      return siteStands(pos, bot)
+      return typeof at === 'number' && Date.now() - at <= window
     }
     if (sf.kind && sf.kind !== kind) return false
-    if (!(Date.now() - sf.at <= window)) return false
-    // A kindless record names no kind to park a site for — it stays the
-    // step-wide hold-all. A kind-named record parks that kind's site.
-    if (!sf.kind) return true
-    return siteStands(sf.pos || null, bot)
+    return Date.now() - sf.at <= window
   } catch (_) {
     return false
   }
@@ -334,13 +330,14 @@ function stampFailKindSite(bot, ctx, kind, status) {
   } catch (_) { /* site best-effort */ }
 }
 
-// Same-kind hop due (idkcraft-klh2): kind KIND is parked at its failed world
-// site, but the next tick must not idle the hold window out — the leg hops
-// to the chest strategy for the same kind (Source 1 runs first every leg;
-// the hop leg skips the world stage at the parked site). True only with a
-// site park on the record (craft/pack-full failures keep today's hold), a
-// live hold window, no same-day park (dlpo owns that), and a chest the hop
-// leg can actually walk to (else the hop leg would end at once, every tick).
+// Same-kind hop due (idkcraft-klh2): kind KIND is held with a failed world
+// site on its record, but the next tick must not idle the hold window out —
+// the leg hops to the chest strategy for the same kind (Source 1 runs first
+// every leg; the hop leg skips the world stage while the hold stands). True
+// only with a site park on the record (craft/pack-full failures keep today's
+// hold), a live hold window, no same-day park (dlpo owns that), and an
+// UNTRIED chest the hop leg can actually walk to (else the hop leg would end
+// at once, every tick; tried chests are remembered on the entry, R2).
 function hopDue(bot, ctx, kind) {
   try {
     if (!kind || !(kind in FETCH)) return false
@@ -350,21 +347,24 @@ function hopDue(bot, ctx, kind) {
     if (!sf || typeof sf.at !== 'number') return false
     const window = require('../budget').CASTLEFETCH_RETRY_MS
     const kinds = sf.kinds
-    let pos = null
     let hasSite = false
+    let hopTried = null
     if (kinds && typeof kinds === 'object') {
       const e = kinds[kind]
       const at = typeof e === 'number' ? e : (e && e.at)
       if (!(typeof at === 'number' && Date.now() - at <= window)) return false
-      if (e && typeof e === 'object' && e.pos && typeof e.pos.x === 'number') { pos = e.pos; hasSite = true }
+      if (e && typeof e === 'object' && e.pos && typeof e.pos.x === 'number') hasSite = true
+      // klh2 R2 major-1: chests an unserved hop already tried under this
+      // hold stay skipped — at most one serving round per chest per hold
+      // window, never a re-poll of an empty footprint chest.
+      if (e && typeof e === 'object' && Array.isArray(e.hopTried)) hopTried = e.hopTried
     }
     // klh2 R1 F2: no legacy branch — kind-stamped failures always carry a
     // kinds map (revmux 02 core-1); kindless records never hop.
     if (!hasSite) return false
-    void pos
     // A chest candidate must exist or the hop leg ends at once (tick churn).
     // Temp leg state: pickChest only reads tried/dry against it, discarded.
-    if (!pickChest(bot, ctx, {}, kind)) return false
+    if (!pickChest(bot, ctx, { chestTried: new Set(hopTried || []) }, kind)) return false
     return true
   } catch (_) {
     return false
@@ -436,10 +436,11 @@ function demand(bot, ctx) {
   const cw = ctx && ctx.castleWord
   const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
   const target = Math.min(FETCH[kind], left)
-  // klh2: the hold parks the failed world site, not the kind — when the
+  // klh2: the window parks the kind (kind-wide, as before klh2) — when the
   // parked kind's next tick would otherwise idle, hop to the chest strategy
-  // for the same kind (the hop leg skips the world stage at the parked
-  // site). No hop when the kind holds siteless, day-parked, or chestless.
+  // for the same kind. The hop leg skips the world stage, so the failed
+  // site stays parked while the hold stands. No hop when the kind holds
+  // siteless, day-parked, chestless, or only at tried chests.
   if (holdFor(bot, ctx, kind)) {
     if (hopDue(bot, ctx, kind)) {
       const short = Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
@@ -581,8 +582,23 @@ function finish(bot, ctx, status) {
     if (f && typeof f.kind === 'string') {
       // A served need retires its kind hold (hop or not); a hopDry end
       // served nothing and stamps nothing (revmux 03 core-1 shape).
-      if (status === 'done') { if (!hopDry) ctx.castleFetchDoneKind = f.kind }
-      else stampFailKindSite(bot, ctx, f.kind, status)
+      if (status === 'done') {
+        if (!hopDry) ctx.castleFetchDoneKind = f.kind
+        else {
+          // klh2 R2 major-1: remember the chests this hop tried on the live
+          // hold entry — the next tick hops only to untried chests, never
+          // re-polling an empty footprint chest for the whole window.
+          try {
+            const kinds = ctx.stepFail && ctx.stepFail.castlefetch && ctx.stepFail.castlefetch.kinds
+            const e = kinds && typeof kinds === 'object' ? kinds[f.kind] : null
+            if (e && typeof e === 'object') {
+              const seen = new Set(Array.isArray(e.hopTried) ? e.hopTried : [])
+              for (const k of (f.chestTried || [])) seen.add(k)
+              e.hopTried = [...seen]
+            }
+          } catch (_) { /* hop memory best-effort */ }
+        }
+      } else stampFailKindSite(bot, ctx, f.kind, status)
     }
   } catch (_) { /* stamp best-effort */ }
   ctx.castleFetch = null

@@ -104,15 +104,19 @@ describe('klh2 same-kind tick hop', () => {
     assert.equal(goal.failHolds(ctx, 'castlefetch', 'castle=stone-none', bot), true, 'the menu entry stays held')
   })
 
-  it('relocated past the site: normal demand, no hop flag', () => {
+  it('relocated past the site: still hops, never a world leg (R2)', () => {
     castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
     const bot = makeBot()
     const ctx = withChest({ castle: castleState() })
     failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
-    bot.entity.position = pos(0, 64, 0) // >32 from the failure point
-    assert.equal(fetch.holdFor(bot, ctx, 'stone'), false, 'relocated: the kind is free')
+    // Past the failure point but still in chest reach: the window holds
+    // kind-wide (revmux 01-review — the quarry is castle-anchored, so a
+    // release would walk back and re-fail the same ground), and the kind
+    // runs as a hop, never as a full world leg.
+    bot.entity.position = pos(SITE.x - 40, 64, SITE.z)
+    assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'R2: relocation never releases the window')
     const d = fetch.demand(bot, ctx)
-    assert.ok(d && d.kind === 'stone' && !d.hop, `a full leg runs at the new site: ${JSON.stringify(d)}`)
+    assert.ok(d && d.kind === 'stone' && d.hop === true, `relocated: the same kind hops: ${JSON.stringify(d)}`)
   })
 
   it('a siteless (craft) failure never hops, even with a chest', () => {
@@ -195,6 +199,24 @@ describe('klh2 same-kind tick hop', () => {
     assert.ok(ctx.castleFetchDoneKind == null, 'no retire stamp on an unserved hop')
     assert.deepEqual(Object.keys(ctx.stepFail.castlefetch.kinds), ['stone'], 'the site hold survives the partial-serve cycle')
     assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'no world retry at the parked site')
+  })
+
+  it('R2 major-1: an unserved hop does not re-poll the same chest', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
+    const bot = makeBot()
+    const ctx = withChest({ castle: castleState() })
+    failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
+    assert.equal(fetch.hopDue(bot, ctx, 'stone'), true, 'setup: first hop due')
+    // The hop leg tried the only chest and served nothing (chestTried is
+    // the per-leg tried set a real leg carries out of chestTick).
+    ctx.castleFetch = { kind: 'stone', chestDone: true, hop: true, chestTried: new Set([`${SITE.x - 2},64,${SITE.z - 2}`]) }
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(ctx.stepFail.castlefetch.kinds.stone.hopTried, [`${SITE.x - 2},64,${SITE.z - 2}`], 'tried chests remembered on the hold entry')
+    // Next tick: the only chest is tried — no hop, no churn, hold stands.
+    assert.equal(fetch.hopDue(bot, ctx, 'stone'), false, 'tried chest skipped for the window')
+    assert.equal(fetch.demand(bot, ctx), null, 'no re-poll of the empty chest')
+    assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'the window still parks the kind')
   })
 
   it('R1 F1 control: a served hop leg retires the hold', () => {
