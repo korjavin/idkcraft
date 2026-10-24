@@ -1577,13 +1577,13 @@ describe('AUTO order spots (idkcraft-vf8e.11)', () => {
   }
 
   it('AUTO spots load and their markers judge the pinned corpus lines', () => {
-    // Only menu-running vehicles propose (revmux 01+02): gather/build run
-    // the goal menu under `build here`, shelter judges enclosed, unreachable
-    // parks run the short `build castle` vehicle (0l0m); other parks and
-    // body-owning orders stay parked.
+    // Only menu-running vehicles propose (revmux 01+02, sggu): gather/build
+    // run the goal menu under `build here`, shelter judges enclosed; every
+    // park (incl. castlefetch-unreachable: `red-parked`) and body-owning
+    // orders stay parked.
     const { dir, out } = autoSpots()
     try {
-      assert.equal(out.length, 4)
+      assert.equal(out.length, 3)
       const find = (reason) => out.find((o) => o.reason === reason).spot
       const gather = find('gather:no-trees')
       assert.equal(matchOrderLine(`got ${NEED} logs`, gather.expect, gather.fail), 'expect')
@@ -1596,10 +1596,7 @@ describe('AUTO order spots (idkcraft-vf8e.11)', () => {
       const shelter = find('shelter:no-cover')
       assert.equal(shelter.mode, 'shelter')
       assert.equal(shelter.order, null) // shelter judges enclosed, never chat
-      const fetch = find('castlefetch-unreachable')
-      assert.equal(matchOrderLine('castle done at 60 64 -206', fetch.expect, fetch.fail), 'expect')
-      assert.equal(matchOrderLine("I can't see you, come closer", fetch.expect, fetch.fail), 'fail')
-      assert.equal(matchOrderLine('chopping stone 4/64', fetch.expect, fetch.fail), null)
+      assert.equal(out.find((o) => o.reason === 'castlefetch-unreachable'), undefined)
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
