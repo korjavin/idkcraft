@@ -29,14 +29,17 @@
 //           arena); castlefetch failures route to park, the rest read
 //           `no-order` (revmux 01: orders that own the body could never
 //           run the skill).
-//   park (vf8e.11, unreachable verdict path 0l0m) — a castlefetch-* leg
-//           failure (`castlefetch <kind>: leg over (failed:...)`,
-//           `castlefetch failed:...`) or a park line (`goal park ...`,
-//           `task ... parked ...`) whose diagnosis names one. Signature =
-//           the castlefetch reason. `castlefetch-unreachable` proposes a
-//           short `build castle` vehicle (sliceToPrep prep); other
-//           castlefetch-* read `no-verdict` (revmux 02: no in-window outcome
-//           judges them); other parks read `no-vehicle`.
+//   park (vf8e.11, unreachable verdict path 0l0m, parked sggu) — a
+//           castlefetch-* leg failure (`castlefetch <kind>: leg over
+//           (failed:...)`, `castlefetch failed:...`) or a park line
+//           (`goal park ...`, `task ... parked ...`) whose diagnosis names
+//           one. Signature = the castlefetch reason. All castlefetch-*
+//           stay parked: other reasons read `no-verdict` (revmux 02: no
+//           in-window outcome judges them) and `castlefetch-unreachable`
+//           reads `red-parked` (sggu: judging `build castle` by `castle
+//           done at ` inside secs:300 is RED on every run — a whole castle
+//           takes hours — so the paid skill loop could never go GREEN);
+//           other parks read `no-vehicle`.
 // Rank = owner tier first (vf8e.22: castlefetch parks, castlefetch/mine/
 // castle-feeding step fails and daytime idle above night/arrival families),
 // then count x weight (page 3, bring 2, step-fail 2, park 2). Bots: CURRICULUM_BOTS = comma
@@ -521,47 +524,23 @@ function proposeStepFail(c, name, base) {
   }
 }
 
-// Shaft-side flat for the unreachable park vehicle (the BRING arena:
-// proven flat, near CASTLE_PARK_BASE so the slice prep lands under the bot).
-const CASTLE_PARK_SPAWN = [59.5, 64, -205.5]
-const CASTLE_PARK_GOAL = [62.5, 64, -205.5]
-const CASTLE_PARK_BASE = [59, 64, -206] // floored SPAWN (sliceToPrep integer base)
-
-// A park candidate (vf8e.11, unreachable verdict path 0l0m): parks whose
+// A park candidate (vf8e.11, unreachable verdict path 0l0m, parked sggu): parks whose
 // diagnosis names no castlefetch-* read `no-vehicle` (no replay vehicle).
 // Castlefetch legs other than unreachable read `no-verdict` (revmux 02: no
 // in-window outcome judges them — `castle done at ` takes hours, the leg
 // lines are console while the order gate reads chat, L1/L2 need 15/45
-// min). The unreachable leg proposes a short castle vehicle: `build
-// castle` on the shaft-side flat with prep rebuilt from the plan-fire
-// voxel slice via sliceToPrep. Without a skill the window times out (no
-// `castle done at ` in 300 s) so the gate reads RED through the runner; a
-// finishing skill would read GREEN. The RED is the runnable verdict that
-// unblocks the demotion loop (3 REDs park the signature for a human look);
-// the console fetch lines stay out of the chat gate.
-function proposePark(c, name, base) {
+// min). The unreachable leg reads `red-parked`: judging `build castle`
+// by `castle done at ` inside secs:300 is RED on every run (a whole castle
+// takes hours), so no skill could ever read GREEN and the paid loop would
+// burn to its 3-RED park. It stays parked for a human look instead —
+// honestly, without spending a rig run. (No sliceToPrep call here, so a
+// bad slice or a PREP_MAX-cap overflow can no longer propose a silent bare
+// flat: sliceToPrep still throws, and stays exported + tested for a future
+// short-castle vehicle.)
+function proposePark(c) {
   if (!String(c.reason || '').startsWith('castlefetch-')) return { why: 'no-vehicle' }
   if (c.reason !== 'castlefetch-unreachable') return { why: 'no-verdict' }
-  const bead = { ...base, bead: BEAD11 }
-  const hint = beforeHint('castlefetch')
-  let prep = []
-  if (c.slice) {
-    try { prep = sliceToPrep(c.slice, CASTLE_PARK_BASE) } catch (_) { prep = [] }
-  }
-  return {
-    spot: {
-      name, mode: 'order', spawn: CASTLE_PARK_SPAWN, goal: CASTLE_PARK_GOAL, order: 'build castle',
-      expect: ['castle done at '], fail: ["I can't see you", 'no castle yet'],
-      secs: 300, scaffold: 64, pickaxe: true, ...(prep.length ? { prep } : {}), bead: BEAD11,
-    },
-    scenario: {
-      ...bead, kind: 'step',
-      task: `In prod the castlefetch leg failed ${c.count}x (last ${c.lastSeen} UTC, bots ${c.bots.join(',')}): failed:${c.reason}. ` +
-        `The bot gets the order 'build castle' here on the shaft-side flat with the standard kit${prep.length ? ` and the prod voxel neighbourhood rebuilt from the plan-fire slice (${prep.length} fills)` : ''}. ` +
-        `Write a goal step skill that fetches stone despite the unreachable spots so the order ends 'castle done at ', not a stall. ` +
-        `Set the skill header 'before' to '${hint}' (it must sit after shelter).`,
-    },
-  }
+  return { why: 'red-parked' }
 }
 
 // candidate -> {spot, scenario} or {why}.
@@ -569,7 +548,7 @@ function proposal(c) {
   const name = `AUTO-${c.sig}`
   const base = { name: `auto-${c.sig}`, spot: name, sabotage: null, skill: `gen_${c.sig}`, bead: BEAD }
   if (c.family === 'step-fail') return proposeStepFail(c, name, base)
-  if (c.family === 'park') return proposePark(c, name, base)
+  if (c.family === 'park') return proposePark(c)
   if (c.family === 'bring') {
     const order = `bring me ${c.item}`
     return {
