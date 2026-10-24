@@ -179,6 +179,52 @@ describe('klh2 same-kind tick hop', () => {
     assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'the failed site stays parked')
   })
 
+  it('R1 F1: a partial-serve hop leg with a dry chest keeps the hold', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
+    const bot = makeBot()
+    const ctx = withChest({ castle: castleState() })
+    failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
+    // Reachable state: the hop leg served partial last tick and is still
+    // active, and the only chest just went dry on the drain.
+    ctx.castleFetch = { kind: 'stone', chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: 0, haul: 70, hop: true }
+    ctx.castleChestDry = { [`stone@${SITE.x - 2},64,${SITE.z - 2}`]: Date.now() }
+    assert.equal(fetch.hopDue(bot, ctx, 'stone'), false, 'setup: chest dry, no hop')
+    assert.equal(fetch.demand(bot, ctx), null, 'setup: demand null')
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done', 'the unserved hop ends quiet, never failed')
+    assert.ok(ctx.castleFetchDoneKind == null, 'no retire stamp on an unserved hop')
+    assert.deepEqual(Object.keys(ctx.stepFail.castlefetch.kinds), ['stone'], 'the site hold survives the partial-serve cycle')
+    assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'no world retry at the parked site')
+  })
+
+  it('R1 F1 control: a served hop leg retires the hold', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 2 }; return 'stone-none' }
+    const bot = makeBot({ items: [{ name: 'cobblestone', count: 500 }] })
+    const ctx = withChest({ castle: castleState() })
+    failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
+    ctx.castleFetch = { kind: 'stone', chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: 0, haul: 70, hop: true }
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(ctx.castleFetchDoneKind, 'stone', 'a served need stamps its retire')
+    goal.recordOutcome(bot, ctx, {}, 'castlefetch', 'done', true, 'castle=stone-none')
+    assert.equal(ctx.stepFail.castlefetch, undefined, 'the hold retires with the served need')
+  })
+
+  it('R1 F2: legacy kind-named records do not hop', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
+    const bot = makeBot()
+    // Old shape: kind + site, no kinds map (no writer produces these since
+    // revmux 02 core-1) — the site park still holds, but never hops.
+    const ctx = withChest({
+      castle: castleState(),
+      castleWord: { kind: 'stone', left: 75 },
+      stepFail: { castlefetch: { status: 'failed:castlefetch-unreachable', kind: 'stone', at: Date.now(), text: 'castle=stone-none', pos: { ...SITE } } },
+    })
+    assert.equal(fetch.hopDue(bot, ctx, 'stone'), false, 'no kinds map: no hop')
+    assert.equal(fetch.demand(bot, ctx), null, 'demand stays parked at the site')
+    assert.equal(goal.failHolds(ctx, 'castlefetch', 'castle=stone-none', bot), true, 'the menu entry stays held')
+  })
+
   it('an expired site hold releases the kind everywhere', () => {
     castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
     const bot = makeBot()

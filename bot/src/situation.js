@@ -141,7 +141,9 @@ function holdsSection(ctx) {
             const kinds = rec.kinds
             if (kinds && typeof kinds === 'object') {
               const ks = Object.keys(kinds)
-              if (ks.length > 0) extra = ` kinds=${ks.map((k) => `${k}@${ageMin(kinds[k])}m`).join(',')}`
+              // klh2 R1 F3: entries are { at, pos } (legacy bare timestamps
+              // still read) — ageMin on the entry object renders '?m'.
+              if (ks.length > 0) extra = ` kinds=${ks.map((k) => `${k}@${ageMin(kinds[k] && typeof kinds[k] === 'object' ? kinds[k].at : kinds[k])}m`).join(',')}`
             }
           } catch (_) { /* kinds best-effort */ }
           parts.push(`${name} ${status} ${ageMin(rec.at)}m ago${extra}`)

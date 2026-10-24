@@ -1713,14 +1713,10 @@ function failHolds(ctx, name, text, bot) {
               if (require('./behaviours/castlefetch').hopDue(bot, ctx, wkind)) return false
             } catch (_) { /* hop unreadable: the hold below decides */ }
           } else if (typeof sf.kind === 'string' && sf.kind && sf.kind !== wkind) return false
-          // klh2: a legacy same-kind record with a site hops too (old
-          // records carry no kinds map). Kindless records never hop —
-          // the text/pos gate below keeps their hold-all.
-          if ((!kinds || typeof kinds !== 'object') && (!sf.kind || sf.kind === wkind)) {
-            try {
-              if (require('./behaviours/castlefetch').hopDue(bot, ctx, wkind)) return false
-            } catch (_) { /* hop unreadable: the gate below decides */ }
-          }
+          // klh2 R1 F2: no legacy hop here — since revmux 02 core-1 every
+          // kind-stamped failure carries a kinds map, and kindless records
+          // never hop. The text/pos gate below still parks legacy records
+          // at their site, as before.
         }
       } catch (_) { /* kind unreadable: hold stands */ }
     }

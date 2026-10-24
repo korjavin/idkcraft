@@ -357,17 +357,30 @@ function hopDue(bot, ctx, kind) {
       const at = typeof e === 'number' ? e : (e && e.at)
       if (!(typeof at === 'number' && Date.now() - at <= window)) return false
       if (e && typeof e === 'object' && e.pos && typeof e.pos.x === 'number') { pos = e.pos; hasSite = true }
-    } else if (sf.kind === kind && sf.pos && typeof sf.pos.x === 'number') {
-      if (!(Date.now() - sf.at <= window)) return false
-      pos = sf.pos
-      hasSite = true
     }
+    // klh2 R1 F2: no legacy branch — kind-stamped failures always carry a
+    // kinds map (revmux 02 core-1); kindless records never hop.
     if (!hasSite) return false
     void pos
     // A chest candidate must exist or the hop leg ends at once (tick churn).
     // Temp leg state: pickChest only reads tried/dry against it, discarded.
     if (!pickChest(bot, ctx, {}, kind)) return false
     return true
+  } catch (_) {
+    return false
+  }
+}
+
+// The castle still owes KIND's batch (klh2 R1 F1): the word did not move on
+// and the pack does not cover it — demand's short formula on the live word.
+// A hop leg ending here served nothing, so its done end stays hopDry.
+function hopNeedShort(bot, ctx, kind) {
+  try {
+    if (!kind || !(kind in FETCH)) return false
+    const cw = ctx && ctx.castleWord
+    if (!cw || cw.kind !== kind || typeof cw.left !== 'number') return false
+    const target = Math.min(FETCH[kind], cw.left)
+    return Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) > 0
   } catch (_) {
     return false
   }
@@ -2585,11 +2598,22 @@ function castlefetch(bot, ctx, target, state) {
     if (d && d.kind === 'torch' && cfl && (cfl.at || cfl.flight)) {
       if (torchTick(bot, ctx, ctx.castleFetch, d, target, state)) return
     }
+    // klh2 R1 F1: a hop leg ending with its need still short served nothing
+    // (partial serve, then the only chest went dry) — end it hopDry so the
+    // site hold survives instead of retiring into a world retry at the
+    // parked site. A served need (short covered) and a moved-on word end
+    // normally with their retire stamp, as before.
+    const hf = ctx.castleFetch
+    if (hf && hf.hop && hopNeedShort(bot, ctx, hf.kind)) hf.hopDry = true
     finish(bot, ctx, 'done'); return
   }
   let f = ctx.castleFetch
   if (!f || f.kind !== d.kind) {
     f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: blocksOnHand(bot), haul: d.short }
+    // klh2 R1 F1: mark hop legs at creation — a later demand-null end with
+    // the need still short is an unserved hop (partial serve + dry chest),
+    // not a served need, and must not retire the site hold.
+    if (d.hop) f.hop = true
     // prkh (revmux 01 core-1): a new leg owns no failure yet — drop any
     // stamp an unrecorded reset left behind, so an unstamped failure below
     // falls back to the kindless hold-all. klh2: the site stamp rides along.
