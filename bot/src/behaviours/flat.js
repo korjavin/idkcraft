@@ -789,6 +789,12 @@ function shiftBumpDone(f) {
   const h = f.bumps.shift()
   if (h && h.sweep) f.sweptN = (f.sweptN || 0) + 1
   else f.shaved++
+  // xtbt (review P2): a cleared sweep column is offered again when
+  // scaffold is rebuilt on it later at any height; kept/refused sweep
+  // bumps keep their sweptTops entry, so they are never retried.
+  if (h && h.sweep && f.sweptTops) {
+    try { delete f.sweptTops[`${h.x},${h.z}`] } catch (_) { /* best-effort */ }
+  }
   f.lastProgressTick = f.ticks
 }
 
@@ -1968,6 +1974,7 @@ module.exports.isStructureMarker = isStructureMarker
 module.exports.structureNear = structureNear
 module.exports.liquidNear = liquidNear
 module.exports.detectBumps = detectBumps
+module.exports.shiftBumpDone = shiftBumpDone
 module.exports.buildSweep = buildSweep
 module.exports.recheckKept = recheckKept
 module.exports.recordKept = recordKept

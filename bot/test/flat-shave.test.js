@@ -11,7 +11,7 @@ const flat = require('../src/behaviours/flat')
 const {
   detectBumps, isDiggable, DIG_ALLOWLIST, isStructureMarker, structureNear,
   threatenedSelf, threatenedByPlayer, resumeLine, startEpisode, liquidNear, buildSweep,
-  recheckKept,
+  recheckKept, shiftBumpDone,
 } = flat
 
 function pos(x, y, z) {
@@ -1079,7 +1079,32 @@ describe('freeze fixes (idkcraft-xtbt)', () => {
     assert.equal(f.bumps[0].topY, 65)
   })
 
-  it('sweeps the other bot\u2019s lone scaffold pillar (shared square, no placedByBot)', async () => {
+  it('cleared sweep columns are re-offered at the same height, kept ones are not (review P2)', () => {
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'dirt') // mid-episode scaffold on a stepped column
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.phase = 'shave'
+    f.level = 63
+    f.stepped = new Set(['3,0'])
+    f.bumpCols = new Set()
+    f.bumps = []
+    assert.equal(buildSweep(bot, f), true, 'first scaffold queues')
+    shiftBumpDone(f) // the real clear path: shave worked the column to the level
+    assert.equal(f.sweptN, 1)
+    world.set(3, 64, 0, 'air') // the dig removed it
+    assert.equal(buildSweep(bot, f), false, 'cleared column is not re-offered')
+    world.set(3, 64, 0, 'dirt') // rebuilt at the SAME height (other bot, recover)
+    assert.equal(buildSweep(bot, f), true, 'replacement scaffold re-queues')
+    // A kept/refused sweep bump leaves the queue WITHOUT the clear path
+    // (shiftBumpSkip drops it, sweptTops stays): never retried.
+    f.bumps.shift()
+    assert.equal(buildSweep(bot, f), false, 'kept sweep column is not retried')
+    world.set(3, 65, 0, 'dirt') // only genuinely taller regrowth re-queues
+    assert.equal(buildSweep(bot, f), true)
+  })
+
+  it('sweeps the other bot’s lone scaffold pillar (shared square, no placedByBot)', async () => {
     const world = makeWorld({})
     world.set(1, 64, 0, 'dirt') // one original bump: shave phase runs
     const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
