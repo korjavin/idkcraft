@@ -1049,6 +1049,63 @@ describe('freeze fixes (idkcraft-xtbt)', () => {
     assert.deepEqual(f.keptMarkers, { torch: 1 })
   })
 
+  it('fill clean-completion re-checks shave-for-fill keeps (send-back P1)', () => {
+    // startDig sends a fill episode through the shave; keeps recorded
+    // there must not bypass the re-check when fill completes.
+    const world = makeWorld({})
+    world.set(2, 64, 1, 'dirt') // kept column, marker since gone
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: null }
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    ctx.flat = f
+    f.phase = 'fill'
+    f.level = 63
+    f.holes = []
+    f.bumps = []
+    f.keptCols = [{ x: 2, z: 1, marker: 'torch' }]
+    f.keptMarkers = { torch: 1 }
+    f.skip.kept = 1
+    bot.entity.position = pos(0, 64, 0)
+    flat(bot, ctx, null, null)
+    assert.ok(ctx.flat, 'fill end re-checks instead of finishing')
+    assert.equal(ctx.flat.bumps.length, 1, 'freed column re-queued')
+    assert.equal(ctx.flat.bumps[0].x, 2)
+    assert.equal(ctx.flat.skip.kept, 0)
+    flat(bot, ctx, null, null)
+    assert.equal(ctx.flat.phase, 'shave', 're-queued bumps take the body to the shave')
+  })
+
+  it('recheck re-frees a sweep-material column after its marker is gone (send-back P2)', () => {
+    // A cobble sweep bump frozen by a marker: the re-check must honor
+    // the same sweep-material exemption the shave gate does.
+    const world = makeWorld({})
+    world.set(3, 64, 0, 'cobblestone') // sweep column, marker gone
+    world.set(4, 64, 0, 'dirt') // solid neighbour: no lone-pillar exemption
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    f.phase = 'shave'
+    f.level = 63
+    f.bumps = []
+    f.keptCols = [{ x: 3, z: 0, marker: 'torch', sweep: true }]
+    f.keptMarkers = { torch: 1 }
+    f.skip.kept = 1
+    assert.equal(recheckKept(bot, {}, f), true, 'sweep column re-frees')
+    assert.equal(f.bumps.length, 1)
+    assert.equal(f.bumps[0].sweep, true, 'sweep flag survives the re-check')
+    assert.equal(f.skip.kept, 0)
+    // Control: the same cobble column WITHOUT the sweep flag stays kept.
+    const g = startEpisode(0, 0, 4, 74, 'P')
+    g.phase = 'shave'
+    g.level = 63
+    g.bumps = []
+    g.keptCols = [{ x: 3, z: 0, marker: 'torch' }]
+    g.keptMarkers = { torch: 1 }
+    g.skip.kept = 1
+    assert.equal(recheckKept(bot, {}, g), false, 'foreign cobble stays kept')
+    assert.equal(g.bumps.length, 0)
+    assert.equal(g.skip.kept, 1)
+  })
+
   it('sweep re-runs over newly stepped columns and regrown pillars', () => {
     const world = makeWorld({})
     world.set(3, 64, 0, 'dirt') // mid-episode nub, never scanned

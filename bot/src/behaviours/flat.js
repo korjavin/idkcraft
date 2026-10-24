@@ -1300,6 +1300,10 @@ function fillTick(bot, ctx, f, bp) {
   if (f.holes.length === 0) {
     if (f.bumps.length === 0) maybeSweep(bot, f)
     if (f.bumps.length === 0) {
+      // xtbt: shave-for-fill keeps land here (startDig sends a fill
+      // episode through the shave, which returns to fill); re-check
+      // them like the shave end does, or they freeze the next order.
+      if (recheckKept(bot, ctx, f)) return
       finish(bot, ctx, f, null)
       return
     }
@@ -1603,7 +1607,13 @@ function recordKept(f, h, marker) {
     if (!f.keptMarkers) f.keptMarkers = {}
     f.keptMarkers[m] = (f.keptMarkers[m] || 0) + 1
     if (!Array.isArray(f.keptCols)) f.keptCols = []
-    if (h && Number.isFinite(h.x) && Number.isFinite(h.z)) f.keptCols.push({ x: h.x, z: h.z, marker: m })
+    // xtbt: the sweep flag survives into keptCols, so the re-check can
+    // honor the same sweep-material exemption the shave gate does.
+    if (h && Number.isFinite(h.x) && Number.isFinite(h.z)) {
+      const e = { x: h.x, z: h.z, marker: m }
+      if (h.sweep) e.sweep = true
+      f.keptCols.push(e)
+    }
   } catch (_) { /* reporting never breaks the shave */ }
 }
 
@@ -1636,8 +1646,14 @@ function recheckKept(bot, ctx, f) {
         if (r && r.status === 'ok' && typeof r.topY === 'number' && r.topY > f.level) {
           const name = blockNameAt(bot, new Vec3(k.x, r.topY, k.z))
           const pillar = PILLAR_MATS.has(name) && lonePillar(bot, ctx, k.x, r.topY, k.z)
-          if ((isDiggable(name) || pillar) && !structureNear(bot, k.x, r.topY, k.z)) {
-            f.bumps.push({ x: k.x, z: k.z, topY: r.topY, y: r.topY, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null, recheck: true })
+          // xtbt: same exemptions as the shave gate (isDiggable, sweep
+          // mats on an original sweep bump, lone pillar) — a cobble
+          // sweep column frozen by a now-gone marker must re-free.
+          const sweepOk = !!k.sweep && SWEEP_MATS.has(name)
+          if ((isDiggable(name) || sweepOk || pillar) && !structureNear(bot, k.x, r.topY, k.z)) {
+            const nb = { x: k.x, z: k.z, topY: r.topY, y: r.topY, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null, recheck: true }
+            if (k.sweep) nb.sweep = true
+            f.bumps.push(nb)
             f.totalBumps = (f.totalBumps || 0) + 1
             if (f.skip && f.skip.kept > 0) f.skip.kept--
             if (f.keptMarkers && k.marker && f.keptMarkers[k.marker] > 0) {
