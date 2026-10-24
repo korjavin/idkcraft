@@ -294,11 +294,93 @@ function holdFor(bot, ctx, kind) {
     const window = require('../budget').CASTLEFETCH_RETRY_MS
     const kinds = sf.kinds
     if (kinds && typeof kinds === 'object') {
-      const at = kinds[kind]
+      // klh2 R2: kind-wide for the window, as before klh2 — the entry pos
+      // does NOT release on relocation (revmux 01-review: the stone world
+      // stage is castle-anchored, so a release walks back and re-fails the
+      // same ground; the hop below is the only in-window path). A legacy
+      // bare-timestamp entry reads the same way.
+      const e = kinds[kind]
+      const at = typeof e === 'number' ? e : (e && e.at)
       return typeof at === 'number' && Date.now() - at <= window
     }
     if (sf.kind && sf.kind !== kind) return false
     return Date.now() - sf.at <= window
+  } catch (_) {
+    return false
+  }
+}
+
+// World-stage failure reasons (idkcraft-klh2): the dig/chop ground failed,
+// not the pack or the chest. Only these park a site the same-kind hop then
+// routes around; craft/pack-full ends stay siteless and hold as before.
+const WORLD_FAIL_RE = /(unreachable|no-stone|no-trees|dig-stall)$/
+
+// Stamp the failed kind for the hold record plus, for a world-stage
+// failure, its site (goal.js recordOutcome consumes both into the kinds
+// map). No new stepStatus strings: parses go through failReason (step.js).
+function stampFailKindSite(bot, ctx, kind, status) {
+  try { ctx.castleFetchFailKind = kind } catch (_) { /* stamp best-effort */ }
+  try {
+    if (WORLD_FAIL_RE.test(failReason(status) || '')) {
+      const bp = bodyPos(bot)
+      ctx.castleFetchFailSite = (bp && typeof bp.x === 'number')
+        ? { kind, x: bp.x, y: bp.y, z: bp.z }
+        : { kind }
+    }
+  } catch (_) { /* site best-effort */ }
+}
+
+// Same-kind hop due (idkcraft-klh2): kind KIND is held with a failed world
+// site on its record, but the next tick must not idle the hold window out —
+// the leg hops to the chest strategy for the same kind (Source 1 runs first
+// every leg; the hop leg skips the world stage while the hold stands). True
+// only with a site park on the record (craft/pack-full failures keep today's
+// hold), a live hold window, no same-day park (dlpo owns that), and an
+// UNTRIED chest the hop leg can actually walk to (else the hop leg would end
+// at once, every tick; tried chests are remembered on the entry, R2).
+function hopDue(bot, ctx, kind) {
+  try {
+    if (!kind || !(kind in FETCH)) return false
+    if (owedMoved(bot, ctx)) return false
+    if (isParked(ctx, kind)) return false
+    const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+    if (!sf || typeof sf.at !== 'number') return false
+    const window = require('../budget').CASTLEFETCH_RETRY_MS
+    const kinds = sf.kinds
+    let hasSite = false
+    let hopTried = null
+    if (kinds && typeof kinds === 'object') {
+      const e = kinds[kind]
+      const at = typeof e === 'number' ? e : (e && e.at)
+      if (!(typeof at === 'number' && Date.now() - at <= window)) return false
+      if (e && typeof e === 'object' && e.pos && typeof e.pos.x === 'number') hasSite = true
+      // klh2 R2 major-1: chests an unserved hop already tried under this
+      // hold stay skipped — at most one serving round per chest per hold
+      // window, never a re-poll of an empty footprint chest.
+      if (e && typeof e === 'object' && Array.isArray(e.hopTried)) hopTried = e.hopTried
+    }
+    // klh2 R1 F2: no legacy branch — kind-stamped failures always carry a
+    // kinds map (revmux 02 core-1); kindless records never hop.
+    if (!hasSite) return false
+    // A chest candidate must exist or the hop leg ends at once (tick churn).
+    // Temp leg state: pickChest only reads tried/dry against it, discarded.
+    if (!pickChest(bot, ctx, { chestTried: new Set(hopTried || []) }, kind)) return false
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
+// The castle still owes KIND's batch (klh2 R1 F1): the word did not move on
+// and the pack does not cover it — demand's short formula on the live word.
+// A hop leg ending here served nothing, so its done end stays hopDry.
+function hopNeedShort(bot, ctx, kind) {
+  try {
+    if (!kind || !(kind in FETCH)) return false
+    const cw = ctx && ctx.castleWord
+    if (!cw || cw.kind !== kind || typeof cw.left !== 'number') return false
+    const target = Math.min(FETCH[kind], cw.left)
+    return Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) > 0
   } catch (_) {
     return false
   }
@@ -351,10 +433,21 @@ function demand(bot, ctx) {
     kind = m[1]
     word = m[2]
   }
-  if (holdFor(bot, ctx, kind)) return null
   const cw = ctx && ctx.castleWord
   const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
   const target = Math.min(FETCH[kind], left)
+  // klh2: the window parks the kind (kind-wide, as before klh2) — when the
+  // parked kind's next tick would otherwise idle, hop to the chest strategy
+  // for the same kind. The hop leg skips the world stage, so the failed
+  // site stays parked while the hold stands. No hop when the kind holds
+  // siteless, day-parked, chestless, or only at tried chests.
+  if (holdFor(bot, ctx, kind)) {
+    if (hopDue(bot, ctx, kind)) {
+      const short = Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
+      if (short > 0) return { kind, word, short, hop: true }
+    }
+    return null
+  }
   // neuc.58: a v2 stone leg hauls the forecast, not FETCH — the blueprint
   // remainder capped by pack room and what the held picks can still dig
   // (stone by hand drops nothing). Pickless keeps the v1 target: equip
@@ -457,7 +550,10 @@ function castleChest(bot, st) {
 
 function finish(bot, ctx, status) {
   const f = ctx.castleFetch
-  if (status === 'done') ctx.castleFetchDry = null // a leg that got stock retires the dry mark
+  // klh2: a hop leg that served nothing (hopDry) retires nothing — the
+  // decor dry mark and the kind hold below survive it.
+  const hopDry = !!(f && f.hopDry)
+  if (status === 'done' && !hopDry) ctx.castleFetchDry = null // a leg that got stock retires the dry mark
   if (status === 'done' && f && f.kind === 'stairs' && !f.stairsMine) ctx.castleStairsMines = 0 // 8njf: stairs on hand (chest, craft) re-arm the mine fallback
   if (f && f.spend) {
     let delta = '?'
@@ -484,8 +580,25 @@ function finish(bot, ctx, status) {
   // decides — never the fresh word).
   try {
     if (f && typeof f.kind === 'string') {
-      if (status === 'done') ctx.castleFetchDoneKind = f.kind
-      else ctx.castleFetchFailKind = f.kind
+      // A served need retires its kind hold (hop or not); a hopDry end
+      // served nothing and stamps nothing (revmux 03 core-1 shape).
+      if (status === 'done') {
+        if (!hopDry) ctx.castleFetchDoneKind = f.kind
+        else {
+          // klh2 R2 major-1: remember the chests this hop tried on the live
+          // hold entry — the next tick hops only to untried chests, never
+          // re-polling an empty footprint chest for the whole window.
+          try {
+            const kinds = ctx.stepFail && ctx.stepFail.castlefetch && ctx.stepFail.castlefetch.kinds
+            const e = kinds && typeof kinds === 'object' ? kinds[f.kind] : null
+            if (e && typeof e === 'object') {
+              const seen = new Set(Array.isArray(e.hopTried) ? e.hopTried : [])
+              for (const k of (f.chestTried || [])) seen.add(k)
+              e.hopTried = [...seen]
+            }
+          } catch (_) { /* hop memory best-effort */ }
+        }
+      } else stampFailKindSite(bot, ctx, f.kind, status)
     }
   } catch (_) { /* stamp best-effort */ }
   ctx.castleFetch = null
@@ -2501,22 +2614,52 @@ function castlefetch(bot, ctx, target, state) {
     if (d && d.kind === 'torch' && cfl && (cfl.at || cfl.flight)) {
       if (torchTick(bot, ctx, ctx.castleFetch, d, target, state)) return
     }
+    // klh2 R1 F1: a hop leg ending with its need still short served nothing
+    // (partial serve, then the only chest went dry) — end it hopDry so the
+    // site hold survives instead of retiring into a world retry at the
+    // parked site. A served need (short covered) and a moved-on word end
+    // normally with their retire stamp, as before.
+    const hf = ctx.castleFetch
+    if (hf && hf.hop && hopNeedShort(bot, ctx, hf.kind)) hf.hopDry = true
     finish(bot, ctx, 'done'); return
   }
   let f = ctx.castleFetch
   if (!f || f.kind !== d.kind) {
     f = ctx.castleFetch = { kind: d.kind, chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: blocksOnHand(bot), haul: d.short }
+    // klh2 R1 F1: mark hop legs at creation — a later demand-null end with
+    // the need still short is an unserved hop (partial serve + dry chest),
+    // not a served need, and must not retire the site hold.
+    if (d.hop) f.hop = true
+    // klh2 R2 02-after-fix minor: a hop leg inherits the hold entry's tried
+    // chests, so a grown candidate set never re-walks an empty chest on the
+    // way to the untried one. Hop legs only: a normal leg must re-check
+    // every chest (owner stock may have landed after the hop tried it).
+    if (d.hop) {
+      try {
+        const kinds = ctx.stepFail && ctx.stepFail.castlefetch && ctx.stepFail.castlefetch.kinds
+        const e = kinds && typeof kinds === 'object' ? kinds[d.kind] : null
+        if (e && typeof e === 'object' && Array.isArray(e.hopTried) && e.hopTried.length > 0) f.chestTried = new Set(e.hopTried)
+      } catch (_) { /* tried best-effort */ }
+    }
     // prkh (revmux 01 core-1): a new leg owns no failure yet — drop any
     // stamp an unrecorded reset left behind, so an unstamped failure below
-    // falls back to the kindless hold-all.
-    try { ctx.castleFetchFailKind = null; ctx.castleFetchDoneKind = null } catch (_) { /* stamp best-effort */ }
-    if (deadRestart(bot, ctx, d)) {
+    // falls back to the kindless hold-all. klh2: the site stamp rides along.
+    try { ctx.castleFetchFailKind = null; ctx.castleFetchDoneKind = null; ctx.castleFetchFailSite = null } catch (_) { /* stamp best-effort */ }
+    // klh2: a hop leg is a chest poll, not a no-progress restart — it never
+    // trips the dead-restart fuse (each hop cycle would otherwise count and
+    // the 4th would fail the kind it is trying to serve).
+    if (!d.hop && deadRestart(bot, ctx, d)) {
       try { console.log(`castlefetch ${d.kind}: leg restarted ${RESTART_MAX}x with no progress, holding the kind`) } catch (_) { /* log best-effort */ }
       castleMod.noteDry(ctx, d.kind) // the decor word tries the next open kind (the fall-through's shape)
       finish(bot, ctx, `failed:castlefetch-no-${d.kind}`)
       return
     }
     try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
+    // klh2: the prod signal — a hop leg names its strategy, so a
+    // failed:* line is followed within seconds by the next fetch line.
+    if (d.hop) {
+      try { console.log(`castlefetch ${d.kind}: hop to chest strategy (world site parked)`) } catch (_) { /* log best-effort */ }
+    }
   }
   // qxql.3: the restart gap runs from this leg's last tick, not its start.
   if (ctx.castleFetchRestarts && ctx.castleFetchRestarts.kind === f.kind) ctx.castleFetchRestarts.at = Date.now()
@@ -2564,6 +2707,16 @@ function castlefetch(bot, ctx, target, state) {
       finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
       return
     }
+    finish(bot, ctx, 'done')
+    return
+  }
+  // klh2: a hop leg serves chest+craft only — the parked world site stays
+  // parked. When neither served the need the leg ends done WITHOUT stamps
+  // (finish's hopDry path): the hold and the dry marks survive for the next
+  // hop cycle, and no new failure extends them. A served need ends through
+  // the demand check at the top with its retire stamp, as before.
+  if (d.hop) {
+    f.hopDry = true
     finish(bot, ctx, 'done')
     return
   }
@@ -2619,9 +2772,10 @@ function castlefetch(bot, ctx, target, state) {
         try { console.log(`castlefetch ${d.kind}: ${NO_WOOD}`) } catch (_) { /* log best-effort */ }
       }
       // prkh: a gather-ended leg stamps its kind like finish() — the hold
-      // parks this kind, never the whole step.
+      // parks this kind, never the whole step. klh2: a no-trees end parks
+      // its chop site too, so the same kind can hop to the chest next tick.
       if (failReason(ctx.stepStatus) !== null) {
-        try { ctx.castleFetchFailKind = d.kind } catch (_) { /* stamp best-effort */ }
+        stampFailKindSite(bot, ctx, d.kind, ctx.stepStatus)
       }
       ctx.castleFetch = null
     }
@@ -2681,9 +2835,10 @@ function castlefetch(bot, ctx, target, state) {
         finish(bot, ctx, 'failed:castlefetch-no-stairs')
       } else {
         // prkh: a gather-ended leg stamps its kind like finish() — the
-        // hold parks this kind, never the whole step.
+        // hold parks this kind, never the whole step (klh2 site stamp
+        // shared with the wood branch above).
         if (failReason(ctx.stepStatus) !== null) {
-          try { ctx.castleFetchFailKind = d.kind } catch (_) { /* stamp best-effort */ }
+          stampFailKindSite(bot, ctx, d.kind, ctx.stepStatus)
         }
         ctx.castleFetch = null
       }
@@ -2722,6 +2877,7 @@ module.exports.PIT_ROOM = PIT_ROOM
 module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.holdFor = holdFor
+module.exports.hopDue = hopDue
 module.exports.isParked = isParked
 module.exports.noteFail = noteFail
 module.exports.unparkKind = unparkKind

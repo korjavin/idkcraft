@@ -500,6 +500,14 @@
     "owner": "src/behaviours/castlefetch.js",
     "note": "failed leg kind (prkh): stamped by castlefetch.finish and the gather-ended legs on failure, consumed by goal.recordOutcome into the stepFail.castlefetch.kinds map; cleared at leg start."
   },
+  "castleFetchFailSite": {
+    "writers": [
+      "src/behaviours/castlefetch.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js",
+    "note": "failed leg site (klh2): { kind, x, y, z } stamped by castlefetch on world-stage failures (unreachable/no-stone/no-trees/dig-stall) alongside the kind, consumed by goal.recordOutcome into the kinds map entry so the hold parks the failed site while the same kind hops; cleared at leg start and on consume."
+  },
   "castleFetchFlight": {
     "writers": [
       "src/behaviours/castlefetch.js"

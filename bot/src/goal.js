@@ -1704,9 +1704,19 @@ function failHolds(ctx, name, text, bot) {
           } catch (_) { /* park unreadable: the time hold below decides */ }
           const kinds = sf.kinds
           if (kinds && typeof kinds === 'object') {
-            const at = kinds[wkind]
+            const e = kinds[wkind]
+            const at = typeof e === 'number' ? e : (e && e.at)
             if (!(typeof at === 'number' && Date.now() - at <= CASTLEFETCH_RETRY_MS)) return false
+            // klh2: a due same-kind hop releases the menu entry — the hold
+            // still parks the failed site, the kind runs at the next one.
+            try {
+              if (require('./behaviours/castlefetch').hopDue(bot, ctx, wkind)) return false
+            } catch (_) { /* hop unreadable: the hold below decides */ }
           } else if (typeof sf.kind === 'string' && sf.kind && sf.kind !== wkind) return false
+          // klh2 R1 F2: no legacy hop here — since revmux 02 core-1 every
+          // kind-stamped failure carries a kinds map, and kindless records
+          // never hop. The text/pos gate below still parks legacy records
+          // at their site, as before.
         }
       } catch (_) { /* kind unreadable: hold stands */ }
     }
@@ -2498,9 +2508,21 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
           const stamp = ctx.castleFetchFailKind
           if (typeof stamp === 'string' && stamp) {
             rec.kind = stamp
-            rec.kinds = { ...((prior && prior.kinds) || {}), [stamp]: Date.now() }
+            // klh2: carry the leg-stamped site for world-stage failures
+            // (craft/pack ends stay siteless). The window still parks the
+            // kind kind-wide; the site marks the entry hop-eligible (a
+            // world strategy failed, so the chest strategy may still
+            // serve it). Consumed like the kind stamp (revmux 01 core-1):
+            // a stale site must never leak into a later siteless failure.
+            let pos = null
+            try {
+              const fs = ctx.castleFetchFailSite
+              if (fs && fs.kind === stamp && typeof fs.x === 'number') pos = { x: fs.x, y: fs.y, z: fs.z }
+            } catch (_) { /* siteless */ }
+            rec.kinds = { ...((prior && prior.kinds) || {}), [stamp]: { at: Date.now(), pos } }
           }
           ctx.castleFetchFailKind = null
+          try { ctx.castleFetchFailSite = null } catch (_) { /* consume best-effort */ }
           // dlpo: the fresh record replaces the old one — carry the
           // same-day counts/park forward (like the kinds merge above), or
           // N never accumulates across legs. Stale days sweep on read.

@@ -62,6 +62,22 @@ describe('situation text', () => {
     assert.ok(text.split('\n').length <= 40, 'prompt stays short')
   })
 
+  it('R1 F3: the holds line ages { at, pos } kinds entries, not ?m', () => {
+    const bot = mockBot()
+    const now = Date.now()
+    const ctx = {
+      stepFail: {
+        castlefetch: {
+          status: 'failed:castlefetch-unreachable', text: 'castle=stone-none', at: now,
+          kind: 'stone', kinds: { stone: { at: now, pos: { x: 96, y: 64, z: 196 } } },
+        },
+      },
+    }
+    const text = situationText(bot, ctx)
+    assert.match(text, /kinds=stone@0m/, `fresh site hold ages in minutes: ${text}`)
+    assert.doesNotMatch(text, /stone@\?m/, 'no unknown age on the new entry shape')
+  })
+
   it('the chests section shows the cached last reads', () => {
     const bot = mockBot()
     const ctx = { chestLast: { castle: { contents: { cobblestone: 64 }, at: Date.now() }, home: { contents: {}, at: Date.now() } } }

@@ -280,6 +280,9 @@ describe('prkh per-kind fetch hold', () => {
     const bot = makeBot()
     // Relocated past the failure point: the text hold releases but the
     // bounded kind hold still parks — the line must name it, not 'batch'.
+    // (klh2 R2: the window holds kind-wide; relocation never releases it —
+    // the quarry is castle-anchored, so a release would walk back and
+    // re-fail the same ground. The hop serves the kind meanwhile.)
     const moved = heldCtx('stone')
     moved.stepFail.castlefetch.pos = { x: 0, y: 64, z: 0 }
     const line = goal.stepWhy('castlefetch', facts, bot, moved, 'castle=stone-none')
