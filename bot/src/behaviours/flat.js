@@ -18,10 +18,14 @@
 // the run); only a new area or an explicit new radius starts over.
 // Flooded ditches cap (7wt): liquid strictly below the level is an
 // ordinary hole (the cap lands over the water); a surface at/above the
-// level is a pond and stays skipped. After the shave, one sweep pass
-// digs leftover above-level dirt/cobble in stepped columns (recover
-// pillar stairs placed mid-episode) through the same safety gates;
-// original-bump columns are never re-queued, so kept/refused bumps stay.
+// level is a pond and stays skipped. After the shave, the sweep re-runs
+// over stepped columns (recover pillar stairs placed mid-episode,
+// including late pillars on newly stepped columns) through the same
+// safety gates, and kept bump columns get one re-check: a freezing
+// marker that is gone by shave end (the other bot's temporary scaffold,
+// a torch since picked up) re-queues the column instead of freezing the
+// next `flat`. Kept columns that stay frozen name their marker in the
+// finish line, so the owner sees what to move instead of re-ordering.
 //
 // v2 (w52.1) shaves bumps above the level after filling the holes, top-down
 // per column. Digging is allowlisted to natural terrain (ores, containers,
@@ -730,8 +734,12 @@ function startEpisode(cx, cz, r, yTop, by, tile = null, level = null) {
     stepped: new Set(),
     bumpCols: null,
     swept: false,
+    sweptTops: null, // stepped key -> topY already offered to the sweep
     sweptN: 0,
     sweepTotal: 0,
+    keptMarkers: {}, // freezing marker name -> kept column count (finish line)
+    keptCols: [], // { x, z, marker } kept bump columns for the shave-end re-check
+    rechecked: false,
     counts: { unloaded: 0, liquid: 0, bump: 0, covered: 0 },
     level: null,
     holes: [],
@@ -806,6 +814,16 @@ function finish(bot, ctx, f, why) {
   if (skipped > 0) {
     const parts = Object.entries(f.skip).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`)
     line += `, skipped ${skipped}: ${parts.join(', ')}`
+  }
+  // xtbt: kept columns name the freezing marker (top 3), so the owner sees
+  // what to move instead of re-ordering flat on a frozen square.
+  if (f.skip.kept > 0) {
+    const tops = Object.entries(f.keptMarkers || {})
+      .filter(([, n]) => n > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([m, n]) => `${m} x${n}`)
+    if (tops.length > 0) line += ` (kept by ${tops.join(', ')})`
   }
   // x3y6.3: a clean swarm finish re-scans the square to steal a strip; a
   // steal that moved nothing (skips only) parks instead of ping-ponging,
@@ -1522,6 +1540,7 @@ function pillarCtx(ctx, x, y, z) {
 }
 function buildSweep(bot, f) {
   if (!f || !f.stepped || f.stepped.size === 0 || f.level == null) return false
+  if (!f.sweptTops) f.sweptTops = {}
   const before = f.bumps.length
   const blockAt = (x, y, z) => {
     try {
@@ -1538,10 +1557,17 @@ function buildSweep(bot, f) {
     if (Math.abs(sx - f.cx) > f.r || Math.abs(sz - f.cz) > f.r) continue
     if (!inTile(f, sx, sz)) continue
     if (f.bumpCols && f.bumpCols.has(key)) continue
+    // Already queued and still queued: the shave gates own it now.
+    if (f.bumps.some((b) => b.x === sx && b.z === sz)) continue
     const r = probeColumn(blockAt, sx, sz, f.level + 1 + SCAN_UP_EXTEND, f.level + 1)
     if (!r || r.status !== 'ok' || typeof r.topY !== 'number' || r.topY <= f.level) continue
+    // xtbt: an examined column is offered once per topY — a kept sweep
+    // bump is not re-queued, but a late pillar that grew taller after the
+    // pass (or a pillar on a newly stepped column) is.
+    if (f.sweptTops[key] != null && r.topY <= f.sweptTops[key]) continue
     const name = blockNameAt(bot, new Vec3(sx, r.topY, sz))
     if (!SWEEP_MATS.has(name)) continue
+    f.sweptTops[key] = r.topY
     f.bumps.push({ x: sx, z: sz, topY: r.topY, y: r.topY, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null, sweep: true })
   }
   const n = f.bumps.length - before
@@ -1552,11 +1578,80 @@ function buildSweep(bot, f) {
 // End-of-job sweep, shared by the fill and shave exits: fill-only jobs
 // never enter shaveTick, so both clean ends offer the sweep before
 // finishing. Stalled/backstop finishes skip it (a wedged bot starts no
-// new work). Runs once: the second exit finds f.swept set.
+// new work). Repeatable (xtbt): every exit offers it, and buildSweep
+// only queues columns it has not already offered, so late pillars on
+// newly stepped columns (or regrown taller) are covered and the offer
+// still terminates.
 function maybeSweep(bot, f) {
-  if (!f || f.swept) return false
-  f.swept = true
-  return buildSweep(bot, f)
+  if (!f) return false
+  const queued = buildSweep(bot, f)
+  if (queued) f.swept = true
+  return queued
+}
+
+// xtbt: record a kept bump column: the freezing marker for the finish
+// line, and the column for the one shave-end re-check below.
+function recordKept(f, h, marker) {
+  try {
+    const m = typeof marker === 'string' && marker ? marker : 'target'
+    if (!f.keptMarkers) f.keptMarkers = {}
+    f.keptMarkers[m] = (f.keptMarkers[m] || 0) + 1
+    if (!Array.isArray(f.keptCols)) f.keptCols = []
+    if (h && Number.isFinite(h.x) && Number.isFinite(h.z)) f.keptCols.push({ x: h.x, z: h.z, marker: m })
+  } catch (_) { /* reporting never breaks the shave */ }
+}
+
+// xtbt: one re-check of kept bump columns at shave end. A marker that
+// froze a column mid-episode may be gone by now (the other bot's
+// temporary scaffold walked away, a torch since picked up, a house build
+// that moved on): freed columns re-queue through the normal shave gates
+// instead of freezing the next `flat` order. Runs once, so the episode
+// still terminates; columns that stay frozen keep their kept count.
+function recheckKept(bot, ctx, f) {
+  if (!f || f.rechecked) return false
+  f.rechecked = true
+  if (!Array.isArray(f.keptCols) || f.keptCols.length === 0 || f.level == null) return false
+  const blockAt = (x, y, z) => {
+    try {
+      return bot.blockAt(new Vec3(x, y, z))
+    } catch (_) {
+      return null
+    }
+  }
+  let n = 0
+  const still = []
+  for (const k of f.keptCols) {
+    let queued = false
+    try {
+      if (k && Number.isFinite(k.x) && Number.isFinite(k.z) &&
+        Math.abs(k.x - f.cx) <= f.r && Math.abs(k.z - f.cz) <= f.r && inTile(f, k.x, k.z) &&
+        !f.bumps.some((b) => b.x === k.x && b.z === k.z)) {
+        const r = probeColumn(blockAt, k.x, k.z, f.level + 1 + SCAN_UP_EXTEND, f.level + 1)
+        if (r && r.status === 'ok' && typeof r.topY === 'number' && r.topY > f.level) {
+          const name = blockNameAt(bot, new Vec3(k.x, r.topY, k.z))
+          const pillar = PILLAR_MATS.has(name) && lonePillar(bot, ctx, k.x, r.topY, k.z)
+          if ((isDiggable(name) || pillar) && !structureNear(bot, k.x, r.topY, k.z)) {
+            f.bumps.push({ x: k.x, z: k.z, topY: r.topY, y: r.topY, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null, recheck: true })
+            f.totalBumps = (f.totalBumps || 0) + 1
+            if (f.skip && f.skip.kept > 0) f.skip.kept--
+            if (f.keptMarkers && k.marker && f.keptMarkers[k.marker] > 0) {
+              f.keptMarkers[k.marker]--
+              if (f.keptMarkers[k.marker] <= 0) delete f.keptMarkers[k.marker]
+            }
+            n++
+            queued = true
+          }
+        }
+      }
+    } catch (_) { /* one bad column never blocks the re-check */ }
+    if (!queued) still.push(k)
+  }
+  f.keptCols = still
+  if (n > 0) {
+    f.lastProgressTick = f.ticks
+    console.log(`flat recheck re-queued ${n} bump${n === 1 ? '' : 's'} (marker gone)`)
+  }
+  return n > 0
 }
 
 function shaveTick(bot, ctx, f, bp) {
@@ -1577,6 +1672,7 @@ function shaveTick(bot, ctx, f, bp) {
   }
   if (f.bumps.length === 0) {
     if (maybeSweep(bot, f)) return
+    if (recheckKept(bot, ctx, f)) return
     finish(bot, ctx, f, null)
     return
   }
@@ -1662,13 +1758,15 @@ function shaveTick(bot, ctx, f, bp) {
   // (structure, liquid, under-feet) still apply.
   const pillar = PILLAR_MATS.has(name) && lonePillar(bot, ctx, h.x, y, h.z)
   if (!isDiggable(name) && !(h.sweep && SWEEP_MATS.has(name)) && !pillar) {
-    shiftBumpSkip(f, 'kept') // ore, wood, built: keep valuables, keep houses
+    recordKept(f, h, name) // ore, wood, built: keep valuables, keep houses
+    shiftBumpSkip(f, 'kept')
     return
   }
   if (h.gateY !== y) {
     const marker = structureNear(bot, h.x, y, h.z)
     if (marker) {
       console.log(`flat bump ${h.x},${h.z} kept: ${marker} next to the dig`)
+      recordKept(f, h, marker)
       shiftBumpSkip(f, 'kept')
       return
     }
@@ -1871,6 +1969,8 @@ module.exports.structureNear = structureNear
 module.exports.liquidNear = liquidNear
 module.exports.detectBumps = detectBumps
 module.exports.buildSweep = buildSweep
+module.exports.recheckKept = recheckKept
+module.exports.recordKept = recordKept
 module.exports.lonePillar = lonePillar
 module.exports.PILLAR_MATS = PILLAR_MATS
 module.exports.resumeLine = resumeLine
