@@ -1468,6 +1468,7 @@ describe('flat behaviour', () => {
     flat(bot, ctx, null, null); await settle() // fill: issue
     bot.entity.position = pos(3, 64, 0)
     flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: pack round empty -> near
     flat(bot, ctx, null, null); await settle() // dig: find + issue
     assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [20, 0], 'inside dirt filtered out')
     const pt = bot.calls.findBlocksOpts && bot.calls.findBlocksOpts.point
@@ -1505,6 +1506,7 @@ describe('flat behaviour', () => {
     flat(bot, ctx, null, null); await settle() // fill: issue
     bot.entity.position = pos(3, 64, 0)
     flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: pack round empty -> near
     flat(bot, ctx, null, null); await settle() // dig: find + issue
     assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [20, 0], 'near-edge dirt filtered out')
     const pt = bot.calls.findBlocksOpts && bot.calls.findBlocksOpts.point
@@ -1529,6 +1531,7 @@ describe('flat behaviour', () => {
     flat(bot, ctx, null, null); await settle() // fill: issue
     bot.entity.position = pos(3, 64, 0)
     flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: pack round empty -> near
     flat(bot, ctx, null, null); await settle() // dig: find + issue
     assert.equal(ctx.flat.phase, 'dig')
     assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.y, ctx.flat.dig.pos.z], [20, 62, 0], 'local-surface dirt accepted below the square level')
@@ -1548,6 +1551,7 @@ describe('flat behaviour', () => {
     flat(bot, ctx, null, null); await settle() // fill: issue
     bot.entity.position = pos(3, 64, 0)
     flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: pack round empty -> near
     flat(bot, ctx, null, null); await settle() // dig: find + issue
     assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [22, 0], 'buried dirt filtered out')
   })
@@ -1567,6 +1571,7 @@ describe('flat behaviour', () => {
     flat(bot, ctx, null, null); await settle() // fill: issue
     bot.entity.position = pos(3, 64, 0)
     flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: pack round empty -> near
     flat(bot, ctx, null, null); await settle() // dig: find + issue
     assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.y, ctx.flat.dig.pos.z], [30, 65, 0], 'bump top preferred')
   })
@@ -1585,6 +1590,7 @@ describe('flat behaviour', () => {
     flat(bot, ctx, null, null); await settle() // fill: issue
     bot.entity.position = pos(3, 64, 0)
     flat(bot, ctx, null, null); await settle() // arrived -> dig
+    flat(bot, ctx, null, null); await settle() // dig: pack round empty -> near
     flat(bot, ctx, null, null); await settle() // dig: find + issue
     assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [22, 0], 'marker-adjacent dirt filtered out')
   })
@@ -1605,6 +1611,7 @@ describe('flat behaviour', () => {
       flat(bot, ctx, null, null); await settle() // fill: issue
       bot.entity.position = pos(3, 64, 0)
       flat(bot, ctx, null, null); await settle() // arrived -> dig
+      flat(bot, ctx, null, null); await settle() // dig: pack round empty -> near
       flat(bot, ctx, null, null); await settle() // dig: find + issue
       assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [22, 0], 'guard-denied dirt skipped')
       assert.ok(!cap.lines.some((l) => l.includes('flat protected:')), 'quiet while a candidate remains')
@@ -1627,12 +1634,14 @@ describe('flat behaviour', () => {
       flat(bot, ctx, null, null); await settle() // fill: issue
       bot.entity.position = pos(3, 64, 0)
       flat(bot, ctx, null, null); await settle() // arrived -> dig
-      flat(bot, ctx, null, null); await settle() // dig: find -> empty -> endDig
+      // xxmn: the empty near round widens instead of ending, then bring
+      // finds no chest and the episode still ends honestly.
+      for (let i = 0; i < 30 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
       assert.equal(ctx.flat, null)
       assert.ok(bot.chats.some((c) => c.includes('1 left (no fill blocks)')), bot.chats.join('\n'))
       const prot = cap.lines.filter((l) => l.includes('flat protected:'))
-      assert.equal(prot.length, 1, cap.lines.join('\n'))
-      assert.ok(prot[0].includes('flat protected: dirt at 20 63 0'), prot[0])
+      assert.equal(prot.length, 2, `one honest line per search round (near, wide): ${cap.lines.join('\n')}`)
+      for (const p of prot) assert.ok(p.includes('flat protected: dirt at 20 63 0'), p)
     } finally { if (origCanBreak === undefined) delete util.canBreak; else util.canBreak = origCanBreak }
   })
 
@@ -1652,11 +1661,13 @@ describe('flat behaviour', () => {
       flat(bot, ctx, null, null); await settle() // fill: issue
       bot.entity.position = pos(3, 64, 0)
       flat(bot, ctx, null, null); await settle() // arrived -> dig
-      flat(bot, ctx, null, null); await settle() // dig: find -> empty -> endDig
+      // xxmn: the empty near round widens instead of ending; the episode
+      // still ends over the later rounds.
+      for (let i = 0; i < 30 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
       assert.equal(ctx.flat, null)
       const prot = cap.lines.filter((l) => l.includes('flat protected:'))
-      assert.equal(prot.length, 1, cap.lines.join('\n'))
-      assert.ok(prot[0].includes('flat protected: dirt at 20 63 0'), prot[0])
+      assert.equal(prot.length, 2, `one honest line per search round (near, wide): ${cap.lines.join('\n')}`)
+      for (const p of prot) assert.ok(p.includes('flat protected: dirt at 20 63 0'), p)
     } finally { if (origCanBreak === undefined) delete util.canBreak; else util.canBreak = origCanBreak }
   })
 

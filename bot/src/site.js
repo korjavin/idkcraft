@@ -95,6 +95,31 @@ const SOLID_BELOW = 3
 // 8 candidate origins around `around` at radius 6 (bead .4).
 const SITE_DIRS = [[6, 0], [4, 4], [0, 6], [-4, 4], [-6, 0], [-4, -4], [0, -6], [4, -4]]
 
+// xxmn: prefer the fresh flat square's anchor for `build here`. A flatEnd
+// from a finished episode near the speaker guarantees level ground there,
+// so the geometric search starts where the work happened instead of where
+// the speaker happens to stand. Pure gate: fresh (10 min), near (32 blocks
+// of the speaker) and no flat running — anything else is null and the
+// caller falls back to the speaker. The siteFor validation still runs, so
+// this can only add a fit, never found a bad site.
+const FLAT_ANCHOR_MS = 10 * 60 * 1000
+const FLAT_ANCHOR_RANGE = 32
+function flatAnchorEnd(flatEnd, running, around, now) {
+  try {
+    if (running) return null
+    if (!flatEnd || typeof flatEnd.cx !== 'number' || typeof flatEnd.cz !== 'number') return null
+    const t = typeof now === 'number' ? now : Date.now()
+    if (typeof flatEnd.at !== 'number' || !(t - flatEnd.at >= 0 && t - flatEnd.at <= FLAT_ANCHOR_MS)) return null
+    if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return null
+    if (Math.hypot(flatEnd.cx - around.x, flatEnd.cz - around.z) > FLAT_ANCHOR_RANGE) return null
+    const y = typeof flatEnd.level === 'number' ? flatEnd.level : Math.floor(around.y)
+    if (!Number.isFinite(y)) return null
+    return { x: flatEnd.cx, y, z: flatEnd.cz }
+  } catch (_) {
+    return null
+  }
+}
+
 // Pick a flat 7x6 site (jr2.1 blueprint): all 42 columns resolve and lie
 // within one block. First fit wins; anything else refuses (null) —
 // uneven, wet or unloaded footprints are never founded (idkcraft-vmzq.12:
@@ -280,4 +305,4 @@ function timeWord(bot) {
   return timeOfDay < 12000 ? 'day' : timeOfDay <= 13000 ? 'dusk' : 'night'
 }
 
-module.exports = { needPlanks, makeHome, groundY, solidBelow, BUILT_GROUND, SITE_DIRS, siteFor, skyOpen, skySiteNear, skyCellNear, isV2House, timeWord }
+module.exports = { needPlanks, makeHome, groundY, solidBelow, BUILT_GROUND, SITE_DIRS, siteFor, skyOpen, skySiteNear, skyCellNear, isV2House, timeWord, flatAnchorEnd, FLAT_ANCHOR_MS, FLAT_ANCHOR_RANGE }

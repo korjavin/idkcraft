@@ -478,6 +478,7 @@ describe('shave safety: restock never digs under a player', () => {
     bot.entity.position = pos(3, 64, 0)
     flat(bot, ctx, null, null); await settle() // arrived, no item -> dig
     assert.equal(ctx.flat.phase, 'dig')
+    flat(bot, ctx, null, null); await settle() // dig: pack round empty -> near
     flat(bot, ctx, null, null); await settle() // dig: find + issue
     assert.deepEqual([ctx.flat.dig.pos.x, ctx.flat.dig.pos.z], [30, 0], 'dirt under the player skipped')
   })
