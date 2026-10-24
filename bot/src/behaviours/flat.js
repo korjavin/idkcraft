@@ -34,6 +34,18 @@
 //
 // One behaviour tick advances at most one async place/dig flight (guarded by
 // the shared ctx.placeInFlight / ctx.digInFlight seams, same as build/gather).
+//
+// xxmn (confident flat): an empty hand fetches fill in rounds — pack (vacuum
+// this episode's littered drops), near (today's restock), wide (bigger
+// radius, whole fill family), bring (home-chest withdraw when close) —
+// before ending honestly with 'no fill blocks'. The shave carries an
+// absolute tick budget: hilltop-scale bump fields stop with the middle flat
+// (the queue runs nearest-first) and far leftovers skip as 'budget', so the
+// build-here check still finds a site. Kept columns (a standing house)
+// resolve by routing around, not by shrinking either side: the episode ends
+// honestly naming the marker, and the build-here check only needs one of
+// siteFor's 8 footprints to fit beside the house. Water stays skipped by
+// owner rule (flat runs on dry spots).
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
@@ -72,6 +84,22 @@ const FILL_RESUME = 16 // x3y6.4: fill blocks banked from own bumps before filli
 const DIG_TICKS = 300 // restock budget before resuming with what is on hand
 const DIG_STALLS = 10
 const DIG_STREAK = 3
+// xxmn fill-fetch chain: an empty hand works pack -> near -> wide -> bring
+// before the episode ends honestly with 'no fill blocks'. Near is today's
+// restock; wide reaches dirt the near radius cannot (prod 2026-10-24: bots
+// dug everything within 48 and stopped with 49 holes left); bring draws the
+// home chest when it is close enough to walk to mid-order.
+const WIDE_DIG_RADIUS = 128 // wide restock search radius (near stays 48)
+const PACK_TICKS = 180 // litter-vacuum budget per restock episode
+const BRING_TICKS = 600 // home-chest fetch budget (walks there, then back to the holes)
+const BRING_RANGE = 192 // home chest past this from the body: too far, skip honestly
+const INTERACT_CLOSE = 4 // window-open reach (packroom INTERACT_REACH mirror)
+const LITTER_MAX = 64 // timed-out drop cells remembered per episode
+// xxmn bump budget: hilltop-scale bump fields (prod: 187) never converge in
+// session time. The shave queues nearest-first, so by the time this trips
+// the middle is flat and only far edges are skipped honestly as 'budget' -
+// and the build-here check still finds a site on the flat middle.
+const SHAVE_TICKS = 1200 // absolute shave effort budget (~20 min at 1 s ticks)
 const PLACE_RANGE = 4 // GoalPlaceBlock range, like build.js
 const EYE_HEIGHT = 1.62 // survival eye height above the feet
 const EYE_REACH = 4.4 // server survival block reach (4.5) minus pose/float margin
@@ -370,15 +398,26 @@ function countFill(bot) {
   return countItems(bot, isFillBlock)
 }
 
-function dirtIds(bot) {
+function idsFor(bot, names) {
   const byName = (bot.registry && bot.registry.blocksByName) || {}
+  const want = names instanceof Set ? names : new Set(names || [])
   const ids = []
   for (const name of Object.keys(byName)) {
-    if (!DIRT_NAMES.has(name)) continue
+    if (!want.has(name)) continue
     const entry = byName[name]
     if (entry && typeof entry.id === 'number' && !ids.includes(entry.id)) ids.push(entry.id)
   }
   return ids
+}
+
+function dirtIds(bot) {
+  return idsFor(bot, DIRT_NAMES)
+}
+
+// xxmn: the wide restock round digs the whole fill family, not just dirt —
+// every name here is placeable as fill, so a surface stone banks cobble.
+function fillIds(bot) {
+  return idsFor(bot, FILL_BLOCKS)
 }
 
 function covers(ent, x, y, z) {
@@ -749,7 +788,9 @@ function startEpisode(cx, cz, r, yTop, by, tile = null, level = null) {
     bumps: [],
     totalBumps: 0,
     shaved: 0,
-    skip: { water: 0, lava: 0, occupied: 0, unreachable: 0, floating: 0, refused: 0, kept: 0 },
+    shaveTicks: 0, // xxmn: absolute shave effort (hilltop budget)
+    litter: [], // xxmn: { k, x, y, z } drop cells whose pickup timed out
+    skip: { water: 0, lava: 0, occupied: 0, unreachable: 0, floating: 0, refused: 0, kept: 0, budget: 0 },
     abortWhy: null,
     parked: false,
     issuedKey: null,
@@ -804,6 +845,31 @@ function shiftBumpSkip(f, why) {
   f.lastProgressTick = f.ticks
 }
 
+// xxmn: remember a drop cell whose pickup walk timed out, so the pack
+// restock round can vacuum it later instead of digging fresh dirt for it.
+// Bounded and deduped; recording never breaks the shave.
+function recordLitter(f, x, y, z) {
+  try {
+    if (!f || !Array.isArray(f.litter)) return
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return
+    const k = `${x},${y},${z}`
+    if (f.litter.some((c) => c && c.k === k)) return
+    if (f.litter.length >= LITTER_MAX) f.litter.shift()
+    f.litter.push({ k, x, y, z })
+  } catch (_) { /* litter best-effort */ }
+}
+
+// xxmn: the hilltop budget. The queue runs nearest-first, so the leftovers
+// are the far edges; they skip honestly as 'budget' and the episode ends
+// over the sweep/recheck path below with left=0.
+function budgetStop(bot, ctx, f) {
+  const n = f.bumps.length
+  f.bumps = []
+  if (f.skip) f.skip.budget = (f.skip.budget || 0) + n
+  f.lastProgressTick = f.ticks
+  console.log(`flat bump budget: skipped ${n} far bump${n === 1 ? '' : 's'}, middle flat (level ${f.level})`)
+}
+
 function rotateBump(f) {
   f.bumps.push(f.bumps.shift())
 }
@@ -845,7 +911,13 @@ function finish(bot, ctx, f, why) {
   // vf8e.6: an LLM plan reads it. A steal round ending 'nothing to steal'
   // follows a clean home strip: done.
   const clean = (why == null || (f.steal && why === 'nothing to steal')) && !f.abortWhy
-  ctx.flatEnd = { outcome: clean ? 'done' : 'failed', at: Date.now() }
+  // xxmn: the anchor travels with the outcome so `build here` can prefer
+  // the guaranteed square (site.js flatAnchorEnd); outcome/at keep their
+  // shape for the LLM plan reader.
+  ctx.flatEnd = {
+    outcome: clean ? 'done' : 'failed', at: Date.now(),
+    cx: f.cx, cz: f.cz, r: f.r, level: f.level, left, skipped,
+  }
   ctx.flat = null
   if (again) {
     // Same key (cx,cz,r): a relay/re-flat of this square resumes the steal.
@@ -1057,7 +1129,9 @@ function startDig(bot, ctx, f) {
     return
   }
   f.phase = 'dig'
-  f.dig = { pos: null, phase: 'walk', skip: new Set(), streak: 0, ticks: 0, stalls: 0, lastPos: null }
+  // xxmn: one restock episode works every round in DIG_ROUNDS before ending
+  // honestly; the skip set accumulates across rounds, stalls/ticks reset.
+  f.dig = { round: 0, pos: null, phase: 'walk', skip: new Set(), streak: 0, ticks: 0, stalls: 0, lastPos: null, have: 0, bring: null }
   f.lastProgressTick = f.ticks
   tell(bot, f, 'out of fill blocks, digging dirt')
 }
@@ -1082,12 +1156,15 @@ function restockPoint(f, bp) {
 // around it is lower, and a square-relative floor starves restock to zero
 // (live 2026-09-28: level 65, zone dirt at 57-63). mnx pit memory and the
 // block under the bot's own feet are excluded like in gather.js.
-function findDirt(bot, ctx, f, bp) {
-  const ids = dirtIds(bot)
+// xxmn: radius/ids vary by round — near digs dirt within DIRT_FIND_RADIUS,
+// wide digs the whole fill family within WIDE_DIG_RADIUS. Every other gate
+// (edge gap, surface-exposed, structure, canBreak) is identical.
+function findDirt(bot, ctx, f, bp, radius, wide) {
+  const ids = wide ? fillIds(bot) : dirtIds(bot)
   if (ids.length === 0) return null
   let found = []
   try {
-    found = bot.findBlocks({ matching: ids, point: restockPoint(f, bp), maxDistance: DIRT_FIND_RADIUS, count: DIRT_FIND_COUNT }) || []
+    found = bot.findBlocks({ matching: ids, point: restockPoint(f, bp), maxDistance: radius || DIRT_FIND_RADIUS, count: DIRT_FIND_COUNT }) || []
   } catch (_) {
     return null
   }
@@ -1151,6 +1228,38 @@ function endDig(bot, ctx, f, resume) {
   finish(bot, ctx, f, 'no fill blocks')
 }
 
+// xxmn restock rounds: 0 pack (vacuum this episode's littered drops),
+// 1 near (today's restock), 2 wide (bigger radius, whole fill family),
+// 3 bring (home-chest withdraw when close). One f.dig across rounds.
+const DIG_ROUNDS = ['pack', 'near', 'wide', 'bring']
+
+function roundTicks(d) {
+  if (!d) return DIG_TICKS
+  if (d.round === 0) return PACK_TICKS
+  if (d.round === 3) return BRING_TICKS
+  return DIG_TICKS
+}
+
+// The round is spent (budget out, nothing found, walk stalled): move to
+// the next one, or end the restock with what is on hand past the last.
+function nextRound(bot, ctx, f) {
+  const d = f.dig
+  d.round++
+  d.pos = null
+  d.phase = 'walk'
+  d.ticks = 0
+  d.stalls = 0
+  d.streak = 0
+  d.lastPos = null
+  d.bring = null
+  if (d.round >= DIG_ROUNDS.length) {
+    endDig(bot, ctx, f, countFill(bot) > 0)
+    return false
+  }
+  console.log(`flat restock round=${DIG_ROUNDS[d.round]}`)
+  return true
+}
+
 function digTick(bot, ctx, f, bp) {
   f.ticks++
   const d = f.dig
@@ -1160,14 +1269,29 @@ function digTick(bot, ctx, f, bp) {
     endDig(bot, ctx, f, true)
     return
   }
-  if (d.ticks > DIG_TICKS) {
-    endDig(bot, ctx, f, have > 0)
+  if (d.ticks > roundTicks(d)) {
+    nextRound(bot, ctx, f)
     return
   }
+  if (d.round === 0) {
+    packTick(bot, ctx, f, bp, have)
+    return
+  }
+  if (d.round === 3) {
+    bringTick(bot, ctx, f, bp)
+    return
+  }
+  restockTick(bot, ctx, f, bp, d.round >= 2)
+}
+
+function restockTick(bot, ctx, f, bp, wide) {
+  const d = f.dig
   if (!d.pos) {
-    const found = findDirt(bot, ctx, f, bp)
+    const found = findDirt(bot, ctx, f, bp, wide ? WIDE_DIG_RADIUS : DIRT_FIND_RADIUS, wide)
     if (!found) {
-      endDig(bot, ctx, f, have > 0)
+      // Near spent with nothing in reach is exactly the prod case: widen
+      // instead of ending with holes left.
+      nextRound(bot, ctx, f)
       return
     }
     d.pos = found
@@ -1191,7 +1315,10 @@ function digTick(bot, ctx, f, bp) {
       const b = bot.blockAt && bot.blockAt(d.pos)
       name = (b && b.name) || null
     } catch (_) { /* name best-effort */ }
-    if (name != null && !isDirtName(name)) {
+    // xxmn: the wide round digs the fill family, so a changed cell still
+    // counts when it holds any fill name, not just dirt.
+    const okName = wide ? isFillBlock(name) : isDirtName(name)
+    if (name != null && !okName) {
       d.pos = null // dug by someone else: search again
       return
     }
@@ -1223,6 +1350,7 @@ function digTick(bot, ctx, f, bp) {
         d.pos = null
         return
       }
+      d.have = countFill(bot) // baseline: the pickup recounts the gain below
       ctx.digInFlight = true
       ;(async () => {
         try { await bot.dig(block); f.blocks++ } catch (_) { /* gone or interrupted: recount anyway */ }
@@ -1253,13 +1381,179 @@ function digTick(bot, ctx, f, bp) {
       return
     }
     // Reached or gave up getting there: the drop is picked up by proximity
-    // and the inventory count is the truth — move to the next dirt.
+    // and the inventory count is the truth — move to the next dirt. The old
+    // same-tick recount never saw a gain (xxmn: baseline at dig time does);
+    // a gain resets the stall streak, a miss litters the cell for the pack
+    // round instead of forgetting it.
+    const lp = d.pos
     d.pos = null
     d.phase = 'walk'
-    if (countFill(bot) > have) {
+    if (countFill(bot) > (d.have || 0)) {
       f.lastProgressTick = f.ticks
       d.streak = 0
+    } else if (lp) {
+      recordLitter(f, lp.x, lp.y, lp.z)
     }
+  }
+}
+
+// xxmn pack round: walk this episode's littered drop cells (timed-out shave
+// and restock pickups) and vacuum them by proximity before digging fresh
+// dirt. Arrival just recounts — the count is the truth either way.
+function packTick(bot, ctx, f, bp, have) {
+  const d = f.dig
+  if (!Array.isArray(f.litter) || f.litter.length === 0) {
+    nextRound(bot, ctx, f)
+    return
+  }
+  const c = f.litter[0]
+  const key = `flat-pack:${c.x},${c.y},${c.z}`
+  if (key !== ctx.lastGoalKey) {
+    try {
+      bot.pathfinder.setGoal(new goals.GoalBlock(c.x, c.y, c.z), false)
+    } catch (_) { /* retry next tick */ return }
+    ctx.lastGoalKey = key
+    d.have = have
+    d.stalls = 0
+    d.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    return
+  }
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  if (moving) {
+    const grounded = !bot.entity || bot.entity.onGround !== false
+    if (progressed(bp, d.lastPos, grounded)) {
+      d.stalls = 0
+      d.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    } else if (++d.stalls >= DIG_STALLS) {
+      f.litter.shift() // taken, despawned or unreachable: next cell
+      d.streak++
+      if (d.streak >= DIG_STREAK) nextRound(bot, ctx, f)
+    }
+    return
+  }
+  f.litter.shift()
+  if (countFill(bot) > (d.have || 0)) {
+    f.lastProgressTick = f.ticks
+    d.streak = 0
+  }
+}
+
+// xxmn bring round: withdraw fill from the home chest when it is close
+// enough to walk to mid-order. The withdraw runs as one async flight behind
+// the shared digInFlight seam (flat() pauses meanwhile); landing sets the
+// fill phase, and the normal hole approach walks the body back.
+function planBring(bot, ctx, f, bp) {
+  const chest = ctx && ctx.home && ctx.home.chest
+  if (!chest || typeof chest.x !== 'number' || typeof chest.y !== 'number' || typeof chest.z !== 'number') {
+    return { ok: false, why: 'no home chest' }
+  }
+  if (typeof bot.openChest !== 'function') return { ok: false, why: 'no chest access' }
+  let dist = null
+  try { dist = dist3(bp, chest) } catch (_) { dist = null }
+  if (typeof dist !== 'number' || !(dist <= BRING_RANGE)) {
+    return { ok: false, why: `chest ${dist == null ? 'unreachable' : `${Math.round(dist)} away`}` }
+  }
+  return { ok: true, chest }
+}
+
+// xxmn: withdraw fill from the home chest without requiring stockpile —
+// the require graph is acyclic by law (oqul.14: stockpile reads flat, so
+// flat cannot read it back; the shared leaves both could use reach flat
+// through castle). A minimal window dance here keeps the bring round
+// self-contained: open, take fill names, always close.
+async function withdrawFill(bot, chest, names, count) {
+  let block = null
+  try {
+    block = bot.blockAt(new Vec3(chest.x, chest.y, chest.z))
+  } catch (_) { block = null }
+  if (!block || block.name !== 'chest') return { got: 0 }
+  let window = null
+  try {
+    window = await bot.openChest(block)
+  } catch (_) {
+    return { got: 0 }
+  }
+  let got = 0
+  try {
+    const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
+    const want = new Set(names)
+    let need = count
+    if (Array.isArray(stacks)) {
+      for (const s of stacks) {
+        if (need <= 0) break
+        if (!s || typeof s.name !== 'string' || !want.has(s.name)) continue
+        const take = Math.min(typeof s.count === 'number' ? s.count : 1, need)
+        if (take <= 0) continue
+        await window.withdraw(s.type, s.metadata, take)
+        need -= take
+        got += take
+      }
+    }
+  } catch (_) { /* partial withdraw keeps what landed */ }
+  try { window.close() } catch (_) { /* close best-effort */ }
+  return { got }
+}
+
+function bringTick(bot, ctx, f, bp) {
+  const d = f.dig
+  if (!d.bring) {
+    d.bring = planBring(bot, ctx, f, bp)
+    if (!d.bring.ok) {
+      console.log(`flat bring skipped: ${d.bring.why}`)
+      nextRound(bot, ctx, f)
+      return
+    }
+    tell(bot, f, 'fetching fill from the home chest')
+    d.stalls = 0
+    d.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+  }
+  const b = d.bring
+  let dist = null
+  try { dist = dist3(bp, b.chest) } catch (_) { dist = null }
+  if (typeof dist === 'number' && dist <= INTERACT_CLOSE) {
+    const need = Math.max(1, DIG_TARGET - countFill(bot))
+    ctx.digInFlight = true
+    ;(async () => {
+      try {
+        const res = await withdrawFill(bot, b.chest, FILL_BLOCKS, need)
+        const got = res && typeof res.got === 'number' ? res.got : 0
+        console.log(`flat bring got=${got} need=${need}`)
+      } catch (_) { /* chest unreadable: resume with what is on hand */ }
+      ctx.digInFlight = false
+      f.phase = 'fill'
+      f.lastProgressTick = f.ticks
+    })().catch(() => { ctx.digInFlight = false; f.phase = 'fill' })
+    return
+  }
+  const key = `flat-bring:${b.chest.x},${b.chest.y},${b.chest.z}`
+  if (key !== ctx.lastGoalKey) {
+    try {
+      bot.pathfinder.setGoal(new goals.GoalNear(b.chest.x, b.chest.y, b.chest.z, 2), false)
+    } catch (_) { /* retry next tick */ return }
+    ctx.lastGoalKey = key
+    d.stalls = 0
+    d.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    return
+  }
+  let moving = false
+  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  if (moving) {
+    const grounded = !bot.entity || bot.entity.onGround !== false
+    if (progressed(bp, d.lastPos, grounded)) {
+      d.stalls = 0
+      d.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    } else if (++d.stalls >= DIG_STALLS) {
+      console.log('flat bring walk stalled')
+      nextRound(bot, ctx, f)
+    }
+    return
+  }
+  // Pathfinder settled but the chest is still out of window reach: count it
+  // like a stall — a wedged walk gives up the round instead of orbiting.
+  if (++d.stalls >= DIG_STALLS) {
+    console.log('flat bring walk stalled')
+    nextRound(bot, ctx, f)
   }
 }
 
@@ -1678,6 +1972,7 @@ function recheckKept(bot, ctx, f) {
 
 function shaveTick(bot, ctx, f, bp) {
   f.ticks++
+  f.shaveTicks = (f.shaveTicks || 0) + 1
   recordStepped(f, bp)
   progressChat(bot, f)
   if (f.ticks - f.lastProgressTick > BACKSTOP_TICKS) {
@@ -1692,6 +1987,9 @@ function shaveTick(bot, ctx, f, bp) {
     f.lastProgressTick = f.ticks
     return
   }
+  // xxmn hilltop budget (nearest-first queue: the middle is flat by now):
+  // far leftovers skip as 'budget', the sweep/recheck/finish below ends it.
+  if (f.bumps.length > 0 && f.shaveTicks > SHAVE_TICKS) budgetStop(bot, ctx, f)
   if (f.bumps.length === 0) {
     if (maybeSweep(bot, f)) return
     if (recheckKept(bot, ctx, f)) return
@@ -1732,6 +2030,7 @@ function shaveTick(bot, ctx, f, bp) {
       h.stalls = 0
       h.lastPos = { x: bp.x, y: bp.y, z: bp.z }
     } else if (++h.stalls >= PICKUP_STALLS) {
+      recordLitter(f, h.pickup.x, h.pickup.y, h.pickup.z) // xxmn: the pack round vacuums it later
       h.pickup = null // the drop stays as litter; the column still advances
       h.stalls = 0
       f.lastProgressTick = f.ticks
@@ -1979,6 +2278,17 @@ module.exports.detectHoles = detectHoles
 module.exports.findFillItem = findFillItem
 module.exports.countFill = countFill
 module.exports.dirtIds = dirtIds
+module.exports.fillIds = fillIds
+module.exports.DIG_ROUNDS = DIG_ROUNDS
+module.exports.SHAVE_TICKS = SHAVE_TICKS
+module.exports.WIDE_DIG_RADIUS = WIDE_DIG_RADIUS
+module.exports.PACK_TICKS = PACK_TICKS
+module.exports.BRING_TICKS = BRING_TICKS
+module.exports.BRING_RANGE = BRING_RANGE
+module.exports.LITTER_MAX = LITTER_MAX
+module.exports.recordLitter = recordLitter
+module.exports.budgetStop = budgetStop
+module.exports.planBring = planBring
 module.exports.cellOccupied = cellOccupied
 module.exports.cellOccupiedSelf = cellOccupiedSelf
 module.exports.cellOccupiedByPlayer = cellOccupiedByPlayer

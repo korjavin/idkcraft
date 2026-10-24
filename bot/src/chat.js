@@ -7,6 +7,7 @@ const { resolvePlayer } = require('./perception')
 const { findNearest, loadedSearchRadius, startFarSearch, stepFarSearch } = require('./behaviours/scout')
 const { helpReply, lookupCommand, detailLine } = require('./commands')
 const goal = require('./goal')
+const siteMod = require('./site')
 const bringMod = require('./behaviours/bring')
 const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
@@ -477,7 +478,14 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     // protected by build.js guardOwnWalls (block-type based, not site).
     // b2o: then the same transition as 'go work' — follow drops the body
     // and the goal loop starts building instead of trailing the owner.
-    const site = goal.siteFor(bot, pos)
+    // xxmn: a fresh flat guarantees level ground at its anchor — search
+    // there first so `flat` then `build here` just works even if the
+    // speaker moved. siteFor still validates geometrically, so this can
+    // only add a fit, never found a bad site; a miss falls back to the
+    // speaker like before.
+    const lctx = bot._tickerCtx
+    const anchor = siteMod.flatAnchorEnd(lctx && lctx.flatEnd, !!(lctx && lctx.flat), pos, Date.now())
+    const site = (anchor && goal.siteFor(bot, anchor)) || goal.siteFor(bot, pos)
     // vmzq.12: validated sites only — every footprint uneven, wet or
     // unloaded refuses honestly instead of founding blind. Unloaded heals
     // (chunks load, the owner re-orders); wet or uneven needs another spot.
