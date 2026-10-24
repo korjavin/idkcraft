@@ -36,6 +36,46 @@ describe('skill-promote (vf8e.4)', () => {
     assert.equal(p.ranDone('skills loaded n=1 names=gen_x\n', 'gen_x'), false, 'never chosen (v2 S6-LEAD)')
   })
 
+  it('demotes a skill banned 3 days in a row, keeps the rest (idkcraft-vf8e.22)', () => {
+    const fs = require('node:fs')
+    const os = require('node:os')
+    const path = require('node:path')
+    const log = [
+      '2026-10-20 10:00:01 IdkBotV2 skill gen_dig banned fails=3 last=failed:no-progress',
+      '2026-10-21 10:00:01 IdkBotV2 skill gen_dig banned fails=4 last=failed:no-progress',
+      '2026-10-21 10:00:02 IdkBotV2 skill gen_climb banned fails=3 last=skill-timeout',
+      '2026-10-22 10:00:01 IdkBotV2 skill gen_dig banned fails=5 last=failed:no-progress',
+      '2026-10-22 10:00:02 IdkBotV2 skill run skill=gen_dig kind=step outcome=failed:no-progress ticks=9',
+      '2026-10-22 10:00:03 IdkBotV2 skills loaded n=2 names=gen_climb,gen_dig',
+    ].join('\n')
+    assert.deepEqual(p.prodBans(log), { gen_dig: ['2026-10-20', '2026-10-21', '2026-10-22'], gen_climb: ['2026-10-21'] })
+    assert.deepEqual(p.demotable(p.prodBans(log)), [{ skill: 'gen_dig', days: ['2026-10-20', '2026-10-21', '2026-10-22'] }])
+    // A gap breaks the run, and an old run does not demote a recovered skill.
+    assert.deepEqual(p.demotable({ gen_gap: ['2026-10-20', '2026-10-22'] }), [])
+    assert.deepEqual(p.demotable({ gen_old: ['2026-10-18', '2026-10-19', '2026-10-20'], gen_now: ['2026-10-22'] }), [])
+    assert.deepEqual(p.demotable({ gen_two: ['2026-10-21', '2026-10-22'] }, 2), [{ skill: 'gen_two', days: ['2026-10-21', '2026-10-22'] }])
+    // The file goes, the kept skill stays, a demotable name with no file is missing.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demote-'))
+    try {
+      fs.writeFileSync(path.join(dir, 'gen_dig.js'), '// doomed\n')
+      fs.writeFileSync(path.join(dir, 'gen_climb.js'), '// kept\n')
+      const r = p.demoteFromLog(log, dir)
+      assert.deepEqual(r.demoted, [{ skill: 'gen_dig', days: ['2026-10-20', '2026-10-21', '2026-10-22'] }])
+      assert.deepEqual(r.kept, [{ skill: 'gen_climb', days: ['2026-10-21'] }])
+      assert.deepEqual(r.missing, [])
+      assert.equal(fs.existsSync(path.join(dir, 'gen_dig.js')), false)
+      assert.equal(fs.existsSync(path.join(dir, 'gen_climb.js')), true)
+      const r2 = p.demoteFromLog(log, dir)
+      assert.deepEqual(r2.missing, [{ skill: 'gen_dig', days: ['2026-10-20', '2026-10-21', '2026-10-22'] }])
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('demote usage without logs exits 2', () => {
+    const log = console.log
+    console.log = () => {}
+    try { assert.equal(p.demoteMain([]), 2) } finally { console.log = log }
+  })
+
   it('mine is judged on the mean of its legs vs the v2 baseline', () => {
     const comps = [20, 35.3, 30].map((r) => ({ kind: 'mine', line: `mine-rate ${r}/game-min: banked=+1` }))
     assert.equal(p.meanLine(comps, 'mine', 29.4), 'mine mean 28.4 over 3 legs (20, 35.3, 30), baseline 29.4 (-3%, within)')

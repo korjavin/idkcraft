@@ -4,6 +4,8 @@
 // gated like a hand movement PR. Prod never runs a skill only a rig loop saw.
 //
 //   node tools/skill-promote.js <bead> <work-dir>/skills/<name>.js...
+//   node tools/skill-promote.js demote <prod-log.txt...> [days=3]  (vf8e.22:
+//     a skill banned on prod `days` days in a row loses its bot/skills file)
 //
 // Per skill, <work-dir>/result.json (skill-loop.js; SKILL_LOOP_VERIFY=<file>
 // re-verifies a written skill without a model call) must be green for that
@@ -101,6 +103,82 @@ function prBody({ bead, skills, stuck, comps, commits }) {
   return s.join('\n') + '\n'
 }
 
+// --- Log-driven demotion (idkcraft-vf8e.22) ---
+//
+// A skill banned on prod 3 days in a row is demoted: the prod read (the same
+// pulled bot2 log prod-score.js scores, `skill <name> banned ...` lines, one
+// per UTC day) is the demotion input — log-driven, no rig.
+//
+//   node tools/skill-promote.js demote <log.txt...> [days=3]
+//
+// Deletes bot/skills/<name>.js for every demotable skill present there and
+// prints `demote <name> banned=<days>` lines; skills banned fewer days print
+// as `keep`. Exit 0 (nothing to demote is also 0), 2 on usage.
+
+// Banned UTC days per skill from a pulled prod log (prod-score input shape:
+// "YYYY-MM-DD HH:MM:SS <msg>"). The name rule is the skill header's, so chat
+// `skills ...` lines and foreign paths never match.
+function prodBans(text) {
+  const bans = {}
+  for (const line of String(text).split('\n')) {
+    const m = /^(\d{4}-\d\d-\d\d) \d\d:\d\d:\d\d \S+ skill ([a-z][a-z0-9_]{1,39}) banned /.exec(line)
+    if (!m) continue
+    ;(bans[m[2]] || (bans[m[2]] = new Set())).add(m[1])
+  }
+  return Object.fromEntries(Object.entries(bans).map(([k, v]) => [k, [...v].sort()]))
+}
+
+const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10)
+
+// Skills banned on each of the `days` UTC days ending at the newest banned
+// day in the input (a nightly job's trailing window: a recovered skill — no
+// ban on the newest day — is kept, never demoted for an old run).
+function demotable(bans, days = 3) {
+  const all = Object.values(bans).flat()
+  if (!all.length) return []
+  const newest = all.sort().at(-1)
+  const end = Date.parse(`${newest}T00:00:00Z`)
+  const want = []
+  for (let i = days - 1; i >= 0; i--) want.push(isoDay(end - i * 86400e3))
+  return Object.entries(bans)
+    .filter(([, ds]) => want.every((d) => ds.includes(d)))
+    .map(([skill]) => ({ skill, days: want }))
+}
+
+// Delete the demotable skills' files from skillsDir. Returns {demoted, kept,
+// missing}: demoted names the removed files, kept names banned-but-short
+// skills, missing demotable skills with no file (already gone).
+function demoteFromLog(text, skillsDir, days = 3) {
+  const bans = prodBans(text)
+  const table = demotable(bans, days)
+  const demoted = []
+  const missing = []
+  for (const { skill, days: ds } of table) {
+    const file = path.join(skillsDir, `${skill}.js`)
+    if (fs.existsSync(file)) { fs.rmSync(file); demoted.push({ skill, days: ds }) }
+    else missing.push({ skill, days: ds })
+  }
+  const hit = new Set(table.map((t) => t.skill))
+  const kept = Object.entries(bans).filter(([s]) => !hit.has(s)).map(([skill, ds]) => ({ skill, days: ds }))
+  return { demoted, kept, missing }
+}
+
+function demoteMain(files) {
+  let days = 3
+  if (files.length > 1 && /^\d+$/.test(files[files.length - 1])) days = Number(files.pop())
+  if (!files.length || !(days >= 2)) {
+    console.log('usage: node tools/skill-promote.js demote <log.txt...> [days=3]')
+    return 2
+  }
+  const text = files.map((f) => fs.readFileSync(f, 'utf8')).join('\n')
+  const { demoted, kept, missing } = demoteFromLog(text, path.join(BOT, 'skills'), days)
+  for (const k of kept) console.log(`keep ${k.skill} banned-days=${k.days.length} last=${k.days.at(-1)}`)
+  for (const m of missing) console.log(`missing ${m.skill} banned=${m.days.join(',')} (no bot/skills file)`)
+  for (const d of demoted) console.log(`demote ${d.skill} banned=${d.days.join(',')}`)
+  console.log(`skill-promote demote: demoted=${demoted.length} kept=${kept.length} missing=${missing.length} days=${days}`)
+  return 0
+}
+
 function sh(cmd, args, env) {
   console.log(`skill-promote: ${cmd} ${args.join(' ')}`)
   const r = spawnSync(cmd, args, { cwd: BOT, env, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -110,8 +188,10 @@ function sh(cmd, args, env) {
 
 function main() {
   const [bead, ...files] = process.argv.slice(2)
+  if (bead === 'demote') return demoteMain(files)
   if (!bead || !/^idkcraft-[\w.]+$/.test(bead) || !files.length) {
     console.log('usage: node tools/skill-promote.js <bead> <work-dir>/skills/<name>.js...')
+    console.log('   or: node tools/skill-promote.js demote <log.txt...> [days=3]')
     return 2
   }
   const skills = []
@@ -180,4 +260,4 @@ if (require.main === module) {
   process.exit(rc)
 }
 
-module.exports = { scrub, greenVerdict, ranDone, promoteText, stuckLines, componentLine, meanLine, prBody }
+module.exports = { scrub, greenVerdict, ranDone, promoteText, stuckLines, componentLine, meanLine, prBody, prodBans, demotable, demoteFromLog, demoteMain }

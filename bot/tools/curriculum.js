@@ -37,7 +37,9 @@
 //           short `build castle` vehicle (sliceToPrep prep); other
 //           castlefetch-* read `no-verdict` (revmux 02: no in-window outcome
 //           judges them); other parks read `no-vehicle`.
-// Rank = count x weight (page 3, bring 2, step-fail 2, park 2). Bots: CURRICULUM_BOTS = comma
+// Rank = owner tier first (vf8e.22: castlefetch parks, castlefetch/mine/
+// castle-feeding step fails and daytime idle above night/arrival families),
+// then count x weight (page 3, bring 2, step-fail 2, park 2). Bots: CURRICULUM_BOTS = comma
 // list or "all" (default BOT2_USERNAME, else IdkBotV2 — the owner's feed);
 // SWARM_PREFIX names fold into one "swarm" bot like deaths.sh. days counts
 // back from the newest timestamp in the dump, so a re-run is deterministic.
@@ -51,6 +53,12 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 
 const WEIGHT = { page: 3, bring: 2, 'step-fail': 2, park: 2 }
+// Owner priority (idkcraft-vf8e.22): the harvest ranks what the owner cares
+// about first — castlefetch/mine/castle-feeding step fails and daytime idle
+// (S4 idle+stay) — above night/arrival families. Tiers sort before score;
+// score (count x weight) still orders inside a tier.
+const OWNER_STEPS = new Set(['castlefetch', 'gather', 'craft', 'build', 'deliver', 'castle']) // mine = gather; castle-feeding = craft/build/deliver
+const NIGHT_ARRIVAL_STEPS = new Set(['shelter', 'gohome', 'stay']) // the night safety steps (skills README): stay, gohome, shelter
 const CELL = 8
 const DIR = () => process.env.CURRICULUM_DIR || '/tmp/idkcraft-curriculum'
 const BEAD = 'idkcraft-vf8e.9'
@@ -188,7 +196,8 @@ function parse(text, env = process.env) {
       if (!keep(name)) continue
       const detail = sf[3].slice('failed:'.length)
       if (sf[2] === 'castlefetch' || detail.startsWith('castlefetch-')) continue
-      out.push({ family: 'step-fail', reason: `${sf[2]}:${detail}`, step: sf[2], detail, facts: sf[4], bot: who(name), at, day })
+      const tm = fact(sf[4], 'time')
+      out.push({ family: 'step-fail', reason: `${sf[2]}:${detail}`, step: sf[2], detail, facts: sf[4], time: tm === 'day' || tm === 'night' ? tm : null, bot: who(name), at, day })
       continue
     }
     // A castlefetch leg that ended failed (vf8e.11): v2 park material. The
@@ -323,18 +332,33 @@ function rank(events, days = 7) {
     if (!c.at || e.at >= c.at) {
       c.at = e.at
       c.lastSeen = new Date(e.at).toISOString().slice(0, 19).replace('T', ' ')
-      for (const k of ['pos', 'facts', 'from', 'next', 'chain', 'item', 'step', 'detail', 'fetch', 'task', 'slice']) if (e[k] !== undefined) c[k] = e[k]
+      for (const k of ['pos', 'facts', 'from', 'next', 'chain', 'item', 'step', 'detail', 'fetch', 'task', 'slice', 'time']) if (e[k] !== undefined) c[k] = e[k]
     }
   }
   const list = [...by.values()].map((c) => {
     c.score = c.count * WEIGHT[c.family]
+    c.tier = tier(c)
     const p = proposal(c)
     c.proposable = !p.why
     if (p.why) c.why = p.why
     delete c.at
     return c
   })
-  return list.sort((a, b) => b.score - a.score || (b.lastSeen > a.lastSeen ? 1 : b.lastSeen < a.lastSeen ? -1 : 0))
+  return list.sort((a, b) => a.tier - b.tier || b.score - a.score || (b.lastSeen > a.lastSeen ? 1 : b.lastSeen < a.lastSeen ? -1 : 0))
+}
+
+// Owner-priority tier (idkcraft-vf8e.22): 0 = what the owner cares about
+// (castlefetch parks, castlefetch/mine/castle-feeding step fails, daytime
+// idle = a day-time stay fail, the S4 idle+stay bucket), 2 = night/arrival
+// families (shelter/gohome/stay fails), 1 = everything else.
+function tier(c) {
+  if (c.family === 'park' && String(c.reason || '').startsWith('castlefetch-')) return 0
+  if (c.family === 'step-fail') {
+    if (c.step === 'stay' && c.time === 'day') return 0
+    if (OWNER_STEPS.has(c.step)) return 0
+    if (NIGHT_ARRIVAL_STEPS.has(c.step)) return 2
+  }
+  return 1
 }
 
 const fact = (text, k) => {
@@ -771,4 +795,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2))
 
-module.exports = { parse, rank, proposal, table, main, WEIGHT, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES, survey, whyLine, sliceToPrep, fetchKind, beforeHint, STEP_VEHICLES }
+module.exports = { parse, rank, tier, proposal, table, main, WEIGHT, OWNER_STEPS, NIGHT_ARRIVAL_STEPS, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES, survey, whyLine, sliceToPrep, fetchKind, beforeHint, STEP_VEHICLES }

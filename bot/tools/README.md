@@ -732,7 +732,11 @@ REPLAY_BODY=baritone node bot/tools/skill-promote.js <bead> <new dir>/skills/<na
 
 `skill-promote.js`:
 
-1. Refuses unless `<dir>/result.json` is green for that skill, with a clean `sha` and the
+1. Log-driven demotion (vf8e.22, no rig): `node tools/skill-promote.js demote <log...> [days=3]`
+   reads the same pulled prod log `prod-score.js` scores and deletes `bot/skills/<name>.js`
+   for every skill with a `skill <name> banned ...` line on each of the trailing `days`
+   UTC days (default 3). A recovered skill (no ban on the newest log day) is kept.
+2. Refuses unless `<dir>/result.json` is green for that skill, with a clean `sha` and the
    `body` the gates run on (`REPLAY_BODY`), and the green attempt's log shows
    `skill run skill=<name> ... outcome=done`. A green run that never needed the skill proves
    nothing (v2 on S6-LEAD never wedges, so `gen_brow_step` stays unpromoted).
@@ -831,7 +835,10 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
     `task ... parked ...`) whose diagnosis names one. Signature = the castlefetch reason;
     any other park reads `no-vehicle` and stays parked. v2 body: run the night with
     `CURRICULUM_BODY=baritone` (below).
-- Rank = count x weight (page 3, bring 2, step-fail 2, park 2). `days` counts back from the
+- Rank = owner tier first (vf8e.22: castlefetch parks, castlefetch/mine/castle-feeding
+  step fails and daytime idle — a day-time `stay` fail, the S4 idle+stay bucket — sort
+  above the night/arrival `shelter`/`gohome`/`stay` families), then count x weight
+  (page 3, bring 2, step-fail 2, park 2). `days` counts back from the
   newest line in the dump.
 - Bots: `CURRICULUM_BOTS` is a comma list or `all`. The default is `BOT2_USERNAME`, else
   `IdkBotV2` (the owner's feed). `SWARM_PREFIX` names fold into one `swarm` bot.
