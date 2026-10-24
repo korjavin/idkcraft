@@ -134,7 +134,7 @@ services:
   bot:
     # Built by CI from ./bot (sibling bead owns bot/**) and pushed to GHCR.
     # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
-    image: ghcr.io/korjavin/idkcraft:latest
+    image: ghcr.io/korjavin/idkcraft:105a3cdb6768def13dbdb24fb522808a7cdaccab
     container_name: ${BOT_CONTAINER_NAME:-idkcraft-bot}
     restart: unless-stopped
     depends_on:
@@ -187,7 +187,7 @@ services:
   baritone:
     # Built by CI from ./baritone and pushed to GHCR.
     # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
-    image: ghcr.io/korjavin/idkcraft-baritone:latest
+    image: ghcr.io/korjavin/idkcraft-baritone:5f1234920697a4e739fe8ebc1d29165a028d8587
     container_name: ${BARITONE_CONTAINER_NAME:-idkcraft-baritone}
     restart: unless-stopped
     depends_on:
@@ -219,7 +219,7 @@ services:
   # RAM (the client dominates; node adds ~150m).
   bot2:
     # Same image as bot (CI rewrites :latest to the commit sha on deploy).
-    image: ghcr.io/korjavin/idkcraft:latest
+    image: ghcr.io/korjavin/idkcraft:105a3cdb6768def13dbdb24fb522808a7cdaccab
     container_name: ${BOT2_CONTAINER_NAME:-idkcraft-bot2}
     restart: unless-stopped
     depends_on:
@@ -286,7 +286,7 @@ services:
   # compose network. No auth volume (offline only: a stored account would
   # shadow the name — baritone/README.md).
   body2:
-    image: ghcr.io/korjavin/idkcraft-baritone:latest
+    image: ghcr.io/korjavin/idkcraft-baritone:5f1234920697a4e739fe8ebc1d29165a028d8587
     container_name: ${BODY2_CONTAINER_NAME:-idkcraft-body2}
     restart: unless-stopped
     depends_on:
@@ -317,7 +317,7 @@ services:
   # memory file /app/memory/<name>.json on the shared volume. No planner
   # keys (stub brain), no worker, no follow.
   swarm1: &swarm
-    image: ghcr.io/korjavin/idkcraft:latest
+    image: ghcr.io/korjavin/idkcraft:105a3cdb6768def13dbdb24fb522808a7cdaccab
     container_name: ${SWARM_CONTAINER_PREFIX:-idkcraft-swarm}1
     restart: unless-stopped
     depends_on:
