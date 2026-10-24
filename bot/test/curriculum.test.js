@@ -266,17 +266,19 @@ describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
     for (const e of ev.filter((e) => e.family === 'step-fail')) assert.match(e.facts, /^time=(day|night) /)
   })
 
-  it('ranks park above step-fail by count x weight; only menu-running vehicles propose', () => {
+  it('ranks owner tier first, then count x weight; only menu-running vehicles propose', () => {
     // Park never proposes for now (revmux 02: no in-window outcome judges a
-    // fetch), and body-owning orders park too.
-    assert.deepEqual(sfList.map((c) => [c.family, c.reason, c.count, c.score, c.proposable ? 'yes' : c.why]), [
-      ['park', 'castlefetch-no-stone', 3, 6, 'no-verdict'],
-      ['park', 'castlefetch-unreachable', 2, 4, 'yes'],
-      ['step-fail', 'gather:no-trees', 2, 4, 'yes'],
-      ['step-fail', 'explore:no-progress', 1, 2, 'no-order'],
-      ['step-fail', 'shelter:no-cover', 1, 2, 'yes'],
-      ['step-fail', 'gohome:cannot-reach', 1, 2, 'no-order'],
-      ['step-fail', 'build:no-planks', 1, 2, 'yes'],
+    // fetch), and body-owning orders park too. vf8e.22: castlefetch/mine/
+    // castle-feeding (build) sort above explore and the night/arrival
+    // (shelter/gohome) families at equal score.
+    assert.deepEqual(sfList.map((c) => [c.family, c.reason, c.count, c.score, c.tier, c.proposable ? 'yes' : c.why]), [
+      ['park', 'castlefetch-no-stone', 3, 6, 0, 'no-verdict'],
+      ['park', 'castlefetch-unreachable', 2, 4, 0, 'yes'],
+      ['step-fail', 'gather:no-trees', 2, 4, 0, 'yes'],
+      ['step-fail', 'build:no-planks', 1, 2, 0, 'yes'],
+      ['step-fail', 'explore:no-progress', 1, 2, 1, 'no-order'],
+      ['step-fail', 'shelter:no-cover', 1, 2, 2, 'yes'],
+      ['step-fail', 'gohome:cannot-reach', 1, 2, 2, 'no-order'],
     ])
   })
 
@@ -390,6 +392,54 @@ describe('curriculum step-fail + park harvest (idkcraft-vf8e.11)', () => {
       const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
       assert.equal(saved.length, 7)
       assert.match(out.at(-1), /^harvest events=11 signatures=7 page=0 bring=0 stepfail=5 park=2 proposable=4 days=7 /)
+    })
+  })
+})
+
+describe('harvest owner priorities (idkcraft-vf8e.22)', () => {
+  const SFD = path.join(__dirname, 'fixtures', 'curriculum-dump-stepfail.txt')
+  const sfRanked = rank(parse(fs.readFileSync(SFD, 'utf8'), ENV), 7)
+  const stayLine = (at, fail, time) =>
+    `${at} IdkBotV2 goal step=rest prev=stay source=goal-fsm fsm=stay why=step-failed fail=${fail} menu=stay,rest facts=${time} logs=none planks=none table=no home=none health=ok food=ok known=none haul=none player=near chest=none gear=none beds=none`
+
+  it('owner tier: castlefetch/mine/castle-feeding above explore and night/arrival', () => {
+    assert.deepEqual(Object.fromEntries(sfRanked.map((c) => [c.reason, c.tier])), {
+      'castlefetch-no-stone': 0,
+      'castlefetch-unreachable': 0,
+      'gather:no-trees': 0,
+      'build:no-planks': 0,
+      'explore:no-progress': 1,
+      'shelter:no-cover': 2,
+      'gohome:cannot-reach': 2,
+    })
+  })
+
+  it('step-fail facts carry day/night; a day-time stay fail is daytime idle (tier 0)', () => {
+    const ev = parse([stayLine('2026-10-20 12:00:01', 'failed:timeout', 'time=day'), stayLine('2026-10-20 13:00:01', 'failed:stuck', 'time=night')].join('\n'), ENV)
+    assert.deepEqual(ev.map((e) => [e.reason, e.time]), [['stay:timeout', 'day'], ['stay:stuck', 'night']])
+    assert.deepEqual(rank(ev, 7).map((c) => [c.reason, c.tier]), [['stay:timeout', 0], ['stay:stuck', 2]])
+  })
+
+  it('day and night stay fails with one reason aggregate separately (codex 02-review)', () => {
+    const ev = parse([
+      stayLine('2026-10-20 12:00:01', 'failed:timeout', 'time=day'),
+      stayLine('2026-10-20 12:30:01', 'failed:timeout', 'time=day'),
+      stayLine('2026-10-20 13:00:01', 'failed:timeout', 'time=night'),
+    ].join('\n'), ENV)
+    assert.deepEqual(rank(ev, 7).map((c) => [c.reason, c.time, c.count, c.tier]),
+      [['stay:timeout', 'day', 2, 0], ['stay:timeout', 'night', 1, 2]])
+  })
+
+  it('the harvest JSON for a prod day lists a proposable castlefetch/mine scenario above night/arrival', () => {
+    withDir((dir) => {
+      assert.equal(main(['harvest', SFD]), 0)
+      const saved = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
+      assert.equal(saved[0].tier, 0)
+      const mine = (c) => (c.family === 'park' && String(c.reason).startsWith('castlefetch-')) ||
+        (c.family === 'step-fail' && ['gather', 'craft', 'build', 'deliver', 'castlefetch'].includes(c.step))
+      const scenarios = saved.filter((c) => c.proposable && mine(c))
+      assert.ok(scenarios.length >= 1, 'no proposable castlefetch/mine scenario')
+      assert.ok(saved.indexOf(scenarios[0]) < saved.findIndex((c) => c.tier === 2), 'owner scenario sorts above night/arrival')
     })
   })
 })
