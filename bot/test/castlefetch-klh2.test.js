@@ -219,6 +219,23 @@ describe('klh2 same-kind tick hop', () => {
     assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'the window still parks the kind')
   })
 
+  it('R2 02-after-fix: a new hop leg inherits tried chests', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
+    const bot = makeBot()
+    const ctx = withChest({ castle: castleState(), home: { chest: { x: SITE.x - 10, y: 64, z: SITE.z - 10 } } })
+    failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
+    // Hop 1 tried the site chest and served nothing.
+    ctx.castleFetch = { kind: 'stone', chestDone: true, hop: true, chestTried: new Set([`${SITE.x - 2},64,${SITE.z - 2}`]) }
+    fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    // The home chest appeared untried: hop 2 is due, and the created leg
+    // skips the tried site chest straight to it.
+    assert.equal(fetch.hopDue(bot, ctx, 'stone'), true, 'untried chest keeps the hop due')
+    fetch(bot, ctx)
+    assert.ok(ctx.castleFetch.chestTried && ctx.castleFetch.chestTried.has(`${SITE.x - 2},64,${SITE.z - 2}`), 'hop 2 inherits hop 1’s tried chest')
+    assert.equal(ctx.castleFetch.chest && ctx.castleFetch.chest.k, `${SITE.x - 10},64,${SITE.z - 10}`, 'hop 2 walks to the untried chest, not back to the empty one')
+  })
+
   it('R1 F1 control: a served hop leg retires the hold', () => {
     castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 2 }; return 'stone-none' }
     const bot = makeBot({ items: [{ name: 'cobblestone', count: 500 }] })

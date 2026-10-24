@@ -2630,6 +2630,17 @@ function castlefetch(bot, ctx, target, state) {
     // the need still short is an unserved hop (partial serve + dry chest),
     // not a served need, and must not retire the site hold.
     if (d.hop) f.hop = true
+    // klh2 R2 02-after-fix minor: a hop leg inherits the hold entry's tried
+    // chests, so a grown candidate set never re-walks an empty chest on the
+    // way to the untried one. Hop legs only: a normal leg must re-check
+    // every chest (owner stock may have landed after the hop tried it).
+    if (d.hop) {
+      try {
+        const kinds = ctx.stepFail && ctx.stepFail.castlefetch && ctx.stepFail.castlefetch.kinds
+        const e = kinds && typeof kinds === 'object' ? kinds[d.kind] : null
+        if (e && typeof e === 'object' && Array.isArray(e.hopTried) && e.hopTried.length > 0) f.chestTried = new Set(e.hopTried)
+      } catch (_) { /* tried best-effort */ }
+    }
     // prkh (revmux 01 core-1): a new leg owns no failure yet — drop any
     // stamp an unrecorded reset left behind, so an unstamped failure below
     // falls back to the kindless hold-all. klh2: the site stamp rides along.
