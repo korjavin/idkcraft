@@ -1579,7 +1579,7 @@ repo, a bead or a PR.
 ## Prod scoreboard (`prod-score.js`, idkcraft-qxql.6)
 
 `node bot/tools/prod-score.js <log.txt> [--day]`: the epic's prod signals
-S1-S9 from a pulled bot2 log, one block per UTC day (`--day`) or for the whole
+S1-S10 from a pulled bot2 log, one block per UTC day (`--day`) or for the whole
 file. Pull the log with the idkcraft-session-review skill recipe
 (`container_name:idkcraft-bot2`, a UTC window), one `YYYY-MM-DD HH:MM:SS <msg>`
 line per message, no bot-name column. It feeds the messages to
@@ -1597,6 +1597,11 @@ line (v2 restart) drops an open leg. Block lines:
 - `holes:` build-stall, build-miss (`castle blocked`), dig slow per hour
   (S7/S8), `skills=<runs>/<bans>` (`skill run` / `skill <name> banned` lines)
 - `deaths` (S9)
+- `choose:` LLM chooser calls (S10, `llm choose` + matching
+  `llm order end text="choose work: ..."` lines): calls, by regime
+  (`castle-stalled` / `no-order`), by outcome (`ok` / `empty` / `budget` /
+  `error` / `timeout`), plan outcomes (`done` / `failed` / `replaced`),
+  median plan `dur`, top-5 chosen first steps and top-5 `need` texts
 
 No baseline file and no PASS/REGRESSION rule: a PR quotes the block for the 24
 h before and the first 24 h after its deploy (min 6 h each side) and the

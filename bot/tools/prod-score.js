@@ -1,7 +1,8 @@
 'use strict'
 
-// Prod scoreboard (idkcraft-qxql.6): S1-S9 of the idkcraft-qxql epic from a
-// pulled bot2 log. Usage: node bot/tools/prod-score.js <log.txt> [--day]
+// Prod scoreboard (idkcraft-qxql.6, S10 idkcraft-qxql.11): S1-S10 of the
+// idkcraft-qxql epic from a pulled bot2 log.
+// Usage: node bot/tools/prod-score.js <log.txt> [--day]
 // Input: one line per log message, 'YYYY-MM-DD HH:MM:SS <msg>' (the
 // idkcraft-session-review recipe output). Reuses castle-replay classify().
 // Prints one block per UTC day (--day) or one for the whole file. No baseline,
@@ -20,7 +21,7 @@ const pct = (n, t) => (t ? Math.round((n / t) * 100) : 0)
 
 function scoreBlock(label, rows, carryN, lastN) {
   resetSeen()
-  const a = { placed: [], ticks: [], share: {}, active: false, legs: 0, stone: 0, blocks: 0, wall: 0, dead: 0, fin: 0, skillRun: 0, skillBan: 0, dig: 0, walk: 0, stall: 0, miss: 0, slow: 0, deaths: 0 }
+  const a = { placed: [], ticks: [], share: {}, active: false, legs: 0, stone: 0, blocks: 0, wall: 0, dead: 0, fin: 0, skillRun: 0, skillBan: 0, dig: 0, walk: 0, stall: 0, miss: 0, slow: 0, deaths: 0, choose: { calls: 0, regime: {}, outcome: {}, steps: {}, needs: {}, done: 0, failed: 0, replaced: 0, durs: [] } }
   if (carryN != null) a.placed.push({ at: rows[0].at, n: carryN }) // a day without a change prints no castle line
   for (const { at, msg } of rows) {
     if (msg.startsWith('spawned as ')) seen.leg = null // v2 restart: an open leg died with the process
@@ -59,6 +60,25 @@ function scoreBlock(label, rows, carryN, lastN) {
     else if (msg.startsWith('skill run ')) a.skillRun++
     else if (/^skill \S+ banned /.test(msg)) a.skillBan++
     else if (msg.startsWith('death health=')) a.deaths++
+    const ch = /^llm choose regime=(\S+) trigger=(\S+) outcome=(\S+) plan=(.+?) need="([^"]*)"/.exec(msg)
+    if (ch) {
+      const c = a.choose
+      c.calls++
+      c.regime[ch[1]] = (c.regime[ch[1]] || 0) + 1
+      c.outcome[ch[3]] = (c.outcome[ch[3]] || 0) + 1
+      if (ch[4] !== '-') { const first = ch[4].split('>')[0]; c.steps[first] = (c.steps[first] || 0) + 1 }
+      if (ch[5]) c.needs[ch[5]] = (c.needs[ch[5]] || 0) + 1
+    }
+    const ce = /^llm order end text="choose work:[^"]*" result=(\S+)/.exec(msg)
+    if (ce) {
+      const c = a.choose
+      const r = ce[1]
+      if (r === 'done') c.done++
+      else if (r.startsWith('failed:')) c.failed++
+      else if (r === 'replaced') c.replaced++
+      const dm = /\bdur=(\d+)s/.exec(msg)
+      if (dm) c.durs.push(+dm[1])
+    }
   }
   const t = rows.length ? rows[rows.length - 1].at - rows[0].at : 0
   const ns = a.placed.map((p) => p.n)
@@ -92,6 +112,12 @@ function scoreBlock(label, rows, carryN, lastN) {
   const cuts = {}
   for (const e of seen.fetchEv) if (e.ev === 'cut') cuts[e.by] = (cuts[e.by] || 0) + 1
   const per = a.blocks > 0 ? (a.wall / a.blocks).toFixed(1) : '-'
+  const c = a.choose
+  const durs = [...c.durs].sort((x, y) => x - y)
+  const med = durs.length ? `${durs[Math.floor(durs.length / 2)]}s` : '-'
+  const ok5 = ['ok', 'empty', 'budget', 'error', 'timeout']
+  const other = Object.entries(c.outcome).reduce((n, [k, v]) => (ok5.includes(k) ? n : n + v), 0)
+  const needs = Object.entries(c.needs).sort((x, y) => y[1] - x[1]).slice(0, 5).map(([k, v]) => `"${k.slice(0, 40)}":${v}`).join('; ') || 'none'
   return [
     `== ${label}`,
     `placed=${min}->${max} (+${ns.length ? max - min : 0})`,
@@ -100,6 +126,7 @@ function scoreBlock(label, rows, carryN, lastN) {
     `walk/dig=${a.dig ? (a.walk / a.dig).toFixed(2) : '-'} dead=${a.dead} top-fail=${top(seen.fails, 3)} flat=${flat} longest=${lstr}`,
     `holes: build-stall=${a.stall} build-miss=${a.miss} dig-slow/h=${t ? (a.slow / (t / 3600000)).toFixed(1) : '-'} skills=${a.skillRun}/${a.skillBan}`,
     `deaths=${a.deaths}`,
+    `choose: calls=${c.calls} castle-stalled=${c.regime['castle-stalled'] || 0} no-order=${c.regime['no-order'] || 0} ok=${c.outcome.ok || 0} empty=${c.outcome.empty || 0} budget=${c.outcome.budget || 0} error=${c.outcome.error || 0} timeout=${c.outcome.timeout || 0} other=${other} done=${c.done} failed=${c.failed} replaced=${c.replaced} med-dur=${med} top-step=${top(c.steps, 5)} top-need=${needs}`,
   ].join('\n')
 }
 

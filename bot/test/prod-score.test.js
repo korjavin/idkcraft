@@ -66,3 +66,41 @@ test('prod-score: --day splits at UTC midnight', () => {
   assert.match(out, /== 2026-10-19\nplaced=100->130 \(\+30\)/)
   assert.match(out, /== 2026-10-20\nplaced=130->150 \(\+20\)/)
 })
+
+test('prod-score: S10 choose column (3 lines per outcome)', () => {
+  const C = (t, msg) => L(t, msg)
+  const log = [
+    // ok x3 (all install a plan, so each gets a matching end line)
+    C('10:00:00', 'llm choose regime=castle-stalled trigger=idle outcome=ok plan=mine stone>gather wood need="stone for walls" why="keep feeding" tokens=10/20 ms=800'),
+    C('10:00:01', 'llm choose regime=no-order trigger=explore outcome=ok plan=gather wood need="wood for chests" why="stockpile low" tokens=10/20 ms=900'),
+    C('10:00:02', 'llm choose regime=castle-stalled trigger=stay outcome=ok plan=mine stone need="stone for walls" why="walls want stone" tokens=10/20 ms=700'),
+    C('10:05:00', 'llm order end text="choose work: castle-stalled" result=done step=2/2 dur=120s'),
+    C('10:06:00', 'llm order end text="choose work: no-order" result=done step=1/1 dur=600s'),
+    C('10:07:00', 'llm order end text="choose work: castle-stalled" result=failed:timeout step=1/2 dur=60s'),
+    C('10:08:00', 'llm order end text="choose work: castle-stalled" result=replaced'),
+    // empty x3 (no plan, no end line)
+    C('10:01:00', 'llm choose regime=castle-stalled trigger=rest outcome=empty plan=- need="a dragon" why="nothing helps" tokens=10/20 ms=800'),
+    C('10:01:01', 'llm choose regime=castle-stalled trigger=idle outcome=empty plan=- need="a crane" why="nothing helps" tokens=10/20 ms=800'),
+    C('10:01:02', 'llm choose regime=no-order trigger=stay outcome=empty plan=- need="a griffin" why="nothing helps" tokens=10/20 ms=800'),
+    // budget x3
+    C('10:02:00', 'llm choose regime=castle-stalled trigger=idle outcome=budget plan=- need="" why="" tokens=0/0 ms=5'),
+    C('10:02:01', 'llm choose regime=castle-stalled trigger=idle outcome=budget plan=- need="" why="" tokens=0/0 ms=5'),
+    C('10:02:02', 'llm choose regime=no-order trigger=explore outcome=budget plan=- need="" why="" tokens=0/0 ms=5'),
+    // error x3
+    C('10:03:00', 'llm choose regime=castle-stalled trigger=idle outcome=error plan=- need="" why="" tokens=0/0 ms=3000'),
+    C('10:03:01', 'llm choose regime=castle-stalled trigger=stay outcome=error plan=- need="" why="" tokens=0/0 ms=3000'),
+    C('10:03:02', 'llm choose regime=no-order trigger=rest outcome=error plan=- need="" why="" tokens=0/0 ms=3000'),
+    // timeout x3
+    C('10:04:00', 'llm choose regime=castle-stalled trigger=idle outcome=timeout plan=- need="" why="" tokens=0/0 ms=15000'),
+    C('10:04:01', 'llm choose regime=no-order trigger=explore outcome=timeout plan=- need="" why="" tokens=0/0 ms=15000'),
+    C('10:04:02', 'llm choose regime=castle-stalled trigger=stay outcome=timeout plan=- need="" why="" tokens=0/0 ms=15000'),
+  ].join('\n')
+  const out = score(log)
+  assert.match(out, /choose: calls=15 castle-stalled=10 no-order=5 ok=3 empty=3 budget=3 error=3 timeout=3 other=0 done=2 failed=1 replaced=1 med-dur=120s/)
+  assert.match(out, /top-step=mine stone:2,gather wood:1/)
+  assert.match(out, /top-need="stone for walls":2/)
+})
+
+test('prod-score: choose line is zeroed without chooser lines', () => {
+  assert.match(score(fixture), /choose: calls=0 .* med-dur=- top-step=none top-need=none/)
+})
