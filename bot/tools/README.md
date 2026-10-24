@@ -852,15 +852,15 @@ node bot/tools/curriculum.js propose <sig>                     # AUTO-<sig>/spot
   corpus arena with the corpus expect/fail tables; shelter → the night dig-in arena. The
   `kind: step` scenario names the `failed:<reason>` and the facts line (the skill header
   `before` names the failed step, after shelter).
-- `propose` for a park reads `no-verdict` (all of them) or `no-vehicle` (a park whose
-  diagnosis names no `castlefetch-*`). The skill would run — `build castle` founds a site
-  and works (revmux 01) — but no in-window outcome judges a fetch (revmux 02): the only
-  terminal chat is `castle done at ` (a whole castle takes hours), the leg lines are
-  console (the order gate only reads chat), and the L1/L2 park chats need 15/45 min. The
-  family unparks when the runner reads console lines or a short castle plan exists. The
-  `plan world dy+2..-2` slice still parses onto each park event, and `sliceToPrep` (codes
-  to fill runs around spawn, like the DUGPIT prep) lands tested for the arena when the
-  verdict path does.
+- `propose` for a park: `castlefetch-unreachable` proposes a short `build castle`
+  vehicle on the shaft-side flat (0l0m) — the `plan world dy+2..-2` slice parsed onto
+  the event rebuilds the prod neighbourhood via `sliceToPrep` (codes to fill runs
+  around the arena base, like the DUGPIT prep). Without a skill the window times out
+  (no `castle done at ` in 300 s) so the gate reads RED; repeated REDs park the
+  signature for a human look. Other `castlefetch-*` read `no-verdict` (revmux 02: no
+  in-window outcome judges them — the leg lines are console while the order gate reads
+  chat, L1/L2 need 15/45 min), and a park whose diagnosis names no `castlefetch-*`
+  reads `no-vehicle`.
 - Scenarios carry `sabotage: null`: prod failed with the full menu. They live in the work dir,
   never in `skill-scenarios.json`, because `skill-loop.test.js` pins that file to corpus spots.
 - Reproduction gate (printed by `propose`; the runner, vf8e.10, gives the verdict): micro-run

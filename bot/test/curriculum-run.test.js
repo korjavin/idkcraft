@@ -239,6 +239,18 @@ describe('curriculum.sh night (idkcraft-vf8e.10)', () => {
     assert.equal(ledger(t)[prop[0].sig].reds, 2)
     assert.match(r.out, /tried=2 green=0 red=2 skipped=2 cost=\$1\.00/)
   })
+
+  it('a castlefetch-unreachable park reports RED through the runner (idkcraft-0l0m)', () => {
+    const t = setup()
+    const SF = path.join(__dirname, 'fixtures', 'curriculum-dump-stepfail.txt')
+    const sig = CURRICULUM.rank(CURRICULUM.parse(fs.readFileSync(SF, 'utf8'), {}), 7)
+      .find((c) => c.reason === 'castlefetch-unreachable').sig
+    const r = runNight(t, { dump: SF, k: 1, gate: 'red', loopMode: 'red', cost: '0.50' })
+    assert.equal(r.rc, 0)
+    assert.match(r.out, new RegExp(`CURRICULUM ${sig} RED: gate:`))
+    assert.match(r.out, new RegExp(`CURRICULUM ${sig} RED attempts=2 cost=\\$0\\.50`))
+    assert.equal(ledger(t)[sig].verdict, 'RED')
+  })
 })
 
 describe('curriculum ledger helpers (idkcraft-vf8e.10)', () => {
