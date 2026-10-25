@@ -131,58 +131,62 @@ services:
       - source: geyser-floodgate
         target: /patches/geyser-floodgate.json
 
-  bot:
-    # Built by CI from ./bot (sibling bead owns bot/**) and pushed to GHCR.
-    # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
-    image: ghcr.io/korjavin/idkcraft:latest
-    container_name: ${BOT_CONTAINER_NAME:-idkcraft-bot}
-    restart: unless-stopped
-    depends_on:
-      mc:
-        condition: service_healthy # itzg image ships an mc-health healthcheck
-    environment:
-      MC_HOST: mc
-      MC_PORT: 25565
-      BOT_USERNAME: ${BOT_USERNAME:-IdkBot}
-      BOT2_USERNAME: ${BOT2_USERNAME:-} # peer name only: ownerOnline excludes it (neuc.45)
-      BOT_FOLLOW: ${BOT_FOLLOW:-}
-      BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
-      BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
-      BOT_SKILLS: ${BOT_SKILLS:-} # vf8e.2: promoted skills, off by default
-      BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
-      BRAIN_URL: ${BRAIN_URL:-}
-      BRAIN_TIMEOUT_MS: ${BRAIN_TIMEOUT_MS:-3000}
-      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      PLANNER: ${PLANNER:-}
-      LLM_MODEL: ${LLM_MODEL:-}
-      LLM_TOKENS_PER_HOUR: ${LLM_TOKENS_PER_HOUR:-}
-      BOT_LLM_ORDERS: ${BOT_LLM_ORDERS:-} # vf8e.6: free-form orders -> one LLM plan (needs ANTHROPIC_API_KEY)
-      GOAL_WATCHDOG_MS: ${GOAL_WATCHDOG_MS:-60000}
-      GOAL_COMMIT_MS: ${GOAL_COMMIT_MS:-120000}
-      GOAL_WATCHDOG_MAX_ROUNDS: ${GOAL_WATCHDOG_MAX_ROUNDS:-6}
-      GOAL_TRAVEL_GRACE_MS: ${GOAL_TRAVEL_GRACE_MS:-90000}
-      GOAL_PLANB_SWITCH_MS: ${GOAL_PLANB_SWITCH_MS:-450000}
-      CASTLE_TIDY_MS: ${CASTLE_TIDY_MS:-3600000}
-      WORKER_NAME: ${WORKER_NAME:-}
-      WORKER_HOST: ${WORKER_HOST:-baritone}
-      WORKER_PORT: ${WORKER_PORT:-7777}
-      # Flat swarm (lhg2): bot is strip 0 of BOT_SWARM_N (empty = whole square).
-      BOT_SWARM_N: ${BOT_SWARM_N:-}
-      BOT_SWARM_PREFIX: ${BOT_SWARM_PREFIX:-IdkSwarm} # helpers never count as players
-    labels:
-      prometheus.scrape: "true"
-      prometheus.port: "9464"
-    networks: [default, monitoring]
-    volumes:
-      # Bot disk memory (idkcraft-hlk): one JSON file per BOT_USERNAME at
-      # /app/memory, surviving restarts and redeploys. Named volume — no
-      # host path, so Portainer git stacks resolve it anywhere.
-      - bot-memory:/app/memory
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
+  # bot: V1 (mineflayer body) DEPRECATED 2026-10-25, zero investment —
+  # the whole service stays commented out (container already stopped in
+  # prod). bot2 (Baritone body) is the only player bot. Uncomment to
+  # resurrect, but do not invest: V1 beads are parked wontfix.
+  #bot:
+  #  # Built by CI from ./bot (sibling bead owns bot/**) and pushed to GHCR.
+  #  # :latest is a placeholder — CI rewrites it to the commit sha on deploy.
+  #  image: ghcr.io/korjavin/idkcraft:latest
+  #  container_name: ${BOT_CONTAINER_NAME:-idkcraft-bot}
+  #  restart: unless-stopped
+  #  depends_on:
+  #    mc:
+  #      condition: service_healthy # itzg image ships an mc-health healthcheck
+  #  environment:
+  #    MC_HOST: mc
+  #    MC_PORT: 25565
+  #    BOT_USERNAME: ${BOT_USERNAME:-IdkBot}
+  #    BOT2_USERNAME: ${BOT2_USERNAME:-} # peer name only: ownerOnline excludes it (neuc.45)
+  #    BOT_FOLLOW: ${BOT_FOLLOW:-}
+  #    BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
+  #    BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
+  #    BOT_SKILLS: ${BOT_SKILLS:-} # vf8e.2: promoted skills, off by default
+  #    BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
+  #    BRAIN_URL: ${BRAIN_URL:-}
+  #    BRAIN_TIMEOUT_MS: ${BRAIN_TIMEOUT_MS:-3000}
+  #    TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+  #    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  #    PLANNER: ${PLANNER:-}
+  #    LLM_MODEL: ${LLM_MODEL:-}
+  #    LLM_TOKENS_PER_HOUR: ${LLM_TOKENS_PER_HOUR:-}
+  #    BOT_LLM_ORDERS: ${BOT_LLM_ORDERS:-} # vf8e.6: free-form orders -> one LLM plan (needs ANTHROPIC_API_KEY)
+  #    GOAL_WATCHDOG_MS: ${GOAL_WATCHDOG_MS:-60000}
+  #    GOAL_COMMIT_MS: ${GOAL_COMMIT_MS:-120000}
+  #    GOAL_WATCHDOG_MAX_ROUNDS: ${GOAL_WATCHDOG_MAX_ROUNDS:-6}
+  #    GOAL_TRAVEL_GRACE_MS: ${GOAL_TRAVEL_GRACE_MS:-90000}
+  #    GOAL_PLANB_SWITCH_MS: ${GOAL_PLANB_SWITCH_MS:-450000}
+  #    CASTLE_TIDY_MS: ${CASTLE_TIDY_MS:-3600000}
+  #    WORKER_NAME: ${WORKER_NAME:-}
+  #    WORKER_HOST: ${WORKER_HOST:-baritone}
+  #    WORKER_PORT: ${WORKER_PORT:-7777}
+  #    # Flat swarm (lhg2): bot is strip 0 of BOT_SWARM_N (empty = whole square).
+  #    BOT_SWARM_N: ${BOT_SWARM_N:-}
+  #    BOT_SWARM_PREFIX: ${BOT_SWARM_PREFIX:-IdkSwarm} # helpers never count as players
+  #  labels:
+  #    prometheus.scrape: "true"
+  #    prometheus.port: "9464"
+  #  networks: [default, monitoring]
+  #  volumes:
+  #    # Bot disk memory (idkcraft-hlk): one JSON file per BOT_USERNAME at
+  #    # /app/memory, surviving restarts and redeploys. Named volume — no
+  #    # host path, so Portainer git stacks resolve it anywhere.
+  #    - bot-memory:/app/memory
+  #  logging:
+  #    driver: json-file
+  #    options:
+  #      max-size: "20m"
 
   baritone:
     # Built by CI from ./baritone and pushed to GHCR.
