@@ -17,6 +17,7 @@
 const stockpileMod = require('./stockpile')
 const woolMod = require('./wool')
 const bedMod = require('./bed')
+const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const { say } = require('./util')
 const { WANT_ORE, WANT_MAX, refuse, done, countDrop, hasPickaxe, tierRefusal, hasEmptyBucket, toWaterFill } = require('./bringbase')
@@ -803,6 +804,11 @@ function smeltTick(bot, ctx, o) {
     return
   }
   if (out === 'failed:no-table') { refuse(bot, ctx, 'need a crafting table'); return }
+  // idkcraft-aq17: the home furnace stands but its walk stalled (a field
+  // smelt far from home) — craft a furnace (8 cobble) and place it nearby
+  // instead of refusing. One attempt: the fallback's own failure, or a
+  // second unreachable, refuses the honest line below.
+  if (out === 'failed:furnace-unreachable' && !o.fieldFurDone) { fieldFurnaceTick(bot, ctx, o, s); return }
   refuse(bot, ctx, `could not smelt ${s.input}: ${String(out).replace(/^failed:/, '')}`)
 }
 
@@ -852,6 +858,104 @@ function materialTick(bot, ctx, o, s) {
   o.smelt = null
   toBlockSub(bot, o, 'stone', 'cobblestone', 8, s.target, 8, 'cobblestone')
   say(bot, subLine(o, '8 cobblestone for a furnace', 'stone'))
+}
+
+// Field furnace fallback (idkcraft-aq17): the home furnace stands but the
+// walk stalled, so the smelt happens here, not home. One attempt per order:
+// 8 cobble (a stone sub when short, the no-cobble shape) funds a crafted
+// furnace (craftany places its own table, the castlefetch field-furnace
+// precedent), which is placed beside the body and adopted as the station
+// for this run only — releaseSmelt (bringbase) restores the home claim when
+// the order ends, so the station never moves. Any step that cannot run
+// (no pick, no craft, no spot, no place) marks the fallback done and
+// refuses the honest unreachable line; so does a second unreachable after
+// an adoption (the placed furnace should have been in reach).
+function fieldFurnaceTick(bot, ctx, o, s) {
+  const fail = () => {
+    o.fieldFurDone = true
+    refuse(bot, ctx, `could not smelt ${s.input}: furnace-unreachable`)
+  }
+  const f = o.fieldFur || (o.fieldFur = { phase: 'cobble', tries: 0 })
+  if (f.flight) return
+  if (f.adopted) { fail(); return } // placed but still unreachable: no second furnace
+  if (!f.said) { f.said = true; say(bot, 'the furnace is out of reach, placing one here') }
+  const pack = packCounts(bot)
+  if (f.phase === 'cobble') {
+    if ((pack.cobblestone || 0) < 8) {
+      const pick = Object.keys(pack).some((n) => n.endsWith('_pickaxe'))
+      if (!pick) {
+        let r = null
+        try { r = deps.craftItem(bot, ctx, ['wooden_pickaxe'], 1) } catch (_) { r = { done: false } }
+        if (r === 'running' || (r && r.done)) return // done: next tick sees the pick
+        fail()
+        return
+      }
+      o.smelt = null
+      toBlockSub(bot, o, 'stone', 'cobblestone', 8, s.target, 8, 'cobblestone')
+      say(bot, subLine(o, '8 cobblestone for a furnace', 'stone'))
+      return
+    }
+    f.phase = 'craft'
+  }
+  if (f.phase === 'craft') {
+    if (!(pack.furnace > 0)) {
+      let r = null
+      try { r = deps.craftItem(bot, ctx, ['furnace'], 1) } catch (_) { r = { done: false } }
+      if (r === 'running') return
+      if (!(r && r.done)) { fail(); return }
+    }
+    f.phase = 'place'
+  }
+  if (!ctx.home) { fail(); return }
+  if (typeof bot.placeBlock !== 'function' || !bot.blockAt) { fail(); return }
+  let item = null
+  try { item = (bot.inventory.items() || []).find((i) => i && i.name === 'furnace') || null } catch (_) { item = null }
+  if (!item) { fail(); return } // crafted but gone: no second attempt
+  const bp = bot.entity && bot.entity.position
+  if (!bp || typeof bp.x !== 'number') return
+  const bx = Math.floor(bp.x)
+  const by = Math.floor(bp.y)
+  const bz = Math.floor(bp.z)
+  let ref = null
+  let at = null
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    let below = null
+    let cell = null
+    try {
+      below = bot.blockAt(new Vec3(bx + dx, by - 1, bz + dz))
+      cell = bot.blockAt(new Vec3(bx + dx, by, bz + dz))
+    } catch (_) { below = null; cell = null }
+    if (!below || !below.position || !below.name || below.name === 'air') continue
+    if (cell && cell.name && cell.name !== 'air') continue
+    ref = below
+    at = { x: below.position.x, y: below.position.y + 1, z: below.position.z }
+    break
+  }
+  if (!ref) { fail(); return }
+  f.flight = true
+  void (async () => {
+    try {
+      if (ctx.bring !== o) return // the order moved on mid-place: leave the furnace standing
+      if (typeof bot.equip === 'function') {
+        try { await bot.equip(item, 'hand') } catch (_) { /* held already: placement decides */ }
+      }
+      await bot.placeBlock(ref, new Vec3(0, 1, 0))
+      let stood = null
+      try { stood = bot.blockAt(new Vec3(at.x, at.y, at.z)) } catch (_) { stood = null }
+      if (!stood || stood.name !== 'furnace') throw new Error('furnace-place')
+      try { ctx.fieldFurAdopt = { adopted: true, saved: ctx.home.furnace } } catch (_) { /* adopt best-effort */ }
+      try { ctx.home.furnace = new Vec3(at.x, at.y, at.z) } catch (_) { /* adopt best-effort */ }
+      f.adopted = true
+      s.started = false // retry the run through the field furnace next tick
+      try { console.log(`bring field furnace placed at ${at.x},${at.y},${at.z} (aq17)`) } catch (_) { /* logging never breaks a smelt */ }
+    } catch (err) {
+      if (ctx.bring !== o) return // ended mid-place: no honest line for a dead order
+      f.tries = (f.tries || 0) + 1
+      if (f.tries >= 3) fail()
+    } finally {
+      f.flight = false
+    }
+  })()
 }
 
 // Chest mats for the craft rung (did.4 colour rule): the product withdraw

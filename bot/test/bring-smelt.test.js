@@ -437,3 +437,90 @@ describe('bring smelt rung (idkcraft-ipn.20)', () => {
     assert.equal(ctx.furnace.result, null)
   })
 })
+
+// Field furnace fallback (idkcraft-aq17): a smelt whose home furnace walk
+// stalls (furnace-unreachable) crafts a furnace from 8 cobble and places it
+// nearby instead of refusing — one attempt, the home claim restored.
+describe('aq17 furnace-unreachable field fallback', () => {
+  const FAR = { x: 200, y: 64, z: 200 }
+  function fieldBot() {
+    const bot = mockBot({
+      items: [{ name: 'raw_iron', count: 3 }, { name: 'stick', count: 2 }, { name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 8 }],
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    bot.placeBlock = async (ref, dir) => {
+      const at = `${ref.position.x + dir.x},${ref.position.y + dir.y},${ref.position.z + dir.z}`
+      bot.cells[at] = 'furnace'
+    }
+    return bot
+  }
+  function withCraft(crafted, body) {
+    const realCraft = itemMod.deps.craftItem
+    itemMod.deps.craftItem = (b, c, names, n) => {
+      crafted.push(names)
+      if (names.includes('furnace')) { b.add('furnace', 1); return { done: true } }
+      return { done: false, line: 'no recipe' }
+    }
+    return Promise.resolve().then(body).finally(() => { itemMod.deps.craftItem = realCraft })
+  }
+
+  it('furnace-unreachable: furnace crafted, placed nearby, smelt completes, claim restored', async () => {
+    const bot = fieldBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const crafted = []
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'done'])
+    await withCraft(crafted, () => withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await drive(bot, ctx)
+    }))
+    assert.deepEqual(crafted, [['furnace']], 'one furnace crafted')
+    const placed = Object.entries(bot.cells).filter(([, n]) => n === 'furnace')
+    assert.equal(placed.length, 1, `one field furnace placed: ${JSON.stringify(placed)}`)
+    assert.deepEqual(ctx.home.furnace, FAR, 'home claim restored')
+    assert.deepEqual(bot.tossCalls, [['iron_ingot', 3]], 'smelt completed and tossed')
+    assert.ok(bot.lines.includes('the furnace is out of reach, placing one here'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('here are 3 iron_ingot'), `lines: ${bot.lines}`)
+    assert.ok(!bot.lines.some((l) => l.includes('could not smelt')), 'never refused')
+  })
+
+  it('a second unreachable after the adoption refuses honestly, no second furnace', async () => {
+    const bot = fieldBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const crafted = []
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'failed:furnace-unreachable'])
+    await withCraft(crafted, () => withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await drive(bot, ctx)
+    }))
+    assert.deepEqual(crafted, [['furnace']], 'crafted once only')
+    assert.equal(bot.lines.at(-1), 'could not smelt raw_iron: furnace-unreachable')
+    assert.equal(ctx.bring, null, 'order refused')
+    assert.deepEqual(ctx.home.furnace, FAR, 'home claim restored on refuse')
+  })
+
+  it('short on cobble: a stone sub funds the furnace first', async () => {
+    const cells = { '0,64,0': 'crafting_table', '3,64,0': 'stone' }
+    for (let x = 4; x < 12; x++) cells[`${x},64,0`] = 'stone'
+    const bot = mockBot({ items: [{ name: 'raw_iron', count: 3 }, { name: 'stick', count: 2 }, { name: 'stone_pickaxe', count: 1 }], cells })
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable'])
+    await withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await bring(bot, ctx, null, {}) // unreachable: short on cobble, morph to stone
+      await bring(bot, ctx, null, {})
+    })
+    const o = ctx.bring
+    assert.equal(o.kind, 'block', 'stone sub opened')
+    assert.equal(o.subFor, 'iron_ingot')
+    assert.ok(bot.lines.some((l) => l.includes('8 cobblestone for a furnace')), `lines: ${bot.lines}`)
+  })
+})
