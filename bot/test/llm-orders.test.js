@@ -793,3 +793,146 @@ describe('llm orders: deterministic do <step> (vf8e.17)', () => {
     }
   })
 })
+
+// Empty-kit build-here (idkcraft-qf05): prod 2026-10-24 planned
+// single-step `build` with an empty pack after a confident flat and failed
+// 3x `plan stopped at build: not possible now`, then gohome walked the bot
+// 20-80 blocks off the flat anchor. installPlan now expands the plan
+// gather-first and sites the home at the anchor (like direct `build here`).
+describe('llm orders: qf05 empty-kit build-here', () => {
+  // Flat dirt world at y<=63, air above: siteFor validates anywhere here.
+  function flatBot(items = []) {
+    const bot = mockBot(items)
+    bot.entity = { position: pos(145, 62, 100), onGround: true }
+    bot.players = { P: { username: 'P', entity: { position: pos(146, 62, 100) } } }
+    bot.blockAt = (v) => (v && v.y <= 63
+      ? { name: 'dirt', boundingBox: 'block' }
+      : { name: 'air', boundingBox: 'empty' })
+    return bot
+  }
+  function fakeTicker() {
+    return { sited: null, setHome(h, o) { this.sited = { h, o } }, work() {} }
+  }
+  const freshFlat = () => ({ outcome: 'done', at: Date.now() - 2 * 60 * 1000, cx: 145, cz: 100, r: 12, level: 62, left: 0 })
+
+  it('single-step build with an empty pack expands gather>craft>equip>build', () => {
+    const bot = flatBot()
+    const ctx = { flatEnd: freshFlat(), flat: null, home: null }
+    const ticker = fakeTicker()
+    const said = []
+    llmOrders.installPlan(bot, ctx, { text: 'bot2 build here', by: 'P', ticker, feed: null },
+      [{ step: 'build', done: 'house up' }], (l) => said.push(l))
+    assert.deepEqual(ctx.llmOrder.steps.map((s) => s.step), ['gather', 'craft', 'equip', 'build'])
+    assert.deepEqual(ctx.llmOrder.steps[3], { step: 'build', done: 'house up' })
+    assert.ok(said.join(' ').includes('plan: gather, then craft, then equip, then build'), String(said))
+  })
+
+  it('a full pack keeps single-step build; a kit-aware plan is untouched', () => {
+    const works = ['gather', 'craft', 'equip', 'build']
+    const full = flatBot([{ name: 'oak_planks', count: 20 }])
+    assert.deepEqual(
+      llmOrders.expandBuildPlan(full, [{ step: 'build', done: '' }], works),
+      [{ step: 'build', done: '' }])
+    const empty = flatBot()
+    assert.deepEqual(
+      llmOrders.expandBuildPlan(empty, [{ step: 'light', done: '' }], works),
+      [{ step: 'light', done: '' }], 'non-build plans are untouched')
+    assert.deepEqual(
+      llmOrders.expandBuildPlan(empty,
+        [{ step: 'flat', count: 8, done: '' }, { step: 'craft', done: '' }, { step: 'equip', done: '' }, { step: 'build', done: '' }], works).map((s) => s.step),
+      ['flat', 'craft', 'equip', 'build'], 'the good shape is untouched')
+    assert.deepEqual(
+      llmOrders.expandBuildPlan(empty, [{ step: 'flat', count: 8, done: '' }, { step: 'build', done: '' }], works).map((s) => s.step),
+      ['flat', 'gather', 'craft', 'equip', 'build'], 'flat>build gains the kit chain')
+    assert.deepEqual(
+      llmOrders.expandBuildPlan(null, [{ step: 'build', done: '' }], works),
+      [{ step: 'build', done: '' }], 'an unreadable pack never rewrites')
+  })
+
+  it('only the kit steps the pack lacks are inserted (r1: no dead equip pin)', () => {
+    const works = ['gather', 'craft', 'equip', 'build']
+    const kitted = flatBot([{ name: 'iron_pickaxe', count: 1 }, { name: 'iron_sword', count: 1 }, { name: 'cobblestone', count: 32 }])
+    assert.deepEqual(
+      llmOrders.expandBuildPlan(kitted, [{ step: 'build', done: '' }], works).map((s) => s.step),
+      ['gather', 'craft', 'build'], 'gear complete: no equip')
+    const logged = flatBot([{ name: 'iron_pickaxe', count: 1 }, { name: 'iron_sword', count: 1 },
+      ...Array.from({ length: 14 }, () => ({ name: 'oak_log', count: 1 }))])
+    assert.deepEqual(
+      llmOrders.expandBuildPlan(logged, [{ step: 'build', done: '' }], works).map((s) => s.step),
+      ['craft', 'build'], 'logs on hand and geared: craft alone')
+    const swordless = flatBot([{ name: 'iron_pickaxe', count: 1 },
+      ...Array.from({ length: 14 }, () => ({ name: 'oak_log', count: 1 }))])
+    assert.deepEqual(
+      llmOrders.expandBuildPlan(swordless, [{ step: 'build', done: '' }], works).map((s) => s.step),
+      ['craft', 'equip', 'build'], 'half gear: equip stays')
+  })
+
+  it("a bring-only plan on negation text never moves the home (r1)", async () => {
+    const bot = flatBot([{ name: 'torch', count: 8 }])
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    const oldHome = { site: { x: 60, y: 62, z: 40 }, built: true }
+    ctx.home = oldHome
+    ctx.flatEnd = freshFlat() // fresh anchor must not site without a build step
+    ctx.flat = null
+    answer = '{"plan":[{"step":"bring","item":"torch","count":1,"done":"torch handed over"}]}'
+    handleChat(bot, ticker, 'P', "don't build here; bring me a torch")
+    await flush()
+    assert.ok(ctx.llmOrder, 'the bring plan installed')
+    assert.deepEqual(ctx.llmOrder.steps.map((s) => s.step), ['bring'])
+    assert.equal(ctx.home, oldHome, 'the real home is kept')
+  })
+
+  it('build-here sites the home at the fresh flat anchor; stale anchor falls back to the speaker', () => {
+    const bot = flatBot()
+    const ctx = { flatEnd: freshFlat(), flat: null, home: null }
+    const ticker = fakeTicker()
+    llmOrders.installPlan(bot, ctx, { text: 'bot2 build here', by: 'P', ticker, feed: null },
+      [{ step: 'build', done: '' }], () => {})
+    assert.ok(ticker.sited && ticker.sited.o && ticker.sited.o.fresh, 're-sited fresh')
+    assert.ok(Math.hypot(ticker.sited.h.site.x - 145, ticker.sited.h.site.z - 100) <= 16,
+      `at the anchor, got ${ticker.sited.h.site.x},${ticker.sited.h.site.z}`)
+
+    const ctx2 = { flatEnd: { ...freshFlat(), at: Date.now() - 60 * 60 * 1000 }, flat: null, home: null }
+    const ticker2 = fakeTicker()
+    llmOrders.installPlan(bot, ctx2, { text: 'bot2 build here', by: 'P', ticker: ticker2, feed: null },
+      [{ step: 'build', done: '' }], () => {})
+    assert.ok(ticker2.sited, 'stale anchor still sites at the speaker')
+    assert.ok(Math.hypot(ticker2.sited.h.site.x - 146, ticker2.sited.h.site.z - 100) <= 16,
+      `near the speaker, got ${ticker2.sited.h.site.x},${ticker2.sited.h.site.z}`)
+  })
+
+  it('no siting without build-here text, or with a far speaker', () => {
+    const bot = flatBot()
+    const ticker = fakeTicker()
+    llmOrders.installPlan(bot, {}, { text: 'light up the house', by: 'P', ticker, feed: null },
+      [{ step: 'light', done: '' }], () => {})
+    assert.equal(ticker.sited, null, 'other orders keep the old home')
+    const far = flatBot()
+    far.players.P.entity.position = pos(900, 62, 900)
+    const ticker2 = fakeTicker()
+    llmOrders.installPlan(far, { flatEnd: freshFlat(), flat: null },
+      { text: 'bot2 build here', by: 'P', ticker: ticker2, feed: null },
+      [{ step: 'build', done: '' }], () => {})
+    assert.equal(ticker2.sited, null, 'a far speaker never yanks the site')
+  })
+
+  it('end to end: bot2 build here plans gather-first at the anchor and the prompt says so', async () => {
+    const bot = flatBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.flatEnd = freshFlat()
+    ctx.flat = null
+    answer = '{"plan":[{"step":"build","done":"house up"}]}'
+    handleChat(bot, ticker, 'P', 'bot2 build here')
+    await flush()
+    assert.equal(calls.length, 1)
+    assert.match(calls[0].system, /gather, craft and equip before build/, 'the model is told to plan kit-first')
+    assert.ok(bot.lines.includes('plan: gather, then craft, then equip, then build'), String(bot.lines))
+    assert.deepEqual(ctx.llmOrder.steps.map((s) => s.step), ['gather', 'craft', 'equip', 'build'])
+    assert.ok(ctx.home && ctx.home.site, 'the home is sited')
+    assert.ok(Math.hypot(ctx.home.site.x - 145, ctx.home.site.z - 100) <= 16,
+      `at the anchor, got ${ctx.home.site.x},${ctx.home.site.z}`)
+    assert.equal(ctx.home.built, false, 'a fresh unbuilt site pins the bot: gohome needs built')
+  })
+})

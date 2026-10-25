@@ -20,6 +20,8 @@
 
 const brain = require('./brain')
 const goal = require('./goal')
+const siteMod = require('./site')
+const { NEED_LOGS } = require('./budget')
 const { situationText } = require('./situation')
 const metrics = require('./metrics')
 const { STEP_EFFECT_TEXT } = require('./plan-consts')
@@ -60,6 +62,7 @@ const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their c
   'Use only the listed step ids, in the order they must run. Item and block names are Minecraft registry ids (torch, water_bucket, iron_ore). ' +
   'Answer JSON only, no prose: {"plan":[{"step":"<id>","item":"<id>","count":<n>,"done":"<what is true when this step is done>"}]}. ' +
   'Leave out item/count when the step takes none. At most ' + PLAN_MAX + ' steps; use the fewest — an order step gathers, mines, crafts and smelts for itself, so never put forage or gather before it. ' +
+  'A build step starts with no batch on hand when the pack holds almost no planks, so plan gather, craft and equip before build then. ' +
   'Answer {"plan":[]} when the line is not an order to the bot or no listed step can do it.'
 
 function enabled(env = process.env) {
@@ -361,14 +364,130 @@ function ask(bot, ctx, req, fetchFn) {
   })()
 }
 
+// qf05: the model answers an empty-kit `build here` with single-step
+// `build`; the pin never starts (MENU.build needs a plank batch on hand)
+// and the plan fails `not possible now` (prod 2026-10-24: 3x after a
+// confident flat, the bot died twice). Expand a trailing build with no
+// kit step before it to the gather>craft>equip>build shape the good
+// plans already use. Pack read only (best-effort, never throws): a chest
+// batch still starts build when the pack holds one, so a full pack is
+// untouched; unregistered kit steps never enter (works filter).
+const KIT_STEPS = ['gather', 'craft', 'equip']
+const BUILD_BATCH = 16 // MENU.build (re)starts on a batch of up to 16 planks
+// Pack counts with the goalFacts rules (goal.js: *_log, *_planks,
+// *_pickaxe, *_sword). Null when unreadable: no rewrite then.
+function packCounts(bot) {
+  try {
+    const n = { planks: 0, logs: 0, pickaxe: 0, sword: 0 }
+    for (const i of bot.inventory.items()) {
+      if (!i || typeof i.name !== 'string') continue
+      const c = i.count | 0
+      if (i.name.endsWith('_planks')) n.planks += c
+      else if (i.name.endsWith('_log')) n.logs += c
+      else if (i.name.endsWith('_pickaxe')) n.pickaxe += c
+      else if (i.name.endsWith('_sword')) n.sword += c
+    }
+    return n
+  } catch (_) {
+    return null
+  }
+}
+function packPlanks(bot) {
+  try {
+    const n = packCounts(bot)
+    return n ? n.planks : null
+  } catch (_) {
+    return null
+  }
+}
+function expandBuildPlan(bot, steps, works) {
+  try {
+    if (!Array.isArray(steps) || !steps.length) return steps
+    const last = steps[steps.length - 1]
+    if (!last || last.step !== 'build') return steps
+    if (steps.slice(0, -1).some((s) => s && KIT_STEPS.includes(s.step))) return steps
+    const pack = packCounts(bot)
+    if (!pack || !(pack.planks < BUILD_BATCH)) return steps
+    const have = Array.isArray(works) ? works : workSteps()
+    // Only the kit steps the pack actually lacks (r1): a geared bot with
+    // logs on hand needs craft alone — an unconditional `equip` re-created
+    // the same not-possible-now (build feasible, the equip pin never
+    // starts, 3 rejected pins). Craft always joins: the expansion only
+    // fires below a batch, so logs still want converting.
+    const want = []
+    if (pack.logs < NEED_LOGS) want.push('gather')
+    want.push('craft')
+    if (!(pack.pickaxe > 0 && pack.sword > 0)) want.push('equip')
+    const chain = want.filter((n) => have.includes(n)).map((step) => ({ step, done: '' }))
+    if (!chain.length) return steps
+    console.log(`llm order build expand pack=log${pack.logs}/plank${pack.planks} plan=${steps.map(label).join('>')}`)
+    return [...steps.slice(0, -1), ...chain, { ...last }]
+  } catch (_) {
+    return steps
+  }
+}
+
+// qf05: an addressed `build here` (`bot2 build here`, no colon) reaches
+// the model as chatter, so the plan's `build` step works the OLD home
+// while the flat anchor — and the speaker — stand elsewhere; the
+// goal-fsm then gohomes to that old built home (prod: 20-80 blocks
+// off-site) and the anchor is lost. Site the order like the direct
+// `build here` handler (chat.js: anchor first, speaker fallback, same
+// range gate) before the plan installs: a fresh unbuilt site also makes
+// gohome infeasible, so the bot stays at the anchor till build starts.
+// Best-effort, never throws; null = kept the old home.
+const BUILD_HERE_RE = /build here/i
+const BUILD_HERE_RANGE = 64 // chat.js BUILD_HERE_RANGE: past it the speaker is last-known, not live
+function siteBuildHere(bot, ctx, req, steps) {
+  try {
+    if (!req || typeof req.text !== 'string' || !BUILD_HERE_RE.test(req.text)) return null
+    // r1: the text match alone false-positives (`don't build here; bring
+    // me a torch` with a bring-only plan re-sited the real home) — only a
+    // plan that actually builds may move the site.
+    if (!Array.isArray(steps) || !steps.some((s) => s && s.step === 'build')) return null
+    const ticker = req.ticker
+    if (!ticker || typeof ticker.setHome !== 'function') return null
+    let speaker = null
+    try {
+      const e = (worker.players(bot) || {})[req.by]
+      if (e && e.entity && e.entity.position && typeof e.entity.position.x === 'number') speaker = e.entity.position
+    } catch (_) { speaker = null }
+    let bp = null
+    try {
+      const p = bot && bot.entity && bot.entity.position
+      if (p && typeof p.x === 'number') bp = p
+    } catch (_) { bp = null }
+    const around = speaker || bp
+    if (!around) return null
+    // Same far-speaker veto as the direct handler (chat.js): stale
+    // coordinates must not yank the site across the map.
+    if (speaker && bp && typeof speaker.y === 'number' && typeof bp.y === 'number' &&
+      Math.hypot(bp.x - speaker.x, bp.y - speaker.y, bp.z - speaker.z) > BUILD_HERE_RANGE) return null
+    const anchor = siteMod.flatAnchorEnd(ctx && ctx.flatEnd, !!(ctx && ctx.flat), around, Date.now())
+    const site = (anchor && goal.siteFor(bot, anchor)) || goal.siteFor(bot, around)
+    if (!site) return null
+    ticker.setHome(site, { fresh: true })
+    const st = (site && site.site) || {}
+    console.log(`llm order build-here site=${st.x},${st.y},${st.z} anchor=${anchor ? 'flat' : 'speaker'}`)
+    return site
+  } catch (_) {
+    return null
+  }
+}
+
 // Install validated plan steps as the running order (vf8e.17): ask()'s
 // tail and the deterministic `do` verb share it. Replaces any running
 // plan and chats the plan line. No model call, no token or metric touch.
 // Steps must already be whitelisted (validatePlan/doPlan): the executive
 // below (startStep/tick/release) reads ORDER_STEPS by id without re-check.
+// qf05: a build-here order sites the home first, and an empty-kit build
+// plan expands gather-first — both best-effort, the installed line chats
+// what actually runs.
 function installPlan(bot, ctx, req, steps, say) {
   if (!ctx || !Array.isArray(steps) || !steps.length) return false
   if (ctx.llmOrder) { release(ctx, ctx.llmOrder); console.log(`llm order end text="${ctx.llmOrder.text}" result=replaced`) }
+  siteBuildHere(bot, ctx, req, steps)
+  steps = expandBuildPlan(bot, steps, workSteps())
   ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false }
   const line = `plan: ${steps.map(label).join(', then ')}`.slice(0, 250)
   if (typeof say === 'function') say(line)
@@ -602,4 +721,4 @@ function statusLine(ctx) {
   return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
 }
 
-module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN }
+module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH }
