@@ -2066,8 +2066,24 @@ async function bring(bot, ctx, target, state) {
       }
       // Trap denial (below-feet/gravity): the stance may change, so look
       // again — but a capped number of times, or find re-picks the same
-      // nearest block forever (walk flips straight back to dig). Never
-      // skipped: a trap is a property of the stance, not the block.
+      // nearest block forever (walk flips straight back to dig).
+      // idkcraft-x16j: a below-feet repeat on the SAME position means the
+      // sidestep episode ran and find re-picked the same exposure anyway —
+      // prod ping-ponged here until the clock died. Skip it instead of
+      // re-striking: the stance episode had its chance, so the next
+      // cheapest candidate wins and the order never ping-pongs. Gravity
+      // stays unskipped (a falling stack is a property of the block, not
+      // the stance), and the strike ceiling below still ends an order whose
+      // every candidate denies.
+      if (bDeny === 'below-feet' && o.belowFeetKey === skipKey(o.pos)) {
+        try { console.log(`below-feet ${o.block} at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)} skipped, taking next (x16j)`) } catch (_) { /* logging never breaks a dig */ }
+        if (!o.skip) o.skip = new Set()
+        o.skip.add(skipKey(o.pos))
+        o.belowFeetKey = null
+        o.pos = null
+        o.phase = 'find'
+        return
+      }
       o.denyStrikes = (o.denyStrikes || 0) + 1
       if (o.denyStrikes > 3) {
         refuse(bot, ctx, o.have > 0
@@ -2080,6 +2096,7 @@ async function bring(bot, ctx, target, state) {
       // stuck.request moves the stance; release() resumes ctx.bring.
       // denyStrikes stays the ceiling.
       if (bDeny === 'below-feet') {
+        o.belowFeetKey = skipKey(o.pos)
         try { stuck.request(bot, ctx, 'bring', o.pos, `bring:${o.pos.x},${o.pos.y},${o.pos.z}`) } catch (_) { /* stuck best-effort */ }
       }
       o.pos = null
@@ -2110,6 +2127,7 @@ async function bring(bot, ctx, target, state) {
       } catch (_) { /* gone or interrupted: pickup anyway */ }
       ctx.digInFlight = false
       o.denyStrikes = 0 // a completed dig is progress: fresh strike budget
+      o.belowFeetKey = null // x16j: progress clears the repeat guard too
       o.phase = 'pickup'
     })()
     return

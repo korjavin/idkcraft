@@ -441,7 +441,12 @@ describe('dig-site wiring (idkcraft-drq)', () => {
     assert.equal(goals.length, 0, 'no walk goal issued yet (walk phase next tick)')
   })
 
-  it('bring re-searches a trap denial 3 times, then refuses', async () => {
+  // idkcraft-x16j: the old shape re-struck the same below-feet position
+  // until the strike ceiling refused — prod ping-ponged exactly here until
+  // the clock died. The repeat denial now skips the position so the next
+  // cheapest candidate wins; with nothing else anywhere (this harness) the
+  // strike ceiling still ends the order on the same honest line.
+  it('bring skips a same-position trap repeat, then refuses when nothing else exists', async () => {
     const bring = require('../src/behaviours/bring')
     let digs = 0
     const lines = []
@@ -463,15 +468,23 @@ describe('dig-site wiring (idkcraft-drq)', () => {
       lastGoalKey: '',
       bring: { phase: 'dig', kind: 'block', pos: { x: 1, y: 62, z: 0 }, block: 'dirt' },
     }
-    for (let i = 0; i < 3; i++) {
-      await bring(bot, ctx, null, {})
-      assert.equal(ctx.bring.phase, 'find', `strike ${i + 1}: search again`)
-      ctx.bring.phase = 'dig' // find re-picks the same nearest block
-      ctx.bring.pos = { x: 1, y: 62, z: 0 }
-    }
     await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'find', 'strike 1: search again')
+    assert.equal(ctx.bring.denyStrikes, 1)
+    ctx.bring.phase = 'dig' // find re-picks the same nearest block
+    ctx.bring.pos = { x: 1, y: 62, z: 0 }
+    await bring(bot, ctx, null, {})
+    assert.equal(ctx.bring.phase, 'find', 'repeat: search again, never re-struck')
+    assert.equal(ctx.bring.denyStrikes, 1, 'the skip burns no strike')
+    assert.ok(ctx.bring.skip && ctx.bring.skip.has('1,62,0'), 'repeat skipped')
+    for (let i = 0; i < 6; i++) {
+      if (!ctx.bring) break
+      ctx.bring.phase = 'dig' // nothing else exists: every re-drive denies again
+      ctx.bring.pos = { x: 1, y: 62, z: 0 }
+      await bring(bot, ctx, null, {})
+    }
     assert.equal(digs, 0, 'trap dirt never dug')
-    assert.equal(ctx.bring, null, '4th denial refuses loudly')
+    assert.equal(ctx.bring, null, 'the strike ceiling still refuses with nothing left')
     assert.ok(lines.some((l) => l.includes('could not reach dirt safely')), lines.join('\n'))
   })
 

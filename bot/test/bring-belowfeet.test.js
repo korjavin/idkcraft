@@ -343,3 +343,89 @@ describe('atl.20 below-feet onto solid (fake-player e2e)', () => {
     assert.ok(!bot.lines.some((l) => l.includes('could not reach iron_ore safely')), 'never refused')
   })
 })
+
+// idkcraft-x16j: the prod ping-pong — the only exposed ore sits below-feet,
+// the sidestep episode runs, find re-picks the same exposure, the clock
+// dies. The second denial of the SAME position skips it instead of
+// re-striking, so the next cheapest candidate wins (one of the bead's three
+// allowed fallbacks; no new movement primitives).
+describe('x16j below-feet repeat skips the position (unit)', () => {
+  // A in the atl.17 shaft, B reachable in the open (no 3-wall trap).
+  const cellsWithNext = () => ({
+    ...shaftCells(),
+    '5,62,0': 'iron_ore',
+  })
+
+  it('re-denial of the same below-feet ore skips it; find commits the next ore', async () => {
+    const bot = shaftBot(cellsWithNext())
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'dig', kind: 'block', name: 'iron_ore', block: 'iron_ore', drop: 'raw_iron', want: 1, have: 0, pos: pos(0, 62, 0) },
+    }
+    const cap = capture()
+    try {
+      await bring(bot, ctx, null, {}) // strike 1: episode, search again
+      assert.equal(ctx.bring.phase, 'find')
+      assert.equal(ctx.bring.denyStrikes, 1)
+      assert.equal(ctx.bring.belowFeetKey, '0,62,0')
+      // The episode did not move the stance: find re-picks A, walk returns.
+      ctx.bring.phase = 'dig'
+      ctx.bring.pos = pos(0, 62, 0)
+      await bring(bot, ctx, null, {}) // strike 2, same position: skip, not strike
+      assert.equal(ctx.bring.phase, 'find', 'repeat searches again')
+      assert.equal(ctx.bring.denyStrikes, 1, 'the skip burns no strike')
+      assert.ok(ctx.bring.skip && ctx.bring.skip.has('0,62,0'), 'A skipped')
+      assert.ok(cap.logged.some((l) => l.includes('skipped, taking next (x16j)')), cap.logged.join('\n'))
+      await bring(bot, ctx, null, {}) // find with A skipped: commits B
+      assert.equal(ctx.bring.phase, 'walk', 'next cheapest candidate wins')
+      assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.y, ctx.bring.pos.z], [5, 62, 0])
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('the next ore digs: no ping-pong, no refusal', async () => {
+    const cellMap = cellsWithNext()
+    const bot = shaftBot(cellMap)
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'dig', kind: 'block', name: 'iron_ore', block: 'iron_ore', drop: 'raw_iron', want: 1, have: 0, pos: pos(0, 62, 0) },
+    }
+    const cap = capture()
+    try {
+      for (let i = 0; i < 12 && ctx.bring && ctx.bring.phase !== 'pickup'; i++) {
+        await bring(bot, ctx, null, {})
+        await new Promise((r) => setImmediate(r))
+        await new Promise((r) => setImmediate(r))
+        const o = ctx.bring
+        // A re-commit walks straight back: simulate the arrival.
+        if (o && o.phase === 'walk' && o.pos && o.pos.x === 0 && o.pos.z === 0) { o.phase = 'dig' }
+      }
+      assert.equal(ctx.bring && ctx.bring.phase, 'pickup', 'B dug, order advances')
+      assert.ok(!('5,62,0' in cellMap), 'B gone from the world')
+      assert.ok('0,62,0' in cellMap, 'denied A never dug')
+      assert.ok(!bot.lines.some((l) => l.includes('could not reach iron_ore safely')), 'never refused')
+      assert.equal(bot.digCalls, 1, 'exactly one dig')
+    } finally {
+      cap.release()
+    }
+  })
+
+  it('a below-feet denial elsewhere still strikes (guard is per-position)', async () => {
+    const bot = shaftBot(shaftCells())
+    const ctx = {
+      lastGoalKey: '',
+      bring: { phase: 'dig', kind: 'block', pos: pos(0, 62, 0), block: 'iron_ore', drop: 'raw_iron', have: 0, belowFeetKey: '9,62,9' },
+    }
+    const cap = capture()
+    try {
+      await bring(bot, ctx, null, {})
+    } finally {
+      cap.release()
+    }
+    assert.equal(ctx.bring.phase, 'find', 'search again after the strike')
+    assert.equal(ctx.bring.denyStrikes, 1, 'a new position strikes, never skips')
+    assert.ok(!ctx.bring.skip, 'nothing skipped')
+    assert.ok(ctx.stuck && ctx.stuck.by === 'bring', 'episode still raised')
+  })
+})
