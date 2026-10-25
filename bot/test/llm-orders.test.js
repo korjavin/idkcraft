@@ -160,6 +160,58 @@ describe('llm orders: flag on', () => {
     assert.ok(bot.lines.includes('done: give me eight torches please'), String(bot.lines))
   })
 
+  it('a work step with count N runs N times, then the plan advances (idkcraft-5v4f)', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"light","count":3}]}'
+    handleChat(bot, ticker, 'P', 'light it three times')
+    await flush()
+    llmOrders.tick(bot, ctx) // plan installs and starts light, count 3
+    assert.equal(ctx.taskPlanStep, 'light')
+    assert.equal(ctx.taskPlanArgs.count, 3)
+    for (let run = 3; run >= 1; run--) {
+      // The goal side runs the pinned step to done (the repeat re-pins
+      // and re-tracks itself, so no re-arm tick is needed).
+      ctx.taskPlanStep = null
+      ctx.step = 'light'
+      ctx.stepStatus = 'running'
+      ctx.stepGen = (ctx.stepGen | 0) + 1
+      llmOrders.tick(bot, ctx) // seen
+      ctx.stepStatus = 'done'
+      llmOrders.tick(bot, ctx) // done -> repeat (re-pinned+tracked) or advance
+      if (run > 1) {
+        assert.ok(ctx.llmOrder, `run ${4 - run}: plan continues`)
+        assert.equal(ctx.llmOrder.steps[0].count, run - 1)
+        assert.equal(ctx.taskPlanArgs.count, run - 1, 're-pin carries the remainder')
+        assert.ok(ctx.llmOrder.cur, 'repeat tracked with the re-pin, not next tick (codex P1)')
+      }
+    }
+    llmOrders.tick(bot, ctx) // steps exhausted -> end done
+    assert.equal(ctx.llmOrder, null, 'plan done after 3 runs')
+    assert.ok(bot.lines.includes('done: light it three times'), String(bot.lines))
+  })
+
+  it('a failed work step never repeats, even with count left', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"light","count":3}]}'
+    handleChat(bot, ticker, 'P', 'light it three times')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    ctx.taskPlanStep = null
+    ctx.step = 'light'
+    ctx.stepStatus = 'running'
+    ctx.stepGen = (ctx.stepGen | 0) + 1
+    llmOrders.tick(bot, ctx)
+    ctx.stepStatus = 'failed:need-torch'
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.llmOrder, null, 'honest stop, no spin')
+    assert.equal(ctx.taskPlanArgs, null)
+    assert.ok(bot.lines.some((l) => l.startsWith('plan stopped at light')), String(bot.lines))
+  })
+
   it('an order step that fails or is cancelled stops the plan, never counts as done', async () => {
     for (const [endIt, why] of [[(bot, ctx) => bringbase.refuse(bot, ctx, 'could not find torch'), 'refused'], [(bot, ctx) => { ctx.bring = null }, 'cancelled']]) {
       const bot = mockBot([{ name: 'torch', count: 8 }])
@@ -655,22 +707,24 @@ describe('llm orders: deterministic do <step> (vf8e.17)', () => {
     assert.equal(ctx.taskPlanStep, 'light')
   })
 
-  it("advancing to the next step drops the previous step's args first", async () => {
+  it("a counted step repeats, then advancing drops its args before the next step", async () => {
     const bot = mockBot()
     const ticker = tickerFor(bot)
     const ctx = bot._tickerCtx
-    answer = '{"plan":[{"step":"light","count":5},{"step":"gather","count":2}]}'
+    answer = '{"plan":[{"step":"light","count":2},{"step":"gather","count":2}]}'
     handleChat(bot, ticker, 'P', 'light then gather')
     await flush()
     llmOrders.tick(bot, ctx) // starts light
-    assert.deepEqual(ctx.taskPlanArgs, { step: 'light', count: 5, by: 'P' })
-    ctx.taskPlanStep = null // decide() consumed it and picked the step
-    ctx.step = 'light'
-    ctx.stepStatus = 'running'
-    ctx.stepGen = (ctx.stepGen | 0) + 1
-    llmOrders.tick(bot, ctx)
-    ctx.stepStatus = 'done'
-    llmOrders.tick(bot, ctx) // light done -> advance, args dropped, nothing started
+    assert.deepEqual(ctx.taskPlanArgs, { step: 'light', count: 2, by: 'P' })
+    for (let run = 2; run >= 1; run--) {
+      ctx.taskPlanStep = null // decide() consumed it and picked the step
+      ctx.step = 'light'
+      ctx.stepStatus = 'running'
+      ctx.stepGen = (ctx.stepGen | 0) + 1
+      llmOrders.tick(bot, ctx) // seen
+      ctx.stepStatus = 'done'
+      llmOrders.tick(bot, ctx) // done -> repeat once, then advance
+    }
     assert.equal(ctx.taskPlanArgs, null, "the previous step's args never reach the next step")
     llmOrders.tick(bot, ctx) // starts gather with its own args
     assert.deepEqual(ctx.taskPlanArgs, { step: 'gather', count: 2, by: 'P' })
