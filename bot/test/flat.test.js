@@ -215,6 +215,40 @@ describe('v8bq sweep order: orderByBot', () => {
   })
 })
 
+describe('v8bq R1 sweep order: orderBumpsByBot', () => {
+  const { orderBumpsByBot } = flat
+  it('works the middle ring first even when the body drifted far', () => {
+    // The hilltop budget only skips far edges honestly when the middle
+    // went flat first — bands beat body distance.
+    const cells = [{ x: 4, z: 0 }, { x: 0, z: 0 }, { x: 2, z: 2 }]
+    assert.deepEqual(
+      orderBumpsByBot(cells, { x: 4, y: 64, z: 0 }, 0, 0).map((c) => [c.x, c.z]),
+      [[0, 0], [2, 2], [4, 0]],
+    )
+  })
+
+  it('breaks band ties nearest-to-bot and sinks deferred cells', () => {
+    const cells = [
+      { x: 0, z: 2 }, // band 2
+      { x: 1, z: 0, def: 1 }, // band 1 but deferred
+      { x: -1, z: 0 }, // band 1, nearer the body
+      { x: 1, z: 1 }, // band 1, farther
+    ]
+    assert.deepEqual(
+      orderBumpsByBot(cells, { x: -4, y: 64, z: 0 }, 0, 0).map((c) => [c.x, c.z]),
+      [[-1, 0], [1, 1], [1, 0], [0, 2]],
+    )
+  })
+
+  it('leaves tiny queues and missing positions alone', () => {
+    assert.deepEqual(orderBumpsByBot([], { x: 0, y: 0, z: 0 }, 0, 0), [])
+    const one = [{ x: 1, z: 2 }]
+    assert.equal(orderBumpsByBot(one, { x: 0, y: 0, z: 0 }, 0, 0), one)
+    const cells = [{ x: 5, z: 5 }, { x: 1, z: 1 }]
+    assert.deepEqual(orderBumpsByBot(cells, null, 0, 0).map((c) => [c.x, c.z]), [[5, 5], [1, 1]])
+  })
+})
+
 describe('flat plan: chooseLevel', () => {
   it('picks the most common walkable height, not min or max', () => {
     const tops = Array(50).fill(63).concat(Array(3).fill(61), [64, 64])

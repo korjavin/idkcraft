@@ -11,7 +11,7 @@ const flat = require('../src/behaviours/flat')
 const {
   detectBumps, isDiggable, DIG_ALLOWLIST, isStructureMarker, structureNear,
   threatenedSelf, threatenedByPlayer, resumeLine, startEpisode, liquidNear, buildSweep,
-  recheckKept, shiftBumpDone,
+  recheckKept, shiftBumpDone, SHAVE_TICKS,
 } = flat
 
 function pos(x, y, z) {
@@ -541,6 +541,44 @@ describe('shave round-1 fixes', () => {
     assert.equal(ctx.flat.bumps[0].pickup, null)
     const nearGoals = bot.calls.goals.filter((g) => g && g.constructor && g.constructor.name === 'GoalNear')
     assert.equal(nearGoals.length, 0, 'v8bq: in-reach dig skips the approach walk too, no pickup tower walk')
+  })
+
+  it('v8bq R1: the middle goes flat first, the budget skips only far rings', async () => {
+    const world = makeWorld({})
+    world.set(0, 64, 0, 'dirt') // middle
+    world.set(4, 64, 0, 'dirt') // far ring
+    const bot = mockBot(world, { items: [] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    bot.entity.position = pos(2, 64, 0) // nearer the far bump than the middle
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // band re-sort: middle head, dig fires
+    assert.deepEqual([ctx.flat.bumps[0].x, ctx.flat.bumps[0].z], [0, 0], 'middle first despite the nearer far bump')
+    bot.entity.position = pos(0, 64, 0) // park on the dug column: instant vacuum
+    for (let i = 0; i < 10 && ctx.flat && ctx.flat.bumps.length === 2; i++) {
+      flat(bot, ctx, null, null); await settle()
+    }
+    assert.equal(world.blockAt({ x: 0, y: 64, z: 0 }).name, 'air', 'middle flat')
+    assert.equal(world.blockAt({ x: 4, y: 64, z: 0 }).name, 'dirt', 'far ring untouched')
+    ctx.flat.shaveTicks = SHAVE_TICKS // fast-forward the clock: hilltop scale
+    for (let i = 0; i < 10 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+    assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 budget')), bot.chats.join('\n'))
+  })
+
+  it('v8bq R1: a drop a block below the feet walks instead of shortcutting', async () => {
+    const world = makeWorld({})
+    world.set(1, 64, 0, 'dirt')
+    const bot = mockBot(world, { items: [] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    flat(bot, ctx, null, null); await settle() // shave: in-reach dig fires, pickup queued
+    assert.ok(ctx.flat.bumps[0].pickup, 'pickup queued')
+    bot.entity.position = pos(1, 65, 0) // a block above the drop: out of the pickup box
+    flat(bot, ctx, null, null); await settle() // no shortcut: the walk is issued
+    assert.ok(ctx.flat.bumps[0].pickup, 'pickup kept, not treated as collected')
+    const walkGoals = bot.calls.goals.filter((g) => g && g.constructor && g.constructor.name === 'GoalNear')
+    assert.equal(walkGoals.length, 1, 'the drop below the feet earns its walk')
   })
 
   it('equips the harvest tool before the shave dig', async () => {

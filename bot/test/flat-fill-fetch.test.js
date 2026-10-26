@@ -205,11 +205,11 @@ describe('xxmn fill-fetch: wide restock', () => {
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 5 holes'), bot.chats.join('\n'))
   })
 
-  it('v8bq: a mid-square restock stages a full pack at the edge, not per-block home trips', async () => {
+  it('v8bq: a mid-square restock stages what the tail needs at the edge, not per-block home trips', async () => {
     const world = makeWorld({})
     world.set(-2, 63, 0, 'air') // 1 hole, empty hand
-    // 64 surface dirt cells past the edge gap: one restock trip banks a
-    // full pack, so the square fills without another fetch.
+    // 64 surface dirt cells past the edge gap: the tail needs 1 cap, so
+    // the restock banks holes + support slack (R1), not a full stack.
     const spots = []
     for (let i = 0; i < 64; i++) spots.push({ x: 20 + (i % 8), y: 63, z: Math.floor(i / 8) })
     const items = []
@@ -230,15 +230,55 @@ describe('xxmn fill-fetch: wide restock', () => {
         prev = ctx.flat.phase
       }
     }
-    assert.equal(resumed, 64, 'fill resumes with a full staged pack')
+    assert.equal(resumed, 1 + flat.RESTOCK_SLACK, 'fill resumes with the tail target, not a full stack')
     assert.equal(ctx.flat, null, 'episode ends')
     assert.equal(world.blockAt({ x: -2, y: 63, z: 0 }).name, 'dirt', 'hole filled')
-    for (const p of spots) assert.equal(world.blockAt(p).name, 'air', `edge dirt dug at ${p.x},${p.z}`)
+    const dug = spots.filter((p) => world.blockAt(p).name === 'air')
+    assert.equal(dug.length, 1 + flat.RESTOCK_SLACK, 'only the tail target dug')
+    assert.equal(world.blockAt({ x: 27, y: 63, z: 7 }).name, 'dirt', 'far edge dirt untouched')
     assert.equal(
       bot.chats.filter((c) => c === 'out of fill blocks, digging dirt').length, 1,
       'one restock episode for the square',
     )
     assert.ok(!bot.chats.some((c) => c.includes('home chest')), 'no home-chest trip mid-square')
+  })
+
+  it('v8bq R1: a usable near pack ends the restock instead of widening', async () => {
+    const world = makeWorld({})
+    for (let x = -4; x <= 3; x++) for (let z = -2; z <= 2; z++) world.set(x, 63, z, 'air') // 40 holes
+    // 35 near dirt cells (past the edge gap): the near round banks them,
+    // then runs dry with a usable pack — no 128-radius trek after that.
+    const spots = []
+    for (let x = 24; x <= 30; x++) for (let z = 0; z <= 4; z++) spots.push({ x, y: 63, z })
+    assert.equal(spots.length, 35)
+    const items = []
+    const bot = mockBot(world, { items, registry: REGISTRY, dirtSpots: spots })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 8, 74, 'P') }
+    let resumed = null
+    let wideAtResume = null
+    let prev = null
+    for (let i = 0; i < 900 && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'fill' && f.holes.length > 0) {
+        const h = f.holes[0]
+        bot.entity.position = pos(h.x + 2, 64, h.z)
+      }
+      flat(bot, ctx, null, null)
+      await settle()
+      if (ctx.flat) {
+        if (prev === 'dig' && ctx.flat.phase === 'fill' && resumed == null) {
+          resumed = flat.countFill(bot)
+          // The second restock (empty-handed, nothing left to dig) may
+          // honestly widen; the first one must not.
+          wideAtResume = cap.lines.filter((l) => l.includes('flat restock round=wide')).length
+        }
+        prev = ctx.flat.phase
+      }
+    }
+    assert.equal(resumed, 35, 'fill resumes with the banked near pack')
+    assert.equal(wideAtResume, 0, 'never widens on a usable pack')
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.ok(bot.chats.some((c) => c.includes('5 left (no fill blocks)')), bot.chats.join('\n'))
   })
 
   it('stays honest when no round banks anything', async () => {
@@ -319,7 +359,8 @@ describe('xxmn fill-fetch: bring round', () => {
     for (let z = -2; z <= 1; z++) {
       assert.equal(world.blockAt({ x: -2, y: 63, z }).name, 'dirt', `hole ${z} filled`)
     }
-    assert.ok(cap.lines.some((l) => l.includes('flat bring got=10')), cap.lines.join('\n'))
+    // R1: the bring withdraws the tail target (4 holes + slack), not a full stack.
+    assert.ok(cap.lines.some((l) => l.includes(`flat bring got=${4 + flat.RESTOCK_SLACK}`)), cap.lines.join('\n'))
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 4 holes'), bot.chats.join('\n'))
   })
 
