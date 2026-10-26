@@ -67,14 +67,16 @@ const facts = (over = {}) => ({
   time: 'day', castle: 'none', player: 'none', home: 'built', known: 'none',
   haul: 'none', surplus: 'no', pinned: 'none', beds: 'both', gear: 'done',
   sword: 1, pickaxe: 1, logs: 0, unlit: 0, torches: 0, rearm: false,
-  maxPlanks: 0, table: 0, door: 0,
+  maxPlanks: 0, table: 0, door: 0, scaffold: 16,
   ...over,
 })
 const dirt8 = [{ name: 'dirt', count: 8 }]
+const dirt20 = [{ name: 'dirt', count: 20 }]
 const junkPair = [{ name: 'rotten_flesh', count: 2 }]
 
 function nearSteve(items = junkPair, extra = {}) {
-  return fakeBot(items, {
+  const withScaffold = [...items, { name: 'dirt', count: 16 }]
+  return fakeBot(withScaffold, {
     players: { Steve: { username: 'Steve', entity: { position: { x: 2, y: 64, z: 0 } } } },
     ...extra,
   })
@@ -86,17 +88,22 @@ function idleCtx(over = {}) {
 
 describe('fun gating (o95q idle-only)', () => {
   it('fires on an idle day with junk or cheap mats after a sustained idle stretch', () => {
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), idleCtx()), true)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), idleCtx()), true)
     assert.equal(goal.MENU.fun.feasible(facts(), nearSteve(), idleCtx()), true)
   })
   it('a fresh or busy body waits: no history, no joke', () => {
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), {}), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), { step: 'rest' }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), { step: 'gather', funIdleSince: Date.now() - fun.FUN_IDLE_MS - 60000 }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), idleCtx({ step: 'gather' })), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), {}), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), { step: 'rest' }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), { step: 'gather', funIdleSince: Date.now() - fun.FUN_IDLE_MS - 60000 }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), idleCtx({ step: 'gather' })), false)
     // An idle stretch accrues: rest then explore keeps the clock.
     const ctx = idleCtx({ step: 'explore' })
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), ctx), true)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), ctx), true)
+    // ...and so does sheltering through the night (R4.1): only productive
+    // work restarts the clock, so idle credit survives dawn.
+    const night = idleCtx({ step: 'shelter' })
+    assert.equal(goal.MENU.fun.feasible(facts({ time: 'day' }), fakeBot(dirt20), night), true)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), idleCtx({ step: 'gohome' })), false)
   })
   it('stays out while useful work is available (home, finds, castle)', () => {
     const b = () => fakeBot(dirt8)
@@ -106,23 +113,30 @@ describe('fun gating (o95q idle-only)', () => {
     assert.equal(goal.MENU.fun.feasible(facts({ castle: 'stone-batch' }), b(), {}), false)
   })
   it('never triggers under order, castle, night, fight, or cooldown', () => {
-    const b = () => fakeBot(dirt8)
-    assert.equal(goal.MENU.fun.feasible(facts({ time: 'night' }), b(), {}), false)
-    assert.equal(goal.MENU.fun.feasible(facts({ time: 'dusk' }), b(), {}), false)
-    assert.equal(goal.MENU.fun.feasible(facts({ castle: 'blocked' }), b(), {}), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { bring: {} }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { lead: {} }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { comehome: {} }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { flat: {} }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { taskPlanStep: 'craft' }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { llmOrder: {} }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { llmAsk: {} }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { paused: true }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { funNext: Date.now() + 60000 }), false)
+    // idleCtx everywhere: only the named gate may bite, never the idle clock.
+    const b = () => fakeBot(dirt20)
+    assert.equal(goal.MENU.fun.feasible(facts({ time: 'night' }), b(), idleCtx()), false)
+    assert.equal(goal.MENU.fun.feasible(facts({ time: 'dusk' }), b(), idleCtx()), false)
+    assert.equal(goal.MENU.fun.feasible(facts({ castle: 'blocked' }), b(), idleCtx()), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { bring: {}, ...idleCtx() }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { lead: {}, ...idleCtx() }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { comehome: {}, ...idleCtx() }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { flat: {}, ...idleCtx() }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { taskPlanStep: 'craft', ...idleCtx() }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { llmOrder: {}, ...idleCtx() }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { llmAsk: {}, ...idleCtx() }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { paused: true, ...idleCtx() }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { ...idleCtx(), funNext: Date.now() + 60000 }), false)
     const hostile = b()
     hostile.entities = { 7: { type: 'mob', name: 'zombie', position: { x: 1, y: 64, z: 0 }, isValid: true } }
     hostile.entity.position.distanceTo = () => 3
-    assert.equal(goal.MENU.fun.feasible(facts(), hostile, {}), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), hostile, idleCtx()), false)
+    // Productive work during cooldown still resets the idle credit.
+    const worked = b()
+    const t0 = Date.now()
+    const wctx = { step: 'gather', funIdleSince: t0 - fun.FUN_IDLE_MS - 60000, funNext: t0 + 3600000 }
+    assert.equal(goal.MENU.fun.feasible(facts(), worked, wctx), false)
+    assert.ok(wctx.funIdleSince >= t0, 'credit restamped despite the cooldown')
   })
   it('stays infeasible with an empty pack or nothing jokeable', () => {
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot([]), {}), false)
@@ -137,7 +151,7 @@ describe('fun gating (o95q idle-only)', () => {
     assert.equal(goal.goalFsm(facts(), ['gather', 'fun', 'rest']), 'gather')
   })
   it('precise idle: joke fires only when nothing productive is available', () => {
-    const idle = () => fakeBot([{ name: 'dirt', count: 8 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }])
+    const idle = () => fakeBot([{ name: 'dirt', count: 20 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }])
     assert.equal(goal.MENU.fun.feasible(facts(), idle(), idleCtx()), true)
     // Every productive alternative vetoes, even with mats on hand —
     // each checked against an already-idle body so only that gate bites.
@@ -146,23 +160,25 @@ describe('fun gating (o95q idle-only)', () => {
       { haul: 'waiting' }, { surplus: 'yes' }, { pinned: 'craft' },
       { beds: 'none' }, { beds: 'one' }, { gear: 'ready' }, { gear: 'want' },
       { sword: 0 }, { pickaxe: 0 }, { rearm: true }, { logs: 14 },
+      { scaffold: 0 },
       { table: 0, maxPlanks: 4, tableOwed: true },
       { door: 0, tablePlaced: true, maxPlanks: 6 },
       { unlit: 3, torches: 2 },
     ]) assert.equal(goal.MENU.fun.feasible(facts(over), idle(), idleCtx()), false, JSON.stringify(over))
   })
   it('a wooden pick plus stone chain belongs to equip, not whimsy', () => {
-    const wood = fakeBot([{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }, { name: 'dirt', count: 8 }])
+    const wood = fakeBot([{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }, { name: 'dirt', count: 16 }])
     assert.equal(fun.upgradeDue(wood), true)
-    assert.equal(goal.MENU.fun.feasible(facts({ pickaxe: 1, sword: 1 }), wood, {}), false)
+    assert.equal(goal.MENU.fun.feasible(facts({ pickaxe: 1, sword: 1 }), wood, idleCtx()), false)
     const stone = fakeBot([{ name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 8 }])
     assert.equal(fun.upgradeDue(stone), false)
   })
   it('FSM mode picks the joke over rest and a nothing-new explore', () => {
     // The R2#1 repro shape, through real goalFacts: built home, no
-    // castle/order/find, full kit, cheap mats — explore starves no more.
+    // castle/order/find, full kit, stacked scaffold, cheap mats —
+    // explore starves no more.
     const b = fakeBot([
-      { name: 'dirt', count: 8 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 },
+      { name: 'dirt', count: 20 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 },
     ])
     const ctx = {
       home: { site: { x: 0, y: 64, z: 0 }, built: true },
@@ -171,8 +187,19 @@ describe('fun gating (o95q idle-only)', () => {
     const f = goal.goalFacts(b, ctx)
     assert.equal(f.home, 'built')
     assert.equal(goal.MENU.fun.feasible(f, b, ctx), true, `why-not=${goal.stepWhy('fun', f, b, ctx, '')}`)
-    const names = ['explore', 'fun', 'rest'].filter((n) => goal.MENU[n].feasible(f, b, ctx))
-    assert.equal(goal.goalFsm(f, names), 'fun')
+    const idleNames = ['explore', 'fun', 'rest'].filter((n) => goal.MENU[n].feasible(f, b, ctx))
+    assert.equal(goal.goalFsm(f, idleNames), 'fun')
+    // ...but a scaffold refill keeps equip in the menu and on top (R4.3:
+    // equip is not hidden from the comparison).
+    const short = fakeBot([
+      { name: 'dirt', count: 10 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 },
+    ])
+    const f2 = goal.goalFacts(short, ctx)
+    assert.equal(goal.MENU.equip.feasible(f2, short, ctx), true, 'equip wants blocks')
+    assert.equal(goal.MENU.fun.feasible(f2, short, ctx), false, 'the joke yields to the refill')
+    const names2 = Object.keys(goal.MENU).filter((n) => goal.MENU[n].feasible(f2, short, ctx))
+    assert.ok(names2.includes('equip'), `menu=${names2.join(',')}`)
+    assert.equal(goal.goalFsm(f2, names2), 'equip')
   })
 })
 
@@ -211,21 +238,21 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
   it('gift act tosses exactly one junk item and chats the gift line', async () => {
     const hadKey = process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_API_KEY
+    const realRandom = Math.random
+    Math.random = () => 0 // avail [gift, folly]: index 0 = gift
     try {
-      const here = { x: 2, y: 64, z: 0 }
-      const b = fakeBot(junkPair, {
-        players: { Steve: { username: 'Steve', entity: { position: here } } },
-      })
+      const b = nearSteve()
       const ctx = {}
       await fun.run(b, ctx)
       assert.deepEqual(b.tossed, ['rotten_flesh'])
       assert.deepEqual(b.tossedCounts, [1], 'one item, the last stays')
-      assert.deepEqual(b.inv, [{ type: 1, name: 'rotten_flesh', count: 1 }])
+      assert.deepEqual(b.inv, [{ type: 1, name: 'rotten_flesh', count: 1 }, { type: 1, name: 'dirt', count: 16 }])
       assert.ok(b.looked.length >= 1, 'faces the recipient before tossing')
       assert.ok(Math.abs(b.looked[0][0] - 2) < 1 && Math.abs(b.looked[0][2] - 0) < 1, `looked=${JSON.stringify(b.looked)}`)
       assert.ok(b.chats.includes(fun.CHAT_GIFT), `chats=${JSON.stringify(b.chats)}`)
       assert.equal(ctx.stepStatus, 'done')
     } finally {
+      Math.random = realRandom
       if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
     }
   })
@@ -366,6 +393,53 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
       if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
     }
   })
+  it('a recipient lost after facing holds the toss: rechecked, not thrown', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    const realRandom = Math.random
+    Math.random = () => 0 // avail [gift, folly]: index 0 = gift
+    try {
+      const b = nearSteve()
+      const origLook = b.lookAt
+      b.lookAt = async (p) => {
+        await origLook(p)
+        delete b.players.Steve // walks out between facing and the toss
+      }
+      const ctx = {}
+      await fun.run(b, ctx)
+      assert.deepEqual(b.tossed, [], 'the toss is rechecked after the facing await')
+      assert.equal(ctx.stepStatus, 'failed:fun-no-recipient')
+    } finally {
+      Math.random = realRandom
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('a preempted walk keeps the replacement movement goal', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    const step = require('../src/step')
+    try {
+      // Steve at 7: the act walks first, so there is a window to preempt.
+      const b = fakeBot(junkPair, {
+        players: { Steve: { username: 'Steve', entity: { position: { x: 7, y: 64, z: 0 } } } },
+      })
+      const replacement = { kind: 'replacement-follow' }
+      b.pathfinder.goal = null
+      b.pathfinder.setGoal = (g) => {
+        b.pathfinder.goal = g
+        b.walkGoals.push('set')
+        step.nextStepGen(b._ctx) // an order lands as the walk starts...
+        b.pathfinder.goal = replacement // ...and the new step takes the body
+      }
+      const ctx = { funApproachMs: 2000 }
+      b._ctx = ctx
+      await fun.run(b, ctx)
+      assert.equal(b.pathfinder.goal, replacement, 'cleanup does not null a goal it did not set')
+      assert.equal(ctx.stepStatus, undefined)
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
   it('a stop ordered mid-equip places nothing', async () => {
     const hadKey = process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_API_KEY
@@ -412,6 +486,28 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
       Math.random = realRandom
       if (OLD_KEY === undefined) delete process.env.ANTHROPIC_API_KEY
       else process.env.ANTHROPIC_API_KEY = OLD_KEY
+    }
+  })
+  it('a body wandering into the ring skips that cell, the joke continues', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      const b = fakeBot(dirt20)
+      const placed = []
+      b.placeBlock = async (ref) => {
+        placed.push([ref.position.x, ref.position.y, ref.position.z])
+        // A cow wanders onto the next ring cell after the first placement.
+        b.entities = { 3: { type: 'animal', name: 'cow', position: { x: 3, y: 64, z: 1 }, isValid: true } }
+      }
+      const ctx = { home: { site: { x: 100, y: 64, z: 100 } } }
+      await fun.run(b, ctx)
+      // (3,1) is skipped outright; (2,0) falls inside the same fat collision
+      // box and is skipped too — the other four land and the joke completes.
+      assert.equal(placed.length, 4, `placed=${JSON.stringify(placed)}`)
+      assert.ok(!placed.some(([x, y, z]) => x === 3 && z === 1), 'the occupied cell is skipped')
+      assert.equal(ctx.stepStatus, 'done')
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
     }
   })
   it('a hostile walking up mid-ring stops the placements', async () => {
