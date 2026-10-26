@@ -20,6 +20,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const bring = require('./bringbase') //oqul.14: progressed() displacement check lives in the leaf
+const harvest = require('./harvest') // qfus: shared harvest predicates live in the leaf
 const { stepDone, stepFailed } = require('../step') // oqul.6: status writes go through step.js
 const { say, clearGoal, issueGoal, botPos, denyReason, protectedReason, inHouseFootprint } = require('./util')
 const { countItems } = require('../perception')
@@ -56,8 +57,16 @@ function isLeafName(name) {
   return typeof name === 'string' && name.endsWith('_leaves')
 }
 
-function isSaplingName(name) {
-  return typeof name === 'string' && (name.endsWith('_sapling') || name === 'mangrove_propagule')
+// Day read for the harvest-coupled planting (idkcraft-qfus): same mirror as
+// bring's self-order gate — day is timeOfDay < 12000, an unreadable clock
+// reads as day (never refuse on a missing clock).
+function isDayBot(bot) {
+  try {
+    const t = bot && bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : NaN
+    return !(t >= 0) ? true : t < 12000
+  } catch (_) {
+    return true
+  }
 }
 
 // Registry leaf names, like logNames in gather.js (v1 path untouched —
@@ -88,7 +97,7 @@ function leafIds(bot) {
 
 function countSaplings(bot) {
   try {
-    return countItems(bot, isSaplingName)
+    return countItems(bot, harvest.isSaplingName)
   } catch (_) {
     return 0
   }
@@ -105,14 +114,47 @@ function cellNameAt(bot, x, y, z) {
   } catch (_) { return null }
 }
 
-// First plantable pack sapling (lc55): like gather's findSapling, a lone
-// dark oak never grows (2x2 only) — planting it wastes the item.
-function firstSapling(bot) {
+// Harvest-coupled replant (idkcraft-qfus): one best-effort planting on a
+// felled stump cell for the gather/bring harvest legs. Same vetted-spot
+// rule as the plant tail (plantSpotOk, stump-flavoured), same pack pick
+// (firstSapling: banked drops ride the pack like any other stock, a lone
+// dark oak never plants), day-only like the step. One attempt, never
+// throws, never writes step status, never retries — a refusal just leaves
+// the stump bare. ownerKey pins body ownership exactly like the gather
+// stump flight and the plant tail: the plant only fires while the goal
+// that dug the stump still owns the body. Resolves true only when the
+// cell reads back as the planted sapling.
+async function replantStump(bot, ctx, stump, ownerKey) {
   try {
-    const items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
-    if (!Array.isArray(items)) return null
-    return items.find((it) => it && isSaplingName(it.name) && it.name !== 'dark_oak_sapling') || null
-  } catch (_) { return null }
+    if (!stump || typeof stump.x !== 'number' || typeof stump.y !== 'number' || typeof stump.z !== 'number') return false
+    if (!isDayBot(bot)) return false
+    if (ctx && ctx.placeInFlight) return false
+    if (typeof bot.equip !== 'function' || typeof bot.placeBlock !== 'function') return false
+    if (ownerKey !== undefined && ctx && ctx.lastGoalKey !== ownerKey) return false
+    const x = Math.floor(stump.x), y = Math.floor(stump.y), z = Math.floor(stump.z)
+    if (!plantSpotOk(bot, ctx, x, y, z, true)) return false
+    const sapling = harvest.firstSapling(bot)
+    if (!sapling) return false
+    let soil = null
+    try { soil = bot.blockAt && bot.blockAt(new Vec3(x, y - 1, z)) } catch (_) { soil = null }
+    if (!soil || !soil.position) return false
+    ctx.placeInFlight = true
+    try {
+      await bot.equip(sapling, 'hand')
+      // The world and the body can change hands across the equip await
+      // (gather's rule): re-pin ownership and the open vetted stump before
+      // placing, or the flight swaps a fighter's sword for a sapling onto
+      // a taken cell.
+      if (ownerKey !== undefined && ctx && ctx.lastGoalKey !== ownerKey) return false
+      if (!plantSpotOk(bot, ctx, x, y, z, true)) return false
+      await bot.placeBlock(soil, new Vec3(0, 1, 0))
+      let landed = null
+      try { landed = bot.blockAt && bot.blockAt(new Vec3(x, y, z)) } catch (_) { landed = null }
+      return !!(landed && landed.name === sapling.name)
+    } finally {
+      try { ctx.placeInFlight = false } catch (_) { /* seam best-effort */ }
+    }
+  } catch (_) { return false }
 }
 
 // Veto predicate for one plant cell (x,y,z: the AIR cell taking the
@@ -121,14 +163,20 @@ function firstSapling(bot) {
 // the shared dig guard on the soil (a tree must never root in чужі
 // builds), wrong soil, missing air or headroom. Pure reads, no writes,
 // so goal.js and the tests share it.
-function plantSpotOk(bot, ctx, x, y, z) {
+// A harvest stump (idkcraft-qfus, stump=true) plants under its own
+// standing trunk: the harvest legs plant the base cell while the crown is
+// still up for the next digs, so a WOODY cell directly above waives the
+// headroom — stone, leaves or anything else still refuses, and every
+// other veto reads exactly as before.
+function plantSpotOk(bot, ctx, x, y, z, stump) {
   try {
     const bp = botPos(bot)
     if (!bp) return false
     if (typeof bot.blockAt !== 'function') return false
     if (Math.hypot(x - bp.x, z - bp.z) > PLANT_RADIUS) return false
     if (cellNameAt(bot, x, y, z) !== 'air') return false
-    if (cellNameAt(bot, x, y + 1, z) !== 'air') return false
+    const above = cellNameAt(bot, x, y + 1, z)
+    if (above !== 'air' && !(stump && harvest.isWoodyName(above))) return false
     // Never the cells the body stands in: the server refuses a block into
     // its own hitbox, so the veto saves the walk.
     if (Math.floor(bp.x) === x && Math.floor(bp.z) === z &&
@@ -210,7 +258,7 @@ function pickPlantSpot(bot, ctx, tried, rnd) {
 // across ticks; the tail still samples the full disc.
 function plantFeasible(bot, ctx) {
   try {
-    if (!firstSapling(bot)) return false
+    if (!harvest.firstSapling(bot)) return false
     const bp = botPos(bot)
     if (!bp) return false
     const x0 = Math.floor(bp.x)
@@ -676,7 +724,7 @@ function reforest(bot, ctx, target, state) {
       finish(bot, ctx, r, plantEndReason(r))
       return
     }
-    if (!firstSapling(bot)) {
+    if (!harvest.firstSapling(bot)) {
       finish(bot, ctx, r, plantEndReason(r))
       return
     }
@@ -697,7 +745,7 @@ function reforest(bot, ctx, target, state) {
       r.phase = 'plant-pick'
       return
     }
-    if (!firstSapling(bot)) {
+    if (!harvest.firstSapling(bot)) {
       finish(bot, ctx, r, plantEndReason(r))
       return
     }
@@ -767,7 +815,7 @@ function reforest(bot, ctx, target, state) {
       plantSkip(ctx, r, s)
       return
     }
-    const sapling = firstSapling(bot)
+    const sapling = harvest.firstSapling(bot)
     if (!sapling) {
       finish(bot, ctx, r, plantEndReason(r))
       return
@@ -844,10 +892,11 @@ module.exports.leafNames = leafNames
 module.exports.leafIds = leafIds
 module.exports.isLeafName = isLeafName
 module.exports.isPersistentLeaf = isPersistentLeaf
-module.exports.isSaplingName = isSaplingName
+module.exports.isSaplingName = harvest.isSaplingName // leaf alias (test-pinned)
 module.exports.countSaplings = countSaplings
 module.exports.leavesNear = leavesNear
 module.exports.beatablesNear = beatablesNear
+module.exports.replantStump = replantStump
 module.exports.reforestFeasible = reforestFeasible
 module.exports.REFOREST_RADIUS = REFOREST_RADIUS
 module.exports.REFOREST_MAX_LEAVES = REFOREST_MAX_LEAVES
@@ -858,7 +907,7 @@ module.exports.UNREACHABLE_STRIKES = UNREACHABLE_STRIKES
 module.exports.WALK_RANGE = WALK_RANGE
 module.exports.PICKUP_RANGE = PICKUP_RANGE
 module.exports.LOW_DY = LOW_DY
-module.exports.firstSapling = firstSapling
+module.exports.firstSapling = harvest.firstSapling // leaf alias (test-pinned)
 module.exports.plantSpotOk = plantSpotOk
 module.exports.surfaceSpotAt = surfaceSpotAt
 module.exports.pickPlantSpot = pickPlantSpot

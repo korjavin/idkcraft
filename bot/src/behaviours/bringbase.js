@@ -9,6 +9,7 @@
 // perception/metrics/util/wool/stuck.
 
 const { countItems } = require('../perception')
+const harvest = require('./harvest') // qfus: woody/deficit predicates live in the leaf
 const metrics = require('../metrics')
 const { say, clearGoal } = require('./util')
 const woolMod = require('./wool')
@@ -59,6 +60,21 @@ function stopGuidedWork(ctx) {
   return true
 }
 
+// qfus: a woody harvest that felled more than it replanted speaks the
+// shortfall once, on the terminal line — never silent, never a spin.
+// Sub-orders stay silent (the parent craft owns the summary); non-woody
+// orders never felled anything.
+function sayHarvestDeficit(bot, o) {
+  try {
+    if (!o || o.subFor || o.deficitSaid) return
+    if (!o.block || !harvest.isWoodyName(o.block)) return
+    const line = harvest.harvestDeficitLine(bot, o.felled | 0, o.replanted | 0)
+    if (!line) return
+    o.deficitSaid = true
+    say(bot, line)
+  } catch (_) { /* deficit best-effort */ }
+}
+
 function refuse(bot, ctx, line) {
   // A failed sub-order (did.4) reads as the parent's honest line: the gap
   // that never filled, not the leg that failed it.
@@ -67,6 +83,7 @@ function refuse(bot, ctx, line) {
     ? `could not get ${o.subWant} ${o.subWord} for the ${o.subFor} in time`
     : null
   say(bot, sub || line)
+  sayHarvestDeficit(bot, o)
   metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
   stopGuidedWork(ctx)
   ctx.bringEnd = { outcome: 'refused', at: Date.now() } // vf8e.6: an LLM plan reads how its bring ended
@@ -76,6 +93,7 @@ function refuse(bot, ctx, line) {
 }
 
 function done(bot, ctx) {
+  sayHarvestDeficit(bot, ctx && ctx.bring)
   metrics.bring.inc({ outcome: 'done', kind: bringKind(ctx) })
   stopGuidedWork(ctx)
   ctx.bringEnd = { outcome: 'done', at: Date.now() }

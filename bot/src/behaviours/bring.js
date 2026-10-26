@@ -2152,6 +2152,7 @@ async function bring(bot, ctx, target, state) {
       return
     }
     ctx.digInFlight = true
+    const digOwnerKey = ctx.lastGoalKey // qfus: the replant only fires under this goal
     void (async () => {
       try {
         // Ore dug with the sword in hand drops nothing: hold the best
@@ -2165,6 +2166,43 @@ async function bring(bot, ctx, target, state) {
       o.denyStrikes = 0 // a completed dig is progress: fresh strike budget
       o.belowFeetKey = null // x16j: progress clears the repeat guard too
       o.phase = 'pickup'
+      // qfus: a felled tree bottom replants from the pack — one stump-cell
+      // attempt through reforest's vetted rule, counted per order column
+      // (upper logs of the same trunk share it), so felled counts trees.
+      // The shortfall speaks once on the order's terminal line (bringbase).
+      try {
+        const dp = block && block.position
+        if (dp && typeof dp.x === 'number') {
+          const at = (x, y, z) => {
+            try {
+              const b = bot.blockAt && bot.blockAt(new Vec3(Math.floor(x), Math.floor(y), Math.floor(z)))
+              return b && b.name
+            } catch (_) { return null }
+          }
+          const { isWoodyName, isSaplingName } = require('./harvest')
+          const { replantStump } = require('./reforest')
+          const below = at(dp.x, dp.y - 1, dp.z)
+          if (isWoodyName(block.name) && at(dp.x, dp.y, dp.z) === 'air' &&
+            below && below !== 'air' && !isWoodyName(below) && !isSaplingName(below)) {
+            const col = `${Math.floor(dp.x)},${Math.floor(dp.z)}`
+            if (!o.stumped) o.stumped = new Set()
+            if (!o.stumped.has(col)) {
+              o.stumped.add(col)
+              o.felled = (o.felled | 0) + 1
+              if (!o.plantInFlight) {
+                o.plantInFlight = true
+                const stump = { x: Math.floor(dp.x), y: Math.floor(dp.y), z: Math.floor(dp.z) }
+                void (async () => {
+                  try {
+                    if (await replantStump(bot, ctx, stump, digOwnerKey)) o.replanted = (o.replanted | 0) + 1
+                  } catch (_) { /* one attempt: the stump stays bare */ }
+                  o.plantInFlight = false
+                })().catch(() => { o.plantInFlight = false })
+              }
+            }
+          }
+        }
+      } catch (_) { /* replant best-effort */ }
     })()
     return
   }
