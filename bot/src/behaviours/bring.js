@@ -98,6 +98,33 @@ function skipKey(p) {
   return `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
 }
 
+// Re-validate below-feet skips when live candidates run out (x16j r1):
+// the walls that made a cell a trap may be gone (mined since) while the
+// skip persists, stranding a now-safe ore. Drops skips whose cell still
+// holds the order's block and now passes the guard; returns true when any
+// dropped so the caller searches again. Protected/submerged skips are
+// never re-validated (a build or water is a property of the block).
+function revalidateBelowFeetSkips(bot, ctx, o) {
+  const bf = o && o.bfSkip
+  if (!bf || typeof bf.has !== 'function' || bf.size === 0) return false
+  let dropped = false
+  for (const key of [...bf]) {
+    const xyz = String(key).split(',').map(Number)
+    if (xyz.length !== 3 || xyz.some((n) => !Number.isFinite(n))) continue
+    let block = null
+    try { block = bot.blockAt && bot.blockAt(new Vec3(xyz[0], xyz[1], xyz[2])) } catch (_) { block = null }
+    if (!block || block.name !== o.block) continue // gone or changed: keep skipped, find never surfaces it
+    let deny = 'protected'
+    try { deny = denyReason(bot, block, ctx) } catch (_) { deny = 'protected' }
+    if (deny !== null) continue // still a trap or a build: stays skipped
+    bf.delete(key)
+    try { if (o.skip && typeof o.skip.delete === 'function') o.skip.delete(key) } catch (_) { /* skip best-effort */ }
+    dropped = true
+    try { console.log(`below-feet ${o.block} at ${key.replace(/,/g, ' ')} safe again, unskipped (x16j r1)`) } catch (_) { /* logging never breaks a find */ }
+  }
+  return dropped
+}
+
 // The item order rungs (did.1 normalisation, resolver, pack plan, honest
 // stub) live in bringitem.js (did.4 split); the dispatcher reaches them as
 // itemMod.*.
@@ -676,8 +703,9 @@ function refuseExhausted(bot, ctx, o) {
   const n = o.searchLegs ? o.searchLegs.legs : 0
   const kind = o.kind || 'block'
   const woolNone = o.color ? `no ${o.color} sheep` : 'no sheep'
+  const skippedKnown = o.bfSkip && o.bfSkip.size > 0 // x16j r1: excluded-known ore reads unsafe, never absent
   const base = o.have > 0 ? `only got ${o.have} ${o.drop}`
-    : (o.sawSubmerged && kind !== 'food' && kind !== 'wool') ? `could not reach ${o.name} safely`
+    : ((o.sawSubmerged || skippedKnown) && kind !== 'food' && kind !== 'wool') ? `could not reach ${o.name} safely`
     : (kind === 'food' ? 'no animals' : kind === 'wool' ? woolNone : `no ${o.name}`)
   // A gated shaft seen along the way (chv): the legs proved no diggable
   // vein exists nearby, so the refusal names the known deep one.
@@ -743,9 +771,11 @@ function canBringName(bot, name) {
 }
 
 // Empty-find refusal text: when every candidate was skipped as a dive,
-// 'no X' would be a lie — the ore is there, just unreachable safely.
+// 'no X' would be a lie — the ore is there, just unreachable safely. The
+// same holds for below-feet skips (x16j r1): excluded-known ore must read
+// as unsafe, never as absent.
 function emptyRefusal(o, edge) {
-  if (o && o.sawSubmerged && !(o.have > 0)) return `could not reach ${o.name} safely`
+  if (o && !(o.have > 0) && (o.sawSubmerged || (o.bfSkip && o.bfSkip.size > 0))) return `could not reach ${o.name} safely`
   return `no ${o.name} within ${edge} blocks (loaded area)`
 }
 
@@ -1796,6 +1826,10 @@ async function bring(bot, ctx, target, state) {
     let res = null
     for (;;) {
       res = findNearest(bot, o.name, null, o.skip ? ((q) => o.skip.has(skipKey(q))) : null)
+      // x16j r1: nothing unskipped in range — a skipped below-feet cell may
+      // have become safe since (its walls mined). Re-validate before giving
+      // up so a freed ore is found instead of stranded.
+      if (!res && revalidateBelowFeetSkips(bot, ctx, o)) continue
       if (res === 'unknown' || !res || !res.position) break
       let pre = null
       try {
@@ -2079,6 +2113,8 @@ async function bring(bot, ctx, target, state) {
         try { console.log(`below-feet ${o.block} at ${Math.floor(o.pos.x)} ${Math.floor(o.pos.y)} ${Math.floor(o.pos.z)} skipped, taking next (x16j)`) } catch (_) { /* logging never breaks a dig */ }
         if (!o.skip) o.skip = new Set()
         o.skip.add(skipKey(o.pos))
+        if (!o.bfSkip) o.bfSkip = new Set() // below-feet origin: re-validated when candidates run out (r1)
+        o.bfSkip.add(skipKey(o.pos))
         o.belowFeetKey = null
         o.pos = null
         o.phase = 'find'
