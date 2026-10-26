@@ -111,16 +111,33 @@ function mockBot({ names = {}, items = [], syncHits = null, stubbornDig = false,
   return bot
 }
 
-// NEED_LOGS trunks at x0+2i: 3-log oaks with a leaf each (the tree-guard
-// shape), dirt under every base so the stump takes a sapling.
+// NEED_LOGS trunks at x0+2i: 3-log oaks with leaves over the crown (the
+// tree-guard shape) on a dirt floor, so a replant lands beside the stump
+// it replaces (qfus R1 never plants under standing wood).
+// The atop leaf matters: once the lower logs are dug, the trunk-remnant
+// rule only still reads the top as a tree with leaves above, so tops stay
+// diggable while the trunk comes down.
 function grove(names, x0, n = NEED_LOGS) {
+  for (let x = x0 - 2; x < x0 + 2 * n + 2; x++) {
+    for (let z = -2; z <= 2; z++) names[`${x},63,${z}`] = 'dirt'
+  }
   for (let i = 0; i < n; i++) {
     const x = x0 + 2 * i
-    names[`${x},63,0`] = 'dirt'
     names[`${x},64,0`] = 'oak_log'
     names[`${x},65,0`] = 'oak_log'
     names[`${x},66,0`] = 'oak_log'
+    names[`${x},67,0`] = 'oak_leaves'
     names[`${x + 1},66,0`] = 'oak_leaves'
+  }
+  // A worked stand is loaded ground: dirt under, air around. Unset cells
+  // read as unloaded (null) in the mock, which the vetted-spot rule
+  // correctly refuses — so the stand's air is modelled, not assumed.
+  for (let x = x0 - 3; x < x0 + 2 * n + 3; x++) {
+    for (let y = 64; y <= 68; y++) {
+      for (let z = -3; z <= 3; z++) {
+        if (names[`${x},${y},${z}`] === undefined) names[`${x},${y},${z}`] = 'air'
+      }
+    }
   }
 }
 
@@ -131,7 +148,18 @@ function homeCtx(over = {}) {
 // Drive the step; teleport along gather walks, hold still for digs/pickup.
 // onTick runs after gather each tick, before dig landings flush (lets a
 // test steal the body mid-dig like fight does).
-async function drive(bot, ctx, maxTicks = 1200, onTick = null) {
+// Prod bodies fall: pickup walks onto the dug column (GoalBlock) and
+// gravity drops the body back down the hollow trunk, so the next find
+// sees bottoms first again. The mock teleports, so it settles the same
+// way — otherwise it floats at canopy level, digs tops first, and the
+// trunk-remnant rule protects the bottoms below (a mock-only pathology).
+function settle(names, x, y, z) {
+  let yy = y
+  while (yy > 1 && names[`${x},${yy - 1},${z}`] === 'air') yy--
+  return pos(x, yy, z)
+}
+
+async function drive(bot, ctx, names, maxTicks = 1200, onTick = null) {
   for (let i = 0; i < maxTicks; i++) {
     gather(bot, ctx, null, {})
     if (onTick) onTick(bot, ctx, i)
@@ -140,9 +168,10 @@ async function drive(bot, ctx, maxTicks = 1200, onTick = null) {
     if (!g || g.final) break
     const gk = ctx.lastGoalKey
     if (gk.startsWith('gather:') && g.pos) {
-      bot.entity.position = pos(g.pos.x + 1, g.pos.y, g.pos.z)
+      bot.entity.position = settle(names, g.pos.x + 1, g.pos.y, g.pos.z)
       bot._moving = false
-    } else if (gk.startsWith('gather-pickup')) {
+    } else if (gk.startsWith('gather-pickup') && g.pos) {
+      bot.entity.position = settle(names, g.pos.x, g.pos.y, g.pos.z)
       bot._moving = false
     }
   }
@@ -150,17 +179,20 @@ async function drive(bot, ctx, maxTicks = 1200, onTick = null) {
 }
 
 describe('gather replant (idkcraft-gc3j)', () => {
-  it('replants one pack sapling on the first home stump and hauls to done', async () => {
+  it('replants one pack sapling beside the first home stump and hauls to done', async () => {
     const names = {}
     grove(names, 10)
     const bot = mockBot({ names, items: [{ name: 'oak_sapling', count: 1 }] })
     const ctx = homeCtx()
-    await drive(bot, ctx)
+    await drive(bot, ctx, names)
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(ctx.gather.replanted, 1)
     assert.equal(bot.placeCalls, 1)
     assert.equal(bot.equipped, 'oak_sapling')
-    assert.equal(names['10,64,0'], 'oak_sapling')
+    // qfus R1: never under the standing trunk — the clear neighbour west
+    // of the stump (the body stands east of it) takes the sapling.
+    assert.equal(names['10,64,0'], 'air')
+    assert.equal(names['9,64,0'], 'oak_sapling')
   })
 
   it('no sapling in pack: no placement, still done', async () => {
@@ -168,22 +200,29 @@ describe('gather replant (idkcraft-gc3j)', () => {
     grove(names, 10)
     const bot = mockBot({ names, items: [] })
     const ctx = homeCtx()
-    await drive(bot, ctx)
+    await drive(bot, ctx, names)
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.placeCalls, 0)
     assert.equal(ctx.gather.replanted || 0, 0)
   })
 
-  it('a memory-routed stand past 160 is chopped but never replanted', async () => {
+  it('a memory-routed stand past 160 is chopped AND replanted (qfus R1: no radius gate)', async () => {
     const names = {}
     grove(names, 200)
     const bot = mockBot({ names, items: [{ name: 'oak_sapling', count: 1 }] })
     const ctx = homeCtx()
     resources.noteSpots(ctx, [{ x: 200, y: 64, z: 0, name: 'oak_log' }], Date.now())
-    await drive(bot, ctx)
+    await drive(bot, ctx, names)
     assert.equal(ctx.stepStatus, 'done')
-    assert.equal(bot.placeCalls, 0)
-    assert.equal(bot._items.filter((it) => it.name === 'oak_sapling').length, 1)
+    // The first felled bottom plants (one sapling, one attempt) wherever
+    // it falls — the count never depended on the radius, now neither does
+    // the plant. Never under the standing trunk: the clear neighbour west
+    // of the stump (the body stands east of it) takes the sapling.
+    assert.equal(bot.placeCalls, 1)
+    assert.equal(ctx.gather.replanted, 1)
+    assert.equal(bot._items.filter((it) => it.name === 'oak_sapling').length, 0)
+    assert.equal(names['200,64,0'], 'air')
+    assert.equal(names['199,64,0'], 'oak_sapling')
     // revmux 01 core-1: the hike out taught the stand — an un-dug upper
     // log of the last trunk is in memory now (arrival scan) ...
     assert.ok(memCells(ctx).has('224,65,0'), `stand noted: ${[...memCells(ctx)].slice(0, 8)}`)
@@ -210,7 +249,7 @@ describe('gather replant (idkcraft-gc3j)', () => {
       { x: 150, y: 64, z: 0, name: 'oak_log' },
       { x: 200, y: 64, z: 0, name: 'oak_log' },
     ], Date.now())
-    await drive(bot, ctx)
+    await drive(bot, ctx, names)
     assert.equal(ctx.stepStatus, 'done')
     assert.ok(!memCells(ctx).has('150,64,0'), 'stale far cell forgotten')
   })
@@ -223,7 +262,7 @@ describe('gather replant (idkcraft-gc3j)', () => {
     const bot = mockBot({ names, items: [{ name: 'oak_sapling', count: 1 }] })
     const ctx = homeCtx()
     let steals = 0
-    await drive(bot, ctx, 1200, (b, c) => {
+    await drive(bot, ctx, names, 1200, (b, c) => {
       // Every landing happens under a foreign goal: no landing may plant.
       if (c.gather && c.digInFlight) {
         steals++
@@ -247,16 +286,17 @@ describe('gather replant (idkcraft-gc3j)', () => {
       onEquip: async () => { ctx.lastGoalKey = 'fight:zombie' },
     })
     const ctx = homeCtx()
-    await drive(bot, ctx)
+    await drive(bot, ctx, names)
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.equipped, 'oak_sapling')
     assert.equal(bot.placeCalls, 0)
   })
 
-  it('a filled stump across the equip await aborts the place', async () => {
+  it('a filled stump across the equip await is skipped, the neighbour takes it', async () => {
     // revmux verify #610 (codex P2): dirt lands in the first stump hole
     // between equip and place — the air re-check refuses onto the taken
-    // cell (later stumps still plant, so the haul is unaffected).
+    // cell, so the flight takes the next clear neighbour instead (later
+    // stumps still plant, so the haul is unaffected).
     const names = {}
     grove(names, 10)
     let poisoned = false
@@ -271,9 +311,10 @@ describe('gather replant (idkcraft-gc3j)', () => {
       },
     })
     const ctx = homeCtx()
-    await drive(bot, ctx)
+    await drive(bot, ctx, names)
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(names['10,64,0'], 'dirt', 'taken stump never planted over')
+    assert.equal(names['9,64,0'], 'oak_sapling', 'clear neighbour takes it instead')
     assert.ok(poisoned, 'poison fired')
   })
 
@@ -284,7 +325,7 @@ describe('gather replant (idkcraft-gc3j)', () => {
     grove(names, 10)
     const bot = mockBot({ names, items: [{ name: 'dark_oak_sapling', count: 3 }] })
     const ctx = homeCtx()
-    await drive(bot, ctx)
+    await drive(bot, ctx, names)
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.placeCalls, 0)
     assert.equal(bot._items.filter((it) => it.name === 'dark_oak_sapling').length, 1)
@@ -298,7 +339,7 @@ describe('gather replant (idkcraft-gc3j)', () => {
       items: [{ name: 'dark_oak_sapling', count: 1 }, { name: 'oak_sapling', count: 1 }],
     })
     const ctx = homeCtx()
-    await drive(bot, ctx)
+    await drive(bot, ctx, names)
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.equipped, 'oak_sapling')
     assert.ok(bot._items.some((it) => it.name === 'dark_oak_sapling'), 'dark oak stays packed')
@@ -311,7 +352,7 @@ describe('gather replant (idkcraft-gc3j)', () => {
     grove(names, 10)
     const bot = mockBot({ names, items: [{ name: 'oak_sapling', count: 3 }], stubbornDig: true })
     const ctx = homeCtx()
-    await drive(bot, ctx, 60)
+    await drive(bot, ctx, names, 60)
     assert.ok(bot.digCalls > 0, 'digs happened')
     assert.equal(bot.placeCalls, 0)
   })
@@ -343,7 +384,7 @@ describe('gather replant (idkcraft-gc3j)', () => {
     try {
       // Three ticks only: start, complete+note+commit — asserted before any
       // walk arrival scan can add its own cells.
-      await drive(bot, ctx, 3)
+      await drive(bot, ctx, names, 3)
     } finally {
       farCtl.start = null
       farCtl.step = null
@@ -364,7 +405,7 @@ describe('gather replant (idkcraft-gc3j)', () => {
         interior: { min: { x: 8, y: 63, z: -2 }, max: { x: 40, y: 67, z: 2 } },
       },
     })
-    await drive(bot, ctx)
+    await drive(bot, ctx, names)
     assert.equal(ctx.stepStatus, 'done')
     assert.equal(bot.placeCalls, 0)
   })
@@ -381,7 +422,7 @@ describe('gather replant (idkcraft-gc3j)', () => {
     )
     const ctx = homeCtx()
     resources.noteSpots(ctx, [{ x: 200, y: 64, z: 0, name: 'oak_log' }], Date.now())
-    await drive(bot, ctx, 60)
+    await drive(bot, ctx, names, 60)
     assert.equal(bot.digCalls, 0)
     assert.equal(bot.placeCalls, 0)
     assert.ok(!memCells(ctx).has('200,64,0'), 'protected cell forgotten on deny')
