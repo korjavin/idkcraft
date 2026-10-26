@@ -11,7 +11,11 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fun = require('../src/behaviours/fun')
 const goal = require('../src/goal')
-const { STEP_ORDER } = require('../src/plan-consts')
+const consts = require('../src/plan-consts')
+const { STEP_ORDER } = consts
+// Explicit registration (o95q R1.5): goal.js stays untouched — the step
+// joins the menu through registerInto, in prod called by src/index.js.
+fun.registerInto(goal, consts)
 
 const OLD_KEY = process.env.ANTHROPIC_API_KEY
 
@@ -59,16 +63,29 @@ const facts = (over = {}) => ({ time: 'day', castle: 'none', player: 'none', hom
 const dirt8 = [{ name: 'dirt', count: 8 }]
 const junkPair = [{ name: 'rotten_flesh', count: 2 }]
 
+function nearSteve(items = junkPair, extra = {}) {
+  return fakeBot(items, {
+    players: { Steve: { username: 'Steve', entity: { position: { x: 2, y: 64, z: 0 } } } },
+    ...extra,
+  })
+}
+
 describe('fun gating (o95q idle-only)', () => {
   it('fires on an idle day with junk or cheap mats', () => {
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), {}), true)
-    assert.equal(goal.MENU.fun.feasible(facts({ player: 'seen' }), fakeBot(junkPair), {}), true)
+    assert.equal(goal.MENU.fun.feasible(facts(), nearSteve(), {}), true)
+  })
+  it('stays out while useful work is available (home, finds, castle)', () => {
+    const b = () => fakeBot(dirt8)
+    assert.equal(goal.MENU.fun.feasible(facts({ home: 'site' }), b(), {}), false)
+    assert.equal(goal.MENU.fun.feasible(facts({ home: 'none' }), b(), {}), false)
+    assert.equal(goal.MENU.fun.feasible({ ...facts(), known: 'near' }, b(), {}), false)
+    assert.equal(goal.MENU.fun.feasible(facts({ castle: 'stone-batch' }), b(), {}), false)
   })
   it('never triggers under order, castle, night, fight, or cooldown', () => {
     const b = () => fakeBot(dirt8)
     assert.equal(goal.MENU.fun.feasible(facts({ time: 'night' }), b(), {}), false)
     assert.equal(goal.MENU.fun.feasible(facts({ time: 'dusk' }), b(), {}), false)
-    assert.equal(goal.MENU.fun.feasible(facts({ castle: 'stone-batch' }), b(), {}), false)
     assert.equal(goal.MENU.fun.feasible(facts({ castle: 'blocked' }), b(), {}), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { bring: {} }), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { lead: {} }), false)
@@ -183,6 +200,105 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
       if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
     }
   })
+  it('the folly ring keeps off the castle footprint and yard', () => {
+    const castle = require('../src/castle')
+    const b = fakeBot(dirt8)
+    b.entity.position.x = 20
+    b.entity.position.z = 20
+    const ctx = {
+      home: { site: { x: 100, y: 64, z: 100 } },
+      castle: { site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: castle.BLUEPRINT_VERSION, phase: 'complete' },
+    }
+    assert.equal(fun.findFollySpot(b, ctx), null, 'every candidate cell sits in the footprint')
+  })
+  it('an unseen or distant player gets no blind toss: delivery defers', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      // Online but unseen (no entity): the only pack is junk, so no act
+      // runs — the joke backs off instead of tossing at its own feet.
+      const far = fakeBot(junkPair, { players: { Steve: { username: 'Steve' } } })
+      assert.deepEqual(fun.availActs(far, {}), [])
+      const ctxFar = {}
+      await fun.run(far, ctxFar)
+      assert.equal(ctxFar.stepStatus, 'failed:fun-no-mats')
+      assert.deepEqual(far.tossed, [])
+      // Visible but 100 blocks out: same deferral.
+      const away = fakeBot(junkPair, {
+        players: { Steve: { username: 'Steve', entity: { position: { x: 100, y: 64, z: 100 } } } },
+      })
+      assert.deepEqual(fun.availActs(away, {}), [])
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('a stop ordered mid-equip places nothing', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      const step = require('../src/step')
+      const b = fakeBot(dirt8)
+      const placed = []
+      b.equip = async () => {
+        step.nextStepGen(b._ctx) // stop lands while the hand fills
+      }
+      b.placeBlock = async (ref) => { placed.push(ref) }
+      const ctx = { home: { site: { x: 100, y: 64, z: 100 } } }
+      b._ctx = ctx
+      await fun.run(b, ctx) // folly is the only act: no dice involved
+      assert.deepEqual(placed, [])
+      assert.equal(ctx.stepStatus, undefined, 'no completion leaks into the replacement step')
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('combat cancels the joke: threat after the model answer aborts', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const realRandom = Math.random
+    Math.random = () => 0.999 // avail [folly, improv]: last = improv
+    const brain = require('../src/brain')
+    const orig = brain.llmCall
+    brain.llmCall = async () => ({
+      usage: { input_tokens: 10, output_tokens: 5 },
+      content: [{ type: 'text', text: '{"kind":"build","block":"dirt","count":7}' }],
+    })
+    try {
+      const b = fakeBot(dirt8)
+      const placed = []
+      b.placeBlock = async (ref) => { placed.push(ref) }
+      const ctx = { home: { site: { x: 100, y: 64, z: 100 } } }
+      b.entities = { 9: { type: 'mob', name: 'zombie', position: { x: 1, y: 64, z: 0 }, isValid: true } }
+      b.entity.position.distanceTo = () => 3
+      await fun.run(b, ctx)
+      assert.equal(ctx.stepStatus, 'failed:fun-threat')
+      assert.deepEqual(placed, [], 'the ring never starts under combat')
+      assert.deepEqual(b.chats, [])
+    } finally {
+      brain.llmCall = orig
+      Math.random = realRandom
+      if (OLD_KEY === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = OLD_KEY
+    }
+  })
+  it('a hostile walking up mid-ring stops the placements', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      const b = fakeBot(dirt8)
+      const placed = []
+      b.placeBlock = async (ref) => {
+        placed.push(ref)
+        b.entities = { 9: { type: 'mob', name: 'zombie', position: { x: 1, y: 64, z: 0 }, isValid: true } }
+        b.entity.position.distanceTo = () => 3
+      }
+      const ctx = { home: { site: { x: 100, y: 64, z: 100 } } }
+      await fun.run(b, ctx) // folly is the only act: no dice involved
+      assert.equal(placed.length, 1, 'one block lands before the threat reads')
+      assert.equal(ctx.stepStatus, 'failed:fun-threat')
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
   it('folly act places at most 7 cheap blocks and chats the folly line', async () => {
     const hadKey = process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_API_KEY
@@ -191,8 +307,8 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
       const placed = []
       b.placeBlock = async (ref) => { placed.push([ref.position.x, ref.position.y, ref.position.z]) }
       const ctx = { home: { site: { x: 100, y: 64, z: 100 } } }
-      // No player, no key: folly is the only available act, no dice involved.
-      assert.deepEqual(fun.availActs(b, { player: 'none' }, ctx), ['folly'])
+      // No recipient, no key: folly is the only available act, no dice involved.
+      assert.deepEqual(fun.availActs(b, ctx), ['folly'])
       await fun.run(b, ctx, null, {})
       assert.ok(placed.length >= 1 && placed.length <= fun.MAX_PLACE, `placed=${placed.length}`)
       assert.deepEqual(new Set(placed.map((p) => p.join(','))).size, placed.length, 'no double-place')
@@ -265,9 +381,11 @@ describe('fun LLM-offer validator (o95q allowlist)', () => {
       content: [{ type: 'text', text: '{"kind":"gift","item":"dirt"}' }],
     })
     try {
-      const b = fakeBot(dirt8)
+      // avail [gift, folly, improv], r=0.75 -> improv; the gift executes
+      // because Steve is in sight.
+      const b = nearSteve(dirt8)
       const ctx = { home: { site: { x: 100, y: 64, z: 100 } } }
-      await fun.run(b, ctx, null, {})
+      await fun.run(b, ctx)
       assert.equal(ctx.stepStatus, 'done')
       assert.deepEqual(b.tossed, ['dirt'])
       assert.ok(b.chats.includes(fun.CHAT_IMPROV), `chats=${JSON.stringify(b.chats)}`)

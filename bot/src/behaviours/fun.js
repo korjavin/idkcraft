@@ -33,10 +33,15 @@ const CHAT_GIFT = 'a gift for you. you\'re welcome.'
 const CHAT_FOLLY = 'do not ask what it means. it is art.'
 const CHAT_IMPROV = 'the voices said you would like this. enjoy.'
 // New failed: reasons (S5): fun-no-mats, fun-no-ground, fun-no-gift,
-// fun-place, fun-toss. All mean "the joke did not land, back off".
+// fun-toss, fun-place, fun-threat. All mean "the joke did not land, back
+// off" — fun-threat is the combat abort (the body belongs to fight).
 const LLM_TIMEOUT_MS = 20000
 const TOSS_TIMEOUT_MS = 5000
 const PACK_SUMMARY_MAX = 300
+// A gift needs a recipient in sight: a visible roster player within this
+// many blocks. Unseen-but-online (far, no entity) or distant players get
+// no toss at the bot's own feet — delivery defers to a later joke.
+const GIFT_RANGE = 8
 
 function itemsOf(bot) {
   try {
@@ -83,6 +88,24 @@ function improvReady(bot) {
   }
 }
 
+// Visible recipient for the gift (o95q R1.2): the nearest roster player
+// with a tracked entity inside GIFT_RANGE. Null when nobody is in sight
+// — the act is not offered then, never tossed blind.
+function giftRecipient(bot) {
+  try {
+    const ps = require('./deliver').playerStatus(bot)
+    if (!ps || ps.level !== 'near' || !ps.entity || !ps.entity.position) return null
+    const bp = botPos(bot)
+    if (!bp) return null
+    const p = ps.entity.position
+    const d = Math.hypot(bp.x - p.x, bp.y - (p.y || bp.y), bp.z - p.z)
+    if (!(d <= GIFT_RANGE)) return null
+    return { name: ps.name || 'you', dist: d }
+  } catch (_) {
+    return null
+  }
+}
+
 // A hostile close by means the body belongs to fight, not whimsy
 // (dispatch preemption is the real guard; this keeps the menu honest).
 function threatNear(bot) {
@@ -110,22 +133,26 @@ function castleQuiet(facts) {
   return w === 'none' || w === 'done' || w === 'parked' || w == null
 }
 
-// Idle-only gate (brief): day, no castle, no order/pin/lease on the body,
-// nobody fighting nearby, cooldown elapsed, and at least one act is
-// materially possible with the pack on hand.
+// Idle-only gate (o95q R1.5): day, no castle, no order/pin/lease on the
+// body, nobody fighting nearby, cooldown elapsed, no useful work on the
+// table (an unfinished house or a remembered find owns the body — a model
+// brain would otherwise take the joke over gather), and at least one act
+// materially possible with the pack on hand. The menu never offers the
+// joke while busy, so goal.js needs no rule for it.
 function funFeasible(facts, bot, ctx, now = Date.now()) {
   try {
     if (!facts || facts.time !== 'day') return false
     if (!castleQuiet(facts)) return false
+    if (facts.home !== 'built') return false
+    if (facts.known === 'near') return false
     if (!ctx || ctx.paused) return false
     if (ctx.bring || ctx.lead || ctx.comehome || ctx.gocastle) return false
     if (ctx.flat && !ctx.flat.parked) return false
     if (ctx.taskPlanStep || ctx.llmOrder || ctx.llmAsk) return false
     if (threatNear(bot)) return false
     if (typeof ctx.funNext === 'number' && now < ctx.funNext) return false
-    if (facts.player !== 'none' && giftPick(bot)) return true
+    if (giftRecipient(bot) && giftPick(bot)) return true
     if (follyMats(bot)) return true
-    if (facts.player === 'none' && giftPick(bot) && improvReady(bot)) return true
     if (improvReady(bot) && (giftPick(bot) || follyMats(bot))) return true
     return false
   } catch (_) {
@@ -144,19 +171,20 @@ function stampFun(ctx, now = Date.now(), rand = Math.random) {
 }
 
 // Which acts can run now; the trigger rolls one (brief: the model picks
-// for improv, the dice picks between the acts).
-function availActs(bot, facts, ctx) {
+// for improv, the dice picks between the acts). The gift needs a visible
+// recipient in range — never offered blind.
+function availActs(bot, ctx) {
   const acts = []
   try {
-    if (facts && facts.player !== 'none' && giftPick(bot)) acts.push('gift')
+    if (giftRecipient(bot) && giftPick(bot)) acts.push('gift')
     if (follyMats(bot)) acts.push('folly')
     if (improvReady(bot) && (giftPick(bot) || follyMats(bot))) acts.push('improv')
   } catch (_) { /* available best-effort */ }
   return acts
 }
 
-function pickAct(bot, facts, ctx, rand = Math.random) {
-  const acts = availActs(bot, facts, ctx)
+function pickAct(bot, ctx, rand = Math.random) {
+  const acts = availActs(bot, ctx)
   if (!acts.length) return null
   const r = typeof rand === 'function' ? rand() : rand
   return acts[Math.floor((typeof r === 'number' ? r : 0) * acts.length) % acts.length]
@@ -234,6 +262,19 @@ function findFollySpot(bot, ctx) {
     const home = ctx && ctx.home && ctx.home.site
     const flat = ctx && ctx.flatEnd
     const castle = ctx && ctx.castle && ctx.castle.site
+    // A 10-block radius cannot guard a 31x27 castle: check every ring
+    // cell against the footprint and yard predicates of every known
+    // castle (o95q R1.1). The old centre-distance veto below stays as a
+    // cheap pre-filter only.
+    const castleKept = (x, y, z) => {
+      try {
+        const castleMod = require('../castle')
+        return !!castleMod.anyCastle(ctx, (st) =>
+          castleMod.inFootprint(st, { x, y, z }) || castleMod.yardRing(st, { x, y, z }))
+      } catch (_) {
+        return false
+      }
+    }
     const farFrom = (x, z, s, r) => {
       if (!s || typeof s !== 'object') return true
       // Flat squares (ctx.flat episode / ctx.flatEnd) are { cx, cz, r },
@@ -276,6 +317,7 @@ function findFollySpot(bot, ctx) {
         if (y !== gy) { ok = false; break } // one flat ring, no cliffs
         const top = blockNameAt(bot, new Vec3(x, y, z))
         if (top !== 'air' && top !== 'cave_air' && top !== 'void_air') { ok = false; break }
+        if (castleKept(x, y, z)) { ok = false; break } // never build on a castle
         cells.push(new Vec3(x, y, z))
       }
       if (ok && cells.length) return { cells }
@@ -319,13 +361,25 @@ async function equipHand(bot, name) {
   }
 }
 
+// Combat cancels the joke: a hostile walking up mid-ring owns the body,
+// so every placement revalidates safety, not just the generation.
+function safeToJoke(bot) {
+  try {
+    return !threatNear(bot)
+  } catch (_) {
+    return false
+  }
+}
+
 async function placeCells(bot, ctx, gen, block, cells) {
   let placed = 0
   for (const cell of cells) {
     if (stale(ctx, gen)) return { placed, fail: 'preempted' }
+    if (!safeToJoke(bot)) return { placed, fail: 'threat' }
     try {
       if (!equipHandSyncCheck(bot, block)) return { placed, fail: 'no-mats' }
       const okEq = await equipHand(bot, block)
+      if (stale(ctx, gen)) return { placed, fail: 'preempted' } // stop ordered mid-equip: place nothing
       if (!okEq) return { placed, fail: 'no-mats' }
       let ref = null
       try { ref = bot.blockAt && bot.blockAt(new Vec3(cell.x, cell.y - 1, cell.z)) } catch (_) { ref = null }
@@ -367,7 +421,7 @@ async function doFolly(bot, ctx, gen, block, count, line) {
   if (stale(ctx, gen)) return // preempted mid-ring: stop placing, write nothing
   if (fail) {
     try { console.log(`fun folly placed=${placed}/${cells.length} fail=${fail}`) } catch (_) { /* log best-effort */ }
-    stepFailed(ctx, fail === 'no-mats' ? 'fun-no-mats' : fail === 'no-ground' ? 'fun-no-ground' : 'fun-place', gen)
+    stepFailed(ctx, fail === 'no-mats' ? 'fun-no-mats' : fail === 'no-ground' ? 'fun-no-ground' : fail === 'threat' ? 'fun-threat' : 'fun-place', gen)
     return
   }
   try { chatStep(bot, ctx, line) } catch (_) { /* chat best-effort */ }
@@ -413,9 +467,14 @@ async function doImprov(bot, ctx, gen, fetchFn) {
   const v = validateFunOffer(offer, packCounts(bot))
   try { console.log(`fun improv offer=${JSON.stringify(offer).slice(0, 160)} verdict=${v.ok ? v.act : v.why}`) } catch (_) { /* log best-effort */ }
   if (stale(ctx, gen)) return // preempted mid-ask: offer dies with the step
+  // Combat cancels the joke (o95q R1.4): the generation check above does
+  // not move on a fight dispatch, so revalidate safety before executing.
+  if (!safeToJoke(bot)) { stepFailed(ctx, 'fun-threat', gen); return }
   if (!v.ok) { stepDone(ctx, gen); return } // honest skip on anything outside the allowlist
-  if (v.act === 'gift') await doGift(bot, ctx, gen, v.item, CHAT_IMPROV)
-  else await doFolly(bot, ctx, gen, v.block, v.count, CHAT_IMPROV)
+  if (v.act === 'gift') {
+    if (!giftRecipient(bot)) { stepDone(ctx, gen); return } // recipient left: no blind toss
+    await doGift(bot, ctx, gen, v.item, CHAT_IMPROV)
+  } else await doFolly(bot, ctx, gen, v.block, v.count, CHAT_IMPROV)
 }
 
 // Fire-and-forget like every other behaviour (applyDecision does not
@@ -428,18 +487,7 @@ async function run(bot, ctx) {
   ctx.funRun = gen
   stampFun(ctx)
   try {
-    // Same player source the feasible gate reads (goalFacts via
-    // deliver.playerStatus): the dispatch target/state is null in idle
-    // work mode, so reconstructing from it would misread the act.
-    const facts = { player: 'none', castle: 'none' }
-    try {
-      const ps = require('./deliver').playerStatus(bot)
-      if (ps && (ps.level === 'near' || ps.level === 'far')) facts.player = ps.level
-    } catch (_) { /* player best-effort */ }
-    try {
-      if (ctx.castle && ctx.castle.site && !ctx.castle.parked && ctx.castle.phase !== 'complete') facts.castle = 'ordered'
-    } catch (_) { /* castle best-effort */ }
-    const act = pickAct(bot, facts, ctx, Math.random)
+    const act = pickAct(bot, ctx, Math.random)
     if (act === 'gift') {
       const g = giftPick(bot)
       if (!g) stepFailed(ctx, 'fun-no-gift', gen)
@@ -479,3 +527,40 @@ module.exports.CHAT_GIFT = CHAT_GIFT
 module.exports.CHAT_FOLLY = CHAT_FOLLY
 module.exports.CHAT_IMPROV = CHAT_IMPROV
 module.exports.FUN_SYSTEM = FUN_SYSTEM
+module.exports.giftRecipient = giftRecipient
+module.exports.safeToJoke = safeToJoke
+module.exports.registerInto = registerInto
+
+// Registration (o95q R1.5): bot/src/goal.js stays byte-identical —
+// the step joins the goal menu through here, on the skills.js registerStep
+// precedent: a MENU entry whose feasible IS funFeasible, a STEP_ORDER slot
+// just above rest (any work step outranks it; the feasible gate itself
+// refuses while useful work is available), plus the criteria and effect
+// text the model menus read. Modules are injected (never required: a
+// behaviour requiring the arbiter is a forbidden edge, lazy or not).
+// Idempotent: call from the ticker entry and from tests.
+const FUN_VERB = 'having a little fun'
+const FUN_CRITERION = 'time is day, the house stands finished, nothing known nearby, and the pack holds junk or cheap mats: play a tiny rare joke'
+const FUN_EFFECT = 'plays a tiny rare joke with junk or cheap mats'
+function registerInto(goalMod, constsMod) {
+  try {
+    if (!goalMod || !goalMod.MENU || goalMod.MENU.fun) return
+    goalMod.MENU.fun = {
+      feasible: (facts, bot, ctx) => {
+        try {
+          return funFeasible(facts, bot, ctx)
+        } catch (_) {
+          return false
+        }
+      },
+      chat: () => 'on my own: a little something for morale',
+      verb: FUN_VERB,
+    }
+    if (constsMod && Array.isArray(constsMod.STEP_ORDER) && !constsMod.STEP_ORDER.includes('fun')) {
+      const at = constsMod.STEP_ORDER.indexOf('rest')
+      constsMod.STEP_ORDER.splice(at < 0 ? constsMod.STEP_ORDER.length : at, 0, 'fun')
+    }
+    if (goalMod.STEP_CRITERIA) goalMod.STEP_CRITERIA.fun = FUN_CRITERION
+    if (constsMod && constsMod.STEP_EFFECT_TEXT) constsMod.STEP_EFFECT_TEXT.fun = FUN_EFFECT
+  } catch (_) { /* registration best-effort */ }
+}

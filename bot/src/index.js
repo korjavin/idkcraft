@@ -43,6 +43,11 @@ const recover = require('./behaviours/recover')
 // The table lives in behaviours/index.js (oqul.3); same object re-exported.
 const { BEHAVIOURS } = require('./behaviours/index')
 const skills = require('./skills')
+// Idle whimsy (idkcraft-o95q R1.5): the fun step self-registers into the
+// goal menu from its own module (registerInto injects the modules, so no
+// behaviour->arbiter require edge). The ticker entry is the one prod
+// path that always runs it.
+try { require('./behaviours/fun').registerInto(goal, require('./plan-consts')) } catch (_) { /* whimsy best-effort */ }
 
 // Poll cadence when nobody is online: no JEV calls happen there, so waking
 // up every 10 s just to re-scan the player list is plenty.

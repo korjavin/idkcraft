@@ -562,22 +562,6 @@ const MENU = {
     chat: () => 'on my own: exploring outward',
     verb: 'exploring',
   },
-  fun: {
-    // Idle whimsy (idkcraft-o95q): a rare joke — a useless gift, a tiny
-    // stonehenge-like ring, or an LLM-improvised gag. Ranked just above
-    // rest, so any feasible work step outranks it; the feasible gate
-    // itself demands day, a quiet castle, no order/pin on the body, no
-    // hostile near, a cooled-down timer, and junk or cheap mats on hand.
-    feasible: (facts, bot, ctx) => {
-      try {
-        return require('./behaviours/fun').funFeasible(facts, bot, ctx)
-      } catch (_) {
-        return false
-      }
-    },
-    chat: () => 'on my own: a little something for morale',
-    verb: 'having a little fun',
-  },
   rest: {
     feasible: () => true,
     chat: (facts) => (facts.home === 'none' ? 'on my own: resting near spawn' : 'on my own: resting at the home site'),
@@ -1799,7 +1783,6 @@ const STEP_CRITERIA = {
   forage: 'known is near: walk to the remembered find and dig it',
   reforest: 'leaves are near, or banked saplings with a vetted spot, and the pack has room and time is day and no castle order runs: beat nearby leaves, bank the dropped saplings, then plant them',
   explore: 'known is none: walk the visited boundary',
-  fun: 'time is day and no castle runs and the pack holds junk or cheap mats: play a tiny rare joke',
   stay: 'inside is yes and time is dusk or night: wait inside',
   rest: 'nothing else fits: rest near home',
 }
@@ -2144,11 +2127,6 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.home !== 'built') return 'explore: house not built yet'
       if (castleBlocked(facts)) return 'explore: castle blocked, waiting at the site'
       return 'explore: nowhere new to go'
-    case 'fun':
-      if (facts.time !== 'day') return 'fun: waiting for daylight'
-      if (facts.castle !== 'none' && facts.castle !== 'done' && facts.castle !== 'parked') return 'fun: castle comes first'
-      if (ctx && typeof ctx.funNext === 'number' && Date.now() < ctx.funNext) return 'fun: saving the next joke'
-      return 'fun: nothing worth joking with'
     default:
       return `${name}: not feasible`
   }
@@ -2909,9 +2887,6 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
     try { forageMod.bankPartial(bot, ctx) } catch (_) { /* haul best-effort */ }
     ctx.forage = null
   }
-  // A fresh whimsy pick restarts the gag (o95q): a stale busy flag from
-  // an order-interrupted run would otherwise swallow the new act.
-  if (choice.step === 'fun' && choice.step !== prev) ctx.funBusy = false
   // A fresh reforest pick restarts the beat (6p4l): a resumed stale
   // walk would chase a decayed leaf while the scan stands elsewhere.
   if (choice.step === 'reforest' && choice.step !== prev) ctx.reforest = null
