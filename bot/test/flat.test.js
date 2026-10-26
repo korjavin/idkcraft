@@ -157,6 +157,98 @@ describe('flat plan: spiralColumns', () => {
   })
 })
 
+describe('v8bq sweep order: orderByBot', () => {
+  const { orderByBot } = flat
+  it('sorts nearest-to-bot first, deterministic on ties', () => {
+    const cells = [{ x: 10, z: 0 }, { x: 1, z: 0 }, { x: 0, z: 2 }, { x: 3, z: 4 }]
+    assert.deepEqual(
+      orderByBot(cells, { x: 0, y: 64, z: 0 }).map((c) => [c.x, c.z]),
+      [[1, 0], [0, 2], [3, 4], [10, 0]],
+    )
+    // Same input, same output: the walk never flip-flops between ticks.
+    assert.deepEqual(
+      orderByBot(cells, { x: 0, y: 64, z: 0 }).map((c) => [c.x, c.z]),
+      [[1, 0], [0, 2], [3, 4], [10, 0]],
+    )
+  })
+
+  it('prefers the same row on equal distance (row-sweep locality)', () => {
+    const cells = [{ x: 0, z: 2 }, { x: 2, z: 0 }]
+    assert.deepEqual(
+      orderByBot(cells, { x: 0, y: 64, z: 0 }).map((c) => [c.x, c.z]),
+      [[2, 0], [0, 2]],
+    )
+  })
+
+  it('sinks deferred cells below fresh ones, nearest-first within each group', () => {
+    const cells = [
+      { x: 9, z: 9 },
+      { x: 0, z: 1, def: 1 }, // floating, rotated to the back: tried after fresh
+      { x: 5, z: 0 },
+      { x: 1, z: 0, occ: 2 }, // camped: same deferral
+      { x: 2, z: 0 },
+    ]
+    assert.deepEqual(
+      orderByBot(cells, { x: 0, y: 64, z: 0 }).map((c) => [c.x, c.z]),
+      [[2, 0], [5, 0], [9, 9], [1, 0], [0, 1]],
+    )
+  })
+
+  it('never jumps far while near cells remain', () => {
+    // Body knocked to the far corner mid-square: the head must be the
+    // nearest remaining cell, not the stale center-first order.
+    const cells = [{ x: -8, z: -8 }, { x: 8, z: 8 }, { x: 7, z: 8 }, { x: 8, z: 7 }]
+    const out = orderByBot(cells, { x: 8, y: 64, z: 8 })
+    assert.deepEqual([out[0].x, out[0].z], [8, 8])
+    assert.ok(
+      Math.hypot(out[0].x - 8, out[0].z - 8) <= Math.hypot(out[3].x - 8, out[3].z - 8),
+      'head is the nearest cell',
+    )
+  })
+
+  it('leaves tiny queues and missing positions alone', () => {
+    assert.deepEqual(orderByBot([], { x: 0, y: 0, z: 0 }), [])
+    const one = [{ x: 1, z: 2 }]
+    assert.equal(orderByBot(one, { x: 0, y: 0, z: 0 }), one)
+    const cells = [{ x: 5, z: 5 }, { x: 1, z: 1 }]
+    assert.deepEqual(orderByBot(cells, null).map((c) => [c.x, c.z]), [[5, 5], [1, 1]])
+  })
+})
+
+describe('v8bq R1 sweep order: orderBumpsByBot', () => {
+  const { orderBumpsByBot } = flat
+  it('works the middle ring first even when the body drifted far', () => {
+    // The hilltop budget only skips far edges honestly when the middle
+    // went flat first — bands beat body distance.
+    const cells = [{ x: 4, z: 0 }, { x: 0, z: 0 }, { x: 2, z: 2 }]
+    assert.deepEqual(
+      orderBumpsByBot(cells, { x: 4, y: 64, z: 0 }, 0, 0).map((c) => [c.x, c.z]),
+      [[0, 0], [2, 2], [4, 0]],
+    )
+  })
+
+  it('breaks band ties nearest-to-bot and sinks deferred cells', () => {
+    const cells = [
+      { x: 0, z: 2 }, // band 2
+      { x: 1, z: 0, def: 1 }, // band 1 but deferred
+      { x: -1, z: 0 }, // band 1, nearer the body
+      { x: 1, z: 1 }, // band 1, farther
+    ]
+    assert.deepEqual(
+      orderBumpsByBot(cells, { x: -4, y: 64, z: 0 }, 0, 0).map((c) => [c.x, c.z]),
+      [[-1, 0], [1, 1], [1, 0], [0, 2]],
+    )
+  })
+
+  it('leaves tiny queues and missing positions alone', () => {
+    assert.deepEqual(orderBumpsByBot([], { x: 0, y: 0, z: 0 }, 0, 0), [])
+    const one = [{ x: 1, z: 2 }]
+    assert.equal(orderBumpsByBot(one, { x: 0, y: 0, z: 0 }, 0, 0), one)
+    const cells = [{ x: 5, z: 5 }, { x: 1, z: 1 }]
+    assert.deepEqual(orderBumpsByBot(cells, null, 0, 0).map((c) => [c.x, c.z]), [[5, 5], [1, 1]])
+  })
+})
+
 describe('flat plan: chooseLevel', () => {
   it('picks the most common walkable height, not min or max', () => {
     const tops = Array(50).fill(63).concat(Array(3).fill(61), [64, 64])
@@ -1342,7 +1434,11 @@ describe('flat behaviour', () => {
     world.set(0, 62, 0, 'air') // center dug to 61...
     for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) world.set(x, 63, z, 'air') // ...ring to 62
     const { bot, ctx } = started(world)
-    await drive(bot, ctx, 40)
+    // No teleport: the body starts on the shaft, so the ref-less center
+    // is nearest-first (v8bq sweep) and takes the support path. A
+    // teleported body would fill the ring first and cap the center off
+    // its side refs with no support — same flat square either way.
+    for (let i = 0; i < 40 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
     assert.equal(ctx.flat, null)
     assert.equal(world.blockAt({ x: 0, y: 62, z: 0 }).name, 'dirt', 'support below the cap')
     assert.equal(world.blockAt({ x: 0, y: 63, z: 0 }).name, 'dirt', 'cap on the support')
@@ -1420,7 +1516,9 @@ describe('flat behaviour', () => {
     const { bot, ctx } = started(world)
     flat(bot, ctx, null, null); await settle() // scan
     const f = ctx.flat
-    bot.entity.position = pos(3, 64, 0)
+    // Out of eye reach: the retake re-paths (the in-reach retake chains
+    // from the stand instead — pinned below).
+    bot.entity.position = pos(20, 64, 0)
     flat(bot, ctx, null, null); await settle() // issue
     const h = f.holes[0]
     h.stalls = 4
@@ -1433,6 +1531,38 @@ describe('flat behaviour', () => {
     assert.deepEqual(h.lastPos, { x: 9, y: 64, z: 9 }, 'lastPos preserved')
     assert.equal(f.issuedKey, 'flat:1,63,0')
     assert.equal(f.holes.length, 1, 'no same-tick place after a re-issue (body-2)')
+  })
+
+  it('v8bq: retaking a hole in reach places from the stand without a new goal', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(4, 63, 0, 'air')
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    bot.entity.position = pos(3, 64, 0) // both caps in eye reach
+    flat(bot, ctx, null, null); await settle() // nearest cap first, no goal
+    assert.equal(bot.calls.goals.length, 0, 'no path goal for the in-reach head')
+    assert.deepEqual(ctx.flat.holes.map((h) => [h.x, h.z]), [[1, 0]], 'nearest hole chained')
+    ctx.lastGoalKey = 'fight:1' // a fight tick stole the body
+    const goalsBefore = bot.calls.goals.length
+    flat(bot, ctx, null, null); await settle() // retake: chain, no re-path
+    assert.equal(bot.calls.goals.length, goalsBefore, 'in-reach retake places from the stand')
+    assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'dirt', 'second cap landed')
+  })
+
+  it('v8bq: chains an adjacent row from one stand without re-pathing', async () => {
+    const world = makeWorld({})
+    for (const x of [1, 2, 3]) world.set(x, 63, 0, 'air')
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    flat(bot, ctx, null, null); await settle() // scan
+    bot.entity.position = pos(2, 64, 0) // stand inside the row
+    for (let i = 0; i < 10 && ctx.flat; i++) { flat(bot, ctx, null, null); await settle() }
+    assert.equal(ctx.flat, null, 'episode ends')
+    for (const x of [1, 2, 3]) assert.equal(world.blockAt({ x, y: 63, z: 0 }).name, 'dirt', `hole ${x} capped`)
+    assert.equal(bot.calls.goals.length, 0, 'the whole row chained from one stand')
+    assert.ok(bot.chats.some((c) => c === 'flat done: filled 3 holes'), bot.chats.join('\n'))
   })
 
   it('gives up restocking after three stalled dirt walks', async () => {

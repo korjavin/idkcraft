@@ -7,10 +7,12 @@
 // gather path below stays untouched (v1 frozen — foliage was never its
 // target).
 //
-// Phase machine, same shape as gather.js: find (live registry scan) ->
-// walk (GoalNear + displacement stalls) -> dig -> pickup (proximity
-// vacuum), capped by leaf count or wall time — never an infinite beat
-// loop — then the plant tail (lc55): plant-pick (random vetted spot
+// Phase machine, same shape as gather.js: find (cluster-cache scan,
+// one radius-32 rescan per cluster) -> walk (GoalNear + displacement
+// stalls; skipped when the pick is already in BEAT_REACH) -> dig ->
+// pickup (proximity vacuum; instant when already on the dug column),
+// capped by leaf count or wall time — never an infinite beat loop —
+// then the plant tail (lc55): plant-pick (random vetted spot
 // within ~30) -> plant-walk (GoalNear + displacement stalls) ->
 // plant-place (equip + placeBlock, one flight), capped by planting count
 // — never an endless phase. Completion goes through step.js only, with
@@ -30,6 +32,8 @@ const REFOREST_MAX_LEAVES = 8 // beaten-leaf cap per step, then done
 const REFOREST_MAX_MS = 180000 // wall-time cap per step (3 min), then done
 const WALK_STALL_TICKS = 10 // no-displacement walk ticks before a leaf is struck
 const PICKUP_TICKS = 4 // settle ticks on the dug column while drops vacuum in
+const BEAT_REACH = 4.5 // xgcf: in-reach beat radius — a cached leaf this close digs without a fresh walk goal (continuous beating inside the cluster)
+const CLUSTER_STALE = 8 // xgcf: rescan radius 32 only once the body drifted this far from the scan origin (one scan per cluster, not per leaf)
 const UNREACHABLE_STRIKES = 3 // struck leaves before failed:unreachable
 const WALK_RANGE = 4 // walk goal range: a 3D sphere, so feet-level leaves satisfy it without climbing
 const PICKUP_RANGE = 1 // pickup goal range on the dug column (XZ only: drops fall to the ground)
@@ -372,6 +376,44 @@ function beatablesNear(bot, radius, skip) {
   }
 }
 
+// xgcf cluster scan: one radius-32 rescan per cluster, cache hits per
+// leaf. The cache holds the last beatablesNear result with the scan
+// origin; a find serves it while the body stays within CLUSTER_STALE of
+// that origin. Entries re-verify cheaply (skip set, still a leaf, still
+// feet-level) — dug/decayed/struck cells fall out, and an empty or stale
+// cache rescans like before. The pick loop below still drops placed
+// (persistent) cells trip-scoped, so the hedge guard is untouched.
+// Per-beat overhead budget, named: chained beats cost 0 scans + 0 walk
+// goals (BEAT_REACH gate in find, PICKUP_CLOSE instant advance); a beat
+// pays a scan + a goal only when the cluster runs out or goes stale.
+function beatScan(bot, r, bp) {
+  try {
+    const c = r && r.beatCache
+    if (c && Array.isArray(c.cells) && c.cells.length > 0 && c.at &&
+      Math.hypot(bp.x - c.at.x, bp.z - c.at.z) <= CLUSTER_STALE) {
+      const live = c.cells.filter((p) => {
+        if (!p || typeof p.x !== 'number') return false
+        if (r.skip && typeof r.skip.has === 'function' && r.skip.has(keyOf(p))) return false
+        if (Math.abs(p.y - bp.y) > LOW_DY) return false
+        let b = null
+        try { b = bot.blockAt && bot.blockAt(asVec3(p)) } catch (_) { return false }
+        return !!(b && isLeafName(b.name))
+      })
+      if (live.length > 0) return live
+    }
+  } catch (_) { /* cache unreadable: rescan below */ }
+  let found = []
+  try {
+    found = beatablesNear(bot, REFOREST_RADIUS, r && r.skip)
+  } catch (_) {
+    found = []
+  }
+  try {
+    if (r) r.beatCache = { at: { x: bp.x, y: bp.y, z: bp.z }, cells: found.slice() }
+  } catch (_) { /* cache best-effort */ }
+  return found
+}
+
 // Player-placed leaves (revmux 01 core-2): natural leaves decay
 // (persistent=false), placed ones do not — hedges and roofs near home
 // must never become idle-beat targets.
@@ -521,9 +563,11 @@ function reforest(bot, ctx, target, state) {
   const grounded = !bot.entity || bot.entity.onGround !== false
 
   if (r.phase === 'find') {
+    // xgcf: the cluster cache serves per leaf; a radius-32 rescan runs
+    // only when the cluster is exhausted or stale.
     let found = []
     try {
-      found = beatablesNear(bot, REFOREST_RADIUS, r.skip)
+      found = beatScan(bot, r, bp)
     } catch (_) {
       found = []
     }
@@ -554,6 +598,21 @@ function reforest(bot, ctx, target, state) {
     } catch (_) {
       r.block = null
     }
+    // xgcf: the pick is already in dig reach (the cluster beat) — skip
+    // the walk goal and dig from this stand, like the walk phase does on
+    // arrival. Same gates (live leaf, not placed, diggable), no re-path.
+    try {
+      const live = bot.blockAt && bot.blockAt(r.pos)
+      const diggable = live && isLeafName(live.name) && !isPersistentLeaf(bot, r.pos) &&
+        typeof bot.canDigBlock === 'function' && bot.canDigBlock(live) &&
+        Math.hypot(r.pos.x - bp.x, r.pos.y - bp.y, r.pos.z - bp.z) <= BEAT_REACH
+      if (diggable) {
+        try { clearGoal(bot, ctx) } catch (_) { /* goal best-effort */ }
+        r.phase = 'dig'
+        r.block = live
+        return
+      }
+    } catch (_) { /* gate unreadable: walk as today */ }
     r.phase = 'walk'
     r.stalls = 0
     r.lastPos = { x: bp.x, y: bp.y, z: bp.z }
@@ -705,6 +764,17 @@ function reforest(bot, ctx, target, state) {
     // holding the step, like forage's replan.
     const key = `reforest-pickup:${Math.floor(r.pos.x)},${Math.floor(r.pos.y)},${Math.floor(r.pos.z)}`
     if (key !== ctx.lastGoalKey) {
+      // xgcf: already standing on the dug column (chained in-reach beat)
+      // — the drops vacuum by proximity, no pickup walk and no settle.
+      try {
+        const dx = bp.x - (Math.floor(r.pos.x) + 0.5)
+        const dz = bp.z - (Math.floor(r.pos.z) + 0.5)
+        if (Math.hypot(dx, dz) <= PICKUP_CLOSE) {
+          r.pos = null
+          r.phase = 'find'
+          return
+        }
+      } catch (_) { /* measure best-effort: walk as today */ }
       issueGoal(bot, ctx, new goals.GoalNearXZ(r.pos.x, r.pos.z, PICKUP_RANGE), key, false)
       r.pickupTicks = 0
       return
@@ -908,6 +978,9 @@ module.exports.REFOREST_MAX_LEAVES = REFOREST_MAX_LEAVES
 module.exports.REFOREST_MAX_MS = REFOREST_MAX_MS
 module.exports.WALK_STALL_TICKS = WALK_STALL_TICKS
 module.exports.PICKUP_TICKS = PICKUP_TICKS
+module.exports.BEAT_REACH = BEAT_REACH
+module.exports.CLUSTER_STALE = CLUSTER_STALE
+module.exports.beatScan = beatScan
 module.exports.UNREACHABLE_STRIKES = UNREACHABLE_STRIKES
 module.exports.WALK_RANGE = WALK_RANGE
 module.exports.PICKUP_RANGE = PICKUP_RANGE

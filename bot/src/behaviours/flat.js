@@ -79,9 +79,10 @@ const PROGRESS_MS = 120000 // progress chat cadence on the long job
 const FIRST_PROGRESS_MS = 25000 // first progress comes fast: 2 min of silence reads as broken
 const FIRST_PROGRESS_N = 10 // ...or after this many resolved cells, whichever first
 const BACKSTOP_TICKS = 180 // ticks without any placement/skip before giving up
-const DIG_TARGET = 32 // dirt to dig per restock episode
-const FILL_RESUME = 16 // x3y6.4: fill blocks banked from own bumps before filling resumes
-const DIG_TICKS = 300 // restock budget before resuming with what is on hand
+const DIG_TARGET = 64 // v8bq: a full stack per restock episode — one dig-zone trip stages the whole pack, not per-block fetch marathons
+const RESTOCK_SLACK = 4 // v8bq R1: support slack past the holes left — deep caps draw the same pack, but a small tail never justifies a full stack
+const FILL_RESUME = 32 // v8bq/x3y6.4: fill blocks banked from own bumps before filling resumes (half a stack, so the resumed fill run earns its walk)
+const DIG_TICKS = 480 // v8bq: restock budget before resuming with what is on hand (room for a full DIG_TARGET stack: walk + dig + pickup per block)
 const DIG_STALLS = 10
 const DIG_STREAK = 3
 // xxmn fill-fetch chain: an empty hand works pack -> near -> wide -> bring
@@ -340,6 +341,19 @@ function chooseLevel(tops) {
   return best
 }
 
+// v8bq sweep order: nearest-to-bot, not center-out. The scan sorts both
+// queues nearest-first from the square centre, but drift, knockback and
+// defer rotations move the body mid-episode — walking the stale order
+// then crosses the whole square per block (prod xxmn: 2.5 blocks/min).
+// After every completion the holes re-sort around the live body (the
+// orderDirty flag, applied at the next fill tick): fresh cells
+// nearest-first with row locality (same-row neighbours win ties, so the
+// walk sweeps rows instead of zig-zagging), deferred cells (def/occ/att
+// burned) after fresh ones so a floating cap still closes ring-by-ring
+// instead of burning its defers up front. Deterministic (deferred,
+// distance, row gap, z, x) so unit pins hold. Bumps re-sort centre-out
+// in bands instead (orderBumpsByBot, v8bq R1): the hilltop budget only
+// skips far edges honestly when the middle went flat first.
 // Hole queue from the scan records: walkable columns below the level plus
 // deep columns, nearest first (Chebyshev, then Euclidean, then x/z for a
 // deterministic order unit tests can pin).
@@ -372,6 +386,49 @@ function detectBumps(records, level, cx, cz) {
     (Math.hypot(a.x - cx, a.z - cz) - Math.hypot(b.x - cx, b.z - cz)) ||
     (a.x - b.x) || (a.z - b.z))
   return bumps.map((h) => ({ ...h, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null }))
+}
+
+// v8bq R1: bumps keep the centre-out budget guarantee — the SHAVE_TICKS
+// budget skips far leftovers honestly only when the middle is flat
+// first. Rings (Chebyshev bands around the square centre) go in order;
+// ties break nearest-to-bot, so the walk still sweeps locally instead
+// of crossing the ring. Deferred cells sink like in orderByBot.
+function orderBumpsByBot(cells, bp, cx, cz) {
+  if (!Array.isArray(cells) || cells.length < 2) return cells
+  const bx = bp && typeof bp.x === 'number' ? bp.x : null
+  const bz = bp && typeof bp.z === 'number' ? bp.z : null
+  if (bx == null || bz == null || typeof cx !== 'number' || typeof cz !== 'number') return cells
+  const band = (c) => Math.max(Math.abs(c.x - cx), Math.abs(c.z - cz))
+  const deferred = (c) => {
+    if (!c) return 0
+    return ((c.def || 0) > 0 || (c.occ || 0) > 0 || (c.att || 0) > 0) ? 1 : 0
+  }
+  cells.sort((a, b) => (band(a) - band(b)) ||
+    (deferred(a) - deferred(b)) ||
+    (Math.hypot(a.x - bx, a.z - bz) - Math.hypot(b.x - bx, b.z - bz)) ||
+    (a.z - b.z) || (a.x - b.x))
+  return cells
+}
+
+// v8bq: re-sort a work queue around the live body (see the sweep-order
+// note above detectHoles). Deferred cells sink below fresh ones; the
+// rest is nearest-first with row locality. Returns the same array.
+// Holes only — bumps use orderBumpsByBot above, so the hilltop budget
+// still finds a flat middle when it trips.
+function orderByBot(cells, bp) {
+  if (!Array.isArray(cells) || cells.length < 2) return cells
+  const bx = bp && typeof bp.x === 'number' ? bp.x : null
+  const bz = bp && typeof bp.z === 'number' ? bp.z : null
+  if (bx == null || bz == null) return cells
+  const deferred = (c) => {
+    if (!c) return 0
+    return ((c.def || 0) > 0 || (c.occ || 0) > 0 || (c.att || 0) > 0) ? 1 : 0
+  }
+  cells.sort((a, b) => (deferred(a) - deferred(b)) ||
+    (Math.hypot(a.x - bx, a.z - bz) - Math.hypot(b.x - bx, b.z - bz)) ||
+    (Math.abs(a.z - bz) - Math.abs(b.z - bz)) ||
+    (a.z - b.z) || (a.x - b.x))
+  return cells
 }
 
 function findFillItem(bot) {
@@ -800,6 +857,7 @@ function startEpisode(cx, cz, r, yTop, by, tile = null, level = null) {
     lastChat: 0,
     progressChats: 0,
     dig: null,
+    orderDirty: false, // v8bq: set after every completion; the next fill/shave tick re-sorts around the body
     travelIdle: 0,
     travelBest: null,
     travelStall: 0,
@@ -814,12 +872,14 @@ function shiftDone(f) {
   f.holes.shift()
   f.filled++
   f.lastProgressTick = f.ticks
+  f.orderDirty = true // v8bq: the body moved — re-sort around it next tick
 }
 
 function shiftSkip(f, why) {
   f.holes.shift()
   if (f.skip[why] != null) f.skip[why]++
   f.lastProgressTick = f.ticks
+  f.orderDirty = true // v8bq: the body moved — re-sort around it next tick
 }
 
 function rotate(f) {
@@ -837,12 +897,14 @@ function shiftBumpDone(f) {
     try { delete f.sweptTops[`${h.x},${h.z}`] } catch (_) { /* best-effort */ }
   }
   f.lastProgressTick = f.ticks
+  f.orderDirty = true // v8bq: the body moved — re-sort around it next tick
 }
 
 function shiftBumpSkip(f, why) {
   f.bumps.shift()
   if (f.skip[why] != null) f.skip[why]++
   f.lastProgressTick = f.ticks
+  f.orderDirty = true // v8bq: the body moved — re-sort around it next tick
 }
 
 // xxmn: remember a drop cell whose pickup walk timed out, so the pack
@@ -1018,6 +1080,7 @@ function scanTick(bot, ctx, f) {
   f.total = f.holes.length
   f.totalBumps = f.bumps.length
   f.phase = 'fill'
+  f.orderDirty = true // v8bq: first fill tick re-sorts around the live body
   f.lastProgressTick = f.ticks
   f.lastChat = Date.now() // the start line below is the first progress
   const size = 2 * f.r + 1
@@ -1124,6 +1187,7 @@ function startDig(bot, ctx, f) {
   if (f.bumps.length > 0) {
     f.phase = 'shave'
     f.shaveForFill = true
+    f.orderDirty = true // v8bq: the fill walked the body — re-sort around it
     f.lastProgressTick = f.ticks
     tell(bot, f, `out of fill blocks, shaving ${f.bumps.length} bumps first`)
     return
@@ -1211,6 +1275,7 @@ function endDig(bot, ctx, f, resume) {
   f.dig = null
   if (resume) {
     f.phase = 'fill'
+    f.orderDirty = true // v8bq: back from the dig zone — re-sort around the body
     f.lastProgressTick = f.ticks
     return
   }
@@ -1221,11 +1286,22 @@ function endDig(bot, ctx, f, resume) {
   if (f.bumps.length > 0 || maybeSweep(bot, f)) {
     f.phase = 'shave'
     f.abortWhy = 'no fill blocks'
+    f.orderDirty = true // v8bq: back from the dig zone — re-sort around the body
     f.lastProgressTick = f.ticks
     tell(bot, f, `no fill blocks, shaving ${f.bumps.length} bumps first`)
     return
   }
   finish(bot, ctx, f, 'no fill blocks')
+}
+
+// v8bq R1: stage only what the episode can use — a full pack for a big
+// square, holes-left + support slack for a small tail. Digging a full
+// stack for 1-3 leftover holes punches 64 fresh pits around the square
+// and costs minutes to fill them back (and a bring round would drain 64
+// from the home chest for the same tail).
+function restockTarget(f) {
+  const holes = f && Array.isArray(f.holes) ? f.holes.length : 0
+  return Math.min(DIG_TARGET, holes + RESTOCK_SLACK)
 }
 
 // xxmn restock rounds: 0 pack (vacuum this episode's littered drops),
@@ -1242,8 +1318,15 @@ function roundTicks(d) {
 
 // The round is spent (budget out, nothing found, walk stalled): move to
 // the next one, or end the restock with what is on hand past the last.
+// v8bq R1: leaving the near round with a usable pack ends the restock
+// instead of widening — a 128-radius trek plus a chest trip for blocks
+// the hand already holds is the fetch marathon in reverse.
 function nextRound(bot, ctx, f) {
   const d = f.dig
+  if (d.round === 1 && countFill(bot) >= Math.min(restockTarget(f), FILL_RESUME)) {
+    endDig(bot, ctx, f, true)
+    return false
+  }
   d.round++
   d.pos = null
   d.phase = 'walk'
@@ -1265,7 +1348,7 @@ function digTick(bot, ctx, f, bp) {
   const d = f.dig
   d.ticks++
   const have = countFill(bot)
-  if (have >= DIG_TARGET) {
+  if (have >= restockTarget(f)) {
     endDig(bot, ctx, f, true)
     return
   }
@@ -1512,7 +1595,7 @@ function bringTick(bot, ctx, f, bp) {
   let dist = null
   try { dist = dist3(bp, b.chest) } catch (_) { dist = null }
   if (typeof dist === 'number' && dist <= INTERACT_CLOSE) {
-    const need = Math.max(1, DIG_TARGET - countFill(bot))
+    const need = Math.max(1, restockTarget(f) - countFill(bot))
     const had = countFill(bot) // baseline: only a grown inventory resumes fill
     ctx.digInFlight = true
     ;(async () => {
@@ -1534,6 +1617,7 @@ function bringTick(bot, ctx, f, bp) {
       // clock, so blind resume loops forever on an empty chest).
       if (countFill(bot) > had) {
         f.phase = 'fill'
+        f.orderDirty = true // v8bq: back from the chest — re-sort around the body
         f.lastProgressTick = f.ticks
       } else {
         endDig(bot, ctx, f, countFill(bot) > 0)
@@ -1602,12 +1686,20 @@ function progressChat(bot, f) {
 
 function fillTick(bot, ctx, f, bp) {
   f.ticks++
+  // v8bq: completions re-sort the queue around the live body (nearest-
+  // to-bot sweep). Applied once per flag, never mid-pursuit: rotate()
+  // defers never set it, so ring-by-ring closing is undisturbed.
+  if (f.orderDirty) {
+    f.orderDirty = false
+    orderByBot(f.holes, bp)
+  }
   recordStepped(f, bp)
   progressChat(bot, f)
   if (f.ticks - f.lastProgressTick > BACKSTOP_TICKS) {
     if (f.bumps.length > 0) {
       f.phase = 'shave'
       f.abortWhy = 'stalled'
+      f.orderDirty = true // v8bq: the fill walked the body — re-sort around it
       f.lastProgressTick = f.ticks
       return
     }
@@ -1625,6 +1717,7 @@ function fillTick(bot, ctx, f, bp) {
       return
     }
     f.phase = 'shave'
+    f.orderDirty = true // v8bq: the fill walked the body — re-sort around it
     f.lastProgressTick = f.ticks
     return
   }
@@ -1691,32 +1784,47 @@ function fillTick(bot, ctx, f, bp) {
   }
   const key = `flat:${cx},${cy},${cz}`
   if (key !== ctx.lastGoalKey) {
-    let g = null
-    try {
-      g = new goals.GoalPlaceBlock(new Vec3(cx, cy, cz), bot.world, { range: PLACE_RANGE })
-    } catch (_) { g = null }
-    if (!g) {
-      h.def++
-      if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
-      else rotate(f)
-      return
-    }
-    try {
-      bot.pathfinder.setGoal(g, false)
-    } catch (_) { /* retry next tick */ return }
-    const prevKey = ctx.lastGoalKey
-    ctx.lastGoalKey = key
-    if (key !== f.issuedKey || prevKey === '' || prevKey === 'idle') {
-      // Fresh hole (or a fresh start): fresh stall budget. Retaking the
-      // SAME hole after a fight/bring tick stole the body (68p rule) keeps
-      // stalls/lastPos. Either way the reach/stall checks run next tick:
-      // setGoal resets the path, so isMoving() reads false right after the
-      // issue and this same tick would burn a defer on a far hole (body-2).
+    // v8bq: the next cap is already under our hands (dense hole field —
+    // just placed next door, or the re-sort put a neighbour first). Work
+    // it from this stand instead of pathing per block: stop the old
+    // goal and fall through to the arrived checks below, which re-verify
+    // the click from the live position before every attempt.
+    const p0 = new Vec3(cx, cy, cz)
+    const pre = findRef(bot, p0, bp)
+    if (pre && standVerified(bot, bp, pre.ref, pre.face)) {
+      try { clearGoal(bot, ctx) } catch (_) { /* stand best-effort */ }
+      ctx.lastGoalKey = key
       f.issuedKey = key
       h.stalls = 0
       h.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    } else {
+      let g = null
+      try {
+        g = new goals.GoalPlaceBlock(new Vec3(cx, cy, cz), bot.world, { range: PLACE_RANGE })
+      } catch (_) { g = null }
+      if (!g) {
+        h.def++
+        if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
+        else rotate(f)
+        return
+      }
+      try {
+        bot.pathfinder.setGoal(g, false)
+      } catch (_) { /* retry next tick */ return }
+      const prevKey = ctx.lastGoalKey
+      ctx.lastGoalKey = key
+      if (key !== f.issuedKey || prevKey === '' || prevKey === 'idle') {
+        // Fresh hole (or a fresh start): fresh stall budget. Retaking the
+        // SAME hole after a fight/bring tick stole the body (68p rule) keeps
+        // stalls/lastPos. Either way the reach/stall checks run next tick:
+        // setGoal resets the path, so isMoving() reads false right after the
+        // issue and this same tick would burn a defer on a far hole (body-2).
+        f.issuedKey = key
+        h.stalls = 0
+        h.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+      }
+      return
     }
-    return
   }
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
@@ -1996,6 +2104,13 @@ function recheckKept(bot, ctx, f) {
 function shaveTick(bot, ctx, f, bp) {
   f.ticks++
   f.shaveTicks = (f.shaveTicks || 0) + 1
+  // v8bq R1: centre-out bands for the bumps (flag set by completions
+  // and phase entries; rotateBump defers never set it) — the hilltop
+  // budget must find a flat middle when it trips.
+  if (f.orderDirty) {
+    f.orderDirty = false
+    orderBumpsByBot(f.bumps, bp, f.cx, f.cz)
+  }
   recordStepped(f, bp)
   progressChat(bot, f)
   if (f.ticks - f.lastProgressTick > BACKSTOP_TICKS) {
@@ -2007,6 +2122,7 @@ function shaveTick(bot, ctx, f, bp) {
   if (f.shaveForFill && (f.bumps.length === 0 || countFill(bot) >= FILL_RESUME)) {
     f.shaveForFill = false
     f.phase = 'fill'
+    f.orderDirty = true // v8bq: the shave walked the body — re-sort around it
     f.lastProgressTick = f.ticks
     return
   }
@@ -2020,6 +2136,7 @@ function shaveTick(bot, ctx, f, bp) {
     if (f.shaveForFill) {
       f.shaveForFill = false
       f.phase = 'fill'
+      f.orderDirty = true // v8bq: the shave walked the body — re-sort around it
       f.lastProgressTick = f.ticks
       return
     }
@@ -2043,6 +2160,21 @@ function shaveTick(bot, ctx, f, bp) {
     }
     const key = `flat-shave-pickup:${h.pickup.x},${h.pickup.y},${h.pickup.z}`
     if (key !== ctx.lastGoalKey) {
+      // v8bq R1: the drop is already at our feet (chained in-reach dig)
+      // — vacuum by proximity, no pickup walk. Real pickup reach only:
+      // the feet at or above the drop within half a block (a drop 1-2
+      // below the feet is out of the pickup box — walk for it, and the
+      // timeout path records the litter). A drop above the feet falls
+      // down to them.
+      try {
+        if (Math.hypot(bp.x - (h.pickup.x + 0.5), bp.z - (h.pickup.z + 0.5)) <= 1.5 &&
+          bp.y - h.pickup.y <= 0.5) {
+          h.pickup = null
+          h.stalls = 0
+          f.lastProgressTick = f.ticks
+          return
+        }
+      } catch (_) { /* measure best-effort: walk as today */ }
       try {
         bot.pathfinder.setGoal(new goals.GoalNear(h.pickup.x, h.pickup.y, h.pickup.z, 1), false)
       } catch (_) { /* retry next tick */ return }
@@ -2152,22 +2284,33 @@ function shaveTick(bot, ctx, f, bp) {
   }
   const key = `flat-shave:${h.x},${y},${h.z}`
   if (key !== ctx.lastGoalKey) {
-    try {
-      // Range 2 (NOT wider): GoalNear stops on floored nodes, and a range-4
-      // stop can land past REACH_DIG, re-issuing the same already-satisfied
-      // goal until the column burns its defers (round-2 majors). Range 2
-      // stops ~2.9 worst case, always inside 4.5. Towering on tall isolated
-      // columns is the accepted minor residual instead (core-5/core-3).
-      bot.pathfinder.setGoal(new goals.GoalNear(h.x, y, h.z, 2), false)
-    } catch (_) { /* retry next tick */ return }
-    const prevKey = ctx.lastGoalKey
-    ctx.lastGoalKey = key
-    if (key !== f.issuedKey || prevKey === '' || prevKey === 'idle') {
+    // v8bq: the next cut is already in dig reach (dense bump field) —
+    // dig it from this stand instead of re-pathing per column. Falls
+    // through to the moving/reach checks below, which re-verify.
+    if (Math.hypot(bp.x - h.x, bp.y - y, bp.z - h.z) <= REACH_DIG) {
+      try { clearGoal(bot, ctx) } catch (_) { /* stand best-effort */ }
+      ctx.lastGoalKey = key
       f.issuedKey = key
       h.stalls = 0
       h.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+    } else {
+      try {
+        // Range 2 (NOT wider): GoalNear stops on floored nodes, and a range-4
+        // stop can land past REACH_DIG, re-issuing the same already-satisfied
+        // goal until the column burns its defers (round-2 majors). Range 2
+        // stops ~2.9 worst case, always inside 4.5. Towering on tall isolated
+        // columns is the accepted minor residual instead (core-5/core-3).
+        bot.pathfinder.setGoal(new goals.GoalNear(h.x, y, h.z, 2), false)
+      } catch (_) { /* retry next tick */ return }
+      const prevKey = ctx.lastGoalKey
+      ctx.lastGoalKey = key
+      if (key !== f.issuedKey || prevKey === '' || prevKey === 'idle') {
+        f.issuedKey = key
+        h.stalls = 0
+        h.lastPos = { x: bp.x, y: bp.y, z: bp.z }
+      }
+      return // reach/stall checks run next tick (body-2)
     }
-    return // reach/stall checks run next tick (body-2)
   }
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
@@ -2289,6 +2432,8 @@ module.exports.SUPPORT_DEPTH = SUPPORT_DEPTH
 module.exports.PROGRESS_MS = PROGRESS_MS
 module.exports.BACKSTOP_TICKS = BACKSTOP_TICKS
 module.exports.DIG_TARGET = DIG_TARGET
+module.exports.RESTOCK_SLACK = RESTOCK_SLACK
+module.exports.restockTarget = restockTarget
 module.exports.DIG_TICKS = DIG_TICKS
 module.exports.DIG_STALLS = DIG_STALLS
 module.exports.DIG_STREAK = DIG_STREAK
@@ -2301,6 +2446,8 @@ module.exports.isAirCell = isAirCell
 module.exports.cellAt = cellAt
 module.exports.probeColumn = probeColumn
 module.exports.spiralColumns = spiralColumns
+module.exports.orderByBot = orderByBot
+module.exports.orderBumpsByBot = orderBumpsByBot
 module.exports.swarmTile = swarmTile
 module.exports.swarmHelper = swarmHelper
 module.exports.SWARM_HELPER_LINE = SWARM_HELPER_LINE

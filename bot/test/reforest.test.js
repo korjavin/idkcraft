@@ -97,7 +97,9 @@ function mockBot({ leaves = [{ x: 5, y: 64, z: 0 }], items = [], castle = null }
       const y = Math.floor(pos.y)
       const z = Math.floor(pos.z)
       world.set(`${x},${y},${z}`, 'air')
-      drops.push({ x: x + 0.5, y, z: z + 0.5, name: 'oak_sapling', count: 1 })
+      // Push through the live reference: settleDrops rebinds bot.drops on
+      // every call, so the closure array would orphan later digs (xgcf).
+      bot.drops.push({ x: x + 0.5, y, z: z + 0.5, name: 'oak_sapling', count: 1 })
     },
     chat: () => {},
   }
@@ -254,10 +256,12 @@ describe('reforest execution', () => {
       assert.equal(bot.drops.length, 1, 'the dig drops a sapling entity, not inventory')
       settleDrops(bot) // the body stands on the column: the drop vacuums in
       assert.equal(bot.inv.filter((i) => i.name === 'oak_sapling').length, 1)
-      // Pickup walks the dug column (XZ), never the empty canopy cell.
+      // Pickup is instant on the dug column (no walk, no settle): the drop
+      // vacuums by proximity and the beat continues from the cache.
+      const goalsBefore = bot.goals.length
       reforest(bot, ctx)
-      assert.equal(bot.goals[bot.goals.length - 1], 'GoalNearXZ')
-      assert.equal(bot.pathfinder.goal.rangeSq, reforest.PICKUP_RANGE * reforest.PICKUP_RANGE)
+      assert.equal(bot.goals.length, goalsBefore, 'no pickup walk from the dug column')
+      assert.equal(ctx.reforest.phase, 'find')
       bot.entity.position = { x: 5, y: 64, z: 0 }
       for (let i = 0; i < 4; i++) { reforest(bot, ctx); settleDrops(bot) }
       // One leaf beaten and banked, no soil to plant on: the step did its
@@ -289,6 +293,48 @@ describe('reforest execution', () => {
     reforest(bot, ctx) // pickup: heads for the column
     assert.equal(ctx.reforest.phase, 'pickup')
     assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('xgcf: beats a grove cluster with one scan and no walk goals', async () => {
+    // 8 leaves in two adjacent columns next to the stand: the first find
+    // scans once, every in-reach pick chains without a GoalNear, and only
+    // the off-column drops pay a short pickup walk (no settle stalls).
+    const grove = []
+    for (const x of [4, 5]) for (const z of [-1, 0, 1, 2]) grove.push({ x, y: 64, z })
+    const bot = mockBot({ leaves: grove })
+    let scans = 0
+    const origFind = bot.findBlocks
+    bot.findBlocks = (...a) => { scans++; return origFind(...a) }
+    const ctx = ctxOf()
+    let beaten = 0
+    const note = () => {
+      const r = ctx.reforest
+      if (r && typeof r.leaves === 'number') beaten = Math.max(beaten, r.leaves)
+    }
+    for (let i = 0; i < 200 && ctx.stepStatus === 'running'; i++) {
+      reforest(bot, ctx)
+      note()
+      const r = ctx.reforest
+      // Arrival: the executor closed whatever the step asked for.
+      if (r && (r.phase === 'walk' || r.phase === 'pickup') && r.pos) {
+        bot.entity.position = { x: Math.floor(r.pos.x), y: 64, z: Math.floor(r.pos.z) }
+      }
+      settleDrops(bot)
+      await tick()
+      note() // the dig flight lands in the flush, after the tick above
+    }
+    assert.equal(beaten, 8, 'all 8 leaves beaten')
+    assert.equal(scans, 1, 'one cluster scan serves all 8 leaves')
+    const walks = bot.goals.filter((g) => g === 'GoalNear')
+    assert.equal(walks.length, 0, 'no per-leaf walk goals inside the cluster')
+    const vacuums = bot.goals.filter((g) => g === 'GoalNearXZ')
+    assert.equal(vacuums.length, 5, 'only the off-column drops pay a short vacuum walk')
+    assert.equal(
+      bot.inv.filter((i) => i.name === 'oak_sapling').length, 7,
+      'drops vacuum on the move; the 8th falls as the leaf cap ends the step',
+    )
+    assert.equal(bot.drops.length, 1, 'the last drop waits where the 8th leaf fell')
+    assert.equal(ctx.stepStatus, 'done', 'leaf cap ends the step as before')
   })
 
   it('prefers feet-level leaves over a nearer canopy and walks range 4', () => {
