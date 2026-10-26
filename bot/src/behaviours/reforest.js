@@ -370,71 +370,10 @@ function asVec3(p) {
   return new Vec3(p.x, p.y, p.z)
 }
 
-// 5v4f: `reforest N` repeats the beat+plant cycle N times (owner prod:
-// "reforest 10" did one cycle and stopped). The pin args carry the model
-// count (llm-orders keeps 1..64 on work steps); the first cycle consumes
-// one, the rest ride ctx.reforestLeft across the state reset. Only a
-// naturally done cycle (reason null: caps reached with work banked)
-// repeats — failures (no-leaves, unreachable, pack-full) end honestly,
-// never spin.
-function clearBudget(ctx) {
-  try {
-    ctx.reforestLeft = null
-    ctx.reforestLeftOf = null
-    ctx.reforestBudgetFor = null
-  } catch (_) { /* best-effort */ }
-}
-
-function takeCycles(ctx) {
-  // Codex R1: the repeat budget belongs to the live pin (taskPlanArgs
-  // object identity). A retreat clears ctx.reforest but keeps the pin, so
-  // the leftover rides on; a cancel/replacement swaps the pin, so a stale
-  // leftover is dropped and the same order object never refills.
-  try {
-    const a = ctx.taskPlanArgs
-    if (a && a.step === 'reforest' && ctx.reforestLeft != null && ctx.reforestLeftOf === a) {
-      // Not consumed on read: finish() overwrites it at cycle end and the
-      // terminal path clears it, so a retreat-resume round-trip keeps the
-      // exact remainder instead of refunding a fresh count.
-      return Math.max(0, Math.floor(Number(ctx.reforestLeft)))
-    }
-    clearBudget(ctx)
-    if (a && a.step === 'reforest') {
-      if (ctx.reforestBudgetFor === a) return 0 // same order re-pinned: no refill
-      const c = Math.floor(Number(a.count))
-      if (c >= 2 && c <= 64) {
-        ctx.reforestBudgetFor = a
-        return c - 1
-      }
-    }
-  } catch (_) { /* unreadable: single cycle */ }
-  return 0
-}
-
 function finish(bot, ctx, r, reason) {
   const leaves = (r && r.leaves) || 0
   const planted = (r && r.planted) || 0
-  if (!reason && r && (r.cyclesLeft | 0) > 0) {
-    const left = (r.cyclesLeft | 0) - 1
-    let cycleGain = 0
-    try {
-      cycleGain = Math.max(0, countSaplings(bot) - ((r && r.saplings0) || 0) + planted)
-    } catch (_) {
-      cycleGain = 0
-    }
-    try {
-      ctx.reforest = null
-      ctx.reforestLeft = left
-      ctx.reforestLeftOf = ctx.taskPlanArgs
-    } catch (_) { /* reset best-effort */ }
-    try {
-      console.log(`reforest leaves=${leaves} saplings=+${cycleGain} fail=- planted=${planted}`)
-    } catch (_) { /* log best-effort */ }
-    try {
-      console.log(`reforest again left=${left}`)
-    } catch (_) { /* log best-effort */ }
-    return // the step stays running; the next tick starts a fresh cycle
-  }
+
   // saplings=+k banks the step's beats even when the tail plants them the
   // same step (body-3): without the add-back a bank-3-plant-3 step would
   // read +0.
@@ -450,7 +389,6 @@ function finish(bot, ctx, r, reason) {
   try {
     ctx.reforest = null
   } catch (_) { /* state best-effort */ }
-  clearBudget(ctx) // terminal cycle: no leftover may leak into the next order
   try {
     console.log(`reforest leaves=${leaves} saplings=+${gain} fail=${reason || '-'} planted=${planted}`)
   } catch (_) { /* log best-effort */ }
@@ -490,7 +428,7 @@ function reforest(bot, ctx, target, state) {
     } catch (_) {
       saplings0 = 0
     }
-    ctx.reforest = { phase: 'find', pos: null, block: null, skip: new Set(), streak: 0, stalls: 0, lastPos: null, leaves: 0, saplings0, startedAt: Date.now(), pickupTicks: 0, planted: 0, plantFails: 0, triedPlant: new Set(), plantInFlight: false, spot: null, plantKey: null, plantStalls: 0, plantLast: null, plantStartedAt: null, cyclesLeft: takeCycles(ctx) }
+    ctx.reforest = { phase: 'find', pos: null, block: null, skip: new Set(), streak: 0, stalls: 0, lastPos: null, leaves: 0, saplings0, startedAt: Date.now(), pickupTicks: 0, planted: 0, plantFails: 0, triedPlant: new Set(), plantInFlight: false, spot: null, plantKey: null, plantStalls: 0, plantLast: null, plantStartedAt: null }
   }
   const r = ctx.reforest
   const bp = botPos(bot)

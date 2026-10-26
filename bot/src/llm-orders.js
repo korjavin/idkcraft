@@ -654,6 +654,28 @@ function tick(bot, ctx, now = Date.now()) {
   if (ctx.paused) return end(bot, ctx, o, 'stop')
   if (!c.held && now - c.at > STEP_MS) return end(bot, ctx, o, 'failed:timeout')
   const next = () => { o.i++; o.cur = null; dropArgs(ctx) }
+  // 5v4f-general: a work-step count N runs the step N times (owner prod:
+  // "reforest 10" did one cycle and stopped; "counter should work for
+  // almost any command"). Order steps (bring/find/flat) own their count
+  // (items, radius) and never repeat here; failures never repeat — the
+  // honest stop stands. Best-effort: any surprise falls through to next().
+  const doneStep = () => {
+    try {
+      const left = Math.floor(Number(s && s.count))
+      if (left >= 2 && s && !ORDER_STEPS[s.step]) {
+        s.count = left - 1
+        pinArgs(ctx, o, s) // re-pin carries the decremented count
+        // Codex P1: tracking starts WITH the re-pin, not next tick —
+        // otherwise goal.decide() can run the repeat invisibly and the
+        // next startStep snapshots a finished generation (extra runs,
+        // swallowed failures).
+        o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, led: false }
+        try { console.log(`llm order step again ${s.step} left=${s.count}`) } catch (_) { /* log best-effort */ }
+        return
+      }
+    } catch (_) { /* fall through to next */ }
+    next()
+  }
   if (ORDER_STEPS[s.step]) {
     if (orderBusy(ctx)) { if (ctx.lead) c.led = true; return }
     const r = orderResult(ctx, s, c)
@@ -664,11 +686,11 @@ function tick(bot, ctx, now = Date.now()) {
   if (ours) {
     c.seen = true
     c.status = ctx.stepStatus
-    if (isFinished(c.status)) return c.status === 'done' ? next() : end(bot, ctx, o, c.status)
+    if (isFinished(c.status)) return c.status === 'done' ? doneStep() : end(bot, ctx, o, c.status)
     return
   }
   // Left the step and it had finished between two reads.
-  if (c.seen && isFinished(c.status)) return c.status === 'done' ? next() : end(bot, ctx, o, c.status)
+  if (c.seen && isFinished(c.status)) return c.status === 'done' ? doneStep() : end(bot, ctx, o, c.status)
   if (nightHold(bot, ctx)) {
     // Held: no pin (a pending one is withdrawn so the night step wins), no
     // miss, no deadline; the step re-pins when the night ends.
