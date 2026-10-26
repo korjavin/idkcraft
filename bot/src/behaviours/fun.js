@@ -10,7 +10,7 @@
 // anything; nothing touches the flat square, the house, or the castle.
 
 const Vec3 = require('vec3')
-const { stepDone, stepFailed, chatStep } = require('../step')
+const { stepDone, stepFailed, stepGen, stale, chatStep } = require('../step')
 const { HOSTILE_NAMES } = require('../perception')
 
 // Long cooldown, randomized (brief: once per 30-60 min max).
@@ -235,7 +235,15 @@ function findFollySpot(bot, ctx) {
     const flat = ctx && ctx.flatEnd
     const castle = ctx && ctx.castle && ctx.castle.site
     const farFrom = (x, z, s, r) => {
-      if (!s || typeof s.x !== 'number') return true
+      if (!s || typeof s !== 'object') return true
+      // Flat squares (ctx.flat episode / ctx.flatEnd) are { cx, cz, r },
+      // not points: keep the ring (radius 2) plus a margin off the whole
+      // square, or the folly lands on the fresh flattening (o95q review).
+      if (typeof s.cx === 'number' && typeof s.cz === 'number') {
+        const half = (typeof s.r === 'number' ? s.r : 0) + 2 + 1
+        return Math.abs(x - s.cx) > half || Math.abs(z - s.cz) > half
+      }
+      if (typeof s.x !== 'number') return true
       return Math.hypot(x - s.x, z - s.z) > r
     }
     const ring = [[2, 0], [1, 1], [-1, 1], [-2, 0], [-1, -1], [1, -1], [0, 0]]
@@ -279,16 +287,21 @@ function findFollySpot(bot, ctx) {
 }
 
 function tossOne(bot, item) {
+  // Count-limited promise toss (mineflayer bot.toss): tossStack drops the
+  // whole stack and takes no callback, which would break the keep-last
+  // bound and time every gift out (o95q review). No count-limited toss
+  // on this body (e.g. a bridge adapter) fails honestly instead.
+  const type = item && typeof item.type === 'number' ? item.type : null
+  if (type == null || typeof bot.toss !== 'function') return Promise.resolve(false)
   return new Promise((resolve) => {
     let done = false
     const fin = (ok) => { if (!done) { done = true; resolve(ok) } }
     try {
       const timer = setTimeout(() => fin(false), TOSS_TIMEOUT_MS)
-      const cb = (err) => { clearTimeout(timer); fin(!err) }
-      if (typeof bot.tossStack === 'function') return void bot.tossStack(item, cb)
-      if (typeof bot.toss === 'function') return void bot.toss(item.type, null, 1, cb)
-      clearTimeout(timer)
-      fin(false)
+      Promise.resolve(bot.toss(type, null, 1)).then(
+        () => { clearTimeout(timer); fin(true) },
+        () => { clearTimeout(timer); fin(false) },
+      )
     } catch (_) {
       fin(false)
     }
@@ -306,9 +319,10 @@ async function equipHand(bot, name) {
   }
 }
 
-async function placeCells(bot, block, cells) {
+async function placeCells(bot, ctx, gen, block, cells) {
   let placed = 0
   for (const cell of cells) {
+    if (stale(ctx, gen)) return { placed, fail: 'preempted' }
     try {
       if (!equipHandSyncCheck(bot, block)) return { placed, fail: 'no-mats' }
       const okEq = await equipHand(bot, block)
@@ -333,32 +347,37 @@ function equipHandSyncCheck(bot, block) {
   }
 }
 
-async function doGift(bot, ctx, item, line) {
+async function doGift(bot, ctx, gen, item, line) {
+  if (stale(ctx, gen)) return
   const inv = itemsOf(bot)
   const stack = inv.find((i) => i && i.name === item) || { name: item, type: null }
   const tossed = await tossOne(bot, stack)
-  if (!tossed) { stepFailed(ctx, 'fun-toss'); return }
+  if (stale(ctx, gen)) return // preempted mid-toss: the body belongs elsewhere now
+  if (!tossed) { stepFailed(ctx, 'fun-toss', gen); return }
   try { chatStep(bot, ctx, line) } catch (_) { /* chat best-effort */ }
-  stepDone(ctx)
+  stepDone(ctx, gen)
 }
 
-async function doFolly(bot, ctx, block, count, line) {
+async function doFolly(bot, ctx, gen, block, count, line) {
+  if (stale(ctx, gen)) return
   const spot = findFollySpot(bot, ctx)
-  if (!spot) { stepFailed(ctx, 'fun-no-ground'); return }
+  if (!spot) { stepFailed(ctx, 'fun-no-ground', gen); return }
   const cells = spot.cells.slice(0, count)
-  const { placed, fail } = await placeCells(bot, block, cells)
+  const { placed, fail } = await placeCells(bot, ctx, gen, block, cells)
+  if (stale(ctx, gen)) return // preempted mid-ring: stop placing, write nothing
   if (fail) {
     try { console.log(`fun folly placed=${placed}/${cells.length} fail=${fail}`) } catch (_) { /* log best-effort */ }
-    stepFailed(ctx, fail === 'no-mats' ? 'fun-no-mats' : fail === 'no-ground' ? 'fun-no-ground' : 'fun-place')
+    stepFailed(ctx, fail === 'no-mats' ? 'fun-no-mats' : fail === 'no-ground' ? 'fun-no-ground' : 'fun-place', gen)
     return
   }
   try { chatStep(bot, ctx, line) } catch (_) { /* chat best-effort */ }
-  stepDone(ctx)
+  stepDone(ctx, gen)
 }
 
-async function doImprov(bot, ctx, fetchFn) {
+async function doImprov(bot, ctx, gen, fetchFn) {
+  if (stale(ctx, gen)) return
   const summary = packSummary(bot)
-  if (!summary) { stepDone(ctx); return }
+  if (!summary) { stepDone(ctx, gen); return }
   let data = null
   try {
     const brain = require('../brain')
@@ -383,7 +402,7 @@ async function doImprov(bot, ctx, fetchFn) {
     }
   } catch (err) {
     try { console.log(`fun improv llm error: ${String((err && err.message) || err).slice(0, 80)}`) } catch (_) { /* log best-effort */ }
-    stepDone(ctx) // honest skip: the joke does not land, the cooldown spaces the next try
+    if (!stale(ctx, gen)) stepDone(ctx, gen) // honest skip: the joke does not land, the cooldown spaces the next try
     return
   }
   let offer = null
@@ -393,41 +412,49 @@ async function doImprov(bot, ctx, fetchFn) {
   } catch (_) { offer = null }
   const v = validateFunOffer(offer, packCounts(bot))
   try { console.log(`fun improv offer=${JSON.stringify(offer).slice(0, 160)} verdict=${v.ok ? v.act : v.why}`) } catch (_) { /* log best-effort */ }
-  if (!v.ok) { stepDone(ctx); return } // honest skip on anything outside the allowlist
-  if (v.act === 'gift') await doGift(bot, ctx, v.item, CHAT_IMPROV)
-  else await doFolly(bot, ctx, v.block, v.count, CHAT_IMPROV)
+  if (stale(ctx, gen)) return // preempted mid-ask: offer dies with the step
+  if (!v.ok) { stepDone(ctx, gen); return } // honest skip on anything outside the allowlist
+  if (v.act === 'gift') await doGift(bot, ctx, gen, v.item, CHAT_IMPROV)
+  else await doFolly(bot, ctx, gen, v.block, v.count, CHAT_IMPROV)
 }
 
 // Fire-and-forget like every other behaviour (applyDecision does not
 // await): the busy flag owns the async window, the cooldown was stamped
 // at pick time, and stepStatus ends the step.
-async function run(bot, ctx, target, state) {
+async function run(bot, ctx) {
   if (!ctx || ctx.funBusy) return
+  const gen = stepGen(ctx)
   ctx.funBusy = true
+  ctx.funRun = gen
   stampFun(ctx)
   try {
+    // Same player source the feasible gate reads (goalFacts via
+    // deliver.playerStatus): the dispatch target/state is null in idle
+    // work mode, so reconstructing from it would misread the act.
     const facts = { player: 'none', castle: 'none' }
     try {
-      if (state && typeof state.player !== 'undefined') facts.player = state.player !== 'none' && state.player ? 'seen' : 'none'
-      else if (target && target.position) facts.player = 'seen'
-    } catch (_) { /* facts best-effort */ }
+      const ps = require('./deliver').playerStatus(bot)
+      if (ps && (ps.level === 'near' || ps.level === 'far')) facts.player = ps.level
+    } catch (_) { /* player best-effort */ }
     try {
       if (ctx.castle && ctx.castle.site && !ctx.castle.parked && ctx.castle.phase !== 'complete') facts.castle = 'ordered'
     } catch (_) { /* castle best-effort */ }
     const act = pickAct(bot, facts, ctx, Math.random)
     if (act === 'gift') {
       const g = giftPick(bot)
-      if (!g) stepFailed(ctx, 'fun-no-gift')
-      else await doGift(bot, ctx, g, CHAT_GIFT)
+      if (!g) stepFailed(ctx, 'fun-no-gift', gen)
+      else await doGift(bot, ctx, gen, g, CHAT_GIFT)
     } else if (act === 'improv') {
-      await doImprov(bot, ctx)
+      await doImprov(bot, ctx, gen)
     } else if (act === 'folly') {
       const m = follyMats(bot)
-      if (!m) stepFailed(ctx, 'fun-no-mats')
-      else await doFolly(bot, ctx, m, MAX_PLACE, CHAT_FOLLY)
-    } else stepFailed(ctx, 'fun-no-mats')
+      if (!m) stepFailed(ctx, 'fun-no-mats', gen)
+      else await doFolly(bot, ctx, gen, m, MAX_PLACE, CHAT_FOLLY)
+    } else stepFailed(ctx, 'fun-no-mats', gen)
   } finally {
-    try { ctx.funBusy = false } catch (_) { /* flag best-effort */ }
+    // A preempted-then-repicked run owns the flag now: only the owning
+    // generation releases it.
+    try { if (ctx.funRun === gen) { ctx.funBusy = false; ctx.funRun = null } } catch (_) { /* flag best-effort */ }
   }
 }
 

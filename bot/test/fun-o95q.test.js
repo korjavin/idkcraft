@@ -16,26 +16,36 @@ const { STEP_ORDER } = require('../src/plan-consts')
 const OLD_KEY = process.env.ANTHROPIC_API_KEY
 
 function botWith(items, extra = {}) {
-  const inv = items.map((i) => ({ type: i.type || 1, ...i }))
-  return {
+  const inv = items.map((i) => ({ type: 1, ...i }))
+  const bot = {
     inv,
     chats: [],
     tossed: [],
     placed: [],
+    tossedCounts: [],
     inventory: { items: () => inv },
     entity: { position: { x: 0, y: 64, z: 0, distanceTo: () => 99 } },
     entities: {},
+    players: {},
     blockAt: (p) => {
       const y = Math.floor(p.y)
       if (y <= 63) return { name: 'dirt', position: { x: Math.floor(p.x), y, z: Math.floor(p.z) } }
       return { name: 'air', position: { x: Math.floor(p.x), y, z: Math.floor(p.z) } }
     },
-    tossStack: (item, cb) => { botWith.last.tossed.push(item && item.name); cb(null) },
+    toss: async (type, meta, count) => {
+      const stack = inv.find((i) => i.type === type)
+      botWith.last.tossed.push(stack && stack.name)
+      botWith.last.tossedCounts.push(count)
+      const idx = inv.indexOf(stack)
+      if (stack && count >= stack.count) inv.splice(idx, 1)
+      else if (stack) stack.count -= count
+    },
     equip: async () => {},
     placeBlock: async () => {},
     chat: (line) => { botWith.last.chats.push(line) },
     ...extra,
   }
+  return bot
 }
 botWith.last = null
 
@@ -118,16 +128,57 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
     assert.equal(fun.CHAT_GIFT, "a gift for you. you're welcome.")
     assert.equal(new Set([fun.CHAT_GIFT, fun.CHAT_FOLLY, fun.CHAT_IMPROV]).size, 3)
   })
-  it('gift act tosses one junk item and chats the gift line', async () => {
+  it('gift act tosses exactly one junk item and chats the gift line', async () => {
     const hadKey = process.env.ANTHROPIC_API_KEY
     delete process.env.ANTHROPIC_API_KEY
     try {
-      const b = fakeBot(junkPair, {})
+      const here = { x: 2, y: 64, z: 0 }
+      const b = fakeBot(junkPair, {
+        players: { Steve: { username: 'Steve', entity: { position: here } } },
+      })
       const ctx = {}
-      await fun.run(b, ctx, { position: { x: 1, y: 64, z: 1 } }, {})
+      await fun.run(b, ctx)
       assert.deepEqual(b.tossed, ['rotten_flesh'])
+      assert.deepEqual(b.tossedCounts, [1], 'one item, the last stays')
+      assert.deepEqual(b.inv, [{ type: 1, name: 'rotten_flesh', count: 1 }])
       assert.ok(b.chats.includes(fun.CHAT_GIFT), `chats=${JSON.stringify(b.chats)}`)
       assert.equal(ctx.stepStatus, 'done')
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('a preempted act writes nothing into the replacement step', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      const step = require('../src/step')
+      const here2 = { x: 2, y: 64, z: 0 }
+      const b = fakeBot(junkPair, {
+        players: { Steve: { username: 'Steve', entity: { position: here2 } } },
+      })
+      const origToss = b.toss
+      b.toss = async (...a) => {
+        step.nextStepGen(b._ctx) // an order lands mid-toss: the step is gone
+        return origToss(...a)
+      }
+      const ctx = {}
+      b._ctx = ctx
+      await fun.run(b, ctx) // gift is the only act: no dice involved
+      assert.equal(ctx.stepStatus, undefined, 'no completion leaks into the new step')
+      assert.deepEqual(b.chats, [], 'no joke line after preemption')
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('the folly ring keeps off the flat square (cx/cz/r shape)', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      const b = fakeBot(dirt8)
+      const ctx = { home: { site: { x: 100, y: 64, z: 100 } }, flatEnd: { cx: 0, cz: 0, r: 8, outcome: 'done' } }
+      assert.equal(fun.findFollySpot(b, ctx), null, 'the whole ring sits inside the square')
+      await fun.run(b, ctx)
+      assert.equal(ctx.stepStatus, 'failed:fun-no-ground')
     } finally {
       if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
     }
