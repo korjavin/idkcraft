@@ -10,8 +10,10 @@
 // anything; nothing touches the flat square, the house, or the castle.
 
 const Vec3 = require('vec3')
+const { goals } = require('mineflayer-pathfinder')
 const { stepDone, stepFailed, stepGen, stale, chatStep } = require('../step')
 const { HOSTILE_NAMES } = require('../perception')
+const { NEED_LOGS } = require('../budget')
 
 // Long cooldown, randomized (brief: once per 30-60 min max).
 const FUN_MIN_MS = 30 * 60 * 1000
@@ -42,6 +44,11 @@ const PACK_SUMMARY_MAX = 300
 // many blocks. Unseen-but-online (far, no entity) or distant players get
 // no toss at the bot's own feet — delivery defers to a later joke.
 const GIFT_RANGE = 8
+// Handover happens at toss range (deliver's TOSS_RANGE twin): the bot
+// walks into it and faces the recipient before tossing, never throws
+// blind across the yard.
+const TOSS_RANGE = 3.5
+const APPROACH_MS = 10000
 
 function itemsOf(bot) {
   try {
@@ -100,9 +107,20 @@ function giftRecipient(bot) {
     const p = ps.entity.position
     const d = Math.hypot(bp.x - p.x, bp.y - (p.y || bp.y), bp.z - p.z)
     if (!(d <= GIFT_RANGE)) return null
-    return { name: ps.name || 'you', dist: d }
+    return { name: ps.name || 'you', dist: d, entity: ps.entity }
   } catch (_) {
     return null
+  }
+}
+
+// Pickaxe upgrade due (o95q R2.2): a wooden/golden pickaxe with the stone
+// chain on hand belongs to equip, not to whimsy. Pack-only probe, no
+// world reads — the table half of the gate is equip's own business.
+function upgradeDue(bot) {
+  try {
+    return !!require('./equip').stoneUpgradeDue(bot)
+  } catch (_) {
+    return false
   }
 }
 
@@ -133,24 +151,56 @@ function castleQuiet(facts) {
   return w === 'none' || w === 'done' || w === 'parked' || w == null
 }
 
-// Idle-only gate (o95q R1.5): day, no castle, no order/pin/lease on the
-// body, nobody fighting nearby, cooldown elapsed, no useful work on the
-// table (an unfinished house or a remembered find owns the body — a model
-// brain would otherwise take the joke over gather), and at least one act
-// materially possible with the pack on hand. The menu never offers the
-// joke while busy, so goal.js needs no rule for it.
+// Only idle picks accrue joke credit: rest, explore, and the joke
+// itself. Any productive step — or an unobserved history — restarts the
+// clock. A fresh body waits a full stretch before its first joke.
+const FUN_IDLE_MS = 20 * 60 * 1000
+const IDLE_STEPS = new Set(['rest', 'explore', 'fun'])
+
+// Precise idle (o95q R2): the joke runs only when no productive step
+// could fire AND the body has idled through a sustained stretch of rest /
+// explore picks — a model brain must never see fun alongside real work,
+// and a fresh or busy body never sees it at all. Cheap facts/pack checks
+// only, no world scans: an unfinished house, a remembered find, a waiting
+// haul or bankable surplus, a pinned order, owed beds, an unfinished gear
+// ladder, a missing/rearming kit, a due pickaxe upgrade, a waiting craft
+// batch (logs or stations), or a torch-ready dark yard all keep the body.
+// Rank does the rest: fun sits just above explore, so in FSM mode it fires
+// exactly when the only alternatives are rest and an explore with nothing
+// new — while a merely-passing idle moment still explores first, and the
+// jr2.2 ladder (fresh ctx, full kit) is untouched (R1#5 vs R2#1).
 function funFeasible(facts, bot, ctx, now = Date.now()) {
   try {
     if (!facts || facts.time !== 'day') return false
     if (!castleQuiet(facts)) return false
     if (facts.home !== 'built') return false
     if (facts.known === 'near') return false
+    if (facts.haul === 'waiting') return false
+    if (facts.surplus === 'yes') return false
+    if (facts.pinned && facts.pinned !== 'none') return false
+    if (facts.beds === 'none' || facts.beds === 'one') return false
+    if (facts.gear !== 'done' && facts.gear !== 'hand') return false
+    if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || facts.rearm) return false
+    if (upgradeDue(bot)) return false
+    if ((facts.logs || 0) >= NEED_LOGS) return false
+    if ((facts.table || 0) <= 0 && (facts.maxPlanks || 0) >= 4 && ((!facts.tablePlaced && !facts.houseTable) || facts.tableOwed)) return false
+    if ((facts.door || 0) <= 0 && facts.tablePlaced && (facts.maxPlanks || 0) >= 6) return false
+    if (facts.unlit > 0 && (facts.torches || 0) > 0) return false
     if (!ctx || ctx.paused) return false
     if (ctx.bring || ctx.lead || ctx.comehome || ctx.gocastle) return false
     if (ctx.flat && !ctx.flat.parked) return false
     if (ctx.taskPlanStep || ctx.llmOrder || ctx.llmAsk) return false
     if (threatNear(bot)) return false
     if (typeof ctx.funNext === 'number' && now < ctx.funNext) return false
+    // Time-since-productive-work (o95q R2.1 fallback): ctx.step still
+    // holds last tick's pick at decide time. Bookkeeping lives here
+    // because goal.js is untouchable — the stamp is monotonic and the
+    // read is the gate.
+    try {
+      const last = ctx.step
+      if (!last || !IDLE_STEPS.has(last) || typeof ctx.funIdleSince !== 'number') ctx.funIdleSince = now
+    } catch (_) { /* stamp best-effort */ }
+    if (now - (ctx.funIdleSince || now) < FUN_IDLE_MS) return false
     if (giftRecipient(bot) && giftPick(bot)) return true
     if (follyMats(bot)) return true
     if (improvReady(bot) && (giftPick(bot) || follyMats(bot))) return true
@@ -260,7 +310,10 @@ function findFollySpot(bot, ctx) {
     const bp = botPos(bot)
     if (!bp) return null
     const home = ctx && ctx.home && ctx.home.site
-    const flat = ctx && ctx.flatEnd
+    // Both flat records (o95q R3.3): the finished flatEnd AND a parked
+    // in-progress episode share the { cx, cz, r } shape — checking only
+    // flatEnd builds on a parked square.
+    const flat = (ctx && ctx.flatEnd) || (ctx && ctx.flat)
     const castle = ctx && ctx.castle && ctx.castle.site
     // A 10-block radius cannot guard a 31x27 castle: check every ring
     // cell against the footprint and yard predicates of every known
@@ -271,6 +324,15 @@ function findFollySpot(bot, ctx) {
         const castleMod = require('../castle')
         return !!castleMod.anyCastle(ctx, (st) =>
           castleMod.inFootprint(st, { x, y, z }) || castleMod.yardRing(st, { x, y, z }))
+      } catch (_) {
+        return false
+      }
+    }
+    // House footprints are per-cell too (o95q R3.5): a centre 6 out can
+    // still hang a ring cell over the roof or the porch apron.
+    const houseKept = (x, y, z) => {
+      try {
+        return !!require('./util').inHouseFootprint(ctx && ctx.home, { x, y, z })
       } catch (_) {
         return false
       }
@@ -286,6 +348,28 @@ function findFollySpot(bot, ctx) {
       }
       if (typeof s.x !== 'number') return true
       return Math.hypot(x - s.x, z - s.z) > r
+    }
+    // No building into anyone (o95q R2.3): cells holding the bot or
+    // another tracked entity are skipped, not failed — the bot stands in
+    // the middle of its own henge, and placing into its own cell burns
+    // blocks without ever chatting.
+    const bodyAt = (x, y, z) => {
+      const all = []
+      try {
+        const bp = botPos(bot)
+        if (bp) all.push(bp)
+        const entities = (bot && bot.entities && typeof bot.entities === 'object') ? Object.values(bot.entities) : []
+        for (const e of entities) {
+          if (!e || e.isValid === false || !e.position) continue
+          all.push(e.position)
+        }
+      } catch (_) { /* positions best-effort */ }
+      for (const p of all) {
+        if (!p || typeof p.x !== 'number') continue
+        const py = Math.floor(typeof p.y === 'number' ? p.y : y)
+        if (Math.abs(x + 0.5 - p.x) < 0.8 && Math.abs(z + 0.5 - p.z) < 0.8 && (y === py || y === py + 1)) return true
+      }
+      return false
     }
     const ring = [[2, 0], [1, 1], [-1, 1], [-2, 0], [-1, -1], [1, -1], [0, 0]]
     // The centre hugs the body: the far ring cell (centre + 2) must stay
@@ -318,7 +402,8 @@ function findFollySpot(bot, ctx) {
         const top = blockNameAt(bot, new Vec3(x, y, z))
         if (top !== 'air' && top !== 'cave_air' && top !== 'void_air') { ok = false; break }
         if (castleKept(x, y, z)) { ok = false; break } // never build on a castle
-        cells.push(new Vec3(x, y, z))
+        if (ctx && ctx.home && houseKept(x, y, z)) { ok = false; break } // never build on the house
+        if (!bodyAt(x, y, z)) cells.push(new Vec3(x, y, z)) // occupied cells are skipped, not failed
       }
       if (ok && cells.length) return { cells }
     }
@@ -380,6 +465,7 @@ async function placeCells(bot, ctx, gen, block, cells) {
       if (!equipHandSyncCheck(bot, block)) return { placed, fail: 'no-mats' }
       const okEq = await equipHand(bot, block)
       if (stale(ctx, gen)) return { placed, fail: 'preempted' } // stop ordered mid-equip: place nothing
+      if (!safeToJoke(bot)) return { placed, fail: 'threat' } // combat started mid-equip: hold fire
       if (!okEq) return { placed, fail: 'no-mats' }
       let ref = null
       try { ref = bot.blockAt && bot.blockAt(new Vec3(cell.x, cell.y - 1, cell.z)) } catch (_) { ref = null }
@@ -401,8 +487,48 @@ function equipHandSyncCheck(bot, block) {
   }
 }
 
+function stopWalk(bot) {
+  try {
+    if (bot && bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null)
+  } catch (_) { /* walk best-effort */ }
+}
+
+// Walk into toss range and face the recipient (o95q R2.5): a gift is
+// handed over, never thrown blind from afar. Returns 'ok' (in range,
+// facing), 'left' (recipient gone), 'threat' (combat owns the body),
+// 'gone' (preempted) or 'far' (unreachable in time — hold, don't toss).
+async function approachRecipient(bot, ctx, gen, ms = APPROACH_MS) {
+  const t0 = Date.now()
+  const budget = (ctx && typeof ctx.funApproachMs === 'number') ? ctx.funApproachMs : ms
+  for (;;) {
+    if (stale(ctx, gen)) { stopWalk(bot); return 'gone' }
+    if (!safeToJoke(bot)) { stopWalk(bot); return 'threat' }
+    const r = giftRecipient(bot)
+    if (!r) { stopWalk(bot); return 'left' }
+    if (r.dist <= TOSS_RANGE) {
+      try {
+        const p = r.entity.position
+        await bot.lookAt(new Vec3(p.x, (typeof p.y === 'number' ? p.y : 64) + 1.6, p.z))
+      } catch (_) { /* facing best-effort */ }
+      stopWalk(bot)
+      return 'ok'
+    }
+    if (Date.now() - t0 > budget) { stopWalk(bot); return 'far' }
+    try {
+      const p = r.entity.position
+      bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, 2))
+    } catch (_) { /* walk best-effort */ }
+    await new Promise((w) => setTimeout(w, 250))
+  }
+}
+
 async function doGift(bot, ctx, gen, item, line) {
   if (stale(ctx, gen)) return
+  if (!giftRecipient(bot)) { stepDone(ctx, gen); return } // recipient left: defer, never toss blind
+  const how = await approachRecipient(bot, ctx, gen)
+  if (how === 'gone') return
+  if (how === 'threat') { stepFailed(ctx, 'fun-threat', gen); return }
+  if (how !== 'ok') { stepFailed(ctx, 'fun-no-recipient', gen); return } // 'left' or 'far': hold, don't toss
   const inv = itemsOf(bot)
   const stack = inv.find((i) => i && i.name === item) || { name: item, type: null }
   const tossed = await tossOne(bot, stack)
@@ -530,6 +656,10 @@ module.exports.FUN_SYSTEM = FUN_SYSTEM
 module.exports.giftRecipient = giftRecipient
 module.exports.safeToJoke = safeToJoke
 module.exports.registerInto = registerInto
+module.exports.upgradeDue = upgradeDue
+module.exports.GIFT_RANGE = GIFT_RANGE
+module.exports.TOSS_RANGE = TOSS_RANGE
+module.exports.FUN_IDLE_MS = FUN_IDLE_MS
 
 // Registration (o95q R1.5): bot/src/goal.js stays byte-identical —
 // the step joins the goal menu through here, on the skills.js registerStep
@@ -556,8 +686,11 @@ function registerInto(goalMod, constsMod) {
       chat: () => 'on my own: a little something for morale',
       verb: FUN_VERB,
     }
+    // Just above explore (o95q R2.1): every productive step outranks the
+    // joke, so in FSM mode it fires exactly when the only alternatives
+    // are rest and an explore with nothing new.
     if (constsMod && Array.isArray(constsMod.STEP_ORDER) && !constsMod.STEP_ORDER.includes('fun')) {
-      const at = constsMod.STEP_ORDER.indexOf('rest')
+      const at = constsMod.STEP_ORDER.indexOf('explore')
       constsMod.STEP_ORDER.splice(at < 0 ? constsMod.STEP_ORDER.length : at, 0, 'fun')
     }
     if (goalMod.STEP_CRITERIA) goalMod.STEP_CRITERIA.fun = FUN_CRITERION

@@ -740,7 +740,7 @@ function planMenu(bot, ctx) {
   const step = ctx && typeof ctx.step === 'string' ? ctx.step : null
   const retryable = step ? planRetryable(ctx, bot) : false
   return goal.STEP_ORDER.filter((n) => {
-    if (n === 'rest') return false
+    if (n === 'rest' || n === 'fun') return false // the joke is never a stall answer (o95q R2)
     if (step && n === step && !retryable) return false
     try {
       return !!(goal.MENU[n] && goal.MENU[n].feasible(facts, bot, ctx) && goal.registered(n))
@@ -1023,7 +1023,7 @@ function watchdogMenu(bot, ctx, kind = null) {
   const goal = require('./goal')
   const facts = goal.goalFacts(bot, ctx)
   const steps = goal.STEP_ORDER.filter((n) => {
-    if (n === 'rest') return false
+    if (n === 'rest' || n === 'fun') return false // the joke is never a stall answer (o95q R2)
     try {
       return !!(goal.MENU[n] && goal.MENU[n].feasible(facts, bot, ctx) && goal.registered(n))
     } catch (_) {

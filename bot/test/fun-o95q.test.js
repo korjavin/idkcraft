@@ -27,10 +27,14 @@ function botWith(items, extra = {}) {
     tossed: [],
     placed: [],
     tossedCounts: [],
+    looked: [],
+    walkGoals: [],
     inventory: { items: () => inv },
     entity: { position: { x: 0, y: 64, z: 0, distanceTo: () => 99 } },
     entities: {},
     players: {},
+    lookAt: async (p) => { botWith.last.looked.push([p.x, p.y, p.z]) },
+    pathfinder: { goal: null, setGoal(g) { botWith.last.walkGoals.push(g ? (g.constructor && g.constructor.name) || 'goal' : null) } },
     blockAt: (p) => {
       const y = Math.floor(p.y)
       if (y <= 63) return { name: 'dirt', position: { x: Math.floor(p.x), y, z: Math.floor(p.z) } }
@@ -59,7 +63,13 @@ function fakeBot(items, extra) {
   return b
 }
 
-const facts = (over = {}) => ({ time: 'day', castle: 'none', player: 'none', home: 'built', ...over })
+const facts = (over = {}) => ({
+  time: 'day', castle: 'none', player: 'none', home: 'built', known: 'none',
+  haul: 'none', surplus: 'no', pinned: 'none', beds: 'both', gear: 'done',
+  sword: 1, pickaxe: 1, logs: 0, unlit: 0, torches: 0, rearm: false,
+  maxPlanks: 0, table: 0, door: 0,
+  ...over,
+})
 const dirt8 = [{ name: 'dirt', count: 8 }]
 const junkPair = [{ name: 'rotten_flesh', count: 2 }]
 
@@ -70,10 +80,23 @@ function nearSteve(items = junkPair, extra = {}) {
   })
 }
 
+function idleCtx(over = {}) {
+  return { step: 'rest', funIdleSince: Date.now() - fun.FUN_IDLE_MS - 60000, ...over }
+}
+
 describe('fun gating (o95q idle-only)', () => {
-  it('fires on an idle day with junk or cheap mats', () => {
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), {}), true)
-    assert.equal(goal.MENU.fun.feasible(facts(), nearSteve(), {}), true)
+  it('fires on an idle day with junk or cheap mats after a sustained idle stretch', () => {
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), idleCtx()), true)
+    assert.equal(goal.MENU.fun.feasible(facts(), nearSteve(), idleCtx()), true)
+  })
+  it('a fresh or busy body waits: no history, no joke', () => {
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), {}), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), { step: 'rest' }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), { step: 'gather', funIdleSince: Date.now() - fun.FUN_IDLE_MS - 60000 }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), idleCtx({ step: 'gather' })), false)
+    // An idle stretch accrues: rest then explore keeps the clock.
+    const ctx = idleCtx({ step: 'explore' })
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt8), ctx), true)
   })
   it('stays out while useful work is available (home, finds, castle)', () => {
     const b = () => fakeBot(dirt8)
@@ -106,10 +129,50 @@ describe('fun gating (o95q idle-only)', () => {
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot([{ name: 'dirt', count: 1 }]), {}), false)
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot([{ name: 'diamond_sword', count: 3 }]), {}), false)
   })
-  it('ranks just above rest and loses to every work step', () => {
-    assert.equal(STEP_ORDER.indexOf('fun'), STEP_ORDER.indexOf('rest') - 1)
+  it('ranks just above explore and above rest, below every work step', () => {
+    assert.equal(STEP_ORDER.indexOf('fun'), STEP_ORDER.indexOf('explore') - 1)
+    assert.equal(STEP_ORDER.indexOf('fun'), STEP_ORDER.indexOf('rest') - 2)
     assert.equal(goal.goalFsm(facts(), ['rest', 'fun']), 'fun')
+    assert.equal(goal.goalFsm(facts(), ['explore', 'fun', 'rest']), 'fun')
     assert.equal(goal.goalFsm(facts(), ['gather', 'fun', 'rest']), 'gather')
+  })
+  it('precise idle: joke fires only when nothing productive is available', () => {
+    const idle = () => fakeBot([{ name: 'dirt', count: 8 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }])
+    assert.equal(goal.MENU.fun.feasible(facts(), idle(), idleCtx()), true)
+    // Every productive alternative vetoes, even with mats on hand —
+    // each checked against an already-idle body so only that gate bites.
+    for (const over of [
+      { home: 'site' }, { home: 'none' }, { known: 'near' },
+      { haul: 'waiting' }, { surplus: 'yes' }, { pinned: 'craft' },
+      { beds: 'none' }, { beds: 'one' }, { gear: 'ready' }, { gear: 'want' },
+      { sword: 0 }, { pickaxe: 0 }, { rearm: true }, { logs: 14 },
+      { table: 0, maxPlanks: 4, tableOwed: true },
+      { door: 0, tablePlaced: true, maxPlanks: 6 },
+      { unlit: 3, torches: 2 },
+    ]) assert.equal(goal.MENU.fun.feasible(facts(over), idle(), idleCtx()), false, JSON.stringify(over))
+  })
+  it('a wooden pick plus stone chain belongs to equip, not whimsy', () => {
+    const wood = fakeBot([{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }, { name: 'dirt', count: 8 }])
+    assert.equal(fun.upgradeDue(wood), true)
+    assert.equal(goal.MENU.fun.feasible(facts({ pickaxe: 1, sword: 1 }), wood, {}), false)
+    const stone = fakeBot([{ name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 8 }])
+    assert.equal(fun.upgradeDue(stone), false)
+  })
+  it('FSM mode picks the joke over rest and a nothing-new explore', () => {
+    // The R2#1 repro shape, through real goalFacts: built home, no
+    // castle/order/find, full kit, cheap mats — explore starves no more.
+    const b = fakeBot([
+      { name: 'dirt', count: 8 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 },
+    ])
+    const ctx = {
+      home: { site: { x: 0, y: 64, z: 0 }, built: true },
+      step: 'explore', funIdleSince: Date.now() - fun.FUN_IDLE_MS - 60000,
+    }
+    const f = goal.goalFacts(b, ctx)
+    assert.equal(f.home, 'built')
+    assert.equal(goal.MENU.fun.feasible(f, b, ctx), true, `why-not=${goal.stepWhy('fun', f, b, ctx, '')}`)
+    const names = ['explore', 'fun', 'rest'].filter((n) => goal.MENU[n].feasible(f, b, ctx))
+    assert.equal(goal.goalFsm(f, names), 'fun')
   })
 })
 
@@ -158,6 +221,8 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
       assert.deepEqual(b.tossed, ['rotten_flesh'])
       assert.deepEqual(b.tossedCounts, [1], 'one item, the last stays')
       assert.deepEqual(b.inv, [{ type: 1, name: 'rotten_flesh', count: 1 }])
+      assert.ok(b.looked.length >= 1, 'faces the recipient before tossing')
+      assert.ok(Math.abs(b.looked[0][0] - 2) < 1 && Math.abs(b.looked[0][2] - 0) < 1, `looked=${JSON.stringify(b.looked)}`)
       assert.ok(b.chats.includes(fun.CHAT_GIFT), `chats=${JSON.stringify(b.chats)}`)
       assert.equal(ctx.stepStatus, 'done')
     } finally {
@@ -200,6 +265,23 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
       if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
     }
   })
+  it('the folly ring keeps off a parked flat episode too, not just flatEnd', () => {
+    const b = fakeBot(dirt8)
+    const ctx = { home: { site: { x: 100, y: 64, z: 100 } }, flat: { cx: 0, cz: 0, r: 8, parked: true } }
+    assert.equal(fun.findFollySpot(b, ctx), null, 'the parked square is protected like flatEnd')
+  })
+  it('the folly ring keeps off the house footprint on every cell', () => {
+    const b = fakeBot(dirt8)
+    b.entity.position.x = 6
+    b.entity.position.z = 5
+    const ctx = {
+      home: {
+        site: { x: 0, y: 64, z: 0 },
+        interior: { min: { x: 0, y: 64, z: 0 }, max: { x: 8, y: 70, z: 8 } },
+      },
+    }
+    assert.equal(fun.findFollySpot(b, ctx), null, 'no ring cell may sit on the house')
+  })
   it('the folly ring keeps off the castle footprint and yard', () => {
     const castle = require('../src/castle')
     const b = fakeBot(dirt8)
@@ -228,6 +310,58 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
         players: { Steve: { username: 'Steve', entity: { position: { x: 100, y: 64, z: 100 } } } },
       })
       assert.deepEqual(fun.availActs(away, {}), [])
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('an unreachable recipient holds the gift: no blind toss', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      // Steve at 7 blocks: offered, but the fake body never walks there.
+      const here7 = { x: 7, y: 64, z: 0 }
+      const b = fakeBot(junkPair, {
+        players: { Steve: { username: 'Steve', entity: { position: here7 } } },
+      })
+      const ctx = { funApproachMs: 300 }
+      await fun.run(b, ctx)
+      assert.deepEqual(b.tossed, [], 'nothing leaves the pack')
+      assert.equal(ctx.stepStatus, 'failed:fun-no-recipient')
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('a recipient who logs out mid-approach keeps the gift', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      const b = fakeBot(junkPair)
+      let reads = 0
+      const steve = { username: 'Steve', entity: { position: { x: 7, y: 64, z: 0 } } }
+      Object.defineProperty(b, 'players', { get: () => (++reads <= 2 ? { Steve: steve } : {}) })
+      const ctx = { funApproachMs: 2000 }
+      await fun.run(b, ctx) // offered, then gone before handover
+      assert.deepEqual(b.tossed, [])
+      assert.equal(ctx.stepStatus, 'failed:fun-no-recipient')
+    } finally {
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('combat during equip holds fire: threat checked after equip', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      const b = fakeBot(dirt8)
+      const placed = []
+      b.equip = async () => {
+        b.entities = { 9: { type: 'mob', name: 'zombie', position: { x: 1, y: 64, z: 0 }, isValid: true } }
+        b.entity.position.distanceTo = () => 3
+      }
+      b.placeBlock = async (ref) => { placed.push(ref) }
+      const ctx = { home: { site: { x: 100, y: 64, z: 100 } } }
+      await fun.run(b, ctx) // folly is the only act: no dice involved
+      assert.deepEqual(placed, [], 'a zombie arriving mid-equip stops the ring')
+      assert.equal(ctx.stepStatus, 'failed:fun-threat')
     } finally {
       if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
     }
@@ -312,6 +446,7 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
       await fun.run(b, ctx, null, {})
       assert.ok(placed.length >= 1 && placed.length <= fun.MAX_PLACE, `placed=${placed.length}`)
       assert.deepEqual(new Set(placed.map((p) => p.join(','))).size, placed.length, 'no double-place')
+      assert.ok(placed.every(([x, y, z]) => !(x === 0 && (y === 64 || y === 65) && z === 0)), 'never into the bot’s own cell')
       assert.ok(b.chats.includes(fun.CHAT_FOLLY), `chats=${JSON.stringify(b.chats)}`)
       assert.equal(ctx.stepStatus, 'done')
       assert.ok(typeof ctx.funNext === 'number' && ctx.funNext > Date.now(), 'cooldown stamped at act start')
