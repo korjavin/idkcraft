@@ -50,6 +50,13 @@ function releaseSmelt(ctx) {
         else ctx.home.furnace = ad.saved
       }
     }
+    // aq17 r1.2 backstop: a craftanyLocal flag the field fallback set must
+    // not outlive the order (stop mid-craft) — later runs plan against the
+    // standing home table again.
+    if (ad && ad.localSet) {
+      ad.localSet = false
+      if (ctx) ctx.craftanyLocal = !!(ad.localPrev)
+    }
   } catch (_) { /* restore best-effort */ }
   const f = ctx && ctx.furnace
   if (!f || !f.bring) return

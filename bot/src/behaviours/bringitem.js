@@ -19,7 +19,7 @@ const woolMod = require('./wool')
 const bedMod = require('./bed')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
-const { say } = require('./util')
+const { say, clearGoal } = require('./util')
 const { WANT_ORE, WANT_MAX, refuse, done, countDrop, hasPickaxe, tierRefusal, hasEmptyBucket, toWaterFill } = require('./bringbase')
 
 // Deferred require, same cycle as bring.js had: craftany->craft->goal
@@ -781,6 +781,12 @@ function smeltTick(bot, ctx, o) {
   if (s.started && fr && fr.settled && fr.result && fr.job && fr.job.input === s.input && fr.job.output === s.output) {
     out = fr.result
     fr.result = null
+  } else if (o.fieldFur && !o.fieldFurDone && !o.fieldFur.adopted) {
+    // aq17 r1.1: while the field fallback is mid-flight it owns the tick —
+    // the home-furnace drive would otherwise re-issue the far walk every
+    // tick and steal the goal crafting or placing needs.
+    fieldFurnaceTick(bot, ctx, o, s)
+    return
   } else {
     if (!s.started && fr && fr.settled) fr.result = null // a stale outcome never ends the new run
     s.started = true
@@ -862,24 +868,60 @@ function materialTick(bot, ctx, o, s) {
 
 // Field furnace fallback (idkcraft-aq17): the home furnace stands but the
 // walk stalled, so the smelt happens here, not home. One attempt per order:
-// 8 cobble (a stone sub when short, the no-cobble shape) funds a crafted
-// furnace (craftany places its own table, the castlefetch field-furnace
-// precedent), which is placed beside the body and adopted as the station
-// for this run only — releaseSmelt (bringbase) restores the home claim when
-// the order ends, so the station never moves. Any step that cannot run
-// (no pick, no craft, no spot, no place) marks the fallback done and
-// refuses the honest unreachable line; so does a second unreachable after
-// an adoption (the placed furnace should have been in reach).
+// a carried furnace places at once (r1.4); else 8 cobble (a stone sub when
+// short, the no-cobble shape) funds a crafted furnace, which is placed
+// beside the body and adopted as the station for this run only —
+// releaseSmelt (bringbase) restores the home claim when the order ends, so
+// the station never moves. While mid-flight the fallback owns every tick
+// (r1.1: no home-furnace drive steals the goal); the furnace craft runs
+// under a local-table flag (r1.2: craftany must not walk to the far home
+// table — pack table placed nearby or one made, restored after), and the
+// adoption rechecks order ownership (r1.3: a mid-place stop never claims).
+// Any step that cannot run (no pick, no craft, no spot, no place) marks
+// the fallback done and refuses the honest unreachable line; so does a
+// second unreachable after an adoption (the placed furnace should have
+// been in reach).
+// Restore a craftanyLocal flag the field fallback set (r1.2): the
+// furnace craft must not outlive the fallback — later craftany runs plan
+// against the standing home table again.
+function restoreLocalTable(ctx, o) {
+  const f = o && o.fieldFur
+  try {
+    if (f && f.owned) {
+      f.owned = false
+      const m = ctx && ctx.fieldFurAdopt
+      if (m && m.localSet) {
+        m.localSet = false
+        if (ctx) ctx.craftanyLocal = !!(m.localPrev)
+      }
+    }
+  } catch (_) { /* restore best-effort */ }
+}
+
 function fieldFurnaceTick(bot, ctx, o, s) {
   const fail = () => {
     o.fieldFurDone = true
+    restoreLocalTable(ctx, o)
     refuse(bot, ctx, `could not smelt ${s.input}: furnace-unreachable`)
   }
   const f = o.fieldFur || (o.fieldFur = { phase: 'cobble', tries: 0 })
+  if (!f.owned) {
+    f.owned = true
+    try { clearGoal(bot, ctx) } catch (_) { /* the stale far-furnace walk drops: the fallback owns the body now */ }
+    // aq17 r1.2: craftany prefers the standing home table even when it is
+    // a field away and walks to it. Force the local path (pack table placed
+    // nearby, or one made from the pack) while the fallback crafts.
+    try {
+      const m = ctx.fieldFurAdopt || (ctx.fieldFurAdopt = {})
+      if (!m.localSet) { m.localSet = true; m.localPrev = ctx.craftanyLocal === true; ctx.craftanyLocal = true }
+    } catch (_) { /* flag best-effort */ }
+  }
   if (f.flight) return
   if (f.adopted) { fail(); return } // placed but still unreachable: no second furnace
   if (!f.said) { f.said = true; say(bot, 'the furnace is out of reach, placing one here') }
   const pack = packCounts(bot)
+  // aq17 r1.4: a carried furnace needs no materials and no craft — place it.
+  if (pack.furnace > 0) f.phase = 'place'
   if (f.phase === 'cobble') {
     if ((pack.cobblestone || 0) < 8) {
       const pick = Object.keys(pack).some((n) => n.endsWith('_pickaxe'))
@@ -943,9 +985,18 @@ function fieldFurnaceTick(bot, ctx, o, s) {
       let stood = null
       try { stood = bot.blockAt(new Vec3(at.x, at.y, at.z)) } catch (_) { stood = null }
       if (!stood || stood.name !== 'furnace') throw new Error('furnace-place')
-      try { ctx.fieldFurAdopt = { adopted: true, saved: ctx.home.furnace } } catch (_) { /* adopt best-effort */ }
+      // aq17 r1.3: a stop (or new order) may have landed mid-place, after
+      // the flight-start guard ran — recheck ownership immediately before
+      // adopting, never claim into a dead order.
+      if (ctx.bring !== o) return
+      try {
+        const m = ctx.fieldFurAdopt || (ctx.fieldFurAdopt = {})
+        m.adopted = true
+        m.saved = ctx.home.furnace
+      } catch (_) { /* adopt best-effort */ }
       try { ctx.home.furnace = new Vec3(at.x, at.y, at.z) } catch (_) { /* adopt best-effort */ }
       f.adopted = true
+      restoreLocalTable(ctx, o) // the furnace craft is done: plan against the home table again
       s.started = false // retry the run through the field furnace next tick
       try { console.log(`bring field furnace placed at ${at.x},${at.y},${at.z} (aq17)`) } catch (_) { /* logging never breaks a smelt */ }
     } catch (err) {
