@@ -549,7 +549,9 @@ describe('shave round-1 fixes', () => {
     world.set(4, 64, 0, 'dirt') // far ring
     const bot = mockBot(world, { items: [] })
     const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
-    bot.entity.position = pos(2, 64, 0) // nearer the far bump than the middle
+    // Strictly nearer the far bump (1 vs 3): plain nearest-to-bot would
+    // head for the far ring — only the centre-out bands head middle.
+    bot.entity.position = pos(3, 64, 0)
     flat(bot, ctx, null, null); await settle() // scan
     flat(bot, ctx, null, null); await settle() // band re-sort: middle head, dig fires
     assert.deepEqual([ctx.flat.bumps[0].x, ctx.flat.bumps[0].z], [0, 0], 'middle first despite the nearer far bump')
