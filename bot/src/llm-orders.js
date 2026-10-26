@@ -78,7 +78,7 @@ const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stock
 const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their companion bot. ' +
   'Use only the listed step ids, in the order they must run. Item and block names are Minecraft registry ids (torch, water_bucket, iron_ore). ' +
   'Answer JSON only, no prose: {"plan":[{"step":"<id>","item":"<id>","count":<n>,"done":"<what is true when this step is done>"}]}. ' +
-  'Leave out item/count when the step takes none. At most ' + PLAN_MAX + ' steps; use the fewest — an order step gathers, mines, crafts and smelts for itself, so never put forage or gather before it. ' +
+  'Leave out item/count when the step takes none. A work step (craft, equip, build, beds, light, gather, stockpile, bank, gear, forage, reforest, explore, or a skill step) with a player number runs that many times — count means repeats ("reforest 10" plans count 10). At most ' + PLAN_MAX + ' steps; use the fewest — an order step gathers, mines, crafts and smelts for itself, so never put forage or gather before it. ' +
   'A build step starts with no batch on hand when the pack holds almost no planks, so plan gather, craft and equip before build then. ' +
   'Answer {"plan":[]} when the line is not an order to the bot or no listed step can do it.'
 
