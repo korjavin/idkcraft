@@ -60,14 +60,16 @@ function stopGuidedWork(ctx) {
   return true
 }
 
-// qfus: a woody harvest that felled more than it replanted speaks the
-// shortfall once, on the terminal line — never silent, never a spin.
-// Sub-orders stay silent (the parent craft owns the summary); non-woody
-// orders never felled anything.
+// qfus R1: a harvest that felled more than it replanted speaks the
+// shortfall once, on the terminal line — never silent, never a spin. The
+// counters ride the one order object across sub-order morphs (openSubOrder
+// reuses o, resumeSub restores the parent rung on it), so the report reads
+// the accumulated harvest: a craft sub that felled without saplings is
+// confessed by the parent's terminal even though o.block is long cleared.
+// felled>0 implies wood — only woody bottoms ever increment it.
 function sayHarvestDeficit(bot, o) {
   try {
-    if (!o || o.subFor || o.deficitSaid) return
-    if (!o.block || !harvest.isWoodyName(o.block)) return
+    if (!o || o.deficitSaid) return
     const line = harvest.harvestDeficitLine(bot, o.felled | 0, o.replanted | 0)
     if (!line) return
     o.deficitSaid = true

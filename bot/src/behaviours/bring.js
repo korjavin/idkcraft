@@ -1769,6 +1769,9 @@ function guidedTick(bot, ctx, o, bp) {
 async function bring(bot, ctx, target, state) {
   const o = ctx.bring
   if (!o) return
+  // qfus R1: a planting flight in the air holds the order — no pickup past
+  // it, no terminal summary before its counts settle.
+  if (o.plantInFlight) return
   // Self orders (jr2.2 bed wool) end at dusk: the night belongs to gohome/
   // stay, and the dispatch runs bring over every goal step but fight, so an
   // uncancelled hunt would own the body past dark. Silent — gohome announces
@@ -2165,14 +2168,13 @@ async function bring(bot, ctx, target, state) {
       ctx.digInFlight = false
       o.denyStrikes = 0 // a completed dig is progress: fresh strike budget
       o.belowFeetKey = null // x16j: progress clears the repeat guard too
-      o.phase = 'pickup'
-      // qfus: a felled tree bottom replants from the pack — one stump-cell
-      // attempt through reforest's vetted rule, counted per order column
-      // (upper logs of the same trunk share it), so felled counts trees.
-      // The shortfall speaks once on the order's terminal line (bringbase).
+      // qfus R1: the landing records every felled tree bottom (the count
+      // never depends on planting eligibility) and replants at once beside
+      // the stump — never under standing wood, never into the body's cell.
+      // Awaited, so pickup and the terminal summary never race the flight.
       try {
         const dp = block && block.position
-        if (dp && typeof dp.x === 'number') {
+        if (dp && typeof dp.x === 'number' && require('./harvest').isWoodyName(block.name)) {
           const at = (x, y, z) => {
             try {
               const b = bot.blockAt && bot.blockAt(new Vec3(Math.floor(x), Math.floor(y), Math.floor(z)))
@@ -2180,29 +2182,26 @@ async function bring(bot, ctx, target, state) {
             } catch (_) { return null }
           }
           const { isWoodyName, isSaplingName } = require('./harvest')
-          const { replantStump } = require('./reforest')
-          const below = at(dp.x, dp.y - 1, dp.z)
-          if (isWoodyName(block.name) && at(dp.x, dp.y, dp.z) === 'air' &&
-            below && below !== 'air' && !isWoodyName(below) && !isSaplingName(below)) {
-            const col = `${Math.floor(dp.x)},${Math.floor(dp.z)}`
-            if (!o.stumped) o.stumped = new Set()
-            if (!o.stumped.has(col)) {
-              o.stumped.add(col)
+          const x = Math.floor(dp.x), y = Math.floor(dp.y), z = Math.floor(dp.z)
+          if (at(x, y, z) === 'air') {
+            const below = at(x, y - 1, z)
+            if (below && below !== 'air' && !isWoodyName(below) && !isSaplingName(below)) {
               o.felled = (o.felled | 0) + 1
+              o.replanted = o.replanted | 0
+              const stump = { x, y, z }
               if (!o.plantInFlight) {
                 o.plantInFlight = true
-                const stump = { x: Math.floor(dp.x), y: Math.floor(dp.y), z: Math.floor(dp.z) }
-                void (async () => {
-                  try {
-                    if (await replantStump(bot, ctx, stump, digOwnerKey)) o.replanted = (o.replanted | 0) + 1
-                  } catch (_) { /* one attempt: the stump stays bare */ }
-                  o.plantInFlight = false
-                })().catch(() => { o.plantInFlight = false })
+                try {
+                  const { replantStump } = require('./reforest')
+                  if (await replantStump(bot, ctx, stump, digOwnerKey)) o.replanted = (o.replanted | 0) + 1
+                } catch (_) { /* one attempt: the stump stays bare */ }
+                o.plantInFlight = false
               }
             }
           }
         }
       } catch (_) { /* replant best-effort */ }
+      o.phase = 'pickup'
     })()
     return
   }
