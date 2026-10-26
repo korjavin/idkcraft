@@ -49,13 +49,13 @@ describe('goal constants and menu shape', () => {
     assert.equal(needPlanks({ site: pos(1, 2, 3), v: 2 }), 107)
   })
 
-  it('menu has all twenty-one steps with feasible and chat functions', () => {
-    assert.deepEqual(Object.keys(MENU).sort(), ['bank', 'beds', 'build', 'castle', 'castlefetch', 'craft', 'deliver', 'equip', 'explore', 'forage', 'gather', 'gear', 'gocastle', 'gohome', 'light', 'reforest', 'rest', 'shelter', 'sitebed', 'stay', 'stockpile'])
+  it('menu has all twenty-two steps with feasible and chat functions', () => {
+    assert.deepEqual(Object.keys(MENU).sort(), ['bank', 'beds', 'build', 'castle', 'castlefetch', 'craft', 'deliver', 'equip', 'explore', 'forage', 'fun', 'gather', 'gear', 'gocastle', 'gohome', 'light', 'reforest', 'rest', 'shelter', 'sitebed', 'stay', 'stockpile'])
     for (const name of Object.keys(MENU)) {
       assert.equal(typeof MENU[name].feasible, 'function', `${name}.feasible`)
       assert.equal(typeof MENU[name].chat, 'function', `${name}.chat`)
     }
-    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'shelter', 'gocastle', 'castlefetch', 'castle', 'bank', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'reforest', 'explore', 'rest'])
+    assert.deepEqual(STEP_ORDER, ['stay', 'gohome', 'shelter', 'gocastle', 'castlefetch', 'castle', 'bank', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'reforest', 'explore', 'fun', 'rest'])
   })
 })
 
@@ -257,8 +257,9 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
     // all refuse, explore stays gated, rest fills the gap.
     const bot = goalBot({
       // Geared (atl.6): a tool-less kit with a table would rearm first.
+      // Stone, not dirt: the whimsy step (o95q) would otherwise joke with it.
       items: [{ name: 'oak_planks', count: 108 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 },
-        { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }],
+        { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'stone', count: 32 }],
       spawn: null,
     })
     const ctx = {}
@@ -1116,8 +1117,9 @@ describe('atl.7 rest explains itself', () => {
   }
   function ladenBot() {
     // Geared (atl.6): a tool-less kit with a placed table would rearm first.
+    // Stone, not dirt: the whimsy step (o95q) would otherwise joke with it.
     return goalBot({ items: [{ name: 'oak_planks', count: 56 }, { name: 'oak_door', count: 1 },
-      { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }] })
+      { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'stone', count: 32 }] })
   }
   const ALL_OUT = [
     'stay: daytime',

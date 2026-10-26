@@ -885,7 +885,7 @@ describe('work mode (epic rw4)', () => {
     // save, announce. buildRan stays 0: nothing else could have flipped it.
     const bot = workBot()
     bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
-    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 32 }] // geared: rest is the only feasible step
+    bot._items = [{ name: 'oak_planks', count: 58 }, { name: 'crafting_table', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'stone', count: 32 }] // geared: rest is the only feasible step (o95q would joke with dirt)
     const cells = new Map()
     const paint = (x, y, z, name) => cells.set(`${x},${y},${z}`, name)
     paint(12, 64, 9, 'crafting_table') // v1 table at site+(4,0,1)

@@ -35,6 +35,7 @@ const BEHAVIOURS = {
   beds: require('./beds'),
   light: require('./light'),
   explore: require('./explore'),
+  fun: require('./fun'),
   forage: require('./forage'),
   reforest: require('./reforest'),
   deliver: require('./deliver'),

@@ -4,7 +4,7 @@
 // (idkcraft-oqul.5): moved here so goal-options needs no task.js and the
 // task loop needs no goal.js for them. Re-exported from the old modules.
 
-const STEP_ORDER = ['stay', 'gohome', 'shelter', 'gocastle', 'castlefetch', 'castle', 'bank', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'reforest', 'explore', 'rest']
+const STEP_ORDER = ['stay', 'gohome', 'shelter', 'gocastle', 'castlefetch', 'castle', 'bank', 'sitebed', 'craft', 'equip', 'build', 'beds', 'light', 'gather', 'deliver', 'stockpile', 'gear', 'forage', 'reforest', 'explore', 'fun', 'rest']
 // Watchdog question language (NOT the tick path: ASK_INSTRUCTIONS and
 // goalText() stay untouched — the facts-text diff IS the decision
 // cadence). Short clauses in the STEP_CRITERIA style.
@@ -32,6 +32,7 @@ const STEP_EFFECT_TEXT = {
   forage: 'walks to a remembered find and digs it',
   reforest: 'beats nearby leaves and banks the dropped saplings for later planting',
   explore: 'walks the visited boundary to new ground to find resources',
+  fun: 'plays a tiny rare joke with junk or cheap mats',
   stay: 'waits inside',
   rest: 'rests near home',
 }

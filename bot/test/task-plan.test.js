@@ -19,7 +19,9 @@ function pos(x, y, z) {
 }
 
 function makeBot({ timeOfDay = 6000, items = null } = {}) {
-  const inv = items || [{ name: 'cobblestone', count: 20 }]
+  // Cobble 7: under the whimsy step's keep-last bar (o95q), so the idle
+  // menu stays exactly what each test stages.
+  const inv = items || [{ name: 'cobblestone', count: 7 }]
   return {
     username: 'IdkBot',
     chats: [],
@@ -310,6 +312,7 @@ describe('stall-point planner (vmzq.5)', () => {
       ? { name: 'crafting_table', boundingBox: 'block' }
       : { name: 'air', boundingBox: 'empty' })
     ctx.stepFail = { build: { status: 'failed:skipped-cells', at: Date.now() } }
+    ctx.funNext = Date.now() + 3600000 // the joke cools down: the menu stays empty (o95q)
     const calls = []
     ctx.brain = { plan: async (req) => { calls.push(req); return { step: 'gather', confidence: 0.9, source: 'jev' } } }
     const t0 = 1000000000000
