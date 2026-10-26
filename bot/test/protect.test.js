@@ -441,38 +441,81 @@ describe('dig-site wiring (idkcraft-drq)', () => {
     assert.equal(goals.length, 0, 'no walk goal issued yet (walk phase next tick)')
   })
 
-  it('bring re-searches a trap denial 3 times, then refuses', async () => {
+  // idkcraft-x16j r1: the old shape re-drove the same below-feet denial
+  // straight back into dig, masking what find does with a skip in place.
+  // An ore target with dirt walls keeps the whole flow natural (the walls
+  // are never candidates): strike, find re-commits A, the walk returns,
+  // the repeat skips, find commits B, B digs, and with nothing left the
+  // order refuses on the honest safety line (never 'no X within N blocks'
+  // for known ore). No phase or position is ever forced by hand.
+  it('bring skips a same-position trap repeat, takes the next candidate, then refuses honestly', async () => {
     const bring = require('../src/behaviours/bring')
     let digs = 0
     const lines = []
+    const dug = new Set()
+    // 4-wall dirt pit at the feet (0,63,0): the adjacent below-feet ore A
+    // is a trap denial; B is a reachable ore. Dug cells read air.
+    const cells = {
+      '1,62,0': 'iron_ore', '1,63,0': 'dirt', '-1,63,0': 'dirt', '0,63,1': 'dirt',
+      '1,64,0': 'dirt', '-1,64,0': 'dirt', '0,64,1': 'dirt',
+      '5,62,0': 'iron_ore',
+    }
     const bot = {
-      // 4-wall pit: the adjacent below-feet dirt is a trap denial.
       entity: { position: new Vec3(0, 63.2, 0), onGround: true },
-      blockAt: (p) => {
-        const y = Math.floor(p.y)
-        // atl.20: air under the target — a real drop, so the strike path
-        // still denies (solid below now digs instead of striking).
-        const n = (y === 63 || y === 62) ? 'dirt' : 'air'
-        return { name: n, position: new Vec3(Math.floor(p.x), y, Math.floor(p.z)) }
+      registry: { blocksByName: { iron_ore: { id: 31 } }, itemsByName: {} },
+      inventory: { items: () => [{ name: 'stone_pickaxe', count: 1 }] },
+      findBlocks: (opts) => {
+        const want = new Set(Array.isArray(opts.matching) ? opts.matching : [opts.matching])
+        const out = []
+        for (const [k, n] of Object.entries(cells)) {
+          if (dug.has(k)) continue
+          if (n === 'iron_ore' && want.has(31)) {
+            const [x, y, z] = k.split(',').map(Number)
+            out.push(new Vec3(x, y, z))
+          }
+        }
+        return out
       },
-      dig: async () => { digs++ },
+      blockAt: (p) => {
+        const k = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+        if (dug.has(k)) return { name: 'air', position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
+        const n = cells[k] || 'air' // atl.20: air under the target, a real drop
+        return { name: n, position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
+      },
+      dig: async (block) => {
+        digs++
+        const bp = block && block.position
+        if (bp) dug.add(`${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)}`)
+      },
       chat: (l) => lines.push(String(l)),
       pathfinder: { goal: null, setGoal() {}, isMoving: () => false, stop() {} },
     }
+    const drive = async (n, pred) => {
+      for (let i = 0; i < n && ctx.bring && !pred(); i++) {
+        await bring(bot, ctx, null, {})
+        await new Promise((r) => setImmediate(r))
+      }
+    }
     const ctx = {
       lastGoalKey: '',
-      bring: { phase: 'dig', kind: 'block', pos: { x: 1, y: 62, z: 0 }, block: 'dirt' },
-    }
-    for (let i = 0; i < 3; i++) {
-      await bring(bot, ctx, null, {})
-      assert.equal(ctx.bring.phase, 'find', `strike ${i + 1}: search again`)
-      ctx.bring.phase = 'dig' // find re-picks the same nearest block
-      ctx.bring.pos = { x: 1, y: 62, z: 0 }
+      bring: { phase: 'dig', kind: 'block', name: 'iron_ore', block: 'iron_ore', drop: 'raw_iron', want: 1, pos: { x: 1, y: 62, z: 0 } },
     }
     await bring(bot, ctx, null, {})
-    assert.equal(digs, 0, 'trap dirt never dug')
-    assert.equal(ctx.bring, null, '4th denial refuses loudly')
-    assert.ok(lines.some((l) => l.includes('could not reach dirt safely')), lines.join('\n'))
+    assert.equal(ctx.bring.phase, 'find', 'strike 1: search again')
+    assert.equal(ctx.bring.denyStrikes, 1)
+    await drive(10, () => ctx.bring.phase !== 'find') // find runs normally: re-commits A, walk back
+    assert.equal(ctx.bring.phase, 'walk', 'find re-commits A')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.z], [1, 0])
+    await drive(10, () => ctx.bring.phase === 'find' && ctx.bring.skip && ctx.bring.skip.has('1,62,0'))
+    assert.equal(ctx.bring.denyStrikes, 1, 'the repeat skipped, never re-struck')
+    await drive(10, () => ctx.bring.phase === 'walk') // find runs normally: A excluded, B wins
+    assert.equal(ctx.bring.phase, 'walk', 'next cheapest candidate wins')
+    assert.deepEqual([ctx.bring.pos.x, ctx.bring.pos.z], [5, 0])
+    await drive(500, () => !ctx.bring) // B digs; then nothing is left: the honest line
+    assert.equal(digs, 1, 'only reachable B dug, trap A never dug')
+    assert.equal(ctx.bring, null, 'refused once nothing is left')
+    assert.ok(lines.some((l) => l.includes('could not reach iron_ore safely')), lines.join('\n'))
+    assert.ok(!lines.some((l) => l.includes('within 48 blocks')), 'never reads as absent')
   })
 
   it('bring trap-refusal names the partial haul it keeps', async () => {
