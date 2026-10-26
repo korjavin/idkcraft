@@ -881,6 +881,15 @@ function materialTick(bot, ctx, o, s) {
 // the fallback done and refuses the honest unreachable line; so does a
 // second unreachable after an adoption (the placed furnace should have
 // been in reach).
+// Support a field furnace can stand on (aq17 r2.2): anything that is not
+// air and not a fluid. A fluid support rejects the placement, so the scan
+// must not offer it — and a spot that failed for any other reason loses
+// to the next candidate instead of being retried to the give-up.
+const BAD_SUPPORT = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'bubble_column'])
+function solidSupport(name) {
+  return typeof name === 'string' && !BAD_SUPPORT.has(name)
+}
+
 // Restore a craftanyLocal flag the field fallback set (r1.2): the
 // furnace craft must not outlive the fallback — later craftany runs plan
 // against the standing home table again.
@@ -920,8 +929,10 @@ function fieldFurnaceTick(bot, ctx, o, s) {
   if (f.adopted) { fail(); return } // placed but still unreachable: no second furnace
   if (!f.said) { f.said = true; say(bot, 'the furnace is out of reach, placing one here') }
   const pack = packCounts(bot)
-  // aq17 r1.4: a carried furnace needs no materials and no craft — place it.
-  if (pack.furnace > 0) f.phase = 'place'
+  // aq17 r1.4: a carried furnace needs no materials and no craft — place
+  // it, unless a furnace craft is still verifying (r2.1: the exposed item
+  // may be mid-verification, not placeable yet).
+  if (pack.furnace > 0 && !f.craftPending && !ctx.gearInFlight) f.phase = 'place'
   if (f.phase === 'cobble') {
     if ((pack.cobblestone || 0) < 8) {
       const pick = Object.keys(pack).some((n) => n.endsWith('_pickaxe'))
@@ -940,11 +951,18 @@ function fieldFurnaceTick(bot, ctx, o, s) {
     f.phase = 'craft'
   }
   if (f.phase === 'craft') {
-    if (!(pack.furnace > 0)) {
+    // aq17 r2.1: a furnace showing in the pack while its craft is still
+    // verifying (our pending craft, or gear's flight) is not placeable
+    // yet — an early place races the craft's verification (phantom craft,
+    // stale run state) or places a ghost the revert then strands. Keep
+    // driving the craft to its settle; only a settled craft (or a furnace
+    // that was never crafted this order) moves to place.
+    if (!(pack.furnace > 0) || f.craftPending || ctx.gearInFlight) {
       let r = null
       try { r = deps.craftItem(bot, ctx, ['furnace'], 1) } catch (_) { r = { done: false } }
-      if (r === 'running') return
-      if (!(r && r.done)) { fail(); return }
+      if (r === 'running') { f.craftPending = true; return }
+      f.craftPending = false
+      if (!(packCounts(bot).furnace > 0)) { fail(); return }
     }
     f.phase = 'place'
   }
@@ -967,8 +985,10 @@ function fieldFurnaceTick(bot, ctx, o, s) {
       below = bot.blockAt(new Vec3(bx + dx, by - 1, bz + dz))
       cell = bot.blockAt(new Vec3(bx + dx, by, bz + dz))
     } catch (_) { below = null; cell = null }
-    if (!below || !below.position || !below.name || below.name === 'air') continue
+    if (!below || !below.position || !below.name || !solidSupport(below.name)) continue
     if (cell && cell.name && cell.name !== 'air') continue
+    const key = `${Math.floor(below.position.x)},${Math.floor(below.position.y) + 1},${Math.floor(below.position.z)}`
+    if (f.badSpots && f.badSpots.has(key)) continue // r2.2: a rejected candidate loses, the next wins
     ref = below
     at = { x: below.position.x, y: below.position.y + 1, z: below.position.z }
     break
@@ -1001,6 +1021,14 @@ function fieldFurnaceTick(bot, ctx, o, s) {
       try { console.log(`bring field furnace placed at ${at.x},${at.y},${at.z} (aq17)`) } catch (_) { /* logging never breaks a smelt */ }
     } catch (err) {
       if (ctx.bring !== o) return // ended mid-place: no honest line for a dead order
+      // aq17 r2.2: this candidate failed — skip it on the retry so the next
+      // spot wins instead of re-placing onto the same rejection.
+      try {
+        if (at && typeof at.x === 'number') {
+          if (!f.badSpots) f.badSpots = new Set()
+          f.badSpots.add(`${Math.floor(at.x)},${Math.floor(at.y)},${Math.floor(at.z)}`)
+        }
+      } catch (_) { /* skip best-effort */ }
       f.tries = (f.tries || 0) + 1
       if (f.tries >= 3) fail()
     } finally {
