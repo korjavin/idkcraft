@@ -3,8 +3,10 @@
 // Bead idkcraft-ipn.11: gear starves — beds repeats thin wool hunts every
 // day and equip repeats the identical table failure after every death, and
 // both outrank gear. Partial hunts count toward the beds day latch, and a
-// same-reason equip failure latches equip for the day; with both latched a
-// ready gear gets the body.
+// same-reason equip failure latches equip for the day.
+// Parked (owner 2026-10-26): with both latched the body falls through the
+// parked gear to the next feasible step — the latch mechanics below still
+// hold, gear just never takes the yield.
 
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
@@ -208,7 +210,7 @@ describe('ipn.11 same-reason equip failures latch equip for the day', () => {
   })
 })
 
-describe('ipn.11 driven latches let a ready gear take the body', () => {
+describe('ipn.11 driven latches hold while gear stays parked (owner 2026-10-26)', () => {
   // End to end on one ctx each: the failures are DRIVEN through the
   // behaviours (not preset), then the same ctx decides. Pre-fix the
   // partials never count and the equip reason never latches, so the menu
@@ -269,18 +271,18 @@ describe('ipn.11 driven latches let a ready gear take the body', () => {
     ]
   }
 
-  it('two driven partial hunts yield the body to a ready gear', async () => {
+  it('two driven partial hunts latch beds; parked gear never takes the body (owner 2026-10-26)', async () => {
     const origLog = console.log
     console.log = () => {}
     try {
       const pack = gearedPack()
       const bot = gearBot(pack)
       const facts = goal.goalFacts(bot, gearCtx())
-      assert.equal(facts.gear, 'ready', 'fixture gear is ready')
+      assert.equal(facts.gear, 'done', 'parked: the gear fact never arms')
       assert.equal(facts.beds, 'none', 'fixture owes the beds')
 
       const free = gearCtx()
-      assert.equal((await goal.decide(bot, free)).action, 'beds', 'unlatched beds outrank gear (the prod shape)')
+      assert.equal((await goal.decide(bot, free)).action, 'beds', 'unlatched beds outrank parked gear (the prod shape)')
 
       const ctx = gearCtx()
       ctx.beds = { phase: 'wool' }
@@ -300,13 +302,17 @@ describe('ipn.11 driven latches let a ready gear take the body', () => {
       ctx.beds.hunt = null
       ctx.step = 'explore'
       ctx.stepStatus = 'done'
-      assert.equal((await goal.decide(bot, ctx)).action, 'gear', 'latched beds yield to a ready gear')
+      // Parked: latched beds yield past gear to the next feasible step.
+      const latched = await goal.decide(bot, ctx)
+      assert.notEqual(latched.action, 'gear', 'parked gear never takes the latched yield')
+      assert.equal(latched.action, 'explore', 'the yield falls through to explore')
+      assert.equal(goal.MENU.gear.feasible(goal.goalFacts(bot, ctx), bot, ctx), false)
     } finally {
       console.log = origLog
     }
   })
 
-  it('two driven same-reason equip failures yield the body to a ready gear', async () => {
+  it('two driven same-reason equip failures latch equip; parked gear never takes the body (owner 2026-10-26)', async () => {
     // Kit missing but materials on hand: equip is feasible on facts, so
     // only the latch can yield. Bedrooms already hold both beds, so beds
     // never interferes.
@@ -331,11 +337,11 @@ describe('ipn.11 driven latches let a ready gear take the body', () => {
     console.error = () => {}
     try {
       const facts = goal.goalFacts(bot, gearCtx())
-      assert.equal(facts.gear, 'ready', 'fixture gear is ready')
+      assert.equal(facts.gear, 'done', 'parked: the gear fact never arms')
       assert.equal(facts.beds, 'both', 'bedrooms already made')
 
       const free = gearCtx()
-      assert.equal((await goal.decide(bot, free)).action, 'equip', 'unlatched equip outranks gear (the prod shape)')
+      assert.equal((await goal.decide(bot, free)).action, 'equip', 'unlatched equip outranks parked gear (the prod shape)')
 
       const ctx = gearCtx()
       ctx.step = 'equip'
@@ -352,7 +358,10 @@ describe('ipn.11 driven latches let a ready gear take the body', () => {
       ctx.step = 'explore'
       ctx.stepStatus = 'done'
       ctx.equip = {}
-      assert.equal((await goal.decide(bot, ctx)).action, 'gear', 'latched equip yields to a ready gear')
+      // Parked: latched equip yields past gear to the next feasible step.
+      const latched = await goal.decide(bot, ctx)
+      assert.notEqual(latched.action, 'gear', 'parked gear never takes the latched yield')
+      assert.equal(goal.MENU.gear.feasible(goal.goalFacts(bot, ctx), bot, ctx), false)
     } finally {
       console.log = origLog
       console.error = origErr

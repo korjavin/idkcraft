@@ -393,9 +393,11 @@ describe('h9z real world: plain claims read through Vec3 normalisation', () => {
     const ctx = { home: { site: { x: 0, y: 64, z: 0 }, table: { x: 1, y: 64, z: 0 } } }
     assert.equal(goal.goalFacts(bot, ctx).tablePlaced, true)
   })
-  it('craft with a plain claim on a standing table crafts the door, not a second table', async () => {
-    // Prod 01:55:59-02:02 UTC: the throw nulled tableBlock, so the table
-    // branch rebuilt while the door branch never fired.
+  it('parked: plain claim on a standing table crafts no door and no second table (owner 2026-10-26)', async () => {
+    // Idle door upkeep is off: the parked branch fires neither the door nor
+    // a rebuild — the verified standing claim reads as a station and the
+    // step ends done. (Prod 01:55:59-02:02 UTC shape stays covered by the
+    // equip roadside test below, which still places and claims.)
     const rw = realWorld()
     rw.set('crafting_table', 1, 64, 0)
     rw.set('dirt', 0, 63, 0)
@@ -403,9 +405,8 @@ describe('h9z real world: plain claims read through Vec3 normalisation', () => {
     const bot = mockBot(rw, items, { oak_door: recipeFor('oak_door'), crafting_table: recipeFor('crafting_table') })
     const ctx = { lastGoalKey: '', stepStatus: 'running', home: null, claimedTable: { x: 1, y: 64, z: 0 } }
     craftMod(bot, ctx, null, {})
-    await untilTrue(() => bot.calls.craft.length >= 1, 'door craft')
-    assert.equal(bot.calls.craft.length, 1)
-    assert.equal(bot.calls.craft[0].recipe.result.name, 'oak_door')
+    await untilTrue(() => ctx.stepStatus === 'done', 'craft done')
+    assert.equal(bot.calls.craft.length, 0, 'parked: neither door nor second table')
   })
   it('equip with a plain claim on a standing table uses it, places nothing, holds no item', async () => {
     // No table item in hand: on master the throw reads the standing table
@@ -429,8 +430,10 @@ describe('h9z real world: plain claims read through Vec3 normalisation', () => {
     assert.equal(bot.calls.craft[0].recipe.result.name, 'wooden_pickaxe')
     assert.deepEqual(errs.filter((l) => l.includes('no-table')), [])
   })
-  it('after equip places a table, craft goes to the door, not a second table', async () => {
-    // The literal prod acceptance: one placed table serves both steps.
+  it('parked: after equip places a table, craft makes no door and no second table (owner 2026-10-26)', async () => {
+    // Phase 1 is the kept prod acceptance: one placed table serves both
+    // steps (equip still places and claims). Phase 2 is parked: idle door
+    // upkeep is off, so the inherited claim ends the step done.
     const rw = realWorld()
     for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]]) rw.set('dirt', x, 63, z)
     const items = [{ name: 'crafting_table', count: 1 }, { name: 'oak_planks', count: 3 }, { name: 'stick', count: 2 }]
@@ -450,15 +453,15 @@ describe('h9z real world: plain claims read through Vec3 normalisation', () => {
     assert.ok(ctx.claimedTable, 'equip claims the placed table')
     assert.equal(typeof ctx.claimedTable.floored, 'function', 'claim stored as Vec3')
     assert.equal(rw.blockAt(new Vec3(ctx.claimedTable.x, ctx.claimedTable.y, ctx.claimedTable.z)).name, 'crafting_table')
-    // Phase 2: the craft step inherits the claim and needs a door.
+    // Phase 2 (parked): the craft step inherits the claim but needs no
+    // door — idle upkeep is off, so nothing crafts and the step ends done.
     items.length = 0
     items.push({ name: 'oak_planks', count: 6 })
     bot.calls.craft.length = 0
     ctx.stepStatus = 'running'
     craftMod(bot, ctx, null, {})
-    await untilTrue(() => bot.calls.craft.length >= 1, 'door craft')
-    assert.equal(bot.calls.craft.length, 1)
-    assert.equal(bot.calls.craft[0].recipe.result.name, 'oak_door')
+    await untilTrue(() => ctx.stepStatus === 'done', 'craft done')
+    assert.equal(bot.calls.craft.length, 0, 'parked: no door off the placed table')
   })
 })
 
@@ -562,15 +565,19 @@ describe('h9z unshadow: a ghost home claim must not hide the standing roadside t
     // Ghost home claim (air, loaded) + standing roadside claim, both plain.
     return { home: { site: { x: 0, y: 64, z: 0 }, table: { x: 9, y: 64, z: 9 } }, claimedTable: { x: 1, y: 64, z: 0 } }
   }
-  it('craft doors off the roadside table despite the ghost', async () => {
+  it('parked: no door off the roadside table despite the ghost (owner 2026-10-26)', async () => {
+    // The unshadow half stays covered by the gear/furnace/chest tests below.
+    // The door half is parked: idle upkeep is off even past the ghost — the
+    // one craft is the owed house table (neuc.41, tables stay), never a door.
     const rw = realWorld()
     rw.set('crafting_table', 1, 64, 0)
     const items = [{ name: 'oak_planks', count: 6 }]
     const bot = mockBot(rw, items, { oak_door: recipeFor('oak_door'), crafting_table: recipeFor('crafting_table') })
     const ctx = { ...ghostCtx(), lastGoalKey: '', stepStatus: 'running' }
     craftMod(bot, ctx, null, {})
-    await untilTrue(() => bot.calls.craft.length >= 1, 'door craft')
-    assert.equal(bot.calls.craft[0].recipe.result.name, 'oak_door')
+    await untilTrue(() => bot.calls.craft.length >= 1, 'owed table craft')
+    assert.equal(bot.calls.craft.length, 1)
+    assert.equal(bot.calls.craft[0].recipe.result.name, 'crafting_table', 'tables stay, doors do not')
   })
   it('gear and furnace tableBlock resolve past the ghost', () => {
     const rw = realWorld()

@@ -1125,12 +1125,21 @@ describe('stockpile gear reserve (idkcraft-ipn.8)', () => {
     assert.equal(stockpile.gearLadderDone(null, null), false)
   })
 
-  it('the kept planks keep the next gear plan off want-logs', () => {
+  it('the menu is parked, but kept planks still keep the ladder core off want-logs (owner 2026-10-26)', () => {
+    // Parked contract: menuPlan reads null; the reserve math below pins the
+    // untouched planFor core the parked menu no longer consults.
     const kept = { sticks: 0, maxPlanks: stockpile.GEAR_RESERVE_PLANKS, logs: 0 }
-    const plan = gear.menuPlan(kept, openCtx())
+    assert.equal(gear.menuPlan(kept, openCtx()), null)
+    const C = (over) => ({
+      ironOre: 0, ingots: 0, diamonds: 0, sticks: 0, planks: 0, logs: 0,
+      iron_pickaxe: 0, iron_sword: 0, diamond_pickaxe: 0, diamond_sword: 0,
+      tablePlaced: false, furnaceClaim: false, furnaceItem: 0, cobble: 0, fuel: 0,
+      ...(over || {}),
+    })
+    const plan = gear.planFor(C({ planks: kept.maxPlanks }), openCtx(), {})
     assert.equal(plan.state, 'ready')
     assert.equal(plan.action, 'sticks')
-    const stripped = gear.menuPlan({ sticks: 0, maxPlanks: 0, logs: 0 }, openCtx())
+    const stripped = gear.planFor(C({}), openCtx(), {})
     assert.equal(stripped.key, 'want-logs')
   })
 })

@@ -339,21 +339,15 @@ function countsFromFacts(facts, ctx) {
   }
 }
 
-// Menu-world entry: counts + impl presence + furnace-busy in one call, so
-// MENU.feasible, stepWhy, and the goalText bucket share one source.
+// Menu-world entry: PARKED (owner 2026-10-26, follow-up o95q). Idle never
+// gears: the bot cleared forest for ladder goods and buckets nobody
+// ordered. The ladder below (planFor/deriveNext/the tick) stays as the
+// regrowth base for the o95q LLM/fun step, which raises order-driven
+// crafting; until then the menu reads null — infeasible, parked stepWhy.
+// equip (wearing what exists), the bring legs (own smelt/mine), and
+// BOT_SKILLS loading are untouched by this park.
 function menuPlan(facts, ctx) {
-  const counts = countsFromFacts(facts, ctx)
-  let busy = false
-  try {
-    busy = !!(ctx.furnace && !ctx.furnace.settled)
-  } catch (_) { /* no run in flight */ }
-  let furnace = false
-  let deep = false
-  try {
-    furnace = !!legImpl(ctx, 'furnace')
-    deep = !!legImpl(ctx, 'deep')
-  } catch (_) { /* slices unreadable */ }
-  return planFor(counts, ctx, { furnace, deep }, busy)
+  return null
 }
 
 // The single planning source for MENU.feasible, stepWhy, goalText, and the

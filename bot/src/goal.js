@@ -492,6 +492,7 @@ const MENU = {
       } catch (_) {
         return false
       }
+      // Parked (owner 2026-10-26): menuPlan is null, so gear never fires.
       if (!plan || plan.state === 'done' || plan.state === 'hand') return false
       if (plan.state === 'ready') return true
       let said = null
@@ -1467,10 +1468,13 @@ function goalFacts(bot, ctx) {
   } catch (_) { /* unreadable beds */ }
   // Ladder state (ipn.3): done/ready/want/wait from the behaviour's plan.
   // Unreadable reads done (light precedent): gear yields, nothing churns.
+  // Parked (owner 2026-10-26): menuPlan is null, so the fact reads done —
+  // the menu never picks gear and nothing churns.
   let gear = 'done'
   try {
     const gm = require('./behaviours/gear')
-    gear = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, tablePlaced, furnaceItem, cobble, coal }, ctx).state || 'done'
+    const gp = gm.menuPlan({ ironOre, ingots, diamonds, sticks, maxPlanks, logs, ironPick, ironSword, diamondPick, diamondSword, bucket, waterBucket, ironHelmet, ironChestplate, ironLeggings, ironBoots, diamondHelmet, diamondChestplate, diamondLeggings, diamondBoots, wornIronHelmet, wornIronChestplate, wornIronLeggings, wornIronBoots, wornDiamondHelmet, wornDiamondChestplate, wornDiamondLeggings, wornDiamondBoots, tablePlaced, furnaceItem, cobble, coal }, ctx)
+    gear = (gp && gp.state) || 'done'
   } catch (_) { /* unreadable ladder */ }
   // Castle project word (g0z.3, castle.js menuFact). Deferred require (the
   // light precedent). Unreadable reads none: castle yields, nothing churns.
@@ -2099,7 +2103,10 @@ function stepWhy(name, facts, bot, ctx, text) {
       } catch (_) {
         return 'gear: not feasible'
       }
-      if (!plan || plan.state === 'done') return 'gear: ladder complete'
+      // Parked (owner 2026-10-26, follow-up o95q): idle never gears, so a
+      // null plan reads parked, never complete.
+      if (!plan) return 'gear: parked — idle auto-craft off, order-driven crafting regrows in o95q'
+      if (plan.state === 'done') return 'gear: ladder complete'
       if (plan.state === 'hand') return `gear: handing over ${plan.name || 'finished goods'}`
       if (plan.state === 'ready') return 'gear: ready'
       return `gear: ${plan.line || plan.key}`

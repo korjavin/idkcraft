@@ -440,8 +440,11 @@ describe('vmzq.19 R2 major 2: the model never overrides a runnable castle', () =
     assert.equal(goal.stepWhy('stockpile', stockFacts, farBot, ctx, ''), 'stockpile: castle comes first')
     const gearFacts = { home: 'built' }
     assert.equal(goal.MENU.gear.feasible(gearFacts, farBot, ctx), false, 'the ladder waits for the castle')
-    assert.equal(goal.MENU.gear.feasible(gearFacts, nearBot, ctx), true)
+    // Parked (owner 2026-10-26): the leash-side refusal stays far away, and
+    // near home the menu stays shut too — idle never gears.
+    assert.equal(goal.MENU.gear.feasible(gearFacts, nearBot, ctx), false, 'parked: no gear even near home')
     assert.equal(goal.stepWhy('gear', gearFacts, farBot, ctx, ''), 'gear: castle comes first')
+    assert.match(goal.stepWhy('gear', gearFacts, nearBot, ctx, ''), /parked/, 'parked: near-home gear names the park')
     // No castle: the leash never fires.
     assert.equal(goal.MENU.light.feasible(lightFacts, farBot, { home: ctx.home }), true)
   })
