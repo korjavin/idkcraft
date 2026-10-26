@@ -205,6 +205,42 @@ describe('xxmn fill-fetch: wide restock', () => {
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 5 holes'), bot.chats.join('\n'))
   })
 
+  it('v8bq: a mid-square restock stages a full pack at the edge, not per-block home trips', async () => {
+    const world = makeWorld({})
+    world.set(-2, 63, 0, 'air') // 1 hole, empty hand
+    // 64 surface dirt cells past the edge gap: one restock trip banks a
+    // full pack, so the square fills without another fetch.
+    const spots = []
+    for (let i = 0; i < 64; i++) spots.push({ x: 20 + (i % 8), y: 63, z: Math.floor(i / 8) })
+    const items = []
+    const bot = mockBot(world, { items, registry: REGISTRY, dirtSpots: spots })
+    const ctx = { lastGoalKey: '', flat: startEpisode(0, 0, 4, 74, 'P') }
+    let resumed = null
+    let prev = null
+    for (let i = 0; i < 600 && ctx.flat; i++) {
+      const f = ctx.flat
+      if (f.phase === 'fill' && f.holes.length > 0) {
+        const h = f.holes[0]
+        bot.entity.position = pos(h.x + 2, 64, h.z)
+      }
+      flat(bot, ctx, null, null)
+      await settle()
+      if (ctx.flat) {
+        if (prev === 'dig' && ctx.flat.phase === 'fill' && resumed == null) resumed = flat.countFill(bot)
+        prev = ctx.flat.phase
+      }
+    }
+    assert.equal(resumed, 64, 'fill resumes with a full staged pack')
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.equal(world.blockAt({ x: -2, y: 63, z: 0 }).name, 'dirt', 'hole filled')
+    for (const p of spots) assert.equal(world.blockAt(p).name, 'air', `edge dirt dug at ${p.x},${p.z}`)
+    assert.equal(
+      bot.chats.filter((c) => c === 'out of fill blocks, digging dirt').length, 1,
+      'one restock episode for the square',
+    )
+    assert.ok(!bot.chats.some((c) => c.includes('home chest')), 'no home-chest trip mid-square')
+  })
+
   it('stays honest when no round banks anything', async () => {
     const world = makeWorld({})
     world.set(-2, 63, 0, 'air') // 1 hole
