@@ -422,7 +422,8 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
   // Prod xoj: on an empty site build waited for the door, the door waited
   // for a placed table, the table was placed only by build — build feasible
   // in 0 of 37 goal steps. Fixed: only the NEXT cell's item gates, and the
-  // table lays first. E2E: the table->door chain through work-mode ticks.
+  // table lays first. Parked (owner 2026-10-26): the table->door idle chain
+  // ends at the table — E2E pins the honest door stall, not the door craft.
   const build = require('../src/behaviours/build')
   const BLUEPRINT_V2 = build.BLUEPRINT_V2
   const goal = require('../src/goal')
@@ -488,7 +489,7 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
     }
   }
 
-  it('table lays, door crafts at it, door lays — build picked throughout', async () => {
+  it('parked: table lays, no idle door crafts, the door gap stalls honestly (owner 2026-10-26)', async () => {
     const world = makeWorld()
     const items = [
       { name: 'oak_planks', count: 45 },
@@ -529,21 +530,21 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
       assert.ok(ctx.home.table, 'table placed and claimed')
       assert.equal(world.get(s.x + 5, s.y, s.z + 1), 'crafting_table')
 
-      // 2. Ring done elsewhere, door cell next, no door: craft makes it.
+      // 2. parked: ring done elsewhere, door cell next, no door — craft
+      // runs (the door clause keeps it feasible) but crafts nothing idle.
       paintHouse(world, ctx.home)
       world.set(s.x + 3, s.y, s.z, 'air') // only the door cell is open
       t = 0
-      for (; t < 20 && !items.some((i) => i.name === 'oak_door'); t++) await step()
-      assert.ok(actions.includes('craft'), `craft picked for the door: ${actions.join(',')}`)
-      assert.equal(crafted.length, 1)
-      assert.equal(crafted[0].recipe.result.name, 'oak_door')
-      assert.equal(crafted[0].table, 'crafting_table', 'door crafts at the placed table')
+      for (; t < 20; t++) await step()
+      assert.equal(crafted.length, 0, `parked: no idle door: ${actions.join(',')}`)
+      assert.ok(!items.some((i) => i.name === 'oak_door'), 'no door arrives unprompted')
 
-      // 3. Door in hand: build lays it, the chain completes.
-      t = 0
-      for (; t < 20 && world.get(s.x + 3, s.y, s.z) !== 'oak_door'; t++) await step()
-      assert.equal(world.get(s.x + 3, s.y, s.z), 'oak_door', 'door laid')
-      assert.ok(!actions.includes('rest'), `never deadlocked to rest: ${actions.join(',')}`)
+      // 3. the EXPECTED honest stall: the door cell stays open and build
+      // stays infeasible on the gap until a bring order delivers the door.
+      assert.equal(world.get(s.x + 3, s.y, s.z), 'air', 'door cell still open')
+      const stallFacts = goal.goalFacts(bot, ctx)
+      assert.equal(stallFacts.door, 0)
+      assert.ok(!goal.MENU.build.feasible(stallFacts, bot, ctx), 'parked: honest door stall')
     } finally {
       cap.release()
       ticker.destroy()

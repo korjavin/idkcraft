@@ -464,43 +464,38 @@ describe('gear menu and goal glue', () => {
     assert.ok(o.indexOf('gear') < o.indexOf('forage'))
     assert.equal(o.indexOf('gear'), o.indexOf('forage') - 1)
   })
-  it('MENU.gear.feasible gates built/done/latch', () => {
+  it('MENU.gear.feasible is parked: never feasible, even built with mats (owner 2026-10-26)', () => {
+    // Parked contract: menuPlan returns a parked-done object, so the menu
+    // never picks gear — the pre-house refusal stays, every built-home
+    // shape reads infeasible (goal.js untouched, R1).
     const F = goal.MENU.gear.feasible
     assert.equal(F({ home: 'site' }, mockBot(), {}), false)
-    const doneCtx = {
+    assert.equal(F({ home: 'built', ingots: 3, sticks: 2, tablePlaced: true }, mockBot(), {}), false, 'mats on hand: still parked')
+    assert.equal(F({ home: 'built' }, mockBot(), {}), false, 'empty pack: still parked')
+    assert.equal(F({ home: 'built' }, mockBot(), { gear: { saidNeed: 'want-logs' } }), false, 'latched want: still parked')
+    const fullCtx = {
       gearGiven: {
         water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1,
         iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
         diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
       },
     }
-    const doneFacts = {
+    const fullFacts = {
       home: 'built', ironPick: 1, diamondPick: 1, waterBucket: 2,
       ironHelmet: 1, ironChestplate: 1, ironLeggings: 1, ironBoots: 1,
       diamondHelmet: 1, diamondChestplate: 1, diamondLeggings: 1, diamondBoots: 1,
     }
-    assert.equal(F(doneFacts, mockBot(), doneCtx), false)
-    assert.equal(F({ home: 'built', ingots: 3, sticks: 2, tablePlaced: true }, mockBot(), {}), true)
-    assert.equal(F({ home: 'built' }, mockBot(), {}), true, 'unlatched want announces')
-    assert.equal(F({ home: 'built' }, mockBot(), { gear: { saidNeed: 'want-logs' } }), false, 'latched want yields')
+    assert.equal(F(fullFacts, mockBot(), fullCtx), false, 'full ladder: still parked')
+    assert.deepEqual(gear.menuPlan({}, {}), { state: 'done', key: 'done' }, 'menuPlan stays parked-done until o95q regrows it')
   })
-  it('criteria and stepWhy mirror the plan', () => {
+  it('criteria and parked stepWhy read the done line (R1: goal.js untouched)', () => {
     assert.ok(goal.STEP_CRITERIA.gear.includes('forge'))
     assert.equal(goal.stepWhy('gear', { home: 'site' }, mockBot(), {}, ''), 'gear: house not built yet')
-    const doneCtx = {
-      gearGiven: {
-        water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1,
-        iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
-        diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
-      },
-    }
-    const doneFacts = {
-      home: 'built', ironPick: 1, diamondPick: 1, waterBucket: 2,
-      ironHelmet: 1, ironChestplate: 1, ironLeggings: 1, ironBoots: 1,
-      diamondHelmet: 1, diamondChestplate: 1, diamondLeggings: 1, diamondBoots: 1,
-    }
-    assert.equal(goal.stepWhy('gear', doneFacts, mockBot(), doneCtx, ''), 'gear: ladder complete')
-    assert.equal(goal.stepWhy('gear', { home: 'built' }, mockBot(), { gear: { saidNeed: 'want-logs' } }, ''), 'gear: need logs for sticks, going to chop')
+    // Built home: the parked-done plan reads the existing done line — the
+    // custom `gear: parked` line was dropped in R1 (goal.js is a risky
+    // file); never a need line.
+    assert.equal(goal.stepWhy('gear', { home: 'built' }, mockBot(), {}, ''), 'gear: ladder complete')
+    assert.equal(goal.stepWhy('gear', { home: 'built' }, mockBot(), { gear: { saidNeed: 'want-logs' } }, ''), 'gear: ladder complete', 'latch reads the same done line')
   })
   it('decide holds the step behind gear and furnace window ops', async () => {
     const bot = mockBot({ items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }] })
@@ -510,7 +505,7 @@ describe('gear menu and goal glue', () => {
       assert.equal(r.action, 'gear', flag)
     }
   })
-  it('fresh gear pick resets run counters, keeps the ledger', async () => {
+  it('parked: no fresh gear pick exists; the menu falls through, the ledger survives (owner 2026-10-26)', async () => {
     const bot = mockBot({ items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }] })
     const ctx = {
       home: { built: true, chest: { x: 5, y: 64, z: 1 }, table: { x: 0, y: 64, z: 0 } },
@@ -518,16 +513,15 @@ describe('gear menu and goal glue', () => {
       gearRun: { walkTicks: 19 }, gearGiven: { iron_sword: 1 },
     }
     const r = await goal.decide(bot, ctx)
-    assert.equal(r.action, 'gear')
-    assert.deepEqual(ctx.gearRun, {})
-    assert.deepEqual(ctx.gearGiven, { iron_sword: 1 })
+    assert.notEqual(r.action, 'gear', 'parked: explore/done never re-picks gear')
+    assert.deepEqual(ctx.gearGiven, { iron_sword: 1 }, 'the parked menu leaves the ledger alone')
   })
   it('goalFacts carries bucket counts for the ladder (jsf.5)', () => {
     const facts = goal.goalFacts(mockBot({ items: [{ name: 'bucket', count: 1 }, { name: 'water_bucket', count: 2 }] }), { home: { built: true } })
     assert.equal(facts.bucket, 1)
     assert.equal(facts.waterBucket, 2)
   })
-  it('goalFacts carries ladder counts, furnace, handover, and bucket', () => {
+  it('goalFacts carries ladder counts, furnace, handover, and bucket (gear fact parked, owner 2026-10-26)', () => {
     const bot = mockBot({ items: [
       { name: 'raw_iron', count: 3 }, { name: 'iron_ingot', count: 2 }, { name: 'diamond', count: 1 },
       { name: 'iron_pickaxe', count: 1 }, { name: 'iron_sword', count: 1 }, { name: 'furnace', count: 1 },
@@ -541,7 +535,7 @@ describe('gear menu and goal glue', () => {
     assert.equal(facts.furnaceItem, 1)
     assert.equal(facts.furnace, 'yes')
     assert.equal(facts.gearHandover, 'waiting')
-    assert.equal(facts.gear, 'want')
+    assert.equal(facts.gear, 'done', 'parked: the gear fact never arms the menu')
   })
 })
 
@@ -857,7 +851,9 @@ describe('gear round-2: handover state and op span', () => {
     assert.equal(ctx.gearInFlight, false)
     assert.ok(bot.lines.some((l) => l.includes('forged iron_pickaxe for me')))
   })
-  it('forged-and-held reads as handover, never a mat want', () => {
+  it('forged-and-held still plans handover, but the parked menu never fires it (owner 2026-10-26)', () => {
+    // Backstop pin: the ladder core is untouched (o95q regrows from it), yet
+    // the parked menu keeps even a handover off the body.
     const goal = require('../src/goal')
     const counts = {
       ironOre: 0, ingots: 0, diamonds: 0, sticks: 0, planks: 0, logs: 0,
@@ -869,8 +865,8 @@ describe('gear round-2: handover state and op span', () => {
     assert.equal(plan.state, 'hand')
     assert.equal(plan.key, 'hand-iron_sword')
     const facts = { home: 'built', ironPick: 1, ironSword: 1, waterBucket: 2, tablePlaced: true }
-    assert.equal(goal.MENU.gear.feasible(facts, mockBot(), ctx), false, 'handover steps own it')
-    assert.equal(goal.stepWhy('gear', facts, mockBot(), ctx, ''), 'gear: handing over iron_sword')
+    assert.equal(goal.MENU.gear.feasible(facts, mockBot(), ctx), false, 'parked: handover never fires')
+    assert.equal(goal.stepWhy('gear', facts, mockBot(), ctx, ''), 'gear: ladder complete', 'handover reads done, not handing-over')
   })
   it('hand tick yields silently', () => {
     const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }, { name: 'iron_sword', count: 1 }] })

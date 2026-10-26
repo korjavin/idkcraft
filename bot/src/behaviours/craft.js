@@ -1302,6 +1302,11 @@ function craft(bot, ctx, target, state) {
       }
     }
   }
+  /* Parked (owner 2026-10-26, follow-up o95q): idle door upkeep is off —
+  // the bot cleared forest for doors nobody ordered. Tables still craft
+  // (above); a house owed a door now stalls honestly via bring-order
+  // crafting instead of regrowing it here. The o95q LLM/fun step regrows
+  // order-driven crafting from this block.
   if (!op) {
     const doorCount = countItems(bot, (n) => n.endsWith('_door'))
     if (doorCount === 0 && tableBlock) {
@@ -1339,12 +1344,13 @@ function craft(bot, ctx, target, state) {
           ctx.craftDoorWalk = null
           clearGoal(bot, ctx)
           stepFailed(ctx, 'table-unseeable')
-          try { console.error(`craft failed item=door error=table-unseeable at ${tablePos.x},${tablePos.y},${tablePos.z}`) } catch (_) { /* log best-effort */ }
+          try { console.error(`craft failed item=door error=table-unseeable at ${tablePos.x},${tablePos.y},${tablePos.z}`) } catch (_) { } // parked: log best-effort was here
         }
         return // walk into reach, then craft on a later tick
       }
     }
   }
+  */ // end parked idle door upkeep (owner 2026-10-26)
   // neuc.41: a station elsewhere never lays the house table cell — with
   // the door in hand (or none craftable yet) an owed cell gets a table.
   if (!op && countItems(bot, (n) => n === 'crafting_table') === 0) {

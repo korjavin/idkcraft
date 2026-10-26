@@ -140,7 +140,7 @@ describe('craft step', () => {
     bot.restoreError()
   })
 
-  it('(c) door crafts only at a table block in reach, else a sight walk', async () => {
+  it('(c) parked: no door crafts at any distance, no sight walk (owner 2026-10-26)', async () => {
     const tablePos = pos(2, 64, 0)
     const mk = (at) => {
       const bot = mockBot({
@@ -152,28 +152,32 @@ describe('craft step', () => {
       bot.blockAt = () => ({ name: 'crafting_table' })
       return bot
     }
-    // near (dist 2): crafts with the table block
+    // Parked: idle door upkeep is off — near or far, nothing crafts, no
+    // walk issues, the step ends done. (Tables still craft: test (b).)
+    // near (dist 2): no craft, no walk
     const near = mk(0)
-    craft(near, freshCtx({ table: tablePos }), null, {})
+    const nearCtx = freshCtx({ table: tablePos })
+    craft(near, nearCtx, null, {})
     await flush()
-    assert.equal(near.calls.craft.length, 1)
-    assert.deepEqual(near.calls.craft[0].recipe, recipeFor('oak_door'))
-    assert.deepEqual(near.calls.craft[0].table, { name: 'crafting_table' })
-    assert.equal(near.calls.setGoal, 0)
+    assert.equal(near.calls.craft.length, 0, 'parked: no door crafted in reach')
+    assert.equal(near.calls.setGoal, 0, 'parked: no table walk issued')
+    assert.equal(nearCtx.stepStatus, 'done')
     near.restoreError()
-    // far (dist 10): walks, does not craft
+    // far (dist 10): no craft, no walk either
     const far = mk(10)
     const farCtx = freshCtx({ table: tablePos })
     craft(far, farCtx, null, {})
     await flush()
-    assert.equal(far.calls.craft.length, 0)
-    assert.equal(far.calls.setGoal, 1)
-    assert.equal(far.calls.goals[0].constructor.name, 'GoalSeeTable') // g0z.40: walk to a cell the table is seen from
-    assert.match(farCtx.lastGoalKey, /^craft-table:2,64,0$/)
+    assert.equal(far.calls.craft.length, 0, 'parked: no door crafted out of reach')
+    assert.equal(far.calls.setGoal, 0, 'parked: no sight walk issued')
+    assert.equal(farCtx.stepStatus, 'done')
     far.restoreError()
   })
 
-  it('neuc.65.6.1: the house table behind a holed doorstep fails entrance-holed, no walk', async () => {
+  it('neuc.65.6.1 parked: holed doorstep no longer fails entrance-holed from craft (owner 2026-10-26)', async () => {
+    // The entrance-holed refusal lived in the parked door walk: with upkeep
+    // off, craft ends done over a holed doorstep too — build (not craft)
+    // owns the refill now. No walk issues in either ground shape.
     const site = { x: 0, y: 64, z: 0 }
     const tablePos = pos(5, 64, 1) // BLUEPRINT_V2[0]
     const home = { site, v: 2, built: true, table: tablePos, interior: { min: { x: 1, y: 64, z: 1 }, max: { x: 5, y: 65, z: 4 } } }
@@ -189,33 +193,33 @@ describe('craft step', () => {
     const bot = mk(true)
     const ctx = freshCtx(home)
     craft(bot, ctx, null, {})
-    assert.equal(ctx.stepStatus, 'failed:entrance-holed')
+    assert.equal(ctx.stepStatus, 'done', 'parked: no entrance-holed failure from craft')
     assert.equal(bot.calls.setGoal, 0)
+    assert.equal(bot.calls.craft.length, 0, 'parked: no door crafted over the hole')
     bot.restoreError()
     const solid = mk(false)
     const sctx = freshCtx(home)
     craft(solid, sctx, null, {})
-    assert.equal(sctx.stepStatus, 'running')
-    assert.equal(solid.calls.setGoal, 1, 'a solid doorstep walks as before')
+    assert.equal(sctx.stepStatus, 'done', 'parked: solid ground ends done too')
+    assert.equal(solid.calls.setGoal, 0, 'parked: no door walk on solid ground either')
     solid.restoreError()
   })
 
-  it('g0z.40: a door table no cell sees fails table-unseeable after 21 still ticks; progress keeps walking', async () => {
+  it('g0z.40 parked: an unseeable door table never fails, never walks (owner 2026-10-26)', async () => {
+    // The table-unseeable give-up lived in the parked door walk: with upkeep
+    // off, 25 ticks end done with no failure and no walk, still or closing.
     const tablePos = pos(2, 64, 0)
     const bot = mockBot({ items: [{ name: 'oak_planks', count: 6 }], ids: IDS, recipes: { oak_door: recipeFor('oak_door') } })
     bot.entity.position = pos(10, 64, 0)
     bot.blockAt = () => ({ name: 'crafting_table' })
     const ctx = freshCtx({ table: tablePos })
-    let at = -1
-    for (let i = 0; i < 25 && !(typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:')); i++) {
+    for (let i = 0; i < 25; i++) {
       craft(bot, ctx, null, {})
-      at = i
     }
-    assert.equal(at, 20, 'gives up on the 21st still tick')
-    assert.equal(ctx.stepStatus, 'failed:table-unseeable')
+    assert.equal(ctx.stepStatus, 'done', 'parked: no table-unseeable failure')
     assert.equal(bot.calls.craft.length, 0)
+    assert.equal(bot.calls.setGoal, 0, 'parked: no sight walk issued')
     bot.restoreError()
-    // closing in resets the budget
     const moving = mockBot({ items: [{ name: 'oak_planks', count: 6 }], ids: IDS, recipes: { oak_door: recipeFor('oak_door') } })
     moving.entity.position = pos(100, 64, 0)
     moving.blockAt = () => ({ name: 'crafting_table' })
@@ -224,13 +228,15 @@ describe('craft step', () => {
       craft(moving, mctx, null, {})
       if (i % 3 === 2) moving.entity.position = pos(moving.entity.position.x - 3, 64, 0)
     }
-    assert.ok(!(typeof mctx.stepStatus === 'string' && mctx.stepStatus.startsWith('failed:')), 'still walking while closing in')
+    assert.equal(mctx.stepStatus, 'done', 'parked: closing in ends done too')
+    assert.equal(moving.calls.setGoal, 0, 'parked: no walk while closing in')
     moving.restoreError()
   })
 
-  it('(c2) claimed station crafts the door; ghost claim rebuilds', async () => {
-    // atl.6: the equip step's placed table doubles for the door branch, and
-    // a mined (ghost) claim reads as no station so the table branch heals.
+  it('(c2) parked: claimed station crafts no door; ghost claim still rebuilds (owner 2026-10-26)', async () => {
+    // atl.6 backstop kept: a mined (ghost) claim still reads as no station
+    // so the table branch heals. Only the door half is parked — the claimed
+    // station now ends the step done with nothing crafted.
     const doorBot = mockBot({
       items: [{ name: 'oak_planks', count: 6 }],
       ids: IDS,
@@ -241,8 +247,8 @@ describe('craft step', () => {
     doorCtx.claimedTable = { x: 1, y: 64, z: 0 }
     craft(doorBot, doorCtx, null, {})
     await flush()
-    assert.equal(doorBot.calls.craft.length, 1)
-    assert.deepEqual(doorBot.calls.craft[0].recipe, recipeFor('oak_door'))
+    assert.equal(doorBot.calls.craft.length, 0, 'parked: no door at the claimed station')
+    assert.equal(doorCtx.stepStatus, 'done')
     doorBot.restoreError()
     const ghostBot = mockBot({
       items: [{ name: 'oak_planks', count: 4 }],

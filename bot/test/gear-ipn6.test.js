@@ -236,18 +236,32 @@ describe('ipn.6 armour planning', () => {
     assert.equal(c.worn_iron_chestplate, 1)
     assert.equal(c.worn_iron_leggings, 0)
   })
-  it('menuPlan maps armour facts and reads done only on the full set', () => {
-    const facts = {
-      ironPick: 1, waterBucket: 2, diamondPick: 1, ingots: 8, tablePlaced: true,
-      ironHelmet: 0, wornIronHelmet: 1,
+  it('menuPlan is parked-done; the ladder core still derives the rung (owner 2026-10-26, R1)', () => {
+    // Parked contract: the menu never fires, but planFor (the o95q regrowth
+    // base) still maps worn-inclusive counts and completes on the full set.
+    const worn = {
+      worn_iron_helmet: 1, worn_iron_chestplate: 0, worn_iron_leggings: 0, worn_iron_boots: 0,
+      worn_diamond_helmet: 0, worn_diamond_chestplate: 0, worn_diamond_leggings: 0, worn_diamond_boots: 0,
+    }
+    const base = {
+      ironOre: 0, ingots: 8, diamonds: 0, sticks: 0, planks: 0, logs: 0,
+      iron_pickaxe: 1, iron_sword: 0, diamond_pickaxe: 1, diamond_sword: 0,
+      bucket: 0, water_bucket: 2,
+      iron_helmet: 0, iron_chestplate: 0, iron_leggings: 0, iron_boots: 0,
+      diamond_helmet: 0, diamond_chestplate: 0, diamond_leggings: 0, diamond_boots: 0,
+      tablePlaced: true, furnaceClaim: false, furnaceItem: 0, cobble: 0, fuel: 0,
+      ...worn,
     }
     const ctx = { gearGiven: { ...TOOLS_GIVEN } }
-    assert.equal(gear.menuPlan(facts, ctx).state, 'ready')
-    // Worn-only completion reads done: the self branch adds worn.
+    assert.deepEqual(gear.menuPlan({}, ctx), { state: 'done', key: 'done' })
+    assert.equal(gear.planFor(base, ctx, {}).state, 'ready', 'armour rung still derives under the park')
+    // Worn-only completion still reads done at the core: the self branch
+    // adds worn.
+    const fullWorn = Object.fromEntries(Object.keys(worn).map((k) => [k, 1]))
     const full = {
-      ...facts,
-      wornIronChestplate: 1, wornIronLeggings: 1, wornIronBoots: 1,
-      wornDiamondHelmet: 1, wornDiamondChestplate: 1, wornDiamondLeggings: 1, wornDiamondBoots: 1,
+      ...base, ...fullWorn,
+      iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1,
+      diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
     }
     const fullCtx = {
       gearGiven: {
@@ -255,9 +269,10 @@ describe('ipn.6 armour planning', () => {
         diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
       },
     }
-    assert.equal(gear.menuPlan(full, fullCtx).state, 'done')
+    assert.deepEqual(gear.menuPlan({}, fullCtx), { state: 'done', key: 'done' }, 'full set: menu still parked')
+    assert.equal(gear.planFor(full, fullCtx, {}).state, 'done', 'full set: core still complete')
   })
-  it('a tossed spare with the self twin worn never reads hand (core-1/body-1)', () => {
+  it('a tossed spare with the self twin worn reconciles, but the parked menu never fires (core-1/body-1, owner 2026-10-26)', () => {
     // The deadlock: worn-inclusive counts held the tossed spare in 'hand',
     // gear went infeasible, the tick never reconciled, the ladder froze.
     // Routed through goalFacts like prod: pre-fix facts inflated the pack
@@ -273,9 +288,8 @@ describe('ipn.6 armour planning', () => {
     const facts = goal.goalFacts(bot, ctx)
     assert.equal(facts.ironHelmet, 0, 'pack only, the worn twin excluded')
     assert.equal(facts.wornIronHelmet, 1)
-    const p = gear.menuPlan(facts, ctx)
-    assert.notEqual(p.state, 'hand', 'tossed spare must not hold handover')
-    assert.equal(goal.MENU.gear.feasible(facts, mockBot(), ctx), true, 'gear runs and reconciles')
+    assert.deepEqual(gear.menuPlan(facts, ctx), { state: 'done', key: 'done' }, 'tossed spare: menu parked-done (owner 2026-10-26, R1)')
+    assert.equal(goal.MENU.gear.feasible(facts, mockBot(), ctx), false, 'parked: gear never fires')
     // And the tick settles the ledger: given lands, the ladder advances.
     const tctx = { ...ctx, home: home(), stepStatus: 'running' }
     gear(bot, tctx)
@@ -765,7 +779,7 @@ describe('ipn.6 goal facts', () => {
     assert.equal(facts.wornIronLeggings, 0)
     assert.equal(facts.diamondHelmet, 0)
   })
-  it('facts.gear reads done on the full worn set, ready without it', () => {
+  it('facts.gear reads done while parked, ready or not (owner 2026-10-26)', () => {
     const fullCtx = {
       home: { built: true },
       gearGiven: {
@@ -774,14 +788,14 @@ describe('ipn.6 goal facts', () => {
       },
     }
     const bare = mockBot({ items: [...TOOLS, { name: 'diamond_pickaxe', count: 1 }] })
-    assert.notEqual(goal.goalFacts(bare, fullCtx).gear, 'done')
+    assert.equal(goal.goalFacts(bare, fullCtx).gear, 'done', 'parked: the fact never arms gear')
     const geared = mockBot({
       items: [...TOOLS, { name: 'diamond_pickaxe', count: 1 }, ...IRON_SELF_PACK],
       slots: wornSet(DIAMOND_WORN),
     })
     assert.equal(goal.goalFacts(geared, fullCtx).gear, 'done')
   })
-  it('MENU.gear.feasible refuses the complete ladder, offers the rest', () => {
+  it('MENU.gear.feasible refuses everything while parked (owner 2026-10-26)', () => {
     const F = goal.MENU.gear.feasible
     const fullCtx = {
       gearGiven: {
@@ -795,8 +809,8 @@ describe('ipn.6 goal facts', () => {
       diamondHelmet: 1, diamondChestplate: 1, diamondLeggings: 1, diamondBoots: 1,
     }
     assert.equal(F(fullFacts, mockBot(), fullCtx), false)
-    // One boot short with stock: ready works now.
+    // One boot short with stock: the core still wants it, the menu stays shut.
     const shortFacts = { ...fullFacts, diamondBoots: 0, diamonds: 4, tablePlaced: true }
-    assert.equal(F(shortFacts, mockBot(), fullCtx), true)
+    assert.equal(F(shortFacts, mockBot(), fullCtx), false, 'parked: short ladder never fires')
   })
 })
