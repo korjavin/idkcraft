@@ -36,6 +36,28 @@ function bringKind(ctx) {
 // refuse/done here, bring.clearSearchLeg for stop/park/new-owner cancels.
 // ponytail: a window cycle still in flight settles after this unread.
 function releaseSmelt(ctx) {
+  // idkcraft-aq17: a bring field-furnace adoption ends with the order —
+  // restore the home claim so the station never moves (covers done, every
+  // smelt/material refuse, and stop/park cancels, which all funnel here).
+  // Runs before the bring-flag gate: the claim must restore even when the
+  // job already dropped.
+  try {
+    const ad = ctx && ctx.fieldFurAdopt
+    if (ad && ad.adopted) {
+      ad.adopted = false
+      if (ctx.home) {
+        if (ad.saved === undefined) { try { delete ctx.home.furnace } catch (_) { /* clear best-effort */ } }
+        else ctx.home.furnace = ad.saved
+      }
+    }
+    // aq17 r1.2 backstop: a craftanyLocal flag the field fallback set must
+    // not outlive the order (stop mid-craft) — later runs plan against the
+    // standing home table again.
+    if (ad && ad.localSet) {
+      ad.localSet = false
+      if (ctx) ctx.craftanyLocal = !!(ad.localPrev)
+    }
+  } catch (_) { /* restore best-effort */ }
   const f = ctx && ctx.furnace
   if (!f || !f.bring) return
   ctx.furnaceJob = null

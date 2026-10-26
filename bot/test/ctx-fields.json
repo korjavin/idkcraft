@@ -748,6 +748,8 @@
   },
   "craftanyLocal": {
     "writers": [
+      "src/behaviours/bringbase.js",
+      "src/behaviours/bringitem.js",
       "src/behaviours/equip.js"
     ],
     "owner": "src/behaviours/equip.js"
@@ -895,6 +897,12 @@
       "src/index.js"
     ],
     "owner": "src/index.js"
+  },
+  "fieldFurAdopt": {
+    "writers": [
+      "src/behaviours/bringitem.js"
+    ],
+    "owner": "src/behaviours/bringitem.js"
   },
   "fightGivenUpId": {
     "writers": [
@@ -1182,6 +1190,7 @@
   "home": {
     "writers": [
       "src/behaviours/beds.js",
+      "src/behaviours/bringbase.js",
       "src/behaviours/build.js",
       "src/behaviours/furnace.js",
       "src/index.js",
@@ -1873,7 +1882,6 @@
   },
   "stepStatus": {
     "writers": [
-      "src/behaviours/bank.js",
       "src/behaviours/beds.js",
       "src/behaviours/bring.js",
       "src/behaviours/build.js",

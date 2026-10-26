@@ -17,8 +17,9 @@
 const stockpileMod = require('./stockpile')
 const woolMod = require('./wool')
 const bedMod = require('./bed')
+const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
-const { say } = require('./util')
+const { say, clearGoal } = require('./util')
 const { WANT_ORE, WANT_MAX, refuse, done, countDrop, hasPickaxe, tierRefusal, hasEmptyBucket, toWaterFill } = require('./bringbase')
 
 // Deferred require, same cycle as bring.js had: craftany->craft->goal
@@ -780,6 +781,12 @@ function smeltTick(bot, ctx, o) {
   if (s.started && fr && fr.settled && fr.result && fr.job && fr.job.input === s.input && fr.job.output === s.output) {
     out = fr.result
     fr.result = null
+  } else if (o.fieldFur && !o.fieldFurDone && !o.fieldFur.adopted) {
+    // aq17 r1.1: while the field fallback is mid-flight it owns the tick —
+    // the home-furnace drive would otherwise re-issue the far walk every
+    // tick and steal the goal crafting or placing needs.
+    fieldFurnaceTick(bot, ctx, o, s)
+    return
   } else {
     if (!s.started && fr && fr.settled) fr.result = null // a stale outcome never ends the new run
     s.started = true
@@ -803,6 +810,11 @@ function smeltTick(bot, ctx, o) {
     return
   }
   if (out === 'failed:no-table') { refuse(bot, ctx, 'need a crafting table'); return }
+  // idkcraft-aq17: the home furnace stands but its walk stalled (a field
+  // smelt far from home) — craft a furnace (8 cobble) and place it nearby
+  // instead of refusing. One attempt: the fallback's own failure, or a
+  // second unreachable, refuses the honest line below.
+  if (out === 'failed:furnace-unreachable' && !o.fieldFurDone) { fieldFurnaceTick(bot, ctx, o, s); return }
   refuse(bot, ctx, `could not smelt ${s.input}: ${String(out).replace(/^failed:/, '')}`)
 }
 
@@ -852,6 +864,177 @@ function materialTick(bot, ctx, o, s) {
   o.smelt = null
   toBlockSub(bot, o, 'stone', 'cobblestone', 8, s.target, 8, 'cobblestone')
   say(bot, subLine(o, '8 cobblestone for a furnace', 'stone'))
+}
+
+// Field furnace fallback (idkcraft-aq17): the home furnace stands but the
+// walk stalled, so the smelt happens here, not home. One attempt per order:
+// a carried furnace places at once (r1.4); else 8 cobble (a stone sub when
+// short, the no-cobble shape) funds a crafted furnace, which is placed
+// beside the body and adopted as the station for this run only —
+// releaseSmelt (bringbase) restores the home claim when the order ends, so
+// the station never moves. While mid-flight the fallback owns every tick
+// (r1.1: no home-furnace drive steals the goal); the furnace craft runs
+// under a local-table flag (r1.2: craftany must not walk to the far home
+// table — pack table placed nearby or one made, restored after), and the
+// adoption rechecks order ownership (r1.3: a mid-place stop never claims).
+// Any step that cannot run (no pick, no craft, no spot, no place) marks
+// the fallback done and refuses the honest unreachable line; so does a
+// second unreachable after an adoption (the placed furnace should have
+// been in reach).
+// Support a field furnace can stand on (aq17 r2.2): anything that is not
+// air and not a fluid. A fluid support rejects the placement, so the scan
+// must not offer it — and a spot that failed for any other reason loses
+// to the next candidate instead of being retried to the give-up.
+const BAD_SUPPORT = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'bubble_column'])
+function solidSupport(name) {
+  return typeof name === 'string' && !BAD_SUPPORT.has(name)
+}
+
+// Restore a craftanyLocal flag the field fallback set (r1.2): the
+// furnace craft must not outlive the fallback — later craftany runs plan
+// against the standing home table again.
+function restoreLocalTable(ctx, o) {
+  const f = o && o.fieldFur
+  try {
+    if (f && f.owned) {
+      f.owned = false
+      const m = ctx && ctx.fieldFurAdopt
+      if (m && m.localSet) {
+        m.localSet = false
+        if (ctx) ctx.craftanyLocal = !!(m.localPrev)
+      }
+    }
+  } catch (_) { /* restore best-effort */ }
+}
+
+function fieldFurnaceTick(bot, ctx, o, s) {
+  const fail = () => {
+    o.fieldFurDone = true
+    restoreLocalTable(ctx, o)
+    refuse(bot, ctx, `could not smelt ${s.input}: furnace-unreachable`)
+  }
+  const f = o.fieldFur || (o.fieldFur = { phase: 'cobble', tries: 0 })
+  if (!f.owned) {
+    f.owned = true
+    try { clearGoal(bot, ctx) } catch (_) { /* the stale far-furnace walk drops: the fallback owns the body now */ }
+    // aq17 r1.2: craftany prefers the standing home table even when it is
+    // a field away and walks to it. Force the local path (pack table placed
+    // nearby, or one made from the pack) while the fallback crafts.
+    try {
+      const m = ctx.fieldFurAdopt || (ctx.fieldFurAdopt = {})
+      if (!m.localSet) { m.localSet = true; m.localPrev = ctx.craftanyLocal === true; ctx.craftanyLocal = true }
+    } catch (_) { /* flag best-effort */ }
+  }
+  if (f.flight) return
+  if (f.adopted) { fail(); return } // placed but still unreachable: no second furnace
+  if (!f.said) { f.said = true; say(bot, 'the furnace is out of reach, placing one here') }
+  const pack = packCounts(bot)
+  // aq17 r1.4: a carried furnace needs no materials and no craft — place
+  // it, unless a furnace craft is still verifying (r2.1: the exposed item
+  // may be mid-verification, not placeable yet).
+  if (pack.furnace > 0 && !f.craftPending && !ctx.gearInFlight) f.phase = 'place'
+  if (f.phase === 'cobble') {
+    if ((pack.cobblestone || 0) < 8) {
+      const pick = Object.keys(pack).some((n) => n.endsWith('_pickaxe'))
+      if (!pick) {
+        let r = null
+        try { r = deps.craftItem(bot, ctx, ['wooden_pickaxe'], 1) } catch (_) { r = { done: false } }
+        if (r === 'running' || (r && r.done)) return // done: next tick sees the pick
+        fail()
+        return
+      }
+      o.smelt = null
+      toBlockSub(bot, o, 'stone', 'cobblestone', 8, s.target, 8, 'cobblestone')
+      say(bot, subLine(o, '8 cobblestone for a furnace', 'stone'))
+      return
+    }
+    f.phase = 'craft'
+  }
+  if (f.phase === 'craft') {
+    // aq17 r2.1: a furnace showing in the pack while its craft is still
+    // verifying (our pending craft, or gear's flight) is not placeable
+    // yet — an early place races the craft's verification (phantom craft,
+    // stale run state) or places a ghost the revert then strands. Keep
+    // driving the craft to its settle; only a settled craft (or a furnace
+    // that was never crafted this order) moves to place.
+    if (!(pack.furnace > 0) || f.craftPending || ctx.gearInFlight) {
+      let r = null
+      try { r = deps.craftItem(bot, ctx, ['furnace'], 1) } catch (_) { r = { done: false } }
+      if (r === 'running') { f.craftPending = true; return }
+      f.craftPending = false
+      if (!(packCounts(bot).furnace > 0)) { fail(); return }
+    }
+    f.phase = 'place'
+  }
+  if (!ctx.home) { fail(); return }
+  if (typeof bot.placeBlock !== 'function' || !bot.blockAt) { fail(); return }
+  let item = null
+  try { item = (bot.inventory.items() || []).find((i) => i && i.name === 'furnace') || null } catch (_) { item = null }
+  if (!item) { fail(); return } // crafted but gone: no second attempt
+  const bp = bot.entity && bot.entity.position
+  if (!bp || typeof bp.x !== 'number') return
+  const bx = Math.floor(bp.x)
+  const by = Math.floor(bp.y)
+  const bz = Math.floor(bp.z)
+  let ref = null
+  let at = null
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    let below = null
+    let cell = null
+    try {
+      below = bot.blockAt(new Vec3(bx + dx, by - 1, bz + dz))
+      cell = bot.blockAt(new Vec3(bx + dx, by, bz + dz))
+    } catch (_) { below = null; cell = null }
+    if (!below || !below.position || !below.name || !solidSupport(below.name)) continue
+    if (cell && cell.name && cell.name !== 'air') continue
+    const key = `${Math.floor(below.position.x)},${Math.floor(below.position.y) + 1},${Math.floor(below.position.z)}`
+    if (f.badSpots && f.badSpots.has(key)) continue // r2.2: a rejected candidate loses, the next wins
+    ref = below
+    at = { x: below.position.x, y: below.position.y + 1, z: below.position.z }
+    break
+  }
+  if (!ref) { fail(); return }
+  f.flight = true
+  void (async () => {
+    try {
+      if (ctx.bring !== o) return // the order moved on mid-place: leave the furnace standing
+      if (typeof bot.equip === 'function') {
+        try { await bot.equip(item, 'hand') } catch (_) { /* held already: placement decides */ }
+      }
+      await bot.placeBlock(ref, new Vec3(0, 1, 0))
+      let stood = null
+      try { stood = bot.blockAt(new Vec3(at.x, at.y, at.z)) } catch (_) { stood = null }
+      if (!stood || stood.name !== 'furnace') throw new Error('furnace-place')
+      // aq17 r1.3: a stop (or new order) may have landed mid-place, after
+      // the flight-start guard ran — recheck ownership immediately before
+      // adopting, never claim into a dead order.
+      if (ctx.bring !== o) return
+      try {
+        const m = ctx.fieldFurAdopt || (ctx.fieldFurAdopt = {})
+        m.adopted = true
+        m.saved = ctx.home.furnace
+      } catch (_) { /* adopt best-effort */ }
+      try { ctx.home.furnace = new Vec3(at.x, at.y, at.z) } catch (_) { /* adopt best-effort */ }
+      f.adopted = true
+      restoreLocalTable(ctx, o) // the furnace craft is done: plan against the home table again
+      s.started = false // retry the run through the field furnace next tick
+      try { console.log(`bring field furnace placed at ${at.x},${at.y},${at.z} (aq17)`) } catch (_) { /* logging never breaks a smelt */ }
+    } catch (err) {
+      if (ctx.bring !== o) return // ended mid-place: no honest line for a dead order
+      // aq17 r2.2: this candidate failed — skip it on the retry so the next
+      // spot wins instead of re-placing onto the same rejection.
+      try {
+        if (at && typeof at.x === 'number') {
+          if (!f.badSpots) f.badSpots = new Set()
+          f.badSpots.add(`${Math.floor(at.x)},${Math.floor(at.y)},${Math.floor(at.z)}`)
+        }
+      } catch (_) { /* skip best-effort */ }
+      f.tries = (f.tries || 0) + 1
+      if (f.tries >= 3) fail()
+    } finally {
+      f.flight = false
+    }
+  })()
 }
 
 // Chest mats for the craft rung (did.4 colour rule): the product withdraw

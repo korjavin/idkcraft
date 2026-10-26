@@ -437,3 +437,341 @@ describe('bring smelt rung (idkcraft-ipn.20)', () => {
     assert.equal(ctx.furnace.result, null)
   })
 })
+
+// Field furnace fallback (idkcraft-aq17): a smelt whose home furnace walk
+// stalls (furnace-unreachable) crafts a furnace from 8 cobble and places it
+// nearby instead of refusing — one attempt, the home claim restored.
+describe('aq17 furnace-unreachable field fallback', () => {
+  const FAR = { x: 200, y: 64, z: 200 }
+  function fieldBot() {
+    const bot = mockBot({
+      items: [{ name: 'raw_iron', count: 3 }, { name: 'stick', count: 2 }, { name: 'stone_pickaxe', count: 1 }, { name: 'cobblestone', count: 8 }],
+      cells: { '0,64,0': 'crafting_table' },
+    })
+    bot.placeBlock = async (ref, dir) => {
+      const at = `${ref.position.x + dir.x},${ref.position.y + dir.y},${ref.position.z + dir.z}`
+      bot.cells[at] = 'furnace'
+    }
+    return bot
+  }
+  function withCraft(crafted, body) {
+    const realCraft = itemMod.deps.craftItem
+    itemMod.deps.craftItem = (b, c, names, n) => {
+      crafted.push(names)
+      if (names.includes('furnace')) { b.add('furnace', 1); return { done: true } }
+      return { done: false, line: 'no recipe' }
+    }
+    return Promise.resolve().then(body).finally(() => { itemMod.deps.craftItem = realCraft })
+  }
+
+  it('furnace-unreachable: furnace crafted, placed nearby, smelt completes, claim restored', async () => {
+    const bot = fieldBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const crafted = []
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'done'])
+    await withCraft(crafted, () => withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await drive(bot, ctx)
+    }))
+    assert.deepEqual(crafted, [['furnace']], 'one furnace crafted')
+    const placed = Object.entries(bot.cells).filter(([, n]) => n === 'furnace')
+    assert.equal(placed.length, 1, `one field furnace placed: ${JSON.stringify(placed)}`)
+    assert.deepEqual(ctx.home.furnace, FAR, 'home claim restored')
+    assert.deepEqual(bot.tossCalls, [['iron_ingot', 3]], 'smelt completed and tossed')
+    assert.ok(bot.lines.includes('the furnace is out of reach, placing one here'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.includes('here are 3 iron_ingot'), `lines: ${bot.lines}`)
+    assert.ok(!bot.lines.some((l) => l.includes('could not smelt')), 'never refused')
+  })
+
+  it('a second unreachable after the adoption refuses honestly, no second furnace', async () => {
+    const bot = fieldBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const crafted = []
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'failed:furnace-unreachable'])
+    await withCraft(crafted, () => withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await drive(bot, ctx)
+    }))
+    assert.deepEqual(crafted, [['furnace']], 'crafted once only')
+    assert.equal(bot.lines.at(-1), 'could not smelt raw_iron: furnace-unreachable')
+    assert.equal(ctx.bring, null, 'order refused')
+    assert.deepEqual(ctx.home.furnace, FAR, 'home claim restored on refuse')
+  })
+
+  it('r1.1: mid-flight fallback owns the tick — the home drive never re-runs before adoption', async () => {
+    const bot = fieldBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const crafted = []
+    let drives = 0
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'done'])
+    await withCraft(crafted, () => withFurnace(f, async () => {
+      const real = itemMod.deps.driveFurnace
+      itemMod.deps.driveFurnace = (...a) => { drives++; return real(...a) }
+      try {
+        handleChat(bot, ticker, 'P', 'bring me iron ingot')
+        await drive(bot, ctx)
+      } finally {
+        itemMod.deps.driveFurnace = real
+      }
+    }))
+    assert.equal(drives, 2, 'one drive to trigger the fallback, one retry after adoption — nothing between')
+    assert.deepEqual(crafted, [['furnace']])
+    assert.equal(Object.entries(bot.cells).filter(([, n]) => n === 'furnace').length, 1, 'field furnace placed')
+    assert.deepEqual(ctx.home.furnace, FAR, 'home claim restored')
+    assert.ok(!ctx.craftanyLocal, 'local-table flag restored')
+    assert.deepEqual(bot.tossCalls, [['iron_ingot', 3]])
+  })
+
+  it('r1.2: a far standing home table never sees a walk — the carried table is placed locally', async () => {
+    const bot = fieldBot()
+    delete bot.cells['0,64,0'] // no reachable standing table
+    bot.cells['200,64,0'] = 'crafting_table' // the home table stands, far away
+    bot.add('crafting_table', 1) // carried table
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.table = { x: 200, y: 64, z: 200 }
+    ctx.home.furnace = { ...FAR }
+    let walked = false
+    const realCraft = itemMod.deps.craftItem
+    // Emulates the real craftany executor: with a standing (far) table it
+    // walks there first ('running'), then gives up; with the local-table
+    // flag it crafts through the pack path at once.
+    itemMod.deps.craftItem = (b, c, names) => {
+      if (!names.includes('furnace')) return { done: false, line: 'no recipe' }
+      if (c.craftanyLocal) { b.add('furnace', 1); return { done: true } }
+      if (!walked) { walked = true; return 'running' }
+      return { done: false, line: "can't reach the crafting table" }
+    }
+    try {
+      const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'done'])
+      await withFurnace(f, async () => {
+        handleChat(bot, ticker, 'P', 'bring me iron ingot')
+        await drive(bot, ctx)
+      })
+    } finally {
+      itemMod.deps.craftItem = realCraft
+    }
+    assert.ok(walked === false || bot.tossCalls.length === 1, `no far-table walk then refuse: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [['iron_ingot', 3]], 'smelt completed through the local craft')
+    assert.equal(Object.entries(bot.cells).filter(([, n]) => n === 'furnace').length, 1, 'field furnace placed')
+  })
+
+  it('r1.3: stop during placement never adopts the home claim', async () => {
+    const bot = fieldBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    let release = null
+    bot.placeBlock = (ref, dir) => new Promise((res) => {
+      release = () => {
+        bot.cells[`${ref.position.x + dir.x},${ref.position.y + dir.y},${ref.position.z + dir.z}`] = 'furnace'
+        res()
+      }
+    })
+    const crafted = []
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable'])
+    await withCraft(crafted, () => withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await bring(bot, ctx, null, {}) // drive fails: craft runs, placement flight starts
+      await new Promise((r) => setImmediate(r))
+      assert.ok(ctx.bring && ctx.bring.fieldFur && ctx.bring.fieldFur.flight, 'placement in flight')
+      ctx.bring = null // stop lands mid-place (prod nulls the order; cleanup runs)
+      release()
+      await new Promise((r) => setImmediate(r))
+      await new Promise((r) => setImmediate(r))
+    }))
+    assert.deepEqual(ctx.home.furnace, FAR, 'home claim untouched by the orphaned placement')
+    assert.ok(!(ctx.fieldFurAdopt && ctx.fieldFurAdopt.adopted), 'nothing adopted')
+  })
+
+  it('r1.4: a carried furnace skips material gathering and crafting', async () => {
+    const bot = fieldBot()
+    bot._items = bot._items.filter((i) => i.name !== 'cobblestone' && i.name !== 'stone_pickaxe')
+    bot.add('furnace', 1) // everything needed, no cobble/pick/wood
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const crafted = []
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'done'])
+    await withCraft(crafted, () => withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await drive(bot, ctx)
+    }))
+    assert.deepEqual(crafted, [], 'no furnace crafted — the carried one places')
+    assert.equal(Object.entries(bot.cells).filter(([, n]) => n === 'furnace').length, 1, 'field furnace placed')
+    assert.deepEqual(ctx.home.furnace, FAR, 'home claim restored')
+    assert.deepEqual(bot.tossCalls, [['iron_ingot', 3]], 'smelt completed and tossed')
+    assert.ok(!bot.lines.some((l) => l.includes('could not smelt')), `never refused: ${bot.lines}`)
+  })
+
+  it('r2.1a: carried furnace waits out an in-flight gear craft', async () => {
+    const bot = fieldBot()
+    bot.add('furnace', 1) // carried from the start — but a craft is verifying
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    ctx.gearInFlight = true // an in-flight craft settles on the next drive
+    let calls = 0
+    const realCraft = itemMod.deps.craftItem
+    itemMod.deps.craftItem = (b, c, names) => {
+      if (!names.includes('furnace')) return { done: false, line: 'no recipe' }
+      calls++
+      if (calls === 1) return 'running' // still verifying
+      try { c.gearInFlight = false } catch (_) { /* flag best-effort */ }
+      return { done: true }
+    }
+    const placed = []
+    const realPlace = bot.placeBlock
+    bot.placeBlock = async (ref, dir) => {
+      placed.push(`${ref.position.x + dir.x},${ref.position.y + dir.y},${ref.position.z + dir.z}`)
+      return realPlace(ref, dir)
+    }
+    try {
+      const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'done'])
+      await withFurnace(f, async () => {
+        handleChat(bot, ticker, 'P', 'bring me iron ingot')
+        // Ticks through the flight (the shared drive() sleeps on in-flight
+        // flags instead of ticking).
+        for (let i = 0; i < 40 && ctx.bring; i++) {
+          await bring(bot, ctx, null, {})
+          await flush()
+          const o = ctx.bring
+          if (!o) break
+          if (o.phase === 'return') bot.entity.position = pos(30, 64, 1)
+          else bot.entity.position = pos(1, 64, 0)
+        }
+      })
+    } finally {
+      itemMod.deps.craftItem = realCraft
+      bot.placeBlock = realPlace
+    }
+    assert.equal(calls, 2, 'the in-flight craft is driven to its settle, not jumped past')
+    assert.equal(placed.length, 1, 'placed once, after the settle')
+    assert.deepEqual(bot.tossCalls, [['iron_ingot', 3]])
+    assert.ok(!ctx.gearInFlight, 'no leaked flight flag')
+  })
+
+  it('r2.1b: furnace exposed by a running craft waits for the craft', async () => {
+    const bot = fieldBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const events = []
+    let calls = 0
+    const realCraft = itemMod.deps.craftItem
+    itemMod.deps.craftItem = (b, c, names) => {
+      if (!names.includes('furnace')) return { done: false, line: 'no recipe' }
+      calls++
+      if (calls === 1) {
+        b.add('furnace', 1) // exposed early while the run continues
+        events.push('craft-running')
+        return 'running'
+      }
+      events.push('craft-done')
+      return { done: true }
+    }
+    const realPlace = bot.placeBlock
+    bot.placeBlock = async (...a) => { events.push('place'); return realPlace(...a) }
+    try {
+      const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'done'])
+      await withFurnace(f, async () => {
+        handleChat(bot, ticker, 'P', 'bring me iron ingot')
+        await drive(bot, ctx)
+      })
+    } finally {
+      itemMod.deps.craftItem = realCraft
+      bot.placeBlock = realPlace
+    }
+    assert.equal(calls, 2, 'the running craft is driven, not jumped past')
+    assert.deepEqual(events, ['craft-running', 'craft-done', 'place'], `settle before place: ${events}`)
+    assert.deepEqual(bot.tossCalls, [['iron_ingot', 3]])
+  })
+
+  it('r2.2a: fluid support is skipped — water east loses to solid west', async () => {
+    const bot = fieldBot()
+    delete bot.cells['0,64,0'] // west cell free
+    bot.cells['2,63,0'] = 'water' // east support fluid
+    bot.entity.position = pos(1, 64, 0)
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const tried = []
+    bot.placeBlock = async (ref, dir) => {
+      tried.push(ref.name)
+      if (ref.name === 'water') throw new Error('no-place')
+      bot.cells[`${ref.position.x + dir.x},${ref.position.y + dir.y},${ref.position.z + dir.z}`] = 'furnace'
+    }
+    const crafted = []
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'done'])
+    await withCraft(crafted, () => withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await drive(bot, ctx)
+    }))
+    assert.ok(!tried.includes('water'), `water support never attempted: ${tried}`)
+    assert.ok(bot.cells['0,64,0'] === 'furnace', `west placed: ${JSON.stringify(bot.cells)}`)
+    assert.ok(!bot.cells['2,64,0'], 'east never placed')
+    assert.deepEqual(bot.tossCalls, [['iron_ingot', 3]])
+    assert.ok(!bot.lines.some((l) => l.includes('could not smelt')), `never refused: ${bot.lines}`)
+  })
+
+  it('r2.2b: a failed spot loses to the next candidate instead of retrying', async () => {
+    const bot = fieldBot()
+    delete bot.cells['0,64,0'] // west cell free (east and west both solid)
+    bot.entity.position = pos(1, 64, 0)
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    let n = 0
+    bot.placeBlock = async (ref, dir) => {
+      n++
+      if (n === 1) throw new Error('flaky') // transient east failure
+      bot.cells[`${ref.position.x + dir.x},${ref.position.y + dir.y},${ref.position.z + dir.z}`] = 'furnace'
+    }
+    const crafted = []
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable', 'done'])
+    await withCraft(crafted, () => withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await drive(bot, ctx)
+    }))
+    assert.equal(n, 2, 'one retry, on the next spot')
+    assert.ok(bot.cells['0,64,0'] === 'furnace', `west wins after the east failure: ${JSON.stringify(bot.cells)}`)
+    assert.ok(!bot.cells['2,64,0'], 'east never retried')
+    assert.deepEqual(bot.tossCalls, [['iron_ingot', 3]])
+  })
+
+  it('short on cobble: a stone sub funds the furnace first', async () => {
+    const cells = { '0,64,0': 'crafting_table', '3,64,0': 'stone' }
+    for (let x = 4; x < 12; x++) cells[`${x},64,0`] = 'stone'
+    const bot = mockBot({ items: [{ name: 'raw_iron', count: 3 }, { name: 'stick', count: 2 }, { name: 'stone_pickaxe', count: 1 }], cells })
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    home(ctx)
+    ctx.home.furnace = { ...FAR }
+    const f = fakeFurnace(bot, ['failed:furnace-unreachable'])
+    await withFurnace(f, async () => {
+      handleChat(bot, ticker, 'P', 'bring me iron ingot')
+      await bring(bot, ctx, null, {}) // unreachable: short on cobble, morph to stone
+      await bring(bot, ctx, null, {})
+    })
+    const o = ctx.bring
+    assert.equal(o.kind, 'block', 'stone sub opened')
+    assert.equal(o.subFor, 'iron_ingot')
+    assert.ok(bot.lines.some((l) => l.includes('8 cobblestone for a furnace')), `lines: ${bot.lines}`)
+  })
+})
