@@ -465,8 +465,9 @@ describe('gear menu and goal glue', () => {
     assert.equal(o.indexOf('gear'), o.indexOf('forage') - 1)
   })
   it('MENU.gear.feasible is parked: never feasible, even built with mats (owner 2026-10-26)', () => {
-    // Parked contract: menuPlan returns null, so the menu never picks gear —
-    // the pre-house refusal stays, every built-home shape reads infeasible.
+    // Parked contract: menuPlan returns a parked-done object, so the menu
+    // never picks gear — the pre-house refusal stays, every built-home
+    // shape reads infeasible (goal.js untouched, R1).
     const F = goal.MENU.gear.feasible
     assert.equal(F({ home: 'site' }, mockBot(), {}), false)
     assert.equal(F({ home: 'built', ingots: 3, sticks: 2, tablePlaced: true }, mockBot(), {}), false, 'mats on hand: still parked')
@@ -485,16 +486,16 @@ describe('gear menu and goal glue', () => {
       diamondHelmet: 1, diamondChestplate: 1, diamondLeggings: 1, diamondBoots: 1,
     }
     assert.equal(F(fullFacts, mockBot(), fullCtx), false, 'full ladder: still parked')
-    assert.equal(gear.menuPlan({}, {}), null, 'menuPlan stays null until o95q regrows it')
+    assert.deepEqual(gear.menuPlan({}, {}), { state: 'done', key: 'done' }, 'menuPlan stays parked-done until o95q regrows it')
   })
-  it('criteria and parked stepWhy mirror the park', () => {
+  it('criteria and parked stepWhy read the done line (R1: goal.js untouched)', () => {
     assert.ok(goal.STEP_CRITERIA.gear.includes('forge'))
     assert.equal(goal.stepWhy('gear', { home: 'site' }, mockBot(), {}, ''), 'gear: house not built yet')
-    // Built home: the plan is null, so stepWhy names the park — never a
-    // need line, never ladder-complete.
-    const parked = goal.stepWhy('gear', { home: 'built' }, mockBot(), {}, '')
-    assert.match(parked, /parked/)
-    assert.equal(goal.stepWhy('gear', { home: 'built' }, mockBot(), { gear: { saidNeed: 'want-logs' } }, ''), parked, 'latch reads the same park')
+    // Built home: the parked-done plan reads the existing done line — the
+    // custom `gear: parked` line was dropped in R1 (goal.js is a risky
+    // file); never a need line.
+    assert.equal(goal.stepWhy('gear', { home: 'built' }, mockBot(), {}, ''), 'gear: ladder complete')
+    assert.equal(goal.stepWhy('gear', { home: 'built' }, mockBot(), { gear: { saidNeed: 'want-logs' } }, ''), 'gear: ladder complete', 'latch reads the same done line')
   })
   it('decide holds the step behind gear and furnace window ops', async () => {
     const bot = mockBot({ items: [{ name: 'iron_ingot', count: 3 }, { name: 'stick', count: 2 }] })
@@ -865,7 +866,7 @@ describe('gear round-2: handover state and op span', () => {
     assert.equal(plan.key, 'hand-iron_sword')
     const facts = { home: 'built', ironPick: 1, ironSword: 1, waterBucket: 2, tablePlaced: true }
     assert.equal(goal.MENU.gear.feasible(facts, mockBot(), ctx), false, 'parked: handover never fires')
-    assert.match(goal.stepWhy('gear', facts, mockBot(), ctx, ''), /parked/, 'handover reads parked, not handing-over')
+    assert.equal(goal.stepWhy('gear', facts, mockBot(), ctx, ''), 'gear: ladder complete', 'handover reads done, not handing-over')
   })
   it('hand tick yields silently', () => {
     const bot = mockBot({ items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'water_bucket', count: 2 }, { name: 'iron_sword', count: 1 }] })

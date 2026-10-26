@@ -343,11 +343,15 @@ function countsFromFacts(facts, ctx) {
 // gears: the bot cleared forest for ladder goods and buckets nobody
 // ordered. The ladder below (planFor/deriveNext/the tick) stays as the
 // regrowth base for the o95q LLM/fun step, which raises order-driven
-// crafting; until then the menu reads null — infeasible, parked stepWhy.
-// equip (wearing what exists), the bring legs (own smelt/mine), and
-// BOT_SKILLS loading are untouched by this park.
+// crafting; until then the menu reads a parked-done object — goal.js maps
+// the done state to infeasible with zero changes there (no null guards
+// needed anywhere). equip (wearing what exists), the bring legs (own
+// smelt/mine), and BOT_SKILLS loading are untouched by this park.
+// The custom `gear: parked` line was dropped in R1 (its only surfacing
+// point is goal.js stepWhy, a risky file): a parked menu reads the
+// existing `gear: ladder complete` done line — acceptable, documented.
 function menuPlan(facts, ctx) {
-  return null
+  return { state: 'done', key: 'done' }
 }
 
 // The single planning source for MENU.feasible, stepWhy, goalText, and the

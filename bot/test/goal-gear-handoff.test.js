@@ -1,8 +1,8 @@
 'use strict'
 
-// Parked contract (owner 2026-10-26, follow-up o95q): the gear menu never
-// fires — menuPlan returns null, so decide() never picks gear and stepWhy
-// names the park. This file keeps the ipn.7 handoff shape (a finished step
+// Parked contract (owner 2026-10-26, follow-up o95q, R1: goal.js untouched):
+// the gear menu never fires — menuPlan returns a parked-done object, so
+// decide() never picks gear and stepWhy reads the done line. This file keeps the ipn.7 handoff shape (a finished step
 // must hand off, never re-issue) with gear replaced by the park: after a
 // stockpile done, decide moves on; new mats never re-arm gear; the only
 // gear behaviour left is the untouched ladder core (see gear.test.js).
@@ -57,7 +57,7 @@ describe('idkcraft-ipn.7 parked: gear never picks, yields elsewhere', () => {
     assert.equal(facts.gear, 'done', 'parked: the gear fact never arms the menu')
     assert.equal(MENU.gear.feasible(facts, bot, ctx), false)
     const why = require('../src/goal').stepWhy('gear', facts, bot, ctx, '')
-    assert.match(why, /parked/, `stepWhy names the park, got=${JSON.stringify(why)}`)
+    assert.equal(why, 'gear: ladder complete', `R1: parked menu reads the done line, got=${JSON.stringify(why)}`)
     const second = await decide(bot, ctx)
     assert.notEqual(second.action, 'gear', 'still parked on the next pick')
   })

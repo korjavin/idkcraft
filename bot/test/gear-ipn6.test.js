@@ -236,7 +236,7 @@ describe('ipn.6 armour planning', () => {
     assert.equal(c.worn_iron_chestplate, 1)
     assert.equal(c.worn_iron_leggings, 0)
   })
-  it('menuPlan is parked: armour facts read null; the ladder core still derives the rung (owner 2026-10-26)', () => {
+  it('menuPlan is parked-done; the ladder core still derives the rung (owner 2026-10-26, R1)', () => {
     // Parked contract: the menu never fires, but planFor (the o95q regrowth
     // base) still maps worn-inclusive counts and completes on the full set.
     const worn = {
@@ -253,7 +253,7 @@ describe('ipn.6 armour planning', () => {
       ...worn,
     }
     const ctx = { gearGiven: { ...TOOLS_GIVEN } }
-    assert.equal(gear.menuPlan({}, ctx), null)
+    assert.deepEqual(gear.menuPlan({}, ctx), { state: 'done', key: 'done' })
     assert.equal(gear.planFor(base, ctx, {}).state, 'ready', 'armour rung still derives under the park')
     // Worn-only completion still reads done at the core: the self branch
     // adds worn.
@@ -269,7 +269,7 @@ describe('ipn.6 armour planning', () => {
         diamond_helmet: 1, diamond_chestplate: 1, diamond_leggings: 1, diamond_boots: 1,
       },
     }
-    assert.equal(gear.menuPlan({}, fullCtx), null, 'full set: menu still parked')
+    assert.deepEqual(gear.menuPlan({}, fullCtx), { state: 'done', key: 'done' }, 'full set: menu still parked')
     assert.equal(gear.planFor(full, fullCtx, {}).state, 'done', 'full set: core still complete')
   })
   it('a tossed spare with the self twin worn reconciles, but the parked menu never fires (core-1/body-1, owner 2026-10-26)', () => {
@@ -288,7 +288,7 @@ describe('ipn.6 armour planning', () => {
     const facts = goal.goalFacts(bot, ctx)
     assert.equal(facts.ironHelmet, 0, 'pack only, the worn twin excluded')
     assert.equal(facts.wornIronHelmet, 1)
-    assert.equal(gear.menuPlan(facts, ctx), null, 'tossed spare: menu parked (owner 2026-10-26)')
+    assert.deepEqual(gear.menuPlan(facts, ctx), { state: 'done', key: 'done' }, 'tossed spare: menu parked-done (owner 2026-10-26, R1)')
     assert.equal(goal.MENU.gear.feasible(facts, mockBot(), ctx), false, 'parked: gear never fires')
     // And the tick settles the ledger: given lands, the ladder advances.
     const tctx = { ...ctx, home: home(), stepStatus: 'running' }
