@@ -171,14 +171,51 @@ const IDLE_STEPS = new Set(['rest', 'explore', 'fun', 'stay', 'shelter'])
 // exactly when the only alternatives are rest and an explore with nothing
 // new — while a merely-passing idle moment still explores first, and the
 // jr2.2 ladder (fresh ctx, full kit) is untouched (R1#5 vs R2#1).
+// The yard needs light (o95q R5.1): mirrors MENU.light's fuel ladder
+// exactly (torches on hand, or craftable fuel plus sticks/planks/logs),
+// so a craftable torch never loses to a joke. The home-site and leash
+// preconditions mirror too — an unlightable yard does not block whimsy.
+function lightDue(bot, ctx, facts) {
+  try {
+    const home = ctx && ctx.home
+    if (!home || !home.site) return false
+    if (!(facts.unlit > 0)) return false
+    const vetoes = require('../vetoes')
+    if (vetoes.homeLegVetoed(bot, ctx, 'light')) return false
+    const lm = require('./light')
+    if ((facts.torches || 0) > 0) return true
+    if (lm.spendableFuel((facts.coal || 0) - (facts.charcoal || 0), facts.charcoal) <= 0) {
+      if (ctx && typeof ctx.lightSmeltAt === 'number') return true
+      if (!lm.charcoalWood(facts.logs || 0, facts.planks || 0, facts.maxPlanks || 0, facts.sticks || 0)) return false
+      try { return !!require('./furnace').furnaceReady(bot, ctx) } catch (_) { return false }
+    }
+    return (facts.sticks || 0) > 0 || (facts.maxPlanks || 0) >= 2 || (facts.logs || 0) >= 1
+  } catch (_) {
+    return false
+  }
+}
+
 function funFeasible(facts, bot, ctx, now = Date.now()) {
   try {
-    if (!facts || facts.time !== 'day') return false
+    if (!facts) return false
+    // Idle-credit bookkeeping FIRST (o95q R5.2): every decide observes
+    // last tick's step, so productive work restarts the clock before ANY
+    // early return below can preserve a stale stamp.
+    if (ctx && typeof ctx === 'object') {
+      try {
+        const last = ctx.step
+        if (!last || !IDLE_STEPS.has(last) || typeof ctx.funIdleSince !== 'number') ctx.funIdleSince = now
+      } catch (_) { /* stamp best-effort */ }
+    }
+    if (facts.time !== 'day') return false
     if (!castleQuiet(facts)) return false
     if (facts.home !== 'built') return false
     if (facts.known === 'near') return false
     if (facts.haul === 'waiting') return false
-    if (facts.surplus === 'yes') return false
+    // Stockpile's exact complement (o95q R5.1): a chest to adopt/place,
+    // bankable surplus, or finished goods awaiting handover all belong
+    // to the banker, never to the joke.
+    if (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')) return false
     if (facts.pinned && facts.pinned !== 'none') return false
     if (facts.beds === 'none' || facts.beds === 'one') return false
     if (facts.gear !== 'done' && facts.gear !== 'hand') return false
@@ -188,21 +225,15 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
     if ((facts.logs || 0) >= NEED_LOGS) return false
     if ((facts.table || 0) <= 0 && (facts.maxPlanks || 0) >= 4 && ((!facts.tablePlaced && !facts.houseTable) || facts.tableOwed)) return false
     if ((facts.door || 0) <= 0 && facts.tablePlaced && (facts.maxPlanks || 0) >= 6) return false
-    if (facts.unlit > 0 && (facts.torches || 0) > 0) return false
+    if (lightDue(bot, ctx, facts)) return false
     if (!ctx || ctx.paused) return false
     if (ctx.bring || ctx.lead || ctx.comehome || ctx.gocastle) return false
     if (ctx.flat && !ctx.flat.parked) return false
     if (ctx.taskPlanStep || ctx.llmOrder || ctx.llmAsk) return false
     if (threatNear(bot)) return false
-    // Time-since-productive-work (o95q R2.1 fallback): ctx.step still
-    // holds last tick's pick at decide time. Bookkeeping lives here
-    // because goal.js is untouchable — the stamp is monotonic and the
-    // read is the gate. Productive work resets the credit even while
-    // the joke cools down (the cooldown return sits below this).
-    try {
-      const last = ctx.step
-      if (!last || !IDLE_STEPS.has(last) || typeof ctx.funIdleSince !== 'number') ctx.funIdleSince = now
-    } catch (_) { /* stamp best-effort */ }
+    // Time-since-productive-work (o95q R2.1 fallback): the credit above
+    // is fresh on every decide, so this read is exact; the cooldown
+    // return sits below it, never shielding work.
     if (now - (ctx.funIdleSince || now) < FUN_IDLE_MS) return false
     if (typeof ctx.funNext === 'number' && now < ctx.funNext) return false
     if (giftRecipient(bot) && giftPick(bot)) return true
@@ -475,6 +506,9 @@ async function placeCells(bot, ctx, gen, block, cells) {
       if (stale(ctx, gen)) return { placed, fail: 'preempted' } // stop ordered mid-equip: place nothing
       if (!safeToJoke(bot)) return { placed, fail: 'threat' } // combat started mid-equip: hold fire
       if (!okEq) return { placed, fail: 'no-mats' }
+      // A body may step in during the equip await (o95q R5.4): recheck
+      // the collision box after every gap, not just at scan time.
+      if (cellOccupied(bot, cell.x, cell.y, cell.z)) continue
       let ref = null
       try { ref = bot.blockAt && bot.blockAt(new Vec3(cell.x, cell.y - 1, cell.z)) } catch (_) { ref = null }
       if (!ref || !ref.position) return { placed, fail: 'no-ground' }
@@ -549,9 +583,17 @@ async function doGift(bot, ctx, gen, item, line) {
   // here — not just inside the approach loop.
   if (stale(ctx, gen)) return
   if (!safeToJoke(bot)) { stepFailed(ctx, 'fun-threat', gen); return }
-  if (!giftRecipient(bot)) { stepFailed(ctx, 'fun-no-recipient', gen); return }
+  // Toss-range recheck (o95q R5.3): giftRecipient sees out to GIFT_RANGE,
+  // but the handover must happen at TOSS_RANGE — the walk-in only counts
+  // if the recipient is still inside it after the facing await.
+  const rr = giftRecipient(bot)
+  if (!rr || !(rr.dist <= TOSS_RANGE)) { stepFailed(ctx, 'fun-no-recipient', gen); return }
   const inv = itemsOf(bot)
-  const stack = inv.find((i) => i && i.name === item) || { name: item, type: null }
+  const stack = inv.find((i) => i && i.name === item)
+  // Reserve revalidation (o95q R5.5): the keep-last promise is checked at
+  // the toss, not just at the pick — a stack that dropped to one since
+  // is survival stock, never the joke's. Defer, don't fail.
+  if (!stack || (stack.count || 0) < 2) { stepDone(ctx, gen); return }
   const tossed = await tossOne(bot, stack)
   if (stale(ctx, gen)) return // preempted mid-toss: the body belongs elsewhere now
   if (!tossed) { stepFailed(ctx, 'fun-toss', gen); return }

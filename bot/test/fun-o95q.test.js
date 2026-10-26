@@ -68,6 +68,8 @@ const facts = (over = {}) => ({
   haul: 'none', surplus: 'no', pinned: 'none', beds: 'both', gear: 'done',
   sword: 1, pickaxe: 1, logs: 0, unlit: 0, torches: 0, rearm: false,
   maxPlanks: 0, table: 0, door: 0, scaffold: 16,
+  chest: 'yes', chestTodo: 'none', gearHandover: 'none',
+  coal: 0, charcoal: 0, sticks: 0,
   ...over,
 })
 const dirt8 = [{ name: 'dirt', count: 8 }]
@@ -163,8 +165,28 @@ describe('fun gating (o95q idle-only)', () => {
       { scaffold: 0 },
       { table: 0, maxPlanks: 4, tableOwed: true },
       { door: 0, tablePlaced: true, maxPlanks: 6 },
-      { unlit: 3, torches: 2 },
     ]) assert.equal(goal.MENU.fun.feasible(facts(over), idle(), idleCtx()), false, JSON.stringify(over))
+  })
+  it('a lightable yard and bankable goods belong to light/stockpile (R5.1 mirrors)', () => {
+    // A yard only counts when the bot has a home site (light itself needs
+    // one) — so these run with the site pinned next to the body.
+    const yard = () => idleCtx({ home: { site: { x: 0, y: 64, z: 0 } } })
+    const b = () => fakeBot(dirt20)
+    // Torches on hand with dark yard: light fires, not fun.
+    assert.equal(goal.MENU.fun.feasible(facts({ unlit: 3, torches: 2 }), b(), yard()), false)
+    // The R5 repro verbatim: craftable charcoal fuel plus sticks.
+    assert.equal(goal.MENU.fun.feasible(
+      facts({ unlit: 1, torches: 0, coal: 1, charcoal: 1, sticks: 1 }), b(), yard()), false)
+    // ...but a dark yard with no fuel and no wood is nobody's work:
+    // light cannot fire, so the joke may.
+    assert.equal(goal.MENU.fun.feasible(facts({ unlit: 2, torches: 0 }), b(), yard()), true)
+    // Stockpile's complement: a chest to adopt/place, bankable surplus,
+    // or finished goods awaiting handover all veto the joke.
+    assert.equal(goal.MENU.fun.feasible(facts({ chest: 'no', chestTodo: 'place' }), b(), idleCtx()), false)
+    assert.equal(goal.MENU.fun.feasible(facts({ gearHandover: 'waiting' }), b(), idleCtx()), false)
+    assert.equal(goal.MENU.fun.feasible(facts({ surplus: 'yes' }), b(), idleCtx()), false)
+    // ...while a standing chest with nothing to bank is no veto.
+    assert.equal(goal.MENU.fun.feasible(facts({ chest: 'yes', chestTodo: 'none' }), b(), idleCtx()), true)
   })
   it('a wooden pick plus stone chain belongs to equip, not whimsy', () => {
     const wood = fakeBot([{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }, { name: 'dirt', count: 16 }])
@@ -411,6 +433,79 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
       assert.equal(ctx.stepStatus, 'failed:fun-no-recipient')
     } finally {
       Math.random = realRandom
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('a recipient drifting past toss range holds the toss (R5.3)', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    const realRandom = Math.random
+    Math.random = () => 0 // avail [gift, folly]: index 0 = gift
+    try {
+      const pos = { x: 2, y: 64, z: 0 }
+      const b = fakeBot(junkPair, {
+        players: { Steve: { username: 'Steve', entity: { position: pos } } },
+      })
+      const origLook = b.lookAt
+      b.lookAt = async (p) => {
+        await origLook(p)
+        pos.x = 7 // backs away during the facing await: seen, but past handover range
+      }
+      const ctx = {}
+      await fun.run(b, ctx)
+      assert.deepEqual(b.tossed, [], 'past toss range is not a handover')
+      assert.equal(ctx.stepStatus, 'failed:fun-no-recipient')
+    } finally {
+      Math.random = realRandom
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('a stack dropping to its last item keeps the gift (R5.5)', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    const realRandom = Math.random
+    Math.random = () => 0 // avail [gift, folly]: index 0 = gift
+    try {
+      const b = nearSteve()
+      const origLook = b.lookAt
+      b.lookAt = async (p) => {
+        await origLook(p)
+        b.inv.find((i) => i && i.name === 'rotten_flesh').count = 1 // eaten/spent mid-approach
+      }
+      const ctx = {}
+      await fun.run(b, ctx)
+      assert.deepEqual(b.tossed, [], 'the last item is survival stock, never the joke')
+      assert.deepEqual(b.chats, [], 'no proud line for a joke that did not land')
+      assert.equal(ctx.stepStatus, 'done', 'an honest skip, not a failure')
+    } finally {
+      Math.random = realRandom
+      if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
+    }
+  })
+  it('a body stepping into a cell mid-equip skips that cell (R5.4)', async () => {
+    const hadKey = process.env.ANTHROPIC_API_KEY
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      const b = fakeBot(dirt8)
+      let calls = 0
+      const placed = []
+      const origEquip = b.equip
+      b.equip = async (...a) => {
+        calls++
+        // Second cell is (3,64,1) — ring order off centre (2,64,0); the
+        // bot's own feet take the centre cell, so 6 are offered. A body
+        // steps into exactly that cell during its equip await: past the
+        // loop-start check, caught only by the post-equip recheck.
+        if (calls === 2) b.entities = { 9: { position: { x: 3.5, y: 64, z: 1.5 }, isValid: true } }
+        return origEquip(...a)
+      }
+      b.placeBlock = async (ref) => { placed.push(ref) }
+      const ctx = { home: { site: { x: 100, y: 64, z: 100 } } }
+      await fun.run(b, ctx) // folly is the only act: no dice involved
+      assert.equal(placed.length, 5, `one cell skipped, the ring lands: ${placed.length}`)
+      assert.equal(ctx.stepStatus, 'done')
+      assert.ok(b.chats.includes(fun.CHAT_FOLLY), `chats=${JSON.stringify(b.chats)}`)
+    } finally {
       if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
     }
   })
