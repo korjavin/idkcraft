@@ -32,7 +32,24 @@ const worker = require('./worker')
 const ORDER_TIMEOUT_MS = 20000
 const STEP_MS = 10 * 60 * 1000 // one plan step's deadline
 const PLAN_MAX = 6
-const MISS_TICKS = 3 // pin consumed without the step starting = not possible now
+const MISS_TICKS = 3 // pin consumed without the step starting
+// m06g: a pinned work step that never starts chats WHY it can't instead
+// of a generic 'not possible now' (prod: 'reforest 10' with no trees near
+// failed 3x in 3-4 s while the real cause sat in the logs as
+// failed:no-trees). Best-effort: any surprise keeps the generic line.
+function missWhy(bot, ctx, o, s) {
+  try {
+    if (!s || ORDER_STEPS[s.step] || typeof goal.stepWhy !== 'function') return null
+    const facts = goal.goalFacts(bot, ctx)
+    const line = goal.stepWhy(s.step, facts, bot, ctx, o && o.text)
+    if (typeof line !== 'string' || !line.includes(':')) return null
+    const cut = line.replace(new RegExp('^' + s.step + ':\\s*'), '').slice(0, 120)
+    if (!cut || cut === line || /not feasible$/.test(cut)) return null
+    return 'failed:' + cut
+  } catch (_) {
+    return null
+  }
+}
 
 // LLM activity chooser (idkcraft-qxql.10): at a nothing-useful FSM pick the
 // bot asks the model for 1-3 steps of useful work over the work whitelist.
@@ -728,7 +745,7 @@ function tick(bot, ctx, now = Date.now()) {
     return
   }
   if (ctx.taskPlanStep !== s.step) {
-    if (++c.miss >= MISS_TICKS) return end(bot, ctx, o, 'failed:not possible now')
+    if (++c.miss >= MISS_TICKS) return end(bot, ctx, o, missWhy(bot, ctx, o, s) || 'failed:not possible now')
     ctx.taskPlanStep = s.step
     pinArgs(ctx, o, s)
   }

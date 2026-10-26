@@ -480,7 +480,24 @@ describe('llm orders: flag on', () => {
       ctx.taskPlanStep = null // consumed, step infeasible: the menu picked something else
     }
     assert.equal(ctx.llmOrder, null)
-    assert.ok(bot.lines.includes('plan stopped at light: not possible now'), String(bot.lines))
+    // m06g: the miss chats the step's own why, not the generic line.
+    assert.ok(bot.lines.includes('plan stopped at light: no home site'), String(bot.lines))
+  })
+
+  it('a reforest miss names the real cause, never the generic line (idkcraft-m06g)', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"reforest","count":10}]}'
+    handleChat(bot, ticker, 'P', 'reforest 10')
+    await flush()
+    for (let i = 0; i < 5; i++) {
+      llmOrders.tick(bot, ctx)
+      ctx.taskPlanStep = null // the arbiter never picks it: no leaves near
+    }
+    assert.equal(ctx.llmOrder, null)
+    const stopped = bot.lines.find((l) => l.startsWith('plan stopped at reforest'))
+    assert.ok(stopped && !stopped.includes('not possible now'), String(bot.lines))
   })
 
   it('chatter answered with an empty plan stays silent', async () => {
