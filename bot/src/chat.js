@@ -335,6 +335,7 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
   llmOrders.installPlan(bot, ctx, {
     text: msg, by: playerName, ticker,
     feed: (line) => handleChat(bot, ticker, username, line, senderUuid),
+    explicit: true, // deterministic player order, like `plan <order>`
   }, [step])
 }
 

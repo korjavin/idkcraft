@@ -10,10 +10,9 @@ const exploreMod = require('./explore')
 const { startFarSearch, stepFarSearch, keyOf } = require('./scout')
 const { NEED_LOGS } = require('../budget')
 const { gatherFailedHolds, farStartOk, LATE_DAY_TICKS } = require('../holds')
-const { stepFailed, failReason } = require('../step') // oqul.4 twin: status writes go through step.js
+const { stepDone, stepFailed, failReason } = require('../step') // oqul.4 twin: status writes go through step.js
 const { countItems } = require('../perception')
-const { say, clearGoal, issueGoal, denyReason, logDeny, protectedReason, inHouseFootprint } = require('./util')
-const buildMod = require('./build')
+const { say, clearGoal, issueGoal, denyReason, logDeny, protectedReason } = require('./util')
 const Vec3 = require('vec3')
 
 // gather: chop the nearest trees until NEED_LOGS logs are on hand. One
@@ -103,9 +102,12 @@ const CLIFF_DY = 3
 // finds) so gather routes there when the near search is empty. The
 // protected-log rule is untouched — denyReason still refuses non-tree logs
 // before any dig, replant only ever places.
-const REPLANT_HOME_RADIUS = 160 // the home wood stand: the far search reach
+// idkcraft-qfus: every felled tree counts wherever it falls (no home,
+// no radius — the step counts all its stumps), the recorded base plants
+// through reforest's vetted-spot rule once the trunk above it is clear
+// (one attempt, day-only, bounded by the step), and the step speaks the
+// shortfall once on its terminal line.
 const FAR_NOTE_MAX = 16 // one stand, not the forest: memory stays mixed-use
-const SAPLING_SOIL = new Set(['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'moss_block', 'mud', 'podzol', 'mycelium', 'farmland'])
 
 function scaffoldCount(bot) {
   return countItems(bot, (n) => n === 'dirt' || n === 'cobblestone')
@@ -147,10 +149,6 @@ function asVec3(p) {
   return new Vec3(p.x, p.y, p.z)
 }
 
-function isSapling(name) {
-  return typeof name === 'string' && (name.endsWith('_sapling') || name === 'mangrove_propagule')
-}
-
 function isWoodyName(name) {
   return typeof name === 'string' &&
     ((name.endsWith('_log') && !name.startsWith('stripped_')) || name.endsWith('_stem') || name.endsWith('_hyphae'))
@@ -163,62 +161,58 @@ function cellNameAt(bot, x, y, z) {
   } catch (_) { return null }
 }
 
-function findSapling(bot) {
+// Harvest accounting (gc3j, qfus R1): the dig landing records every felled
+// tree bottom wherever it falls — the count never depends on planting
+// eligibility — and replants at once beside the stump (one flight through
+// the shared vetted rule, awaited, so pickup and the terminal summary
+// never race it). Never under standing wood, never into the body's cell.
+// Never writes stepStatus, never throws, never retries.
+async function harvestLanding(bot, ctx, g, block, banned, digKey) {
+  if (!block || !g) return
   try {
-    const items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
-    if (!Array.isArray(items)) return null
-    // revmux verify #610 (codex P2): a lone dark_oak_sapling never grows
-    // (2x2 only) — planting it wastes the item, so it is never picked.
-    return items.find((it) => it && isSapling(it.name) && it.name !== 'dark_oak_sapling') || null
-  } catch (_) { return null }
+    const dp = block.position
+    if (!dp || typeof dp.x !== 'number') return
+    const x = Math.floor(dp.x), y = Math.floor(dp.y), z = Math.floor(dp.z)
+    if (!isWoodyName(block.name)) return
+    if (cellNameAt(bot, x, y, z) !== 'air') return // interrupted dig: nothing felled
+    const { isSaplingName } = require('./harvest')
+    // Bottom landing: solid non-woody ground under the dug log (soil,
+    // never air, never a sapling just planted) — a tree base, not an
+    // upper log. Counts wherever it falls: planting eligibility gates the
+    // plant, never the count.
+    const below = cellNameAt(bot, x, y - 1, z)
+    if (!below || below === 'air' || isWoodyName(below) || isSaplingName(below)) return
+    g.felled = (g.felled | 0) + 1
+    const stump = { x, y, z }
+    if (typeof banned === 'function' && banned(stump)) return
+    g.plantInFlight = true
+    try {
+      const { firstSapling } = require('./harvest')
+      const { replantStump } = require('./reforest')
+      if (await replantStump(bot, ctx, stump, digKey)) {
+        g.replanted = (g.replanted | 0) + 1
+      } else {
+        // Honest console breadcrumb for the prod log review: which stump
+        // stayed bare, and whether the pack is out of plantable saplings.
+        try {
+          const why = firstSapling(bot) ? 'refused' : 'out of saplings'
+          console.log(`gather: stump at ${stump.x} ${stump.y} ${stump.z} not replanted (${why})`)
+        } catch (_) { /* log best-effort */ }
+      }
+    } catch (_) { /* one attempt: the stump stays bare */ }
+    g.plantInFlight = false
+  } catch (_) { /* replant best-effort */ }
 }
 
-// One best-effort replant (gc3j): equip a pack sapling and lay it on the
-// stump cell the dig just opened. Never writes stepStatus, never throws,
-// never retries — a refusal just leaves this stump bare. Near-home only
-// (the home wood stand), outside the house footprint and off banned ground
-// (danger, castle frame); soil under the stump must take a sapling.
-// digKey pins ownership (revmux 01 core-4): the plant only fires while the
-// goal the dig was issued under still owns the body — a fight that took
-// the body mid-dig must not lose its sword to a sapling. The stump must
-// read back as air (an interrupted dig leaves the log standing) and the
-// flight rides the shared ctx.placeInFlight seam like every other placer.
-function tryReplant(bot, ctx, g, stump, banned, digKey) {
+// qfus: the harvest speaks its replant shortfall once, on the terminal
+// line — never silent, never a spin. Null-safe: a leg that felled nothing
+// (chest logs, pre-held pack) stays single-line.
+function sayDeficit(bot, g) {
   try {
-    if (!stump || !g || g.plantInFlight) return
-    if (typeof bot.equip !== 'function' || typeof bot.placeBlock !== 'function') return
-    if ((ctx && ctx.lastGoalKey) !== digKey) return // body changed hands mid-dig
-    if (ctx && ctx.placeInFlight) return
-    const home = ctx && ctx.home
-    if (!home || !home.site || typeof home.site.x !== 'number') return
-    if (Math.hypot(stump.x - home.site.x, stump.z - home.site.z) > REPLANT_HOME_RADIUS) return
-    if (inHouseFootprint(home, stump)) return
-    if (typeof banned === 'function' && banned(stump)) return
-    if (cellNameAt(bot, stump.x, stump.y, stump.z) !== 'air') return
-    if (!SAPLING_SOIL.has(cellNameAt(bot, stump.x, stump.y - 1, stump.z))) return
-    const sapling = findSapling(bot)
-    if (!sapling) return
-    const ref = buildMod.findRef(bot, stump)
-    if (!ref) return
-    g.plantInFlight = true
-    ctx.placeInFlight = true
-    ;(async () => {
-      try {
-        await bot.equip(sapling, 'hand')
-        // revmux verify #610 (codex P2): the world and the body can change
-        // hands across the equip await — re-pin ownership and the open
-        // stump (air over plantable soil) before placing, or the flight
-        // swaps a fighter's sword for a sapling onto a taken cell.
-        if ((ctx && ctx.lastGoalKey) !== digKey) return
-        if (cellNameAt(bot, stump.x, stump.y, stump.z) !== 'air') return
-        if (!SAPLING_SOIL.has(cellNameAt(bot, stump.x, stump.y - 1, stump.z))) return
-        await bot.placeBlock(ref.ref, ref.face)
-        g.replanted = (g.replanted || 0) + 1
-        try { console.log(`gather: replanted ${sapling.name} at ${stump.x} ${stump.y} ${stump.z}`) } catch (_) { /* log best-effort */ }
-      } catch (_) { /* one attempt: the stump stays bare */ }
-      finally { g.plantInFlight = false; ctx.placeInFlight = false }
-    })().catch(() => { g.plantInFlight = false; ctx.placeInFlight = false })
-  } catch (_) { /* replant best-effort */ }
+    const { harvestDeficitLine } = require('./harvest')
+    const line = harvestDeficitLine(bot, (g && g.felled) | 0, (g && g.replanted) | 0)
+    if (line) say(bot, line)
+  } catch (_) { /* deficit best-effort */ }
 }
 
 // Far-search hits into resource memory (gc3j): the staged search read
@@ -354,6 +348,7 @@ function failFinal(bot, ctx, g, logs, final, search = null) {
   g.failPos = bodyPos(bot)
   stepFailed(ctx, failReason(g.final)) // same string, via step.js (house convention)
   say(bot, finalLine(g, final, search))
+  sayDeficit(bot, g) // qfus: the felled-but-bare count rides the terminal line
   clearGoal(bot, ctx)
 }
 
@@ -443,7 +438,7 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
 
 function gather(bot, ctx, target, state) {
   const logs = countItems(bot, (n) => n.endsWith('_log'))
-  if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now() }
+  if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now(), felled: 0, replanted: 0 }
   const g = ctx.gather
   // (vmzq.66) the stranded record holds only at the log count that
   // produced it — wood landing (a retry's chop, a walk-out gain) clears
@@ -474,11 +469,18 @@ function gather(bot, ctx, target, state) {
       keepSkip = true
     }
     if (g.atLogs === logs) {
-      ctx.stepStatus = g.final
+      // oqul.4 twin: terminal status re-asserts through step.js.
+      if (g.final === 'done') stepDone(ctx)
+      else stepFailed(ctx, failReason(g.final))
       clearGoal(bot, ctx) // no-op once null (acceptance: no setGoal past final)
       return
     }
     g.final = null
+    // qfus: a fresh attempt recounts its own harvest — the felled/replanted
+    // counters ride the attempt, never the step, so a regrown stand
+    // recounts on the next step.
+    g.felled = 0
+    g.replanted = 0
     g.chestTried = false // a fresh attempt may draw the chest again (ht8l)
     // A fresh attempt re-counts its own near misses (stale ground's
     // misses never ride a relocation retry's give-up line).
@@ -490,11 +492,16 @@ function gather(bot, ctx, target, state) {
     if (!keepSkip) g.farEmpty = false
     g.streak = 0
   }
+  // qfus R1: a planting flight in the air holds the step — no new dig on
+  // the stale block, no pickup past it, no terminal summary before its
+  // counts settle. Flights always settle (promise-bound, never retried).
+  if (g.plantInFlight) return
   if (logs >= NEED_LOGS) {
     g.final = 'done'
     g.atLogs = logs
-    ctx.stepStatus = 'done'
+    stepDone(ctx)
     say(bot, `got ${NEED_LOGS} logs`)
+    sayDeficit(bot, g) // qfus: one honest line when stumps outnumber plantings
     clearGoal(bot, ctx)
     return
   }
@@ -733,8 +740,9 @@ function gather(bot, ctx, target, state) {
           g.final = 'failed:unreachable'
           g.atLogs = logs
           g.failPos = bodyPos(bot)
-          ctx.stepStatus = g.final
+          stepFailed(ctx, failReason(g.final)) // same string, via step.js (house convention)
           say(bot, 'cannot reach the trees')
+          sayDeficit(bot, g) // qfus: the felled-but-bare count rides the terminal line
           clearGoal(bot, ctx)
           // One escape at the final through stuck.request (core-1: skips
           // reset the central stills, so a trunk wedge got no episode).
@@ -806,20 +814,14 @@ function gather(bot, ctx, target, state) {
     }
     ctx.digInFlight = true
     const block = g.block
-    // gc3j: stump for the replant — the bottom log only (nothing woody
-    // under it). Consumed when the dig lands; any other log leaves no stump.
-    let stump = null
-    try {
-      const sp = block && block.position
-      if (sp && typeof sp.x === 'number' && isWoodyName(block.name) &&
-        !isWoodyName(cellNameAt(bot, sp.x, sp.y - 1, sp.z))) {
-        stump = { x: Math.floor(sp.x), y: Math.floor(sp.y), z: Math.floor(sp.z) }
-      }
-    } catch (_) { stump = null }
     const digKey = ctx.lastGoalKey // revmux 01 core-4: the replant only fires under this goal
     const run = async () => {
       try { await bot.dig(block) } catch (_) { /* gone or interrupted: pickup anyway */ }
       ctx.digInFlight = false
+      // qfus R1: the landing records the fell and plants the recorded base
+      // once its trunk is clear — awaited, so pickup and the terminal
+      // summary never race the flight.
+      await harvestLanding(bot, ctx, g, block, banned, digKey)
       g.phase = 'pickup'
       // revmux 01 core-5: the dug cell leaves resource memory — a later
       // empty-search run must not re-walk a chopped stand.
@@ -827,7 +829,6 @@ function gather(bot, ctx, target, state) {
         const dp = block && block.position
         if (dp && typeof dp.x === 'number') resources.forget(ctx, Math.floor(dp.x), Math.floor(dp.y), Math.floor(dp.z))
       } catch (_) { /* forget best-effort */ }
-      tryReplant(bot, ctx, g, stump, banned, digKey)
     }
     void run()
     return
@@ -848,4 +849,4 @@ function gather(bot, ctx, target, state) {
 module.exports = gather
 module.exports.taskFar = taskFar
 module.exports.noteFarWood = noteFarWood
-module.exports.tryReplant = tryReplant
+module.exports.harvestLanding = harvestLanding

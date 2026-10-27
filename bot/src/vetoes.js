@@ -29,6 +29,8 @@ function castleFirst(ctx, step = null) {
         const { goalUnlock } = require('./goal-unlock')
         if (goalUnlock(ctx, 'houseStep') === step) return false
       } catch (_) { /* no unlock */ }
+      // zz85: a player-issued order outranks the veto for its own step.
+      if (orderOwnsStep(ctx, step)) return false
     }
     return !!require('./behaviours/explore').castleActive(ctx)
   } catch (_) {
@@ -72,4 +74,21 @@ function taskParked(ctx) {
   return false
 }
 
-module.exports = { PARK_FORAGE_RADIUS, castleFirst, homeLegVetoed, taskParked }
+// zz85: a player-issued order outranks the castle veto for its own step
+// only. The chooser (by 'self') and the stall planner (no llmOrder at
+// all) never own a step; peer-bot lines never install an order
+// (chat.js guard). Read the live order step (steps[o.i]) so the lift
+// covers the pin and every counted repeat, and ends with the order.
+function orderOwnsStep(ctx, step) {
+  try {
+    if (!step || !ctx || typeof ctx !== 'object') return false
+    const o = ctx.llmOrder
+    if (!o || !o.explicit || !Array.isArray(o.steps)) return false
+    const s = o.steps[o.i]
+    return !!(s && s.step === step)
+  } catch (_) {
+    return false
+  }
+}
+
+module.exports = { PARK_FORAGE_RADIUS, castleFirst, homeLegVetoed, taskParked, orderOwnsStep }

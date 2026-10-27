@@ -78,7 +78,7 @@ const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stock
 const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their companion bot. ' +
   'Use only the listed step ids, in the order they must run. Item and block names are Minecraft registry ids (torch, water_bucket, iron_ore). ' +
   'Answer JSON only, no prose: {"plan":[{"step":"<id>","item":"<id>","count":<n>,"done":"<what is true when this step is done>"}]}. ' +
-  'Leave out item/count when the step takes none. At most ' + PLAN_MAX + ' steps; use the fewest — an order step gathers, mines, crafts and smelts for itself, so never put forage or gather before it. ' +
+  'Leave out item/count when the step takes none. A work step (craft, equip, build, beds, light, gather, stockpile, bank, gear, forage, reforest, explore, or a skill step) with a player number runs that many times — count means repeats ("reforest 10" plans count 10). At most ' + PLAN_MAX + ' steps; use the fewest — an order step gathers, mines, crafts and smelts for itself, so never put forage or gather before it. ' +
   'A build step starts with no batch on hand when the pack holds almost no planks, so plan gather, craft and equip before build then. ' +
   'Answer {"plan":[]} when the line is not an order to the bot or no listed step can do it.'
 
@@ -354,7 +354,7 @@ function ask(bot, ctx, req, fetchFn) {
       console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${r.need || ''}" why="${r.why || ''}" tokens=${r.tokens || '0/0'} ms=${ms}`)
       if (!r.steps) return // fallback: the FSM pick stands, log only
       const sayChoose = rosterOnline(bot) ? say : () => {}
-      installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null }, r.steps, sayChoose)
+      installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false }, r.steps, sayChoose)
       return
     }
     let r
@@ -377,7 +377,7 @@ function ask(bot, ctx, req, fetchFn) {
       if (req.fallback || req.explicit) say(req.fallback || `I can't plan that (${r.error}) — try: help`)
       return
     }
-    installPlan(bot, ctx, { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed }, r.steps, say)
+    installPlan(bot, ctx, { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed, explicit: req.explicit }, r.steps, say)
   })()
 }
 
@@ -505,7 +505,12 @@ function installPlan(bot, ctx, req, steps, say) {
   if (ctx.llmOrder) { release(ctx, ctx.llmOrder); console.log(`llm order end text="${ctx.llmOrder.text}" result=replaced`) }
   siteBuildHere(bot, ctx, req, steps)
   steps = expandBuildPlan(bot, steps, workSteps())
-  ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false }
+  // zz85: player-issued = outranks the castle veto (vetoes.castleFirst).
+  // Bare orders (`reforest 10`) arrive with explicit unset — only the
+  // chooser (by 'self') and peer chatter (never installed) are not
+  // player-issued, and llmAsk never fires for peer bots (chat.js).
+  const playerIssued = typeof req.by === 'string' && req.by !== '' && req.by !== 'self'
+  ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false, explicit: !!req.explicit || playerIssued }
   const line = `plan: ${steps.map(label).join(', then ')}`.slice(0, 250)
   if (typeof say === 'function') say(line)
   else { try { bot.chat(line) } catch (_) { /* chat best-effort */ } }

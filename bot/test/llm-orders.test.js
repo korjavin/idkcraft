@@ -853,6 +853,15 @@ describe('llm orders: deterministic do <step> (vf8e.17)', () => {
     assert.match(list, /^stroll_fixture: fixture step: ordered only/m)
   })
 
+  it('the ask prompt tells the model count means repeats (idkcraft-2pqz)', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    answer = '{"plan":[]}'
+    handleChat(bot, ticker, 'P', 'reforest 10')
+    await flush()
+    assert.match(calls[0].system, /count means repeats/)
+  })
+
   it('BOT_SKILLS off: workSteps/stepList ignore loaded skills', () => {
     const saved = process.env.BOT_SKILLS
     delete process.env.BOT_SKILLS

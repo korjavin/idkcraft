@@ -7,10 +7,12 @@
 // gather path below stays untouched (v1 frozen — foliage was never its
 // target).
 //
-// Phase machine, same shape as gather.js: find (live registry scan) ->
-// walk (GoalNear + displacement stalls) -> dig -> pickup (proximity
-// vacuum), capped by leaf count or wall time — never an infinite beat
-// loop — then the plant tail (lc55): plant-pick (random vetted spot
+// Phase machine, same shape as gather.js: find (cluster-cache scan,
+// one radius-32 rescan per cluster) -> walk (GoalNear + displacement
+// stalls; skipped when the pick is already in BEAT_REACH) -> dig ->
+// pickup (proximity vacuum; instant when already on the dug column),
+// capped by leaf count or wall time — never an infinite beat loop —
+// then the plant tail (lc55): plant-pick (random vetted spot
 // within ~30) -> plant-walk (GoalNear + displacement stalls) ->
 // plant-place (equip + placeBlock, one flight), capped by planting count
 // — never an endless phase. Completion goes through step.js only, with
@@ -20,6 +22,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const bring = require('./bringbase') //oqul.14: progressed() displacement check lives in the leaf
+const harvest = require('./harvest') // qfus: shared harvest predicates live in the leaf
 const { stepDone, stepFailed } = require('../step') // oqul.6: status writes go through step.js
 const { say, clearGoal, issueGoal, botPos, denyReason, protectedReason, inHouseFootprint } = require('./util')
 const { countItems } = require('../perception')
@@ -29,6 +32,8 @@ const REFOREST_MAX_LEAVES = 8 // beaten-leaf cap per step, then done
 const REFOREST_MAX_MS = 180000 // wall-time cap per step (3 min), then done
 const WALK_STALL_TICKS = 10 // no-displacement walk ticks before a leaf is struck
 const PICKUP_TICKS = 4 // settle ticks on the dug column while drops vacuum in
+const BEAT_REACH = 4.5 // xgcf: in-reach beat radius — a cached leaf this close digs without a fresh walk goal (continuous beating inside the cluster)
+const CLUSTER_STALE = 8 // xgcf: rescan radius 32 only once the body drifted this far from the scan origin (one scan per cluster, not per leaf)
 const UNREACHABLE_STRIKES = 3 // struck leaves before failed:unreachable
 const WALK_RANGE = 4 // walk goal range: a 3D sphere, so feet-level leaves satisfy it without climbing
 const PICKUP_RANGE = 1 // pickup goal range on the dug column (XZ only: drops fall to the ground)
@@ -56,8 +61,16 @@ function isLeafName(name) {
   return typeof name === 'string' && name.endsWith('_leaves')
 }
 
-function isSaplingName(name) {
-  return typeof name === 'string' && (name.endsWith('_sapling') || name === 'mangrove_propagule')
+// Day read for the harvest-coupled planting (idkcraft-qfus): same mirror as
+// bring's self-order gate — day is timeOfDay < 12000, an unreadable clock
+// reads as day (never refuse on a missing clock).
+function isDayBot(bot) {
+  try {
+    const t = bot && bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : NaN
+    return !(t >= 0) ? true : t < 12000
+  } catch (_) {
+    return true
+  }
 }
 
 // Registry leaf names, like logNames in gather.js (v1 path untouched —
@@ -88,7 +101,7 @@ function leafIds(bot) {
 
 function countSaplings(bot) {
   try {
-    return countItems(bot, isSaplingName)
+    return countItems(bot, harvest.isSaplingName)
   } catch (_) {
     return 0
   }
@@ -105,14 +118,56 @@ function cellNameAt(bot, x, y, z) {
   } catch (_) { return null }
 }
 
-// First plantable pack sapling (lc55): like gather's findSapling, a lone
-// dark oak never grows (2x2 only) — planting it wastes the item.
-function firstSapling(bot) {
+// Harvest-coupled replant (idkcraft-qfus R1): one best-effort planting
+// AT or BESIDE a felled stump cell for the gather/bring harvest legs.
+// The stump cell itself is tried first (a lone trunk plants where it
+// stood), then the eight same-level neighbours in fixed order — the
+// first cell passing the plant tail's vetted-spot rule verbatim takes
+// the sapling. Never under standing wood (headroom is part of the rule),
+// never into the body's own cell (the rule refuses it): the legs plant at
+// bottom-landing time, when the body is guaranteed adjacent, so the spot
+// is reachable and plantable right away. Same pack pick
+// (harvest.firstSapling: banked drops ride the pack like any other stock,
+// a lone dark oak never plants), day-only like the step. One flight,
+// never throws, never writes step status, never retries — a refusal just
+// leaves the stump bare. ownerKey pins body ownership exactly like the
+// gather stump flight and the plant tail: the plant only fires while the
+// goal that dug the stump still owns the body. Resolves true only when a
+// cell reads back as the planted sapling.
+const STUMP_OFFS = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
+async function replantStump(bot, ctx, stump, ownerKey) {
   try {
-    const items = bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
-    if (!Array.isArray(items)) return null
-    return items.find((it) => it && isSaplingName(it.name) && it.name !== 'dark_oak_sapling') || null
-  } catch (_) { return null }
+    if (!stump || typeof stump.x !== 'number' || typeof stump.y !== 'number' || typeof stump.z !== 'number') return false
+    if (!isDayBot(bot)) return false
+    if (ctx && ctx.placeInFlight) return false
+    if (typeof bot.equip !== 'function' || typeof bot.placeBlock !== 'function') return false
+    if (ownerKey !== undefined && ctx && ctx.lastGoalKey !== ownerKey) return false
+    const bx = Math.floor(stump.x), by = Math.floor(stump.y), bz = Math.floor(stump.z)
+    const sapling = harvest.firstSapling(bot)
+    if (!sapling) return false
+    ctx.placeInFlight = true
+    try {
+      await bot.equip(sapling, 'hand')
+      // The world and the body can change hands across the equip await
+      // (gather's rule): re-pin ownership before every placement, or the
+      // flight swaps a fighter's sword for a sapling onto a taken cell.
+      for (const [dx, dz] of STUMP_OFFS) {
+        const x = bx + dx, z = bz + dz
+        if (ownerKey !== undefined && ctx && ctx.lastGoalKey !== ownerKey) return false
+        if (!plantSpotOk(bot, ctx, x, by, z)) continue
+        let soil = null
+        try { soil = bot.blockAt && bot.blockAt(new Vec3(x, by - 1, z)) } catch (_) { soil = null }
+        if (!soil || !soil.position) continue
+        await bot.placeBlock(soil, new Vec3(0, 1, 0))
+        let landed = null
+        try { landed = bot.blockAt && bot.blockAt(new Vec3(x, by, z)) } catch (_) { landed = null }
+        return !!(landed && landed.name === sapling.name)
+      }
+      return false
+    } finally {
+      try { ctx.placeInFlight = false } catch (_) { /* seam best-effort */ }
+    }
+  } catch (_) { return false }
 }
 
 // Veto predicate for one plant cell (x,y,z: the AIR cell taking the
@@ -120,7 +175,9 @@ function firstSapling(bot) {
 // house footprint (box + apron), the castle footprint, danger memory,
 // the shared dig guard on the soil (a tree must never root in чужі
 // builds), wrong soil, missing air or headroom. Pure reads, no writes,
-// so goal.js and the tests share it.
+// so goal.js and the tests share it. Harvest stumps use it verbatim (no
+// waiver: the legs plant the base only once the trunk above is clear,
+// since a sapling under wood never regrows).
 function plantSpotOk(bot, ctx, x, y, z) {
   try {
     const bp = botPos(bot)
@@ -210,7 +267,7 @@ function pickPlantSpot(bot, ctx, tried, rnd) {
 // across ticks; the tail still samples the full disc.
 function plantFeasible(bot, ctx) {
   try {
-    if (!firstSapling(bot)) return false
+    if (!harvest.firstSapling(bot)) return false
     const bp = botPos(bot)
     if (!bp) return false
     const x0 = Math.floor(bp.x)
@@ -319,6 +376,44 @@ function beatablesNear(bot, radius, skip) {
   }
 }
 
+// xgcf cluster scan: one radius-32 rescan per cluster, cache hits per
+// leaf. The cache holds the last beatablesNear result with the scan
+// origin; a find serves it while the body stays within CLUSTER_STALE of
+// that origin. Entries re-verify cheaply (skip set, still a leaf, still
+// feet-level) — dug/decayed/struck cells fall out, and an empty or stale
+// cache rescans like before. The pick loop below still drops placed
+// (persistent) cells trip-scoped, so the hedge guard is untouched.
+// Per-beat overhead budget, named: chained beats cost 0 scans + 0 walk
+// goals (BEAT_REACH gate in find, PICKUP_CLOSE instant advance); a beat
+// pays a scan + a goal only when the cluster runs out or goes stale.
+function beatScan(bot, r, bp) {
+  try {
+    const c = r && r.beatCache
+    if (c && Array.isArray(c.cells) && c.cells.length > 0 && c.at &&
+      Math.hypot(bp.x - c.at.x, bp.z - c.at.z) <= CLUSTER_STALE) {
+      const live = c.cells.filter((p) => {
+        if (!p || typeof p.x !== 'number') return false
+        if (r.skip && typeof r.skip.has === 'function' && r.skip.has(keyOf(p))) return false
+        if (Math.abs(p.y - bp.y) > LOW_DY) return false
+        let b = null
+        try { b = bot.blockAt && bot.blockAt(asVec3(p)) } catch (_) { return false }
+        return !!(b && isLeafName(b.name))
+      })
+      if (live.length > 0) return live
+    }
+  } catch (_) { /* cache unreadable: rescan below */ }
+  let found = []
+  try {
+    found = beatablesNear(bot, REFOREST_RADIUS, r && r.skip)
+  } catch (_) {
+    found = []
+  }
+  try {
+    if (r) r.beatCache = { at: { x: bp.x, y: bp.y, z: bp.z }, cells: found.slice() }
+  } catch (_) { /* cache best-effort */ }
+  return found
+}
+
 // Player-placed leaves (revmux 01 core-2): natural leaves decay
 // (persistent=false), placed ones do not — hedges and roofs near home
 // must never become idle-beat targets.
@@ -342,8 +437,11 @@ function isPersistentLeaf(bot, p) {
 function reforestFeasible(facts, bot, ctx) {
   try {
     if (!facts || facts.time !== 'day') return false
+    // zz85: the castle gate yields for the explicitly ordered step only —
+    // the arbiter veto (vetoes.castleFirst) already does; without this the
+    // pin never starts and stepWhy misreports 'no leaves nearby'.
     try {
-      if (require('./explore').castleActive(ctx)) return false
+      if (require('./explore').castleActive(ctx) && !require('../vetoes').orderOwnsStep(ctx, 'reforest')) return false
     } catch (_) {
       return false
     }
@@ -468,9 +566,11 @@ function reforest(bot, ctx, target, state) {
   const grounded = !bot.entity || bot.entity.onGround !== false
 
   if (r.phase === 'find') {
+    // xgcf: the cluster cache serves per leaf; a radius-32 rescan runs
+    // only when the cluster is exhausted or stale.
     let found = []
     try {
-      found = beatablesNear(bot, REFOREST_RADIUS, r.skip)
+      found = beatScan(bot, r, bp)
     } catch (_) {
       found = []
     }
@@ -501,6 +601,21 @@ function reforest(bot, ctx, target, state) {
     } catch (_) {
       r.block = null
     }
+    // xgcf: the pick is already in dig reach (the cluster beat) — skip
+    // the walk goal and dig from this stand, like the walk phase does on
+    // arrival. Same gates (live leaf, not placed, diggable), no re-path.
+    try {
+      const live = bot.blockAt && bot.blockAt(r.pos)
+      const diggable = live && isLeafName(live.name) && !isPersistentLeaf(bot, r.pos) &&
+        typeof bot.canDigBlock === 'function' && bot.canDigBlock(live) &&
+        Math.hypot(r.pos.x - bp.x, r.pos.y - bp.y, r.pos.z - bp.z) <= BEAT_REACH
+      if (diggable) {
+        try { clearGoal(bot, ctx) } catch (_) { /* goal best-effort */ }
+        r.phase = 'dig'
+        r.block = live
+        return
+      }
+    } catch (_) { /* gate unreadable: walk as today */ }
     r.phase = 'walk'
     r.stalls = 0
     r.lastPos = { x: bp.x, y: bp.y, z: bp.z }
@@ -652,6 +767,17 @@ function reforest(bot, ctx, target, state) {
     // holding the step, like forage's replan.
     const key = `reforest-pickup:${Math.floor(r.pos.x)},${Math.floor(r.pos.y)},${Math.floor(r.pos.z)}`
     if (key !== ctx.lastGoalKey) {
+      // xgcf: already standing on the dug column (chained in-reach beat)
+      // — the drops vacuum by proximity, no pickup walk and no settle.
+      try {
+        const dx = bp.x - (Math.floor(r.pos.x) + 0.5)
+        const dz = bp.z - (Math.floor(r.pos.z) + 0.5)
+        if (Math.hypot(dx, dz) <= PICKUP_CLOSE) {
+          r.pos = null
+          r.phase = 'find'
+          return
+        }
+      } catch (_) { /* measure best-effort: walk as today */ }
       issueGoal(bot, ctx, new goals.GoalNearXZ(r.pos.x, r.pos.z, PICKUP_RANGE), key, false)
       r.pickupTicks = 0
       return
@@ -676,7 +802,7 @@ function reforest(bot, ctx, target, state) {
       finish(bot, ctx, r, plantEndReason(r))
       return
     }
-    if (!firstSapling(bot)) {
+    if (!harvest.firstSapling(bot)) {
       finish(bot, ctx, r, plantEndReason(r))
       return
     }
@@ -697,7 +823,7 @@ function reforest(bot, ctx, target, state) {
       r.phase = 'plant-pick'
       return
     }
-    if (!firstSapling(bot)) {
+    if (!harvest.firstSapling(bot)) {
       finish(bot, ctx, r, plantEndReason(r))
       return
     }
@@ -767,7 +893,7 @@ function reforest(bot, ctx, target, state) {
       plantSkip(ctx, r, s)
       return
     }
-    const sapling = firstSapling(bot)
+    const sapling = harvest.firstSapling(bot)
     if (!sapling) {
       finish(bot, ctx, r, plantEndReason(r))
       return
@@ -844,21 +970,25 @@ module.exports.leafNames = leafNames
 module.exports.leafIds = leafIds
 module.exports.isLeafName = isLeafName
 module.exports.isPersistentLeaf = isPersistentLeaf
-module.exports.isSaplingName = isSaplingName
+module.exports.isSaplingName = harvest.isSaplingName // leaf alias (test-pinned)
 module.exports.countSaplings = countSaplings
 module.exports.leavesNear = leavesNear
 module.exports.beatablesNear = beatablesNear
+module.exports.replantStump = replantStump
 module.exports.reforestFeasible = reforestFeasible
 module.exports.REFOREST_RADIUS = REFOREST_RADIUS
 module.exports.REFOREST_MAX_LEAVES = REFOREST_MAX_LEAVES
 module.exports.REFOREST_MAX_MS = REFOREST_MAX_MS
 module.exports.WALK_STALL_TICKS = WALK_STALL_TICKS
 module.exports.PICKUP_TICKS = PICKUP_TICKS
+module.exports.BEAT_REACH = BEAT_REACH
+module.exports.CLUSTER_STALE = CLUSTER_STALE
+module.exports.beatScan = beatScan
 module.exports.UNREACHABLE_STRIKES = UNREACHABLE_STRIKES
 module.exports.WALK_RANGE = WALK_RANGE
 module.exports.PICKUP_RANGE = PICKUP_RANGE
 module.exports.LOW_DY = LOW_DY
-module.exports.firstSapling = firstSapling
+module.exports.firstSapling = harvest.firstSapling // leaf alias (test-pinned)
 module.exports.plantSpotOk = plantSpotOk
 module.exports.surfaceSpotAt = surfaceSpotAt
 module.exports.pickPlantSpot = pickPlantSpot

@@ -9,6 +9,7 @@
 // perception/metrics/util/wool/stuck.
 
 const { countItems } = require('../perception')
+const harvest = require('./harvest') // qfus: woody/deficit predicates live in the leaf
 const metrics = require('../metrics')
 const { say, clearGoal } = require('./util')
 const woolMod = require('./wool')
@@ -36,6 +37,28 @@ function bringKind(ctx) {
 // refuse/done here, bring.clearSearchLeg for stop/park/new-owner cancels.
 // ponytail: a window cycle still in flight settles after this unread.
 function releaseSmelt(ctx) {
+  // idkcraft-aq17: a bring field-furnace adoption ends with the order —
+  // restore the home claim so the station never moves (covers done, every
+  // smelt/material refuse, and stop/park cancels, which all funnel here).
+  // Runs before the bring-flag gate: the claim must restore even when the
+  // job already dropped.
+  try {
+    const ad = ctx && ctx.fieldFurAdopt
+    if (ad && ad.adopted) {
+      ad.adopted = false
+      if (ctx.home) {
+        if (ad.saved === undefined) { try { delete ctx.home.furnace } catch (_) { /* clear best-effort */ } }
+        else ctx.home.furnace = ad.saved
+      }
+    }
+    // aq17 r1.2 backstop: a craftanyLocal flag the field fallback set must
+    // not outlive the order (stop mid-craft) — later runs plan against the
+    // standing home table again.
+    if (ad && ad.localSet) {
+      ad.localSet = false
+      if (ctx) ctx.craftanyLocal = !!(ad.localPrev)
+    }
+  } catch (_) { /* restore best-effort */ }
   const f = ctx && ctx.furnace
   if (!f || !f.bring) return
   ctx.furnaceJob = null
@@ -59,6 +82,23 @@ function stopGuidedWork(ctx) {
   return true
 }
 
+// qfus R1: a harvest that felled more than it replanted speaks the
+// shortfall once, on the terminal line — never silent, never a spin. The
+// counters ride the one order object across sub-order morphs (openSubOrder
+// reuses o, resumeSub restores the parent rung on it), so the report reads
+// the accumulated harvest: a craft sub that felled without saplings is
+// confessed by the parent's terminal even though o.block is long cleared.
+// felled>0 implies wood — only woody bottoms ever increment it.
+function sayHarvestDeficit(bot, o) {
+  try {
+    if (!o || o.deficitSaid) return
+    const line = harvest.harvestDeficitLine(bot, o.felled | 0, o.replanted | 0)
+    if (!line) return
+    o.deficitSaid = true
+    say(bot, line)
+  } catch (_) { /* deficit best-effort */ }
+}
+
 function refuse(bot, ctx, line) {
   // A failed sub-order (did.4) reads as the parent's honest line: the gap
   // that never filled, not the leg that failed it.
@@ -67,6 +107,7 @@ function refuse(bot, ctx, line) {
     ? `could not get ${o.subWant} ${o.subWord} for the ${o.subFor} in time`
     : null
   say(bot, sub || line)
+  sayHarvestDeficit(bot, o)
   metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
   stopGuidedWork(ctx)
   ctx.bringEnd = { outcome: 'refused', at: Date.now() } // vf8e.6: an LLM plan reads how its bring ended
@@ -76,6 +117,7 @@ function refuse(bot, ctx, line) {
 }
 
 function done(bot, ctx) {
+  sayHarvestDeficit(bot, ctx && ctx.bring)
   metrics.bring.inc({ outcome: 'done', kind: bringKind(ctx) })
   stopGuidedWork(ctx)
   ctx.bringEnd = { outcome: 'done', at: Date.now() }
