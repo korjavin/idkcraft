@@ -834,7 +834,7 @@ function nightBedItem(bot, a, st) {
   }
   return bedsMod.findBedItem(bot, null)
 }
-function layNightBed(bot, ctx, home, a, st, item) {
+function layNightBed(bot, ctx, home, a, st, item, claimA) {
   ctx.sleepInFlight = true
   void (async () => {
     try {
@@ -848,7 +848,11 @@ function layNightBed(bot, ctx, home, a, st, item) {
       }
       await new Promise((resolve) => setTimeout(resolve, 500)) // the head acks a tick after the foot
       if (!require('./beds').bedAt(bot, a.foot, a.facing)) throw new Error('bed did not take')
-      try { home.bedA = new Vec3(a.foot.x, a.foot.y, a.foot.z); delete home.sleptA } catch (_) { /* claim best-effort */ }
+      // Only bedroom A claims home.bedA (the day beds step owns it); a free
+      // inside spot sleeps without touching the claims.
+      if (claimA !== false) {
+        try { home.bedA = new Vec3(a.foot.x, a.foot.y, a.foot.z); delete home.sleptA } catch (_) { /* claim best-effort */ }
+      }
       try { bot.chat('my bed is in') } catch (_) { /* chat best-effort */ }
     } catch (err) {
       st.bedLayFails = (st.bedLayFails || 0) + 1
@@ -860,10 +864,224 @@ function layNightBed(bot, ctx, home, a, st, item) {
     }
   })()
 }
+// Night bed fallback chain (idkcraft-a8rb): the own bedroom bed first,
+// then any other placed bed inside, then a carried bed laid in a free
+// inside spot, then a bed crafted from the pack (3 wool of one colour +
+// 3 planks, the beds.js recipe, no gathering — the night owns no hunts).
+// Honest skip when none is possible. Never overrides fight/flee: a hostile
+// near means the reflexes and the retreat chain own the body, not the
+// sleep click. v1 huts have no bedrooms, so only the fallbacks run there.
+const NEARBY_BED_R = 12 // findBlocks scan radius for a placed bed
+const LAY_SPOT_R = 5 // free-spot scan radius around the inside stance
+const HOSTILE_SLEEP_D = 8 // a hostile nearer than this vetoes the sleep
+// Head offsets by bed facing (residence sense: 0 n, 1 e, 2 s, 3 w).
+const BED_DIRS = [[0, -1], [1, 0], [0, 1], [-1, 0]]
+
+// A hostile close enough to matter: sleep never overrides fight/flee —
+// the melee reflex and the retreat chain own the tick instead.
+function hostileNear(bot) {
+  try {
+    const snap = require('../perception').snapHostiles(bot)
+    return !!snap && (snap.count || 0) > 0 && typeof snap.dist === 'number' && snap.dist < HOSTILE_SLEEP_D
+  } catch (_) {
+    return false
+  }
+}
+
+// Both halves of a candidate bed inside the residence (a shut door stays
+// shut: the bot never walks out to an outdoor bed at night).
+function bedInside(home, foot, head) {
+  try {
+    const r = residence.of(home)
+    return !!r.interior && !!r.interior(home, foot) && !!r.interior(home, head)
+  } catch (_) {
+    return false
+  }
+}
+
+// Nearest placed bed inside that is not the owner's bedroom B (foot, head
+// and claim all banned). Dark chunks read air: a dark B stays banned by
+// the claim, a dark stranger reads as no bed — the walk-in re-checks
+// (bedAt) before the click.
+function nearbyBed(bot, home, cells) {
+  try {
+    const byName = (bot.registry && bot.registry.blocksByName) || {}
+    const ids = []
+    for (const c of require('./bed').BED_COLORS) { // deferred, as cellsOf above
+      const e = byName[`${c}_bed`]
+      if (e && typeof e.id === 'number') ids.push(e.id)
+    }
+    if (!ids.length || typeof bot.findBlocks !== 'function') return null
+    let hits = null
+    try { hits = bot.findBlocks({ matching: ids, maxDistance: NEARBY_BED_R, count: 8 }) || [] } catch (_) { return null }
+    const bedsMod = require('./beds') // deferred, as cellsOf above
+    const banned = new Set()
+    try {
+      if (cells && cells.b) {
+        for (const end of [cells.b.foot, cells.b.head]) {
+          if (end && typeof end.x === 'number') banned.add(`${end.x},${end.y},${end.z}`)
+        }
+      }
+      if (home && home.bedB && typeof home.bedB.x === 'number') banned.add(`${home.bedB.x},${home.bedB.y},${home.bedB.z}`)
+    } catch (_) { /* ban best-effort */ }
+    const bp = botPos(bot)
+    let best = null
+    for (const p of hits) {
+      if (!p || typeof p.x !== 'number') continue
+      const foot = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+      if (banned.has(`${foot.x},${foot.y},${foot.z}`)) continue
+      for (let f = 0; f < 4; f++) {
+        let bed = null
+        try { bed = bedsMod.bedAt(bot, foot, f) } catch (_) { bed = null }
+        if (!bed) continue
+        const head = new Vec3(foot.x + BED_DIRS[f][0], foot.y, foot.z + BED_DIRS[f][1])
+        if (banned.has(`${head.x},${head.y},${head.z}`)) continue
+        if (!bedInside(home, foot, head)) continue
+        const d = bp ? Math.hypot(foot.x + 0.5 - bp.x, foot.y - bp.y, foot.z + 0.5 - bp.z) : 0
+        if (!best || d < best.d) best = { bed, foot, head, facing: f, d }
+      }
+    }
+    return best
+  } catch (_) {
+    return null
+  }
+}
+
+// A free foot+head pair near the inside stance for a carried/crafted bed:
+// both cells air, solid ground under both, both inside. The lay keeps the
+// forced-yaw shape (layNightBed); only bedroom A claims home.bedA.
+function freeBedSpot(bot, home) {
+  try {
+    const bedsMod = require('./beds') // deferred, as cellsOf above
+    const inn = insidePos(home)
+    if (!inn || typeof inn.x !== 'number') return null
+    const name = (p) => { try { const b = bot.blockAt(p); return b ? b.name : null } catch (_) { return null } }
+    const groundOk = (x, y, z) => {
+      const g = name(new Vec3(x, y - 1, z))
+      return !!g && !bedsMod.needsFillGround(g)
+    }
+    const ix = Math.floor(inn.x)
+    const iy = Math.floor(inn.y)
+    const iz = Math.floor(inn.z)
+    for (let r = 0; r <= LAY_SPOT_R; r++) {
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dz = -r; dz <= r; dz++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue
+          const fx = ix + dx
+          const fz = iz + dz
+          for (let f = 0; f < 4; f++) {
+            const foot = new Vec3(fx, iy, fz)
+            const head = new Vec3(fx + BED_DIRS[f][0], iy, fz + BED_DIRS[f][1])
+            if (!AIR_CELLS.has(name(foot)) || !AIR_CELLS.has(name(head))) continue
+            if (!groundOk(fx, iy, fz) || !groundOk(fx + BED_DIRS[f][0], iy, fz + BED_DIRS[f][1])) continue
+            if (!bedInside(home, foot, head)) continue
+            return { foot, facing: f }
+          }
+        }
+      }
+    }
+    return null
+  } catch (_) {
+    return null
+  }
+}
+
+// A bed craftable from the pack right now: 3 wool of one colour + 3 planks
+// (the beds.js recipe). The table must already stand usable in reach —
+// the craft never walks out the shut door at night.
+function craftableBed(bot, home) {
+  try {
+    const bedMod = require('./bed') // deferred, as cellsOf above
+    const pack = bedMod.packCounts(bot)
+    const color = bedMod.pickBedColor(pack)
+    if (!color) return null
+    const short = bedMod.bedShortfall(pack, color, 1)
+    if (short.wool > 0 || short.planks > 0) return null
+    if (!tableInReach(bot, home)) return null
+    return bedMod.bedTarget(color)
+  } catch (_) {
+    return null
+  }
+}
+
+function tableInReach(bot, home) {
+  try {
+    const tp = residence.of(home).table(home)
+    if (!tp || typeof tp.x !== 'number') return false
+    const block = bot.blockAt && bot.blockAt(new Vec3(tp.x, tp.y, tp.z))
+    if (!block || block.name !== 'crafting_table') return false
+    return !!require('./craft').tableUsable(bot, block, tp)
+  } catch (_) {
+    return false
+  }
+}
+
+// Walk into click reach of the head, then click it. `open` is the GoalNear
+// cell (the residence sleep stance when there is one, else the head).
+// Returns true while owning the tick.
+function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
+  const bp = botPos(bot)
+  if (!bp) return false
+  if (headGap(bp, head) > SLEEP_REACH) {
+    const o = open || head
+    setGoal(bot, ctx, 'stay-bed', new goals.GoalNear(o.x, o.y, o.z, 1))
+    const last = st.sleepAnchor
+    if (!last || Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) {
+      st.sleepStalls = 0
+      st.sleepAnchor = { x: bp.x, z: bp.z }
+    } else if (++st.sleepStalls >= SLEEP_STALL_TICKS) {
+      st.sleepGiveUp = true // unreachable tonight: hold, retry tomorrow
+      return false
+    }
+    return true
+  }
+  ctx.sleepInFlight = true
+  void (async () => {
+    try {
+      await bot.sleep(bed)
+      try { home.sleptA = true } catch (_) { /* claim best-effort */ } // vanilla sets the spawn on use
+      if (ctx.stay !== st) {
+        // An order or the retreat chain took the body mid-flight (revmux
+        // 02-review): the spawn is set, but the body must not sleep under
+        // the order — wake at once, skip the chat.
+        try { if (typeof bot.wake === 'function') await bot.wake() } catch (_) { /* the order wakes */ }
+        return
+      }
+      if (!st.sleepSaid) {
+        st.sleepSaid = true
+        try { bot.chat(chatLine || 'sleeping in my bed') } catch (_) { /* chat best-effort */ }
+      }
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : ''
+      // g0z.59: occupied retries too — v1 and v2 share the castle's bed A
+      // (bedroom B stays the owner's): the second bot holds inside awake
+      // and takes the bed if it frees, never gives up the night.
+      if (/monsters nearby|not night|occupied/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
+      else if (/not sleeping/i.test(msg)) {
+        // Silent server refusal (clock skew under lag): back off and retry
+        // a few times, then give up — a permanently refused bed must not
+        // click all night, and each timed-out try leaks mineflayer's
+        // once('sleep') listener (revmux 01-review).
+        st.sleepRefusals = (st.sleepRefusals || 0) + 1
+        if (st.sleepRefusals < SLEEP_REFUSAL_TRIES) st.sleepCooldown = SLEEP_RETRY_TICKS
+        else st.sleepGiveUp = true
+      } else st.sleepGiveUp = true // occupied/too-far: hold tonight, retry tomorrow
+      if (!st.sleepErrSaid) {
+        st.sleepErrSaid = true
+        try { console.log(`sleep failed: ${msg || err}`) } catch (_) { /* logging best-effort */ }
+      }
+    } finally {
+      ctx.sleepInFlight = false
+    }
+  })()
+  return true
+}
+
 function sleepTick(bot, ctx, home, st) {
   try {
-    if (!home || !home.site || residence.of(home).beds(home).length === 0) return false
+    if (!home || !home.site) return false
     if (typeof bot.sleep !== 'function') return false
+    if (hostileNear(bot)) return false // fight/flee owns the tick, never the sleep click
     if (bot.isSleeping) return true
     if (ctx.sleepInFlight) return true
     if (st.sleepGiveUp) return false
@@ -872,74 +1090,50 @@ function sleepTick(bot, ctx, home, st) {
     try {
       cells = require('./beds').cellsOf(home) // deferred: home loads inside the behaviour chain
     } catch (_) { cells = null }
-    if (!cells) return false
-    let bed = null
-    try { bed = require('./beds').bedroomBed(bot, home, 'a') } catch (_) { bed = null }
-    let carried = null
-    if (!bed) {
+    // The own bedroom bed (bedroom A; v1 huts have no bedrooms, so only
+    // the fallbacks run there). The owner's bed (B) is never touched.
+    if (cells && cells.a) {
+      let bed = null
+      try { bed = require('./beds').bedroomBed(bot, home, 'a') } catch (_) { bed = null }
+      if (bed) {
+        try { home.bedA = new Vec3(cells.a.foot.x, cells.a.foot.y, cells.a.foot.z) } catch (_) { /* claim best-effort */ }
+        return sleepInBed(bot, ctx, home, st, bed, cells.a.head, cells.a.sleep, 'sleeping in my bed')
+      }
       try { if (home.bedA) { delete home.bedA; delete home.sleptA } } catch (_) { /* retract best-effort */ }
-      carried = nightBedItem(bot, cells.a, st)
-      if (!carried) return false // no whole bed in A and none to lay: hold as before, never take B
-    } else {
-      try { home.bedA = new Vec3(cells.a.foot.x, cells.a.foot.y, cells.a.foot.z) } catch (_) { /* claim best-effort */ }
+      // A carried bed still lands in A first (rw4.20): the claim keeps the
+      // day beds step consistent.
+      const carriedA = nightBedItem(bot, cells.a, st)
+      if (carriedA) { layNightBed(bot, ctx, home, cells.a, st, carriedA); return true }
     }
-    const bp = botPos(bot)
-    if (!bp) return false
-    const head = cells.a.head
-    if (headGap(bp, head) > SLEEP_REACH) {
-      const open = cells.a.sleep // residence sleep cell (house: the common room; castle: beside the head)
-      setGoal(bot, ctx, 'stay-bed', new goals.GoalNear(open.x, open.y, open.z, 1))
-      const last = st.sleepAnchor
-      if (!last || Math.hypot(bp.x - last.x, bp.z - last.z) > MOVE_TOLERANCE) {
-        st.sleepStalls = 0
-        st.sleepAnchor = { x: bp.x, z: bp.z }
-      } else if (++st.sleepStalls >= SLEEP_STALL_TICKS) {
-        st.sleepGiveUp = true // unreachable tonight: hold, retry tomorrow
-        return false
+    // A placed bed nearby (not the owner's B): walk over and use it.
+    const near = nearbyBed(bot, home, cells)
+    if (near) return sleepInBed(bot, ctx, home, st, near.bed, near.head, near.head, 'sleeping in a nearby bed')
+    // A carried bed laid in a free inside spot.
+    if ((st.bedLayFails || 0) < NIGHT_BED_FAILS) {
+      let item = null
+      try { item = require('./beds').findBedItem(bot, null) } catch (_) { item = null }
+      if (item) {
+        const spot = freeBedSpot(bot, home)
+        if (spot) { layNightBed(bot, ctx, home, spot, st, item, false); return true }
       }
-      return true
+      // Craftable from the pack (planks + wool on hand, table in reach):
+      // craft, then place and sleep on the next ticks.
+      const target = item ? null : craftableBed(bot, home)
+      if (target) {
+        let res = null
+        try { res = require('./craftany')(bot, ctx, target, 1) } catch (_) { res = null }
+        if (res === 'running') return true
+        if (res && res.done) return true // recount next tick: the pack now covers it
+        // Craft refused (no recipe): honest skip below.
+      }
     }
-    if (carried) { layNightBed(bot, ctx, home, cells.a, st, carried); return true }
-    ctx.sleepInFlight = true
-    void (async () => {
-      try {
-        await bot.sleep(bed)
-        try { home.sleptA = true } catch (_) { /* claim best-effort */ } // vanilla sets the spawn on use
-        if (ctx.stay !== st) {
-          // An order took the body mid-flight (revmux 02-review): the spawn
-          // is set, but the body must not sleep under the order — wake at
-          // once, skip the chat.
-          try { if (typeof bot.wake === 'function') await bot.wake() } catch (_) { /* the order wakes */ }
-          return
-        }
-        if (!st.sleepSaid) {
-          st.sleepSaid = true
-          try { bot.chat('sleeping in my bed') } catch (_) { /* chat best-effort */ }
-        }
-      } catch (err) {
-        const msg = err && err.message ? String(err.message) : ''
-        // g0z.59: occupied retries too — v1 and v2 share the castle's bed A
-        // (bedroom B stays the owner's): the second bot holds inside awake
-        // and takes the bed if it frees, never gives up the night.
-        if (/monsters nearby|not night|occupied/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
-        else if (/not sleeping/i.test(msg)) {
-          // Silent server refusal (clock skew under lag): back off and retry
-          // a few times, then give up — a permanently refused bed must not
-          // click all night, and each timed-out try leaks mineflayer's
-          // once('sleep') listener (revmux 01-review).
-          st.sleepRefusals = (st.sleepRefusals || 0) + 1
-          if (st.sleepRefusals < SLEEP_REFUSAL_TRIES) st.sleepCooldown = SLEEP_RETRY_TICKS
-          else st.sleepGiveUp = true
-        } else st.sleepGiveUp = true // occupied/too-far: hold tonight, retry tomorrow
-        if (!st.sleepErrSaid) {
-          st.sleepErrSaid = true
-          try { console.log(`sleep failed: ${msg || err}`) } catch (_) { /* logging best-effort */ }
-        }
-      } finally {
-        ctx.sleepInFlight = false
-      }
-    })()
-    return true
+    // Honest skip, once a night: keep the old hold, say why.
+    if (!st.nobedSaid) {
+      st.nobedSaid = true
+      try { bot.chat('no bed in reach tonight, holding till dawn') } catch (_) { /* chat best-effort */ }
+      try { console.log('stay sleep: no bed, no mats — holding till dawn') } catch (_) { /* logging best-effort */ }
+    }
+    return false
   } catch (_) {
     return false
   }
@@ -2063,4 +2257,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R }
+module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, nearbyBed, freeBedSpot, craftableBed, tableInReach }
