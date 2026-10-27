@@ -354,7 +354,7 @@ function ask(bot, ctx, req, fetchFn) {
       console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${r.need || ''}" why="${r.why || ''}" tokens=${r.tokens || '0/0'} ms=${ms}`)
       if (!r.steps) return // fallback: the FSM pick stands, log only
       const sayChoose = rosterOnline(bot) ? say : () => {}
-      installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null }, r.steps, sayChoose)
+      installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false }, r.steps, sayChoose)
       return
     }
     let r
@@ -377,7 +377,7 @@ function ask(bot, ctx, req, fetchFn) {
       if (req.fallback || req.explicit) say(req.fallback || `I can't plan that (${r.error}) — try: help`)
       return
     }
-    installPlan(bot, ctx, { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed }, r.steps, say)
+    installPlan(bot, ctx, { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed, explicit: req.explicit }, r.steps, say)
   })()
 }
 
@@ -505,7 +505,7 @@ function installPlan(bot, ctx, req, steps, say) {
   if (ctx.llmOrder) { release(ctx, ctx.llmOrder); console.log(`llm order end text="${ctx.llmOrder.text}" result=replaced`) }
   siteBuildHere(bot, ctx, req, steps)
   steps = expandBuildPlan(bot, steps, workSteps())
-  ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false }
+  ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false, explicit: !!req.explicit }
   const line = `plan: ${steps.map(label).join(', then ')}`.slice(0, 250)
   if (typeof say === 'function') say(line)
   else { try { bot.chat(line) } catch (_) { /* chat best-effort */ } }

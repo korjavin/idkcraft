@@ -29,6 +29,15 @@ function castleFirst(ctx, step = null) {
         const { goalUnlock } = require('./goal-unlock')
         if (goalUnlock(ctx, 'houseStep') === step) return false
       } catch (_) { /* no unlock */ }
+      // zz85: an explicit owner order outranks the veto for its own step
+      // only — the pin and every counted repeat read the live order
+      // (steps[o.i]), so the veto returns the moment the order ends.
+      // Autonomous picks (FSM, stall planner, chooser) never set explicit.
+      try {
+        const o = ctx && ctx.llmOrder
+        const s = o && o.explicit && o.steps && o.steps[o.i]
+        if (s && s.step === step) return false
+      } catch (_) { /* no order lift */ }
     }
     return !!require('./behaviours/explore').castleActive(ctx)
   } catch (_) {
