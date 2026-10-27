@@ -836,6 +836,10 @@ function castleChat(bot, ticker, playerName, cmd) {
     const dmg = damageOf(castleMod.progressByKind(bot, st))
     if (!dmg) return `castle at ${at(st.site)} is intact — nothing to repair`
     const dry = typeof st.status === 'string' && st.status.startsWith('no wood') ? `; ${st.status}` : ''
+    // idkcraft-fuja: the owner's explicit repair order reopens every
+    // retired-but-open plan cell (the automatic path only reopens
+    // transient ones on a tidy return) — a fresh strike ladder now.
+    try { castleMod.reopenRepairs(bot, ctx, st, false) } catch (_) { /* best-effort */ }
     try { taskMod.clearTaskParks(ctx) } catch (_) { /* resume best-effort */ }
     // The owner may just have filled the chest: the fetch retries now, not
     // after the CASTLEFETCH_RETRY_MS hold.
