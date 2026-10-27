@@ -437,8 +437,11 @@ function isPersistentLeaf(bot, p) {
 function reforestFeasible(facts, bot, ctx) {
   try {
     if (!facts || facts.time !== 'day') return false
+    // zz85: the castle gate yields for the explicitly ordered step only —
+    // the arbiter veto (vetoes.castleFirst) already does; without this the
+    // pin never starts and stepWhy misreports 'no leaves nearby'.
     try {
-      if (require('./explore').castleActive(ctx)) return false
+      if (require('./explore').castleActive(ctx) && !require('../vetoes').orderOwnsStep(ctx, 'reforest')) return false
     } catch (_) {
       return false
     }

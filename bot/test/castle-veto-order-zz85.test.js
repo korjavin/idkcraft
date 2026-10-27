@@ -79,3 +79,32 @@ describe('zz85 installPlan marks player-issued orders', () => {
     assert.equal(o.explicit, false)
   })
 })
+
+describe('zz85 orderOwnsStep + reforestFeasible', () => {
+  const { orderOwnsStep } = require('../src/vetoes')
+  const { reforestFeasible } = require('../src/behaviours/reforest')
+  const order = (step) => ({ explicit: true, steps: [{ step }], i: 0 })
+  const leafBot = () => ({
+    entity: { position: { x: 107, y: 67, z: 61 } },
+    registry: { blocksByName: { oak_leaves: { id: 18 } } },
+    inventory: { items: () => [] },
+    findBlocks: () => [{ x: 106, y: 67, z: 61 }],
+  })
+
+  it('orderOwnsStep true only for the live player-ordered step', () => {
+    const ctx = activeCastleCtx({ llmOrder: order('reforest') })
+    assert.equal(orderOwnsStep(ctx, 'reforest'), true)
+    assert.equal(orderOwnsStep(ctx, 'build'), false)
+    assert.equal(orderOwnsStep(activeCastleCtx(), 'reforest'), false)
+    assert.equal(orderOwnsStep(activeCastleCtx({ llmOrder: { explicit: false, steps: [{ step: 'reforest' }], i: 0 } }), 'reforest'), false)
+  })
+
+  it('reforestFeasible stays false under an active castle with no order', () => {
+    assert.equal(reforestFeasible({ time: 'day' }, leafBot(), activeCastleCtx()), false)
+  })
+
+  it('reforestFeasible true for the explicitly ordered step', () => {
+    const ctx = activeCastleCtx({ llmOrder: order('reforest') })
+    assert.equal(reforestFeasible({ time: 'day' }, leafBot(), ctx), true)
+  })
+})
