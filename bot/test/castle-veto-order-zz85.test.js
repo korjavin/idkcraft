@@ -57,3 +57,25 @@ describe('zz85 explicit order lifts castleFirst for its own step', () => {
     assert.equal(castleFirst({}), false)
   })
 })
+
+describe('zz85 installPlan marks player-issued orders', () => {
+  const { installPlan } = require('../src/llm-orders')
+  const fakeBot = () => ({ chat() {} })
+  const install = (req) => {
+    const ctx = {}
+    const ok = installPlan(fakeBot(), ctx, req, [{ step: 'reforest', count: 10 }], () => {})
+    assert.equal(ok, true)
+    return ctx.llmOrder
+  }
+
+  it('bare player order (explicit unset) is player-issued', () => {
+    const o = install({ text: 'reforest 10', by: 'IdkTester', ticker: null, feed: null })
+    assert.equal(o.explicit, true)
+    assert.equal(castleFirst(activeCastleCtx({ llmOrder: { ...o, steps: [{ step: 'reforest' }], i: 0 } }), 'reforest'), false)
+  })
+
+  it('chooser (by self) stays non-explicit', () => {
+    const o = install({ text: 'choose work: no-order', by: 'self', ticker: null, feed: null, explicit: false })
+    assert.equal(o.explicit, false)
+  })
+})

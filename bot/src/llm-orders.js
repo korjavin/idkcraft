@@ -505,7 +505,12 @@ function installPlan(bot, ctx, req, steps, say) {
   if (ctx.llmOrder) { release(ctx, ctx.llmOrder); console.log(`llm order end text="${ctx.llmOrder.text}" result=replaced`) }
   siteBuildHere(bot, ctx, req, steps)
   steps = expandBuildPlan(bot, steps, workSteps())
-  ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false, explicit: !!req.explicit }
+  // zz85: player-issued = outranks the castle veto (vetoes.castleFirst).
+  // Bare orders (`reforest 10`) arrive with explicit unset — only the
+  // chooser (by 'self') and peer chatter (never installed) are not
+  // player-issued, and llmAsk never fires for peer bots (chat.js).
+  const playerIssued = typeof req.by === 'string' && req.by !== '' && req.by !== 'self'
+  ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false, explicit: !!req.explicit || playerIssued }
   const line = `plan: ${steps.map(label).join(', then ')}`.slice(0, 250)
   if (typeof say === 'function') say(line)
   else { try { bot.chat(line) } catch (_) { /* chat best-effort */ } }
