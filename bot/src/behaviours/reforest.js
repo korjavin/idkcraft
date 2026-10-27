@@ -1,8 +1,8 @@
 'use strict'
 
-// Reforest step (idkcraft-6p4l beat + idkcraft-lc55 plant): beat nearby
-// leaves and bank the dropped saplings during idle time, then plant the
-// banked saplings at random vetted spots. Picked by the goal FSM between
+// Reforest step (idkcraft-6p4l beat + idkcraft-lc55 plant + idkcraft-44rl
+// grove): beat nearby leaves and bank the dropped saplings during idle
+// time, then plant the banked saplings into one grove patch. Picked by the goal FSM between
 // forage and explore (STEP_ORDER) when nothing better is feasible: the
 // gather path below stays untouched (v1 frozen — foliage was never its
 // target).
@@ -12,12 +12,14 @@
 // stalls; skipped when the pick is already in BEAT_REACH) -> dig ->
 // pickup (proximity vacuum; instant when already on the dug column),
 // capped by leaf count or wall time — never an infinite beat loop —
-// then the plant tail (lc55): plant-pick (random vetted spot
-// within ~30) -> plant-walk (GoalNear + displacement stalls) ->
-// plant-place (equip + placeBlock, one flight), capped by planting count
-// — never an endless phase. Completion goes through step.js only, with
-// one prod line per step: reforest leaves=<n> saplings=+<k> fail=<reason|->
-// planted=<p>, plus one reforest plant <sapling> at <x,y,z> per planting.
+// then the plant tail (lc55, groved by 44rl): plant-pick (one vetted spot
+// inside the run's grove patch, dead grove spots first) -> plant-walk
+// (GoalNear + displacement stalls) -> plant-place (equip + placeBlock,
+// one flight), capped by planting count — never an endless phase.
+// Completion goes through step.js only, with one prod line per step:
+// reforest leaves=<n> saplings=+<k> fail=<reason|-> planted=<p>, plus one
+// reforest plant <sapling> at <x,y,z> per planting and one chat line per
+// run naming the grove (planted <n> <kind> around <x,y,z>).
 
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
@@ -40,6 +42,8 @@ const PICKUP_RANGE = 1 // pickup goal range on the dug column (XZ only: drops fa
 const PICKUP_CLOSE = 1.2 // column-centre distance that vacuums the drops (item pickup is ~1.4)
 const LOW_DY = 4 // canopy guard (revmux 01 core-1/02): leaves more than 4 above the feet need a tower, not an idle beat
 const PLANT_RADIUS = 30 // bead: random plant spots within ~30 blocks of the body
+const GROVE_RADIUS = 8 // idkcraft-44rl: one run's plantings cluster inside this patch around the grove anchor — a visible grove, not scattered singles
+const GROVE_SPOTS_MAX = 24 // remembered grove cells across runs, bounded: old entries fall off
 const PLANT_MAX = 8 // plantings per step, then done — never an endless phase
 const PLANT_PICK_TRIES = 16 // random candidates vetted per pick before giving up
 const PLANT_FAIL_MAX = 8 // walk/place failures before the tail ends with what it planted
@@ -49,6 +53,9 @@ const PLANT_DOWN = 24 // ... and below: top-down takes the surface first, so hil
 // Deterministic feasibility probe (core-2): fixed offsets, not random
 // samples, so the menu does not flicker between ticks.
 const PLANT_PROBE = [[10, 0], [-10, 0], [0, 10], [0, -10], [14, 14], [14, -14], [-14, 14], [-14, -14], [22, 7], [-22, 7], [7, 22], [7, -22]]
+// Deterministic grove fallback (44rl): fixed offsets inside the patch, so
+// what the menu vetted the tail still reaches when random sampling misses.
+const GROVE_PROBE = [[0, 0], [4, 0], [-4, 0], [0, 4], [0, -4], [4, 4], [4, -4], [-4, 4], [-4, -4], [8, 0], [-8, 0], [0, 8], [0, -8]]
 
 // Plantable soil (lc55): gather's SAPLING_SOIL minus the cells the shared
 // guard refuses anyway (moss_block, farmland read 'protected' — a mossy or
@@ -234,26 +241,30 @@ function surfaceSpotAt(bot, ctx, x, z, tried) {
   return null
 }
 
-// Random vetted spot within the disc around the body, or null. Bounded
-// tries; tried (walk/place-failed cells) never re-issue. rnd defaults to
+// Random vetted spot within the disc around the body, or null — or, with
+// an anchor (44rl), inside the grove patch around it. Bounded tries;
+// tried (walk/place-failed cells) never re-issue. rnd defaults to
 // Math.random and is injectable for the unit pins.
-function pickPlantSpot(bot, ctx, tried, rnd) {
+function pickPlantSpot(bot, ctx, tried, rnd, anchor) {
   const rand = typeof rnd === 'function' ? rnd : Math.random
   try {
     const bp = botPos(bot)
     if (!bp) return null
+    const gx = anchor && typeof anchor.x === 'number' ? anchor.x : bp.x
+    const gz = anchor && typeof anchor.z === 'number' ? anchor.z : bp.z
+    const rad = anchor ? GROVE_RADIUS : PLANT_RADIUS
     for (let t = 0; t < PLANT_PICK_TRIES; t++) {
       const a = rand() * Math.PI * 2
-      const rr = PLANT_RADIUS * Math.sqrt(rand())
-      const spot = surfaceSpotAt(bot, ctx, Math.floor(bp.x + Math.cos(a) * rr), Math.floor(bp.z + Math.sin(a) * rr), tried)
+      const rr = rad * Math.sqrt(rand())
+      const spot = surfaceSpotAt(bot, ctx, Math.floor(gx + Math.cos(a) * rr), Math.floor(gz + Math.sin(a) * rr), tried)
       if (spot) return spot
     }
-    // Fallback over the feasibility probe columns (round-2 minor): what
-    // the menu vetted, the tail can reach — no instant failed:no-leaves
+    // Fallback over fixed probe columns around the same centre: what the
+    // menu vetted, the tail still reaches — no instant failed:no-leaves
     // on sparse ground when random sampling misses.
-    const x0 = Math.floor(bp.x)
-    const z0 = Math.floor(bp.z)
-    for (const [dx, dz] of PLANT_PROBE) {
+    const x0 = Math.floor(gx)
+    const z0 = Math.floor(gz)
+    for (const [dx, dz] of anchor ? GROVE_PROBE : PLANT_PROBE) {
       const spot = surfaceSpotAt(bot, ctx, x0 + dx, z0 + dz, tried)
       if (spot) return spot
     }
@@ -292,7 +303,7 @@ function plantEndReason(r) {
 // with saplings banked: plant them instead of ending the step (core-1).
 // Returns true when the tail takes over, false when the step should
 // finish as before. Stamps the tail's own time budget once.
-function enterPlantTail(bot, r) {
+function enterPlantTail(bot, ctx, r) {
   try {
     if ((r.planted || 0) >= PLANT_MAX || (r.plantFails || 0) >= PLANT_FAIL_MAX) return false
     if (countSaplings(bot) <= 0) return false
@@ -301,10 +312,65 @@ function enterPlantTail(bot, r) {
     try {
       r.plantStartedAt = Date.now()
     } catch (_) { /* stamp best-effort */ }
+    // One grove per run (44rl): seed the anchor and the replant list once.
+    try {
+      r.grove = groveAnchor(bot, ctx, r)
+    } catch (_) { r.grove = null }
+    try {
+      r.pendingReplant = deadGroveSpots(bot, ctx, r)
+    } catch (_) { r.pendingReplant = [] }
   }
   r.spot = null
   r.phase = 'plant-pick'
   return true
+}
+
+// Grove anchor (44rl): the patch this run plants into. The beaten stand
+// first (the cluster scan origin — the grove rises where the leaves fell),
+// the previous grove's centre when the body is still beside it, else the
+// body itself (the no-leaves tail starts where the bot stands: near the
+// player or home in work mode). x/z only; the column scan takes the top.
+function groveAnchor(bot, ctx, r) {
+  const bp = botPos(bot)
+  if (!bp) return null
+  try {
+    const old = ctx && ctx.grove
+    if (old && old.center && typeof old.center.x === 'number' && typeof old.center.z === 'number' &&
+      Math.hypot(old.center.x - bp.x, old.center.z - bp.z) <= PLANT_RADIUS - GROVE_RADIUS) {
+      return { x: Math.floor(old.center.x), z: Math.floor(old.center.z) }
+    }
+  } catch (_) { /* no usable memory: anchor below */ }
+  try {
+    const at = r && r.beatCache && r.beatCache.at
+    if (at && typeof at.x === 'number' && typeof at.z === 'number' &&
+      Math.hypot(at.x - bp.x, at.z - bp.z) <= PLANT_RADIUS - GROVE_RADIUS) {
+      return { x: Math.floor(at.x), z: Math.floor(at.z) }
+    }
+  } catch (_) { /* no cache: anchor at the body */ }
+  return { x: Math.floor(bp.x), z: Math.floor(bp.z) }
+}
+
+// Dead or missing spots from the remembered grove (44rl): cells that read
+// vetted-and-empty now — a grown trunk or a living sapling is not a hole,
+// far or refused ground never re-issues. Bounded by the run's planting
+// cap, so the replant pass cannot outgrow the tail.
+function deadGroveSpots(bot, ctx, r) {
+  const out = []
+  try {
+    const old = ctx && ctx.grove
+    if (!old || !Array.isArray(old.spots)) return out
+    for (const s of old.spots) {
+      if (out.length >= PLANT_MAX) break
+      if (!s || typeof s.x !== 'number' || typeof s.y !== 'number' || typeof s.z !== 'number') continue
+      try {
+        if (r.triedPlant && typeof r.triedPlant.has === 'function' && r.triedPlant.has(`${s.x},${s.y},${s.z}`)) continue
+      } catch (_) { /* check best-effort */ }
+      try {
+        if (plantSpotOk(bot, ctx, s.x, s.y, s.z)) out.push({ x: s.x, y: s.y, z: s.z })
+      } catch (_) { /* unreadable cell: not a hole */ }
+    }
+  } catch (_) { /* memory unreadable: no replants */ }
+  return out
 }
 
 // Skip without planting: a property of the spot (unreachable, refused),
@@ -490,6 +556,31 @@ function finish(bot, ctx, r, reason) {
   try {
     console.log(`reforest leaves=${leaves} saplings=+${gain} fail=${reason || '-'} planted=${planted}`)
   } catch (_) { /* log best-effort */ }
+  // One grove per run (44rl): bank the landed cells for the next run's
+  // growth check and chat where the grove stands — one line, only when
+  // something was planted.
+  try {
+    if (planted > 0) {
+      const seen = new Set()
+      const merged = []
+      const old = ctx && ctx.grove
+      const prev = old && Array.isArray(old.spots) ? old.spots : []
+      for (const s of prev.concat((r && r.plantedSpots) || [])) {
+        if (!s || typeof s.x !== 'number' || typeof s.y !== 'number' || typeof s.z !== 'number') continue
+        const k = `${s.x},${s.y},${s.z}`
+        if (seen.has(k)) continue
+        seen.add(k)
+        merged.push({ x: s.x, y: s.y, z: s.z })
+      }
+      const anchor = (r && r.grove) || (old && old.center) || null
+      const cx = anchor && typeof anchor.x === 'number' ? Math.floor(anchor.x) : 0
+      const cz = anchor && typeof anchor.z === 'number' ? Math.floor(anchor.z) : 0
+      const cy = anchor && typeof anchor.y === 'number' ? Math.floor(anchor.y) : (merged.length > 0 ? merged[0].y : 0)
+      ctx.grove = { center: { x: cx, y: cy, z: cz }, spots: merged.slice(-GROVE_SPOTS_MAX), at: Date.now() }
+      const kind = String((r && r.plantedKind) || 'oak_sapling').replace(/_sapling$/, '').replace(/_/g, ' ') || 'sapling'
+      say(bot, `planted ${planted} ${kind} around ${cx},${cy},${cz}`)
+    }
+  } catch (_) { /* grove best-effort: the step verdict above still stands */ }
   if (!reason) stepDone(ctx)
   else stepFailed(ctx, reason)
 }
@@ -548,7 +639,7 @@ function reforest(bot, ctx, target, state) {
         return
       }
     } else if (r.leaves >= REFOREST_MAX_LEAVES || Date.now() - r.startedAt >= REFOREST_MAX_MS) {
-      if (!enterPlantTail(bot, r)) {
+      if (!enterPlantTail(bot, ctx, r)) {
         finish(bot, ctx, r, null)
         return
       }
@@ -588,7 +679,7 @@ function reforest(bot, ctx, target, state) {
     if (!pick) {
       // Nothing beatable (no low natural leaves): the plant tail (lc55)
       // when saplings are banked — never tower, never an endless phase.
-      if (!enterPlantTail(bot, r)) {
+      if (!enterPlantTail(bot, ctx, r)) {
         finish(bot, ctx, r, r.streak > 0 ? 'unreachable' : 'no-leaves')
         return
       }
@@ -652,7 +743,7 @@ function reforest(bot, ctx, target, state) {
         say(bot, 'cannot reach the leaves')
         // Banked saplings still plant (core-1): the tail keeps the
         // unreachable verdict when it plants nothing.
-        if (!enterPlantTail(bot, r)) finish(bot, ctx, r, 'unreachable')
+        if (!enterPlantTail(bot, ctx, r)) finish(bot, ctx, r, 'unreachable')
       }
       return
     }
@@ -671,7 +762,7 @@ function reforest(bot, ctx, target, state) {
         say(bot, 'cannot reach the leaves')
         // Banked saplings still plant (core-1): the tail keeps the
         // unreachable verdict when it plants nothing.
-        if (!enterPlantTail(bot, r)) finish(bot, ctx, r, 'unreachable')
+        if (!enterPlantTail(bot, ctx, r)) finish(bot, ctx, r, 'unreachable')
       }
       return
     }
@@ -717,7 +808,7 @@ function reforest(bot, ctx, target, state) {
     if (ctx.digInFlight) return
     if (typeof bot.dig !== 'function') {
       strike(ctx, r, r.pos)
-      if (r.streak >= UNREACHABLE_STRIKES && !enterPlantTail(bot, r)) finish(bot, ctx, r, 'unreachable')
+      if (r.streak >= UNREACHABLE_STRIKES && !enterPlantTail(bot, ctx, r)) finish(bot, ctx, r, 'unreachable')
       return
     }
     let block = r.block
@@ -797,7 +888,8 @@ function reforest(bot, ctx, target, state) {
   }
 
   if (r.phase === 'plant-pick') {
-    // One vetted random spot, or the tail ends with what it planted.
+    // One vetted spot in the grove, or the tail ends with what it planted.
+    // Dead grove spots replant first (44rl), then fresh patch ground.
     if ((r.planted || 0) >= PLANT_MAX || (r.plantFails || 0) >= PLANT_FAIL_MAX) {
       finish(bot, ctx, r, plantEndReason(r))
       return
@@ -806,7 +898,11 @@ function reforest(bot, ctx, target, state) {
       finish(bot, ctx, r, plantEndReason(r))
       return
     }
-    const spot = pickPlantSpot(bot, ctx, r.triedPlant)
+    let spot = null
+    try {
+      if (r.pendingReplant && r.pendingReplant.length > 0) spot = r.pendingReplant.shift()
+    } catch (_) { spot = null }
+    if (!spot) spot = pickPlantSpot(bot, ctx, r.triedPlant, undefined, r.grove)
     if (!spot) {
       finish(bot, ctx, r, plantEndReason(r))
       return
@@ -937,6 +1033,13 @@ function reforest(bot, ctx, target, state) {
         } catch (_) { landed = null }
         if (!landed || landed.name !== sapling.name) return
         r.planted = (r.planted || 0) + 1
+        // The grove record (44rl): each landed cell, plus the kind for
+        // the one chat line — finish() banks them to ctx.grove.
+        try {
+          if (!r.plantedSpots) r.plantedSpots = []
+          r.plantedSpots.push({ x: s.x, y: s.y, z: s.z })
+          if (!r.plantedKind) r.plantedKind = sapling.name
+        } catch (_) { /* record best-effort */ }
         try {
           console.log(`reforest plant ${sapling.name} at ${s.x},${s.y},${s.z}`)
         } catch (_) { /* log best-effort */ }
@@ -994,6 +1097,10 @@ module.exports.surfaceSpotAt = surfaceSpotAt
 module.exports.pickPlantSpot = pickPlantSpot
 module.exports.plantFeasible = plantFeasible
 module.exports.PLANT_RADIUS = PLANT_RADIUS
+module.exports.GROVE_RADIUS = GROVE_RADIUS
+module.exports.GROVE_SPOTS_MAX = GROVE_SPOTS_MAX
+module.exports.groveAnchor = groveAnchor
+module.exports.deadGroveSpots = deadGroveSpots
 module.exports.PLANT_MAX = PLANT_MAX
 module.exports.PLANT_PICK_TRIES = PLANT_PICK_TRIES
 module.exports.PLANT_FAIL_MAX = PLANT_FAIL_MAX
