@@ -1152,8 +1152,48 @@ function nearSite(bot, st) {
 }
 function noteVisit(bot, ctx, st, now) {
   if (!nearSite(bot, st)) return
+  const wasDue = tidyDue(st, now) // edge: back after a due window
   st.visitedAt = now
   ctx.tidyLegMs = 0
+  if (wasDue) reopenRepairs(bot, ctx, st, true)
+}
+
+// Repair re-try (idkcraft-fuja): a retired-but-open plan cell never reaches
+// pick/peek again, so creeper damage that struck out (no stance over the
+// crater, a mob in the way, an unloaded chunk) stayed missing forever
+// while the word read done. A return after a due window reopens the
+// transient ones — the pjsl backfill may have healed the stance since —
+// for one fresh strike ladder; permanent ones (an owner's kept block, a
+// refilled moat, liquid, an unharvestable occupant) stay retired and are
+// reported instead (sayHoles on the done path below). The 'castle repair'
+// command reopens all of them: the owner just asked for a fresh attempt.
+// Best-effort and bounded: at most one reopen per tidy window, plus the
+// explicit command.
+const RETIRED_PERMANENT_RE = /^(kept-|refilled|liquid|no-tool-)/
+function reopenRepairs(bot, ctx, st, transientOnly) {
+  try {
+    if (!st || !st.site || typeof st.site.x !== 'number' || !st.blocked) return 0
+    const { cells } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
+    let n = 0
+    for (const k of Object.keys(st.blocked)) {
+      const e = st.blocked[k]
+      if (!e || !e.retired) continue
+      if (transientOnly && RETIRED_PERMANENT_RE.test(String(e.why || ''))) continue
+      const parts = String(k).split(':')
+      if (Number(parts[0]) !== ver(st)) continue // stale version: pick's prune drops it
+      const idx = Number(parts[1])
+      const c = cells[idx]
+      if (!c) continue // off-plan entries (prep, litter, fill, decor, sill) are someone else's
+      if (done(bot, c)) continue // healed: pick's prune drops the entry
+      delete st.blocked[k]
+      n++
+    }
+    if (n > 0) {
+      try { console.log(`castle repairs reopened: ${n} cell(s)`) } catch (_) { /* log best-effort */ }
+      if (ctx) ctx.castleScanAt = 0 // the next pick re-reads from 0
+    }
+    return n
+  } catch (_) { return 0 }
 }
 
 // Dry decor kinds (g0z.49): every castlefetch leg that comes up dry adds
@@ -1283,6 +1323,12 @@ function menuFact(bot, ctx, now = Date.now()) {
         return 'blocked'
       }
       if (st.phase === 'complete') {
+        // Retired damage (idkcraft-fuja): retired-but-open plan cells never
+        // reach peek, so without this the menu stays silent about missing
+        // walls no matter which word wins below. Report them like holes
+        // (status + one chat per new cell) — the transient ones reopen on
+        // the next tidy return.
+        sayHoles(bot, ctx, st, holesOf(bot, st, r.cells), now)
         // Decor (g0z.31): on site, open decor cells ask for their kind; the
         // castle stays 'complete' (off site it reads 'done', above). A held
         // kind words first (g0z.32), else the first open kind no leg found
@@ -2538,6 +2584,7 @@ module.exports.LITTER_BAND_BASE = LITTER_BAND_BASE
 module.exports.litterCell = litterCell
 module.exports.bandOf = bandOf
 module.exports.decorOpen = decorOpen
+module.exports.reopenRepairs = reopenRepairs
 module.exports.rank = rank
 module.exports.siteCheck = siteCheck
 module.exports.siteEval = siteEval
