@@ -1021,6 +1021,56 @@ function bandOf(st, idx) {
   return { x: st.site.x + dx, y: st.site.y + dy, z: st.site.z + dz, kind: 'air', dy, idx }
 }
 
+// Transit backfill (idkcraft-pjsl): an under-floor hole a transit dig left
+// (an underpassage under the floor or the fence ring) is no plan cell, so
+// pick() never surfaces it, and the litter sweep only removes placed
+// blocks — the holes stayed open forever. Below grade the doorway can
+// never stand in the way (it is at dy >= 0), so any below-grade air cell
+// that is no plan cell is safe to refill with the prep-fill material
+// (castle stone above the reserve, else dirt above the shelter reserve —
+// fillItem). Complete castles only (the build's own below-grade holes are
+// prep's), one cell per castle tick, cached like the box litter. The door
+// sill cell (sillOf) is excluded: it wants planks, not fill.
+const FILL_BASE = 2600000 // band space ends near 2.35M, decor starts at 3M
+const FILL_DEPTH = 4 // holes dug for transit are shallow
+function fillTargets(bot, ctx, st, now) {
+  const site = st && st.site
+  const key = site && typeof site.x === 'number' ? `${site.x},${site.y},${site.z},${st.rot | 0},v${ver(st)}` : null
+  const c0 = ctx && ctx.castleFill
+  if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS) return c0.list.filter((c) => !done(bot, c))
+  const list = []
+  if (key) {
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    const at = blueprint.absPlan(site, st.rot, st.blueprintVersion).at
+    const sill = sillOf(st)
+    const sillKey = `${sill.x},${sill.y},${sill.z}`
+    for (let dx = -1; dx <= w; dx++) {
+      for (let dz = -1; dz <= d; dz++) {
+        for (let dd = 1; dd <= FILL_DEPTH; dd++) {
+          const x = site.x + dx, y = site.y - dd, z = site.z + dz
+          const k = `${x},${y},${z}`
+          if (k === sillKey || at.has(k)) continue
+          const n = nameAt(bot, { x, y, z })
+          if (n == null || !AIR.has(n)) continue // unloaded reads null: never fill blind
+          list.push({ x, y, z, kind: 'stone', prep: 'fill', idx: FILL_BASE + ((dx + 1) * (d + 2) + (dz + 1)) * FILL_DEPTH + (dd - 1) })
+        }
+      }
+    }
+  }
+  if (ctx) ctx.castleFill = { key, at: now, list }
+  return list
+}
+// Next workable fill cell (not backing off, never retired): the menu and
+// the tail share it. No player guard — refilling ground below grade never
+// buries anyone (placeCell still refuses its own stance cells itself).
+function nextFill(st, list, now) {
+  const bl = (st && st.blocked) || {}
+  return (list || []).find((o) => {
+    const b = bl[bkey(st, o.idx)]
+    return !(b && (b.retired || b.until > now))
+  }) || null
+}
+
 // Batch gate (build precedent): a castle leg starts with BATCH of the next
 // kind on hand, or the whole remainder of that kind when less is left.
 const BATCH = 16
@@ -1250,7 +1300,8 @@ function menuFact(bot, ctx, now = Date.now()) {
           ctx.castleWord = { kind, left }
           return stockWord(bot, kind, left)
         }
-        if (nextLitter(st, litterTargets(bot, ctx, st, now), now, bot)) {
+        if (nextLitter(st, litterTargets(bot, ctx, st, now), now, bot) ||
+          (nextFill(st, fillTargets(bot, ctx, st, now), now) && fillItem(bot, ctx))) {
           ctx.castleWord = { word: 'clear' }
           return 'clear'
         }
@@ -1992,16 +2043,31 @@ function guardCastle(bot, ctx) {
       if (m && Array.isArray(m.exclusionAreasBreak)) m.exclusionAreasBreak = m.exclusionAreasBreak.filter((f) => f !== ctx.castleGuardFn)
       if (m && Array.isArray(m.exclusionAreasPlace)) m.exclusionAreasPlace = m.exclusionAreasPlace.filter((f) => f !== ctx.castlePlaceFn)
     }
+    // A peer's laid cells (idkcraft-pjsl): a castleless, swarm or visiting
+    // bot's A* read a peer's floor/fence as empty ground and tunnelled it
+    // for transit — the place side already guards every known apron
+    // (g0z.63), the break side only knew the own project. castleProtects
+    // and yardDigBan are pure in the state, so they read a peer state.
+    const peerLaid = (block) => blueprint.anyCastle(ctx, (c, own) => {
+      if (own || !c) return false
+      try { return castleProtects(c, block.position, block.name) } catch (_) { return false }
+    }) != null
+    const peerYard = (block) => blueprint.anyCastle(ctx, (c, own) => {
+      if (own || !c) return false
+      try { return yardDigBan(c, block.position, block.name) } catch (_) { return false }
+    }) != null
     const fn = (block) => {
       try {
-        if (!ctx.castle || !block) return 0
-        if (castleProtects(ctx.castle, block.position, block.name)) return 100
+        if (!block) return 0
+        if (ctx.castle && castleProtects(ctx.castle, block.position, block.name)) return 100
+        if (peerLaid(block)) return 100
         // The castle step's own walks (g0z.44 revmux 01 body-2, 02 core-1):
         // prep cuts and cell approaches dig as before — but not a borrower
         // (fight, lead, a reflex), whose A* stays out of the yard like
         // every other executor's.
         if (ctx.step === 'castle' && !borrowedGoal(bot, ctx)) return 0
-        return yardDigBan(ctx.castle, block.position, block.name) ? 100 : 0
+        if (ctx.castle && yardDigBan(ctx.castle, block.position, block.name)) return 100
+        return peerYard(block) ? 100 : 0
       } catch (_) { return 0 }
     }
     const placeFn = (block) => {
@@ -2417,6 +2483,14 @@ function castle(bot, ctx) {
     // the sweep runs before decor.
     const lit = nextLitter(st, litterTargets(bot, ctx, st, now), now, bot)
     if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
+    // Transit backfill (idkcraft-pjsl): a below-grade hole no plan covers,
+    // one cell per tick once nothing else is open. No material on hand
+    // stays silent (the word below stays silent too) — the next pass
+    // retries once fetch refills the kit.
+    if (st.phase === 'complete') {
+      const fill = nextFill(st, fillTargets(bot, ctx, st, now), now)
+      if (fill && fillItem(bot, ctx)) { work(bot, ctx, st, fill, now, 'backfilling a transit hole'); return }
+    }
     // Decor (g0z.31): a complete castle lays its panes (g0z.32: and
     // banners) through the same placeCell; phase stays 'complete'
     // (residence/stockpile read it). First open cell whose kind is held.
@@ -2456,6 +2530,9 @@ module.exports.isMaterial = (name, st) => typeof name === 'string' && Object.ent
 module.exports.siteLoaded = siteLoaded
 module.exports.menuFact = menuFact
 module.exports.litterTargets = litterTargets
+module.exports.fillTargets = fillTargets
+module.exports.nextFill = nextFill
+module.exports.FILL_BASE = FILL_BASE
 module.exports.scaffoldShape = scaffoldShape
 module.exports.LITTER_BAND_BASE = LITTER_BAND_BASE
 module.exports.litterCell = litterCell
