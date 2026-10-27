@@ -59,7 +59,7 @@ const ITEM = {
   pane: (n) => blueprint.matches('pane', n), // g0z.31 decor: window panes (chest-supplied)
   banner: (n) => blueprint.matches('banner', n), // g0z.32 decor: gate banners (chest-only, never crafted)
   bookshelf: (n) => blueprint.matches('bookshelf', n), // g0z.49 decor: attic shelves (chest books, crafted)
-  enchanting_table: (n) => blueprint.matches('enchanting_table', n), // g0z.49 decor: attic table (chest-only, never crafted)
+  enchanting_table: (n) => blueprint.matches('enchanting_table', n), // 0dbg decor: attic table (finished or chest mats + table craft)
   blast_furnace: (n) => blueprint.matches('blast_furnace', n), // g0z.50 decor: kitchen blast furnace (chest, else crafted)
   gate: (n) => blueprint.matches('gate', n), // g0z.46 decor: the fence-ring gate (chest, else crafted from wood)
 }

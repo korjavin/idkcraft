@@ -3,8 +3,10 @@
 // idkcraft-g0z.49: the castle attic nook — an enchanting table at (15,8,12)
 // and five bookshelves (13..17,8,10) on the dy7 slab, laid after phase
 // 'complete' like g0z.31/32/45. Phase 1 is chest-supplied: shelves or books
-// from the castle chest (3 books + 6 planks crafted at a table), the table
-// chest-only; missing stock fails honestly into the hold. The dry-kind
+// from the castle chest (3 books + 6 planks crafted at a table); the table
+// (idkcraft-0dbg) is the finished item or its vanilla mats from the chest
+// (4 obsidian + 2 diamonds + 1 book), crafted at a table. Missing stock
+// fails honestly into the hold with the named shortfall. The dry-kind
 // skip is per kind (a Set), so a dry table never locks stocked shelves out.
 
 const { describe, it, afterEach } = require('node:test')
@@ -381,22 +383,26 @@ describe('castle attic decor behaviour (g0z.49)', () => {
     assert.deepEqual([...ctx.castleFetchDry], ['bookshelf'])
   })
 
-  it('no table anywhere: failed:castlefetch-no-enchanting_table, never crafted (no gather, no hunt)', async () => {
+  it('no table anywhere: the craft is tried, then failed:castlefetch-no-enchanting_table (no gather, no hunt)', async () => {
+    // idkcraft-0dbg: the table crafts from chest mats (4 obsidian + 2
+    // diamonds + 1 book) instead of arriving finished-only — the craft is
+    // attempted once, then the leg fails honestly with the named shortfall.
     const bot = castleBot({ items: [], chest: [] })
     closeDecor(bot, 0)
     const table = blueprint.decorPlan(SITE, 0, 2).cells.find((c) => c.kind === 'enchanting_table')
     bot.set.delete(k3(table.x, table.y, table.z))
     const ctx = { castle: completeState() }
     assert.equal(castleMod.menuFact(bot, ctx), 'enchanting_table-none')
-    let crafted = 0
+    const asked = []
     fetch.deps.gather = () => { bot.calls.gather++ }
-    fetch.deps.craftItem = () => { crafted++; return { done: false } }
+    fetch.deps.craftItem = (b, c, names, n) => { asked.push([names, n]); return { done: false } }
     for (let i = 0; i < 40 && !ctx.stepStatus; i++) { fetch(bot, ctx); await settle(); await settle() }
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-enchanting_table')
-    assert.equal(crafted, 0)
+    assert.deepEqual(asked, [[['enchanting_table'], 1]], 'one table-craft attempt from the pack')
     assert.equal(bot.calls.gather, 0)
     assert.equal(ctx.bring, undefined)
     assert.deepEqual([...ctx.castleFetchDry], ['enchanting_table'])
+    assert.equal(ctx.castle.status, 'no table mats (4 obsidian, 2 diamonds, 1 book) — drop obsidian, diamonds and a book in a chest')
   })
 
   it('per-kind dry skip: a table-dry word lays chest shelves; failures accumulate per kind', async () => {

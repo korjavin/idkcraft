@@ -42,9 +42,13 @@ const { stepDone, stepFailed, failReason, isFinished, stepGen, stale } = require
 // 2026-10-09) — 6 wool + 1 stick per banner, the wool through a self bring
 // order (bannerTick), but only once the beds stand (beds first).
 // bookshelf (g0z.49, phase 1: chest-supplied) — shelves else books from
-// the chest, 3 books + 6 planks crafted at a table; enchanting_table —
-// chest only (no bot chain for obsidian/diamonds). Both fail honestly
-// into the hold, like banners before g0z.35.
+// the chest, 3 books + 6 planks crafted at a table. enchanting_table
+// (idkcraft-0dbg) — the finished table else its vanilla mats from the
+// chest (4 obsidian + 2 diamonds + 1 book), crafted at a table like the
+// shelves. No self-source ladders: diamonds have no fetch leg (deep.js is
+// the gear step's subroutine) and obsidian needs a lava chain nobody owns
+// — both read as chest loot, failing honestly into the hold with a named
+// shortfall, like banners before g0z.35.
 // blast_furnace (g0z.50, self-sourced g0z.51) — the finished block from
 // the chest, else one table craft from 5 iron_ingot + 1 furnace + 3
 // smooth_stone held; else the blast ladder (blastTick): chest iron/chain
@@ -63,7 +67,10 @@ const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: cas
 // castle<->castlefetch switch rate from below no matter how the words flap.
 const LEG_MAX_MS = 5 * 60 * 1000
 // One craft op per call; the next tick re-checks the target.
-const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, blast_furnace: 1, stairs: 4, gate: 1 }
+const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, enchanting_table: 1, blast_furnace: 1, stairs: 4, gate: 1 }
+const TABLE_OBSIDIAN = 4 // vanilla enchanting_table recipe (craftTick crafts it whole)
+const TABLE_DIAMOND = 2
+const TABLE_BOOK = 1
 const BANNER_WOOL = 6 // one colour per banner (table recipe)
 const BOOKS_PER_SHELF = 3 // table recipe: 6 planks + 3 books (g0z.49)
 const BLAST_IRON = 5 // iron_ingot per blast furnace (table recipe, g0z.51)
@@ -222,7 +229,7 @@ function chestNames(bot, kind) {
   if (kind === 'pane') return [itemNames(bot, (n) => blueprint.matches('pane', n)), ['glass'], ['sand']]
   if (kind === 'banner') return [itemNames(bot, (n) => blueprint.matches('banner', n)), itemNames(bot, (n) => n.endsWith('_wool'))]
   if (kind === 'bookshelf') return [['bookshelf'], ['book']]
-  if (kind === 'enchanting_table') return [['enchanting_table']]
+  if (kind === 'enchanting_table') return [['enchanting_table'], ['obsidian'], ['book'], ['diamond']]
   if (kind === 'blast_furnace') return [['blast_furnace'], ['iron_ingot'], ['raw_iron'], ['smooth_stone'], ['stone'], ['cobblestone']]
   // vf8e.8: stairs fund their table like every wood kind (g0z.56) — the
   // finished stairs first, then ONE table's worth (a table, else planks,
@@ -241,6 +248,7 @@ function craftNames(bot, kind) {
   if (kind === 'pane') return ['glass_pane'] // 6 glass -> 16 at a table
   if (kind === 'banner') return itemNames(bot, isBanner) // 6 wool of one colour + 1 stick at a table
   if (kind === 'bookshelf') return ['bookshelf'] // 6 planks + 3 books at a table (craftany does the planks layer from logs)
+  if (kind === 'enchanting_table') return ['enchanting_table'] // 4 obsidian + 2 diamonds + 1 book at a table (0dbg)
   if (kind === 'blast_furnace') return ['blast_furnace'] // 5 iron_ingot + 1 furnace + 3 smooth_stone at a table (g0z.50; the furnace itself must be held)
   if (kind === 'stairs') return ['cobblestone_stairs'] // 6 cobble -> 4 at a table (g0z.47; cobble from the quarry legs)
   return []
@@ -915,6 +923,18 @@ async function drawChest(bot, ctx, d, at, need) {
       if (want > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
       continue
     }
+    // Table mats (idkcraft-0dbg): the recipe's whole need per mat, at once
+    // (the blast shape) — the finished table through the generic need
+    // above, then obsidian, the book, diamonds. Recomputed per mat: each
+    // withdraw lands in the pack before the next want is read. Already
+    // packed mats are never re-drawn.
+    if (d.kind === 'enchanting_table' && names[0] !== 'enchanting_table') {
+      const want = names[0] === 'obsidian' ? Math.max(0, TABLE_OBSIDIAN - countItems(bot, (n) => n === 'obsidian'))
+        : names[0] === 'book' ? Math.max(0, TABLE_BOOK - countItems(bot, (n) => n === 'book'))
+        : names[0] === 'diamond' ? Math.max(0, TABLE_DIAMOND - countItems(bot, (n) => n === 'diamond')) : 0
+      if (want > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
+      continue
+    }
     // Books already packed cover shelves too (revmux 01 minor): never
     // withdraw what the pack holds.
     const bookWant = book ? Math.max(0, BOOKS_PER_SHELF * Math.ceil(need) - countItems(bot, (n) => n === 'book')) : need
@@ -1217,6 +1237,33 @@ function blastNeed(bot) {
     cobble: countItems(bot, (n) => n === 'cobblestone'),
     furn: countItems(bot, (n) => n === 'furnace'),
   }
+}
+
+// Missing table mats, named (idkcraft-0dbg): the honest line when no chest
+// anywhere funds the recipe — null when the pack already funds the whole
+// table. The 'castle' reply reads st.status.
+function tableShort(bot) {
+  const parts = []
+  const o = TABLE_OBSIDIAN - countItems(bot, (n) => n === 'obsidian')
+  const di = TABLE_DIAMOND - countItems(bot, (n) => n === 'diamond')
+  const b = TABLE_BOOK - countItems(bot, (n) => n === 'book')
+  if (o > 0) parts.push(`${o} obsidian`)
+  if (di > 0) parts.push(`${di} diamond${di > 1 ? 's' : ''}`)
+  if (b > 0) parts.push(`${b} book`)
+  return parts.length ? parts.join(', ') : null
+}
+function tableStatus(bot, ctx, f, st) {
+  try {
+    if (!st) return
+    const miss = tableShort(bot)
+    const line = miss
+      ? `no table mats (${miss}) — drop obsidian, diamonds and a book in a chest`
+      : `can't craft the table: ${((f && f.craftLine) || 'unknown craft failure')} — checking the table next leg`
+    if (st.status !== line) {
+      st.status = line
+      try { console.log(`castlefetch enchanting_table: ${line}`) } catch (_) { /* log best-effort */ }
+    }
+  } catch (_) { /* status best-effort */ }
 }
 
 // Blast world source (g0z.51, owner: the bot gets its own materials).
@@ -2849,6 +2896,7 @@ function castlefetch(bot, ctx, target, state) {
   if (d.kind === 'pane') { paneTick(bot, ctx, f, d, target, state); return }
   if (d.kind === 'blast_furnace') { blastTick(bot, ctx, f, d, target, state); return }
   if (d.kind === 'torch' && torchTick(bot, ctx, f, d, target, state)) return
+  if (d.kind === 'enchanting_table') tableStatus(bot, ctx, f, st)
   castleMod.noteDry(ctx, d.kind) // the decor word tries the next open kind (castle menuFact)
   finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, banner without chest stock (beds first)
 }
@@ -2884,6 +2932,12 @@ module.exports.unparkKind = unparkKind
 module.exports.unparkAll = unparkAll
 module.exports.deadRestart = deadRestart
 module.exports.RESTART_MAX = RESTART_MAX
+module.exports.chestNames = chestNames
+module.exports.craftNames = craftNames
+module.exports.tableShort = tableShort
+module.exports.TABLE_OBSIDIAN = TABLE_OBSIDIAN
+module.exports.TABLE_DIAMOND = TABLE_DIAMOND
+module.exports.TABLE_BOOK = TABLE_BOOK
 module.exports.roomForDrop = roomForDrop
 module.exports.castleChest = castleChest
 module.exports.chestVia = chestVia
