@@ -1031,6 +1031,30 @@
     ],
     "owner": "src/behaviours/forage.js"
   },
+  "funBusy": {
+    "writers": [
+      "src/behaviours/fun.js"
+    ],
+    "owner": "src/behaviours/fun.js"
+  },
+  "funIdleSince": {
+    "writers": [
+      "src/behaviours/fun.js"
+    ],
+    "owner": "src/behaviours/fun.js"
+  },
+  "funNext": {
+    "writers": [
+      "src/behaviours/fun.js"
+    ],
+    "owner": "src/behaviours/fun.js"
+  },
+  "funRun": {
+    "writers": [
+      "src/behaviours/fun.js"
+    ],
+    "owner": "src/behaviours/fun.js"
+  },
   "furnace": {
     "writers": [
       "src/behaviours/furnace.js"
