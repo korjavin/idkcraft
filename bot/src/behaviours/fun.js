@@ -235,7 +235,11 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
     // is fresh on every decide, so this read is exact; the cooldown
     // return sits below it, never shielding work.
     if (now - (ctx.funIdleSince || now) < FUN_IDLE_MS) return false
-    if (typeof ctx.funNext === 'number' && now < ctx.funNext) return false
+    // A running joke is not cooled down (codex R6 P2): the stamp lands at pick time,
+    // so without this the next text move would force a re-pick the joke can never
+    // win -- abandoned act, burned 30-60 min cooldown. Safety gates above still
+    // cancel a running joke; only the cooldown applies to new runs.
+    if (ctx.step !== 'fun' && typeof ctx.funNext === 'number' && now < ctx.funNext) return false
     if (giftRecipient(bot) && giftPick(bot)) return true
     if (follyMats(bot)) return true
     if (improvReady(bot) && (giftPick(bot) || follyMats(bot))) return true

@@ -730,3 +730,15 @@ describe('fun LLM-offer validator (o95q allowlist)', () => {
     assert.ok(s.includes('item_0 x64'))
   })
 })
+
+describe('fun running-step cooldown (codex R6 P2)', () => {
+  it('a running joke stays feasible under its own cooldown; a new run does not', () => {
+    // run() stamps funNext at pick time: without the running-step
+    // exemption the next goal-text move forces a re-pick the joke can
+    // never win (abandoned act, burned 30-60 min cooldown).
+    const stamped = idleCtx({ step: 'fun', funNext: Date.now() + 30 * 60 * 1000 })
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), stamped), true)
+    const next = idleCtx({ step: 'rest', funNext: Date.now() + 30 * 60 * 1000 })
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), next), false)
+  })
+})
