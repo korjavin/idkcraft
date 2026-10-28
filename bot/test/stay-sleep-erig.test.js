@@ -505,61 +505,78 @@ describe('erig follow-up: sleep-safe shelter before the click', () => {
     assert.ok(bot.chats.includes("can't sleep tonight (my bed is gone), holding till dawn"))
   })
 
-describe('erig round 4: the attempt waits for the sleep window', () => {
-  it('holds silent at dusk (no attempt, no line, no latch), clicks once the window opens', async () => {
+describe('erig round 5: refusal-driven waiting replaces the fixed tick', () => {
+  it('attempts at dusk: no tick gate, the server decides', async () => {
     const bot = mockBot2({ hp: 20, food: 20, pack: [] }) // prod vitals: torch/vitals/ring all fine
     bot.time.timeOfDay = 12400 // facts time=dusk
     const ctx = hutCtx2()
-    for (let t = 0; t < 60; t++) await tick(bot, ctx)
-    assert.equal(bot.calls.sleeps, 0, 'no doomed dusk click')
-    assert.deepEqual(bot.chats, [], 'no dusk line: the stay just holds')
-    assert.ok(!ctx.stay.sleepGiveUp, 'a pre-window hold is not a give-up')
+    for (let t = 0; t < 5; t++) await tick(bot, ctx)
+    assert.ok(bot.calls.sleeps >= 1, 'the attempt goes out at dusk')
     assert.equal(ctx.inShelter, true, 'still inside behind the shut door')
-    bot.time.timeOfDay = 14000 // the window opens
-    await tick(bot, ctx)
-    assert.ok(bot.calls.sleeps >= 1, 'the attempt goes out once sleepable')
   })
 
-  it('window edges mirror mineflayer bed.js (12541..23458)', () => {
-    const at = (timeOfDay) => home.sleepWindowOpen({ time: { timeOfDay } })
-    assert.equal(at(12000), false, 'dusk start holds')
-    assert.equal(at(12540), false, 'one tick early holds')
-    assert.equal(at(12541), true, 'window opens')
-    assert.equal(at(14000), true, 'night clicks')
-    assert.equal(at(23458), true, 'window closes')
-    assert.equal(at(23459), false, 'past close holds')
-  })
-
-  it('a dusk thunderstorm sleeps; plain rain and unknown thunder do not open it', () => {
-    const storm = (extra) => home.sleepWindowOpen({ time: { timeOfDay: 12400 }, ...extra })
-    assert.equal(storm({ isRaining: true, thunderState: 1 }), true, 'v1 storm at dusk clicks')
-    assert.equal(storm({ isRaining: true, thunderState: 0 }), false, 'plain rain holds')
-    assert.equal(storm({ isRaining: true }), false, 'v2 bridge (rain only, no thunder level) holds till night')
-    assert.equal(storm({}), false, 'dry dusk holds')
-  })
-
-  it('unreadable clock fails open, like the legacy chain', () => {
-    assert.equal(home.sleepWindowOpen({ time: {} }), true)
-    assert.equal(home.sleepWindowOpen({}), true)
-  })
-
-  it('a dusk storm attempt goes out through stay', async () => {
+  it('a client-side early-night refusal holds silently and retries till true night', async () => {
     const bot = mockBot2({ hp: 20, food: 20, pack: [] })
     bot.time.timeOfDay = 12400
-    bot.isRaining = true
-    bot.thunderState = 1
+    bot.sleep = async () => { bot.calls.sleeps++; throw new Error("it's not night and it's not a thunderstorm") }
     const ctx = hutCtx2()
-    for (let t = 0; t < 5; t++) await tick(bot, ctx)
-    assert.ok(bot.calls.sleeps >= 1, 'storm at dusk clicks')
+    for (let t = 0; t < 120; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 4, 'retries on the ~30 s timer (0/31/62/93), not the 3-try budget')
+    assert.ok(!ctx.stay.sleepGiveUp, 'early night never gives up')
+    assert.ok(!ctx.stay.sleepRefusals, 'the failure budget is untouched')
+    assert.deepEqual(bot.chats, [], 'silent: no line while waiting on the night')
+    bot.time.timeOfDay = 14000 // skyDarken crosses 4: the server accepts
+    bot.sleep = async () => { bot.calls.sleeps++ }
+    for (let t = 0; t < 35; t++) await tick(bot, ctx) // the ~30 s cooldown drains first
+    assert.ok(bot.chats.includes('sleeping in a nearby bed'), 'sleeps once accepted')
   })
 
-  it('fight stays supreme: a close hostile holds the tick even inside the window', async () => {
-    const bot = mockBot2({ mobs: [{ name: 'zombie', pos: [15.5, 64, 22.5] }] })
-    bot.time.timeOfDay = 14000
+  it("the server's own early-night line holds silently, budget untouched, till it accepts", async () => {
+    const bot = mockBot2({ hp: 20, food: 20, pack: [] })
+    bot.time.timeOfDay = 12400
+    let accept = false
+    bot.sleep = async () => {
+      bot.calls.sleeps++
+      if (accept) return
+      for (const fn of (bot.msgHandlers.message || [])) {
+        fn({ text: 'You can sleep only at night or during thunderstorms' }, 'game_info')
+      }
+      throw new Error('bot is not sleeping')
+    }
     const ctx = hutCtx2()
-    for (let t = 0; t < 10; t++) await tick(bot, ctx)
-    assert.equal(bot.calls.sleeps, 0, 'never clicks through a real threat')
-    assert.ok(!bot.chats.some((m) => m.includes("can't sleep")), 'no sleep line: fight owns the tick')
+    for (let t = 0; t < 100; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 4, 'retries on the timer, never the give-up budget')
+    assert.ok(!ctx.stay.sleepGiveUp, 'no give-up on an early night')
+    assert.ok(!ctx.stay.sleepRefusals, 'budget untouched')
+    assert.deepEqual(bot.chats, [], 'silent hold')
+    accept = true // true night: the next attempt lands
+    bot.time.timeOfDay = 12600
+    for (let t = 0; t < 35; t++) await tick(bot, ctx) // the ~30 s cooldown drains first
+    assert.ok(bot.chats.includes('sleeping in a nearby bed'), 'sleeps once accepted')
+  })
+
+  it('dawn breaks the hold: no attempt, no line, no latch', async () => {
+    const bot = mockBot2({ hp: 20, food: 20, pack: [] })
+    bot.time.timeOfDay = 12400
+    bot.sleep = async () => { bot.calls.sleeps++; throw new Error("it's not night and it's not a thunderstorm") }
+    const ctx = hutCtx2()
+    for (let t = 0; t < 40; t++) await tick(bot, ctx)
+    assert.ok(bot.calls.sleeps >= 1, 'held through dusk')
+    const held = bot.calls.sleeps
+    bot.time.timeOfDay = 6000 // dawn: the stay leaves the night branch
+    for (let t = 0; t < 5; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, held, 'no attempt by day')
+    assert.ok(!bot.chats.some((m) => m.includes("can't sleep")), 'no failure line')
+    assert.ok(!ctx.stay.sleepGiveUp, 'no latch')
+  })
+
+  it('torch, vitals and the 16-block ring still gate the dusk attempt', async () => {
+    const bot = mockBot2({ mobs: [{ name: 'pillager', pos: [23.5, 64, 22.5] }] })
+    bot.time.timeOfDay = 12400
+    const ctx = hutCtx2()
+    for (let t = 0; t < 35; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 0, 'the ring still holds the click')
+    assert.deepEqual(bot.chats, ["can't sleep yet (hostiles roaming close), holding"])
   })
 })
 
