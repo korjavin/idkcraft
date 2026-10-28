@@ -120,6 +120,46 @@ describe('owner-only orders (idkcraft-rd6q)', () => {
     assert.deepEqual(bot.chats, [])
     assert.ok(bot._tickerCtx.llmOrder == null)
   })
+
+  it('non-owner stop cannot cancel the owner plan (cancel branch gated)', () => {
+    process.env.OWNER_USERNAME = 'LoptiFriend'
+    const bot = leafyBot()
+    bot.players = { LoptiFriend: livePlayer('LoptiFriend'), Griefer: livePlayer('Griefer') }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    const ctx = bot._tickerCtx
+    handleChat(bot, ticker, 'LoptiFriend', 'reforest 3')
+    assert.ok(ctx.llmOrder, 'owner plan should be installed')
+    bot.chats = []
+    handleChat(bot, ticker, 'Griefer', 'stop')
+    assert.deepEqual(bot.chats, [])
+    assert.ok(ctx.llmOrder, 'stranger stop must leave the owner plan running')
+  })
+
+  it('non-owner chatter never reaches the model (llmAsk gated)', () => {
+    process.env.OWNER_USERNAME = 'LoptiFriend'
+    const prevOrders = process.env.BOT_LLM_ORDERS
+    const prevKey = process.env.ANTHROPIC_API_KEY
+    process.env.BOT_LLM_ORDERS = '1'
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const origAsk = llmOrders.ask
+    let asks = 0
+    llmOrders.ask = () => { asks++; return true }
+    try {
+      const bot = leafyBot()
+      bot.players = { LoptiFriend: livePlayer('LoptiFriend'), Griefer: livePlayer('Griefer') }
+      const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+      assert.ok(llmOrders.enabled(), 'stub env should enable llm orders')
+      handleChat(bot, ticker, 'Griefer', 'lol nice')
+      handleChat(bot, ticker, 'Griefer', 'plan reforest 10')
+      assert.equal(asks, 0, 'no model call for stranger lines')
+    } finally {
+      llmOrders.ask = origAsk
+      if (prevOrders === undefined) delete process.env.BOT_LLM_ORDERS
+      else process.env.BOT_LLM_ORDERS = prevOrders
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = prevKey
+    }
+  })
 })
 
 describe('explicit reforest order (idkcraft-rd6q)', () => {

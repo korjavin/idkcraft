@@ -116,6 +116,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `LEVEL`: World directory name (default `world`)
   - `BOT_USERNAME`: Bot player name (default `IdkBot`)
   - `BOT_FOLLOW`: Target player to follow (empty = work mode until `follow me`)
+  - `OWNER_USERNAME`: owner-only orders (when set, only that player's chat lines become orders, case-insensitive, leading-dot-insensitive; empty = everyone, as before; pass through stack env + recreate)
   - `BOT_BODY`: Bot body (`mineflayer` default | `baritone` — bot2 pins it; never set on bot)
   - `BOT2_USERNAME`: v2 bot name (empty = v2 off; whitelist its OFFLINE uuid like `BOT_USERNAME`)
   - `BOT_CASTLE_PEER`: peer bot whose memory file's complete castle is read (never written) as a night residence (bot2 pins it to `BOT_USERNAME`; empty = off)
