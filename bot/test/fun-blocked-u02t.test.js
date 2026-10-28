@@ -79,6 +79,54 @@ describe('fun blocked-bypass (u02t)', () => {
     assert.equal(fun.menuBlocked(f, b, c), false)
     assert.equal(goal.MENU.fun.feasible(f, b, c), false)
   })
+  it('a blocked castle with a rest-only menu stays feasible (u02t R2 core-1)', () => {
+    // The bead's motivating case: the castle never completes (bookshelf
+    // chain reads 'blocked'), every work step latched — the joke runs.
+    const f = owedFacts({ castle: 'blocked' })
+    const c = blockedCtx()
+    const b = botWith(kit)
+    const names = Object.keys(goal.MENU).filter((n) => {
+      try { return goal.MENU[n].feasible(f, b, c) } catch (_) { return false }
+    })
+    assert.deepEqual(names.filter((n) => n !== 'fun'), ['rest'], `menu=${names.join(',')}`)
+    assert.equal(fun.menuBlocked(f, b, c), true)
+    assert.equal(goal.MENU.fun.feasible(f, b, c), true)
+  })
+  it('an active non-blocked castle still vetoes even with a rest-only menu (u02t R2 core-1)', () => {
+    // The bypass is narrow: only 'blocked' lifts the castle veto. Hold
+    // the castle legs on the current text so the menu is rest-only, and
+    // the 'stone-batch' word still keeps the joke off.
+    const f = owedFacts({ castle: 'stone-batch' })
+    const c = blockedCtx()
+    const b = botWith(kit)
+    const text = goal.goalText(f, c && c.home)
+    c.stepFail = { castle: { text, status: 'failed:probe' }, castlefetch: { text, status: 'failed:probe' } }
+    const names = Object.keys(goal.MENU).filter((n) => {
+      try { return goal.MENU[n].feasible(f, b, c) && !goal.failHolds(c, n, text, b) } catch (_) { return false }
+    })
+    assert.deepEqual(names.filter((n) => n !== 'fun'), ['rest'], `menu=${names.join(',')}`)
+    assert.equal(fun.menuBlocked(f, b, c), true)
+    assert.equal(goal.MENU.fun.feasible(f, b, c), false)
+  })
+  it('a step held only by a failHold counts as blocked (u02t R2 core-2)', () => {
+    // The 'failed' leg: every feasible productive step ended
+    // `failed:<reason>` on the current text, so the arbiter menu drops
+    // them and the FSM rests — the bypass must fire.
+    const f = owedFacts()
+    const c = idleCtx()
+    const b = botWith(kit)
+    const text = goal.goalText(f, c && c.home)
+    c.stepFail = {}
+    for (const n of Object.keys(goal.MENU)) {
+      if (n === 'fun' || n === 'rest' || n === 'explore') continue
+      let feasible = false
+      try { feasible = !!goal.MENU[n].feasible(f, b, c) } catch (_) { feasible = false }
+      if (feasible) c.stepFail[n] = { text, status: 'failed:probe' }
+    }
+    assert.ok(Object.keys(c.stepFail).length > 0, 'free menu holds a productive step to fail-hold')
+    assert.equal(fun.menuBlocked(f, b, c), true)
+    assert.equal(goal.MENU.fun.feasible(f, b, c), true)
+  })
   it('night and threat still veto even when blocked', () => {
     assert.equal(
       goal.MENU.fun.feasible(owedFacts({ time: 'night' }), botWith(kit), blockedCtx()),

@@ -119,7 +119,11 @@ describe('fun gating (o95q idle-only)', () => {
     const b = () => fakeBot(dirt20)
     assert.equal(goal.MENU.fun.feasible(facts({ time: 'night' }), b(), idleCtx()), false)
     assert.equal(goal.MENU.fun.feasible(facts({ time: 'dusk' }), b(), idleCtx()), false)
-    assert.equal(goal.MENU.fun.feasible(facts({ castle: 'blocked' }), b(), idleCtx()), false)
+    // u02t: a stuck ('blocked') castle with a rest-only menu no longer
+    // vetoes (release covered in fun-blocked-u02t.test.js) — the veto
+    // below bites while work can run, beds owed-but-runnable keeping
+    // the menu open.
+    assert.equal(goal.MENU.fun.feasible(facts({ castle: 'blocked', beds: 'none' }), b(), idleCtx()), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { bring: {}, ...idleCtx() }), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { lead: {}, ...idleCtx() }), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { comehome: {}, ...idleCtx() }), false)

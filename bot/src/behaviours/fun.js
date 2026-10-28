@@ -173,13 +173,22 @@ const BYPASS_IDLE = new Set(['fun', 'rest', 'explore'])
 // because it is held, parked, latched or failed, NOT because it finished
 // (finished work reads clean in facts and never reaches this gate, so no
 // extra done-vs-blocked distinction is needed here). Mirrors menuNames'
-// runnable test (feasible AND registered); the text-keyed failHolds have
-// no text here, so the feasible-internal holds/parks/latches carry it.
+// runnable test exactly (feasible AND registered AND NOT failHolds on the
+// current text — u02t R2 core-2: a step held after failing on this text
+// is out of the arbiter menu, so it must not count as runnable here).
+// The text is the same call decide makes (goal.js).
 function menuBlocked(facts, bot, ctx) {
   try {
     const menu = menuMod && menuMod.MENU
     if (!menu) return false
     const registered = menuMod && typeof menuMod.registered === 'function' ? menuMod.registered : null
+    const failHoldsFn = menuMod && typeof menuMod.failHolds === 'function' ? menuMod.failHolds : null
+    let text = null
+    try {
+      text = menuMod && typeof menuMod.goalText === 'function' ? menuMod.goalText(facts, ctx && ctx.home) : null
+    } catch (_) {
+      text = null
+    }
     for (const name of Object.keys(menu)) {
       if (BYPASS_IDLE.has(name)) continue
       let ok = false
@@ -187,6 +196,11 @@ function menuBlocked(facts, bot, ctx) {
         ok = !!menu[name].feasible(facts, bot, ctx) && (!registered || registered(name) !== false)
       } catch (_) {
         ok = false
+      }
+      if (ok && text != null && failHoldsFn) {
+        try {
+          if (failHoldsFn(ctx, name, text, bot)) ok = false
+        } catch (_) { /* hold unreadable: the step counts as runnable */ }
       }
       if (ok) return false
     }
@@ -249,7 +263,12 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
       } catch (_) { /* stamp best-effort */ }
     }
     if (facts.time !== 'day') return false
-    if (!castleQuiet(facts)) return false
+    // Blocked-castle bypass (u02t R2 core-1): a 'blocked' castle never
+    // progresses, so with a rest-only menu the joke runs on the idle pins
+    // alone — the bead's motivating case (bookshelf chain). Any other
+    // active castle word still vetoes, and a runnable castle leg keeps
+    // the veto through menuBlocked.
+    if (!castleQuiet(facts) && !(facts.castle === 'blocked' && menuBlocked(facts, bot, ctx))) return false
     if (facts.home !== 'built') return false
     if (facts.known === 'near') return false
     const owedHaul = facts.haul === 'waiting'
