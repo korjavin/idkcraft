@@ -7,8 +7,9 @@
 // bounded only the explore spiral. Fix: while an unfinished, unparked
 // castle stands, (1) beds/build are infeasible and castlefetch/castle come
 // first in STEP_ORDER (equip only outranked — the chain needs its kit),
-// (2) every own search/bring leg stays within the task radius, (3) dusk
-// and night shelter at the site instead of marching home.
+// (2) every own search/bring leg stays within the task radius, (3) night
+// shelters at the site instead of marching home (dusk did too until vd93,
+// owner 2026-10-28: the dusk knock-off beats castle-first and marches).
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -182,7 +183,7 @@ describe('vmzq.19 castle first: order and vetoes', () => {
   })
 })
 
-describe('vmzq.19 dusk shelters at the site, never marches home', () => {
+describe('vmzq.19 night shelters at the site (vd93: dusk knocks off)', () => {
   it('dusk at the site with an unbuilt far house: shelter (the acceptance shape)', async () => {
     await quiet(async () => {
       const bot = goalBot({ at: pos(CASTLE.x + 2, 64, CASTLE.z + 2), timeOfDay: 12500 })
@@ -194,15 +195,17 @@ describe('vmzq.19 dusk shelters at the site, never marches home', () => {
     })
   })
 
-  it('dusk mid-map with a built far house: shelter in place, not gohome (run3 03:37)', async () => {
+  it('dusk mid-map with a built far house: past knock-off range, shelter (run3 03:37, vd93)', async () => {
     await quiet(async () => {
       const { home, cells } = standingHomeCells()
       // Feet on the mock surface (dirt at y<=63): the run3 y=62 reads
       // buried here, and buried-at-dusk climbs out first (vmzq.50).
+      // 287 out is past the knock-off ring + walk budget (revmux
+      // 03-after-fix): the march could not arrive, the site keeps it.
       const bot = goalBot({ at: pos(MIDMAP.x, 64, MIDMAP.z), timeOfDay: 12500, cells })
       const ctx = { home, castle: castleState(), work: true, step: 'castle', stepStatus: 'done' }
       const facts = goal.goalFacts(bot, ctx)
-      assert.equal(goal.MENU.gohome.feasible(facts, bot, ctx), false, 'no 500-block dusk march')
+      assert.equal(goal.MENU.gohome.feasible(facts, bot, ctx), false, 'vd93: out of range, no dusk march')
       assert.equal(goal.stepWhy('gohome', facts, bot, ctx, ''), 'gohome: sheltering at the castle')
       assert.equal(goal.MENU.shelter.feasible(facts, bot, ctx), true)
       assert.equal((await goal.decide(bot, ctx)).action, 'shelter')
@@ -481,12 +484,13 @@ describe('vmzq.19 R2 major 2: the model never overrides a runnable castle', () =
       ctx.stockpilePierced = false
       ctx.stepStatus = 'done'
       assert.notEqual((await goal.decide(bot, ctx)).action, 'stockpile', 'unlatch re-leashes')
-      // Dusk drops the walk for shelter but keeps the latch; dawn resumes it.
+      // Dusk on a far castle (vd93 range: ~500 out) shelters mid-trip but
+      // keeps the latch; dawn resumes it.
       ctx.stockpilePierced = true
       ctx.step = 'stockpile'
       ctx.stepStatus = 'running'
       bot.time.timeOfDay = 12500
-      assert.equal((await goal.decide(bot, ctx)).action, 'shelter', 'dusk shelters mid-trip')
+      assert.equal((await goal.decide(bot, ctx)).action, 'shelter', 'dusk shelters the far trip')
       assert.equal(ctx.stockpilePierced, true, 'the night keeps the latch')
       bot.time.timeOfDay = 6000
       ctx.stepStatus = 'done'

@@ -3,8 +3,12 @@
 // Bead idkcraft-g0z.21: a castle 113 blocks from home cost every night a
 // march (gohome failed x46, deaths on the night transitions). While an
 // unfinished, unparked castle stands far from home and the bot works at
-// it, the night (from dusk) goes to the shelter step by the site; a bot
-// without a castle, or near home, walks home as before.
+// it, the night goes to the shelter step by the site; a bot without a
+// castle, or near home, walks home as before.
+// vd93 (owner 2026-10-28) reverses the dusk half: the knock-off beats
+// castle-first, so dusk marches home past the castle and the a8rb sleep
+// chain runs — night still shelters. The dusk assertions below pin the
+// new direction; the night ones pin what vd93 kept.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -72,19 +76,20 @@ async function quiet(fn) {
   try { return await fn() } finally { console.log = orig }
 }
 
-describe('g0z.21 castle night: shelter by the far castle, not the march home', () => {
+describe('g0z.21 castle night: shelter by the far castle (vd93: dusk knocks off)', () => {
   const FGO = goal.MENU.gohome.feasible
   const FSH = goal.MENU.shelter.feasible
   const facts = (time) => ({ time, home: 'built', inside: 'no' })
 
-  it('dusk and night at the far castle: shelter, never gohome', () => {
-    for (const t of ['dusk', 'night']) {
-      const b = bot(AT_CASTLE, 15000)
-      assert.equal(FGO(facts(t), b, ctxWith()), false, `${t}: no march home`)
-      assert.equal(FSH(facts(t), b, ctxWith()), true, `${t}: shelter at the site`)
-    }
-    assert.equal(goal.stepWhy('gohome', facts('dusk'), bot(AT_CASTLE), ctxWith(), ''), 'gohome: sheltering at the castle')
-    assert.equal(FSH(facts('day'), bot(AT_CASTLE), ctxWith()), false, 'day works')
+  it('dusk at the far castle knocks off, night still shelters', () => {
+    // vd93: dusk marches home past the castle.
+    assert.equal(FGO(facts('dusk'), bot(AT_CASTLE, 12500), ctxWith()), true, 'dusk: knock off')
+    assert.equal(goal.stepWhy('gohome', facts('dusk'), bot(AT_CASTLE, 12500), ctxWith(), ''), null, 'dusk: no veto to explain')
+    // Night keeps the g0z.21 guard.
+    assert.equal(FGO(facts('night'), bot(AT_CASTLE, 15000), ctxWith()), false, 'night: no march home')
+    assert.equal(FSH(facts('night'), bot(AT_CASTLE, 15000), ctxWith()), true, 'night: shelter at the site')
+    assert.equal(goal.stepWhy('gohome', facts('night'), bot(AT_CASTLE, 15000), ctxWith(), ''), 'gohome: sheltering at the castle')
+    assert.equal(FSH(facts('day'), bot(AT_CASTLE, 6000), ctxWith()), false, 'day works')
   })
 
   it('without a castle, parked, complete, or near home: as before', () => {
@@ -100,12 +105,12 @@ describe('g0z.21 castle night: shelter by the far castle, not the march home', (
       assert.equal(FGO(facts('dusk'), b, ctxWith(castle)), true, `${name}: dusk marches`)
       assert.equal(FSH(facts('dusk'), b, ctxWith(castle)), false, `${name}: no dusk shelter`)
     }
-    // Far from both with an active castle (vmzq.19, reverses the old dusk
-    // march): run3 was caught mid-map at two dusks and marched 500 blocks
-    // home each time — now it shelters in place.
+    // Far from both with an active castle (vd93 range: 283 out is past
+    // the knock-off ring plus walk budget, revmux 03-after-fix): the march
+    // could not arrive, so the site shelter keeps the night.
     {
       const b = bot({ x: 400, y: 64, z: 400 }, 12500)
-      assert.equal(FGO(facts('dusk'), b, ctxWith()), false, 'far from both: no dusk march')
+      assert.equal(FGO(facts('dusk'), b, ctxWith()), false, 'far from both: no dusk knock-off')
       assert.equal(FSH(facts('dusk'), b, ctxWith()), true, 'far from both: shelter in place')
     }
     assert.equal(goal.stepWhy('shelter', facts('dusk'), bot(AT_CASTLE), ctxWith(null), ''), 'shelter: dusk marches home')
@@ -114,22 +119,22 @@ describe('g0z.21 castle night: shelter by the far castle, not the march home', (
     assert.equal(FGO(facts('dusk'), bot({ x: SITE.x + 20, y: 64, z: SITE.z + 20 }), close), true)
   })
 
-  it('decide: castle dusk shelters past feasible day steps; no castle marches', async () => {
+  it('decide: castle dusk knocks off past feasible day steps; no castle marches', async () => {
     await quiet(async () => {
-      assert.equal((await goal.decide(bot(AT_CASTLE, 12500), ctxWith())).action, 'shelter')
+      assert.equal((await goal.decide(bot(AT_CASTLE, 12500), ctxWith())).action, 'gohome')
       assert.equal((await goal.decide(bot(AT_CASTLE, 12500), ctxWith(null))).action, 'gohome')
       assert.equal((await goal.decide(bot(AT_CASTLE, 15000), ctxWith())).action, 'shelter')
     })
   })
 
-  it('decide: a dusk shelter holds, and parking the castle releases it home', async () => {
+  it('decide: dusk knocks off with the castle standing; night still shelters', async () => {
     await quiet(async () => {
       const b = bot(AT_CASTLE, 12500)
       const ctx = ctxWith()
-      assert.equal((await goal.decide(b, ctx)).action, 'shelter')
-      assert.equal((await goal.decide(b, ctx)).action, 'shelter', 'held')
+      assert.equal((await goal.decide(b, ctx)).action, 'gohome')
+      assert.equal((await goal.decide(b, ctx)).action, 'gohome', 'held')
       ctx.castle.parked = true
-      assert.equal((await goal.decide(b, ctx)).action, 'gohome', 'parked: the old dusk march')
+      assert.equal((await goal.decide(b, ctx)).action, 'gohome', 'parked: the dusk march either way')
     })
   })
 })
