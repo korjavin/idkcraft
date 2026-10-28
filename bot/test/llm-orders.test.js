@@ -488,8 +488,9 @@ describe('llm orders: flag on', () => {
     const bot = mockBot()
     const ticker = tickerFor(bot)
     const ctx = bot._tickerCtx
-    answer = '{"plan":[{"step":"reforest","count":10}]}'
-    handleChat(bot, ticker, 'P', 'reforest 10')
+    // rd6q: bare `reforest` is an explicit order now (its empty world
+    // refuses synchronously), so the executive miss rides `do reforest`.
+    handleChat(bot, ticker, 'P', 'do reforest')
     await flush()
     for (let i = 0; i < 5; i++) {
       llmOrders.tick(bot, ctx)
@@ -857,7 +858,9 @@ describe('llm orders: deterministic do <step> (vf8e.17)', () => {
     const bot = mockBot()
     const ticker = tickerFor(bot)
     answer = '{"plan":[]}'
-    handleChat(bot, ticker, 'P', 'reforest 10')
+    // rd6q: bare `reforest 10` is an explicit order now (no model call),
+    // so the prompt assertion rides an explicit `plan` force instead.
+    handleChat(bot, ticker, 'P', 'plan reforest 10')
     await flush()
     assert.match(calls[0].system, /count means repeats/)
   })
