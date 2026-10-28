@@ -2816,11 +2816,11 @@ function siteFarFor(bot, ctx, facts, prev, status, finished, commitStep) {
 }
 
 // Menu pins for a re-decide. Reads the plan/commit pins and the castle
-// re-arm; writes ctx.taskPlanStep (consumed). Returns the menu and which
-// pin applied.
+// re-arm; writes ctx.taskPlanStep (consumed, unless the night defers it).
+// Returns the menu and which pin applied.
 function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
   // Stall-point plan (vmzq.5): the one-shot forced re-pick — the planned
-  // step as the only menu entry. Consumed always (one-shot); applied only
+  // step as the only menu entry. Consumed on use (one-shot); applied only
   // while still feasible and registered (a stale answer degrades to the
   // normal menu, never to a broken step). failHolds is bypassed: retrying
   // a held step is the planner's job.
@@ -2828,11 +2828,27 @@ function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
   // night steps do — a pinned castle leg cannot dig and wedges again.
   let rearm = false
   try { rearm = picklessCastle(facts, names) } catch (_) { rearm = false }
+  // Night safety (idkcraft-vd93): the night rule owns the body from dusk
+  // to home arrival — a work pin never jumps the night queue. The safety
+  // choice is computed once from the ORDINARY menu for both pins (the
+  // commit branch already did this; the plan branch did not, so a pending
+  // plan pin stole the dusk march and its stay handoff). When safety is a
+  // night step the normal menu runs (chooseStep's night rule picks it);
+  // the plan pin waits — deferred, not consumed (holds never consume, and
+  // the commit window persists the same way). Fight/flee still win: they
+  // move ctx.step outside decide, never through a pin.
+  let safety = null
+  try {
+    safety = goalFsm(facts, names)
+  } catch (_) {
+    safety = null
+  }
+  const nightOwns = safety === 'stay' || safety === 'gohome' || safety === 'shelter'
   let planApplied = false
-  if (planStep) {
+  if (planStep && !nightOwns) {
     try { ctx.taskPlanStep = null } catch (_) { /* consume best-effort */ }
   }
-  if (planStep && !rearm) {
+  if (planStep && !nightOwns && !rearm) {
     let ok = false
     try {
       ok = !!(MENU[planStep] && MENU[planStep].feasible(facts, bot, ctx) && registered(planStep))
@@ -2845,19 +2861,12 @@ function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
     }
   }
   // Watchdog commitment (vmzq.21): pin the window's step for the whole
-  // window (same-step holds included). Safety first (peer Q2): the
-  // safety choice is computed from the ORDINARY menu, and when it is a
-  // night step the normal menu runs (chooseStep's night rule picks it)
-  // while the window pauses — the commit pins only the work choice.
+  // window (same-step holds included). Safety first (peer Q2): when the
+  // safety choice above is a night step the normal menu runs while the
+  // window pauses — the commit pins only the work choice.
   let commitApplied = false
   if (!planApplied && commitActive && !rearm) {
-    let safety = null
-    try {
-      safety = goalFsm(facts, names)
-    } catch (_) {
-      safety = null
-    }
-    if (safety !== 'stay' && safety !== 'gohome' && safety !== 'shelter') {
+    if (!nightOwns) {
       let ok = false
       try {
         ok = !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
