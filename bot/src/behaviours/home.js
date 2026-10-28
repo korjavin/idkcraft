@@ -888,6 +888,70 @@ function hostileNear(bot) {
   }
 }
 
+// The server's monster-nearby box (vanilla ServerPlayer.startSleepInBed,
+// mirrored by mineflayer's head-anchored monsterRange in bed.js) is wider
+// than the 3D hostileNear sphere above: a mob at the box edge (8 out from
+// the head, or a few blocks up with horizontal 7) reads dist >= 8 from the
+// body, so hostileNear clears it, the click goes out, and the server
+// silently refuses (prod erig: 'bot is not sleeping' at health 2). Veto the
+// click on the bed box, not the body sphere: a hold tonight beats a refused
+// click. Anchored on the head block (bottom centre), like the server: the
+// mob's own AABB vs the box (head ±8 horizontally, ±5 vertically).
+// Only Monster subclasses count: phantoms, slimes/magma cubes, ghasts and
+// hoglins are Enemy but not Monster, so they never block sleep — the fight
+// veto above still takes them, but the sleep box ignores them.
+const SLEEP_NON_MONSTERS = new Set(['phantom', 'slime', 'magma_cube', 'ghast', 'hoglin'])
+function monsterBlocksBed(bot, head) {
+  try {
+    if (!head || typeof head.x !== 'number' || typeof head.y !== 'number' || typeof head.z !== 'number') return false
+    const cx = head.x + 0.5
+    const cz = head.z + 0.5
+    const ents = (bot && bot.entities) || {}
+    for (const key of Object.keys(ents)) {
+      const e = ents[key]
+      if (!e || e.isValid === false || e.type === 'player') continue
+      const p = e.position
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') continue
+      const nm = e.name || ''
+      if (!HOSTILE_NAMES.has(nm) || SLEEP_NON_MONSTERS.has(nm)) continue
+      // The mob's own AABB vs the bed box (minor 02): feet above
+      // head.y-5-height and at most head.y+5, centre within 8+width/2.
+      // Fixed floors over-veto short mobs in the storey below (a zombie at
+      // head.y-7 sleeps fine on the server). Unreadable size reads as a
+      // zombie (1.95 x 0.6).
+      const mh = (e && typeof e.height === 'number' && e.height > 0) ? e.height : 1.95
+      const mw = (e && typeof e.width === 'number' && e.width > 0) ? e.width : 0.6
+      const m = 8 + mw / 2
+      if (Math.abs(p.x - cx) <= m && Math.abs(p.z - cz) <= m && (p.y - head.y) >= -5 - mh && (p.y - head.y) <= 5) return true
+    }
+  } catch (_) {
+    return false
+  }
+  return false
+}
+
+// Prod diagnosis aid (erig): health/food on the refusal line — the bead's
+// bot sat at health 2, and damage/lag reads very differently from mobs.
+function sleepVitals(bot) {
+  try {
+    const h = bot && typeof bot.health === 'number' ? bot.health : null
+    const f = bot && typeof bot.food === 'number' ? bot.food : null
+    if (h === null && f === null) return ''
+    return ` (health ${h === null ? '?' : h} food ${f === null ? '?' : f})`
+  } catch (_) { return '' }
+}
+
+// Honest line (erig): retries spent, holding awake — say why, once per
+// episode (st is fresh per stay), chat + log. Transient holds (cooldown,
+// box veto, the shared-bed occupied retry) stay silent: they may resolve.
+function sleepGiveUpSay(bot, st, why) {
+  if (st.sleepGiveUpSaid) return
+  st.sleepGiveUpSaid = true
+  const line = `can't sleep tonight (${why}), holding till dawn`
+  try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+  try { console.log(`stay sleep: ${line}`) } catch (_) { /* logging best-effort */ }
+}
+
 // Both halves of a candidate bed inside the residence (a shut door stays
 // shut: the bot never walks out to an outdoor bed at night).
 function bedInside(home, foot, head) {
@@ -1031,10 +1095,29 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
       st.sleepAnchor = { x: bp.x, z: bp.z }
     } else if (++st.sleepStalls >= SLEEP_STALL_TICKS) {
       st.sleepGiveUp = true // unreachable tonight: hold, retry tomorrow
+      sleepGiveUpSay(bot, st, "I can't reach my bed")
       return false
     }
     return true
   }
+  // Bed-anchored server-box veto (erig): the click would be refused, so hold
+  // and retry every tick — a wandering mob clears it and the click fires at
+  // once (no cooldown: nothing was spent). Past a sustained hold, say so
+  // once per episode (core-1): a mob camping the wall must not hold the bot
+  // awake all night silently. Runs pre-click only, after the isSleeping /
+  // sleepInFlight early-outs above — a sleeping body never falls through to
+  // the door check (core-4).
+  if (monsterBlocksBed(bot, head)) {
+    st.boxHolds = (st.boxHolds || 0) + 1
+    if (!st.boxHoldSaid && st.boxHolds >= SLEEP_RETRY_TICKS) {
+      st.boxHoldSaid = true
+      const line = "can't sleep yet (monsters too close), holding"
+      try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+      try { console.log(`stay sleep: ${line}`) } catch (_) { /* logging best-effort */ }
+    }
+    return false
+  }
+  st.boxHolds = 0
   ctx.sleepInFlight = true
   void (async () => {
     try {
@@ -1064,11 +1147,19 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
         // once('sleep') listener (revmux 01-review).
         st.sleepRefusals = (st.sleepRefusals || 0) + 1
         if (st.sleepRefusals < SLEEP_REFUSAL_TRIES) st.sleepCooldown = SLEEP_RETRY_TICKS
-        else st.sleepGiveUp = true
-      } else st.sleepGiveUp = true // occupied/too-far: hold tonight, retry tomorrow
+        else {
+          st.sleepGiveUp = true
+          // States what is known (core-3): a 'not sleeping' refusal reaches
+          // here only after the bed box read clear, so do not blame mobs.
+          sleepGiveUpSay(bot, st, 'the server keeps refusing my bed')
+        }
+      } else {
+        st.sleepGiveUp = true // occupied/too-far: hold tonight, retry tomorrow
+        sleepGiveUpSay(bot, st, msg || err)
+      }
       if (!st.sleepErrSaid) {
         st.sleepErrSaid = true
-        try { console.log(`sleep failed: ${msg || err}`) } catch (_) { /* logging best-effort */ }
+        try { console.log(`sleep failed: ${msg || err}${sleepVitals(bot)}`) } catch (_) { /* logging best-effort */ }
       }
     } finally {
       ctx.sleepInFlight = false
@@ -2257,4 +2348,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, nearbyBed, freeBedSpot, craftableBed, tableInReach }
+module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, nearbyBed, freeBedSpot, craftableBed, tableInReach }
