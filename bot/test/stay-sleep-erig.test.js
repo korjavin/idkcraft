@@ -184,6 +184,7 @@ const TORCH_CELL = '10,64,22'
 function mockBot2({ mobs = [], pack = [], hp = 20, food = 20, torchLit = true, consumeFn, placeFn } = {}) {
   const calls = { sleeps: 0, eats: 0, torches: 0, places: 0 }
   const chats = []
+  const msgHandlers = {}
   const ents = {}
   mobs.forEach((m, i) => {
     ents[`m${i}`] = { name: m.name, type: 'mob', position: new Vec3(m.pos[0], m.pos[1], m.pos[2]) }
@@ -192,9 +193,12 @@ function mockBot2({ mobs = [], pack = [], hp = 20, food = 20, torchLit = true, c
   const bot = {
     calls,
     chats,
+    msgHandlers,
     health: hp,
     food,
     entities: ents,
+    on: (ev, fn) => { (msgHandlers[ev] = msgHandlers[ev] || []).push(fn) },
+    off: (ev, fn) => { msgHandlers[ev] = (msgHandlers[ev] || []).filter((f) => f !== fn) },
     entity: { position: new Vec3(AT.x, AT.y, AT.z) },
     time: { timeOfDay: 14000, day: 5 }, // night
     registry: { blocksByName: { white_bed: { id: 1 }, red_bed: { id: 2 } } },
@@ -397,6 +401,108 @@ describe('erig follow-up: sleep-safe shelter before the click', () => {
     for (let t = 0; t < 40; t++) await tick(bot, ctx)
     assert.ok(bot.calls.sleeps >= 1, 'the click goes out')
     assert.ok(!bot.chats.some((m) => m.includes("can't sleep")), 'no hold without readable vitals')
+  })
+
+  it('boxOccupants snapshots who is inside the server box', () => {
+    const zombie = { name: 'zombie', pos: [21.5, 64, 22.5] }
+    const snap = home.boxOccupants(mockBot({ mobs: [zombie] }), HEAD)
+    assert.equal(snap.length, 1)
+    assert.equal(snap[0].name, 'zombie')
+    assert.deepEqual(home.boxOccupants(mockBot({ mobs: [{ name: 'phantom', pos: [14.5, 64, 22.5] }] }), HEAD), [])
+    assert.deepEqual(home.boxOccupants(mockBot(), HEAD), [])
+    assert.deepEqual(home.boxOccupants(mockBot(), null), [])
+  })
+
+  it('a roamer wandering in mid-click retries without spending the refusal budget', async () => {
+    const bot = mockBot2({ hp: 20, food: 20, pack: [] })
+    bot.sleep = async () => {
+      bot.calls.sleeps++
+      // Clear at click (the pre-click veto passed), hot at reject: the
+      // handshake, not the bed, is at fault.
+      bot.entities.m0 = { name: 'zombie', type: 'mob', position: new Vec3(21.5, 64, 22.5) }
+      throw new Error('bot is not sleeping')
+    }
+    const ctx = hutCtx2()
+    for (let t = 0; t < 100; t++) { await tick(bot, ctx); bot.entities = {} }
+    assert.equal(bot.calls.sleeps, 4, 'tries at 0/31/62/93, budget untouched')
+    assert.ok(!ctx.stay.sleepGiveUp, 'a spoiled handshake is not a dead bed')
+    assert.ok(!bot.chats.some((m) => m.includes("can't sleep")), 'transients stay silent')
+  })
+
+  it('a patrol route through the box gives up with the patrol line, not the refusal line', async () => {
+    const bot = mockBot2({ hp: 20, food: 20, pack: [] })
+    bot.sleep = async () => {
+      bot.calls.sleeps++
+      bot.entities.m0 = { name: 'pillager', type: 'mob', position: new Vec3(20.5, 64, 22.5) }
+      throw new Error('bot is not sleeping')
+    }
+    const ctx = hutCtx2()
+    for (let t = 0; t < 200; t++) { await tick(bot, ctx); bot.entities = {} }
+    assert.equal(bot.calls.sleeps, 6, 'bounded transients, then tonight is over')
+    assert.ok(ctx.stay.sleepGiveUp, 'give-up latches')
+    assert.deepEqual(
+      bot.chats,
+      ["can't sleep tonight (hostiles keep spoiling the attempt), holding till dawn"],
+      'the patrol signal, once',
+    )
+    for (let t = 0; t < 40; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 6, 'no more clicks after give-up')
+  })
+
+  it("the server's own monster line retries as a transient even with a clear box", async () => {
+    const bot = mockBot2({ hp: 20, food: 20, pack: [] })
+    bot.sleep = async () => {
+      bot.calls.sleeps++
+      // Direct system-push shape: a single {message, position} object.
+      for (const fn of (bot.msgHandlers.message || [])) {
+        fn({ message: 'You may not rest now; there are monsters nearby', position: 'game_info' })
+      }
+      throw new Error('bot is not sleeping')
+    }
+    const ctx = hutCtx2()
+    for (let t = 0; t < 100; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 4, 'transient, budget untouched')
+    assert.ok(!ctx.stay.sleepGiveUp, 'the server named the cause: keep trying')
+  })
+
+  it('player chat quoting monsters never counts as the server line', async () => {
+    const bot = mockBot2({ hp: 20, food: 20, pack: [] })
+    bot.sleep = async () => {
+      bot.calls.sleeps++
+      // Held-path shape: ChatMessage-ish plus position arg, but from chat.
+      for (const fn of (bot.msgHandlers.message || [])) {
+        fn({ text: 'there are monsters nearby lol', toString: () => 'there are monsters nearby lol' }, 'chat', null)
+      }
+      throw new Error('bot is not sleeping')
+    }
+    const ctx = hutCtx2()
+    for (let t = 0; t < 120; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 3, 'the plain budget path')
+    assert.ok(ctx.stay.sleepGiveUp, 'give-up latches')
+    assert.deepEqual(
+      bot.chats,
+      ["can't sleep tonight (the server keeps refusing my bed), holding till dawn"],
+      'no phantom patrol signal from player chat',
+    )
+  })
+
+  it('a bed broken mid-flight says the bed is gone, not that the server refused', async () => {
+    const bot = mockBot2({ hp: 20, food: 20, pack: [] })
+    let gone = false
+    const liveBlockAt = bot.blockAt
+    bot.blockAt = (p) => {
+      const k = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+      if (gone && (k === '12,64,22' || k === '13,64,22')) {
+        return { name: 'air', position: new Vec3(Math.floor(p.x), 64, Math.floor(p.z)), boundingBox: 'empty' }
+      }
+      return liveBlockAt(p)
+    }
+    bot.sleep = async () => { bot.calls.sleeps++; gone = true; throw new Error('bot is not sleeping') }
+    const ctx = hutCtx2()
+    for (let t = 0; t < 60; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 1, 'resolved live, refused gone: one doomed click, never again')
+    assert.ok(ctx.stay.sleepGiveUp, 'give-up latches')
+    assert.ok(bot.chats.includes("can't sleep tonight (my bed is gone), holding till dawn"))
   })
 
   it('prod night end to end: ring holds, then torch, meal, click', async () => {
