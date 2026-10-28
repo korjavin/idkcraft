@@ -1121,6 +1121,22 @@ function sleepMsgText(a, b) {
   } catch (_) { /* unreadable: no reason */ }
   return ''
 }
+// Early-night refusal (erig round 5): vanilla sleeps on skyDarken>=4
+// (true night), not on any fixed tick — a dusk attempt, or a lagged clock
+// on either side of the window, is refused. The refusal arrives either as
+// mineflayer's own client-side 'it's not night...' reject (thrown before
+// any packet) or as the server's 'You can sleep only at night or during
+// thunderstorms' line snooped into st.sleepRefusalMsg above. Either way
+// the bed is fine: the night just has not opened yet.
+const EARLY_NIGHT_RE = /not night|only sleep|thunderstorm/i
+function earlyNightRefusal(msg, st) {
+  try {
+    if (msg && EARLY_NIGHT_RE.test(msg)) return true
+    const heard = st && st.sleepRefusalMsg
+    if (heard && EARLY_NIGHT_RE.test(heard)) return true
+  } catch (_) { /* unreadable: not an early-night refusal */ }
+  return false
+}
 // A bed half that is no bed cell at all (dug mid-flight, lagged dark read
 // excluded: unreadable fails open, the click is harmless).
 function bedHalfGone(bot, pos) {
@@ -1435,7 +1451,12 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
       // g0z.59: occupied retries too — v1 and v2 share the castle's bed A
       // (bedroom B stays the owner's): the second bot holds inside awake
       // and takes the bed if it frees, never gives up the night.
-      if (/monsters nearby|not night|occupied/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
+      // Erig round 5: an early-night refusal holds silently (no chat, no
+      // refusal budget) and retries on the ~30 s cooldown until the server
+      // accepts or dawn breaks the stay. Checked before the branches below
+      // so a night-gated server silence never spends the dead-bed budget.
+      if (earlyNightRefusal(msg, st)) st.sleepCooldown = SLEEP_RETRY_TICKS
+      else if (/monsters nearby|not night|occupied/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
       else if (/not sleeping/i.test(msg)) {
         boxNow = []
         try { boxNow = boxOccupants(bot, head) } catch (_) { /* snapshot best-effort */ }
@@ -1516,10 +1537,10 @@ function sleepTick(bot, ctx, home, st) {
     }
     if (st.sleepGiveUp) return false
     if ((st.sleepCooldown || 0) > 0) { st.sleepCooldown--; return false } // awake and waiting: the door check runs
-    // Erig round 4: pre-window (dusk) the stay holds inside — no walk-in,
-    // no torch, no meal, no click, no line. The tick falls through to the
-    // door check and holdStill below.
-    if (!sleepWindowOpen(bot)) return false
+    // Erig round 5: no tick gate — the attempt goes out whenever the ring,
+    // torch and vitals pass, and the server's answer decides. An early-night
+    // refusal holds silently on the cooldown above (no chat, no budget)
+    // until the server accepts or dawn breaks the stay.
     let cells = null
     try {
       cells = require('./beds').cellsOf(home) // deferred: home loads inside the behaviour chain
@@ -1571,33 +1592,6 @@ function sleepTick(bot, ctx, home, st) {
   } catch (_) {
     return false
   }
-}
-
-// Sleep window (erig round 4, mirrors mineflayer bed.js): the server
-// sleeps only at timeOfDay 12541..23458 or under a thunderstorm. The old
-// chain fired at dusk (facts time=dusk, 12000..13000) — one doomed click
-// refused with 'You can sleep only at night or during thunderstorms'
-// while torch/vitals/ring all read fine. Gate the whole sleepTick (not
-// just the click): pre-window the stay holds inside with the door shut,
-// spending no tries, no cooldowns and no lines. Unreadable clock fails
-// open (legacy: the click); unreadable thunder level (the v2 bridge
-// forwards rain only) reads as no storm — the clock gate still opens at
-// night, a dusk storm just waits ~27 ticks.
-const SLEEP_OPEN_T = 12541
-const SLEEP_CLOSE_T = 23458
-function thunderstormNow(bot) {
-  try {
-    if (!bot || bot.isRaining !== true) return false
-    return typeof bot.thunderState === 'number' ? bot.thunderState > 0 : false
-  } catch (_) { return false }
-}
-function sleepWindowOpen(bot) {
-  try {
-    if (thunderstormNow(bot)) return true
-    const t = bot && bot.time && bot.time.timeOfDay
-    if (typeof t !== 'number' || !(t >= 0)) return true // unreadable: fail open
-    return t >= SLEEP_OPEN_T && t <= SLEEP_CLOSE_T
-  } catch (_) { return true }
 }
 
 // Off the inside stance's storey or 4+ away (a castle bedroom/kitchen; the
@@ -2718,4 +2712,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, boxOccupants, threatInSleepRing, sleepWindowOpen, nearbyBed, freeBedSpot, craftableBed, tableInReach }
+module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, boxOccupants, threatInSleepRing, nearbyBed, freeBedSpot, craftableBed, tableInReach }
