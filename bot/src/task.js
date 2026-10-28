@@ -893,12 +893,52 @@ function onPlanAnswer(ctx, kind, state, seq, ans, err) {
   } catch (_) { /* a dropped answer parks on the next tick */ }
 }
 
+// Night hold (idkcraft-vd93): from dusk to home arrival the night rule
+// owns the body — a running night step, or dusk/night whose ordinary-menu
+// answer is a night step. The planner must not pin over it; the arbiter
+// (goal.js pinMenu) degrades any surviving pin the same way.
+function nightHoldsBody(bot, ctx) {
+  try {
+    if (ctx && (ctx.step === 'stay' || ctx.step === 'gohome' || ctx.step === 'shelter') &&
+      ctx.stepStatus === 'running') return true
+    const goal = require('./goal')
+    const facts = goal.goalFacts(bot, ctx)
+    if (!facts || (facts.time !== 'dusk' && facts.time !== 'night')) return false
+    const text = goal.goalText(facts, ctx && ctx.home)
+    const names = Object.keys(goal.MENU).filter((n) => {
+      try {
+        if (!goal.MENU[n].feasible(facts, bot, ctx) || !goal.registered(n)) return false
+      } catch (_) {
+        return false
+      }
+      return !goal.failHolds(ctx, n, text, bot)
+    })
+    const safety = goal.goalFsm(facts, names)
+    return safety === 'stay' || safety === 'gohome' || safety === 'shelter'
+  } catch (_) {
+    return false
+  }
+}
+
 // Consume a stored plan answer: force a valid confident step one-shot
 // (fresh stall window; decide() honours ctx.taskPlanStep), or park
 // deterministically on any failure. Returns the park diagnosis when it
 // parked, null when it forced a step.
 function consumePlan(bot, ctx, kind, done, total, state, now) {
   const ans = state.planAnswer
+  // Night hold (idkcraft-vd93): never pin over the dusk march or the stay
+  // handoff (prod 2026-10-28: a pin stole gohome mid-march and the bot
+  // worked all night). Wait it out: no pin and no park while the night
+  // owns the body (the stall clock is paused at night) — the answer stays
+  // queued and the freshness/confidence checks below re-validate it when
+  // the hold ends. Dropping it instead would park at the next L2 with the
+  // episode's planTried spent.
+  if (nightHoldsBody(bot, ctx)) {
+    try {
+      console.log(`task plan kind=${kind} progress=${done}/${total} source=${(ans && ans.source) || 'jev'} answer=held why=night-hold`)
+    } catch (_) { /* log best-effort */ }
+    return null
+  }
   state.planAnswer = null
   const parkFallback = (why) => {
     try {
@@ -3219,4 +3259,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { castleCurrent, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState }
+module.exports = { castleCurrent, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan }

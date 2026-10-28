@@ -160,6 +160,124 @@ describe('vd93 go home nightly: dusk knock-off beats castle-first', () => {
     assert.equal(FGO(outFacts('dusk'), b, castleCtx()), true)
   })
 
+describe('vd93 follow-up: the dusk march is preemption-proof', () => {
+  // Prod 2026-10-28: gohome fired at dusk (force=time) but a pending
+  // task-plan pin stole the body mid-march (step=build prev=gohome
+  // source=task-plan) — the bot worked all night, zero stay/sleep lines.
+  // The night rule owns the body from dusk to home arrival: pins wait.
+  const task = require('../src/task')
+  const RICH = [{ name: 'oak_planks', count: 20 }, { name: 'crafting_table', count: 1 }, { name: 'oak_door', count: 1 }]
+  const richBot = (at, timeOfDay) => {
+    const b = bot(at, timeOfDay)
+    b.inventory = { items: () => RICH }
+    return b
+  }
+  const marchCtx = (over = {}) => castleCtx({
+    step: 'gohome', stepStatus: 'running',
+    gohome: { phase: 'walk', stalls: 0, fails: 0 },
+    taskPlanStep: 'build',
+    ...over,
+  })
+  const INSIDE = { x: 202.5, y: 64, z: 202.5 } // geometric interior of the home() fixture
+
+  it('dusk march + pending plan pin: the march holds', async () => {
+    const ctx = marchCtx()
+    await quiet(async () => {
+      assert.equal((await goal.decide(richBot(AT_CASTLE, 12500), ctx)).action, 'gohome')
+    })
+  })
+
+  it('dusk handoff (gohome done, inside) + pending plan pin: stay, pin deferred', async () => {
+    const ctx = marchCtx({ stepStatus: 'done', gohome: { phase: 'done' } })
+    await quiet(async () => {
+      assert.equal((await goal.decide(richBot(INSIDE, 12500), ctx)).action, 'stay')
+    })
+    assert.equal(ctx.taskPlanStep, 'build', 'deferred, not consumed: dawn still gets the plan')
+  })
+
+  it('fresh dusk pick after an outside reset + pending pin: gohome, pin deferred', async () => {
+    const ctx = castleCtx({ step: null, stepStatus: null, taskPlanStep: 'build' })
+    await quiet(async () => {
+      assert.equal((await goal.decide(richBot(AT_CASTLE, 12500), ctx)).action, 'gohome')
+    })
+    assert.equal(ctx.taskPlanStep, 'build')
+  })
+
+  it('night-far force + pending pin: shelter, never the pin', async () => {
+    // Mid-map at night, far from home: the night-far force fires and the
+    // safety answer is shelter — the pin waits that out too.
+    const ctx = marchCtx({ gohome: { phase: 'walk', stalls: 0, fails: 0 } })
+    await quiet(async () => {
+      assert.equal((await goal.decide(richBot(MIDMAP, 15000), ctx)).action, 'shelter')
+    })
+    assert.equal(ctx.taskPlanStep, 'build')
+  })
+
+  it('dusk handoff + commitment-window pin: stay (commit path stays guarded)', async () => {
+    const now = Date.now()
+    const ctx = marchCtx({
+      stepStatus: 'done', gohome: { phase: 'done' }, taskPlanStep: null,
+      goal: { id: 'castle-1', generation: 1, kind: 'castle', text: 'build castle', startedAt: now - 1000,
+        commit: { goalId: 'castle-1', generation: 1, kind: 'castle', optionId: 'opt', step: 'build', until: now + 60000, appliedAt: now - 1000, lastTick: now - 1000, deaths: 0, snapshot: {} } },
+    })
+    await quiet(async () => {
+      assert.equal((await goal.decide(richBot(INSIDE, 12500), ctx)).action, 'stay')
+    })
+  })
+
+  it('day unchanged: a pending pin still applies to day work', async () => {
+    const ctx = castleCtx({ castle: null, step: 'gather', stepStatus: 'running', taskPlanStep: 'build' })
+    await quiet(async () => {
+      assert.equal((await goal.decide(richBot(AT_CASTLE, 8000), ctx)).action, 'build')
+    })
+    assert.equal(ctx.taskPlanStep, null, 'consumed on use by day')
+  })
+
+  it('consumePlan holds the answer over the night march: no pin, no park, kept for dawn', async () => {
+    const b = richBot(AT_CASTLE, 12500)
+    const ctx = castleCtx({ step: 'gohome', stepStatus: 'running', gohome: { phase: 'walk' } })
+    const state = { planAnswer: { step: 'build', conf: 0.9, source: 'jev' }, planTried: true, stallMs: 0, lastAt: 0 }
+    let logged = ''
+    const orig = console.log
+    console.log = (m) => { logged += String(m) }
+    let out
+    try { out = task.consumePlan(b, ctx, 'castle', 10, 100, state, Date.now()) } finally { console.log = orig }
+    assert.equal(out, null)
+    assert.equal(ctx.taskPlanStep, undefined, 'no pin over the march')
+    assert.ok(state.planAnswer, 'kept queued: dawn re-validates instead of parking')
+    assert.match(logged, /answer=held why=night-hold/)
+  })
+
+  it('a held answer applies once the dawn stay ends (no premature park)', async () => {
+    // Verifier corner: stay still running at dawn must not eat the queued
+    // answer (planTried spent + stallMs kept = park at the next L2).
+    const b = richBot(AT_CASTLE, 8000)
+    const ctx = castleCtx({ castle: null, step: 'stay', stepStatus: 'running', stay: { phase: 'hold' } })
+    const state = { planAnswer: { step: 'build', conf: 0.9, source: 'jev' }, planTried: true, stallMs: 0, lastAt: 0 }
+    await quiet(async () => {
+      assert.equal(task.consumePlan(b, ctx, 'castle', 10, 100, state, Date.now()), null)
+    })
+    assert.equal(ctx.taskPlanStep, undefined, 'no pin over stay')
+    assert.ok(state.planAnswer, 'still queued while stay holds the body')
+    ctx.step = 'gather'
+    ctx.stepStatus = 'running'
+    await quiet(async () => {
+      assert.equal(task.consumePlan(b, ctx, 'castle', 10, 100, state, Date.now()), null)
+    })
+    assert.equal(ctx.taskPlanStep, 'build', 'the same answer consumes when the hold ends')
+  })
+
+  it('consumePlan still pins by day', async () => {
+    const b = richBot(AT_CASTLE, 8000)
+    const ctx = castleCtx({ castle: null, step: 'gather', stepStatus: 'running' })
+    const state = { planAnswer: { step: 'build', conf: 0.9, source: 'jev' }, planTried: true, stallMs: 0, lastAt: 0 }
+    await quiet(async () => {
+      assert.equal(task.consumePlan(b, ctx, 'castle', 10, 100, state, Date.now()), null)
+    })
+    assert.equal(ctx.taskPlanStep, 'build')
+  })
+})
+
   it('night inside hands to stay (the a8rb sleep chain), dawn resumes the same leg', async () => {
     const inFacts = (time) => ({ time, home: 'built', inside: 'yes' })
     assert.equal(goal.MENU.stay.feasible(inFacts('night')), true)
