@@ -941,6 +941,151 @@ function sleepVitals(bot) {
   } catch (_) { return '' }
 }
 
+// Sleep-safe shelter (erig follow-up, prod 2026-10-28): the fixed build
+// still refused one attempt at health 2.16/food 8 with pillagers roaming
+// and unlit=many. The bed is found and clicked — the refusal is
+// environmental. Three new pre-click gates run inside sleepInBed after the
+// reach walk-in, closest blockers first (after the existing server box —
+// a camper must not rack up eat holds): the wider ring, the night torch,
+// then vitals right before the click. Each sustained hold owns an honest
+// line; none of them moves the body or opens the door, and none overrides
+// fight/flee — hostileNear still returns the tick above, an intruder still
+// fights.
+
+// Ranged/damage margin: the server box is ±8/±5, but a pillager or
+// skeleton inside arrow range spoils the ~3 s handshake with a hit — and
+// on the v2 body there is no client-side monster check at all, so a
+// refused click is the only signal. Hold the click while any hostile roams
+// within SLEEP_CLEAR_R of the head (perception's nearby_hostiles radius,
+// where ranged mobs engage). A wanderer crosses the box, and an arrow
+// lands, inside the ~3 s handshake — so the ring counts every HOSTILE_NAMES
+// head, including the kinds the server box ignores (a phantom dive or a
+// slime at the doorway spoils the click the same way). Over-holding a
+// harmless circler costs a held night with an honest line, never a death.
+// Never fights: the body stays inside behind the shut door, fight/flee
+// keep the tick above.
+const SLEEP_CLEAR_R = 16
+const SLEEP_CLEAR_DY = 6
+function threatInSleepRing(bot, head) {
+  try {
+    if (!head || typeof head.x !== 'number' || typeof head.y !== 'number' || typeof head.z !== 'number') return false
+    const cx = head.x + 0.5
+    const cz = head.z + 0.5
+    const ents = (bot && bot.entities) || {}
+    for (const key of Object.keys(ents)) {
+      const e = ents[key]
+      if (!e || e.isValid === false || e.type === 'player') continue
+      const p = e.position
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') continue
+      if (!HOSTILE_NAMES.has(e.name || '')) continue
+      if (Math.hypot(p.x - cx, p.z - cz) <= SLEEP_CLEAR_R && Math.abs(p.y - head.y) <= SLEEP_CLEAR_DY) return true
+    }
+  } catch (_) {
+    return false
+  }
+  return false
+}
+
+// Vitals, numbers or null: an unreadable body reads unknown and fails open
+// (a click is harmless; a refusal costs one try of the existing budget).
+function sleepVitalsRead(bot) {
+  let h = null
+  let f = null
+  try { if (bot && typeof bot.health === 'number') h = bot.health } catch (_) { /* unknown */ }
+  try { if (bot && typeof bot.food === 'number') f = bot.food } catch (_) { /* unknown */ }
+  return { h, f }
+}
+
+// Regen needs food (eatReflex eats below this); half hearts means one stray
+// hit can't one-shot. A broken consume must not hold all night: past the
+// eat beat it fails open with a line (a click is harmless).
+const SLEEP_REGEN_FOOD = 18
+const SLEEP_MIN_HP = 10
+const SLEEP_EAT_TICKS = 100
+
+// One pass-through note per episode (st is fresh per stay), chat + log —
+// for gates that say why and then try anyway (fail open).
+function sleepNoteSay(bot, st, key, line) {
+  if (st[key]) return
+  st[key] = true
+  try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+  try { console.log(`stay sleep: ${line}`) } catch (_) { /* logging best-effort */ }
+}
+
+// Verifier majors (codex): a refused torch spot must never starve the
+// click — findRef reads static support, not reach, so a far or protected
+// cell would re-flight forever. Loose reach pre-check (the light step's
+// own 5) plus a 3-strike skip, same family as light.js REFUSALS_TO_SKIP.
+const NIGHT_TORCH_FAILS = 3
+const NIGHT_TORCH_REACH = 5
+
+// Night torch: the day light step owns the yard and the bot never walks out
+// at night — but the plan's INTERIOR spot above the stay cell is in place
+// reach from inside. A dark room spawns the intruder (33vm), so an unlit
+// interior spot with a torch on hand is placed before the click. Castle
+// torch plans carry no interior flag: the gate passes trivially there.
+// Returns true while owning the tick (the place flight).
+function nightTorchTick(bot, ctx, home, st) {
+  try {
+    if (ctx.sleepInFlight) return true // the place flight below runs
+    if ((st.torchFails || 0) >= NIGHT_TORCH_FAILS) return false // refused thrice: the click proceeds
+    if (ctx.eatInFlight) return false // the meal owns the hand; the torch waits (verifier major)
+    let spots = null
+    try { spots = residence.of(home).lights(home) } catch (_) { spots = null }
+    if (!Array.isArray(spots)) return false
+    const site = home && home.site
+    if (!site || typeof site.x !== 'number') return false
+    let items = null
+    try { items = (bot.inventory && typeof bot.inventory.items === 'function') ? bot.inventory.items() : null } catch (_) { items = null }
+    for (const spot of spots) {
+      if (!spot || !spot.interior) continue
+      const p = new Vec3(site.x + spot.dx, site.y + (spot.dy || 0), site.z + spot.dz)
+      let nm = null
+      try { const b = bot.blockAt(p); nm = b ? b.name : null } catch (_) { nm = null }
+      if (nm === 'torch' || nm === 'wall_torch') continue
+      // Taken (a fallback bed landed on the spot, a station, unloaded):
+      // never place into it and never hold the night on it — the mob
+      // gates still cover the threat. The day step owns the rest.
+      if (!AIR_CELLS.has(nm)) continue
+      const torch = Array.isArray(items) ? (items.find((i) => i && i.name === 'torch') || null) : null
+      if (!torch) {
+        // Unreadable pack reads torchless, fail open — and a material
+        // shortfall never holds the night: the mob gates still cover it.
+        sleepNoteSay(bot, st, 'noTorchSaid', 'no torches to light the room, trying anyway')
+        return false
+      }
+      const ref = buildMod.findRef(bot, p)
+      if (!ref) return false // no support from here: the walk-in may fix it, retry silently
+      // Loose reach pre-check: findRef is static geometry, placeBlock is
+      // not — a far fallback bed would re-flight forever (verifier major).
+      // Feet-based like the light step; a near miss still tries (counted).
+      try {
+        const bp = botPos(bot)
+        if (bp && Math.hypot(bp.x - p.x, bp.y - p.y, bp.z - p.z) > NIGHT_TORCH_REACH) return false
+      } catch (_) { /* unverifiable: attempt anyway, the strikes bound it */ }
+      ctx.sleepInFlight = true
+      void (async () => {
+        try {
+          await bot.equip(torch, 'hand')
+          await bot.placeBlock(ref.ref, ref.face)
+          try { console.log(`night torch ${p.x} ${p.y} ${p.z}`) } catch (_) { /* logging best-effort */ }
+        } catch (_) {
+          st.torchFails = (st.torchFails || 0) + 1
+          if (st.torchFails === NIGHT_TORCH_FAILS) {
+            sleepNoteSay(bot, st, 'torchFailSaid', 'could not light the room, trying anyway')
+          }
+        } finally {
+          ctx.sleepInFlight = false
+        }
+      })()
+      return true
+    }
+  } catch (_) {
+    return false
+  }
+  return false
+}
+
 // Honest line (erig): retries spent, holding awake — say why, once per
 // episode (st is fresh per stay), chat + log. Transient holds (cooldown,
 // box veto, the shared-bed occupied retry) stay silent: they may resolve.
@@ -1118,6 +1263,65 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
     return false
   }
   st.boxHolds = 0
+  // Wider ring (erig follow-up): a roamer inside arrow range spoils the
+  // handshake with a hit. Hold the click, never spend a try on it; a
+  // sustained hold says so once per episode (st is fresh per stay).
+  if (threatInSleepRing(bot, head)) {
+    st.ringHolds = (st.ringHolds || 0) + 1
+    if (!st.ringHoldSaid && st.ringHolds >= SLEEP_RETRY_TICKS) {
+      st.ringHoldSaid = true
+      const line = "can't sleep yet (hostiles roaming close), holding"
+      try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+      try { console.log(`stay sleep: ${line}`) } catch (_) { /* logging best-effort */ }
+    }
+    return false
+  }
+  st.ringHolds = 0
+  // The room first: an unlit interior spot with a torch on hand is placed
+  // before the click (owns the tick while the flight runs).
+  if (nightTorchTick(bot, ctx, home, st)) return true
+  // Feed and heal right before the click (erig follow-up): food below regen
+  // with a meal on hand runs the shared eat beat and holds — food 8 never
+  // regens, so clicking weak spends the night on refusals. A fed body below
+  // half waits for regen; hunger with nothing edible says so once and tries
+  // anyway (a click is harmless, a refusal costs one try).
+  const vr = sleepVitalsRead(bot)
+  if (vr.f !== null && vr.f < SLEEP_REGEN_FOOD) {
+    let items = null
+    try { items = (bot.inventory && typeof bot.inventory.items === 'function') ? bot.inventory.items() : null } catch (_) { items = null }
+    const edible = Array.isArray(items) && typeof bot.consume === 'function'
+      ? require('../reflexes').pickEdible(items)
+      : null
+    if (edible) {
+      try { require('../reflexes').eatReflex(bot, ctx, null) } catch (_) { /* beat best-effort */ }
+      st.eatHolds = (st.eatHolds || 0) + 1
+      if (!st.eatHoldSaid && st.eatHolds >= SLEEP_RETRY_TICKS) {
+        st.eatHoldSaid = true
+        const line = "can't sleep yet (eating first), holding"
+        try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+        try { console.log(`stay sleep: ${line}`) } catch (_) { /* logging best-effort */ }
+      }
+      // A broken consume must not hold all night: past the beat, fail open.
+      if (st.eatHolds <= SLEEP_EAT_TICKS) return false
+      sleepNoteSay(bot, st, 'eatFailSaid', 'still hungry, trying anyway')
+    } else if (Array.isArray(items)) {
+      sleepNoteSay(bot, st, 'hungrySaid', 'hungry with nothing to eat, trying anyway')
+    }
+    // Unreadable pack (items null): fail open silently, like lowHpNoFood.
+  } else st.eatHolds = 0
+  // Unknown food reads unknown: without it regen cannot be established, so
+  // the hold needs food known-good (verifier major) — fail open otherwise.
+  if (vr.h !== null && vr.h < SLEEP_MIN_HP && vr.f !== null && vr.f >= SLEEP_REGEN_FOOD) {
+    st.healHolds = (st.healHolds || 0) + 1
+    if (!st.healHoldSaid && st.healHolds >= SLEEP_RETRY_TICKS) {
+      st.healHoldSaid = true
+      const line = "can't sleep yet (healing first), holding"
+      try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+      try { console.log(`stay sleep: ${line}`) } catch (_) { /* logging best-effort */ }
+    }
+    return false
+  }
+  st.healHolds = 0
   ctx.sleepInFlight = true
   void (async () => {
     try {
@@ -2348,4 +2552,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, nearbyBed, freeBedSpot, craftableBed, tableInReach }
+module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, threatInSleepRing, nearbyBed, freeBedSpot, craftableBed, tableInReach }
