@@ -57,10 +57,16 @@ RUN java -jar headlessmc-launcher-wrapper.jar --command fabric 26.1.2 \
 # their edits reuse this layer (libraries do not depend on them). Leaves no
 # account (auth/.accounts.json stays empty: offline); drops logs, the lock
 # and the per-launch natives dir.
-RUN mkfifo /tmp/warm-in && exec 8<> /tmp/warm-in \
+# idkcraft-ogo9: HMC installs the latest stable loader (0.19.5 -> 0.20.1
+# broke the hardcoded launch name with "Couldn't find object"), so the
+# warm-up launches whatever `versions` knows instead of a pinned name.
+RUN LOADER=$(java -jar headlessmc-launcher-wrapper.jar --command versions \
+      | grep -o 'fabric-loader-[^[:space:]]*' | tail -n 1) \
+ && [ -n "$LOADER" ] \
+ && mkfifo /tmp/warm-in && exec 8<> /tmp/warm-in \
  && (java -Dhmc.jvmargs=-Dhmc.jline.dumb=true -Dhmc.offline.username=warm \
       -jar headlessmc-launcher-wrapper.jar \
-      --command launch fabric-loader-0.19.5-26.1.2 -lwjgl -offline \
+      --command launch "$LOADER" -lwjgl -offline \
       < /tmp/warm-in > /tmp/warm.log 2>&1 &) \
  && for _ in $(seq 1 100); do grep -q "HMC-Specifics initialized" /tmp/warm.log && break; sleep 3; done \
  && if ! grep -q "HMC-Specifics initialized" /tmp/warm.log; then tail -50 /tmp/warm.log; exit 1; fi \

@@ -1,7 +1,8 @@
 # Baritone worker: a headless client beside the mineflayer head (idkcraft-jlda)
 
 The worker is a real headless Minecraft client (HeadlessMc 2.10.0 + Fabric
-0.19.5 + Baritone v1.18.0, MC 26.1.2 = the prod Paper) that takes the long
+(loader floats: HMC installs latest stable, launch resolves it via `versions`;
+idkcraft-ogo9) + Baritone v1.18.0, MC 26.1.2 = the prod Paper) that takes the long
 walks and the mining while the mineflayer bot keeps the head (brain, chat,
 goals, items). Design: the jlda epic — the worker is a pilot fish, never a
 hauler (Baritone has no inventory actions, so it only moves and the head
