@@ -164,9 +164,11 @@ const IDLE_STEPS = new Set(['rest', 'explore', 'fun', 'stay', 'shelter'])
 // explore picks — a model brain must never see fun alongside real work,
 // and a fresh or busy body never sees it at all. Cheap facts/pack checks
 // only, no world scans: an unfinished house, a remembered find, a waiting
-// haul or bankable surplus, a pinned order, owed beds, an unfinished gear
-// ladder, a missing/rearming kit, a due pickaxe upgrade, a waiting craft
-// batch (logs or stations), or a torch-ready dark yard all keep the body.
+// haul or bankable surplus, a pinned order, an unfinished gear ladder,
+// a missing/rearming kit, a due pickaxe upgrade, a waiting craft batch
+// (logs or stations), or a torch-ready dark yard all keep the body.
+// Owed beds keep no body (idkcraft-u19u): fun stays feasible with beds
+// owed and the classifier weighs whimsy against the owed work.
 // Rank does the rest: fun sits just above explore, so in FSM mode it fires
 // exactly when the only alternatives are rest and an explore with nothing
 // new — while a merely-passing idle moment still explores first, and the
@@ -217,7 +219,8 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
     // to the banker, never to the joke.
     if (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')) return false
     if (facts.pinned && facts.pinned !== 'none') return false
-    if (facts.beds === 'none' || facts.beds === 'one') return false
+    // u19u: owed beds demoted from menu veto to classifier criterion text
+    // (FUN_CRITERION below) — whimsy weighs against owed work, never vetoed.
     if (facts.gear !== 'done' && facts.gear !== 'hand') return false
     if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || facts.rearm) return false
     if (upgradeDue(bot)) return false
@@ -737,7 +740,7 @@ module.exports.FUN_IDLE_MS = FUN_IDLE_MS
 // behaviour requiring the arbiter is a forbidden edge, lazy or not).
 // Idempotent: call from the ticker entry and from tests.
 const FUN_VERB = 'having a little fun'
-const FUN_CRITERION = 'time is day, the house stands finished, nothing known nearby, and the pack holds junk or cheap mats: play a tiny rare joke'
+const FUN_CRITERION = 'time is day, the house stands finished, nothing known nearby, and the pack holds junk or cheap mats (beds owed weighs against the joke): play a tiny rare joke'
 const FUN_EFFECT = 'plays a tiny rare joke with junk or cheap mats'
 function registerInto(goalMod, constsMod) {
   try {
