@@ -292,8 +292,10 @@ class FakeTransport extends EventEmitter {
         return { ok: true }
       case 'sleep':
         (s.sleepCalls = s.sleepCalls || []).push({ ...params })
-        s.isSleeping = true
-        return { ok: true }
+        // refuseSleep models a client-rejected synthetic hit (erig round 3):
+        // the body never sleeps and accepted reads false, like the mod.
+        if (!s.refuseSleep) s.isSleeping = true
+        return { ok: true, accepted: !s.refuseSleep }
       case 'wake':
         (s.wakeCalls = (s.wakeCalls || 0) + 1)
         s.isSleeping = false

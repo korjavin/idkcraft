@@ -164,8 +164,14 @@ public final class Look {
                 BlockPos pos = new BlockPos(x, y, z);
                 BlockHitResult hit = new BlockHitResult(
                         new Vec3(x + 0.5, y + 0.5, z + 0.5), Direction.UP, pos, false);
-                client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
-                return ok();
+                var result = client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
+                JsonObject res = ok();
+                // consumesAction() is the version-proof verdict (Interact.java
+                // and Windows.java read it the same way): false means the
+                // client rejected the synthetic hit outright, whatever the
+                // InteractionResult representation.
+                res.addProperty("accepted", result.consumesAction());
+                return res;
             });
         });
         server.register("wake", params -> look.onPlayer(player -> {

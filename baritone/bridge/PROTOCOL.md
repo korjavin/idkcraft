@@ -563,7 +563,7 @@ constructor, `handleLookEvent` in the adapter's event router).
 | `interact.block` | `{x,y,z,face,cursor{x,y,z},sneak}` | `{ok,result}` | `bot.activateBlock(block,direction,cursorPos)` |
 | `interact.item` | `{hand:'main'\|'off',holdMs?}` | `{ok}` | `bot.activateItem(offHand)` |
 | `interact.stop` | — | `{ok}` | `bot.deactivateItem()` |
-| `sleep` | `{x,y,z}` (bed block) | `{ok}` | `bot.sleep(bedBlock)` |
+| `sleep` | `{x,y,z}` (bed block) | `{ok,accepted}` | `bot.sleep(bedBlock)` |
 | `wake` | — | `{ok}` | `bot.wake()` |
 
 Events: `sleep {}` / `wake {}` on the player's sleeping-state edge
@@ -596,10 +596,18 @@ continuous uses (eat/drink/bow — a use animation) until
 `interact.stop`/the `holdMs` deadline, since vanilla releases a
 one-shot use on the next tick; instant uses (buckets) never hold.
 `interact.item` with `holdMs` also auto-stops on the client when the
-deadline passes. `sleep` waits up to 3 s for the sleeping state and
-rejects `bot is not sleeping` (mineflayer's timeout message); `wake`
-rejects `already awake` and `sleep` rejects `already sleeping` /
-`wrong block : not a bed block`, all mineflayer's strings.
+deadline passes. `sleep` aims the crosshair at the bed centre first
+(mineflayer parity: mineflayer sleeps via activateBlock), returns the
+client's predicted click verdict as `accepted` (`consumesAction()` on the
+`useItemOn` verdict — the version-proof read, same as the mod's own
+`interact`/`windows` paths; missing on older mods), waits up to 3 s for
+the sleeping state (the
+`sleep` push edge latches too, so a fast sleep→wake flicker still counts
+as fired) and rejects `bot is not sleeping` — with a ` (click rejected)`
+suffix when the client rejected the synthetic hit (mineflayer's timeout
+message otherwise); `wake` rejects `already awake` and `sleep` rejects
+`already sleeping` / `wrong block : not a bed block`, all mineflayer's
+strings.
 
 Doors while pathing: Baritone opens doors itself, so the adapter's
 `activateBlock` is a no-op for `*_door` blocks while

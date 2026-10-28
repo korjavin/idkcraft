@@ -225,7 +225,11 @@ function installLook(bot) {
   }
 
   // mineflayer sleep: click the bed, then wait for the sleeping state
-  // (state poll or the mod's sleep notification, whichever lands first).
+  // (the sleep edge or the state poll, whichever lands first). mineflayer
+  // sleeps via activateBlock, crosshair on the bed: the aim goes first here
+  // too (erig round 3 — the synthetic UP-face hit used to fire with a stale
+  // aim). A fast sleep→wake flicker reads false on the state poll but still
+  // fired, so the push edge latches as well (v1 resolves on the edge too).
   bot.sleep = async (bedBlock) => {
     if (bot.isSleeping) throw new Error('already sleeping')
     if (!bedBlock || !bedBlock.position) throw new Error('wrong block : not a bed block')
@@ -233,15 +237,36 @@ function installLook(bot) {
       throw new Error('wrong block : not a bed block')
     }
     const p = bedBlock.position
-    await withBaritonePaused(bot, () => bot.transport.call('sleep', {
-      x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z),
-    }))
-    const deadline = Date.now() + 3000
-    while (!bot.isSleeping && Date.now() < deadline) {
-      await sleepMs(50)
-      if (typeof bot.refresh === 'function') await bot.refresh().catch(() => {})
+    const bx = Math.floor(p.x)
+    const by = Math.floor(p.y)
+    const bz = Math.floor(p.z)
+    await bot.lookAt(new bot.Vec3(bx + 0.5, by + 0.5, bz + 0.5))
+    let sleptEdge = false
+    const onSleepEdge = () => { sleptEdge = true }
+    if (typeof bot.once === 'function') {
+      try { bot.once('sleep', onSleepEdge) } catch (_) { /* edge best-effort; the poll remains */ }
     }
-    if (!bot.isSleeping) throw new Error('bot is not sleeping')
+    // The client's predicted click verdict (accepted = the hit went out;
+    // false = the client rejected the synthetic hit: reach, face, or block
+    // state). Missing on older mods: the wait below is unchanged.
+    let clickRejected = false
+    try {
+      const res = await withBaritonePaused(bot, () => bot.transport.call('sleep', { x: bx, y: by, z: bz }))
+      if (res && res.accepted === false) clickRejected = true
+      const deadline = Date.now() + 3000
+      while (!bot.isSleeping && !sleptEdge && Date.now() < deadline) {
+        await sleepMs(50)
+        if (typeof bot.refresh === 'function') await bot.refresh().catch(() => {})
+      }
+      if (bot.isSleeping || sleptEdge) return
+      throw new Error(`bot is not sleeping${clickRejected ? ' (click rejected)' : ''}`)
+    } finally {
+      if (typeof bot.off === 'function') {
+        try { bot.off('sleep', onSleepEdge) } catch (_) { /* listener best-effort */ }
+      } else if (typeof bot.removeListener === 'function') {
+        try { bot.removeListener('sleep', onSleepEdge) } catch (_) { /* listener best-effort */ }
+      }
+    }
   }
 
   // mineflayer wake: throws when awake; the mod sends STOP_SLEEPING and

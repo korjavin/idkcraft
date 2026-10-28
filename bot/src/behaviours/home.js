@@ -901,9 +901,13 @@ function hostileNear(bot) {
 // hoglins are Enemy but not Monster, so they never block sleep — the fight
 // veto above still takes them, but the sleep box ignores them.
 const SLEEP_NON_MONSTERS = new Set(['phantom', 'slime', 'magma_cube', 'ghast', 'hoglin'])
-function monsterBlocksBed(bot, head) {
+// The box's occupants (erig round 3): the snapshot behind the veto and the
+// refusal log — a roamer that wanders in during the ~3 s handshake reads
+// clear at click and hot at reject.
+function boxOccupants(bot, head) {
+  const out = []
   try {
-    if (!head || typeof head.x !== 'number' || typeof head.y !== 'number' || typeof head.z !== 'number') return false
+    if (!head || typeof head.x !== 'number' || typeof head.y !== 'number' || typeof head.z !== 'number') return out
     const cx = head.x + 0.5
     const cz = head.z + 0.5
     const ents = (bot && bot.entities) || {}
@@ -922,12 +926,19 @@ function monsterBlocksBed(bot, head) {
       const mh = (e && typeof e.height === 'number' && e.height > 0) ? e.height : 1.95
       const mw = (e && typeof e.width === 'number' && e.width > 0) ? e.width : 0.6
       const m = 8 + mw / 2
-      if (Math.abs(p.x - cx) <= m && Math.abs(p.z - cz) <= m && (p.y - head.y) >= -5 - mh && (p.y - head.y) <= 5) return true
+      if (Math.abs(p.x - cx) <= m && Math.abs(p.z - cz) <= m && (p.y - head.y) >= -5 - mh && (p.y - head.y) <= 5) {
+        out.push({ name: nm, x: p.x, y: p.y, z: p.z })
+      }
     }
+  } catch (_) { /* unreadable reads as empty, like the veto */ }
+  return out
+}
+function monsterBlocksBed(bot, head) {
+  try {
+    return boxOccupants(bot, head).length > 0
   } catch (_) {
     return false
   }
-  return false
 }
 
 // Prod diagnosis aid (erig): health/food on the refusal line — the bead's
@@ -1084,6 +1095,60 @@ function nightTorchTick(bot, ctx, home, st) {
     return false
   }
   return false
+}
+
+// Server refusal lines worth snooping (erig round 3): the vanilla overlay
+// ("... monsters nearby", "... bed is too far away", "... only sleep at
+// night ...", "This bed is occupied") arrives as a message push with
+// position game_info/system — the mod forwards every system line. Player
+// chat (position chat) never counts, even when it quotes one.
+const SLEEP_REFUSAL_RE = /monster|too far|only sleep|night|thunderstorm|occupied|rest now|wake up|spawn/i
+// Box-hot mid-click transients stop spending the effort budget, but not
+// forever: a patrol route through the shelter re-fills the box every click.
+const SLEEP_BOX_RETRIES = 6
+// Message-push text in either adapter shape: the held path carries a
+// ChatMessage-ish (text/toString) plus position/uuid args, the direct
+// system push a single {message, position} object.
+function sleepMsgText(a, b) {
+  try {
+    if (a && typeof a.text === 'string' && a.text) return a.text
+    if (a && typeof a.message === 'string' && a.message) return a.message
+    if (typeof b === 'string' && b && SLEEP_REFUSAL_RE.test(b)) return b
+    if (a && typeof a.toString === 'function') {
+      const s = String(a.toString())
+      if (s && s !== '[object Object]') return s
+    }
+  } catch (_) { /* unreadable: no reason */ }
+  return ''
+}
+// A bed half that is no bed cell at all (dug mid-flight, lagged dark read
+// excluded: unreadable fails open, the click is harmless).
+function bedHalfGone(bot, pos) {
+  try {
+    if (!pos || typeof pos.x !== 'number') return false
+    const b = bot.blockAt && bot.blockAt(pos)
+    if (!b) return false
+    return !(typeof b.name === 'string' && (b.name.endsWith('_bed') || b.name === 'bed'))
+  } catch (_) {
+    return false
+  }
+}
+// Refusal log detail (erig round 3): the box then vs now plus the server's
+// own line when one arrived — the next debug starts here, not at vitals.
+function sleepRefusalDetail(msg, boxNow, st) {
+  let detail = msg
+  try {
+    const names = (o) => (o && o.name ? o.name : '?')
+    const at = Array.isArray(st.sleepBoxAtClick) ? st.sleepBoxAtClick.map(names).join(',') : ''
+    const now = Array.isArray(boxNow) ? boxNow.map(names).join(',') : ''
+    const flight = Array.isArray(st.sleepBoxFlight) ? st.sleepBoxFlight.map(names).join(',') : ''
+    const seen = [at && `click=[${at}]`, flight && `flight=[${flight}]`, now && `reject=[${now}]`].filter(Boolean)
+    if (seen.length) detail += ` box ${seen.join(' ')}`
+  } catch (_) { /* names best-effort */ }
+  try {
+    if (st.sleepRefusalMsg) detail += ` refused=${st.sleepRefusalMsg}`
+  } catch (_) { /* reason best-effort */ }
+  return detail
 }
 
 // Honest line (erig): retries spent, holding awake — say why, once per
@@ -1322,6 +1387,32 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
     return false
   }
   st.healHolds = 0
+  // Round-3 snapshot (a): the box at click, the head for the mid-flight
+  // watch below, and the server's own refusal line if one arrives.
+  st.sleepHead = head
+  st.boxHotDuringFlight = false
+  st.sleepBoxFlight = null
+  st.sleepRefusalMsg = null
+  try { st.sleepBoxAtClick = boxOccupants(bot, head) } catch (_) { st.sleepBoxAtClick = [] }
+  let onSleepMsg = null
+  if (typeof bot.on === 'function' && (typeof bot.off === 'function' || typeof bot.removeListener === 'function')) {
+    onSleepMsg = (a, b) => {
+      try {
+        const pos = typeof b === 'string' ? b : (a && typeof a.position === 'string' ? a.position : null)
+        if (pos === 'chat') return // a player quoting the line, not the server
+        const text = sleepMsgText(a, b)
+        if (text && SLEEP_REFUSAL_RE.test(text)) st.sleepRefusalMsg = text.slice(0, 120)
+      } catch (_) { /* snoop best-effort */ }
+    }
+    try { bot.on('message', onSleepMsg) } catch (_) { onSleepMsg = null }
+  }
+  const dropSleepMsg = () => {
+    if (!onSleepMsg) return
+    try {
+      if (typeof bot.off === 'function') bot.off('message', onSleepMsg)
+      else bot.removeListener('message', onSleepMsg)
+    } catch (_) { /* listener best-effort */ }
+  }
   ctx.sleepInFlight = true
   void (async () => {
     try {
@@ -1340,22 +1431,52 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
       }
     } catch (err) {
       const msg = err && err.message ? String(err.message) : ''
+      let boxNow = null // the reject-time box, for the one refusal log below
       // g0z.59: occupied retries too — v1 and v2 share the castle's bed A
       // (bedroom B stays the owner's): the second bot holds inside awake
       // and takes the bed if it frees, never gives up the night.
       if (/monsters nearby|not night|occupied/i.test(msg)) st.sleepCooldown = SLEEP_RETRY_TICKS
       else if (/not sleeping/i.test(msg)) {
-        // Silent server refusal (clock skew under lag): back off and retry
-        // a few times, then give up — a permanently refused bed must not
-        // click all night, and each timed-out try leaks mineflayer's
-        // once('sleep') listener (revmux 01-review).
-        st.sleepRefusals = (st.sleepRefusals || 0) + 1
-        if (st.sleepRefusals < SLEEP_REFUSAL_TRIES) st.sleepCooldown = SLEEP_RETRY_TICKS
-        else {
-          st.sleepGiveUp = true
-          // States what is known (core-3): a 'not sleeping' refusal reaches
-          // here only after the bed box read clear, so do not blame mobs.
-          sleepGiveUpSay(bot, st, 'the server keeps refusing my bed')
+        boxNow = []
+        try { boxNow = boxOccupants(bot, head) } catch (_) { /* snapshot best-effort */ }
+        // Round 3 (a): clear at click, hot at reject (or mid-flight, or the
+        // server's own monster line) — a roamer spoiled the handshake, not
+        // a dead bed. Hold and retry without spending the refusal budget.
+        const hot = boxNow.length > 0 || st.boxHotDuringFlight === true || /monster/i.test(st.sleepRefusalMsg || '')
+        if (hot) {
+          st.sleepBoxRetries = (st.sleepBoxRetries || 0) + 1
+          if (st.sleepBoxRetries >= SLEEP_BOX_RETRIES) {
+            st.sleepGiveUp = true
+            // The patrol-route signal: the box keeps re-filling mid-click.
+            // Evidence for area denial (door/walls) or relocation, not
+            // another retry tweak.
+            sleepGiveUpSay(bot, st, 'hostiles keep spoiling the attempt')
+          } else st.sleepCooldown = SLEEP_RETRY_TICKS
+        } else {
+          // A broken-off bed reads the same server silence: the halves
+          // were live at resolve, gone at reject.
+          let gone = false
+          try {
+            gone = bedHalfGone(bot, bed && bed.position) || bedHalfGone(bot, head)
+          } catch (_) { /* unreadable: the budget path below */ }
+          if (gone) {
+            st.sleepGiveUp = true
+            sleepGiveUpSay(bot, st, 'my bed is gone')
+          } else {
+            // Silent server refusal (clock skew under lag): back off and
+            // retry a few times, then give up — a permanently refused bed
+            // must not click all night, and each timed-out try leaks
+            // mineflayer's once('sleep') listener (revmux 01-review).
+            st.sleepRefusals = (st.sleepRefusals || 0) + 1
+            if (st.sleepRefusals < SLEEP_REFUSAL_TRIES) st.sleepCooldown = SLEEP_RETRY_TICKS
+            else {
+              st.sleepGiveUp = true
+              // States what is known (core-3): a 'not sleeping' refusal
+              // reaches here only after the bed box read clear, so do not
+              // blame mobs.
+              sleepGiveUpSay(bot, st, 'the server keeps refusing my bed')
+            }
+          }
         }
       } else {
         st.sleepGiveUp = true // occupied/too-far: hold tonight, retry tomorrow
@@ -1363,9 +1484,11 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
       }
       if (!st.sleepErrSaid) {
         st.sleepErrSaid = true
-        try { console.log(`sleep failed: ${msg || err}${sleepVitals(bot)}`) } catch (_) { /* logging best-effort */ }
+        try { console.log(`sleep failed: ${sleepRefusalDetail(msg || err, boxNow, st)}${sleepVitals(bot)}`) } catch (_) { /* logging best-effort */ }
       }
     } finally {
+      dropSleepMsg()
+      st.sleepHead = null
       ctx.sleepInFlight = false
     }
   })()
@@ -1378,7 +1501,19 @@ function sleepTick(bot, ctx, home, st) {
     if (typeof bot.sleep !== 'function') return false
     if (hostileNear(bot)) return false // fight/flee owns the tick, never the sleep click
     if (bot.isSleeping) return true
-    if (ctx.sleepInFlight) return true
+    if (ctx.sleepInFlight) {
+      // Round 3 (a): the click is mid-handshake — watch the box while it
+      // flies. A roamer wandering in now explains a 'not sleeping' reject
+      // that the pre-click veto never saw; the catch retries it as a
+      // transient instead of spending the refusal budget.
+      try {
+        if (st.sleepHead && monsterBlocksBed(bot, st.sleepHead)) {
+          st.boxHotDuringFlight = true
+          try { st.sleepBoxFlight = boxOccupants(bot, st.sleepHead) } catch (_) { /* flag is the signal */ }
+        }
+      } catch (_) { /* watch best-effort */ }
+      return true
+    }
     if (st.sleepGiveUp) return false
     if ((st.sleepCooldown || 0) > 0) { st.sleepCooldown--; return false } // awake and waiting: the door check runs
     let cells = null
@@ -2552,4 +2687,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, threatInSleepRing, nearbyBed, freeBedSpot, craftableBed, tableInReach }
+module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, boxOccupants, threatInSleepRing, nearbyBed, freeBedSpot, craftableBed, tableInReach }

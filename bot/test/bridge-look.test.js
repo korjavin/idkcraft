@@ -218,4 +218,36 @@ describe('bridge consume/sleep (idkcraft-neuc.9)', () => {
     assert.equal(wakes, 1)
     await assert.rejects(() => bot.sleep({ name: 'stone', position: new Vec3(0, 64, 0) }), /not a bed/)
   })
+
+  it('sleep aims the crosshair at the bed centre before the click (erig round 3)', async () => {
+    let transport
+    ;({ transport, bot } = await lookBot({ blocks: { '3,64,5': 'red_bed' } }))
+    const bed = { name: 'red_bed', position: new Vec3(3, 64, 5) }
+    await bot.sleep(bed)
+    const aims = transport.state.lookLog.filter((l) => l.method === 'look.at')
+    assert.equal(aims.length, 1, 'one aim, then the click')
+    assert.deepEqual([aims[0].x, aims[0].y, aims[0].z], [3.5, 64.5, 5.5])
+    assert.equal(transport.state.sleepCalls.length, 1)
+    assert.deepEqual(transport.state.sleepCalls, [{ x: 3, y: 64, z: 5 }])
+  })
+
+  it('a sleep→wake flicker still counts the fired click (edge latch, erig round 3)', async () => {
+    let transport
+    // refuseSleep: the poll never reads asleep — only the push edges speak.
+    ;({ transport, bot } = await lookBot({ blocks: { '3,64,3': 'red_bed' }, refuseSleep: true }))
+    const bed = { name: 'red_bed', position: new Vec3(3, 64, 3) }
+    const p = bot.sleep(bed)
+    await tick(100) // inside the 3 s wait
+    transport.inject('sleep', {})
+    transport.inject('wake', {})
+    await p // resolves: the edge fired, even though the poll reads awake
+    assert.equal(bot.isSleeping, false)
+  })
+
+  it('a client-rejected click names the verdict (erig round 3)', async () => {
+    let transport
+    ;({ transport, bot } = await lookBot({ blocks: { '3,64,3': 'red_bed' }, refuseSleep: true }))
+    const bed = { name: 'red_bed', position: new Vec3(3, 64, 3) }
+    await assert.rejects(() => bot.sleep(bed), /bot is not sleeping \(click rejected\)/)
+  })
 })
