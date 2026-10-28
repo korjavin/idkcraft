@@ -505,6 +505,64 @@ describe('erig follow-up: sleep-safe shelter before the click', () => {
     assert.ok(bot.chats.includes("can't sleep tonight (my bed is gone), holding till dawn"))
   })
 
+describe('erig round 4: the attempt waits for the sleep window', () => {
+  it('holds silent at dusk (no attempt, no line, no latch), clicks once the window opens', async () => {
+    const bot = mockBot2({ hp: 20, food: 20, pack: [] }) // prod vitals: torch/vitals/ring all fine
+    bot.time.timeOfDay = 12400 // facts time=dusk
+    const ctx = hutCtx2()
+    for (let t = 0; t < 60; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 0, 'no doomed dusk click')
+    assert.deepEqual(bot.chats, [], 'no dusk line: the stay just holds')
+    assert.ok(!ctx.stay.sleepGiveUp, 'a pre-window hold is not a give-up')
+    assert.equal(ctx.inShelter, true, 'still inside behind the shut door')
+    bot.time.timeOfDay = 14000 // the window opens
+    await tick(bot, ctx)
+    assert.ok(bot.calls.sleeps >= 1, 'the attempt goes out once sleepable')
+  })
+
+  it('window edges mirror mineflayer bed.js (12541..23458)', () => {
+    const at = (timeOfDay) => home.sleepWindowOpen({ time: { timeOfDay } })
+    assert.equal(at(12000), false, 'dusk start holds')
+    assert.equal(at(12540), false, 'one tick early holds')
+    assert.equal(at(12541), true, 'window opens')
+    assert.equal(at(14000), true, 'night clicks')
+    assert.equal(at(23458), true, 'window closes')
+    assert.equal(at(23459), false, 'past close holds')
+  })
+
+  it('a dusk thunderstorm sleeps; plain rain and unknown thunder do not open it', () => {
+    const storm = (extra) => home.sleepWindowOpen({ time: { timeOfDay: 12400 }, ...extra })
+    assert.equal(storm({ isRaining: true, thunderState: 1 }), true, 'v1 storm at dusk clicks')
+    assert.equal(storm({ isRaining: true, thunderState: 0 }), false, 'plain rain holds')
+    assert.equal(storm({ isRaining: true }), false, 'v2 bridge (rain only, no thunder level) holds till night')
+    assert.equal(storm({}), false, 'dry dusk holds')
+  })
+
+  it('unreadable clock fails open, like the legacy chain', () => {
+    assert.equal(home.sleepWindowOpen({ time: {} }), true)
+    assert.equal(home.sleepWindowOpen({}), true)
+  })
+
+  it('a dusk storm attempt goes out through stay', async () => {
+    const bot = mockBot2({ hp: 20, food: 20, pack: [] })
+    bot.time.timeOfDay = 12400
+    bot.isRaining = true
+    bot.thunderState = 1
+    const ctx = hutCtx2()
+    for (let t = 0; t < 5; t++) await tick(bot, ctx)
+    assert.ok(bot.calls.sleeps >= 1, 'storm at dusk clicks')
+  })
+
+  it('fight stays supreme: a close hostile holds the tick even inside the window', async () => {
+    const bot = mockBot2({ mobs: [{ name: 'zombie', pos: [15.5, 64, 22.5] }] })
+    bot.time.timeOfDay = 14000
+    const ctx = hutCtx2()
+    for (let t = 0; t < 10; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 0, 'never clicks through a real threat')
+    assert.ok(!bot.chats.some((m) => m.includes("can't sleep")), 'no sleep line: fight owns the tick')
+  })
+})
+
   it('prod night end to end: ring holds, then torch, meal, click', async () => {
     const bot = mockBot2({
       hp: 2.16,
