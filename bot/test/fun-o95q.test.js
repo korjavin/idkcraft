@@ -160,12 +160,21 @@ describe('fun gating (o95q idle-only)', () => {
     for (const over of [
       { home: 'site' }, { home: 'none' }, { known: 'near' },
       { haul: 'waiting' }, { surplus: 'yes' }, { pinned: 'craft' },
-      { beds: 'none' }, { beds: 'one' }, { gear: 'ready' }, { gear: 'want' },
+      { gear: 'ready' }, { gear: 'want' },
       { sword: 0 }, { pickaxe: 0 }, { rearm: true }, { logs: 14 },
       { scaffold: 0 },
       { table: 0, maxPlanks: 4, tableOwed: true },
       { door: 0, tablePlaced: true, maxPlanks: 6 },
     ]) assert.equal(goal.MENU.fun.feasible(facts(over), idle(), idleCtx()), false, JSON.stringify(over))
+  })
+  it('owed beds no longer veto the joke (u19u classifier demotion)', () => {
+    const idle = () => fakeBot([{ name: 'dirt', count: 20 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }])
+    // Beds owed is a classifier criterion now, not a menu veto: the joke
+    // stays feasible with beds owed (prod decides by FSM rank until a tick
+    // ask is wired). All other idle pins are unchanged.
+    assert.equal(goal.MENU.fun.feasible(facts({ beds: 'none' }), idle(), idleCtx()), true)
+    assert.equal(goal.MENU.fun.feasible(facts({ beds: 'one' }), idle(), idleCtx()), true)
+    assert.ok(String(goal.STEP_CRITERIA.fun).includes('beds owed'), 'criterion names the owed work')
   })
   it('a lightable yard and bankable goods belong to light/stockpile (R5.1 mirrors)', () => {
     // A yard only counts when the bot has a home site (light itself needs
