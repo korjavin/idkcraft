@@ -19,6 +19,7 @@ const bedMod = require('./behaviours/bed')
 const bedsMod = require('./behaviours/beds')
 const craftanyMod = require('./behaviours/craftany')
 const flatMod = require('./behaviours/flat')
+const reforestMod = require('./behaviours/reforest')
 const buildMod = require('./behaviours/build')
 const homeMod = require('./behaviours/home')
 const taskMod = require('./task')
@@ -552,6 +553,43 @@ function createOrders(box) {
       if (at) return `scanning ${size}x${size} at ${cx},${cz}${tile ? ` (strip ${tile.i + 1}/${tile.n})` : ''}…`
       const hint = explicit ? '' : ' (flat 48 for a big field)'
       return `scanning ${size}x${size} for holes…${hint}`
+    },
+    // Explicit reforest order (idkcraft-rd6q): bare `reforest` / `reforest N`
+    // run the reforest work step through the deterministic plan executive
+    // (installPlan + tick — the `do` precedent, no model call, no API key),
+    // so the order never depends on the LLM plan path. Count = repeats
+    // (the executive's doneStep decrements); a failed cycle ends the plan
+    // honestly, like a model plan. The OWNER_ORDER cancel branch ends it
+    // generically (stop / follow / any other owner order).
+    setReforest: ({ count, by }) => {
+      if (box.swarmHelper) return flatMod.SWARM_HELPER_LINE
+      const n = count == null || count === '' ? undefined : Math.floor(Number(count))
+      if (n !== undefined && !(n >= 1 && n <= 64)) return 'try: reforest 10'
+      // Honest pre-check first (idkcraft-rd6q review): a refusal must not
+      // wipe a running go-castle walk or a pending search. Day/pack/castle
+      // feasibility stays with the executive (night hold / miss), like the
+      // LLM path — no beatable leaves and no banked saplings means the pin
+      // could never start (the executive would miss 3 ticks, then fail it).
+      let leaves = 0
+      let saps = 0
+      try { leaves = reforestMod.beatablesNear(bot, reforestMod.REFOREST_RADIUS, null).length } catch (_) { leaves = 0 }
+      try { saps = reforestMod.countSaplings(bot) } catch (_) { saps = 0 }
+      if (leaves <= 0 && saps <= 0) return 'no leaves nearby and no saplings to plant'
+      clearPendingSearch(ctx)
+      clearStuck()
+      resetNightStep()
+      ctx.gocastle = null
+      startWork() // work mode carries the pin (helper already refused above)
+      ctx.llmAsk = null // a valid order clears a pending ask first (doPlan precedent)
+      const step = { step: 'reforest' }
+      if (n !== undefined) step.count = n
+      llmOrders.installPlan(bot, ctx, {
+        text: n === undefined ? 'reforest' : `reforest ${n}`,
+        by: by || 'you',
+        ticker: { work: () => startWork() }, // startStep's !work fallback; already working
+        explicit: true,
+      }, [step], () => {})
+      return n === undefined ? 'reforesting…' : `reforesting x${n}…`
     },
     // 'Come home' order (jr2.3): drop follow/work and wait in the common
     // room until countermanded. Refuses honestly without a built home

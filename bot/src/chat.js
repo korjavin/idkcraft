@@ -340,7 +340,7 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
 }
 
 // vf8e.6: the owner orders that end a running LLM plan.
-const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|share|bring me(?: .*)?)$/
+const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|reforest(?: \d+)?|share|bring me(?: .*)?)$/
 // vf8e.17: the `do <step> [count]` grammar. Only grammar-shaped lines take
 // the deterministic verb (a valid one replaces the running plan through
 // installPlan); anything else starting with `do ` (`do you have coal`)
@@ -348,6 +348,24 @@ const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go ho
 // OWNER_ORDER on purpose: a typo (`do lgiht`) or a refusal must never
 // cancel a running plan.
 const DO_LINE = /^do\s+[a-z0-9_]+(?:\s+\d+)?$/
+
+// idkcraft-rd6q: OWNER_USERNAME — when set, only that player's lines become
+// orders; everyone else's lines stay chatter (silently ignored, never
+// refused — strangers must not draw a chat line). Empty/unset = everyone,
+// the behaviour before. Compared case-insensitively with the leading dot
+// stripped, so Bedrock '.Name' and Java 'Name' read as the same person.
+// Peer-bot/worker/swarm sieves above are unchanged; greetings (greet.js,
+// arrival path) and read-only help/status stay open.
+function ownerOnlyName() {
+  const o = process.env.OWNER_USERNAME
+  return o != null && String(o).trim() !== '' ? String(o).trim() : null
+}
+function ownerLineOk(playerName) {
+  const o = ownerOnlyName()
+  if (!o) return true
+  const n = (s) => String(s || '').replace(/^\./, '').toLowerCase()
+  return n(playerName) === n(o)
+}
 
 function handleChat(bot, ticker, username, message, senderUuid) {
   if (username === bot.username) return
@@ -365,6 +383,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     return
   }
   const playerName = resolvePlayer(bot, username, senderUuid)
+  // idkcraft-rd6q: the order gate — every order branch below (and llmAsk)
+  // requires it; help/status/chatter do not.
+  const ownerOk = ownerLineOk(playerName)
   let msg = message.toLowerCase().trim()
   // vewo.6: '<BotName>: <command>' belongs to that bot alone (full name,
   // case-insensitive); every other bot ignores the line. Unprefixed unchanged.
@@ -395,7 +416,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   // Peer bots (v1/v2 hear each other's lines) never spend a call.
   const peerBot = [process.env.BOT_USERNAME, process.env.BOT2_USERNAME, process.env.BOT_PEER_USERNAME].some((n) => n && n === username)
   const llmAsk = (fallback, text = msg, explicit = false) => {
-    if (!(ticker && lctx && !peerBot && llmOrders.enabled() && !llmOrders.feeding(lctx) && worker.players(bot)[playerName])) return false
+    if (!(ticker && lctx && !peerBot && ownerOk && llmOrders.enabled() && !llmOrders.feeding(lctx) && worker.players(bot)[playerName])) return false
     const fired = llmOrders.ask(bot, lctx, { text, by: playerName, ticker, fallback, explicit, feed: (line) => handleChat(bot, ticker, username, line, senderUuid) })
     // qxql.9 owner ring: the order the model reads. OWNER_ORDER lines are
     // pushed by the cancel branch below, so only other fired asks push here
@@ -405,11 +426,12 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   }
   // Any other owner order ends the plan (its next work step would undo a
   // come home / go castle / flat); status, help, brain and chatter do not.
-  if (!peerBot && !llmOrders.feeding(lctx) && OWNER_ORDER.test(msg)) {
+  if (!peerBot && ownerOk && !llmOrders.feeding(lctx) && OWNER_ORDER.test(msg)) {
     try { pushOrderLog(lctx, msg) } catch (_) { /* ring best-effort */ }
     llmOrders.cancel(lctx, msg.split(' ')[0])
   }
   if (msg === 'follow me') {
+    if (!ownerOk) return
     if (ticker) ticker.setFollow(playerName)
     const seenEntry = worker.players(bot)[playerName]
     const seen = seenEntry && seenEntry.entity
@@ -425,11 +447,13 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       bot.chat(`I can't see you — I'm at ${at}${dist}; come closer or /tp ${bot.username} ${playerName}`)
     }
   } else if (msg === 'stop') {
+    if (!ownerOk) return
     if (ticker) {
       ticker.setFollow('')
       ticker.stop()
     }
   } else if (msg === 'lead anyway') {
+    if (!ownerOk) return
     const offer = deepOffers.get(playerName)
     deepOffers.delete(playerName)
     if (offer) {
@@ -439,6 +463,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       bot.chat('no deep find on hold — ask me to find something first')
     }
   } else if (msg === 'go work' || msg === 'free') {
+    if (!ownerOk) return
     // Owner resume (vmzq.3): an L2 task park clears on the explicit order
     // (internal work() entries — login adoption, resumeWork — keep it; a
     // restart re-arms an L3 latch as one 60-min retry, neuc.40). Owner
@@ -449,13 +474,16 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     if (ticker) ticker.work()
     bot.chat(`on my own; say 'follow me' to call me`)
   } else if (msg === 'come home' || msg === 'go home') {
+    if (!ownerOk) return
     if (ticker && typeof ticker.setComehome === 'function') bot.chat(ticker.setComehome({ by: playerName }))
   } else if (msg === 'go castle') {
+    if (!ownerOk) return
     if (ticker && typeof ticker.setGocastle === 'function') {
       const reply = ticker.setGocastle({ by: playerName })
       if (reply) bot.chat(reply)
     }
   } else if (msg === 'build here') {
+    if (!ownerOk) return
     const speakerEntry = worker.players(bot)[playerName]
     const speaker = speakerEntry && speakerEntry.entity
     const pos = speaker && speaker.position
@@ -506,11 +534,13 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     const st = (site && site.site) || {}
     bot.chat(`building a home at ${st.x} ${st.y} ${st.z}`)
   } else if (msg === 'build castle' || msg === 'castle' || msg.startsWith('castle ')) {
+    if (!ownerOk) return
     const reply = castleChat(bot, ticker, playerName, msg)
     if (reply) bot.chat(reply)
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
   } else if (msg === 'brain' || msg.startsWith('brain ')) {
+    if (!ownerOk) return
     // Brain switch (d75): with a follow target only they may switch; with
     // nobody followed (work mode) any roster player may. Others get silence
     // and the engine never changes for them.
@@ -559,6 +589,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   } else {
     const m = msg.match(/^find me\s+(\S+)$/)
     if (m) {
+      if (!ownerOk) return
       if (bot._tickerCtx) clearPendingSearch(bot._tickerCtx)
       const name = m[1]
       const speakerEntry = worker.players(bot)[playerName]
@@ -586,8 +617,10 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         answerFound(bot, ticker, playerName, refY, res)
       }
     } else if (msg === 'find me' || msg.startsWith('find me ')) {
+      if (!ownerOk) return
       bot.chat('try: find me iron')
     } else if (msg === 'flat' || msg.startsWith('flat ') || msg === 'make flat' || msg.startsWith('make flat ') || msg === 'flatten' || msg.startsWith('flatten ')) {
+      if (!ownerOk) return
       // tpd1: flat <r> [at] <x> <z> — an explicit anchor every swarm bot shares.
       const m = msg.match(/^(?:flat|make flat|flatten)(?:\s+(\S+)(?:\s+(?:at\s+)?(-?\d+)\s+(-?\d+))?)?$/)
       const r = m ? flatMod.parseRadius(m[1]) : null
@@ -601,11 +634,13 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         bot.chat(ticker.setFlat(order))
       }
     } else if (msg === 'share') {
+      if (!ownerOk) return
       if (ticker && typeof ticker.setShare === 'function') {
         const r = ticker.setShare({ by: playerName })
         if (r) bot.chat(r)
       }
     } else if (msg === 'autonomous' || msg.startsWith('autonomous ')) {
+      if (!ownerOk) return
       const m = msg.match(/^autonomous(?:\s+(on|off))?$/)
       if (!m) {
         bot.chat('try: autonomous on')
@@ -614,6 +649,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         else bot.chat(ticker.setAutonomous(m[1] === 'on'))
       }
     } else if (msg === 'skills' || msg.startsWith('skills ')) {
+      if (!ownerOk) return
       // vf8e.4: runtime kill switch for generated skills, until restart.
       const skills = require('./skills')
       const arg = msg.slice(6).trim()
@@ -623,6 +659,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       }
       bot.chat(arg === '' || arg === 'off' ? `skills: ${skills.state()}` : 'try: skills off')
     } else if (msg === 'bring me' || msg.startsWith('bring me ')) {
+      if (!ownerOk) return
       const m = msg.match(/^bring me\s+(.+?)(?:\s+(\d+))?$/)
       if (!m) {
         bot.chat('try: bring me coal')
@@ -639,11 +676,22 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       }
     } else if (msg.startsWith('plan ')) {
       // vf8e.6: force the planner on any line (A/B against the FSM parse).
+      // (owner gate lives inside llmAsk.)
       llmAsk(null, msg.slice(5).trim(), true)
+    } else if (msg === 'reforest' || /^reforest \d+$/.test(msg)) {
+      // idkcraft-rd6q: explicit reforest order — the setReforest handler
+      // (orders.js), never the LLM plan path. Strict digits only: other
+      // `reforest …` lines stay chatter for the owner model to read.
+      if (!ownerOk) return
+      if (ticker && typeof ticker.setReforest === 'function') {
+        const n = msg === 'reforest' ? undefined : parseInt(msg.slice(9), 10)
+        const r = ticker.setReforest({ count: n, by: playerName })
+        if (r) bot.chat(r)
+      }
     } else if (msg === 'do' || DO_LINE.test(msg)) {
       // vf8e.17: deterministic one-step plan, no model call. Only the
       // grammar lands here; other `do …` lines stay chatter below.
-      if (ticker && lctx && !peerBot && !llmOrders.feeding(lctx) && worker.players(bot)[playerName]) {
+      if (ticker && lctx && !peerBot && ownerOk && !llmOrders.feeding(lctx) && worker.players(bot)[playerName]) {
         doPlan(bot, ticker, lctx, playerName, username, senderUuid, msg)
       } else llmAsk(null)
     } else {

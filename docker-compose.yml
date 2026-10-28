@@ -245,6 +245,8 @@ services:
       BOT_SWARM_PREFIX: ${BOT_SWARM_PREFIX:-IdkSwarm}
       BOT_SWARM_I: "-1"
       BOT_FOLLOW: ${BOT_FOLLOW:-}
+      # idkcraft-rd6q: when set, only this player's chat lines become orders.
+      OWNER_USERNAME: ${OWNER_USERNAME:-}
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
       BOT_SKILLS: ${BOT2_SKILLS:-} # vf8e.4: v2's own switch (BOT_SKILLS stays v1's), off by default
@@ -343,6 +345,8 @@ services:
       BOT_PEER_USERNAME: ${BOT_USERNAME:-IdkBot}
       BOT2_USERNAME: ${BOT2_USERNAME:-}
       BOT_FOLLOW: ""
+      # idkcraft-rd6q: helpers obey only this player's lines when set.
+      OWNER_USERNAME: ${OWNER_USERNAME:-}
       WORKER_NAME: ""
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
