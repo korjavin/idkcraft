@@ -1516,6 +1516,10 @@ function sleepTick(bot, ctx, home, st) {
     }
     if (st.sleepGiveUp) return false
     if ((st.sleepCooldown || 0) > 0) { st.sleepCooldown--; return false } // awake and waiting: the door check runs
+    // Erig round 4: pre-window (dusk) the stay holds inside — no walk-in,
+    // no torch, no meal, no click, no line. The tick falls through to the
+    // door check and holdStill below.
+    if (!sleepWindowOpen(bot)) return false
     let cells = null
     try {
       cells = require('./beds').cellsOf(home) // deferred: home loads inside the behaviour chain
@@ -1567,6 +1571,33 @@ function sleepTick(bot, ctx, home, st) {
   } catch (_) {
     return false
   }
+}
+
+// Sleep window (erig round 4, mirrors mineflayer bed.js): the server
+// sleeps only at timeOfDay 12541..23458 or under a thunderstorm. The old
+// chain fired at dusk (facts time=dusk, 12000..13000) — one doomed click
+// refused with 'You can sleep only at night or during thunderstorms'
+// while torch/vitals/ring all read fine. Gate the whole sleepTick (not
+// just the click): pre-window the stay holds inside with the door shut,
+// spending no tries, no cooldowns and no lines. Unreadable clock fails
+// open (legacy: the click); unreadable thunder level (the v2 bridge
+// forwards rain only) reads as no storm — the clock gate still opens at
+// night, a dusk storm just waits ~27 ticks.
+const SLEEP_OPEN_T = 12541
+const SLEEP_CLOSE_T = 23458
+function thunderstormNow(bot) {
+  try {
+    if (!bot || bot.isRaining !== true) return false
+    return typeof bot.thunderState === 'number' ? bot.thunderState > 0 : false
+  } catch (_) { return false }
+}
+function sleepWindowOpen(bot) {
+  try {
+    if (thunderstormNow(bot)) return true
+    const t = bot && bot.time && bot.time.timeOfDay
+    if (typeof t !== 'number' || !(t >= 0)) return true // unreadable: fail open
+    return t >= SLEEP_OPEN_T && t <= SLEEP_CLOSE_T
+  } catch (_) { return true }
 }
 
 // Off the inside stance's storey or 4+ away (a castle bedroom/kitchen; the
@@ -2687,4 +2718,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, boxOccupants, threatInSleepRing, nearbyBed, freeBedSpot, craftableBed, tableInReach }
+module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, boxOccupants, threatInSleepRing, sleepWindowOpen, nearbyBed, freeBedSpot, craftableBed, tableInReach }
