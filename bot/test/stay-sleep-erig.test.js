@@ -166,3 +166,258 @@ describe('erig: server-box veto and honest give-up line', () => {
     assert.ok(bot.chats.includes("can't sleep tonight (I can't reach my bed), holding till dawn"))
   })
 })
+
+// Bead idkcraft-erig follow-up (prod 2026-10-28, fixed build): one attempt,
+// refused at health 2.16/food 8 with pillagers roaming and unlit=many. The
+// bed is found and clicked — the refusal is environmental. Three pre-click
+// gates make the shelter sleep-safe: the interior torch lands before the
+// click, hostiles inside arrow range hold it, and the attempt waits for
+// food (eat-and-wait) and regen. Each skip owns an honest line; fight/flee
+// stay supreme (a close hostile returns the tick silently, as before).
+
+// SITE shifted so the v1 interior spot (site+2,64,site.z+2 = 10,64,22)
+// reads air instead of colliding with the mock bed foot.
+const SITE2 = { x: 8, y: 64, z: 20 }
+const DOOR2 = { x: 9, y: 64, z: 20 }
+const TORCH_CELL = '10,64,22'
+
+function mockBot2({ mobs = [], pack = [], hp = 20, food = 20, torchLit = true, consumeFn, placeFn } = {}) {
+  const calls = { sleeps: 0, eats: 0, torches: 0, places: 0 }
+  const chats = []
+  const ents = {}
+  mobs.forEach((m, i) => {
+    ents[`m${i}`] = { name: m.name, type: 'mob', position: new Vec3(m.pos[0], m.pos[1], m.pos[2]) }
+  })
+  let lit = torchLit
+  const bot = {
+    calls,
+    chats,
+    health: hp,
+    food,
+    entities: ents,
+    entity: { position: new Vec3(AT.x, AT.y, AT.z) },
+    time: { timeOfDay: 14000, day: 5 }, // night
+    registry: { blocksByName: { white_bed: { id: 1 }, red_bed: { id: 2 } } },
+    pathfinder: {
+      goal: null,
+      movements: {},
+      isMoving: () => false,
+      setGoal: (g) => { bot.pathfinder.goal = g },
+      stop: () => {},
+    },
+    inventory: { items: () => pack.slice() },
+    findBlocks: () => [{ x: 12, y: 64, z: 22 }],
+    blockAt: (p) => {
+      const k = `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+      if (k === '12,64,22' || k === '13,64,22') {
+        return { name: 'white_bed', position: new Vec3(Math.floor(p.x), 64, Math.floor(p.z)), boundingBox: 'block' }
+      }
+      if (k === TORCH_CELL) {
+        return lit
+          ? { name: 'torch', position: new Vec3(10, 64, 22), boundingBox: 'block' }
+          : { name: 'air', position: new Vec3(10, 64, 22), boundingBox: 'empty' }
+      }
+      if (k === `${DOOR2.x},${DOOR2.y},${DOOR2.z}`) {
+        return { name: 'oak_door', position: new Vec3(DOOR2.x, DOOR2.y, DOOR2.z), getProperties: () => ({ open: false }) }
+      }
+      if (Math.floor(p.y) === 63) {
+        return { name: 'oak_planks', boundingBox: 'block', position: new Vec3(Math.floor(p.x), 63, Math.floor(p.z)) }
+      }
+      return { name: 'air', boundingBox: 'empty', position: new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }
+    },
+    sleep: async () => { calls.sleeps++ },
+    wake: async () => {},
+    equip: async () => {},
+    look: async () => {},
+    placeBlock: placeFn || (async () => { calls.places++; calls.torches++; lit = true }),
+    consume: consumeFn || (async () => { calls.eats++; bot.food = 20 }),
+    activateBlock: async () => {},
+    chat: (m) => { chats.push(String(m)) },
+    lookAt() {},
+    setControlState() {},
+    clearControlStates() {},
+  }
+  return bot
+}
+
+function hutCtx2() {
+  return {
+    home: {
+      site: { ...SITE2 },
+      built: true,
+      interior: { ...INTERIOR, min: { ...INTERIOR.min }, max: { ...INTERIOR.max } },
+    },
+  }
+}
+
+describe('erig follow-up: sleep-safe shelter before the click', () => {
+  it('ring geometry: roamers inside arrow range hold, the far and high stay clear', () => {
+    const at = (name, x, y, z) => mockBot({ mobs: [{ name, pos: [x, y, z] }] })
+    // Head centre (13.5, 22.5): XZ 12 holds, XZ 17 clears.
+    assert.equal(home.threatInSleepRing(at('pillager', 25.5, 64, 22.5), HEAD), true)
+    assert.equal(home.threatInSleepRing(at('pillager', 30.5, 64, 22.5), HEAD), false)
+    // Vertical band: 6 above holds, 7 above clears.
+    assert.equal(home.threatInSleepRing(at('skeleton', 13.5, 70, 22.5), HEAD), true)
+    assert.equal(home.threatInSleepRing(at('skeleton', 13.5, 71, 22.5), HEAD), false)
+    // The server ignores phantoms but a dive still spoils the handshake.
+    assert.equal(home.threatInSleepRing(at('phantom', 20.5, 68, 22.5), HEAD), true)
+    assert.equal(home.monsterBlocksBed(at('phantom', 20.5, 68, 22.5), HEAD), false)
+    assert.equal(home.threatInSleepRing(at('sheep', 14.5, 64, 22.5), HEAD), false)
+    assert.equal(home.threatInSleepRing(mockBot(), HEAD), false)
+    assert.equal(home.threatInSleepRing(mockBot(), null), false)
+  })
+
+  it('holds (no click) while a roamer camps inside arrow range, clicks once it leaves', async () => {
+    const bot = mockBot2({ mobs: [{ name: 'pillager', pos: [23.5, 64, 22.5] }] }) // head+10: box clear, ring hot
+    assert.equal(home.monsterBlocksBed(bot, HEAD), false, 'box reads clear: the old code clicked')
+    const ctx = hutCtx2()
+    for (let t = 0; t < 35; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 0, 'no doomed click into arrow range')
+    assert.deepEqual(bot.chats, ["can't sleep yet (hostiles roaming close), holding"], 'one ring line')
+    bot.entities = {} // the roamer moves on
+    await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 1, 'clicks once the ring clears')
+  })
+
+  it('box camper says the box line, not the ring line', async () => {
+    const bot = mockBot2({ mobs: [{ name: 'zombie', pos: [21.5, 64, 22.5] }] }) // head+8: box and ring hot
+    const ctx = hutCtx2()
+    for (let t = 0; t < 35; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 0)
+    assert.deepEqual(bot.chats, ["can't sleep yet (monsters too close), holding"], 'closest blocker first')
+  })
+
+  it('eats first (eat-and-wait beat) and holds the click while hungry', async () => {
+    let releaseEat = null
+    const bot = mockBot2({
+      hp: 20,
+      food: 8,
+      pack: [{ name: 'bread', count: 3 }, { name: 'torch', count: 2 }], // torch: the room reads lit
+      consumeFn: () => new Promise((res) => {
+        bot.calls.eats++
+        releaseEat = () => { bot.food = 20; res() }
+      }),
+    })
+    const ctx = hutCtx2()
+    for (let t = 0; t < 35; t++) await tick(bot, ctx)
+    assert.ok(bot.calls.eats >= 1, 'the beat eats')
+    assert.equal(bot.calls.sleeps, 0, 'no click on an empty stomach')
+    assert.deepEqual(bot.chats, ["can't sleep yet (eating first), holding"], 'one eat line')
+    releaseEat()
+    for (let t = 0; t < 5; t++) await tick(bot, ctx)
+    assert.ok(bot.calls.sleeps >= 1, 'clicks once fed')
+  })
+
+  it('says so once and tries anyway with nothing edible on hand', async () => {
+    const bot = mockBot2({ hp: 20, food: 8, pack: [], torchLit: false })
+    const ctx = hutCtx2()
+    for (let t = 0; t < 5; t++) await tick(bot, ctx)
+    assert.ok(bot.calls.sleeps >= 1, 'fail open: a click is harmless')
+    assert.ok(bot.chats.includes('hungry with nothing to eat, trying anyway'), 'honest shortfall line')
+    assert.ok(bot.chats.includes('no torches to light the room, trying anyway'), 'torch shortfall line')
+    assert.ok(bot.chats.includes('sleeping in a nearby bed'), 'the attempt still goes out')
+    assert.equal(bot.chats.length, 3, 'each line exactly once')
+  })
+
+  it('fails open past a broken consume instead of holding all night', async () => {
+    const bot = mockBot2({
+      hp: 20,
+      food: 8,
+      pack: [{ name: 'bread', count: 1 }],
+      consumeFn: () => new Promise(() => {}), // never resolves
+    })
+    const ctx = hutCtx2()
+    for (let t = 0; t < 120; t++) await tick(bot, ctx)
+    assert.ok(bot.calls.sleeps >= 1, 'past the beat the click goes out')
+    assert.ok(bot.chats.includes("can't sleep yet (eating first), holding"))
+    assert.ok(bot.chats.includes('still hungry, trying anyway'), 'fail-open line')
+  })
+
+  it('waits for regen below half, then clicks once healed', async () => {
+    const bot = mockBot2({ hp: 2.16, food: 20, pack: [] }) // prod vitals, fed
+    const ctx = hutCtx2()
+    for (let t = 0; t < 35; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 0, 'no weak click')
+    assert.ok(bot.chats.includes("can't sleep yet (healing first), holding"), 'one heal line')
+    bot.health = 12 // regen lands
+    for (let t = 0; t < 5; t++) await tick(bot, ctx)
+    assert.ok(bot.calls.sleeps >= 1, 'clicks once healed')
+  })
+
+  it('places the night torch before the click', async () => {
+    const bot = mockBot2({ torchLit: false, pack: [{ name: 'torch', count: 4 }] })
+    const ctx = hutCtx2()
+    for (let t = 0; t < 10; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.torches, 1, 'the interior spot burns first')
+    assert.ok(bot.calls.sleeps >= 1, 'then the click goes out')
+  })
+
+  it('a close hostile keeps fight supreme: silent hold, no click, no sleep line', async () => {
+    const bot = mockBot2({ mobs: [{ name: 'zombie', pos: [15.5, 64, 22.5] }] }) // 3 from the body
+    assert.equal(home.hostileNear(bot), true, 'fight owns this tick')
+    const ctx = hutCtx2()
+    for (let t = 0; t < 35; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 0, 'never clicks through a real threat')
+    assert.ok(!bot.chats.some((m) => m.includes("can't sleep")), 'no sleep line: fight owns the tick')
+  })
+
+  it('a refused torch spot never starves the click: three strikes, one line, then the attempt', async () => {
+    const bot = mockBot2({
+      torchLit: false,
+      pack: [{ name: 'torch', count: 4 }],
+      placeFn: async () => { bot.calls.places++; throw new Error('protected') },
+    })
+    const ctx = hutCtx2()
+    for (let t = 0; t < 15; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.places, 3, 'bounded retries, not a nightly loop')
+    assert.ok(bot.calls.sleeps >= 1, 'the click proceeds past the dead spot')
+    assert.deepEqual(
+      bot.chats.filter((m) => m !== 'sleeping in a nearby bed'),
+      ['could not light the room, trying anyway'],
+      'one fail-open line',
+    )
+  })
+
+  it('an out-of-reach torch spot is skipped silently and the click proceeds', async () => {
+    const bot = mockBot2({ torchLit: false, pack: [{ name: 'torch', count: 4 }] })
+    // Interior spot lands at (2,64,22), ~10 from the body: findRef may
+    // succeed, but placeBlock cannot — the gate must not flight.
+    const ctx = { home: { site: { x: 0, y: 64, z: 20 }, built: true, interior: { ...INTERIOR, min: { ...INTERIOR.min }, max: { ...INTERIOR.max } } } }
+    for (let t = 0; t < 5; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.places, 0, 'no doomed flight')
+    assert.ok(bot.calls.sleeps >= 1, 'the click goes out')
+    assert.ok(!bot.chats.some((m) => m.includes('torch')), 'no torch line at all')
+  })
+
+  it('unreadable vitals fail open: unknown food never holds a weak body', async () => {
+    const bot = mockBot2({ hp: 2.16, food: 8, pack: [] })
+    delete bot.health
+    delete bot.food
+    const ctx = hutCtx2()
+    for (let t = 0; t < 40; t++) await tick(bot, ctx)
+    assert.ok(bot.calls.sleeps >= 1, 'the click goes out')
+    assert.ok(!bot.chats.some((m) => m.includes("can't sleep")), 'no hold without readable vitals')
+  })
+
+  it('prod night end to end: ring holds, then torch, meal, click', async () => {
+    const bot = mockBot2({
+      hp: 2.16,
+      food: 8,
+      torchLit: false,
+      pack: [{ name: 'bread', count: 3 }, { name: 'torch', count: 4 }],
+      mobs: [{ name: 'pillager', pos: [23.5, 64, 22.5] }],
+    })
+    const ctx = hutCtx2()
+    for (let t = 0; t < 40; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.sleeps, 0, 'nothing doomed goes out')
+    assert.equal(bot.calls.torches, 0, 'the room waits: the ring is hot')
+    assert.equal(bot.calls.eats, 0, 'the meal waits too')
+    assert.deepEqual(bot.chats, ["can't sleep yet (hostiles roaming close), holding"])
+    bot.entities = {} // the patrol moves on
+    bot.health = 12 // and the body heals (fed by the beat below)
+    for (let t = 0; t < 40; t++) await tick(bot, ctx)
+    assert.equal(bot.calls.torches, 1, 'room lit before the click')
+    assert.ok(bot.calls.eats >= 1, 'meal before the click')
+    assert.ok(bot.calls.sleeps >= 1, 'click only when safe')
+  })
+})
