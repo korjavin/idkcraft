@@ -84,14 +84,19 @@ const MENU = {
   },
   gohome: {
     // Night-far (ipn.12): at night a far march is a death march — shelter
-    // owns it (see nightFarFromHome). Dusk marches at any distance —
-    // except away from home with an active castle (vmzq.19): the night
-    // belongs to the site, never to a 500-block march back.
+    // owns it (see nightFarFromHome). At dusk the knock-off beats
+    // castle-first (vd93, owner 2026-10-28): an active castle no longer
+    // holds the bot at the site in knock-off range — it walks home and
+    // the stay step runs the a8rb sleep chain. Night keeps the old guards
+    // (far = shelter, latched = shelter, at the castle = shelter). A cave
+    // start marches like before (the walk fails, latches, and hands to
+    // the climb leg below — no detour through the castle costs the dusk).
     feasible: (facts, bot, ctx) => (facts.time === 'dusk' || facts.time === 'night') && facts.home === 'built' && facts.inside === 'no' &&
       !(facts.time === 'night' && nightFarFromHome(bot, ctx)) &&
       // Castle band (g0z.57): by the castle with a home in walking range
       // the bot keeps heading in — no latch, no castle-night shelter.
-      (castleBandHome(bot, ctx) || (!gohomeLatched(ctx, bot) && !castleNight(bot, ctx) && !castleSiteNight(bot, ctx))),
+      (castleBandHome(bot, ctx) || (!gohomeLatched(ctx, bot) &&
+        ((facts.time === 'dusk' && duskKnockoff(bot, ctx)) || (!castleNight(bot, ctx) && !castleSiteNight(bot, ctx))))),
     chat: () => 'on my own: heading home',
     verb: 'heading home',
   },
@@ -960,6 +965,29 @@ function nightFarFromHome(bot, ctx) {
     const site = nh && nh.site
     if (!site || typeof site.x !== 'number' || !bp || typeof bp.x !== 'number') return false
     return Math.hypot(bp.x - site.x, bp.z - site.z) > range
+  } catch (_) {
+    return false
+  }
+}
+// Dusk knock-off range (idkcraft-vd93): dusk is 1000 ticks (~50 s) and a
+// march still inside the night-far ring at nightfall keeps walking (night
+// gohome stays feasible there). Past the ring plus one dusk walk the
+// march cannot arrive: nightfall catches it in open country, the night-far
+// force pillars it mid-route, and the bot never sleeps — while the safe
+// site shelter (g0z.21, vmzq.19) is lost. So the dusk lift of the
+// castle-night vetoes applies only in range; a far castle keeps the site
+// shelter. The walk budget (150, ~35 s at 4.3 blocks/s) keeps margin for
+// path detours and decide latency (revmux 03-after-fix). Anchored on
+// ctx.home (where gohome walks), not the nightHome covering (which may be
+// the castle itself).
+const DUSK_WALK_BLOCKS = 150
+function duskKnockoff(bot, ctx) {
+  try {
+    const range = (require('./behaviours/retreat').HOME_WALK_RANGE || 96) + DUSK_WALK_BLOCKS
+    const h = ctx && ctx.home && ctx.home.site
+    const bp = bot && bot.entity && bot.entity.position
+    if (!h || typeof h.x !== 'number' || !bp || typeof bp.x !== 'number') return false
+    return Math.hypot(bp.x - h.x, bp.z - h.z) <= range
   } catch (_) {
     return false
   }
@@ -1907,8 +1935,11 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (facts.home !== 'built') return 'gohome: home not built'
       if (facts.inside !== 'no') return 'gohome: already inside'
       if (gohomeLatched(ctx, bot)) return 'gohome: failed at the same spot tonight'
-      if (castleNight(bot, ctx)) return 'gohome: sheltering at the castle'
-      if (castleSiteNight(bot, ctx)) return 'gohome: sheltering at the castle'
+      // vd93: at dusk the vetoes fire only past knock-off range (the march
+      // could not arrive), otherwise the knock-off beats the castle — so
+      // at night, or at an out-of-range dusk, the reason reads shelter.
+      if ((facts.time === 'night' || !duskKnockoff(bot, ctx)) && castleNight(bot, ctx)) return 'gohome: sheltering at the castle'
+      if ((facts.time === 'night' || !duskKnockoff(bot, ctx)) && castleSiteNight(bot, ctx)) return 'gohome: sheltering at the castle'
       return 'gohome: too far to walk at night'
     case 'shelter':
       if (facts.time === 'day') return 'shelter: daytime'
