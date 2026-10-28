@@ -52,7 +52,16 @@ fi
 # Game JVM args: no TTY, so the in-game JLine reader crashes init unless dumb.
 # idkcraft-neuc.67: BODY_JVM_ARGS (compose body2) appends the body's heap/GC
 # flags; unset (the worker, the old body) = the same single arg as before.
+# idkcraft-ogo9: the installed loader floats (HMC installs latest stable;
+# a pinned 0.19.5 broke every launch with "Couldn't find object" once 0.20.1
+# released), so launch whatever `versions` knows. Fail loud, never guess.
+LOADER=$(java -jar headlessmc-launcher-wrapper.jar --command versions \
+  | grep -o 'fabric-loader-[^[:space:]]*' | tail -n 1)
+if [ -z "$LOADER" ]; then
+  echo "no installed fabric-loader version found (hmc versions output changed?)"
+  exit 1
+fi
 java "-Dhmc.jvmargs=-Dhmc.jline.dumb=true${BODY_JVM_ARGS:+ $BODY_JVM_ARGS}" $HMC_PROPS -jar headlessmc-launcher-wrapper.jar \
-  --command launch fabric-loader-0.19.5-26.1.2 -lwjgl $HMC_OFFLINE < /tmp/console &
+  --command launch "$LOADER" -lwjgl $HMC_OFFLINE < /tmp/console &
 CLIENT=$!
 wait $CLIENT
