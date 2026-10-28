@@ -1,8 +1,10 @@
 'use strict'
 
-// Classifier plug, phase 1 (idkcraft-u19u §§1.1-1.3, §3): chooseStep
-// consults the brain with the FSM as fallback and disagreement reference —
-// the same shape as the ask it replaces. No C/deadlock behaviour here.
+// Classifier plug contract, phase 1 (idkcraft-u19u §§1.1-1.3, §3):
+// chooseStep consults a brain with ask() and falls back to the FSM with a
+// disagreement reference. Prod note: the tick brain has no ask() (vhlb.5),
+// so prod decides by FSM rank until a tick ask is wired; these tests pin
+// the contract with a hand-built asking brain. No C/deadlock behaviour here.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')

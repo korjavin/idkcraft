@@ -170,8 +170,8 @@ describe('fun gating (o95q idle-only)', () => {
   it('owed beds no longer veto the joke (u19u classifier demotion)', () => {
     const idle = () => fakeBot([{ name: 'dirt', count: 20 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }])
     // Beds owed is a classifier criterion now, not a menu veto: the joke
-    // stays feasible with beds owed and the model weighs whimsy against
-    // the owed work. All other idle pins are unchanged.
+    // stays feasible with beds owed (prod decides by FSM rank until a tick
+    // ask is wired). All other idle pins are unchanged.
     assert.equal(goal.MENU.fun.feasible(facts({ beds: 'none' }), idle(), idleCtx()), true)
     assert.equal(goal.MENU.fun.feasible(facts({ beds: 'one' }), idle(), idleCtx()), true)
     assert.ok(String(goal.STEP_CRITERIA.fun).includes('beds owed'), 'criterion names the owed work')
