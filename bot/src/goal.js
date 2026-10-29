@@ -1838,6 +1838,15 @@ async function chooseStep(brain, facts, feasible, home, extra) {
   const names = STEP_ORDER.filter((n) => feasible.includes(n))
   const text = goalText(facts, home)
   const fsm = goalFsm(facts, names)
+  // Deadlock escalation (idkcraft-u19u phase C): the work-mode twin of the
+  // task-executive watchdog, owned by task.js (goal.js never requires the
+  // task layer, oqul.1). Observes every re-decide — rest-only menus
+  // included — fires ONE plan() on a proven stall, consumes or FSM-falls
+  // back. Null runs the existing path byte-identical.
+  if (extra && typeof extra.deadlock === 'function') {
+    const deadlock = extra.deadlock(brain, facts, feasible, home, extra, fsm)
+    if (deadlock) return deadlock
+  }
   if (names.length <= 1) return { step: names[0] || 'rest', source: 'only-option', fsm, model: null }
   // bhz2: the night safety steps are a rule, not a preference — the model never overrides them.
   // xhqv: shelter too — a latched gohome hands the night to shelter, and a
@@ -3080,7 +3089,7 @@ async function decide(bot, ctx) {
     // layering gate (oqul.1) forbids goal.js from reaching the task layer.
     let stratExtra = null
     try {
-      if (ctx && typeof ctx.strategicChoose === 'function') stratExtra = { bot, ctx, choose: ctx.strategicChoose }
+      if (ctx && (typeof ctx.strategicChoose === 'function' || typeof ctx.deadlockChoose === 'function')) stratExtra = { bot, ctx, choose: ctx.strategicChoose, deadlock: ctx.deadlockChoose }
     } catch (_) {
       stratExtra = null
     }
@@ -3093,4 +3102,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome }
+module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome }
