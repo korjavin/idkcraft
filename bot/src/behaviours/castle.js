@@ -33,7 +33,7 @@ const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.j
 const build = require('./build')
 const flat = require('./flat')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
-const { stepFailed, stepGen, failReason } = require('../step')
+const { stepDone, stepFailed, stepGen, failReason } = require('../step')
 const worker = require('../worker')
 
 const STRIKES = 3
@@ -244,6 +244,14 @@ function backoffMs(tries) { return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 
 // Bounded retry (vmzq.27 revmux 01): after this many blocks the hole
 // (see blockCell) retires.
 const MAX_HOLE_TRIES = 8
+// Protected cells (idkcraft-v0vy): a 'protected' deny (an owner's bed or
+// build in the cell, a guarded block) never heals — no stance, tool or
+// backfill changes it. Three consecutive protected blocks retire the cell
+// permanently (RETIRED_PERMANENT_RE below, never re-armed), so the castle
+// completes with a reported gap instead of re-striking the cell every
+// tidy window. A transient fail between protected ones breaks the streak
+// and the cell keeps the ordinary 8-try ladder.
+const PROTECTED_MAX_TRIES = 3
 // Builder refusals (idkcraft-synq, revmux 01 core-3): a 'build-miss' block
 // means Baritone refused the cell in STRIKES consecutive batches with
 // material on hand on the layer it was laying (strikeMisses). There is
@@ -268,10 +276,19 @@ function blockCell(ctx, st, c, why, now) {
   e.tries++
   e.until = now + backoffMs(e.tries)
   e.why = String(why)
+  // Consecutive-protected streak (idkcraft-v0vy): only unbroken protected
+  // evidence retires fast — a transient fail in between resets the streak.
+  if (why === 'protected') e.prot = (e.prot | 0) + 1
+  else delete e.prot
   // Bounded retry (revmux 01): the MAX_HOLE_TRIES-th block retires the
   // hole — still reported, never picked or waited on again. Builder
-  // refusals retire faster (idkcraft-synq BUILD_MISS_TRIES above).
-  if (e.tries >= (why === 'build-miss' ? BUILD_MISS_TRIES : MAX_HOLE_TRIES)) e.retired = true
+  // refusals retire faster (idkcraft-synq BUILD_MISS_TRIES above) and
+  // protected cells faster still (PROTECTED_MAX_TRIES above), with a
+  // permanent why the tidy return never re-arms. The tries>=MAX backstop
+  // keeps the old invariant for mixed ladders that never streak.
+  const limit = why === 'build-miss' ? BUILD_MISS_TRIES : why === 'protected' ? PROTECTED_MAX_TRIES : MAX_HOLE_TRIES
+  const n = why === 'protected' ? (e.prot | 0) : e.tries
+  if (n >= limit || e.tries >= MAX_HOLE_TRIES) e.retired = true
   st.blocked[k] = e
   ctx.castleFails = null
   ctx.castleCell = null
@@ -1164,12 +1181,13 @@ function noteVisit(bot, ctx, st, now) {
 // while the word read done. A return after a due window reopens the
 // transient ones — the pjsl backfill may have healed the stance since —
 // for one fresh strike ladder; permanent ones (an owner's kept block, a
-// refilled moat, liquid, an unharvestable occupant) stay retired and are
-// reported instead (sayHoles on the done path below). The 'castle repair'
-// command reopens all of them: the owner just asked for a fresh attempt.
-// Best-effort and bounded: at most one reopen per tidy window, plus the
-// explicit command.
-const RETIRED_PERMANENT_RE = /^(kept-|refilled|liquid|no-tool-)/
+// refilled moat, liquid, an unharvestable occupant, a protected block)
+// stay retired and are reported instead (sayHoles on the done path below).
+// The 'castle repair' command reopens all but the protected ones: the
+// owner just asked for a fresh attempt, but a protected deny would refuse
+// it identically. Best-effort and bounded: at most one reopen per tidy
+// window, plus the explicit command.
+const RETIRED_PERMANENT_RE = /^(kept-|refilled|liquid|no-tool-|protected)/
 function reopenRepairs(bot, ctx, st, transientOnly) {
   try {
     if (!st || !st.site || typeof st.site.x !== 'number' || !st.blocked) return 0
@@ -1178,6 +1196,11 @@ function reopenRepairs(bot, ctx, st, transientOnly) {
     for (const k of Object.keys(st.blocked)) {
       const e = st.blocked[k]
       if (!e || !e.retired) continue
+      // A protected retirement never re-arms (idkcraft-v0vy): the denying
+      // block is the owner's choice and a fresh ladder would only burn
+      // three more strikes to retire it again — neither on a tidy return
+      // nor on the explicit repair order.
+      if (/^protected/.test(String(e.why || ''))) continue
       if (transientOnly && RETIRED_PERMANENT_RE.test(String(e.why || ''))) continue
       const parts = String(k).split(':')
       if (Number(parts[0]) !== ver(st)) continue // stale version: pick's prune drops it
@@ -2424,7 +2447,7 @@ function work(bot, ctx, st, c, now, status) {
     item = c.prep === 'fill' ? fillItem(bot, ctx) : findItem(bot, c.kind, ctx)
     if (!item) {
       st.status = `need ${c.kind}`
-      ctx.stepStatus = `failed:no-${c.kind}`
+      stepFailed(ctx, `no-${c.kind}`)
       return
     }
   }
@@ -2522,7 +2545,7 @@ function castle(bot, ctx) {
       // until a retry comes due. A waiting dig with no hole is held by
       // interior work (never by a backoff), so it keeps its own status.
       if (!holes.length) st.status = `waiting on ${r.waiting.x} ${r.waiting.y} ${r.waiting.z} (${r.waiting.kind})`
-      ctx.stepStatus = 'failed:blocked'
+      stepFailed(ctx, 'blocked')
       return
     }
     // Litter (g0z.14 box scan, g0z.44 band scan on a complete castle):
@@ -2547,7 +2570,7 @@ function castle(bot, ctx) {
     // Holes stay on the status past completion (sayHoles set it above),
     // so 'castle' keeps reporting the gaps, not just 'complete'.
     if (!holes.length) st.status = 'complete'
-    ctx.stepStatus = 'done'
+    stepDone(ctx)
     if (st.phase !== 'complete') {
       st.phase = 'complete'
       delete st.upgrade // the relay (g0z.48) ends where the build does
@@ -2562,6 +2585,8 @@ module.exports = castle
 module.exports.holesOf = holesOf
 module.exports.sayHoles = sayHoles
 module.exports.MAX_HOLE_TRIES = MAX_HOLE_TRIES
+module.exports.PROTECTED_MAX_TRIES = PROTECTED_MAX_TRIES
+module.exports.blockCell = blockCell
 module.exports.BUILD_MISS_TRIES = BUILD_MISS_TRIES
 module.exports.STRIKE_WIDE_CAP = STRIKE_WIDE_CAP
 module.exports.guardCastle = guardCastle

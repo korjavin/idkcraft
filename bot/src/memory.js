@@ -312,6 +312,11 @@ function castleOf(c) {
         // Retired holes stay retired (vmzq.27 revmux 02): without the flag
         // a rejoin re-waits retired holes up to the clamped backoff.
         if (e.retired === true) out.blocked[k].retired = true
+        // Consecutive-protected streak (idkcraft-v0vy): the count rides
+        // along so a restart resumes fast-retire instead of re-climbing
+        // from zero. Capped well above the retire threshold; blockCell
+        // recomputes it on the next strike anyway.
+        if (e.why === 'protected' && Number.isInteger(e.prot) && e.prot > 0) out.blocked[k].prot = Math.min(e.prot, 8)
       }
     }
     return out
