@@ -537,6 +537,21 @@ const MENU = {
     chat: () => 'on my own: beating leaves for saplings',
     verb: 'beating leaves',
   },
+  farm: {
+    // Wheat autonomy (idkcraft-1z1m): till soil, water, plant seeds and
+    // harvest wheat, carrying the crop to sheep. Day only, never under an
+    // active castle order (the reforest gate), pack room for the harvest,
+    // and a leg actionable now (the behaviour's own scan).
+    feasible: (facts, bot, ctx) => {
+      try {
+        return require('./behaviours/farm').farmFeasible(facts, bot, ctx)
+      } catch (_) {
+        return false
+      }
+    },
+    chat: () => 'on my own: tending the wheat field',
+    verb: 'tending wheat',
+  },
   explore: {
     // Blind search once the house stands; pre-house gaps rest (rw4 owns the
     // body until built) — except the stranded hard state (gyw): a
@@ -1810,6 +1825,7 @@ const STEP_CRITERIA = {
   gear: 'gear is ready, want, or wait: forge better tools',
   forage: 'known is near: walk to the remembered find and dig it',
   reforest: 'leaves are near, or banked saplings with a vetted spot, and the pack has room and time is day and no castle order runs: beat nearby leaves, bank the dropped saplings, then plant them',
+  farm: 'wheat is ripe, or seeds with tilled soil, or tillable soil near water, or wheat carried to sheep, and time is day and no castle order runs: till soil, water, plant seeds, harvest wheat and feed sheep',
   explore: 'known is none: walk the visited boundary',
   stay: 'inside is yes and time is dusk or night: wait inside',
   rest: 'nothing else fits: rest near home',

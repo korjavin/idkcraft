@@ -115,6 +115,22 @@ function isWoody(name) {
   return typeof name === 'string' && /(_log|_stem|_hyphae|_wood)$/.test(name)
 }
 
+// Seed tufts + mature wheat the farm step (idkcraft-1z1m) may break:
+// regrowable flora and crops, never part of a build. Step-scoped
+// (ctx.step === 'farm') so no other executor inherits it; wheat maturity
+// is fail-closed on unreadable age, so young crops are never griefed on a
+// body whose blocks carry no properties.
+const FARM_TUFT = new Set(['short_grass', 'grass', 'tall_grass', 'fern', 'large_fern'])
+function farmDiggable(block, props) {
+  try {
+    if (!block || typeof block.name !== 'string') return false
+    if (FARM_TUFT.has(block.name)) return true
+    if (block.name !== 'wheat') return false
+    const p = props || (typeof block.getProperties === 'function' ? block.getProperties() : null)
+    return !!p && Number(p.age) === 7
+  } catch (_) { return false }
+}
+
 function cellName(bot, x, y, z) {
   try {
     const b = bot && typeof bot.blockAt === 'function' ? bot.blockAt(new Vec3(x, y, z)) : null
@@ -463,6 +479,11 @@ function protectedReason(bot, block, ctx) {
     if (own && !KEEP_OWN.test(name) && (fp || !inHouseFootprint(ctx.home, pos) ||
       (name === 'cobblestone' && pos.y >= ctx.home.site.y))) return null
     if (CLEAR_FLORA.has(name) || NATURAL_SOLID.has(name)) return null
+    // Farm digs (idkcraft-1z1m): the farm step only (ctx.step === 'farm')
+    // may break seed tufts and MATURE wheat — regrowable, never part of a
+    // build. Sits after the footprint/castle rules above, so walled fields
+    // keep their protection.
+    if (ctx && ctx.step === 'farm' && farmDiggable(block, props)) return null
     if (name.endsWith('_ore') || name.endsWith('_leaves')) return null
     const woody = (name.endsWith('_log') && !name.startsWith('stripped_')) ||
       name.endsWith('_stem') || name.endsWith('_hyphae')
@@ -716,4 +737,4 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
+module.exports = { say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }

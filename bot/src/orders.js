@@ -591,6 +591,33 @@ function createOrders(box) {
       }, [step], () => {})
       return n === undefined ? 'reforesting…' : `reforesting x${n}…`
     },
+    // Explicit farm order (idkcraft-1z1m): bare `farm` / `farm N` runs
+    // the farm work step through the deterministic plan executive, like
+    // reforest above. Honest pre-check: nothing actionable to grow, water
+    // or feed means the pin could never start, so refuse instead.
+    setFarm: ({ count, by }) => {
+      const farmMod = require('./behaviours/farm')
+      const n = count == null || count === '' ? undefined : Math.floor(Number(count))
+      if (n !== undefined && !(n >= 1 && n <= 64)) return 'try: farm 10'
+      let ready = false
+      try { ready = farmMod.workReady(bot, ctx) } catch (_) { ready = false }
+      if (!ready) return 'no wheat to tend and no sheep nearby'
+      clearPendingSearch(ctx)
+      clearStuck()
+      resetNightStep()
+      ctx.gocastle = null
+      startWork() // work mode carries the pin (helper already refused above)
+      ctx.llmAsk = null // a valid order clears a pending ask first (doPlan precedent)
+      const step = { step: 'farm' }
+      if (n !== undefined) step.count = n
+      llmOrders.installPlan(bot, ctx, {
+        text: n === undefined ? 'farm' : `farm ${n}`,
+        by: by || 'you',
+        ticker: { work: () => startWork() }, // startStep's !work fallback; already working
+        explicit: true,
+      }, [step], () => {})
+      return n === undefined ? 'farming…' : `farming x${n}…`
+    },
     // 'Come home' order (jr2.3): drop follow/work and wait in the common
     // room until countermanded. Refuses honestly without a built home
     // (adopting a standing house first, like the work tick); a repeat
