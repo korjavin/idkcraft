@@ -234,7 +234,10 @@ describe('castle arbiter step (g0z.3)', () => {
     const ctx = { castle: castleState() }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'castle')
-    assert.ok(bot.chats.includes('next: building the castle (goal-fsm)'))
+    // u19u phase 2 (rules-first): with no brain to consult, the castle rule
+    // still owns the pick — source is castle-rule, never the goal-fsm
+    // fallthrough.
+    assert.ok(bot.chats.includes('next: building the castle (castle-rule)'))
   })
 
   it('g0z.17: a torch cell next in plan order, no torch, no coal: stone goes on, torch-none never gates', async () => {

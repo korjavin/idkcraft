@@ -1834,12 +1834,11 @@ function shapeGoalMenu(names, model) {
 // method: stub brain or unit tests), <brain source> (model answered) or
 // fsm-fallback (model consulted and failed). model is the consulted brain
 // source or null when nothing was asked.
-async function chooseStep(brain, facts, feasible, home) {
+async function chooseStep(brain, facts, feasible, home, extra) {
   const names = STEP_ORDER.filter((n) => feasible.includes(n))
   const text = goalText(facts, home)
   const fsm = goalFsm(facts, names)
   if (names.length <= 1) return { step: names[0] || 'rest', source: 'only-option', fsm, model: null }
-  if (!brain || typeof brain.ask !== 'function') return { step: fsm, source: 'goal-fsm', fsm, model: null }
   // bhz2: the night safety steps are a rule, not a preference — the model never overrides them.
   // xhqv: shelter too — a latched gohome hands the night to shelter, and a
   // model re-pick to a day step would undo the latch.
@@ -1852,6 +1851,18 @@ async function chooseStep(brain, facts, feasible, home) {
   // vmzq.50: the return-to-site walk rides it too — displaced, the model
   // must not wander to forage/explore instead of walking back.
   if (fsm === 'castle' || fsm === 'castlefetch' || fsm === 'gocastle' || fsm === 'sitebed' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
+  // Strategic choice (idkcraft-u19u phase 2): the multi-option day
+  // work-menu branch goes through the task-owned strategic chooser (wired
+  // via ctx by taskTick — goal.js never requires the task layer, oqul.1).
+  // A null return means no strategic context (or no option table) — the
+  // phase-1 ask plug below runs.
+  // (Rules above stay first: a plan-only brain with no ask() still takes
+  // the night/castle rule, never the goal-fsm fallthrough below.)
+  if (extra && typeof extra.choose === 'function') {
+    const strategic = extra.choose(brain, facts, feasible, home, extra, fsm)
+    if (strategic) return strategic
+  }
+  if (!brain || typeof brain.ask !== 'function') return { step: fsm, source: 'goal-fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
@@ -3064,7 +3075,16 @@ async function decide(bot, ctx) {
     const gateFired = { chain: chainOwns, 'fetch-retry': fetchRetry, 'gate-opened': gateOpened, 'build-retry': buildRetry, 'site-retry': siteRetry, 'night-far': nightFarWalk, 'night-near': nightNearShelter }
     const force = forceName(bot, ctx, facts, prev, status, text, gateFired)
     const t0 = Date.now()
-    const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home)
+    // Strategic context (idkcraft-u19u phase 2): the task-owned chooser
+    // wired via ctx (taskTick runs before decide) — no require here, the
+    // layering gate (oqul.1) forbids goal.js from reaching the task layer.
+    let stratExtra = null
+    try {
+      if (ctx && typeof ctx.strategicChoose === 'function') stratExtra = { bot, ctx, choose: ctx.strategicChoose }
+    } catch (_) {
+      stratExtra = null
+    }
+    const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home, stratExtra)
     if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     applyChoice(bot, ctx, facts, choice, prev, finished, why, text)
