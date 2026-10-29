@@ -1302,14 +1302,31 @@ function craft(bot, ctx, target, state) {
       }
     }
   }
-  /* Parked (owner 2026-10-26, follow-up o95q): idle door upkeep is off —
-  // the bot cleared forest for doors nobody ordered. Tables still craft
-  // (above); a house owed a door now stalls honestly via bring-order
-  // crafting instead of regrowing it here. The o95q LLM/fun step regrows
-  // order-driven crafting from this block.
+  // neuc.41: a station elsewhere never lays the house table cell — with
+  // the door in hand (or none craftable yet) an owed cell gets a table.
+  // The table goes first (plan order, and the door needs a table to be
+  // made) — the demand-driven door below only runs when no table is owed.
+  if (!op && countItems(bot, (n) => n === 'crafting_table') === 0) {
+    let owed = false
+    try { owed = require('./build').houseTableOwed(bot, ctx.home, ctx.buildSkip) } catch (_) { owed = false }
+    if (owed) {
+      for (const [, n] of sortedWoods(planks)) {
+        if (n < 4) break
+        const found = recipes(bot, 'crafting_table', null)
+        if (found.length > 0) { op = { item: 'crafting_table', recipe: found[0], count: 1, table: null }; break }
+      }
+    }
+  }
+  // Demand-driven door (idkcraft-q9i0): idle upkeep stays off per owner
+  // 2026-10-26, but a house whose plan owes its door cell regrows exactly
+  // one door here instead of stalling the build forever. Pack doors still
+  // win (build places from hand); no owed door, no site, or a given-up
+  // door cell crafts nothing.
   if (!op) {
     const doorCount = countItems(bot, (n) => n.endsWith('_door'))
-    if (doorCount === 0 && tableBlock) {
+    let doorOwed = false
+    try { doorOwed = require('./build').houseDoorOwed(bot, ctx.home, ctx.buildSkip) } catch (_) { doorOwed = false }
+    if (doorCount === 0 && doorOwed && tableBlock) {
       if (tableUsable(bot, tableBlock, tablePos)) {
         ctx.craftDoorWalk = null
         for (const [wood, n] of sortedWoods(planks)) {
@@ -1344,23 +1361,9 @@ function craft(bot, ctx, target, state) {
           ctx.craftDoorWalk = null
           clearGoal(bot, ctx)
           stepFailed(ctx, 'table-unseeable')
-          try { console.error(`craft failed item=door error=table-unseeable at ${tablePos.x},${tablePos.y},${tablePos.z}`) } catch (_) { } // parked: log best-effort was here
+          try { console.error(`craft failed item=door error=table-unseeable at ${tablePos.x},${tablePos.y},${tablePos.z}`) } catch (_) { } // log best-effort was here
         }
         return // walk into reach, then craft on a later tick
-      }
-    }
-  }
-  */ // end parked idle door upkeep (owner 2026-10-26)
-  // neuc.41: a station elsewhere never lays the house table cell — with
-  // the door in hand (or none craftable yet) an owed cell gets a table.
-  if (!op && countItems(bot, (n) => n === 'crafting_table') === 0) {
-    let owed = false
-    try { owed = require('./build').houseTableOwed(bot, ctx.home, ctx.buildSkip) } catch (_) { owed = false }
-    if (owed) {
-      for (const [, n] of sortedWoods(planks)) {
-        if (n < 4) break
-        const found = recipes(bot, 'crafting_table', null)
-        if (found.length > 0) { op = { item: 'crafting_table', recipe: found[0], count: 1, table: null }; break }
       }
     }
   }

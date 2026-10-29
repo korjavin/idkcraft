@@ -495,6 +495,22 @@ function houseTableOwed(bot, home, skipped) {
   } catch (_) { return false }
 }
 
+// A house-owed door (idkcraft-q9i0): the demand-driven twin of
+// houseTableOwed — true while the plan's door cell stands unplaced and
+// ungiven-up, so craft regrows the door exactly when the build needs it
+// (idle door upkeep stays off per owner 2026-10-26).
+function houseDoorOwed(bot, home, skipped) {
+  try {
+    if (!home || !home.site) return false
+    const plan = blueprintFor(home)
+    const idx = plan.findIndex((c) => c && c.kind === 'door')
+    if (idx < 0) return false
+    if (Array.isArray(skipped) && skipped.includes(idx)) return false
+    const name = blockNameAt(bot, cellAbs(home, plan[idx]))
+    return name != null && !String(name).endsWith('_door')
+  } catch (_) { return false }
+}
+
 // The house table cell's coords when a crafting table stands in it, else
 // null (idkcraft-neuc.47). build claims home.table only on its NEXT tick,
 // but the facts read runs first: the tick after the table landed read
@@ -1374,6 +1390,7 @@ module.exports.clearOwed = clearOwed
 module.exports.holeOwed = holeOwed
 module.exports.entranceHoled = entranceHoled
 module.exports.houseTableOwed = houseTableOwed
+module.exports.houseDoorOwed = houseDoorOwed
 module.exports.houseTableAt = houseTableAt
 module.exports.countRemainingPlanks = countRemainingPlanks
 module.exports.cellDone = cellDone
