@@ -3,7 +3,7 @@
   {"tick":1,"kind":"owner","owner":"work"},
   {"tick":1,"kind":"step","value":"stay"},
   {"tick":1,"kind":"stepStatus","value":"running"},
-  {"tick":1,"kind":"chat","text":"next: staying inside (goal-fsm)"},
+  {"tick":1,"kind":"chat","text":"next: staying inside (night-rule)"},
   {"tick":1,"kind":"lastGoalKey","value":"stay"},
   {"tick":2,"kind":"owner","owner":"shelter"},
   {"tick":7,"kind":"lastGoalKey","value":"home-door"},

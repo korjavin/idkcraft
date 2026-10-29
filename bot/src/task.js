@@ -893,6 +893,308 @@ function onPlanAnswer(ctx, kind, state, seq, ans, err) {
   } catch (_) { /* a dropped answer parks on the next tick */ }
 }
 
+// Pack snapshot for the strategic pack delta (idkcraft-u19u phase 2):
+// the goalFacts counts the oqj5 wood-progress lesson needs, read twice
+// (fire time vs the previous fire's baseline on the episode memo).
+function stratPackOf(facts) {
+  try {
+    return {
+      logs: (facts && facts.logs) | 0,
+      planks: (facts && facts.planks) | 0,
+      food: (facts && facts.food) | 0,
+    }
+  } catch (_) {
+    return { logs: 0, planks: 0, food: 0 }
+  }
+}
+
+// Strategic prompt state (idkcraft-u19u phase 2): planState() + the §1.2
+// deltas (progressPct, packDelta vs the memo baseline, abilities, owed).
+// Reads only — the caller owns the memo writes — so it stays unit-testable
+// with a fake state. The stall-state inventory rides along as-is: it is
+// already capped at the menu-gating kinds (pickaxe/axe/sword/logs/planks/
+// cobble/coal/iron/torches/food/beds), never the full ~60-key goalFacts.
+function goalPromptState(bot, ctx, kind, done, total, state) {
+  const goal = require('./goal')
+  const base = planState(bot, ctx, kind, done, total, state, true)
+  const facts = goal.goalFacts(bot, ctx)
+  const d = typeof done === 'number' ? done : (state && state.done)
+  const t = typeof total === 'number' ? total : (state && state.total)
+  base.progressPct = (typeof d === 'number' && typeof t === 'number' && t > 0)
+    ? Math.max(0, Math.min(100, Math.round((d / t) * 100)))
+    : null
+  let prev = null
+  try {
+    prev = state && state.wd && state.wd.stratPack
+  } catch (_) {
+    prev = null
+  }
+  const pack = stratPackOf(facts)
+  base.packDelta = {
+    logs: pack.logs - ((prev && prev.logs) | 0),
+    planks: pack.planks - ((prev && prev.planks) | 0),
+    food: pack.food - ((prev && prev.food) | 0),
+  }
+  base.abilities = {
+    pickaxe: (facts && facts.pickWord) || 'no',
+    table: (facts && (facts.tablePlaced || facts.houseTable)) ? 'yes' : 'no',
+    food: (facts && typeof facts.food === 'number' && facts.food < 6) ? 'hungry' : 'ok',
+    sword: (facts && (facts.sword || 0) > 0) ? 'yes' : 'no',
+  }
+  base.owed = {
+    table: !!(facts && facts.tableOwed),
+    beds: (facts && facts.beds) || 'unknown',
+    door: (facts && (facts.door || 0) > 0) ? 'yes' : 'no',
+  }
+  return base
+}
+
+// Strategic goal choice (idkcraft-u19u phase 2): one planState-shaped call
+// over the watchdog option table, fired at the existing decision points
+// (never per tick) — the fire is async (the plan() pattern, never a
+// blocking ask), the FSM answers this tick, and the stored answer applies
+// at a later re-decide when the episode, facts text and offered menu still
+// match. Owned here (not goal.js) so the arbiter never requires the task
+// layer (oqul.1); goal.js decide() delegates through ctx.strategicChoose,
+// wired by taskTick below.
+
+// Episode memo home: the watchdog state (wd-adjacent) — progress clears it
+// via resetWdProgress/clearPlan, so no other lifecycle is needed. Created
+// lazily; only strat* fields are ever written, never the watchdog's own.
+function stratWd(state) {
+  try {
+    if (!state || typeof state !== 'object') return null
+    if (!state.wd || typeof state.wd !== 'object') state.wd = {}
+    return state.wd
+  } catch (_) {
+    return null
+  }
+}
+
+function stratFailReason(err) {
+  try {
+    if (err && err.name === 'TimeoutError') return 'timeout'
+    const msg = String((err && err.message) || err)
+    if (/^(jev|llm) http/.test(msg)) return 'http'
+    if (/^(jev|llm) missing/.test(msg)) return 'invalid'
+    if (/^(jev|llm) budget/.test(msg)) return 'budget'
+    return 'error'
+  } catch (_) {
+    return 'error'
+  }
+}
+
+function stratFail(wd, model, reason) {
+  try {
+    metrics.escalation.inc({ from: model, to: 'fsm', reason })
+  } catch (_) { /* counter best-effort */ }
+  try {
+    stratBackoff(wd, Date.now())
+  } catch (_) { /* backoff best-effort */ }
+}
+
+// Stored-answer resolver: drops answers for a replaced task state, a moved
+// memo key, or a moved-on goal — the stall they planned for is over.
+function onStrategicAnswer(ctx, kind, state, wd, key, goalId, generation, seq, ans, err) {
+  try {
+    if (!ctx || !ctx.task || ctx.task[kind] !== state) return
+    if (!wd || wd.stratKey !== key || wd.stratPending !== seq) return
+    wd.stratPending = null
+    const g = ctx.goal
+    if (!g || g.id !== goalId || g.generation !== generation) return
+    if (err || !ans || typeof ans.step !== 'string') {
+      wd.stratStep = null
+      stratFail(wd, wd.stratModel || 'model', err ? stratFailReason(err) : 'invalid')
+      return
+    }
+    wd.stratStep = ans.step
+    wd.stratConf = typeof ans.confidence === 'number' ? ans.confidence : null
+    wd.stratProbs = ans.probabilities && typeof ans.probabilities === 'object' ? ans.probabilities : null
+    wd.stratSource = (ans && typeof ans.source === 'string' && ans.source) || wd.stratModel || 'model'
+  } catch (_) { /* a dropped answer runs the FSM */ }
+}
+
+// Memo-hit consume: the answer is validated against the feasible menu at
+// consume time (re-checked NOW, not at fire). Out-of-menu, stale and failed
+// validations drop the answer and take the FSM with an escalation count —
+// never a forced step the menu cannot run.
+function consumeStrategic(bot, ctx, kind, state, wd, facts, goal, text, offered, fsm, model, fail) {
+  const step = wd.stratStep
+  const opt = offered.find((o) => o && o.id === step) || null
+  const drop = (reason) => {
+    wd.stratStep = null
+    return fail(reason)
+  }
+  // Unlock options (the *-far / house-* / bank set): step + unlock through
+  // the existing commit path when still feasible under the unlock — the
+  // window pins the next re-decides; this tick keeps the FSM.
+  if (opt && opt.unlock && opt.step) {
+    let ok = false
+    try {
+      const gopts = require('./goal-options')
+      ok = !!goal.registered(opt.step) && !!gopts.probeFeasible(bot, ctx, opt.step, opt.unlock)
+    } catch (_) {
+      ok = false
+    }
+    if (ok) {
+      try {
+        applyCommit(bot, ctx, kind, opt.id, opt.step, Date.now(), opt.unlock, opt.criterion)
+      } catch (_) { /* commit best-effort */ }
+      return { step: fsm, source: 'goal-fsm', fsm, model: null }
+    }
+    return drop('stale')
+  }
+  // park / ask-owner / hold-*: the watchdog owns those forks (§4.2) — the
+  // chooser only ever overrides a day work-menu pick.
+  if (opt && (opt.id === 'park' || opt.id === 'ask-owner' || String(opt.id).indexOf('hold-') === 0)) {
+    return drop('non-step')
+  }
+  let valid = false
+  try {
+    valid = typeof step === 'string' && !!goal.MENU[step] && step !== 'rest' &&
+      !!goal.MENU[step].feasible(facts, bot, ctx) && goal.registered(step)
+  } catch (_) {
+    valid = false
+  }
+  if (!valid) return drop(opt ? 'stale' : 'invalid')
+  // Low-confidence: the deterministic fallback, never a coin flip. Only a
+  // plain feasible step is expressible as a one-tick pick; anything else
+  // (or nothing) falls back to the FSM.
+  if (typeof wd.stratConf === 'number' && wd.stratConf < TASK_PLAN_MIN_CONF) {
+    let fb = null
+    try {
+      const hist = (state && state.wd && Array.isArray(state.wd.history)) ? state.wd.history : null
+      const held = new Set()
+      try {
+        const sf = ctx && ctx.stepFail
+        if (sf && typeof sf === 'object') {
+          for (const k of Object.keys(sf)) {
+            if (sf[k] && typeof sf[k].status === 'string' && sf[k].status.startsWith('failed:')) held.add(k)
+          }
+        }
+      } catch (_) { /* held best-effort */ }
+      fb = fallbackRank(kind, offered, hist, ctx && ctx.step, held)
+    } catch (_) {
+      fb = null
+    }
+    if (fb && fb.step && !fb.unlock && goal.MENU[fb.step] && fb.step !== 'rest') {
+      let ok = false
+      try {
+        ok = !!goal.MENU[fb.step].feasible(facts, bot, ctx) && goal.registered(fb.step)
+      } catch (_) {
+        ok = false
+      }
+      if (ok) {
+        if (fb.step !== fsm) {
+          try {
+            metrics.goalDisagreements.inc({ model: fb.step, fsm })
+          } catch (_) { /* counter best-effort */ }
+          try {
+            console.error(`goal disagree source=fallback model=${fb.step} fsm=${fsm} menu=${offered.map((o) => o.id).join(',')} facts=${text}`)
+          } catch (_) { /* log best-effort */ }
+        }
+        return { step: fb.step, source: 'fallback', fsm, model }
+      }
+    }
+    return drop('low-confidence')
+  }
+  const source = wd.stratSource || model
+  if (step !== fsm) {
+    try {
+      metrics.goalDisagreements.inc({ model: step, fsm })
+    } catch (_) { /* counter best-effort */ }
+    try {
+      console.error(`goal disagree source=${source} model=${step} fsm=${fsm} menu=${offered.map((o) => o.id).join(',')} facts=${text}`)
+    } catch (_) { /* log best-effort */ }
+  }
+  return { step, source, fsm, model }
+}
+
+// The task-owned strategic chooser: goal.js decide() delegates the
+// multi-option day work-menu branch here. Returns a choice, or null when
+// the table cannot be built (the caller falls through to the phase-1 ask
+// plug). Fires at most one plan() per episode state: the same key never
+// re-fires, and an in-flight call or a live backoff suppresses the fire —
+// the FSM answers those ticks.
+function strategicChoose(brain, facts, feasible, home, extra, fsm) {
+  const bot = extra && extra.bot
+  const ctx = extra && extra.ctx
+  const kind = goalKind(ctx)
+  if (kind !== 'castle' && kind !== 'house') return null
+  const state = ctx && ctx.task && ctx.task[kind]
+  if (!state || typeof state !== 'object') return null
+  if (!brain || typeof brain.plan !== 'function') return null
+  const wd = stratWd(state)
+  if (!wd) return null
+  const model = (brain && (brain.planner || brain.source || brain.name)) || 'model'
+  let gopts = null
+  try {
+    gopts = require('./goal-options')
+  } catch (_) {
+    return null
+  }
+  let offered = null
+  try {
+    offered = gopts.goalOptions(bot, ctx, kind)
+  } catch (_) {
+    return null
+  }
+  if (!Array.isArray(offered) || offered.length === 0) return null
+  let goal = null
+  try {
+    goal = require('./goal')
+  } catch (_) {
+    return null
+  }
+  const text = goal.goalText(facts, home)
+  const g = ctx && ctx.goal
+  const key = `${(g && g.id) || '?'}:${(g && typeof g.generation === 'number') ? g.generation : '?'}|${text}|${offered.map((o) => o.id).join(',')}`
+  const fail = (reason) => {
+    stratFail(wd, model, reason)
+    return { step: fsm, source: 'fsm-fallback', fsm, model }
+  }
+  // Memo hit: same episode, same facts text, same offered menu.
+  if (wd.stratKey === key && typeof wd.stratStep === 'string' && wd.stratStep) {
+    return consumeStrategic(bot, ctx, kind, state, wd, facts, goal, text, offered, fsm, model, fail)
+  }
+  // Same key with no stored answer (in flight, or a fire that already
+  // failed on this state): no second call.
+  if (wd.stratKey === key) return { step: fsm, source: 'goal-fsm', fsm, model: null }
+  // Cost guards: one call in flight per episode, and the backoff window.
+  if (wd.stratPending) return { step: fsm, source: 'goal-fsm', fsm, model: null }
+  try {
+    if (Date.now() < (wd.stratBackoffUntil || 0)) return { step: fsm, source: 'goal-fsm', fsm, model: null }
+  } catch (_) { /* guard best-effort */ }
+  let prompt = null
+  let instructions = ''
+  try {
+    prompt = goalPromptState(bot, ctx, kind, state.done, state.total, state)
+    instructions = `${gopts.planInstructions(kind, ctx, state.done, state.total)} Prefer the option that moves the progress metric this window; park/ask-owner only when no option can.`
+  } catch (_) {
+    return null
+  }
+  const criteria = {}
+  for (const o of offered) criteria[o.id] = o.criterion
+  if (Object.keys(criteria).length === 0) return null
+  const goalId = g && g.id
+  const generation = g && g.generation
+  const seq = (wd.stratSeq = (wd.stratSeq || 0) + 1)
+  wd.stratPending = seq
+  wd.stratKey = key
+  wd.stratModel = model
+  try {
+    wd.stratPack = stratPackOf(facts)
+  } catch (_) { /* baseline best-effort */ }
+  const req = { state: prompt, instructions, criteria }
+  Promise.resolve()
+    .then(() => brain.plan(req))
+    .then(
+      (ans) => onStrategicAnswer(ctx, kind, state, wd, key, goalId, generation, seq, ans, null),
+      (err) => onStrategicAnswer(ctx, kind, state, wd, key, goalId, generation, seq, null, err || new Error('strategic plan failed')),
+    )
+  return { step: fsm, source: 'goal-fsm', fsm, model: null }
+}
+
 // Night hold (idkcraft-vd93): from dusk to home arrival the night rule
 // owns the body — a running night step, or dusk/night whose ordinary-menu
 // answer is a night step. The planner must not pin over it; the arbiter
@@ -1013,6 +1315,19 @@ function clearPlan(state) {
       state.planTried = false
       state.planPending = null
       state.planAnswer = null
+      // Strategic-chooser memo (idkcraft-u19u phase 2): same lifecycle as
+      // the plan it shadows — progress ends the stall it was fired for.
+      const wd = state.wd
+      if (wd && typeof wd === 'object') {
+        wd.stratKey = null
+        wd.stratPack = null
+        wd.stratStep = null
+        wd.stratConf = null
+        wd.stratProbs = null
+        wd.stratSource = null
+        wd.stratModel = null
+        wd.stratPending = null
+      }
     }
   } catch (_) { /* clear best-effort */ }
 }
@@ -1044,8 +1359,30 @@ function resetWdProgress(wd) {
       wd.rounds = 0
       wd.lowConf = 0
       wd.lowConfGoal = null
+      // Strategic-chooser memo (idkcraft-u19u phase 2): progress ends the
+      // episode the stored answer was fired for.
+      wd.stratKey = null
+      wd.stratPack = null
+      wd.stratStep = null
+      wd.stratConf = null
+      wd.stratProbs = null
+      wd.stratSource = null
+      wd.stratModel = null
+      wd.stratPending = null
     }
   } catch (_) { /* reset best-effort */ }
+}
+
+// Strategic-chooser backoff (idkcraft-u19u phase 2): the same 30 s doubling
+// to 5 min as the watchdog transport backoff, on its own fields so a
+// chooser failure never delays the deadlock-escalation fire.
+function stratBackoff(wd, now) {
+  try {
+    if (!wd || typeof wd !== 'object') return
+    const next = wd.stratBackoffMs ? Math.min(wd.stratBackoffMs * 2, GOAL_BACKOFF_MAX_MS) : GOAL_BACKOFF_MIN_MS
+    wd.stratBackoffMs = next
+    wd.stratBackoffUntil = (typeof now === 'number' ? now : Date.now()) + next
+  } catch (_) { /* backoff best-effort */ }
 }
 
 // Watchdog menu (.22): the option table ids (plain steps + costed
@@ -2691,6 +3028,12 @@ function castlePlacedProgressed(state, cur) {
 function taskTick(bot, ctx, now = Date.now()) {
   try {
     if (!ctx) return
+    // Strategic chooser wiring (idkcraft-u19u phase 2): goal.js decide()
+    // delegates the multi-option day work-menu branch through ctx, so the
+    // arbiter never requires the task layer (oqul.1).
+    try {
+      ctx.strategicChoose = strategicChoose
+    } catch (_) { /* wiring best-effort */ }
     // Park timers first (vmzq.3): wall-clock, independent of the stall
     // eligibility below. May resetTask, so before the state init.
     maybeResume(bot, ctx, now)
@@ -3259,4 +3602,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { castleCurrent, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan }
+module.exports = { castleCurrent, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose }
