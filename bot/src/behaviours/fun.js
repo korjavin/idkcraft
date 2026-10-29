@@ -159,6 +159,57 @@ function castleQuiet(facts) {
 const FUN_IDLE_MS = 20 * 60 * 1000
 const IDLE_STEPS = new Set(['rest', 'explore', 'fun', 'stay', 'shelter'])
 
+// Blocked-bypass (idkcraft-u02t): the arbiter menu captured through
+// registerInto (injected, never required — a behaviour requiring the
+// arbiter is a forbidden edge, lazy or not). Null until registration;
+// without it the bypass stays off and the owed vetoes apply as before.
+let menuMod = null
+// Steps that are idleness itself, never productive work: the bypass fires
+// exactly when none of the other menu steps could run.
+const BYPASS_IDLE = new Set(['fun', 'rest', 'explore'])
+
+// True when no productive menu step could run now — the FSM would pick
+// rest-only or an explore with nothing new: every work step is absent
+// because it is held, parked, latched or failed, NOT because it finished
+// (finished work reads clean in facts and never reaches this gate, so no
+// extra done-vs-blocked distinction is needed here). Mirrors menuNames'
+// runnable test exactly (feasible AND registered AND NOT failHolds on the
+// current text — u02t R2 core-2: a step held after failing on this text
+// is out of the arbiter menu, so it must not count as runnable here).
+// The text is the same call decide makes (goal.js).
+function menuBlocked(facts, bot, ctx) {
+  try {
+    const menu = menuMod && menuMod.MENU
+    if (!menu) return false
+    const registered = menuMod && typeof menuMod.registered === 'function' ? menuMod.registered : null
+    const failHoldsFn = menuMod && typeof menuMod.failHolds === 'function' ? menuMod.failHolds : null
+    let text = null
+    try {
+      text = menuMod && typeof menuMod.goalText === 'function' ? menuMod.goalText(facts, ctx && ctx.home) : null
+    } catch (_) {
+      text = null
+    }
+    for (const name of Object.keys(menu)) {
+      if (BYPASS_IDLE.has(name)) continue
+      let ok = false
+      try {
+        ok = !!menu[name].feasible(facts, bot, ctx) && (!registered || registered(name) !== false)
+      } catch (_) {
+        ok = false
+      }
+      if (ok && text != null && failHoldsFn) {
+        try {
+          if (failHoldsFn(ctx, name, text, bot)) ok = false
+        } catch (_) { /* hold unreadable: the step counts as runnable */ }
+      }
+      if (ok) return false
+    }
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 // Precise idle (o95q R2): the joke runs only when no productive step
 // could fire AND the body has idled through a sustained stretch of rest /
 // explore picks — a model brain must never see fun alongside real work,
@@ -212,26 +263,42 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
       } catch (_) { /* stamp best-effort */ }
     }
     if (facts.time !== 'day') return false
-    if (!castleQuiet(facts)) return false
+    // Blocked-castle bypass (u02t R2 core-1): a 'blocked' castle never
+    // progresses, so with a rest-only menu the joke runs on the idle pins
+    // alone — the bead's motivating case (bookshelf chain). Any other
+    // active castle word still vetoes, and a runnable castle leg keeps
+    // the veto through menuBlocked.
+    if (!castleQuiet(facts) && !(facts.castle === 'blocked' && menuBlocked(facts, bot, ctx))) return false
     if (facts.home !== 'built') return false
     if (facts.known === 'near') return false
-    if (facts.haul === 'waiting') return false
+    const owedHaul = facts.haul === 'waiting'
     // Stockpile's exact complement (o95q R5.1): a chest to adopt/place,
     // bankable surplus, or finished goods awaiting handover all belong
     // to the banker, never to the joke.
-    if (facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')) return false
+    const owedChest = facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')
     if (facts.pinned && facts.pinned !== 'none') return false
     // u19u: owed beds demoted from menu veto to classifier criterion text
     // (FUN_CRITERION below), inert until a tick ask is wired (prod brain
     // has no ask(); FSM rank decides meantime) — never vetoed either way.
-    if (facts.gear !== 'done' && facts.gear !== 'hand') return false
-    if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || facts.rearm) return false
-    if (upgradeDue(bot)) return false
-    if ((facts.scaffold || 0) < SCAFFOLD_LOW) return false
-    if ((facts.logs || 0) >= NEED_LOGS) return false
-    if ((facts.table || 0) <= 0 && (facts.maxPlanks || 0) >= 4 && ((!facts.tablePlaced && !facts.houseTable) || facts.tableOwed)) return false
-    if ((facts.door || 0) <= 0 && facts.tablePlaced && (facts.maxPlanks || 0) >= 6) return false
-    if (lightDue(bot, ctx, facts)) return false
+    // Blocked-bypass (idkcraft-u02t): the owed-work clauses below are one
+    // boolean. When the menu holds no runnable productive step — every
+    // work step held, parked, latched or failed, the FSM down to rest-only
+    // or an explore with nothing new — the vetoes are skipped and the
+    // joke runs on the idle pins alone (the castle never completes in
+    // practice, so nominally-owed work would otherwise starve fun
+    // forever). While any productive step could run, the vetoes stand, so
+    // the joke never cannibalizes real work. Owed clauses stay registered
+    // as STEP_CRITERIA tiebreak weight for a future tick ask.
+    const owedWork = owedHaul || owedChest ||
+      (facts.gear !== 'done' && facts.gear !== 'hand') ||
+      ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || facts.rearm) ||
+      upgradeDue(bot) ||
+      ((facts.scaffold || 0) < SCAFFOLD_LOW) ||
+      ((facts.logs || 0) >= NEED_LOGS) ||
+      ((facts.table || 0) <= 0 && (facts.maxPlanks || 0) >= 4 && ((!facts.tablePlaced && !facts.houseTable) || facts.tableOwed)) ||
+      ((facts.door || 0) <= 0 && facts.tablePlaced && (facts.maxPlanks || 0) >= 6) ||
+      lightDue(bot, ctx, facts)
+    if (owedWork && !menuBlocked(facts, bot, ctx)) return false
     if (!ctx || ctx.paused) return false
     if (ctx.bring || ctx.lead || ctx.comehome || ctx.gocastle) return false
     if (ctx.flat && !ctx.flat.parked) return false
@@ -708,6 +775,7 @@ async function run(bot, ctx) {
 module.exports = run
 module.exports.run = run
 module.exports.funFeasible = funFeasible
+module.exports.menuBlocked = menuBlocked
 module.exports.pickAct = pickAct
 module.exports.availActs = availActs
 module.exports.validateFunOffer = validateFunOffer
@@ -743,11 +811,12 @@ module.exports.FUN_IDLE_MS = FUN_IDLE_MS
 // behaviour requiring the arbiter is a forbidden edge, lazy or not).
 // Idempotent: call from the ticker entry and from tests.
 const FUN_VERB = 'having a little fun'
-const FUN_CRITERION = 'time is day, the house stands finished, nothing known nearby, and the pack holds junk or cheap mats (beds owed weighs against the joke): play a tiny rare joke'
+const FUN_CRITERION = 'time is day, the house stands finished, nothing known nearby, and the pack holds junk or cheap mats (beds owed weighs against the joke, as does other owed work — gear, table, light, haul — while any of it can run; when every work step is held, parked, latched or failed the joke runs on the idle pins alone): play a tiny rare joke'
 const FUN_EFFECT = 'plays a tiny rare joke with junk or cheap mats'
 function registerInto(goalMod, constsMod) {
   try {
     if (!goalMod || !goalMod.MENU || goalMod.MENU.fun) return
+    menuMod = goalMod // u02t blocked-bypass: capture the injected menu (see menuBlocked)
     goalMod.MENU.fun = {
       feasible: (facts, bot, ctx) => {
         try {

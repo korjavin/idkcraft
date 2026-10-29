@@ -119,7 +119,11 @@ describe('fun gating (o95q idle-only)', () => {
     const b = () => fakeBot(dirt20)
     assert.equal(goal.MENU.fun.feasible(facts({ time: 'night' }), b(), idleCtx()), false)
     assert.equal(goal.MENU.fun.feasible(facts({ time: 'dusk' }), b(), idleCtx()), false)
-    assert.equal(goal.MENU.fun.feasible(facts({ castle: 'blocked' }), b(), idleCtx()), false)
+    // u02t: a stuck ('blocked') castle with a rest-only menu no longer
+    // vetoes (release covered in fun-blocked-u02t.test.js) — the veto
+    // below bites while work can run, beds owed-but-runnable keeping
+    // the menu open.
+    assert.equal(goal.MENU.fun.feasible(facts({ castle: 'blocked', beds: 'none' }), b(), idleCtx()), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { bring: {}, ...idleCtx() }), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { lead: {}, ...idleCtx() }), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { comehome: {}, ...idleCtx() }), false)
@@ -157,6 +161,9 @@ describe('fun gating (o95q idle-only)', () => {
     assert.equal(goal.MENU.fun.feasible(facts(), idle(), idleCtx()), true)
     // Every productive alternative vetoes, even with mats on hand —
     // each checked against an already-idle body so only that gate bites.
+    // u02t: beds owed-but-runnable rides along so the menu is never
+    // blocked here — the vetoes below bite while work can run; the
+    // blocked-menu release is covered in fun-blocked-u02t.test.js.
     for (const over of [
       { home: 'site' }, { home: 'none' }, { known: 'near' },
       { haul: 'waiting' }, { surplus: 'yes' }, { pinned: 'craft' },
@@ -165,7 +172,7 @@ describe('fun gating (o95q idle-only)', () => {
       { scaffold: 0 },
       { table: 0, maxPlanks: 4, tableOwed: true },
       { door: 0, tablePlaced: true, maxPlanks: 6 },
-    ]) assert.equal(goal.MENU.fun.feasible(facts(over), idle(), idleCtx()), false, JSON.stringify(over))
+    ]) assert.equal(goal.MENU.fun.feasible(facts({ beds: 'none', ...over }), idle(), idleCtx()), false, JSON.stringify(over))
   })
   it('owed beds no longer veto the joke (u19u classifier demotion)', () => {
     const idle = () => fakeBot([{ name: 'dirt', count: 20 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }])
@@ -200,7 +207,10 @@ describe('fun gating (o95q idle-only)', () => {
   it('a wooden pick plus stone chain belongs to equip, not whimsy', () => {
     const wood = fakeBot([{ name: 'wooden_pickaxe', count: 1 }, { name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }, { name: 'dirt', count: 16 }])
     assert.equal(fun.upgradeDue(wood), true)
-    assert.equal(goal.MENU.fun.feasible(facts({ pickaxe: 1, sword: 1 }), wood, idleCtx()), false)
+    // u02t: beds owed-but-runnable keeps the menu unblocked, so the
+    // upgrade veto bites while work can run (blocked-menu release is
+    // covered in fun-blocked-u02t.test.js).
+    assert.equal(goal.MENU.fun.feasible(facts({ pickaxe: 1, sword: 1, beds: 'none' }), wood, idleCtx()), false)
     const stone = fakeBot([{ name: 'stone_pickaxe', count: 1 }, { name: 'dirt', count: 8 }])
     assert.equal(fun.upgradeDue(stone), false)
   })
