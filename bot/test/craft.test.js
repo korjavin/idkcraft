@@ -186,6 +186,9 @@ describe('craft step', () => {
       bot.entity.position = pos(20, 64, 0)
       bot.blockAt = (p) => {
         if (p.y === 63) return holed && p.x === 3 && p.z === -1 ? { name: 'air', boundingBox: 'empty' } : { name: 'dirt', boundingBox: 'block' }
+        // q9i0: the v2 door cell already holds a door — nothing owed, so the
+        // demand-driven branch stays quiet like the old parked block did.
+        if (p.y === 64 && p.x === 3 && p.z === 0) return { name: 'oak_door', boundingBox: 'block' }
         return { name: 'crafting_table', boundingBox: 'block' }
       }
       return bot
@@ -264,6 +267,72 @@ describe('craft step', () => {
     assert.deepEqual(ghostBot.calls.craft[0].recipe, recipeFor('crafting_table'))
     assert.equal(ghostBot.calls.setGoal, 0) // rebuilds, never walks to the ghost
     ghostBot.restoreError()
+  })
+
+  it('(q9i0-a) a house-owed door crafts exactly one door at a usable table', async () => {
+    // Demand-driven (not idle upkeep): the v1 plan owes its door cell,
+    // a placed table stands in reach, 6 planks on hand.
+    const home = { site: pos(0, 64, 0), table: pos(2, 64, 0) } // v1 door cell at (1, 64, 0)
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    bot.entity.position = pos(0, 64, 0)
+    bot.blockAt = (p) => {
+      if (p.y === 64 && p.x === 1 && p.z === 0) return { name: 'air', boundingBox: 'empty' } // door cell unplaced
+      if (p.y === 64 && p.x === 4 && p.z === 1) return { name: 'crafting_table', boundingBox: 'block' } // table cell stands
+      if (p.y === 64 && p.x === 2 && p.z === 0) return { name: 'crafting_table', boundingBox: 'block' } // the placed station
+      return { name: 'air', boundingBox: 'empty' }
+    }
+    craft(bot, freshCtx(home), null, {})
+    await untilCrafts(bot, 1)
+    assert.equal(bot.calls.craft.length, 1)
+    assert.deepEqual(bot.calls.craft[0].recipe, recipeFor('oak_door'))
+    assert.equal(bot.calls.craft[0].count, 1)
+    bot.restoreError()
+  })
+
+  it('(q9i0-b) a door in hand beats crafting: nothing owed from the pack', async () => {
+    const home = { site: pos(0, 64, 0), table: pos(2, 64, 0) }
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }, { name: 'oak_door', count: 1 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    bot.entity.position = pos(0, 64, 0)
+    bot.blockAt = (p) => {
+      if (p.y === 64 && p.x === 1 && p.z === 0) return { name: 'air', boundingBox: 'empty' }
+      return { name: 'crafting_table', boundingBox: 'block' }
+    }
+    const ctx = freshCtx(home)
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0, 'pack door wins, no regrow')
+    assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
+  })
+
+  it('(q9i0-c) a standing door crafts nothing: idle upkeep stays off', async () => {
+    // The owner 2026-10-26 rule survives: with the door cell placed,
+    // 6+ planks and a usable table still craft no door.
+    const home = { site: pos(0, 64, 0), table: pos(2, 64, 0) }
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    bot.entity.position = pos(0, 64, 0)
+    bot.blockAt = (p) => {
+      if (p.y === 64 && p.x === 1 && p.z === 0) return { name: 'oak_door', boundingBox: 'block' } // door standing
+      return { name: 'crafting_table', boundingBox: 'block' }
+    }
+    const ctx = freshCtx(home)
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0, 'no idle door while none owed')
+    assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
   })
 
   it('(neuc.41) a roadside claim never stops the house table: the empty table cell crafts one', async () => {

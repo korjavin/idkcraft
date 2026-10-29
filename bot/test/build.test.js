@@ -885,7 +885,7 @@ describe('xoj fresh-site menu deadlock: build starts at the table without the do
     assert.equal(goal.MENU.build.feasible(facts, bot, ctx), false)
   })
 
-  it('chain parked: build lays the table -> craft skips the door -> build stalls honestly (owner 2026-10-26)', async () => {
+  it('chain demand-driven: build lays the table -> craft regrows the owed door -> build places it (q9i0; idle upkeep stays off)', async () => {
     const world = makeWorld()
     const items = [
       { name: 'oak_planks', count: 45 },
@@ -913,26 +913,27 @@ describe('xoj fresh-site menu deadlock: build starts at the table without the do
     build(bot, ctx, null, null) // claims home.table, approaches the next cell
     assert.ok(ctx.home.table, 'table claimed once it stands')
 
-    // 2. parked (owner 2026-10-26): the placed table no longer unlocks an
-    // idle door craft. craft still runs (the door clause keeps it feasible)
-    // but ends done with nothing — the EXPECTED honest stall.
+    // 2. q9i0: the placed table unlocks exactly one door craft while the
+    // plan owes its door cell — demand-driven, not idle upkeep.
     const placedFacts = goal.goalFacts(bot, ctx)
     assert.equal(placedFacts.tablePlaced, true)
     assert.equal(goal.MENU.craft.feasible(placedFacts, bot, ctx), true)
     craft(bot, ctx, null, {})
     await settle()
-    assert.equal(crafted.length, 0, 'parked: no idle door at the placed table')
-    assert.ok(!ctx.craftInFlight, 'parked: no in-flight craft without an op')
+    assert.equal(crafted.length, 1, 'q9i0: the owed door regrows once')
+    assert.equal(crafted[0].recipe.result.name, 'oak_door')
+    assert.ok(!ctx.craftInFlight, 'q9i0: no in-flight craft after the op')
 
-    // 3. doorless with only the door cell open: build stays shut — the house
-    // stalls honestly on the door until a bring order delivers one.
+    // 3. doorless with only the door cell open, door now in hand: build
+    // opens and places it — the stall is gone.
     paintHouse(world, ctx.home)
     world.set(s.x + 3, s.y, s.z, 'air') // only the door cell is open
     bot.entity.position = pos(s.x + 3, s.y, s.z + 1) // next to the doorway
     const doorFacts = goal.goalFacts(bot, ctx)
-    assert.equal(doorFacts.door, 0)
-    assert.ok(!goal.MENU.build.feasible(doorFacts, bot, ctx), 'parked: honest door stall')
-    assert.equal(world.get(s.x + 3, s.y, s.z), 'air')
+    assert.equal(doorFacts.door, 1, 'q9i0: the regrown door is counted')
+    assert.ok(goal.MENU.build.feasible(doorFacts, bot, ctx), 'q9i0: build opens with the door owed and in hand')
+    for (let i = 0; i < 6 && world.get(s.x + 3, s.y, s.z) !== 'oak_door'; i++) { build(bot, ctx, null, null); await settle() }
+    assert.equal(world.get(s.x + 3, s.y, s.z), 'oak_door', 'q9i0: the door lands in its cell')
   })
 })
 

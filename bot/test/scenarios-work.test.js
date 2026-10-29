@@ -489,7 +489,7 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
     }
   }
 
-  it('parked: table lays, no idle door crafts, the door gap stalls honestly (owner 2026-10-26)', async () => {
+  it('q9i0: table lays, the owed door regrows, the gap closes (idle upkeep stays off)', async () => {
     const world = makeWorld()
     const items = [
       { name: 'oak_planks', count: 45 },
@@ -530,21 +530,24 @@ describe('xoj: fresh site builds instead of deadlocking the menu', () => {
       assert.ok(ctx.home.table, 'table placed and claimed')
       assert.equal(world.get(s.x + 5, s.y, s.z + 1), 'crafting_table')
 
-      // 2. parked: ring done elsewhere, door cell next, no door — craft
-      // runs (the door clause keeps it feasible) but crafts nothing idle.
+      // 2. q9i0: ring done elsewhere, door cell next, no door — craft
+      // regrows exactly one owed door (demand-driven, not idle upkeep).
       paintHouse(world, ctx.home)
       world.set(s.x + 3, s.y, s.z, 'air') // only the door cell is open
       t = 0
-      for (; t < 20; t++) await step()
-      assert.equal(crafted.length, 0, `parked: no idle door: ${actions.join(',')}`)
-      assert.ok(!items.some((i) => i.name === 'oak_door'), 'no door arrives unprompted')
+      for (; t < 20 && crafted.length < 1; t++) await step()
+      assert.equal(crafted.length, 1, `q9i0: one owed door regrows: ${actions.join(',')}`)
+      assert.equal(crafted[0].recipe.result.name, 'oak_door')
+      assert.ok(items.some((i) => i.name === 'oak_door'), 'the regrown door lands in the pack')
 
-      // 3. the EXPECTED honest stall: the door cell stays open and build
-      // stays infeasible on the gap until a bring order delivers the door.
-      assert.equal(world.get(s.x + 3, s.y, s.z), 'air', 'door cell still open')
-      const stallFacts = goal.goalFacts(bot, ctx)
-      assert.equal(stallFacts.door, 0)
-      assert.ok(!goal.MENU.build.feasible(stallFacts, bot, ctx), 'parked: honest door stall')
+      // 3. with the door owed and in hand, build opens and closes the gap.
+      assert.equal(world.get(s.x + 3, s.y, s.z), 'air', 'door cell still open before the fix')
+      const doorFacts = goal.goalFacts(bot, ctx)
+      assert.equal(doorFacts.door, 1)
+      assert.ok(goal.MENU.build.feasible(doorFacts, bot, ctx), 'q9i0: build opens on the owed door cell')
+      t = 0
+      for (; t < 30 && world.get(s.x + 3, s.y, s.z) !== 'oak_door'; t++) await step()
+      assert.equal(world.get(s.x + 3, s.y, s.z), 'oak_door', 'q9i0: the door gap closes')
     } finally {
       cap.release()
       ticker.destroy()
