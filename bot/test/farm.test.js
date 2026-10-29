@@ -86,7 +86,9 @@ function mockBot({ cells = {}, items = [], sheep = null } = {}) {
     activateItem: async () => {
       ops.useItem.push(bot.heldItem ? bot.heldItem.name : 'empty')
       // Bucket use places water at the aimed cell (look point), like the
-      // client use path on both bodies.
+      // client use path on both bodies. noPour spills: the use fires but no
+      // water lands (the honest-miss branch).
+      if (bot.noPour) return
       if (bot.heldItem && bot.heldItem.name === 'water_bucket' && bot.lookPoint) {
         const k = `${Math.floor(bot.lookPoint.x)},${Math.floor(bot.lookPoint.y)},${Math.floor(bot.lookPoint.z)}`
         world.set(k, 'water')
@@ -207,12 +209,67 @@ describe('farm legs', () => {
       },
       items: [{ name: 'water_bucket', count: 1 }, { name: 'wooden_hoe', count: 1 }],
     })
-    bot.entity.position = { x: 2, y: 64, z: 2 }
+    bot.entity.position = { x: 2, y: 64, z: 1 }
     const ctx = ctxOf()
     for (let t = 0; t < 14 && ctx.stepStatus === 'running'; t++) await farm(bot, ctx)
     assert.ok(bot.ops.dig.includes('dirt'), `trench dig missing: ${bot.ops.dig}`)
     assert.ok(bot.ops.useItem.includes('water_bucket'), `pour missing: ${bot.ops.useItem}`)
     assert.equal(bot.world.get('3,64,0'), 'water')
+  })
+
+  it('counts watering only when the water reads back', async () => {
+    const bot = mockBot({
+      cells: {
+        '2,64,0': { name: 'farmland', props: { moisture: 0 } },
+        '3,64,0': 'dirt',
+        '3,63,0': 'stone',
+      },
+      items: [{ name: 'water_bucket', count: 1 }],
+    })
+    bot.entity.position = { x: 2, y: 64, z: 1 }
+    bot.noPour = true
+    const ctx = ctxOf()
+    const lines = []
+    const orig = console.log
+    console.log = (l) => { lines.push(String(l)) }
+    try {
+      for (let t = 0; t < 14 && ctx.stepStatus === 'running'; t++) await farm(bot, ctx)
+    } finally {
+      console.log = orig
+    }
+    assert.equal(bot.world.get('3,64,0'), 'air')
+    assert.ok(bot.ops.useItem.includes('water_bucket'), 'use never fired')
+    assert.ok(!lines.some((l) => l.startsWith('farm water trench')), `dishonest water line: ${lines}`)
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('struck cells survive the pick within TTL, then release', () => {
+    const fresh = { step: 'farm', stepStatus: 'running', farmStruck: new Set(['9,9,9']), farmStruckAt: Date.now() }
+    assert.ok(farm.farmState(fresh).struck.has('9,9,9'))
+    const stale = { step: 'farm', stepStatus: 'running', farmStruck: new Set(['9,9,9']), farmStruckAt: Date.now() - farm.STRUCK_TTL_MS - 1 }
+    assert.ok(!farm.farmState(stale).struck.has('9,9,9'))
+  })
+
+  it('resets per pick: a second run re-tills capped cells', async () => {
+    // All 8 soils inside one-bot reach (the mock body never walks) and
+    // inside one water cell's hydration box.
+    const cells = { '2,64,2': 'water' }
+    for (const [x, z] of [[1, 0], [2, 0], [3, 0], [1, 1], [2, 1], [3, 1], [1, -1], [2, -1]]) {
+      cells[`${x},64,${z}`] = 'grass_block'
+    }
+    const bot = mockBot({
+      cells,
+      items: [{ name: 'wooden_hoe', count: 1 }, { name: 'wheat_seeds', count: 20 }],
+    })
+    const tills = () => bot.ops.use.filter((u) => u === 'wooden_hoe>grass_block').length
+    const ctx1 = ctxOf()
+    for (let t = 0; t < 60 && ctx1.stepStatus === 'running'; t++) await farm(bot, ctx1)
+    assert.equal(ctx1.stepStatus, 'done')
+    assert.equal(ctx1.farm, null)
+    assert.equal(tills(), 4)
+    const ctx2 = ctxOf()
+    for (let t = 0; t < 60 && ctx2.stepStatus === 'running'; t++) await farm(bot, ctx2)
+    assert.equal(tills(), 8)
   })
 
   it('dedupes the walk goal per unchanged target', async () => {

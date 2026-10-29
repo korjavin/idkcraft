@@ -38,10 +38,15 @@ const SEED_DIG_CAP = 4 // grass-tuft digs per step for first seeds
 const MAX_MS = 180000 // wall-time cap per step (3 min), then done
 const LURE_TICKS = 6 // ticks holding wheat by the sheep before done
 const POUR_SETTLE_TICKS = 2 // ticks for the bucket water to land before verifying
+const POUR_ARRIVE = 2 // pour only this close: past ~2.1 blocks the view ray
+// hits the pit rim and the water lands on the field, flooding the crops
 const FEED_RADIUS = 24 // sheep farther than the farm scans never pull the step
 const FEED_COOLDOWN_MS = 600000 // a fed flock reads fed for 10 min (wheat is
 // never consumed on V2: no activateEntity served, so the lure alone must
 // not re-pick the step every tick and starve explore/rest)
+const STRUCK_TTL_MS = 600000 // struck cells stay struck across picks for
+// 10 min: a dry untrenchable farmland must not re-pull the step every other
+// tick, and stale strikes heal when the world changes
 
 // Hoeable soil (minimal: one hoe use -> farmland, no two-step kinds).
 function isTillable(name) {
@@ -238,6 +243,15 @@ function farmState(ctx) {
     try { ctx.farm = f } catch (_) { /* stateless */ }
   }
   if (!(f.struck instanceof Set)) f.struck = new Set()
+  // Re-adopt fresh cross-pick strikes (finish() parks them on the ctx):
+  // the per-pick reset must drop the caps but not the memory of cells that
+  // struck out, or an untrenchable farmland re-pulls the step every tick.
+  try {
+    if (f.struck.size === 0 && ctx && ctx.farmStruck instanceof Set &&
+        typeof ctx.farmStruckAt === 'number' && Date.now() - ctx.farmStruckAt < STRUCK_TTL_MS) {
+      f.struck = ctx.farmStruck
+    }
+  } catch (_) { /* strikes best-effort */ }
   if (typeof f.t0 !== 'number') f.t0 = Date.now()
   return f
 }
@@ -245,21 +259,31 @@ function farmState(ctx) {
 // Walk-or-arrived (reforest 6p4l shape): issue the goal once per target,
 // never re-issue an unchanged target every tick (Baritone restarts A* on
 // every fresh goto). Returns true while walking (caller returns), false
-// on arrival. Arrival is judged on the goal's own cell within REACH, so a
-// satisfied GoalNear always reads arrived.
-function walkTo(bot, ctx, f, leg, p, range) {
+// on arrival. Arrival is judged on the goal's own cell within `range`
+// (default REACH), so a satisfied goal always reads arrived. The issued
+// goal range defaults to WALK_RANGE; the pour passes 1 so the bot stands
+// close enough for the view ray to enter the pit.
+function walkTo(bot, ctx, f, leg, p, range, goalRange) {
   const bp = botPos(bot)
   if (!bp) return true // no position: stay put this tick, rescan next
   const cell = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }
-  const gk = `${leg}:${cell.x},${cell.y},${cell.z}`
+  const gr = goalRange || WALK_RANGE
+  const gk = `${leg}:${gr}:${cell.x},${cell.y},${cell.z}`
   if (Math.hypot(cell.x + 0.5 - bp.x, cell.y - bp.y, cell.z + 0.5 - bp.z) <= (range || REACH)) {
     f.walkKey = null
     return false
   }
   if (!ctx || ctx.lastGoalKey !== gk) {
-    issueGoal(bot, ctx, new goals.GoalNear(cell.x, cell.y, cell.z, WALK_RANGE), gk, false)
+    issueGoal(bot, ctx, new goals.GoalNear(cell.x, cell.y, cell.z, gr), gk, false)
     f.walkKey = keyOf(cell)
-    f.still = 0
+    // Stall patience survives nearby re-targets within one leg (a strolling
+    // sheep changes cells every few seconds): a leg switch or a far move
+    // restarts the clock, so an unreachable target still strikes instead of
+    // resetting forever.
+    const prev = f.walkLeg === leg ? f.walkCell : null
+    f.walkLeg = leg
+    f.walkCell = cell
+    if (!prev || Math.hypot(cell.x - prev.x, cell.y - prev.y, cell.z - prev.z) > WALK_RANGE) f.still = 0
   }
   return true
 }
@@ -324,6 +348,9 @@ function farmFeasible(facts, bot, ctx) {
     }
     // First seeds: tufts to break while nothing is planted yet.
     if (countSeeds(bot) <= 0 && nearestCell(bot, ctx, ['short_grass', 'grass', 'tall_grass', 'fern', 'large_fern'], FARM_RADIUS, { forDig: true })) return true
+    // Tilling needs seeds in the pack (the tuft leg above makes the first
+    // ones): seedless tilling would pave the whole bank 4 cells per pick.
+    if (countSeeds(bot) <= 0) return false
     const soil = nearestCell(bot, ctx, ['grass_block', 'dirt'], FARM_RADIUS)
     if (soil && (waterNear(bot, soil) || hasBucket(bot))) {
       if (hasHoe(bot)) return true
@@ -349,8 +376,16 @@ function finish(bot, ctx, f, ok, reason, gen) {
   try { clearGoal(bot, ctx) } catch (_) { /* goal best-effort */ }
   try { console.log(prodLine(f)) } catch (_) { /* log best-effort */ }
   // Drop the run state with the step (reforest precedent): a re-picked
-  // farm must rescan, or stale caps finish it done on the first tick.
-  try { if (ctx) ctx.farm = null } catch (_) { /* state best-effort */ }
+  // farm must rescan, or stale caps finish it done on the first tick. The
+  // struck set parks on the ctx with a timestamp instead: struck cells stay
+  // struck across picks until STRUCK_TTL_MS passes.
+  try {
+    if (ctx) {
+      if (f.struck instanceof Set && f.struck.size > 0) ctx.farmStruck = f.struck
+      ctx.farmStruckAt = Date.now()
+      ctx.farm = null
+    }
+  } catch (_) { /* state best-effort */ }
   if (ok) return stepDone(ctx, gen)
   return stepFailed(ctx, reason || 'unreachable', gen)
 }
@@ -498,7 +533,9 @@ async function run(bot, ctx) {
       // ground and would walk past the open pit to the next cell.
       if (f.trench) {
         const t = f.trench
-        if (walkTo(bot, ctx, f, 'farm-water', t)) return // f.trench kept: pour on arrival
+        // Walk to pit-side (goal range 1) before pouring: from REACH the
+        // view ray clears the rim only by luck.
+        if (walkTo(bot, ctx, f, 'farm-water', t, POUR_ARRIVE, 1)) return // f.trench kept: pour on arrival
         let cell = null
         try { cell = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { cell = null }
         if (cell && isWaterName(cell.name)) { f.watered = (f.watered | 0) + 1; f.trench = null; f.pourWait = 0; return }
@@ -561,7 +598,9 @@ async function run(bot, ctx) {
     }
 
     // Leg 5 — till soil near water (free hydration) or with a bucket.
-    if ((f.tilled | 0) < TILL_CAP) {
+    // Seeds first (menu gate mirrors this): seedless tilling paves the bank
+    // 4 cells per pick with nothing to plant.
+    if ((f.tilled | 0) < TILL_CAP && countSeeds(bot) > 0) {
       // A hoe first: craft one (craftany, the beds precedent) or skip the
       // leg this step — never fail the step for missing tool mats.
       if (!hasHoe(bot)) {
@@ -671,9 +710,12 @@ module.exports.farmFeasible = farmFeasible
 module.exports.workReady = workReady
 module.exports.walkTo = walkTo
 module.exports.feedReady = feedReady
+module.exports.farmState = farmState
 module.exports.FEED_RADIUS = FEED_RADIUS
 module.exports.FEED_COOLDOWN_MS = FEED_COOLDOWN_MS
 module.exports.POUR_SETTLE_TICKS = POUR_SETTLE_TICKS
+module.exports.POUR_ARRIVE = POUR_ARRIVE
+module.exports.STRUCK_TTL_MS = STRUCK_TTL_MS
 module.exports.isTillable = isTillable
 module.exports.isSeedTuft = isSeedTuft
 module.exports.isMatureWheat = isMatureWheat
