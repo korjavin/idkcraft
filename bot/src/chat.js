@@ -688,6 +688,16 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         const r = ticker.setReforest({ count: n, by: playerName })
         if (r) bot.chat(r)
       }
+    } else if (msg === 'farm' || /^farm \d+$/.test(msg)) {
+      // idkcraft-1z1m: explicit farm order — the setFarm handler
+      // (orders.js), never the LLM plan path. Strict digits only, like
+      // reforest above.
+      if (!ownerOk) return
+      if (ticker && typeof ticker.setFarm === 'function') {
+        const n = msg === 'farm' ? undefined : parseInt(msg.slice(5), 10)
+        const r = ticker.setFarm({ count: n, by: playerName })
+        if (r) bot.chat(r)
+      }
     } else if (msg === 'do' || DO_LINE.test(msg)) {
       // vf8e.17: deterministic one-step plan, no model call. Only the
       // grammar lands here; other `do …` lines stay chatter below.

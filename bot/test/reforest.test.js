@@ -196,9 +196,9 @@ describe('reforest feasibility', () => {
 })
 
 describe('reforest step wiring', () => {
-  it('sits in STEP_ORDER between forage and explore', () => {
+  it('sits in STEP_ORDER between forage and farm', () => {
     assert.equal(STEP_ORDER.indexOf('reforest'), STEP_ORDER.indexOf('forage') + 1)
-    assert.equal(STEP_ORDER.indexOf('explore'), STEP_ORDER.indexOf('reforest') + 1)
+    assert.equal(STEP_ORDER.indexOf('farm'), STEP_ORDER.indexOf('reforest') + 1) // idkcraft-1z1m
   })
 
   it('names its criterion and rest grounds', () => {
