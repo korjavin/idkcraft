@@ -172,4 +172,39 @@ describe('v0vy protected retirement', () => {
     assert.equal(ctx.stepStatus, 'done', 'step done')
     assert.equal(failReason(ctx.stepStatus), null, 'no failure reason parses')
   })
+  it('the protected streak rides the memory file across a restart', () => {
+    const fs = require('node:fs')
+    const os = require('node:os')
+    const path = require('node:path')
+    const memory = require('../src/memory')
+    const bot = worldBot(new Map(), [])
+    bot.username = 'Prot'
+    bot.spawnPoint = { x: 0, y: 64, z: 0 }
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'v0vy-')), 'Prot.json')
+    assert.equal(memory.save(bot, { castle: state({ blocked: { '2:5': { tries: 2, until: Date.now() + 1000, why: 'protected', prot: 2 } } }) }, f), true)
+    const doc = JSON.parse(fs.readFileSync(f, 'utf8'))
+    assert.equal(doc.castle.blocked['2:5'].prot, 2, 'streak rides the file')
+    const ctx = {}
+    memory.restore(bot, ctx, f)
+    assert.equal(ctx.castle.blocked['2:5'].prot, 2, 'streak survives the rejoin')
+    assert.equal(ctx.castle.blocked['2:5'].why, 'protected')
+  })
+  it("'castle repair' says nothing-to-repair when only protected-retired damage remains", () => {
+    const { createTicker, handleChat } = require('../src/index')
+    const { set, cells } = damaged()
+    const bot = worldBot(set)
+    bot.username = 'IdkBot'
+    bot.registry = { itemsByName: {} }
+    bot.time = { timeOfDay: 6000, day: 1 }
+    bot.spawnPoint = { x: 0, y: 64, z: 0 }
+    bot.on = () => {}
+    bot.once = () => {}
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
+    const ctx = bot._tickerCtx
+    ctx.castle = state({ blocked: retired(cells, 'protected') })
+    handleChat(bot, ticker, 'Steve', 'castle repair')
+    const line = bot.chats.pop()
+    assert.match(line, /nothing to repair/, 'honest line instead of repairing')
+    assert.equal(Object.keys(ctx.castle.blocked).length, 4, 'protected entries stay retired')
+  })
 })

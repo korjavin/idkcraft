@@ -888,7 +888,8 @@ function castleChat(bot, ticker, playerName, cmd) {
     // retired-but-open plan cell but a protected one (the automatic path
     // only reopens transient ones on a tidy return) — a fresh strike
     // ladder now.
-    try { castleMod.reopenRepairs(bot, ctx, st, false) } catch (_) { /* best-effort */ }
+    let reopened = 0
+    try { reopened = castleMod.reopenRepairs(bot, ctx, st, false) || 0 } catch (_) { /* best-effort */ }
     try { taskMod.clearTaskParks(ctx) } catch (_) { /* resume best-effort */ }
     // The owner may just have filled the chest: the fetch retries now, not
     // after the CASTLEFETCH_RETRY_MS hold.
@@ -897,6 +898,15 @@ function castleChat(bot, ticker, playerName, cmd) {
     ticker.saveMemory()
     ticker.work()
     const wood = dmg.kinds.some((k) => WOOD_KINDS.has(k)) ? ' — drop logs in the castle chest to speed it up' : ''
+    // idkcraft-v0vy revmux 01 minor: when the only damage left sits on
+    // protected-retired cells (never reopened), 'repairing' is a lie —
+    // say so instead of resuming into another silent stall.
+    try {
+      const blocked = st.blocked && typeof st.blocked === 'object' ? Object.values(st.blocked) : []
+      const onlyProtected = reopened === 0 && blocked.length > 0 &&
+        blocked.every((e) => e && e.retired === true && /^protected/.test(String(e.why || '')))
+      if (onlyProtected) return `castle at ${at(st.site)}: ${dmg.line} — all on protected ground, nothing to repair`
+    } catch (_) { /* honest-line best-effort */ }
     return `castle: ${dmg.line}; repairing${wood}${dry}`
   }
   if (cmd === 'castle stop') {
