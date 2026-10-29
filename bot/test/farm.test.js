@@ -22,7 +22,7 @@ const IDS = {
 
 function mockBot({ cells = {}, items = [], sheep = null } = {}) {
   const world = new Map(Object.entries(cells))
-  const ops = { dig: [], use: [], equip: [], goals: [], chat: [] }
+  const ops = { dig: [], use: [], useItem: [], equip: [], goals: [], chat: [] }
   const bot = {
     ops,
     world,
@@ -82,6 +82,18 @@ function mockBot({ cells = {}, items = [], sheep = null } = {}) {
       }
     },
     equip: async (item) => { ops.equip.push(item.name); bot.heldItem = item },
+    lookAt: async (p) => { bot.lookPoint = { x: p.x, y: p.y, z: p.z } },
+    activateItem: async () => {
+      ops.useItem.push(bot.heldItem ? bot.heldItem.name : 'empty')
+      // Bucket use places water at the aimed cell (look point), like the
+      // client use path on both bodies.
+      if (bot.heldItem && bot.heldItem.name === 'water_bucket' && bot.lookPoint) {
+        const k = `${Math.floor(bot.lookPoint.x)},${Math.floor(bot.lookPoint.y)},${Math.floor(bot.lookPoint.z)}`
+        world.set(k, 'water')
+        bot.inv = bot.inv.filter((i) => i.name !== 'water_bucket')
+        bot.inv.push({ name: 'bucket', count: 1 })
+      }
+    },
     chat: (line) => { ops.chat.push(line) },
   }
   if (sheep) bot.entities[7] = { id: 7, name: 'sheep', position: { ...sheep }, isValid: true }
@@ -122,6 +134,17 @@ describe('farm predicates', () => {
     assert.equal(denyReason(bot, tuft, { step: 'farm' }), null)
     assert.equal(denyReason(bot, young, { step: 'farm' }), 'protected')
     assert.equal(denyReason(bot, ripe, { step: 'gather' }), 'protected')
+  })
+
+  it('feed pulls only near sheep and cools down after a lure', () => {
+    const near = mockBot({ items: [{ name: 'wheat', count: 1 }], sheep: { x: 2, y: 64, z: 0 } })
+    assert.ok(farm.feedReady(near, ctxOf()))
+    const far = mockBot({ items: [{ name: 'wheat', count: 1 }], sheep: { x: 40, y: 64, z: 0 } })
+    assert.equal(farm.feedReady(far, ctxOf()), null)
+    const cooled = mockBot({ items: [{ name: 'wheat', count: 1 }], sheep: { x: 2, y: 64, z: 0 } })
+    const cooledCtx = ctxOf()
+    cooledCtx.farmFedAt = Date.now()
+    assert.equal(farm.feedReady(cooled, cooledCtx), null)
   })
 
   it('menu gate: ripe crop pulls, night never does', () => {
@@ -175,12 +198,12 @@ describe('farm legs', () => {
     assert.equal(ctx.stepStatus, 'done')
   })
 
-  it('trenches water for dry farmland with a bucket', async () => {
+  it('trenches water at field level and pours via use', async () => {
     const bot = mockBot({
       cells: {
         '2,64,0': { name: 'farmland', props: { moisture: 0 } },
-        '3,63,0': 'dirt',
-        '3,62,0': 'stone',
+        '3,64,0': 'dirt',
+        '3,63,0': 'stone',
       },
       items: [{ name: 'water_bucket', count: 1 }, { name: 'wooden_hoe', count: 1 }],
     })
@@ -188,8 +211,18 @@ describe('farm legs', () => {
     const ctx = ctxOf()
     for (let t = 0; t < 14 && ctx.stepStatus === 'running'; t++) await farm(bot, ctx)
     assert.ok(bot.ops.dig.includes('dirt'), `trench dig missing: ${bot.ops.dig}`)
-    assert.ok(bot.ops.use.some((u) => u === 'water_bucket>stone'), `pour missing: ${bot.ops.use}`)
-    assert.equal(bot.world.get('3,63,0'), 'water')
+    assert.ok(bot.ops.useItem.includes('water_bucket'), `pour missing: ${bot.ops.useItem}`)
+    assert.equal(bot.world.get('3,64,0'), 'water')
+  })
+
+  it('dedupes the walk goal per unchanged target', async () => {
+    const bot = mockBot({ cells: { '5,64,0': 'grass_block', '7,64,0': 'water' } })
+    const ctx = ctxOf()
+    const w = { x: 5, y: 64, z: 0 }
+    assert.equal(farm.walkTo(bot, ctx, {}, 'farm-till', w), true)
+    assert.equal(farm.walkTo(bot, ctx, {}, 'farm-till', w), true)
+    assert.deepEqual(bot.ops.goals, ['GoalNear'])
+    assert.equal(farm.walkTo(bot, ctx, {}, 'farm-till', { x: 1, y: 64, z: 0 }), false)
   })
 
   it('carries wheat to sheep and ends done with no failure', async () => {

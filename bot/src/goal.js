@@ -2966,6 +2966,9 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
   // A fresh reforest pick restarts the beat (6p4l): a resumed stale
   // walk would chase a decayed leaf while the scan stands elsewhere.
   if (choice.step === 'reforest' && choice.step !== prev) ctx.reforest = null
+  // A fresh farm pick restarts the field (idkcraft-1z1m): stale caps would
+  // finish the new step done on its first tick and starve explore/rest.
+  if (choice.step === 'farm' && choice.step !== prev) ctx.farm = null
   // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
   // an order-interrupted night would otherwise hold on open ground. The
   // interrupted gohome walk resets too, so the next march starts from the

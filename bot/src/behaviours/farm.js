@@ -37,6 +37,11 @@ const WATER_CAP = 2 // trench placements per step, then done
 const SEED_DIG_CAP = 4 // grass-tuft digs per step for first seeds
 const MAX_MS = 180000 // wall-time cap per step (3 min), then done
 const LURE_TICKS = 6 // ticks holding wheat by the sheep before done
+const POUR_SETTLE_TICKS = 2 // ticks for the bucket water to land before verifying
+const FEED_RADIUS = 24 // sheep farther than the farm scans never pull the step
+const FEED_COOLDOWN_MS = 600000 // a fed flock reads fed for 10 min (wheat is
+// never consumed on V2: no activateEntity served, so the lure alone must
+// not re-pick the step every tick and starve explore/rest)
 
 // Hoeable soil (minimal: one hoe use -> farmland, no two-step kinds).
 function isTillable(name) {
@@ -174,13 +179,16 @@ function nearestCell(bot, ctx, names, radius, { forDig = false } = {}) {
   return cands[0] || null
 }
 
-// Standing water within hydration reach (4 XZ, 1 Y) of a cell.
+// Standing water within hydration reach of a cell: the vanilla 9x2x9 box
+// (4 XZ, water at the same level or one above — water a level below never
+// hydrates, so riverbank soil above the surface reads dry and wants the
+// trench only with a bucket in hand).
 function waterNear(bot, p) {
   try {
     for (let dx = -4; dx <= 4; dx++) {
       for (let dz = -4; dz <= 4; dz++) {
         if (Math.hypot(dx, dz) > 4) continue
-        for (let dy = -1; dy <= 1; dy++) {
+        for (let dy = 0; dy <= 1; dy++) {
           let b = null
           try { b = bot.blockAt(new Vec3(Math.floor(p.x) + dx, Math.floor(p.y) + dy, Math.floor(p.z) + dz)) } catch (_) { b = null }
           if (b && isWaterName(b.name)) return true
@@ -191,13 +199,14 @@ function waterNear(bot, p) {
   return false
 }
 
-// A trench candidate for dry farmland F: an adjacent diggable soil cell
-// one below field level whose dig leaves a contained pit (solid around is
-// the field's own dirt; denyReason vets traps). Returns the cell to dig.
+// A trench candidate for dry farmland F: adjacent ground at field level
+// whose dig leaves a 1-deep pit the bucket fills at the same level (only
+// same-level-or-above water hydrates). Solid floor below keeps the water
+// put; denyReason vets traps and builds. Returns the cell to dig.
 function trenchFor(bot, ctx, f) {
   const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
   for (const [dx, dz] of dirs) {
-    const x = Math.floor(f.x) + dx, y = Math.floor(f.y) - 1, z = Math.floor(f.z) + dz
+    const x = Math.floor(f.x) + dx, y = Math.floor(f.y), z = Math.floor(f.z) + dz
     const k = `${x},${y},${z}`
     if (ctx && ctx.farm && ctx.farm.struck && ctx.farm.struck.has(k)) continue
     let b = null
@@ -231,6 +240,48 @@ function farmState(ctx) {
   if (!(f.struck instanceof Set)) f.struck = new Set()
   if (typeof f.t0 !== 'number') f.t0 = Date.now()
   return f
+}
+
+// Walk-or-arrived (reforest 6p4l shape): issue the goal once per target,
+// never re-issue an unchanged target every tick (Baritone restarts A* on
+// every fresh goto). Returns true while walking (caller returns), false
+// on arrival. Arrival is judged on the goal's own cell within REACH, so a
+// satisfied GoalNear always reads arrived.
+function walkTo(bot, ctx, f, leg, p, range) {
+  const bp = botPos(bot)
+  if (!bp) return true // no position: stay put this tick, rescan next
+  const cell = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }
+  const gk = `${leg}:${cell.x},${cell.y},${cell.z}`
+  if (Math.hypot(cell.x + 0.5 - bp.x, cell.y - bp.y, cell.z + 0.5 - bp.z) <= (range || REACH)) {
+    f.walkKey = null
+    return false
+  }
+  if (!ctx || ctx.lastGoalKey !== gk) {
+    issueGoal(bot, ctx, new goals.GoalNear(cell.x, cell.y, cell.z, WALK_RANGE), gk, false)
+    f.walkKey = keyOf(cell)
+    f.still = 0
+  }
+  return true
+}
+
+// Feed preconditions shared by the menu gate and the leg: wheat in the
+// pack, a sheep inside the farm scans, and no fresh lure on record.
+function feedReady(bot, ctx) {
+  try {
+    if (countWheat(bot) <= 0) return null
+    try {
+      const fedAt = ctx && ctx.farmFedAt
+      if (typeof fedAt === 'number' && Date.now() - fedAt < FEED_COOLDOWN_MS) return null
+    } catch (_) { /* cooldown unreadable: feed */ }
+    const bp = botPos(bot)
+    if (!bp) return null
+    let found = null
+    try { found = bring.findAnimal(bot, null, { prey: ['sheep'] }) } catch (_) { found = null }
+    if (!found || !found.position) return null
+    const sp = found.position
+    if (Math.hypot(sp.x - bp.x, sp.y - bp.y, sp.z - bp.z) > FEED_RADIUS) return null
+    return found
+  } catch (_) { return null }
 }
 
 // Feasibility probe (goal.js MENU.farm): day, no active castle, pack room,
@@ -284,11 +335,7 @@ function farmFeasible(facts, bot, ctx) {
         }
       } catch (_) { /* uncraftable: fall through */ }
     }
-    if (countWheat(bot) > 0) {
-      try {
-        if (bring.findAnimal(bot, null, { prey: ['sheep'] })) return true
-      } catch (_) { /* no sheep */ }
-    }
+    if (feedReady(bot, ctx)) return true
     return false
   } catch (_) { return false }
 }
@@ -301,6 +348,9 @@ function prodLine(f) {
 function finish(bot, ctx, f, ok, reason, gen) {
   try { clearGoal(bot, ctx) } catch (_) { /* goal best-effort */ }
   try { console.log(prodLine(f)) } catch (_) { /* log best-effort */ }
+  // Drop the run state with the step (reforest precedent): a re-picked
+  // farm must rescan, or stale caps finish it done on the first tick.
+  try { if (ctx) ctx.farm = null } catch (_) { /* state best-effort */ }
   if (ok) return stepDone(ctx, gen)
   return stepFailed(ctx, reason || 'unreachable', gen)
 }
@@ -342,8 +392,6 @@ async function run(bot, ctx) {
     }
     f.lastPos = here
 
-    const at = (p, range) => Math.hypot(p.x + 0.5 - bp.x, p.y - bp.y, p.z + 0.5 - bp.z) <= (range || REACH)
-
     // Leg 1 — harvest mature wheat (drops reseed the plant leg).
     if ((f.harvested | 0) < HARVEST_CAP) {
       const w = nearestCell(bot, ctx, ['wheat'], FARM_RADIUS, { forDig: true })
@@ -351,17 +399,12 @@ async function run(bot, ctx) {
         let b = null
         try { b = bot.blockAt(new Vec3(w.x, w.y, w.z)) } catch (_) { b = null }
         if (b && isMatureWheat(b)) {
-          if (!at(w)) {
-            issueGoal(bot, ctx, new goals.GoalNear(w.x, w.y, w.z, WALK_RANGE), 'farm-harvest', false)
-            f.walkKey = keyOf(w)
-            return
-          }
-          f.walkKey = null
+          if (walkTo(bot, ctx, f, 'farm-harvest', w)) return
           try { if (denyReason(bot, b, ctx)) { strike(ctx, w); return } } catch (_) { strike(ctx, w); return }
           await bot.dig(b)
-          // Settle tick for the drops, then replant the same cell from
-          // the harvest seeds (the chain closes its own loop).
-          f.replant = { x: w.x, y: w.y, z: w.z, ticks: 2 }
+          // Settle tick for the drops, then replant the soil below (the
+          // wheat cell itself is air after the dig).
+          f.replant = { x: w.x, y: w.y - 1, z: w.z, ticks: 2 }
           f.harvested = (f.harvested | 0) + 1
           try { console.log(`farm harvest wheat at ${w.x},${w.y},${w.z}`) } catch (_) { /* log best-effort */ }
           return
@@ -378,13 +421,11 @@ async function run(bot, ctx) {
         let b = null
         try { b = bot.blockAt(new Vec3(r.x, r.y, r.z)) } catch (_) { b = null }
         if (b && (isFarmland(b) || b.name === 'dirt' || b.name === 'grass_block')) {
-          if (!at(r)) {
-            issueGoal(bot, ctx, new goals.GoalNear(r.x, r.y, r.z, WALK_RANGE), 'farm-replant', false)
-            f.walkKey = keyOf(r)
-            f.replant = { x: r.x, y: r.y, z: r.z, ticks: 0, walk: true }
+          if (walkTo(bot, ctx, f, 'farm-replant', r)) {
+            // Still walking: keep the tail so the plant lands on arrival.
+            f.replant = { x: r.x, y: r.y, z: r.z, ticks: 0 }
             return
           }
-          f.walkKey = null
           if (await equipHeld(bot, 'wheat_seeds')) {
             let soil = null
             try { soil = bot.blockAt(new Vec3(r.x, r.y, r.z)) } catch (_) { soil = null }
@@ -418,12 +459,7 @@ async function run(bot, ctx) {
           aboveEmpty = !!above && (above.name === 'air' || above.name === 'cave_air')
         } catch (_) { aboveEmpty = false }
         if (aboveEmpty) {
-          if (!at(fl)) {
-            issueGoal(bot, ctx, new goals.GoalNear(fl.x, fl.y, fl.z, WALK_RANGE), 'farm-plant', false)
-            f.walkKey = keyOf(fl)
-            return
-          }
-          f.walkKey = null
+          if (walkTo(bot, ctx, f, 'farm-plant', fl)) return
           if (await equipHeld(bot, 'wheat_seeds')) {
             let soil = null
             try { soil = bot.blockAt(new Vec3(fl.x, fl.y, fl.z)) } catch (_) { soil = null }
@@ -447,12 +483,7 @@ async function run(bot, ctx) {
         let b = null
         try { b = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { b = null }
         if (b && isSeedTuft(b.name)) {
-          if (!at(t)) {
-            issueGoal(bot, ctx, new goals.GoalNear(t.x, t.y, t.z, WALK_RANGE), 'farm-seeds', false)
-            f.walkKey = keyOf(t)
-            return
-          }
-          f.walkKey = null
+          if (walkTo(bot, ctx, f, 'farm-seeds', t)) return
           await bot.dig(b)
           f.seedDigs = (f.seedDigs | 0) + 1
           return
@@ -467,24 +498,40 @@ async function run(bot, ctx) {
       // ground and would walk past the open pit to the next cell.
       if (f.trench) {
         const t = f.trench
-        if (!at(t)) {
-          issueGoal(bot, ctx, new goals.GoalNear(t.x, t.y, t.z, WALK_RANGE), 'farm-water', false)
-          f.walkKey = keyOf(t)
-          return // f.trench kept: pour on arrival
-        }
-        f.walkKey = null
+        if (walkTo(bot, ctx, f, 'farm-water', t)) return // f.trench kept: pour on arrival
         let cell = null
         try { cell = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { cell = null }
-        if (cell && isWaterName(cell.name)) { f.watered = (f.watered | 0) + 1; f.trench = null; return }
-        let floor = null
-        try { floor = bot.blockAt(new Vec3(t.x, t.y - 1, t.z)) } catch (_) { floor = null }
-        if (!floor || floor.name === 'air' || isWaterName(floor.name)) { strike(ctx, t); f.trench = null; return }
-        if (await equipHeld(bot, 'water_bucket')) {
-          await bot.activateBlock(floor, new Vec3(0, 1, 0))
-          f.watered = (f.watered | 0) + 1
-          try { console.log(`farm water trench at ${t.x},${t.y},${t.z}`) } catch (_) { /* log best-effort */ }
+        if (cell && isWaterName(cell.name)) { f.watered = (f.watered | 0) + 1; f.trench = null; f.pourWait = 0; return }
+        if ((f.pourWait | 0) > 0) {
+          // Pour sent, water still landing: wait it out (replant settle
+          // shape), then verify below. The walk key stays down — the body
+          // stands at the pit, no displacement strike while waiting.
+          f.pourWait--
+          f.walkKey = null
+          if ((f.pourWait | 0) <= 0) {
+            let landed = null
+            try { landed = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { landed = null }
+            if (landed && isWaterName(landed.name)) {
+              f.watered = (f.watered | 0) + 1
+              try { console.log(`farm water trench at ${t.x},${t.y},${t.z}`) } catch (_) { /* log best-effort */ }
+            } else {
+              strike(ctx, t) // honest: the pour missed, the pit is struck
+            }
+            f.trench = null
+          }
+          return
         }
-        f.trench = null
+        // Buckets pour through use, not useOn (activateBlock is a no-op
+        // for them on both bodies): look at the pit, use the bucket, and
+        // count the watering only when the water reads back.
+        if (await equipHeld(bot, 'water_bucket')) {
+          try { await bot.lookAt(new Vec3(t.x + 0.5, t.y + 0.5, t.z + 0.5)) } catch (_) { /* aim best-effort */ }
+          try { await bot.activateItem() } catch (_) { strike(ctx, t); f.trench = null; return }
+          f.pourWait = POUR_SETTLE_TICKS
+          f.walkKey = null
+        } else {
+          f.trench = null // bucket gone mid-step: release the pit
+        }
         return
       }
       const fl = nearestCell(bot, ctx, ['farmland'], FARM_RADIUS)
@@ -494,12 +541,7 @@ async function run(bot, ctx) {
         if (b && needsWater(b) && !waterNear(bot, fl)) {
           const t = trenchFor(bot, ctx, fl)
           if (!t) { strike(ctx, fl); return }
-          if (!at(t)) {
-            issueGoal(bot, ctx, new goals.GoalNear(t.x, t.y, t.z, WALK_RANGE), 'farm-water', false)
-            f.walkKey = keyOf(t)
-            return
-          }
-          f.walkKey = null
+          if (walkTo(bot, ctx, f, 'farm-water', t)) return
           let tb = null
           try { tb = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { tb = null }
           if (tb && !isWaterName(tb.name)) {
@@ -507,6 +549,7 @@ async function run(bot, ctx) {
             try { if (denyReason(bot, tb, ctx)) { strike(ctx, t); return } } catch (_) { strike(ctx, t); return }
             await bot.dig(tb)
             f.trench = { x: t.x, y: t.y, z: t.z }
+            f.pourWait = 0
             return // pour the water next tick, on the settled cell
           }
           // trenchFor only returns diggable ground, so an open pit here is
@@ -538,12 +581,7 @@ async function run(bot, ctx) {
       if (hasHoe(bot)) {
         const s = nearestCell(bot, ctx, ['grass_block', 'dirt'], FARM_RADIUS)
         if (s && (waterNear(bot, s) || hasBucket(bot))) {
-          if (!at(s)) {
-            issueGoal(bot, ctx, new goals.GoalNear(s.x, s.y, s.z, WALK_RANGE), 'farm-till', false)
-            f.walkKey = keyOf(s)
-            return
-          }
-          f.walkKey = null
+          if (walkTo(bot, ctx, f, 'farm-till', s)) return
           let sb = null
           try { sb = bot.blockAt(new Vec3(s.x, s.y, s.z)) } catch (_) { sb = null }
           if (!sb || !isTillable(sb.name)) { strike(ctx, s); return }
@@ -559,21 +597,20 @@ async function run(bot, ctx) {
     }
 
     // Leg 6 — carry wheat to sheep (lure; breed where the body allows).
-    if (countWheat(bot) > 0 && !(f.fedSheep | 0)) {
-      let found = null
-      try { found = bring.findAnimal(bot, null, { prey: ['sheep'] }) } catch (_) { found = null }
-      if (found && found.position) {
+    // feedReady bounds the loop: only near sheep pull the leg, and a fresh
+    // lure cools it down (wheat is never consumed on V2, so without the
+    // cooldown the step would re-pick itself every tick).
+    if (!(f.fedSheep | 0)) {
+      const found = feedReady(bot, ctx)
+      if (found) {
         const sp = { x: found.position.x, y: found.position.y, z: found.position.z }
-        if (Math.hypot(sp.x - bp.x, sp.y - bp.y, sp.z - bp.z) > WALK_RANGE) {
-          issueGoal(bot, ctx, new goals.GoalNear(sp.x, sp.y, sp.z, WALK_RANGE), 'farm-feed', false)
-          f.walkKey = `${Math.floor(sp.x)},${Math.floor(sp.y)},${Math.floor(sp.z)}`
+        if (walkTo(bot, ctx, f, 'farm-feed', sp)) {
           // Hold the wheat out while walking: sheep follow a holder.
           try {
             if (!(bot.heldItem && bot.heldItem.name === 'wheat')) await equipHeld(bot, 'wheat')
           } catch (_) { /* hold best-effort */ }
           return
         }
-        f.walkKey = null
         try {
           if (!(bot.heldItem && bot.heldItem.name === 'wheat')) await equipHeld(bot, 'wheat')
         } catch (_) { /* hold best-effort */ }
@@ -592,6 +629,7 @@ async function run(bot, ctx) {
         f.lure = (f.lure | 0) + 1
         if (bred > 0 || (f.lure | 0) >= LURE_TICKS) {
           f.fedSheep = 1
+          try { if (ctx) ctx.farmFedAt = Date.now() } catch (_) { /* cooldown best-effort */ }
           try { say(bot, bred > 0 ? 'fed the sheep wheat' : 'brought wheat to the sheep') } catch (_) { /* chat best-effort */ }
           return
         }
@@ -631,6 +669,11 @@ module.exports = run
 module.exports.run = run
 module.exports.farmFeasible = farmFeasible
 module.exports.workReady = workReady
+module.exports.walkTo = walkTo
+module.exports.feedReady = feedReady
+module.exports.FEED_RADIUS = FEED_RADIUS
+module.exports.FEED_COOLDOWN_MS = FEED_COOLDOWN_MS
+module.exports.POUR_SETTLE_TICKS = POUR_SETTLE_TICKS
 module.exports.isTillable = isTillable
 module.exports.isSeedTuft = isSeedTuft
 module.exports.isMatureWheat = isMatureWheat

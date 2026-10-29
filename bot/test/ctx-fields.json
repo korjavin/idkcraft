@@ -904,6 +904,13 @@
     ],
     "owner": "src/behaviours/bringitem.js"
   },
+  "farm": {
+    "writers": [
+      "src/behaviours/farm.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/farm.js"
+  },
   "fightGivenUpId": {
     "writers": [
       "src/behaviours/fight.js",
