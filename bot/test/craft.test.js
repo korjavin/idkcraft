@@ -281,7 +281,7 @@ describe('craft step', () => {
     bot.entity.position = pos(0, 64, 0)
     bot.blockAt = (p) => {
       if (p.y === 64 && p.x === 1 && p.z === 0) return { name: 'air', boundingBox: 'empty' } // door cell unplaced
-      if (p.y === 64 && p.x === 4 && p.z === 1) return { name: 'crafting_table', boundingBox: 'block' } // table cell stands
+      if (p.y === 64 && p.x === 4 && p.z === 1) return { name: 'crafting_table', boundingBox: 'block' } // v1 table cell stands
       if (p.y === 64 && p.x === 2 && p.z === 0) return { name: 'crafting_table', boundingBox: 'block' } // the placed station
       return { name: 'air', boundingBox: 'empty' }
     }
@@ -332,6 +332,84 @@ describe('craft step', () => {
     await flush()
     assert.equal(bot.calls.craft.length, 0, 'no idle door while none owed')
     assert.equal(ctx.stepStatus, 'done')
+    bot.restoreError()
+  })
+
+  it('(q9i0-d) an owed door past a far table issues the sight walk, crafts nothing yet', async () => {
+    // The re-enabled walk half: door owed, table out of reach — one walk
+    // goal, no craft, step stays running.
+    const home = { site: pos(0, 64, 0), table: pos(20, 64, 0) } // v1 door cell at (1, 64, 0)
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    bot.entity.position = pos(0, 64, 0)
+    bot.blockAt = (p) => {
+      if (p.y === 64 && p.x === 1 && p.z === 0) return { name: 'air', boundingBox: 'empty' } // door owed
+      if (p.y === 64 && p.x === 4 && p.z === 1) return { name: 'crafting_table', boundingBox: 'block' } // v1 table cell stands
+      if (p.y === 64 && p.x === 20 && p.z === 0) return { name: 'crafting_table', boundingBox: 'block' } // the far station
+      return { name: 'air', boundingBox: 'empty' }
+    }
+    const ctx = freshCtx(home)
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0, 'no craft before the walk lands')
+    assert.equal(bot.calls.setGoal, 1, 'one sight walk to the table')
+    assert.equal(ctx.stepStatus, 'running')
+    bot.restoreError()
+  })
+
+  it('(q9i0-e) a standing-still door walk gives up as table-unseeable', async () => {
+    // Progress-based give-up: 20 still ticks with no closing fail the step.
+    const home = { site: pos(0, 64, 0), table: pos(20, 64, 0) }
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    bot.entity.position = pos(0, 64, 0)
+    bot.blockAt = (p) => {
+      if (p.y === 64 && p.x === 1 && p.z === 0) return { name: 'air', boundingBox: 'empty' } // door owed
+      if (p.y === 64 && p.x === 4 && p.z === 1) return { name: 'crafting_table', boundingBox: 'block' } // v1 table cell stands
+      if (p.y === 64 && p.x === 20 && p.z === 0) return { name: 'crafting_table', boundingBox: 'block' } // the far station
+      return { name: 'air', boundingBox: 'empty' }
+    }
+    const ctx = freshCtx(home)
+    for (let i = 0; i < 25; i++) craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0, 'no craft on an unreached table')
+    assert.equal(ctx.stepStatus, 'failed:table-unseeable')
+    bot.restoreError()
+  })
+
+  it('(q9i0-f) a holed doorstep refuses before any walk (entrance-holed)', async () => {
+    // neuc.65.6.1 guard, live again: the table sits in the footprint above
+    // an unfilled v2 sill cell — fail soft, no walk, no craft.
+    const home = {
+      site: pos(0, 64, 0), v: 2,
+      interior: { min: pos(1, 64, 1), max: pos(5, 65, 4) },
+      table: pos(6, 64, 2),
+    }
+    const bot = mockBot({
+      items: [{ name: 'oak_planks', count: 6 }],
+      ids: IDS,
+      recipes: { oak_door: recipeFor('oak_door') },
+    })
+    bot.entity.position = pos(0, 64, 0)
+    bot.blockAt = (p) => {
+      if (p.y === 64 && p.x === 3 && p.z === 0) return { name: 'air', boundingBox: 'empty' } // v2 door cell open
+      if (p.y === 64 && p.x === 6 && p.z === 2) return { name: 'crafting_table', boundingBox: 'block' } // station in footprint
+      if (p.y === 64 && p.x === 5 && p.z === 1) return { name: 'crafting_table', boundingBox: 'block' } // v2 table cell stands
+      if (p.y === 63 && p.x === 2 && p.z === -1) return { name: 'air', boundingBox: 'empty' } // unfilled dz=-1 sill cell
+      return { name: 'cobblestone', boundingBox: 'block' }
+    }
+    const ctx = freshCtx(home)
+    craft(bot, ctx, null, {})
+    await flush()
+    assert.equal(bot.calls.craft.length, 0, 'no craft over the hole')
+    assert.equal(bot.calls.setGoal, 0, 'no walk over the hole')
+    assert.equal(ctx.stepStatus, 'failed:entrance-holed')
     bot.restoreError()
   })
 
