@@ -10,6 +10,7 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
+const goal = require('../src/goal')
 const taskMod = require('../src/task')
 const metrics = require('../src/metrics')
 
@@ -17,7 +18,7 @@ function pos(x, y, z) {
   return { x, y, z, distanceTo: (q) => Math.hypot(x - q.x, y - q.y, z - q.z) }
 }
 
-function dlBot({ items = [], timeOfDay = 6000 } = {}) {
+function dlBot({ items = [], timeOfDay = 6000, food = 20 } = {}) {
   return {
     entity: { position: pos(0, 64, 0) },
     inventory: { items: () => items },
@@ -26,6 +27,8 @@ function dlBot({ items = [], timeOfDay = 6000 } = {}) {
     blockAt: () => ({ name: 'air' }),
     pathfinder: {},
     chat: () => {},
+    food,
+    health: 20,
   }
 }
 
@@ -335,5 +338,196 @@ describe('deadlock guards (u19u phase C)', () => {
     const ctx = { work: true }
     taskMod.taskTick(bot, ctx, Date.now())
     assert.equal(typeof ctx.deadlockChoose, 'function')
+  })
+})
+
+describe('deadlock episode bound (u19u phase C, R3 core-2)', () => {
+  // Rebuild a fresh 3-cycle loop (alternating picks within the window)
+  // and drive it through fire + consume.
+  async function loopRound(brain, bot, ctx, facts, menu) {
+    const dl = ctx.deadlock
+    dl.cooldownUntil = 0
+    dl.stratBackoffUntil = 0
+    dl.firedAt = 0
+    const steps = ['gather', 'forage']
+    for (let i = 0; i < 7; i++) {
+      ctx.step = steps[i % 2]
+      ctx.stepStatus = 'failed:stuck'
+      await taskMod.deadlockChoose(brain, facts, menu, null, dlExtra(bot, ctx), steps[i % 2])
+    }
+    await flush()
+    return taskMod.deadlockChoose(brain, facts, menu, null, dlExtra(bot, ctx), ctx.step)
+  }
+
+  it('fire and consume each clear the evidence: the next round needs fresh picks', async () => {
+    const bot = dlBot()
+    const now = Date.now()
+    const ctx = dlCtx({
+      step: 'forage',
+      stepStatus: 'failed:stuck',
+      deadlock: seedRest({
+        restSince: null,
+        lastStep: 'gather',
+        chain: [
+          { step: 'gather', at: now }, { step: 'forage', at: now },
+          { step: 'gather', at: now }, { step: 'forage', at: now },
+          { step: 'gather', at: now },
+        ],
+      }),
+    })
+    const brain = planBrain()
+    const facts = clearFacts()
+    const menu = ['gather', 'forage', 'rest']
+    const r = await taskMod.deadlockChoose(brain, facts, menu, null, dlExtra(bot, ctx), 'gather')
+    assert.equal(brain.calls, 1)
+    assert.deepEqual(ctx.deadlock.chain, [], 'fire spends the loop evidence')
+    assert.equal(ctx.deadlock.restSince, null)
+    await flush()
+    assert.ok(r, 'fire tick answers FSM')
+    const r2 = await taskMod.deadlockChoose(brain, facts, menu, null, dlExtra(bot, ctx), 'gather')
+    assert.ok(r2 && r2.step, 'consume resolves the round')
+    assert.equal(ctx.deadlock.rounds, 1)
+    assert.deepEqual(ctx.deadlock.chain, [], 'consume spends the post-fire evidence')
+  })
+
+  it('a persistent loop spends one call per round and stops at the round cap', async () => {
+    const bot = dlBot()
+    const now = Date.now()
+    const ctx = dlCtx({ step: 'gather', stepStatus: 'failed:stuck', deadlock: seedRest() })
+    const brain = planBrain()
+    const facts = clearFacts()
+    const menu = ['gather', 'forage', 'rest']
+    const maxRounds = 6 // GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT
+    for (let round = 1; round <= maxRounds; round++) {
+      const before = brain.calls
+      await loopRound(brain, bot, ctx, facts, menu)
+      assert.equal(brain.calls, before + 1, `round ${round} spends exactly one call`)
+      assert.equal(ctx.deadlock.rounds, round)
+    }
+    // Past the budget, fresh stalls with expired guards still spend nothing.
+    for (let extra = 0; extra < 3; extra++) {
+      const before = brain.calls
+      ctx.deadlock.cooldownUntil = 0
+      ctx.deadlock.stratBackoffUntil = 0
+      ctx.deadlock.firedAt = 0
+      ctx.deadlock.chain = [
+        { step: 'gather', at: now }, { step: 'forage', at: now },
+        { step: 'gather', at: now }, { step: 'forage', at: now },
+        { step: 'gather', at: now }, { step: 'forage', at: now },
+      ]
+      ctx.deadlock.lastStep = 'forage'
+      ctx.step = 'gather'
+      ctx.stepStatus = 'failed:stuck'
+      const r = await taskMod.deadlockChoose(brain, facts, menu, null, dlExtra(bot, ctx), 'gather')
+      assert.equal(r, null)
+      assert.equal(brain.calls, before, `capped stall ${extra} spends no call`)
+      assert.ok(ctx.deadlock.cooldownUntil - Date.now() > 120000, 'cap holds a long backoff')
+      assert.equal(ctx.deadlock.rounds, maxRounds, 'cap never resets the round count')
+    }
+  })
+})
+
+describe('deadlock tick clock (u19u phase C, core-1)', () => {
+  // Homeless, empty pack: only gather is feasible — hold it out of the
+  // menu (a fail hold), so the FSM rests while gather stays runnable for
+  // the escalation to offer. The missing pickaxe is the owed need.
+  function heldRestWorld() {
+    const bot = dlBot()
+    const ctx = dlCtx({})
+    const facts0 = goal.goalFacts(bot, ctx)
+    const text0 = goal.goalText(facts0, ctx.home)
+    assert.deepEqual(
+      Object.keys(goal.MENU).filter((n) => {
+        try { return goal.MENU[n].feasible(facts0, bot, ctx) && goal.registered(n) } catch (_) { return false }
+      }).sort(),
+      ['gather', 'rest'],
+      'probe: only gather is feasible pre-hold',
+    )
+    ctx.stepFail = { gather: { text: text0 } }
+    return { bot, ctx }
+  }
+
+  it('steady-rest ticks fire without a re-decide; the answer pins and decide applies it', async () => {
+    const { bot, ctx } = heldRestWorld()
+    const brain = planBrain({ step: 'gather', confidence: 0.8, source: 'jev' })
+    ctx.brain = brain
+    // The pick tick and steady ticks: the clock seeds the stretch, no call.
+    taskMod.taskTick(bot, ctx, Date.now())
+    assert.equal(brain.calls, 0)
+    assert.ok(ctx.deadlock.restSince != null, 'steady rest seeds the stretch')
+    taskMod.taskTick(bot, ctx, Date.now())
+    assert.equal(brain.calls, 0)
+    // Past the window the clock fires: exactly one call, zero decide()s.
+    ctx.deadlock.restSince = Date.now() - 61000
+    taskMod.taskTick(bot, ctx, Date.now())
+    await flush()
+    assert.equal(brain.calls, 1)
+    assert.deepEqual(ctx.deadlock.chain, [], 'fire spends the loop evidence')
+    assert.equal(ctx.deadlock.restSince, null, 'fire spends the rest stretch')
+    await flush()
+    // The landed answer pins as a one-shot force — still no decide() yet.
+    taskMod.taskTick(bot, ctx, Date.now())
+    assert.equal(ctx.taskPlanStep, 'gather')
+    assert.equal(brain.calls, 1, 'consume spends no second call')
+    // ... and the next decide() applies the pin and consumes it.
+    const d = await goal.decide(bot, ctx)
+    assert.equal(d.action, 'gather')
+    assert.equal(ctx.step, 'gather')
+    assert.equal(ctx.taskPlanStep, null, 'pin consumed')
+    assert.equal(brain.calls, 1)
+  })
+
+  it('a dusk flip defers the pin: night owns the body, the pin applies at dawn', async () => {
+    const { bot, ctx } = heldRestWorld()
+    const brain = planBrain({ step: 'gather', confidence: 0.8, source: 'jev' })
+    ctx.brain = brain
+    taskMod.taskTick(bot, ctx, Date.now())
+    ctx.deadlock.restSince = Date.now() - 61000
+    taskMod.taskTick(bot, ctx, Date.now())
+    await flush()
+    assert.equal(brain.calls, 1)
+    taskMod.taskTick(bot, ctx, Date.now())
+    assert.equal(ctx.taskPlanStep, 'gather', 'day consume pins the answer')
+    // Dusk: the night rule owns the body — the pin waits, unconsumed.
+    bot.time.timeOfDay = 12500
+    const dusk = await goal.decide(bot, ctx)
+    assert.equal(dusk.action, 'shelter')
+    assert.equal(ctx.taskPlanStep, 'gather', 'pin deferred past the night march')
+    // Dawn: the pin forces the re-decide and applies.
+    bot.time.timeOfDay = 6000
+    const dawn = await goal.decide(bot, ctx)
+    assert.equal(dawn.action, 'gather')
+    assert.equal(ctx.taskPlanStep, null, 'pin consumed')
+    assert.equal(brain.calls, 1)
+  })
+
+  it('no trigger while progressing: running ticks spend no call', async () => {
+    const bot = dlBot()
+    const brain = planBrain({ step: 'gather', confidence: 0.8, source: 'jev' })
+    // A running work step re-deciding: progressing, never a stall.
+    const ctx = dlCtx({ step: 'gather', stepStatus: 'running' })
+    ctx.brain = brain
+    for (let i = 0; i < 3; i++) {
+      taskMod.taskTick(bot, ctx, Date.now())
+      assert.equal(brain.calls, 0, `steady tick ${i} spends no call`)
+    }
+    // A fresh rest stretch seeds the clock but spends no call either.
+    ctx.step = 'rest'
+    taskMod.taskTick(bot, ctx, Date.now())
+    assert.equal(brain.calls, 0)
+    assert.ok(ctx.deadlock.restSince != null)
+  })
+
+  it('no trigger while progressing: a running work step never forces', async () => {
+    const bot = dlBot()
+    const ctx = dlCtx({ step: 'gather', stepStatus: 'running' })
+    const brain = planBrain({ step: 'gather', confidence: 0.8, source: 'jev' })
+    ctx.brain = brain
+    taskMod.taskTick(bot, ctx, Date.now())
+    for (let i = 0; i < 3; i++) {
+      const d = await goal.decide(bot, ctx)
+      assert.equal(d.action, 'gather')
+      assert.equal(brain.calls, 0, `steady tick ${i} spends no call`)
+    }
   })
 })
