@@ -25,7 +25,7 @@
 
 const metrics = require('./metrics')
 const { CHAT_LIMIT } = require('./commands')
-const { orderStamp, carryOrderStamp, chatStep, failReason } = require('./step') // oqul.11: moved for home.js
+const { orderStamp, carryOrderStamp, chatStep, failReason, isFinished } = require('./step') // oqul.11: moved for home.js
 const worker = require('./worker')
 
 const TASK_STALL_L1_MS = 15 * 60 * 1000
@@ -1192,6 +1192,414 @@ function strategicChoose(brain, facts, feasible, home, extra, fsm) {
       (ans) => onStrategicAnswer(ctx, kind, state, wd, key, goalId, generation, seq, ans, null),
       (err) => onStrategicAnswer(ctx, kind, state, wd, key, goalId, generation, seq, null, err || new Error('strategic plan failed')),
     )
+  return { step: fsm, source: 'goal-fsm', fsm, model: null }
+}
+
+// Deadlock escalation (idkcraft-u19u phase C): the work-mode twin of the
+// task-executive watchdog. While a castle/house/order goal is active the
+// executive owns escalation (strategic chooser + watchdog), so this yields
+// there — check first, never double-fire. In work mode (no goal) there is
+// no progress metric and no park target, so the detector reads the picks
+// the tick already maintains: a rest-only stretch with owed needs past
+// GOAL_WATCHDOG_MS, or an A→B→A action loop x3 within 10 min. Either fires
+// ONE contextual plan() (the phase-2 prompt/memo/cost plumbing below),
+// the answer applies as a bounded pick (cooldown ≤ 120 s, no new env),
+// and every failure falls back to the FSM answer.
+//
+// Zero model calls while progressing: the only plan() site is the fire
+// below, guarded by pending/answer/cooldown/backoff/min-interval, and the
+// fire/consume/fail ticks return a choice directly, suppressing the
+// phase-1 ask plug for that re-decide — one stall episode spends one call.
+const DEADLOCK_LOOP_PICKS = 6 // A→B→A x3: 3 full cycles of 2 steps
+const DEADLOCK_LOOP_WINDOW_MS = 10 * 60 * 1000
+const DEADLOCK_CHAIN_KEPT = 8
+const DEADLOCK_COMMIT_MAX_MS = 120000 // the commit window never exceeds 120 s
+
+// Owed needs visible in facts (u19u §2.2): the rest-stretch gate. Health
+// is deliberately absent — low-hp rest is safety, excluded at the call
+// site, never a deadlock.
+function deadlockUnmet(facts) {
+  try {
+    if (!facts || typeof facts !== 'object') return false
+    if (facts.beds === 'none' || facts.beds === 'one') return true
+    if (facts.gear === 'want') return true
+    if (typeof facts.food === 'number' && facts.food < 6) return true
+    if (typeof facts.pickaxe === 'number' && facts.pickaxe === 0) return true
+    if (facts.known === 'near') return true
+    if (typeof facts.unlit === 'number' && facts.unlit > 0) return true
+  } catch (_) { /* no needs best-effort */ }
+  return false
+}
+
+// Per-ctx work-mode counters (u19u §2.3: new counters only where no task
+// executive exists). Lifecycle: any step-done resets (progress ends the
+// episode); cooldown/backoff/firedAt survive (they bound calls, not state).
+function deadlockOf(ctx) {
+  try {
+    if (!ctx || typeof ctx !== 'object') return null
+    if (!ctx.deadlock || typeof ctx.deadlock !== 'object') {
+      ctx.deadlock = { restSince: null, restPicks: 0, chain: [], lastStep: null, seq: 0, pending: null, answer: null, key: null, trigger: null, model: null, firedAt: 0, cooldownUntil: 0, rounds: 0 }
+    }
+    const dl = ctx.deadlock
+    if (!Array.isArray(dl.chain)) dl.chain = []
+    return dl
+  } catch (_) {
+    return null
+  }
+}
+
+function deadlockReset(dl) {
+  try {
+    if (!dl || typeof dl !== 'object') return
+    dl.restSince = null
+    dl.restPicks = 0
+    dl.chain = []
+    dl.lastStep = null
+    dl.pending = null
+    dl.answer = null
+    dl.key = null
+    dl.trigger = null
+    dl.rounds = 0
+  } catch (_) { /* reset best-effort */ }
+}
+
+function deadlockLoopDescribe(dl) {
+  try {
+    return dl.chain.slice(-DEADLOCK_LOOP_PICKS).map((e) => e.step).join('->')
+  } catch (_) {
+    return '?'
+  }
+}
+
+// Stored-answer resolver: drops answers for a replaced detector, a moved
+// key, or a mode change — the stall they planned for is over (the
+// onStrategicAnswer precedent).
+function onDeadlockAnswer(ctx, dl, key, seq, ans, err) {
+  try {
+    if (!ctx || ctx.deadlock !== dl) return
+    if (!dl || dl.pending !== seq || dl.key !== key) return
+    dl.pending = null
+    if (err || !ans || typeof ans.step !== 'string') {
+      dl.answer = { error: err ? stratFailReason(err) : 'invalid' }
+      return
+    }
+    dl.answer = {
+      step: ans.step,
+      conf: typeof ans.confidence === 'number' ? ans.confidence : null,
+      probs: ans.probabilities && typeof ans.probabilities === 'object' ? ans.probabilities : null,
+      source: typeof ans.source === 'string' && ans.source ? ans.source : null,
+    }
+  } catch (_) { /* a dropped answer re-fires on the next stall */ }
+}
+
+// Fire ONE contextual plan(): the phase-2 goalPromptState shape (a house
+// kind stands in for the missing task goal; progressPct reads null without
+// done/total) with the deadlock goal line and the restWhy string as
+// blocked_on detail, over the feasible menu in effect language + park.
+// Returns the episode key, or null when no call was made.
+function deadlockFire(bot, ctx, brain, facts, home, names, text, dl, model, now, trigger, stallMs) {
+  let goal = null
+  try {
+    goal = require('./goal')
+  } catch (_) {
+    return null
+  }
+  const criteria = {}
+  const offered = []
+  for (const n of names) {
+    if (n === 'rest' || n === 'fun') continue // retrying idleness never unsticks (planMenu precedent)
+    try {
+      const c = STEP_EFFECT_TEXT[n] || goal.STEP_CRITERIA[n]
+      if (typeof c === 'string' && c) {
+        criteria[n] = c
+        offered.push(n)
+      }
+    } catch (_) { /* criterion best-effort */ }
+  }
+  criteria.park = PLAN_PARK_CRITERION
+  if (offered.length === 0) return null
+  let prompt = null
+  try {
+    prompt = goalPromptState(bot, ctx, 'house', undefined, undefined, { stallMs, fails: [], wd: dl })
+    prompt.goal = 'unstick the work loop'
+    let rest = ''
+    try {
+      rest = String(goal.restWhy(facts, bot, ctx, names) || '')
+    } catch (_) {
+      rest = ''
+    }
+    const diag = diagnose(bot, ctx)
+    prompt.blocked_on = trigger === 'loop'
+      ? `${diag} | loop: ${deadlockLoopDescribe(dl)} | rest: ${rest}`
+      : `${diag} | rest: ${rest}`
+  } catch (_) {
+    return null
+  }
+  let instructions = ''
+  try {
+    instructions = `${PLAN_INSTRUCTIONS}; prefer the owed need the facts name`
+  } catch (_) {
+    return null
+  }
+  const key = `${text}|${offered.join(',')}|${trigger}`
+  const seq = (dl.seq = (dl.seq || 0) + 1)
+  dl.pending = seq
+  dl.key = key
+  dl.trigger = trigger
+  dl.firedAt = now
+  dl.model = model
+  try {
+    dl.stratPack = stratPackOf(facts)
+  } catch (_) { /* baseline best-effort */ }
+  const req = { state: prompt, instructions, criteria }
+  Promise.resolve()
+    .then(() => brain.plan(req))
+    .then(
+      (ans) => onDeadlockAnswer(ctx, dl, key, seq, ans, null),
+      (err) => onDeadlockAnswer(ctx, dl, key, seq, null, err || new Error('deadlock plan failed')),
+    )
+  try {
+    console.log(`goal deadlock kind=work trigger=${trigger} stall=${Math.floor(stallMs / 1000)}s options=${offered.join(',')} choice=fired source=${model} why=${prompt.blocked_on}`)
+  } catch (_) { /* log best-effort */ }
+  return key
+}
+
+// Consume a stored answer: validate against the feasible menu NOW (not at
+// fire), apply as a bounded pick, or FSM-fallback with an escalation count
+// on any failure — the bot never stalls on the escalation.
+function deadlockConsume(bot, ctx, facts, home, names, dl, fsm, model, now) {
+  const ans = dl.answer
+  dl.answer = null
+  let goal = null
+  try {
+    goal = require('./goal')
+  } catch (_) {
+    return null
+  }
+  const fail = (reason) => {
+    try {
+      metrics.escalation.inc({ from: model, to: 'fsm', reason })
+    } catch (_) { /* counter best-effort */ }
+    try {
+      stratBackoff(dl, now)
+    } catch (_) { /* backoff best-effort */ }
+    try {
+      console.log(`goal deadlock kind=work trigger=${dl.trigger || '?'} options=${names.join(',')} choice=none conf=? source=${model} why=${reason} ${diagnose(bot, ctx)}`)
+    } catch (_) { /* log best-effort */ }
+    return { step: fsm, source: 'fsm-fallback', fsm, model }
+  }
+  // Safety cut-through (pinMenu precedent): a night answer owns the body —
+  // the stalled-day answer drops and the night rule picks below.
+  let safety = null
+  try {
+    safety = goal.goalFsm(facts, names)
+  } catch (_) {
+    safety = null
+  }
+  if (safety === 'stay' || safety === 'gohome' || safety === 'shelter') {
+    try {
+      console.log(`goal deadlock kind=work trigger=${dl.trigger || '?'} choice=dropped source=night why=${diagnose(bot, ctx)}`)
+    } catch (_) { /* log best-effort */ }
+    return null
+  }
+  const choice = ans && ans.step
+  if (!ans || ans.error) return fail((ans && ans.error) || 'invalid')
+  if (choice === 'park' || choice === 'ask-owner') {
+    // Work mode has no task to park: the round still counts and the window
+    // still bounds, the FSM simply runs on.
+    dl.rounds = (dl.rounds || 0) + 1
+    dl.cooldownUntil = now + Math.min(goalCommitMs(), DEADLOCK_COMMIT_MAX_MS)
+    try {
+      console.log(`goal deadlock kind=work trigger=${dl.trigger || '?'} options=${names.join(',')} choice=${choice} conf=${typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?'} source=${ans.source || model} why=${diagnose(bot, ctx)}`)
+    } catch (_) { /* log best-effort */ }
+    try {
+      metrics.goalWatchdogTotal.inc({ kind: 'work', choice, source: ans.source || model })
+    } catch (_) { /* counter best-effort */ }
+    return { step: fsm, source: 'goal-fsm', fsm, model: null }
+  }
+  let valid = false
+  try {
+    valid = typeof choice === 'string' && choice !== 'rest' && choice !== 'fun' &&
+      names.includes(choice) && !!goal.MENU[choice] &&
+      !!goal.MENU[choice].feasible(facts, bot, ctx) && goal.registered(choice)
+  } catch (_) {
+    valid = false
+  }
+  if (!valid) return fail(names.includes(choice) ? `stale:${choice}` : 'invalid')
+  if (typeof ans.conf === 'number' && ans.conf < TASK_PLAN_MIN_CONF) {
+    return fail(`low-confidence conf=${ans.conf.toFixed(2)}`)
+  }
+  const conf = typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?'
+  const source = ans.source || model
+  dl.rounds = (dl.rounds || 0) + 1
+  dl.cooldownUntil = now + Math.min(goalCommitMs(), DEADLOCK_COMMIT_MAX_MS)
+  try {
+    console.log(`goal deadlock kind=work trigger=${dl.trigger || '?'} options=${names.join(',')} choice=${choice} conf=${conf} source=${source} why=${diagnose(bot, ctx)}`)
+  } catch (_) { /* log best-effort */ }
+  try {
+    metrics.goalWatchdogTotal.inc({ kind: 'work', choice, source })
+  } catch (_) { /* counter best-effort */ }
+  if (choice !== fsm) {
+    try {
+      metrics.goalDisagreements.inc({ model: choice, fsm })
+    } catch (_) { /* counter best-effort */ }
+    try {
+      console.error(`goal disagree source=${source} model=${choice} fsm=${fsm} menu=${names.join(',')}`)
+    } catch (_) { /* log best-effort */ }
+  }
+  return { step: choice, source: 'deadlock-plan', fsm, model: source }
+}
+
+// The work-mode deadlock chooser: goal.js decide() delegates here through
+// ctx (the strategicChoose wiring precedent — the arbiter never requires
+// the task layer, oqul.1). Returns a choice on fire/consume/fail ticks
+// (the phase-1 ask plug is suppressed: one episode spends one call), or
+// null when the existing path runs unchanged.
+function deadlockChoose(brain, facts, feasible, home, extra, fsm) {
+  const bot = extra && extra.bot
+  const ctx = extra && extra.ctx
+  // The task executive owns goal kinds: yield before any observation, and
+  // a mode change ends the work episode.
+  let kind = null
+  try {
+    kind = goalKind(ctx)
+  } catch (_) {
+    kind = null
+  }
+  if (kind) {
+    try {
+      if (ctx && ctx.deadlock) deadlockReset(ctx.deadlock)
+    } catch (_) { /* reset best-effort */ }
+    return null
+  }
+  if (!brain || typeof brain.plan !== 'function') return null
+  // 0 = off (the shipped ladder, the rollback — the watchdogOn precedent).
+  if (!watchdogOn()) return null
+  const dl = deadlockOf(ctx)
+  if (!dl) return null
+  const model = (brain && (brain.planner || brain.source || brain.name)) || 'model'
+  let goal = null
+  try {
+    goal = require('./goal')
+  } catch (_) {
+    return null
+  }
+  const now = Date.now()
+  const names = STEP_ORDER.filter((n) => Array.isArray(feasible) && feasible.includes(n))
+  let text = ''
+  try {
+    text = goal.goalText(facts, home)
+  } catch (_) {
+    text = ''
+  }
+  // stepStatus parses go through step.js (failReason/isFinished): a
+  // finished stall is moot — any step-done resets the episode and drops a
+  // late answer (the resolver's pending check plus this reset).
+  const status = (ctx && typeof ctx.stepStatus === 'string') ? ctx.stepStatus : null
+  let done = false
+  try {
+    done = !!status && isFinished(status) && failReason(status) === null
+  } catch (_) {
+    done = false
+  }
+  if (done) {
+    deadlockReset(dl)
+    return null
+  }
+  // Consume-first (the maybeWatchdog precedent): an answer resolves on
+  // this re-decide, never a second call in flight.
+  if (dl.answer) return deadlockConsume(bot, ctx, facts, home, names, dl, fsm, model, now)
+  if (dl.pending) return null
+  // A live commitment window (defensive: work mode founds no goal, but a
+  // window from a just-finished order must not be doubled).
+  try {
+    const g = ctx && ctx.goal
+    if (g && g.commit) return null
+  } catch (_) { /* window best-effort */ }
+  if (now < (dl.cooldownUntil || 0)) return null
+  try {
+    if (now < (dl.stratBackoffUntil || 0)) return null
+  } catch (_) { /* guard best-effort */ }
+  const W = goalWatchdogMs()
+  if (now - (dl.firedAt || 0) < W) return null
+  // Observe the applied pick: a transition extends the loop chain. A work
+  // pick (e.g. a classifier override) also ends a rest stretch — only
+  // consecutive rest keeps it.
+  const cur = (ctx && typeof ctx.step === 'string') ? ctx.step : null
+  if (cur && dl.lastStep && cur !== dl.lastStep) {
+    dl.chain.push({ step: cur, at: now })
+    while (dl.chain.length > DEADLOCK_CHAIN_KEPT) dl.chain.shift()
+  }
+  if (cur) dl.lastStep = cur
+  if (cur && cur !== 'rest') {
+    dl.restSince = null
+    dl.restPicks = 0
+  }
+  // Rest stretch: consecutive eligible rest answers with owed needs.
+  // Excluded: night rest by design, low-hp-gated rest (safety, not
+  // deadlock), parked-task rest.
+  let eligibleRest = false
+  try {
+    eligibleRest = fsm === 'rest' && facts && facts.time === 'day' &&
+      !goal.lowHpGated(bot, facts, ctx) && !goal.taskParked(ctx) &&
+      deadlockUnmet(facts)
+  } catch (_) {
+    eligibleRest = false
+  }
+  if (fsm === 'rest' && eligibleRest) {
+    if (dl.restSince == null) {
+      dl.restSince = now
+      dl.restPicks = 1
+    } else {
+      dl.restPicks += 1
+    }
+  } else if (fsm !== 'rest' || (cur && cur !== 'rest')) {
+    dl.restSince = null
+    dl.restPicks = 0
+  } else {
+    // Ineligible rest (night / low-hp / parked / needs met): a boundary
+    // ends the day episode — pause, do not count.
+    dl.restSince = null
+    dl.restPicks = 0
+  }
+  // Loop: 3 full A→B→A cycles (6 alternating picks of 2 steps) within
+  // 10 min, without an intervening done (resets above).
+  let loop = false
+  try {
+    const c = dl.chain
+    if (c.length >= DEADLOCK_LOOP_PICKS) {
+      const last6 = c.slice(-DEADLOCK_LOOP_PICKS)
+      const distinct = [...new Set(last6.map((e) => e.step))]
+      loop = distinct.length === 2 &&
+        last6.every((e, i) => i === 0 || e.step !== last6[i - 1].step) &&
+        (now - last6[0].at) <= DEADLOCK_LOOP_WINDOW_MS
+    }
+  } catch (_) {
+    loop = false
+  }
+  const restReady = eligibleRest && dl.restSince != null && (now - dl.restSince) >= W
+  if (!restReady && !loop) return null
+  // Round cap (goalMaxRounds, the watchdog resolution): work mode has no
+  // task to park or switch — the FSM, already the safe default, runs on
+  // with a line and a fresh episode.
+  if ((dl.rounds || 0) >= goalMaxRounds()) {
+    try {
+      console.log(`goal deadlock kind=work trigger=${restReady ? 'rest-stretch' : 'loop'} choice=none source=max-rounds why=${diagnose(bot, ctx)}`)
+    } catch (_) { /* log best-effort */ }
+    dl.rounds = 0
+    dl.restSince = null
+    dl.restPicks = 0
+    dl.chain = []
+    dl.cooldownUntil = now + Math.min(goalCommitMs(), DEADLOCK_COMMIT_MAX_MS)
+    return null
+  }
+  const trigger = restReady ? 'rest-stretch' : 'loop'
+  const stallMs = restReady
+    ? (now - dl.restSince)
+    : (now - dl.chain[dl.chain.length - DEADLOCK_LOOP_PICKS].at)
+  const fired = deadlockFire(bot, ctx, brain, facts, home, names, text, dl, model, now, trigger, stallMs)
+  if (!fired) return null
+  // This tick takes the FSM answer: the episode spends exactly ONE call.
   return { step: fsm, source: 'goal-fsm', fsm, model: null }
 }
 
@@ -3034,6 +3442,11 @@ function taskTick(bot, ctx, now = Date.now()) {
     try {
       ctx.strategicChoose = strategicChoose
     } catch (_) { /* wiring best-effort */ }
+    // Deadlock escalation wiring (idkcraft-u19u phase C): the work-mode
+    // chooser goal.js decide() delegates through — same seam as above.
+    try {
+      ctx.deadlockChoose = deadlockChoose
+    } catch (_) { /* wiring best-effort */ }
     // Park timers first (vmzq.3): wall-clock, independent of the stall
     // eligibility below. May resetTask, so before the state init.
     maybeResume(bot, ctx, now)
@@ -3602,4 +4015,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { castleCurrent, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose }
+module.exports = { castleCurrent, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose }
