@@ -33,7 +33,7 @@ function mockBot({ cells = {}, items = [], sheep = null } = {}) {
     registry: { blocksByName: Object.fromEntries(Object.entries(IDS).map(([n, id]) => [n, { id }])) },
     pathfinder: {
       goal: null,
-      setGoal: (g) => { ops.goals.push(g && g.constructor && g.constructor.name); bot.pathfinder.goal = g },
+      setGoal: (g) => { ops.goals.push(`${g && g.constructor && g.constructor.name}:${g && g.rangeSq}`); bot.pathfinder.goal = g },
       isMoving: () => false,
     },
     inventory: { items: () => bot.inv },
@@ -278,8 +278,32 @@ describe('farm legs', () => {
     const w = { x: 5, y: 64, z: 0 }
     assert.equal(farm.walkTo(bot, ctx, {}, 'farm-till', w), true)
     assert.equal(farm.walkTo(bot, ctx, {}, 'farm-till', w), true)
-    assert.deepEqual(bot.ops.goals, ['GoalNear'])
+    assert.deepEqual(bot.ops.goals, ['GoalNear:9'])
     assert.equal(farm.walkTo(bot, ctx, {}, 'farm-till', { x: 1, y: 64, z: 0 }), false)
+  })
+
+  it('keeps stall patience across nearby re-targets, resets on far moves', () => {
+    const bot = mockBot()
+    const ctx = ctxOf()
+    const f = {}
+    assert.equal(farm.walkTo(bot, ctx, f, 'farm-feed', { x: 10, y: 64, z: 0 }), true)
+    assert.equal(f.still, 0)
+    f.still = 7
+    assert.equal(farm.walkTo(bot, ctx, f, 'farm-feed', { x: 11, y: 64, z: 0 }), true)
+    assert.equal(f.still, 7)
+    assert.equal(farm.walkTo(bot, ctx, f, 'farm-feed', { x: 30, y: 64, z: 0 }), true)
+    assert.equal(f.still, 0)
+    assert.deepEqual(bot.ops.goals, ['GoalNear:9', 'GoalNear:9', 'GoalNear:9'])
+  })
+
+  it('pours from pit-side: walk goal range 1, arrival within 2', () => {
+    const bot = mockBot()
+    const ctx = ctxOf()
+    const f = {}
+    assert.equal(farm.walkTo(bot, ctx, f, 'farm-water', { x: 5, y: 64, z: 0 }, 2, 1), true)
+    assert.deepEqual(bot.ops.goals, ['GoalNear:1'])
+    bot.entity.position = { x: 4, y: 64, z: 0 }
+    assert.equal(farm.walkTo(bot, ctx, f, 'farm-water', { x: 5, y: 64, z: 0 }, 2, 1), false)
   })
 
   it('carries wheat to sheep and ends done with no failure', async () => {
@@ -294,10 +318,35 @@ describe('farm legs', () => {
   it('ends done (never failed) with no hoe mats', async () => {
     const bot = mockBot({
       cells: { '1,64,0': 'grass_block', '3,64,0': 'water' },
-      items: [],
+      items: [{ name: 'wheat_seeds', count: 2 }],
     })
     const ctx = ctxOf()
     for (let t = 0; t < 6 && ctx.stepStatus === 'running'; t++) await farm(bot, ctx)
     assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('tills nothing without seeds in the pack', async () => {
+    const bot = mockBot({
+      cells: { '1,64,0': 'grass_block', '3,64,0': 'water' },
+      items: [{ name: 'wooden_hoe', count: 1 }],
+    })
+    const ctx = ctxOf()
+    for (let t = 0; t < 6 && ctx.stepStatus === 'running'; t++) await farm(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(!bot.ops.use.some((u) => u === 'wooden_hoe>grass_block'), `seedless till happened: ${bot.ops.use}`)
+    assert.equal(farm.farmFeasible(DAY, bot, ctxOf()), false)
+  })
+
+  it('struck farmland stays out of the menu until TTL passes', () => {
+    const bot = mockBot({
+      cells: { '2,64,0': { name: 'farmland', props: { moisture: 0 } } },
+      items: [{ name: 'water_bucket', count: 1 }],
+    })
+    bot.entity.position = { x: 2, y: 64, z: 2 }
+    assert.equal(farm.farmFeasible(DAY, bot, ctxOf()), true)
+    const struck = ctxOf()
+    struck.farmStruck = new Set(['2,64,0'])
+    struck.farmStruckAt = Date.now()
+    assert.equal(farm.farmFeasible(DAY, bot, struck), false)
   })
 })

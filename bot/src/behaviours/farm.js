@@ -163,7 +163,8 @@ function nearestCell(bot, ctx, names, radius, { forDig = false } = {}) {
     const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z)
     if (Math.abs(y - bp.y) > 6) continue
     const k = `${x},${y},${z}`
-    if (ctx && ctx.farm && ctx.farm.struck && ctx.farm.struck.has(k)) continue
+    const struck = struckSet(ctx)
+    if (struck && struck.has(k)) continue
     let b = null
     try { b = bot.blockAt(new Vec3(x, y, z)) } catch (_) { b = null }
     if (!b || !set.has(b.name)) continue
@@ -213,7 +214,8 @@ function trenchFor(bot, ctx, f) {
   for (const [dx, dz] of dirs) {
     const x = Math.floor(f.x) + dx, y = Math.floor(f.y), z = Math.floor(f.z) + dz
     const k = `${x},${y},${z}`
-    if (ctx && ctx.farm && ctx.farm.struck && ctx.farm.struck.has(k)) continue
+    const struck = struckSet(ctx)
+    if (struck && struck.has(k)) continue
     let b = null
     try { b = bot.blockAt(new Vec3(x, y, z)) } catch (_) { b = null }
     if (!b || (!isTillable(b.name) && b.name !== 'sand' && b.name !== 'gravel')) continue
@@ -235,6 +237,20 @@ function strike(ctx, p) {
   } catch (_) { /* strike best-effort */ }
 }
 
+// Struck cells visible to both the menu probe and the step: the live run
+// set, else the fresh cross-pick parked set. The menu must skip the same
+// cells run() skips, or a struck farmland re-picks the step every tick.
+function struckSet(ctx) {
+  try {
+    if (ctx && ctx.farm && ctx.farm.struck instanceof Set && ctx.farm.struck.size > 0) return ctx.farm.struck
+  } catch (_) { /* fall through to parked */ }
+  try {
+    if (ctx && ctx.farmStruck instanceof Set && typeof ctx.farmStruckAt === 'number' &&
+        Date.now() - ctx.farmStruckAt < STRUCK_TTL_MS) return ctx.farmStruck
+  } catch (_) { /* no parked strikes */ }
+  return null
+}
+
 function farmState(ctx) {
   let f = null
   try { f = ctx.farm } catch (_) { f = null }
@@ -252,6 +268,10 @@ function farmState(ctx) {
       f.struck = ctx.farmStruck
     }
   } catch (_) { /* strikes best-effort */ }
+  // Strike watermark: finish() re-stamps the TTL only when this pick added
+  // strikes, so passing blocks (a mob stall, a missed pour) heal on schedule
+  // instead of refreshing forever.
+  try { f.struckBase = f.struck.size } catch (_) { /* watermark best-effort */ }
   if (typeof f.t0 !== 'number') f.t0 = Date.now()
   return f
 }
@@ -377,12 +397,18 @@ function finish(bot, ctx, f, ok, reason, gen) {
   try { console.log(prodLine(f)) } catch (_) { /* log best-effort */ }
   // Drop the run state with the step (reforest precedent): a re-picked
   // farm must rescan, or stale caps finish it done on the first tick. The
-  // struck set parks on the ctx with a timestamp instead: struck cells stay
-  // struck across picks until STRUCK_TTL_MS passes.
+  // struck set parks on the ctx instead — but the TTL re-stamps only when
+  // this pick added strikes (struckBase watermark), so passing blocks heal
+  // on schedule instead of refreshing forever.
   try {
     if (ctx) {
-      if (f.struck instanceof Set && f.struck.size > 0) ctx.farmStruck = f.struck
-      ctx.farmStruckAt = Date.now()
+      if (f.struck instanceof Set && f.struck.size > (f.struckBase | 0)) {
+        ctx.farmStruck = f.struck
+        ctx.farmStruckAt = Date.now()
+      } else if (f.struck instanceof Set && f.struck.size > 0 && !(typeof ctx.farmStruckAt === 'number')) {
+        ctx.farmStruck = f.struck
+        ctx.farmStruckAt = Date.now()
+      }
       ctx.farm = null
     }
   } catch (_) { /* state best-effort */ }
