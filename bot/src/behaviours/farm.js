@@ -8,8 +8,9 @@
 // water so hydration is free) -> plant (seeds + activateBlock on
 // farmland) -> harvest (dig mature wheat, age 7, and replant from the
 // drops) -> feed (walk wheat to the nearest sheep and hold it; breeding
-// itself needs an entity-use RPC the mod does not serve yet, so the leg
-// lures — sheep follow a wheat holder — and says so).
+// itself goes through the entity-use RPC (h1nl serves it on V2 too), and
+// where the body cannot breed the leg still lures — sheep follow a wheat
+// holder — and says so).
 //
 // Body ops only (dig / activateBlock / equip / craft / walk goals), all
 // served by the bridge, so the same code runs on v1 mineflayer too. The
@@ -41,9 +42,9 @@ const POUR_SETTLE_TICKS = 2 // ticks for the bucket water to land before verifyi
 const POUR_ARRIVE = 2 // pour only this close: past ~2.1 blocks the view ray
 // hits the pit rim and the water lands on the field, flooding the crops
 const FEED_RADIUS = 24 // sheep farther than the farm scans never pull the step
-const FEED_COOLDOWN_MS = 600000 // a fed flock reads fed for 10 min (wheat is
-// never consumed on V2: no activateEntity served, so the lure alone must
-// not re-pick the step every tick and starve explore/rest)
+const FEED_COOLDOWN_MS = 600000 // a fed flock reads fed for 10 min (a lure
+// that never breeds must not re-pick the step every tick and starve
+// explore/rest)
 const STRUCK_TTL_MS = 600000 // struck cells stay struck across picks for
 // 10 min: a dry untrenchable farmland must not re-pull the step every other
 // tick, and stale strikes heal when the world changes
@@ -679,8 +680,8 @@ async function run(bot, ctx) {
         try {
           if (!(bot.heldItem && bot.heldItem.name === 'wheat')) await equipHeld(bot, 'wheat')
         } catch (_) { /* hold best-effort */ }
-        // Breed where the body serves entity-use (v1); the V2 mod has no
-        // entity-use RPC yet, so there the leg lures and says so.
+        // Breed where the body serves entity-use (v1 mineflayer, V2 h1nl
+        // interact.entity); where it does not, the leg lures and says so.
         let bred = 0
         try {
           if (typeof bot.activateEntity === 'function') {

@@ -137,6 +137,29 @@ describe('bridge look/lookAt (idkcraft-neuc.9)', () => {
     assert.equal(transport.state.blockInteracts.length, 4)
   })
 
+  it('useOn/activateEntity interact with the entity id (idkcraft-h1nl)', async () => {
+    let transport
+    ;({ transport, bot } = await lookBot())
+    bot.pathfinder.setGoal(new goals.GoalNear(10, 64, 10, 1))
+    await tick()
+    bot.useOn({ id: 11 }) // fire-and-forget, like attack
+    await tick(150) // pause + resume + the one-tick status wait
+    assert.deepEqual(transport.state.entityInteracts, [11])
+    assert.deepEqual(transport.state.baritonePauses, ['#pause', '#resume'])
+    assert.equal(bot.pathfinder.isMoving(), true) // goal survived the pause
+    bot.useOn(null) // invalid target: no call, no throw
+    bot.useOn({}) // no id: no call, no throw
+    await tick(60)
+    assert.deepEqual(transport.state.entityInteracts, [11])
+    // activateEntity aims first (mineflayer parity), then interacts.
+    await bot.activateEntity({ id: 12, position: new Vec3(3, 64, 4) })
+    const aims = transport.state.lookLog.filter((l) => l.method === 'look.at')
+    assert.equal(aims.length, 1)
+    assert.deepEqual([aims[0].x, aims[0].y, aims[0].z], [3, 65, 4])
+    assert.deepEqual(transport.state.entityInteracts, [11, 12])
+    await assert.rejects(() => bot.activateEntity({}), /want an entity/)
+  })
+
   it('activateItem/deactivateItem start and stop the held-item use', async () => {
     let transport
     ;({ transport, bot } = await lookBot())

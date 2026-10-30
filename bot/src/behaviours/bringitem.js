@@ -656,7 +656,12 @@ function resumeSub(bot, ctx, o) {
 // color; a bare family tosses the best color in the pack (re-derived each
 // pickup). Partial pack/chest stock counts toward the want (recounted
 // against the concrete drop, the toss truth).
-function toWoolHunt(bot, o) {
+// idkcraft-h1nl: with no shears in the pack but a covered shears recipe
+// (2 iron, no table) the hunt opens with a 'shears' craft phase instead —
+// shearing beats killing. Uncovered (no iron) hunts as before: kill stays
+// the fallback when shearing is impossible. ctx is optional: callers
+// without one (beds, castlefetch) keep the old find-first shape.
+function toWoolHunt(bot, o, ctx) {
   const names = o.names || []
   const color = names.length === 1 ? woolMod.dropColor(names[0]) : null
   o.kind = 'wool'
@@ -670,6 +675,13 @@ function toWoolHunt(bot, o) {
   }
   o.have = o.drop ? countDrop(bot, o.drop) : 0
   o.phase = 'find'
+  if (ctx && !woolMod.hasShears(bot)) {
+    let plan = null
+    try {
+      plan = craftany().planCraft(bot, ctx, ['shears'], 1)
+    } catch (_) { plan = null }
+    if (plan && plan.ok) o.phase = 'shears'
+  }
   o.announced = false
   o.animal = null
   return o
@@ -679,7 +691,7 @@ function toWoolHunt(bot, o) {
 // else falls through to the craft rung, then the honest refusal.
 function refuseItemOrHunt(bot, ctx, o) {
   if (woolMod.isWoolFamily(o)) {
-    toWoolHunt(bot, o)
+    toWoolHunt(bot, o, ctx)
     return
   }
   enterCraftOrRefuse(bot, ctx, o)
@@ -762,6 +774,27 @@ function craftTick(bot, ctx, o) {
     return
   }
   refuse(bot, ctx, (res && res.line) || `can't make ${o.name}: crafting failed`)
+}
+
+// Shears rung (idkcraft-h1nl): the 'shears' phase of a wool hunt crafts
+// one pair through the shared craftany tick, then resumes the hunt. Done
+// re-announces with the shears status; a lost race (the iron wandered off
+// mid-craft) hunts anyway — kill stays the fallback, so this phase never
+// refuses and writes no failed: status.
+function shearsTick(bot, ctx, o) {
+  if (!o.shearsSaid) {
+    o.shearsSaid = true
+    say(bot, 'making shears first')
+  }
+  let res = null
+  try {
+    res = deps.craftItem(bot, ctx, ['shears'], 1)
+  } catch (_) {
+    res = { done: false, line: 'craft threw' }
+  }
+  if (res === 'running') return
+  o.phase = 'find'
+  o.announced = false
 }
 
 // Phase 'smelt' (ipn.20), castlefetch smeltTick's shape: a settled result
@@ -1185,7 +1218,7 @@ async function fetchItem(bot, ctx, o) {
       o.saidWaiting = false
     } else if (woolMod.isWoolFamily(o)) {
       o.chestInFlight = false
-      toWoolHunt(bot, o) // short or empty chest: the mob rung hunts the rest
+      toWoolHunt(bot, o, ctx) // short or empty chest: the mob rung hunts the rest
     } else if (plan.have > 0) {
       o.chestInFlight = false
       say(bot, `only ${plan.items.map((i) => `${i.count} ${i.name}`).join(', ')}, coming`)
@@ -1292,6 +1325,7 @@ module.exports.toWoolHunt = toWoolHunt
 module.exports.refuseItemOrHunt = refuseItemOrHunt
 module.exports.enterCraftOrRefuse = enterCraftOrRefuse
 module.exports.craftTick = craftTick
+module.exports.shearsTick = shearsTick
 module.exports.fetchItem = fetchItem
 module.exports.shareToss = shareToss
 module.exports.openSubOrder = openSubOrder

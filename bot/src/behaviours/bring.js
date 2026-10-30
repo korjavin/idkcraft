@@ -1061,10 +1061,13 @@ function pickupFood(bot, ctx, o, bp, grounded) {
 
 // Wool orders (idkcraft-did.3) ride the shared n7k prey phases above —
 // find, walk, kill (shear when shears are held, else swing), pickup —
-// plus the same search legs. Only the return leg falls through to the
-// shared single-drop toss in bring(). The morphs and rungs (toWoolHunt,
-// refuseItemOrHunt, enterCraftOrRefuse, craftTick) live in bringitem.js.
+// plus the same search legs, with the h1nl 'shears' craft phase first when
+// the pack covers shears but holds none. Only the return leg falls through
+// to the shared single-drop toss in bring(). The morphs and rungs
+// (toWoolHunt, refuseItemOrHunt, enterCraftOrRefuse, craftTick, shearsTick)
+// live in bringitem.js.
 async function gatherWool(bot, ctx, o, bp, grounded) {
+  if (o.phase === 'shears') { itemMod.shearsTick(bot, ctx, o); return } // h1nl: craft shears, then hunt
   if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
   if (o.phase === 'find') { await findFood(bot, ctx, o); return }
   if (o.phase === 'walk') { walkFood(bot, ctx, o, bp, grounded); return }

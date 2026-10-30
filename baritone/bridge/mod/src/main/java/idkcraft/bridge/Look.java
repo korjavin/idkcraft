@@ -9,13 +9,15 @@ import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 
 /**
  * Look / attack / interact / sleep surface (idkcraft-neuc.9).
  *
  * <p>Methods: {@code look.set {yaw,pitch,force}}, {@code look.at {x,y,z}},
- * {@code attack {entityId}}, {@code interact.block {x,y,z,face,cursor,sneak}},
+ * {@code attack {entityId}}, {@code interact.entity {entityId}},
+ * {@code interact.block {x,y,z,face,cursor,sneak}},
  * {@code interact.item {hand,holdMs}}, {@code interact.stop {}},
  * {@code sleep {x,y,z}}, {@code wake {}}, {@code respawn {}}. Notifications: {@code sleep {}} /
  * {@code wake {}} on the player's sleeping-state edge (per-tick hook).
@@ -86,6 +88,27 @@ public final class Look {
                 client.gameMode.attack(player, target);
                 player.swing(InteractionHand.MAIN_HAND);
                 return ok();
+            });
+        });
+        // idkcraft-h1nl: entity-use (shear sheep, breed, mount) — the use
+        // path of use_entity, beside attack's hit path. The caller aims
+        // first (Node lookAt, like mineflayer's activateEntity); the client
+        // decides reach and validity, same as interact.block.
+        server.register("interact.entity", params -> {
+            int entityId = requiredInt(params, "entityId");
+            return look.onPlayer(player -> {
+                Minecraft client = Minecraft.getInstance();
+                if (client.gameMode == null) {
+                    throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "not in world");
+                }
+                Entity target = client.level == null ? null : client.level.getEntity(entityId);
+                if (target == null) {
+                    throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "no such entity " + entityId);
+                }
+                var result = client.gameMode.interact(player, target, new EntityHitResult(target), InteractionHand.MAIN_HAND);
+                JsonObject res = ok();
+                res.addProperty("result", String.valueOf(result));
+                return res;
             });
         });
         server.register("interact.block", params -> {

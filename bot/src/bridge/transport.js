@@ -269,6 +269,9 @@ class FakeTransport extends EventEmitter {
       case 'attack':
         (s.attacks = s.attacks || []).push(params.entityId)
         return { ok: true }
+      case 'interact.entity': // idkcraft-h1nl: entity-use (useOn/activateEntity)
+        (s.entityInteracts = s.entityInteracts || []).push(params.entityId)
+        return { ok: true, result: 'SUCCESS' }
       case 'interact.block': {
         (s.blockInteracts = s.blockInteracts || []).push({ ...params })
         const name = s.blocks[this.key(params.x, params.y, params.z)] || 'air'

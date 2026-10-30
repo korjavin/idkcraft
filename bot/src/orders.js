@@ -323,7 +323,7 @@ function createOrders(box) {
         ctx.bring = bringMod.toWoolHunt(bot, {
           kind: 'item', name: resolved.family, names: resolved.names,
           want: need, by, drop: null, have: 0,
-        })
+        }, ctx) // h1nl: ctx opens the shears craft phase, else the hunt kills
         ctx.paused = false
         const c = ctx.bring.color
         return c ? `looking for ${c} sheep` : 'looking for sheep'
