@@ -560,6 +560,7 @@ constructor, `handleLookEvent` in the adapter's event router).
 | `look.set` | `{yaw,pitch,force}` (mineflayer radians) | `{ok}` | `bot.look(yaw,pitch,force)` |
 | `look.at` | `{x,y,z}` | `{ok,yaw,pitch}` (aimed, mineflayer radians) | `bot.lookAt(point,force)` |
 | `attack` | `{entityId}` | `{ok}` | `bot.attack(entity)` |
+| `interact.entity` | `{entityId}` | `{ok,result}` | `bot.useOn(entity)` / `bot.activateEntity(entity)` (aims first, like mineflayer) |
 | `interact.block` | `{x,y,z,face,cursor{x,y,z},sneak}` | `{ok,result}` | `bot.activateBlock(block,direction,cursorPos)` |
 | `interact.item` | `{hand:'main'\|'off',holdMs?}` | `{ok}` | `bot.activateItem(offHand)` |
 | `interact.stop` | — | `{ok}` | `bot.deactivateItem()` |

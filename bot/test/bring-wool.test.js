@@ -7,6 +7,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const bring = require('../src/behaviours/bring')
+const itemMod = require('../src/behaviours/bringitem')
 const wool = require('../src/behaviours/wool')
 const { handleChat, createTicker } = require('../src/index')
 
@@ -251,6 +252,30 @@ describe('wool helpers (idkcraft-did.3)', () => {
     const bare = { inventory: { items: () => [{ name: 'dirt', count: 3 }] } }
     assert.equal(wool.hasShears(bare), false)
     assert.equal(wool.topWoolColor(bare), null)
+  })
+
+  it("toWoolHunt opens a shears phase when iron covers shears but none are held (h1nl)", () => {
+    const bot = {
+      inventory: { items: () => [{ name: 'iron_ingot', count: 2 }] },
+      registry: { itemsByName: { shears: { id: 500 }, iron_ingot: { id: 501 } } },
+      recipesAll: (id) => (id === 500
+        ? [{ requiresTable: false, result: { count: 1 }, delta: [{ id: 501, count: -2 }] }]
+        : []),
+    }
+    const seed = () => ({ kind: 'item', name: 'wool', names: ['white_wool'], want: 3, drop: null, have: 0 })
+    const o = bring.toWoolHunt(bot, seed(), {})
+    assert.equal(o.phase, 'shears')
+    assert.equal(o.kind, 'wool')
+    // Shears in hand: straight to the hunt (killFood shears from here).
+    const held = bring.toWoolHunt(
+      { ...bot, inventory: { items: () => [{ name: 'shears', count: 1 }] } }, seed(), {})
+    assert.equal(held.phase, 'find')
+    // One iron short: uncovered, hunt as before (kill stays the fallback).
+    const poor = bring.toWoolHunt(
+      { ...bot, inventory: { items: () => [{ name: 'iron_ingot', count: 1 }] } }, seed(), {})
+    assert.equal(poor.phase, 'find')
+    // No ctx (beds, castlefetch): the old find-first shape.
+    assert.equal(bring.toWoolHunt(bot, seed()).phase, 'find')
   })
 
   it('toWoolHunt locks single-color families and seeds bare ones from the pack', () => {
@@ -569,5 +594,50 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     assert.equal(bot.entities[12].isValid, false, 'the free sheep died')
     assert.ok(bot.attackCalls.length > 0 && bot.attackCalls.every((id) => id === 12), `swings: ${bot.attackCalls}`)
     assert.equal(bot.lines.filter((l) => l.startsWith('going for wool')).length, 1, 'one announcement, silent re-chase')
+  })
+})
+
+describe("shears rung (idkcraft-h1nl)", () => {
+  it('shearsTick crafts, then resumes the hunt; a lost race hunts anyway', () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0) })
+    const ctx = {}
+    const real = itemMod.deps.craftItem
+    try {
+      itemMod.deps.craftItem = () => 'running'
+      const o = { kind: 'wool', phase: 'shears' }
+      itemMod.shearsTick(bot, ctx, o)
+      assert.equal(o.phase, 'shears')
+      assert.ok(bot.lines.some((l) => l === 'making shears first'), `lines: ${bot.lines}`)
+      itemMod.deps.craftItem = () => ({ done: true, target: 'shears' })
+      itemMod.shearsTick(bot, ctx, o)
+      assert.equal(o.phase, 'find')
+      assert.equal(o.announced, false) // the hunt re-announces with shears status
+      // Lost race (the iron wandered off mid-craft): hunt anyway — kill
+      // stays the fallback, never a refusal here.
+      const o2 = { kind: 'wool', phase: 'shears', shearsSaid: true }
+      itemMod.deps.craftItem = () => ({ done: false, line: "can't make shears: need 2 iron_ingot (have 0)" })
+      itemMod.shearsTick(bot, ctx, o2)
+      assert.equal(o2.phase, 'find')
+      assert.deepEqual(bot.lines, ['making shears first'], 'no refusal line on the lost race')
+    } finally {
+      itemMod.deps.craftItem = real
+    }
+  })
+
+  it('a shears phase routes through gatherWool without touching the hunt', async () => {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), animals: [sheep(11, 10)] })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    ctx.bring.phase = 'shears' // as toWoolHunt leaves it when iron covers shears
+    const real = itemMod.deps.craftItem
+    try {
+      itemMod.deps.craftItem = () => ({ done: true, target: 'shears' })
+      await bring(bot, ctx, null, {})
+      await flush()
+      assert.equal(ctx.bring.phase, 'find')
+      assert.equal(bot.attackCalls.length, 0, 'no swing during the craft phase')
+    } finally {
+      itemMod.deps.craftItem = real
+    }
   })
 })

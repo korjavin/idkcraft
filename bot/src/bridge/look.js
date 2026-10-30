@@ -1,9 +1,9 @@
 // idkcraft-neuc.9: look/attack/interact/sleep for the Baritone body.
 //
 // mineflayer signatures over the bridge wire (baritone/bridge/PROTOCOL.md,
-// look section): look.set / look.at / attack / interact.block /
-// interact.item / interact.stop / sleep / wake, plus the mod's sleep/wake
-// notifications folded by handleLookEvent.
+// look section): look.set / look.at / attack / interact.entity /
+// interact.block / interact.item / interact.stop / sleep / wake, plus the
+// mod's sleep/wake notifications folded by handleLookEvent.
 //
 // Baritone owns the crosshair while pathing, so every interaction pauses
 // it first and resumes after (withBaritonePaused — the ONE pause/resume
@@ -149,6 +149,24 @@ function installLook(bot) {
     if (!entity || typeof entity.id !== 'number') return
     void withBaritonePaused(bot, () => bot.transport.call('attack', { entityId: entity.id }))
       .catch((e) => failLog('attack', e))
+  }
+
+  // idkcraft-h1nl: entity-use over interact.entity (shear sheep, mount —
+  // the use path of use_entity, beside attack's hit path). useOn is
+  // fire-and-forget like attack (bring.js killFood calls it sync);
+  // activateEntity aims first like mineflayer (farm.js awaits it).
+  bot.useOn = (target) => {
+    if (!target || typeof target.id !== 'number') return
+    void withBaritonePaused(bot, () => bot.transport.call('interact.entity', { entityId: target.id }))
+      .catch((e) => failLog('interact.entity', e))
+  }
+
+  bot.activateEntity = async (entity) => {
+    if (!entity || typeof entity.id !== 'number' || !entity.position || typeof entity.position.x !== 'number') {
+      throw new Error('activateEntity: want an entity with a position')
+    }
+    await bot.lookAt(entity.position.offset(0, 1, 0), false)
+    await withBaritonePaused(bot, () => bot.transport.call('interact.entity', { entityId: entity.id }))
   }
 
   // mineflayer activateBlock: look at the block centre, then use the held
