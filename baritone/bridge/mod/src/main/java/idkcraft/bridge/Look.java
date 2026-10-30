@@ -9,6 +9,7 @@ import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -104,7 +105,7 @@ public final class Look {
                 if (target == null) {
                     throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "no such entity " + entityId);
                 }
-                var result = client.gameMode.interact(player, target, InteractionHand.MAIN_HAND);
+                var result = client.gameMode.interact(player, target, new EntityHitResult(target), InteractionHand.MAIN_HAND);
                 JsonObject res = ok();
                 res.addProperty("result", String.valueOf(result));
                 return res;

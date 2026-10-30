@@ -640,4 +640,23 @@ describe("shears rung (idkcraft-h1nl)", () => {
       itemMod.deps.craftItem = real
     }
   })
+
+  it("chat 'bring me wool' opens the shears phase with iron and no home chest (h1nl)", () => {
+    const bot = mockBot({
+      playerPos: pos(30, 64, 0),
+      items: [{ name: 'iron_ingot', count: 2 }],
+      animals: [sheep(11, 10)],
+    })
+    // Covered shears recipe (2 iron, no table), like the toWoolHunt unit pin.
+    bot.recipesAll = (id) => (id === ITEMS.shears
+      ? [{ requiresTable: false, result: { count: 1 }, delta: [{ id: 501, count: -2 }] }]
+      : [])
+    bot.registry.itemsByName.iron_ingot = { id: 501 }
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    // Fresh ticker ctx has no home chest, so the chest rung is skipped and
+    // the wool order lands on the mob rung directly.
+    assert.equal(ctx.bring.phase, 'shears')
+    assert.ok(bot.lines.some((l) => /sheep/.test(l)), `lines: ${bot.lines}`)
+  })
 })
