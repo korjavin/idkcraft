@@ -491,6 +491,40 @@ function createOrders(box) {
       if (!ctx.bring && plan && plan.have > 0) return openPackOrder()
       return answer
     },
+    // Tool order (idkcraft-0jvh): 'make me a stone hoe' / 'craft iron axe'.
+    // name is the concrete '<tier>_<tool>' (the chat parser defaulted the
+    // tier to stone); resolveItem confirms it is exactly one registry item.
+    // A bring-family order with toolName: the pack/chest/craft/gap ladder
+    // runs as usual, but the terminal equips instead of tossing and stone
+    // gaps dig instead of refusing. Chest-first like other item orders.
+    setTool: ({ name, by }) => {
+      clearPendingSearch(ctx)
+      resetNightStep()
+      ctx.gocastle = null
+      const resolved = bringMod.resolveItem(bot, name)
+      if (!resolved || resolved.names.length !== 1 || !bringMod.isToolName(resolved.names[0])) {
+        return `unknown item: ${name}`
+      }
+      const tool = resolved.names[0]
+      if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+      ctx.unseenTicks = 0
+      ctx.resumeWork = false
+      clearStuck()
+      homeMod.releaseMeet(bot, ctx)
+      ctx.craftany = null // a cancelled run must not resume under the new one
+      const o = {
+        kind: 'item', name: tool, names: [tool], want: 1, by,
+        items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
+        phase: 'chestfetch', announced: true, toolName: tool,
+      }
+      ctx.bring = o
+      ctx.paused = false
+      if (ctx.home && ctx.home.chest) return `checking the home chest for ${tool}`
+      // No adopted chest: open the rung now (pack -> craft -> gaps); every
+      // path announces its own line, so nothing to chat here.
+      bringMod.ensureTool(bot, ctx, o, tool)
+      return null
+    },
     setFlat: ({ radius, by, explicit, cx: atX, cz: atZ, relay, feet: relayFeet, level: relayLevel }) => {
       // tpd1: flat <r> <x> <z> — the given column IS the anchor, so every
       // swarm bot cuts the same square whoever sees the speaker.
