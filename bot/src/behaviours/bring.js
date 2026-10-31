@@ -1303,6 +1303,42 @@ function openPhase(ctx) {
   return 'find'
 }
 
+// Chest target (0jvh follow-up): the adopted home chest first (fetch-first,
+// unchanged), then remembered sightings nearest-first within
+// NEARBY_CHEST_RADIUS. Tried positions (o.chestSeen) stay skipped, so a
+// leg never re-opens a chest. Null when every chest is tried or none is
+// near — the caller falls back exactly as the chestless path did.
+function pickChest(bot, ctx, o) {
+  try {
+    if (!o || typeof o !== 'object') return null
+    if (!Array.isArray(o.chestSeen)) o.chestSeen = []
+    const h = ctx && ctx.home && ctx.home.chest
+    if (h && typeof h.x === 'number') {
+      const hk = stockpileMod.chestKeyOf(h)
+      if (hk !== null && !o.chestSeen.includes(hk)) return { pos: h, home: true }
+    }
+    const rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen)
+    if (rest.length > 0) return { pos: rest[0], home: false }
+  } catch (_) { /* no target */ }
+  return null
+}
+
+// Mark a fetched chest tried (o.chestSeen): the stockpile helper, so the
+// all-chests chain never re-opens it.
+const markChestSeen = stockpileMod.markChestSeen
+
+// A chest is available: the adopted home chest, or a remembered sighting
+// near the bot. The find-phase gates below read this instead of the home
+// chest alone, so a chestless home still checks remembered chests.
+function chestAvailable(bot, ctx, o) {
+  try {
+    if (ctx && ctx.home && ctx.home.chest) return true
+    return stockpileMod.nearbyChests(bot, ctx, o && o.chestSeen).length > 0
+  } catch (_) {
+    return false
+  }
+}
+
 // Day gate for self orders (goalFacts mirror): day is timeOfDay < 12000,
 // unknown reads as day (never cancel on an unreadable clock).
 function isDaytime(bot) {
@@ -1315,10 +1351,17 @@ function isDaytime(bot) {
 }
 
 function chestFetch(bot, ctx, o, bp) {
-  const c = ctx && ctx.home && ctx.home.chest
+  // All-chests (0jvh follow-up): the home chest first, then remembered
+  // sightings nearest-first. An order with no untried chest left falls back
+  // exactly as the chestless path did.
+  // Exactly one window op at a time (the dig rule), checked BEFORE target
+  // selection: an in-flight fetch marks its chest tried, and a concurrent
+  // tick must not read that as an exhausted rung and refuse (body-1).
+  if (o.chestInFlight) return
+  const tgt = pickChest(bot, ctx, o)
   const food = (o.kind || 'block') === 'food'
   const item = (o.kind || 'block') === 'item'
-  if (!c) {
+  if (!tgt) {
     o.chestTried = true
     if (item) { // adopted chest lost mid-order: wool hunts, the rest refuses
       itemMod.refuseItemOrHunt(bot, ctx, o)
@@ -1327,6 +1370,7 @@ function chestFetch(bot, ctx, o, bp) {
     o.phase = 'find'
     return
   }
+  const c = tgt.pos
   // Orders that open with no world hit carry no drop yet: derive it from
   // the requested name (ores/logs: dropFor covers request and block names).
   if (!food && !item && !o.drop && o.name) {
@@ -1363,10 +1407,18 @@ function chestFetch(bot, ctx, o, bp) {
     } catch (_) { /* retry next tick */ }
     ctx.lastGoalKey = key
     o.chestStalls = 0
-    if (!o.announced) {
-      o.announced = true
-      const what = food && !o.drop ? 'food' : (item ? o.name : (o.drop || o.name))
-      say(bot, `checking the home chest for ${what}`)
+    const what = food && !o.drop ? 'food' : (item ? o.name : (o.drop || o.name))
+    if (tgt.home) {
+      if (!o.announced) {
+        o.announced = true
+        say(bot, `checking the home chest for ${what}`)
+      }
+    } else if (!Array.isArray(o.announcedNear) || !o.announcedNear.includes(key)) {
+      // One line per remembered chest (the home line above stays once per
+      // order): the walk target is not the home chest, so say so honestly.
+      if (!Array.isArray(o.announcedNear)) o.announcedNear = []
+      o.announcedNear.push(key)
+      say(bot, `checking a nearby chest for ${what}`)
     }
     return
   }
@@ -1384,37 +1436,52 @@ function chestFetch(bot, ctx, o, bp) {
   if (!near) {
     o.chestStalls = (o.chestStalls || 0) + 1
     if (o.chestStalls >= CHEST_STALL_TICKS) {
+      // Unreachable target: skip it and walk to the next chest. Only the
+      // last one falls back, exactly as the single-chest path did.
+      markChestSeen(o, c)
+      if (pickChest(bot, ctx, o)) {
+        ctx.lastGoalKey = null
+        o.chestStalls = 0
+        return
+      }
       o.chestTried = true
       o.phase = 'find'
     }
     return
   }
   o.chestStalls = 0
-  if (o.chestInFlight) return // exactly one window op at a time (dig rule)
   o.chestInFlight = true
   void (async () => {
     try {
+      // Remembered chests open via `at` (the home leg passes null, the
+      // adopted chest, as before). Every leg marks its chest tried; a
+      // short fetch stays on the rung while an untried chest remains.
+      const at = tgt.home ? null : c
       if (item) {
-        await itemMod.fetchItem(bot, ctx, o)
+        await itemMod.fetchItem(bot, ctx, o, at)
         return
       }
       const need = Math.max(o.want - o.have, 0)
       const res = food && !o.drop
-        ? await stockpileMod.withdrawEdible(bot, ctx, need)
-        : await stockpileMod.withdrawFromChest(bot, ctx, o.drop, need)
+        ? await stockpileMod.withdrawEdible(bot, ctx, need, at)
+        : await stockpileMod.withdrawFromChest(bot, ctx, o.drop, need, at)
       o.chestInFlight = false
-      o.chestTried = true
+      markChestSeen(o, c)
       ctx.chestFull = false // a fetch may have made room: re-arm the step
       if (food && !o.drop && res && res.name) o.drop = res.name
       o.have = o.drop ? countDrop(bot, o.drop) : 0 // inventory count is the truth
       if (o.have >= o.want) {
         o.phase = 'return'
         o.saidWaiting = false
+      } else if (pickChest(bot, ctx, o)) {
+        // Short: walk to the next chest (phase stays chestfetch).
       } else {
+        o.chestTried = true
         o.phase = 'find' // short or empty: dig the rest
       }
     } catch (_) {
       o.chestInFlight = false
+      markChestSeen(o, c)
       o.chestTried = true
       if (item) {
         if (!ctx || ctx.bring !== o) return
@@ -1864,7 +1931,7 @@ async function bring(bot, ctx, target, state) {
       let mem = null
       try { mem = memoryExposed(bot, ctx, bp, o.name, o.skip) } catch (_) { mem = null }
       o.memKnown = mem
-      if (!food && !o.chestTried && o.have < o.want && ctx && ctx.home && ctx.home.chest) {
+      if (!food && !o.chestTried && o.have < o.want && chestAvailable(bot, ctx, o)) {
         o.phase = 'chestfetch'
         return
       }
@@ -1923,10 +1990,10 @@ async function bring(bot, ctx, target, state) {
       try { mem = memoryExposed(bot, ctx, bp, o.name, o.skip) } catch (_) { mem = null }
       o.memKnown = memoryInBudget(mem, o.buried)
     }
-    // Gated with no dig in play (chv): like an empty find, the adopted
-    // chest comes before the shells and legs (atl.14 fetch-first). A
+    // Gated with no dig in play (chv): like an empty find, a chest comes
+    // before the shells and legs (atl.14 fetch-first, all-chests). A
     // feasible stash digs directly, as before.
-    if (!o.buried && !o.chestTried && o.have < o.want && ctx && ctx.home && ctx.home.chest) {
+    if (!o.buried && !o.chestTried && o.have < o.want && chestAvailable(bot, ctx, o)) {
       o.phase = 'chestfetch'
       return
     }
@@ -2373,6 +2440,9 @@ module.exports.enterSearch = enterSearch
 module.exports.canSearch = canSearch
 module.exports.canBringName = canBringName
 module.exports.openPhase = openPhase
+module.exports.pickChest = pickChest
+module.exports.chestAvailable = chestAvailable
+module.exports.nearbyChests = stockpileMod.nearbyChests
 module.exports.SEARCH_BUDGET = SEARCH_BUDGET
 module.exports.SELF_SEARCH_RADIUS = SELF_SEARCH_RADIUS
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS

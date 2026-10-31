@@ -882,9 +882,95 @@ async function chestCounts(bot, ctx, names, at = null) {
   }
 }
 
-// Withdraw up to count of the first edible in the adopted chest.
+// Remembered sightings (idkcraft-0jvh follow-up): every chest on the map,
+// not only the adopted home chest. The scout tick records chest blocks it
+// sees into ctx.chests (persisted by memory.js); the chest-first lookup
+// (bring.js chestFetch) checks remembered sightings near the bot after the
+// home chest comes up short. Read-only: deposits and banking always use
+// the adopted home chest, never a sighting.
+// Radius (REPROBE_RADIUS precedent): an expired full park re-arms only near
+// home, so a probably-still-full chest never costs a cross-map trip — 32
+// blocks is the codebase's "near" for a chest trip (bring.js FILL_SEARCH
+// is the same distance for the same reason).
+const NEARBY_CHEST_RADIUS = 32
+// Cap mirrors memory.js CHESTS_MAX (no shared import: the require would
+// cycle — the PIT_MAX precedent of mirrored numbers with a comment).
+const CHEST_SIGHT_MAX = 32
+
+function chestKeyOf(p) {
+  try {
+    if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return null
+    return `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+  } catch (_) {
+    return null
+  }
+}
+
+// Stamp a fetched chest tried (o.chestSeen), so the all-chests chain never
+// re-opens it. Null-safe: an unreadable position simply stamps nothing.
+function markChestSeen(o, pos) {
+  try {
+    const k = chestKeyOf(pos)
+    if (k === null) return
+    if (!o || typeof o !== 'object') return
+    if (!Array.isArray(o.chestSeen)) o.chestSeen = []
+    if (!o.chestSeen.includes(k)) o.chestSeen.push(k)
+  } catch (_) { /* seen best-effort */ }
+}
+
+// Record sighted chest blocks (dedupe by block position, oldest dropped
+// past the cap). Session state on ctx.chests; memory.js persists it.
+function rememberChests(ctx, positions) {
+  try {
+    if (!ctx || typeof ctx !== 'object') return []
+    const list = Array.isArray(positions) ? positions : [positions]
+    if (!Array.isArray(ctx.chests)) ctx.chests = []
+    for (const p of list) {
+      const key = chestKeyOf(p)
+      if (key === null) continue
+      if (ctx.chests.some((c) => chestKeyOf(c) === key)) continue
+      ctx.chests.push({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) })
+      while (ctx.chests.length > CHEST_SIGHT_MAX) ctx.chests.shift()
+    }
+    return ctx.chests
+  } catch (_) {
+    return []
+  }
+}
+
+// Remembered sightings near the bot, nearest first, within radius. The
+// adopted home chest is excluded (the fetch checks it first); tried keys
+// (the order's chestSeen) stay skipped so a leg never re-opens a chest.
+function nearbyChests(bot, ctx, seen, radius) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return []
+    const r = typeof radius === 'number' && radius > 0 ? radius : NEARBY_CHEST_RADIUS
+    const skip = new Set(Array.isArray(seen) ? seen : [])
+    const home = ctx && ctx.home && ctx.home.chest
+    const homeKey = home ? chestKeyOf(home) : null
+    const out = []
+    const list = ctx && Array.isArray(ctx.chests) ? ctx.chests : []
+    for (const c of list) {
+      if (!c || typeof c.x !== 'number') continue
+      const key = chestKeyOf(c)
+      if (key === null || skip.has(key)) continue
+      if (homeKey !== null && key === homeKey) continue
+      const d = Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z)
+      if (!(d <= r)) continue
+      out.push({ c, d })
+    }
+    out.sort((a, b) => a.d - b.d)
+    return out.map((e) => e.c)
+  } catch (_) {
+    return []
+  }
+}
+
+// Withdraw up to count of the first edible in the adopted chest (or the
+// explicit chest at `at` — the all-chests lookup).
 // { got, name } — name null when nothing edible came out.
-async function withdrawEdible(bot, ctx, count) {
+async function withdrawEdible(bot, ctx, count, at = null) {
   const edible = edibles()
   try {
     const res = await withChest(bot, ctx, async (window) => {
@@ -904,7 +990,7 @@ async function withdrawEdible(bot, ctx, count) {
         got += take
       }
       return { got, name: first.name }
-    })
+    }, at)
     return res && res.status === 'ok' ? res.value : { got: 0, name: null }
   } catch (_) {
     return { got: 0, name: null }
@@ -1979,6 +2065,12 @@ module.exports.chestCounts = chestCounts
 module.exports.depositToChest = depositToChest
 module.exports.withChest = withChest // craft.js room bank (rwuu): partial junk deposit with spare keeps
 module.exports.withdrawEdible = withdrawEdible
+module.exports.rememberChests = rememberChests
+module.exports.nearbyChests = nearbyChests
+module.exports.chestKeyOf = chestKeyOf
+module.exports.markChestSeen = markChestSeen
+module.exports.NEARBY_CHEST_RADIUS = NEARBY_CHEST_RADIUS
+module.exports.CHEST_SIGHT_MAX = CHEST_SIGHT_MAX
 module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2
 module.exports.spotsFor = spotsFor

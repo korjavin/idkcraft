@@ -476,6 +476,9 @@ function findNearest(bot, blockName, refY = null, exclude = null) {
   return wrapResult(bot, blockName, p)
 }
 
+// One scan's chest sightings (the coal-scan pool shape): a map holds few
+// chests, so 16 covers every plausible scan without growing the tick.
+const CHEST_SCAN_COUNT = 16
 // Transparency (vmzq.66): scout sightings are console-only — say defaults
 // to a no-op, so only an explicit say reaches chat. Chat narrates the
 // bot's own attempts, plans and outcomes, never what it sees.
@@ -560,6 +563,34 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = () => {}, now = () 
         require('../resources').noteSpots(ctx, spots, t)
       } catch {
         // memory never breaks scout
+      }
+    }
+    // Chest sightings (idkcraft-0jvh follow-up): every chest block in the
+    // scan radius joins the remembered sightings, so the chest-first lookup
+    // checks all map chests, not only the home one. Silent (vmzq.66):
+    // sightings never reach chat. Call-time require (the stockpile shape):
+    // stockpile never requires scout, but the late load keeps it that way.
+    if (ctx) {
+      let chestIds = null
+      try {
+        chestIds = resolveIds(bot, ['chest'])
+      } catch {
+        chestIds = null
+      }
+      if (chestIds && chestIds.length > 0) {
+        let sighted = []
+        try {
+          sighted = bot.findBlocks({ matching: chestIds, maxDistance: radius, count: CHEST_SCAN_COUNT }) || []
+        } catch {
+          sighted = []
+        }
+        if (sighted.length > 0) {
+          try {
+            require('./stockpile').rememberChests(ctx, sighted)
+          } catch {
+            // memory never breaks scout
+          }
+        }
       }
     }
     // ponytail: bounded memory, LRU if it ever matters.
