@@ -658,9 +658,12 @@ function resumeSub(bot, ctx, o) {
 // against the concrete drop, the toss truth).
 // idkcraft-h1nl: with no shears in the pack but a covered shears recipe
 // (2 iron, no table) the hunt opens with a 'shears' craft phase instead —
-// shearing beats killing. Uncovered (no iron) hunts as before: kill stays
-// the fallback when shearing is impossible. ctx is optional: callers
-// without one (beds, castlefetch) keep the old find-first shape.
+// shearing beats killing. ctx is optional: callers without one (beds,
+// castlefetch) keep the old find-first shape.
+// Chain (owner): shears known but iron short opens the iron gap through
+// the shared planGap/smelt rungs (smelt, dig, or honest refusal) — wool ->
+// shears -> iron, each link fetched before the hunt. Only a refused gap
+// hunts as before: kill stays the fallback when shearing is impossible.
 function toWoolHunt(bot, o, ctx) {
   const names = o.names || []
   const color = names.length === 1 ? woolMod.dropColor(names[0]) : null
@@ -680,7 +683,21 @@ function toWoolHunt(bot, o, ctx) {
     try {
       plan = craftany().planCraft(bot, ctx, ['shears'], 1)
     } catch (_) { plan = null }
-    if (plan && plan.ok) o.phase = 'shears'
+    if (plan && plan.ok) {
+      o.phase = 'shears'
+    } else if (plan && plan.fail === 'missing') {
+      let g = null
+      try {
+        g = planGap(bot, ctx, o, plan)
+      } catch (_) { g = null }
+      if (g && g.open) {
+        // Chain marker: the gap (smelt/dig) resumes through
+        // enterCraftOrRefuse, which must re-enter the hunt (now covered)
+        // instead of refusing uncraftable wool.
+        o.woolChain = true
+        try { say(bot, g.line) } catch (_) { /* announce best-effort */ }
+      }
+    }
   }
   o.announced = false
   o.animal = null
@@ -714,6 +731,13 @@ function orderCraftNames(names) {
 // gap opens a sub-order (beds pick their colour first), a furnace-gated
 // gap refuses with the smelting line, anything else keeps planCraft's line.
 function enterCraftOrRefuse(bot, ctx, o) {
+  // Wool chain (h1nl follow-up): a hunt that opened an iron gap resumes
+  // here when the gap fills — re-enter the hunt (plan now covered) instead
+  // of refusing uncraftable wool. Normal wool orders never reach this rung.
+  if (o && o.woolChain && woolMod.isWoolFamily(o)) {
+    refuseItemOrHunt(bot, ctx, o)
+    return
+  }
   // Bucket fill (idkcraft-k2ze, revmux 01 core-1): a water-bucket order that
   // fell through the home chest (empty, or the chest was lost mid-order)
   // fills from nearby water when the pack holds an empty — before the craft
