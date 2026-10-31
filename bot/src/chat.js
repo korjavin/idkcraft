@@ -340,7 +340,7 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
 }
 
 // vf8e.6: the owner orders that end a running LLM plan.
-const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|reforest(?: \d+)?|share|bring me(?: .*)?)$/
+const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|reforest(?: \d+)?|share|bring me(?: .*)?|make(?: .*)?|craft(?: .*)?)$/
 // vf8e.17: the `do <step> [count]` grammar. Only grammar-shaped lines take
 // the deterministic verb (a valid one replaces the running plan through
 // installPlan); anything else starting with `do ` (`do you have coal`)
@@ -674,6 +674,16 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         // read; its empty answer chats this refusal after all.
         if (!(/^unknown (?:item|block):/.test(String(reply)) && llmAsk(reply))) bot.chat(reply)
       }
+    } else if (msg === 'make' || msg.startsWith('make ') || msg === 'craft' || msg.startsWith('craft ')) {
+      // idkcraft-0jvh: explicit tool order ('make me a stone hoe', 'craft
+      // iron axe'), english only, owner-only like the other order branches.
+      // Anything the tool grammar rejects stays chatter for the model.
+      if (!ownerOk) return
+      const p = bringMod.parseToolRequest(msg)
+      if (p && ticker && typeof ticker.setTool === 'function') {
+        const r = ticker.setTool({ name: p.tool, by: playerName })
+        if (r) bot.chat(r)
+      } else llmAsk(null)
     } else if (msg.startsWith('plan ')) {
       // vf8e.6: force the planner on any line (A/B against the FSM parse).
       // (owner gate lives inside llmAsk.)

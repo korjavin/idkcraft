@@ -22,6 +22,7 @@ const COMMANDS = [
   { names: ['build castle', 'castle'], usage: 'build castle | castle [stop|go|repair|tidy|forget|upgrade]', what: 'builds a stone castle over many hours; castle reports progress, stop/go park and resume, repair fixes damage, tidy revisits, forget drops it, upgrade adds stairs', example: 'build castle' },
   { names: ['bring me'], usage: 'bring me <item> [count]', what: 'brings an item from pack or chest, or digs blocks, to your feet', example: 'bring me coal 5' },
   { names: ['bring me food', 'bring me meat', 'bring me something to eat'], usage: 'bring me food [count]', what: 'brings food from inventory or hunts animals', example: 'bring me food 3' },
+  { names: ['make', 'craft'], usage: 'make me a <tool>', what: 'makes a stone tool from pack or chest (iron only when asked) and equips it', example: 'make me a stone hoe' },
   { names: ['autonomous'], usage: 'autonomous on|off', what: 'stay and work with nobody online (free brain only)', example: 'autonomous on' },
   { names: ['share'], usage: 'share', what: 'hands over everything carried except tools, weapons, armour and 32 support blocks', example: 'share' },
   { names: ['flat', 'make flat', 'flatten'], usage: 'flat [radius] [x z]', what: 'fills holes and shaves bumps around you (or around column x z) to level ground', example: 'flat 16' },

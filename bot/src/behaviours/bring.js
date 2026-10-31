@@ -1340,7 +1340,10 @@ function chestFetch(bot, ctx, o, bp) {
       o.drop = plan.items[0].name
       o.have = plan.have
     }
-    if (plan.have >= o.want) {
+    // Tool orders never take the return shortcut (0jvh): a held or fetched
+    // tool is equipped, not tossed — the fetch leg lands in ensureTool's
+    // held path instead. Gated on o.toolName: all other items unchanged.
+    if (plan.have >= o.want && !o.toolName) {
       o.phase = 'return'
       o.saidWaiting = false
       return
@@ -2374,6 +2377,9 @@ module.exports.SEARCH_BUDGET = SEARCH_BUDGET
 module.exports.SELF_SEARCH_RADIUS = SELF_SEARCH_RADIUS
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
 module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA
+module.exports.parseToolRequest = itemMod.parseToolRequest
+module.exports.isToolName = itemMod.isToolName
+module.exports.ensureTool = itemMod.ensureTool
 module.exports.toWoolHunt = itemMod.toWoolHunt
 module.exports.toWaterFill = toWaterFill
 module.exports.hasEmptyBucket = hasEmptyBucket

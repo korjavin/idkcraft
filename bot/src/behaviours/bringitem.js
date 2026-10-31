@@ -163,6 +163,32 @@ function resolveItem(bot, name) {
   return null
 }
 
+// Tool orders (idkcraft-0jvh, english only, owner-only at the chat gate):
+// 'make me a stone hoe' / 'craft iron axe' / 'make me a sharp sword'.
+// Verbs make|craft, fillers (me/a/an/please/for) dropped, tier wood|wooden|
+// stone|iron (default stone — the owner's standing rule, iron only when
+// asked), an optional 'sharp' flavour adjective, tool pickaxe|axe|shovel|
+// hoe|sword (plural -s stripped: 'axes' -> 'axe'). Gold/diamond tools are
+// not in the set: null, the line stays chatter for the model to read.
+const TOOL_TIER_OF = { wood: 'wooden', wooden: 'wooden', stone: 'stone', iron: 'iron' }
+const TOOL_KINDS = new Set(['pickaxe', 'axe', 'shovel', 'hoe', 'sword'])
+function isToolName(name) {
+  return typeof name === 'string' && /^(wooden|stone|iron)_(pickaxe|axe|shovel|hoe|sword)$/.test(name)
+}
+function parseToolRequest(text) {
+  const words = String(text || '').toLowerCase().trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0 || (words[0] !== 'make' && words[0] !== 'craft')) return null
+  const rest = words.slice(1).filter((w) => w !== 'me' && w !== 'a' && w !== 'an' && w !== 'please' && w !== 'for')
+  if (rest.length === 0) return null
+  const toolWord = rest[rest.length - 1].replace(/s$/, '')
+  if (!TOOL_KINDS.has(toolWord)) return null
+  const mods = rest.slice(0, -1).filter((w) => w !== 'sharp')
+  let tier = 'stone'
+  if (mods.length === 1 && TOOL_TIER_OF[mods[0]]) tier = TOOL_TIER_OF[mods[0]]
+  else if (mods.length > 0) return null
+  return { tool: `${tier}_${toolWord}` }
+}
+
 // Pack contents as a plain {name: count} map; unreadable reads as empty.
 function packCounts(bot) {
   const counts = {}
@@ -731,6 +757,11 @@ function orderCraftNames(names) {
 // gap opens a sub-order (beds pick their colour first), a furnace-gated
 // gap refuses with the smelting line, anything else keeps planCraft's line.
 function enterCraftOrRefuse(bot, ctx, o) {
+  // Tool rung (idkcraft-0jvh): every resume path (chest fetch, sub resume,
+  // smelt done) funnels through here, so tool orders re-enter the shared
+  // rung instead of the generic refusal. Gated on o.toolName, which only
+  // tool orders set — all other orders read not one line changed.
+  if (o && o.toolName) { ensureTool(bot, ctx, o, o.toolName); return }
   // Wool chain (h1nl follow-up): a hunt that opened an iron gap resumes
   // here when the gap fills — re-enter the hunt (plan now covered) instead
   // of refusing uncraftable wool. Normal wool orders never reach this rung.
@@ -771,10 +802,111 @@ function enterCraftOrRefuse(bot, ctx, o) {
   refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
 }
 
+// Equip best-effort: the tool in hand, no refusal when the arm fails (the
+// pack holds it — the order still lands).
+function equipTool(bot, tool) {
+  try {
+    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : []
+    const it = (Array.isArray(items) ? items : []).find((i) => i && i.name === tool) || null
+    if (it && typeof bot.equip === 'function') void Promise.resolve(bot.equip(it, 'hand')).catch(() => {})
+  } catch (_) { /* equip best-effort */ }
+}
+
+// Shared tool rung (idkcraft-0jvh): the bot produces one concrete tool from
+// empty hands as a building block other chains call. The caller owns o (a
+// bring-family order — usually already ctx.bring) and names the concrete
+// '<tier>_<tool>'. Returns 'done' | 'craft' | 'gap' | 'refused':
+// - held or in the pack: equip it, done.
+// - planCraft covered: the existing craft phase (craftTick lands it, the
+//   giveOrRefuse tool branch equips instead of tossing).
+// - gaps: the existing planGap (sticks/planks/logs ladder subs via
+//   openSubOrder, iron via smeltRung) plus the stone-tier cobble dig below.
+// - refusal only when truly unobtainable (no recipe, no table, no source).
+// The shears phase does NOT ride this rung: it must preserve the wool-hunt
+// order (kind/color/drop/woolChain) and resume the hunt with kill as the
+// fallback, never refusing — morphing it into an equip-terminal tool order
+// would strand the wool want, so it stays bespoke in shearsTick.
+function ensureTool(bot, ctx, o, toolName) {
+  const tool = String(toolName || '')
+  if (o && typeof o === 'object') {
+    o.kind = 'item'
+    o.name = tool
+    o.names = [tool]
+    o.want = 1
+    o.toolName = tool
+    o.items = []
+    o.have = 0
+  }
+  const pack = packCounts(bot)
+  // The keep-list deducts from the opening pack, so a freshly crafted tool
+  // gives instead of stranding as kept gear (chain callers pass a bare o).
+  if (o && typeof o === 'object' && (!o.packBase || typeof o.packBase !== 'object')) o.packBase = { ...pack }
+  if ((pack[tool] || 0) > 0) {
+    equipTool(bot, tool)
+    say(bot, `equipped ${tool}`)
+    done(bot, ctx)
+    return 'done'
+  }
+  const plan = craftany().planCraft(bot, ctx, [tool], 1)
+  if (plan.ok) {
+    o.phase = 'craft'
+    o.craftTarget = plan.target
+    try {
+      ctx.craftany = null // a cancelled run must not resume under the new one
+    } catch (_) { /* state best-effort */ }
+    say(bot, `making you a ${plan.target}`)
+    return 'craft'
+  }
+  if (plan.fail === 'no-table') { refuse(bot, ctx, plan.line); return 'refused' }
+  const g = planGap(bot, ctx, o, plan)
+  if (g && g.open) { say(bot, g.line); return 'gap' }
+  // Stone-tier cobble (0jvh): the shared ladder stays wool/planks/logs/
+  // sticks (bring-bed pins cobblestone null in pickSubGap/openSubOrder), so
+  // the stone dig opens here, tool-scoped. Ladder leftovers first (sticks),
+  // then cobble. No pickaxe at all means the stone is undiggable — the
+  // honest line, not a bare-handed dig that drops nothing (a forged wooden
+  // pickaxe prerequisite is follow-up work, not this rung).
+  if (plan && plan.fail === 'missing' && o && !o.subFor) {
+    const miss = Array.isArray(plan.missing) ? plan.missing : []
+    const lad = pickSubGap(miss)
+    const lline = lad && openSubOrder(bot, ctx, o, lad, plan.target, woolMod.dropColor(lad.name))
+    if (lline) { say(bot, lline); return 'gap' }
+    const cob = miss.find((e) => e && e.name === 'cobblestone')
+    if (cob) {
+      const need = cob.need || 0
+      if (!Object.keys(pack).some((n) => typeof n === 'string' && n.endsWith('_pickaxe') && pack[n] > 0)) {
+        refuse(bot, ctx, `need a pickaxe to dig stone for the ${tool}`)
+        return 'refused'
+      }
+      const want = Math.max(1, need - (pack.cobblestone || 0))
+      toBlockSub(bot, o, 'stone', 'cobblestone', want, plan.target, need, 'cobblestone')
+      say(bot, subLine(o, `${need} cobblestone`, 'stone'))
+      return 'gap'
+    }
+  }
+  if (g) { refuse(bot, ctx, g.line); return 'refused' }
+  refuse(bot, ctx, itemRefusal(bot, tool, { names: [tool] }, null))
+  return 'refused'
+}
+
 // Pack plan after a craft or a direct smelt: full or partial give, else
 // the honest line.
 function giveOrRefuse(bot, ctx, o, failLine) {
   const plan = planItemGive(bot, { names: o.names || [] }, o.want, o.packBase)
+  // Tool terminal (idkcraft-0jvh): a made tool is equipped, never tossed —
+  // 'make me a stone hoe' ends in hand, not in the return walk. Gated on
+  // o.toolName: every other order reads the path below unchanged.
+  if (o.toolName) {
+    if (plan.have > 0) {
+      const got = plan.items.length > 0 ? plan.items[0].name : o.toolName
+      equipTool(bot, got)
+      say(bot, `equipped ${got}`)
+      done(bot, ctx)
+    } else {
+      refuse(bot, ctx, failLine)
+    }
+    return
+  }
   o.items = plan.items
   o.have = plan.have
   o.drop = plan.items.length > 0 ? plan.items[0].name : null
@@ -1209,7 +1341,10 @@ async function withdrawCraftMats(bot, ctx, o) {
   }
   for (const e of plan.missing) {
     if (!e || typeof e.name !== 'string') continue
-    const ladder = e.name.endsWith('_wool') || e.name.endsWith('_planks') || e.name === 'stick'
+    // Tool orders draw their cobble chest-first too (0jvh): gated on
+    // o.toolName, every other order's draw set is unchanged.
+    const ladder = e.name.endsWith('_wool') || e.name.endsWith('_planks') || e.name === 'stick' ||
+      (o.toolName && e.name === 'cobblestone')
     if (!ladder) continue
     const short = Math.max(0, (e.need || 0) - (pack[e.name] || 0))
     if (short <= 0) continue
@@ -1236,14 +1371,17 @@ async function fetchItem(bot, ctx, o) {
     o.items = plan.items
     o.have = plan.have
     o.drop = plan.items.length > 0 ? plan.items[0].name : null
-    if (plan.have >= o.want) {
+    // Tool orders never take the return path (0jvh, the chestFetch gate's
+    // mirror): a fetched tool is equipped via enterCraftOrRefuse/ensureTool,
+    // never tossed. Gated: all other items read on unchanged.
+    if (plan.have >= o.want && !o.toolName) {
       o.chestInFlight = false
       o.phase = 'return'
       o.saidWaiting = false
     } else if (woolMod.isWoolFamily(o)) {
       o.chestInFlight = false
       toWoolHunt(bot, o, ctx) // short or empty chest: the mob rung hunts the rest
-    } else if (plan.have > 0) {
+    } else if (plan.have > 0 && !o.toolName) {
       o.chestInFlight = false
       say(bot, `only ${plan.items.map((i) => `${i.count} ${i.name}`).join(', ')}, coming`)
       o.phase = 'return'
@@ -1336,6 +1474,9 @@ function shareToss(bot, ctx, o) {
   })()
 }
 
+module.exports.parseToolRequest = parseToolRequest
+module.exports.isToolName = isToolName
+module.exports.ensureTool = ensureTool
 module.exports.sharePlan = sharePlan
 module.exports.isFoodRequest = isFoodRequest
 module.exports.findEdible = findEdible
