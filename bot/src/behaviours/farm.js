@@ -662,10 +662,11 @@ async function run(bot, ctx) {
       }
     }
 
-    // Leg 6 — carry wheat to sheep (lure; breed where the body allows).
+    // Leg 6 — carry wheat to sheep: breed a pair where the body serves
+    // entity-use, else lure and say so.
     // feedReady bounds the loop: only near sheep pull the leg, and a fresh
-    // lure cools it down (wheat is never consumed on V2, so without the
-    // cooldown the step would re-pick itself every tick).
+    // feed cools it down (an unlured attraction would re-pick the step
+    // every tick and starve explore/rest).
     if (!(f.fedSheep | 0)) {
       const found = feedReady(bot, ctx)
       if (found) {
@@ -680,23 +681,38 @@ async function run(bot, ctx) {
         try {
           if (!(bot.heldItem && bot.heldItem.name === 'wheat')) await equipHeld(bot, 'wheat')
         } catch (_) { /* hold best-effort */ }
-        // Breed where the body serves entity-use (v1 mineflayer, V2 h1nl
-        // interact.entity); where it does not, the leg lures and says so.
+        // Breed (idkcraft-8ytm): wheat to two near sheep puts the pair in
+        // love mode — lambs fill the map. One sheep (or one wheat) is the
+        // old single feed: love mode with no partner, still fed and said.
+        // Each sheep is fed once per step; later ticks only hold (lure) so
+        // a lone sheep costs one wheat, not one per tick.
         let bred = 0
         try {
           if (typeof bot.activateEntity === 'function') {
-            const first = bring.findAnimal(bot, null, { prey: ['sheep'] })
-            if (first && first.id != null && bot.entities && bot.entities[first.id]) {
-              await bot.activateEntity(bot.entities[first.id])
+            const bp = botPos(bot)
+            if (!(f.bredIds instanceof Set)) f.bredIds = new Set()
+            const seen = new Set()
+            for (let n = 0; n < 2; n++) {
+              let one = null
+              try {
+                one = bring.findAnimal(bot, null, { prey: ['sheep'], skipIds: seen })
+              } catch (_) { one = null }
+              if (!one || one.id == null || !bot.entities || !bot.entities[one.id]) break
+              seen.add(one.id)
+              if (f.bredIds.has(one.id)) continue // fed already: hold, don't re-feed
+              if (bp && one.position && Math.hypot(one.position.x - bp.x, one.position.y - bp.y, one.position.z - bp.z) > FEED_RADIUS) break
+              if (n > 0 && countWheat(bot) - bred < 1) break // one wheat per sheep
+              await bot.activateEntity(bot.entities[one.id])
+              f.bredIds.add(one.id)
               bred++
             }
           }
-        } catch (_) { /* breed best-effort: lure still counts */ }
+        } catch (_) { /* feed best-effort: lure still counts */ }
         f.lure = (f.lure | 0) + 1
-        if (bred > 0 || (f.lure | 0) >= LURE_TICKS) {
+        if (bred > 1 || (f.lure | 0) >= LURE_TICKS) {
           f.fedSheep = 1
           try { if (ctx) ctx.farmFedAt = Date.now() } catch (_) { /* cooldown best-effort */ }
-          try { say(bot, bred > 0 ? 'fed the sheep wheat' : 'brought wheat to the sheep') } catch (_) { /* chat best-effort */ }
+          try { say(bot, bred > 1 ? 'fed wheat to two sheep' : (bred > 0 ? 'fed the sheep wheat' : 'brought wheat to the sheep')) } catch (_) { /* chat best-effort */ }
           return
         }
         return
