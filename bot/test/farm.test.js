@@ -22,7 +22,7 @@ const IDS = {
 
 function mockBot({ cells = {}, items = [], sheep = null } = {}) {
   const world = new Map(Object.entries(cells))
-  const ops = { dig: [], use: [], useItem: [], equip: [], goals: [], chat: [] }
+  const ops = { dig: [], use: [], useItem: [], useEntity: [], equip: [], goals: [], chat: [] }
   const bot = {
     ops,
     world,
@@ -98,7 +98,18 @@ function mockBot({ cells = {}, items = [], sheep = null } = {}) {
     },
     chat: (line) => { ops.chat.push(line) },
   }
-  if (sheep) bot.entities[7] = { id: 7, name: 'sheep', position: { ...sheep }, isValid: true }
+  if (sheep) {
+    const flock = Array.isArray(sheep) ? sheep : [sheep]
+    flock.forEach((s, i) => {
+      bot.entities[7 + i] = { id: 7 + i, name: 'sheep', position: { x: s.x, y: s.y, z: s.z }, isValid: true }
+    })
+  }
+  bot.activateEntity = async (e) => {
+    ops.useEntity.push(e && e.id)
+    // Server consumes one wheat per fed sheep (love mode), like the bucket.
+    const w = bot.inv.find((it) => it && it.name === 'wheat')
+    if (w) { w.count = (typeof w.count === 'number' ? w.count : 1) - 1; if (w.count <= 0) bot.inv = bot.inv.filter((it) => it !== w) }
+  }
   return bot
 }
 
@@ -322,6 +333,19 @@ describe('farm legs', () => {
     })
     const ctx = ctxOf()
     for (let t = 0; t < 6 && ctx.stepStatus === 'running'; t++) await farm(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('breeds a pair: wheat to two near sheep, one wheat each', async () => {
+    const bot = mockBot({
+      items: [{ name: 'wheat', count: 3 }],
+      sheep: [{ x: 2, y: 64, z: 0 }, { x: 3, y: 64, z: 1 }],
+    })
+    const ctx = ctxOf()
+    for (let t = 0; t < 14 && ctx.stepStatus === 'running'; t++) await farm(bot, ctx)
+    assert.deepEqual(bot.ops.useEntity, [7, 8])
+    assert.equal(farm.feedReady(bot, ctx), null) // wheat left (1) but flock cooling down
+    assert.ok(bot.ops.chat.some((l) => /fed wheat to two sheep/.test(l)), `breed line missing: ${bot.ops.chat}`)
     assert.equal(ctx.stepStatus, 'done')
   })
 
