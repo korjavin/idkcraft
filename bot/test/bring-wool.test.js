@@ -660,3 +660,47 @@ describe("shears rung (idkcraft-h1nl)", () => {
     assert.ok(bot.lines.some((l) => /sheep/.test(l)), `lines: ${bot.lines}`)
   })
 })
+
+describe('wool -> shears -> iron chain (h1nl follow-up)', () => {
+  function chainBot(items) {
+    const bot = mockBot({ playerPos: pos(30, 64, 0), items, animals: [sheep(11, 10)] })
+    // Shears recipe known (2 iron, no table) but uncovered: the pack holds
+    // raw iron, not ingots.
+    bot.recipesAll = (id) => (id === ITEMS.shears
+      ? [{ requiresTable: false, result: { count: 1 }, delta: [{ id: 501, count: -2 }] }]
+      : [])
+    bot.registry.itemsByName.iron_ingot = { id: 501 }
+    bot.registry.itemsByName.raw_iron = { id: 502 }
+    return bot
+  }
+
+  it("opens the iron smelt gap instead of hunting when raw iron covers it", () => {
+    const bot = chainBot([{ name: 'raw_iron', count: 2 }])
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    const o = ctx.bring
+    assert.equal(o.phase, 'smelt')
+    assert.equal(o.smelt && o.smelt.output, 'iron_ingot')
+    assert.ok(bot.lines.some((l) => /smelting 2 raw_iron for your shears/.test(l)), `lines: ${bot.lines}`)
+  })
+
+  it("resumes to the shears phase once the iron lands, then hunts to shear", () => {
+    const bot = chainBot([{ name: 'raw_iron', count: 2 }])
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    const o = ctx.bring
+    assert.equal(o.phase, 'smelt')
+    // The furnace lands the ingots: the chain resumes to the hunt, whose
+    // plan is now covered — shears, not kill.
+    bot._items.push({ name: 'iron_ingot', count: 2 })
+    itemMod.enterCraftOrRefuse(bot, ctx, o)
+    assert.equal(o.phase, 'shears')
+  })
+
+  it("hunts (kill fallback) when iron is truly unobtainable", () => {
+    const bot = chainBot([])
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.bring.phase, 'find')
+  })
+})
