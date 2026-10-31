@@ -1,7 +1,8 @@
 'use strict'
 
 // Disk memory (idkcraft-hlk): homes, resource finds, explored chunks,
-// danger spots, and the gear ledger survive bot restart/redeploy. One JSON file on a named
+// danger spots, remembered chests, and the gear ledger survive bot
+// restart/redeploy. One JSON file on a named
 // volume (/app/memory/<BOT_USERNAME>.json), atomic write (tmp + rename),
 // throttled periodic save plus save on setHome and on disconnect. Load runs
 // before spawn adoption; a missing, corrupt or other-world file means empty
@@ -19,6 +20,7 @@ const DIR_DEFAULT = '/app/memory'
 const SAVE_MIN_MS = 45000 // periodic tick save at most this often
 const VISITED_MAX = 4096 // MAX_RADIUS 512 spiral holds ~3.2k chunks
 const HOMES_MAX = 8
+const CHESTS_MAX = 32 // remembered non-home chest sightings (0jvh follow-up)
 
 function safeName(name) {
   const s = typeof name === 'string' && name ? name : 'IdkBot'
@@ -101,6 +103,28 @@ function skipAtOf(v, skip) {
   } catch (_) { /* stamps best-effort */ }
   return out
 }
+// Remembered chest sightings (idkcraft-0jvh follow-up): integer block
+// positions, deduped, capped like every other store (a hand-edited file
+// must not inject shapes; floats never occur — rememberChests floors).
+function chestSpotsOf(v) {
+  const out = []
+  try {
+    if (Array.isArray(v)) {
+      const seen = new Set()
+      for (const e of v) {
+        if (!e || typeof e !== 'object') continue
+        if (!Number.isInteger(e.x) || !Number.isInteger(e.y) || !Number.isInteger(e.z)) continue
+        const key = `${e.x},${e.y},${e.z}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({ x: e.x, y: e.y, z: e.z })
+        if (out.length >= CHESTS_MAX) break
+      }
+    }
+  } catch (_) { /* chests best-effort */ }
+  return out
+}
+
 function skipOf(v) {
   const out = []
   try {
@@ -488,7 +512,14 @@ function snapshot(bot, ctx, now) {
     if (f === null || (f && f.parked)) flat = null
     else if (f) flat = flatOf({ cx: f.cx, cz: f.cz, r: f.r, yTop: f.yTop, level: f.fixedLevel == null ? null : f.fixedLevel, by: f.by }) || undefined
   } catch (_) { /* flat best-effort */ }
-  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle, sheep, flat }
+  // Remembered chests (0jvh follow-up), tri-state like follow: an array
+  // (possibly empty after an explicit clear), undefined for a ctx that
+  // never restored — save keeps the file's record then.
+  let chests
+  try {
+    if (Array.isArray(ctx.chests)) chests = chestSpotsOf(ctx.chests)
+  } catch (_) { /* chests best-effort */ }
+  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle, sheep, flat, chests }
 }
 
 // Gear ledger maps, sanitized both ways (own write, but a hand-edited
@@ -546,7 +577,7 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle && !doc.sheep && !doc.flat
+    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle && !doc.sheep && !doc.flat && !(doc.chests && doc.chests.length)
     f = file || fileFor(process.env, bot && bot.username)
     let prev = null
     try {
@@ -570,6 +601,9 @@ function save(bot, ctx, file, now) {
     if (doc.castle === undefined && prevCastle) doc.castle = prevCastle
     const prevFlat = prev && prev.v === VERSION && prev.world === doc.world ? flatOf(prev.flat) : null
     if (doc.flat === undefined && prevFlat) doc.flat = prevFlat
+    // Chests: an unrestored ctx (undefined) never wipes the file's record.
+    const prevChests = prev && prev.v === VERSION && prev.world === doc.world ? chestSpotsOf(prev.chests) : null
+    if (doc.chests === undefined && prevChests && prevChests.length) doc.chests = prevChests
     // Another world's flat would make main() rejoin an empty server forever
     // (hasFlat cannot check the world before login): replace that file.
     const staleFlat = !!(prev && prev.flat && !prevFlat)
@@ -588,9 +622,10 @@ function save(bot, ctx, file, now) {
 }
 
 // Restore file stores into ctx. Adopt-before-restore is the caller's job:
-// this only fills ctx.home (last stored home), resources, explore visited
-// and danger (expired marks dropped). Returns counts, or null when there
-// is no usable memory (missing/corrupt/other-world file). Never throws.
+// this only fills ctx.home (last stored home), resources, explore visited,
+// danger (expired marks dropped) and remembered chests. Returns counts, or
+// null when there is no usable memory (missing/corrupt/other-world file).
+// Never throws.
 function restore(bot, ctx, file, now) {
   try {
     if (!ctx) return null
@@ -600,7 +635,7 @@ function restore(bot, ctx, file, now) {
     const world = worldKey(bot)
     if (!world || doc.world !== world) return null
     const t = typeof now === 'number' ? now : Date.now()
-    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0, castle: 0, sheep: 0, flat: 0 }
+    const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0, castle: 0, sheep: 0, flat: 0, chests: 0 }
     const sheep = sheepOf(doc.sheep, t)
     if (sheep) {
       if (!ctx.beds || typeof ctx.beds !== 'object') ctx.beds = {}
@@ -620,6 +655,14 @@ function restore(bot, ctx, file, now) {
     if (flat) {
       ctx.flatSaved = flat
       out.flat = 1
+    }
+    // Remembered chests (0jvh follow-up): only a non-empty record lands
+    // (the visited/danger pattern) — an empty list leaves ctx.chests
+    // untouched, so nothing ever invents an empty array over one.
+    const chests = chestSpotsOf(doc.chests)
+    if (chests.length) {
+      ctx.chests = chests
+      out.chests = chests.length
     }
     if (typeof doc.follow === 'string' && doc.follow) {
       ctx.followName = doc.follow
@@ -780,4 +823,4 @@ function refreshKnownCastles(bot, ctx, now, env) {
   } catch (_) { /* peers best-effort */ }
 }
 
-module.exports = { save, restore, hasFlat, saveThrottled, refreshKnownCastles, fileFor, worldKey, SAVE_MIN_MS, VISITED_MAX, HOMES_MAX }
+module.exports = { save, restore, hasFlat, saveThrottled, refreshKnownCastles, fileFor, worldKey, SAVE_MIN_MS, VISITED_MAX, HOMES_MAX, CHESTS_MAX, chestSpotsOf }

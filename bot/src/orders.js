@@ -520,8 +520,12 @@ function createOrders(box) {
       ctx.bring = o
       ctx.paused = false
       if (ctx.home && ctx.home.chest) return `checking the home chest for ${tool}`
-      // No adopted chest: open the rung now (pack -> craft -> gaps); every
-      // path announces its own line, so nothing to chat here.
+      // No adopted chest but a remembered one nearby (0jvh follow-up): stay
+      // on the chestfetch rung — it walks there and announces itself.
+      // Every other path announces its own line, so nothing to chat here.
+      try {
+        if (bringMod.nearbyChests(bot, ctx, null).length > 0) return null
+      } catch (_) { /* no sightings: open the rung below */ }
       bringMod.ensureTool(bot, ctx, o, tool)
       return null
     },

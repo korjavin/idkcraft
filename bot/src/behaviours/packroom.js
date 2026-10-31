@@ -197,9 +197,10 @@ function noteChestRead(ctx, c, window) {
   ctx.chestLast[slot] = { contents, at: Date.now() }
 }
 
-// Withdraw up to count of name from the adopted chest. { got } — 0 when the
-// chest is gone, empty of name, or the inventory is full.
-async function withdrawFromChest(bot, ctx, name, count) {
+// Withdraw up to count of name from the adopted chest (or the explicit
+// chest at `at` — the all-chests lookup). { got } — 0 when the chest is
+// gone, empty of name, or the inventory is full.
+async function withdrawFromChest(bot, ctx, name, count, at = null) {
   try {
     const res = await withChest(bot, ctx, async (window) => {
       const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
@@ -217,7 +218,7 @@ async function withdrawFromChest(bot, ctx, name, count) {
         }
       }
       return got
-    })
+    }, at)
     return { got: res && res.status === 'ok' ? res.value : 0 }
   } catch (_) {
     return { got: 0 }

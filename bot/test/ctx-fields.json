@@ -722,6 +722,13 @@
     ],
     "owner": "src/behaviours/stockpile.js"
   },
+  "chests": {
+    "writers": [
+      "src/behaviours/stockpile.js",
+      "src/memory.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
   "claimedTable": {
     "writers": [
       "src/behaviours/tablespot.js"

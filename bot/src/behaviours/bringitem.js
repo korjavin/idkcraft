@@ -582,6 +582,7 @@ function openSubOrder(bot, ctx, o, gap, target, color) {
     o.unreachIds = null
     o.deadColors = null
     o.chestTried = false
+    o.chestSeen = null // the sub re-checks every chest (the body-5 re-arm)
     o.subFor = target
     o.subWant = gap.need
     o.subWord = word
@@ -632,6 +633,7 @@ function toBlockSub(bot, o, fetch, drop, want, target, subWant, word) {
   o.search = null
   o.searchSkipFar = false
   o.chestTried = false
+  o.chestSeen = null // the sub re-checks every chest (the body-5 re-arm)
   o.subFor = target
   o.subWant = subWant
   o.subWord = word
@@ -1234,7 +1236,9 @@ function fieldFurnaceTick(bot, ctx, o, s) {
 // wool of any colour first (up to one bed's worth past the pack): the bed
 // gap then argmaxes over the topped-up pack, which is the chest+pack
 // max-count rule. Exact orders keep their colour and draw it exactly.
-async function withdrawCraftMats(bot, ctx, o) {
+async function withdrawCraftMats(bot, ctx, o, at = null) {
+  // `at` pins the chest (the all-chests lookup walks to it first);
+  // null is the adopted home chest, as before.
   let plan = null
   try {
     plan = craftany().planCraft(bot, ctx, orderCraftNames(o.names || []), 1)
@@ -1249,7 +1253,7 @@ async function withdrawCraftMats(bot, ctx, o) {
     for (const name of draws) {
       if (!name || short <= 0) continue
       try {
-        const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [name], short)
+        const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [name], short, at)
         if (res && res.got > 0) short -= res.got
       } catch (_) { /* next draw */ }
     }
@@ -1264,7 +1268,7 @@ async function withdrawCraftMats(bot, ctx, o) {
     // hunt sheep the chest could have funded.
     let chest = {}
     try {
-      chest = await stockpileMod.chestCounts(bot, ctx) || {}
+      chest = await stockpileMod.chestCounts(bot, ctx, undefined, at) || {}
     } catch (_) { chest = {} }
     const single = (o.names || []).length === 1 ? bedMod.bedColor(o.names[0]) : null
     if (single) {
@@ -1272,7 +1276,7 @@ async function withdrawCraftMats(bot, ctx, o) {
       const short = Math.max(0, bedMod.BED_WOOL - (pack[wname] || 0))
       if (short > 0) {
         try {
-          const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [wname], short)
+          const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [wname], short, at)
           if (res && res.got > 0) pack[wname] = (pack[wname] || 0) + res.got
         } catch (_) { /* planks draw below still runs */ }
       }
@@ -1290,7 +1294,7 @@ async function withdrawCraftMats(bot, ctx, o) {
       const short = Math.max(0, bedMod.BED_WOOL - (pack[wname] || 0))
       if (short > 0) {
         try {
-          const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [wname], short)
+          const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [wname], short, at)
           if (res && res.got > 0) pack[wname] = (pack[wname] || 0) + res.got
         } catch (_) { /* planks draw below still runs */ }
       }
@@ -1323,7 +1327,7 @@ async function withdrawCraftMats(bot, ctx, o) {
     const pshort = Math.max(0, bedMod.BED_PLANKS + infl - have)
     if (pshort > 0) {
       try {
-        const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [pname], pshort)
+        const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [pname], pshort, at)
         if (res && res.got > 0) pack[pname] = (pack[pname] || 0) + res.got
       } catch (_) { /* log draw below still runs */ }
     }
@@ -1333,7 +1337,7 @@ async function withdrawCraftMats(bot, ctx, o) {
     const lshort = Math.max(0, bedMod.BED_PLANKS + infl - have2)
     if (lshort > 0) {
       try {
-        const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [lname], Math.ceil(lshort / 4))
+        const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [lname], Math.ceil(lshort / 4), at)
         if (res && res.got > 0) pack[lname] = (pack[lname] || 0) + res.got
       } catch (_) { /* hunt/craft legs run on the pack as-is */ }
     }
@@ -1349,7 +1353,7 @@ async function withdrawCraftMats(bot, ctx, o) {
     const short = Math.max(0, (e.need || 0) - (pack[e.name] || 0))
     if (short <= 0) continue
     try {
-      const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [e.name], short)
+      const res = await stockpileMod.withdrawAnyFromChest(bot, ctx, [e.name], short, at)
       if (res && res.got > 0) pack[e.name] = (pack[e.name] || 0) + res.got
     } catch (_) { /* next gap */ }
   }
@@ -1360,17 +1364,29 @@ async function withdrawCraftMats(bot, ctx, o) {
 // chest adds nothing. No world fallback: item orders only open for names with
 // no diggable world form. The keep-list deducts from the opening pack counts,
 // so fetched stock gives instead of stranding on the keep rule.
-async function fetchItem(bot, ctx, o) {
+// `at` pins the chest (the all-chests lookup walks to it first); null is
+// the adopted home chest, as before.
+async function fetchItem(bot, ctx, o, at = null) {
   try {
     const need = Math.max(o.want - o.have, 0)
-    if (need > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, o.names || [], need)
+    if (need > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, o.names || [], need, at)
     if (!ctx || ctx.bring !== o) return // stop or a new order landed mid-fetch: touch nothing
-    o.chestTried = true
+    markChestSeen(o, at || (ctx.home && ctx.home.chest))
     ctx.chestFull = false // a fetch may have made room: re-arm the step
     const plan = planItemGive(bot, { names: o.names || [] }, o.want, o.packBase) // inventory count is the truth
     o.items = plan.items
     o.have = plan.have
     o.drop = plan.items.length > 0 ? plan.items[0].name : null
+    // All-chests chain (0jvh follow-up): a short fetch walks to the next
+    // remembered chest instead of branching — the terminal legs below run
+    // only once every chest is tried. A satisfied order never chains: a
+    // fetched tool equips and a full pack returns, as before.
+    if (!fetchSatisfied(plan, o) && stockpileMod.nearbyChests(bot, ctx, o.chestSeen).length > 0) {
+      o.chestInFlight = false
+      o.phase = 'chestfetch'
+      return
+    }
+    o.chestTried = true
     // Tool orders never take the return path (0jvh, the chestFetch gate's
     // mirror): a fetched tool is equipped via enterCraftOrRefuse/ensureTool,
     // never tossed. Gated: all other items read on unchanged.
@@ -1391,7 +1407,7 @@ async function fetchItem(bot, ctx, o) {
       // here would let the next tick open a second concurrent fetch on the
       // same order. Wool families never run the draws (body-6): a dyeing
       // plan could pull a colour the hunt does not count.
-      await withdrawCraftMats(bot, ctx, o)
+      await withdrawCraftMats(bot, ctx, o, at)
       if (!ctx || ctx.bring !== o) return
       o.chestInFlight = false
       enterCraftOrRefuse(bot, ctx, o)
@@ -1403,6 +1419,18 @@ async function fetchItem(bot, ctx, o) {
     refuseItemOrHunt(bot, ctx, o)
   }
 }
+
+// Satisfied without another chest: a full pack (non-tools), or a tool in
+// hand — a fetched tool equips via the rung below, never chains on.
+function fetchSatisfied(plan, o) {
+  if (!plan || typeof plan.have !== 'number') return false
+  if (o && o.toolName) return plan.have > 0
+  return plan.have >= o.want
+}
+
+// Stamp a fetched chest tried (o.chestSeen): the stockpile helper, so the
+// all-chests chain never re-opens it.
+const markChestSeen = stockpileMod.markChestSeen
 
 // Item toss cap (did.1): the order's list, limited by the live inventory (it
 // may have shifted since the order opened). Zero-count entries drop out.
