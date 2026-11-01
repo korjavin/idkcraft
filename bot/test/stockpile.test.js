@@ -1468,3 +1468,30 @@ describe('sapling replant reserve (idkcraft-gc3j)', () => {
     assert.equal(banked(plan, 'oak_sapling') + banked(plan, 'mangrove_propagule'), 2)
   })
 })
+
+describe('wheat and seed farm reserve (idkcraft-1z1m, idkcraft-8ytm)', () => {
+  const planBot = (inv) => ({ inventory: { items: () => inv } })
+  const banked = (plan, name) => plan.filter((p) => p.name === name).reduce((n, p) => n + p.count, 0)
+
+  it('keeps 2 wheat for sheep feeding/breeding and banks the surplus', () => {
+    const plan = stockpile.depositPlan(planBot([{ name: 'wheat', count: 12 }]), { home: null })
+    assert.equal(banked(plan, 'wheat'), 10, '12 wheat -> 2 kept, 10 banked')
+  })
+
+  it('a short wheat pack (<= 2) keeps all wheat', () => {
+    const plan1 = stockpile.depositPlan(planBot([{ name: 'wheat', count: 1 }]), { home: null })
+    assert.equal(banked(plan1, 'wheat'), 0)
+    const plan2 = stockpile.depositPlan(planBot([{ name: 'wheat', count: 2 }]), { home: null })
+    assert.equal(banked(plan2, 'wheat'), 0)
+  })
+
+  it('keeps 8 wheat_seeds for planting and banks the surplus', () => {
+    const plan = stockpile.depositPlan(planBot([{ name: 'wheat_seeds', count: 15 }]), { home: null })
+    assert.equal(banked(plan, 'wheat_seeds'), 7, '15 seeds -> 8 kept, 7 banked')
+  })
+
+  it('a short seed pack (<= 8) keeps all seeds', () => {
+    const plan = stockpile.depositPlan(planBot([{ name: 'wheat_seeds', count: 5 }]), { home: null })
+    assert.equal(banked(plan, 'wheat_seeds'), 0)
+  })
+})
