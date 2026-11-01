@@ -96,14 +96,19 @@ function harness(bot, ctx) {
   const inWater = bot._waters.has(feet) || bot._waters.has(head)
   bot.entity.isInWater = inWater
   if (bot.controls.jump && inWater && !bot.opts.freezeRise) {
-    let surface = null
+    // A flowing top surfaces below top+1 (opts.flowTop models it — the run
+    // itself never reads fluid heights).
+    let top = null
     for (const k of bot._waters) {
       const [x, y, z] = k.split(',').map(Number)
       if (x === Math.floor(p.x) && z === Math.floor(p.z) && y + 1 > p.y) {
-        if (surface === null || y + 1 > surface) surface = y + 1
+        if (top === null || y > top) top = y
       }
     }
-    if (surface !== null && p.y + 1.62 < surface) p.y = Math.min(p.y + 0.5, surface - 1.62 + 0.4)
+    if (top !== null) {
+      const surface = bot.opts.flowTop ? top + 0.5 : top + 1
+      if (p.y + 1.62 < surface) p.y = Math.min(p.y + 0.5, surface - 1.62 + 0.4)
+    }
   }
   // Beach crossing: forward taps toward the aimed exit, mounting the lip
   // once over it (the jump is held).
@@ -280,16 +285,36 @@ describe('waterfallUpRun', () => {
     assert.equal(bot.controls.jump, false, 'releases on fail')
   })
 
+  it('flowing top beaches via the stall arm (the P2 probe)', async () => {
+    // A flowing top surfaces below top+1, so the eye-out read never fires:
+    // the stall with a beach in reach is the surface signal. No fluid
+    // heights in the run — only the stalled plateau drives out.
+    const bot = worldBot(fallWorld())
+    bot._waters = fallWorld().waters
+    bot.opts.flowTop = true
+    const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
+    let out = 'running'
+    let exits = 0
+    for (let i = 0; i < 40 && out === 'running'; i++) {
+      out = harness(bot, ctx)
+      await flush()
+      if (out === 'running' && ctx.recovery.st.phase === 'exit') exits++
+    }
+    assert.equal(out, 'done')
+    assert.ok(exits > 0, 'the stall arm drove the beach')
+    assert.ok(bot.entity.position.y >= 64, 'left the water higher up')
+  })
+
   it('open top plateaus then treads to no-progress (the P1 probe)', async () => {
-    // No lip to beach on: the eye-out plateau holds, the run treads the
-    // column and fails the stall window instead of hanging.
+    // No lip to beach on: the plateau holds, the run treads the column and
+    // fails the stall window instead of hanging — and never swims blind.
     const bot = worldBot(openFallWorld())
     bot._waters = openFallWorld().waters
     const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
     let out = 'running'
     for (let i = 0; i < 20 && out === 'running'; i++) { out = harness(bot, ctx); await flush() }
     assert.equal(out, 'failed:no-progress')
-    assert.equal(ctx.recovery.st.phase, 'exit', 'reached the plateau')
+    assert.ok(bot.entity.position.y >= 63, 'rose to the surface plateau')
     assert.equal(bot.controls.forward, false, 'never swims blind')
   })
 

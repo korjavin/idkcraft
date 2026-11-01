@@ -1007,6 +1007,7 @@ const FALL_MIN_UP = 2 // multi-block falls: a 1-high sheet is a hop/sidestep ste
 const FALL_SCAN_UP = 12 // column scan budget; taller falls still offer (open sky past the scan)
 const FALL_TIMEOUT_TICKS = 40 // a 12-block rise at 1.6 b/s plus margin, then failed:no-progress
 const FALL_STALL_TICKS = 6 // no +0.15 gain this long: pinned against the sheet, fail
+const FALL_EXIT_STALL = 3 // ... but a stall with a beach in reach drives out at 3, well short of failing
 const FALL_GAIN = 0.15 // same rise granularity as the combo swim
 
 function fallCellAt(bot, x, y, z) {
@@ -1140,20 +1141,28 @@ function waterfallUpRun(bot, ctx) {
     setForward(bot, false)
     return (bp.y >= st.startY + 1) ? 'done' : 'failed:no-progress'
   }
-  // Plateau drive: the eye is out over the top water but the feet are still
-  // wet — beach onto the lip instead of treading one block below done. The
-  // phase sticks once taken (bobbing at the surface must not flap the aim),
-  // and the stall/timeout below still bound a beach that never lands.
+  // Plateau drive: the surface reached but the feet still wet — beach onto
+  // the lip instead of treading one block below done. The eye-out read
+  // assumes a full-height source top; a flowing top surfaces lower, so a
+  // stall with a beach in reach drives out too (revmux P2: no fluid heights
+  // anywhere — the stall is the surface signal). Recomputed every tick, so
+  // a body that unpins mid-drive swims on (forward off) instead of pressing
+  // a cleared sheet; the stall/timeout below bound a beach that never lands.
   const scan = scanFall(bot)
   const eyeOut = !!scan && bp.y + EYE_HEIGHT >= scan.top + 1
-  if (eyeOut) {
+  const stalled = st.waited - st.lastGainTick >= FALL_EXIT_STALL
+  let exit = null
+  if (scan && (eyeOut || stalled)) exit = findFallExit(bot, scan.top, ctx)
+  if (exit) {
     st.phase = 'exit'
-    const exit = findFallExit(bot, scan.top, ctx)
-    st.exit = exit || null
-    if (exit && typeof bot.lookAt === 'function') {
+    st.exit = exit
+    if (typeof bot.lookAt === 'function') {
       try { bot.lookAt(new Vec3(exit.x, bp.y + 1.0, exit.z)) } catch (_) { /* facing best-effort */ }
       setForward(bot, true)
     }
+  } else {
+    st.phase = 'swim'
+    st.exit = null
   }
   if (++st.waited > FALL_TIMEOUT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
   if (st.waited - st.lastGainTick > FALL_STALL_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
