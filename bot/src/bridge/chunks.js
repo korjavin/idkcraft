@@ -397,9 +397,17 @@ function findBlocks(bot, options = {}) {
   const matchAt = typeof useExtraInfo === 'boolean'
     ? (cursor) => matcher(bot.blockAt(cursor, useExtraInfo))
     : (cursor) => { const b = bot.blockAt(cursor, true); return matcher(b) && useExtraInfo(b) }
+  // getBlockStateId takes column-local x/z (prismarine-chunk masks only
+  // y): absolute world coords read the wrong cell outside chunk (0,0).
+  const scratch = { x: 0, y: 0, z: 0 }
   const matchStateId = (column, cursor) => {
     let sid = -1
-    try { sid = column.getBlockStateId(cursor) } catch (_) { sid = -1 }
+    try {
+      scratch.x = cursor.x & 15
+      scratch.y = cursor.y
+      scratch.z = cursor.z & 15
+      sid = column.getBlockStateId(scratch)
+    } catch (_) { sid = -1 }
     if (sid < 0 || sid >= rawTable.length) return false
     return rawSet.has(rawTable[sid])
   }

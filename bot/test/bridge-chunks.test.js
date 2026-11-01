@@ -109,6 +109,28 @@ describe('bridge chunk cache (neuc.6)', () => {
       byFn.slice(0, 1).map(String))
   })
 
+  it('numeric matching agrees with the closure outside chunk (0,0) (nn2s)', async () => {
+    const ext = tinyWorld()
+    ext['-13,64,-11'] = 'oak_log' // column (-1,-1)
+    ext['35,64,20'] = 'oak_log' // column (2,1)
+    const t2 = new FakeTransport({
+      pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true },
+      blocks: ext,
+    })
+    const bot2 = new BaritoneBot(t2, { Vec3, registry, username: 'IdkBody2' })
+    await bot2.start({ pollMs: 0 })
+    await sleep(350) // queued near columns land via the background fill
+    try {
+      const byFn = bot2.findBlocks({ matching: (b) => b && b.name === 'oak_log', maxDistance: 48, count: 64 })
+      const byId = bot2.findBlocks({ matching: [registry.blocksByName.oak_log.id], maxDistance: 48, count: 64 })
+      assert.deepEqual(byId.map(String), byFn.map(String), 'raw scan matches the Block scan in every column')
+      assert.ok(byId.some((p) => p.x === -13 && p.z === -11), 'negative-column log found')
+      assert.ok(byId.some((p) => p.x === 35 && p.z === 20), 'non-zero-column log found')
+    } finally {
+      await bot2.stop()
+    }
+  })
+
   it('block.update flips a cell and emits blockUpdate(old, new)', async () => {
     const seen = []
     bot.on('blockUpdate', (oldB, newB) => seen.push([oldB && oldB.name, newB && newB.name]))
