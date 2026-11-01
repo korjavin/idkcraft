@@ -2289,6 +2289,57 @@ const FORCES = [
     name: 'fetch-retry', bead: 'idkcraft-g0z.4', kind: 'gate',
     fires: (prev, facts, ctx) => {
       const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+      // ihen: per-kind holds expire per kind — retire any expired kind
+      // entry and fire, even while the newest stamp still stands. Before,
+      // only sf.at (the newest failure) was consulted, so an older kind's
+      // expiry never fired until the newest expired too. A same-day parked
+      // kind stays out: the park (not the window) owns its release.
+      let kindFired = false
+      try {
+        const kinds = sf && sf.kinds
+        if (kinds && typeof kinds === 'object') {
+          let park = null
+          try { park = require('./behaviours/castlefetch') } catch (_) { /* park unreadable */ }
+          const now = Date.now()
+          let fired = false
+          for (const k of Object.keys(kinds)) {
+            const e = kinds[k]
+            const at = typeof e === 'number' ? e : (e && e.at)
+            if (!(typeof at === 'number' && now - at > CASTLEFETCH_RETRY_MS)) continue
+            try { if (park && park.isParked(ctx, k)) continue } catch (_) { /* park unreadable: retire */ }
+            delete kinds[k]
+            fired = true
+          }
+          if (fired) {
+            let empty = false
+            try { empty = Object.keys(kinds).length === 0 } catch (_) { /* prune best-effort */ }
+            // Last kind out retires the kindless hold fields with it (ihen
+            // revmux 01 major): sf.at may still be fresh from a later
+            // kind's failure or a success that left a stale stamp, so
+            // falling through to the legacy branch would resurrect a
+            // kindless hold on that kind until at expires, then fire
+            // twice. An early return here would leave the text hold
+            // standing one more tick (codex review) — the forced pick
+            // vetoed, then a second fire.
+            if (empty) {
+              try {
+                const keepPark = (sf.parked && typeof sf.parked === 'object' && Object.keys(sf.parked).length > 0) ||
+                  (sf.counts && typeof sf.counts === 'object' && Object.keys(sf.counts).length > 0)
+                if (keepPark) {
+                  delete sf.at
+                  delete sf.kind
+                  delete sf.kinds
+                  delete sf.status
+                  delete sf.text
+                  delete sf.pos
+                  if (Object.keys(sf).length === 0) delete ctx.stepFail.castlefetch
+                } else delete ctx.stepFail.castlefetch
+              } catch (_) { /* retire best-effort */ }
+              kindFired = true
+            } else return true
+          }
+        }
+      } catch (_) { /* kind-expiry best-effort */ }
       if (sf && typeof sf.at === 'number' && Date.now() - sf.at > CASTLEFETCH_RETRY_MS) {
         // dlpo: an expired time hold retires, but a same-day park survives
         // it — the parked kind still needs its day/bank release.
@@ -2307,7 +2358,7 @@ const FORCES = [
         } catch (_) { /* retire best-effort */ }
         return true
       }
-      return false
+      return kindFired
     },
   },
   // Low-hp gate gated->open edge: one fresh pick (writes the edge latch).
