@@ -823,7 +823,20 @@ async function withdrawAnyFromChest(bot, ctx, names, count, at = null) {
           got += take
         }
       }
-      return { got, name: first }
+      // qwyl: post-draw window contents for the caller's snapshot (one open
+      // answers every kind — no extra peek). Re-read live: earlier stacks
+      // predate this call's withdrawals.
+      const counts = {}
+      try {
+        const after = typeof window.containerItems === 'function' ? window.containerItems() : []
+        if (Array.isArray(after)) {
+          for (const s of after) {
+            if (!s || typeof s.name !== 'string') continue
+            counts[s.name] = (counts[s.name] || 0) + (typeof s.count === 'number' ? s.count : 1)
+          }
+        }
+      } catch (_) { /* post-read best-effort */ }
+      return { got, name: first, counts }
     }, at)
     return res && res.status === 'ok' ? res.value : { got: 0, name: null }
   } catch (_) {
@@ -975,9 +988,12 @@ function filterChests(bot, list, home, seen, radius) {
 // Cross-bot reuse (idkcraft-qwyl): every other bot's memory file on the
 // shared volume is READ, never written (the refreshKnownCastles precedent
 // in memory.js — same dir, same world, best-effort). Their remembered
-// chest sightings land in ctx.peerChests (deduped, CHESTS_MAX cap), so any
-// remembered chest regardless of owner is a withdrawal source; deposits
-// stay home-only (the chest-map rule: only withdraw paths take `at`).
+// chest sightings land in ctx.peerChests (deduped across files, each file
+// already capped by chestSpotsOf), so any remembered chest regardless of
+// owner is a withdrawal source; deposits stay home-only (the chest-map
+// rule: only withdraw paths take `at`). No combined cap: the radius +
+// nearest-first ordering in filterChests picks, so one full peer file can
+// never hide another peer's nearby chest (revmux 01 core-2).
 // Re-read at most once per SAVE_MIN_MS, like the castles precedent.
 // Deferred require (memory -> resources -> castle; never the reverse).
 function refreshPeerChests(bot, ctx, now) {
@@ -989,6 +1005,7 @@ function refreshPeerChests(bot, ctx, now) {
     const window = (mem && mem.SAVE_MIN_MS) || 45000
     if (Array.isArray(ctx.peerChests) && typeof ctx.peerChestsAt === 'number' && t - ctx.peerChestsAt < window) return ctx.peerChests
     const out = []
+    const seen = new Set()
     if (mem && bot) {
       try {
         const own = mem.fileFor(process.env, bot && bot.username)
@@ -1005,12 +1022,11 @@ function refreshPeerChests(bot, ctx, now) {
             if (!world || doc.world !== world) continue
             for (const c of mem.chestSpotsOf(doc.chests)) {
               const k = chestKeyOf(c)
-              if (k === null || out.some((e) => chestKeyOf(e) === k)) continue
+              if (k === null || seen.has(k)) continue
+              seen.add(k)
               out.push(c)
-              if (out.length >= mem.CHESTS_MAX) break
             }
           } catch (_) { /* half-written or foreign file: skip */ }
-          if (out.length >= mem.CHESTS_MAX) break
         }
       } catch (_) { /* volume unreadable: no peers */ }
     }

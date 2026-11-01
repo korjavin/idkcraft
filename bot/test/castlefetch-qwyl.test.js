@@ -111,10 +111,76 @@ describe('qwyl chest-first: remembered chests spare the gather/craft legs', () =
     fs.writeFileSync(path.join(tmpDir, 'BotE.json'), '{ corrupt')
     const ctx = {}
     const peers = stockpile.refreshPeerChests(bot, ctx)
-    assert.equal(peers.length, 32, 'CHESTS_MAX cap holds across peers')
+    assert.equal(peers.length, 33, 'no combined cap: every peer sighting collected once (per-file cap stays)')
     assert.deepEqual(peers[0], dup, 'first peer sighting kept once')
     assert.equal(peers.filter((c) => c.x === dup.x && c.z === dup.z).length, 1, 'cross-file dupe dropped')
     assert.ok(!peers.some((c) => c.x === 12), 'other-world file ignored')
+  })
+
+  it('a full first peer file never hides a later peer\'s nearby chest', () => {
+    const bot = makeBot()
+    const world = worldOf(bot)
+    const far = []
+    for (let i = 0; i < 40; i++) far.push({ x: 1000 + i, y: 64, z: 1000 })
+    const near = { x: SITE.x - 6, y: 64, z: SITE.z - 6 }
+    memoryDir({
+      'BotB.json': { v: 1, world, chests: far },
+      'BotC.json': { v: 1, world, chests: [near] },
+    })
+    const ctx = { castle: castleState() }
+    const all = stockpile.nearbyChestsAll(bot, ctx, [])
+    assert.ok(all.some((c) => c.x === near.x && c.z === near.z), 'later peer nearby chest surfaces')
+    assert.equal(all[0].x, near.x, 'nearest first across files')
+  })
+
+  it('empty chest opened once: every unheld kind dry-marked, no re-walks within the window', () => {
+    const bot = makeBot()
+    const chest = { x: SITE.x - 10, y: 64, z: SITE.z - 10 }
+    const k = `${chest.x},${chest.y},${chest.z}`
+    const ctx = { castle: castleState(), chests: [chest] }
+    // What chestTick now does after one open of an empty bank chest: the
+    // visiting kind's own drain mark plus one mark per unheld kind.
+    fetch.snapshotChest(ctx, k, {})
+    fetch.dryMarkEmpties(ctx, bot, k, {}, 'planks')
+    fetch.markChestDry(ctx, 'planks', k)
+    for (const kind of Object.keys(fetch.FETCH)) {
+      assert.ok(typeof ctx.castleChestDry[`${kind}@${k}`] === 'number', `${kind} dry-marked from one open`)
+    }
+    assert.equal(fetch.pickChest(bot, ctx, {}, 'stone'), null, 'stone never re-walks the opened chest')
+    assert.equal(fetch.pickChest(bot, ctx, {}, 'torch'), null, 'torch never re-walks the opened chest')
+    // Past the window both caches expire and the chest is eligible again.
+    for (const key of Object.keys(ctx.castleChestDry)) ctx.castleChestDry[key] -= fetch.CHEST_DRY_MS + 1
+    ctx.castleChestState[k].ts -= fetch.CHEST_DRY_MS + 1
+    assert.ok(fetch.pickChest(bot, ctx, {}, 'stone'), 'chest eligible again after the window')
+  })
+
+  it('stocked chest: the held kind stays eligible, the rest go dry', () => {
+    const bot = makeBot()
+    const chest = { x: SITE.x - 10, y: 64, z: SITE.z - 10 }
+    const k = `${chest.x},${chest.y},${chest.z}`
+    const ctx = { castle: castleState(), chests: [chest] }
+    fetch.snapshotChest(ctx, k, { cobblestone: 10 })
+    fetch.dryMarkEmpties(ctx, bot, k, { cobblestone: 10 }, 'planks')
+    assert.ok(!ctx.castleChestDry[`stone@${k}`], 'stone held: never dry-marked')
+    assert.ok(typeof ctx.castleChestDry[`torch@${k}`] === 'number', 'torch unheld: dry-marked')
+    assert.ok(fetch.pickChest(bot, ctx, {}, 'stone'), 'stone still walks to its stock')
+    assert.equal(fetch.pickChest(bot, ctx, {}, 'torch'), null, 'torch skips the stone-only chest')
+  })
+
+  it('snapshot alone answers: empty snapshot skips the walk, stale entries drop fast', () => {
+    const bot = makeBot()
+    const chest = { x: SITE.x - 10, y: 64, z: SITE.z - 10 }
+    const k = `${chest.x},${chest.y},${chest.z}`
+    const ctx = { castle: castleState(), chests: [chest] }
+    // Repeat legs read the snapshot instead of re-walking: an empty
+    // snapshot skips the chest with no dry mark at all.
+    fetch.snapshotChest(ctx, k, {})
+    assert.equal(fetch.pickChest(bot, ctx, {}, 'stone'), null, 'fresh empty snapshot: no walk')
+    assert.ok(fetch.freshChestState(ctx, k), 'snapshot fresh within TTL')
+    // Failed withdrawal against cached state: invalidate immediately.
+    fetch.dropChestState(ctx, k)
+    assert.equal(fetch.freshChestState(ctx, k), null, 'dropped entry reads stale at once')
+    assert.ok(fetch.pickChest(bot, ctx, {}, 'stone'), 'no snapshot, no dry mark: chest tried again')
   })
 
   it('nearbyChestsAll merges own + peer, nearest first, home excluded', () => {
