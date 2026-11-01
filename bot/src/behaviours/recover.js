@@ -1988,7 +1988,8 @@ const RECOVER_MENU = {
     // buckets and vetoes facts.water). A body standing IN a player-made
     // fall with the goal above swims the sheet it stands in — no kit, no
     // pour, no strip. The run holds jump-only and reports done on leaving
-    // the water higher up; a stall reads failed:no-progress (an S5-known
+    // the fall column at/above the top (the wet lip stays wet, so dryness
+    // is not the signal); a stall reads failed:no-progress (an S5-known
     // string) so the menu falls through to sidestep.
     feasible: (facts, ctx) => facts.water && facts.fall && !facts.lavaNear &&
       (facts.goalDy >= 2 || pitClimb(facts, facts.wall2)) && !recoverBanned(ctx, 'waterfall_up'),
@@ -2095,10 +2096,22 @@ function resetRecoverStreaksIfMoved(ctx, bp) {
   const st = recoverStreakState(ctx)
   if (!st) return
   if (recoverStreaksMoved(st, bp)) {
+    // waterfall_up column run (i1cw 02): the climb itself rises past the 3D
+    // anchor, so a same-column fail run must survive the rise — only an XZ
+    // departure is a new situation for it. Every other kind still clears.
+    let keepWaterfall = null
+    try {
+      const w = st.waterfall
+      if (w && bp && typeof w.x === 'number' && typeof w.z === 'number' &&
+        typeof bp.x === 'number' && typeof bp.z === 'number' &&
+        Math.hypot(bp.x - w.x, bp.z - w.z) <= RECOVER_BAN_ANCHOR_DIST) keepWaterfall = w
+    } catch (_) { /* anchor best-effort */ }
     st.anchor = null
     st.fails = {}
     st.dones = {} // a new situation restarts the shuffle runs too (i4wm)
     st.pageKeys = {} // a new situation re-arms every detector's page
+    if (keepWaterfall) st.waterfall = keepWaterfall
+    else delete st.waterfall
   }
   if (bp && !st.anchor) st.anchor = { x: bp.x, y: bp.y, z: bp.z }
 }
@@ -2152,6 +2165,17 @@ function noteRecoverFail(ctx, bp, action, outcome) {
   if (prev < RECOVER_BAN_FAILS && n >= RECOVER_BAN_FAILS) {
     try { console.log(`recover ban action=${action} fails=${n} outcome=${outcome} pos=${fmtPos(bp)}`) } catch (_) { /* log best-effort */ }
   }
+  // waterfall_up column run (i1cw 02): top-failures record at the top of
+  // the fall while the anchor sits at the floor, and the rise alone wipes
+  // the 3D-anchored fails above — so the cross-episode ban never reaches 3
+  // on falls 5+ high. A same-column (XZ) fail run survives the rise; only
+  // an XZ departure or a waterfall_up done restarts it.
+  if (action === 'waterfall_up' && bp && typeof bp.x === 'number' && typeof bp.z === 'number') {
+    const w = st.waterfall
+    const same = !!w && typeof w.x === 'number' && typeof w.z === 'number' &&
+      Math.hypot(bp.x - w.x, bp.z - w.z) <= RECOVER_BAN_ANCHOR_DIST
+    st.waterfall = { n: same ? w.n + 1 : 1, at: Date.now(), x: bp.x, y: bp.y, z: bp.z }
+  }
 }
 function noteRecoverDone(ctx, bp, action, boxed) {
   const st = recoverStreakState(ctx)
@@ -2159,6 +2183,7 @@ function noteRecoverDone(ctx, bp, action, boxed) {
   resetRecoverStreaksIfMoved(ctx, bp)
   if (bp) st.anchor = { x: bp.x, y: bp.y, z: bp.z }
   if (action && st.fails) delete st.fails[action]
+  if (action === 'waterfall_up' && st) delete st.waterfall // progress restarts the column run
   // Shuffle-done run (i4wm): a boxed same-floor shuffle done extends the
   // kind's run, anything else restarts or clears it. Open-ground shuffles
   // never count (the fja wedge genuinely walks free). A climbing/tunneling
@@ -2195,6 +2220,9 @@ function recoverBanned(ctx, action) {
     const st = ctx && ctx.recoverStreaks
     if (!st || !RECOVER_BANNABLE.has(action)) return false
     if (recoverStreakFresh(st.fails && st.fails[action])) return true
+    // waterfall_up column run (i1cw 02): same n/at shape as a fail streak,
+    // but XZ-anchored so it survives the 3D reset on tall falls.
+    if (action === 'waterfall_up' && recoverStreakFresh(st.waterfall)) return true
     return recoverStreakFresh(st.dones && st.dones[action]) // three flat boxed shuffles (i4wm)
   } catch (_) { return false }
 }

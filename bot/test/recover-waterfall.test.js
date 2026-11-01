@@ -48,6 +48,16 @@ function openFallWorld() {
   return world
 }
 
+// The player-made shape (i1cw core-1): the source sits ON the lip and
+// spreads across it — the step/head cells are water standing on solid,
+// not dry air. A dry-only exit read finds nothing here.
+function wetLipFallWorld() {
+  const world = fallWorld()
+  world.waters.add(key(0, 64, -1)) // source on the lip
+  world.waters.add(key(0, 64, -2)) // spread sheet across the top
+  return world
+}
+
 function worldBot(world, at) {
   const { solids, waters, lavas } = world
   const bot = {
@@ -250,6 +260,12 @@ describe('fall exits', () => {
     const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
     assert.equal(waterup.findFallExit(bot, 64, ctx), null)
   })
+
+  it('wet lip beaches: source spread over the lip is still an exit', () => {
+    const bot = worldBot(wetLipFallWorld())
+    const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
+    assert.deepEqual(waterup.findFallExit(bot, 64, ctx), { x: 0.5, y: 64, z: -0.5 })
+  })
 })
 
 describe('waterfallUpRun', () => {
@@ -325,5 +341,43 @@ describe('waterfallUpRun', () => {
     bot.entity.position = pos(2.5, 61, 0.5)
     bot.entity.isInWater = false
     assert.equal(waterup.waterfallUpRun(bot, ctx), 'failed:no-progress')
+  })
+
+  it('wet lip run ends done (feet stay wet past the top)', async () => {
+    const bot = worldBot(wetLipFallWorld())
+    bot._waters = wetLipFallWorld().waters
+    const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
+    let out = 'running'
+    for (let i = 0; i < 40 && out === 'running'; i++) {
+      out = harness(bot, ctx)
+      await flush()
+    }
+    assert.equal(out, 'done')
+    assert.ok(bot.entity.position.y >= 64, 'left the fall higher up')
+    assert.equal(bot.controls.jump, false, 'releases on done')
+    assert.equal(bot.controls.forward, false, 'releases on done')
+  })
+})
+
+describe('waterfall_up cross-episode ban', () => {
+  it('three top-failures on a 6-high fall ban the kind (the rise must not wipe the streak)', () => {
+    const ctx = {}
+    const floor = pos(0.5, 61, 0.5)
+    const mid = pos(0.5, 63.5, 0.5)
+    const top = pos(0.5, 65.6, 0.5) // >3 (3D) above the floor
+    const facts = { water: true, fall: true, lavaNear: false, goalDy: 9, goalDist: 40, pit: false, wall2: false, last: 'none' }
+    const feasible = () => recover.RECOVER_MENU.waterfall_up.feasible(facts, ctx)
+    assert.equal(feasible(), true, 'offered before any failure')
+    for (let i = 0; i < 3; i++) {
+      recover.resetRecoverStreaksIfMoved(ctx, floor) // episode start at the floor
+      recover.resetRecoverStreaksIfMoved(ctx, mid) // the rise (stuck.js per-tick anchor check)
+      recover.resetRecoverStreaksIfMoved(ctx, top)
+      recover.noteRecoverFail(ctx, top, 'waterfall_up', 'failed:no-progress')
+      assert.equal(recover.recoverBanned(ctx, 'waterfall_up'), i === 2, `ban state after top-failure ${i + 1}`)
+      recover.resetRecoverStreaksIfMoved(ctx, floor) // sinks back to the floor
+    }
+    assert.equal(feasible(), false, 'banned kind leaves the menu')
+    recover.noteRecoverDone(ctx, top, 'waterfall_up', false)
+    assert.equal(recover.recoverBanned(ctx, 'waterfall_up'), false, 'a done restarts the column run')
   })
 })

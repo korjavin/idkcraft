@@ -1068,12 +1068,22 @@ function findWaterfall(bot) {
   } catch (_) { return null }
 }
 
+// Spread source/flow over solid ground beaches the same as air — the
+// usual player-made fall has its source sitting on the cliff-top lip, so a
+// dry-only step/head read finds no exit one block short of the top. Water
+// counts when it stands on solid ground; open water (nothing to stand on)
+// still reads null and the run treads instead of swimming blind.
+function beachable(cell, support) {
+  if (isAirish(cell)) return true
+  return isWater(cell) && solid(support)
+}
+
 // The surface exit at the top of the sheet (revmux P1 on i1cw): jump-only
 // swimming plateaus with the eye out and the feet still wet — forward stays
 // off in the sheet, so without a beach drive the climb stalls one block
-// below done. A level beach (stand on the top-1 ring, two headroom) or a
-// jump-held step-up beach, goalward first. Null when the top is open water:
-// the run treads the column instead of swimming blind.
+// below done. A level beach (stand on the top-1 ring, two headroom, wet or
+// dry) or a jump-held step-up beach, goalward first. Null when the top is
+// open water: the run treads the column instead of swimming blind.
 function findFallExit(bot, topY, ctx) {
   try {
     const p = botPos(bot)
@@ -1094,11 +1104,14 @@ function findFallExit(bot, topY, ctx) {
       const stand = fallCellAt(bot, nx, topY - 1, nz)
       const step = fallCellAt(bot, nx, topY, nz)
       const head = fallCellAt(bot, nx, topY + 1, nz)
-      if (solid(stand) && isAirish(step) && isAirish(head)) return { x: nx + 0.5, y: topY, z: nz + 0.5 }
+      // Level beach, wet or dry: spread water over the solid lip still mounts.
+      if (solid(stand) && beachable(step, stand) && (isAirish(head) || (isWater(head) && solid(stand)))) return { x: nx + 0.5, y: topY, z: nz + 0.5 }
       const stand2 = fallCellAt(bot, nx, topY, nz)
       const step2 = fallCellAt(bot, nx, topY + 1, nz)
       const head2 = fallCellAt(bot, nx, topY + 2, nz)
-      if (solid(stand2) && isAirish(step2) && isAirish(head2)) return { x: nx + 0.5, y: topY + 1, z: nz + 0.5 }
+      // Step-up beach: the stand itself may be a drowned step over the lip.
+      const standable2 = solid(stand2) || (isWater(stand2) && solid(stand))
+      if (standable2 && beachable(step2, stand2) && (isAirish(head2) || (isWater(head2) && solid(stand)))) return { x: nx + 0.5, y: topY + 1, z: nz + 0.5 }
     }
     return null
   } catch (_) { return null }
@@ -1109,9 +1122,10 @@ function findFallExit(bot, topY, ctx) {
 // reason as the combo swim — a 1-wide sheet leaves 0.2 gaps, and pressing
 // into the sheet pins the body while the flow shoves it back), then a beach
 // drive past the surface plateau (the eye out, feet still wet: face the lip
-// exit and hold forward, jump still held). Done on leaving the water higher
-// up; a level walk-out or a stall window reads failed:no-progress so the
-// menu falls through to sidestep.
+// exit and hold forward, jump still held). Done on leaving the fall column
+// at/above the top — the wet lip keeps the feet wet, so dryness is not the
+// signal; a level walk-out below the top or a stall window reads
+// failed:no-progress so the menu falls through to sidestep.
 function waterfallUpRun(bot, ctx) {
   const rec = ctx.recovery
   const fresh = !rec.st
@@ -1127,6 +1141,12 @@ function waterfallUpRun(bot, ctx) {
   if (st.startY === undefined || st.startY === null) {
     st.startY = bp.y
     st.lastY = bp.y
+    // The fall column being climbed: done reads off-column at/above the
+    // top, not dryness — a spread-wet lip keeps the feet wet past the top.
+    try {
+      const s0 = scanFall(bot)
+      if (s0) { st.colX = s0.cx; st.colZ = s0.cz; st.topY = s0.top }
+    } catch (_) { /* column best-effort */ }
   }
   setForward(bot, false)
   setJump(bot, true)
@@ -1136,6 +1156,17 @@ function waterfallUpRun(bot, ctx) {
     wet = isWater(cellAt(bot, 0, 0, 0)) ||
       !!(bot && bot.entity && bot.entity.isInWater === true)
   } catch (_) { wet = false }
+  // Off the fall column at/above the top: beached (the lip may still be
+  // wet, so dryness is not the signal). A level walk-out below the top
+  // still reads failed:no-progress through the dry arm below.
+  try {
+    if (st.colX !== undefined && st.colX !== null && st.topY !== undefined && st.topY !== null &&
+      (Math.floor(bp.x) !== st.colX || Math.floor(bp.z) !== st.colZ) && Math.floor(bp.y) >= st.topY) {
+      setJump(bot, false)
+      setForward(bot, false)
+      return 'done'
+    }
+  } catch (_) { /* done-read best-effort */ }
   if (!wet) {
     setJump(bot, false)
     setForward(bot, false)
