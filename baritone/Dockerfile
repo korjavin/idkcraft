@@ -48,28 +48,52 @@ ADD --checksum=sha256:beec850e73591ab1dc81cb359d1d224ef3230a35d21dc6e72f8e8d287e
 WORKDIR /headlessmc
 # Downloads the vanilla client + Fabric loader at build time (no account needed
 # to download; launching is gated by start.sh, see README).
-RUN java -jar headlessmc-launcher-wrapper.jar --command fabric 26.1.2 \
- && java -jar headlessmc-launcher-wrapper.jar --command versions
+# idkcraft-uy4q: pin the loader. HMC installs latest stable, which floats
+# (0.19.5 -> 0.20.1 broke the hardcoded launch name in ogo9, and the dynamic
+# `versions` lookup then picked a stale entry the launch could not resolve:
+# "fabric-loader-0.19.5-26.1.2 object unresolvable"). --uid passes -loader to
+# fabric-installer, so the installed version name is deterministic and the
+# warm-up launches that exact name — no `versions` parsing. Bump the pin when
+# a newer loader is proven (warm-up green); the ARG change invalidates the
+# download layer and everything below it.
+ARG FABRIC_LOADER=0.20.1
+RUN java -jar headlessmc-launcher-wrapper.jar --command fabric 26.1.2 --uid "$FABRIC_LOADER" \
+ && VERS=$(java -jar headlessmc-launcher-wrapper.jar --command versions) \
+ && echo "$VERS" \
+ && echo "$VERS" | grep -Eq "(^|[[:space:]])fabric-loader-$FABRIC_LOADER-26.1.2($|[[:space:]])" \
+ || { echo "pinned loader fabric-loader-$FABRIC_LOADER-26.1.2 missing from hmc versions"; exit 1; }
 # Warm layer (idkcraft-6x7.28): launch the client offline once so the ~600 MB
 # of libraries + assets the first launch downloads live in the image, then
-# kill it. Waits on the start.sh/client.sh marker, not a sleep; 300 s cap =
-# the build fails loud. Before the mod/start.sh/settings COPYs below, so
-# their edits reuse this layer (libraries do not depend on them). Leaves no
+# kill it. Waits on the start.sh/client.sh marker, not a sleep; 300 s cap per
+# attempt = the build fails loud. Before the mod/start.sh/settings COPYs below,
+# so their edits reuse this layer (libraries do not depend on them). Leaves no
 # account (auth/.accounts.json stays empty: offline); drops logs, the lock
 # and the per-launch natives dir.
-# idkcraft-ogo9: HMC installs the latest stable loader (0.19.5 -> 0.20.1
-# broke the hardcoded launch name with "Couldn't find object"), so the
-# warm-up launches whatever `versions` knows instead of a pinned name.
-RUN LOADER=$(java -jar headlessmc-launcher-wrapper.jar --command versions \
-      | grep -o 'fabric-loader-[^[:space:]]*' | tail -n 1) \
- && [ -n "$LOADER" ] \
+# idkcraft-uy4q: retry the launch (up to 3 attempts). The first launch
+# downloads the libraries + assets, and a flaked download leaves a versions
+# entry the launch cannot resolve ("object unresolvable", idkcraft-uy4q); each
+# retry re-runs the fabric download (idempotent, heals partial state) before
+# relaunching. Attempts are sequential: the previous client is killed first.
+RUN LOADER="fabric-loader-$FABRIC_LOADER-26.1.2" \
  && mkfifo /tmp/warm-in && exec 8<> /tmp/warm-in \
- && (java -Dhmc.jvmargs=-Dhmc.jline.dumb=true -Dhmc.offline.username=warm \
-      -jar headlessmc-launcher-wrapper.jar \
-      --command launch "$LOADER" -lwjgl -offline \
-      < /tmp/warm-in > /tmp/warm.log 2>&1 &) \
- && for _ in $(seq 1 100); do grep -q "HMC-Specifics initialized" /tmp/warm.log && break; sleep 3; done \
- && if ! grep -q "HMC-Specifics initialized" /tmp/warm.log; then tail -50 /tmp/warm.log; exit 1; fi \
+ && ATTEMPT=1 && WARMED=0 \
+ && while [ "$ATTEMPT" -le 3 ] && [ "$WARMED" = 0 ]; do \
+      echo "warm-up attempt $ATTEMPT/3: $LOADER"; \
+      rm -f /tmp/warm.log; \
+      (java -Dhmc.jvmargs=-Dhmc.jline.dumb=true -Dhmc.offline.username=warm \
+        -jar headlessmc-launcher-wrapper.jar \
+        --command launch "$LOADER" -lwjgl -offline \
+        < /tmp/warm-in > /tmp/warm.log 2>&1 &) ; \
+      for _ in $(seq 1 100); do grep -q "HMC-Specifics initialized" /tmp/warm.log 2>/dev/null && break; sleep 3; done; \
+      if grep -q "HMC-Specifics initialized" /tmp/warm.log 2>/dev/null; then WARMED=1; \
+      else \
+        echo "attempt $ATTEMPT missed the marker; last 50 warm lines:"; tail -50 /tmp/warm.log; \
+        pkill -f headlessmc ; pkill java ; sleep 3; \
+        java -jar headlessmc-launcher-wrapper.jar --command fabric 26.1.2 --uid "$FABRIC_LOADER"; \
+        ATTEMPT=$((ATTEMPT + 1)); \
+      fi; \
+    done \
+ && [ "$WARMED" = 1 ] || { echo "warm-up failed after 3 attempts"; exit 1; } \
  && grep -c "is missing, downloading" /tmp/warm.log || true \
  && pkill -f headlessmc ; pkill java ; sleep 3 \
  ; rm -rf /tmp/warm-in /tmp/warm.log HeadlessMC/run/logs HeadlessMC/run/crash-reports \
