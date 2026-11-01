@@ -766,7 +766,7 @@ function chestTick(bot, ctx, f, d) {
     const bp = bodyPos(bot)
     const dd = bp ? Math.hypot(bp.x - at.x, bp.y - at.y, bp.z - at.z) : Infinity
     if (stalled(f.chestWalk || (f.chestWalk = {}), dd, CHEST_WAITS)) { // unreachable: next chest
-      if (bank) markChestDry(ctx, d.kind, k)
+      if (bank) dryMarkAllKinds(ctx, k)
       f.chest = null
     }
     return true
@@ -804,8 +804,9 @@ function chestTick(bot, ctx, f, d) {
       dryMarkEmpties(ctx, bot, k, peek, d.kind)
     } else if (drew <= 0 && !fund) {
       dropChestState(ctx, k) // fruitless draw, no re-read: cached state is stale, drop it fast
+      if (chestGoneAt(bot, at)) dryMarkAllKinds(ctx, k) // vanished: no kind walks back within the window
     }
-  }, CHEST_TIMEOUT_MS, () => { if (bank) markChestDry(ctx, d.kind, k) })
+  }, CHEST_TIMEOUT_MS, () => { if (bank) dryMarkAllKinds(ctx, k) })
   return true
 }
 
@@ -842,6 +843,28 @@ function kindHeld(bot, kind, present) {
     return false
   } catch (_) {
     return true
+  }
+}
+
+// qwyl 02-after-fix minor: a vanished or unreachable bank chest informs
+// every kind, not just the visitor — remembered/peer sightings are never
+// pruned, so one visit dry-marks all FETCH kinds at k for CHEST_DRY_MS.
+function dryMarkAllKinds(ctx, k) {
+  for (const kind of Object.keys(FETCH)) markChestDry(ctx, kind, k)
+}
+
+// True when the chest block is loaded and no longer a chest (packroom's
+// 'gone' verdict, re-checked locally so the shared withdraw keeps its
+// shape). Unreadable (null: unloaded chunk) is NOT gone — the single-kind
+// mark stands and the next leg retries, the szr1 shape.
+function chestGoneAt(bot, at) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function' || !at) return false
+    const b = bot.blockAt(new Vec3(at.x, at.y, at.z))
+    if (!b) return false
+    return b.name !== 'chest'
+  } catch (_) {
+    return false
   }
 }
 

@@ -183,6 +183,26 @@ describe('qwyl chest-first: remembered chests spare the gather/craft legs', () =
     assert.ok(fetch.pickChest(bot, ctx, {}, 'stone'), 'no snapshot, no dry mark: chest tried again')
   })
 
+  it('a bank between snapshot and pick re-arms the chest: no wait for the TTL', () => {
+    const bot = makeBot()
+    const chest = { x: SITE.x - 10, y: 64, z: SITE.z - 10 }
+    const k = `${chest.x},${chest.y},${chest.z}`
+    const ctx = { castle: castleState(), home: { chest }, chests: [chest] }
+    // A stone leg opened the home chest when it held no stone.
+    fetch.snapshotChest(ctx, k, {})
+    fetch.dryMarkEmpties(ctx, bot, k, {}, 'planks')
+    assert.equal(fetch.pickChest(bot, ctx, {}, 'stone'), null, 'empty snapshot: no walk')
+    // Then stockpile banks the quarry's cobble into the home chest.
+    stockpile.rearmCastleDraw(ctx, ['10 cobblestone'])
+    const picked = fetch.pickChest(bot, ctx, {}, 'stone')
+    assert.ok(picked, 'banked stock is drawable without waiting out the TTL')
+    assert.deepEqual([picked.at.x, picked.at.y, picked.at.z], [chest.x, chest.y, chest.z])
+    // Coal/dirt still leave both caches alone.
+    fetch.snapshotChest(ctx, k, {})
+    stockpile.rearmCastleDraw(ctx, ['64 coal'])
+    assert.equal(fetch.pickChest(bot, ctx, {}, 'stone'), null, 'non-material bank: snapshot stands')
+  })
+
   it('nearbyChestsAll merges own + peer, nearest first, home excluded', () => {
     const bot = makeBot()
     const home = { x: SITE.x - 4, y: 64, z: SITE.z - 4 }

@@ -147,6 +147,11 @@ describe('castlefetch draws the bank chests (g0z.60)', () => {
     await settle(); await settle()
     assert.deepEqual(bot.calls.opens, ['100,64,170'])
     assert.equal(typeof ctx.castleChestDry['stone@100,64,170'], 'number')
+    // qwyl 02-after-fix: the tick itself wires the caches — one open
+    // informs every kind (a second kind is dry) and stores the snapshot,
+    // so deleting that wiring breaks this test.
+    assert.equal(typeof ctx.castleChestDry['torch@100,64,170'], 'number', 'one open dry-marks every unheld kind')
+    assert.ok(ctx.castleChestState && ctx.castleChestState['100,64,170'], 'post-draw snapshot stored by the tick')
     fetch(bot, ctx) // no candidate left: the dig source runs
     assert.ok(ctx.castleFetch == null || ctx.castleFetch.chestDone)
     ctx.castleFetch = null // a fresh leg inside the dry window
@@ -225,6 +230,27 @@ describe('castlefetch draws the bank chests (g0z.60)', () => {
     assert.equal(count(bot, 'oak_log'), 4, 'FETCH.torch 16: one log = one charcoal = 4 torches')
     fetch(bot, ctx)
     assert.notEqual(ctx.stepStatus, 'done', 'a log is no torch: the smelt rung runs')
+  })
+
+  it('a vanished bank chest dry-marks every kind: no kind walks back within the window', async () => {
+    word('stone')
+    const chests = { '100,64,170': [] }
+    const items = [{ name: 'stone_pickaxe', count: 1 }]
+    const bot = makeBot({ items, chests, at: pos(100.5, 64, 171.5) })
+    const ctx = ctxFor()
+    delete chests['100,64,170'] // the chest is gone before the leg opens it
+    fetch(bot, ctx)
+    await settle(); await settle(); await settle()
+    for (const kind of Object.keys(fetch.FETCH)) {
+      assert.equal(typeof ctx.castleChestDry[`${kind}@100,64,170`], 'number', `${kind} dry-marked after one visit to a gone chest`)
+    }
+    assert.ok(!ctx.castleChestState || !ctx.castleChestState['100,64,170'], 'no snapshot kept for a gone chest')
+    const before = bot.calls.opens.length
+    ctx.castleFetch = null // a fresh leg inside the dry window
+    ctx.stepStatus = undefined
+    fetch(bot, ctx)
+    await settle()
+    assert.equal(bot.calls.opens.length, before, 'the gone chest is not reopened')
   })
 
   it('a bank chest past the task radius is never walked to', () => {

@@ -1167,10 +1167,16 @@ function distXZ(a, b) {
 }
 // g0z.60: a bank of castle material ("<n> <name>" lines) re-arms the
 // castlefetch bank draw (its dry marks); coal or dirt leave them alone.
+// qwyl 02-after-fix major: the bank also drops the post-draw snapshots —
+// the chest now holds a kind the last open did not see, so pickChest must
+// re-walk it instead of skipping it on the stale snapshot until the TTL.
 function rearmCastleDraw(ctx, names) {
   try {
     const castle = require('./castle')
-    if (names.some((s) => castle.isMaterial(String(s).split(' ').pop(), ctx.castle))) ctx.castleChestDry = null
+    if (names.some((s) => castle.isMaterial(String(s).split(' ').pop(), ctx.castle))) {
+      ctx.castleChestDry = null
+      ctx.castleChestState = null
+    }
   } catch (_) { /* marks lapse on their own (CHEST_DRY_MS) */ }
 }
 // True when site banking owns the tick: an active castle, the body near
