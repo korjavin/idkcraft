@@ -480,7 +480,10 @@ describe('castle break guard (g0z.55)', () => {
       for (const n of ['cobblestone', 'oak_planks', 'oak_fence', 'oak_door', 'torch', 'cobblestone_stairs', 'glass_pane']) {
         assert.ok(ban.includes(n), n)
       }
-      for (const n of ['dirt', 'grass_block']) assert.ok(!avoid.includes(n) && !ban.includes(n), n)
+      // Transit soil (idkcraft-pjsl): natural ground is break-banned for v2
+      // pathing (the old neither-list state let Baritone tunnel castle
+      // floors and fence underpassages for transit).
+      for (const n of ['dirt', 'grass_block']) assert.ok(ban.includes(n) && !avoid.includes(n), n)
     })
   })
 
