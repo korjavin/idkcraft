@@ -57,6 +57,10 @@ const SHELF_BOOK_KEEP = 3
 // felled home stump — banking every sapling would starve the loop, so the
 // first SAPLING_KEEP stay packed (any type) and only the surplus banks.
 const SAPLING_KEEP = 8
+// Farm reserve (idkcraft-1z1m, idkcraft-8ytm): wheat stays packed
+// to feed/breed sheep; seeds stay packed for farm replant.
+const WHEAT_KEEP = 2
+const SEED_KEEP = 8
 // Blast ladder (g0z.51): the recipe stock stays packed only while a blast
 // decor cell is open, capped (5 iron + the 3 smooth chain + the recipe
 // furnace); the rest banks like junk. Cobble keeps the rung gate's 35 =
@@ -375,6 +379,8 @@ function depositPlan(bot, ctx) {
   let blastKeep = null
   let tableKeep = null
   let saplingKeep = SAPLING_KEEP // gc3j: unconditional, no castle read
+  let wheatKeep = WHEAT_KEEP // 1z1m / 8ytm: keep 2 wheat to feed/breed sheep
+  let seedKeep = SEED_KEEP // 1z1m: keep 8 seeds for farm replanting
   let decorKeep = null // g0z.45: open decor demand per kind (pane/banner/fence), the pack keep bound
   try {
     const far = { blockAt: (p) => bot.blockAt(p) || { name: 'air' } }
@@ -477,6 +483,20 @@ function depositPlan(bot, ctx) {
     if (saplingKeep > 0 && (i.name.endsWith('_sapling') || i.name === 'mangrove_propagule')) {
       const k = Math.min(saplingKeep, n)
       saplingKeep -= k
+      n -= k
+      if (n <= 0) continue
+    }
+    // Farm reserve (idkcraft-1z1m, idkcraft-8ytm): wheat stays packed
+    // to feed/breed sheep; seeds stay packed for farm replant.
+    if (wheatKeep > 0 && i.name === 'wheat') {
+      const k = Math.min(wheatKeep, n)
+      wheatKeep -= k
+      n -= k
+      if (n <= 0) continue
+    }
+    if (seedKeep > 0 && i.name === 'wheat_seeds') {
+      const k = Math.min(seedKeep, n)
+      seedKeep -= k
       n -= k
       if (n <= 0) continue
     }
@@ -2218,6 +2238,8 @@ module.exports.spotsFor = spotsFor
 module.exports.FOOD_KEEP = FOOD_KEEP
 module.exports.SCAFFOLD_KEEP = SCAFFOLD_KEEP
 module.exports.SAPLING_KEEP = SAPLING_KEEP
+module.exports.WHEAT_KEEP = WHEAT_KEEP
+module.exports.SEED_KEEP = SEED_KEEP
 module.exports.BLAST_COBBLE_KEEP = BLAST_COBBLE_KEEP
 module.exports.GEAR_RESERVE_PLANKS = GEAR_RESERVE_PLANKS
 module.exports.GEAR_RESERVE_COBBLE = GEAR_RESERVE_COBBLE
