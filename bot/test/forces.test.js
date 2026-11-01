@@ -42,6 +42,34 @@ describe('FORCES table (vmzq.62)', () => {
     assert.ok(fresh.stepFail.castlefetch)
   })
 
+  it('fetch-retry (ihen): fires when ANY held kind expires, not just the newest', () => {
+    const old = Date.now() - CASTLEFETCH_RETRY_MS - 1
+    // stone expired, planks fresh (the newest stamp): the old code read
+    // only sf.at and never fired until planks expired too.
+    const ctx = {
+      stepFail: {
+        castlefetch: {
+          at: Date.now(),
+          kind: 'planks',
+          kinds: { stone: { at: old, pos: null }, planks: { at: Date.now(), pos: null } },
+        },
+      },
+    }
+    assert.equal(fire('fetch-retry', { ctx }), true)
+    assert.deepEqual(Object.keys(ctx.stepFail.castlefetch.kinds), ['planks'], 'only the expired kind retires')
+    assert.ok(ctx.stepFail.castlefetch, 'the fresh newest hold stands')
+    // Second tick: nothing expired now, no fire.
+    assert.equal(fire('fetch-retry', { ctx }), false)
+    // Legacy bare-timestamp entries count too.
+    const legacy = {
+      stepFail: {
+        castlefetch: { at: Date.now(), kind: 'planks', kinds: { stone: old, planks: Date.now() } },
+      },
+    }
+    assert.equal(fire('fetch-retry', { ctx: legacy }), true)
+    assert.deepEqual(Object.keys(legacy.stepFail.castlefetch.kinds), ['planks'])
+  })
+
   it('gate-opened: fires on the gated->open edge only, writing the latch', () => {
     const ctx = { lowHpWasGated: true }
     assert.equal(fire('gate-opened', { ctx, facts: { health: 20 } }), true)
