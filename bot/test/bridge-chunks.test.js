@@ -131,6 +131,50 @@ describe('bridge chunk cache (neuc.6)', () => {
     }
   })
 
+  it('cold-first numeric scan fits the 50 ms skill budget via the raw path (nn2s)', async () => {
+    // A cold keeper registry carries min/maxStateId ranges, so the first
+    // full-sphere scan takes the raw stateId path (no Block per cell).
+    for (const n of ['oak_log', 'stone', 'dirt']) {
+      const e = registry.blocksByName[n]
+      assert.ok(e && typeof e.minStateId === 'number' && typeof e.maxStateId === 'number',
+        `${n} carries state-id ranges`)
+    }
+    const t = new FakeTransport({
+      pos: { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, onGround: true },
+      blocks: tinyWorld(),
+    })
+    const cold = new BaritoneBot(t, { Vec3, registry, username: 'IdkBodyCold' })
+    await cold.start({ pollMs: 0 })
+    try {
+      let blockAtCalls = 0
+      const blockAt = cold.blockAt
+      cold.blockAt = (...a) => { blockAtCalls++; return blockAt.call(cold, ...a) }
+      const t0 = process.hrtime.bigint()
+      const hits = cold.findBlocks({ matching: [registry.blocksByName.oak_log.id], maxDistance: 32, count: 64 })
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6
+      assert.ok(hits.length >= 3, `expected the tree, got ${hits.length}`)
+      assert.equal(blockAtCalls, 0, 'raw stateId scan builds no Block per cell')
+      assert.ok(ms < 50, `cold-first scan took ${ms.toFixed(1)} ms, over the 50 ms skill budget`)
+    } finally {
+      await cold.stop()
+    }
+  })
+
+  it('numeric matching with useExtraInfo keeps the Block path (nn2s)', () => {
+    let blockAtCalls = 0
+    const blockAt = bot.blockAt
+    bot.blockAt = (...a) => { blockAtCalls++; return blockAt.call(bot, ...a) }
+    try {
+      const hits = bot.findBlocks({
+        matching: [registry.blocksByName.oak_log.id], maxDistance: 16, count: 64, useExtraInfo: true,
+      })
+      assert.ok(hits.length >= 3, `expected the tree, got ${hits.length}`)
+      assert.ok(blockAtCalls > 0, 'the Block fallback builds a Block per visited cell')
+    } finally {
+      bot.blockAt = blockAt
+    }
+  })
+
   it('block.update flips a cell and emits blockUpdate(old, new)', async () => {
     const seen = []
     bot.on('blockUpdate', (oldB, newB) => seen.push([oldB && oldB.name, newB && newB.name]))
