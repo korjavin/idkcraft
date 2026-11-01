@@ -66,6 +66,13 @@ const SAPLING_KEEP = 8
 // the next leg re-digs it. The far-cell read matches paneKeep.
 const BLAST_COBBLE_KEEP = 35
 const BLAST_KEEP = { raw_iron: 5, iron_ingot: 5, stone: 3, smooth_stone: 3, furnace: 1, cobblestone: BLAST_COBBLE_KEEP }
+// Attic table (idkcraft-0dbg): the vanilla recipe stock stays packed only
+// while the enchanting_table decor cell is open, capped (4 obsidian +
+// 2 diamonds + 1 book; the numbers mirror castlefetch TABLE_OBSIDIAN /
+// TABLE_DIAMOND / TABLE_BOOK) — else a failed leg's mats bank between legs
+// and the next leg re-draws them, and after 3 same-day fails the kind parks
+// for the date naming missing mats the chest already holds.
+const TABLE_KEEP = { obsidian: 4, diamond: 2, book: 1 }
 // Pack room for a dig drop (moved from castlefetch, oqul.12; castlefetch
 // re-exports it). Pack-full yield (g0z.26): digging into a full pack drops
 // the cobble on the ground and counts no-gain strikes — castlefetch fails
@@ -366,6 +373,7 @@ function depositPlan(bot, ctx) {
   let paneKeep = null
   let shelfBookKeep = 0
   let blastKeep = null
+  let tableKeep = null
   let saplingKeep = SAPLING_KEEP // gc3j: unconditional, no castle read
   let decorKeep = null // g0z.45: open decor demand per kind (pane/banner/fence), the pack keep bound
   try {
@@ -383,10 +391,14 @@ function depositPlan(bot, ctx) {
       // a blast cell is open — else it shuttles chest<->pack across
       // failed legs (the paneKeep shape).
       if (open.some((c) => c.kind === 'blast_furnace')) blastKeep = { ...BLAST_KEEP }
+      // Table-mats keep (idkcraft-0dbg): the recipe stock stays packed
+      // while the attic table cell is open — else it shuttles chest<->pack
+      // across failed legs (the blastKeep shape).
+      if (open.some((c) => c.kind === 'enchanting_table')) tableKeep = { ...TABLE_KEEP }
       decorKeep = {}
       for (const c of open) decorKeep[c.kind] = (decorKeep[c.kind] || 0) + 1
     }
-  } catch (_) { paneKeep = null; decorKeep = null; shelfBookKeep = 0; blastKeep = null }
+  } catch (_) { paneKeep = null; decorKeep = null; shelfBookKeep = 0; blastKeep = null; tableKeep = null }
   // Keep-first counters for bankable keeps (vmzq.39): name -> kept so far.
   const kept = {}
   let li = 0
@@ -451,6 +463,12 @@ function depositPlan(bot, ctx) {
     if (blastKeep && blastKeep[i.name] > 0) {
       const k = Math.min(blastKeep[i.name], n)
       blastKeep[i.name] -= k
+      n -= k
+      if (n <= 0) continue
+    }
+    if (tableKeep && tableKeep[i.name] > 0) {
+      const k = Math.min(tableKeep[i.name], n)
+      tableKeep[i.name] -= k
       n -= k
       if (n <= 0) continue
     }
@@ -2057,6 +2075,7 @@ module.exports.LOG_KEEP = LOG_KEEP
 module.exports.STONE_KEEP = STONE_KEEP
 module.exports.STACK_KEEP = STACK_KEEP
 module.exports.keepFor = keepFor
+module.exports.TABLE_KEEP = TABLE_KEEP // 0dbg: the test pins it to castlefetch's recipe trio
 module.exports.PACK_RESERVE = PACK_RESERVE
 module.exports.chestSpotFor = chestSpotFor
 module.exports.withdrawFromChest = withdrawFromChest

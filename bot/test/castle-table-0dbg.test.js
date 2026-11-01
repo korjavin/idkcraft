@@ -11,6 +11,7 @@ const { Vec3 } = require('vec3')
 const blueprint = require('../src/castle')
 const castle = require('../src/behaviours/castle')
 const castlefetch = require('../src/behaviours/castlefetch')
+const stockpile = require('../src/behaviours/stockpile')
 
 const SITE = { x: 100, y: 64, z: 200 }
 const V = 2
@@ -81,5 +82,44 @@ describe('0dbg enchanting table', () => {
     const bot = worldBot(painted(false))
     const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: {}, visitedAt: now } }
     assert.equal(castle.menuFact(bot, ctx, now), 'done')
+  })
+  it('the stockpile keep mirrors the recipe (4 obsidian, 2 diamonds, 1 book)', () => {
+    assert.deepEqual(stockpile.TABLE_KEEP, { obsidian: castlefetch.TABLE_OBSIDIAN, diamond: castlefetch.TABLE_DIAMOND, book: castlefetch.TABLE_BOOK })
+  })
+  it('keeps the recipe stock packed while only the table cell is open', () => {
+    const now = Date.now()
+    const bot = worldBot(painted(true), items([['obsidian', 4], ['diamond', 2], ['book', 1], ['crafting_table', 1], ['iron_pickaxe', 1], ['bread', 5]]))
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: {}, visitedAt: now } }
+    const plan = stockpile.depositPlan(bot, ctx)
+    for (const m of ['obsidian', 'diamond', 'book']) {
+      assert.ok(!plan.some((p) => p.name === m), `${m} stays packed, not banked: ${JSON.stringify(plan)}`)
+    }
+  })
+  it('banks recipe surplus above the keep while the table cell is open', () => {
+    const now = Date.now()
+    const bot = worldBot(painted(true), items([['obsidian', 9], ['diamond', 5], ['book', 3]]))
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: {}, visitedAt: now } }
+    const plan = stockpile.depositPlan(bot, ctx)
+    const got = (n) => (plan.find((p) => p.name === n) || { count: 0 }).count
+    assert.equal(got('obsidian'), 5)
+    assert.equal(got('diamond'), 3)
+    assert.equal(got('book'), 2)
+  })
+  it('banks the mats once the table is laid (no open table cell)', () => {
+    const now = Date.now()
+    const bot = worldBot(painted(false), items([['obsidian', 4], ['diamond', 2], ['book', 1]]))
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: {}, visitedAt: now } }
+    const plan = stockpile.depositPlan(bot, ctx)
+    const got = (n) => (plan.find((p) => p.name === n) || { count: 0 }).count
+    assert.equal(got('obsidian'), 4)
+    assert.equal(got('diamond'), 2)
+    assert.equal(got('book'), 1)
+  })
+  it('keeps the finished table packed until it is laid', () => {
+    const now = Date.now()
+    const bot = worldBot(painted(true), items([['enchanting_table', 1]]))
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: {}, visitedAt: now } }
+    const plan = stockpile.depositPlan(bot, ctx)
+    assert.ok(!plan.some((p) => p.name === 'enchanting_table'), `finished table stays packed: ${JSON.stringify(plan)}`)
   })
 })
