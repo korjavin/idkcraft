@@ -171,11 +171,14 @@ function obsidianFaces(bot, block) {
 function bringDeny(bot, block, ctx, name) {
   let d = 'protected'
   try { d = denyReason(bot, block, ctx) } catch (_) { d = 'protected' }
-  if (d === 'protected' && obsidianMod.isObsidianName(name) && block && obsidianMod.isObsidianName(block.name)) {
+  // 6ci5.1 r02: the faces gate every verdict on a consented block, not
+  // just 'protected' — a below-feet trap verdict over a lava pocket must
+  // still read 'submerged', or the atl.20 drop digs into it.
+  if (obsidianMod.isObsidianName(name) && block && obsidianMod.isObsidianName(block.name)) {
     const faces = obsidianFaces(bot, block)
     if (faces.portal) return 'protected' // lit frame: consent never reaches it
     if (faces.lava) return 'submerged' // lava-capped crust: unsafe, the safe refusal names it
-    return null
+    return d === 'protected' ? null : d
   }
   return d
 }

@@ -187,6 +187,51 @@ describe('obsidian dig consent (bringDeny)', () => {
     assert.ok(c.bring.skip && c.bring.skip.has('2,64,0'), 'frame cell skipped')
   })
 
+  it('a consented below-feet block over solid ground digs via the atl.20 drop', async () => {
+    const bot = mockBot({
+      names: {
+        '0,64,0': 'obsidian', '0,63,0': 'stone',
+        '1,65,0': 'stone', '-1,65,0': 'stone', '0,65,1': 'stone',
+      },
+      items: [{ name: 'diamond_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    bot.entity.position = pos(0, 65, 0) // walled pit over the block
+    c.bring = {
+      kind: 'block', name: 'obsidian', want: 1, by: 'P', block: 'obsidian', drop: 'obsidian',
+      pos: pos(0, 64, 0), phase: 'dig', stalls: 0, lastPos: null, have: 0, announced: true, exposed: true,
+    }
+    await bring(bot, c, null, {})
+    await flush()
+    await bring(bot, c, null, {})
+    assert.equal(bot.digCalls, 1)
+    assert.ok(!(c.bring && c.bring.skip && c.bring.skip.has('0,64,0')), 'no protected skip')
+  })
+
+  it('a below-feet block with lava beside it never takes the drop', async () => {
+    const bot = mockBot({
+      names: {
+        '0,64,0': 'obsidian', '0,63,0': 'stone', '1,64,0': 'lava',
+        '1,65,0': 'stone', '-1,65,0': 'stone', '0,65,1': 'stone',
+      },
+      items: [{ name: 'diamond_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    bot.entity.position = pos(0, 65, 0) // walled pit over the block
+    c.bring = {
+      kind: 'block', name: 'obsidian', want: 1, by: 'P', block: 'obsidian', drop: 'obsidian',
+      pos: pos(0, 64, 0), phase: 'dig', stalls: 0, lastPos: null, have: 0, announced: true, exposed: true,
+    }
+    await bring(bot, c, null, {})
+    assert.equal(bot.digCalls, 0)
+    assert.equal(c.bring.phase, 'find')
+    assert.equal(c.bring.sawSubmerged, true)
+  })
+
   it('a lava-capped crust skips back to find without digging', async () => {
     const bot = mockBot({
       names: { '2,64,0': 'obsidian', '2,63,0': 'lava' },
