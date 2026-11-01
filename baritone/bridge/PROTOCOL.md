@@ -100,7 +100,7 @@ constructor; `handleMineEvent` first in the adapter's event router for
 
 | method | params | result | mineflayer surface |
 |---|---|---|---|
-| `baritone.mine` | `{blocks:[names],count,radius,guard?}` (`blocks` non-empty, `count` positive; `radius` accepted, enforced in Node; `guard` = `{x0,y0,z0,x1,y1,z1}` cell box, mod-enforced) | `{id,have,target}` (`target` = live matching count + `count`, Baritone's absolute quantity) | `bot.mine(names,count,{radius,forbid})` → `Promise<{have}>` |
+| `baritone.mine` | `{blocks:[names],count,radius,guard?,suspend?}` (`blocks` non-empty, `count` positive; `radius` accepted, enforced in Node; `guard` = `{x0,y0,z0,x1,y1,z1}` cell box, mod-enforced; `suspend` = extra names dropped from the ban for the call only — cover soil, never counted toward `target`) | `{id,have,target}` (`target` = live matching count + `count`, Baritone's absolute quantity) | `bot.mine(names,count,{radius,forbid})` → `Promise<{have}>` |
 | `baritone.minestate` | `{}` (diagnostic read, no params) | `{id,have,target,active,procActive,pathing,inControl,customGoal,known,blacklisted}` (control/goal best-effort nulls, list sizes -1 when unreadable; throws `not in world` out of world) | scratch probes only (no `bot.*` surface) |
 
 End statuses on `baritone.event {kind:'mine', …}`: `done` (at/above target),
