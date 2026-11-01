@@ -563,7 +563,11 @@ function finish(bot, ctx, status) {
   const hopDry = !!(f && f.hopDry)
   if (status === 'done' && !hopDry) ctx.castleFetchDry = null // a leg that got stock retires the dry mark
   if (status === 'done' && f && f.kind === 'stairs' && !f.stairsMine) ctx.castleStairsMines = 0 // 8njf: stairs on hand (chest, craft) re-arm the mine fallback
-  if (f && f.spend) {
+  // idkcraft-082d: an open leg always gets its over line — chest/craft
+  // legs never touch spend, so the S2/S3 scoreboard (legs/finished,
+  // stone/h, s/stone) was blind to every chest-served leg.
+  if (f) {
+    const spent = (f && f.spend) || { dig: 0, walk: 0, other: 0 }
     let delta = '?'
     try {
       const now = blocksOnHand(bot)
@@ -573,7 +577,7 @@ function finish(bot, ctx, status) {
     } catch (_) { /* delta best-effort */ }
     let wall = '?'
     try { wall = (typeof f.t0 === 'number' ? Math.round((Date.now() - f.t0) / 1000) + 's' : '?') } catch (_) { /* wall best-effort */ }
-    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${f.spend.dig | 0} walk=${f.spend.walk | 0} other=${f.spend.other | 0} starts=${f.starts | 0} dug=${f.dug | 0} blocks=${delta} target=${typeof f.haul === 'number' ? f.haul : '?'} wall=${wall}`) } catch (_) { /* log best-effort */ }
+    try { console.log(`castlefetch ${f.kind || '?'}: leg over (${status}) ticks dig=${spent.dig | 0} walk=${spent.walk | 0} other=${spent.other | 0} starts=${f.starts | 0} dug=${f.dug | 0} blocks=${delta} target=${typeof f.haul === 'number' ? f.haul : '?'} wall=${wall}`) } catch (_) { /* log best-effort */ }
   }
   if (status !== 'done') {
     try { console.log(`castlefetch ${status}`) } catch (_) { /* log best-effort */ }
