@@ -12,7 +12,16 @@ const assert = require('node:assert/strict')
 const { handleChat, createTicker } = require('../src/index')
 const llmOrders = require('../src/llm-orders')
 const bringitem = require('../src/behaviours/bringitem')
+const bring = require('../src/behaviours/bring')
 const { resetLlmBudget, LLM_MODEL } = require('../src/brain')
+
+// NOTE (6ci5.1 merged): 'bring me obsidian' in prod routes to the block
+// ladder before any item rung, so the obsidian tests below prove the
+// resolve->validate->attempt->morph mechanism through a directly built
+// item order (the same shape a recipe step for another target takes), not
+// the chat path — the chat path for obsidian itself is covered by
+// bring-obsidian.test.js. The mine leg they run is the real 6ci5.1 ladder,
+// not a fixture.
 
 function pos(x, y, z) {
   const p = { x, y, z, distanceTo: (q) => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z), clone() { return pos(p.x, p.y, p.z) } }
@@ -23,7 +32,7 @@ const ITEMS = {
   atlantium: 1, obsidian: 2, bucket: 3, water_bucket: 4, diamond_pickaxe: 5,
 }
 
-function mockBot(items = []) {
+function mockBot(items = [], cells = null) {
   const lines = []
   const itemsByName = {}
   for (const [name, id] of Object.entries(ITEMS)) itemsByName[name] = { id }
@@ -40,7 +49,11 @@ function mockBot(items = []) {
     _items: items,
     inventory: { items: () => bot._items },
     findBlocks: () => [],
-    blockAt: () => null,
+    blockAt: (p) => {
+      if (!cells || !p) return null
+      const n = cells[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`]
+      return n ? { name: n, position: pos(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) } : null
+    },
     toss: async () => {},
     chat(line) { lines.push(String(line)) },
   }
@@ -387,5 +400,60 @@ describe('recipe execution', () => {
     const res = await llmOrders.planRecipe(bot, {}, 'u0', { caps: { held: () => false }, alive: () => false })
     assert.equal(res.fail, 'cancelled')
     assert.equal(calls.length, 0)
+  })
+
+  it('two smelt steps each smelt once: snapshot gate plus per-step budget', () => {
+    const bot = mockBot([{ name: 'stone_pickaxe', count: 1 }, { name: 'raw_iron', count: 1 }])
+    const ctx = {}
+    const step = { do: 'smelt', item: 'iron_ingot' }
+    const o = { kind: 'item', name: 'iron_ingot', names: ['X'], want: 3, by: 'P', smeltRuns: 5 }
+    ctx.bring = o
+    o.recipe = { target: 'iron_ingot', pending: false, at: Date.now(), original: 'ORIG', i: 0, queue: [step, step], executing: true, done: false, active: null, activeHave: 0, want: 3 }
+    // Step 1 morphs with a reset furnace budget and the step's names.
+    bringitem.recipeNext(bot, ctx, o)
+    assert.equal(o.smeltRuns, 0, 'each validated step gets its own furnace budget')
+    assert.deepEqual(o.names, ['iron_ingot'])
+    assert.equal(o.phase, 'smelt', 'raw held: straight to the furnace')
+    // The furnace lands one ingot and eats the raw; the gate sees growth.
+    o.smeltRuns = 1
+    bot._items.splice(bot._items.findIndex((i) => i.name === 'raw_iron'), 1)
+    bot._items.push({ name: 'iron_ingot', count: 1 })
+    bringitem.enterCraftOrRefuse(bot, ctx, o)
+    assert.equal(o.recipe.i, 2, 'growth past the snapshot advances')
+    // Step 2 finds no raw, digs the ore, and must NOT advance on step 1's
+    // ingot when the sub resumes — its furnace has not run yet.
+    assert.equal(o.smeltRuns, 0, 'budget resets every step')
+    assert.ok(o.subFor, 'raw short digs the ore first')
+    assert.equal(o.phase, 'find')
+    bot._items.push({ name: 'raw_iron', count: 1 })
+    bringitem.resumeSub(bot, ctx, o)
+    assert.equal(ctx.bring, o, 'no refusal after the dig')
+    assert.equal(o.recipe.i, 2, 'no growth, no advance')
+    assert.equal(o.phase, 'smelt', 'resume reaches the furnace rung')
+    // The second furnace lands ingot two; the queue runs out and delivers.
+    bot._items.push({ name: 'iron_ingot', count: 1 })
+    bringitem.enterCraftOrRefuse(bot, ctx, o)
+    assert.equal(o.phase, 'return', 'exhausted queue delivers')
+    assert.ok(bot.lines.some((l) => l === 'only 2 iron_ingot, coming'), `partial give: ${bot.lines}`)
+  })
+
+  it('obsidian consent stays with explicit orders, never with recipes', () => {
+    assert.equal(bring.obsidianConsented(null, null), true)
+    assert.equal(bring.obsidianConsented(null, { name: 'obsidian' }), true)
+    assert.equal(bring.obsidianConsented({}, { name: 'obsidian', recipe: { target: 'obsidian' } }), true)
+    assert.equal(bring.obsidianConsented({}, { name: 'obsidian', recipe: { target: 'enchanting_table' } }), false)
+    assert.equal(bring.obsidianConsented({ bring: { name: 'obsidian', recipe: { target: 'enchanting_table' } } }), false)
+    assert.equal(bring.obsidianConsented({ bring: { name: 'obsidian', recipe: { target: 'obsidian' } } }), true)
+  })
+
+  it('bringDeny withholds the lift for a recipe-driven order', () => {
+    const cells = { '2,64,0': 'obsidian', '3,64,0': 'nether_portal' }
+    const bot = mockBot([], cells)
+    const blk = { name: 'obsidian', position: pos(2, 64, 0) }
+    const lifted = bring.bringDeny(bot, blk, {}, 'obsidian')
+    const withheld = bring.bringDeny(bot, blk, { bring: { name: 'obsidian', recipe: { target: 'enchanting_table' } } }, 'obsidian')
+    const never = bring.bringDeny(bot, blk, {}, 'coal')
+    assert.equal(lifted, 'protected', 'control: a lit frame is protected even with consent')
+    assert.equal(withheld, never, 'no lift: reads exactly like an unconsented order')
   })
 })

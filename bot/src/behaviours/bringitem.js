@@ -397,7 +397,7 @@ function startRecipeFallback(bot, ctx, o) {
   let original = null
   try { original = itemRefusal(bot, target, { names: o.names || [] }, o.keptName) } catch (_) { original = `can't get ${target}: no recipe, no source` }
   o.phase = 'recipe'
-  o.recipe = { target, pending: true, at: Date.now(), original, i: 0, queue: null, executing: false, done: false, active: null, want: o.want }
+  o.recipe = { target, pending: true, at: Date.now(), original, i: 0, queue: null, executing: false, done: false, active: null, activeHave: 0, want: o.want }
   const alive = () => { try { return ctx.bring === o && !!o.recipe } catch (_) { return false } }
   void recipeSource.plan(bot, ctx, target, { caps: recipeCaps, alive }).then((res) => {
     try {
@@ -492,6 +492,10 @@ function recipeNext(bot, ctx, o) {
   }
   R.i++
   R.active = step
+  // Count snapshot: every rung only ADDS its item, so the completion gate
+  // below advances on growth past this count — never on stock an earlier
+  // step (or the pack) already held.
+  try { R.activeHave = packCounts(bot)[step.item] || 0 } catch (_) { R.activeHave = 0 }
   const tag = `recipe for ${R.target} ${R.i}/${q.length}`
   if (step.do === 'craft') {
     o.phase = 'craft'
@@ -506,8 +510,11 @@ function recipeNext(bot, ctx, o) {
     const pack = packCounts(bot)
     // The step owns the names while it runs: an ore sub that fills resumes
     // through the normal ladder, which keys the smelt rung off o.names.
+    // Each validated step gets its own furnace budget (SMELT_RUNS caps one
+    // job's retries, not a queue of independently validated smelts).
     o.names = [step.item]
     o.want = 1
+    o.smeltRuns = 0
     const g = smeltRung(bot, ctx, o, { out: step.item, need: 1, have: pack[step.item] || 0 }, R.target)
     if (g && g.open) { say(bot, `${tag}: ${g.line}`); return }
     R.done = true
@@ -1022,14 +1029,15 @@ function orderCraftNames(names) {
 // gap refuses with the smelting line, anything else keeps planCraft's line.
 function enterCraftOrRefuse(bot, ctx, o) {
   // Recipe execution (idkcraft-6ci5.2): a finished step's rung lands back
-  // here — advance the queue. An unfinished active step (an ore sub still
-  // filling, a furnace running, fuel/cobble legs mid-flight) falls through
-  // to the normal ladder instead: recipeNext would read it as done and abort
-  // on a false 'lost' line.
+  // here — advance the queue when its item grew past the morph snapshot. An
+  // unfinished active step (an ore sub still filling, a furnace running,
+  // fuel/cobble legs mid-flight) falls through to the normal ladder
+  // instead: presence alone would re-count an earlier step's stock and skip
+  // the furnace. o.recipe is set, so the fall-through never re-asks.
   if (o && o.recipe && o.recipe.executing && !o.recipe.done && o.recipe.active) {
-    let stepDone = false
-    try { stepDone = !!recipeCaps.held(bot, o.recipe.active.item) } catch (_) { stepDone = false }
-    if (stepDone) { recipeNext(bot, ctx, o); return }
+    let now = 0
+    try { now = packCounts(bot)[o.recipe.active.item] || 0 } catch (_) { now = 0 }
+    if (now > (o.recipe.activeHave || 0)) { recipeNext(bot, ctx, o); return }
   }
   // Tool rung (idkcraft-0jvh): every resume path (chest fetch, sub resume,
   // smelt done) funnels through here, so tool orders re-enter the shared

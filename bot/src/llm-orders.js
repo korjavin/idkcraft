@@ -775,6 +775,7 @@ const RECIPE_SYSTEM = 'You turn a Minecraft bring order the bot cannot otherwise
   'The ladder can: craft <item> at a table (vanilla recipes; inputs held or produced by an earlier step), smelt <item> in a furnace (ore inputs need the right pickaxe), gather logs or colored wool through sub-orders, fill a water_bucket from water with an empty bucket, mine <block> with the right pickaxe. ' +
   'Answer JSON only, no prose: {"materials":["<id>",...],"steps":[{"do":"craft|smelt|gather|fill|mine","item":"<id>"}]}. ' +
   'Steps run in order; every material is held already or produced by an earlier step. ' +
+  'Each step yields one unit — repeat a step for more (three smelts for three ingots). ' +
   'The last step makes the ordered item itself. ' +
   'Item names are Minecraft registry ids. Answer {"materials":[],"steps":[]} when no ladder-runnable recipe exists.'
 
