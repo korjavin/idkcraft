@@ -95,6 +95,20 @@ describe('bridge chunk cache (neuc.6)', () => {
     assert.deepEqual([found.position.x, found.position.y, found.position.z], [3, 64, 0])
   })
 
+  it('numeric matching scans raw state ids with closure parity (nn2s)', () => {
+    const logId = registry.blocksByName.oak_log.id
+    const byFn = bot.findBlocks({ matching: (b) => b && b.name === 'oak_log', maxDistance: 16, count: 64 })
+    const byId = bot.findBlocks({ matching: [logId], maxDistance: 16, count: 64 })
+    assert.deepEqual(byId.map(String), byFn.map(String), 'raw stateId scan matches the Block scan')
+    assert.ok(byId.length >= 3, `expected the tree, got ${byId.length}`)
+    // useExtraInfo keeps the Block path with identical results.
+    const extra = bot.findBlocks({ matching: [logId], maxDistance: 16, count: 64, useExtraInfo: true })
+    assert.deepEqual(extra.map(String), byFn.map(String))
+    // Single (non-array) numeric matching works too.
+    assert.deepEqual(bot.findBlocks({ matching: logId, maxDistance: 16, count: 1 }).map(String),
+      byFn.slice(0, 1).map(String))
+  })
+
   it('block.update flips a cell and emits blockUpdate(old, new)', async () => {
     const seen = []
     bot.on('blockUpdate', (oldB, newB) => seen.push([oldB && oldB.name, newB && newB.name]))
