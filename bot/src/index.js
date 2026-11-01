@@ -555,8 +555,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     lastVisible = !!target
     if (target) noteSeen()
     else noteGone()
+    // idkcraft-e4p4: hoisted for the flee snapshot reuse below.
+    let state = null
     if (target) {
-      const state = buildState(bot, target, lastTargetPos)
+      state = buildState(bot, target, lastTargetPos)
       lastTargetPos = state._lastTargetPos
       if (!ctx.scout && bot.registry) ctx.scout = makeScout(bot, { ctx })
       if (ctx.scout) ctx.scout.tick()
@@ -564,7 +566,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       eatReflex(bot, ctx, state)
     } else {
       try {
-        const state = buildState(bot, null)
+        state = buildState(bot, null)
         if (meleeReflex(bot, ctx, state)) reflexFast = true
         eatReflex(bot, ctx, state)
       } catch (_) { /* facts best-effort */ }
@@ -574,7 +576,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     }
     // Parked but not dead: a hissing creeper still moves the body
     // (fast ticks while fleeing, same as the nobody-online path).
-    const fledParked = fleeReflex(bot, ctx)
+    const fledParked = fleeReflex(bot, ctx, state)
     if (fledParked) reflexFast = true
     else stopOnce()
     // Breath while parked (0u9): 'stop' parks the body, it must not
@@ -772,7 +774,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     eatReflex(bot, ctx, state)
     // Safety preempts arbitration (and the lead order below): the brain
     // never sees creepers, so nothing else would move the body.
-    const fleeDist = fleeReflex(bot, ctx)
+    const fleeDist = fleeReflex(bot, ctx, state)
     if (fleeDist !== false) {
       const fleePlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
       console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()}`)

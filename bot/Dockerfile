@@ -10,4 +10,8 @@ COPY skills/ ./skills/
 # default and as the seed ownership of the named volume.
 RUN mkdir -p /app/memory && chown node:node /app/memory
 USER node
+# idkcraft-e4p4: bot2 node heap pinned at its 626MB ceiling for 3+ days
+# (2-5s GC/min slowing ticks) — raise the old-space cap; the churn cut in
+# perception.js lowers the allocation rate to match.
+ENV NODE_OPTIONS=--max-old-space-size=1536
 CMD ["node", "src/index.js"]
