@@ -175,3 +175,121 @@ describe('pjsl transit backfill', () => {
     assert.equal(castle.menuFact(worldBot(cells, []), { castle: st2 }, now), 'done', 'silent with an empty pack')
   })
 })
+
+// TRACK 2 (idkcraft-pjsl, this bead): the prod offender is the v2 body —
+// v1's per-cell guard never reaches Baritone, the bridge maps names only,
+// and dirt/ground is no castle kind, so Baritone tunnelled castle floors
+// and fence underpassages for transit. Task 1 hard-bans natural ground
+// (soil) for v2 pathing breaks, id-global like the existing built-only ban;
+// Task 2 routes v2 through the known gate/door cells, which Baritone opens
+// natively (see baritone/settings.txt door-traversal note) with the reflex
+// (doors.openGateUnderFeet/adopt) and bridge click rules covering the stall.
+
+const bodyMod = require('../src/body')
+const { movementsToSettings } = require('../src/bridge/index')
+const doors = require('../src/doors')
+
+const V2_NAMES = ['cobblestone', 'stone', 'deepslate', 'granite', 'tuff', 'oak_planks', 'oak_log',
+  'oak_fence', 'oak_door', 'oak_fence_gate', 'torch', 'cobblestone_stairs', 'glass_pane',
+  'dirt', 'grass_block', 'gravel', 'sand', 'clay', 'snow', 'chest']
+function v2Registry() {
+  const blocksByName = {}
+  let id = 1
+  for (const n of V2_NAMES) blocksByName[n] = { id: id++, name: n, diggable: true }
+  return { blocksByName, itemsByName: {} }
+}
+function v2Bot(registry, pos) {
+  return {
+    registry,
+    entity: { position: pos || { x: 0, y: 80, z: 0 } },
+    pathfinder: {
+      movements: { canDig: true, exclusionAreasBreak: [], blocksCantBreak: new Set() },
+      setMovements() {},
+    },
+  }
+}
+function withBaritone(fn) {
+  const prev = process.env.BOT_BODY
+  process.env.BOT_BODY = 'baritone'
+  try { fn() } finally {
+    if (prev == null) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = prev
+  }
+}
+function v2Settings(bot, ctx) {
+  withBaritone(() => bodyMod.movementsFor('work', bot, ctx))
+  const set = movementsToSettings(bot.pathfinder.movements, bot.registry)
+  return {
+    avoid: String(set.blocksToAvoidBreaking || '').split(',').filter(Boolean),
+    ban: String(set.blocksToDisallowBreaking || '').split(',').filter(Boolean),
+    allowBreak: set.allowBreak,
+    allowPlace: set.allowPlace,
+  }
+}
+function peerCentre(rot = 0, version = V) {
+  const st = peer()
+  const { w, d } = blueprint.siteDimensions(rot, version)
+  return { x: st.site.x + w / 2, y: st.site.y, z: st.site.z + d / 2, st }
+}
+
+describe('pjsl v2 transit guard (task 1: soil hard-ban)', () => {
+  it('soil is break-banned with no castle at all (castleless bot2 shape)', () => {
+    const s = v2Settings(v2Bot(v2Registry()), {})
+    for (const n of ['dirt', 'grass_block', 'gravel', 'sand', 'clay']) {
+      assert.ok(s.ban.includes(n), `${n} banned`)
+      assert.ok(!s.avoid.includes(n), `${n} not merely avoided`)
+    }
+  })
+  it('soil stays banned inside a known peer castle (no own ctx.castle) and far off', () => {
+    const registry = v2Registry()
+    const { x, z, st } = peerCentre()
+    const ctx = { castle: null, knownCastles: [st] }
+    const near = v2Settings(v2Bot(registry, { x, y: 65, z }), ctx)
+    assert.ok(near.ban.includes('dirt'), 'peer footprint soil banned')
+    const far = v2Settings(v2Bot(registry, { x: 0, y: 80, z: 0 }), ctx)
+    assert.ok(far.ban.includes('dirt'), 'far soil still banned (id-global ponytail)')
+  })
+  it('rock tunneling keeps working: stone/deepslate/logs avoid-only, never banned', () => {
+    const registry = v2Registry()
+    const { x, z, st } = peerCentre()
+    for (const ctx of [{}, { castle: null, knownCastles: [st] }]) {
+      const s = v2Settings(v2Bot(registry, { x, y: 65, z }), ctx)
+      for (const n of ['stone', 'deepslate', 'oak_log']) {
+        assert.ok(s.avoid.includes(n) && !s.ban.includes(n), n)
+      }
+    }
+  })
+  it('snow stays out of the ban (build clears)', () => {
+    const s = v2Settings(v2Bot(v2Registry()), {})
+    assert.ok(!s.ban.includes('snow'), 'snow not banned')
+  })
+  it('normal walks keep allowBreak true with the soil ban installed (explicit quarry/moat digs unaffected)', () => {
+    const s = v2Settings(v2Bot(v2Registry()), {})
+    assert.equal(s.allowBreak, 'true', 'pathing breaks still allowed; the ban is per-name')
+  })
+})
+
+describe('pjsl v2 door route (task 2: known gate/door cells)', () => {
+  it('a known peer castle resolves a gate + door cell whose laid names are the openable route', () => {
+    const st = peer()
+    const gate = blueprint.decorPlan(st.site, 0, V).cells.find((c) => c.kind === 'gate')
+    const door = blueprint.absPlan(st.site, 0, V).cells.find((c) => c.kind === 'door')
+    assert.ok(gate, 'peer gate cell resolves')
+    assert.ok(door, 'peer door cell resolves')
+    assert.ok(doors.isPassage('oak_fence_gate'), 'laid gate opens on approach')
+    assert.ok(doors.isPassage('oak_door'), 'laid door opens on approach')
+  })
+  it('gate/door names are break-banned (Baritone opens instead of breaking)', () => {
+    const s = v2Settings(v2Bot(v2Registry()), {})
+    assert.ok(s.ban.includes('oak_fence_gate'), 'gate never broken for transit')
+    assert.ok(s.ban.includes('oak_door'), 'door never broken for transit')
+  })
+  it('inside a peer castle the route is the gate/door: soil banned, place off, allowBreak on', () => {
+    const { x, z, st } = peerCentre()
+    const s = v2Settings(v2Bot(v2Registry(), { x, y: 65, z }), { castle: null, knownCastles: [st] })
+    assert.ok(s.ban.includes('dirt'), 'no under-dig')
+    assert.ok(s.ban.includes('cobblestone'), 'no through-wall')
+    assert.equal(s.allowPlace, 'false', 'no over-via-place')
+    assert.equal(s.allowBreak, 'true', 'walks still break non-banned when needed')
+  })
+})
