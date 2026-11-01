@@ -583,6 +583,30 @@ describe('ipn.6 pantry tick', () => {
     assert.equal(ctx.gear.pantrySeen, 1)
     assert.equal(stacks[0].count, 0)
   })
+  it('a failed draw latches the stock snapshot: no second withdraw off stale stock (2ket)', async () => {
+    // Stale snapshot: the last successful open saw 64 ingots, but the lid
+    // is blocked now — the draw throws, the snapshot stays, and only the
+    // latch stops planFor re-offering withdraw every tick (minor 01-review).
+    const packroom = require('../src/behaviours/packroom')
+    const real = packroom.withdrawFromChest
+    packroom.withdrawFromChest = async () => { throw new Error('lid blocked') }
+    try {
+      const at = Date.now()
+      const bot = mockBot({ items: [...TOOLS], cells: CELLS, chestStacks: chestOf([['iron_ingot', 64]]) })
+      const ctx = {
+        home: homeChest(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN },
+        gearPantryBanked: 1, gear: { pantrySeen: 1 }, // latched: the pantry path stays shut, stock decides
+        chestLast: { home: { contents: { iron_ingot: 64 }, at } },
+      }
+      gear(bot, ctx)
+      await tick(300)
+      assert.equal(ctx.gear.stockSeenAt, at, 'failed draw latches the snapshot it trusted')
+      const p = gear.planFor(gear.liveCounts(bot, ctx), ctx, {})
+      assert.equal(p.key, 'want-ore', 'no second withdraw off the stale snapshot')
+    } finally {
+      packroom.withdrawFromChest = real
+    }
+  })
   it('empty chest latches and yields want-ore exactly once', async () => {
     const bot = mockBot({ items: [...TOOLS], cells: CELLS, chestStacks: chestOf([]) })
     const ctx = { home: homeChest(), stepStatus: 'running', gearGiven: { ...TOOLS_GIVEN }, gearPantryBanked: 1 }
@@ -617,6 +641,7 @@ describe('ipn.6 pantry tick', () => {
     gear(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:gear-chest-far')
     assert.equal(ctx.gear.pantrySeen, 1, 'give-up latches the pantry')
+    assert.equal(ctx.gear.stockSeenAt, -1, 'give-up latches the (absent) stock snapshot too')
     assert.equal(stacks[0].count, 8, 'no window on a failed walk')
     // Next pick degrades to the fetchers instead of re-walking.
     const p = gear.planFor({
