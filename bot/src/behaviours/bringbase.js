@@ -207,16 +207,18 @@ const FIND_RADIUS = 48
 // Nearest passive animal within 48; when drop is set (second+ kill of one
 // order) only animals dropping it, so one order tosses one food kind.
 // opts (did.3 wool) narrows the hunt: { prey, skipSheared, color,
-// skipIds, skipColors }. Without opts the food shape is byte-identical
-// (forage.js relies on it). A color filter is strict — it only ever
-// carries an explicitly ordered color, which is a promise (bare families
-// pass none and hunt any sheep). skipIds (8gc stall skips) applies to
-// every prey kind, sheep filters only to sheep.
+// skipIds, skipColors, radius }. radius widens the ring (aoql.1 wool);
+// without opts the food shape is byte-identical (forage.js relies on it).
+// A color filter is strict — it only ever carries an explicitly ordered
+// color, which is a promise (bare families pass none and hunt any sheep).
+// skipIds (8gc stall skips) applies to every prey kind, sheep filters
+// only to sheep.
 function findAnimal(bot, drop, opts) {
   const bp = bot && bot.entity && bot.entity.position
   if (!bp) return null
   const o = opts && typeof opts === 'object' ? opts : null
   const prey = o && o.prey ? new Set(o.prey) : PREY_NAMES
+  const radius = o && typeof o.radius === 'number' && o.radius > 0 ? o.radius : FIND_RADIUS
   let best = null
   let bestDist = Infinity
   for (const e of Object.values(bot.entities || {})) {
@@ -236,7 +238,7 @@ function findAnimal(bot, drop, opts) {
       }
     }
     const d = animalDist(bp, e.position)
-    if (typeof d !== 'number' || d > FIND_RADIUS) continue
+    if (typeof d !== 'number' || d > radius) continue
     if (d < bestDist) { bestDist = d; best = e }
   }
   if (!best) return null

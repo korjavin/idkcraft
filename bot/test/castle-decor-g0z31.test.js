@@ -588,6 +588,15 @@ describe('castle banners self-source (g0z.35)', () => {
     fetch.selfOrder({}, f, { searchLegs: { legs: 3 } })
     assert.deepEqual(fetch.selfOrderBack(f), { exhausted: false })
   })
+
+  it('selfOrderBack: a wool hunt on legs 24-31 is still hunting (aoql.1 core-2)', () => {
+    const f = {}
+    fetch.selfOrder({}, f, { kind: 'wool', searchLegs: { legs: 24 } })
+    assert.deepEqual(fetch.selfOrderBack(f), { exhausted: false })
+    const g = {}
+    fetch.selfOrder({}, g, { kind: 'wool', searchLegs: { legs: 32 } })
+    assert.deepEqual(fetch.selfOrderBack(g), { exhausted: true })
+  })
 })
 
 // idkcraft-g0z.38: the pane ladder — empty chest -> self sand order -> fuel

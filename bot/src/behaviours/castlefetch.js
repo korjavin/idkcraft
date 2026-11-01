@@ -1056,7 +1056,10 @@ function selfOrderBack(f) {
   let exhausted = false
   try {
     const s = o.searchLegs || {}
-    const budget = (require('./bring').SEARCH_BUDGET || {}).legs || 24
+    const bringMod = require('./bring')
+    // aoql.1: wool hunts walk a wider budget — a banner hunt on legs 24-31
+    // is still hunting, not exhausted (no early noteNoWool).
+    const budget = (typeof bringMod.searchLegsFor === 'function' && bringMod.searchLegsFor(o && o.kind)) || 24
     exhausted = (s.legs || 0) >= budget || !!s.timedOut || !!s.capped
   } catch (_) { /* unreadable order: not exhausted */ }
   return { exhausted }

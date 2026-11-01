@@ -73,8 +73,16 @@ const GUIDED_REISSUE_MS = 6000 // re-anchor GoalFollow on the moving worker (fol
 // compose); tests stub them through the module export below.
 const SEARCH_BUDGET = { legs: 24, minutes: 5 }
 const SELF_SEARCH_RADIUS = 96 // 9qt0: self-order legs stay this close to the anchor
-function searchLegs() {
+function searchLegs(o) {
+  // aoql.1: wool hunts walk more legs (the sheared sheep lives, so a sparse
+  // flock still fills the order); every other kind keeps the shared budget.
+  if (o && (o.kind || 'block') === 'wool') return woolMod.WOOL_SEARCH_LEGS
   return SEARCH_BUDGET.legs
+}
+// Kind-aware leg budget for step mirrors (beds classifies a finished hunt
+// against the same number the hunt itself walked).
+function searchLegsFor(kind) {
+  return (kind || 'block') === 'wool' ? woolMod.WOOL_SEARCH_LEGS : SEARCH_BUDGET.legs
 }
 function searchMinutes() {
   return SEARCH_BUDGET.minutes
@@ -237,7 +245,7 @@ const SEARCH_CRITERIA = {
 function searchText(o, s) {
   const kind = o.kind || 'block'
   const what = kind === 'food' ? 'food' : kind === 'wool' ? 'wool' : (o.name || 'block')
-  return `search=${what} legs=${s.legs}/${searchLegs()} last=${s.last || 'empty'}`
+  return `search=${what} legs=${s.legs}/${searchLegs(o)} last=${s.last || 'empty'}`
 }
 
 // Model leg choice with the FSM as fallback and disagreement reference,
@@ -848,7 +856,7 @@ async function enterSearch(bot, ctx, o, legacy) {
   // A time-expired search is exhausted even with legs left (revmux
   // 01-review): self wool hunts must fail, never reopen 3 more searches.
   if (Date.now() - s.startedAt >= searchMinutes() * 60 * 1000) s.timedOut = true
-  if (s.legs >= searchLegs() || s.timedOut) {
+  if (s.legs >= searchLegs(o) || s.timedOut) {
     refuseExhausted(bot, ctx, o)
     return
   }
@@ -881,7 +889,7 @@ async function enterSearch(bot, ctx, o, legacy) {
     }
   }
   const text = searchText(o, s)
-  const c = await chooseBringSearch(ctx && ctx.brain, text, searchLegs() - s.legs)
+  const c = await chooseBringSearch(ctx && ctx.brain, text, searchLegs(o) - s.legs)
   if (!ctx || ctx.bring !== o) return // stop or a new order landed mid-ask: touch nothing
   if (c.action !== 'search_more') {
     refuseExhausted(bot, ctx, o)
@@ -936,8 +944,9 @@ async function findFood(bot, ctx, o) {
   const wool = (o.kind || 'block') === 'wool'
   const color = wool ? (o.color || null) : null
   const skip = wool ? preySkipIds(o) : (o.unreachIds && o.unreachIds.size ? o.unreachIds : null)
+  const radius = wool ? woolMod.WOOL_FIND_RADIUS : undefined // aoql.1: the sheep ring runs wider
   let res = wool
-    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, skipIds: skip, skipColors: o.deadColors })
+    ? findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color, skipIds: skip, skipColors: o.deadColors, radius })
     : findAnimal(bot, o.drop || null, skip ? { skipIds: skip } : undefined)
   if (!res && wool && o.lockColor && o.color) {
     // The provisional lock stranded (did.4 rig: one light_gray in a brown
@@ -945,7 +954,7 @@ async function findFood(bot, ctx, o) {
     // core-1): with none in range at all the flock stands a leg away, so
     // the lock stays and the legs relocate. Releasing there would burn
     // the pack colour for the whole order.
-    const any = findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color: null, skipIds: skip, skipColors: o.deadColors })
+    const any = findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, color: null, skipIds: skip, skipColors: o.deadColors, radius })
     if (any) {
       if (!o.deadColors) o.deadColors = new Set()
       o.deadColors.add(o.color)
@@ -964,11 +973,22 @@ async function findFood(bot, ctx, o) {
     return
   }
   if (!res) {
+    // Chest-loot second look (aoql.1): the hunt may have opened with no
+    // chest known (or the chest rung never ran for this order) — when the
+    // field is empty but a chest is available and untried, swing through
+    // the chest rung once before walking legs. Concrete drop only: the
+    // rung withdraws o.drop by name. One pass: the rung latches
+    // chestTried, so this never loops.
+    if (wool && !o.chestTried && o.drop && o.have < o.want && chestAvailable(bot, ctx, o)) {
+      o.phase = 'chestfetch'
+      return
+    }
     // Legs move areas (revmux 03 core-1): dead colours are a per-area
     // hint — the new ground may hold the stranded colour, so it hunts
     // again there instead of dooming the legs that walk past it.
     if (wool && o.lockColor) o.deadColors = null
-    const woolLegacy = o.have > 0 ? `only got ${o.have} ${o.drop}` : (color ? `no ${color} sheep within 48 blocks` : 'no sheep within 48 blocks')
+    const within = `within ${wool ? woolMod.WOOL_FIND_RADIUS : 48} blocks`
+    const woolLegacy = o.have > 0 ? `only got ${o.have} ${o.drop}` : (color ? `no ${color} sheep ${within}` : `no sheep ${within}`)
     await enterSearch(bot, ctx, o, wool ? woolLegacy : (o.have > 0 ? `only got ${o.have} ${o.drop}` : 'no animals within 48 blocks'))
     return
   }
@@ -1116,12 +1136,17 @@ function pickupFood(bot, ctx, o, bp, grounded) {
 // Wool orders (idkcraft-did.3) ride the shared n7k prey phases above —
 // find, walk, kill (shear when shears are held, else swing), pickup —
 // plus the same search legs, with the h1nl 'shears' craft phase first when
-// the pack covers shears but holds none. Only the return leg falls through
+// the pack covers shears but holds none. aoql.1: the iron gap smelts
+// through the shared smeltTick (the woolChain re-enters the hunt after),
+// and an empty find swings through the chest rung once when a chest is
+// available but untried. Only the return leg falls through
 // to the shared single-drop toss in bring(). The morphs and rungs
 // (toWoolHunt, refuseItemOrHunt, enterCraftOrRefuse, craftTick, shearsTick)
 // live in bringitem.js.
 async function gatherWool(bot, ctx, o, bp, grounded) {
   if (o.phase === 'shears') { itemMod.shearsTick(bot, ctx, o); return } // h1nl: craft shears, then hunt
+  if (o.phase === 'smelt') { itemMod.smeltTick(bot, ctx, o); return } // aoql.1: the iron gap smelts (was a stall)
+  if (o.phase === 'chestfetch') { chestFetch(bot, ctx, o, bp); return } // aoql.1: mid-hunt chest loot
   if (o.phase === 'searchwalk') { walkSearch(bot, ctx, o); return }
   if (o.phase === 'find') { await findFood(bot, ctx, o); return }
   if (o.phase === 'walk') { walkFood(bot, ctx, o, bp, grounded); return }
@@ -2503,6 +2528,7 @@ module.exports.pickChest = pickChest
 module.exports.chestAvailable = chestAvailable
 module.exports.nearbyChests = stockpileMod.nearbyChests
 module.exports.SEARCH_BUDGET = SEARCH_BUDGET
+module.exports.searchLegsFor = searchLegsFor
 module.exports.SELF_SEARCH_RADIUS = SELF_SEARCH_RADIUS
 module.exports.SEARCH_INSTRUCTIONS = SEARCH_INSTRUCTIONS
 module.exports.SEARCH_CRITERIA = SEARCH_CRITERIA

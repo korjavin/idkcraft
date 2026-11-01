@@ -74,6 +74,19 @@ function taskLogs() {
 }
 
 describe('task stall clock (vmzq.2)', () => {
+  it('selfSearching: a wool hunt inside its wider budget is not a stall (aoql.1 core-2)', () => {
+    const fresh = (kind, legs) => ({
+      self: 'beds', kind, phase: 'find',
+      searchLegs: { legs, startedAt: Date.now(), timedOut: false, capped: false },
+    })
+    assert.equal(taskMod.selfSearching(fresh('wool', 24)), true, 'wool legs 24-31 still hunt')
+    assert.equal(taskMod.selfSearching(fresh('wool', 31)), true)
+    assert.equal(taskMod.selfSearching(fresh('wool', 32)), false, 'the wider budget spent')
+    assert.equal(taskMod.selfSearching(fresh('block', 24)), false, 'other kinds keep 24')
+    assert.equal(taskMod.selfSearching(fresh('block', 23)), true)
+    assert.equal(taskMod.selfSearching({ self: 'beds', kind: 'wool', phase: 'return', searchLegs: { legs: 0 } }), false)
+  })
+
   it('eligible ticks without progress for 15 min -> exactly one L1 log+chat', () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)

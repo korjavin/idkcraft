@@ -9,6 +9,13 @@
 
 const WANT_WOOL = 3
 
+// Hunt width (idkcraft-aoql.1): sheep shear 1-3 wool but keep living, so the
+// hunt ranges wider and walks more legs than a kill hunt before refusing —
+// a sparse flock still fills the order instead of latching beds sheepless.
+// Food/block hunts keep the shared 48 / 24 budget.
+const WOOL_FIND_RADIUS = 64
+const WOOL_SEARCH_LEGS = 32
+
 // Vanilla DyeColor order: the sheep metadata wool byte carries the color
 // in the low nibble and the sheared flag in 0x10.
 const WOOL_COLORS = [
@@ -112,6 +119,8 @@ function topWoolColor(bot, excl) {
 }
 
 module.exports.WANT_WOOL = WANT_WOOL
+module.exports.WOOL_FIND_RADIUS = WOOL_FIND_RADIUS
+module.exports.WOOL_SEARCH_LEGS = WOOL_SEARCH_LEGS
 module.exports.WOOL_COLORS = WOOL_COLORS
 module.exports.isWoolName = isWoolName
 module.exports.isWoolFamily = isWoolFamily
