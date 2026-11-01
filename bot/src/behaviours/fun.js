@@ -219,9 +219,9 @@ function menuBlocked(facts, bot, ctx) {
 // a missing/rearming kit, a due pickaxe upgrade, a waiting craft batch
 // (logs or stations), or a torch-ready dark yard all keep the body.
 // Owed beds keep no body (idkcraft-u19u): fun stays feasible with beds
-// owed; the criterion clause below records the weighing for a future tick
-// ask — in prod today the FSM rank decides (the tick brain has no ask(),
-// vhlb.5), so beds wins whenever it is feasible.
+// owed; the criterion clause below records the weighing for the tick ask
+// (prod opt-in BOT_MENU_ASK=1, idkcraft-82zl fix) — where the model is not
+// consulted the FSM rank decides, so beds wins whenever it is feasible.
 // Rank does the rest: fun sits just above explore, so in FSM mode it fires
 // exactly when the only alternatives are rest and an explore with nothing
 // new — while a merely-passing idle moment still explores first, and the
@@ -278,8 +278,9 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
     const owedChest = facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')
     if (facts.pinned && facts.pinned !== 'none') return false
     // u19u: owed beds demoted from menu veto to classifier criterion text
-    // (FUN_CRITERION below), inert until a tick ask is wired (prod brain
-    // has no ask(); FSM rank decides meantime) — never vetoed either way.
+    // (FUN_CRITERION below), weighed by the tick ask (prod opt-in
+    // BOT_MENU_ASK=1; FSM rank decides where the model is not consulted) —
+    // never vetoed either way.
     // Blocked-bypass (idkcraft-u02t): the owed-work clauses below are one
     // boolean. When the menu holds no runnable productive step — every
     // work step held, parked, latched or failed, the FSM down to rest-only

@@ -329,6 +329,33 @@ describe('skills: sandbox (vf8e.2)', () => {
     assert.equal(tick(compiled('finder2', 'try { bot.findBlocks(new Array(65).fill("a")) } catch (e) { return "failed:refused" } return "done"'), bot), 'failed:refused')
   })
 
+  it('findBlocks with a registry sends numeric ids for the raw stateId scan (nn2s)', () => {
+    const cells = new Map([[key(3, 61, 0), 'oak_log']])
+    const idByName = { oak_log: 17, stone: 1 }
+    const bot = fakeBot(cells)
+    bot.registry = { blocksByName: { oak_log: { id: 17 }, stone: { id: 1 } } }
+    const seen = []
+    bot.findBlocks = ({ matching, maxDistance = 16, count = 1 }) => {
+      seen.push(matching)
+      const o = bot.entity.position.floored()
+      const out = []
+      for (const [k] of cells) {
+        const [x, y, z] = k.split(',').map(Number)
+        const hit = Array.isArray(matching)
+          ? matching.includes(idByName[cells.get(k)]) // bridge numeric contract
+          : matching({ name: cells.get(k) })
+        if (o.distanceTo(new Vec3(x, y, z)) <= maxDistance && hit) out.push(new Vec3(x, y, z))
+      }
+      return out.sort((a, b) => o.distanceTo(a) - o.distanceTo(b)).slice(0, count)
+    }
+    const sk = compiled('finder_ids', 'const r = bot.findBlocks(["oak_log"], 99, 99); return "failed:n" + r.length')
+    assert.equal(tick(sk, bot), 'failed:n1')
+    assert.deepEqual(seen, [[17]], 'names resolve to numeric ids, not a closure')
+    const sk2 = compiled('finder_unknown', 'const r = bot.findBlocks(["nope_block"], 99, 99); return "failed:n" + r.length')
+    assert.equal(tick(sk2, bot), 'failed:n0')
+    assert.deepEqual(seen[1], [], 'unknown names match nothing, never everything')
+  })
+
   it('a hostile skill cannot run code outside the call timeout or reach the host', () => {
     const bot = fakeBot()
     // A getter/setter on the globals the runtime used to read: never touched by the host.

@@ -59,6 +59,8 @@ beforeEach(() => {
   delete process.env.BOT_AUTONOMOUS
   delete process.env.BRAIN_URL
   delete process.env.TYPESAFE_API_KEY
+  delete process.env.ANTHROPIC_API_KEY
+  delete process.env.BOT_MENU_ASK
 })
 afterEach(() => {
   process.env = savedEnv
@@ -137,6 +139,49 @@ describe('autonomous mode', () => {
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
     await ticker.tick()
     assert.equal(ticker.getBrainEngine(), 'jev', 'restored on join')
+  })
+
+  it('82zl fix: prod (non-manual) jev brain steps down alone and restores menuAsk on join', async () => {
+    // No 'brain jev' chat: manualBrain stays null, so the restore path
+    // rebuilds the prod brain through makeBrain instead of the manual hybrid.
+    process.env.TYPESAFE_API_KEY = 'k'
+    process.env.BOT_MENU_ASK = '1'
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev', autonomous: true })
+    await ticker.tick()
+    bot.players = {}
+    for (let i = 0; i < 3; i++) await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'off', 'paid ask steps down with nobody online')
+    assert.equal(bot._tickerCtx.brain.ask, undefined, 'no shared ask while off')
+    assert.equal(bot._tickerCtx.brain.menuAsk, undefined, 'no menu ask while off')
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'jev', 'prod ask brain returns on join')
+    assert.equal(typeof bot._tickerCtx.brain.menuAsk, 'function', 'menu ask restored')
+    assert.equal(bot._tickerCtx.brain.ask, undefined, 'shared ask stays off after restore')
+    assert.equal(typeof bot._tickerCtx.brain.plan, 'function', 'stall planner restored')
+  })
+
+  it('82zl fix: prod llm brain steps down alone and restores menuAsk on join', async () => {
+    // Minor c: the step-down cost guard covers the llm engine too — without
+    // it BOT_AUTONOMOUS=1 plus ANTHROPIC_API_KEY would keep calling the
+    // model on an empty server.
+    process.env.ANTHROPIC_API_KEY = 'a'
+    process.env.BOT_MENU_ASK = '1'
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'llm', autonomous: true })
+    await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'llm', 'paid llm ask runs with players online')
+    bot.players = {}
+    for (let i = 0; i < 3; i++) await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'off', 'paid llm ask steps down with nobody online')
+    assert.equal(bot._tickerCtx.brain.menuAsk, undefined, 'no menu ask while off')
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'llm', 'llm prod brain returns on join')
+    assert.equal(typeof bot._tickerCtx.brain.menuAsk, 'function', 'menu ask restored')
   })
 
   it('metric tracks the toggle', () => {

@@ -141,6 +141,7 @@ function dropFor(blockName) {
 // golden are refused for everything. The refusal names the required tier.
 const PICKAXE_RANK = { wooden: 0, golden: 0, stone: 1, iron: 2, diamond: 3, netherite: 4 }
 function requiredTier(blockName) {
+  if (blockName === 'obsidian') return 'diamond' // 6ci5.1: the only non-ore with a tier gate
   const base = blockName.endsWith('_ore') ? blockName.slice(0, -'_ore'.length) : blockName
   if (/(gold|diamond|redstone|emerald)$/.test(base)) return 'iron'
   return 'stone'
@@ -157,7 +158,10 @@ function bestPickRank(bot) {
   return best
 }
 function hasPickaxe(bot, blockName) {
-  const need = blockName && blockName.endsWith('_ore') ? (requiredTier(blockName) === 'iron' ? 2 : 1) : 0
+  // 6ci5.1: obsidian needs a diamond pick (rank 3) — without it the dig
+  // drops nothing, so the tier gates refuse instead of walking there.
+  const need = blockName === 'obsidian' ? 3
+    : blockName && blockName.endsWith('_ore') ? (requiredTier(blockName) === 'iron' ? 2 : 1) : 0
   return bestPickRank(bot) >= need
 }
 function tierArticle(tier) {

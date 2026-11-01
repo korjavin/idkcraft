@@ -186,6 +186,22 @@ function short(e) {
   return String((e && e.message) || e).slice(0, 80)
 }
 
+// Numeric block ids for a name list, or null without a usable registry
+// (unit fakes carry none — they keep the closure matcher). Lets the
+// bridge scan raw state ids instead of building a Block per cell.
+function blockIds(bot, names) {
+  try {
+    const byName = bot && bot.registry && bot.registry.blocksByName
+    if (!byName) return null
+    const ids = []
+    for (const n of names) {
+      const e = byName[String(n)]
+      if (e && typeof e.id === 'number' && ids.indexOf(e.id) < 0) ids.push(e.id)
+    }
+    return ids
+  } catch (_) { return null }
+}
+
 function cellAt(bot, x, y, z) {
   return bot.blockAt(new Vec3(Math.floor(num(x)), Math.floor(num(y)), Math.floor(num(z))))
 }
@@ -270,10 +286,15 @@ const OPS = {
     const b = cellAt(c.bot, x, y, z)
     return b ? { name: b.name, solid: solid(b), x: b.position.x, y: b.position.y, z: b.position.z } : null
   },
+  // idkcraft-nn2s: names resolve to numeric ids when the body has a
+  // registry, so the bridge scans raw state ids (no Block per cell) —
+  // the first full-sphere scan on a cold keeper blew the 50 ms per-call
+  // budget as a name closure. Registry-less fakes keep the closure.
   findBlocks(c, names, maxDistance = 16, count = 16) {
     if (!Array.isArray(names) || names.length > 64) throw new Error('names must be an array of <=64')
-    const want = new Set(names.map(String))
-    const found = c.bot.findBlocks({ matching: (b) => !!b && want.has(b.name), maxDistance: Math.min(num(maxDistance), 32), count: Math.min(num(count), 64) }) || []
+    const ids = blockIds(c.bot, names)
+    const matching = ids || ((b) => !!b && new Set(names.map(String)).has(b.name))
+    const found = c.bot.findBlocks({ matching, maxDistance: Math.min(num(maxDistance), 32), count: Math.min(num(count), 64) }) || []
     return found.map((p) => ({ x: p.x, y: p.y, z: p.z }))
   },
   inventory(c) {

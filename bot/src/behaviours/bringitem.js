@@ -952,6 +952,9 @@ function toWoolHunt(bot, o, ctx) {
 
 // Item rung exhaustion: wool falls through to the sheep hunt; anything
 // else falls through to the craft rung, then the honest refusal.
+// (6ci5.1: obsidian needs no rung here — isBringable routes it to a kind
+// 'block' order at creation, and the consent + tier gates live on the
+// block path.)
 function refuseItemOrHunt(bot, ctx, o) {
   if (woolMod.isWoolFamily(o)) {
     toWoolHunt(bot, o, ctx)

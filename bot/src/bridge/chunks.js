@@ -341,6 +341,28 @@ function stopChunks(bot) {
 
 // --- mineflayer sync surface (blocks.js semantics, cited) -------------
 
+// idkcraft-nn2s: stateId -> numeric block id, built once per registry. The
+// numeric findBlocks path reads raw state ids (no Block per cell): the
+// first full-sphere scan on a cold keeper blew the skill 50 ms budget
+// building a prismarine Block per visited cell. Empty (length 0) when the
+// registry carries no state-id ranges — the scan then keeps the Block
+// path, never silently empty.
+const stateIdTables = new WeakMap() // registry -> Array<stateId, blockId>
+function stateIdTable(registry) {
+  let t = stateIdTables.get(registry)
+  if (t) return t
+  t = []
+  try {
+    const byName = (registry && registry.blocksByName) || {}
+    for (const e of Object.values(byName)) {
+      if (!e || typeof e.id !== 'number' || typeof e.minStateId !== 'number' || typeof e.maxStateId !== 'number') continue
+      for (let s = e.minStateId; s <= e.maxStateId; s++) t[s] = e.id
+    }
+  } catch (_) { /* partially built table still maps what it mapped */ }
+  stateIdTables.set(registry, t)
+  return t
+}
+
 // Port of mineflayer lib/plugins/blocks.js findBlocks (~60 lines over
 // world columns): OctahedronIterator over sections, palette pre-check,
 // nearest-first sort, count slice. useExtraInfo semantics identical.
@@ -350,9 +372,11 @@ function findBlocks(bot, options = {}) {
   const { Block, OctahedronIterator } = prismarine(bot.registry)
   const matching = options.matching
   let matcher
+  let numericSet = null // all-number matching: raw stateId scan, no Blocks
   if (typeof matching === 'function') matcher = matching
   else {
     const types = Array.isArray(matching) ? matching : [matching]
+    if (types.every((t) => typeof t === 'number')) numericSet = new Set(types)
     matcher = (block) => block !== null && types.indexOf(block.type) >= 0
   }
   const pointOpt = options.point || (bot.entity && bot.entity.position)
@@ -362,10 +386,31 @@ function findBlocks(bot, options = {}) {
   const count = options.count || 1
   const useExtraInfo = options.useExtraInfo || false
   const Vec3 = bot.Vec3
+  // Numeric ids without useExtraInfo scan raw state ids (no Block per
+  // cell); every other shape keeps the mineflayer getFullMatchingFunction
+  // below, verbatim. The table stays empty without state-id ranges, so a
+  // half registry never takes the raw path.
+  const rawTable = (numericSet && useExtraInfo === false) ? stateIdTable(bot.registry) : null
+  const rawFast = !!(numericSet && rawTable && rawTable.length > 0)
+  const rawSet = numericSet
   // mineflayer getFullMatchingFunction, verbatim shapes:
   const matchAt = typeof useExtraInfo === 'boolean'
     ? (cursor) => matcher(bot.blockAt(cursor, useExtraInfo))
     : (cursor) => { const b = bot.blockAt(cursor, true); return matcher(b) && useExtraInfo(b) }
+  // getBlockStateId takes column-local x/z (prismarine-chunk masks only
+  // y): absolute world coords read the wrong cell outside chunk (0,0).
+  const scratch = { x: 0, y: 0, z: 0 }
+  const matchStateId = (column, cursor) => {
+    let sid = -1
+    try {
+      scratch.x = cursor.x & 15
+      scratch.y = cursor.y
+      scratch.z = cursor.z & 15
+      sid = column.getBlockStateId(scratch)
+    } catch (_) { sid = -1 }
+    if (sid < 0 || sid >= rawTable.length) return false
+    return rawSet.has(rawTable[sid])
+  }
   const minY = typeof bot.game.minY === 'number' ? bot.game.minY : -64
   const height = typeof bot.game.height === 'number' ? bot.game.height : 384
   const start = new Vec3(Math.floor(point.x / 16), Math.floor(point.y / 16), Math.floor(point.z / 16))
@@ -397,7 +442,8 @@ function findBlocks(bot, options = {}) {
         for (cursor.x = begin.x; cursor.x < end.x; cursor.x++) {
           for (cursor.y = begin.y; cursor.y < end.y; cursor.y++) {
             for (cursor.z = begin.z; cursor.z < end.z; cursor.z++) {
-              if (matchAt(cursor) && cursor.distanceTo(point) <= maxDistance) blocks.push(cursor.clone())
+              const hit = rawFast ? matchStateId(column, cursor) : matchAt(cursor)
+              if (hit && cursor.distanceTo(point) <= maxDistance) blocks.push(cursor.clone())
             }
           }
         }

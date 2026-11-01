@@ -1846,10 +1846,14 @@ function shapeGoalMenu(names, model) {
 // Model step choice with the FSM as fallback and disagreement reference,
 // exactly like hybridBrain: { step, source, fsm, model }. source is
 // only-option (single feasible step, or a shaped [work, rest] pair answered
-// without asking — shapeGoalMenu above — model not asked), goal-fsm (no ask
-// method: stub brain or unit tests), <brain source> (model answered) or
-// fsm-fallback (model consulted and failed). model is the consulted brain
-// source or null when nothing was asked.
+// without asking — shapeGoalMenu above — model not asked), goal-fsm (no
+// menuAsk or ask method: switch-off prod brain or unit tests), <brain
+// source> (model answered) or fsm-fallback (model consulted and failed).
+// model is the consulted brain source or null when nothing was asked.
+// The prod menu ask arrives as brain.menuAsk (82zl fix, opt-in
+// BOT_MENU_ASK=1) and is read solely here — retreat/recover/bring read
+// brain.ask only, so they keep the FSM in prod. Manual 'brain jev|laya'
+// brains carry ask() and consult as before.
 async function chooseStep(brain, facts, feasible, home, extra) {
   const names = STEP_ORDER.filter((n) => feasible.includes(n))
   const text = goalText(facts, home)
@@ -1887,7 +1891,7 @@ async function chooseStep(brain, facts, feasible, home, extra) {
     const strategic = extra.choose(brain, facts, feasible, home, extra, fsm)
     if (strategic) return strategic
   }
-  if (!brain || typeof brain.ask !== 'function') return { step: fsm, source: 'goal-fsm', fsm, model: null }
+  if (!brain || (typeof brain.menuAsk !== 'function' && typeof brain.ask !== 'function')) return { step: fsm, source: 'goal-fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')
   const askNames = shapeGoalMenu(names, model)
   if (askNames.length <= 1) return { step: askNames[0] || 'rest', source: 'only-option', fsm, model: null }
@@ -1897,8 +1901,9 @@ async function chooseStep(brain, facts, feasible, home, extra) {
     metrics.escalation.inc({ from: model, to: 'fsm', reason })
     return { step: fsm, source: 'fsm-fallback', fsm, model }
   }
+  const askFn = typeof brain.menuAsk === 'function' ? brain.menuAsk : brain.ask
   try {
-    const label = await brain.ask({ state: text, instructions: ASK_INSTRUCTIONS, criteria, situation: text })
+    const label = await askFn.call(brain, { state: text, instructions: ASK_INSTRUCTIONS, criteria, situation: text })
     if (!askNames.includes(label)) return fail('invalid')
     if (label !== fsm) {
       metrics.goalDisagreements.inc({ model: label, fsm })
