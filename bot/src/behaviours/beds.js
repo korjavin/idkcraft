@@ -368,7 +368,7 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
     try { timedOut = !!(last.searchLegs && last.searchLegs.timedOut) } catch (_) { /* unreadable order: reopen */ }
     let capped = false
     try { capped = !!(last.searchLegs && last.searchLegs.capped) } catch (_) { /* unreadable order: reopen */ }
-    const budget = (bringMod.SEARCH_BUDGET && bringMod.SEARCH_BUDGET.legs) || 24
+    const budget = (typeof bringMod.searchLegsFor === 'function' && bringMod.searchLegsFor(last && last.kind)) || 24
     if (legs >= budget || timedOut || capped || (st.reopens || 0) >= HUNT_REOPENS) {
       st.reopens = 0
       noteNoWool(st)

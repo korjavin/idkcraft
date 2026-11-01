@@ -435,7 +435,7 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     await drive(bot, bot._tickerCtx, null, 600)
     assert.equal(bot._tickerCtx.bring, null)
     assert.ok(bot.lines.some((l) => l === 'no sheep nearby, searching…'), `lines: ${bot.lines}`)
-    assert.ok(bot.lines.some((l) => l === 'searched 24 areas, no sheep'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'searched 32 areas, no sheep'), `lines: ${bot.lines}`)
     assert.equal(bot.attackCalls.length, 0)
   })
 
@@ -444,7 +444,7 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
     await bring(bot, bot._tickerCtx, null, {})
     await flush()
-    assert.ok(bot.lines.some((l) => l === 'no sheep within 48 blocks'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'no sheep within 64 blocks'), `lines: ${bot.lines}`)
     assert.equal(bot._tickerCtx.bring, null)
   })
 
@@ -455,7 +455,7 @@ describe("'bring me wool' (idkcraft-did.3)", () => {
     handleChat(bot, ticker, 'P', 'bring me wool 3')
     assert.deepEqual(bot.lines, ['looking for sheep'])
     await drive(bot, bot._tickerCtx, null, 600)
-    assert.ok(bot.lines.some((l) => l === 'searched 24 areas, only got 1 white_wool'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'searched 32 areas, only got 1 white_wool'), `lines: ${bot.lines}`)
     assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
     assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
   })
@@ -702,5 +702,89 @@ describe('wool -> shears -> iron chain (h1nl follow-up)', () => {
     handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
     const ctx = bot._tickerCtx
     assert.equal(ctx.bring.phase, 'find')
+  })
+})
+
+describe('wider wool hunt (idkcraft-aoql.1)', () => {
+  it('the wool ring runs wider than the food ring', () => {
+    assert.ok(wool.WOOL_FIND_RADIUS > 48, 'wider than the shared 48')
+    const bot = {
+      entities: { 11: sheep(11, 60) }, // past the food ring, inside the wool ring
+      entity: { position: pos(0, 64, 0) },
+      registry: { entitiesByName: { sheep: { metadataKeys: SHEEP_KEYS } } },
+    }
+    assert.equal(bring.findAnimal(bot, null), null, 'the default ring misses it')
+    const got = bring.findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, radius: wool.WOOL_FIND_RADIUS })
+    assert.equal(got && got.id, 11, 'the wool ring sees it')
+  })
+
+  it('wool hunts walk more legs than other kinds', () => {
+    assert.ok(wool.WOOL_SEARCH_LEGS > bring.SEARCH_BUDGET.legs, 'wider than the shared budget')
+    assert.equal(bring.searchLegsFor('wool'), wool.WOOL_SEARCH_LEGS)
+    assert.equal(bring.searchLegsFor('block'), bring.SEARCH_BUDGET.legs)
+    assert.equal(bring.searchLegsFor('food'), bring.SEARCH_BUDGET.legs)
+    assert.equal(bring.searchLegsFor(), bring.SEARCH_BUDGET.legs)
+  })
+
+  it('the iron chain runs end to end: smelt, shears, shear — no kill', async () => {
+    const bot = mockBot({
+      playerPos: pos(30, 64, 0),
+      items: [{ name: 'raw_iron', count: 2 }],
+      animals: [sheep(11, 10)],
+    })
+    bot.recipesAll = (id) => (id === ITEMS.shears
+      ? [{ requiresTable: false, result: { count: 1 }, delta: [{ id: 501, count: -2 }] }]
+      : [])
+    bot.registry.itemsByName.iron_ingot = { id: 501 }
+    bot.registry.itemsByName.raw_iron = { id: 502 }
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me wool 1')
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.bring.phase, 'smelt', 'raw iron opens the iron gap, not the kill hunt')
+    const realFurnace = itemMod.deps.driveFurnace
+    const realCraft = itemMod.deps.craftItem
+    try {
+      // The furnace lands the ingots (faithful: the smelt output hits the pack).
+      itemMod.deps.driveFurnace = () => {
+        bot._items.push({ name: 'iron_ingot', count: 2 })
+        return 'done'
+      }
+      // The shears craft lands the tool (faithful: a made tool hits the pack).
+      itemMod.deps.craftItem = () => {
+        bot._items.push({ name: 'shears', count: 1 })
+        return { done: true, target: 'shears' }
+      }
+      await drive(bot, ctx, null)
+    } finally {
+      itemMod.deps.driveFurnace = realFurnace
+      itemMod.deps.craftItem = realCraft
+    }
+    assert.ok(bot.lines.some((l) => /going for wool: sheep \d+ blocks away \(shears\)/.test(l)), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.useOnCalls, [11], 'shorn, not killed')
+    assert.equal(bot.attackCalls.length, 0, 'no swing on the shear rung')
+    assert.equal(bot.entities[11].isValid, true, 'the sheep lives for the next shearing')
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
+  })
+
+  it('an empty find swings through a newly known chest before walking legs', async () => {
+    const bot = mockBot({
+      playerPos: pos(30, 64, 0),
+      chest: [{ name: 'white_wool', count: 2 }],
+    })
+    handleChat(bot, tickerFor(bot), 'P', 'bring me white wool 2')
+    const ctx = bot._tickerCtx
+    // No home chest at order time: the hunt opens find-first, chest untried.
+    assert.equal(ctx.bring.phase, 'find')
+    assert.equal(ctx.bring.chestTried || false, false)
+    chestHome(ctx) // the home chest is adopted before the first hunt tick, already stocked
+    await bring(bot, ctx, null, {})
+    await flush()
+    assert.equal(ctx.bring.phase, 'chestfetch', 'empty find diverts to the untried chest')
+    await drive(bot, ctx, null)
+    assert.ok(bot.lines.some((l) => l === 'checking the home chest for white_wool'), `lines: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l === 'here are 2 white_wool'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 2]])
+    assert.equal(bot.attackCalls.length, 0, 'no hunt needed: the chest covered it')
   })
 })
