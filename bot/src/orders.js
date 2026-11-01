@@ -399,16 +399,19 @@ function createOrders(box) {
           kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
           items: [], drop: null, have: 0, phase: 'recipe', announced: true, keptName,
         }
+        // Installed before the fallback fires: the late answer (and the
+        // alive gate) keys off ctx.bring identity.
+        if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        clearStuck()
+        homeMod.releaseMeet(bot, ctx)
+        ctx.bring = ro
+        ctx.paused = false
         if (bringMod.startRecipeFallback(bot, ctx, ro)) {
-          if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
-          ctx.unseenTicks = 0
-          ctx.resumeWork = false
-          clearStuck()
-          homeMod.releaseMeet(bot, ctx)
-          ctx.bring = ro
-          ctx.paused = false
           return `no recipe for ${resolved.family} — asking how to get it…`
         }
+        if (ctx.bring === ro) ctx.bring = null // gate closed: no half order left behind
         return bringMod.itemRefusal(bot, resolved.family, resolved, keptName)
       }
       if (!res) {

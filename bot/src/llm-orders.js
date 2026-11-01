@@ -770,9 +770,10 @@ const RECIPE_TIMEOUT_MS = 20000
 const RECIPE_VERBS = ['craft', 'smelt', 'gather', 'fill', 'mine']
 
 const RECIPE_SYSTEM = 'You turn a Minecraft bring order the bot cannot otherwise fill into an acquisition recipe its order ladder can run. ' +
-  'The ladder can: craft <item> at a table (vanilla recipes), smelt <item> in a furnace, gather logs/planks/sticks/wool through sub-orders, fill a water_bucket from water with an empty bucket, mine <block> with the right pickaxe. ' +
+  'The ladder can: craft <item> at a table (vanilla recipes; inputs held or produced by an earlier step), smelt <item> in a furnace (ore inputs need the right pickaxe), gather logs or colored wool through sub-orders, fill a water_bucket from water with an empty bucket, mine <block> with the right pickaxe. ' +
   'Answer JSON only, no prose: {"materials":["<id>",...],"steps":[{"do":"craft|smelt|gather|fill|mine","item":"<id>"}]}. ' +
   'Steps run in order; every material is held already or produced by an earlier step. ' +
+  'The last step makes the ordered item itself. ' +
   'Item names are Minecraft registry ids. Answer {"materials":[],"steps":[]} when no ladder-runnable recipe exists.'
 
 // Model answer -> { recipe } | { error }. Shape only: verb whitelist and
@@ -786,6 +787,7 @@ function checkRecipeShape(ans) {
   const idOk = (v) => typeof v === 'string' && /^[a-z0-9_]{1,40}$/.test(v)
   if (!mats.every(idOk)) return { error: 'bad recipe' }
   if (steps.length > RECIPE_MAX_STEPS) return { error: 'bad recipe' }
+  if (mats.length > RECIPE_MAX_STEPS) return { error: 'bad recipe' } // same bound: wide answers recurse exponentially
   for (const s of steps) {
     if (!s || typeof s !== 'object') return { error: 'bad recipe' }
     if (!RECIPE_VERBS.includes(s.do)) return { error: 'bad recipe' }
@@ -835,16 +837,22 @@ async function requestRecipe(bot, ctx, target, opts = {}) {
   return { recipe: shape.recipe, tokens }
 }
 
-// Resolve the full recipe tree for target: one model call per level, every
-// step validated against caps BEFORE anything starts (the load-bearing
+// Resolve the full recipe tree for target: one model call per level.
+// Materials resolve first: unknown ones recurse (each its own call,
+// depth+1), so their outputs fund the craft steps below. Then every step
+// validates against caps BEFORE anything starts (the load-bearing
 // validate-before-start: a later impossible step aborts the whole recipe, so
-// an earlier valid step never runs alone). Materials neither held nor
-// produced by a step recurse (each its own call, depth+1); unknown materials
-// past the max depth, a material cycle, a blocked step, or a dead call all
-// abort with the chain. Returns { ok, queue, tokens } (the flat execution
-// queue: sub-recipe steps first, then this level's) or { fail, ... }.
-// caps: { held(bot, item)->bool, craft/smelt/gather/fill/mine(bot, ctx, item)
-// -> 'ok' | { impossible: reason } }. Never throws.
+// an earlier valid step never runs alone) — `made` (sub outputs, then each
+// validated step in order) covers craft inputs the pack does not hold yet.
+// The last step must make the target itself, else the queue would run out
+// holding the wrong item. Past the max depth, a material cycle, a blocked
+// step, a mismatched end, or a dead call all abort with the chain. An
+// opts.alive() predicate (the order still current) stops further calls after
+// stop/timeout — the late answer drops anyway. Returns { ok, queue, tokens }
+// (the flat execution queue: sub-recipe steps first, then this level's) or
+// { fail, ... }. caps: { held(bot, item)->bool,
+// craft/smelt/gather/fill/mine(bot, ctx, item, made) -> 'ok' |
+// { impossible: reason } }. Never throws.
 async function planRecipe(bot, ctx, target, opts = {}) {
   const t = String(target || '').slice(0, 40)
   const depth = (opts && typeof opts.depth === 'number') ? opts.depth : 0
@@ -854,6 +862,11 @@ async function planRecipe(bot, ctx, target, opts = {}) {
   const log = (outcome, extra) => { try { console.log(`llm recipe target=${t} depth=${depth} chain=${full} outcome=${outcome}${extra || ''}`) } catch (_) { /* log best-effort */ } }
   if (depth >= RECIPE_MAX_DEPTH) { log('depth-refuse'); return { fail: 'depth', chain: [...chain, t] } }
   if (chain.includes(t)) { log('cycle'); return { fail: 'cycle', chain: [...chain, t] } }
+  if (opts && typeof opts.alive === 'function') {
+    let live = false
+    try { live = !!opts.alive() } catch (_) { live = false }
+    if (!live) { log('cancelled'); return { fail: 'cancelled', reason: 'cancelled' } }
+  }
   let r
   try {
     r = await requestRecipe(bot, ctx, t, opts)
@@ -863,19 +876,15 @@ async function planRecipe(bot, ctx, target, opts = {}) {
   }
   const toks = [r.tokens || '0/0']
   if (r.error || !r.recipe) { log(r.error || 'error', ` tokens=${toks[0]}`); return { fail: r.error || 'error', reason: r.error || 'error' } }
-  for (const s of r.recipe.steps) {
-    let v = null
-    try {
-      const cap = caps[s.do]
-      v = typeof cap === 'function' ? cap(bot, ctx, s.item) : { impossible: 'no capability' }
-    } catch (_) { v = { impossible: 'capability threw' } }
-    if (v !== 'ok') {
-      const reason = (v && v.impossible) || 'not possible'
-      log('impossible', ` step=${s.do} ${s.item} tokens=${toks[0]}`)
-      return { fail: 'impossible', step: { do: s.do, item: s.item }, reason: String(reason).slice(0, 80) }
+  const steps = r.recipe.steps
+  if (steps.length > 0) {
+    const last = steps[steps.length - 1]
+    if (!last || last.item !== t) {
+      log('mismatch', ` last=${last && last.do} ${last && last.item} tokens=${toks[0]}`)
+      return { fail: 'mismatch', step: last, reason: `recipe makes ${last && last.item}, not ${t}` }
     }
   }
-  const produced = new Set(r.recipe.steps.map((s) => s.item))
+  const produced = new Set(steps.map((s) => s.item))
   const queue = []
   for (const m of r.recipe.materials) {
     let held = false
@@ -886,7 +895,21 @@ async function planRecipe(bot, ctx, target, opts = {}) {
     queue.push(...sub.queue)
     toks.push(sub.tokens || '0/0')
   }
-  queue.push(...r.recipe.steps)
+  const made = new Set(queue.map((s) => s.item))
+  for (const s of steps) {
+    let v = null
+    try {
+      const cap = caps[s.do]
+      v = typeof cap === 'function' ? cap(bot, ctx, s.item, made) : { impossible: 'no capability' }
+    } catch (_) { v = { impossible: 'capability threw' } }
+    if (v !== 'ok') {
+      const reason = (v && v.impossible) || 'not possible'
+      log('impossible', ` step=${s.do} ${s.item} tokens=${toks[0]}`)
+      return { fail: 'impossible', step: { do: s.do, item: s.item }, reason: String(reason).slice(0, 80) }
+    }
+    made.add(s.item)
+  }
+  queue.push(...steps)
   const tokens = toks.join('+')
   log('ok', ` steps=${queue.map((s) => `${s.do} ${s.item}`).join(',')} tokens=${tokens}`)
   return { ok: true, queue, tokens }

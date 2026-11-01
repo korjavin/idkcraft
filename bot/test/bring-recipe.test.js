@@ -113,6 +113,11 @@ const RECIPE_FILL_MINE = JSON.stringify({
   steps: [{ do: 'fill', item: 'water_bucket' }, { do: 'mine', item: 'atlantium' }],
 })
 
+const RECIPE_OBSIDIAN = JSON.stringify({
+  materials: [],
+  steps: [{ do: 'fill', item: 'water_bucket' }, { do: 'mine', item: 'obsidian' }],
+})
+
 describe('recipe fallback: refusal sites', () => {
   it('chat-time: asks the model instead of instant-refuse, then aborts naming the impossible step', async () => {
     answerFor = RECIPE_FILL_MINE
@@ -248,5 +253,100 @@ describe('recipe execution', () => {
     bringitem.recipeTick(bot, ctx, o)
     assert.equal(ctx.bring, null)
     assert.deepEqual(bot.lines, ["can't get atlantium: no recipe, no source"])
+  })
+
+  it('obsidian queue runs to the wired mine leg with the real fill check', async () => {
+    answerFor = RECIPE_OBSIDIAN
+    const bot = mockBot([{ name: 'bucket', count: 1 }])
+    // The 6ci5.1 rung is not on this base: a fake stands in for it, while
+    // fill/held/mine validation all run live.
+    let legged = null
+    bringitem.recipeCaps.mineLeg = (b, c, oo) => {
+      legged = oo
+      b.chat('mining obsidian (fake leg)')
+      require('../src/behaviours/bringbase').done(b, c)
+    }
+    const ctx = {}
+    const o = { kind: 'item', name: 'obsidian', names: ['obsidian'], want: 1, by: 'P' }
+    ctx.bring = o
+    bringitem.enterCraftOrRefuse(bot, ctx, o)
+    await flush()
+    assert.equal(o.phase, 'fill', 'first step morphs through the real fill rung')
+    assert.equal(o.drop, 'water_bucket')
+    assert.ok(bot.lines.some((l) => l === 'recipe for obsidian 1/2: filling a bucket for you'), `step announced: ${bot.lines}`)
+    // The fill lands; the return branch would drive recipeNext — call it
+    // directly like the branch does.
+    bot._items.push({ name: 'water_bucket', count: 1 })
+    bringitem.recipeNext(bot, ctx, o)
+    assert.equal(legged, o, 'mine leg got the order')
+    assert.equal(ctx.bring, null, 'fake leg ended the order')
+    assert.ok(bot.lines.includes('mining obsidian (fake leg)'))
+    assert.ok(logs.some((l) => /outcome=attempt/.test(l) && /fill water_bucket,mine obsidian/.test(l)), `attempt logged: ${logs}`)
+  })
+
+  it('queue end delivers instead of re-running the last rung', () => {
+    const bot = mockBot([{ name: 'water_bucket', count: 1 }])
+    const ctx = {}
+    const step = { do: 'fill', item: 'water_bucket' }
+    const o = { kind: 'item', name: 'water_bucket', names: ['water_bucket'], want: 1, by: 'P' }
+    ctx.bring = o
+    // The fill step just completed (return branch): the queue is spent.
+    o.recipe = { target: 'water_bucket', pending: false, at: Date.now(), original: 'ORIG', i: 1, queue: [step], executing: true, done: false, active: step, want: 1 }
+    bringitem.recipeNext(bot, ctx, o)
+    assert.equal(o.phase, 'return', 'exhausted queue gives instead of stalling')
+    assert.equal(o.drop, 'water_bucket')
+    assert.equal(ctx.bring, o, 'order stays open for the return walk')
+  })
+
+  it('a recipe whose last step misses the target refuses naming it', async () => {
+    answerFor = JSON.stringify({ materials: [], steps: [{ do: 'craft', item: 'torch' }] })
+    const bot = mockBot()
+    const res = await llmOrders.planRecipe(bot, {}, 'atlantium', { caps: { held: () => false, craft: () => 'ok' } })
+    assert.equal(res.fail, 'mismatch')
+    assert.match(res.reason, /torch.*atlantium/)
+    const ctx = {}
+    const o = { kind: 'item', name: 'atlantium', names: ['atlantium'], want: 1, by: 'P' }
+    ctx.bring = o
+    o.recipe = { target: 'atlantium', pending: false, at: Date.now(), original: 'ORIG', i: 0, queue: null, executing: false, done: false }
+    bringitem.abortRecipe(bot, ctx, o, res)
+    assert.equal(ctx.bring, null)
+    assert.ok(bot.lines.some((l) => l === "can't get atlantium: recipe makes torch, not atlantium"), `names the mismatch: ${bot.lines}`)
+  })
+
+  it('smelt validates the dig tier, not just the name', () => {
+    assert.match(bringitem.recipeCaps.smelt(mockBot([]), {}, 'iron_ingot').impossible, /stone pickaxe/)
+    assert.equal(bringitem.recipeCaps.smelt(mockBot([{ name: 'raw_iron', count: 2 }]), {}, 'iron_ingot'), 'ok')
+    assert.match(bringitem.recipeCaps.smelt(mockBot([]), {}, 'brick').impossible, /clay/)
+    assert.match(bringitem.recipeCaps.smelt(mockBot([]), {}, 'dirt').impossible, /smeltable/)
+  })
+
+  it('craft inputs funded by earlier steps validate, unfunded abort', async () => {
+    const caps = {
+      held: () => false,
+      gather: () => 'ok',
+      craft: (b, c, item, made) => (made.has('oak_log') && item === 'oak_planks' ? 'ok' : { impossible: 'need oak_log' }),
+    }
+    answerFor = JSON.stringify({
+      materials: [],
+      steps: [{ do: 'gather', item: 'oak_log' }, { do: 'craft', item: 'oak_planks' }],
+    })
+    const funded = await llmOrders.planRecipe(mockBot(), {}, 'oak_planks', { caps })
+    assert.equal(funded.fail, undefined, JSON.stringify(funded))
+    assert.deepEqual(funded.queue, [{ do: 'gather', item: 'oak_log' }, { do: 'craft', item: 'oak_planks' }])
+    answerFor = JSON.stringify({ materials: [], steps: [{ do: 'craft', item: 'torch' }] })
+    const bare = await llmOrders.planRecipe(mockBot(), {}, 'torch', { caps })
+    assert.equal(bare.fail, 'impossible')
+  })
+
+  it('wide answers refuse without a model call', () => {
+    const many = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7']
+    assert.equal(llmOrders.checkRecipeShape({ materials: many, steps: [] }).error, 'bad recipe')
+  })
+
+  it('stop before the first call cancels without a model call', async () => {
+    const bot = mockBot()
+    const res = await llmOrders.planRecipe(bot, {}, 'u0', { caps: { held: () => false }, alive: () => false })
+    assert.equal(res.fail, 'cancelled')
+    assert.equal(calls.length, 0)
   })
 })
