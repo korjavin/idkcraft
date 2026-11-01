@@ -426,6 +426,13 @@ const MENU = {
         try {
           if (require('./behaviours/castlefetch').holdFor(bot, ctx, castleChopKind(facts))) return false
         } catch (_) { /* hold unreadable: chop as before */ }
+        // Stock-first (2ket): remembered chest stock covering the kind's
+        // fetch shortfall rides the fetch leg's own withdraw — no kit chop.
+        // The fetch leg still opens (demand short > 0 while the pack is
+        // short), so nothing strands; a covered need just never chops.
+        try {
+          if (fetchKindCovered(bot, ctx, castleChopKind(facts))) return false
+        } catch (_) { /* cover unreadable: chop as before */ }
         return true
       }
       // Home-budget chop waits while the castle is the project (qxql.2).
@@ -857,6 +864,28 @@ function castleChopKind(facts) {
     return m[1]
   } catch (_) {
     return null
+  }
+}
+
+// Stock-first fetch cover (idkcraft-2ket): true when remembered chest stock
+// (home/site/castle last-read snapshots, cheststock.js) covers the kind's
+// live fetch shortfall. Reads demand() — the fetch planner, the same
+// formula the castleFetchGo gate uses — and counts the kind's direct chest
+// goods (chestNames' first list: finished items, planks, stone, logs for
+// frame). No log conversion: logs still chop as today. Single source for
+// MENU.gather.feasible and the stepWhy wording. Fail-open: anything
+// unreadable reads uncovered, so the chop runs as today.
+function fetchKindCovered(bot, ctx, kind) {
+  try {
+    if (!kind) return false
+    const cf = require('./behaviours/castlefetch')
+    const d = typeof cf.demand === 'function' ? cf.demand(bot, ctx) : null
+    if (!d || d.kind !== kind || !(d.short > 0)) return false
+    const lists = typeof cf.chestNames === 'function' ? cf.chestNames(bot, kind) : null
+    if (!Array.isArray(lists) || lists.length === 0 || !Array.isArray(lists[0]) || lists[0].length === 0) return false
+    return require('./cheststock').fetchStockOf(ctx, lists[0]) >= d.short
+  } catch (_) {
+    return false
   }
 }
 
@@ -2121,6 +2150,11 @@ function stepWhy(name, facts, bot, ctx, text) {
       try {
         const kind = castleChopKind(facts)
         if (kind && require('./behaviours/castlefetch').holdFor(bot, ctx, kind)) return `gather: ${kind} fetch held`
+      } catch (_) { /* wording best-effort */ }
+      // Stock-first (2ket): the fetch leg withdraws the remembered stock.
+      try {
+        const kind = castleChopKind(facts)
+        if (kind && fetchKindCovered(bot, ctx, kind)) return `gather: ${kind} stocked in chests`
       } catch (_) { /* wording best-effort */ }
       if (houseChainVetoed(ctx) && !castleChopKind(facts)) return 'gather: castle comes first'
       if (nightHurt(facts)) return 'gather: hurt at night, waiting for dawn'

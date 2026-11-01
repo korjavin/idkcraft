@@ -1,0 +1,84 @@
+'use strict'
+
+// Stock-first planning (idkcraft-2ket): remembered chest stock for the
+// planner decision. packroom.withChest snapshots every opened chest into
+// ctx.chestLast.{home,site,castle}.contents (the qxql.9 last-read cache);
+// fetch/craft planners consult it FIRST, alongside the inventory, and route
+// to a withdraw instead of planning a gather/mine leg when the remembered
+// stock covers the need. Pure reads over ctx — never opens a chest, never
+// writes. Fail-open everywhere: unknown reads as no stock, so unstocked
+// plans exactly as today.
+//
+// Asymmetry note: over-trust only costs a chest walk — the withdraw legs
+// verify live (chestCounts/peek before they draw) and fall through to the
+// world stages when the snapshot went stale. Under-trust (stale-empty)
+// plans as today. The planners below only skip world legs where a withdraw
+// path still runs (gear withdraw action, the castlefetch leg itself), so a
+// covered need never strands: the house-budget chop stays stock-blind on
+// purpose (no house-plank withdraw leg exists to serve it).
+
+// Chest slots the legs source from (packroom.chestSlot): the adopted home
+// chest, the castle site chest, and the footprint (owner) chest.
+const SLOTS = ['home', 'site', 'castle']
+
+// Last-seen contents of one slot, or {} when never opened / unreadable.
+function slotContents(ctx, slot) {
+  try {
+    const s = ctx && ctx.chestLast && ctx.chestLast[slot]
+    const c = s && s.contents
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return {}
+    return c
+  } catch (_) {
+    return {}
+  }
+}
+
+// Exact-name sum over slots. Names is a string or an array of item names.
+function stockInSlots(ctx, slots, names) {
+  try {
+    const list = typeof names === 'string' ? [names] : names
+    if (!Array.isArray(list) || list.length === 0) return 0
+    const want = new Set(list.filter((n) => typeof n === 'string'))
+    if (want.size === 0) return 0
+    const ss = Array.isArray(slots) ? slots : [slots]
+    let n = 0
+    for (const slot of ss) {
+      const c = slotContents(ctx, slot)
+      for (const k of Object.keys(c)) {
+        if (!want.has(k)) continue
+        const v = c[k]
+        if (typeof v === 'number' && v > 0) n += Math.floor(v)
+      }
+    }
+    return n
+  } catch (_) {
+    return 0
+  }
+}
+
+// Adopted-home-chest stock (gear's withdraw draws the home chest only, so
+// its cover reads home-only). Stale snapshots of a lost adoption read 0:
+// without ctx.home.chest there is no pantry to draw.
+function homeStockOf(ctx, names) {
+  try {
+    if (!ctx || !ctx.home || !ctx.home.chest) return 0
+    return stockInSlots(ctx, ['home'], names)
+  } catch (_) {
+    return 0
+  }
+}
+
+// Home/site/castle stock (the castlefetch leg's withdraw walks all three,
+// pickChest source order). Site/castle snapshots key on the live adoption,
+// so they read only under an active castle order.
+function fetchStockOf(ctx, names) {
+  try {
+    const home = homeStockOf(ctx, names) // adoption-guarded inside
+    if (!ctx || !ctx.castle) return home
+    return home + stockInSlots(ctx, ['site', 'castle'], names)
+  } catch (_) {
+    return 0
+  }
+}
+
+module.exports = { SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }

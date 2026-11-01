@@ -46,6 +46,7 @@ const { Vec3 } = require('vec3')
 const craftMod = require('./craft')
 const { countItems, wornItems } = require('../perception')
 const { say } = require('./util')
+const chestStock = require('../cheststock')
 const { stepDone, stepFailed, failReason } = require('../step')
 const metrics = require('../metrics')
 
@@ -431,7 +432,11 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
   const short = needMat - matHave
   if (rung.tier === 'diamond') {
     // Pantry first (ipn.6): stranded chest diamonds beat an expedition.
-    if (pantryFresh(ctx)) return { state: 'ready', key: 'ready', action: 'withdraw' }
+    // Remembered stock (2ket): seen home-chest diamonds beat one too, with
+    // no fresh bank (owner restocks, pre-restart strands). A short or
+    // errored draw latches back to want/deep (runWithdraw), so over-trust
+    // costs one chest walk, never a loop.
+    if (pantryFresh(ctx) || chestStock.homeStockOf(ctx, 'diamond') >= short) return { state: 'ready', key: 'ready', action: 'withdraw' }
     // Buried cells are undiggable by forage (ipn.2): without the deep leg
     // the want is unactionable, so it waits instead of announcing a dig.
     if (!im.deep) return { state: 'wait', key: 'wait-deep', line: 'waiting on the deep shaft for diamonds' }
@@ -450,7 +455,9 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
     return { state: 'ready', key: 'ready', action: 'smelt' }
   }
   // Pantry first (ipn.6): a banked batch draws before the fetchers walk.
-  if (pantryFresh(ctx)) return { state: 'ready', key: 'ready', action: 'withdraw' }
+  // Remembered stock (2ket): seen home-chest ingots+ore cover the rung the
+  // same way — no ore-dig leg. Same fail-open as diamonds above.
+  if (pantryFresh(ctx) || chestStock.homeStockOf(ctx, ['iron_ingot', 'raw_iron']) >= short) return { state: 'ready', key: 'ready', action: 'withdraw' }
   return { state: 'want', key: 'want-ore', line: `need ${short} more raw iron, going to dig` }
 }
 
