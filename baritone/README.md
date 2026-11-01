@@ -59,9 +59,12 @@ stored profile, not `WORKER_NAME`).
 ## Body JVM args and the dig read (idkcraft-neuc.67)
 
 `BODY_JVM_ARGS` (compose `body2`, the rig via `client.sh`) is appended to
-the game JVM's `hmc.jvmargs` by `start.sh`; empty (the default, and always
-on the worker) = the JVM as before: no `-Xmx`, max heap = 25% of the
-cgroup (~626 MiB at `BODY2_MEM_LIMIT=2500m`). Example:
+the game JVM's `hmc.jvmargs` by `start.sh`; empty on the worker = the JVM
+as before: no `-Xmx`, max heap = 25% of the cgroup (~626 MiB at
+`BODY2_MEM_LIMIT=2500m`). On body2 (`BARITONE_API=1`) empty means the
+idkcraft-e4p4 default `-Xmx1500m` (~1.5 GiB heap, ~1000m headroom under the
+2500m cap); an explicit value always wins (compose default, Portainer over
+that). Example:
 `BODY_JVM_ARGS=-XX:MaxRAMPercentage=60 -Xlog:gc:stdout` (~1.5 GiB heap, GC
 pause lines in the container log).
 
