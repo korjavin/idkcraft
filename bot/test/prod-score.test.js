@@ -101,6 +101,17 @@ test('prod-score: S10 choose column (3 lines per outcome)', () => {
   assert.match(out, /top-need="stone for walls":2/)
 })
 
+test('prod-score: choose top-err attributes error reasons (bv9x)', () => {
+  const C = (t, msg) => L(t, msg)
+  const log = [
+    C('10:03:00', 'llm choose regime=no-order trigger=idle outcome=error plan=- need="" why="" tokens=0/0 ms=3000 err="llm http 401"'),
+    C('10:03:01', 'llm choose regime=no-order trigger=stay outcome=error plan=- need="" why="" tokens=0/0 ms=3000 err="llm http 401"'),
+    C('10:03:02', 'llm choose regime=no-order trigger=rest outcome=error plan=- need="" why="" tokens=0/0 ms=3000'),
+  ].join('\n')
+  const out = score(log)
+  assert.match(out, /top-err=llm http 401:2/)
+})
+
 test('prod-score: choose line is zeroed without chooser lines', () => {
-  assert.match(score(fixture), /choose: calls=0 .* med-dur=- top-step=none top-need=none/)
+  assert.match(score(fixture), /choose: calls=0 .* med-dur=- top-err=none top-step=none top-need=none/)
 })

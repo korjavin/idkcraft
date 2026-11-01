@@ -192,6 +192,18 @@ describe('chooser ask', () => {
     assert.ok(!ctx.llmOrder)
     assert.ok(logs.some((l) => l.includes('outcome=empty') && l.includes('need="a quarry skill"')), JSON.stringify(logs))
   })
+  it('http error logs the reason in err (bv9x: prod attribution)', async () => {
+    const { bot, ctx } = ctxWith(true)
+    globalThis.fetch = async () => ({ ok: false, status: 401 })
+    llmOrders.ask(bot, ctx, { text: 'choose work: no-order', by: 'self', ticker: null, feed: null, fallback: null, explicit: false, choose: { regime: 'no-order', trigger: 'idle' } })
+    await flush()
+    assert.ok(!ctx.llmOrder, 'no plan on error: FSM pick stands')
+    const line = logs.find((l) => l.startsWith('llm choose regime=no-order'))
+    assert.ok(line, JSON.stringify(logs))
+    assert.ok(line.includes('outcome=error'), line)
+    assert.ok(line.includes('tokens=0/0'), line)
+    assert.ok(line.includes('err="llm http 401"'), line)
+  })
   it('stop cancels a chooser plan and go work does not immediate re-ask', async () => {
     const { bot, ctx, ticker } = ctxWith(true)
     answer = '{"plan":[{"step":"light"}],"why":"dark","need":""}'

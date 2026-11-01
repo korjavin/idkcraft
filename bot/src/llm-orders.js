@@ -351,7 +351,9 @@ function ask(bot, ctx, req, fetchFn) {
       const outcome = r.steps ? 'ok' : r.empty ? 'empty' : (r.outcome || 'invalid')
       try { metrics.llmCalls.inc({ use: 'choose', outcome }) } catch (_) { /* metric best-effort */ }
       const plan = r.steps ? r.steps.map(label).join('>') : '-'
-      console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${r.need || ''}" why="${r.why || ''}" tokens=${r.tokens || '0/0'} ms=${ms}`)
+      // bv9x: the error reason used to die here (plan=- need="" why=""), so a
+      // prod sweep could not tell a bad key from a dead route. Always log it.
+      console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${r.need || ''}" why="${r.why || ''}" tokens=${r.tokens || '0/0'} ms=${ms} err="${(r.error || '').replace(/"/g, "'")}"`)
       if (!r.steps) return // fallback: the FSM pick stands, log only
       const sayChoose = rosterOnline(bot) ? say : () => {}
       installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false }, r.steps, sayChoose)
