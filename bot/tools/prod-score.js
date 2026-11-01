@@ -21,7 +21,7 @@ const pct = (n, t) => (t ? Math.round((n / t) * 100) : 0)
 
 function scoreBlock(label, rows, carryN, lastN) {
   resetSeen()
-  const a = { placed: [], ticks: [], share: {}, active: false, legs: 0, stone: 0, blocks: 0, wall: 0, dead: 0, fin: 0, skillRun: 0, skillBan: 0, dig: 0, walk: 0, stall: 0, miss: 0, slow: 0, deaths: 0, choose: { calls: 0, regime: {}, outcome: {}, steps: {}, needs: {}, done: 0, failed: 0, replaced: 0, durs: [] } }
+  const a = { placed: [], ticks: [], share: {}, active: false, legs: 0, stone: 0, blocks: 0, wall: 0, dead: 0, fin: 0, skillRun: 0, skillBan: 0, dig: 0, walk: 0, stall: 0, miss: 0, slow: 0, deaths: 0, choose: { calls: 0, regime: {}, outcome: {}, steps: {}, needs: {}, errs: {}, done: 0, failed: 0, replaced: 0, durs: [] } }
   if (carryN != null) a.placed.push({ at: rows[0].at, n: carryN }) // a day without a change prints no castle line
   for (const { at, msg } of rows) {
     if (msg.startsWith('spawned as ')) seen.leg = null // v2 restart: an open leg died with the process
@@ -66,6 +66,8 @@ function scoreBlock(label, rows, carryN, lastN) {
       c.calls++
       c.regime[ch[1]] = (c.regime[ch[1]] || 0) + 1
       c.outcome[ch[3]] = (c.outcome[ch[3]] || 0) + 1
+      const em = /\berr="([^"]+)"/.exec(msg) // bv9x: attribute chooser errors (bad key vs dead route)
+      if (em) c.errs[em[1]] = (c.errs[em[1]] || 0) + 1
       if (ch[4] !== '-') { const first = ch[4].split('>')[0]; c.steps[first] = (c.steps[first] || 0) + 1 }
       if (ch[5]) c.needs[ch[5]] = (c.needs[ch[5]] || 0) + 1
     }
@@ -126,7 +128,7 @@ function scoreBlock(label, rows, carryN, lastN) {
     `walk/dig=${a.dig ? (a.walk / a.dig).toFixed(2) : '-'} dead=${a.dead} top-fail=${top(seen.fails, 3)} flat=${flat} longest=${lstr}`,
     `holes: build-stall=${a.stall} build-miss=${a.miss} dig-slow/h=${t ? (a.slow / (t / 3600000)).toFixed(1) : '-'} skills=${a.skillRun}/${a.skillBan}`,
     `deaths=${a.deaths}`,
-    `choose: calls=${c.calls} castle-stalled=${c.regime['castle-stalled'] || 0} no-order=${c.regime['no-order'] || 0} ok=${c.outcome.ok || 0} empty=${c.outcome.empty || 0} budget=${c.outcome.budget || 0} error=${c.outcome.error || 0} timeout=${c.outcome.timeout || 0} other=${other} done=${c.done} failed=${c.failed} replaced=${c.replaced} med-dur=${med} top-step=${top(c.steps, 5)} top-need=${needs}`,
+    `choose: calls=${c.calls} castle-stalled=${c.regime['castle-stalled'] || 0} no-order=${c.regime['no-order'] || 0} ok=${c.outcome.ok || 0} empty=${c.outcome.empty || 0} budget=${c.outcome.budget || 0} error=${c.outcome.error || 0} timeout=${c.outcome.timeout || 0} other=${other} done=${c.done} failed=${c.failed} replaced=${c.replaced} med-dur=${med} top-err=${top(c.errs, 3)} top-step=${top(c.steps, 5)} top-need=${needs}`,
   ].join('\n')
 }
 
