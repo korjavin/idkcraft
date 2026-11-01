@@ -310,3 +310,31 @@ describe('pjsl v2 door route (task 2: known gate/door cells)', () => {
     assert.equal(s.allowBreak, 'true', 'walks still break non-banned when needed')
   })
 })
+
+// revmux 01 core-1: the soil hard-ban starved stone mines whose targets sit
+// under dirt — Baritone's MineProcess paths through the cover soil, and
+// banned cover reads COST_INF, so grassland legs ended mine-noPath. The
+// bridge mine suspends soil for the call (sent with the targets, dropped
+// mod-side), without counting it toward the goal.
+const { soilSuspendNames } = require('../src/bridge/mine')
+
+describe('pjsl mine soil suspension (core-1)', () => {
+  const byName = (names) => {
+    const out = {}
+    let id = 1
+    for (const n of names) out[n] = { id: id++, name: n, diggable: true }
+    return out
+  }
+  it("the mine's suspension list includes soil when the targets are STONE_FAMILY", () => {
+    const suspend = soilSuspendNames(byName([...blueprint.STONE_ITEMS, 'dirt', 'grass_block', 'coarse_dirt', 'sand', 'gravel']))
+    for (const n of ['dirt', 'grass_block', 'coarse_dirt']) assert.ok(suspend.includes(n), `${n} suspended`)
+    for (const n of ['sand', 'gravel']) assert.ok(!suspend.includes(n), `${n} stays banned (narrowed set)`)
+  })
+  it('regression pin: a dirt-covered stone mine target list suspends dirt but never targets it', () => {
+    const targets = [...blueprint.STONE_ITEMS]
+    assert.ok(!targets.includes('dirt'), 'STONE_FAMILY carries no soil')
+    const suspend = soilSuspendNames(byName(['stone', 'dirt', 'grass_block']))
+    assert.ok(suspend.includes('dirt'), 'cover dirt suspended for the mine')
+    assert.ok(!targets.includes('dirt'), '...but not mined toward the goal')
+  })
+})

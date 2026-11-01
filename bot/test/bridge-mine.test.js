@@ -70,6 +70,20 @@ describe('bridge mine (idkcraft-neuc.53)', () => {
     await assert.rejects(bot.mine(['stone', 'cobblestone'], 4, { tickMs: 5 }), /mine-noPath/)
   })
 
+  it('a stone-family mine sends soil suspend names but keeps them out of the targets (pjsl core-1)', async () => {
+    ({ transport, bot } = mineBot({}))
+    await bot.start({ pollMs: 0 })
+    // castlefetch's STONE_FAMILY shape: the whole quarry family, no soil.
+    const stoneFamily = ['cobblestone', 'stone', 'granite', 'diorite', 'andesite', 'tuff', 'deepslate', 'calcite']
+    await bot.mine(stoneFamily, 4, { tickMs: 5 })
+    assert.equal(transport.state.mineLog.length, 1)
+    const sent = transport.state.mineLog[0]
+    assert.deepEqual(sent.blocks, stoneFamily, 'targets unchanged: soil must not count toward the goal')
+    assert.ok(!sent.blocks.includes('dirt'), 'no soil in targets')
+    const suspend = sent.suspend || []
+    for (const n of ['dirt', 'grass_block']) assert.ok(suspend.includes(n), `${n} suspended so MineProcess can path through cover soil`)
+  })
+
   it('a churn-tripped mine rejects mine-futile', async () => {
     ({ transport, bot } = mineBot({ mineScript: 'futile' }))
     await bot.start({ pollMs: 0 })

@@ -15,7 +15,7 @@ import net.minecraft.world.item.ItemStack;
 /**
  * Mine surface (idkcraft-neuc.53).
  *
- * <p>Method: {@code baritone.mine {blocks:[names], count:int, radius:int}} ->
+ * <p>Method: {@code baritone.mine {blocks:[names], count:int, radius:int, suspend:[names]}} ->
  * {@code {id, have, target}}, driving Baritone's MineProcess (#mine) instead
  * of a hand-rolled per-tick dig loop. Quantity is absolute like Baritone's
  * own (MineProcess stops when the inventory holds the quantity), so the
@@ -219,6 +219,7 @@ public final class Mine {
         final List<String> want = List.copyOf(blocks);
         final int need = count;
         final int[] guard = guardBox(params);
+        final List<String> suspend = suspendList(params);
         Rpc.RpcException[] failure = new Rpc.RpcException[1];
         JsonObject res = server.onClient(() -> {
             Minecraft client = Minecraft.getInstance();
@@ -227,7 +228,7 @@ public final class Mine {
                 return null;
             }
             try {
-                return begin(want, need, guard);
+                return begin(want, need, guard, suspend);
             } catch (Rpc.RpcException e) {
                 failure[0] = e;
                 return null;
@@ -275,8 +276,47 @@ public final class Mine {
         return box;
     }
 
+    /**
+     * Optional extra suspension names for the call (pjsl core-1 — cover
+     * soil the MineProcess must path through, sent alongside, never
+     * inside, the target list so it cannot count toward the goal).
+     * Absent or malformed reads empty; stripped, deduped, order-kept
+     * like the targets. Pure (game-free) so unit tests reach it.
+     */
+    static List<String> suspendList(JsonObject params) {
+        List<String> out = new ArrayList<>();
+        if (!params.has("suspend") || !params.get("suspend").isJsonArray()) {
+            return out;
+        }
+        for (var el : params.getAsJsonArray("suspend")) {
+            if (el.isJsonPrimitive() && el.getAsJsonPrimitive().isString()) {
+                String n = strip(el.getAsString());
+                if (!n.isEmpty() && !out.contains(n)) {
+                    out.add(n);
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Suspension want-list: the mine's blocks plus the extra suspend
+     * names, targets first. Pure so unit tests reach it; the
+     * client-thread suspend reads this (counting, mining and the guard
+     * snapshot stay on the blocks alone).
+     */
+    static List<String> withSuspend(List<String> blocks, List<String> suspend) {
+        List<String> out = new ArrayList<>(blocks);
+        for (String s : suspend) {
+            if (s != null && !s.isEmpty() && !out.contains(s)) {
+                out.add(s);
+            }
+        }
+        return out;
+    }
+
     /** Client thread: arm the mine and start the process. */
-    private static JsonObject begin(List<String> blocks, int count, int[] guard) throws Rpc.RpcException {
+    private static JsonObject begin(List<String> blocks, int count, int[] guard, List<String> suspend) throws Rpc.RpcException {
         IBaritone b = BaritoneAPI.getProvider().getPrimaryBaritone();
         int have = countInventory(acceptedItems(blocks));
         int goal = have + count;
@@ -292,7 +332,7 @@ public final class Mine {
         tripHave = have;
         tripBase = -1;
         tripSinceMs = System.currentTimeMillis();
-        suspendBreakPolicy(blocks);
+        suspendBreakPolicy(withSuspend(blocks, suspend));
         active = true;
         guardBox = guard;
         snapshotGuard(blocks, guard);

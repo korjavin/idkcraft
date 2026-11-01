@@ -48,6 +48,30 @@ const MINE_SETTINGS = [
 // stone is done when the cobblestone lands, grass when the dirt does.
 const DROPS = { grass_block: 'dirt', stone: 'cobblestone' }
 
+// idkcraft-pjsl core-1: dirt-family soil the mine may path through. The v2
+// castle guard hard-bans soil for pathing breaks (bot/src/body.js), which
+// starved stone mines under grassland cover — MineProcess reaches targets
+// with normal pathing, and banned cover reads COST_INF. The mine sends
+// these names alongside (never inside) its target list: the mod drops them
+// from the ban for the call, but they never count toward the goal —
+// appending them to the targets would let dirt satisfy a stone leg.
+// Mirror of the narrowed body.js SOIL set: bridge/ cannot require outside
+// bridge/, so the 8 names live here too; castle-transit-pjsl.test.js pins
+// them equal.
+const MINE_SOIL = ['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'mud', 'clay']
+
+// Registry-present soil names to suspend for a mine (pure: the wire test
+// below covers the full params through run). Unknown or missing registries
+// read empty — the mod treats an absent suspend list as none.
+function soilSuspendNames(byName) {
+  const out = []
+  if (!byName || typeof byName !== 'object') return out
+  for (const n of MINE_SOIL) {
+    if (Object.prototype.hasOwnProperty.call(byName, n) && !out.includes(n)) out.push(n)
+  }
+  return out
+}
+
 function stripMcPrefix(s) {
   return typeof s === 'string' ? s.replace(/^minecraft:/, '') : s
 }
@@ -234,6 +258,11 @@ async function run(bot, st, names, need, { radius, forbid, guard, stallMs, tickM
     }
     const params = { blocks: names.map(stripMcPrefix), count: need, radius }
     if (guard) params.guard = guard
+    // Soil suspension (pjsl core-1): cover dirt the MineProcess must path
+    // through, dropped from the ban mod-side for the call only. Out of
+    // the targets, so it never counts toward the goal.
+    const suspend = soilSuspendNames(bot.registry && bot.registry.blocksByName)
+    if (suspend.length > 0) params.suspend = suspend
     const r = await bot.transport.call('baritone.mine', params)
     if (!r || r.id == null || typeof r.target !== 'number') throw new Error(`mine: bad baritone.mine reply ${JSON.stringify(r)}`)
     // A goal that superseded us while the verb was in flight already
@@ -329,4 +358,4 @@ function handleMineEvent(bot, method, params) {
   return true
 }
 
-module.exports = { installMine, handleMineEvent, cancelMine, countHave, acceptedNames, cacheReady, MINE_STALL_MS, MINE_TICK_MS }
+module.exports = { installMine, handleMineEvent, cancelMine, countHave, acceptedNames, cacheReady, soilSuspendNames, MINE_STALL_MS, MINE_TICK_MS }

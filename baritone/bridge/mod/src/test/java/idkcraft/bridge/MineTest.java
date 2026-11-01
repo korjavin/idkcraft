@@ -80,6 +80,50 @@ public class MineTest {
     }
 
     @Test
+    public void suspendAbsentReadsEmpty() {
+        assertEquals(List.of(), Mine.suspendList(new JsonObject()));
+    }
+
+    @Test
+    public void suspendStripsAndDedupes() {
+        JsonObject p = new JsonObject();
+        com.google.gson.JsonArray a = new com.google.gson.JsonArray();
+        a.add("dirt");
+        a.add("minecraft:grass_block");
+        a.add(" dirt ");
+        a.add("dirt");
+        a.add(7);
+        p.add("suspend", a);
+        assertEquals(List.of("dirt", "grass_block"), Mine.suspendList(p));
+    }
+
+    @Test
+    public void suspendNonArrayReadsEmpty() {
+        JsonObject p = new JsonObject();
+        p.addProperty("suspend", "dirt");
+        assertEquals(List.of(), Mine.suspendList(p));
+    }
+
+    @Test
+    public void suspendUnionKeepsTargetsFirst() {
+        assertEquals(
+                List.of("stone", "cobblestone", "dirt", "grass_block"),
+                Mine.withSuspend(List.of("stone", "cobblestone"), List.of("dirt", "grass_block", "stone")));
+    }
+
+    @Test
+    public void suspendedSoilLeavesCastleBan() {
+        // The composition the begin path runs: banned minus the union
+        // keeps the castle names while the mine's blocks and the cover
+        // soil drop for the call.
+        assertEquals(
+                List.of("oak_planks", "cobblestone"),
+                Mine.dropTargets(
+                        List.of("oak_planks", "cobblestone", "stone", "dirt"),
+                        Mine.withSuspend(List.of("stone"), List.of("dirt"))));
+    }
+
+    @Test
     public void dropTargetsKeepsEverythingElse() {
         assertEquals(
                 List.of("oak_planks", "dirt"),
