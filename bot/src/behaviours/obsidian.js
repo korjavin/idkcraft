@@ -10,6 +10,9 @@
 // obsidian is mined here.
 
 // Vanilla: obsidian drops only under a diamond (or netherite) pick.
+// The family check is the ladder-consumption seam (the sibling bead
+// consumes capabilities incl. this one); the dig consent itself lives on
+// the block path (bring.js bringDeny), not here.
 const OBSIDIAN_TOOL = 'diamond_pickaxe'
 
 function isObsidianName(name) {

@@ -120,21 +120,91 @@ describe('obsidian data module (idkcraft-6ci5.1)', () => {
     assert.equal(bring.tierRefusal(mockBot({}), 'obsidian'), 'need a diamond pickaxe for obsidian')
   })
 
-  it('refuseItemOrHunt morphs an obsidian item order into the block mine', () => {
+  it("resolveItem sees 'obsidian' as the single-name family", () => {
     const bot = mockBot({})
-    const o = { kind: 'item', name: 'obsidian', names: ['obsidian'], want: 3, phase: 'find', have: 0 }
-    bring.refuseItemOrHunt(bot, {}, o)
-    assert.equal(o.kind, 'block')
-    assert.equal(o.name, 'obsidian')
-    assert.equal(o.drop, 'obsidian')
-    assert.equal(o.phase, 'find')
+    assert.deepEqual(bring.resolveItem(bot, 'obsidian'), { names: ['obsidian'], family: 'obsidian' })
+    assert.equal(obsidian.isObsidianFamily(bring.resolveItem(bot, 'obsidian')), true)
   })
 
-  it('toObsidianMine counts a partial pack toward the want', () => {
-    const bot = mockBot({ items: [{ name: 'obsidian', count: 1 }] })
-    const o = bring.toObsidianMine(bot, { kind: 'item', name: 'obsidian', names: ['obsidian'], want: 3 })
-    assert.equal(o.have, 1)
-    assert.equal(o.chestTried, true)
+  it('the item rung still refuses obsidian with the untouched stub line (6ci5.2 seam)', () => {
+    const bot = mockBot({})
+    tickerFor(bot)
+    const ctx = bot._tickerCtx
+    const o = { kind: 'item', name: 'obsidian', names: ['obsidian'], want: 3, phase: 'find', have: 0 }
+    ctx.bring = o
+    bring.refuseItemOrHunt(bot, ctx, o)
+    assert.equal(ctx.bring, null)
+    assert.deepEqual(bot.lines, ["can't get obsidian: no recipe, no source"])
+  })
+})
+
+describe('obsidian dig consent (bringDeny)', () => {
+  const blk = () => ({ name: 'obsidian', position: pos(2, 64, 0) })
+
+  it('consents to a clean obsidian block for an obsidian order', () => {
+    const bot = mockBot({ names: { '2,64,0': 'obsidian' } })
+    assert.equal(bring.bringDeny(bot, blk(bot), {}, 'obsidian'), null)
+  })
+
+  it('withholds consent from a lit portal frame block', () => {
+    const bot = mockBot({ names: { '2,64,0': 'obsidian', '3,64,0': 'nether_portal' } })
+    assert.equal(bring.bringDeny(bot, blk(bot), {}, 'obsidian'), 'protected')
+  })
+
+  it('a diagonal portal touch is not a frame (corners hold nothing)', () => {
+    const bot = mockBot({ names: { '2,64,0': 'obsidian', '3,65,0': 'nether_portal' } })
+    assert.equal(bring.bringDeny(bot, blk(bot), {}, 'obsidian'), null)
+  })
+
+  it('lava on any face reads submerged (the crust case)', () => {
+    const bot = mockBot({ names: { '2,64,0': 'obsidian', '2,63,0': 'lava' } })
+    assert.equal(bring.bringDeny(bot, blk(bot), {}, 'obsidian'), 'submerged')
+  })
+
+  it('other orders and blocks read the guard unchanged', () => {
+    const bot = mockBot({ names: { '2,64,0': 'obsidian' } })
+    assert.equal(bring.bringDeny(bot, blk(bot), {}, 'coal'), 'protected')
+    assert.equal(bring.bringDeny(bot, { name: 'coal_ore', position: pos(2, 64, 0) }, {}, 'obsidian'), null)
+  })
+
+  it('a walk-phase portal frame skips back to find without digging', async () => {
+    const bot = mockBot({
+      names: { '2,64,0': 'obsidian', '3,64,0': 'nether_portal' },
+      items: [{ name: 'diamond_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    bot.entity.position = pos(3, 64, 0)
+    c.bring = {
+      kind: 'block', name: 'obsidian', want: 1, by: 'P', block: 'obsidian', drop: 'obsidian',
+      pos: pos(2, 64, 0), phase: 'walk', stalls: 0, lastPos: null, have: 0, announced: true, exposed: true,
+    }
+    await bring(bot, c, null, {})
+    await bring(bot, c, null, {})
+    assert.equal(bot.digCalls, 0)
+    assert.equal(c.bring.phase, 'find')
+    assert.ok(c.bring.skip && c.bring.skip.has('2,64,0'), 'frame cell skipped')
+  })
+
+  it('a lava-capped crust skips back to find without digging', async () => {
+    const bot = mockBot({
+      names: { '2,64,0': 'obsidian', '2,63,0': 'lava' },
+      items: [{ name: 'diamond_pickaxe', count: 1 }],
+      playerPos: pos(30, 64, 0),
+    })
+    tickerFor(bot)
+    const c = bot._tickerCtx
+    bot.entity.position = pos(3, 64, 0)
+    c.bring = {
+      kind: 'block', name: 'obsidian', want: 1, by: 'P', block: 'obsidian', drop: 'obsidian',
+      pos: pos(2, 64, 0), phase: 'walk', stalls: 0, lastPos: null, have: 0, announced: true, exposed: true,
+    }
+    await bring(bot, c, null, {})
+    await bring(bot, c, null, {})
+    assert.equal(bot.digCalls, 0)
+    assert.equal(c.bring.phase, 'find')
+    assert.equal(c.bring.sawSubmerged, true)
   })
 })
 

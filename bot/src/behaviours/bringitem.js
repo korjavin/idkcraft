@@ -17,7 +17,6 @@
 const stockpileMod = require('./stockpile')
 const woolMod = require('./wool')
 const bedMod = require('./bed')
-const obsidianMod = require('./obsidian')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const { say, clearGoal } = require('./util')
@@ -733,39 +732,14 @@ function toWoolHunt(bot, o, ctx) {
   return o
 }
 
-// Mine rung (idkcraft-6ci5.1): obsidian the pack and chest could not
-// fill is mined exposed with a diamond pick. Morphs an item order into a
-// kind 'block' dig in place — the shared find/walk/dig/pickup phases +
-// search legs take it from here, and the commitSource tier gate
-// (needsPickaxe/requiredTier) refuses honestly without a diamond pick.
-// Partial pack/chest stock counts toward the want.
-function toObsidianMine(bot, o) {
-  o.kind = 'block'
-  o.name = 'obsidian'
-  o.block = null
-  o.pos = null
-  o.exposed = null
-  o.drop = 'obsidian'
-  o.have = countDrop(bot, 'obsidian')
-  o.phase = 'find'
-  o.announced = false
-  o.skip = null
-  o.search = null
-  o.searchSkipFar = false
-  o.chestTried = true // the item rungs ran first: pack plus every chest
-  return o
-}
-
-// Item rung exhaustion: wool falls through to the sheep hunt, obsidian to
-// the exposed mine; anything else falls through to the craft rung, then
-// the honest refusal.
+// Item rung exhaustion: wool falls through to the sheep hunt; anything
+// else falls through to the craft rung, then the honest refusal.
+// (6ci5.1: obsidian needs no rung here — isBringable routes it to a kind
+// 'block' order at creation, and the consent + tier gates live on the
+// block path.)
 function refuseItemOrHunt(bot, ctx, o) {
   if (woolMod.isWoolFamily(o)) {
     toWoolHunt(bot, o, ctx)
-    return
-  }
-  if (obsidianMod.isObsidianFamily(o)) {
-    toObsidianMine(bot, o)
     return
   }
   enterCraftOrRefuse(bot, ctx, o)
@@ -1426,9 +1400,6 @@ async function fetchItem(bot, ctx, o, at = null) {
     } else if (woolMod.isWoolFamily(o)) {
       o.chestInFlight = false
       toWoolHunt(bot, o, ctx) // short or empty chest: the mob rung hunts the rest
-    } else if (obsidianMod.isObsidianFamily(o)) {
-      o.chestInFlight = false
-      toObsidianMine(bot, o) // short or empty chest: the mine rung digs the rest
     } else if (plan.have > 0 && !o.toolName) {
       o.chestInFlight = false
       say(bot, `only ${plan.items.map((i) => `${i.count} ${i.name}`).join(', ')}, coming`)
@@ -1547,7 +1518,6 @@ module.exports.planItemGive = planItemGive
 module.exports.orderCraftNames = orderCraftNames
 module.exports.itemRefusal = itemRefusal
 module.exports.toWoolHunt = toWoolHunt
-module.exports.toObsidianMine = toObsidianMine
 module.exports.refuseItemOrHunt = refuseItemOrHunt
 module.exports.enterCraftOrRefuse = enterCraftOrRefuse
 module.exports.craftTick = craftTick

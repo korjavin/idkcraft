@@ -20,6 +20,7 @@ const {
 const Vec3 = require('vec3')
 
 const woolMod = require('./wool')
+const obsidianMod = require('./obsidian') // 6ci5.1: the mine rung's data (one-directional, wool's shape)
 
 // Bring: the 'bring me <block> [count]' order. The bot walks to the nearest
 // matching block alone, digs up to N drops, walks back to the requesting
@@ -93,7 +94,7 @@ function isBringable(blockName) {
 // dispatcher reaches them as itemMod.sharePlan.
 
 function needsPickaxe(blockName) {
-  return blockName.endsWith('_ore') || blockName === 'obsidian' // 6ci5.1: diamond pick or the dig drops nothing
+  return blockName.endsWith('_ore') || obsidianMod.isObsidianName(blockName) // 6ci5.1: diamond pick or the dig drops nothing
 }
 
 function skipKey(p) {
@@ -117,7 +118,7 @@ function revalidateBelowFeetSkips(bot, ctx, o) {
     try { block = bot.blockAt && bot.blockAt(new Vec3(xyz[0], xyz[1], xyz[2])) } catch (_) { block = null }
     if (!block || block.name !== o.block) continue // gone or changed: keep skipped, find never surfaces it
     let deny = 'protected'
-    try { deny = denyReason(bot, block, ctx) } catch (_) { deny = 'protected' }
+    try { deny = bringDeny(bot, block, ctx, o.name) } catch (_) { deny = 'protected' }
     if (deny !== null) continue // still a trap or a build: stays skipped
     bf.delete(key)
     try { if (o.skip && typeof o.skip.delete === 'function') o.skip.delete(key) } catch (_) { /* skip best-effort */ }
@@ -139,10 +140,43 @@ function revalidateBelowFeetSkips(bot, ctx, o) {
 // every other executor keeps default-deny. name is the request/order
 // name (o.name at the tick, requestName in memoryExposed, where ctx.bring
 // may still be the previous order).
+// Two hazards withhold the consent (revmux 01 majors), read off the six
+// faces at every bringDeny site (find, dig, memory) so the block never
+// commits: a lit portal neighbour (a load-bearing frame block — corners
+// touch only diagonally and hold nothing, so they stay diggable), and
+// lava on any face (the crust case: lava directly under the target —
+// digging it drops the body into lava and burns every drop).
+function obsidianFaces(bot, block) {
+  const out = { portal: false, lava: false }
+  try {
+    if (!bot || typeof bot.blockAt !== 'function' || !block || !block.position) return out
+    const p = block.position
+    if (typeof p.x !== 'number' || typeof p.y !== 'number' || typeof p.z !== 'number') return out
+    const x = Math.floor(p.x)
+    const y = Math.floor(p.y)
+    const z = Math.floor(p.z)
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      let n = null
+      try {
+        const b = bot.blockAt(new Vec3(x + dx, y + dy, z + dz))
+        n = (b && b.name) || null
+      } catch (_) { n = null }
+      if (n === 'nether_portal') out.portal = true
+      else if (n === 'lava') out.lava = true
+      if (out.portal && out.lava) break
+    }
+  } catch (_) { /* unreadable faces: no hazard seen, consent stands */ }
+  return out
+}
 function bringDeny(bot, block, ctx, name) {
   let d = 'protected'
   try { d = denyReason(bot, block, ctx) } catch (_) { d = 'protected' }
-  if (d === 'protected' && name === 'obsidian' && block && block.name === 'obsidian') return null
+  if (d === 'protected' && obsidianMod.isObsidianName(name) && block && obsidianMod.isObsidianName(block.name)) {
+    const faces = obsidianFaces(bot, block)
+    if (faces.portal) return 'protected' // lit frame: consent never reaches it
+    if (faces.lava) return 'submerged' // lava-capped crust: unsafe, the safe refusal names it
+    return null
+  }
   return d
 }
 
@@ -2157,7 +2191,11 @@ async function bring(bot, ctx, target, state) {
       return
     }
     let bDeny = bringDeny(bot, block, ctx, o.name) // idkcraft-drq: never fetch through owner builds (6ci5.1: an obsidian order consents)
-    if (bDeny === 'below-feet' && solidBelow(bot, o.pos) && protectedReason(bot, block, ctx) !== null) {
+    // 6ci5.1: a consented obsidian block has no build to unmask (the type
+    // rule is lifted for the order), so it keeps the trap verdict and takes
+    // the atl.20 drop like ore — never the protected skip below.
+    const consented = obsidianMod.isObsidianName(o.name) && block && obsidianMod.isObsidianName(block.name)
+    if (bDeny === 'below-feet' && solidBelow(bot, o.pos) && !consented && protectedReason(bot, block, ctx) !== null) {
       // revmux 01 core-1: the trap denial masks protection (denyReason
       // returns 'below-feet' before it checks the type rules), so a
       // below-feet stance over solid may sit on a build. Unmask it: the
@@ -2469,7 +2507,6 @@ module.exports.parseToolRequest = itemMod.parseToolRequest
 module.exports.isToolName = itemMod.isToolName
 module.exports.ensureTool = itemMod.ensureTool
 module.exports.toWoolHunt = itemMod.toWoolHunt
-module.exports.toObsidianMine = itemMod.toObsidianMine
 module.exports.toWaterFill = toWaterFill
 module.exports.hasEmptyBucket = hasEmptyBucket
 // Terminal actions for the bringitem.js bridge (deferred require back).
