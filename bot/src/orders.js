@@ -26,6 +26,17 @@ const taskMod = require('./task')
 const residence = require('./residence')
 const llmOrders = require('./llm-orders')
 
+// Recipe fallback wiring (idkcraft-6ci5.2): bringitem owns the refusal branch
+// and the capability table but cannot require llm-orders (require-graph
+// cycle — lazy requires count the same). The edge lives here, where both
+// modules are already visible. The mine leg rides the same table from the
+// sibling's own file when 6ci5.1 lands (bring.js already requires bringitem).
+bringMod.setRecipeSource({
+  plan: (bot, ctx, target, opts) => llmOrders.planRecipe(bot, ctx, target, opts),
+  timeoutMs: llmOrders.RECIPE_TIMEOUT_MS,
+  enabled: () => llmOrders.enabled(),
+})
+
 // How long a recover outcome stays reportable in status (01 body-2): the
 // stamp never clears, so without a window every status would cite it.
 const LAST_RECOVER_WINDOW_MS = 5 * 60 * 1000
@@ -381,7 +392,31 @@ function createOrders(box) {
       if (res === 'unknown') {
         if (!resolved) return `unknown item: ${name}`
         // No diggable block, the pack came up short, and no adopted chest:
-        // the honest stub (did.2-4 replace its branches).
+        // the recipe fallback (6ci5.2) asks the model once for a
+        // ladder-runnable acquisition recipe instead of refusing outright;
+        // gated (flag/key, no kept tool, no known recipe), else the stub.
+        const ro = {
+          kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
+          items: [], drop: null, have: 0, phase: 'recipe', announced: true, keptName,
+        }
+        // Gate first: the install below (lead drop, unpause, meet release)
+        // must never run for a refusal the fallback declines — with the LLM
+        // gate off (the prod default) this path stays byte-identical to the
+        // old instant refusal. Installed before the fallback fires when open:
+        // the late answer (and the alive gate) keys off ctx.bring identity.
+        if (bringMod.canRecipeFallback(bot, ro)) {
+          if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+          ctx.unseenTicks = 0
+          ctx.resumeWork = false
+          clearStuck()
+          homeMod.releaseMeet(bot, ctx)
+          ctx.bring = ro
+          ctx.paused = false
+          if (bringMod.startRecipeFallback(bot, ctx, ro)) {
+            return `no recipe for ${resolved.family} — asking how to get it…`
+          }
+          if (ctx.bring === ro) ctx.bring = null // gate closed late: no half order left behind
+        }
         return bringMod.itemRefusal(bot, resolved.family, resolved, keptName)
       }
       if (!res) {

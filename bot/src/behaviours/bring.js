@@ -176,13 +176,24 @@ function obsidianFaces(bot, block) {
   } catch (_) { /* unreadable faces: no hazard seen, consent stands */ }
   return out
 }
+// 6ci5.2: recipe-driven obsidian (a mine step for another target) carries
+// no owner consent — only an explicit order for obsidian itself lifts
+// protection. True for explicit orders and non-recipe paths (unchanged).
+function obsidianConsented(ctx, o) {
+  try {
+    const b = (o && o.recipe) ? o : (ctx && ctx.bring)
+    if (!b || !b.recipe) return true
+    return b.recipe.target === 'obsidian'
+  } catch (_) { return true }
+}
+
 function bringDeny(bot, block, ctx, name) {
   let d = 'protected'
   try { d = denyReason(bot, block, ctx) } catch (_) { d = 'protected' }
   // 6ci5.1 r02: the faces gate every verdict on a consented block, not
   // just 'protected' — a below-feet trap verdict over a lava pocket must
   // still read 'submerged', or the atl.20 drop digs into it.
-  if (obsidianMod.isObsidianName(name) && block && obsidianMod.isObsidianName(block.name)) {
+  if (obsidianMod.isObsidianName(name) && block && obsidianMod.isObsidianName(block.name) && obsidianConsented(ctx)) {
     const faces = obsidianFaces(bot, block)
     if (faces.portal) return 'protected' // lit frame: consent never reaches it
     if (faces.lava) return 'submerged' // lava-capped crust: unsafe, the safe refusal names it
@@ -1960,6 +1971,10 @@ async function bring(bot, ctx, target, state) {
 
   if (o.phase === 'smelt') { itemMod.smeltTick(bot, ctx, o); return }
 
+  // Recipe wait (idkcraft-6ci5.2): the model call is in flight — the tick
+  // holds the order on its timeout backstop, nothing else.
+  if (o.phase === 'recipe') { itemMod.recipeTick(bot, ctx, o); return }
+
   if (o.phase === 'find') {
     if (food) { await findFood(bot, ctx, o); return }
     if ((o.kind || 'block') === 'item') { // no diggable world form: wool hunts, else the item reason
@@ -2222,7 +2237,7 @@ async function bring(bot, ctx, target, state) {
     // 6ci5.1: a consented obsidian block has no build to unmask (the type
     // rule is lifted for the order), so it keeps the trap verdict and takes
     // the atl.20 drop like ore — never the protected skip below.
-    const consented = obsidianMod.isObsidianName(o.name) && block && obsidianMod.isObsidianName(block.name)
+    const consented = obsidianMod.isObsidianName(o.name) && block && obsidianMod.isObsidianName(block.name) && obsidianConsented(ctx, o)
     if (bDeny === 'below-feet' && solidBelow(bot, o.pos) && !consented && protectedReason(bot, block, ctx) !== null) {
       // revmux 01 core-1: the trap denial masks protection (denyReason
       // returns 'below-feet' before it checks the type rules), so a
@@ -2395,6 +2410,9 @@ async function bring(bot, ctx, target, state) {
   }
 
   if (o.phase === 'return') {
+    // Recipe execution (idkcraft-6ci5.2): a fill step that gave still belongs
+    // to the recipe — advance the queue instead of tossing to the player.
+    if (o.recipe && o.recipe.executing && !o.recipe.done) { itemMod.recipeNext(bot, ctx, o); return }
     if (o.subFor) { // a sub-order resumes, never tosses: the mats belong to the craft
       itemMod.resumeSub(bot, ctx, o)
       return
@@ -2496,6 +2514,7 @@ module.exports.liveExposed = liveExposed
 module.exports.buriedCand = buriedCand
 module.exports.skipKey = skipKey
 module.exports.bringDeny = bringDeny
+module.exports.obsidianConsented = obsidianConsented
 module.exports.unreachLine = unreachLine
 module.exports.guidedTarget = guidedTarget
 module.exports.guidedStepback = guidedStepback
@@ -2553,3 +2572,9 @@ module.exports.pickSubGap = itemMod.pickSubGap
 module.exports.subWordFor = itemMod.subWordFor
 module.exports.smeltingGap = itemMod.smeltingGap
 module.exports.planGap = itemMod.planGap
+module.exports.recipeCaps = itemMod.recipeCaps
+module.exports.setRecipeSource = itemMod.setRecipeSource
+module.exports.canRecipeFallback = itemMod.canRecipeFallback
+module.exports.startRecipeFallback = itemMod.startRecipeFallback
+module.exports.recipeNext = itemMod.recipeNext
+module.exports.recipeTick = itemMod.recipeTick
