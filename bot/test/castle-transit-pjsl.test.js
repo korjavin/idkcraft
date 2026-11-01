@@ -232,6 +232,9 @@ function peerCentre(rot = 0, version = V) {
   return { x: st.site.x + w / 2, y: st.site.y, z: st.site.z + d / 2, st }
 }
 
+// revmux 02 minor: the single drift-guard list — body.js SOIL and the bridge
+// MINE_SOIL must stay the same 8 names, or a mine under new cover starves.
+const SOIL_NAMES = ['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'mud', 'clay']
 describe('pjsl v2 transit guard (task 1: soil hard-ban)', () => {
   it('dirt-family soil is break-banned with no castle at all (castleless bot2 shape)', () => {
     const s = v2Settings(v2Bot(v2Registry()), {})
@@ -249,7 +252,7 @@ describe('pjsl v2 transit guard (task 1: soil hard-ban)', () => {
     for (const n of names) blocksByName[n] = { id: id++, name: n, diggable: true }
     const registry = { blocksByName, itemsByName: {} }
     const s = v2Settings(v2Bot(registry), {})
-    for (const n of ['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'mud', 'clay']) {
+    for (const n of SOIL_NAMES) {
       assert.ok(s.ban.includes(n), `${n} banned`)
     }
     for (const n of ['sand', 'red_sand', 'gravel', 'sandstone', 'red_sandstone', 'ice', 'packed_ice',
@@ -326,8 +329,8 @@ describe('pjsl mine soil suspension (core-1)', () => {
     return out
   }
   it("the mine's suspension list includes soil when the targets are STONE_FAMILY", () => {
-    const suspend = soilSuspendNames(byName([...blueprint.STONE_ITEMS, 'dirt', 'grass_block', 'coarse_dirt', 'sand', 'gravel']))
-    for (const n of ['dirt', 'grass_block', 'coarse_dirt']) assert.ok(suspend.includes(n), `${n} suspended`)
+    const suspend = soilSuspendNames(byName([...blueprint.STONE_ITEMS, ...SOIL_NAMES, 'sand', 'gravel']))
+    assert.deepEqual([...suspend].sort(), [...SOIL_NAMES].sort(), 'suspend pins the same 8 names as the body ban')
     for (const n of ['sand', 'gravel']) assert.ok(!suspend.includes(n), `${n} stays banned (narrowed set)`)
   })
   it('regression pin: a dirt-covered stone mine target list suspends dirt but never targets it', () => {
