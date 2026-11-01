@@ -770,7 +770,7 @@ function chestTick(bot, ctx, f, d) {
     const bp = bodyPos(bot)
     const dd = bp ? Math.hypot(bp.x - at.x, bp.y - at.y, bp.z - at.z) : Infinity
     if (stalled(f.chestWalk || (f.chestWalk = {}), dd, CHEST_WAITS)) { // unreachable: next chest
-      if (bank) markChestDry(ctx, d.kind, k)
+      if (bank) dryMarkAllKinds(ctx, k)
       f.chest = null
     }
     return true
@@ -794,7 +794,23 @@ function chestTick(bot, ctx, f, d) {
     try { console.log(`castlefetch ${d.kind}: drew ${Math.max(0, Math.round(need0 - left))} of ${need0}${fund ? ` plus table fund x${fund}` : ''} from the bank chest at ${k}`) } catch (_) { /* log best-effort */ }
     if (left > 0 && !fund) markChestDry(ctx, d.kind, k) // drained: no walk back to it within CHEST_DRY_MS
     else if (left <= 0) f.bankFull = true // a full bank batch: the leg lays it instead of digging the rest
-  }, CHEST_TIMEOUT_MS, () => { if (bank) markChestDry(ctx, d.kind, k) })
+    // qwyl revmux 01 core-1 + owner TTL directive: one open feeds both
+    // caches (positive snapshot + negative dry-marks, both CHEST_DRY_MS).
+    // The contents come from the draw's own opens — a fallback peek only
+    // runs when the draw never opened the chest (rare list shapes).
+    const drew = Math.max(0, Math.round(need0 - left))
+    let peek = dr.counts || null
+    if (!peek) {
+      try { peek = await stockpileMod.chestCounts(bot, ctx, null, at) } catch (_) { peek = null }
+    }
+    if (peek) {
+      snapshotChest(ctx, k, peek)
+      dryMarkEmpties(ctx, bot, k, peek, d.kind)
+    } else if (drew <= 0 && !fund) {
+      dropChestState(ctx, k) // fruitless draw, no re-read: cached state is stale, drop it fast
+      if (chestGoneAt(bot, at)) dryMarkAllKinds(ctx, k) // vanished: no kind walks back within the window
+    }
+  }, CHEST_TIMEOUT_MS, () => { if (bank) markTimeoutChest(ctx, d.kind, k) })
   return true
 }
 
@@ -805,6 +821,121 @@ function chestTick(bot, ctx, f, d) {
 const CHEST_DRY_MS = 10 * 60 * 1000
 function markChestDry(ctx, kind, k) {
   (ctx.castleChestDry || (ctx.castleChestDry = {}))[`${kind}@${k}`] = Date.now()
+}
+
+// qwyl: names present in a chest snapshot (chestCounts' {name: count}).
+function presentNames(counts) {
+  const out = new Set()
+  try {
+    for (const n of Object.keys(counts || {})) {
+      if ((counts[n] | 0) > 0) out.add(n)
+    }
+  } catch (_) { /* unreadable counts: empty */ }
+  return out
+}
+
+// True when the kind's chest lists overlap the snapshot: the chest holds
+// (or held, pre-draw) something the kind draws. Unreadable recipe lists
+// read as held — never dry-mark what cannot be checked.
+function kindHeld(bot, kind, present) {
+  try {
+    const lists = chestNames(bot, kind)
+    if (!Array.isArray(lists) || lists.length === 0) return true
+    for (const names of lists) {
+      if (Array.isArray(names) && names.some((n) => present.has(n))) return true
+    }
+    return false
+  } catch (_) {
+    return true
+  }
+}
+
+// qwyl 02-after-fix minor: a vanished or unreachable bank chest informs
+// every kind, not just the visitor — remembered/peer sightings are never
+// pruned, so one visit dry-marks all FETCH kinds at k for CHEST_DRY_MS.
+function dryMarkAllKinds(ctx, k) {
+  for (const kind of Object.keys(FETCH)) markChestDry(ctx, kind, k)
+}
+
+// qwyl 03-after-fix minor: the flight timeout fires while run() may still
+// be drawing (openChest has its own 20 s timeout), so at the bot's own
+// bank (home/site) a slow open is not a blocked lid — only the visiting
+// kind is marked. A truly gone or unreachable chest keeps the all-kinds
+// verdict through the draw path (stalled walk, chestGoneAt).
+function homeSiteKeys(ctx) {
+  const out = new Set()
+  try {
+    for (const c of [ctx && ctx.home && ctx.home.chest, ctx && ctx.castle && ctx.castle.siteChest]) {
+      if (c && typeof c.x === 'number' && typeof c.y === 'number' && typeof c.z === 'number') {
+        out.add(`${c.x},${c.y},${c.z}`)
+        out.add(`${Math.floor(c.x)},${Math.floor(c.y)},${Math.floor(c.z)}`)
+      }
+    }
+  } catch (_) { /* best-effort */ }
+  return out
+}
+
+function markTimeoutChest(ctx, kind, k) {
+  try {
+    if (homeSiteKeys(ctx).has(k)) markChestDry(ctx, kind, k)
+    else dryMarkAllKinds(ctx, k)
+  } catch (_) { /* marks best-effort */ }
+}
+
+// True when the chest block is loaded and no longer a chest (packroom's
+// 'gone' verdict, re-checked locally so the shared withdraw keeps its
+// shape). Unreadable (null: unloaded chunk) is NOT gone — the single-kind
+// mark stands and the next leg retries, the szr1 shape.
+function chestGoneAt(bot, at) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function' || !at) return false
+    const b = bot.blockAt(new Vec3(at.x, at.y, at.z))
+    if (!b) return false
+    return b.name !== 'chest'
+  } catch (_) {
+    return false
+  }
+}
+
+// qwyl revmux 01 core-1: one visit informs every kind. Dry-mark every FETCH
+// kind the opened chest does not hold, so no other kind walks there within
+// CHEST_DRY_MS. The visiting kind keeps its own mark as before (skipKind),
+// incl. the stairs fund protection above.
+function dryMarkEmpties(ctx, bot, k, counts, skipKind) {
+  const present = presentNames(counts)
+  for (const kind of Object.keys(FETCH)) {
+    if (kind === skipKind) continue
+    if (!kindHeld(bot, kind, present)) markChestDry(ctx, kind, k)
+  }
+}
+
+// Owner TTL directive (qwyl): positive cache — the chest's post-draw state
+// snapshot, 10-min TTL. Repeat legs read the snapshot instead of re-walking;
+// a stale read is corrected fast by dropChestState on a fruitless draw.
+function snapshotChest(ctx, k, counts) {
+  try {
+    if (!ctx || typeof ctx !== 'object') return
+    (ctx.castleChestState || (ctx.castleChestState = {}))[k] = { ts: Date.now(), counts: { ...(counts || {}) } }
+  } catch (_) { /* snapshot best-effort */ }
+}
+
+function dropChestState(ctx, k) {
+  try {
+    if (ctx && ctx.castleChestState) delete ctx.castleChestState[k]
+  } catch (_) { /* drop best-effort */ }
+}
+
+// Fresh snapshot for the chest, or null (none/stale). Stale entries stay
+// until overwritten — expiry is read-time, like the dry marks.
+function freshChestState(ctx, k) {
+  try {
+    const e = ctx && ctx.castleChestState && ctx.castleChestState[k]
+    if (!e || typeof e.ts !== 'number') return null
+    if (Date.now() - e.ts >= CHEST_DRY_MS) return null
+    return e
+  } catch (_) {
+    return null
+  }
 }
 
 // Nearest untried chest this leg: the footprint chest (owner's, never
@@ -828,11 +959,29 @@ function pickChest(bot, ctx, f, kind) {
     if (c && ctx.home && c === ctx.home.chest && require('./build').entranceHoled(bot, ctx, c)) continue
     if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true })
   }
+  // Remembered map chests (idkcraft-qwyl, the #692 bring precedent): own
+  // sightings plus peer bots' sightings (read-only, radius 32, home
+  // excluded by the lookup). A stocked remembered chest spares the
+  // craft/gather stages below — the selection stays nearest-first.
+  try {
+    const extra = stockpileMod.nearbyChestsAll
+      ? stockpileMod.nearbyChestsAll(bot, ctx, [...tried])
+      : stockpileMod.nearbyChests(bot, ctx, [...tried])
+    for (const c of extra) {
+      if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true })
+    }
+  } catch (_) { /* remembered sightings best-effort */ }
   let best = null
   for (const c of cands) {
     const k = `${c.at.x},${c.at.y},${c.at.z}`
     if (tried.has(k)) continue
     if (c.bank && typeof dry[`${kind}@${k}`] === 'number' && now - dry[`${kind}@${k}`] < CHEST_DRY_MS) continue
+    // qwyl: a fresh snapshot answers without a walk — a kind the chest does
+    // not hold is skipped like a dry mark (no re-walk within the window).
+    if (c.bank) {
+      const snap = freshChestState(ctx, k)
+      if (snap && !kindHeld(bot, kind, presentNames(snap.counts))) continue
+    }
     const dist = bp ? Math.hypot(bp.x - c.at.x, bp.z - c.at.z) : 0
     if (c.bank && dist > require('./explore').TASK_SEARCH_RADIUS) continue
     if (!best || dist < best.dist) best = { ...c, k, dist }
@@ -864,9 +1013,16 @@ function stairsTableBroke(bot, ctx, f) {
 }
 
 // One chest's withdraw for the demand: the kind's lists in order (finished
-// item first, then its raw stock). Returns the need left (> 0: short).
+// item first, then its raw stock). Returns the need left (> 0: short) plus
+// the last full post-draw window contents (null when never opened).
 async function drawChest(bot, ctx, d, at, need) {
   let fund = 0 // stairs table-fund items drawn (not the need — chestTick's bank log/dry-mark read it)
+  let seen = null // last full post-draw contents at `at`: the chestTick snapshot source (qwyl, zero extra opens)
+  async function drawFrom(names, want) {
+    const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
+    if (r && r.counts) seen = r.counts
+    return r
+  }
   for (const names of chestNames(bot, d.kind)) {
     if (need <= 0 || names.length === 0) break
     // Stairs table fund (vf8e.8): the stairs recipe needs a table the
@@ -880,7 +1036,7 @@ async function drawChest(bot, ctx, d, at, need) {
         const missing = Math.max(0, 4 - countItems(bot, (n) => n.endsWith('_planks')) - 4 * countItems(bot, (n) => n.endsWith('_log')))
         const want = names[0] === 'crafting_table' ? 1 : names.some((n) => n.endsWith('_planks')) ? missing : 1
         if (want > 0) {
-          const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
+          const r = await drawFrom(names, want)
           if (r && r.got > 0) {
             fund += r.got
             try { console.log(`castlefetch stairs: drew table fund ${r.name} x${r.got} from the chest`) } catch (_) { /* log best-effort */ }
@@ -906,7 +1062,7 @@ async function drawChest(bot, ctx, d, at, need) {
     // Panes' third is sand (g0z.38): the ladder's whole sand need, at once.
     if (d.kind === 'pane' && names[0] === 'sand') {
       const sn = paneNeed(bot, ctx, d).sandNeed
-      if (sn > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, sn, at)
+      if (sn > 0) await drawFrom(names, sn)
       break
     }
     // Blast mats (g0z.51): the ladder's whole need per mat, at once (the
@@ -924,7 +1080,7 @@ async function drawChest(bot, ctx, d, at, need) {
       const want = names[0] === 'iron_ingot' || names[0] === 'raw_iron' ? ironShort
         : names[0] === 'smooth_stone' || names[0] === 'stone' ? chainShort
         : names[0] === 'cobblestone' ? cobbleShort : 0
-      if (want > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
+      if (want > 0) await drawFrom(names, want)
       continue
     }
     // Table mats (idkcraft-0dbg): the recipe's whole need per mat, at once
@@ -936,7 +1092,7 @@ async function drawChest(bot, ctx, d, at, need) {
       const want = names[0] === 'obsidian' ? Math.max(0, TABLE_OBSIDIAN - countItems(bot, (n) => n === 'obsidian'))
         : names[0] === 'book' ? Math.max(0, TABLE_BOOK - countItems(bot, (n) => n === 'book'))
         : names[0] === 'diamond' ? Math.max(0, TABLE_DIAMOND - countItems(bot, (n) => n === 'diamond')) : 0
-      if (want > 0) await stockpileMod.withdrawAnyFromChest(bot, ctx, names, want, at)
+      if (want > 0) await drawFrom(names, want)
       continue
     }
     // Books already packed cover shelves too (revmux 01 minor): never
@@ -957,7 +1113,7 @@ async function drawChest(bot, ctx, d, at, need) {
       if (!counts) {
         for (const name of names) {
           if (need <= 0) break
-          const pr = await stockpileMod.withdrawAnyFromChest(bot, ctx, [name], Math.ceil(need / LOG_YIELD[d.kind]) * 4, at)
+          const pr = await drawFrom([name], Math.ceil(need / LOG_YIELD[d.kind]) * 4)
           need -= (pr && pr.got ? pr.got : 0) * (LOG_YIELD[d.kind] / 4)
         }
       } else {
@@ -970,16 +1126,16 @@ async function drawChest(bot, ctx, d, at, need) {
           if (fund > bestFund) { bestFund = fund; best = name }
         }
         if (best) {
-          const pr = await stockpileMod.withdrawAnyFromChest(bot, ctx, [best], wantFull, at)
+          const pr = await drawFrom([best], wantFull)
           need -= (pr && pr.got ? pr.got : 0) * (LOG_YIELD[d.kind] / 4)
         }
       }
     } else {
-      const r = await stockpileMod.withdrawAnyFromChest(bot, ctx, names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need, at)
+      const r = await drawFrom(names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need)
       need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
     }
   }
-  return { left: need, fund }
+  return { left: need, fund, counts: seen }
 }
 
 // Source 2: craft from the pack. Returns true while it owns the tick.
@@ -2911,6 +3067,13 @@ function castlefetch(bot, ctx, target, state) {
 module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.pickChest = pickChest
+module.exports.CHEST_DRY_MS = CHEST_DRY_MS
+module.exports.markChestDry = markChestDry
+module.exports.dryMarkEmpties = dryMarkEmpties
+module.exports.markTimeoutChest = markTimeoutChest
+module.exports.snapshotChest = snapshotChest
+module.exports.dropChestState = dropChestState
+module.exports.freshChestState = freshChestState
 module.exports.torchTick = torchTick
 module.exports.fieldSpot = fieldSpot
 module.exports.TORCH_HOME_DIST = TORCH_HOME_DIST

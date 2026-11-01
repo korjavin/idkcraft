@@ -841,7 +841,20 @@ async function withdrawAnyFromChest(bot, ctx, names, count, at = null) {
           got += take
         }
       }
-      return { got, name: first }
+      // qwyl: post-draw window contents for the caller's snapshot (one open
+      // answers every kind — no extra peek). Re-read live: earlier stacks
+      // predate this call's withdrawals.
+      const counts = {}
+      try {
+        const after = typeof window.containerItems === 'function' ? window.containerItems() : []
+        if (Array.isArray(after)) {
+          for (const s of after) {
+            if (!s || typeof s.name !== 'string') continue
+            counts[s.name] = (counts[s.name] || 0) + (typeof s.count === 'number' ? s.count : 1)
+          }
+        }
+      } catch (_) { /* post-read best-effort */ }
+      return { got, name: first, counts }
     }, at)
     return res && res.status === 'ok' ? res.value : { got: 0, name: null }
   } catch (_) {
@@ -960,16 +973,21 @@ function rememberChests(ctx, positions) {
 // adopted home chest is excluded (the fetch checks it first); tried keys
 // (the order's chestSeen) stay skipped so a leg never re-opens a chest.
 function nearbyChests(bot, ctx, seen, radius) {
+  const list = ctx && Array.isArray(ctx.chests) ? ctx.chests : []
+  return filterChests(bot, list, ctx && ctx.home && ctx.home.chest, seen, radius)
+}
+
+// Shared near-first filter over an explicit sighting list (qwyl): the home
+// chest is excluded, tried keys stay skipped, radius 32 by default.
+function filterChests(bot, list, home, seen, radius) {
   try {
     const bp = bot && bot.entity && bot.entity.position
     if (!bp || typeof bp.x !== 'number') return []
     const r = typeof radius === 'number' && radius > 0 ? radius : NEARBY_CHEST_RADIUS
     const skip = new Set(Array.isArray(seen) ? seen : [])
-    const home = ctx && ctx.home && ctx.home.chest
     const homeKey = home ? chestKeyOf(home) : null
     const out = []
-    const list = ctx && Array.isArray(ctx.chests) ? ctx.chests : []
-    for (const c of list) {
+    for (const c of Array.isArray(list) ? list : []) {
       if (!c || typeof c.x !== 'number') continue
       const key = chestKeyOf(c)
       if (key === null || skip.has(key)) continue
@@ -980,6 +998,82 @@ function nearbyChests(bot, ctx, seen, radius) {
     }
     out.sort((a, b) => a.d - b.d)
     return out.map((e) => e.c)
+  } catch (_) {
+    return []
+  }
+}
+
+// Cross-bot reuse (idkcraft-qwyl): every other bot's memory file on the
+// shared volume is READ, never written (the refreshKnownCastles precedent
+// in memory.js — same dir, same world, best-effort). Their remembered
+// chest sightings land in ctx.peerChests (deduped across files, each file
+// already capped by chestSpotsOf), so any remembered chest regardless of
+// owner is a withdrawal source; deposits stay home-only (the chest-map
+// rule: only withdraw paths take `at`). No combined cap: the radius +
+// nearest-first ordering in filterChests picks, so one full peer file can
+// never hide another peer's nearby chest (revmux 01 core-2).
+// Re-read at most once per SAVE_MIN_MS, like the castles precedent.
+// Deferred require (memory -> resources -> castle; never the reverse).
+function refreshPeerChests(bot, ctx, now) {
+  try {
+    if (!ctx || typeof ctx !== 'object') return []
+    const t = typeof now === 'number' ? now : Date.now()
+    let mem = null
+    try { mem = require('../memory') } catch (_) { mem = null }
+    const window = (mem && mem.SAVE_MIN_MS) || 45000
+    if (Array.isArray(ctx.peerChests) && typeof ctx.peerChestsAt === 'number' && t - ctx.peerChestsAt < window) return ctx.peerChests
+    const out = []
+    const seen = new Set()
+    if (mem && bot) {
+      try {
+        const own = mem.fileFor(process.env, bot && bot.username)
+        const dir = require('node:path').dirname(own)
+        const world = mem.worldKey(bot)
+        let names = []
+        try { names = require('node:fs').readdirSync(dir).filter((n) => n.endsWith('.json')).sort() } catch (_) { names = [] }
+        for (const n of names) {
+          const f = require('node:path').join(dir, n)
+          if (f === own) continue
+          try {
+            const doc = JSON.parse(require('node:fs').readFileSync(f, 'utf8'))
+            if (!doc || typeof doc !== 'object') continue
+            if (!world || doc.world !== world) continue
+            for (const c of mem.chestSpotsOf(doc.chests)) {
+              const k = chestKeyOf(c)
+              if (k === null || seen.has(k)) continue
+              seen.add(k)
+              out.push(c)
+            }
+          } catch (_) { /* half-written or foreign file: skip */ }
+        }
+      } catch (_) { /* volume unreadable: no peers */ }
+    }
+    ctx.peerChests = out
+    ctx.peerChestsAt = t
+    return out
+  } catch (_) {
+    return []
+  }
+}
+
+// Own sightings plus peer sightings (qwyl), deduped, same near-first
+// filter. bring.js keeps nearbyChests (own only); castlefetch's pickChest
+// takes this one, so a stocked peer chest spares the gather/craft legs.
+function nearbyChestsAll(bot, ctx, seen, radius) {
+  try { refreshPeerChests(bot, ctx) } catch (_) { /* peers best-effort */ }
+  try {
+    const merged = []
+    const keys = new Set()
+    for (const list of [ctx && ctx.chests, ctx && ctx.peerChests]) {
+      if (!Array.isArray(list)) continue
+      for (const c of list) {
+        const k = chestKeyOf(c)
+        if (k === null || keys.has(k)) continue
+        keys.add(k)
+        merged.push(c)
+      }
+    }
+    return filterChests(bot, merged, ctx && ctx.home && ctx.home.chest, seen, radius)
   } catch (_) {
     return []
   }
@@ -1091,10 +1185,36 @@ function distXZ(a, b) {
 }
 // g0z.60: a bank of castle material ("<n> <name>" lines) re-arms the
 // castlefetch bank draw (its dry marks); coal or dirt leave them alone.
+// qwyl 02-after-fix major: the bank also drops the post-draw snapshots —
+// the chest now holds a kind the last open did not see, so pickChest must
+// re-walk it instead of skipping it on the stale snapshot until the TTL.
 function rearmCastleDraw(ctx, names) {
   try {
     const castle = require('./castle')
-    if (names.some((s) => castle.isMaterial(String(s).split(' ').pop(), ctx.castle))) ctx.castleChestDry = null
+    if (names.some((s) => castle.isMaterial(String(s).split(' ').pop(), ctx.castle))) {
+      // qwyl 03-after-fix major: only the home/site chests ever receive
+      // this bot's deposits — drop just their keys, remembered and peer
+      // sightings keep their entries to the 10-min TTL.
+      const own = new Set()
+      for (const c of [ctx && ctx.home && ctx.home.chest, ctx && ctx.castle && ctx.castle.siteChest]) {
+        if (c && typeof c.x === 'number' && typeof c.y === 'number' && typeof c.z === 'number') {
+          own.add(`${c.x},${c.y},${c.z}`)
+          const floored = chestKeyOf(c)
+          if (floored) own.add(floored)
+        }
+      }
+      if (ctx.castleChestState) {
+        for (const k of own) delete ctx.castleChestState[k]
+        if (Object.keys(ctx.castleChestState).length === 0) ctx.castleChestState = null
+      }
+      if (ctx.castleChestDry) {
+        for (const key of Object.keys(ctx.castleChestDry)) {
+          const at = key.slice(key.lastIndexOf('@') + 1)
+          if (own.has(at)) delete ctx.castleChestDry[key]
+        }
+        if (Object.keys(ctx.castleChestDry).length === 0) ctx.castleChestDry = null
+      }
+    }
   } catch (_) { /* marks lapse on their own (CHEST_DRY_MS) */ }
 }
 // True when site banking owns the tick: an active castle, the body near
@@ -2086,6 +2206,8 @@ module.exports.withChest = withChest // craft.js room bank (rwuu): partial junk 
 module.exports.withdrawEdible = withdrawEdible
 module.exports.rememberChests = rememberChests
 module.exports.nearbyChests = nearbyChests
+module.exports.nearbyChestsAll = nearbyChestsAll
+module.exports.refreshPeerChests = refreshPeerChests
 module.exports.chestKeyOf = chestKeyOf
 module.exports.markChestSeen = markChestSeen
 module.exports.NEARBY_CHEST_RADIUS = NEARBY_CHEST_RADIUS

@@ -442,6 +442,14 @@
     "owner": "src/behaviours/castlefetch.js",
     "note": "g0z.60: { '<kind>@x,y,z': ms } bank chests (home/site) a castlefetch draw found drained or unreachable; castlefetch skips them for CHEST_DRY_MS, stockpile clears the map (null) on a castle-material bank (rearmCastleDraw)."
   },
+  "castleChestState": {
+    "writers": [
+      "src/behaviours/castlefetch.js",
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js",
+    "note": "qwyl: { 'x,y,z': { ts, counts } } post-draw chest snapshots, 10-min TTL; castlefetch skips kinds the snapshot does not hold, stockpile clears the map (null) on a castle-material bank (rearmCastleDraw) so banked stock is drawable at once."
+  },
   "castleCursor": {
     "writers": [
       "src/behaviours/castle.js",
