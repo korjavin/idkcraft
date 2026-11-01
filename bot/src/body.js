@@ -129,7 +129,7 @@ function castleWalk(ctx) {
 const danger = require('./danger')
 const swim = require('./swim')
 const castle = require('./castle') // pure blueprint data
-const { NATURAL_SOLID } = require('./behaviours/util') // shared ground set, no cycle (util needs only castle/metrics/residence)
+const SOIL = new Set(['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'mud', 'clay']) // idkcraft-pjsl core-2: dirt-family ground only (bridge/mine.js mirrors the list — bridge/ cannot require outside bridge/)
 const { STONE_ITEMS, isStone } = castle
 
 const SPRINT_DIST = 8
@@ -257,16 +257,24 @@ function scaffoldCobble(bot, mov, on) {
 // v2; its cobble/planks/fences keep the global ban.
 // Transit soil (idkcraft-pjsl): natural ground is no castle kind, so the
 // guard above never named it and Baritone tunnelled castle floors and fence
-// underpassages for transit. Soil joins the HARD ban in both lists —
-// id-global again (bot2 keeps no ctx.castle, so a near-scope would never
-// fire for the prod offender): explicit mine/fill/backfill/lay go through
-// bot.dig/bot.placeBlock and the mine's own allowBreak pin, never through
-// pathing breaks (bridge/mine.js pins it, bridge/index.js skips break keys
-// mid-mine). Rock keeps its near/far treatment above; snow stays out
+// underpassages for transit. Dirt-family ground joins the HARD ban in both
+// lists — id-global again (bot2 keeps no ctx.castle, so a near-scope would
+// never fire for the prod offender): explicit mine/fill/backfill/lay go
+// through bot.dig/bot.placeBlock and the mine's own suspend list
+// (bridge/mine.js sends the soil names, the mod drops them for the call;
+// bridge/index.js skips break keys mid-mine), never through pathing
+// breaks. Rock keeps its near/far treatment above; snow stays out
 // (build clears).
-// ponytail: id-global — v2 never breaks cobble/planks/fences/soil anywhere
-// while pathing (explicit digs unaffected); a shared castle descriptor if
-// v2 must tunnel cobble far from home. v1 never installs it (zero diff).
+// Narrowed (revmux 01 core-2) to dirt-family ground: the first cut banned
+// every NATURAL_SOLID name (sand, gravel, sandstone, ice, nether/end
+// terrain) — far more than a castle stands on. Stranding trade-off, kept
+// deliberately: near a known castle allowPlace=false already holds, so a
+// v2 body in a soil-walled pit has no Baritone exit — it can neither break
+// nor tower until recover's direct bot.dig prims step in
+// (behaviours/recover.js digs cells directly; prims do not path).
+// ponytail: id-global — v2 never breaks cobble/planks/fences/dirt-family
+// soil while pathing (explicit digs unaffected); a shared castle descriptor
+// if v2 must tunnel dirt far from home. v1 never installs it (zero diff).
 // ponytail: the rock ban is a radius around the site, not per cell (Baritone
 // takes names only); a mod-side box hook if v2 must tunnel granite by a castle.
 const BULK_ROCK = new Set(['stone', 'deepslate'])
@@ -284,7 +292,7 @@ function castleNamesGuard(bot, near) {
     const names = Object.keys(byName).filter((n) => live.some((k) => castle.matches(k, n)))
     const bulk = (n) => BULK_ROCK.has(n) || n.endsWith('_log')
     const far = (n) => bulk(n) || LAID_ROCK.has(n)
-    const soil = (n) => NATURAL_SOLID.has(n) && n !== 'snow' && !bulk(n) && !LAID_ROCK.has(n)
+    const soil = (n) => SOIL.has(n)
     const soilNames = Object.keys(byName).filter(soil)
     const lists = (avoid) => ({
       guardNames: names.filter(avoid),

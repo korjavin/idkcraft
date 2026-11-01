@@ -233,11 +233,28 @@ function peerCentre(rot = 0, version = V) {
 }
 
 describe('pjsl v2 transit guard (task 1: soil hard-ban)', () => {
-  it('soil is break-banned with no castle at all (castleless bot2 shape)', () => {
+  it('dirt-family soil is break-banned with no castle at all (castleless bot2 shape)', () => {
     const s = v2Settings(v2Bot(v2Registry()), {})
-    for (const n of ['dirt', 'grass_block', 'gravel', 'sand', 'clay']) {
+    for (const n of ['dirt', 'grass_block', 'clay']) {
       assert.ok(s.ban.includes(n), `${n} banned`)
       assert.ok(!s.avoid.includes(n), `${n} not merely avoided`)
+    }
+  })
+  it('narrowed soil (core-2): only dirt-family ground is banned, sand/gravel/ice/rock left alone', () => {
+    const names = ['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'mud', 'clay',
+      'sand', 'red_sand', 'gravel', 'sandstone', 'red_sandstone', 'ice', 'packed_ice', 'snow_block',
+      'dripstone_block', 'netherrack', 'end_stone', 'muddy_mangrove_roots', 'soul_sand']
+    const blocksByName = {}
+    let id = 1
+    for (const n of names) blocksByName[n] = { id: id++, name: n, diggable: true }
+    const registry = { blocksByName, itemsByName: {} }
+    const s = v2Settings(v2Bot(registry), {})
+    for (const n of ['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'mud', 'clay']) {
+      assert.ok(s.ban.includes(n), `${n} banned`)
+    }
+    for (const n of ['sand', 'red_sand', 'gravel', 'sandstone', 'red_sandstone', 'ice', 'packed_ice',
+      'snow_block', 'dripstone_block', 'netherrack', 'end_stone', 'muddy_mangrove_roots', 'soul_sand']) {
+      assert.ok(!s.ban.includes(n), `${n} not banned (today's behaviour)`)
     }
   })
   it('soil stays banned inside a known peer castle (no own ctx.castle) and far off', () => {
