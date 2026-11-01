@@ -23,7 +23,7 @@ const danger = require('../danger')
 const doors = require('../doors')
 const { botPos, denyReason, logDeny, protectedReason } = require('./util')
 const worker = require('../worker')
-const { waterUpRun, countBuckets, wall2At, findCombo, findComboStand } = require('./waterup')
+const { waterUpRun, countBuckets, wall2At, findCombo, findComboStand, findWaterfall, waterfallUpRun } = require('./waterup')
 const castle = require('../castle') // yardRing only (pure, no requires of its own)
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
@@ -64,7 +64,7 @@ const NEAR_PLAYER = 8
 // probe dist=12; tune inside [16,32] without asking.
 const PIT_GOAL_INSIDE = 24
 
-const RECOVER_ORDER = ['pillar_up', 'dig_up', 'water_up', 'dig_pillar', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
+const RECOVER_ORDER = ['pillar_up', 'dig_up', 'water_up', 'waterfall_up', 'dig_pillar', 'dig_step', 'hop_step', 'sidestep', 'dig_through', 'wait', 'call_player']
 // Generated skills (vf8e.2, src/skills.js): appended to RECOVER_ORDER/MENU/
 // CRITERIA only under BOT_SKILLS=1; empty otherwise, so every line reading
 // it is a no-op with the flag off.
@@ -778,6 +778,10 @@ function recoverFacts(bot, ctx, state, target) {
     // hopStep: decide-time only, never per tick.
     // neuc.34: or from a floor stand a few walks away (the run walks there).
     combo: !!findCombo(bot) || !!findComboStand(bot),
+    // i1cw: a swimmable player-made fall the body already stands in (the
+    // wet climber — water_up above is dry-only). Scanned like combo:
+    // decide-time only, never per tick.
+    fall: !!findWaterfall(bot),
     wall2: wall2At(bot),
     freeSides: sides.free,
     shuffleOut: recoverShuffleBanned(ctx, 'sidestep'),
@@ -822,7 +826,7 @@ function recoverText(facts) {
 function recoverFsm(facts, names) {
   const ok = new Set(Array.isArray(names) ? names : [])
   let failed = null
-  const m = /^(pillar_up|dig_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const m = /^(pillar_up|dig_up|waterfall_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   if (m && ok.size > 1) failed = m[1]
   const pick = (n) => n !== failed && ok.has(n)
   if ((facts.goalDy >= 2 || pitClimb(facts)) && pick('pillar_up')) return 'pillar_up'
@@ -834,6 +838,9 @@ function recoverFsm(facts, names) {
   // the climb is a one-way door (4jr: the goal sits inside the pit, height
   // gained is never given back), and hop/sidestep own the level case.
   if ((facts.goalDy >= 2 || pitClimb(facts, facts.wall2)) && pick('water_up')) return 'water_up'
+  // i1cw: the wet climber rides the same high-goal/hemmed gate (water_up is
+  // dry-only, so the two never compete — one of them is always infeasible).
+  if ((facts.goalDy >= 2 || pitClimb(facts, facts.wall2)) && pick('waterfall_up')) return 'waterfall_up'
   // vmzq.43: the pickless boxed climb — one head dig plus a pillar per
   // block beats the staircase's three digs plus a mount below, so it goes
   // first. The boxed goal-less arm answers the buried castle raise
@@ -849,7 +856,7 @@ function recoverFsm(facts, names) {
   // vf8e.3: a feasible skill is a climb candidate too (empty set with the
   // flag off: unchanged) — else the page preempts it before its turn below.
   if (facts.goalDy >= 2 && facts.playerOnline && facts.walls >= 3 && pick('call_player') &&
-    !ok.has('pillar_up') && !ok.has('dig_up') && !ok.has('water_up') && !ok.has('dig_step') &&
+    !ok.has('pillar_up') && !ok.has('dig_up') && !ok.has('water_up') && !ok.has('waterfall_up') && !ok.has('dig_step') &&
     ![...RECOVER_SKILLS].some((n) => ok.has(n))) return 'call_player'
   // Level goal with a mountable +1 next to the body: hopping it beats a
   // sideways shuffle (cjq: the executor wedges on straight +1 steps with
@@ -887,6 +894,7 @@ const RECOVER_CRITERIA = {
   pillar_up: 'climb: goal is high, or in a pit with the goal far away, scaffold on hand, headroom free — jump and place one block under your feet',
   dig_up: 'climb: goal is high, or in a pit with the goal far away, pickaxe on hand — dig above your head and climb',
   water_up: 'climb: goal is high, or in a pit with the goal far away, water bucket on hand — pour water on the wall, swim up the fall, scoop it back',
+  waterfall_up: 'climb: goal is high, or in a pit with the goal far away, standing in falling water — swim up the fall, no buckets needed',
   dig_pillar: 'climb: buried with no pickaxe, scaffold on hand — dig the block above your head and pillar up through it',
   dig_step: 'climb: low on blocks, pit wall digs by hand or pickaxe — dig one step and climb out',
   hop_step: 'climb: level goal, solid step with air above — back up and hop one block up, no digging',
@@ -910,7 +918,7 @@ async function chooseRecovery(brain, facts, feasible) {
   // Kept when it is the only option; the FSM fallback below still sees it.
   // Decided on askNames, not names (round-2 minors): a menu shrunk to one
   // answer must not cost a brain call on the tick path.
-  const failedM = /^(pillar_up|dig_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const failedM = /^(pillar_up|dig_up|waterfall_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
   // y34/duc shaping after the 4jr exclusion: a failed hop/sidestep is
   // already out, so shaping never hides the dig it escalates to. Before
@@ -1975,6 +1983,20 @@ const RECOVER_MENU = {
       (facts.goalDy >= 2 || pitChain(facts, facts.wall2)),
     verb: 'pouring water to swim up',
   },
+  waterfall_up: {
+    // i1cw: the wet climber (water_up above is dry-only: it pours from
+    // buckets and vetoes facts.water). A body standing IN a player-made
+    // fall with the goal above swims the sheet it stands in — no kit, no
+    // pour, no strip. The run holds jump-only and reports done on leaving
+    // the water higher up; a stall reads failed:no-progress (an S5-known
+    // string) so the menu falls through to sidestep.
+    feasible: (facts, ctx) => facts.water && facts.fall && !facts.lavaNear &&
+      (facts.goalDy >= 2 || pitClimb(facts, facts.wall2)) && !recoverBanned(ctx, 'waterfall_up'),
+    run: waterfallUpRun,
+    repeatable: (facts) => facts.water && facts.fall && !facts.lavaNear &&
+      (facts.goalDy >= 2 || pitChain(facts, facts.wall2)),
+    verb: 'swimming up the waterfall',
+  },
   dig_pillar: {
     // vmzq.43: the pickless boxed climb — one head dig plus a pillar per
     // block instead of the staircase's three digs plus a mount. Boxed-only:
@@ -2048,7 +2070,7 @@ const RECOVER_MENU = {
 // new situation and clears; a done episode re-anchors and clears the kind
 // that worked; bans expire after RECOVER_BAN_MS so a one-off race retries
 // instead of wedging a pillar-only pocket forever.
-const RECOVER_BANNABLE = new Set(['pillar_up', 'water_up', 'hop_step', 'sidestep'])
+const RECOVER_BANNABLE = new Set(['pillar_up', 'water_up', 'waterfall_up', 'hop_step', 'sidestep'])
 // Shuffle kinds (idkcraft-i4wm): sidestep/hop_step dones while boxed in at
 // the same floor prove nothing — the c698 loop shuffled 1 block inside a
 // level-goal pit and called it done, so no fail-streak ever accrued and the
@@ -2498,7 +2520,7 @@ function dropGoal(ctx, facts) {
   // Steep only (horizontal <= 3x rise): a far goal up a long slope is still
   // walkable, and sidestep walking goalward may free it.
   if (Math.sqrt(Math.max(0, facts.goalDist * facts.goalDist - facts.goalDy * facts.goalDy)) > 3 * facts.goalDy) return false
-  return !['pillar_up', 'dig_up', 'water_up', 'dig_step'].some((n) => {
+  return !['pillar_up', 'dig_up', 'water_up', 'waterfall_up', 'dig_step'].some((n) => {
     try { return RECOVER_MENU[n].feasible(facts, ctx) } catch (_) { return false }
   })
 }
@@ -2535,7 +2557,7 @@ function wantsPlan(ctx, rec, facts, names) {
 // regression vs the strict maxCalls gate): call_player stays on the plan
 // menu only when it is the FSM pick; MAX_FAILS still pages as before.
 function askMenu(facts, names) {
-  const failedM = /^(pillar_up|dig_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
+  const failedM = /^(pillar_up|dig_up|waterfall_up|water_up|dig_pillar|dig_step|hop_step|sidestep|dig_through|wait|call_player):failed/.exec((facts && facts.last) || '')
   const unshaped = (failedM && names.length > 1) ? names.filter((n) => n !== failedM[1]) : names
   const fsm = recoverFsm(facts, names)
   return shapeRecoverMenu(unshaped, facts).filter((n) => n !== 'call_player' || fsm === 'call_player')

@@ -157,7 +157,7 @@ describe('i4wm shuffle-done guard', () => {
     const ctx2 = {}
     recover.noteRecoverDone(ctx2, bp, 'sidestep', true)
     recover.noteRecoverDone(ctx2, bp, 'sidestep', true)
-    for (const kind of ['pillar_up', 'dig_up', 'water_up', 'dig_pillar', 'dig_step', 'dig_through', 'wait']) {
+    for (const kind of ['pillar_up', 'dig_up', 'water_up', 'waterfall_up', 'dig_pillar', 'dig_step', 'dig_through', 'wait']) {
       recover.noteRecoverDone(ctx2, bp, kind, true)
       assert.equal(recover.recoverBanned(ctx2, kind), false, `${kind} done never bans`)
     }
