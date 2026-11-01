@@ -988,6 +988,218 @@ function waterUpRun(bot, ctx) {
   return 'failed:error'
 }
 
+// --- existing-fall climb (idkcraft-i1cw) ---
+//
+// Player-made waterfalls: the combo above only climbs POURED source water
+// from buckets in a DRY shaft (its feasible vetoes facts.water, and
+// highPourAt needs an air dest). A body already standing IN a falling sheet
+// — flow or source, multi-block — gets no climber at all: the wet menu is
+// sidestep/wait/call, while the walk leg pushes back into the sheet, so the
+// detector wedges. A swimmable fall is a water column the body stands in
+// that keeps rising: water at the feet now, water continuing up FALL_MIN_UP
+// blocks with no solid inside the column and a non-solid cell above the top
+// to exit into (no kit, no pour, no strip — the run swims the sheet it
+// stands in). Lava gating stays in recover's feasible (lavaNear), like the
+// combo. No new failed strings: done / no-pos / no-progress only, so the S5
+// prod-signal vocabulary is unchanged.
+
+const FALL_MIN_UP = 2 // multi-block falls: a 1-high sheet is a hop/sidestep step
+const FALL_SCAN_UP = 12 // column scan budget; taller falls still offer (open sky past the scan)
+const FALL_TIMEOUT_TICKS = 40 // a 12-block rise at 1.6 b/s plus margin, then failed:no-progress
+const FALL_STALL_TICKS = 6 // no +0.15 gain this long: pinned against the sheet, fail
+const FALL_EXIT_STALL = 3 // ... but a stall with a beach in reach drives out at 3, well short of failing
+const FALL_GAIN = 0.15 // same rise granularity as the combo swim
+
+function fallCellAt(bot, x, y, z) {
+  try {
+    if (!bot || typeof bot.blockAt !== 'function') return null
+    return bot.blockAt(new Vec3(x, y, z))
+  } catch (_) { return null }
+}
+
+// Standing IN the sheet: water at the feet (flow or source climbs the
+// same), or the engine flag where the feet cell reads dry at the edge.
+function inFallWater(bot) {
+  try {
+    const p = botPos(bot)
+    if (!p) return false
+    if (isWater(fallCellAt(bot, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)))) return true
+    return !!(bot && bot.entity && bot.entity.isInWater === true)
+  } catch (_) { return false }
+}
+
+// The fall column from the feet: contiguous water up with no solid inside.
+// Returns { cx, cz, fy, top } or null. The MIN_UP gate and the above-top
+// exit read live in findWaterfall (decide-time); the run re-scans per tick
+// for the plateau surface below.
+function scanFall(bot) {
+  try {
+    const p = botPos(bot)
+    if (!p) return null
+    if (!inFallWater(bot)) return null
+    const cx = Math.floor(p.x)
+    const cz = Math.floor(p.z)
+    const fy = Math.floor(p.y)
+    let top = null
+    for (let y = fy; y <= fy + FALL_SCAN_UP; y++) {
+      const c = fallCellAt(bot, cx, y, cz)
+      if (isWater(c)) { top = y; continue } // eslint-disable-line no-continue
+      if (isAirish(c)) break
+      return null
+    }
+    if (top === null) return null
+    return { cx, cz, fy, top }
+  } catch (_) { return null }
+}
+
+// The climbable fall from the feet: contiguous water up at least
+// FALL_MIN_UP with no solid inside the column and a non-solid cell above
+// the top to exit into. A solid (or a ceiling) inside the column reads null
+// — the sheet is not swimmable past it. Past the scan the sky reads open
+// (scans run within loaded chunks). Returns { topY, height } or null.
+function findWaterfall(bot) {
+  try {
+    const s = scanFall(bot)
+    if (!s) return null
+    if (s.top - s.fy + 1 < FALL_MIN_UP) return null
+    const above = fallCellAt(bot, s.cx, s.top + 1, s.cz)
+    if (!isAirish(above) && !isWater(above)) return null
+    return { topY: s.top, height: s.top - s.fy + 1 }
+  } catch (_) { return null }
+}
+
+// Spread source/flow over solid ground beaches the same as air — the
+// usual player-made fall has its source sitting on the cliff-top lip, so a
+// dry-only step/head read finds no exit one block short of the top. Water
+// counts when it stands on solid ground; open water (nothing to stand on)
+// still reads null and the run treads instead of swimming blind.
+function beachable(cell, support) {
+  if (isAirish(cell)) return true
+  return isWater(cell) && solid(support)
+}
+
+// The surface exit at the top of the sheet (revmux P1 on i1cw): jump-only
+// swimming plateaus with the eye out and the feet still wet — forward stays
+// off in the sheet, so without a beach drive the climb stalls one block
+// below done. A level beach (stand on the top-1 ring, two headroom, wet or
+// dry) or a jump-held step-up beach, goalward first. Null when the top is
+// open water: the run treads the column instead of swimming blind.
+function findFallExit(bot, topY, ctx) {
+  try {
+    const p = botPos(bot)
+    if (!p || topY === null || topY === undefined) return null
+    const cx = Math.floor(p.x)
+    const cz = Math.floor(p.z)
+    // Goalward first: the climb continues toward the goal, not away from it.
+    let gx = 0
+    let gz = 0
+    try {
+      const g = ctx && ctx.stuck && ctx.stuck.goal
+      if (g && typeof g.x === 'number' && typeof g.z === 'number') { gx = g.x - p.x; gz = g.z - p.z }
+    } catch (_) { /* goal-less exit: SIDES order */ }
+    const dirs = SIDES.slice().sort((a, b) => (b[0] * gx + b[1] * gz) - (a[0] * gx + a[1] * gz))
+    for (const [dx, dz] of dirs) {
+      const nx = cx + dx
+      const nz = cz + dz
+      const stand = fallCellAt(bot, nx, topY - 1, nz)
+      const step = fallCellAt(bot, nx, topY, nz)
+      const head = fallCellAt(bot, nx, topY + 1, nz)
+      // Level beach, wet or dry: spread water over the solid lip still mounts.
+      if (solid(stand) && beachable(step, stand) && (isAirish(head) || (isWater(head) && solid(stand)))) return { x: nx + 0.5, y: topY, z: nz + 0.5 }
+      const stand2 = fallCellAt(bot, nx, topY, nz)
+      const step2 = fallCellAt(bot, nx, topY + 1, nz)
+      const head2 = fallCellAt(bot, nx, topY + 2, nz)
+      // Step-up beach: the stand itself may be a drowned step over the lip.
+      const standable2 = solid(stand2) || (isWater(stand2) && solid(stand))
+      if (standable2 && beachable(step2, stand2) && (isAirish(head2) || (isWater(head2) && solid(stand)))) return { x: nx + 0.5, y: topY + 1, z: nz + 0.5 }
+    }
+    return null
+  } catch (_) { return null }
+}
+
+// The tick primitive (ctx.recovery.st holds the phase machine).
+// Jump-only up the sheet (forward=false every tick: the same wall-pin
+// reason as the combo swim — a 1-wide sheet leaves 0.2 gaps, and pressing
+// into the sheet pins the body while the flow shoves it back), then a beach
+// drive past the surface plateau (the eye out, feet still wet: face the lip
+// exit and hold forward, jump still held). Done on leaving the fall column
+// at/above the top — the wet lip keeps the feet wet, so dryness is not the
+// signal; a level walk-out below the top or a stall window reads
+// failed:no-progress so the menu falls through to sidestep.
+function waterfallUpRun(bot, ctx) {
+  const rec = ctx.recovery
+  const fresh = !rec.st
+  const st = rec.st || (rec.st = { phase: 'swim', waited: 0, lastGainTick: 0 })
+  if (fresh) {
+    // Take the body: the same latch/goal cleanup as the combo run — a live
+    // goal repaths into the sheet and fights the 1 Hz ticks.
+    try { clearGoal(bot, ctx) } catch (_) { /* body best-effort */ }
+    try { if (typeof bot.clearControlStates === 'function') bot.clearControlStates() } catch (_) { /* body best-effort */ }
+  }
+  const bp = botPos(bot)
+  if (!bp) return 'failed:no-pos'
+  if (st.startY === undefined || st.startY === null) {
+    st.startY = bp.y
+    st.lastY = bp.y
+    // The fall column being climbed: done reads off-column at/above the
+    // top, not dryness — a spread-wet lip keeps the feet wet past the top.
+    try {
+      const s0 = scanFall(bot)
+      if (s0) { st.colX = s0.cx; st.colZ = s0.cz; st.topY = s0.top }
+    } catch (_) { /* column best-effort */ }
+  }
+  setForward(bot, false)
+  setJump(bot, true)
+  if (bp.y > st.lastY + FALL_GAIN) { st.lastY = bp.y; st.lastGainTick = st.waited }
+  let wet = false
+  try {
+    wet = isWater(cellAt(bot, 0, 0, 0)) ||
+      !!(bot && bot.entity && bot.entity.isInWater === true)
+  } catch (_) { wet = false }
+  // Off the fall column at/above the top: beached (the lip may still be
+  // wet, so dryness is not the signal). A level walk-out below the top
+  // still reads failed:no-progress through the dry arm below.
+  try {
+    if (st.colX !== undefined && st.colX !== null && st.topY !== undefined && st.topY !== null &&
+      (Math.floor(bp.x) !== st.colX || Math.floor(bp.z) !== st.colZ) && Math.floor(bp.y) >= st.topY) {
+      setJump(bot, false)
+      setForward(bot, false)
+      return 'done'
+    }
+  } catch (_) { /* done-read best-effort */ }
+  if (!wet) {
+    setJump(bot, false)
+    setForward(bot, false)
+    return (bp.y >= st.startY + 1) ? 'done' : 'failed:no-progress'
+  }
+  // Plateau drive: the surface reached but the feet still wet — beach onto
+  // the lip instead of treading one block below done. The eye-out read
+  // assumes a full-height source top; a flowing top surfaces lower, so a
+  // stall with a beach in reach drives out too (revmux P2: no fluid heights
+  // anywhere — the stall is the surface signal). Recomputed every tick, so
+  // a body that unpins mid-drive swims on (forward off) instead of pressing
+  // a cleared sheet; the stall/timeout below bound a beach that never lands.
+  const scan = scanFall(bot)
+  const eyeOut = !!scan && bp.y + EYE_HEIGHT >= scan.top + 1
+  const stalled = st.waited - st.lastGainTick >= FALL_EXIT_STALL
+  let exit = null
+  if (scan && (eyeOut || stalled)) exit = findFallExit(bot, scan.top, ctx)
+  if (exit) {
+    st.phase = 'exit'
+    st.exit = exit
+    if (typeof bot.lookAt === 'function') {
+      try { bot.lookAt(new Vec3(exit.x, bp.y + 1.0, exit.z)) } catch (_) { /* facing best-effort */ }
+      setForward(bot, true)
+    }
+  } else {
+    st.phase = 'swim'
+    st.exit = null
+  }
+  if (++st.waited > FALL_TIMEOUT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
+  if (st.waited - st.lastGainTick > FALL_STALL_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
+  return 'running'
+}
+
 module.exports = {
   USE_REACH,
   SCAN_REACH,
@@ -1025,7 +1237,10 @@ module.exports = {
   findLedgePour,
   findCombo,
   findComboStand,
+  findWaterfall,
+  findFallExit,
   waterUpRun,
+  waterfallUpRun,
   equipStep,
   resetEquip,
   handHas,
