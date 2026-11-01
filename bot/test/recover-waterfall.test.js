@@ -23,8 +23,10 @@ function pos(x, y, z) {
 
 function key(x, y, z) { return `${x},${y},${z}` }
 
-// Cliff-face fall world: floor top 61, a cliff at x=1, and a 4-high sheet
-// (0,61..64,0) running down its face with air above to exit into.
+// Cliff-face fall world: floor top 61, a cliff at x=1, a 4-high sheet
+// (0,61..64,0) running down its face with air above to exit into, and the
+// lip it pours over — a ledge at (0,61..63,-1) with top surface 64, the
+// beach the plateau drive mounts.
 function fallWorld() {
   const solids = new Set()
   for (let x = -3; x <= 4; x++) {
@@ -33,9 +35,17 @@ function fallWorld() {
     }
   }
   for (let y = 61; y <= 70; y++) solids.add(key(1, y, 0))
+  for (let y = 61; y <= 63; y++) solids.add(key(0, y, -1))
   const waters = new Set()
   for (let y = 61; y <= 64; y++) waters.add(key(0, y, 0))
   return { solids, waters, lavas: new Set() }
+}
+
+// The same sheet with no lip: open water at the top, nothing to beach on.
+function openFallWorld() {
+  const world = fallWorld()
+  for (let y = 61; y <= 63; y++) world.solids.delete(key(0, y, -1))
+  return world
 }
 
 function worldBot(world, at) {
@@ -74,10 +84,10 @@ function menuNames(bot, stuck) {
   return { facts, names }
 }
 
-// Cheap buoyancy double: the sheet lifts 0.5 a tick until the feet leave
-// the water. The state machine under test — jump held, gain tracked,
-// wet/dry transitions, stall/timeout — is the point, not buoyancy (the
-// eye-out plateau the combo models is skipped here).
+// Server-faithful buoyancy double: the sheet lifts 0.5 a tick only while
+// the eye is under the local surface — the eye-out plateau emerges (the
+// combo models it; the P1 probe pins this run on it). A beach drive toward
+// the aimed exit crosses onto the lip and mounts it with the held jump.
 function harness(bot, ctx) {
   const out = waterup.waterfallUpRun(bot, ctx)
   const p = bot.entity.position
@@ -85,7 +95,33 @@ function harness(bot, ctx) {
   const head = key(Math.floor(p.x), Math.floor(p.y) + 1, Math.floor(p.z))
   const inWater = bot._waters.has(feet) || bot._waters.has(head)
   bot.entity.isInWater = inWater
-  if (bot.controls.jump && inWater && !bot.opts.freezeRise) p.y += 0.5
+  if (bot.controls.jump && inWater && !bot.opts.freezeRise) {
+    let surface = null
+    for (const k of bot._waters) {
+      const [x, y, z] = k.split(',').map(Number)
+      if (x === Math.floor(p.x) && z === Math.floor(p.z) && y + 1 > p.y) {
+        if (surface === null || y + 1 > surface) surface = y + 1
+      }
+    }
+    if (surface !== null && p.y + 1.62 < surface) p.y = Math.min(p.y + 0.5, surface - 1.62 + 0.4)
+  }
+  // Beach crossing: forward taps toward the aimed exit, mounting the lip
+  // once over it (the jump is held).
+  const st = ctx.recovery && ctx.recovery.st
+  if (bot.controls.forward && st && st.phase === 'exit' && st.exit) {
+    const dx = st.exit.x - p.x
+    const dz = st.exit.z - p.z
+    const d = Math.hypot(dx, dz)
+    if (d > 0.05) {
+      const step = Math.min(0.4, d)
+      p.x += (dx / d) * step
+      p.z += (dz / d) * step
+    }
+    if (Math.floor(p.x) === Math.floor(st.exit.x) && Math.floor(p.z) === Math.floor(st.exit.z) &&
+      p.y < st.exit.y && p.y > st.exit.y - 1.6) {
+      p.y = st.exit.y
+    }
+  }
   const below = bot.blockAt({ x: p.x, y: p.y - 0.1, z: p.z })
   bot.entity.onGround = !!below && below.boundingBox !== 'empty' && p.y <= below.position.y + 1.05
   return out
@@ -197,39 +233,69 @@ describe('waterfall_up wiring', () => {
   })
 })
 
+describe('fall exits', () => {
+  it('beaches goalward: the lip behind the fall wins over the cliff', () => {
+    const bot = worldBot(fallWorld())
+    const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
+    assert.deepEqual(waterup.findFallExit(bot, 64, ctx), { x: 0.5, y: 64, z: -0.5 })
+  })
+
+  it('null with open water at the top (tread, never swim blind)', () => {
+    const bot = worldBot(openFallWorld())
+    const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
+    assert.equal(waterup.findFallExit(bot, 64, ctx), null)
+  })
+})
+
 describe('waterfallUpRun', () => {
-  it('swims the sheet: done, higher up, jump held and forward off', async () => {
+  it('swims the sheet then beaches the lip: done, higher up, dry', async () => {
     const bot = worldBot(fallWorld())
     bot._waters = fallWorld().waters
-    const ctx = { recovery: {} }
-    const jumps = []
+    const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
+    const swims = []
     let out = 'running'
     for (let i = 0; i < 40 && out === 'running'; i++) {
       out = harness(bot, ctx)
       await flush()
-      if (out === 'running') jumps.push([!!bot.controls.jump, !!bot.controls.forward])
+      if (out === 'running') swims.push({ jump: !!bot.controls.jump, fwd: !!bot.controls.forward, phase: ctx.recovery.st.phase })
     }
     assert.equal(out, 'done')
     assert.ok(bot.entity.position.y >= 64, 'left the water higher up')
-    assert.ok(jumps.length > 2, 'swam several ticks')
-    assert.ok(jumps.every(([j, f]) => j === true && f === false), 'jump-only the whole climb')
+    assert.ok(swims.length > 2, 'swam several ticks')
+    assert.ok(swims.every((s) => s.jump === true), 'jump held the whole climb')
+    assert.ok(swims.filter((s) => s.phase === 'swim').every((s) => s.fwd === false), 'jump-only up the sheet')
+    assert.ok(swims.some((s) => s.phase === 'exit' && s.fwd === true), 'forward drive past the plateau')
     assert.equal(bot.controls.jump, false, 'releases on done')
+    assert.equal(bot.controls.forward, false, 'releases on done')
   })
 
   it('pinned sheet fails no-progress on the stall window', async () => {
     const bot = worldBot(fallWorld())
     bot._waters = fallWorld().waters
     bot.opts.freezeRise = true
-    const ctx = { recovery: {} }
+    const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
     let out = 'running'
     for (let i = 0; i < 20 && out === 'running'; i++) { out = harness(bot, ctx); await flush() }
     assert.equal(out, 'failed:no-progress')
     assert.equal(bot.controls.jump, false, 'releases on fail')
   })
 
+  it('open top plateaus then treads to no-progress (the P1 probe)', async () => {
+    // No lip to beach on: the eye-out plateau holds, the run treads the
+    // column and fails the stall window instead of hanging.
+    const bot = worldBot(openFallWorld())
+    bot._waters = openFallWorld().waters
+    const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
+    let out = 'running'
+    for (let i = 0; i < 20 && out === 'running'; i++) { out = harness(bot, ctx); await flush() }
+    assert.equal(out, 'failed:no-progress')
+    assert.equal(ctx.recovery.st.phase, 'exit', 'reached the plateau')
+    assert.equal(bot.controls.forward, false, 'never swims blind')
+  })
+
   it('a level walk-out is no-progress, not done', () => {
     const bot = worldBot(fallWorld())
-    const ctx = { recovery: {} }
+    const ctx = { stuck: { by: 'test', goal: { x: 0, y: 70, z: -8 } }, recovery: {} }
     assert.equal(waterup.waterfallUpRun(bot, ctx), 'running')
     bot.entity.position = pos(2.5, 61, 0.5)
     bot.entity.isInWater = false

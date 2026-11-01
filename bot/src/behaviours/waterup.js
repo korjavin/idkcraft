@@ -1027,12 +1027,11 @@ function inFallWater(bot) {
   } catch (_) { return false }
 }
 
-// The climbable fall from the feet: contiguous water up at least
-// FALL_MIN_UP with no solid inside the column and a non-solid cell above
-// the top to exit into. A solid (or a ceiling) inside the column reads null
-// — the sheet is not swimmable past it. Past the scan the sky reads open
-// (scans run within loaded chunks). Returns { topY, height } or null.
-function findWaterfall(bot) {
+// The fall column from the feet: contiguous water up with no solid inside.
+// Returns { cx, cz, fy, top } or null. The MIN_UP gate and the above-top
+// exit read live in findWaterfall (decide-time); the run re-scans per tick
+// for the plateau surface below.
+function scanFall(bot) {
   try {
     const p = botPos(bot)
     if (!p) return null
@@ -1047,19 +1046,71 @@ function findWaterfall(bot) {
       if (isAirish(c)) break
       return null
     }
-    if (top === null || top - fy + 1 < FALL_MIN_UP) return null
-    const above = fallCellAt(bot, cx, top + 1, cz)
+    if (top === null) return null
+    return { cx, cz, fy, top }
+  } catch (_) { return null }
+}
+
+// The climbable fall from the feet: contiguous water up at least
+// FALL_MIN_UP with no solid inside the column and a non-solid cell above
+// the top to exit into. A solid (or a ceiling) inside the column reads null
+// — the sheet is not swimmable past it. Past the scan the sky reads open
+// (scans run within loaded chunks). Returns { topY, height } or null.
+function findWaterfall(bot) {
+  try {
+    const s = scanFall(bot)
+    if (!s) return null
+    if (s.top - s.fy + 1 < FALL_MIN_UP) return null
+    const above = fallCellAt(bot, s.cx, s.top + 1, s.cz)
     if (!isAirish(above) && !isWater(above)) return null
-    return { topY: top, height: top - fy + 1 }
+    return { topY: s.top, height: s.top - s.fy + 1 }
+  } catch (_) { return null }
+}
+
+// The surface exit at the top of the sheet (revmux P1 on i1cw): jump-only
+// swimming plateaus with the eye out and the feet still wet — forward stays
+// off in the sheet, so without a beach drive the climb stalls one block
+// below done. A level beach (stand on the top-1 ring, two headroom) or a
+// jump-held step-up beach, goalward first. Null when the top is open water:
+// the run treads the column instead of swimming blind.
+function findFallExit(bot, topY, ctx) {
+  try {
+    const p = botPos(bot)
+    if (!p || topY === null || topY === undefined) return null
+    const cx = Math.floor(p.x)
+    const cz = Math.floor(p.z)
+    // Goalward first: the climb continues toward the goal, not away from it.
+    let gx = 0
+    let gz = 0
+    try {
+      const g = ctx && ctx.stuck && ctx.stuck.goal
+      if (g && typeof g.x === 'number' && typeof g.z === 'number') { gx = g.x - p.x; gz = g.z - p.z }
+    } catch (_) { /* goal-less exit: SIDES order */ }
+    const dirs = SIDES.slice().sort((a, b) => (b[0] * gx + b[1] * gz) - (a[0] * gx + a[1] * gz))
+    for (const [dx, dz] of dirs) {
+      const nx = cx + dx
+      const nz = cz + dz
+      const stand = fallCellAt(bot, nx, topY - 1, nz)
+      const step = fallCellAt(bot, nx, topY, nz)
+      const head = fallCellAt(bot, nx, topY + 1, nz)
+      if (solid(stand) && isAirish(step) && isAirish(head)) return { x: nx + 0.5, y: topY, z: nz + 0.5 }
+      const stand2 = fallCellAt(bot, nx, topY, nz)
+      const step2 = fallCellAt(bot, nx, topY + 1, nz)
+      const head2 = fallCellAt(bot, nx, topY + 2, nz)
+      if (solid(stand2) && isAirish(step2) && isAirish(head2)) return { x: nx + 0.5, y: topY + 1, z: nz + 0.5 }
+    }
+    return null
   } catch (_) { return null }
 }
 
 // The tick primitive (ctx.recovery.st holds the phase machine).
-// Jump-only the whole climb (forward=false every tick): the same wall-pin
+// Jump-only up the sheet (forward=false every tick: the same wall-pin
 // reason as the combo swim — a 1-wide sheet leaves 0.2 gaps, and pressing
-// into the sheet pins the body while the flow shoves it back. Done on
-// leaving the water higher up; a level walk-out or a stall window reads
-// failed:no-progress so the menu falls through to sidestep.
+// into the sheet pins the body while the flow shoves it back), then a beach
+// drive past the surface plateau (the eye out, feet still wet: face the lip
+// exit and hold forward, jump still held). Done on leaving the water higher
+// up; a level walk-out or a stall window reads failed:no-progress so the
+// menu falls through to sidestep.
 function waterfallUpRun(bot, ctx) {
   const rec = ctx.recovery
   const fresh = !rec.st
@@ -1086,10 +1137,26 @@ function waterfallUpRun(bot, ctx) {
   } catch (_) { wet = false }
   if (!wet) {
     setJump(bot, false)
+    setForward(bot, false)
     return (bp.y >= st.startY + 1) ? 'done' : 'failed:no-progress'
   }
-  if (++st.waited > FALL_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:no-progress' }
-  if (st.waited - st.lastGainTick > FALL_STALL_TICKS) { setJump(bot, false); return 'failed:no-progress' }
+  // Plateau drive: the eye is out over the top water but the feet are still
+  // wet — beach onto the lip instead of treading one block below done. The
+  // phase sticks once taken (bobbing at the surface must not flap the aim),
+  // and the stall/timeout below still bound a beach that never lands.
+  const scan = scanFall(bot)
+  const eyeOut = !!scan && bp.y + EYE_HEIGHT >= scan.top + 1
+  if (eyeOut) {
+    st.phase = 'exit'
+    const exit = findFallExit(bot, scan.top, ctx)
+    st.exit = exit || null
+    if (exit && typeof bot.lookAt === 'function') {
+      try { bot.lookAt(new Vec3(exit.x, bp.y + 1.0, exit.z)) } catch (_) { /* facing best-effort */ }
+      setForward(bot, true)
+    }
+  }
+  if (++st.waited > FALL_TIMEOUT_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
+  if (st.waited - st.lastGainTick > FALL_STALL_TICKS) { setJump(bot, false); setForward(bot, false); return 'failed:no-progress' }
   return 'running'
 }
 
@@ -1131,6 +1198,7 @@ module.exports = {
   findCombo,
   findComboStand,
   findWaterfall,
+  findFallExit,
   waterUpRun,
   waterfallUpRun,
   equipStep,
