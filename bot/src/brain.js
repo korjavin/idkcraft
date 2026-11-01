@@ -365,6 +365,78 @@ function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MO
   return { plan }
 }
 
+// Tick-menu ask answered by a text LLM (idkcraft-82zl): the same one-line
+// JSON menu shape as llmPlanner but returning the chosen label, like
+// jevBrain.ask, so chooseStep/retreat can consult it. Budgeted by
+// LLM_TOKENS_PER_HOUR inside llmCall; single-option menus answer directly,
+// like the jev ask. Timeout defaults to the tick deadline: a late menu
+// answer is a stall, and chooseStep falls back to the FSM on timeout.
+function llmAsk(apiKey, fetchFn, timeoutMs = 1000, model = LLM_MODEL) {
+  async function ask({ state, instructions, criteria, labels = null, situation = '' }) {
+    const keys = Object.keys(criteria || {})
+    const valid = Array.isArray(labels) && labels.length ? labels : keys
+    if (keys.length === 0) throw new Error('llm missing ask answer')
+    if (keys.length === 1) {
+      if (situation) askErrors.delete(situation)
+      return keys[0]
+    }
+    const endTimer = metrics.brainDuration.startTimer({ source: 'llm' })
+    try {
+      const ac = new AbortController()
+      const timer = setTimeout(() => ac.abort(new DOMException('brain timeout', 'TimeoutError')), timeoutMs)
+      const user = `${instructions || 'Pick the next option.'}\n\nState:\n${state}\n\nOptions (id: criterion):\n` +
+        keys.map((k) => `${k}: ${criteria[k]}`).join('\n')
+      let data
+      try {
+        data = await llmCall({
+          use: 'ask',
+          apiKey,
+          signal: ac.signal,
+          fetchFn,
+          body: {
+            model,
+            max_tokens: 300,
+            // A one-line menu pick: no thinking keeps it inside the tick deadline.
+            thinking: { type: 'disabled' },
+            system: LLM_SYSTEM,
+            messages: [{ role: 'user', content: user }],
+          },
+        })
+      } finally {
+        clearTimeout(timer)
+      }
+      const text = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+      let ans = null
+      try {
+        ans = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
+      } catch (_) {
+        ans = null
+      }
+      const choice = ans && ans.choice
+      if (typeof choice !== 'string' || !valid.includes(choice)) throw new Error('llm missing ask answer')
+      if (situation) askErrors.delete(situation)
+      endTimer()
+      metrics.brainRequests.inc({ source: 'llm', outcome: 'ok' })
+      metrics.llmCalls.inc({ use: 'ask', outcome: 'ok' })
+      return choice
+    } catch (err) {
+      endTimer()
+      const msg = String(err && err.message ? err.message : err)
+      const outcome = err && err.name === 'TimeoutError' ? 'timeout'
+        : msg.startsWith('llm http') ? 'http'
+        : msg.startsWith('llm missing') ? 'invalid'
+        : msg.startsWith('llm budget') ? 'budget'
+        : 'error'
+      // brain_requests keeps its vocabulary: a budget skip counts as error there.
+      metrics.brainRequests.inc({ source: 'llm', outcome: outcome === 'budget' ? 'error' : outcome })
+      metrics.llmCalls.inc({ use: 'ask', outcome })
+      streakFail(situation)
+      throw err
+    }
+  }
+  return { ask }
+}
+
 // Planner selection (vhlb.2): PLANNER=llm|jev; default llm when
 // ANTHROPIC_API_KEY exists, else jev (which already rides every
 // TYPESAFE-keyed brain). Only the llm choice changes a brain: no
@@ -595,17 +667,30 @@ function hybridBrain(remote) {
   }
 }
 
-// vhlb.5: the tick ask (laya/JEV) is out of the decision path — the A/B
-// (vhlb.1) showed neither beats the stub FSM. The base brain is always the
-// stub; a TYPESAFE key only adds the stall-point plan() (JEV), and
-// withPlanner may swap in the LLM one. BRAIN_URL is ignored (prod still has
-// it set to JEV); jevBrain/hybridBrain stay for the manual 'brain jev|laya'.
+// vhlb.5 retired the tick DECIDE ask (laya/JEV) — the A/B (vhlb.1) showed
+// neither beats the stub FSM on combat, so decide() stays the stub here.
+// u19u B (idkcraft-82zl) wires back only the menu ask: the prod brain
+// carries ask() so the goal classifier arbitration (chooseStep) and retreat
+// consult the model, not just a manual 'brain jev|laya'. BRAIN_URL stays
+// ignored (prod still has it set to JEV); jevBrain/hybridBrain stay for
+// the manual 'brain jev|laya'.
 function makeBrain(env) {
   const key = env && env.TYPESAFE_API_KEY
-  if (env && env.BRAIN_URL) console.log('BRAIN_URL ignored: the tick ask is retired (idkcraft-vhlb.5)')
-  const b = withPlanner(key ? { ...stubBrain, ...planner(key) } : stubBrain, env)
-  console.log(`brain=stub planner=${plannerName(b)}`)
+  if (env && env.BRAIN_URL) console.log('BRAIN_URL ignored: combat tick ask stays retired (vhlb.5); the menu ask rides the PLANNER seam (idkcraft-82zl)')
+  const base = key ? { ...stubBrain, ...planner(key) } : stubBrain
+  // PLANNER seam: llm when ANTHROPIC_API_KEY is set (budgeted by
+  // LLM_TOKENS_PER_HOUR inside llmCall), else jev when TYPESAFE_API_KEY is.
+  // source names the asker so chooseStep shapes menus like the manual
+  // brain (jev asks the full menu; anything else gets the hg8 shaping).
+  let b = base
+  if (plannerChoice(env) === 'llm') {
+    b = { ...base, source: 'llm', ask: llmAsk(env.ANTHROPIC_API_KEY, undefined, brainTimeoutMs(env), env.LLM_MODEL || LLM_MODEL).ask }
+  } else if (key) {
+    b = { ...base, source: 'jev', ask: jevBrain(key, undefined, brainTimeoutMs(env), JEV_ENDPOINT).ask }
+  }
+  b = withPlanner(b, env)
+  console.log(`brain=stub planner=${plannerName(b)} ask=${(b.ask && b.source) || 'none'}`)
   return b
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, llmCall, llmTokensPerHour, resetLlmBudget }
+module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, llmAsk, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, llmCall, llmTokensPerHour, resetLlmBudget }

@@ -139,6 +139,25 @@ describe('autonomous mode', () => {
     assert.equal(ticker.getBrainEngine(), 'jev', 'restored on join')
   })
 
+  it('82zl: prod (non-manual) jev brain steps down alone and restores the menu ask on join', async () => {
+    // No 'brain jev' chat: manualBrain stays null, so the restore path
+    // rebuilds the prod brain through makeBrain instead of the manual hybrid.
+    process.env.TYPESAFE_API_KEY = 'k'
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev', autonomous: true })
+    await ticker.tick()
+    bot.players = {}
+    for (let i = 0; i < 3; i++) await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'off', 'paid ask steps down with nobody online')
+    assert.equal(bot._tickerCtx.brain.ask, undefined, 'no tick ask while off')
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'jev', 'prod ask brain returns on join')
+    assert.equal(typeof bot._tickerCtx.brain.ask, 'function', 'menu ask restored')
+    assert.equal(typeof bot._tickerCtx.brain.plan, 'function', 'stall planner restored')
+  })
+
   it('metric tracks the toggle', () => {
     const bot = mockBot()
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }

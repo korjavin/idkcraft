@@ -480,13 +480,53 @@ describe('configurable brain endpoint (laya sidecar)', () => {
 })
 
 describe('makeBrain', () => {
-  it('is always the stub: no tick ask with a key or a BRAIN_URL (vhlb.5)', () => {
-    for (const env of [{}, { TYPESAFE_API_KEY: '' }, { TYPESAFE_API_KEY: 'x' }, { BRAIN_URL: 'http://laya:8000/v1/systemone' }, { BRAIN_URL: JEV_ENDPOINT, TYPESAFE_API_KEY: 'x' }]) {
+  it('keyless prod is the bare stub: no ask, no plan', () => {
+    for (const env of [{}, { TYPESAFE_API_KEY: '' }, { BRAIN_URL: 'http://laya:8000/v1/systemone' }]) {
       const b = makeBrain(env)
       assert.equal(b.name, 'stub')
       assert.equal(b.ask, undefined)
+      assert.equal(b.plan, undefined)
     }
-    assert.equal(typeof makeBrain({ TYPESAFE_API_KEY: 'x' }).plan, 'function', 'key keeps plan()')
+  })
+  it('TYPESAFE key wires the jev menu ask; combat decide stays the stub (82zl)', async () => {
+    // jevBrain captures fetch at construction: stub before makeBrain.
+    let calls = 0
+    const origFetch = global.fetch
+    global.fetch = async (url, opts) => {
+      calls++
+      assert.equal(url, JEV_ENDPOINT)
+      assert.deepEqual(Object.keys(JSON.parse(opts.body).questions), ['action'])
+      return { ok: true, json: async () => ({ answers: { action: { choice: 'gather' } } }) }
+    }
+    // The single stub serves construction (captured) and the ask below.
+    const b = makeBrain({ TYPESAFE_API_KEY: 'x' })
+    assert.equal(b.name, 'stub')
+    assert.equal(b.source, 'jev')
+    assert.equal(typeof b.ask, 'function', 'classifier arbitration consults the model')
+    assert.equal(typeof b.plan, 'function', 'key keeps plan()')
+    assert.equal(b.decide, stubBrain.decide, 'no combat tick ask (vhlb.5 stands)')
+    // The wired ask actually posts the menu and returns the label.
+    try {
+      assert.equal(await b.ask({ state: 's', instructions: 'i', criteria: { gather: 'g', craft: 'c' } }), 'gather')
+    } finally {
+      global.fetch = origFetch
+    }
+    assert.equal(calls, 1)
+    // Hard combat states still answer from the FSM without touching the network.
+    global.fetch = async () => { calls++; throw new Error('must not be called') }
+    try {
+      assert.equal((await b.decide({ distance_to_player: 12 })).source, 'stub')
+    } finally {
+      global.fetch = origFetch
+    }
+    assert.equal(calls, 1)
+  })
+  it('PLANNER=jev keeps the jev ask with both keys', () => {
+    const b = makeBrain({ ANTHROPIC_API_KEY: 'a', TYPESAFE_API_KEY: 'j', PLANNER: 'jev' })
+    assert.equal(b.source, 'jev')
+    assert.equal(typeof b.ask, 'function')
+    assert.equal(b.decide, stubBrain.decide)
+    assert.equal(typeof b.plan, 'function')
   })
 })
 

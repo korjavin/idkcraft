@@ -1847,7 +1847,7 @@ function shapeGoalMenu(names, model) {
 // exactly like hybridBrain: { step, source, fsm, model }. source is
 // only-option (single feasible step, or a shaped [work, rest] pair answered
 // without asking — shapeGoalMenu above — model not asked), goal-fsm (no ask
-// method: stub brain or unit tests), <brain source> (model answered) or
+// method: keyless prod brain or unit tests), <brain source> (model answered) or
 // fsm-fallback (model consulted and failed). model is the consulted brain
 // source or null when nothing was asked.
 async function chooseStep(brain, facts, feasible, home, extra) {

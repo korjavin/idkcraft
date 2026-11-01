@@ -312,14 +312,16 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   function autoBrain(rosterOnline) {
     // zchb: a running flat works alone too; a pending restore still needs the join edge.
     if (!ctx.autonomous && !(ctx.flat && !ctx.flat.parked) && !ctx.brainRestore) return
-    if (!rosterOnline && brainEngine === 'jev' && !ctx.brainRestore) {
+    // 82zl: any paid asker steps down alone (jev or llm tick menus); the
+    // local laya engine never steps down, as before.
+    if (!rosterOnline && (brainEngine === 'jev' || brainEngine === 'llm') && !ctx.brainRestore) {
       const to = 'off'
       // Alone-exemption for plan() only (idkcraft-vmzq.5): the tick ask
       // runs off, but the stall-point planner still reaches JEV (only when
       // the key exists).
       const key = process.env.TYPESAFE_API_KEY
       const next = key ? { ...stubBrain, ...planner(key) } : stubBrain
-      ctx.brainRestore = { from: 'jev', manual: ctx.manualBrain === 'jev' }
+      ctx.brainRestore = { from: brainEngine, manual: ctx.manualBrain === 'jev', prod: !ctx.manualBrain }
       doSetBrain(next, to)
       console.log(`brain auto to=${to} (nobody online)`)
       return
@@ -329,6 +331,14 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         const next = hybridBrain(jevBrain(process.env.TYPESAFE_API_KEY, undefined, brainTimeoutMs(process.env), JEV_ENDPOINT))
         doSetBrain(next, 'jev')
         console.log('brain auto to=jev (player joined)')
+      } else if (ctx.brainRestore && ctx.brainRestore.prod) {
+        // 82zl: a stepped-down prod brain comes back through makeBrain so
+        // the menu ask (and the PLANNER plan) return on join — without this
+        // the first empty-server episode would park prod on FSM until restart.
+        const next = makeBrain(process.env)
+        const engine = typeof next.ask === 'function' ? (next.source || 'jev') : 'off'
+        doSetBrain(next, engine)
+        console.log(`brain auto to=${engine} (player joined, prod restore)`)
       }
       ctx.brainRestore = null
     }
@@ -1663,8 +1673,11 @@ async function main() {
   const username = process.env.BOT_USERNAME || 'IdkBot'
   const followName = process.env.BOT_FOLLOW || ''
   const brain = makeBrain(process.env)
-  // makeBrain is always the stub FSM (vhlb.5); only a manual 'brain jev|laya' asks.
-  const brainEngine = 'off'
+  // 82zl: the prod brain carries a menu ask (PLANNER seam) so the goal
+  // classifier arbitrates in prod; combat decide() stays the stub FSM.
+  // The engine mirrors the asker so the alone-guard (autoBrain) treats a
+  // paid prod ask like a manual jev/llm brain, and the chat report matches.
+  const brainEngine = typeof brain.ask === 'function' ? (brain.source || 'jev') : 'off'
   metrics.serve(parseInt(process.env.METRICS_PORT || '9464', 10))
   const pingFn = require('minecraft-protocol').ping
   for (;;) {

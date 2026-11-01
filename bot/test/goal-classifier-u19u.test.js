@@ -2,13 +2,14 @@
 
 // Classifier plug contract, phase 1 (idkcraft-u19u §§1.1-1.3, §3):
 // chooseStep consults a brain with ask() and falls back to the FSM with a
-// disagreement reference. Prod note: the tick brain has no ask() (vhlb.5),
-// so prod decides by FSM rank until a tick ask is wired; these tests pin
-// the contract with a hand-built asking brain. No C/deadlock behaviour here.
+// disagreement reference. Prod note: the tick brain carries ask() since
+// idkcraft-82zl (PLANNER seam); these tests pin the contract with a
+// hand-built asking brain. No C/deadlock behaviour here.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const goal = require('../src/goal')
+const { makeBrain, JEV_ENDPOINT } = require('../src/brain')
 const metrics = require('../src/metrics')
 
 const facts = (over = {}) => ({
@@ -123,5 +124,31 @@ describe('goal classifier plug (u19u phase 1)', () => {
     assert.equal(r.step, 'forage')
     assert.equal(r.fsm, 'gather')
     assert.equal(await disagreements('forage', 'gather'), before + 1)
+  })
+
+  it('82zl: makeBrain with a key yields a brain chooseStep asks', async () => {
+    // The bead's acceptance: the prod brain carries ask(), so the
+    // classifier arbitration runs against the stubbed model, not goal-fsm.
+    // FSM ranks craft above gather on the default facts; the model picks gather.
+    // jevBrain captures fetch at construction: stub before makeBrain.
+    const origFetch = global.fetch
+    global.fetch = async (url, opts) => {
+      assert.equal(url, JEV_ENDPOINT)
+      const q = JSON.parse(opts.body).questions.action
+      assert.deepEqual(Object.keys(q.criteria).sort(), ['craft', 'gather', 'rest'])
+      return { ok: true, json: async () => ({ answers: { action: { choice: 'gather' } } }) }
+    }
+    let brain
+    try {
+      brain = makeBrain({ TYPESAFE_API_KEY: 'k' })
+      assert.equal(typeof brain.ask, 'function')
+      const r = await goal.chooseStep(brain, facts(), ['gather', 'craft', 'rest'], null)
+      assert.equal(r.step, 'gather')
+      assert.equal(r.source, 'jev')
+      assert.equal(r.fsm, 'craft')
+      assert.equal(r.model, 'jev')
+    } finally {
+      global.fetch = origFetch
+    }
   })
 })
