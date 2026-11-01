@@ -839,6 +839,15 @@ async function requestRecipe(bot, ctx, target, opts = {}) {
   return { recipe: shape.recipe, tokens }
 }
 
+// One capability check: 'ok' or { impossible }. Never throws.
+function checkStep(caps, bot, ctx, s, made) {
+  try {
+    const cap = caps[s.do]
+    const v = typeof cap === 'function' ? cap(bot, ctx, s.item, made) : { impossible: 'no capability' }
+    return v === 'ok' ? 'ok' : v
+  } catch (_) { return { impossible: 'capability threw' } }
+}
+
 // Resolve the full recipe tree for target: one model call per level.
 // Materials resolve first: unknown ones recurse (each its own call,
 // depth+1), so their outputs fund the craft steps below. Then every step
@@ -886,6 +895,17 @@ async function planRecipe(bot, ctx, target, opts = {}) {
       return { fail: 'mismatch', step: last, reason: `recipe makes ${last && last.item}, not ${t}` }
     }
   }
+  // Phase 1: every step that needs no funding validates now, before any
+  // material spends a model call — a doomed level aborts on the first call.
+  for (const s of steps) {
+    if (s.do === 'craft') continue
+    const v = checkStep(caps, bot, ctx, s, null)
+    if (v !== 'ok') {
+      log('impossible', ` step=${s.do} ${s.item} tokens=${toks[0]}`)
+      return { fail: 'impossible', step: { do: s.do, item: s.item }, reason: String((v && v.impossible) || 'not possible').slice(0, 80) }
+    }
+  }
+  // Phase 2: unknown materials recurse, funding the craft steps below.
   const produced = new Set(steps.map((s) => s.item))
   const queue = []
   for (const m of r.recipe.materials) {
@@ -897,19 +917,19 @@ async function planRecipe(bot, ctx, target, opts = {}) {
     queue.push(...sub.queue)
     toks.push(sub.tokens || '0/0')
   }
-  const made = new Set(queue.map((s) => s.item))
+  // Phase 3: craft steps validate in order against `made` — sub outputs,
+  // then each validated step, counted (a smelt/gather/fill rung yields one
+  // unit in recipe execution, so 3 ingots need 3 funding steps, not one).
+  const made = new Map()
+  for (const s of queue) made.set(s.item, (made.get(s.item) || 0) + 1)
   for (const s of steps) {
-    let v = null
-    try {
-      const cap = caps[s.do]
-      v = typeof cap === 'function' ? cap(bot, ctx, s.item, made) : { impossible: 'no capability' }
-    } catch (_) { v = { impossible: 'capability threw' } }
+    if (s.do !== 'craft') { made.set(s.item, (made.get(s.item) || 0) + 1); continue }
+    const v = checkStep(caps, bot, ctx, s, made)
     if (v !== 'ok') {
-      const reason = (v && v.impossible) || 'not possible'
       log('impossible', ` step=${s.do} ${s.item} tokens=${toks[0]}`)
-      return { fail: 'impossible', step: { do: s.do, item: s.item }, reason: String(reason).slice(0, 80) }
+      return { fail: 'impossible', step: { do: s.do, item: s.item }, reason: String((v && v.impossible) || 'not possible').slice(0, 80) }
     }
-    made.add(s.item)
+    made.set(s.item, (made.get(s.item) || 0) + 1)
   }
   queue.push(...steps)
   const tokens = toks.join('+')

@@ -17,6 +17,7 @@
 const stockpileMod = require('./stockpile')
 const woolMod = require('./wool')
 const bedMod = require('./bed')
+const obsidianMod = require('./obsidian') // 6ci5.1 (merged): the mine-runnable check, a require-free leaf
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const { say, clearGoal } = require('./util')
@@ -70,9 +71,10 @@ const recipeCaps = {
     try { p = craftany().planCraft(bot, ctx, [name], 1) } catch (_) { return { impossible: 'craft threw' } }
     if (p && p.ok) return 'ok'
     // Funded by earlier validated steps (sub-recipe outputs, then each step
-    // in order): the pack check above cannot see what the queue makes first.
+    // in order, counted — a rung yields one unit): the pack check above
+    // cannot see what the queue makes first.
     if (p && p.fail === 'missing' && Array.isArray(p.missing) && p.missing.length > 0 &&
-        p.missing.every((e) => e && made instanceof Set && made.has(e.name))) return 'ok'
+        p.missing.every((e) => e && made instanceof Map && (made.get(e.name) || 0) >= (e.need || 1))) return 'ok'
     return { impossible: (p && (p.line || p.fail)) || 'no recipe' }
   },
   smelt: (bot, ctx, name) => {
@@ -99,17 +101,20 @@ const recipeCaps = {
     if (name !== 'water_bucket') return { impossible: 'not fillable' }
     return hasEmptyBucket(bot) ? 'ok' : { impossible: 'no empty bucket' }
   },
-  // 6ci5-A consumption seam (sibling bead idkcraft-6ci5.1): the mine-capable
-  // rung A adds is wired here, from its own file (bring.js already requires
-  // this module, so no new edge either way) — B never adds mine legs or
-  // ladder dispatch itself. The second of the two beads to merge assigns
-  // `mineLeg` to the rung `(bot, ctx, o)` (mine + deliver, owns its
-  // terminal) and, when it serves a subset of names, narrows `mine` the
-  // same way; A serving obsidian through the block ladder can instead route
-  // the mine step there once both are on master. Absent reads as no mine
-  // capability and the step aborts honestly.
-  mineLeg: null,
-  mine: (bot, ctx, name) => (typeof recipeCaps.mineLeg === 'function' ? 'ok' : { impossible: 'no mine leg' }),
+  // Mine execution (idkcraft-6ci5.2 over merged 6ci5.1): the obsidian block
+  // order — A's ladder mines exposed obsidian with a diamond pick and
+  // delivers it, so the step morphs the recipe order onto the kind-'block'
+  // find legs instead of adding a leg. B never adds mine legs or ladder
+  // dispatch: `mine` stays narrowed to the names that rung serves (obsidian
+  // today), and the queue-end delivery below owns the terminal. Patchable
+  // like every other cap (unit tests restore it).
+  mineLeg: (bot, ctx, o) => openObsidianMine(bot, ctx, o),
+  mine: (bot, ctx, name) => {
+    if (!obsidianMod.isObsidianName(name)) return { impossible: 'no mine leg' }
+    // A's dig needs the diamond tier (bringbase gate) — without it the dig
+    // drops nothing, so the step fails here, not mid-recipe.
+    return hasPickaxe(bot, 'obsidian') ? 'ok' : { impossible: tierRefusal(bot, 'obsidian') }
+  },
 }
 
 // Share keep-list (idkcraft-ah9): tools, weapons, armour, plus a 32-block
@@ -427,6 +432,33 @@ function abortRecipe(bot, ctx, o, res) {
   refuse(bot, ctx, line)
 }
 
+// Morph the recipe order onto 6ci5.1's obsidian block order: exposed
+// obsidian the ladder can see, mined with the validated diamond tier. The
+// fresh find legs re-derive everything (memory, chests, search legs); the
+// return walk lands back in the recipe via the return branch, and the
+// queue-end delivery below owns the terminal.
+function openObsidianMine(bot, ctx, o) {
+  const R = o && o.recipe
+  const want = (R && R.want > 0) ? R.want : 1
+  o.kind = 'block'
+  o.name = 'obsidian'
+  o.names = ['obsidian']
+  o.block = null
+  o.pos = null
+  o.drop = 'obsidian'
+  o.have = 0
+  o.want = want
+  o.phase = 'find'
+  o.announced = false
+  o.skip = null
+  o.search = null
+  o.memKnown = null
+  o.buried = null
+  o.farCache = null
+  o.deepVein = null
+  o.sawSubmerged = false
+}
+
 // Run the next validated recipe step through the ladder rung it names —
 // craft/smelt/gather/fill morphs the open order, mine calls the sibling rung
 // (validated present). Completions land back in enterCraftOrRefuse (or
@@ -472,6 +504,10 @@ function recipeNext(bot, ctx, o) {
   }
   if (step.do === 'smelt') {
     const pack = packCounts(bot)
+    // The step owns the names while it runs: an ore sub that fills resumes
+    // through the normal ladder, which keys the smelt rung off o.names.
+    o.names = [step.item]
+    o.want = 1
     const g = smeltRung(bot, ctx, o, { out: step.item, need: 1, have: pack[step.item] || 0 }, R.target)
     if (g && g.open) { say(bot, `${tag}: ${g.line}`); return }
     R.done = true
@@ -482,6 +518,8 @@ function recipeNext(bot, ctx, o) {
     const pack = packCounts(bot)
     let color = null
     try { color = woolMod.dropColor(step.item) } catch (_) { color = null }
+    o.names = [step.item]
+    o.want = 1
     const line = openSubOrder(bot, ctx, o, { name: step.item, need: 1, have: pack[step.item] || 0 }, R.target, color)
     if (line) { say(bot, `${tag}: ${line}`); return }
     R.done = true
@@ -495,13 +533,16 @@ function recipeNext(bot, ctx, o) {
     return
   }
   if (step.do === 'mine') {
+    // Validated present: the rung morphs onto the block legs, which own the
+    // middle (find/walk/dig/pickup/return); the queue-end delivery below
+    // owns the terminal when the return branch re-enters. R stays executing.
     const leg = recipeCaps.mineLeg
     if (typeof leg !== 'function') {
       R.done = true
       refuse(bot, ctx, `can't get ${R.target}: recipe needs mine ${step.item} (no mine leg)`)
       return
     }
-    R.done = true // the sibling rung owns the rest; later rung ends never re-advance the queue
+    say(bot, `${tag}: mining ${step.item}`)
     try { leg(bot, ctx, o) } catch (_) { refuse(bot, ctx, `could not mine ${step.item} for the ${R.target}`) }
     return
   }

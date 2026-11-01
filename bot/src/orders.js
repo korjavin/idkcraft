@@ -399,19 +399,24 @@ function createOrders(box) {
           kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
           items: [], drop: null, have: 0, phase: 'recipe', announced: true, keptName,
         }
-        // Installed before the fallback fires: the late answer (and the
-        // alive gate) keys off ctx.bring identity.
-        if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
-        ctx.unseenTicks = 0
-        ctx.resumeWork = false
-        clearStuck()
-        homeMod.releaseMeet(bot, ctx)
-        ctx.bring = ro
-        ctx.paused = false
-        if (bringMod.startRecipeFallback(bot, ctx, ro)) {
-          return `no recipe for ${resolved.family} — asking how to get it…`
+        // Gate first: the install below (lead drop, unpause, meet release)
+        // must never run for a refusal the fallback declines — with the LLM
+        // gate off (the prod default) this path stays byte-identical to the
+        // old instant refusal. Installed before the fallback fires when open:
+        // the late answer (and the alive gate) keys off ctx.bring identity.
+        if (bringMod.canRecipeFallback(bot, ro)) {
+          if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+          ctx.unseenTicks = 0
+          ctx.resumeWork = false
+          clearStuck()
+          homeMod.releaseMeet(bot, ctx)
+          ctx.bring = ro
+          ctx.paused = false
+          if (bringMod.startRecipeFallback(bot, ctx, ro)) {
+            return `no recipe for ${resolved.family} — asking how to get it…`
+          }
+          if (ctx.bring === ro) ctx.bring = null // gate closed late: no half order left behind
         }
-        if (ctx.bring === ro) ctx.bring = null // gate closed: no half order left behind
         return bringMod.itemRefusal(bot, resolved.family, resolved, keptName)
       }
       if (!res) {

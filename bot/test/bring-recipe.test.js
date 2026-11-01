@@ -255,17 +255,9 @@ describe('recipe execution', () => {
     assert.deepEqual(bot.lines, ["can't get atlantium: no recipe, no source"])
   })
 
-  it('obsidian queue runs to the wired mine leg with the real fill check', async () => {
+  it('obsidian queue runs the real mine leg with the real fill check', async () => {
     answerFor = RECIPE_OBSIDIAN
-    const bot = mockBot([{ name: 'bucket', count: 1 }])
-    // The 6ci5.1 rung is not on this base: a fake stands in for it, while
-    // fill/held/mine validation all run live.
-    let legged = null
-    bringitem.recipeCaps.mineLeg = (b, c, oo) => {
-      legged = oo
-      b.chat('mining obsidian (fake leg)')
-      require('../src/behaviours/bringbase').done(b, c)
-    }
+    const bot = mockBot([{ name: 'bucket', count: 1 }, { name: 'diamond_pickaxe', count: 1 }])
     const ctx = {}
     const o = { kind: 'item', name: 'obsidian', names: ['obsidian'], want: 1, by: 'P' }
     ctx.bring = o
@@ -278,10 +270,57 @@ describe('recipe execution', () => {
     // directly like the branch does.
     bot._items.push({ name: 'water_bucket', count: 1 })
     bringitem.recipeNext(bot, ctx, o)
-    assert.equal(legged, o, 'mine leg got the order')
-    assert.equal(ctx.bring, null, 'fake leg ended the order')
-    assert.ok(bot.lines.includes('mining obsidian (fake leg)'))
+    assert.equal(o.kind, 'block', 'mine step morphs onto the 6ci5.1 block order')
+    assert.equal(o.phase, 'find')
+    assert.equal(o.name, 'obsidian')
+    assert.equal(o.drop, 'obsidian')
+    assert.equal(ctx.bring, o, 'order stays open for the ladder')
+    assert.ok(bot.lines.some((l) => l === 'recipe for obsidian 2/2: mining obsidian'), `mine announced: ${bot.lines}`)
     assert.ok(logs.some((l) => /outcome=attempt/.test(l) && /fill water_bucket,mine obsidian/.test(l)), `attempt logged: ${logs}`)
+  })
+
+  it('mine validates the obsidian name and the diamond tier', () => {
+    assert.equal(bringitem.recipeCaps.mine(mockBot([{ name: 'diamond_pickaxe', count: 1 }]), {}, 'obsidian'), 'ok')
+    assert.match(bringitem.recipeCaps.mine(mockBot([]), {}, 'obsidian').impossible, /diamond pickaxe/)
+    assert.match(bringitem.recipeCaps.mine(mockBot([{ name: 'diamond_pickaxe', count: 1 }]), {}, 'atlantium').impossible, /no mine leg/)
+  })
+
+  it('smelt step that digs its ore resumes into the furnace', () => {
+    // Queue [smelt iron_ingot]: an earlier craft left o.names behind, the
+    // ore sub fills, and the resume must reach smeltRung — not refuse.
+    const bot = mockBot([{ name: 'stone_pickaxe', count: 1 }])
+    const ctx = {}
+    const step = { do: 'smelt', item: 'iron_ingot' }
+    const o = { kind: 'item', name: 'iron_ingot', names: ['X'], want: 3, by: 'P' }
+    ctx.bring = o
+    o.recipe = { target: 'iron_ingot', pending: false, at: Date.now(), original: 'ORIG', i: 0, queue: [step], executing: true, done: false, active: null, want: 3 }
+    bringitem.recipeNext(bot, ctx, o)
+    assert.deepEqual(o.names, ['iron_ingot'], 'smelt step owns the names')
+    assert.ok(o.subFor, 'raw short digs the ore first')
+    assert.equal(o.phase, 'find')
+    // The dig lands: raw in the pack, resume like the pickup branch does.
+    bot._items.push({ name: 'raw_iron', count: 2 })
+    bringitem.resumeSub(bot, ctx, o)
+    assert.equal(ctx.bring, o, 'no refusal after the dig')
+    assert.equal(o.phase, 'smelt', 'resume reaches the furnace rung')
+    assert.equal(o.smelt && o.smelt.output, 'iron_ingot')
+  })
+
+  it('gate off: a refused unknown leaves paused, lead and bring untouched', () => {
+    delete process.env.BOT_LLM_ORDERS
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    const prior = { kind: 'block', name: 'iron_ore' }
+    ctx.bring = prior
+    ctx.paused = true
+    ctx.lead = { kind: 'lead' }
+    handleChat(bot, ticker, 'P', 'bring me atlantium')
+    assert.deepEqual(bot.lines, ["can't get atlantium: no recipe, no source"])
+    assert.equal(ctx.bring, prior, 'running order kept')
+    assert.equal(ctx.paused, true, 'park kept')
+    assert.deepEqual(ctx.lead, { kind: 'lead' }, 'lead kept')
+    assert.equal(calls.length, 0)
   })
 
   it('queue end delivers instead of re-running the last rung', () => {
@@ -324,7 +363,7 @@ describe('recipe execution', () => {
     const caps = {
       held: () => false,
       gather: () => 'ok',
-      craft: (b, c, item, made) => (made.has('oak_log') && item === 'oak_planks' ? 'ok' : { impossible: 'need oak_log' }),
+      craft: (b, c, item, made) => ((made.get('oak_log') || 0) >= 1 && item === 'oak_planks' ? 'ok' : { impossible: 'need oak_log' }),
     }
     answerFor = JSON.stringify({
       materials: [],
