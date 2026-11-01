@@ -84,14 +84,16 @@ function searchMinutes() {
 // count would never grow and the order would mine the area forever.
 // Sand drops itself (g0z.37: castle glass); gravel stays out (junk).
 function isBringable(blockName) {
-  return blockName.endsWith('_ore') || blockName.endsWith('_log') || blockName === 'sand' || blockName === 'red_sand'
+  // 6ci5.1: exposed obsidian mines with a diamond pick (the tier gate is
+  // needsPickaxe/requiredTier); the drop is itself, so the count grows.
+  return blockName.endsWith('_ore') || blockName.endsWith('_log') || blockName === 'sand' || blockName === 'red_sand' || blockName === 'obsidian'
 }
 
 // The share keep-list and plan live in bringitem.js (did.4 split); the
 // dispatcher reaches them as itemMod.sharePlan.
 
 function needsPickaxe(blockName) {
-  return blockName.endsWith('_ore')
+  return blockName.endsWith('_ore') || blockName === 'obsidian' // 6ci5.1: diamond pick or the dig drops nothing
 }
 
 function skipKey(p) {
@@ -128,6 +130,21 @@ function revalidateBelowFeetSkips(bot, ctx, o) {
 // The item order rungs (did.1 normalisation, resolver, pack plan, honest
 // stub) live in bringitem.js (did.4 split); the dispatcher reaches them as
 // itemMod.*.
+
+// Obsidian consent (idkcraft-6ci5.1): the type guard default-denies
+// obsidian (owner-plausible builds: portals), but an explicit
+// 'bring me obsidian' order is consent to break it. The bring target
+// reads past the 'protected' verdict for its own committed block — trap
+// (below-feet/gravity) and water (submerged) denials still stand, and
+// every other executor keeps default-deny. name is the request/order
+// name (o.name at the tick, requestName in memoryExposed, where ctx.bring
+// may still be the previous order).
+function bringDeny(bot, block, ctx, name) {
+  let d = 'protected'
+  try { d = denyReason(bot, block, ctx) } catch (_) { d = 'protected' }
+  if (d === 'protected' && name === 'obsidian' && block && block.name === 'obsidian') return null
+  return d
+}
 
 // Same-block test (8gc): the pickup counts only once the body stands in
 // the death-spot block — the GoalBlock arrival cell (the pathfinder
@@ -410,7 +427,7 @@ function memoryExposed(bot, ctx, bp, requestName, skip) {
     let pre = null
     try {
       const blk = bot.blockAt && bot.blockAt(new Vec3(Math.floor(item.x), Math.floor(item.y), Math.floor(item.z)))
-      pre = blk && denyReason(bot, blk, ctx)
+      pre = blk && bringDeny(bot, blk, ctx, requestName)
     } catch (_) { pre = null }
     if (pre === 'protected' || pre === 'submerged') return null // owner build or dive: same rule as the live loop
     const distH = Math.hypot(item.x - bp.x, item.z - bp.z)
@@ -1910,7 +1927,7 @@ async function bring(bot, ctx, target, state) {
       let pre = null
       try {
         const blk = bot.blockAt && bot.blockAt(res.position)
-        pre = blk && denyReason(bot, blk, ctx)
+        pre = blk && bringDeny(bot, blk, ctx, o.name)
       } catch (_) { pre = null }
       if (pre !== 'protected' && pre !== 'submerged') break
       if (pre === 'submerged') o.sawSubmerged = true
@@ -2139,7 +2156,7 @@ async function bring(bot, ctx, target, state) {
       o.phase = 'find'
       return
     }
-    let bDeny = denyReason(bot, block, ctx) // idkcraft-drq: never fetch through owner builds
+    let bDeny = bringDeny(bot, block, ctx, o.name) // idkcraft-drq: never fetch through owner builds (6ci5.1: an obsidian order consents)
     if (bDeny === 'below-feet' && solidBelow(bot, o.pos) && protectedReason(bot, block, ctx) !== null) {
       // revmux 01 core-1: the trap denial masks protection (denyReason
       // returns 'below-feet' before it checks the type rules), so a
@@ -2412,6 +2429,7 @@ module.exports.memoryInBudget = memoryInBudget
 module.exports.liveExposed = liveExposed
 module.exports.buriedCand = buriedCand
 module.exports.skipKey = skipKey
+module.exports.bringDeny = bringDeny
 module.exports.unreachLine = unreachLine
 module.exports.guidedTarget = guidedTarget
 module.exports.guidedStepback = guidedStepback
@@ -2451,6 +2469,7 @@ module.exports.parseToolRequest = itemMod.parseToolRequest
 module.exports.isToolName = itemMod.isToolName
 module.exports.ensureTool = itemMod.ensureTool
 module.exports.toWoolHunt = itemMod.toWoolHunt
+module.exports.toObsidianMine = itemMod.toObsidianMine
 module.exports.toWaterFill = toWaterFill
 module.exports.hasEmptyBucket = hasEmptyBucket
 // Terminal actions for the bringitem.js bridge (deferred require back).
