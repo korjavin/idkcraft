@@ -80,6 +80,44 @@ describe('FORCES table (vmzq.62)', () => {
     assert.equal(fire('fetch-retry', { ctx: last }), false)
   })
 
+  it('fetch-retry (ihen revmux 01 major): evicting the last kind retires a FRESH kindless stamp too', () => {
+    const old = Date.now() - CASTLEFETCH_RETRY_MS - 1
+    // stone expired; planks succeeded earlier, leaving sf.at/sf.kind fresh
+    // with a standing text/pos hold. Retiring stone must retire the
+    // kindless fields with it — never resurrect a planks hold until at
+    // expires, then fire the legacy branch a second time.
+    const stale = {
+      stepFail: {
+        castlefetch: { at: Date.now(), kind: 'planks', text: 'time=day', pos: { x: 0, y: 64, z: 0 }, kinds: { stone: { at: old, pos: null } } },
+      },
+    }
+    assert.equal(fire('fetch-retry', { ctx: stale }), true)
+    assert.equal(stale.stepFail.castlefetch, undefined, 'no kindless hold resurrected')
+    assert.equal(fire('fetch-retry', { ctx: stale }), false, 'no second fire')
+    assert.equal(require('../src/behaviours/castlefetch').holdFor(bot(), stale, 'planks'), false, 'succeeded kind runs freely')
+    // Same eviction with a same-day park kept: the hold fields retire but
+    // the park/counts survive, and the succeeded kind still runs.
+    const today = require('../src/castle-park').parkDay()
+    const kept = {
+      stepFail: {
+        castlefetch: {
+          at: Date.now(), kind: 'planks', text: 'time=day', pos: { x: 0, y: 64, z: 0 },
+          counts: { fence: { day: today, n: 1 } }, parked: { fence: today },
+          kinds: { stone: { at: old, pos: null } },
+        },
+      },
+    }
+    assert.equal(fire('fetch-retry', { ctx: kept }), true)
+    assert.deepEqual(
+      [kept.stepFail.castlefetch.at, kept.stepFail.castlefetch.kind, kept.stepFail.castlefetch.text, kept.stepFail.castlefetch.kinds],
+      [undefined, undefined, undefined, undefined],
+      'kindless hold fields retire, park/counts stay',
+    )
+    assert.equal(require('../src/behaviours/castlefetch').holdFor(bot(), kept, 'planks'), false, 'succeeded kind runs freely')
+    assert.equal(require('../src/goal').failHolds(kept, 'castlefetch', 'time=day', bot()), false, 'menu entry not held')
+    assert.equal(fire('fetch-retry', { ctx: kept }), false, 'no second fire')
+  })
+
   it('gate-opened: fires on the gated->open edge only, writing the latch', () => {
     const ctx = { lowHpWasGated: true }
     assert.equal(fire('gate-opened', { ctx, facts: { health: 20 } }), true)

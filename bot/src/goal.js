@@ -2313,12 +2313,28 @@ const FORCES = [
           if (fired) {
             let empty = false
             try { empty = Object.keys(kinds).length === 0 } catch (_) { /* prune best-effort */ }
-            // Last kind out falls through to the legacy branch: its sf.at
-            // stamp expired with it (same write), and an early return here
-            // would leave the text hold standing one more tick (codex
-            // review) — the forced pick vetoed, then a second fire.
+            // Last kind out retires the kindless hold fields with it (ihen
+            // revmux 01 major): sf.at may still be fresh from a later
+            // kind's failure or a success that left a stale stamp, so
+            // falling through to the legacy branch would resurrect a
+            // kindless hold on that kind until at expires, then fire
+            // twice. An early return here would leave the text hold
+            // standing one more tick (codex review) — the forced pick
+            // vetoed, then a second fire.
             if (empty) {
-              try { delete sf.kinds } catch (_) { /* prune best-effort */ }
+              try {
+                const keepPark = (sf.parked && typeof sf.parked === 'object' && Object.keys(sf.parked).length > 0) ||
+                  (sf.counts && typeof sf.counts === 'object' && Object.keys(sf.counts).length > 0)
+                if (keepPark) {
+                  delete sf.at
+                  delete sf.kind
+                  delete sf.kinds
+                  delete sf.status
+                  delete sf.text
+                  delete sf.pos
+                  if (Object.keys(sf).length === 0) delete ctx.stepFail.castlefetch
+                } else delete ctx.stepFail.castlefetch
+              } catch (_) { /* retire best-effort */ }
               kindFired = true
             } else return true
           }
