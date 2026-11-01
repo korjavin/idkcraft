@@ -726,6 +726,47 @@ describe('wider wool hunt (idkcraft-aoql.1)', () => {
     assert.equal(bring.searchLegsFor(), bring.SEARCH_BUDGET.legs)
   })
 
+  it('a coloured chain re-derives the wool drop after the smelt (aoql.1 core-1)', async () => {
+    const bot = mockBot({
+      playerPos: pos(30, 64, 0),
+      items: [{ name: 'raw_iron', count: 2 }],
+      animals: [sheep(11, 10, 0x00)], // explicit white: the colour filter is strict
+    })
+    bot.recipesAll = (id) => (id === ITEMS.shears
+      ? [{ requiresTable: false, result: { count: 1 }, delta: [{ id: 501, count: -2 }] }]
+      : [])
+    bot.registry.itemsByName.iron_ingot = { id: 501 }
+    bot.registry.itemsByName.raw_iron = { id: 502 }
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me white wool 1')
+    const ctx = bot._tickerCtx
+    assert.equal(ctx.bring.phase, 'smelt')
+    const realFurnace = itemMod.deps.driveFurnace
+    const realCraft = itemMod.deps.craftItem
+    try {
+      itemMod.deps.driveFurnace = () => {
+        bot._items.push({ name: 'iron_ingot', count: 2 })
+        return 'done'
+      }
+      itemMod.deps.craftItem = () => {
+        bot._items.push({ name: 'shears', count: 1 })
+        return { done: true, target: 'shears' }
+      }
+      await bring(bot, ctx, null, {})
+      await flush()
+      assert.equal(ctx.bring.phase, 'shears', 'smelt completes into the shears phase')
+      assert.equal(ctx.bring.drop, 'white_wool', 'the gap output no longer masks the wool drop')
+      await drive(bot, ctx, null)
+    } finally {
+      itemMod.deps.driveFurnace = realFurnace
+      itemMod.deps.craftItem = realCraft
+    }
+    assert.deepEqual(bot.useOnCalls, [11], 'shorn, not killed')
+    assert.equal(bot.attackCalls.length, 0)
+    assert.ok(bot.lines.some((l) => l === 'here is 1 white_wool'), `lines: ${bot.lines}`)
+    assert.deepEqual(bot.tossCalls, [[ITEMS.white_wool, null, 1]])
+  })
+
   it('the iron chain runs end to end: smelt, shears, shear — no kill', async () => {
     const bot = mockBot({
       playerPos: pos(30, 64, 0),

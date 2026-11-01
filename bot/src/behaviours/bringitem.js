@@ -767,7 +767,12 @@ function enterCraftOrRefuse(bot, ctx, o) {
   // Wool chain (h1nl follow-up): a hunt that opened an iron gap resumes
   // here when the gap fills — re-enter the hunt (plan now covered) instead
   // of refusing uncraftable wool. Normal wool orders never reach this rung.
+  // aoql.1: the gap legs stamped the order with the gap output (smeltRung:
+  // drop=iron_ingot) — clear it first, or the hunt counts and fetches iron
+  // instead of wool.
   if (o && o.woolChain && woolMod.isWoolFamily(o)) {
+    o.drop = null
+    o.have = 0
     refuseItemOrHunt(bot, ctx, o)
     return
   }
