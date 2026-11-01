@@ -206,6 +206,28 @@ function gearCtx(ctx) {
   }
 }
 
+// Stock trust (2ket, minor 01-review): homeStockOf reads the last successful
+// chest snapshot, which a failed open never refreshes (withChest snapshots
+// only after fn runs). A short/errored draw, or the far give-up, proves THAT
+// snapshot wrong — latch its timestamp so the planner stops re-offering the
+// same withdraw until a newer snapshot lands.
+function stockSnapshotAt(ctx) {
+  try {
+    const at = ctx && ctx.chestLast && ctx.chestLast.home && ctx.chestLast.home.at
+    return typeof at === 'number' ? at : -1
+  } catch (_) { return -1 }
+}
+function stockTrusted(ctx) {
+  try {
+    const at = stockSnapshotAt(ctx)
+    const seen = ctx && ctx.gear && ctx.gear.stockSeenAt
+    return at >= 0 && at !== seen
+  } catch (_) { return false }
+}
+function latchStock(ctx) {
+  try { gearCtx(ctx).stockSeenAt = stockSnapshotAt(ctx) } catch (_) { /* latch best-effort */ }
+}
+
 function runCtx(ctx) {
   try {
     if (!ctx.gearRun || typeof ctx.gearRun !== 'object') ctx.gearRun = {}
@@ -433,10 +455,10 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
   if (rung.tier === 'diamond') {
     // Pantry first (ipn.6): stranded chest diamonds beat an expedition.
     // Remembered stock (2ket): seen home-chest diamonds beat one too, with
-    // no fresh bank (owner restocks, pre-restart strands). A short or
-    // errored draw latches back to want/deep (runWithdraw), so over-trust
-    // costs one chest walk, never a loop.
-    if (pantryFresh(ctx) || chestStock.homeStockOf(ctx, 'diamond') >= short) return { state: 'ready', key: 'ready', action: 'withdraw' }
+    // no fresh bank (owner restocks, pre-restart strands). Trusted only
+    // until a draw proves the snapshot wrong (stockTrusted/latchStock), so
+    // a failed open degrades to want/deep instead of re-offering withdraw.
+    if (pantryFresh(ctx) || (stockTrusted(ctx) && chestStock.homeStockOf(ctx, 'diamond') >= short)) return { state: 'ready', key: 'ready', action: 'withdraw' }
     // Buried cells are undiggable by forage (ipn.2): without the deep leg
     // the want is unactionable, so it waits instead of announcing a dig.
     if (!im.deep) return { state: 'wait', key: 'wait-deep', line: 'waiting on the deep shaft for diamonds' }
@@ -456,8 +478,8 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
   }
   // Pantry first (ipn.6): a banked batch draws before the fetchers walk.
   // Remembered stock (2ket): seen home-chest ingots+ore cover the rung the
-  // same way — no ore-dig leg. Same fail-open as diamonds above.
-  if (pantryFresh(ctx) || chestStock.homeStockOf(ctx, ['iron_ingot', 'raw_iron']) >= short) return { state: 'ready', key: 'ready', action: 'withdraw' }
+  // same way — no ore-dig leg. Same trust latch as diamonds above.
+  if (pantryFresh(ctx) || (stockTrusted(ctx) && chestStock.homeStockOf(ctx, ['iron_ingot', 'raw_iron']) >= short)) return { state: 'ready', key: 'ready', action: 'withdraw' }
   return { state: 'want', key: 'want-ore', line: `need ${short} more raw iron, going to dig` }
 }
 
@@ -1096,6 +1118,7 @@ function runWithdraw(bot, ctx, next) {
   if (!packroomMod || typeof packroomMod.withdrawFromChest !== 'function') {
     try {
       g.pantrySeen = ctx.gearPantryBanked || 0
+      latchStock(ctx) // the snapshot misled before any open: distrust it too
     } catch (_) { /* latch best-effort */ }
     return
   }
@@ -1127,7 +1150,10 @@ function runWithdraw(bot, ctx, next) {
       const stock = next.tier === 'iron'
         ? have(bot, 'iron_ingot') + have(bot, 'raw_iron')
         : have(bot, 'diamond')
-      if (errored || stock < need) g.pantrySeen = ctx.gearPantryBanked || 0
+      if (errored || stock < need) {
+        g.pantrySeen = ctx.gearPantryBanked || 0
+        latchStock(ctx) // that snapshot proved wrong: stop re-offering it (minor 01-review)
+      }
     } catch (_) { /* latch best-effort */ }
   })()
 }
@@ -1293,6 +1319,7 @@ function gear(bot, ctx, target, state) {
       if (failReason(ctx.stepStatus) === 'gear-chest-far') {
         try {
           gearCtx(ctx).pantrySeen = ctx.gearPantryBanked || 0
+          latchStock(ctx) // unreachable chest: its snapshot is stale too (minor 01-review)
         } catch (_) { /* latch best-effort */ }
       }
       return

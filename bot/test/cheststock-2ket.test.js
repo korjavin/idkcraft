@@ -124,6 +124,20 @@ describe('2ket gear ladder: remembered stock routes to withdraw', () => {
     const p = gear.planFor(C({ sticks: 2 }), { home: { chest: { x: 1, y: 64, z: 1 } } }, {})
     assert.deepEqual([p.state, p.action], ['ready', 'withdraw'])
   })
+  it('a failed draw latches the snapshot: no second withdraw off stale stock (minor 01-review)', () => {
+    const ctx = latched({ iron_ingot: 64 })
+    assert.equal(gear.planFor(C({ sticks: 2 }), ctx, {}).action, 'withdraw')
+    ctx.gear.stockSeenAt = ctx.chestLast.home.at // what runWithdraw records on a short/errored draw
+    const p = gear.planFor(C({ sticks: 2 }), ctx, {})
+    assert.equal(p.key, 'want-ore')
+  })
+  it('a newer snapshot re-arms the withdraw after the latch', () => {
+    const ctx = latched({ iron_ingot: 64 })
+    ctx.gear.stockSeenAt = ctx.chestLast.home.at
+    assert.equal(gear.planFor(C({ sticks: 2 }), ctx, {}).key, 'want-ore')
+    ctx.chestLast.home.at += 1 // the next successful open refreshes the snapshot
+    assert.equal(gear.planFor(C({ sticks: 2 }), ctx, {}).action, 'withdraw')
+  })
   it('diamonds stocked -> withdraw, not the deep leg', () => {
     const given = { water_bucket: 2, iron_sword: 1, iron_pickaxe: 1, iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1 }
     const counts = C({ sticks: 2, diamonds: 1, iron_pickaxe: 1, water_bucket: 2, iron_helmet: 1, iron_chestplate: 1, iron_leggings: 1, iron_boots: 1 })
@@ -159,6 +173,20 @@ describe('2ket goal kit chop: remembered stock skips the chop', () => {
     const bot = makeBot()
     const ctx = stockedCtx({ oak_planks: 10 }) // short is 34: target 32 + reserve 2
     assert.equal(goal.MENU.gather.feasible(facts, bot, ctx), true)
+  })
+  it('pickless stone keeps the kit chop: the fetch cannot open to withdraw (major 01-review)', () => {
+    castleMod.menuFact = () => 'stone-none'
+    const bot = makeBot()
+    const ctx = stockedCtx({ cobblestone: 128 }) // covers the stone shortfall...
+    ctx.castleWord = { kind: 'stone', left: 64 }
+    const stoneFacts = { ...facts, castle: 'stone-none', pickaxe: 0 } // ...but no pickaxe closes the fetch
+    assert.equal(goal.MENU.gather.feasible(stoneFacts, bot, ctx), true)
+  })
+  it('night keeps the kit chop as today: the fetch never opens at night', () => {
+    castleMod.menuFact = () => 'planks-none'
+    const bot = makeBot()
+    const ctx = stockedCtx({ oak_planks: 64 })
+    assert.equal(goal.MENU.gather.feasible({ ...facts, time: 'night' }, bot, ctx), true)
   })
   it('held kind stays parked as today (no chop even when stocked)', () => {
     castleMod.menuFact = () => 'planks-none'
