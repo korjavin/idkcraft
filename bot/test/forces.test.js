@@ -68,6 +68,16 @@ describe('FORCES table (vmzq.62)', () => {
     }
     assert.equal(fire('fetch-retry', { ctx: legacy }), true)
     assert.deepEqual(Object.keys(legacy.stepFail.castlefetch.kinds), ['planks'])
+    // Last kind out retires the legacy stamp too (codex review): one fire,
+    // no reactivated text hold, no second fire next tick.
+    const last = {
+      stepFail: {
+        castlefetch: { at: old, kind: 'stone', text: 'time=day', kinds: { stone: { at: old, pos: null } } },
+      },
+    }
+    assert.equal(fire('fetch-retry', { ctx: last }), true)
+    assert.equal(last.stepFail.castlefetch, undefined)
+    assert.equal(fire('fetch-retry', { ctx: last }), false)
   })
 
   it('gate-opened: fires on the gated->open edge only, writing the latch', () => {

@@ -2294,6 +2294,7 @@ const FORCES = [
       // only sf.at (the newest failure) was consulted, so an older kind's
       // expiry never fired until the newest expired too. A same-day parked
       // kind stays out: the park (not the window) owns its release.
+      let kindFired = false
       try {
         const kinds = sf && sf.kinds
         if (kinds && typeof kinds === 'object') {
@@ -2310,8 +2311,16 @@ const FORCES = [
             fired = true
           }
           if (fired) {
-            try { if (Object.keys(kinds).length === 0) delete sf.kinds } catch (_) { /* prune best-effort */ }
-            return true
+            let empty = false
+            try { empty = Object.keys(kinds).length === 0 } catch (_) { /* prune best-effort */ }
+            // Last kind out falls through to the legacy branch: its sf.at
+            // stamp expired with it (same write), and an early return here
+            // would leave the text hold standing one more tick (codex
+            // review) — the forced pick vetoed, then a second fire.
+            if (empty) {
+              try { delete sf.kinds } catch (_) { /* prune best-effort */ }
+              kindFired = true
+            } else return true
           }
         }
       } catch (_) { /* kind-expiry best-effort */ }
@@ -2333,7 +2342,7 @@ const FORCES = [
         } catch (_) { /* retire best-effort */ }
         return true
       }
-      return false
+      return kindFired
     },
   },
   // Low-hp gate gated->open edge: one fresh pick (writes the edge latch).
