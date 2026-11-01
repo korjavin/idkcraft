@@ -756,6 +756,142 @@ function tick(bot, ctx, now = Date.now()) {
   }
 }
 
+// Acquisition recipes (idkcraft-6ci5.2): when a bring order hits 'no recipe,
+// no source', the refusal branch asks the model ONCE per level for how to get
+// the item with the order ladder's own rungs, validates every step against
+// the injected capabilities before starting, and recurses for materials the
+// ladder cannot serve yet (depth max RECIPE_MAX_DEPTH, per order — nothing is
+// stored on ctx, so a new order restarts at 0). Execution lives in
+// bringitem.js; this module owns the call, the shape check and the resolve.
+// Tokens ride the same use=orders LLM_TOKENS_PER_HOUR cap (brain.llmCall).
+const RECIPE_MAX_DEPTH = 5
+const RECIPE_MAX_STEPS = 6
+const RECIPE_TIMEOUT_MS = 20000
+const RECIPE_VERBS = ['craft', 'smelt', 'gather', 'fill', 'mine']
+
+const RECIPE_SYSTEM = 'You turn a Minecraft bring order the bot cannot otherwise fill into an acquisition recipe its order ladder can run. ' +
+  'The ladder can: craft <item> at a table (vanilla recipes), smelt <item> in a furnace, gather logs/planks/sticks/wool through sub-orders, fill a water_bucket from water with an empty bucket, mine <block> with the right pickaxe. ' +
+  'Answer JSON only, no prose: {"materials":["<id>",...],"steps":[{"do":"craft|smelt|gather|fill|mine","item":"<id>"}]}. ' +
+  'Steps run in order; every material is held already or produced by an earlier step. ' +
+  'Item names are Minecraft registry ids. Answer {"materials":[],"steps":[]} when no ladder-runnable recipe exists.'
+
+// Model answer -> { recipe } | { error }. Shape only: verb whitelist and
+// registry-id shape (the validatePlan precedent); servability is the
+// caller's capability check, never the model's claim.
+function checkRecipeShape(ans) {
+  if (!ans || typeof ans !== 'object') return { error: 'bad recipe' }
+  const mats = Array.isArray(ans.materials) ? ans.materials : null
+  const steps = Array.isArray(ans.steps) ? ans.steps : null
+  if (!mats || !steps) return { error: 'bad recipe' }
+  const idOk = (v) => typeof v === 'string' && /^[a-z0-9_]{1,40}$/.test(v)
+  if (!mats.every(idOk)) return { error: 'bad recipe' }
+  if (steps.length > RECIPE_MAX_STEPS) return { error: 'bad recipe' }
+  for (const s of steps) {
+    if (!s || typeof s !== 'object') return { error: 'bad recipe' }
+    if (!RECIPE_VERBS.includes(s.do)) return { error: 'bad recipe' }
+    if (!idOk(s.item)) return { error: 'bad recipe' }
+  }
+  return { recipe: { materials: mats.slice(), steps: steps.map((s) => ({ do: s.do, item: s.item })) } }
+}
+
+// ONE Messages-API call for an acquisition recipe for target. Never throws:
+// transport/budget/parse failures come back as { error }. fetchFn injects
+// the fake in tests (llmCall defaults to the global fetch).
+async function requestRecipe(bot, ctx, target, opts = {}) {
+  const t = String(target || '').slice(0, 40)
+  const user = `Order from the player: "bring me ${t}"\n\nSituation:\n${situationText(bot, ctx)}\n\nReply with the acquisition recipe.`
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new DOMException('recipe timeout', 'TimeoutError')),
+    (opts && typeof opts.timeoutMs === 'number') ? opts.timeoutMs : RECIPE_TIMEOUT_MS)
+  let data
+  try {
+    data = await brain.llmCall({
+      use: 'orders',
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      signal: ac.signal,
+      fetchFn: opts && opts.fetchFn,
+      body: {
+        model: process.env.LLM_MODEL || brain.LLM_MODEL,
+        max_tokens: 500,
+        thinking: { type: 'disabled' },
+        system: RECIPE_SYSTEM,
+        messages: [{ role: 'user', content: user }],
+      },
+    })
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err)
+    return { error: err && err.name === 'TimeoutError' ? 'timeout' : msg.startsWith('llm budget') ? 'budget' : msg.slice(0, 40) }
+  } finally {
+    clearTimeout(timer)
+  }
+  const u = (data && data.usage) || {}
+  const tokens = `${u.input_tokens | 0}/${u.output_tokens | 0}`
+  const out = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+  let ans = null
+  try { ans = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch (_) { ans = null }
+  const shape = checkRecipeShape(ans)
+  if (shape.error) return { error: 'invalid' }
+  if (shape.recipe.materials.length === 0 && shape.recipe.steps.length === 0) return { error: 'empty' }
+  return { recipe: shape.recipe, tokens }
+}
+
+// Resolve the full recipe tree for target: one model call per level, every
+// step validated against caps BEFORE anything starts (the load-bearing
+// validate-before-start: a later impossible step aborts the whole recipe, so
+// an earlier valid step never runs alone). Materials neither held nor
+// produced by a step recurse (each its own call, depth+1); unknown materials
+// past the max depth, a material cycle, a blocked step, or a dead call all
+// abort with the chain. Returns { ok, queue, tokens } (the flat execution
+// queue: sub-recipe steps first, then this level's) or { fail, ... }.
+// caps: { held(bot, item)->bool, craft/smelt/gather/fill/mine(bot, ctx, item)
+// -> 'ok' | { impossible: reason } }. Never throws.
+async function planRecipe(bot, ctx, target, opts = {}) {
+  const t = String(target || '').slice(0, 40)
+  const depth = (opts && typeof opts.depth === 'number') ? opts.depth : 0
+  const chain = Array.isArray(opts && opts.chain) ? opts.chain : []
+  const caps = (opts && opts.caps) || {}
+  const full = [...chain, t].join('>')
+  const log = (outcome, extra) => { try { console.log(`llm recipe target=${t} depth=${depth} chain=${full} outcome=${outcome}${extra || ''}`) } catch (_) { /* log best-effort */ } }
+  if (depth >= RECIPE_MAX_DEPTH) { log('depth-refuse'); return { fail: 'depth', chain: [...chain, t] } }
+  if (chain.includes(t)) { log('cycle'); return { fail: 'cycle', chain: [...chain, t] } }
+  let r
+  try {
+    r = await requestRecipe(bot, ctx, t, opts)
+  } catch (err) {
+    log('error')
+    return { fail: 'error', reason: String((err && err.message) || err).slice(0, 40) }
+  }
+  const toks = [r.tokens || '0/0']
+  if (r.error || !r.recipe) { log(r.error || 'error', ` tokens=${toks[0]}`); return { fail: r.error || 'error', reason: r.error || 'error' } }
+  for (const s of r.recipe.steps) {
+    let v = null
+    try {
+      const cap = caps[s.do]
+      v = typeof cap === 'function' ? cap(bot, ctx, s.item) : { impossible: 'no capability' }
+    } catch (_) { v = { impossible: 'capability threw' } }
+    if (v !== 'ok') {
+      const reason = (v && v.impossible) || 'not possible'
+      log('impossible', ` step=${s.do} ${s.item} tokens=${toks[0]}`)
+      return { fail: 'impossible', step: { do: s.do, item: s.item }, reason: String(reason).slice(0, 80) }
+    }
+  }
+  const produced = new Set(r.recipe.steps.map((s) => s.item))
+  const queue = []
+  for (const m of r.recipe.materials) {
+    let held = false
+    try { held = !!(typeof caps.held === 'function' && caps.held(bot, m)) } catch (_) { held = false }
+    if (held || produced.has(m)) continue
+    const sub = await planRecipe(bot, ctx, m, { ...opts, depth: depth + 1, chain: [...chain, t] })
+    if (!sub.ok) return sub
+    queue.push(...sub.queue)
+    toks.push(sub.tokens || '0/0')
+  }
+  queue.push(...r.recipe.steps)
+  const tokens = toks.join('+')
+  log('ok', ` steps=${queue.map((s) => `${s.do} ${s.item}`).join(',')} tokens=${tokens}`)
+  return { ok: true, queue, tokens }
+}
+
 // Status line: the active plan step and its done-when text.
 function statusLine(ctx) {
   const o = ctx && ctx.llmOrder
@@ -765,4 +901,4 @@ function statusLine(ctx) {
   return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
 }
 
-module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH }
+module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH, RECIPE_MAX_DEPTH, RECIPE_MAX_STEPS, RECIPE_TIMEOUT_MS, RECIPE_VERBS, checkRecipeShape, requestRecipe, planRecipe }

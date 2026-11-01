@@ -1881,6 +1881,10 @@ async function bring(bot, ctx, target, state) {
 
   if (o.phase === 'smelt') { itemMod.smeltTick(bot, ctx, o); return }
 
+  // Recipe wait (idkcraft-6ci5.2): the model call is in flight — the tick
+  // holds the order on its timeout backstop, nothing else.
+  if (o.phase === 'recipe') { itemMod.recipeTick(bot, ctx, o); return }
+
   if (o.phase === 'find') {
     if (food) { await findFood(bot, ctx, o); return }
     if ((o.kind || 'block') === 'item') { // no diggable world form: wool hunts, else the item reason
@@ -2312,6 +2316,9 @@ async function bring(bot, ctx, target, state) {
   }
 
   if (o.phase === 'return') {
+    // Recipe execution (idkcraft-6ci5.2): a fill step that gave still belongs
+    // to the recipe — advance the queue instead of tossing to the player.
+    if (o.recipe && o.recipe.executing && !o.recipe.done) { itemMod.recipeNext(bot, ctx, o); return }
     if (o.subFor) { // a sub-order resumes, never tosses: the mats belong to the craft
       itemMod.resumeSub(bot, ctx, o)
       return
@@ -2468,3 +2475,9 @@ module.exports.pickSubGap = itemMod.pickSubGap
 module.exports.subWordFor = itemMod.subWordFor
 module.exports.smeltingGap = itemMod.smeltingGap
 module.exports.planGap = itemMod.planGap
+module.exports.recipeCaps = itemMod.recipeCaps
+module.exports.setRecipeSource = itemMod.setRecipeSource
+module.exports.canRecipeFallback = itemMod.canRecipeFallback
+module.exports.startRecipeFallback = itemMod.startRecipeFallback
+module.exports.recipeNext = itemMod.recipeNext
+module.exports.recipeTick = itemMod.recipeTick

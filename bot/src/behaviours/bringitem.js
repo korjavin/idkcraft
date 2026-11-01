@@ -46,6 +46,55 @@ const deps = {
   craftItem: (...a) => craftany()(...a),
 }
 
+// Injected model-call side (idkcraft-6ci5.2): bringitem cannot require
+// llm-orders (require-graph cycle — lazy requires count the same), so the
+// edge lives in orders.js, which already sees both modules: it calls
+// setRecipeSource once at load. Null until wired — the gate below then reads
+// exactly as before. { plan, timeoutMs, enabled }.
+let recipeSource = null
+function setRecipeSource(s) {
+  recipeSource = (s && typeof s.plan === 'function' && typeof s.enabled === 'function') ? s : null
+}
+
+// Recipe capability table (idkcraft-6ci5.2): the ladder rungs a validated
+// recipe step may use — each reads the LIVE ladder, so a capability the
+// sibling adds (the mine leg above) validates the moment it lands and the
+// recipe degrades to an honest abort while absent. 'ok' or { impossible }.
+// Exported (the deps precedent): unit tests patch + restore fields.
+const recipeCaps = {
+  held: (bot, name) => {
+    try { return (packCounts(bot)[name] || 0) > 0 } catch (_) { return false }
+  },
+  craft: (bot, ctx, name) => {
+    let p = null
+    try { p = craftany().planCraft(bot, ctx, [name], 1) } catch (_) { return { impossible: 'craft threw' } }
+    return p && p.ok ? 'ok' : { impossible: (p && (p.line || p.fail)) || 'no recipe' }
+  },
+  smelt: (bot, ctx, name) => {
+    if (SMELT[name]) return 'ok'
+    if (SMELT_OFF[name]) return { impossible: SMELT_OFF[name] }
+    return { impossible: 'not smeltable' }
+  },
+  gather: (bot, ctx, name) => {
+    if (pickSubGap([{ name }])) return 'ok'
+    try { if (woolMod.isWoolFamily({ names: [name] })) return 'ok' } catch (_) { /* fall through */ }
+    return { impossible: 'nothing to gather' }
+  },
+  fill: (bot, ctx, name) => {
+    if (name !== 'water_bucket') return { impossible: 'not fillable' }
+    return hasEmptyBucket(bot) ? 'ok' : { impossible: 'no empty bucket' }
+  },
+  // 6ci5-A consumption seam (sibling bead idkcraft-6ci5.1): the mine-capable
+  // rung A adds is wired here, from its own file (bring.js already requires
+  // this module, so no new edge either way) — B never adds mine legs or
+  // ladder dispatch itself. Contract for A: assign `mineLeg` to the rung
+  // `(bot, ctx, o) => { opened }` (mine + deliver, owns its terminal) and,
+  // when it serves a subset of names, narrow `mine` the same way. Absent
+  // reads as no mine capability and the step aborts honestly.
+  mineLeg: null,
+  mine: (bot, ctx, name) => (typeof recipeCaps.mineLeg === 'function' ? 'ok' : { impossible: 'no mine leg' }),
+}
+
 // Share keep-list (idkcraft-ah9): tools, weapons, armour, plus a 32-block
 // dirt/cobblestone reserve — without it the bot cannot pillar out (ef3
 // pillar_up). Dirt fills the reserve first, cobblestone the remainder.
@@ -302,6 +351,144 @@ function itemRefusal(bot, name, resolved, keptName) {
   if (keptName) return `my only ${keptName}, can't make another yet`
   if (hasRecipe(bot, resolved)) return `can't make ${name} yet (crafting comes next)`
   return `can't get ${name}: no recipe, no source`
+}
+
+// Acquisition-recipe fallback (idkcraft-6ci5.2): the refusal branch below no
+// longer refuses outright for a plain unknown — it opens phase 'recipe' and
+// asks the model once per level for a ladder-runnable recipe (llm-orders.js
+// planRecipe: validate-before-start over recipeCaps, unknown materials
+// recursing to depth 5). Either refusal site funnels here: the chat-time one
+// (orders.js, no order open yet) and the tick-time one (enterCraftOrRefuse).
+// Stop / a new order clears ctx.bring, so a late answer drops silently.
+function canRecipeFallback(bot, o) {
+  if (!o || typeof o !== 'object') return false
+  if (!recipeSource) return false
+  if (o.recipe || o.subFor || o.toolName) return false
+  if (o.keptName) return false
+  try { if (hasRecipe(bot, { names: o.names || [] })) return false } catch (_) { return false }
+  try { return !!recipeSource.enabled() } catch (_) { return false }
+}
+
+function startRecipeFallback(bot, ctx, o) {
+  if (!ctx || !canRecipeFallback(bot, o)) return false
+  const target = o.name
+  let original = null
+  try { original = itemRefusal(bot, target, { names: o.names || [] }, o.keptName) } catch (_) { original = `can't get ${target}: no recipe, no source` }
+  o.phase = 'recipe'
+  o.recipe = { target, pending: true, at: Date.now(), original, i: 0, queue: null, executing: false, done: false }
+  void recipeSource.plan(bot, ctx, target, { caps: recipeCaps }).then((res) => {
+    try {
+      if (!ctx || ctx.bring !== o || !o.recipe || !o.recipe.pending) return // stop / replaced: drop silently
+      o.recipe.pending = false
+      if (!res || !res.ok || !Array.isArray(res.queue) || res.queue.length === 0) { abortRecipe(bot, ctx, o, res && res.ok ? { fail: 'empty' } : res); return }
+      o.recipe.queue = res.queue
+      o.recipe.tokens = res.tokens
+      o.recipe.executing = true
+      try { console.log(`llm recipe target=${target} outcome=attempt steps=${res.queue.map((s) => `${s.do} ${s.item}`).join(',')} tokens=${res.tokens || '0/0'}`) } catch (_) { /* log best-effort */ }
+      recipeNext(bot, ctx, o)
+    } catch (_) {
+      try { refuse(bot, ctx, o.recipe.original) } catch (_) { /* refuse best-effort */ }
+    }
+  })
+  return true
+}
+
+// A level that resolved badly: the original refusal for dead calls (timeout,
+// budget, unreadable or empty answers — clean degrade, no new strings), a
+// step-naming line for an impossible step or a depth/cycle chain otherwise.
+function abortRecipe(bot, ctx, o, res) {
+  const R = o && o.recipe
+  const T = (R && R.target) || (o && o.name)
+  let line = (R && R.original) || itemRefusal(bot, T, { names: (o && o.names) || [] }, o && o.keptName)
+  const fail = res && res.fail
+  if (fail === 'impossible' && res.step) line = `can't get ${T}: recipe needs ${res.step.do} ${res.step.item} (${res.reason || 'not possible'})`
+  else if (fail === 'depth' && Array.isArray(res.chain)) line = `can't get ${T}: recipe too deep (${res.chain.join('>')})`
+  else if (fail === 'cycle' && Array.isArray(res.chain)) line = `can't get ${T}: recipe loops (${res.chain.join('>')})`
+  try { console.log(`llm recipe target=${T} outcome=abort fail=${fail || '?'} line=${line}`) } catch (_) { /* log best-effort */ }
+  refuse(bot, ctx, line)
+}
+
+// Run the next validated recipe step through the ladder rung it names —
+// craft/smelt/gather/fill morphs the open order, mine calls the sibling rung
+// (validated present). Completions land back in enterCraftOrRefuse (or
+// craftTick / the return branch), which re-enters here while executing.
+// The previous step's item must be held first: mats that wandered off
+// mid-recipe abort honestly instead of advancing silently.
+function recipeNext(bot, ctx, o) {
+  const R = o && o.recipe
+  if (!R || !R.executing || R.done) return
+  const q = Array.isArray(R.queue) ? R.queue : []
+  if (R.i > 0) {
+    const prev = q[R.i - 1]
+    if (prev && !recipeCaps.held(bot, prev.item)) {
+      R.done = true
+      refuse(bot, ctx, `lost ${prev.item} before the ${R.target} was done`)
+      return
+    }
+  }
+  const step = q[R.i]
+  if (!step) { R.done = true; return } // queue exhausted: the last rung owns the terminal
+  R.i++
+  const tag = `recipe for ${R.target} ${R.i}/${q.length}`
+  if (step.do === 'craft') {
+    o.phase = 'craft'
+    o.craftTarget = step.item
+    o.names = [step.item]
+    o.want = 1
+    try { ctx.craftany = null } catch (_) { /* state best-effort */ }
+    say(bot, `${tag}: making ${step.item}`)
+    return
+  }
+  if (step.do === 'smelt') {
+    const pack = packCounts(bot)
+    const g = smeltRung(bot, ctx, o, { out: step.item, need: 1, have: pack[step.item] || 0 }, R.target)
+    if (g && g.open) { say(bot, `${tag}: ${g.line}`); return }
+    R.done = true
+    refuse(bot, ctx, (g && g.line) || `could not smelt ${step.item} for the ${R.target}`)
+    return
+  }
+  if (step.do === 'gather') {
+    const pack = packCounts(bot)
+    let color = null
+    try { color = woolMod.dropColor(step.item) } catch (_) { color = null }
+    const line = openSubOrder(bot, ctx, o, { name: step.item, need: 1, have: pack[step.item] || 0 }, R.target, color)
+    if (line) { say(bot, `${tag}: ${line}`); return }
+    R.done = true
+    refuse(bot, ctx, `could not start gather ${step.item} for the ${R.target}`)
+    return
+  }
+  if (step.do === 'fill') {
+    toWaterFill(bot, o)
+    o.want = 1
+    say(bot, `${tag}: filling a bucket for you`)
+    return
+  }
+  if (step.do === 'mine') {
+    const leg = recipeCaps.mineLeg
+    if (typeof leg !== 'function') {
+      R.done = true
+      refuse(bot, ctx, `can't get ${R.target}: recipe needs mine ${step.item} (no mine leg)`)
+      return
+    }
+    R.done = true // the sibling rung owns the rest; later rung ends never re-advance the queue
+    try { leg(bot, ctx, o) } catch (_) { refuse(bot, ctx, `could not mine ${step.item} for the ${R.target}`) }
+    return
+  }
+  R.done = true
+  refuse(bot, ctx, `can't get ${R.target}: unknown recipe step ${String(step.do).slice(0, 20)}`)
+}
+
+// Phase 'recipe' tick (bring.js routes here): the model call is still in
+// flight — wait, with the original refusal as the timeout backstop.
+function recipeTick(bot, ctx, o) {
+  const R = o && o.recipe
+  if (!R || !R.pending) return
+  let limit = 20000
+  try { limit = (recipeSource && recipeSource.timeoutMs) || limit } catch (_) { /* default stands */ }
+  if (Date.now() - (R.at || 0) > limit) {
+    o.recipe = null
+    refuse(bot, ctx, R.original)
+  }
 }
 
 // Furnace-gated ingredients (did.4). ipn.20: the SMELT ones ride a smelt
@@ -759,6 +946,9 @@ function orderCraftNames(names) {
 // gap opens a sub-order (beds pick their colour first), a furnace-gated
 // gap refuses with the smelting line, anything else keeps planCraft's line.
 function enterCraftOrRefuse(bot, ctx, o) {
+  // Recipe execution (idkcraft-6ci5.2): a completed rung lands back here —
+  // advance the validated queue instead of re-planning the craft.
+  if (o && o.recipe && o.recipe.executing && !o.recipe.done) { recipeNext(bot, ctx, o); return }
   // Tool rung (idkcraft-0jvh): every resume path (chest fetch, sub resume,
   // smelt done) funnels through here, so tool orders re-enter the shared
   // rung instead of the generic refusal. Gated on o.toolName, which only
@@ -801,6 +991,10 @@ function enterCraftOrRefuse(bot, ctx, o) {
   const g = planGap(bot, ctx, o, plan)
   if (g && g.open) { say(bot, g.line); return }
   if (g) { refuse(bot, ctx, g.line); return }
+  // Recipe fallback (idkcraft-6ci5.2): one model call for a ladder-runnable
+  // acquisition recipe instead of the instant refusal; gated (flag/key, no
+  // kept tool, no known recipe), so tool and sub orders read unchanged.
+  if (startRecipeFallback(bot, ctx, o)) { say(bot, `no recipe for ${o.name} — asking how to get it…`); return }
   refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
 }
 
@@ -928,6 +1122,9 @@ function craftTick(bot, ctx, o) {
   const res = craftany()(bot, ctx, orderCraftNames(o.names || []), 1)
   if (res === 'running') return
   if (res && res.done) {
+    // Recipe execution (idkcraft-6ci5.2): the crafted step stays packed —
+    // advance the queue instead of giving (tossing ends the order).
+    if (o && o.recipe && o.recipe.executing && !o.recipe.done) { recipeNext(bot, ctx, o); return }
     giveOrRefuse(bot, ctx, o, `could not craft ${res.target || o.name}`)
     return
   }
@@ -1530,3 +1727,10 @@ module.exports.smeltingGap = smeltingGap
 module.exports.planGap = planGap
 module.exports.smeltTick = smeltTick
 module.exports.deps = deps
+module.exports.recipeCaps = recipeCaps
+module.exports.setRecipeSource = setRecipeSource
+module.exports.canRecipeFallback = canRecipeFallback
+module.exports.startRecipeFallback = startRecipeFallback
+module.exports.abortRecipe = abortRecipe
+module.exports.recipeNext = recipeNext
+module.exports.recipeTick = recipeTick
