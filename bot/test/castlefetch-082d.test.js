@@ -16,6 +16,16 @@ function pos(x, y, z) {
   return p
 }
 
+// Fake contract: mineflayer 4.39 bot.blockAt(Vec3) (lib/plugins/blocks.js:612,
+// set in the plugin install at :605-613) returns a prismarine Block (or null
+// for an unloaded chunk); bot.findBlocks(options) (:156) scans loaded chunks;
+// bot.openChest (lib/plugins/chest.js:31, openContainer) opens a chest block;
+// bot.inventory.items() and bot.pathfinder (setGoal/isMoving/stop, the
+// mineflayer-pathfinder plugin surface) report carried items and movement.
+// Fields read on this path: `name`/`position`/`boundingBox` ('block'/'empty').
+// Internal seam (not mineflayer): fetch.deps (castlefetch.js:160 craftItem /
+// gather / driveFurnace stubs) and castleMod.menuFact (castle.js:1240,
+// exported :2602) stubbed per test to pin the castle word.
 function makeBot({ items = [] } = {}) {
   return {
     username: 'IdkBot',
