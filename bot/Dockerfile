@@ -10,4 +10,9 @@ COPY skills/ ./skills/
 # default and as the seed ownership of the named volume.
 RUN mkdir -p /app/memory && chown node:node /app/memory
 USER node
+# idkcraft-e4p4: Node-side cleanup only (not the bead's fix) — more old-space
+# headroom; the bead's 626MB heap/GC evidence is the body JVM (body.stats),
+# whose heap is raised via the BODY_JVM_ARGS default (compose body2,
+# baritone/start.sh). The perception.js churn cut lowers the allocation rate.
+ENV NODE_OPTIONS=--max-old-space-size=1536
 CMD ["node", "src/index.js"]

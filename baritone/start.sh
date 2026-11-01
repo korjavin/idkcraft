@@ -49,6 +49,14 @@ trap 'kill $CLIENT $SOCAT 2>/dev/null' TERM INT
 if [ "${BARITONE_API:-}" = 1 ]; then
   cp /headlessmc/baritone-api.jar HeadlessMC/run/mods/baritone.jar
 fi
+# idkcraft-e4p4: default body heap — the bead's 626MB ceiling was the JVM
+# default (25% of the cgroup); body.stats GC churn never reaches the Node
+# heap. -Xmx1500m leaves ~1000m headroom under the 2500m body2 cap for
+# non-heap JVM + socat. Body2-only (BARITONE_API=1): the worker keeps
+# today's JVM; an explicit BODY_JVM_ARGS always wins (compose/Portainer).
+if [ "${BARITONE_API:-}" = 1 ] && [ -z "${BODY_JVM_ARGS:-}" ]; then
+  BODY_JVM_ARGS="-Xmx1500m"
+fi
 # Game JVM args: no TTY, so the in-game JLine reader crashes init unless dumb.
 # idkcraft-neuc.67: BODY_JVM_ARGS (compose body2) appends the body's heap/GC
 # flags; unset (the worker, the old body) = the same single arg as before.

@@ -475,8 +475,9 @@ function meleeReflex(bot, ctx, state) {
   metrics.setVitals(state)
   // Same seam for the death line's hostile snapshot (see deathLine): the
   // killer is often gone at the death tick (exploded creeper), so the last
-  // tick's scan is the truthful one.
-  try { ctx.lastHostileSnap = snapHostiles(bot) } catch (_) { /* snapshot best-effort */ }
+  // tick's scan is the truthful one. idkcraft-e4p4: reuse the buildState
+  // snapshot when present (same shape) instead of rescanning the map.
+  try { ctx.lastHostileSnap = (state && state._snap) || snapHostiles(bot) } catch (_) { /* snapshot best-effort */ }
   const hostile = state && state.hostile
   if (!hostile || hostile.isValid === false) return false
   let d
@@ -505,7 +506,7 @@ function meleeReflex(bot, ctx, state) {
 // body, so asking the model follow-vs-flee would add a wire case for zero gain.
 const CREEPER_FLEE_RANGE = 6
 const CREEPER_FLEE_DIST = 6
-function fleeReflex(bot, ctx) {
+function fleeReflex(bot, ctx, state) {
   // rqdj: a creeper outside a closed house cannot reach us; running out is the danger.
   // inShelter alone is not enough (home.js sets it on the open-air night pillar
   // too), so require the body to be inside the home box.
@@ -523,14 +524,18 @@ function fleeReflex(bot, ctx) {
     const sh = ctx && ctx.shelter
     if (ctx && ctx.inShelter && sh && (sh.dugIn || sh.perched || (sh.dig && sh.dig.digs > 0))) return false
   } catch (_) { /* scan best-effort: flee */ }
+  // idkcraft-e4p4: reuse the buildState snapshot when present (nearest
+  // creeper at any distance — the flee band is enforced below) instead of
+  // rescanning; states built elsewhere fall back to the ranged scan.
   let creeper = null
-  try { creeper = findCreeper(bot, CREEPER_FLEE_RANGE) } catch (_) { return false }
+  try { creeper = (state && state._snap) ? state._creeper : findCreeper(bot, CREEPER_FLEE_RANGE) } catch (_) { return false }
   if (!creeper) { ctx.fleeTargetId = null; return false }
   const bp = bot.entity && bot.entity.position
   if (!bp) return false
   let d
   try { d = bp.distanceTo(creeper.position) } catch (_) { return false }
   if (typeof d !== 'number') return false
+  if (d > CREEPER_FLEE_RANGE) { ctx.fleeTargetId = null; return false }
   let dx = bp.x - creeper.position.x
   let dz = bp.z - creeper.position.z
   if (dx === 0 && dz === 0) dx = 1

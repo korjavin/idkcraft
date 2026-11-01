@@ -29,3 +29,30 @@ describe('docker-compose body2 wiring (idkcraft-neuc.19)', () => {
     assert.doesNotMatch(serviceBlock('baritone'), /BARITONE_API/)
   })
 })
+
+describe('docker-compose body2 heap default (idkcraft-e4p4)', () => {
+  const startSh = fs.readFileSync(path.join(__dirname, '..', '..', 'baritone', 'start.sh'), 'utf8')
+
+  it('body2 defaults BODY_JVM_ARGS to -Xmx1500m (the bead evidence is the body JVM, not Node)', () => {
+    assert.match(serviceBlock('body2'), /BODY_JVM_ARGS:.*-Xmx1500m/)
+  })
+
+  it('the -Xmx fits inside the body2 cap with headroom for non-heap JVM + socat', () => {
+    const xmx = Number(serviceBlock('body2').match(/-Xmx(\d+)m/)[1])
+    const cap = Number(serviceBlock('body2').match(/mem_limit:.*:-(\d+)m/)[1])
+    assert.ok(cap - xmx >= 800, `headroom ${cap - xmx}m under the ${cap}m cap`)
+  })
+
+  it('the worker keeps todays JVM (no BODY_JVM_ARGS on the baritone service)', () => {
+    assert.doesNotMatch(serviceBlock('baritone'), /BODY_JVM_ARGS/)
+  })
+
+  it('the 400m swarm slots are node-only (no BODY_JVM_ARGS)', () => {
+    assert.doesNotMatch(serviceBlock('swarm1'), /BODY_JVM_ARGS/)
+  })
+
+  it('start.sh defaults the body2 heap to -Xmx1500m, body2-only, explicit value wins', () => {
+    assert.match(startSh, /-Xmx1500m/)
+    assert.match(startSh, /\[\s*"\$\{BARITONE_API:-\}"\s*=\s*1\s*\] && \[ -z "\$\{BODY_JVM_ARGS:-\}" \]/)
+  })
+})

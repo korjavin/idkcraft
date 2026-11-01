@@ -309,7 +309,10 @@ services:
       BARITONE_API: "1"
       BOT: ${BOT2_USERNAME:-}
       # idkcraft-neuc.67: extra game-JVM args (heap/GC), appended by start.sh.
-      BODY_JVM_ARGS: ${BODY_JVM_ARGS:-}
+      # idkcraft-e4p4: default -Xmx1500m — the bead's 626MB heap/GC evidence
+      # is the body JVM (body.stats), not Node; 1500m leaves ~1000m headroom
+      # under the 2500m cap. A Portainer BODY_JVM_ARGS still wins when set.
+      BODY_JVM_ARGS: ${BODY_JVM_ARGS:--Xmx1500m}
     logging:
       driver: json-file
       options:
@@ -351,6 +354,9 @@ services:
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
       BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
+      # idkcraft-e4p4: the image default (Dockerfile, 1536m for bot2) does
+      # not fit the 400m helper cap — pin the swarm heap inside it.
+      NODE_OPTIONS: --max-old-space-size=256
     volumes:
       - bot-memory:/app/memory
     logging:

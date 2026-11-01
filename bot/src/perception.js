@@ -41,7 +41,10 @@ function findCreeper(bot, maxDist) {
   if (!bp) return null
   let best = null
   let bestDist = Infinity
-  for (const entity of Object.values(bot.entities || {})) {
+  // idkcraft-e4p4: for-in over the live map, no Object.values copy — this
+  // scan runs on reaction ticks and every flee check.
+  for (const id in (bot.entities || {})) {
+    const entity = bot.entities[id]
     if (!entity || entity.type === 'player' || !entity.position) continue
     if ((entity.name || '') !== 'creeper') continue
     if (entity.isValid === false) continue
@@ -63,7 +66,10 @@ function snapHostiles(bot) {
   let count = 0
   let name = null
   let dist = null
-  for (const entity of Object.values(bot.entities || {})) {
+  // idkcraft-e4p4: for-in over the live map, no Object.values copy — this
+  // snapshot runs every tick via meleeReflex.
+  for (const id in (bot.entities || {})) {
+    const entity = bot.entities[id]
     if (!entity || entity.type === 'player' || !entity.position) continue
     if (!HOSTILE_NAMES.has(entity.name || '')) continue
     let d
@@ -187,30 +193,49 @@ function buildState(bot, target, lastTargetPos, fightGivenUpId = null) {
   let distanceToPlayer = null
   let playerMoving = false
   let nextPos = null
+  let playerPos = null
   if (target) {
     distanceToPlayer = bot.entity.position.distanceTo(target.position)
+    playerPos = target.position
     if (lastTargetPos) {
       playerMoving = target.position.distanceTo(lastTargetPos) > 0.1
     }
     nextPos = target.position.clone()
   }
+  // idkcraft-e4p4: one pass over a single entity snapshot — this is the
+  // hottest per-tick allocation path (buildState + snapHostiles +
+  // findCreeper ran four full scans per tick: two snapshots here plus one
+  // each in the reflexes). The hostile snapshot and the nearest creeper
+  // ride on the state so meleeReflex/fleeReflex reuse them instead of
+  // rescanning. Negated comparisons preserve isFightTarget NaN semantics
+  // (NaN reads as not-a-target on both ranges).
+  const bp = bot.entity.position
+  const list = Object.values((bot && bot.entities) || {})
   let nearbyHostiles = 0
-  for (const entity of Object.values(bot.entities)) {
-    if (entity.type === 'player' || !entity.position) continue
-    const name = entity.name || ''
-    if (!HOSTILE_NAMES.has(name)) continue
-    if (entity.position.distanceTo(bot.entity.position) < 16) nearbyHostiles++
-  }
   let hostile = null
   let hostileDistance = null
   let hostilePlayerDistance = Infinity
-  for (const entity of Object.values(bot.entities)) {
-    if (!isFightTarget(entity, bot.entity.position, target && target.position)) continue
-    const dBot = entity.position.distanceTo(bot.entity.position)
-    const dPlayer = target ? entity.position.distanceTo(target.position) : Infinity
-    if (hostileDistance === null || dBot < hostileDistance) {
+  let snapName = null
+  let snapDist = null
+  let creeper = null
+  let creeperDist = Infinity
+  for (const entity of list) {
+    if (!entity || entity.type === 'player' || !entity.position) continue
+    const name = entity.name || ''
+    if (!HOSTILE_NAMES.has(name)) continue
+    const d = entity.position.distanceTo(bp)
+    if (typeof d !== 'number') continue
+    if (d < 16) {
+      nearbyHostiles++
+      if (snapDist === null || d < snapDist) { snapDist = d; snapName = name || 'mob' }
+    }
+    if (name === 'creeper' && entity.isValid !== false && d < creeperDist) { creeperDist = d; creeper = entity }
+    if (NO_CHASE.has(name)) continue
+    const dPlayer = playerPos ? entity.position.distanceTo(playerPos) : Infinity
+    if (!(d <= FIGHT_RANGE_BOT) && !(typeof dPlayer === 'number' && dPlayer <= FIGHT_RANGE_PLAYER)) continue
+    if (hostileDistance === null || d < hostileDistance) {
       hostile = entity
-      hostileDistance = dBot
+      hostileDistance = d
       hostilePlayerDistance = dPlayer
     }
   }
@@ -227,6 +252,11 @@ function buildState(bot, target, lastTargetPos, fightGivenUpId = null) {
     hostile
   }
   state._lastTargetPos = nextPos
+  // idkcraft-e4p4: same shapes as snapHostiles()/findCreeper() so the
+  // reflexes reuse them; states built elsewhere lack these and fall back
+  // to a direct scan.
+  state._snap = { count: nearbyHostiles, name: snapName, dist: snapDist }
+  state._creeper = creeper
   return state
 }
 
