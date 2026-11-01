@@ -824,6 +824,18 @@ function pickChest(bot, ctx, f, kind) {
     if (c && ctx.home && c === ctx.home.chest && require('./build').entranceHoled(bot, ctx, c)) continue
     if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true })
   }
+  // Remembered map chests (idkcraft-qwyl, the #692 bring precedent): own
+  // sightings plus peer bots' sightings (read-only, radius 32, home
+  // excluded by the lookup). A stocked remembered chest spares the
+  // craft/gather stages below — the selection stays nearest-first.
+  try {
+    const extra = stockpileMod.nearbyChestsAll
+      ? stockpileMod.nearbyChestsAll(bot, ctx, [...tried])
+      : stockpileMod.nearbyChests(bot, ctx, [...tried])
+    for (const c of extra) {
+      if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true })
+    }
+  } catch (_) { /* remembered sightings best-effort */ }
   let best = null
   for (const c of cands) {
     const k = `${c.at.x},${c.at.y},${c.at.z}`
