@@ -806,7 +806,7 @@ function chestTick(bot, ctx, f, d) {
       dropChestState(ctx, k) // fruitless draw, no re-read: cached state is stale, drop it fast
       if (chestGoneAt(bot, at)) dryMarkAllKinds(ctx, k) // vanished: no kind walks back within the window
     }
-  }, CHEST_TIMEOUT_MS, () => { if (bank) dryMarkAllKinds(ctx, k) })
+  }, CHEST_TIMEOUT_MS, () => { if (bank) markTimeoutChest(ctx, d.kind, k) })
   return true
 }
 
@@ -851,6 +851,31 @@ function kindHeld(bot, kind, present) {
 // pruned, so one visit dry-marks all FETCH kinds at k for CHEST_DRY_MS.
 function dryMarkAllKinds(ctx, k) {
   for (const kind of Object.keys(FETCH)) markChestDry(ctx, kind, k)
+}
+
+// qwyl 03-after-fix minor: the flight timeout fires while run() may still
+// be drawing (openChest has its own 20 s timeout), so at the bot's own
+// bank (home/site) a slow open is not a blocked lid — only the visiting
+// kind is marked. A truly gone or unreachable chest keeps the all-kinds
+// verdict through the draw path (stalled walk, chestGoneAt).
+function homeSiteKeys(ctx) {
+  const out = new Set()
+  try {
+    for (const c of [ctx && ctx.home && ctx.home.chest, ctx && ctx.castle && ctx.castle.siteChest]) {
+      if (c && typeof c.x === 'number' && typeof c.y === 'number' && typeof c.z === 'number') {
+        out.add(`${c.x},${c.y},${c.z}`)
+        out.add(`${Math.floor(c.x)},${Math.floor(c.y)},${Math.floor(c.z)}`)
+      }
+    }
+  } catch (_) { /* best-effort */ }
+  return out
+}
+
+function markTimeoutChest(ctx, kind, k) {
+  try {
+    if (homeSiteKeys(ctx).has(k)) markChestDry(ctx, kind, k)
+    else dryMarkAllKinds(ctx, k)
+  } catch (_) { /* marks best-effort */ }
 }
 
 // True when the chest block is loaded and no longer a chest (packroom's
@@ -3038,6 +3063,7 @@ module.exports.pickChest = pickChest
 module.exports.CHEST_DRY_MS = CHEST_DRY_MS
 module.exports.markChestDry = markChestDry
 module.exports.dryMarkEmpties = dryMarkEmpties
+module.exports.markTimeoutChest = markTimeoutChest
 module.exports.snapshotChest = snapshotChest
 module.exports.dropChestState = dropChestState
 module.exports.freshChestState = freshChestState

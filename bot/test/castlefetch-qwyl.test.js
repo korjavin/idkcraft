@@ -203,6 +203,55 @@ describe('qwyl chest-first: remembered chests spare the gather/craft legs', () =
     assert.equal(fetch.pickChest(bot, ctx, {}, 'stone'), null, 'non-material bank: snapshot stands')
   })
 
+  it('a home-chest bank re-arms only the home chest: remembered snapshots stand', () => {
+    const bot = makeBot()
+    const home = { x: SITE.x - 10, y: 64, z: SITE.z - 10 }
+    const hk = `${home.x},${home.y},${home.z}`
+    const rem = { x: SITE.x - 12, y: 64, z: SITE.z - 12 }
+    const rk = `${rem.x},${rem.y},${rem.z}`
+    const ctx = { castle: castleState(), home: { chest: home }, chests: [home, rem] }
+    // Both chests opened empty by earlier legs.
+    fetch.snapshotChest(ctx, hk, {})
+    fetch.snapshotChest(ctx, rk, {})
+    fetch.markChestDry(ctx, 'stone', hk)
+    fetch.markChestDry(ctx, 'stone', rk)
+    // Then stockpile banks the quarry's cobble into the home chest.
+    stockpile.rearmCastleDraw(ctx, ['10 cobblestone'])
+    assert.equal(fetch.freshChestState(ctx, hk), null, 'home snapshot re-armed')
+    assert.ok(!ctx.castleChestDry[`stone@${hk}`], 'home dry mark re-armed')
+    assert.ok(fetch.freshChestState(ctx, rk), 'remembered snapshot survives the deposit')
+    assert.ok(typeof ctx.castleChestDry[`stone@${rk}`] === 'number', 'remembered dry mark survives the deposit')
+    const picked = fetch.pickChest(bot, ctx, {}, 'stone')
+    assert.ok(picked, 'banked stock is drawable without waiting out the TTL')
+    assert.deepEqual([picked.at.x, picked.at.y, picked.at.z], [home.x, home.y, home.z])
+    assert.equal(
+      fetch.pickChest(bot, ctx, { chestTried: new Set([hk]) }, 'stone'),
+      null,
+      'remembered sighting still skipped after the re-arm',
+    )
+  })
+
+  it('a flight timeout at the home bank marks only the visiting kind', () => {
+    const home = { x: SITE.x - 10, y: 64, z: SITE.z - 10 }
+    const hk = `${home.x},${home.y},${home.z}`
+    const ctx = { castle: castleState(), home: { chest: home }, chests: [home] }
+    // Slow-but-successful draw at the bot's own bank: only stone goes dry.
+    fetch.markTimeoutChest(ctx, 'stone', hk)
+    assert.ok(typeof ctx.castleChestDry[`stone@${hk}`] === 'number', 'visiting kind marked')
+    for (const kind of Object.keys(fetch.FETCH)) {
+      if (kind === 'stone') continue
+      assert.ok(!ctx.castleChestDry[`${kind}@${hk}`], `${kind} spared at the own bank`)
+    }
+    // A remembered sighting timing out still informs every kind.
+    const rem = { x: SITE.x - 12, y: 64, z: SITE.z - 12 }
+    const rk = `${rem.x},${rem.y},${rem.z}`
+    ctx.chests.push(rem)
+    fetch.markTimeoutChest(ctx, 'stone', rk)
+    for (const kind of Object.keys(fetch.FETCH)) {
+      assert.ok(typeof ctx.castleChestDry[`${kind}@${rk}`] === 'number', `${kind} dry-marked at a non-bank sighting`)
+    }
+  })
+
   it('nearbyChestsAll merges own + peer, nearest first, home excluded', () => {
     const bot = makeBot()
     const home = { x: SITE.x - 4, y: 64, z: SITE.z - 4 }

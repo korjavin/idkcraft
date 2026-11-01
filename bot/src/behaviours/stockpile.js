@@ -1174,8 +1174,28 @@ function rearmCastleDraw(ctx, names) {
   try {
     const castle = require('./castle')
     if (names.some((s) => castle.isMaterial(String(s).split(' ').pop(), ctx.castle))) {
-      ctx.castleChestDry = null
-      ctx.castleChestState = null
+      // qwyl 03-after-fix major: only the home/site chests ever receive
+      // this bot's deposits — drop just their keys, remembered and peer
+      // sightings keep their entries to the 10-min TTL.
+      const own = new Set()
+      for (const c of [ctx && ctx.home && ctx.home.chest, ctx && ctx.castle && ctx.castle.siteChest]) {
+        if (c && typeof c.x === 'number' && typeof c.y === 'number' && typeof c.z === 'number') {
+          own.add(`${c.x},${c.y},${c.z}`)
+          const floored = chestKeyOf(c)
+          if (floored) own.add(floored)
+        }
+      }
+      if (ctx.castleChestState) {
+        for (const k of own) delete ctx.castleChestState[k]
+        if (Object.keys(ctx.castleChestState).length === 0) ctx.castleChestState = null
+      }
+      if (ctx.castleChestDry) {
+        for (const key of Object.keys(ctx.castleChestDry)) {
+          const at = key.slice(key.lastIndexOf('@') + 1)
+          if (own.has(at)) delete ctx.castleChestDry[key]
+        }
+        if (Object.keys(ctx.castleChestDry).length === 0) ctx.castleChestDry = null
+      }
     }
   } catch (_) { /* marks lapse on their own (CHEST_DRY_MS) */ }
 }
