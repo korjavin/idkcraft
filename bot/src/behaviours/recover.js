@@ -915,8 +915,11 @@ async function chooseRecovery(brain, facts, feasible) {
   // y34/duc shaping after the 4jr exclusion: a failed hop/sidestep is
   // already out, so shaping never hides the dig it escalates to. Before
   // the only-option check: a menu shrunk to one answer costs no brain
-  // call (round-2 rule).
-  const askNames = shapeRecoverMenu(unshaped, facts)
+  // call (round-2 rule). Plus the askMenu call_player rule (82zl fix): the
+  // synchronous ask path has no plan-path filter, so the model menu never
+  // offers the owner page unless the FSM picks it — a model-picked
+  // call_player on the first stuck action is the healthy-pit page regression.
+  const askNames = shapeRecoverMenu(unshaped, facts).filter((n) => n !== 'call_player' || fsm === 'call_player')
   if (askNames.length <= 1) return { action: askNames[0] || 'wait', source: 'only-option', fsm, model: null }
   if (!brain || typeof brain.ask !== 'function') return { action: fsm, source: 'fsm', fsm, model: null }
   const model = (brain.source || brain.name || 'model')

@@ -259,6 +259,7 @@ services:
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_TOKENS_PER_HOUR: ${LLM_TOKENS_PER_HOUR:-}
       BOT_LLM_ORDERS: ${BOT_LLM_ORDERS:-} # each bot asks its own plan; peer bot lines never ask
+      BOT_MENU_ASK: ${BOT_MENU_ASK:-} # 82zl fix: opt-in prod goal-classifier menu ask (1|true|yes; default off = stub FSM)
       GOAL_WATCHDOG_MS: ${GOAL_WATCHDOG_MS:-60000}
       GOAL_COMMIT_MS: ${GOAL_COMMIT_MS:-120000}
       GOAL_WATCHDOG_MAX_ROUNDS: ${GOAL_WATCHDOG_MAX_ROUNDS:-6}

@@ -488,7 +488,16 @@ describe('makeBrain', () => {
       assert.equal(b.plan, undefined)
     }
   })
-  it('TYPESAFE key wires the jev menu ask; combat decide stays the stub (82zl)', async () => {
+  it('TYPESAFE key alone wires no menu ask: retreat/recover/bring keep the FSM (82zl fix, switch off)', () => {
+    const b = makeBrain({ TYPESAFE_API_KEY: 'x' })
+    assert.equal(b.name, 'stub')
+    assert.equal(b.source, undefined)
+    assert.equal(b.ask, undefined, 'no shared ask in prod without BOT_MENU_ASK=1')
+    assert.equal(b.menuAsk, undefined)
+    assert.equal(typeof b.plan, 'function', 'key keeps plan()')
+    assert.equal(b.decide, stubBrain.decide, 'no combat tick ask (vhlb.5 stands)')
+  })
+  it('TYPESAFE key with the switch wires the jev menu ask as menuAsk; combat decide stays the stub (82zl fix)', async () => {
     // jevBrain captures fetch at construction: stub before makeBrain.
     let calls = 0
     const origFetch = global.fetch
@@ -499,15 +508,16 @@ describe('makeBrain', () => {
       return { ok: true, json: async () => ({ answers: { action: { choice: 'gather' } } }) }
     }
     // The single stub serves construction (captured) and the ask below.
-    const b = makeBrain({ TYPESAFE_API_KEY: 'x' })
+    const b = makeBrain({ TYPESAFE_API_KEY: 'x', BOT_MENU_ASK: '1' })
     assert.equal(b.name, 'stub')
     assert.equal(b.source, 'jev')
-    assert.equal(typeof b.ask, 'function', 'classifier arbitration consults the model')
+    assert.equal(typeof b.menuAsk, 'function', 'classifier arbitration consults the model')
+    assert.equal(b.ask, undefined, 'shared ask stays off: retreat/recover/bring keep the FSM')
     assert.equal(typeof b.plan, 'function', 'key keeps plan()')
     assert.equal(b.decide, stubBrain.decide, 'no combat tick ask (vhlb.5 stands)')
-    // The wired ask actually posts the menu and returns the label.
+    // The wired menuAsk actually posts the menu and returns the label.
     try {
-      assert.equal(await b.ask({ state: 's', instructions: 'i', criteria: { gather: 'g', craft: 'c' } }), 'gather')
+      assert.equal(await b.menuAsk({ state: 's', instructions: 'i', criteria: { gather: 'g', craft: 'c' } }), 'gather')
     } finally {
       global.fetch = origFetch
     }
@@ -521,12 +531,18 @@ describe('makeBrain', () => {
     }
     assert.equal(calls, 1)
   })
-  it('PLANNER=jev keeps the jev ask with both keys', () => {
-    const b = makeBrain({ ANTHROPIC_API_KEY: 'a', TYPESAFE_API_KEY: 'j', PLANNER: 'jev' })
+  it('PLANNER=jev with the switch keeps the jev menuAsk with both keys', () => {
+    const b = makeBrain({ ANTHROPIC_API_KEY: 'a', TYPESAFE_API_KEY: 'j', PLANNER: 'jev', BOT_MENU_ASK: 'true' })
     assert.equal(b.source, 'jev')
-    assert.equal(typeof b.ask, 'function')
+    assert.equal(typeof b.menuAsk, 'function')
+    assert.equal(b.ask, undefined)
     assert.equal(b.decide, stubBrain.decide)
     assert.equal(typeof b.plan, 'function')
+  })
+  it('PLANNER=jev without the switch wires no menu ask', () => {
+    const b = makeBrain({ ANTHROPIC_API_KEY: 'a', TYPESAFE_API_KEY: 'j', PLANNER: 'jev' })
+    assert.equal(b.menuAsk, undefined)
+    assert.equal(b.ask, undefined)
   })
 })
 

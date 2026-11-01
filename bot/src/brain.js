@@ -220,6 +220,12 @@ const LLM_SYSTEM = 'You are the stall-point planner of a Minecraft companion bot
   'The bot is working on a goal and its progress has stalled. Read the state and pick the ONE option ' +
   'most likely to get progress moving again. Answer with JSON only, no prose: ' +
   '{"choice": "<one of the option ids>", "reason": "<one short sentence>"}'
+// Routine tick-menu prompt (idkcraft-82zl fix): the stall wording above
+// pushes the model toward 'unstick' options and tilts retreat's {opt, no}
+// questions toward 'no'. Menus get a neutral pick-one prompt; LLM_SYSTEM
+// stays with the stall planner only.
+const LLM_ASK_SYSTEM = 'You choose the next action of a Minecraft companion bot. ' +
+  'Answer with JSON only: {"choice": "<option id>"}'
 
 // LLM guardrails (idkcraft-vf8e.5): the ONE Anthropic call site — every use
 // (planner today; orders/skill later) posts through llmCall(). It counts
@@ -235,6 +241,10 @@ const LLM_TOKENS_PER_HOUR_DEFAULT = 200000
 const LLM_WINDOW_MS = 3600000
 const llmSpend = []
 let llmBudgetLogged = false
+
+function pruneLlmSpend(now = Date.now()) {
+  while (llmSpend.length && now - llmSpend[0].t >= LLM_WINDOW_MS) llmSpend.shift()
+}
 
 function llmTokensPerHour(env = process.env) {
   const raw = env.LLM_TOKENS_PER_HOUR
@@ -258,7 +268,7 @@ function hhmm(ms) {
 // throws 'llm budget exhausted' | 'llm http <status>' | the fetch/abort error.
 async function llmCall({ use, apiKey, body, signal, fetchFn }) {
   const now = Date.now()
-  while (llmSpend.length && now - llmSpend[0].t >= LLM_WINDOW_MS) llmSpend.shift()
+  pruneLlmSpend(now)
   const cap = llmTokensPerHour()
   const used = llmSpend.reduce((a, e) => a + e.n, 0)
   if (cap > 0 && used >= cap) {
@@ -274,7 +284,7 @@ async function llmCall({ use, apiKey, body, signal, fetchFn }) {
   // body that never parses) may still be billed: charge the window a
   // conservative estimate (~4 chars/token in + the max_tokens ceiling out)
   // so a run of timeouts still trips the cap. The counters stay real usage.
-  const charge = () => llmSpend.push({ t: Date.now(), n: Math.ceil(payload.length / 4) + (Number(body.max_tokens) || 0) })
+  const charge = () => llmSpend.push({ t: Date.now(), n: Math.ceil(payload.length / 4) + (Number(body.max_tokens) || 0), use })
   let res
   try {
     res = await (fetchFn || fetch)(LLM_ENDPOINT, {
@@ -300,7 +310,7 @@ async function llmCall({ use, apiKey, body, signal, fetchFn }) {
   const tout = Number.isFinite(u.output_tokens) ? u.output_tokens : 0
   metrics.llmTokens.inc({ dir: 'in', use }, tin)
   metrics.llmTokens.inc({ dir: 'out', use }, tout)
-  llmSpend.push({ t: Date.now(), n: tin + tout })
+  llmSpend.push({ t: Date.now(), n: tin + tout, use })
   return data
 }
 
@@ -367,10 +377,11 @@ function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MO
 
 // Tick-menu ask answered by a text LLM (idkcraft-82zl): the same one-line
 // JSON menu shape as llmPlanner but returning the chosen label, like
-// jevBrain.ask, so chooseStep/retreat can consult it. Budgeted by
-// LLM_TOKENS_PER_HOUR inside llmCall; single-option menus answer directly,
-// like the jev ask. Timeout defaults to the tick deadline: a late menu
-// answer is a stall, and chooseStep falls back to the FSM on timeout.
+// jevBrain.ask, for the goal classifier (chooseStep reads it as menuAsk).
+// Budgeted by LLM_TOKENS_PER_HOUR inside llmCall; single-option menus
+// answer directly, like the jev ask. Timeout defaults to the tick
+// deadline: a late menu answer is a stall, and chooseStep falls back to
+// the FSM on timeout.
 function llmAsk(apiKey, fetchFn, timeoutMs = 1000, model = LLM_MODEL) {
   async function ask({ state, instructions, criteria, labels = null, situation = '' }) {
     const keys = Object.keys(criteria || {})
@@ -379,6 +390,18 @@ function llmAsk(apiKey, fetchFn, timeoutMs = 1000, model = LLM_MODEL) {
     if (keys.length === 1) {
       if (situation) askErrors.delete(situation)
       return keys[0]
+    }
+    // Budget partition (idkcraft-82zl fix, minor a): menu asks share
+    // LLM_TOKENS_PER_HOUR with the stall planner and owner orders. Once
+    // menu asks alone spent half the window, skip (FSM fallback) so a busy
+    // tick hour cannot starve plan()/orders until the window slides.
+    pruneLlmSpend()
+    const cap = llmTokensPerHour()
+    if (cap > 0 && llmSpend.reduce((a, e) => a + (e.use === 'ask' ? e.n : 0), 0) >= cap / 2) {
+      metrics.llmCalls.inc({ use: 'ask', outcome: 'budget' })
+      metrics.brainRequests.inc({ source: 'llm', outcome: 'error' })
+      streakFail(situation)
+      throw new Error('llm budget exhausted (menu ask headroom)')
     }
     const endTimer = metrics.brainDuration.startTimer({ source: 'llm' })
     try {
@@ -398,7 +421,7 @@ function llmAsk(apiKey, fetchFn, timeoutMs = 1000, model = LLM_MODEL) {
             max_tokens: 300,
             // A one-line menu pick: no thinking keeps it inside the tick deadline.
             thinking: { type: 'disabled' },
-            system: LLM_SYSTEM,
+            system: LLM_ASK_SYSTEM,
             messages: [{ role: 'user', content: user }],
           },
         })
@@ -667,30 +690,43 @@ function hybridBrain(remote) {
   }
 }
 
+// Opt-in for the prod menu ask (idkcraft-82zl fix): BOT_MENU_ASK=1 (also
+// true/yes, like BOT_AUTONOMOUS) wires the goal-classifier menu ask in
+// prod. Default off = today's stub behavior (vhlb.5): no model on the tick
+// path, keyless envs byte-identical.
+function menuAskEnabled(env) {
+  const v = env && env.BOT_MENU_ASK
+  return v === '1' || v === 'true' || v === 'yes'
+}
+
 // vhlb.5 retired the tick DECIDE ask (laya/JEV) — the A/B (vhlb.1) showed
 // neither beats the stub FSM on combat, so decide() stays the stub here.
-// u19u B (idkcraft-82zl) wires back only the menu ask: the prod brain
-// carries ask() so the goal classifier arbitration (chooseStep) and retreat
-// consult the model, not just a manual 'brain jev|laya'. BRAIN_URL stays
-// ignored (prod still has it set to JEV); jevBrain/hybridBrain stay for
-// the manual 'brain jev|laya'.
+// u19u B (idkcraft-82zl) wires back only the menu ask, scoped to the goal
+// classifier: the prod brain carries menuAsk() — read solely by chooseStep —
+// and leaves ask off, so retreat/recover/bring (which read brain.ask) keep
+// the FSM in prod exactly like the manual 'brain off'. Manual 'brain
+// jev|laya' brains keep ask() and consult everywhere, as before.
+// BRAIN_URL stays ignored (prod still has it set to JEV);
+// jevBrain/hybridBrain stay for the manual 'brain jev|laya'.
 function makeBrain(env) {
   const key = env && env.TYPESAFE_API_KEY
-  if (env && env.BRAIN_URL) console.log('BRAIN_URL ignored: combat tick ask stays retired (vhlb.5); the menu ask rides the PLANNER seam (idkcraft-82zl)')
+  if (env && env.BRAIN_URL) console.log('BRAIN_URL ignored: combat tick ask stays retired (vhlb.5); the menu ask rides the PLANNER seam (idkcraft-82zl, opt-in BOT_MENU_ASK=1)')
   const base = key ? { ...stubBrain, ...planner(key) } : stubBrain
   // PLANNER seam: llm when ANTHROPIC_API_KEY is set (budgeted by
   // LLM_TOKENS_PER_HOUR inside llmCall), else jev when TYPESAFE_API_KEY is.
   // source names the asker so chooseStep shapes menus like the manual
   // brain (jev asks the full menu; anything else gets the hg8 shaping).
   let b = base
-  if (plannerChoice(env) === 'llm') {
-    b = { ...base, source: 'llm', ask: llmAsk(env.ANTHROPIC_API_KEY, undefined, brainTimeoutMs(env), env.LLM_MODEL || LLM_MODEL).ask }
-  } else if (key) {
-    b = { ...base, source: 'jev', ask: jevBrain(key, undefined, brainTimeoutMs(env), JEV_ENDPOINT).ask }
+  if (menuAskEnabled(env)) {
+    if (plannerChoice(env) === 'llm') {
+      b = { ...base, source: 'llm', menuAsk: llmAsk(env.ANTHROPIC_API_KEY, undefined, brainTimeoutMs(env), env.LLM_MODEL || LLM_MODEL).ask }
+    } else if (key) {
+      b = { ...base, source: 'jev', menuAsk: jevBrain(key, undefined, brainTimeoutMs(env), JEV_ENDPOINT).ask }
+    }
   }
   b = withPlanner(b, env)
-  console.log(`brain=stub planner=${plannerName(b)} ask=${(b.ask && b.source) || 'none'}`)
+  console.log(`brain=stub planner=${plannerName(b)} ask=${(b.ask && b.source) || 'none'} menuAsk=${(b.menuAsk && b.source) || 'none'}`)
   return b
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, llmAsk, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, llmCall, llmTokensPerHour, resetLlmBudget }
+module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, llmAsk, LLM_ASK_SYSTEM, menuAskEnabled, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, llmCall, llmTokensPerHour, resetLlmBudget }

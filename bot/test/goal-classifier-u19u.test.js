@@ -1,10 +1,11 @@
 'use strict'
 
 // Classifier plug contract, phase 1 (idkcraft-u19u §§1.1-1.3, §3):
-// chooseStep consults a brain with ask() and falls back to the FSM with a
-// disagreement reference. Prod note: the tick brain carries ask() since
-// idkcraft-82zl (PLANNER seam); these tests pin the contract with a
-// hand-built asking brain. No C/deadlock behaviour here.
+// chooseStep consults a brain with menuAsk()/ask() and falls back to the
+// FSM with a disagreement reference. Prod note (82zl fix): the prod brain
+// carries menuAsk() only behind opt-in BOT_MENU_ASK=1 (PLANNER seam); these
+// tests pin the contract with a hand-built asking brain. No C/deadlock
+// behaviour here.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
@@ -126,10 +127,31 @@ describe('goal classifier plug (u19u phase 1)', () => {
     assert.equal(await disagreements('forage', 'gather'), before + 1)
   })
 
-  it('82zl: makeBrain with a key yields a brain chooseStep asks', async () => {
-    // The bead's acceptance: the prod brain carries ask(), so the
-    // classifier arbitration runs against the stubbed model, not goal-fsm.
-    // FSM ranks craft above gather on the default facts; the model picks gather.
+  it('82zl fix: makeBrain with a key but no switch yields a brain chooseStep never asks', async () => {
+    // Switch off (default): no menuAsk and no ask, so the classifier runs
+    // the FSM even though a key exists. The fetch stub must stay untouched.
+    const origFetch = global.fetch
+    let calls = 0
+    global.fetch = async () => { calls++; throw new Error('must not be called') }
+    try {
+      const brain = makeBrain({ TYPESAFE_API_KEY: 'k' })
+      assert.equal(brain.menuAsk, undefined)
+      assert.equal(brain.ask, undefined)
+      const r = await goal.chooseStep(brain, facts(), ['gather', 'craft', 'rest'], null)
+      assert.equal(r.step, 'craft', 'FSM rank answers unasked')
+      assert.equal(r.source, 'goal-fsm')
+      assert.equal(r.model, null)
+    } finally {
+      global.fetch = origFetch
+    }
+    assert.equal(calls, 0)
+  })
+
+  it('82zl fix: makeBrain with the switch yields a menuAsk brain chooseStep asks', async () => {
+    // The bead's acceptance: the opt-in prod brain carries menuAsk() (not
+    // ask()), so the classifier arbitration runs against the stubbed model,
+    // not goal-fsm. FSM ranks craft above gather on the default facts; the
+    // model picks gather.
     // jevBrain captures fetch at construction: stub before makeBrain.
     const origFetch = global.fetch
     global.fetch = async (url, opts) => {
@@ -140,8 +162,9 @@ describe('goal classifier plug (u19u phase 1)', () => {
     }
     let brain
     try {
-      brain = makeBrain({ TYPESAFE_API_KEY: 'k' })
-      assert.equal(typeof brain.ask, 'function')
+      brain = makeBrain({ TYPESAFE_API_KEY: 'k', BOT_MENU_ASK: '1' })
+      assert.equal(typeof brain.menuAsk, 'function')
+      assert.equal(brain.ask, undefined)
       const r = await goal.chooseStep(brain, facts(), ['gather', 'craft', 'rest'], null)
       assert.equal(r.step, 'gather')
       assert.equal(r.source, 'jev')

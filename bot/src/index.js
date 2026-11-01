@@ -336,7 +336,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         // the menu ask (and the PLANNER plan) return on join — without this
         // the first empty-server episode would park prod on FSM until restart.
         const next = makeBrain(process.env)
-        const engine = typeof next.ask === 'function' ? (next.source || 'jev') : 'off'
+        const engine = (typeof next.ask === 'function' || typeof next.menuAsk === 'function') ? (next.source || 'jev') : 'off'
         doSetBrain(next, engine)
         console.log(`brain auto to=${engine} (player joined, prod restore)`)
       }
@@ -1673,11 +1673,12 @@ async function main() {
   const username = process.env.BOT_USERNAME || 'IdkBot'
   const followName = process.env.BOT_FOLLOW || ''
   const brain = makeBrain(process.env)
-  // 82zl: the prod brain carries a menu ask (PLANNER seam) so the goal
-  // classifier arbitrates in prod; combat decide() stays the stub FSM.
-  // The engine mirrors the asker so the alone-guard (autoBrain) treats a
-  // paid prod ask like a manual jev/llm brain, and the chat report matches.
-  const brainEngine = typeof brain.ask === 'function' ? (brain.source || 'jev') : 'off'
+  // 82zl: the opt-in prod brain carries a menu ask (menuAsk, PLANNER seam)
+  // so the goal classifier arbitrates in prod; combat decide() stays the
+  // stub FSM. The engine mirrors the asker so the alone-guard (autoBrain)
+  // treats a paid prod ask like a manual jev/llm brain, and the chat
+  // report matches.
+  const brainEngine = (typeof brain.ask === 'function' || typeof brain.menuAsk === 'function') ? (brain.source || 'jev') : 'off'
   metrics.serve(parseInt(process.env.METRICS_PORT || '9464', 10))
   const pingFn = require('minecraft-protocol').ping
   for (;;) {
