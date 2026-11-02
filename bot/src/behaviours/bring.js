@@ -190,6 +190,12 @@ function obsidianConsented(ctx, o) {
 function bringDeny(bot, block, ctx, name) {
   let d = 'protected'
   try { d = denyReason(bot, block, ctx) } catch (_) { d = 'protected' }
+  if (block && typeof block.name === 'string' && block.name.endsWith('_leaves')) {
+    try {
+      const reforestMod = require('./reforest')
+      if (reforestMod.isPersistentLeaf(bot, block.position)) return 'protected'
+    } catch (_) { /* guards best-effort */ }
+  }
   // 6ci5.1 r02: the faces gate every verdict on a consented block, not
   // just 'protected' — a below-feet trap verdict over a lava pocket must
   // still read 'submerged', or the atl.20 drop digs into it.
@@ -2340,7 +2346,13 @@ async function bring(bot, ctx, target, state) {
         // harvest tool first (guarded: fake bots may lack either method).
         let tool = null
         try { tool = bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(block) : null } catch (_) { tool = null }
+        const isSapDrop = o.drop && (o.drop.endsWith('_sapling') || o.drop === 'mangrove_propagule' || o.drop === 'azalea' || o.drop === 'flowering_azalea')
+        if (tool && tool.name === 'shears' && isSapDrop) tool = null
         if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+        const held = bot.heldItem
+        if (held && held.name === 'shears' && isSapDrop) {
+          try { if (typeof bot.unequip === 'function') await bot.unequip('hand') } catch (_) {}
+        }
         await bot.dig(block)
       } catch (_) { /* gone or interrupted: pickup anyway */ }
       ctx.digInFlight = false

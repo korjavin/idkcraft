@@ -129,6 +129,12 @@ function done(bot, ctx) {
 function dropFor(blockName) {
   if (blockName.endsWith('_log')) return blockName
   if (blockName === 'stone') return 'cobblestone' // ipn.20: the smelt rung's furnace stone sub
+  if (blockName.endsWith('_leaves')) {
+    if (blockName === 'mangrove_leaves') return 'mangrove_propagule'
+    if (blockName === 'azalea_leaves') return 'azalea'
+    if (blockName === 'flowering_azalea_leaves') return 'flowering_azalea'
+    return blockName.slice(0, -'_leaves'.length) + '_sapling'
+  }
   const base = blockName.endsWith('_ore') ? blockName.slice(0, -'_ore'.length) : blockName
   const raw = base.match(/(iron|copper|gold)$/)
   if (raw) return `raw_${raw[1]}`

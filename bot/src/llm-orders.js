@@ -65,7 +65,7 @@ const HOUSE_CHAIN = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stoc
 const ORDER_STEPS = {
   // codex: max = the executor's own clamp (bring WANT_MAX, flat FLAT_MAX_RADIUS) so a
   // bigger count refuses instead of silently delivering less and reporting done.
-  bring: { args: 'item, count', max: WANT_MAX, what: `gets an item to the player (count at most ${WANT_MAX}): from the pack, the home chest, by crafting or smelting it, mining the block, shearing sheep or hunting for food`, chat: (s) => `bring me ${s.item}${s.count ? ` ${s.count}` : ''}` },
+  bring: { args: 'item, count', max: WANT_MAX, what: `gets an item to the player (count at most ${WANT_MAX}): from the pack, the home chest, by crafting or smelting it, mining the block, shearing sheep, hunting for food, or beating leaves for saplings`, chat: (s) => `bring me ${s.item}${s.count ? ` ${s.count}` : ''}` },
   find: { args: 'item', what: 'finds the nearest block of that name and leads the player to it', chat: (s) => `find me ${s.item}` },
   flat: { args: 'count', max: 64, what: 'levels the ground around the player, count = radius', chat: (s) => `flat ${s.count || 8}` },
   share: { args: '', what: 'hands the player everything carried except tools, weapons and armour', chat: () => 'share' },
@@ -784,7 +784,7 @@ const RECIPE_TIMEOUT_MS = 20000
 const RECIPE_VERBS = ['craft', 'smelt', 'gather', 'fill', 'mine']
 
 const RECIPE_SYSTEM = 'You turn a Minecraft bring order the bot cannot otherwise fill into an acquisition recipe its order ladder can run. ' +
-  'The ladder can: craft <item> at a table (vanilla recipes; inputs held or produced by an earlier step), smelt <item> in a furnace (ore inputs need the right pickaxe), gather logs or colored wool through sub-orders, fill a water_bucket from water with an empty bucket, mine <block> with the right pickaxe. ' +
+  'The ladder can: craft <item> at a table (vanilla recipes; inputs held or produced by an earlier step), smelt <item> in a furnace (ore inputs need the right pickaxe), gather logs, colored wool, or saplings (by beating matching tree leaves, e.g. cherry_sapling from cherry_leaves, oak_sapling from oak_leaves) through sub-orders, fill a water_bucket from water with an empty bucket, mine <block> with the right pickaxe. ' +
   'Answer JSON only, no prose: {"materials":["<id>",...],"steps":[{"do":"craft|smelt|gather|fill|mine","item":"<id>"}]}. ' +
   'Steps run in order; every material is held already or produced by an earlier step. ' +
   'Each step yields one unit — repeat a step for more (three smelts for three ingots). ' +

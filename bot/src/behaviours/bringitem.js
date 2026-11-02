@@ -57,6 +57,19 @@ function setRecipeSource(s) {
   recipeSource = (s && typeof s.plan === 'function' && typeof s.enabled === 'function') ? s : null
 }
 
+function isSapling(name) {
+  return typeof name === 'string' && (name.endsWith('_sapling') || name === 'mangrove_propagule' || name === 'azalea' || name === 'flowering_azalea')
+}
+
+function leavesForSapling(name) {
+  if (typeof name !== 'string') return null
+  if (name === 'mangrove_propagule') return 'mangrove_leaves'
+  if (name === 'azalea') return 'azalea_leaves'
+  if (name === 'flowering_azalea') return 'flowering_azalea_leaves'
+  if (name.endsWith('_sapling')) return name.slice(0, -'_sapling'.length) + '_leaves'
+  return null
+}
+
 // Recipe capability table (idkcraft-6ci5.2): the ladder rungs a validated
 // recipe step may use — each reads the LIVE ladder, so a capability the
 // sibling adds (the mine leg above) validates the moment it lands and the
@@ -95,6 +108,7 @@ const recipeCaps = {
     // the queue would spend the dig, then abort on a false 'lost' line.
     if (typeof name === 'string' && name.endsWith('_log')) return 'ok'
     try { if (woolMod.isWoolFamily({ names: [name] })) return 'ok' } catch (_) { /* fall through */ }
+    if (isSapling(name)) return 'ok'
     return { impossible: 'nothing to gather' }
   },
   fill: (bot, ctx, name) => {
@@ -938,6 +952,12 @@ function openSubOrder(bot, ctx, o, gap, target, color) {
       want = Math.max(1, Math.ceil((2 * Math.ceil(short / 4) + infl) / 4))
     }
     toBlockSub(bot, o, fetch, fetch === 'logs' ? null : fetch, want, target, gap.need, word)
+  } else if (isSapling(name)) {
+    const leaves = leavesForSapling(name)
+    if (!leaves) return null
+    const want = Math.max((gap && gap.need) || 1, (pack[name] || 0) + 1)
+    toBlockSub(bot, o, leaves, name, want, target, gap.need, word)
+    return subLine(o, `${gap.need} ${word}`, leaves)
   } else {
     return null
   }
@@ -1887,6 +1907,8 @@ module.exports.resumeSub = resumeSub
 module.exports.bedGap = bedGap
 module.exports.pickSubGap = pickSubGap
 module.exports.subWordFor = subWordFor
+module.exports.isSapling = isSapling
+module.exports.leavesForSapling = leavesForSapling
 module.exports.smeltingGap = smeltingGap
 module.exports.planGap = planGap
 module.exports.smeltTick = smeltTick
