@@ -207,6 +207,61 @@ function normalizeBringName(raw) {
   return s.replace(/ /g, '_')
 }
 
+// Trim structure hints (idkcraft-3dkc): where each armor trim naturally generates in vanilla.
+const TRIM_STRUCTURES = {
+  coast: 'shipwrecks',
+  dune: 'desert pyramids',
+  eye: 'strongholds',
+  host: 'trail ruins',
+  raiser: 'trail ruins',
+  rib: 'nether fortresses',
+  sentry: 'pillager outposts',
+  shaper: 'trail ruins',
+  silence: 'ancient cities',
+  snout: 'bastion remnants',
+  spire: 'end cities',
+  tide: 'ocean monuments',
+  vex: 'woodland mansions',
+  ward: 'ancient cities',
+  wayfinder: 'trail ruins',
+  wild: 'jungle pyramids',
+  bolt: 'trial chambers',
+  flow: 'trial chambers',
+}
+
+function resolveArmorTrim(byName, rawNorm) {
+  const norm = String(rawNorm || '').toLowerCase().trim().replace(/ /g, '_')
+  const allTrims = Object.keys(byName).filter((n) => n.endsWith('_armor_trim_smithing_template')).sort()
+  if (allTrims.length === 0) return null
+  if (norm === 'armor_trim' || norm === 'armor_trims' || norm === 'trim' || norm === 'trims' ||
+      norm === 'armor_trim_smithing_template' || norm === 'armor_trim_smithing_templates') {
+    return { names: allTrims, family: 'armor_trim', isTrim: true }
+  }
+  const m = norm.match(/^(\w+?)_(?:(?:armor_)?trims?|armor_trim_smithing_templates?)$/)
+  if (m) {
+    const prefix = m[1]
+    const trimName = `${prefix}_armor_trim_smithing_template`
+    if (byName[trimName]) return { names: [trimName], family: `${prefix}_armor_trim`, isTrim: true, trimType: prefix }
+  }
+  return null
+}
+
+function scanTrimChests(bot, ctx, o) {
+  if (!o || !o.isTrim || o.chestScanned || !bot || typeof bot.findBlocks !== 'function') return
+  o.chestScanned = true
+  try {
+    const chestIds = (bot.registry && bot.registry.blocksByName)
+      ? ['chest', 'trapped_chest', 'barrel'].map((n) => bot.registry.blocksByName[n]?.id).filter(Number.isFinite)
+      : []
+    if (chestIds.length > 0) {
+      const sighted = bot.findBlocks({ matching: chestIds, maxDistance: stockpileMod.NEARBY_CHEST_RADIUS, count: 16 })
+      if (sighted && sighted.length > 0) {
+        stockpileMod.rememberChests(ctx, sighted)
+      }
+    }
+  } catch (_) { /* scan best-effort */ }
+}
+
 // Item name -> concrete registry items: the exact name, else the *_<name>
 // family (wool -> 16 *_wool, bed -> *_bed, axe -> *_axe), else the singular
 // (beds -> bed, torches -> torch). Nothing fuzzy: no match is null and the
@@ -214,7 +269,9 @@ function normalizeBringName(raw) {
 function resolveItem(bot, name) {
   const norm = String(name || '').toLowerCase().trim()
   if (!norm) return null
-  const byName = (bot.registry && bot.registry.itemsByName) || {}
+  const byName = (bot && bot.registry && bot.registry.itemsByName) || {}
+  const trim = resolveArmorTrim(byName, norm)
+  if (trim) return trim
   if (byName[norm]) return { names: [norm], family: norm }
   const family = (base) => Object.keys(byName).filter((n) => n.endsWith('_' + base)).sort()
   let names = family(norm)
@@ -371,6 +428,12 @@ function hasRecipe(bot, resolved) {
 // reaches it: the mob rung hunts sheep first (refuseItemOrHunt).
 function itemRefusal(bot, name, resolved, keptName) {
   if (keptName) return `my only ${keptName}, can't make another yet`
+  if (resolved && resolved.isTrim) {
+    if (resolved.trimType && TRIM_STRUCTURES[resolved.trimType]) {
+      return `no ${name} in chests (found in ${TRIM_STRUCTURES[resolved.trimType]})`
+    }
+    return `no armor trim in chests (found in structure chests like outposts, pyramids, ruins)`
+  }
   if (hasRecipe(bot, resolved)) return `can't make ${name} yet (crafting comes next)`
   return `can't get ${name}: no recipe, no source`
 }
@@ -1090,7 +1153,7 @@ function enterCraftOrRefuse(bot, ctx, o) {
   // acquisition recipe instead of the instant refusal; gated (flag/key, no
   // kept tool, no known recipe), so tool and sub orders read unchanged.
   if (startRecipeFallback(bot, ctx, o)) { say(bot, `no recipe for ${o.name} — asking how to get it…`); return }
-  refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [] }, o.keptName))
+  refuse(bot, ctx, itemRefusal(bot, o.name, { names: o.names || [], isTrim: o.isTrim, trimType: o.trimType }, o.keptName))
 }
 
 // Equip best-effort: the tool in hand, no refusal when the arm fails (the
@@ -1673,10 +1736,13 @@ async function fetchItem(bot, ctx, o, at = null) {
     // remembered chest instead of branching — the terminal legs below run
     // only once every chest is tried. A satisfied order never chains: a
     // fetched tool equips and a full pack returns, as before.
-    if (!fetchSatisfied(plan, o) && stockpileMod.nearbyChests(bot, ctx, o.chestSeen).length > 0) {
-      o.chestInFlight = false
-      o.phase = 'chestfetch'
-      return
+    if (!fetchSatisfied(plan, o)) {
+      if (o.isTrim && !o.chestScanned) scanTrimChests(bot, ctx, o)
+      if (stockpileMod.nearbyChests(bot, ctx, o.chestSeen).length > 0) {
+        o.chestInFlight = false
+        o.phase = 'chestfetch'
+        return
+      }
     }
     o.chestTried = true
     // Tool orders never take the return path (0jvh, the chestFetch gate's
@@ -1802,6 +1868,9 @@ module.exports.isFoodRequest = isFoodRequest
 module.exports.findEdible = findEdible
 module.exports.normalizeBringName = normalizeBringName
 module.exports.resolveItem = resolveItem
+module.exports.resolveArmorTrim = resolveArmorTrim
+module.exports.scanTrimChests = scanTrimChests
+module.exports.TRIM_STRUCTURES = TRIM_STRUCTURES
 module.exports.packCounts = packCounts
 module.exports.planItemGive = planItemGive
 module.exports.orderCraftNames = orderCraftNames

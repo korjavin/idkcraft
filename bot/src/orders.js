@@ -291,7 +291,8 @@ function createOrders(box) {
       // everywhere. The chest rung runs for every name with no diggable world
       // form — including exact block names like white_wool, dirt or torch.
       const keptName = plan && plan.keptOnly ? resolved.family : null
-      if (resolved && !worldFallback && ctx.home && ctx.home.chest) {
+      const hasHomeChest = ctx.home && ctx.home.chest
+      if (resolved && !worldFallback && (hasHomeChest || resolved.isTrim)) {
         if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
         ctx.resumeWork = false
@@ -300,10 +301,10 @@ function createOrders(box) {
         ctx.bring = {
           kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
           items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
-          phase: 'chestfetch', announced: true, keptName,
+          phase: 'chestfetch', announced: true, keptName, isTrim: !!resolved.isTrim, trimType: resolved.trimType,
         }
         ctx.paused = false
-        return `checking the home chest for ${resolved.family}`
+        return hasHomeChest ? `checking the home chest for ${resolved.family}` : `checking chests for ${resolved.family}`
       }
       // Bucket fill (idkcraft-k2ze): 'bring me water_bucket' with an empty
       // bucket in the pack fills from nearby water instead of refusing

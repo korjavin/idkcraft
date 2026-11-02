@@ -84,6 +84,11 @@ function resolveLogIds(bot) {
 function resolveFindIds(bot, name) {
   if (name === 'ore' || name === 'ores') return resolveIds(bot, ORE_NAMES)
   if (name === 'log' || name === 'logs') return resolveLogIds(bot)
+  const norm = String(name || '').toLowerCase().trim().replace(/ /g, '_')
+  if (norm === 'armor_trim' || norm === 'armor_trims' || norm === 'trim' || norm === 'trims' ||
+      norm.endsWith('_armor_trim') || norm.endsWith('_trim')) {
+    return resolveIds(bot, ['chest', 'trapped_chest', 'barrel'])
+  }
   let ids = resolveBlockIds(bot, name)
   if (ids.length === 0 && name.length > 1 && name.endsWith('s')) {
     const singular = name.slice(0, -1)
