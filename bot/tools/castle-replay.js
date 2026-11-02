@@ -1544,22 +1544,23 @@ async function main() {
   // complete castle-opening kit — batch stone, planks, scaffold dirt and a
   // stone kit (pick + sword), so equip is kit-complete and the first castle
   // word is a batch. One give carries many stacks (stuck precedent).
+  // neuc.65 H2 fix (idkcraft-r8tl): includes bread so post-respawn bodies can heal.
   if (KIT === 'seeded') {
     for (const [item, count] of [['cobblestone', 128], ['oak_planks', 64], ['dirt', 64],
-      ['stone_pickaxe', 1], ['stone_sword', 1], ['bookshelf', 5], ['enchanting_table', 1], ['blast_furnace', 1]]) {
+      ['stone_pickaxe', 1], ['stone_sword', 1], ['bread', 16], ['bookshelf', 5], ['enchanting_table', 1], ['blast_furnace', 1]]) {
       await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
     }
-    origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword, 5 shelves + table, blast furnace)')
+    origLog('CASTLE-RIG kit=seeded (128 cobble, 64 planks, 64 dirt, stone pick+sword, 16 bread, 5 shelves + table, blast furnace)')
   }
   // neuc.60 component kits: lay = the seeded kit with stock for a whole
   // 10-game-min window (no fetch leg should open); pick = 3 stone picks +
   // a sword and nothing to lay, so the first castle word opens a stone leg.
   if (KIT === 'lay') {
     for (const [item, count] of [['cobblestone', 640], ['oak_planks', 192], ['dirt', 64], ['torch', 32],
-      ['stone_pickaxe', 1], ['stone_sword', 1], ['bookshelf', 5], ['enchanting_table', 1], ['blast_furnace', 1]]) {
+      ['stone_pickaxe', 1], ['stone_sword', 1], ['bread', 16], ['bookshelf', 5], ['enchanting_table', 1], ['blast_furnace', 1]]) {
       await rcon(`give ${FOLLOWER} ${item} ${count}`).catch((e) => fail('seed', `${item}: ${e.message}`))
     }
-    origLog('CASTLE-RIG kit=lay (640 cobble, 192 planks, 64 dirt, 32 torches, stone pick+sword, 5 shelves + table, blast furnace)')
+    origLog('CASTLE-RIG kit=lay (640 cobble, 192 planks, 64 dirt, 32 torches, stone pick+sword, 16 bread, 5 shelves + table, blast furnace)')
   }
   if (KIT === 'pick') {
     for (const [item, count] of [['stone_pickaxe', 3], ['stone_sword', 1]]) {
