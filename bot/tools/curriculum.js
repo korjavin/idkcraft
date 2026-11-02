@@ -55,7 +55,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 
-const WEIGHT = { page: 3, bring: 2, 'step-fail': 2, park: 2 }
+const WEIGHT = { page: 3, bring: 2, 'step-fail': 2, park: 2, need: 2 }
 // Owner priority (idkcraft-vf8e.22): the harvest ranks what the owner cares
 // about first — castlefetch/mine/castle-feeding step fails and daytime idle
 // (S4 idle+stay) — above night/arrival families. Tiers sort before score;
@@ -153,6 +153,17 @@ function fetchKind(reason) {
   return m ? m[1] : null
 }
 
+// Normalise need text (idkcraft-vf8e.23): trim, lowercase, strip optional
+// prefix and punctuation, collapse whitespace.
+function normNeed(s) {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z0-9_-]+:\s*/, '')
+    .replace(/[.!?,;:]+$/, '')
+    .replace(/\s+/g, ' ')
+}
+
 // Lines -> events [{family, reason, bot, at, day, pos, facts, next, chain, item}].
 function parse(text, env = process.env) {
   const keep = botFilter(env)
@@ -161,6 +172,9 @@ function parse(text, env = process.env) {
   const who = (n) => (n.startsWith(swarm) ? 'swarm' : n)
   const eps = new Map()
   const out = []
+  // Recent situations and facts by bot, to attach the excerpt from the same
+  // minute as the chooser need event (idkcraft-vf8e.23).
+  const situations = []
   // Latest voxel slice in stream order (planState logs it at fire time, the
   // park lands later): the next park events' arena. Bot-agnostic — feeds are
   // single-bot, and a missing slice parks the candidate, never misplaces it.
@@ -241,6 +255,47 @@ function parse(text, env = process.env) {
       if (!keep(name)) continue
       lastSlice = w[1]
       continue
+    }
+    // A situation line (explicit situationText dump or task planState):
+    const sm = /^(?:choose )?situation(?:Text)?[: ]\s*(.*)$/.exec(msg)
+    if (sm) {
+      if (keep(name)) situations.push({ at, day, bot: who(name), text: sm[1].trim() })
+      continue
+    }
+
+    // An LLM chooser line with a named capability need (idkcraft-vf8e.23):
+    const ch = /^llm choose regime=(\S+) trigger=(\S+) outcome=(\S+) plan=(.+?) need="([^"]*)"(?: why="([^"]*)")?(?: situation="([^"]*)")?/.exec(msg)
+    if (ch) {
+      if (!keep(name)) continue
+      const rawNeed = ch[5].trim()
+      if (rawNeed) {
+        const regime = ch[1]
+        const trigger = ch[2]
+        const outcome = ch[3]
+        const plan = ch[4]
+        const why = ch[6] || ''
+        const sitExplicit = ch[7] ? ch[7].trim() : ''
+        const norm = normNeed(rawNeed)
+        const b = who(name)
+        const sitMatch = sitExplicit || (situations.slice().reverse().find((s) => s.bot === b && Math.abs(s.at - at) <= 60000) || {}).text
+        const sitText = sitMatch ? sitMatch.slice(0, 300) : (why ? why.slice(0, 300) : null)
+        out.push({
+          family: 'need',
+          reason: words(norm),
+          need: rawNeed,
+          norm,
+          regime,
+          trigger,
+          outcome,
+          plan,
+          whyText: why,
+          situation: sitText,
+          bot: b,
+          at,
+          day,
+        })
+        continue
+      }
     }
     const a = RECOVER.exec(msg)
     if (!a || !keep(name)) continue
@@ -331,19 +386,27 @@ function rank(events, days = 7) {
     // night occurrences aggregate separately, so one late fail cannot demote
     // (or promote) the other bucket with the newest event's time.
     const key = e.family === 'page' ? `page|${e.reason}|${cellOf(e.pos)}` : e.family === 'bring' ? `bring|${e.reason}` :
-      e.family === 'step-fail' && e.step === 'stay' ? `step-fail|${e.reason}|${e.time || 'unknown'}` : `${e.family}|${e.reason}`
+      e.family === 'step-fail' && e.step === 'stay' ? `step-fail|${e.reason}|${e.time || 'unknown'}` :
+      e.family === 'need' ? `need|${e.regime}|${e.reason}` :
+      `${e.family}|${e.reason}`
     let c = by.get(key)
-    if (!c) by.set(key, (c = { sig: sigOf(key), family: e.family, reason: e.reason, cell: e.family === 'page' ? cellOf(e.pos) : '-', count: 0, bots: [] }))
+    if (!c) by.set(key, (c = { sig: sigOf(key), family: e.family, reason: e.reason, cell: e.family === 'page' ? cellOf(e.pos) : '-', count: 0, bots: [], days: new Set() }))
     c.count++
+    c.days.add(e.day)
     if (!c.bots.includes(e.bot)) c.bots.push(e.bot)
     if (!c.at || e.at >= c.at) {
       c.at = e.at
       c.lastSeen = new Date(e.at).toISOString().slice(0, 19).replace('T', ' ')
-      for (const k of ['pos', 'facts', 'from', 'next', 'chain', 'item', 'step', 'detail', 'fetch', 'task', 'slice', 'time']) if (e[k] !== undefined) c[k] = e[k]
+      for (const k of ['pos', 'facts', 'from', 'next', 'chain', 'item', 'step', 'detail', 'fetch', 'task', 'slice', 'time', 'need', 'norm', 'regime', 'trigger', 'whyText']) if (e[k] !== undefined) c[k] = e[k]
+      if (e.situation) {
+        if (!c.situation || e.situation !== e.whyText) c.situation = e.situation
+      }
     }
   }
   const list = [...by.values()].map((c) => {
-    c.score = c.count * WEIGHT[c.family]
+    c.daysSeen = c.days ? c.days.size : 1
+    c.score = c.family === 'need' ? c.count * c.daysSeen : c.count * (WEIGHT[c.family] || 1)
+    delete c.days
     c.tier = tier(c)
     const p = proposal(c)
     c.proposable = !p.why
@@ -354,12 +417,15 @@ function rank(events, days = 7) {
   return list.sort((a, b) => a.tier - b.tier || b.score - a.score || (b.lastSeen > a.lastSeen ? 1 : b.lastSeen < a.lastSeen ? -1 : 0))
 }
 
-// Owner-priority tier (idkcraft-vf8e.22): 0 = what the owner cares about
+// Owner-priority tier (idkcraft-vf8e.22, vf8e.23): 0 = what the owner cares about
 // (castlefetch parks, castlefetch/mine/castle-feeding step fails, daytime
-// idle = a day-time stay fail, the S4 idle+stay bucket), 2 = night/arrival
-// families (shelter/gohome/stay fails), 1 = everything else.
+// idle = a day-time stay fail, the S4 idle+stay bucket), 1 = bring refusals
+// and castle-stalled needs, 2 = other needs / night/arrival
+// families (shelter/gohome/stay fails).
 function tier(c) {
   if (c.family === 'park' && String(c.reason || '').startsWith('castlefetch-')) return 0
+  if (c.family === 'bring') return 1
+  if (c.family === 'need') return c.regime === 'castle-stalled' ? 1 : 2
   if (c.family === 'step-fail') {
     if (c.step === 'stay' && c.time === 'day') return 0
     if (OWNER_STEPS.has(c.step)) return 0
@@ -543,12 +609,37 @@ function proposePark(c) {
   return { why: 'red-parked' }
 }
 
+// A chooser capability need candidate (idkcraft-vf8e.23):
+// Generates a hand-written-style goal template (vf8e.20 CURRICULUM_GOALS
+// path) for human completion. Marks why='needs-verify' (proposable=false)
+// so the automated runner does not pick an unverified empty arena.
+function proposeNeed(c, name, base) {
+  if (!c.need) return { why: 'no-need' }
+  const bead = { ...base, bead: 'idkcraft-vf8e.23' }
+  const head = `In prod the chooser needed '${c.need}' ${c.count}x across ${c.daysSeen || 1} day${(c.daysSeen || 1) === 1 ? '' : 's'} (last ${c.lastSeen} UTC, bots ${c.bots.join(',')}, regime=${c.regime}).`
+  const sit = c.situation ? ` Situation: ${c.situation}.` : (c.whyText ? ` Why: ${c.whyText}.` : '')
+  const order = `do gen_${c.sig}`
+  return {
+    spot: {
+      name, mode: 'order', spawn: BRING_SPAWN, goal: BRING_GOAL, order,
+      expect: [`done: ${order}`], fail: ['no step ', 'plan stopped at ', "I can't plan that", "can't "],
+      secs: 300, scaffold: 64, pickaxe: true, bead: 'idkcraft-vf8e.23',
+    },
+    scenario: {
+      ...bead, kind: 'step',
+      task: `${head}${sit} Write a goal step skill '${base.skill}' that satisfies this capability, so the chooser can select it. The order must end 'done: ${order}', not a fail marker.`,
+    },
+    why: 'needs-verify',
+  }
+}
+
 // candidate -> {spot, scenario} or {why}.
 function proposal(c) {
   const name = `AUTO-${c.sig}`
   const base = { name: `auto-${c.sig}`, spot: name, sabotage: null, skill: `gen_${c.sig}`, bead: BEAD }
   if (c.family === 'step-fail') return proposeStepFail(c, name, base)
   if (c.family === 'park') return proposePark(c)
+  if (c.family === 'need') return proposeNeed(c, name, base)
   if (c.family === 'bring') {
     const order = `bring me ${c.item}`
     return {
@@ -748,7 +839,7 @@ function main(argv) {
     console.log(table(list, Number(process.env.TOP || 20)))
     const fam = (f) => list.filter((c) => c.family === f)
     const s = survey(text)
-    console.log(`harvest events=${events.length} signatures=${list.length} page=${fam('page').length} bring=${fam('bring').length} stepfail=${fam('step-fail').length} park=${fam('park').length} ` +
+    console.log(`harvest events=${events.length} signatures=${list.length} page=${fam('page').length} bring=${fam('bring').length} stepfail=${fam('step-fail').length} park=${fam('park').length}${fam('need').length ? ` need=${fam('need').length}` : ''} ` +
       `proposable=${list.filter((c) => c.proposable).length} days=${days} parsed=${s.parsed}/${s.lines} recover=${s.recover} refusals=${s.refusals} -> ${path.join(dir, 'curriculum.json')}`)
     if (list.length === 0) console.log(`harvest why: ${whyLine(s, events, botSpec())}`)
     return 0
@@ -759,12 +850,12 @@ function main(argv) {
     const c = JSON.parse(fs.readFileSync(file, 'utf8')).find((x) => x.sig === arg)
     if (!c) { console.log(`sig ${arg} not in ${file}`); return 2 }
     const p = proposal(c)
-    if (p.why) { console.log(`not proposable: ${p.why}`); return 1 }
+    if (p.why && (!p.spot || !p.scenario)) { console.log(`not proposable: ${p.why}`); return 1 }
     const work = path.join(dir, p.spot.name)
     fs.mkdirSync(work, { recursive: true })
     fs.writeFileSync(path.join(work, 'spots.json'), JSON.stringify([p.spot], null, 1) + '\n')
     fs.writeFileSync(path.join(work, 'scenario.json'), JSON.stringify([p.scenario], null, 1) + '\n')
-    console.log(`proposed ${p.spot.name} (${c.family} ${c.reason}) -> ${work}/spots.json + scenario.json`)
+    console.log(`proposed ${p.spot.name} (${c.family} ${c.reason}) -> ${work}/spots.json + scenario.json${p.why ? ` [${p.why}]` : ''}`)
     console.log(GATE)
     return 0
   }
@@ -778,4 +869,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2))
 
-module.exports = { parse, rank, tier, proposal, table, main, WEIGHT, OWNER_STEPS, NIGHT_ARRIVAL_STEPS, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES, survey, whyLine, sliceToPrep, fetchKind, beforeHint, STEP_VEHICLES }
+module.exports = { parse, rank, tier, proposal, table, main, WEIGHT, OWNER_STEPS, NIGHT_ARRIVAL_STEPS, pick, record, spent, gate, readLedger, ENV_FAIL_NOTES, survey, whyLine, sliceToPrep, fetchKind, beforeHint, STEP_VEHICLES, normNeed, proposeNeed }

@@ -54,7 +54,7 @@ LIMIT="${CURRICULUM_FEED_LIMIT:-50000}"
 KV="${CURRICULUM_KV:-$HOME/.local/bin/kv}"
 CURL="${CURRICULUM_FEED_CURL:-curl}"
 SCHEME="${CURRICULUM_LOGS_SCHEME:-https}"
-QUERY="${CURRICULUM_FEED_QUERY:-compose_service:$SERVICE \"recover action=\" _time:${DAYS}d | sort by (_time) | fields _time, _msg}"
+QUERY="${CURRICULUM_FEED_QUERY:-compose_service:$SERVICE (\"recover action=\" or \"llm choose\") _time:${DAYS}d | sort by (_time) | fields _time, _msg}"
 
 command -v python3 >/dev/null 2>&1 || { echo "curriculum-feed: need python3" >&2; exit 2; }
 
