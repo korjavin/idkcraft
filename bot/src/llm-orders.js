@@ -243,7 +243,8 @@ async function planOrder(bot, ctx, text, fetchFn) {
 
 // One chooser call -> { steps|error|empty, why, need, tokens }.
 async function planChoose(bot, ctx, regime, fetchFn) {
-  const user = `Choose work: ${regime}\n\nSituation:\n${situationText(bot, ctx)}\n\nSteps (id: what it does):\n${chooseStepList()}`
+  const sit = situationText(bot, ctx)
+  const user = `Choose work: ${regime}\n\nSituation:\n${sit}\n\nSteps (id: what it does):\n${chooseStepList()}`
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
   let data
@@ -269,7 +270,7 @@ async function planChoose(bot, ctx, regime, fetchFn) {
   const out = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
   let ans = null
   try { ans = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch (_) { ans = null }
-  return { ...validatePlan(ans, workSteps(), { maxSteps: CHOOSE_MAX_STEPS, allowOrders: false }), tokens }
+  return { ...validatePlan(ans, workSteps(), { maxSteps: CHOOSE_MAX_STEPS, allowOrders: false }), tokens, situation: sit }
 }
 
 // Castle order active for the chooser regime: a castle site exists and the
@@ -351,9 +352,12 @@ function ask(bot, ctx, req, fetchFn) {
       const outcome = r.steps ? 'ok' : r.empty ? 'empty' : (r.outcome || 'invalid')
       try { metrics.llmCalls.inc({ use: 'choose', outcome }) } catch (_) { /* metric best-effort */ }
       const plan = r.steps ? r.steps.map(label).join('>') : '-'
+      const need = (r.need || '').replace(/"/g, "'")
+      const why = (r.why || '').replace(/"/g, "'")
+      const sit = (r.situation || '').replace(/"/g, "'").replace(/[\r\n]+/g, ' ').slice(0, 160)
       // bv9x: the error reason used to die here (plan=- need="" why=""), so a
       // prod sweep could not tell a bad key from a dead route. Always log it.
-      console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${r.need || ''}" why="${r.why || ''}" tokens=${r.tokens || '0/0'} ms=${ms} err="${(r.error || '').replace(/"/g, "'")}"`)
+      console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${need}" why="${why}" situation="${sit}" tokens=${r.tokens || '0/0'} ms=${ms} err="${(r.error || '').replace(/"/g, "'")}"`)
       if (!r.steps) return // fallback: the FSM pick stands, log only
       const sayChoose = rosterOnline(bot) ? say : () => {}
       installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false }, r.steps, sayChoose)

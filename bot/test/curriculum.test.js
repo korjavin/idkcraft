@@ -496,3 +496,101 @@ describe('sliceToPrep (idkcraft-vf8e.11)', () => {
     assert.throws(() => sliceToPrep(checker, [0, 64, 0]), /too big/)
   })
 })
+
+describe('curriculum need harvest and propose (idkcraft-vf8e.23)', () => {
+  it('groups 3 need lines with the same normalised need text into 1 signature with situation excerpt', () => {
+    const dump = [
+      '2026-10-21 12:30:00 IdkBotV2 llm choose regime=castle-stalled trigger=idle outcome=empty plan=- need="withdraw stairs from the chest" why="no stairs in pack" situation="castle: blocked stone left=16 | inventory: cobble 0" tokens=120/15 ms=850 err=""',
+      '2026-10-21 12:31:00 IdkBotV2 llm choose regime=castle-stalled trigger=stay outcome=empty plan=- need="Withdraw stairs from the chest." why="still no stairs" situation="castle: blocked stone left=16 | inventory: cobble 0" tokens=120/15 ms=850 err=""',
+      '2026-10-22 12:32:00 IdkBotV2 llm choose regime=castle-stalled trigger=rest outcome=empty plan=- need="  withdraw stairs from the chest  " why="need stairs" situation="castle: blocked stone left=16 | inventory: cobble 0" tokens=120/15 ms=850 err=""',
+    ].join('\n')
+    const ev = parse(dump, ENV)
+    assert.equal(ev.length, 3)
+    assert.ok(ev.every((e) => e.family === 'need'))
+    assert.equal(ev[0].reason, 'withdraw-stairs-from-the-chest')
+    assert.match(ev[0].situation, /^castle: blocked stone left=16/)
+
+    const list = rank(ev, 7)
+    assert.equal(list.length, 1)
+    const c = list[0]
+    assert.equal(c.family, 'need')
+    assert.equal(c.reason, 'withdraw-stairs-from-the-chest')
+    assert.equal(c.count, 3)
+    assert.equal(c.daysSeen, 2)
+    assert.equal(c.score, 6) // count (3) * daysSeen (2)
+    assert.equal(c.tier, 1)  // castle-stalled regime is tier 1 (owner-priority)
+    assert.equal(c.proposable, false) // requires verify before auto-pick
+    assert.equal(c.why, 'needs-verify')
+    assert.match(c.situation, /^castle: blocked stone left=16/)
+  })
+
+  it('ranks castle-stalled needs (tier 1) above no-order needs (tier 2)', () => {
+    const dump = [
+      '2026-10-21 10:00:00 IdkBotV2 llm choose regime=no-order trigger=explore outcome=empty plan=- need="find water" why="thirsty" tokens=10/20 ms=500',
+      '2026-10-21 10:01:00 IdkBotV2 llm choose regime=no-order trigger=explore outcome=empty plan=- need="find water" why="thirsty" tokens=10/20 ms=500',
+      '2026-10-22 10:02:00 IdkBotV2 llm choose regime=no-order trigger=explore outcome=empty plan=- need="find water" why="thirsty" tokens=10/20 ms=500',
+      '2026-10-22 12:00:00 IdkBotV2 llm choose regime=castle-stalled trigger=idle outcome=empty plan=- need="craft blast furnace" why="need decor" tokens=10/20 ms=500',
+    ].join('\n')
+    const list = rank(parse(dump, ENV), 7)
+    assert.equal(list.length, 2)
+    assert.equal(list[0].reason, 'craft-blast-furnace')
+    assert.equal(list[0].tier, 1)
+    assert.equal(list[1].reason, 'find-water')
+    assert.equal(list[1].tier, 2)
+  })
+
+  it('proposes 1 goal file (spots.json + scenario.json) from 3 need lines in a fixture', () => {
+    const dump = [
+      '2026-10-21 12:30:00 IdkBotV2 llm choose regime=castle-stalled trigger=idle outcome=empty plan=- need="withdraw stairs from the chest" why="no stairs in pack" situation="castle: blocked stone left=16 | inventory: cobble 0" tokens=120/15 ms=850 err=""',
+      '2026-10-21 12:31:00 IdkBotV2 llm choose regime=castle-stalled trigger=stay outcome=empty plan=- need="Withdraw stairs from the chest." why="still no stairs" situation="castle: blocked stone left=16 | inventory: cobble 0" tokens=120/15 ms=850 err=""',
+      '2026-10-22 12:32:00 IdkBotV2 llm choose regime=castle-stalled trigger=rest outcome=empty plan=- need="  withdraw stairs from the chest  " why="need stairs" situation="castle: blocked stone left=16 | inventory: cobble 0" tokens=120/15 ms=850 err=""',
+    ].join('\n')
+    withDir((dir) => {
+      const dumpPath = path.join(dir, 'needs-dump.txt')
+      fs.writeFileSync(dumpPath, dump)
+      assert.equal(main(['harvest', dumpPath]), 0)
+      const list = JSON.parse(fs.readFileSync(path.join(dir, 'curriculum.json'), 'utf8'))
+      assert.equal(list.length, 1)
+      const sig = list[0].sig
+
+      assert.equal(main(['propose', sig]), 0)
+      const goalDir = path.join(dir, `AUTO-${sig}`)
+      assert.ok(fs.existsSync(path.join(goalDir, 'spots.json')), 'spots.json exists')
+      assert.ok(fs.existsSync(path.join(goalDir, 'scenario.json')), 'scenario.json exists')
+
+      const spots = JSON.parse(fs.readFileSync(path.join(goalDir, 'spots.json'), 'utf8'))
+      const scenarios = JSON.parse(fs.readFileSync(path.join(goalDir, 'scenario.json'), 'utf8'))
+      assert.equal(spots.length, 1)
+      assert.equal(scenarios.length, 1)
+
+      const spot = spots[0]
+      assert.equal(spot.name, `AUTO-${sig}`)
+      assert.equal(spot.mode, 'order')
+      assert.equal(spot.order, `do gen_${sig}`)
+      assert.deepEqual(spot.expect, [`done: do gen_${sig}`])
+      assert.equal(spot.bead, 'idkcraft-vf8e.23')
+
+      const scn = scenarios[0]
+      assert.equal(scn.name, `auto-${sig}`)
+      assert.equal(scn.spot, `AUTO-${sig}`)
+      assert.equal(scn.kind, 'step')
+      assert.equal(scn.skill, `gen_${sig}`)
+      assert.equal(scn.bead, 'idkcraft-vf8e.23')
+      assert.match(scn.task, /withdraw stairs from the chest/)
+      assert.match(scn.task, /castle: blocked stone left=16/)
+      assert.match(scn.task, /across 2 days/)
+
+      // Verify compatible with CURRICULUM_GOALS validation in curriculum.sh:
+      assert.ok(Array.isArray(scenarios) && scn.name && scn.skill && scn.bead)
+    })
+  })
+
+  it('empty need strings are skipped and do not produce events', () => {
+    const dump = [
+      '2026-10-21 12:30:00 IdkBotV2 llm choose regime=castle-stalled trigger=idle outcome=ok plan=mine stone need="" why="" tokens=120/15 ms=850 err=""',
+      '2026-10-21 12:31:00 IdkBotV2 llm choose regime=castle-stalled trigger=stay outcome=empty plan=- need="   " why="nothing" tokens=120/15 ms=850 err=""',
+    ].join('\n')
+    const ev = parse(dump, ENV)
+    assert.equal(ev.length, 0)
+  })
+})
