@@ -266,6 +266,23 @@ function hhmm(ms) {
 
 // llmCall({ use, apiKey, body, signal, fetchFn }) -> the parsed response JSON;
 // throws 'llm budget exhausted' | 'llm http <status>' | the fetch/abort error.
+// Thinking config for model (idkcraft-qxql.15):
+// Models that reject thinking.type.disabled (e.g. opus-5-5, sonnet-5-5, fable, mythos)
+// omit thinking; models that accept disabled (haiku-5-5, Opus 5, Sonnet 5, 4.x)
+// disable thinking so tokens/latency are not spent on reasoning for 1-line answers.
+function thinkingForModel(model) {
+  if (typeof model === 'string' && /opus-5-5|sonnet-5-5|fable|mythos/i.test(model)) return undefined
+  return { type: 'disabled' }
+}
+
+function llmModelConfig(model, baseMaxTokens = 300) {
+  const thinking = thinkingForModel(model)
+  if (thinking) {
+    return { max_tokens: baseMaxTokens, thinking }
+  }
+  return { max_tokens: Math.max(baseMaxTokens, 2000), output_config: { effort: 'low' } }
+}
+
 async function llmCall({ use, apiKey, body, signal, fetchFn }) {
   const now = Date.now()
   pruneLlmSpend(now)
@@ -297,7 +314,24 @@ async function llmCall({ use, apiKey, body, signal, fetchFn }) {
     if (signal && signal.aborted) charge()
     throw err
   }
-  if (!res.ok) throw new Error(`llm http ${res.status}`)
+  if (!res.ok) {
+    let errMsg = ''
+    try {
+      const errText = await (typeof res.text === 'function' ? res.text() : Promise.resolve('')).catch(() => '')
+      if (errText) {
+        const parsed = JSON.parse(errText)
+        errMsg = (parsed && parsed.error && parsed.error.message) || errText.slice(0, 80)
+      }
+    } catch (_) {}
+    if (res.status === 400 && /thinking/i.test(errMsg) && body && body.thinking) {
+      const retryBody = { ...body }
+      delete retryBody.thinking
+      if (!retryBody.output_config) retryBody.output_config = { effort: 'low' }
+      if ((retryBody.max_tokens || 0) < 2000) retryBody.max_tokens = 2000
+      return llmCall({ use, apiKey, body: retryBody, signal, fetchFn })
+    }
+    throw new Error(`llm http ${res.status}${errMsg ? `: ${errMsg}` : ''}`)
+  }
   let data
   try {
     data = await res.json()
@@ -334,9 +368,7 @@ function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MO
           fetchFn,
           body: {
             model,
-            max_tokens: 300,
-            // A one-line menu pick: no thinking keeps it inside the 10 s deadline.
-            thinking: { type: 'disabled' },
+            ...llmModelConfig(model, 300),
             system: LLM_SYSTEM,
             messages: [{ role: 'user', content: user }],
           },
@@ -344,7 +376,11 @@ function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MO
       } finally {
         clearTimeout(timer)
       }
-      const text = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+      const textBlock = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text'))
+      if (!textBlock && data && data.stop_reason === 'max_tokens') {
+        throw new Error('llm max_tokens (thinking exhausted budget)')
+      }
+      const text = (textBlock && textBlock.text) || ''
       let ans = null
       try {
         ans = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
@@ -363,11 +399,12 @@ function llmPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MO
       const msg = String(err && err.message ? err.message : err)
       const outcome = err && err.name === 'TimeoutError' ? 'timeout'
         : msg.startsWith('llm http') ? 'http'
+        : msg.startsWith('llm max_tokens') ? 'max_tokens'
         : msg.startsWith('llm missing') ? 'invalid'
         : msg.startsWith('llm budget') ? 'budget'
         : 'error'
       // brain_requests keeps its vocabulary: a budget skip counts as error there.
-      metrics.brainRequests.inc({ source: 'llm', outcome: outcome === 'budget' ? 'error' : outcome })
+      metrics.brainRequests.inc({ source: 'llm', outcome: (outcome === 'budget' || outcome === 'max_tokens') ? 'error' : outcome })
       metrics.llmCalls.inc({ use: 'planner', outcome })
       throw err
     }
@@ -418,9 +455,7 @@ function llmAsk(apiKey, fetchFn, timeoutMs = 1000, model = LLM_MODEL) {
           fetchFn,
           body: {
             model,
-            max_tokens: 300,
-            // A one-line menu pick: no thinking keeps it inside the tick deadline.
-            thinking: { type: 'disabled' },
+            ...llmModelConfig(model, 300),
             system: LLM_ASK_SYSTEM,
             messages: [{ role: 'user', content: user }],
           },
@@ -428,7 +463,11 @@ function llmAsk(apiKey, fetchFn, timeoutMs = 1000, model = LLM_MODEL) {
       } finally {
         clearTimeout(timer)
       }
-      const text = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+      const textBlock = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text'))
+      if (!textBlock && data && data.stop_reason === 'max_tokens') {
+        throw new Error('llm max_tokens (thinking exhausted budget)')
+      }
+      const text = (textBlock && textBlock.text) || ''
       let ans = null
       try {
         ans = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
@@ -447,11 +486,12 @@ function llmAsk(apiKey, fetchFn, timeoutMs = 1000, model = LLM_MODEL) {
       const msg = String(err && err.message ? err.message : err)
       const outcome = err && err.name === 'TimeoutError' ? 'timeout'
         : msg.startsWith('llm http') ? 'http'
+        : msg.startsWith('llm max_tokens') ? 'max_tokens'
         : msg.startsWith('llm missing') ? 'invalid'
         : msg.startsWith('llm budget') ? 'budget'
         : 'error'
       // brain_requests keeps its vocabulary: a budget skip counts as error there.
-      metrics.brainRequests.inc({ source: 'llm', outcome: outcome === 'budget' ? 'error' : outcome })
+      metrics.brainRequests.inc({ source: 'llm', outcome: (outcome === 'budget' || outcome === 'max_tokens') ? 'error' : outcome })
       metrics.llmCalls.inc({ use: 'ask', outcome })
       streakFail(situation)
       throw err
@@ -729,4 +769,4 @@ function makeBrain(env) {
   return b
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, llmAsk, LLM_ASK_SYSTEM, menuAskEnabled, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, llmCall, llmTokensPerHour, resetLlmBudget }
+module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, llmAsk, LLM_ASK_SYSTEM, menuAskEnabled, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, llmCall, llmTokensPerHour, resetLlmBudget, thinkingForModel, llmModelConfig }

@@ -712,8 +712,7 @@ async function doImprov(bot, ctx, gen, fetchFn) {
         fetchFn,
         body: {
           model: process.env.LLM_MODEL || brain.LLM_MODEL,
-          max_tokens: 300,
-          thinking: { type: 'disabled' },
+          ...brain.llmModelConfig(process.env.LLM_MODEL || brain.LLM_MODEL, 300),
           system: FUN_SYSTEM,
           messages: [{ role: 'user', content: `Pack (name xcount): ${summary}\nOffer ONE tiny joke fitting the pack.` }],
         },
