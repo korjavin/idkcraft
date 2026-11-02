@@ -380,8 +380,7 @@ const MENU = {
       if (!facts || facts.pinned !== 'bank') return false
       if (facts.time !== 'day') return false
       if (lowHpGated(bot, facts, ctx)) return false
-      if (!castleFirst(ctx)) return false
-      if (facts.castle === 'none' || facts.castle === 'done' || facts.castle === 'parked') return false
+      if (!ctx || !ctx.castle || !ctx.castle.site || facts.castle === 'none' || facts.castle === 'parked') return false
       try {
         if (!require('./behaviours/castlefetch').castleChest(bot, ctx && ctx.castle)) return false
       } catch (_) { return false }
@@ -2148,8 +2147,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (!facts || facts.pinned !== 'bank') return 'bank: waiting for the plan pin'
       if (facts.time !== 'day') return 'bank: daytime job'
       if (lowHpGated(bot, facts, ctx)) return 'bank: eating first (low health, no food)'
-      if (!castleFirst(ctx)) return 'bank: no castle ordered'
-      if (!facts || facts.castle === 'none' || facts.castle === 'done' || facts.castle === 'parked') return 'bank: no castle ordered'
+      if (!ctx || !ctx.castle || !ctx.castle.site || facts.castle === 'none' || facts.castle === 'parked') return 'bank: no castle ordered'
       try {
         if (!require('./behaviours/castlefetch').castleChest(bot, ctx && ctx.castle)) return 'bank: no castle chest'
       } catch (_) { return 'bank: no castle chest' }

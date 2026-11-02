@@ -647,3 +647,52 @@ describe('pillar_up descending floor anchor (idkcraft-cm0.2)', () => {
     assert.equal(ctx.recovery.st.startFloor, 61, 'rises never move the anchor up')
   })
 })
+
+describe('pillar_up partial block / stair stuck fix (idkcraft-qxql.18)', () => {
+  it('standing on stairs: feetSolid is true, pillar_up infeasible and not repeatable', () => {
+    const solids = pitWorld()
+    solids.add(key(0, 61, 0))
+    const bot = strictBot(solids, [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.5, 0.5)
+    bot.entity.onGround = true
+    const ctx = pillarCtx()
+    const facts = recover.recoverFacts(bot, ctx, 'stuck', null)
+    assert.equal(facts.feetSolid, true, 'feet cell is solid (stair/slab)')
+    assert.equal(recover.RECOVER_MENU.pillar_up.feasible(facts, ctx), false, 'pillar_up infeasible on stairs')
+    assert.equal(recover.RECOVER_MENU.pillar_up.repeatable(facts), false, 'pillar_up not repeatable on stairs')
+    assert.equal(recover.RECOVER_MENU.dig_pillar.feasible(facts, ctx), false, 'dig_pillar infeasible on stairs')
+    assert.equal(recover.RECOVER_MENU.dig_pillar.repeatable(facts), false, 'dig_pillar not repeatable on stairs')
+  })
+
+  it('standing on stairs: pillarUpRun fails occupied instead of returning false done', () => {
+    const solids = pitWorld()
+    solids.add(key(0, 61, 0))
+    const bot = strictBot(solids, [{ name: 'dirt', count: 10 }])
+    // Position at trigger height with startFloor=61 on stair
+    bot.entity.position = pos(0.5, 61.6, 0.5)
+    bot.entity.onGround = false
+    const ctx = {
+      recovery: {
+        action: 'pillar_up', source: 'stub', model: null, status: 'running',
+        st: { phase: 'place', startFloor: 61, solidAtStart: true, waited: 0, placeInFlight: false, placed: false, placeError: false },
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:occupied', 'cannot place into already-occupied stair cell')
+    assert.equal(bot._places, 0, 'no placement attempted')
+  })
+
+  it('grounded back at start floor after place reports failed:no-rise', () => {
+    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.0, 0.5)
+    bot.entity.onGround = true
+    const ctx = {
+      recovery: {
+        action: 'pillar_up', source: 'stub', model: null, status: 'running',
+        st: { phase: 'place', startFloor: 61, waited: 0, placeInFlight: false, placed: true, placeError: false },
+      },
+    }
+    recover.run(bot, ctx)
+    assert.equal(ctx.recovery.status, 'failed:no-rise', 'grounded at or below startFloor reports failed:no-rise')
+  })
+})

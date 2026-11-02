@@ -771,6 +771,7 @@ function recoverFacts(bot, ctx, state, target) {
     walls: sides.walls,
     pit: pitAt(bot),
     boxed: boxedIn(bot),
+    feetSolid: solid(cellAt(bot, 0, 0, 0)),
     // water_up (jsf.2): a climbable pour combo (high shaft pour with a clear
     // swim lane + a dry ledge pour above its spread) and a 2-high wall beside
     // the body (the bead's one-side pit gate — jsf.3's 2-side pit reads false
@@ -980,7 +981,10 @@ function pillarUpRun(bot, ctx) {
   // risen head, so their ticks keep the exact old gate.
   const risen = st.startFloor !== null && Math.floor(bp.y) > st.startFloor
   if (!risen && headBlockedAt(bot)) { setJump(bot, false); return 'failed:head-blocked' }
-  if (st.startFloor === null) st.startFloor = Math.floor(bp.y)
+  if (st.startFloor === null) {
+    st.startFloor = Math.floor(bp.y)
+    st.solidAtStart = solid(cellAt(bot, 0, 0, 0))
+  }
   if (st.phase === 'jump') {
     // Descending floor anchor (cm0.2): the cycle may arm mid-flight — an
     // approach jump still airborne when stuck fires (prod 09:36:48 armed at
@@ -996,6 +1000,7 @@ function pillarUpRun(bot, ctx) {
       st.belowFloor = (st.belowFloor || 0) + 1
       if ((bot.entity && bot.entity.onGround) || st.belowFloor >= 2) {
         st.startFloor = Math.floor(bp.y)
+        st.solidAtStart = solid(cellAt(bot, 0, 0, 0))
         st.belowFloor = 0 // every re-seed needs its own confirmation
       }
     } else {
@@ -1018,6 +1023,10 @@ function pillarUpRun(bot, ctx) {
     return 'running'
   }
   if (st.placed) {
+    if (bot.entity && bot.entity.onGround && bp.y <= st.startFloor + 0.1) {
+      setJump(bot, false)
+      return 'failed:no-rise'
+    }
     // Verify the block is really there before claiming done: the target is
     // the feet cell we jumped from (startFloor), whatever floor we read now.
     return solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0)) ? 'done' : 'failed:no-place'
@@ -1091,7 +1100,9 @@ function issuePillarPlace(bot, ctx, st) {
   if (!bp) return 'no-pos'
   // Already solid (a twin call, an earlier cycle): verify instead of
   // stacking a second placement into the cell (the yvi loop).
-  if (solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0))) { st.placed = true; return null }
+  // Partial blocks (stairs/slabs) solid at jump start must not count as placed.
+  if (!st.solidAtStart && solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0))) { st.placed = true; return null }
+  if (st.solidAtStart) return 'occupied'
   // Reference: a solid neighbour of the feet cell, ground below first.
   const fx = Math.floor(bp.x)
   const fz = Math.floor(bp.z)
@@ -1955,9 +1966,9 @@ const RECOVER_MENU = {
     // day) — after a place-error in this episode pillar_up leaves the menu.
     // 5vv: jumping to the apex in water is pointless — swim exits and
     // sidestep own the escape, not the scaffold.
-    feasible: (facts, ctx) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water && !recoverBanned(ctx, 'pillar_up'),
+    feasible: (facts, ctx) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water && !facts.feetSolid && !recoverBanned(ctx, 'pillar_up'),
     run: pillarUpRun,
-    repeatable: (facts) => (facts.goalDy >= 1 || pitChain(facts)) && facts.scaffold > 0 && !facts.placeError && !facts.water,
+    repeatable: (facts) => (facts.goalDy >= 1 || pitChain(facts)) && facts.scaffold > 0 && !facts.placeError && !facts.water && !facts.feetSolid,
     verb: 'pillaring up',
   },
   dig_up: {
@@ -2018,10 +2029,10 @@ const RECOVER_MENU = {
     // retries; here the head state already does that (rig c42c: 1
     // transient refusal, 9 s sidestep detour, climb resumed same episode).
     feasible: (facts) => facts.boxed && (facts.goalDy >= 1 || boxClimb(facts)) &&
-      !facts.pickaxe && facts.scaffold > 0 && facts.digPillar && !facts.lavaNear && !facts.water,
+      !facts.pickaxe && facts.scaffold > 0 && facts.digPillar && !facts.lavaNear && !facts.water && !facts.feetSolid,
     run: digPillarRun,
     repeatable: (facts) => (facts.goalDy >= 1 || boxChain(facts)) &&
-      !facts.pickaxe && facts.scaffold > 0 && !facts.lavaNear && !facts.water && facts.ownHeadBlocked,
+      !facts.pickaxe && facts.scaffold > 0 && !facts.lavaNear && !facts.water && facts.ownHeadBlocked && !facts.feetSolid,
     chainCap: 32, // verified metres, not episodes: every chained done rose a block, fuel bounds the rest
     verb: 'digging overhead and pillaring up',
   },
