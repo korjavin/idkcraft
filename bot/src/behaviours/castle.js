@@ -289,7 +289,9 @@ function blockCell(ctx, st, c, why, now) {
   // refusals retire faster (idkcraft-synq BUILD_MISS_TRIES above) and
   // protected cells faster still (PROTECTED_MAX_TRIES above), with a
   // permanent why the tidy return never re-arms. Litter unreachable
-  // retires after LITTER_MAX_TRIES (idkcraft-qxql.16). The tries>=MAX backstop
+  // retires after LITTER_MAX_TRIES (idkcraft-qxql.16). Decor stays on the
+  // standard retry ladder (revmux 01 core-2) so transient unreachability
+  // never permanently drops decor. The tries>=MAX backstop
   // keeps the old invariant for mixed ladders that never streak.
   const isLitter = c && (c.idx >= LITTER_BOX_BASE && c.idx < blueprint.DECOR_BASE)
   const limit = why === 'build-miss'
@@ -1017,7 +1019,7 @@ function litterTargets(bot, ctx, st, now) {
 // next call, no strike): the menu and the tail share it. Retired band cells
 // stay listed by litterTargets (the status line reports them) but are never
 // re-worded or re-worked.
-function nextLitter(st, list, now, bot = null) {
+function nextLitter(st, list, now, bot = null, ctx = null) {
   const bl = st.blocked || {}
   let near = []
   try {
@@ -1028,11 +1030,37 @@ function nextLitter(st, list, now, bot = null) {
       .map(([, p]) => p && p.entity && p.entity.position).filter(Boolean)
   } catch (_) { near = [] }
   const r2 = LITTER_PLAYER_R * LITTER_PLAYER_R
-  return list.find((o) => {
+  const open = list.filter((o) => {
     const b = bl[bkey(st, o.idx)]
     if (b && (b.retired || b.until > now)) return false
     return !near.some((p) => (p.x - o.x - 0.5) ** 2 + (p.y - o.y - 0.5) ** 2 + (p.z - o.z - 0.5) ** 2 < r2)
   })
+  if (!open.length) return null
+  // Latch current target if it remains open and workable (revmux 01/02 core-1):
+  // avoids ping-ponging between candidates during approach and across far() strikes.
+  const latch = (ctx && ctx.castleGoalIdx != null && ctx.castleGoalIdx >= 0)
+    ? ctx.castleGoalIdx
+    : (ctx && ctx.castleFar && ctx.castleFar.idx)
+  if (latch != null) {
+    const cur = open.find((o) => o.idx === latch)
+    if (cur) return cur
+  }
+  const bp = bot && bodyPos(bot)
+  if (!bp || open.length === 1) return open[0]
+  // Prioritize closest workable litter cell to the body (qxql.17: vertical 2x
+  // weight keeps the bot clearing local roof/floor scaffold before pathing
+  // across sheer drops to the moat).
+  let best = open[0]
+  let bestD2 = (open[0].x + 0.5 - bp.x) ** 2 + (2 * (open[0].y + 0.5 - bp.y)) ** 2 + (open[0].z + 0.5 - bp.z) ** 2
+  for (let i = 1; i < open.length; i++) {
+    const o = open[i]
+    const d2 = (o.x + 0.5 - bp.x) ** 2 + (2 * (o.y + 0.5 - bp.y)) ** 2 + (o.z + 0.5 - bp.z) ** 2
+    if (d2 < bestD2) {
+      best = o
+      bestD2 = d2
+    }
+  }
+  return best
 }
 
 // A band idx back to its cell (the litterCell formula inverted), or null.
@@ -1608,12 +1636,27 @@ function far(bot, ctx, st, c, reach, now) {
   if (!bp) return false
   const dist = Math.hypot(bp.x - (c.x + 0.5), (bp.y + 1.6) - (c.y + 0.5), bp.z - (c.z + 0.5))
   if (dist <= reach) {
-    if (ctx.castleFar && ctx.castleFar.idx === c.idx) ctx.castleFar.n = 0
+    if (ctx.castleFar && ctx.castleFar.idx === c.idx) {
+      ctx.castleFar.n = 0
+      ctx.castleFar.minDist = Infinity
+    }
     return false
   }
-  const f = ctx.castleFar && ctx.castleFar.idx === c.idx ? ctx.castleFar : { idx: c.idx, dist: Infinity, n: 0 }
-  if (dist < f.dist - build.CELL_PROGRESS) f.n = 0
-  else f.n++
+  const f = ctx.castleFar && ctx.castleFar.idx === c.idx
+    ? ctx.castleFar
+    : { idx: c.idx, dist, minDist: dist, n: 0 }
+  // Monotonic progress check (qxql.17): pacing/oscillating along a ledge or
+  // obstacle fluctuates dist without reaching the cell — resetting n on each
+  // oscillation trapped the bot in an endless loop. Only beating the minimum
+  // distance achieved so far by CELL_PROGRESS resets strikes.
+  const baseline = typeof f.minDist === 'number' ? f.minDist : f.dist
+  if (dist < baseline - build.CELL_PROGRESS) {
+    f.n = 0
+    f.minDist = dist
+  } else {
+    f.n++
+    if (dist < baseline) f.minDist = dist
+  }
   f.dist = dist
   ctx.castleFar = f
   ctx.castleGoalIdx = -1
@@ -1632,6 +1675,10 @@ function borrowedGoal(bot, ctx) {
 // lead, a reflex) replaced our goal while the cell stayed the same.
 function approach(bot, ctx, c, make) {
   const foreign = borrowedGoal(bot, ctx)
+  if (foreign && ctx.castleFar && ctx.castleFar.idx === c.idx) {
+    ctx.castleFar.n = 0
+    ctx.castleFar.minDist = Infinity
+  }
   if (ctx.castleGoalIdx === c.idx && !foreign) return false
   ctx.castleGoalIdx = c.idx
   try {
@@ -2580,7 +2627,7 @@ function castle(bot, ctx) {
     }
     // Litter (g0z.14 box scan, g0z.44 band scan on a complete castle):
     // the sweep runs before decor.
-    const lit = nextLitter(st, litterTargets(bot, ctx, st, now), now, bot)
+    const lit = nextLitter(st, litterTargets(bot, ctx, st, now), now, bot, ctx)
     if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
     // Transit backfill (idkcraft-pjsl): a below-grade hole no plan covers,
     // one cell per tick once nothing else is open. No material on hand
@@ -2680,6 +2727,9 @@ module.exports.tidyDue = tidyDue
 module.exports.nearSite = nearSite
 module.exports.tidyMs = tidyMs
 module.exports.siteDist = siteDist
+// Castle unreachable / strike tracking (qxql.17)
+module.exports.far = far
+module.exports.nextLitter = nextLitter
 // Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
 module.exports.prepTargets = prepTargets
 // Site storage (vmzq.39): stockpile reuses the stow ring and the door path.
