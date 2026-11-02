@@ -587,11 +587,30 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       else bot.chat(`unknown command: "${topic.slice(0, 30)}" — say help for the list`)
     }
   } else {
-    const m = msg.match(/^find me\s+(\S+)$/)
+    let m = msg.match(/^find me\s+(\S+)$/)
+    if (!m) {
+      const full = msg.match(/^find me\s+(.+)$/)
+      if (full) {
+        const candidate = full[1].trim()
+        const trimCheck = bringMod.resolveItem(bot, candidate)
+        if (trimCheck && trimCheck.isTrim) m = full
+      }
+    }
     if (m) {
       if (!ownerOk) return
       if (bot._tickerCtx) clearPendingSearch(bot._tickerCtx)
-      const name = m[1]
+      const name = m[1].trim()
+      const trimRes = bringMod.resolveItem(bot, name)
+      if (trimRes && trimRes.isTrim) {
+        const plan = bringMod.planItemGive(bot, trimRes, 1)
+        if (plan && plan.have > 0) {
+          bot.chat(`i have ${plan.items[0].name} in my pack, bringing it to you!`)
+          if (ticker && typeof ticker.setBring === 'function') {
+            ticker.setBring({ name, want: 1, by: playerName })
+          }
+          return
+        }
+      }
       const speakerEntry = worker.players(bot)[playerName]
       const speaker = speakerEntry && speakerEntry.entity
       const speakerY = speaker && typeof speaker.position?.y === 'number' ? speaker.position.y : null

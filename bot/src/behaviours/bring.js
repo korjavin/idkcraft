@@ -1407,8 +1407,15 @@ function pickChest(bot, ctx, o) {
       const hk = stockpileMod.chestKeyOf(h)
       if (hk !== null && !o.chestSeen.includes(hk)) return { pos: h, home: true }
     }
-    const rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen)
+    let rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen)
     if (rest.length > 0) return { pos: rest[0], home: false }
+    // Armor trim chest scan (idkcraft-3dkc): when searching for armor trims,
+    // scan the loaded area for chests before giving up.
+    if (o.isTrim && !o.chestScanned) {
+      itemMod.scanTrimChests(bot, ctx, o)
+      rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen)
+      if (rest.length > 0) return { pos: rest[0], home: false }
+    }
   } catch (_) { /* no target */ }
   return null
 }
@@ -2575,6 +2582,8 @@ module.exports.planGap = itemMod.planGap
 module.exports.recipeCaps = itemMod.recipeCaps
 module.exports.setRecipeSource = itemMod.setRecipeSource
 module.exports.canRecipeFallback = itemMod.canRecipeFallback
+module.exports.resolveArmorTrim = itemMod.resolveArmorTrim
+module.exports.TRIM_STRUCTURES = itemMod.TRIM_STRUCTURES
 module.exports.startRecipeFallback = itemMod.startRecipeFallback
 module.exports.recipeNext = itemMod.recipeNext
 module.exports.recipeTick = itemMod.recipeTick
