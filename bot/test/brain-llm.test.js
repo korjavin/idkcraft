@@ -6,7 +6,7 @@
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { stubBrain, jevBrain, makeBrain, hybridBrain, llmPlanner, llmAsk, LLM_ASK_SYSTEM, menuAskEnabled, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, resetLlmBudget } = require('../src/brain')
+const { stubBrain, jevBrain, makeBrain, hybridBrain, llmPlanner, llmAsk, LLM_ASK_SYSTEM, menuAskEnabled, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, resetLlmBudget, thinkingForModel, llmModelConfig } = require('../src/brain')
 const metrics = require('../src/metrics')
 
 const STATE = { goal: 'build castle', progress: '8/1722', blocked_on: 'step=castlefetch running', facts: 'time=day' }
@@ -50,6 +50,7 @@ describe('llm planner (vhlb.2)', () => {
     assert.equal(seen.opts.headers['x-api-key'], 'sk-test')
     assert.equal(seen.opts.headers['anthropic-version'], '2023-06-01')
     assert.equal(seen.body.model, 'claude-haiku-5-5')
+    assert.deepEqual(seen.body.thinking, { type: 'disabled' }, 'default haiku disables thinking')
     assert.match(seen.body.messages[0].content, /"progress":"8\/1722"/, 'state rides as JSON')
     assert.match(seen.body.messages[0].content, /gather: logs are few: chop/, 'options as id: criterion')
     assert.equal(await llmOutcome('ok'), before + 1)
@@ -74,6 +75,108 @@ describe('llm planner (vhlb.2)', () => {
     const limited = async () => ({ ok: false, status: 429 })
     await assert.rejects(llmPlanner('k', limited).plan(REQ), /llm http 429/)
     assert.equal(await llmOutcome('http'), before + 1)
+  })
+
+  it('http 400 with message includes error details in message', async () => {
+    const before = await llmOutcome('http')
+    const limited = async () => ({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ error: { message: 'invalid request format' } }),
+    })
+    await assert.rejects(llmPlanner('k', limited).plan(REQ), /llm http 400: invalid request format/)
+    assert.equal(await llmOutcome('http'), before + 1)
+  })
+
+  it('thinkingForModel selects disabled for standard models and omits for always-on models', () => {
+    assert.deepEqual(thinkingForModel('claude-haiku-5-5'), { type: 'disabled' })
+    assert.deepEqual(thinkingForModel('claude-3-5-haiku-20241022'), { type: 'disabled' })
+    assert.equal(thinkingForModel('claude-opus-5-5'), undefined)
+    assert.equal(thinkingForModel('claude-sonnet-5-5'), undefined)
+    assert.equal(thinkingForModel('claude-fable-1'), undefined)
+    assert.equal(thinkingForModel('mythos-beta'), undefined)
+
+    assert.deepEqual(llmModelConfig('claude-haiku-5-5', 300), { max_tokens: 300, thinking: { type: 'disabled' } })
+    assert.deepEqual(llmModelConfig('claude-opus-5-5', 300), { max_tokens: 2000, output_config: { effort: 'low' } })
+    assert.deepEqual(llmModelConfig('claude-sonnet-5-5', 500), { max_tokens: 2000, output_config: { effort: 'low' } })
+  })
+
+  it('retries without thinking field when API rejects with thinking error 400', async () => {
+    const bodies = []
+    const fetchFn = async (url, opts) => {
+      const body = JSON.parse(opts.body)
+      bodies.push(body)
+      if (bodies.length === 1 && body.thinking) {
+        return {
+          ok: false,
+          status: 400,
+          text: async () => JSON.stringify({ error: { message: 'To turn thinking off on this model, send "thinking": {"type": "between_tools"} instead of {"type": "disabled"}' } }),
+        }
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          id: 'msg_retry',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: '{"choice":"gather","reason":"retried without thinking"}' }],
+          usage: { input_tokens: 100, output_tokens: 20 },
+        }),
+      }
+    }
+    const p = llmPlanner('k', fetchFn)
+    const r = await p.plan(REQ)
+    assert.equal(r.step, 'gather')
+    assert.equal(bodies.length, 2, 'called twice: initial then retry')
+    assert.deepEqual(bodies[0].thinking, { type: 'disabled' })
+    assert.equal(bodies[1].thinking, undefined, 'retry omitted thinking')
+    assert.deepEqual(bodies[1].output_config, { effort: 'low' })
+    assert.equal(bodies[1].max_tokens, 2000)
+  })
+
+  it('parses text block correctly when preceded by thinking block', async () => {
+    const fetchFn = async () => ({
+      ok: true,
+      json: async () => ({
+        id: 'msg_think',
+        type: 'message',
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Let me analyze the state...' },
+          { type: 'text', text: '{"choice":"park","reason":"scaffold high"}' },
+        ],
+        usage: { input_tokens: 150, output_tokens: 50 },
+      }),
+    })
+    const p = llmPlanner('k', fetchFn)
+    const r = await p.plan(REQ)
+    assert.equal(r.step, 'park')
+    assert.equal(r.reason, 'scaffold high')
+  })
+
+  it('throws max_tokens error when reply has only thinking block and stop_reason max_tokens', async () => {
+    const textBefore = await metrics.client.register.metrics()
+    const mBefore = textBefore.match(/idkcraft_bot_llm_calls_total\{use="planner",outcome="max_tokens"\} ([0-9.e+]+)/)
+    const before = mBefore ? Number(mBefore[1]) : 0
+    const fetchFn = async () => ({
+      ok: true,
+      json: async () => ({
+        id: 'msg_exhausted',
+        type: 'message',
+        role: 'assistant',
+        stop_reason: 'max_tokens',
+        content: [
+          { type: 'thinking', thinking: 'Deep thinking that exhausted the token budget before finishing...' },
+        ],
+        usage: { input_tokens: 150, output_tokens: 300 },
+      }),
+    })
+    const p = llmPlanner('k', fetchFn)
+    await assert.rejects(p.plan(REQ), /llm max_tokens \(thinking exhausted budget\)/)
+    const textAfter = await metrics.client.register.metrics()
+    const mAfter = textAfter.match(/idkcraft_bot_llm_calls_total\{use="planner",outcome="max_tokens"\} ([0-9.e+]+)/)
+    const after = mAfter ? Number(mAfter[1]) : 0
+    assert.equal(after, before + 1)
   })
 
   it('timeout aborts within the deadline with the timeout outcome', async () => {

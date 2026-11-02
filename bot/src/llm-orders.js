@@ -217,15 +217,15 @@ async function planOrder(bot, ctx, text, fetchFn) {
   const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
   let data
   try {
+    const model = process.env.LLM_MODEL || brain.LLM_MODEL
     data = await brain.llmCall({
       use: 'orders',
       apiKey: process.env.ANTHROPIC_API_KEY,
       signal: ac.signal,
       fetchFn,
       body: {
-        model: process.env.LLM_MODEL || brain.LLM_MODEL,
-        max_tokens: 500,
-        thinking: { type: 'disabled' },
+        model,
+        ...brain.llmModelConfig(model, 500),
         system: SYSTEM,
         messages: [{ role: 'user', content: user }],
       },
@@ -235,7 +235,11 @@ async function planOrder(bot, ctx, text, fetchFn) {
   }
   const u = (data && data.usage) || {}
   const tokens = `${u.input_tokens | 0}/${u.output_tokens | 0}`
-  const out = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+  const textBlock = (data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text')
+  if (!textBlock && data && data.stop_reason === 'max_tokens') {
+    return { error: 'max_tokens', outcome: 'max_tokens', tokens }
+  }
+  const out = (textBlock && textBlock.text) || ''
   let ans = null
   try { ans = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch (_) { ans = null }
   return { ...validatePlan(ans), tokens }
@@ -249,15 +253,15 @@ async function planChoose(bot, ctx, regime, fetchFn) {
   const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
   let data
   try {
+    const model = process.env.LLM_MODEL || brain.LLM_MODEL
     data = await brain.llmCall({
       use: 'choose',
       apiKey: process.env.ANTHROPIC_API_KEY,
       signal: ac.signal,
       fetchFn,
       body: {
-        model: process.env.LLM_MODEL || brain.LLM_MODEL,
-        max_tokens: 500,
-        thinking: { type: 'disabled' },
+        model,
+        ...brain.llmModelConfig(model, 500),
         system: CHOOSE_SYSTEM,
         messages: [{ role: 'user', content: user }],
       },
@@ -267,7 +271,11 @@ async function planChoose(bot, ctx, regime, fetchFn) {
   }
   const u = (data && data.usage) || {}
   const tokens = `${u.input_tokens | 0}/${u.output_tokens | 0}`
-  const out = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+  const textBlock = (data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text')
+  if (!textBlock && data && data.stop_reason === 'max_tokens') {
+    return { error: 'max_tokens', outcome: 'max_tokens', why: '', need: '', tokens, situation: sit }
+  }
+  const out = (textBlock && textBlock.text) || ''
   let ans = null
   try { ans = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch (_) { ans = null }
   return { ...validatePlan(ans, workSteps(), { maxSteps: CHOOSE_MAX_STEPS, allowOrders: false }), tokens, situation: sit }
@@ -814,15 +822,15 @@ async function requestRecipe(bot, ctx, target, opts = {}) {
     (opts && typeof opts.timeoutMs === 'number') ? opts.timeoutMs : RECIPE_TIMEOUT_MS)
   let data
   try {
+    const model = process.env.LLM_MODEL || brain.LLM_MODEL
     data = await brain.llmCall({
       use: 'orders',
       apiKey: process.env.ANTHROPIC_API_KEY,
       signal: ac.signal,
       fetchFn: opts && opts.fetchFn,
       body: {
-        model: process.env.LLM_MODEL || brain.LLM_MODEL,
-        max_tokens: 500,
-        thinking: { type: 'disabled' },
+        model,
+        ...brain.llmModelConfig(model, 500),
         system: RECIPE_SYSTEM,
         messages: [{ role: 'user', content: user }],
       },
@@ -835,7 +843,11 @@ async function requestRecipe(bot, ctx, target, opts = {}) {
   }
   const u = (data && data.usage) || {}
   const tokens = `${u.input_tokens | 0}/${u.output_tokens | 0}`
-  const out = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text') || {}).text || ''
+  const textBlock = (data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text')
+  if (!textBlock && data && data.stop_reason === 'max_tokens') {
+    return { error: 'max_tokens', tokens }
+  }
+  const out = (textBlock && textBlock.text) || ''
   let ans = null
   try { ans = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch (_) { ans = null }
   const shape = checkRecipeShape(ans)

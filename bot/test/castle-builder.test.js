@@ -70,6 +70,10 @@ function mockBot(world, { items = KIT, withBuilder = true, buildScript = 'ok' } 
       if (buildScript === 'preempted') throw new Error('build-preempted')
       if (buildScript === 'starve') return { placed: 0, missing: cells.length }
       if (buildScript === 'starve-spent') { items.length = 0; return { placed: 0, missing: cells.length } }
+      if (buildScript === 'starve-torches-spent') {
+        for (let i = items.length - 1; i >= 0; i--) if (items[i].name === 'torch') items.splice(i, 1)
+        return { placed: 0, missing: cells.length }
+      }
       if (buildScript === 'starve-names') { // the mod spent every named stack, other variants stay
         const names = new Set(cells.map((c) => c.block))
         for (let i = items.length - 1; i >= 0; i--) if (names.has(items[i].name)) items.splice(i, 1)
@@ -277,6 +281,27 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     await run(bot, ctx, 1)
     assert.ok(!(ctx.stepStatus || '').startsWith('failed:'), `no fetch word, got ${ctx.stepStatus}`)
     assert.ok(Object.keys(ctx.castle.batchStrikes || {}).length > 0, 'refused cells strike')
+  })
+
+  it('on final resolve with named held, starved kind on lowY is not struck (core-3)', async () => {
+    const world = makeWorld()
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    for (const c of plan) {
+      if (c.y <= 63) world.set(c.x, c.y, c.z, c.kind === 'planks' ? 'oak_planks' : 'cobblestone')
+    }
+    // 26 cobblestone (reserve 24 -> 2 usable) + 1 torch (reserve 0 -> 1 usable)
+    const items = [{ name: 'cobblestone', count: 26 }, { name: 'torch', count: 1 }]
+    const bot = mockBot(world, { items, buildScript: 'starve-torches-spent' })
+    const ver = blueprint.blueprintOf(3).version
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    await run(bot, ctx, 1)
+    assert.ok(!(ctx.stepStatus || '').startsWith('failed:'), `no fetch word while stone usable, got ${ctx.stepStatus}`)
+    const strikes = ctx.castle.batchStrikes || {}
+    assert.equal(Object.keys(strikes).length, 2, 'exactly the 2 stone cells struck')
+    for (const k of Object.keys(strikes)) {
+      const idx = Number(k.split(':')[1])
+      assert.equal(plan[idx].kind, 'stone', 'only held stone was struck')
+    }
   })
 
   it('a stack is never named past its count: the next stack takes over (cu1a review)', () => {
@@ -551,5 +576,54 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     const te = ctx.castle.blocked[`${ver}:${top.idx}`]
     assert.ok(!te || !te.retired, `top never burns the ladder: ${JSON.stringify(te)}`)
     assert.deepEqual(ctx.castle.batchStrikes || {}, {}, 'no lingering strikes')
+  })
+
+  it('a stall strikes the lowest unfinished layer even when its material was spent during the flight (idkcraft-qxql.15)', async () => {
+    const world = makeWorld()
+    paintAll(world)
+
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    const stoneLow = plan.find((c) => c.kind === 'stone' && c.y === 64)
+    const plankHigh = plan.find((c) => c.kind === 'planks' && c.y === 67)
+    world.set(stoneLow.x, stoneLow.y, stoneLow.z, 'air')
+    world.set(plankHigh.x, plankHigh.y, plankHigh.z, 'air')
+
+    // 25 cobblestone (reserve 24 -> 1 usable) and 64 planks so both enter the batch
+    const items = [
+      { name: 'cobblestone', count: 25 },
+      { name: 'oak_planks', count: 64 },
+    ]
+    const bot = {
+      calls: { builds: [] },
+      chats: [],
+      entity: { position: { x: stoneLow.x + 2.5, y: stoneLow.y, z: stoneLow.z + 0.5 } },
+      inventory: { items: () => items },
+      blockAt: (p) => world.blockAt(p),
+      pathfinder: {
+        movements: { exclusionAreasBreak: [], exclusionAreasPlace: [] },
+        isMoving: () => false,
+        setGoal: () => {},
+      },
+      buildCells: async (name, origin, cells) => {
+        bot.calls.builds.push(cells)
+        // cobblestone drops to reserve (24 -> 0 usable) during flight
+        items.find((it) => it.name === 'cobblestone').count = 24
+        throw new Error('build-stall')
+      },
+    }
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    const ver = blueprint.blueprintOf(3).version
+    for (let i = 0; i < 4; i++) {
+      items.find((it) => it.name === 'cobblestone').count = 25
+      castle(bot, ctx)
+      await new Promise((r) => setImmediate(r))
+      await new Promise((r) => setImmediate(r))
+    }
+    // Lowest unfinished layer (stoneLow at y=64) was struck and retired despite usable material being 0 at stall time
+    const se = ctx.castle.blocked[`${ver}:${stoneLow.idx}`]
+    assert.ok(se && se.retired, `lowest attempted cell struck and retired: ${JSON.stringify(se)}`)
+    // Higher layer (plankHigh at y=67) was not struck (collateral)
+    const pe = ctx.castle.blocked[`${ver}:${plankHigh.idx}`]
+    assert.ok(!pe || !pe.retired, 'higher layer was not struck')
   })
 })

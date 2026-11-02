@@ -2305,13 +2305,17 @@ function castleBuilderBatch(bot, ctx, st, c) {
   // The builder lays bottom-up inside the batch, so the lowest unfinished
   // batch layer is the one it attempted; higher layers — even with their
   // floors long laid — are collateral of the stall and must not burn the
-  // one-shot build-miss ladder. Starved kinds never strike. A batch-wide
+  // one-shot build-miss ladder. On the build-stall path, the lowest unfinished
+  // layer was attempted, so undone cells on lowY strike even if material
+  // was spent to 0 during flight. On the final-with-named-held resolve path,
+  // starved cells (usable <= 0) never strike. A batch-wide
   // wedge (more than a handful striking at once — a wedged body or a cold
   // cache refuses every cell alike) is not cell-specific evidence either:
   // it falls back to the ordinary backoff ladder under a distinct why, so
   // a transient cannot permanently retire a whole course, while a truly
   // dead layer still retires through it.
-  const strikeMisses = () => {
+  const strikeMisses = (opts = {}) => {
+    const starvedToo = opts.starvedToo !== false
     try {
       if (!st.batchStrikes || typeof st.batchStrikes !== 'object') st.batchStrikes = {}
       const now = Date.now()
@@ -2324,7 +2328,7 @@ function castleBuilderBatch(bot, ctx, st, c) {
       for (const o of flightCells) {
         if (done(bot, o)) continue
         if (o.y !== lowY) continue
-        if (usable(bot, o.kind, ctx) <= 0) continue
+        if (!starvedToo && usable(bot, o.kind, ctx) <= 0) continue
         set.push(o)
       }
       if (set.length > STRIKE_WIDE_CAP) {
@@ -2379,7 +2383,7 @@ function castleBuilderBatch(bot, ctx, st, c) {
         if (miss && usable(bot, miss.kind, ctx) > 0) {
           const named = new Set()
           try { for (const it of bot.inventory.items() || []) if (it && it.count > 0) named.add(it.name) } catch (_) { /* none */ }
-          if (flightCells.some((o) => !done(bot, o) && named.has(o.block))) strikeMisses()
+          if (flightCells.some((o) => !done(bot, o) && named.has(o.block))) strikeMisses({ starvedToo: false })
           return
         }
         if (miss) settleFail(`no-${miss.kind}`)
