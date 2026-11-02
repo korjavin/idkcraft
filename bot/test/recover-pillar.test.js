@@ -682,17 +682,19 @@ describe('pillar_up partial block / stair stuck fix (idkcraft-qxql.18)', () => {
     assert.equal(bot._places, 0, 'no placement attempted')
   })
 
-  it('grounded back at start floor after place reports failed:no-rise', () => {
-    const bot = strictBot(pitWorld(), [{ name: 'dirt', count: 10 }])
-    bot.entity.position = pos(0.5, 61.0, 0.5)
+  it('solidAtStart: placed on an already-occupied cell reports failed:occupied', () => {
+    const solids = pitWorld()
+    solids.add(key(0, 61, 0))
+    const bot = strictBot(solids, [{ name: 'dirt', count: 10 }])
+    bot.entity.position = pos(0.5, 61.5, 0.5)
     bot.entity.onGround = true
     const ctx = {
       recovery: {
         action: 'pillar_up', source: 'stub', model: null, status: 'running',
-        st: { phase: 'place', startFloor: 61, waited: 0, placeInFlight: false, placed: true, placeError: false },
+        st: { phase: 'place', startFloor: 61, solidAtStart: true, waited: 0, placeInFlight: false, placed: true, placeError: false },
       },
     }
     recover.run(bot, ctx)
-    assert.equal(ctx.recovery.status, 'failed:no-rise', 'grounded at or below startFloor reports failed:no-rise')
+    assert.equal(ctx.recovery.status, 'failed:occupied', 'solidAtStart fails occupied even if placed flag is set')
   })
 })
