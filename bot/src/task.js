@@ -3201,13 +3201,32 @@ function taskLine(ctx) {
   try {
     const t = ctx && ctx.task
     const kind = t && t.active
-    const st = kind && t[kind]
-    if (!kind || !st) return null
+    if (!kind) {
+      if (ctx && ctx.castle && ctx.castle.phase === 'complete') {
+        const st = t && t.castle
+        const done = (st && typeof st.done === 'number') ? st.done : (ctx.castle.built || '?')
+        const total = (st && typeof st.total === 'number') ? st.total : (ctx.castle.total || '?')
+        const act = (ctx.castle.status && ctx.castle.status !== 'complete') ? `, ${ctx.castle.status}` : ''
+        return `task castle complete (${done}/${total}${act})`
+      }
+      return null
+    }
+    const st = t[kind]
+    if (!st) return null
     try {
       if (kind !== goalKind(ctx)) return null
     } catch (_) { /* identity best-effort */ }
     let done = typeof st.done === 'number' ? st.done : '?'
     let total = typeof st.total === 'number' ? st.total : '?'
+    if (kind === 'castle') {
+      const act = (ctx.castle && ctx.castle.status && ctx.castle.status !== 'complete') ? ` (${ctx.castle.status})` : ''
+      if (ctx.castle && ctx.castle.phase === 'complete') {
+        return `task castle complete (${done}/${total}${act ? ', ' + ctx.castle.status : ''})`
+      }
+      let rounds = 0
+      try { rounds = (st.wd && st.wd.rounds) || 0 } catch (_) { rounds = 0 }
+      return `task castle ${done}/${total}${act} stall=${stallFmt(st.stallMs || 0)}${rounds > 0 ? ` round=${rounds}` : ''}`
+    }
     if (isOrderKind(kind) && (kind === 'comehome' || kind === 'gocastle' || kind === 'lead')) {
       done = typeof st.dist === 'number' ? Math.round(st.dist) : '?'
       total = typeof st.total === 'number' && st.total > 0 ? st.total : 'left'
@@ -3710,7 +3729,13 @@ function taskTick(bot, ctx, now = Date.now()) {
     if (!kind) {
       t.active = null
       try {
-        if (ctx.castle && ctx.castle.site) setStallGauge('castle', 0)
+        if (ctx.castle && ctx.castle.site) {
+          setStallGauge('castle', 0)
+          if (ctx.castle.phase === 'complete' && t.castle) {
+            t.castle.stallMs = 0
+            try { resetWdProgress(wdOf(t.castle)) } catch (_) {}
+          }
+        }
         if (ctx.home && ctx.home.site) setStallGauge('house', 0)
         for (const k of ORDER_KINDS) {
           try {
@@ -3901,6 +3926,16 @@ function taskTick(bot, ctx, now = Date.now()) {
     }
     if (kind === 'castle') {
       const cur = castleCurrent(bot, ctx, ctx.castle, now)
+      if (ctx.castle && ctx.castle.phase === 'complete') {
+        if (typeof cur.done === 'number') state.done = cur.done
+        if (typeof cur.total === 'number') state.total = cur.total
+        state.stallMs = 0
+        state.lastAt = now
+        state.lastProgressAt = now
+        setStallGauge(kind, 0)
+        try { resetWdProgress(wdOf(state)) } catch (_) { /* rounds best-effort */ }
+        return
+      }
       if (castleTravel(bot, ctx, state)) {
         // Far walk back to the site (vmzq.35, prod: a respawn 500 off read
         // flat for 20 min): the any-clock resets, the placed clock accrues.
