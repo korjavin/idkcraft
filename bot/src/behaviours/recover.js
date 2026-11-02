@@ -1023,10 +1023,7 @@ function pillarUpRun(bot, ctx) {
     return 'running'
   }
   if (st.placed) {
-    if (bot.entity && bot.entity.onGround && bp.y <= st.startFloor + 0.1) {
-      setJump(bot, false)
-      return 'failed:no-rise'
-    }
+    if (st.solidAtStart) return 'failed:occupied'
     // Verify the block is really there before claiming done: the target is
     // the feet cell we jumped from (startFloor), whatever floor we read now.
     return solid(cellAt(bot, 0, st.startFloor - Math.floor(bp.y), 0)) ? 'done' : 'failed:no-place'
