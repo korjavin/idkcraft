@@ -56,6 +56,10 @@ services:
       # World directory name (level-name). Default keeps the original world;
       # the stack env overrides it (LEVEL=world2 in Portainer since 2026-10-08).
       LEVEL: ${LEVEL:-world}
+      # r8tl (neuc.65 H2 fix): bots receive bread kit on client connect (not on respawn;
+      # keepInventory preserves it across deaths) so bodies can eat to regenerate low health
+      # (H2 deaths lead at 34.3% when food=0).
+      # Idempotent: gives bread only when the bot holds no bread.
       # x3y6.5 (owner 2026-10-17): swarm helpers get an unbreakable stone
       # pickaxe from the server (hand-dug stone is 10 s/block, drops nothing).
       # File-free on purpose: Portainer git stacks did not apply inline
@@ -68,6 +72,8 @@ services:
       # The bot's own spawn kit line can read pickaxe=no on first connect (the
       # give lands seconds after spawn); check by dig intervals instead.
       RCON_CMDS_ON_CONNECT: |
+        execute if entity @a[name=${BOT_USERNAME:-IdkBot}] unless items entity @a[name=${BOT_USERNAME:-IdkBot}] container.* minecraft:bread run give ${BOT_USERNAME:-IdkBot} minecraft:bread 16
+        execute if entity @a[name=${BOT2_USERNAME:-IdkBotV2}] unless items entity @a[name=${BOT2_USERNAME:-IdkBotV2}] container.* minecraft:bread run give ${BOT2_USERNAME:-IdkBotV2} minecraft:bread 16
         execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}1] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}1] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}1 minecraft:stone_pickaxe[unbreakable={}]
         execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}2] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}2] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}2 minecraft:stone_pickaxe[unbreakable={}]
         execute if entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}3] unless items entity @a[name=${BOT_SWARM_PREFIX:-IdkSwarm}3] container.* minecraft:stone_pickaxe run give ${BOT_SWARM_PREFIX:-IdkSwarm}3 minecraft:stone_pickaxe[unbreakable={}]
