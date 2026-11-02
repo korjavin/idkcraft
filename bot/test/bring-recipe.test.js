@@ -29,7 +29,7 @@ function pos(x, y, z) {
 }
 
 const ITEMS = {
-  atlantium: 1, obsidian: 2, bucket: 3, water_bucket: 4, diamond_pickaxe: 5,
+  atlantium: 1, obsidian: 2, bucket: 3, water_bucket: 4, diamond_pickaxe: 5, cherry_sapling: 6,
 }
 
 function mockBot(items = [], cells = null) {
@@ -147,6 +147,23 @@ describe('recipe fallback: refusal sites', () => {
     assert.ok(bot.lines.some((l) => l === "can't get atlantium: recipe needs mine atlantium (no mine leg)"), `abort names the step: ${bot.lines}`)
     assert.ok(!bot.lines.some((l) => /no recipe, no source/.test(l)), 'original refusal replaced')
     assert.ok(!bot.lines.some((l) => /^recipe for /.test(l)), 'validate-before-start: the valid fill step never ran')
+  })
+
+  it("chat-time: 'bring me cherry_sapling' asks model and opens cherry_leaves sub-order", async () => {
+    answerFor = '{"materials":[],"steps":[{"do":"gather","item":"cherry_sapling"}]}'
+    const bot = mockBot([])
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me cherry_sapling')
+    assert.equal(bot.lines[0], 'no recipe for cherry_sapling — asking how to get it…')
+    const ctx = bot._tickerCtx
+    assert.ok(ctx.bring && ctx.bring.phase === 'recipe')
+    await flush()
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0], 'cherry_sapling')
+    assert.equal(ctx.bring.kind, 'block')
+    assert.equal(ctx.bring.name, 'cherry_leaves')
+    assert.equal(ctx.bring.drop, 'cherry_sapling')
+    assert.ok(bot.lines.some((l) => l.includes('recipe for cherry_sapling 1/1: making you a cherry_sapling: need 1 cherry_sapling, going for cherry_leaves')))
   })
 
   it('tick-time: a chest-exhausted order falls back, then aborts naming the step', async () => {
@@ -455,5 +472,207 @@ describe('recipe execution', () => {
     const never = bring.bringDeny(bot, blk, {}, 'coal')
     assert.equal(lifted, 'protected', 'control: a lit frame is protected even with consent')
     assert.equal(withheld, never, 'no lift: reads exactly like an unconsented order')
+  })
+
+  it('leaf beating capability: isSapling and leavesForSapling helpers', () => {
+    assert.equal(bringitem.isSapling('cherry_sapling'), true)
+    assert.equal(bringitem.isSapling('oak_sapling'), true)
+    assert.equal(bringitem.isSapling('mangrove_propagule'), true)
+    assert.equal(bringitem.isSapling('azalea'), true)
+    assert.equal(bringitem.isSapling('flowering_azalea'), true)
+    assert.equal(bringitem.isSapling('dirt'), false)
+
+    assert.equal(bringitem.leavesForSapling('cherry_sapling'), 'cherry_leaves')
+    assert.equal(bringitem.leavesForSapling('oak_sapling'), 'oak_leaves')
+    assert.equal(bringitem.leavesForSapling('mangrove_propagule'), 'mangrove_leaves')
+    assert.equal(bringitem.leavesForSapling('azalea'), 'azalea_leaves')
+    assert.equal(bringitem.leavesForSapling('flowering_azalea'), 'flowering_azalea_leaves')
+    assert.equal(bringitem.leavesForSapling('dirt'), null)
+  })
+
+  it('recipeCaps.gather validates saplings and rejects invalid gather items', () => {
+    assert.equal(bringitem.recipeCaps.gather({}, {}, 'cherry_sapling'), 'ok')
+    assert.equal(bringitem.recipeCaps.gather({}, {}, 'oak_sapling'), 'ok')
+    assert.equal(bringitem.recipeCaps.gather({}, {}, 'mangrove_propagule'), 'ok')
+    assert.equal(bringitem.recipeCaps.gather({}, {}, 'oak_log'), 'ok')
+    assert.equal(bringitem.recipeCaps.gather({}, {}, 'white_wool'), 'ok')
+    assert.deepEqual(bringitem.recipeCaps.gather({}, {}, 'iron_ingot'), { impossible: 'nothing to gather' })
+  })
+
+  it('leaves stay out of isBringable: bring me oak_leaves does not open sapling order', async () => {
+    assert.equal(bring.isBringable('oak_leaves'), false)
+    assert.equal(bring.isBringable('cherry_leaves'), false)
+    process.env.BOT_LLM_ORDERS = '0'
+    const bot = mockBot([])
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me oak_leaves')
+    await flush()
+    assert.ok(!bot.lines.some((l) => l.includes('oak_sapling')), `never gives sapling: ${bot.lines}`)
+    assert.ok(bot.lines.some((l) => l.includes('only') || l.includes('no recipe') || l.includes('unknown')), `refuses: ${bot.lines}`)
+  })
+
+  it('planRecipe plans gather cherry_sapling from leaf-beating recipe', async () => {
+    const bot = mockBot([])
+    answerFor = '{"materials":[],"steps":[{"do":"gather","item":"cherry_sapling"}]}'
+    const res = await llmOrders.planRecipe(bot, {}, 'cherry_sapling', { caps: bringitem.recipeCaps })
+    assert.equal(res.ok, true)
+    assert.deepEqual(res.queue, [{ do: 'gather', item: 'cherry_sapling' }])
+  })
+
+  it('recipe execution gathers cherry_sapling via block sub targeting cherry_leaves', () => {
+    const bot = mockBot([])
+    const ctx = {}
+    const step = { do: 'gather', item: 'cherry_sapling' }
+    const o = { kind: 'item', name: 'cherry_sapling', names: ['cherry_sapling'], want: 1, by: 'P' }
+    ctx.bring = o
+    o.recipe = { target: 'cherry_sapling', pending: false, at: Date.now(), original: 'ORIG', i: 0, queue: [step], executing: true, done: false, active: null, activeHave: 0, want: 1 }
+
+    // Step 1: recipeNext dispatches gather -> openSubOrder
+    bringitem.recipeNext(bot, ctx, o)
+    assert.equal(o.kind, 'block')
+    assert.equal(o.name, 'cherry_leaves', 'sub-order targets cherry leaves')
+    assert.equal(o.drop, 'cherry_sapling', 'sub-order drop is cherry_sapling')
+    assert.equal(o.want, 1)
+    assert.equal(o.subFor, 'cherry_sapling')
+    assert.equal(o.phase, 'find')
+
+    // Bot picks up the dropped sapling: resumeSub restores item rung
+    bot._items.push({ name: 'cherry_sapling', count: 1 })
+    bringitem.resumeSub(bot, ctx, o)
+    // Growth past activeHave (0 -> 1) advances the recipe queue to exhaustion
+    assert.equal(o.recipe.done, true)
+    assert.equal(o.phase, 'return', 'exhausted recipe delivers the sapling')
+    assert.equal(o.have, 1)
+  })
+
+  it('multi-sapling recipe: step 2 sub want is absolute and continues beating on no-drop', () => {
+    const bot = mockBot([])
+    const ctx = {}
+    const step = { do: 'gather', item: 'cherry_sapling' }
+    const o = { kind: 'item', name: 'cherry_sapling', names: ['cherry_sapling'], want: 2, by: 'P' }
+    ctx.bring = o
+    o.recipe = { target: 'cherry_sapling', pending: false, at: Date.now(), original: 'ORIG', i: 0, queue: [step, step], executing: true, done: false, active: null, activeHave: 0, want: 2 }
+
+    // Step 1: pack has 0, wants 1
+    bringitem.recipeNext(bot, ctx, o)
+    assert.equal(o.kind, 'block')
+    assert.equal(o.want, 1)
+
+    // Step 1 finishes: pack gets 1 sapling, resumeSub automatically advances to step 2
+    bot._items.push({ name: 'cherry_sapling', count: 1 })
+    bringitem.resumeSub(bot, ctx, o)
+    assert.equal(o.recipe.i, 2, 'advanced to step 2')
+    assert.equal(o.kind, 'block')
+    assert.equal(o.name, 'cherry_leaves')
+    assert.equal(o.have, 1)
+    assert.equal(o.want, 2, 'sub want is absolute: pack[name] + 1')
+
+    // A leaf dig drops nothing: have is still 1 (< want 2)
+    assert.ok(o.have < o.want, 'have < want prevents premature done')
+
+    // Next leaf dig drops a sapling: have becomes 2
+    bot._items.push({ name: 'cherry_sapling', count: 1 })
+    bringitem.resumeSub(bot, ctx, o)
+    assert.equal(o.recipe.done, true)
+    assert.equal(o.phase, 'return')
+    assert.equal(o.have, 2)
+  })
+
+  it('bringDeny protects persistent leaves and permits natural leaves', () => {
+    const bot = mockBot([])
+    const naturalLow = {
+      name: 'cherry_leaves',
+      position: pos(2, 65, 0),
+      getProperties: () => ({ persistent: false }),
+    }
+    const persistent = {
+      name: 'cherry_leaves',
+      position: pos(3, 65, 0),
+      getProperties: () => ({ persistent: true }),
+    }
+    bot.blockAt = (p) => {
+      if (p.x === 3) return persistent
+      return naturalLow
+    }
+    assert.equal(bring.bringDeny(bot, naturalLow, {}, 'cherry_leaves'), null)
+    assert.equal(bring.bringDeny(bot, persistent, {}, 'cherry_leaves'), 'protected')
+  })
+
+  it('woodless logs sub re-points o.drop to concrete log species on each commit', async () => {
+    const birchPos = pos(2, 64, 0)
+    const oakPos = pos(4, 64, 0)
+    const cells = {
+      '2,63,0': 'dirt', '2,64,0': 'birch_log', '2,65,0': 'birch_log', '2,66,0': 'birch_leaves',
+      '4,63,0': 'dirt', '4,64,0': 'oak_log', '4,65,0': 'oak_log', '4,66,0': 'oak_leaves',
+    }
+    const bot = mockBot([], cells)
+    bot.registry.blocksByName = { birch_log: { id: 101 }, oak_log: { id: 102 } }
+    bot.findBlocks = () => [birchPos]
+    const ctx = {}
+    const o = {
+      kind: 'block', name: 'logs', drop: null,
+      want: 2, have: 0, phase: 'find', subFor: 'chest', by: 'P',
+    }
+    ctx.bring = o
+    await bring(bot, ctx, null, {})
+    assert.equal(o.phase, 'walk')
+    assert.equal(o.drop, 'birch_log', 'first commit points to birch')
+
+    // Second commit picks oak
+    bot.findBlocks = () => [oakPos]
+    o.phase = 'find'
+    o.pos = null
+    await bring(bot, ctx, null, {})
+    assert.equal(o.phase, 'walk')
+    assert.equal(o.drop, 'oak_log', 'second commit re-points to oak')
+  })
+
+  it('sapling sub find phase commits cherry_leaves and preserves o.drop as cherry_sapling', async () => {
+    const leafPos = pos(3, 64, 0)
+    const cells = { '3,64,0': 'cherry_leaves' }
+    const bot = mockBot([], cells)
+    bot.registry.blocksByName = { cherry_leaves: { id: 200 } }
+    bot.findBlocks = () => [leafPos]
+    const ctx = {}
+    const o = {
+      kind: 'block', name: 'cherry_leaves', drop: 'cherry_sapling',
+      want: 1, have: 0, phase: 'find', subFor: 'cherry_sapling', by: 'P',
+    }
+    ctx.bring = o
+    await bring(bot, ctx, null, {})
+    assert.equal(o.phase, 'walk')
+    assert.equal(o.name, 'cherry_leaves')
+    assert.equal(o.drop, 'cherry_sapling', 'commitSource keeps sapling drop')
+    assert.equal(o.pos.x, 3)
+    assert.equal(o.pos.y, 64)
+    assert.equal(o.pos.z, 0)
+  })
+
+  it('sapling sub dig phase unequips held shears and never equips shears', async () => {
+    let unequippedSlot = null
+    let equippedTool = null
+    let dugBlock = null
+    const leafPos = pos(2, 64, 0)
+    const cells = { '2,64,0': 'cherry_leaves' }
+    const bot = mockBot([], cells)
+    bot.entity.position = pos(0, 64, 0)
+    bot.heldItem = { name: 'shears' }
+    bot.pathfinder.bestHarvestTool = () => ({ name: 'shears' })
+    bot.unequip = async (slot) => { unequippedSlot = slot; bot.heldItem = null }
+    bot.equip = async (tool) => { equippedTool = tool }
+    bot.dig = async (b) => { dugBlock = b }
+
+    const ctx = {}
+    const o = {
+      kind: 'block', name: 'cherry_leaves', drop: 'cherry_sapling',
+      want: 1, have: 0, phase: 'dig', pos: leafPos, block: 'cherry_leaves', subFor: 'cherry_sapling', by: 'P',
+    }
+    ctx.bring = o
+    await bring(bot, ctx, null, {})
+    await flush()
+    assert.equal(unequippedSlot, 'hand', 'unequipped shears from hand')
+    assert.equal(equippedTool, null, 'never equipped shears')
+    assert.equal(dugBlock && dugBlock.name, 'cherry_leaves', 'dug the leaf block')
+    assert.equal(o.phase, 'pickup', 'advanced to pickup phase')
   })
 })

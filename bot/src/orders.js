@@ -390,7 +390,7 @@ function createOrders(box) {
         if (cPlan.fail === 'no-table') return cPlan.line
       }
       const res = findNearest(bot, name)
-      if (res === 'unknown') {
+      if (res === 'unknown' || (resolved && !worldFallback)) {
         if (!resolved) return `unknown item: ${name}`
         // No diggable block, the pack came up short, and no adopted chest:
         // the recipe fallback (6ci5.2) asks the model once for a
