@@ -345,17 +345,22 @@ describe('g0z.44 post-complete band sweep', () => {
     ctx.placedByBot.delete(key(99, 64, 200))
     assert.equal(castle.menuFact(bot, ctx), 'done')
   })
-  it('band blocked entries live until swept, box entries still prune on expiry (revmux 01 core-1)', () => {
+  it('band and box blocked entries live until swept, prep entries prune on expiry (idkcraft-qxql.16)', () => {
     const cells = painted()
     closeDecor(cells)
     cells.set(key(99, 64, 200), 'dirt')
     const bot = worldBot(cells)
     const ctx = { castle: st2(), placedByBot: new Set([key(99, 64, 200)]) }
     const idx = castle.litterTargets(bot, ctx, ctx.castle, Date.now()).find((c) => c.x === 99).idx
-    ctx.castle.blocked = { [`2:${idx}`]: { tries: 3, until: 0, why: 'protected' }, '2:2000000': { tries: 2, until: 0, why: 'dig-refused' } }
+    ctx.castle.blocked = {
+      [`2:${idx}`]: { tries: 3, until: 0, why: 'protected' },
+      '2:2000000': { tries: 2, until: 0, why: 'unreachable' },
+      '2:1000000': { tries: 2, until: 0, why: 'dig-refused' },
+    }
     castle(bot, ctx) // pick() prunes at its head; the far walk below never blocks
     assert.equal(ctx.castle.blocked[`2:${idx}`].tries, 3, 'expired band entry kept, tries escalate')
-    assert.equal(ctx.castle.blocked['2:2000000'], undefined, 'expired box entry pruned as before')
+    assert.equal(ctx.castle.blocked['2:2000000'].tries, 2, 'expired box entry kept, tries escalate (qxql.16)')
+    assert.equal(ctx.castle.blocked['2:1000000'], undefined, 'expired prep entry pruned on expiry')
     cells.set(key(99, 64, 200), 'air') // swept
     castle(bot, ctx)
     assert.equal(ctx.castle.blocked[`2:${idx}`], undefined, 'swept band entry pruned')

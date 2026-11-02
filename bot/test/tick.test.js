@@ -2289,6 +2289,22 @@ describe('work mode (epic rw4)', () => {
     ticker.destroy()
   })
 
+  it('(f11) status omits skipped reason spam and suspect state (idkcraft-qxql.16)', async () => {
+    const bot = workBot()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(10) } }
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10 })
+    ticker.work()
+    await ticker.tick()
+    const ctx = bot._tickerCtx
+    ctx.stuckState = 'SUSPECT'
+    const n = bot.chats.length
+    handleChat(bot, ticker, 'Steve', 'status')
+    const reply = bot.chats.slice(n).join('\n')
+    assert.ok(!reply.includes('stuck=SUSPECT'), `suspect hidden: ${reply}`)
+    assert.ok(!reply.includes('skipped:'), `skipped reasons omitted: ${reply}`)
+    ticker.destroy()
+  })
+
   it('(f8) status never leaks the brain URL (gwvg A7)', async () => {
     const keep = process.env.BRAIN_URL
     process.env.BRAIN_URL = 'http://' + 'fake-host' + '.invalid:8000/v1/systemone'
