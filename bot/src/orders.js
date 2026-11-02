@@ -830,14 +830,6 @@ function createOrders(box) {
         if (step === 'rest') {
           // atl.7: a resting bot names the reason decide() stored, if any.
           if (ctx.restWhy) line += ` resting because ${ctx.restWhy}`
-        } else if (goal.STEP_ORDER.includes(step)) {
-          // Higher-priority steps this pick skipped, with their reasons.
-          // Shared with the L1 diagnosis (task.js).
-          try {
-            const text = goal.goalText(facts, ctx.home)
-            const sk = taskMod.skippedReason(bot, ctx, facts, text, step)
-            if (sk) line += `; ${sk}`
-          } catch (_) { /* skipped best-effort */ }
         }
         lines.push(line)
       }
@@ -869,7 +861,7 @@ function createOrders(box) {
       } catch (_) { /* blocked best-effort */ }
       let stuckState = 'MOVING'
       try { stuckState = verdict(ctx).state || 'MOVING' } catch (_) { /* moving default */ }
-      if (stuckState !== 'MOVING') wrong.push(`stuck=${stuckState}`)
+      if (stuckState === 'STUCK') wrong.push(`stuck=${stuckState}`)
       const rec = ctx.recovery
       if (rec && rec.action) wrong.push(rec.status ? `recovering=${rec.action}/${rec.status}` : `recovering=${rec.action}`)
       // Only abnormal verdicts (the stuck.js terminal set): a healthy bot

@@ -269,4 +269,39 @@ describe('g0z.61 own blocks, players, idx', () => {
     assert.equal(castle.bandOf(st, 2100000), null, 'a g0z.44 band idx prunes')
     assert.equal(castle.bandOf(st, blueprint.DECOR_BASE), null, 'decor idx space')
   })
+  it('idx unique over site box and boxOf inverts it (idkcraft-qxql.16)', () => {
+    const st = st3()
+    const seen = new Set()
+    for (let dx = 0; dx < w; dx++) {
+      for (let dz = 0; dz < d; dz++) {
+        for (let dy = 0; dy <= 16; dy++) {
+          const idx = castle.LITTER_BOX_BASE + (dx * d + dz) * 40 + dy
+          assert.ok(!seen.has(idx), `dup ${dx},${dy},${dz}`)
+          seen.add(idx)
+          assert.ok(idx >= castle.LITTER_BOX_BASE && idx < castle.LITTER_BAND_BASE)
+          const back = castle.boxOf(st, idx)
+          assert.ok(back && back.x === SITE.x + dx && back.y === SITE.y + dy && back.z === SITE.z + dz && back.kind === 'air' && back.dy === dy, `boxOf ${dx},${dy},${dz}`)
+        }
+      }
+    }
+    assert.equal(castle.boxOf(st, castle.LITTER_BOX_BASE - 1), null, 'below base')
+    assert.equal(castle.boxOf(st, castle.LITTER_BAND_BASE), null, 'band base')
+    assert.equal(castle.boxOf(st, blueprint.DECOR_BASE), null, 'decor base')
+  })
+  it('unreachable litter cell retires after LITTER_MAX_TRIES (idkcraft-qxql.16)', () => {
+    const st = st3()
+    const ctx = { castle: st }
+    const cell = { x: SITE.x + 2, y: SITE.y + 10, z: SITE.z + 2, kind: 'air', idx: castle.LITTER_BOX_BASE + 50 }
+    const now = 1000000
+    castle.blockCell(ctx, st, cell, 'unreachable', now)
+    const k = `3:${cell.idx}`
+    assert.equal(st.blocked[k].tries, 1)
+    assert.equal(st.blocked[k].retired, undefined)
+    castle.blockCell(ctx, st, cell, 'unreachable', now + 40000)
+    assert.equal(st.blocked[k].tries, 2)
+    assert.equal(st.blocked[k].retired, undefined)
+    castle.blockCell(ctx, st, cell, 'unreachable', now + 120000)
+    assert.equal(st.blocked[k].tries, 3)
+    assert.equal(st.blocked[k].retired, true)
+  })
 })

@@ -261,6 +261,10 @@ const PROTECTED_MAX_TRIES = 3
 // 'build-miss-wide' is the batch-wide wedge fallback (revmux 03): not
 // cell-specific, so it rides the ordinary 8-try ladder instead.
 const BUILD_MISS_TRIES = 1
+// Litter unreachable limit (idkcraft-qxql.16): scaffold clearing is best-effort.
+// Three unreachable attempts retire the cell so the castle completes instead
+// of looping on unreachable scaffold.
+const LITTER_MAX_TRIES = 3
 // A strike set bigger than this is a batch-wide wedge, not cell-specific
 // evidence (revmux 03 core-1) — a wedged body refuses every cell alike.
 const STRIKE_WIDE_CAP = 8
@@ -284,9 +288,17 @@ function blockCell(ctx, st, c, why, now) {
   // hole — still reported, never picked or waited on again. Builder
   // refusals retire faster (idkcraft-synq BUILD_MISS_TRIES above) and
   // protected cells faster still (PROTECTED_MAX_TRIES above), with a
-  // permanent why the tidy return never re-arms. The tries>=MAX backstop
+  // permanent why the tidy return never re-arms. Litter unreachable
+  // retires after LITTER_MAX_TRIES (idkcraft-qxql.16). The tries>=MAX backstop
   // keeps the old invariant for mixed ladders that never streak.
-  const limit = why === 'build-miss' ? BUILD_MISS_TRIES : why === 'protected' ? PROTECTED_MAX_TRIES : MAX_HOLE_TRIES
+  const isLitter = c && (c.idx >= LITTER_BOX_BASE && c.idx < blueprint.DECOR_BASE)
+  const limit = why === 'build-miss'
+    ? BUILD_MISS_TRIES
+    : why === 'protected'
+      ? PROTECTED_MAX_TRIES
+      : (isLitter && why === 'unreachable')
+        ? LITTER_MAX_TRIES
+        : MAX_HOLE_TRIES
   const n = why === 'protected' ? (e.prot | 0) : e.tries
   if (n >= limit || e.tries >= MAX_HOLE_TRIES) e.retired = true
   st.blocked[k] = e
@@ -457,11 +469,11 @@ function pick(bot, ctx, st, cells, key, now) {
   // lays while holes wait out their backoff.
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
-    const c = cells[Number(i)] || decorOf(st, Number(i)) || bandOf(st, Number(i)) || (Number(i) === SILL_IDX ? sillOf(st) : null)
-    // Off-plan entries (prep, box litter) live until they expire (g0z.14);
+    const c = cells[Number(i)] || decorOf(st, Number(i)) || bandOf(st, Number(i)) || boxOf(st, Number(i)) || (Number(i) === SILL_IDX ? sillOf(st) : null)
+    // Off-plan entries (prep) live until they expire (g0z.14);
     // decor entries (g0z.31) live until laid, so a bad pane cell retires;
-    // band entries (g0z.44) live until swept, so refusals escalate to
-    // retired instead of re-chasing every 30 s.
+    // band and box litter entries (g0z.44, qxql.16) live until swept, so refusals
+    // escalate to retired instead of re-chasing every 30 s.
     if (Number(v) !== ver(st) || (c ? done(bot, c) : st.blocked[k].until <= now)) { delete st.blocked[k]; continue }
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
@@ -835,6 +847,7 @@ function prepTargets(bot, ctx, st, now) {
 // — box-litter entries still prune on expiry, so the two modes must not
 // share idx space. The base moved from g0z.44's 2100000 with the strides:
 // a persisted old entry prunes instead of decoding to another cell.
+const LITTER_BOX_BASE = 2000000
 const LITTER_BAND_BASE = 2200000
 const LITTER_BELOW = blueprint.NIGHT_BAND_BELOW
 // Scaffold names (body.js scafoldingBlocks = dirt + castle.STONE_ITEMS;
@@ -990,7 +1003,7 @@ function litterTargets(bot, ctx, st, now) {
         // the bot placed it this session (trackPlaced), never the owner's.
         const ownCobble = n === 'cobblestone' && (!st.upgrade || placed.has(k))
         if (ownCobble || (placed.has(k) && NATURAL_SOLID.has(n))) {
-          list.push({ x, y, z, kind: 'air', dy, idx: 2000000 + (dx * d + dz) * 40 + dy })
+          list.push({ x, y, z, kind: 'air', dy, idx: LITTER_BOX_BASE + (dx * d + dz) * 40 + dy })
         }
       }
     }
@@ -1035,6 +1048,19 @@ function bandOf(st, idx) {
   const dz = (q % (d + 2 * R)) - R
   const dx = (q - (dz + R)) / (d + 2 * R) - R
   if (dy > SITE_TOP || dx >= w + R || dz >= d + R) return null
+  return { x: st.site.x + dx, y: st.site.y + dy, z: st.site.z + dz, kind: 'air', dy, idx }
+}
+
+// A box litter idx back to its cell (the boxLitter formula inverted), or null.
+function boxOf(st, idx) {
+  if (!(idx >= LITTER_BOX_BASE && idx < LITTER_BAND_BASE)) return null
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const t = idx - LITTER_BOX_BASE
+  const dy = t % 40
+  const q = (t - dy) / 40
+  const dz = q % d
+  const dx = (q - dz) / d
+  if (dx < 0 || dx >= w || dz < 0 || dz >= d || dy < 0 || dy > SITE_TOP) return null
   return { x: st.site.x + dx, y: st.site.y + dy, z: st.site.z + dz, kind: 'air', dy, idx }
 }
 
@@ -2609,9 +2635,12 @@ module.exports.fillTargets = fillTargets
 module.exports.nextFill = nextFill
 module.exports.FILL_BASE = FILL_BASE
 module.exports.scaffoldShape = scaffoldShape
+module.exports.LITTER_BOX_BASE = LITTER_BOX_BASE
 module.exports.LITTER_BAND_BASE = LITTER_BAND_BASE
 module.exports.litterCell = litterCell
 module.exports.bandOf = bandOf
+module.exports.boxOf = boxOf
+module.exports.LITTER_MAX_TRIES = LITTER_MAX_TRIES
 module.exports.decorOpen = decorOpen
 module.exports.reopenRepairs = reopenRepairs
 module.exports.rank = rank
