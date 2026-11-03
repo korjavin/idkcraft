@@ -2366,7 +2366,7 @@ const roomForDrop = (bot, ctx) => stockpileMod.roomForDrop(bot, ctx)
 function digTick(bot, ctx, f, d) {
   const bp = bodyPos(bot)
   if (!bp) { spend(f, 'other'); return }
-  if (typeof bot.mine === 'function' && !toolPrep.ready(bot, ctx, f, { name: 'stone' })) return
+  if (typeof bot.mine === 'function' && !toolPrep.ready(bot, ctx, f, { name: 'stone' }, () => finish(bot, ctx, 'failed:castlefetch-no-pickaxe'))) return
   if (!hasPickaxe(bot) && process.env.BOT_BODY !== 'baritone') { spend(f, 'other'); finish(bot, ctx, 'done'); return } // equip rearms first
   if (!roomForDrop(bot, ctx)) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
   // Mid-leg pick upgrade (idkcraft-vmzq.20): the first fetch digs on a
@@ -2721,7 +2721,7 @@ function digTick(bot, ctx, f, d) {
   // each stance walk ran 3.75 s on 0.75 s dirt): let the feet land first,
   // a bounded wait so a body that never reads grounded still digs.
   if (bot.entity && bot.entity.onGround === false && (t.air = (t.air | 0) + 1) <= AIR_WAITS) { spend(f, 'other'); return }
-  if (!toolPrep.ready(bot, ctx, f, b)) return
+  if (!toolPrep.ready(bot, ctx, f, b, () => finish(bot, ctx, 'failed:castlefetch-no-pickaxe'))) return
   if (t.quarry) {
     // Drops land at the digging stance (pickup reach), so no
     // cobble-gain strike; a cell that survives its digs is skipped instead.

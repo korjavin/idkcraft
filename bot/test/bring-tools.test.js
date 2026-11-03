@@ -331,6 +331,92 @@ describe('v2 bulk tool prerequisite (idkcraft-514b)', () => {
     assert.equal(parent.have, 9)
   })
 
+  it('ends the actual bring order honestly after two unavailable tool attempts', async () => {
+    const bot = mockBot({ cells: { '1,64,0': 'stone', '1,63,0': 'stone' } })
+    const parent = { name: 'stone', block: 'stone', drop: 'cobblestone', want: 20, have: 0, phase: 'dig', pos: pos(1, 64, 0) }
+    const ctx = { bring: parent }
+    let attempts = 0
+    toolPrep.setDriver((_bot, child) => { attempts++; child.bring = null })
+    bot.dig = () => assert.fail('stone must never dig bare handed')
+    for (let i = 0; i < 10 && ctx.bring; i++) {
+      await bring(bot, ctx)
+      await flush()
+      if (parent.toolPrepFailures && parent.toolPrepFailures.pickaxe === 1) parent.toolPrepBackoff.pickaxe = 0
+    }
+    assert.equal(attempts, 2)
+    assert.equal(ctx.bring, null)
+    assert.equal(ctx.bringEnd.outcome, 'refused')
+    assert.ok(bot.lines.includes('could not prepare a suitable tool for stone'))
+  })
+
+  it('failed fetch preparation terminates, survives a new leg, and can craft after materials arrive', async () => {
+    const fetch = require('../src/behaviours/castlefetch')
+    const bot = mockBot({ cells: { '0,64,0': 'crafting_table' } })
+    bot.mine = () => assert.fail('no mine before the tool is prepared')
+    const castle = { site: { x: 0, y: 64, z: 0 }, rot: 0, phase: 'body', blueprintVersion: 1 }
+    const f = { kind: 'stone', dug: 12, t0: Date.now() }
+    const ctx = { castle, castleFetch: f, stepStatus: 'running' }
+    tableHome(ctx, 0, 64, 0)
+    let attempts = 0
+    toolPrep.setDriver((_bot, child) => { attempts++; child.bring = null })
+    const d = { kind: 'stone', word: 'none', short: 20 }
+    for (let i = 0; i < 12 && ctx.castleFetch; i++) {
+      fetch.digTick(bot, ctx, f, d)
+      await flush()
+      if (castle.toolPrepFailures && castle.toolPrepFailures.pickaxe === 1) castle.toolPrepBackoff.pickaxe = 0
+    }
+    assert.equal(attempts, 2)
+    assert.equal(ctx.castleFetch, null)
+    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-pickaxe')
+    assert.equal(f.dug, 12)
+    assert.ok(Number.isFinite(castle.toolPrepBackoff.pickaxe))
+    ctx.castleFetch = { kind: 'stone' }
+    fetch.digTick(bot, ctx, ctx.castleFetch, d)
+    assert.equal(ctx.castleFetch, null, 'a new leg cannot mint another attempt during cooldown')
+    assert.equal(attempts, 2)
+    castle.toolPrepBackoff.pickaxe = 0 // cooldown elapsed, materials arrived
+    bot._items.push({ name: 'stick', count: 2 }, { name: 'cobblestone', count: 3 })
+    ctx.castleFetch = { kind: 'stone' }
+    const retry = ctx.castleFetch
+    toolPrep.setDriver(bring)
+    await prepare(bot, ctx, retry, { name: 'stone' })
+    assert.equal(bot.held, 'stone_pickaxe')
+    assert.equal(ctx.castleFetch, retry)
+    assert.equal(castle.toolPrepFailures.pickaxe, 0)
+  })
+
+  it('does not classify redstone controls, instant crops or powders as nonharvestable stone', () => {
+    for (const name of ['redstone_wire', 'redstone_torch', 'stone_button', 'stone_pressure_plate', 'glowstone', 'lodestone', 'grindstone', 'stonecutter', 'pointed_dripstone', 'melon_stem', 'attached_pumpkin_stem']) {
+      assert.equal(toolPrep.requirement({ name }), null, name)
+    }
+    assert.equal(toolPrep.requirement({ name: 'white_concrete_powder' }).hand, true)
+    for (const name of ['coal_ore', 'nether_quartz_ore', 'nether_gold_ore']) assert.equal(toolPrep.requirement({ name }).tier, 0, name)
+    assert.equal(toolPrep.requirement({ name: 'warped_stem' }).kind, 'axe')
+  })
+
+  it('a goal switch cannot reset the castle tool budget by replacing its fetch leg', () => {
+    const bot = mockBot()
+    const castle = {}
+    const first = {}
+    const ctx = { castle, castleFetch: first, stepGen: 1 }
+    assert.equal(toolPrep.ready(bot, ctx, first, { name: 'stone' }), false)
+    ctx.stepGen++
+    ctx.castleFetch = {}
+    assert.equal(toolPrep.ready(bot, ctx, ctx.castleFetch, { name: 'stone' }), false)
+    assert.equal(castle.toolPrepFailures.pickaxe, 1)
+    assert.equal(first.toolPrep, null)
+    castle.toolPrepBackoff.pickaxe = 0
+    const second = ctx.castleFetch
+    assert.equal(toolPrep.ready(bot, ctx, second, { name: 'stone' }), false)
+    ctx.stepGen++
+    ctx.castleFetch = {}
+    let terminal = 0
+    assert.equal(toolPrep.ready(bot, ctx, ctx.castleFetch, { name: 'stone' }, () => { terminal++ }), false)
+    assert.equal(castle.toolPrepFailures.pickaxe, 2)
+    assert.equal(terminal, 1)
+    assert.equal(ctx.castleFetch.toolPrep, undefined, 'no third fresh acquisition is opened')
+  })
+
   it('backs off impossible acquisition and re-enters preparation after a carried tool breaks', async () => {
     const bot = mockBot({ recipes: {} })
     const parent = {}

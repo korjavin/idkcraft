@@ -140,6 +140,41 @@ function mockBrain(action = 'roam') {
   return { calls: 0, async decide() { this.calls++; return { action, sprint: false, source: 'stub' } } }
 }
 
+it('v2 flat holds its anchored episode until the shovel equips, then shaves the same bump', async () => {
+  const previous = process.env.BOT_BODY
+  process.env.BOT_BODY = 'baritone'
+  try {
+    const world = makeWorld()
+    world.set(2, 64, 0, 'dirt')
+    const shovel = { name: 'stone_shovel', count: 1 }
+    const bot = mockBot(world, { items: [shovel] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    const ctx = { flat: f }
+    let release
+    bot.equip = (item) => new Promise((resolve) => { release = () => { bot.heldItem = item; resolve() } })
+    const dig = bot.dig
+    bot.dig = async (b) => { assert.equal(bot.heldItem, shovel); await dig(b) }
+    const tick = async () => { flat(bot, ctx); await settle() }
+    for (let i = 0; i < 12 && !release; i++) await tick()
+    assert.equal(typeof release, 'function')
+    const ticks = f.ticks, bump = f.bumps[0], level = f.level
+    for (let i = 0; i < 3; i++) await tick()
+    assert.equal(bot.calls.digs.length, 0)
+    assert.equal(f.ticks, ticks)
+    assert.equal(f.bumps[0], bump)
+    assert.equal(f.blocks, 0)
+    release()
+    for (let i = 0; i < 6 && !bot.calls.digs.length; i++) await tick()
+    assert.equal(bot.calls.digs.length, 1)
+    assert.equal(f.blocks, 1)
+    assert.equal(ctx.flat, f)
+    assert.deepEqual([f.cx, f.cz, f.r, f.level], [0, 0, 4, level])
+  } finally {
+    if (previous === undefined) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = previous
+  }
+})
+
 describe('flat plan: spiralColumns', () => {
   it('covers the whole square center-first in non-decreasing rings', () => {
     const cols = spiralColumns(10, 20, 4)

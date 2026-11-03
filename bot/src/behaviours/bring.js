@@ -2341,7 +2341,7 @@ async function bring(bot, ctx, target, state) {
       o.phase = 'find'
       return
     }
-    if (!toolPrep.ready(bot, ctx, o, block)) return
+    if (!toolPrep.ready(bot, ctx, o, block, () => refuse(bot, ctx, `could not prepare a suitable tool for ${o.name}`))) return
     ctx.digInFlight = true
     const digOwnerKey = ctx.lastGoalKey // qfus: the replant only fires under this goal
     void (async () => {
@@ -2356,7 +2356,7 @@ async function bring(bot, ctx, target, state) {
         }
         const isSapDrop = o.drop && (o.drop.endsWith('_sapling') || o.drop === 'mangrove_propagule' || o.drop === 'azalea' || o.drop === 'flowering_azalea')
         if (tool && tool.name === 'shears' && isSapDrop) tool = null
-        if (tool && typeof bot.equip === 'function' && (process.env.BOT_BODY !== 'baritone' || ctx.internalTool)) await bot.equip(tool, 'hand')
+        if (tool && typeof bot.equip === 'function' && (process.env.BOT_BODY !== 'baritone' || ctx.internalTool || !toolPrep.requirement(block))) await bot.equip(tool, 'hand')
         const held = bot.heldItem
         if (held && held.name === 'shears' && isSapDrop) {
           try { if (typeof bot.unequip === 'function') await bot.unequip('hand') } catch (_) {}

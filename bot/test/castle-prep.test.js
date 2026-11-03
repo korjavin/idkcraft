@@ -67,6 +67,43 @@ async function run(bot, ctx, ticks) {
   for (let i = 0; i < ticks; i++) { castle(bot, ctx); await settle() }
 }
 
+it('v2 castle prep holds its site/cell until the shovel equips, then clears it', async () => {
+  const previous = process.env.BOT_BODY
+  process.env.BOT_BODY = 'baritone'
+  try {
+    const world = makeWorld()
+    world.set(SITE.x + 1, 64, SITE.z + 1, 'dirt')
+    const bot = mockBot(world)
+    const shovel = { name: 'stone_shovel', count: 1 }
+    bot.inventory.items = () => [...KIT, shovel]
+    let release
+    bot.equip = (item) => bot.heldItem === item ? Promise.resolve() : new Promise((resolve) => { release = () => { bot.heldItem = item; bot.held = item.name; resolve() } })
+    const dig = bot.dig
+    bot.dig = async (b) => { assert.equal(bot.heldItem, shovel); await dig(b) }
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 2, phase: 'prep', blocked: {} }
+    const ctx = { castle: st }
+    for (let i = 0; i < 12 && !release; i++) await run(bot, ctx, 1)
+    assert.equal(typeof release, 'function')
+    const site = st.site
+    world.set(SITE.x + 1, 64, SITE.z + 1, 'air') // another actor changes the cell while equipment is pending
+    await run(bot, ctx, 3)
+    assert.equal(bot.calls.digs.length, 0)
+    assert.equal(ctx.castle, st)
+    assert.equal(st.site, site)
+    assert.equal(st.phase, 'prep')
+    assert.deepEqual(st.blocked, {})
+    world.set(SITE.x + 1, 64, SITE.z + 1, 'dirt')
+    release()
+    for (let i = 0; i < 6 && !bot.calls.digs.length; i++) await run(bot, ctx, 1)
+    assert.equal(bot.calls.digs.length, 1)
+    assert.equal(world.get(SITE.x + 1, 64, SITE.z + 1), 'air')
+    assert.equal(ctx.castle, st)
+  } finally {
+    if (previous === undefined) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = previous
+  }
+})
+
 describe('g0z.5 site check', () => {
   const check = (mutate) => {
     const w = makeWorld()

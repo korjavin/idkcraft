@@ -7,6 +7,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 
 const castlefetch = require('../src/behaviours/castlefetch')
+require('../src/behaviours/bring') // wire the private acquisition driver
 
 function mockBot({ items = [], mineImpl = null, digImpl = null, pos = null } = {}) {
   const calls = { mine: [], dig: [] }
@@ -44,6 +45,37 @@ async function flush() {
 }
 
 describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
+  it('v2 holds the same fetch leg and progress until its carried pick equips before mine', async () => {
+    const previous = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const pick = { name: 'stone_pickaxe', count: 1 }
+      const bot = mockBot({ items: [pick], mineImpl: (b, calls) => async () => { assert.equal(b.heldItem, pick); calls.mine.push({}) } })
+      const ctx = stoneCtx(), f = ctx.castleFetch
+      f.dug = 12
+      let release
+      bot.equip = (item) => new Promise((resolve) => { release = () => { bot.heldItem = item; resolve() } })
+      const d = { kind: 'stone', word: 'batch', short: 8 }
+      castlefetch.digTick(bot, ctx, f, d)
+      await flush()
+      assert.equal(typeof release, 'function')
+      for (let i = 0; i < 3; i++) castlefetch(bot, ctx)
+      assert.equal(bot.calls.mine.length, 0)
+      assert.equal(ctx.castleFetch, f)
+      assert.equal(f.dug, 12)
+      assert.equal(ctx.stepStatus, 'running')
+      release()
+      await flush()
+      castlefetch(bot, ctx) // the hold completes without advancing the parent
+      castlefetch.digTick(bot, ctx, f, d)
+      await flush()
+      assert.equal(bot.calls.mine.length, 1)
+      assert.equal(ctx.stepStatus, 'done')
+    } finally {
+      if (previous === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = previous
+    }
+  })
   it('one bot.mine call for the shortfall, no bot.dig, done on resolve', async () => {
     const bot = mockBot({
       items: [{ name: 'stone_pickaxe', count: 1 }],

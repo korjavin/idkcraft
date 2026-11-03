@@ -1891,8 +1891,8 @@ function digCell(bot, ctx, st, c, now) {
   }
   // Harvest tool first (flat digFlight): stone by hand drops nothing,
   // and the spoil is kept — cobble counts for the castle (g0z.6).
-  if (!toolPrep.ready(bot, ctx, st, b)) return
-  const tool = process.env.BOT_BODY === 'baritone' ? bot.heldItem : harvestTool(bot, b)
+  if (!toolPrep.ready(bot, ctx, st, b, () => blockCell(ctx, st, c, `no-tool-${name}`, now))) return
+  const tool = process.env.BOT_BODY === 'baritone' && toolPrep.requirement(b) ? bot.heldItem : harvestTool(bot, b)
   // Someone's block (vmzq.40) is never destroyed by hand: it waits for the tool.
   if (footprintOnly && !canHarvest(b, tool)) { blockCell(ctx, st, c, `no-tool-${name}`, now); return }
   flight(ctx, 'digInFlight', c, async (token) => {
@@ -1953,8 +1953,8 @@ function relocate(bot, ctx, st, c, name, now) {
     else strike(ctx, st, c, deny, now)
     return
   }
-  if (!toolPrep.ready(bot, ctx, st, b)) return
-  const tool = process.env.BOT_BODY === 'baritone' ? bot.heldItem : harvestTool(bot, b)
+  if (!toolPrep.ready(bot, ctx, st, b, () => blockCell(ctx, st, c, `no-tool-${name}`, now))) return
+  const tool = process.env.BOT_BODY === 'baritone' && toolPrep.requirement(b) ? bot.heldItem : harvestTool(bot, b)
   if (!canHarvest(b, tool)) { blockCell(ctx, st, c, `no-tool-${name}`, now); return }
   flight(ctx, 'digInFlight', c, async (token) => {
     let win = null
