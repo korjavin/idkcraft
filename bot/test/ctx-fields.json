@@ -1624,6 +1624,7 @@
   },
   "placedByBot": {
     "writers": [
+      "src/behaviours/castle.js",
       "src/behaviours/util.js"
     ],
     "owner": "src/behaviours/util.js"

@@ -33,6 +33,7 @@ const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.j
 const build = require('./build')
 const flat = require('./flat')
 const toolPrep = require('./toolprep')
+const cellRecovery = require('./castlerecovery')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
 const { stepDone, stepFailed, stepGen, failReason } = require('../step')
 const worker = require('../worker')
@@ -1263,7 +1264,13 @@ function reopenRepairs(bot, ctx, st, transientOnly) {
       const c = cells[idx]
       if (!c) continue // off-plan entries (prep, litter, fill, decor, sill) are someone else's
       if (done(bot, c)) continue // healed: pick's prune drops the entry
-      delete st.blocked[k]
+      // Automatic tidy must not mint a fresh paid recovery budget every
+      // hour. Keep history/counter; only an explicit owner repair resets it.
+      if (transientOnly && e.recoveries > 0) {
+        if (e.recoveries >= cellRecovery.MAX_EPISODES) continue
+        e.retired = false
+        e.until = 0
+      } else delete st.blocked[k]
       n++
     }
     if (n > 0) {
@@ -1362,6 +1369,13 @@ function menuFact(bot, ctx, now = Date.now()) {
         progress(bot, st, r.cells, ctx)
       }
     } catch (_) { /* progress best-effort */ }
+    // Retired builder misses need an actual menu route back to castle.
+    // Only loaded, funded, due geometry holes qualify; protected holes
+    // and the normal progressing builder retain their existing words.
+    if (cellRecovery.eligible(bot, ctx, st, r.cells, now, RECOVERY_HOOKS)) {
+      ctx.castleWord = { word: 'clear' }
+      return 'clear'
+    }
     let word = null
     if (!r.cell) {
       // Blocked (g0z.23): the waiting kind and its remainder stay on the
@@ -2564,6 +2578,28 @@ function arrive(bot, st) {
   try { bot.chat(`building the castle here at ${st.site.x} ${st.site.y} ${st.site.z} (~${n} blocks)`) } catch (_) { /* chat best-effort */ }
 }
 
+const RECOVERY_HOOKS = {
+  bkey, done, findItem, fillItem,
+  own(ctx, p, name) {
+    if (!(ctx.placedByBot instanceof Set)) ctx.placedByBot = new Set()
+    ctx.placedByBot.add(`${p.x},${p.y},${p.z}`)
+    if (ctx.placedNames instanceof Map) ctx.placedNames.set(`${p.x},${p.y},${p.z}`, name)
+  },
+  resume(ctx, st, c, outcome) {
+    // Only the diagnosed cell reopens, and only after an observed effect.
+    const k = bkey(st, c.idx)
+    if (outcome === 'correct') delete st.blocked[k]
+    else if (st.blocked[k]) { st.blocked[k].retired = false; st.blocked[k].until = 0 }
+    if (st.batchStrikes) delete st.batchStrikes[bkey(st, c.idx)]
+    ctx.castleGoalIdx = -1
+    ctx.castleCell = null
+    ctx.castleFails = null
+    ctx.castleFar = null
+    ctx.castleCursor = 0
+    ctx.castleScanAt = 0
+  },
+}
+
 function castle(bot, ctx) {
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return
@@ -2581,6 +2617,8 @@ function castle(bot, ctx) {
   }
   if (ctx.placeInFlight || ctx.digInFlight || ctx.castleBuildFlight) return
   guardCastle(bot, ctx)
+  const recoveryCells = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells
+  if (cellRecovery.tick(bot, ctx, st, recoveryCells, now, RECOVERY_HOOKS)) return
   if (st.announce) arrive(bot, st)
   if (ctx.castlePickup && pickup(bot, ctx)) return
   if (ctx.castleCarry && stow(bot, ctx, st, now)) return

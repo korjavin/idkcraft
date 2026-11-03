@@ -336,6 +336,9 @@ function castleOf(c) {
         // Retired holes stay retired (vmzq.27 revmux 02): without the flag
         // a rejoin re-waits retired holes up to the clamped backoff.
         if (e.retired === true) out.blocked[k].retired = true
+        // qxql.19: keep the optional lifetime recovery budget across
+        // restarts; legacy entries without it still start at zero.
+        if (Number.isInteger(e.recoveries) && e.recoveries > 0) out.blocked[k].recoveries = Math.min(e.recoveries, 2)
         // Consecutive-protected streak (idkcraft-v0vy): the count rides
         // along so a restart resumes fast-retire instead of re-climbing
         // from zero. Capped well above the retire threshold; blockCell
