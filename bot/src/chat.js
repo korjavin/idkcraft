@@ -387,20 +387,12 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   // requires it; help/status/chatter do not.
   const ownerOk = ownerLineOk(playerName)
   let msg = message.toLowerCase().trim()
-  // vewo.6: '<BotName>: <command>' belongs to that bot alone (full name,
-  // case-insensitive); every other bot ignores the line. Unprefixed unchanged.
-  // Only KNOWN bot names count as an address; any other `word: text` is an
-  // ordinary unprefixed line.
-  const addr = /^([\w.]{3,16}):\s*(.*)$/.exec(msg)
+  // gs5s: any '<Name>: <command>' is addressed, including unknown names.
+  // Drop other names before command handling or LLM orders; broadcasts stay unchanged.
+  const addr = /^([\w.]{1,32}):\s*(.*)$/.exec(msg)
   if (addr) {
-    const e = process.env
-    const pre = (e.BOT_SWARM_PREFIX || 'IdkSwarm').toLowerCase()
-    const known = [bot.username, e.BOT_USERNAME, e.BOT2_USERNAME, e.BOT_PEER_USERNAME].some((n) => n && n.toLowerCase() === addr[1]) ||
-      (addr[1].startsWith(pre) && /^([1-9]|[12]\d|3[0-2])$/.test(addr[1].slice(pre.length)))
-    if (known) {
-      if (addr[1] !== String(bot.username).toLowerCase()) return
-      msg = addr[2]
-    }
+    if (addr[1] !== String(bot.username).toLowerCase()) return
+    msg = addr[2]
   }
   // Puppet sessions (idkcraft-jlw7): the only incoming-chat tag — session
   // review tells from=IdkTester apart from live players. No metric label.
