@@ -321,6 +321,7 @@ function feedReady(bot, ctx) {
     if (!bp) return null
     const skipIds = new Set(ctx && ctx.farm && ctx.farm.bredIds)
     const struck = struckSet(ctx)
+    if (struck && struck.has('feed-uncertain')) return null
     if (struck) {
       for (const e of Object.values(bot.entities || {})) {
         if (e && struck.has(`sheep:${e.id}`)) skipIds.add(e.id)
@@ -438,6 +439,14 @@ function feedControl(ctx, f, gen) {
     !(ctx.lastDecision && ['fight', 'follow'].includes(ctx.lastDecision.action))
 }
 
+function deferFeed(ctx, f, id, uncertain = false) {
+  if (id != null) f.struck.add(`sheep:${id}`)
+  if (uncertain) f.struck.add('feed-uncertain')
+  ctx.farmStruck = f.struck
+  ctx.farmStruckAt = Date.now()
+  f.feedDone = true
+}
+
 // One entity-use is in flight at a time. A resolved RPC can be PASS, so
 // count only the later inventory snapshot, without doing other farm work
 // between the before/after reads. Rejected sheep stay skipped across picks
@@ -447,7 +456,7 @@ function settleFeed(bot, ctx, f) {
   if (!p) return false
   if (!feedControl(ctx, f, p.gen)) { f.feedPending = null; return true }
   const after = countWheat(bot)
-  if (after < p.before) {
+  if (p.done && after < p.before) {
     if (!(f.bredIds instanceof Set)) f.bredIds = new Set()
     f.bredIds.add(p.id)
     f.fedSheep = (f.fedSheep | 0) + 1
@@ -458,7 +467,12 @@ function settleFeed(bot, ctx, f) {
   }
   p.ticks++
   if (p.ticks >= FEED_SETTLE_TICKS || Date.now() - p.at >= FEED_SETTLE_MS) {
-    f.struck.add(`sheep:${p.id}`)
+    // The first RPC or its inventory update may still arrive late. End
+    // this sequence and fence subsequent picks with the existing TTL,
+    // rather than attributing that update to a second sheep. Bridge RPCs
+    // time out after 5s each (transport.js); this 10min backoff outlasts
+    // both the aim and use calls without pretending feeding succeeded.
+    deferFeed(ctx, f, p.id, true)
     f.feedPending = null
     console.log(`farm feed sheep=${p.id} outcome=${p.error ? 'error' : 'no-effect'} wheat=${p.before}->${after} fed=${f.fedSheep | 0}`)
   }
@@ -471,7 +485,11 @@ async function run(bot, ctx) {
   if (f.busy) return
   f.busy = true
   try {
-    if (Date.now() - (f.t0 || Date.now()) > MAX_MS) return void finish(bot, ctx, f, true, null, gen)
+    if (Date.now() - (f.t0 || Date.now()) > MAX_MS) {
+      if (f.feedPending) deferFeed(ctx, f, f.feedPending.id, true)
+      else if (f.walkLeg === 'farm-feed' && !(f.fedSheep | 0)) deferFeed(ctx, f, f.feedTargetId)
+      return void finish(bot, ctx, f, true, null, gen)
+    }
     const bp = botPos(bot)
     if (!bp) return
     if (settleFeed(bot, ctx, f)) return
@@ -708,6 +726,7 @@ async function run(bot, ctx) {
     if (!f.feedDone) {
       const found = (f.fedSheep | 0) < 2 ? feedReady(bot, ctx) : null
       if (found) {
+        f.feedTargetId = found.id
         const sp = { x: found.position.x, y: found.position.y, z: found.position.z }
         if (Math.hypot(sp.x - bp.x, sp.y - bp.y, sp.z - bp.z) > FEED_REACH &&
             walkTo(bot, ctx, f, 'farm-feed', sp, 1, 1)) {
@@ -734,7 +753,11 @@ async function run(bot, ctx) {
         Promise.resolve().then(() => {
           if (!feedControl(ctx, f, gen) || f.feedPending !== pending) return
           return bot.activateEntity(one)
-        }).catch(() => { if (feedControl(ctx, f, gen)) pending.error = true })
+        }).then(() => {
+          if (feedControl(ctx, f, gen)) pending.done = true
+        }, () => {
+          if (feedControl(ctx, f, gen)) { pending.done = true; pending.error = true }
+        })
         return
       }
       f.feedDone = true

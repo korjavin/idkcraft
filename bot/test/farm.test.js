@@ -438,6 +438,48 @@ describe('farm legs', () => {
     }
   })
 
+  it('ends an uncertain feed sequence before a second sheep can inherit its late consumption', async () => {
+    const bot = mockBot({
+      items: [{ name: 'wheat', count: 2 }],
+      sheep: [{ x: 2, y: 64, z: 0 }, { x: 2, y: 64, z: 1 }],
+    })
+    let resolveUse
+    bot.activateEntity = (e) => {
+      bot.ops.useEntity.push(e.id)
+      return new Promise((resolve) => { resolveUse = resolve })
+    }
+    const ctx = ctxOf()
+    await farm(bot, ctx)
+    const oldFarm = ctx.farm
+    await farmTicks(bot, ctx, 12)
+    assert.deepEqual(bot.ops.useEntity, [7], 'a still-pending first use forbids a second sheep use')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(oldFarm.fedSheep | 0, 0)
+    assert.ok(ctx.farmStruck.has('sheep:7'))
+    // activateEntity can still await its look/entity RPCs (bridge/transport.js
+    // defaults each RPC to 5s), so even a fresh pick must not start sheep B.
+    ctx.stepGen = 1
+    ctx.stepStatus = 'running'
+    await farmTicks(bot, ctx, 12)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(bot.ops.useEntity, [7], 'uncertainty survives a new farm pick')
+    assert.equal(ctx.farmFedAt, undefined)
+    ctx.step = 'follow'
+    ctx.stepGen = 2
+    ctx.stepStatus = 'running'
+    const replacement = { owner: 'replacement' }
+    ctx.farm = replacement
+    consumeWheat(bot) // the original RPC's server effect arrives after its observation timeout
+    resolveUse()
+    await new Promise(setImmediate)
+    assert.equal(ctx.farm, replacement)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(ctx.farmFedAt, undefined)
+    assert.equal(oldFarm.fedSheep | 0, 0)
+    assert.deepEqual(bot.ops.useEntity, [7])
+    assert.ok(!bot.ops.chat.some((line) => /fed .*sheep/.test(line)))
+  })
+
   it('a body without entity-use finishes honestly without a feeding claim', async () => {
     const bot = mockBot({ items: [{ name: 'wheat', count: 1 }], sheep: { x: 2, y: 64, z: 0 } })
     delete bot.activateEntity
@@ -447,6 +489,29 @@ describe('farm legs', () => {
     assert.equal(ctx.farmFedAt, undefined)
     assert.ok(!bot.ops.chat.some((line) => /fed .*sheep|brought wheat/.test(line)))
     assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('a timed-out moving sheep chase is skipped by the next farm pick', async () => {
+    const bot = mockBot({ items: [{ name: 'wheat', count: 2 }], sheep: { x: 30, y: 64, z: 0 } })
+    const ctx = ctxOf()
+    await farm(bot, ctx)
+    assert.deepEqual(bot.ops.goals, ['GoalNear:1'])
+    // Moving without arriving can evade displacement strikes, but not the
+    // whole-step 3min cap. Expire that cap without sleeping the test.
+    bot.entity.position = { x: 1, y: 64, z: 0 }
+    ctx.farm.t0 = Date.now() - 181000
+    await farm(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(ctx.farmStruck.has('sheep:7'))
+    assert.equal(ctx.farmFedAt, undefined)
+    ctx.stepGen = 1
+    ctx.stepStatus = 'running'
+    await farm(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(farm.feedReady(bot, ctx), null, 'the same chase cannot immediately pull farm again')
+    bot.entities[8] = { id: 8, name: 'sheep', position: { x: 10, y: 64, z: 0 }, isValid: true }
+    assert.equal(farm.feedReady(bot, ctx).id, 8, 'a different sheep remains eligible')
+    assert.deepEqual(bot.ops.useEntity, [])
   })
 
   it('late entity-use completion cannot finish or cool down a replacement order', async () => {
