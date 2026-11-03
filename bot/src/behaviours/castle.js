@@ -1264,7 +1264,13 @@ function reopenRepairs(bot, ctx, st, transientOnly) {
       const c = cells[idx]
       if (!c) continue // off-plan entries (prep, litter, fill, decor, sill) are someone else's
       if (done(bot, c)) continue // healed: pick's prune drops the entry
-      delete st.blocked[k]
+      // Automatic tidy must not mint a fresh paid recovery budget every
+      // hour. Keep history/counter; only an explicit owner repair resets it.
+      if (transientOnly && e.recoveries > 0) {
+        if (e.recoveries >= cellRecovery.MAX_EPISODES) continue
+        e.retired = false
+        e.until = 0
+      } else delete st.blocked[k]
       n++
     }
     if (n > 0) {

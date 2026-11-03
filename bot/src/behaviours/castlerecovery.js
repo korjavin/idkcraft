@@ -58,6 +58,9 @@ function say(ep, action, outcome) {
 }
 function end(s, ep, now, outcome) {
   if (s.episode !== ep) return
+  // Only a real planner invocation spends the lifetime episode budget.
+  // Paid calls stay charged even when a later fight/timeout preempts them.
+  if (ep.calls === 0) ep.entry.recoveries = Math.max(0, ep.entry.recoveries - 1)
   ep.cancelled = true
   s.cooldown.set(ep.cell.idx, now + BACKOFF_MS)
   s.until = now + 30000 // many old holes must not create one model call per tick
@@ -242,6 +245,7 @@ function tick(bot, ctx, st, cells, now, hooks) {
     if (!control(bot, ctx, ep)) return false
     const entry = st.blocked[hooks.bkey(st, c.idx)]
     entry.recoveries = (entry.recoveries || 0) + 1
+    ep.entry = entry
     s.episode = ep
   }
   st.status = `diagnosing obstacle at ${key(ep.cell)}`
@@ -284,9 +288,13 @@ function tick(bot, ctx, st, cells, now, hooks) {
   const choices = menu(bot, ctx, ep, hooks)
   if (choices.actions.length === 1) { end(s, ep, now, 'no-safe-action'); return true }
   ep.choices = choices.actions
-  ep.pending = true; ep.waitAt = now; ep.calls++
+  ep.pending = true; ep.waitAt = now
   const req = prompt(bot, ctx, ep, choices, hooks)
-  Promise.resolve().then(() => control(bot, ctx, ep) && !ep.cancelled ? ctx.brain.plan(req) : null).then(
+  Promise.resolve().then(() => {
+    if (!control(bot, ctx, ep) || ep.cancelled) return null
+    ep.calls++
+    return ctx.brain.plan(req)
+  }).then(
     (answer) => { if (control(bot, ctx, ep) && !ep.cancelled) { ep.pending = false; ep.answer = answer && typeof answer.step === 'string' ? { step: answer.step } : { step: '' } } },
     () => { if (control(bot, ctx, ep) && !ep.cancelled) end(s, ep, Date.now(), 'planner-unavailable') },
   )

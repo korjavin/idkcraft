@@ -239,6 +239,46 @@ describe('castle cell recovery (qxql.19)', () => {
     assert.equal(f.calls.plans.length, 0)
     assert.equal(f.calls.digs.length, 0)
     assert.ok(f.st.blocked[`3:${f.target.idx}`].retired)
+    assert.equal(f.st.blocked[`3:${f.target.idx}`].recoveries || 0, 0, 'no-safe-menu does not spend a lifetime planner episode')
+  })
+
+  it('charges recovery lifetime budget only when a planner invocation actually starts', async () => {
+    const unpaid = fixture(); retire(unpaid)
+    const unpaidEntry = unpaid.st.blocked[`3:${unpaid.target.idx}`]
+    castle(unpaid.bot, unpaid.ctx)
+    unpaid.ctx.lastDecision = { action: 'fight' }
+    await settle(); await ticks(unpaid, 1)
+    assert.equal(unpaid.calls.plans.length, 0, 'fight preempts before the planner microtask')
+    assert.equal(unpaidEntry.recoveries || 0, 0, 'pre-invocation cancellation refunds the reservation')
+
+    const paid = fixture(); retire(paid)
+    paid.ctx.brain.plan = (q) => { paid.calls.plans.push(q); return new Promise(() => {}) }
+    castle(paid.bot, paid.ctx)
+    await settle()
+    paid.ctx.lastDecision = { action: 'fight' }
+    await ticks(paid, 1)
+    assert.equal(paid.calls.plans.length, 1)
+    assert.equal(paid.st.blocked[`3:${paid.target.idx}`].recoveries, 1, 'already invoked plans remain charged after preemption')
+  })
+
+  it('automatic tidy preserves recovery history and exhausted retirement; owner repair can reset it', () => {
+    const f = fixture(); retire(f)
+    const k = `3:${f.target.idx}`, entry = f.st.blocked[k]
+    entry.recoveries = 1
+    assert.equal(castle.reopenRepairs(f.bot, f.ctx, f.st, true), 1)
+    assert.equal(f.st.blocked[k], entry, 'automatic tidy keeps the same bounded history')
+    assert.equal(entry.tries, 3)
+    assert.equal(entry.recoveries, 1)
+    assert.equal(entry.retired, false)
+    assert.equal(entry.until, 0)
+
+    entry.retired = true
+    entry.recoveries = recovery.MAX_EPISODES
+    assert.equal(castle.reopenRepairs(f.bot, f.ctx, f.st, true), 0)
+    assert.equal(entry.retired, true, 'automatic tidy cannot restore an exhausted budget')
+    assert.equal(entry.tries, 3)
+    assert.equal(castle.reopenRepairs(f.bot, f.ctx, f.st, false), 1, 'explicit owner repair still requests a fresh attempt')
+    assert.equal(f.st.blocked[k], undefined)
   })
 
   it('caps calls/actions across unchanged clear, stance and retry promises', async () => {
