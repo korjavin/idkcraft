@@ -17,8 +17,9 @@ const MAX_ACTIONS = 3
 const EPISODE_MS = 60000
 const WAIT_MS = 10000
 const BACKOFF_MS = 600000
+const MAX_EPISODES = 2
 const AIR = new Set(['air', 'cave_air', 'void_air'])
-const WHY = new Set(['build-miss', 'build-miss-wide', 'no-ref', 'unreachable', 'cell-budget', 'cell-hard-cap'])
+const WHY = new Set(['build-miss', 'no-ref', 'unreachable', 'cell-budget', 'cell-hard-cap'])
 const sessions = new WeakMap()
 const key = (p) => `${p.x},${p.y},${p.z}`
 function block(bot, p) { try { return bot.blockAt(new Vec3(p.x, p.y, p.z)) } catch (_) { return null } }
@@ -32,13 +33,13 @@ function state(ctx, st) {
 }
 function enabled(ctx) { return process.env.BOT_BODY === 'baritone' && ctx.brain && typeof ctx.brain.plan === 'function' }
 function eligible(bot, ctx, st, cells, now, hooks) {
-  if (!enabled(ctx) || st.phase === 'prep') return null
+  if (!enabled(ctx) || st.phase === 'prep' || st.toolPrep) return null
   const s = state(ctx, st)
   if (s.episode) return s.episode.cell
   if (s.until > now) return null
   return cells.find((c) => {
     const e = st.blocked && st.blocked[hooks.bkey(st, c.idx)]
-    return e && WHY.has(e.why) && blueprint.isPlaceTarget(c.kind) &&
+    return e && e.retired && (e.until || 0) <= now && (e.recoveries || 0) < MAX_EPISODES && WHY.has(e.why) && blueprint.isPlaceTarget(c.kind) &&
       (s.cooldown.get(c.idx) || 0) <= now && name(bot, c) != null &&
       !hooks.done(bot, c) && hooks.findItem(bot, c.kind, ctx) && distance(bot, c) < 16
   }) || null
@@ -115,7 +116,8 @@ function menu(bot, ctx, ep, hooks) {
     const b = position(bot)
     if (!b || Math.hypot(b.x - p.x - 0.5, b.y - p.y, b.z - p.z - 0.5) < 0.75 || !standable(bot, p, at)) continue
     stances.push(p)
-    add(`stance_${stances.length}`, 'stance', p, `Repath to observed dry stance ${key(p)} beside the target; only measured arrival enables retry.`)
+    if (!['stone', 'planks', 'frame'].includes(c.kind)) continue
+    add(`stance_${stances.length}`, 'stance', p, `Repath to observed dry stance ${key(p)} and try placing the target cube from there; only observed target correctness counts as an effect.`)
     if (stances.length >= 2) break
   }
   const retryRef = build.findRef(bot, new Vec3(c.x, c.y, c.z))
@@ -150,8 +152,6 @@ function effect(bot, ep, a, hooks) {
   if (hooks.done(bot, ep.cell)) return 'correct'
   if (a.type === 'clear' && AIR.has(name(bot, a.p))) return 'enabled'
   if (a.type === 'support' && name(bot, a.p) === a.itemName) return 'enabled'
-  const b = position(bot)
-  if (a.type === 'stance' && b && Math.hypot(b.x - a.p.x - 0.5, b.y - a.p.y, b.z - a.p.z - 0.5) < 0.75) return 'enabled'
   return 'unchanged'
 }
 function record(bot, ctx, s, ep, a, hooks) {
@@ -162,12 +162,12 @@ function record(bot, ctx, s, ep, a, hooks) {
   ep.pending = false
   if (outcome === 'enabled' || outcome === 'correct') {
     if (a.type === 'support') hooks.own(ctx, a.p, a.itemName)
-    hooks.resume(ctx, ep.castle, ep.cell)
+    hooks.resume(ctx, ep.castle, ep.cell, outcome)
     end(s, ep, Date.now(), outcome)
   }
 }
 
-async function act(bot, ctx, s, ep, a, hooks) {
+async function act(bot, ctx, s, ep, a, hooks, afterWalk = false) {
   const live = () => !ep.cancelled && control(bot, ctx, ep) && unchanged(bot, a.stamps)
   try {
     if (!live()) return
@@ -195,17 +195,19 @@ async function act(bot, ctx, s, ep, a, hooks) {
       await bot.equip(item, 'hand')
       if (!live() || distance(bot, a.p) > build.PLACE_REACH || flat.cellOccupiedSelf(bot, a.p.x, a.p.y, a.p.z) || flat.cellOccupiedByPlayer(bot, a.p.x, a.p.y, a.p.z)) return
       await bot.placeBlock(ref.ref, ref.face)
-    } else if (a.type === 'stance') {
+    } else if (a.type === 'stance' && !afterWalk) {
       ep.goal = new goals.GoalBlock(a.p.x, a.p.y, a.p.z)
       bot.pathfinder.setGoal(ep.goal)
       ep.walk = a
       return
-    } else if (a.type === 'retry') {
+    } else if (a.type === 'retry' || a.type === 'stance') {
       const item = hooks.findItem(bot, ep.cell.kind, ctx)
-      const ref = build.findRef(bot, new Vec3(a.p.x, a.p.y, a.p.z))
-      if (!item || !ref || !live()) return
+      const p = ep.cell
+      const ref = build.findRef(bot, new Vec3(p.x, p.y, p.z))
+      if (!item || !ref || !live() || !AIR.has(name(bot, p))) return
+      const reference = signature(bot, ref.ref.position)
       await bot.equip(item, 'hand')
-      if (!live() || distance(bot, a.p) > build.PLACE_REACH || flat.cellOccupiedSelf(bot, a.p.x, a.p.y, a.p.z) || flat.cellOccupiedByPlayer(bot, a.p.x, a.p.y, a.p.z)) return
+      if (!live() || signature(bot, ref.ref.position) !== reference || distance(bot, p) > build.PLACE_REACH || flat.cellOccupiedSelf(bot, p.x, p.y, p.z) || flat.cellOccupiedByPlayer(bot, p.x, p.y, p.z)) return
       await bot.placeBlock(ref.ref, ref.face)
     }
   } catch (err) {
@@ -238,11 +240,20 @@ function tick(bot, ctx, st, cells, now, hooks) {
     ep = { castle: st, cell: Object.freeze({ ...c }), work: ctx.work, gen: stepGen(ctx), started: now,
       calls: 0, actions: 0, recent: [], pending: false, goal: bot.pathfinder.goal || null }
     if (!control(bot, ctx, ep)) return false
+    const entry = st.blocked[hooks.bkey(st, c.idx)]
+    entry.recoveries = (entry.recoveries || 0) + 1
     s.episode = ep
   }
   st.status = `diagnosing obstacle at ${key(ep.cell)}`
   if (ep.walk) {
-    if (!bot.pathfinder.isMoving()) { const a = ep.walk; ep.walk = null; record(bot, ctx, s, ep, a, hooks) }
+    if (!bot.pathfinder.isMoving()) {
+      const a = ep.walk, b = position(bot)
+      ep.walk = null
+      if (b && Math.hypot(b.x - a.p.x - 0.5, b.y - a.p.y, b.z - a.p.z - 0.5) < 0.75) {
+        ep.waitAt = now
+        act(bot, ctx, s, ep, a, hooks, true)
+      } else record(bot, ctx, s, ep, a, hooks)
+    }
     return true
   }
   if (ep.pending) return true
@@ -250,7 +261,18 @@ function tick(bot, ctx, st, cells, now, hooks) {
     const a = ep.choices.find((o) => o.id === ep.answer.step)
     if (!a || a.type === 'defer') { end(s, ep, now, a ? 'deferred' : 'invalid'); return true }
     if (!unchanged(bot, a.stamps)) { ep.answer = null; ep.recent.push({ id: a.id, signature: JSON.stringify(a.stamps), outcome: 'world-changed' }); return true }
-    if (a.type === 'clear' && !tools.ready(bot, ctx, st, block(bot, a.p), () => end(s, ep, now, 'no-tool'))) return true
+    if (a.type === 'clear') {
+      const b = block(bot, a.p), req = tools.requirement(b)
+      if (req && !tools.carried(bot, { ...req, harvestTools: b.harvestTools }) &&
+          (!req.hand || !((st.toolPrepBackoff || {})[req.kind] > now))) {
+        // A missing tool is a prerequisite, not geometry work. End this
+        // episode before toolprep takes the tick (its own budget applies).
+        end(s, ep, now, 'preparing-tool')
+        s.cooldown.set(ep.cell.idx, now + 30000)
+        tools.ready(bot, ctx, st, b)
+        return true
+      }
+    }
     ep.answer = null
     ep.actions++
     ep.pending = true; ep.waitAt = now
@@ -271,4 +293,4 @@ function tick(bot, ctx, st, cells, now, hooks) {
   return true
 }
 
-module.exports = { eligible, tick, MAX_CALLS }
+module.exports = { eligible, tick, MAX_CALLS, MAX_EPISODES }

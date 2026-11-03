@@ -2579,9 +2579,11 @@ const RECOVERY_HOOKS = {
     ctx.placedByBot.add(`${p.x},${p.y},${p.z}`)
     if (ctx.placedNames instanceof Map) ctx.placedNames.set(`${p.x},${p.y},${p.z}`, name)
   },
-  resume(ctx, st, c) {
+  resume(ctx, st, c, outcome) {
     // Only the diagnosed cell reopens, and only after an observed effect.
-    delete st.blocked[bkey(st, c.idx)]
+    const k = bkey(st, c.idx)
+    if (outcome === 'correct') delete st.blocked[k]
+    else if (st.blocked[k]) { st.blocked[k].retired = false; st.blocked[k].until = 0 }
     if (st.batchStrikes) delete st.batchStrikes[bkey(st, c.idx)]
     ctx.castleGoalIdx = -1
     ctx.castleCell = null

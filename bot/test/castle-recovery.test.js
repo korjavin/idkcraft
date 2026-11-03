@@ -9,12 +9,13 @@ const Vec3 = require('vec3')
 const blueprint = require('../src/castle')
 const castle = require('../src/behaviours/castle')
 const recovery = require('../src/behaviours/castlerecovery')
+const toolPrep = require('../src/behaviours/toolprep')
 const { nextStepGen } = require('../src/step')
 const oldBody = process.env.BOT_BODY
 afterEach(() => { if (oldBody === undefined) delete process.env.BOT_BODY; else process.env.BOT_BODY = oldBody })
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise((r) => setImmediate(r)) }
 
-function fixture({ occupant = 'dirt', choose = 'clear', missingSupport = false, ineffective = false } = {}) {
+function fixture({ occupant = 'dirt', choose = 'clear', missingSupport = false, ineffective = false, stanceProblem = false } = {}) {
   process.env.BOT_BODY = 'baritone'
   const site = { x: 100, y: 64, z: 200 }
   const st = { site, rot: 0, blueprintVersion: 3, phase: 'body', blocked: {} }
@@ -47,12 +48,14 @@ function fixture({ occupant = 'dirt', choose = 'clear', missingSupport = false, 
     equip: async (it) => { bot.heldItem = it },
     dig: async (b) => { calls.digs.push(key(b.position)); if (!ineffective) set(b.position, 'air') },
     placeBlock: async (ref, face) => {
-      const p = ref.position.plus(face); calls.places.push(key(p)); if (!ineffective) set(p, bot.heldItem.name)
+      const p = ref.position.plus(face); calls.places.push(key(p))
+      if (!ineffective && !(stanceProblem && Math.floor(bot.entity.position.x) === target.x - 2 && Math.floor(bot.entity.position.z) === target.z)) set(p, bot.heldItem.name)
     },
     stopBuild: async () => { calls.stops++ },
     buildCells: async (name, origin, batch) => {
       calls.builds.push(batch)
-      if (bot.blockAt(target).name !== 'air' || bot.blockAt(below).boundingBox !== 'block' || ineffective) return { placed: 0, missing: batch.length }
+      if (bot.blockAt(target).name !== 'air' || bot.blockAt(below).boundingBox !== 'block' || ineffective ||
+          (stanceProblem && Math.floor(bot.entity.position.x) === target.x - 2 && Math.floor(bot.entity.position.z) === target.z)) return { placed: 0, missing: batch.length }
       for (const c of batch) set({ x: origin.x + c.dx, y: origin.y + c.dy, z: origin.z + c.dz }, c.block)
       return { placed: batch.length, missing: 0 }
     },
@@ -66,7 +69,7 @@ function fixture({ occupant = 'dirt', choose = 'clear', missingSupport = false, 
 }
 
 async function ticks(f, n = 5) { for (let i = 0; i < n; i++) { castle(f.bot, f.ctx); await settle() } }
-function retire(f, why = 'build-miss') { f.st.blocked[`3:${f.target.idx}`] = { why, tries: 3, until: Date.now() + 60000, retired: true } }
+function retire(f, why = 'build-miss') { f.st.blocked[`3:${f.target.idx}`] = { why, tries: 3, until: Date.now() - 1, retired: true } }
 
 describe('castle cell recovery (qxql.19)', () => {
   it('recovers a persisted builder-miss obstruction and resumes actual builder progress', async () => {
@@ -92,11 +95,14 @@ describe('castle cell recovery (qxql.19)', () => {
   })
 
   it('offers alternative target-centered standable stances and verifies displacement', async () => {
-    const f = fixture({ occupant: 'air', choose: 'stance' })
+    const f = fixture({ occupant: 'air', choose: 'stance', stanceProblem: true })
+    const before = await f.bot.buildCells('before', f.st.site, [{ dx: f.target.x - f.st.site.x, dy: 0, dz: f.target.z - f.st.site.z, block: 'cobblestone' }])
+    assert.equal(before.missing, 1, 'the bad starting column genuinely prevents placement')
     retire(f)
     await ticks(f)
     assert.ok(f.calls.plans[0].state.stances.length)
     assert.ok(f.calls.goals.some((g) => g && g.constructor.name === 'GoalBlock'))
+    assert.ok(f.calls.places.includes(f.key(f.target)), 'placement succeeds from the changed stance')
     assert.equal(f.bot.blockAt(f.target).name, 'cobblestone')
   })
 
@@ -106,7 +112,10 @@ describe('castle cell recovery (qxql.19)', () => {
     assert.equal(f.calls.plans.length, 0)
     assert.equal(f.bot.blockAt(f.target).name, 'cobblestone')
     const stuck = fixture()
-    await ticks(stuck, 6)
+    await ticks(stuck, 3)
+    assert.equal(stuck.calls.plans.length, 0, 'the normal blocked-cell backoff is respected')
+    stuck.st.blocked[`3:${stuck.target.idx}`].until = Date.now() - 1
+    await ticks(stuck, 3)
     assert.ok(stuck.calls.plans.length > 0, 'real repeated misses enter recovery')
   })
 
@@ -240,5 +249,71 @@ describe('castle cell recovery (qxql.19)', () => {
     assert.equal(f.calls.digs.length, 1)
     assert.equal(f.st.blocked[`3:${f.target.idx}`].retired, true)
     assert.equal(f.bot.blockAt(f.target).name, 'dirt')
+  })
+
+  it('does not plan for nonretired, still-backed-off or batch-wide wedge entries', async () => {
+    for (const entry of [
+      { why: 'unreachable', tries: 1, until: 0 },
+      { why: 'build-miss', tries: 3, until: Date.now() + 60000, retired: true },
+      { why: 'build-miss-wide', tries: 8, until: 0, retired: true },
+    ]) {
+      const f = fixture({ occupant: 'air' })
+      f.st.blocked[`3:${f.target.idx}`] = entry
+      await ticks(f, 2)
+      assert.equal(f.calls.plans.length, 0, JSON.stringify(entry))
+    }
+  })
+
+  it('ineffective stance arrival never reopens the cell and lifetime episodes are capped', async () => {
+    const f = fixture({ occupant: 'air', choose: 'stance', stanceProblem: true, ineffective: true })
+    retire(f)
+    const k = `3:${f.target.idx}`, clock = Date.now
+    let now = clock()
+    try {
+      Date.now = () => now
+      for (let i = 0; i < recovery.MAX_EPISODES + 2; i++) {
+        await ticks(f, 12)
+        now += 700000
+      }
+      assert.equal(f.st.blocked[k].recoveries, recovery.MAX_EPISODES)
+      assert.equal(f.st.blocked[k].tries, 3, 'the original retry history is retained')
+      assert.equal(f.st.blocked[k].retired, true)
+      assert.equal(f.bot.blockAt(f.target).name, 'air')
+      assert.ok(f.calls.plans.length <= recovery.MAX_CALLS * recovery.MAX_EPISODES)
+      assert.equal(f.calls.builds.length, 0, 'ineffective stance never re-arms normal builder')
+    } finally { Date.now = clock }
+  })
+
+  it('observed clearing preserves retry history until the builder really lays the cell', async () => {
+    const f = fixture(); retire(f)
+    await ticks(f, 2)
+    const entry = f.st.blocked[`3:${f.target.idx}`]
+    assert.equal(f.bot.blockAt(f.target).name, 'air')
+    assert.equal(entry.tries, 3)
+    assert.equal(entry.recoveries, 1)
+    assert.equal(entry.retired, false)
+    await ticks(f, 2)
+    assert.equal(f.bot.blockAt(f.target).name, 'cobblestone')
+    assert.equal(f.st.blocked[`3:${f.target.idx}`], undefined)
+  })
+
+  it('ends geometry episode before a missing-tool child can hold the castle tick', async () => {
+    const f = fixture(); retire(f)
+    f.items.splice(f.items.findIndex((it) => it.name === 'stone_shovel'), 1)
+    f.bot.heldItem = null
+    toolPrep.setDriver(async () => new Promise(() => {}))
+    const clock = Date.now, now = clock()
+    try {
+      Date.now = () => now
+      await ticks(f, 2)
+      assert.ok(f.st.toolPrep, 'the existing tool prerequisite is separate')
+      assert.equal(f.calls.digs.length, 0)
+      Date.now = () => now + 20000
+      assert.notEqual(castle.menuFact(f.bot, f.ctx), 'clear', 'ended geometry episode does not override the normal material word while prerequisite holds')
+      Date.now = () => now + 61000
+      await ticks(f, 2)
+      assert.equal(f.calls.plans.length, 1)
+      assert.equal(f.st.blocked[`3:${f.target.idx}`].retired, true)
+    } finally { Date.now = clock; toolPrep.setDriver(null) }
   })
 })
