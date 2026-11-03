@@ -374,6 +374,12 @@ describe('v2 bulk tool prerequisite (idkcraft-514b)', () => {
     fetch.digTick(bot, ctx, ctx.castleFetch, d)
     assert.equal(ctx.castleFetch, null, 'a new leg cannot mint another attempt during cooldown')
     assert.equal(attempts, 2)
+    castle.toolPrepBackoff.pickaxe = 0 // another failed attempt after cooldown escalates it
+    const third = ctx.castleFetch = { kind: 'stone' }
+    for (let i = 0; i < 8 && ctx.castleFetch; i++) { fetch.digTick(bot, ctx, third, d); await flush() }
+    assert.equal(attempts, 3)
+    assert.equal(castle.toolPrepFailures.pickaxe, 3)
+    assert.ok(castle.toolPrepBackoff.pickaxe - Date.now() >= 119000)
     castle.toolPrepBackoff.pickaxe = 0 // cooldown elapsed, materials arrived
     bot._items.push({ name: 'stick', count: 2 }, { name: 'cobblestone', count: 3 })
     ctx.castleFetch = { kind: 'stone' }

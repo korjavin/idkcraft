@@ -104,6 +104,34 @@ it('v2 castle prep holds its site/cell until the shovel equips, then clears it',
   }
 })
 
+it('v2 castle marks a stone prep cell no-tool after bounded acquisition failures', async () => {
+  const previous = process.env.BOT_BODY
+  process.env.BOT_BODY = 'baritone'
+  const toolPrep = require('../src/behaviours/toolprep')
+  const bring = require('../src/behaviours/bring')
+  try {
+    const world = makeWorld()
+    world.set(SITE.x + 1, 64, SITE.z + 1, 'stone')
+    const bot = mockBot(world)
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 2, phase: 'prep', blocked: {} }
+    const ctx = { castle: st }
+    let attempts = 0
+    toolPrep.setDriver((_bot, child) => { attempts++; child.bring = null })
+    for (let i = 0; i < 30 && !Object.values(st.blocked).some((b) => b.why === 'no-tool-stone'); i++) {
+      await run(bot, ctx, 1)
+      if (st.toolPrepFailures && st.toolPrepFailures.pickaxe === 1) st.toolPrepBackoff.pickaxe = 0
+    }
+    assert.equal(attempts, 2)
+    assert.ok(Object.values(st.blocked).some((b) => b.why === 'no-tool-stone'))
+    assert.equal(bot.calls.digs.length, 0)
+    assert.equal(ctx.castle, st)
+  } finally {
+    toolPrep.setDriver(bring)
+    if (previous === undefined) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = previous
+  }
+})
+
 describe('g0z.5 site check', () => {
   const check = (mutate) => {
     const w = makeWorld()

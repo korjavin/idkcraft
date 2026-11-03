@@ -175,6 +175,37 @@ it('v2 flat holds its anchored episode until the shovel equips, then shaves the 
   }
 })
 
+it('v2 flat skips just the stone bump when tool acquisition is exhausted', async () => {
+  const previous = process.env.BOT_BODY
+  process.env.BOT_BODY = 'baritone'
+  const toolPrep = require('../src/behaviours/toolprep')
+  const bring = require('../src/behaviours/bring')
+  try {
+    const world = makeWorld()
+    world.set(2, 64, 0, 'stone')
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }] })
+    const f = startEpisode(0, 0, 4, 74, 'P')
+    const ctx = { flat: f }
+    let attempts = 0
+    toolPrep.setDriver((_bot, child) => { attempts++; child.bring = null })
+    for (let i = 0; i < 30 && !f.skip.refused; i++) {
+      flat(bot, ctx)
+      await settle()
+      if (f.toolPrepFailures && f.toolPrepFailures.pickaxe === 1) f.toolPrepBackoff.pickaxe = 0
+    }
+    assert.equal(attempts, 2)
+    assert.equal(f.skip.refused, 1)
+    assert.equal(f.bumps.length, 0)
+    assert.equal(bot.calls.digs.length, 0)
+    assert.equal(ctx.flat, f, 'a missing pick skips the bump instead of aborting the entire episode')
+    assert.equal(ctx.flatEnd, undefined)
+  } finally {
+    toolPrep.setDriver(bring)
+    if (previous === undefined) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = previous
+  }
+})
+
 describe('flat plan: spiralColumns', () => {
   it('covers the whole square center-first in non-decreasing rings', () => {
     const cols = spiralColumns(10, 20, 4)

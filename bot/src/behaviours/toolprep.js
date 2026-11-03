@@ -47,8 +47,9 @@ function unavailable(owner, req) {
   owner.toolPrepBackoff = owner.toolPrepBackoff || {}
   owner.toolPrepFailures = owner.toolPrepFailures || {}
   const failures = owner.toolPrepFailures[req.kind] = (owner.toolPrepFailures[req.kind] || 0) + 1
-  owner.toolPrepBackoff[req.kind] = Date.now() + BACKOFF_MS
-  console.log(`tool prep unavailable ${req.kind}; ${failures >= 2 && !req.hand ? 'ending blocked work; ' : ''}retry available in ${BACKOFF_MS}ms`)
+  const delay = BACKOFF_MS * Math.min(30, 2 ** Math.min(5, Math.max(0, failures - 2)))
+  owner.toolPrepBackoff[req.kind] = Date.now() + delay
+  console.log(`tool prep unavailable ${req.kind}; ${failures >= 2 && !req.hand ? 'ending blocked work; ' : ''}retry available in ${delay}ms`)
 }
 
 function finish(bot, ctx, owner, p) {
@@ -60,6 +61,7 @@ function finish(bot, ctx, owner, p) {
     clearGoal(bot, ctx) // resume by reissuing the parent's original target
     if (p.equipFailed || !carried(bot, p.req)) {
       unavailable(p.budget, p.req)
+      if (p.equipFailed) p.budget.toolEquipBackoff[p.req.kind] = p.budget.toolPrepBackoff[p.req.kind]
     } else if (p.budget.toolPrepFailures) {
       p.budget.toolPrepFailures[p.req.kind] = 0
     }
@@ -132,7 +134,6 @@ function ready(bot, ctx, owner, block, onUnavailable) {
     if (!req.hand && budget.toolPrepFailures && budget.toolPrepFailures[req.kind] >= 2 && onUnavailable) onUnavailable()
     return req.hand
   }
-  if (budget.toolPrepFailures && budget.toolPrepFailures[req.kind] >= 2) budget.toolPrepFailures[req.kind] = 0
   if (!drive) return req.hand
   const gen = stepGen(ctx), parentBring = ctx.bring, parentFlat = ctx.flat, work = ctx.work
   const tier = req.tier >= 3 ? 'diamond' : req.tier >= 2 ? 'iron' : 'stone'
