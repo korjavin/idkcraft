@@ -748,16 +748,15 @@ async function run(bot, ctx) {
         }
         const pending = { id: one.id, before: countWheat(bot), gen, at: Date.now(), ticks: 0 }
         f.feedPending = pending
-        // Dispatch on a microtask so stop/preemption during equip can veto
-        // the call. Do not hold f.busy while the RPC awaits its own timeout.
-        Promise.resolve().then(() => {
-          if (!feedControl(ctx, f, gen) || f.feedPending !== pending) return
-          return bot.activateEntity(one)
-        }).then(() => {
-          if (feedControl(ctx, f, gen)) pending.done = true
-        }, () => {
-          if (feedControl(ctx, f, gen)) { pending.done = true; pending.error = true }
-        })
+        // Control was rechecked after equip. Do not hold f.busy while the
+        // RPC awaits its own timeout; confirmation also waits for it.
+        try {
+          Promise.resolve(bot.activateEntity(one)).then(() => {
+            if (feedControl(ctx, f, gen)) pending.done = true
+          }, () => {
+            if (feedControl(ctx, f, gen)) { pending.done = true; pending.error = true }
+          })
+        } catch (_) { pending.done = true; pending.error = true }
         return
       }
       f.feedDone = true
