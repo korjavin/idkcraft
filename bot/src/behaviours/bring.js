@@ -2599,3 +2599,5 @@ module.exports.TRIM_STRUCTURES = itemMod.TRIM_STRUCTURES
 module.exports.startRecipeFallback = itemMod.startRecipeFallback
 module.exports.recipeNext = itemMod.recipeNext
 module.exports.recipeTick = itemMod.recipeTick
+module.exports.isSapling = itemMod.isSapling
+module.exports.leavesForSapling = itemMod.leavesForSapling

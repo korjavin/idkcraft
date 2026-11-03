@@ -13,6 +13,7 @@ const { handleChat, createTicker } = require('../src/index')
 const llmOrders = require('../src/llm-orders')
 const bringitem = require('../src/behaviours/bringitem')
 const bring = require('../src/behaviours/bring')
+const bringbase = require('../src/behaviours/bringbase')
 const { resetLlmBudget, LLM_MODEL } = require('../src/brain')
 
 // NOTE (6ci5.1 merged): 'bring me obsidian' in prod routes to the block
@@ -29,7 +30,7 @@ function pos(x, y, z) {
 }
 
 const ITEMS = {
-  atlantium: 1, obsidian: 2, bucket: 3, water_bucket: 4, diamond_pickaxe: 5, cherry_sapling: 6,
+  atlantium: 1, obsidian: 2, bucket: 3, water_bucket: 4, diamond_pickaxe: 5, cherry_sapling: 6, oak_sapling: 7,
 }
 
 function mockBot(items = [], cells = null) {
@@ -674,5 +675,149 @@ describe('recipe execution', () => {
     assert.equal(equippedTool, null, 'never equipped shears')
     assert.equal(dugBlock && dugBlock.name, 'cherry_leaves', 'dug the leaf block')
     assert.equal(o.phase, 'pickup', 'advanced to pickup phase')
+  })
+
+  it('multi-sapling recipe expands queue to want count and delivers full order on completion', async () => {
+    answerFor = '{"materials":[],"steps":[{"do":"gather","item":"oak_sapling"}]}'
+    const bot = mockBot([])
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me oak_sapling 3')
+    const ctx = bot._tickerCtx
+    assert.ok(ctx.bring && ctx.bring.phase === 'recipe')
+    await flush()
+    const o = ctx.bring
+    assert.equal(o.recipe.want, 3)
+    assert.equal(o.recipe.queue.length, 3, 'expanded 1-step blueprint to 3 steps for want=3')
+
+    // Step 1 runs: gathers 1 oak_sapling
+    assert.equal(o.recipe.i, 1)
+    assert.equal(o.want, 1)
+    bot._items.push({ name: 'oak_sapling', count: 1 })
+    bringitem.resumeSub(bot, ctx, o)
+
+    // Step 2 runs: wants absolute count 2
+    assert.equal(o.recipe.i, 2)
+    assert.equal(o.want, 2)
+    bot._items.push({ name: 'oak_sapling', count: 1 })
+    bringitem.resumeSub(bot, ctx, o)
+
+    // Step 3 runs: wants absolute count 3
+    assert.equal(o.recipe.i, 3)
+    assert.equal(o.want, 3)
+    bot._items.push({ name: 'oak_sapling', count: 1 })
+    bringitem.resumeSub(bot, ctx, o)
+
+    // All 3 steps done: queue exhausted, delivers all 3
+    assert.equal(o.recipe.done, true)
+    assert.equal(o.phase, 'return')
+    assert.equal(o.have, 3)
+    assert.equal(o.want, 3)
+  })
+
+  it('orders.js falls through to recipe fallback when pack holds partial saplings', async () => {
+    answerFor = '{"materials":[],"steps":[{"do":"gather","item":"cherry_sapling"}]}'
+    const bot = mockBot([{ name: 'cherry_sapling', count: 1 }])
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me cherry_sapling 3')
+    assert.equal(bot.lines[0], 'no recipe for cherry_sapling — asking how to get it…')
+    const ctx = bot._tickerCtx
+    assert.ok(ctx.bring && ctx.bring.phase === 'recipe')
+  })
+
+  it('pack holds partial saplings and LLM recipe aborts: delivers partial pack stock instead of refusing (core-1)', async () => {
+    answerFor = '{"materials":[],"steps":[]}' // empty steps -> abort
+    const bot = mockBot([{ name: 'cherry_sapling', count: 1 }])
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me cherry_sapling 3')
+    const ctx = bot._tickerCtx
+    assert.ok(ctx.bring && ctx.bring.phase === 'recipe')
+    await flush()
+    assert.equal(bot.lines[bot.lines.length - 1], 'only 1 cherry_sapling, coming')
+    assert.ok(ctx.bring)
+    assert.equal(ctx.bring.phase, 'return')
+    assert.equal(ctx.bring.have, 1)
+  })
+
+  it('pack holds partial saplings and recipe wait times out: delivers partial pack stock (core-1)', async () => {
+    answerFor = new Promise(() => {}) // pending forever
+    const bot = mockBot([{ name: 'cherry_sapling', count: 1 }])
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me cherry_sapling 3')
+    const ctx = bot._tickerCtx
+    assert.ok(ctx.bring && ctx.bring.phase === 'recipe')
+    ctx.bring.recipe.at = Date.now() - 30000
+    bringitem.recipeTick(bot, ctx, ctx.bring)
+    assert.equal(bot.lines[bot.lines.length - 1], 'only 1 cherry_sapling, coming')
+    assert.ok(ctx.bring)
+    assert.equal(ctx.bring.phase, 'return')
+    assert.equal(ctx.bring.have, 1)
+  })
+
+  it('pack holds 2 cherry saplings for want=3: expandRecipeQueue only expands 1 step (core-3)', async () => {
+    answerFor = '{"materials":[],"steps":[{"do":"gather","item":"cherry_sapling"}]}'
+    const bot = mockBot([{ name: 'cherry_sapling', count: 2 }])
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me cherry_sapling 3')
+    const ctx = bot._tickerCtx
+    assert.ok(ctx.bring && ctx.bring.phase === 'recipe')
+    await flush()
+    const o = ctx.bring
+    assert.equal(o.recipe.want, 3)
+    assert.equal(o.recipe.queue.length, 1, 'needed=1, only 1 pass scheduled')
+  })
+
+  it('multi-pass recipe mid-queue failure delivers accumulated saplings and clears pathfinder goal (core-2 / r2 core-1)', async () => {
+    answerFor = '{"materials":[],"steps":[{"do":"gather","item":"oak_sapling"}]}'
+    const bot = mockBot([])
+    let clearedGoal = false
+    bot.pathfinder = {
+      goal: { x: 10, y: 64, z: 10 },
+      setGoal(g) { this.goal = g; if (g === null) clearedGoal = true },
+    }
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me oak_sapling 3')
+    const ctx = bot._tickerCtx
+    await flush()
+    const o = ctx.bring
+    assert.equal(o.recipe.want, 3)
+    assert.equal(o.recipe.queue.length, 3)
+
+    // Step 1 runs and gathers 1 oak_sapling
+    bot._items.push({ name: 'oak_sapling', count: 1 })
+    bringitem.resumeSub(bot, ctx, o)
+    assert.equal(o.recipe.i, 2)
+
+    // Step 2 sub sets a goal, then fails (e.g. search budget exhausted)
+    bot.pathfinder.goal = { x: 50, y: 64, z: 50 }
+    bringbase.refuse(bot, ctx, 'searched 24 areas, no oak_leaves')
+    assert.equal(bot.lines[bot.lines.length - 1], 'only 1 oak_sapling, coming')
+    assert.ok(ctx.bring)
+    assert.equal(ctx.bring.phase, 'return')
+    assert.equal(ctx.bring.have, 1)
+    assert.equal(bot.pathfinder.goal, null, 'cleared pathfinder goal on partial delivery')
+    assert.ok(clearedGoal)
+  })
+
+  it('multi-pass recipe delivers early when pass 1 satisfies full want, skipping remaining passes (r2 core-2)', async () => {
+    answerFor = '{"materials":[],"steps":[{"do":"gather","item":"oak_sapling"}]}'
+    const bot = mockBot([])
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me oak_sapling 3')
+    const ctx = bot._tickerCtx
+    await flush()
+    const o = ctx.bring
+    assert.equal(o.recipe.want, 3)
+    assert.equal(o.recipe.queue.length, 3)
+
+    // Pass 1 collected all 3 (e.g. multi-drop from leaves)
+    bot._items.push({ name: 'oak_sapling', count: 3 })
+    bringitem.resumeSub(bot, ctx, o)
+
+    // Recipe completed early at i=1 without running passes 2 or 3
+    assert.equal(o.recipe.done, true)
+    assert.equal(o.phase, 'return')
+    assert.equal(o.have, 3)
+    assert.equal(o.want, 3)
+    assert.equal(o.recipe.i, 1, 'stopped after pass 1 without opening passes 2 or 3')
   })
 })

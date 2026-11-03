@@ -100,9 +100,41 @@ function sayHarvestDeficit(bot, o) {
 }
 
 function refuse(bot, ctx, line) {
+  // A recipe order that already gathered or held part of its target delivers
+  // partial on sub-failure or budget exhaustion instead of keeping the stock.
+  const o = ctx && ctx.bring
+  if (o && o.recipe && o.recipe.executing && !o.recipe.done) {
+    const target = o.recipe.target
+    const have = countDrop(bot, target)
+    if (have > 0) {
+      stopGuidedWork(ctx)
+      releaseSmelt(ctx)
+      clearGoal(bot, ctx)
+      o.recipe.done = true
+      o.recipe.executing = false
+      o.recipe.active = null
+      o.kind = 'item'
+      o.name = target
+      o.names = [target]
+      o.want = o.recipe.want > 0 ? o.recipe.want : 1
+      o.subFor = null
+      o.subWant = null
+      o.subWord = null
+      o.search = null
+      o.searchLegs = null
+      o.block = null
+      o.pos = null
+      o.items = [{ name: target, count: have }]
+      o.have = have
+      o.drop = target
+      o.phase = 'return'
+      o.saidWaiting = false
+      say(bot, `only ${have} ${target}, coming`)
+      return
+    }
+  }
   // A failed sub-order (did.4) reads as the parent's honest line: the gap
   // that never filled, not the leg that failed it.
-  const o = ctx && ctx.bring
   const sub = o && o.subFor && o.subWant && o.subWord
     ? `could not get ${o.subWant} ${o.subWord} for the ${o.subFor} in time`
     : null
