@@ -855,6 +855,7 @@ function startEpisode(cx, cz, r, yTop, by, tile = null, level = null) {
     ticks: 0,
     lastProgressTick: 0,
     blocks: 0, // dug + placed blocks (x3y6.2: the goal watchdog's flat metric)
+    defers: 0, // total bump/hole deferrals (idkcraft-71gv: watchdog progress)
     lastChat: 0,
     progressChats: 0,
     dig: null,
@@ -885,6 +886,16 @@ function shiftSkip(f, why) {
 
 function rotate(f) {
   f.holes.push(f.holes.shift())
+}
+
+function deferHole(f, h) {
+  h.def++
+  f.defers = (f.defers || 0) + 1
+}
+
+function deferBump(f, h) {
+  h.def++
+  f.defers = (f.defers || 0) + 1
 }
 
 function shiftBumpDone(f) {
@@ -1809,7 +1820,7 @@ function fillTick(bot, ctx, f, bp) {
         g = new goals.GoalPlaceBlock(new Vec3(cx, cy, cz), bot.world, { range: PLACE_RANGE })
       } catch (_) { g = null }
       if (!g) {
-        h.def++
+        deferHole(f, h)
         if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
         else rotate(f)
         return
@@ -1845,7 +1856,7 @@ function fillTick(bot, ctx, f, bp) {
         shiftDone(f)
         return
       }
-      h.def++
+      deferHole(f, h)
       if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
       else rotate(f)
     }
@@ -1863,8 +1874,9 @@ function fillTick(bot, ctx, f, bp) {
   if (ref) {
     if (!standVerified(bot, bp, ref.ref, ref.face)) {
       try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
-      h.def++
+      deferHole(f, h)
       if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
+      else rotate(f)
       return
     }
     const item = findFillItem(bot)
@@ -1879,7 +1891,7 @@ function fillTick(bot, ctx, f, bp) {
   // gives it footing (narrow shafts), or neighbouring columns capped on
   // later passes supply a side reference (wide pits close ring by ring).
   if (h.sup >= SUPPORT_DEPTH) {
-    h.def++
+    deferHole(f, h)
     if (h.def > HOLE_DEFERS) shiftSkip(f, 'floating')
     else rotate(f)
     return
@@ -1891,7 +1903,7 @@ function fillTick(bot, ctx, f, bp) {
     return
   }
   if (below === 'unloaded') {
-    h.def++
+    deferHole(f, h)
     if (h.def > HOLE_DEFERS) shiftSkip(f, 'floating')
     else rotate(f)
     return
@@ -1904,15 +1916,16 @@ function fillTick(bot, ctx, f, bp) {
   }
   const sref = findRef(bot, new Vec3(cx, cy - 1, cz), bp)
   if (!sref) {
-    h.def++
+    deferHole(f, h)
     if (h.def > HOLE_DEFERS) shiftSkip(f, 'floating')
     else rotate(f)
     return
   }
   if (!standVerified(bot, bp, sref.ref, sref.face)) {
     try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
-    h.def++
+    deferHole(f, h)
     if (h.def > HOLE_DEFERS) shiftSkip(f, 'unreachable')
+    else rotate(f)
     return
   }
   const item = findFillItem(bot)
@@ -2217,7 +2230,7 @@ function shaveTick(bot, ctx, f, bp) {
     const cell = cellAt(bot, h.x, y, h.z)
     if (cell === 'air') { y--; continue }
     if (cell === 'unloaded') {
-      h.def++
+      deferBump(f, h)
       if (h.def > HOLE_DEFERS) shiftBumpSkip(f, 'unreachable')
       else rotateBump(f)
       return
@@ -2326,7 +2339,7 @@ function shaveTick(bot, ctx, f, bp) {
       h.stalls = 0
       h.lastPos = { x: bp.x, y: bp.y, z: bp.z }
     } else if (++h.stalls >= WALK_STALLS) {
-      h.def++
+      deferBump(f, h)
       if (h.def > HOLE_DEFERS) shiftBumpSkip(f, 'unreachable')
       else rotateBump(f)
     }
@@ -2334,14 +2347,15 @@ function shaveTick(bot, ctx, f, bp) {
   }
   if (Math.hypot(bp.x - h.x, bp.y - y, bp.z - h.z) > REACH_DIG) {
     try { ctx.lastGoalKey = '' } catch (_) { /* re-issue best-effort */ }
-    h.def++
+    deferBump(f, h)
     if (h.def > HOLE_DEFERS) shiftBumpSkip(f, 'unreachable')
+    else rotateBump(f)
     return
   }
   let block = null
   try { block = bot.blockAt(new Vec3(h.x, y, h.z)) } catch (_) { block = null }
   if (!block) {
-    h.def++
+    deferBump(f, h)
     if (h.def > HOLE_DEFERS) shiftBumpSkip(f, 'unreachable')
     else rotateBump(f)
     return
