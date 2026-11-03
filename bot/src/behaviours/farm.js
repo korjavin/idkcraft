@@ -7,22 +7,20 @@
 // water (a bucket trench next to dry farmland, or till near standing
 // water so hydration is free) -> plant (seeds + activateBlock on
 // farmland) -> harvest (dig mature wheat, age 7, and replant from the
-// drops) -> feed (walk wheat to the nearest sheep and hold it; breeding
-// itself goes through the entity-use RPC (h1nl serves it on V2 too), and
-// where the body cannot breed the leg still lures — sheep follow a wheat
-// holder — and says so).
+// drops) -> feed (approach each sheep, use wheat, then confirm the
+// inventory decrease delivered by the server before counting a feed).
 //
 // Body ops only (dig / activateBlock / equip / craft / walk goals), all
 // served by the bridge, so the same code runs on v1 mineflayer too. The
-// only body sniff is the breed attempt: bot.activateEntity when the body
-// serves it, lure-only otherwise. Step completion goes through step.js;
+// only body sniff is the feed attempt: bot.activateEntity when the body
+// serves it, an honest skip otherwise. Step completion goes through step.js;
 // the only failed: reason is the existing 'unreachable' (walk strikes),
 // so no new failed: string needs a verdict line.
 
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
-const { stepDone, stepFailed, stepGen, chatStep } = require('../step')
+const { stepDone, stepFailed, stepGen, isFinished, chatStep } = require('../step')
 const { say, clearGoal, issueGoal, botPos, denyReason } = require('./util')
 const bring = require('./bringbase')
 
@@ -37,14 +35,14 @@ const HARVEST_CAP = 8 // harvested crops per step, then done
 const WATER_CAP = 2 // trench placements per step, then done
 const SEED_DIG_CAP = 4 // grass-tuft digs per step for first seeds
 const MAX_MS = 180000 // wall-time cap per step (3 min), then done
-const LURE_TICKS = 6 // ticks holding wheat by the sheep before done
 const POUR_SETTLE_TICKS = 2 // ticks for the bucket water to land before verifying
 const POUR_ARRIVE = 2 // pour only this close: past ~2.1 blocks the view ray
 // hits the pit rim and the water lands on the field, flooding the crops
-const FEED_RADIUS = 24 // sheep farther than the farm scans never pull the step
-const FEED_COOLDOWN_MS = 600000 // a fed flock reads fed for 10 min (a lure
-// that never breeds must not re-pick the step every tick and starve
-// explore/rest)
+const FEED_RADIUS = 48 // existing loaded-animal search bound (bringbase)
+const FEED_REACH = 2.5 // entity use needs a closer approach than block work
+const FEED_SETTLE_TICKS = 3 // inventory.update may follow the entity RPC
+const FEED_SETTLE_MS = 5000
+const FEED_COOLDOWN_MS = 600000 // only an observed feed cools down the flock
 const STRUCK_TTL_MS = 600000 // struck cells stay struck across picks for
 // 10 min: a dry untrenchable farmland must not re-pull the step every other
 // tick, and stale strikes heal when the world changes
@@ -310,18 +308,27 @@ function walkTo(bot, ctx, f, leg, p, range, goalRange) {
 }
 
 // Feed preconditions shared by the menu gate and the leg: wheat in the
-// pack, a sheep inside the farm scans, and no fresh lure on record.
+// pack, a sheep in the loaded-animal radius, and no fresh feed on record.
 function feedReady(bot, ctx) {
   try {
     if (countWheat(bot) <= 0) return null
     try {
       const fedAt = ctx && ctx.farmFedAt
-      if (typeof fedAt === 'number' && Date.now() - fedAt < FEED_COOLDOWN_MS) return null
+      if (typeof fedAt === 'number' && Date.now() - fedAt < FEED_COOLDOWN_MS &&
+          !(ctx.farm && ctx.farm.fedSheep > 0 && !ctx.farm.feedDone)) return null
     } catch (_) { /* cooldown unreadable: feed */ }
     const bp = botPos(bot)
     if (!bp) return null
+    const skipIds = new Set(ctx && ctx.farm && ctx.farm.bredIds)
+    const struck = struckSet(ctx)
+    if (struck && struck.has('feed-uncertain')) return null
+    if (struck) {
+      for (const e of Object.values(bot.entities || {})) {
+        if (e && struck.has(`sheep:${e.id}`)) skipIds.add(e.id)
+      }
+    }
     let found = null
-    try { found = bring.findAnimal(bot, null, { prey: ['sheep'] }) } catch (_) { found = null }
+    try { found = bring.findAnimal(bot, null, { prey: ['sheep'], skipIds, radius: FEED_RADIUS }) } catch (_) { found = null }
     if (!found || !found.position) return null
     const sp = found.position
     if (Math.hypot(sp.x - bp.x, sp.y - bp.y, sp.z - bp.z) > FEED_RADIUS) return null
@@ -425,15 +432,67 @@ async function equipHeld(bot, name) {
   return true
 }
 
+function feedControl(ctx, f, gen) {
+  return ctx.farm === f && stepGen(ctx) === gen && ctx.step === 'farm' &&
+    !isFinished(ctx.stepStatus) && !ctx.paused && ctx.work !== false &&
+    (!ctx.body || ctx.body.owner === 'work') &&
+    !(ctx.lastDecision && ['fight', 'follow'].includes(ctx.lastDecision.action))
+}
+
+function deferFeed(ctx, f, id, uncertain = false) {
+  if (id != null) f.struck.add(`sheep:${id}`)
+  if (uncertain) f.struck.add('feed-uncertain')
+  ctx.farmStruck = f.struck
+  ctx.farmStruckAt = Date.now()
+  f.feedDone = true
+}
+
+// One entity-use is in flight at a time. A resolved RPC can be PASS, so
+// count only the later inventory snapshot, without doing other farm work
+// between the before/after reads. Rejected sheep stay skipped across picks
+// using the same finite TTL as other ineffective farm targets.
+function settleFeed(bot, ctx, f) {
+  const p = f.feedPending
+  if (!p) return false
+  if (!feedControl(ctx, f, p.gen)) { f.feedPending = null; return true }
+  const after = countWheat(bot)
+  if (p.done && after < p.before) {
+    if (!(f.bredIds instanceof Set)) f.bredIds = new Set()
+    f.bredIds.add(p.id)
+    f.fedSheep = (f.fedSheep | 0) + 1
+    ctx.farmFedAt = Date.now()
+    f.feedPending = null
+    console.log(`farm feed sheep=${p.id} outcome=consumed wheat=${p.before}->${after} fed=${f.fedSheep}`)
+    return true
+  }
+  p.ticks++
+  if (p.ticks >= FEED_SETTLE_TICKS || Date.now() - p.at >= FEED_SETTLE_MS) {
+    // The first RPC or its inventory update may still arrive late. End
+    // this sequence and fence subsequent picks with the existing TTL,
+    // rather than attributing that update to a second sheep. Bridge RPCs
+    // time out after 5s each (transport.js); this 10min backoff outlasts
+    // both the aim and use calls without pretending feeding succeeded.
+    deferFeed(ctx, f, p.id, true)
+    f.feedPending = null
+    console.log(`farm feed sheep=${p.id} outcome=${p.error ? 'error' : 'no-effect'} wheat=${p.before}->${after} fed=${f.fedSheep | 0}`)
+  }
+  return true
+}
+
 async function run(bot, ctx) {
   const gen = stepGen(ctx)
   const f = farmState(ctx)
   if (f.busy) return
   f.busy = true
   try {
-    if (Date.now() - (f.t0 || Date.now()) > MAX_MS) return void finish(bot, ctx, f, true, null, gen)
+    if (Date.now() - (f.t0 || Date.now()) > MAX_MS) {
+      if (f.feedPending) deferFeed(ctx, f, f.feedPending.id, true)
+      else if (f.walkLeg === 'farm-feed' && !(f.fedSheep | 0)) deferFeed(ctx, f, f.feedTargetId)
+      return void finish(bot, ctx, f, true, null, gen)
+    }
     const bp = botPos(bot)
     if (!bp) return
+    if (settleFeed(bot, ctx, f)) return
 
     // Displacement stall: a walk that goes nowhere strikes its target.
     const here = `${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)}`
@@ -662,59 +721,48 @@ async function run(bot, ctx) {
       }
     }
 
-    // Leg 6 — carry wheat to sheep: breed a pair where the body serves
-    // entity-use, else lure and say so.
-    // feedReady bounds the loop: only near sheep pull the leg, and a fresh
-    // feed cools it down (an unlured attraction would re-pick the step
-    // every tick and starve explore/rest).
-    if (!(f.fedSheep | 0)) {
-      const found = feedReady(bot, ctx)
+    // Leg 6 — approach each sheep separately, then verify consumption.
+    // Holding wheat can lure it closer, but does not count as feeding.
+    if (!f.feedDone) {
+      const found = (f.fedSheep | 0) < 2 ? feedReady(bot, ctx) : null
       if (found) {
+        f.feedTargetId = found.id
         const sp = { x: found.position.x, y: found.position.y, z: found.position.z }
-        if (walkTo(bot, ctx, f, 'farm-feed', sp)) {
+        if (Math.hypot(sp.x - bp.x, sp.y - bp.y, sp.z - bp.z) > FEED_REACH &&
+            walkTo(bot, ctx, f, 'farm-feed', sp, 1, 1)) {
           // Hold the wheat out while walking: sheep follow a holder.
           try {
             if (!(bot.heldItem && bot.heldItem.name === 'wheat')) await equipHeld(bot, 'wheat')
           } catch (_) { /* hold best-effort */ }
           return
         }
-        try {
-          if (!(bot.heldItem && bot.heldItem.name === 'wheat')) await equipHeld(bot, 'wheat')
-        } catch (_) { /* hold best-effort */ }
-        // Breed (idkcraft-8ytm): wheat to two near sheep puts the pair in
-        // love mode — lambs fill the map. One sheep (or one wheat) is the
-        // old single feed: love mode with no partner, still fed and said.
-        // Each sheep is fed once per step; later ticks only hold (lure) so
-        // a lone sheep costs one wheat, not one per tick.
-        let bred = 0
-        try {
-          if (typeof bot.activateEntity === 'function') {
-            const bp = botPos(bot)
-            if (!(f.bredIds instanceof Set)) f.bredIds = new Set()
-            const seen = new Set()
-            for (let n = 0; n < 2; n++) {
-              let one = null
-              try {
-                one = bring.findAnimal(bot, null, { prey: ['sheep'], skipIds: seen })
-              } catch (_) { one = null }
-              if (!one || one.id == null || !bot.entities || !bot.entities[one.id]) break
-              seen.add(one.id)
-              if (f.bredIds.has(one.id)) continue // fed already: hold, don't re-feed
-              if (bp && one.position && Math.hypot(one.position.x - bp.x, one.position.y - bp.y, one.position.z - bp.z) > FEED_RADIUS) break
-              if (n > 0 && countWheat(bot) - bred < 1) break // one wheat per sheep
-              await bot.activateEntity(bot.entities[one.id])
-              f.bredIds.add(one.id)
-              bred++
-            }
-          }
-        } catch (_) { /* feed best-effort: lure still counts */ }
-        f.lure = (f.lure | 0) + 1
-        if (bred > 1 || (f.lure | 0) >= LURE_TICKS) {
-          f.fedSheep = 1
-          try { if (ctx) ctx.farmFedAt = Date.now() } catch (_) { /* cooldown best-effort */ }
-          try { say(bot, bred > 1 ? 'fed wheat to two sheep' : (bred > 0 ? 'fed the sheep wheat' : 'brought wheat to the sheep')) } catch (_) { /* chat best-effort */ }
+        if (!await equipHeld(bot, 'wheat') || !feedControl(ctx, f, gen)) return
+        const one = bot.entities && bot.entities[found.id]
+        const here = botPos(bot)
+        if (!one || one.isValid === false || !one.position || !here ||
+            Math.hypot(one.position.x - here.x, one.position.y - here.y, one.position.z - here.z) > FEED_REACH) return
+        clearGoal(bot, ctx)
+        if (typeof bot.activateEntity !== 'function') {
+          f.struck.add(`sheep:${one.id}`)
           return
         }
+        const pending = { id: one.id, before: countWheat(bot), gen, at: Date.now(), ticks: 0 }
+        f.feedPending = pending
+        // Control was rechecked after equip. Do not hold f.busy while the
+        // RPC awaits its own timeout; confirmation also waits for it.
+        try {
+          Promise.resolve(bot.activateEntity(one)).then(() => {
+            if (feedControl(ctx, f, gen)) pending.done = true
+          }, () => {
+            if (feedControl(ctx, f, gen)) { pending.done = true; pending.error = true }
+          })
+        } catch (_) { pending.done = true; pending.error = true }
+        return
+      }
+      f.feedDone = true
+      if ((f.fedSheep | 0) > 0 && feedControl(ctx, f, gen)) {
+        ctx.farmFedAt = Date.now()
+        say(bot, f.fedSheep > 1 ? 'fed wheat to two sheep' : 'fed the sheep wheat')
         return
       }
     }
@@ -756,6 +804,8 @@ module.exports.feedReady = feedReady
 module.exports.farmState = farmState
 module.exports.FEED_RADIUS = FEED_RADIUS
 module.exports.FEED_COOLDOWN_MS = FEED_COOLDOWN_MS
+module.exports.FEED_SETTLE_TICKS = FEED_SETTLE_TICKS
+module.exports.FEED_SETTLE_MS = FEED_SETTLE_MS
 module.exports.POUR_SETTLE_TICKS = POUR_SETTLE_TICKS
 module.exports.POUR_ARRIVE = POUR_ARRIVE
 module.exports.STRUCK_TTL_MS = STRUCK_TTL_MS
