@@ -62,8 +62,10 @@ function finish(bot, ctx, owner, p) {
     if (p.equipFailed || !carried(bot, p.req)) {
       unavailable(p.budget, p.req)
       if (p.equipFailed) p.budget.toolEquipBackoff[p.req.kind] = p.budget.toolPrepBackoff[p.req.kind]
-    } else if (p.budget.toolPrepFailures) {
-      p.budget.toolPrepFailures[p.req.kind] = 0
+    } else {
+      if (p.budget.toolPrepFailures) p.budget.toolPrepFailures[p.req.kind] = 0
+      if (p.budget.toolPrepBackoff) delete p.budget.toolPrepBackoff[p.req.kind]
+      if (p.budget.toolEquipBackoff) delete p.budget.toolEquipBackoff[p.req.kind]
     }
   }
 }
@@ -110,6 +112,8 @@ function ready(bot, ctx, owner, block, onUnavailable) {
   if (tool) {
     if (bot.heldItem === tool || (bot.heldItem && bot.heldItem.name === tool.name)) {
       if (budget.toolPrepFailures) budget.toolPrepFailures[req.kind] = 0
+      if (budget.toolPrepBackoff) delete budget.toolPrepBackoff[req.kind]
+      if (budget.toolEquipBackoff) delete budget.toolEquipBackoff[req.kind]
       return true
     }
     if ((budget.toolEquipBackoff && budget.toolEquipBackoff[req.kind]) > Date.now()) {

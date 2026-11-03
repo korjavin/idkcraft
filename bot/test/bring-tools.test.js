@@ -437,11 +437,12 @@ describe('v2 bulk tool prerequisite (idkcraft-514b)', () => {
     toolPrep.hold(bot, ctx, parent)
     await flush()
     toolPrep.hold(bot, ctx, parent)
+    assert.ok(parent.toolPrepBackoff.pickaxe > Date.now())
     bot._items.push({ name: 'stone_pickaxe', count: 1 })
     await prepare(bot, ctx, parent, { name: 'stone' })
+    assert.equal(parent.toolPrepBackoff.pickaxe, undefined, 'tool success clears the old cooldown')
     bot._items = []
     bot.heldItem = null
-    parent.toolPrepBackoff = {}
     assert.equal(toolPrep.ready(bot, ctx, parent, { name: 'stone' }), false)
     assert.ok(parent.toolPrep, 'lost/broken tool requires a new prerequisite')
   })
