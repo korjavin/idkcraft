@@ -685,9 +685,10 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       } else if (ticker && typeof ticker.setBring === 'function') {
         const name = bringMod.normalizeBringName(m[1])
         const food = bringMod.isFoodRequest(name)
+        const sapling = bringMod.isSapling(name)
         const want = m[2]
           ? Math.min(bringMod.WANT_MAX, Math.max(1, parseInt(m[2], 10)))
-          : (food ? bringMod.WANT_FOOD : (/logs?$|_log$/.test(name) ? bringMod.WANT_LOGS : bringMod.WANT_ORE))
+          : (food ? bringMod.WANT_FOOD : (sapling ? 1 : (/logs?$|_log$/.test(name) ? bringMod.WANT_LOGS : bringMod.WANT_ORE)))
         const reply = ticker.setBring({ name, want, by: playerName })
         // vf8e.6: an unknown name ('bring me 8 torches') is the model's to
         // read; its empty answer chats this refusal after all.

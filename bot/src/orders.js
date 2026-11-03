@@ -285,8 +285,10 @@ function createOrders(box) {
       }
       // A short wool pack falls through to the chest and mob rungs instead
       // of giving partial (did.3): toWoolHunt counts the pack stock toward
-      // the want, and the sheep top it up.
-      if (plan && plan.have > 0 && (plan.have >= need || (!worldFallback && !woolMod.isWoolFamily(resolved)))) return openPackOrder()
+      // the want, and the sheep top it up. An item covered by recipe fallback
+      // (vf8e.24 / gayf) falls through to gather/craft the remaining want.
+      const canRecipe = resolved && bringMod.canRecipeFallback(bot, { name: resolved.family, names: resolved.names, want: need, by })
+      if (plan && plan.have > 0 && (plan.have >= need || (!worldFallback && !woolMod.isWoolFamily(resolved) && !canRecipe))) return openPackOrder()
       // Orders carry the canonical family name, so 'beds' reads as 'bed'
       // everywhere. The chest rung runs for every name with no diggable world
       // form — including exact block names like white_wool, dirt or torch.
@@ -398,7 +400,7 @@ function createOrders(box) {
         // gated (flag/key, no kept tool, no known recipe), else the stub.
         const ro = {
           kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
-          items: [], drop: null, have: 0, phase: 'recipe', announced: true, keptName,
+          items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot), phase: 'recipe', announced: true, keptName,
         }
         // Gate first: the install below (lead drop, unpause, meet release)
         // must never run for a refusal the fallback declines — with the LLM

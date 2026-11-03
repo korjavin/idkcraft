@@ -468,6 +468,19 @@ function canRecipeFallback(bot, o) {
   try { return !!recipeSource.enabled() } catch (_) { return false }
 }
 
+function expandRecipeQueue(queue, target, want, have = 0) {
+  if (!Array.isArray(queue) || queue.length === 0 || !(want > 1)) return queue
+  const needed = Math.max(1, want - (have > 0 ? have : 0))
+  const produces = queue.filter((s) => s.item === target).length || 1
+  const repeat = Math.min(WANT_MAX, Math.ceil(needed / produces))
+  if (repeat <= 1) return queue
+  const out = []
+  for (let i = 0; i < repeat; i++) {
+    for (const s of queue) out.push({ ...s })
+  }
+  return out
+}
+
 function startRecipeFallback(bot, ctx, o) {
   if (!ctx || !canRecipeFallback(bot, o)) return false
   const target = o.name
@@ -481,13 +494,22 @@ function startRecipeFallback(bot, ctx, o) {
       if (!ctx || ctx.bring !== o || !o.recipe || !o.recipe.pending) return // stop / replaced: drop silently
       o.recipe.pending = false
       if (!res || !res.ok || !Array.isArray(res.queue) || res.queue.length === 0) { abortRecipe(bot, ctx, o, res && res.ok ? { fail: 'empty' } : res); return }
-      o.recipe.queue = res.queue
+      let have = 0
+      try { have = packCounts(bot)[target] || 0 } catch (_) { have = 0 }
+      o.recipe.queue = expandRecipeQueue(res.queue, target, o.want, have)
       o.recipe.tokens = res.tokens
       o.recipe.executing = true
-      try { console.log(`llm recipe target=${target} outcome=attempt steps=${res.queue.map((s) => `${s.do} ${s.item}`).join(',')} tokens=${res.tokens || '0/0'}`) } catch (_) { /* log best-effort */ }
+      try { console.log(`llm recipe target=${target} outcome=attempt steps=${o.recipe.queue.map((s) => `${s.do} ${s.item}`).join(',')} tokens=${res.tokens || '0/0'}`) } catch (_) { /* log best-effort */ }
       recipeNext(bot, ctx, o)
     } catch (_) {
-      try { refuse(bot, ctx, o.recipe.original) } catch (_) { /* refuse best-effort */ }
+      try {
+        const T = (o.recipe && o.recipe.target) || o.name
+        const orig = (o.recipe && o.recipe.original) || null
+        if (o.recipe) { o.recipe.done = true; o.recipe.executing = false }
+        o.names = [T]
+        o.want = (o.recipe && o.recipe.want > 0) ? o.recipe.want : (o.want > 0 ? o.want : 1)
+        giveOrRefuse(bot, ctx, o, orig)
+      } catch (_) { /* refuse best-effort */ }
     }
   })
   return true
@@ -506,7 +528,10 @@ function abortRecipe(bot, ctx, o, res) {
   else if (fail === 'cycle' && Array.isArray(res.chain)) line = `can't get ${T}: recipe loops (${res.chain.join('>')})`
   else if (fail === 'mismatch') line = `can't get ${T}: ${res.reason || 'wrong item'}`
   try { console.log(`llm recipe target=${T} outcome=abort fail=${fail || '?'} line=${line}`) } catch (_) { /* log best-effort */ }
-  refuse(bot, ctx, line)
+  if (R) { R.done = true; R.executing = false }
+  o.names = [T]
+  o.want = (R && R.want > 0) ? R.want : (o.want > 0 ? o.want : 1)
+  giveOrRefuse(bot, ctx, o, line)
 }
 
 // Morph the recipe order onto 6ci5.1's obsidian block order: exposed
@@ -545,12 +570,27 @@ function openObsidianMine(bot, ctx, o) {
 function recipeNext(bot, ctx, o) {
   const R = o && o.recipe
   if (!R || !R.executing || R.done) return
+  let currentHave = 0
+  try { currentHave = packCounts(bot)[R.target] || 0 } catch (_) { currentHave = 0 }
+  if (currentHave >= R.want) {
+    R.done = true
+    R.executing = false
+    R.active = null
+    o.names = [R.target]
+    o.want = R.want > 0 ? R.want : 1
+    giveOrRefuse(bot, ctx, o, `could not get ${R.target} with the recipe`)
+    return
+  }
   const q = Array.isArray(R.queue) ? R.queue : []
   if (R.i > 0) {
     const prev = q[R.i - 1]
     if (prev && !recipeCaps.held(bot, prev.item)) {
       R.done = true
-      refuse(bot, ctx, `lost ${prev.item} before the ${R.target} was done`)
+      R.executing = false
+      R.active = null
+      o.names = [R.target]
+      o.want = R.want > 0 ? R.want : 1
+      giveOrRefuse(bot, ctx, o, `lost ${prev.item} before the ${R.target} was done`)
       return
     }
   }
@@ -595,7 +635,10 @@ function recipeNext(bot, ctx, o) {
     const g = smeltRung(bot, ctx, o, { out: step.item, need: 1, have: pack[step.item] || 0 }, R.target)
     if (g && g.open) { say(bot, `${tag}: ${g.line}`); return }
     R.done = true
-    refuse(bot, ctx, (g && g.line) || `could not smelt ${step.item} for the ${R.target}`)
+    R.executing = false
+    o.names = [R.target]
+    o.want = R.want > 0 ? R.want : 1
+    giveOrRefuse(bot, ctx, o, (g && g.line) || `could not smelt ${step.item} for the ${R.target}`)
     return
   }
   if (step.do === 'gather') {
@@ -607,7 +650,10 @@ function recipeNext(bot, ctx, o) {
     const line = openSubOrder(bot, ctx, o, { name: step.item, need: 1, have: pack[step.item] || 0 }, R.target, color)
     if (line) { say(bot, `${tag}: ${line}`); return }
     R.done = true
-    refuse(bot, ctx, `could not start gather ${step.item} for the ${R.target}`)
+    R.executing = false
+    o.names = [R.target]
+    o.want = R.want > 0 ? R.want : 1
+    giveOrRefuse(bot, ctx, o, `could not start gather ${step.item} for the ${R.target}`)
     return
   }
   if (step.do === 'fill') {
@@ -623,15 +669,27 @@ function recipeNext(bot, ctx, o) {
     const leg = recipeCaps.mineLeg
     if (typeof leg !== 'function') {
       R.done = true
-      refuse(bot, ctx, `can't get ${R.target}: recipe needs mine ${step.item} (no mine leg)`)
+      R.executing = false
+      o.names = [R.target]
+      o.want = R.want > 0 ? R.want : 1
+      giveOrRefuse(bot, ctx, o, `can't get ${R.target}: recipe needs mine ${step.item} (no mine leg)`)
       return
     }
     say(bot, `${tag}: mining ${step.item}`)
-    try { leg(bot, ctx, o) } catch (_) { refuse(bot, ctx, `could not mine ${step.item} for the ${R.target}`) }
+    try { leg(bot, ctx, o) } catch (_) {
+      R.done = true
+      R.executing = false
+      o.names = [R.target]
+      o.want = R.want > 0 ? R.want : 1
+      giveOrRefuse(bot, ctx, o, `could not mine ${step.item} for the ${R.target}`)
+    }
     return
   }
   R.done = true
-  refuse(bot, ctx, `can't get ${R.target}: unknown recipe step ${String(step.do).slice(0, 20)}`)
+  R.executing = false
+  o.names = [R.target]
+  o.want = R.want > 0 ? R.want : 1
+  giveOrRefuse(bot, ctx, o, `can't get ${R.target}: unknown recipe step ${String(step.do).slice(0, 20)}`)
 }
 
 // Phase 'recipe' tick (bring.js routes here): the model call is still in
@@ -642,8 +700,12 @@ function recipeTick(bot, ctx, o) {
   let limit = 20000
   try { limit = (recipeSource && recipeSource.timeoutMs) || limit } catch (_) { /* default stands */ }
   if (Date.now() - (R.at || 0) > limit) {
+    const T = R.target || o.name
+    const orig = R.original
     o.recipe = null
-    refuse(bot, ctx, R.original)
+    o.names = [T]
+    o.want = (R && R.want > 0) ? R.want : (o.want > 0 ? o.want : 1)
+    giveOrRefuse(bot, ctx, o, orig)
   }
 }
 
@@ -1917,6 +1979,7 @@ module.exports.recipeCaps = recipeCaps
 module.exports.setRecipeSource = setRecipeSource
 module.exports.canRecipeFallback = canRecipeFallback
 module.exports.startRecipeFallback = startRecipeFallback
+module.exports.expandRecipeQueue = expandRecipeQueue
 module.exports.abortRecipe = abortRecipe
 module.exports.recipeNext = recipeNext
 module.exports.recipeTick = recipeTick
