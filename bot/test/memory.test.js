@@ -502,6 +502,22 @@ describe('castle blocked why survives a restart (g0z.23 follow-up)', () => {
     assert.equal(ctx2.castle.blocked['1:9'].retired, undefined)
   })
 
+  it('keeps the bounded recovery budget across restart without changing legacy holes (qxql.19)', () => {
+    const now = Date.now()
+    const legacy = { tries: 3, until: now + 30000, why: 'build-miss', retired: true }
+    const blocked = { '1:5': { ...legacy }, '1:6': { ...legacy, recoveries: 1 }, '1:7': { ...legacy, recoveries: 2 }, '1:8': { ...legacy, recoveries: 99 } }
+    const invalid = [0, -1, 1.5, '2', null, Infinity]
+    invalid.forEach((recoveries, i) => { blocked[`1:${10 + i}`] = { ...legacy, recoveries } })
+    assert.equal(memory.save(botAt(SPAWN_A), castleCtx(blocked), file, now), true)
+    const restored = {}
+    assert.ok(memory.restore(botAt(SPAWN_A), restored, file, now))
+    assert.deepEqual(restored.castle.blocked['1:5'], legacy)
+    assert.equal(restored.castle.blocked['1:6'].recoveries, 1)
+    assert.equal(restored.castle.blocked['1:7'].recoveries, 2)
+    assert.equal(restored.castle.blocked['1:8'].recoveries, 2)
+    invalid.forEach((_, i) => { assert.equal(restored.castle.blocked[`1:${10 + i}`].recoveries, undefined) })
+  })
+
   it('drops a non-string why instead of persisting it', () => {
     const now = Date.now()
     const ctx1 = castleCtx({ '1:5': { tries: 1, until: now + 60000, why: { evil: true } } })
