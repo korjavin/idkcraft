@@ -32,6 +32,7 @@ const park = require('../castle-park') // dlpo: same-day park state (a leaf — 
 const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.js read
 const build = require('./build')
 const flat = require('./flat')
+const toolPrep = require('./toolprep')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
 const { stepDone, stepFailed, stepGen, failReason } = require('../step')
 const worker = require('../worker')
@@ -1890,7 +1891,8 @@ function digCell(bot, ctx, st, c, now) {
   }
   // Harvest tool first (flat digFlight): stone by hand drops nothing,
   // and the spoil is kept — cobble counts for the castle (g0z.6).
-  const tool = harvestTool(bot, b)
+  if (!toolPrep.ready(bot, ctx, st, b)) return
+  const tool = process.env.BOT_BODY === 'baritone' ? bot.heldItem : harvestTool(bot, b)
   // Someone's block (vmzq.40) is never destroyed by hand: it waits for the tool.
   if (footprintOnly && !canHarvest(b, tool)) { blockCell(ctx, st, c, `no-tool-${name}`, now); return }
   flight(ctx, 'digInFlight', c, async (token) => {
@@ -1951,7 +1953,8 @@ function relocate(bot, ctx, st, c, name, now) {
     else strike(ctx, st, c, deny, now)
     return
   }
-  const tool = harvestTool(bot, b)
+  if (!toolPrep.ready(bot, ctx, st, b)) return
+  const tool = process.env.BOT_BODY === 'baritone' ? bot.heldItem : harvestTool(bot, b)
   if (!canHarvest(b, tool)) { blockCell(ctx, st, c, `no-tool-${name}`, now); return }
   flight(ctx, 'digInFlight', c, async (token) => {
     let win = null
@@ -2564,6 +2567,7 @@ function arrive(bot, st) {
 function castle(bot, ctx) {
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return
+  if (toolPrep.hold(bot, ctx, st)) return
   if (!st.blocked || typeof st.blocked !== 'object') st.blocked = {}
   const now = Date.now()
   const fl = ctx.castleFlight

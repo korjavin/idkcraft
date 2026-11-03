@@ -12,6 +12,8 @@ const stockpileMod = require('./stockpile')
 const metrics = require('../metrics')
 const { say, clearGoal, issueGoal, denyReason, logDeny, submergedAt, solidBelow, protectedReason, atPos, isWetDigName } = require('./util')
 const itemMod = require('./bringitem')
+const toolPrep = require('./toolprep')
+const { stepFailed } = require('../step')
 const {
   WANT_ORE, WANT_MAX, countDrop, refuse, done, releaseSmelt, stopGuidedWork, dropFor, requiredTier,
   PICKAXE_RANK, bestPickRank, hasPickaxe, tierArticle, tierRefusal, PREY_NAMES, PREY_DROPS,
@@ -762,7 +764,7 @@ function commitSource(bot, ctx, o, exposed, buried, pick) {
   try { readable = !!(bot.blockAt && bot.blockAt(win.pos)) } catch (_) { readable = false }
   o.far = win.kind === 'memory' || !readable
   o.drop = dropFor(res.name)
-  if (needsPickaxe(res.name) && !hasPickaxe(bot, res.name)) {
+  if (needsPickaxe(res.name) && !hasPickaxe(bot, res.name) && process.env.BOT_BODY !== 'baritone') {
     refuse(bot, ctx, tierRefusal(bot, res.name))
     return false
   }
@@ -932,7 +934,7 @@ function walkSearch(bot, ctx, o) {
   try {
     exploreMod(bot, ctx, null, {})
   } catch (_) {
-    ctx.stepStatus = 'failed:bring-search'
+    stepFailed(ctx, 'bring-search')
   }
   const st = ctx.stepStatus
   if (st === 'done' && !hadTarget && !(ctx.explore && ctx.explore.target)) {
@@ -1945,6 +1947,7 @@ function guidedTick(bot, ctx, o, bp) {
 async function bring(bot, ctx, target, state) {
   const o = ctx.bring
   if (!o) return
+  if (toolPrep.hold(bot, ctx, o)) return
   // qfus R1: a planting flight in the air holds the order — no pickup past
   // it, no terminal summary before its counts settle.
   if (o.plantInFlight) return
@@ -2338,6 +2341,7 @@ async function bring(bot, ctx, target, state) {
       o.phase = 'find'
       return
     }
+    if (!toolPrep.ready(bot, ctx, o, block)) return
     ctx.digInFlight = true
     const digOwnerKey = ctx.lastGoalKey // qfus: the replant only fires under this goal
     void (async () => {
@@ -2346,13 +2350,18 @@ async function bring(bot, ctx, target, state) {
         // harvest tool first (guarded: fake bots may lack either method).
         let tool = null
         try { tool = bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(block) : null } catch (_) { tool = null }
+        if (ctx.internalTool) {
+          const req = toolPrep.requirement(block)
+          if (req) tool = toolPrep.carried(bot, { ...req, harvestTools: block.harvestTools })
+        }
         const isSapDrop = o.drop && (o.drop.endsWith('_sapling') || o.drop === 'mangrove_propagule' || o.drop === 'azalea' || o.drop === 'flowering_azalea')
         if (tool && tool.name === 'shears' && isSapDrop) tool = null
-        if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+        if (tool && typeof bot.equip === 'function' && (process.env.BOT_BODY !== 'baritone' || ctx.internalTool)) await bot.equip(tool, 'hand')
         const held = bot.heldItem
         if (held && held.name === 'shears' && isSapDrop) {
           try { if (typeof bot.unequip === 'function') await bot.unequip('hand') } catch (_) {}
         }
+        if (ctx.internalTool && ctx.bring !== o) return
         await bot.dig(block)
       } catch (_) { /* gone or interrupted: pickup anyway */ }
       ctx.digInFlight = false
@@ -2492,6 +2501,7 @@ async function bring(bot, ctx, target, state) {
 // The item toss cap and the share/item toss live in bringitem.js.
 
 module.exports = bring
+toolPrep.setDriver(bring)
 module.exports.dropFor = dropFor
 module.exports.isBringable = isBringable
 module.exports.requiredTier = requiredTier

@@ -18,6 +18,7 @@ const stockpileMod = require('./stockpile')
 const woolMod = require('./wool')
 const bedMod = require('./bed')
 const obsidianMod = require('./obsidian') // 6ci5.1 (merged): the mine-runnable check, a require-free leaf
+const toolPrep = require('./toolprep')
 const { Vec3 } = require('vec3')
 const { countItems } = require('../perception')
 const { say, clearGoal } = require('./util')
@@ -1263,7 +1264,12 @@ function equipTool(bot, tool) {
 // fallback, never refusing — morphing it into an equip-terminal tool order
 // would strand the wool want, so it stays bespoke in shearsTick.
 function ensureTool(bot, ctx, o, toolName) {
-  const tool = String(toolName || '')
+  let tool = String(toolName || '')
+  // Internal bulk prerequisites may use a better chest tool as well.
+  if (o && o.internalTool && !o.toolReturn && !o.toolUpgrade && Array.isArray(o.toolChoices)) {
+    const pack = packCounts(bot)
+    tool = o.toolChoices.find((n) => pack[n] > 0 && bot.inventory.items().some((it) => it.name === n && toolPrep.usable(bot, it))) || tool
+  }
   if (o && typeof o === 'object') {
     o.kind = 'item'
     o.name = tool
@@ -1277,7 +1283,16 @@ function ensureTool(bot, ctx, o, toolName) {
   // The keep-list deducts from the opening pack, so a freshly crafted tool
   // gives instead of stranding as kept gear (chain callers pass a bare o).
   if (o && typeof o === 'object' && (!o.packBase || typeof o.packBase !== 'object')) o.packBase = { ...pack }
-  if ((pack[tool] || 0) > 0) {
+  const usable = !o.internalTool || bot.inventory.items().some((it) => it.name === tool && toolPrep.usable(bot, it))
+  if ((pack[tool] || 0) > 0 && usable) {
+    if (o.toolReturn) {
+      const target = o.toolReturn
+      o.toolReturn = null
+      o.toolUpgrade = true
+      o.chestTried = false
+      o.chestSeen = null
+      return ensureTool(bot, ctx, o, target)
+    }
     equipTool(bot, tool)
     say(bot, `equipped ${tool}`)
     done(bot, ctx)
@@ -1311,6 +1326,10 @@ function ensureTool(bot, ctx, o, toolName) {
     if (cob) {
       const need = cob.need || 0
       if (!Object.keys(pack).some((n) => typeof n === 'string' && n.endsWith('_pickaxe') && pack[n] > 0)) {
+        if (o.internalTool && tool.startsWith('stone_')) {
+          o.toolReturn = tool
+          return ensureTool(bot, ctx, o, 'wooden_pickaxe')
+        }
         refuse(bot, ctx, `need a pickaxe to dig stone for the ${tool}`)
         return 'refused'
       }
@@ -1334,6 +1353,13 @@ function giveOrRefuse(bot, ctx, o, failLine) {
   // o.toolName: every other order reads the path below unchanged.
   if (o.toolName) {
     if (plan.have > 0) {
+      if (o.toolReturn) {
+        const target = o.toolReturn
+        o.toolReturn = null
+        o.toolUpgrade = true
+        ensureTool(bot, ctx, o, target)
+        return
+      }
       const got = plan.items.length > 0 ? plan.items[0].name : o.toolName
       equipTool(bot, got)
       say(bot, `equipped ${got}`)
@@ -1678,7 +1704,7 @@ async function withdrawCraftMats(bot, ctx, o, at = null) {
   // null is the adopted home chest, as before.
   let plan = null
   try {
-    plan = craftany().planCraft(bot, ctx, orderCraftNames(o.names || []), 1)
+    plan = craftany().planCraft(bot, ctx, o.internalTool ? [o.toolName] : orderCraftNames(o.names || []), 1)
   } catch (_) { plan = null }
   // Smelt gap (ipn.20, gear runWithdraw order): the output first, then its
   // raw for the rest. A direct order's own output was the product withdraw.
@@ -1814,6 +1840,12 @@ async function fetchItem(bot, ctx, o, at = null) {
     o.items = plan.items
     o.have = plan.have
     o.drop = plan.items.length > 0 ? plan.items[0].name : null
+    // Internal prerequisites collect materials from EACH chest, before
+    // the existing all-chest walk advances to the next one.
+    if (o.internalTool && !fetchSatisfied(plan, o)) {
+      await withdrawCraftMats(bot, ctx, o, at)
+      if (!ctx || ctx.bring !== o) return
+    }
     // All-chests chain (0jvh follow-up): a short fetch walks to the next
     // remembered chest instead of branching — the terminal legs below run
     // only once every chest is tried. A satisfied order never chains: a

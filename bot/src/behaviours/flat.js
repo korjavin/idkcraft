@@ -53,6 +53,7 @@ const { countItems } = require('../perception')
 const danger = require('../danger')
 const stuck = require('../stuck')
 const util = require('./util')
+const toolPrep = require('./toolprep')
 const { say, clearGoal, denyReason, logDeny } = util
 
 const FLAT_DEFAULT_RADIUS = 8 // bare `flat` (owner 2026-09-27: 97x97 hid the bot for half an hour)
@@ -1148,6 +1149,7 @@ function placeFlight(bot, ctx, f, h, item, ref, p, isSupport) {
 }
 
 function digFlight(bot, ctx, f, h, block) {
+  if (!toolPrep.ready(bot, ctx, f, block)) return
   ctx.digInFlight = true
   const at = { x: block.position.x, y: block.position.y, z: block.position.z }
   console.log(`flat dig ${at.x},${at.y},${at.z}`)
@@ -1157,7 +1159,7 @@ function digFlight(bot, ctx, f, h, block) {
       // (forage.js pattern) keeps the job fast and banks the drops.
       let tool = null
       try { tool = bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function' ? bot.pathfinder.bestHarvestTool(block) : null } catch (_) { tool = null }
-      if (tool && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+      if (tool && typeof bot.equip === 'function' && process.env.BOT_BODY !== 'baritone') await bot.equip(tool, 'hand')
       await bot.dig(block)
       f.blocks++
       h.pickup = at // walk the drop into the inventory (gather pattern)
@@ -1433,6 +1435,7 @@ function restockTick(bot, ctx, f, bp, wide) {
         d.pos = null
         return
       }
+      if (!toolPrep.ready(bot, ctx, f, block)) return
       d.have = countFill(bot) // baseline: the pickup recounts the gain below
       ctx.digInFlight = true
       ;(async () => {
@@ -2383,6 +2386,7 @@ function travelTick(bot, ctx, f, bp) {
 function flat(bot, ctx, target, state) {
   const f = ctx.flat
   if (!f) return
+  if (toolPrep.hold(bot, ctx, f)) return
   const bp = bot.entity && bot.entity.position
   if (!bp) return
   // One async flight at a time across behaviours: a build/gather flight
