@@ -22,6 +22,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const blueprint = require('../castle')
 const castleMod = require('./castle')
+const toolPrep = require('./toolprep')
 const stockpileMod = require('./stockpile')
 const danger = require('../danger')
 const { countItems } = require('../perception')
@@ -2365,7 +2366,8 @@ const roomForDrop = (bot, ctx) => stockpileMod.roomForDrop(bot, ctx)
 function digTick(bot, ctx, f, d) {
   const bp = bodyPos(bot)
   if (!bp) { spend(f, 'other'); return }
-  if (!hasPickaxe(bot)) { spend(f, 'other'); finish(bot, ctx, 'done'); return } // equip rearms first
+  if (typeof bot.mine === 'function' && !toolPrep.ready(bot, ctx, f, { name: 'stone' }, () => finish(bot, ctx, 'failed:castlefetch-no-pickaxe'))) return
+  if (!hasPickaxe(bot) && process.env.BOT_BODY !== 'baritone') { spend(f, 'other'); finish(bot, ctx, 'done'); return } // equip rearms first
   if (!roomForDrop(bot, ctx)) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
   // Mid-leg pick upgrade (idkcraft-vmzq.20): the first fetch digs on a
   // wooden pick (~1.4x slower on stone) and no equip step ever interjects
@@ -2719,6 +2721,7 @@ function digTick(bot, ctx, f, d) {
   // each stance walk ran 3.75 s on 0.75 s dirt): let the feet land first,
   // a bounded wait so a body that never reads grounded still digs.
   if (bot.entity && bot.entity.onGround === false && (t.air = (t.air | 0) + 1) <= AIR_WAITS) { spend(f, 'other'); return }
+  if (!toolPrep.ready(bot, ctx, f, b, () => finish(bot, ctx, 'failed:castlefetch-no-pickaxe'))) return
   if (t.quarry) {
     // Drops land at the digging stance (pickup reach), so no
     // cobble-gain strike; a cell that survives its digs is skipped instead.
@@ -2750,10 +2753,10 @@ function digTick(bot, ctx, f, d) {
   flight(ctx, async () => {
     // Trench dirt by hand (rig: the pick wore out on the sod before the
     // batch was in); rock with the pickaxe.
-    if (ROCK.test(b.name)) {
+    if (ROCK.test(b.name) && process.env.BOT_BODY !== 'baritone') {
       const pick = (bot.inventory.items() || []).find((i) => i && typeof i.name === 'string' && i.name.endsWith('_pickaxe'))
       if (pick) await bot.equip(pick, 'hand')
-    } else if (bot.heldItem && /_pickaxe$/.test(bot.heldItem.name)) await bot.unequip('hand')
+    } else if (process.env.BOT_BODY !== 'baritone' && bot.heldItem && /_pickaxe$/.test(bot.heldItem.name)) await bot.unequip('hand')
     await bot.dig(b, true) // instant look, as the pathfinder's own digs: a smooth turn added ~0.25 s per dig
   }, DIG_TIMEOUT_MS, () => {
     // A hung dig skips the block (no retry this leg); the no-gain strike
@@ -2766,10 +2769,19 @@ function digTick(bot, ctx, f, d) {
 }
 
 function castlefetch(bot, ctx, target, state) {
+  if (toolPrep.hold(bot, ctx, ctx.castleFetch)) return
   // A dig (or chest op) spans ticks: the issue tick bucketed above, the
   // continuation ticks here, so dig reads as duration, not starts.
   if (ctx.castleFetchInFlight) {
     if (ctx.castleFetch) spend(ctx.castleFetch, ctx.castleFetchFlight === 'dig' ? 'dig' : 'other')
+    // A pick can break during a Baritone batch. Release that batch without
+    // ending the parent leg; its next tick prepares the replacement.
+    if (process.env.BOT_BODY === 'baritone' && ctx.castleFetchMine && !toolPrep.carried(bot, { kind: 'pickaxe', tier: 0 })) {
+      ctx.castleFetchMine = false
+      ctx.castleFetchInFlight = false
+      try { if (typeof bot.cancelMine === 'function') bot.cancelMine(new Error('mine-stopped')) } catch (_) { /* next tick rechecks */ }
+      return
+    }
     // Pack filled mid-mine (round-1 core-5): roomForDrop only gated the
     // start, and a full pack loses every further drop into a dig-stall.
     // Cancel the bridge mine and bank instead; the v1 flight below owns no

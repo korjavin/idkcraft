@@ -3,6 +3,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
 const bring = require('./bring')
+const toolPrep = require('./toolprep')
 const resources = require('../resources')
 const danger = require('../danger')
 const blueprint = require('../castle')
@@ -440,6 +441,7 @@ function gather(bot, ctx, target, state) {
   const logs = countItems(bot, (n) => n.endsWith('_log'))
   if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now(), felled: 0, replanted: 0 }
   const g = ctx.gather
+  if (toolPrep.hold(bot, ctx, g)) return
   // (vmzq.66) the stranded record holds only at the log count that
   // produced it — wood landing (a retry's chop, a walk-out gain) clears
   // it even with no final on the books (the gyw release keeps none).
@@ -812,6 +814,7 @@ function gather(bot, ctx, target, state) {
       g.pos = null
       return
     }
+    if (!toolPrep.ready(bot, ctx, g, g.block)) return
     ctx.digInFlight = true
     const block = g.block
     const digKey = ctx.lastGoalKey // revmux 01 core-4: the replant only fires under this goal

@@ -77,6 +77,39 @@ function freshCtx() {
   return { lastGoalKey: '', stepStatus: 'running' }
 }
 
+it('v2 gather holds its original target/progress until the axe equips, then digs', async () => {
+  const previous = process.env.BOT_BODY
+  process.env.BOT_BODY = 'baritone'
+  try {
+    const tool = { name: 'stone_axe', count: 1 }
+    const bot = mockBot({ spots: [pos(1, 64, 0)], names: { '1,64,0': 'oak_log' }, items: [tool] })
+    const ctx = freshCtx()
+    let release, digs = 0
+    bot.equip = (item) => new Promise((resolve) => { release = () => { bot.heldItem = item; resolve() } })
+    bot.dig = async () => { assert.equal(bot.heldItem, tool); digs++ }
+    const tick = async () => { gather(bot, ctx); await new Promise((r) => setImmediate(r)) }
+    for (let i = 0; i < 12 && !release; i++) await tick()
+    assert.equal(typeof release, 'function')
+    const g = ctx.gather, target = g.pos, phase = g.phase, logs = g.atLogs
+    bot._items.push({ name: 'oak_log', count: NEED_LOGS }) // a prerequisite/chest can change the pack mid-flight
+    for (let i = 0; i < 3; i++) await tick()
+    assert.equal(digs, 0)
+    assert.equal(ctx.gather, g)
+    assert.equal(g.pos, target)
+    assert.equal(g.phase, phase)
+    assert.equal(g.atLogs, logs)
+    assert.equal(ctx.stepStatus, 'running', 'the parent cannot finish past its active prerequisite')
+    bot._items = bot._items.filter((it) => it.name !== 'oak_log')
+    release()
+    for (let i = 0; i < 6 && !digs; i++) await tick()
+    assert.equal(digs, 1)
+    assert.equal(ctx.gather, g)
+  } finally {
+    if (previous === undefined) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = previous
+  }
+})
+
 describe('gather step', () => {
   it('(g0z.12) never targets a laid castle beam, even when it is the nearest log', () => {
     const blueprint = require('../src/castle')

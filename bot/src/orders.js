@@ -456,7 +456,7 @@ function createOrders(box) {
         // tier for both): refuse synchronously so a short pack still hands
         // over — the deferred verdicts below have no plan in scope
         // (revmux 01 core-3). Order mirrors startBlockOrder + fallback.
-        if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
+        if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name) && process.env.BOT_BODY !== 'baritone') {
           clearStuck()
           if (plan && plan.have > 0) return openPackOrder()
           return bringMod.tierRefusal(bot, res.name)

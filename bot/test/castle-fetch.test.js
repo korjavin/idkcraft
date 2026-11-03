@@ -724,7 +724,7 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     }
   })
 
-  it('v2: after the stone batch the next table-broke leg gathers instead of holding (vf8e.8 revmux 01 core-4)', () => {
+  it('v2: after the stone batch the next table-broke leg gathers instead of holding (vf8e.8 revmux 01 core-4)', async () => {
     castleMod.menuFact = stairsWord
     const wasBody = process.env.BOT_BODY
     process.env.BOT_BODY = 'baritone'
@@ -732,10 +732,11 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     try {
       const mined = []
       const bot = makeBot({ items: stairsPack() })
+      bot.equip = async (item) => { bot.heldItem = item }
       bot.mine = (names, count) => { mined.push(count); return new Promise(() => {}) }
       bot.entity.position = pos(500, 64, 500) // outside the site guard: the mine arms at once
       const ctx = { castle: castleState() }
-      for (let i = 0; i < 40 && mined.length === 0 && !ctx.stepStatus; i++) fetch(bot, ctx)
+      for (let i = 0; i < 40 && mined.length === 0 && !ctx.stepStatus; i++) { fetch(bot, ctx); await settle() }
       assert.deepEqual(mined, [16], 'the stone batch still comes first')
       // The next leg (the batch landed 'done'): no wood, table still out.
       ctx.castleFetch = null

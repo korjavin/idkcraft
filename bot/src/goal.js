@@ -22,7 +22,7 @@ const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
 const residence = require('./residence')
 const { recordAttempt, markAttemptStart } = require('./stall-state')
-const { failReason, isFinished, nextStepGen, chatStep, STEP_CHAT_SAME_MS } = require('./step')
+const { failReason, isFinished, nextStepGen, chatStep, STEP_CHAT_SAME_MS, stepDone, stepFailed } = require('./step')
 
 // House budget and bounded-hold windows live in the leaf budget.js
 // (oqul.3) so behaviours read them without loading goal; re-exported here.
@@ -767,7 +767,8 @@ function castleFetchGo(facts, bot, ctx) {
     kind = w.slice(0, w.lastIndexOf('-'))
   }
   if (!registered('castlefetch') || !registered('castle')) return false
-  if (needsDigNoPick(kind, facts, bot)) return false
+  // V2 prepares its tool as a resumable prerequisite inside the fetch leg.
+  if (needsDigNoPick(kind, facts, bot) && process.env.BOT_BODY !== 'baritone') return false
   if (castleGo(facts, ctx, bot) && !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running')) return false
   try {
     const d = require('./behaviours/castlefetch').demand(bot, ctx)
@@ -2641,10 +2642,10 @@ function gearOutcome(bot, ctx) {
         console.log(`gear yield key=${key} line=${line}`) // ipn.15: gear's announceYield twin
       }
     } catch (_) { /* announce best-effort */ }
-    ctx.stepStatus = 'done' // yield: fetchers run, gear latched out
+    stepDone(ctx) // yield: fetchers run, gear latched out
     return 'done'
   }
-  ctx.stepStatus = `failed:gear-furnace-${reason}`
+  stepFailed(ctx, `gear-furnace-${reason}`)
   return ctx.stepStatus
 }
 
