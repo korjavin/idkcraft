@@ -166,20 +166,22 @@ describe('shave safety: dig allowlist', () => {
 
 describe('shave safety: structure markers', () => {
   it('recognises houses, farms, mines and decoration', () => {
-    for (const n of ['oak_door', 'white_bed', 'chest', 'blast_furnace', 'oak_planks', 'oak_log', 'oak_leaves', 'glass_pane', 'cobblestone_stairs', 'stone_brick_wall', 'torch', 'soul_lantern', 'diamond_ore', 'bell', 'lectern', 'dirt', 'stone']) {
-      const want = n !== 'dirt' && n !== 'stone'
+    for (const n of ['oak_door', 'white_bed', 'chest', 'blast_furnace', 'oak_planks', 'glass_pane', 'cobblestone_stairs', 'stone_brick_wall', 'torch', 'soul_lantern', 'diamond_ore', 'bell', 'lectern', 'dirt', 'stone', 'oak_leaves', 'oak_log']) {
+      const want = n !== 'dirt' && n !== 'stone' && n !== 'oak_leaves' && n !== 'oak_log'
       assert.equal(isStructureMarker(n), want, n)
     }
     assert.equal(isStructureMarker(null), false)
     assert.equal(isStructureMarker(42), false)
   })
 
-  it('structureNear finds an adjacent door, null in open terrain', () => {
+  it('structureNear finds an adjacent door, null in open terrain and near vegetation', () => {
     const world = makeWorld({})
     world.set(2, 64, 0, 'oak_door')
+    world.set(10, 64, 11, 'oak_leaves')
+    world.set(10, 64, 9, 'oak_log')
     const bot = mockBot(world, {})
     assert.equal(structureNear(bot, 1, 64, 0), 'oak_door')
-    assert.equal(structureNear(bot, 10, 64, 10), null)
+    assert.equal(structureNear(bot, 10, 64, 10), null, 'leaves and logs do not freeze adjacent ground')
   })
 })
 

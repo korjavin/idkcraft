@@ -159,13 +159,14 @@ function isDiggable(name) {
 
 // Conservative gate: a dig target with any of these within one block is left
 // alone, so the job never eats into a house, a farm, a mine with torches or
-// a decorated cave (w52.1). Substring match over snake_case names.
+// a decorated cave (w52.1). Natural tree foliage and logs (leaves, log) are
+// excluded so wooded terrain can be leveled without freezing open ground (idkcraft-ltad).
 const STRUCTURE_MARKERS = [
   'door', 'bed', 'chest', 'shulker', 'barrel', 'furnace', 'hopper', 'dropper',
   'dispenser', 'lectern', 'grindstone', 'stonecutter', 'smithing', 'brewing',
   'cauldron', 'composter', 'loom', 'cartography', 'fletching', 'anvil',
-  'enchant', 'bookshelf', 'torch', 'lantern', 'glass', 'planks', 'log',
-  'leaves', 'stairs', 'slab', 'fence', 'wall', 'brick', 'ore', 'debris',
+  'enchant', 'bookshelf', 'torch', 'lantern', 'glass', 'planks',
+  'stairs', 'slab', 'fence', 'wall', 'brick', 'ore', 'debris',
   'spawner', 'bell', 'button', 'pressure_plate', 'rail', 'carpet', 'sign',
   'banner', 'flower_pot', 'candle', 'chain', 'iron_bars', 'obsidian',
   'anchor', 'conduit', 'beacon', 'lodestone',
@@ -210,6 +211,20 @@ function isLiquidName(name) {
 
 function isSolidCell(b) {
   return !!b && b.boundingBox !== 'empty' && !isLiquidName(b.name)
+}
+
+function isLeavesName(n) {
+  return typeof n === 'string' && (n.endsWith('_leaves') || n === 'leaves')
+}
+
+function isLogName(n) {
+  return typeof n === 'string' && (n.endsWith('_log') || n.endsWith('_stem')) && !n.startsWith('stripped_')
+}
+
+// Tree blocks (canopy and trunk) are pass-through during ground detection so
+// wooded terrain resolves to the ground beneath instead of freezing (idkcraft-ltad).
+function isTreeBlock(n) {
+  return isLeavesName(n) || isLogName(n)
 }
 
 // nullAsAir covers the build-limit ceiling above a loaded column: only call
@@ -283,12 +298,12 @@ function probeColumn(blockAt, x, z, yTop, yBottom) {
   let top = at(yTop)
   if (top == null) return { status: 'unloaded' }
   let y = yTop
-  while (isSolidCell(top) && y < yTop + SCAN_UP_EXTEND) {
+  while (isSolidCell(top) && !isTreeBlock(top.name) && y < yTop + SCAN_UP_EXTEND) {
     y++
     top = at(y)
     if (top == null) break
   }
-  if (top != null && isSolidCell(top)) return { status: 'bump' }
+  if (top != null && isSolidCell(top) && !isTreeBlock(top.name)) return { status: 'bump' }
   let liquidTop = null
   for (let d = y; d >= yBottom; d--) {
     const b = d === y ? top : at(d)
@@ -297,8 +312,12 @@ function probeColumn(blockAt, x, z, yTop, yBottom) {
       if (liquidTop == null) liquidTop = d // surface: keep diving for the bottom
       continue
     }
+    if (isTreeBlock(b.name)) {
+      continue // dive through tree canopy and trunk to ground (idkcraft-ltad)
+    }
     if (isSolidCell(b)) {
-      const walkable = isAirCell(at(d + 1), true) && isAirCell(at(d + 2), true)
+      const walkable = isAirCell(at(d + 1), true) &&
+        (isAirCell(at(d + 2), true) || isLeavesName(at(d + 2)?.name))
       if (liquidTop != null) return { status: 'ok', topY: d, walkable, liquidTop }
       return { status: 'ok', topY: d, walkable }
     }
@@ -1746,6 +1765,11 @@ function fillTick(bot, ctx, f, bp) {
   // the long job runs, so a stale queue entry must not place blind.
   const cur = cellAt(bot, cx, cy, cz)
   if (cur === 'solid') {
+    const name = blockNameAt(bot, new Vec3(cx, cy, cz))
+    if (isTreeBlock(name)) {
+      shiftSkip(f, 'occupied')
+      return
+    }
     shiftDone(f)
     return
   }
@@ -1853,6 +1877,11 @@ function fillTick(bot, ctx, f, bp) {
     } else if (++h.stalls >= WALK_STALLS) {
       const re = cellAt(bot, cx, cy, cz)
       if (re === 'solid') {
+        const name = blockNameAt(bot, new Vec3(cx, cy, cz))
+        if (isTreeBlock(name)) {
+          shiftSkip(f, 'occupied')
+          return
+        }
         shiftDone(f)
         return
       }
@@ -2464,6 +2493,9 @@ module.exports.isDirtName = isDirtName
 module.exports.isLiquidName = isLiquidName
 module.exports.isSolidCell = isSolidCell
 module.exports.isAirCell = isAirCell
+module.exports.isLeavesName = isLeavesName
+module.exports.isLogName = isLogName
+module.exports.isTreeBlock = isTreeBlock
 module.exports.cellAt = cellAt
 module.exports.probeColumn = probeColumn
 module.exports.spiralColumns = spiralColumns
