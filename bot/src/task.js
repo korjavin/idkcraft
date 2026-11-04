@@ -366,11 +366,19 @@ function orderCurrent(bot, ctx, kind) {
     if (kind === 'flat') {
       const f = ctx && ctx.flat
       if (!f) return out
-      const done = (f.filled || 0) + (f.shaved || 0)
+      if (f.phase === 'scan' && f.scan) {
+        out.done = f.scan.i || 0
+        out.total = (f.scan.queue && f.scan.queue.length) || 0
+        out.scan = true
+        return out
+      }
+      const skips = f.skip ? Object.values(f.skip).reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0) : 0
+      const done = (f.filled || 0) + (f.shaved || 0) + skips
       const total = (f.total || 0) + (f.totalBumps || 0)
       out.done = done
       out.total = total
       out.blocks = f.blocks || 0 // x3y6.2: dug/placed blocks, finer than levelled cells
+      out.defers = f.defers || 0 // idkcraft-71gv: evaluation progress during terrain checks
       return out
     }
   } catch (_) { /* unreadable reads empty */ }
@@ -386,10 +394,12 @@ const ORDER_ARRIVE_BLOCKS = 2
 function orderProgressWhy(state, cur, kind) {
   try {
     if (kind === 'bring' || kind === 'flat') {
+      if (kind === 'flat' && state.scan && !cur.scan) return 'scan'
       if (typeof cur.done === 'number' && typeof state.done === 'number' && cur.done > state.done) {
-        return kind === 'bring' ? 'have' : 'cells'
+        return kind === 'bring' ? 'have' : (cur.scan ? 'scan' : 'cells')
       }
       if (kind === 'flat' && cur.blocks > (state.blocks || 0)) return 'blocks'
+      if (kind === 'flat' && typeof cur.defers === 'number' && cur.defers > (state.defers || 0)) return 'defers'
       return null
     }
     if (kind === 'comehome' || kind === 'gocastle' || kind === 'lead') {
@@ -3782,6 +3792,8 @@ function taskTick(bot, ctx, now = Date.now()) {
             stallMs: 0, lastAt: now, lastL1At: null, fails: [],
             orderRef: orderStamp(orderObj(ctx, kind)),
           }
+          if (cur.scan) t[kind].scan = true
+          if (typeof cur.defers === 'number') t[kind].defers = cur.defers
           // Travel goals baseline the distance as the total (blocks left).
           if ((kind === 'comehome' || kind === 'gocastle' || kind === 'lead') && typeof cur.dist === 'number') {
             t[kind].total = Math.round(cur.dist)
@@ -3827,6 +3839,8 @@ function taskTick(bot, ctx, now = Date.now()) {
       if (typeof state.done !== 'number' && (kind === 'bring' || kind === 'flat')) {
         state.done = cur.done
         state.total = cur.total
+        if (typeof cur.defers === 'number') state.defers = cur.defers
+        if (cur.scan) state.scan = true
         state.lastAt = now
         setStallGauge(kind, state.stallMs || 0)
         return
@@ -3844,6 +3858,8 @@ function taskTick(bot, ctx, now = Date.now()) {
         if (typeof cur.total === 'number') state.total = cur.total
         if (typeof cur.dist === 'number') state.dist = cur.dist
         if (typeof cur.blocks === 'number') state.blocks = cur.blocks
+        if (typeof cur.defers === 'number') state.defers = cur.defers
+        state.scan = cur.scan || false
         progressReset(state, kind, now)
         logReset(kind, why)
         try {

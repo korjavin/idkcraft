@@ -1576,6 +1576,37 @@ describe('flat behaviour', () => {
     assert.ok(bot.chats.some((c) => c.includes('skipped 1: 1 unreachable')), bot.chats.join('\n'))
   })
 
+  it('idkcraft-71gv: rotates bump queue when stopped bump is outside reach', async () => {
+    const world = makeWorld({})
+    world.set(3, 64, 3, 'dirt')
+    world.set(4, 64, 4, 'dirt')
+    const { bot, ctx } = started(world)
+    bot.entity.position = pos(-3, 64, -3)
+
+    for (let i = 0; i < 10 && ctx.flat && ctx.flat.phase === 'scan'; i++) {
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+    assert.equal(ctx.flat.phase, 'shave')
+    const bumpA = ctx.flat.bumps.find((b) => b.x === 3 && b.z === 3)
+    const bumpB = ctx.flat.bumps.find((b) => b.x === 4 && b.z === 4)
+    assert.ok(bumpA && bumpB)
+    ctx.flat.bumps = [bumpA, bumpB]
+    ctx.flat.orderDirty = false
+
+    // Tick 1: issues goal for bump A (key != lastGoalKey)
+    flat(bot, ctx, null, null)
+    await settle()
+    assert.equal(ctx.flat.bumps[0], bumpA)
+
+    // Tick 2: mock pathfinder isMoving()=false and distance > REACH_DIG.
+    // With rotateBump, bumpA def increments and it rotates to back; bumpB is now head!
+    flat(bot, ctx, null, null)
+    await settle()
+    assert.equal(ctx.flat.bumps[0], bumpB, 'bump queue rotated after out-of-reach stop')
+    assert.equal(bumpA.def, 1)
+  })
+
   it('keeps the stall budget when retaking a hole after a stolen tick', async () => {
     const world = makeWorld({})
     world.set(1, 63, 0, 'air')
@@ -2227,5 +2258,34 @@ describe('flat verified stands (idkcraft-cm0)', () => {
     assert.equal(ctx.flat, null)
     assert.equal(bot.calls.places.length, 1, 'reach gate alone still places')
     assert.equal(world.blockAt({ x: 1, y: 63, z: 0 }).name, 'dirt')
+  })
+
+  it('rotates hole queue when stand verification fails with multiple candidate holes', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    world.set(2, 63, 0, 'air')
+    const { bot, ctx } = started(world)
+    bot.world.raycast = () => ({ position: { x: 99, y: 64, z: 99 } }) // wall blocks LOS to ref
+
+    for (let i = 0; i < 10 && ctx.flat && ctx.flat.phase === 'scan'; i++) {
+      flat(bot, ctx, null, null)
+      await settle()
+    }
+    assert.equal(ctx.flat.phase, 'fill')
+    const holeA = ctx.flat.holes[0]
+    const holeB = ctx.flat.holes[1]
+    assert.ok(holeA && holeB)
+
+    // Tick 1: GoalPlaceBlock issued for holeA
+    flat(bot, ctx, null, null)
+    await settle()
+    assert.equal(ctx.flat.holes[0], holeA)
+
+    // Tick 2: bot standing (moving=false). ref found, but standVerified fails because raycast hit wall.
+    // With rotate(f), holeA def increments and rotates to back; holeB is promoted to head!
+    flat(bot, ctx, null, null)
+    await settle()
+    assert.equal(ctx.flat.holes[0], holeB, 'hole queue rotated after failed stand verification')
+    assert.equal(holeA.def, 1)
   })
 })

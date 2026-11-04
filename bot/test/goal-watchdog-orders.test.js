@@ -1091,3 +1091,61 @@ describe('x3y6.2 flat watchdog metric counts dug/placed blocks', () => {
     assert.equal(taskMod.orderProgressWhy(state, taskMod.orderCurrent(makeBot(), ctx, 'flat'), 'flat'), 'blocks')
   })
 })
+
+describe('idkcraft-71gv flat watchdog accounts for skipped, scan, and deferred progress', () => {
+  it('accounts for skips in orderCurrent done count and resets progress', () => {
+    const ctx = { flat: { filled: 1, shaved: 2, skip: { kept: 3, unreachable: 1 }, total: 10, totalBumps: 10, blocks: 0 } }
+    const cur = taskMod.orderCurrent(makeBot(), ctx, 'flat')
+    assert.equal(cur.done, 7) // 1 filled + 2 shaved + 4 skips
+    assert.equal(cur.total, 20)
+    const state = { done: 6, total: 20 }
+    assert.equal(taskMod.orderProgressWhy(state, cur, 'flat'), 'cells')
+  })
+
+  it('accounts for active scan columns in orderCurrent and resets progress via scan', () => {
+    const ctx = { flat: { phase: 'scan', scan: { queue: [1, 2, 3, 4], i: 2 } } }
+    const cur = taskMod.orderCurrent(makeBot(), ctx, 'flat')
+    assert.equal(cur.done, 2)
+    assert.equal(cur.total, 4)
+    assert.equal(cur.scan, true)
+    const state = { done: 1, total: 4, scan: true }
+    assert.equal(taskMod.orderProgressWhy(state, cur, 'flat'), 'scan')
+  })
+
+  it('accounts for defers rising in orderCurrent and resets progress via defers', () => {
+    const ctx = { flat: { filled: 0, shaved: 0, defers: 4, total: 10, totalBumps: 10 } }
+    const cur = taskMod.orderCurrent(makeBot(), ctx, 'flat')
+    assert.equal(cur.defers, 4)
+    const state = { done: 0, total: 20, defers: 3 }
+    assert.equal(taskMod.orderProgressWhy(state, cur, 'flat'), 'defers')
+  })
+
+  it('resets baseline downward when transitioning from scan to shave phase', () => {
+    const ctx = { flat: { phase: 'shave', filled: 0, shaved: 0, skip: { kept: 1 }, total: 10, totalBumps: 10 } }
+    const cur = taskMod.orderCurrent(makeBot(), ctx, 'flat')
+    assert.equal(cur.done, 1)
+    const state = { done: 400, total: 400, scan: true }
+    assert.equal(taskMod.orderProgressWhy(state, cur, 'flat'), 'scan')
+  })
+
+  it('drops state.done down to cur.done upon scan->shave transition during taskTick', () => {
+    const bot = makeBot()
+    const { ctx } = bringCtx(bot)
+    delete ctx.bring
+    ctx.flat = { phase: 'scan', scan: { queue: [1, 2, 3, 4], i: 4 }, parked: false }
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    assert.equal(ctx.task.flat.done, 4)
+    assert.equal(ctx.task.flat.scan, true)
+
+    ctx.flat.phase = 'shave'
+    ctx.flat.filled = 0
+    ctx.flat.shaved = 0
+    ctx.flat.skip = { kept: 1 }
+    ctx.flat.total = 10
+    ctx.flat.totalBumps = 10
+    taskMod.taskTick(bot, ctx, t0 + 10000)
+    assert.equal(ctx.task.flat.done, 1)
+    assert.equal(ctx.task.flat.scan, false)
+  })
+})
