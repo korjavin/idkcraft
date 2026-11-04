@@ -392,11 +392,42 @@ describe('flat plan: probeColumn', () => {
     assert.deepEqual(r, { status: 'ok', topY: 74, walkable: false })
   })
 
-  it('reads a tree canopy as the surface (bumps stay out of scope)', () => {
+  it('reads through a low leaf to the ground surface beneath (foot-level leaf not walkable)', () => {
     const world = makeWorld({ surface: 63 })
     world.set(0, 64, 0, 'oak_leaves')
     const r = probeColumn(gridAt(world), 0, 0, 74, 4)
+    assert.deepEqual(r, { status: 'ok', topY: 63, walkable: false })
+  })
+
+  it('reads through elevated tree canopy to the ground surface beneath (walkable)', () => {
+    const world = makeWorld({ surface: 63 })
+    world.set(0, 65, 0, 'oak_leaves')
+    const r = probeColumn(gridAt(world), 0, 0, 74, 4)
+    assert.deepEqual(r, { status: 'ok', topY: 63, walkable: true })
+  })
+
+  it('dives through elevated leaves to a dirt bump', () => {
+    const world = makeWorld({ surface: 63 })
+    world.set(0, 64, 0, 'dirt')
+    world.set(0, 66, 0, 'oak_leaves')
+    world.set(0, 67, 0, 'cherry_leaves')
+    const r = probeColumn(gridAt(world), 0, 0, 74, 4)
     assert.deepEqual(r, { status: 'ok', topY: 64, walkable: true })
+  })
+
+  it('marks a tree trunk column as not walkable', () => {
+    const world = makeWorld({ surface: 63 })
+    world.set(0, 64, 0, 'oak_log')
+    world.set(0, 65, 0, 'oak_log')
+    const r = probeColumn(gridAt(world), 0, 0, 74, 4)
+    assert.deepEqual(r, { status: 'ok', topY: 63, walkable: false })
+  })
+
+  it('marks ground with leaf at foot level (d+1) as not walkable', () => {
+    const world = makeWorld({ surface: 62 })
+    world.set(0, 63, 0, 'oak_leaves')
+    const r = probeColumn(gridAt(world), 0, 0, 74, 4)
+    assert.deepEqual(r, { status: 'ok', topY: 62, walkable: false })
   })
 
   it('reports no ground down to the floor as deep', () => {
@@ -1437,6 +1468,39 @@ describe('flat behaviour', () => {
     assert.equal(bot.calls.places.length, 1)
     assert.ok(bot.chats.some((c) => c.includes('flattening 9x9 around P, level 63: 1 holes, 1 bumps')), bot.chats.join('\n'))
     assert.ok(bot.chats.some((c) => c === 'flat done: filled 1 hole, shaved 1 bump'), bot.chats.join('\n'))
+  })
+
+  it('idkcraft-ltad: levels ground in proximity to leaves and logs without over-freezing', async () => {
+    const world = makeWorld({})
+    world.set(2, 64, 0, 'dirt') // bump directly under canopy and adjacent to tree trunk
+    world.set(2, 66, 0, 'oak_leaves') // leaf canopy directly above bump
+    world.set(2, 67, 0, 'cherry_leaves')
+    world.set(1, 65, 0, 'oak_leaves') // leaf canopy adjacent
+    world.set(3, 64, 0, 'oak_log') // tree trunk adjacent
+    const { bot, ctx } = started(world)
+    await drive(bot, ctx, 25)
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.equal(world.blockAt({ x: 2, y: 64, z: 0 }).name, 'air', 'dirt bump under canopy shaved')
+    assert.equal(world.blockAt({ x: 3, y: 64, z: 0 }).name, 'oak_log', 'log kept, not destroyed')
+    assert.equal(world.blockAt({ x: 1, y: 65, z: 0 }).name, 'oak_leaves', 'leaves kept, not destroyed')
+    assert.equal(bot.chats.some((c) => c.includes('kept by oak_leaves') || c.includes('kept by cherry_leaves')), false, 'no bumps kept by leaves')
+    assert.ok(bot.chats.some((c) => c.includes('shaved 1 bump')), bot.chats.join('\n'))
+  })
+
+  it('idkcraft-ltad: skips hole as occupied when a tree block occupies the cap cell', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air') // hole at (1, 63, 0)
+    world.set(1, 62, 0, 'dirt')
+    const { bot, ctx } = started(world)
+    // Drive until scan completes and enters fill phase with hole queued
+    while (ctx.flat && ctx.flat.phase === 'scan') await drive(bot, ctx, 1)
+    assert.equal(ctx.flat.phase, 'fill')
+    assert.equal(ctx.flat.holes.length, 1)
+    // Tree leaves appear in the cap cell before fillTick attempts to place
+    world.set(1, 63, 0, 'oak_leaves')
+    await drive(bot, ctx, 15)
+    assert.equal(ctx.flat, null, 'episode ends')
+    assert.ok(bot.chats.some((c) => c.includes('filled 0 holes') && c.includes('1 occupied')), bot.chats.join('\n'))
   })
 
   it('x3y6.2: a fill place and a shave dig each count one block', async () => {
