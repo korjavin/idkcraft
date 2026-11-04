@@ -36,6 +36,10 @@ describe('generated water-climb reach (idkcraft-vf8e.13)', () => {
     for (let n = 0; n < 35 && outcome === 'running' && !bot.used.length; n++) {
       outcome = sk.tick(bot, {}, st)
       await flush()
+      // Complete requested walking in this reach test; server physics are
+      // covered by the skill's separate v2 verification.
+      const walk = bot.pathfinder.goal
+      if (walk) bot.entity.position = new Vec3(walk.x + 0.5, walk.y, walk.z + 0.5)
     }
     assert.equal(outcome, 'running', `must reach a valid pour, got ${outcome}`)
     assert.equal(bot.used.length, 1, 'the real guarded facade must allow a bucket activation')
