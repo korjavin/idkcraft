@@ -267,8 +267,35 @@ describe('chooser shared startability contract', () => {
       assert.ok(logs.some((l) => l.includes('outcome=invalid') && l.includes(`cannot start ${step}`)))
       assert.ok(!logs.some((l) => l.includes('outcome=ok')))
       assert.equal(llmOrders.shouldChoose('idle', ctx, facts), false, 'normal pacing survives rejection')
+      assert.equal(ctx.llmChooseWait, llmOrders.chooseMinMs() * 2, 'failed-plan backoff survives rejection')
     })
   }
+
+  it('backs repeated semantic rejections off to the existing 30-minute cap', async () => {
+    const { bot, ctx } = finishedHome()
+    answer = '{"plan":[{"step":"beds"}]}'
+    for (const wait of [600000, 1200000, 1800000, 1800000]) {
+      await choose(bot, ctx)
+      assert.equal(ctx.llmChooseWait, wait)
+      assert.equal(llmOrders.shouldChoose('idle', ctx, goal.goalFacts(bot, ctx), ctx.llmChooseAt + wait - 1), false)
+      assert.equal(llmOrders.shouldChoose('idle', ctx, goal.goalFacts(bot, ctx), ctx.llmChooseAt + wait), true)
+      assert.ok(!ctx.llmOrder)
+    }
+    assert.equal(calls.length, 4, 'one call per ask, no synthesized retry')
+  })
+
+  it('rejects impossible answers during a sticky daytime stay instead of treating it as night', async () => {
+    const { bot, ctx } = finishedHome()
+    ctx.step = 'stay'
+    ctx.stepStatus = 'running'
+    ctx.stay = { phase: 'hold' }
+    assert.equal(llmOrders.shouldChoose('stay', ctx, goal.goalFacts(bot, ctx)), true)
+    answer = '{"plan":[{"step":"beds"}]}'
+    await choose(bot, ctx)
+    assert.ok(!ctx.llmOrder)
+    assert.ok(!ctx.taskPlanStep)
+    assert.ok(logs.some((l) => l.includes('outcome=invalid')))
+  })
 
   it('starts a feasible prerequisite through the real pin path without filtering its infeasible tail', async () => {
     const { bot, ctx } = ctxWith(true)

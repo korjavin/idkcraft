@@ -364,9 +364,15 @@ function ask(bot, ctx, req, fetchFn) {
         // even when the raw build capability cannot run yet. The tail is
         // allowed to depend on the first step's work.
         r.steps = expandBuildPlan(bot, r.steps, workSteps())
-        if (!nightHold(bot, ctx) && !candidateFeasible(bot, ctx, r.steps[0])) {
+        const facts = goal.goalFacts(bot, ctx)
+        const deferred = facts.time !== 'day' && nightHold(bot, ctx)
+        if (!deferred && !candidateFeasible(bot, ctx, r.steps[0], facts)) {
           r.error = `cannot start ${label(r.steps[0])}`
           delete r.steps
+          // Preserve the failed-plan throttle without installing a futile
+          // plan just to reach end()'s backoff a few ticks later.
+          const cur = typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0 ? ctx.llmChooseWait : chooseMinMs()
+          ctx.llmChooseWait = Math.min(cur * 2, CHOOSE_WAIT_MAX_MS)
         }
       }
       const ms = Date.now() - a.at
