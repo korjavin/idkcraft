@@ -138,12 +138,13 @@ function stepList() {
 
 // Chooser whitelist: work steps only (flat stays out per owner default;
 // bring/find/share need a player). Same line shape as stepList.
-function chooseStepList() {
+function chooseStepList(bot, ctx, facts = bot ? goal.goalFacts(bot, ctx) : null) {
   const lines = []
   for (const id of workSteps()) {
     const effect = STEP_EFFECT_TEXT[id] || goal.STEP_CRITERIA[id] || id
     const when = goal.STEP_CRITERIA[id] ? ` (runs when: ${goal.STEP_CRITERIA[id].split(':')[0]})` : ''
-    lines.push(`${id}: ${effect}${when}`)
+    const start = facts ? ` [can begin now with count=1: ${candidateFeasible(bot, ctx, { step: id, count: 1 }, facts) ? 'yes' : 'no'}]` : ''
+    lines.push(`${id}: ${effect}${when}${start}`)
   }
   return lines.join('\n')
 }
@@ -248,7 +249,9 @@ async function planOrder(bot, ctx, text, fetchFn) {
 // One chooser call -> { steps|error|empty, why, need, tokens }.
 async function planChoose(bot, ctx, regime, fetchFn) {
   const sit = situationText(bot, ctx)
-  const user = `Choose work: ${regime}\n\nSituation:\n${sit}\n\nSteps (id: what it does):\n${chooseStepList()}`
+  const facts = goal.goalFacts(bot, ctx)
+  const live = `${goal.goalText(facts, ctx && ctx.home)} chestTodo=${facts.chestTodo}`
+  const user = `Choose work: ${regime}\n\nSituation:\n${sit}\n\nLive work facts:\n${live}\n\nCapabilities (later steps may need prerequisites; begin with a startable step, or return an empty plan):\n${chooseStepList(bot, ctx, facts)}`
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
   let data
@@ -356,6 +359,22 @@ function ask(bot, ctx, req, fetchFn) {
       }
       if (ctx.llmAsk !== a) return // cancelled mid-ask (stop / follow me / go work)
       ctx.llmAsk = null
+      if (r.steps) {
+        // Expand build before admission: an empty kit starts with gather,
+        // even when the raw build capability cannot run yet. The tail is
+        // allowed to depend on the first step's work.
+        r.steps = expandBuildPlan(bot, r.steps, workSteps())
+        const facts = goal.goalFacts(bot, ctx)
+        const deferred = facts.time !== 'day' && nightHold(bot, ctx)
+        if (!deferred && !candidateFeasible(bot, ctx, r.steps[0], facts)) {
+          r.error = `cannot start ${label(r.steps[0])}`
+          delete r.steps
+          // Preserve the failed-plan throttle without installing a futile
+          // plan just to reach end()'s backoff a few ticks later.
+          const cur = typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0 ? ctx.llmChooseWait : chooseMinMs()
+          ctx.llmChooseWait = Math.min(cur * 2, CHOOSE_WAIT_MAX_MS)
+        }
+      }
       const ms = Date.now() - a.at
       const outcome = r.steps ? 'ok' : r.empty ? 'empty' : (r.outcome || 'invalid')
       try { metrics.llmCalls.inc({ use: 'choose', outcome }) } catch (_) { /* metric best-effort */ }
@@ -368,7 +387,7 @@ function ask(bot, ctx, req, fetchFn) {
       console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${need}" why="${why}" situation="${sit}" tokens=${r.tokens || '0/0'} ms=${ms} err="${(r.error || '').replace(/"/g, "'")}"`)
       if (!r.steps) return // fallback: the FSM pick stands, log only
       const sayChoose = rosterOnline(bot) ? say : () => {}
-      installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false }, r.steps, sayChoose)
+      installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false, choose: true }, r.steps, sayChoose)
       return
     }
     let r
@@ -518,13 +537,13 @@ function installPlan(bot, ctx, req, steps, say) {
   if (!ctx || !Array.isArray(steps) || !steps.length) return false
   if (ctx.llmOrder) { release(ctx, ctx.llmOrder); console.log(`llm order end text="${ctx.llmOrder.text}" result=replaced`) }
   siteBuildHere(bot, ctx, req, steps)
-  steps = expandBuildPlan(bot, steps, workSteps())
+  if (!req.choose) steps = expandBuildPlan(bot, steps, workSteps())
   // zz85: player-issued = outranks the castle veto (vetoes.castleFirst).
   // Bare orders (`reforest 10`) arrive with explicit unset — only the
   // chooser (by 'self') and peer chatter (never installed) are not
   // player-issued, and llmAsk never fires for peer bots (chat.js).
   const playerIssued = typeof req.by === 'string' && req.by !== '' && req.by !== 'self'
-  ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false, explicit: !!req.explicit || playerIssued }
+  ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false, explicit: !!req.explicit || playerIssued, choose: !!req.choose }
   const line = `plan: ${steps.map(label).join(', then ')}`.slice(0, 250)
   if (typeof say === 'function') say(line)
   else { try { bot.chat(line) } catch (_) { /* chat best-effort */ } }
@@ -591,6 +610,19 @@ function stillFeasible(bot, ctx, step) {
   try { return !!(goal.MENU[step] && goal.MENU[step].feasible(goal.goalFacts(bot, ctx), bot, ctx) && goal.registered(step)) } catch (_) { return false }
 }
 
+// The pin menu's predicate, with the hypothetical candidate's pin/count.
+// Never install a live pin to probe an alternative: bank and promoted
+// skills can require these facts even before they own the body.
+function candidateFeasible(bot, ctx, s, facts) {
+  try {
+    const f = { ...(facts || goal.goalFacts(bot, ctx)), pinned: s.step, pinCount: s.count || 0 }
+    // A hypothetical autonomous candidate cannot borrow a player's castle
+    // veto override from an order that happens to be live during the probe.
+    const candidateCtx = ctx && ctx.llmOrder && ctx.llmOrder.explicit ? { ...ctx, llmOrder: null } : ctx
+    return !!(workSteps().includes(s.step) && goal.MENU[s.step] && goal.MENU[s.step].feasible(f, bot, candidateCtx))
+  } catch (_) { return false }
+}
+
 // How the step's order ended: bringbase/lead/flat stamp done or a failure
 // at their single end points; gone without a stamp since the step began =
 // cancelled. A find that never led (nothing found, too deep) = refused.
@@ -654,6 +686,7 @@ function startStep(bot, ctx, o, s, now) {
     return
   }
   o.waitAt = null
+  if (o.choose && !candidateFeasible(bot, ctx, s)) return end(bot, ctx, o, missWhy(bot, ctx, o, s) || 'failed:not possible now')
   o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, led: false }
   if (order) {
     // Accepted = the line created (or resumed) its own executor; an
@@ -737,6 +770,7 @@ function tick(bot, ctx, now = Date.now()) {
     return
   }
   if (c.held) {
+    if (o.choose && !candidateFeasible(bot, ctx, s)) return end(bot, ctx, o, missWhy(bot, ctx, o, s) || 'failed:not possible now')
     c.held = false
     c.at = now
     c.gen = stepGen(ctx)
