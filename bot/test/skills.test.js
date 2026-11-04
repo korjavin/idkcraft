@@ -21,6 +21,30 @@ const metrics = require('../src/metrics')
 
 const FIXTURES = path.join(__dirname, 'fixtures', 'skills')
 
+describe('generated water-climb reach (idkcraft-vf8e.13)', () => {
+  it('uses a reachable side face when the upper notch cell is out of reach', async () => {
+    // The old scan treats the air above this ledge as its pour target:
+    // (2, 67, 0), 5.27 blocks from the eyes at the stand (0.5, 61, 0.5).
+    // The shaft beside the ledge has a reachable pour cell at (1, 66, 0).
+    const bot = fakeBot(new Map([['2,66,0', 'obsidian']]))
+    bot.items = [{ name: 'water_bucket', count: 2 }]
+    const file = process.env.BARE_PIT_TEST_SKILL || path.join(__dirname, '..', 'skills', 'gen_bare_pit_climb.js')
+    const { sk } = skills.compile(file, require('node:fs').readFileSync(file, 'utf8'), { BOT_BODY: 'baritone' })
+    sk.reset()
+    const st = { ticks: 0, hs: { busy: null, err: null } }
+    let outcome = 'running'
+    for (let n = 0; n < 35 && outcome === 'running' && !bot.used.length; n++) {
+      outcome = sk.tick(bot, {}, st)
+      await flush()
+    }
+    assert.equal(outcome, 'running', `must reach a valid pour, got ${outcome}`)
+    assert.equal(bot.used.length, 1, 'the real guarded facade must allow a bucket activation')
+    assert.equal(bot.used[0].item, 'water_bucket')
+    assert.equal(bot.used[0].at, '2,66,0', 'pour against the reachable side of the ledge')
+    assert.ok(Math.hypot(1.5 - bot.entity.position.x, 66.5 - (bot.entity.position.y + 1.62), 0.5 - bot.entity.position.z) <= 4.5)
+  })
+})
+
 function key(x, y, z) { return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}` }
 
 // Open ground: dirt at y<=60, air above, `cells` overrides.
