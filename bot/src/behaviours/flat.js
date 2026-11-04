@@ -374,6 +374,21 @@ function chooseLevel(tops) {
 // distance, row gap, z, x) so unit pins hold. Bumps re-sort centre-out
 // in bands instead (orderBumpsByBot, v8bq R1): the hilltop budget only
 // skips far edges honestly when the middle went flat first.
+// Stable 32-bit FNV-1a hash with avalanche to scatter nearby bump candidates among multiple bots
+// so bots disperse across the area without clashing or blocking each other (idkcraft-zowe).
+function botCellScore(name, x, z) {
+  if (!name || typeof name !== 'string') return 0
+  let h = 2166136261 >>> 0
+  for (let i = 0; i < name.length; i++) {
+    h = Math.imul(h ^ name.charCodeAt(i), 16777619) >>> 0
+  }
+  h = Math.imul(h ^ (x * 374761393), 668265263) >>> 0
+  h = (h ^ (h >>> 13)) >>> 0
+  h = Math.imul(h ^ (z * 668265263), 374761393) >>> 0
+  h = (h ^ (h >>> 16)) >>> 0
+  return h
+}
+
 // Hole queue from the scan records: walkable columns below the level plus
 // deep columns, nearest first (Chebyshev, then Euclidean, then x/z for a
 // deterministic order unit tests can pin).
@@ -394,7 +409,7 @@ function detectHoles(records, level, cx, cz) {
 // Bump queue (w52.1): walkable columns above the level, same nearest-first
 // order as the holes. y is the next dig target: the column shaves top-down
 // from topY to the level, so gravity blocks never hang unsupported.
-function detectBumps(records, level, cx, cz) {
+function detectBumps(records, level, cx, cz, botName = '') {
   const bumps = []
   for (const rec of records || []) {
     if (!rec || typeof rec.x !== 'number' || typeof rec.z !== 'number') continue
@@ -402,7 +417,10 @@ function detectBumps(records, level, cx, cz) {
     bumps.push({ x: rec.x, z: rec.z, topY: rec.topY, y: rec.topY })
   }
   const cheb = (h) => Math.max(Math.abs(h.x - cx), Math.abs(h.z - cz))
+  const distBucket = (h) => Math.floor(Math.hypot(h.x - cx, h.z - cz) / 3)
   bumps.sort((a, b) => (cheb(a) - cheb(b)) ||
+    (distBucket(a) - distBucket(b)) ||
+    (botName ? (botCellScore(botName, a.x, a.z) - botCellScore(botName, b.x, b.z)) : 0) ||
     (Math.hypot(a.x - cx, a.z - cz) - Math.hypot(b.x - cx, b.z - cz)) ||
     (a.x - b.x) || (a.z - b.z))
   return bumps.map((h) => ({ ...h, att: 0, def: 0, occ: 0, stalls: 0, lastPos: null, gateY: null, pickup: null }))
@@ -413,7 +431,9 @@ function detectBumps(records, level, cx, cz) {
 // first. Rings (Chebyshev bands around the square centre) go in order;
 // ties break nearest-to-bot, so the walk still sweeps locally instead
 // of crossing the ring. Deferred cells sink like in orderByBot.
-function orderBumpsByBot(cells, bp, cx, cz) {
+// Multi-bot dispersion (idkcraft-zowe): nearby candidate bumps in the same
+// distance bucket disperse by botCellScore(botName).
+function orderBumpsByBot(cells, bp, cx, cz, botName = '') {
   if (!Array.isArray(cells) || cells.length < 2) return cells
   const bx = bp && typeof bp.x === 'number' ? bp.x : null
   const bz = bp && typeof bp.z === 'number' ? bp.z : null
@@ -423,8 +443,11 @@ function orderBumpsByBot(cells, bp, cx, cz) {
     if (!c) return 0
     return ((c.def || 0) > 0 || (c.occ || 0) > 0 || (c.att || 0) > 0) ? 1 : 0
   }
+  const distBucket = (c) => Math.floor(Math.hypot(c.x - bx, c.z - bz) / 3)
   cells.sort((a, b) => (band(a) - band(b)) ||
     (deferred(a) - deferred(b)) ||
+    (distBucket(a) - distBucket(b)) ||
+    (botName ? (botCellScore(botName, a.x, a.z) - botCellScore(botName, b.x, b.z)) : 0) ||
     (Math.hypot(a.x - bx, a.z - bz) - Math.hypot(b.x - bx, b.z - bz)) ||
     (a.z - b.z) || (a.x - b.x))
   return cells
@@ -836,10 +859,11 @@ function squareLoaded(bot, cx, cz, r, y) {
   } catch (_) { return false }
 }
 
-function startEpisode(cx, cz, r, yTop, by, tile = null, level = null) {
+function startEpisode(cx, cz, r, yTop, by, tile = null, level = null, botName = '') {
   return {
     key: `${cx},${cz},${r}`,
     cx, cz, r, by: by || 'you', tile,
+    botName: botName || '',
     fixedLevel: level, // zchb: speaker feet level; null = mode vote
     yTop, yBottom: yTop - SCAN_DOWN,
     phase: 'scan',
@@ -1015,7 +1039,7 @@ function finish(bot, ctx, f, why) {
   if (again) {
     // Same key (cx,cz,r): a relay/re-flat of this square resumes the steal.
     // Persists like any episode; a restart resumes the home strip.
-    ctx.flat = startEpisode(f.cx, f.cz, f.r, f.yTop, f.by, null, f.level)
+    ctx.flat = startEpisode(f.cx, f.cz, f.r, f.yTop, f.by, null, f.level, f.botName)
     ctx.flat.steal = { i: home.i, n: home.n }
     ctx.flat.blocks = f.blocks // the watchdog metric stays monotone
     guardFlatSurface(bot, ctx)
@@ -1089,7 +1113,7 @@ function scanTick(bot, ctx, f) {
   }
   f.liquidCols = []
   f.holes = detectHoles(f.cands, level, f.cx, f.cz)
-  f.bumps = detectBumps(f.cands, level, f.cx, f.cz)
+  f.bumps = detectBumps(f.cands, level, f.cx, f.cz, f.botName)
   if (f.steal) {
     // Whole square was kept (tile null): pick the victim, keep its strip,
     // farthest from the centre first — the owner works centre-out.
@@ -2157,7 +2181,7 @@ function shaveTick(bot, ctx, f, bp) {
   // budget must find a flat middle when it trips.
   if (f.orderDirty) {
     f.orderDirty = false
-    orderBumpsByBot(f.bumps, bp, f.cx, f.cz)
+    orderBumpsByBot(f.bumps, bp, f.cx, f.cz, f.botName)
   }
   recordStepped(f, bp)
   progressChat(bot, f)
@@ -2432,6 +2456,7 @@ function travelTick(bot, ctx, f, bp) {
 function flat(bot, ctx, target, state) {
   const f = ctx.flat
   if (!f) return
+  if (!f.botName && bot && bot.username) f.botName = bot.username
   if (toolPrep.hold(bot, ctx, f)) return
   const bp = bot.entity && bot.entity.position
   if (!bp) return
@@ -2501,6 +2526,7 @@ module.exports.probeColumn = probeColumn
 module.exports.spiralColumns = spiralColumns
 module.exports.orderByBot = orderByBot
 module.exports.orderBumpsByBot = orderBumpsByBot
+module.exports.botCellScore = botCellScore
 module.exports.swarmTile = swarmTile
 module.exports.swarmHelper = swarmHelper
 module.exports.SWARM_HELPER_LINE = SWARM_HELPER_LINE

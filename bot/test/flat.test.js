@@ -14,7 +14,7 @@ const util = require('../src/behaviours/util')
 const {
   probeColumn, spiralColumns, chooseLevel, detectHoles,
   isFillBlock, findFillItem, countFill, cellOccupied, parseRadius, startEpisode, progressChat, buildSweep,
-  restockPoint, guardFlatSurface,
+  restockPoint, guardFlatSurface, botCellScore,
   FLAT_DEFAULT_RADIUS, FLAT_MIN_RADIUS, FLAT_MAX_RADIUS,
 } = flat
 
@@ -313,6 +313,39 @@ describe('v8bq R1 sweep order: orderBumpsByBot', () => {
     const cells = [{ x: 5, z: 5 }, { x: 1, z: 1 }]
     assert.deepEqual(orderBumpsByBot(cells, null, 0, 0).map((c) => [c.x, c.z]), [[5, 5], [1, 1]])
   })
+
+  it('idkcraft-zowe: disperses nearby candidate bumps between different bot names', () => {
+    // 4 bumps in the same band (1) and distance bucket
+    const bumpsA = [{ x: 1, z: 1 }, { x: 1, z: 0 }, { x: 0, z: 1 }, { x: -1, z: 1 }]
+    const bumpsB = [{ x: 1, z: 1 }, { x: 1, z: 0 }, { x: 0, z: 1 }, { x: -1, z: 1 }]
+    const sortedA = orderBumpsByBot(bumpsA, { x: 0, y: 64, z: 0 }, 0, 0, 'IdkBot')
+    const sortedB = orderBumpsByBot(bumpsB, { x: 0, y: 64, z: 0 }, 0, 0, 'IdkBotV2b')
+    // Head bumps picked by the two bots should differ so bots naturally disperse
+    assert.notDeepEqual([sortedA[0].x, sortedA[0].z], [sortedB[0].x, sortedB[0].z])
+  })
+
+  it('idkcraft-zowe: detectBumps disperses candidate head bumps between peer bots', () => {
+    const records = [
+      { x: 1, z: 1, topY: 64 },
+      { x: 1, z: 0, topY: 64 },
+      { x: 0, z: 1, topY: 64 },
+      { x: -1, z: 1, topY: 64 },
+    ]
+    const bumpsA = flat.detectBumps(records, 63, 0, 0, 'IdkBot')
+    const bumpsB = flat.detectBumps(records, 63, 0, 0, 'IdkBotV2b')
+    assert.notDeepEqual([bumpsA[0].x, bumpsA[0].z], [bumpsB[0].x, bumpsB[0].z])
+  })
+})
+
+describe('multi-bot candidate dispersion: botCellScore (idkcraft-zowe)', () => {
+  it('produces deterministic scores and differs across bot names', () => {
+    const s1 = botCellScore('IdkBot', 5, 10)
+    const s2 = botCellScore('IdkBot', 5, 10)
+    const s3 = botCellScore('IdkBotV2b', 5, 10)
+    assert.equal(typeof s1, 'number')
+    assert.equal(s1, s2, 'deterministic for same bot and coords')
+    assert.notEqual(s1, s3, 'differs between peer bots')
+  })
 })
 
 describe('flat plan: chooseLevel', () => {
@@ -555,7 +588,7 @@ describe('flat ticker wiring', () => {
   beforeEach(() => { cap = capture() })
   afterEach(() => { cap.release() })
 
-  function rig({ action = 'roam', world = null, items = [{ name: 'dirt', count: 64 }], players = { P: { username: 'P' } } } = {}) {
+  function rig({ action = 'roam', world = null, items = [{ name: 'dirt', count: 64 }], players = { P: { username: 'P', entity: { position: pos(0, 64, 0) } } } } = {}) {
     const w = world || makeWorld({})
     const bot = mockBot(w, { items, players })
     const brain = mockBrain(action)
@@ -1115,13 +1148,39 @@ describe('flat ticker wiring', () => {
     } finally { r.done() }
   })
 
-  it('setFlat centers on the bot when the speaker is out of range', async () => {
+  it('setFlat refuses when the speaker is out of range without explicit coordinates (idkcraft-zowe)', async () => {
     const r = rig({})
     try {
-      r.ticker.setFlat({ radius: 4, by: 'Ghost' })
+      const res = r.ticker.setFlat({ radius: 4, by: 'Ghost' })
+      assert.match(res, /can't see you/)
+      assert.ok(!r.ctx.flat)
+    } finally { r.done() }
+  })
+
+  it('setFlat accepts explicit anchor even when speaker is unseen (idkcraft-zowe)', async () => {
+    const r = rig({})
+    try {
+      const res = r.ticker.setFlat({ radius: 4, by: 'Ghost', explicit: true, cx: 0, cz: 0 })
+      assert.match(res, /scanning 9x9 at 0,0/)
       assert.equal(r.ctx.flat.cx, 0)
       assert.equal(r.ctx.flat.cz, 0)
-      assert.equal(r.ctx.flat.by, 'Ghost')
+    } finally { r.done() }
+  })
+
+  it('setFlat resumes a parked episode from inside the square even when speaker is unseen (idkcraft-zowe)', async () => {
+    const world = makeWorld({})
+    world.set(1, 63, 0, 'air')
+    const r = rig({ world })
+    try {
+      r.ticker.setFlat({ radius: 4, by: 'P' })
+      assert.ok(r.ctx.flat)
+      await r.ticker.tick()
+      r.ticker.stop()
+      assert.equal(r.ctx.flat.parked, true)
+      // Speaker Ghost is out of sight, but bot is inside the square at (0, 0)
+      const res = r.ticker.setFlat({ radius: 4, by: 'Ghost' })
+      assert.match(res, /resuming flat/)
+      assert.equal(r.ctx.flat.parked, false)
     } finally { r.done() }
   })
 
@@ -1251,10 +1310,10 @@ describe('flat ticker wiring', () => {
       r.ticker.setFlat({ radius: 4, by: 'P' })
       assert.ok(r.ctx.flat)
       handleChat(r.bot, r.ticker, 'P', 'follow me')
-      assert.equal(r.ctx.flat, null)
+      assert.ok(!r.ctx.flat)
       r.ticker.setFlat({ radius: 4, by: 'P' })
       handleChat(r.bot, r.ticker, 'P', 'go work')
-      assert.equal(r.ctx.flat, null)
+      assert.ok(!r.ctx.flat)
     } finally { r.done() }
   })
 

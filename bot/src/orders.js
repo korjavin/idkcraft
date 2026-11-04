@@ -576,9 +576,15 @@ function createOrders(box) {
       const tile = flatMod.swarmTile()
       const speakerEntry = by && worker.players(bot)[by]
       const speaker = speakerEntry && speakerEntry.entity && speakerEntry.entity.position ? speakerEntry.entity : null
-      // Swarm (lhg2): a strip is only right on the speaker's square — a
-      // bot that cannot see the speaker refuses instead of centring on itself.
-      if (!relay && tile && !at && !speaker) return `can't see you — come within 48 or /tp ${bot.username} ${by || 'you'}`
+      // Swarm (lhg2) + multibot (idkcraft-zowe): relative flat requires seeing the
+      // speaker so bots never invent remote flat jobs on hills at arbitrary heights.
+      // A bare `flat` (or same radius) resume of an episode from inside its square
+      // stays legal even when the speaker is out of sight.
+      const f = ctx.flat
+      const bp = bot.entity && bot.entity.position
+      const botInside = f && bp && Math.abs(bp.x - f.cx) <= f.r && Math.abs(bp.z - f.cz) <= f.r
+      const isResume = f && botInside && (!explicit || radius === f.r)
+      if (!relay && !at && !speaker && !isResume) return `can't see you — come within 48 or /tp ${bot.username} ${by || 'you'}`
       const atFeet = at && !relay ? surfaceFeet(atX, atZ) : null
       if (at && !relay && (atFeet == null || !squareLoaded(atX, atZ, radius))) return `too far to see ${atX},${atZ} — come closer or /tp ${bot.username} ${by || 'you'}`
       clearPendingSearch(ctx)
@@ -588,17 +594,16 @@ function createOrders(box) {
       homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the first flat walk (jr2.3)
       if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
-      // Center: the player who gave the command, or the bot itself when the
-      // speaker is out of tracking range (same honest fallback as build here).
-      // zchb: level = the speaker's feet level at command time, fixed for
-      // the whole job (no speaker in sight: the walkable-height mode).
+      // Center: explicit coordinates, the speaker who gave the command, or the
+      // bot itself when resuming from inside the square.
+      // zchb: level = the speaker's feet level at command time (explicit x z:
+      // the walkable-height mode).
       const anchor = (speaker && speaker.position) || (bot.entity && bot.entity.position)
       const level = relay ? relayLevel : (speaker ? flatMod.feetLevel(speaker.position) : null)
       const cx = at ? atX : (anchor ? Math.floor(anchor.x) : 0)
       const cz = at ? atZ : (anchor ? Math.floor(anchor.z) : 0)
       const feet = level != null ? level + 1 : (relay ? relayFeet : (at ? atFeet : Math.floor(anchor ? anchor.y : 64)))
       const yTop = feet + flatMod.SCAN_UP
-      const f = ctx.flat
       // zchb: the main bot (strip 0) relays the one square it resolved —
       // started or resumed — and every helper adopts exactly that.
       const announce = (ep) => { if (tile && tile.i === 0) bot.chat(flatMod.relayLine(ep)) }
@@ -619,7 +624,7 @@ function createOrders(box) {
         announce(f)
         return flatMod.resumeLine(f)
       }
-      ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you', tile, level)
+      ctx.flat = flatMod.startEpisode(cx, cz, radius, yTop, by || 'you', tile, level, (bot && bot.username) || '')
       ctx.unseenTicks = 0
       ctx.resumeWork = false
       ctx.paused = false
