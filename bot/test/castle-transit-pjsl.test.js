@@ -139,6 +139,85 @@ function holed() {
 }
 
 describe('pjsl transit backfill', () => {
+  it('retains executor retry history across expiry and retirement', () => {
+    const { cells } = holed()
+    const bot = worldBot(cells)
+    const st = own()
+    const ctx = { castle: st }
+    const cell = castle.fillTargets(bot, ctx, st, 100000)[0]
+    const k = `2:${cell.idx}`
+    const realNow = Date.now
+    let now = 100000
+    Date.now = () => now
+    try {
+      for (let attempt = 1; attempt <= 8; attempt++) {
+        for (let tick = 0; tick < 12 && (!st.blocked[k] || st.blocked[k].tries < attempt); tick++) castle(bot, ctx)
+        assert.equal(st.blocked[k]?.tries, attempt, `attempt ${attempt} retains its history`)
+        assert.equal(!!st.blocked[k].retired, attempt === 8)
+        if (attempt < 8) {
+          const until = st.blocked[k].until
+          assert.ok(until > now)
+          now = until + 1
+        }
+      }
+      now = st.blocked[k].until + 1
+      for (let tick = 0; tick < 5; tick++) castle(bot, ctx)
+      assert.equal(st.blocked[k].tries, 8)
+      assert.equal(ctx.stepStatus, 'done')
+      const decor = blueprint.decorPlan(SITE, 0, V).cells.find((c) => c.kind === 'pane')
+      cells.set(key(decor.x, decor.y, decor.z), 'air')
+      bot.inventory.items = () => [{ name: 'dirt', count: 64 }, { name: 'glass_pane', count: 64 }]
+      castle(bot, ctx)
+      assert.equal(st.status, 'decorating', 'other eligible work is selected')
+      assert.equal(st.blocked[k].tries, 8)
+    } finally { Date.now = realNow }
+  })
+  it('restores retired fill across tidy and unloaded reads, pruning only when filled or stale', () => {
+    const { cells, hole } = holed()
+    const bot = worldBot(cells)
+    const initial = own()
+    const cell = castle.fillTargets(bot, {}, initial, 100000)[0]
+    const k = `2:${cell.idx}`
+    const record = { tries: 8, until: 1, why: 'unreachable', retired: true }
+    const st = JSON.parse(JSON.stringify(own({ blocked: { [k]: record }, visitedAt: 1 })))
+    const ctx = { castle: st }
+    castle.reopenRepairs(bot, ctx, st, true)
+    assert.deepEqual(st.blocked[k], record, 'tidy repair does not rearm off-plan fill')
+    const read = bot.blockAt
+    bot.blockAt = (p) => key(p.x, p.y, p.z) === key(hole.x, hole.y, hole.z) ? null : read(p)
+    castle(bot, ctx)
+    assert.deepEqual(st.blocked[k], record, 'unloaded target preserves history')
+    bot.blockAt = read
+    castle(bot, ctx)
+    assert.deepEqual(st.blocked[k], record, 'loaded air remains retired')
+    cells.set(key(hole.x, hole.y, hole.z), 'dirt')
+    castle(bot, ctx)
+    assert.equal(st.blocked[k], undefined, 'dirt satisfies prep fill')
+    st.blocked[`1:${cell.idx}`] = { ...record }
+    castle(bot, ctx)
+    assert.equal(st.blocked[`1:${cell.idx}`], undefined, 'stale version pruned')
+  })
+  it('decodes rotated fill boundaries without retaining invalid or plan IDs', () => {
+    for (const rot of [0, 1]) {
+      const st = own({ rot })
+      const { w, d } = blueprint.siteDimensions(rot, V)
+      const bot = worldBot(painted())
+      const valid = castle.FILL_BASE + ((w + 1) * (d + 2) + (d + 1)) * 4 + 3
+      const outside = castle.FILL_BASE + (w + 2) * (d + 2) * 4
+      const plan = blueprint.absPlan(SITE, rot, V).cells.find((c) => c.y < SITE.y && c.x >= SITE.x - 1 && c.x <= SITE.x + w && c.z >= SITE.z - 1 && c.z <= SITE.z + d && SITE.y - c.y <= 4)
+      assert.ok(plan)
+      const planId = castle.FILL_BASE + ((plan.x - SITE.x + 1) * (d + 2) + (plan.z - SITE.z + 1)) * 4 + (SITE.y - plan.y - 1)
+      const entry = { tries: 2, until: 1, why: 'unreachable' }
+      st.blocked = Object.fromEntries([valid, outside, planId].map((id) => [`2:${id}`, { ...entry }]))
+      const x = SITE.x + w, y = SITE.y - 4, z = SITE.z + d
+      const read = bot.blockAt
+      bot.blockAt = (p) => key(p.x, p.y, p.z) === key(x, y, z) ? null : read(p)
+      castle(bot, { castle: st })
+      assert.deepEqual(st.blocked[`2:${valid}`], entry, `rotation ${rot} final fill ID retained`)
+      assert.equal(st.blocked[`2:${outside}`], undefined)
+      assert.equal(st.blocked[`2:${planId}`], undefined)
+    }
+  })
   it('lists a below-grade non-plan air cell, skips plan cells and the sill', () => {
     const { cells, hole } = holed()
     const bot = worldBot(cells)
