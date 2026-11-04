@@ -295,7 +295,7 @@ function blockCell(ctx, st, c, why, now) {
   // standard retry ladder (revmux 01 core-2) so transient unreachability
   // never permanently drops decor. The tries>=MAX backstop
   // keeps the old invariant for mixed ladders that never streak.
-  const isLitter = c && (c.idx >= LITTER_BOX_BASE && c.idx < blueprint.DECOR_BASE)
+  const isLitter = c && (c.idx >= LITTER_BOX_BASE && c.idx < FILL_BASE)
   const limit = why === 'build-miss'
     ? BUILD_MISS_TRIES
     : why === 'protected'
@@ -473,11 +473,11 @@ function pick(bot, ctx, st, cells, key, now) {
   // lays while holes wait out their backoff.
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
-    const c = cells[Number(i)] || decorOf(st, Number(i)) || bandOf(st, Number(i)) || boxOf(st, Number(i)) || (Number(i) === SILL_IDX ? sillOf(st) : null)
+    const c = cells[Number(i)] || decorOf(st, Number(i)) || bandOf(st, Number(i)) || boxOf(st, Number(i)) || fillOf(st, Number(i)) || (Number(i) === SILL_IDX ? sillOf(st) : null)
     // Off-plan entries (prep) live until they expire (g0z.14);
     // decor entries (g0z.31) live until laid, so a bad pane cell retires;
-    // band and box litter entries (g0z.44, qxql.16) live until swept, so refusals
-    // escalate to retired instead of re-chasing every 30 s.
+    // band and box litter entries and transit fills live until resolved, so
+    // refusals escalate to retired instead of re-chasing every 30 s.
     if (Number(v) !== ver(st) || (c ? done(bot, c) : st.blocked[k].until <= now)) { delete st.blocked[k]; continue }
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
@@ -1106,6 +1106,23 @@ function boxOf(st, idx) {
 // sill cell (sillOf) is excluded: it wants planks, not fill.
 const FILL_BASE = 2600000 // band space ends near 2.35M, decor starts at 3M
 const FILL_DEPTH = 4 // holes dug for transit are shallow
+// Invert the scan's ID, but only for cells that scan could actually emit.
+// Prep IDs and invalid offsets must retain their temporary expiry semantics.
+function fillOf(st, idx) {
+  if (!Number.isSafeInteger(idx) || idx < FILL_BASE || idx >= blueprint.DECOR_BASE || !st || !st.site) return null
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const t = idx - FILL_BASE
+  if (t >= (w + 2) * (d + 2) * FILL_DEPTH) return null
+  const dd = t % FILL_DEPTH + 1
+  const q = Math.floor(t / FILL_DEPTH)
+  const dx = Math.floor(q / (d + 2)) - 1
+  const dz = q % (d + 2) - 1
+  const c = { x: st.site.x + dx, y: st.site.y - dd, z: st.site.z + dz, kind: 'stone', prep: 'fill', idx }
+  const k = `${c.x},${c.y},${c.z}`
+  const sill = sillOf(st)
+  if (k === `${sill.x},${sill.y},${sill.z}` || blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.has(k)) return null
+  return c
+}
 function fillTargets(bot, ctx, st, now) {
   const site = st && st.site
   const key = site && typeof site.x === 'number' ? `${site.x},${site.y},${site.z},${st.rot | 0},v${ver(st)}` : null
