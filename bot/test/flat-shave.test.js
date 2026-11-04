@@ -445,7 +445,7 @@ describe('shave ticker: resume counts bumps', () => {
     const world = makeWorld({})
     world.set(1, 63, 0, 'air')
     world.set(2, 64, 0, 'dirt')
-    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }], players: { P: { username: 'P' } } })
+    const bot = mockBot(world, { items: [{ name: 'dirt', count: 64 }], players: { P: { username: 'P', entity: { position: pos(0, 64, 0) } } } })
     const brain = { async decide() { return { action: 'roam', sprint: false, source: 'stub' } } }
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10 })
     try {

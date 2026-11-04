@@ -1491,7 +1491,7 @@ describe('jr2.3 move commands exit through the doorway, repeat and stop never ha
 
 describe('jr2.3 every order opens through the doorway, not through the wall', () => {
   function held(extra = {}) {
-    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve' } }, ...extra })
+    const bot = tickBot({ at: { ...MEET2 }, players: { Steve: { username: 'Steve', entity: { position: pos(MEET2.x, MEET2.y, MEET2.z) } } }, ...extra })
     const ticker = tickerWith(bot, idleBrain, extra.home || v2home())
     const ctx = bot._tickerCtx
     ctx.comehome = { ...home.startMeet('Steve', true, v2home()), phase: 'hold' }
