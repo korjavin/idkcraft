@@ -60,6 +60,212 @@ function mobEntity(id, name, x, opts = {}) {
   return { id, name, type: 'mob', position: p, height: 1.95, ...opts }
 }
 
+// Bridge contract: issuing a goal optimistically sets isMoving, even if
+// no position update follows; a later noPath ends that activity. The dry,
+// grounded mob is below the wet actor and outside swing reach (qxql.22).
+function stationaryBridge() {
+  const bot = mockBot()
+  bot.entity.position = pos(81.3, 60, -51.7)
+  const mob = mobEntity(1, 'zombie', 82.23)
+  mob.position.y = 57
+  mob.position.z = -50.46
+  bot.entities = { 1: mob }
+  bot.blockAt = (p) => ({ name: p.y < 57 ? 'stone' : p.y >= 60 ? 'water' : 'air' })
+  let pending = 0
+  const recordGoal = bot.pathfinder.setGoal
+  bot.pathfinder.setGoal = (goal) => {
+    recordGoal(goal)
+    bot.pathfinder.goal = goal
+    bot._moving = !!goal
+    pending = goal ? 2 : 0
+  }
+  return {
+    bot, mob,
+    pulse(ticker) {
+      if (pending > 0 && --pending === 0) {
+        bot._moving = false
+        if (ticker) ticker.setPathStatus('noPath')
+      }
+    },
+    goals: () => bot.calls.goals.filter((g) => g && g.entity === mob).length
+  }
+}
+
+describe('observed pursuit progress (qxql.22)', () => {
+  it('bounds stationary optimistic goal/noPath activity and retires the live work-mode goal', () => {
+    const { bot, mob, pulse, goals } = stationaryBridge()
+    const ctx = { lastGoalKey: '' }
+    for (let t = 0; t < 240; t++) {
+      fight(bot, ctx, null, { hostile: mob })
+      pulse()
+    }
+    assert.equal(ctx.fightGivenUpId, mob.id)
+    assert.equal(ctx.fightPursuit, 19)
+    assert.equal(goals(), 4, 'initial goal plus three spaced retries, then quiet')
+    assert.equal(bot.pathfinder.goal, null)
+    assert.equal(bot._moving, false)
+    assert.equal(bot.calls.attack, 0)
+  })
+
+  it('same-position recovery releases cannot renew the active pursuit budget', () => {
+    const recover = require('../src/behaviours/recover')
+    const { bot, mob, pulse, goals } = stationaryBridge()
+    const ctx = { lastGoalKey: '' }
+    for (let t = 0; t < 20; t++) {
+      if (t > 0 && t % 5 === 0) {
+        recover.setStuck(ctx, 'fight', mob.position, 'fight:1')
+        ctx.recovery = { action: 'dig_step', status: 'done' }
+        recover.release(bot, ctx, 'done')
+        assert.equal(ctx.lastGoalKey, '')
+        assert.equal(ctx.recovery, null)
+      }
+      fight(bot, ctx, null, { hostile: mob })
+      pulse()
+    }
+    assert.equal(ctx.fightGivenUpId, mob.id)
+    assert.equal(ctx.fightPursuit, 19)
+    assert.ok(goals() <= 7, `re-entry caused ${goals()} pursuit goals`)
+  })
+
+  it('observed approach and sideways detours replenish the budget even when noPath says stopped', () => {
+    for (const [axis, moving] of [['x', false], ['z', false], ['x', true], ['z', true]]) {
+      const bot = mockBot()
+      bot._moving = moving
+      const mob = mobEntity(1, 'zombie', 8)
+      const ctx = { lastGoalKey: '' }
+      fight(bot, ctx, null, { hostile: mob })
+      for (let leg = 0; leg < 4; leg++) {
+        for (let t = 0; t < 16; t++) fight(bot, ctx, null, { hostile: mob })
+        bot.entity.position[axis] += 0.6 // mutate the live Vec3, as snapshots may do
+        fight(bot, ctx, null, { hostile: mob })
+        assert.equal(ctx.fightPursuit, 0, axis)
+        assert.equal(ctx.fightGivenUpId, null, axis)
+      }
+      for (let t = 0; t < 19; t++) fight(bot, ctx, null, { hostile: mob })
+      assert.equal(ctx.fightGivenUpId, mob.id, 'a later stall still has a bound')
+    }
+  })
+
+  it('re-entry preserves retry spacing without resetting the pursuit budget', () => {
+    const { bot, mob, pulse, goals } = stationaryBridge()
+    const ctx = { lastGoalKey: '' }
+    for (let t = 0; t < 5; t++) { fight(bot, ctx, null, { hostile: mob }); pulse() }
+    require('../src/behaviours/util').clearGoal(bot, ctx)
+    fight(bot, ctx, null, { hostile: mob }) // re-enter at spent tick 5
+    pulse()
+    assert.equal(goals(), 2)
+    for (let t = 0; t < 5; t++) { fight(bot, ctx, null, { hostile: mob }); pulse() }
+    assert.equal(goals(), 2, 'a fresh search gets the entire retry allowance')
+    fight(bot, ctx, null, { hostile: mob })
+    assert.equal(goals(), 3)
+    assert.equal(ctx.fightPursuit, 11)
+  })
+
+  it('small position jitter and target motion do not masquerade as body progress', () => {
+    const { bot, mob, pulse } = stationaryBridge()
+    const ctx = { lastGoalKey: '' }
+    for (let t = 0; t < 20; t++) {
+      bot.entity.position.x = 81.3 + (t % 2) * 0.1
+      mob.position.x = 82.23 + (t % 2) * 0.2
+      fight(bot, ctx, null, { hostile: mob })
+      pulse()
+    }
+    assert.equal(ctx.fightGivenUpId, mob.id)
+  })
+
+  it('a new target and a disappeared target start fresh pursuit histories', () => {
+    const bot = mockBot()
+    const ctx = { lastGoalKey: '' }
+    const a = mobEntity(1, 'zombie', 6)
+    for (let t = 0; t < 18; t++) fight(bot, ctx, null, { hostile: a })
+    const b = mobEntity(2, 'zombie', 6)
+    fight(bot, ctx, null, { hostile: b })
+    assert.equal(ctx.fightPursuit, 0)
+    for (let t = 0; t < 17; t++) fight(bot, ctx, null, { hostile: b })
+    fight(bot, ctx, null, { hostile: null })
+    fight(bot, ctx, null, { hostile: b })
+    assert.equal(ctx.fightPursuit, 0)
+    assert.equal(ctx.fightGivenUpId, null)
+  })
+
+  it('the real ticker yields after optimistic activity, waits 30 ticks, then grants a bounded reprobe', async () => {
+    const { bot, mob, pulse, goals } = stationaryBridge()
+    mob.position.x = 85.23 // keep the mob >6 blocks from the resting player
+    // Just outside the brain's follow radius but within GoalFollow's
+    // floored radius: the cooldown can rest, rather than start a separate
+    // stationary player-follow recovery while we measure the reprobe.
+    const player = playerEntity(78.1)
+    player.position.y = 60
+    player.position.z = -51.7
+    bot.players = { Steve: { username: 'Steve', entity: player } }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    const tick = async () => {
+      const result = await ticker.tick()
+      pulse(ticker)
+      return result
+    }
+    try {
+      for (let t = 0; t < 20; t++) assert.equal((await tick()).decision.action, 'fight')
+      assert.equal(bot._tickerCtx.fightGivenUpId, mob.id)
+      assert.equal(goals(), 4)
+      for (let t = 0; t < 29; t++) assert.equal((await tick()).decision.action, 'follow')
+      assert.equal(goals(), 4)
+      assert.equal((await tick()).decision.action, 'fight')
+      assert.equal(bot._tickerCtx.fightPursuit, 0, 'reprobe receives the existing full budget')
+      for (let t = 0; t < 19; t++) await tick()
+      assert.equal(bot._tickerCtx.fightGivenUpId, mob.id)
+      assert.equal(goals(), 8)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('ticker recovery ownership pauses pursuit accounting and same-position release resumes it', async () => {
+    const recover = require('../src/behaviours/recover')
+    const { bot, mob, pulse, goals } = stationaryBridge()
+    bot.players = { Steve: { username: 'Steve', entity: playerEntity(100) } }
+    const ticker = createTicker({ bot, brain: stubBrain, tickMs: 10, idleTickMs: 10 })
+    const tick = async () => { const r = await ticker.tick(); pulse(ticker); return r }
+    try {
+      for (let t = 0; t < 10; t++) await tick()
+      const ctx = bot._tickerCtx
+      const spent = ctx.fightPursuit
+      const issued = goals()
+      recover.setStuck(ctx, 'fight', mob.position, 'fight:1')
+      ctx.recovery = { action: 'wait', status: 'running', source: 'fsm' }
+      for (let t = 0; t < 3; t++) {
+        assert.equal((await tick()).decision.action, 'wait')
+        assert.equal(ctx.body.owner, 'recover')
+        assert.equal(ctx.fightPursuit, spent)
+        assert.equal(goals(), issued)
+      }
+      // Model the existing completion contract; this asserts no physical
+      // escape. The real release clears the goal but not pursuit history.
+      ctx.recovery.action = 'dig_step'
+      recover.release(bot, ctx, 'done')
+      for (let t = 0; t < 10; t++) assert.equal((await tick()).decision.action, 'fight')
+      assert.equal(ctx.fightGivenUpId, mob.id)
+      assert.equal(ctx.fightPursuit, 19)
+      assert.ok(goals() <= 5)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('emits terminal attribution once while the pursuit remains latched', (t) => {
+    const lines = []
+    t.mock.method(console, 'log', (line) => lines.push(line))
+    const { bot, mob, pulse } = stationaryBridge()
+    const ctx = { lastGoalKey: '' }
+    for (let n = 0; n < 240; n++) {
+      fight(bot, ctx, null, { hostile: mob })
+      pulse()
+    }
+    assert.equal(lines.length, 1)
+    assert.match(lines[0], /fight pursuit=give-up branch=stationary target=1:zombie .*ticks=19 anchor=81\.30,60\.00,-51\.70 pos=81\.30,60\.00,-51\.70$/)
+  })
+})
+
 describe('perception hostile facts', () => {
   it('finds the nearest zombie: distance, entity, near-player flag', () => {
     const bot = mockBot()
