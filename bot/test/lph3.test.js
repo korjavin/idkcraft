@@ -377,9 +377,13 @@ describe('lph3 ticker: night grace holds fight, shelter digs', () => {
     }
   })
 
-  it('visible player keeps player protection fighting (grace is alone-only)', async () => {
+  it('visible player keeps player protection fighting (mob threatens them)', async () => {
+    // neuc.65.7: protection is threat-based, not presence-based — the mob
+    // must threaten the visible player (within 6, the stub's own near
+    // radius). A zombie on the player keeps fight ticks.
     const bot = graceBot()
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(10, 64, 0), username: 'Steve' } } }
+    bot.entities[3] = zombie(3, 9) // 1 from the player: threatens them
     const ticker = createTicker({ bot, brain: fightBrain(), tickMs: 10, idleTickMs: 10 })
     ticker.work()
     const ctx = bot._tickerCtx

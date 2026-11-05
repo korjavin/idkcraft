@@ -5,8 +5,8 @@
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { Vec3 } = require('vec3')
-const { RETREAT_ORDER, feasibleRetreat, chooseRetreat, retreat, pillar } = require('../src/behaviours/retreat')
-const { hybridBrain } = require('../src/brain')
+const { RETREAT_ORDER, feasibleRetreat, chooseRetreat, retreat, pillar, mobPressure, MOB_CROWD_N, rangedNearCount, retreatFallback } = require('../src/behaviours/retreat')
+const { hybridBrain, stubBrain } = require('../src/brain')
 const { createTicker, BEHAVIOURS } = require('../src/index')
 
 function pos(x, y, z) {
@@ -101,10 +101,489 @@ describe('retreat gates', () => {
     assert.deepEqual(feasibleRetreat(bot, freshCtx(raw), STATE), ['retreat'])
     assert.deepEqual(feasibleRetreat(bot, freshCtx(), { ...STATE, hostile_distance: 10 }), [])
   })
-  it('players online: chain refuses (normal flow owns)', async () => {
+  it('threatened player online: chain refuses (normal flow protects)', async () => {
+    // neuc.65.7: the alone-only gate is threat-based now — a mob within 6 of
+    // the visible player (the stub's near radius) keeps the refusal, so the
+    // normal flow (fight/follow) protects them.
     const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
-    const r = await chooseRetreat(null, bot, freshCtx(), { ...STATE, distance_to_player: 4 })
+    const r = await chooseRetreat(null, bot, freshCtx(), { ...STATE, distance_to_player: 4, hostile_near_player: true })
     assert.equal(r, null)
+  })
+
+  it('visible but unthreatened bystander: chain proceeds (neuc.65.7)', async () => {
+    // The rig puppet watches from 45+ out while the mob chews the bot: the
+    // mob threatens the bot, not the bystander, so the chain runs instead of
+    // deferring to a normal flow that never comes.
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const r = await chooseRetreat(null, bot, freshCtx(), { ...STATE, distance_to_player: 45, hostile_near_player: false })
+    assert.ok(r && r.action === 'retreat', `chain runs past a far bystander, got ${JSON.stringify(r)}`)
+  })
+})
+
+describe('mob pressure predicate (neuc.65.7)', () => {
+  const st = (over) => ({ bot_health: 20, hostile_distance: 5, nearby_hostiles: 1, ...over })
+  const open = { hurtFresh: true, sheltered: false, ordered: false, protectedTarget: false }
+
+  it('ranged hits with no fight fact divert only with a shooter near (revmux 02 core-2)', () => {
+    assert.equal(mobPressure(st({ hostile_distance: null, nearby_hostiles: 2 }), { ...open, rangedNear: 2 }), true)
+  })
+
+  it('hits with no fact and no shooter near do not divert (fall + creeper shape)', () => {
+    // The snap count mixes in creepers/endermen and melee walkers that
+    // fight.js owns — breaking contact blind over a fall or a milling
+    // creeper wastes the escape. Only a nearby shooter justifies it.
+    assert.equal(mobPressure(st({ hostile_distance: null, nearby_hostiles: 2 }), { ...open, rangedNear: 0 }), false)
+  })
+
+  it('a healthy pack diverts (death-3 shape: 6 near, fact live)', () => {
+    assert.equal(mobPressure(st({ nearby_hostiles: 6 }), open), true)
+  })
+
+  it('crowd size follows the H2 pack number', () => {
+    assert.equal(MOB_CROWD_N, 3)
+    assert.equal(mobPressure(st({ nearby_hostiles: 2 }), open), false, 'a pair still fights fair')
+    assert.equal(mobPressure(st({ nearby_hostiles: 3 }), open), true)
+  })
+
+  it('single reachable mob keeps fighting (no divert)', () => {
+    assert.equal(mobPressure(st({ nearby_hostiles: 1 }), open), false)
+  })
+
+  it('no fresh hurt, no divert (old bruises do not route)', () => {
+    assert.equal(mobPressure(st({ nearby_hostiles: 6 }), { ...open, hurtFresh: false }), false)
+    assert.equal(mobPressure(st({ hostile_distance: null, nearby_hostiles: 2 }), { ...open, hurtFresh: false, rangedNear: 2 }), false)
+  })
+
+  it('no hostiles near, no divert', () => {
+    assert.equal(mobPressure(st({ nearby_hostiles: 0 }), open), false)
+  })
+
+  it('shelter, orders and protected players keep their ticks', () => {
+    const hot = st({ nearby_hostiles: 6 })
+    assert.equal(mobPressure(hot, { ...open, sheltered: true }), false)
+    assert.equal(mobPressure(hot, { ...open, ordered: true }), false)
+    assert.equal(mobPressure(hot, { ...open, protectedTarget: true }), false)
+  })
+
+  it('null-safe: missing state or flags never divert', () => {
+    assert.equal(mobPressure(null, open), false)
+    assert.equal(mobPressure(st({ nearby_hostiles: 6 }), null), false)
+    assert.equal(mobPressure(st({ nearby_hostiles: 6 }), {}), false)
+  })
+})
+
+describe('ranged-nearby scan (neuc.65.7 revmux 02 core-2)', () => {
+  function mob(id, name, x, y, z) {
+    return { id, name, type: 'mob', position: pos(x, y, z), isValid: true }
+  }
+
+  it('counts only shooter kinds within 16 (skeleton yes, zombie/creeper/drowned no)', () => {
+    const bot = fieldBot({
+      entities: {
+        1: mob(1, 'skeleton', 14, 64, 0), // shooter at range: counts
+        2: mob(2, 'zombie', 5, 64, 0), // melee walker: fight.js owns it
+        3: mob(3, 'creeper', 6, 64, 0), // snap filler, never shoots
+        4: mob(4, 'drowned', 12, 64, 0), // melee read: no held-item proof of a trident
+        5: mob(5, 'enderman', 10, 64, 0), // snap filler, never shoots
+      },
+    })
+    assert.equal(rangedNearCount(bot), 1)
+  })
+
+  it('counts the full shooter set (pillager/witch/blaze/stray/bogged/ghast)', () => {
+    const bot = fieldBot({
+      entities: {
+        1: mob(1, 'pillager', 15, 64, 0),
+        2: mob(2, 'witch', 15, 64, 1),
+        3: mob(3, 'blaze', 15, 64, 2),
+      },
+    })
+    assert.equal(rangedNearCount(bot), 3)
+  })
+
+  it('ignores beyond-16 shooters, players, and entities without position', () => {
+    const bot = fieldBot({
+      entities: {
+        1: mob(1, 'skeleton', 17, 64, 0), // outside the snap radius
+        2: { id: 2, name: 'skeleton', type: 'player', position: pos(5, 64, 0) },
+        3: { id: 3, name: 'skeleton', type: 'mob', position: null },
+      },
+    })
+    assert.equal(rangedNearCount(bot), 0)
+  })
+
+  it('null-safe: missing bot or entity returns 0', () => {
+    assert.equal(rangedNearCount(null), 0)
+    assert.equal(rangedNearCount({}), 0)
+  })
+})
+
+describe('ranged pillar cap (neuc.65.7 revmux 03 R3-4)', () => {
+  function shooterBot() {
+    return fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: {
+        1: { id: 1, name: 'skeleton', type: 'mob', position: pos(12, 64, 0), isValid: true },
+      },
+      health: 20,
+    })
+  }
+  const home = { site: { x: 10, y: 64, z: 0 }, built: true }
+  const far = { bot_health: 20, hostile_distance: null, nearby_hostiles: 1 }
+
+  it('one rise per column per minute against a still-far shooter', async () => {
+    // A skeleton at 12 keeps hitting across pillar episodes: the first
+    // pick rises, the next picks from the same column must not re-pillar —
+    // one block never breaks archer line of sight, it only spends scaffold.
+    const bot = shooterBot()
+    const ctx = freshCtx(home)
+    const r1 = await chooseRetreat(null, bot, ctx, far)
+    assert.equal(r1 && r1.action, 'pillar', `first pick rises, got ${JSON.stringify(r1)}`)
+    ctx.stepStatus = 'done' // the episode completed: the next divert tick decides fresh (the hold branch would return the running pick)
+    const r2 = await chooseRetreat(null, bot, ctx, far)
+    assert.equal(r2 && r2.action, 'gohome', `second pick from the same column walks, got ${JSON.stringify(r2)}`)
+    ctx.stepStatus = 'done'
+    const r3 = await chooseRetreat(null, bot, ctx, far)
+    assert.equal(r3 && r3.action, 'gohome', `third pick still walks, got ${JSON.stringify(r3)}`)
+  })
+
+  it('cap releases on movement, closing, or age', async () => {
+    const t0 = Date.now()
+    const bot = shooterBot()
+    const ctx = freshCtx(home)
+    assert.equal((await chooseRetreat(null, bot, ctx, far, t0)).action, 'pillar')
+    ctx.stepStatus = 'done' // episode over: decide fresh below
+    bot.entity.position = pos(5.5, 64, 0.5) // walked a block: re-arm
+    assert.equal((await chooseRetreat(null, bot, ctx, far, t0 + 1000)).action, 'pillar')
+    ctx.stepStatus = 'done'
+    bot.entity.position = pos(0.5, 64, 0.5)
+    const ctx2 = freshCtx(home)
+    assert.equal((await chooseRetreat(null, bot, ctx2, far, t0)).action, 'pillar')
+    ctx2.stepStatus = 'done'
+    assert.equal((await chooseRetreat(null, bot, ctx2, far, t0 + 61000)).action, 'pillar', 'minute-old stamp re-arms')
+    const ctx3 = freshCtx(home)
+    assert.equal((await chooseRetreat(null, bot, ctx3, far, t0)).action, 'pillar')
+    ctx3.stepStatus = 'done'
+    assert.equal(
+      (await chooseRetreat(null, bot, ctx3, { ...far, hostile_distance: 4 }, t0 + 1000)).action,
+      'retreat', 'closed to a fact: melee rules, run first'
+    )
+  })
+})
+
+describe('retreat fallback (neuc.65.7 revmux 02 core-3)', () => {
+  it('pillars directly when the chain declines on a live fight', () => {
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const ctx = freshCtx()
+    const r = retreatFallback(bot, ctx, {})
+    assert.deepEqual(r, { action: 'pillar', source: 'retreat-fallback', model: null })
+    assert.equal(ctx.retreat && ctx.retreat.action, 'pillar')
+    assert.equal(ctx.recovery && ctx.recovery.action, 'pillar_up')
+    assert.ok(bot.calls.chats.some((l) => l.includes('retreating: pillaring up (retreat-fallback)')))
+  })
+
+  it('no scaffold, no fallback (pillar-up cannot run)', () => {
+    const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } })
+    assert.ok(!feasibleRetreat(bot, freshCtx(), STATE).includes('pillar'), 'fixture: pillar infeasible')
+    assert.equal(retreatFallback(bot, freshCtx(), {}), null)
+  })
+
+  it('head blocked, no fallback (consistency with the honest gate)', () => {
+    const ground = new Set()
+    for (let x = -4; x <= 4; x++) {
+      for (let z = -4; z <= 4; z++) ground.add(key(x, 63, z))
+    }
+    ground.add(key(0, 65, 0)) // ceiling over the head
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], solids: ground, entities: { 1: zombie(1, 2, 64, 0) } })
+    assert.ok(!feasibleRetreat(bot, freshCtx(), STATE).includes('pillar'), 'fixture: pillar infeasible')
+    assert.equal(retreatFallback(bot, freshCtx(), {}), null)
+  })
+
+  it('threatened player online: the chain veto stands, no fallback', () => {
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const st = { hostile_near_player: true, distance_to_player: 4 }
+    assert.equal(retreatFallback(bot, freshCtx(), st), null)
+  })
+
+  it('a failed pillar re-arms the chain instead of looping the fallback', () => {
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], entities: { 1: zombie(1, 2, 64, 0) } })
+    const ctx = freshCtx()
+    ctx.retreatFailed = 'pillar'
+    assert.equal(retreatFallback(bot, ctx, {}), null)
+  })
+})
+
+describe('mob pressure end to end (neuc.65.7)', () => {
+  function drowned(id, x, y, z) {
+    return { id, name: 'drowned', type: 'mob', position: pos(x, y, z), isValid: true }
+  }
+
+  function fightMock() {
+    return { async decide() { return { action: 'fight', sprint: false, source: 'stub' } } }
+  }
+
+  function pressuredTicker(bot) {
+    const ticker = createTicker({ bot, brain: fightMock(), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.home = { built: true, site: { x: 5, y: 64, z: 5 } }
+    ctx.lastHurtAt = Date.now()
+    return { ticker, ctx }
+  }
+
+  it('pack on a healthy bot: runs instead of trading (death-3 shape)', async () => {
+    const bot = fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: { 1: zombie(1, 4, 64, 0), 2: zombie(2, 5, 64, 0), 3: zombie(3, 6, 64, 0) },
+      health: 20,
+    })
+    bot.players = {}
+    const { ticker } = pressuredTicker(bot)
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'retreat', `pack breaks contact, got ${r.decision && r.decision.action}`)
+      assert.ok(bot.calls.chats.some((l) => l.startsWith('retreating: running from the hostile')))
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('ranged hits with no fact: pillars instead of standing (skeleton shape, revmux 02 core-2)', async () => {
+    // Two skeleton archers outside the hostile fact: the ranged shape breaks
+    // contact via pillar. Drowned read melee now (pinned below); their
+    // water-written-off shape routes via underFire, kind-agnostic.
+    const bot = fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: { 1: skeleton(1, 10, 64, 0), 2: skeleton(2, 11, 64, 0) },
+      health: 20,
+    })
+    bot.players = {}
+    const { ticker } = pressuredTicker(bot)
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'pillar', `ranged pressure breaks line of sight, got ${r.decision && r.decision.action}`)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('empty chain on a live fight fights explicitly instead of working (revmux 03 R3-1)', async () => {
+    // A pack at 7-8 blocks with no scaffold and no near home: the chain is
+    // empty, so the old fall-through let goal.decide pick forage and the
+    // bot chopped while the pack closed. No escape feasible means fight.
+    const bot = fieldBot({
+      entities: { 1: zombie(1, 7, 64, 0), 2: zombie(2, 8, 64, 0), 3: zombie(3, 8, 64, 1) },
+      health: 20,
+    })
+    bot.players = {}
+    const ticker = createTicker({ bot, brain: fightMock(), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.home = null // no home in range: gohome infeasible, chain empty
+    ctx.lastHurtAt = Date.now()
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    const origLog = console.log
+    const logged = []
+    console.log = (l) => { logged.push(String(l)) }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight', `no escape feasible must fight, got ${r.decision && r.decision.action}`)
+      assert.equal(fightRan, 1, 'the brain fight runs instead of goal work')
+      assert.ok(logged.some((l) => l.includes('retreat none feasible')), `explicit-fight logged, got: ${logged.join(' | ')}`)
+    } finally {
+      BEHAVIOURS.fight = origFight
+      console.log = origLog
+      ticker.destroy()
+    }
+  })
+
+  it('declined chain falls back to pillar on a live fight (revmux 02 core-3)', async () => {
+    // A pack the model declines to escape: the old code fell through to
+    // goal.decide and the bot died standing. A wrong pillar costs ticks; a
+    // wrong stand costs the bot — bias to action when scaffold stands.
+    const bot = fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: { 1: zombie(1, 4, 64, 0), 2: zombie(2, 5, 64, 0), 3: zombie(3, 6, 64, 0) },
+      health: 20,
+    })
+    bot.players = {}
+    const declining = {
+      async decide() { return { action: 'fight', sprint: false, source: 'stub' } },
+      async ask() { return 'no' },
+    }
+    const ticker = createTicker({ bot, brain: declining, tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    const ctx = bot._tickerCtx
+    ctx.home = { built: true, site: { x: 5, y: 64, z: 5 } }
+    ctx.lastHurtAt = Date.now()
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'pillar', `declined chain must bias to pillar, got ${r.decision && r.decision.action}`)
+      assert.ok(bot.calls.chats.some((l) => l.includes('retreating: pillaring up (retreat-fallback)')), `fallback chatted, got: ${bot.calls.chats.join(' | ')}`)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  function skeleton(id, x, y, z) {
+    return { id, name: 'skeleton', type: 'mob', position: pos(x, y, z), isValid: true }
+  }
+
+  it('pillar first vs ranged attackers (leg-1 death 4: run dies in the open)', async () => {
+    // A skeleton pack at dusk: the owner-order run pick jogs in the open
+    // under arrows and dies. Pillar breaks line of sight first when the
+    // scaffold stands; melee keeps the run-first order (pinned below).
+    const bot = fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: { 1: skeleton(1, 4, 64, 0), 2: skeleton(2, 5, 64, 0) },
+      health: 20,
+    })
+    bot.players = {}
+    const ctx = freshCtx()
+    ctx.lastHurtAt = Date.now()
+    const r = await chooseRetreat(null, bot, ctx, { bot_health: 20, hostile_distance: 4, nearby_hostiles: 2 })
+    assert.equal(r && r.action, 'pillar', `ranged nearest pillars first, got ${JSON.stringify(r)}`)
+  })
+
+  it('melee keeps the run-first order (no pillar regression)', async () => {
+    const bot = fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: { 1: zombie(1, 4, 64, 0), 2: zombie(2, 5, 64, 0) },
+      health: 20,
+    })
+    bot.players = {}
+    const ctx = freshCtx()
+    ctx.lastHurtAt = Date.now()
+    const r = await chooseRetreat(null, bot, ctx, { bot_health: 20, hostile_distance: 4, nearby_hostiles: 2 })
+    assert.equal(r && r.action, 'retreat', `melee nearest still runs first, got ${JSON.stringify(r)}`)
+  })
+
+  it('ambiguous drowned reads melee (trident unknown, run stays)', async () => {
+    // A drowned may melee or throw; without a held-item read the chain
+    // must not assume archers and strand a winnable run behind a pillar.
+    const bot = fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: { 1: drowned(1, 4, 64, 0), 2: drowned(2, 5, 64, 0) },
+      health: 20,
+    })
+    bot.players = {}
+    const ctx = freshCtx()
+    ctx.lastHurtAt = Date.now()
+    const r = await chooseRetreat(null, bot, ctx, { bot_health: 20, hostile_distance: 4, nearby_hostiles: 2 })
+    assert.equal(r && r.action, 'retreat', `drowned keeps run-first, got ${JSON.stringify(r)}`)
+  })
+})
+
+describe('low-hp divert (neuc.65.7 leg-1 deaths 1-3)', () => {
+  function stubTicker(bot) {
+    const brain = { async decide(state) { return stubBrain.decide(state) } }
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    return ticker
+  }
+
+  it('single mob grinding a weak bot diverts to the chain (1v1 losses)', async () => {
+    // Leg-1 deaths 1-2: one zombie each, no crowd, no ranged shape — the
+    // stub idles at hp<6 and the arbiter keeps working (dies standing).
+    // The revived 1tj trigger breaks contact instead.
+    const bot = fieldBot({
+      entities: { 1: zombie(1, 2, 64, 0) },
+      health: 5,
+    })
+    bot.players = {}
+    const ticker = stubTicker(bot)
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'retreat', `weak bot breaks contact, got ${r.decision && r.decision.action}`)
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('low-hp non-fight tick falls back when the chain declines (stub is silent, revmux 02 core-3)', async () => {
+    // hp<6 with a hostile fact that the stub cannot voice: the brain rests
+    // while the mob chews. A declined chain must still bias to pillar —
+    // the fallback treats lowHp like a live fight.
+    const bot = fieldBot({
+      items: [{ name: 'dirt', count: 5 }],
+      entities: { 1: zombie(1, 2, 64, 0) },
+      health: 5,
+    })
+    bot.players = {}
+    const declining = {
+      async decide() { return { action: 'rest', sprint: false, source: 'stub' } },
+      async ask() { return 'no' },
+    }
+    const ticker = createTicker({ bot, brain: declining, tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'pillar', `silent weak bot must bias to pillar, got ${r.decision && r.decision.action}`)
+      assert.ok(bot.calls.chats.some((l) => l.includes('retreating: pillaring up (retreat-fallback)')))
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('low-hp empty chain with a silent stub fights instead of gathering (revmux 03 R3-1)', async () => {
+    // hp 5 with a live fact at 7 (retreat needs <=6), no scaffold, no home:
+    // the chain is empty and the stub is silent, so goal.decide picked
+    // gather and the bot chopped while chewed. The divert already decided
+    // this tick is combat — fight explicitly.
+    const bot = fieldBot({
+      entities: { 1: zombie(1, 7, 64, 0) },
+      health: 5,
+    })
+    bot.players = {}
+    const restBrain = { async decide() { return { action: 'rest', sprint: false, source: 'stub' } } }
+    const ticker = createTicker({ bot, brain: restBrain, tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    const origFight = BEHAVIOURS.fight
+    let fightRan = 0
+    BEHAVIOURS.fight = () => { fightRan++ }
+    try {
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, 'fight', `weak chewed bot must fight, got ${r.decision && r.decision.action}`)
+      assert.equal(fightRan, 1, 'the synthetic fight runs instead of goal work')
+    } finally {
+      BEHAVIOURS.fight = origFight
+      ticker.destroy()
+    }
+  })
+
+  it('threatened player keeps protection (no divert off the bodyguard)', async () => {
+    const bot = fieldBot({
+      entities: { 1: zombie(1, 2, 64, 0), 2: zombie(2, 9, 64, 0) },
+      health: 5,
+    })
+    bot.players = { P: { username: 'P', entity: { position: pos(10, 64, 0) } } }
+    const ticker = stubTicker(bot)
+    try {
+      const r = await ticker.tick()
+      assert.notEqual(r.decision && r.decision.action, 'retreat', 'protection owns the tick')
+      assert.notEqual(r.decision && r.decision.action, 'pillar', 'protection owns the tick')
+    } finally {
+      ticker.destroy()
+    }
+  })
+
+  it('explicit order keeps its tick at low hp (no divert off an errand)', async () => {
+    const bot = fieldBot({
+      entities: { 1: zombie(1, 2, 64, 0) },
+      health: 5,
+    })
+    bot.players = {}
+    const ticker = stubTicker(bot)
+    bot._tickerCtx.lead = { name: 'Steve' }
+    try {
+      const r = await ticker.tick()
+      assert.notEqual(r.decision && r.decision.action, 'retreat', 'orders own their ticks')
+      assert.notEqual(r.decision && r.decision.action, 'pillar', 'orders own their ticks')
+    } finally {
+      ticker.destroy()
+    }
   })
 })
 
@@ -367,8 +846,12 @@ describe('veto path ownership (live 1tj)', () => {
 })
 
 describe('goal shortcut (live 1tj follow-up)', () => {
-  it('lapsed veto holds the latched leg, then re-decides past expiry', async () => {
+  it('lapsed low-hp divert holds the latched leg, then re-decides past expiry', async () => {
     // No dirt: the chain can only pick retreat (no asks anywhere).
+    // neuc.65.7: the veto-gated entry is subsumed by the low-hp divert —
+    // a weak bot with a live fact retreats on tick 0 instead of idling
+    // one more tick into the same zombie. Latch, hold and release below
+    // are unchanged.
     const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) }, health: 3 })
     bot.players = {}
     const decides = ['idle', 'follow', 'idle', 'idle']
@@ -388,11 +871,12 @@ describe('goal shortcut (live 1tj follow-up)', () => {
     const brain = hybridBrain(remote)
     const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10, autonomous: true })
     ticker.work()
-    // Tick 0: model idle (no veto) -> goal arbiter sets its text and step.
-    // HP drifts 3->4->5 across ticks (same veto window, same key bucket):
-    // the ticker caches identical states, so each tick needs fresh facts.
+    // Tick 0: hp 3 + adjacent zombie: the low-hp divert fires at once
+    // (the old veto path idled this tick and died standing).
+    // HP drifts 3->4->5 across ticks (same key bucket): the ticker caches
+    // identical states, so each tick needs fresh facts.
     const r0 = await ticker.tick()
-    assert.ok(r0.decision.action !== 'retreat')
+    assert.equal(r0.decision.action, 'retreat')
     // Tick 1: model follow -> veto -> only-option retreat pick, owns the step.
     bot.health = 4
     const r1 = await ticker.tick()
@@ -403,8 +887,10 @@ describe('goal shortcut (live 1tj follow-up)', () => {
     bot.health = 5
     const r2 = await ticker.tick()
     assert.equal(r2.decision.action, 'retreat')
-    // Tick 3: past latch expiry the arbiter re-decides (the 1tj release
-    // property), never re-issues the stale leg.
+    // Tick 3: hp recovered past release (8+) with the latch expired: the
+    // arbiter re-decides (the 1tj release property), never re-issues the
+    // stale leg. At hp 5 the divert would (rightly) re-latch instead.
+    bot.health = 9
     bot._tickerCtx.retreatLatch.until = Date.now() - 1
     const r3 = await ticker.tick()
     assert.ok(r3.decision.action !== 'retreat', `expired latch re-issued retreat: ${r3.decision.action}`)
@@ -657,7 +1143,7 @@ describe('taking-fire retreat (0ay)', () => {
     }
   })
 
-  it('hurt + unreachable + visible player: no retreat (alone-only, like the veto leg)', async () => {
+  it('hurt + unreachable + threatened player: no retreat (protection owns the tick)', async () => {
     const bot = fireBot(20)
     bot.players = { P: { username: 'P', entity: { position: pos(10, 64, 0) } } }
     const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
@@ -749,18 +1235,19 @@ describe('taking-fire retreat (0ay)', () => {
     ticker.destroy()
   })
 
-  it('hurt + reachable + idle at low hp: no retreat (reachability gates)', async () => {
-    // Hard route (hp<6 + hostile fact) with an idle model: decision idle
-    // reaches the work block, so only the reachable===false conjunct stands
-    // between this tick and a retreat — deleting it fails this test.
+  it('weak + reachable + idle at low hp: low-hp divert retreats (revived 1tj)', async () => {
+    // neuc.65.7 leg-1 deaths 1-3: a single reachable mob grinds a weak bot
+    // 20->0 while the stub idles (hp<6) and the arbiter keeps working it to
+    // death — no crowd, no ranged shape, so mobPress never fires either.
+    // The revived 1tj trigger breaks contact instead of standing down.
     const bot = fireBot(5)
     const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
     ticker.work()
     await ticker.tick()
     bot.health = 4 // drop stamps, but the mob was never written off
     const r = await ticker.tick()
-    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
-    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no log for reachable fire')
+    assert.equal(r.decision.action, 'retreat', `weak bot breaks contact, got ${r.decision.action}`)
+    assert.ok(logs.some((l) => l.includes('low-hp:')), 'low-hp edge logged')
     ticker.destroy()
   })
 
