@@ -11,6 +11,7 @@ const blueprint = require('../src/castle')
 const castle = require('../src/behaviours/castle')
 const { protectedReason } = require('../src/behaviours/util')
 const { BEHAVIOURS } = require('../src/index')
+const goal = require('../src/goal')
 
 const SITE = { x: 100, y: 64, z: 200 }
 const EMPTY = new Set(['air', 'torch', 'wall_torch'])
@@ -1076,7 +1077,7 @@ describe('g0z.2 castle protection', () => {
 
 describe('g0z.44 post-complete band sweep', () => {
   const LAID2 = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', fence: 'oak_fence', door: 'oak_door', torch: 'torch', chest: 'chest' }
-  it('qxql.23 clears the last grass-filled moat cell through the complete-castle executor', async () => {
+  for (const partialDecor of [false, true]) it(`qxql.23 clears the last grass-filled moat cell with ${partialDecor ? 'partial decor stock' : 'no materials'}`, async () => {
     const site = { x: -326, y: 119, z: 77 }
     const st = { site, rot: 2, blueprintVersion: 3, phase: 'complete', blocked: {} }
     const world = makeWorld()
@@ -1084,13 +1085,19 @@ describe('g0z.44 post-complete band sweep', () => {
     const laid = { ...LAID2, stairs: 'cobblestone_stairs' }
     for (const c of plan) world.set(c.x, c.y, c.z, laid[c.kind] || 'air')
     const decor = { pane: 'glass_pane', banner: 'white_wall_banner', fence: 'oak_fence', bookshelf: 'bookshelf', enchanting_table: 'enchanting_table', blast_furnace: 'blast_furnace', gate: 'oak_fence_gate' }
-    for (const c of blueprint.decorPlan(site, 2, 3).cells) world.set(c.x, c.y, c.z, decor[c.kind])
+    for (const c of blueprint.decorPlan(site, 2, 3).cells) world.set(c.x, c.y, c.z, partialDecor && c.kind === 'fence' ? 'air' : decor[c.kind])
     const target = plan.find((c) => c.idx === 1852)
     assert.deepEqual([target.x, target.y, target.z, target.kind], [-308, 117, 100, 'dig'])
     world.set(target.x, target.y, target.z, 'grass_block')
     world.set(target.x, target.y - 1, target.z, 'cobblestone')
-    const bot = mockBot(world, { items: [] })
+    const bot = mockBot(world, { items: partialDecor ? [{ name: 'oak_fence', count: 8 }] : [] })
     bot.entity.position = { x: site.x, y: site.y, z: site.z }
+    bot.time = { timeOfDay: 6000, day: 1 }
+    bot.health = 20
+    bot.food = 20
+    bot.entities = {}
+    bot.registry = { blocksByName: {}, itemsByName: {} }
+    bot.findBlocks = () => []
     const raw = bot.blockAt
     const at = blueprint.absPlan(site, 2, 3).at
     bot.blockAt = (p) => {
@@ -1103,7 +1110,9 @@ describe('g0z.44 post-complete band sweep', () => {
     const totals = () => Object.values(castle.progressByKind(bot, st)).reduce((a, v) => ({ done: a.done + v.done, total: a.total + v.total }), { done: 0, total: 0 })
     assert.deepEqual(totals(), { done: 2047, total: 2048 })
     const word = castle.menuFact(bot, ctx)
-    await run(bot, ctx, 20)
+    assert.equal(goal.goalFacts(bot, ctx).castle, 'clear')
+    assert.equal((await goal.decide(bot, ctx)).action, 'castle')
+    for (let i = 0; i < 20 && !bot.calls.digs.length; i++) await run(bot, ctx, 1)
     assert.equal(word, 'clear')
     assert.equal(world.get(target.x, target.y, target.z), 'air')
     assert.deepEqual(bot.calls.digs, [{ x: target.x, y: target.y, z: target.z }])

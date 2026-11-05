@@ -1444,21 +1444,29 @@ function menuFact(bot, ctx, now = Date.now()) {
         // dry (g0z.49: the whole dry set is skipped, so an empty pane
         // stock never locks the chest banners — or the attic shelves —
         // out, and dry legs never ping-pong past the fence row).
-        // Band sweep (g0z.44): between the two — held decor still wins, but
-        // a dry decor word never hides workable band litter (and litter
-        // never hides decor).
+        // Held decor wins when its word can start or continue castle work.
+        // A partial batch cannot start a castle leg, so first offer the
+        // sweep that the executor would perform before decorating anyway.
         const open = decorOpen(bot, st, now)
         const heldCell = open.find((c) => usable(bot, c.kind, ctx) > 0)
+        let heldWord = null
         if (heldCell) {
           const kind = heldCell.kind
           const left = open.filter((c) => c.kind === kind).length
-          ctx.castleWord = { kind, left }
-          return stockWord(bot, kind, left)
+          heldWord = { kind, left, word: stockWord(bot, kind, left) }
+          if (!heldWord.word.endsWith('-some') || (ctx.step === 'castle' && ctx.stepStatus === 'running')) {
+            ctx.castleWord = { kind, left }
+            return heldWord.word
+          }
         }
         if (nextLitter(st, litterTargets(bot, ctx, st, now), now, bot) ||
           (nextFill(st, fillTargets(bot, ctx, st, now), now) && fillItem(bot, ctx))) {
           ctx.castleWord = { word: 'clear' }
           return 'clear'
+        }
+        if (heldWord) {
+          ctx.castleWord = { kind: heldWord.kind, left: heldWord.left }
+          return heldWord.word
         }
         if (open.length > 0) {
           const dry = dryKinds(ctx)
