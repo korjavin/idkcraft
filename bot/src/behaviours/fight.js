@@ -21,6 +21,9 @@ const SWING_RANGE = 3
 // swings if the mob walks into range.
 const RETRY_EVERY_TICKS = 6
 const GIVE_UP_TICKS = 18
+// Ignore snapshot jitter, but allow a real detour to replenish the budget:
+// getting around an obstacle need not reduce straight-line target distance.
+const PROGRESS_BLOCKS = 0.5
 // ponytail: hysteresis margin (blocks). A newcomer this much nearer than
 // the incumbent wins immediately.
 const STICKY_MARGIN_BLOCKS = 2
@@ -33,6 +36,8 @@ function fight(bot, ctx, target, state) {
   if (!hostile || hostile.isValid === false) {
     ctx.fightId = null
     ctx.fightGivenUpId = null
+    ctx.fightProgress = null
+    ctx.fightPursuit = 0
     // No visible mob but the brain said fight (e.g. a remote model answering
     // fight on hostile_distance=none): delegate to follow.js — one follow
     // implementation. Never call bot.pathfinder.stop() in the same tick as
@@ -61,7 +66,7 @@ function fight(bot, ctx, target, state) {
       if (!ctx.reflexSwung) swing(bot, hostile)
       return
     }
-    if (wet || FLYERS.has(hostile.name)) ctx.fightGivenUpId = hostile.id
+    if (wet || FLYERS.has(hostile.name)) giveUp(bot, ctx, hostile, wet ? 'wet' : 'airborne')
     follow(bot, ctx, target, state)
     return
   }
@@ -73,33 +78,46 @@ function fight(bot, ctx, target, state) {
     if (inRange) {
       ctx.fightGivenUpId = null
       ctx.fightPursuit = 0
+      ctx.fightProgress = { id: hostile.id, pos: bot.entity.position.clone() }
       if (!ctx.reflexSwung) swing(bot, hostile)
     } else {
       follow(bot, ctx, target, state)
     }
     return
   }
-  if (key !== ctx.lastGoalKey) {
-    issueGoal(bot, ctx, new goals.GoalFollow(hostile, 2), key, true)
+  // A goal request (including the bridge's optimistic isMoving=true) is
+  // not body progress. Keep the anchor across retries and recovery release,
+  // which clears lastGoalKey even when the actor returns to the same spot.
+  // Only the ticker clears an exhausted target's latch for a timed reprobe;
+  // passing the latch branch above with a spent counter starts that budget.
+  const progress = ctx.fightProgress
+  const here = bot.entity.position
+  const moved = progress && (Math.hypot(here.x - progress.pos.x, here.z - progress.pos.z) >= PROGRESS_BLOCKS ||
+    (bot.entity.onGround !== false && Math.floor(here.y) !== Math.floor(progress.pos.y)))
+  if (!progress || progress.id !== hostile.id || ctx.fightPursuit > GIVE_UP_TICKS ||
+      inRange || moved) {
+    ctx.fightProgress = { id: hostile.id, pos: bot.entity.position.clone() }
     ctx.fightPursuit = 0
     ctx.fightGivenUpId = null
-    equipGear(bot)
-  } else if (!inRange) {
-    if (bot.pathfinder.isMoving()) {
-      ctx.fightPursuit = 0 // progress: a later stall gets a fresh budget
-    } else {
-      ctx.fightPursuit = (ctx.fightPursuit || 0) + 1
-      if (ctx.fightPursuit > GIVE_UP_TICKS) {
-        ctx.fightGivenUpId = hostile.id
-        follow(bot, ctx, target, state)
-        return
-      }
-      if (ctx.fightPursuit % RETRY_EVERY_TICKS === 0) {
-        bot.pathfinder.setGoal(new goals.GoalFollow(hostile, 2), true)
-      }
-    }
   } else {
-    ctx.fightPursuit = 0
+    ctx.fightPursuit = (ctx.fightPursuit || 0) + 1
+    if (ctx.fightPursuit > GIVE_UP_TICKS) {
+      giveUp(bot, ctx, hostile, 'stationary')
+      // follow(null) does nothing in work mode: retire our own live goal
+      // here so the abandoned pursuit cannot keep driving the body.
+      if (ctx.lastGoalKey === key) clearGoal(bot, ctx)
+      follow(bot, ctx, target, state)
+      return
+    }
+  }
+  if (key !== ctx.lastGoalKey) {
+    issueGoal(bot, ctx, new goals.GoalFollow(hostile, 2), key, true)
+    ctx.fightProgress.issuedAt = ctx.fightPursuit
+    equipGear(bot)
+  } else if (!inRange && ctx.fightPursuit > 0 &&
+      ctx.fightPursuit - (ctx.fightProgress.issuedAt || 0) >= RETRY_EVERY_TICKS && !bot.pathfinder.isMoving()) {
+    bot.pathfinder.setGoal(new goals.GoalFollow(hostile, 2), true)
+    ctx.fightProgress.issuedAt = ctx.fightPursuit
   }
   // Same-tick reflex guard: the reflex already swung (at any mob — it hits
   // the nearest while fight may hold a sticky incumbent), so a second
@@ -107,6 +125,16 @@ function fight(bot, ctx, target, state) {
   if (inRange && !ctx.reflexSwung) {
     swing(bot, hostile)
   }
+}
+
+// One attribution per terminal transition, never per tick while latched.
+function giveUp(bot, ctx, hostile, branch) {
+  if (branch === 'stationary' && ctx.fightGivenUpId !== hostile.id) {
+    const at = (p) => p ? `${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}` : 'none'
+    const progress = ctx.fightProgress
+    console.log(`fight pursuit=give-up branch=${branch} target=${hostile.id}:${hostile.name} targetPos=${at(hostile.position)} ticks=${ctx.fightPursuit || 0} anchor=${at(progress && progress.id === hostile.id ? progress.pos : null)} pos=${at(bot.entity.position)}`)
+  }
+  ctx.fightGivenUpId = hostile.id
 }
 
 // Stay on the current target while it is still a fight candidate: perception
