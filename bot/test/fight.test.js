@@ -173,6 +173,27 @@ describe('observed pursuit progress (qxql.22)', () => {
     assert.equal(ctx.fightGivenUpId, mob.id)
   })
 
+  it('airborne bobbing cannot renew pursuit, while a grounded floor change can', () => {
+    const { bot, mob, pulse } = stationaryBridge()
+    const ctx = { lastGoalKey: '' }
+    for (let t = 0; t < 20; t++) {
+      bot.entity.position.y = t % 2 ? 60.7 : 60
+      bot.entity.onGround = t % 2 === 0
+      fight(bot, ctx, null, { hostile: mob })
+      pulse()
+    }
+    assert.equal(ctx.fightGivenUpId, mob.id)
+
+    const climb = stationaryBridge()
+    const climbCtx = { lastGoalKey: '' }
+    for (let t = 0; t < 18; t++) fight(climb.bot, climbCtx, null, { hostile: climb.mob })
+    climb.bot.entity.position.y = 61
+    climb.bot.entity.onGround = true
+    fight(climb.bot, climbCtx, null, { hostile: climb.mob })
+    assert.equal(climbCtx.fightPursuit, 0)
+    assert.equal(climbCtx.fightGivenUpId, null)
+  })
+
   it('a new target and a disappeared target start fresh pursuit histories', () => {
     const bot = mockBot()
     const ctx = { lastGoalKey: '' }

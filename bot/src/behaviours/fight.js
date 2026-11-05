@@ -91,8 +91,11 @@ function fight(bot, ctx, target, state) {
   // Only the ticker clears an exhausted target's latch for a timed reprobe;
   // passing the latch branch above with a spent counter starts that budget.
   const progress = ctx.fightProgress
+  const here = bot.entity.position
+  const moved = progress && (Math.hypot(here.x - progress.pos.x, here.z - progress.pos.z) >= PROGRESS_BLOCKS ||
+    (bot.entity.onGround !== false && Math.floor(here.y) !== Math.floor(progress.pos.y)))
   if (!progress || progress.id !== hostile.id || ctx.fightPursuit > GIVE_UP_TICKS ||
-      inRange || bot.entity.position.distanceTo(progress.pos) >= PROGRESS_BLOCKS) {
+      inRange || moved) {
     ctx.fightProgress = { id: hostile.id, pos: bot.entity.position.clone() }
     ctx.fightPursuit = 0
     ctx.fightGivenUpId = null
@@ -126,7 +129,7 @@ function fight(bot, ctx, target, state) {
 
 // One attribution per terminal transition, never per tick while latched.
 function giveUp(bot, ctx, hostile, branch) {
-  if (ctx.fightGivenUpId !== hostile.id) {
+  if (branch === 'stationary' && ctx.fightGivenUpId !== hostile.id) {
     const at = (p) => p ? `${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}` : 'none'
     const progress = ctx.fightProgress
     console.log(`fight pursuit=give-up branch=${branch} target=${hostile.id}:${hostile.name} targetPos=${at(hostile.position)} ticks=${ctx.fightPursuit || 0} anchor=${at(progress && progress.id === hostile.id ? progress.pos : null)} pos=${at(bot.entity.position)}`)
