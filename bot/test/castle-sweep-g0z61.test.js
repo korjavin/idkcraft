@@ -138,6 +138,40 @@ describe('g0z.61 scaffoldShape', () => {
     assert.ok(has(list, dig.x, dig.y, dig.z), 'moat fill listed')
     assert.equal(list.length, 1, 'nothing else')
   })
+  it('qxql.23 revalidates grass only in planned moat cells and keeps the existing guards', () => {
+    const cells = painted()
+    const dig = blueprint.absPlan(SITE, 0, V).cells.find((c) => c.kind === 'dig' && c.dy === -2)
+    const k = key(dig.x, dig.y, dig.z)
+    const off = key(SITE.x - 8, SITE.y, SITE.z + 5)
+    cells.set(off, 'grass_block')
+    cells.set(k, 'dirt')
+    const bot = worldBot(cells)
+    const ctx = { castle: st3() }
+    let list = pass(bot, ctx, 1000)
+    const target = list.find((c) => key(c.x, c.y, c.z) === k)
+    assert.ok(target)
+    cells.set(k, 'grass_block')
+    list = castle.litterTargets(bot, ctx, ctx.castle, 2000)
+    assert.ok(has(list, dig.x, dig.y, dig.z), 'dirt-to-grass remains eligible on revalidation')
+    assert.ok(!list.some((c) => key(c.x, c.y, c.z) === off), 'off-plan grass stays')
+    bot.players.owner = { entity: { position: { x: dig.x, y: dig.y, z: dig.z } } }
+    assert.equal(castle.nextLitter(ctx.castle, list, 2000, bot), null)
+    assert.deepEqual(ctx.castle.blocked, {}, 'player deferral adds no strike')
+    delete bot.players.owner
+    const blockedKey = `3:${target.idx}`
+    ctx.castle.blocked[blockedKey] = { tries: castle.LITTER_MAX_TRIES, retired: true, why: 'dig-refused' }
+    const restarted = { castle: st3({ blocked: ctx.castle.blocked }) }
+    assert.equal(castle.nextLitter(restarted.castle, pass(bot, restarted, 3000), 3000, bot), null)
+    assert.equal(restarted.castle.blocked[blockedKey].retired, true)
+    for (const name of ['red_bed', 'chest', 'cobblestone_stairs']) {
+      cells.set(k, name)
+      assert.ok(!has(castle.litterTargets(bot, ctx, ctx.castle, 4000), dig.x, dig.y, dig.z), name)
+    }
+    cells.set(k, 'grass_block')
+    const raw = bot.blockAt
+    bot.blockAt = (p) => key(p.x, p.y, p.z) === k ? null : raw(p)
+    assert.ok(!has(castle.litterTargets(bot, ctx, ctx.castle, 5000), dig.x, dig.y, dig.z), 'unloaded is not selected')
+  })
   it('false for grass with 4 solid neighbours, a 2-wide wall, a plan cell, laid decor, a bed', () => {
     const cells = painted()
     assert.equal(castle.scaffoldShape(worldBot(cells), ctx, { name: 'grass_block', position: new Vec3(X, Y - 1, Z) }), false, 'grass')
