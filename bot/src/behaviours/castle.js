@@ -913,12 +913,12 @@ function scaffoldShape(bot, ctx, b, st = ctx && ctx.castle) {
 function isLitter(bot, ctx, st, x, y, z, w, d) {
   const b = blockAtXYZ(bot, x, y, z)
   const n = b && b.name
-  if (!SCAFFOLD_MATS.has(n)) return false
   // A filled plan 'dig' cell (revmux 01: a walker's moat bridge lands at
   // dy -1, in the dug moat) is litter: the complete castle dug it, nothing
   // natural refills it, and the relay skips dig cells after complete.
   const pc = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${x},${y},${z}`)
-  if (pc) return pc.kind === 'dig'
+  if (pc) return pc.kind === 'dig' && (SCAFFOLD_MATS.has(n) || n === 'grass_block')
+  if (!SCAFFOLD_MATS.has(n)) return false
   const ring = y >= st.site.y && x >= st.site.x - 1 && x <= st.site.x + w && z >= st.site.z - 1 && z <= st.site.z + d
   if (ring && isOwnPlaced(ctx, b)) {
     const k = `${x},${y},${z}`
