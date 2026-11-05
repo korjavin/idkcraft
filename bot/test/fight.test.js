@@ -177,7 +177,7 @@ describe('observed pursuit progress (qxql.22)', () => {
     const { bot, mob, pulse } = stationaryBridge()
     const ctx = { lastGoalKey: '' }
     for (let t = 0; t < 20; t++) {
-      bot.entity.position.y = t % 2 ? 60.7 : 60
+      bot.entity.position.y = t % 2 ? 61.2 : 60
       bot.entity.onGround = t % 2 === 0
       fight(bot, ctx, null, { hostile: mob })
       pulse()
