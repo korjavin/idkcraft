@@ -2,6 +2,8 @@ package idkcraft.bridge;
 
 import baritone.api.BaritoneAPI;
 import baritone.api.Settings;
+import baritone.api.event.events.PathEvent;
+import baritone.api.event.listener.AbstractGameEventListener;
 import baritone.api.schematic.ISchematic;
 import com.google.gson.JsonObject;
 import idkcraft.bridge.BuildPlan.Cell;
@@ -72,6 +74,7 @@ public final class Build {
     private volatile long clock;
     /** Baritone's pause verdict from its own chat lines (idkcraft-pnxy). */
     private final BuildPlan.PauseTap pauseTap = new BuildPlan.PauseTap();
+    private final BuildDiagnostics diagnostics = new BuildDiagnostics();
 
     /**
      * Wraps {@code Settings.logger} (Baritone's chat sink) so the builder's
@@ -124,6 +127,12 @@ public final class Build {
 
     public static void install(BridgeServer server) {
         Build build = new Build(server);
+        BaritoneAPI.getProvider().getPrimaryBaritone().getGameEventHandler()
+                .registerEventListener(new AbstractGameEventListener() {
+                    @Override public void onPathEvent(PathEvent event) {
+                        try { build.diagnostics.event(event.name()); } catch (Exception ignored) { }
+                    }
+                });
         server.onClientTick(build::tick);
         server.register("baritone.build", params -> {
             Spec spec = BuildPlan.parse(params);
@@ -278,6 +287,7 @@ public final class Build {
         // A replaced build ends now with its final event, so no name hangs
         // without one (the adapter settles a build on its own final only).
         if (active != null) {
+            diagnostics.stop();
             push(active.spec.name, active.lastPlaced, active.lastMissing, false, null);
             restore(active);
             active = null;
@@ -328,7 +338,13 @@ public final class Build {
             settings.logger.value = new LogTap(settings.logger.value);
         }
         pauseTap.reset();
-        baritone.getBuilderProcess().build(spec.name, schematic, origin);
+        diagnostics.start();
+        try {
+            baritone.getBuilderProcess().build(spec.name, schematic, origin);
+        } catch (RuntimeException e) {
+            diagnostics.stop();
+            throw e;
+        }
         active = new Active(spec, origin, schematic, substitutes, savedDisallow);
         int missing = countNow(spec, substitutes);
         active.lastPlaced = spec.cells.size() - missing;
@@ -390,7 +406,49 @@ public final class Build {
         if (reason != null) {
             note.addProperty("reason", reason);
         }
+        if (live) {
+            try { note.add("diagnostics", diagnosticSnapshot()); } catch (Exception ignored) { }
+        }
         server.push("baritone.event", note);
+    }
+
+    /** Best effort only: absent values are unknown, never false by default. */
+    private JsonObject diagnosticSnapshot() {
+        JsonObject out = diagnostics.snapshot();
+        try {
+            Minecraft client = Minecraft.getInstance();
+            if (client != null && client.player != null) {
+                BlockPos pos = client.player.blockPosition();
+                JsonObject feet = new JsonObject();
+                feet.addProperty("x", pos.getX());
+                feet.addProperty("y", pos.getY());
+                feet.addProperty("z", pos.getZ());
+                out.add("feet", feet);
+            }
+        } catch (Exception ignored) { }
+        try {
+            var b = BaritoneAPI.getProvider().getPrimaryBaritone();
+            try { out.addProperty("builderActive", b.getBuilderProcess().isActive()); } catch (Exception ignored) { }
+            try { out.addProperty("builderPaused", b.getBuilderProcess().isPaused()); } catch (Exception ignored) { }
+            try { b.getBuilderProcess().getMinLayer().ifPresent(v -> out.addProperty("minLayer", v)); } catch (Exception ignored) { }
+            try { b.getBuilderProcess().getMaxLayer().ifPresent(v -> out.addProperty("maxLayer", v)); } catch (Exception ignored) { }
+            try { out.addProperty("pathing", b.getPathingBehavior().isPathing()); } catch (Exception ignored) { }
+            try { out.addProperty("hasPath", b.getPathingBehavior().hasPath()); } catch (Exception ignored) { }
+            try { out.addProperty("calculating", b.getPathingBehavior().getInProgress().isPresent()); } catch (Exception ignored) { }
+            try {
+                Object goal = b.getPathingBehavior().getGoal();
+                if (goal != null) {
+                    String value = String.valueOf(goal).replaceAll("[\\r\\n]", " ");
+                    out.addProperty("goal", value.substring(0, Math.min(value.length(), 200)));
+                    out.addProperty("goalType", goal.getClass().getSimpleName());
+                }
+            } catch (Exception ignored) { }
+            try {
+                Object control = b.getPathingControlManager().mostRecentInControl().orElse(null);
+                if (control != null) out.addProperty("control", control.getClass().getSimpleName());
+            } catch (Exception ignored) { }
+        } catch (Exception ignored) { }
+        return out;
     }
 
     /** Client thread, every post-tick: secondly progress, end when the builder idles. */
@@ -417,6 +475,7 @@ public final class Build {
         }
         a.pausedTicks = paused ? a.pausedTicks + 1 : 0;
         if (!building) {
+            diagnostics.stop();
             // Done, out of world, or #stop took the builder: the final event
             // settles the adapter's build (a quiet world still counts what
             // stands, so a re-issue repairs the rest).

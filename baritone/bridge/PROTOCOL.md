@@ -900,6 +900,19 @@ cancels the builder like any other process; the mod's tick reports the
 idle, so no separate stop verb exists and `bot.stopBuild()` is that `#stop`
 spelling).
 
+Live events may contain an optional `diagnostics` snapshot: player feet,
+builder active/paused and optional layer bounds, pathing/hasPath/calculating,
+navigation goal text/type, current controller, and saturated raw per-build
+path-event counts and last event. Missing fields mean unknown, including a
+null goal; a navigation goal is not a selected schematic cell. Events can
+describe lookahead or cancellation, not necessarily a build failure. Counts
+reset when a build starts and stop when it ends or is replaced. The adapter
+retains only the latest matching wire-name snapshot and logs it at a stall;
+it marks samples older than 10 seconds unavailable. Up to three separately
+labelled missing cells include current/above/below block names where readable;
+these are samples, not confirmed path targets. Diagnostics are best-effort
+and do not affect build settlement or issue extra RPCs.
+
 `paused` (idkcraft-pnxy): Baritone's `IBuilderProcess#isPaused()` — the
 builder pauses itself ("Unable to do it. Pausing.") while `isActive()`
 stays true, so without it a paused build reads as a slow one. Set once the
