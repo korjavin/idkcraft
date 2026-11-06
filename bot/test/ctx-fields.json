@@ -1311,6 +1311,7 @@
       "src/behaviours/equip.js",
       "src/behaviours/explore.js",
       "src/behaviours/flat.js",
+      "src/behaviours/food-recovery.js",
       "src/behaviours/forage.js",
       "src/behaviours/gather.js",
       "src/behaviours/gear.js",
@@ -1366,6 +1367,7 @@
   "lastPathStatus": {
     "writers": [
       "src/behaviours/castlefetch.js",
+      "src/behaviours/food-recovery.js",
       "src/behaviours/forage.js",
       "src/behaviours/gather.js",
       "src/behaviours/reforest.js",
@@ -1539,6 +1541,13 @@
       "src/llm-orders.js"
     ],
     "owner": "src/llm-orders.js"
+  },
+  "foodRecoveryChestSeen": {
+    "writers": [
+      "src/behaviours/food-recovery.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
   },
   "lowHpGateLast": {
     "writers": [

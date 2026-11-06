@@ -383,6 +383,21 @@ function parkedHuntOk(ctx, found, bot) {
 // Step target: { kind, name, pos, drop, want }. Memory first; a passive
 // animal (bring.js finder) when nothing diggable is remembered. Null =
 // explore.
+function foodTarget(bot, ctx, safeOnly = false) {
+  let found = null
+  try {
+    const edible = require('../reflexes').EDIBLE_FOODS
+    const prey = safeOnly ? Object.keys(bring.PREY_DROPS).filter((name) => edible.has(bring.PREY_DROPS[name])) : null
+    found = bring.findAnimal(bot, null, prey ? { prey } : undefined)
+  } catch (_) { found = null }
+  if (!found) return null
+  const drop = bring.PREY_DROPS[found.name] || null
+  if (!drop || !huntAllowed(bot, ctx, drop) || !parkedHuntOk(ctx, found, bot)) return null
+  let reserved = false
+  try { reserved = !!require('./packroom').slotReserved(bot, ctx) } catch (_) { reserved = false }
+  return { kind: 'food', name: found.name, id: found.id, pos: null, drop, want: reserved ? 1 : FORAGE_WANT }
+}
+
 function planForage(bot, ctx) {
   const bp = botPos(bot)
   if (!bp) return null
@@ -426,19 +441,7 @@ function planForage(bot, ctx) {
     }
     return { kind, name: cell.name, pos: { x: cell.x, y: cell.y, z: cell.z }, drop: bring.dropFor(cell.name), want }
   }
-  let found = null
-  try { found = bring.findAnimal(bot, null) } catch (_) { found = null }
-  if (found) {
-    const drop = bring.PREY_DROPS[found.name] || null
-    if (drop && huntAllowed(bot, ctx, drop) && parkedHuntOk(ctx, found, bot)) {
-      // Under the reserve a hunt is one kill: a full batch would overflow
-      // the checked stack room onto new slots.
-      let reserved = false
-      try { reserved = !!require('./packroom').slotReserved(bot, ctx) } catch (_) { reserved = false }
-      return { kind: 'food', name: found.name, id: found.id, pos: null, drop, want: reserved ? 1 : FORAGE_WANT }
-    }
-  }
-  return null
+  return foodTarget(bot, ctx)
 }
 
 
@@ -637,6 +640,102 @@ function replan(bot, ctx, f, bp) {
   return true
 }
 
+function huntTick(bot, ctx, f, bp, grounded, { replanTarget, stall, finishTarget }) {
+  const t = f.target
+  // --- food: find / walk / kill / pickup (bring.js animal phases, step-shaped) ---
+    if (f.phase === 'find' || f.phase === 'walk') {
+      const ent = (t.id != null) ? bring.entityById(bot, t.id) : null
+      if (!ent) {
+        const found = (() => { try { return bring.findAnimal(bot, t.drop) } catch (_) { return null } })()
+        // Parked re-target (vmzq.3 R4): the in-leg find must pass the
+        // same gate as planForage, or each kill re-centers a 48-block
+        // hop away from home (03 major). replan already applies it.
+        if (!found || found.name !== t.name || !parkedHuntOk(ctx, found, bot)) {
+          if (!replanTarget()) return
+          return
+        }
+        t.id = found.id
+        f.phase = 'walk'
+        return
+      }
+      const d = dist(bp, ent.position)
+      if (d !== null && d <= fightMod.SWING_RANGE) { f.phase = 'kill'; f.foodStreak = 0; return }
+      const key = `forage-hunt:${Math.round(ent.position.x)},${Math.round(ent.position.y)},${Math.round(ent.position.z)}`
+      if (key !== ctx.lastGoalKey) {
+        issueGoal(bot, ctx, new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, WALK_RANGE), key, false)
+        // No stall reset and no early return here: a grazing animal moves
+        // every tick, which used to zero the counter (then skip counting
+        // entirely) forever. Stalls reset only on the bot's own displacement
+        // below, counted every tick.
+        f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+      }
+      let verdict = null
+      try { verdict = ctx.lastPathStatus } catch (_) { verdict = null }
+      if (verdict === 'noPath') {
+        // Unreachable herd across water/a fence: the streak is the strike
+        // counter, same as the ore walk (round-2 minor).
+        try { ctx.lastPathStatus = 'none' } catch (_) { /* status best-effort */ }
+        if (!stall()) return
+        return
+      }
+      if (bring.progressed(bp, f.lastBotPos, grounded)) {
+        f.stalls = 0
+        f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+      } else if (++f.stalls >= WALK_STALL_TICKS) {
+        if (!stall()) return
+      }
+      return
+    }
+    if (f.phase === 'kill') {
+      const ent = (t.id != null) ? bring.entityById(bot, t.id) : null
+      if (!ent) {
+        f.dropPos = f.lastPos
+        f.phase = 'pickup'
+        return
+      }
+      f.lastPos = { x: ent.position.x, y: ent.position.y, z: ent.position.z }
+      const d = dist(bp, ent.position)
+      if (d === null || d > fightMod.SWING_RANGE) { f.phase = 'walk'; return }
+      if (f.armedId !== ent.id) {
+        f.armedId = ent.id
+        try { fightMod.equipGear(bot) } catch (_) { /* fists are fine */ }
+      }
+      try { fightMod.swing(bot, ent) } catch (_) { /* mock bots may lack attack */ }
+      return
+    }
+    if (f.phase === 'pickup') {
+      const dp = f.dropPos
+      if (!dp) { f.phase = 'find'; return }
+      const key = `forage-food-pickup:${Math.round(dp.x)},${Math.round(dp.y)},${Math.round(dp.z)}`
+      if (key !== ctx.lastGoalKey) {
+        issueGoal(bot, ctx, new goals.GoalNear(dp.x, dp.y, dp.z, 1), key, false)
+        f.stalls = 0
+        f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+        return
+      }
+      const d = dist(bp, dp)
+      if (d === null || d > 2) {
+        if (bring.progressed(bp, f.lastBotPos, grounded)) {
+          f.stalls = 0
+          f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
+        } else if (++f.stalls >= WALK_STALL_TICKS) {
+          if (!stall()) return
+        }
+        return
+      }
+      const have = Math.max(0, bring.countDrop(bot, t.drop) - ((f.startInv && f.startInv[t.drop]) || 0))
+      if (have >= t.want) {
+        finishTarget()
+      } else {
+        t.id = null
+        f.phase = 'find'
+      }
+      return
+    }
+    if (!replanTarget()) return
+    return
+}
+
 function forage(bot, ctx, target, state) {
   // A finished failure stays finished until the world changes (memory
   // count or banked haul): the tick after a fail re-runs this function
@@ -707,98 +806,12 @@ function forage(bot, ctx, target, state) {
   }
   trackDrop(f, t.drop)
 
-  // --- food: find / walk / kill / pickup (bring.js animal phases, step-shaped) ---
   if (t.kind === 'food') {
-    if (f.phase === 'find' || f.phase === 'walk') {
-      const ent = (t.id != null) ? bring.entityById(bot, t.id) : null
-      if (!ent) {
-        const found = (() => { try { return bring.findAnimal(bot, t.drop) } catch (_) { return null } })()
-        // Parked re-target (vmzq.3 R4): the in-leg find must pass the
-        // same gate as planForage, or each kill re-centers a 48-block
-        // hop away from home (03 major). replan already applies it.
-        if (!found || found.name !== t.name || !parkedHuntOk(ctx, found, bot)) {
-          if (!replan(bot, ctx, f, bp)) return
-          return
-        }
-        t.id = found.id
-        f.phase = 'walk'
-        return
-      }
-      const d = dist(bp, ent.position)
-      if (d !== null && d <= fightMod.SWING_RANGE) { f.phase = 'kill'; f.foodStreak = 0; return }
-      const key = `forage-hunt:${Math.round(ent.position.x)},${Math.round(ent.position.y)},${Math.round(ent.position.z)}`
-      if (key !== ctx.lastGoalKey) {
-        issueGoal(bot, ctx, new goals.GoalNear(ent.position.x, ent.position.y, ent.position.z, WALK_RANGE), key, false)
-        // No stall reset and no early return here: a grazing animal moves
-        // every tick, which used to zero the counter (then skip counting
-        // entirely) forever. Stalls reset only on the bot's own displacement
-        // below, counted every tick.
-        f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
-      }
-      let verdict = null
-      try { verdict = ctx.lastPathStatus } catch (_) { verdict = null }
-      if (verdict === 'noPath') {
-        // Unreachable herd across water/a fence: the streak is the strike
-        // counter, same as the ore walk (round-2 minor).
-        try { ctx.lastPathStatus = 'none' } catch (_) { /* status best-effort */ }
-        if (!replanFoodStall(bot, ctx, f, bp)) return
-        return
-      }
-      if (bring.progressed(bp, f.lastBotPos, grounded)) {
-        f.stalls = 0
-        f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
-      } else if (++f.stalls >= WALK_STALL_TICKS) {
-        if (!replanFoodStall(bot, ctx, f, bp)) return
-      }
-      return
-    }
-    if (f.phase === 'kill') {
-      const ent = (t.id != null) ? bring.entityById(bot, t.id) : null
-      if (!ent) {
-        f.dropPos = f.lastPos
-        f.phase = 'pickup'
-        return
-      }
-      f.lastPos = { x: ent.position.x, y: ent.position.y, z: ent.position.z }
-      const d = dist(bp, ent.position)
-      if (d === null || d > fightMod.SWING_RANGE) { f.phase = 'walk'; return }
-      if (f.armedId !== ent.id) {
-        f.armedId = ent.id
-        try { fightMod.equipGear(bot) } catch (_) { /* fists are fine */ }
-      }
-      try { fightMod.swing(bot, ent) } catch (_) { /* mock bots may lack attack */ }
-      return
-    }
-    if (f.phase === 'pickup') {
-      const dp = f.dropPos
-      if (!dp) { f.phase = 'find'; return }
-      const key = `forage-food-pickup:${Math.round(dp.x)},${Math.round(dp.y)},${Math.round(dp.z)}`
-      if (key !== ctx.lastGoalKey) {
-        issueGoal(bot, ctx, new goals.GoalNear(dp.x, dp.y, dp.z, 1), key, false)
-        f.stalls = 0
-        f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
-        return
-      }
-      const d = dist(bp, dp)
-      if (d === null || d > 2) {
-        if (bring.progressed(bp, f.lastBotPos, grounded)) {
-          f.stalls = 0
-          f.lastBotPos = { x: bp.x, y: bp.y, z: bp.z }
-        } else if (++f.stalls >= WALK_STALL_TICKS) {
-          if (!replanFoodStall(bot, ctx, f, bp)) return
-        }
-        return
-      }
-      const have = Math.max(0, bring.countDrop(bot, t.drop) - ((f.startInv && f.startInv[t.drop]) || 0))
-      if (have >= t.want) {
-        finish(bot, ctx, f, true)
-      } else {
-        t.id = null
-        f.phase = 'find'
-      }
-      return
-    }
-    if (!replan(bot, ctx, f, bp)) return
+    huntTick(bot, ctx, f, bp, grounded, {
+      replanTarget: () => replan(bot, ctx, f, bp),
+      stall: () => replanFoodStall(bot, ctx, f, bp),
+      finishTarget: () => finish(bot, ctx, f, true),
+    })
     return
   }
 
@@ -1001,3 +1014,6 @@ module.exports.bestDiamondCell = bestDiamondCell
 module.exports.skipCell = skipCell
 module.exports.parkedCellSkipped = parkedCellSkipped
 module.exports.FORAGE_WANT = FORAGE_WANT
+
+module.exports.foodTarget = foodTarget
+module.exports.huntTick = huntTick

@@ -136,7 +136,7 @@ const INTERACT_REACH = 4
 // closer and retries instead of dropping the adoption. An open throw on a
 // LOADED chest (blocked lid, cat, lag) is an error, never unknown: the
 // caller fails loud so failHolds parks the step (revmux 02-review).
-async function withChest(bot, ctx, fn, at = null) {
+async function withChest(bot, ctx, fn, at = null, valid = null) {
   const c = at || (ctx && ctx.home && ctx.home.chest)
   if (!c || typeof bot.openChest !== 'function') return { status: 'gone' }
   let block = null
@@ -150,14 +150,17 @@ async function withChest(bot, ctx, fn, at = null) {
   try {
     const window = await bot.openChest(block)
     try {
+      if (valid && !valid()) return { status: 'cancelled' }
       const value = await fn(window)
       // qxql.9 last-read cache for situationText (read-only there, never a
       // re-open): snapshot the open window's contents, tagged home/castle by
       // position. Runs only on an already-open chest, one sync list call.
-      try { noteChestRead(ctx, c, window) } catch (_) { /* cache best-effort */ }
+      if (!valid || valid()) {
+        try { noteChestRead(ctx, c, window) } catch (_) { /* cache best-effort */ }
+      }
       return { status: 'ok', value }
     } finally {
-      try { window.close() } catch (_) { /* close best-effort */ }
+      try { await window.close() } catch (_) { /* close best-effort */ }
     }
   } catch (_) {
     return { status: 'error' }

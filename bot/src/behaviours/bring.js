@@ -1410,12 +1410,17 @@ function pickChest(bot, ctx, o) {
   try {
     if (!o || typeof o !== 'object') return null
     if (!Array.isArray(o.chestSeen)) o.chestSeen = []
+    const within = (p) => {
+      if (!(typeof o.maxChestDistance === 'number')) return true
+      const b = bot && bot.entity && bot.entity.position
+      return !!(b && p && Math.hypot(b.x - p.x, b.y - p.y, b.z - p.z) <= o.maxChestDistance)
+    }
     const h = ctx && ctx.home && ctx.home.chest
-    if (h && typeof h.x === 'number') {
+    if (h && typeof h.x === 'number' && within(h)) {
       const hk = stockpileMod.chestKeyOf(h)
       if (hk !== null && !o.chestSeen.includes(hk)) return { pos: h, home: true }
     }
-    let rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen)
+    let rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen).filter(within)
     if (rest.length > 0) return { pos: rest[0], home: false }
     // Armor trim chest scan (idkcraft-3dkc): when searching for armor trims,
     // scan the loaded area for chests before giving up.
@@ -1455,7 +1460,7 @@ function isDaytime(bot) {
   }
 }
 
-function chestFetch(bot, ctx, o, bp) {
+function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
   // All-chests (0jvh follow-up): the home chest first, then remembered
   // sightings nearest-first. An order with no untried chest left falls back
   // exactly as the chestless path did.
@@ -1568,8 +1573,10 @@ function chestFetch(bot, ctx, o, bp) {
       }
       const need = Math.max(o.want - o.have, 0)
       const res = food && !o.drop
-        ? await stockpileMod.withdrawEdible(bot, ctx, need, at)
+        ? await stockpileMod.withdrawEdible(bot, ctx, need, at, valid)
         : await stockpileMod.withdrawFromChest(bot, ctx, o.drop, need, at)
+      if (valid && !valid()) return
+      if (valid && res && res.outcome) console.log(`food recovery chest=${res.outcome} item=${res.name || 'none'} count=${res.got || 0}`)
       o.chestInFlight = false
       markChestSeen(o, c)
       ctx.chestFull = false // a fetch may have made room: re-arm the step
@@ -1585,6 +1592,7 @@ function chestFetch(bot, ctx, o, bp) {
         o.phase = 'find' // short or empty: dig the rest
       }
     } catch (_) {
+      if (valid && !valid()) return
       o.chestInFlight = false
       markChestSeen(o, c)
       o.chestTried = true
@@ -1592,6 +1600,8 @@ function chestFetch(bot, ctx, o, bp) {
         if (!ctx || ctx.bring !== o) return
         itemMod.refuseItemOrHunt(bot, ctx, o)
       } else o.phase = 'find'
+    } finally {
+      if (settled) settled()
     }
   })()
 }
@@ -2574,6 +2584,7 @@ module.exports.canBringName = canBringName
 module.exports.openPhase = openPhase
 module.exports.pickChest = pickChest
 module.exports.chestAvailable = chestAvailable
+module.exports.chestFetch = chestFetch
 module.exports.nearbyChests = stockpileMod.nearbyChests
 module.exports.SEARCH_BUDGET = SEARCH_BUDGET
 module.exports.searchLegsFor = searchLegsFor

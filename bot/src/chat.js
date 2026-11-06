@@ -419,6 +419,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   // Any other owner order ends the plan (its next work step would undo a
   // come home / go castle / flat); status, help, brain and chatter do not.
   if (!peerBot && ownerOk && !llmOrders.feeding(lctx) && OWNER_ORDER.test(msg)) {
+    require('./behaviours/food-recovery').invalidate(lctx)
     try { pushOrderLog(lctx, msg) } catch (_) { /* ring best-effort */ }
     llmOrders.cancel(lctx, msg.split(' ')[0])
   }
