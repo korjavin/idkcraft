@@ -2568,6 +2568,7 @@ function lowHpClock(bot, ctx, facts) {
       } else {
         ctx.lowHpGateSince = null
         ctx.lowHpGateLast = null
+        ctx.foodRecoveryChestSeen = null
       }
     }
   } catch (_) { /* clock best-effort */ }

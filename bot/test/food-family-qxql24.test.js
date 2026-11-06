@@ -313,6 +313,12 @@ it('an unreachable chest walk ends and backs off without opening', () => {
   assert.equal(goals, 1)
   assert.equal(opens, 0)
   assert.ok(ctx.foodRecoveryRetryAt > Date.now())
+  assert.equal(ctx.foodRecoveryChestSeen.length, 1)
+  ctx.stepStatus = 'running'
+  ctx.foodRecoveryRetryAt = 0
+  for (let i = 0; i < 4 && ctx.stepStatus === 'running'; i++) BEHAVIOURS.foodRecovery(bot, ctx)
+  assert.equal(goals, 1, 'a later attempt does not walk to the same unreachable chest')
+  assert.equal(opens, 0)
 })
 
 it('a failed material leg does not strand a later nearby food source', async () => {

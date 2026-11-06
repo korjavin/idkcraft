@@ -1542,6 +1542,13 @@
     ],
     "owner": "src/llm-orders.js"
   },
+  "foodRecoveryChestSeen": {
+    "writers": [
+      "src/behaviours/food-recovery.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
+  },
   "lowHpGateLast": {
     "writers": [
       "src/goal.js"

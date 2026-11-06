@@ -32,14 +32,15 @@ function needed(bot, ctx, facts) {
   } catch (_) { return false }
 }
 
-function chestState() {
-  return { kind: 'food', phase: 'chestfetch', want: 1, have: 0, drop: null, chestSeen: [], maxChestDistance: stockpile.NEARBY_CHEST_RADIUS }
+function chestState(ctx) {
+  if (!Array.isArray(ctx.foodRecoveryChestSeen)) ctx.foodRecoveryChestSeen = []
+  return { kind: 'food', phase: 'chestfetch', want: 1, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: stockpile.NEARBY_CHEST_RADIUS }
 }
 
 function available(bot, ctx, facts) {
   if (!needed(bot, ctx, facts) || (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt)) return false
   if (ctx.foodRecoveryFlight) return false
-  return !!(bring.pickChest(bot, ctx, chestState()) || forage.foodTarget(bot, ctx, true))
+  return !!(bring.pickChest(bot, ctx, chestState(ctx)) || forage.foodTarget(bot, ctx, true))
 }
 
 function invalidate(ctx) {
@@ -49,7 +50,7 @@ function invalidate(ctx) {
 function run(bot, ctx) {
   let r = ctx.foodRecovery
   if (!r || !r.valid) {
-    r = ctx.foodRecovery = { valid: true, chest: chestState(), phase: 'chest', startFood: bot.food }
+    r = ctx.foodRecovery = { valid: true, chest: chestState(ctx), phase: 'chest', startFood: bot.food }
     ctx.lastPathStatus = 'none'
     console.log(`food recovery start health=${bot.health} food=${bot.food} edible=0`)
   }
