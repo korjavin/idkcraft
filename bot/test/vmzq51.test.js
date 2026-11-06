@@ -72,9 +72,11 @@ describe('vmzq.51: the low-hp castle gate releases after a bounded stall', () =>
       const c = { castle: castleState(), home: { site: { x: 0, y: 64, z: 0 }, built: true } }
       await goal.decide(gated, c)
       assert.ok(typeof c.lowHpGateSince === 'number', 'clock arms while gated')
+      c.foodRecoveryChestSeen = ['previous-chest']
       const fed = goalBot({ items: [...TOOLS, { name: 'bread', count: 2 }], health: 5, food: 10 })
       await goal.decide(fed, c)
       assert.equal(c.lowHpGateSince, null, 'food clears the clock')
+      assert.equal(c.foodRecoveryChestSeen, null, 'food resets the tried chests for the next episode')
     })
   })
 

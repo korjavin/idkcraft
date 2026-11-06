@@ -37,6 +37,7 @@ const BEHAVIOURS = {
   explore: require('./explore'),
   fun: require('./fun'),
   forage: require('./forage'),
+  foodRecovery: require('./food-recovery').run,
   reforest: require('./reforest'),
   farm: require('./farm'),
   deliver: require('./deliver'),

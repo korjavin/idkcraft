@@ -1102,17 +1102,18 @@ function nearbyChestsAll(bot, ctx, seen, radius) {
 // Withdraw up to count of the first edible in the adopted chest (or the
 // explicit chest at `at` — the all-chests lookup).
 // { got, name } — name null when nothing edible came out.
-async function withdrawEdible(bot, ctx, count, at = null) {
+async function withdrawEdible(bot, ctx, count, at = null, valid = null) {
   const edible = edibles()
   try {
     const res = await withChest(bot, ctx, async (window) => {
-      const stacks = typeof window.containerItems === 'function' ? window.containerItems() : []
-      if (!Array.isArray(stacks)) return { got: 0, name: null, status: 'ok' }
+      const stacks = typeof window.containerItems === 'function' ? window.containerItems() : null
+      if (!Array.isArray(stacks)) return { got: 0, name: null, status: valid ? 'unknown' : 'ok' }
       const first = stacks.find((s) => s && typeof s.name === 'string' && edible.has(s.name))
       if (!first) return { got: 0, name: null }
       let want = count
       let got = 0
       for (const s of stacks) {
+        if (valid && !valid()) break
         if (want <= 0) break
         if (!s || s.name !== first.name) continue
         const take = Math.min(typeof s.count === 'number' ? s.count : 1, want)
@@ -1122,10 +1123,14 @@ async function withdrawEdible(bot, ctx, count, at = null) {
         got += take
       }
       return { got, name: first.name }
-    }, at)
+    }, at, valid)
+    if (valid) {
+      if (res && res.status === 'ok') return { ...res.value, outcome: res.value && res.value.status === 'unknown' ? 'unknown' : res.value && res.value.got > 0 ? 'withdrawn' : 'empty' }
+      return { got: 0, name: null, outcome: (res && res.status) || 'error' }
+    }
     return res && res.status === 'ok' ? res.value : { got: 0, name: null }
   } catch (_) {
-    return { got: 0, name: null }
+    return valid ? { got: 0, name: null, outcome: 'error' } : { got: 0, name: null }
   }
 }
 

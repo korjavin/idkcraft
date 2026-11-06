@@ -381,6 +381,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   }
 
   function applyDecision(decision, target, state) {
+    if (decision.action !== 'foodRecovery') require('./behaviours/food-recovery').invalidate(ctx)
     const handler = BEHAVIOURS[decision.action]
     if (typeof handler === 'function') {
       handler(bot, ctx, target, state)
@@ -786,6 +787,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // never sees creepers, so nothing else would move the body.
     const fleeDist = fleeReflex(bot, ctx, state)
     if (fleeDist !== false) {
+      require('./behaviours/food-recovery').invalidate(ctx)
       const fleePlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
       console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()}`)
       return { decision: { action: 'flee', sprint: false, source: 'reflex' }, calledBrain }
@@ -793,6 +795,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // Drowning owns the body over every order (0u9): a dig 3 blocks down
     // still kills when the vein sits under a lake.
     if (breathReflex(bot, ctx)) {
+      require('./behaviours/food-recovery').invalidate(ctx)
       const breathPlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
       console.log(`decision source=reflex action=breath dist=${breathPlayerDist} ${pathSuffix()}`)
       return { decision: { action: 'breath', sprint: false, source: 'reflex' }, calledBrain }
@@ -1838,6 +1841,7 @@ function handleDeath(bot, ticker) {
   try {
     const ctx = bot && bot._tickerCtx
     if (ctx) {
+      require('./behaviours/food-recovery').invalidate(ctx)
       stepMod.nextStepGen(ctx) // oqul.7: an op cut by the death drops its late completion
       ctx.gohome = null
       ctx.stay = null
