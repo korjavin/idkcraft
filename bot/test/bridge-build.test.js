@@ -121,6 +121,42 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
     }, 5)
   }
 
+  it('stall diagnostics use only the matching build snapshot and cap missing samples', async () => {
+    transport.state.buildScript = 'stall'
+    bot._buildTiming = { stallMs: 50, watchMs: 5 }
+    const { logged } = await capture(async () => {
+      const first = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS)
+      const wire1 = transport.state.buildLog[0].name
+      transport.inject('baritone.event', { kind: 'build', name: wire1, active: true, diagnostics: { goal: 'old' } })
+      await assert.rejects(first, /^Error: build-stall$/)
+      const second = bot.buildCells('house', { x: 100, y: 64, z: -40 }, [...CELLS, { dx: 2, dy: 0, dz: 0, block: 'oak_planks' }])
+      const wire2 = transport.state.buildLog[1].name
+      transport.inject('baritone.event', { kind: 'build', name: wire1, active: true, diagnostics: { goal: 'foreign' } })
+      transport.inject('baritone.event', { kind: 'build', name: wire2, active: true, diagnostics: { feet: { x: 100, y: 64, z: -40 }, pathing: true, goal: 'new', pathEvents: { CALC_FAILED: 2 } } })
+      await assert.rejects(second, /^Error: build-stall$/)
+    })
+    const lines = logged.filter((line) => line.startsWith('build-stall-diagnostic '))
+    assert.equal(lines.length, 2)
+    assert.match(lines[1], /"goal":"new"/)
+    assert.doesNotMatch(lines[1], /foreign|old/)
+    assert.match(lines[1], /"hasPath":"unknown"/)
+    const samples = JSON.parse(lines[1].split(' missingSample=')[1])
+    assert.equal(samples.length, 3)
+    assert.equal(samples[0].current, 'air')
+  })
+
+  it('does not log stall diagnostics on success or preemption', async () => {
+    const { logged } = await capture(async () => {
+      await bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS)
+      transport.state.buildScript = 'stall'
+      const pending = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS)
+      await sleep(10)
+      await bot.stopBuild()
+      await assert.rejects(pending, /^Error: build-preempted$/)
+    })
+    assert.equal(logged.filter((line) => line.startsWith('build-stall-diagnostic ')).length, 0)
+  })
+
   it('a paused missing:<id> resolves starved at once and logs node vs mod counts (pnxy)', async () => {
     await bot.stop()
     ;({ transport, bot } = makeBot({ inventory: [{ slot: 37, name: 'cobblestone', count: 64 }] }))

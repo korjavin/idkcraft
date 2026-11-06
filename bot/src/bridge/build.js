@@ -188,6 +188,9 @@ function handleBuildEvent(bot, method, params) {
   const st = bot._build
   if (!st) return true
   if (params.name != null && params.name !== st.wire) return true
+  if (params.name === st.wire && params.diagnostics && typeof params.diagnostics === 'object') {
+    st.diagnostic = { data: params.diagnostics, receivedAt: Date.now() }
+  }
   if (typeof params.placed === 'number' && params.placed > st.placed) {
     st.placed = params.placed
     st.grownAt = Date.now()
@@ -221,12 +224,31 @@ function refresh(bot, st) {
 
 // Stall-site line (r185): absolute coords the world still shows unplaced,
 // capped so one wedge cannot flood the log; then reject build-stall.
-function stall(st, missing, tail) {
+function stall(bot, st, missing, tail) {
   try {
     const show = (missing || st.cells).slice(0, 10)
       .map((c) => `${st.origin.x + c.dx},${st.origin.y + c.dy},${st.origin.z + c.dz}:${c.block}`)
       .join(' ')
     console.log(`build-stall ${st.name}: ${st.missing} cells unplaced e.g. ${show} ${tail}`)
+    const age = st.diagnostic ? Math.max(0, Date.now() - st.diagnostic.receivedAt) : null
+    const d = age != null && age <= 10000 ? st.diagnostic.data : null
+    const fields = ['feet', 'builderActive', 'builderPaused', 'minLayer', 'maxLayer', 'pathing', 'hasPath', 'calculating', 'goal', 'goalType', 'control', 'pathEvents', 'lastPathEvent']
+    const snapshot = {}
+    for (const key of fields) {
+      const value = d && d[key]
+      if (value == null) snapshot[key] = 'unknown'
+      else if (key === 'feet') snapshot[key] = ['x', 'y', 'z'].every((k) => Number.isFinite(value[k])) ? { x: value.x, y: value.y, z: value.z } : 'unknown'
+      else if (key === 'pathEvents') {
+        snapshot[key] = typeof value === 'object' ? Object.fromEntries(Object.entries(value).slice(0, 32).filter(([k, v]) => /^[A-Z_]{1,48}$/.test(k) && Number.isInteger(v) && v >= 0 && v <= 999999)) : 'unknown'
+      } else if (typeof value === 'string') snapshot[key] = value.slice(0, 200)
+      else if (typeof value === 'boolean' || Number.isFinite(value)) snapshot[key] = value
+      else snapshot[key] = 'unknown'
+    }
+    const samples = (missing || st.cells).slice(0, 3).map((c) => {
+      const x = st.origin.x + c.dx; const y = st.origin.y + c.dy; const z = st.origin.z + c.dz
+      return { x, y, z, want: c.block.slice(0, 128), current: blockNameAt(bot, x, y, z) || 'unavailable', above: blockNameAt(bot, x, y + 1, z) || 'unavailable', below: blockNameAt(bot, x, y - 1, z) || 'unavailable' }
+    })
+    console.log(`build-stall-diagnostic ${st.wire} placed=${st.placed} missing=${st.missing} sampleAgeMs=${age == null ? 'unknown' : age} snapshot=${JSON.stringify(snapshot)} missingSample=${JSON.stringify(samples)}`)
   } catch (_) { /* stall-site line best-effort */ }
   st.settle(st.reject, new Error('build-stall'))
 }
@@ -271,7 +293,7 @@ function paused(bot, st, reason) {
     // still strikes, but once per step failure + hold, as on master.
     // ponytail: H1 itself (the mirror/Baritone disagreement) is unfixed
     // until a rig shows mod=0 with node>0 on this line.
-    if (ids.some((id) => node[id] > 0)) stall(st, missing, `paused=yes reason=${reason} mismatch`)
+    if (ids.some((id) => node[id] > 0)) stall(bot, st, missing, `paused=yes reason=${reason} mismatch`)
     else st.settle(st.resolve, { placed: st.placed, missing: st.missing })
     const say = (slots) => {
       for (const id of ids) {
@@ -285,7 +307,7 @@ function paused(bot, st, reason) {
         .then((inv) => say(inv && Array.isArray(inv.slots) ? inv.slots : null), () => say(null))
     } catch (_) { say(null) }
   } else {
-    stall(st, missing, `paused=yes reason=${reason}`)
+    stall(bot, st, missing, `paused=yes reason=${reason}`)
   }
   release(bot)
 }
@@ -314,7 +336,7 @@ function watch(bot, st) {
   // promise, and a still-running (paused or wedged) builder must never
   // survive untracked (core-2) — the late final finds no live build.
   if (starved) st.settle(st.resolve, { placed: st.placed, missing: st.missing })
-  else stall(st, missing, 'paused=no')
+  else stall(bot, st, missing, 'paused=no')
   release(bot)
 }
 
