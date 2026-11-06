@@ -145,6 +145,18 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
     assert.equal(samples[0].current, 'air')
   })
 
+  it('does not log stall diagnostics on success or preemption', async () => {
+    const { logged } = await capture(async () => {
+      await bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS)
+      transport.state.buildScript = 'stall'
+      const pending = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS)
+      await sleep(10)
+      await bot.stopBuild()
+      await assert.rejects(pending, /^Error: build-preempted$/)
+    })
+    assert.equal(logged.filter((line) => line.startsWith('build-stall-diagnostic ')).length, 0)
+  })
+
   it('a paused missing:<id> resolves starved at once and logs node vs mod counts (pnxy)', async () => {
     await bot.stop()
     ;({ transport, bot } = makeBot({ inventory: [{ slot: 37, name: 'cobblestone', count: 64 }] }))
