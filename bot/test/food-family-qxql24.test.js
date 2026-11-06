@@ -19,7 +19,25 @@ const registry = { blocksByName: { air: { id: 0 } }, entitiesByName: { cow: { he
 
 class FoodWorld extends FakeTransport {
   async call(method, params) {
+    const before = { ...this.state.pos }
     const result = await super.call(method, params)
+    if (method === 'attack') {
+      const prey = this.state.entities.find((entity) => entity.id === params.entityId && entity.type === 'cow')
+      if (prey) {
+        this.state.entities = this.state.entities.filter((entity) => entity !== prey)
+        this.state.entities.push({ id: 8, uuid: '44444444-4444-4444-4444-444444444444', type: 'item', kind: 'object', pos: { ...prey.pos }, vel: { x: 0, y: 0, z: 0 }, onGround: true, pose: 'standing' })
+        this.state.foodDropCreated = true
+      }
+    }
+    if (method === 'baritone.cmd' && /^#(?:goto|near)\s/.test(params.command || '')) {
+      const p = this.state.pos
+      const drop = this.state.entities.find((entity) => entity.id === 8)
+      if (drop && Math.hypot(p.x - before.x, p.y - before.y, p.z - before.z) > 0 && Math.hypot(p.x - drop.pos.x, p.y - drop.pos.y, p.z - drop.pos.z) <= 1) {
+        this.state.entities = this.state.entities.filter((entity) => entity !== drop)
+        this.state.inventory.push({ slot: 12, name: 'beef', count: 1 })
+        this.state.foodDropPickedUp = true
+      }
+    }
     if (method === 'interact.item') {
       const held = this.state.inventory.find((item) => item.slot === 36 + (this.state.selected || 0) && ['beef', 'bread'].includes(item.name))
       if (held && held.count > 0) {
@@ -37,7 +55,7 @@ it('critical hunger acquires and eats nearby prey despite remembered iron', asyn
   const transport = new FoodWorld({
     health: 5, food: 3,
     inventory: [{ slot: 9, name: 'stone_pickaxe', count: 1 }, { slot: 10, name: 'stone_sword', count: 1 }, { slot: 11, name: 'dirt', count: 32 }],
-    entities: [{ id: 7, uuid: '22222222-2222-2222-2222-222222222222', type: 'cow', displayName: 'Cow', kind: 'animal', pos: { x: 1, y: 64, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, health: 20, onGround: true, pose: 'standing' }],
+    entities: [{ id: 7, uuid: '22222222-2222-2222-2222-222222222222', type: 'cow', displayName: 'Cow', kind: 'animal', pos: { x: 2, y: 64, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, health: 20, onGround: true, pose: 'standing' }],
   })
   const bot = new BaritoneBot(transport, { Vec3, registry, username: 'IdkBody' })
   await bot.start({ pollMs: 0 })
@@ -55,12 +73,15 @@ it('critical hunger acquires and eats nearby prey despite remembered iron', asyn
       await sleep(20)
     }
     assert.deepEqual(transport.state.attacks, [7])
-    transport.state.entities = []
     await bot.refresh()
     BEHAVIOURS.foodRecovery(bot, ctx, null, {}) // kill observes despawn, enters pickup
     assert.equal(ctx.foodRecovery.hunt.phase, 'pickup')
+    assert.ok(transport.state.foodDropCreated)
+    assert.ok(transport.state.entities.some((entity) => entity.id === 8))
+    assert.ok(!bot.inventory.items().some((item) => item.name === 'beef'))
     BEHAVIOURS.foodRecovery(bot, ctx, null, {}) // issues the pickup walk
-    transport.state.inventory.push({ slot: 12, name: 'beef', count: 1 })
+    for (let i = 0; i < 100 && !transport.state.foodDropPickedUp; i++) await sleep(10)
+    assert.ok(transport.state.foodDropPickedUp, 'pickup walk reaches the dropped item')
     await bot.refresh()
     assert.ok(bot.inventory.items().some((item) => item.name === 'beef'))
     BEHAVIOURS.foodRecovery(bot, ctx, null, {})
@@ -123,6 +144,10 @@ it('critical hunger withdraws edible food from a reachable stocked chest', async
     assert.ok(sawBread, 'autonomous recovery withdraws food')
     assert.equal(bot.food, 8, 'the item-use request feeds the body')
     for (let i = 0; i < 100 && ctx.eatInFlight; i++) await sleep(20)
+    transport.state.health = 6
+    transport.state.food = 18
+    await bot.refresh()
+    assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch', 'castle work resumes after feeding and regeneration')
   } finally {
     await bot.stop()
     if (previousBody === undefined) delete process.env.BOT_BODY
@@ -324,7 +349,7 @@ it('an unreachable chest walk ends and backs off without opening', () => {
 it('a failed material leg does not strand a later nearby food source', async () => {
   const previousBody = process.env.BOT_BODY
   process.env.BOT_BODY = 'baritone'
-  const transport = new FakeTransport({
+  const transport = new FoodWorld({
     health: 5, food: 3,
     inventory: [{ slot: 9, name: 'stone_pickaxe', count: 1 }, { slot: 10, name: 'stone_sword', count: 1 }, { slot: 11, name: 'dirt', count: 32 }],
   })
@@ -345,7 +370,10 @@ it('a failed material leg does not strand a later nearby food source', async () 
     await goal.decide(bot, ctx)
     assert.ok(ctx.stepFail.forage, 'material failure is recorded')
     const materialFinal = ctx.forageFinal
-    transport.state.entities = [{ id: 7, uuid: '22222222-2222-2222-2222-222222222222', type: 'cow', displayName: 'Cow', kind: 'animal', pos: { x: 1, y: 64, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, health: 20, onGround: true, pose: 'standing' }]
+    await sleep(50)
+    await bot.refresh()
+    const p = bot.entity.position
+    transport.state.entities = [{ id: 7, uuid: '22222222-2222-2222-2222-222222222222', type: 'cow', displayName: 'Cow', kind: 'animal', pos: { x: p.x + 2, y: p.y, z: p.z }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, health: 20, onGround: true, pose: 'standing' }]
     await bot.refresh()
     for (let i = 0; i < 10 && !(transport.state.attacks || []).length; i++) {
       const decision = await goal.decide(bot, ctx)
@@ -355,8 +383,22 @@ it('a failed material leg does not strand a later nearby food source', async () 
       await bot.refresh()
     }
     assert.deepEqual(transport.state.attacks, [7], `recovery reaches the new food source: ${JSON.stringify(ctx.foodRecovery)}`)
+    for (let i = 0; i < 30 && ctx.stepStatus !== 'done'; i++) {
+      BEHAVIOURS.foodRecovery(bot, ctx)
+      await sleep(20)
+      await bot.refresh()
+    }
+    assert.ok(transport.state.foodDropPickedUp, 'pickup movement acquires the spawned drop')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.equal(eatReflex(bot, ctx, {}), true)
+    for (let i = 0; i < 100 && ctx.eatInFlight; i++) await sleep(20)
+    assert.equal(bot.food, 6)
     assert.ok(ctx.stepFail.forage, 'the material cooldown remains recorded')
     assert.equal(ctx.forageFinal, materialFinal, 'the executor failure snapshot remains intact')
+    transport.state.health = 6
+    transport.state.food = 18
+    await bot.refresh()
+    assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch')
   } finally {
     await bot.stop()
     if (previousBody === undefined) delete process.env.BOT_BODY
