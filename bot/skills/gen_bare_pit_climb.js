@@ -1,133 +1,145 @@
-/* skill {"name":"gen_bare_pit_climb","description":"climb: in a deep pit with no pickaxe and no blocks, water bucket on hand, a wall notch near the top — pour water high against the notch wall, swim up the fall, step onto the notch, scoop the water back","kind":"recover","verb":"swimming up the pit","body":"any","verifiedBy":{"scenario":"water-climb","verdict":"baseline: 1/1 ok, 0 improved, 0 regressed, 0 env (stuck-baseline-v2.json) | micro-run: exit 0 in 77s","sha":"e8688b96","body":"baritone"},"bead":"idkcraft-vf8e.4"} */
+/* skill {"name":"gen_bare_pit_climb","description":"climb: in a pit with a water bucket, no pickaxe or blocks, a ledge in the wall within reach — pour one bucket on the wall below the ledge, swim up the fall, scoop it back","kind":"recover","body":"any","verb":"swimming out of the pit","verifiedBy":{"scenario":"water-climb","verdict":"baseline: 1/1 ok, 0 improved, 0 regressed, 0 env (stuck-baseline-v2.json) | micro-run: exit 0 in 71s","sha":"cff5482b","body":"baritone"},"bead":"idkcraft-vf8e.13"} */
 
-function feasible(facts) {
-  return facts.bucket >= 1 && facts.goalDy >= 2 && !facts.pickaxe && facts.scaffold === 0 && !facts.lavaNear
+function feasible(f) {
+  var b = typeof f.bucket === 'number' ? f.bucket : (f.bucket ? 1 : 0)
+  return b >= 1 && f.goalDy >= 2 && !f.lavaNear && !f.water
 }
 
-function air(bot, x, y, z) {
-  const b = bot.blockAt(x, y, z)
-  return !!b && !b.solid && b.name !== 'lava'
-}
-function solid(bot, x, y, z) {
-  const b = bot.blockAt(x, y, z)
-  return !!b && b.solid
+var REACH = 4.4
+var PLAN_REACH = 4.2
+
+function isAir(b) { return !!b && (b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air') }
+function isOpen(b) { return !!b && !b.solid && b.name !== 'water' && b.name !== 'lava' }
+
+function eyeDist(p, c) {
+  return Math.hypot(c.px + 0.5 - p.x, c.ly + 0.5 - (p.y + 1.62), c.pz + 0.5 - p.z)
 }
 
-function scan(bot) {
-  const p = bot.pos()
-  const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z)
-  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
-  let best = null
-  for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) {
-    for (let ny = by + 2; ny <= by + 6; ny++) {
-      const nx = bx + dx, nz = bz + dz
-      if (!solid(bot, nx, ny - 1, nz) || !air(bot, nx, ny, nz) || !air(bot, nx, ny + 1, nz)) continue
-      for (const d of dirs) {
-        const ix = nx - d[0], iz = nz - d[1]
-        let ok = true
-        for (let y = by; y <= ny + 1 && ok; y++) if (!air(bot, ix, y, iz)) ok = false
-        if (!ok) continue
-        const sx = nx - 2 * d[0], sz = nz - 2 * d[1]
-        if (!air(bot, sx, by, sz) || !air(bot, sx, by + 1, sz) || !solid(bot, sx, by - 1, sz)) continue
-        const score = ny * 100 + Math.abs(dx) + Math.abs(dz)
-        if (!best || score < best.score) best = { score, nx, ny, nz, ix, iz, sx, sz, by, dx: d[0], dz: d[1] }
-        break
+function scan(bot, st) {
+  var p = bot.pos()
+  var fx = Math.floor(p.x), fy = Math.floor(p.y + 0.2), fz = Math.floor(p.z)
+  var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+  var best = null
+  for (var dx = -3; dx <= 3; dx++) for (var dz = -3; dz <= 3; dz++) for (var ly = fy + 2; ly <= fy + 5; ly++) {
+    var lx = fx + dx, lz = fz + dz
+    var L = bot.blockAt(lx, ly, lz)
+    if (!L || !L.solid) continue
+    if (!isOpen(bot.blockAt(lx, ly + 1, lz)) || !isOpen(bot.blockAt(lx, ly + 2, lz))) continue
+    for (var i = 0; i < 4; i++) {
+      var px = lx + dirs[i][0], pz = lz + dirs[i][1]
+      var key = px + ',' + ly + ',' + pz
+      if (st.bad[key]) continue
+      // reach from the planned stand (directly below the pour cell), checked first
+      var reach = Math.hypot(0, ly + 0.5 - (fy + 1.62), 0)
+      if (reach > PLAN_REACH) continue
+      var floor = bot.blockAt(px, fy - 1, pz)
+      if (!floor || !floor.solid) continue
+      var ok = true
+      for (var y = fy; y <= ly; y++) { if (!isAir(bot.blockAt(px, y, pz))) { ok = false; break } }
+      if (!ok) continue
+      var bd = Math.hypot(px + 0.5 - p.x, pz + 0.5 - p.z)
+      if (bd > 4.5) continue
+      var score = reach + 0.3 * bd - 0.05 * (ly - fy)
+      if (!best || score < best.score) {
+        best = { px: px, pz: pz, ly: ly, lx: lx, lz: lz, fy: fy, key: key, score: score }
       }
     }
   }
   return best
 }
 
+function ban(st) { if (st.c) st.bad[st.c.key] = true; st.nbad = (st.nbad || 0) + 1; st.ph = 'scan' }
+
 function release(bot) {
-  bot.control('forward', false); bot.control('jump', false)
-  bot.control('sprint', false); bot.control('sneak', false)
+  bot.control('forward', false); bot.control('jump', false); bot.control('sprint', false)
+  bot.stop()
 }
 
 function run(bot, st) {
-  st.pt = (st.pt || 0) + 1
-  const p = bot.pos()
-  const s = bot.status()
-  const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z)
-  const go = (ph) => { st.ph = ph; st.pt = 0 }
-  if (!st.ph) {
-    if (bot.count('water_bucket') < 1) return 'failed:no-water-bucket'
-    const g = scan(bot)
-    if (!g) return 'failed:no-notch'
-    st.g = g
-    st.wb0 = bot.count('water_bucket')
-    go('walk')
+  if (!st.ph) { st.ph = 'scan'; st.bad = {}; st.wb0 = bot.count('water_bucket'); st.nbad = 0 }
+  var p = bot.pos()
+  var s = bot.status()
+  var c = st.c
+  if (st.ph === 'scan') {
+    if (st.nbad > 8) return 'failed:no-reachable-notch'
+    if (st.wb0 < 1) return 'failed:no-water-bucket'
+    st.c = scan(bot, st)
+    if (!st.c) return 'failed:no-notch'
+    st.ph = 'move'; st.t = 0
     return 'running'
   }
-  const g = st.g
-  if (st.ph === 'walk') {
-    if (fx === g.sx && fz === g.sz && fy === g.by && Math.abs(p.x - g.sx - 0.5) <= 0.4 && Math.abs(p.z - g.sz - 0.5) <= 0.4) {
-      bot.stop(); go('nudge'); return 'running'
-    }
-    if (st.pt > 15) return 'failed:no-stand'
-    bot.goto(g.sx + 0.5, g.by, g.sz + 0.5, 0)
+  if (st.ph === 'move') {
+    st.t++
+    var inCol = Math.floor(p.x) === c.px && Math.floor(p.z) === c.pz
+    if (inCol && p.onGround && eyeDist(p, c) <= REACH) { bot.stop(); st.ph = 'equip'; return 'running' }
+    if (st.t > 10) { bot.stop(); ban(st); return 'running' }
+    bot.goto(c.px + 0.5, c.fy, c.pz + 0.5, 0)
     return 'running'
   }
-  if (st.ph === 'nudge') {
-    const along = (p.x - g.sx - 0.5) * g.dx + (p.z - g.sz - 0.5) * g.dz
-    if (along >= 0.12 || st.pt > 6) { release(bot); bot.equip('water_bucket', 'hand'); go('pour'); return 'running' }
-    bot.lookAt(g.nx + 0.5, g.by + 1.6, g.nz + 0.5)
-    bot.control('sneak', true)
-    bot.control('forward', true)
+  if (st.ph === 'equip') {
+    if (s.busy) return 'running'
+    var r = bot.equip('water_bucket', 'hand')
+    if (r.indexOf('denied') === 0) return 'failed:equip-denied'
+    st.ph = 'pour'; st.t = 0
     return 'running'
   }
   if (st.ph === 'pour') {
-    release(bot)
-    if (s.busy) { if (st.pt > 8) return 'failed:pour-busy'; return 'running' }
-    if (st.pt < 2) return 'running'
-    if (!st.poured) {
-      const r = bot.use(g.nx, g.ny, g.nz)
-      if (r === 'started') { st.poured = true; st.pp = st.pt; return 'running' }
-      if (r === 'busy') return 'running'
-      return 'failed:pour-' + String(r).replace(/[^a-z0-9-]/g, '-').slice(0, 30)
-    }
-    let src = null
-    for (let y = g.ny; y >= g.by; y--) {
-      const b = bot.blockAt(g.ix, y, g.iz)
-      if (b && b.name === 'water') { src = { x: g.ix, y, z: g.iz }; break }
-    }
-    if (src && src.y >= g.ny - 1) { st.src = src; go('enter'); return 'running' }
-    if (st.pt - st.pp > 4) {
-      if (src && src.y >= g.ny - 2) { st.src = src; go('enter'); return 'running' }
-      return 'failed:no-water'
-    }
+    if (s.busy) return 'running'
+    st.t++
+    if (eyeDist(p, c) > REACH) { ban(st); return 'running' }
+    var u = bot.use(c.px, c.ly, c.pz)
+    if (u === 'started') { st.ph = 'pourwait'; st.t = 0; return 'running' }
+    if (u === 'busy' && st.t < 5) return 'running'
+    ban(st)
     return 'running'
   }
-  if (st.ph === 'enter') {
-    if (fx === g.ix && fz === g.iz) { go('swim'); return 'running' }
-    if (st.pt > 6) { release(bot); return 'failed:no-enter' }
-    bot.lookAt(g.nx + 0.5, p.y + 1.6, g.nz + 0.5)
-    bot.control('forward', true)
+  if (st.ph === 'pourwait') {
+    if (s.busy) return 'running'
+    st.t++
+    var w = bot.blockAt(c.px, c.ly, c.pz)
+    if (w && w.name === 'water' && bot.count('water_bucket') < st.wb0) { st.ph = 'swim'; st.t = 0; return 'running' }
+    if (st.t > 3) {
+      if (bot.count('water_bucket') < st.wb0) return 'failed:pour-misplaced'
+      ban(st)
+    }
     return 'running'
   }
   if (st.ph === 'swim') {
-    if (fy >= g.ny && !(fx === g.ix && fz === g.iz)) { release(bot); go('scoop'); return 'running' }
-    if (st.pt > 25) { release(bot); return 'failed:no-climb' }
-    bot.lookAt(g.nx + 0.5, g.ny + 1.5, g.nz + 0.5)
-    bot.control('jump', true)
+    st.t++
+    if (p.onGround && p.y >= c.ly + 0.9) { release(bot); st.up = true; st.ph = 'equip2'; return 'running' }
+    if (st.t > 25) { release(bot); st.ph = 'equip2'; return 'running' }
+    bot.lookAt(c.lx + 0.5, c.ly + 1.5, c.lz + 0.5)
     bot.control('forward', true)
+    bot.control('jump', true)
+    return 'running'
+  }
+  if (st.ph === 'equip2') {
+    if (s.busy) return 'running'
+    var e = bot.equip('bucket', 'hand')
+    if (e.indexOf('denied') === 0) return 'failed:equip-bucket-denied'
+    st.ph = 'scoop'; st.t = 0
     return 'running'
   }
   if (st.ph === 'scoop') {
-    release(bot)
-    if (bot.count('water_bucket') >= st.wb0) { go('hop'); return 'running' }
     if (s.busy) return 'running'
-    if (!st.eq) { bot.equip('bucket', 'hand'); st.eq = true; return 'running' }
-    if (st.pt > 12) return 'failed:no-scoop'
-    if (st.pt % 2 === 0) bot.use(st.src.x, st.src.y, st.src.z)
+    st.t++
+    if (bot.count('water_bucket') >= st.wb0) return st.up ? 'done' : 'failed:swim-short'
+    if (st.t > 10) return 'failed:scoop-failed'
+    if (eyeDist(p, c) > REACH) {
+      if (st.up) bot.goto(c.lx + 0.5, c.ly + 1, c.lz + 0.5, 0)
+      else bot.goto(c.px + 0.5, c.fy, c.pz + 0.5, 0)
+      return 'running'
+    }
+    bot.stop()
+    var k = bot.use(c.px, c.ly, c.pz)
+    if (k === 'started') { st.ph = 'scoopwait'; st.t2 = 0 }
     return 'running'
   }
-  if (st.ph === 'hop') {
-    const rx = g.nx + g.dx, rz = g.nz + g.dz
-    if (!(solid(bot, rx, g.ny, rz) && air(bot, rx, g.ny + 1, rz) && air(bot, rx, g.ny + 2, rz))) { release(bot); return 'done' }
-    if ((fy >= g.ny + 1 && p.onGround) || st.pt > 6) { release(bot); return 'done' }
-    bot.lookAt(rx + 0.5, g.ny + 1.5, rz + 0.5)
-    bot.control('forward', true)
-    bot.control('jump', true)
+  if (st.ph === 'scoopwait') {
+    if (s.busy) return 'running'
+    st.t2++
+    if (bot.count('water_bucket') >= st.wb0) return st.up ? 'done' : 'failed:swim-short'
+    if (st.t2 > 2) st.ph = 'scoop'
     return 'running'
   }
   return 'failed:bad-phase'
