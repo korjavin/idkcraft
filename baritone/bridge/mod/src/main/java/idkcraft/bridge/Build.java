@@ -75,6 +75,7 @@ public final class Build {
     /** Baritone's pause verdict from its own chat lines (idkcraft-pnxy). */
     private final BuildPlan.PauseTap pauseTap = new BuildPlan.PauseTap();
     private final BuildDiagnostics diagnostics = new BuildDiagnostics();
+    private boolean listenerInstalled;
 
     /**
      * Wraps {@code Settings.logger} (Baritone's chat sink) so the builder's
@@ -127,12 +128,6 @@ public final class Build {
 
     public static void install(BridgeServer server) {
         Build build = new Build(server);
-        BaritoneAPI.getProvider().getPrimaryBaritone().getGameEventHandler()
-                .registerEventListener(new AbstractGameEventListener() {
-                    @Override public void onPathEvent(PathEvent event) {
-                        try { build.diagnostics.event(event.name()); } catch (Exception ignored) { }
-                    }
-                });
         server.onClientTick(build::tick);
         server.register("baritone.build", params -> {
             Spec spec = BuildPlan.parse(params);
@@ -325,6 +320,18 @@ public final class Build {
         int[] o = BuildPlan.rebasedOrigin(spec);
         BlockPos origin = new BlockPos(o[0], o[1], o[2]);
         baritone.api.IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+        if (!listenerInstalled) {
+            try {
+                baritone.getGameEventHandler().registerEventListener(new AbstractGameEventListener() {
+                    @Override public void onPathEvent(PathEvent event) {
+                        try { diagnostics.event(event.name()); } catch (Exception ignored) { }
+                    }
+                });
+                listenerInstalled = true;
+            } catch (Exception ignored) {
+                // Best effort; a later build may retry registration.
+            }
+        }
         Map<Block, List<Block>> javaSubstitutes = new HashMap<>();
         for (Map.Entry<String, List<String>> e : substitutes.entrySet()) {
             List<Block> alts = new ArrayList<>();
