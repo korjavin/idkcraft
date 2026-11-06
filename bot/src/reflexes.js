@@ -104,6 +104,11 @@ function eatReflex(bot, ctx, state) {
       await bot.consume()
       console.log(`eat ${foodItem.name} food=${prevFood}`)
     } catch (_) {
+      const now = Date.now()
+      if (process.env.BOT_BODY === 'baritone' && (!ctx.eatFailureLoggedAt || now - ctx.eatFailureLoggedAt >= 60000)) {
+        ctx.eatFailureLoggedAt = now
+        console.log(`eat failed item=${foodItem.name} food=${bot.food}`)
+      }
     } finally {
       ctx.eatInFlight = false
       try { fightMod.equipGear(bot) } catch (_) {}

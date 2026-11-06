@@ -23,6 +23,7 @@ const metrics = require('./metrics')
 const residence = require('./residence')
 const { recordAttempt, markAttemptStart } = require('./stall-state')
 const { failReason, isFinished, nextStepGen, chatStep, STEP_CHAT_SAME_MS, stepDone, stepFailed } = require('./step')
+const { LOW_HP_GATE_MS, LOW_HP_GAP_MS, lowHpNoFood, lowHpGated } = require('./health-gate')
 
 // House budget and bounded-hold windows live in the leaf budget.js
 // (oqul.3) so behaviours read them without loading goal; re-exported here.
@@ -616,37 +617,15 @@ function castleGo(facts, ctx, bot = null) {
 // (nothing to eat), so forage (a hunt) or rest runs until food or regen
 // lands. With food on hand the reflex eats and work continues. An
 // unreadable pack reads fed (fail open: the old behaviour).
-function lowHpNoFood(bot, facts) {
-  try {
-    if (!(facts && facts.health < 6)) return false
-    const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
-    if (!Array.isArray(items)) return false
-    return !require('./reflexes').pickEdible(items)
-  } catch (_) {
-    return false
-  }
-}
 // Bounded stand-down (idkcraft-vmzq.51): the .49 gate above idles the
 // castle until the watchdog parks when hp stays low with no food, no
 // animals and no regen. Past LOW_HP_GATE_MS of continuous gating the work
 // resumes at low hp — an idle bot starves anyway, and retreat/pillar still
 // own live combat. The clock arms in decide() on the raw pack check; an
 // unarmed ctx reads gated (fail closed, the .49 shape).
-const LOW_HP_GATE_MS = 5 * 60 * 1000
 // Continuity gap (67z3 revmux 01 minor): decide runs on work ticks only
 // (~1 s), so a longer silence means fight, follow or pause owned the body
 // and the 'continuous' in continuous gating is unverified.
-const LOW_HP_GAP_MS = 60 * 1000
-function lowHpGated(bot, facts, ctx) {
-  if (!lowHpNoFood(bot, facts)) return false
-  try {
-    const since = ctx && typeof ctx.lowHpGateSince === 'number' ? ctx.lowHpGateSince : null
-    if (since == null) return true
-    return Date.now() - since <= LOW_HP_GATE_MS
-  } catch (_) {
-    return true
-  }
-}
 
 // Return-to-site radius (idkcraft-vmzq.50): past 64 XZ from the castle
 // centre the day belongs to the walk back, not to far legs. 64 is the
@@ -3168,6 +3147,16 @@ async function decide(bot, ctx) {
   try { nightNearShelter = fires('night-near') } catch (_) { nightNearShelter = false }
   const held = stickyHold(bot, ctx, facts, prev, status, finished, nightFarWalk)
   if (held) return held
+  const foodRecovery = require('./behaviours/food-recovery')
+  const foodExit = prev === 'foodRecovery' && !foodRecovery.needed(bot, ctx, facts)
+  if (foodExit) foodRecovery.invalidate(ctx)
+  if (prev === 'foodRecovery' && !finished && !foodExit) return { action: prev, sprint: false, source: 'goal-fsm' }
+  if (prev !== 'foodRecovery' && foodRecovery.available(bot, ctx, facts)) {
+    const choice = { step: 'foodRecovery', source: 'survival', fsm: 'foodRecovery' }
+    applyChoice(bot, ctx, facts, choice, prev, finished, 'low-health-food', text)
+    console.log('goal step=foodRecovery source=survival why=low-health-food')
+    return { action: 'foodRecovery', sprint: false, source: 'goal-fsm' }
+  }
   const { chainOwns, fetchRetry, gateOpened, buildRetry, siteRetry } = gateForces(fires)
   const pins = readPins(ctx)
   const planStep = pins.planStep
@@ -3185,7 +3174,7 @@ async function decide(bot, ctx) {
   if (prev && !finished && ctx) {
     try { factsForce = textForce(prev, facts, bot, ctx, status, text) } catch (_) { factsForce = ctx.goalText !== text }
   }
-  if (!prev || finished || factsForce || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
+  if (!prev || finished || foodExit || factsForce || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
     if (commitEnded) {
       try {
         require('./commitment').commitFinished(bot, ctx, status) // oqul.5: task.js registers it

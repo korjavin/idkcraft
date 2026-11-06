@@ -69,6 +69,7 @@ function createOrders(box) {
   const orders = {
     setFollow: (name) => {
       if (name && box.swarmHelper) return flatMod.SWARM_HELPER_LINE // tpd1: refused, nothing changes; stop ('') passes
+      require('./behaviours/food-recovery').invalidate(ctx)
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
@@ -155,6 +156,7 @@ function createOrders(box) {
       return line
     },
     stop: () => {
+      require('./behaviours/food-recovery').invalidate(ctx)
       clearPendingSearch(ctx)
       clearStuck()
       resetNightStep()
@@ -171,7 +173,7 @@ function createOrders(box) {
       ctx.gocastle = null
       stopOnce()
     },
-    setLead: (order) => { clearStuck(); resetNightStep(); ctx.gocastle = null; homeMod.releaseMeet(bot, ctx); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } },
+    setLead: (order) => { require('./behaviours/food-recovery').invalidate(ctx); clearStuck(); resetNightStep(); ctx.gocastle = null; homeMod.releaseMeet(bot, ctx); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } },
     clearLead: (player) => {
       // A pending far search dies with the asker (or with the bot, when no
       // player is named) — never with an unrelated player logging off.
