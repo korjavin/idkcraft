@@ -855,7 +855,21 @@ async function withdrawAnyFromChest(bot, ctx, names, count, at = null) {
           if (!s || typeof s.name !== 'string' || !want.has(s.name)) continue
           const take = Math.min(typeof s.count === 'number' ? s.count : 1, need)
           if (take <= 0) continue
+          // A confirmed pack increase supplies provenance for the tool chain's
+          // non-home chest lookup without treating a successful call as proof.
+          const trace = at && ctx && ctx.bring && ctx.bring.toolName
+          const countInPack = () => {
+            try { return invItems(bot).filter((i) => i.name === s.name).reduce((n, i) => n + i.count, 0) } catch (_) { return null }
+          }
+          const before = trace ? countInPack() : null
           await window.withdraw(s.type, s.metadata, take)
+          if (trace && before !== null) {
+            const after = countInPack()
+            const gained = after === null ? 0 : Math.min(take, Math.max(0, after - before))
+            if (gained > 0) {
+              try { console.log(`tool chest withdrawal at=${at.x},${at.y},${at.z} item=${s.name} count=${gained} tool=${trace}`) } catch (_) { /* logging must not affect withdrawal */ }
+            }
+          }
           if (first === null) first = s.name
           need -= take
           got += take

@@ -249,6 +249,32 @@ describe('remembered chest sightings', () => {
 })
 
 describe("'make me a stone hoe' with an empty home chest", () => {
+  it('logs only observed non-home tool material gains, with their source', async () => {
+    const bot = mockBot({
+      chests: { '12,64,0': [{ name: 'cobblestone', count: 3 }] },
+      names: chestCells({ '12,64,0': 'chest' }),
+    })
+    bot.entity.position = pos(12, 64, 0)
+    const ctx = { bring: { toolName: 'stone_hoe' }, home: { chest: HOME_CHEST } }
+    const lines = []
+    const log = console.log
+    console.log = (line) => lines.push(line)
+    try {
+      await stockpile.withdrawAnyFromChest(bot, ctx, ['cobblestone'], 3, NEAR_CHEST)
+      await stockpile.withdrawAnyFromChest(bot, ctx, ['cobblestone'], 3, NEAR_CHEST)
+      assert.deepEqual(lines, ['tool chest withdrawal at=12,64,0 item=cobblestone count=3 tool=stone_hoe'])
+      assert.equal(bot._items.find((i) => i.name === 'cobblestone').count, 3)
+      assert.deepEqual(bot.chests['12,64,0'], [])
+      bot.chests['12,64,0'].push({ name: 'stick', count: 2 })
+      const open = bot.openChest
+      bot.openChest = async (block) => ({ ...await open(block), withdraw: async () => {} })
+      await stockpile.withdrawAnyFromChest(bot, ctx, ['stick'], 2, NEAR_CHEST)
+      assert.equal(lines.length, 1, 'a resolved withdrawal without a pack gain is not proof')
+    } finally {
+      console.log = log
+    }
+  })
+
   it('opens the remembered nearby chest holding the mats and equips', async () => {
     const bot = mockBot({
       chests: { '5,64,1': [], '12,64,0': [{ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }] },
