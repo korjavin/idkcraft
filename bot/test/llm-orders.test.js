@@ -577,6 +577,51 @@ describe('llm orders: flag on', () => {
     }
   })
 
+  it('v2 marks a deferred prerequisite search as self-owned and cancels it on timeout', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot()
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"need","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 1')
+      await flush()
+      answer = '{"plan":[{"step":"acquire","item":"coal","count":1}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      // Model the far-search result of setBring; no bring exists until the
+      // async search cursor completes.
+      ticker.setBring = ({ name, want, by }) => { ctx.pendingSearch = { name, want, by, kind: 'bring' }; return 'searching' }
+      const now = Date.now()
+      llmOrders.tick(bot, ctx, now)
+      assert.equal(ctx.pendingSearch.self, true)
+      answer = '{"plan":[]}'
+      llmOrders.tick(bot, ctx, now + llmOrders.STEP_MS + 1)
+      await flush()
+      assert.equal(ctx.pendingSearch, null)
+      assert.equal(ctx.llmOrder, null)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('a completed far search carries self ownership into the acquired block order', async () => {
+    const { advancePendingSearch } = require('../src/chat')
+    const bot = mockBot()
+    bot.registry.blocksByName.coal_ore = { id: 12 }
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.pendingSearch = {
+      cursor: { blockName: 'coal_ore', ids: [12], queue: [], at: 0, hits: new Map(), stageMs: {}, stageScans: {}, edge: 160, origin: pos(0, 64, 0) },
+      kind: 'bring', name: 'coal_ore', want: 1, by: 'P', self: true,
+    }
+    await advancePendingSearch(bot, ticker, ctx)
+    assert.equal(ctx.bring && ctx.bring.self, true)
+    assert.equal(ctx.bring && ctx.bring.name, 'coal_ore')
+  })
+
   it('an unparsed line plans, the order step is re-fed as chat, done when the order ends', async () => {
     const bot = mockBot([{ name: 'torch', count: 8 }])
     const ticker = tickerFor(bot)

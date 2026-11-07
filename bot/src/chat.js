@@ -54,7 +54,7 @@ function resSubmerged(bot, ctx, res) {
 
 // Shared block-order creation (amb): sync setBring and far-search
 // completion build the same order and announce the honest distance.
-function startBlockOrder(bot, ctx, { name, want, by }, res) {
+function startBlockOrder(bot, ctx, { name, want, by, self }, res) {
   if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
   if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
     return bringMod.tierRefusal(bot, res.name)
@@ -76,6 +76,7 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
     ctx.resumeWork = false
     ctx.bring = {
       kind: 'block', name, want, by, phase: 'find', have: 0, announced: false,
+      ...(self ? { self: true } : {}),
       skip: new Set([bringMod.skipKey(res.position)]), sawSubmerged: true,
     }
     ctx.paused = false
@@ -93,6 +94,7 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
     kind: 'block', name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
     pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
     have: 0, announced: true, exposed: res.exposed !== false,
+    ...(self ? { self: true } : {}),
   }
   if (res.far === true) ctx.bring.far = true // memory target: unloaded is not gone
   ctx.paused = false
@@ -168,6 +170,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
         ctx.bring = {
           kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
           have: 0, announced: false, searchSkipFar: true,
+          ...(p.self ? { self: true } : {}),
           deepVein: gated ? bringMod.deepVeinOf(bp0, gated) : undefined,
         }
         try {
@@ -249,6 +252,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
       ctx.bring = {
         kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
         have: 0, announced: false, searchSkipFar: true,
+        ...(p.self ? { self: true } : {}),
       }
       // The handover takes the body (revmux 02-review): same inline reset as
       // the found branch — a stale stay must not survive, and a body asleep

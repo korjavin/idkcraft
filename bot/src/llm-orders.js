@@ -694,6 +694,7 @@ function release(ctx, o) {
     ctx.bring = null
     try { require('./behaviours/bring').clearSearchLeg(ctx) } catch (_) { /* leg best-effort */ }
   }
+  if (o.cur.search && ctx.pendingSearch === o.cur.search && o.ticker && typeof o.ticker.prepareBring === 'function') o.ticker.prepareBring()
   if (s.step === 'find' && (ctx.lead || ctx.pendingSearch) && o.ticker && typeof o.ticker.clearLead === 'function') o.ticker.clearLead()
   if (s.step === 'flat' && ctx.flat) ctx.flat.parked = true
 }
@@ -819,6 +820,7 @@ function startStep(bot, ctx, o, s, now) {
       if (s.step === 'acquire' && o.bringGoal) {
         const reply = o.ticker && o.ticker.setBring({ name: s.item, want: s.count, by: o.by })
         if (ctx.bring && ctx.bring !== before.bring) ctx.bring.self = true
+        else if (ctx.pendingSearch && ctx.pendingSearch !== before.ps) ctx.pendingSearch.self = true
         else if (reply) o.acquireRefusal = String(reply).slice(0, 120)
       } else o.feed(order.chat(s))
     } finally { o.feeding = false }
@@ -832,6 +834,7 @@ function startStep(bot, ctx, o, s, now) {
       o.cur = null
       return end(bot, ctx, o, 'failed:refused')
     }
+    if (ctx.pendingSearch && ctx.pendingSearch !== before.ps) o.cur.search = ctx.pendingSearch
     if (ctx.lead) o.cur.led = true
     return
   }
