@@ -685,11 +685,11 @@ function handleChat(bot, ticker, username, message, senderUuid) {
           : (food ? bringMod.WANT_FOOD : (sapling ? 1 : (/logs?$|_log$/.test(name) ? bringMod.WANT_LOGS : bringMod.WANT_ORE)))
         // On v2 the LLM can guide ordinary bring orders too. Its own
         // re-fed bring line bypasses this branch via feeding().
-        const knownBring = food || !!bringMod.resolveItem(bot, name) || bringMod.canBringName(bot, name)
-        if (process.env.BOT_BODY === 'baritone' && knownBring && /^[a-z0-9_]{1,40}$/.test(name)) {
+        if (process.env.BOT_BODY === 'baritone' && /^[a-z0-9_]{1,40}$/.test(name) &&
+            (food || !!bringMod.resolveItem(bot, name) || bringMod.canBringName(bot, name))) {
           const fallback = () => { const reply = ticker.setBring({ name, want, by: playerName }); if (reply) bot.chat(reply) }
           if (llmAsk(null, msg, true, { item: name, remaining: want, history: [] }, fallback)) {
-            if (typeof ticker.stop === 'function') ticker.stop()
+            if (typeof ticker.prepareBring === 'function') ticker.prepareBring()
             return
           }
         }

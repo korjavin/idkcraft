@@ -95,7 +95,7 @@ const BRING_SYSTEM = 'You guide a Minecraft companion to fulfill the player’s 
   'Choose only listed actions. When a prerequisite is missing, answer with a single need(item,count) step; that pushes it onto the goal stack and you will be asked again. For a prerequisite goal use acquire(item,count) to keep it; the parent resumes afterwards. If a prerequisite cannot be obtained, use abandon to reconsider its parent. For the root goal use bring(item,count). ' +
   'Use observations and prior failures to try a different feasible approach; do not invent commands or claim success. ' +
   'Answer JSON only: {"plan":[{"step":"<id>","item":"<registry id>","count":<n>,"done":"<expected result>"}]}. ' +
-  'Use only bring or listed work skills, at most 6 steps. If no listed skill can help, return {"plan":[]}.'
+  'Use only the listed actions and work skills, at most 6 steps. If no listed skill can help, return {"plan":[]}.'
 
 function enabled(env = process.env) {
   return /^(1|true|yes)$/i.test(String(env.BOT_LLM_ORDERS || '')) && !!env.ANTHROPIC_API_KEY
@@ -746,6 +746,7 @@ function replanBring(bot, ctx, o, observation) {
   }
   g.rounds++
   o.cur = null
+  o.waitAt = null
   o.replanning = true
   void (async () => {
     let r

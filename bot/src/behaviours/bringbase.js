@@ -142,7 +142,8 @@ function refuse(bot, ctx, line) {
   sayHarvestDeficit(bot, o)
   metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
   stopGuidedWork(ctx)
-  ctx.bringEnd = { outcome: 'refused', at: Date.now(), reason: String(sub || line || 'refused').slice(0, 120) }
+  ctx.bringEnd = { outcome: 'refused', at: Date.now() }
+  if (process.env.BOT_BODY === 'baritone') ctx.bringEnd.reason = String(sub || line || 'refused').slice(0, 120)
   ctx.bring = null
   releaseSmelt(ctx)
   clearGoal(bot, ctx)
