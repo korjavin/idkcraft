@@ -622,6 +622,21 @@ describe('llm orders: flag on', () => {
     assert.equal(ctx.bring && ctx.bring.name, 'coal_ore')
   })
 
+  it('found dry and underwater block targets retain self ownership', () => {
+    const { startBlockOrder } = require('../src/chat')
+    for (const wet of [false, true]) {
+      const bot = mockBot()
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      const target = pos(5, 64, 0)
+      bot.blockAt = (p) => ({ name: wet && p.y === 65 ? 'water' : 'oak_log', position: p })
+      startBlockOrder(bot, ctx, { name: 'oak_log', want: 1, by: 'P', self: true }, { name: 'oak_log', position: target, distance: 5, exposed: true })
+      assert.equal(ctx.bring.self, true)
+      assert.equal(ctx.bring.phase, wet ? 'find' : 'walk')
+      assert.ok(ticker)
+    }
+  })
+
   it('an unparsed line plans, the order step is re-fed as chat, done when the order ends', async () => {
     const bot = mockBot([{ name: 'torch', count: 8 }])
     const ticker = tickerFor(bot)
