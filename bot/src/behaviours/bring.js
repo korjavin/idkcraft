@@ -2495,11 +2495,14 @@ async function bring(bot, ctx, target, state) {
       o.tossInFlight = true
       void (async () => {
         try {
+          const before = countDrop(bot, o.drop)
           await bot.toss(id, null, n)
+          if (ctx.bring !== o) return
+          const tossed = Math.min(n, Math.max(0, before - countDrop(bot, o.drop)))
           say(bot, `here ${n === 1 ? 'is' : 'are'} ${n} ${o.drop}`)
-          done(bot, ctx)
+          done(bot, ctx, { tossed, item: o.drop, by: o.by })
         } catch (_) {
-          refuse(bot, ctx, `could not toss ${o.drop}`)
+          if (ctx.bring === o) refuse(bot, ctx, `could not toss ${o.drop}`)
         } finally {
           o.tossInFlight = false
         }

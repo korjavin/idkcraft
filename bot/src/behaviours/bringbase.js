@@ -142,17 +142,17 @@ function refuse(bot, ctx, line) {
   sayHarvestDeficit(bot, o)
   metrics.bring.inc({ outcome: 'refused', kind: bringKind(ctx) })
   stopGuidedWork(ctx)
-  ctx.bringEnd = { outcome: 'refused', at: Date.now() } // vf8e.6: an LLM plan reads how its bring ended
+  ctx.bringEnd = { outcome: 'refused', at: Date.now(), reason: String(sub || line || 'refused').slice(0, 120) }
   ctx.bring = null
   releaseSmelt(ctx)
   clearGoal(bot, ctx)
 }
 
-function done(bot, ctx) {
+function done(bot, ctx, evidence) {
   sayHarvestDeficit(bot, ctx && ctx.bring)
   metrics.bring.inc({ outcome: 'done', kind: bringKind(ctx) })
   stopGuidedWork(ctx)
-  ctx.bringEnd = { outcome: 'done', at: Date.now() }
+  ctx.bringEnd = { outcome: 'done', at: Date.now(), ...(evidence || {}) }
   ctx.bring = null
   releaseSmelt(ctx)
   clearGoal(bot, ctx)
