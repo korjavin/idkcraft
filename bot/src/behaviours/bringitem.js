@@ -1944,8 +1944,11 @@ function shareToss(bot, ctx, o) {
   o.tossInFlight = true
   void (async () => {
     const got = []
+    let tossed = 0
+    const v2 = process.env.BOT_BODY === 'baritone'
     try {
       for (const item of items) {
+        if (v2 && ctx.bring !== o) break
         let id = null
         try {
           const entry = bot.registry && bot.registry.itemsByName && bot.registry.itemsByName[item.name]
@@ -1958,19 +1961,22 @@ function shareToss(bot, ctx, o) {
         if (n <= 0) continue
         try {
           await bot.toss(id, null, n)
+          if (v2 && ctx.bring !== o) break
+          if (v2) tossed += Math.min(n, Math.max(0, have - countItems(bot, (name) => name === item.name)))
           got.push(`${n} ${item.name}`)
         } catch (_) { /* next item */ }
       }
     } finally {
       o.tossInFlight = false
     }
+    if (v2 && ctx.bring !== o) return
     if (got.length === 0) {
       refuse(bot, ctx, `could not toss ${(items[0] && items[0].name) || 'items'}`)
       return
     }
     const one = got.length === 1 && /^1 \S/.test(got[0])
     say(bot, `${isItem ? (one ? 'here is' : 'here are') : 'shared:'} ${got.join(', ')}`)
-    done(bot, ctx)
+    done(bot, ctx, v2 ? { tossed, by: o.by } : null)
   })()
 }
 

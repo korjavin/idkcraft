@@ -138,6 +138,505 @@ describe('llm orders: plan validation', () => {
 })
 
 describe('llm orders: flag on', () => {
+  it('v2 routes a known bring order through the model and reports only a confirmed inventory toss', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const items = [{ name: 'torch', count: 2 }]
+      const bot = mockBot(items)
+      bot.toss = async () => { items[0].count = 0 }
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      ctx.work = true
+      answer = '{"plan":[{"step":"bring","item":"torch","count":2}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 2')
+      await flush()
+      assert.equal(calls.length, 1)
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.bring.name, 'torch')
+      require('../src/behaviours/bringitem').shareToss(bot, ctx, ctx.bring)
+      await flush()
+      assert.equal(ctx.bringEnd.tossed, 2)
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.llmOrder, null)
+      assert.equal(ctx.work, true, 'the pre-order work mode resumes after bring')
+      assert.ok(bot.lines.some((line) => line.includes('pickup not verified')))
+      assert.ok(!bot.lines.some((line) => line.startsWith('done:')))
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 reconsiders a refused action with feedback and preserves the original order', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const items = [{ name: 'coal', count: 1 }]
+      const bot = mockBot(items)
+      bot.toss = async () => { items[0].count = 0 }
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me coal 1')
+      await flush()
+      llmOrders.tick(bot, ctx)
+      assert.ok(ctx.bring)
+      bringbase.refuse(bot, ctx, 'no reachable route')
+      answer = '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      assert.equal(calls.length, 2)
+      assert.match(calls[1].messages[0].content, /no reachable route/)
+      llmOrders.tick(bot, ctx)
+      require('../src/behaviours/bringitem').shareToss(bot, ctx, ctx.bring)
+      await flush()
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.llmOrder, null)
+      assert.ok(bot.lines.some((line) => line.includes('pickup not verified')))
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 retains the root goal while a prerequisite is on the stack, and rejects a cycle', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot()
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"need","item":"stick","count":2}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 2')
+      await flush()
+      answer = '{"plan":[{"step":"need","item":"torch","count":2}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      assert.deepEqual(ctx.llmOrder.bringGoal.stack, [{ item: 'torch', count: 2 }, { item: 'stick', count: 2 }])
+      assert.match(calls[1].messages[0].content, /torch 2 > stick 2/)
+      answer = '{"plan":[]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      assert.equal(ctx.llmOrder, null)
+      assert.match(calls[2].messages[0].content, /cycle or depth limit/)
+      assert.ok(!bot.lines.some((line) => line.startsWith('done:')))
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 acquires a prerequisite from a chest, resumes its parent, and tosses the requested item', async () => {
+    const prev = process.env.BOT_BODY
+    const stockpile = require('../src/behaviours/stockpile')
+    const originalWithdraw = stockpile.withdrawAnyFromChest
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const items = []
+      const chest = { stick: 2, torch: 2 }
+      const bot = mockBot(items)
+      bot.toss = async (id, _meta, n) => { const name = Object.keys(bot.registry.itemsByName).find((key) => bot.registry.itemsByName[key].id === id); items.find((i) => i.name === name).count -= n }
+      // Same withdraw contract as stockpile: move stock from a chest into
+      // the actual bot inventory and return the amount transferred.
+      stockpile.withdrawAnyFromChest = async (_bot, _ctx, names, need) => {
+        const name = names.find((n) => chest[n] > 0)
+        if (!name) return { got: 0 }
+        const got = Math.min(chest[name], need)
+        chest[name] -= got
+        const item = items.find((i) => i.name === name)
+        if (item) item.count += got
+        else items.push({ name, count: got })
+        return { got }
+      }
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      ctx.home = { chest: { x: 0, y: 64, z: 0 } }
+      answer = '{"plan":[{"step":"need","item":"stick","count":2}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 2')
+      await flush()
+      answer = '{"plan":[{"step":"acquire","item":"stick","count":2}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.bring.self, true)
+      await require('../src/behaviours/bringitem').fetchItem(bot, ctx, ctx.bring)
+      assert.equal(ctx.bring.phase, 'return')
+      await require('../src/behaviours/bring')(bot, ctx, null, {})
+      assert.equal(items.find((i) => i.name === 'stick').count, 2)
+      answer = '{"plan":[{"step":"bring","item":"torch","count":2}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      assert.equal(ctx.llmOrder.bringGoal.stack.length, 1)
+      assert.match(calls[2].messages[0].content, /acquired 2 stick; resuming parent/)
+      llmOrders.tick(bot, ctx)
+      await require('../src/behaviours/bringitem').fetchItem(bot, ctx, ctx.bring)
+      require('../src/behaviours/bringitem').shareToss(bot, ctx, ctx.bring)
+      await flush()
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.llmOrder, null)
+      assert.equal(items.find((i) => i.name === 'torch').count, 0)
+      assert.equal(items.find((i) => i.name === 'stick').count, 2)
+    } finally {
+      stockpile.withdrawAnyFromChest = originalWithdraw
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 can abandon an unavailable prerequisite and reconsider the parent goal', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot([{ name: 'torch', count: 1 }])
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"need","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 1')
+      await flush()
+      answer = '{"plan":[{"step":"abandon"}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      assert.equal(ctx.llmOrder.bringGoal.stack.length, 2)
+      answer = '{"plan":[{"step":"bring","item":"torch","count":1}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      assert.equal(ctx.llmOrder.bringGoal.stack.length, 1)
+      assert.match(calls[2].messages[0].content, /abandoned prerequisite coal/)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 discards a replan response after stop', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot([{ name: 'coal', count: 1 }])
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me coal 1')
+      await flush()
+      llmOrders.tick(bot, ctx)
+      bringbase.refuse(bot, ctx, 'not reachable')
+      let resolveFetch
+      globalThis.fetch = () => new Promise((resolve) => { resolveFetch = resolve })
+      llmOrders.tick(bot, ctx)
+      handleChat(bot, ticker, 'P', 'stop')
+      resolveFetch({ ok: true, json: async () => ({ content: [{ type: 'text', text: '{"plan":[{"step":"bring","item":"coal","count":1}]}' }], usage: {} }) })
+      await flush()
+      assert.equal(ctx.llmOrder, null)
+      assert.equal(ctx.bring, null)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 does not claim success when toss reports success without an inventory decrease', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot([{ name: 'torch', count: 1 }])
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"bring","item":"torch","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 1')
+      await flush()
+      llmOrders.tick(bot, ctx)
+      require('../src/behaviours/bringitem').shareToss(bot, ctx, ctx.bring)
+      await flush()
+      answer = '{"plan":[]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      assert.match(calls[1].messages[0].content, /inventory decreased by 0/)
+      assert.ok(!bot.lines.some((line) => line.includes('pickup not verified')))
+      assert.equal(ctx.llmOrder, null)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 rejects a model plan that changes the requested item and falls back to the ordinary order', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot([{ name: 'torch', count: 1 }])
+      const ticker = tickerFor(bot)
+      bot._tickerCtx.work = true
+      bot._tickerCtx.flat = { parked: false }
+      answer = '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 1')
+      await flush()
+      assert.equal(bot._tickerCtx.llmOrder, null)
+      assert.equal(bot._tickerCtx.bring.name, 'torch')
+      assert.equal(bot._tickerCtx.work, true)
+      assert.equal(bot._tickerCtx.flat.parked, false)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 stops replanning when the shared LLM budget is exhausted', async () => {
+    const prevBody = process.env.BOT_BODY
+    const prevBudget = process.env.LLM_TOKENS_PER_HOUR
+    process.env.BOT_BODY = 'baritone'
+    process.env.LLM_TOKENS_PER_HOUR = '1'
+    try {
+      const bot = mockBot([{ name: 'coal', count: 1 }])
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me coal 1')
+      await flush()
+      llmOrders.tick(bot, ctx)
+      bringbase.refuse(bot, ctx, 'not reachable')
+      llmOrders.tick(bot, ctx)
+      await flush()
+      assert.equal(calls.length, 1, 'no second network call after the budget is spent')
+      assert.equal(ctx.llmOrder, null)
+      assert.ok(!bot.lines.some((line) => line.includes('pickup not verified')))
+    } finally {
+      if (prevBody === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prevBody
+      if (prevBudget === undefined) delete process.env.LLM_TOKENS_PER_HOUR
+      else process.env.LLM_TOKENS_PER_HOUR = prevBudget
+    }
+  })
+
+  it('v2 stops a repeated prerequisite cycle without spending calls forever', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot([{ name: 'torch', count: 1 }])
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"need","item":"torch","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 1')
+      await flush()
+      for (let i = 0; i < 3; i++) { llmOrders.tick(bot, ctx); await flush() }
+      assert.equal(ctx.llmOrder, null)
+      assert.equal(calls.length, 3)
+      assert.ok(bot.lines.some((line) => line.includes('no progress')))
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 stops after the same bring fails three times without progress', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot([{ name: 'coal', count: 1 }])
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me coal 1')
+      await flush()
+      for (let i = 0; i < 3; i++) {
+        llmOrders.tick(bot, ctx)
+        bringbase.refuse(bot, ctx, 'not reachable')
+        llmOrders.tick(bot, ctx)
+        await flush()
+      }
+      assert.equal(ctx.llmOrder, null)
+      assert.equal(calls.length, 3)
+      assert.ok(bot.lines.some((line) => line.includes('no progress')))
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 stops at the model-round cap even when each attempt has a different inventory', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const items = [{ name: 'torch', count: 1 }, { name: 'stick', count: 1 }]
+      const bot = mockBot(items)
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"need","item":"torch","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 1')
+      await flush()
+      for (let i = 0; i < 12; i++) { items[1].count++; llmOrders.tick(bot, ctx); await flush() }
+      assert.equal(ctx.llmOrder, null)
+      assert.equal(calls.length, 12)
+      assert.ok(bot.lines.some((line) => line.includes('replan limit')))
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 retries a failed bring with a different work skill before delivering', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const items = [{ name: 'coal', count: 1 }]
+      const bot = mockBot(items)
+      bot.toss = async () => { items[0].count = 0 }
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me coal 1')
+      await flush()
+      llmOrders.tick(bot, ctx)
+      bringbase.refuse(bot, ctx, 'not reachable')
+      answer = '{"plan":[{"step":"gather"}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.taskPlanStep, 'gather')
+      ctx.taskPlanStep = null
+      ctx.step = 'gather'
+      ctx.stepStatus = 'running'
+      ctx.stepGen = (ctx.stepGen | 0) + 1
+      llmOrders.tick(bot, ctx)
+      ctx.stepStatus = 'done'
+      llmOrders.tick(bot, ctx)
+      answer = '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      assert.match(calls[2].messages[0].content, /steps ended without a confirmed toss/)
+      llmOrders.tick(bot, ctx)
+      require('../src/behaviours/bringitem').shareToss(bot, ctx, ctx.bring)
+      await flush()
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.llmOrder, null)
+      assert.equal(items[0].count, 0)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 counts an actual inventory decrease through the single-drop return phase', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const items = [{ name: 'coal', count: 1 }]
+      const bot = mockBot(items)
+      bot.toss = async () => { items[0].count = 0 }
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me coal 1')
+      await flush()
+      llmOrders.tick(bot, ctx)
+      // Seed the return phase produced by the block/mining ladder; use the
+      // real bring dispatcher and toss, rather than fabricating bringEnd.
+      Object.assign(ctx.bring, { kind: 'block', drop: 'coal', have: 1, want: 1, phase: 'return' })
+      await require('../src/behaviours/bring')(bot, ctx, null, {})
+      await flush()
+      assert.equal(ctx.bringEnd.tossed, 1)
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.llmOrder, null)
+      assert.equal(items[0].count, 0)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 waits for daylight before starting a self-acquisition', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot()
+      bot.time = { timeOfDay: 18000 }
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      ctx.home = { chest: { x: 0, y: 64, z: 0 } }
+      answer = '{"plan":[{"step":"need","item":"stick","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 1')
+      await flush()
+      answer = '{"plan":[{"step":"acquire","item":"stick","count":1}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      const now = Date.now()
+      llmOrders.tick(bot, ctx, now)
+      assert.ok(!ctx.bring)
+      assert.equal(calls.length, 2)
+      llmOrders.tick(bot, ctx, now + llmOrders.STEP_MS + 1)
+      await flush()
+      assert.equal(calls.length, 3, 'timeout replans once')
+      llmOrders.tick(bot, ctx, now + llmOrders.STEP_MS + 2)
+      assert.equal(calls.length, 3, 'the new night wait starts fresh')
+      bot.time.timeOfDay = 1000
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.bring.self, true)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('v2 marks a deferred prerequisite search as self-owned and cancels it on timeout', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot()
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = '{"plan":[{"step":"need","item":"coal","count":1}]}'
+      handleChat(bot, ticker, 'P', 'bring me torch 1')
+      await flush()
+      answer = '{"plan":[{"step":"acquire","item":"coal","count":1}]}'
+      llmOrders.tick(bot, ctx)
+      await flush()
+      // Model the far-search result of setBring; no bring exists until the
+      // async search cursor completes.
+      ticker.setBring = ({ name, want, by }) => { ctx.pendingSearch = { name, want, by, kind: 'bring' }; return 'searching' }
+      const now = Date.now()
+      llmOrders.tick(bot, ctx, now)
+      assert.equal(ctx.pendingSearch.self, true)
+      answer = '{"plan":[]}'
+      llmOrders.tick(bot, ctx, now + llmOrders.STEP_MS + 1)
+      await flush()
+      assert.equal(ctx.pendingSearch, null)
+      assert.equal(ctx.llmOrder, null)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('a completed far search carries self ownership into the acquired block order', async () => {
+    const { advancePendingSearch } = require('../src/chat')
+    const bot = mockBot()
+    bot.registry.blocksByName.coal_ore = { id: 12 }
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    ctx.pendingSearch = {
+      cursor: { blockName: 'coal_ore', ids: [12], queue: [], at: 0, hits: new Map(), stageMs: {}, stageScans: {}, edge: 160, origin: pos(0, 64, 0) },
+      kind: 'bring', name: 'coal_ore', want: 1, by: 'P', self: true,
+    }
+    await advancePendingSearch(bot, ticker, ctx)
+    assert.equal(ctx.bring && ctx.bring.self, true)
+    assert.equal(ctx.bring && ctx.bring.name, 'coal_ore')
+  })
+
+  it('found dry and underwater block targets retain self ownership', () => {
+    const { startBlockOrder } = require('../src/chat')
+    for (const wet of [false, true]) {
+      const bot = mockBot()
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      const target = pos(5, 64, 0)
+      bot.blockAt = (p) => ({ name: wet && p.y === 65 ? 'water' : 'oak_log', position: p })
+      startBlockOrder(bot, ctx, { name: 'oak_log', want: 1, by: 'P', self: true }, { name: 'oak_log', position: target, distance: 5, exposed: true })
+      assert.equal(ctx.bring.self, true)
+      assert.equal(ctx.bring.phase, wet ? 'find' : 'walk')
+      assert.ok(ticker)
+    }
+  })
+
   it('an unparsed line plans, the order step is re-fed as chat, done when the order ends', async () => {
     const bot = mockBot([{ name: 'torch', count: 8 }])
     const ticker = tickerFor(bot)
