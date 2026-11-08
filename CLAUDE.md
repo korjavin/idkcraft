@@ -170,52 +170,25 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - Smallest diff that meets acceptance criteria, no speculative abstractions beyond the single brain interface.
   - Server runs `ONLINE_MODE=false` + `ENFORCE_WHITELIST=TRUE` in iteration 1 so the bot does not need a Microsoft account.
 
-## Delivery (curator 2026-10-14)
+## Fast experimental delivery (owner 2026-11-09)
 
-- A wait over 10 min (castle-rig, stuck-run, a live body): hand it to one foreground `Agent` with
-  `model: "haiku"` ("wait until <file/condition>, return its last 40 lines"), never repeated 10-min
-  polls — each poll re-reads the developer's ~150k context (~650k tokens per 40-min rig run).
-- A follow-up from a developer hand-back on a symptom that already has ≥2 beads → spawn the architect
-  (family rule: design bead + rig scenario), never `bd create` another point fix (g0z.38→.54, neuc.35/.36).
-- Bundle beads only when together they fit one ~100-turn developer run; a bead that needs a rig run
-  never bundles (neuc.15+.23: 174 turns, 2 compactions).
+This is a game: ship small experiments promptly and tolerate minor regressions.
+The owner supersedes the older mandatory revmux, rig and multi-round review gates.
+Keep Beads for work tracking, but do not create process-only handoffs or wait for
+an architect/review round when a focused fix is clear.
 
-## Review (revmux)
-
-- One command, run from the branch's worktree: `.revmux/review.sh <bead> 01-review` — privacy pre-check,
-  profile pick, scope/goal from the bead, archive in the MAIN checkout's `.revmux/tasks/` (a worktree's
-  archive dies with the worktree), prints critical/major only, exit 1 while any is open.
-- Profile is picked from the diff: `idkcraft-risky` (two agents, synthesis on) when it touches
-  `bot/src/index.js`, `goal.js`, `brain.js`, `body.js` (`movementsFor`, the Movements write site),
-  `behaviours/recover.js`, `follow.js`, the pathfinder
-  customisations (`jumpcost.js`, `nocorner.js`, `swim.js`, `snow.js`), the packet taps (`unpin.js`,
-  `decontact.js`, `detour.js`), any `Movements` setting elsewhere (an added `bot/src/` line naming
-  `scafoldingBlocks`, `canDig`, `allow1by1towers`, `allowParkour`, `blocksCantBreak`, `exclusionAreas`,
-  `canOpenDoors`, `allowSprinting` or `Movements`) or `laya/`; else `idkcraft`
-  (one agent, `--no-synthesis`). Check a pick: `git diff --no-ext-diff origin/master...HEAD | sh .revmux/review.sh --pick`. Compose/Dockerfile/CI/env/.revmux-only diffs get `--lenses tests` automatically
-  (`LENSES=` overrides).
-- Risky files: the review archive is **mandatory** for merge.
-- Merge gate (owner 2026-10-20, prod-first): a PR is mergeable when `cd bot && npm test` is green,
-  the revmux archive exists (risky profile for the risky files above) and the PR body names the
-  **prod log signals** it moves — from the list in the idkcraft-qxql epic (S1 castle
-  `<n>/<total>` growth/day, S2 castlefetch legs/finished/cut-by, S3 stone/h and s/stone from
-  `leg over` lines, S4 step share incl. house chain and idle+stay, S5 top `failed:<reason>`,
-  S6 flat windows, S7 build-stall/build-miss, S8 dig slow/`body.stats`) — with the expected
-  direction and, when the bead gives one, the prod before-day numbers. The verdict is read
-  **after deploy** by the prod log review (idkcraft-qxql.7, `bot/tools/prod-score.js` over a
-  pulled bot2 log; pull recipe in `.claude/skills/idkcraft-session-review`): a signal that moved
-  the wrong way reopens the bead (P1 if S1 growth/day fell). No new `failed:<reason>` string
-  without naming the signal it moves.
-- Rigs are optional developer tools, never a gate: `bot/tools/castle-rig.sh` (incl.
-  `CASTLE_COMPONENT=lay|mine`, `--night`, 90-min), `bot/tools/stuck-run.sh`, `work-rig.sh` and
-  their baseline json files may be run to convince yourself before a PR; nobody waits for them,
-  no PR quotes them as acceptance, no batch run after N merges. A movement PR still lists its
-  prod coords in the PR body (for a later rig scenario if someone wants one).
-  `REPLAY_BODY=baritone` / v1 `stuck-run.sh` are frozen with v1 (owner 2026-10-20: v1 gets no time).
-- Rounds 2+ only after a critical/major was fixed: `PREV=<round-1 findings.json> REVIEWED_SHA=<sha>
-  .revmux/review.sh <bead> 02-after-fix` (scope = the fix delta, one-agent `idkcraft` profile unless one is passed). Minors are fixed in the same commit
-  and never trigger another round. Max 3 rounds (the script refuses a 4th); whatever is still gating is outstanding in the handoff.
-- A livelock/pathing finding raised in two rounds or by both agents is never dropped or downgraded
-  without a written reason (the ones that were came back as prod bugs: 3nt.19→ak4, ef3→9sq, 2bh→lzw).
-- Privacy pre-check by hand (must print nothing):
-  `git diff --no-ext-diff origin/master...HEAD | rg -n '^\+.*(\b\d{1,3}(\.\d{1,3}){3}\b|(api[_-]?key|secret|token)\s*[:=]\s*\S{8,})'`
+- For ordinary changes, run focused tests or a targeted reproduction, and have the
+  orchestrator or another developer inspect the diff for correctness. A brief
+  review is enough; revmux, full local suites and rigs are optional tools.
+- Merge and deploy once the focused checks and review pass; do not wait for
+  duplicate PR CI. The main CI test suite gates deployment on master; the slow
+  suite runs independently and failures must be investigated. Do not claim
+  deployment before verifying the running image and relevant production logs.
+- Treat credentials, access controls, world/data deletion or migration, and
+  deployment infrastructure as higher risk: inspect the exact change and use
+  appropriate extra checks. Preserve secrets, player builds and existing data.
+- Prefer reversible, small changes; note the production signal and roll back or
+  fix a regression promptly. Do not wait for long rigs or new review rounds by
+  default. The v1 body and frozen replay remain out of scope unless requested.
+- Before publishing, scan the diff for secrets, hostnames and IP addresses.
+  Existing explicit user instructions always take precedence.

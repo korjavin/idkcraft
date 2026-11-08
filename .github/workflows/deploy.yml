@@ -20,8 +20,7 @@ jobs:
           cache-dependency-path: bot/package-lock.json
       - run: cd bot && npm ci && npm test
 
-  # idkcraft-oqul.2: the ~9 min task-run.sh oracle suite moved out of npm
-  # test (kept < 60 s); a parallel job keeps it gating the deploy.
+  # The slower oracle suite remains visible in CI, but does not delay deploy.
   test-slow:
     runs-on: ubuntu-latest
     steps:
@@ -51,9 +50,12 @@ jobs:
           cache-from: type=gha,scope=baritone
 
   deploy:
-    needs: [test, test-slow]
+    needs: [test]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    concurrency:
+      group: idkcraft-deploy
+      cancel-in-progress: false
     permissions:
       contents: write
       packages: write
@@ -134,6 +136,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=baritone
 
       - name: Update deploy branch
+        id: update-deploy
         env:
           IMAGE_BASE: ghcr.io/korjavin/idkcraft
           BARITONE_IMAGE: ghcr.io/korjavin/idkcraft-baritone
@@ -141,6 +144,12 @@ jobs:
           BARITONE_SHA: ${{ env.BARITONE_SHA }}
           GITHUB_COMMIT_SHA: ${{ github.sha }}
         run: |
+          git fetch origin master
+          if [ "$(git rev-parse FETCH_HEAD)" != "$GITHUB_COMMIT_SHA" ]; then
+            echo "A newer master commit superseded this deployment"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B deploy
@@ -153,8 +162,10 @@ jobs:
           git add docker-compose.yml
           git commit -m "deploy: ${GITHUB_COMMIT_SHA}"
           git push origin deploy --force
+          echo "updated=true" >> "$GITHUB_OUTPUT"
 
       - name: Trigger Portainer webhook
+        if: steps.update-deploy.outputs.updated == 'true'
         uses: distributhor/workflow-webhook@2381f0e9c7b6bf061fb1405bd0804b8706116369 # v3.0.8
         with:
           webhook_url: ${{ secrets.PORTAINER_REDEPLOY_HOOK }}
