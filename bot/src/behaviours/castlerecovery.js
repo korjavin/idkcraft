@@ -56,7 +56,9 @@ function blocker(bot, ctx) {
   if (ctx.breath) return 'breath'
   if (ctx.stuck) return 'stuck'
   if (ctx.body && ctx.body.owner !== 'work') return `owner-${ctx.body.owner}`
-  if (ctx.lastDecision && ['fight', 'follow'].includes(ctx.lastDecision.action)) return ctx.lastDecision.action
+  // Only fight takes the body from work: a stub 'follow' (any player in range)
+  // runs the work tick anyway, so it blocked every recovery while someone was online.
+  if (ctx.lastDecision && ctx.lastDecision.action === 'fight') return 'fight'
   return null
 }
 // The menu's word: an eligible cell the castle step would actually start.
@@ -77,7 +79,7 @@ function control(bot, ctx, ep) {
     ctx.work && ctx.step === 'castle' && !ctx.paused && !ctx.lead && !ctx.bring &&
     !ctx.inShelter && !ctx.breath && !ctx.stuck &&
     (!ctx.body || ctx.body.owner === 'work') &&
-    !(ctx.lastDecision && ['fight', 'follow'].includes(ctx.lastDecision.action)) &&
+    !(ctx.lastDecision && ctx.lastDecision.action === 'fight') &&
     (!bot.pathfinder.goal || bot.pathfinder.goal === ep.goal)
 }
 function say(ep, action, outcome) {
