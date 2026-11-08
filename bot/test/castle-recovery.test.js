@@ -391,4 +391,12 @@ describe('qxql.27 recovery word vs a running fence fetch', () => {
     assert.ok(logs.some((m) => m === `castle recovery target=${f.frame.x},${f.frame.y},${f.frame.z} not startable: bring`), logs.join('\n'))
     assert.equal(recovery.blocker(f.bot, { work: true, body: { owner: 'work' } }), null)
   })
+  it('prod 2026-11-08 23:34: a stub follow (owner online, work tick runs) does not block; fight does', () => {
+    const f = fenceFixture()
+    f.ctx.step = 'explore'
+    f.ctx.lastDecision = { action: 'follow', source: 'stub' }
+    assert.equal(castle.menuFact(f.bot, f.ctx), 'clear')
+    assert.equal(recovery.blocker(f.bot, { work: true, body: { owner: 'work' }, lastDecision: { action: 'follow' } }), null)
+    assert.equal(recovery.blocker(f.bot, { work: true, body: { owner: 'work' }, lastDecision: { action: 'fight' } }), 'fight')
+  })
 })
