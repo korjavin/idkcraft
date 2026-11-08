@@ -76,12 +76,62 @@ describe('chat-limit', () => {
     assert.equal(packets('a\nb'), 2)
     assert.equal(packets('/tell P ' + 'x'.repeat(600)), 1)
     const bot = fakeBot()
-    bot.chat('x'.repeat(600)) // 60
-    bot.chat('x'.repeat(600)) // 120
-    bot.chat('x'.repeat(600)) // 180 > 160: queued
-    assert.equal(bot.sent.length, 2)
+    bot.chat('x'.repeat(600)) // 3 packets, each its own send
+    bot.chat('x'.repeat(600))
+    bot.chat('x'.repeat(600)) // the 9th packet would pass 160: queued
+    assert.equal(bot.sent.length, 8)
+    assert.ok(bot.sent.every((m) => m.length <= 256))
     for (let t = 0; t < 50; t++) mock.timers.tick(100)
-    assert.equal(bot.sent.length, 3)
+    assert.equal(bot.sent.length, 9)
+    assert.equal(bot.sent.join(''), 'x'.repeat(1800))
+  })
+
+  it('qxql.26: one 3087-char line on an empty bucket is no kick; chat keeps 3 packets, the log keeps it all', () => {
+    const line = 'castle: 40 holes: ' + Array.from({ length: 200 }, (_, i) => `${i} 64 ${i} (wall: dug)`).join(', ')
+    const raw = server() // pre-fix: the whole line as packets in one go
+    for (let i = 0; i < line.length; i += 256) raw.recv(line.slice(i, i + 256))
+    assert.ok(raw.peak > 200, `raw peak ${raw.peak}`)
+    const bot = fakeBot()
+    const logs = []
+    const log = mock.method(console, 'log', (m) => logs.push(m))
+    try {
+      bot.chat(line)
+      bot.chat(line) // a repeat right after still paces
+      for (let t = 0; t < 100; t++) mock.timers.tick(100)
+    } finally { log.mock.restore() }
+    assert.equal(bot.sent.length, 6)
+    assert.ok(bot.sent.every((m) => m.length <= 256), 'each send is one packet')
+    assert.ok(bot.sent[2].endsWith(' …(see log)'))
+    assert.ok(bot.srv.peak <= 200, `peak ${bot.srv.peak}`)
+    assert.ok(logs.some((m) => m.includes(line)), 'full report in the log')
+  })
+
+  it('qxql.26: a burst of packets never exceeds the threshold, even from an empty bucket', () => {
+    const bot = fakeBot()
+    for (let k = 0; k < 5; k++) bot.chat('y'.repeat(700))
+    for (let t = 0; t < 200; t++) mock.timers.tick(100)
+    assert.equal(bot.sent.length, 15)
+    assert.ok(bot.srv.peak <= 200, `peak ${bot.srv.peak}`)
+  })
+
+  it('overflow drops a whole long message, never half of one', () => {
+    const bot = fakeBot()
+    const log = mock.method(console, 'log', () => {})
+    try {
+      for (let i = 0; i < 8; i++) bot.chat(`fill ${i}`)
+      bot.chat('a'.repeat(600)) // 3 queued packets
+      for (let i = 0; i < 19; i++) bot.chat(`later ${i}`)
+      for (let t = 0; t < 400; t++) mock.timers.tick(100)
+    } finally { log.mock.restore() }
+    assert.ok(!bot.sent.some((m) => m.startsWith('a')), 'all 3 parts dropped together')
+    assert.equal(bot.sent.at(-1), 'later 18')
+  })
+
+  it('a command is never split or cut', () => {
+    const bot = fakeBot()
+    const cmd = '/tell P ' + 'z'.repeat(900)
+    bot.chat(cmd)
+    assert.deepEqual(bot.sent, [cmd])
   })
 
   it('runOnce wraps bot.chat on login', () => {
