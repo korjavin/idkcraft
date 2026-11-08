@@ -246,7 +246,7 @@ function label(s) {
 
 // vf8e.25.5 review: the retry hint names the rule the plan broke.
 function invalidHint(error) {
-  if (/mismatch|abandon/.test(String(error))) return 'bring only the root item with its remaining count when no prerequisite is on the stack; acquire only the current (last) prerequisite'
+  if (/mismatch|abandon/.test(String(error))) return 'bring: root item+remaining, only when no prerequisite is on the stack; acquire: current prerequisite only'
   return 'answer with listed bare step ids and separate item/count fields'
 }
 
@@ -273,7 +273,11 @@ function validateBringPlan(result, goalState) {
 
 // One Messages-API call -> { steps|error|empty, tokens }.
 async function planOrder(bot, ctx, text, fetchFn, feedback) {
-  const goalText = feedback ? `\n\nRequested item: ${feedback.item}; remaining count: ${feedback.remaining}. Goal stack (last is current): ${(feedback.stack || [{ item: feedback.item, count: feedback.remaining }]).map((g) => `${g.item} ${g.count}`).join(' > ')}.\nObserved prior actions: ${feedback.history.join('; ') || 'none'}. A successful toss is not proof of player pickup.` : ''
+  const gs = feedback && (feedback.stack || [{ item: feedback.item, count: feedback.remaining }])
+  const cur = gs && gs[gs.length - 1]
+  // vf8e.25.6: name the current goal and what each action may target.
+  const curText = cur ? `\nCurrent goal: ${cur.item} ${cur.count} (${gs.length > 1 ? 'prerequisite: acquire it, or need one missing input of it' : 'root: bring it, or need one missing input of it'}; never need ${cur.item} itself).` : ''
+  const goalText = feedback ? `\n\nRequested item: ${feedback.item}; remaining count: ${feedback.remaining}. Goal stack (last is current): ${gs.map((g) => `${g.item} ${g.count}`).join(' > ')}.${curText}\nObserved prior actions: ${feedback.history.join('; ') || 'none'}. A successful toss is not proof of player pickup.` : ''
   const user = `Order from the player: "${text}"${goalText}\n\nSituation:\n${situationText(bot, ctx)}\n\nSteps (id(args): what it does):\n${stepList(!!feedback)}`
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
@@ -818,7 +822,11 @@ function startStep(bot, ctx, o, s, now) {
   }
   if (o.bringGoal && s.step === 'need') {
     const g = o.bringGoal
-    if (g.stack.length >= BRING_DEPTH || g.stack.some((x) => x.item === s.item)) return replanBring(bot, ctx, o, `cannot add ${s.item}: cycle or depth limit`)
+    // vf8e.25.6: name which rule refused the need (real haiku re-needed the current goal 6x on "cycle or depth limit").
+    const top = g.stack[g.stack.length - 1]
+    if (top && top.item === s.item) return replanBring(bot, ctx, o, `cannot add ${s.item}: it is already the current goal; need one missing input of it, or ${g.stack.length > 1 ? 'acquire' : 'bring'} it`)
+    if (g.stack.some((x) => x.item === s.item)) return replanBring(bot, ctx, o, `cannot add ${s.item}: cycle (already on the goal stack)`)
+    if (g.stack.length >= BRING_DEPTH) return replanBring(bot, ctx, o, `cannot add ${s.item}: depth limit ${BRING_DEPTH}`)
     if (heldItem(bot, s.item) >= s.count) return replanBring(bot, ctx, o, `already holding ${s.count} ${s.item}`)
     const key = `${s.item}:${s.count}:${inventoryFingerprint(bot)}`
     g.needs = g.needs || []
