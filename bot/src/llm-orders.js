@@ -246,7 +246,7 @@ function label(s) {
 
 // vf8e.25.5 review: the retry hint names the rule the plan broke.
 function invalidHint(error) {
-  if (/mismatch|abandon/.test(String(error))) return 'bring: root item+remaining, empty stack only; acquire: current prerequisite only'
+  if (/mismatch|abandon/.test(String(error))) return 'bring: root item+remaining, only when no prerequisite is on the stack; acquire: current prerequisite only'
   return 'answer with listed bare step ids and separate item/count fields'
 }
 

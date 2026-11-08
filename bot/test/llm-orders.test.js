@@ -1645,7 +1645,7 @@ describe('llm orders: replan diagnostics (vf8e.25.5 review)', () => {
       await flush()
       const line = seen.find((l) => /llm order replan .*outcome=invalid/.test(l))
       assert.match(line, /tokens=5\/2 err="bring target mismatch" stack=torch:4>stick:1/)
-      assert.match(calls[2].messages[0].content, /invalid plan: bring target mismatch; bring: root item\+remaining, empty stack only/)
+      assert.match(calls[2].messages[0].content, /invalid plan: bring target mismatch; bring: root item\+remaining, only when no prerequisite is on the stack/)
     } finally {
       if (prev === undefined) delete process.env.BOT_BODY
       else process.env.BOT_BODY = prev
@@ -1680,6 +1680,26 @@ describe('llm orders: current-goal context (vf8e.25.6)', () => {
       llmOrders.tick(bot, ctx) // the third reply re-needs the current prerequisite
       await flush()
       assert.match(calls[3].messages[0].content, /cannot add iron_ingot: it is already the current goal; need one missing input of it, or acquire it/)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+  it('a fifth goal past the depth limit is refused by name and the stack stays at 4', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const bot = mockBot()
+      for (const [n, id] of [['bucket', 9], ['iron_ingot', 10], ['raw_iron', 11], ['stone_pickaxe', 12], ['cobblestone', 13]]) bot.registry.itemsByName[n] = { id }
+      const replies = ['iron_ingot', 'raw_iron', 'stone_pickaxe', 'cobblestone'].map((i) => `{"plan":[{"step":"need","item":"${i}","count":1}]}`)
+      globalThis.fetch = async (url, init) => { calls.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ content: [{ type: 'text', text: replies.shift() || '{"plan":[]}' }], usage: {} }) } }
+      handleChat(bot, tickerFor(bot), 'P', 'bring me bucket 1')
+      await flush()
+      const ctx = bot._tickerCtx
+      let deepest = 0
+      for (let i = 0; i < 4 && ctx.llmOrder; i++) { deepest = Math.max(deepest, ctx.llmOrder.bringGoal.stack.length); llmOrders.tick(bot, ctx); await flush() }
+      assert.strictEqual(deepest, 4)
+      assert.ok(calls.some((c) => /cannot add cobblestone: depth limit 4/.test(c.messages[0].content)))
     } finally {
       if (prev === undefined) delete process.env.BOT_BODY
       else process.env.BOT_BODY = prev

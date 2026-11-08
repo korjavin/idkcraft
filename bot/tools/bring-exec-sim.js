@@ -108,6 +108,10 @@ async function runScenario(name, sc, baseline) {
   const bringbase = require('../src/behaviours/bringbase')
   const bringitem = require('../src/behaviours/bringitem')
   const { resetLlmBudget } = require('../src/brain')
+  // The fake bot has no recipesFor: the FSM's recipe fallback is what keeps an
+  // order open for the simulated obtain, but a real recipe call then races it
+  // (first TORCH toss refused). Hold it pending forever, no model call.
+  bringitem.setRecipeSource({ plan: () => new Promise(() => {}), enabled: () => true, timeoutMs: Infinity })
   resetLlmBudget()
   const inv = { ...sc.inv }
   const chest = { ...sc.chest }
