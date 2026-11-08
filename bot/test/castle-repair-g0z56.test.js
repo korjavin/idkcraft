@@ -227,3 +227,36 @@ describe('castle rig repair seed (g0z.56)', () => {
     assert.deepEqual(by, { fence: 12, door: 1, stone: 4, torch: 3, stairs: 2 })
   })
 })
+
+describe('qxql.27 fence leg vs a log-funded frame recovery (goal seam)', () => {
+  it('logs drawn for fences keep the fetch leg; finished fences then go to the castle', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const set = completeSet()
+      const cells = blueprint.absPlan(SITE, 0, 2).cells
+      const fences = cells.filter((c) => c.kind === 'fence').slice(0, 12)
+      for (const c of fences) set.set(`${c.x},${c.y},${c.z}`, 'air')
+      const frame = cells.find((c) => c.kind === 'frame')
+      set.set(`${frame.x},${frame.y},${frame.z}`, 'air')
+      const items = [{ name: 'oak_log', count: 8 }, { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'cobblestone', count: 64 }]
+      const bot = makeBot({ set, items })
+      bot.entity.position = pos(frame.x - 1.5, frame.y, frame.z + 0.5)
+      const st = castleState({ phase: 'body' })
+      st.blocked[`2:${frame.idx}`] = { why: 'build-miss', tries: 3, until: Date.now() - 1, retired: true }
+      const home = { site: pos(SITE.x - 40, 64, SITE.z), built: true, v: 2 }
+      const ctx = { castle: st, home, work: true, body: { owner: 'work' }, brain: { plan: async () => ({ step: 'defer' }) }, step: 'castlefetch', stepStatus: 'running' }
+      const leg = await goal.decide(bot, ctx)
+      assert.equal(leg.action, 'castlefetch', `the drawn logs stay with the fence leg (got ${leg.action}, word ${goal.goalFacts(bot, ctx).castle})`)
+      // The leg crafted: 12 fences, the logs spent. Done -> the castle lays them.
+      items.splice(0, 1, { name: 'oak_fence', count: 12 })
+      ctx.stepStatus = 'done'
+      assert.match(goal.goalFacts(bot, ctx).castle, /^fence-(batch|some)$/)
+      const lay = await goal.decide(bot, ctx)
+      assert.equal(lay.action, 'castle')
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+})

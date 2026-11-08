@@ -357,3 +357,38 @@ describe('castle cell recovery (qxql.19)', () => {
     } finally { Date.now = clock; toolPrep.setDriver(null) }
   })
 })
+
+describe('qxql.27 recovery word vs a running fence fetch', () => {
+  // Prod 2026-11-08: 8 logs drawn as 16 fence-equivalents funded a retired
+  // frame (log) hole; the word flipped to 'clear' and cut the fetch leg
+  // before its fence craft, then the castle failed no-fence: a refetch loop.
+  function fenceFixture() {
+    const f = fixture({ occupant: 'air' })
+    const { cells } = blueprint.absPlan(f.st.site, 0, 3)
+    const frame = cells.find((c) => c.kind === 'frame')
+    for (const c of cells.filter((x) => x.kind === 'fence')) f.set(c, 'air')
+    f.set(frame, 'air')
+    f.st.blocked[`3:${frame.idx}`] = { why: 'build-miss', tries: 3, until: Date.now() - 1, retired: true }
+    f.items.push({ name: 'oak_log', type: 17, count: 8 })
+    f.bot.entity.position = new Vec3(frame.x - 1.5, frame.y, frame.z + 0.5)
+    return { ...f, frame }
+  }
+  it('a running fetch keeps its word; the same pack outside the leg still recovers', () => {
+    const f = fenceFixture()
+    f.ctx.step = 'castlefetch'
+    assert.notEqual(castle.menuFact(f.bot, f.ctx), 'clear', 'the fence leg is not cut for a frame recovery')
+    f.ctx.step = 'explore'
+    assert.equal(castle.menuFact(f.bot, f.ctx), 'clear', 'recovery stays reachable when no leg runs')
+  })
+  it('a recovery the castle step would not start is not advertised, and says why', () => {
+    const f = fenceFixture()
+    f.ctx.step = 'explore'
+    f.ctx.bring = { by: 'P' }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => logs.push(String(m))
+    try { assert.notEqual(castle.menuFact(f.bot, f.ctx), 'clear') } finally { console.log = orig }
+    assert.ok(logs.some((m) => m === `castle recovery target=${f.frame.x},${f.frame.y},${f.frame.z} not startable: bring`), logs.join('\n'))
+    assert.equal(recovery.blocker(f.bot, { work: true, body: { owner: 'work' } }), null)
+  })
+})
