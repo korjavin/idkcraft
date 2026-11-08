@@ -1,7 +1,7 @@
 'use strict'
 
 // LLM orders (idkcraft-vf8e.6). With BOT_LLM_ORDERS=1 (and ANTHROPIC_API_KEY)
-// a player's chat line the FSM cannot parse becomes ONE Messages-API call
+// a player's chat line the FSM cannot parse becomes a Messages-API call
 // (brain.llmCall: the .5 token counters + LLM_TOKENS_PER_HOUR cap) that
 // answers a JSON plan over a whitelist:
 // - order steps = the existing chat orders, re-fed through handleChat as the
@@ -10,6 +10,9 @@
 //   ctx.taskPlanStep, the stall-planner seam decide() already honours
 //   (feasible + registered only); the pin is held while a night step
 //   would win (nightHold), since pinMenu checks no safety for it.
+// On v2, recognized bring orders additionally use a bounded goal stack and
+// replan after action outcomes. Need/acquire retain prerequisites in the
+// bot's inventory; the original bring goal remains until the toss or failure.
 // The task executive runs each step as usual (orders keep their watchdog and
 // park, work steps their decide/commit rules). No LLM on the tick: tick()
 // only reads ctx to move to the next step. Flag off: nothing here runs.
@@ -27,11 +30,14 @@ const metrics = require('./metrics')
 const { STEP_EFFECT_TEXT } = require('./plan-consts')
 const { isFinished, failReason, stepGen, chatStep } = require('./step')
 const { WANT_MAX } = require('./behaviours/bringbase')
+const { countItems } = require('./perception')
 const worker = require('./worker')
 
 const ORDER_TIMEOUT_MS = 20000
 const STEP_MS = 10 * 60 * 1000 // one plan step's deadline
 const PLAN_MAX = 6
+const BRING_ROUNDS = 12
+const BRING_DEPTH = 4
 const MISS_TICKS = 3 // pin consumed without the step starting
 // m06g: a pinned work step that never starts chats WHY it can't instead
 // of a generic 'not possible now' (prod: 'reforest 10' with no trees near
@@ -66,6 +72,9 @@ const ORDER_STEPS = {
   // codex: max = the executor's own clamp (bring WANT_MAX, flat FLAT_MAX_RADIUS) so a
   // bigger count refuses instead of silently delivering less and reporting done.
   bring: { args: 'item, count', max: WANT_MAX, what: `gets an item to the player (count at most ${WANT_MAX}): from the pack, the home chest, by crafting or smelting it, mining the block, shearing sheep, hunting for food, or beating leaves for saplings`, chat: (s) => `bring me ${s.item}${s.count ? ` ${s.count}` : ''}` },
+  need: { args: 'item, count', max: WANT_MAX, what: 'push an item prerequisite onto the goal stack; solve it before resuming the parent' },
+  acquire: { args: 'item, count', max: WANT_MAX, what: 'obtain the current prerequisite and keep it in the bot inventory' },
+  abandon: { args: '', what: 'abandon the current prerequisite and reconsider the parent goal' },
   find: { args: 'item', what: 'finds the nearest block of that name and leads the player to it', chat: (s) => `find me ${s.item}` },
   flat: { args: 'count', max: 64, what: 'levels the ground around the player, count = radius', chat: (s) => `flat ${s.count || 8}` },
   share: { args: '', what: 'hands the player everything carried except tools, weapons and armour', chat: () => 'share' },
@@ -81,6 +90,12 @@ const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their c
   'Leave out item/count when the step takes none. A work step (craft, equip, build, beds, light, gather, stockpile, bank, gear, forage, reforest, explore, or a skill step) with a player number runs that many times — count means repeats ("reforest 10" plans count 10). At most ' + PLAN_MAX + ' steps; use the fewest — an order step gathers, mines, crafts and smelts for itself, so never put forage or gather before it. ' +
   'A build step starts with no batch on hand when the pack holds almost no planks, so plan gather, craft and equip before build then. ' +
   'Answer {"plan":[]} when the line is not an order to the bot or no listed step can do it.'
+
+const BRING_SYSTEM = 'You guide a Minecraft companion to fulfill the player’s requested item order. ' +
+  'Choose only listed actions. When a prerequisite is missing, answer with a single need(item,count) step; that pushes it onto the goal stack and you will be asked again. For a prerequisite goal use acquire(item,count) to keep it; the parent resumes afterwards. If a prerequisite cannot be obtained, use abandon to reconsider its parent. For the root goal use bring(item,count). ' +
+  'Use observations and prior failures to try a different feasible approach; do not invent commands or claim success. ' +
+  'Answer JSON only: {"plan":[{"step":"<id>","item":"<registry id>","count":<n>,"done":"<expected result>"}]}. ' +
+  'Use only the listed actions and work skills, at most 6 steps. If no listed skill can help, return {"plan":[]}.'
 
 function enabled(env = process.env) {
   return /^(1|true|yes)$/i.test(String(env.BOT_LLM_ORDERS || '')) && !!env.ANTHROPIC_API_KEY
@@ -124,9 +139,10 @@ function workSteps() {
   return base
 }
 
-function stepList() {
-  const lines = Object.entries(ORDER_STEPS).map(([id, s]) => `${id}(${s.args}): ${s.what}`)
+function stepList(bringGoal = false) {
+  const lines = Object.entries(ORDER_STEPS).filter(([id]) => bringGoal ? ['bring', 'need', 'acquire', 'abandon'].includes(id) : !['need', 'acquire', 'abandon'].includes(id)).map(([id, s]) => `${id}(${s.args}): ${s.what}`)
   for (const id of workSteps()) {
+    if (bringGoal && ['build', 'beds', 'light', 'reforest'].includes(id)) continue
     // A skill has no STEP_EFFECT_TEXT: fall back to its header description
     // (goal.STEP_CRITERIA), so the model still sees what it does.
     const effect = STEP_EFFECT_TEXT[id] || goal.STEP_CRITERIA[id] || id
@@ -182,6 +198,7 @@ function validatePlan(ans, works = workSteps(), opts = {}) {
   for (const r of raw) {
     const id = r && typeof r.step === 'string' ? r.step.toLowerCase().trim() : ''
     const knownOrder = orderStep(id)
+    if (['need', 'acquire', 'abandon'].includes(id) && !opts.bring) return { error: `no step "${id}"`, why, need }
     if (knownOrder && !allowOrders) return { error: `no step "${id.slice(0, 20)}"`, why, need }
     if (!knownOrder && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"`, why, need }
     const s = { step: id, done: typeof r.done === 'string' ? r.done.replace(/\s+/g, ' ').trim().slice(0, 80) : '' }
@@ -208,12 +225,35 @@ function validatePlan(ans, works = workSteps(), opts = {}) {
 }
 
 function label(s) {
+  if (!s) return 'plan'
   return [s.step, s.item, s.count].filter((x) => x != null && x !== '').join(' ')
 }
 
+function validateBringPlan(result, goalState) {
+  if (!result || !result.steps) return result
+  const current = goalState.stack ? goalState.stack[goalState.stack.length - 1] : goalState
+  for (const s of result.steps) {
+    if (s.step === 'bring') {
+      if ((goalState.stack && goalState.stack.length > 1) || s.item !== goalState.item || (s.count != null && s.count !== goalState.remaining)) return { error: 'bring target mismatch' }
+      s.count = goalState.remaining
+    } else if (s.step === 'acquire') {
+      if (!goalState.stack || goalState.stack.length < 2 || s.item !== current.item || (s.count != null && s.count !== current.count)) return { error: 'acquire target mismatch' }
+      s.count = current.count
+    } else if (s.step === 'need') {
+      s.count = s.count || 1
+    } else if (s.step === 'abandon') {
+      if (!goalState.stack || goalState.stack.length < 2) return { error: 'no prerequisite to abandon' }
+    } else if (orderStep(s.step) || ['build', 'beds', 'light', 'reforest'].includes(s.step)) {
+      return { error: 'action outside bring goal' }
+    }
+  }
+  return result
+}
+
 // One Messages-API call -> { steps|error|empty, tokens }.
-async function planOrder(bot, ctx, text, fetchFn) {
-  const user = `Order from the player: "${text}"\n\nSituation:\n${situationText(bot, ctx)}\n\nSteps (id(args): what it does):\n${stepList()}`
+async function planOrder(bot, ctx, text, fetchFn, feedback) {
+  const goalText = feedback ? `\n\nRequested item: ${feedback.item}; remaining count: ${feedback.remaining}. Goal stack (last is current): ${(feedback.stack || [{ item: feedback.item, count: feedback.remaining }]).map((g) => `${g.item} ${g.count}`).join(' > ')}.\nObserved prior actions: ${feedback.history.join('; ') || 'none'}. A successful toss is not proof of player pickup.` : ''
+  const user = `Order from the player: "${text}"${goalText}\n\nSituation:\n${situationText(bot, ctx)}\n\nSteps (id(args): what it does):\n${stepList(!!feedback)}`
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
   let data
@@ -227,7 +267,7 @@ async function planOrder(bot, ctx, text, fetchFn) {
       body: {
         model,
         ...brain.llmModelConfig(model, 500),
-        system: SYSTEM,
+        system: feedback ? BRING_SYSTEM : SYSTEM,
         messages: [{ role: 'user', content: user }],
       },
     })
@@ -243,7 +283,7 @@ async function planOrder(bot, ctx, text, fetchFn) {
   const out = (textBlock && textBlock.text) || ''
   let ans = null
   try { ans = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch (_) { ans = null }
-  return { ...validatePlan(ans), tokens }
+  return { ...validatePlan(ans, workSteps(), { bring: !!feedback }), tokens }
 }
 
 // One chooser call -> { steps|error|empty, why, need, tokens }.
@@ -392,7 +432,8 @@ function ask(bot, ctx, req, fetchFn) {
     }
     let r
     try {
-      r = await planOrder(bot, ctx, a.text, fetchFn)
+      r = await planOrder(bot, ctx, a.text, fetchFn, req.bringGoal)
+      if (req.bringGoal) r = validateBringPlan(r, req.bringGoal)
     } catch (err) {
       const msg = String(err && err.message ? err.message : err)
       r = { error: err && err.name === 'TimeoutError' ? 'timeout' : msg.startsWith('llm budget') ? 'budget' : msg.slice(0, 40), outcome: msg.startsWith('llm budget') ? 'budget' : 'error' }
@@ -403,14 +444,15 @@ function ask(bot, ctx, req, fetchFn) {
     const outcome = r.steps ? 'ok' : r.empty ? 'empty' : (r.outcome || 'invalid')
     try { metrics.llmCalls.inc({ use: 'orders', outcome }) } catch (_) { /* metric best-effort */ }
     console.log(`llm order by=${req.by} text="${a.text}" outcome=${outcome} plan=${r.steps ? r.steps.map(label).join('>') : (r.error || '-')} tokens=${r.tokens || '0/0'} ms=${ms}`)
-    if (r.empty) { if (req.fallback) say(req.fallback); return }
+    if (r.empty) { if (req.fallbackFn) req.fallbackFn(); else if (req.fallback) say(req.fallback); return }
     if (!r.steps) {
       // Chatter that failed to plan stays silent (log only); an explicit
       // `plan <order>` or a refused order gets its answer.
-      if (req.fallback || req.explicit) say(req.fallback || `I can't plan that (${r.error}) — try: help`)
+      if (req.fallbackFn) req.fallbackFn()
+      else if (req.fallback || req.explicit) say(req.fallback || `I can't plan that (${r.error}) — try: help`)
       return
     }
-    installPlan(bot, ctx, { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed, explicit: req.explicit }, r.steps, say)
+    installPlan(bot, ctx, { text: a.text, by: req.by, ticker: req.ticker, feed: req.feed, explicit: req.explicit, bringGoal: req.bringGoal }, r.steps, say)
   })()
 }
 
@@ -544,6 +586,7 @@ function installPlan(bot, ctx, req, steps, say) {
   // player-issued, and llmAsk never fires for peer bots (chat.js).
   const playerIssued = typeof req.by === 'string' && req.by !== '' && req.by !== 'self'
   ctx.llmOrder = { text: String(req.text).slice(0, 200), by: req.by, ticker: req.ticker, feed: req.feed, steps, i: 0, cur: null, at: Date.now(), feeding: false, explicit: !!req.explicit || playerIssued, choose: !!req.choose }
+  if (req.bringGoal) ctx.llmOrder.bringGoal = { ...req.bringGoal, history: [], rounds: 1, stack: [{ item: req.bringGoal.item, count: req.bringGoal.remaining }] }
   const line = `plan: ${steps.map(label).join(', then ')}`.slice(0, 250)
   if (typeof say === 'function') say(line)
   else { try { bot.chat(line) } catch (_) { /* chat best-effort */ } }
@@ -626,7 +669,7 @@ function candidateFeasible(bot, ctx, s, facts) {
 // How the step's order ended: bringbase/lead/flat stamp done or a failure
 // at their single end points; gone without a stamp since the step began =
 // cancelled. A find that never led (nothing found, too deep) = refused.
-const END_FIELD = { bring: 'bringEnd', share: 'bringEnd', find: 'leadEnd', flat: 'flatEnd' }
+const END_FIELD = { bring: 'bringEnd', acquire: 'bringEnd', share: 'bringEnd', find: 'leadEnd', flat: 'flatEnd' }
 function orderResult(ctx, s, c) {
   if (s.step === 'find' && !c.led) return 'failed:refused'
   const e = ctx[END_FIELD[s.step]]
@@ -651,11 +694,15 @@ function release(ctx, o) {
     ctx.bring = null
     try { require('./behaviours/bring').clearSearchLeg(ctx) } catch (_) { /* leg best-effort */ }
   }
+  if (o.cur.search && ctx.pendingSearch === o.cur.search && o.ticker && typeof o.ticker.prepareBring === 'function') o.ticker.prepareBring()
   if (s.step === 'find' && (ctx.lead || ctx.pendingSearch) && o.ticker && typeof o.ticker.clearLead === 'function') o.ticker.clearLead()
   if (s.step === 'flat' && ctx.flat) ctx.flat.parked = true
 }
 
 function end(bot, ctx, o, result) {
+  if (o.bringGoal && typeof result === 'string' && result.startsWith('failed:')) {
+    return replanBring(bot, ctx, o, result)
+  }
   if (result !== 'done') release(ctx, o)
   else dropArgs(ctx) // release() already nulled the rest
   // Chooser backoff (qxql.10): a failed plan doubles the wait up to 30 min,
@@ -673,12 +720,88 @@ function end(bot, ctx, o, result) {
   console.log(`llm order end text="${o.text}" result=${result} step=${Math.min(o.i + 1, n)}/${n} dur=${Math.floor((Date.now() - o.at) / 1000)}s`)
   if (ctx.llmOrder === o) ctx.llmOrder = null
   const why = failReason(result)
-  if (result === 'done') chatStep(bot, ctx, `done: ${o.text}`.slice(0, 250))
+  if (result === 'done' && o.bringGoal) chatStep(bot, ctx, `tossed ${o.bringGoal.item} near ${o.by}; pickup not verified`)
+  else if (result === 'done') chatStep(bot, ctx, `done: ${o.text}`.slice(0, 250))
   else if (why !== null) chatStep(bot, ctx, `plan stopped at ${label(o.steps[o.i])}: ${why || 'failed'}`.slice(0, 250))
 }
 
+// Called only at a step boundary, never once per tick. A cancelled or
+// replaced order cannot install a late response into the new order.
+function replanBring(bot, ctx, o, observation) {
+  const g = o.bringGoal
+  if (!g || o.replanning || ctx.llmOrder !== o) return
+  release(ctx, o)
+  const detail = o.cur && ['bring', 'acquire'].includes(o.steps[o.i]?.step) && ctx.bringEnd && ctx.bringEnd.at >= o.cur.at ? ctx.bringEnd.reason : o.acquireRefusal
+  o.acquireRefusal = null
+  g.history.push(`${o.steps[o.i] ? label(o.steps[o.i]) : 'plan'}: ${observation}${detail ? ` (${detail})` : ''}`.slice(0, 160))
+  const signature = `${g.stack.map((x) => `${x.item}:${x.count}`).join('>')}|${label(o.steps[o.i])}|${observation}|${inventoryFingerprint(bot)}`
+  g.repeats = g.repeats || {}
+  g.repeats[signature] = (g.repeats[signature] || 0) + 1
+  if (g.repeats[signature] >= 3) {
+    o.bringGoal = null
+    return end(bot, ctx, o, 'failed:no progress')
+  }
+  if (g.rounds >= BRING_ROUNDS) {
+    o.bringGoal = null
+    return end(bot, ctx, o, 'failed:replan limit')
+  }
+  g.rounds++
+  o.cur = null
+  o.waitAt = null
+  o.replanning = true
+  void (async () => {
+    let r
+    try { r = validateBringPlan(await planOrder(bot, ctx, o.text, undefined, g), g) } catch (err) {
+      const msg = String(err && err.message ? err.message : err)
+      r = { error: msg.startsWith('llm budget') ? 'budget' : 'model unavailable' }
+    }
+    const outcome = r.steps ? 'ok' : r.empty ? 'empty' : r.error === 'budget' ? 'budget' : 'invalid'
+    try { metrics.llmCalls.inc({ use: 'orders', outcome }) } catch (_) { /* metric best effort */ }
+    console.log(`llm order replan by=${o.by} round=${g.rounds} outcome=${outcome} tokens=${r.tokens || '0/0'}`)
+    if (ctx.llmOrder !== o) return
+    o.replanning = false
+    if (!r.steps) {
+      o.bringGoal = null
+      return end(bot, ctx, o, 'failed:no further plan')
+    }
+    o.steps = r.steps
+    o.i = 0
+    try { bot.chat(`trying: ${r.steps.map(label).join(', then ')}`.slice(0, 250)) } catch (_) { /* best effort */ }
+  })()
+}
+
+function heldItem(bot, item) {
+  try { return countItems(bot, (name) => name === item) } catch (_) { return 0 }
+}
+
+function inventoryFingerprint(bot) {
+  try { return bot.inventory.items().map((i) => `${i.name}:${i.count}`).sort().join(',') } catch (_) { return 'unavailable' }
+}
+
 function startStep(bot, ctx, o, s, now) {
+  if (o.bringGoal && s.step === 'abandon') {
+    const abandoned = o.bringGoal.stack.pop()
+    return replanBring(bot, ctx, o, `abandoned prerequisite ${abandoned.item}; reconsider parent`)
+  }
+  if (o.bringGoal && s.step === 'need') {
+    const g = o.bringGoal
+    if (g.stack.length >= BRING_DEPTH || g.stack.some((x) => x.item === s.item)) return replanBring(bot, ctx, o, `cannot add ${s.item}: cycle or depth limit`)
+    if (heldItem(bot, s.item) >= s.count) return replanBring(bot, ctx, o, `already holding ${s.count} ${s.item}`)
+    const key = `${s.item}:${s.count}:${inventoryFingerprint(bot)}`
+    g.needs = g.needs || []
+    if (g.needs.includes(key)) return replanBring(bot, ctx, o, `repeated prerequisite ${s.item} without progress`)
+    g.needs.push(key)
+    g.stack.push({ item: s.item, count: s.count })
+    return replanBring(bot, ctx, o, `need ${s.count} ${s.item}; parent goal retained`)
+  }
   const order = ORDER_STEPS[s.step]
+  // The shared self-acquisition ladder deliberately yields at night; wait
+  // for day here rather than spending every model round on that cancellation.
+  if (o.bringGoal && s.step === 'acquire' && bot.time && bot.time.timeOfDay >= 12000) {
+    if (o.waitAt == null) o.waitAt = now
+    else if (now - o.waitAt > STEP_MS) return end(bot, ctx, o, 'failed:timeout')
+    return
+  }
   if (!order && nightHold(bot, ctx)) {
     // Wait the night out unpinned, bounded like a running step.
     if (o.waitAt == null) o.waitAt = now
@@ -693,7 +816,14 @@ function startStep(bot, ctx, o, s, now) {
     // unrelated order already running is not this step's (codex P2).
     const before = { bring: ctx.bring, lead: ctx.lead, ps: ctx.pendingSearch, flat: ctx.flat, parked: !!(ctx.flat && ctx.flat.parked) }
     o.feeding = true
-    try { o.feed(order.chat(s)) } finally { o.feeding = false }
+    try {
+      if (s.step === 'acquire' && o.bringGoal) {
+        const reply = o.ticker && o.ticker.setBring({ name: s.item, want: s.count, by: o.by })
+        if (ctx.bring && ctx.bring !== before.bring) ctx.bring.self = true
+        else if (ctx.pendingSearch && ctx.pendingSearch !== before.ps) ctx.pendingSearch.self = true
+        else if (reply) o.acquireRefusal = String(reply).slice(0, 120)
+      } else o.feed(order.chat(s))
+    } finally { o.feeding = false }
     const made = (ctx.bring && ctx.bring !== before.bring) || (ctx.lead && ctx.lead !== before.lead) ||
       (ctx.pendingSearch && ctx.pendingSearch !== before.ps) ||
       (ctx.flat && !ctx.flat.parked && (ctx.flat !== before.flat || before.parked))
@@ -704,6 +834,7 @@ function startStep(bot, ctx, o, s, now) {
       o.cur = null
       return end(bot, ctx, o, 'failed:refused')
     }
+    if (ctx.pendingSearch && ctx.pendingSearch !== before.ps) o.cur.search = ctx.pendingSearch
     if (ctx.lead) o.cur.led = true
     return
   }
@@ -716,8 +847,9 @@ function startStep(bot, ctx, o, s, now) {
 function tick(bot, ctx, now = Date.now()) {
   const o = ctx && ctx.llmOrder
   if (!o) return
+  if (o.replanning) return
   const s = o.steps[o.i]
-  if (!s) return end(bot, ctx, o, 'done')
+  if (!s) return o.bringGoal ? replanBring(bot, ctx, o, 'steps ended without a confirmed toss') : end(bot, ctx, o, 'done')
   if (!o.cur) return startStep(bot, ctx, o, s, now)
   const c = o.cur
   if (ctx.paused) return end(bot, ctx, o, 'stop')
@@ -748,6 +880,22 @@ function tick(bot, ctx, now = Date.now()) {
   if (ORDER_STEPS[s.step]) {
     if (orderBusy(ctx)) { if (ctx.lead) c.led = true; return }
     const r = orderResult(ctx, s, c)
+    if (o.bringGoal && s.step === 'acquire') {
+      const have = heldItem(bot, s.item)
+      if (r === 'done' && have >= s.count) {
+        o.bringGoal.stack.pop()
+        return replanBring(bot, ctx, o, `acquired ${have} ${s.item}; resuming parent`)
+      }
+      return replanBring(bot, ctx, o, `acquire ${s.item} ${r}; inventory has ${have}/${s.count}`)
+    }
+    if (o.bringGoal && s.step === 'bring' && r === 'done') {
+      const e = ctx.bringEnd
+      const tossed = e && e.by === o.by ? Math.min(o.bringGoal.remaining, Math.max(0, Number(e.tossed) || 0)) : 0
+      o.bringGoal.remaining -= tossed
+      o.bringGoal.stack[0].count = o.bringGoal.remaining
+      if (o.bringGoal.remaining <= 0) return end(bot, ctx, o, 'done')
+      return replanBring(bot, ctx, o, `inventory decreased by ${tossed}; ${o.bringGoal.remaining} still needed, pickup unverified`)
+    }
     return r === 'done' ? next() : end(bot, ctx, o, r)
   }
   if (!ctx.work) return end(bot, ctx, o, 'mode')

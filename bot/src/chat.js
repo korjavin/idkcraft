@@ -54,7 +54,7 @@ function resSubmerged(bot, ctx, res) {
 
 // Shared block-order creation (amb): sync setBring and far-search
 // completion build the same order and announce the honest distance.
-function startBlockOrder(bot, ctx, { name, want, by }, res) {
+function startBlockOrder(bot, ctx, { name, want, by, self }, res) {
   if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
   if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
     return bringMod.tierRefusal(bot, res.name)
@@ -76,6 +76,7 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
     ctx.resumeWork = false
     ctx.bring = {
       kind: 'block', name, want, by, phase: 'find', have: 0, announced: false,
+      ...(self ? { self: true } : {}),
       skip: new Set([bringMod.skipKey(res.position)]), sawSubmerged: true,
     }
     ctx.paused = false
@@ -93,6 +94,7 @@ function startBlockOrder(bot, ctx, { name, want, by }, res) {
     kind: 'block', name, want, by, block: res.name, drop: bringMod.dropFor(res.name),
     pos: res.position, phase: 'walk', stalls: 0, lastPos: null,
     have: 0, announced: true, exposed: res.exposed !== false,
+    ...(self ? { self: true } : {}),
   }
   if (res.far === true) ctx.bring.far = true // memory target: unloaded is not gone
   ctx.paused = false
@@ -168,6 +170,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
         ctx.bring = {
           kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
           have: 0, announced: false, searchSkipFar: true,
+          ...(p.self ? { self: true } : {}),
           deepVein: gated ? bringMod.deepVeinOf(bp0, gated) : undefined,
         }
         try {
@@ -249,6 +252,7 @@ async function advancePendingSearch(bot, ticker, ctx) {
       ctx.bring = {
         kind: 'block', name: p.name, want: p.want, by: p.by, phase: bringMod.openPhase(ctx),
         have: 0, announced: false, searchSkipFar: true,
+        ...(p.self ? { self: true } : {}),
       }
       // The handover takes the body (revmux 02-review): same inline reset as
       // the found branch — a stale stay must not survive, and a body asleep
@@ -306,6 +310,7 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
   const m = /^do\s+([a-z0-9_]+)(?:\s+(\d+))?$/.exec(msg)
   if (!m) { bot.chat('try: do light'); return }
   const id = m[1]
+  if (['need', 'acquire', 'abandon'].includes(id)) { bot.chat(`no step "${id}" — try: help`); return }
   // Prototype-safe (vf8e.17 verifier): a plain ORDER_STEPS[id] lookup hits
   // inherited members (`do constructor`), and `.args` of that throws
   // uncaught in the chat handler. Only own entries count.
@@ -407,9 +412,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   const lctx = bot._tickerCtx
   // Peer bots (v1/v2 hear each other's lines) never spend a call.
   const peerBot = [process.env.BOT_USERNAME, process.env.BOT2_USERNAME, process.env.BOT_PEER_USERNAME].some((n) => n && n === username)
-  const llmAsk = (fallback, text = msg, explicit = false) => {
+  const llmAsk = (fallback, text = msg, explicit = false, bringGoal = null, fallbackFn = null) => {
     if (!(ticker && lctx && !peerBot && ownerOk && llmOrders.enabled() && !llmOrders.feeding(lctx) && worker.players(bot)[playerName])) return false
-    const fired = llmOrders.ask(bot, lctx, { text, by: playerName, ticker, fallback, explicit, feed: (line) => handleChat(bot, ticker, username, line, senderUuid) })
+    const fired = llmOrders.ask(bot, lctx, { text, by: playerName, ticker, fallback, fallbackFn, bringGoal, explicit, feed: (line) => handleChat(bot, ticker, username, line, senderUuid) })
     // qxql.9 owner ring: the order the model reads. OWNER_ORDER lines are
     // pushed by the cancel branch below, so only other fired asks push here
     // (explicit `plan <order>`, unknown-bring names and roster chatter).
@@ -682,6 +687,16 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         const want = m[2]
           ? Math.min(bringMod.WANT_MAX, Math.max(1, parseInt(m[2], 10)))
           : (food ? bringMod.WANT_FOOD : (sapling ? 1 : (/logs?$|_log$/.test(name) ? bringMod.WANT_LOGS : bringMod.WANT_ORE)))
+        // On v2 the LLM can guide ordinary bring orders too. Its own
+        // re-fed bring line bypasses this branch via feeding().
+        if (process.env.BOT_BODY === 'baritone' && /^[a-z0-9_]{1,40}$/.test(name) &&
+            (food || !!bringMod.resolveItem(bot, name) || bringMod.canBringName(bot, name))) {
+          const fallback = () => { const reply = ticker.setBring({ name, want, by: playerName }); if (reply) bot.chat(reply) }
+          if (llmAsk(null, msg, true, { item: name, remaining: want, history: [] }, fallback)) {
+            if (typeof ticker.prepareBring === 'function') ticker.prepareBring()
+            return
+          }
+        }
         const reply = ticker.setBring({ name, want, by: playerName })
         // vf8e.6: an unknown name ('bring me 8 torches') is the model's to
         // read; its empty answer chats this refusal after all.

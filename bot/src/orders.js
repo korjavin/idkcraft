@@ -173,6 +173,18 @@ function createOrders(box) {
       ctx.gocastle = null
       stopOnce()
     },
+    // Suspend only the previous bring while a replacement is being planned.
+    // Keep work, shelter, follow and parked-flat state exactly as they were.
+    prepareBring: () => {
+      clearPendingSearch(ctx)
+      if (ctx.bring) {
+        metrics.bring.inc({ outcome: 'cancelled', kind: ctx.bring.kind || 'block' })
+        ctx.bring = null
+        bringMod.clearSearchLeg(ctx)
+        clearStuck()
+        stopOnce()
+      }
+    },
     setLead: (order) => { require('./behaviours/food-recovery').invalidate(ctx); clearStuck(); resetNightStep(); ctx.gocastle = null; homeMod.releaseMeet(bot, ctx); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } },
     clearLead: (player) => {
       // A pending far search dies with the asker (or with the bot, when no
