@@ -1396,7 +1396,12 @@ function menuFact(bot, ctx, now = Date.now()) {
     // Retired builder misses need an actual menu route back to castle.
     // Only loaded, funded, due geometry holes qualify; protected holes
     // and the normal progressing builder retain their existing words.
-    if (cellRecovery.eligible(bot, ctx, st, r.cells, now, RECOVERY_HOOKS)) {
+    // qxql.27: advertise only a recovery the castle step would start, and
+    // never over a running fetch leg (prod: logs drawn for fences funded a
+    // retired frame hole, 'clear' cut the leg before its fence craft, and
+    // the castle then failed no-fence: a refetch loop).
+    const fetching = ctx.step === 'castlefetch' && ctx.stepStatus === 'running'
+    if (!fetching && cellRecovery.startable(bot, ctx, st, r.cells, now, RECOVERY_HOOKS)) {
       ctx.castleWord = { word: 'clear' }
       return 'clear'
     }

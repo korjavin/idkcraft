@@ -45,6 +45,33 @@ function eligible(bot, ctx, st, cells, now, hooks) {
   }) || null
 }
 
+// qxql.27: the control() terms a menu can check before the castle step
+// exists (no step/gen/goal yet); the first false one is named, else null.
+function blocker(bot, ctx) {
+  if (!ctx.work) return 'no-work'
+  if (ctx.paused) return 'paused'
+  if (ctx.lead) return 'lead'
+  if (ctx.bring) return 'bring'
+  if (ctx.inShelter) return 'shelter'
+  if (ctx.breath) return 'breath'
+  if (ctx.stuck) return 'stuck'
+  if (ctx.body && ctx.body.owner !== 'work') return `owner-${ctx.body.owner}`
+  if (ctx.lastDecision && ['fight', 'follow'].includes(ctx.lastDecision.action)) return ctx.lastDecision.action
+  return null
+}
+// The menu's word: an eligible cell the castle step would actually start.
+function startable(bot, ctx, st, cells, now, hooks) {
+  const c = eligible(bot, ctx, st, cells, now, hooks)
+  if (!c) return null
+  const why = blocker(bot, ctx)
+  if (why) {
+    const s = state(ctx, st)
+    if (s.saidBlocker !== `${c.idx}:${why}`) { s.saidBlocker = `${c.idx}:${why}`; console.log(`castle recovery target=${key(c)} not startable: ${why}`) }
+    return null
+  }
+  return c
+}
+
 function control(bot, ctx, ep) {
   return ctx.castle === ep.castle && stepGen(ctx) === ep.gen && ctx.work === ep.work &&
     ctx.work && ctx.step === 'castle' && !ctx.paused && !ctx.lead && !ctx.bring &&
@@ -242,7 +269,11 @@ function tick(bot, ctx, st, cells, now, hooks) {
     if (!c) return false
     ep = { castle: st, cell: Object.freeze({ ...c }), work: ctx.work, gen: stepGen(ctx), started: now,
       calls: 0, actions: 0, recent: [], pending: false, goal: bot.pathfinder.goal || null }
-    if (!control(bot, ctx, ep)) return false
+    if (!control(bot, ctx, ep)) {
+      const why = blocker(bot, ctx) || (ctx.step !== 'castle' ? `step-${ctx.step}` : 'goal-or-gen')
+      if (s.saidBlocker !== `${c.idx}:${why}`) { s.saidBlocker = `${c.idx}:${why}`; console.log(`castle recovery target=${key(c)} not started: ${why}`) }
+      return false
+    }
     const entry = st.blocked[hooks.bkey(st, c.idx)]
     entry.recoveries = (entry.recoveries || 0) + 1
     ep.entry = entry
@@ -301,4 +332,4 @@ function tick(bot, ctx, st, cells, now, hooks) {
   return true
 }
 
-module.exports = { eligible, tick, MAX_CALLS, MAX_EPISODES }
+module.exports = { startable, blocker, eligible, tick, MAX_CALLS, MAX_EPISODES }
