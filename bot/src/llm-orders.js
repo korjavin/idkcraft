@@ -92,7 +92,8 @@ const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their c
   'Answer {"plan":[]} when the line is not an order to the bot or no listed step can do it.'
 
 const BRING_SYSTEM = 'You guide a Minecraft companion to fulfill the player’s requested item order. ' +
-  'Choose only listed actions. When a prerequisite is missing, answer with a single need(item,count) step; that pushes it onto the goal stack and you will be asked again. For a prerequisite goal use acquire(item,count) to keep it; the parent resumes afterwards. If a prerequisite cannot be obtained, use abandon to reconsider its parent. For the root goal use bring(item,count). ' +
+  'Choose only listed actions. When a prerequisite is missing, answer with a single need step; that pushes it onto the goal stack and you will be asked again. For a prerequisite goal use acquire to keep it; the parent resumes afterwards. If a prerequisite cannot be obtained, use abandon to reconsider its parent. For the root goal use bring with the requested item and remaining count. ' +
+  'The "step" value is the bare action id ("need", "acquire", "abandon", "bring" or a listed work id), never id(args); the item goes in "item" as a registry id without namespace (e.g. "stick", not "minecraft:stick") and the number in "count". Example: {"plan":[{"step":"need","item":"stick","count":2,"done":"2 sticks held"}]}. ' +
   'Use observations and prior failures to try a different feasible approach; do not invent commands or claim success. ' +
   'Answer JSON only: {"plan":[{"step":"<id>","item":"<registry id>","count":<n>,"done":"<expected result>"}]}. ' +
   'Use only the listed actions and work skills, at most 6 steps. If no listed skill can help, return {"plan":[]}.'
@@ -196,27 +197,41 @@ function validatePlan(ans, works = workSteps(), opts = {}) {
   if (raw.length > maxSteps) return { error: `plan too long (${raw.length})`, why, need }
   const steps = []
   for (const r of raw) {
-    const id = r && typeof r.step === 'string' ? r.step.toLowerCase().trim() : ''
+    let id = r && typeof r.step === 'string' ? r.step.toLowerCase().trim() : ''
+    const nsItem = (v) => String(v == null ? '' : v).toLowerCase().trim().replace(/^minecraft:/, '').replace(/\s+/g, '_')
+    let sigItem = null
+    let sigCount = null
+    // vf8e.25.5: the real model copies the listed `need(item, count)` form
+    // into step; accept it only for bring actions and only when it agrees
+    // with any item/count fields given beside it.
+    const sig = opts.bring ? /^(need|acquire|bring)\(\s*([a-z0-9_:]+)\s*(?:,\s*(\d+)\s*)?\)$/.exec(id) : null
+    if (sig) {
+      id = sig[1]
+      sigItem = nsItem(sig[2])
+      sigCount = sig[3] != null ? Number(sig[3]) : null
+      if ((r.item != null && nsItem(r.item) !== sigItem) || (r.count != null && sigCount != null && Number(r.count) !== sigCount)) return { error: `conflicting arguments in ${id}(...)`, why, need }
+    }
     const knownOrder = orderStep(id)
     if (['need', 'acquire', 'abandon'].includes(id) && !opts.bring) return { error: `no step "${id}"`, why, need }
     if (knownOrder && !allowOrders) return { error: `no step "${id.slice(0, 20)}"`, why, need }
     if (!knownOrder && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"`, why, need }
     const s = { step: id, done: typeof r.done === 'string' ? r.done.replace(/\s+/g, ' ').trim().slice(0, 80) : '' }
     if (knownOrder && knownOrder.args.includes('item')) {
-      const item = String(r.item || '').toLowerCase().trim().replace(/\s+/g, '_')
+      const item = sigItem || nsItem(r.item)
       if (!/^[a-z0-9_]{1,40}$/.test(item)) return { error: `${id} needs an item`, why, need }
       s.item = item
     }
-    if (knownOrder && knownOrder.args.includes('count') && r.count != null) {
-      const c = Math.floor(Number(r.count))
-      if (!(c >= 1 && c <= knownOrder.max)) return { error: `${id} count ${String(r.count).slice(0, 8)}`, why, need }
+    const rawCount = r.count != null ? r.count : sigCount
+    if (knownOrder && knownOrder.args.includes('count') && rawCount != null) {
+      const c = Math.floor(Number(rawCount))
+      if (!(c >= 1 && c <= knownOrder.max)) return { error: `${id} count ${String(rawCount).slice(0, 8)}`, why, need }
       s.count = c
     }
     // A work step keeps a 1..64 count when the model gives one (vf8e.17):
     // hand steps ignore it at execution, skill steps read st.count.
     if (!knownOrder && r.count != null) {
       const c = Math.floor(Number(r.count))
-      if (!(c >= 1 && c <= 64)) return { error: `${id} count ${String(r.count).slice(0, 8)}`, why, need }
+      if (!(c >= 1 && c <= 64)) return { error: `${id} count ${String(rawCount).slice(0, 8)}`, why, need }
       s.count = c
     }
     steps.push(s)
@@ -229,22 +244,28 @@ function label(s) {
   return [s.step, s.item, s.count].filter((x) => x != null && x !== '').join(' ')
 }
 
+// vf8e.25.5 review: the retry hint names the rule the plan broke.
+function invalidHint(error) {
+  if (/mismatch|abandon/.test(String(error))) return 'bring only the root item with its remaining count when no prerequisite is on the stack; acquire only the current (last) prerequisite'
+  return 'answer with listed bare step ids and separate item/count fields'
+}
+
 function validateBringPlan(result, goalState) {
   if (!result || !result.steps) return result
   const current = goalState.stack ? goalState.stack[goalState.stack.length - 1] : goalState
   for (const s of result.steps) {
     if (s.step === 'bring') {
-      if ((goalState.stack && goalState.stack.length > 1) || s.item !== goalState.item || (s.count != null && s.count !== goalState.remaining)) return { error: 'bring target mismatch' }
+      if ((goalState.stack && goalState.stack.length > 1) || s.item !== goalState.item || (s.count != null && s.count !== goalState.remaining)) return { error: 'bring target mismatch', tokens: result.tokens }
       s.count = goalState.remaining
     } else if (s.step === 'acquire') {
-      if (!goalState.stack || goalState.stack.length < 2 || s.item !== current.item || (s.count != null && s.count !== current.count)) return { error: 'acquire target mismatch' }
+      if (!goalState.stack || goalState.stack.length < 2 || s.item !== current.item || (s.count != null && s.count !== current.count)) return { error: 'acquire target mismatch', tokens: result.tokens }
       s.count = current.count
     } else if (s.step === 'need') {
       s.count = s.count || 1
     } else if (s.step === 'abandon') {
-      if (!goalState.stack || goalState.stack.length < 2) return { error: 'no prerequisite to abandon' }
+      if (!goalState.stack || goalState.stack.length < 2) return { error: 'no prerequisite to abandon', tokens: result.tokens }
     } else if (orderStep(s.step) || ['build', 'beds', 'light', 'reforest'].includes(s.step)) {
-      return { error: 'action outside bring goal' }
+      return { error: 'action outside bring goal', tokens: result.tokens }
     }
   }
   return result
@@ -434,6 +455,14 @@ function ask(bot, ctx, req, fetchFn) {
     try {
       r = await planOrder(bot, ctx, a.text, fetchFn, req.bringGoal)
       if (req.bringGoal) r = validateBringPlan(r, req.bringGoal)
+      // vf8e.25.5: one retry with the validation error as feedback (shared
+      // token budget via llmCall; dropped when the ask was cancelled).
+      if (req.bringGoal && !r.steps && !r.empty && !r.outcome && r.error && ctx.llmAsk === a) {
+        console.log(`llm order by=${req.by} text="${a.text}" outcome=invalid plan=${r.error} tokens=${r.tokens || '0/0'} retry=1`)
+        try { metrics.llmCalls.inc({ use: 'orders', outcome: 'invalid' }) } catch (_) { /* metric best-effort */ }
+        const fb = { ...req.bringGoal, history: [...(req.bringGoal.history || []), `invalid plan: ${r.error}; ${invalidHint(r.error)}`] }
+        r = validateBringPlan(await planOrder(bot, ctx, a.text, fetchFn, fb), req.bringGoal)
+      }
     } catch (err) {
       const msg = String(err && err.message ? err.message : err)
       r = { error: err && err.name === 'TimeoutError' ? 'timeout' : msg.startsWith('llm budget') ? 'budget' : msg.slice(0, 40), outcome: msg.startsWith('llm budget') ? 'budget' : 'error' }
@@ -757,9 +786,13 @@ function replanBring(bot, ctx, o, observation) {
     }
     const outcome = r.steps ? 'ok' : r.empty ? 'empty' : r.error === 'budget' ? 'budget' : 'invalid'
     try { metrics.llmCalls.inc({ use: 'orders', outcome }) } catch (_) { /* metric best effort */ }
-    console.log(`llm order replan by=${o.by} round=${g.rounds} outcome=${outcome} tokens=${r.tokens || '0/0'}`)
+    console.log(`llm order replan by=${o.by} round=${g.rounds} outcome=${outcome} tokens=${r.tokens || '0/0'}${r.steps ? '' : ` err="${String(r.error || (r.empty ? 'empty' : '')).replace(/["\r\n]/g, "'").slice(0, 60)}" stack=${g.stack.map((x) => `${x.item}:${x.count}`).join('>')}`}`)
     if (ctx.llmOrder !== o) return
     o.replanning = false
+    if (!r.steps && !r.empty && r.error && !['budget', 'model unavailable'].includes(r.error) && !g.invalidRetried) {
+      g.invalidRetried = true // vf8e.25.5: once per goal, still counted in BRING_ROUNDS
+      return replanBring(bot, ctx, o, `invalid plan: ${r.error}; ${invalidHint(r.error)}`)
+    }
     if (!r.steps) {
       o.bringGoal = null
       return end(bot, ctx, o, 'failed:no further plan')
