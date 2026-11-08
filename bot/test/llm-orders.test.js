@@ -1625,3 +1625,30 @@ describe('llm orders: real-model bring reply shapes (vf8e.25.5)', () => {
     void ctx
   }))
 })
+
+describe('llm orders: replan diagnostics (vf8e.25.5 review)', () => {
+  it('an invalid replan logs its sanitized reason and the goal stack; a mismatch gets the stack-rule hint', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    const seen = []
+    console.log = (line) => { seen.push(String(line)) }
+    try {
+      const bot = mockBot()
+      const replies = ['{"plan":[{"step":"need","item":"stick","count":1}]}', '{"plan":[{"step":"bring","item":"torch","count":4}]}', '{"plan":[{"step":"bring","item":"torch","count":4}]}']
+      globalThis.fetch = async (url, init) => { calls.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ content: [{ type: 'text', text: replies.shift() || '{"plan":[]}' }], usage: { input_tokens: 5, output_tokens: 2 } }) } }
+      const ticker = tickerFor(bot)
+      handleChat(bot, ticker, 'P', 'bring me torch 4')
+      await flush()
+      const ctx = bot._tickerCtx
+      llmOrders.tick(bot, ctx) // need stick -> replan with stick on the stack
+      await flush()
+      await flush()
+      const line = seen.find((l) => /llm order replan .*outcome=invalid/.test(l))
+      assert.match(line, /tokens=5\/2 err="bring target mismatch" stack=torch:4>stick:1/)
+      assert.match(calls[2].messages[0].content, /invalid plan: bring target mismatch; bring only the root item/)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+})

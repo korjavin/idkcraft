@@ -244,6 +244,12 @@ function label(s) {
   return [s.step, s.item, s.count].filter((x) => x != null && x !== '').join(' ')
 }
 
+// vf8e.25.5 review: the retry hint names the rule the plan broke.
+function invalidHint(error) {
+  if (/mismatch|abandon/.test(String(error))) return 'bring only the root item with its remaining count when no prerequisite is on the stack; acquire only the current (last) prerequisite'
+  return 'answer with listed bare step ids and separate item/count fields'
+}
+
 function validateBringPlan(result, goalState) {
   if (!result || !result.steps) return result
   const current = goalState.stack ? goalState.stack[goalState.stack.length - 1] : goalState
@@ -453,7 +459,8 @@ function ask(bot, ctx, req, fetchFn) {
       // token budget via llmCall; dropped when the ask was cancelled).
       if (req.bringGoal && !r.steps && !r.empty && !r.outcome && r.error && ctx.llmAsk === a) {
         console.log(`llm order by=${req.by} text="${a.text}" outcome=invalid plan=${r.error} tokens=${r.tokens || '0/0'} retry=1`)
-        const fb = { ...req.bringGoal, history: [...(req.bringGoal.history || []), `invalid plan: ${r.error}; answer with listed bare step ids and separate item/count fields`] }
+        try { metrics.llmCalls.inc({ use: 'orders', outcome: 'invalid' }) } catch (_) { /* metric best-effort */ }
+        const fb = { ...req.bringGoal, history: [...(req.bringGoal.history || []), `invalid plan: ${r.error}; ${invalidHint(r.error)}`] }
         r = validateBringPlan(await planOrder(bot, ctx, a.text, fetchFn, fb), req.bringGoal)
       }
     } catch (err) {
@@ -779,12 +786,12 @@ function replanBring(bot, ctx, o, observation) {
     }
     const outcome = r.steps ? 'ok' : r.empty ? 'empty' : r.error === 'budget' ? 'budget' : 'invalid'
     try { metrics.llmCalls.inc({ use: 'orders', outcome }) } catch (_) { /* metric best effort */ }
-    console.log(`llm order replan by=${o.by} round=${g.rounds} outcome=${outcome} tokens=${r.tokens || '0/0'}`)
+    console.log(`llm order replan by=${o.by} round=${g.rounds} outcome=${outcome} tokens=${r.tokens || '0/0'}${r.steps ? '' : ` err="${String(r.error || (r.empty ? 'empty' : '')).replace(/["\r\n]/g, "'").slice(0, 60)}" stack=${g.stack.map((x) => `${x.item}:${x.count}`).join('>')}`}`)
     if (ctx.llmOrder !== o) return
     o.replanning = false
     if (!r.steps && !r.empty && r.error && !['budget', 'model unavailable'].includes(r.error) && !g.invalidRetried) {
       g.invalidRetried = true // vf8e.25.5: once per goal, still counted in BRING_ROUNDS
-      return replanBring(bot, ctx, o, `invalid plan: ${r.error}; answer with listed bare step ids and separate item/count fields`)
+      return replanBring(bot, ctx, o, `invalid plan: ${r.error}; ${invalidHint(r.error)}`)
     }
     if (!r.steps) {
       o.bringGoal = null

@@ -148,7 +148,13 @@ async function runScenario(name, sc, baseline) {
       if (o && !o.tossInFlight) {
         const item = o.kind === 'item' && o.items && o.items[0] ? o.items[0].name : (o.drop || o.name)
         const want = o.want || 1
+        const snap = { ...inv }
+        const snapChest = { ...chest }
         const miss = obtain(inv, chest, item, want)
+        await settle()
+        // The real FSM bring may have ended this order meanwhile (e.g. its own
+        // recipe rung refused): undo the simulated gain, never resolve twice.
+        if (ctx.bring !== o) { for (const k of Object.keys(inv)) delete inv[k]; Object.assign(inv, snap); for (const k of Object.keys(chest)) delete chest[k]; Object.assign(chest, snapChest); events.push(`sim: ${item} order ended by the FSM before the simulated result; result discarded`); continue }
         if (miss) { events.push(`sim: ${o.self ? 'acquire' : 'bring'} ${want} ${item} -> refused: ${miss}`); bringbase.refuse(bot, ctx, miss) } else if (o.self) {
           events.push(`sim: acquire ${want} ${item} -> held ${inv[item]}`)
           bringbase.done(bot, ctx)
