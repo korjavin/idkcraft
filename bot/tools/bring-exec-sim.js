@@ -6,7 +6,11 @@
 //   node tools/bring-exec-sim.js [--baseline] [scenario...]
 //   key: ANTHROPIC_API_KEY, else stash secrets/minecraft/anthropic-api-key
 //   (never printed; request headers are never logged). Report: SIM_OUT
-//   (default /tmp/bring-exec-sim-<mode>.json).
+//   (default /tmp/bring-exec-sim-<mode>.json): replies + token usage only;
+//   SIM_PROMPTS=1 adds the full system/user prompts. Each scenario runs in
+//   its own node process (module state never leaks between scenarios).
+// Baseline (--baseline) is WEAK: the fake bot has no mineflayer recipesFor,
+// so the FSM craft rung refuses at once; it is not a faithful FSM result.
 //
 // What is simulated (says nothing about v2 physics or pickup): every bring /
 // acquire is resolved by the table below — held -> chest -> one recipe batch
@@ -29,12 +33,13 @@ const RECIPES = { // output: { n: yield, in: consumed, tool: held, not consumed 
 }
 
 const SCENARIOS = {
+  // Explicit counts: `bring me a X` parses as the default want (3), not 1 (F4, tracked apart).
   // Chain A: smelt + craft + chest fetch (bucket <- iron_ingot <- raw_iron/coal, furnace, table).
-  'BUCKET-CHEST-SMELT': { order: 'bring me a bucket', item: 'bucket', want: 1, inv: { cobblestone: 8, coal: 3, oak_planks: 4 }, chest: { raw_iron: 3 } },
+  'BUCKET-CHEST-SMELT': { order: 'bring me bucket 1', item: 'bucket', want: 1, inv: { cobblestone: 8, coal: 3, oak_planks: 4 }, chest: { raw_iron: 3 } },
   // Chain B: wood crafting only (torch <- stick <- planks <- logs), no chest, no smelting.
   'TORCH-FROM-LOGS': { order: 'bring me torch 4', item: 'torch', want: 4, inv: { oak_log: 2, coal: 1 }, chest: {} },
   // Bounded unavailable: nothing in the world yields diamond.
-  'DIAMOND-NONE': { order: 'bring me a diamond', item: 'diamond', want: 1, inv: { cobblestone: 4 }, chest: { dirt: 8 } },
+  'DIAMOND-NONE': { order: 'bring me diamond 1', item: 'diamond', want: 1, inv: { cobblestone: 4 }, chest: { dirt: 8 } },
 }
 
 function key() {
@@ -116,7 +121,8 @@ async function runScenario(name, sc, baseline) {
     const res = await realFetch(url, init)
     const data = await res.clone().json().catch(() => null)
     calls.push({
-      prompt: (body.messages || []).map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n'),
+      system: process.env.SIM_PROMPTS === '1' ? body.system : undefined,
+      prompt: process.env.SIM_PROMPTS !== '1' ? undefined : (body.messages || []).map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n'),
       reply: data && data.content ? data.content.map((c) => c.text || '').join('') : `http ${res.status}`,
       usage: data && data.usage ? { in: data.usage.input_tokens, out: data.usage.output_tokens } : null,
     })
@@ -187,14 +193,24 @@ async function main() {
     if (!k) { console.log('no ANTHROPIC_API_KEY (stash secrets/minecraft/anthropic-api-key)'); return 2 }
     process.env.ANTHROPIC_API_KEY = k
   }
+  const child = args.includes('--child')
   const out = []
   for (const [name, sc] of Object.entries(SCENARIOS)) {
     if (pick.length && !pick.includes(name)) continue
-    const r = await runScenario(name, sc, baseline)
+    let r
+    if (child) r = await runScenario(name, sc, baseline)
+    else {
+      const res = require('node:child_process').spawnSync(process.execPath, [__filename, '--child', ...(baseline ? ['--baseline'] : []), name], { env: process.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+      const line = (res.stdout || '').split('\n').find((l) => l.startsWith('{"scenario"'))
+      if (!line) { console.log(`${name}: child failed rc=${res.status} ${(res.stderr || '').slice(-300)}`); continue }
+      r = JSON.parse(line)
+    }
     delete r._before
+    if (child) { process.stdout.write(JSON.stringify(r) + '\n'); continue }
     out.push(r)
     console.log(`${name} [${r.mode}; ${r.world}] calls=${r.modelCalls} tokens=${r.tokens.in}/${r.tokens.out} -> ${r.verdict}`)
   }
+  if (child) return 0
   const file = process.env.SIM_OUT || `/tmp/bring-exec-sim-${baseline ? 'baseline' : 'model'}.json`
   fs.writeFileSync(file, JSON.stringify(out, null, 2))
   console.log(`report: ${file}`)

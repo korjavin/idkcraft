@@ -1518,3 +1518,110 @@ describe('llm orders: qf05 empty-kit build-here', () => {
     assert.equal(ctx.home.built, false, 'a fresh unbuilt site pins the bot: gohome needs built')
   })
 })
+
+// vf8e.25.5: the exact replies the real model gave in the vf8e.25.4
+// simulated smoke (/private/tmp/sim-model.json), replayed deterministically.
+describe('llm orders: real-model bring reply shapes (vf8e.25.5)', () => {
+  const queue = (bot, replies) => {
+    globalThis.fetch = async (url, init) => {
+      calls.push(JSON.parse(init.body))
+      const text = replies.length ? replies.shift() : '{"plan":[]}'
+      return { ok: true, json: async () => ({ content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 900, output_tokens: 40 } }) }
+    }
+  }
+  const v2 = async (fn) => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try { await fn() } finally { if (prev === undefined) delete process.env.BOT_BODY; else process.env.BOT_BODY = prev }
+  }
+  const bring = { bring: true }
+
+  it('a step written as need(item,count) that agrees with its fields is the bare need step', () => {
+    const r = llmOrders.validatePlan({ plan: [{ step: 'need(stick,2)', item: 'stick', count: 2 }] }, [], bring)
+    assert.deepEqual(r.steps, [{ step: 'need', item: 'stick', count: 2, done: '' }])
+    assert.deepEqual(llmOrders.validatePlan({ plan: [{ step: 'need(minecraft:stick, 2)' }] }, [], bring).steps, [{ step: 'need', item: 'stick', count: 2, done: '' }])
+  })
+  it('conflicting signature arguments are rejected, never guessed', () => {
+    assert.match(llmOrders.validatePlan({ plan: [{ step: 'need(iron_ingot,3)', item: 'bucket', count: 3 }] }, [], bring).error, /conflicting arguments/)
+    assert.match(llmOrders.validatePlan({ plan: [{ step: 'need(stick,2)', item: 'stick', count: 4 }] }, [], bring).error, /conflicting arguments/)
+    assert.match(llmOrders.validatePlan({ plan: [{ step: 'need(stick,2)' }] }, []).error, /no step/, 'outside a bring goal the form stays unknown')
+    assert.match(llmOrders.validatePlan({ plan: [{ step: 'craft(stick)' }] }, ['craft'], bring).error, /no step/)
+  })
+  it('only the minecraft: namespace is stripped', () => {
+    assert.equal(llmOrders.validatePlan({ plan: [{ step: 'bring', item: 'minecraft:diamond', count: 1 }] }, []).steps[0].item, 'diamond')
+    assert.match(llmOrders.validatePlan({ plan: [{ step: 'bring', item: 'mod:diamond' }] }, []).error, /needs an item/)
+  })
+  it('the bring prompt names bare step ids and separate item/count fields', async () => v2(async () => {
+    const bot = mockBot([{ name: 'coal', count: 1 }])
+    queue(bot, ['{"plan":[]}'])
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal 1')
+    await flush()
+    assert.match(calls[0].system, /bare action id/)
+    assert.doesNotMatch(calls[0].system, /need\(item,count\)/)
+  }))
+  it('BUCKET reply: a conflicting first plan gets ONE retry with the validation error, then runs', async () => v2(async () => {
+    const bot = mockBot()
+    bot.registry.itemsByName.bucket = { id: 9 }
+    bot.registry.itemsByName.iron_ingot = { id: 10 }
+    queue(bot, ['{"plan":[{"step":"need(iron_ingot,3)","item":"bucket","count":3,"done":"Goal stack pushes iron_ingot x3"}]}', '{"plan":[{"step":"need","item":"iron_ingot","count":3}]}'])
+    const ctx = bot._tickerCtx || null
+    handleChat(bot, tickerFor(bot), 'P', 'bring me bucket 1')
+    await flush()
+    assert.equal(calls.length, 2)
+    assert.match(calls[1].messages[0].content, /invalid plan: conflicting arguments in need/)
+    assert.deepEqual(bot._tickerCtx.llmOrder.steps.map((s) => `${s.step}:${s.item}:${s.count}`), ['need:iron_ingot:3'])
+    void ctx
+  }))
+  it('DIAMOND reply: root acquire of minecraft:diamond x3 retries once, a second bad plan falls back bounded', async () => v2(async () => {
+    const bot = mockBot()
+    bot.registry.itemsByName.diamond = { id: 11 }
+    const bad = '{"plan":[{"step":"acquire","item":"minecraft:diamond","count":3,"done":"3 diamonds are in the bot inventory"}]}'
+    queue(bot, [bad, bad, bad])
+    handleChat(bot, tickerFor(bot), 'P', 'bring me diamond 1')
+    await flush()
+    // A later call, if any, is the FSM fallback's own recipe ask, not a bring retry.
+    assert.equal(calls.filter((c) => /bare action id/.test(c.system)).length, 2, 'exactly one retry')
+    assert.match(calls[1].messages[0].content, /invalid plan: acquire target mismatch/)
+    assert.equal(bot._tickerCtx.llmOrder, null)
+    assert.equal(bot._tickerCtx.llmAsk, null)
+  }))
+  it('a stop while the retry is in flight drops its answer', async () => v2(async () => {
+    const bot = mockBot([{ name: 'coal', count: 1 }])
+    const ticker = tickerFor(bot)
+    let release
+    let n = 0
+    globalThis.fetch = async (url, init) => {
+      calls.push(JSON.parse(init.body))
+      n++
+      if (n === 2) await new Promise((r) => { release = r })
+      const text = n === 1 ? '{"plan":[{"step":"acquire","item":"coal","count":1}]}' : '{"plan":[{"step":"bring","item":"coal","count":1}]}'
+      return { ok: true, json: async () => ({ content: [{ type: 'text', text }], usage: {} }) }
+    }
+    handleChat(bot, ticker, 'P', 'bring me coal 1')
+    await flush()
+    assert.equal(calls.length, 2)
+    handleChat(bot, ticker, 'P', 'stop')
+    release()
+    await flush()
+    assert.equal(bot._tickerCtx.llmOrder, null)
+    assert.ok(!bot._tickerCtx.bring)
+  }))
+  it('a replan answer that fails validation gets one retry inside the round cap, then ends', async () => v2(async () => {
+    const bot = mockBot([{ name: 'coal', count: 1 }])
+    const ctx = bot._tickerCtx || null
+    queue(bot, ['{"plan":[{"step":"bring","item":"coal","count":1}]}', '{"plan":[{"step":"acquire","item":"coal","count":1}]}', '{"plan":[{"step":"acquire","item":"coal","count":1}]}'])
+    const ticker = tickerFor(bot)
+    handleChat(bot, ticker, 'P', 'bring me coal 1')
+    await flush()
+    const c = bot._tickerCtx
+    llmOrders.tick(bot, c)
+    bringbase.refuse(bot, c, 'no route')
+    llmOrders.tick(bot, c)
+    await flush()
+    await flush()
+    assert.equal(calls.length, 3, 'first plan + replan + one validation retry')
+    assert.match(calls[2].messages[0].content, /invalid plan: acquire target mismatch/)
+    assert.equal(c.llmOrder, null)
+    void ctx
+  }))
+})
