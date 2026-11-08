@@ -1154,3 +1154,37 @@ describe('g0z.44 post-complete band sweep', () => {
     assert.ok(dugAt >= 0 && laidAt >= 0 && dugAt < laidAt, `sweep before decor: ${JSON.stringify(seq)}`)
   })
 })
+
+describe('qxql.26 castle hole report stays short in chat', () => {
+  it('names 5 holes and a count in chat; status and log keep all 40', () => {
+    const { mock } = require('node:test')
+    const castle = require('../src/behaviours/castle')
+    const chats = []
+    const bot = { chat: (m) => chats.push(m) }
+    const ctx = {}
+    const st = {}
+    const holes = Array.from({ length: 40 }, (_, i) => ({ x: i, y: 64, z: -i, kind: 'stone', why: 'dig-refused', until: 1000 }))
+    const logs = []
+    const log = mock.method(console, 'log', (m) => logs.push(m))
+    try { castle.sayHoles(bot, ctx, st, holes, 0) } finally { log.mock.restore() }
+    assert.equal(chats.length, 1)
+    assert.match(chats[0], /^castle: 40 holes: (?:[^,]+, ){4}[^,]+ and 35 more, retry in 1s$/)
+    assert.ok(chats[0].length < 256, `${chats[0].length} chars`)
+    assert.equal(st.status.split(', ').length, 40)
+    assert.ok(logs.some((m) => m.startsWith('castle holes all 40: ') && m.includes('39 64 -39')))
+  })
+  it('a new hole is named first when the list is cut', () => {
+    const castle = require('../src/behaviours/castle')
+    const { mock } = require('node:test')
+    const chats = []
+    const bot = { chat: (m) => chats.push(m) }
+    const ctx = {}
+    const holes = Array.from({ length: 8 }, (_, i) => ({ x: i, y: 64, z: 0, kind: 'stone', why: 'dug', until: 0 }))
+    const log = mock.method(console, 'log', () => {})
+    try {
+      castle.sayHoles(bot, ctx, {}, holes, 0)
+      castle.sayHoles(bot, ctx, {}, [...holes, { x: 99, y: 64, z: 0, kind: 'stone', why: 'dug', until: 0 }], 0)
+    } finally { log.mock.restore() }
+    assert.match(chats[1], /^castle: 9 holes: 99 64 0 /)
+  })
+})

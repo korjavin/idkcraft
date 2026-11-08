@@ -14,6 +14,17 @@ const DRAIN_PER_MS = 20 / 1000
 const LIMIT = 160 // headroom under 200 for the server's own tick skew
 const QUEUE_MAX = 20
 const PACKET_LEN = 256 // mineflayer chat.js CHAT_LENGTH_LIMIT: longer lines go as several packets
+const MAX_PARTS = 3 // qxql.26: packets one message may take in chat; the rest goes to the log only
+
+// The body's own split (mineflayer chat.js / bridge chatParts): a '/' command
+// whole, else per '\n' line (empties dropped) in 256-char packets.
+function parts(message) {
+  const s = String(message)
+  if (s.startsWith('/')) return [s]
+  const out = []
+  for (const line of s.split('\n')) for (let i = 0; i < line.length; i += PACKET_LEN) out.push(line.substring(i, i + PACKET_LEN))
+  return out
+}
 
 function packets(message) {
   const s = String(message)
@@ -28,34 +39,51 @@ function limitChat(bot, now = Date.now) {
   let level = 0
   let at = now()
   let timer = null
+  let seq = 0
   const drain = () => { const t = now(); level = Math.max(0, level - (t - at) * DRAIN_PER_MS); at = t }
-  // level === 0: a line costing more than LIMIT on its own still goes out on an empty bucket
-  const fits = (m) => level === 0 || level + packets(m) * COST <= LIMIT
+  // qxql.26: every queued entry is one packet, so no single send can overshoot.
+  // The old empty-bucket exception let a 3087-char line out as 13 packets at once (kick).
+  const fits = () => level + COST <= LIMIT
   function flush() {
     timer = null
     drain()
-    while (queue.length && fits(queue[0])) {
-      const m = queue.shift()
-      level += packets(m) * COST
+    while (queue.length && fits()) {
+      const m = queue.shift().p
+      level += COST
       try { send(m) } catch (e) { console.log(`chat send failed: ${(e && e.message) || e}`) }
     }
     if (!queue.length) return
-    const over = Math.min(level, level + packets(queue[0]) * COST - LIMIT)
+    const over = Math.min(level, level + COST - LIMIT)
     timer = setTimeout(flush, Math.max(1, Math.ceil(over / DRAIN_PER_MS)))
     if (timer.unref) timer.unref()
   }
   bot.chat = (message) => {
-    drain()
-    if (!queue.length && fits(message)) { level += packets(message) * COST; return send(message) }
-    queue.push(message)
-    if (queue.length > QUEUE_MAX) {
-      const i = queue.findIndex((q) => !String(q).startsWith('swarm flat '))
-      if (i >= 0) console.log(`chat dropped: ${queue.splice(i, 1)[0]}`)
+    let ps = parts(message)
+    if (ps.length > MAX_PARTS) {
+      console.log(`chat long ${String(message).length} chars, ${ps.length} packets, chat keeps ${MAX_PARTS}: ${message}`)
+      ps = ps.slice(0, MAX_PARTS)
+      const last = ps[MAX_PARTS - 1]
+      ps[MAX_PARTS - 1] = last.slice(0, PACKET_LEN - 12) + ' …(see log)'
     }
-    if (!timer) flush()
+    const id = ++seq
+    const relay = String(message).startsWith('swarm flat ')
+    for (const p of ps) {
+      drain()
+      if (!queue.length && fits()) { level += COST; send(p); continue }
+      queue.push({ p, id, relay })
+    }
+    // Overflow drops whole messages (all their queued packets), oldest first, never the relay.
+    while (queue.length > QUEUE_MAX) {
+      const old = queue.find((q) => !q.relay)
+      if (!old) break
+      const gone = queue.filter((q) => q.id === old.id)
+      for (const g of gone) queue.splice(queue.indexOf(g), 1)
+      console.log(`chat dropped: ${gone.map((g) => g.p).join('')}`)
+    }
+    if (queue.length && !timer) flush()
   }
   if (typeof bot.on === 'function') bot.on('end', () => { queue.length = 0; clearTimeout(timer); timer = null })
   return bot
 }
 
-module.exports = { limitChat, packets, LIMIT, COST }
+module.exports = { limitChat, packets, parts, LIMIT, COST, MAX_PARTS }

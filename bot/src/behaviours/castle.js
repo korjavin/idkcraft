@@ -352,6 +352,7 @@ function holesOf(bot, st, cells) {
 // retired one) re-chats: a retry gap, a resolve and a why-change between
 // retries all stay silent (revmux 01), the latch syncing either way.
 // False when no open hole.
+const HOLES_CHAT_MAX = 5
 function sayHoles(bot, ctx, st, holes, now) {
   if (!holes.length) { ctx.castleBlockedSaid = null; return false }
   const toks = holes.map((h) => `${h.x},${h.y},${h.z}${h.retired ? 'R' : ''}`)
@@ -365,7 +366,13 @@ function sayHoles(bot, ctx, st, holes, now) {
   const tail = live.length
     ? `, retry in ${Math.max(0, Math.round((Math.min(...live.map((h) => (typeof h.until === 'number' ? h.until : now))) - now) / 1000))}s`
     : ', no retries left'
-  let line = holes.length === 1 ? `castle: 1 hole at ${desc(holes[0])}${tail}` : `castle: ${holes.length} holes: ${holes.map(desc).join(', ')}${tail}`
+  // qxql.26: chat names the first few (a 3087-char list got the bot kicked); st.status and the log keep them all.
+  const tok = (h) => `${h.x},${h.y},${h.z}${h.retired ? 'R' : ''}`
+  const fresh1 = new Set(fresh)
+  const first = holes.length <= HOLES_CHAT_MAX ? holes : [...holes.filter((h) => fresh1.has(tok(h))), ...holes.filter((h) => !fresh1.has(tok(h)))] // cut: new holes first
+  const shown = first.slice(0, HOLES_CHAT_MAX).map(desc).join(', ') + (holes.length > HOLES_CHAT_MAX ? ` and ${holes.length - HOLES_CHAT_MAX} more` : '')
+  if (holes.length > HOLES_CHAT_MAX) console.log(`castle holes all ${holes.length}: ${holes.map(desc).join(', ')}`)
+  let line = holes.length === 1 ? `castle: 1 hole at ${desc(holes[0])}${tail}` : `castle: ${holes.length} holes: ${shown}${tail}`
   const kept = [...new Set(holes.map((h) => /^kept-(.+)$/.exec(h.why)).filter(Boolean).map((m) => m[1]))]
   if (kept.length === 1 && holes.length === 1) line += ` — remove the ${kept[0]} there or say castle stop`
   else if (kept.length) line += ' — remove those blocks or say castle stop'
