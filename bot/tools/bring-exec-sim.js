@@ -134,7 +134,11 @@ async function runScenario(name, sc, baseline) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   const settle = async () => { for (let i = 0; i < 600 && (ctx.llmAsk || (ctx.llmOrder && ctx.llmOrder.replanning)); i++) await sleep(100); for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r)) }
   const events = []
-  let now = Date.now()
+  // One virtual clock for every stamp (bringEnd.at, step starts, timeouts):
+  // a separate tick clock made refusals read as cancelled (lost reasons).
+  const realNow = Date.now
+  let now = realNow()
+  Date.now = () => now
   const before = inv[sc.item] || 0
   let tossed = 0
   try {
@@ -143,7 +147,7 @@ async function runScenario(name, sc, baseline) {
     const rounds = Number(process.env.SIM_ROUNDS) || 40
     for (let i = 0; i < rounds; i++) {
       if (baseline ? !ctx.bring : !ctx.llmOrder) break
-      if (!baseline) { llmOrders.tick(bot, ctx, now); await settle() }
+      if (!baseline) { llmOrders.tick(bot, ctx); await settle() }
       const o = ctx.bring
       if (o && !o.tossInFlight) {
         const item = o.kind === 'item' && o.items && o.items[0] ? o.items[0].name : (o.drop || o.name)
@@ -174,6 +178,7 @@ async function runScenario(name, sc, baseline) {
     }
   } finally {
     console.log = origLog
+    Date.now = realNow
     globalThis.fetch = realFetch
     for (const k of Object.keys(process.env)) if (!(k in envKeep)) delete process.env[k]
     Object.assign(process.env, envKeep)
