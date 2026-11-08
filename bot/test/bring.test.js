@@ -671,3 +671,58 @@ describe('bring helper branches (idkcraft-pun)', () => {
     assert.equal(r.model, 'probe')
   })
 })
+
+describe('vf8e.25.7 single-drop toss faces the recipient', () => {
+  const eyePos = (x, y, z) => Object.assign(pos(x, y, z), { offset: (dx, dy, dz) => pos(x + dx, y + dy, z + dz) })
+  async function run(lookAt) {
+    const names = { '2,64,0': 'coal_ore', '6,64,0': 'coal_ore', '9,64,0': 'coal_ore' }
+    const spots = [pos(2, 64, 0), pos(6, 64, 0), pos(9, 64, 0)]
+    const bot = mockBot({ spots, names, items: [{ name: 'stone_pickaxe', count: 1 }], playerPos: eyePos(30, 64, 0) })
+    const seq = []
+    bot.lookAt = async (p) => { seq.push(['look', p.x, p.y, p.z]); if (lookAt) lookAt(bot) }
+    const toss = bot.toss
+    bot.toss = async (...a) => { seq.push(['toss']); return toss(...a) }
+    bot._moving = true
+    handleChat(bot, tickerFor(bot), 'P', 'bring me coal')
+    const ctx = bot._tickerCtx
+    for (let i = 0; i < 80 && ctx.bring; i++) {
+      bring(bot, ctx, null, {})
+      await flush()
+      const o = ctx.bring
+      if (!o) break
+      const gk = ctx.lastGoalKey
+      if (gk.startsWith('bring:') && o.pos) { bot.entity.position = pos(o.pos.x + 1, o.pos.y, o.pos.z); bot._moving = false } else if (gk.startsWith('bring-pickup')) bot._moving = false
+      else if (gk.startsWith('bring-return')) { bot.entity.position = pos(31, 64, 0); bot._moving = false }
+    }
+    return { bot, seq }
+  }
+  it('looks at the recipient eyes before the drop toss', async () => {
+    const { bot, seq } = await run()
+    const t = seq.findIndex((s) => s[0] === 'toss')
+    assert.ok(t > 0, `seq: ${JSON.stringify(seq)}`)
+    assert.deepEqual(seq[t - 1], ['look', 30, 64 + 1.8 * 0.9, 0])
+    assert.deepEqual(bot.tossCalls, [[ITEMS.coal, null, 3]])
+  })
+  it('v2: an order replaced while turning tosses nothing', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    const atReturn = (cancel) => {
+      const bot = mockBot({ items: [{ name: 'coal', count: 3 }], playerPos: eyePos(30, 64, 0) })
+      bot.entity.position = pos(31, 64, 0)
+      bot.lookAt = async () => { if (cancel) bot._tickerCtx.bring = null }
+      bot._tickerCtx = { lastGoalKey: '', bring: { name: 'coal', want: 3, by: 'P', block: 'coal_ore', drop: 'coal', pos: null, phase: 'return', stalls: 0, lastPos: null, have: 3, announced: true } }
+      return bot
+    }
+    try {
+      for (const cancel of [false, true]) {
+        const bot = atReturn(cancel)
+        bring(bot, bot._tickerCtx, null, {})
+        for (let k = 0; k < 5; k++) await flush()
+        assert.deepEqual(bot.tossCalls, cancel ? [] : [[ITEMS.coal, null, 3]], `cancel=${cancel}`)
+      }
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+})

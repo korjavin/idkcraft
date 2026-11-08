@@ -1929,6 +1929,18 @@ function capByLive(items, live) {
 // what actually left; an empty toss refuses like the single-drop path.
 // Item orders (did.1) toss their own list, capped the same way. A single
 // piece reads singular ('here is 1 white_bed', did.4).
+// vf8e.25.7: a toss flies where the bot looks (vanilla throw), so face the
+// recipient's eyes first; a recipient out of sight leaves the aim unchanged.
+async function faceRecipient(bot, o) {
+  try {
+    const p = require('../worker').players(bot)[o && o.by]
+    const e = p && p.entity
+    if (e && e.position && typeof bot.lookAt === 'function') await bot.lookAt(e.position.offset(0, (e.height || 1.8) * 0.9, 0), true)
+    // mineflayer sends the look with the next position packet: let it go out first.
+    if (process.env.BOT_BODY !== 'baritone' && typeof bot.waitForTicks === 'function') await bot.waitForTicks(1)
+  } catch (_) { /* aim best-effort */ }
+}
+
 function shareToss(bot, ctx, o) {
   if (o.tossInFlight) return
   let live = []
@@ -1947,6 +1959,7 @@ function shareToss(bot, ctx, o) {
     let tossed = 0
     const v2 = process.env.BOT_BODY === 'baritone'
     try {
+      await faceRecipient(bot, o)
       for (const item of items) {
         if (v2 && ctx.bring !== o) break
         let id = null
@@ -1980,6 +1993,7 @@ function shareToss(bot, ctx, o) {
   })()
 }
 
+module.exports.faceRecipient = faceRecipient
 module.exports.parseToolRequest = parseToolRequest
 module.exports.isToolName = isToolName
 module.exports.ensureTool = ensureTool
