@@ -483,7 +483,9 @@ function matches(kind, name) {
   if (kind === 'stairs') return name.endsWith('_stairs') // v3 steps (g0z.47)
   if (kind === 'gate') return name.endsWith('_fence_gate') // fence-ring gate decor (g0z.46)
   if (kind === 'air') return AIR_NAMES.has(name) || name.endsWith('_door')
-  if (kind === 'dig') return AIR_NAMES.has(name)
+  // qxql.28 (owner 2026-11-09): water or lava in a moat cell is a done moat;
+  // the bot never changes the liquid (prod had 175/326 cells wet).
+  if (kind === 'dig') return AIR_NAMES.has(name) || name === 'water' || name === 'lava'
   return false
 }
 
