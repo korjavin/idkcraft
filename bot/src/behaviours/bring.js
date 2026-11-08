@@ -2496,6 +2496,8 @@ async function bring(bot, ctx, target, state) {
       void (async () => {
         const v2 = process.env.BOT_BODY === 'baritone'
         try {
+          await itemMod.faceRecipient(bot, o)
+          if (v2 && ctx.bring !== o) return
           const before = v2 ? countDrop(bot, o.drop) : 0
           await bot.toss(id, null, n)
           if (v2 && ctx.bring !== o) return

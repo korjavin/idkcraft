@@ -493,3 +493,44 @@ describe('bring tierArticle (idkcraft-xfs)', () => {
     assert.equal(bring.tierArticle('stone'), 'a')
   })
 })
+
+describe('vf8e.25.7 toss faces the recipient', () => {
+  const eyePos = (x, y, z) => Object.assign(pos(x, y, z), { offset: (dx, dy, dz) => pos(x + dx, y + dy, z + dz) })
+  it('looks at the recipient eyes before the toss (a toss flies where the bot looks)', async () => {
+    const bot = mockBot({ chest: [{ name: 'dirt', count: 40 }], playerPos: eyePos(30, 64, 0) })
+    const seq = []
+    bot.lookAt = async (p) => { seq.push(['look', p.x, p.y, p.z]) }
+    const toss = bot.toss
+    bot.toss = async (...a) => { seq.push(['toss']); return toss(...a) }
+    const ticker = tickerFor(bot)
+    chestHome(bot._tickerCtx)
+    handleChat(bot, ticker, 'P', 'bring me dirt 5')
+    await drive(bot, bot._tickerCtx)
+    assert.deepEqual(seq.slice(0, 2), [['look', 30, 64 + 1.8 * 0.9, 0], ['toss']])
+    assert.ok(bot.lines.includes('here are 5 dirt'), `lines: ${bot.lines}`)
+  })
+  it('v2: an order replaced while turning tosses nothing', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const ctl = mockBot({ chest: [{ name: 'dirt', count: 40 }], playerPos: eyePos(30, 64, 0) })
+      ctl.lookAt = async () => {}
+      const ctlTicker = tickerFor(ctl)
+      chestHome(ctl._tickerCtx)
+      handleChat(ctl, ctlTicker, 'P', 'bring me dirt 5')
+      await drive(ctl, ctl._tickerCtx)
+      assert.deepEqual(ctl.tossCalls, [[ITEMS.dirt, null, 5]], 'v2 control reaches the toss')
+      const bot = mockBot({ chest: [{ name: 'dirt', count: 40 }], playerPos: eyePos(30, 64, 0) })
+      bot.lookAt = async () => { bot._tickerCtx.bring = null }
+      const ticker = tickerFor(bot)
+      chestHome(bot._tickerCtx)
+      handleChat(bot, ticker, 'P', 'bring me dirt 5')
+      await drive(bot, bot._tickerCtx)
+      assert.deepEqual(bot.tossCalls, [])
+      assert.ok(!bot.lines.includes('here are 5 dirt'), `lines: ${bot.lines}`)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+})
