@@ -1,5 +1,5 @@
 'use strict'
-// idkcraft-qxql.32: prod V2b struck no-ref on a ring over real grass at a
+// idkcraft-qxql.32 (cache cause is a hypothesis): prod V2b struck no-ref on a ring over grass at a
 // chunk edge — the v2 bridge cache read the ground column as null
 // (unloaded). An unknown neighbour now asks the body to load it and strikes
 // 'unloaded', never 'no-ref'; once the column loads the cell lays.
@@ -63,4 +63,22 @@ describe('castle no-ref vs an unloaded neighbour (qxql.32)', () => {
     for (let i = 0; i < 30; i++) { castle(bot, ctx); await settle() }
     assert.ok(places.length > before, 'once loaded the ring lays')
   })
+})
+
+describe('a retired unloaded cell re-enters via castlerecovery (qxql.32)', () => {
+  const rec = require('../src/behaviours/castlerecovery')
+  const run = (loaded) => {
+    const env = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      const c = { idx: 7, x: 1, y: 64, z: 1, kind: 'stone' }
+      const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, phase: 'build', blocked: { k7: { retired: true, until: 0, why: 'unloaded' } } }
+      const bot = { entity: { position: { x: 2, y: 64, z: 2 } }, blockAt: () => (loaded ? { name: 'air' } : null) }
+      const ctx = { brain: { plan: () => null } }
+      const hooks = { bkey: (_s, i) => `k${i}`, done: () => false, findItem: () => ({ name: 'cobblestone' }) }
+      return rec.eligible(bot, ctx, st, [c], Date.now(), hooks)
+    } finally { if (env === undefined) delete process.env.BOT_BODY; else process.env.BOT_BODY = env }
+  }
+  it('still unloaded: not eligible (no planner call on a cache gap)', () => assert.equal(run(false), null))
+  it('column loaded later: eligible for the safe-primitive planner', () => assert.equal(run(true).idx, 7))
 })
