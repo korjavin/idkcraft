@@ -94,3 +94,35 @@ it('fewer than 3 wheat: bread source is off', () => {
   inv = [{ name: 'wheat', count: 2 }]
   assert.equal(fr.available(mkBot(), mkCtx(), facts), false)
 })
+
+it('exactly 3 wheat: async craft 3->0 wheat, 0->1 bread reports crafted, not failed', () => {
+  inv = [{ name: 'wheat', count: 3 }]
+  const bot = mkBot(); const ctx = mkCtx()
+  assert.equal(fr.available(bot, ctx, facts), true)
+  const logs = []; const log = console.log; console.log = (l) => logs.push(l)
+  try {
+    craftResult = () => { ctx.gearInFlight = true; return 'running' }
+    fr.run(bot, ctx) // op in flight
+    inv = [{ name: 'bread', count: 1 }]; ctx.gearInFlight = false // craft lands, wheat gone
+    craftResult = { done: false, line: "can't make bread: crafting failed" } // must not be consulted
+    fr.run(bot, ctx)
+  } finally { console.log = log }
+  assert.ok(logs.some((l) => /source=bread result=crafted/.test(l)), logs.join('\n'))
+  assert.ok(!logs.some((l) => /result=failed/.test(l)))
+  assert.ok(!ctx.foodRecoveryRetryAt)
+  assert.equal(ctx.stepStatus, 'done')
+})
+
+it('cancel mid-craft clears the stale craftany run', () => {
+  const bot = mkBot(); const ctx = mkCtx()
+  craftResult = () => { ctx.craftany = { key: 'breadx1' }; return 'running' }
+  fr.run(bot, ctx)
+  assert.equal(ctx.craftany.key, 'breadx1')
+  ctx.followName = 'Owner'
+  fr.run(bot, ctx)
+  assert.equal(ctx.craftany, null)
+  assert.equal(ctx.foodRecovery.valid, false)
+  delete ctx.followName
+  ctx.craftany = { key: 'breadx1' }; fr.invalidate(ctx)
+  assert.equal(ctx.craftany, null)
+})
