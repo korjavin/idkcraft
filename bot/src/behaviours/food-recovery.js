@@ -7,6 +7,7 @@ const forage = require('./forage')
 const stockpile = require('./stockpile')
 const { stepDone } = require('../step')
 const { LOW_HP_GATE_MS, lowHpGated } = require('../health-gate')
+const craftany = require('./craftany')
 
 const RETRY_MS = 60000
 const WINDOW_TIMEOUT_MS = 30000
@@ -37,10 +38,28 @@ function chestState(ctx) {
   return { kind: 'food', phase: 'chestfetch', want: 1, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: stockpile.NEARBY_CHEST_RADIUS }
 }
 
+function wheatCount(bot) {
+  try { return bot.inventory.items().reduce((n, i) => n + (i && i.name === 'wheat' ? i.count || 0 : 0), 0) } catch (_) { return 0 }
+}
+
+// idkcraft-qxql33: pack wheat -> bread only at a standing known table, so the
+// craft consumes nothing but wheat (craftany never has to make a table).
+function breadReady(bot, ctx) {
+  if (wheatCount(bot) < 3) return false
+  try { return !!craftany.standingTable(bot, ctx) } catch (_) { return false }
+}
+
 function available(bot, ctx, facts) {
   if (!needed(bot, ctx, facts) || (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt)) return false
   if (ctx.foodRecoveryFlight) return false
-  return !!(bring.pickChest(bot, ctx, chestState(ctx)) || forage.foodTarget(bot, ctx, true))
+  if (breadReady(bot, ctx)) return true
+  const other = !!(bring.pickChest(bot, ctx, chestState(ctx)) || forage.foodTarget(bot, ctx, true))
+  const wheat = wheatCount(bot)
+  if (!other && wheat >= 3 && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
+    ctx.foodBreadLogAt = Date.now()
+    console.log(`food recovery source=bread result=no-table wheat=${wheat}`)
+  }
+  return other
 }
 
 function invalidate(ctx) {
@@ -50,7 +69,7 @@ function invalidate(ctx) {
 function run(bot, ctx) {
   let r = ctx.foodRecovery
   if (!r || !r.valid) {
-    r = ctx.foodRecovery = { valid: true, chest: chestState(ctx), phase: 'chest', startFood: bot.food }
+    r = ctx.foodRecovery = { valid: true, chest: chestState(ctx), phase: breadReady(bot, ctx) ? 'bread' : 'chest', startFood: bot.food }
     ctx.lastPathStatus = 'none'
     console.log(`food recovery start health=${bot.health} food=${bot.food} edible=0`)
   }
@@ -69,6 +88,25 @@ function run(bot, ctx) {
   if (bot.food > r.startFood) { done(false); return }
   const bp = bot.entity && bot.entity.position
   if (!bp) return
+  if (r.phase === 'bread') {
+    if (!r.bread) {
+      r.bread = { wheat0: wheatCount(bot) }
+      ctx.craftany = null
+      console.log(`food recovery source=bread start wheat=${r.bread.wheat0}`)
+    }
+    // The table must still stand each tick, else craftany would make one.
+    const res = breadReady(bot, ctx) || ctx.gearInFlight ? craftany(bot, ctx, 'bread', 1) : { done: false, line: 'need a crafting table' }
+    if (res === 'running') return
+    ctx.craftany = null
+    if (res && res.done) {
+      console.log(`food recovery source=bread result=crafted wheat=${wheatCount(bot)}`)
+      done(false) // bread is edible now: the eat reflex eats it, needed() goes false
+      return
+    }
+    console.log(`food recovery source=bread result=failed why=${JSON.stringify((res && res.line) || 'unknown')} wheat=${wheatCount(bot)}`)
+    done(true)
+    return
+  }
   if (r.phase === 'chest') {
     if (ctx.foodRecoveryFlight) {
       if (ctx.foodRecoveryFlight.owner === r && Date.now() - ctx.foodRecoveryFlight.at >= WINDOW_TIMEOUT_MS) {
