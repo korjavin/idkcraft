@@ -113,12 +113,12 @@ function signature(bot, p) {
 }
 function stamp(bot, points) { return points.map((p) => [Object.freeze({ x: p.x, y: p.y, z: p.z }), signature(bot, p)]) }
 function unchanged(bot, stamps) { return stamps.every(([p, v]) => signature(bot, p) === v) }
-function safeDig(bot, ctx, p) {
+function safeDig(bot, ctx, p, escape = false) {
   const b = block(bot, p)
   // Strict shared default-deny preserves owner builds and containers;
   // unlike normal footprint clearing, recovery never opts into castleClear.
   return b && !AIR.has(b.name) && distance(bot, p) <= flat.REACH_DIG &&
-    !flat.threatenedSelf(bot, p.x, p.y, p.z) && !flat.threatenedByPlayer(bot, p.x, p.y, p.z) && !denyReason(bot, b, ctx)
+    !flat.threatenedSelf(bot, p.x, p.y, p.z) && !flat.threatenedByPlayer(bot, p.x, p.y, p.z) && (!denyReason(bot, b, ctx) || (escape && denyReason(bot, b, ctx) === 'protected'))
 }
 // qxql.29: off-plan cells are free to stand in; isPlaceTarget(undefined) is
 // true, so the old check refused every stance outside the blueprint.
@@ -434,7 +434,7 @@ async function primitive(bot, ctx, ep, o, hooks) {
   bot.pathfinder.setGoal(null)
   ep.goal = null
   if (o.op === 'walk_to') {
-    if (!standable(bot, o, at)) return 'refused:not-standable'
+    if (!standable(bot, o, ep.generic ? new Map() : at)) return 'refused:not-standable'
     ep.goal = new goals.GoalBlock(o.x, o.y, o.z)
     bot.pathfinder.setGoal(ep.goal)
     ep.walk = o
@@ -451,12 +451,12 @@ async function primitive(bot, ctx, ep, o, hooks) {
     // escape: the castle's own build protection yields; trap/gravity/water rules still refuse
     const deny = denyReason(bot, b, ctx)
     if (deny && !(escape && deny === 'protected')) return 'refused:protected'
-    if (!safeDig(bot, ctx, o)) return 'refused:out-of-reach-or-occupied'
+    if (!safeDig(bot, ctx, o, escape)) return 'refused:out-of-reach-or-occupied'
     const req = tools.requirement(b)
     const tool = req ? tools.carried(bot, { ...req, harvestTools: b.harvestTools }) : bot.pathfinder.bestHarvestTool && bot.pathfinder.bestHarvestTool(b)
     if ((req && !req.hand && !tool) || (b.harvestTools && !(tool && b.harvestTools[tool.type]))) return 'refused:no-tool'
     if (tool) await bot.equip(tool, 'hand')
-    if (!live() || !safeDig(bot, ctx, o)) return 'preempted'
+    if (!live() || !safeDig(bot, ctx, o, escape)) return 'preempted'
     await bot.dig(block(bot, o))
     return AIR.has(name(bot, o)) ? 'dug' : 'unchanged'
   }
