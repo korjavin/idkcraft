@@ -14,6 +14,8 @@ const fakeCraft = (bot, ctx, name, count) => {
   assert.equal(name, 'bread'); assert.equal(count, 1)
   return typeof craftResult === 'function' ? craftResult(bot) : craftResult
 }
+// Planner stub: real affordability is covered in food-bread-real-qxql33b.
+fakeCraft.planCraft = () => ({ ok: table || inv.some((i) => i.name === 'crafting_table' || i.name.endsWith('_log')) })
 fakeCraft.standingTable = () => (table ? { block: { name: 'crafting_table' }, pos: { x: 1, y: 64, z: 0 } } : null)
 require(craftPath)
 require.cache[craftPath].exports = fakeCraft
@@ -62,13 +64,15 @@ it('no table: not available via bread, honest log, no craft', () => {
   assert.equal(craftCalls, 0)
 })
 
-it('craft failure: retry backoff, no immediate re-entry', () => {
+it('craft failure: bread-only backoff, episode falls through to chest/hunt', () => {
   const bot = mkBot(); const ctx = mkCtx()
   craftResult = { done: false, line: "can't make bread: crafting failed" }
   fr.run(bot, ctx)
-  assert.equal(ctx.stepStatus, 'done')
-  assert.ok(ctx.foodRecoveryRetryAt > Date.now())
-  assert.equal(fr.available(bot, ctx, facts), false)
+  assert.equal(ctx.stepStatus, undefined)
+  assert.ok(ctx.foodBreadRetryAt > Date.now() && ctx.foodRecovery.phase === 'chest')
+  ctx.foodRecovery.valid = false
+  assert.equal(fr.available(bot, ctx, facts), false, 'bread not re-offered, no chest/prey here')
+  assert.equal(craftCalls, 1)
 })
 
 it('table gone mid-run and no wood: craftany ends it, honest table=none + backoff', () => {
@@ -79,7 +83,7 @@ it('table gone mid-run and no wood: craftany ends it, honest table=none + backof
   const logs = []; const log = console.log; console.log = (l) => logs.push(l)
   try { fr.run(bot, ctx) } finally { console.log = log }
   assert.ok(logs.some((l) => /source=bread table=none why="need a crafting table"/.test(l)), logs.join('\n'))
-  assert.ok(ctx.foodRecoveryRetryAt > Date.now())
+  assert.ok(ctx.foodBreadRetryAt > Date.now() && ctx.foodRecovery.phase === 'chest')
 })
 
 it('owner order preempts: follow stops the bread run without a craft call', () => {
@@ -149,14 +153,6 @@ it('no table + a log: bread source on, craftany makes/places the table, crafts b
   assert.equal(inv.find((i) => i.name === 'oak_log').count, 1)
 })
 
-it('no table + 4 planks or a carried table also fund it; 3 planks do not', () => {
-  table = false
-  for (const [extra, ok] of [[{ name: 'spruce_planks', count: 4 }, true], [{ name: 'crafting_table', count: 1 }, true], [{ name: 'oak_planks', count: 3 }, false]]) {
-    inv = [{ name: 'wheat', count: 86 }, extra]
-    assert.equal(fr.available(mkBot(), mkCtx(), facts), ok, extra.name)
-  }
-})
-
 it('table make never finishes: bounded by the bread deadline, then backoff', () => {
   table = false
   inv = [{ name: 'wheat', count: 86 }, { name: 'oak_log', count: 1 }]
@@ -167,7 +163,7 @@ it('table make never finishes: bounded by the bread deadline, then backoff', () 
   try { fr.run(bot, ctx) } finally { console.log = log }
   assert.equal(craftCalls, 1)
   assert.ok(logs.some((l) => /source=bread table=none why="timeout"/.test(l)), logs.join('\n'))
-  assert.ok(ctx.foodRecoveryRetryAt > Date.now())
+  assert.ok(ctx.foodBreadRetryAt > Date.now() && ctx.foodRecovery.phase === 'chest')
   assert.equal(ctx.craftany, null)
 })
 

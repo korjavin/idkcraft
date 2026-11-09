@@ -83,3 +83,79 @@ it('prod V2b inventory: 4 logs, no planks/table, 86 wheat -> bread, <=1 log spen
   assert.deepEqual(ops, ['oak_planks', 'crafting_table', 'bread'])
   assert.ok(!ctx.foodRecoveryRetryAt)
 })
+
+// Codex review #757 (2): the gate must agree with craftany's own planner.
+it('2 oak + 2 birch planks: craftany cannot fund a table, so bread is not offered', () => {
+  process.env.BOT_BODY = 'baritone'
+  placed = false
+  const bot = mkBot()
+  bot.registry.itemsByName.birch_planks = { id: 6, name: 'birch_planks' }
+  bot._names[6] = 'birch_planks'
+  bot._inv = [{ name: 'oak_planks', count: 2 }, { name: 'birch_planks', count: 2 }, { name: 'wheat', count: 86 }]
+  const ctx = { work: true, step: 'foodRecovery' }
+  const craftany = require('../src/behaviours/craftany')
+  assert.equal(craftany.planCraft(bot, ctx, ['bread'], 1).ok, false, 'craftany refuses')
+  assert.equal(fr.available(bot, ctx, { time: 'day', health: bot.health }), false, 'gate agrees')
+})
+
+// Codex review #757 (1): a failed bread leg must not block chest/forage.
+it('bread failure falls through to chest/forage in the same episode, no shared cooldown', () => {
+  process.env.BOT_BODY = 'baritone'
+  placed = false
+  const bring = require('../src/behaviours/bring')
+  const forage = require('../src/behaviours/forage')
+  const bot = mkBot()
+  const ctx = { work: true, step: 'foodRecovery' }
+  const facts = { time: 'day', health: bot.health }
+  const saved = tablespot.tableFor
+  tablespot.tableFor = () => Promise.reject(new Error('no legal spot'))
+  forage.foodTarget = () => ({ name: 'sheep', want: 1 })
+  const logs = []; const log = console.log; console.log = (l) => logs.push(String(l))
+  try {
+    fr.run(bot, ctx)
+    ctx.foodRecovery.bread.at -= 121000 // deadline passes
+    fr.run(bot, ctx)
+  } finally { console.log = log; tablespot.tableFor = saved; forage.foodTarget = () => null }
+  assert.ok(logs.some((l) => /source=bread table=none why="timeout"/.test(l)), logs.join('\n'))
+  assert.notEqual(ctx.foodRecovery.phase, 'bread', 'moved on to chest/forage')
+  assert.equal(ctx.foodRecovery.valid, true)
+  assert.ok(!ctx.foodRecoveryRetryAt, 'no episode cooldown from a bread failure')
+  // a new episode inside the bread cooldown still offers chest/forage, not bread
+  forage.foodTarget = () => ({ name: 'sheep', want: 1 })
+  try {
+    ctx.foodRecovery.valid = false
+    assert.equal(fr.available(bot, ctx, facts), true)
+    fr.run(bot, ctx)
+    assert.notEqual(ctx.foodRecovery.phase, 'bread')
+  } finally { forage.foodTarget = () => null; bring.pickChest = () => null }
+})
+
+it('stripped log only: craftany has no table variant for it, so bread is not offered', () => {
+  process.env.BOT_BODY = 'baritone'
+  placed = false
+  const bot = mkBot()
+  bot.registry.itemsByName.stripped_oak_log = { id: 7, name: 'stripped_oak_log' }
+  bot._names[7] = 'stripped_oak_log'
+  bot._inv = [{ name: 'stripped_oak_log', count: 4 }, { name: 'wheat', count: 86 }]
+  const ctx = { work: true, step: 'foodRecovery' }
+  assert.equal(require('../src/behaviours/craftany').planCraft(bot, ctx, ['bread'], 1).ok, false)
+  assert.equal(fr.available(bot, ctx, { time: 'day', health: bot.health }), false)
+})
+
+it('bread latch outlasts RETRY_MS: covers the 5-min low-HP episode', () => {
+  const ctx = { foodBreadRetryAt: 0 }
+  const { LOW_HP_GATE_MS } = require('../src/health-gate')
+  assert.ok(LOW_HP_GATE_MS >= fr.RETRY_MS)
+  process.env.BOT_BODY = 'baritone'
+  placed = false
+  const bot = mkBot()
+  Object.assign(ctx, { work: true, step: 'foodRecovery' })
+  const saved = tablespot.tableFor
+  tablespot.tableFor = () => Promise.reject(new Error('refused'))
+  const log = console.log; console.log = () => {}
+  try { fr.run(bot, ctx); ctx.foodRecovery.bread.at -= 121000; fr.run(bot, ctx) } finally { console.log = log; tablespot.tableFor = saved }
+  assert.ok(ctx.foodBreadRetryAt - Date.now() > fr.RETRY_MS + 1000)
+  ctx.foodRecovery.valid = false
+  const realNow = Date.now; Date.now = () => realNow() + fr.RETRY_MS + 5000
+  try { assert.equal(fr.available(bot, ctx, { time: 'day', health: bot.health }), false, 'bread still latched after RETRY_MS') } finally { Date.now = realNow }
+})
