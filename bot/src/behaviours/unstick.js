@@ -13,11 +13,13 @@ const NOPATH_TICKS = 10
 const COOLDOWN_MS = 300000
 const EPISODE_MS = 180000
 const WAIT_MS = 10000
+const BOXED_MS = 120000
 const SYSTEM = 'You unstick a Minecraft bot whose pathfinder cannot reach its goal. Answer with JSON only: ' +
   '{"plan":[{"op":"walk_to","x":0,"y":0,"z":0},{"op":"dig","x":0,"y":0,"z":0},{"op":"place","item":"name","x":0,"y":0,"z":0},{"op":"wait","s":3},{"op":"ask_owner","text":"..."}]} ' +
   `with at most ${esc.ESC_MAX_STEPS} steps, all within ${esc.ESC_RANGE} blocks of the bot. Typical fixes: dig through a 1-2 block wall, ` +
   'place a block to step up or bridge a gap, walk to an intermediate spot. Coordinates are block coordinates; walk_to targets the feet cell. ' +
-  'Unsafe steps (owner/protected blocks, containers, castle cells, lava, out of reach) are refused and reported back.'
+  'Unsafe steps (owner/protected blocks, containers, lava, out of reach) are refused and reported back. ' +
+  'Castle cells are refused except dig of a castle stone/planks block: if the bot is boxed in on or inside its castle, dig one down or sideways to get out (the castle re-lays it).'
 const NOOP = Object.freeze({ done: () => false, findItem: () => null, own: () => {} })
 const sessions = new WeakMap()
 const key = (p) => `${p.x},${p.y},${p.z}`
@@ -92,8 +94,13 @@ function tick(bot, ctx, fight = false) {
   s.nopath = g && ctx.lastPathStatus === 'noPath' ? s.nopath + 1 : 0
   const why = trigger(bot, ctx, s)
   const target = g || (s.goal && s.goal.gen === stepGen(ctx) ? s.goal.pos : null)
-  // castle cells have their own 8hx3 episode
-  if (!why || !target || !ctx.work || !ctx.step || ctx.step === 'castle' || ctx.paused || ctx.inShelter || ctx.breath || ctx.lead) return false
+  // Castle cells have their own 8hx3 episode; the castle step escalates here
+  // only when the bot itself has not moved a block for BOXED_MS (prod
+  // 2026-11-09: boxed in on the wall top, every cell noPath, 35+ min).
+  const p = bot.entity.position
+  if (!s.moved || Math.hypot(p.x - s.moved.x, p.y - s.moved.y, p.z - s.moved.z) >= 1) s.moved = { x: p.x, y: p.y, z: p.z, at: now }
+  const boxed = now - s.moved.at >= BOXED_MS
+  if (!why || !target || !ctx.work || !ctx.step || (ctx.step === 'castle' && !boxed) || esc.busy(ctx) || ctx.paused || ctx.inShelter || ctx.breath || ctx.lead) return false
   if ((s.cooldown.get(key(target)) || 0) > now) return false
   ep = { generic: true, trigger: why, target, step: ctx.step, cell: floor(bot.entity.position), castle: ctx.castle || null,
     work: ctx.work, gen: stepGen(ctx), started: now, calls: 0, actions: 0, history: [], pending: false, goal: null }

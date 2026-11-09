@@ -115,4 +115,19 @@ describe('unstick: LLM escalation for a stuck v2 step (u04q)', () => {
     await ticks(f, 3)
     assert.equal(f.calls.digs.length, 0)
   })
+
+  it('(e) castle step escalates only once the bot has not moved for BOXED_MS', async () => {
+    const f = fixture(() => ({ plan: [{ op: 'wait', s: 0 }] }))
+    f.ctx.step = 'castle'
+    const clock = Date.now
+    let now = clock()
+    try {
+      Date.now = () => now
+      await ticks(f, unstick.NOPATH_TICKS + 2)
+      assert.equal(f.calls.esc.length, 0, 'castle owns its own cells until boxed')
+      now += 121000
+      await ticks(f, 2)
+    } finally { Date.now = clock }
+    assert.equal(f.calls.esc.length, 1)
+  })
 })
