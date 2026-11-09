@@ -109,14 +109,18 @@ function safeDig(bot, ctx, p) {
   return b && !AIR.has(b.name) && distance(bot, p) <= flat.REACH_DIG &&
     !flat.threatenedSelf(bot, p.x, p.y, p.z) && !flat.threatenedByPlayer(bot, p.x, p.y, p.z) && !denyReason(bot, b, ctx)
 }
+// qxql.29: off-plan cells are free to stand in; isPlaceTarget(undefined) is
+// true, so the old check refused every stance outside the blueprint.
+function planned(at, p) { const c = at.get(key(p)); return !!c && blueprint.isPlaceTarget(c.kind) }
 function standable(bot, p, at) {
   const feet = block(bot, p), head = block(bot, { ...p, y: p.y + 1 }), floor = block(bot, { ...p, y: p.y - 1 })
   return feet && head && floor && AIR.has(feet.name) && AIR.has(head.name) &&
     floor.boundingBox === 'block' && !flat.isLiquidName(floor.name) &&
-    !blueprint.isPlaceTarget((at.get(key(p)) || {}).kind) &&
-    !blueprint.isPlaceTarget((at.get(key({ ...p, y: p.y + 1 })) || {}).kind) &&
+    !planned(at, p) && !planned(at, { ...p, y: p.y + 1 }) &&
     !flat.cellOccupiedByPlayer(bot, p.x, p.y, p.z)
 }
+// qxql.29: torch too (a wall or floor ref gives wall_torch/torch, both match).
+const PLACE_KINDS = ['stone', 'planks', 'frame', 'torch']
 function menu(bot, ctx, ep, hooks) {
   const c = ep.cell, st = ep.castle
   const { at } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
@@ -142,18 +146,27 @@ function menu(bot, ctx, ep, hooks) {
       !flat.cellOccupiedSelf(bot, under.x, under.y, under.z) && !flat.cellOccupiedByPlayer(bot, under.x, under.y, under.z)) {
     add('support_below', 'support', under, `Place owned ${filler.name} support below the missing cell at ${key(under)}, verify support, then retry builder.`, { ref, itemName: filler.name })
   }
+  // qxql.29: stances are any observed dry spot within place reach of the
+  // cell (nearest first, at most 2), not only +-2 on the cell's own row —
+  // a wall cell high up had none, so a bot out of reach got only 'defer'.
   const stances = []
-  for (const [dx, dz] of [[-2, 0], [2, 0], [0, -2], [0, 2]]) {
-    const p = { x: c.x + dx, y: c.y, z: c.z + dz }
+  const reach = (p) => Math.hypot(p.x - c.x, p.y + 1.6 - c.y - 0.5, p.z - c.z)
+  const near = []
+  for (let dy = -3; dy <= 1; dy++) for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) {
+    const p = { x: c.x + dx, y: c.y + dy, z: c.z + dz }
+    if ((dx || dz || dy > 0 || dy < -1) && reach(p) <= build.PLACE_REACH) near.push(p)
+  }
+  near.sort((p, q) => reach(p) - reach(q))
+  for (const p of near) {
     const b = position(bot)
     if (!b || Math.hypot(b.x - p.x - 0.5, b.y - p.y, b.z - p.z - 0.5) < 0.75 || !standable(bot, p, at)) continue
     stances.push(p)
-    if (!['stone', 'planks', 'frame'].includes(c.kind)) continue
+    if (!PLACE_KINDS.includes(c.kind)) continue
     add(`stance_${stances.length}`, 'stance', p, `Repath to observed dry stance ${key(p)} and try placing the target cube from there; only observed target correctness counts as an effect.`)
     if (stances.length >= 2) break
   }
   const retryRef = build.findRef(bot, new Vec3(c.x, c.y, c.z))
-  if (['stone', 'planks', 'frame'].includes(c.kind) && AIR.has(name(bot, c)) && retryRef && distance(bot, c) <= build.PLACE_REACH &&
+  if (PLACE_KINDS.includes(c.kind) && AIR.has(name(bot, c)) && retryRef && distance(bot, c) <= build.PLACE_REACH &&
       !flat.cellOccupiedSelf(bot, c.x, c.y, c.z) && !flat.cellOccupiedByPlayer(bot, c.x, c.y, c.z)) {
     add('retry_cell', 'retry', c, 'Retry direct placement only into this currently open supported cell; success requires the expected block in the world.', { ref: retryRef })
   }
@@ -334,4 +347,4 @@ function tick(bot, ctx, st, cells, now, hooks) {
   return true
 }
 
-module.exports = { startable, blocker, eligible, tick, MAX_CALLS, MAX_EPISODES }
+module.exports = { startable, blocker, eligible, tick, menu, MAX_CALLS, MAX_EPISODES }

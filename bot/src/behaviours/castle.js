@@ -2814,3 +2814,4 @@ module.exports.prepTargets = prepTargets
 // Site storage (vmzq.39): stockpile reuses the stow ring and the door path.
 module.exports.stowSpot = stowSpot
 module.exports.onDoorPath = onDoorPath
+module.exports.RECOVERY_HOOKS = RECOVERY_HOOKS
