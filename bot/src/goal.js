@@ -1777,7 +1777,11 @@ function failHolds(ctx, name, text, bot) {
         }
       } catch (_) { /* kind unreadable: hold stands */ }
     }
-    if (!sf || sf.text !== text) return false
+    // qxql.31b: player near/far flips every few seconds and never changes a
+    // castle failure; keyed on it, the hold released/rearmed and flapped
+    // castle<->rest (prod 21:46, castle=planks-batch both ways).
+    const same = (t) => (name === 'castle' ? String(t).replace(/(^| )player=\S+/, '') : t)
+    if (!sf || same(sf.text) !== same(text)) return false
     // qxql.31: a build-stall retires its cells and the word turns 'clear' (a
     // cell recovery is startable) in the very text the stall failed on; holding
     // it locked out the recovery and flapped castle<->rest on every word flip.

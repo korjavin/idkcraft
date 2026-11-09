@@ -21,3 +21,16 @@ describe('castle hold after a build-stall (qxql.31)', () => {
     assert.equal(goal.failHolds(hold('failed:build-stall', 'planks-batch'), 'castle', text('planks-batch'), bot), true)
   })
 })
+
+describe('castle hold ignores the player near/far flip (qxql.31b)', () => {
+  const t = (p) => `time=day castle=planks-batch player=${p} health=ok`
+  const h = { stepFail: { castle: { status: 'failed:build-stall', text: t('near'), pos: { x: 218, y: 70, z: -39 }, at: Date.now() } } }
+  it('holds on the same facts whatever the player word', () => {
+    assert.equal(goal.failHolds(h, 'castle', t('near'), bot), true)
+    assert.equal(goal.failHolds(h, 'castle', t('far'), bot), true)
+  })
+  it('other steps still release on a player change', () => {
+    const d = { stepFail: { deliver: { status: 'failed:x', text: t('far'), at: Date.now() } } }
+    assert.equal(goal.failHolds(d, 'deliver', t('near'), bot), false)
+  })
+})
