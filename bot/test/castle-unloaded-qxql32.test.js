@@ -82,3 +82,35 @@ describe('a retired unloaded cell re-enters via castlerecovery (qxql.32)', () =>
   it('still unloaded: not eligible (no planner call on a cache gap)', () => assert.equal(run(false), null))
   it('column loaded later: eligible for the safe-primitive planner', () => assert.equal(run(true).idx, 7))
 })
+
+describe('prep stays open on an unloaded column; the column is fetched, rate-limited (qxql.32)', () => {
+  it('prefetches once per window, then leaves prep once the column loads', async () => {
+    let loaded = false
+    const fetches = []
+    const bot = {
+      chats: [], players: {}, held: null,
+      entity: { position: { x: SITE.x + 2, y: 64, z: SITE.z + 2 } },
+      world: { getBlock: () => null },
+      inventory: { items: () => [{ name: 'cobblestone', count: 64 }, { name: 'oak_planks', count: 64 }] },
+      blockAt: (p) => {
+        const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z)
+        if (!loaded && x >= SITE.x + 8) return null // one far column strip unloaded
+        const name = y <= SITE.y - 1 ? 'dirt' : 'air'
+        return { name, boundingBox: name === 'air' ? 'empty' : 'block', position: { x, y, z } }
+      },
+      prefetch: async (c) => { fetches.push(c.length) },
+      pathfinder: { movements: { exclusionAreasBreak: [], exclusionAreasPlace: [] }, isMoving: () => false, setGoal: () => {} },
+      equip: async () => {}, dig: async () => {}, placeBlock: async () => {}, chat: (m) => bot.chats.push(String(m)),
+    }
+    const ctx = { castle: { site: SITE, rot: 0, phase: 'prep' } }
+    const log = console.log
+    console.log = () => {}
+    try { for (let i = 0; i < 20; i++) { castle(bot, ctx); await settle() } } finally { console.log = log }
+    assert.equal(ctx.castle.phase, 'prep', 'an unknown column keeps prep open')
+    assert.equal(fetches.length, 1, `rate-limited: ${fetches.length} fetches in 20 ticks`)
+    loaded = true
+    console.log = () => {}
+    try { for (let i = 0; i < 5; i++) { castle(bot, ctx); await settle() } } finally { console.log = log }
+    assert.notEqual(ctx.castle.phase, 'prep', 'loaded: prep ends, recovery can run')
+  })
+})

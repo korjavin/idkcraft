@@ -790,6 +790,7 @@ function prepDone(bot, c) {
 // decide is too much once the site grows).
 // ponytail: full site volume; a tall tree's upper logs sit out of reach and
 // block after three strikes — add a pillar-free skip if prod shows churn.
+const PREP_FETCH_MS = 15000
 function prepTargets(bot, ctx, st, now) {
   const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
   const c0 = ctx && ctx.castlePrep
@@ -806,12 +807,13 @@ function prepTargets(bot, ctx, st, now) {
   const cuts = []
   const fills = []
   let unknown = 0
+  const cols = new Map()
   for (let dx = 0; dx < w; dx++) {
     for (let dz = 0; dz < d; dz++) {
       const x = sx + dx
       const z = sz + dz
       const r = scanColumn(bot, x, z, sy)
-      if (r.unknown) unknown++
+      if (r.unknown) { unknown++; if (cols.size < 64) cols.set(`${Math.floor(x / 16)},${Math.floor(z / 16)}`, { x, y: sy, z }) }
       if (r.unknown || r.liquid || r.foreign) continue
       for (const y of r.logs) logs.push({ x, y, z, kind: 'air', prep: 'log', idx: idx(x, y, z) })
       // Past its cap the order refused it: a later change is not ours to level.
@@ -832,6 +834,15 @@ function prepTargets(bot, ctx, st, now) {
     .concat(cuts.sort((a, b) => b.y - a.y), fills.sort((a, b) => a.y - b.y))
   // unknown (g0z.15): unloaded columns — no cache, and prep stays open.
   if (ctx) ctx.castlePrep = { key, at: now, list, unknown }
+  // qxql.32: prep never ends while a column reads unknown (phase stays
+  // 'prep', which also keeps castlerecovery off). Ask the body to load those
+  // columns, at most once per PREP_FETCH_MS, and say which ones.
+  if (unknown && ctx && now - (ctx.castlePrepFetchAt || 0) >= PREP_FETCH_MS) {
+    ctx.castlePrepFetchAt = now
+    const cached = [...cols.keys()].map((k) => (bot._chunkCols && bot._chunkCols.has(k) ? 'y' : 'n')).join('')
+    console.log(`castle prep unknown=${unknown} cols=${[...cols.keys()].join('|')} cached=${cached}`)
+    try { if (typeof bot.prefetch === 'function') bot.prefetch([...cols.values()]).catch(() => {}) } catch (_) { /* best-effort */ }
+  }
   return list
 }
 
