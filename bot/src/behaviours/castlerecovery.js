@@ -11,6 +11,7 @@ const flat = require('./flat')
 const tools = require('./toolprep')
 const { denyReason, isInteractRef } = require('./util')
 const { stepGen } = require('../step')
+const { voxelSlice, LEGEND } = require('../stall-state')
 
 const MAX_CALLS = 3
 const MAX_ACTIONS = 3
@@ -31,7 +32,14 @@ function state(ctx, st) {
   if (!s || s.castle !== st) { s = { castle: st, cooldown: new Map(), until: 0, episode: null }; sessions.set(ctx, s) }
   return s
 }
-function enabled(ctx) { return process.env.BOT_BODY === 'baritone' && ctx.brain && typeof ctx.brain.plan === 'function' }
+// No escalation model (no key) keeps the old menu.
+function escalation(ctx) { return /^(1|true|yes)$/i.test(String(process.env.CASTLE_LLM_ESCALATION || '')) && !!escalator(ctx) }
+// 8hx3: the escalation planner; tests (or another brain) set ctx.brain.escalate.
+function escalator(ctx) { return (ctx.brain && ctx.brain.escalate) || (process.env.ANTHROPIC_API_KEY ? llmEscalate : null) }
+function enabled(ctx) {
+  if (process.env.BOT_BODY !== 'baritone' || !ctx.brain) return false
+  return escalation(ctx) || typeof ctx.brain.plan === 'function'
+}
 function eligible(bot, ctx, st, cells, now, hooks) {
   if (!enabled(ctx) || st.phase === 'prep' || st.toolPrep) return null
   const s = state(ctx, st)
@@ -87,6 +95,7 @@ function say(ep, action, outcome) {
 }
 function end(s, ep, now, outcome) {
   if (s.episode !== ep) return
+  if (ep.esc && ep.plan) console.log(`escalation target=${key(ep.cell)} kind=${ep.cell.kind} call=${ep.calls} plan=${ep.plan} outcome=${outcome}`)
   // Only a real planner invocation spends the lifetime episode budget.
   // Paid calls stay charged even when a later fight/timeout preempts them.
   if (ep.calls === 0) ep.entry.recoveries = Math.max(0, ep.entry.recoveries - 1)
@@ -267,7 +276,7 @@ async function act(bot, ctx, s, ep, a, hooks, afterWalk = false) {
 function tick(bot, ctx, st, cells, now, hooks) {
   const s = state(ctx, st)
   let ep = s.episode
-  if (ep && (!control(bot, ctx, ep) || now - ep.started >= EPISODE_MS || (ep.pending && now - ep.waitAt >= WAIT_MS))) {
+  if (ep && (!control(bot, ctx, ep) || now - ep.started >= (escalation(ctx) ? ESC_EPISODE_MS : EPISODE_MS) || (ep.pending && now - ep.waitAt >= WAIT_MS))) {
     // Cancel only our state: a new body's goal must never be cleared by
     // a stale episode or its late asynchronous completion.
     const owned = control(bot, ctx, ep)
@@ -283,7 +292,7 @@ function tick(bot, ctx, st, cells, now, hooks) {
     const c = eligible(bot, ctx, st, cells, now, hooks)
     if (!c) return false
     ep = { castle: st, cell: Object.freeze({ ...c }), work: ctx.work, gen: stepGen(ctx), started: now,
-      calls: 0, actions: 0, recent: [], pending: false, goal: bot.pathfinder.goal || null }
+      calls: 0, actions: 0, recent: [], history: [], pending: false, goal: bot.pathfinder.goal || null }
     if (!control(bot, ctx, ep)) {
       const why = blocker(bot, ctx) || (ctx.step !== 'castle' ? `step-${ctx.step}` : 'goal-or-gen')
       if (s.saidBlocker !== `${c.idx}:${why}`) { s.saidBlocker = `${c.idx}:${why}`; console.log(`castle recovery target=${key(c)} not started: ${why}`) }
@@ -295,6 +304,7 @@ function tick(bot, ctx, st, cells, now, hooks) {
     s.episode = ep
   }
   st.status = `diagnosing obstacle at ${key(ep.cell)}`
+  if (escalation(ctx)) return escTick(bot, ctx, s, ep, now, hooks)
   if (ep.walk) {
     if (!bot.pathfinder.isMoving()) {
       const a = ep.walk, b = position(bot)
@@ -347,4 +357,166 @@ function tick(bot, ctx, st, cells, now, hooks) {
   return true
 }
 
-module.exports = { startable, blocker, eligible, tick, menu, MAX_CALLS, MAX_EPISODES }
+// --- 8hx3: generic LLM escalation over safe primitives (CASTLE_LLM_ESCALATION=1).
+// The model writes a short plan of walk_to/dig/place/wait/ask_owner; safety
+// lives in each primitive (refusals go back to the model as outcomes), and
+// every result is read from the world, never from a resolved RPC.
+const ESC_EPISODE_MS = 240000
+const ESC_MAX_STEPS = 4
+const ESC_RANGE = 6 // primitives stay near the target cell
+const ESC_TIMEOUT_MS = 9000 // under WAIT_MS: a hung call ends as timeout, not a late plan
+const ESC_SYSTEM = 'You unstick a Minecraft bot that failed to place one castle block. Answer with JSON only: ' +
+  '{"plan":[{"op":"walk_to","x":0,"y":0,"z":0},{"op":"dig","x":0,"y":0,"z":0},{"op":"place","item":"name","x":0,"y":0,"z":0},{"op":"wait","s":3},{"op":"ask_owner","text":"..."}]} ' +
+  `with at most ${ESC_MAX_STEPS} steps. Coordinates are block coordinates; walk_to targets the feet cell. ` +
+  'Unsafe steps (owner/protected blocks, containers, other castle cells, lava, out of reach) are refused and reported back.'
+const ints = (o) => ['x', 'y', 'z'].every((k) => Number.isInteger(o[k]))
+function primText(o) {
+  if (o.op === 'place') return `place(${o.item},${key(o)})`
+  if (o.op === 'wait') return `wait(${o.s})`
+  if (o.op === 'ask_owner') return 'ask_owner'
+  return `${o.op}(${key(o)})`
+}
+function parsePlan(ans) {
+  const list = ans && Array.isArray(ans.plan) ? ans.plan : []
+  return list.slice(0, ESC_MAX_STEPS).filter((o) => o && (
+    ((o.op === 'walk_to' || o.op === 'dig') && ints(o)) || (o.op === 'place' && ints(o) && typeof o.item === 'string') ||
+    o.op === 'wait' || (o.op === 'ask_owner' && typeof o.text === 'string'))).map((o) => Object.freeze({ ...o }))
+}
+function observe(bot, ctx, ep, hooks) {
+  const c = ep.cell
+  const target = []
+  for (let dy = 1; dy >= -1; dy--) for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) target.push(name(bot, { x: c.x + dx, y: c.y + dy, z: c.z + dz }) || 'unloaded')
+  const item = hooks.findItem(bot, c.kind, ctx)
+  const b = position(bot)
+  return {
+    target: { x: c.x, y: c.y, z: c.z, kind: c.kind, item: item && item.name, occupant: name(bot, c), why: (ep.castle.blocked[hooks.bkey(ep.castle, c.idx)] || {}).why },
+    target_grid: 'blocks x-1..x+1 per row, rows z-1..z+1, layers y+1..y-1: ' + target.join(' '),
+    bot: b && { x: Math.floor(b.x), y: Math.floor(b.y), z: Math.floor(b.z) },
+    bot_grid: voxelSlice(bot, ctx), legend: LEGEND,
+    inventory: (bot.inventory.items() || []).map((it) => `${it.name}x${it.count}`),
+    history: ep.history.slice(-12),
+  }
+}
+async function llmEscalate(obs) {
+  const brain = require('../brain')
+  const model = process.env.LLM_MODEL || brain.LLM_MODEL
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), ESC_TIMEOUT_MS)
+  try {
+    const data = await brain.llmCall({ use: 'escalation', apiKey: process.env.ANTHROPIC_API_KEY, signal: ac.signal,
+      body: { model, ...brain.llmModelConfig(model, 400), system: ESC_SYSTEM, messages: [{ role: 'user', content: JSON.stringify(obs) }] } })
+    const t = ((data && data.content) || []).find((x) => x && x.type === 'text')
+    const out = (t && t.text) || ''
+    return JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1))
+  } finally { clearTimeout(timer) }
+}
+// One primitive -> a result word; 'walking' finishes in escTick.
+async function primitive(bot, ctx, ep, o, hooks) {
+  const c = ep.cell
+  const live = () => !ep.cancelled && control(bot, ctx, ep)
+  if (o.op === 'wait') { ep.waitUntil = Date.now() + Math.min(10, Math.max(1, Number(o.s) || 1)) * 1000; return 'waited' }
+  if (o.op === 'ask_owner') { try { bot.chat(`castle ${key(c)}: ${String(o.text).slice(0, 120)}`) } catch (_) { /* chat best-effort */ } return 'asked' }
+  if (Math.max(Math.abs(o.x - c.x), Math.abs(o.y - c.y), Math.abs(o.z - c.z)) > ESC_RANGE) return 'refused:too-far-from-target'
+  const { at } = blueprint.absPlan(ep.castle.site, ep.castle.rot, ep.castle.blueprintVersion)
+  const isTarget = key(o) === key(c)
+  if (!isTarget && at.has(key(o)) && o.op !== 'walk_to') return 'refused:castle-cell'
+  if (typeof bot.stopBuild === 'function') await bot.stopBuild()
+  if (!live()) return 'preempted'
+  bot.pathfinder.setGoal(null)
+  ep.goal = null
+  if (o.op === 'walk_to') {
+    if (!standable(bot, o, at)) return 'refused:not-standable'
+    ep.goal = new goals.GoalBlock(o.x, o.y, o.z)
+    bot.pathfinder.setGoal(ep.goal)
+    ep.walk = o
+    return 'walking'
+  }
+  const b = block(bot, o)
+  if (!b) return 'refused:unloaded'
+  if (o.op === 'dig') {
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      if (/lava/.test(name(bot, { x: o.x + dx, y: o.y + dy, z: o.z + dz }) || '')) return 'refused:lava'
+    }
+    if (AIR.has(b.name)) return 'refused:already-air'
+    if (isTarget && hooks.done(bot, c)) return 'refused:already-correct'
+    if (denyReason(bot, b, ctx)) return 'refused:protected'
+    if (!safeDig(bot, ctx, o)) return 'refused:out-of-reach-or-occupied'
+    const req = tools.requirement(b)
+    const tool = req ? tools.carried(bot, { ...req, harvestTools: b.harvestTools }) : bot.pathfinder.bestHarvestTool && bot.pathfinder.bestHarvestTool(b)
+    if ((req && !req.hand && !tool) || (b.harvestTools && !(tool && b.harvestTools[tool.type]))) return 'refused:no-tool'
+    if (tool) await bot.equip(tool, 'hand')
+    if (!live() || !safeDig(bot, ctx, o)) return 'preempted'
+    await bot.dig(block(bot, o))
+    return AIR.has(name(bot, o)) ? 'dug' : 'unchanged'
+  }
+  // place
+  if (!AIR.has(b.name) && !flat.isLiquidName(b.name)) return 'refused:occupied'
+  const item = isTarget ? hooks.findItem(bot, c.kind, ctx) : (bot.inventory.items() || []).find((it) => it.name === o.item)
+  if (!item) return 'refused:no-item'
+  if (!isTarget && blueprint.inCastleApron(ctx, o)) return 'refused:castle-apron'
+  const ref = build.findRef(bot, new Vec3(o.x, o.y, o.z))
+  if (!ref) return 'refused:no-ref'
+  if (distance(bot, o) > build.PLACE_REACH) return 'refused:out-of-reach'
+  if (flat.cellOccupiedSelf(bot, o.x, o.y, o.z) || flat.cellOccupiedByPlayer(bot, o.x, o.y, o.z)) return 'refused:occupied-by-entity'
+  await bot.equip(item, 'hand')
+  if (!live()) return 'preempted'
+  await bot.placeBlock(ref.ref, ref.face)
+  if (isTarget) return hooks.done(bot, c) ? 'placed' : 'unchanged'
+  if (name(bot, o) !== item.name) return 'unchanged'
+  hooks.own(ctx, o, item.name)
+  return 'placed'
+}
+function note(ep, o, result) {
+  ep.history.push(`${primText(o)} -> ${result}`)
+  console.log(`escalation primitive=${primText(o)} result=${result}`)
+}
+function escTick(bot, ctx, s, ep, now, hooks) {
+  ep.esc = true
+  if (ep.waitUntil > now) return true
+  if (ep.walk) {
+    if (bot.pathfinder.isMoving()) return true
+    const w = ep.walk, b = position(bot)
+    ep.walk = null
+    note(ep, w, b && Math.hypot(b.x - w.x - 0.5, b.y - w.y, b.z - w.z - 0.5) < 0.75 ? 'arrived' : 'not-arrived')
+    return true
+  }
+  if (ep.pending) return true
+  if (hooks.done(bot, ep.cell)) { hooks.resume(ctx, ep.castle, ep.cell, 'correct'); end(s, ep, now, 'correct'); return true }
+  if (ep.queue && ep.queue.length) {
+    const o = ep.queue.shift()
+    ep.actions++
+    ep.pending = true; ep.waitAt = now
+    primitive(bot, ctx, ep, o, hooks).then((r) => r, (err) => (err && err.message === 'build-preempted' ? 'preempted' : 'error')).then((r) => {
+      if (ep.cancelled || !control(bot, ctx, ep)) return
+      ep.pending = false
+      if (r !== 'walking') note(ep, o, r)
+      if (o.op === 'ask_owner') end(s, ep, Date.now(), 'asked-owner')
+    })
+    return true
+  }
+  if (ep.plan) console.log(`escalation target=${key(ep.cell)} kind=${ep.cell.kind} call=${ep.calls} plan=${ep.plan} outcome=unfinished`)
+  if (ep.calls >= MAX_CALLS) {
+    try { bot.chat(`castle ${key(ep.cell)}: stuck on this ${ep.cell.kind} after ${ep.calls} tries, please help`) } catch (_) { /* chat best-effort */ }
+    ep.plan = null
+    end(s, ep, now, 'ask-owner')
+    return true
+  }
+  const ask = escalator(ctx)
+  const obs = observe(bot, ctx, ep, hooks)
+  ep.plan = null
+  ep.pending = true; ep.waitAt = now
+  Promise.resolve().then(() => {
+    if (!control(bot, ctx, ep) || ep.cancelled) return null
+    ep.calls++
+    return ask(obs)
+  }).then((ans) => {
+    if (!control(bot, ctx, ep) || ep.cancelled) return
+    ep.pending = false
+    ep.queue = parsePlan(ans)
+    ep.plan = `[${ep.queue.map(primText).join(' ')}]`
+    if (!ep.queue.length) end(s, ep, Date.now(), 'empty-plan')
+  }, () => { if (control(bot, ctx, ep) && !ep.cancelled) end(s, ep, Date.now(), 'planner-unavailable') })
+  return true
+}
+
+module.exports = { startable, ESC_MAX_STEPS, blocker, eligible, tick, menu, MAX_CALLS, MAX_EPISODES }

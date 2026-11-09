@@ -15,12 +15,11 @@ const oldBody = process.env.BOT_BODY
 afterEach(() => { if (oldBody === undefined) delete process.env.BOT_BODY; else process.env.BOT_BODY = oldBody })
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise((r) => setImmediate(r)) }
 
-function fixture({ occupant = 'dirt', choose = 'clear', missingSupport = false, ineffective = false, stanceProblem = false } = {}) {
+function fixture({ occupant = 'dirt', choose = 'clear', missingSupport = false, ineffective = false, stanceProblem = false, site = { x: 100, y: 64, z: 200 }, rot = 0, cell = null } = {}) {
   process.env.BOT_BODY = 'baritone'
-  const site = { x: 100, y: 64, z: 200 }
-  const st = { site, rot: 0, blueprintVersion: 3, phase: 'body', blocked: {} }
-  const { cells } = blueprint.absPlan(site, 0, 3)
-  const target = cells.find((c) => c.kind === 'stone' && c.y === site.y)
+  const st = { site, rot, blueprintVersion: 3, phase: 'body', blocked: {} }
+  const { cells } = blueprint.absPlan(site, rot, 3)
+  const target = cell ? cells.find((c) => `${c.x},${c.y},${c.z}` === cell) : cells.find((c) => c.kind === 'stone' && c.y === site.y)
   const map = new Map(), key = (p) => `${p.x},${p.y},${p.z}`
   const set = (p, n) => map.set(key(p), n)
   const names = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', fence: 'oak_fence', door: 'oak_door', torch: 'torch', stairs: 'cobblestone_stairs', chest: 'chest', gate: 'oak_fence_gate' }
@@ -31,7 +30,7 @@ function fixture({ occupant = 'dirt', choose = 'clear', missingSupport = false, 
   const calls = { plans: [], digs: [], places: [], goals: [], builds: [], stops: 0 }
   const pick = { name: 'stone_pickaxe', type: 274, count: 1 }
   const shovel = { name: 'stone_shovel', type: 273, count: 1 }
-  const items = [pick, shovel, { name: 'cobblestone', type: 4, count: 128 }, { name: 'dirt', type: 3, count: 32 }]
+  const items = [pick, shovel, { name: 'cobblestone', type: 4, count: 128 }, { name: 'dirt', type: 3, count: 32 }, { name: 'oak_log', type: 17, count: 16 }]
   const bot = {
     entity: { position: new Vec3(target.x - 1.5, target.y, target.z + 0.5) },
     inventory: { items: () => items }, heldItem: shovel, players: {}, world: {},
@@ -425,5 +424,80 @@ describe('qxql.27 recovery word vs a running fence fetch', () => {
     assert.equal(castle.menuFact(f.bot, f.ctx), 'clear')
     assert.equal(recovery.blocker(f.bot, { work: true, body: { owner: 'work' }, lastDecision: { action: 'follow' } }), null)
     assert.equal(recovery.blocker(f.bot, { work: true, body: { owner: 'work' }, lastDecision: { action: 'fight' } }), 'fight')
+  })
+})
+
+// 8hx3: generic LLM escalation over safe primitives (CASTLE_LLM_ESCALATION=1).
+describe('castle LLM escalation (8hx3)', () => {
+  const oldEsc = process.env.CASTLE_LLM_ESCALATION
+  afterEach(() => { if (oldEsc === undefined) delete process.env.CASTLE_LLM_ESCALATION; else process.env.CASTLE_LLM_ESCALATION = oldEsc })
+  // Prod 2026-11-09: site 199,64,-51 rot 2 v3, retired frame hole 206,67,-37.
+  function prod(plans) {
+    process.env.CASTLE_LLM_ESCALATION = '1'
+    const f = fixture({ occupant: 'air', site: { x: 199, y: 64, z: -51 }, rot: 2, cell: '206,67,-37' })
+    const { at } = blueprint.absPlan(f.st.site, 2, 3)
+    const open = (p) => /^(air|torch)$/.test(f.bot.blockAt(p).name)
+    // a dry off-plan spot near the hole; the bot starts on one out of reach
+    const stance = (lo, hi) => {
+      for (let dy = -4; dy <= 1; dy++) for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) {
+        const p = { x: f.target.x + dx, y: f.target.y + dy, z: f.target.z + dz }, d = Math.hypot(dx, dy + 1.1, dz)
+        if (d >= lo && d <= hi && open(p) && open({ ...p, y: p.y + 1 }) && !open({ ...p, y: p.y - 1 }) && !at.has(f.key(p)) && !at.has(f.key({ ...p, y: p.y + 1 }))) return p
+      }
+      return null
+    }
+    const near = stance(1, 3.5), far = stance(5, 7)
+    assert.ok(near && far, 'fixture geometry has stances')
+    f.bot.entity.position = new Vec3(far.x + 0.5, far.y, far.z + 0.5)
+    f.calls.esc = []
+    f.calls.chat = []
+    f.bot.chat = (t) => f.calls.chat.push(t)
+    f.ctx.brain = { escalate: async (obs) => { f.calls.esc.push(obs); return plans(obs, near, f) } }
+    f.st.blocked[`3:${f.target.idx}`] = { why: 'build-miss', tries: 3, until: Date.now() - 1, retired: true }
+    return f
+  }
+
+  it('(a) prod geometry: the model picks walk_to + place and the frame hole is filled', async () => {
+    const f = prod((obs, near) => ({ plan: [{ op: 'walk_to', ...near }, { op: 'place', item: 'oak_log', x: obs.target.x, y: obs.target.y, z: obs.target.z }] }))
+    await ticks(f, 8)
+    assert.equal(f.calls.esc.length, 1)
+    assert.equal(f.calls.esc[0].target.kind, 'frame')
+    assert.ok(Array.isArray(f.calls.esc[0].bot_grid))
+    assert.equal(f.bot.blockAt(f.target).name, 'oak_log')
+    assert.equal(f.st.blocked[`3:${f.target.idx}`], undefined)
+  })
+
+  it('(b) a protected/owner block or castle cell is refused and the refusal goes back to the model', async () => {
+    const f = prod((obs, near, f) => {
+      const p = { x: near.x, y: near.y - 1, z: near.z }
+      f.set(p, 'chest')
+      return { plan: [{ op: 'dig', ...p }, { op: 'dig', x: f.st.site.x, y: f.st.site.y, z: f.st.site.z }] }
+    })
+    await ticks(f, 8)
+    assert.equal(f.calls.digs.length, 0)
+    assert.ok(f.calls.esc[1].history.some((h) => /dig\(.*\) -> refused:/.test(h)), JSON.stringify(f.calls.esc[1].history))
+  })
+
+  it('(c) the call cap ends in ask_owner and backs off', async () => {
+    const f = prod(() => ({ plan: [{ op: 'wait', s: 0 }] }))
+    const clock = Date.now
+    let now = clock()
+    try {
+      Date.now = () => now
+      for (let i = 0; i < 20; i++) { await ticks(f, 1); now += 1500 }
+    } finally { Date.now = clock }
+    assert.equal(f.calls.esc.length, recovery.MAX_CALLS)
+    assert.ok(f.calls.chat.some((t) => /please help/.test(t)), f.calls.chat.join('|'))
+    assert.ok(f.st.blocked[`3:${f.target.idx}`].retired)
+  })
+
+  it('(d) fight preempts mid-plan: no placement after the walk', async () => {
+    const f = prod((obs, near) => ({ plan: [{ op: 'walk_to', ...near }, { op: 'place', item: 'oak_log', x: obs.target.x, y: obs.target.y, z: obs.target.z }] }))
+    await ticks(f, 1)
+    await ticks(f, 1) // plan arrives, walk starts
+    assert.ok(f.calls.goals.some((g) => g && g.constructor.name === 'GoalBlock'))
+    f.ctx.lastDecision = { action: 'fight' }
+    await ticks(f, 6)
+    assert.equal(f.calls.places.length, 0)
+    assert.equal(f.bot.blockAt(f.target).name, 'air')
   })
 })
