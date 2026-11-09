@@ -234,7 +234,8 @@ describe('castle cell recovery (qxql.19)', () => {
 
   it('backs off an empty menu without forcing a paid call', async () => {
     const f = fixture({ occupant: 'chest' }); retire(f)
-    for (const [dx, dz] of [[-2, 0], [2, 0], [0, -2], [0, 2]]) f.set({ x: f.target.x + dx, y: f.target.y, z: f.target.z + dz }, 'chest')
+    // qxql.29: every spot within place reach is a stance candidate now; fill them all.
+    for (let dy = -3; dy <= 1; dy++) for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) if (dx || dy || dz) f.set({ x: f.target.x + dx, y: f.target.y + dy, z: f.target.z + dz }, 'chest')
     await ticks(f, 6)
     assert.equal(f.calls.plans.length, 0)
     assert.equal(f.calls.digs.length, 0)
@@ -355,6 +356,32 @@ describe('castle cell recovery (qxql.19)', () => {
       assert.equal(f.calls.plans.length, 1)
       assert.equal(f.st.blocked[`3:${f.target.idx}`].retired, true)
     } finally { Date.now = clock; toolPrep.setDriver(null) }
+  })
+})
+
+describe('qxql.29 recovery menu on the prod wall geometry', () => {
+  // Prod 2026-11-08: 20 retired build-miss cells (11 torch, 5 frame, 3 stone,
+  // 1 planks) on site 199,64,-51 rot 2; nights ended no-safe-action calls=0.
+  function wall(kind, at) {
+    const f = fixture({ occupant: 'air' })
+    const { cells } = blueprint.absPlan(f.st.site, 0, 3)
+    const c = cells.find((x) => x.kind === kind && (!at || at(x)))
+    f.set(c, 'air')
+    f.st.blocked = { [`3:${c.idx}`]: { why: 'build-miss', tries: 3, until: Date.now() - 1, retired: true } }
+    return { ...f, c }
+  }
+  const ids = (f, c) => recovery.menu(f.bot, f.ctx, { cell: c, castle: f.st, recent: [] }, castle.RECOVERY_HOOKS).actions.map((a) => a.id)
+  it('a torch cell gets a placement retry and stances, not only defer', () => {
+    const f = wall('torch')
+    f.items.push({ name: 'torch', type: 50, count: 4 })
+    f.bot.entity.position = new Vec3(f.c.x + 1.5, f.c.y, f.c.z + 0.5)
+    const a = ids(f, f.c)
+    assert.ok(a.includes('retry_cell') || a.some((x) => x.startsWith('stance_')), a.join(','))
+  })
+  it('an off-plan dry spot is a stance (old check refused every off-blueprint cell)', () => {
+    const f = wall('frame', (x) => x.y > 64 + 2)
+    const a = ids(f, f.c)
+    assert.ok(a.some((x) => x.startsWith('stance_')), a.join(','))
   })
 })
 
