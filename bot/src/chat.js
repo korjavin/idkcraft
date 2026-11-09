@@ -411,7 +411,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
   // go back to it. Flag off: llmAsk is false and nothing below changes.
   const lctx = bot._tickerCtx
   // Peer bots (v1/v2 hear each other's lines) never spend a call.
-  const peerBot = [process.env.BOT_USERNAME, process.env.BOT2_USERNAME, process.env.BOT_PEER_USERNAME].some((n) => n && n === username)
+  const peerBot = worker.botNames().includes(username)
   const llmAsk = (fallback, text = msg, explicit = false, bringGoal = null, fallbackFn = null) => {
     if (!(ticker && lctx && !peerBot && ownerOk && llmOrders.enabled() && !llmOrders.feeding(lctx) && worker.players(bot)[playerName])) return false
     const fired = llmOrders.ask(bot, lctx, { text, by: playerName, ticker, fallback, fallbackFn, bringGoal, explicit, feed: (line) => handleChat(bot, ticker, username, line, senderUuid) })

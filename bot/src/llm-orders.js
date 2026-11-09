@@ -365,7 +365,7 @@ function castleActive(ctx, facts) {
 function rosterOnline(bot) {
   try {
     const e = process.env
-    const bots = [e.BOT_USERNAME, e.BOT2_USERNAME, e.BOT_PEER_USERNAME].filter(Boolean)
+    const bots = worker.botNames()
     return Object.keys(worker.players(bot) || {}).some((n) => !bots.includes(n))
   } catch (_) { return false }
 }

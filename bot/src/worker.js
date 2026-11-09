@@ -90,8 +90,14 @@ function players(bot) {
 // helper (BOT_SWARM_I >= 1) also drops the main bot (BOT_PEER_USERNAME).
 // Env read per call; swarm off = no-op. ponytail: the server ping count still
 // includes the bots (hidden sample), so they keep each other on like bot+bot2.
+// j3af: every known bot name — own, v1/v2 peers and the v2 fleet
+// (BOT_FLEET, comma list) — so sibling v2 bots never count as players.
+function botNames(env = process.env) {
+  return [env.BOT_USERNAME, env.BOT2_USERNAME, env.BOT_PEER_USERNAME, ...String(env.BOT_FLEET || '').split(',').map((n) => n.trim())].filter(Boolean)
+}
 function isSwarmBot(name, env = process.env) {
   if (typeof name !== 'string') return false
+  if (String(env.BOT_FLEET || '').split(',').map((n) => n.trim()).includes(name) && name !== env.BOT_USERNAME) return true
   // vewo.2: bot2 is a bot too — its flat lines are never orders, swarm or not.
   if (env.BOT2_USERNAME && name === env.BOT2_USERNAME) return true
   if (!(parseInt(env.BOT_SWARM_N || '', 10) > 1)) return false
@@ -464,4 +470,4 @@ function walkTick(bot, ctx, rec, bp, arrived) {
   return 'walk'
 }
 
-module.exports = { configure, configured, name, isWorker, isSwarmBot, players, workerEntity, workerOnline, send, ensureJoined, leave, JOIN_ABSENT_MS, JOIN_RESEND_MS, SEND_TIMEOUT_MS, walkAvailable, walkNightBlocked, walkWatchdogFlat, walkShouldDelegate, walkDelegate, walkStop, walkCancel, walkStale, walkTick, WALK_FAR_BLOCKS, WALK_TOTAL_MS, WALK_GONE_MS, WALK_STILL_MS, WALK_PAUSE_D, WALK_RESUME_D, WALK_ARRIVE_D, WALK_FOLLOW_RANGE, WALK_REISSUE_MS, WALK_NIGHT_RANGE }
+module.exports = { configure, configured, name, isWorker, isSwarmBot, botNames, players, workerEntity, workerOnline, send, ensureJoined, leave, JOIN_ABSENT_MS, JOIN_RESEND_MS, SEND_TIMEOUT_MS, walkAvailable, walkNightBlocked, walkWatchdogFlat, walkShouldDelegate, walkDelegate, walkStop, walkCancel, walkStale, walkTick, WALK_FAR_BLOCKS, WALK_TOTAL_MS, WALK_GONE_MS, WALK_STILL_MS, WALK_PAUSE_D, WALK_RESUME_D, WALK_ARRIVE_D, WALK_FOLLOW_RANGE, WALK_REISSUE_MS, WALK_NIGHT_RANGE }
