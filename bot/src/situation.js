@@ -189,7 +189,7 @@ function worldSection(bot, ctx) {
     let players = 'unknown'
     try {
       const e = process.env
-      const peers = [e.BOT_USERNAME, e.BOT2_USERNAME, e.BOT_PEER_USERNAME].filter(Boolean)
+      const peers = worker.botNames()
       const names = Object.keys(worker.players(bot) || {}).filter((n) => !peers.includes(n))
       players = names.length > 0 ? names.slice(0, 5).join(',') : 'none'
     } catch (_) { /* players best-effort */ }

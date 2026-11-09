@@ -227,7 +227,7 @@ services:
   # bot under its own name, off until BOT2_USERNAME is set (bot2 idles,
   # body2 sleeps at ~0 RAM, prod is untouched). Turning v2 on costs ~2.5g
   # RAM (the client dominates; node adds ~150m).
-  bot2:
+  bot2: &v2bot
     # Same image as bot (CI rewrites :latest to the commit sha on deploy).
     image: ghcr.io/korjavin/idkcraft:latest
     container_name: ${BOT2_CONTAINER_NAME:-idkcraft-bot2}
@@ -235,11 +235,13 @@ services:
     depends_on:
       mc:
         condition: service_healthy
-    environment:
+    environment: &v2env
       MC_HOST: mc
       MC_PORT: 25565
       BOT_BODY: baritone
       BOT_USERNAME: ${BOT2_USERNAME:-}
+      # j3af: every v2 name, so siblings are bots (never owners/orders) to each other
+      BOT_FLEET: ${BOT2_USERNAME:-},${BOT3_USERNAME:-},${BOT4_USERNAME:-},${BOT5_USERNAME:-}
       # g0z.59: v2 reads (never writes) v1's complete castle from v1's
       # memory file on the shared volume, so it sleeps inside it too.
       BOT_CASTLE_PEER: ${BOT_USERNAME:-IdkBot}
@@ -300,7 +302,7 @@ services:
   # bot2 reaches the console bridge (7777) and the mod ws (7778) on the
   # compose network. No auth volume (offline only: a stored account would
   # shadow the name — baritone/README.md).
-  body2:
+  body2: &v2body
     image: ghcr.io/korjavin/idkcraft-baritone:latest
     container_name: ${BODY2_CONTAINER_NAME:-idkcraft-body2}
     restart: unless-stopped
@@ -308,7 +310,7 @@ services:
       mc:
         condition: service_healthy
     mem_limit: ${BODY2_MEM_LIMIT:-2500m}
-    environment:
+    environment: &v2bodyenv
       BARITONE_OFFLINE: "1"
       # The bridge mod needs baritone/api/**, which only the API jar keeps:
       # start.sh swaps it in only with BARITONE_API=1 (the rig boot passes
@@ -326,6 +328,49 @@ services:
       driver: json-file
       options:
         max-size: "20m"
+
+  # j3af: v2 fleet parity — bot3..5/body3..5 are bot2/body2 with their own
+  # name, bridge host and container name; same image, env and caps. Empty
+  # BOTn_USERNAME = idle (like bot2). Memory: own /app/memory/<name>.json.
+  bot3:
+    <<: *v2bot
+    container_name: ${BOT3_CONTAINER_NAME:-idkcraft-bot3}
+    environment:
+      <<: *v2env
+      BOT_USERNAME: ${BOT3_USERNAME:-}
+      BRIDGE_HOST: body3
+  body3:
+    <<: *v2body
+    container_name: ${BODY3_CONTAINER_NAME:-idkcraft-body3}
+    environment:
+      <<: *v2bodyenv
+      BOT: ${BOT3_USERNAME:-}
+  bot4:
+    <<: *v2bot
+    container_name: ${BOT4_CONTAINER_NAME:-idkcraft-bot4}
+    environment:
+      <<: *v2env
+      BOT_USERNAME: ${BOT4_USERNAME:-}
+      BRIDGE_HOST: body4
+  body4:
+    <<: *v2body
+    container_name: ${BODY4_CONTAINER_NAME:-idkcraft-body4}
+    environment:
+      <<: *v2bodyenv
+      BOT: ${BOT4_USERNAME:-}
+  bot5:
+    <<: *v2bot
+    container_name: ${BOT5_CONTAINER_NAME:-idkcraft-bot5}
+    environment:
+      <<: *v2env
+      BOT_USERNAME: ${BOT5_USERNAME:-}
+      BRIDGE_HOST: body5
+  body5:
+    <<: *v2body
+    container_name: ${BODY5_CONTAINER_NAME:-idkcraft-body5}
+    environment:
+      <<: *v2bodyenv
+      BOT: ${BOT5_USERNAME:-}
 
   # Flat swarm (idkcraft-lhg2): 32 extra v1 (mineflayer) bots named
   # <BOT_SWARM_PREFIX>1..32 (default IdkSwarm1..32) that split one `flat` square into BOT_SWARM_N strips
