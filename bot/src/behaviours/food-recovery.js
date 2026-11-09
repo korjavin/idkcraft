@@ -11,6 +11,7 @@ const craftany = require('./craftany')
 
 const RETRY_MS = 60000
 const WINDOW_TIMEOUT_MS = 30000
+const BREAD_TIMEOUT_MS = 120000 // walk + table make/place + craft, then the RETRY_MS cooldown
 
 function needed(bot, ctx, facts) {
   if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || facts.time !== 'day' || !(bot.food < 18) || !(facts.health < 6)) return false
@@ -47,10 +48,24 @@ function hasTable(bot, ctx) {
   try { return !!craftany.standingTable(bot, ctx) } catch (_) { return false }
 }
 
-// idkcraft-qxql33: pack wheat -> bread only at a standing known table, so the
-// craft consumes nothing but wheat (craftany never has to make a table).
+// What craftany can fund a table from: a carried table, 4 planks or 1 log
+// (craftany converts only the table's own wood, one op = 4 planks).
+function tableWood(bot) {
+  let items = []
+  try { items = bot.inventory.items() || [] } catch (_) { /* none */ }
+  let planks = 0
+  for (const i of items) {
+    if (!i || typeof i.name !== 'string') continue
+    if (i.name === 'crafting_table' || i.name.endsWith('_log')) return true
+    if (i.name.endsWith('_planks')) planks += i.count || 0
+  }
+  return planks >= 4
+}
+
+// idkcraft-qxql33(b): pack wheat -> bread at a known table, or at one craftany
+// makes/places (tableFor: castle cell, placement guards) from carried wood.
 function breadReady(bot, ctx) {
-  return wheatCount(bot) >= 3 && hasTable(bot, ctx)
+  return wheatCount(bot) >= 3 && (hasTable(bot, ctx) || tableWood(bot))
 }
 
 function available(bot, ctx, facts) {
@@ -61,7 +76,7 @@ function available(bot, ctx, facts) {
   const wheat = wheatCount(bot)
   if (!other && wheat >= 3 && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
     ctx.foodBreadLogAt = Date.now()
-    console.log(`food recovery source=bread result=no-table wheat=${wheat}`)
+    console.log(`food recovery source=bread table=none why=no-table-no-wood wheat=${wheat}`)
   }
   return other
 }
@@ -100,22 +115,24 @@ function run(bot, ctx) {
   if (!bp) return
   if (r.phase === 'bread') {
     if (!r.bread) {
-      r.bread = { wheat0: wheatCount(bot), bread0: countOf(bot, 'bread') }
+      r.bread = { wheat0: wheatCount(bot), bread0: countOf(bot, 'bread'), table: hasTable(bot, ctx) ? 'reached' : 'placed', at: Date.now() }
       ctx.craftany = null
       console.log(`food recovery source=bread start wheat=${r.bread.wheat0}`)
     }
-    // Success is bread in the pack (the craft may spend the last 3 wheat);
-    // the table must still stand each tick, else craftany would make one.
+    // Success is bread in the pack (the craft may spend the last 3 wheat).
+    // craftany bounds the table walk/make/place itself; the deadline caps the leg.
     const crafted = countOf(bot, 'bread') > r.bread.bread0
-    const res = crafted ? { done: true } : hasTable(bot, ctx) || ctx.gearInFlight ? craftany(bot, ctx, 'bread', 1) : { done: false, line: 'need a crafting table' }
+    const res = crafted ? { done: true }
+      : Date.now() - r.bread.at > BREAD_TIMEOUT_MS && !ctx.gearInFlight ? { done: false, line: 'timeout' }
+        : craftany(bot, ctx, 'bread', 1)
     if (res === 'running') return
     ctx.craftany = null
     if (crafted || countOf(bot, 'bread') > r.bread.bread0 || (res && res.done)) {
-      console.log(`food recovery source=bread result=crafted wheat=${wheatCount(bot)}`)
+      console.log(`food recovery source=bread table=${r.bread.table} why=crafted wheat=${wheatCount(bot)}`)
       done(false) // bread is edible now: the eat reflex eats it, needed() goes false
       return
     }
-    console.log(`food recovery source=bread result=failed why=${JSON.stringify((res && res.line) || 'unknown')} wheat=${wheatCount(bot)}`)
+    console.log(`food recovery source=bread table=none why=${JSON.stringify((res && res.line) || 'unknown')} wheat=${wheatCount(bot)}`)
     done(true)
     return
   }
