@@ -422,11 +422,12 @@ async function primitive(bot, ctx, ep, o, hooks) {
   if (Math.max(Math.abs(o.x - c.x), Math.abs(o.y - c.y), Math.abs(o.z - c.z)) > ESC_RANGE) return 'refused:too-far-from-target'
   const { at } = ep.castle && ep.castle.site ? blueprint.absPlan(ep.castle.site, ep.castle.rot, ep.castle.blueprintVersion) : { at: new Map() }
   const isTarget = !ep.generic && key(o) === key(c)
-  // A stuck bot on its own castle (prod 2026-11-09: trapped on the wall top
-  // 205,74,-38 for 35+ min) may dig one stone/planks plan cell to get out;
-  // the castle step re-lays it. Every other plan cell stays refused.
+  // Owner 2026-11-09: no guard on the bot's own castle for a stuck episode —
+  // whatever it breaks, the castle step re-lays (repair instead of protection).
+  // Containers stay refused: their contents would spill.
   const pc = at.get(key(o))
-  const escape = ep.generic && o.op === 'dig' && pc && (pc.kind === 'stone' || pc.kind === 'planks')
+  const own = ep.generic && (pc || blueprint.inCastleApron(ctx, o))
+  const escape = own && !(pc && (pc.kind === 'chest' || pc.kind === 'blast_furnace'))
   if (!isTarget && pc && o.op !== 'walk_to' && !escape) return 'refused:castle-cell'
   if (typeof bot.stopBuild === 'function') await bot.stopBuild()
   if (!live()) return 'preempted'
@@ -463,7 +464,7 @@ async function primitive(bot, ctx, ep, o, hooks) {
   if (!AIR.has(b.name) && !flat.isLiquidName(b.name)) return 'refused:occupied'
   const item = isTarget ? hooks.findItem(bot, c.kind, ctx) : (bot.inventory.items() || []).find((it) => it.name === o.item)
   if (!item) return 'refused:no-item'
-  if (!isTarget && blueprint.inCastleApron(ctx, o)) return 'refused:castle-apron'
+  if (!isTarget && !escape && blueprint.inCastleApron(ctx, o)) return 'refused:castle-apron'
   const ref = build.findRef(bot, new Vec3(o.x, o.y, o.z))
   if (!ref) return 'refused:no-ref'
   if (distance(bot, o) > build.PLACE_REACH) return 'refused:out-of-reach'

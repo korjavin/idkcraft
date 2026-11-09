@@ -19,7 +19,7 @@ const SYSTEM = 'You unstick a Minecraft bot whose pathfinder cannot reach its go
   `with at most ${esc.ESC_MAX_STEPS} steps, all within ${esc.ESC_RANGE} blocks of the bot. Typical fixes: dig through a 1-2 block wall, ` +
   'place a block to step up or bridge a gap, walk to an intermediate spot. Coordinates are block coordinates; walk_to targets the feet cell. ' +
   'Unsafe steps (owner/protected blocks, containers, lava, out of reach) are refused and reported back. ' +
-  'Castle cells are refused except dig of a castle stone/planks block: if the bot is boxed in on or inside its castle, dig one down or sideways to get out (the castle re-lays it).'
+  'The bot\'s own castle is not protected: dig or place through its walls, floor or yard freely to get out (the castle repairs itself later); only its chests are refused.'
 const NOOP = Object.freeze({ done: () => false, findItem: () => null, own: () => {} })
 const sessions = new WeakMap()
 const key = (p) => `${p.x},${p.y},${p.z}`
