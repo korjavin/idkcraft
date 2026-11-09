@@ -20,7 +20,8 @@ const WAIT_MS = 10000
 const BACKOFF_MS = 600000
 const MAX_EPISODES = 2
 const AIR = new Set(['air', 'cave_air', 'void_air'])
-const WHY = new Set(['build-miss', 'no-ref', 'unreachable', 'cell-budget', 'cell-hard-cap'])
+// qxql.32: 'unloaded' too — a cell retired on cache gaps re-enters via the planner once its column reads (eligible needs name != null).
+const WHY = new Set(['build-miss', 'no-ref', 'unloaded', 'unreachable', 'cell-budget', 'cell-hard-cap'])
 const sessions = new WeakMap()
 const key = (p) => `${p.x},${p.y},${p.z}`
 function block(bot, p) { try { return bot.blockAt(new Vec3(p.x, p.y, p.z)) } catch (_) { return null } }

@@ -1834,6 +1834,23 @@ function placeCell(bot, ctx, st, c, item, now) {
   }
   if (!ref) {
     ctx.castleGoalIdx = -1
+    // qxql.32 (hypothesis until the live diagnostic confirms it): a neighbour
+    // that reads null is an unloaded column in the v2 bridge cache, not a
+    // missing support (prod V2b: no-ref ring over grass at the x=320 chunk
+    // edge). Log each no-ref with its unknown count, ask the body to load the
+    // column, and strike 'unloaded' — the same bounded ladder; a retired
+    // 'unloaded' cell re-enters via castlerecovery once its column reads.
+    const nb = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]].map(([dx, dy, dz]) => ({ x: c.x + dx, y: c.y + dy, z: c.z + dz }))
+    const unknown = nb.filter((q) => { try { return !bot.blockAt(new Vec3(q.x, q.y, q.z)) } catch (_) { return true } })
+    if (unknown.length) {
+      const cols = [...new Set(unknown.map((q) => `${Math.floor(q.x / 16)},${Math.floor(q.z / 16)}`))]
+      const cached = cols.map((k) => (bot._chunkCols && bot._chunkCols.has(k) ? 'y' : 'n')).join('')
+      console.log(`castle no-ref cell=${c.x},${c.y},${c.z} unknown=${unknown.length}/6 cols=${cols.join('|')} cached=${cached}`)
+      try { if (typeof bot.prefetch === 'function') bot.prefetch(unknown).catch(() => {}) } catch (_) { /* best-effort */ }
+      strike(ctx, st, c, 'unloaded', now)
+      return
+    }
+    console.log(`castle no-ref cell=${c.x},${c.y},${c.z} unknown=0/6`)
     strike(ctx, st, c, 'no-ref', now)
     return
   }
