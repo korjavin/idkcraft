@@ -113,6 +113,7 @@ function signature(bot, p) {
 }
 function stamp(bot, points) { return points.map((p) => [Object.freeze({ x: p.x, y: p.y, z: p.z }), signature(bot, p)]) }
 function unchanged(bot, stamps) { return stamps.every(([p, v]) => signature(bot, p) === v) }
+const KEEP = /chest|barrel|shulker|furnace|smoker|hopper|dispenser|dropper|brewing|_bed$/
 function safeDig(bot, ctx, p, escape = false) {
   const b = block(bot, p)
   // Strict shared default-deny preserves owner builds and containers;
@@ -449,14 +450,17 @@ async function primitive(bot, ctx, ep, o, hooks) {
     if (AIR.has(b.name)) return 'refused:already-air'
     if (isTarget && hooks.done(bot, c)) return 'refused:already-correct'
     // escape: the castle's own build protection yields; trap/gravity/water rules still refuse
+    // Owner 2026-11-09: a stuck episode ignores build protection everywhere
+    // (default-deny refused plain mountain rock); only containers and beds stay.
+    const loose = escape || (ep.generic && !KEEP.test(b.name))
     const deny = denyReason(bot, b, ctx)
-    if (deny && !(escape && deny === 'protected')) return 'refused:protected'
-    if (!safeDig(bot, ctx, o, escape)) return 'refused:out-of-reach-or-occupied'
+    if (deny && !(loose && deny === 'protected')) return 'refused:protected'
+    if (!safeDig(bot, ctx, o, loose)) return 'refused:out-of-reach-or-occupied'
     const req = tools.requirement(b)
     const tool = req ? tools.carried(bot, { ...req, harvestTools: b.harvestTools }) : bot.pathfinder.bestHarvestTool && bot.pathfinder.bestHarvestTool(b)
     if ((req && !req.hand && !tool) || (b.harvestTools && !(tool && b.harvestTools[tool.type]))) return 'refused:no-tool'
     if (tool) await bot.equip(tool, 'hand')
-    if (!live() || !safeDig(bot, ctx, o, escape)) return 'preempted'
+    if (!live() || !safeDig(bot, ctx, o, loose)) return 'preempted'
     await bot.dig(block(bot, o))
     return AIR.has(name(bot, o)) ? 'dug' : 'unchanged'
   }

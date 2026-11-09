@@ -131,3 +131,11 @@ describe('unstick: LLM escalation for a stuck v2 step (u04q)', () => {
     assert.equal(f.calls.esc.length, 1)
   })
 })
+
+describe('unstick: no build protection for a stuck episode (owner 2026-11-09)', () => {
+  it('digs a default-deny block (wool), the protection yields', async () => {
+    const f = fixture(() => ({ plan: [{ op: 'dig', x: 2, y: 64, z: 0 }, { op: 'dig', x: 2, y: 65, z: 0 }, { op: 'walk_to', x: 4, y: 64, z: 0 }] }), 'white_wool')
+    await ticks(f, unstick.NOPATH_TICKS + 8)
+    assert.deepEqual(f.calls.digs, ['2,64,0', '2,65,0'])
+  })
+})
