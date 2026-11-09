@@ -1778,6 +1778,10 @@ function failHolds(ctx, name, text, bot) {
       } catch (_) { /* kind unreadable: hold stands */ }
     }
     if (!sf || sf.text !== text) return false
+    // qxql.31: a build-stall retires its cells and the word turns 'clear' (a
+    // cell recovery is startable) in the very text the stall failed on; holding
+    // it locked out the recovery and flapped castle<->rest on every word flip.
+    if (name === 'castle' && sf.status === 'failed:build-stall' && textWord(text, 'castle') === 'clear') return false
     if (!sf.pos) return true
     const bp = bot && bot.entity && bot.entity.position
     if (!bp || typeof bp.x !== 'number') return true
