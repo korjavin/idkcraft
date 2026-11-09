@@ -447,7 +447,9 @@ async function primitive(bot, ctx, ep, o, hooks) {
     }
     if (AIR.has(b.name)) return 'refused:already-air'
     if (isTarget && hooks.done(bot, c)) return 'refused:already-correct'
-    if (denyReason(bot, b, ctx)) return 'refused:protected'
+    // escape: the castle's own build protection yields; trap/gravity/water rules still refuse
+    const deny = denyReason(bot, b, ctx)
+    if (deny && !(escape && deny === 'protected')) return 'refused:protected'
     if (!safeDig(bot, ctx, o)) return 'refused:out-of-reach-or-occupied'
     const req = tools.requirement(b)
     const tool = req ? tools.carried(bot, { ...req, harvestTools: b.harvestTools }) : bot.pathfinder.bestHarvestTool && bot.pathfinder.bestHarvestTool(b)
