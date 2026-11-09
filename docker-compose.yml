@@ -256,6 +256,7 @@ services:
       BOT_LEAVE_AFTER_MS: ${BOT_LEAVE_AFTER_MS:-60000}
       BOT_AUTONOMOUS: ${BOT_AUTONOMOUS:-}
       CASTLE_LLM_ESCALATION: ${CASTLE_LLM_ESCALATION:-1} # 8hx3: castle holes -> LLM primitive plans (needs ANTHROPIC_API_KEY); 0 = old menu
+      LLM_ESCALATION: ${LLM_ESCALATION:-1} # u04q: stuck/noPath/unreachable v2 step -> the same LLM primitives; 0 = off
       BOT_SKILLS: ${BOT2_SKILLS:-} # vf8e.4: v2's own switch (BOT_SKILLS stays v1's), off by default
       BRAIN_TICK_MS: ${BRAIN_TICK_MS:-1000}
       BRAIN_URL: ${BRAIN_URL:-}

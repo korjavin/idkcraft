@@ -1957,6 +1957,7 @@
       "src/behaviours/retreat.js",
       "src/behaviours/sitebed.js",
       "src/behaviours/stockpile.js",
+      "src/behaviours/unstick.js",
       "src/chat.js",
       "src/goal.js",
       "src/index.js",

@@ -397,14 +397,14 @@ function observe(bot, ctx, ep, hooks) {
     history: ep.history.slice(-12),
   }
 }
-async function llmEscalate(obs) {
+async function llmEscalate(obs, system = ESC_SYSTEM) {
   const brain = require('../brain')
   const model = process.env.LLM_MODEL || brain.LLM_MODEL
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(), ESC_TIMEOUT_MS)
   try {
     const data = await brain.llmCall({ use: 'escalation', apiKey: process.env.ANTHROPIC_API_KEY, signal: ac.signal,
-      body: { model, ...brain.llmModelConfig(model, 400), system: ESC_SYSTEM, messages: [{ role: 'user', content: JSON.stringify(obs) }] } })
+      body: { model, ...brain.llmModelConfig(model, 400), system, messages: [{ role: 'user', content: JSON.stringify(obs) }] } })
     const t = ((data && data.content) || []).find((x) => x && x.type === 'text')
     const out = (t && t.text) || ''
     return JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1))
@@ -413,12 +413,13 @@ async function llmEscalate(obs) {
 // One primitive -> a result word; 'walking' finishes in escTick.
 async function primitive(bot, ctx, ep, o, hooks) {
   const c = ep.cell
-  const live = () => !ep.cancelled && control(bot, ctx, ep)
+  // u04q: a generic stuck episode (ep.generic) brings its own live() and no castle target
+  const live = () => !ep.cancelled && (ep.live ? ep.live() : control(bot, ctx, ep))
   if (o.op === 'wait') { ep.waitUntil = Date.now() + Math.min(10, Math.max(1, Number(o.s) || 1)) * 1000; return 'waited' }
-  if (o.op === 'ask_owner') { try { bot.chat(`castle ${key(c)}: ${String(o.text).slice(0, 120)}`) } catch (_) { /* chat best-effort */ } return 'asked' }
+  if (o.op === 'ask_owner') { try { bot.chat(`${ep.generic ? 'stuck' : 'castle'} ${key(c)}: ${String(o.text).slice(0, 120)}`) } catch (_) { /* chat best-effort */ } return 'asked' }
   if (Math.max(Math.abs(o.x - c.x), Math.abs(o.y - c.y), Math.abs(o.z - c.z)) > ESC_RANGE) return 'refused:too-far-from-target'
-  const { at } = blueprint.absPlan(ep.castle.site, ep.castle.rot, ep.castle.blueprintVersion)
-  const isTarget = key(o) === key(c)
+  const { at } = ep.castle && ep.castle.site ? blueprint.absPlan(ep.castle.site, ep.castle.rot, ep.castle.blueprintVersion) : { at: new Map() }
+  const isTarget = !ep.generic && key(o) === key(c)
   if (!isTarget && at.has(key(o)) && o.op !== 'walk_to') return 'refused:castle-cell'
   if (typeof bot.stopBuild === 'function') await bot.stopBuild()
   if (!live()) return 'preempted'
@@ -519,4 +520,4 @@ function escTick(bot, ctx, s, ep, now, hooks) {
   return true
 }
 
-module.exports = { startable, ESC_MAX_STEPS, blocker, eligible, tick, menu, MAX_CALLS, MAX_EPISODES }
+module.exports = { primitive, parsePlan, primText, llmEscalate, escalator, ESC_RANGE, startable, ESC_MAX_STEPS, blocker, eligible, tick, menu, MAX_CALLS, MAX_EPISODES }
