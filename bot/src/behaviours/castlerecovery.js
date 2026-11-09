@@ -27,6 +27,8 @@ function block(bot, p) { try { return bot.blockAt(new Vec3(p.x, p.y, p.z)) } cat
 function name(bot, p) { const b = block(bot, p); return b && b.name }
 function position(bot) { return bot.entity && bot.entity.position }
 function distance(bot, p) { const b = position(bot); return b ? Math.hypot(b.x - p.x - 0.5, b.y + 1.6 - p.y - 0.5, b.z - p.z - 0.5) : Infinity }
+// An 8hx3 cell episode is running (unstick must not take the tick from it).
+function busy(ctx) { const s = sessions.get(ctx); return !!(s && s.episode) }
 function state(ctx, st) {
   let s = sessions.get(ctx)
   if (!s || s.castle !== st) { s = { castle: st, cooldown: new Map(), until: 0, episode: null }; sessions.set(ctx, s) }
@@ -420,7 +422,12 @@ async function primitive(bot, ctx, ep, o, hooks) {
   if (Math.max(Math.abs(o.x - c.x), Math.abs(o.y - c.y), Math.abs(o.z - c.z)) > ESC_RANGE) return 'refused:too-far-from-target'
   const { at } = ep.castle && ep.castle.site ? blueprint.absPlan(ep.castle.site, ep.castle.rot, ep.castle.blueprintVersion) : { at: new Map() }
   const isTarget = !ep.generic && key(o) === key(c)
-  if (!isTarget && at.has(key(o)) && o.op !== 'walk_to') return 'refused:castle-cell'
+  // A stuck bot on its own castle (prod 2026-11-09: trapped on the wall top
+  // 205,74,-38 for 35+ min) may dig one stone/planks plan cell to get out;
+  // the castle step re-lays it. Every other plan cell stays refused.
+  const pc = at.get(key(o))
+  const escape = ep.generic && o.op === 'dig' && pc && (pc.kind === 'stone' || pc.kind === 'planks')
+  if (!isTarget && pc && o.op !== 'walk_to' && !escape) return 'refused:castle-cell'
   if (typeof bot.stopBuild === 'function') await bot.stopBuild()
   if (!live()) return 'preempted'
   bot.pathfinder.setGoal(null)
@@ -520,4 +527,4 @@ function escTick(bot, ctx, s, ep, now, hooks) {
   return true
 }
 
-module.exports = { primitive, parsePlan, primText, llmEscalate, escalator, ESC_RANGE, startable, ESC_MAX_STEPS, blocker, eligible, tick, menu, MAX_CALLS, MAX_EPISODES }
+module.exports = { primitive, parsePlan, primText, llmEscalate, escalator, ESC_RANGE, startable, ESC_MAX_STEPS, blocker, eligible, tick, menu, MAX_CALLS, MAX_EPISODES, busy }
