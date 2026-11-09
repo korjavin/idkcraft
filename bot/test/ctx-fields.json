@@ -755,6 +755,7 @@
     "writers": [
       "src/behaviours/bringitem.js",
       "src/behaviours/craftany.js",
+      "src/behaviours/food-recovery.js",
       "src/behaviours/stockpile.js",
       "src/orders.js",
       "src/skills.js"

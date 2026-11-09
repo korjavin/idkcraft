@@ -7,6 +7,7 @@ const forage = require('./forage')
 const stockpile = require('./stockpile')
 const { stepDone } = require('../step')
 const { LOW_HP_GATE_MS, lowHpGated } = require('../health-gate')
+const craftany = require('./craftany')
 
 const RETRY_MS = 60000
 const WINDOW_TIMEOUT_MS = 30000
@@ -37,20 +38,48 @@ function chestState(ctx) {
   return { kind: 'food', phase: 'chestfetch', want: 1, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: stockpile.NEARBY_CHEST_RADIUS }
 }
 
+function countOf(bot, name) {
+  try { return bot.inventory.items().reduce((n, i) => n + (i && i.name === name ? i.count || 0 : 0), 0) } catch (_) { return 0 }
+}
+const wheatCount = (bot) => countOf(bot, 'wheat')
+
+function hasTable(bot, ctx) {
+  try { return !!craftany.standingTable(bot, ctx) } catch (_) { return false }
+}
+
+// idkcraft-qxql33: pack wheat -> bread only at a standing known table, so the
+// craft consumes nothing but wheat (craftany never has to make a table).
+function breadReady(bot, ctx) {
+  return wheatCount(bot) >= 3 && hasTable(bot, ctx)
+}
+
 function available(bot, ctx, facts) {
   if (!needed(bot, ctx, facts) || (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt)) return false
   if (ctx.foodRecoveryFlight) return false
-  return !!(bring.pickChest(bot, ctx, chestState(ctx)) || forage.foodTarget(bot, ctx, true))
+  if (breadReady(bot, ctx)) return true
+  const other = !!(bring.pickChest(bot, ctx, chestState(ctx)) || forage.foodTarget(bot, ctx, true))
+  const wheat = wheatCount(bot)
+  if (!other && wheat >= 3 && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
+    ctx.foodBreadLogAt = Date.now()
+    console.log(`food recovery source=bread result=no-table wheat=${wheat}`)
+  }
+  return other
 }
 
 function invalidate(ctx) {
-  if (ctx && ctx.foodRecovery) ctx.foodRecovery.valid = false
+  if (ctx && ctx.foodRecovery) cancel(ctx, ctx.foodRecovery)
+}
+
+// A cancelled bread run must not leave its craftany run for the next start.
+function cancel(ctx, r) {
+  r.valid = false
+  if (r.bread && ctx.craftany && ctx.craftany.key === 'breadx1') ctx.craftany = null
 }
 
 function run(bot, ctx) {
   let r = ctx.foodRecovery
   if (!r || !r.valid) {
-    r = ctx.foodRecovery = { valid: true, chest: chestState(ctx), phase: 'chest', startFood: bot.food }
+    r = ctx.foodRecovery = { valid: true, chest: chestState(ctx), phase: breadReady(bot, ctx) ? 'bread' : 'chest', startFood: bot.food }
     ctx.lastPathStatus = 'none'
     console.log(`food recovery start health=${bot.health} food=${bot.food} edible=0`)
   }
@@ -65,10 +94,31 @@ function run(bot, ctx) {
     console.log(`food recovery result=${retry ? 'retry' : 'acquired'} health=${bot.health} food=${bot.food}`)
     stepDone(ctx)
   }
-  if (!valid()) { r.valid = false; return }
+  if (!valid()) { cancel(ctx, r); return }
   if (bot.food > r.startFood) { done(false); return }
   const bp = bot.entity && bot.entity.position
   if (!bp) return
+  if (r.phase === 'bread') {
+    if (!r.bread) {
+      r.bread = { wheat0: wheatCount(bot), bread0: countOf(bot, 'bread') }
+      ctx.craftany = null
+      console.log(`food recovery source=bread start wheat=${r.bread.wheat0}`)
+    }
+    // Success is bread in the pack (the craft may spend the last 3 wheat);
+    // the table must still stand each tick, else craftany would make one.
+    const crafted = countOf(bot, 'bread') > r.bread.bread0
+    const res = crafted ? { done: true } : hasTable(bot, ctx) || ctx.gearInFlight ? craftany(bot, ctx, 'bread', 1) : { done: false, line: 'need a crafting table' }
+    if (res === 'running') return
+    ctx.craftany = null
+    if (crafted || countOf(bot, 'bread') > r.bread.bread0 || (res && res.done)) {
+      console.log(`food recovery source=bread result=crafted wheat=${wheatCount(bot)}`)
+      done(false) // bread is edible now: the eat reflex eats it, needed() goes false
+      return
+    }
+    console.log(`food recovery source=bread result=failed why=${JSON.stringify((res && res.line) || 'unknown')} wheat=${wheatCount(bot)}`)
+    done(true)
+    return
+  }
   if (r.phase === 'chest') {
     if (ctx.foodRecoveryFlight) {
       if (ctx.foodRecoveryFlight.owner === r && Date.now() - ctx.foodRecoveryFlight.at >= WINDOW_TIMEOUT_MS) {
