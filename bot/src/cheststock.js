@@ -75,7 +75,25 @@ function fetchStockOf(ctx, names) {
   try {
     const home = homeStockOf(ctx, names) // adoption-guarded inside
     if (!ctx || !ctx.castle) return home
-    return home + stockInSlots(ctx, ['site', 'castle'], names)
+    return home + stockInSlots(ctx, ['site', 'castle'], names) + rememberedStockOf(ctx, names)
+  } catch (_) {
+    return 0
+  }
+}
+
+// y7lp.3: snapshots of other remembered chests (ctx.chests), the home and
+// site chests excluded (their slots count above). Over-trust costs one walk.
+function rememberedStockOf(ctx, names) {
+  try {
+    const want = new Set(typeof names === 'string' ? [names] : names)
+    const key = (c) => c ? `${c.x},${c.y},${c.z}` : null
+    const skip = new Set([key(ctx.home && ctx.home.chest), key(ctx.castle && ctx.castle.siteChest)])
+    let n = 0
+    for (const c of Array.isArray(ctx.chests) ? ctx.chests : []) {
+      if (!c || !c.contents || skip.has(key(c))) continue
+      for (const [k, v] of Object.entries(c.contents)) if (want.has(k) && typeof v === 'number' && v > 0) n += Math.floor(v)
+    }
+    return n
   } catch (_) {
     return 0
   }

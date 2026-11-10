@@ -969,7 +969,9 @@ function pickChest(bot, ctx, f, kind) {
       ? stockpileMod.nearbyChestsAll(bot, ctx, [...tried])
       : stockpileMod.nearbyChests(bot, ctx, [...tried])
     for (const c of extra) {
-      if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true })
+      // y7lp.3: a snapshot without the kind is no source (the draw re-reads live)
+      if (c && c.contents && !kindHeld(bot, kind, presentNames(c.contents))) continue
+      if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true, mem: true })
     }
   } catch (_) { /* remembered sightings best-effort */ }
   let best = null
@@ -985,7 +987,8 @@ function pickChest(bot, ctx, f, kind) {
     }
     const dist = bp ? Math.hypot(bp.x - c.at.x, bp.z - c.at.z) : 0
     if (c.bank && dist > require('./explore').TASK_SEARCH_RADIUS) continue
-    if (!best || dist < best.dist) best = { ...c, k, dist }
+    // y7lp.3: home/site/castle first, remembered chests only when none qualifies
+    if (!best || (!c.mem && best.mem) || (!!c.mem === !!best.mem && dist < best.dist)) best = { ...c, k, dist }
   }
   if (best) tried.add(best.k)
   return best
