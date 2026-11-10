@@ -429,6 +429,14 @@ function ask(bot, ctx, req, fetchFn) {
       // a5xy: a need step drives the bring goal stack for the bot itself;
       // the rest of the plan is dropped (the FSM resumes work afterwards).
       const nd = r.steps && r.steps.find((s) => s.step === 'need')
+      if (nd && heldFor(bot, nd.item, true) >= (nd.count || 1)) {
+        // core-1: an already-held need would end done at once and unpark a
+        // stall it never fixed; the FSM pick stands, the backoff keeps doubling.
+        console.log(`llm choose need already held ${nd.item}`)
+        const cur = typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0 ? ctx.llmChooseWait : chooseMinMs()
+        ctx.llmChooseWait = Math.min(cur * 2, CHOOSE_WAIT_MAX_MS)
+        return
+      }
       if (nd) r.steps = [{ ...nd, count: nd.count || 1 }]
       else if (r.steps) {
         // Expand build before admission: an empty kit starts with gather,
@@ -832,6 +840,15 @@ function heldItem(bot, item) {
   try { return countItems(bot, (name) => name === item) } catch (_) { return 0 }
 }
 
+// a5xy: a self need for food/meat or any edible is met by any edible held
+// (the food ladder hunts any animal, never smelts cooked_*).
+function heldFor(bot, item, self) {
+  if (!self) return heldItem(bot, item)
+  const { isFoodRequest, FOOD_NAMES } = require('./behaviours/bringitem')
+  if (!isFoodRequest(item) && !FOOD_NAMES.has(item)) return heldItem(bot, item)
+  try { return countItems(bot, (name) => FOOD_NAMES.has(name)) } catch (_) { return 0 }
+}
+
 function inventoryFingerprint(bot) {
   try { return bot.inventory.items().map((i) => `${i.name}:${i.count}`).sort().join(',') } catch (_) { return 'unavailable' }
 }
@@ -943,7 +960,7 @@ function tick(bot, ctx, now = Date.now()) {
     if (orderBusy(ctx)) { if (ctx.lead) c.led = true; return }
     const r = orderResult(ctx, s, c)
     if (o.bringGoal && s.step === 'acquire') {
-      const have = heldItem(bot, s.item)
+      const have = heldFor(bot, s.item, o.bringGoal.self)
       if (r === 'done' && have >= s.count) {
         o.bringGoal.stack.pop()
         if (!o.bringGoal.stack.length) return end(bot, ctx, o, 'done') // a5xy: self root acquired
@@ -1208,4 +1225,4 @@ function statusLine(ctx) {
   return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
 }
 
-module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH, RECIPE_MAX_DEPTH, RECIPE_MAX_STEPS, RECIPE_TIMEOUT_MS, RECIPE_VERBS, checkRecipeShape, requestRecipe, planRecipe }
+module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, validateBringPlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH, RECIPE_MAX_DEPTH, RECIPE_MAX_STEPS, RECIPE_TIMEOUT_MS, RECIPE_VERBS, checkRecipeShape, requestRecipe, planRecipe }
