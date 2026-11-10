@@ -1385,7 +1385,7 @@ function giveOrRefuse(bot, ctx, o, failLine) {
 }
 
 function craftTick(bot, ctx, o) {
-  const res = craftany()(bot, ctx, orderCraftNames(o.names || []), 1)
+  const res = craftany()(bot, ctx, orderCraftNames(o.names || []), o.craftCount || 1)
   if (res === 'running') return
   if (res && res.done) {
     // Recipe execution (idkcraft-6ci5.2): the crafted step stays packed —

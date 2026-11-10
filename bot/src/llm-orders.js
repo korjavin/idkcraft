@@ -842,6 +842,8 @@ function heldItem(bot, item) {
 
 // a5xy: a self need for food/meat or any edible is met by any edible held
 // (the food ladder hunts any animal, never smelts cooked_*).
+const ACQUIRE_RESOLVERS = ['craft', 'ladder']
+function craftanyMod() { return require('./behaviours/craftany') }
 function isSelfFood(item) {
   const { isFoodRequest, FOOD_NAMES } = require('./behaviours/bringitem')
   return isFoodRequest(item) || FOOD_NAMES.has(item)
@@ -902,7 +904,20 @@ function startStep(bot, ctx, o, s, now) {
       if (s.step === 'acquire' && o.bringGoal) {
         // a5xy: a self food need (cooked_* included) runs the hunt ladder; heldFor counts any edible
         const foodNeed = o.bringGoal.self && isSelfFood(s.item)
-        const reply = o.ticker && o.ticker.setBring({ name: foodNeed ? 'food' : s.item, want: s.count, by: o.by })
+        // 8hpy.1: deterministic resolvers first, each once per acquire step
+        // (craft when a recipe plan exists, then the gather/hunt/mine ladder);
+        // the LLM replan runs only after all of them failed.
+        const tried = s.tried || (s.tried = [])
+        let reply = null
+        for (const r of ACQUIRE_RESOLVERS) {
+          if (tried.includes(r)) continue
+          tried.push(r)
+          const short = Math.max(1, s.count - heldFor(bot, s.item, o.bringGoal.self)) // craft only the missing part
+          if (r === 'craft' && !craftanyMod().planCraft(bot, ctx, [s.item], short).ok) continue
+          reply = o.ticker && o.ticker.setBring(r === 'craft' ? { name: s.item, want: short, by: o.by, craftFirst: true } : { name: foodNeed ? 'food' : s.item, want: s.count, by: o.by })
+          if ((ctx.bring && ctx.bring !== before.bring) || (ctx.pendingSearch && ctx.pendingSearch !== before.ps)) break
+        }
+        if (o.ticker) console.log(`llm order acquire ${s.item} resolver=${tried[tried.length - 1]} tried=${tried.join(',')}`)
         if (ctx.bring && ctx.bring !== before.bring) ctx.bring.self = true
         else if (ctx.pendingSearch && ctx.pendingSearch !== before.ps) ctx.pendingSearch.self = true
         else if (reply) o.acquireRefusal = String(reply).slice(0, 120)
@@ -971,6 +986,8 @@ function tick(bot, ctx, now = Date.now()) {
         if (!o.bringGoal.stack.length) return end(bot, ctx, o, 'done') // a5xy: self root acquired
         return replanBring(bot, ctx, o, `acquired ${have} ${s.item}; resuming parent`)
       }
+      // 8hpy.1: a done without the item = that resolver failed; try the next one
+      if (s.tried && ACQUIRE_RESOLVERS.some((x) => !s.tried.includes(x))) { o.cur = null; return }
       return replanBring(bot, ctx, o, `acquire ${s.item} ${r}; inventory has ${have}/${s.count}`)
     }
     if (o.bringGoal && s.step === 'bring' && r === 'done') {
