@@ -425,16 +425,30 @@ function carriedWood(bot) {
 }
 
 const CHEST_DRY_MS = 10 * 60 * 1000
+const WOOD_KIT = 9 // mirrors goal.js WOOD_KIT (table 4 + pickaxe 3 + sticks 2 planks)
+const KIT_LOGS = 3 // 12 planks >= WOOD_KIT
 function chestLogsTick(bot, ctx, g, logs, bp) {
   let pick = g.chestLogs
   if (!pick) {
     if (g.chestTried) return false // one try per attempt, dry window or not
+    let banked = false
     try {
-      if (ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx)) return false
+      banked = !!(ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx))
     } catch (_) { return false }
+    // y7lp: a built home (stockpile banks logs home) draws only while wood-starved
+    // (goal.js woodStarved: no logs, < WOOD_KIT planks), only a KIT_LOGS kit, never
+    // from the home chest — the kit is spent/kept, so nothing ping-pongs.
+    // ...and only while the pack has no pickaxe (the kit need): with tools made, a
+    // starved pack never re-draws, so the opens stay bounded (y7lp review 02).
+    if (banked && (logs > 0 || countItems(bot, (n) => n.endsWith('_planks')) >= WOOD_KIT || countItems(bot, (n) => n.endsWith('_pickaxe')) > 0)) return false
     const dry = ctx.chestLogsDry || {}
     const now = Date.now()
-    for (const c of [ctx.home && ctx.home.chest, ctx.castle && ctx.castle.siteChest]) {
+    const h = ctx.home && ctx.home.chest
+    const isHome = (c) => h && c.x === h.x && c.y === h.y && c.z === h.z
+    // y7lp: plus any remembered chest whose last snapshot held logs
+    const logged = (Array.isArray(ctx.chests) ? ctx.chests : []).filter((c) => c && c.contents && Object.entries(c.contents).some(([n, v]) => (n.endsWith('_log') || n.endsWith('_stem')) && v > 0))
+    const cands = banked ? logged.filter((c) => !isHome(c)) : [h, ctx.castle && ctx.castle.siteChest, ...logged]
+    for (const c of cands) {
       if (!c || typeof c.x !== 'number') continue
       const k = `${c.x},${c.y},${c.z}`
       if (typeof dry[k] === 'number' && now - dry[k] < CHEST_DRY_MS) continue
@@ -450,7 +464,10 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
     g.chestLogs = null
     g.chestTried = true
   }
-  const want = NEED_LOGS - logs
+  let want = NEED_LOGS - logs
+  let capped = false
+  try { capped = !!(ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx)) } catch (_) { capped = true }
+  if (capped) want = Math.min(want, KIT_LOGS)
   let busy = false
   try {
     busy = require('./beds').chestTick(bot, ctx, g, `gather-chest:${pick.k}`, async () => {
@@ -459,7 +476,9 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
         const r = await require('./stockpile').withdrawAnyFromChest(bot, ctx, logNames(bot), want, pick.c)
         got = (r && r.got) || 0
       } catch (_) { got = 0 }
-      if (got < want) markDry()
+      // a built-home kit draw also dries the chest: stockpile may bank part of
+      // the kit (depositPlan keeps 1 gear log), so no re-draw inside CHEST_DRY_MS
+      if (got < want || capped) markDry()
       else g.chestLogs = null
       try { console.log(`gather: ${got} logs from the chest at ${pick.k}`) } catch (_) { /* log best-effort */ }
     }, pick.c)

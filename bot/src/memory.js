@@ -117,7 +117,15 @@ function chestSpotsOf(v) {
         const key = `${e.x},${e.y},${e.z}`
         if (seen.has(key)) continue
         seen.add(key)
-        out.push({ x: e.x, y: e.y, z: e.z })
+        const spot = { x: e.x, y: e.y, z: e.z }
+        // y7lp: last-read snapshot (old x,y,z-only files simply have none)
+        if (Number.isFinite(e.at) && e.contents && typeof e.contents === 'object' && !Array.isArray(e.contents)) {
+          const contents = {}
+          for (const [n, c] of Object.entries(e.contents)) if (Number.isInteger(c) && c > 0) contents[n] = c
+          spot.contents = contents
+          spot.at = e.at
+        }
+        out.push(spot)
         if (out.length >= CHESTS_MAX) break
       }
     }

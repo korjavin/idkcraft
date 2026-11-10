@@ -732,6 +732,7 @@
   },
   "chests": {
     "writers": [
+      "src/behaviours/packroom.js",
       "src/behaviours/stockpile.js",
       "src/memory.js"
     ],
