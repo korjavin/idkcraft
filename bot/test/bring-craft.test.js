@@ -27,7 +27,7 @@ const ITEMS = {
   white_wool: 106, torch: 111, dirt: 112, cobblestone: 113, bucket: 114,
   stick: 115, coal: 116, iron_ingot: 117, oak_log: 118, oak_planks: 119,
   crafting_table: 120, cobbled_deepslate: 121, blackstone: 122,
-  birch_planks: 123, birch_log: 124,
+  birch_planks: 123, birch_log: 124, bread: 125, wheat: 126, nether_star: 127,
 }
 
 // Fake recipe with the real shape: delta negatives consumed, result count,
@@ -53,6 +53,7 @@ function RECIPES() {
     stick: [R('stick', [['oak_planks', 2]], 4, false)],
     oak_planks: [R('oak_planks', [['oak_log', 1]], 4, false)],
     crafting_table: [R('crafting_table', [['oak_planks', 4]], 1, false)],
+    bread: [R('bread', [['wheat', 3]], 1, true)],
   }
 }
 
@@ -697,5 +698,58 @@ describe('bring craft handover and give-ups (idkcraft-did.2 revmux 01)', () => {
     assert.equal(ctx.stepStatus, null)
     assert.equal(ctx.gearInFlight, true)
     await sleep(650) // let the issued op settle so no timer leaks past the test
+  })
+})
+
+// idkcraft-8hpy.1: a self acquire resolves deterministically first (craft,
+// then the bring ladder); the LLM replans only when none is left.
+describe('self acquire: deterministic before LLM (idkcraft-8hpy.1)', () => {
+  const llmOrders = require('../src/llm-orders')
+  async function acquire(bot, ticker, item, count) {
+    const ctx = bot._tickerCtx
+    let fetches = 0
+    const origFetch = globalThis.fetch
+    const origKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    globalThis.fetch = async () => { fetches++; return { ok: false, status: 500 } }
+    try {
+      llmOrders.installPlan(bot, ctx, { text: 'choose work: test', by: 'self', ticker, choose: true, bringGoal: { item, remaining: count, self: true } }, [{ step: 'acquire', item, count }], () => {})
+      for (let i = 0; i < 80 && ctx.llmOrder && !ctx.llmOrder.replanning; i++) {
+        llmOrders.tick(bot, ctx)
+        if (ctx.bring) await drive(bot, ctx)
+        await flush()
+      }
+      await flush()
+    } finally {
+      globalThis.fetch = origFetch
+      if (origKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = origKey
+    }
+    return { ctx, fetches, held: bot._items.filter((s) => s.name === item).reduce((n, s) => n + s.count, 0) }
+  }
+
+  it('need bread 3 with 9 wheat and a placed table: bread held, 0 LLM calls', async () => {
+    const bot = mockBot({ playerPos: pos(0, 64, 0), items: [{ name: 'wheat', count: 9 }], cells: { '0,64,0': 'crafting_table' } })
+    const ticker = tickerFor(bot)
+    tableHome(bot._tickerCtx, 0, 64, 0)
+    const r = await acquire(bot, ticker, 'bread', 3)
+    assert.equal(r.held, 3)
+    assert.equal(r.fetches, 0)
+    assert.equal(r.ctx.llmOrder, null)
+  })
+
+  it('torch 8 from coal+sticks: torches held, 0 LLM calls', async () => {
+    const bot = mockBot({ playerPos: pos(0, 64, 0), items: [{ name: 'coal', count: 2 }, { name: 'stick', count: 2 }] })
+    const r = await acquire(bot, tickerFor(bot), 'torch', 8)
+    assert.equal(r.held, 8)
+    assert.equal(r.fetches, 0)
+    assert.equal(r.ctx.llmOrder, null)
+  })
+
+  it('no recipe and no ladder: exactly one LLM replan', async () => {
+    const bot = mockBot({ items: [] })
+    const r = await acquire(bot, tickerFor(bot), 'nether_star', 1)
+    assert.equal(r.held, 0)
+    assert.equal(r.fetches, 1)
   })
 })

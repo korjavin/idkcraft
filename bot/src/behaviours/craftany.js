@@ -541,9 +541,11 @@ function craftItem(bot, ctx, name, count) {
       return 'running'
     }
   }
-  const op = nextOp(bot, plan, st.table)
+  // 8hpy.1: a multi-batch run checks only the batches still to craft
+  const left = Math.max(1, Math.ceil((st.finalNeed - (have(bot, plan.target) - st.have0)) / resultCount(plan.recipe)))
+  const op = nextOp(bot, { ...plan, times: left }, st.table)
   if (!op || op.fail) {
-    const missing = gapOf(plan.needs, packCounts(bot), plan.times)
+    const missing = gapOf(plan.needs, packCounts(bot), left)
     clearRun(ctx)
     if (missing.length > 0) return { done: false, line: missingLine(plan.target, missing) }
     return { done: false, line: `can't make ${plan.target}: crafting failed` }

@@ -258,7 +258,7 @@ function createOrders(box) {
       ctx.paused = false
       return null
     },
-    setBring: ({ name, want, by }) => {
+    setBring: ({ name, want, by, craftFirst }) => {
       clearPendingSearch(ctx)
       resetNightStep()
       ctx.gocastle = null
@@ -296,6 +296,24 @@ function createOrders(box) {
       const need = want || bringMod.WANT_ORE
       const plan = resolved ? bringMod.planItemGive(bot, resolved, need) : null
       const worldFallback = resolved ? bringMod.canBringName(bot, name) : false
+      // 8hpy.1: a self acquire tries the craft rung first, for the whole want
+      // (craftCount); no plan = refusal, the caller tries its next resolver.
+      if (craftFirst) {
+        const cPlan = resolved ? craftanyMod.planCraft(bot, ctx, bringMod.orderCraftNames(resolved.names), need) : { ok: false }
+        if (!cPlan.ok) return `can't craft ${name} now`
+        if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        clearStuck()
+        ctx.craftany = null
+        ctx.bring = {
+          kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
+          items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
+          phase: 'craft', announced: true, craftTarget: cPlan.target, craftCount: need,
+        }
+        ctx.paused = false
+        return `crafting ${need} ${cPlan.target}`
+      }
       const openPackOrder = () => {
         if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
         ctx.unseenTicks = 0
