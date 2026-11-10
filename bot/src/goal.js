@@ -403,43 +403,25 @@ const MENU = {
     // replays the same final while the log count stands (decide's stepFail
     // is the menu-wide twin of this gate). gyw: relocation past the
     // failure point releases — new ground may hold nearer trees.
+    // Owner 2026-11-10 (idkcraft-woodstarve): no bans on chopping — the
+    // house park, castle-first, fetch hold and chest cover vetoes are gone
+    // (gather banks chest logs first itself). What stays: night+hurt, the
+    // failed hold (anti-spin), the built-home gate and the stock cap.
     feasible: (facts, bot, ctx) => {
-      if (ctx && ctx.home && ctx.home.parked) return false
       if (nightHurt(facts)) return false
+      // Kept (anti-spin, atl.4/gyw): a failed gather holds while the log
+      // count and the spot stand; relocation or a new log releases it.
       try {
         if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
       } catch (_) { /* fall through to facts */ }
-      // Post-build top-up for the beds only (jr2.2): the house budget
-      // usually leaves 6+ planks, but a tight exact-wood remainder must not
-      // strand the beds with nobody left to chop. Single-wood count — bed
-      // variants bind one wood, so a mixed 2+2+2 is still short. A partial
-      // log load never reads as covered (craft only converts full 14-log
-      // batches — 3 leftover logs would otherwise strand between this gate
-      // and the batch gate with nothing converting them). Bounded by the
-      // bed need: once both beds are in (or the planks cover them), the bot
-      // never farms again. Precedence preserved (top-up reads before holds).
+      // Post-build bed top-up (jr2.2) and the castle kit chop (qxql.2) keep
+      // their own bounds.
       if (facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one') && (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS) return true
-      // Kit path (qxql.2 core-1 fix): the vmzq.17 castle-chop clause runs on
-      // any home state — an empty kit still bootstraps the pickaxe/table
-      // chain under a castle order. A fetch-held kind still parks (prkh).
-      if (castleChopKind(facts)) {
-        try {
-          if (require('./behaviours/castlefetch').holdFor(bot, ctx, castleChopKind(facts))) return false
-        } catch (_) { /* hold unreadable: chop as before */ }
-        // Stock-first (2ket): remembered chest stock covering the kind's
-        // fetch shortfall rides the fetch leg's own withdraw — no kit chop.
-        // fetchKindCovered fires only when the fetch leg would actually open
-        // (day, pickaxe for dig kinds, ...), so a closed fetch never strands
-        // the kit; a covered need just never chops.
-        try {
-          if (fetchKindCovered(facts, bot, ctx, castleChopKind(facts))) return false
-        } catch (_) { /* cover unreadable: chop as before */ }
-        return true
-      }
-      // Home-budget chop waits while the castle is the project (qxql.2).
-      if (houseChainVetoed(ctx)) return false
-      if (facts.home === 'built') return false
+      if (castleChopKind(facts)) return true
       const total = facts.planks + facts.logs * 4
+      // Kept: built-home gate (forage/deliver/explore routing rests on it);
+      // a wood-starved built bot gets out via explore instead.
+      if (facts.home === 'built') return false
       const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
       // 8cx: the started load finishes only while loose planks alone are
       // short — with the budget covered a sub-batch remainder is no reason
@@ -574,13 +556,14 @@ const MENU = {
     // built-home search (vmzq.3: the parked wander is the failure to
     // stop); the stranded branch vetoes on the house park only (R2).
     feasible: (facts, bot, ctx) => {
-      if (facts.home === 'built') return !castleBlocked(facts) && !taskParked(ctx)
+      if (facts.home === 'built') return !castleBlocked(facts) && (!taskParked(ctx) || (facts.time === 'day' && woodStarved(facts, ctx)))
       if (facts.time !== 'day') return false
       if (facts.player !== 'none' && !houseSiteActive(ctx)) return false
       // The stranded branch is the only release for a no-trees hold (gyw),
       // so an owner castle stop — no timer, never auto-resumes — must not
-      // veto it (R2). Only the timer-bounded house park does.
-      if (ctx && ctx.home && ctx.home.parked) return false
+      // veto it (R2). Only the timer-bounded house park does — unless the
+      // bot is wood-starved (no wood, no table, no remembered tree).
+      if (ctx && ctx.home && ctx.home.parked && !woodStarved(facts, ctx)) return false
       try {
         return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)
       } catch (_) {
@@ -762,6 +745,20 @@ function castleFetchGo(facts, bot, ctx) {
 // explore/forage. Day only: the night steps own the night. Narrow on
 // purpose — a stone-none word with no pickaxe keeps explore/forage as the
 // only wood-finding path (widen to every in-progress word later if asked).
+// Wood-starved (idkcraft-woodstarve): prod v2 bots with no wood, no table
+// and no remembered log rested forever behind a parked house/task.
+function woodStarved(facts, ctx) {
+  if (!(facts.logs === 0 && facts.table === 0 && plankBucket(facts.planks, ctx && ctx.home) !== 'enough')) return false
+  try {
+    const mem = ctx && ctx.resources
+    if (!mem || !(mem.items instanceof Map)) return true
+    for (const it of mem.items.values()) if (it && typeof it.name === 'string' && it.name.endsWith('_log')) return false
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 function castleBlocked(facts) {
   if (!facts || facts.castle !== 'blocked' || facts.time !== 'day') return false
   return registered('castle')
@@ -2138,18 +2135,6 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'bank: nothing above the kit keep'
     }
     case 'gather':
-      if (ctx && ctx.home && ctx.home.parked) return 'gather: house parked'
-      // A fetch-held kind parks the chop too (prkh): name the park, not the load.
-      try {
-        const kind = castleChopKind(facts)
-        if (kind && require('./behaviours/castlefetch').holdFor(bot, ctx, kind)) return `gather: ${kind} fetch held`
-      } catch (_) { /* wording best-effort */ }
-      // Stock-first (2ket): the fetch leg withdraws the remembered stock.
-      try {
-        const kind = castleChopKind(facts)
-        if (kind && fetchKindCovered(facts, bot, ctx, kind)) return `gather: ${kind} stocked in chests`
-      } catch (_) { /* wording best-effort */ }
-      if (houseChainVetoed(ctx) && !castleChopKind(facts)) return 'gather: castle comes first'
       if (nightHurt(facts)) return 'gather: hurt at night, waiting for dawn'
       if (facts.home === 'built') return 'gather: home built'
       return 'gather: load full'

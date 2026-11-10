@@ -154,12 +154,12 @@ describe('2ket gear ladder: remembered stock routes to withdraw', () => {
 
 describe('2ket goal kit chop: remembered stock skips the chop', () => {
   const facts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 1, home: 'site', beds: 'both', castle: 'planks-none', health: 20, food: 20 }
-  it('planks stocked -> no chop leg, fetch withdraws', () => {
+  it('planks stocked -> chop still offered (woodstarve)', () => {
     castleMod.menuFact = () => 'planks-none'
     const bot = makeBot()
     const ctx = stockedCtx({ oak_planks: 64 })
-    assert.equal(goal.MENU.gather.feasible(facts, bot, ctx), false)
-    assert.equal(goal.stepWhy('gather', facts, bot, ctx, ''), 'gather: planks stocked in chests')
+// woodstarve (owner 2026-11-10): no fetch-hold/chest-cover/castle-first/park ban on chopping.
+    assert.equal(goal.MENU.gather.feasible(facts, bot, ctx), true) // gather withdraws chest logs first itself
   })
   it('unstocked -> kit chop as today', () => {
     castleMod.menuFact = () => 'planks-none'
@@ -188,13 +188,13 @@ describe('2ket goal kit chop: remembered stock skips the chop', () => {
     const ctx = stockedCtx({ oak_planks: 64 })
     assert.equal(goal.MENU.gather.feasible({ ...facts, time: 'night' }, bot, ctx), true)
   })
-  it('held kind stays parked as today (no chop even when stocked)', () => {
+  it('held kind no longer bans the chop (woodstarve)', () => {
     castleMod.menuFact = () => 'planks-none'
     const bot = makeBot()
     const now = Date.now()
     const ctx = stockedCtx({ oak_planks: 64 })
     ctx.stepFail = { castlefetch: { status: 'failed:castlefetch-unreachable', at: now, kinds: { planks: { at: now } } } }
-    assert.equal(goal.MENU.gather.feasible(facts, bot, ctx), false)
-    assert.equal(goal.stepWhy('gather', facts, bot, ctx, ''), 'gather: planks fetch held')
+// woodstarve (owner 2026-11-10): no fetch-hold/chest-cover/castle-first/park ban on chopping.
+    assert.equal(goal.MENU.gather.feasible(facts, bot, ctx), true)
   })
 })

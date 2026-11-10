@@ -316,10 +316,10 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.ok(ctx.home.taskPark)
     assert.equal(parkChats(bot).length, 1)
     assert.match(parkChats(bot)[0], /^house parked at 31\/149 after 45 min without progress — .*; say go work to resume$/)
-    // The house chain is out, explore is out, rest stays.
+    // The house chain is out (gather excepted, woodstarve), explore is out, rest stays.
     const day = { time: 'day', health: 20, home: 'site', inside: 'no', logs: 14, planks: 0, maxPlanks: 0, table: 0, tablePlaced: false, door: 0, castle: 'none', known: 'none', player: 'none', beds: 'both' }
     assert.equal(goal.MENU.build.feasible(day, bot, ctx), false)
-    assert.equal(goal.MENU.gather.feasible(day, bot, ctx), false)
+    assert.equal(goal.MENU.gather.feasible(day, bot, ctx), true) // woodstarve: the park no longer bans the chop
     assert.equal(goal.MENU.craft.feasible(day, bot, ctx), false)
     assert.equal(goal.MENU.explore.feasible({ ...day, home: 'built' }, bot, ctx), false)
     assert.equal(goal.MENU.rest.feasible(day, bot, ctx), true)

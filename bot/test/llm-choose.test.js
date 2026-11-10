@@ -441,6 +441,8 @@ describe('chooser shared startability contract', () => {
   it('keeps an empty startable menu on the ordinary fallback/cooldown', async () => {
     const { bot, ctx } = finishedHome()
     ctx.home.parked = true
+    // A remembered tree: not wood-starved, so the park still vetoes explore.
+    ctx.resources = { items: new Map([['t', { name: 'oak_log', x: 5000, y: 64, z: 5000 }]]) }
     const catalog = llmOrders.chooseStepList(bot, ctx)
     assert.ok(!catalog.includes('count=1: yes'), catalog)
     answer = '{"plan":[]}'
