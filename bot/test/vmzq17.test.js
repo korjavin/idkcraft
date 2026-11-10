@@ -138,13 +138,14 @@ describe('vmzq.17 gather chops the castle chain', () => {
   })
 
   it('stays narrow: batch/clear/blocked words and full loads never farm', () => {
+    // woodstarve: a built home now chops below 56 plank-equivalent; a full stock isolates the castle words
     const ctx = { home: builtHome() }
-    assert.equal(F('gather', facts({ castle: 'stone-batch' }), null, ctx), false)
-    assert.equal(F('gather', facts({ castle: 'clear' }), null, ctx), false)
-    assert.equal(F('gather', facts({ castle: 'blocked' }), null, ctx), false)
-    assert.equal(F('gather', facts({ castle: 'torch-none' }), null, ctx), false, 'torch wants coal, not logs')
-    assert.equal(F('gather', facts({ castle: 'stone-none', logs: 14 }), null, ctx), false)
-    assert.equal(F('gather', facts({ castle: 'none' }), null, ctx), false)
+    assert.equal(F('gather', facts({ planks: 56, castle: 'stone-batch' }), null, ctx), false)
+    assert.equal(F('gather', facts({ planks: 56, castle: 'clear' }), null, ctx), false)
+    assert.equal(F('gather', facts({ planks: 56, castle: 'blocked' }), null, ctx), false)
+    assert.equal(F('gather', facts({ planks: 56, castle: 'torch-none' }), null, ctx), false, 'torch wants coal, not logs')
+    assert.equal(F('gather', facts({ planks: 56, castle: 'stone-none', logs: 14 }), null, ctx), false)
+    assert.equal(F('gather', facts({ planks: 56, castle: 'none' }), null, ctx), false)
   })
 })
 

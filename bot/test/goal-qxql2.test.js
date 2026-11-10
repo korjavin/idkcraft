@@ -70,14 +70,14 @@ async function quiet(fn) {
 }
 
 describe('qxql.2 house chain veto while a castle order is active', () => {
-  it('unbuilt home + active castle: the home-budget chop waits, named as castle-first', () => {
+  it('unbuilt home + active castle: the home-budget chop runs (woodstarve)', () => {
     const ctx = { home: unbuiltHome(), castle: castleState() }
     const bot = makeBot()
     // stone-batch never chops (the kit clause is -none/-some only), so a
     // short load reads pure home-budget here — and the castle owns the work.
     const gatherFacts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 1, home: 'site', beds: 'both', castle: 'stone-batch', health: 20, food: 20 }
-    assert.equal(goal.MENU.gather.feasible(gatherFacts, bot, ctx), false, 'no house gather under a castle order')
-    assert.equal(goal.stepWhy('gather', gatherFacts, bot, ctx, ''), 'gather: castle comes first')
+// woodstarve (owner 2026-11-10): no fetch-hold/chest-cover/castle-first/park ban on chopping.
+    assert.equal(goal.MENU.gather.feasible(gatherFacts, bot, ctx), true, 'house gather runs under a castle order')
   })
 
   it('unbuilt home + active castle: the kit path still bootstraps (chop, batch, table)', () => {
@@ -137,7 +137,7 @@ describe('qxql.2 house chain veto while a castle order is active', () => {
 })
 
 describe('qxql.2 castle order + both holds yields no house step', () => {
-  it('stone held on both legs, unbuilt home: decide rests, never gather/craft for the home', async () => {
+  it('stone held on both legs, unbuilt home: decide chops, never crafts for the home', async () => {
     await quiet(async () => {
       castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
       const bot = makeBot({
@@ -157,9 +157,8 @@ describe('qxql.2 castle order + both holds yields no house step', () => {
         castle: { status: 'failed:build-stall', text, pos: null, at: now },
       }
       const d = await goal.decide(bot, ctx)
-      assert.equal(d.action, 'rest', `both holds: no house step, got ${d.action}`)
-      assert.ok(ctx.restWhy.includes('gather: stone fetch held'), `rest names the gather park: ${ctx.restWhy}`)
-      assert.ok(ctx.restWhy.includes('craft: castle comes first'), `rest names the craft veto: ${ctx.restWhy}`)
+      // woodstarve: the stone hold no longer bans the chop; craft stays vetoed.
+      assert.equal(d.action, 'gather', `both holds: the chop runs, got ${d.action}`)
     })
   })
 

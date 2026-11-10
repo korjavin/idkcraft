@@ -127,7 +127,9 @@ describe('MENU feasibility gates', () => {
   it('gather runs while material is missing, not once built', () => {
     assert.equal(F('gather', base), true) // empty hands: gather
     assert.equal(F('gather', { ...base, logs: 5 }), true) // mid-load: keep gathering
-    assert.equal(F('gather', { ...base, home: 'built' }), false) // job done: rest becomes reachable
+    // woodstarve: a built home gathers below NEED_LOGS*4 plank-equivalent, not at it
+    assert.equal(F('gather', { ...base, home: 'built' }), true)
+    assert.equal(F('gather', { ...base, home: 'built', planks: 56 }), false) // stock full: rest becomes reachable
   })
   it('gather finishes the load instead of deadlocking on rest', () => {
     // Review state: 1 log + 46 planks + kit. Stopping here strands a
@@ -219,7 +221,7 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
   })
   const memCtx = (cells, items) => {
     const bot = goalBot({ items: items || [] })
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop keeps gather out
     resources.noteSpots(ctx, cells, 1000)
     return { bot, ctx }
   }
@@ -245,7 +247,7 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
   })
   it('nothing known routes to explore once built', () => {
     const bot = goalBot()
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, gear: { saidNeed: 'want-logs' } } // ipn.3: need announced
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, gear: { saidNeed: 'want-logs' }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop; ipn.3: need announced
     const facts = goalFacts(bot, ctx)
     assert.equal(facts.known, 'none')
     assert.equal(F('explore', facts), true)
@@ -315,7 +317,7 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
   })
   it('decide picks forage when a find is known', async () => {
     const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' } } // ipn.3: need announced
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop; ipn.3: need announced
     resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
     const r = await decide(bot, ctx)
     assert.deepEqual(r, { action: 'forage', sprint: false, source: 'goal-fsm' })
@@ -326,7 +328,7 @@ describe('atl.2 menu: forage/deliver/explore priority', () => {
 describe('bt8s: a known flip never re-picks forage before the bound', () => {
   it('failed forage holds past near/none flips, retries after the bound', async () => {
     const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop
     resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
     assert.equal((await decide(bot, ctx)).action, 'forage')
     ctx.stepStatus = 'failed:unreachable'
@@ -357,7 +359,7 @@ describe('4dse: a known flicker never flips forage<->explore', () => {
   const flickerSetup = () => {
     const bot = goalBot({ items: [] })
     bot.entities = { 1: { id: 1, name: 'cow', position: pos(47.5, 64, 0) } }
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop
     resources.noteSpots(ctx, [
       { x: 5, y: 60, z: 0, name: 'iron_ore' },
       { x: 6, y: 60, z: 0, name: 'lapis_ore' },
@@ -458,7 +460,7 @@ describe('atl.4 livelock guard: a holding failure bars its step', () => {
     const bot = logsBot(14) // craft feasible on a full load
     const ctx = { home: { site: pos(10, 64, 10) }, brain: {}, step: 'craft', stepStatus: 'failed:no-table' }
     const first = await decide(bot, ctx)
-    assert.equal(first.action, 'gather') // craft held at the failure point
+    assert.notEqual(first.action, 'craft') // craft held at the failure point (woodstarve: a full 14-log load no longer re-picks gather)
     // Gather fails away from the point: craft's hold releases by distance.
     bot.entity.position = pos(40, 64, 0)
     ctx.stepStatus = 'failed:away'
@@ -502,7 +504,7 @@ describe('atl.4 exemptions: self-advancing failures never hold', () => {
     // Holding explore would deadlock the spiral after one river: the failed
     // point is visited and the next pick is a new target by construction.
     const bot = goalBot()
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, step: 'explore', stepStatus: 'failed:unreachable', gear: { saidNeed: 'want-logs' } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, step: 'explore', stepStatus: 'failed:unreachable', gear: { saidNeed: 'want-logs' }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'explore')
   })
@@ -1158,7 +1160,8 @@ describe('atl.7 rest explains itself', () => {
     const ctx = { step: '', stepStatus: null, goalText: null, home: { site: { x: 6, y: 64, z: 0 }, built: true }, brain }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'rest')
-    assert.ok(ctx.restWhy.includes('gather: home built'), `why: ${ctx.restWhy}`)
+    // woodstarve: built-home gather is capped by stock, not vetoed
+    assert.ok(ctx.restWhy.includes('gather: stock full'), `why: ${ctx.restWhy}`)
     assert.ok(ctx.restWhy.includes('explore: ready'), `declined ready step marked: ${ctx.restWhy}`)
     assert.ok(bot.chats.some((l) => l.startsWith('resting: ') && l.endsWith('(jev)')), `chats: ${bot.chats}`)
   })

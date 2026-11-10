@@ -254,6 +254,7 @@ describe('ipn.11 driven latches hold while gear stays parked (owner 2026-10-26)'
         chest: { x: site.x + 1, y: site.y, z: site.z + 1 },
       },
       gear: { pantrySeen: 0 },
+      gather: { final: 'failed:no-trees', atLogs: 0 }, // woodstarve: held chop keeps the built-home gather out
       step: 'explore',
       stepStatus: 'done',
     }

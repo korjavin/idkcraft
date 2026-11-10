@@ -262,14 +262,15 @@ describe('prkh per-kind fetch hold', () => {
     assert.equal(goal.failHolds(mk('fence'), 'castlefetch', text, makeBot()), true, 'fence hold still holds a fence word')
   })
 
-  it('gather never chops for a fetch-held word', () => {
+  it('a fetch-held word no longer bans the chop (woodstarve)', () => {
     const facts = { home: 'built', castle: 'stone-none', logs: 0, planks: 0, table: 1, door: 1, beds: 'both', time: 'day' }
     const bot = makeBot()
     // qxql.2: this scenario is a built home (the house-chain veto only fires
     // while the home is unbuilt), so the fixture carries the home record.
     const home = { site: { x: 0, y: 64, z: 0 }, built: true }
     const withHome = (ctx) => ({ ...ctx, home })
-    assert.equal(goal.MENU.gather.feasible(facts, bot, withHome(heldCtx('stone'))), false, 'stone held: no chop')
+    // woodstarve (owner 2026-11-10): no fetch-hold/chest-cover/castle-first/park ban on chopping.
+    assert.equal(goal.MENU.gather.feasible(facts, bot, withHome(heldCtx('stone'))), true, 'stone held: chop anyway')
     assert.equal(goal.MENU.gather.feasible(facts, bot, withHome(heldCtx('torch'))), true, 'another kind held: chop as before')
     assert.equal(goal.MENU.gather.feasible(facts, bot, withHome({ castle: castleState() })), true, 'no hold: chop as before')
   })

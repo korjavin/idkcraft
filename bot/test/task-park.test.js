@@ -316,10 +316,11 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.ok(ctx.home.taskPark)
     assert.equal(parkChats(bot).length, 1)
     assert.match(parkChats(bot)[0], /^house parked at 31\/149 after 45 min without progress — .*; say go work to resume$/)
-    // The house chain is out, explore is out, rest stays.
+    // The house chain is out (gather excepted, woodstarve), explore is out, rest stays.
     const day = { time: 'day', health: 20, home: 'site', inside: 'no', logs: 14, planks: 0, maxPlanks: 0, table: 0, tablePlaced: false, door: 0, castle: 'none', known: 'none', player: 'none', beds: 'both' }
     assert.equal(goal.MENU.build.feasible(day, bot, ctx), false)
-    assert.equal(goal.MENU.gather.feasible(day, bot, ctx), false)
+    assert.equal(goal.MENU.gather.feasible(day, bot, ctx), false) // woodstarve core-3: a full 14-log load waits for craft
+    assert.equal(goal.MENU.gather.feasible({ ...day, logs: 0 }, bot, ctx), true) // woodstarve: the park no longer bans the chop
     assert.equal(goal.MENU.craft.feasible(day, bot, ctx), false)
     assert.equal(goal.MENU.explore.feasible({ ...day, home: 'built' }, bot, ctx), false)
     assert.equal(goal.MENU.rest.feasible(day, bot, ctx), true)
@@ -382,7 +383,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     const facts = goal.goalFacts(bot, ctx)
     assert.equal(facts.castle, 'parked')
     assert.equal(facts.known, 'near')
-    assert.equal(goal.MENU.explore.feasible({ ...facts, home: 'built' }, bot, ctx), false, 'explore vetoed while parked')
+    assert.equal(goal.MENU.explore.feasible({ ...facts, home: 'built', logs: 1 }, bot, ctx), false, 'explore vetoed while parked') // woodstarve: a log on hand = not wood-starved, so the park veto is what is tested
     assert.equal(goal.MENU.forage.feasible(facts, bot, ctx), true, 'near forage is side work')
     assert.equal(goal.MENU.castle.feasible(facts, bot, ctx), false, 'parked word stalls the leg')
     assert.equal(goal.MENU.castlefetch.feasible(facts, bot, ctx), false, 'parked word stalls the fetch')
@@ -486,9 +487,13 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(goal.MENU.explore.feasible(daySite, bot, ownerParked), true, 'owner stop keeps the release')
     // The timer-bounded house park vetoes it (auto-resume retries).
     const houseParked = { home: { site: pos(10, 64, 10), parked: true, taskPark: { at: 1000000000000, auto: true, diag: 'x' } }, gather: { ...stranded } }
-    assert.equal(goal.MENU.explore.feasible(daySite, bot, houseParked), false, 'house park vetoes briefly')
+    assert.equal(goal.MENU.explore.feasible({ ...daySite, planks: 20 }, bot, houseParked), false, 'house park vetoes briefly')
+    // woodstarve: no logs, under a kit's planks -> the starved release passes the house park.
+    assert.equal(goal.MENU.explore.feasible(daySite, bot, houseParked), true, 'wood-starved passes the house park')
     // And the built-home search stays vetoed on any park.
-    assert.equal(goal.MENU.explore.feasible({ ...daySite, home: 'built' }, bot, ownerParked), false)
+    assert.equal(goal.MENU.explore.feasible({ ...daySite, home: 'built', planks: 20 }, bot, ownerParked), false)
+    // woodstarve: wood-starved after a failed gather, the built search passes the park.
+    assert.equal(goal.MENU.explore.feasible({ ...daySite, home: 'built' }, bot, ownerParked), true)
   })
 
   it('status shows the parked diagnosis', () => {

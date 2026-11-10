@@ -90,7 +90,8 @@ describe('vmzq.49 health gate: the menu picks forage/rest, not castle work', () 
   // (it wants coal, not logs), so forage is the honest next step.
   function facts(over) {
     return {
-      time: 'day', logs: 0, planks: 0, maxPlanks: 0, table: 1, door: 1,
+      // woodstarve: a full wood stock (56 plank-equivalent) keeps the built-home gather out
+      time: 'day', logs: 0, planks: 56, maxPlanks: 0, table: 1, door: 1,
       sword: 1, pickaxe: 1, pickWord: 'stone', cobble: 0, sticks: 0, coal: 0, charcoal: 0,
       torches: 0, scaffold: 32, home: 'built', unlit: 0, tablePlaced: false, inside: 'no',
       health: 5, food: 10, known: 'near', haul: 'none', player: 'none', chest: 'yes',
@@ -137,6 +138,7 @@ describe('vmzq.49 health gate: the menu picks forage/rest, not castle work', () 
         castle: castleState(),
         castleWord: { kind: 'torch', left: 3 },
         gear: { saidNeed: 'want-logs' }, // latch the ladder out (goal.test.js memCtx precedent)
+        gather: { final: 'failed:no-trees', atLogs: 0 }, // woodstarve: held chop keeps the built-home gather out
       }
       resources.noteSpots(c, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
       const f = goal.goalFacts(bot, c)

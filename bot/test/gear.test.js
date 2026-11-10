@@ -695,7 +695,7 @@ describe('gear round-2: collision, async legs, latch', () => {
   it('async furnace no-fuel yields with an announce', async () => {
     const goal = require('../src/goal')
     const bot = mockBot({ items: [{ name: 'stick', count: 2 }, { name: 'raw_iron', count: 3 }] })
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, step: 'gear', stepStatus: 'failed:no-fuel', brain: {}, furnace: { settled: true, result: 'failed:no-fuel' } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, step: 'gear', stepStatus: 'failed:no-fuel', brain: {}, furnace: { settled: true, result: 'failed:no-fuel' }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop keeps the built-home gather out
     const r = await goal.decide(bot, ctx)
     assert.equal(ctx.gear.saidNeed, 'want-coal')
     assert.ok(bot.lines.some((l) => l.includes('need coal or planks')))
@@ -705,7 +705,7 @@ describe('gear round-2: collision, async legs, latch', () => {
   it('async furnace stall fails under a gear name and holds', async () => {
     const goal = require('../src/goal')
     const bot = mockBot()
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, step: 'gear', stepStatus: 'failed:smelt-stalled', brain: {}, furnace: { settled: true, result: 'failed:smelt-stalled' } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, step: 'gear', stepStatus: 'failed:smelt-stalled', brain: {}, furnace: { settled: true, result: 'failed:smelt-stalled' }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop keeps the built-home gather out
     const r = await goal.decide(bot, ctx)
     assert.equal(r.action, 'explore')
     assert.ok(ctx.stepFail && ctx.stepFail.gear, 'hold recorded')
