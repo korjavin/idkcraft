@@ -419,6 +419,9 @@ const MENU = {
       // their own bounds.
       if (facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one') && (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS) return true
       if (castleChopKind(facts)) return true
+      // A full load waits for craft (a parked house never crafts it): no
+      // instant-done re-picks that chat 'got 14 logs' all park long.
+      if ((facts.logs || 0) >= NEED_LOGS) return false
       const total = facts.planks + facts.logs * 4
       // Built home: a modest stock (NEED_LOGS logs' worth) caps the chop,
       // counting the remembered home-chest wood too, or stockpile's bank
@@ -558,14 +561,15 @@ const MENU = {
     // built-home search (vmzq.3: the parked wander is the failure to
     // stop); the stranded branch vetoes on the house park only (R2).
     feasible: (facts, bot, ctx) => {
-      if (facts.home === 'built') return !castleBlocked(facts) && (!taskParked(ctx) || (facts.time === 'day' && woodStarved(facts, ctx)))
+      // Wood-starved and gather already failed here: explore past a park.
+      if (facts.home === 'built') return !castleBlocked(facts) && (!taskParked(ctx) || (facts.time === 'day' && woodStarved(facts, ctx) && gatherOut(ctx, facts, bot)))
       if (facts.time !== 'day') return false
       if (facts.player !== 'none' && !houseSiteActive(ctx)) return false
       // The stranded branch is the only release for a no-trees hold (gyw),
       // so an owner castle stop — no timer, never auto-resumes — must not
       // veto it (R2). Only the timer-bounded house park does — unless the
       // bot is wood-starved (no logs, planks short; a table alone makes no pickaxe).
-      if (ctx && ctx.home && ctx.home.parked && !woodStarved(facts, ctx)) return false
+      if (ctx && ctx.home && ctx.home.parked && !woodStarved(facts, ctx)) return false // still needs the failed gather below
       try {
         return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)
       } catch (_) {
@@ -751,11 +755,15 @@ function castleFetchGo(facts, bot, ctx) {
 // without wood crafts nothing). No
 // tree-memory check: a stale/far remembered log must not veto explore; gather
 // ranks first and explore only runs once gather is out (held after failing).
-// Plank-equivalent wood in the last-read home chest snapshot (0 if unknown).
+// Plank-equivalent wood in the last-read home chest snapshot (0 if unknown
+// or older than CHEST_WOOD_FRESH_MS: a stale-high read must not stop the chop).
+const CHEST_WOOD_FRESH_MS = 30 * 60 * 1000
 function homeChestWood(ctx) {
   let n = 0
   try {
     if (!ctx || !ctx.home || !ctx.home.chest) return 0
+    const last = ctx.chestLast && ctx.chestLast.home
+    if (!last || !(Date.now() - last.at < CHEST_WOOD_FRESH_MS)) return 0 // stale: count nothing, chop
     const c = require('./cheststock').slotContents(ctx, 'home')
     for (const [name, v] of Object.entries(c)) {
       const k = typeof v === 'number' ? v : 0
@@ -766,8 +774,14 @@ function homeChestWood(ctx) {
   return n
 }
 
-function woodStarved(facts, ctx) {
-  return facts.logs === 0 && plankBucket(facts.planks, ctx && ctx.home) !== 'enough'
+// WOOD_KIT: table 4 + pickaxe 3 + sticks 2 planks — below it no kit is craftable.
+const WOOD_KIT = 9
+function woodStarved(facts) {
+  return facts.logs === 0 && (facts.planks || 0) < WOOD_KIT
+}
+
+function gatherOut(ctx, facts, bot) {
+  try { return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot) } catch (_) { return false }
 }
 
 function castleBlocked(facts) {

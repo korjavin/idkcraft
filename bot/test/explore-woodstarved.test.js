@@ -45,10 +45,24 @@ describe('woodstarve: gather has no park/home bans, only the cap', () => {
   })
   it('banked wood in the home chest counts toward the cap (no bank/gather loop)', () => {
     const chest = { x: 1, y: 64, z: 1 }
-    const banked = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 40, oak_log: 4 }, at: 1 } } }
+    const banked = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 40, oak_log: 4 }, at: Date.now() } } }
     assert.equal(g(starved({ home: 'built', planks: 4 }), banked), false, '4 packed + 56 banked = cap')
-    const light = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 8 }, at: 1 } } }
+    const light = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 8 }, at: Date.now() } } }
     assert.equal(g(starved({ home: 'built', planks: 4 }), light), true, 'below the cap still chops')
+  })
+  it('core-3: parked house with a full 14-log load -> gather not re-picked', () => {
+    assert.equal(g(starved({ logs: NEED_LOGS }), { home: { site, built: false, parked: true } }), false)
+  })
+  it('core-1: a stale home-chest snapshot counts nothing (chop resumes)', () => {
+    const chest = { x: 1, y: 64, z: 1 }
+    const stale = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 64 }, at: Date.now() - 31 * 60 * 1000 } } }
+    assert.equal(g(starved({ home: 'built', planks: 4 }), stale), true)
+  })
+  it('core-1: built, wood banked, empty pack -> gather not chosen, no chop loop', async () => {
+    const chest = { x: 1, y: 64, z: 1 }
+    const ctx = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 60 }, at: Date.now() } } }
+    assert.equal(g(starved({ home: 'built', table: 1 }), ctx), false)
+    assert.notEqual(await pick(starved({ home: 'built', table: 1 }), ctx), 'gather')
   })
   it('night + hurt -> no chop', () => {
     assert.equal(g(starved({ time: 'night', health: 3 }), { home: { site, built: false } }), false)
@@ -67,6 +81,13 @@ describe('woodstarve: explore once gather is out', () => {
     assert.equal(await pick(starved({ table: 1 }), site1), 'explore')
     const built = { home: { site, built: true }, castle: { parked: true }, gather: failed }
     assert.equal(await pick(starved({ table: 1, home: 'built' }), built), 'explore')
+  })
+  it('core-2: parked built bot with planks 9..55 is not starved -> no explore; starved without a failed gather -> no explore', async () => {
+    const parked = { home: { site, built: true }, castle: { parked: true }, gather: failed }
+    assert.equal(e(starved({ home: 'built', planks: 60 }), parked), false)
+    assert.equal(e(starved({ home: 'built', planks: 20 }), parked), false)
+    assert.equal(e(starved({ home: 'built' }), { home: { site, built: true }, castle: { parked: true } }), false)
+    assert.equal(e(starved({ home: 'built' }), parked), true)
   })
   it('a remembered (stale/far) log does not veto explore', async () => {
     const items = new Map([['a', { name: 'oak_log', x: 900, y: 64, z: 900 }]])

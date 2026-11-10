@@ -460,7 +460,7 @@ describe('atl.4 livelock guard: a holding failure bars its step', () => {
     const bot = logsBot(14) // craft feasible on a full load
     const ctx = { home: { site: pos(10, 64, 10) }, brain: {}, step: 'craft', stepStatus: 'failed:no-table' }
     const first = await decide(bot, ctx)
-    assert.equal(first.action, 'gather') // craft held at the failure point
+    assert.notEqual(first.action, 'craft') // craft held at the failure point (woodstarve: a full 14-log load no longer re-picks gather)
     // Gather fails away from the point: craft's hold releases by distance.
     bot.entity.position = pos(40, 64, 0)
     ctx.stepStatus = 'failed:away'
