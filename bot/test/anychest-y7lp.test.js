@@ -180,4 +180,19 @@ describe('built home draw cycle is bounded (y7lp review 02)', () => {
     assert.equal(b.opens, 1)
     assert.equal(logs(), 3)
   })
+
+  it('(d) castle open: a full draw of a small want leaves the chest drawable (review 02 core-1)', async () => {
+    const items = [{ name: 'oak_log', count: 12 }]
+    const b = bot(items)
+    b.openChest = async () => {
+      b.opens++
+      const stacks = [{ name: 'oak_log', count: 30, type: 'oak_log', metadata: null }]
+      return { containerItems: () => stacks, withdraw: async (t, m, n) => { items.push({ name: t, count: n }) }, close() {} }
+    }
+    const ctx = { home: home(), castle: { phase: 'walls' }, chests: remembered() }
+    gather.chestLogsTick(b, ctx, {}, 12, b.entity.position)
+    await new Promise((r) => setTimeout(r, 5))
+    assert.equal(b.opens, 1)
+    assert.ok(!(ctx.chestLogsDry && ctx.chestLogsDry['2,64,0']))
+  })
 })

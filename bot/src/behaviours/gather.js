@@ -465,7 +465,9 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
     g.chestTried = true
   }
   let want = NEED_LOGS - logs
-  try { if (ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx)) want = Math.min(want, KIT_LOGS) } catch (_) { want = Math.min(want, KIT_LOGS) }
+  let capped = false
+  try { capped = !!(ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx)) } catch (_) { capped = true }
+  if (capped) want = Math.min(want, KIT_LOGS)
   let busy = false
   try {
     busy = require('./beds').chestTick(bot, ctx, g, `gather-chest:${pick.k}`, async () => {
@@ -476,7 +478,7 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
       } catch (_) { got = 0 }
       // a built-home kit draw also dries the chest: stockpile may bank part of
       // the kit (depositPlan keeps 1 gear log), so no re-draw inside CHEST_DRY_MS
-      if (got < want || want <= KIT_LOGS && ctx.home && ctx.home.built) markDry()
+      if (got < want || capped) markDry()
       else g.chestLogs = null
       try { console.log(`gather: ${got} logs from the chest at ${pick.k}`) } catch (_) { /* log best-effort */ }
     }, pick.c)
