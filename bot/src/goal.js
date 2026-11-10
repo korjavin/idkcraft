@@ -871,7 +871,7 @@ function fetchKindCovered(facts, bot, ctx, kind) {
     if (!d || d.kind !== kind || !(d.short > 0)) return false
     const lists = typeof cf.chestNames === 'function' ? cf.chestNames(bot, kind) : null
     if (!Array.isArray(lists) || lists.length === 0 || !Array.isArray(lists[0]) || lists[0].length === 0) return false
-    return require('./cheststock').fetchStockOf(ctx, lists[0]) >= d.short
+    return require('./cheststock').fetchStockOf(ctx, lists[0], bot, kind) >= d.short
   } catch (_) {
     return false
   }
