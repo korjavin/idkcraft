@@ -394,6 +394,58 @@ function shouldChoose(pick, ctx, facts, now = Date.now()) {
   } catch (_) { return false }
 }
 
+// 8hpy.2 JEV-first chooser: a deterministic candidate list (feasible work
+// steps + needs read from facts), ranked by JEV; the LLM only when JEV has no
+// confident pick or the list is empty, and at most once per stall episode.
+const CHOOSE_JEV_MIN_CONF = 0.5 // = task.TASK_PLAN_MIN_CONF (task requires this module)
+const CASTLE_NEED_ITEM = { torch: 'torch', stairs: 'cobblestone_stairs', frame: 'oak_log', planks: 'oak_planks', stone: 'cobblestone', door: 'oak_door', fence: 'oak_fence', chest: 'chest' }
+function chooseCandidates(bot, ctx, facts) {
+  const out = []
+  const needs = new Map()
+  const addNeed = (item, n) => {
+    const count = Math.max(1, Math.min(n | 0, 16, WANT_MAX))
+    if (!item || needs.has(item) || heldFor(bot, item, true) >= count) return
+    needs.set(item, count)
+    out.push({ id: `need_${item}`, step: 'need', item, count, what: `get ${count} ${item} into the inventory, then resume work` })
+  }
+  try {
+    const castle = require('./behaviours/castle')
+    const cw = ctx && ctx.castleWord
+    if (castleActive(ctx, facts) && cw && CASTLE_NEED_ITEM[cw.kind] && castle.usable(bot, cw.kind, ctx) <= 0) addNeed(CASTLE_NEED_ITEM[cw.kind], cw.left)
+    if (castleActive(ctx, facts) && castle.siteLoaded(bot, ctx.castle) === true) {
+      for (const [k, v] of Object.entries(castle.progressByKind(bot, ctx.castle) || {})) {
+        const left = (v.total | 0) - (v.done | 0)
+        if (left > 0 && CASTLE_NEED_ITEM[k] && castle.usable(bot, k, ctx) <= 0) addNeed(CASTLE_NEED_ITEM[k], left)
+      }
+    }
+  } catch (_) { /* castle needs best-effort */ }
+  if (facts && typeof facts.health === 'number' && facts.health < 10) addNeed('cooked_beef', 3)
+  for (const id of workSteps()) {
+    if (candidateFeasible(bot, ctx, { step: id, count: 1 }, facts)) out.push({ id, step: id, count: 1, what: STEP_EFFECT_TEXT[id] || goal.STEP_CRITERIA[id] || id })
+  }
+  return out
+}
+
+// Stall episode: lasts until the castle/house progress or the regime changes.
+function chooseEpisode(ctx, facts, regime) {
+  const p = ctx && ctx.castle && ctx.castle.progress
+  return `${regime}|${p ? p.done : '-'}|${facts ? facts.home : '-'}`
+}
+
+async function jevChoose(bot, ctx, regime, cands, fetchFn) {
+  const key = process.env.TYPESAFE_API_KEY
+  if (!key || !cands.length) return null
+  const criteria = {}
+  for (const c of cands) criteria[c.id] = c.what
+  const ans = await brain.planner(key, fetchFn).plan({
+    state: { task: `choose work: ${regime}`, situation: situationText(bot, ctx) },
+    instructions: 'Pick the most useful next work for this Minecraft companion bot. Prefer what the castle is missing; get a missing material or food first.',
+    criteria,
+  })
+  if (!ans || (typeof ans.confidence === 'number' && ans.confidence < CHOOSE_JEV_MIN_CONF)) return null
+  return cands.find((c) => c.id === ans.step) || null
+}
+
 // Chat entry: ask for a plan, never blocking the chat handler. One ask in
 // flight (ctx.llmAsk); a running plan (ctx.llmOrder) is replaced only by a
 // valid new plan — chatter answered {"plan":[]} leaves it alone.
@@ -417,6 +469,33 @@ function ask(bot, ctx, req, fetchFn) {
     if (isChoose) {
       const regime = (req.choose && req.choose.regime) || 'no-order'
       const trigger = (req.choose && req.choose.trigger) || '?'
+      let facts0 = null
+      let cands = []
+      try { facts0 = goal.goalFacts(bot, ctx); cands = chooseCandidates(bot, ctx, facts0) } catch (_) { cands = [] }
+      let jp = null
+      // No JEV key: no await, the LLM ask starts in the same turn as before.
+      if (process.env.TYPESAFE_API_KEY) try { jp = await jevChoose(bot, ctx, regime, cands, fetchFn) } catch (err) { console.log(`choose jev error="${String(err && err.message ? err.message : err).slice(0, 60).replace(/"/g, "'")}"`) }
+      if (ctx.llmAsk !== a) return
+      const sayC = rosterOnline(bot) ? say : () => {}
+      if (jp) {
+        ctx.llmAsk = null
+        console.log(`choose tier=jev pick=${jp.id} candidates=${cands.length}`)
+        const base = { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false, choose: true }
+        if (jp.step === 'need') {
+          const g = { item: jp.item, remaining: jp.count, self: true }
+          installPlan(bot, ctx, { ...base, bringGoal: g }, [{ step: 'acquire', item: g.item, count: g.remaining }], sayC)
+        } else installPlan(bot, ctx, base, [{ step: jp.step, count: 1 }], sayC)
+        return
+      }
+      const ep = chooseEpisode(ctx, facts0, regime)
+      if (ctx.llmChooseEpisode === ep) {
+        ctx.llmAsk = null
+        const cur = typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0 ? ctx.llmChooseWait : chooseMinMs()
+        ctx.llmChooseWait = Math.min(cur * 2, CHOOSE_WAIT_MAX_MS)
+        console.log(`choose tier=none pick=- candidates=${cands.length}`)
+        return
+      }
+      ctx.llmChooseEpisode = ep
       let r
       try {
         r = await planChoose(bot, ctx, regime, fetchFn)
@@ -464,6 +543,7 @@ function ask(bot, ctx, req, fetchFn) {
       // bv9x: the error reason used to die here (plan=- need="" why=""), so a
       // prod sweep could not tell a bad key from a dead route. Always log it.
       console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${need}" why="${why}" situation="${sit}" tokens=${r.tokens || '0/0'} ms=${ms} err="${(r.error || '').replace(/"/g, "'")}"`)
+      console.log(`choose tier=llm pick=${plan} candidates=${cands.length}`)
       if (!r.steps) return // fallback: the FSM pick stands, log only
       const sayChoose = rosterOnline(bot) ? say : () => {}
       if (nd) {
@@ -1247,4 +1327,4 @@ function statusLine(ctx) {
   return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
 }
 
-module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, validateBringPlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH, RECIPE_MAX_DEPTH, RECIPE_MAX_STEPS, RECIPE_TIMEOUT_MS, RECIPE_VERBS, checkRecipeShape, requestRecipe, planRecipe }
+module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, validateBringPlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH, RECIPE_MAX_DEPTH, RECIPE_MAX_STEPS, RECIPE_TIMEOUT_MS, RECIPE_VERBS, checkRecipeShape, requestRecipe, planRecipe, chooseCandidates, chooseEpisode }

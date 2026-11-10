@@ -275,6 +275,7 @@ describe('chooser shared startability contract', () => {
     const { bot, ctx } = finishedHome()
     answer = '{"plan":[{"step":"beds"}]}'
     for (const wait of [600000, 1200000, 1800000, 1800000]) {
+      ctx.llmChooseEpisode = null // 8hpy.2: a new stall episode each round
       await choose(bot, ctx)
       assert.equal(ctx.llmChooseWait, wait)
       assert.equal(llmOrders.shouldChoose('idle', ctx, goal.goalFacts(bot, ctx), ctx.llmChooseAt + wait - 1), false)
@@ -666,5 +667,98 @@ describe('chooser need step', () => {
     assert.equal(ctx.llmOrder, null)
     assert.equal(fake.calls, 1)
     assert.equal(ctx.castle.parked, false)
+  })
+})
+
+// 8hpy.2: JEV ranks a deterministic candidate list first; the LLM only when
+// JEV has no confident pick or nothing is listed, once per stall episode.
+describe('chooser JEV-first tier', () => {
+  const { JEV_ENDPOINT } = require('../src/brain')
+  let jevAns
+  let jevCalls
+  let llmCalls
+  let savedJev
+  beforeEach(() => {
+    savedJev = process.env.TYPESAFE_API_KEY
+    process.env.TYPESAFE_API_KEY = 'test-jev'
+    jevCalls = []
+    llmCalls = 0
+    jevAns = null
+    const llmFetch = globalThis.fetch
+    globalThis.fetch = async (url, init) => {
+      if (url === JEV_ENDPOINT) {
+        const body = JSON.parse(init.body)
+        jevCalls.push(body)
+        const keys = Object.keys(body.questions.action.criteria)
+        const a = jevAns ? jevAns(keys) : { choice: keys[0], confidence: 0.9 }
+        return { ok: true, json: async () => ({ answers: { action: a } }) }
+      }
+      llmCalls++
+      return llmFetch(url, init)
+    }
+  })
+  afterEach(() => {
+    if (savedJev === undefined) delete process.env.TYPESAFE_API_KEY
+    else process.env.TYPESAFE_API_KEY = savedJev
+  })
+  // Castle stalled on torches with none held: a need_torch candidate.
+  function torchCastle() {
+    const w = ctxWith(true)
+    w.ctx.castle = { site: pos(10, 64, 10), progress: { done: 2041, total: 2048 } }
+    w.ctx.castleWord = { kind: 'torch', left: 7 }
+    return w
+  }
+  const ask = (bot, ctx) => llmOrders.ask(bot, ctx, { text: 'choose work: castle-stalled', by: 'self', explicit: false, choose: { regime: 'castle-stalled', trigger: 'idle' } })
+
+  it('lists castle and food needs from facts', () => {
+    const { bot, ctx } = torchCastle()
+    bot.health = 4
+    const c = llmOrders.chooseCandidates(bot, ctx, goal.goalFacts(bot, ctx))
+    assert.ok(c.some((x) => x.id === 'need_torch' && x.count === 7), JSON.stringify(c))
+    assert.ok(c.some((x) => x.id === 'need_cooked_beef'), JSON.stringify(c))
+  })
+
+  it('JEV picks a need candidate: acquire installed, 0 LLM fetches', async () => {
+    const { bot, ctx } = torchCastle()
+    jevAns = () => ({ choice: 'need_torch', confidence: 0.8 })
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 0)
+    assert.ok(ctx.llmOrder && ctx.llmOrder.bringGoal && ctx.llmOrder.bringGoal.item === 'torch', JSON.stringify(logs))
+    assert.ok(logs.some((l) => /^choose tier=jev pick=need_torch candidates=\d+/.test(l)), JSON.stringify(logs))
+  })
+
+  it('JEV unsure: exactly 1 LLM call; a second stall in the same episode: 0 more', async () => {
+    const { bot, ctx } = torchCastle()
+    ctx.castleWord = { kind: 'stairs', left: 4 } // two candidates: JEV is really asked
+    bot.health = 4
+    jevAns = (keys) => ({ choice: keys[0], confidence: 0.3 })
+    ask(bot, ctx)
+    await flush()
+    assert.equal(jevCalls.length, 1)
+    assert.equal(llmCalls, 1)
+    assert.ok(logs.some((l) => l.startsWith('choose tier=llm')), JSON.stringify(logs))
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 1, 'same episode: no second LLM call')
+    assert.ok(logs.some((l) => l.startsWith('choose tier=none')), JSON.stringify(logs))
+    ctx.castle.progress = { done: 2042, total: 2048 } // progress = new episode
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 2)
+  })
+
+  it('no candidates: no JEV call, LLM once', async () => {
+    const { bot, ctx } = ctxWith(true)
+    const saved = llmOrders.workSteps().map((id) => [id, goal.MENU[id].feasible])
+    for (const [id] of saved) goal.MENU[id].feasible = () => false
+    try {
+      assert.deepEqual(llmOrders.chooseCandidates(bot, ctx, goal.goalFacts(bot, ctx)), [])
+      ask(bot, ctx)
+      await flush()
+    } finally { for (const [id, f] of saved) goal.MENU[id].feasible = f }
+    assert.equal(jevCalls.length, 0)
+    assert.equal(llmCalls, 1)
+    assert.ok(logs.some((l) => l.startsWith('choose tier=llm') && l.includes('candidates=0')), JSON.stringify(logs))
   })
 })
