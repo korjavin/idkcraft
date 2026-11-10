@@ -520,3 +520,66 @@ describe('chooser shared startability contract', () => {
     assert.ok(!ctx.llmOrder, 'banned registered skill is never admitted')
   })
 })
+
+// idkcraft-a5xy: the chooser pushes a need onto the bring goal stack for
+// the bot itself; the solved need un-parks a watchdog-parked castle.
+describe('chooser need step', () => {
+  function fakeTicker(ctx) {
+    return { saved: 0, setBring({ name, want, by }) { ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() { this.saved++; return require('../src/task').clearTaskParks(ctx) } }
+  }
+  const needAsk = (bot, ctx, ticker) => llmOrders.ask(bot, ctx, { text: 'choose work: castle-stalled', by: 'self', ticker, explicit: false, choose: { regime: 'castle-stalled', trigger: 'idle' } })
+
+  it('validates need only with opts.need', () => {
+    const plan = { plan: [{ step: 'need', item: 'minecraft:torch', count: 16 }] }
+    assert.match(llmOrders.validatePlan(plan, ['light'], { maxSteps: 3, allowOrders: false }).error, /no step/)
+    const ok = llmOrders.validatePlan(plan, ['light'], { maxSteps: 3, allowOrders: false, need: true })
+    assert.deepEqual(ok.steps.map((s) => [s.step, s.item, s.count]), [['need', 'torch', 16]])
+    assert.match(llmOrders.validatePlan({ plan: [{ step: 'acquire', item: 'torch' }] }, ['light'], { maxSteps: 3, allowOrders: false, need: true }).error, /no step/)
+  })
+
+  it('a need plan installs a self goal stack, its acquire done un-parks the castle', async () => {
+    const { bot, ctx } = ctxWith(true)
+    const items = []
+    bot.inventory.items = () => items
+    ctx.castle = { site: pos(10, 64, 10), parked: true, taskPark: { at: 1, auto: false, diag: 'torch' } }
+    const ticker = fakeTicker(ctx)
+    answer = '{"plan":[{"step":"need","item":"torch","count":16,"done":"16 torches held"},{"step":"light"}],"need":"craft torches"}'
+    needAsk(bot, ctx, ticker)
+    await flush()
+    const o = ctx.llmOrder
+    assert.ok(o, JSON.stringify(logs))
+    assert.ok(logs.some((l) => l.includes('outcome=ok plan=need torch 16')), JSON.stringify(logs))
+    assert.equal(o.bringGoal.self, true)
+    assert.deepEqual(o.bringGoal.stack, [{ item: 'torch', count: 16 }])
+    assert.deepEqual(o.steps.map((s) => s.step), ['acquire'])
+    llmOrders.tick(bot, ctx, Date.now())
+    assert.equal(ctx.bring.name, 'torch', 'acquire started the bring ladder')
+    assert.equal(ctx.bring.self, true)
+    ctx.bring = null
+    ctx.bringEnd = { at: Date.now() + 1, outcome: 'done' }
+    items.push({ name: 'torch', count: 16 })
+    llmOrders.tick(bot, ctx, Date.now())
+    assert.equal(ctx.llmOrder, null)
+    assert.equal(ctx.castle.parked, false)
+    assert.equal(ctx.castle.taskPark, null)
+    assert.equal(ticker.saved, 1)
+    assert.ok(!bot.lines.some((l) => l.startsWith('tossed')), bot.lines.join('|'))
+  })
+
+  it('an owner-parked castle (no task park) stays parked', async () => {
+    const { bot, ctx } = ctxWith(true)
+    const items = []
+    bot.inventory.items = () => items
+    ctx.castle = { site: pos(10, 64, 10), parked: true }
+    answer = '{"plan":[{"step":"need","item":"bread","count":3}]}'
+    needAsk(bot, ctx, fakeTicker(ctx))
+    await flush()
+    llmOrders.tick(bot, ctx, Date.now())
+    ctx.bring = null
+    ctx.bringEnd = { at: Date.now() + 1, outcome: 'done' }
+    items.push({ name: 'bread', count: 3 })
+    llmOrders.tick(bot, ctx, Date.now())
+    assert.equal(ctx.llmOrder, null)
+    assert.equal(ctx.castle.parked, true)
+  })
+})

@@ -117,6 +117,7 @@ const CHOOSE_SYSTEM = 'You pick useful work for a Minecraft companion bot for th
   'Answer JSON only, no prose: {"plan":[{"step":"<id>","count":<n>,"done":"<what is true when this step is done>"}],"why":"<one-line reason>","need":"<capability the bot lacks>"}. ' +
   'Leave out count when the step takes none. At most ' + CHOOSE_MAX_STEPS + ' steps; use the fewest. ' +
   'Prefer what the castle is missing when a castle order exists. ' +
+  'When a material or food the work needs is missing, answer one step {"step":"need","item":"<registry id>","count":<n>}: the bot gets it (craft, smelt, gather, hunt, prerequisites first) and then resumes its work. ' +
   'Do not strip the area bare — gather only what a named need consumes. ' +
   'Answer {"plan":[],"need":"<capability the bot lacks>"} when no listed step helps.'
 
@@ -156,7 +157,7 @@ function stepList(bringGoal = false) {
 // Chooser whitelist: work steps only (flat stays out per owner default;
 // bring/find/share need a player). Same line shape as stepList.
 function chooseStepList(bot, ctx, facts = bot ? goal.goalFacts(bot, ctx) : null) {
-  const lines = []
+  const lines = ['need(item, count): get a missing material or food into the inventory, then resume work']
   for (const id of workSteps()) {
     const effect = STEP_EFFECT_TEXT[id] || goal.STEP_CRITERIA[id] || id
     const when = goal.STEP_CRITERIA[id] ? ` (runs when: ${goal.STEP_CRITERIA[id].split(':')[0]})` : ''
@@ -204,7 +205,7 @@ function validatePlan(ans, works = workSteps(), opts = {}) {
     // vf8e.25.5: the real model copies the listed `need(item, count)` form
     // into step; accept it only for bring actions and only when it agrees
     // with any item/count fields given beside it.
-    const sig = opts.bring ? /^(need|acquire|bring)\(\s*([a-z0-9_:]+)\s*(?:,\s*(\d+)\s*)?\)$/.exec(id) : null
+    const sig = opts.bring || opts.need ? /^(need|acquire|bring)\(\s*([a-z0-9_:]+)\s*(?:,\s*(\d+)\s*)?\)$/.exec(id) : null
     if (sig) {
       id = sig[1]
       sigItem = nsItem(sig[2])
@@ -212,8 +213,9 @@ function validatePlan(ans, works = workSteps(), opts = {}) {
       if ((r.item != null && nsItem(r.item) !== sigItem) || (r.count != null && sigCount != null && Number(r.count) !== sigCount)) return { error: `conflicting arguments in ${id}(...)`, why, need }
     }
     const knownOrder = orderStep(id)
-    if (['need', 'acquire', 'abandon'].includes(id) && !opts.bring) return { error: `no step "${id}"`, why, need }
-    if (knownOrder && !allowOrders) return { error: `no step "${id.slice(0, 20)}"`, why, need }
+    const needOk = !!opts.need && id === 'need' // a5xy: the chooser may push one need onto a self goal stack
+    if (['need', 'acquire', 'abandon'].includes(id) && !opts.bring && !needOk) return { error: `no step "${id}"`, why, need }
+    if (knownOrder && !allowOrders && !needOk) return { error: `no step "${id.slice(0, 20)}"`, why, need }
     if (!knownOrder && !works.includes(id)) return { error: `no step "${id.slice(0, 20)}"`, why, need }
     const s = { step: id, done: typeof r.done === 'string' ? r.done.replace(/\s+/g, ' ').trim().slice(0, 80) : '' }
     if (knownOrder && knownOrder.args.includes('item')) {
@@ -255,10 +257,10 @@ function validateBringPlan(result, goalState) {
   const current = goalState.stack ? goalState.stack[goalState.stack.length - 1] : goalState
   for (const s of result.steps) {
     if (s.step === 'bring') {
-      if ((goalState.stack && goalState.stack.length > 1) || s.item !== goalState.item || (s.count != null && s.count !== goalState.remaining)) return { error: 'bring target mismatch', tokens: result.tokens }
+      if (goalState.self || (goalState.stack && goalState.stack.length > 1) || s.item !== goalState.item || (s.count != null && s.count !== goalState.remaining)) return { error: 'bring target mismatch', tokens: result.tokens }
       s.count = goalState.remaining
     } else if (s.step === 'acquire') {
-      if (!goalState.stack || goalState.stack.length < 2 || s.item !== current.item || (s.count != null && s.count !== current.count)) return { error: 'acquire target mismatch', tokens: result.tokens }
+      if (!goalState.stack || goalState.stack.length < (goalState.self ? 1 : 2) || s.item !== current.item || (s.count != null && s.count !== current.count)) return { error: 'acquire target mismatch', tokens: result.tokens }
       s.count = current.count
     } else if (s.step === 'need') {
       s.count = s.count || 1
@@ -276,8 +278,8 @@ async function planOrder(bot, ctx, text, fetchFn, feedback) {
   const gs = feedback && (feedback.stack || [{ item: feedback.item, count: feedback.remaining }])
   const cur = gs && gs[gs.length - 1]
   // vf8e.25.6: name the current goal and what each action may target.
-  const curText = cur ? `\nCurrent goal: ${cur.item} ${cur.count} (${gs.length > 1 ? 'prerequisite: acquire it, or need one missing input of it' : 'root: bring it, or need one missing input of it'}; never need ${cur.item} itself).` : ''
-  const goalText = feedback ? `\n\nRequested item: ${feedback.item}; remaining count: ${feedback.remaining}. Goal stack (last is current): ${gs.map((g) => `${g.item} ${g.count}`).join(' > ')}.${curText}\nObserved prior actions: ${feedback.history.join('; ') || 'none'}. A successful toss is not proof of player pickup.` : ''
+  const curText = cur ? `\nCurrent goal: ${cur.item} ${cur.count} (${gs.length > 1 || feedback.self ? 'prerequisite: acquire it, or need one missing input of it' : 'root: bring it, or need one missing input of it'}; never need ${cur.item} itself).` : ''
+  const goalText = feedback ? `\n\nRequested item: ${feedback.item}; remaining count: ${feedback.remaining}. Goal stack (last is current): ${gs.map((g) => `${g.item} ${g.count}`).join(' > ')}.${curText}\nObserved prior actions: ${feedback.history.join('; ') || 'none'}. ${feedback.self ? 'This goal is for the bot itself (no player): acquire the root to keep it, never bring.' : 'A successful toss is not proof of player pickup.'}` : ''
   const user = `Order from the player: "${text}"${goalText}\n\nSituation:\n${situationText(bot, ctx)}\n\nSteps (id(args): what it does):\n${stepList(!!feedback)}`
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(new DOMException('order timeout', 'TimeoutError')), ORDER_TIMEOUT_MS)
@@ -346,7 +348,7 @@ async function planChoose(bot, ctx, regime, fetchFn) {
   const out = (textBlock && textBlock.text) || ''
   let ans = null
   try { ans = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch (_) { ans = null }
-  return { ...validatePlan(ans, workSteps(), { maxSteps: CHOOSE_MAX_STEPS, allowOrders: false }), tokens, situation: sit }
+  return { ...validatePlan(ans, workSteps(), { maxSteps: CHOOSE_MAX_STEPS, allowOrders: false, need: true }), tokens, situation: sit }
 }
 
 // Castle order active for the chooser regime: a castle site exists and the
@@ -424,7 +426,11 @@ function ask(bot, ctx, req, fetchFn) {
       }
       if (ctx.llmAsk !== a) return // cancelled mid-ask (stop / follow me / go work)
       ctx.llmAsk = null
-      if (r.steps) {
+      // a5xy: a need step drives the bring goal stack for the bot itself;
+      // the rest of the plan is dropped (the FSM resumes work afterwards).
+      const nd = r.steps && r.steps.find((s) => s.step === 'need')
+      if (nd) r.steps = [{ ...nd, count: nd.count || 1 }]
+      else if (r.steps) {
         // Expand build before admission: an empty kit starts with gather,
         // even when the raw build capability cannot run yet. The tail is
         // allowed to depend on the first step's work.
@@ -452,6 +458,11 @@ function ask(bot, ctx, req, fetchFn) {
       console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${need}" why="${why}" situation="${sit}" tokens=${r.tokens || '0/0'} ms=${ms} err="${(r.error || '').replace(/"/g, "'")}"`)
       if (!r.steps) return // fallback: the FSM pick stands, log only
       const sayChoose = rosterOnline(bot) ? say : () => {}
+      if (nd) {
+        const g = { item: nd.item, remaining: r.steps[0].count, self: true }
+        installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false, choose: true, bringGoal: g }, [{ step: 'acquire', item: g.item, count: g.remaining, done: nd.done }], sayChoose)
+        return
+      }
       installPlan(bot, ctx, { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false, choose: true }, r.steps, sayChoose)
       return
     }
@@ -753,9 +764,19 @@ function end(bot, ctx, o, result) {
   console.log(`llm order end text="${o.text}" result=${result} step=${Math.min(o.i + 1, n)}/${n} dur=${Math.floor((Date.now() - o.at) / 1000)}s`)
   if (ctx.llmOrder === o) ctx.llmOrder = null
   const why = failReason(result)
-  if (result === 'done' && o.bringGoal) chatStep(bot, ctx, `tossed ${o.bringGoal.item} near ${o.by}; pickup not verified`)
+  if (result === 'done' && o.bringGoal && o.bringGoal.self) unparkTask(ctx, o)
+  if (result === 'done' && o.bringGoal && !o.bringGoal.self) chatStep(bot, ctx, `tossed ${o.bringGoal.item} near ${o.by}; pickup not verified`)
   else if (result === 'done') chatStep(bot, ctx, `done: ${o.text}`.slice(0, 250))
   else if (why !== null) chatStep(bot, ctx, `plan stopped at ${label(o.steps[o.i])}: ${why || 'failed'}`.slice(0, 250))
+}
+
+// a5xy: a self need solved = the stall's blocker is gone; clear the
+// watchdog's task park (never an owner park) so the castle resumes now.
+function unparkTask(ctx, o) {
+  try {
+    if (!o.ticker || typeof o.ticker.clearTaskParks !== 'function' || !o.ticker.clearTaskParks()) return
+    console.log(`llm order unpark after need ${o.bringGoal.item}`)
+  } catch (_) { /* unpark best-effort */ }
 }
 
 // Called only at a step boundary, never once per tick. A cancelled or
@@ -850,7 +871,7 @@ function startStep(bot, ctx, o, s, now) {
     return
   }
   o.waitAt = null
-  if (o.choose && !candidateFeasible(bot, ctx, s)) return end(bot, ctx, o, missWhy(bot, ctx, o, s) || 'failed:not possible now')
+  if (o.choose && !order && !candidateFeasible(bot, ctx, s)) return end(bot, ctx, o, missWhy(bot, ctx, o, s) || 'failed:not possible now')
   o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, led: false }
   if (order) {
     // Accepted = the line created (or resumed) its own executor; an
@@ -925,6 +946,7 @@ function tick(bot, ctx, now = Date.now()) {
       const have = heldItem(bot, s.item)
       if (r === 'done' && have >= s.count) {
         o.bringGoal.stack.pop()
+        if (!o.bringGoal.stack.length) return end(bot, ctx, o, 'done') // a5xy: self root acquired
         return replanBring(bot, ctx, o, `acquired ${have} ${s.item}; resuming parent`)
       }
       return replanBring(bot, ctx, o, `acquire ${s.item} ${r}; inventory has ${have}/${s.count}`)

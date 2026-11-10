@@ -1202,7 +1202,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         try { facts = goal.goalFacts(bot, ctx) } catch (_) { facts = null }
         if (facts && llmOrders.shouldChoose(pick, ctx, facts)) {
           const regime = llmOrders.castleActive(ctx, facts) ? 'castle-stalled' : 'no-order'
-          llmOrders.ask(bot, ctx, { text: `choose work: ${regime}`, by: 'self', ticker: null, feed: null, fallback: null, explicit: false, choose: { regime, trigger: pick } })
+          llmOrders.ask(bot, ctx, { text: `choose work: ${regime}`, by: 'self', ticker: orders, feed: null, fallback: null, explicit: false, choose: { regime, trigger: pick } })
         }
       }
     } catch (_) { /* chooser never breaks the tick */ }
