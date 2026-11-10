@@ -426,7 +426,7 @@ const MENU = {
       // Built home: a modest stock (NEED_LOGS logs' worth) caps the chop,
       // counting the remembered home-chest wood too, or stockpile's bank
       // (it keeps only a few planks packed) would re-arm gather forever.
-      if (facts.home === 'built') return total + homeChestWood(ctx) < NEED_LOGS * 4
+      if (facts.home === 'built') return total + require('./cheststock').homeChestWood(ctx) < NEED_LOGS * 4
       const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
       // 8cx: the started load finishes only while loose planks alone are
       // short — with the budget covered a sub-batch remainder is no reason
@@ -755,26 +755,6 @@ function castleFetchGo(facts, bot, ctx) {
 // without wood crafts nothing). No
 // tree-memory check: a stale/far remembered log must not veto explore; gather
 // ranks first and explore only runs once gather is out (held after failing).
-// Plank-equivalent wood in the last-read home chest snapshot (0 if unknown
-// or older than CHEST_WOOD_FRESH_MS: a stale-high read must not stop the chop;
-// gather re-reads a stale home chest first, so a full chest is never re-chopped).
-const CHEST_WOOD_FRESH_MS = 30 * 60 * 1000
-function homeChestWood(ctx) {
-  let n = 0
-  try {
-    if (!ctx || !ctx.home || !ctx.home.chest) return 0
-    const last = ctx.chestLast && ctx.chestLast.home
-    if (!last || !(Date.now() - last.at < CHEST_WOOD_FRESH_MS)) return 0 // stale: count nothing, chop
-    const c = require('./cheststock').slotContents(ctx, 'home')
-    for (const [name, v] of Object.entries(c)) {
-      const k = typeof v === 'number' ? v : 0
-      if (name.endsWith('_planks')) n += k
-      else if (name.endsWith('_log') || name.endsWith('_stem')) n += k * 4
-    }
-  } catch (_) { return 0 }
-  return n
-}
-
 // WOOD_KIT: table 4 + pickaxe 3 + sticks 2 planks — below it no kit is craftable.
 const WOOD_KIT = 9
 function woodStarved(facts) {

@@ -88,4 +88,20 @@ function homeChestStale(ctx, ms = 30 * 60 * 1000) {
   return !!(last && typeof last.at === 'number' && Date.now() - last.at >= ms)
 }
 
-module.exports = { homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }
+// Plank-equivalent wood in the home-chest read (0 if unknown or older than
+// ms: a stale-high read must not stop the chop; gather re-reads it first).
+function homeChestWood(ctx, ms = 30 * 60 * 1000) {
+  let n = 0
+  try {
+    const last = ctx && ctx.home && ctx.home.chest && ctx.chestLast && ctx.chestLast.home
+    if (!last || !(Date.now() - last.at < ms)) return 0
+    for (const [name, v] of Object.entries(slotContents(ctx, 'home'))) {
+      const k = typeof v === 'number' ? v : 0
+      if (name.endsWith('_planks')) n += k
+      else if (name.endsWith('_log') || name.endsWith('_stem')) n += k * 4
+    }
+  } catch (_) { return 0 }
+  return n
+}
+
+module.exports = { homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }

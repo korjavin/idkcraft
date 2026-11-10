@@ -111,19 +111,44 @@ describe('woodstarve: explore once gather is out', () => {
   })
 })
 
-describe('woodstarve: a stale home-chest read is refreshed before any chop', () => {
+describe('woodstarve: a stale home-chest read is refreshed (read-only) before any chop', () => {
   const gatherMod = require('../src/behaviours/gather')
-  const chest = { x: 1, y: 64, z: 1 }
-  const bp = { x: 0, y: 64, z: 0 }
-  it('stale snapshot: gather goes to the home chest first (re-read), fresh: it does not', () => {
-    const stale = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 64 }, at: Date.now() - 31 * 60 * 1000 } } }
-    const g1 = {}
-    gatherMod.chestLogsTick(bot, stale, g1, 0, bp)
-    assert.ok(g1.chestLogs || (stale.chestLogsDry && stale.chestLogsDry['1,64,1']), 'stale read: chest attempted')
-    const fresh = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 64 }, at: Date.now() } } }
-    const g2 = {}
-    assert.equal(gatherMod.chestLogsTick(bot, fresh, g2, 0, bp), false)
-    assert.equal(g2.chestLogs, undefined)
-    assert.equal(fresh.chestLogsDry, undefined)
+  const Vec3 = require('vec3')
+  const chest = new Vec3(1, 64, 1)
+  function fakeBot(chestItems, log) {
+    return {
+      entity: { position: new Vec3(1, 64, 2) },
+      players: {},
+      inventory: { items: () => [] },
+      pathfinder: { setGoal: () => {} },
+      blockAt: (p) => (p.x === 1 && p.y === 64 && p.z === 1 ? { name: 'chest', position: p } : { name: 'air', position: p }),
+      openChest: async () => ({
+        containerItems: () => chestItems,
+        withdraw: async () => { log.push('withdraw') },
+        close: async () => {},
+      }),
+    }
+  }
+  const tick = () => new Promise((r) => setImmediate(r))
+  async function run(chestItems) {
+    const log = []
+    const b = fakeBot(chestItems, log)
+    const ctx = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 64 }, at: Date.now() - 31 * 60 * 1000 } } }
+    gatherMod(b, ctx, null, {})
+    for (let k = 0; k < 5 && !ctx.stepStatus; k++) { await tick(); gatherMod(b, ctx, null, {}) } // the runner stops at the first step status
+    return { ctx, log }
+  }
+  it('full chest: the home read refreshes, the step ends done before any chop, nothing drawn', async () => {
+    const { ctx, log } = await run([{ name: 'oak_planks', count: 64 }])
+    assert.ok(Date.now() - ctx.chestLast.home.at < 5000, 'home read refreshed')
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(log, [], 'read-only: no withdraw')
+    assert.equal(ctx.gather.pos, null, 'no tree targeted')
+  })
+  it('emptied chest: refreshed read is low, gather goes on to chop (no stale-high trust)', async () => {
+    const { ctx, log } = await run([])
+    assert.ok(Date.now() - ctx.chestLast.home.at < 5000)
+    assert.notEqual(ctx.stepStatus, 'done')
+    assert.deepEqual(log, [])
   })
 })

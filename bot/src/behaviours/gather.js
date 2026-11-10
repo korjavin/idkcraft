@@ -393,15 +393,44 @@ function finalLine(g, final, search) {
 // an open castle (its wood keep, LOG_KEEP, covers a full NEED_LOGS load).
 // ponytail: logs only — banked planks feed beds (beds.js) and the castle
 // chest (castlefetch chestTick); add planks here if a plank-only bank shows.
+// Woodstarve: a built home's chop cap counts the remembered home-chest wood.
+// A stale read is re-opened READ-ONLY (withChest snapshots it, nothing is
+// drawn) once per attempt; when the refreshed stock reaches the cap the step
+// ends before any chop. True while the read is walking/in flight.
+function homeReadTick(bot, ctx, g) {
+  if (g.homeRead) return false
+  const stock = require('../cheststock')
+  try {
+    if (!(ctx.home && ctx.home.built && ctx.home.chest) || require('./packroom').castleWoodOpen(ctx) || (!g.homeReadAt && !stock.homeChestStale(ctx))) return false
+  } catch (_) { return false }
+  if (!g.homeReadAt) g.homeReadAt = Date.now()
+  let busy = false
+  try {
+    busy = require('./beds').chestTick(bot, ctx, g, 'gather-home-read', async () => {
+      await require('./packroom').withChest(bot, ctx, async () => null, ctx.home.chest)
+    }, ctx.home.chest)
+  } catch (_) { busy = false }
+  if (busy && stock.homeChestStale(ctx) && Date.now() - g.homeReadAt < 60000) return true
+  g.homeRead = true // one read per attempt (walked/read, unreachable, or a minute)
+  if (!stock.homeChestStale(ctx) && carriedWood(bot) + stock.homeChestWood(ctx) >= NEED_LOGS * 4) {
+    clearGoal(bot, ctx)
+    stepDone(ctx)
+    return true
+  }
+  return false
+}
+
+function carriedWood(bot) {
+  return countItems(bot, (n) => n.endsWith('_planks')) + 4 * countItems(bot, (n) => n.endsWith('_log') || n.endsWith('_stem'))
+}
+
 const CHEST_DRY_MS = 10 * 60 * 1000
 function chestLogsTick(bot, ctx, g, logs, bp) {
   let pick = g.chestLogs
   if (!pick) {
     if (g.chestTried) return false // one try per attempt, dry window or not
     try {
-      // Built home: no chest draw — unless the home-chest read is stale
-      // (woodstarve): the open refreshes the snapshot the chop cap trusts.
-      if (ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx) && !require('../cheststock').homeChestStale(ctx)) return false
+      if (ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx)) return false
     } catch (_) { return false }
     const dry = ctx.chestLogsDry || {}
     const now = Date.now()
@@ -511,6 +540,7 @@ function gather(bot, ctx, target, state) {
   }
   const bp = bot.entity && bot.entity.position
   if (!bp) return
+  if (!g.pos && homeReadTick(bot, ctx, g)) return
   if (!g.pos && chestLogsTick(bot, ctx, g, logs, bp)) return
   // mnx pit memory: no target within a gave-up spot's radius.
   // g0z.12: laid castle beams (v2 frame cells) are logs the castle owns —
@@ -854,5 +884,6 @@ function gather(bot, ctx, target, state) {
 module.exports = gather
 module.exports.taskFar = taskFar
 module.exports.chestLogsTick = chestLogsTick
+module.exports.homeReadTick = homeReadTick
 module.exports.noteFarWood = noteFarWood
 module.exports.harvestLanding = harvestLanding
