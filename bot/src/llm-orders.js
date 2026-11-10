@@ -912,8 +912,9 @@ function startStep(bot, ctx, o, s, now) {
         for (const r of ACQUIRE_RESOLVERS) {
           if (tried.includes(r)) continue
           tried.push(r)
-          if (r === 'craft' && !craftanyMod().planCraft(bot, ctx, [s.item], s.count).ok) continue
-          reply = o.ticker && o.ticker.setBring(r === 'craft' ? { name: s.item, want: s.count, by: o.by, craftFirst: true } : { name: foodNeed ? 'food' : s.item, want: s.count, by: o.by })
+          const short = Math.max(1, s.count - heldFor(bot, s.item, o.bringGoal.self)) // craft only the missing part
+          if (r === 'craft' && !craftanyMod().planCraft(bot, ctx, [s.item], short).ok) continue
+          reply = o.ticker && o.ticker.setBring(r === 'craft' ? { name: s.item, want: short, by: o.by, craftFirst: true } : { name: foodNeed ? 'food' : s.item, want: s.count, by: o.by })
           if ((ctx.bring && ctx.bring !== before.bring) || (ctx.pendingSearch && ctx.pendingSearch !== before.ps)) break
         }
         if (o.ticker) console.log(`llm order acquire ${s.item} resolver=${tried[tried.length - 1]} tried=${tried.join(',')}`)

@@ -738,6 +738,15 @@ describe('self acquire: deterministic before LLM (idkcraft-8hpy.1)', () => {
     assert.equal(r.ctx.llmOrder, null)
   })
 
+  it('need bread 3 holding 1 bread + 6 wheat: crafts the missing 2, 0 LLM calls', async () => {
+    const bot = mockBot({ playerPos: pos(0, 64, 0), items: [{ name: 'bread', count: 1 }, { name: 'wheat', count: 6 }], cells: { '0,64,0': 'crafting_table' } })
+    const ticker = tickerFor(bot)
+    tableHome(bot._tickerCtx, 0, 64, 0)
+    const r = await acquire(bot, ticker, 'bread', 3)
+    assert.equal(r.held, 3)
+    assert.equal(r.fetches, 0)
+  })
+
   it('torch 8 from coal+sticks: torches held, 0 LLM calls', async () => {
     const bot = mockBot({ playerPos: pos(0, 64, 0), items: [{ name: 'coal', count: 2 }, { name: 'stick', count: 2 }] })
     const r = await acquire(bot, tickerFor(bot), 'torch', 8)
