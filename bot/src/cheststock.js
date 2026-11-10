@@ -71,11 +71,40 @@ function homeStockOf(ctx, names) {
 // Home/site/castle stock (the castlefetch leg's withdraw walks all three,
 // pickChest source order). Site/castle snapshots key on the live adoption,
 // so they read only under an active castle order.
-function fetchStockOf(ctx, names) {
+function fetchStockOf(ctx, names, bot = null, kind = null) {
   try {
     const home = homeStockOf(ctx, names) // adoption-guarded inside
     if (!ctx || !ctx.castle) return home
-    return home + stockInSlots(ctx, ['site', 'castle'], names)
+    return home + stockInSlots(ctx, ['site', 'castle'], names) + rememberedStockOf(ctx, names, bot, kind)
+  } catch (_) {
+    return 0
+  }
+}
+
+// y7lp.3: snapshots of other remembered chests (ctx.chests), the home and
+// site chests excluded (their slots count above). Counts only what
+// castlefetch.pickChest could pick: in its radius of the body, not dry for kind.
+// = stockpile.NEARBY_CHEST_RADIUS and castlefetch.CHEST_DRY_MS (a require
+// would be a cycle; the y7lp3 test pins them equal).
+const REMEMBERED_RADIUS = 32
+const REMEMBERED_DRY_MS = 10 * 60 * 1000
+function rememberedStockOf(ctx, names, bot, kind) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || !kind) return 0 // no anchor: no claim (pickChest needs the body too)
+    const dry = ctx.castleChestDry || {}
+    const want = new Set(typeof names === 'string' ? [names] : names)
+    const key = (c) => c ? `${c.x},${c.y},${c.z}` : null
+    const skip = new Set([key(ctx.home && ctx.home.chest), key(ctx.castle && ctx.castle.siteChest)])
+    let n = 0
+    for (const c of Array.isArray(ctx.chests) ? ctx.chests : []) {
+      if (!c || !c.contents || skip.has(key(c))) continue
+      if (!Number.isFinite(c.at) || Date.now() - c.at >= REMEMBERED_DRY_MS) continue // stale snapshot: no claim
+      if (Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) > REMEMBERED_RADIUS) continue
+      if (Date.now() - (dry[`${kind}@${key(c)}`] ?? -Infinity) < REMEMBERED_DRY_MS) continue
+      for (const [k, v] of Object.entries(c.contents)) if (want.has(k) && typeof v === 'number' && v > 0) n += Math.floor(v)
+    }
+    return n
   } catch (_) {
     return 0
   }
@@ -104,4 +133,4 @@ function homeChestWood(ctx, ms = 30 * 60 * 1000) {
   return n
 }
 
-module.exports = { homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }
+module.exports = { REMEMBERED_RADIUS, REMEMBERED_DRY_MS, homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }
