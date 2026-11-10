@@ -438,7 +438,9 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
     // y7lp: a built home (stockpile banks logs home) draws only while wood-starved
     // (goal.js woodStarved: no logs, < WOOD_KIT planks), only a KIT_LOGS kit, never
     // from the home chest — the kit is spent/kept, so nothing ping-pongs.
-    if (banked && (logs > 0 || countItems(bot, (n) => n.endsWith('_planks')) >= WOOD_KIT)) return false
+    // ...and only while the pack has no pickaxe (the kit need): with tools made, a
+    // starved pack never re-draws, so the opens stay bounded (y7lp review 02).
+    if (banked && (logs > 0 || countItems(bot, (n) => n.endsWith('_planks')) >= WOOD_KIT || countItems(bot, (n) => n.endsWith('_pickaxe')) > 0)) return false
     const dry = ctx.chestLogsDry || {}
     const now = Date.now()
     const h = ctx.home && ctx.home.chest
@@ -472,7 +474,9 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
         const r = await require('./stockpile').withdrawAnyFromChest(bot, ctx, logNames(bot), want, pick.c)
         got = (r && r.got) || 0
       } catch (_) { got = 0 }
-      if (got < want) markDry()
+      // a built-home kit draw also dries the chest: stockpile may bank part of
+      // the kit (depositPlan keeps 1 gear log), so no re-draw inside CHEST_DRY_MS
+      if (got < want || want <= KIT_LOGS && ctx.home && ctx.home.built) markDry()
       else g.chestLogs = null
       try { console.log(`gather: ${got} logs from the chest at ${pick.k}`) } catch (_) { /* log best-effort */ }
     }, pick.c)

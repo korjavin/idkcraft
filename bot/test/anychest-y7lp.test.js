@@ -128,3 +128,56 @@ describe('built home draws a kit from a non-home chest only when starved (y7lp r
     assert.equal(gather.chestLogsTick(bot, ctx, {}, 0, bot.entity.position), false)
   })
 })
+
+describe('built home draw cycle is bounded (y7lp review 02)', () => {
+  const stockpile = require('../src/behaviours/stockpile')
+  const home = () => ({ site: pos(0, 64, 0), built: true, chest: pos(0, 64, 1) })
+  const remembered = () => [{ x: 2, y: 64, z: 0, contents: { oak_log: 30 }, at: 1 }]
+  function bot(items) {
+    const b = makeBot({ '2,64,0': [{ name: 'oak_log', count: 30 }] })
+    b.entity.position = pos(1, 64, 0)
+    b.inventory.items = () => items
+    b.registry.blocksByName = { oak_log: { id: 17 } }
+    b.opens = 0
+    const open = b.openChest
+    b.openChest = async (x) => { b.opens++; return open(x) }
+    return b
+  }
+
+  it('(a) after the kit is crafted (pickaxe in pack, wood-empty) the next attempts never draw', () => {
+    const b = bot([{ name: 'wooden_pickaxe', count: 1 }])
+    const ctx = { home: home(), chests: remembered() }
+    for (let i = 0; i < 5; i++) assert.equal(gather.chestLogsTick(b, ctx, {}, 0, b.entity.position), false)
+    assert.equal(b.opens, 0)
+  })
+
+  it('(b) stockpile banks 2 of a 3-log kit (keeps 1 gear log); the drawn chest stays dry so the wood-empty pack does not re-draw', async () => {
+    const b = bot([{ name: 'oak_log', count: 3 }])
+    assert.deepEqual(stockpile.depositPlan(b, { home: home() }).filter((p) => p.name === 'oak_log'), [{ name: 'oak_log', count: 2 }])
+    const items = []
+    const c = bot(items)
+    const ctx = { home: home(), chests: remembered() }
+    gather.chestLogsTick(c, ctx, {}, 0, c.entity.position)
+    await new Promise((r) => setTimeout(r, 5))
+    assert.equal(c.opens, 1)
+    items.length = 0 // banked + crafted away, still no pickaxe
+    for (let i = 0; i < 5; i++) assert.equal(gather.chestLogsTick(c, ctx, {}, 0, c.entity.position), false)
+    assert.equal(c.opens, 1)
+    assert.ok(ctx.chestLogsDry['2,64,0'] > 0)
+  })
+
+  it('(c) N starved attempts without a pickaxe: one draw until the logs are consumed', async () => {
+    const items = []
+    const b = bot(items)
+    b.openChest = async (blk) => {
+      b.opens++
+      const stacks = [{ name: 'oak_log', count: 30, type: 'oak_log', metadata: null }]
+      return { containerItems: () => stacks, withdraw: async (t, m, n) => { items.push({ name: t, count: n }) }, close() {} }
+    }
+    const ctx = { home: home(), chests: remembered() }
+    const logs = () => items.reduce((a, i) => a + (i.name === 'oak_log' ? i.count : 0), 0)
+    for (let i = 0; i < 10; i++) { gather.chestLogsTick(b, ctx, {}, logs(), b.entity.position); await new Promise((r) => setTimeout(r, 2)) }
+    assert.equal(b.opens, 1)
+    assert.equal(logs(), 3)
+  })
+})
