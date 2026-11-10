@@ -213,7 +213,7 @@ describe('reforest step wiring', () => {
     try {
       const bot = mockBot()
       // gear latched (want announced): the idle menu is reforest/explore/rest.
-      const ctx = { lastGoalKey: '', lastPathStatus: 'none', stepStatus: 'running', home: { site: { x: 0, y: 64, z: 0 }, built: true }, gear: { saidNeed: 'want-logs' } }
+      const ctx = { lastGoalKey: '', lastPathStatus: 'none', stepStatus: 'running', home: { site: { x: 0, y: 64, z: 0 }, built: true }, gear: { saidNeed: 'want-logs' }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop keeps the built-home gather out
       assert.equal((await decide(bot, ctx)).action, 'reforest')
       // The interrupted leg: a stale mid-walk at the old leaf.
       ctx.reforest = { phase: 'walk', pos: { x: 5, y: 64, z: 0 }, stale: true }

@@ -312,7 +312,7 @@ describe('unreachable memory point (reviewer atl.2: strike, never loop)', () => 
   function deepCtx() {
     // Chest adopted: the decide loop isolates forage/explore strike routing,
     // not the atl.14 no-chest stockpile branch (an empty pack has no surplus).
-    const ctx = { lastGoalKey: '', home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: null, step: null, stepStatus: null }
+    const ctx = { lastGoalKey: '', home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: null, step: null, stepStatus: null, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop keeps the built-home gather out
     resources.noteSpots(ctx, [CELL], 1000)
     return ctx
   }

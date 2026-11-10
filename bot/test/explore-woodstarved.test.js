@@ -1,71 +1,78 @@
 'use strict'
 
-// Wood-starved explore (idkcraft-woodstarve): no logs, planks short, no
-// table, no remembered tree -> explore opens by day past a parked house/task.
+// Wood-starved routing (idkcraft-woodstarve, owner 2026-11-10: no bans on
+// chopping). Gather runs below the stock cap whatever the park/home state;
+// once gather is out (held after failing here) explore opens past a park.
 
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { MENU } = require('../src/goal')
+const goal = require('../src/goal')
+const { MENU, NEED_LOGS } = goal
 
 const bot = { entity: { position: { x: 0, y: 64, z: 0 } }, players: {} }
-const feasible = (facts, ctx) => MENU.explore.feasible(facts, bot, ctx)
-const starved = (over) => ({ time: 'day', player: 'none', logs: 0, planks: 0, table: 0, home: 'site', castle: 'none', ...over })
+const starved = (over) => ({ time: 'day', player: 'none', health: 20, logs: 0, planks: 0, maxPlanks: 0, table: 0, door: 1, beds: 'both', home: 'site', castle: 'none', ...over })
 const site = { x: 0, y: 64, z: 0 }
-// gather ran here and failed with no trees (gather is no longer park-vetoed).
+// gather ran here and failed with no trees.
 const failed = { final: 'failed:no-trees', atLogs: 0, failPos: { x: 0, y: 64, z: 0 } }
+const g = (facts, ctx) => MENU.gather.feasible(facts, bot, ctx)
+const e = (facts, ctx) => MENU.explore.feasible(facts, bot, ctx)
+const brain = { source: 'x', ask: async () => { throw new Error('must not ask') } }
+// The real chooser over the real feasibility of the wood-relevant steps.
+async function pick(facts, ctx) {
+  const menu = ['gather', 'explore', 'rest'].filter((n) => MENU[n].feasible(facts, bot, ctx))
+  return (await goal.chooseStep(brain, facts, menu, ctx.home)).step
+}
 
-describe('explore wood-starved', () => {
-  it('(1) home=site, no wood, no tree, house parked, day -> feasible', () => {
-    assert.equal(feasible(starved(), { home: { site, built: false, parked: true }, gather: failed, resources: { items: new Map() } }), true)
+describe('woodstarve: gather has no park/home bans, only the cap', () => {
+  it('(c1) parked house -> gather picked', async () => {
+    const ctx = { home: { site, built: false, parked: true } }
+    assert.equal(g(starved(), ctx), true)
+    assert.equal(await pick(starved(), ctx), 'gather')
   })
-  it('(2) home=built, task parked, wood-starved, day -> feasible', () => {
-    assert.equal(feasible(starved({ home: 'built', planks: 3 }), { home: { site, built: true }, castle: { parked: true } }), true)
+  it('(c2) parked castle task -> gather picked (unbuilt and built)', async () => {
+    assert.equal(await pick(starved(), { home: { site, built: false }, castle: { parked: true } }), 'gather')
+    assert.equal(await pick(starved({ home: 'built' }), { home: { site, built: true }, castle: { parked: true } }), 'gather')
   })
-  it('(3) logs present -> parked still vetoes', () => {
-    assert.equal(feasible(starved({ logs: 0 }), { home: { site, built: false, parked: true }, gather: { ...failed } }), true)
-    assert.equal(feasible(starved({ logs: 2 }), { home: { site, built: false, parked: true }, gather: { ...failed, atLogs: 2 } }), false)
-    assert.equal(feasible(starved({ home: 'built', logs: 2 }), { home: { site, built: true }, castle: { parked: true } }), false)
-  })
-  it('remembered tree -> parked still vetoes', () => {
-    const items = new Map([['a', { name: 'oak_log', x: 10, y: 64, z: 10 }]])
-    assert.equal(feasible(starved(), { home: { site, built: false, parked: true }, gather: failed, resources: { items } }), false)
-  })
-  it('(4) night -> not feasible', () => {
-    assert.equal(feasible(starved({ time: 'night' }), { home: { site, built: false, parked: true } }), false)
-    assert.equal(feasible(starved({ time: 'night', home: 'built' }), { home: { site, built: true }, castle: { parked: true } }), false)
-  })
-  it('(5) player online with no house site -> not feasible', () => {
-    assert.equal(feasible(starved({ player: 'Owner', home: 'none' }), {}), false)
-  })
-})
-
-describe('gather: no chopping bans (owner 2026-11-10)', () => {
-  const goal = require('../src/goal')
-  const g = (facts, ctx) => MENU.gather.feasible(facts, bot, ctx)
-  it('(c1) parked house -> gather feasible', () => {
-    assert.equal(g(starved(), { home: { site, built: false, parked: true } }), true)
-  })
-  it('(c2) parked castle task, unbuilt home -> gather feasible', () => {
-    assert.equal(g(starved(), { home: { site, built: false }, castle: { parked: true } }), true)
-  })
-  it('built home keeps its gate (routing rests on it); explore is the release', () => {
-    assert.equal(g(starved({ home: 'built', beds: 'two', maxPlanks: 0 }), { home: { site, built: true }, castle: { parked: true } }), false)
+  it('built home below the cap -> gather picked', async () => {
+    assert.equal(await pick(starved({ home: 'built', planks: 10 }), { home: { site, built: true } }), 'gather')
   })
   it('(b) refilled above the cap -> gather not offered (no endless chop)', () => {
-    const ctx = { home: { site, built: false, parked: true } }
-    assert.equal(g(starved({ planks: goal.needPlanks(ctx.home) + 10 }), ctx), false)
-    assert.equal(g(starved({ planks: goal.needPlanks(ctx.home) + 10, table: 1, door: 1 }), ctx), false)
+    const built = { home: { site, built: true } }
+    assert.equal(g(starved({ home: 'built', planks: NEED_LOGS * 4 }), built), false)
+    assert.equal(g(starved({ home: 'built', logs: NEED_LOGS }), built), false)
+    const unbuilt = { home: { site, built: false, parked: true } }
+    assert.equal(g(starved({ planks: goal.needPlanks(unbuilt.home) + 10 }), unbuilt), false)
   })
   it('night + hurt -> no chop', () => {
     assert.equal(g(starved({ time: 'night', health: 3 }), { home: { site, built: false } }), false)
   })
-  it('(a) no known tree, gather out (held after failing) -> explore feasible and chosen', async () => {
-    const facts = starved()
-    const ctx = { home: { site, built: false, parked: true }, gather: failed, resources: { items: new Map() } }
-    assert.equal(MENU.gather.feasible(facts, bot, ctx), false) // held after its failure here
-    assert.equal(feasible(facts, ctx), true)
-    const brain = { source: 'x', ask: async () => { throw new Error('must not ask') } }
-    const choice = await goal.chooseStep(brain, facts, ['explore', 'rest'], null)
-    assert.equal(choice.step, 'explore')
+})
+
+describe('woodstarve: explore once gather is out', () => {
+  it('(1)/(a) home=site, house parked, gather failed here -> explore picked', async () => {
+    const ctx = { home: { site, built: false, parked: true }, gather: failed }
+    assert.equal(g(starved(), ctx), false)
+    assert.equal(e(starved(), ctx), true)
+    assert.equal(await pick(starved(), ctx), 'explore')
+  })
+  it('a remembered (stale/far) log does not veto explore', async () => {
+    const items = new Map([['a', { name: 'oak_log', x: 900, y: 64, z: 900 }]])
+    const ctx = { home: { site, built: false, parked: true }, gather: failed, resources: { items } }
+    assert.equal(await pick(starved(), ctx), 'explore')
+  })
+  it('(2) home=built, task parked, wood-starved, gather failed -> explore picked', async () => {
+    const ctx = { home: { site, built: true }, castle: { parked: true }, gather: failed }
+    assert.equal(await pick(starved({ home: 'built', planks: 3 }), ctx), 'explore')
+  })
+  it('(3) logs on hand -> the park still vetoes explore', () => {
+    assert.equal(e(starved({ logs: 2 }), { home: { site, built: false, parked: true }, gather: { ...failed, atLogs: 2 } }), false)
+    assert.equal(e(starved({ home: 'built', logs: 2 }), { home: { site, built: true }, castle: { parked: true } }), false)
+  })
+  it('(4) night -> not feasible', () => {
+    assert.equal(e(starved({ time: 'night' }), { home: { site, built: false, parked: true }, gather: failed }), false)
+    assert.equal(e(starved({ time: 'night', home: 'built' }), { home: { site, built: true }, castle: { parked: true } }), false)
+  })
+  it('(5) player online with no house site -> not feasible', () => {
+    assert.equal(e(starved({ player: 'Owner', home: 'none' }), { gather: failed }), false)
   })
 })

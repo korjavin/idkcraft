@@ -360,6 +360,7 @@ it('a failed material leg does not strand a later nearby food source', async () 
       home: { built: true },
       castle: { site: { x: 5, y: 64, z: 5 }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false },
       castleWord: { kind: 'torch', left: 3 }, gear: { saidNeed: 'want-logs' }, stepStatus: 'running',
+      gather: { final: 'failed:no-trees', atLogs: 0 }, // woodstarve: held chop keeps the built-home gather out
     }
     resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
     assert.equal((await goal.decide(bot, ctx)).action, 'forage')

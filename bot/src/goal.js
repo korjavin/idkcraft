@@ -406,7 +406,8 @@ const MENU = {
     // Owner 2026-11-10 (idkcraft-woodstarve): no bans on chopping — the
     // house park, castle-first, fetch hold and chest cover vetoes are gone
     // (gather banks chest logs first itself). What stays: night+hurt, the
-    // failed hold (anti-spin), the built-home gate and the stock cap.
+    // failed hold (anti-spin) and the stock cap (house budget, or
+    // NEED_LOGS logs' worth once built).
     feasible: (facts, bot, ctx) => {
       if (nightHurt(facts)) return false
       // Kept (anti-spin, atl.4/gyw): a failed gather holds while the log
@@ -419,9 +420,8 @@ const MENU = {
       if (facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one') && (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS) return true
       if (castleChopKind(facts)) return true
       const total = facts.planks + facts.logs * 4
-      // Kept: built-home gate (forage/deliver/explore routing rests on it);
-      // a wood-starved built bot gets out via explore instead.
-      if (facts.home === 'built') return false
+      // Built home: a modest stock (NEED_LOGS logs' worth) caps the chop.
+      if (facts.home === 'built') return total < NEED_LOGS * 4
       const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
       // 8cx: the started load finishes only while loose planks alone are
       // short — with the budget covered a sub-batch remainder is no reason
@@ -745,18 +745,11 @@ function castleFetchGo(facts, bot, ctx) {
 // explore/forage. Day only: the night steps own the night. Narrow on
 // purpose — a stone-none word with no pickaxe keeps explore/forage as the
 // only wood-finding path (widen to every in-progress word later if asked).
-// Wood-starved (idkcraft-woodstarve): prod v2 bots with no wood, no table
-// and no remembered log rested forever behind a parked house/task.
+// Wood-starved (idkcraft-woodstarve): no logs, planks short, no table. No
+// tree-memory check: a stale/far remembered log must not veto explore; gather
+// ranks first and explore only runs once gather is out (held after failing).
 function woodStarved(facts, ctx) {
-  if (!(facts.logs === 0 && facts.table === 0 && plankBucket(facts.planks, ctx && ctx.home) !== 'enough')) return false
-  try {
-    const mem = ctx && ctx.resources
-    if (!mem || !(mem.items instanceof Map)) return true
-    for (const it of mem.items.values()) if (it && typeof it.name === 'string' && it.name.endsWith('_log')) return false
-    return true
-  } catch (_) {
-    return false
-  }
+  return facts.logs === 0 && facts.table === 0 && plankBucket(facts.planks, ctx && ctx.home) !== 'enough'
 }
 
 function castleBlocked(facts) {
@@ -2136,7 +2129,7 @@ function stepWhy(name, facts, bot, ctx, text) {
     }
     case 'gather':
       if (nightHurt(facts)) return 'gather: hurt at night, waiting for dawn'
-      if (facts.home === 'built') return 'gather: home built'
+      if (facts.home === 'built') return 'gather: stock full'
       return 'gather: load full'
     case 'deliver':
       if (facts.haul !== 'waiting') return 'deliver: nothing waiting'

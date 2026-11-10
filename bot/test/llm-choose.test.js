@@ -353,6 +353,7 @@ describe('chooser shared startability contract', () => {
     const pending = choose(bot, ctx)
     assert.equal(goal.MENU.gather.feasible(goal.goalFacts(bot, ctx), bot, ctx), true)
     ctx.home = { built: true, v: 1 }
+    ctx.gather = { final: 'failed:no-trees', atLogs: 0 } // woodstarve: a built home alone no longer stops the chop; the held chop does
     reply()
     await pending
     assert.ok(!ctx.llmOrder)
@@ -365,6 +366,7 @@ describe('chooser shared startability contract', () => {
     await choose(bot, ctx)
     assert.ok(ctx.llmOrder)
     ctx.home = { built: true, v: 1 }
+    ctx.gather = { final: 'failed:no-trees', atLogs: 0 } // woodstarve: a built home alone no longer stops the chop; the held chop does
     llmOrders.tick(bot, ctx)
     assert.equal(ctx.llmOrder, null)
     assert.ok(!ctx.taskPlanStep)
@@ -441,6 +443,9 @@ describe('chooser shared startability contract', () => {
   it('keeps an empty startable menu on the ordinary fallback/cooldown', async () => {
     const { bot, ctx } = finishedHome()
     ctx.home.parked = true
+    // woodstarve: a log on hand = not wood-starved (the park vetoes explore); the held chop keeps gather out
+    bot.inventory.items = () => [{ name: 'oak_log', count: 1 }]
+    ctx.gather = { final: 'failed:no-trees', atLogs: 1 }
     // A remembered tree: not wood-starved, so the park still vetoes explore.
     ctx.resources = { items: new Map([['t', { name: 'oak_log', x: 5000, y: 64, z: 5000 }]]) }
     const catalog = llmOrders.chooseStepList(bot, ctx)

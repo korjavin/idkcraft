@@ -1076,6 +1076,7 @@ describe('jr2.2 decide picks beds over explore until both are in', () => {
       home,
       gearGiven: { iron_sword: 1, iron_pickaxe: 1, diamond_sword: 1, diamond_pickaxe: 1 },
       gear: {},
+      gather: { final: 'failed:no-trees', atLogs: 0 }, // woodstarve: held chop keeps the built-home gather out
     }
   }
 

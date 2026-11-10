@@ -382,7 +382,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     const facts = goal.goalFacts(bot, ctx)
     assert.equal(facts.castle, 'parked')
     assert.equal(facts.known, 'near')
-    assert.equal(goal.MENU.explore.feasible({ ...facts, home: 'built' }, bot, ctx), false, 'explore vetoed while parked')
+    assert.equal(goal.MENU.explore.feasible({ ...facts, home: 'built', table: 1 }, bot, ctx), false, 'explore vetoed while parked') // woodstarve: a table on hand = not wood-starved, so the park veto is what is tested
     assert.equal(goal.MENU.forage.feasible(facts, bot, ctx), true, 'near forage is side work')
     assert.equal(goal.MENU.castle.feasible(facts, bot, ctx), false, 'parked word stalls the leg')
     assert.equal(goal.MENU.castlefetch.feasible(facts, bot, ctx), false, 'parked word stalls the fetch')

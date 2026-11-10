@@ -299,6 +299,7 @@ describe('rw4.12: forage walks around the marked pit', () => {
     ctx.work = true
     ctx.home = { built: true } // siteless: build/gather infeasible, forage wins the FSM
     ctx.gear = { saidNeed: 'want-logs' } // ipn.3: need announced, leg routing isolated
+    ctx.gather = { final: 'failed:no-trees', atLogs: 0 } // woodstarve: held chop keeps the built-home gather out
     resources.noteSpots(ctx, [{ x: 40, y: 64, z: 0, name: 'oak_log' }, { x: 0, y: 64, z: 60, name: 'oak_log' }], Date.now())
     danger.mark(ctx, { x: 20, y: 60, z: 0 })
     try {

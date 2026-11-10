@@ -96,7 +96,7 @@ describe('step.js gen check (oqul.7)', () => {
 describe('decide bumps the gen on a new step instance only (oqul.7)', () => {
   it('a finished step re-decided bumps; a running re-issue keeps the gen', async () => {
     const bot = { entity: { position: pos(0, 64, 0) }, inventory: { items: () => [{ name: 'stone_pickaxe', count: 1 }] }, time: { timeOfDay: 6000 }, spawnPoint: pos(0, 64, 0), chat() {} }
-    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' } }
+    const ctx = { home: { built: true, chest: { x: 5, y: 64, z: 1 } }, brain: {}, gear: { saidNeed: 'want-logs' }, gather: { final: 'failed:no-trees', atLogs: 0 } } // woodstarve: held chop keeps the built-home gather out
     resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
     assert.equal((await decide(bot, ctx)).action, 'forage')
     const g1 = step.stepGen(ctx)
