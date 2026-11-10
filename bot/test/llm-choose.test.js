@@ -275,7 +275,7 @@ describe('chooser shared startability contract', () => {
     const { bot, ctx } = finishedHome()
     answer = '{"plan":[{"step":"beds"}]}'
     for (const wait of [600000, 1200000, 1800000, 1800000]) {
-      ctx.llmChooseEpisode = null // 8hpy.2: a new stall episode each round
+      ctx.llmChooseEp = null // 8hpy.2: a new stall episode each round
       await choose(bot, ctx)
       assert.equal(ctx.llmChooseWait, wait)
       assert.equal(llmOrders.shouldChoose('idle', ctx, goal.goalFacts(bot, ctx), ctx.llmChooseAt + wait - 1), false)
@@ -720,9 +720,11 @@ describe('chooser JEV-first tier', () => {
 
   it('JEV picks a need candidate: acquire installed, 0 LLM fetches', async () => {
     const { bot, ctx } = torchCastle()
+    bot.health = 4 // a second candidate: JEV is really asked
     jevAns = () => ({ choice: 'need_torch', confidence: 0.8 })
     ask(bot, ctx)
     await flush()
+    assert.equal(jevCalls.length, 1)
     assert.equal(llmCalls, 0)
     assert.ok(ctx.llmOrder && ctx.llmOrder.bringGoal && ctx.llmOrder.bringGoal.item === 'torch', JSON.stringify(logs))
     assert.ok(logs.some((l) => /^choose tier=jev pick=need_torch candidates=\d+/.test(l)), JSON.stringify(logs))
@@ -782,20 +784,118 @@ describe('chooser JEV-first tier', () => {
     assert.ok(!logs.some((l) => l.startsWith('choose tier=jev')), JSON.stringify(logs))
   })
 
-  it('a pack change starts a new episode: one more LLM call', async () => {
+  it('an unrelated pack change keeps the episode; a needed item starts a new one', async () => {
     const { bot, ctx } = torchCastle()
     const items = []
     bot.inventory.items = () => items
+    bot.health = 4 // need_food keeps JEV a real (unsure) choice once torch is held
     jevAns = (keys) => ({ choice: keys[0], confidence: 0.1 })
     ask(bot, ctx)
     await flush()
+    assert.equal(llmCalls, 1)
+    items.push({ name: 'dirt', count: 5 })
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 1, 'dirt: same episode')
+    items.push({ name: 'torch', count: 1 })
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 2, 'torch for need_torch: new episode')
+  })
+
+  it('JEV picks a work step: installs it as steps[0]', async () => {
+    const { bot, ctx } = torchCastle()
+    ctx.castleWord = null
+    jevAns = (keys) => ({ choice: keys.includes('gather') ? 'gather' : keys[0], confidence: 0.9 })
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 0)
+    assert.equal(ctx.llmOrder && ctx.llmOrder.steps[0].step, 'gather', JSON.stringify(logs))
+  })
+
+  it('a held castle need item is not a candidate', () => {
+    const { bot, ctx } = torchCastle()
+    bot.inventory.items = () => [{ name: 'torch', count: 1 }]
+    const c = llmOrders.chooseCandidates(bot, ctx, goal.goalFacts(bot, ctx))
+    assert.ok(!c.some((x) => x.step === 'need'), JSON.stringify(c))
+  })
+
+  it('JEV fetch rejects: exactly 1 LLM call', async () => {
+    const { bot, ctx } = torchCastle()
+    bot.health = 4
+    const inner = globalThis.fetch
+    globalThis.fetch = async (url, init) => url === JEV_ENDPOINT ? { ok: false, status: 500 } : inner(url, init)
     ask(bot, ctx)
     await flush()
     assert.equal(llmCalls, 1)
-    items.push({ name: 'stick', count: 2 })
+  })
+
+  it('a JEV pick is not re-picked in the episode; all tried -> LLM once', async () => {
+    const { bot, ctx } = torchCastle()
+    bot.health = 4
+    jevAns = (keys) => ({ choice: keys.find((k) => k.startsWith('need_')) || keys[0], confidence: 0.9 })
     ask(bot, ctx)
     await flush()
-    assert.equal(llmCalls, 2)
+    const first = ctx.llmOrder.bringGoal.item
+    ctx.llmOrder = null // the pick failed
+    ask(bot, ctx)
+    await flush()
+    assert.notEqual(ctx.llmOrder.bringGoal.item, first)
+    assert.ok(!Object.keys(jevCalls[1].questions.action.criteria).includes(`need_${first}`))
+    assert.equal(llmCalls, 0)
+    // drop the work steps: only the two needs, both tried now
+    const saved = llmOrders.workSteps().map((id) => [id, goal.MENU[id].feasible])
+    for (const [id] of saved) goal.MENU[id].feasible = () => false
+    try {
+      ctx.llmOrder = null
+      ask(bot, ctx)
+      await flush()
+      assert.equal(llmCalls, 1)
+      ask(bot, ctx)
+      await flush()
+      assert.equal(llmCalls, 1, 'episode budget spent')
+    } finally { for (const [id, f] of saved) goal.MENU[id].feasible = f }
+  })
+
+  it('a failed JEV need makes no LLM replan', async () => {
+    const { bot, ctx } = torchCastle()
+    bot.health = 4
+    const ticker = { setBring({ name, want, by }) { ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() {} }
+    jevAns = () => ({ choice: 'need_torch', confidence: 0.9 })
+    llmOrders.ask(bot, ctx, { text: 'choose work: castle-stalled', by: 'self', ticker, explicit: false, choose: { regime: 'castle-stalled', trigger: 'idle' } })
+    await flush()
+    const o = ctx.llmOrder
+    for (let i = 0; i < 6 && ctx.llmOrder === o; i++) {
+      llmOrders.tick(bot, ctx, Date.now())
+      ctx.bring = null
+      ctx.bringEnd = { at: Date.now() + 1, outcome: 'refused' }
+      llmOrders.tick(bot, ctx, Date.now())
+      await flush()
+    }
+    assert.equal(llmCalls, 0, JSON.stringify(logs))
+    assert.notEqual(ctx.llmOrder, o, 'the JEV need ended')
+  })
+
+  it('a transient LLM error does not use up the episode', async () => {
+    const { bot, ctx } = finishedHome()
+    const inner = globalThis.fetch
+    let fail = true
+    globalThis.fetch = async (url, init) => {
+      if (url !== JEV_ENDPOINT && fail) { fail = false; llmCalls++; return { ok: false, status: 529 } }
+      return inner(url, init)
+    }
+    const saved = llmOrders.workSteps().map((id) => [id, goal.MENU[id].feasible])
+    for (const [id] of saved) goal.MENU[id].feasible = () => false
+    try {
+      ask(bot, ctx)
+      await flush()
+      ask(bot, ctx)
+      await flush()
+      assert.equal(llmCalls, 2)
+      ask(bot, ctx)
+      await flush()
+      assert.equal(llmCalls, 2)
+    } finally { for (const [id, f] of saved) goal.MENU[id].feasible = f }
   })
 
   it('no candidates: no JEV call, LLM once', async () => {
