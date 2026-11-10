@@ -11,6 +11,7 @@ const craftany = require('./craftany')
 
 const RETRY_MS = 60000
 const WINDOW_TIMEOUT_MS = 30000
+const BREAD_TIMEOUT_MS = 120000 // walk + table make/place + craft, then the RETRY_MS cooldown
 
 function needed(bot, ctx, facts) {
   if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || facts.time !== 'day' || !(bot.food < 18) || !(facts.health < 6)) return false
@@ -47,10 +48,13 @@ function hasTable(bot, ctx) {
   try { return !!craftany.standingTable(bot, ctx) } catch (_) { return false }
 }
 
-// idkcraft-qxql33: pack wheat -> bread only at a standing known table, so the
-// craft consumes nothing but wheat (craftany never has to make a table).
+// idkcraft-qxql33(b): pack wheat -> bread at a known table, or at one craftany
+// makes/places (tableFor: castle cell, placement guards) from carried wood.
+// craftany's own planner is the gate, so offer and execution agree. A failed
+// bread leg pauses only bread (foodBreadRetryAt), not chest/forage.
 function breadReady(bot, ctx) {
-  return wheatCount(bot) >= 3 && hasTable(bot, ctx)
+  if (wheatCount(bot) < 3 || (ctx && ctx.foodBreadRetryAt && Date.now() < ctx.foodBreadRetryAt)) return false
+  try { return !!craftany.planCraft(bot, ctx, ['bread'], 1).ok } catch (_) { return false }
 }
 
 function available(bot, ctx, facts) {
@@ -59,9 +63,9 @@ function available(bot, ctx, facts) {
   if (breadReady(bot, ctx)) return true
   const other = !!(bring.pickChest(bot, ctx, chestState(ctx)) || forage.foodTarget(bot, ctx, true))
   const wheat = wheatCount(bot)
-  if (!other && wheat >= 3 && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
+  if (!other && wheat >= 3 && !(ctx.foodBreadRetryAt && Date.now() < ctx.foodBreadRetryAt) && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
     ctx.foodBreadLogAt = Date.now()
-    console.log(`food recovery source=bread result=no-table wheat=${wheat}`)
+    console.log(`food recovery source=bread table=none why=no-table-no-wood wheat=${wheat}`)
   }
   return other
 }
@@ -100,23 +104,26 @@ function run(bot, ctx) {
   if (!bp) return
   if (r.phase === 'bread') {
     if (!r.bread) {
-      r.bread = { wheat0: wheatCount(bot), bread0: countOf(bot, 'bread') }
+      r.bread = { wheat0: wheatCount(bot), bread0: countOf(bot, 'bread'), table: hasTable(bot, ctx) ? 'reached' : 'placed', at: Date.now() }
       ctx.craftany = null
       console.log(`food recovery source=bread start wheat=${r.bread.wheat0}`)
     }
-    // Success is bread in the pack (the craft may spend the last 3 wheat);
-    // the table must still stand each tick, else craftany would make one.
+    // Success is bread in the pack (the craft may spend the last 3 wheat).
+    // craftany bounds the table walk/make/place itself; the deadline caps the leg.
     const crafted = countOf(bot, 'bread') > r.bread.bread0
-    const res = crafted ? { done: true } : hasTable(bot, ctx) || ctx.gearInFlight ? craftany(bot, ctx, 'bread', 1) : { done: false, line: 'need a crafting table' }
+    const res = crafted ? { done: true }
+      : Date.now() - r.bread.at > BREAD_TIMEOUT_MS && !ctx.gearInFlight ? { done: false, line: 'timeout' }
+        : craftany(bot, ctx, 'bread', 1)
     if (res === 'running') return
     ctx.craftany = null
     if (crafted || countOf(bot, 'bread') > r.bread.bread0 || (res && res.done)) {
-      console.log(`food recovery source=bread result=crafted wheat=${wheatCount(bot)}`)
+      console.log(`food recovery source=bread table=${r.bread.table} why=crafted wheat=${wheatCount(bot)}`)
       done(false) // bread is edible now: the eat reflex eats it, needed() goes false
       return
     }
-    console.log(`food recovery source=bread result=failed why=${JSON.stringify((res && res.line) || 'unknown')} wheat=${wheatCount(bot)}`)
-    done(true)
+    console.log(`food recovery source=bread table=none why=${JSON.stringify((res && res.line) || 'unknown')} wheat=${wheatCount(bot)}`)
+    ctx.foodBreadRetryAt = Date.now() + LOW_HP_GATE_MS // the rest of the low-HP episode
+    r.phase = 'chest'; ctx.lastGoalKey = '' // same episode: chest, then hunt
     return
   }
   if (r.phase === 'chest') {
