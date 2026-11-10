@@ -20,8 +20,8 @@ const bot = {
   findBlocks: () => [],
 }
 const castle = () => ({ site: { ...SITE }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false })
-const near = { x: SITE.x + 5, y: 64, z: SITE.z, contents: { dirt: 64 }, at: 1 }
-const stone = { x: SITE.x + 12, y: 64, z: SITE.z, contents: { cobblestone: 40 }, at: 1 }
+const near = { x: SITE.x + 5, y: 64, z: SITE.z, contents: { dirt: 64 }, at: Date.now() }
+const stone = { x: SITE.x + 12, y: 64, z: SITE.z, contents: { cobblestone: 40 }, at: Date.now() }
 const keyOf = (c) => `${c.x},${c.y},${c.z}`
 const at = (p) => p && [p.at.x, p.at.y, p.at.z]
 
@@ -44,6 +44,13 @@ describe('castlefetch any chest (y7lp.3)', () => {
     assert.equal(fetch.pickChest(bot, ctx, {}, 'stone'), null)
   })
 
+  it('a stale snapshot without the kind expires: a restocked chest is picked again (review 01 core-2)', () => {
+    const old = { ...near, at: Date.now() - fetch.CHEST_DRY_MS - 1 }
+    const p = fetch.pickChest(bot, { castle: castle(), chests: [old] }, {}, 'stone')
+    assert.deepEqual(at(p), [old.x, old.y, old.z])
+    assert.equal(fetch.pickChest(bot, { castle: castle(), chests: [near] }, {}, 'stone'), null)
+  })
+
   it('home/site chests still come first', () => {
     const site = { x: SITE.x + 20, y: 64, z: SITE.z }
     const ctx = { castle: { ...castle(), siteChest: site }, chests: [stone] }
@@ -57,7 +64,7 @@ describe('castlefetch any chest (y7lp.3)', () => {
   })
 
   it('coverage equals what pickChest picks: far or dry -> 0 and no pick (quarry); near fresh -> both', () => {
-    const far = { x: SITE.x + 200, y: 64, z: SITE.z, contents: { cobblestone: 64 }, at: 1 }
+    const far = { x: SITE.x + 200, y: 64, z: SITE.z, contents: { cobblestone: 64 }, at: Date.now() }
     const cases = [
       [{ castle: castle(), chests: [far] }, false],
       [{ castle: castle(), chests: [stone], castleChestDry: { [`stone@${keyOf(stone)}`]: Date.now() } }, false],

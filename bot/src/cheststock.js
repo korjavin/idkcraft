@@ -99,6 +99,7 @@ function rememberedStockOf(ctx, names, bot, kind) {
     let n = 0
     for (const c of Array.isArray(ctx.chests) ? ctx.chests : []) {
       if (!c || !c.contents || skip.has(key(c))) continue
+      if (!Number.isFinite(c.at) || Date.now() - c.at >= REMEMBERED_DRY_MS) continue // stale snapshot: no claim
       if (Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) > REMEMBERED_RADIUS) continue
       if (Date.now() - (dry[`${kind}@${key(c)}`] ?? -Infinity) < REMEMBERED_DRY_MS) continue
       for (const [k, v] of Object.entries(c.contents)) if (want.has(k) && typeof v === 'number' && v > 0) n += Math.floor(v)

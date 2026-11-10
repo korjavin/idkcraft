@@ -970,7 +970,8 @@ function pickChest(bot, ctx, f, kind) {
       : stockpileMod.nearbyChests(bot, ctx, [...tried])
     for (const c of extra) {
       // y7lp.3: a snapshot without the kind is no source (the draw re-reads live)
-      if (c && c.contents && !kindHeld(bot, kind, presentNames(c.contents))) continue
+      // a stale empty snapshot falls back to the live read (a restocked chest counts again)
+      if (c && c.contents && Number.isFinite(c.at) && Date.now() - c.at < CHEST_DRY_MS && !kindHeld(bot, kind, presentNames(c.contents))) continue
       if (banks && c && typeof c.x === 'number') cands.push({ at: new Vec3(c.x, c.y, c.z), bank: true, mem: true })
     }
   } catch (_) { /* remembered sightings best-effort */ }
