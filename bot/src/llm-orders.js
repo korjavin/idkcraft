@@ -117,7 +117,7 @@ const CHOOSE_SYSTEM = 'You pick useful work for a Minecraft companion bot for th
   'Answer JSON only, no prose: {"plan":[{"step":"<id>","count":<n>,"done":"<what is true when this step is done>"}],"why":"<one-line reason>","need":"<capability the bot lacks>"}. ' +
   'Leave out count when the step takes none. At most ' + CHOOSE_MAX_STEPS + ' steps; use the fewest. ' +
   'Prefer what the castle is missing when a castle order exists. ' +
-  'When a material or food the work needs is missing, answer one step {"step":"need","item":"<registry id>","count":<n>}: the bot gets it (craft, smelt, gather, hunt, prerequisites first) and then resumes its work. ' +
+  'When a material or food the work needs is missing, answer one step {"step":"need","item":"<registry id>","count":<n>}: the bot gets it (craft, gather, prerequisites first; any food item hunts animals and is met by any edible) and then resumes its work. ' +
   'Do not strip the area bare — gather only what a named need consumes. ' +
   'Answer {"plan":[],"need":"<capability the bot lacks>"} when no listed step helps.'
 
@@ -432,12 +432,12 @@ function ask(bot, ctx, req, fetchFn) {
       if (nd && heldFor(bot, nd.item, true) >= (nd.count || 1)) {
         // core-1: an already-held need would end done at once and unpark a
         // stall it never fixed; the FSM pick stands, the backoff keeps doubling.
-        console.log(`llm choose need already held ${nd.item}`)
         const cur = typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0 ? ctx.llmChooseWait : chooseMinMs()
         ctx.llmChooseWait = Math.min(cur * 2, CHOOSE_WAIT_MAX_MS)
-        return
-      }
-      if (nd) r.steps = [{ ...nd, count: nd.count || 1 }]
+        delete r.steps
+        r.outcome = 'held'
+        r.error = `need already held ${nd.item}`
+      } else if (nd) r.steps = [{ ...nd, count: nd.count || 1 }]
       else if (r.steps) {
         // Expand build before admission: an empty kit starts with gather,
         // even when the raw build capability cannot run yet. The tail is
@@ -842,10 +842,13 @@ function heldItem(bot, item) {
 
 // a5xy: a self need for food/meat or any edible is met by any edible held
 // (the food ladder hunts any animal, never smelts cooked_*).
-function heldFor(bot, item, self) {
-  if (!self) return heldItem(bot, item)
+function isSelfFood(item) {
   const { isFoodRequest, FOOD_NAMES } = require('./behaviours/bringitem')
-  if (!isFoodRequest(item) && !FOOD_NAMES.has(item)) return heldItem(bot, item)
+  return isFoodRequest(item) || FOOD_NAMES.has(item)
+}
+function heldFor(bot, item, self) {
+  if (!self || !isSelfFood(item)) return heldItem(bot, item)
+  const { FOOD_NAMES } = require('./behaviours/bringitem')
   try { return countItems(bot, (name) => FOOD_NAMES.has(name)) } catch (_) { return 0 }
 }
 
@@ -897,7 +900,9 @@ function startStep(bot, ctx, o, s, now) {
     o.feeding = true
     try {
       if (s.step === 'acquire' && o.bringGoal) {
-        const reply = o.ticker && o.ticker.setBring({ name: s.item, want: s.count, by: o.by })
+        // a5xy: a self food need (cooked_* included) runs the hunt ladder; heldFor counts any edible
+        const foodNeed = o.bringGoal.self && isSelfFood(s.item)
+        const reply = o.ticker && o.ticker.setBring({ name: foodNeed ? 'food' : s.item, want: s.count, by: o.by })
         if (ctx.bring && ctx.bring !== before.bring) ctx.bring.self = true
         else if (ctx.pendingSearch && ctx.pendingSearch !== before.ps) ctx.pendingSearch.self = true
         else if (reply) o.acquireRefusal = String(reply).slice(0, 120)

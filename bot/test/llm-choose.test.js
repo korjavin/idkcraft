@@ -572,6 +572,20 @@ describe('chooser need step', () => {
     assert.ok(!bot.lines.some((l) => l.startsWith('tossed')), bot.lines.join('|'))
   })
 
+  it('a self need for cooked_beef runs the food (hunt) ladder and any edible meets it', async () => {
+    const { bot, ctx, items, fake } = world({ at: 1, auto: true, diag: 'food' })
+    answer = '{"plan":[{"step":"need","item":"cooked_beef","count":2}]}'
+    needAsk(bot, ctx, fake)
+    await flush()
+    llmOrders.tick(bot, ctx, Date.now())
+    assert.equal(ctx.bring.name, 'food', 'cooked_* maps to the food ladder')
+    finish(ctx)
+    items.push({ name: 'beef', count: 2 })
+    llmOrders.tick(bot, ctx, Date.now())
+    assert.equal(ctx.llmOrder, null)
+    assert.equal(fake.calls, 1)
+  })
+
   it('a day-latched park (auto:false) and an owner park stay parked', async () => {
     for (const park of [{ at: 1, auto: false, diag: 'x' }, null]) {
       const { bot, ctx, items, fake } = world(park)
@@ -596,7 +610,7 @@ describe('chooser need step', () => {
     const wait = ctx.llmChooseWait
     await flush()
     assert.ok(!ctx.llmOrder)
-    assert.ok(logs.includes('llm choose need already held torch'), JSON.stringify(logs))
+    assert.ok(logs.some((l) => l.includes('outcome=held') && l.includes("err=\"need already held torch\"")), JSON.stringify(logs))
     assert.equal(ctx.castle.parked, true)
     assert.equal(fake.calls, 0)
     assert.equal(ctx.llmChooseWait, wait * 2)
