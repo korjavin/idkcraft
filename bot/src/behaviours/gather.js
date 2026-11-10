@@ -434,7 +434,9 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
     } catch (_) { return false }
     const dry = ctx.chestLogsDry || {}
     const now = Date.now()
-    for (const c of [ctx.home && ctx.home.chest, ctx.castle && ctx.castle.siteChest]) {
+    // y7lp: plus any remembered chest whose last snapshot held logs
+    const logged = (Array.isArray(ctx.chests) ? ctx.chests : []).filter((c) => c && c.contents && Object.entries(c.contents).some(([n, v]) => (n.endsWith('_log') || n.endsWith('_stem')) && v > 0))
+    for (const c of [ctx.home && ctx.home.chest, ctx.castle && ctx.castle.siteChest, ...logged]) {
       if (!c || typeof c.x !== 'number') continue
       const k = `${c.x},${c.y},${c.z}`
       if (typeof dry[k] === 'number' && now - dry[k] < CHEST_DRY_MS) continue

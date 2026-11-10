@@ -146,7 +146,11 @@ async function withChest(bot, ctx, fn, at = null, valid = null) {
     if (!block) unknown = true
   } catch (_) { unknown = true }
   if (!block) return { status: unknown ? 'unknown' : 'gone' }
-  if (block.name !== 'chest') return { status: 'gone' }
+  if (block.name !== 'chest') {
+    // y7lp: a remembered chest that is no longer a chest leaves the registry
+    try { if (ctx && Array.isArray(ctx.chests)) ctx.chests = ctx.chests.filter((e) => !(e && e.x === c.x && e.y === c.y && e.z === c.z)) } catch (_) { /* best-effort */ }
+    return { status: 'gone' }
+  }
   try {
     const window = await bot.openChest(block)
     try {
@@ -187,7 +191,6 @@ function chestSlot(ctx, c) {
 function noteChestRead(ctx, c, window) {
   if (!ctx || typeof ctx !== 'object') return
   const slot = chestSlot(ctx, c)
-  if (!slot) return
   const stacks = window && typeof window.containerItems === 'function' ? window.containerItems() : []
   const contents = {}
   if (Array.isArray(stacks)) {
@@ -196,8 +199,19 @@ function noteChestRead(ctx, c, window) {
       contents[s.name] = (contents[s.name] || 0) + (typeof s.count === 'number' ? s.count : 1)
     }
   }
+  const at = Date.now()
+  // y7lp: any opened chest joins the registry with its snapshot (bots use any chest)
+  try {
+    if (!Array.isArray(ctx.chests)) ctx.chests = []
+    const x = Math.floor(c.x), y = Math.floor(c.y), z = Math.floor(c.z)
+    let e = ctx.chests.find((s) => s && s.x === x && s.y === y && s.z === z)
+    if (!e) { e = { x, y, z }; ctx.chests.push(e); while (ctx.chests.length > 32) ctx.chests.shift() } // stockpile.rememberChests (same cap) would be a require cycle
+    e.contents = contents
+    e.at = at
+  } catch (_) { /* registry best-effort */ }
+  if (!slot) return
   if (!ctx.chestLast || typeof ctx.chestLast !== 'object') ctx.chestLast = {}
-  ctx.chestLast[slot] = { contents, at: Date.now() }
+  ctx.chestLast[slot] = { contents, at }
 }
 
 // Withdraw up to count of name from the adopted chest (or the explicit
