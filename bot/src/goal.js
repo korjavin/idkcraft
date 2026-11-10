@@ -420,8 +420,10 @@ const MENU = {
       if (facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one') && (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS) return true
       if (castleChopKind(facts)) return true
       const total = facts.planks + facts.logs * 4
-      // Built home: a modest stock (NEED_LOGS logs' worth) caps the chop.
-      if (facts.home === 'built') return total < NEED_LOGS * 4
+      // Built home: a modest stock (NEED_LOGS logs' worth) caps the chop,
+      // counting the remembered home-chest wood too, or stockpile's bank
+      // (it keeps only a few planks packed) would re-arm gather forever.
+      if (facts.home === 'built') return total + homeChestWood(ctx) < NEED_LOGS * 4
       const need = needPlanks(ctx && ctx.home) + (facts.table > 0 ? 0 : 4) + (facts.door > 0 ? 0 : 6)
       // 8cx: the started load finishes only while loose planks alone are
       // short — with the budget covered a sub-batch remainder is no reason
@@ -749,6 +751,21 @@ function castleFetchGo(facts, bot, ctx) {
 // without wood crafts nothing). No
 // tree-memory check: a stale/far remembered log must not veto explore; gather
 // ranks first and explore only runs once gather is out (held after failing).
+// Plank-equivalent wood in the last-read home chest snapshot (0 if unknown).
+function homeChestWood(ctx) {
+  let n = 0
+  try {
+    if (!ctx || !ctx.home || !ctx.home.chest) return 0
+    const c = require('./cheststock').slotContents(ctx, 'home')
+    for (const [name, v] of Object.entries(c)) {
+      const k = typeof v === 'number' ? v : 0
+      if (name.endsWith('_planks')) n += k
+      else if (name.endsWith('_log') || name.endsWith('_stem')) n += k * 4
+    }
+  } catch (_) { return 0 }
+  return n
+}
+
 function woodStarved(facts, ctx) {
   return facts.logs === 0 && plankBucket(facts.planks, ctx && ctx.home) !== 'enough'
 }

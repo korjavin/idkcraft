@@ -43,6 +43,13 @@ describe('woodstarve: gather has no park/home bans, only the cap', () => {
     const unbuilt = { home: { site, built: false, parked: true } }
     assert.equal(g(starved({ planks: goal.needPlanks(unbuilt.home) + 10 }), unbuilt), false)
   })
+  it('banked wood in the home chest counts toward the cap (no bank/gather loop)', () => {
+    const chest = { x: 1, y: 64, z: 1 }
+    const banked = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 40, oak_log: 4 }, at: 1 } } }
+    assert.equal(g(starved({ home: 'built', planks: 4 }), banked), false, '4 packed + 56 banked = cap')
+    const light = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 8 }, at: 1 } } }
+    assert.equal(g(starved({ home: 'built', planks: 4 }), light), true, 'below the cap still chops')
+  })
   it('night + hurt -> no chop', () => {
     assert.equal(g(starved({ time: 'night', health: 3 }), { home: { site, built: false } }), false)
   })
