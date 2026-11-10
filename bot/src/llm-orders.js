@@ -398,7 +398,22 @@ function shouldChoose(pick, ctx, facts, now = Date.now()) {
 // steps + needs read from facts), ranked by JEV; the LLM only when JEV has no
 // confident pick or the list is empty, and at most once per stall episode.
 const CHOOSE_JEV_MIN_CONF = 0.5 // = task.TASK_PLAN_MIN_CONF (task requires this module)
-const CASTLE_NEED_ITEM = { torch: 'torch', stairs: 'cobblestone_stairs', frame: 'oak_log', planks: 'oak_planks', stone: 'cobblestone', door: 'oak_door', fence: 'oak_fence', chest: 'chest' }
+// A castle kind's need item: what castlefetch crafts for it (craftNames),
+// else the finished items its chest draw accepts (chestNames[0]), preferring
+// the wood family the pack already holds. No generic name (an unknown kind):
+// the kind itself, so the acquire resolvers / LLM resolve it.
+function kindNeedItem(bot, kind) {
+  let names = []
+  try {
+    const cf = require('./behaviours/castlefetch')
+    names = cf.craftNames(bot, kind)
+    if (!names.length) names = (cf.chestNames(bot, kind)[0]) || []
+  } catch (_) { names = [] }
+  if (!names.length) return kind
+  let fam = []
+  try { fam = bot.inventory.items().map((i) => i.name).filter((n) => /_(log|planks)$/.test(n)).map((n) => n.replace(/(log|planks)$/, '')) } catch (_) { fam = [] }
+  return names.find((n) => fam.some((f) => n.startsWith(f))) || names[0]
+}
 function chooseCandidates(bot, ctx, facts) {
   const out = []
   const needs = new Map()
@@ -411,15 +426,15 @@ function chooseCandidates(bot, ctx, facts) {
   try {
     const castle = require('./behaviours/castle')
     const cw = ctx && ctx.castleWord
-    if (castleActive(ctx, facts) && cw && CASTLE_NEED_ITEM[cw.kind] && castle.usable(bot, cw.kind, ctx) <= 0) addNeed(CASTLE_NEED_ITEM[cw.kind], cw.left)
+    if (castleActive(ctx, facts) && cw && typeof cw.kind === 'string' && cw.kind && castle.usable(bot, cw.kind, ctx) <= 0) addNeed(kindNeedItem(bot, cw.kind), cw.left)
     if (castleActive(ctx, facts) && castle.siteLoaded(bot, ctx.castle) === true) {
       for (const [k, v] of Object.entries(castle.progressByKind(bot, ctx.castle) || {})) {
         const left = (v.total | 0) - (v.done | 0)
-        if (left > 0 && CASTLE_NEED_ITEM[k] && castle.usable(bot, k, ctx) <= 0) addNeed(CASTLE_NEED_ITEM[k], left)
+        if (left > 0 && k !== 'moat' && castle.usable(bot, k, ctx) <= 0) addNeed(kindNeedItem(bot, k), left)
       }
     }
   } catch (_) { /* castle needs best-effort */ }
-  if (facts && typeof facts.health === 'number' && facts.health < 10) addNeed('cooked_beef', 3)
+  if (facts && typeof facts.health === 'number' && facts.health < 10) addNeed('food', 3) // generic food route: any edible meets it
   for (const id of workSteps()) {
     if (candidateFeasible(bot, ctx, { step: id, count: 1 }, facts)) out.push({ id, step: id, count: 1, what: STEP_EFFECT_TEXT[id] || goal.STEP_CRITERIA[id] || id })
   }
@@ -427,9 +442,12 @@ function chooseCandidates(bot, ctx, facts) {
 }
 
 // Stall episode: lasts until the castle/house progress or the regime changes.
-function chooseEpisode(ctx, facts, regime) {
+function chooseEpisode(bot, ctx, facts, regime) {
   const p = ctx && ctx.castle && ctx.castle.progress
-  return `${regime}|${p ? p.done : '-'}|${facts ? facts.home : '-'}`
+  // Pack total too: a gathered/crafted item allows a new tier pass.
+  let pack = 0
+  try { for (const it of bot.inventory.items()) pack += it.count | 0 } catch (_) { pack = -1 }
+  return `${regime}|${p ? p.done : '-'}|${facts ? facts.home : '-'}|${pack}`
 }
 
 async function jevChoose(bot, ctx, regime, cands, fetchFn) {
@@ -477,6 +495,13 @@ function ask(bot, ctx, req, fetchFn) {
       if (process.env.TYPESAFE_API_KEY) try { jp = await jevChoose(bot, ctx, regime, cands, fetchFn) } catch (err) { console.log(`choose jev error="${String(err && err.message ? err.message : err).slice(0, 60).replace(/"/g, "'")}"`) }
       if (ctx.llmAsk !== a) return
       const sayC = rosterOnline(bot) ? say : () => {}
+      // Re-check against a fresh list (work steps: candidateFeasible inside):
+      // a pick gone stale during the await counts as no pick.
+      if (jp) {
+        let fresh = []
+        try { fresh = chooseCandidates(bot, ctx, goal.goalFacts(bot, ctx)) } catch (_) { fresh = [] }
+        if (!fresh.some((c) => c.id === jp.id)) { console.log(`choose jev stale pick=${jp.id}`); jp = null }
+      }
       if (jp) {
         ctx.llmAsk = null
         console.log(`choose tier=jev pick=${jp.id} candidates=${cands.length}`)
@@ -487,7 +512,7 @@ function ask(bot, ctx, req, fetchFn) {
         } else installPlan(bot, ctx, base, [{ step: jp.step, count: 1 }], sayC)
         return
       }
-      const ep = chooseEpisode(ctx, facts0, regime)
+      const ep = chooseEpisode(bot, ctx, facts0, regime)
       if (ctx.llmChooseEpisode === ep) {
         ctx.llmAsk = null
         const cur = typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0 ? ctx.llmChooseWait : chooseMinMs()

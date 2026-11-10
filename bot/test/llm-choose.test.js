@@ -715,7 +715,7 @@ describe('chooser JEV-first tier', () => {
     bot.health = 4
     const c = llmOrders.chooseCandidates(bot, ctx, goal.goalFacts(bot, ctx))
     assert.ok(c.some((x) => x.id === 'need_torch' && x.count === 7), JSON.stringify(c))
-    assert.ok(c.some((x) => x.id === 'need_cooked_beef'), JSON.stringify(c))
+    assert.ok(c.some((x) => x.id === 'need_food'), JSON.stringify(c))
   })
 
   it('JEV picks a need candidate: acquire installed, 0 LLM fetches', async () => {
@@ -743,6 +743,56 @@ describe('chooser JEV-first tier', () => {
     assert.equal(llmCalls, 1, 'same episode: no second LLM call')
     assert.ok(logs.some((l) => l.startsWith('choose tier=none')), JSON.stringify(logs))
     ctx.castle.progress = { done: 2042, total: 2048 } // progress = new episode
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 2)
+  })
+
+  it('castle stuck on planks with spruce logs only: a spruce need, accepted', async () => {
+    const { bot, ctx } = torchCastle()
+    const items = [{ name: 'spruce_log', count: 3 }]
+    bot.inventory.items = () => items
+    for (const n of ['oak_planks', 'birch_planks', 'spruce_planks', 'oak_log', 'spruce_log']) bot.registry.itemsByName[n] = { id: n }
+    ctx.castleWord = { kind: 'planks', left: 20 }
+    jevAns = () => ({ choice: 'need_spruce_planks', confidence: 0.8 })
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 0)
+    assert.equal(ctx.llmOrder && ctx.llmOrder.bringGoal.item, 'spruce_planks', JSON.stringify(logs))
+  })
+
+  it('need_food picked: acquire on the generic food route', async () => {
+    const { bot, ctx } = torchCastle()
+    bot.health = 4
+    jevAns = () => ({ choice: 'need_food', confidence: 0.8 })
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 0)
+    assert.equal(ctx.llmOrder && ctx.llmOrder.bringGoal.item, 'food', JSON.stringify(logs))
+  })
+
+  it('JEV picks something not in the menu: no install, LLM fallback', async () => {
+    const { bot, ctx } = torchCastle()
+    bot.health = 4
+    jevAns = () => ({ choice: 'flat', confidence: 0.99 })
+    ask(bot, ctx)
+    await flush()
+    assert.equal(jevCalls.length, 1)
+    assert.equal(llmCalls, 1)
+    assert.ok(!logs.some((l) => l.startsWith('choose tier=jev')), JSON.stringify(logs))
+  })
+
+  it('a pack change starts a new episode: one more LLM call', async () => {
+    const { bot, ctx } = torchCastle()
+    const items = []
+    bot.inventory.items = () => items
+    jevAns = (keys) => ({ choice: keys[0], confidence: 0.1 })
+    ask(bot, ctx)
+    await flush()
+    ask(bot, ctx)
+    await flush()
+    assert.equal(llmCalls, 1)
+    items.push({ name: 'stick', count: 2 })
     ask(bot, ctx)
     await flush()
     assert.equal(llmCalls, 2)
