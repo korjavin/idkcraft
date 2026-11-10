@@ -562,7 +562,7 @@ const MENU = {
       // The stranded branch is the only release for a no-trees hold (gyw),
       // so an owner castle stop — no timer, never auto-resumes — must not
       // veto it (R2). Only the timer-bounded house park does — unless the
-      // bot is wood-starved (no wood, no table, no remembered tree).
+      // bot is wood-starved (no logs, planks short; a table alone makes no pickaxe).
       if (ctx && ctx.home && ctx.home.parked && !woodStarved(facts, ctx)) return false
       try {
         return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)
@@ -745,11 +745,12 @@ function castleFetchGo(facts, bot, ctx) {
 // explore/forage. Day only: the night steps own the night. Narrow on
 // purpose — a stone-none word with no pickaxe keeps explore/forage as the
 // only wood-finding path (widen to every in-progress word later if asked).
-// Wood-starved (idkcraft-woodstarve): no logs, planks short, no table. No
+// Wood-starved (idkcraft-woodstarve): no logs, planks short (a standing table
+// without wood crafts nothing). No
 // tree-memory check: a stale/far remembered log must not veto explore; gather
 // ranks first and explore only runs once gather is out (held after failing).
 function woodStarved(facts, ctx) {
-  return facts.logs === 0 && facts.table === 0 && plankBucket(facts.planks, ctx && ctx.home) !== 'enough'
+  return facts.logs === 0 && plankBucket(facts.planks, ctx && ctx.home) !== 'enough'
 }
 
 function castleBlocked(facts) {

@@ -55,6 +55,12 @@ describe('woodstarve: explore once gather is out', () => {
     assert.equal(e(starved(), ctx), true)
     assert.equal(await pick(starved(), ctx), 'explore')
   })
+  it('a standing table but no wood, parked, gather failed -> explore picked (site and built)', async () => {
+    const site1 = { home: { site, built: false, parked: true }, gather: failed }
+    assert.equal(await pick(starved({ table: 1 }), site1), 'explore')
+    const built = { home: { site, built: true }, castle: { parked: true }, gather: failed }
+    assert.equal(await pick(starved({ table: 1, home: 'built' }), built), 'explore')
+  })
   it('a remembered (stale/far) log does not veto explore', async () => {
     const items = new Map([['a', { name: 'oak_log', x: 900, y: 64, z: 900 }]])
     const ctx = { home: { site, built: false, parked: true }, gather: failed, resources: { items } }
