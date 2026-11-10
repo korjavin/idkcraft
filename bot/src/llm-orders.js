@@ -397,6 +397,7 @@ function shouldChoose(pick, ctx, facts, now = Date.now()) {
 // 8hpy.2 JEV-first chooser: a deterministic candidate list (feasible work
 // steps + needs read from facts), ranked by JEV; the LLM only when JEV has no
 // confident pick or the list is empty, and at most once per stall episode.
+const CHOOSE_EP_LLM_MAX = 3 // LLM calls per stall episode: choose + replans
 const CHOOSE_JEV_MIN_CONF = 0.5 // = task.TASK_PLAN_MIN_CONF (task requires this module)
 // A castle kind's need item: what castlefetch crafts for it (craftNames),
 // else the finished items its chest draw accepts (chestNames[0]), preferring
@@ -874,14 +875,7 @@ function release(ctx, o) {
 
 function end(bot, ctx, o, result) {
   if (o.bringGoal && typeof result === 'string' && result.startsWith('failed:')) {
-    // 8hpy.2: a chooser need replans through the LLM at most once per stall
-    // episode; a JEV pick never (it is marked tried; the LLM tier comes next).
-    const ep = ctx && ctx.llmChooseEp
-    const capped = o.choose && !o.jev && !!ep && ep.replans >= 1
-    if (!capped) {
-      if (o.choose && !o.jev && ep) ep.replans++
-      return replanBring(bot, ctx, o, result)
-    }
+    return replanBring(bot, ctx, o, result)
   }
   if (result !== 'done') release(ctx, o)
   else dropArgs(ctx) // release() already nulled the rest
@@ -922,6 +916,17 @@ function replanBring(bot, ctx, o, observation) {
   if (!g || o.replanning || ctx.llmOrder !== o) return
   // 8hpy.2: a JEV-picked need never asks the LLM; it fails (tried in the episode).
   if (o.jev) { o.bringGoal = null; return end(bot, ctx, o, 'failed:jev need unresolved') }
+  // Hard cap: a chooser plan's LLM calls (the choose + every replan) per
+  // stall episode. Plans without an episode (owner orders) are unchanged.
+  const ep = o.choose ? ctx.llmChooseEp : null
+  if (ep) {
+    if (ep.llm + ep.replans >= CHOOSE_EP_LLM_MAX) {
+      console.log(`llm order episode budget calls=${ep.llm + ep.replans} max=${CHOOSE_EP_LLM_MAX}`)
+      o.bringGoal = null
+      return end(bot, ctx, o, 'failed:episode llm budget')
+    }
+    ep.replans++
+  }
   release(ctx, o)
   const detail = o.cur && ['bring', 'acquire'].includes(o.steps[o.i]?.step) && ctx.bringEnd && ctx.bringEnd.at >= o.cur.at ? ctx.bringEnd.reason : o.acquireRefusal
   o.acquireRefusal = null

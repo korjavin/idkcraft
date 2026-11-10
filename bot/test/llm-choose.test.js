@@ -647,6 +647,7 @@ describe('chooser need step', () => {
     answer = '{"plan":[{"step":"need","item":"torch","count":16}]}'
     needAsk(bot, ctx, fake)
     await flush()
+    ctx.llmChooseEp = null // stack mechanics only: 4 LLM calls exceed the 8hpy.2 episode cap (tested below)
     llmOrders.tick(bot, ctx, Date.now()) // acquire torch starts
     finish(ctx, 'refused')
     await step('{"plan":[{"step":"need","item":"coal","count":2}]}') // fails -> replan
@@ -896,6 +897,30 @@ describe('chooser JEV-first tier', () => {
       await flush()
       assert.equal(llmCalls, 2)
     } finally { for (const [id, f] of saved) goal.MENU[id].feasible = f }
+  })
+
+  it('an LLM-chosen need that keeps pushing prerequisites stops at 3 LLM calls', async () => {
+    const { bot, ctx } = finishedHome()
+    const ticker = { setBring({ name, want, by }) { ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() {} }
+    const saved = llmOrders.workSteps().map((id) => [id, goal.MENU[id].feasible])
+    for (const [id] of saved) goal.MENU[id].feasible = () => false
+    const chain = ['torch', 'coal', 'stick', 'oak_planks', 'oak_log', 'iron_ore']
+    let n = 0
+    answer = '{"plan":[{"step":"need","item":"torch","count":4}]}'
+    try {
+      llmOrders.ask(bot, ctx, { text: 'choose work: no-order', by: 'self', ticker, explicit: false, choose: { regime: 'no-order', trigger: 'idle' } })
+      await flush()
+      for (let i = 0; i < 8 && ctx.llmOrder; i++) {
+        answer = `{"plan":[{"step":"need","item":"${chain[++n]}","count":1}]}`
+        llmOrders.tick(bot, ctx, Date.now())
+        ctx.bring = null
+        ctx.bringEnd = { at: Date.now() + 1, outcome: 'refused' }
+        llmOrders.tick(bot, ctx, Date.now())
+        await flush()
+      }
+    } finally { for (const [id, f] of saved) goal.MENU[id].feasible = f }
+    assert.equal(llmCalls, 3, JSON.stringify(logs))
+    assert.ok(logs.some((l) => l.includes('result=failed:episode llm budget')), JSON.stringify(logs))
   })
 
   it('no candidates: no JEV call, LLM once', async () => {
