@@ -2000,6 +2000,7 @@ module.exports.ensureTool = ensureTool
 module.exports.sharePlan = sharePlan
 module.exports.isFoodRequest = isFoodRequest
 module.exports.findEdible = findEdible
+module.exports.FOOD_NAMES = FOOD_NAMES
 module.exports.normalizeBringName = normalizeBringName
 module.exports.resolveItem = resolveItem
 module.exports.resolveArmorTrim = resolveArmorTrim

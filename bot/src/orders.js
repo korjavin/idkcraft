@@ -144,6 +144,20 @@ function createOrders(box) {
     // save-on-exit; the periodic tick save covers the rest.
     loadMemory: () => { try { return memory.restore(bot, ctx) } catch (_) { return null } },
     saveMemory: () => { try { return memory.save(bot, ctx) } catch (_) { return false } },
+    // a5xy: a solved chooser need clears the watchdog's task parks (never an owner park).
+    // Auto (watchdog) parks only: a day latch (auto:false) holds till the day turns or the owner speaks.
+    clearTaskParks: () => {
+      try {
+        let changed = false
+        for (const rec of [ctx.castle, ctx.home]) {
+          if (rec && rec.taskPark && rec.taskPark.auto === true) { rec.taskPark = null; rec.parked = false; changed = true }
+        }
+        if (!changed) return false
+        taskMod.resetTask(ctx)
+        memory.save(bot, ctx)
+        return true
+      } catch (_) { return false }
+    },
     // vewo.8: the flat job a deploy interrupted resumes on the same square,
     // owner online or not; the relay path skips the sight checks, and the
     // main bot (strip 0) re-announces it so helpers adopt the one square.
