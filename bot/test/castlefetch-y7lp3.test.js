@@ -8,7 +8,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const fetch = require('../src/behaviours/castlefetch')
-const { fetchStockOf } = require('../src/cheststock')
+const { fetchStockOf, REMEMBERED_RADIUS, REMEMBERED_DRY_MS } = require('../src/cheststock')
 
 const SITE = { x: 100, y: 64, z: 200 }
 const bot = {
@@ -67,6 +67,8 @@ describe('castlefetch any chest (y7lp.3)', () => {
       assert.equal(fetchStockOf(ctx, ['cobblestone'], bot, 'stone') > 0, ok)
       assert.equal(!!fetch.pickChest(bot, ctx, {}, 'stone'), ok)
     }
+    assert.equal(REMEMBERED_RADIUS, require('../src/behaviours/stockpile').NEARBY_CHEST_RADIUS)
+    assert.equal(REMEMBERED_DRY_MS, fetch.CHEST_DRY_MS)
     assert.equal(fetchStockOf({ castle: castle(), chests: [stone] }, ['cobblestone']), 0, 'no body: no claim')
   })
 })
