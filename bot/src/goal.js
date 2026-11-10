@@ -756,7 +756,8 @@ function castleFetchGo(facts, bot, ctx) {
 // tree-memory check: a stale/far remembered log must not veto explore; gather
 // ranks first and explore only runs once gather is out (held after failing).
 // Plank-equivalent wood in the last-read home chest snapshot (0 if unknown
-// or older than CHEST_WOOD_FRESH_MS: a stale-high read must not stop the chop).
+// or older than CHEST_WOOD_FRESH_MS: a stale-high read must not stop the chop;
+// gather re-reads a stale home chest first, so a full chest is never re-chopped).
 const CHEST_WOOD_FRESH_MS = 30 * 60 * 1000
 function homeChestWood(ctx) {
   let n = 0

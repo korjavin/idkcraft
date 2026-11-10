@@ -110,3 +110,20 @@ describe('woodstarve: explore once gather is out', () => {
     assert.equal(e(starved({ player: 'Owner', home: 'none' }), { gather: failed }), false)
   })
 })
+
+describe('woodstarve: a stale home-chest read is refreshed before any chop', () => {
+  const gatherMod = require('../src/behaviours/gather')
+  const chest = { x: 1, y: 64, z: 1 }
+  const bp = { x: 0, y: 64, z: 0 }
+  it('stale snapshot: gather goes to the home chest first (re-read), fresh: it does not', () => {
+    const stale = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 64 }, at: Date.now() - 31 * 60 * 1000 } } }
+    const g1 = {}
+    gatherMod.chestLogsTick(bot, stale, g1, 0, bp)
+    assert.ok(g1.chestLogs || (stale.chestLogsDry && stale.chestLogsDry['1,64,1']), 'stale read: chest attempted')
+    const fresh = { home: { site, built: true, chest }, chestLast: { home: { contents: { oak_planks: 64 }, at: Date.now() } } }
+    const g2 = {}
+    assert.equal(gatherMod.chestLogsTick(bot, fresh, g2, 0, bp), false)
+    assert.equal(g2.chestLogs, undefined)
+    assert.equal(fresh.chestLogsDry, undefined)
+  })
+})

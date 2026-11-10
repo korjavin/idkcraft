@@ -399,7 +399,9 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
   if (!pick) {
     if (g.chestTried) return false // one try per attempt, dry window or not
     try {
-      if (ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx)) return false
+      // Built home: no chest draw — unless the home-chest read is stale
+      // (woodstarve): the open refreshes the snapshot the chop cap trusts.
+      if (ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx) && !require('../cheststock').homeChestStale(ctx)) return false
     } catch (_) { return false }
     const dry = ctx.chestLogsDry || {}
     const now = Date.now()
@@ -851,5 +853,6 @@ function gather(bot, ctx, target, state) {
 
 module.exports = gather
 module.exports.taskFar = taskFar
+module.exports.chestLogsTick = chestLogsTick
 module.exports.noteFarWood = noteFarWood
 module.exports.harvestLanding = harvestLanding

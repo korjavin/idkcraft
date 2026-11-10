@@ -81,4 +81,11 @@ function fetchStockOf(ctx, names) {
   }
 }
 
-module.exports = { SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }
+// A home-chest read that exists but is older than ms (woodstarve): gather
+// re-opens it before chopping. No read at all is not stale (never drawn).
+function homeChestStale(ctx, ms = 30 * 60 * 1000) {
+  const last = ctx && ctx.home && ctx.home.chest && ctx.chestLast && ctx.chestLast.home
+  return !!(last && typeof last.at === 'number' && Date.now() - last.at >= ms)
+}
+
+module.exports = { homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }
