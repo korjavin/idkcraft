@@ -212,6 +212,19 @@ describe('bridge consume/sleep (idkcraft-neuc.9)', () => {
     await assert.rejects(() => bot.consume(), /not consumed/)
   })
 
+  it('a hand swap mid-use is not a meal (prod bot2: 100 phantom eats at food=17)', async () => {
+    let transport
+    ;({ transport, bot } = await lookBot({
+      food: 17,
+      inventory: [{ slot: 36, name: 'bread', count: 3 }, { slot: 37, name: 'stone_sword', count: 1 }],
+    }))
+    const p = bot.consume()
+    await tick(120)
+    transport.state.selected = 1 // another step equips the sword; no bread was eaten
+    await assert.rejects(() => p, /not consumed/)
+    assert.equal(transport.state.inventory[0].count, 3)
+  })
+
   it('overlapping interactions share one pause/resume pair (refcounted)', async () => {
     let transport
     ;({ transport, bot } = await lookBot())
