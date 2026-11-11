@@ -50,10 +50,21 @@ function eligible(bot, ctx, st, cells, now, hooks) {
   if (s.until > now) return null
   return cells.find((c) => {
     const e = st.blocked && st.blocked[hooks.bkey(st, c.idx)]
-    return e && e.retired && (e.until || 0) <= now && (e.recoveries || 0) < MAX_EPISODES && WHY.has(e.why) && blueprint.isPlaceTarget(c.kind) &&
-      (s.cooldown.get(c.idx) || 0) <= now && name(bot, c) != null &&
-      !hooks.done(bot, c) && hooks.findItem(bot, c.kind, ctx) && distance(bot, c) < 16
+    if (!e || !e.retired || !blueprint.isPlaceTarget(c.kind)) return false
+    const why = (e.until || 0) > now ? 'until' : (e.recoveries || 0) >= MAX_EPISODES ? 'recoveries' : !WHY.has(e.why) ? `why-${e.why}`
+      : (s.cooldown.get(c.idx) || 0) > now ? 'cooldown' : name(bot, c) == null ? 'unloaded' : hooks.done(bot, c) ? 'done'
+        : !hooks.findItem(bot, c.kind, ctx) ? 'no-item' : distance(bot, c) >= 16 ? 'far' : null
+    noteSkip(s, c, why)
+    return !why
   }) || null
+}
+// A retired cell recovery skips logs its first failing term once per change
+// (2026-11-11: 4 torch holes held torches yet never got an episode).
+function noteSkip(s, c, why) {
+  s.skips = s.skips || new Map()
+  if (s.skips.get(c.idx) === why) return
+  s.skips.set(c.idx, why)
+  if (why) console.log(`castle recovery skip ${c.kind} ${key(c)} why=${why}`)
 }
 
 // qxql.27: the control() terms a menu can check before the castle step

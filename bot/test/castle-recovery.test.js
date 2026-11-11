@@ -408,6 +408,22 @@ describe('qxql.29 recovery menu on the prod wall geometry', () => {
     assert.ok(!ids(f, f.target).includes('retry_cell'))
   })
 
+  it('a skipped retired cell logs its first failing term once per change', async () => {
+    const f = fixture({ occupant: 'air', choose: 'retry' })
+    retire(f)
+    const items = f.items.splice(0) // no material: no-item
+    const lines = []
+    const log = console.log
+    console.log = (m) => { lines.push(String(m)) }
+    try {
+      await ticks(f, 3)
+      f.items.push(...items)
+      await ticks(f, 1)
+    } finally { console.log = log }
+    const skips = lines.filter((l) => l.startsWith('castle recovery skip'))
+    assert.deepEqual(skips, [`castle recovery skip stone ${f.key(f.target)} why=no-item`], lines.join('\n'))
+  })
+
   it('a torch cell gets a placement retry and stances, not only defer', () => {
     const f = wall('torch')
     f.items.push({ name: 'torch', type: 50, count: 4 })
