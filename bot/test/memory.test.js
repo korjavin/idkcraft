@@ -518,6 +518,19 @@ describe('castle blocked why survives a restart (g0z.23 follow-up)', () => {
     invalid.forEach((_, i) => { assert.equal(restored.castle.blocked[`1:${10 + i}`].recoveries, undefined) })
   })
 
+  it('keeps the recovery window start across restart, clamped to now (qxql.30)', () => {
+    const now = Date.now()
+    const e = { tries: 3, until: now, why: 'build-miss', retired: true, recoveries: 2 }
+    const blocked = { '1:5': { ...e, recoveredAt: now - 1000 }, '1:6': { ...e, recoveredAt: now + 99999 }, '1:7': { ...e, recoveredAt: 'x' }, '1:8': { ...e } }
+    assert.equal(memory.save(botAt(SPAWN_A), castleCtx(blocked), file, now), true)
+    const r = {}
+    assert.ok(memory.restore(botAt(SPAWN_A), r, file, now))
+    assert.equal(r.castle.blocked['1:5'].recoveredAt, now - 1000)
+    assert.ok(r.castle.blocked['1:6'].recoveredAt <= Date.now(), 'never in the future')
+    assert.equal(r.castle.blocked['1:7'].recoveredAt, undefined)
+    assert.equal(r.castle.blocked['1:8'].recoveredAt, undefined, 'legacy: no stamp')
+  })
+
   it('drops a non-string why instead of persisting it', () => {
     const now = Date.now()
     const ctx1 = castleCtx({ '1:5': { tries: 1, until: now + 60000, why: { evil: true } } })

@@ -347,6 +347,8 @@ function castleOf(c) {
         // qxql.19: keep the optional lifetime recovery budget across
         // restarts; legacy entries without it still start at zero.
         if (Number.isInteger(e.recoveries) && e.recoveries > 0) out.blocked[k].recoveries = Math.min(e.recoveries, 2)
+        // qxql.30: the budget's window start rides along (never in the future).
+        if (Number.isFinite(e.recoveredAt) && e.recoveredAt > 0) out.blocked[k].recoveredAt = Math.min(e.recoveredAt, Date.now())
         // Consecutive-protected streak (idkcraft-v0vy): the count rides
         // along so a restart resumes fast-retire instead of re-climbing
         // from zero. Capped well above the retire threshold; blockCell
