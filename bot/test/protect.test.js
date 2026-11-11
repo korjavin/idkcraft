@@ -896,4 +896,25 @@ describe('castle ground (idkcraft-g0z.14)', () => {
     assert.equal(d('snow', wall.x, site.y - 1, wall.z), null)
     assert.equal(denyReason(bot, blk('stone', wall.x, site.y - 1, wall.z), {}), null, 'no castle')
   })
+  it('a recovering body trapped under the site may dig ground beside/above it, never below, plan cells or under sand (prod 2026-11-11 V2d y51)', () => {
+    const { protectedReason } = require('../src/behaviours/util')
+    const cells = new Map()
+    const b = worldBot(cells)
+    const fx = site.x + 15, fy = site.y - 13, fz = site.z + 13
+    b.entity = { position: new Vec3(fx + 0.5, fy, fz + 0.5) }
+    const rec = { castle, recovery: { action: 'dig_pillar' } }
+    const p = (n, x, y, z, ctx = rec) => protectedReason(b, blk(n, x, y, z), ctx)
+    assert.equal(p('stone', fx, fy + 2, fz), null, 'head/up: diggable in recovery')
+    assert.equal(p('stone', fx + 1, fy, fz), null, 'beside at body height')
+    assert.equal(p('stone', fx, fy - 1, fz), 'protected', 'never below the feet')
+    assert.equal(p('stone', fx + 3, fy + 1, fz), 'protected', 'not adjacent')
+    assert.equal(p('stone', fx, fy + 2, fz, { castle }), 'protected', 'not recovering: guard stays')
+    cells.set(`${fx},${fy + 3},${fz}`, 'gravel')
+    assert.equal(p('stone', fx, fy + 2, fz), 'protected', 'gravel above would fall')
+    const pw = blueprint.absPlan(site, 0, 2).cells.find((c) => c.y < site.y && c.kind === 'stone')
+    if (pw) {
+      b.entity.position = new Vec3(pw.x + 0.5, pw.y - 1, pw.z + 0.5)
+      assert.equal(p('cobblestone', pw.x, pw.y, pw.z), 'protected', 'castle plan cell stays protected')
+    }
+  })
 })
