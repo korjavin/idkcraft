@@ -345,6 +345,31 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
 }
 
 // vf8e.6: the owner orders that end a running LLM plan.
+// Fixed argless commands a one-edit typo maps to ('follwo me'), only when
+// exactly one is that close; short words (stop, share) are never guessed.
+const TYPO_COMMANDS = ['follow me', 'go work', 'come home', 'go home', 'go castle', 'build here', 'build castle', 'lead anyway']
+function editDist1(a, b) {
+  if (a === b) return 0
+  if (Math.abs(a.length - b.length) > 1) return 2
+  let i = 0
+  while (i < a.length && a[i] === b[i]) i++
+  if (a.length === b.length) {
+    if (a.slice(i + 1) === b.slice(i + 1)) return 1
+    return a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2) ? 1 : 2
+  }
+  const [l, sh] = a.length > b.length ? [a, b] : [b, a]
+  return l.slice(i + 1) === sh.slice(i) ? 1 : 2
+}
+function fixTypo(msg) {
+  if (msg.length < 6 || TYPO_COMMANDS.includes(msg) || OWNER_ORDER.test(msg)) return msg
+  // Every word keeps its first letter ('no work' is not 'go work', 'build
+  // there' is not 'build here'): typos land inside words, not on meaning.
+  const heads = (t) => t.split(' ').map((w) => w[0]).join(' ')
+  const hits = TYPO_COMMANDS.filter((c) => heads(c) === heads(msg) && editDist1(msg, c) === 1)
+  if (hits.length !== 1) return msg
+  console.log(`chat typo "${msg}" -> "${hits[0]}"`)
+  return hits[0]
+}
 const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|reforest(?: \d+)?|share|bring me(?: .*)?|make(?: .*)?|craft(?: .*)?)$/
 // vf8e.17: the `do <step> [count]` grammar. Only grammar-shaped lines take
 // the deterministic verb (a valid one replaces the running plan through
@@ -399,6 +424,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     if (addr[1] !== String(bot.username).toLowerCase()) return
     msg = addr[2]
   }
+  msg = fixTypo(msg)
   // Puppet sessions (idkcraft-jlw7): the only incoming-chat tag — session
   // review tells from=IdkTester apart from live players. No metric label.
   console.log(`chat from=${playerName} msg=${msg}`)
@@ -1030,4 +1056,4 @@ function wakeBody(bot) {
   void (async () => { try { await bot.wake() } catch (_) { /* already awake: the event won */ } })()
 }
 
-module.exports = { handleChat, advancePendingSearch, clearPendingSearch, startBlockOrder, answerFound, resSubmerged, wakeBody, castleSite }
+module.exports = { fixTypo, handleChat, advancePendingSearch, clearPendingSearch, startBlockOrder, answerFound, resSubmerged, wakeBody, castleSite }

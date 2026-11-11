@@ -709,6 +709,32 @@ describe('llm orders: flag on', () => {
     assert.equal(ctx.llmOrder, null, 'honest stop, no spin')
     assert.equal(ctx.taskPlanArgs, null)
     assert.ok(bot.lines.some((l) => l.startsWith('plan stopped at light')), String(bot.lines))
+    assert.ok(!bot.lines.some((l) => l.includes('partial')), 'zero runs: no partial count')
+  })
+
+  it('a repeated step that runs out of work ends with an honest partial count', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"light","count":3}]}'
+    handleChat(bot, ticker, 'P', 'light it three times')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    const run = (status) => {
+      ctx.taskPlanStep = null
+      ctx.step = 'light'
+      ctx.stepStatus = 'running'
+      ctx.stepGen = (ctx.stepGen | 0) + 1
+      llmOrders.tick(bot, ctx)
+      ctx.stepStatus = status
+      llmOrders.tick(bot, ctx)
+    }
+    run('done')
+    assert.ok(ctx.llmOrder, 'repeats after one run')
+    run('failed:not possible now')
+    assert.equal(ctx.llmOrder, null, 'no further repeat')
+    assert.ok(bot.lines.some((l) => l.includes('partial 1/3 light')), String(bot.lines))
+    assert.ok(!bot.lines.some((l) => l.startsWith('done:')), 'never claims done')
   })
 
   it('an order step that fails or is cancelled stops the plan, never counts as done', async () => {
@@ -1131,6 +1157,16 @@ describe('llm orders: deterministic do <step> (vf8e.17)', () => {
     assert.deepEqual(llmOrders.validatePlan({ plan: [{ step: 'reforest' }] }, llmOrders.workSteps(), { allowOrders: false }).steps, [{ step: 'reforest', done: '' }])
     assert.match(llmOrders.stepList(), /^reforest: /m)
     assert.match(llmOrders.chooseStepList(), /^reforest: /m)
+  })
+
+  it('"follwo me" (prod typo) follows without an LLM call', async () => {
+    const bot = mockBot()
+    const ticker = tickerFor(bot)
+    answer = '{"plan":[{"step":"share"}]}' // what the model answered in prod
+    handleChat(bot, ticker, 'P', 'follwo me')
+    await flush()
+    assert.ok(bot.lines.includes('Following P'), String(bot.lines))
+    assert.equal(calls.length, 0)
   })
 
   it('do while following takes the same path as an LLM plan (work mode on, pinned)', async () => {
