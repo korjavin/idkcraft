@@ -1466,11 +1466,14 @@ function menuFact(bot, ctx, now = Date.now()) {
           const kind = heldCell.kind
           const left = open.filter((c) => c.kind === kind).length
           heldWord = { kind, left, word: stockWord(bot, kind, left) }
-          if (!heldWord.word.endsWith('-some') || (ctx.step === 'castle' && ctx.stepStatus === 'running')) {
+          if (!heldWord.word.endsWith('-some')) {
             ctx.castleWord = { kind, left }
             return heldWord.word
           }
         }
+        // The sweep words before a partial held batch whatever step runs:
+        // gating it on ctx.step flipped clear <-> <kind>-some on every step
+        // change (prod 2026-11-11 V2d: castle <-> gather once a second).
         if (nextLitter(st, litterTargets(bot, ctx, st, now), now, bot) ||
           (nextFill(st, fillTargets(bot, ctx, st, now), now) && fillItem(bot, ctx))) {
           ctx.castleWord = { word: 'clear' }
