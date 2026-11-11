@@ -69,8 +69,24 @@ function installEquipGuard(bot, ctx) {
     if (dest === 'hand' && ctx.eatInFlight && item && typeof item.name === 'string' && item.name.endsWith('_sword')) {
       return Promise.resolve()
     }
+    // The meal owns the hand: another step's hand equip waits for it (<= 3 s)
+    // instead of swapping mid-use, which cancels the bite (prod 2026-11-11 bot2).
+    if (dest === 'hand' && ctx.eatInFlight && !(item && item.name === ctx.eatItem)) {
+      return waitMeal(ctx).then(() => origEquip.call(this, item, dest, ...args))
+    }
     return origEquip.call(this, item, dest, ...args)
   }
+  const origSelect = bot.setQuickBarSlot
+  if (typeof origSelect === 'function') {
+    bot.setQuickBarSlot = function(...args) {
+      if (!ctx.eatInFlight) return origSelect.apply(this, args)
+      waitMeal(ctx).then(() => origSelect.apply(this, args))
+    }
+  }
+}
+
+async function waitMeal(ctx) {
+  for (let i = 0; i < 60 && ctx.eatInFlight; i++) await new Promise((r) => setTimeout(r, 50))
 }
 
 function eatReflex(bot, ctx, state) {
@@ -95,6 +111,7 @@ function eatReflex(bot, ctx, state) {
   if (typeof bot.consume !== 'function') return false
 
   ctx.eatInFlight = true
+  ctx.eatItem = foodItem.name
   const prevFood = bot.food
   const doEat = async () => {
     try {
