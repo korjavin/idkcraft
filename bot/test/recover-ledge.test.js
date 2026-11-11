@@ -107,10 +107,17 @@ describe('sidestep ledge drop', () => {
     assert.equal(b.controls.forward, true)
     await new Promise((r) => setTimeout(r, 400))
     assert.equal(b.controls.forward, false, 'released well inside the 1 s tick')
-    b.entity.position = pos(1.2, 60.4, 0.5); b.entity.onGround = false // stepped off, falling
+    const [dx, dz] = ctx.recovery.st.dir
+    b.entity.position = pos(0.5 + dx * 0.6, 61, 0.5 + dz * 0.6) // centre just past the boundary, hitbox still on the edge
+    assert.equal(run(b, ctx), 'running')
+    assert.equal(b.controls.forward, true, 'still on the edge: pulse again')
+    b.entity.position = pos(0.5 + dx * 1.1, 61, 0.5 + dz * 1.1) // a block past the centre: beyond the measured edge
+    run(b, ctx)
+    assert.equal(b.controls.forward, false, 'no push past the measured zone')
+    b.entity.position = pos(0.5 + dx * 0.8, 60.4, 0.5 + dz * 0.8); b.entity.onGround = false // falling
     assert.equal(run(b, ctx), 'running')
     assert.equal(b.controls.forward, false, 'no push in the air / off the start cell')
-    b.entity.position = pos(1.5, 57, 0.5); b.entity.onGround = true // landed on the measured column
+    b.entity.position = pos(0.5 + dx, 57, 0.5 + dz); b.entity.onGround = true // landed on the measured column
     assert.equal(run(b, ctx), 'done')
     assert.equal(b.controls.forward, false)
   })

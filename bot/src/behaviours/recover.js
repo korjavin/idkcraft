@@ -1898,10 +1898,13 @@ function sidestepRun(bot, ctx) {
       try { const p = typeof bot.lookAt === 'function' && bot.lookAt(new Vec3(bp.x + st.dir[0] * 2, bp.y + 1.6, bp.z + st.dir[1] * 2), true); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch (_) { /* best-effort */ }
     }
     // A bounded pulse, never a held key (the tick is 1 Hz: a held forward
-    // walks past the measured column). ~1 block at walk speed, and only from
-    // the start cell on the ground: off the cell or airborne, no push.
-    const inCell = `${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)}` === st.cell
-    if (inCell && (!bot.entity || bot.entity.onGround !== false)) {
+    // walks past the measured column). ~1 block at walk speed, only on the
+    // ground at the start height and while the centre is less than a block
+    // past the start cell's centre: the 0.6 hitbox still stands on the edge
+    // a little past the boundary, so the cell alone would stall there.
+    const sc = { x: Math.floor(st.start.x) + 0.5, z: Math.floor(st.start.z) + 0.5 }
+    const along = (bp.x - sc.x) * st.dir[0] + (bp.z - sc.z) * st.dir[1]
+    if (along < 1 && Math.floor(bp.y) === Math.floor(st.start.y) && (!bot.entity || bot.entity.onGround !== false)) {
       setForward(bot, true)
       clearTimeout(st.pulse)
       st.pulse = setTimeout(() => setForward(bot, false), LEDGE_PULSE_MS)
