@@ -370,6 +370,20 @@ describe('qxql.29 recovery menu on the prod wall geometry', () => {
     return { ...f, c }
   }
   const ids = (f, c) => recovery.menu(f.bot, f.ctx, { cell: c, castle: f.st, recent: [] }, castle.RECOVERY_HOOKS).actions.map((a) => a.id)
+  it('a retired unreachable stairs cell is retried and placed faced (prod 2026-11-11: 5 of 14 last holes)', async () => {
+    const site = { x: 100, y: 64, z: 200 }
+    const sc = blueprint.absPlan(site, 0, 3).cells.find((c) => c.kind === 'stairs' && c.face && c.y === site.y)
+    const f = fixture({ occupant: 'air', choose: 'retry', cell: `${sc.x},${sc.y},${sc.z}` })
+    f.items.push({ name: 'cobblestone_stairs', type: 67, count: 4 })
+    const looks = []
+    f.bot.look = async (yaw) => { looks.push(yaw) }
+    retire(f, 'unreachable')
+    await ticks(f, 3)
+    assert.ok(f.calls.places.includes(f.key(f.target)), JSON.stringify(f.calls))
+    assert.equal(f.bot.blockAt(f.target).name, 'cobblestone_stairs')
+    assert.deepEqual(looks, [Math.atan2(-sc.face.dx, -sc.face.dz)], 'looks along the plan face first')
+  })
+
   it('a torch cell gets a placement retry and stances, not only defer', () => {
     const f = wall('torch')
     f.items.push({ name: 'torch', type: 50, count: 4 })

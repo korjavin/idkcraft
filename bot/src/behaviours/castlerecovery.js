@@ -133,7 +133,8 @@ function standable(bot, p, at) {
     !flat.cellOccupiedByPlayer(bot, p.x, p.y, p.z)
 }
 // qxql.29: torch too (a wall or floor ref gives wall_torch/torch, both match).
-const PLACE_KINDS = ['stone', 'planks', 'frame', 'torch']
+// Stairs (2026-11-11 prod: 5 of 14 last holes) place faced via the builder.
+const PLACE_KINDS = ['stone', 'planks', 'frame', 'torch', 'stairs']
 function menu(bot, ctx, ep, hooks) {
   const c = ep.cell, st = ep.castle
   const { at } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
@@ -261,12 +262,15 @@ async function act(bot, ctx, s, ep, a, hooks, afterWalk = false) {
     } else if (a.type === 'retry' || a.type === 'stance') {
       const item = hooks.findItem(bot, ep.cell.kind, ctx)
       const p = ep.cell
-      const ref = build.findRef(bot, new Vec3(p.x, p.y, p.z))
+      const stairs = p.kind === 'stairs'
+      if (stairs && !(p.face && hooks.placeStairs)) return
+      const ref = build.findRef(bot, new Vec3(p.x, p.y, p.z), stairs ? { excludeTop: true } : undefined)
       if (!item || !ref || !live() || !AIR.has(name(bot, p))) return
       const reference = signature(bot, ref.ref.position)
       await bot.equip(item, 'hand')
       if (!live() || signature(bot, ref.ref.position) !== reference || distance(bot, p) > build.PLACE_REACH || flat.cellOccupiedSelf(bot, p.x, p.y, p.z) || flat.cellOccupiedByPlayer(bot, p.x, p.y, p.z)) return
-      await bot.placeBlock(ref.ref, ref.face)
+      if (stairs) await hooks.placeStairs(bot, ref, p)
+      else await bot.placeBlock(ref.ref, ref.face)
     }
   } catch (err) {
     if (err && err.message === 'build-preempted' && control(bot, ctx, ep)) end(s, ep, Date.now(), 'preempted')
