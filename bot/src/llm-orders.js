@@ -879,6 +879,9 @@ function end(bot, ctx, o, result) {
   if (o.bringGoal && typeof result === 'string' && result.startsWith('failed:')) {
     return replanBring(bot, ctx, o, result)
   }
+  // A repeated step that ran some times then ran out of work: say so.
+  const cs = o.steps && o.steps[o.i]
+  if (typeof result === 'string' && result.startsWith('failed:') && cs && cs.ran > 0) result = `failed:partial ${cs.ran}/${cs.total} ${cs.step}, then ${failReason(result) || 'failed'}`
   if (result !== 'done') release(ctx, o)
   else dropArgs(ctx) // release() already nulled the rest
   // Chooser backoff (qxql.10): a failed plan doubles the wait up to 30 min,
@@ -1100,6 +1103,8 @@ function tick(bot, ctx, now = Date.now()) {
     try {
       const left = Math.floor(Number(s && s.count))
       if (left >= 2 && s && !ORDER_STEPS[s.step]) {
+        if (!s.total) s.total = left
+        s.ran = (s.ran || 0) + 1
         s.count = left - 1
         pinArgs(ctx, o, s) // re-pin carries the decremented count
         // Codex P1: tracking starts WITH the re-pin, not next tick —
