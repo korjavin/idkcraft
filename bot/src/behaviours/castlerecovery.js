@@ -133,7 +133,8 @@ function standable(bot, p, at) {
     !flat.cellOccupiedByPlayer(bot, p.x, p.y, p.z)
 }
 // qxql.29: torch too (a wall or floor ref gives wall_torch/torch, both match).
-const PLACE_KINDS = ['stone', 'planks', 'frame', 'torch']
+// Stairs (2026-11-11 prod: 5 of 14 last holes) place faced via the builder.
+const PLACE_KINDS = ['stone', 'planks', 'frame', 'torch', 'stairs']
 function menu(bot, ctx, ep, hooks) {
   const c = ep.cell, st = ep.castle
   const { at } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
@@ -178,7 +179,7 @@ function menu(bot, ctx, ep, hooks) {
     add(`stance_${stances.length}`, 'stance', p, `Repath to observed dry stance ${key(p)} and try placing the target cube from there; only observed target correctness counts as an effect.`)
     if (stances.length >= 2) break
   }
-  const retryRef = build.findRef(bot, new Vec3(c.x, c.y, c.z))
+  const retryRef = build.findRef(bot, new Vec3(c.x, c.y, c.z), c.kind === 'stairs' ? { excludeTop: true } : undefined) // the act's own ref rule
   if (PLACE_KINDS.includes(c.kind) && AIR.has(name(bot, c)) && retryRef && distance(bot, c) <= build.PLACE_REACH &&
       !flat.cellOccupiedSelf(bot, c.x, c.y, c.z) && !flat.cellOccupiedByPlayer(bot, c.x, c.y, c.z)) {
     add('retry_cell', 'retry', c, 'Retry direct placement only into this currently open supported cell; success requires the expected block in the world.', { ref: retryRef })
@@ -261,12 +262,15 @@ async function act(bot, ctx, s, ep, a, hooks, afterWalk = false) {
     } else if (a.type === 'retry' || a.type === 'stance') {
       const item = hooks.findItem(bot, ep.cell.kind, ctx)
       const p = ep.cell
-      const ref = build.findRef(bot, new Vec3(p.x, p.y, p.z))
+      const stairs = p.kind === 'stairs'
+      if (stairs && !(p.face && hooks.placeStairs)) return
+      const ref = build.findRef(bot, new Vec3(p.x, p.y, p.z), stairs ? { excludeTop: true } : undefined)
       if (!item || !ref || !live() || !AIR.has(name(bot, p))) return
       const reference = signature(bot, ref.ref.position)
       await bot.equip(item, 'hand')
       if (!live() || signature(bot, ref.ref.position) !== reference || distance(bot, p) > build.PLACE_REACH || flat.cellOccupiedSelf(bot, p.x, p.y, p.z) || flat.cellOccupiedByPlayer(bot, p.x, p.y, p.z)) return
-      await bot.placeBlock(ref.ref, ref.face)
+      if (stairs) await hooks.placeStairs(bot, ref, p)
+      else await bot.placeBlock(ref.ref, ref.face)
     }
   } catch (err) {
     if (err && err.message === 'build-preempted' && control(bot, ctx, ep)) end(s, ep, Date.now(), 'preempted')

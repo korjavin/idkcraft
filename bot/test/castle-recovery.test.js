@@ -370,6 +370,44 @@ describe('qxql.29 recovery menu on the prod wall geometry', () => {
     return { ...f, c }
   }
   const ids = (f, c) => recovery.menu(f.bot, f.ctx, { cell: c, castle: f.st, recent: [] }, castle.RECOVERY_HOOKS).actions.map((a) => a.id)
+  it('a retired unreachable stairs cell is retried and placed faced (prod 2026-11-11: 5 of 14 last holes)', async () => {
+    const site = { x: 100, y: 64, z: 200 }
+    const sc = blueprint.absPlan(site, 0, 3).cells.find((c) => c.kind === 'stairs' && c.face && c.y === site.y)
+    const f = fixture({ occupant: 'air', choose: 'retry', cell: `${sc.x},${sc.y},${sc.z}` })
+    f.items.push({ name: 'cobblestone_stairs', type: 67, count: 4 })
+    const looks = []
+    let yaw = null
+    f.bot.look = async (y) => { looks.push(y); yaw = y }
+    // Server rule: a stair faces the placer's horizontal look; half from the click.
+    const props = new Map()
+    const dirOf = (y) => ({ dx: Math.round(-Math.sin(y)), dz: Math.round(-Math.cos(y)) })
+    f.bot._placeBlockWithOptions = async (ref, face, opt) => {
+      f.calls.facing = yaw
+      await f.bot.placeBlock(ref, face)
+      props.set(f.key(ref.position.plus(face)), { facing: blueprint.faceName(dirOf(yaw)), half: opt.half })
+    }
+    const at = f.bot.blockAt
+    f.bot.blockAt = (p) => { const b = at(p); const pr = props.get(f.key(p)); if (pr) b.getProperties = () => pr; return b }
+    retire(f, 'unreachable')
+    await ticks(f, 3)
+    assert.ok(f.calls.places.includes(f.key(f.target)), JSON.stringify(f.calls))
+    assert.equal(f.bot.blockAt(f.target).name, 'cobblestone_stairs')
+    assert.deepEqual(looks, [Math.atan2(-sc.face.dx, -sc.face.dz)], 'looks along the plan face first')
+    assert.equal(f.calls.facing, Math.atan2(-sc.face.dx, -sc.face.dz), 'placed while facing the plan face')
+    assert.equal(f.st.blocked[`3:${f.target.idx}`], undefined, 'outcome correct: the hole is cleared')
+  })
+
+  it('a stairs cell whose only ref is the block above gets no retry', () => {
+    const site = { x: 100, y: 64, z: 200 }
+    const sc = blueprint.absPlan(site, 0, 3).cells.find((c) => c.kind === 'stairs' && c.face && c.y === site.y)
+    const f = fixture({ occupant: 'air', cell: `${sc.x},${sc.y},${sc.z}` })
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, -1, 0]]) f.set({ x: sc.x + dx, y: sc.y + dy, z: sc.z + dz }, 'air')
+    f.set({ x: sc.x, y: sc.y + 1, z: sc.z }, 'cobblestone')
+    f.items.push({ name: 'cobblestone_stairs', type: 67, count: 4 })
+    retire(f, 'unreachable')
+    assert.ok(!ids(f, f.target).includes('retry_cell'))
+  })
+
   it('a torch cell gets a placement retry and stances, not only defer', () => {
     const f = wall('torch')
     f.items.push({ name: 'torch', type: 50, count: 4 })

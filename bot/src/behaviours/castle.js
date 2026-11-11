@@ -2633,6 +2633,7 @@ function arrive(bot, st) {
 }
 
 const RECOVERY_HOOKS = {
+  placeStairs,
   bkey, done, findItem, fillItem,
   own(ctx, p, name) {
     if (!(ctx.placedByBot instanceof Set)) ctx.placedByBot = new Set()
