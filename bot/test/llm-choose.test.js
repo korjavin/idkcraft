@@ -899,7 +899,7 @@ describe('chooser JEV-first tier', () => {
     } finally { for (const [id, f] of saved) goal.MENU[id].feasible = f }
   })
 
-  it('an LLM-chosen need that keeps pushing prerequisites stops at 3 LLM calls', async () => {
+  it('an LLM-chosen need that keeps pushing prerequisites stops at 2 LLM calls', async () => {
     const { bot, ctx } = finishedHome()
     const ticker = { setBring({ name, want, by }) { ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() {} }
     const saved = llmOrders.workSteps().map((id) => [id, goal.MENU[id].feasible])
@@ -919,8 +919,53 @@ describe('chooser JEV-first tier', () => {
         await flush()
       }
     } finally { for (const [id, f] of saved) goal.MENU[id].feasible = f }
-    assert.equal(llmCalls, 3, JSON.stringify(logs))
+    assert.equal(llmCalls, 2, JSON.stringify(logs))
     assert.ok(logs.some((l) => l.includes('result=failed:episode llm budget')), JSON.stringify(logs))
+  })
+
+  it('episode resets on cancel and on time; a lost need item does not reset it', async () => {
+    const { bot, ctx } = finishedHome()
+    const items = [{ name: 'bread', count: 2 }]
+    bot.inventory.items = () => items
+    const saved = llmOrders.workSteps().map((id) => [id, goal.MENU[id].feasible])
+    for (const [id] of saved) goal.MENU[id].feasible = () => false
+    try {
+      ask(bot, ctx)
+      await flush()
+      assert.equal(llmCalls, 1)
+      ask(bot, ctx)
+      await flush()
+      assert.equal(llmCalls, 1, 'same episode')
+      llmOrders.cancel(ctx)
+      ask(bot, ctx)
+      await flush()
+      assert.equal(llmCalls, 2, 'cancel starts a new episode')
+      ctx.llmChooseEp.items = ['bread']
+      ctx.llmChooseEp.held = 2
+      items[0].count = 1 // ate one: not progress
+      ask(bot, ctx)
+      await flush()
+      assert.equal(llmCalls, 2, 'a loss keeps the episode')
+      assert.equal(ctx.llmChooseEp.held, 1)
+      ctx.llmChooseEp.at -= 31 * 60 * 1000
+      ask(bot, ctx)
+      await flush()
+      assert.equal(llmCalls, 3, 'an old episode expires')
+    } finally { for (const [id, f] of saved) goal.MENU[id].feasible = f }
+  })
+
+  it('a JEV pick gone infeasible during the await is dropped', async () => {
+    const { bot, ctx } = torchCastle()
+    ctx.castleWord = null
+    const f = goal.MENU.gather.feasible
+    bot.health = 4 // a second candidate: JEV is really asked
+    jevAns = () => { goal.MENU.gather.feasible = () => false; return { choice: 'gather', confidence: 0.9 } }
+    try {
+      ask(bot, ctx)
+      await flush()
+    } finally { goal.MENU.gather.feasible = f }
+    assert.ok(logs.some((l) => l.startsWith('choose jev stale pick=gather')), JSON.stringify(logs))
+    assert.ok(!(ctx.llmOrder && ctx.llmOrder.steps && ctx.llmOrder.steps[0].step === 'gather'))
   })
 
   it('no candidates: no JEV call, LLM once', async () => {

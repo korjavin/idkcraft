@@ -397,7 +397,7 @@ function shouldChoose(pick, ctx, facts, now = Date.now()) {
 // 8hpy.2 JEV-first chooser: a deterministic candidate list (feasible work
 // steps + needs read from facts), ranked by JEV; the LLM only when JEV has no
 // confident pick or the list is empty, and at most once per stall episode.
-const CHOOSE_EP_LLM_MAX = 3 // LLM calls per stall episode: choose + replans
+const CHOOSE_EP_LLM_MAX = 2 // LLM calls per stall episode: choose + 1 replan
 const CHOOSE_JEV_MIN_CONF = 0.5 // = task.TASK_PLAN_MIN_CONF (task requires this module)
 // A castle kind's need item: what castlefetch crafts for it (craftNames),
 // else the finished items its chest draw accepts (chestNames[0]), preferring
@@ -500,10 +500,12 @@ function ask(bot, ctx, req, fetchFn) {
       // episode; the LLM tier answers at most once per episode.
       const epKey = chooseEpisode(bot, ctx, facts0, regime)
       let ep = ctx.llmChooseEp
-      if (!ep || ep.key !== epKey || needHeld(bot, ep.items) !== ep.held) {
+      // Only a gain is progress (eating/placing lowers the count); the episode
+      // also expires after CHOOSE_WAIT_MAX_MS so a no-order bot is never silent.
+      if (!ep || ep.key !== epKey || needHeld(bot, ep.items) > ep.held || Date.now() - ep.at > CHOOSE_WAIT_MAX_MS) {
         const items = cands.filter((c) => c.step === 'need').map((c) => c.item)
-        ep = ctx.llmChooseEp = { key: epKey, items, held: needHeld(bot, items), tried: [], llm: 0, replans: 0 }
-      }
+        ep = ctx.llmChooseEp = { key: epKey, items, held: needHeld(bot, items), tried: [], llm: 0, replans: 0, at: Date.now() }
+      } else ep.held = Math.min(ep.held, needHeld(bot, ep.items))
       const open = cands.filter((c) => !ep.tried.includes(c.id))
       let jp = null
       // No JEV key: no await, the LLM ask starts in the same turn as before.
