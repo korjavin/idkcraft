@@ -56,6 +56,9 @@ const PILLAR_ISSUE_LAST_MS = 300 // ceiling: re-arms stop here (see firePillarTi
 const PILLAR_LIFTOFF_DY = 0.15 // below this height the jump hasn't begun (lzw: the ceiling slides)
 const PILLAR_STALL_MS = 5000 // absolute patience per arm: a stall past this yields (quit bounds the chain)
 const SIDESTEP_DIST = 2
+// A ledge the pathfinder will not step off (Baritone maxFallHeightNoWater 3)
+// but a body survives: 4..6 blocks onto a solid floor costs 1-3 HP.
+const LEDGE_DROP_MAX = 6
 const NEAR_PLAYER = 8
 // jsf.6: a live goal nearer than this MIGHT sit inside the pit (the 4jr
 // veto stands); farther out it cannot — the walls hem the body while the
@@ -1810,6 +1813,19 @@ function hopStepRun(bot, ctx) {
 // Sidestep: the old wedge/nudge action, now a primitive — 2 blocks toward
 // a free side with a one-tick jump. Done on displacement, failed when the
 // body still does not move.
+// Drop depth beside the body on side (dx,dz): blocks fallen to a standable
+// floor (0 = level), null when the side is walled, the floor is deeper than
+// LEDGE_DROP_MAX, or lava lands.
+function ledgeDrop(bot, dx, dz) {
+  for (let d = 0; d <= LEDGE_DROP_MAX; d++) {
+    const b = cellAt(bot, dx, -1 - d, dz)
+    if (isLava(b)) return null
+    if (b && standable(b)) return d
+    if (solid(cellAt(bot, dx, -d, dz)) || solid(cellAt(bot, dx, 1 - d, dz))) return null
+  }
+  return null
+}
+
 function sidestepRun(bot, ctx) {
   const rec = ctx.recovery
   const st = rec.st || (rec.st = { start: null, dir: null, waited: 0, issued: false })
@@ -1827,6 +1843,17 @@ function sidestepRun(bot, ctx) {
     const sides = scanSides(bot)
     if (sides.free.length === 0) return 'failed:boxed'
     st.dir = pickSidestepDir(bot, sides)
+    // Perched (prod 2026-11-11 V2d on a 1x2 dirt bridge, 4 blocks up, 45 min
+    // of Baritone 'Open set size: 0'): no side the pathfinder walks, one it
+    // would not drop from: walk off that ledge by hand.
+    // A level neighbour does not prove a way out (that bridge had one), so a
+    // ledge is also taken once a plain sidestep from this cell has failed.
+    st.cell = `${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)}`
+    const drops = sides.free.map((d) => ({ d, n: ledgeDrop(bot, d[0], d[1]) }))
+    if (ctx.sidestepFailedAt === st.cell || !drops.some((x) => x.n !== null && x.n <= 3)) {
+      const ledge = drops.filter((x) => x.n !== null && x.n > 3).sort((a, b) => a.n - b.n)[0]
+      if (ledge) { st.dir = ledge.d; st.ledge = ledge.n }
+    }
   }
   // Done only when the situation really changed (fja). The strict rule
   // applies to goal-less backstop episodes (the session pit: nothing to
@@ -1848,11 +1875,28 @@ function sidestepRun(bot, ctx) {
     gained = st.goalDist0 - Math.hypot(bp.x - st.goal0.x, bp.y - st.goal0.y, bp.z - st.goal0.z) > 1
   }
   const freed = !strict && Math.hypot(bp.x - st.start.x, bp.z - st.start.z) > PROGRESS_TOLERANCE
-  if (climbed || gained || freed) {
+  const dropped = st.ledge != null && (!bot.entity || !!bot.entity.onGround) && Math.floor(bp.y) < Math.floor(st.start.y)
+  if (climbed || gained || freed || dropped) {
     setJump(bot, false)
+    if (st.ledge != null) setForward(bot, false)
     return 'done'
   }
-  if (++st.waited > SIDESTEP_TIMEOUT_TICKS) { setJump(bot, false); return 'failed:no-progress' }
+  if (++st.waited > SIDESTEP_TIMEOUT_TICKS) {
+    setJump(bot, false)
+    if (st.ledge != null) setForward(bot, false)
+    ctx.sidestepFailedAt = st.cell
+    return 'failed:no-progress'
+  }
+  if (st.ledge != null) {
+    if (!st.issued) {
+      st.issued = true
+      console.log(`recover sidestep ledge drop=${st.ledge} dir=${st.dir[0]},${st.dir[1]}`)
+      try { if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null) } catch (_) { /* best-effort */ }
+      try { const p = typeof bot.lookAt === 'function' && bot.lookAt(new Vec3(bp.x + st.dir[0] * 2, bp.y + 1.6, bp.z + st.dir[1] * 2), true); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch (_) { /* best-effort */ }
+    }
+    setForward(bot, true)
+    return 'running'
+  }
   if (!st.issued) {
     st.issued = true
     try {
