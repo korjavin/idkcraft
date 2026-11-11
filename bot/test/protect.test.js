@@ -911,10 +911,11 @@ describe('castle ground (idkcraft-g0z.14)', () => {
     assert.equal(p('stone', fx, fy + 2, fz, { castle }), 'protected', 'not recovering: guard stays')
     cells.set(`${fx},${fy + 3},${fz}`, 'gravel')
     assert.equal(p('stone', fx, fy + 2, fz), 'protected', 'gravel above would fall')
-    const pw = blueprint.absPlan(site, 0, 2).cells.find((c) => c.y < site.y && c.kind === 'stone')
-    if (pw) {
-      b.entity.position = new Vec3(pw.x + 0.5, pw.y - 1, pw.z + 0.5)
-      assert.equal(p('cobblestone', pw.x, pw.y, pw.z), 'protected', 'castle plan cell stays protected')
-    }
+    // the only non-dig plan cells under site.y are planks at dy-1 (stone none): pin that so the check below can never go dead
+    const pw = blueprint.absPlan(site, 0, 2).cells.find((c) => c.y < site.y && c.kind !== 'dig')
+    assert.ok(pw && pw.kind === 'planks' && pw.y === site.y - 1, 'a non-dig plan cell exists under the site')
+    b.entity.position = new Vec3(pw.x + 0.5, pw.y - 1, pw.z + 0.5)
+    assert.equal(p('stone', pw.x + 1, pw.y, pw.z), null, 'escape zone reaches this height')
+    assert.equal(p('oak_planks', pw.x, pw.y, pw.z), 'protected', 'castle plan cell stays protected')
   })
 })
