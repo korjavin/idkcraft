@@ -59,6 +59,7 @@ const SIDESTEP_DIST = 2
 // A ledge the pathfinder will not step off (Baritone maxFallHeightNoWater 3)
 // but a body survives: 4..6 blocks onto a solid floor costs 1-3 HP.
 const LEDGE_DROP_MAX = 6
+const LEDGE_PULSE_MS = 250
 const NEAR_PLAYER = 8
 // jsf.6: a live goal nearer than this MIGHT sit inside the pit (the 4jr
 // veto stands); farther out it cannot — the walls hem the body while the
@@ -1896,7 +1897,15 @@ function sidestepRun(bot, ctx) {
       try { if (bot.pathfinder && typeof bot.pathfinder.setGoal === 'function') bot.pathfinder.setGoal(null) } catch (_) { /* best-effort */ }
       try { const p = typeof bot.lookAt === 'function' && bot.lookAt(new Vec3(bp.x + st.dir[0] * 2, bp.y + 1.6, bp.z + st.dir[1] * 2), true); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch (_) { /* best-effort */ }
     }
-    setForward(bot, true)
+    // A bounded pulse, never a held key (the tick is 1 Hz: a held forward
+    // walks past the measured column). ~1 block at walk speed, and only from
+    // the start cell on the ground: off the cell or airborne, no push.
+    const inCell = `${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)}` === st.cell
+    if (inCell && (!bot.entity || bot.entity.onGround !== false)) {
+      setForward(bot, true)
+      clearTimeout(st.pulse)
+      st.pulse = setTimeout(() => setForward(bot, false), LEDGE_PULSE_MS)
+    } else setForward(bot, false)
     return 'running'
   }
   if (!st.issued) {

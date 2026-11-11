@@ -44,7 +44,7 @@ describe('sidestep ledge drop', () => {
     const ctx = { recovery: {}, stuck: { by: 'x', goal: null } }
     assert.equal(run(b, ctx), 'running')
     assert.equal(ctx.recovery.st.ledge, 4)
-    assert.equal(b.controls.forward, true, 'forward held, no pathfinder goal')
+    assert.equal(b.controls.forward, true, 'forward pulse, no pathfinder goal')
     assert.equal(b.pathfinder.goal, null)
     b.entity.position = pos(1.5, 57, 0.5)
     assert.equal(run(b, ctx), 'done')
@@ -98,6 +98,20 @@ describe('sidestep ledge drop', () => {
     let r
     for (let i = 0; i < 20 && (r = run(b, ctx)) === 'running'; i++);
     assert.equal(r, 'failed:no-progress')
+    assert.equal(b.controls.forward, false)
+  })
+  it('forward is a bounded pulse: released before the next tick, never pushed off the cell or mid-air', async () => {
+    const b = bot(world(false))
+    const ctx = { recovery: {}, stuck: { by: 'x', goal: null } }
+    run(b, ctx)
+    assert.equal(b.controls.forward, true)
+    await new Promise((r) => setTimeout(r, 400))
+    assert.equal(b.controls.forward, false, 'released well inside the 1 s tick')
+    b.entity.position = pos(1.2, 60.4, 0.5); b.entity.onGround = false // stepped off, falling
+    assert.equal(run(b, ctx), 'running')
+    assert.equal(b.controls.forward, false, 'no push in the air / off the start cell')
+    b.entity.position = pos(1.5, 57, 0.5); b.entity.onGround = true // landed on the measured column
+    assert.equal(run(b, ctx), 'done')
     assert.equal(b.controls.forward, false)
   })
   it('never onto lava, never deeper than the cap', () => {
