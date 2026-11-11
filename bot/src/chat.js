@@ -362,7 +362,10 @@ function editDist1(a, b) {
 }
 function fixTypo(msg) {
   if (msg.length < 6 || TYPO_COMMANDS.includes(msg) || OWNER_ORDER.test(msg)) return msg
-  const hits = TYPO_COMMANDS.filter((c) => editDist1(msg, c) === 1)
+  // Every word keeps its first letter ('no work' is not 'go work', 'build
+  // there' is not 'build here'): typos land inside words, not on meaning.
+  const heads = (t) => t.split(' ').map((w) => w[0]).join(' ')
+  const hits = TYPO_COMMANDS.filter((c) => heads(c) === heads(msg) && editDist1(msg, c) === 1)
   if (hits.length !== 1) return msg
   console.log(`chat typo "${msg}" -> "${hits[0]}"`)
   return hits[0]

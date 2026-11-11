@@ -12,6 +12,6 @@ describe('chat typo fix', () => {
     assert.equal(fixTypo('go hoke'), 'go home')
   })
   it('leaves exact, short, far or ambiguous lines alone', () => {
-    for (const m of ['follow me', 'stpo', 'shrae', 'farm 10', 'hello there', 'flat 20', 'go']) assert.equal(fixTypo(m), m)
+    for (const m of ['follow me', 'stpo', 'shrae', 'farm 10', 'hello there', 'flat 20', 'go', 'no work', 'build there', 'do work']) assert.equal(fixTypo(m), m)
   })
 })
