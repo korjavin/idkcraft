@@ -394,6 +394,81 @@ function shouldChoose(pick, ctx, facts, now = Date.now()) {
   } catch (_) { return false }
 }
 
+// 8hpy.2 JEV-first chooser: a deterministic candidate list (feasible work
+// steps + needs read from facts), ranked by JEV; the LLM only when JEV has no
+// confident pick or the list is empty, and at most once per stall episode.
+const CHOOSE_EP_LLM_MAX = 2 // LLM calls per stall episode: choose + 1 replan
+const CHOOSE_JEV_MIN_CONF = 0.5 // = task.TASK_PLAN_MIN_CONF (task requires this module)
+// A castle kind's need item: what castlefetch crafts for it (craftNames),
+// else the finished items its chest draw accepts (chestNames[0]), preferring
+// the wood family the pack already holds. No generic name (an unknown kind):
+// the kind itself, so the acquire resolvers / LLM resolve it.
+function kindNeedItem(bot, kind) {
+  let names = []
+  try {
+    const cf = require('./behaviours/castlefetch')
+    names = cf.craftNames(bot, kind)
+    if (!names.length) names = (cf.chestNames(bot, kind)[0]) || []
+  } catch (_) { names = [] }
+  if (!names.length) return kind
+  let fam = []
+  try { fam = bot.inventory.items().map((i) => i.name).filter((n) => /_(log|planks)$/.test(n)).map((n) => n.replace(/(log|planks)$/, '')) } catch (_) { fam = [] }
+  return names.find((n) => fam.some((f) => n.startsWith(f))) || names[0]
+}
+function chooseCandidates(bot, ctx, facts) {
+  const out = []
+  const needs = new Map()
+  const addNeed = (item, n) => {
+    const count = Math.max(1, Math.min(n | 0, 16, WANT_MAX))
+    if (!item || needs.has(item) || heldFor(bot, item, true) >= count) return
+    needs.set(item, count)
+    out.push({ id: `need_${item}`, step: 'need', item, count, what: `get ${count} ${item} into the inventory, then resume work` })
+  }
+  try {
+    const castle = require('./behaviours/castle')
+    const cw = ctx && ctx.castleWord
+    if (castleActive(ctx, facts) && cw && typeof cw.kind === 'string' && cw.kind && castle.usable(bot, cw.kind, ctx) <= 0) addNeed(kindNeedItem(bot, cw.kind), cw.left)
+    if (castleActive(ctx, facts) && castle.siteLoaded(bot, ctx.castle) === true) {
+      for (const [k, v] of Object.entries(castle.progressByKind(bot, ctx.castle) || {})) {
+        const left = (v.total | 0) - (v.done | 0)
+        if (left > 0 && k !== 'moat' && castle.usable(bot, k, ctx) <= 0) addNeed(kindNeedItem(bot, k), left)
+      }
+    }
+  } catch (_) { /* castle needs best-effort */ }
+  if (facts && typeof facts.health === 'number' && facts.health < 10) addNeed('food', 3) // generic food route: any edible meets it
+  for (const id of workSteps()) {
+    if (candidateFeasible(bot, ctx, { step: id, count: 1 }, facts)) out.push({ id, step: id, count: 1, what: STEP_EFFECT_TEXT[id] || goal.STEP_CRITERIA[id] || id })
+  }
+  return out
+}
+
+// Stall episode: lasts until the castle/house progress or the regime changes.
+function chooseEpisode(bot, ctx, facts, regime) {
+  const p = ctx && ctx.castle && ctx.castle.progress
+  return `${regime}|${p ? p.done : '-'}|${facts ? facts.home : '-'}`
+}
+// Held count of the items the episode's need candidates named (food: any
+// edible). Only these end the episode; unrelated gathering does not.
+function needHeld(bot, items) {
+  let n = 0
+  for (const i of items) n += heldFor(bot, i, true)
+  return n
+}
+
+async function jevChoose(bot, ctx, regime, cands, fetchFn) {
+  const key = process.env.TYPESAFE_API_KEY
+  if (!key || !cands.length) return null
+  const criteria = {}
+  for (const c of cands) criteria[c.id] = c.what
+  const ans = await brain.planner(key, fetchFn).plan({
+    state: { task: `choose work: ${regime}`, situation: situationText(bot, ctx) },
+    instructions: 'Pick the most useful next work for this Minecraft companion bot. Prefer what the castle is missing; get a missing material or food first.',
+    criteria,
+  })
+  if (!ans || (typeof ans.confidence === 'number' && ans.confidence < CHOOSE_JEV_MIN_CONF)) return null
+  return cands.find((c) => c.id === ans.step) || null
+}
+
 // Chat entry: ask for a plan, never blocking the chat handler. One ask in
 // flight (ctx.llmAsk); a running plan (ctx.llmOrder) is replaced only by a
 // valid new plan — chatter answered {"plan":[]} leaves it alone.
@@ -417,6 +492,52 @@ function ask(bot, ctx, req, fetchFn) {
     if (isChoose) {
       const regime = (req.choose && req.choose.regime) || 'no-order'
       const trigger = (req.choose && req.choose.trigger) || '?'
+      let facts0 = null
+      let cands = []
+      try { facts0 = goal.goalFacts(bot, ctx); cands = chooseCandidates(bot, ctx, facts0) } catch (_) { cands = [] }
+      // Stall episode (8hpy.2): same regime/progress and the same held count of
+      // the items its need candidates named. JEV picks are tried once per
+      // episode; the LLM tier answers at most once per episode.
+      const epKey = chooseEpisode(bot, ctx, facts0, regime)
+      let ep = ctx.llmChooseEp
+      // Only a gain is progress (eating/placing lowers the count); the episode
+      // also expires after CHOOSE_WAIT_MAX_MS so a no-order bot is never silent.
+      if (!ep || ep.key !== epKey || needHeld(bot, ep.items) > ep.held || Date.now() - ep.at > CHOOSE_WAIT_MAX_MS) {
+        const items = cands.filter((c) => c.step === 'need').map((c) => c.item)
+        ep = ctx.llmChooseEp = { key: epKey, items, held: needHeld(bot, items), tried: [], llm: 0, replans: 0, at: Date.now() }
+      } else ep.held = Math.min(ep.held, needHeld(bot, ep.items))
+      const open = cands.filter((c) => !ep.tried.includes(c.id))
+      let jp = null
+      // No JEV key: no await, the LLM ask starts in the same turn as before.
+      if (process.env.TYPESAFE_API_KEY) try { jp = await jevChoose(bot, ctx, regime, open, fetchFn) } catch (err) { console.log(`choose jev error="${String(err && err.message ? err.message : err).slice(0, 60).replace(/"/g, "'")}"`) }
+      if (ctx.llmAsk !== a) return
+      const sayC = rosterOnline(bot) ? say : () => {}
+      // Re-check against a fresh list (work steps: candidateFeasible inside):
+      // a pick gone stale during the await counts as no pick.
+      if (jp) {
+        let fresh = []
+        try { fresh = chooseCandidates(bot, ctx, goal.goalFacts(bot, ctx)) } catch (_) { fresh = [] }
+        if (!fresh.some((c) => c.id === jp.id && !ep.tried.includes(c.id))) { console.log(`choose jev stale pick=${jp.id}`); jp = null }
+      }
+      if (jp) {
+        ctx.llmAsk = null
+        ep.tried.push(jp.id) // a JEV pick runs once per episode; done resets the episode
+        console.log(`choose tier=jev pick=${jp.id} candidates=${open.length}`)
+        const base = { text: a.text, by: 'self', ticker: req.ticker || null, feed: null, explicit: false, choose: true }
+        if (jp.step === 'need') {
+          const g = { item: jp.item, remaining: jp.count, self: true }
+          installPlan(bot, ctx, { ...base, bringGoal: g }, [{ step: 'acquire', item: g.item, count: g.remaining }], sayC)
+        } else installPlan(bot, ctx, base, [{ step: jp.step, count: 1 }], sayC)
+        if (ctx.llmOrder) ctx.llmOrder.jev = true // no LLM replan for a JEV pick
+        return
+      }
+      if (ep.llm >= 1) {
+        ctx.llmAsk = null
+        const cur = typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0 ? ctx.llmChooseWait : chooseMinMs()
+        ctx.llmChooseWait = Math.min(cur * 2, CHOOSE_WAIT_MAX_MS)
+        console.log(`choose tier=none pick=- candidates=${open.length}`)
+        return
+      }
       let r
       try {
         r = await planChoose(bot, ctx, regime, fetchFn)
@@ -426,6 +547,7 @@ function ask(bot, ctx, req, fetchFn) {
       }
       if (ctx.llmAsk !== a) return // cancelled mid-ask (stop / follow me / go work)
       ctx.llmAsk = null
+      if (r.outcome !== 'error' && r.outcome !== 'budget') ep.llm++ // a transient failure keeps the episode's call
       // a5xy: a need step drives the bring goal stack for the bot itself;
       // the rest of the plan is dropped (the FSM resumes work afterwards).
       const nd = r.steps && r.steps.find((s) => s.step === 'need')
@@ -464,6 +586,7 @@ function ask(bot, ctx, req, fetchFn) {
       // bv9x: the error reason used to die here (plan=- need="" why=""), so a
       // prod sweep could not tell a bad key from a dead route. Always log it.
       console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${need}" why="${why}" situation="${sit}" tokens=${r.tokens || '0/0'} ms=${ms} err="${(r.error || '').replace(/"/g, "'")}"`)
+      console.log(`choose tier=llm pick=${plan} candidates=${open.length}`)
       if (!r.steps) return // fallback: the FSM pick stands, log only
       const sayChoose = rosterOnline(bot) ? say : () => {}
       if (nd) {
@@ -672,6 +795,7 @@ function cancel(ctx, why = 'stop') {
   }
   ctx.llmOrder = null
   ctx.llmAsk = null
+  ctx.llmChooseEp = null // stop / go work / follow me: a new stall episode
   dropArgs(ctx) // a pin the arbiter never consumed must not leak args into a later run
 }
 
@@ -764,7 +888,7 @@ function end(bot, ctx, o, result) {
       const min = chooseMinMs()
       const cur = typeof ctx.llmChooseWait === 'number' && ctx.llmChooseWait >= 0 ? ctx.llmChooseWait : min
       if (typeof result === 'string' && result.startsWith('failed:')) ctx.llmChooseWait = Math.min(cur * 2, CHOOSE_WAIT_MAX_MS)
-      else if (result === 'done') ctx.llmChooseWait = min
+      else if (result === 'done') { ctx.llmChooseWait = min; ctx.llmChooseEp = null }
       else ctx.llmChooseWait = cur
     }
   } catch (_) { /* backoff best-effort */ }
@@ -792,6 +916,19 @@ function unparkTask(ctx, o) {
 function replanBring(bot, ctx, o, observation) {
   const g = o.bringGoal
   if (!g || o.replanning || ctx.llmOrder !== o) return
+  // 8hpy.2: a JEV-picked need never asks the LLM; it fails (tried in the episode).
+  if (o.jev) { o.bringGoal = null; return end(bot, ctx, o, 'failed:jev need unresolved') }
+  // Hard cap: a chooser plan's LLM calls (the choose + every replan) per
+  // stall episode. Plans without an episode (owner orders) are unchanged.
+  const ep = o.choose ? ctx.llmChooseEp : null
+  if (ep) {
+    if (ep.llm + ep.replans >= CHOOSE_EP_LLM_MAX) {
+      console.log(`llm order episode budget calls=${ep.llm + ep.replans} max=${CHOOSE_EP_LLM_MAX}`)
+      o.bringGoal = null
+      return end(bot, ctx, o, 'failed:episode llm budget')
+    }
+    ep.replans++
+  }
   release(ctx, o)
   const detail = o.cur && ['bring', 'acquire'].includes(o.steps[o.i]?.step) && ctx.bringEnd && ctx.bringEnd.at >= o.cur.at ? ctx.bringEnd.reason : o.acquireRefusal
   o.acquireRefusal = null
@@ -1247,4 +1384,4 @@ function statusLine(ctx) {
   return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
 }
 
-module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, validateBringPlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH, RECIPE_MAX_DEPTH, RECIPE_MAX_STEPS, RECIPE_TIMEOUT_MS, RECIPE_VERBS, checkRecipeShape, requestRecipe, planRecipe }
+module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, validateBringPlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH, RECIPE_MAX_DEPTH, RECIPE_MAX_STEPS, RECIPE_TIMEOUT_MS, RECIPE_VERBS, checkRecipeShape, requestRecipe, planRecipe, chooseCandidates, chooseEpisode }
