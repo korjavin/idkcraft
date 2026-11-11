@@ -61,6 +61,45 @@ describe('sidestep ledge drop', () => {
     assert.equal(run(b, ctx), 'running')
     assert.equal(ctx.recovery.st.ledge, 4, 'second try drops off the ledge')
   })
+  it('health and landing gate: a 6-drop needs HP to spare, magma never', () => {
+    const w = world(false); w.solids = new Set([key(0, 60, 0)])
+    for (let x = -4; x <= 4; x++) for (let z = -4; z <= 4; z++) w.solids.add(key(x, 54, z))
+    const b = bot(w)
+    b.health = 6 // a 6-drop costs 3 HP -> 3 left < 4
+    const ctx = { recovery: {}, stuck: { by: 'x', goal: null } }
+    run(b, ctx)
+    assert.equal(ctx.recovery.st.ledge, undefined, 'low health: no drop')
+    b.health = 20
+    const ctx2 = { recovery: {}, stuck: { by: 'x', goal: null } }
+    run(b, ctx2)
+    assert.equal(ctx2.recovery.st.ledge, 6)
+    const b3 = bot(world(false))
+    const orig = b3.blockAt.bind(b3)
+    b3.blockAt = (p) => { const r = orig(p); return Math.floor(p.y) === 56 && r.name === 'dirt' ? { ...r, name: 'magma_block' } : r }
+    const ctx3 = { recovery: {}, stuck: { by: 'x', goal: null } }
+    run(b3, ctx3)
+    assert.equal(ctx3.recovery.st.ledge, undefined, 'magma landing refused')
+  })
+  it('re-entry after a restart (fresh ctx, latch gone) at the same perch: plain try, then the ledge', () => {
+    for (let restart = 0; restart < 2; restart++) {
+      const b = bot(world(true))
+      const ctx = { recovery: {}, stuck: { by: 'no-displacement', goal: null } }
+      let r
+      for (let i = 0; i < 20 && (r = run(b, ctx)) === 'running'; i++);
+      assert.equal(r, 'failed:no-progress')
+      ctx.recovery = {}
+      assert.equal(run(b, ctx), 'running')
+      assert.equal(ctx.recovery.st.ledge, 4)
+    }
+  })
+  it('a ledge try that never lands fails and releases forward', () => {
+    const b = bot(world(false))
+    const ctx = { recovery: {}, stuck: { by: 'x', goal: null } }
+    let r
+    for (let i = 0; i < 20 && (r = run(b, ctx)) === 'running'; i++);
+    assert.equal(r, 'failed:no-progress')
+    assert.equal(b.controls.forward, false)
+  })
   it('never onto lava, never deeper than the cap', () => {
     const lava = new Set()
     for (let x = -4; x <= 4; x++) for (let z = -4; z <= 4; z++) lava.add(key(x, 57, z))

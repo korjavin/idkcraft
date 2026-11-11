@@ -1816,11 +1816,13 @@ function hopStepRun(bot, ctx) {
 // Drop depth beside the body on side (dx,dz): blocks fallen to a standable
 // floor (0 = level), null when the side is walled, the floor is deeper than
 // LEDGE_DROP_MAX, or lava lands.
+const HURT_FLOOR = /^(magma_block|cactus|campfire|soul_campfire|pointed_dripstone|sweet_berry_bush|powder_snow)$/
 function ledgeDrop(bot, dx, dz) {
   for (let d = 0; d <= LEDGE_DROP_MAX; d++) {
     const b = cellAt(bot, dx, -1 - d, dz)
-    if (isLava(b)) return null
-    if (b && standable(b)) return d
+    if (isLava(b) || (b && HURT_FLOOR.test(b.name))) return null
+    // Fall damage is d-3 HP (water: none); keep at least 4 HP after landing.
+    if (b && standable(b)) return d > 3 && !isWater(b) && (typeof bot.health === 'number' ? bot.health : 20) - (d - 3) < 4 ? null : d
     if (solid(cellAt(bot, dx, -d, dz)) || solid(cellAt(bot, dx, 1 - d, dz))) return null
   }
   return null
