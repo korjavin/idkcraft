@@ -322,7 +322,7 @@ function tick(bot, ctx, st, cells, now, hooks) {
       return false
     }
     const entry = st.blocked[hooks.bkey(st, c.idx)]
-    if ((entry.recoveries || 0) >= MAX_EPISODES) entry.recoveries = 0 // a refreshed budget
+    if (now - (entry.recoveredAt || 0) >= RECOVERY_RESET_MS) entry.recoveries = 0 // window expired: a fresh budget
     entry.recoveries = (entry.recoveries || 0) + 1
     entry.recoveredAt = now
     ep.entry = entry

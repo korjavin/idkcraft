@@ -314,6 +314,16 @@ describe('castle cell recovery (qxql.19)', () => {
     assert.equal(castle.reopenRepairs(f.bot, f.ctx, f.st, true), 1)
   })
 
+  it('an expired window restarts the count even from 1 (two fresh episodes)', async () => {
+    const f = fixture({ occupant: 'air', choose: 'defer' }); retire(f)
+    const e = f.st.blocked[`3:${f.target.idx}`]
+    e.recoveries = 1
+    e.recoveredAt = Date.now() - recovery.RECOVERY_RESET_MS - 1
+    await ticks(f, 1)
+    assert.equal(e.recoveries, 1, 'window restarted: this is episode 1 of 2')
+    assert.ok(e.recoveredAt > Date.now() - 5000)
+  })
+
   it('caps calls/actions across unchanged clear, stance and retry promises', async () => {
     const f = fixture({ ineffective: true }); retire(f)
     f.ctx.brain.plan = async (q) => { f.calls.plans.push(q); return { step: Object.keys(q.criteria).find((k) => k !== 'defer') } }
