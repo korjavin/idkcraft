@@ -360,6 +360,24 @@ function inHouseFootprint(home, pos) {
 // beside it at body height and above — recover's stair/headroom digs —
 // never below. Recover only (ctx.recovery): equip in the pit must not
 // widen it (revmux 02).
+// Castle ground escape (2026-11-11 prod: V2d trapped at y51 under its own
+// castle, every dig_up refused as castle ground): like apronEscape, a
+// recovering body below site.y may dig natural ground cells beside it at
+// body height and above, never plan cells (castle.protects still guards
+// them) and never under a falling block (sand/gravel above would drop).
+const FALLING = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder|anvil|chipped_anvil|damaged_anvil)$/
+function castleGroundEscape(bot, state, pos) {
+  try {
+    const feet = botPos(bot)
+    if (!feet || !pos || !state || !state.site || !castle.groundCell(state, pos)) return false
+    const fy = Math.floor(feet.y)
+    if (!(fy < state.site.y && Math.floor(pos.y) >= fy &&
+      Math.abs(Math.floor(pos.x) - Math.floor(feet.x)) <= 1 && Math.abs(Math.floor(pos.z) - Math.floor(feet.z)) <= 1)) return false
+    const up = bot.blockAt && bot.blockAt(new Vec3(Math.floor(pos.x), Math.floor(pos.y) + 1, Math.floor(pos.z)))
+    return !(up && FALLING.test(up.name))
+  } catch (_) { return false }
+}
+
 function apronEscape(bot, home, pos) {
   const feet = botPos(bot)
   if (!feet || !pos) return false
@@ -454,7 +472,8 @@ function protectedReason(bot, block, ctx) {
     // The v2 door sill swap (lqgo: castle.js digCell) digs its own natural
     // ground cell; everything else keeps the castle guard.
     const sill = !!(ctx && ctx.castleSill) && NATURAL_SOLID.has(name)
-    if (ctx && ctx.castle && !sill && castleProtects(ctx.castle, pos, name, props)) return 'protected'
+    const groundEscape = !!(ctx && ctx.recovery && ctx.castle) && !castle.protects(ctx.castle, pos, name, props) && castleGroundEscape(bot, ctx.castle, pos) // recover only
+    if (ctx && ctx.castle && !sill && !groundEscape && castleProtects(ctx.castle, pos, name, props)) return 'protected'
     if (castleClears(ctx, pos, name)) return null // vmzq.40: castle step, footprint blocker
     // Castle yard (idkcraft-g0z.44): after the castle step's own clears
     // (prep cuts, litter, foreign-clear keep working), before the own
