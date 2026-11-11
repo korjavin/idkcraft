@@ -179,7 +179,7 @@ function menu(bot, ctx, ep, hooks) {
     add(`stance_${stances.length}`, 'stance', p, `Repath to observed dry stance ${key(p)} and try placing the target cube from there; only observed target correctness counts as an effect.`)
     if (stances.length >= 2) break
   }
-  const retryRef = build.findRef(bot, new Vec3(c.x, c.y, c.z))
+  const retryRef = build.findRef(bot, new Vec3(c.x, c.y, c.z), c.kind === 'stairs' ? { excludeTop: true } : undefined) // the act's own ref rule
   if (PLACE_KINDS.includes(c.kind) && AIR.has(name(bot, c)) && retryRef && distance(bot, c) <= build.PLACE_REACH &&
       !flat.cellOccupiedSelf(bot, c.x, c.y, c.z) && !flat.cellOccupiedByPlayer(bot, c.x, c.y, c.z)) {
     add('retry_cell', 'retry', c, 'Retry direct placement only into this currently open supported cell; success requires the expected block in the world.', { ref: retryRef })
