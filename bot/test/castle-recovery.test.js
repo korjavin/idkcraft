@@ -274,11 +274,54 @@ describe('castle cell recovery (qxql.19)', () => {
 
     entry.retired = true
     entry.recoveries = recovery.MAX_EPISODES
+    entry.recoveredAt = Date.now()
     assert.equal(castle.reopenRepairs(f.bot, f.ctx, f.st, true), 0)
     assert.equal(entry.retired, true, 'automatic tidy cannot restore an exhausted budget')
     assert.equal(entry.tries, 3)
     assert.equal(castle.reopenRepairs(f.bot, f.ctx, f.st, false), 1, 'explicit owner repair still requests a fresh attempt')
     assert.equal(f.st.blocked[k], undefined)
+  })
+
+  it('an exhausted cell budget refreshes a day after its last episode (prod 2026-11-11: why=recoveries on every hole)', async () => {
+    const f = fixture({ occupant: 'air', choose: 'retry' }); retire(f)
+    const e = f.st.blocked[`3:${f.target.idx}`]
+    e.recoveries = recovery.MAX_EPISODES
+    e.recoveredAt = Date.now() - 60 * 1000
+    await ticks(f, 3)
+    assert.equal(f.bot.blockAt(f.target).name, 'air', 'spent within the day: no episode')
+    e.recoveredAt = Date.now() - recovery.RECOVERY_RESET_MS - 1
+    await ticks(f, 3)
+    assert.equal(f.bot.blockAt(f.target).name, 'cobblestone', 'refreshed: retried and placed')
+  })
+
+  it('a legacy exhausted entry (no stamp) is eligible once, then at most 2 episodes per window', () => {
+    const f = fixture({ occupant: 'air' }); retire(f)
+    const e = f.st.blocked[`3:${f.target.idx}`]
+    e.recoveries = recovery.MAX_EPISODES // restored from disk, no recoveredAt
+    const now = Date.now()
+    assert.ok(recovery.eligible(f.bot, f.ctx, f.st, [f.target], now, castle.RECOVERY_HOOKS), 'legacy entry opens after rollout')
+    assert.equal(recovery.spent(e, now), false)
+    e.recoveries = 2; e.recoveredAt = now
+    assert.equal(recovery.spent(e, now), true, 'fresh stamp: spent')
+    assert.equal(recovery.eligible(f.bot, f.ctx, f.st, [f.target], now, castle.RECOVERY_HOOKS), null)
+    e.recoveries = 1
+    assert.equal(recovery.spent(e, now), false, 'one of two used in the window')
+    assert.equal(recovery.spent({ recoveries: 2, recoveredAt: now - recovery.RECOVERY_RESET_MS }, now), false, 'expired window')
+    // reopen path agrees with eligible
+    e.recoveries = 2; e.recoveredAt = now; e.retired = true
+    assert.equal(castle.reopenRepairs(f.bot, f.ctx, f.st, true), 0)
+    e.recoveredAt = now - recovery.RECOVERY_RESET_MS - 1
+    assert.equal(castle.reopenRepairs(f.bot, f.ctx, f.st, true), 1)
+  })
+
+  it('an expired window restarts the count even from 1 (two fresh episodes)', async () => {
+    const f = fixture({ occupant: 'air', choose: 'defer' }); retire(f)
+    const e = f.st.blocked[`3:${f.target.idx}`]
+    e.recoveries = 1
+    e.recoveredAt = Date.now() - recovery.RECOVERY_RESET_MS - 1
+    await ticks(f, 1)
+    assert.equal(e.recoveries, 1, 'window restarted: this is episode 1 of 2')
+    assert.ok(e.recoveredAt > Date.now() - 5000)
   })
 
   it('caps calls/actions across unchanged clear, stance and retry promises', async () => {

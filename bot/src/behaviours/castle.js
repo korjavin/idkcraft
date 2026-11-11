@@ -1291,7 +1291,7 @@ function reopenRepairs(bot, ctx, st, transientOnly) {
       // Automatic tidy must not mint a fresh paid recovery budget every
       // hour. Keep history/counter; only an explicit owner repair resets it.
       if (transientOnly && e.recoveries > 0) {
-        if (e.recoveries >= cellRecovery.MAX_EPISODES) continue
+        if (cellRecovery.spent(e, Date.now())) continue // refreshes a day after the last episode
         e.retired = false
         e.until = 0
       } else delete st.blocked[k]

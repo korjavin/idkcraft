@@ -19,6 +19,10 @@ const EPISODE_MS = 60000
 const WAIT_MS = 10000
 const BACKOFF_MS = 600000
 const MAX_EPISODES = 2
+// The per-cell budget refreshes a day after its last episode (2026-11-11:
+// every retired cell sat at the lifetime cap, so later fixes never ran).
+const RECOVERY_RESET_MS = 24 * 60 * 60 * 1000
+function spent(e, now) { return (e.recoveries || 0) >= MAX_EPISODES && now - (e.recoveredAt || 0) < RECOVERY_RESET_MS }
 const AIR = new Set(['air', 'cave_air', 'void_air'])
 // qxql.32: 'unloaded' too — a cell retired on cache gaps re-enters via the planner once its column reads (eligible needs name != null).
 const WHY = new Set(['build-miss', 'no-ref', 'unloaded', 'unreachable', 'cell-budget', 'cell-hard-cap'])
@@ -51,7 +55,7 @@ function eligible(bot, ctx, st, cells, now, hooks) {
   return cells.find((c) => {
     const e = st.blocked && st.blocked[hooks.bkey(st, c.idx)]
     if (!e || !e.retired || !blueprint.isPlaceTarget(c.kind)) return false
-    const why = (e.until || 0) > now ? 'until' : (e.recoveries || 0) >= MAX_EPISODES ? 'recoveries' : !WHY.has(e.why) ? `why-${e.why}`
+    const why = (e.until || 0) > now ? 'until' : spent(e, now) ? 'recoveries' : !WHY.has(e.why) ? `why-${e.why}`
       : (s.cooldown.get(c.idx) || 0) > now ? 'cooldown' : name(bot, c) == null ? 'unloaded' : hooks.done(bot, c) ? 'done'
         : !hooks.findItem(bot, c.kind, ctx) ? 'no-item' : distance(bot, c) >= 16 ? 'far' : null
     noteSkip(s, c, why)
@@ -318,7 +322,9 @@ function tick(bot, ctx, st, cells, now, hooks) {
       return false
     }
     const entry = st.blocked[hooks.bkey(st, c.idx)]
+    if (now - (entry.recoveredAt || 0) >= RECOVERY_RESET_MS) entry.recoveries = 0 // window expired: a fresh budget
     entry.recoveries = (entry.recoveries || 0) + 1
+    entry.recoveredAt = now
     ep.entry = entry
     s.episode = ep
   }
@@ -550,4 +556,4 @@ function escTick(bot, ctx, s, ep, now, hooks) {
   return true
 }
 
-module.exports = { primitive, parsePlan, primText, llmEscalate, escalator, ESC_RANGE, startable, ESC_MAX_STEPS, blocker, eligible, tick, menu, MAX_CALLS, MAX_EPISODES, busy }
+module.exports = { primitive, parsePlan, primText, llmEscalate, escalator, ESC_RANGE, startable, ESC_MAX_STEPS, blocker, eligible, tick, menu, MAX_CALLS, MAX_EPISODES, busy, spent, RECOVERY_RESET_MS }
