@@ -34,7 +34,8 @@ describe('pickless buried castle rearms first (vmzq.37)', () => {
   it('goalFsm puts equip ahead of the castle legs only on facts.rearm', () => {
     assert.equal(goal.goalFsm(R, ['castle', 'equip', 'rest']), 'equip')
     assert.equal(goal.goalFsm(R, ['castlefetch', 'equip', 'rest']), 'equip')
-    assert.equal(goal.goalFsm({ ...R, rearm: false }, ['castle', 'equip', 'rest']), 'castle', 'vmzq.19: at the site the batch lays first')
+    assert.equal(goal.goalFsm({ ...R, rearm: false, sword: 1 }, ['castle', 'equip', 'rest']), 'castle', 'vmzq.19: at the site the batch lays first')
+    assert.equal(goal.goalFsm({ ...R, rearm: false, sword: 0 }, ['castle', 'equip', 'rest']), 'equip', 'swordless castle rearms first')
     assert.equal(goal.goalFsm(R, ['castle', 'rest']), 'castle', 'no feasible equip: castle as before')
   })
 
