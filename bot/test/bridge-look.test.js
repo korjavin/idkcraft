@@ -322,3 +322,27 @@ describe('bridge consume/sleep (idkcraft-neuc.9)', () => {
     await assert.rejects(() => bot.sleep(bed), /bot is not sleeping \(click rejected\)/)
   })
 })
+
+describe('eat hand ownership: the meal\'s own hotbar select (v1 mineflayer equip)', () => {
+  it('mineflayer-style equip selects the food slot immediately; a foreign select still waits', async () => {
+    const selects = []
+    const bot = {
+      food: 17,
+      heldItem: { name: 'stone_pickaxe', count: 1 },
+      inventory: { items: () => [{ name: 'bread', count: 3, slot: 37 }] },
+      setQuickBarSlot(n) { selects.push(n) },
+      async equip(item, dest) { this.setQuickBarSlot(1); this.heldItem = item }, // mineflayer equip selects internally
+      async consume() { await new Promise((r) => setTimeout(r, 150)) },
+    }
+    const ctx = {}
+    assert.equal(eatReflex(bot, ctx, {}), true)
+    await new Promise((r) => setTimeout(r, 30))
+    assert.deepEqual(selects, [1], 'the food select ran during the meal, not deferred')
+    bot.setQuickBarSlot(5) // another step mid-bite
+    await new Promise((r) => setTimeout(r, 30))
+    assert.deepEqual(selects, [1], 'a foreign select waits for the meal')
+    for (let i = 0; i < 40 && ctx.eatInFlight; i++) await new Promise((r) => setTimeout(r, 25))
+    await new Promise((r) => setTimeout(r, 120))
+    assert.deepEqual(selects, [1, 5])
+  })
+})

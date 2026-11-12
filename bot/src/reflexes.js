@@ -80,7 +80,8 @@ function installEquipGuard(bot, ctx) {
   const origSelect = bot.setQuickBarSlot
   if (typeof origSelect === 'function') {
     bot.setQuickBarSlot = function(...args) {
-      if (!ctx.eatInFlight) return origSelect.apply(this, args)
+      // ctx.eatEquipping: the meal's own equip (mineflayer equip selects the hotbar slot itself).
+      if (!ctx.eatInFlight || ctx.eatEquipping) return origSelect.apply(this, args)
       const lease = leaseOf(ctx)
       waitMeal(ctx).then(() => { if (leaseOf(ctx) === lease) origSelect.apply(this, args) })
     }
@@ -124,7 +125,8 @@ function eatReflex(bot, ctx, state) {
   const doEat = async () => {
     try {
       if (typeof bot.equip === 'function') {
-        try { await bot.equip(foodItem, 'hand') } catch (_) {}
+        ctx.eatEquipping = true
+        try { await bot.equip(foodItem, 'hand') } catch (_) {} finally { ctx.eatEquipping = false }
       }
       await bot.consume()
       console.log(`eat ${foodItem.name} food=${prevFood}`)
