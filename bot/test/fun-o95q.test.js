@@ -756,3 +756,21 @@ describe('fun running-step cooldown (codex R6 P2)', () => {
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), next), false)
   })
 })
+
+describe('fun folly on uneven ground (prod fun-no-ground)', () => {
+  it('a bumpy patch still yields a ring; a refused cell is skipped', async () => {
+    const b = fakeBot([{ name: 'dirt', count: 20 }])
+    b.blockAt = (p) => {
+      const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
+      const top = (x + z) % 2 === 0 ? 63 : 64 // checkerboard bumps of 1
+      return { name: y <= top ? 'dirt' : 'air', position: { x, y, z } }
+    }
+    const spot = fun.findFollySpot(b, {})
+    assert.ok(spot && spot.cells.length >= 3, `spot=${JSON.stringify(spot)}`)
+    let n = 0
+    b.placeBlock = async () => { if (n++ === 0) throw new Error('still air') }
+    const r = await fun.placeCells(b, { stepGen: 0 }, undefined, 'dirt', spot.cells)
+    assert.equal(r.fail, null)
+    assert.equal(r.placed, spot.cells.length - 1)
+  })
+})

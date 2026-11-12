@@ -474,21 +474,22 @@ function findFollySpot(bot, ctx) {
         let y = null
         for (let dy = 2; dy >= -3; dy--) {
           const n = blockNameAt(bot, new Vec3(x, Math.floor(bp.y) + dy, z))
-          if (n == null) { ok = false; break }
+          if (n == null) break
           if (n === 'air' || n === 'cave_air' || n === 'void_air') continue
           y = Math.floor(bp.y) + dy + 1
           break
         }
-        if (y == null) { ok = false; break }
+        // Uneven ground skips the cell, not the ring (prod: a whole flat 5x3 was rare -> fun-no-ground).
+        if (y == null) continue
         if (gy == null) gy = y
-        if (y !== gy) { ok = false; break } // one flat ring, no cliffs
+        if (Math.abs(y - gy) > 1) continue
         const top = blockNameAt(bot, new Vec3(x, y, z))
-        if (top !== 'air' && top !== 'cave_air' && top !== 'void_air') { ok = false; break }
+        if (top !== 'air' && top !== 'cave_air' && top !== 'void_air') continue
         if (castleKept(x, y, z)) { ok = false; break } // never build on a castle
         if (ctx && ctx.home && houseKept(x, y, z)) { ok = false; break } // never build on the house
         if (!cellOccupied(bot, x, y, z)) cells.push(new Vec3(x, y, z)) // occupied cells are skipped, not failed
       }
-      if (ok && cells.length) return { cells }
+      if (ok && cells.length >= 3) return { cells }
     }
     return null
   } catch (_) {
@@ -562,11 +563,12 @@ async function placeCells(bot, ctx, gen, block, cells) {
       if (!ref || !ref.position) return { placed, fail: 'no-ground' }
       await bot.placeBlock(ref, new Vec3(0, 1, 0))
       placed++
-    } catch (_) {
-      return { placed, fail: 'place-fail' }
+    } catch (err) {
+      // One refused cell skips, not aborts (prod v2: placed=2/6 fail=place-fail).
+      try { console.log(`fun folly cell ${cell.x} ${cell.y} ${cell.z} refused: ${(err && err.message) || err}`) } catch (_) { /* log best-effort */ }
     }
   }
-  return { placed, fail: null }
+  return { placed, fail: placed ? null : 'place-fail' }
 }
 
 function equipHandSyncCheck(bot, block) {
@@ -789,6 +791,7 @@ module.exports.follyMats = follyMats
 module.exports.improvReady = improvReady
 module.exports.stampFun = stampFun
 module.exports.findFollySpot = findFollySpot
+module.exports.placeCells = placeCells
 module.exports.walkOutForSpot = walkOutForSpot
 module.exports.FUN_MIN_MS = FUN_MIN_MS
 module.exports.FUN_JITTER_MS = FUN_JITTER_MS
