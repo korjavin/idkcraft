@@ -1552,6 +1552,7 @@ function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
       // Unreachable target: skip it and walk to the next chest. Only the
       // last one falls back, exactly as the single-chest path did.
       markChestSeen(o, c)
+      stockpileMod.markChestFailed(ctx, c)
       if (pickChest(bot, ctx, o)) {
         ctx.lastGoalKey = null
         o.chestStalls = 0
@@ -1580,6 +1581,7 @@ function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
         : await stockpileMod.withdrawFromChest(bot, ctx, o.drop, need, at)
       if (valid && !valid()) return
       if (valid && res && res.outcome) console.log(`food recovery chest=${res.outcome} item=${res.name || 'none'} count=${res.got || 0}`)
+      if (res && res.outcome && res.outcome !== 'withdrawn' && res.outcome !== 'empty') stockpileMod.markChestFailed(ctx, c)
       o.chestInFlight = false
       markChestSeen(o, c)
       ctx.chestFull = false // a fetch may have made room: re-arm the step
@@ -1598,6 +1600,7 @@ function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
       if (valid && !valid()) return
       o.chestInFlight = false
       markChestSeen(o, c)
+      stockpileMod.markChestFailed(ctx, c)
       o.chestTried = true
       if (item) {
         if (!ctx || ctx.bring !== o) return

@@ -126,3 +126,32 @@ for (const [food, health] of [[0, 10], [0, 20], [9, 10], [9, 20]]) {
     assert.equal(bot.food, food + 5)
   })
 }
+
+it('an unreachable chest is not re-toured when the seen list is wiped; it is retried after staleness', async () => {
+  let goals = 0
+  const { bot } = world([{ name: 'bread', type: 1, count: 5 }])
+  bot.pathfinder = { setGoal() { goals++ }, isMoving: () => false } // never arrives
+  const ctx = { chests: [{ ...CHEST }] }
+  await drive(bot, ctx)
+  assert.equal(goals, 1)
+  ctx.foodRecoveryChestSeen = null; ctx.foodRecoveryRetryAt = 0 // goal.js lowHpClock wipes it on every healthy tick
+  assert.equal(foodRecovery.needed(bot, ctx, facts), false, 'failed chest skipped across episodes')
+  ctx.chests[0].failAt -= stockpile.CHEST_STALE_MS
+  assert.equal(foodRecovery.needed(bot, ctx, facts), true, 'stale failure: try again')
+})
+
+it('a hungry (healthy) run at an empty chest never starts a hunt, even with a cow beside it', async () => {
+  const { bot } = world([{ name: 'dirt', type: 2, count: 3 }])
+  bot.entities = { 7: { id: 7, name: 'cow', type: 'animal', position: new Vec3(2, 64, 0), isValid: true } }
+  const ctx = { chests: [{ ...CHEST }] }
+  const phases = []
+  ctx.step = 'foodRecovery'; ctx.stepStatus = 'running'; ctx.work = true
+  for (let i = 0; i < 20 && ctx.stepStatus === 'running'; i++) {
+    BEHAVIOURS.foodRecovery(bot, ctx, null, facts)
+    if (ctx.foodRecovery) phases.push(ctx.foodRecovery.phase)
+    await sleep(5)
+  }
+  assert.equal(ctx.stepStatus, 'done')
+  assert.ok(!phases.includes('hunt'), phases.join(','))
+  assert.equal(ctx.foodRecovery.hunt, undefined)
+})
