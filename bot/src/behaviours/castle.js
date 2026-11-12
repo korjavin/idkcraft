@@ -322,7 +322,10 @@ function blockCell(ctx, st, c, why, now) {
         ? LITTER_MAX_TRIES
         : MAX_HOLE_TRIES
   const n = why === 'protected' ? (e.prot | 0) : e.tries
-  if (n >= limit || e.tries >= MAX_HOLE_TRIES) e.retired = true
+  // Lava (owner 2026-11-12) is a world condition, not a failed lay: nothing is
+  // placed while it waits, so it never retires — the capped backoff re-checks
+  // and the cell lays once the lava is gone.
+  if (why !== 'lava' && (n >= limit || e.tries >= MAX_HOLE_TRIES)) e.retired = true
   st.blocked[k] = e
   ctx.castleFails = null
   ctx.castleCell = null

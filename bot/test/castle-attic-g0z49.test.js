@@ -433,6 +433,15 @@ describe('castle lava hold (owner 2026-11-12)', () => {
     assert.ok(logs.some((l) => /castle blocked .* bookshelf \(lava\) try 1/.test(l)), logs.join('\n'))
     const e = Object.values(ctx.castle.blocked).find((b) => b.why === 'lava')
     assert.ok(e && e.until > Date.now(), 'backs off, retried later')
+    // Past the hole-retire count it still never retires (a world condition).
+    for (let t = 0; t < 12; t++) {
+      e.until = 0
+      console.log = () => {}
+      try { for (let i = 0; i < 6; i++) { castleMod(bot, ctx); await settle(); await settle() } } finally { console.log = orig }
+    }
+    assert.ok(e.tries >= 10, `tries=${e.tries}`)
+    assert.equal(e.retired, undefined, 'lava never retires the cell')
+    assert.deepEqual(bot.calls.places, [])
     // The lava goes (owner/flow change): the retry lays it.
     bot.set.delete(k3(cell.x, cell.y, cell.z + 1))
     e.until = 0
