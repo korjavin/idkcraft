@@ -1270,6 +1270,32 @@ describe('neuc.47 the table just laid in the house cell is a station before buil
   })
 })
 
+describe('castle residence workbench: a standing table at the castle table cell is a station', () => {
+  it('stands -> equip feasible + tableFor resolves; air/unloaded -> no station', async () => {
+    const residence = require('../src/residence')
+    const home = residence.castleHome({ site: { x: 300, y: 110, z: -220 }, rot: 0, blueprintVersion: 3 })
+    const t = residence.of(home).table(home)
+    const bot = goalBot({ items: [{ name: 'oak_planks', count: 20 }] })
+    const ctx = { home }
+    const atT = (p) => Math.floor(p.x) === t.x && Math.floor(p.y) === t.y && Math.floor(p.z) === t.z
+    bot.blockAt = (p) => ({ name: atT(p) ? 'crafting_table' : 'air' })
+    const f = goalFacts(bot, ctx)
+    assert.equal(f.houseTable, true)
+    assert.equal(MENU.equip.feasible({ ...f, pickaxe: 0, sword: 0, tablePlaced: false }, bot, ctx), true)
+    bot.entity = { position: pos(t.x + 1, t.y, t.z) }
+    bot.inventory = { items: () => [] }
+    const got = await require('../src/behaviours/tablespot').tableFor(bot, ctx)
+    assert.deepEqual([got.pos.x, got.pos.y, got.pos.z], [t.x, t.y, t.z])
+    bot.blockAt = () => ({ name: 'air' })
+    const air = goalFacts(bot, ctx)
+    assert.equal(air.houseTable, false)
+    assert.equal(MENU.equip.feasible({ ...air, pickaxe: 0, sword: 0, tablePlaced: false }, bot, ctx), false)
+    assert.equal(MENU.craft.feasible({ ...f, tablePlaced: false, door: 1 }, bot, ctx), false) // stands: no second table
+    bot.blockAt = () => null
+    assert.equal(goalFacts(bot, ctx).houseTable, false)
+  })
+})
+
 describe('rest re-pick after failure (idkcraft-q0h round 2)', () => {
   it('empty menu re-picks rest: the hold paces episodes, not the menu', async () => {
     // Round-1 core-1: after rest fails as the only option, the arbiter
