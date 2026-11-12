@@ -156,7 +156,7 @@ function castleQuiet(facts) {
 // work, so idle credit survives dawn instead of resetting every night).
 // Any productive step, or an unobserved history, restarts the clock. A
 // fresh body waits a full stretch before its first joke.
-const FUN_IDLE_MS = 20 * 60 * 1000
+const FUN_IDLE_MS = 5 * 60 * 1000 // prod: a 20-min stretch never accrued between day-cycle picks
 const FUN_WORK_MS = 60 * 1000
 const IDLE_STEPS = new Set(['rest', 'explore', 'fun', 'stay', 'shelter'])
 
