@@ -1580,7 +1580,7 @@ function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
         ? await stockpileMod.withdrawEdible(bot, ctx, need, at, valid, o.drawWants || o.wants)
         : await stockpileMod.withdrawFromChest(bot, ctx, o.drop, need, at)
       if (valid && !valid()) return
-      if (valid && res && res.outcome) console.log(`food recovery chest=${res.outcome} item=${res.name || 'none'} count=${res.got || 0}`)
+      if (valid && res && res.outcome) console.log(`food recovery chest=${res.outcome} item=${res.name || 'none'} count=${res.got || 0} at=${c && typeof c.x === 'number' ? `${c.x},${c.y},${c.z}` : 'home'}`)
       if (res && res.outcome && res.outcome !== 'withdrawn' && res.outcome !== 'empty') stockpileMod.markChestFailed(ctx, c)
       o.chestInFlight = false
       markChestSeen(o, c)
