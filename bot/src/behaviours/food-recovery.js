@@ -6,7 +6,7 @@ const bring = require('./bring')
 const forage = require('./forage')
 const stockpile = require('./stockpile')
 const { stepDone } = require('../step')
-const { LOW_HP_GATE_MS, lowHpGated } = require('../health-gate')
+const { LOW_HP_GATE_MS, lowHpGated, needsFood } = require('../health-gate')
 const craftany = require('./craftany')
 
 const RETRY_MS = 60000
@@ -31,7 +31,7 @@ function hungry(bot, ctx, facts) {
 
 function needed(bot, ctx, facts) {
   if (hungry(bot, ctx, facts)) return true
-  if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || facts.time !== 'day' || !(bot.food < 18) || !(facts.health < 6)) return false
+  if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || facts.time !== 'day' || !(bot.food < 18) || !needsFood(facts)) return false
   let items
   try {
     items = bot.inventory.items()
@@ -107,7 +107,7 @@ function run(bot, ctx) {
   }
   const valid = () => r.valid && ctx.foodRecovery === r && ctx.step === 'foodRecovery' &&
     ctx.work !== false && !ctx.paused && !ctx.bring && !ctx.lead && !ctx.followName && !(ctx.flat && !ctx.flat.parked) &&
-    bot.food < 18 && (r.hungry || bot.health < 6) &&
+    bot.food < 18 && (r.hungry || needsFood({ health: bot.health, food: bot.food })) &&
     !(!r.hungry && typeof ctx.lowHpGateSince === 'number' && Date.now() - ctx.lowHpGateSince > LOW_HP_GATE_MS)
   const done = (retry) => {
     if (!valid()) return

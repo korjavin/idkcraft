@@ -5,20 +5,25 @@
 const LOW_HP_GATE_MS = 5 * 60 * 1000
 const LOW_HP_GAP_MS = 60 * 1000
 
-function lowHpNoFood(bot, facts) {
+// Hungry or hurt (food recovery uses the same line); hpOnly = threat travel.
+function needsFood(facts, hpOnly) {
+  return !!(facts && (facts.health < 6 || (!hpOnly && facts.food < 6)))
+}
+
+function lowHpNoFood(bot, facts, hpOnly) {
   try {
     // Hunger opens it too (prod 2026-11-12 bot5: food 0, health held at 10 —
     // Easy starvation stops at 10, so health < 6 never came and the castle
     // rule kept it building on an empty stomach).
-    if (!(facts && (facts.health < 6 || facts.food < 6))) return false
+    if (!needsFood(facts, hpOnly)) return false
     const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
     if (!Array.isArray(items)) return false
     return !require('./reflexes').pickEdible(items)
   } catch (_) { return false }
 }
 
-function lowHpGated(bot, facts, ctx) {
-  if (!lowHpNoFood(bot, facts)) return false
+function lowHpGated(bot, facts, ctx, hpOnly) {
+  if (!lowHpNoFood(bot, facts, hpOnly)) return false
   try {
     const since = ctx && typeof ctx.lowHpGateSince === 'number' ? ctx.lowHpGateSince : null
     if (since == null) return true
@@ -26,4 +31,4 @@ function lowHpGated(bot, facts, ctx) {
   } catch (_) { return true }
 }
 
-module.exports = { LOW_HP_GATE_MS, LOW_HP_GAP_MS, lowHpNoFood, lowHpGated }
+module.exports = { LOW_HP_GATE_MS, LOW_HP_GAP_MS, needsFood, lowHpNoFood, lowHpGated }

@@ -674,7 +674,7 @@ function duskClimbOut(facts, bot, ctx) {
   try {
     if (!facts || facts.time !== 'dusk') return false
     if (!castleFirst(ctx) || !displacedFromCastle(bot, ctx) || !needsClimb(bot)) return false // tidy is day only
-    if (lowHpGated(bot, facts, ctx) && threatNear(bot)) return false
+    if (lowHpGated(bot, facts, ctx, true) && threatNear(bot)) return false
     return !failHolds(ctx, 'gocastle', goalText(facts, ctx && ctx.home), bot)
   } catch (_) {
     return false
@@ -696,7 +696,7 @@ function gocastleGo(facts, bot, ctx) {
     // travel — flee/recover first. Quiet travel stays legal (a fresh
     // respawn is full-hp anyway; the gate only bites a walk that has
     // already gone bad).
-    if (lowHpGated(bot, facts, ctx) && threatNear(bot)) return false
+    if (lowHpGated(bot, facts, ctx, true) && threatNear(bot)) return false
     const t = facts && facts.time
     if (t === 'day') return true
     return t === 'dusk' && castleFirst(ctx) && needsClimb(bot) // the tidy trip is day only
@@ -2014,7 +2014,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (!ctx || !ctx.castle || !ctx.castle.site || ctx.castle.parked || (ctx.castle.phase === 'complete' && !tidyDue(ctx.castle))) return 'gocastle: no active castle'
       if (facts.time !== 'day' && facts.time !== 'dusk') return 'gocastle: daytime job'
       if (!displacedFromCastle(bot, ctx)) return 'gocastle: already at the site'
-      if (lowHpGated(bot, facts, ctx) && threatNear(bot)) return 'gocastle: too hurt to travel (low health, no food, hostile near)'
+      if (lowHpGated(bot, facts, ctx, true) && threatNear(bot)) return 'gocastle: too hurt to travel (low health, no food, hostile near)'
       return 'gocastle: dusk shelters' // dusk on the surface (the climb leg is the only dusk run)
     case 'craft':
       if (ctx && ctx.home && ctx.home.parked) return 'craft: house parked'
