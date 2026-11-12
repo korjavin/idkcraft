@@ -828,7 +828,7 @@ function advanceCastleSearch(bot, ctx, p) {
   ctx.pendingSearch = null
   if (!r.site) {
     const why = SEARCH_WHY[r.why] || 'nothing fits'
-    bot.chat(`I found no castle spot within ${castleMod.SEARCH_RADIUS} blocks — mostly ${why} (${r.n} of ${r.of} spots); try another area`)
+    bot.chat(`I found no castle spot within ${p.cursor.radius} blocks — mostly ${why} (${r.n} of ${r.of} spots); try another area`)
     return
   }
   if (ctx.castle) return // ordered meanwhile (another speaker)
@@ -901,7 +901,7 @@ function castleChat(bot, ticker, playerName, cmd) {
       kind: 'castle', by: playerName, ticker,
       cursor: castleMod.startSiteSearch(pos, v, (s, q) => overlapsHome(ctx.home, s, q, v)),
     }
-    return `not right here (${why}) — looking for a castle spot within ${castleMod.SEARCH_RADIUS} blocks…`
+    return `not right here (${why}) — looking for a castle spot within ${ctx.pendingSearch.cursor.radius} blocks…`
   }
   if (!st) {
     if (ctx.pendingSearch && ctx.pendingSearch.kind === 'castle' && (cmd === 'castle forget' || cmd === 'castle stop')) {

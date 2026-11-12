@@ -1947,7 +1947,7 @@ function siteGuardBox(st) {
     if (!(w > 0) || !(d > 0)) return null
     return {
       x0: st.site.x - 1, y0: st.site.y - 3, z0: st.site.z - 1,
-      x1: st.site.x + w, y1: st.site.y + 16, z1: st.site.z + d,
+      x1: st.site.x + w, y1: st.site.y + blueprint.siteTop(st.blueprintVersion), z1: st.site.z + d,
     }
   } catch (_) { return null }
 }

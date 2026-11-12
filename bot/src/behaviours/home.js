@@ -1794,7 +1794,8 @@ function offCastleSpot(bot, ctx) {
     const st = ctx && ctx.castle
     const own = st && st.site && typeof st.site.x === 'number' ? st : null
     const { w, d } = own ? castleData.siteDimensions(own.rot | 0, own.blueprintVersion) : { w: 0, d: 0 }
-    const gap2 = SHELTER_CASTLE_GAP * SHELTER_CASTLE_GAP
+    const g = own ? castleData.nightR(own.blueprintVersion) : SHELTER_CASTLE_GAP
+    const gap2 = g * g
     const gap = (ax, az) => {
       if (!own) return true
       const ox = ax < own.site.x ? own.site.x - ax : ax >= own.site.x + w ? ax - (own.site.x + w - 1) : 0
@@ -1806,7 +1807,7 @@ function offCastleSpot(bot, ctx) {
     // search reaches out of the apron from a 31x27 box's centre (16 + 17);
     // no such spot keeps the old gap-6 walk-off from the own box.
     const clear = (ax, az) => !castleData.inCastleApron(ctx, { x: ax, z: az })
-    return walkOffSpot(bot, ctx, (ax, az) => clear(ax, az) && gap(ax, az), castleData.CASTLE_APRON + 17) ||
+    return walkOffSpot(bot, ctx, (ax, az) => clear(ax, az) && gap(ax, az), castleData.apronR(own && own.blueprintVersion) + 17) ||
       (own ? walkOffSpot(bot, ctx, gap) : null)
   } catch (_) { return null }
 }

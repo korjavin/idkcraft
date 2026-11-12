@@ -602,10 +602,10 @@ function passes(n) { return AIR.has(n) || build.isReplaceable(n) || isTreeBlock(
 // disqualifies the column. Unloaded reads are 'unknown'. Water below the
 // level is read through to its bed (g0z.20: {top, water: y}, the fill's
 // to replace); lava, bubble columns and water at or above site.y refuse.
-function scanColumn(bot, x, z, sy) {
+function scanColumn(bot, x, z, sy, siteTop = SITE_TOP) {
   const logs = []
   let water = null
-  for (let y = sy + SITE_TOP; y >= sy - 1 - SCAN_DOWN; y--) {
+  for (let y = sy + siteTop; y >= sy - 1 - SCAN_DOWN; y--) {
     const name = nameAt(bot, { x, y, z })
     if (name == null) return { unknown: true }
     if (FOREIGN.test(name)) return { foreign: name, y }
@@ -653,7 +653,7 @@ function coreOf(rot, version) {
 function siteEval(bot, site, rot, version, opts = {}) {
   const { w, d } = blueprint.siteDimensions(rot | 0, version)
   const core = coreOf(rot, version)
-  const scan = opts.scan || ((x, z, sy) => scanColumn(bot, x, z, sy))
+  const scan = opts.scan || ((x, z, sy) => scanColumn(bot, x, z, sy, blueprint.siteTop(version)))
   const tops = []
   for (const k of core) {
     const [dx, dz] = k.split(',').map(Number)
@@ -732,15 +732,16 @@ const SEARCH_STEP = 4
 const SEARCH_SCANS = 300 // new columns per tick, ~25 blockAt each
 function startSiteSearch(from, version, reject) {
   const cands = []
-  for (let ox = -SEARCH_RADIUS; ox <= SEARCH_RADIUS; ox += SEARCH_STEP) {
-    for (let oz = -SEARCH_RADIUS; oz <= SEARCH_RADIUS; oz += SEARCH_STEP) {
-      if (Math.hypot(ox, oz) <= SEARCH_RADIUS) cands.push([ox, oz])
+  const radius = Math.round(SEARCH_RADIUS * blueprint.scaleOf(version)) // a bigger castle looks farther
+  for (let ox = -radius; ox <= radius; ox += SEARCH_STEP) {
+    for (let oz = -radius; oz <= radius; oz += SEARCH_STEP) {
+      if (Math.hypot(ox, oz) <= radius) cands.push([ox, oz])
     }
   }
   cands.sort((a, b) => Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]))
   return {
     from: { x: Math.floor(from.x), y: Math.floor(from.y), z: Math.floor(from.z) },
-    version, reject, cands, i: 0, cache: new Map(), why: {}, lastScans: 0,
+    version, radius, reject, cands, i: 0, cache: new Map(), why: {}, lastScans: 0,
   }
 }
 
@@ -754,7 +755,7 @@ function stepSiteSearch(bot, cur, budget = SEARCH_SCANS) {
     if (r) return r
     if (left <= 0) return null
     left--
-    r = scanColumn(bot, x, z, sy)
+    r = scanColumn(bot, x, z, sy, blueprint.siteTop(cur.version))
     cur.cache.set(k, r)
     return r
   }
@@ -810,7 +811,7 @@ function prepTargets(bot, ctx, st, now) {
     for (let dz = 0; dz < d; dz++) {
       const x = sx + dx
       const z = sz + dz
-      const r = scanColumn(bot, x, z, sy)
+      const r = scanColumn(bot, x, z, sy, blueprint.siteTop(st.blueprintVersion))
       if (r.unknown) unknown++
       if (r.unknown || r.liquid || r.foreign) continue
       for (const y of r.logs) logs.push({ x, y, z, kind: 'air', prep: 'log', idx: idx(x, y, z) })
@@ -936,7 +937,7 @@ function isLitter(bot, ctx, st, x, y, z, w, d) {
   return scaffoldShape(bot, ctx, b, st)
 }
 function litterCell(st, d, x, y, z) {
-  const R = blueprint.CASTLE_APRON
+  const R = blueprint.apronR(st.blueprintVersion)
   const dx = x - st.site.x, dy = y - st.site.y, dz = z - st.site.z
   return { x, y, z, kind: 'air', dy, idx: LITTER_BAND_BASE + ((dx + R) * (d + 2 * R) + (dz + R)) * 40 + dy + LITTER_BELOW }
 }
@@ -951,14 +952,14 @@ function litterSlice(bot, ctx, st, s, w, d) {
     }
     return out
   }
-  const R = blueprint.CASTLE_APRON
+  const R = blueprint.apronR(st.blueprintVersion)
   const x0 = st.site.x, x1 = x0 + w - 1, z0 = st.site.z, z1 = z0 + d - 1
   const x = x0 - R + s - 1
   const nearX = x >= x0 - 1 && x <= x1 + 1
   for (let z = z0 - R; z <= z1 + R; z++) {
     // Slice 0's cells (fenceBandCells: within 1 of the ring line, dy 0..3).
     const inBand = nearX && z >= z0 - 1 && z <= z1 + 1 && (x <= x0 + 1 || x >= x1 - 1 || z <= z0 + 1 || z >= z1 - 1)
-    for (let dy = SITE_TOP; dy >= -LITTER_BELOW; dy--) {
+    for (let dy = blueprint.siteTop(st.blueprintVersion); dy >= -LITTER_BELOW; dy--) {
       if (inBand && dy >= 0 && dy <= 3) continue
       const y = st.site.y + dy
       if (isLitter(bot, ctx, st, x, y, z, w, d)) out.push(litterCell(st, d, x, y, z))
@@ -974,7 +975,7 @@ function litterTargets(bot, ctx, st, now) {
     // One slice per call; the previous pass's list stands in for the
     // slices this pass has not reached yet. A finished pass waits
     // FULL_RESCAN_MS before the next one starts.
-    const last = w + 2 * blueprint.CASTLE_APRON
+    const last = w + 2 * blueprint.apronR(st.blueprintVersion)
     let c = ctx.castleLitter
     if (!c || c.key !== key || !Array.isArray(c.acc)) c = ctx.castleLitter = { key, at: now, list: [], acc: [], next: 0 }
     if (c.next > last && now - c.at >= FULL_RESCAN_MS) { c.at = now; c.next = 0; c.acc = [] }
@@ -1000,7 +1001,7 @@ function litterTargets(bot, ctx, st, now) {
   const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
   const placed = ctx.placedByBot instanceof Set ? ctx.placedByBot : new Set()
   const list = []
-  for (let dy = 0; dy <= SITE_TOP; dy++) {
+  for (let dy = 0; dy <= blueprint.siteTop(st.blueprintVersion); dy++) {
     for (let dx = 0; dx < w; dx++) {
       for (let dz = 0; dz < d; dz++) {
         const x = st.site.x + dx
@@ -1078,13 +1079,13 @@ function nextLitter(st, list, now, bot = null, ctx = null) {
 function bandOf(st, idx) {
   if (!(idx >= LITTER_BAND_BASE && idx < blueprint.DECOR_BASE)) return null
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-  const R = blueprint.CASTLE_APRON
+  const R = blueprint.apronR(st.blueprintVersion)
   const t = idx - LITTER_BAND_BASE
   const dy = (t % 40) - LITTER_BELOW
   const q = (t - (t % 40)) / 40
   const dz = (q % (d + 2 * R)) - R
   const dx = (q - (dz + R)) / (d + 2 * R) - R
-  if (dy > SITE_TOP || dx >= w + R || dz >= d + R) return null
+  if (dy > blueprint.siteTop(st.blueprintVersion) || dx >= w + R || dz >= d + R) return null
   return { x: st.site.x + dx, y: st.site.y + dy, z: st.site.z + dz, kind: 'air', dy, idx }
 }
 
@@ -1097,7 +1098,7 @@ function boxOf(st, idx) {
   const q = (t - dy) / 40
   const dz = q % d
   const dx = (q - dz) / d
-  if (dx < 0 || dx >= w || dz < 0 || dz >= d || dy < 0 || dy > SITE_TOP) return null
+  if (dx < 0 || dx >= w || dz < 0 || dz >= d || dy < 0 || dy > blueprint.siteTop(st.blueprintVersion)) return null
   return { x: st.site.x + dx, y: st.site.y + dy, z: st.site.z + dz, kind: 'air', dy, idx }
 }
 
@@ -2301,7 +2302,7 @@ function guardCastle(bot, ctx) {
         // just outside it took scaffolding at cost 0 — a foothold over the
         // fence. The yard ring (the box grown by 1) vetoes too.
         if (!(dx >= 0 && dx < w && dz >= 0 && dz < d)) return blueprint.yardRing(st, q) ? 100 : 0
-        if (dy >= 0 && dy <= SITE_TOP) return 100
+        if (dy >= 0 && dy <= blueprint.siteTop(st.blueprintVersion)) return 100
         // Moat pits (vmzq.54): dig cells sit below the site level, so the
         // band above missed them and A* towered dirt back into the pit it
         // climbed out of (prod livelock 1613/1722). 100 vetoes the tower

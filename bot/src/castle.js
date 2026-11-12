@@ -412,47 +412,254 @@ const BLUEPRINTS = {
 }
 
 // The blueprint of a castle version; unknown/missing -> v1 (every castle
-// ordered before g0z.11 is v1).
+// ordered before g0z.11 is v1). A scaled version (scaledVersion) builds its
+// plan on first use.
 function blueprintOf(version) {
-  if (!BLUEPRINTS[version] && Number.isInteger(version) && version > SCALE_BASE) {
+  if (!BLUEPRINTS[version] && Number.isInteger(version) && version > SCALE_BASE && version % SCALE_BASE === FULL_VERSION) {
     const pct = Math.floor(version / SCALE_BASE)
-    const base = BLUEPRINTS[version % SCALE_BASE]
-    if (base && pct > 0 && pct <= MAX_SCALE_PCT) BLUEPRINTS[version] = scaleBlueprint(base, version, 1 + pct / 100)
+    if (pct > 0 && pct <= MAX_SCALE_PCT) {
+      const bp = buildScaledBlueprint(1 + pct / 100)
+      bp.version = version
+      DECOR[version] = bp.DECOR
+      BLUEPRINTS[version] = bp
+    }
   }
   return BLUEPRINTS[version] || BLUEPRINTS[1]
 }
 
-// Castle scale (owner 2026-11-12, `build castle N`): every dimension grows
-// by N percent. The scale rides in blueprintVersion (pct * SCALE_BASE +
-// base version), so memory, caches and every siteDimensions/absPlan caller
-// carry it unchanged; an unscaled castle keeps its plain version (1.0).
+// Castle scale (owner 2026-11-12, `build castle N`): every outer dimension
+// grows by N percent (0 < N <= MAX_SCALE_PCT). The scale rides in
+// blueprintVersion as pct * SCALE_BASE + 3: an integer like every stored
+// version, >= 2 like every full castle, > BLUEPRINT_VERSION so `castle
+// upgrade` refuses it. Memory, residence, peer reads, blocked keys and every
+// siteDimensions/absPlan caller carry it unchanged. A castle without it
+// (every v1/v2/v3 castle) reads scale 1 and its frozen plan.
 const SCALE_BASE = 1000
 const MAX_SCALE_PCT = 100
 function scaledVersion(version, pct) {
   return pct > 0 ? pct * SCALE_BASE + version : version
 }
-// Nearest-neighbour upsample: local cell i covers [round(i*f), round((i+1)*f))
-// per axis, so walls stay gapless. Door/torch/stairs keep one block at the
-// bottom of their y range (the rest is air): a stacked door or torch cannot
-// be placed. shortcut: stairs flights stretch (steps 2 apart at 2x) and the
-// decor layer is dropped; hand-place both if scaled castles stick.
-const SINGLE_Y = new Set(['door', 'torch', 'stairs'])
-function scaleBlueprint(bp, version, f) {
-  const r = (i) => Math.round(i * f)
-  const span = (i) => { const out = []; for (let v = r(i); v < r(i + 1); v++) out.push(v); return out }
-  const PLAN = []
-  for (const c of bp.PLAN) {
-    span(c.dy).forEach((dy, j) => {
-      const kind = j > 0 && SINGLE_Y.has(c.kind) ? 'air' : c.kind
-      for (const dx of span(c.dx)) for (const dz of span(c.dz)) {
-        const o = { dx, dy, dz, kind }
-        if (c.face && kind === c.kind) o.face = { ...c.face }
-        PLAN.push(o)
-      }
-    })
+function scaleOf(version) {
+  return blueprintOf(version).scale || 1
+}
+// Height of the site volume (crenellations + headroom) every site, yard,
+// fetch and litter box reads: 16 unscaled.
+const SITE_TOP_BASE = 16
+function siteTop(version) {
+  return Math.round(SITE_TOP_BASE * scaleOf(version))
+}
+// The XZ rings around the box (night band, apron) grow with the castle too.
+function nightR(version) {
+  return Math.round(NIGHT_BAND * scaleOf(version))
+}
+function apronR(version) {
+  return Math.round(CASTLE_APRON * scaleOf(version))
+}
+
+// The v3 castle laid out for scale f: outer measures (site, moat ring,
+// body, towers, windows, roof, height) scale and round to whole blocks;
+// playable parts stay one block: walls and floors 1 thick, doors 1x2, a
+// storey is round(3f) clear + its slab, every flight rises 1 per step with
+// 2 free blocks above. Towers climb by a spiral on their inner ring (one
+// step per ring cell; the ring is >= 8 long, so the lap above clears the
+// head) to a top landing under the crenellations. The moat stays 2 deep
+// (its corner exit steps). Same lay rule as buildFullPlan (a cell is laid
+// once a solid neighbour or the ground is there). Decor: window panes,
+// fence row 2 and the gate.
+function buildScaledBlueprint(f) {
+  const X = (i) => Math.round(i * f)
+  const E = (i) => X(i + 1) - 1 // last block of original cell i
+  const W = X(FULL_W)
+  const D = X(FULL_D)
+  const bx0 = X(7), bx1 = E(23), bz0 = X(7), bz1 = E(19)
+  const c = Math.round(3 * f) // storey clear height
+  const A = 2 * c + 1 // attic slab
+  const K = Math.round(3 * f) // roof steps
+  const TT = Math.round(15 * f) - 2 // tower wall top (crenellations above)
+  const S = TT - 1 // tower top landing
+  const plan = []
+  const air = []
+  const windows = []
+  const solid = new Set()
+  const add = (o) => {
+    plan.push(o.face ? { dx: o.x, dy: o.y, dz: o.z, kind: o.kind, face: { ...o.face } } : { dx: o.x, dy: o.y, dz: o.z, kind: o.kind })
+    if (COLLIDES.has(o.kind)) solid.add(k3(o.x, o.y, o.z))
   }
-  const at = (p) => ({ dx: r(p.dx), dy: r(p.dy), dz: r(p.dz) })
-  return { version, W: r(bp.W), D: r(bp.D), ENTRANCE: at(bp.ENTRANCE), DOOR: at(bp.DOOR), PLAN }
+  const lay = (cells) => {
+    const left = []
+    for (const o of cells) {
+      if (o.kind === 'air') air.push({ dx: o.x, dy: o.y, dz: o.z, kind: 'air' })
+      else left.push(o)
+    }
+    while (left.length > 0) {
+      const i = left.findIndex((o) => o.y <= 0 || NEIGH6.some(([a, b, d]) => solid.has(k3(o.x + a, o.y + b, o.z + d))))
+      if (i < 0) throw new Error(`castle x${f}: unsupported cell ${JSON.stringify(left[0])}`)
+      add(left.splice(i, 1)[0])
+    }
+  }
+  const outer = (x, z) => x === bx0 || x === bx1 || z === bz0 || z === bz1
+  const win = (o) => { windows.push(o); return { ...o, kind: 'air' } }
+
+  // Towers [x0, z0, doorway on the east (+1) or west (-1) wall].
+  const towers = [[7, 7, 1], [19, 7, -1], [7, 15, 1], [19, 15, -1]].map(([tx, tz, side]) => {
+    const t = { x0: X(tx), x1: E(tx + 4), z0: X(tz), z1: E(tz + 4) }
+    t.doorX = side > 0 ? t.x1 : t.x0
+    t.doorZ = (t.z0 + t.z1) >> 1
+    return t
+  })
+  const inTowerS = (x, z) => towers.some((t) => x >= t.x0 && x <= t.x1 && z >= t.z0 && z <= t.z1)
+  for (const t of towers) {
+    const wall = []
+    for (let x = t.x0; x <= t.x1; x++) wall.push([x, t.z0], [x, t.z1])
+    for (let z = t.z0 + 1; z < t.z1; z++) wall.push([t.x0, z], [t.x1, z])
+    // Inner ring, clockwise, starting at the cell inside the doorway (floor).
+    const ring = []
+    const ix0 = t.x0 + 1, ix1 = t.x1 - 1, iz0 = t.z0 + 1, iz1 = t.z1 - 1
+    for (let x = ix0; x < ix1; x++) ring.push([x, iz0])
+    for (let z = iz0; z < iz1; z++) ring.push([ix1, z])
+    for (let x = ix1; x > ix0; x--) ring.push([x, iz1])
+    for (let z = iz1; z > iz0; z--) ring.push([ix0, z])
+    const inX = t.doorX === t.x1 ? ix1 : ix0
+    const r0 = ring.findIndex(([x, z]) => x === inX && z === t.doorZ)
+    const stepAt = (i) => ring[(r0 + 1 + i) % ring.length] // step i at height i
+    const lastStep = new Map() // 'x,z' -> the highest step in that column
+    for (let i = 0; i < S; i++) lastStep.set(stepAt(i).join(','), i)
+    const midX = (t.x0 + t.x1) >> 1, midZ = (t.z0 + t.z1) >> 1
+    for (let y = 0; y <= TT; y++) {
+      const layer = wall.map(([x, z]) => {
+        if (x === t.doorX && z === t.doorZ && y <= 1) return { x, y, z, kind: 'air' }
+        const mid = (x === midX && (z === t.z0 || z === t.z1)) || (z === midZ && (x === t.x0 || x === t.x1))
+        // A window never takes the wall cell a step of this layer leans on.
+        const [sx, sz] = y < S ? stepAt(y) : [NaN, NaN]
+        const leans = Math.abs(sx - x) + Math.abs(sz - z) === 1
+        if (mid && !leans && outer(x, z) && y >= 2 && y < TT && (y - 2) % 3 === 0) return win({ x, y, z, kind: 'air' })
+        return { x, y, z, kind: 'stone' }
+      })
+      if (y < S) {
+        const [x, z] = stepAt(y)
+        const [nx, nz] = stepAt(y + 1)
+        layer.push({ x, y, z, kind: 'stairs', face: { dx: nx - x, dz: nz - z } })
+      }
+      if (y === S) {
+        for (let x = ix0; x <= ix1; x++) {
+          for (let z = iz0; z <= iz1; z++) {
+            const h = lastStep.get(x + ',' + z)
+            // The last steps' columns stay open: head and jump room.
+            layer.push({ x, y, z, kind: h !== undefined && h >= S - 3 ? 'air' : 'planks' })
+          }
+        }
+      }
+      lay(layer)
+    }
+    lay([{ x: midX, y: S + 1, z: midZ, kind: 'torch' }])
+    lay(wall.filter((_, i) => i % 2 === 0).map(([x, z]) => ({ x, y: TT + 1, z, kind: 'stone' })))
+  }
+
+  // Body outer walls between the towers.
+  const seg = []
+  for (let x = bx0; x <= bx1; x++) for (const z of [bz0, bz1]) if (!inTowerS(x, z)) seg.push([x, z])
+  for (let z = bz0 + 1; z < bz1; z++) for (const x of [bx0, bx1]) if (!inTowerS(x, z)) seg.push([x, z])
+  const mx = (v) => v === 23 ? bx1 : X(v)
+  const mz = (v) => v === 19 ? bz1 : X(v)
+  const mapSet = (list) => new Set(list.map((s) => { const [x, z] = s.split(',').map(Number); return mx(x) + ',' + mz(z) }))
+  const winLow = mapSet(['13,7', '17,7', '13,19', '17,19', '7,13', '23,13'])
+  const winHigh = mapSet(['13,7', '14,7', '16,7', '17,7', '13,19', '14,19', '16,19', '17,19', '7,13', '23,13'])
+  const doorX = X(15)
+  const postX = new Set([X(12), X(15), E(18)])
+  const postZ = new Set([X(12), E(14)])
+  const post = (x, z) => (z === bz0 || z === bz1) ? postX.has(x) : postZ.has(z)
+  const wallKind = (x, y, z) => {
+    if (x === doorX && z === bz0 && y <= 1) return y === 0 ? 'door' : 'air'
+    if (y === 1 && winLow.has(x + ',' + z)) return 'window'
+    if (y === c + 2 && winHigh.has(x + ',' + z)) return 'window'
+    if (y < c) return 'stone'
+    if (y === c || y === A) return 'frame'
+    return post(x, z) ? 'frame' : 'planks'
+  }
+  const walls = (y) => seg.map(([x, z]) => {
+    const kind = wallKind(x, y, z)
+    return kind === 'window' ? win({ x, y, z, kind: 'air' }) : { x, y, z, kind }
+  }).filter((o) => o.kind !== 'door')
+
+  // Partitions; doorways 2 high from the storey floor.
+  const pz = X(14)
+  const partG = []
+  for (let x = X(12); x <= E(18); x++) partG.push([x, pz])
+  for (let z = pz + 1; z < bz1; z++) partG.push([X(15), z])
+  const partU = partG.slice()
+  for (let z = X(12); z <= E(14); z++) partU.push([X(19), z])
+  const doorG = new Set([X(13) + ',' + pz, X(17) + ',' + pz])
+  const doorU = new Set([...doorG, X(19) + ',' + X(13)])
+  const parts = (y, base, list, doors, kind) => list.map(([x, z]) => ({ x, y, z, kind: doors.has(x + ',' + z) && y - base <= 1 ? 'air' : kind }))
+
+  // Flights: ground -> upper slab along +x beside the NW tower, upper ->
+  // attic along +z beside the NE tower; both lean on the tower wall.
+  const stairG = []
+  for (let i = 0; i < c; i++) stairG.push({ x: X(8) + i, y: i, z: X(12), kind: 'stairs', face: { dx: 1, dz: 0 } })
+  const stairU = []
+  for (let i = 0; i < c; i++) stairU.push({ x: E(18), y: c + 1 + i, z: X(8) + i, kind: 'stairs', face: { dx: 0, dz: 1 } })
+  const wellG = new Set(stairG.map((o) => o.x + ',' + o.z))
+  const wellU = new Set(stairU.map((o) => o.x + ',' + o.z))
+  const interior = []
+  for (let z = bz0 + 1; z < bz1; z++) for (let x = bx0 + 1; x < bx1; x++) if (!inTowerS(x, z)) interior.push([x, z])
+  const slab = (y, well) => interior.map(([x, z]) => ({ x, y, z, kind: well.has(x + ',' + z) ? 'air' : 'planks' }))
+  const torches = (y, list) => list.map(([x, z]) => ({ x: X(x), y, z: X(z), kind: 'torch' }))
+
+  // Ground storey: floor layer, the slab, then the layers under it top-down.
+  lay([...walls(0), ...parts(0, 0, partG, doorG, 'stone'), stairG[0]])
+  lay([...walls(c), ...slab(c, wellG)])
+  for (let y = c - 1; y >= 1; y--) lay([...walls(y), ...parts(y, 0, partG, doorG, 'stone'), stairG[y]])
+  lay(torches(0, [[15, 10], [10, 14], [21, 13], [13, 17], [16, 16]]))
+  // Upper storey.
+  lay([...walls(c + 1), ...parts(c + 1, c + 1, partU, doorU, 'planks'), stairU[0]])
+  lay([...walls(A), ...slab(A, wellU)])
+  for (let y = A - 1; y >= c + 2; y--) lay([...walls(y), ...parts(y, c + 1, partU, doorU, 'planks'), stairU[y - c - 1]])
+  lay(torches(c + 1, [[15, 10], [9, 14], [13, 17], [17, 17], [21, 13]]))
+
+  // Attic: roof stepping up from the eaves, a flat cap, stone gables.
+  const roofY = (z) => A + 1 + Math.min(z - bz0, bz1 - z, K)
+  const roof = []
+  for (let z = bz0; z <= bz1; z++) {
+    for (let x = bx0 + 1; x < bx1; x++) if (!inTowerS(x, z)) roof.push({ x, y: roofY(z), z, kind: 'planks' })
+    if (!inTowerS(bx0, z)) for (let y = A + 1; y <= roofY(z); y++) roof.push({ x: bx0, y, z, kind: 'stone' }, { x: bx1, y, z, kind: 'stone' })
+  }
+  lay(torches(A + 1, [[15, 13], [10, 13], [20, 13]]))
+  lay(roof.sort((a, b) => a.y - b.y))
+
+  // Outside: bridge deck, chest, gate, keep-clear markers, moat, fence.
+  const deck = (x, z) => x >= X(14) && x <= E(16) && z >= X(3) && z < X(5)
+  const deckCells = []
+  for (let z = X(3); z < X(5); z++) for (let x = X(14); x <= E(16); x++) deckCells.push({ x, y: -1, z, kind: 'planks' })
+  lay(deckCells)
+  lay([{ x: E(18), y: 0, z: bz1 - 1, kind: 'chest' }])
+  add({ x: doorX, y: 0, z: bz0, kind: 'door' })
+  for (const o of air) plan.push(o)
+  const moat = []
+  for (let z = X(3); z <= E(23); z++) {
+    for (let x = X(3); x <= E(27); x++) if (!(x >= X(5) && x <= E(25) && z >= X(5) && z <= E(21))) moat.push([x, z])
+  }
+  const exitStep = (x, z) => (x === X(3) || x === E(27)) && (z === X(3) || z === E(23))
+  for (const [x, z] of moat) if (!deck(x, z)) plan.push({ dx: x, dy: -1, dz: z, kind: 'dig' })
+  for (const [x, z] of moat) if (!exitStep(x, z) && !deck(x, z)) plan.push({ dx: x, dy: -2, dz: z, kind: 'dig' })
+  for (const [x, z] of moat) if (deck(x, z)) plan.push({ dx: x, dy: -2, dz: z, kind: 'dig' })
+  const fence = []
+  for (let x = 0; x < W; x++) {
+    if (x < X(14) || x > E(16)) fence.push([x, 0])
+    fence.push([x, D - 1])
+  }
+  for (let z = 1; z < D - 1; z++) fence.push([0, z], [W - 1, z])
+  for (const [x, z] of fence) plan.push({ dx: x, dy: 0, dz: z, kind: 'fence' })
+
+  const gap = []
+  for (let x = X(14); x <= E(16); x++) if (x !== doorX) gap.push(x)
+  const decor = windows.map((o) => ({ dx: o.x, dy: o.y, dz: o.z, kind: 'pane' }))
+    .concat(fence.map(([x, z]) => ({ dx: x, dy: 1, dz: z, kind: 'fence' })))
+    .concat([0, 1].flatMap((dy) => gap.map((x) => ({ dx: x, dy, dz: 0, kind: 'fence' }))))
+    .concat([{ dx: doorX, dy: 0, dz: 0, kind: 'gate', face: { dx: 0, dz: 1 } }])
+  return {
+    scale: f, W, D, PLAN: plan, DECOR: decor,
+    ENTRANCE: { dx: doorX, dy: 0, dz: X(5) }, DOOR: { dx: doorX, dy: 0, dz: bz0 },
+  }
 }
 
 // Quarter-turns clockwise (viewed from above): 0 entrance north, 1 east,
@@ -683,7 +890,7 @@ function inFootprint(state, pos) {
 // pillars and dig-in caps stay out of it; the post-complete sweep bands
 // inside it. Every yard rule uses this predicate, nothing else grows the
 // box. Pure.
-const YARD_TOP = 16 // == behaviours/castle.js SITE_TOP (crenellation dy 13 + headroom)
+const YARD_TOP = SITE_TOP_BASE // unscaled; siteTop(version) is the live bound
 function yardRing(state, pos) {
   try {
     const site = state && state.site
@@ -691,7 +898,7 @@ function yardRing(state, pos) {
     const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
     const { w, d } = siteDimensions(state.rot | 0, state.blueprintVersion)
     return x >= site.x - 1 && x <= site.x + w && z >= site.z - 1 && z <= site.z + d &&
-      y >= site.y && y <= site.y + YARD_TOP
+      y >= site.y && y <= site.y + siteTop(state.blueprintVersion)
   } catch (_) { return false }
 }
 
@@ -707,11 +914,12 @@ function nightBand(state, pos) {
     const site = state && state.site
     if (!site || typeof site.x !== 'number' || !pos || typeof pos.x !== 'number') return false
     const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z)
-    if (y < site.y - NIGHT_BAND_BELOW || y > site.y + YARD_TOP) return false
+    if (y < site.y - NIGHT_BAND_BELOW || y > site.y + siteTop(state.blueprintVersion)) return false
     const { w, d } = siteDimensions(state.rot | 0, state.blueprintVersion)
     const ox = x < site.x ? site.x - x : x >= site.x + w ? x - (site.x + w - 1) : 0
     const oz = z < site.z ? site.z - z : z >= site.z + d ? z - (site.z + d - 1) : 0
-    return ox * ox + oz * oz < NIGHT_BAND * NIGHT_BAND
+    const r = nightR(state.blueprintVersion)
+    return ox * ox + oz * oz < r * r
   } catch (_) { return false }
 }
 
@@ -725,7 +933,7 @@ function nightBand(state, pos) {
 // deeper than NIGHT_BAND_BELOW is below the floor and re-enables the
 // pillar. Pure.
 const CASTLE_APRON = 16
-function apronOf(state, pos, r = CASTLE_APRON) {
+function apronOf(state, pos, r = apronR(state && state.blueprintVersion)) {
   try {
     const site = state && state.site
     if (!site || typeof site.x !== 'number' || !pos || typeof pos.x !== 'number') return false
@@ -734,7 +942,7 @@ function apronOf(state, pos, r = CASTLE_APRON) {
     if (!(x >= site.x - r && x < site.x + w + r && z >= site.z - r && z < site.z + d + r)) return false
     if (typeof pos.y !== 'number') return true // XZ-only query (the shelter walk-off)
     const y = Math.floor(pos.y)
-    return y >= site.y - NIGHT_BAND_BELOW && y <= site.y + YARD_TOP
+    return y >= site.y - NIGHT_BAND_BELOW && y <= site.y + siteTop(state.blueprintVersion)
   } catch (_) { return false }
 }
 // Every known castle (ctx.castle live first, then memory.refreshKnownCastles'
@@ -819,13 +1027,13 @@ function ownBandCells(placed, state, names) {
 // the castle's own ground or walls for its stone. Moved verbatim from
 // behaviours/castlefetch.js (idkcraft-oqul.11) so equip.js reads it without
 // the equip<->castlefetch cycle; castlefetch re-exports it.
-const FETCH_SITE_TOP = 16
+const FETCH_SITE_TOP = SITE_TOP_BASE // unscaled; siteTop(version) is the live bound
 function onSite(st, p, margin = 1, below = 3) {
   const { w, d } = siteDimensions(st.rot | 0, st.blueprintVersion)
   const dx = Math.floor(p.x) - st.site.x
   const dy = Math.floor(p.y) - st.site.y
   const dz = Math.floor(p.z) - st.site.z
-  return dx >= -margin && dx < w + margin && dz >= -margin && dz < d + margin && dy >= -below && dy <= FETCH_SITE_TOP
+  return dx >= -margin && dx < w + margin && dz >= -margin && dz < d + margin && dy >= -below && dy <= siteTop(st.blueprintVersion)
 }
 
 function billOfMaterials(plan) {
@@ -847,6 +1055,10 @@ module.exports = {
   BLUEPRINTS,
   blueprintOf,
   scaledVersion,
+  scaleOf,
+  siteTop,
+  nightR,
+  apronR,
   MAX_SCALE_PCT,
   buildPlan,
   buildFullPlan,
