@@ -1246,7 +1246,7 @@ describe('neuc.41 the house table cell outranks a roadside station', () => {
 })
 
 describe('neuc.47 the table just laid in the house cell is a station before build claims it', () => {
-  it('no table item, no home.table yet, table cell stands: no table craft', () => {
+  it('no table item, no home.table yet, table cell stands: no table craft', async () => {
     const home = siteFor(flatBot(), pos(0, 64, 0))
     const t = { x: home.site.x + 5, y: home.site.y, z: home.site.z + 1 } // v2 table cell
     const bot = goalBot({ items: [{ name: 'acacia_planks', count: 90 }, { name: 'acacia_door', count: 1 }] })
@@ -1259,6 +1259,12 @@ describe('neuc.47 the table just laid in the house cell is a station before buil
     assert.equal(f.tableOwed, false)
     assert.equal(MENU.craft.feasible(f, bot, ctx), false) // pre-fix: true, a second table from the kit planks
     assert.equal(stepWhy('craft', f, bot, ctx, ''), 'craft: nothing to craft')
+    // table-bootstrap: no pickaxe, no table item, house table stands -> equip runs on it (was a craft/equip deadlock)
+    assert.equal(MENU.equip.feasible({ ...f, pickaxe: 0, sword: 0, tablePlaced: false }, bot, ctx), true)
+    bot.entity = { position: pos(t.x + 1, t.y, t.z) }
+    bot.inventory = { items: () => [] }
+    const got = await require('../src/behaviours/tablespot').tableFor(bot, ctx)
+    assert.deepEqual([got.pos.x, got.pos.y, got.pos.z], [t.x, t.y, t.z])
     bot.blockAt = () => null // unloaded: no claim (unlike stationStanding)
     assert.equal(goalFacts(bot, ctx).houseTable, false)
   })

@@ -176,7 +176,7 @@ const MENU = {
       const upgrade = equipUpgradeDue(bot, ctx)
       if ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || upgrade) {
         if (!upgrade && !equipWant(facts)) return false
-        if ((facts.table || 0) <= 0 && !facts.tablePlaced) return false
+        if ((facts.table || 0) <= 0 && !facts.tablePlaced && !facts.houseTable) return false // standing house table: craft will not build another
         // The house table first (h9z): while build can lay the site table,
         // the table item belongs to build — placing roadside instead would
         // eat the item build needs and strand the house (prod: 153 planks,
@@ -2036,7 +2036,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       const upgrade = equipUpgradeDue(bot, ctx)
       if ((facts.sword || 0) > 0 && (facts.pickaxe || 0) > 0 && !upgrade) return 'equip: kit complete'
       if (!upgrade && !equipWant(facts)) return 'equip: no materials'
-      if ((facts.table || 0) <= 0 && !facts.tablePlaced) return 'equip: no table'
+      if ((facts.table || 0) <= 0 && !facts.tablePlaced && !facts.houseTable) return 'equip: no table'
       try {
         if ((facts.table || 0) > 0 && tableYieldToBuild(facts, bot, ctx)) return 'equip: waiting for the house table'
       } catch (_) { /* wording best-effort: fall through to the table line */ }

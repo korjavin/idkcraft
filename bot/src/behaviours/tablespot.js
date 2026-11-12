@@ -102,6 +102,8 @@ function tableFor(bot, ctx) {
   if (ctx.home && ctx.home.table) tables.push(ctx.home.table)
   if (st.tablePos) tables.push(st.tablePos)
   if (ctx.claimedTable && ctx.claimedTable !== st.tablePos) tables.push(ctx.claimedTable)
+  // A standing house-cell table nobody claimed (goal facts.houseTable makes equip feasible on it).
+  try { const h = require('./build').houseTableAt(bot, ctx.home); if (h) tables.push(h) } catch (_) { /* no house table */ }
   let homeTable = null
   let homeBlock = null
   let farTable = null
