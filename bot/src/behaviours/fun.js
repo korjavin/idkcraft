@@ -157,6 +157,7 @@ function castleQuiet(facts) {
 // Any productive step, or an unobserved history, restarts the clock. A
 // fresh body waits a full stretch before its first joke.
 const FUN_IDLE_MS = 20 * 60 * 1000
+const FUN_WORK_MS = 60 * 1000
 const IDLE_STEPS = new Set(['rest', 'explore', 'fun', 'stay', 'shelter'])
 
 // Blocked-bypass (idkcraft-u02t): the arbiter menu captured through
@@ -259,7 +260,14 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
     if (ctx && typeof ctx === 'object') {
       try {
         const last = ctx.step
-        if (!last || !IDLE_STEPS.has(last) || typeof ctx.funIdleSince !== 'number') ctx.funIdleSince = now
+        // A work step resets the credit only once it has run FUN_WORK_MS: prod
+        // bot2's 2-30 s no-op picks (stockpile on a full chest, a castle retry)
+        // reset it every few minutes and the joke never came.
+        if (last && !IDLE_STEPS.has(last)) {
+          if (ctx.funWorkStep !== last) { ctx.funWorkStep = last; ctx.funWorkAt = now }
+          if (now - ctx.funWorkAt >= FUN_WORK_MS) ctx.funIdleSince = now
+        } else ctx.funWorkStep = null
+        if (!last || typeof ctx.funIdleSince !== 'number') ctx.funIdleSince = now
       } catch (_) { /* stamp best-effort */ }
     }
     if (facts.time !== 'day') return false

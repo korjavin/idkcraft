@@ -96,8 +96,8 @@ describe('fun gating (o95q idle-only)', () => {
   it('a fresh or busy body waits: no history, no joke', () => {
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), {}), false)
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), { step: 'rest' }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), { step: 'gather', funIdleSince: Date.now() - fun.FUN_IDLE_MS - 60000 }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), idleCtx({ step: 'gather' })), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), { step: 'gather', funWorkStep: 'gather', funWorkAt: Date.now() - 61000, funIdleSince: Date.now() - fun.FUN_IDLE_MS - 60000 }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), idleCtx({ step: 'gather', funWorkStep: 'gather', funWorkAt: Date.now() - 61000 })), false)
     // An idle stretch accrues: rest then explore keeps the clock.
     const ctx = idleCtx({ step: 'explore' })
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), ctx), true)
@@ -105,7 +105,9 @@ describe('fun gating (o95q idle-only)', () => {
     // work restarts the clock, so idle credit survives dawn.
     const night = idleCtx({ step: 'shelter' })
     assert.equal(goal.MENU.fun.feasible(facts({ time: 'day' }), fakeBot(dirt20), night), true)
-    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), idleCtx({ step: 'gohome' })), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), idleCtx({ step: 'gohome', funWorkStep: 'gohome', funWorkAt: Date.now() - 61000 })), false)
+    // A short no-op work pick (prod bot2: stockpile on a full chest) keeps the credit.
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), idleCtx({ step: 'stockpile' })), true)
   })
   it('stays out while useful work is available (home, finds, castle)', () => {
     const b = () => fakeBot(dirt8)
@@ -140,7 +142,7 @@ describe('fun gating (o95q idle-only)', () => {
     // Productive work during cooldown still resets the idle credit.
     const worked = b()
     const t0 = Date.now()
-    const wctx = { step: 'gather', funIdleSince: t0 - fun.FUN_IDLE_MS - 60000, funNext: t0 + 3600000 }
+    const wctx = { step: 'gather', funWorkStep: 'gather', funWorkAt: Date.now() - 61000, funIdleSince: t0 - fun.FUN_IDLE_MS - 60000, funNext: t0 + 3600000 }
     assert.equal(goal.MENU.fun.feasible(facts(), worked, wctx), false)
     assert.ok(wctx.funIdleSince >= t0, 'credit restamped despite the cooldown')
   })
