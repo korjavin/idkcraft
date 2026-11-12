@@ -1415,12 +1415,15 @@ function pickChest(bot, ctx, o) {
       const b = bot && bot.entity && bot.entity.position
       return !!(b && p && Math.hypot(b.x - p.x, b.y - p.y, b.z - p.z) <= o.maxChestDistance)
     }
+    // o.wants (name => bool): skip chests a fresh read shows without it, stocked ones first.
+    const hope = (p) => typeof o.wants === 'function' ? stockpileMod.chestHope(ctx, p, o.wants) : 1
     const h = ctx && ctx.home && ctx.home.chest
-    if (h && typeof h.x === 'number' && within(h)) {
+    if (h && typeof h.x === 'number' && within(h) && hope(h) > 0) {
       const hk = stockpileMod.chestKeyOf(h)
       if (hk !== null && !o.chestSeen.includes(hk)) return { pos: h, home: true }
     }
     let rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen).filter(within)
+    if (typeof o.wants === 'function') rest = rest.map((c) => [c, hope(c)]).filter((e) => e[1] > 0).sort((a, b) => b[1] - a[1]).map((e) => e[0])
     if (rest.length > 0) return { pos: rest[0], home: false }
     // Armor trim chest scan (idkcraft-3dkc): when searching for armor trims,
     // scan the loaded area for chests before giving up.

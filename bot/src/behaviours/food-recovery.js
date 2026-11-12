@@ -12,8 +12,25 @@ const craftany = require('./craftany')
 const RETRY_MS = 60000
 const WINDOW_TIMEOUT_MS = 30000
 const BREAD_TIMEOUT_MS = 120000 // walk + table make/place + craft, then the RETRY_MS cooldown
+// Chest loop: a healthy but hungry body with no meal also draws from a chest
+// whose read holds food, or one never/long ago read (stockpile.chestHope).
+const HUNGRY_FOOD = 14
+const HUNGRY_WANT = 4 // bounded draw: a few meals, the rest stays for others
+
+const isEdible = (n) => require('../reflexes').EDIBLE_FOODS.has(n)
+
+function noMeal(bot) {
+  try { const items = bot.inventory.items(); return Array.isArray(items) && !require('../reflexes').pickEdible(items) } catch (_) { return false }
+}
+
+function hungry(bot, ctx, facts) {
+  if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || facts.time !== 'day' || !(bot.food < HUNGRY_FOOD) || facts.health < 6) return false
+  if (ctx && (ctx.llmOrder || ctx.taskPlanArgs)) return false
+  return noMeal(bot) && !!bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT))
+}
 
 function needed(bot, ctx, facts) {
+  if (hungry(bot, ctx, facts)) return true
   if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || facts.time !== 'day' || !(bot.food < 18) || !(facts.health < 6)) return false
   let items
   try {
@@ -34,9 +51,9 @@ function needed(bot, ctx, facts) {
   } catch (_) { return false }
 }
 
-function chestState(ctx) {
+function chestState(ctx, want = 1) {
   if (!Array.isArray(ctx.foodRecoveryChestSeen)) ctx.foodRecoveryChestSeen = []
-  return { kind: 'food', phase: 'chestfetch', want: 1, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: stockpile.NEARBY_CHEST_RADIUS }
+  return { kind: 'food', phase: 'chestfetch', want, wants: isEdible, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: stockpile.NEARBY_CHEST_RADIUS }
 }
 
 function countOf(bot, name) {
@@ -83,14 +100,15 @@ function cancel(ctx, r) {
 function run(bot, ctx) {
   let r = ctx.foodRecovery
   if (!r || !r.valid) {
-    r = ctx.foodRecovery = { valid: true, chest: chestState(ctx), phase: breadReady(bot, ctx) ? 'bread' : 'chest', startFood: bot.food }
+    const hungryRun = !(bot.health < 6)
+    r = ctx.foodRecovery = { valid: true, hungry: hungryRun, chest: chestState(ctx, hungryRun ? HUNGRY_WANT : 1), phase: breadReady(bot, ctx) ? 'bread' : 'chest', startFood: bot.food }
     ctx.lastPathStatus = 'none'
-    console.log(`food recovery start health=${bot.health} food=${bot.food} edible=0`)
+    console.log(`food recovery start health=${bot.health} food=${bot.food} edible=0${hungryRun ? ' why=hungry' : ''}`)
   }
   const valid = () => r.valid && ctx.foodRecovery === r && ctx.step === 'foodRecovery' &&
     ctx.work !== false && !ctx.paused && !ctx.bring && !ctx.lead && !ctx.followName && !(ctx.flat && !ctx.flat.parked) &&
-    bot.health < 6 && bot.food < 18 &&
-    !(typeof ctx.lowHpGateSince === 'number' && Date.now() - ctx.lowHpGateSince > LOW_HP_GATE_MS)
+    bot.food < 18 && (r.hungry || bot.health < 6) &&
+    !(!r.hungry && typeof ctx.lowHpGateSince === 'number' && Date.now() - ctx.lowHpGateSince > LOW_HP_GATE_MS)
   const done = (retry) => {
     if (!valid()) return
     r.valid = false
@@ -136,6 +154,7 @@ function run(bot, ctx) {
       return
     }
     if (r.chest.phase === 'return') { done(false); return }
+    if (r.chest.phase === 'find' && r.hungry) { done(true); return } // shortcut: hungry runs are chest-only; hunting stays low-HP
     if (r.chest.phase === 'find') { r.phase = 'hunt'; ctx.lastGoalKey = ''; return }
     const flight = { owner: r, at: Date.now() }
     ctx.foodRecoveryFlight = flight
@@ -170,4 +189,4 @@ function run(bot, ctx) {
   })
 }
 
-module.exports = { run, needed, available, invalidate, RETRY_MS }
+module.exports = { run, needed, available, invalidate, RETRY_MS, HUNGRY_FOOD, HUNGRY_WANT }
