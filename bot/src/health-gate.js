@@ -7,7 +7,10 @@ const LOW_HP_GAP_MS = 60 * 1000
 
 function lowHpNoFood(bot, facts) {
   try {
-    if (!(facts && facts.health < 6)) return false
+    // Hunger opens it too (prod 2026-11-12 bot5: food 0, health held at 10 —
+    // Easy starvation stops at 10, so health < 6 never came and the castle
+    // rule kept it building on an empty stomach).
+    if (!(facts && (facts.health < 6 || facts.food < 6))) return false
     const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
     if (!Array.isArray(items)) return false
     return !require('./reflexes').pickEdible(items)
