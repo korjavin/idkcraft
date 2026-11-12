@@ -125,9 +125,11 @@ function farmDiggable(block, props) {
   try {
     if (!block || typeof block.name !== 'string') return false
     if (FARM_TUFT.has(block.name)) return true
-    if (block.name !== 'wheat') return false
+    if (block.name === 'pumpkin' || block.name === 'melon') return true // the fruit; the stem regrows it
+    const ripe = { wheat: 7, carrots: 7, potatoes: 7, beetroots: 3 }[block.name]
+    if (ripe == null) return false
     const p = props || (typeof block.getProperties === 'function' ? block.getProperties() : null)
-    return !!p && Number(p.age) === 7
+    return !!p && Number(p.age) === ripe
   } catch (_) { return false }
 }
 
