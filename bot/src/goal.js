@@ -3153,6 +3153,21 @@ async function decide(bot, ctx) {
     console.log('goal step=foodRecovery source=survival why=low-health-food')
     return { action: 'foodRecovery', sprint: false, source: 'goal-fsm' }
   }
+  // Chest search (owner 2026-11-12): hungry, no meal, no chest with hope -> a
+  // bounded leg to find unseen chests, before the menu's forage/hunt.
+  const chestSearch = require('./behaviours/chestsearch')
+  if (prev === 'chestSearch' && !finished && facts.time === 'day') return { action: prev, sprint: false, source: 'goal-fsm' }
+  if (ctx && ctx.chestSearch) { // preempted (dusk, foodRecovery took a sighted chest): the leg is over
+    ctx.chestSearch = null
+    console.log(`chest search result why=preempted step=${prev}`)
+  }
+  if (prev !== 'chestSearch' && chestSearch.available(bot, ctx, facts)) {
+    ctx.chestSearch = null // a fresh leg: a preempted one's clock does not carry over
+    const choice = { step: 'chestSearch', source: 'survival', fsm: 'chestSearch' }
+    applyChoice(bot, ctx, facts, choice, prev, finished, 'hungry-no-chest', text)
+    console.log('goal step=chestSearch source=survival why=hungry-no-chest')
+    return { action: 'chestSearch', sprint: false, source: 'goal-fsm' }
+  }
   const { chainOwns, fetchRetry, gateOpened, buildRetry, siteRetry } = gateForces(fires)
   const pins = readPins(ctx)
   const planStep = pins.planStep

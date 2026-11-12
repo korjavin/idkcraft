@@ -30,15 +30,18 @@ async function decideWith(health, entities, extra) {
   }
 }
 
+// Hunt comes after the chest search (owner order): these pin a search on cooldown.
+const COOL = { chestSearchRetryAt: Date.now() + 3600000 }
 for (const health of [10, 3]) {
   it(`no castle, health ${health} food 0: a remembered unopened chest beyond NEARBY_CHEST_RADIUS -> foodRecovery`, async () => {
     assert.equal(await decideWith(health, [], { chests: [{ x: stockpile.NEARBY_CHEST_RADIUS + 60, y: 64, z: 0 }] }), 'foodRecovery')
   })
   it(`no castle, health ${health} food 0: no chest, a cow near -> foodRecovery`, async () => {
-    assert.equal(await decideWith(health, [cow]), 'foodRecovery')
+    assert.equal(await decideWith(health, [cow], COOL), 'foodRecovery')
+    assert.equal(await decideWith(health, [cow]), 'chestSearch', 'search due: chest search before the hunt')
   })
   it(`no castle, health ${health} food 0: a watchdog task-plan does not hold a starving bot`, async () => {
-    assert.equal(await decideWith(health, [cow], { taskPlanStep: 'craft' }), 'foodRecovery')
+    assert.equal(await decideWith(health, [cow], { taskPlanStep: 'craft', ...COOL }), 'foodRecovery')
   })
 }
 

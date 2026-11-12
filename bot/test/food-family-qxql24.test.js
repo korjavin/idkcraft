@@ -60,7 +60,7 @@ it('critical hunger acquires and eats nearby prey despite remembered iron', asyn
   const bot = new BaritoneBot(transport, { Vec3, registry, username: 'IdkBody' })
   await bot.start({ pollMs: 0 })
   try {
-    const ctx = {
+    const ctx = { chestSearchRetryAt: Date.now() + 3600000,
       home: { built: true },
       castle: { site: { x: 5, y: 64, z: 5 }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false },
       castleWord: { kind: 'torch', left: 3 }, gear: { saidNeed: 'want-logs' }, stepStatus: 'running',
@@ -361,6 +361,7 @@ it('a failed material leg does not strand a later nearby food source', async () 
       castle: { site: { x: 5, y: 64, z: 5 }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false },
       castleWord: { kind: 'torch', left: 3 }, gear: { saidNeed: 'want-logs' }, stepStatus: 'running',
       gather: { final: 'failed:no-trees', atLogs: 0 }, // woodstarve: held chop keeps the built-home gather out
+      chestSearchRetryAt: Date.now() + 3600000, // chest search on cooldown: this pins the forage leg
     }
     resources.noteSpots(ctx, [{ x: 5, y: 60, z: 0, name: 'iron_ore' }], 1000)
     assert.equal((await goal.decide(bot, ctx)).action, 'forage')
@@ -421,7 +422,7 @@ it('an empty reachable chest is tried once, then recovery backs off', async () =
     const openChest = bot.openChest.bind(bot)
     let opens = 0
     bot.openChest = (...args) => { opens++; return openChest(...args) }
-    const ctx = { home: { built: true, chest: { x: 2, y: 64, z: 0 } }, castle: { site: { x: 5, y: 64, z: 5 }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false }, gear: { saidNeed: 'want-logs' }, stepStatus: 'running' }
+    const ctx = { chestSearchRetryAt: Date.now() + 3600000, home: { built: true, chest: { x: 2, y: 64, z: 0 } }, castle: { site: { x: 5, y: 64, z: 5 }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false }, gear: { saidNeed: 'want-logs' }, stepStatus: 'running' }
     for (let i = 0; i < 30; i++) {
       const decision = await goal.decide(bot, ctx)
       if (decision.action === 'foodRecovery') BEHAVIOURS.foodRecovery(bot, ctx)
@@ -445,7 +446,7 @@ it('does not start recovery for a healthy bot, an unknown pack, or an expired ga
   await bot.start({ pollMs: 0 })
   try {
     const recovery = require('../src/behaviours/food-recovery')
-    const ctx = { castle: { site: { x: 5, y: 64, z: 5 }, phase: 'body', parked: false } }
+    const ctx = { chestSearchRetryAt: Date.now() + 3600000, castle: { site: { x: 5, y: 64, z: 5 }, phase: 'body', parked: false } }
     assert.equal(recovery.available(bot, ctx, { time: 'day', health: 5 }), true)
     assert.equal(recovery.available(bot, ctx, { time: 'day', health: 20 }), false)
     const items = bot.inventory.items
@@ -477,7 +478,7 @@ it('hunger alone (health held at 10 by Easy, food 0) picks foodRecovery, not the
   const bot = new BaritoneBot(transport, { Vec3, registry, username: 'IdkBody' })
   await bot.start({ pollMs: 0 })
   try {
-    const ctx = {
+    const ctx = { chestSearchRetryAt: Date.now() + 3600000,
       home: { built: true },
       castle: { site: { x: 5, y: 64, z: 5 }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false },
       castleWord: { kind: 'torch', left: 3 }, gear: { saidNeed: 'want-logs' }, stepStatus: 'running',

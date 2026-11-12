@@ -146,7 +146,7 @@ async function withChest(bot, ctx, fn, at = null, valid = null) {
     if (!block) unknown = true
   } catch (_) { unknown = true }
   if (!block) return { status: unknown ? 'unknown' : 'gone' }
-  if (block.name !== 'chest') {
+  if (!['chest', 'trapped_chest', 'barrel'].includes(block.name)) { // same container window (bridge openContainer)
     // y7lp: a remembered chest that is no longer a chest leaves the registry
     try { if (ctx && Array.isArray(ctx.chests)) ctx.chests = ctx.chests.filter((e) => !(e && e.x === c.x && e.y === c.y && e.z === c.z)) } catch (_) { /* best-effort */ }
     return { status: 'gone' }

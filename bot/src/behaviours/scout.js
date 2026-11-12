@@ -479,6 +479,22 @@ function findNearest(bot, blockName, refY = null, exclude = null) {
 // One scan's chest sightings (the coal-scan pool shape): a map holds few
 // chests, so 16 covers every plausible scan without growing the tick.
 const CHEST_SCAN_COUNT = 16
+// Chest search (owner 2026-11-12): a needy bot scans chests this far over loaded chunks.
+const CHEST_WIDE_RADIUS = 64
+const CHEST_HUNGRY_FOOD = 14 // mirrors food-recovery HUNGRY_FOOD
+
+function hungryNoMeal(bot) {
+  try {
+    if (process.env.BOT_BODY !== 'baritone' || !(bot.food < CHEST_HUNGRY_FOOD)) return false
+    const items = bot.inventory.items()
+    return Array.isArray(items) && !require('../reflexes').pickEdible(items)
+  } catch (_) { return false }
+}
+
+// A need worth a wider chest look: hungry with nothing to eat, a bring order, a castle fetch, a running search.
+function chestNeedy(bot, ctx) {
+  return hungryNoMeal(bot) || !!(ctx && (ctx.bring || ctx.step === 'castlefetch' || ctx.step === 'chestSearch'))
+}
 // Transparency (vmzq.66): scout sightings are console-only — say defaults
 // to a no-op, so only an explicit say reaches chat. Chat narrates the
 // bot's own attempts, plans and outcomes, never what it sees.
@@ -571,16 +587,19 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = () => {}, now = () 
     // sightings never reach chat. Call-time require (the stockpile shape):
     // stockpile never requires scout, but the late load keeps it that way.
     if (ctx) {
+      // A needy bot (hungry, no meal; bring; castle fetch) looks wider (chest search).
+      let wide = false
+      try { wide = chestNeedy(bot, ctx) } catch { wide = false }
       let chestIds = null
       try {
-        chestIds = resolveIds(bot, ['chest'])
+        chestIds = resolveIds(bot, wide ? ['chest', 'trapped_chest', 'barrel'] : ['chest'])
       } catch {
         chestIds = null
       }
       if (chestIds && chestIds.length > 0) {
         let sighted = []
         try {
-          sighted = bot.findBlocks({ matching: chestIds, maxDistance: radius, count: CHEST_SCAN_COUNT }) || []
+          sighted = bot.findBlocks({ matching: chestIds, maxDistance: wide ? Math.max(radius, CHEST_WIDE_RADIUS) : radius, count: wide ? 2 * CHEST_SCAN_COUNT : CHEST_SCAN_COUNT }) || []
         } catch {
           sighted = []
         }
@@ -614,4 +633,4 @@ function makeScout(bot, { everyMs = 5000, radius = 16, say = () => {}, now = () 
   return { tick }
 }
 
-module.exports = { makeScout, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES, COAL_NAMES, COAL_COUNT, keyOf, MAX_DIG_DEPTH, MAX_DIG_DISTH }
+module.exports = { makeScout, hungryNoMeal, chestNeedy, CHEST_WIDE_RADIUS, findNearestBlock, findNearest, startFarSearch, stepFarSearch, resolveBlockIds, resolveFindIds, isExposed, loadedSearchRadius, ORE_NAMES, COAL_NAMES, COAL_COUNT, keyOf, MAX_DIG_DEPTH, MAX_DIG_DISTH }
