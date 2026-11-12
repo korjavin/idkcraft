@@ -463,3 +463,28 @@ it('does not start recovery for a healthy bot, an unknown pack, or an expired ga
     else process.env.BOT_BODY = previousBody
   }
 })
+
+it('hunger alone (health held at 10 by Easy, food 0) picks foodRecovery, not the castle', async () => {
+  const previousBody = process.env.BOT_BODY
+  process.env.BOT_BODY = 'baritone'
+  const transport = new FoodWorld({
+    health: 10, food: 0,
+    inventory: [{ slot: 9, name: 'stone_pickaxe', count: 1 }, { slot: 11, name: 'dirt', count: 32 }],
+    entities: [{ id: 7, uuid: '22222222-2222-2222-2222-222222222222', type: 'cow', displayName: 'Cow', kind: 'animal', pos: { x: 2, y: 64, z: 0 }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, health: 20, onGround: true, pose: 'standing' }],
+  })
+  const bot = new BaritoneBot(transport, { Vec3, registry, username: 'IdkBody' })
+  await bot.start({ pollMs: 0 })
+  try {
+    const ctx = {
+      home: { built: true },
+      castle: { site: { x: 5, y: 64, z: 5 }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false },
+      castleWord: { kind: 'torch', left: 3 }, gear: { saidNeed: 'want-logs' }, stepStatus: 'running',
+      sitebed: { deadDay: 0 },
+    }
+    assert.equal((await goal.decide(bot, ctx)).action, 'foodRecovery')
+  } finally {
+    await bot.stop()
+    if (previousBody === undefined) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = previousBody
+  }
+})

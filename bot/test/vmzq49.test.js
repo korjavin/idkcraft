@@ -77,6 +77,15 @@ describe('vmzq.49 health gate: castle legs stand down at low hp with no food', (
     assert.equal(goal.stepWhy('castlefetch', facts, foodless(), ctx(), ''), 'castlefetch: eating first (low health, no food)')
   })
 
+  it('hunger opens the gate too: food < 6, no food, health held at 10 (Easy starvation floor)', () => {
+    const F = goal.MENU.castle.feasible
+    const facts = { time: 'day', castle: 'stone-batch', health: 10, food: 0 }
+    const starving = goalBot({ items: [...TOOLS], health: 10, food: 0 })
+    assert.equal(F(facts, starving, {}), false, 'starving + foodless: eat first')
+    assert.equal(F({ ...facts, food: 6 }, goalBot({ items: [...TOOLS], health: 10, food: 6 }), {}), true, 'food 6: build')
+    assert.equal(F(facts, goalBot({ items: [...TOOLS, { name: 'bread', count: 2 }], health: 10, food: 0 }), {}), true, 'bread in the pack: the eat reflex handles it')
+  })
+
   it('an unreadable pack reads fed (fail open to the old behaviour)', () => {
     const blind = goalBot({ health: 5, food: 10 })
     blind.inventory = { items: () => { throw new Error('no pack') } }
