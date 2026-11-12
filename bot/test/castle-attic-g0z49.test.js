@@ -433,18 +433,17 @@ describe('castle lava hold (owner 2026-11-12)', () => {
     assert.ok(logs.some((l) => /castle blocked .* bookshelf \(lava\) try 1/.test(l)), logs.join('\n'))
     const e = Object.values(ctx.castle.blocked).find((b) => b.why === 'lava')
     assert.ok(e && e.until > Date.now(), 'backs off, retried later')
-    // Past the hole-retire count it still never retires (a world condition).
-    for (let t = 0; t < 12; t++) {
+    // Lasting lava: it retires as a reported gap (the castle can complete).
+    for (let t = 0; t < 12 && !e.retired; t++) {
       e.until = 0
       console.log = () => {}
       try { for (let i = 0; i < 6; i++) { castleMod(bot, ctx); await settle(); await settle() } } finally { console.log = orig }
     }
-    assert.ok(e.tries >= 10, `tries=${e.tries}`)
-    assert.equal(e.retired, undefined, 'lava never retires the cell')
+    assert.equal(e.retired, true, `retires after MAX_HOLE_TRIES, tries=${e.tries}`)
     assert.deepEqual(bot.calls.places, [])
-    // The lava goes (owner/flow change): the retry lays it.
+    // The lava goes: the tidy return re-arms the transient hole and lays it.
     bot.set.delete(k3(cell.x, cell.y, cell.z + 1))
-    e.until = 0
+    castleMod.reopenRepairs(bot, ctx, ctx.castle, true)
     for (let i = 0; i < 60 && bot.calls.places.length < 1; i++) { castleMod(bot, ctx); await settle(); await settle() }
     assert.deepEqual(bot.calls.places, [k3(cell.x, cell.y, cell.z)])
   })
