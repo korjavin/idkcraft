@@ -218,7 +218,17 @@ function installLook(bot) {
       throw new Error('Food is full')
     }
     const beforeName = held.name
-    const beforeCount = typeof held.count === 'number' ? held.count : null
+    // Count the item across the whole inventory, not in the hand: a hand swap
+    // mid-use (gear re-equip, another step's equip) read as "eaten" before
+    // (prod 2026-11-11 bot2: 100 "eat bread" at food=17 a second apart, food
+    // never rose, health stayed low for want of regen).
+    const total = () => {
+      let n = 0
+      try { for (const it of bot.inventory.items()) if (it && it.name === beforeName) n += it.count || 0 } catch (_) {}
+      return n
+    }
+    const beforeTotal = total()
+    const beforeFood = bot.food
     await withBaritonePaused(bot, async () => {
       await bot.transport.call('interact.item', { hand: 'main' })
       bot.usingHeldItem = true
@@ -228,9 +238,9 @@ function installLook(bot) {
         while (Date.now() < deadline) {
           await sleepMs(50)
           if (typeof bot.refresh === 'function') await bot.refresh().catch(() => {})
+          if (total() < beforeTotal || (typeof bot.food === 'number' && bot.food > beforeFood)) { dropped = true; break }
           const cur = bot.heldItem
-          if (!cur || cur.name !== beforeName) { dropped = true; break }
-          if (beforeCount != null && typeof cur.count === 'number' && cur.count < beforeCount) { dropped = true; break }
+          if (!cur || cur.name !== beforeName) break // hand swapped: the use is cancelled
         }
       } finally {
         bot.usingHeldItem = false

@@ -69,8 +69,33 @@ function installEquipGuard(bot, ctx) {
     if (dest === 'hand' && ctx.eatInFlight && item && typeof item.name === 'string' && item.name.endsWith('_sword')) {
       return Promise.resolve()
     }
+    // The meal owns the hand: another step's hand equip waits for it (<= 3 s)
+    // instead of swapping mid-use, which cancels the bite (prod 2026-11-11 bot2).
+    if (dest === 'hand' && ctx.eatInFlight && !(item && item.name === ctx.eatItem)) {
+      const lease = leaseOf(ctx)
+      return waitMeal(ctx).then(() => (leaseOf(ctx) === lease ? origEquip.call(this, item, dest, ...args) : undefined))
+    }
     return origEquip.call(this, item, dest, ...args)
   }
+  const origSelect = bot.setQuickBarSlot
+  if (typeof origSelect === 'function') {
+    bot.setQuickBarSlot = function(...args) {
+      // ctx.eatEquipping: the meal's own equip (mineflayer equip selects the hotbar slot itself).
+      if (!ctx.eatInFlight || ctx.eatEquipping) return origSelect.apply(this, args)
+      const lease = leaseOf(ctx)
+      waitMeal(ctx).then(() => { if (leaseOf(ctx) === lease) origSelect.apply(this, args) })
+    }
+  }
+}
+
+// A deferred hand change runs only for the body owner and step that asked:
+// after a switch the new step equips for itself (no stale late swap).
+function leaseOf(ctx) {
+  return `${(ctx.body && ctx.body.owner) || ''}|${ctx.step || ''}`
+}
+
+async function waitMeal(ctx) {
+  for (let i = 0; i < 60 && ctx.eatInFlight; i++) await new Promise((r) => setTimeout(r, 50))
 }
 
 function eatReflex(bot, ctx, state) {
@@ -95,11 +120,13 @@ function eatReflex(bot, ctx, state) {
   if (typeof bot.consume !== 'function') return false
 
   ctx.eatInFlight = true
+  ctx.eatItem = foodItem.name
   const prevFood = bot.food
   const doEat = async () => {
     try {
       if (typeof bot.equip === 'function') {
-        try { await bot.equip(foodItem, 'hand') } catch (_) {}
+        ctx.eatEquipping = true
+        try { await bot.equip(foodItem, 'hand') } catch (_) {} finally { ctx.eatEquipping = false }
       }
       await bot.consume()
       console.log(`eat ${foodItem.name} food=${prevFood}`)

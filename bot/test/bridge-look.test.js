@@ -212,6 +212,54 @@ describe('bridge consume/sleep (idkcraft-neuc.9)', () => {
     await assert.rejects(() => bot.consume(), /not consumed/)
   })
 
+  it('a hand swap mid-use is not a meal (prod bot2: 100 phantom eats at food=17)', async () => {
+    let transport
+    ;({ transport, bot } = await lookBot({
+      food: 17,
+      inventory: [{ slot: 36, name: 'bread', count: 3 }, { slot: 37, name: 'stone_sword', count: 1 }],
+    }))
+    const p = bot.consume()
+    await tick(120)
+    transport.state.selected = 1 // another step equips the sword; no bread was eaten
+    await assert.rejects(() => p, /not consumed/)
+    assert.equal(transport.state.inventory[0].count, 3)
+  })
+
+  it('another step\'s hand equip waits for the meal instead of cancelling it', async () => {
+    let transport
+    ;({ transport, bot } = await lookBot({
+      food: 17,
+      inventory: [{ slot: 36, name: 'bread', count: 3 }, { slot: 37, name: 'stone_pickaxe', count: 1 }],
+      eatDelayMs: 300,
+    }))
+    const ctx = {}
+    assert.equal(eatReflex(bot, ctx, {}), true)
+    await tick(60)
+    const pick = bot.inventory.items().find((i) => i.name === 'stone_pickaxe')
+    const eq = bot.equip(pick, 'hand') // a dig step re-arms its tool mid-bite
+    for (let i = 0; i < 80 && ctx.eatInFlight; i++) await tick(25)
+    await eq
+    assert.equal(transport.state.inventory.find((i) => i.name === 'bread').count, 2) // the bite landed
+    assert.equal(bot.heldItem && bot.heldItem.name, 'stone_pickaxe') // then the tool
+  })
+
+  it('a deferred hand equip is dropped when the step changed during the meal', async () => {
+    ;({ bot } = await lookBot({
+      food: 17,
+      inventory: [{ slot: 36, name: 'bread', count: 3 }, { slot: 37, name: 'stone_pickaxe', count: 1 }],
+      eatDelayMs: 300,
+    }))
+    const ctx = { step: 'gather', body: { owner: 'work' } }
+    assert.equal(eatReflex(bot, ctx, {}), true)
+    await tick(60)
+    const eq = bot.equip(bot.inventory.items().find((i) => i.name === 'stone_pickaxe'), 'hand')
+    ctx.step = 'castle' // the step moved on mid-bite
+    for (let i = 0; i < 80 && ctx.eatInFlight; i++) await tick(25)
+    await eq
+    await tick(60)
+    assert.notEqual(bot.heldItem && bot.heldItem.name, 'stone_pickaxe')
+  })
+
   it('overlapping interactions share one pause/resume pair (refcounted)', async () => {
     let transport
     ;({ transport, bot } = await lookBot())
@@ -272,5 +320,29 @@ describe('bridge consume/sleep (idkcraft-neuc.9)', () => {
     ;({ transport, bot } = await lookBot({ blocks: { '3,64,3': 'red_bed' }, refuseSleep: true }))
     const bed = { name: 'red_bed', position: new Vec3(3, 64, 3) }
     await assert.rejects(() => bot.sleep(bed), /bot is not sleeping \(click rejected\)/)
+  })
+})
+
+describe('eat hand ownership: the meal\'s own hotbar select (v1 mineflayer equip)', () => {
+  it('mineflayer-style equip selects the food slot immediately; a foreign select still waits', async () => {
+    const selects = []
+    const bot = {
+      food: 17,
+      heldItem: { name: 'stone_pickaxe', count: 1 },
+      inventory: { items: () => [{ name: 'bread', count: 3, slot: 37 }] },
+      setQuickBarSlot(n) { selects.push(n) },
+      async equip(item, dest) { this.setQuickBarSlot(1); this.heldItem = item }, // mineflayer equip selects internally
+      async consume() { await new Promise((r) => setTimeout(r, 150)) },
+    }
+    const ctx = {}
+    assert.equal(eatReflex(bot, ctx, {}), true)
+    await new Promise((r) => setTimeout(r, 30))
+    assert.deepEqual(selects, [1], 'the food select ran during the meal, not deferred')
+    bot.setQuickBarSlot(5) // another step mid-bite
+    await new Promise((r) => setTimeout(r, 30))
+    assert.deepEqual(selects, [1], 'a foreign select waits for the meal')
+    for (let i = 0; i < 40 && ctx.eatInFlight; i++) await new Promise((r) => setTimeout(r, 25))
+    await new Promise((r) => setTimeout(r, 120))
+    assert.deepEqual(selects, [1, 5])
   })
 })
