@@ -93,3 +93,36 @@ it('stocked chests come before unknown ones; fresh-empty ones are skipped', () =
   assert.equal(stockpile.chestHope(ctx, mid, (n) => n === 'bread'), 0)
   assert.equal(stockpile.chestHope(ctx, near, (n) => n === 'bread'), 1)
 })
+
+// Through the real goal.decide on a castle build (Codex #776): a sighted,
+// never-opened chest (scout's rememberChests: no contents = hope 1) with bread.
+const goal = require('../src/goal')
+for (const [food, health] of [[0, 10], [0, 20], [9, 10], [9, 20]]) {
+  it(`decide on a castle build picks the food leg: food=${food} health=${health}, a sighted chest`, async () => {
+    const chest = [{ name: 'bread', type: 1, count: 16 }]
+    const { bot, pack } = world(chest)
+    bot.food = food; bot.health = health
+    bot.time = { timeOfDay: 1000 }
+    const ctx = {
+      home: { built: true },
+      castle: { site: { x: 5, y: 64, z: 5 }, rot: 0, blueprintVersion: 1, phase: 'body', blocked: {}, parked: false },
+      stepStatus: 'running', work: true,
+    }
+    stockpile.rememberChests(ctx, [new Vec3(CHEST.x, CHEST.y, CHEST.z)])
+    assert.equal(stockpile.chestHope(ctx, CHEST, () => true), 1, 'sighted, never opened: a candidate')
+    const d = await goal.decide(bot, ctx)
+    assert.equal(d.action, 'foodRecovery')
+    for (let i = 0; i < 20 && ctx.stepStatus === 'running'; i++) {
+      BEHAVIOURS.foodRecovery(bot, ctx, null, { time: 'day', health })
+      await sleep(5)
+    }
+    assert.equal(pack[0] && pack[0].name, 'bread')
+    assert.equal(pack[0].count, foodRecovery.HUNGRY_WANT)
+    // the real eat reflex on the mock body (consume is the mock's food gain)
+    bot.equip = async () => {}
+    bot.consume = async () => { pack[0].count--; bot.food += 5 }
+    assert.equal(require('../src/reflexes').eatReflex(bot, ctx, null), true)
+    for (let i = 0; i < 10 && ctx.eatInFlight; i++) await sleep(5)
+    assert.equal(bot.food, food + 5)
+  })
+}
