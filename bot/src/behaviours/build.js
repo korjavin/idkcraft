@@ -521,6 +521,12 @@ function houseDoorOwed(bot, home, skipped) {
 function houseTableAt(bot, home) {
   try {
     if (!home || !home.site) return null
+    // A castle residence's workbench cell (nothing claims it into home.table).
+    if (home.kind === 'castle') {
+      const c = require('../residence').of(home).table(home)
+      const p = c && new Vec3(c.x, c.y, c.z)
+      return p && blockNameAt(bot, p) === 'crafting_table' ? p : null
+    }
     const t = blueprintFor(home)[0]
     if (!t || t.kind !== 'table') return null
     const p = cellAbs(home, t)
