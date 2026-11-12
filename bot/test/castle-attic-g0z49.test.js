@@ -441,6 +441,9 @@ describe('castle lava hold (owner 2026-11-12)', () => {
     }
     assert.equal(e.retired, true, `retires after MAX_HOLE_TRIES, tries=${e.tries}`)
     assert.deepEqual(bot.calls.places, [])
+    // A tidy return while the lava stays does not re-arm it.
+    castleMod.reopenRepairs(bot, ctx, ctx.castle, true)
+    assert.ok(Object.values(ctx.castle.blocked).includes(e) && e.retired, 'lava still there: stays retired')
     // The lava goes: the tidy return re-arms the transient hole and lays it.
     bot.set.delete(k3(cell.x, cell.y, cell.z + 1))
     castleMod.reopenRepairs(bot, ctx, ctx.castle, true)

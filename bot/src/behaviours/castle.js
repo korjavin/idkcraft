@@ -1311,6 +1311,7 @@ function reopenRepairs(bot, ctx, st, transientOnly) {
       const c = cells[idx] || (e.why === 'lava' ? decorOf(st, idx) : null)
       if (!c) continue // off-plan entries (prep, litter, fill, decor, sill) are someone else's
       if (done(bot, c)) continue // healed: pick's prune drops the entry
+      if (e.why === 'lava' && lavaNear(bot, c)) continue // still beside lava: stays a reported gap
       // Automatic tidy must not mint a fresh paid recovery budget every
       // hour. Keep history/counter; only an explicit owner repair resets it.
       if (transientOnly && e.recoveries > 0) {
