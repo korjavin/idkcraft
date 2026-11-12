@@ -707,6 +707,7 @@ describe('llm orders: flag on', () => {
       llmOrders.tick(bot, ctx)
       ctx.stepStatus = 'failed:need-torch'
       llmOrders.tick(bot, ctx)
+      if (ctx.llmOrder && ctx.llmOrder.aside) llmOrders.tick(bot, ctx, ctx.llmOrder.aside.until + 1)
     }
     fail()
     assert.ok(ctx.llmOrder, 'one failure retries')
@@ -734,6 +735,7 @@ describe('llm orders: flag on', () => {
       llmOrders.tick(bot, ctx)
       ctx.stepStatus = status
       llmOrders.tick(bot, ctx)
+      if (ctx.llmOrder && ctx.llmOrder.aside) llmOrders.tick(bot, ctx, ctx.llmOrder.aside.until + 1)
     }
     run('done')
     assert.ok(ctx.llmOrder, 'repeats after one run')

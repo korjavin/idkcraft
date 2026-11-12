@@ -165,6 +165,7 @@ function installInteract(bot) {
       }
       bot.on('blockUpdate', onUpdate)
       try {
+        if (bot._selectPending) { try { await bot._selectPending } catch (_) { /* logged by select */ } }
         await bot.transport.call('place.once', { ...dest, face: faceName(faceVector), yaw, pitch, cursor, sneak })
         bot.entity.yaw = yaw
         bot.entity.pitch = pitch
