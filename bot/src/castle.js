@@ -414,7 +414,45 @@ const BLUEPRINTS = {
 // The blueprint of a castle version; unknown/missing -> v1 (every castle
 // ordered before g0z.11 is v1).
 function blueprintOf(version) {
+  if (!BLUEPRINTS[version] && Number.isInteger(version) && version > SCALE_BASE) {
+    const pct = Math.floor(version / SCALE_BASE)
+    const base = BLUEPRINTS[version % SCALE_BASE]
+    if (base && pct > 0 && pct <= MAX_SCALE_PCT) BLUEPRINTS[version] = scaleBlueprint(base, version, 1 + pct / 100)
+  }
   return BLUEPRINTS[version] || BLUEPRINTS[1]
+}
+
+// Castle scale (owner 2026-11-12, `build castle N`): every dimension grows
+// by N percent. The scale rides in blueprintVersion (pct * SCALE_BASE +
+// base version), so memory, caches and every siteDimensions/absPlan caller
+// carry it unchanged; an unscaled castle keeps its plain version (1.0).
+const SCALE_BASE = 1000
+const MAX_SCALE_PCT = 100
+function scaledVersion(version, pct) {
+  return pct > 0 ? pct * SCALE_BASE + version : version
+}
+// Nearest-neighbour upsample: local cell i covers [round(i*f), round((i+1)*f))
+// per axis, so walls stay gapless. Door/torch/stairs keep one block at the
+// bottom of their y range (the rest is air): a stacked door or torch cannot
+// be placed. shortcut: stairs flights stretch (steps 2 apart at 2x) and the
+// decor layer is dropped; hand-place both if scaled castles stick.
+const SINGLE_Y = new Set(['door', 'torch', 'stairs'])
+function scaleBlueprint(bp, version, f) {
+  const r = (i) => Math.round(i * f)
+  const span = (i) => { const out = []; for (let v = r(i); v < r(i + 1); v++) out.push(v); return out }
+  const PLAN = []
+  for (const c of bp.PLAN) {
+    span(c.dy).forEach((dy, j) => {
+      const kind = j > 0 && SINGLE_Y.has(c.kind) ? 'air' : c.kind
+      for (const dx of span(c.dx)) for (const dz of span(c.dz)) {
+        const o = { dx, dy, dz, kind }
+        if (c.face && kind === c.kind) o.face = { ...c.face }
+        PLAN.push(o)
+      }
+    })
+  }
+  const at = (p) => ({ dx: r(p.dx), dy: r(p.dy), dz: r(p.dz) })
+  return { version, W: r(bp.W), D: r(bp.D), ENTRANCE: at(bp.ENTRANCE), DOOR: at(bp.DOOR), PLAN }
 }
 
 // Quarter-turns clockwise (viewed from above): 0 entrance north, 1 east,
@@ -808,6 +846,8 @@ module.exports = {
   PLAN,
   BLUEPRINTS,
   blueprintOf,
+  scaledVersion,
+  MAX_SCALE_PCT,
   buildPlan,
   buildFullPlan,
   rotatePlan,
