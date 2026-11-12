@@ -243,6 +243,23 @@ describe('bridge consume/sleep (idkcraft-neuc.9)', () => {
     assert.equal(bot.heldItem && bot.heldItem.name, 'stone_pickaxe') // then the tool
   })
 
+  it('a deferred hand equip is dropped when the step changed during the meal', async () => {
+    ;({ bot } = await lookBot({
+      food: 17,
+      inventory: [{ slot: 36, name: 'bread', count: 3 }, { slot: 37, name: 'stone_pickaxe', count: 1 }],
+      eatDelayMs: 300,
+    }))
+    const ctx = { step: 'gather', body: { owner: 'work' } }
+    assert.equal(eatReflex(bot, ctx, {}), true)
+    await tick(60)
+    const eq = bot.equip(bot.inventory.items().find((i) => i.name === 'stone_pickaxe'), 'hand')
+    ctx.step = 'castle' // the step moved on mid-bite
+    for (let i = 0; i < 80 && ctx.eatInFlight; i++) await tick(25)
+    await eq
+    await tick(60)
+    assert.notEqual(bot.heldItem && bot.heldItem.name, 'stone_pickaxe')
+  })
+
   it('overlapping interactions share one pause/resume pair (refcounted)', async () => {
     let transport
     ;({ transport, bot } = await lookBot())

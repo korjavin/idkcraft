@@ -72,7 +72,8 @@ function installEquipGuard(bot, ctx) {
     // The meal owns the hand: another step's hand equip waits for it (<= 3 s)
     // instead of swapping mid-use, which cancels the bite (prod 2026-11-11 bot2).
     if (dest === 'hand' && ctx.eatInFlight && !(item && item.name === ctx.eatItem)) {
-      return waitMeal(ctx).then(() => origEquip.call(this, item, dest, ...args))
+      const lease = leaseOf(ctx)
+      return waitMeal(ctx).then(() => (leaseOf(ctx) === lease ? origEquip.call(this, item, dest, ...args) : undefined))
     }
     return origEquip.call(this, item, dest, ...args)
   }
@@ -80,9 +81,16 @@ function installEquipGuard(bot, ctx) {
   if (typeof origSelect === 'function') {
     bot.setQuickBarSlot = function(...args) {
       if (!ctx.eatInFlight) return origSelect.apply(this, args)
-      waitMeal(ctx).then(() => origSelect.apply(this, args))
+      const lease = leaseOf(ctx)
+      waitMeal(ctx).then(() => { if (leaseOf(ctx) === lease) origSelect.apply(this, args) })
     }
   }
+}
+
+// A deferred hand change runs only for the body owner and step that asked:
+// after a switch the new step equips for itself (no stale late swap).
+function leaseOf(ctx) {
+  return `${(ctx.body && ctx.body.owner) || ''}|${ctx.step || ''}`
 }
 
 async function waitMeal(ctx) {
