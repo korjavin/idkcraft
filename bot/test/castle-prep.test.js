@@ -158,13 +158,12 @@ describe('g0z.5 site check', () => {
     assert.equal(check((w) => { w.set(103, 63, 203, 'air'); w.set(103, 62, 203, 'air') }), null)
     assert.equal(check((w) => { w.set(104, 64, 204, 'dirt'); w.set(104, 65, 204, 'stone') }), null)
   })
-  it('g0z.20: the core levels ±4 and refuses past it with the spot count and the worst offset', () => {
+  it('g0z.20: the core levels ±8 and refuses past it with the spot count and the worst offset', () => {
     // (103, 203) / (105, 205): v1 tower columns (core).
-    assert.equal(check((w) => { for (let y = 60; y <= 63; y++) w.set(103, y, 203, 'air') }), null, '4 deep')
-    assert.equal(check((w) => { for (let y = 59; y <= 63; y++) w.set(103, y, 203, 'air') }),
-      'the ground is too uneven: 1 spots are more than 4 blocks off level, worst 5 down at 103 203 (I level up to 4 under the castle)')
-    const r = check((w) => { for (let y = 64; y <= 69; y++) w.set(105, y, 205, 'stone') })
-    assert.match(r, /too uneven: 1 spots are more than 4 blocks off level, worst 6 up at 105 205/)
+    assert.equal(check((w) => { for (let y = 56; y <= 63; y++) w.set(103, y, 203, 'air') }), null, '8 deep')
+    assert.equal(check((w) => { for (let y = 64; y <= 69; y++) w.set(105, y, 205, 'stone') }), null, '6 up')
+    const r = check((w) => { for (let y = 64; y <= 72; y++) w.set(105, y, 205, 'stone') })
+    assert.match(r, /too uneven: 1 spots are more than 8 blocks off level, worst 9 up at 105 205 \(I level up to 8 under the castle\)/)
     assert.match(check((w) => { for (let y = 50; y <= 63; y++) w.set(103, y, 203, 'air') }), /worst 9\+ down at 103 203/)
   })
 })
@@ -204,15 +203,17 @@ describe('g0z.20 site level, ring and earthwork budget (v2 31x27)', () => {
     assert.ok(bot.chats.some((x) => /0 blocks to cut, 2 holes to fill/.test(x)), bot.chats.join('|'))
     assert.equal(w.get(m.x, 62, m.z), 'cobblestone', 'the dy -2 moat cell filled')
     assert.equal(w.get(m.x, 63, m.z), 'cobblestone', 'the dy -1 moat cell filled')
-    const r = v2((w) => { for (let x = 0; x < 7; x++) w.set(SITE.x + x, 63, SITE.z, 'water') })
-    assert.match(r.bad, /there is water in 7 spots around it, first at 100 63 200 \(I fill up to 6\)/)
+    const r = v2((w) => { for (let x = 0; x < 18; x++) w.set(SITE.x + x, 63, SITE.z, 'water') })
+    assert.match(r.bad, /there is water in 18 spots around it, first at 100 63 200 \(I fill up to 17\)/)
   })
 
   it('(c) a slope past the earthwork budget refuses with the number', () => {
     // Five front rows (the fence, moat and bridge side: all ring) 5 up.
-    const r = v2((w) => { for (let x = 0; x < 31; x++) for (let z = 0; z < 5; z++) for (let y = 64; y < 69; y++) w.set(SITE.x + x, y, SITE.z + z, 'dirt') })
+    const r = v2((w) => { for (let x = 0; x < 31; x++) for (let z = 0; z < 9; z++) for (let y = 64; y < 69; y++) w.set(SITE.x + x, y, SITE.z + z, 'dirt') })
     assert.equal(r.why, 'uneven')
-    assert.match(r.bad, /too uneven: levelling it moves 775 blocks, worst 5 up at \d+ \d+ \(I move up to 400\)/)
+    assert.match(r.bad, /too uneven: levelling it moves \d+ blocks, worst 5 up at \d+ \d+ \(I move up to 1256\)/)
+    // Five rows 5 up (775) now fit the footprint-scaled budget.
+    assert.equal(v2((w) => { for (let x = 0; x < 31; x++) for (let z = 0; z < 5; z++) for (let y = 64; y < 69; y++) w.set(SITE.x + x, y, SITE.z + z, 'dirt') }).bad, null)
     // The same rows 2 up stay in budget (310).
     assert.equal(v2((w) => { for (let x = 0; x < 31; x++) for (let z = 0; z < 5; z++) for (let y = 64; y < 66; y++) w.set(SITE.x + x, y, SITE.z + z, 'dirt') }).bad, null)
   })
