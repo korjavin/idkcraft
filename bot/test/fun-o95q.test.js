@@ -774,3 +774,10 @@ describe('fun folly on uneven ground (prod fun-no-ground)', () => {
     assert.equal(r.placed, spot.cells.length - 1)
   })
 })
+
+describe('fun repeat (prod: 6 jokes a minute)', () => {
+  it('a finished joke is not exempt from the idle gap', () => {
+    const ctx = idleCtx({ step: 'fun', stepStatus: 'done', funLast: Date.now(), funNext: Date.now() + 60000 })
+    assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), ctx), false)
+  })
+})
