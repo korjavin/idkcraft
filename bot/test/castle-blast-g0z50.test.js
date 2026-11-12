@@ -41,14 +41,14 @@ describe('castle kitchen blast furnace plan (g0z.50)', () => {
     assert.equal(blueprint.DECOR[2].filter((c) => c.kind === 'pane').length, 44)
     assert.equal(blueprint.DECOR[2].filter((c) => c.kind === 'banner').length, 2)
     assert.equal(blueprint.DECOR[2].filter((c) => c.kind === 'bookshelf').length, 5)
-    assert.equal(blueprint.DECOR[2].filter((c) => c.kind === 'enchanting_table').length, 1)
+    assert.equal(blueprint.DECOR[2].filter((c) => c.kind === 'enchanting_table').length, 1) // retired slot stays (idx)
     const tail = blueprint.DECOR[2].slice(-12, -5).map((c) => c.kind) // the g0z.46 gate gap (5 cells) appends after
     assert.deepEqual(tail, ['enchanting_table', 'bookshelf', 'bookshelf', 'bookshelf', 'bookshelf', 'bookshelf', 'blast_furnace'])
     const dp = blueprint.decorPlan(SITE, 0, 2)
-    assert.equal(dp.cells.length, 44 + 2 + V2.PLAN.filter((c) => c.kind === 'fence').length + 6 + 1 + 5)
+    assert.equal(dp.cells.length, 44 + 2 + V2.PLAN.filter((c) => c.kind === 'fence').length + 5 + 1 + 5)
     const last = dp.cells[dp.cells.length - 6]
     assert.equal(last.kind, 'blast_furnace')
-    assert.equal(last.idx, blueprint.DECOR_BASE + dp.cells.length - 6)
+    assert.equal(last.idx, blueprint.DECOR_BASE + blueprint.DECOR[2].length - 6)
   })
 
   it('the PLAN stays frozen and v1 has no blast', () => {
