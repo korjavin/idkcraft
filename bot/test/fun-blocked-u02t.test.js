@@ -67,6 +67,23 @@ describe('fun blocked-bypass (u02t)', () => {
     assert.equal(fun.menuBlocked(f, b, c), true)
     assert.equal(goal.MENU.fun.feasible(f, b, c), true)
   })
+  it('known=near with every work step held stays feasible (prod bot2: forage held, fun hard-vetoed)', () => {
+    const f = owedFacts({ known: 'near' })
+    const b = botWith(kit)
+    assert.equal(goal.MENU.fun.feasible(f, b, idleCtx()), false, 'runnable forage still vetoes')
+    const c = idleCtx()
+    const text = goal.goalText(f, c.home)
+    c.stepFail = {}
+    for (const n of Object.keys(goal.MENU)) {
+      if (n === 'fun' || n === 'rest' || n === 'explore') continue
+      let ok = false
+      try { ok = !!goal.MENU[n].feasible(f, b, c) } catch (_) { ok = false }
+      if (ok) c.stepFail[n] = { text, status: 'failed:probe' }
+    }
+    assert.ok(c.stepFail.forage, 'forage was runnable before the hold')
+    assert.equal(fun.menuBlocked(f, b, c), true)
+    assert.equal(goal.MENU.fun.feasible(f, b, c), true)
+  })
   it('a runnable productive step with owed work stays infeasible (no cannibalization)', () => {
     // Same owed books, free menu: beds and craft can run.
     const f = owedFacts()

@@ -270,7 +270,6 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
     // the veto through menuBlocked.
     if (!castleQuiet(facts) && !(facts.castle === 'blocked' && menuBlocked(facts, bot, ctx))) return false
     if (facts.home !== 'built') return false
-    if (facts.known === 'near') return false
     const owedHaul = facts.haul === 'waiting'
     // Stockpile's exact complement (o95q R5.1): a chest to adopt/place,
     // bankable surplus, or finished goods awaiting handover all belong
@@ -290,7 +289,9 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
     // forever). While any productive step could run, the vetoes stand, so
     // the joke never cannibalizes real work. Owed clauses stay registered
     // as STEP_CRITERIA tiebreak weight for a future tick ask.
-    const owedWork = owedHaul || owedChest ||
+    // known=near is owed forage, not a hard veto: prod bot2 sat in rest with
+    // forage held 'castle blocked' and fun 'not feasible' on known=near alone.
+    const owedWork = owedHaul || owedChest || facts.known === 'near' ||
       (facts.gear !== 'done' && facts.gear !== 'hand') ||
       ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || facts.rearm) ||
       upgradeDue(bot) ||
