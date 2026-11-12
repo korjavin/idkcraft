@@ -300,13 +300,17 @@ function sameCastle(home, st) {
 // un-selects it (no flapping) and a new order keeps the old castle until the
 // new one completes. Only a forget (no castle at all) or the flag off falls
 // back to the hut.
+// shortcut: the residence geometry (door, beds, floors) is v2's; a scaled
+// castle (build castle N) is never a residence until it derives them from
+// blueprintOf(version).
+function unscaled(st) { return castle.scaleOf(st.blueprintVersion) === 1 }
 function wanted(ctx) {
   if (!ctx) return undefined
   const h = ctx.home
   const st = ctx.castle
   const on = module.exports.RESIDENCE_CASTLE === true
   const isCastle = !!h && h.kind === 'castle'
-  if (on && st && st.site && st.phase === 'complete' && st.blueprintVersion >= 2) {
+  if (on && st && st.site && st.phase === 'complete' && st.blueprintVersion >= 2 && unscaled(st)) {
     // Edge, not level (01-review): adopted once (st.residence, persisted),
     // a later 'build here' stands until a new castle completes.
     return (isCastle && sameCastle(h, st)) || st.residence ? undefined : castleHome(st)
@@ -330,7 +334,7 @@ function nightHome(ctx, pos) {
     if (h && h.built === true) return h
     const own = ctx.castle && ctx.castle.phase === 'complete' ? ctx.castle : null
     const st = own || ctx.peerCastle
-    if (!st || !st.site || st.phase !== 'complete' || !(st.blueprintVersion >= 2)) return h
+    if (!st || !st.site || st.phase !== 'complete' || !(st.blueprintVersion >= 2) || !unscaled(st)) return h
     const a = h && h.site ? h.site : pos
     if (!a || typeof a.x !== 'number' || Math.hypot(a.x - st.site.x, a.z - st.site.z) > NIGHT_CASTLE_RANGE) return h
     if (!sameCastle(ctx.nightCastle, st)) ctx.nightCastle = castleHome(st)

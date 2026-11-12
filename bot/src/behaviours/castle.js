@@ -295,7 +295,7 @@ function blockCell(ctx, st, c, why, now) {
   // standard retry ladder (revmux 01 core-2) so transient unreachability
   // never permanently drops decor. The tries>=MAX backstop
   // keeps the old invariant for mixed ladders that never streak.
-  const isLitter = c && (c.idx >= LITTER_BOX_BASE && c.idx < FILL_BASE)
+  const isLitter = c && (c.idx >= LITTER_BOX_BASE && c.idx < fillBase(st))
   const limit = why === 'build-miss'
     ? BUILD_MISS_TRIES
     : why === 'protected'
@@ -1077,7 +1077,7 @@ function nextLitter(st, list, now, bot = null, ctx = null) {
 // Only the range checks can fail: dy = t mod 40 and the strides divide by
 // construction.
 function bandOf(st, idx) {
-  if (!(idx >= LITTER_BAND_BASE && idx < blueprint.DECOR_BASE)) return null
+  if (!(idx >= LITTER_BAND_BASE && idx < fillBase(st))) return null
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const R = blueprint.apronR(st.blueprintVersion)
   const t = idx - LITTER_BAND_BASE
@@ -1113,13 +1113,20 @@ function boxOf(st, idx) {
 // prep's), one cell per castle tick, cached like the box litter. The door
 // sill cell (sillOf) is excluded: it wants planks, not fill.
 const FILL_BASE = 2600000 // band space ends near 2.35M, decor starts at 3M
+// A scaled castle's band (box + scaled apron, up to (62+64)(54+64)*40 ~
+// 595k at N=100) runs past 2.6M, so its fills start higher; unscaled
+// castles keep 2.6M (stored blocked keys stay valid).
+const FILL_BASE_SCALED = 2850000
+function fillBase(st) {
+  return blueprint.scaleOf(st && st.blueprintVersion) === 1 ? FILL_BASE : FILL_BASE_SCALED
+}
 const FILL_DEPTH = 4 // holes dug for transit are shallow
 // Invert the scan's ID, but only for cells that scan could actually emit.
 // Prep IDs and invalid offsets must retain their temporary expiry semantics.
 function fillOf(st, idx) {
-  if (!Number.isSafeInteger(idx) || idx < FILL_BASE || idx >= blueprint.DECOR_BASE || !st || !st.site) return null
+  if (!Number.isSafeInteger(idx) || !st || !st.site || idx < fillBase(st) || idx >= blueprint.DECOR_BASE) return null
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-  const t = idx - FILL_BASE
+  const t = idx - fillBase(st)
   if (t >= (w + 2) * (d + 2) * FILL_DEPTH) return null
   const dd = t % FILL_DEPTH + 1
   const q = Math.floor(t / FILL_DEPTH)
@@ -1150,7 +1157,7 @@ function fillTargets(bot, ctx, st, now) {
           if (k === sillKey || at.has(k)) continue
           const n = nameAt(bot, { x, y, z })
           if (n == null || !AIR.has(n)) continue // unloaded reads null: never fill blind
-          list.push({ x, y, z, kind: 'stone', prep: 'fill', idx: FILL_BASE + ((dx + 1) * (d + 2) + (dz + 1)) * FILL_DEPTH + (dd - 1) })
+          list.push({ x, y, z, kind: 'stone', prep: 'fill', idx: fillBase(st) + ((dx + 1) * (d + 2) + (dz + 1)) * FILL_DEPTH + (dd - 1) })
         }
       }
     }
@@ -2782,6 +2789,8 @@ module.exports.litterTargets = litterTargets
 module.exports.fillTargets = fillTargets
 module.exports.nextFill = nextFill
 module.exports.FILL_BASE = FILL_BASE
+module.exports.fillBase = fillBase
+module.exports.fillOf = fillOf
 module.exports.scaffoldShape = scaffoldShape
 module.exports.LITTER_BOX_BASE = LITTER_BOX_BASE
 module.exports.LITTER_BAND_BASE = LITTER_BAND_BASE

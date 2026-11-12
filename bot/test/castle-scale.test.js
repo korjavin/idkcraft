@@ -279,3 +279,35 @@ describe('castle scale: build order', () => {
     })
   }
 })
+
+describe('castle scale: review 01 (ids, residence)', () => {
+  const residence = require('../src/residence')
+
+  it('litter band ids stay below the fill ids, fills below decor, at every N', () => {
+    assert.equal(castleMod.fillBase({ blueprintVersion: 3 }), castleMod.FILL_BASE, 'unscaled ids unchanged')
+    for (const n of [0, 50, 66, 100]) {
+      const v = bp.scaledVersion(3, n)
+      const st = { site: { x: 0, y: 64, z: 0 }, rot: 1, blueprintVersion: v }
+      const { w, d } = bp.siteDimensions(st.rot, v)
+      const R = bp.apronR(v)
+      const bandMax = castleMod.litterCell(st, d, w - 1 + R, 64 + bp.siteTop(v), d - 1 + R).idx
+      const fb = castleMod.fillBase(st)
+      assert.ok(bandMax < fb, `N=${n}: band ${bandMax} < fill ${fb}`)
+      assert.ok(fb + (w + 2) * (d + 2) * 4 < bp.DECOR_BASE, `N=${n}: fills below decor`)
+      assert.equal(castleMod.bandOf(st, fb), null, 'a fill id never decodes as band litter')
+      const corner = castleMod.bandOf(st, bandMax)
+      assert.deepEqual([corner.x, corner.y, corner.z], [w - 1 + R, 64 + bp.siteTop(v), d - 1 + R])
+    }
+  })
+
+  it('a complete scaled castle is not the residence (own or peer); an unscaled one is', () => {
+    const complete = (v) => ({ site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: v, phase: 'complete', blocked: {}, parked: false })
+    const scaled = complete(bp.scaledVersion(3, 100))
+    assert.equal(residence.wanted({ home: null, castle: scaled }), undefined, 'scaled: home unchanged, not adopted')
+    assert.equal(residence.nightHome({ home: null, castle: scaled }, { x: 5, y: 64, z: 5 }), null)
+    assert.equal(residence.nightHome({ home: null, castle: null, peerCastle: scaled }, { x: 5, y: 64, z: 5 }), null, 'peer scaled castle')
+    const plain = complete(3)
+    assert.equal(residence.wanted({ home: null, castle: plain }).kind, 'castle')
+    assert.equal(residence.nightHome({ home: null, castle: plain }, { x: 5, y: 64, z: 5 }).kind, 'castle')
+  })
+})

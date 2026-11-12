@@ -1804,10 +1804,11 @@ function offCastleSpot(bot, ctx) {
     }
     // g0z.63: and outside the apron of every known castle (the pillar and
     // the cap are refused there), XZ only — at the castle's own level. The
-    // search reaches out of the apron from a 31x27 box's centre (16 + 17);
+    // search reaches out of the apron from the box's centre (apron + half
+    // the box + 1: 16 + 17 for a 31x27 box, 32 + 32 at build castle 100);
     // no such spot keeps the old gap-6 walk-off from the own box.
     const clear = (ax, az) => !castleData.inCastleApron(ctx, { x: ax, z: az })
-    return walkOffSpot(bot, ctx, (ax, az) => clear(ax, az) && gap(ax, az), castleData.apronR(own && own.blueprintVersion) + 17) ||
+    return walkOffSpot(bot, ctx, (ax, az) => clear(ax, az) && gap(ax, az), own ? castleData.apronR(own.blueprintVersion) + Math.ceil(Math.max(w, d) / 2) + 1 : castleData.CASTLE_APRON + 17) ||
       (own ? walkOffSpot(bot, ctx, gap) : null)
   } catch (_) { return null }
 }
