@@ -398,3 +398,20 @@ describe('castle bookshelf craft (g0z.49)', () => {
     assert.match(p.line, /book/)
   })
 })
+
+describe('retired table slot: idx lookups past it (vt7r review)', () => {
+  it('a blocked shelf AFTER the retired table keeps its backoff while its laid neighbour is done', async () => {
+    const dp = blueprint.decorPlan(SITE, 0, 2)
+    const shelves = dp.cells.filter((c) => c.kind === 'bookshelf')
+    const open = shelves[0] // the next array slot is a laid shelf: a positional lookup read it as this idx
+    assert.equal(dp.byIdx.get(open.idx), open)
+    const bot = castleBot({ items: [{ name: 'bookshelf', count: 1 }] })
+    closeDecor(bot, 0, new Set([k3(open.x, open.y, open.z)]))
+    const ctx = { castle: completeState() }
+    const key = `2:${open.idx}`
+    ctx.castle.blocked = { [key]: { tries: 1, until: Date.now() + 60000, why: 'unreachable' } }
+    for (let i = 0; i < 10; i++) { castleMod(bot, ctx); await settle(); await settle() }
+    assert.ok(ctx.castle.blocked[key], 'the backoff entry survives the prune')
+    assert.deepEqual(bot.calls.places, [], 'the backing-off shelf is not re-picked at once')
+  })
+})

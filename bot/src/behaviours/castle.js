@@ -2615,7 +2615,7 @@ function work(bot, ctx, st, c, now, status) {
 // in a window is his choice, never dug), not backing off or retired.
 function decorOf(st, idx) {
   if (!(idx >= blueprint.DECOR_BASE)) return null
-  return blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).cells[idx - blueprint.DECOR_BASE] || null
+  return blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).byIdx.get(idx) || null
 }
 function decorOpen(bot, st, now) {
   const bl = st.blocked || {}

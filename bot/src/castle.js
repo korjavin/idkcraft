@@ -584,7 +584,8 @@ function decorPlan(site, rot, version) {
   }).filter((c) => !RETIRED_DECOR.has(c.kind)) // after idx: every other cell keeps its idx
   const at = new Map()
   for (const c of cells) at.set(`${c.x},${c.y},${c.z}`, c)
-  decorCache = { key, cells, at }
+  const byIdx = new Map(cells.map((c) => [c.idx, c])) // cells is not dense: a retired slot leaves a gap
+  decorCache = { key, cells, at, byIdx }
   return decorCache
 }
 
