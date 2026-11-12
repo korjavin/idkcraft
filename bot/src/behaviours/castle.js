@@ -276,6 +276,25 @@ function bodyPos(bot) {
   return p && typeof p.x === 'number' ? p : null
 }
 
+// Kinds that burn (wood); stone/cobble/glass/stairs (cobble) do not.
+const FLAMMABLE = new Set(['planks', 'fence', 'frame', 'door', 'gate', 'bookshelf', 'banner'])
+// Lava within 3 blocks sideways, 3 below to 1 above a flammable cell: lava's
+// random tick puts fire up to 2 sideways/2 up, and that fire lights its
+// side neighbour, 3 sideways (vanilla LavaFluid.randomTick, b63u review).
+function lavaNear(bot, c) {
+  if (!c || !FLAMMABLE.has(c.kind) || typeof bot.blockAt !== 'function') return false
+  for (let dy = -3; dy <= 1; dy++) {
+    for (let dx = -3; dx <= 3; dx++) {
+      for (let dz = -3; dz <= 3; dz++) {
+        let b = null
+        try { b = bot.blockAt(new Vec3(c.x + dx, c.y + dy, c.z + dz)) } catch (_) { b = null }
+        if (b && (b.name === 'lava' || b.name === 'flowing_lava')) return true
+      }
+    }
+  }
+  return false
+}
+
 function blockCell(ctx, st, c, why, now) {
   const k = bkey(st, c.idx)
   const e = st.blocked[k] || { tries: 0, until: 0 }
@@ -304,6 +323,9 @@ function blockCell(ctx, st, c, why, now) {
         ? LITTER_MAX_TRIES
         : MAX_HOLE_TRIES
   const n = why === 'protected' ? (e.prot | 0) : e.tries
+  // Lava (owner 2026-11-12) is a world condition, not a failed lay: nothing is
+  // placed while it waits, so it never retires — the capped backoff re-checks
+  // and the cell lays once the lava is gone.
   if (n >= limit || e.tries >= MAX_HOLE_TRIES) e.retired = true
   st.blocked[k] = e
   ctx.castleFails = null
@@ -1285,9 +1307,11 @@ function reopenRepairs(bot, ctx, st, transientOnly) {
       const parts = String(k).split(':')
       if (Number(parts[0]) !== ver(st)) continue // stale version: pick's prune drops it
       const idx = Number(parts[1])
-      const c = cells[idx]
+      // A lava-retired decor cell is re-armed too: the lava may have gone.
+      const c = cells[idx] || (e.why === 'lava' ? decorOf(st, idx) : null)
       if (!c) continue // off-plan entries (prep, litter, fill, decor, sill) are someone else's
       if (done(bot, c)) continue // healed: pick's prune drops the entry
+      if (e.why === 'lava' && lavaNear(bot, c)) continue // still beside lava: stays a reported gap
       // Automatic tidy must not mint a fresh paid recovery budget every
       // hour. Keep history/counter; only an explicit owner repair resets it.
       if (transientOnly && e.recoveries > 0) {
@@ -2383,6 +2407,7 @@ function castleBuilderCells(bot, ctx, st) {
       if (done(bot, c)) continue
       const b = blocked[bkey(st, c.idx)]
       if (b && (b.retired || b.until > now)) continue
+      if (lavaNear(bot, c)) continue // the per-cell path holds it (why=lava); the batch never lays it into the fire
       // Stand-floor gate (idkcraft-synq): a cell whose plan cell below is
       // an unlaid place target that is NOT itself in this batch (unheld
       // kind, or blocked/backing off) stays out — batching it can only end
@@ -2592,6 +2617,11 @@ function work(bot, ctx, st, c, now, status) {
   } catch (_) { /* walk best-effort: fall through to the cell */ }
   // v2 builder (neuc.54): plain-cube place cells batch through
   // BuilderProcess; everything else keeps the per-cell path below.
+  // Owner 2026-11-12 (prod bot2): lava beside the fence set it alight and the
+  // bot re-laid it forever. A flammable cell near real lava waits on the
+  // retry ladder (honest status, retires after MAX_HOLE_TRIES as a reported
+  // gap so the castle can complete; 'lava' is transient, the tidy return re-arms it).
+  if (!clearing(c) && lavaNear(bot, c)) { st.status = `${c.kind} near lava`; blockCell(ctx, st, c, 'lava', now); return }
   if (typeof bot.buildCells === 'function' && castleBuilderBatch(bot, ctx, st, c)) return
   let item = null
   if (!clearing(c)) {
