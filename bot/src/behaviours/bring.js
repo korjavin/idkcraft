@@ -1415,12 +1415,15 @@ function pickChest(bot, ctx, o) {
       const b = bot && bot.entity && bot.entity.position
       return !!(b && p && Math.hypot(b.x - p.x, b.y - p.y, b.z - p.z) <= o.maxChestDistance)
     }
+    // o.wants (name => bool): skip chests a fresh read shows without it, stocked ones first.
+    const hope = (p) => typeof o.wants === 'function' ? stockpileMod.chestHope(ctx, p, o.wants) : 1
     const h = ctx && ctx.home && ctx.home.chest
-    if (h && typeof h.x === 'number' && within(h)) {
+    if (h && typeof h.x === 'number' && within(h) && hope(h) > 0) {
       const hk = stockpileMod.chestKeyOf(h)
       if (hk !== null && !o.chestSeen.includes(hk)) return { pos: h, home: true }
     }
     let rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen).filter(within)
+    if (typeof o.wants === 'function') rest = rest.map((c) => [c, hope(c)]).filter((e) => e[1] > 0).sort((a, b) => b[1] - a[1]).map((e) => e[0])
     if (rest.length > 0) return { pos: rest[0], home: false }
     // Armor trim chest scan (idkcraft-3dkc): when searching for armor trims,
     // scan the loaded area for chests before giving up.
@@ -1549,6 +1552,7 @@ function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
       // Unreachable target: skip it and walk to the next chest. Only the
       // last one falls back, exactly as the single-chest path did.
       markChestSeen(o, c)
+      stockpileMod.markChestFailed(ctx, c)
       if (pickChest(bot, ctx, o)) {
         ctx.lastGoalKey = null
         o.chestStalls = 0
@@ -1577,6 +1581,7 @@ function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
         : await stockpileMod.withdrawFromChest(bot, ctx, o.drop, need, at)
       if (valid && !valid()) return
       if (valid && res && res.outcome) console.log(`food recovery chest=${res.outcome} item=${res.name || 'none'} count=${res.got || 0}`)
+      if (res && res.outcome && res.outcome !== 'withdrawn' && res.outcome !== 'empty') stockpileMod.markChestFailed(ctx, c)
       o.chestInFlight = false
       markChestSeen(o, c)
       ctx.chestFull = false // a fetch may have made room: re-arm the step
@@ -1595,6 +1600,7 @@ function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
       if (valid && !valid()) return
       o.chestInFlight = false
       markChestSeen(o, c)
+      stockpileMod.markChestFailed(ctx, c)
       o.chestTried = true
       if (item) {
         if (!ctx || ctx.bring !== o) return

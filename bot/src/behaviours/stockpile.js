@@ -983,6 +983,34 @@ function markChestSeen(o, pos) {
   } catch (_) { /* seen best-effort */ }
 }
 
+// Need-driven chest choice (chest loop): what a chest's remembered snapshot
+// (packroom.noteChestRead, refreshed by every open) says about wants(name).
+// 2 = a fresh read holds a wanted item, 1 = never read or stale (look again:
+// refills and new chests), 0 = a fresh read without it (skip until stale).
+const CHEST_STALE_MS = require('../cheststock').REMEMBERED_DRY_MS
+function chestHope(ctx, pos, wants) {
+  try {
+    const k = chestKeyOf(pos)
+    const e = k !== null && Array.isArray(ctx && ctx.chests) ? ctx.chests.find((c) => chestKeyOf(c) === k) : null
+    // a failed walk/open (markChestFailed) newer than any read: skip until stale
+    if (e && Number.isFinite(e.failAt) && Date.now() - e.failAt < CHEST_STALE_MS && !(e.at > e.failAt)) return 0
+    if (!e || !e.contents || !Number.isFinite(e.at) || Date.now() - e.at >= CHEST_STALE_MS) return 1
+    return Object.entries(e.contents).some(([n, v]) => v > 0 && wants(n)) ? 2 : 0
+  } catch (_) { return 1 }
+}
+
+// Stamp a chest whose walk or open failed (no read): chestHope skips it for
+// CHEST_STALE_MS across episodes, so an unreachable chest is not re-toured.
+function markChestFailed(ctx, pos) {
+  try {
+    const k = chestKeyOf(pos)
+    if (k === null) return
+    rememberChests(ctx, [pos])
+    const e = ctx.chests.find((c) => chestKeyOf(c) === k)
+    if (e) e.failAt = Date.now()
+  } catch (_) { /* best-effort */ }
+}
+
 // Record sighted chest blocks (dedupe by block position, oldest dropped
 // past the cap). Session state on ctx.chests; memory.js persists it.
 function rememberChests(ctx, positions) {
@@ -2249,6 +2277,9 @@ module.exports.nearbyChestsAll = nearbyChestsAll
 module.exports.refreshPeerChests = refreshPeerChests
 module.exports.chestKeyOf = chestKeyOf
 module.exports.markChestSeen = markChestSeen
+module.exports.chestHope = chestHope
+module.exports.markChestFailed = markChestFailed
+module.exports.CHEST_STALE_MS = CHEST_STALE_MS
 module.exports.NEARBY_CHEST_RADIUS = NEARBY_CHEST_RADIUS
 module.exports.CHEST_SIGHT_MAX = CHEST_SIGHT_MAX
 module.exports.CHEST_SPOTS = CHEST_SPOTS
