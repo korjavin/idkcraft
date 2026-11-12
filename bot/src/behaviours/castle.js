@@ -276,6 +276,24 @@ function bodyPos(bot) {
   return p && typeof p.x === 'number' ? p : null
 }
 
+// Kinds that burn (wood); stone/cobble/glass/stairs (cobble) do not.
+const FLAMMABLE = new Set(['planks', 'fence', 'frame', 'door', 'gate', 'bookshelf', 'banner'])
+// Lava within 2 blocks sideways, 3 below to 1 above a flammable cell: the
+// range lava ignites from (vanilla spreads fire up and around a lava cell).
+function lavaNear(bot, c) {
+  if (!c || !FLAMMABLE.has(c.kind) || typeof bot.blockAt !== 'function') return false
+  for (let dy = -3; dy <= 1; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        let b = null
+        try { b = bot.blockAt(new Vec3(c.x + dx, c.y + dy, c.z + dz)) } catch (_) { b = null }
+        if (b && (b.name === 'lava' || b.name === 'flowing_lava')) return true
+      }
+    }
+  }
+  return false
+}
+
 function blockCell(ctx, st, c, why, now) {
   const k = bkey(st, c.idx)
   const e = st.blocked[k] || { tries: 0, until: 0 }
@@ -2592,6 +2610,10 @@ function work(bot, ctx, st, c, now, status) {
   } catch (_) { /* walk best-effort: fall through to the cell */ }
   // v2 builder (neuc.54): plain-cube place cells batch through
   // BuilderProcess; everything else keeps the per-cell path below.
+  // Owner 2026-11-12 (prod bot2): lava beside the fence set it alight and the
+  // bot re-laid it forever. A flammable cell near real lava waits on the
+  // retry ladder (honest status, retires after MAX_HOLE_TRIES) instead.
+  if (!clearing(c) && lavaNear(bot, c)) { st.status = `${c.kind} near lava`; blockCell(ctx, st, c, 'lava', now); return }
   if (typeof bot.buildCells === 'function' && castleBuilderBatch(bot, ctx, st, c)) return
   let item = null
   if (!clearing(c)) {

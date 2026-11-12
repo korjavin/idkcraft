@@ -415,3 +415,28 @@ describe('retired table slot: idx lookups past it (vt7r review)', () => {
     assert.deepEqual(bot.calls.places, [], 'the backing-off shelf is not re-picked at once')
   })
 })
+
+describe('castle lava hold (owner 2026-11-12)', () => {
+  it('a flammable cell beside real lava is not laid; it waits on the ladder with why=lava', async () => {
+    const bot = castleBot({ items: [{ name: 'bookshelf', count: 1 }] })
+    const cell = blueprint.decorPlan(SITE, 0, 2).cells.find((c) => c.kind === 'bookshelf')
+    closeDecor(bot, 0, new Set([k3(cell.x, cell.y, cell.z)]))
+    bot.set.set(k3(cell.x, cell.y, cell.z + 1), 'lava')
+    const ctx = { castle: completeState() }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      for (let i = 0; i < 20; i++) { castleMod(bot, ctx); await settle(); await settle() }
+    } finally { console.log = orig }
+    assert.deepEqual(bot.calls.places, [])
+    assert.ok(logs.some((l) => /castle blocked .* bookshelf \(lava\) try 1/.test(l)), logs.join('\n'))
+    const e = Object.values(ctx.castle.blocked).find((b) => b.why === 'lava')
+    assert.ok(e && e.until > Date.now(), 'backs off, retried later')
+    // The lava goes (owner/flow change): the retry lays it.
+    bot.set.delete(k3(cell.x, cell.y, cell.z + 1))
+    e.until = 0
+    for (let i = 0; i < 60 && bot.calls.places.length < 1; i++) { castleMod(bot, ctx); await settle(); await settle() }
+    assert.deepEqual(bot.calls.places, [k3(cell.x, cell.y, cell.z)])
+  })
+})
