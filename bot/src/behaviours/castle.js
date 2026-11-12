@@ -278,13 +278,14 @@ function bodyPos(bot) {
 
 // Kinds that burn (wood); stone/cobble/glass/stairs (cobble) do not.
 const FLAMMABLE = new Set(['planks', 'fence', 'frame', 'door', 'gate', 'bookshelf', 'banner'])
-// Lava within 2 blocks sideways, 3 below to 1 above a flammable cell: the
-// range lava ignites from (vanilla spreads fire up and around a lava cell).
+// Lava within 3 blocks sideways, 3 below to 1 above a flammable cell: lava's
+// random tick puts fire up to 2 sideways/2 up, and that fire lights its
+// side neighbour, 3 sideways (vanilla LavaFluid.randomTick, b63u review).
 function lavaNear(bot, c) {
   if (!c || !FLAMMABLE.has(c.kind) || typeof bot.blockAt !== 'function') return false
   for (let dy = -3; dy <= 1; dy++) {
-    for (let dx = -2; dx <= 2; dx++) {
-      for (let dz = -2; dz <= 2; dz++) {
+    for (let dx = -3; dx <= 3; dx++) {
+      for (let dz = -3; dz <= 3; dz++) {
         let b = null
         try { b = bot.blockAt(new Vec3(c.x + dx, c.y + dy, c.z + dz)) } catch (_) { b = null }
         if (b && (b.name === 'lava' || b.name === 'flowing_lava')) return true
@@ -2404,6 +2405,7 @@ function castleBuilderCells(bot, ctx, st) {
       if (done(bot, c)) continue
       const b = blocked[bkey(st, c.idx)]
       if (b && (b.retired || b.until > now)) continue
+      if (lavaNear(bot, c)) continue // the per-cell path holds it (why=lava); the batch never lays it into the fire
       // Stand-floor gate (idkcraft-synq): a cell whose plan cell below is
       // an unlaid place target that is NOT itself in this batch (unheld
       // kind, or blocked/backing off) stays out — batching it can only end

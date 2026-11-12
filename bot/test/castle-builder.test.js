@@ -153,6 +153,21 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     assert.equal(batch, null, 'open fence cells never form a schematic')
   })
 
+  it('a planks cell with lava 3 sideways and 2 below stays out of the batch; a far one batches (b63u)', () => {
+    const world = makeWorld()
+    const planks = blueprint.absPlan(SITE, 0, 3).cells.filter((c) => c.kind === 'planks')
+    const near = planks[0]
+    const far = planks.find((c) => Math.abs(c.x - near.x) + Math.abs(c.z - near.z) > 12 && c.y === near.y)
+    paintAll(world, { except: (c) => c === near || c === far })
+    world.set(near.x + 3, near.y - 2, near.z, 'lava')
+    const bot = mockBot(world)
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 3 }
+    const batch = castle.castleBuilderCells(bot, { castleCarry: null }, st)
+    const idx = (batch ? batch.cells : []).map((c) => c.idx)
+    assert.ok(!idx.includes(near.idx), 'the cell beside lava never enters the schematic')
+    assert.ok(idx.includes(far.idx), 'the far planks cell still batches')
+  })
+
   it('one buildCells call per batch; only plain cubes enter the schematic', async () => {
     const world = makeWorld()
     const bot = mockBot(world)
