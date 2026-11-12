@@ -607,11 +607,15 @@ function peekPlan(bot, st, now, ctx) {
 // sit ±MAX_DIP off level, the ring around it (apron, moat, fence) anything
 // the scan reads, all of it within EARTH_BUDGET blocks cut + filled; water
 // in the core refuses, up to RING_WATER wet ring columns are filled.
-const MAX_DIP = 4
+const MAX_DIP = 8 // owner 2026-11-13: 4 refused most hilly land (one 9-up tree-hill column sank a site)
 const SCAN_DOWN = 8 // holes are read this deep for the refusal's worst offset
 const RING_DIP = SCAN_DOWN // the scan floor (a deeper hole reads 9+, refused)
-const EARTH_BUDGET = 400
+const EARTH_BUDGET = 400 // floor; the live budget scales with the footprint
 const RING_WATER = 6
+// Budgets grow with the footprint (a scaled castle kept the unscaled 400 and
+// refused nearly everything): ~1.5 moved blocks and 2% wet ring per column.
+function earthBudget(w, d) { return Math.max(EARTH_BUDGET, Math.round(1.5 * w * d)) }
+function ringWater(w, d) { return Math.max(RING_WATER, Math.round(0.02 * w * d)) }
 // Built things: someone's house, not terrain (the site check refuses them).
 const FOREIGN = /(planks|_door$|_bed$|fence|glass|crafting_table|chest|furnace|brick|wool|stairs|_slab$|_sign$|barrel|ladder|torch|(?<!moss_)carpet|concrete|bookshelf|_wall$)/
 
@@ -717,18 +721,18 @@ function siteEval(bot, site, rot, version, opts = {}) {
         if (!over || Math.abs(off) > Math.abs(over.off)) over = { off, x, z } // the refusal names an offender
       }
       // The search needs the verdict, not the tally: stop reading here.
-      if (opts.strict && (n || moved > EARTH_BUDGET)) return { y: sy, bad: 'the ground is too uneven', why: 'uneven' }
+      if (opts.strict && (n || moved > earthBudget(w, d))) return { y: sy, bad: 'the ground is too uneven', why: 'uneven' }
     }
   }
-  if (wet > RING_WATER) {
-    return { y: sy, bad: `there is water in ${wet} spots around it, first at ${firstWet.x} ${firstWet.y} ${firstWet.z} (I fill up to ${RING_WATER})`, why: 'water' }
+  if (wet > ringWater(w, d)) {
+    return { y: sy, bad: `there is water in ${wet} spots around it, first at ${firstWet.x} ${firstWet.y} ${firstWet.z} (I fill up to ${ringWater(w, d)})`, why: 'water' }
   }
-  if (!n && moved <= EARTH_BUDGET) return { y: sy, bad: null }
+  if (!n && moved <= earthBudget(w, d)) return { y: sy, bad: null }
   const p = n ? over : worst
   const by = p.off <= -(1 + SCAN_DOWN) ? `${1 + SCAN_DOWN}+` : String(Math.abs(p.off)) // the scan floor
   const at = `worst ${by} ${p.off > 0 ? 'up' : 'down'} at ${p.x} ${p.z}`
   if (n) return { y: sy, bad: `the ground is too uneven: ${n} spots are more than ${MAX_DIP} blocks off level, ${at} (I level up to ${MAX_DIP} under the castle)`, why: 'uneven' }
-  return { y: sy, bad: `the ground is too uneven: levelling it moves ${moved} blocks, ${at} (I move up to ${EARTH_BUDGET})`, why: 'uneven' }
+  return { y: sy, bad: `the ground is too uneven: levelling it moves ${moved} blocks, ${at} (I move up to ${earthBudget(w, d)})`, why: 'uneven' }
 }
 
 // Reason or null (tests, the legacy seam); an order builds on siteEval's y.
@@ -822,7 +826,7 @@ function prepTargets(bot, ctx, st, now) {
   }
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const { x: sx, y: sy, z: sz } = st.site
-  const idx = (x, y, z) => 1000000 + ((x - sx) * d + (z - sz)) * 40 + (y - sy + 4)
+  const idx = (x, y, z) => 1000000 + ((x - sx) * d + (z - sz)) * 80 + (y - sy + 12) // fills reach sy-1-MAX_DIP
   const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
   const core = coreOf(st.rot, st.blueprintVersion)
   const logs = []
