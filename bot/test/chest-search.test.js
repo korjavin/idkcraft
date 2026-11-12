@@ -88,3 +88,40 @@ it('the needy scout scan sees a chest at 40 blocks that the 16-block scan misses
     assert.equal(ctx.chests.length, 1)
   } finally { await bot.stop() }
 })
+
+it('near death (0.29 hp, food 0), no chest/bread/animal: the search runs, not a hung foodRecovery', async () => {
+  const { bot, ctx, transport } = await world([])
+  try {
+    transport.state.health = 0.29; transport.state.food = 0
+    bot.health = 0.29; bot.food = 0
+    assert.equal((await goal.decide(bot, ctx)).action, 'chestSearch')
+  } finally { await bot.stop() }
+})
+
+it('a found chest whose walk then fails (failAt) is not found again: the next search starts at once', async () => {
+  const chests = []
+  const { bot, ctx } = await world(chests)
+  try {
+    await goal.decide(bot, ctx)
+    BEHAVIOURS.chestSearch(bot, ctx)
+    const p = bot.entity.position
+    chests.push({ x: Math.floor(p.x) + 10, y: Math.floor(p.y), z: Math.floor(p.z) })
+    BEHAVIOURS.chestSearch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'done')
+    assert.ok(!ctx.chestSearchRetryAt, 'found: no cooldown')
+    require('../src/behaviours/stockpile').markChestFailed(ctx, chests[0]) // the food leg's walk failed
+    assert.equal(chestsearch.available(bot, ctx, { time: 'day', health: 20 }), true, 'failed chest has no hope: search again')
+    ctx.step = 'chestSearch'; ctx.stepStatus = 'running'; ctx.chestSearch = null
+    BEHAVIOURS.chestSearch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'running', 'the failed chest does not end the search as found')
+  } finally { await bot.stop() }
+})
+
+it('a remembered barrel opens through withChest (not dropped as gone)', async () => {
+  const { withChest } = require('../src/behaviours/packroom')
+  const ctx = { chests: [{ x: 1, y: 64, z: 0 }] }
+  const bot = { blockAt: () => ({ name: 'barrel' }), openChest: async () => ({ containerItems: () => [{ name: 'bread', count: 3 }], close() {} }) }
+  const res = await withChest(bot, ctx, async (w) => w.containerItems().length, { x: 1, y: 64, z: 0 })
+  assert.equal(res.status, 'ok')
+  assert.equal(ctx.chests.length, 1)
+})

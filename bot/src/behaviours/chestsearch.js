@@ -6,7 +6,7 @@
 // RADIUS cap from the anchor; the leg ends after BUDGET_MS, when the spiral
 // is out, or once a chest with hope (stockpile.chestHope) is within the
 // food leg's reach — then foodRecovery's pickChest opens it. Every end arms
-// a COOLDOWN_MS hold: never an endless tour.
+// a fruitless end arms a COOLDOWN_MS hold: never an endless tour.
 const { goals } = require('mineflayer-pathfinder')
 const stockpile = require('./stockpile')
 const explore = require('./explore')
@@ -45,7 +45,7 @@ function foodChest(bot, ctx, r) {
 }
 
 function available(bot, ctx, facts) {
-  if (!bot || !ctx || !facts || facts.time !== 'day' || facts.health < 6) return false
+  if (!bot || !ctx || !facts || facts.time !== 'day') return false // any health: foodRecovery (above in decide) owns a hunt/bread/known chest
   if (ctx.llmOrder || ctx.taskPlanArgs || ctx.bring || ctx.lead || ctx.followName) return false
   if (ctx.chestSearchRetryAt && Date.now() < ctx.chestSearchRetryAt) return false
   if (!hungryNoMeal(bot)) return false
@@ -56,7 +56,8 @@ function available(bot, ctx, facts) {
 function finish(bot, ctx, s, ok, why) {
   clearGoal(bot, ctx)
   ctx.chestSearch = null
-  ctx.chestSearchRetryAt = Date.now() + COOLDOWN_MS
+  // found: no cooldown — a chest whose walk/open then fails gets failAt (bring), hope 0, so a new search may start
+  if (!ok) ctx.chestSearchRetryAt = Date.now() + COOLDOWN_MS
   const found = (Array.isArray(ctx.chests) ? ctx.chests.length : 0) - s.known0
   console.log(`chest search result found=${found} why=${why}`)
   if (ok) stepDone(ctx)
