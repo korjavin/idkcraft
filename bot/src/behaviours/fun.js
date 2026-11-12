@@ -11,7 +11,7 @@
 
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
-const { stepDone, stepFailed, stepGen, stale, chatStep } = require('../step')
+const { stepDone, stepFailed, stepGen, stale, chatStep, isFinished } = require('../step')
 const { HOSTILE_NAMES } = require('../perception')
 const { NEED_LOGS, SCAFFOLD_LOW } = require('../budget')
 
@@ -281,7 +281,7 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
     if (threatNear(bot)) return false
     // Owner 2026-11-12: a joke whenever there is nothing to do, and a break
     // every FUN_BUSY_MS while busy. A running joke stays feasible.
-    if (ctx.step !== 'fun') {
+    if (ctx.step !== 'fun' || isFinished(ctx.stepStatus)) {
       if (typeof ctx.funNext !== 'number') ctx.funNext = now + FUN_BUSY_MS
       const busyDue = now >= ctx.funNext
       const idleDue = !busyDue && now - (ctx.funIdleSince || now) >= FUN_IDLE_MS &&
