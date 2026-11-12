@@ -370,7 +370,7 @@ function fixTypo(msg) {
   console.log(`chat typo "${msg}" -> "${hits[0]}"`)
   return hits[0]
 }
-const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|reforest(?: \d+)?|share|bring me(?: .*)?|make(?: .*)?|craft(?: .*)?)$/
+const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle(?: \d+)?|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|reforest(?: \d+)?|share|bring me(?: .*)?|make(?: .*)?|craft(?: .*)?)$/
 // vf8e.17: the `do <step> [count]` grammar. Only grammar-shaped lines take
 // the deterministic verb (a valid one replaces the running plan through
 // installPlan); anything else starting with `do ` (`do you have coal`)
@@ -557,7 +557,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     if (ticker) ticker.work()
     const st = (site && site.site) || {}
     bot.chat(`building a home at ${st.x} ${st.y} ${st.z}`)
-  } else if (msg === 'build castle' || msg === 'castle' || msg.startsWith('castle ')) {
+  } else if (/^build castle(?: \d+)?$/.test(msg) || msg === 'castle' || msg.startsWith('castle ')) {
     if (!ownerOk) return
     const reply = castleChat(bot, ticker, playerName, msg)
     if (reply) bot.chat(reply)
@@ -778,13 +778,13 @@ function handleChat(bot, ticker, username, message, senderUuid) {
 // (the way they look) with its gate facing back at them: the entrance apron
 // lands two blocks ahead of their feet. Mineflayer yaw looks along
 // (-sin, -cos); rot r = gate facing north/east/south/west.
-function castleSite(pos, yaw) {
+function castleSite(pos, yaw, v = blueprint.BLUEPRINT_VERSION) {
   const y = typeof yaw === 'number' && Number.isFinite(yaw) ? yaw : 0
   const lx = -Math.sin(y)
   const lz = -Math.cos(y)
   const rot = castleMod.facing(lx, lz)
   const [dx, dz] = [[0, 1], [-1, 0], [0, -1], [1, 0]][rot] // the look axis (gate north: castle south)
-  const bp = blueprint.blueprintOf(blueprint.BLUEPRINT_VERSION) // new orders only
+  const bp = blueprint.blueprintOf(v) // new orders only
   const e = blueprint.rotatePlan([{ ...bp.ENTRANCE, kind: 'air' }], rot, bp.version)[0]
   const site = {
     x: Math.floor(pos.x) + 2 * dx - e.dx,
@@ -796,18 +796,17 @@ function castleSite(pos, yaw) {
 
 // The house box plus a one-block yard (interior + walls + 1); a home
 // without an interior reads as the v2 7x6 footprint.
-function overlapsHome(home, site, rot) {
+function overlapsHome(home, site, rot, v = blueprint.BLUEPRINT_VERSION) {
   if (!home || !home.site) return false
   const lo = home.interior && home.interior.min ? { x: home.interior.min.x - 2, z: home.interior.min.z - 2 } : { x: home.site.x - 1, z: home.site.z - 1 }
   const hi = home.interior && home.interior.max ? { x: home.interior.max.x + 2, z: home.interior.max.z + 2 } : { x: home.site.x + 7, z: home.site.z + 6 }
-  const { w, d } = blueprint.siteDimensions(rot, blueprint.BLUEPRINT_VERSION)
+  const { w, d } = blueprint.siteDimensions(rot, v)
   return site.x <= hi.x && site.x + w - 1 >= lo.x && site.z <= hi.z && site.z + d - 1 >= lo.z
 }
 
 const at = (p) => `${p.x} ${p.y} ${p.z}`
 
-function startCastle(ticker, site, rot, announce) {
-  const v = blueprint.BLUEPRINT_VERSION
+function startCastle(ticker, site, rot, announce, v = blueprint.BLUEPRINT_VERSION) {
   ticker.setCastle({ site, rot, blueprintVersion: v, phase: 'prep', blocked: {}, parked: false, announce })
   ticker.work()
   const n = blueprint.blueprintOf(v).PLAN.filter((c) => blueprint.isPlaceTarget(c.kind)).length
@@ -829,14 +828,14 @@ function advanceCastleSearch(bot, ctx, p) {
   ctx.pendingSearch = null
   if (!r.site) {
     const why = SEARCH_WHY[r.why] || 'nothing fits'
-    bot.chat(`I found no castle spot within ${castleMod.SEARCH_RADIUS} blocks — mostly ${why} (${r.n} of ${r.of} spots); try another area`)
+    bot.chat(`I found no castle spot within ${p.cursor.radius} blocks — mostly ${why} (${r.n} of ${r.of} spots); try another area`)
     return
   }
   if (ctx.castle) return // ordered meanwhile (another speaker)
-  const { w, d } = blueprint.siteDimensions(r.rot, blueprint.BLUEPRINT_VERSION)
+  const { w, d } = blueprint.siteDimensions(r.rot, p.cursor.version)
   const f = p.cursor.from
   const dist = Math.round(Math.hypot(r.site.x + w / 2 - f.x, r.site.z + d / 2 - f.z))
-  bot.chat(`found a castle spot ${dist} blocks away, going there; ${startCastle(p.ticker, r.site, r.rot, true)}`)
+  bot.chat(`found a castle spot ${dist} blocks away, going there; ${startCastle(p.ticker, r.site, r.rot, true, p.cursor.version)}`)
 }
 
 // Stairs steps of the castle's plan (g0z.48): the upgrade converts exactly
@@ -881,7 +880,10 @@ function castleChat(bot, ticker, playerName, cmd) {
   const ctx = bot && bot._tickerCtx
   if (!ticker || !ctx || typeof ticker.setCastle !== 'function') return null
   const st = ctx.castle
-  if (cmd === 'build castle') {
+  const scale = /^build castle(?: (\d+))?$/.exec(cmd)
+  if (scale) {
+    const pct = Number(scale[1] || 0) // N = percent growth of every dimension
+    if (pct > blueprint.MAX_SCALE_PCT) return `castle scale is 0..${blueprint.MAX_SCALE_PCT} percent`
     if (st) return `I already have a castle at ${at(st.site)} — say castle forget first`
     const speakerEntry = worker.players(bot)[playerName]
     const speaker = speakerEntry && speakerEntry.entity
@@ -889,17 +891,17 @@ function castleChat(bot, ticker, playerName, cmd) {
     if (!pos || typeof pos.x !== 'number') return "I can't see you, come closer"
     // The spot in front of the speaker first; else the bot searches the
     // nearest one itself (g0z.19), sliced over ticks by advancePendingSearch.
-    const { site, rot } = castleSite(pos, speaker.yaw)
-    const v = blueprint.BLUEPRINT_VERSION
-    const home = overlapsHome(ctx.home, site, rot)
+    const v = blueprint.scaledVersion(blueprint.BLUEPRINT_VERSION, pct)
+    const { site, rot } = castleSite(pos, speaker.yaw, v)
+    const home = overlapsHome(ctx.home, site, rot, v)
     const r = home ? null : castleMod.siteEval(bot, site, rot, v)
-    if (r && !r.bad) return startCastle(ticker, { ...site, y: r.y }, rot, false)
+    if (r && !r.bad) return startCastle(ticker, { ...site, y: r.y }, rot, false, v)
     const why = home ? `it would sit on my house at ${at(ctx.home.site)}` : r.bad
     ctx.pendingSearch = {
       kind: 'castle', by: playerName, ticker,
-      cursor: castleMod.startSiteSearch(pos, v, (s, q) => overlapsHome(ctx.home, s, q)),
+      cursor: castleMod.startSiteSearch(pos, v, (s, q) => overlapsHome(ctx.home, s, q, v)),
     }
-    return `not right here (${why}) — looking for a castle spot within ${castleMod.SEARCH_RADIUS} blocks…`
+    return `not right here (${why}) — looking for a castle spot within ${ctx.pendingSearch.cursor.radius} blocks…`
   }
   if (!st) {
     if (ctx.pendingSearch && ctx.pendingSearch.kind === 'castle' && (cmd === 'castle forget' || cmd === 'castle stop')) {
