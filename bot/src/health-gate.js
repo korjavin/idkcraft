@@ -10,7 +10,7 @@ function needsFood(facts, hpOnly) {
   return !!(facts && (facts.health < 6 || (!hpOnly && facts.food < 6)))
 }
 
-function lowHpNoFood(bot, facts, hpOnly) {
+function lowHpNoFood(bot, facts, hpOnly, ctx) {
   try {
     // Hunger opens it too (prod 2026-11-12 bot5: food 0, health held at 10 —
     // Easy starvation stops at 10, so health < 6 never came and the castle
@@ -18,12 +18,12 @@ function lowHpNoFood(bot, facts, hpOnly) {
     if (!needsFood(facts, hpOnly)) return false
     const items = bot && bot.inventory && typeof bot.inventory.items === 'function' ? bot.inventory.items() : null
     if (!Array.isArray(items)) return false
-    return !require('./reflexes').pickEdible(items)
+    return !require('./reflexes').mealFor(bot, ctx || {}, items)
   } catch (_) { return false }
 }
 
 function lowHpGated(bot, facts, ctx, hpOnly) {
-  if (!lowHpNoFood(bot, facts, hpOnly)) return false
+  if (!lowHpNoFood(bot, facts, hpOnly, ctx)) return false
   try {
     const since = ctx && typeof ctx.lowHpGateSince === 'number' ? ctx.lowHpGateSince : null
     if (since == null) return true

@@ -29,14 +29,14 @@ const isEdible = (n) => require('../reflexes').EDIBLE_FOODS.has(n)
 // an opened chest with no real food gives it up whenever starving (drawWants).
 const orRotten = (n) => isEdible(n) || n === require('../reflexes').LAST_RESORT
 
-function noMeal(bot) {
-  try { const items = bot.inventory.items(); return Array.isArray(items) && !require('../reflexes').pickEdible(items) } catch (_) { return false }
+function noMeal(bot, ctx) {
+  try { const items = bot.inventory.items(); return Array.isArray(items) && !require('../reflexes').mealFor(bot, ctx || {}, items) } catch (_) { return false }
 }
 
 function hungry(bot, ctx, facts) {
   if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || !foodTime(bot, facts) || !(bot.food < HUNGRY_FOOD) || facts.health < 6) return false
   if (ctx && (ctx.llmOrder || ctx.taskPlanArgs)) return false
-  return noMeal(bot) && !!bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT, bot))
+  return noMeal(bot, ctx) && !!bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT, bot))
 }
 
 function needed(bot, ctx, facts) {
@@ -55,7 +55,7 @@ function needed(bot, ctx, facts) {
   }
   try {
     return !(ctx && (ctx.llmOrder || ctx.taskPlanArgs)) &&
-      lowHpNoFood(bot, facts)
+      lowHpNoFood(bot, facts, false, ctx)
   } catch (_) { return false }
 }
 
@@ -65,7 +65,7 @@ function normalFoodChest(bot, ctx) {
 
 function chestState(ctx, want = 1, bot = null) {
   if (!Array.isArray(ctx.foodRecoveryChestSeen)) ctx.foodRecoveryChestSeen = []
-  const rotten = !!bot && require('../reflexes').starving(bot) && !normalFoodChest(bot, ctx)
+  const rotten = !!bot && require('../reflexes').lastResortOk(bot, ctx)
   return { kind: 'food', phase: 'chestfetch', want, wants: rotten ? orRotten : isEdible, drawWants: bot && require('../reflexes').starving(bot) ? orRotten : isEdible, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: bot && require('../reflexes').starving(bot) ? FOOD_CHEST_RADIUS : HUNGRY_CHEST_RADIUS }
 }
 
@@ -167,7 +167,16 @@ function run(bot, ctx) {
       }
       return
     }
-    if (r.chest.phase === 'return') { done(false); return }
+    // Drawn food counts once eaten (bot.food > startFood ends the run above):
+    // wait for the eat reflex, bounded, instead of "acquired" with food uneaten.
+    // Drawn flesh is eaten only once no remembered chest hopes for real food
+    // (reflexes.lastResortOk): until then the same run tours the next chest.
+    if (r.chest.phase === 'return') {
+      // An eatable meal in the pack: needed() goes false with it, so no restart.
+      if (noMeal(bot, ctx)) r.chest = chestState(ctx, r.chest.want, bot)
+      else done(false)
+      return
+    }
     if (r.chest.phase === 'find' && r.hungry) { done(true); return } // shortcut: hungry runs are chest-only; hunting stays low-HP
     if (r.chest.phase === 'find' && require('./chestsearch').searchFirst(bot, ctx)) {
       r.valid = false // chests out: end without a hunt or retry hold, so decide picks the chest search
