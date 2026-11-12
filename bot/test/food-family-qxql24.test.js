@@ -452,11 +452,13 @@ it('does not start recovery for a healthy bot, an unknown pack, or an expired ga
     bot.inventory.items = () => { throw new Error('inventory unready') }
     assert.equal(recovery.available(bot, ctx, { time: 'day', health: 5 }), false)
     bot.inventory.items = items
+    // Owner 2026-11-12 (food anywhere): an expired castle gate clock or no castle
+    // at all still recovers food; before, both returned false.
     ctx.lowHpGateSince = Date.now() - goal.LOW_HP_GATE_MS - 1
-    assert.equal(recovery.available(bot, ctx, { time: 'day', health: 5 }), false)
+    assert.equal(recovery.available(bot, ctx, { time: 'day', health: 5 }), true)
     ctx.lowHpGateSince = Date.now()
     ctx.castle = null
-    assert.equal(recovery.available(bot, ctx, { time: 'day', health: 5 }), false)
+    assert.equal(recovery.available(bot, ctx, { time: 'day', health: 5 }), true)
   } finally {
     await bot.stop()
     if (previousBody === undefined) delete process.env.BOT_BODY

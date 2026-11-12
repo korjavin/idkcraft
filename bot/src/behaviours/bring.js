@@ -1422,7 +1422,7 @@ function pickChest(bot, ctx, o) {
       const hk = stockpileMod.chestKeyOf(h)
       if (hk !== null && !o.chestSeen.includes(hk)) return { pos: h, home: true }
     }
-    let rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen).filter(within)
+    let rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen, o.maxChestDistance).filter(within)
     if (typeof o.wants === 'function') rest = rest.map((c) => [c, hope(c)]).filter((e) => e[1] > 0).sort((a, b) => b[1] - a[1]).map((e) => e[0])
     if (rest.length > 0) return { pos: rest[0], home: false }
     // Armor trim chest scan (idkcraft-3dkc): when searching for armor trims,

@@ -4,9 +4,8 @@
 // cooldown must survive this leg. Window flights also outlive cancellation.
 const bring = require('./bring')
 const forage = require('./forage')
-const stockpile = require('./stockpile')
 const { stepDone } = require('../step')
-const { LOW_HP_GATE_MS, lowHpGated, needsFood } = require('../health-gate')
+const { LOW_HP_GATE_MS, lowHpNoFood, needsFood } = require('../health-gate')
 const craftany = require('./craftany')
 
 const RETRY_MS = 60000
@@ -16,22 +15,30 @@ const BREAD_TIMEOUT_MS = 120000 // walk + table make/place + craft, then the RET
 // whose read holds food, or one never/long ago read (stockpile.chestHope).
 const HUNGRY_FOOD = 14
 const HUNGRY_WANT = 4 // bounded draw: a few meals, the rest stays for others
+// Owner 2026-11-12: food anywhere, castle or not. Remembered chests up to the
+// explore spiral cap; failAt TTL (markChestFailed) bounds the retries.
+const FOOD_CHEST_RADIUS = 256 // = explore MAX_RADIUS
+
+// Night is shelter time, except a starving body (health<6 or food 0) eats first.
+const foodTime = (bot, facts) => facts.time === 'day' || facts.health < 6 || bot.food === 0
 
 const isEdible = (n) => require('../reflexes').EDIBLE_FOODS.has(n)
+// Rotten flesh is a chest want only when starving and no chest hopes for real food.
+const orRotten = (n) => isEdible(n) || n === require('../reflexes').LAST_RESORT
 
 function noMeal(bot) {
   try { const items = bot.inventory.items(); return Array.isArray(items) && !require('../reflexes').pickEdible(items) } catch (_) { return false }
 }
 
 function hungry(bot, ctx, facts) {
-  if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || facts.time !== 'day' || !(bot.food < HUNGRY_FOOD) || facts.health < 6) return false
+  if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || !foodTime(bot, facts) || !(bot.food < HUNGRY_FOOD) || facts.health < 6) return false
   if (ctx && (ctx.llmOrder || ctx.taskPlanArgs)) return false
-  return noMeal(bot) && !!bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT))
+  return noMeal(bot) && !!bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT, bot))
 }
 
 function needed(bot, ctx, facts) {
   if (hungry(bot, ctx, facts)) return true
-  if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || facts.time !== 'day' || !(bot.food < 18) || !needsFood(facts)) return false
+  if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || !foodTime(bot, facts) || !(bot.food < 18) || !needsFood(facts)) return false
   let items
   try {
     items = bot.inventory.items()
@@ -45,15 +52,18 @@ function needed(bot, ctx, facts) {
   }
   try {
     return !(ctx && (ctx.llmOrder || ctx.taskPlanArgs)) &&
-      require('../vetoes').castleFirst(ctx) &&
-      lowHpGated(bot, facts, ctx) &&
-      !require('../reflexes').pickEdible(items)
+      lowHpNoFood(bot, facts)
   } catch (_) { return false }
 }
 
-function chestState(ctx, want = 1) {
+function normalFoodChest(bot, ctx) {
+  return bring.pickChest(bot, ctx, chestState(ctx))
+}
+
+function chestState(ctx, want = 1, bot = null) {
   if (!Array.isArray(ctx.foodRecoveryChestSeen)) ctx.foodRecoveryChestSeen = []
-  return { kind: 'food', phase: 'chestfetch', want, wants: isEdible, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: stockpile.NEARBY_CHEST_RADIUS }
+  const rotten = !!bot && require('../reflexes').starving(bot) && !normalFoodChest(bot, ctx)
+  return { kind: 'food', phase: 'chestfetch', want, wants: rotten ? orRotten : isEdible, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: FOOD_CHEST_RADIUS }
 }
 
 function countOf(bot, name) {
@@ -78,7 +88,7 @@ function available(bot, ctx, facts) {
   if (!needed(bot, ctx, facts) || (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt)) return false
   if (ctx.foodRecoveryFlight) return false
   if (breadReady(bot, ctx)) return true
-  const other = !!(bring.pickChest(bot, ctx, chestState(ctx)) || forage.foodTarget(bot, ctx, true))
+  const other = !!(bring.pickChest(bot, ctx, chestState(ctx, 1, bot)) || forage.foodTarget(bot, ctx, true))
   const wheat = wheatCount(bot)
   if (!other && wheat >= 3 && !(ctx.foodBreadRetryAt && Date.now() < ctx.foodBreadRetryAt) && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
     ctx.foodBreadLogAt = Date.now()
@@ -101,14 +111,13 @@ function run(bot, ctx) {
   let r = ctx.foodRecovery
   if (!r || !r.valid) {
     const hungryRun = !(bot.health < 6)
-    r = ctx.foodRecovery = { valid: true, hungry: hungryRun, chest: chestState(ctx, hungryRun ? HUNGRY_WANT : 1), phase: breadReady(bot, ctx) ? 'bread' : 'chest', startFood: bot.food }
+    r = ctx.foodRecovery = { valid: true, hungry: hungryRun, chest: chestState(ctx, hungryRun ? HUNGRY_WANT : 1, bot), phase: breadReady(bot, ctx) ? 'bread' : 'chest', startFood: bot.food }
     ctx.lastPathStatus = 'none'
     console.log(`food recovery start health=${bot.health} food=${bot.food} edible=0${hungryRun ? ' why=hungry' : ''}`)
   }
   const valid = () => r.valid && ctx.foodRecovery === r && ctx.step === 'foodRecovery' &&
     ctx.work !== false && !ctx.paused && !ctx.bring && !ctx.lead && !ctx.followName && !(ctx.flat && !ctx.flat.parked) &&
-    bot.food < 18 && (r.hungry || needsFood({ health: bot.health, food: bot.food })) &&
-    !(!r.hungry && typeof ctx.lowHpGateSince === 'number' && Date.now() - ctx.lowHpGateSince > LOW_HP_GATE_MS)
+    bot.food < 18 && (r.hungry || needsFood({ health: bot.health, food: bot.food }))
   const done = (retry) => {
     if (!valid()) return
     r.valid = false
@@ -189,4 +198,6 @@ function run(bot, ctx) {
   })
 }
 
-module.exports = { run, needed, available, invalidate, RETRY_MS, HUNGRY_FOOD, HUNGRY_WANT }
+require('../reflexes').setFoodChestProbe(normalFoodChest)
+
+module.exports = { run, needed, available, invalidate, normalFoodChest, RETRY_MS, HUNGRY_FOOD, HUNGRY_WANT }
