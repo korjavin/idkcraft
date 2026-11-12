@@ -45,11 +45,26 @@ const EDIBLE_FOODS = new Set([
 // eat, but less hunger per slot than cooked, so anything else wins.
 const RAW_FALLBACK = new Set(['beef', 'porkchop', 'mutton', 'rabbit'])
 
+// Last resort (prod 2026-11-12: a home chest held only rotten flesh): eaten
+// only at critical hunger/health, nothing else on hand and no remembered chest
+// with hope for real food. Its Hunger effect drains ~1 food/40 s, still a net gain.
+const LAST_RESORT = 'rotten_flesh'
+const starving = (bot) => !!bot && (bot.food <= 2 || bot.health < 6)
+// food-recovery registers its chest probe (no reflexes -> behaviours require: cycle).
+let foodChestProbe = null
+const setFoodChestProbe = (fn) => { foodChestProbe = fn }
+function lastResortOk(bot, ctx) {
+  if (!starving(bot)) return false
+  try { return !(foodChestProbe && foodChestProbe(bot, ctx)) } catch (_) { return true }
+}
+
 // Best edible: the first preferred item in inventory order, else the first
-// raw fallback. Pure, so the preference mutant dies here.
-function pickEdible(items) {
+// raw fallback, else (lastResort) rotten flesh. Pure, so the preference mutant dies here.
+function pickEdible(items, lastResort) {
   let raw = null
+  let rotten = null
   for (const i of items || []) {
+    if (lastResort && i && i.name === LAST_RESORT && !rotten) rotten = i
     if (!i || typeof i.name !== 'string' || !EDIBLE_FOODS.has(i.name)) continue
     if (RAW_FALLBACK.has(i.name)) {
       if (!raw) raw = i
@@ -57,7 +72,7 @@ function pickEdible(items) {
     }
     return i
   }
-  return raw
+  return raw || rotten
 }
 
 function installEquipGuard(bot, ctx) {
@@ -115,7 +130,7 @@ function eatReflex(bot, ctx, state) {
   let items
   try { items = bot.inventory.items() } catch (_) { return false }
   if (!Array.isArray(items)) return false
-  const foodItem = pickEdible(items)
+  const foodItem = pickEdible(items) || (items.some((i) => i && i.name === LAST_RESORT) && lastResortOk(bot, ctx) ? pickEdible(items, true) : null)
   if (!foodItem) return false
   if (typeof bot.consume !== 'function') return false
 
@@ -589,4 +604,4 @@ function fleeReflex(bot, ctx, state) {
   return d
 }
 
-module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }
+module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, LAST_RESORT, starving, setFoodChestProbe, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }
