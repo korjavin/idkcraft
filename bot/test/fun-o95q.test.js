@@ -336,6 +336,16 @@ describe('fun chat lines (o95q unmistakable joke)', () => {
       if (hadKey !== undefined) process.env.ANTHROPIC_API_KEY = hadKey
     }
   })
+  it('no ground beside the body: walks out and finds a spot (prod bot2 at its castle)', async () => {
+    const b = fakeBot(dirt8)
+    const ctx = { home: { site: { x: 100, y: 64, z: 100 } }, flatEnd: { cx: 0, cz: 0, r: 8, outcome: 'done' } }
+    assert.equal(fun.findFollySpot(b, ctx), null)
+    const goalsSet = []
+    b.pathfinder = { goal: null, setGoal: (g) => { goalsSet.push(g); b.pathfinder.goal = g; if (g) { b.entity.position.x = Math.round(g.x); b.entity.position.z = Math.round(g.z) } } }
+    const spot = await fun.walkOutForSpot(b, ctx, undefined)
+    assert.ok(spot && spot.cells.length > 0, 'a ring after the walk')
+    assert.ok(goalsSet.length >= 1 && goalsSet[0], 'walked')
+  })
   it('the folly ring keeps off a parked flat episode too, not just flatEnd', () => {
     const b = fakeBot(dirt8)
     const ctx = { home: { site: { x: 100, y: 64, z: 100 } }, flat: { cx: 0, cz: 0, r: 8, parked: true } }

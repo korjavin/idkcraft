@@ -688,9 +688,43 @@ async function doGift(bot, ctx, gen, item, line) {
   stepDone(ctx, gen)
 }
 
+// No ground beside the body (prod bot2 idles at its castle, where every
+// cell is vetoed): walk up to WALK_OUT_MS away from the castle/home centre
+// and re-scan on the way. Threats and preemption stop the walk.
+const WALK_OUT_MS = 30000
+const WALK_OUT_DIST = 24
+async function walkOutForSpot(bot, ctx, gen) {
+  const bp = botPos(bot)
+  if (!bp || !bot.pathfinder || typeof bot.pathfinder.setGoal !== 'function') return null
+  const c = (ctx && ctx.castle && ctx.castle.site) || (ctx && ctx.home && ctx.home.site) || null
+  let dx = c && typeof c.x === 'number' ? bp.x - c.x : 1
+  let dz = c && typeof c.z === 'number' ? bp.z - c.z : 0
+  const n = Math.hypot(dx, dz) || 1
+  dx /= n; dz /= n
+  let walkGoal = null
+  try {
+    walkGoal = new goals.GoalNear(bp.x + dx * WALK_OUT_DIST, bp.y, bp.z + dz * WALK_OUT_DIST, 3)
+    bot.pathfinder.setGoal(walkGoal)
+  } catch (_) { return null }
+  const t0 = Date.now()
+  try {
+    while (Date.now() - t0 < WALK_OUT_MS) {
+      await new Promise((w) => setTimeout(w, 500))
+      if (stale(ctx, gen) || !safeToJoke(bot)) return null
+      const spot = findFollySpot(bot, ctx)
+      if (spot) return spot
+    }
+    return null
+  } finally {
+    stopWalk(bot, walkGoal)
+  }
+}
+
 async function doFolly(bot, ctx, gen, block, count, line) {
   if (stale(ctx, gen)) return
-  const spot = findFollySpot(bot, ctx)
+  let spot = findFollySpot(bot, ctx)
+  if (!spot) spot = await walkOutForSpot(bot, ctx, gen)
+  if (stale(ctx, gen)) return
   if (!spot) { stepFailed(ctx, 'fun-no-ground', gen); return }
   const cells = spot.cells.slice(0, count)
   const { placed, fail } = await placeCells(bot, ctx, gen, block, cells)
@@ -794,6 +828,7 @@ module.exports.follyMats = follyMats
 module.exports.improvReady = improvReady
 module.exports.stampFun = stampFun
 module.exports.findFollySpot = findFollySpot
+module.exports.walkOutForSpot = walkOutForSpot
 module.exports.FUN_MIN_MS = FUN_MIN_MS
 module.exports.FUN_JITTER_MS = FUN_JITTER_MS
 module.exports.MAX_PLACE = MAX_PLACE
