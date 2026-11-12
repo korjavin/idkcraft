@@ -39,6 +39,7 @@ const PLAN_MAX = 6
 const BRING_ROUNDS = 12
 const BRING_DEPTH = 4
 const MISS_TICKS = 3 // pin consumed without the step starting
+const RETRY_FAILS = 5 // failed/unstartable attempts in a row before a counted work order gives up
 // m06g: a pinned work step that never starts chats WHY it can't instead
 // of a generic 'not possible now' (prod: 'reforest 10' with no trees near
 // failed 3x in 3-4 s while the real cause sat in the logs as
@@ -1099,7 +1100,27 @@ function tick(bot, ctx, now = Date.now()) {
   // almost any command"). Order steps (bring/find/flat) own their count
   // (items, radius) and never repeat here; failures never repeat — the
   // honest stop stands. Best-effort: any surprise falls through to next().
+  // Owner 2026-11-12: a counted work order tries hard — a failed or
+  // unstartable attempt spends one of the count and tries again, and only
+  // RETRY_FAILS attempts in a row without a success end the order.
+  const retryStep = (why) => {
+    try {
+      const left = Math.floor(Number(s && s.count))
+      if (left >= 2 && s && !ORDER_STEPS[s.step] && (s.fails | 0) + 1 < RETRY_FAILS) {
+        s.fails = (s.fails | 0) + 1
+        if (!s.total) s.total = left
+        s.count = left - 1
+        ctx.taskPlanStep = s.step
+        pinArgs(ctx, o, s)
+        o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, led: false }
+        try { console.log(`llm order step retry ${s.step} left=${s.count} fails=${s.fails} why=${why}`) } catch (_) { /* log best-effort */ }
+        return
+      }
+    } catch (_) { /* fall through to end */ }
+    end(bot, ctx, o, why)
+  }
   const doneStep = () => {
+    try { if (s) s.fails = 0 } catch (_) { /* best-effort */ }
     try {
       const left = Math.floor(Number(s && s.count))
       if (left >= 2 && s && !ORDER_STEPS[s.step]) {
@@ -1147,11 +1168,11 @@ function tick(bot, ctx, now = Date.now()) {
   if (ours) {
     c.seen = true
     c.status = ctx.stepStatus
-    if (isFinished(c.status)) return c.status === 'done' ? doneStep() : end(bot, ctx, o, c.status)
+    if (isFinished(c.status)) return c.status === 'done' ? doneStep() : retryStep(c.status)
     return
   }
   // Left the step and it had finished between two reads.
-  if (c.seen && isFinished(c.status)) return c.status === 'done' ? doneStep() : end(bot, ctx, o, c.status)
+  if (c.seen && isFinished(c.status)) return c.status === 'done' ? doneStep() : retryStep(c.status)
   if (nightHold(bot, ctx)) {
     // Held: no pin (a pending one is withdrawn so the night step wins), no
     // miss, no deadline; the step re-pins when the night ends.
@@ -1190,7 +1211,7 @@ function tick(bot, ctx, now = Date.now()) {
     return
   }
   if (ctx.taskPlanStep !== s.step) {
-    if (++c.miss >= MISS_TICKS) return end(bot, ctx, o, missWhy(bot, ctx, o, s) || 'failed:not possible now')
+    if (++c.miss >= MISS_TICKS) return retryStep(missWhy(bot, ctx, o, s) || 'failed:not possible now')
     ctx.taskPlanStep = s.step
     pinArgs(ctx, o, s)
   }

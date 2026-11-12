@@ -25,6 +25,10 @@ const { say, clearGoal, issueGoal, botPos, denyReason } = require('./util')
 const bring = require('./bringbase')
 
 const FARM_RADIUS = 24 // body-anchored work radius, like reforest's 32
+const ORDER_RADIUS = 64 // an owner's farm order looks as far as workReady does
+function farmRadius(ctx) {
+  try { return require('../vetoes').orderOwnsStep(ctx, 'farm') ? ORDER_RADIUS : FARM_RADIUS } catch (_) { return FARM_RADIUS }
+}
 const WALK_RANGE = 3 // GoalNear arrival range for till/plant/water/harvest/feed
 const REACH = 4.5 // interact reach: arrival this close works the block without another goal
 const WALK_STALL_TICKS = 10 // no-displacement ticks before a target is struck
@@ -371,14 +375,14 @@ function farmFeasible(facts, bot, ctx) {
       if (require('./explore').castleActive(ctx) && !require('../vetoes').orderOwnsStep(ctx, 'farm')) return false
     } catch (_) { /* no castle: farm */ }
     try {
-      if (require('./stockpile').packFull(bot, ctx)) return false
+      if (require('./stockpile').packFull(bot, ctx) && !require('../vetoes').orderOwnsStep(ctx, 'farm')) return false
     } catch (_) { /* room unreadable: farm */ }
     const bp = botPos(bot)
     if (!bp) return false
-    const farmland = nearestCell(bot, ctx, ['farmland'], FARM_RADIUS)
+    const farmland = nearestCell(bot, ctx, ['farmland'], farmRadius(ctx))
     // Mature wheat anywhere in range — confirm maturity on the nearest
     // head before claiming feasibility (young crops never pull the step).
-    if (nearestCell(bot, ctx, CROP_BLOCKS, FARM_RADIUS, { forDig: true, ripe: true })) return true
+    if (nearestCell(bot, ctx, CROP_BLOCKS, farmRadius(ctx), { forDig: true, ripe: true })) return true
     if (farmland && countSeeds(bot) > 0) {
       try {
         const above = bot.blockAt(new Vec3(farmland.x, farmland.y + 1, farmland.z))
@@ -392,11 +396,11 @@ function farmFeasible(facts, bot, ctx) {
       } catch (_) { /* no trench leg */ }
     }
     // First seeds: tufts to break while nothing is planted yet.
-    if (countSeeds(bot) <= 0 && nearestCell(bot, ctx, ['short_grass', 'grass', 'tall_grass', 'fern', 'large_fern'], FARM_RADIUS, { forDig: true })) return true
+    if (countSeeds(bot) <= 0 && nearestCell(bot, ctx, ['short_grass', 'grass', 'tall_grass', 'fern', 'large_fern'], farmRadius(ctx), { forDig: true })) return true
     // Tilling needs seeds in the pack (the tuft leg above makes the first
     // ones): seedless tilling would pave the whole bank 4 cells per pick.
     if (countSeeds(bot) <= 0) return false
-    const soil = nearestCell(bot, ctx, ['grass_block', 'dirt'], FARM_RADIUS)
+    const soil = nearestCell(bot, ctx, ['grass_block', 'dirt'], farmRadius(ctx))
     if (soil && (waterNear(bot, soil) || hasBucket(bot))) {
       if (hasHoe(bot)) return true
       try {
@@ -532,7 +536,7 @@ async function run(bot, ctx) {
 
     // Leg 1 — harvest mature wheat (drops reseed the plant leg).
     if ((f.harvested | 0) < HARVEST_CAP) {
-      const w = nearestCell(bot, ctx, CROP_BLOCKS, FARM_RADIUS, { forDig: true, ripe: true })
+      const w = nearestCell(bot, ctx, CROP_BLOCKS, farmRadius(ctx), { forDig: true, ripe: true })
       if (w) {
         let b = null
         try { b = bot.blockAt(new Vec3(w.x, w.y, w.z)) } catch (_) { b = null }
@@ -590,7 +594,7 @@ async function run(bot, ctx) {
 
     // Leg 2 — plant seeds on empty farmland.
     if (countSeeds(bot) > 0 && (f.planted | 0) < PLANT_CAP) {
-      const fl = nearestCell(bot, ctx, ['farmland'], FARM_RADIUS)
+      const fl = nearestCell(bot, ctx, ['farmland'], farmRadius(ctx))
       if (fl) {
         let aboveEmpty = false
         try {
@@ -618,7 +622,7 @@ async function run(bot, ctx) {
 
     // Leg 3 — first seeds: break grass tufts until the plant leg runs.
     if (countSeeds(bot) <= 0 && (f.seedDigs | 0) < SEED_DIG_CAP) {
-      const t = nearestCell(bot, ctx, ['short_grass', 'grass', 'tall_grass', 'fern', 'large_fern'], FARM_RADIUS, { forDig: true })
+      const t = nearestCell(bot, ctx, ['short_grass', 'grass', 'tall_grass', 'fern', 'large_fern'], farmRadius(ctx), { forDig: true })
       if (t) {
         let b = null
         try { b = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { b = null }
@@ -676,7 +680,7 @@ async function run(bot, ctx) {
         }
         return
       }
-      const fl = nearestCell(bot, ctx, ['farmland'], FARM_RADIUS)
+      const fl = nearestCell(bot, ctx, ['farmland'], farmRadius(ctx))
       if (fl) {
         let b = null
         try { b = bot.blockAt(new Vec3(fl.x, fl.y, fl.z)) } catch (_) { b = null }
@@ -723,7 +727,7 @@ async function run(bot, ctx) {
         try { console.log('farm hoe ready') } catch (_) { /* log best-effort */ }
       }
       if (hasHoe(bot)) {
-        const s = nearestCell(bot, ctx, ['grass_block', 'dirt'], FARM_RADIUS)
+        const s = nearestCell(bot, ctx, ['grass_block', 'dirt'], farmRadius(ctx))
         if (s && (waterNear(bot, s) || hasBucket(bot))) {
           if (walkTo(bot, ctx, f, 'farm-till', s)) return
           let sb = null
