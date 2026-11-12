@@ -19,7 +19,7 @@ const REF_DIRS = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 
 const REF_DIRS_STAIRS = REF_DIRS.filter(([x, y, z]) => !(x === 0 && y === 1 && z === 0)) // g0z.47: stairs exclude the top ref (half='top')
 const COLLIDES = new Set(['stone', 'planks', 'frame', 'fence', 'chest', 'stairs'])
 const NO_STAND = new Set(['fence', 'chest'])
-const YMIN = -4
+const YMIN = -6 // scaled moats dig to -4
 const YMAX = 34 // scaled castles (build castle 100) top out at dy 30
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 

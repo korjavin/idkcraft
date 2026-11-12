@@ -57,11 +57,11 @@ function passability(b) {
   for (const c of b.PLAN) apply(g, c)
   const seen = flood(g, b.ENTRANCE)
   assert.ok(seen, 'entrance standable')
-  const f = b.scale
-  const n = Math.max(2, Math.round(2 * f)) // storeys, 4 high
-  const A = 4 * n - 1
-  const S = Math.round(15 * f) - 3
-  const floors = b.PLAN.filter((c) => c.kind === 'stairs' || (c.kind === 'planks' && (c.dy <= A || c.dy === S)))
+  const { floors: storeys, attic: A, towerLanding: S } = b.LEVELS
+  // Stairs, storey slabs, the attic, lofts under the roof, tower landings.
+  const roofTop = new Map()
+  for (const c of b.PLAN) if (c.kind === 'planks' && c.dy > A) roofTop.set(c.dx + ',' + c.dz, Math.max(roofTop.get(c.dx + ',' + c.dz) || -99, c.dy))
+  const floors = b.PLAN.filter((c) => c.kind === 'stairs' || (c.kind === 'planks' && (c.dy <= A || c.dy === S || c.dy < roofTop.get(c.dx + ',' + c.dz))))
   let checked = 0
   const missed = []
   for (const c of floors) {
@@ -71,7 +71,7 @@ function passability(b) {
   }
   assert.deepEqual(missed.slice(0, 5), [], `${missed.length} unreachable floor cells`)
   const levels = new Set(floors.filter((c) => c.kind === 'planks').map((c) => c.dy))
-  for (let k = 0; k < n; k++) assert.ok(levels.has(4 * k + 3), `floor level ${4 * k + 3}`)
+  for (const F of storeys.slice(1).concat([A + 1])) assert.ok(levels.has(F - 1), `floor level ${F - 1}`)
   assert.ok(levels.has(S), `tower landing ${S}`)
   return checked
 }
@@ -87,8 +87,8 @@ describe('castle scale: geometry', () => {
     assert.equal(bp.nightR(3), bp.NIGHT_BAND)
   })
 
-  for (const [n, f] of [[2, 1.02], [100, 2]]) {
-    it(`build castle ${n}: outer dimensions x${f}, every floor walkable`, () => {
+  for (const [n, f] of [[2, 1.02], [50, 1.5], [100, 2]]) {
+    it(`build castle ${n}: every dimension x${f}, every floor walkable`, () => {
       const { bot, st } = order(`build castle ${n}`)
       assert.ok(st, bot.chats.join('|'))
       const s = bp.blueprintOf(st.blueprintVersion)
@@ -97,8 +97,14 @@ describe('castle scale: geometry', () => {
       const [bx, by, bz] = box(s.PLAN)
       assert.deepEqual(bx, [0, s.W - 1])
       assert.deepEqual(bz, [0, s.D - 1])
-      assert.equal(by[1] + 1, Math.round(15 * f), 'height above ground scales')
-      assert.equal(by[0], -2, 'moat stays 2 deep')
+      assert.equal(by[1] + 1, Math.round(15 * f), 'tower height (v3: 15)')
+      assert.equal(-by[0], Math.round(2 * f), 'moat depth (v3: 2)')
+      assert.ok(Math.abs(by[1] - by[0] + 1 - Math.round(17 * f)) <= 1, 'bounding-box height (v3: 17)')
+      const X = (i) => Math.round(i * f)
+      const body = s.PLAN.filter((c) => c.dx >= X(12) && c.dx < X(19) && c.dz >= X(12) && c.dz < X(15) && c.kind !== 'air' && c.kind !== 'dig')
+      assert.equal(Math.max(...body.map((c) => c.dy)) + 1, Math.round(12 * f), 'body height (v3: 12)')
+      const tower = s.PLAN.filter((c) => c.dx >= X(7) && c.dx < X(12) && c.dz >= X(7) && c.dz < X(12) && c.kind === 'stone')
+      assert.equal(box(tower)[0][1] - box(tower)[0][0] + 1, X(12) - X(7), 'tower width (v3: 5)')
       assert.ok(bp.siteTop(st.blueprintVersion) > by[1], 'site top over the crenellations')
       assert.ok(passability(s) > 50)
       // Doors stay 1x2: one door cell.
@@ -213,7 +219,7 @@ describe('castle scale: storage compatibility', () => {
 
 describe('castle scale: build order', () => {
   const { checkPlan } = require('./castle-reach')
-  for (const n of [2, 100]) {
+  for (const n of [2, 50, 100]) {
     it(`build castle ${n}: every step of the lay order has a reachable stance and a visible reference face`, () => {
       const b = bp.blueprintOf(bp.scaledVersion(3, n))
       const r = checkPlan(b, bp.isPlaceTarget)

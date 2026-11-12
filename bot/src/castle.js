@@ -456,26 +456,37 @@ function apronR(version) {
   return Math.round(CASTLE_APRON * scaleOf(version))
 }
 
-// The v3 castle laid out for scale f: outer measures (site, moat ring,
-// body, towers, windows, roof, height) scale and round to whole blocks;
-// playable parts stay one block: walls and floors 1 thick, doors 1x2, a
-// storey stays 3 clear + its slab (the height a builder on the floor
-// reaches: the v2 lay pattern F, F+3, F+2, F+1), so height grows by
-// round(2f) storeys; every flight rises 1 per step with 2 free blocks above. Towers climb by a spiral on their inner ring (one
-// step per ring cell; the ring is >= 8 long, so the lap above clears the
-// head) to a top landing under the crenellations. The moat stays 2 deep
-// (its corner exit steps). Same lay rule as buildFullPlan (a cell is laid
-// once a solid neighbour or the ground is there). Decor: window panes,
-// fence row 2 and the gate.
+// The v3 castle laid out for scale f: every main measure scales and rounds
+// to whole blocks: site, moat ring and depth, body, towers, windows, roof,
+// body height (cap at round(12f) - 1) and tower height (round(15f)).
+// Playable parts stay one block: walls and floors 1 thick, doors 1x2. A
+// storey is 3 or 2 clear + its slab (what a builder on the floor reaches:
+// the v2 lay pattern F, slab, then down), so height grows by storey count;
+// every flight rises 1 per step with 2 free blocks above. Towers climb by a
+// spiral on their inner ring (one step per ring cell; the ring is >= 8
+// long, so the lap above clears the head) to a top landing under the
+// crenellations. The moat has a 1-per-block exit ramp from each outer
+// corner. Same lay rule as buildFullPlan (a cell is laid once a solid
+// neighbour or the ground is there). Decor: panes, fence row 2, the gate.
 function buildScaledBlueprint(f) {
   const X = (i) => Math.round(i * f)
   const E = (i) => X(i + 1) - 1 // last block of original cell i
   const W = X(FULL_W)
   const D = X(FULL_D)
   const bx0 = X(7), bx1 = E(23), bz0 = X(7), bz1 = E(19)
-  const n = Math.max(2, Math.round(2 * f)) // storeys, 4 high each
-  const A = 4 * n - 1 // attic slab
-  const K = 3 // roof steps (the attic floor reaches 3 up)
+  const K = Math.round(3 * f) // roof steps
+  // Body top (roof cap) at round(12f) - 1 like v3's dy 11: storeys of pitch
+  // 4 (3 clear + slab) or 3 (2 clear + slab) fill the height under the roof.
+  const m = Math.round(12 * f) - 1 - K // storey height sum
+  const n = Math.ceil(m / 4)
+  const pitch = []
+  for (let k = 0; k < n; k++) pitch.push(k < n - (4 * n - m) ? 4 : 3)
+  const floorAt = [0]
+  for (let k = 0; k < n; k++) floorAt.push(floorAt[k] + pitch[k])
+  const A = floorAt[n] - 1 // attic slab
+  const storey = (y) => { let k = 0; while (k < n - 1 && y >= floorAt[k + 1]) k++; return k }
+  const Dm = Math.round(2 * f) // moat depth
+  const cap = A + 1 + K // roof cap (body top)
   const TT = Math.round(15 * f) - 2 // tower wall top (crenellations above)
   const S = TT - 1 // tower top landing
   const plan = []
@@ -569,13 +580,13 @@ function buildScaledBlueprint(f) {
   const postX = new Set([X(12), X(15), E(18)])
   const postZ = new Set([X(12), E(14)])
   const post = (x, z) => (z === bz0 || z === bz1) ? postX.has(x) : postZ.has(z)
-  // Storey k = floor(y / 4): k 0 stone, upper storeys Fachwerk; y % 4 === 3
-  // is the slab row (frame beam).
+  // Storey k: 0 stone, upper storeys Fachwerk; its top row is the slab
+  // (frame beam).
   const wallKind = (x, y, z) => {
-    const k = y >> 2, r = y & 3
+    const k = storey(y), r = y - floorAt[k]
     if (x === doorX && z === bz0 && y <= 1) return y === 0 ? 'door' : 'air'
     if (r === 1 && (k === 0 ? winLow : winHigh).has(x + ',' + z)) return 'window'
-    if (r === 3) return 'frame'
+    if (r === pitch[k] - 1) return 'frame'
     if (k === 0) return 'stone'
     return post(x, z) ? 'frame' : 'planks'
   }
@@ -594,17 +605,17 @@ function buildScaledBlueprint(f) {
   const doorG = new Set([X(13) + ',' + pz, X(17) + ',' + pz])
   const doorU = new Set([...doorG, X(19) + ',' + X(13)])
   const parts = (y) => {
-    const k = y >> 2
+    const k = storey(y)
     const [list, doors, kind] = k === 0 ? [partG, doorG, 'stone'] : [partU, doorU, 'planks']
-    return list.map(([x, z]) => ({ x, y, z, kind: doors.has(x + ',' + z) && (y & 3) <= 1 ? 'air' : kind }))
+    return list.map(([x, z]) => ({ x, y, z, kind: doors.has(x + ',' + z) && y - floorAt[k] <= 1 ? 'air' : kind }))
   }
 
-  // Flights, 3 steps per storey, alternating: along +x beside the NW tower
+  // Flights, pitch-1 steps per storey, alternating: along +x beside the NW tower
   // (even storeys), along +z beside the NE tower (odd); each leans on the
   // tower wall, the slab above it is its well.
-  const flight = (k) => [0, 1, 2].map((i) => (k % 2 === 0
-    ? { x: X(8) + i, y: 4 * k + i, z: X(12), kind: 'stairs', face: i === 0 ? { dx: 0, dz: -1 } : { dx: 1, dz: 0 } }
-    : { x: E(18), y: 4 * k + i, z: X(8) + i, kind: 'stairs', face: i === 0 ? { dx: 1, dz: 0 } : { dx: 0, dz: 1 } }))
+  const flight = (k) => [0, 1, 2].slice(0, pitch[k] - 1).map((i) => (k % 2 === 0
+    ? { x: X(8) + i, y: floorAt[k] + i, z: X(12), kind: 'stairs', face: i === 0 ? { dx: 0, dz: -1 } : { dx: 1, dz: 0 } }
+    : { x: E(18), y: floorAt[k] + i, z: X(8) + i, kind: 'stairs', face: i === 0 ? { dx: 1, dz: 0 } : { dx: 0, dz: 1 } }))
   // (first step faces its approach, as v3's stairGKind/stairUKind)
   const interior = []
   for (let z = bz0 + 1; z < bz1; z++) for (let x = bx0 + 1; x < bx1; x++) if (!inTowerS(x, z)) interior.push([x, z])
@@ -612,33 +623,54 @@ function buildScaledBlueprint(f) {
   const torches = (y, list) => list.map(([x, z]) => ({ x: X(x), y, z: X(z), kind: 'torch' }))
 
   for (let k = 0; k < n; k++) {
-    const F = 4 * k
+    const F = floorAt[k]
+    const top = F + pitch[k] - 1
     const st = flight(k)
     lay([...walls(F), ...parts(F), st[0]])
-    lay([...walls(F + 3), ...slab(F + 3, new Set(st.map((o) => o.x + ',' + o.z)))])
-    lay([...walls(F + 2), ...parts(F + 2), st[2]])
-    lay([...walls(F + 1), ...parts(F + 1), st[1]])
+    // The well: the flight plus its approach cell (the jump onto step 0
+    // needs a third free block above the approach on a 2-clear storey).
+    const well = new Set(st.map((o) => o.x + ',' + o.z))
+    well.add(k % 2 === 0 ? `${X(8)},${X(12) + 1}` : `${E(18) - 1},${X(8)}`)
+    lay([...walls(top), ...slab(top, well)])
+    for (let y = top - 1; y > F; y--) lay([...walls(y), ...parts(y), st[y - F]])
     lay(torches(F, k === 0 ? [[15, 10], [10, 14], [21, 13], [13, 17], [16, 16]] : [[15, 10], [9, 14], [13, 17], [17, 17], [21, 13]]))
   }
 
-  // Attic: eaves + gable foot, the gable top-down (hanging off the
-  // towers), the roof steps, the flat cap (the v2 order).
+  // Attic: a stepped roof (rows rising 1 per block inward to a flat cap)
+  // and stone gables, laid in 3-high bands from a floor the builder stands
+  // on — each band: its floor layer, its top layer (hanging off the
+  // towers/gables), the middle — the storey pattern. While the cap is 3+
+  // over a band's top, that top carries a loft slab (2 clear above the
+  // floor) reached by a 2-step flight, so a tall roof is never out of reach.
   const roofY = (z) => A + 1 + Math.min(z - bz0, bz1 - z, K)
-  const gz = []
-  for (let z = bz0; z <= bz1; z++) if (!inTowerS(bx0, z)) gz.push(z)
-  const gable = (y) => gz.filter((z) => roofY(z) >= y).flatMap((z) => [{ x: bx0, y, z, kind: 'stone' }, { x: bx1, y, z, kind: 'stone' }])
-  const row = (dist) => {
-    const out = []
-    for (let z = bz0; z <= bz1; z++) {
-      if (Math.min(z - bz0, bz1 - z, K) !== dist) continue
-      for (let x = bx0 + 1; x < bx1; x++) if (!inTowerS(x, z)) out.push({ x, y: A + 1 + dist, z, kind: 'planks' })
-    }
-    return out
+  const roof = []
+  for (let z = bz0; z <= bz1; z++) {
+    for (let x = bx0 + 1; x < bx1; x++) if (!inTowerS(x, z)) roof.push({ x, y: roofY(z), z, kind: 'planks' })
+    if (!inTowerS(bx0, z)) for (let y = A + 1; y <= roofY(z); y++) roof.push({ x: bx0, y, z, kind: 'stone' }, { x: bx1, y, z, kind: 'stone' })
   }
-  lay([...row(0), ...gable(A + 1)])
-  lay(torches(A + 1, [[15, 13], [10, 13], [20, 13]]))
-  for (let y = A + 1 + K; y > A + 1; y--) lay(gable(y))
-  for (let dist = 1; dist <= K; dist++) lay(row(dist))
+  // Gables first in a layer: their reference is the tower's/gable's z face
+  // (seen from inside), never a roof cell's x face (seen only from outside).
+  const band = (y) => roof.filter((o) => o.y === y && o.kind === 'stone').concat(roof.filter((o) => o.y === y && o.kind !== 'stone'))
+  const atticTorches = () => torches(A + 1, [[15, 13], [10, 13], [20, 13]])
+  for (let P = A + 1, j = 0; ; j++) {
+    const L = P + 2
+    if (L + 3 > cap) {
+      lay(band(P))
+      if (j === 0) lay(atticTorches())
+      for (let y = cap; y > P; y--) lay(band(y))
+      break
+    }
+    const o = ((n + j) % 2) * 3 // off the flight below's well
+    const fl = [0, 1].map((i) => ({ x: X(8) + o + i, y: P + i, z: X(12), kind: 'stairs', face: i === 0 ? { dx: 0, dz: -1 } : { dx: 1, dz: 0 } }))
+    const well = new Set(fl.map((q) => q.x + ',' + q.z))
+    well.add(`${X(8) + o},${X(12) + 1}`)
+    const loft = interior.filter(([, z]) => roofY(z) >= L + 3).map(([x, z]) => ({ x, y: L, z, kind: well.has(x + ',' + z) ? 'air' : 'planks' }))
+    lay([...band(P), fl[0]])
+    if (j === 0) lay(atticTorches())
+    lay([...band(L), ...loft])
+    lay([...band(P + 1), fl[1]])
+    P = L + 1
+  }
 
   // Outside: bridge deck, chest, gate, keep-clear markers, moat, fence.
   const deck = (x, z) => x >= X(14) && x <= E(16) && z >= X(3) && z < X(5)
@@ -652,10 +684,16 @@ function buildScaledBlueprint(f) {
   for (let z = X(3); z <= E(23); z++) {
     for (let x = X(3); x <= E(27); x++) if (!(x >= X(5) && x <= E(25) && z >= X(5) && z <= E(21))) moat.push([x, z])
   }
-  const exitStep = (x, z) => (x === X(3) || x === E(27)) && (z === X(3) || z === E(23))
-  for (const [x, z] of moat) if (!deck(x, z)) plan.push({ dx: x, dy: -1, dz: z, kind: 'dig' })
-  for (const [x, z] of moat) if (!exitStep(x, z) && !deck(x, z)) plan.push({ dx: x, dy: -2, dz: z, kind: 'dig' })
-  for (const [x, z] of moat) if (deck(x, z)) plan.push({ dx: x, dy: -2, dz: z, kind: 'dig' })
+  // Exit ramps: from each outer corner along its x edge, depth 1, 2, ...
+  const depth = (x, z) => {
+    if (!(z === X(3) || z === E(23))) return Dm
+    const j = Math.min(x - X(3), E(27) - x)
+    return Math.min(Dm, j + 1)
+  }
+  for (let dy = -1; dy >= -Dm; dy--) {
+    for (const [x, z] of moat) if (!deck(x, z) && depth(x, z) >= -dy) plan.push({ dx: x, dy, dz: z, kind: 'dig' })
+  }
+  for (let dy = -2; dy >= -Dm; dy--) for (const [x, z] of moat) if (deck(x, z)) plan.push({ dx: x, dy, dz: z, kind: 'dig' })
   const fence = []
   for (let x = 0; x < W; x++) {
     if (x < X(14) || x > E(16)) fence.push([x, 0])
@@ -671,7 +709,7 @@ function buildScaledBlueprint(f) {
     .concat([0, 1].flatMap((dy) => gap.map((x) => ({ dx: x, dy, dz: 0, kind: 'fence' }))))
     .concat([{ dx: doorX, dy: 0, dz: 0, kind: 'gate', face: { dx: 0, dz: 1 } }])
   return {
-    scale: f, W, D, PLAN: plan, DECOR: decor,
+    scale: f, W, D, PLAN: plan, DECOR: decor, LEVELS: { floors: floorAt.slice(0, n), attic: A, cap, towerLanding: S },
     ENTRANCE: { dx: doorX, dy: 0, dz: X(5) }, DOOR: { dx: doorX, dy: 0, dz: bz0 },
   }
 }
