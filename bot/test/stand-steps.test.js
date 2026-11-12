@@ -63,7 +63,8 @@ describe('goal-context-eval.json watchdog rows', () => {
   it('keeps the fsm cache honest: every filed fsm matches goalFsm', () => {
     for (const r of rows) {
       const m = /time=(day|dusk|night)/.exec(r.facts)
-      const fsm = goalFsm({ time: m ? m[1] : 'day' }, r.menu)
+      // The facts text prints only sword=no (armed omits the word).
+      const fsm = goalFsm({ time: m ? m[1] : 'day', sword: /\bsword=no\b/.test(r.facts) ? 0 : 1 }, r.menu)
       assert.equal(r.fsm, fsm, `fixture ${r.id}: filed fsm=${r.fsm} but goalFsm says ${fsm}`)
       assert.ok(r.context && r.context.goal, `fixture ${r.id}: missing context`)
     }

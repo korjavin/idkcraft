@@ -62,7 +62,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castle",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 13,
@@ -89,7 +89,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castle",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 11,
@@ -115,7 +115,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castle",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 5,
@@ -345,7 +345,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castle",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 1,
@@ -371,7 +371,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castlefetch",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -397,7 +397,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castlefetch",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -424,7 +424,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castlefetch",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -452,7 +452,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castlefetch",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "stockpile",
   "prod_n": 1,
@@ -503,7 +503,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castle",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 1,
@@ -529,7 +529,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castle",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 1,
@@ -582,7 +582,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castlefetch",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -609,7 +609,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castlefetch",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -635,7 +635,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castlefetch",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castlefetch",
   "prod_n": 1,
@@ -716,7 +716,7 @@
    "explore",
    "rest"
   ],
-  "fsm": "castle",
+  "fsm": "equip",
   "reviewer": "equip",
   "prod_model": "castle",
   "prod_n": 1,

@@ -404,7 +404,7 @@ describe('vmzq.19 R2 major 1: a castle next to the house never anchors the night
 describe('vmzq.19 R2 major 2: the model never overrides a runnable castle', () => {
   it('castle-rule: fsm castle/castlefetch skips the model (boom brain)', async () => {
     const boom = { source: 'laya-test', ask: async () => { throw new Error('model asked') } }
-    const facts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0 }
+    const facts = { time: 'day', logs: 0, planks: 0, maxPlanks: 0, sword: 1 }
     assert.deepEqual(
       await goal.chooseStep(boom, facts, ['castle', 'light', 'equip', 'rest'], null),
       { step: 'castle', source: 'castle-rule', fsm: 'castle', model: null })

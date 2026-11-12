@@ -305,9 +305,12 @@ describe('castle arbiter step (g0z.3)', () => {
   })
 
   it('lays a ready batch before rearming (vmzq.19: castle outranks equip)', async () => {
-    const bot = makeBot({ items: [{ name: 'cobblestone', count: 64 }, { name: 'stick', count: 4 }, { name: 'crafting_table', count: 1 }] })
+    const bot = makeBot({ items: [{ name: 'cobblestone', count: 64 }, { name: 'stick', count: 4 }, { name: 'crafting_table', count: 1 }, { name: 'stone_sword', count: 1 }] })
     const r = await decide(bot, { castle: castleState() })
     assert.equal(r.action, 'castle', 'a layable batch lays; the missing tools rearm after')
+    // Swordless (prod 2026-11-12): the sword is crafted first, the batch after.
+    const bare = makeBot({ items: [{ name: 'cobblestone', count: 64 }, { name: 'stick', count: 4 }, { name: 'crafting_table', count: 1 }] })
+    assert.equal((await decide(bare, { castle: castleState() })).action, 'equip')
   })
 
   it('stone at or below the scaffold reserve is not castle material', async () => {

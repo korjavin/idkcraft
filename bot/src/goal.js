@@ -776,8 +776,11 @@ function castleBlocked(facts) {
 // castle legs: prod's pick wore out in a forage tunnel at y~40 and the
 // castle-rule walked the no-dig body there for 17 min while equip waited
 // for a table.
+// Swordless too (prod 2026-11-12: bot2 died 4x in 1 h at its castle with
+// sword=0 and cobble+sticks+table in the pack — the castle-rule kept
+// building; a failing equip drops out of names via its hold, so bounded).
 function picklessCastle(facts, names) {
-  return !!(facts && facts.rearm) && names.includes('equip') &&
+  return !!(facts && (facts.rearm || !((facts.sword || 0) > 0))) && names.includes('equip') &&
     (names.includes('castle') || names.includes('castlefetch'))
 }
 // Site half of the stockpile feasible (vmzq.39, extracted R3): an active
