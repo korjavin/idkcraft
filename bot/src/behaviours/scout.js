@@ -493,7 +493,7 @@ function hungryNoMeal(bot) {
 
 // A need worth a wider chest look: hungry with nothing to eat, a bring order, a castle fetch, a running search.
 function chestNeedy(bot, ctx) {
-  return hungryNoMeal(bot) || !!(ctx && (ctx.bring || ctx.step === 'castlefetch' || ctx.chestSearch))
+  return hungryNoMeal(bot) || !!(ctx && (ctx.bring || ctx.step === 'castlefetch' || ctx.step === 'chestSearch'))
 }
 // Transparency (vmzq.66): scout sightings are console-only — say defaults
 // to a no-op, so only an explicit say reaches chat. Chat narrates the

@@ -5,8 +5,9 @@
 // legs reuse explore's spiral (nextTarget, the shared visited set) under a
 // RADIUS cap from the anchor; the leg ends after BUDGET_MS, when the spiral
 // is out, or once a chest with hope (stockpile.chestHope) is within the
-// food leg's reach — then foodRecovery's pickChest opens it. Every end arms
-// a fruitless end arms a COOLDOWN_MS hold: never an endless tour.
+// food leg's reach — then foodRecovery's pickChest opens it. A fruitless
+// end (timeout/explored) arms a COOLDOWN_MS hold: never an endless tour; only
+// then does foodRecovery hunt (searchFirst).
 const { goals } = require('mineflayer-pathfinder')
 const stockpile = require('./stockpile')
 const explore = require('./explore')
@@ -20,7 +21,8 @@ const BUDGET_MS = 3 * 60 * 1000
 const COOLDOWN_MS = 10 * 60 * 1000
 const { hungryNoMeal, CHEST_WIDE_RADIUS: WIDE_RADIUS } = require('./scout')
 const WIDE_COUNT = 32
-const REACH = stockpile.NEARBY_CHEST_RADIUS - 4 // inside the food leg's pickChest bound
+const FOOD_REACH = 64 // mirrors food-recovery HUNGRY_CHEST_RADIUS (starving: 256)
+const REACH = FOOD_REACH - 4 // a found chest lies inside foodRecovery's pickChest bound
 const ARRIVE = 4
 const STALL_TICKS = 10
 const CONTAINERS = ['chest', 'trapped_chest', 'barrel']
@@ -44,18 +46,35 @@ function foodChest(bot, ctx, r) {
   return bring.pickChest(bot, ctx, { wants: isEdible, chestSeen: [], maxChestDistance: r })
 }
 
+// foodRecovery's chest reach for this body (food-recovery chestState).
+function foodReach(bot) {
+  try { return require('../reflexes').starving(bot) ? 256 : FOOD_REACH } catch (_) { return FOOD_REACH }
+}
+
+// Owner order: remembered chest -> chest search -> hunt. True while a daytime
+// search is still due (not on cooldown): foodRecovery then does not hunt.
+function searchFirst(bot, ctx) {
+  if (process.env.BOT_BODY !== 'baritone' || !ctx) return false
+  if (ctx.chestSearchRetryAt && Date.now() < ctx.chestSearchRetryAt) return false
+  return require('../site').timeWord(bot) === 'day'
+}
+
 function available(bot, ctx, facts) {
   if (!bot || !ctx || !facts || facts.time !== 'day') return false // any health: foodRecovery (above in decide) owns a hunt/bread/known chest
   if (ctx.llmOrder || ctx.taskPlanArgs || ctx.bring || ctx.lead || ctx.followName) return false
   if (ctx.chestSearchRetryAt && Date.now() < ctx.chestSearchRetryAt) return false
   if (!hungryNoMeal(bot)) return false
   scanWide(bot, ctx)
-  return !foodChest(bot, ctx, WIDE_RADIUS)
+  return !foodChest(bot, ctx, foodReach(bot))
 }
 
 function finish(bot, ctx, s, ok, why) {
   clearGoal(bot, ctx)
   ctx.chestSearch = null
+  // fruitless: the last leg's spot is not re-toured after the cooldown
+  if (!ok && s.target) {
+    try { ctx.explore.visited.add(`${Math.floor(s.target.x / 16)},${Math.floor(s.target.z / 16)}`) } catch (_) { /* best-effort */ }
+  }
   // found: no cooldown — a chest whose walk/open then fails gets failAt (bring), hope 0, so a new search may start
   if (!ok) ctx.chestSearchRetryAt = Date.now() + COOLDOWN_MS
   const found = (Array.isArray(ctx.chests) ? ctx.chests.length : 0) - s.known0
@@ -86,9 +105,10 @@ function run(bot, ctx) {
     if (t) ctx.explore.target = null // own pick: explore's pending leg is not ours to consume
   }
   if (!t) return finish(bot, ctx, s, false, 'explored')
-  if (s.last && dist(bp, s.last) < 0.5) s.stalls++
+  const cell = `${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)}` // block cell: jitter is not progress
+  if (s.last === cell) s.stalls++
   else s.stalls = 0
-  s.last = { x: bp.x, y: bp.y, z: bp.z }
+  s.last = cell
   if (s.stalls >= STALL_TICKS) {
     visited.add(`${Math.floor(t.x / 16)},${Math.floor(t.z / 16)}`)
     if (c) stockpile.markChestFailed(ctx, c.pos)
@@ -106,6 +126,7 @@ module.exports = run
 module.exports.run = run
 module.exports.available = available
 module.exports.scanWide = scanWide
+module.exports.searchFirst = searchFirst
 module.exports.RADIUS = RADIUS
 module.exports.BUDGET_MS = BUDGET_MS
 module.exports.COOLDOWN_MS = COOLDOWN_MS

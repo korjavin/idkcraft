@@ -91,7 +91,8 @@ function available(bot, ctx, facts) {
   if (!needed(bot, ctx, facts) || (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt)) return false
   if (ctx.foodRecoveryFlight) return false
   if (breadReady(bot, ctx)) return true
-  const other = !!(bring.pickChest(bot, ctx, chestState(ctx, 1, bot)) || forage.foodTarget(bot, ctx, true))
+  // remembered chest -> chest search -> hunt: no hunt while a search is due
+  const other = !!(bring.pickChest(bot, ctx, chestState(ctx, 1, bot)) || (!require('./chestsearch').searchFirst(bot, ctx) && forage.foodTarget(bot, ctx, true)))
   const wheat = wheatCount(bot)
   if (!other && wheat >= 3 && !(ctx.foodBreadRetryAt && Date.now() < ctx.foodBreadRetryAt) && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
     ctx.foodBreadLogAt = Date.now()
@@ -168,6 +169,12 @@ function run(bot, ctx) {
     }
     if (r.chest.phase === 'return') { done(false); return }
     if (r.chest.phase === 'find' && r.hungry) { done(true); return } // shortcut: hungry runs are chest-only; hunting stays low-HP
+    if (r.chest.phase === 'find' && require('./chestsearch').searchFirst(bot, ctx)) {
+      r.valid = false // chests out: end without a hunt or retry hold, so decide picks the chest search
+      console.log('food recovery result=search health=' + bot.health + ' food=' + bot.food)
+      stepDone(ctx)
+      return
+    }
     if (r.chest.phase === 'find') { r.phase = 'hunt'; ctx.lastGoalKey = ''; return }
     const flight = { owner: r, at: Date.now() }
     ctx.foodRecoveryFlight = flight

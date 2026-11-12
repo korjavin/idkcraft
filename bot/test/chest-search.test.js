@@ -125,3 +125,107 @@ it('a remembered barrel opens through withChest (not dropped as gone)', async ()
   assert.equal(res.status, 'ok')
   assert.equal(ctx.chests.length, 1)
 })
+
+// Whole loop (owner order: remembered chest -> chest search -> hunt), real decide + behaviour ticks.
+const cowAt = (p) => ({ id: 7, uuid: '22222222-2222-2222-2222-222222222222', type: 'cow', displayName: 'Cow', kind: 'animal', pos: { x: p.x + 3, y: p.y, z: p.z }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, health: 20, onGround: true, pose: 'standing' })
+async function loopWorld(chests, chestItems) {
+  const w = await world(chests)
+  registry.entitiesByName.cow = { height: 1.4, width: 0.9, type: 'animal' }
+  const blockAt = w.bot.blockAt.bind(w.bot)
+  w.bot.blockAt = (p) => chests.some((c) => c.x === Math.floor(p.x) && c.y === Math.floor(p.y) && c.z === Math.floor(p.z)) ? { name: 'chest', position: p } : blockAt(p)
+  w.bot.openChest = async () => ({
+    containerItems: () => chestItems.filter((s) => s.count > 0),
+    withdraw: async (type, meta, n) => { const s = chestItems.find((i) => i.type === type); s.count -= n; w.transport.state.inventory.push({ slot: 12, name: s.name, count: n }) },
+    close() {},
+  })
+  return w
+}
+async function tick(bot, ctx) {
+  const d = await goal.decide(bot, ctx)
+  const run = BEHAVIOURS[d.action]
+  if (run) await run(bot, ctx, null, {})
+  await new Promise((r) => setTimeout(r, 5))
+  await bot.refresh()
+  return d.action
+}
+
+it('loop: hungry, cow near, no chest -> search (not hunt); a chest at ~50 appears -> foodRecovery takes bread from it', async () => {
+  const chests = []
+  const items = [{ name: 'bread', type: 1, count: 10 }]
+  const { bot, ctx, transport } = await loopWorld(chests, items)
+  try {
+    transport.state.entities = [cowAt(bot.entity.position)]
+    await bot.refresh()
+    assert.equal(await tick(bot, ctx), 'chestSearch', 'search before the hunt')
+    const p = bot.entity.position
+    chests.push({ x: Math.floor(p.x) + 50, y: Math.floor(p.y), z: Math.floor(p.z) })
+    let got = false
+    for (let i = 0; i < 60 && !got; i++) {
+      await tick(bot, ctx)
+      got = transport.state.inventory.some((s) => s.name === 'bread')
+    }
+    assert.ok(got, `bread drawn from the found chest: step=${ctx.step} ${JSON.stringify(ctx.foodRecovery && ctx.foodRecovery.chest && ctx.foodRecovery.chest.phase)}`)
+    assert.ok(!(transport.state.attacks || []).length, 'no hunt while a chest had hope')
+  } finally { await bot.stop() }
+})
+
+it('loop: search exhausted -> cooldown -> foodRecovery hunts', async () => {
+  const { bot, ctx, transport } = await loopWorld([], [])
+  try {
+    transport.state.entities = [cowAt(bot.entity.position)]
+    await bot.refresh()
+    assert.equal(await tick(bot, ctx), 'chestSearch')
+    ctx.chestSearch.at -= chestsearch.BUDGET_MS + 1
+    await tick(bot, ctx) // timeout -> cooldown
+    assert.ok(ctx.chestSearchRetryAt > Date.now())
+    assert.equal(await tick(bot, ctx), 'foodRecovery')
+  } finally { await bot.stop() }
+})
+
+it('moderate hunger (food 4, hp 10): a remembered chest at 50 is targeted by foodRecovery, no search', async () => {
+  const { bot, ctx, transport } = await world([])
+  try {
+    transport.state.health = 10
+    await bot.refresh()
+    const p = bot.entity.position
+    ctx.chests = [{ x: Math.floor(p.x) + 50, y: Math.floor(p.y), z: Math.floor(p.z) }]
+    assert.equal((await goal.decide(bot, ctx)).action, 'foodRecovery')
+  } finally { await bot.stop() }
+})
+
+it('stuck: no movement for the stall ticks marks the target chunk visited and picks another', async () => {
+  const { bot, ctx } = await world([])
+  try {
+    await goal.decide(bot, ctx)
+    bot.pathfinder.setGoal = () => {} // the body never moves
+    BEHAVIOURS.chestSearch(bot, ctx)
+    const t = ctx.chestSearch.target
+    for (let i = 0; i < 12; i++) BEHAVIOURS.chestSearch(bot, ctx)
+    assert.ok(ctx.explore.visited.has(`${Math.floor(t.x / 16)},${Math.floor(t.z / 16)}`))
+    assert.notDeepEqual(ctx.chestSearch.target, t)
+  } finally { await bot.stop() }
+})
+
+it('dusk ends the search: decide does not hold it and clears the leg', async () => {
+  const { bot, ctx } = await world([])
+  try {
+    assert.equal((await goal.decide(bot, ctx)).action, 'chestSearch')
+    BEHAVIOURS.chestSearch(bot, ctx)
+    bot.time = { timeOfDay: 12500, isDay: false }
+    assert.notEqual((await goal.decide(bot, ctx)).action, 'chestSearch')
+    assert.equal(ctx.chestSearch, null)
+  } finally { await bot.stop() }
+})
+
+it('spiral explored: failed:explored arms the cooldown', async () => {
+  const { bot, ctx } = await world([])
+  try {
+    await goal.decide(bot, ctx)
+    const all = new Set()
+    all.has = () => true // every spiral chunk already visited
+    ctx.explore = { visited: all, target: null }
+    BEHAVIOURS.chestSearch(bot, ctx)
+    assert.equal(ctx.stepStatus, 'failed:explored')
+    assert.ok(ctx.chestSearchRetryAt > Date.now())
+  } finally { await bot.stop() }
+})
