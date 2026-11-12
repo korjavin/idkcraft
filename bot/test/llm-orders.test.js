@@ -691,7 +691,7 @@ describe('llm orders: flag on', () => {
     assert.ok(bot.lines.includes('done: light it three times'), String(bot.lines))
   })
 
-  it('a failed work step never repeats, even with count left', async () => {
+  it('a failed work step retries while count is left, then stops honestly (owner 2026-11-12)', async () => {
     const bot = mockBot()
     const ticker = tickerFor(bot)
     const ctx = bot._tickerCtx
@@ -699,17 +699,23 @@ describe('llm orders: flag on', () => {
     handleChat(bot, ticker, 'P', 'light it three times')
     await flush()
     llmOrders.tick(bot, ctx)
-    ctx.taskPlanStep = null
-    ctx.step = 'light'
-    ctx.stepStatus = 'running'
-    ctx.stepGen = (ctx.stepGen | 0) + 1
-    llmOrders.tick(bot, ctx)
-    ctx.stepStatus = 'failed:need-torch'
-    llmOrders.tick(bot, ctx)
-    assert.equal(ctx.llmOrder, null, 'honest stop, no spin')
-    assert.equal(ctx.taskPlanArgs, null)
+    const fail = () => {
+      ctx.taskPlanStep = null
+      ctx.step = 'light'
+      ctx.stepStatus = 'running'
+      ctx.stepGen = (ctx.stepGen | 0) + 1
+      llmOrders.tick(bot, ctx)
+      ctx.stepStatus = 'failed:need-torch'
+      llmOrders.tick(bot, ctx)
+    }
+    fail()
+    assert.ok(ctx.llmOrder, 'one failure retries')
+    fail()
+    assert.ok(ctx.llmOrder, 'second failure retries')
+    fail()
+    assert.equal(ctx.llmOrder, null, 'count spent: honest stop')
     assert.ok(bot.lines.some((l) => l.startsWith('plan stopped at light')), String(bot.lines))
-    assert.ok(!bot.lines.some((l) => l.includes('partial')), 'zero runs: no partial count')
+    assert.ok(!bot.lines.some((l) => l.startsWith('done:')), 'never claims done')
   })
 
   it('a repeated step that runs out of work ends with an honest partial count', async () => {
@@ -732,7 +738,9 @@ describe('llm orders: flag on', () => {
     run('done')
     assert.ok(ctx.llmOrder, 'repeats after one run')
     run('failed:not possible now')
-    assert.equal(ctx.llmOrder, null, 'no further repeat')
+    assert.ok(ctx.llmOrder, 'a failure with count left retries')
+    run('failed:not possible now')
+    assert.equal(ctx.llmOrder, null, 'count spent')
     assert.ok(bot.lines.some((l) => l.includes('partial 1/3 light')), String(bot.lines))
     assert.ok(!bot.lines.some((l) => l.startsWith('done:')), 'never claims done')
   })
