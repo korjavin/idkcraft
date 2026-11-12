@@ -2837,3 +2837,4 @@ module.exports.prepTargets = prepTargets
 module.exports.stowSpot = stowSpot
 module.exports.onDoorPath = onDoorPath
 module.exports.RECOVERY_HOOKS = RECOVERY_HOOKS
+module.exports.peek = peek // test seam: the arbiter's next cell (castle-scale resume)

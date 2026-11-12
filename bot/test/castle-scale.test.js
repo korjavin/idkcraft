@@ -58,8 +58,8 @@ function passability(b) {
   const seen = flood(g, b.ENTRANCE)
   assert.ok(seen, 'entrance standable')
   const f = b.scale
-  const cl = Math.round(3 * f)
-  const A = 2 * cl + 1
+  const n = Math.max(2, Math.round(2 * f)) // storeys, 4 high
+  const A = 4 * n - 1
   const S = Math.round(15 * f) - 3
   const floors = b.PLAN.filter((c) => c.kind === 'stairs' || (c.kind === 'planks' && (c.dy <= A || c.dy === S)))
   let checked = 0
@@ -71,8 +71,8 @@ function passability(b) {
   }
   assert.deepEqual(missed.slice(0, 5), [], `${missed.length} unreachable floor cells`)
   const levels = new Set(floors.filter((c) => c.kind === 'planks').map((c) => c.dy))
-  for (const y of [cl, A, S]) assert.ok(levels.has(y), `floor level ${y}`)
-  // Every flight rises one block per step: consecutive tower steps differ by 1.
+  for (let k = 0; k < n; k++) assert.ok(levels.has(4 * k + 3), `floor level ${4 * k + 3}`)
+  assert.ok(levels.has(S), `tower landing ${S}`)
   return checked
 }
 
@@ -209,4 +209,67 @@ describe('castle scale: storage compatibility', () => {
     assert.equal(bp.scaleOf(3), 1)
     assert.equal(bp.blueprintOf(5002).version, 1, 'only v3 scales; others read v1 as before')
   })
+})
+
+describe('castle scale: build order', () => {
+  const { checkPlan } = require('./castle-reach')
+  for (const n of [2, 100]) {
+    it(`build castle ${n}: every step of the lay order has a reachable stance and a visible reference face`, () => {
+      const b = bp.blueprintOf(bp.scaledVersion(3, n))
+      const r = checkPlan(b, bp.isPlaceTarget)
+      assert.ok(r.ok, JSON.stringify({ idx: r.idx, cell: r.cell, reason: r.reason }))
+      assert.equal(r.checked, b.PLAN.filter((c) => bp.isPlaceTarget(c.kind)).length)
+    })
+  }
+
+  // A fake world the executor's arbiter (peek) reads; lay() writes a cell.
+  const NAME = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', stairs: 'oak_stairs', fence: 'oak_fence', torch: 'torch', door: 'oak_door', chest: 'chest' }
+  function world() {
+    const w = new Map()
+    const bot = makeBot((p) => {
+      const e = w.get(`${p.x},${p.y},${p.z}`)
+      const name = e ? e.name : (p.y <= 63 ? 'dirt' : 'air')
+      return { name, position: p, boundingBox: name === 'air' ? 'empty' : 'block', getProperties: () => (e && e.props) || {} }
+    })
+    bot.inventory = { items: () => [{ name: 'torch', count: 64, type: 1 }] }
+    const lay = (c) => w.set(`${c.x},${c.y},${c.z}`, { name: c.kind === 'dig' ? 'air' : NAME[c.kind], props: c.face ? { facing: bp.faceName(c.face), half: 'bottom' } : null })
+    return { bot, lay }
+  }
+  const next = (bot, st, ctx) => { const r = castleMod.peek(bot, st, 1e12, ctx); return r.cell && r.cell.idx }
+
+  for (const n of [2, 100]) {
+    it(`build castle ${n}: a mid-build save reloads and continues on the same cells`, () => {
+      const v = bp.scaledVersion(3, n)
+      const { bot, lay } = world()
+      const st = { site: { x: 0, y: 64, z: 0 }, rot: 2, blueprintVersion: v, phase: 'body', blocked: {}, parked: false }
+      const cells = bp.absPlan(st.site, st.rot, v).cells
+      const ctx = {}
+      for (let i = 0; i < 400; i++) lay(cells[next(bot, st, ctx)])
+      // A hole in backoff: the arbiter skips it, before and after the restart.
+      const hole = next(bot, st, ctx)
+      st.blocked[`${v}:${hole}`] = { tries: 2, until: 1e12 + 60000 }
+      const before = next(bot, st, ctx)
+      assert.notEqual(before, hole)
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'castle-scale-resume-'))
+      const file = path.join(dir, 'IdkBot.json')
+      assert.ok(memory.save(bot, { castle: st }, file, 1e12))
+      const ctx2 = {}
+      memory.restore(bot, ctx2, file, 1e12)
+      const st2 = ctx2.castle
+      assert.equal(st2.blueprintVersion, v)
+      assert.equal(st2.phase, 'body')
+      assert.equal(st2.rot, 2)
+      assert.ok(st2.blocked[`${v}:${hole}`], 'the hole survives the restart')
+      assert.equal(next(bot, st2, {}), before, 'same next cell after the restart')
+      // Both continue identically; the progress count matches too.
+      for (let i = 0; i < 200; i++) {
+        const a = next(bot, st, ctx)
+        assert.equal(next(bot, st2, ctx2), a, `step ${i}`)
+        lay(cells[a])
+      }
+      const sum = (o) => Object.values(o).reduce((s, e) => s + e.done, 0)
+      assert.equal(sum(castleMod.progressByKind(bot, st2)), sum(castleMod.progressByKind(bot, st)))
+      assert.ok(sum(castleMod.progressByKind(bot, st2)) >= 600)
+    })
+  }
 })
