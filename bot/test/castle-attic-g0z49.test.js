@@ -47,10 +47,10 @@ describe('castle attic decor plan (g0z.49)', () => {
       ...SHELVES.map((c) => `bookshelf@${k3(c.dx, c.dy, c.dz)}`),
     ])
     const dp = blueprint.decorPlan(SITE, 0, 2)
-    assert.equal(dp.cells.length, 44 + 2 + V2.PLAN.filter((c) => c.kind === 'fence').length + 6 + 1 + 5) // +1: the g0z.50 blast furnace after the nook, +5: the g0z.46 gate gap
-    NOOK.forEach((c, i) => {
-      assert.equal(dp.cells[dp.cells.length - 12 + i].idx, blueprint.DECOR_BASE + dp.cells.length - 12 + i)
-    })
+    assert.equal(dp.cells.length, 44 + 2 + V2.PLAN.filter((c) => c.kind === 'fence').length + 5 + 1 + 5) // 5 shelves (table retired), +1: the g0z.50 blast furnace after the nook, +5: the g0z.46 gate gap
+    // Owner 2026-11-12: the table is retired from the plan; its slot keeps every idx.
+    assert.equal(dp.cells.filter((c) => c.kind === 'enchanting_table').length, 0)
+    for (const c of dp.cells) assert.equal(blueprint.DECOR[2][c.idx - blueprint.DECOR_BASE].kind, c.kind)
   })
 
   it('the PLAN stays frozen and v1 has no nook', () => {
@@ -64,35 +64,11 @@ describe('castle attic decor plan (g0z.49)', () => {
       const plan = blueprint.absPlan(SITE, rot, 2)
       const nook = blueprint.decorPlan(SITE, rot, 2).cells.filter((c) => c.kind === 'bookshelf' || c.kind === 'enchanting_table')
       assert.equal(nook.filter((c) => c.kind === 'bookshelf').length, 5)
-      assert.equal(nook.filter((c) => c.kind === 'enchanting_table').length, 1)
+      assert.equal(nook.filter((c) => c.kind === 'enchanting_table').length, 0) // retired
       const well = wellKeys(rot)
       for (const c of nook) {
         assert.ok(!plan.at.has(k3(c.x, c.y, c.z)), `rot ${rot}: ${k3(c.x, c.y, c.z)} is off-plan`)
         assert.ok(!well.has(k3(c.x, c.y, c.z)), `rot ${rot}: ${k3(c.x, c.y, c.z)} keeps the stair well free`)
-      }
-    }
-  })
-
-  it('every shelf within Chebyshev 2 of the table at dy 8 with the air row between, all 4 rots', () => {
-    const airLocal = SHELVES.map((c) => ({ dx: c.dx, dy: 8, dz: 11, kind: 'air' }))
-    for (let rot = 0; rot < 4; rot++) {
-      const plan = blueprint.absPlan(SITE, rot, 2)
-      const dp = blueprint.decorPlan(SITE, rot, 2)
-      const t = dp.cells.filter((c) => c.kind === 'enchanting_table')
-      assert.equal(t.length, 1)
-      const [table] = t
-      assert.equal(table.dy, 8)
-      const shelves = dp.cells.filter((c) => c.kind === 'bookshelf')
-      assert.equal(shelves.length, 5)
-      for (const s of shelves) {
-        assert.equal(s.dy, 8)
-        assert.ok(Math.max(Math.abs(s.x - table.x), Math.abs(s.z - table.z)) <= 2, `rot ${rot}: shelf ${k3(s.x, s.y, s.z)} in the bonus ring`)
-      }
-      for (const c of blueprint.rotatePlan(airLocal, rot, 2)) {
-        const k = k3(SITE.x + c.dx, SITE.y + c.dy, SITE.z + c.dz)
-        const p = plan.at.get(k)
-        assert.ok(!p || !blueprint.isPlaceTarget(p.kind), `rot ${rot}: air row ${k} holds no plan block`)
-        assert.ok(!dp.at.has(k), `rot ${rot}: air row ${k} holds no decor`)
       }
     }
   })
@@ -259,10 +235,10 @@ describe('castle attic decor behaviour (g0z.49)', () => {
     const bot = castleBot()
     const open = castleMod.decorOpen(bot, completeState(), Date.now())
     assert.equal(open.filter((c) => c.kind === 'bookshelf').length, 5)
-    assert.equal(open.filter((c) => c.kind === 'enchanting_table').length, 1)
+    assert.equal(open.filter((c) => c.kind === 'enchanting_table').length, 0) // retired (owner 2026-11-12)
   })
 
-  for (const [kind, item] of [['bookshelf', 'bookshelf'], ['enchanting_table', 'enchanting_table']]) {
+  for (const [kind, item] of [['bookshelf', 'bookshelf']]) {
     it(`the tail lays one held ${item}; progress and phase stay complete`, async () => {
       const items = [{ name: item, count: 1 }]
       const bot = castleBot({ items })
@@ -347,23 +323,6 @@ describe('castle attic decor behaviour (g0z.49)', () => {
     assert.equal(banked(stockpile.depositPlan(bot, { home: null }), 'book'), 16)
   })
 
-  it('a chest table is withdrawn; the stockpile keeps the nook packed', async () => {
-    const bot = castleBot({ items: [], chest: [{ name: 'enchanting_table', count: 1 }] })
-    closeDecor(bot, 0)
-    const table = blueprint.decorPlan(SITE, 0, 2).cells.find((c) => c.kind === 'enchanting_table')
-    bot.set.delete(k3(table.x, table.y, table.z))
-    const ctx = { castle: completeState() }
-    assert.equal(castleMod.menuFact(bot, ctx), 'enchanting_table-none')
-    for (let i = 0; i < 40 && !bot.calls.withdraw.length; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.deepEqual(bot.calls.withdraw, [['enchanting_table', 1]])
-    assert.equal(castleMod.menuFact(bot, ctx), 'enchanting_table-batch')
-    assert.equal(castleMod.isMaterial('bookshelf', completeState()), true)
-    assert.equal(castleMod.isMaterial('enchanting_table', completeState()), true)
-    assert.equal(castleMod.isMaterial('bookshelf', { blueprintVersion: 1 }), false)
-    const plan = require('../src/behaviours/stockpile').depositPlan(bot, { castle: completeState(), home: null })
-    assert.ok(!plan.some((p) => p.name === 'enchanting_table'), JSON.stringify(plan))
-  })
-
   it('no shelves anywhere: the craft is tried, then failed:castlefetch-no-bookshelf (no gather, no hunt)', async () => {
     const bot = castleBot({ items: [], chest: [] })
     closeDecor(bot, 0)
@@ -381,89 +340,6 @@ describe('castle attic decor behaviour (g0z.49)', () => {
     assert.equal(bot.calls.gather, 0)
     assert.equal(ctx.bring, undefined)
     assert.deepEqual([...ctx.castleFetchDry], ['bookshelf'])
-  })
-
-  it('no table anywhere: the craft is tried, then failed:castlefetch-no-enchanting_table (no gather, no hunt)', async () => {
-    // idkcraft-0dbg: the table crafts from chest mats (4 obsidian + 2
-    // diamonds + 1 book) instead of arriving finished-only — the craft is
-    // attempted once, then the leg fails honestly with the named shortfall.
-    const bot = castleBot({ items: [], chest: [] })
-    closeDecor(bot, 0)
-    const table = blueprint.decorPlan(SITE, 0, 2).cells.find((c) => c.kind === 'enchanting_table')
-    bot.set.delete(k3(table.x, table.y, table.z))
-    const ctx = { castle: completeState() }
-    assert.equal(castleMod.menuFact(bot, ctx), 'enchanting_table-none')
-    const asked = []
-    fetch.deps.gather = () => { bot.calls.gather++ }
-    fetch.deps.craftItem = (b, c, names, n) => { asked.push([names, n]); return { done: false } }
-    for (let i = 0; i < 40 && !ctx.stepStatus; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-enchanting_table')
-    assert.deepEqual(asked, [[['enchanting_table'], 1]], 'one table-craft attempt from the pack')
-    assert.equal(bot.calls.gather, 0)
-    assert.equal(ctx.bring, undefined)
-    assert.deepEqual([...ctx.castleFetchDry], ['enchanting_table'])
-    assert.equal(ctx.castle.status, 'no table mats (4 obsidian, 2 diamonds, 1 book) — drop obsidian, diamonds and a book in a chest')
-  })
-
-  it('per-kind dry skip: a table-dry word lays chest shelves; failures accumulate per kind', async () => {
-    const chest = []
-    const bot = castleBot({ items: [], chest })
-    closeDecor(bot, 0)
-    for (const c of blueprint.decorPlan(SITE, 0, 2).cells) {
-      if (c.kind === 'bookshelf' || c.kind === 'enchanting_table') bot.set.delete(k3(c.x, c.y, c.z))
-    }
-    const ctx = { castle: completeState() }
-    fetch.deps.craftItem = () => ({ done: false })
-    assert.equal(castleMod.menuFact(bot, ctx), 'enchanting_table-none')
-    for (let i = 0; i < 40 && !ctx.stepStatus; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-enchanting_table')
-    assert.deepEqual([...ctx.castleFetchDry], ['enchanting_table'])
-    // The owner stocks shelves (no table): the word skips the dry table.
-    chest.push({ name: 'bookshelf', count: 5 })
-    ctx.stepStatus = 'running'
-    ctx.castleFetch = null
-    assert.equal(castleMod.menuFact(bot, ctx), 'bookshelf-none')
-    assert.equal(fetch.demand(bot, ctx).kind, 'bookshelf')
-    for (let i = 0; i < 40 && !bot.calls.withdraw.length; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.deepEqual(bot.calls.withdraw, [['bookshelf', 5]])
-    for (let i = 0; i < 40 && ctx.stepStatus !== 'done'; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.equal(ctx.stepStatus, 'done')
-    assert.equal(ctx.castleFetchDry, null, 'a leg that got stock retires the dry set')
-    for (let i = 0; i < 200 && bot.calls.places.length < 5; i++) { castleMod(bot, ctx); await settle(); await settle() }
-    assert.equal(bot.calls.places.length, 5)
-    assert.equal(ctx.castle.phase, 'complete')
-    assert.equal(castleMod.menuFact(bot, ctx), 'enchanting_table-none')
-  })
-
-  it('two dry legs accumulate two kinds; all dry retries the first and restarts the cycle', async () => {
-    const bot = castleBot({ items: [], chest: [] })
-    closeDecor(bot, 0)
-    for (const c of blueprint.decorPlan(SITE, 0, 2).cells) {
-      if (c.kind === 'bookshelf' || c.kind === 'enchanting_table') bot.set.delete(k3(c.x, c.y, c.z))
-    }
-    const ctx = { castle: completeState() }
-    fetch.deps.craftItem = () => ({ done: false })
-    for (let i = 0; i < 40 && !ctx.stepStatus; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-enchanting_table')
-    ctx.stepStatus = 'running'
-    ctx.castleFetch = null
-    assert.equal(castleMod.menuFact(bot, ctx), 'bookshelf-none')
-    for (let i = 0; i < 40 && ctx.stepStatus === 'running'; i++) { fetch(bot, ctx); await settle(); await settle() }
-    assert.equal(ctx.stepStatus, 'failed:castlefetch-no-bookshelf')
-    assert.deepEqual([...ctx.castleFetchDry], ['enchanting_table', 'bookshelf'])
-    // Every open kind dry: the word retries the first and clears the set.
-    assert.equal(castleMod.menuFact(bot, ctx), 'enchanting_table-none')
-    assert.equal(ctx.castleFetchDry, null)
-  })
-
-  it('a legacy single-kind dry string still reads as a one-kind set', () => {
-    const bot = castleBot()
-    closeDecor(bot, 0)
-    for (const c of blueprint.decorPlan(SITE, 0, 2).cells) {
-      if (c.kind === 'bookshelf' || c.kind === 'enchanting_table') bot.set.delete(k3(c.x, c.y, c.z))
-    }
-    assert.equal(castleMod.menuFact(bot, { castle: completeState(), castleFetchDry: 'bookshelf' }), 'enchanting_table-none')
-    assert.equal(castleMod.menuFact(bot, { castle: completeState(), castleFetchDry: 'enchanting_table' }), 'bookshelf-none')
   })
 
   it('nook words fire no gather/forage/explore veto and never read blocked', () => {
@@ -520,5 +396,22 @@ describe('castle bookshelf craft (g0z.49)', () => {
     assert.equal(p.ok, false)
     assert.equal(p.fail, 'missing')
     assert.match(p.line, /book/)
+  })
+})
+
+describe('retired table slot: idx lookups past it (vt7r review)', () => {
+  it('a blocked shelf AFTER the retired table keeps its backoff while its laid neighbour is done', async () => {
+    const dp = blueprint.decorPlan(SITE, 0, 2)
+    const shelves = dp.cells.filter((c) => c.kind === 'bookshelf')
+    const open = shelves[0] // the next array slot is a laid shelf: a positional lookup read it as this idx
+    assert.equal(dp.byIdx.get(open.idx), open)
+    const bot = castleBot({ items: [{ name: 'bookshelf', count: 1 }] })
+    closeDecor(bot, 0, new Set([k3(open.x, open.y, open.z)]))
+    const ctx = { castle: completeState() }
+    const key = `2:${open.idx}`
+    ctx.castle.blocked = { [key]: { tries: 1, until: Date.now() + 60000, why: 'unreachable' } }
+    for (let i = 0; i < 10; i++) { castleMod(bot, ctx); await settle(); await settle() }
+    assert.ok(ctx.castle.blocked[key], 'the backoff entry survives the prune')
+    assert.deepEqual(bot.calls.places, [], 'the backing-off shelf is not re-picked at once')
   })
 })

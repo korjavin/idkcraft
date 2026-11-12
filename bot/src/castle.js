@@ -544,6 +544,9 @@ function absPlan(site, rot, version) {
 // axis (+z, into the castle): placed looking along it (placeStairs), so the
 // gate swings across z between the posts. Appended last, idx stay put.
 const DECOR_BASE = 3000000
+// Owner 2026-11-12: the enchanting table left the castle project. Its DECOR
+// slot stays so later idx stay put; a laid table is left in the world.
+const RETIRED_DECOR = new Set(['enchanting_table'])
 const DECOR = {
   2: BLUEPRINTS[2].PLAN
     .filter((c) => c.kind === 'air' && outerLine(c.dx, c.dz) && !(c.dx === FULL_DOOR.dx && c.dz === FULL_DOOR.dz))
@@ -578,10 +581,11 @@ function decorPlan(site, rot, version) {
       o.stance = { x: site.x + s.dx, y: site.y + s.dy, z: site.z + s.dz }
     }
     return o
-  })
+  }).filter((c) => !RETIRED_DECOR.has(c.kind)) // after idx: every other cell keeps its idx
   const at = new Map()
   for (const c of cells) at.set(`${c.x},${c.y},${c.z}`, c)
-  decorCache = { key, cells, at }
+  const byIdx = new Map(cells.map((c) => [c.idx, c])) // cells is not dense: a retired slot leaves a gap
+  decorCache = { key, cells, at, byIdx }
   return decorCache
 }
 
