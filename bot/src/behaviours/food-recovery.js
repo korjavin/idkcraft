@@ -16,14 +16,17 @@ const BREAD_TIMEOUT_MS = 120000 // walk + table make/place + craft, then the RET
 const HUNGRY_FOOD = 14
 const HUNGRY_WANT = 4 // bounded draw: a few meals, the rest stays for others
 // Owner 2026-11-12: food anywhere, castle or not. Remembered chests up to the
-// explore spiral cap; failAt TTL (markChestFailed) bounds the retries.
+// explore spiral cap when critical (food<=2 or health<6), else a shorter walk;
+// failAt TTL (markChestFailed) bounds the retries.
 const FOOD_CHEST_RADIUS = 256 // = explore MAX_RADIUS
+const HUNGRY_CHEST_RADIUS = 64
 
 // Night is shelter time, except a starving body (health<6 or food 0) eats first.
 const foodTime = (bot, facts) => facts.time === 'day' || facts.health < 6 || bot.food === 0
 
 const isEdible = (n) => require('../reflexes').EDIBLE_FOODS.has(n)
-// Rotten flesh is a chest want only when starving and no chest hopes for real food.
+// Rotten flesh: a chest target only when starving and no chest hopes for real food;
+// an opened chest with no real food gives it up whenever starving (drawWants).
 const orRotten = (n) => isEdible(n) || n === require('../reflexes').LAST_RESORT
 
 function noMeal(bot) {
@@ -57,13 +60,13 @@ function needed(bot, ctx, facts) {
 }
 
 function normalFoodChest(bot, ctx) {
-  return bring.pickChest(bot, ctx, chestState(ctx))
+  return bring.pickChest(bot, ctx, { ...chestState(ctx), maxChestDistance: FOOD_CHEST_RADIUS })
 }
 
 function chestState(ctx, want = 1, bot = null) {
   if (!Array.isArray(ctx.foodRecoveryChestSeen)) ctx.foodRecoveryChestSeen = []
   const rotten = !!bot && require('../reflexes').starving(bot) && !normalFoodChest(bot, ctx)
-  return { kind: 'food', phase: 'chestfetch', want, wants: rotten ? orRotten : isEdible, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: FOOD_CHEST_RADIUS }
+  return { kind: 'food', phase: 'chestfetch', want, wants: rotten ? orRotten : isEdible, drawWants: bot && require('../reflexes').starving(bot) ? orRotten : isEdible, have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: bot && require('../reflexes').starving(bot) ? FOOD_CHEST_RADIUS : HUNGRY_CHEST_RADIUS }
 }
 
 function countOf(bot, name) {
@@ -110,8 +113,9 @@ function cancel(ctx, r) {
 function run(bot, ctx) {
   let r = ctx.foodRecovery
   if (!r || !r.valid) {
-    const hungryRun = !(bot.health < 6)
-    r = ctx.foodRecovery = { valid: true, hungry: hungryRun, chest: chestState(ctx, hungryRun ? HUNGRY_WANT : 1, bot), phase: breadReady(bot, ctx) ? 'bread' : 'chest', startFood: bot.food }
+    // food<6 is an emergency like low hp: chest, then hunt (prod: Easy holds hp at 10)
+    const hungryRun = !needsFood({ health: bot.health, food: bot.food })
+    r = ctx.foodRecovery = { valid: true, hungry: hungryRun, chest: chestState(ctx, bot.health < 6 ? 1 : HUNGRY_WANT, bot), phase: breadReady(bot, ctx) ? 'bread' : 'chest', startFood: bot.food }
     ctx.lastPathStatus = 'none'
     console.log(`food recovery start health=${bot.health} food=${bot.food} edible=0${hungryRun ? ' why=hungry' : ''}`)
   }

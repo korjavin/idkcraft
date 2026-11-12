@@ -140,8 +140,10 @@ it('an unreachable chest is not re-toured when the seen list is wiped; it is ret
   assert.equal(foodRecovery.needed(bot, ctx, facts), true, 'stale failure: try again')
 })
 
+// #778: food < 6 is an emergency now (it hunts, test below); a merely hungry run (food 10) stays chest-only.
 it('a hungry (healthy) run at an empty chest never starts a hunt, even with a cow beside it', async () => {
   const { bot } = world([{ name: 'dirt', type: 2, count: 3 }])
+  bot.food = 10
   bot.entities = { 7: { id: 7, name: 'cow', type: 'animal', position: new Vec3(2, 64, 0), isValid: true } }
   const ctx = { chests: [{ ...CHEST }] }
   const phases = []
@@ -154,4 +156,59 @@ it('a hungry (healthy) run at an empty chest never starts a hunt, even with a co
   assert.equal(ctx.stepStatus, 'done')
   assert.ok(!phases.includes('hunt'), phases.join(','))
   assert.equal(ctx.foodRecovery.hunt, undefined)
+})
+
+// Review #778: run-level, not only decide (food 0, health 10 = the Easy prod case).
+it('food 0 health 10: an empty remembered chest falls through to the hunt', async () => {
+  const { bot } = world([{ name: 'dirt', type: 2, count: 3 }])
+  bot.food = 0; bot.health = 10
+  bot.entities = { 7: { id: 7, name: 'cow', type: 'animal', position: new Vec3(2, 64, 0), isValid: true } }
+  const ctx = { chests: [{ ...CHEST }] }
+  ctx.step = 'foodRecovery'; ctx.stepStatus = 'running'; ctx.work = true
+  for (let i = 0; i < 20 && !(ctx.foodRecovery && ctx.foodRecovery.hunt); i++) {
+    BEHAVIOURS.foodRecovery(bot, ctx, null, { time: 'day', health: 10 })
+    await sleep(5)
+  }
+  assert.ok(ctx.foodRecovery.hunt, 'hunt started after the empty chest')
+  assert.ok(!(ctx.foodRecoveryRetryAt > Date.now()), 'no chest-only retry')
+})
+
+it('food 0: a rotten-flesh-only chest is withdrawn, then eaten by the eat reflex', async () => {
+  const { bot, pack } = world([{ name: 'rotten_flesh', type: 3, count: 14 }])
+  bot.food = 0; bot.health = 10
+  await drive(bot, { chests: [{ ...CHEST }] })
+  assert.equal(pack[0] && pack[0].name, 'rotten_flesh')
+  let eaten = null
+  bot.equip = async (i) => { eaten = i.name }
+  bot.consume = async () => {}
+  require('../src/reflexes').eatReflex(bot, {}, null)
+  await sleep(10)
+  assert.equal(eaten, 'rotten_flesh')
+})
+
+it('bread and rotten flesh in one chest: bread is drawn', async () => {
+  const { bot, pack } = world([{ name: 'rotten_flesh', type: 3, count: 14 }, { name: 'bread', type: 1, count: 2 }])
+  bot.food = 0; bot.health = 10
+  await drive(bot, { chests: [{ ...CHEST }] })
+  assert.deepEqual(pack.map((i) => i.name), ['bread'])
+})
+
+it('night: food 0 or health<6 recovers, food 4 at health 10 waits for day', () => {
+  const night = (food, health) => {
+    const { bot } = world([])
+    bot.food = food; bot.health = health
+    return foodRecovery.needed(bot, { chests: [{ ...CHEST }] }, { time: 'night', health, food })
+  }
+  assert.equal(night(0, 10), true)
+  assert.equal(night(4, 3), true)
+  assert.equal(night(4, 10), false)
+})
+
+it('moderate hunger walks at most 64 to a chest; critical hunger up to 256', () => {
+  const far = { x: 120, y: 64, z: 0 }
+  const { bot } = world([])
+  bot.food = 4; bot.health = 10
+  assert.equal(foodRecovery.available(bot, { chests: [{ ...far }] }, { time: 'day', health: 10, food: 4 }), false)
+  bot.food = 0
+  assert.equal(foodRecovery.available(bot, { chests: [{ ...far }] }, { time: 'day', health: 10, food: 0 }), true)
 })

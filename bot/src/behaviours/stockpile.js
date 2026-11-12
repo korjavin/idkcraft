@@ -1144,13 +1144,16 @@ function nearbyChestsAll(bot, ctx, seen, radius) {
 // Withdraw up to count of the first edible in the adopted chest (or the
 // explicit chest at `at` — the all-chests lookup).
 // { got, name } — name null when nothing edible came out.
-async function withdrawEdible(bot, ctx, count, at = null, valid = null) {
+// wants (name => bool, food-recovery's run predicate): a last-resort item
+// (rotten flesh) is taken only when no EDIBLE_FOODS stack is in the window.
+async function withdrawEdible(bot, ctx, count, at = null, valid = null, wants = null) {
   const edible = edibles()
   try {
     const res = await withChest(bot, ctx, async (window) => {
       const stacks = typeof window.containerItems === 'function' ? window.containerItems() : null
       if (!Array.isArray(stacks)) return { got: 0, name: null, status: valid ? 'unknown' : 'ok' }
-      const first = stacks.find((s) => s && typeof s.name === 'string' && edible.has(s.name))
+      const find = (f) => stacks.find((s) => s && typeof s.name === 'string' && f(s.name))
+      const first = find((n) => edible.has(n)) || (typeof wants === 'function' ? find(wants) : null)
       if (!first) return { got: 0, name: null }
       let want = count
       let got = 0
