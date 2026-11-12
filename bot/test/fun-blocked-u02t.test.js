@@ -109,7 +109,7 @@ describe('fun blocked-bypass (u02t)', () => {
     assert.equal(fun.menuBlocked(f, b, c), true)
     assert.equal(goal.MENU.fun.feasible(f, b, c), true)
   })
-  it('an active non-blocked castle still vetoes even with a rest-only menu (u02t R2 core-1)', () => {
+  it('an active castle with a rest-only menu: nothing to do, the joke runs (owner 2026-11-12)', () => {
     // The bypass is narrow: only 'blocked' lifts the castle veto. Hold
     // the castle legs on the current text so the menu is rest-only, and
     // the 'stone-batch' word still keeps the joke off.
@@ -123,7 +123,7 @@ describe('fun blocked-bypass (u02t)', () => {
     })
     assert.deepEqual(names.filter((n) => n !== 'fun'), ['rest'], `menu=${names.join(',')}`)
     assert.equal(fun.menuBlocked(f, b, c), true)
-    assert.equal(goal.MENU.fun.feasible(f, b, c), false)
+    assert.equal(goal.MENU.fun.feasible(f, b, c), true)
   })
   it('a step held only by a failHold counts as blocked (u02t R2 core-2)', () => {
     // The 'failed' leg: every feasible productive step ended
