@@ -1813,6 +1813,8 @@ function failHolds(ctx, name, text, bot) {
 function goalFsm(facts, feasibleNames) {
   const ok = new Set(Array.isArray(feasibleNames) ? feasibleNames : [])
   const t = facts && facts.time
+  // Owner 2026-11-12: a feasible joke is a due joke (idle, or the 20-min busy break).
+  if (ok.has('fun') && t === 'day') return 'fun'
   for (const name of STEP_ORDER) {
     if (!ok.has(name)) continue
     if (name === 'stay' && t === 'day') continue // stay holds dusk and night; day goes to work
@@ -1896,6 +1898,7 @@ async function chooseStep(brain, facts, feasible, home, extra) {
   // xhqv: shelter too — a latched gohome hands the night to shelter, and a
   // model re-pick to a day step would undo the latch.
   if (fsm === 'stay' || fsm === 'gohome' || fsm === 'shelter') return { step: fsm, source: 'night-rule', fsm, model: null }
+  if (fsm === 'fun') return { step: fsm, source: 'fun-rule', fsm, model: null }
   // Castle rule (vmzq.19 R2, major 2, the night-rule precedent): a runnable
   // castle is a rule, not a preference — run3's laya picked equip then
   // beds over a feasible castle and walked 500 blocks home. The model is

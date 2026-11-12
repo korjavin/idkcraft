@@ -156,7 +156,9 @@ function castleQuiet(facts) {
 // work, so idle credit survives dawn instead of resetting every night).
 // Any productive step, or an unobserved history, restarts the clock. A
 // fresh body waits a full stretch before its first joke.
-const FUN_IDLE_MS = 5 * 60 * 1000 // prod: a 20-min stretch never accrued between day-cycle picks
+const FUN_IDLE_MS = 60 * 1000
+const FUN_IDLE_GAP_MS = 3 * 60 * 1000 // idle jokes: at most one per 3 min
+const FUN_BUSY_MS = 20 * 60 * 1000 // busy: a joke break every 20 min
 const FUN_WORK_MS = 60 * 1000
 const IDLE_STEPS = new Set(['rest', 'explore', 'fun', 'stay', 'shelter'])
 
@@ -271,58 +273,22 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
       } catch (_) { /* stamp best-effort */ }
     }
     if (facts.time !== 'day') return false
-    // Blocked-castle bypass (u02t R2 core-1): a 'blocked' castle never
-    // progresses, so with a rest-only menu the joke runs on the idle pins
-    // alone — the bead's motivating case (bookshelf chain). Any other
-    // active castle word still vetoes, and a runnable castle leg keeps
-    // the veto through menuBlocked.
-    if (!castleQuiet(facts) && !(facts.castle === 'blocked' && menuBlocked(facts, bot, ctx))) return false
-    if (facts.home !== 'built') return false
-    const owedHaul = facts.haul === 'waiting'
-    // Stockpile's exact complement (o95q R5.1): a chest to adopt/place,
-    // bankable surplus, or finished goods awaiting handover all belong
-    // to the banker, never to the joke.
-    const owedChest = facts.chest === 'no' ? facts.chestTodo !== 'none' : (facts.surplus === 'yes' || facts.gearHandover === 'waiting')
-    if (facts.pinned && facts.pinned !== 'none') return false
-    // u19u: owed beds demoted from menu veto to classifier criterion text
-    // (FUN_CRITERION below), weighed by the tick ask (prod opt-in
-    // BOT_MENU_ASK=1; FSM rank decides where the model is not consulted) —
-    // never vetoed either way.
-    // Blocked-bypass (idkcraft-u02t): the owed-work clauses below are one
-    // boolean. When the menu holds no runnable productive step — every
-    // work step held, parked, latched or failed, the FSM down to rest-only
-    // or an explore with nothing new — the vetoes are skipped and the
-    // joke runs on the idle pins alone (the castle never completes in
-    // practice, so nominally-owed work would otherwise starve fun
-    // forever). While any productive step could run, the vetoes stand, so
-    // the joke never cannibalizes real work. Owed clauses stay registered
-    // as STEP_CRITERIA tiebreak weight for a future tick ask.
-    // known=near is owed forage, not a hard veto: prod bot2 sat in rest with
-    // forage held 'castle blocked' and fun 'not feasible' on known=near alone.
-    const owedWork = owedHaul || owedChest || facts.known === 'near' ||
-      (facts.gear !== 'done' && facts.gear !== 'hand') ||
-      ((facts.sword || 0) <= 0 || (facts.pickaxe || 0) <= 0 || facts.rearm) ||
-      upgradeDue(bot) ||
-      ((facts.scaffold || 0) < SCAFFOLD_LOW) ||
-      ((facts.logs || 0) >= NEED_LOGS) ||
-      ((facts.table || 0) <= 0 && (facts.maxPlanks || 0) >= 4 && ((!facts.tablePlaced && !facts.houseTable) || facts.tableOwed)) ||
-      ((facts.door || 0) <= 0 && facts.tablePlaced && (facts.maxPlanks || 0) >= 6) ||
-      lightDue(bot, ctx, facts)
-    if (owedWork && !menuBlocked(facts, bot, ctx)) return false
     if (!ctx || ctx.paused) return false
+    if (facts.pinned && facts.pinned !== 'none') return false
     if (ctx.bring || ctx.lead || ctx.comehome || ctx.gocastle) return false
     if (ctx.flat && !ctx.flat.parked) return false
     if (ctx.taskPlanStep || ctx.llmOrder || ctx.llmAsk) return false
     if (threatNear(bot)) return false
-    // Time-since-productive-work (o95q R2.1 fallback): the credit above
-    // is fresh on every decide, so this read is exact; the cooldown
-    // return sits below it, never shielding work.
-    if (now - (ctx.funIdleSince || now) < FUN_IDLE_MS) return false
-    // A running joke is not cooled down (codex R6 P2): the stamp lands at pick time,
-    // so without this the next text move would force a re-pick the joke can never
-    // win -- abandoned act, burned 30-60 min cooldown. Safety gates above still
-    // cancel a running joke; only the cooldown applies to new runs.
-    if (ctx.step !== 'fun' && typeof ctx.funNext === 'number' && now < ctx.funNext) return false
+    // Owner 2026-11-12: a joke whenever there is nothing to do, and a break
+    // every FUN_BUSY_MS while busy. A running joke stays feasible.
+    if (ctx.step !== 'fun') {
+      if (typeof ctx.funNext !== 'number') ctx.funNext = now + FUN_BUSY_MS
+      const busyDue = now >= ctx.funNext
+      const idleDue = !busyDue && now - (ctx.funIdleSince || now) >= FUN_IDLE_MS &&
+        !(typeof ctx.funLast === 'number' && now - ctx.funLast < FUN_IDLE_GAP_MS) &&
+        menuBlocked(facts, bot, ctx)
+      if (!busyDue && !idleDue) return false
+    }
     if (giftRecipient(bot) && giftPick(bot)) return true
     if (follyMats(bot)) return true
     if (improvReady(bot) && (giftPick(bot) || follyMats(bot))) return true
@@ -333,13 +299,8 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
 }
 
 // Cooldown stamped when the act STARTS, so a failure still spaces out.
-function stampFun(ctx, now = Date.now(), rand = Math.random) {
-  try {
-    const r = typeof rand === 'function' ? rand() : rand
-    ctx.funNext = now + FUN_MIN_MS + Math.floor((typeof r === 'number' ? r : Math.random()) * FUN_JITTER_MS)
-  } catch (_) {
-    try { ctx.funNext = now + FUN_MIN_MS } catch (_) { /* stamp best-effort */ }
-  }
+function stampFun(ctx, now = Date.now()) {
+  try { ctx.funLast = now; ctx.funNext = now + FUN_BUSY_MS } catch (_) { /* stamp best-effort */ }
 }
 
 // Which acts can run now; the trigger rolls one (brief: the model picks
@@ -845,6 +806,8 @@ module.exports.upgradeDue = upgradeDue
 module.exports.GIFT_RANGE = GIFT_RANGE
 module.exports.TOSS_RANGE = TOSS_RANGE
 module.exports.FUN_IDLE_MS = FUN_IDLE_MS
+module.exports.FUN_BUSY_MS = FUN_BUSY_MS
+module.exports.FUN_IDLE_GAP_MS = FUN_IDLE_GAP_MS
 
 // Registration (o95q R1.5): bot/src/goal.js stays byte-identical —
 // the step joins the goal menu through here, on the skills.js registerStep

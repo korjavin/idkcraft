@@ -125,7 +125,6 @@ describe('fun gating (o95q idle-only)', () => {
     // vetoes (release covered in fun-blocked-u02t.test.js) — the veto
     // below bites while work can run, beds owed-but-runnable keeping
     // the menu open.
-    assert.equal(goal.MENU.fun.feasible(facts({ castle: 'blocked', beds: 'none' }), b(), idleCtx()), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { bring: {}, ...idleCtx() }), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { lead: {}, ...idleCtx() }), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { comehome: {}, ...idleCtx() }), false)
@@ -134,7 +133,7 @@ describe('fun gating (o95q idle-only)', () => {
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { llmOrder: {}, ...idleCtx() }), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { llmAsk: {}, ...idleCtx() }), false)
     assert.equal(goal.MENU.fun.feasible(facts(), b(), { paused: true, ...idleCtx() }), false)
-    assert.equal(goal.MENU.fun.feasible(facts(), b(), { ...idleCtx(), funNext: Date.now() + 60000 }), false)
+    assert.equal(goal.MENU.fun.feasible(facts(), b(), { ...idleCtx(), funLast: Date.now() - 60000 }), false)
     const hostile = b()
     hostile.entities = { 7: { type: 'mob', name: 'zombie', position: { x: 1, y: 64, z: 0 }, isValid: true } }
     hostile.entity.position.distanceTo = () => 3
@@ -156,35 +155,19 @@ describe('fun gating (o95q idle-only)', () => {
     assert.equal(STEP_ORDER.indexOf('fun'), STEP_ORDER.indexOf('rest') - 2)
     assert.equal(goal.goalFsm(facts(), ['rest', 'fun']), 'fun')
     assert.equal(goal.goalFsm(facts(), ['explore', 'fun', 'rest']), 'fun')
-    assert.equal(goal.goalFsm(facts(), ['gather', 'fun', 'rest']), 'gather')
+    // A feasible joke is due (idle or the 20-min busy break): it beats work.
+    assert.equal(goal.goalFsm(facts(), ['gather', 'fun', 'rest']), 'fun')
+    assert.equal(goal.goalFsm(facts({ time: 'night' }), ['stay', 'fun', 'rest']), 'stay')
   })
-  it('precise idle: joke fires only when nothing productive is available', () => {
-    const idle = () => fakeBot([{ name: 'dirt', count: 20 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }])
-    assert.equal(goal.MENU.fun.feasible(facts(), idle(), idleCtx()), true)
-    // Every productive alternative vetoes, even with mats on hand —
-    // each checked against an already-idle body so only that gate bites.
-    // u02t: beds owed-but-runnable rides along so the menu is never
-    // blocked here — the vetoes below bite while work can run; the
-    // blocked-menu release is covered in fun-blocked-u02t.test.js.
-    for (const over of [
-      { home: 'site' }, { home: 'none' }, { known: 'near' },
-      { haul: 'waiting' }, { surplus: 'yes' }, { pinned: 'craft' },
-      { gear: 'ready' }, { gear: 'want' },
-      { sword: 0 }, { pickaxe: 0 }, { rearm: true }, { logs: 14 },
-      { scaffold: 0 },
-      { table: 0, maxPlanks: 4, tableOwed: true },
-      { door: 0, tablePlaced: true, maxPlanks: 6 },
-    ]) assert.equal(goal.MENU.fun.feasible(facts({ beds: 'none', ...over }), idle(), idleCtx()), false, JSON.stringify(over))
-  })
-  it('owed beds no longer veto the joke (u19u classifier demotion)', () => {
-    const idle = () => fakeBot([{ name: 'dirt', count: 20 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }])
-    // Beds owed is a classifier criterion now, not a menu veto: the joke
-    // stays feasible with beds owed (the tick ask weighs it; FSM rank
-    // decides where the model is not consulted). All other idle pins are
-    // unchanged.
-    assert.equal(goal.MENU.fun.feasible(facts({ beds: 'none' }), idle(), idleCtx()), true)
-    assert.equal(goal.MENU.fun.feasible(facts({ beds: 'one' }), idle(), idleCtx()), true)
-    assert.ok(String(goal.STEP_CRITERIA.fun).includes('beds owed'), 'criterion names the owed work')
+  it('busy: a joke break every 20 min, whatever work is owed', () => {
+    const b = () => fakeBot([{ name: 'dirt', count: 10 }, { name: 'stone_sword', count: 1 }, { name: 'stone_pickaxe', count: 1 }])
+    const f = { ...facts(), scaffold: 0 } // equip refill runnable: not idle
+    const ctx = { step: 'gather', funWorkStep: 'gather', funWorkAt: Date.now() }
+    assert.equal(goal.MENU.fun.feasible(f, b(), ctx), false, 'a fresh body waits the first 20 min')
+    assert.ok(Math.abs(ctx.funNext - Date.now() - fun.FUN_BUSY_MS) < 1000)
+    ctx.funNext = Date.now() - 1
+    assert.equal(goal.MENU.fun.feasible(f, b(), ctx), true)
+    assert.equal(goal.MENU.fun.feasible({ ...f, time: 'night' }, b(), ctx), false)
   })
   it('a lightable yard and bankable goods belong to light/stockpile (R5.1 mirrors)', () => {
     // A yard only counts when the bot has a home site (light itself needs
@@ -230,8 +213,9 @@ describe('fun gating (o95q idle-only)', () => {
     }
     const f = goal.goalFacts(b, ctx)
     assert.equal(f.home, 'built')
-    assert.equal(goal.MENU.fun.feasible(f, b, ctx), true, `why-not=${goal.stepWhy('fun', f, b, ctx, '')}`)
-    const idleNames = ['explore', 'fun', 'rest'].filter((n) => goal.MENU[n].feasible(f, b, ctx))
+    const due = { ...ctx, funNext: Date.now() - 1 }
+    assert.equal(goal.MENU.fun.feasible(f, b, due), true, `why-not=${goal.stepWhy('fun', f, b, due, '')}`)
+    const idleNames = ['explore', 'fun', 'rest'].filter((n) => goal.MENU[n].feasible(f, b, due))
     assert.equal(goal.goalFsm(f, idleNames), 'fun')
     // ...but a scaffold refill keeps equip in the menu and on top (R4.3:
     // equip is not hidden from the comparison).
@@ -264,13 +248,11 @@ describe('fun bounds (o95q cheap-only, keep-last, caps)', () => {
     assert.equal(fun.giftPick(rich), null)
     assert.equal(fun.follyMats(rich), null)
   })
-  it('cooldown spans 30-60 min from the act start', () => {
+  it('the act stamps the next busy break 20 min out', () => {
     const ctx = {}
-    fun.stampFun(ctx, 1000, () => 0)
-    assert.equal(ctx.funNext, 1000 + fun.FUN_MIN_MS)
-    fun.stampFun(ctx, 1000, () => 0.99999)
-    assert.ok(ctx.funNext >= 1000 + fun.FUN_MIN_MS)
-    assert.ok(ctx.funNext <= 1000 + fun.FUN_MIN_MS + fun.FUN_JITTER_MS)
+    fun.stampFun(ctx, 1000)
+    assert.equal(ctx.funNext, 1000 + fun.FUN_BUSY_MS)
+    assert.equal(ctx.funLast, 1000)
   })
 })
 
@@ -770,7 +752,7 @@ describe('fun running-step cooldown (codex R6 P2)', () => {
     // never win (abandoned act, burned 30-60 min cooldown).
     const stamped = idleCtx({ step: 'fun', funNext: Date.now() + 30 * 60 * 1000 })
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), stamped), true)
-    const next = idleCtx({ step: 'rest', funNext: Date.now() + 30 * 60 * 1000 })
+    const next = idleCtx({ step: 'rest', funNext: Date.now() + 30 * 60 * 1000, funLast: Date.now() })
     assert.equal(goal.MENU.fun.feasible(facts(), fakeBot(dirt20), next), false)
   })
 })
