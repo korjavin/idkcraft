@@ -38,6 +38,7 @@ const BEHAVIOURS = {
   fun: require('./fun'),
   forage: require('./forage'),
   foodRecovery: require('./food-recovery').run,
+  chestSearch: require('./chestsearch'),
   reforest: require('./reforest'),
   farm: require('./farm'),
   deliver: require('./deliver'),

@@ -545,7 +545,7 @@
       "src/behaviours/castlefetch.js"
     ],
     "owner": "src/behaviours/castlefetch.js",
-    "note": "dead-leg streak (qxql.3): { kind, short, inv, n, at } — consecutive leg starts (each within 30 s of the last) of one kind with the same need and an unchanged pack; past RESTART_MAX the leg fails once into the per-kind hold."
+    "note": "dead-leg streak (qxql.3): { kind, short, inv, n, at } \u2014 consecutive leg starts (each within 30 s of the last) of one kind with the same need and an unchanged pack; past RESTART_MAX the leg fails once into the per-kind hold."
   },
   "castleFieldDead": {
     "writers": [
@@ -904,6 +904,7 @@
   },
   "explore": {
     "writers": [
+      "src/behaviours/chestsearch.js",
       "src/behaviours/explore.js",
       "src/memory.js"
     ],
@@ -1112,7 +1113,7 @@
       "src/index.js"
     ],
     "owner": "src/behaviours/gather.js",
-    "note": "farEmpty (vmzq.65): the staged far search came back empty at the current log count — set in failFinal, cleared by the world-changed reset, kept across the gyw relocation release. Nested; the scan only sees the top-level field."
+    "note": "farEmpty (vmzq.65): the staged far search came back empty at the current log count \u2014 set in failFinal, cleared by the world-changed reset, kept across the gyw relocation release. Nested; the scan only sees the top-level field."
   },
   "gear": {
     "writers": [
@@ -2099,5 +2100,12 @@
       "src/behaviours/bring.js"
     ],
     "owner": "src/behaviours/bring.js"
+  },
+  "chestSearch": {
+    "writers": [
+      "src/behaviours/chestsearch.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/chestsearch.js"
   }
 }
