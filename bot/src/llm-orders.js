@@ -39,6 +39,8 @@ const PLAN_MAX = 6
 const BRING_ROUNDS = 12
 const BRING_DEPTH = 4
 const MISS_TICKS = 3 // pin consumed without the step starting
+const ASIDE_DIST = 18 // blocks walked off between failed tries
+const ASIDE_MS = 30000
 const RETRY_FAILS = 5 // failed/unstartable attempts in a row before a counted work order gives up
 // m06g: a pinned work step that never starts chats WHY it can't instead
 // of a generic 'not possible now' (prod: 'reforest 10' with no trees near
@@ -877,6 +879,8 @@ function release(ctx, o) {
 }
 
 function end(bot, ctx, o, result) {
+  if (o) o.aside = null
+  if (ctx) ctx.orderAside = null
   if (o.bringGoal && typeof result === 'string' && result.startsWith('failed:')) {
     return replanBring(bot, ctx, o, result)
   }
@@ -1093,6 +1097,19 @@ function tick(bot, ctx, now = Date.now()) {
   if (!o.cur) return startStep(bot, ctx, o, s, now)
   const c = o.cur
   if (ctx.paused) return end(bot, ctx, o, 'stop')
+  // Step aside between retries (owner 2026-11-13): rest is pinned and walks
+  // to ctx.orderAside; arrival or ASIDE_MS re-pins the step for the next try.
+  if (o.aside) {
+    const bp = bot && bot.entity && bot.entity.position
+    const near = bp && Math.hypot(bp.x - o.aside.x, bp.z - o.aside.z) < 3
+    if (!near && now < o.aside.until) { ctx.taskPlanStep = 'rest'; return }
+    o.aside = null
+    ctx.orderAside = null
+    ctx.taskPlanStep = s.step
+    pinArgs(ctx, o, s)
+    o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, led: false }
+    return
+  }
   if (!c.held && now - c.at > STEP_MS) return end(bot, ctx, o, 'failed:timeout')
   const next = () => { o.i++; o.cur = null; dropArgs(ctx) }
   // 5v4f-general: a work-step count N runs the step N times (owner prod:
@@ -1110,10 +1127,19 @@ function tick(bot, ctx, now = Date.now()) {
         s.fails = (s.fails | 0) + 1
         if (!s.total) s.total = left
         s.count = left - 1
-        ctx.taskPlanStep = s.step
-        pinArgs(ctx, o, s)
+        const bp = bot && bot.entity && bot.entity.position
+        if (bp) {
+          const a = Math.random() * Math.PI * 2
+          o.aside = { x: bp.x + Math.cos(a) * ASIDE_DIST, y: bp.y, z: bp.z + Math.sin(a) * ASIDE_DIST, until: now + ASIDE_MS }
+          ctx.orderAside = o.aside
+          ctx.taskPlanStep = 'rest'
+          dropArgs(ctx)
+        } else {
+          ctx.taskPlanStep = s.step
+          pinArgs(ctx, o, s)
+        }
         o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, led: false }
-        try { console.log(`llm order step retry ${s.step} left=${s.count} fails=${s.fails} why=${why}`) } catch (_) { /* log best-effort */ }
+        try { console.log(`llm order step retry ${s.step} left=${s.count} fails=${s.fails} why=${why}${o.aside ? ` aside=${Math.round(o.aside.x)},${Math.round(o.aside.z)}` : ''}`) } catch (_) { /* log best-effort */ }
         return
       }
     } catch (_) { /* fall through to end */ }

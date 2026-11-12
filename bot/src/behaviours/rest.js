@@ -1,6 +1,7 @@
 'use strict'
 
 const Vec3 = require('vec3')
+const { goals } = require('mineflayer-pathfinder')
 const roam = require('./roam')
 
 // Castle anchor (g0z.23): with nobody visible and an open castle, wait at
@@ -25,6 +26,17 @@ function castleAnchor(ctx) {
 // a real Vec3 — GoalFollow.hasChanged calls position.floored(), which plain
 // home-site coords lack (live crash); a Vec3 re-wraps losslessly.
 function rest(bot, ctx, target, state) {
+  // An order's step-aside walk (llm-orders retry) owns rest while it runs.
+  const aside = ctx && ctx.orderAside
+  if (aside && Date.now() < aside.until) {
+    const key = `aside:${Math.round(aside.x)},${Math.round(aside.z)}`
+    try {
+      if (ctx.lastGoalKey !== key || !bot.pathfinder.isMoving()) {
+        require('./util').issueGoal(bot, ctx, new goals.GoalNear(aside.x, aside.y, aside.z, 2), key, false)
+      }
+    } catch (_) { /* walk best-effort */ }
+    return
+  }
   // Player near (the ticker hands the nearest visible player as target):
   // stroll near them, never wander back to the site trap while the owner
   // stands next to the bot (p4s). Roam reuses follow at >6 blocks and picks

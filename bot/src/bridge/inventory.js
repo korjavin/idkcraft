@@ -311,7 +311,9 @@ function installInventory(bot) {
     bot.quickBarSlot = n
     syncHeld(bot)
     // Fire-and-forget like chat: a failed select logs, never emits 'error'.
-    transport.call('inventory.select', { hotbar: n }).then(
+    // Kept so a place waits for the client to really hold the item (prod:
+    // 'still air' refusals — place.once beat the queued select).
+    bot._selectPending = transport.call('inventory.select', { hotbar: n }).then(
       (r) => { if (r) applyInventory(bot, r) },
       (e) => { console.log(`bridge inventory.select failed: ${(e && e.message) || e}`) },
     )
