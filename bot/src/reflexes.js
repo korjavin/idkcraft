@@ -53,9 +53,17 @@ const starving = (bot) => !!bot && (bot.food <= 2 || bot.health < 6)
 // food-recovery registers its chest probe (no reflexes -> behaviours require: cycle).
 let foodChestProbe = null
 const setFoodChestProbe = (fn) => { foodChestProbe = fn }
+// ONE predicate for the chest draw, the edible count and the eater (prod
+// 2026-11-12 bot5: draw and eat disagreed, the run "acquired" flesh forever).
 function lastResortOk(bot, ctx) {
   if (!starving(bot)) return false
   try { return !(foodChestProbe && foodChestProbe(bot, ctx)) } catch (_) { return true }
+}
+// The meal this body may eat now: real food first, flesh only when lastResortOk.
+function mealFor(bot, ctx, items) {
+  const real = pickEdible(items)
+  if (real || !Array.isArray(items) || !items.some((i) => i && i.name === LAST_RESORT)) return real
+  return lastResortOk(bot, ctx) ? pickEdible(items, true) : null
 }
 
 // Best edible: the first preferred item in inventory order, else the first
@@ -130,7 +138,7 @@ function eatReflex(bot, ctx, state) {
   let items
   try { items = bot.inventory.items() } catch (_) { return false }
   if (!Array.isArray(items)) return false
-  const foodItem = pickEdible(items) || (items.some((i) => i && i.name === LAST_RESORT) && lastResortOk(bot, ctx) ? pickEdible(items, true) : null)
+  const foodItem = mealFor(bot, ctx, items)
   if (!foodItem) return false
   if (typeof bot.consume !== 'function') return false
 
@@ -604,4 +612,4 @@ function fleeReflex(bot, ctx, state) {
   return d
 }
 
-module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, LAST_RESORT, starving, setFoodChestProbe, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }
+module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, LAST_RESORT, starving, lastResortOk, mealFor, setFoodChestProbe, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }

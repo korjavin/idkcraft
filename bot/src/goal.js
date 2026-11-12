@@ -2549,7 +2549,7 @@ function lowHpClock(bot, ctx, facts) {
   // back (the run8 shape .49 gated against). Only work-tick time counts.
   try {
     if (ctx) {
-      if (lowHpNoFood(bot, facts)) {
+      if (lowHpNoFood(bot, facts, false, ctx)) {
         const last = ctx.lowHpGateLast
         if (typeof ctx.lowHpGateSince !== 'number' || typeof last !== 'number') {
           ctx.lowHpGateSince = Date.now()
