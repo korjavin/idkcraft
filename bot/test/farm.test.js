@@ -18,6 +18,7 @@ const { BEHAVIOURS } = require('../src/behaviours/index')
 const IDS = {
   grass_block: 1, dirt: 2, farmland: 3, wheat: 4, water: 5, stone: 6,
   short_grass: 7, sand: 8, air: 0,
+  carrots: 9, potatoes: 10, beetroots: 11, pumpkin: 12, melon: 13,
 }
 
 function mockBot({ cells = {}, items = [], sheep = null } = {}) {
@@ -231,6 +232,23 @@ describe('farm legs', () => {
     for (let t = 0; t < 8 && ctx.stepStatus === 'running'; t++) await farm(bot, ctx)
     assert.deepEqual(bot.ops.dig, ['wheat'])
     assert.equal(ctx.stepStatus, 'done')
+  })
+
+  it('harvests ripe carrots, beetroots and pumpkins; leaves young crops', async () => {
+    const bot = mockBot({
+      cells: {
+        '1,64,0': { name: 'carrots', props: { age: 7 } },
+        '1,63,0': 'farmland',
+        '2,64,0': 'pumpkin',
+        '-1,64,0': { name: 'beetroots', props: { age: 3 } },
+        '-2,64,0': { name: 'potatoes', props: { age: 4 } },
+      },
+      items: [],
+    })
+    const ctx = ctxOf()
+    for (let t = 0; t < 12 && ctx.stepStatus === 'running'; t++) await farm(bot, ctx)
+    assert.deepEqual([...bot.ops.dig].sort(), ['beetroots', 'carrots', 'pumpkin'])
+    assert.equal(farm.seedName({ inventory: { items: () => [{ name: 'carrot', count: 5 }, { name: 'wheat_seeds', count: 2 }] } }), 'wheat_seeds')
   })
 
   it('trenches water at field level and pours via use', async () => {

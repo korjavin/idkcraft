@@ -64,14 +64,36 @@ function propsOf(block) {
   return null
 }
 
-// Mature wheat only (age 7): fail-closed on unreadable age, so young
+// Crop block -> ripe age and the item that plants it. Gourds (pumpkin,
+// melon) are the ripe fruit block itself; their stem stays and regrows.
+const CROPS = { wheat: 7, carrots: 7, potatoes: 7, beetroots: 3 }
+const GOURDS = new Set(['pumpkin', 'melon'])
+const CROP_BLOCKS = [...Object.keys(CROPS), ...GOURDS]
+const SEEDS = ['wheat_seeds', 'carrot', 'potato', 'beetroot_seeds', 'pumpkin_seeds', 'melon_seeds']
+
+// Mature crops only: fail-closed on unreadable age, so young
 // crops are never griefed on a body whose blocks carry no properties.
-function isMatureWheat(block) {
+function isMatureCrop(block) {
   try {
-    if (!block || block.name !== 'wheat') return false
+    if (!block) return false
+    if (GOURDS.has(block.name)) return true
+    if (!(block.name in CROPS)) return false
     const p = propsOf(block)
-    return !!p && Number(p.age) === 7
+    return !!p && Number(p.age) === CROPS[block.name]
   } catch (_) { return false }
+}
+const isMatureWheat = isMatureCrop
+
+// The seed to plant next: the one the pack holds least of rotates the field
+// through every crop the bot has found.
+function seedName(bot) {
+  let best = null
+  let bestN = Infinity
+  for (const s of SEEDS) {
+    const n = countItems(bot, (x) => x === s)
+    if (n > 0 && n < bestN) { best = s; bestN = n }
+  }
+  return best
 }
 
 function isFarmland(block) {
@@ -116,7 +138,7 @@ function hasHoe(bot) {
 }
 
 function countSeeds(bot) {
-  return countItems(bot, (n) => n === 'wheat_seeds')
+  return countItems(bot, (n) => SEEDS.includes(n))
 }
 
 function countWheat(bot) {
@@ -146,7 +168,7 @@ function idsFor(bot, names) {
 // reforest's), then the vetting findBlocks cannot do — struck cells, the
 // house footprint (no lawn-tearing), the break guard (dig legs), and air
 // above (till/plant legs). Deterministic distance sort.
-function nearestCell(bot, ctx, names, radius, { forDig = false } = {}) {
+function nearestCell(bot, ctx, names, radius, { forDig = false, ripe = false } = {}) {
   const bp = botPos(bot)
   if (!bp) return null
   const set = names instanceof Set ? names : new Set(names)
@@ -167,6 +189,7 @@ function nearestCell(bot, ctx, names, radius, { forDig = false } = {}) {
     let b = null
     try { b = bot.blockAt(new Vec3(x, y, z)) } catch (_) { b = null }
     if (!b || !set.has(b.name)) continue
+    if (ripe && !isMatureCrop(b)) continue
     try {
       const home = ctx && ctx.home
       if (home && require('./util').inHouseFootprint(home, b.position)) continue
@@ -355,13 +378,7 @@ function farmFeasible(facts, bot, ctx) {
     const farmland = nearestCell(bot, ctx, ['farmland'], FARM_RADIUS)
     // Mature wheat anywhere in range — confirm maturity on the nearest
     // head before claiming feasibility (young crops never pull the step).
-    const w = nearestCell(bot, ctx, ['wheat'], FARM_RADIUS)
-    if (w) {
-      try {
-        const b = bot.blockAt(new Vec3(w.x, w.y, w.z))
-        if (isMatureWheat(b)) return true
-      } catch (_) { /* unreadable: not feasible on wheat */ }
-    }
+    if (nearestCell(bot, ctx, CROP_BLOCKS, FARM_RADIUS, { forDig: true, ripe: true })) return true
     if (farmland && countSeeds(bot) > 0) {
       try {
         const above = bot.blockAt(new Vec3(farmland.x, farmland.y + 1, farmland.z))
@@ -515,19 +532,19 @@ async function run(bot, ctx) {
 
     // Leg 1 — harvest mature wheat (drops reseed the plant leg).
     if ((f.harvested | 0) < HARVEST_CAP) {
-      const w = nearestCell(bot, ctx, ['wheat'], FARM_RADIUS, { forDig: true })
+      const w = nearestCell(bot, ctx, CROP_BLOCKS, FARM_RADIUS, { forDig: true, ripe: true })
       if (w) {
         let b = null
         try { b = bot.blockAt(new Vec3(w.x, w.y, w.z)) } catch (_) { b = null }
-        if (b && isMatureWheat(b)) {
+        if (b && isMatureCrop(b)) {
           if (walkTo(bot, ctx, f, 'farm-harvest', w)) return
           try { if (denyReason(bot, b, ctx)) { strike(ctx, w); return } } catch (_) { strike(ctx, w); return }
           await bot.dig(b)
           // Settle tick for the drops, then replant the soil below (the
           // wheat cell itself is air after the dig).
-          f.replant = { x: w.x, y: w.y - 1, z: w.z, ticks: 2 }
+          if (!GOURDS.has(b.name)) f.replant = { x: w.x, y: w.y - 1, z: w.z, ticks: 2 }
           f.harvested = (f.harvested | 0) + 1
-          try { console.log(`farm harvest wheat at ${w.x},${w.y},${w.z}`) } catch (_) { /* log best-effort */ }
+          try { console.log(`farm harvest ${b.name} at ${w.x},${w.y},${w.z}`) } catch (_) { /* log best-effort */ }
           return
         }
       }
@@ -547,7 +564,8 @@ async function run(bot, ctx) {
             f.replant = { x: r.x, y: r.y, z: r.z, ticks: 0 }
             return
           }
-          if (await equipHeld(bot, 'wheat_seeds')) {
+          const seed = seedName(bot)
+          if (seed && await equipHeld(bot, seed)) {
             let soil = null
             try { soil = bot.blockAt(new Vec3(r.x, r.y, r.z)) } catch (_) { soil = null }
             if (soil && (isFarmland(soil) || isTillable(soil.name))) {
@@ -561,7 +579,7 @@ async function run(bot, ctx) {
               if (soil && isFarmland(soil)) {
                 await bot.activateBlock(soil)
                 f.planted = (f.planted | 0) + 1
-                try { console.log(`farm plant wheat_seeds at ${r.x},${r.y},${r.z}`) } catch (_) { /* log best-effort */ }
+                try { console.log(`farm plant ${seed} at ${r.x},${r.y},${r.z}`) } catch (_) { /* log best-effort */ }
               }
             }
           }
@@ -581,13 +599,14 @@ async function run(bot, ctx) {
         } catch (_) { aboveEmpty = false }
         if (aboveEmpty) {
           if (walkTo(bot, ctx, f, 'farm-plant', fl)) return
-          if (await equipHeld(bot, 'wheat_seeds')) {
+          const seed = seedName(bot)
+          if (seed && await equipHeld(bot, seed)) {
             let soil = null
             try { soil = bot.blockAt(new Vec3(fl.x, fl.y, fl.z)) } catch (_) { soil = null }
             if (soil && isFarmland(soil)) {
               await bot.activateBlock(soil)
               f.planted = (f.planted | 0) + 1
-              try { console.log(`farm plant wheat_seeds at ${fl.x},${fl.y},${fl.z}`) } catch (_) { /* log best-effort */ }
+              try { console.log(`farm plant ${seed} at ${fl.x},${fl.y},${fl.z}`) } catch (_) { /* log best-effort */ }
               return
             }
           }
@@ -785,7 +804,7 @@ function workReady(bot, ctx) {
   try {
     const bp = botPos(bot)
     if (!bp) return false
-    if (nearestCell(bot, ctx, ['wheat'], 64, { forDig: true })) return true
+    if (nearestCell(bot, ctx, CROP_BLOCKS, 64, { forDig: true, ripe: true })) return true
     if (nearestCell(bot, ctx, ['farmland'], 64)) return true
     if (nearestCell(bot, ctx, ['grass_block', 'dirt'], 64)) return true
     try {
@@ -812,6 +831,8 @@ module.exports.STRUCK_TTL_MS = STRUCK_TTL_MS
 module.exports.isTillable = isTillable
 module.exports.isSeedTuft = isSeedTuft
 module.exports.isMatureWheat = isMatureWheat
+module.exports.isMatureCrop = isMatureCrop
+module.exports.seedName = seedName
 module.exports.isFarmland = isFarmland
 module.exports.needsWater = needsWater
 module.exports.FARM_RADIUS = FARM_RADIUS
