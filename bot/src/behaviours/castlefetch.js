@@ -2449,7 +2449,7 @@ function digTick(bot, ctx, f, d) {
   if (!bp) { spend(f, 'other'); return }
   if (typeof bot.mine === 'function' && !toolPrep.ready(bot, ctx, f, { name: 'stone' }, () => finish(bot, ctx, 'failed:castlefetch-no-pickaxe'))) return
   if (!hasPickaxe(bot) && process.env.BOT_BODY !== 'baritone') { spend(f, 'other'); finish(bot, ctx, 'done'); return } // equip rearms first
-  if (!roomForDrop(bot, ctx)) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
+  if (!roomForDrop(bot, ctx)) { spend(f, 'other'); if (!stockpileMod.tossJunk(bot, ctx)) finish(bot, ctx, 'failed:castlefetch-pack-full'); return }
   // Mid-leg pick upgrade (idkcraft-vmzq.20): the first fetch digs on a
   // wooden pick (~1.4x slower on stone) and no equip step ever interjects
   // while castle legs are feasible, so upgrade in place once the pack
@@ -2871,7 +2871,7 @@ function castlefetch(bot, ctx, target, state) {
       ctx.castleFetchMine = false
       ctx.castleFetchInFlight = false
       try { if (bot && typeof bot.cancelMine === 'function') bot.cancelMine(new Error('mine-stopped')) } catch (_) { /* cancel best-effort */ }
-      finish(bot, ctx, 'failed:castlefetch-pack-full')
+      if (!stockpileMod.tossJunk(bot, ctx)) finish(bot, ctx, 'failed:castlefetch-pack-full')
       return
     }
     return
