@@ -1424,8 +1424,12 @@ function pickChest(bot, ctx, o) {
       const hk = stockpileMod.chestKeyOf(h)
       if (hk !== null && !o.chestSeen.includes(hk)) return { pos: h, home: true }
     }
-    let rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen, o.maxChestDistance).filter(within)
-    if (typeof o.wants === 'function') {
+    let rest = (o.peerChests ? stockpileMod.nearbyChestsAll : stockpileMod.nearbyChests)(bot, ctx, o.chestSeen, o.maxChestDistance).filter(within)
+    if (o.peerChests && typeof o.wants === 'function') {
+      // far/peer sightings (beds wool): only near chests or a snapshot showing the item earn the walk
+      const b = bot && bot.entity && bot.entity.position
+      rest = rest.filter((c) => (b && Math.hypot(b.x - c.x, b.y - c.y, b.z - c.z) <= stockpileMod.NEARBY_CHEST_RADIUS) || stockpileMod.chestHope(ctx, c, o.wants) === 2 || (c.contents && Object.entries(c.contents).some(([n, v]) => v > 0 && o.wants(n))))
+    } else if (typeof o.wants === 'function') {
       // owner 2026-11-13 hunger: the owner restocks the castle-site chests — with one known there, no >100-block chest trips and site chests go first
       const site = ctx && ctx.castle && ctx.castle.site
       const atSite = (c) => !!(site && Math.hypot(c.x - site.x, c.y - site.y, c.z - site.z) <= SITE_CHEST_RADIUS)
