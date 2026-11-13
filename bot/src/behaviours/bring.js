@@ -1406,7 +1406,7 @@ function openPhase(ctx) {
 // NEARBY_CHEST_RADIUS. Tried positions (o.chestSeen) stay skipped, so a
 // leg never re-opens a chest. Null when every chest is tried or none is
 // near — the caller falls back exactly as the chestless path did.
-const SITE_CHEST_RADIUS = 24
+const SITE_CHEST_RADIUS = 48 // the castle is 62x54: its chests sit up to ~40 from the centre
 const SITE_CHEST_TRIP = 100
 function pickChest(bot, ctx, o) {
   try {
