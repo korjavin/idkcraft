@@ -448,7 +448,7 @@ it('does not start recovery for a healthy bot, an unknown pack, or an expired ga
     const recovery = require('../src/behaviours/food-recovery')
     const ctx = { chestSearchRetryAt: Date.now() + 3600000, castle: { site: { x: 5, y: 64, z: 5 }, phase: 'body', parked: false } }
     assert.equal(recovery.available(bot, ctx, { time: 'day', health: 5 }), true)
-    assert.equal(recovery.available(bot, ctx, { time: 'day', health: 20 }), false)
+    assert.equal(recovery.available(bot, ctx, { time: 'day', health: 20 }), true, 'healthy but hungry (food 3): the ladder hunts the cow')
     const items = bot.inventory.items
     bot.inventory.items = () => { throw new Error('inventory unready') }
     assert.equal(recovery.available(bot, ctx, { time: 'day', health: 5 }), false)

@@ -274,6 +274,29 @@ describe('stairs sourcing (g0z.47)', () => {
     assert.deepEqual(asked, [[['cobblestone_stairs'], 4]])
   })
 
+  // Source ladder (owner 2026-11-13, prod bot3: 402 cobble + table on hand,
+  // walked to far empty chests): the pack rung crafts before any chest walk.
+  it('ladder: cobble + table in the pack crafts before walking to a chest', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 60 }; return 'stairs-none' }
+    const asked = []
+    fetch.deps.craftItem = (bot, ctx, names) => { asked.push(names); return 'running' }
+    const ctx = { home: { chest: { x: 20, y: 64, z: 0 } }, castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, phase: 'body', blocked: {} } }
+    fetch(fetchBot([{ name: 'cobblestone', count: 64 }, { name: 'crafting_table', count: 1 }]), ctx)
+    assert.deepEqual(asked, [['cobblestone_stairs']])
+    assert.ok(!String(ctx.lastGoalKey || '').startsWith('castlefetch-chest'), 'no chest walk')
+    assert.equal(ctx.castleFetch.rung, 'inventory')
+  })
+
+  it('ladder: a pack craft that fails falls to the chest rung in the same tick', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 60 }; return 'stairs-none' }
+    fetch.deps.craftItem = () => ({ done: false, line: "can't make cobblestone_stairs" })
+    const ctx = { home: { chest: { x: 20, y: 64, z: 0 } }, castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, phase: 'body', blocked: {} } }
+    fetch(fetchBot([{ name: 'cobblestone', count: 64 }, { name: 'crafting_table', count: 1 }]), ctx)
+    assert.equal(ctx.stepStatus, undefined, 'the leg did not fail on one dead rung')
+    assert.equal(ctx.castleFetch.rung, 'nearChest')
+    assert.match(String(ctx.lastGoalKey), /^castlefetch-chest:20,64,0/)
+  })
+
   it('short on cobble (variants, or only the reserve) digs instead of crafting (revmux 01 core-1/6)', () => {
     castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stairs', left: 60 }; return 'stairs-none' }
     for (const items of [[{ name: 'andesite', count: 30 }], [{ name: 'cobblestone', count: 29 }]]) {

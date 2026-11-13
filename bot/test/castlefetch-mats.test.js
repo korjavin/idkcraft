@@ -37,6 +37,11 @@ describe('castlefetch far chests', () => {
     assert.equal(fetch.pickChest(mkBot(), { castle: castle(), chests: [tooFar] }, {}, 'stone'), null)
   })
 
+  it('ladder: a near-only leg (obtainable kind) leaves the far chest for the hop leg', () => {
+    const c = { x: SITE.x + 600, y: 64, z: SITE.z, contents: { cobblestone: 900 }, at: Date.now() }
+    assert.equal(fetch.pickChest(mkBot(), { castle: castle(), chests: [c] }, { nearOnly: true }, 'stone'), null)
+  })
+
   it('a far trip draws a full load: castle remainder capped by pack room', () => {
     const ctx = { castle: castle(), castleWord: { kind: 'planks', left: 3700 } }
     assert.equal(fetch.farLoad(mkBot(), ctx, 'planks', 10), (36 - 2) * 64)

@@ -30,7 +30,7 @@ async function decideWith(health, entities, extra) {
   }
 }
 
-// Hunt comes after the chest search (owner order): these pin a search on cooldown.
+// Source ladder: the hunt (obtain) comes before the chest search (long trip).
 const COOL = { chestSearchRetryAt: Date.now() + 3600000 }
 for (const health of [10, 3]) {
   it(`no castle, health ${health} food 0: a remembered unopened chest beyond NEARBY_CHEST_RADIUS -> foodRecovery`, async () => {
@@ -38,7 +38,7 @@ for (const health of [10, 3]) {
   })
   it(`no castle, health ${health} food 0: no chest, a cow near -> foodRecovery`, async () => {
     assert.equal(await decideWith(health, [cow], COOL), 'foodRecovery')
-    assert.equal(await decideWith(health, [cow]), 'chestSearch', 'search due: chest search before the hunt')
+    assert.equal(await decideWith(health, [cow]), 'foodRecovery', 'search due: still the hunt first')
   })
   it(`no castle, health ${health} food 0: a watchdog task-plan does not hold a starving bot`, async () => {
     assert.equal(await decideWith(health, [cow], { taskPlanStep: 'craft', ...COOL }), 'foodRecovery')

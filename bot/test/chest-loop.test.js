@@ -140,22 +140,29 @@ it('an unreachable chest is not re-toured when the seen list is wiped; it is ret
   assert.equal(foodRecovery.needed(bot, ctx, facts), true, 'stale failure: try again')
 })
 
-// #778: food < 6 is an emergency now (it hunts, test below); a merely hungry run (food 10) stays chest-only.
-it('a hungry (healthy) run at an empty chest never starts a hunt, even with a cow beside it', async () => {
+// Source ladder (owner 2026-11-13): a hungry run whose near chest is empty
+// falls to the obtain rung (hunt) in the same leg, never a chest-only retry.
+it('a hungry (healthy) run at an empty chest hunts the cow beside it', async () => {
   const { bot } = world([{ name: 'dirt', type: 2, count: 3 }])
   bot.food = 10
   bot.entities = { 7: { id: 7, name: 'cow', type: 'animal', position: new Vec3(2, 64, 0), isValid: true } }
   const ctx = { chests: [{ ...CHEST }] }
-  const phases = []
   ctx.step = 'foodRecovery'; ctx.stepStatus = 'running'; ctx.work = true
-  for (let i = 0; i < 20 && ctx.stepStatus === 'running'; i++) {
+  for (let i = 0; i < 20 && !(ctx.foodRecovery && ctx.foodRecovery.hunt); i++) {
     BEHAVIOURS.foodRecovery(bot, ctx, null, facts)
-    if (ctx.foodRecovery) phases.push(ctx.foodRecovery.phase)
     await sleep(5)
   }
-  assert.equal(ctx.stepStatus, 'done')
-  assert.ok(!phases.includes('hunt'), phases.join(','))
-  assert.equal(ctx.foodRecovery.hunt, undefined)
+  assert.ok(ctx.foodRecovery.hunt, 'hunt started after the empty chest')
+  assert.ok(!(ctx.foodRecoveryRetryAt > Date.now()), 'no chest-only retry')
+})
+
+it('hungry with no chest at all: the hunt rung is offered, not a chest search', () => {
+  const { bot } = world([])
+  bot.food = 10
+  bot.entities = { 7: { id: 7, name: 'cow', type: 'animal', position: new Vec3(2, 64, 0), isValid: true } }
+  const ctx = {}
+  assert.equal(foodRecovery.needed(bot, ctx, facts), true)
+  assert.equal(foodRecovery.available(bot, ctx, facts), true)
 })
 
 // Review #778: run-level, not only decide (food 0, health 10 = the Easy prod case).

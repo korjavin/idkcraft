@@ -24,6 +24,7 @@ const blueprint = require('../castle')
 const castleMod = require('./castle')
 const toolPrep = require('./toolprep')
 const stockpileMod = require('./stockpile')
+const ladder = require('../source-ladder')
 const danger = require('../danger')
 const { countItems } = require('../perception')
 const { canBreak, clearGoal, denyReason, logDeny, protectedReason } = require('./util')
@@ -169,6 +170,8 @@ const deps = {
 
 // Wood kinds (g0z.56): crafted from planks/logs, chopped when short.
 const WOOD = new Set(['planks', 'door', 'fence', 'chest', 'frame', 'gate'])
+// Kinds with an obtain rung (dig/gather tail): their far chests wait for the hop leg.
+const OBTAIN = new Set(['stone', 'stairs', ...WOOD])
 const NO_WOOD = 'no wood within 64 — drop logs in the castle chest'
 // Items one chest log funds per kind (craftTick crafts the rest).
 const LOG_YIELD = { planks: 4, frame: 1, fence: 2, door: 2, chest: 0.5, gate: 1, torch: 4 } // torch: one log -> one charcoal -> 4
@@ -1011,7 +1014,7 @@ function pickChest(bot, ctx, f, kind) {
     // y7lp.3: home/site/castle first, remembered chests only when none qualifies
     if (!best || (!c.mem && best.mem) || (!!c.mem === !!best.mem && dist < best.dist)) best = { ...c, k, dist }
   }
-  if (!best) best = far
+  if (!best && !f.nearOnly) best = far // the ladder's far rung: after obtain (hop legs)
   if (best) tried.add(best.k)
   return best
 }
@@ -1218,6 +1221,16 @@ function craftTick(bot, ctx, f, d) {
 // Stairs craft only from cobble above the castle's stone reserve (revmux 02
 // core-6); below it the leg digs (stairsDig) — the bot sources its own stone.
 const STAIRS_COBBLE = 6
+// Ladder rung 1: the pack funds the craft now — no chest walk first.
+// Stairs keep their cobble reserve + table fund gate; other kinds ask
+// craftany's planner (the same gate craftTick's craft runs through).
+function packFunds(bot, ctx, d) {
+  if (d.kind === 'stairs') return !stairsCobbleShort(bot) && stairsTableFunded(bot, ctx)
+  const names = craftNames(bot, d.kind)
+  if (names.length === 0) return false
+  try { return !!require('./craftany').planCraft(bot, ctx, names, CRAFT_COUNT[d.kind] || 1).ok } catch (_) { return false }
+}
+
 function stairsCobbleShort(bot) {
   return countItems(bot, (n) => n === 'cobblestone') < STAIRS_COBBLE + castleMod.reserveOf('stone')
 }
@@ -2993,12 +3006,18 @@ function castlefetch(bot, ctx, target, state) {
     return
   }
   if (st.status !== NO_WOOD || !(WOOD.has(d.kind) || d.kind === 'stairs')) st.status = `fetching ${d.kind}`
-  // Stairs the pack can craft now (cobble + a funded table) craft before any
-  // chest walk (owner 2026-11-13: prod bot3 held 402 cobble, planks and a
-  // table, yet walked to far empty chests and failed no-stairs).
-  if (d.kind === 'stairs' && !stairsCobbleShort(bot) && stairsTableFunded(bot, ctx) && craftTick(bot, ctx, f, d)) return
-  if (chestTick(bot, ctx, f, d)) return
-  if (craftTick(bot, ctx, f, d)) return
+  // Source ladder (src/source-ladder.js): pack craft -> site drops -> near
+  // chests -> craft whatever a chest drew; the dig/gather tail below is the
+  // obtain rung, far chests wait for the hold's hop leg (owner 2026-11-13:
+  // prod bot3 held 402 cobble, planks and a table, yet walked to far empty
+  // chests and failed no-stairs).
+  f.nearOnly = !d.hop && OBTAIN.has(d.kind)
+  if (ladder.climb(f, [
+    ['inventory', () => packFunds(bot, ctx, d) && craftTick(bot, ctx, f, d)],
+    ['drops', () => d.kind === 'stone' && sweepTick(bot, ctx, f)],
+    ['nearChest', () => chestTick(bot, ctx, f, d)],
+    ['craft', () => craftTick(bot, ctx, f, d)],
+  ], `castlefetch ${d.kind}`)) return
   // g0z.60: a bank batch on hand lays before any dig. Not a torch leg (fqkn):
   // its bank draw is logs, which torchTick below smelts into the torches.
   // Stairs keep the old shape (8njf/vf8e.8 own its table-broke mine batch).
@@ -3055,7 +3074,6 @@ function castlefetch(bot, ctx, target, state) {
         if (require('./equip').craftSparePick(bot, ctx)) return // deferred: craftany requires equip
       } catch (_) { /* unfunded: dig as before */ }
     }
-    if (d.kind === 'stone' && sweepTick(bot, ctx, f)) return
     digTick(bot, ctx, f, d); return // neuc.53: the v2 mine sizes from d.short
   }
   if (WOOD.has(d.kind)) {

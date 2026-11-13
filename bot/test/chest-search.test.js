@@ -126,7 +126,7 @@ it('a remembered barrel opens through withChest (not dropped as gone)', async ()
   assert.equal(ctx.chests.length, 1)
 })
 
-// Whole loop (owner order: remembered chest -> chest search -> hunt), real decide + behaviour ticks.
+// Whole loop (source ladder: near chest -> hunt -> chest search), real decide + behaviour ticks.
 const cowAt = (p) => ({ id: 7, uuid: '22222222-2222-2222-2222-222222222222', type: 'cow', displayName: 'Cow', kind: 'animal', pos: { x: p.x + 3, y: p.y, z: p.z }, vel: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, health: 20, onGround: true, pose: 'standing' })
 async function loopWorld(chests, chestItems) {
   const w = await world(chests)
@@ -149,14 +149,12 @@ async function tick(bot, ctx) {
   return d.action
 }
 
-it('loop: hungry, cow near, no chest -> search (not hunt); a chest at ~50 appears -> foodRecovery takes bread from it', async () => {
+it('loop: hungry, no cow, no chest -> search; a chest at ~50 appears -> foodRecovery takes bread from it', async () => {
   const chests = []
   const items = [{ name: 'bread', type: 1, count: 10 }]
   const { bot, ctx, transport } = await loopWorld(chests, items)
   try {
-    transport.state.entities = [cowAt(bot.entity.position)]
-    await bot.refresh()
-    assert.equal(await tick(bot, ctx), 'chestSearch', 'search before the hunt')
+    assert.equal(await tick(bot, ctx), 'chestSearch', 'nothing nearer: the long-trip rung')
     const p = bot.entity.position
     chests.push({ x: Math.floor(p.x) + 50, y: Math.floor(p.y), z: Math.floor(p.z) })
     let got = false
@@ -169,16 +167,15 @@ it('loop: hungry, cow near, no chest -> search (not hunt); a chest at ~50 appear
   } finally { await bot.stop() }
 })
 
-it('loop: search exhausted -> cooldown -> foodRecovery hunts', async () => {
+// Prod 2026-11-13: 13 of 20 steps were fruitless chest searches with food
+// around. The obtain rung (hunt) now runs before the long trip.
+it('loop: hungry, cow near, no chest -> foodRecovery hunts, no chest search first', async () => {
   const { bot, ctx, transport } = await loopWorld([], [])
   try {
     transport.state.entities = [cowAt(bot.entity.position)]
     await bot.refresh()
-    assert.equal(await tick(bot, ctx), 'chestSearch')
-    ctx.chestSearch.at -= chestsearch.BUDGET_MS + 1
-    await tick(bot, ctx) // timeout -> cooldown
-    assert.ok(ctx.chestSearchRetryAt > Date.now())
-    assert.equal(await tick(bot, ctx), 'foodRecovery')
+    assert.equal(await tick(bot, ctx), 'foodRecovery', 'obtain before the long trip')
+    assert.equal(ctx.chestSearch, undefined)
   } finally { await bot.stop() }
 })
 

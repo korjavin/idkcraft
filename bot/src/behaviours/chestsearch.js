@@ -6,8 +6,9 @@
 // RADIUS cap from the anchor; the leg ends after BUDGET_MS, when the spiral
 // is out, or once a chest with hope (stockpile.chestHope) is within the
 // food leg's reach — then foodRecovery's pickChest opens it. A fruitless
-// end (timeout/explored) arms a COOLDOWN_MS hold: never an endless tour; only
-// then does foodRecovery hunt (searchFirst).
+// end (timeout/explored) arms a COOLDOWN_MS hold: never an endless tour.
+// Source ladder (src/source-ladder.js): this is the far rung — it runs only
+// once foodRecovery (pack bread, near chest, hunt) has nothing to serve.
 const { goals } = require('mineflayer-pathfinder')
 const stockpile = require('./stockpile')
 const explore = require('./explore')
@@ -49,14 +50,6 @@ function foodChest(bot, ctx, r) {
 // foodRecovery's chest reach for this body (food-recovery chestState).
 function foodReach(bot) {
   try { return require('../reflexes').starving(bot) ? 256 : FOOD_REACH } catch (_) { return FOOD_REACH }
-}
-
-// Owner order: remembered chest -> chest search -> hunt. True while a daytime
-// search is still due (not on cooldown): foodRecovery then does not hunt.
-function searchFirst(bot, ctx) {
-  if (process.env.BOT_BODY !== 'baritone' || !ctx) return false
-  if (ctx.chestSearchRetryAt && Date.now() < ctx.chestSearchRetryAt) return false
-  return require('../site').timeWord(bot) === 'day'
 }
 
 function available(bot, ctx, facts) {
@@ -126,7 +119,6 @@ module.exports = run
 module.exports.run = run
 module.exports.available = available
 module.exports.scanWide = scanWide
-module.exports.searchFirst = searchFirst
 module.exports.RADIUS = RADIUS
 module.exports.BUDGET_MS = BUDGET_MS
 module.exports.COOLDOWN_MS = COOLDOWN_MS
