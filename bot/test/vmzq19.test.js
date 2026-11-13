@@ -124,6 +124,7 @@ describe('vmzq.19 castle first: order and vetoes', () => {
       const { home, cells } = standingHomeCells()
       const items = [
         { name: 'stone_pickaxe', count: 1 }, { name: 'stone_sword', count: 1 }, { name: 'dirt', count: 32 },
+        { name: 'white_bed', count: 1 }, // carried bed: the castle veto holds (a bedless bot may craft one)
       ]
       const bot = goalBot({ items, cells })
       const ctx = { home, castle: castleState(), work: true, step: 'explore', stepStatus: 'done' }
@@ -133,6 +134,23 @@ describe('vmzq.19 castle first: order and vetoes', () => {
       assert.equal(goal.MENU.beds.feasible(facts, bot, ctx), false, 'beds vetoed while the castle stands')
       assert.equal(goal.stepWhy('beds', facts, bot, ctx, ''), 'beds: castle comes first')
       assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch', 'fetches stone instead of hunting wool')
+    })
+  })
+
+  it('owner 2026-11-13: a bedless castle bot may run beds for its own carried bed', async () => {
+    await quiet(async () => {
+      const { home, cells } = standingHomeCells()
+      const bot = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }], cells })
+      const ctx = { home, castle: castleState(), work: true }
+      const facts = goal.goalFacts(bot, ctx)
+      assert.equal(goal.MENU.beds.feasible(facts, bot, ctx), true, 'no bed in the pack lifts the castle veto')
+      const withBed = goalBot({ items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'white_bed', count: 1 }], cells })
+      assert.equal(goal.MENU.beds.feasible(goal.goalFacts(withBed, ctx), withBed, ctx), false, 'a carried bed keeps the veto')
+      // the step finishes with the bed in the pack, never walking it home to place
+      const beds = require('../src/behaviours/beds')
+      const sctx = { home, castle: castleState(), beds: { phase: 'place' } }
+      beds(withBed, sctx, null, {})
+      assert.equal(sctx.stepStatus, 'done')
     })
   })
 

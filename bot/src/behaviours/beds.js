@@ -695,8 +695,13 @@ function beds(bot, ctx, target, state) {
     return
   }
   const pack = bedMod.packCounts(bot)
+  // owner 2026-11-13: under a castle the bed is carried (p5hk field bed), never walked home to place
+  if (require('../vetoes').castleFirst(ctx)) {
+    if (bedItemsInPack(pack) > 0) { ctx.stepStatus = 'done'; return }
+    if (st.phase === 'place') st.phase = 'craft'
+  }
   const missing = (placed.a ? 0 : 1) + (placed.b ? 0 : 1)
-  const craftsOwed = Math.max(0, missing - bedItemsInPack(pack))
+  const craftsOwed = Math.max(0, (require('../vetoes').castleFirst(ctx) ? 1 : missing) - bedItemsInPack(pack))
   if (!st.phase) st.phase = 'shears'
   if (st.phase === 'shears') shearsTick(bot, ctx, st, pack, craftsOwed)
   else if (st.phase === 'wool') woolTick(bot, ctx, st, pack, craftsOwed)
@@ -728,3 +733,4 @@ module.exports.needsFillGround = needsFillGround
 module.exports.WANT_WOOL = WANT_WOOL
 module.exports.chestTick = chestTick
 module.exports.findBedItem = findBedItem
+module.exports.bedItemsInPack = bedItemsInPack
