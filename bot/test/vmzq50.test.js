@@ -242,6 +242,24 @@ describe('vmzq.50 return-to-site: decide force', () => {
     })
   })
 
+  it('a running chest trip is exempt too (owner 2026-11-13: castlefetch<->gocastle ping-pong)', async () => {
+    await quietAsync(async () => {
+      const bot = goalBot({ at: pos(SPAWN.x, SPAWN.y, SPAWN.z) })
+      const ctx = {
+        castle: castleState(), work: true,
+        castleFetch: { chest: { at: { x: SPAWN.x - 100, y: 60, z: SPAWN.z }, bank: true } },
+      }
+      const facts = goal.goalFacts(bot, ctx)
+      const text = goal.goalText(facts, null)
+      ctx.step = 'castlefetch'
+      ctx.stepStatus = 'running'
+      ctx.goalText = text
+      ctx.askedKey = `${text}\nrunning`
+      const d = await goal.decide(bot, ctx)
+      assert.equal(d.action, 'castlefetch')
+    })
+  })
+
   it('a pin on the current step is exempt (R1): no per-tick re-decide churn', async () => {
     await quietAsync(async () => {
       const bot = goalBot({ at: pos(SPAWN.x, SPAWN.y, SPAWN.z) })

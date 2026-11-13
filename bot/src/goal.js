@@ -2922,7 +2922,10 @@ function siteFarFor(bot, ctx, facts, prev, status, finished, commitStep) {
   try {
     const f = ctx && ctx.castleFetch
     const farLeg = prev === 'castlefetch' && status === 'running' &&
-      !!f && !!f.farCandidate && typeof f.farCandidate.x === 'number'
+      !!f && ((!!f.farCandidate && typeof f.farCandidate.x === 'number') ||
+        // A chest trip off the site is the leg's own destination too (owner
+        // 2026-11-13: prod bot3 ping-ponged castlefetch<->gocastle every 15 s).
+        (!!f.chest && !!f.chest.at))
     siteFarWalk = !finished && (prev === 'castle' || prev === 'castlefetch') &&
       !farLeg && commitStep !== prev &&
       !!MENU.gocastle.feasible(facts, bot, ctx)
