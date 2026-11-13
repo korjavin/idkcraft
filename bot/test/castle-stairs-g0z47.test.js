@@ -185,7 +185,11 @@ describe('stairs dig/relay loop (g0z.47)', () => {
       pathfinder: { isMoving: () => false, setGoal() {}, goal: null, movements: { exclusionAreasBreak: [], exclusionAreasPlace: [] } },
       chat() {},
     }
-    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, phase: 'body', blocked: {} } }
+    // Only c is drivable (the fake paints c): the other held stairs cells,
+    // which the castle now lays around the short stone, sit out retired.
+    const blocked = {}
+    for (const o of cells) if (o.kind === 'stairs' && o.idx > c.idx) blocked[`3:${o.idx}`] = { tries: 9, until: 0, retired: true }
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, phase: 'body', blocked } }
     return { bot, ctx, c }
   }
 
@@ -200,7 +204,7 @@ describe('stairs dig/relay loop (g0z.47)', () => {
     assert.ok(bot.calls.faced.length >= 1, 'it was relaid through the faced path')
     assert.equal(castleMod.done(bot, c), true)
     assert.equal(bot.calls.looks.length, bot.calls.faced.length, 'one look per faced place')
-    assert.deepEqual(Object.keys(ctx.castle.blocked), [], 'no hole left behind')
+    assert.equal(ctx.castle.blocked[`3:${c.idx}`], undefined, 'no hole left behind')
   })
 
   it('placeCell asks findRef to exclude the top ref for stairs (revmux 01 core-5)', async () => {

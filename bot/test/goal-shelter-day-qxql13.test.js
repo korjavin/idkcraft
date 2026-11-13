@@ -110,6 +110,8 @@ describe('qxql.13 day shelter', () => {
     ctx.castleFetchFailKind = kind
     ctx.goalText = text
     ctx.heldText = null
+    // Castle-around (owner 2026-11-13): every other kind came up dry too.
+    ctx.castleFetchDry = new Set(['stone', 'planks', 'frame', 'stairs', 'torch', 'door', 'fence', 'pane', 'banner', 'chest', 'bookshelf', 'enchanting_table', 'blast_furnace'].filter((k) => k !== kind))
     await decide(bot, ctx)
     assert.equal(castlefetchMod.holdFor(bot, ctx, kind), true, `${kind} parks on no-trees`)
     assert.equal(MENU.castlefetch.feasible(goalFacts(bot, ctx), bot, ctx), false, 'parked kind leaves the fetch menu')

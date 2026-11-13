@@ -364,9 +364,10 @@ describe('castle arbiter step (g0z.3)', () => {
       if (c.kind !== 'stone') break
       set.set(`${c.x},${c.y},${c.z}`, 'cobblestone')
     }
+    // Castle-around (owner 2026-11-13): held stone keeps laying past the short kind.
     const bot = makeBot({ set, items: [{ name: 'cobblestone', count: 64 }] })
-    const w = goal.goalFacts(bot, { castle: castleState() }).castle
-    assert.notEqual(w, 'stone-batch')
+    assert.equal(goal.goalFacts(bot, { castle: castleState() }).castle, 'stone-batch')
+    const w = goal.goalFacts(makeBot({ set, items: [] }), { castle: castleState() }).castle
     assert.match(w, /^(planks|torch|door)-none$/)
   })
 
@@ -418,7 +419,7 @@ describe('castle arbiter step (g0z.3)', () => {
       set.set(`${c.x},${c.y},${c.z}`, 'cobblestone')
     }
     const w = goal.goalFacts(near, ctx).castle
-    assert.match(w, /^(planks|torch)-none$/)
+    assert.match(w, /^(planks|torch)-none$|^stone-batch$/) // stone-batch: makeBot's stone, laid around the short kind
     const nearAt = near.blockAt
     near.blockAt = (p) => (p.x >= SITE.x + 5 ? null : nearAt(p)) // revmux 02: east chunk (with laid tower cells) gone, origin still loaded
     assert.equal(goal.goalFacts(near, ctx).castle, w, 'partly loaded site = last on-site word')

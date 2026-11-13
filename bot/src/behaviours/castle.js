@@ -29,7 +29,7 @@ const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const blueprint = require('../castle')
 const park = require('../castle-park') // dlpo: same-day park state (a leaf — no cycle)
-const { SCAFFOLD_LOW } = require('../budget') // oqul.11: was a deferred equip.js read
+const { SCAFFOLD_LOW, CASTLEFETCH_RETRY_MS } = require('../budget') // oqul.11: was a deferred equip.js read
 const build = require('./build')
 const flat = require('./flat')
 const toolPrep = require('./toolprep')
@@ -493,6 +493,31 @@ function nearest(bot, ctx, st, cells, order, i, now) {
   return best || c0
 }
 
+// Castle around a short kind (owner 2026-11-13: one missing material
+// never stops the whole castle). A place cell whose kind is not on hand
+// steps aside like a torchless torch; the scan lays every held cell past
+// it. Once a short cell was skipped, a later cell must have a laid
+// neighbour (lay()'s support rule), so nothing floats over the gap. Only
+// with nothing layable does the short cell come back: the first whose
+// kind no fetch holds (same-day park, dry leg, a fresh failed-kind hold),
+// else the first, so the word and the no-<kind> fail name it as before.
+function fetchHeld(ctx, kind, now) {
+  try {
+    if (park.isParked(ctx, kind) || dryKinds(ctx).has(kind)) return true
+    const sf = ctx.stepFail && ctx.stepFail.castlefetch
+    const e = sf && sf.kinds && sf.kinds[kind]
+    const at = typeof e === 'number' ? e : (e && e.at)
+    return typeof at === 'number' && now - at <= CASTLEFETCH_RETRY_MS
+  } catch (_) { return false }
+}
+function shortOf(bot, ctx, c) { return !clearing(c) && usable(bot, c.kind, ctx) <= 0 }
+function keepShort(ctx, short, c, now) {
+  return !short || (fetchHeld(ctx, short.kind, now) && !fetchHeld(ctx, c.kind, now)) ? c : short
+}
+function shortPick(ctx, short, owed, now) {
+  return [short, owed].find((c) => c && !fetchHeld(ctx, c.kind, now)) || short || owed
+}
+
 // Next cell to work in work order, or why there is none.
 function pick(bot, ctx, st, cells, key, now) {
   const order = workOrder(cells, key)
@@ -516,6 +541,7 @@ function pick(bot, ctx, st, cells, key, now) {
     let waiting = null
     let inside = false
     let owed = null
+    let short = null
     for (let i = full ? 0 : (ctx.castleCursor | 0); i < order.length; i++) {
       const c = cells[order[i]]
       // The stairs relay (g0z.48) converts place cells only: a complete
@@ -536,6 +562,8 @@ function pick(bot, ctx, st, cells, key, now) {
       if (b && b.until > now) { waiting = waiting || c; continue }
       if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
       if (interior(c)) inside = true
+      if (shortOf(bot, ctx, c)) { short = keepShort(ctx, short, c, now); continue }
+      if (short && !clearing(c) && !supported(bot, c)) continue
       ctx.castleCursor = first
       const n = nearest(bot, ctx, st, cells, order, i, now)
       ctx.castleNearIdx = n.idx
@@ -543,7 +571,8 @@ function pick(bot, ctx, st, cells, key, now) {
     }
     ctx.castleCursor = first < 0 ? order.length : first
     if (first < 0 && !full) { full = true; continue } // confirm "all done" from 0
-    if (owed) return { idx: owed.idx }
+    const sp = shortPick(ctx, short, owed, now)
+    if (sp) return { idx: sp.idx }
     return { idx: -1, waiting }
   }
 }
@@ -570,6 +599,7 @@ function peekPlan(bot, st, now, ctx) {
   let waiting = null
   let inside = false
   let owed = null
+  let short = null
   const order = workOrder(cells, key)
   for (let i = 0; i < order.length; i++) {
     const c = cells[order[i]]
@@ -587,9 +617,12 @@ function peekPlan(bot, st, now, ctx) {
     if (b && b.until > now) { waiting = waiting || c; continue }
     if (c.kind === 'dig' && inside) { waiting = waiting || c; continue }
     if (interior(c)) inside = true
+    if (shortOf(bot, ctx, c)) { short = keepShort(ctx, short, c, now); continue }
+    if (short && !clearing(c) && !supported(bot, c)) continue
     return { cell: nearest(bot, ctx, st, cells, order, i, now), waiting: null, cells }
   }
-  return { cell: owed, waiting: owed ? null : waiting, cells }
+  const sp = shortPick(ctx, short, owed, now)
+  return { cell: sp, waiting: sp ? null : waiting, cells }
 }
 
 // Site prep (g0z.5, phase 'prep'): the order-time check (siteCheck) vouches
