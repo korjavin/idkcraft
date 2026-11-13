@@ -27,6 +27,7 @@
 
 const STALL_MS = 90000 // no placed growth with material on hand -> build-stall
 const WATCH_MS = 5000 // missing/material re-check cadence
+const NOPATH_MS = 20000 // no growth + mod reports no path this long -> build-stall early
 const MAX_CELLS = 4096
 
 function suffixClass(name) {
@@ -141,6 +142,7 @@ function installBuild(bot) {
       // watchdog (bridge-build.test.js); prod always uses the constants.
       const timing = bot._buildTiming || {}
       st.stallMs = timing.stallMs || STALL_MS
+      st.noPathMs = timing.noPathMs || NOPATH_MS
       // Referenced, not unref'd: a pending buildCells promise owns the
       // loop until it settles (an unref'd watchdog let the file's loop
       // drain with the promise still pending).
@@ -317,7 +319,15 @@ function paused(bot, st, reason) {
 // the FSM fetches). Missing re-reads from the world, never from the last
 // event alone.
 function watch(bot, st) {
-  if (st.settled || Date.now() - st.grownAt < (st.stallMs || STALL_MS)) return
+  if (st.settled) return
+  const now = Date.now()
+  // Pathless wedge (prod bot3 2026-11-13: 11/11 stall snapshots pathing=false
+  // hasPath=false, mostly calculating GoalBreak): Baritone never finds a path,
+  // so fail after NOPATH_MS instead of STALL_MS when material is on hand.
+  const d = st.diagnostic && now - st.diagnostic.receivedAt <= 10000 ? st.diagnostic.data : null
+  if (d && d.pathing === false && d.hasPath === false) { if (st.noPathAt == null) st.noPathAt = now } else st.noPathAt = null
+  const early = st.noPathAt != null && now - Math.max(st.noPathAt, st.grownAt) >= (st.noPathMs || NOPATH_MS)
+  if (!early && now - st.grownAt < (st.stallMs || STALL_MS)) return
   const missing = refresh(bot, st)
   // Starvation is EXACT-name (round-2 core-5): the builder can only place
   // what it holds — a valid substitute counts a standing cell as done
@@ -335,9 +345,10 @@ function watch(bot, st) {
   // Settle first, then stop the builder: the watchdog's verdict owns the
   // promise, and a still-running (paused or wedged) builder must never
   // survive untracked (core-2) — the late final finds no live build.
-  if (starved) st.settle(st.resolve, { placed: st.placed, missing: st.missing })
-  else stall(bot, st, missing, 'paused=no')
+  if (starved && !early) st.settle(st.resolve, { placed: st.placed, missing: st.missing })
+  else if (starved) return // pathless but starved: the STALL_MS verdict fetches as before
+  else stall(bot, st, missing, early ? 'paused=no nopath' : 'paused=no')
   release(bot)
 }
 
-module.exports = { installBuild, installBuildStop, handleBuildEvent, missingCells, onHand, defaultSame, STALL_MS, WATCH_MS }
+module.exports = { installBuild, installBuildStop, handleBuildEvent, missingCells, onHand, defaultSame, STALL_MS, WATCH_MS, NOPATH_MS }

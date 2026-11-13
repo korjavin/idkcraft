@@ -564,6 +564,7 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     await run(bot, ctx, 2)
     for (const c of open) {
     assert.ok(ctx.castleBatchOff > Date.now(), 'a wide wedge hands the castle to the per-cell path for a while')
+      assert.notEqual(ctx.stepStatus, 'failed:build-stall', 'a wide wedge keeps the castle step running per-cell')
       const e = ctx.castle.blocked[`${ver}:${c.idx}`]
       assert.ok(e && !e.retired && e.why === 'build-miss-wide', `${c.idx} backed off, not retired: ${JSON.stringify(e)}`)
     }

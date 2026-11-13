@@ -2614,7 +2614,7 @@ function castleBuilderBatch(bot, ctx, st, c) {
           delete st.batchStrikes[bkey(st, o.idx)]
           blockCell(ctx, st, o, 'build-miss-wide', now)
         }
-        return
+        return true
       }
       for (const o of set) {
         const k = bkey(st, o.idx)
@@ -2683,7 +2683,9 @@ function castleBuilderBatch(bot, ctx, st, c) {
             st.batchStrikes && typeof st.batchStrikes === 'object') {
             for (const k of Object.keys(st.batchStrikes)) delete st.batchStrikes[k]
           }
-          strikeMisses()
+          // Wedged -> per-cell spell: keep the castle step running on the
+          // dig+place path instead of failing it to explore/fun.
+          if (strikeMisses()) { ctx.castleBuildFlight = false; return }
         }
         settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
       },
