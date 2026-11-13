@@ -487,7 +487,7 @@ describe('castle break guard (g0z.55)', () => {
     })
   })
 
-  it('v2 (neuc.46): laid rock (granite/tuff) is banned only near its own castle (never a peer castle); stone/deepslate/logs stay a cost', () => {
+  it('v2 (neuc.46): laid rock (granite/tuff) is banned only near its own castle (never a peer castle); stone/deepslate stay a cost, logs banned near', () => {
     withBody('baritone', () => {
       const bot = v2Bot()
       const ctx = { castle: { site: SITE, rot: 0, blueprintVersion: 3, phase: 'complete' } }
@@ -498,8 +498,8 @@ describe('castle break guard (g0z.55)', () => {
       }
       bot.entity = { position: { x: SITE.x + 5, y: 65, z: SITE.z + 5 } }
       let s = sync()
-      for (const n of ['granite', 'tuff', 'cobblestone']) assert.ok(s.ban.includes(n) && !s.avoid.includes(n), `near: ${n}`)
-      for (const n of ['stone', 'deepslate', 'oak_log']) assert.ok(s.avoid.includes(n) && !s.ban.includes(n), `near: ${n}`)
+      for (const n of ['granite', 'tuff', 'cobblestone', 'oak_log']) assert.ok(s.ban.includes(n) && !s.avoid.includes(n), `near: ${n}`)
+      for (const n of ['stone', 'deepslate']) assert.ok(s.avoid.includes(n) && !s.ban.includes(n), `near: ${n}`)
       let pushes = 0
       bot.pathfinder.setMovements = () => { pushes++ }
       sync()

@@ -298,7 +298,8 @@ function castleNamesGuard(bot, near) {
       guardNames: names.filter(avoid),
       banNames: names.filter((n) => !avoid(n)).concat(soilNames.filter((n) => names.indexOf(n) < 0)),
     })
-    castleNames = { byName, fn: () => 0, near: lists(bulk), far: lists(far) } // fn: names only, no per-cell cost
+    // Near the own castle logs are banned too: Baritone paths dug the frame beams (prod frame regress); gather digs via bot.dig.
+    castleNames = { byName, fn: () => 0, near: lists((n) => BULK_ROCK.has(n)), far: lists(far) } // fn: names only, no per-cell cost
   }
   // One fn object rides the Movements; the bridge reads its lists per sync.
   // A flip mid-goal re-pushes in movementsFor (one push with the place flip).
