@@ -214,6 +214,18 @@ describe('stairs dig/relay loop (g0z.47)', () => {
     assert.ok(opts.every((o) => o && o.excludeTop), 'stairs ask for excludeTop')
   })
 
+  it('approaches a stair from the step below, not GoalPlaceBlock (v2 wall-top unreachable)', async () => {
+    const { bot, ctx, c } = loopBot({ lay: 'right' })
+    bot.paint('air', {})
+    bot.entity.position = new Vec3(c.x + 0.5, c.y, c.z + 9.5) // out of reach: the approach fires
+    const set = []
+    bot.pathfinder.setGoal = (g) => { set.push(g) }
+    castleMod(bot, ctx); await settle()
+    const g = set.find((x) => x && x.constructor && x.constructor.name === 'GoalBlock')
+    assert.ok(g, `stairs approach is an exact stance: ${set.map((x) => x && x.constructor && x.constructor.name)}`)
+    assert.deepEqual([g.x, g.y, g.z], [c.x - c.face.dx, c.y, c.z - c.face.dz])
+  })
+
   it('a placement bug that keeps laying wrong blocks after STRIKES, never loops', async () => {
     const { bot, ctx, c } = loopBot({ lay: 'wrong-always' })
     // The fake always lays the opposite facing, so every lay is wrong.

@@ -1829,6 +1829,18 @@ async function placeFaced(bot, ref, c) {
   return bot.placeBlock(ref.ref, ref.face)
 }
 
+// The step-below stance of a faced stair (feet at the cell's level, one
+// back along the face): air feet + head on a solid floor, else null.
+function stairStance(bot, c) {
+  if (!c.face) return null
+  const s = { x: c.x - c.face.dx, y: c.y, z: c.z - c.face.dz }
+  if (!AIR.has(nameAt(bot, s)) || !AIR.has(nameAt(bot, { x: s.x, y: s.y + 1, z: s.z }))) return null
+  let below = null
+  try { below = bot.blockAt(new Vec3(s.x, s.y - 1, s.z)) } catch (_) { below = null }
+  if (!below || below.boundingBox !== 'block' || flat.isLiquidName(below.name)) return null
+  return s
+}
+
 // Stair placement (g0z.47): the server faces the stair along the placer's
 // horizontal look and halves it by the clicked face/cursor, so look along
 // the plan face first (mineflayer yaw convention, non-forced like
@@ -1851,8 +1863,13 @@ function placeCell(bot, ctx, st, c, item, now) {
   // furnace (g0z.50) places from its stance north of the cell, looking
   // south-into-kitchen, so its front faces into the room.
   const ent = c.kind === 'door' || c.kind === 'banner' ? entrance(st) : c.kind === 'blast_furnace' ? c.stance || null : null
-  if (approach(bot, ctx, c, () => ent
-    ? new goals.GoalBlock(ent.x, ent.y, ent.z)
+  // Stairs (idkcraft-stairs): stand on the step below, facing up the
+  // flight. GoalPlaceBlock on v2 picks the column beside the cell toward
+  // the body — inside the tower that is the wall, and Baritone's #goto x z
+  // ends on its top (y+14): far() struck every stair 'unreachable'.
+  const stand = !ent && c.kind === 'stairs' ? stairStance(bot, c) : null
+  if (approach(bot, ctx, c, () => ent || stand
+    ? new goals.GoalBlock((ent || stand).x, (ent || stand).y, (ent || stand).z)
     // Decor (g0z.31): 10 of 44 v2 windows hide every neighbour face from
     // the walkable stances behind a stair step; the server checks the click
     // distance only, so a pane approach drops LOS (far() still gates reach).
