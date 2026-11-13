@@ -282,7 +282,7 @@ const MENU = {
       // Castle first (vmzq.19): an active castle vetoes the wool hunt —
       // its place/bank legs walk home, 500 blocks in run3 — and an L2
       // park keeps the veto past the task radius (R2 minor 3).
-      if (castleFirst(ctx, 'beds') || castleParkLeash(ctx)) return false
+      if ((castleFirst(ctx, 'beds') && !castleBedOwed(bot, ctx)) || castleParkLeash(ctx)) return false
       if (!(facts.time === 'day' && facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one'))) return false
       // vmzq.61: an unreachable/unplaceable bed holds on home/bed-count/time, not the facts text.
       try { const m = require('./behaviours/beds'); return !m.placeHeld(ctx, bot) && !m.sheepLatched(ctx, bot) } catch (_) { return true }
@@ -808,6 +808,14 @@ function stockpileSiteBranch(facts, bot, ctx) {
 // proceeds under either park. Only the auto-resuming episode leashes (R3,
 // round-2 major B): a latched 3rd park lasts till the owner speaks, and
 // the day's fallback work is the house, not the stalled site.
+// owner 2026-11-13: a castle bot with no bed in the pack and no site bed standing crafts one
+// (the beds step lifts the castle veto for it; sitebed then lays it at the site).
+function castleBedOwed(bot, ctx) {
+  try {
+    const bedMod = require('./behaviours/bed')
+    return require('./behaviours/beds').bedItemsInPack(bedMod.packCounts(bot)) === 0 && !require('./behaviours/sitebed').siteBedStands(bot, ctx)
+  } catch (_) { return false }
+}
 function castleParkLeash(ctx) {
   try {
     const st = ctx && ctx.castle
@@ -2073,7 +2081,7 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'build: nothing left to build'
     }
     case 'beds':
-      if (castleFirst(ctx, 'beds') || castleParkLeash(ctx)) return 'beds: castle comes first'
+      if ((castleFirst(ctx, 'beds') && !castleBedOwed(bot, ctx)) || castleParkLeash(ctx)) return 'beds: castle comes first'
       if (facts.time !== 'day') return 'beds: daytime job'
       if (facts.home !== 'built') return 'beds: house not built yet'
       if (facts.beds !== 'none' && facts.beds !== 'one') return 'beds: both beds are in'
