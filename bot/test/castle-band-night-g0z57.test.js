@@ -175,3 +175,13 @@ describe('g0z.57 castle band night: inside the castle or its house, never at the
     assert.equal(ctx.recovery == null || ctx.recovery.action !== 'pillar_up', true, 'no pillar on the ring')
   })
 })
+
+describe('prod bot3: the night dig-in stays by a building castle', () => {
+  it('from 25 out the spot is nightR..16 out of the box, not where the body stands', () => {
+    const st = castleState('building')
+    const b = bot({ x: SITE.x + W - 1 + 25.5, y: 63, z: SITE.z + 5.5 }, 15000)
+    const spot = home.offCastleSpot(b, { castle: st })
+    const out = spot.x - (SITE.x + W - 1)
+    assert.ok(out >= castle.nightR(3) && out <= 16, JSON.stringify({ spot, out }))
+  })
+})

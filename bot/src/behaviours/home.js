@@ -1789,6 +1789,7 @@ function castleGroundHere(bot, ctx) {
 // the walk reuses digInRun's walk below, the veto is recover's.
 const SHELTER_CASTLE_GAP = castleData.NIGHT_BAND // g0z.57: the spot clears the night band
 const SHELTER_CASTLE_R = 24
+const SHELTER_CASTLE_NEAR = 16 // outer edge of the preferred night dig-in ring, from the box
 function offCastleSpot(bot, ctx) {
   try {
     const st = ctx && ctx.castle
@@ -1796,19 +1797,25 @@ function offCastleSpot(bot, ctx) {
     const { w, d } = own ? castleData.siteDimensions(own.rot | 0, own.blueprintVersion) : { w: 0, d: 0 }
     const g = own ? castleData.nightR(own.blueprintVersion) : SHELTER_CASTLE_GAP
     const gap2 = g * g
-    const gap = (ax, az) => {
-      if (!own) return true
+    const out2 = (ax, az) => {
       const ox = ax < own.site.x ? own.site.x - ax : ax >= own.site.x + w ? ax - (own.site.x + w - 1) : 0
       const oz = az < own.site.z ? own.site.z - az : az >= own.site.z + d ? az - (own.site.z + d - 1) : 0
-      return ox * ox + oz * oz >= gap2
+      return ox * ox + oz * oz
     }
+    const gap = (ax, az) => !own || out2(ax, az) >= gap2
+    // Prod bot3: the nearest-to-body spot landed 12..26 out of a 62x54
+    // box, then gocastle walked back. Try the ring just past the band first.
+    const near2 = Math.max(g, SHELTER_CASTLE_NEAR) ** 2
+    const ring = (ax, az) => gap(ax, az) && out2(ax, az) <= near2
     // g0z.63: and outside the apron of every known castle (the pillar and
     // the cap are refused there), XZ only — at the castle's own level. The
     // search reaches out of the apron from the box's centre (apron + half
     // the box + 1: 16 + 17 for a 31x27 box, 32 + 32 at build castle 100);
     // no such spot keeps the old gap-6 walk-off from the own box.
     const clear = (ax, az) => !castleData.inCastleApron(ctx, { x: ax, z: az })
-    return walkOffSpot(bot, ctx, (ax, az) => clear(ax, az) && gap(ax, az), own ? castleData.apronR(own.blueprintVersion) + Math.ceil(Math.max(w, d) / 2) + 1 : castleData.CASTLE_APRON + 17) ||
+    const reach = own ? castleData.apronR(own.blueprintVersion) + Math.ceil(Math.max(w, d) / 2) + 1 : castleData.CASTLE_APRON + 17
+    return (own ? walkOffSpot(bot, ctx, (ax, az) => clear(ax, az) && ring(ax, az), reach) : null) ||
+      walkOffSpot(bot, ctx, (ax, az) => clear(ax, az) && gap(ax, az), reach) ||
       (own ? walkOffSpot(bot, ctx, gap) : null)
   } catch (_) { return null }
 }
@@ -2852,4 +2859,4 @@ function comehome(bot, ctx, target, state) {
   }
 }
 
-module.exports = { gohome, stay, shelter, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, boxOccupants, threatInSleepRing, nearbyBed, freeBedSpot, craftableBed, tableInReach }
+module.exports = { gohome, stay, shelter, offCastleSpot, shelterOpen, SHELTER_PREPILLAR_MS, comehome, releaseMeet, startMeet, isInside, meetPos, outLaneBlocked, exitDoorShut, SHELTER_RUN_FRESH_MS, NIGHT_GRACE_MS, nightGrace, phantomNear, PHANTOM_R, hostileNear, monsterBlocksBed, boxOccupants, threatInSleepRing, nearbyBed, freeBedSpot, craftableBed, tableInReach }
