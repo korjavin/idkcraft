@@ -1196,6 +1196,16 @@ async function drawChest(bot, ctx, d, at, need) {
       if (r && r.got > 0) try { console.log(`castlefetch ${d.kind}: drew ${r.name} x${r.got} for the night`) } catch (_) { /* log best-effort */ }
     }
   }
+  // owner 2026-11-13 hunger: any chest it opens tops pack food up to FOOD_KEEP, so no separate food trips
+  if (seen) {
+    const edible = stockpileMod.edibles()
+    const want = stockpileMod.FOOD_KEEP - countItems(bot, (n) => edible.has(n))
+    const names = Object.keys(seen).filter((n) => edible.has(n) && seen[n] > 0)
+    if (want > 0 && names.length > 0) {
+      const r = await drawFrom(names, want)
+      if (r && r.got > 0) try { console.log(`castlefetch ${d.kind}: drew ${r.name} x${r.got} for food`) } catch (_) { /* log best-effort */ }
+    }
+  }
   return { left: need, fund, counts: seen }
 }
 
