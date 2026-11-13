@@ -254,6 +254,23 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     assert.ok(bot.calls.places.length > 0, 'per-cell placements still lay')
   })
 
+  it('a torch-only stall defers the torches and keeps the castle step running', async () => {
+    const world = makeWorld()
+    paintAll(world)
+    const torches = blueprint.absPlan(SITE, 0, 3).cells.filter((c) => c.kind === 'torch').slice(0, 2)
+    for (const c of torches) world.set(c.x, c.y, c.z, 'air')
+    const bot = mockBot(world, { buildScript: 'stall' })
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    ctx.castle.blocked = {}
+    assert.ok(castle.castleBuilderBatch(bot, ctx, ctx.castle, torches[0]), 'torch batch fired')
+    await settle()
+    assert.equal(bot.calls.builds[0].cells.length, 2)
+    assert.ok(!(ctx.stepStatus || '').startsWith('failed:'), `torches never fail the step, got ${ctx.stepStatus}`)
+    assert.equal(ctx.castleBuildFlight, false)
+    const why = Object.values(ctx.castle.blocked || {}).map((b) => b.why)
+    assert.equal(why.filter((w) => w === 'torch-stall').length, 2, JSON.stringify(why))
+  })
+
   it('a wedged builder fails build-stall and releases the flight (core-9)', async () => {
     const world = makeWorld()
     const bot = mockBot(world, { buildScript: 'stall' })
