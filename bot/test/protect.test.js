@@ -368,7 +368,7 @@ describe('dig-site wiring (idkcraft-drq)', () => {
       equip(bot, ctx)
       assert.equal(digs, 0, 'cobble walls never mined')
       assert.ok(String(ctx.stepStatus).startsWith('failed:equip-blocks'), `fails loudly, got ${ctx.stepStatus}`)
-      assert.ok(lines.some((l) => l.startsWith('protected: cobblestone')), lines.join('\n'))
+      // cobblestone is no dig target at all (owner 2026-11-13), so no protected line is needed
     } finally { console.log = orig }
   })
 
