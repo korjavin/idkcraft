@@ -1434,7 +1434,7 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
     try {
       await bot.sleep(bed)
       try { home.sleptA = true } catch (_) { /* claim best-effort */ } // vanilla sets the spawn on use
-      if (ctx.stay !== st) {
+      if (ctx.stay !== st && ctx.shelter !== st) { // p5hk: the shelter's field bed shares this flight
         // An order or the retreat chain took the body mid-flight (revmux
         // 02-review): the spawn is set, but the body must not sleep under
         // the order — wake at once, skip the chat.
@@ -1890,6 +1890,138 @@ function shelterOpen(ctx) {
   if (st.dig && ((st.dig.digs | 0) > 0 || st.descended)) return false
   return true
 }
+// Field bed (idkcraft-p5hk): far from the home bed a carried bed is laid
+// beside the body at night and slept in (one sleeper skips the night on the
+// server), and dawn breaks it back into the pack. Any trouble (hostiles, no
+// flat spot, refusals) turns it off for the night: the dig-in below runs
+// unchanged. ponytail: no field craft — the night craft needs a table in reach.
+const FIELD_BED_HOME_R = 48 // the home bed this near: gohome/stay own the night
+const FIELD_BED_SPOT_R = 3 // foot rings around the body (place reach)
+const FIELD_BED_HOLDS = 90 // night ticks without sleep before the dig-in
+const FIELD_BED_PICKUP_MS = 30000 // dawn break-and-pickup budget
+function bedCount(bot) {
+  let n = 0
+  try {
+    for (const i of bot.inventory.items()) if (i && typeof i.name === 'string' && i.name.endsWith('_bed')) n += i.count || 0
+  } catch (_) { /* unreadable pack: none */ }
+  return n
+}
+function fieldBedSpot(bot, ctx) {
+  const bp = botPos(bot)
+  if (!bp) return null
+  const bedsMod = require('./beds')
+  const name = (x, y, z) => { try { const b = bot.blockAt(new Vec3(x, y, z)); return b ? b.name : null } catch (_) { return null } }
+  const free = (x, y, z) => {
+    if (!AIR_CELLS.has(name(x, y, z)) || !AIR_CELLS.has(name(x, y + 1, z))) return false
+    const g = name(x, y - 1, z)
+    if (!g || g === 'lava' || bedsMod.needsFillGround(g)) return false
+    const p = { x, y, z }
+    if (castleData.nightBand(ctx.castle, p) || castleData.inCastleApron(ctx, p)) return false
+    try { if (require('./flat').cellOccupiedSelf(bot, x, y, z)) return false } catch (_) { /* unreadable body: allow */ }
+    return true
+  }
+  const x0 = Math.floor(bp.x)
+  const y0 = Math.floor(bp.y)
+  const z0 = Math.floor(bp.z)
+  for (let r = 1; r <= FIELD_BED_SPOT_R; r++) {
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue
+        for (let f = 0; f < 4; f++) {
+          const [hx, hz] = BED_DIRS[f]
+          if (free(x0 + dx, y0, z0 + dz) && free(x0 + dx + hx, y0, z0 + dz + hz)) {
+            return { foot: new Vec3(x0 + dx, y0, z0 + dz), facing: f }
+          }
+        }
+      }
+    }
+  }
+  return null
+}
+// Night: true while the field bed owns the tick (lay, walk, sleep, hold).
+function fieldBedTick(bot, ctx, home, st, time) {
+  if (st.fieldOff) return false
+  if (bot.isSleeping || ctx.sleepInFlight) return true
+  const off = (why) => {
+    st.fieldOff = true
+    if (why) { try { console.log(`field bed: ${why}, digging in`) } catch (_) { /* log best-effort */ } }
+    return false
+  }
+  try {
+    if (typeof bot.sleep !== 'function') return off(null)
+    const bedsMod = require('./beds')
+    if (!st.fieldBed && st.fieldSpot) { // the lay flight landed (or not)
+      if (bedsMod.bedAt(bot, st.fieldSpot.foot, st.fieldSpot.facing)) {
+        st.fieldBed = st.fieldSpot
+        st.fieldPack = bedCount(bot)
+      }
+      st.fieldSpot = null
+    }
+    if (hostileNear(bot)) return off('hostiles near')
+    if (st.sleepGiveUp) return off('sleep refused')
+    const fb = st.fieldBed
+    if (fb) {
+      const bed = bedsMod.bedAt(bot, fb.foot, fb.facing)
+      if (!bed) { st.fieldBed = null; return off('bed gone') }
+      if (time === 'night' && ++st.fieldHolds > FIELD_BED_HOLDS) return off('no sleep yet')
+      if ((st.sleepCooldown || 0) > 0) { st.sleepCooldown--; return true }
+      const head = new Vec3(fb.foot.x + BED_DIRS[fb.facing][0], fb.foot.y, fb.foot.z + BED_DIRS[fb.facing][1])
+      sleepInBed(bot, ctx, null, st, bed, head, head, 'sleeping in my field bed') // null home: never claims sleptA
+      return !st.sleepGiveUp || off('sleep refused')
+    }
+    const bp = botPos(bot)
+    const a = home && home.bedA
+    if (bp && a && typeof a.x === 'number' && Math.hypot(bp.x - a.x, bp.z - a.z) < FIELD_BED_HOME_R) return off(null)
+    if ((st.bedLayFails || 0) >= NIGHT_BED_FAILS) return off('bed would not place')
+    const item = bedsMod.findBedItem(bot, null)
+    if (!item) return off(null)
+    const spot = fieldBedSpot(bot, ctx)
+    if (!spot) return off('no flat spot')
+    st.fieldSpot = spot
+    st.fieldHolds = 0
+    layNightBed(bot, ctx, null, spot, st, item, false)
+    return true
+  } catch (_) {
+    return off(null)
+  }
+}
+// Dawn: wake, break the field bed, stand on its cell till the drop is back
+// in the pack. True while it owns the tick; bounded by FIELD_BED_PICKUP_MS.
+function fieldBedPickup(bot, ctx) {
+  const st = ctx.shelter
+  const fb = st && st.fieldBed
+  if (!fb) return false
+  const now = Date.now()
+  if (!st.fieldPickupAt) st.fieldPickupAt = now
+  const done = (why) => {
+    st.fieldBed = null
+    try { console.log(`field bed: ${why}`) } catch (_) { /* log best-effort */ }
+    return false
+  }
+  if (now - st.fieldPickupAt > FIELD_BED_PICKUP_MS) return done('pickup timed out')
+  if (ctx.sleepInFlight || st.fieldDigging) return true
+  if (bot.isSleeping) {
+    if (typeof bot.wake !== 'function') return done('cannot wake')
+    ctx.sleepInFlight = true
+    void Promise.resolve().then(() => bot.wake()).catch(() => {}).finally(() => { ctx.sleepInFlight = false })
+    return true
+  }
+  const bed = require('./beds').bedAt(bot, fb.foot, fb.facing)
+  if (bed) {
+    const bp = botPos(bot)
+    if (bp && Math.hypot(bp.x - (fb.foot.x + 0.5), bp.y - fb.foot.y, bp.z - (fb.foot.z + 0.5)) > 4) {
+      setGoal(bot, ctx, 'fieldbed-break', new goals.GoalNear(fb.foot.x, fb.foot.y, fb.foot.z, 2))
+      return true
+    }
+    if (typeof bot.dig !== 'function') return done('cannot dig')
+    st.fieldDigging = true
+    void Promise.resolve().then(() => bot.dig(bed)).catch(() => {}).finally(() => { st.fieldDigging = false })
+    return true
+  }
+  if (bedCount(bot) > (st.fieldPack || 0)) return done('picked up')
+  setGoal(bot, ctx, 'fieldbed-pickup', new goals.GoalBlock(fb.foot.x, fb.foot.y, fb.foot.z))
+  return true
+}
 function shelter(bot, ctx, target, state) {
   // Homeless is fine (vmzq.32: goal's castleSiteNight picks it for a
   // homeless castle): home only answers "already inside" and the swim aim.
@@ -1907,8 +2039,9 @@ function shelter(bot, ctx, target, state) {
     time = factsTime(bot) || 'night'
   } catch (_) { /* hold on unknown time */ }
   if (time === 'day') {
-    ctx.stepStatus = 'done'
     ctx.inShelter = false
+    if (fieldBedPickup(bot, ctx)) return
+    ctx.stepStatus = 'done'
     // Compose before snapshotting (stay-close mirror): the line reads the
     // opening, then the report becomes the next opening.
     let line = ''
@@ -1926,6 +2059,11 @@ function shelter(bot, ctx, target, state) {
   ensureNight(bot, ctx) // idempotent: the tally opens once, like gohome/stay
   if (!ctx.shelter || typeof ctx.shelter !== 'object') ctx.shelter = {}
   const st = ctx.shelter
+  if (!st.pillared && !st.dig && !ctx.recovery && fieldBedTick(bot, ctx, home, st, time)) {
+    logShelterPhase(bot, ctx, st, 'field-bed', state)
+    ctx.inShelter = false
+    return
+  }
   try {
     const bp = botPos(bot)
     // Not while the dig-in walks to a dirt column (stone stance): arrival
