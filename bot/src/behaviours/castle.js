@@ -2543,8 +2543,10 @@ function castleSame(want, have) {
   }
   return false
 }
+const BATCH_OFF_MS = 10 * 60 * 1000 // per-cell spell after a builder stall
 function castleBuilderBatch(bot, ctx, st, c) {
   if (ctx.castleBuildFlight) return true
+  if (typeof ctx.castleBatchOff === 'number' && Date.now() < ctx.castleBatchOff) return false
   if (!c || clearing(c) || c.prep || c.sill || !CASTLE_BUILDER_KINDS.has(c.kind)) return false
   const batch = castleBuilderCells(bot, ctx, st)
   if (!batch) return false
@@ -2603,6 +2605,11 @@ function castleBuilderBatch(bot, ctx, st, c) {
         set.push(o)
       }
       if (set.length > STRIKE_WIDE_CAP) {
+        // A batch-wide wedge (owner 2026-11-13, prod bot3: 40/44 path calcs
+        // failed on grass-topped plank cells) hands the castle to the
+        // per-cell dig+place path for a while instead of re-batching.
+        ctx.castleBatchOff = now + BATCH_OFF_MS
+        try { console.log(`castle builder ${name}: wedged, per-cell for ${BATCH_OFF_MS / 60000} min`) } catch (_) { /* log best-effort */ }
         for (const o of set) {
           delete st.batchStrikes[bkey(st, o.idx)]
           blockCell(ctx, st, o, 'build-miss-wide', now)
