@@ -229,6 +229,9 @@ describe('castlefetch sources (g0z.4)', () => {
     const items = TOOLS()
     const bot = makeBot({ items, under: (y) => (y <= 63 ? 'water' : 'air') }) // a lake: no quarry side either
     const ctx = { castle: castleState() }
+    // Castle-around (owner 2026-11-13): every other kind dry, so a held
+    // stone leaves no kind to fetch.
+    ctx.castleFetchDry = new Set(Object.keys(blueprint.billOfMaterials(blueprint.blueprintOf(1).PLAN)).filter((k) => k !== 'stone'))
     assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch')
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
@@ -421,6 +424,9 @@ describe('castlefetch sources (g0z.4)', () => {
     const items = TOOLS()
     const bot = makeBot({ items, under: (y) => (y <= 63 ? 'water' : 'air') })
     const ctx = { castle: castleState() }
+    // Castle-around (owner 2026-11-13): every other kind dry, so a held
+    // stone leaves no kind to fetch.
+    ctx.castleFetchDry = new Set(Object.keys(blueprint.billOfMaterials(blueprint.blueprintOf(1).PLAN)).filter((k) => k !== 'stone'))
     assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch')
     fetch(bot, ctx)
     await goal.decide(bot, ctx)
@@ -1218,6 +1224,8 @@ describe('castlefetch at the site: walk, quarry, prep word, infill run (g0z.15)'
     // Committed to the planks cell (neuc.57 sticky pick): unpinned, the held
     // logs would make the nearest frame beam the next cell instead.
     const ctx = { castle: castleState({ blueprintVersion: 2 }), castleNearIdx: cells[i].idx }
+    // Castle-around: held logs would lay the open frame beams first; retire them.
+    for (const c of cells.slice(i)) if (c.kind === 'frame') ctx.castle.blocked[`2:${c.idx}`] = { tries: 9, until: 0, retired: true }
     const d = fetch.demand(bot, ctx)
     assert.equal(d.kind, 'planks')
     assert.equal(ctx.castleWord.left, 4)
