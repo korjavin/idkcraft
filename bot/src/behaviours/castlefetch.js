@@ -1177,6 +1177,15 @@ async function drawChest(bot, ctx, d, at, need) {
       need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
     }
   }
+  // owner 2026-11-13 forest: a wood-starved castle takes saplings from any chest it opens (reforest plants them by the site)
+  if (seen && require('../vetoes').woodStarved(ctx)) {
+    const want = stockpileMod.SAPLING_KEEP - countItems(bot, (n) => n.endsWith('_sapling'))
+    const names = Object.keys(seen).filter((n) => n.endsWith('_sapling') && seen[n] > 0)
+    if (want > 0 && names.length > 0) {
+      const r = await drawFrom(names, want)
+      if (r && r.got > 0) try { console.log(`castlefetch ${d.kind}: drew ${r.name} x${r.got} for the forest`) } catch (_) { /* log best-effort */ }
+    }
+  }
   return { left: need, fund, counts: seen }
 }
 
@@ -3242,3 +3251,4 @@ module.exports.acceptStone = acceptStone
 module.exports.FIND_COUNT = FIND_COUNT
 module.exports.STONE_BELOW = STONE_BELOW
 module.exports.STONE_ABOVE = STONE_ABOVE
+module.exports.drawChest = drawChest
