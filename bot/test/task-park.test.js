@@ -252,14 +252,14 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     return ctx
   }
 
-  it('a latched park resumes on the next UTC day, not before (neuc.40)', () => {
+  it('a latched park resumes after 3 h, not before (owner 2026-11-13, was the UTC day)', () => {
     const bot = makeBot()
     const at = Date.parse('2001-09-09T20:00:00Z')
     const ctx = latchedHouse(bot, at)
-    taskMod.taskTick(bot, ctx, Date.parse('2001-09-09T23:59:00Z'))
-    assert.equal(ctx.home.parked, true, 'same day: still latched')
-    taskMod.taskTick(bot, ctx, Date.parse('2001-09-10T00:00:30Z'))
-    assert.equal(ctx.home.parked, false, 'next day: resumed')
+    taskMod.taskTick(bot, ctx, Date.parse('2001-09-09T22:59:00Z'))
+    assert.equal(ctx.home.parked, true, 'under 3 h: still latched')
+    taskMod.taskTick(bot, ctx, Date.parse('2001-09-09T23:00:30Z'))
+    assert.equal(ctx.home.parked, false, 'past 3 h: resumed')
     assert.equal(ctx.home.taskPark, null)
     const day = { time: 'day', health: 20, home: 'site', inside: 'no', logs: 0, planks: 4, maxPlanks: 4, table: 0, tablePlaced: false, door: 1, castle: 'none', known: 'none', player: 'none', beds: 'both' }
     assert.notEqual(goal.stepWhy('gather', day, bot, ctx, ''), 'gather: house parked')
@@ -290,8 +290,8 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
       const t = advance(bot2, ctx2, t1 + 2000, 46)
       assert.equal(ctx2.home.parked, true, 're-parked')
       assert.equal(ctx2.home.taskPark.auto, false, 'n=4 latches again')
-      taskMod.taskTick(bot2, ctx2, t + 3 * 3600 * 1000)
-      assert.equal(ctx2.home.parked, true, 'no in-process retry the same day')
+      taskMod.taskTick(bot2, ctx2, t + 2 * 3600 * 1000)
+      assert.equal(ctx2.home.parked, true, 'no in-process retry within the latch window')
       // A reconnect in the same process (join loop) keeps a latch it set
       // itself: only parks from before the process re-arm (revmux 01).
       const live = Date.now()

@@ -32,6 +32,7 @@ const TASK_STALL_L1_MS = 15 * 60 * 1000
 const TASK_STALL_L2_MS = 45 * 60 * 1000
 const TASK_PARK_RETRY_MS = 60 * 60 * 1000
 const TASK_PARKS_PER_DAY = 3
+const TASK_PARK_LATCH_MS = 3 * 60 * 60 * 1000
 const TASK_PARK_DIAG_MAX = 200
 const TASK_HOUSE_CACHE_MS = 60 * 1000
 const TASK_FAILS_KEPT = 3
@@ -3173,7 +3174,9 @@ function maybeResume(bot, ctx, now) {
       // A latched park is 'parked for the day' (idkcraft-neuc.40): it
       // resumes once the UTC day turns instead of waiting for an owner
       // command forever. The day count resets on the next park.
-      if (ep.auto !== true && utcDay(ep.at) === utcDay(now)) continue
+      // Owner 2026-11-13: a latched park waits TASK_PARK_LATCH_MS, not the
+      // UTC day (prod bot3's castle sat parked all afternoon after one bad hour).
+      if (ep.auto !== true && now - ep.at < TASK_PARK_LATCH_MS) continue
       if (now - ep.at < TASK_PARK_RETRY_MS) continue
       const n = (rec.parkHist && typeof rec.parkHist.n === 'number' && rec.parkHist.n >= 1) ? rec.parkHist.n : 1
       rec.parked = false
