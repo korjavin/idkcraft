@@ -862,6 +862,27 @@ function prepTargets(bot, ctx, st, now) {
   return list
 }
 
+// Nearest workable prep cell (owner 2026-11-13: prep walked the whole site
+// per block): stay in the first group (logs, cuts, fills), take each column's
+// first cell in list order (cuts top-down, fills bottom-up), then the nearest.
+function nearestPrep(bot, live) {
+  if (!live.length) return null
+  const group = live[0].prep
+  const seen = new Set()
+  const pos = bot.entity && bot.entity.position
+  let best = null
+  let bd = Infinity
+  for (const o of live) {
+    if (o.prep !== group) continue
+    const k = `${o.x},${o.z}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    const dd = pos ? (o.x + 0.5 - pos.x) ** 2 + (o.y - pos.y) ** 2 + (o.z + 0.5 - pos.z) ** 2 : 0
+    if (dd < bd) { bd = dd; best = o }
+  }
+  return best
+}
+
 // Own litter (g0z.14): before 'complete', every off-plan block in the site
 // box (dy 0..SITE_TOP) that is our scaffold — cobblestone by name (digCell's
 // restart rule) or a placedByBot ground block — clears like a keep-clear
@@ -2724,7 +2745,7 @@ function castle(bot, ctx) {
   if (ctx.castleCarry && stow(bot, ctx, st, now)) return
   if (st.phase === 'prep') {
     const list = prepTargets(bot, ctx, st, now)
-    const c = list.find((o) => !done(bot, o) && !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now))
+    const c = nearestPrep(bot, list.filter((o) => !done(bot, o) && !(st.blocked[bkey(st, o.idx)] && st.blocked[bkey(st, o.idx)].until > now)))
     if (c) {
       if (!ctx.castlePrepSaid) {
         ctx.castlePrepSaid = true
@@ -2876,6 +2897,7 @@ module.exports.far = far
 module.exports.nextLitter = nextLitter
 // Task executive (vmzq.2): prep remaining for the stall clock (cached 30 s).
 module.exports.prepTargets = prepTargets
+module.exports.nearestPrep = nearestPrep
 // Site storage (vmzq.39): stockpile reuses the stow ring and the door path.
 module.exports.stowSpot = stowSpot
 module.exports.onDoorPath = onDoorPath
