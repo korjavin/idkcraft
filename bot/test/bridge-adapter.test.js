@@ -30,6 +30,14 @@ function spikeBot(state = {}) {
 }
 
 describe('goal translation (pathfinder -> Baritone)', () => {
+  it('climbs a high wall cell from an open side, not the laid course', () => {
+    // prod -166 82 409: the dominant side (-165) is the wall itself
+    const g = new goals.GoalPlaceBlock(new Vec3(-166, 82, 409), { getBlock: () => null }, { range: 4 })
+    const solid = new Set(['-165,82,409', '-165,83,409', '-167,82,409', '-167,83,409'])
+    const blockAt = (x, y, z) => ({ boundingBox: solid.has(`${x},${y},${z}`) ? 'block' : 'empty' })
+    assert.equal(goalToBaritone(g, { x: -164, y: 75, z: 411 }, blockAt), '#goto -166 82 410')
+    assert.equal(goalToBaritone(g, { x: -164, y: 75, z: 411 }), '#goto -165 82 409') // no world read: old pick
+  })
   it('maps the walk goals to #goto', () => {
     assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 2)), '#near 1 64 -3 2') // neuc.21: the range rides along
     assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 1.5)), '#near 1 64 -3 1') // floored: never wider than isEnd

@@ -207,6 +207,15 @@ function goalToBaritone(goal, from, blockAt) {
     const range = (goal.options && typeof goal.options.range === 'number') ? goal.options.range
       : (typeof goal.reach === 'number' ? goal.reach : 4)
     if (py - fy > range - 1) {
+      // A wall cell's along-wall neighbour is the laid course: feet in a
+      // solid block never path (prod: -166 82 409 'unreachable' x4). Take
+      // the first side whose feet + head read open, dominant side first.
+      if (typeof blockAt === 'function') {
+        const open = (x, y, z) => { try { const b = blockAt(x, y, z); return !!b && b.boundingBox === 'empty' } catch (_) { return false } }
+        const sides = [[nx, nz], [2 * px - nx, 2 * pz - nz], ...(nx !== px ? [[px, pz + 1], [px, pz - 1]] : [[px + 1, pz], [px - 1, pz]])]
+        const s = sides.find(([x, z]) => !(x === fx && py === fy && z === fz) && open(x, py, z) && open(x, py + 1, z))
+        if (s) { nx = s[0]; nz = s[1] }
+      }
       if (nx === fx && py === fy && nz === fz) return null
       return `#goto ${nx} ${py} ${nz}`
     }
