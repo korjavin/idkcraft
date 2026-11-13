@@ -211,8 +211,17 @@ function tablePathOf(bot, ctx, pack) {
   if ((pack.crafting_table || 0) > 0) return 'pack'
   // Logs fund the table through a planks op first (did.4 core-1): the
   // executor converts, the planner only checks the worth here.
-  if (totalPlanks(pack) + 4 * totalLogs(pack) >= 4) return 'make'
+  if (tableWood(pack)) return 'make'
   return null
+}
+
+// A table is one wood's 4 planks (idkcraft-stairs): 2 oak + 2 spruce read
+// 'make' on the total, pickTableRecipe found no variant, and the stairs
+// craft refused 'need a crafting table' forever while castlefetch read the
+// table as funded and never chopped a log.
+function tableWood(pack) {
+  if (totalLogs(pack) >= 1) return true
+  return Object.entries(pack).some(([n, c]) => isPlanks(n) && c >= 4)
 }
 
 // Registry id -> item name (planCraft builds its own inline; the executor
@@ -557,3 +566,5 @@ function craftItem(bot, ctx, name, count) {
 module.exports = craftItem
 module.exports.planCraft = planCraft
 module.exports.standingTable = standingTable
+module.exports.tableWood = tableWood
+module.exports.packCounts = packCounts

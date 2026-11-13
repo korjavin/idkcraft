@@ -1034,19 +1034,20 @@ function farLoad(bot, ctx, kind, short) {
 // never pulled from the bank for a table the bot can walk to.
 function stairsTableFunded(bot, ctx) {
   if (countItems(bot, (n) => n === 'crafting_table') > 0) return true
-  if (countItems(bot, (n) => n.endsWith('_planks')) + 4 * countItems(bot, (n) => n.endsWith('_log')) >= 4) return true
-  try { if (require('./craftany').standingTable(bot, ctx)) return true } catch (_) { /* unreadable claim: draw */ }
+  try {
+    const ca = require('./craftany')
+    if (ca.tableWood(ca.packCounts(bot)) || ca.standingTable(bot, ctx)) return true
+  } catch (_) { /* unreadable claim: draw */ }
   return false
 }
 
 // The stairs table is still unfunded (vf8e.8): the craft failed out on
 // the table (f.tableRetry latched by a 'crafting table' line) and the
 // pack holds no table, no 4 planks-worth, no reachable standing table.
-// v2 only after the 8njf stone batch (ctx.castleStairsMines > 0) —
-// stone first, then the log.
+// v2 too before any stone batch (idkcraft-stairs): mining stone never
+// funds a table, so an unfunded one chops its log first.
 function stairsTableBroke(bot, ctx, f) {
   if (!f.craftOut || !f.tableRetry) return false
-  if (process.env.BOT_BODY === 'baritone' && !(ctx.castleStairsMines > 0)) return false
   return !stairsTableFunded(bot, ctx)
 }
 
@@ -3033,7 +3034,7 @@ function castlefetch(bot, ctx, target, state) {
   // instead of a mine loop the watchdog reads as flat. v1 untouched (its
   // digTick can end at once on a full cobble stock — a per-tick re-pick).
   let stairsMine = false
-  if (d.kind === 'stairs' && f.craftOut && typeof bot.mine === 'function' && !stairsCobbleShort(bot)) {
+  if (d.kind === 'stairs' && f.craftOut && typeof bot.mine === 'function' && !stairsCobbleShort(bot) && !stairsTableBroke(bot, ctx, f)) {
     if (!f.stairsMine && !(ctx.castleStairsMines > 0)) {
       f.stairsMine = true
       ctx.castleStairsMines = 1

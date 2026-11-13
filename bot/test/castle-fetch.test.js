@@ -724,28 +724,23 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     }
   })
 
-  it('v2: after the stone batch the next table-broke leg gathers instead of holding (vf8e.8 revmux 01 core-4)', async () => {
+  it('v2: an unfunded table chops its log at once, no stone batch first (idkcraft-stairs)', async () => {
     castleMod.menuFact = stairsWord
     const wasBody = process.env.BOT_BODY
     process.env.BOT_BODY = 'baritone'
     fetch.deps.craftItem = () => ({ done: false, line: 'need a crafting table' })
     try {
       const mined = []
-      const bot = makeBot({ items: stairsPack() })
+      // Mixed planks (2+2) fund no table: the prod bot3 pack.
+      const bot = makeBot({ items: [...stairsPack(), { name: 'oak_planks', count: 2 }, { name: 'spruce_planks', count: 2 }] })
       bot.equip = async (item) => { bot.heldItem = item }
       bot.mine = (names, count) => { mined.push(count); return new Promise(() => {}) }
-      bot.entity.position = pos(500, 64, 500) // outside the site guard: the mine arms at once
-      const ctx = { castle: castleState() }
-      for (let i = 0; i < 40 && mined.length === 0 && !ctx.stepStatus; i++) { fetch(bot, ctx); await settle() }
-      assert.deepEqual(mined, [16], 'the stone batch still comes first')
-      // The next leg (the batch landed 'done'): no wood, table still out.
-      ctx.castleFetch = null
-      ctx.castleFetchInFlight = false
-      ctx.castleFetchMine = false
+      bot.entity.position = pos(500, 64, 500)
       let chopped = 0
       fetch.deps.gather = () => { chopped++ }
-      fetch(bot, ctx)
-      fetch(bot, ctx)
+      const ctx = { castle: castleState() }
+      for (let i = 0; i < 4 && chopped === 0; i++) { fetch(bot, ctx); await settle() }
+      assert.deepEqual(mined, [], 'stone never funds a table')
       assert.equal(chopped, 1, 'the unfunded v2 leg chops instead of holding')
       assert.equal(ctx.stepStatus, undefined)
     } finally {

@@ -52,3 +52,11 @@ describe('craftany table tries (unm6)', () => {
     assert.deepEqual(res, { done: false, line: 'need a crafting table' })
   })
 })
+
+describe('table wood is one wood (idkcraft-stairs)', () => {
+  it('2 oak + 2 spruce planks fund no table; 4 of one wood or any log does', () => {
+    assert.equal(craftany.tableWood({ oak_planks: 2, spruce_planks: 2, cobblestone: 64 }), false)
+    assert.equal(craftany.tableWood({ oak_planks: 4 }), true)
+    assert.equal(craftany.tableWood({ birch_log: 1 }), true)
+  })
+})
