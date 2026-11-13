@@ -15,3 +15,13 @@ it('foodRecovery/chestSearch are not eligible stall time', () => {
     assert.equal(task.eligible({}, { work: true, step: 'chestSearch' }), false)
   } finally { site.timeWord = orig }
 })
+
+it('fight/shelter body owners pause the clock; recover does not', () => {
+  const orig = site.timeWord
+  site.timeWord = () => 'day'
+  try {
+    assert.equal(task.eligible({}, { work: true, step: 'castle', body: { owner: 'fight' } }), false)
+    assert.equal(task.eligible({}, { work: true, step: 'shelter' }), false)
+    assert.equal(task.eligible({}, { work: true, step: 'castle', body: { owner: 'recover' } }), true)
+  } finally { site.timeWord = orig }
+})
