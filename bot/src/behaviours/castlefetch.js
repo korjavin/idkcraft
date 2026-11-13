@@ -2050,6 +2050,19 @@ function guardExit(guard, bp) {
   return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: guard.z1 + 1 }
 }
 
+// Point pad blocks past the guard edge nearest the body, on the body's
+// side of the site (dead-quarry arm spot).
+const DEAD_AWAY = 12
+function nearGuard(guard, bp, pad) {
+  return bp.x > guard.x0 - pad && bp.x < guard.x1 + 1 + pad && bp.z > guard.z0 - pad && bp.z < guard.z1 + 1 + pad
+}
+function awayPoint(guard, bp, pad) {
+  const cx = (guard.x0 + guard.x1) / 2, cz = (guard.z0 + guard.z1) / 2
+  const ox = (bp.x - cx) / Math.max(1, guard.x1 - guard.x0), oz = (bp.z - cz) / Math.max(1, guard.z1 - guard.z0)
+  if (Math.abs(ox) >= Math.abs(oz)) return { x: ox < 0 ? guard.x0 - pad : guard.x1 + pad, y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  return { x: Math.floor(bp.x), y: Math.floor(bp.y), z: oz < 0 ? guard.z0 - pad : guard.z1 + pad }
+}
+
 // Trench side s (0..3) on ring (0..1, vmzq.31): origin column just
 // outside the footprint near a corner (the entrance sits mid-side, never
 // in front of it), the outward direction and the width axis. Ring 1 works
@@ -2583,6 +2596,19 @@ function digTick(bot, ctx, f, d) {
       if (!f.qTarget && !f.qRecoverySaid) {
         f.qRecoverySaid = true
         try { console.log('castlefetch quarry recovery: all sides dead/dug, mining in place') } catch (_) { /* log best-effort */ }
+      }
+    }
+    // Dead quarry (prod bot3: 'all sides dead/dug, mining in place' then
+    // mine-leash in ~1 s, dug=0): from the guard edge the nearest natural
+    // rock is under/inside the site, Baritone steps in and the forbid
+    // leash trips. Arm DEAD_AWAY blocks out so the nearest rock is outside.
+    if (!f.qTarget && guard && (f.deadAway || nearGuard(guard, bp, DEAD_AWAY))) {
+      const away = f.deadAway || (f.deadAway = awayPoint(guard, bp, DEAD_AWAY))
+      const ad = Math.hypot(bp.x - (away.x + 0.5), bp.z - (away.z + 0.5))
+      if (ad > 3) {
+        walkTo(bot, ctx, `castlefetch-away:${away.x},${away.z}`, away, 2, true)
+        spend(f, 'walk')
+        if (!stalled(f.awayWalk || (f.awayWalk = {}), ad, APPROACH_WAITS)) return
       }
     }
     const qt = f.qTarget
@@ -3273,3 +3299,4 @@ module.exports.STONE_BELOW = STONE_BELOW
 module.exports.STONE_ABOVE = STONE_ABOVE
 module.exports.drawChest = drawChest
 module.exports.MINE_ROCK = MINE_ROCK
+module.exports.awayPoint = awayPoint

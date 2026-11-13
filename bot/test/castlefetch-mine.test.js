@@ -464,3 +464,24 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     } finally { castleMod.menuFact = origMenuFact }
   })
 })
+
+describe('castlefetch v2 dead quarry walks away from the site before mining', () => {
+  it('at the guard edge it walks DEAD_AWAY out first, then arms there', () => {
+    const bot = mockBot({
+      items: [{ name: 'stone_pickaxe', count: 1 }],
+      pos: { x: -2.5, y: 64, z: 5.5 }, // one past the -x guard edge
+      mineImpl: (b, calls) => async (names, count, opts) => { calls.mine.push({ opts }) },
+    })
+    const goals = []
+    bot.pathfinder = { setGoal: (g) => { goals.push(g); bot.pathfinder.goal = g } }
+    const ctx = stoneCtx()
+    const d = { kind: 'stone', word: 'batch', short: 8 }
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, d)
+    assert.equal(bot.calls.mine.length, 0, 'no in-place arm at the edge (prod: mine-leash in 1 s)')
+    assert.deepEqual(ctx.castleFetch.deadAway, { x: -13, y: 64, z: 5 })
+    assert.ok(goals.length >= 1)
+    bot.entity.position = { x: -12.5, y: 64, z: 5.5 }
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, d)
+    assert.equal(bot.calls.mine.length, 1, 'arms once away')
+  })
+})
