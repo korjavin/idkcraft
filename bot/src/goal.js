@@ -2765,6 +2765,9 @@ function stickyHold(bot, ctx, facts, prev, status, finished, nightFarWalk) {
   // shelter is night-infeasible — and through the behaviour's own done.
   // Near home the hold releases too (revmux 02): a death that respawns by
   // the house must walk in (gohome/stay), not pillar outside it all night.
+  // p5hk: a dawn field bed holds shelter until the bed is back in the pack
+  // (the step's own bounded pickup ends it done).
+  if (!finished && prev === 'shelter' && facts.time === 'day' && ctx.shelter && ctx.shelter.fieldBed) return { action: prev, sprint: false, source: 'goal-fsm' }
   if (!finished && !nightFarWalk && (prev === 'gohome' || prev === 'stay' || (prev === 'shelter' && shelterFits(facts, bot, ctx)))) {
     if (prev === 'shelter') return { action: prev, sprint: false, source: 'goal-fsm' }
     const ph = prev === 'gohome' ? ctx.gohome && ctx.gohome.phase : ctx.stay && ctx.stay.phase
