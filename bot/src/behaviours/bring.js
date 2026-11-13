@@ -1406,6 +1406,8 @@ function openPhase(ctx) {
 // NEARBY_CHEST_RADIUS. Tried positions (o.chestSeen) stay skipped, so a
 // leg never re-opens a chest. Null when every chest is tried or none is
 // near — the caller falls back exactly as the chestless path did.
+const SITE_CHEST_RADIUS = 48 // the castle is 62x54: its chests sit up to ~40 from the centre
+const SITE_CHEST_TRIP = 100
 function pickChest(bot, ctx, o) {
   try {
     if (!o || typeof o !== 'object') return null
@@ -1423,7 +1425,14 @@ function pickChest(bot, ctx, o) {
       if (hk !== null && !o.chestSeen.includes(hk)) return { pos: h, home: true }
     }
     let rest = stockpileMod.nearbyChests(bot, ctx, o.chestSeen, o.maxChestDistance).filter(within)
-    if (typeof o.wants === 'function') rest = rest.map((c) => [c, hope(c)]).filter((e) => e[1] > 0).sort((a, b) => b[1] - a[1]).map((e) => e[0])
+    if (typeof o.wants === 'function') {
+      // owner 2026-11-13 hunger: the owner restocks the castle-site chests — with one known there, no >100-block chest trips and site chests go first
+      const site = ctx && ctx.castle && ctx.castle.site
+      const atSite = (c) => !!(site && Math.hypot(c.x - site.x, c.y - site.y, c.z - site.z) <= SITE_CHEST_RADIUS)
+      const b = bot && bot.entity && bot.entity.position
+      if (b && (ctx.chests || []).some((c) => c && typeof c.x === 'number' && atSite(c))) rest = rest.filter((c) => atSite(c) || Math.hypot(b.x - c.x, b.y - c.y, b.z - c.z) <= SITE_CHEST_TRIP)
+      rest = rest.map((c) => [c, hope(c) + (atSite(c) ? 0.5 : 0)]).filter((e) => e[1] >= 1).sort((a, b) => b[1] - a[1]).map((e) => e[0])
+    }
     if (rest.length > 0) return { pos: rest[0], home: false }
     // Armor trim chest scan (idkcraft-3dkc): when searching for armor trims,
     // scan the loaded area for chests before giving up.

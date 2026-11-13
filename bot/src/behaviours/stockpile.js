@@ -2323,6 +2323,7 @@ module.exports.CHEST_SPOTS = CHEST_SPOTS
 module.exports.CHEST_SPOTS_V2 = CHEST_SPOTS_V2
 module.exports.spotsFor = spotsFor
 module.exports.FOOD_KEEP = FOOD_KEEP
+module.exports.edibles = edibles
 module.exports.SCAFFOLD_KEEP = SCAFFOLD_KEEP
 module.exports.SAPLING_KEEP = SAPLING_KEEP
 module.exports.WHEAT_KEEP = WHEAT_KEEP
