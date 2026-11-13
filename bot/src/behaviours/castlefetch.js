@@ -1188,6 +1188,14 @@ async function drawChest(bot, ctx, d, at, need) {
       if (r && r.got > 0) try { console.log(`castlefetch ${d.kind}: drew ${r.name} x${r.got} for the forest`) } catch (_) { /* log best-effort */ }
     }
   }
+  // owner 2026-11-13 nights: a bedless bot takes one bed from any chest it opens (home.js field bed sleeps it at the castle)
+  if (seen && countItems(bot, (n) => n.endsWith('_bed')) === 0) {
+    const names = Object.keys(seen).filter((n) => n.endsWith('_bed') && seen[n] > 0)
+    if (names.length > 0) {
+      const r = await drawFrom(names, 1)
+      if (r && r.got > 0) try { console.log(`castlefetch ${d.kind}: drew ${r.name} x${r.got} for the night`) } catch (_) { /* log best-effort */ }
+    }
+  }
   return { left: need, fund, counts: seen }
 }
 
