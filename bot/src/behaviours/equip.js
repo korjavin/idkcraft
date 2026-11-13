@@ -408,7 +408,7 @@ function toolOp(bot, kind) {
 
 function digTargets(bot) {
   const names = ['dirt', 'grass_block']
-  if (hasPickaxe(bot)) names.push('stone', 'cobblestone')
+  if (hasPickaxe(bot)) names.push('stone') // never cobblestone: castle walls are cobble (owner 2026-11-13)
   return names
 }
 

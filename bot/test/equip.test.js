@@ -2886,7 +2886,7 @@ describe('equip v2 mine branch (idkcraft-neuc.53)', () => {
     const ctx = freshCtx()
     equip(bot, ctx, null, {})
     assert.equal(mines.length, 1, 'exactly one mine call')
-    assert.deepEqual(mines[0].names, ['dirt', 'grass_block', 'stone', 'cobblestone'])
+    assert.deepEqual(mines[0].names, ['dirt', 'grass_block', 'stone'])
     assert.equal(mines[0].count, 22, 'SCAFFOLD_FULL(32) - scaffold(10)')
     assert.equal(mines[0].opts.radius, 12)
     assert.equal(typeof mines[0].opts.forbid, 'function')

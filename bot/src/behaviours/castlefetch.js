@@ -105,6 +105,8 @@ const DIG_TIMEOUT_MS = 10000
 // counts, and every leg stalls at 60 s with +a few uncounted blocks.
 const STONE_FAMILY = Array.isArray(blueprint.STONE_ITEMS) && blueprint.STONE_ITEMS.length > 0
   ? [...blueprint.STONE_ITEMS] : ['stone', 'cobblestone']
+// owner 2026-11-13: mine natural rock only — cobblestone and dressed stone are what the castle walls are made of (prod bot3 mined its own walls: castle 2451 -> 2441)
+const MINE_ROCK = STONE_FAMILY.filter((n) => n !== 'cobblestone' && !/^(polished_|cobbled_|cracked_|chiseled_)|_(bricks|tiles)$/.test(n))
 const CHEST_REACH = stockpileMod.INTERACT_REACH
 const CHEST_WAITS = 30 // ticks without closing in on the chest
 const CHEST_TIMEOUT_MS = 15000
@@ -2621,7 +2623,7 @@ function digTick(bot, ctx, f, d) {
     let armHave = 0
     try { armHave = cobble(bot) } catch (_) { /* pack unreadable: no reloc below */ }
     f.mineArmHave = armHave
-    bot.mine(STONE_FAMILY, need, { radius: DIG_RADIUS, forbid, guard }).then(
+    bot.mine(MINE_ROCK, need, { radius: DIG_RADIUS, forbid, guard }).then(
       () => { settleMine(); if (!settled()) finish(bot, ctx, 'done') },
       (err) => {
         settleMine()
@@ -3252,3 +3254,4 @@ module.exports.FIND_COUNT = FIND_COUNT
 module.exports.STONE_BELOW = STONE_BELOW
 module.exports.STONE_ABOVE = STONE_ABOVE
 module.exports.drawChest = drawChest
+module.exports.MINE_ROCK = MINE_ROCK
