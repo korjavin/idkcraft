@@ -305,6 +305,11 @@ function blockCell(ctx, st, c, why, now) {
   // evidence retires fast — a transient fail in between resets the streak.
   if (why === 'protected') e.prot = (e.prot | 0) + 1
   else delete e.prot
+  // A batch-wide wedge hands the hole to the per-cell path for good: the
+  // batch re-picked it after each backoff and the next wedge struck it
+  // again (prod bot3 2026-11-13: 73 holes, 8 wedges -> retired unseen by
+  // the per-cell stance logic). castleBuilderCells skips a wide hole.
+  if (why === 'build-miss-wide') e.wide = true
   // Bounded retry (revmux 01): the MAX_HOLE_TRIES-th block retires the
   // hole — still reported, never picked or waited on again. Builder
   // refusals retire faster (idkcraft-synq BUILD_MISS_TRIES above) and
@@ -2505,7 +2510,7 @@ function castleBuilderCells(bot, ctx, st) {
       if (!CASTLE_BUILDER_KINDS.has(c.kind) || c.prep) continue
       if (done(bot, c)) continue
       const b = blocked[bkey(st, c.idx)]
-      if (b && (b.retired || b.until > now)) continue
+      if (b && (b.retired || b.until > now || b.wide || b.why === 'build-miss-wide')) continue // a wide hole is per-cell only (why survives a restart)
       if (lavaNear(bot, c)) continue // the per-cell path holds it (why=lava); the batch never lays it into the fire
       // Stand-floor gate (idkcraft-synq): a cell whose plan cell below is
       // an unlaid place target that is NOT itself in this batch (unheld

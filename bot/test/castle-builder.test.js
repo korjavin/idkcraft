@@ -361,6 +361,19 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     assert.equal(by.cobblestone + (by.andesite | 0), stone.length, 'only held names')
   })
 
+  it('a wide-wedge hole stays out of the batch after its backoff (per-cell retry)', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: 3, blocked: {} }
+    const first = castle.castleBuilderCells(bot, {}, st).cells
+    const ver = blueprint.blueprintOf(3).version
+    st.blocked[`${ver}:${first[0].idx}`] = { tries: 2, until: 0, why: 'build-miss-wide' }
+    st.blocked[`${ver}:${first[1].idx}`] = { tries: 2, until: 0, why: 'unreachable' }
+    const idx = castle.castleBuilderCells(bot, {}, st).cells.map((c) => c.idx)
+    assert.ok(!idx.includes(first[0].idx), 'wide hole is per-cell only')
+    assert.ok(idx.includes(first[1].idx), 'other expired holes still batch')
+  })
+
   it('two refused cells retire after 3 stalls (round-2 core-1, synq one-shot)', async () => {
     const world = makeWorld()
     const plan = blueprint.absPlan(SITE, 0, 3).cells
