@@ -22,6 +22,11 @@ const PARK_FORAGE_RADIUS = 64
 // precedent — goal.js loads inside the behaviour chain).
 // (.22) a house-<step> unlock lifts the veto for that step only — never
 // wholesale (peer Q3). Pass the step name; omitted keeps the veto.
+// The castle fetch named the wood ceiling (castlefetch NO_WOOD status).
+function woodStarved(ctx) {
+  const st = ctx && ctx.castle && ctx.castle.status
+  return typeof st === 'string' && st.startsWith('no wood within')
+}
 function castleFirst(ctx, step = null) {
   try {
     if (step) {
@@ -31,6 +36,8 @@ function castleFirst(ctx, step = null) {
       } catch (_) { /* no unlock */ }
       // zz85: a player-issued order outranks the veto for its own step.
       if (orderOwnsStep(ctx, step)) return false
+      // owner 2026-11-13: no tree near the castle -> grow one; reforest runs under the castle order
+      if (step === 'reforest' && woodStarved(ctx)) return false
     }
     return !!require('./behaviours/explore').castleActive(ctx)
   } catch (_) {
@@ -91,4 +98,4 @@ function orderOwnsStep(ctx, step) {
   }
 }
 
-module.exports = { PARK_FORAGE_RADIUS, castleFirst, homeLegVetoed, taskParked, orderOwnsStep }
+module.exports = { PARK_FORAGE_RADIUS, castleFirst, woodStarved, homeLegVetoed, taskParked, orderOwnsStep }

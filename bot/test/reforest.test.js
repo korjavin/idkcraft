@@ -169,6 +169,12 @@ describe('reforest feasibility', () => {
     assert.equal(reforest.reforestFeasible(day, mockBot(), ctxOf(castle)), false)
   })
 
+  it('feasible under a castle order that ran out of wood (grow a forest)', () => {
+    const castle = { site: { x: 100, y: 64, z: 100 }, phase: 'lay', status: 'no wood within 64 — drop logs in the castle chest' }
+    assert.equal(reforest.reforestFeasible(day, mockBot(), ctxOf(castle)), true)
+    assert.equal(require('../src/vetoes').castleFirst(ctxOf(castle), 'reforest'), false)
+  })
+
   it('infeasible with a full pack', () => {
     const full = []
     for (let i = 0; i < 36; i++) full.push({ name: 'cobblestone', count: 64, stackSize: 64 })

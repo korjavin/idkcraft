@@ -507,7 +507,7 @@ function reforestFeasible(facts, bot, ctx) {
     // the arbiter veto (vetoes.castleFirst) already does; without this the
     // pin never starts and stepWhy misreports 'no leaves nearby'.
     try {
-      if (require('./explore').castleActive(ctx) && !require('../vetoes').orderOwnsStep(ctx, 'reforest')) return false
+      if (require('./explore').castleActive(ctx) && !require('../vetoes').orderOwnsStep(ctx, 'reforest') && !require('../vetoes').woodStarved(ctx)) return false
     } catch (_) {
       return false
     }
