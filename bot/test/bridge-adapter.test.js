@@ -38,6 +38,12 @@ describe('goal translation (pathfinder -> Baritone)', () => {
     assert.equal(goalToBaritone(g, { x: -164, y: 75, z: 411 }, blockAt), '#goto -166 82 410')
     assert.equal(goalToBaritone(g, { x: -164, y: 75, z: 411 }), '#goto -165 82 409') // no world read: old pick
   })
+  it('stands on the room floor under a high ceiling cell, not a mid-air pillar', () => {
+    // prod -157 78 404: floor at y75, body on a lower floor at y73
+    const g = new goals.GoalPlaceBlock(new Vec3(-157, 78, 404), { getBlock: () => null }, { range: 4 })
+    const blockAt = (x, y, z) => ({ boundingBox: y <= 75 ? 'block' : 'empty' })
+    assert.equal(goalToBaritone(g, { x: -158, y: 73, z: 398 }, blockAt), '#goto -157 76 404')
+  })
   it('maps the walk goals to #goto', () => {
     assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 2)), '#near 1 64 -3 2') // neuc.21: the range rides along
     assert.equal(goalToBaritone(new goals.GoalNear(1, 64, -3, 1.5)), '#near 1 64 -3 1') // floored: never wider than isEnd
