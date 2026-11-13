@@ -36,7 +36,9 @@ function noMeal(bot, ctx) {
 function hungry(bot, ctx, facts) {
   if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || !foodTime(bot, facts) || !(bot.food < HUNGRY_FOOD) || facts.health < 6) return false
   if (ctx && (ctx.llmOrder || ctx.taskPlanArgs)) return false
-  return noMeal(bot, ctx) && !!bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT, bot))
+  // Source ladder (src/source-ladder.js): pack bread, a near chest, then a
+  // hunt; chestSearch (the long-trip rung) only once none of these serves.
+  return noMeal(bot, ctx) && !!(breadReady(bot, ctx) || bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT, bot)) || forage.foodTarget(bot, ctx, true))
 }
 
 function needed(bot, ctx, facts) {
@@ -91,8 +93,8 @@ function available(bot, ctx, facts) {
   if (!needed(bot, ctx, facts) || (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt)) return false
   if (ctx.foodRecoveryFlight) return false
   if (breadReady(bot, ctx)) return true
-  // remembered chest -> chest search -> hunt: no hunt while a search is due
-  const other = !!(bring.pickChest(bot, ctx, chestState(ctx, 1, bot)) || (!require('./chestsearch').searchFirst(bot, ctx) && forage.foodTarget(bot, ctx, true)))
+  // ladder: near chest -> hunt (obtain) -> chestSearch, the far rung, once this holds
+  const other = !!(bring.pickChest(bot, ctx, chestState(ctx, 1, bot)) || forage.foodTarget(bot, ctx, true))
   const wheat = wheatCount(bot)
   if (!other && wheat >= 3 && !(ctx.foodBreadRetryAt && Date.now() < ctx.foodBreadRetryAt) && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
     ctx.foodBreadLogAt = Date.now()
@@ -177,13 +179,7 @@ function run(bot, ctx) {
       else done(false)
       return
     }
-    if (r.chest.phase === 'find' && r.hungry) { done(true); return } // shortcut: hungry runs are chest-only; hunting stays low-HP
-    if (r.chest.phase === 'find' && require('./chestsearch').searchFirst(bot, ctx)) {
-      r.valid = false // chests out: end without a hunt or retry hold, so decide picks the chest search
-      console.log('food recovery result=search health=' + bot.health + ' food=' + bot.food)
-      stepDone(ctx)
-      return
-    }
+    // near chests out: the obtain rung (hunt) in the same leg, never a fail
     if (r.chest.phase === 'find') { r.phase = 'hunt'; ctx.lastGoalKey = ''; return }
     const flight = { owner: r, at: Date.now() }
     ctx.foodRecoveryFlight = flight
