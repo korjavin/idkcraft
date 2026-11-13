@@ -309,6 +309,27 @@ describe('9kd sheepless day latch', () => {
     assert.equal(F(FACTS, bot, ctx), true, 'expired latch retries')
   })
 
+  it('a known far wool chest lifts the latch and opens a chest fetch before any hunt', () => {
+    const bot = bedsBot()
+    const ctx = { bot, home: v2home({ x: 10, y: 64, z: 20 }), beds: { phase: 'wool' } }
+    failedEpisode(ctx)
+    failedEpisode(ctx)
+    const F = goal.MENU.beds.feasible
+    assert.equal(F(FACTS, bot, ctx), false, 'latched with no chest')
+    ctx.peerChests = [{ x: 600, y: 64, z: 20, contents: { gray_wool: 9 }, at: Date.now() }, { x: 400, y: 64, z: 20 }]
+    ctx.peerChestsAt = Date.now()
+    assert.ok(beds.knownWoolChest(bot, ctx), 'peer snapshot with wool is known')
+    assert.equal(F(FACTS, bot, ctx), true, 'wool chest lifts the latch')
+    ctx.beds = { phase: 'wool' }
+    ctx.bring = null
+    beds(bot, ctx)
+    assert.equal(ctx.bring && ctx.bring.phase, 'chestfetch')
+    const t = require('../src/behaviours/bring').pickChest(bot, ctx, ctx.bring)
+    assert.equal(t && t.pos.x, 600, 'the far snapshot-less chest is skipped, the wool one picked')
+    ctx.chests = [{ x: 600, y: 64, z: 20, contents: {}, at: Date.now() }]
+    assert.equal(beds.knownWoolChest(bot, ctx), null, 'own empty read shadows the peer snapshot')
+  })
+
   it('short reopened hunts do not count, latch input never throws', () => {
     const bot = bedsBot()
     const ctx = { bot, home: v2home({ x: 10, y: 64, z: 20 }), beds: { phase: 'wool', hunt: { searchLegs: { legs: 3 } } } }

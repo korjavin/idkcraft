@@ -265,8 +265,23 @@ function sheepLatched(ctx, bot, now) {
   return latchLive(ctx, bot, now)
 }
 
+// A known chest (own or peer sighting, castlefetch's far radius) whose
+// last read shows wool: no sheep needed. nearbyChestsAll lists own entries
+// first, so an own read of a drained chest shadows the peer snapshot.
+const WOOL_CHEST_RADIUS = 1000
+function isWool(n) { return typeof n === 'string' && n.endsWith('_wool') }
+function knownWoolChest(bot, ctx) {
+  try {
+    for (const c of stockpileMod.nearbyChestsAll(bot, ctx, [], WOOL_CHEST_RADIUS)) {
+      if (c.contents && Object.entries(c.contents).some(([n, v]) => v > 0 && isWool(n))) return c
+    }
+  } catch (_) { /* no known chest */ }
+  return null
+}
+
 function latchLive(ctx, bot, now) {
   try {
+    if (knownWoolChest(bot, ctx)) return false
     const st = ctx && ctx.beds
     const cur = st && st.noWool
     if (!cur || typeof cur !== 'object' || typeof cur.at !== 'number') return false
@@ -424,7 +439,9 @@ function woolTick(bot, ctx, st, pack, craftsOwed) {
   const base = { kind: 'item', name: 'wool', names: WOOL16.slice(), want: need, by: null, drop: null, have: 0 }
   let o = null
   try {
-    o = direct ? bringMod.toWoolHunt(bot, base) : { ...base, phase: bringMod.openPhase(ctx), announced: false }
+    // Remembered/peer wool chests up to the far radius come before any hunt (prod bot3: sheepless site, wool in a peer chest).
+    const far = !direct && knownWoolChest(bot, ctx) ? { phase: 'chestfetch', peerChests: true, wants: isWool, maxChestDistance: WOOL_CHEST_RADIUS } : null
+    o = direct ? bringMod.toWoolHunt(bot, base) : { ...base, phase: bringMod.openPhase(ctx), ...far, announced: false }
   } catch (_) { o = null }
   if (!o) { ctx.stepStatus = 'failed:no-wool'; return }
   o.self = 'beds'
@@ -721,6 +738,7 @@ module.exports.bedroomBed = bedroomBed
 module.exports.adoptBeds = adoptBeds
 module.exports.bedsFact = bedsFact
 module.exports.sheepLatched = sheepLatched
+module.exports.knownWoolChest = knownWoolChest
 module.exports.noteNoWool = noteNoWool // g0z.35: the castle banner hunt shares the one sheep latch
 module.exports.WOOL16 = WOOL16
 module.exports.placeHeld = placeHeld
