@@ -211,6 +211,11 @@ function ownerOnline(bot) {
   }
 }
 
+// Survival is not a stall (owner 2026-11-13): eating, sheltering, fighting
+// own the body for the bot's sake, not because the task is stuck. A stuck
+// recover is not survival: it stays eligible so a wedged task still parks.
+const SURVIVAL_STEPS = new Set(['foodRecovery', 'chestSearch', 'shelter', 'eat'])
+const SURVIVAL_OWNERS = new Set(['fight', 'shelter'])
 function eligible(bot, ctx) {
   if (!timeDay(bot)) return false
   if (!ctx || !ctx.work || ctx.paused) return false
@@ -218,9 +223,8 @@ function eligible(bot, ctx) {
   // A running flat order owns the body (vmzq.8): the L1 must not fire
   // mid-order. A parked flat episode (stop) is not running.
   if (ctx.flat && !ctx.flat.parked) return false
-  // Survival is not a stall (owner 2026-11-13: prod bot3 castle parked for
-  // 60 min on a foodRecovery run, then walked 600 blocks home).
-  if (ctx.step === 'foodRecovery' || ctx.step === 'chestSearch') return false
+  if (SURVIVAL_STEPS.has(ctx.step)) return false
+  try { if (ctx.body && SURVIVAL_OWNERS.has(ctx.body.owner)) return false } catch (_) { /* owner unknown: eligible */ }
   return true
 }
 

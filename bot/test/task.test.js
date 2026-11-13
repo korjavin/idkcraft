@@ -658,7 +658,7 @@ describe('task stall clock (vmzq.2)', () => {
     assert.ok((ctx.task.house.stallMs || 0) >= 900000, 'first reading does not reset')
   })
 
-  it('runTick advances the stall on sheltered fight ticks (core-5)', async () => {
+  it('runTick pauses the stall on sheltered fight ticks (owner 2026-11-13: survival is not a stall)', async () => {
     // Pins the hook position: the shelter/fight short-circuits must not skip it.
     const bot = makeBot()
     bot.blockAt = () => null
@@ -673,7 +673,7 @@ describe('task stall clock (vmzq.2)', () => {
     assert.ok(ctx.task && ctx.task.castle, 'hook ran on the first tick')
     ctx.task.castle.lastAt = Date.now() - 5000
     await ticker.tick()
-    assert.ok((ctx.task.castle.stallMs || 0) >= 4000, `stall advanced on a sheltered fight tick, got ${ctx.task.castle.stallMs}`)
+    assert.ok((ctx.task.castle.stallMs || 0) < 4000, `stall paused on a sheltered fight tick, got ${ctx.task.castle.stallMs}`)
   })
 
   it('castle unread since connect still reports (verify core-1)', () => {
