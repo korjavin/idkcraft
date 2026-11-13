@@ -74,6 +74,7 @@ const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: cas
 const LOAD = { ...FETCH, stone: 296, planks: 62, stairs: 64 }
 function capOf(kind) { return process.env.BOT_BODY === 'baritone' ? LOAD[kind] : FETCH[kind] }
 const LEG_MAX_MS = 5 * 60 * 1000
+const MINE_BATCH = 64 // v2: stone per bridge mine before the leg hands back to the castle
 // One craft op per call; the next tick re-checks the target.
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, enchanting_table: 1, blast_furnace: 1, stairs: 4, gate: 1 }
 const TABLE_OBSIDIAN = 4 // vanilla enchanting_table recipe (craftTick crafts it whole)
@@ -2567,7 +2568,11 @@ function digTick(bot, ctx, f, d) {
     // while the castle could lay, and the LEG_MAX_MS yield never fires
     // mid-mine.
     const raw = (d && typeof d.short === 'number' && d.short > 0) ? d.short : castleMod.BATCH
-    const need = raw // owner 2026-11-13 haul: the whole load (demand caps stone by room, picks and the keep)
+    // Prod 2026-11-13 (castle 3618/11493 for 35 min): a 320-stone mine held
+    // the body while each gain reset the leg's yield clock, so the castle
+    // never resumed. One mine call = one MINE_BATCH; the castle lays it and
+    // the next fetch leg mines the next one.
+    const need = Math.min(raw, MINE_BATCH)
     if (ctx.castleFetchInFlight) return
     const st0 = ctx.castle
     const forbid = (pos) => {
@@ -3256,6 +3261,7 @@ function castlefetch(bot, ctx, target, state) {
 
 module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
+module.exports.MINE_BATCH = MINE_BATCH
 module.exports.pickChest = pickChest
 module.exports.sweepTick = sweepTick
 module.exports.farLoad = farLoad
