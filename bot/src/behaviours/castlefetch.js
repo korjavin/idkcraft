@@ -107,6 +107,8 @@ const STONE_FAMILY = Array.isArray(blueprint.STONE_ITEMS) && blueprint.STONE_ITE
 const CHEST_REACH = stockpileMod.INTERACT_REACH
 const CHEST_WAITS = 30 // ticks without closing in on the chest
 const CHEST_TIMEOUT_MS = 15000
+const FAR_CHEST_RADIUS = 1000 // owner 2026-11-13: known chests this far feed the castle when none is near
+const FAR_WALK_NEAR = 16 // a far chest walk goes xz until this close
 // v2 chest-walk retry budget (idkcraft-6fc1): Baritone verdicts noPath
 // across water the v1 pathfinder swims, and the leg used to burn its whole
 // walk patience and fall through to gather/no-trees with the chest full.
@@ -705,10 +707,24 @@ function chestTick(bot, ctx, f, d) {
     f.chestRetries = 0
     f.chestVia = null
     f.chestViaWalk = null
+    f.chestFarWalk = null
   }
   if (!f.chest) { f.chestDone = true; return false }
-  const { at, k, bank } = f.chest
+  const { at, k, bank, far } = f.chest
   if (!near(bot, at, CHEST_REACH)) {
+    // Far known chest: walk y-agnostic (vmzq.35) until close, then the near approach below.
+    if (far) {
+      const bp0 = bodyPos(bot)
+      const dxz = bp0 ? Math.hypot(bp0.x - at.x, bp0.z - at.z) : Infinity
+      if (dxz > FAR_WALK_NEAR) {
+        walkTo(bot, ctx, `castlefetch-chest-far:${k}`, at, FAR_WALK_NEAR / 2, true)
+        if (stalled(f.chestFarWalk || (f.chestFarWalk = {}), dxz, CHEST_WAITS)) {
+          dryMarkAllKinds(ctx, k)
+          f.chest = null
+        }
+        return true
+      }
+    }
     const v2 = process.env.BOT_BODY === 'baritone'
     const key = `castlefetch-chest:${k}`
     // A staging detour in flight: walk it first; arrival drops back to the
@@ -783,7 +799,7 @@ function chestTick(bot, ctx, f, d) {
   // (FETCH + reserve = STONE_KEEP 88; planks 34 < PLANK_KEEP 64): what it
   // hands over is never banked straight back (no deposit<->withdraw
   // ping-pong). The owner's footprint chest draws the whole short, as before.
-  const need0 = bank ? Math.min(d.short, bankCap(bot, d.kind)) : d.short
+  const need0 = bank ? (far ? farLoad(bot, ctx, d.kind, d.short) : Math.min(d.short, bankCap(bot, d.kind))) : d.short
   flight(ctx, async () => {
     const dr = await drawChest(bot, ctx, d, at, need0)
     const left = dr.left
@@ -966,8 +982,8 @@ function pickChest(bot, ctx, f, kind) {
   // craft/gather stages below — the selection stays nearest-first.
   try {
     const extra = stockpileMod.nearbyChestsAll
-      ? stockpileMod.nearbyChestsAll(bot, ctx, [...tried])
-      : stockpileMod.nearbyChests(bot, ctx, [...tried])
+      ? stockpileMod.nearbyChestsAll(bot, ctx, [...tried], FAR_CHEST_RADIUS)
+      : stockpileMod.nearbyChests(bot, ctx, [...tried], FAR_CHEST_RADIUS)
     for (const c of extra) {
       // y7lp.3: a snapshot without the kind is no source (the draw re-reads live)
       // a stale empty snapshot falls back to the live read (a restocked chest counts again)
@@ -976,6 +992,7 @@ function pickChest(bot, ctx, f, kind) {
     }
   } catch (_) { /* remembered sightings best-effort */ }
   let best = null
+  let far = null // owner 2026-11-13: nearest known bank chest past the near radius, only when nothing near qualifies
   for (const c of cands) {
     const k = `${c.at.x},${c.at.y},${c.at.z}`
     if (tried.has(k)) continue
@@ -987,12 +1004,28 @@ function pickChest(bot, ctx, f, kind) {
       if (snap && !kindHeld(bot, kind, presentNames(snap.counts))) continue
     }
     const dist = bp ? Math.hypot(bp.x - c.at.x, bp.z - c.at.z) : 0
-    if (c.bank && dist > require('./explore').TASK_SEARCH_RADIUS) continue
+    if (c.bank && (dist > require('./explore').TASK_SEARCH_RADIUS || (c.mem && dist > stockpileMod.NEARBY_CHEST_RADIUS))) {
+      if (dist <= FAR_CHEST_RADIUS && (!far || dist < far.dist)) far = { ...c, k, dist, far: dist > require('./explore').TASK_SEARCH_RADIUS }
+      continue
+    }
     // y7lp.3: home/site/castle first, remembered chests only when none qualifies
     if (!best || (!c.mem && best.mem) || (!!c.mem === !!best.mem && dist < best.dist)) best = { ...c, k, dist }
   }
+  if (!best) best = far
   if (best) tried.add(best.k)
   return best
+}
+
+// A far bank trip (> TASK_SEARCH_RADIUS) hauls a full load: the castle's
+// remainder of the kind plus its reserve, capped by pack room (ROOM_KEEP
+// slots stay free so the stockpile pierce never fires on the draw).
+function farLoad(bot, ctx, kind, short) {
+  const cw = ctx && ctx.castleWord
+  const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
+  let empty = 0
+  try { empty = typeof bot.inventory.emptySlotCount === 'function' ? bot.inventory.emptySlotCount() : 36 - (bot.inventory.items() || []).length } catch (_) { empty = 0 }
+  const want = Math.min(left + castleMod.reserveOf(kind) - castleMod.held(bot, kind), Math.max(0, empty - ROOM_KEEP) * 64)
+  return Math.max(short, want)
 }
 
 // The pack already funds a stairs table (vf8e.8): its own table, 4
@@ -2367,6 +2400,50 @@ function pickQuarry(bot, ctx, f) {
 // pickup reach, pickaxe in hand, one dig at a time with a deadline).
 // Pack-full yield (g0z.26): roomForDrop lives in stockpile (oqul.12).
 const roomForDrop = (bot, ctx) => stockpileMod.roomForDrop(bot, ctx)
+// Owner 2026-11-13: site prep leaves dropped cobble lying around; a stone
+// leg first walks over stone drops on the footprint (+ SWEEP_MARGIN),
+// nearest first, bounded by SWEEP_MAX_MS (walking within ~1 picks up).
+const SWEEP_MARGIN = 8
+const SWEEP_MAX_MS = 90 * 1000
+const SWEEP_WAITS = 10
+function sweepTick(bot, ctx, f) {
+  if (f.sweepDone) return false
+  const st = ctx.castle
+  const site = st && st.site
+  const bp = bodyPos(bot)
+  const stop = () => {
+    f.sweepDone = true
+    if (f.sweepN) try { console.log(`castlefetch stone: swept ${f.sweepN} site drops`) } catch (_) { /* log best-effort */ }
+    return false
+  }
+  if (!site || !bp || !roomForDrop(bot, ctx)) return stop()
+  if (!f.sweepT0) f.sweepT0 = Date.now()
+  if (Date.now() - f.sweepT0 > SWEEP_MAX_MS) return stop()
+  let w = 0
+  let dd = 0
+  try { const dm = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion); w = dm.w; dd = dm.d } catch (_) { /* site corner only */ }
+  const skip = f.sweepSkip || (f.sweepSkip = new Set())
+  let best = null
+  let bestD = Infinity
+  for (const e of Object.values(bot.entities || {})) {
+    if (!e || !e.position || skip.has(e.id)) continue
+    let name = null
+    try { const it = e.getDroppedItem && e.getDroppedItem(); name = it && it.name } catch (_) { name = null }
+    if (typeof name !== 'string' || !blueprint.isStone(name.replace(/^minecraft:/, ''))) continue
+    const p = e.position
+    if (p.x < site.x - SWEEP_MARGIN || p.x > site.x + w + SWEEP_MARGIN || p.z < site.z - SWEEP_MARGIN || p.z > site.z + dd + SWEEP_MARGIN) continue
+    const dist = Math.hypot(p.x - bp.x, p.y - bp.y, p.z - bp.z)
+    if (dist < bestD) { best = e; bestD = dist }
+  }
+  if (!best) return stop()
+  if (f.sweepId !== best.id) { f.sweepId = best.id; f.sweepWalk = null; f.sweepN = (f.sweepN | 0) + 1 }
+  const p = best.position
+  walkTo(bot, ctx, `castlefetch-sweep:${best.id}`, new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)), 1, true)
+  if (stalled(f.sweepWalk || (f.sweepWalk = {}), bestD, SWEEP_WAITS)) skip.add(best.id)
+  spend(f, 'walk')
+  return true
+}
+
 function digTick(bot, ctx, f, d) {
   const bp = bodyPos(bot)
   if (!bp) { spend(f, 'other'); return }
@@ -2909,7 +2986,7 @@ function castlefetch(bot, ctx, target, state) {
     }
     if (typeof f.lastGainAt === 'number') since = f.lastGainAt
   }
-  if (d.word === 'batch' && typeof since === 'number' && Date.now() - since > LEG_MAX_MS) {
+  if (d.word === 'batch' && !(f.chest && f.chest.far) && typeof since === 'number' && Date.now() - since > LEG_MAX_MS) {
     try { console.log(`castlefetch ${d.kind}: batch ready, yielding`) } catch (_) { /* log best-effort */ }
     finish(bot, ctx, 'done')
     return
@@ -2973,6 +3050,7 @@ function castlefetch(bot, ctx, target, state) {
         if (require('./equip').craftSparePick(bot, ctx)) return // deferred: craftany requires equip
       } catch (_) { /* unfunded: dig as before */ }
     }
+    if (d.kind === 'stone' && sweepTick(bot, ctx, f)) return
     digTick(bot, ctx, f, d); return // neuc.53: the v2 mine sizes from d.short
   }
   if (WOOD.has(d.kind)) {
@@ -3083,6 +3161,8 @@ function castlefetch(bot, ctx, target, state) {
 module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.pickChest = pickChest
+module.exports.sweepTick = sweepTick
+module.exports.farLoad = farLoad
 module.exports.CHEST_DRY_MS = CHEST_DRY_MS
 module.exports.markChestDry = markChestDry
 module.exports.dryMarkEmpties = dryMarkEmpties

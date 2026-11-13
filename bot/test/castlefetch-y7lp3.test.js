@@ -64,7 +64,7 @@ describe('castlefetch any chest (y7lp.3)', () => {
   })
 
   it('coverage equals what pickChest picks: far or dry -> 0 and no pick (quarry); near fresh -> both', () => {
-    const far = { x: SITE.x + 200, y: 64, z: SITE.z, contents: { cobblestone: 64 }, at: Date.now() }
+    const far = { x: SITE.x + 1500, y: 64, z: SITE.z, contents: { cobblestone: 64 }, at: Date.now() }
     const cases = [
       [{ castle: castle(), chests: [far] }, false],
       [{ castle: castle(), chests: [stone], castleChestDry: { [`stone@${keyOf(stone)}`]: Date.now() } }, false],

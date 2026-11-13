@@ -70,7 +70,7 @@ describe('qwyl chest-first: remembered chests spare the gather/craft legs', () =
 
   it('unstocked: no remembered chest in radius -> null, gather as today', () => {
     const bot = makeBot()
-    const ctx = { castle: castleState(), chests: [{ x: SITE.x + 200, y: 64, z: SITE.z }] }
+    const ctx = { castle: castleState(), chests: [{ x: SITE.x + 1500, y: 64, z: SITE.z }] }
     assert.equal(fetch.pickChest(bot, ctx, {}, 'planks'), null, 'far sighting out of radius: no chest leg')
     assert.equal(fetch.pickChest(bot, { castle: castleState() }, {}, 'planks'), null, 'no sightings at all: no chest leg')
   })
