@@ -88,6 +88,21 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
     )
   })
 
+  it('a pathless builder (no path, no growth) rejects build-stall before STALL_MS', async () => {
+    transport.state.buildScript = 'stall'
+    bot._buildTiming = { stallMs: 60000, noPathMs: 20, watchMs: 5 }
+    const t0 = Date.now()
+    const p = bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1))
+    const tick = setInterval(() => {
+      const wire = transport.state.buildLog[transport.state.buildLog.length - 1].name
+      transport.inject('baritone.event', { kind: 'build', name: wire, active: true, diagnostics: { pathing: false, hasPath: false, calculating: true } })
+    }, 5)
+    try {
+      await assert.rejects(p, /^Error: build-stall$/)
+    } finally { clearInterval(tick) }
+    assert.ok(Date.now() - t0 < 5000, 'early, not the 60 s stall')
+  })
+
   it('the stall verdict names the still-missing cells (r185 stall diagnosis)', async () => {
     transport.state.buildScript = 'stall'
     bot._buildTiming = { stallMs: 30, watchMs: 5 }
