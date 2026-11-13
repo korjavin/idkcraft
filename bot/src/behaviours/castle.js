@@ -2691,6 +2691,15 @@ function castleBuilderBatch(bot, ctx, st, c) {
           // Wedged -> per-cell spell: keep the castle step running on the
           // dig+place path instead of failing it to explore/fun.
           if (strikeMisses()) { ctx.castleBuildFlight = false; return }
+          // Torch-only stall (prod 2026-11-14: 2 unreachable torches held the
+          // castle 6+ min and failed it into equip): torches defer, the rest lays.
+          const left = flightCells.filter((o) => { try { return !done(bot, o) } catch (_) { return true } })
+          if (left.length && left.every((o) => o.kind === 'torch')) {
+            const now = Date.now()
+            for (const o of left) blockCell(ctx, st, o, 'torch-stall', now)
+            ctx.castleBuildFlight = false
+            return
+          }
         }
         settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
       },
@@ -2983,3 +2992,4 @@ module.exports.stowSpot = stowSpot
 module.exports.onDoorPath = onDoorPath
 module.exports.RECOVERY_HOOKS = RECOVERY_HOOKS
 module.exports.peek = peek // test seam: the arbiter's next cell (castle-scale resume)
+module.exports.castleBuilderBatch = castleBuilderBatch
