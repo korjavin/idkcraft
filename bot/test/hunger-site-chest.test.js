@@ -28,11 +28,11 @@ it('a castle draw also tops pack food up to FOOD_KEEP', async () => {
 it('food pickChest skips far chests when the castle site has one, and prefers the site chest', () => {
   const bot = { entity: { position: { x: 0, y: 64, z: 0 } } }
   const near = { x: 20, y: 64, z: 0 }
-  const far = { x: 150, y: 64, z: 0 }
-  const site = { x: 60, y: 64, z: 0 }
+  const far = { x: 250, y: 64, z: 0 }
+  const site = { x: 90, y: 64, z: 0 }
   const o = () => ({ wants: (n) => n === 'bread', chestSeen: [], maxChestDistance: 400 })
   let ctx = { castle: { site }, chests: [{ ...far }] }
   assert.deepEqual(bring.pickChest(bot, ctx, o()).pos, far)
-  ctx = { castle: { site }, chests: [{ ...near }, { x: 62, y: 64, z: 0 }, { ...far }] }
-  assert.deepEqual(bring.pickChest(bot, ctx, o()).pos, { x: 62, y: 64, z: 0 })
+  ctx = { castle: { site }, chests: [{ ...near }, { x: 92, y: 64, z: 0 }, { ...far }] }
+  assert.deepEqual(bring.pickChest(bot, ctx, o()).pos, { x: 92, y: 64, z: 0 })
 })
