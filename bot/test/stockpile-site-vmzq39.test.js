@@ -48,10 +48,10 @@ function siteCtx(over = {}) {
 
 describe('vmzq.39 deposit caps', () => {
   it('banks quarry stone past the ceiling, keep-first across variants', () => {
-    const bot = mockBot({ inv: [{ name: 'granite', count: 60 }, { name: 'diorite', count: 40 }] })
+    const bot = mockBot({ inv: [{ name: 'granite', count: 300 }, { name: 'diorite', count: 40 }] })
     const plan = stockpile.depositPlan(bot, siteCtx())
-    assert.deepEqual(plan, [{ name: 'diorite', count: 12 }])
-    assert.equal(stockpile.STONE_KEEP, 88)
+    assert.deepEqual(plan, [{ name: 'diorite', count: 20 }])
+    assert.equal(stockpile.STONE_KEEP, 320)
   })
 
   it('banks duplicate tools, keeps one per name', () => {

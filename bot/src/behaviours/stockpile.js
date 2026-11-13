@@ -46,7 +46,9 @@ function spotsFor(home) {
 // (castle reserveOf stone 24), keep-first across variants, the rest banks
 // as surplus stone beyond castle need. No shared import (stockpile must
 // not require castlefetch — the demand cycle); the numbers mirror.
-const STONE_KEEP = 88
+// owner 2026-11-13 haul: five stacks (castlefetch LOAD.stone 296 + reserve
+// 24) so one trip feeds several layers and is never banked straight back.
+const STONE_KEEP = 320
 // Pane ladder (g0z.37): 18 sand -> 18 glass -> 3 crafts x 16 panes >= 44.
 const PANE_SAND_KEEP = 18
 const PANE_GLASS_KEEP = 18

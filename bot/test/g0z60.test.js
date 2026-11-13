@@ -112,7 +112,7 @@ describe('castlefetch draws the bank chests (g0z.60)', () => {
       fetch(bot, ctx)
       await settle(); await settle(); await settle()
       assert.deepEqual(bot.calls.opens, ['100,64,170'])
-      assert.equal(count(bot, 'cobblestone'), 88, 'one batch, up to the castle keep (STONE_KEEP)')
+      assert.equal(count(bot, 'cobblestone'), body === 'baritone' ? stockpileMod.STONE_KEEP : 88, 'one load, up to the castle keep (v2: STONE_KEEP haul)')
       fetch(bot, ctx)
       assert.equal(ctx.stepStatus, 'done')
       assert.equal(bot.calls.dig + bot.calls.mine, 0, 'never dug')
@@ -169,7 +169,8 @@ describe('castlefetch draws the bank chests (g0z.60)', () => {
     it(`${body}: bank-and-lay cycles drain the home chest without a dig`, async () => {
       process.env.BOT_BODY = body
       word('stone')
-      const chests = { '100,64,170': [{ name: 'cobblestone', count: 480 }] }
+      const full = body === 'baritone' ? 2000 : 480 // v2 legs haul five stacks
+      const chests = { '100,64,170': [{ name: 'cobblestone', count: full }] }
       const items = [{ name: 'cobblestone', count: 0 }, { name: 'stone_pickaxe', count: 1 }]
       const bot = makeBot({ items, chests, at: pos(100.5, 64, 171.5) })
       const ctx = ctxFor()
@@ -193,7 +194,7 @@ describe('castlefetch draws the bank chests (g0z.60)', () => {
       }
       assert.equal(bot.calls.dig + bot.calls.mine, 0, 'never dug')
       assert.ok(laid >= 5 * 64, `laid ${laid} from the bank`)
-      assert.ok(stock() < 480 - 5 * 64, 'the home chest drains')
+      assert.ok(stock() < full - 5 * 64, 'the home chest drains')
     })
   }
 

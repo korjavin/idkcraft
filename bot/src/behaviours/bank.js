@@ -31,7 +31,7 @@ function keeps() {
   let stairs = 16
   let torch = 16
   try {
-    const f = castleFetch.FETCH || {}
+    const f = (process.env.BOT_BODY === 'baritone' ? castleFetch.LOAD : castleFetch.FETCH) || {}
     stone = (f.stone || 64) + castleMod.reserveOf('stone')
     stairs = (f.stairs || 16) + castleMod.reserveOf('stairs')
     torch = (f.torch || 16) + castleMod.reserveOf('torch')
