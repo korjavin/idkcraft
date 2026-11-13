@@ -2993,6 +2993,10 @@ function castlefetch(bot, ctx, target, state) {
     return
   }
   if (st.status !== NO_WOOD || !(WOOD.has(d.kind) || d.kind === 'stairs')) st.status = `fetching ${d.kind}`
+  // Stairs the pack can craft now (cobble + a funded table) craft before any
+  // chest walk (owner 2026-11-13: prod bot3 held 402 cobble, planks and a
+  // table, yet walked to far empty chests and failed no-stairs).
+  if (d.kind === 'stairs' && !stairsCobbleShort(bot) && stairsTableFunded(bot, ctx) && craftTick(bot, ctx, f, d)) return
   if (chestTick(bot, ctx, f, d)) return
   if (craftTick(bot, ctx, f, d)) return
   // g0z.60: a bank batch on hand lays before any dig. Not a torch leg (fqkn):
