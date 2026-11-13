@@ -153,8 +153,8 @@ describe('castlefetch v2 chest-walk noPath retries (6fc1)', () => {
     t.move(CHEST.x + 0.5, CHEST.y, CHEST.z + 0.5)
     t.tick()
     await settle(); await settle(); await settle(); await settle()
-    assert.equal(count(t.items, 'oak_planks'), 12, 'one log worth of planks per log the kind draws')
-    assert.equal(t.chest[0].count, 12)
+    assert.equal(count(t.items, 'oak_planks'), 24, 'owner 2026-11-13 haul: the v2 draw takes the whole chest stock')
+    assert.equal(t.chest[0].count, 0)
     assert.equal(t.gathered(), 0, 'no gather trip: the retried walk relayed the chest')
   })
 

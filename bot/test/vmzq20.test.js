@@ -295,7 +295,8 @@ describe('neuc.58 v2 stone haul = forecast', () => {
   it('no stone room keeps the v1 target (the leg reaches pack-full, the stockpile pierce opens)', async () => {
     await v2(async () => {
       const items = [pick('diamond_pickaxe', 1561, 0), ...fill(33)]
-      assert.equal(short(items).d.short, 64 + 24)
+      const { d, left } = short(items)
+      assert.equal(d.short, Math.min(fetch.LOAD.stone, left) + 24)
     })
   })
 

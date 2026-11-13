@@ -340,7 +340,7 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     assert.notEqual(ctx.castleFetch, null, 'the leg survives for the next tick to re-issue')
   })
 
-  it('a batch leg mines at most one BATCH', async () => {
+  it('a batch leg mines the whole haul (owner 2026-11-13)', async () => {
     const bot = mockBot({
       items: [{ name: 'stone_pickaxe', count: 1 }],
       mineImpl: (b, calls) => async (names, count, opts) => { calls.mine.push({ names, count, opts }) },
@@ -348,11 +348,11 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     const ctx = stoneCtx()
     castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 88 })
     assert.equal(bot.calls.mine.length, 1)
-    assert.equal(bot.calls.mine[0].count, 16, 'capped at castle BATCH')
+    assert.equal(bot.calls.mine[0].count, 88, 'the whole short, not one BATCH')
     await flush()
   })
 
-  it('a none leg also mines at most one BATCH', async () => {
+  it('a none leg also mines the whole haul', async () => {
     const bot = mockBot({
       items: [{ name: 'stone_pickaxe', count: 1 }],
       mineImpl: (b, calls) => async (names, count, opts) => { calls.mine.push({ names, count, opts }) },
@@ -360,7 +360,7 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     const ctx = stoneCtx()
     castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'none', short: 64 })
     assert.equal(bot.calls.mine.length, 1)
-    assert.equal(bot.calls.mine[0].count, 16, 'capped at castle BATCH whatever the word')
+    assert.equal(bot.calls.mine[0].count, 64, 'the whole short whatever the word')
     await flush()
   })
 

@@ -67,6 +67,12 @@ const FETCH = { stone: 64, planks: 32, door: 1, torch: 16, fence: 16, frame: cas
 // castle after this long instead of running to its full target. Five
 // minutes ≈ one stone batch at the measured quarry rate, and bounds the
 // castle<->castlefetch switch rate from below no matter how the words flap.
+// owner 2026-11-13 haul: a v2 leg (bank draw, mine) fills the pack like a
+// human builder, up to the stockpile keeps (stone STONE_KEEP 320 = 296 +
+// reserve 24; planks PLANK_KEEP 64 = 62 + 2; stairs are never banked), so
+// nothing it hauls is banked straight back. v1 keeps FETCH.
+const LOAD = { ...FETCH, stone: 296, planks: 62, stairs: 64 }
+function capOf(kind) { return process.env.BOT_BODY === 'baritone' ? LOAD[kind] : FETCH[kind] }
 const LEG_MAX_MS = 5 * 60 * 1000
 // One craft op per call; the next tick re-checks the target.
 const CRAFT_COUNT = { planks: 4, door: 1, torch: 4, fence: 3, chest: 1, pane: 16, banner: 1, bookshelf: 1, enchanting_table: 1, blast_furnace: 1, stairs: 4, gate: 1 }
@@ -395,7 +401,7 @@ function hopNeedShort(bot, ctx, kind) {
     if (!kind || !(kind in FETCH)) return false
     const cw = ctx && ctx.castleWord
     if (!cw || cw.kind !== kind || typeof cw.left !== 'number') return false
-    const target = Math.min(FETCH[kind], cw.left)
+    const target = Math.min(capOf(kind), cw.left)
     return Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) > 0
   } catch (_) {
     return false
@@ -451,7 +457,7 @@ function demand(bot, ctx) {
   }
   const cw = ctx && ctx.castleWord
   const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
-  const target = Math.min(FETCH[kind], left)
+  const target = Math.min(capOf(kind), left)
   // klh2: the window parks the kind (kind-wide, as before klh2) — when the
   // parked kind's next tick would otherwise idle, hop to the chest strategy
   // for the same kind. The hop leg skips the world stage, so the failed
@@ -475,7 +481,7 @@ function demand(bot, ctx) {
     const room = stoneRoom(bot)
     if (picks > 0 && room > 0) {
       const forecast = left + castleMod.reserveOf(kind) - castleMod.held(bot, kind)
-      return { kind, word, short: Math.max(0, Math.min(forecast, room, picks)) }
+      return { kind, word, short: Math.max(0, Math.min(forecast, room, picks, bankCap(bot, kind))) }
     }
   }
   // Raw items: below the reserve the reserve refills first (never laid).
@@ -804,7 +810,7 @@ function chestTick(bot, ctx, f, d) {
   // (FETCH + reserve = STONE_KEEP 88; planks 34 < PLANK_KEEP 64): what it
   // hands over is never banked straight back (no deposit<->withdraw
   // ping-pong). The owner's footprint chest draws the whole short, as before.
-  const need0 = bank ? (far ? farLoad(bot, ctx, d.kind, d.short) : Math.min(d.short, bankCap(bot, d.kind))) : d.short
+  const need0 = bank ? (far ? farLoad(bot, ctx, d.kind, d.short) : (process.env.BOT_BODY === 'baritone' ? Math.min(farLoad(bot, ctx, d.kind, d.short), Math.max(d.short, bankCap(bot, d.kind))) : Math.min(d.short, bankCap(bot, d.kind)))) : d.short
   flight(ctx, async () => {
     const dr = await drawChest(bot, ctx, d, at, need0)
     const left = dr.left
@@ -964,7 +970,7 @@ function freshChestState(ctx, k) {
 // dry-marked: he restocks it), ctx.castle.siteChest, ctx.home.chest —
 // the bank ones within TASK_SEARCH_RADIUS of the body.
 function bankCap(bot, kind) {
-  return kind in FETCH ? Math.max(0, FETCH[kind] + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) : Infinity
+  return kind in FETCH ? Math.max(0, capOf(kind) + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) : Infinity
 }
 
 function pickChest(bot, ctx, f, kind) {
@@ -1204,6 +1210,18 @@ async function drawChest(bot, ctx, d, at, need) {
     if (want > 0 && names.length > 0) {
       const r = await drawFrom(names, want)
       if (r && r.got > 0) try { console.log(`castlefetch ${d.kind}: drew ${r.name} x${r.got} for food`) } catch (_) { /* log best-effort */ }
+    }
+  }
+  // owner 2026-11-13 haul: a v2 castle trip also fills stone and planks to the keep from any chest it opens
+  if (seen && process.env.BOT_BODY === 'baritone') {
+    for (const k of ['stone', 'planks']) {
+      if (k === d.kind) continue
+      const want = bankCap(bot, k)
+      const names = Object.keys(seen).filter((n) => seen[n] > 0 && (k === 'stone' ? blueprint.isStone(n) : n.endsWith('_planks')))
+      if (want > 0 && names.length > 0) {
+        const r = await drawFrom(names, want)
+        if (r && r.got > 0) try { console.log(`castlefetch ${d.kind}: drew ${r.name} x${r.got} for the next layers`) } catch (_) { /* log best-effort */ }
+      }
     }
   }
   return { left: need, fund, counts: seen }
@@ -2549,7 +2567,7 @@ function digTick(bot, ctx, f, d) {
     // while the castle could lay, and the LEG_MAX_MS yield never fires
     // mid-mine.
     const raw = (d && typeof d.short === 'number' && d.short > 0) ? d.short : castleMod.BATCH
-    const need = Math.min(raw, castleMod.BATCH)
+    const need = raw // owner 2026-11-13 haul: the whole load (demand caps stone by room, picks and the keep)
     if (ctx.castleFetchInFlight) return
     const st0 = ctx.castle
     const forbid = (pos) => {
@@ -3289,6 +3307,7 @@ module.exports.CHEST_RETRIES = CHEST_RETRIES
 module.exports.onSite = onSite
 module.exports.deps = deps
 module.exports.FETCH = FETCH
+module.exports.LOAD = LOAD
 module.exports.selfOrder = selfOrder
 module.exports.selfOrderBack = selfOrderBack
 module.exports.paneNeed = paneNeed
