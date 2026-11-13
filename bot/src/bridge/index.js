@@ -212,6 +212,14 @@ function goalToBaritone(goal, from, blockAt) {
       // the first side whose feet + head read open, dominant side first.
       if (typeof blockAt === 'function') {
         const open = (x, y, z) => { try { const b = blockAt(x, y, z); return !!b && b.boundingBox === 'empty' } catch (_) { return false } }
+        // A floor/ceiling cell over a room (prod -157 78 404 'unreachable'
+        // from a lower floor): stand on the room floor under or beside it
+        // instead of pillaring into mid-air from the body's distant level.
+        const solidAt = (x, y, z) => { try { const b = blockAt(x, y, z); return !!b && b.boundingBox === 'block' } catch (_) { return false } }
+        const stance = [[px, pz, 2], [px, pz, 3], [nx, nz, 1], [nx, nz, 2], [px + 1, pz, 2], [px - 1, pz, 2], [px, pz + 1, 2], [px, pz - 1, 2]]
+          .map(([x, z, d]) => [x, py - d, z])
+          .find(([x, y, z]) => !(x === fx && y === fy && z === fz) && solidAt(x, y - 1, z) && open(x, y, z) && open(x, y + 1, z))
+        if (stance) return `#goto ${stance[0]} ${stance[1]} ${stance[2]}`
         const sides = [[nx, nz], [2 * px - nx, 2 * pz - nz], ...(nx !== px ? [[px, pz + 1], [px, pz - 1]] : [[px + 1, pz], [px - 1, pz]])]
         const s = sides.find(([x, z]) => !(x === fx && py === fy && z === fz) && open(x, py, z) && open(x, py + 1, z))
         if (s) { nx = s[0]; nz = s[1] }
