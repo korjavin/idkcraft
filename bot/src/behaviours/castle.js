@@ -1991,6 +1991,12 @@ function digCell(bot, ctx, st, c, now) {
   // The doorway clears from the apron like the door places (rig: scaffold
   // in the doorway, dug from the inner stair step = walled below-feet).
   const ent = c.kind === 'door' ? entrance(st) : null
+  // Prep in reach (owner 2026-11-13): dig from where we stand, like a player
+  // clearing the 3x3 around him, instead of a fresh walk per block.
+  if (c.prep && inReach(bot, c) && ctx.castleGoalIdx !== c.idx) {
+    ctx.castleGoalIdx = c.idx
+    try { bot.pathfinder.setGoal(null) } catch (_) { /* dig anyway */ }
+  }
   if (approach(bot, ctx, c, () => ent
     ? new goals.GoalBlock(ent.x, ent.y, ent.z)
     : new goals.GoalNear(c.x, c.y, c.z, DIG_APPROACH))) return
@@ -2038,7 +2044,7 @@ function digCell(bot, ctx, st, c, now) {
           const n = ctx.castleRedig[rk] || (ctx.castleRedig[rk] = { digs: 0, blocks: 0 })
           n.digs++
         }
-        if (spoilWalk(st, c)) ctx.castlePickup = { x: c.x, y: c.y, z: c.z, ticks: 0 }
+        if (spoilWalk(st, c) && !(c.prep && prepInReach(bot, ctx, c))) ctx.castlePickup = { x: c.x, y: c.y, z: c.z, ticks: 0 }
       }
     } catch (_) {
       if (live(ctx, token) && nameAt(bot, c) !== 'air') strike(ctx, st, c, 'dig-refused', Date.now())
@@ -2256,6 +2262,16 @@ const PICKUP_TICKS = 6
 // the dug cell itself is then the standable node GoalNear(.., 1) needs. A
 // bridge column under the deck has none (A* would dig one), and a place
 // cell's occupant dig would walk the body into the cell it lays next.
+function inReach(bot, c) {
+  const bp = bodyPos(bot)
+  return !!bp && Math.hypot(bp.x - c.x - 0.5, bp.y + 1.6 - c.y - 0.5, bp.z - c.z - 0.5) <= flat.REACH_DIG - 0.5
+}
+// shortcut: spoil left while more prep is in reach is picked up only when the
+// bot walks over it or digs its last reachable cell; add a sweep if fills starve.
+function prepInReach(bot, ctx, c) {
+  const list = ctx.castlePrep && ctx.castlePrep.list
+  return !!list && list.some((o) => o !== c && o.prep === 'cut' && inReach(bot, o) && !done(bot, o))
+}
 function spoilWalk(st, c) {
   if (c.kind !== 'dig' && c.prep !== 'cut') return false // prep cut spoil is castle stone/filler too (g0z.16)
   const above = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${c.x},${c.y + 1},${c.z}`)
