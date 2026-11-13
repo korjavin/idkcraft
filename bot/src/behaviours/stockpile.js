@@ -117,6 +117,40 @@ function packFull(bot, ctx) {
     return false
   }
 }
+// Junk toss (owner 2026-11-13): far from any bank chest a pack of site-prep
+// junk stalled castlefetch on pack-full. Plain junk is tossed, keeping a
+// small reserve; castle materials are never junk. Returns true when a toss
+// was issued (one stack per call; the next tick re-reads the pack).
+const JUNK_KEEP = { dirt: 32, wheat_seeds: SEED_KEEP, gravel: 0, flint: 0, rotten_flesh: 0, spider_eye: 0, poisonous_potato: 0 }
+function junkKeep(name) {
+  if (typeof name !== 'string') return null
+  if (name in JUNK_KEEP) return JUNK_KEEP[name]
+  if (name.endsWith('_leaves')) return 0
+  if (name.endsWith('_sapling')) return SAPLING_KEEP
+  return null
+}
+const tossing = new WeakSet()
+function tossJunk(bot, ctx) {
+  if (!bot || tossing.has(bot) || typeof bot.toss !== 'function') return false
+  const have = {}
+  for (const i of invItems(bot)) if (i && junkKeep(i.name) !== null) have[i.name] = (have[i.name] || 0) + (typeof i.count === 'number' ? i.count : 1)
+  for (const [name, n] of Object.entries(have)) {
+    let need = false
+    try { need = require('./castle').isMaterial(name, ctx && ctx.castle) } catch (_) { need = false }
+    if (need) continue
+    const extra = n - junkKeep(name)
+    if (extra <= 0) continue
+    const stack = invItems(bot).find((i) => i && i.name === name)
+    tossing.add(bot)
+    const done = () => tossing.delete(bot)
+    try {
+      Promise.resolve(bot.toss(stack.type, null, Math.min(extra, stack.count))).then(done, done)
+    } catch (_) { done(); return false }
+    try { console.log(`stockpile: tossed ${Math.min(extra, stack.count)} ${name} (junk)`) } catch (_) { /* log best-effort */ }
+    return true
+  }
+  return false
+}
 // Kept kit (same shape as bring share keeps): tools/armor keep one per
 // name (vmzq.39: duplicates are valuables and bank), the light fuel
 // rw4.13 counts from the inventory keeps one stack (torch keeps all —
@@ -2310,6 +2344,8 @@ module.exports.castleBankAt = castleBankAt
 module.exports.bankPlan = bankPlan
 module.exports.findSiteChest = findSiteChest
 module.exports.siteChestTodo = siteChestTodo
+module.exports.tossJunk = tossJunk
+module.exports.junkKeep = junkKeep
 module.exports.doubleSpot = doubleSpot
 module.exports.doublePending = doublePending
 module.exports.doubleArmed = doubleArmed
