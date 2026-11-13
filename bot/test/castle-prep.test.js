@@ -415,3 +415,19 @@ describe('g0z.16 levelling prep (±2)', () => {
     assert.equal(world.get(m.x, 62, m.z), 'air')
   })
 })
+
+describe('nearestPrep (prep walks to the nearest column)', () => {
+  const { nearestPrep } = require('../src/behaviours/castle')
+  it('takes the nearest column top first, never a lower cell under an open one', () => {
+    const bot = { entity: { position: { x: 0, y: 70, z: 0 } } }
+    const list = [
+      { x: 30, y: 74, z: 30, prep: 'cut' },
+      { x: 1, y: 72, z: 1, prep: 'cut' },
+      { x: 1, y: 71, z: 1, prep: 'cut' },
+      { x: 0, y: 69, z: 0, prep: 'fill' },
+    ]
+    assert.equal(nearestPrep(bot, list), list[1])
+    assert.equal(nearestPrep(bot, list.slice(2)), list[2])
+    assert.equal(nearestPrep(bot, []), null)
+  })
+})
