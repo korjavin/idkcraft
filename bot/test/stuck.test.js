@@ -539,6 +539,15 @@ describe('stuck update: raise gates', () => {
     }
   })
 
+  it('castle noPath never raises; a castle wedge with a live path still does', () => {
+    for (const [status, raised] of [['noPath', false], ['success', true]]) {
+      const bot = mockBot({ moving: true })
+      const ctx = { work: true, step: 'castle', lastGoalKey: 'castle:1', lastPathStatus: status, lastPos: { x: 0, y: 64, z: 0 } }
+      for (let i = 0; i < 35; i++) stuck.update(bot, ctx)
+      assert.equal(!!ctx.stuck, raised, status)
+    }
+  })
+
   it('the rest gave-up hold suppresses the raise at its point (q0h)', () => {
     const bot = mockBot({ moving: true })
     const ctx = {

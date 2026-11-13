@@ -332,6 +332,9 @@ function latchStale(ctx, bot, bp) {
 // gave-up hold (q0h) owns repeats at its marked point.
 function raiseExempt(ctx, bot) {
   if ((ctx.work && (ctx.step === 'gohome' || ctx.step === 'stay' || ctx.step === 'shelter')) || ctx.comehome || ctx.gocastle) return true
+  // Castle noPath is a high/unreachable cell, not a wedge: the builder's
+  // blocked-retry ladder owns it; the menu only burned sidestep/wait (prod bot3).
+  if (ctx.work && ctx.step === 'castle' && ctx.lastPathStatus === 'noPath') return true
   try {
     if (recover.restGaveUpHolds(ctx, bot)) return true
   } catch (_) { /* hold best-effort */ }
