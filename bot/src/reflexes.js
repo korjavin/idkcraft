@@ -561,6 +561,19 @@ function meleeReflex(bot, ctx, state) {
 // body, so asking the model follow-vs-flee would add a wire case for zero gain.
 const CREEPER_FLEE_RANGE = 6
 const CREEPER_FLEE_DIST = 6
+const CASTLE_GUARD_MARGIN = 8
+// Own castle site centre when the body stands within the site box + margin, else null.
+function castleGuardCentre(ctx, bp) {
+  try {
+    const st = ctx && ctx.castle
+    const site = st && st.site
+    if (!site || typeof site.x !== 'number') return null
+    const { w, d } = require('./castle').siteDimensions(st.rot | 0, st.blueprintVersion)
+    const m = CASTLE_GUARD_MARGIN
+    if (bp.x < site.x - m || bp.x > site.x + w + m || bp.z < site.z - m || bp.z > site.z + d + m) return null
+    return { x: site.x + w / 2, z: site.z + d / 2 }
+  } catch (_) { return null }
+}
 function fleeReflex(bot, ctx, state) {
   // rqdj: a creeper outside a closed house cannot reach us; running out is the danger.
   // inShelter alone is not enough (home.js sets it on the open-air night pillar
@@ -594,7 +607,27 @@ function fleeReflex(bot, ctx, state) {
   let dx = bp.x - creeper.position.x
   let dz = bp.z - creeper.position.z
   if (dx === 0 && dz === 0) dx = 1
-  const len = Math.hypot(dx, dz)
+  let len = Math.hypot(dx, dz)
+  // Castle guard (prod bot3: fled creepers blew craters in its own castle):
+  // near the own castle, hit the creeper when it closes (knockback resets
+  // the fuse) and retreat away from the castle centre too, so a blast
+  // lands outside the walls.
+  const cc = castleGuardCentre(ctx, bp)
+  if (cc) {
+    if (d <= fightMod.SWING_RANGE) {
+      if (ctx.fleeTargetId !== creeper.id) { try { fightMod.equipGear(bot) } catch (_) { /* fists knock back too */ } }
+      try { fightMod.swing(bot, creeper) } catch (_) { /* mock bots may lack lookAt/attack */ }
+      console.log(`reflex hit creeper dist=${d.toFixed(1)} castle`)
+    }
+    const ox = bp.x - cc.x
+    const oz = bp.z - cc.z
+    const ol = Math.hypot(ox, oz) || 1
+    const sx = dx / len + ox / ol
+    const sz = dz / len + oz / ol
+    // creeper straight outward: the sum cancels, go outward anyway (the hit keeps it off)
+    if (Math.hypot(sx, sz) < 0.3) { dx = ox / ol; dz = oz / ol } else { dx = sx; dz = sz }
+    len = Math.hypot(dx, dz)
+  }
   const nx = bp.x + (dx / len) * CREEPER_FLEE_DIST
   const nz = bp.z + (dz / len) * CREEPER_FLEE_DIST
   const key = `flee:${creeper.id}`
