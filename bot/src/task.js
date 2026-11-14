@@ -718,6 +718,8 @@ function parkTask(bot, ctx, kind, done, total, now) {
     rec.taskPark = { at: now, auto: !latched, diag: diag.length > TASK_PARK_DIAG_MAX ? diag.slice(0, TASK_PARK_DIAG_MAX - 1) + '…' : diag }
     // A castle parked over a side step (explore/gather/...) is not stuck on itself.
     if (kind === 'castle' && !CASTLE_CHAIN.has(ctx && ctx.step)) rec.taskPark.side = true
+    // A material shortage (castlefetch/gocastle) retries soon on every park, not just the first (prod 2026-11-14 park #2 sat 60 min).
+    if (kind === 'castle' && ctx && (ctx.step === 'castlefetch' || ctx.step === 'gocastle')) rec.taskPark.side = rec.taskPark.fetch = true
     rec.parked = true
     try {
       console.log(`task ${kind} ${done}/${total} parked #${n}${latched ? ' latched' : ''} why=${diagnosis}`)
@@ -3188,7 +3190,7 @@ function maybeResume(bot, ctx, now) {
       const n = (rec.parkHist && typeof rec.parkHist.n === 'number' && rec.parkHist.n >= 1) ? rec.parkHist.n : 1
       // The castle is the owner's work goal (prod 2026-11-14): a first park
       // blamed on a side step retries after 10 min, not 60.
-      const retryMs = kind === 'castle' && n === 1 && ep.side === true ? TASK_PARK_CASTLE_FIRST_MS : TASK_PARK_RETRY_MS
+      const retryMs = kind === 'castle' && ep.side === true && (n === 1 || ep.fetch === true) ? TASK_PARK_CASTLE_FIRST_MS : TASK_PARK_RETRY_MS
       if (now - ep.at < retryMs) continue
       const mins = Math.round(retryMs / 60000)
       rec.parked = false
