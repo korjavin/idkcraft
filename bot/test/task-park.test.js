@@ -573,4 +573,19 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(taskLogs().length, 1, 'parked flat does not pause')
     assert.equal(bot.chats.length, 1)
   })
+  it('a castle parked over a side step retries after 10 min (prod 2026-11-14)', () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    ctx.step = 'explore'
+    ctx.stepStatus = 'failed:unreachable'
+    const t0 = 1000000000000
+    taskMod.taskTick(bot, ctx, t0)
+    const t1 = advance(bot, ctx, t0, 45)
+    assert.equal(ctx.castle.taskPark.side, true, 'side-step park')
+    const t2 = advance(bot, ctx, t1, 9)
+    assert.equal(ctx.castle.parked, true, 'no resume before 10 min')
+    advance(bot, ctx, t2, 2)
+    assert.equal(ctx.castle.parked, false, 'resumed')
+    assert.ok(taskLogs().some((l) => /^task castle resumed after 10 min parked \(stall 1\/3\)$/.test(l)))
+  })
 })

@@ -31,6 +31,8 @@ const worker = require('./worker')
 const TASK_STALL_L1_MS = 15 * 60 * 1000
 const TASK_STALL_L2_MS = 45 * 60 * 1000
 const TASK_PARK_RETRY_MS = 60 * 60 * 1000
+const TASK_PARK_CASTLE_FIRST_MS = 10 * 60 * 1000
+const CASTLE_CHAIN = new Set(['castle', 'castlefetch', 'gocastle'])
 const TASK_PARKS_PER_DAY = 3
 const TASK_PARK_LATCH_MS = 3 * 60 * 60 * 1000
 const TASK_PARK_DIAG_MAX = 200
@@ -714,6 +716,8 @@ function parkTask(bot, ctx, kind, done, total, now) {
     const latched = n >= TASK_PARKS_PER_DAY
     const diag = String(diagnosis || 'unknown')
     rec.taskPark = { at: now, auto: !latched, diag: diag.length > TASK_PARK_DIAG_MAX ? diag.slice(0, TASK_PARK_DIAG_MAX - 1) + '…' : diag }
+    // A castle parked over a side step (explore/gather/...) is not stuck on itself.
+    if (kind === 'castle' && !CASTLE_CHAIN.has(ctx && ctx.step)) rec.taskPark.side = true
     rec.parked = true
     try {
       console.log(`task ${kind} ${done}/${total} parked #${n}${latched ? ' latched' : ''} why=${diagnosis}`)
@@ -3177,16 +3181,20 @@ function maybeResume(bot, ctx, now) {
       // Owner 2026-11-13: a latched park waits TASK_PARK_LATCH_MS, not the
       // UTC day (prod bot3's castle sat parked all afternoon after one bad hour).
       if (ep.auto !== true && now - ep.at < TASK_PARK_LATCH_MS) continue
-      if (now - ep.at < TASK_PARK_RETRY_MS) continue
       const n = (rec.parkHist && typeof rec.parkHist.n === 'number' && rec.parkHist.n >= 1) ? rec.parkHist.n : 1
+      // The castle is the owner's work goal (prod 2026-11-14): a first park
+      // blamed on a side step retries after 10 min, not 60.
+      const retryMs = kind === 'castle' && n === 1 && ep.side === true ? TASK_PARK_CASTLE_FIRST_MS : TASK_PARK_RETRY_MS
+      if (now - ep.at < retryMs) continue
+      const mins = Math.round(retryMs / 60000)
       rec.parked = false
       rec.taskPark = null
       resetTask(ctx)
       try {
-        console.log(`task ${kind} resumed after 60 min parked (stall ${n}/${TASK_PARKS_PER_DAY})`)
+        console.log(`task ${kind} resumed after ${mins} min parked (stall ${n}/${TASK_PARKS_PER_DAY})`)
       } catch (_) { /* log best-effort */ }
       try {
-        bot.chat(`${kind} retrying after 60 min parked (stall ${n}/${TASK_PARKS_PER_DAY})`)
+        bot.chat(`${kind} retrying after ${mins} min parked (stall ${n}/${TASK_PARKS_PER_DAY})`)
       } catch (_) { /* chat best-effort */ }
       savePark(bot, ctx)
     }
@@ -4254,4 +4262,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { eligible, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick }
+module.exports = { eligible, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick }

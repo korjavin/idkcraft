@@ -1142,7 +1142,12 @@ function shelterOwns(bot, ctx) {
 // shelter in place at any distance, even next to the house or the site.
 function castleSiteNight(bot, ctx) {
   try {
-    if (!castleFirst(ctx)) return false
+    // A TASK-parked castle is still the owner's work goal (prod 2026-11-14:
+    // a park sent the dusk march 500 blocks to the old house) — owner parks
+    // (no taskPark episode) release the night as before.
+    const st = ctx && ctx.castle
+    const taskParkedCastle = !!(st && st.taskPark && st.site && typeof st.site.x === 'number' && st.phase !== 'complete')
+    if (!castleFirst(ctx) && !taskParkedCastle) return false
     if (!(ctx.home && ctx.home.site)) return true
     const h = ctx && ctx.home && ctx.home.site
     const bp = bot && bot.entity && bot.entity.position
