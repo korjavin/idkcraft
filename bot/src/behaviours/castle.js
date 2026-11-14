@@ -2684,13 +2684,19 @@ function castleBuilderBatch(bot, ctx, st, c) {
           // laid cells. Strikes count consecutive no-progress refusals —
           // any cell this batch placed clears the stale suspicion before
           // this batch's misses strike below.
-          if (flightCells.some((o) => { try { return done(bot, o) } catch (_) { return false } }) &&
-            st.batchStrikes && typeof st.batchStrikes === 'object') {
+          const grew = flightCells.some((o) => { try { return done(bot, o) } catch (_) { return false } })
+          if (grew && st.batchStrikes && typeof st.batchStrikes === 'object') {
             for (const k of Object.keys(st.batchStrikes)) delete st.batchStrikes[k]
           }
           // Wedged -> per-cell spell: keep the castle step running on the
           // dig+place path instead of failing it to explore/fun.
           if (strikeMisses()) { ctx.castleBuildFlight = false; return }
+          // A batch that laid cells then stalled on its unreachable rest
+          // (prod 2026-11-14: 10 build-stalls/30 min on y78-79 wall-top planks
+          // after a growing batch, each failing the castle into equip/gather):
+          // the lowest stuck layer is struck above, so re-batch next tick; the
+          // strike ladder backs the stuck cells off and the layers above lay.
+          if (grew) { ctx.castleBuildFlight = false; return }
           // Torch-only stall (prod 2026-11-14: 2 unreachable torches held the
           // castle 6+ min and failed it into equip): torches defer, the rest lays.
           const left = flightCells.filter((o) => { try { return !done(bot, o) } catch (_) { return true } })
