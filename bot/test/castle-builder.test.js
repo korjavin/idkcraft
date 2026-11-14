@@ -717,3 +717,28 @@ describe('castle flight gate: no stairs, no cells above the unlaid flight', () =
     assert.equal(r.cell && r.cell.kind, 'stairs')
   })
 })
+
+// Prod 2026-11-14: a tower spiral's corner step faces its NEXT step, so the
+// back-along-face stance was the tower wall and the whole flight above it
+// struck 'unreachable'. The stance is the laid previous step beside it.
+describe('castle tower stairs: corner step stance', () => {
+  const v = blueprint.scaledVersion(3, 100)
+  const { cells: plan } = blueprint.absPlan(SITE, 0, v)
+  const stairs = plan.filter((c) => c.kind === 'stairs')
+  const prevOf = (c) => stairs.find((o) => o.y === c.y - 1 && Math.abs(o.x - c.x) + Math.abs(o.z - c.z) === 1)
+  const corner = stairs.find((c) => { const p = prevOf(c); return p && (p.x !== c.x - c.face.dx || p.z !== c.z - c.face.dz) })
+
+  it('stands on the laid previous step, none while it is unlaid', () => {
+    assert.ok(corner, 'the scaled plan has a corner step')
+    const prev = prevOf(corner)
+    const world = makeWorld()
+    for (const c of plan) {
+      if (!blueprint.isPlaceTarget(c.kind) || c.idx === corner.idx || c.idx === prev.idx) continue
+      world.set(c.x, c.y, c.z, c.kind === 'stairs' ? 'cobblestone_stairs' : (LAID[c.kind] || 'cobblestone'))
+    }
+    const bot = mockBot(world)
+    assert.equal(castle.stairStance(bot, corner), null, 'previous step unlaid: no stance (the step waits)')
+    world.set(prev.x, prev.y, prev.z, 'cobblestone_stairs')
+    assert.deepEqual(castle.stairStance(bot, corner), { x: prev.x, y: corner.y, z: prev.z })
+  })
+})
