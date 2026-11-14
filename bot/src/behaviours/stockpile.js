@@ -121,8 +121,11 @@ function packFull(bot, ctx) {
 }
 // Junk toss (owner 2026-11-13): far from any bank chest a pack of site-prep
 // junk stalled castlefetch on pack-full. Plain junk is tossed, keeping a
-// small reserve; castle materials are never junk. Returns true when a toss
-// was issued (one stack per call; the next tick re-reads the pack).
+// small reserve; castle materials are never junk. One pass tosses every
+// junk kind (prod 2026-11-14: one stack per tick re-failed the leg on
+// pack-full while the toss was in flight); true while a pass runs, so the
+// caller waits instead of failing. The bot faces away from the castle
+// site and up first: a toss at its feet was re-picked 2 s later.
 const JUNK_KEEP = { dirt: 32, wheat_seeds: SEED_KEEP, gravel: 0, flint: 0, rotten_flesh: 0, spider_eye: 0, poisonous_potato: 0 }
 function junkKeep(name) {
   if (typeof name !== 'string') return null
@@ -131,27 +134,44 @@ function junkKeep(name) {
   if (name.endsWith('_sapling')) return SAPLING_KEEP
   return null
 }
+const TOSS_PITCH = 0.6 // radians up: the throw lands a few blocks out
 const tossing = new WeakSet()
 function tossJunk(bot, ctx) {
-  if (!bot || tossing.has(bot) || typeof bot.toss !== 'function') return false
+  if (!bot || typeof bot.toss !== 'function') return false
+  if (tossing.has(bot)) return true
   const have = {}
   for (const i of invItems(bot)) if (i && junkKeep(i.name) !== null) have[i.name] = (have[i.name] || 0) + (typeof i.count === 'number' ? i.count : 1)
+  const plan = []
   for (const [name, n] of Object.entries(have)) {
     let need = false
     try { need = require('./castle').isMaterial(name, ctx && ctx.castle) } catch (_) { need = false }
     if (need) continue
     const extra = n - junkKeep(name)
-    if (extra <= 0) continue
-    const stack = invItems(bot).find((i) => i && i.name === name)
-    tossing.add(bot)
-    const done = () => tossing.delete(bot)
-    try {
-      Promise.resolve(bot.toss(stack.type, null, Math.min(extra, stack.count))).then(done, done)
-    } catch (_) { done(); return false }
-    try { console.log(`stockpile: tossed ${Math.min(extra, stack.count)} ${name} (junk)`) } catch (_) { /* log best-effort */ }
-    return true
+    if (extra > 0) plan.push([name, extra])
   }
-  return false
+  if (!plan.length) return false
+  tossing.add(bot)
+  ;(async () => {
+    try {
+      const site = ctx && ctx.castle && ctx.castle.site
+      const p = bot.entity && bot.entity.position
+      let yaw = bot.entity && typeof bot.entity.yaw === 'number' ? bot.entity.yaw : 0
+      if (site && p) yaw = Math.atan2(-(p.x - site.x), -(p.z - site.z))
+      if (typeof bot.look === 'function') await bot.look(yaw, TOSS_PITCH, true)
+    } catch (_) { /* toss anyway */ }
+    for (const [name, extra] of plan) {
+      let left = extra
+      while (left > 0) {
+        const stack = invItems(bot).find((i) => i && i.name === name)
+        if (!stack) break
+        const n = Math.min(left, typeof stack.count === 'number' ? stack.count : 1)
+        try { await bot.toss(stack.type, null, n) } catch (_) { break }
+        left -= n
+      }
+      if (left < extra) try { console.log(`stockpile: tossed ${extra - left} ${name} (junk)`) } catch (_) { /* log best-effort */ }
+    }
+  })().finally(() => tossing.delete(bot))
+  return true
 }
 // Kept kit (same shape as bring share keeps): tools/armor keep one per
 // name (vmzq.39: duplicates are valuables and bank), the light fuel

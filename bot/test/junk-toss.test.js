@@ -21,12 +21,16 @@ test('junkKeep: plain junk tosses, keeps reserves, valuables are not junk', () =
   assert.strictEqual(junkKeep('iron_pickaxe'), null)
 })
 
-test('tossJunk: tosses dirt beyond the keep, one toss in flight', async () => {
-  const bot = fakeBot([{ name: 'dirt', type: 9, count: 50 }, { name: 'diamond', type: 1, count: 3 }])
-  assert.strictEqual(tossJunk(bot, {}), true)
-  assert.deepStrictEqual(bot.tossed, [{ type: 9, count: 18 }])
-  assert.strictEqual(tossJunk(bot, {}), false) // in flight
-  await new Promise((r) => setImmediate(r))
+test('tossJunk: one pass tosses every junk kind, faces away from the site, busy while in flight', async () => {
+  const bot = fakeBot([{ name: 'dirt', type: 9, count: 50 }, { name: 'flint', type: 7, count: 4 }, { name: 'oak_leaves', type: 8, count: 1 }, { name: 'diamond', type: 1, count: 3 }])
+  bot.entity = { position: { x: 10, y: 70, z: 0 }, yaw: 0 }
+  bot.look = (yaw, pitch) => { bot.looked = { yaw, pitch }; return Promise.resolve() }
+  assert.strictEqual(tossJunk(bot, { castle: { site: { x: 0, z: 0 } } }), true)
+  assert.strictEqual(tossJunk(bot, {}), true) // in flight: wait, do not fail
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+  assert.deepStrictEqual(bot.tossed, [{ type: 9, count: 18 }, { type: 7, count: 4 }, { type: 8, count: 1 }])
+  assert.ok(Math.abs(bot.looked.yaw - Math.atan2(-10, -0)) < 1e-9) // facing +x, away from the site
+  assert.ok(bot.looked.pitch > 0)
 })
 
 test('tossJunk: nothing to toss returns false', () => {
