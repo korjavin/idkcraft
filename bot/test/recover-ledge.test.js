@@ -141,7 +141,9 @@ describe('sidestep ledge drop', () => {
     const b = bot(w)
     b.health = 20
     const ctx = { recovery: {}, stuck: { by: 'x', goal: { x: 0.5, y: 61, z: 40 } } }
-    assert.equal(run(b, ctx), 'running')
+    const rnd = Math.random
+    Math.random = () => 0 // sidestep picks a random free side; pin the first (along the wall)
+    try { assert.equal(run(b, ctx), 'running') } finally { Math.random = rnd }
     assert.equal(ctx.recovery.st.ledge, undefined, 'level neighbour on the wall: plain sidestep first')
     const [dx] = ctx.recovery.st.dir
     b.entity.position = pos(0.5 + dx, 61, 0.5)
