@@ -87,6 +87,28 @@ function needsOf(recipe, idToName) {
   }
 }
 
+// The registry's planks recipe names only <wood>_log, but the game takes
+// the whole #<wood>_logs tag: a pack of stripped logs or wood blocks
+// failed every planks craft ("need 1 spruce_log") while facts said
+// logs=few. Clone the recipe with the held variant's id swapped in.
+function logVariants(rs, pack, byName, idToName) {
+  const out = []
+  for (const r of rs) {
+    const log = (r && Array.isArray(r.delta) ? r.delta : []).find((d) => d && d.count < 0 && /_(log|stem)$/.test(idToName[d.id] || ''))
+    if (!log) continue
+    const base = idToName[log.id]
+    const wood = base.replace(/_(log|stem)$/, '')
+    const kind = base.endsWith('_stem') ? 'hyphae' : 'wood'
+    for (const v of [`stripped_${base}`, `${wood}_${kind}`, `stripped_${wood}_${kind}`]) {
+      const e = byName[v]
+      if (!(pack[v] > 0) || !e || typeof e.id !== 'number') continue
+      const swap = (d) => (d && d.id === log.id ? { ...d, id: e.id } : d)
+      out.push({ ...r, delta: r.delta.map(swap), ingredients: Array.isArray(r.ingredients) ? r.ingredients.map(swap) : r.ingredients, inShape: Array.isArray(r.inShape) ? r.inShape.map((row) => row.map(swap)) : r.inShape })
+    }
+  }
+  return out
+}
+
 function resultCount(recipe) {
   try {
     const n = recipe && recipe.result && recipe.result.count
@@ -345,6 +367,7 @@ function planCraft(bot, ctx, names, count) {
       rs = bot.recipesAll(e.id, null, true) || []
     } catch (_) { rs = [] }
     if (!Array.isArray(rs)) continue
+    if (isPlanks(target)) rs = rs.concat(logVariants(rs, pack, byName, idToName))
     for (const r of rs) {
       const needs = needsOf(r, idToName)
       if (!needs) continue
