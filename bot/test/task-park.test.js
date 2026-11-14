@@ -506,8 +506,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     const before = bot.chats.length
     ticker.status()
     const after = bot.chats.slice(before)
-    assert.ok(after.some((l) => l.startsWith('parked castle: step=')), JSON.stringify(after))
-    assert.ok(after.some((l) => l.startsWith('task castle 8/1722 stall=')), 'task line still rides along')
+    assert.deepEqual(after, ['Fetching castle material: 8/1722 (0%)', 'Castle on hold — no progress lately, I will retry later'])
   })
 
   it('park episode and day count survive a restart (memory round-trip)', () => {

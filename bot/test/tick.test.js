@@ -746,7 +746,7 @@ describe('work mode (epic rw4)', () => {
       assert.equal(r.decision.action, 'build')
       assert.equal(r.decision.source, 'goal-fsm')
       assert.equal(followRan, 0)
-      assert.ok(bot.chats.some((m) => m === 'next: building the house (goal-fsm)'))
+      assert.ok(bot.chats.some((m) => m === 'now building the house'))
       assert.ok(lines.some((l) => l.includes('goal step=build')))
     } finally {
       BEHAVIOURS.follow = origFollow
@@ -2090,14 +2090,9 @@ describe('work mode (epic rw4)', () => {
     handleChat(bot, ticker, 'Steve', 'status')
     const reply = bot.chats.slice(n)
     assert.ok(reply.length >= 1 && reply.length <= 3, `1-3 lines, got ${reply.length}`)
-    const line1 = reply[0]
-    for (const frag of ['working', 'body=work', 'step=gather', 'chopping wood', 'running', 'goal-fsm', 'start']) {
-      assert.ok(line1.includes(frag), `line 1 names ${frag}: ${line1}`)
-    }
-    const all = reply.join('\n')
-    for (const frag of ['logs=', 'planks=', 'home=']) {
-      assert.ok(all.includes(frag), `reply keeps ${frag}: ${all}`)
-    }
+    // Owner 2026-11-14: plain words, no internal ids.
+    assert.equal(reply[0], 'Chopping wood')
+    assert.doesNotMatch(reply.join('\n'), /goal-fsm|step=|body=|logs=/)
     ticker.destroy()
   })
 
@@ -2111,10 +2106,8 @@ describe('work mode (epic rw4)', () => {
     bot._tickerCtx.restWhy = 'gather: load full, explore: house not built yet'
     handleChat(bot, ticker, 'Steve', 'status')
     const line = bot.chats[bot.chats.length - 1]
-    assert.ok(line.includes('working'), `mode: ${line}`)
-    assert.ok(line.includes('step=rest'), `step: ${line}`)
-    assert.ok(line.includes('resting because gather: load full, explore: house not built yet'), `same restWhy text: ${line}`)
-    assert.ok(line.includes('logs=0') && line.includes('planks=0') && line.includes('home=none'), `facts: ${line}`)
+    // The internal restWhy stays in the log; chat says idle in plain words.
+    assert.equal(line, 'Idle — nothing useful to do right now')
     ticker.destroy()
   })
 
@@ -2131,12 +2124,13 @@ describe('work mode (epic rw4)', () => {
     ctx.stepFail = { gather: { status: 'failed:unreachable', text: live, pos: { x: 0, y: 64, z: 0 }, at: Date.now() } }
     let n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.ok(bot.chats.slice(n).join('\n').includes('blocked: gather holds after failure'), bot.chats.slice(n).join(' | '))
+    // Owner 2026-11-14: internal holds stay out of the status chat.
+    assert.deepEqual(bot.chats.slice(n), ['Chopping wood'])
     // A stale record text with the gather latch still holding: same words.
     ctx.stepFail = { gather: { status: 'failed:unreachable', text: 't', pos: { x: 0, y: 64, z: 0 } } }
     n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.ok(bot.chats.slice(n).join('\n').includes('blocked: gather holds after failure'), bot.chats.slice(n).join(' | '))
+    assert.deepEqual(bot.chats.slice(n), ['Chopping wood'])
     ticker.destroy()
   })
 
@@ -2173,12 +2167,12 @@ describe('work mode (epic rw4)', () => {
     ctx.stuckState = 'STUCK'
     let n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.ok(bot.chats.slice(n).join('\n').includes('stuck=STUCK'), bot.chats.slice(n).join(' | '))
+    assert.ok(bot.chats.slice(n).includes('Stuck — trying to get free'), bot.chats.slice(n).join(' | '))
     ctx.stuckState = 'MOVING'
     ctx.recovery = { action: 'pillar_up', status: 'running' }
     n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.ok(bot.chats.slice(n).join('\n').includes('recovering=pillar_up'), bot.chats.slice(n).join(' | '))
+    assert.ok(bot.chats.slice(n).includes('Stuck — trying to get free'), bot.chats.slice(n).join(' | '))
     ticker.destroy()
   })
 
@@ -2197,7 +2191,7 @@ describe('work mode (epic rw4)', () => {
     assert.equal(ctx.recovery, null)
     const n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.ok(bot.chats.slice(n).join('\n').includes('last recover: pillar_up done'), bot.chats.slice(n).join(' | '))
+    assert.deepEqual(bot.chats.slice(n), ['Chopping wood'], 'a finished recovery is not news')
     ticker.destroy()
   })
 
@@ -2218,9 +2212,7 @@ describe('work mode (epic rw4)', () => {
     const n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
     const reply = bot.chats.slice(n)
-    assert.ok(reply[0].includes('following'), reply.join(' | '))
-    assert.ok(reply[0].includes('body=follow'), reply.join(' | '))
-    assert.ok(reply[0].includes('source=stub'), reply.join(' | '))
+    assert.deepEqual(reply, ['Following Steve'])
     ticker.destroy()
   })
 
@@ -2238,8 +2230,6 @@ describe('work mode (epic rw4)', () => {
     const reply = bot.chats.slice(n)
     assert.ok(reply.length >= 1 && reply.length <= 3, `1-3 lines, got ${reply.length}`)
     for (const l of reply) assert.ok(l.length <= CHAT_LIMIT, `line is ${l.length} chars`)
-    assert.ok(reply[0].endsWith('…'), `clipped line ends with …: ${reply[0].slice(-10)}`)
-    assert.ok(reply[0].includes('logs=') && reply[0].includes('home='), `facts survive the clip: ${reply[0].slice(0, 140)}`)
     ticker.destroy()
   })
 
@@ -2255,15 +2245,13 @@ describe('work mode (epic rw4)', () => {
     let n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
     let reply = bot.chats.slice(n).join('\n')
-    assert.ok(!reply.includes('path='), `no path on a healthy bot: ${reply}`)
-    assert.ok(!reply.includes('last recover:'), `aged-out outcome hidden: ${reply}`)
+    assert.equal(reply, 'Chopping wood', 'healthy: one line')
     ctx.lastPathStatus = 'noPath'
     ctx.lastRecover = { action: 'pillar_up', outcome: 'done', at: Date.now() }
     n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
     reply = bot.chats.slice(n).join('\n')
-    assert.ok(reply.includes('path=noPath'), `abnormal verdict shown: ${reply}`)
-    assert.ok(reply.includes('last recover: pillar_up done'), `fresh outcome shown: ${reply}`)
+    assert.ok(reply.includes("Can't find a way to my target"), `abnormal verdict shown: ${reply}`)
     ticker.destroy()
   })
 
@@ -2277,15 +2265,15 @@ describe('work mode (epic rw4)', () => {
     assert.equal(ctx.stepPick.step, 'gather')
     let n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
-    assert.ok(bot.chats.slice(n).join('\n').includes('by goal-fsm'), 'pick shown for its own step')
+    assert.deepEqual(bot.chats.slice(n), ['Chopping wood'], 'the work step shows')
     ctx.home = { site: { x: 0, y: 64, z: 0 }, built: true }
     handleChat(bot, ticker, 'Steve', 'come home')
     assert.ok(ctx.comehome, 'order armed')
     n = bot.chats.length
     handleChat(bot, ticker, 'Steve', 'status')
     const reply = bot.chats.slice(n).join('\n')
-    assert.ok(reply.includes('coming home'), reply)
-    assert.ok(!reply.includes('by goal-fsm'), `stale pick hidden: ${reply}`)
+    assert.ok(reply.startsWith('Coming home'), reply)
+    assert.ok(!reply.includes('Chopping wood'), `stale pick hidden: ${reply}`)
     ticker.destroy()
   })
 

@@ -198,7 +198,8 @@ describe('stall-point planner (vmzq.5)', () => {
     assert.equal(ctx.stepPick.why, 'task-plan')
     assert.equal(ctx.stepPick.source, 'task-plan')
     assert.ok(ctx.stepFail.gather, 'the hold record survives the bypass')
-    assert.ok(bot.chats.some((c) => c === 'next: chopping wood (task-plan)'), JSON.stringify(bot.chats))
+    // Owner 2026-11-14: the activity chat is throttled to one per 5 min (rest said first).
+    assert.deepEqual(bot.chats, ['now resting'])
     assert.match(lines.filter((l) => l.startsWith('goal step=')).pop() || '', /goal step=gather .*source=task-plan/)
   })
 

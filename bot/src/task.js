@@ -2665,7 +2665,7 @@ function applyCommit(bot, ctx, kind, optionId, step, now, unlock = null, criteri
     }
     try {
       const line = commitChatLine(ctx, kind, optionId, step, criterion)
-      if (line) chatStep(bot, ctx, line)
+      if (line) console.log(`goal commit: ${line}`) // owner 2026-11-14: internal narration, log only
     } catch (_) { /* narration never breaks the commit */ }
     return true
   } catch (_) {

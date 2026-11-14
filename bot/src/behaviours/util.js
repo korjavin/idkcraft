@@ -11,8 +11,18 @@ const castle = require('../castle')
 const metrics = require('../metrics')
 const residence = require('../residence') // isInside; requires only vec3 + castle
 
-function say(bot, line) {
-  try { bot.chat(line) } catch (_) { /* chat best-effort, like goal.js */ }
+// Owner 2026-11-14: the same behaviour line within 10 min is suppressed (log keeps it).
+const SAY_SAME_MS = 10 * 60 * 1000
+function say(bot, line, now = Date.now()) {
+  try {
+    const seen = bot._said || (bot._said = new Map())
+    const at = seen.get(line)
+    if (typeof at === 'number' && now - at < SAY_SAME_MS) { console.log(`chat dup suppressed: ${line}`); return false }
+    seen.set(line, now)
+    if (seen.size > 200) seen.delete(seen.keys().next().value)
+    bot.chat(line)
+    return true
+  } catch (_) { return false /* chat best-effort, like goal.js */ }
 }
 
 // Drop a live pathfinder goal like stopOnce, but without stop(): its latch
@@ -758,4 +768,4 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
+module.exports = { SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }

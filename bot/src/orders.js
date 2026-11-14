@@ -37,14 +37,78 @@ bringMod.setRecipeSource({
   enabled: () => llmOrders.enabled(),
 })
 
-// How long a recover outcome stays reportable in status (01 body-2): the
-// stamp never clears, so without a window every status would cite it.
-const LAST_RECOVER_WINDOW_MS = 5 * 60 * 1000
-
 // Chat cap (commands.js CHAT_LIMIT): an overlong status line clips with '…'.
 function clipStatus(line) {
   const s = String(line)
   return s.length > CHAT_LIMIT ? s.slice(0, CHAT_LIMIT - 1) + '…' : s
+}
+
+// Owner 2026-11-14: status is at most 3 plain lines — what I do (and the
+// castle progress), what blocks me, and my body/place only when notable.
+const CASTLE_STEPS = new Set(['castle', 'castlefetch', 'bank', 'gocastle'])
+const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1)
+function statusLines(bot, ctx, followName, now = Date.now()) {
+  const castleMod = require('./behaviours/castle')
+  const c = ctx.castle
+  const prog = c && c.progress && c.progress.total > 0 ? c.progress : null
+  const castleText = () => {
+    if (!prog) return ''
+    if (c.phase === 'complete') return ' (castle complete)'
+    const rate = castleMod.castleRate(ctx, now)
+    return `: ${prog.done}/${prog.total} (${Math.floor(prog.done * 100 / prog.total)}%)${rate !== null ? `, ~${rate} blocks/h` : ''}`
+  }
+  const step = ctx.step
+  const pick = ctx.stepPick && ctx.stepPick.step === step ? ctx.stepPick : null
+  const mins = pick && typeof pick.at === 'number' ? Math.floor((now - pick.at) / 60000) : 0
+  const since = mins >= 1 ? ` for ${mins} min` : ''
+  let doing
+  if (ctx.lead) doing = `Leading ${ctx.lead.by || 'you'}`
+  else if (ctx.paused || (ctx.flat && ctx.flat.parked)) doing = 'Parked — say go work or follow me'
+  else if (ctx.gocastle) doing = 'Going to the castle'
+  else if (ctx.comehome) doing = 'Coming home'
+  else if (ctx.bring) doing = `Bringing ${ctx.bring.want || ''} ${ctx.bring.name || ctx.bring.drop || 'items'}`.replace('  ', ' ')
+  else if (ctx.flat) doing = 'Flattening the ground'
+  else if (!ctx.work) doing = `Following ${followName || 'you'}`
+  else if (!step || step === 'rest') doing = 'Idle — nothing useful to do right now'
+  else {
+    const entry = goal.MENU[step]
+    doing = cap((entry && entry.verb) || step) + (CASTLE_STEPS.has(step) ? castleText() : '') + since
+  }
+  const lines = [doing]
+  let plan = null
+  try { plan = llmOrders.statusLine(ctx) } catch (_) { plan = null }
+  // What blocks me / what I need: the first that applies.
+  let need = null
+  const f = ctx.castleFetch
+  const cw = ctx.castleWord
+  let stuck = false
+  try { stuck = verdict(ctx).state === 'STUCK' } catch (_) { stuck = false }
+  if (plan) need = plan
+  else if (stuck || (ctx.recovery && ctx.recovery.action)) need = 'Stuck — trying to get free'
+  else if (ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout') need = "Can't find a way to my target"
+  else if (c && c.taskPark) need = 'Castle on hold — no progress lately, I will retry later'
+  else if (ctx.home && ctx.home.taskPark) need = 'House on hold — no progress lately, I will retry later'
+  else if (step === 'castlefetch' && f && f.kind) need = `Short on ${f.kind}${f.haul ? ` (need ${f.haul})` : ''} — fetching it`
+  else if (cw && cw.word === 'blocked' && cw.kind) need = `Out of ${cw.kind} — ${cw.left || 'some'} blocks still need it`
+  else if (ctx.beds && ctx.beds.noWool) need = 'No wool for beds — looking for sheep'
+  if (need) lines.push(need)
+  // Body and place, only when notable.
+  const notes = []
+  if (typeof bot.health === 'number' && bot.health <= 10) notes.push(`health ${Math.round(bot.health)}/20`)
+  if (typeof bot.food === 'number' && bot.food <= 10) notes.push(`food ${Math.round(bot.food)}/20`)
+  try {
+    const t = bot.time && bot.time.timeOfDay
+    if (typeof t === 'number' && t >= 13000 && t < 23000) notes.push('night')
+  } catch (_) { /* time best-effort */ }
+  try {
+    const p = bot.entity && bot.entity.position
+    if (p && c && c.site && CASTLE_STEPS.has(step)) {
+      const d = Math.round(Math.hypot(p.x - c.site.x, p.z - c.site.z))
+      if (d > 48) notes.push(`${d} blocks from the castle`)
+    }
+  } catch (_) { /* place best-effort */ }
+  if (notes.length) lines.push(cap(notes.join(', ')))
+  return lines
 }
 
 function createOrders(box) {
@@ -853,81 +917,9 @@ function createOrders(box) {
       return 'going to castle'
     },
     status: () => {
-      const facts = goal.goalFacts(bot, ctx)
-      const flatParked = ctx.flat && ctx.flat.parked
-      const mode = ctx.gocastle ? 'going to castle' : (ctx.comehome ? 'coming home' : (ctx.bring ? 'bringing' : (ctx.flat && !ctx.flat.parked && !ctx.paused && !ctx.lead ? 'flattening' : (ctx.work ? 'working' : (ctx.lead ? 'leading' : ((ctx.paused || flatParked) ? (ctx.flat ? 'parked (flat paused)' : 'parked') : 'following'))))))
-      const tail = `logs=${facts.logs} planks=${facts.planks} home=${facts.home}`
-      const lines = []
-      if (mode === 'following') {
-        // The brain's follow/fight/roam/idle share the idle lease by design
-        // (body.js), so the lease owner cannot name the mode — derive it.
-        const owner = ctx.body && ctx.body.owner
-        const bodyName = (!owner || owner === 'idle') ? 'follow' : owner
-        const src = (ctx.lastDecision && ctx.lastDecision.source) || 'none'
-        lines.push(`following body=${bodyName} source=${src} ${tail}`)
-      } else {
-        const step = ctx.step || 'none'
-        const entry = goal.MENU[step]
-        const verb = entry && entry.verb
-        const flatActive = ctx.flat && !ctx.flat.parked ? ctx.flat : null
-        const order = ctx.gocastle || ctx.comehome || ctx.bring || flatActive || ctx.lead
-        const phase = order && typeof order.phase === 'string' && order.phase ? ` phase=${order.phase}` : ''
-        let line = `${mode}${phase} body=${(ctx.body && ctx.body.owner) || 'none'} step=${step}`
-        if (verb) line += ` (${verb})`
-        if (ctx.stepStatus) line += ` ${ctx.stepStatus}`
-        // The stamp belongs to its own step only (01 core-2).
-        const pick = ctx.stepPick && ctx.stepPick.step === step ? ctx.stepPick : null
-        if (pick && typeof pick.at === 'number') line += ` ${Math.max(0, Math.floor((Date.now() - pick.at) / 1000))}s`
-        if (pick && pick.source) line += ` — by ${pick.source} (${pick.why || 'unknown'})`
-        // Facts ride ahead of the reasons: a long skipped/resting tail clips first.
-        line += ` ${tail}`
-        if (step === 'rest') {
-          // atl.7: a resting bot names the reason decide() stored, if any.
-          if (ctx.restWhy) line += ` resting because ${ctx.restWhy}`
-        }
-        lines.push(line)
-      }
-      // Task line (vmzq.2): active build task with its stall, when one exists.
-      try {
-        const tl = taskMod.taskLine(ctx)
-        if (tl) lines.push(tl)
-      } catch (_) { /* task line best-effort */ }
-      // LLM order plan (vf8e.6): the active step and its done-when text.
-      try {
-        const pl = llmOrders.statusLine(ctx)
-        if (pl) lines.push(pl)
-      } catch (_) { /* plan line best-effort */ }
-      // Park line (vmzq.3): the parked task with the diagnosis it parked
-      // with (persisted on the episode, so it survives a restart).
-      try {
-        const cEp = ctx.castle && ctx.castle.taskPark
-        const hEp = ctx.home && ctx.home.taskPark
-        if (cEp && cEp.diag) lines.push(`parked castle: ${cEp.diag}`)
-        else if (hEp && hEp.diag) lines.push(`parked house: ${hEp.diag}`)
-      } catch (_) { /* park line best-effort */ }
-      // Line 2, only when something is wrong: holds, stuck, recovery, path, last outcome.
-      const wrong = []
-      try {
-        // Only live holds read as blocked (01 core-1). Shared with task.js.
-        const text = goal.goalText(facts, ctx.home)
-        const bl = taskMod.blockedReason(bot, ctx, facts, text)
-        if (bl) wrong.push(bl)
-      } catch (_) { /* blocked best-effort */ }
-      let stuckState = 'MOVING'
-      try { stuckState = verdict(ctx).state || 'MOVING' } catch (_) { /* moving default */ }
-      if (stuckState === 'STUCK') wrong.push(`stuck=${stuckState}`)
-      const rec = ctx.recovery
-      if (rec && rec.action) wrong.push(rec.status ? `recovering=${rec.action}/${rec.status}` : `recovering=${rec.action}`)
-      // Only abnormal verdicts (the stuck.js terminal set): a healthy bot
-      // holds path=success all session (01 body-2).
-      if (ctx.lastPathStatus === 'noPath' || ctx.lastPathStatus === 'timeout') wrong.push(`path=${ctx.lastPathStatus}`)
-      const lr = ctx.lastRecover
-      if (lr && lr.action && typeof lr.at === 'number' && Date.now() - lr.at <= LAST_RECOVER_WINDOW_MS) {
-        const ago = typeof lr.at === 'number' ? ` ${Math.max(0, Math.floor((Date.now() - lr.at) / 1000))}s ago` : ''
-        wrong.push(`last recover: ${lr.action} ${lr.outcome || 'unknown'}${ago}`)
-      }
-      if (wrong.length > 0) lines.push(wrong.join('; '))
-      for (const l of lines) bot.chat(clipStatus(l))
+      // The old internal dump stays in the log for debugging.
+      try { console.log(`status diag: ${taskMod.diagnose(bot, ctx)}`) } catch (_) { /* log best-effort */ }
+      for (const l of statusLines(bot, ctx, box.followName)) bot.chat(clipStatus(l))
     },
     // Residence switch (g0z.29): every tick (and once after the memory
     // restore) — idempotent, so the restart migration of a castle completed
@@ -968,4 +960,4 @@ function createOrders(box) {
 // re-earns them.
 const HOME_STEPS = ['stay', 'gohome', 'shelter', 'build', 'beds', 'light', 'stockpile', 'craft']
 
-module.exports = { createOrders }
+module.exports = { createOrders, statusLines }

@@ -1541,12 +1541,9 @@ function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
         o.announced = true
         say(bot, `checking the home chest for ${what}`)
       }
-    } else if (!Array.isArray(o.announcedNear) || !o.announcedNear.includes(key)) {
-      // One line per remembered chest (the home line above stays once per
-      // order): the walk target is not the home chest, so say so honestly.
-      if (!Array.isArray(o.announcedNear)) o.announcedNear = []
-      o.announcedNear.push(key)
-      say(bot, `checking a nearby chest for ${what}`)
+    } else {
+      // Nearby chests stay quiet until one pays off (owner 2026-11-14: misses were chat spam).
+      console.log(`bring: checking a nearby chest for ${what} at ${c.x},${c.y},${c.z}`)
     }
     return
   }
@@ -1602,6 +1599,7 @@ function chestFetch(bot, ctx, o, bp, valid = null, settled = null) {
       ctx.chestFull = false // a fetch may have made room: re-arm the step
       if (food && !o.drop && res && res.name) o.drop = res.name
       o.have = o.drop ? countDrop(bot, o.drop) : 0 // inventory count is the truth
+      if (res && res.got > 0) say(bot, `took ${res.got} ${res.name || o.drop || 'items'} from a chest`)
       if (o.have >= o.want) {
         o.phase = 'return'
         o.saidWaiting = false

@@ -177,8 +177,9 @@ describe('atl.4: failed gather holds instead of livelocking the arbiter', () => 
       actions.push(r.decision && r.decision.action)
       assert.equal(r.decision.action, 'rest')
       const holdStart = actions.length - 1
-      assert.ok(bot.lines.some((l) => l.includes('gather holds after failure')),
-        `rest names the hold: ${bot.lines.join(' | ')}`)
+      // Owner 2026-11-14: the reason is kept on ctx.restWhy (status/log), not chatted.
+      assert.ok(String(bot._tickerCtx.restWhy).includes('gather holds after failure'),
+        `rest names the hold: ${bot._tickerCtx.restWhy}`)
       for (let i = 0; i < 10; i++) {
         const rr = await ticker.tick()
         actions.push(rr.decision && rr.decision.action)

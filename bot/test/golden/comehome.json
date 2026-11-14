@@ -8,7 +8,7 @@
   {"tick":4,"kind":"stepStatus","value":"running"},
   {"tick":5,"kind":"owner","owner":"work"},
   {"tick":5,"kind":"step","value":"beds"},
-  {"tick":5,"kind":"chat","text":"next: making beds (goal-fsm)"}
+  {"tick":5,"kind":"chat","text":"now making beds"}
  ],
  "jr2.3 'come home' walk goal issues with digging off": [
   {"tick":0,"kind":"step","value":null},

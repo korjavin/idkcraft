@@ -60,13 +60,19 @@ describe('fuja retired damage', () => {
     const now = Date.now()
     const bot = worldBot(set, [{ name: 'cobblestone', count: 64 }])
     const ctx = { castle: state({ visitedAt: now, blocked: retired(cells, 'no-ref') }) }
-    castle.menuFact(bot, ctx, now)
-    assert.match(ctx.castle.status, /holes: .*stone: no-ref, retired/, 'status names the damage')
-    assert.equal(bot.chats.length, 1, 'one honest chat line')
-    assert.match(bot.chats[0], /^castle: 4 holes: .*no retries left$/, 'chat names the holes')
-    const n = bot.chats.length
-    castle.menuFact(bot, ctx, now + 1000)
-    assert.equal(bot.chats.length, n, 'no repeat chat')
+    // Owner 2026-11-14: the hole report is a log line, never chat.
+    const lines = []
+    const orig = console.log
+    console.log = (m) => { if (String(m).startsWith('castle: ')) lines.push(String(m)) }
+    try {
+      castle.menuFact(bot, ctx, now)
+      assert.match(ctx.castle.status, /holes: .*stone: no-ref, retired/, 'status names the damage')
+      assert.equal(lines.length, 1, 'one honest log line')
+      assert.match(lines[0], /^castle: 4 holes: .*no retries left$/, 'the line names the holes')
+      castle.menuFact(bot, ctx, now + 1000)
+      assert.equal(lines.length, 1, 'no repeat line')
+    } finally { console.log = orig }
+    assert.equal(bot.chats.length, 0, 'nothing chatted')
   })
   it('a tidy return reopens transient cells into the repair word', () => {
     const { set, cells } = damaged()

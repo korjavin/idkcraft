@@ -672,6 +672,7 @@ describe('gear round-2: collision, async legs, latch', () => {
     assert.equal(ctx.gear.saidNeed, 'want-ore')
     bot._items.push({ name: 'iron_pickaxe', count: 1 }) // self pick forged
     ctx.stepStatus = 'running'
+    bot._said = null // util.say 10-min dedupe: a new rung may repeat
     gear(bot, ctx) // rung 2: same want-ore key, announced again
     assert.equal(bot.lines.filter((l) => l.includes('more raw iron')).length, 2)
   })
