@@ -625,6 +625,16 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     assert.deepEqual(asked, [[['cobblestone_stairs'], 4]], 'craft runs next tick')
   })
 
+  it('stairs: no cobble but planks on hand -> crafts wood stairs from the pack (prod 2026-11-14)', () => {
+    castleMod.menuFact = stairsWord
+    const asked = []
+    fetch.deps.craftItem = (b, c, names, n) => { asked.push([names, n]); return 'running' }
+    const bot = stairsBot({ items: [...TOOLS(), { name: 'oak_planks', count: 40 }, { name: 'crafting_table', count: 1 }], chest: [] })
+    bot.registry.itemsByName.oak_planks = {}
+    fetch(bot, { castle: castleState() })
+    assert.deepEqual(asked, [[['oak_stairs'], 4]])
+  })
+
   it('stairs: chest logs fund the table — withdraws 1 log (vf8e.8)', async () => {
     castleMod.menuFact = stairsWord
     fetch.deps.craftItem = () => { throw new Error('craft must not run on the chest tick') }
