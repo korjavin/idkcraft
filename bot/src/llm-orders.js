@@ -85,7 +85,10 @@ const ORDER_STEPS = {
 // Work steps the plan may pin: not the night/safety steps (the FSM owns
 // them), not deliver/rest/castle internals. Loaded step skills join below
 // (skillSteps): they sit in goal.MENU and are registered like hand steps.
-const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stockpile', 'bank', 'gear', 'forage', 'reforest', 'explore']
+const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stockpile', 'bank', 'gear', 'forage', 'reforest', 'explore', 'castlefetch']
+// Chooser synonyms: prod haiku answered mine/quarry for castle stone and
+// chop/wood for logs; the whole plan used to die as outcome=invalid.
+const CHOOSE_SYNONYMS = { mine: 'castlefetch', quarry: 'castlefetch', dig: 'castlefetch', fetch: 'castlefetch', castle_fetch: 'castlefetch', mine_stone: 'castlefetch', chop: 'gather', chop_wood: 'gather', gather_wood: 'gather', wood: 'gather', explore_far: 'explore' }
 
 const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their companion bot. ' +
   'Use only the listed step ids, in the order they must run. Item and block names are Minecraft registry ids (torch, water_bucket, iron_ore). ' +
@@ -198,8 +201,16 @@ function validatePlan(ans, works = workSteps(), opts = {}) {
   const raw = ans && Array.isArray(ans.plan) ? ans.plan : null
   if (!raw) return { error: 'no plan', why, need }
   if (raw.length === 0) return { empty: true, why, need }
-  if (raw.length > maxSteps) return { error: `plan too long (${raw.length})`, why, need }
+  // Chooser (opts.need): keep the valid head of the plan, drop the rest.
+  const lenient = !!opts.need
+  if (raw.length > maxSteps && !lenient) return { error: `plan too long (${raw.length})`, why, need }
   const steps = []
+  const res = validateSteps(lenient ? raw.slice(0, maxSteps) : raw, works, opts, allowOrders, steps, why, need)
+  if (res && res.error && lenient && steps.length) return { steps, why, need, dropped: res.error }
+  return res || { steps, why, need }
+}
+
+function validateSteps(raw, works, opts, allowOrders, steps, why, need) {
   for (const r of raw) {
     let id = r && typeof r.step === 'string' ? r.step.toLowerCase().trim() : ''
     const nsItem = (v) => String(v == null ? '' : v).toLowerCase().trim().replace(/^minecraft:/, '').replace(/\s+/g, '_')
@@ -215,6 +226,7 @@ function validatePlan(ans, works = workSteps(), opts = {}) {
       sigCount = sig[3] != null ? Number(sig[3]) : null
       if ((r.item != null && nsItem(r.item) !== sigItem) || (r.count != null && sigCount != null && Number(r.count) !== sigCount)) return { error: `conflicting arguments in ${id}(...)`, why, need }
     }
+    if (opts.need && Object.hasOwn(CHOOSE_SYNONYMS, id.replace(/[\s-]+/g, '_'))) id = CHOOSE_SYNONYMS[id.replace(/[\s-]+/g, '_')]
     const knownOrder = orderStep(id)
     const needOk = !!opts.need && id === 'need' // a5xy: the chooser may push one need onto a self goal stack
     if (['need', 'acquire', 'abandon'].includes(id) && !opts.bring && !needOk) return { error: `no step "${id}"`, why, need }
@@ -241,7 +253,7 @@ function validatePlan(ans, works = workSteps(), opts = {}) {
     }
     steps.push(s)
   }
-  return { steps, why, need }
+  return null
 }
 
 function label(s) {
@@ -588,7 +600,7 @@ function ask(bot, ctx, req, fetchFn) {
       const sit = (r.situation || '').replace(/"/g, "'").replace(/[\r\n]+/g, ' ').slice(0, 160)
       // bv9x: the error reason used to die here (plan=- need="" why=""), so a
       // prod sweep could not tell a bad key from a dead route. Always log it.
-      console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome} plan=${plan} need="${need}" why="${why}" situation="${sit}" tokens=${r.tokens || '0/0'} ms=${ms} err="${(r.error || '').replace(/"/g, "'")}"`)
+      console.log(`llm choose regime=${regime} trigger=${trigger} outcome=${outcome}${outcome === 'invalid' ? ` invalid why="${(r.error || '').replace(/"/g, "'")}"` : r.dropped ? ` dropped="${r.dropped.replace(/"/g, "'")}"` : ''} plan=${plan} need="${need}" why="${why}" situation="${sit}" tokens=${r.tokens || '0/0'} ms=${ms} err="${(r.error || '').replace(/"/g, "'")}"`)
       console.log(`choose tier=llm pick=${plan} candidates=${open.length}`)
       if (!r.steps) return // fallback: the FSM pick stands, log only
       const sayChoose = rosterOnline(bot) ? say : () => {}

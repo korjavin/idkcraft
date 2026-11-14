@@ -982,3 +982,18 @@ describe('chooser JEV-first tier', () => {
     assert.ok(logs.some((l) => l.startsWith('choose tier=llm') && l.includes('candidates=0')), JSON.stringify(logs))
   })
 })
+
+describe('chooser plan tolerance (castle-stalled invalid)', () => {
+  it('maps mine->castlefetch, keeps the valid head, names the reject reason', () => {
+    const works = [...llmOrders.WORK_STEPS]
+    const opts = { maxSteps: llmOrders.CHOOSE_MAX_STEPS, allowOrders: false, need: true }
+    const reply = '{"plan":[{"step":"mine","count":1},{"step":"chop wood"},{"step":"build_castle"}],"why":"stone","need":"stone supply"}'
+    const r = llmOrders.validatePlan(JSON.parse(reply), works, opts)
+    assert.deepEqual(r.steps.map((s) => s.step), ['castlefetch', 'gather'])
+    assert.match(r.dropped, /no step "build_castle"/)
+    const bad = llmOrders.validatePlan({ plan: [{ step: 'build_castle' }] }, works, opts)
+    assert.match(bad.error, /no step/)
+    // orders stay strict
+    assert.ok(llmOrders.validatePlan({ plan: [{ step: 'craft' }, { step: 'mine' }] }, works).error)
+  })
+})
