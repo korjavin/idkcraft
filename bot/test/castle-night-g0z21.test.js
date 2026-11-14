@@ -119,6 +119,16 @@ describe('g0z.21 castle night: shelter by the far castle (vd93: dusk knocks off)
     assert.equal(FGO(facts('dusk'), bot({ x: SITE.x + 20, y: 64, z: SITE.z + 20 }), close), true)
   })
 
+  it('a TASK-parked castle still owns the far dusk (prod 2026-11-14: no 500-block march)', () => {
+    const far = { x: 400, y: 64, z: 400 }
+    const taskParked = { site: { ...CASTLE }, rot: 0, phase: 'body', parked: true, taskPark: { at: 1, auto: true, side: true } }
+    assert.equal(FGO(facts('dusk'), bot(far, 12500), ctxWith(taskParked)), false, 'task park: no far dusk march')
+    assert.equal(FSH(facts('dusk'), bot(far, 12500), ctxWith(taskParked)), true, 'task park: shelter in place')
+    // An owner park (no episode) releases the night as before.
+    const ownerParked = { site: { ...CASTLE }, rot: 0, phase: 'body', parked: true }
+    assert.equal(FSH(facts('dusk'), bot(far, 12500), ctxWith(ownerParked)), false, 'owner park: no castle shelter')
+  })
+
   it('decide: castle dusk knocks off past feasible day steps; no castle marches', async () => {
     await quiet(async () => {
       assert.equal((await goal.decide(bot(AT_CASTLE, 12500), ctxWith())).action, 'gohome')
