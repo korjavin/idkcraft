@@ -20,6 +20,7 @@ const { createTicker } = require('../src/index')
 
 const L2 = taskMod.TASK_STALL_L2_MS
 const RETRY = taskMod.TASK_PARK_RETRY_MS
+const CASTLE_RETRY = taskMod.TASK_PARK_CASTLE_FIRST_MS
 assert.equal(L2, 45 * 60 * 1000, 'L2 is 45 min')
 assert.equal(RETRY, 60 * 60 * 1000, 'park retry is 60 min')
 assert.equal(taskMod.TASK_PARKS_PER_DAY, 3, '3 parks latch for the day')
@@ -114,7 +115,7 @@ function parkChats(bot) {
   return bot.chats.filter((c) => /parked at|for the day/.test(c))
 }
 function resumeChats(bot) {
-  return bot.chats.filter((c) => /retrying after 60 min parked/.test(c))
+  return bot.chats.filter((c) => /retrying after 10 min parked/.test(c))
 }
 
 describe('stall ladder L2/L3 (vmzq.3)', () => {
@@ -137,10 +138,10 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.ok(parkChats(bot)[0].length <= 200, `park chat caps at 200, got ${parkChats(bot)[0].length}`)
     assert.match(taskLogs().find((l) => l.includes('parked')) || '', /^task castle 8\/1722 parked #1 why=step=castle running/)
     assert.equal(await stallCounter('castle', 'L2'), l2Before + 1)
-    // No re-park while parked: 30 more stalled minutes stay at one line.
+    // No re-park while parked: 9 more stalled minutes stay at one line.
     const epAt = ctx.castle.taskPark.at
     const t2 = advance(bot, ctx, t0, 45)
-    advance(bot, ctx, t2, 30)
+    advance(bot, ctx, t2, 9)
     assert.equal(parkChats(bot).length, 1, 'no second park while parked')
     assert.equal(ctx.castle.taskPark.at, epAt, 'episode untouched')
   })
@@ -156,6 +157,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     // Side work moves to a new failure: the changed diagnosis re-fires.
     ctx.step = 'equip'
     ctx.stepStatus = 'failed:craft-stall'
+    ctx.castle.taskPark.at = t1 + 15 * 60 * 1000 // hold the park past the 10-min castle retry
     advance(bot, ctx, t1, 15)
     const l1s = bot.chats.filter((c) => c.startsWith('castle: no progress'))
     assert.equal(l1s.length, l1Before + 1, 'changed diagnosis re-fires while parked')
@@ -163,7 +165,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.ok(taskLogs().some((l) => /stall=\d+s parked step=equip/.test(l)), 'parked token in the log')
   })
 
-  it('auto-resume after 60 min wall, once per episode', () => {
+  it('castle auto-resume after 10 min wall, once per episode', () => {
     const bot = makeBot()
     const { ctx } = castleCtx(bot)
     const t0 = 1000000000000
@@ -171,21 +173,21 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     const t1 = advance(bot, ctx, t0, 45)
     assert.equal(ctx.castle.parked, true)
     const at = ctx.castle.taskPark.at
-    // 59 min of park: still parked, silent.
-    const t2 = advance(bot, ctx, t1, 59)
+    // 9 min of park: still parked, silent.
+    const t2 = advance(bot, ctx, t1, 9)
     assert.equal(at - t1 <= 0, true, 'episode started at the park tick')
-    assert.equal(ctx.castle.parked, true, 'no resume before 60 min')
+    assert.equal(ctx.castle.parked, true, 'no resume before 10 min')
     assert.equal(resumeChats(bot).length, 0)
-    // The 60th minute resumes: flags clear, history stays, clock resets.
+    // The 10th minute resumes: flags clear, history stays, clock resets.
     advance(bot, ctx, t2, 2)
     assert.equal(ctx.castle.parked, false)
     assert.equal(ctx.castle.taskPark, null)
     assert.deepEqual(ctx.castle.parkHist, { day: '2001-09-09', n: 1 })
     assert.equal(resumeChats(bot).length, 1, 'one resume line')
-    assert.match(resumeChats(bot)[0], /^castle retrying after 60 min parked \(stall 1\/3\)$/)
-    assert.match(taskLogs().find((l) => l.includes('resumed')) || '', /^task castle resumed after 60 min parked \(stall 1\/3\)$/)
+    assert.match(resumeChats(bot)[0], /^castle retrying after 10 min parked \(stall 1\/3\)$/)
+    assert.match(taskLogs().find((l) => l.includes('resumed')) || '', /^task castle resumed after 10 min parked \(stall 1\/3\)$/)
     // The clock re-baselines: a fresh 45 min stall parks again (#2).
-    const t3 = at + RETRY + 2 * 60 * 1000
+    const t3 = at + CASTLE_RETRY + 2 * 60 * 1000
     taskMod.taskTick(bot, ctx, t3)
     advance(bot, ctx, t3, 45)
     assert.equal(ctx.castle.parkHist.n, 2, 'second stall parks again')
@@ -193,21 +195,21 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(parkChats(bot).length, 2)
   })
 
-  it('third park in a day latches until an owner command', async () => {
+  it('third castle park in a day latches the count but still retries after 10 min (only castle stop is permanent)', async () => {
     const bot = makeBot()
     const { ticker, ctx } = castleCtx(bot)
     const l3Before = stallCounter('castle', 'L3')
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
     let t = t0
-    // Three full stall cycles: 45 to park, 60 to retry, twice, then park.
+    // Three full stall cycles: 45 to park, 10 to retry, twice, then park.
     t = advance(bot, ctx, t, 45)
     assert.equal(ctx.castle.parkHist.n, 1)
-    t = advance(bot, ctx, t, 61)
+    t = advance(bot, ctx, t, 11)
     assert.equal(ctx.castle.parked, false, 'park 1 auto-resumes')
     t = advance(bot, ctx, t, 45)
     assert.equal(ctx.castle.parkHist.n, 2)
-    t = advance(bot, ctx, t, 61)
+    t = advance(bot, ctx, t, 11)
     assert.equal(ctx.castle.parked, false, 'park 2 auto-resumes')
     t = advance(bot, ctx, t, 45)
     assert.equal(ctx.castle.parkHist.n, 3)
@@ -217,17 +219,18 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.match(latched[0], /^castle parked for the day \(3 stalls\) — step=/)
     assert.ok(latched[0].length <= 200, `L3 chat caps at 200, got ${latched[0].length}`)
     assert.equal((await stallCounter('castle', 'L3')) - (await l3Before), 1, 'L3 counter moves')
-    // 2 h more: still parked, no resume.
-    advance(bot, ctx, t, 120)
-    assert.equal(ctx.castle.parked, true, 'latched park waits for the owner')
-    assert.equal(ctx.castle.taskPark.auto, false)
-    assert.equal(resumeChats(bot).length, 2, 'no third auto-resume')
-    // Owner command clears: parked flag, episode and clock.
-    handleChat(bot, ticker, 'Steve', 'castle go')
-    assert.equal(ctx.castle.parked, false)
+    // Owner 2026-11-14: a latched (or legacy pre-#843, no side flag) park retries after 10 min too.
+    const at3 = ctx.castle.taskPark.at
+    taskMod.taskTick(bot, ctx, at3 + 9 * 60 * 1000)
+    assert.equal(ctx.castle.parked, true, 'still parked at 9 min')
+    taskMod.taskTick(bot, ctx, at3 + 10 * 60 * 1000 + 1000)
+    assert.equal(ctx.castle.parked, false, 'latched park resumes after 10 min')
     assert.equal(ctx.castle.taskPark, null)
-    assert.equal(ctx.task, null, 'clock resets on resume')
-    assert.equal(bot.chats[bot.chats.length - 1], 'castle resumed')
+    assert.equal(resumeChats(bot).length, 3, 'third auto-resume')
+    // An owner castle stop (no episode) never auto-resumes.
+    handleChat(bot, ticker, 'Steve', 'castle stop')
+    advance(bot, ctx, at3 + 11 * 60 * 1000, 180)
+    assert.equal(ctx.castle.parked, true, 'castle stop stays parked')
   })
 
   it('day rollover restarts the park count', () => {
@@ -529,7 +532,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
       assert.deepEqual(ctx2.castle.parkHist, { day: '2001-09-09', n: 1 })
       // The restored episode still auto-resumes on its wall clock.
       ctx2.work = true
-      taskMod.taskTick(bot2, ctx2, ctx.castle.taskPark.at + RETRY + 1000)
+      taskMod.taskTick(bot2, ctx2, ctx.castle.taskPark.at + CASTLE_RETRY + 1000)
       assert.equal(ctx2.castle.parked, false, 'restored park resumes')
       assert.equal(ctx2.castle.taskPark, null)
       assert.deepEqual(ctx2.castle.parkHist, { day: '2001-09-09', n: 1 }, 'history rides the resume')
