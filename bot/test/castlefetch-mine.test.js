@@ -117,6 +117,7 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
     await flush()
     await flush()
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 }) // no rock in reach either
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
   })
 
@@ -129,6 +130,7 @@ describe('castlefetch v2 mine branch (idkcraft-neuc.53)', () => {
     castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 })
     await flush()
     await flush()
+    castlefetch.digTick(bot, ctx, ctx.castleFetch, { kind: 'stone', word: 'batch', short: 8 }) // no rock in reach either
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stone')
   })
 
