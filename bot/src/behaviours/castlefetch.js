@@ -265,7 +265,7 @@ function craftNames(bot, kind) {
   if (kind === 'bookshelf') return ['bookshelf'] // 6 planks + 3 books at a table (craftany does the planks layer from logs)
   if (kind === 'enchanting_table') return ['enchanting_table'] // 4 obsidian + 2 diamonds + 1 book at a table (0dbg)
   if (kind === 'blast_furnace') return ['blast_furnace'] // 5 iron_ingot + 1 furnace + 3 smooth_stone at a table (g0z.50; the furnace itself must be held)
-  if (kind === 'stairs') return ['cobblestone_stairs'] // 6 cobble -> 4 at a table (g0z.47; cobble from the quarry legs)
+  if (kind === 'stairs') return stairsCobbleShort(bot) ? woodStairs(bot) : ['cobblestone_stairs'] // 6 cobble -> 4 at a table (g0z.47; cobble from the quarry legs)
   return []
 }
 
@@ -1233,7 +1233,7 @@ function craftTick(bot, ctx, f, d) {
   const names = craftNames(bot, d.kind)
   if (names.length === 0 || f.craftOut) return false
   if (d.kind === 'banner' && !bannerSelf(bot, ctx)) return false // beds first: the wool is theirs
-  if (d.kind === 'stairs' && stairsCobbleShort(bot)) return false // dig first (stairsDig); the scaffold/shelter reserve stays
+  if (d.kind === 'stairs' && names.length === 0) return false // dig first (stairsDig); the scaffold/shelter reserve stays
   // Smelting's coal floor; charcoal is always spendable (light.js 33vm, g0z.62's torchTick smelts it).
   // ponytail: craftany may still pick the coal recipe when both are held — a reserve leak of one coal per 4 torches.
   if (d.kind === 'torch' && require('./light').spendableFuel(countItems(bot, (n) => n === 'coal'), countItems(bot, (n) => n === 'charcoal')) <= 0) return false
@@ -1273,10 +1273,19 @@ const STAIRS_COBBLE = 6
 // Stairs keep their cobble reserve + table fund gate; other kinds ask
 // craftany's planner (the same gate craftTick's craft runs through).
 function packFunds(bot, ctx, d) {
-  if (d.kind === 'stairs') return !stairsCobbleShort(bot) && stairsTableFunded(bot, ctx)
+  if (d.kind === 'stairs') return craftNames(bot, 'stairs').length > 0 && stairsTableFunded(bot, ctx)
   const names = craftNames(bot, d.kind)
   if (names.length === 0) return false
   try { return !!require('./craftany').planCraft(bot, ctx, names, CRAFT_COUNT[d.kind] || 1).ok } catch (_) { return false }
+}
+
+// Wood stairs (prod 2026-11-14: failed:no-stairs with planks=enough and no
+// cobble): 6 planks of one wood -> 4 <wood>_stairs, above the planks reserve.
+function woodStairs(bot) {
+  const keep = STAIRS_COBBLE + castleMod.reserveOf('planks')
+  return itemNames(bot, (n) => n.endsWith('_planks'))
+    .filter((p) => countItems(bot, (n) => n === p) >= keep)
+    .map((p) => p.replace(/_planks$/, '_stairs'))
 }
 
 function stairsCobbleShort(bot) {

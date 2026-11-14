@@ -627,6 +627,7 @@ function peekPlan(bot, st, now, ctx) {
   let owed = null
   let short = null
   const order = workOrder(cells, key)
+  const gate = stairGateY(bot, ctx, st, cells) // pick()'s flight gate: the word names the short stairs, not a gated planks cell
   for (let i = 0; i < order.length; i++) {
     const c = cells[order[i]]
     // Same relay skip as pick(): the arbiter's word never reads 'clear'
@@ -645,6 +646,7 @@ function peekPlan(bot, st, now, ctx) {
     if (interior(c)) inside = true
     if (shortOf(bot, ctx, c)) { short = keepShort(ctx, short, c, now); continue }
     if (short && !clearing(c) && !supported(bot, c)) continue
+    if (stairGated(c, gate)) continue
     return { cell: nearest(bot, ctx, st, cells, order, i, now), waiting: null, cells }
   }
   const sp = shortPick(ctx, short, owed, now)

@@ -709,4 +709,11 @@ describe('castle flight gate: no stairs, no cells above the unlaid flight', () =
     assert.equal(bot.calls.places.length, 0, 'the high cell is never attempted')
     assert.equal(ctx.stepStatus, 'failed:no-stairs')
   })
+
+  it('the arbiter peek names the short stair too, not the gated planks cell (castlefetch, not craft/beds)', () => {
+    const world = makeWorld()
+    paintAll(world, { except: (c) => c.idx === high.idx })
+    const r = castle.peek(mockBot(world, { items: noStairs }), st(), Date.now(), {})
+    assert.equal(r.cell && r.cell.kind, 'stairs')
+  })
 })
