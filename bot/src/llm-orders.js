@@ -88,7 +88,7 @@ const ORDER_STEPS = {
 const WORK_STEPS = ['craft', 'equip', 'build', 'beds', 'light', 'gather', 'stockpile', 'bank', 'gear', 'forage', 'reforest', 'explore', 'castlefetch']
 // Chooser synonyms: prod haiku answered mine/quarry for castle stone and
 // chop/wood for logs; the whole plan used to die as outcome=invalid.
-const CHOOSE_SYNONYMS = { mine: 'castlefetch', quarry: 'castlefetch', dig: 'castlefetch', fetch: 'castlefetch', castle_fetch: 'castlefetch', mine_stone: 'castlefetch', chop: 'gather', chop_wood: 'gather', gather_wood: 'gather', wood: 'gather', explore_far: 'explore' }
+const CHOOSE_SYNONYMS = { mine: 'castlefetch', quarry: 'castlefetch', dig: 'castlefetch', fetch: 'castlefetch', castle_fetch: 'castlefetch', mine_stone: 'castlefetch', chop: 'gather', chop_wood: 'gather', gather_wood: 'gather', wood: 'gather', explore_far: 'explore', pack_room: 'stockpile', make_room: 'stockpile', deposit: 'stockpile', bank_items: 'bank' }
 
 const SYSTEM = 'You turn a Minecraft player\'s chat line into a plan for their companion bot. ' +
   'Use only the listed step ids, in the order they must run. Item and block names are Minecraft registry ids (torch, water_bucket, iron_ore). ' +

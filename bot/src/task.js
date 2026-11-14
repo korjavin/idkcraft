@@ -2878,6 +2878,10 @@ function commitTickTop(bot, ctx, now) {
       } catch (_) {
         full = false
       }
+      // castlefetch makes room itself first (prod 2026-11-14 stall loop)
+      if (full && c.step === 'castlefetch') {
+        try { full = !require('./behaviours/stockpile').tossJunk(bot, ctx) } catch (_) { /* preempt as before */ }
+      }
       if (full) {
         endCommit(bot, ctx, c.kind, state, c, 'preempted:pack-full', now)
         return

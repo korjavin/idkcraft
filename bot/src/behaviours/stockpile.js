@@ -127,9 +127,14 @@ function packFull(bot, ctx) {
 // caller waits instead of failing. The bot faces away from the castle
 // site and up first: a toss at its feet was re-picked 2 s later.
 const JUNK_KEEP = { dirt: 32, wheat_seeds: SEED_KEEP, gravel: 0, flint: 0, rotten_flesh: 0, spider_eye: 0, poisonous_potato: 0 }
-function junkKeep(name) {
+// Mining byproducts are junk only while a castle runs (prod 2026-11-14: a
+// pack of them stalled castlefetch on pack-full); isMaterial still keeps
+// any the blueprint uses (stone variants count as castle stone).
+const CASTLE_JUNK = new Set(['granite', 'diorite', 'andesite', 'tuff', 'deepslate', 'cobbled_deepslate', 'calcite', 'dripstone_block', 'sand', 'red_sand', 'clay_ball', 'beetroot_seeds', 'pumpkin_seeds', 'melon_seeds', 'bone', 'string', 'feather', 'egg'])
+function junkKeep(name, ctx) {
   if (typeof name !== 'string') return null
   if (name in JUNK_KEEP) return JUNK_KEEP[name]
+  if (ctx && ctx.castle && CASTLE_JUNK.has(name)) return 0
   if (name.endsWith('_leaves')) return 0
   if (name.endsWith('_sapling')) return SAPLING_KEEP
   return null
@@ -140,13 +145,13 @@ function tossJunk(bot, ctx) {
   if (!bot || typeof bot.toss !== 'function') return false
   if (tossing.has(bot)) return true
   const have = {}
-  for (const i of invItems(bot)) if (i && junkKeep(i.name) !== null) have[i.name] = (have[i.name] || 0) + (typeof i.count === 'number' ? i.count : 1)
+  for (const i of invItems(bot)) if (i && junkKeep(i.name, ctx) !== null) have[i.name] = (have[i.name] || 0) + (typeof i.count === 'number' ? i.count : 1)
   const plan = []
   for (const [name, n] of Object.entries(have)) {
     let need = false
     try { need = require('./castle').isMaterial(name, ctx && ctx.castle) } catch (_) { need = false }
     if (need) continue
-    const extra = n - junkKeep(name)
+    const extra = n - junkKeep(name, ctx)
     if (extra > 0) plan.push([name, extra])
   }
   if (!plan.length) return false

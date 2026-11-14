@@ -1042,7 +1042,10 @@ function pickChest(bot, ctx, f, kind) {
       continue
     }
     // y7lp.3: home/site/castle first, remembered chests only when none qualifies
-    if (!best || (!c.mem && best.mem) || (!!c.mem === !!best.mem && dist < best.dist)) best = { ...c, k, dist }
+    // prod 2026-11-14: a castle bank is a site chest (<= SITE_CHEST_RADIUS of the site), never one 200 away
+    const site = ctx.castle && ctx.castle.site
+    const atSite = !c.bank || !site || Math.hypot(site.x - c.at.x, site.z - c.at.z) <= SITE_CHEST_RADIUS
+    if (!best || (atSite && !best.atSite) || (atSite === best.atSite && ((!c.mem && best.mem) || (!!c.mem === !!best.mem && dist < best.dist)))) best = { ...c, k, dist, atSite }
   }
   if (!best && !f.nearOnly) best = far // the ladder's far rung: after obtain (hop legs)
   if (best) tried.add(best.k)
@@ -1052,6 +1055,7 @@ function pickChest(bot, ctx, f, kind) {
 // A far bank trip (> TASK_SEARCH_RADIUS) hauls a full load: the castle's
 // remainder of the kind plus its reserve, capped by pack room (ROOM_KEEP
 // slots stay free so the stockpile pierce never fires on the draw).
+const SITE_CHEST_RADIUS = 48
 function farLoad(bot, ctx, kind, short) {
   const cw = ctx && ctx.castleWord
   const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
