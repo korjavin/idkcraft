@@ -887,6 +887,8 @@ async function enterSearch(bot, ctx, o, legacy) {
   // (.22) a radius unlock lifts the cap for the window only (clamped).
   if (o.self) {
     let cap = exploreMod.taskActive(ctx) ? exploreMod.TASK_SEARCH_RADIUS : SELF_SEARCH_RADIUS
+    // Sheep live past the build radius (prod v2 castle: every 64-ring chunk visited, the hunt capped in 90 s, beds latched)
+    if ((o.kind || 'block') === 'wool') cap = Math.max(cap, woolMod.WOOL_SELF_SEARCH_RADIUS)
     try {
       const { goalUnlock } = require('../goal-unlock')
       const r = goalUnlock(ctx, 'radius')

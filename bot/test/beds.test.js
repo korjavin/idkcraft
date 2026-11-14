@@ -1473,7 +1473,7 @@ describe('9qt0 sheep hunting: persistent latch, banked partials, string rung, ne
 
   it('revmux 02 core-1: a far pending explore leg is replaced by the near pick before a self search walks', async () => {
     const bot = mockBot({ at: { x: SITE.x, y: 64, z: SITE.z } })
-    const far = { x: SITE.x, z: SITE.z - 128 }
+    const far = { x: SITE.x, z: SITE.z - 200 }
     const o = bring.toWoolHunt(bot, { kind: 'item', name: 'wool', names: ['white_wool'], want: 3, by: null, drop: null, have: 0 })
     o.self = 'beds'
     const ctx = { home: v2home(), bring: o, explore: { visited: new Set(), target: { ...far } } }
@@ -1483,7 +1483,7 @@ describe('9qt0 sheep hunting: persistent latch, banked partials, string rung, ne
     }
     assert.equal(o.phase, 'searchwalk', `phase ${o.phase}`)
     const t = ctx.explore.target
-    assert.ok(t && Math.hypot(t.x - SITE.x, t.z - SITE.z) <= bring.SELF_SEARCH_RADIUS, `leg target ${JSON.stringify(t)}`)
+    assert.ok(t && Math.hypot(t.x - SITE.x, t.z - SITE.z) <= require('../src/behaviours/wool').WOOL_SELF_SEARCH_RADIUS, `leg target ${JSON.stringify(t)}`)
   })
 
   it('revmux 01: string too short for the need does not open a latched hunt', async () => {

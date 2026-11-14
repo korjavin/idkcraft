@@ -298,11 +298,11 @@ describe('vmzq.19 own legs stay within the task radius', () => {
     }
   })
 
-  it('rings 16/32/64 visited at the site: the hunt caps instead of walking out', async () => {
+  it('rings 16..128 visited at the site: the wool hunt caps at 150 instead of walking out', async () => {
     const bot = huntBot({ x: CASTLE.x, y: 64, z: CASTLE.z - 3 })
     const ctx = huntCtx()
     ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, issuedKey: null, markStart: 0, chatAt: 0 }
-    for (const r of [16, 32, 64]) {
+    for (const r of [16, 32, 64, 128]) {
       for (let a = 0; a < 8; a++) {
         const x = Math.round(CASTLE.x + r * Math.sin(a * Math.PI / 4))
         const z = Math.round(CASTLE.z - r * Math.cos(a * Math.PI / 4))
@@ -326,20 +326,49 @@ describe('vmzq.19 own legs stay within the task radius', () => {
     assert.ok(Math.hypot(t.x - CASTLE.x, t.z - CASTLE.z) <= explore.TASK_SEARCH_RADIUS, `site pick ${t.x},${t.z}`)
   })
 
-  it('the 64 task cap replaces a stale 65-96 leg (send-back: fails at 96)', async () => {
+  it('prod v2 castle: rings 16..64 visited, the wool hunt walks out to 128 and finds the v2-listed sheep there', async () => {
+    const rnd = Math.random
+    Math.random = () => 0.5
+    try {
+      const bot = huntBot({ x: CASTLE.x, y: 64, z: CASTLE.z - 3 })
+      const ctx = huntCtx()
+      ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, issuedKey: null, markStart: 0, chatAt: 0 }
+      for (const r of [16, 32, 64]) {
+        for (let a = 0; a < 8; a++) {
+          const x = Math.round(CASTLE.x + r * Math.sin(a * Math.PI / 4))
+          const z = Math.round(CASTLE.z - r * Math.cos(a * Math.PI / 4))
+          ctx.explore.visited.add(`${Math.floor(x / 16)},${Math.floor(z / 16)}`)
+        }
+      }
+      const order = ctx.bring
+      await bring(bot, ctx, null, {})
+      assert.equal(order.phase, 'searchwalk', 'not capped at 64')
+      await bring(bot, ctx, null, {})
+      const t = ctx.explore.target
+      const d = Math.hypot(t.x - CASTLE.x, t.z - CASTLE.z)
+      assert.ok(d > explore.TASK_SEARCH_RADIUS && d <= 150, `leg ${t.x},${t.z} ${Math.round(d)} from site`)
+      // v2 bridge fold shape: name = registry path, metadata [] (sheared unknown: fail-open)
+      bot.entities[7] = { id: 7, name: 'sheep', type: 'animal', position: pos(t.x + 5, 64, t.z), metadata: [], isValid: true }
+      bot.entity.position = pos(t.x, 64, t.z)
+      const seen = require('../src/behaviours/bringbase').findAnimal(bot, null, { prey: ['sheep'], skipSheared: true, radius: 64 })
+      assert.equal(seen && seen.id, 7)
+    } finally { Math.random = rnd }
+  })
+
+  it('the wool cap (150) replaces a stale far leg', async () => {
     // A pending leg 80 out sits inside the old SELF_SEARCH_RADIUS (96)
     // but outside the task radius (64): the anchor-shift transition
     // (home-anchored leg, then the castle order moves the anchor) leaves
     // exactly such legs. The 64 cap must replace it with a site pick.
     const bot = huntBot({ x: CASTLE.x, y: 64, z: CASTLE.z - 3 })
     const ctx = huntCtx()
-    const stale = { x: CASTLE.x + 80, z: CASTLE.z }
+    const stale = { x: CASTLE.x + 200, z: CASTLE.z }
     ctx.explore = { visited: new Set(), target: stale, lastPos: null, stalls: 0, issuedKey: null, markStart: 0, chatAt: 0 }
     await bring(bot, ctx, null, {})
     assert.equal(ctx.bring.phase, 'searchwalk')
     const t = ctx.explore.target
     assert.ok(t && t !== stale, 'the stale leg is replaced')
-    assert.ok(Math.hypot(t.x - CASTLE.x, t.z - CASTLE.z) <= explore.TASK_SEARCH_RADIUS, `site pick ${t.x},${t.z}`)
+    assert.ok(Math.hypot(t.x - CASTLE.x, t.z - CASTLE.z) <= 150, `site pick ${t.x},${t.z}`)
   })
 
   it('owner wool orders keep the home-anchored full spiral under a castle (R3a)', async () => {
