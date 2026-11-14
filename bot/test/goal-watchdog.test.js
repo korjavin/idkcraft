@@ -176,6 +176,8 @@ afterEach(() => {
 })
 
 function wdLogs() { return lines.filter((l) => l.startsWith('goal watchdog')) }
+// Owner 2026-11-14: commit narration is log-only.
+function narr() { return lines.filter((l) => l.startsWith('goal commit: ')).map((l) => l.slice('goal commit: '.length)) }
 function outLogs() { return lines.filter((l) => l.startsWith('goal outcome')) }
 function resetLogs() { return lines.filter((l) => l.startsWith('goal reset')) }
 function planbLogs() { return lines.filter((l) => l.startsWith('goal planb')) }
@@ -1411,7 +1413,7 @@ describe('deterministic fallback (vmzq.28)', () => {
   })
 })
 
-describe('watchdog commit narration (vmzq.66)', () => {
+describe('watchdog commit narration (vmzq.66, log-only)', () => {
   // Stranded house: owner online, gather failed holding no-trees, nothing
   // placed — explore-far and plain explore are both offered.
   function strandedHouse() {
@@ -1426,7 +1428,7 @@ describe('watchdog commit narration (vmzq.66)', () => {
     return { bot, ctx }
   }
 
-  it('a JEV explore-far commit narrates once; a repeat within 10 s stays silent; a new option narrates again', async () => {
+  it('a JEV explore-far commit narrates once; every commit logs; a new option logs its own line; nothing chats', async () => {
     process.env.GOAL_WATCHDOG_MS = '5000'
     process.env.GOAL_COMMIT_MS = '1000'
     const { bot, ctx } = strandedHouse()
@@ -1446,12 +1448,13 @@ describe('watchdog commit narration (vmzq.66)', () => {
     assert.ok(wdLogs()[0].includes('choice=explore-far'), JSON.stringify(wdLogs()))
     assert.ok(wdLogs()[1].includes('choice=explore-far'), JSON.stringify(wdLogs()))
     assert.match(wdLogs()[2], / choice=explore /, JSON.stringify(wdLogs()))
-    const far = bot.chats.filter((c) => c.includes('up to 256 blocks'))
-    assert.equal(far.length, 1, `one narration for two same-option commits: ${JSON.stringify(bot.chats)}`)
+    const far = narr().filter((c) => c.includes('up to 256 blocks'))
+    assert.equal(far.length, 2, `the log keeps both same-option commits: ${JSON.stringify(narr())}`)
     assert.match(far[0], /^build home: no wood within 160 — search beyond the task radius up to 256 blocks \(may find wood\)$/)
-    assert.equal(bot.chats.length, 2, `a different option narrates its own line: ${JSON.stringify(bot.chats)}`)
+    assert.equal(narr().length, 3, `a different option narrates its own line: ${JSON.stringify(narr())}`)
+    assert.equal(bot.chats.length, 0, 'narration never chats')
     // Plain steps narrate the action, not the STEP_CRITERIA predicate (revmux 01).
-    assert.match(bot.chats[1], /^build home: no wood within 160 — walks the visited boundary to new ground to find resources \(unlikely \+home now\)$/)
+    assert.match(narr()[2], /^build home: no wood within 160 — walks the visited boundary to new ground to find resources \(unlikely \+home now\)$/)
   })
 
   it('the bank option narrates whole: a colon after a paren is not a trigger cut', () => {
@@ -1459,7 +1462,7 @@ describe('watchdog commit narration (vmzq.66)', () => {
     taskMod.taskTick(bot, ctx, 1000000000000)
     const crit = 'bank the full pack at home before fetching more (+home chain: frees room)'
     assert.equal(taskMod.applyCommit(bot, ctx, 'house', 'bank', 'stockpile', 1000000000000, null, crit), true)
-    assert.match(bot.chats[bot.chats.length - 1], / — bank the full pack at home before fetching more \(\+home chain: frees room\)$/)
+    assert.match(narr()[narr().length - 1], / — bank the full pack at home before fetching more \(\+home chain: frees room\)$/)
   })
 
   it('the commit reason echoes the radius gather actually searched', async () => {
@@ -1470,7 +1473,7 @@ describe('watchdog commit narration (vmzq.66)', () => {
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
     await fullRound(bot, ctx, t0, 'house')
-    assert.match(bot.chats[0], /^build home: no wood within 96 — search beyond the task radius up to 256 blocks \(may find wood\)$/)
+    assert.match(narr()[0], /^build home: no wood within 96 — search beyond the task radius up to 256 blocks \(may find wood\)$/)
   })
 
   it('without a recorded radius the reason stays radius-free', async () => {
@@ -1481,7 +1484,7 @@ describe('watchdog commit narration (vmzq.66)', () => {
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
     await fullRound(bot, ctx, t0, 'house')
-    assert.match(bot.chats[0], /^build home: no wood found nearby — search beyond the task radius up to 256 blocks \(may find wood\)$/)
+    assert.match(narr()[0], /^build home: no wood found nearby — search beyond the task radius up to 256 blocks \(may find wood\)$/)
   })
 
   it('256-cap give-up asks for logs at the park fork (tick loop to the round cap)', async () => {
@@ -1495,7 +1498,7 @@ describe('watchdog commit narration (vmzq.66)', () => {
     t = await fullRound(bot, ctx, t, 'house')
     await fullRound(bot, ctx, t, 'house')
     assert.ok(ctx.home.taskPark, 'parked at the round cap')
-    assert.ok(bot.chats.some((c) => c.includes('up to 256 blocks')), `narrated the tries: ${JSON.stringify(bot.chats)}`)
+    assert.ok(narr().some((c) => c.includes('up to 256 blocks')), `narrated the tries: ${JSON.stringify(narr())}`)
     const parks = bot.chats.filter((c) => /parked at/.test(c))
     assert.equal(parks.length, 1)
     assert.match(parks[0], /^house parked at .*; say go work to resume — drop me some logs or say stop$/)

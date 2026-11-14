@@ -530,7 +530,7 @@ describe('decide decision point', () => {
     assert.equal(ctx.step, 'gather')
     assert.equal(ctx.stepStatus, 'running')
     assert.deepEqual(goalLines(), [`goal step=gather prev=none source=goal-fsm fsm=gather why=start menu=gather,rest facts=${goalText(goalFacts(bot, ctx))}`])
-    assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
+    assert.deepEqual(bot.chats, ['now chopping wood'])
   })
 
   it('a failed previous step logs its status (ipn.15)', async () => {
@@ -555,12 +555,12 @@ describe('decide decision point', () => {
     const bot = goalBot()
     const ctx = {}
     await decide(bot, ctx)
-    assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
+    assert.deepEqual(bot.chats, ['now chopping wood'])
     ctx.step = 'explore'; ctx.stepStatus = 'done' // simulate a finished flip away
     const r = await decide(bot, ctx) // same facts re-decide to gather
     assert.equal(ctx.step, 'gather')
     assert.equal(r.action, 'gather')
-    assert.deepEqual(bot.chats, ['next: chopping wood (goal-fsm)'])
+    assert.deepEqual(bot.chats, ['now chopping wood'])
   })
 
   it('same facts with a running step: no change, no log, no chat', async () => {
@@ -1137,10 +1137,9 @@ describe('atl.7 rest explains itself', () => {
     const ctx = { step: '', stepStatus: null, goalText: null, home: siteHome() }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'rest')
-    const line = bot.chats.find((l) => l.startsWith('resting: '))
-    assert.ok(line && line.endsWith('(only-option)'), `chats: ${bot.chats}`)
-    assert.equal(line, `resting: ${ctx.restWhy} (only-option)`)
-    for (const frag of ALL_OUT) assert.ok(line.includes(frag), `missing ${frag} in: ${line}`)
+    assert.ok(bot.chats.includes('now resting'), `chats: ${bot.chats}`)
+    // The reasons stay on ctx.restWhy (status/log), not in chat.
+    for (const frag of ALL_OUT) assert.ok(ctx.restWhy.includes(frag), `missing ${frag} in: ${ctx.restWhy}`)
   })
   it('rest repeats stay silent but refresh the stored reason', async () => {
     const bot = ladenBot()
@@ -1163,7 +1162,7 @@ describe('atl.7 rest explains itself', () => {
     // woodstarve: built-home gather is capped by stock, not vetoed
     assert.ok(ctx.restWhy.includes('gather: stock full'), `why: ${ctx.restWhy}`)
     assert.ok(ctx.restWhy.includes('explore: ready'), `declined ready step marked: ${ctx.restWhy}`)
-    assert.ok(bot.chats.some((l) => l.startsWith('resting: ') && l.endsWith('(jev)')), `chats: ${bot.chats}`)
+    assert.ok(bot.chats.includes('now resting'), `chats: ${bot.chats}`)
   })
   it('held steps report the hold, not the facts', async () => {
     const bot = ladenBot()

@@ -117,7 +117,7 @@ describe('rw4.4 (a) build step announces itself', () => {
     const ctx = { step: '', stepStatus: null, goalText: null, home: goal.siteFor(bot, pos(0, 64, 0)) }
     const r = await goal.decide(bot, ctx)
     assert.equal(r.action, 'build')
-    assert.deepEqual(bot.chats, ['next: building the house (goal-fsm)'])
+    assert.deepEqual(bot.chats, ['now building the house'])
   })
 })
 

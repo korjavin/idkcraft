@@ -8,7 +8,7 @@
   {"tick":2,"kind":"setGoal","goal":null,"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
   {"tick":2,"kind":"step","value":"gather"},
   {"tick":2,"kind":"stepStatus","value":"running"},
-  {"tick":2,"kind":"chat","text":"next: chopping wood (goal-fsm)"},
+  {"tick":2,"kind":"chat","text":"now chopping wood"},
   {"tick":2,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":4,"x":20,"y":64,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
   {"tick":2,"kind":"lastGoalKey","value":"gather:20,64,0"},
   {"tick":4,"kind":"setGoal","goal":{"type":"GoalNear","rangeSq":4,"x":20,"y":65,"z":0},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
@@ -19,7 +19,6 @@
   {"tick":7,"kind":"lastGoalKey","value":""},
   {"tick":8,"kind":"step","value":"explore"},
   {"tick":8,"kind":"stepStatus","value":"running"},
-  {"tick":8,"kind":"chat","text":"next: exploring (goal-fsm)"},
   {"tick":8,"kind":"setGoal","goal":{"type":"GoalXZ","x":14,"z":-12},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
   {"tick":8,"kind":"lastGoalKey","value":"explore:14,-12"},
   {"tick":8,"kind":"chat","text":"exploring north, 16 blocks from home"}

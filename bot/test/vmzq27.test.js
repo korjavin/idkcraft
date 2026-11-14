@@ -159,14 +159,20 @@ describe('vmzq.27 skip-and-continue: three holes, material word, one report line
       assert.equal(castleMod.menuFact(bot, ctx), 'stone-batch', 'workable rest, not blocked')
       const holes = castleMod.holesOf(bot, ctx.castle, cells)
       assert.equal(holes.length, 3)
-      assert.ok(castleMod.sayHoles(bot, ctx, ctx.castle, holes, Date.now()))
-      assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-      assert.match(bot.chats[0], /^castle: 3 holes: .*, retry in \d+s — remove those blocks or say castle stop$/)
-      for (const w of whys) assert.ok(bot.chats[0].includes(`(stone: ${w})`), `why ${w} listed`)
-      for (const c of trio) assert.ok(bot.chats[0].includes(`${c.x} ${c.y} ${c.z}`), `hole ${c.x} ${c.y} ${c.z} listed`)
+      // Owner 2026-11-14: the hole report goes to the log, never chat.
+      const lines = []
+      const inner = console.log
+      console.log = (m) => lines.push(String(m))
+      try { assert.ok(castleMod.sayHoles(bot, ctx, ctx.castle, holes, Date.now())) } finally { console.log = inner }
+      assert.equal(bot.chats.length, 0, `chats: ${JSON.stringify(bot.chats)}`)
+      assert.equal(lines.length, 1, `lines: ${JSON.stringify(lines)}`)
+      assert.match(lines[0], /^castle: 3 holes: .*, retry in \d+s — remove those blocks or say castle stop$/)
+      for (const w of whys) assert.ok(lines[0].includes(`(stone: ${w})`), `why ${w} listed`)
+      for (const c of trio) assert.ok(lines[0].includes(`${c.x} ${c.y} ${c.z}`), `hole ${c.x} ${c.y} ${c.z} listed`)
       // Same set again: silent.
-      assert.ok(castleMod.sayHoles(bot, ctx, ctx.castle, castleMod.holesOf(bot, ctx.castle, cells), Date.now()))
-      assert.equal(bot.chats.length, 1, 'no re-chat without a new hole')
+      console.log = (m) => lines.push(String(m))
+      try { assert.ok(castleMod.sayHoles(bot, ctx, ctx.castle, castleMod.holesOf(bot, ctx.castle, cells), Date.now())) } finally { console.log = inner }
+      assert.equal(lines.length, 1, 'no repeat without a new hole')
     })
   })
 })
@@ -228,10 +234,13 @@ describe('vmzq.27 interactable refs: a placement click never opens a GUI', () =>
 
 describe('vmzq.27 revmux 01: the latch is per cell, transient no-ref stays silent', () => {
   it('a why-change stays silent, a new cell and a retire re-chat', () => {
+    // Owner 2026-11-14: hole reports are log lines now; same latch.
     const chats = []
-    const bot = { chats, chat(m) { chats.push(String(m)) } }
+    const bot = { chat() { assert.fail('holes never chat') } }
     const ctx = {}
     const st = { status: '' }
+    const { mock } = require('node:test')
+    mock.method(console, 'log', (m) => { if (String(m).startsWith('castle: ')) chats.push(String(m)) })
     const hole = (x, why, retired = false) => ({ x, y: 64, z: 200, kind: 'stone', why, until: Date.now() + 30000, retired })
     assert.ok(castleMod.sayHoles(bot, ctx, st, [hole(100, 'protected')], Date.now()))
     assert.equal(chats.length, 1)

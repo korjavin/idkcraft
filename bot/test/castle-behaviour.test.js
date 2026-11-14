@@ -38,11 +38,17 @@ const KIT = [
   { name: 'oak_door', count: 1 }, { name: 'torch', count: 8 },
 ]
 
+// Owner 2026-11-14: hole reports go to the log, not chat; capture them per bot.
+let holeSink = null
+const log0 = console.log
+console.log = (...a) => { if (holeSink && /^castle: \d+ holes?/.test(String(a[0]))) holeSink.push(String(a[0])); else log0(...a) }
+
 function mockBot(world, { items = KIT, refuse = () => false } = {}) {
   const calls = { goals: [], places: [], digs: [] }
   const bot = {
     calls,
     chats: [],
+    holes: (holeSink = []),
     entity: { position: { x: SITE.x - 3, y: 64, z: SITE.z - 3 } },
     world: { getBlock: () => null },
     players: {},
@@ -596,8 +602,8 @@ describe('g0z.2 castle executor', () => {
     for (const c of moat) { const [x, y, z] = c.split(',').map(Number); assert.equal(world.get(x, y, z), 'air', `moat ${c} dug past the hole`) }
     for (const c of deck) assert.equal(world.get(c.x, c.y, c.z), 'oak_planks', 'deck laid (ground dug, then placed)')
     for (const c of fence) assert.equal(world.get(c.x, c.y, c.z), 'oak_fence')
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.ok(bot.chats[0].includes(`${held.x} ${held.y} ${held.z}`), 'the hole is listed')
+    assert.equal(bot.holes.length, 1, `chats: ${JSON.stringify(bot.holes)}`)
+    assert.ok(bot.holes[0].includes(`${held.x} ${held.y} ${held.z}`), 'the hole is listed')
     assert.equal(ctx.stepStatus, 'failed:blocked', 'the live hole still waits')
     assert.equal(castle.menuFact(bot, ctx), 'blocked', 'peek agrees while the hole is live')
     // Moat order, read off phase 1 (the moat digs here now): bridge
@@ -651,8 +657,8 @@ describe('g0z.2 castle executor', () => {
     await run(bot, ctx, 30)
     const e = ctx.castle.blocked[`2:${held.idx}`]
     assert.ok(e && e.retired && e.tries === castle.MAX_HOLE_TRIES, `entry: ${JSON.stringify(e)}`)
-    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[1], new RegExp(`^castle: 1 hole at ${held.x} ${held.y} ${held.z} \\(planks: air, retired\\), no retries left$`))
+    assert.equal(bot.holes.length, 2, `chats: ${JSON.stringify(bot.holes)}`)
+    assert.match(bot.holes[1], new RegExp(`^castle: 1 hole at ${held.x} ${held.y} ${held.z} \\(planks: air, retired\\), no retries left$`))
     // The moat, deck, door and fence all finish past it; the castle
     // completes with the hole still listed on the status.
     for (let i = 0; i < 3000 && ctx.stepStatus !== 'done'; i++) await run(bot, ctx, 1)
@@ -779,8 +785,8 @@ describe('g0z.2 castle executor', () => {
     // Out-of-order attempts cascade: cells above the hole have no laid
     // neighbour yet and block no-ref — unlisted at try 1 (revmux 01), so
     // the seed's line stands alone until a lasting hole appears.
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: air\\), retry in \\d+s$`))
+    assert.equal(bot.holes.length, 1, `chats: ${JSON.stringify(bot.holes)}`)
+    assert.match(bot.holes[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: air\\), retry in \\d+s$`))
     // Backoffs expire: every hole retries (and now lands, refs and all).
     for (const k of Object.keys(ctx.castle.blocked)) ctx.castle.blocked[k].until = 0
     refusing = false
@@ -815,17 +821,17 @@ describe('g0z.2 castle executor', () => {
     assert.notEqual(ctx.stepStatus, 'failed:blocked', 'skipping keeps the step running')
     assert.ok(bot.calls.places.length >= 5, 'the build progressed past the refusing cell')
     assert.ok(bot.calls.places.every((p) => !(p.x === stuck.x && p.y === stuck.y && p.z === stuck.z)), 'the hole itself never lays')
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+    assert.equal(bot.holes.length, 1, `chats: ${JSON.stringify(bot.holes)}`)
+    assert.match(bot.holes[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
     await run(bot, ctx, 6)
-    assert.equal(bot.chats.length, 1, 'same backoff window: no re-chat')
+    assert.equal(bot.holes.length, 1, 'same backoff window: no re-chat')
     // Backoff expired, still refused: the retry re-blocks silently (one
     // line through two windows, acceptance 6).
     ctx.castle.blocked[`1:${stuck.idx}`].until = 0
     await run(bot, ctx, 8)
     assert.notEqual(ctx.stepStatus, 'failed:blocked')
     assert.equal(ctx.castle.blocked[`1:${stuck.idx}`].tries, 2)
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.equal(bot.holes.length, 1, `chats: ${JSON.stringify(bot.holes)}`)
     // The cell lands, then a later cell blocks: a second, different line.
     ctx.castle.blocked[`1:${stuck.idx}`].until = 0
     refused = null
@@ -835,8 +841,8 @@ describe('g0z.2 castle executor', () => {
     refused = { x: next.x, y: next.y, z: next.z }
     await run(bot, ctx, 300)
     assert.ok(ctx.castle.blocked[`1:${next.idx}`], 'the later cell blocked')
-    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[1], new RegExp(`^castle: 1 hole at ${next.x} ${next.y} ${next.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+    assert.equal(bot.holes.length, 2, `chats: ${JSON.stringify(bot.holes)}`)
+    assert.match(bot.holes[1], new RegExp(`^castle: 1 hole at ${next.x} ${next.y} ${next.z} \\(stone: dig-refused\\), retry in \\d+s$`))
   })
 
   it('g0z.23 round 3 + vmzq.27: two holes share one line, re-blocking stays silent', async () => {
@@ -859,9 +865,9 @@ describe('g0z.2 castle executor', () => {
     await run(bot, ctx, 100)
     assert.notEqual(ctx.stepStatus, 'failed:blocked', 'skipping keeps the step running')
     // One line per new hole, each listing every hole so far.
-    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[1], /^castle: 2 holes: .*\(stone: dig-refused\), .*\(stone: dig-refused\), retry in \d+s$/)
-    assert.ok(bot.chats[1].includes(`${a.x} ${a.y} ${a.z}`) && bot.chats[1].includes(`${b.x} ${b.y} ${b.z}`), 'both holes listed')
+    assert.equal(bot.holes.length, 2, `chats: ${JSON.stringify(bot.holes)}`)
+    assert.match(bot.holes[1], /^castle: 2 holes: .*\(stone: dig-refused\), .*\(stone: dig-refused\), retry in \d+s$/)
+    assert.ok(bot.holes[1].includes(`${a.x} ${a.y} ${a.z}`) && bot.holes[1].includes(`${b.x} ${b.y} ${b.z}`), 'both holes listed')
     // Both backoffs expire: both retry and re-block, still two lines.
     ctx.castle.blocked[`1:${a.idx}`].until = 0
     ctx.castle.blocked[`1:${b.idx}`].until = 0
@@ -869,7 +875,7 @@ describe('g0z.2 castle executor', () => {
     assert.notEqual(ctx.stepStatus, 'failed:blocked')
     assert.equal(ctx.castle.blocked[`1:${a.idx}`].tries, 2)
     assert.equal(ctx.castle.blocked[`1:${b.idx}`].tries, 2)
-    assert.equal(bot.chats.length, 2, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.equal(bot.holes.length, 2, `chats: ${JSON.stringify(bot.holes)}`)
   })
 
   it('g0z.23 round 3: resolving the latched cell re-arms the stuck line', async () => {
@@ -887,7 +893,7 @@ describe('g0z.2 castle executor', () => {
     }
     const ctx = { castle: { site: SITE, rot: 0 } }
     await run(bot, ctx, 60)
-    assert.equal(bot.chats.length, 1)
+    assert.equal(bot.holes.length, 1)
     assert.ok(ctx.castleBlockedSaid)
     // Backoff expired, digs allowed: the cell lands, work moves elsewhere.
     ctx.castle.blocked[`1:${stuck.idx}`].until = 0
@@ -911,8 +917,8 @@ describe('g0z.2 castle executor', () => {
     // The chest is skipped as a placement ref too, so the cell stacked on
     // it holes no-ref until its sides lay — unlisted at try 1 (revmux 01),
     // while the seed itself is reported (the heal is pinned below).
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: kept-chest\\), retry in \\d+s — remove the chest there or say castle stop$`))
+    assert.equal(bot.holes.length, 1, `chats: ${JSON.stringify(bot.holes)}`)
+    assert.match(bot.holes[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: kept-chest\\), retry in \\d+s — remove the chest there or say castle stop$`))
   })
 
   it('vmzq.27: above a chest seed the cell lands via a side ref, never clicking the chest', async () => {
@@ -943,7 +949,7 @@ describe('g0z.2 castle executor', () => {
     assert.equal(world.get(stuck.x, stuck.y, stuck.z), 'chest', 'the seed is never dug')
     assert.ok(ctx.castle.blocked[`1:${stuck.idx}`], 'the seed stays a reported hole')
     assert.equal(ctx.castle.blocked[`1:${above.idx}`], undefined, 'no hole for the landed cell')
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.equal(bot.holes.length, 1, `chats: ${JSON.stringify(bot.holes)}`)
   })
 
   it('g0z.23 round 2: a blocked keep-clear cell latches no kind; far reads blocked', () => {
@@ -956,8 +962,8 @@ describe('g0z.2 castle executor', () => {
     const bot = mockBot(world, { items: [] })
     assert.equal(castle.menuFact(bot, ctx), 'blocked')
     assert.deepEqual(ctx.castleWord, { word: 'blocked' })
-    assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-    assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${win.x} ${win.y} ${win.z} \\(air: kept-chest\\), retry in \\d+s — remove the chest there or say castle stop$`))
+    assert.equal(bot.holes.length, 1, `chats: ${JSON.stringify(bot.holes)}`)
+    assert.match(bot.holes[0], new RegExp(`^castle: 1 hole at ${win.x} ${win.y} ${win.z} \\(air: kept-chest\\), retry in \\d+s — remove the chest there or say castle stop$`))
     bot.blockAt = () => null // walked away: no corner reads
     assert.equal(castle.menuFact(bot, ctx), 'blocked')
   })
@@ -983,9 +989,9 @@ describe('g0z.2 castle executor', () => {
       memory.restore(botLike, ctx, file, Date.now())
       const bot = mockBot(world, { items: [] })
       assert.equal(castle.menuFact(bot, ctx), 'blocked')
-      assert.equal(bot.chats.length, 1, `chats: ${JSON.stringify(bot.chats)}`)
-      assert.match(bot.chats[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
-      assert.ok(!bot.chats[0].includes('undefined'))
+      assert.equal(bot.holes.length, 1, `chats: ${JSON.stringify(bot.holes)}`)
+      assert.match(bot.holes[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
+      assert.ok(!bot.holes[0].includes('undefined'))
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
@@ -1029,7 +1035,7 @@ describe('g0z.2 castle executor', () => {
     const door = places.find((c) => c.kind === 'door')
     const last = bot.calls.places[bot.calls.places.length - 1]
     assert.deepEqual([last.x, last.y, last.z], [door.x, door.y, door.z], 'door laid last')
-    assert.deepEqual(bot.chats, [`castle done at ${SITE.x} ${SITE.y} ${SITE.z}`])
+    assert.deepEqual(bot.chats, [`castle 100% built (240/240)`, `castle done at ${SITE.x} ${SITE.y} ${SITE.z}`])
   })
 })
 
@@ -1159,14 +1165,14 @@ describe('qxql.26 castle hole report stays short in chat', () => {
   it('names 5 holes and a count in chat; status and log keep all 40', () => {
     const { mock } = require('node:test')
     const castle = require('../src/behaviours/castle')
-    const chats = []
-    const bot = { chat: (m) => chats.push(m) }
+    const bot = { chat: () => assert.fail('holes never chat') }
     const ctx = {}
     const st = {}
     const holes = Array.from({ length: 40 }, (_, i) => ({ x: i, y: 64, z: -i, kind: 'stone', why: 'dig-refused', until: 1000 }))
     const logs = []
     const log = mock.method(console, 'log', (m) => logs.push(m))
     try { castle.sayHoles(bot, ctx, st, holes, 0) } finally { log.mock.restore() }
+    const chats = logs.filter((m) => m.startsWith('castle: '))
     assert.equal(chats.length, 1)
     assert.match(chats[0], /^castle: 40 holes: (?:[^,]+, ){4}[^,]+ and 35 more, retry in 1s$/)
     assert.ok(chats[0].length < 256, `${chats[0].length} chars`)
@@ -1177,10 +1183,10 @@ describe('qxql.26 castle hole report stays short in chat', () => {
     const castle = require('../src/behaviours/castle')
     const { mock } = require('node:test')
     const chats = []
-    const bot = { chat: (m) => chats.push(m) }
+    const bot = { chat: () => assert.fail('holes never chat') }
     const ctx = {}
     const holes = Array.from({ length: 8 }, (_, i) => ({ x: i, y: 64, z: 0, kind: 'stone', why: 'dug', until: 0 }))
-    const log = mock.method(console, 'log', () => {})
+    const log = mock.method(console, 'log', (m) => { if (String(m).startsWith('castle: ')) chats.push(m) })
     try {
       castle.sayHoles(bot, ctx, {}, holes, 0)
       castle.sayHoles(bot, ctx, {}, [...holes, { x: 99, y: 64, z: 0, kind: 'stone', why: 'dug', until: 0 }], 0)

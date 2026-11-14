@@ -1338,10 +1338,10 @@ describe('flat ticker wiring', () => {
       assert.notEqual(t2.decision.action, 'flat', 'parked job stays parked')
       assert.equal(r.ctx.flat.parked, true)
       r.ticker.status()
-      assert.ok(r.bot.chats.at(-1).startsWith('parked (flat paused)'), r.bot.chats.at(-1))
+      assert.ok(r.bot.chats.at(-1).startsWith('Parked'), r.bot.chats.at(-1))
       r.ticker.setLead({ name: 'coal', pos: { x: 1, y: 63, z: 0 }, by: 'P', lastProgressAt: Date.now() })
       r.ticker.status()
-      assert.ok(r.bot.chats.at(-1).startsWith('leading'), r.bot.chats.at(-1))
+      assert.ok(r.bot.chats.at(-1).startsWith('Leading'), r.bot.chats.at(-1))
     } finally { BEHAVIOURS.bring = origBring; r.done() }
   })
 
@@ -1413,10 +1413,10 @@ describe('flat ticker wiring', () => {
     try {
       r.ticker.setFlat({ radius: 4, by: 'P' })
       r.ticker.status()
-      assert.ok(r.bot.chats.at(-1).startsWith('flattening'), r.bot.chats.at(-1))
+      assert.ok(r.bot.chats.at(-1).startsWith('Flattening'), r.bot.chats.at(-1))
       r.ticker.stop()
       r.ticker.status()
-      assert.ok(r.bot.chats.at(-1).startsWith('parked (flat paused)'), r.bot.chats.at(-1))
+      assert.ok(r.bot.chats.at(-1).startsWith('Parked'), r.bot.chats.at(-1))
     } finally { r.done() }
   })
 })

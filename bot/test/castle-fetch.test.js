@@ -1349,13 +1349,20 @@ describe('castlefetch while the castle is blocked (g0z.23)', () => {
     ctx.step = 'castle'
     ctx.stepStatus = 'running'
     ctx.goalText = 'stale'
-    const r = await goal.decide(bot, ctx)
+    // Owner 2026-11-14: hole reports go to the log, never chat.
+    const logs = []
+    const orig = console.log
+    console.log = (m) => logs.push(String(m))
+    let r
+    try { r = await goal.decide(bot, ctx) } finally { console.log = orig }
     assert.equal(r.action, 'castlefetch')
-    const holeLines = () => bot.chats.filter((m) => m.startsWith('castle: 1 hole'))
-    assert.equal(holeLines().length, 1, `chats: ${JSON.stringify(bot.chats)}`)
+    assert.ok(!bot.chats.some((m) => m.startsWith('castle: ')), `chats: ${JSON.stringify(bot.chats)}`)
+    const holeLines = () => logs.filter((m) => m.startsWith('castle: 1 hole'))
+    assert.equal(holeLines().length, 1, `logs: ${JSON.stringify(logs)}`)
     assert.match(holeLines()[0], new RegExp(`^castle: 1 hole at ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\), retry in \\d+s$`))
     assert.match(ctx.castle.status, new RegExp(`^holes: ${stuck.x} ${stuck.y} ${stuck.z} \\(stone: dig-refused\\)$`))
-    await goal.decide(bot, ctx)
+    console.log = (m) => logs.push(String(m))
+    try { await goal.decide(bot, ctx) } finally { console.log = orig }
     assert.equal(holeLines().length, 1, 'the standing block stays silent')
   })
 

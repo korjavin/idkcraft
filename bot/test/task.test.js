@@ -385,7 +385,7 @@ describe('task stall clock (vmzq.2)', () => {
     const before = bot.chats.length
     ticker.status()
     const after = bot.chats.slice(before)
-    assert.ok(after.some((l) => l === 'task castle 8/1722 stall=23m'), JSON.stringify(after))
+    assert.deepEqual(after, ['Fetching castle material: 8/1722 (0%)'], 'plain progress, no task internals')
     // No task, no line.
     ticker.setCastle(null)
     assert.equal(taskMod.taskLine(ctx), null)

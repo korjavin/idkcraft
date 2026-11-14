@@ -3113,14 +3113,22 @@ function noteChoice(bot, ctx, facts, names, choice, prev, status, why, force, te
   if (choice.step !== prev && !ctx.paused && ctx.work !== false) {
     const menu = STEP_ORDER.filter((n) => names.includes(n)).join(',')
     console.log(`goal step=${choice.step} prev=${prev || 'none'} source=${choice.source} fsm=${choice.fsm} why=${why}${why === 'step-failed' ? ` fail=${status}` : ''}${force ? ` force=${force}` : ''} menu=${menu} facts=${text}`)
-    if (choice.step === 'rest') {
-      chatStep(bot, ctx, `resting: ${ctx.restWhy} (${choice.source})`)
-    } else {
-      const entry = MENU[choice.step]
-      const verb = (entry && entry.verb) || choice.step
-      chatStep(bot, ctx, `next: ${verb} (${choice.source})`)
-    }
+    const entry = MENU[choice.step]
+    activityChat(bot, ctx, choice.step === 'rest' ? 'resting' : ((entry && entry.verb) || choice.step))
   }
+}
+
+// Owner 2026-11-14: step flips chatted ~300 `next: X (castle-rule)` lines in
+// 12 h. Chat a plain activity only when it differs from the last one said and
+// the last was >= 5 min ago; the goal step log keeps every transition.
+const ACTIVITY_CHAT_MS = 5 * 60 * 1000
+function activityChat(bot, ctx, verb, now = Date.now()) {
+  if (!ctx || ctx.activitySaid === verb) return false
+  if (typeof ctx.activitySaidAt === 'number' && now - ctx.activitySaidAt < ACTIVITY_CHAT_MS) return false
+  ctx.activitySaid = verb
+  ctx.activitySaidAt = now
+  try { bot.chat(`now ${verb}`) } catch (_) { /* chat best-effort */ }
+  return true
 }
 
 // Decision point: re-decide when there is no step, the step finished
@@ -3241,4 +3249,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome }
+module.exports = { activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome }

@@ -378,6 +378,31 @@ function holesOf(bot, st, cells) {
 // the shared latch dedupes across both. Only a new cell (or a newly
 // retired one) re-chats: a retry gap, a resolve and a why-change between
 // retries all stay silent (revmux 01), the latch syncing either way.
+// Owner 2026-11-14: status reads the build rate (cells/h over 30 min) from
+// these samples; chat says each new 10% once (the first scan only baselines).
+const RATE_WINDOW_MS = 30 * 60 * 1000
+function castleMilestone(bot, ctx, done, total, now = Date.now()) {
+  if (!(total > 0)) return
+  const r = ctx.castleRate || (ctx.castleRate = [])
+  if (!r.length || now - r[r.length - 1].at >= 60000) r.push({ at: now, done })
+  while (r.length > 2 && now - r[1].at >= RATE_WINDOW_MS) r.shift()
+  const tenth = Math.floor((done / total) * 10)
+  if (typeof ctx.castleTenthSaid === 'number' && tenth > ctx.castleTenthSaid) {
+    try { bot.chat(`castle ${tenth * 10}% built (${done}/${total})`) } catch (_) { /* chat best-effort */ }
+  }
+  if (typeof ctx.castleTenthSaid !== 'number' || tenth > ctx.castleTenthSaid) ctx.castleTenthSaid = tenth
+}
+
+// Cells per hour over the kept window, or null with under 5 min of samples.
+function castleRate(ctx, now = Date.now()) {
+  const r = ctx && ctx.castleRate
+  if (!Array.isArray(r) || r.length < 2) return null
+  const a = r[0]
+  const b = r[r.length - 1]
+  if (b.at - a.at < 5 * 60000) return null
+  return Math.max(0, Math.round((b.done - a.done) * 3600000 / (b.at - a.at)))
+}
+
 // False when no open hole.
 const HOLES_CHAT_MAX = 5
 function sayHoles(bot, ctx, st, holes, now) {
@@ -403,7 +428,7 @@ function sayHoles(bot, ctx, st, holes, now) {
   const kept = [...new Set(holes.map((h) => /^kept-(.+)$/.exec(h.why)).filter(Boolean).map((m) => m[1]))]
   if (kept.length === 1 && holes.length === 1) line += ` — remove the ${kept[0]} there or say castle stop`
   else if (kept.length) line += ' — remove those blocks or say castle stop'
-  try { bot.chat(line) } catch (_) { /* chat best-effort */ }
+  console.log(line) // owner 2026-11-14: coordinate dumps go to the log, never chat
   return true
 }
 
@@ -1704,6 +1729,7 @@ function progress(bot, st, cells, ctx) {
     } else if (done(bot, c)) { n++; now.add(c.idx) } else if (ctx.castleDug.was.has(c.idx)) lost.push(c)
   }
   st.progress = { done: n, total }
+  castleMilestone(bot, ctx, n, total)
   // uh28: a drop below the high-water mark names the cells that were laid
   // last scan and are not now, once per drop.
   // idkcraft-akze: after an away gap (no scan for a while — the bot was off
@@ -3002,6 +3028,8 @@ module.exports.SEARCH_SCANS = SEARCH_SCANS
 module.exports.EARTH_BUDGET = EARTH_BUDGET
 module.exports.progressByKind = progressByKind
 module.exports.progress = progress
+module.exports.castleMilestone = castleMilestone
+module.exports.castleRate = castleRate
 module.exports.usable = usable
 module.exports.kindOf = kindOf
 module.exports.noteDry = noteDry

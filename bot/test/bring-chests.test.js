@@ -293,7 +293,7 @@ describe("'make me a stone hoe' with an empty home chest", () => {
     // family window plus the two mat-draw windows (sticks, cobblestone).
     assert.equal(bot.calls.opens[0], '5,64,1')
     assert.deepEqual(bot.calls.opens.slice(1), ['12,64,0', '12,64,0', '12,64,0'])
-    assert.ok(bot.lines.includes('checking a nearby chest for stone_hoe'), `lines: ${bot.lines}`)
+    assert.ok(!bot.lines.includes('checking a nearby chest for stone_hoe'), `lines: ${bot.lines}`)
     assert.ok(bot.lines.includes('making you a stone_hoe'), `lines: ${bot.lines}`)
     assert.ok(bot.lines.includes('equipped stone_hoe'), `lines: ${bot.lines}`)
   })
@@ -349,7 +349,6 @@ describe("'bring me coal' with an empty home chest", () => {
     await drive(bot, ctx)
     assert.equal(ctx.bring, null)
     assert.deepEqual(bot.calls.opens, ['5,64,1', '12,64,0'])
-    assert.ok(bot.lines.includes('checking a nearby chest for coal'), `lines: ${bot.lines}`)
     assert.ok(bot.lines.includes('here are 3 coal'), `lines: ${bot.lines}`)
   })
 })
