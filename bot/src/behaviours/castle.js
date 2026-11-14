@@ -529,7 +529,8 @@ function stairGateY(bot, ctx, st, cells) {
   for (const c of cells) {
     if (c.kind !== 'stairs' || c.y >= y) continue
     const b = st.blocked && st.blocked[bkey(st, c.idx)]
-    if (b && b.retired) continue
+    // A step struck STRIKES+ times stops gating (it may never lay; the rest goes on).
+    if (b && (b.retired || b.tries >= STRIKES)) continue
     if (!done(bot, c)) y = c.y
   }
   return y + STAIR_GATE
@@ -590,6 +591,7 @@ function pick(bot, ctx, st, cells, key, now) {
       if (shortOf(bot, ctx, c)) { short = keepShort(ctx, short, c, now); continue }
       if (short && !clearing(c) && !supported(bot, c)) continue
       if (stairGated(c, gate)) continue
+      if (stairWaits(bot, cells, c)) { waiting = waiting || c; continue }
       ctx.castleCursor = first
       const n = nearest(bot, ctx, st, cells, order, i, now)
       ctx.castleNearIdx = n.idx
@@ -1892,14 +1894,27 @@ async function placeFaced(bot, ref, c) {
 
 // The step-below stance of a faced stair (feet at the cell's level, one
 // back along the face): air feet + head on a solid floor, else null.
+// A corner step of a tower spiral faces its NEXT step, so back-along-face is
+// the tower wall (prod 2026-11-14: -138 80 417 'unreachable'); then stand on
+// the laid previous step beside it instead.
+const SIDES4 = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 function stairStance(bot, c) {
   if (!c.face) return null
-  const s = { x: c.x - c.face.dx, y: c.y, z: c.z - c.face.dz }
-  if (!AIR.has(nameAt(bot, s)) || !AIR.has(nameAt(bot, { x: s.x, y: s.y + 1, z: s.z }))) return null
-  let below = null
-  try { below = bot.blockAt(new Vec3(s.x, s.y - 1, s.z)) } catch (_) { below = null }
-  if (!below || below.boundingBox !== 'block' || flat.isLiquidName(below.name)) return null
-  return s
+  for (const [dx, dz, back] of [[-c.face.dx, -c.face.dz, true], ...SIDES4]) {
+    const s = { x: c.x + dx, y: c.y, z: c.z + dz }
+    if (!AIR.has(nameAt(bot, s)) || !AIR.has(nameAt(bot, { x: s.x, y: s.y + 1, z: s.z }))) continue
+    let below = null
+    try { below = bot.blockAt(new Vec3(s.x, s.y - 1, s.z)) } catch (_) { below = null }
+    if (!below || below.boundingBox !== 'block' || flat.isLiquidName(below.name)) continue
+    if (back || String(below.name).endsWith('_stairs')) return s
+  }
+  return null
+}
+// Bottom-up flights: a step with no stance whose previous step (a plan
+// stair one lower, beside it) is unlaid waits instead of striking out.
+function stairWaits(bot, cells, c) {
+  if (c.kind !== 'stairs' || stairStance(bot, c)) return false
+  return cells.some((o) => o.kind === 'stairs' && o.y === c.y - 1 && Math.abs(o.x - c.x) + Math.abs(o.z - c.z) === 1 && !done(bot, o))
 }
 
 // Stair placement (g0z.47): the server faces the stair along the placer's
@@ -2945,6 +2960,7 @@ module.exports = castle
 module.exports.holesOf = holesOf
 module.exports.sayHoles = sayHoles
 module.exports.MAX_HOLE_TRIES = MAX_HOLE_TRIES
+module.exports.stairStance = stairStance
 module.exports.PROTECTED_MAX_TRIES = PROTECTED_MAX_TRIES
 module.exports.blockCell = blockCell
 module.exports.BUILD_MISS_TRIES = BUILD_MISS_TRIES
