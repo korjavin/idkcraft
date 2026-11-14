@@ -131,4 +131,38 @@ describe('p5hk field bed', () => {
     assert.equal(bot.beds.size, 0)
   })
 
+
+  it('a placed castle site bed in range: walks to it, sleeps, dawn leaves it standing', async () => {
+    const bot = fieldBot(false)
+    bot.beds.set(key(40, 64, 0), 'red_bed')
+    bot.beds.set(key(41, 64, 0), 'red_bed') // head +x (sitebed's east yaw)
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: { site: { x: 60, y: 64, z: 0 }, siteBed: { x: 40, y: 64, z: 0 } } }
+    const logs = await quiet(async () => {
+      home.shelter(bot, ctx, null, {})
+      assert.ok(ctx.shelter.fieldBed && ctx.shelter.fieldKnown, 'known bed adopted')
+      home.shelter(bot, ctx, null, {})
+      const g = bot.goals[bot.goals.length - 1]
+      assert.ok(g && Math.abs(g.x - 41) <= 1, 'walks to the bed')
+      bot.entity.position = pos(41.5, 64, 1.5)
+      home.shelter(bot, ctx, null, {})
+      await wait(5)
+      assert.ok(bot.isSleeping, 'asleep in the site bed')
+      assert.ok(!ctx.shelter.dig && !ctx.shelter.pillared, 'no dig-in')
+      bot.time.timeOfDay = 1000
+      bot.isSleeping = false
+      home.shelter(bot, ctx, null, {})
+      assert.equal(ctx.stepStatus, 'done')
+      assert.equal(bot.beds.size, 2, 'site bed never broken')
+    })
+    assert.ok(logs.some((l) => l.includes('walking to my bed')), logs.join('\n'))
+  })
+
+  it('a placed bed past 96 of bot and site: not adopted', async () => {
+    const bot = fieldBot(false)
+    bot.beds.set(key(200, 64, 0), 'red_bed')
+    bot.beds.set(key(201, 64, 0), 'red_bed')
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: { site: { x: 0, y: 64, z: 0 }, siteBed: { x: 200, y: 64, z: 0 } } }
+    await quiet(async () => { home.shelter(bot, ctx, null, {}) })
+    assert.equal(ctx.shelter.fieldOff, true)
+  })
 })
