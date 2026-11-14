@@ -157,6 +157,18 @@ describe('p5hk field bed', () => {
     assert.ok(logs.some((l) => l.includes('walking to my bed')), logs.join('\n'))
   })
 
+  it('an unrecorded placed bed (respawn bed) within 32: found by scan and adopted', async () => {
+    const bot = fieldBot(false)
+    bot.beds.set(key(5, 64, 0), 'red_bed')
+    bot.beds.set(key(6, 64, 0), 'red_bed')
+    bot.registry = { blocksByName: { red_bed: { id: 7 } } }
+    bot.findBlocks = (o) => (o.maxDistance >= 6 ? [new Vec3(5, 64, 0), new Vec3(6, 64, 0)] : [])
+    const ctx = { step: 'shelter', stepStatus: 'running', castle: { site: { x: 0, y: 64, z: 0 } } }
+    const logs = await quiet(async () => { home.shelter(bot, ctx, null, {}) })
+    assert.ok(ctx.shelter.fieldBed && ctx.shelter.fieldKnown, 'scanned bed adopted')
+    assert.ok(logs.some((l) => l.includes('walking to my bed')), logs.join('\n'))
+  })
+
   it('a placed bed past 96 of bot and site: not adopted', async () => {
     const bot = fieldBot(false)
     bot.beds.set(key(200, 64, 0), 'red_bed')

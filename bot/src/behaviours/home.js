@@ -1962,8 +1962,24 @@ function knownBed(bot, ctx) {
     const foot = new Vec3(c.x, c.y, c.z)
     for (let f = 0; f < 4; f++) if (bedsMod.bedAt(bot, foot, f)) return { foot, facing: f }
   }
+  // Any placed bed within SPAWN_BED_R (prod 2026-11-14: the respawn bed beside
+  // the bot was in none of the slots above); bedroom B stays the owner's.
+  if (typeof bot.findBlocks !== 'function') return null
+  const byName = (bot.registry && bot.registry.blocksByName) || {}
+  const ids = require('./bed').BED_COLORS.map((c) => byName[`${c}_bed`]).filter((e) => e && typeof e.id === 'number').map((e) => e.id)
+  if (!ids.length) return null
+  const b = ctx.home && ctx.home.bedB
+  let hits = []
+  try { hits = bot.findBlocks({ matching: ids, maxDistance: SPAWN_BED_R, count: 8 }) || [] } catch (_) { return null }
+  for (const p of hits) {
+    if (!p || typeof p.x !== 'number') continue
+    const foot = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+    if (b && Math.abs(b.x - foot.x) + Math.abs(b.y - foot.y) + Math.abs(b.z - foot.z) <= 1) continue
+    for (let f = 0; f < 4; f++) if (bedsMod.bedAt(bot, foot, f)) return { foot, facing: f }
+  }
   return null
 }
+const SPAWN_BED_R = 32
 // Night: true while the field bed owns the tick (lay, walk, sleep, hold).
 function fieldBedTick(bot, ctx, home, st, time) {
   if (st.fieldOff) return false
