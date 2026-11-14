@@ -134,4 +134,24 @@ describe('sidestep ledge drop', () => {
     run(b2, ctx2)
     assert.equal(ctx2.recovery.st.ledge, undefined)
   })
+  it('a castle wall top over a 10-drop (prod V2b): shuffle along the wall once, then drop off', () => {
+    const w = { solids: new Set(), lava: new Set() }
+    for (let x = -1; x <= 1; x++) w.solids.add(key(x, 60, 0))
+    for (let x = -6; x <= 6; x++) for (let z = -6; z <= 6; z++) w.solids.add(key(x, 51, z))
+    const b = bot(w)
+    b.health = 20
+    const ctx = { recovery: {}, stuck: { by: 'x', goal: { x: 0.5, y: 61, z: 40 } } }
+    assert.equal(run(b, ctx), 'running')
+    assert.equal(ctx.recovery.st.ledge, undefined, 'level neighbour on the wall: plain sidestep first')
+    const [dx] = ctx.recovery.st.dir
+    b.entity.position = pos(0.5 + dx, 61, 0.5)
+    assert.equal(run(b, ctx), 'done')
+    ctx.recovery = {}
+    assert.equal(run(b, ctx), 'running')
+    assert.equal(ctx.recovery.st.ledge, 9, 'stuck again beside the last shuffle: walk off the wall')
+    b.health = 9
+    ctx.recovery = {}
+    run(b, ctx)
+    assert.equal(ctx.recovery.st.ledge, undefined, 'low health: stays up')
+  })
 })

@@ -57,8 +57,11 @@ const PILLAR_LIFTOFF_DY = 0.15 // below this height the jump hasn't begun (lzw: 
 const PILLAR_STALL_MS = 5000 // absolute patience per arm: a stall past this yields (quit bounds the chain)
 const SIDESTEP_DIST = 2
 // A ledge the pathfinder will not step off (Baritone maxFallHeightNoWater 3)
-// but a body survives: 4..6 blocks onto a solid floor costs 1-3 HP.
-const LEDGE_DROP_MAX = 6
+// but a body survives: 4..12 blocks onto a solid floor costs 1-9 HP
+// (ledgeDrop keeps >= 4 HP after landing; prod 2026-11-14 V2b sat 1 h on its
+// own castle wall top over a 9-10 drop).
+const LEDGE_DROP_MAX = 12
+const LEDGE_SHUFFLE_DIST = 4 // a plain sidestep 'done' this near on the same floor did not free the body
 const LEDGE_PULSE_MS = 250
 const NEAR_PLAYER = 8
 // jsf.6: a live goal nearer than this MIGHT sit inside the pit (the 4jr
@@ -1853,7 +1856,12 @@ function sidestepRun(bot, ctx) {
     // ledge is also taken once a plain sidestep from this cell has failed.
     st.cell = `${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)}`
     const drops = sides.free.map((d) => ({ d, n: ledgeDrop(bot, d[0], d[1]) }))
-    if (ctx.sidestepFailedAt === st.cell || !drops.some((x) => x.n !== null && x.n <= 3)) {
+    // A wall top (prod V2b): level neighbours along the wall, so a plain
+    // sidestep shuffles 'done' cell to cell and never fails; stuck again
+    // near the last shuffle on the same floor counts as that failure.
+    const sh = ctx.sidestepDoneAt
+    const shuffled = sh && sh.y === Math.floor(bp.y) && Math.hypot(bp.x - sh.x, bp.z - sh.z) <= LEDGE_SHUFFLE_DIST
+    if (ctx.sidestepFailedAt === st.cell || shuffled || !drops.some((x) => x.n !== null && x.n <= 3)) {
       const ledge = drops.filter((x) => x.n !== null && x.n > 3).sort((a, b) => a.n - b.n)[0]
       if (ledge) { st.dir = ledge.d; st.ledge = ledge.n }
     }
@@ -1882,6 +1890,7 @@ function sidestepRun(bot, ctx) {
   if (climbed || gained || freed || dropped) {
     setJump(bot, false)
     if (st.ledge != null) setForward(bot, false)
+    ctx.sidestepDoneAt = st.ledge != null ? null : { x: bp.x, y: Math.floor(bp.y), z: bp.z }
     return 'done'
   }
   if (++st.waited > SIDESTEP_TIMEOUT_TICKS) {
