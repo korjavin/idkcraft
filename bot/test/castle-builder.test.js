@@ -675,3 +675,38 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     assert.ok(!pe || !pe.retired, 'higher layer was not struck')
   })
 })
+
+// Prod 2026-11-14: with a storey flight's stairs unlaid and none on hand,
+// y81 slab cells went 'unreachable' one by one (~10 s each, Baritone found
+// no path onto the storey). Cells 5+ above the lowest unlaid stair stay out
+// of the batch and the per-cell pick until stairs are held.
+describe('castle flight gate: no stairs, no cells above the unlaid flight', () => {
+  const { cells: plan, at } = blueprint.absPlan(SITE, 0, 3)
+  const stairY = Math.min(...plan.filter((c) => c.kind === 'stairs').map((c) => c.y))
+  const onStair = (c) => (at.get(`${c.x},${c.y - 1},${c.z}`) || {}).kind === 'stairs' // stairs never paint here
+  const low = plan.find((c) => c.kind === 'planks' && !c.prep && c.y < stairY + 5 && !onStair(c))
+  const high = plan.find((c) => c.kind === 'planks' && c.y >= stairY + 5)
+  const noStairs = [{ name: 'cobblestone', count: 500 }, { name: 'oak_planks', count: 500 }, { name: 'oak_log', count: 200 }]
+  const st = () => ({ site: { ...SITE }, rot: 0, blueprintVersion: 3, blocked: {} })
+
+  it('the batch skips gated cells without stairs and keeps them with stairs', () => {
+    const world = makeWorld()
+    paintAll(world, { except: (c) => c.idx === low.idx || c.idx === high.idx })
+    const idx = (b) => (b ? b.cells : []).map((c) => c.idx)
+    const gated = idx(castle.castleBuilderCells(mockBot(world, { items: noStairs }), {}, st()))
+    assert.ok(gated.includes(low.idx), 'a cell below the gate still batches')
+    assert.ok(!gated.includes(high.idx), 'a cell 5+ above the unlaid flight stays out')
+    const open = idx(castle.castleBuilderCells(mockBot(world), {}, st()))
+    assert.ok(open.includes(high.idx), 'stairs on hand: the high cell batches')
+  })
+
+  it('the per-cell pick names the short stair once only gated cells are left', async () => {
+    const world = makeWorld()
+    paintAll(world, { except: (c) => c.idx === high.idx })
+    const bot = mockBot(world, { items: noStairs, withBuilder: false })
+    const ctx = { castle: st() }
+    await run(bot, ctx, 3)
+    assert.equal(bot.calls.places.length, 0, 'the high cell is never attempted')
+    assert.equal(ctx.stepStatus, 'failed:no-stairs')
+  })
+})
