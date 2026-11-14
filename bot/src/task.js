@@ -3186,11 +3186,13 @@ function maybeResume(bot, ctx, now) {
       // command forever. The day count resets on the next park.
       // Owner 2026-11-13: a latched park waits TASK_PARK_LATCH_MS, not the
       // UTC day (prod bot3's castle sat parked all afternoon after one bad hour).
-      if (ep.auto !== true && now - ep.at < TASK_PARK_LATCH_MS) continue
+      // Owner 2026-11-14: every automatic castle park (only `castle stop` is
+      // permanent, and it has no taskPark) retries after 10 min, latched or legacy.
+      if (kind !== 'castle' && ep.auto !== true && now - ep.at < TASK_PARK_LATCH_MS) continue
       const n = (rec.parkHist && typeof rec.parkHist.n === 'number' && rec.parkHist.n >= 1) ? rec.parkHist.n : 1
       // The castle is the owner's work goal (prod 2026-11-14): a first park
       // blamed on a side step retries after 10 min, not 60.
-      const retryMs = kind === 'castle' && ep.side === true && (n === 1 || ep.fetch === true) ? TASK_PARK_CASTLE_FIRST_MS : TASK_PARK_RETRY_MS
+      const retryMs = kind === 'castle' ? TASK_PARK_CASTLE_FIRST_MS : TASK_PARK_RETRY_MS
       if (now - ep.at < retryMs) continue
       const mins = Math.round(retryMs / 60000)
       rec.parked = false
