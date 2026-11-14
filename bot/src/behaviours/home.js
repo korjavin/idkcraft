@@ -1945,6 +1945,25 @@ function fieldBedSpot(bot, ctx) {
   }
   return null
 }
+// A placed own bed (castle site bed, home bed A, castle night bed) within
+// KNOWN_BED_R of the bot or the castle site: walk there and sleep instead of
+// digging in (prod 2026-11-14: a site bed 60 off, six failed shelters a night).
+// shortcut: an unloaded chunk reads as no bed, fine inside view distance.
+const KNOWN_BED_R = 96
+function knownBed(bot, ctx) {
+  const bp = botPos(bot)
+  if (!bp) return null
+  const site = ctx.castle && ctx.castle.site
+  const near = (p) => Math.hypot(bp.x - p.x, bp.z - p.z) <= KNOWN_BED_R ||
+    (!!site && typeof site.x === 'number' && Math.hypot(site.x - p.x, site.z - p.z) <= KNOWN_BED_R)
+  const bedsMod = require('./beds')
+  for (const c of [ctx.castle && ctx.castle.siteBed, ctx.home && ctx.home.bedA, ctx.nightCastle && ctx.nightCastle.bedA]) {
+    if (!c || typeof c.x !== 'number' || !near(c)) continue
+    const foot = new Vec3(c.x, c.y, c.z)
+    for (let f = 0; f < 4; f++) if (bedsMod.bedAt(bot, foot, f)) return { foot, facing: f }
+  }
+  return null
+}
 // Night: true while the field bed owns the tick (lay, walk, sleep, hold).
 function fieldBedTick(bot, ctx, home, st, time) {
   if (st.fieldOff) return false
@@ -1970,11 +1989,20 @@ function fieldBedTick(bot, ctx, home, st, time) {
     if (fb) {
       const bed = bedsMod.bedAt(bot, fb.foot, fb.facing)
       if (!bed) { st.fieldBed = null; return off('bed gone') }
-      if (time === 'night' && ++st.fieldHolds > FIELD_BED_HOLDS) return off('no sleep yet')
-      if ((st.sleepCooldown || 0) > 0) { st.sleepCooldown--; return true }
       const head = new Vec3(fb.foot.x + BED_DIRS[fb.facing][0], fb.foot.y, fb.foot.z + BED_DIRS[fb.facing][1])
+      const bp0 = botPos(bot) // the walk to a known bed is sleepInBed's stall check, not the hold cap
+      if (time === 'night' && (!bp0 || headGap(bp0, head) <= SLEEP_REACH) && ++st.fieldHolds > FIELD_BED_HOLDS) return off('no sleep yet')
+      if ((st.sleepCooldown || 0) > 0) { st.sleepCooldown--; return true }
       sleepInBed(bot, ctx, null, st, bed, head, head, 'sleeping in my field bed') // null home: never claims sleptA
       return !st.sleepGiveUp || off('sleep refused')
+    }
+    const kb = knownBed(bot, ctx)
+    if (kb) {
+      st.fieldBed = kb
+      st.fieldKnown = true // placed for good: dawn leaves it standing
+      st.fieldHolds = 0
+      try { console.log(`field bed: walking to my bed at ${kb.foot.x} ${kb.foot.y} ${kb.foot.z}`) } catch (_) { /* log best-effort */ }
+      return true
     }
     const bp = botPos(bot)
     const a = home && home.bedA
@@ -1998,6 +2026,7 @@ function fieldBedPickup(bot, ctx) {
   const st = ctx.shelter
   const fb = st && st.fieldBed
   if (!fb) return false
+  if (st.fieldKnown) { st.fieldBed = null; st.fieldKnown = false; return false } // own placed bed: never broken
   const now = Date.now()
   if (!st.fieldPickupAt) st.fieldPickupAt = now
   const done = (why) => {
