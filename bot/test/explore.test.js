@@ -635,3 +635,24 @@ describe('stranded-wood leash lift (vmzq.65)', () => {
     assert.deepEqual(logs, ['explore done: all chunks within 64 blocks visited'])
   })
 })
+
+describe('castle wood hunt (prod 2026-11-14 bot3: explore-far ended after one hop)', () => {
+  it('arrival without a log walks on; a seen log ends the leg', () => {
+    const bot = mockBot()
+    const ctx = homeCtx()
+    ctx.castleWord = { kind: 'fence' }
+    ctx.goal = { id: 'g', generation: 1, commit: { goalId: 'g', generation: 1, until: Date.now() + 60000, unlock: { radius: 256 } } }
+    explore(bot, ctx, null, null)
+    bot.entity.position = pos(0, 64, -16)
+    explore(bot, ctx, null, null)
+    assert.equal(ctx.stepStatus, 'running')
+    explore(bot, ctx, null, null)
+    const t = ctx.explore.target
+    assert.ok(t && !(t.x === 0 && t.z === -16), 'picked the next hop')
+    bot.entity.position = pos(t.x, 64, t.z)
+    bot.findBlocks = (o) => (o && o.matching === 2) || (Array.isArray(o && o.matching) && o.matching.includes(2)) ? [pos(t.x + 3, 64, t.z)] : []
+    bot.blockAt = (p) => ({ name: p.x === t.x + 3 ? 'oak_log' : 'stone', position: p })
+    explore(bot, ctx, null, null)
+    assert.equal(ctx.stepStatus, 'done')
+  })
+})

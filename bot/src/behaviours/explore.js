@@ -237,6 +237,7 @@ function columnTop(bot, t, fallback) {
 // report done with the one wedge line.
 function arrive(bot, ctx, e, t) {
   clearGoal(bot, ctx)
+  const logsBefore = logCount(ctx)
   try {
     resources.scan(bot, ctx)
   } catch (_) { /* scan best-effort */ }
@@ -244,8 +245,31 @@ function arrive(bot, ctx, e, t) {
   e.visited.add(chunkOf(t.x, t.z)) // scanned: never re-pick this point
   e.target = null
   e.issuedKey = null
+  // Castle wood hunt (prod 2026-11-14 bot3): an explore-far leg for a wood
+  // block walks hop after hop while its window lives until a log is seen;
+  // one 16-block hop per window never reached a tree.
+  if (castleWoodHunt(ctx) && logCount(ctx) <= logsBefore) {
+    console.log(`explore to ${t.x} ${t.z} (${fresh} chunks new) no logs yet, walking on`)
+    return
+  }
   ctx.stepStatus = 'done'
   console.log(`explore to ${t.x} ${t.z} (${fresh} chunks new)`)
+}
+
+function logCount(ctx) {
+  let n = 0
+  try { for (const it of ctx.resources.items.values()) if (it && typeof it.name === 'string' && it.name.endsWith('_log')) n++ } catch (_) { /* none */ }
+  return n
+}
+const WOOD_KINDS = ['planks', 'door', 'fence', 'chest', 'frame'] // goal-options WOOD_FETCH_KINDS
+function castleWoodHunt(ctx) {
+  try {
+    const cw = ctx && ctx.castleWord
+    if (!cw || WOOD_KINDS.indexOf(cw.kind) === -1) return false
+    return typeof require('../goal-unlock').goalUnlock(ctx, 'radius') === 'number'
+  } catch (_) {
+    return false
+  }
 }
 
 function explore(bot, ctx, target, state) {
