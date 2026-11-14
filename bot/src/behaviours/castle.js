@@ -548,8 +548,12 @@ function shortOf(bot, ctx, c) { return !clearing(c) && usable(bot, c.kind, ctx) 
 // They wait like an unheld kind, so the short stair surfaces as the
 // castlefetch word instead of the castle burning strikes on every cell.
 const STAIR_GATE = 5
+// A stairs fetch that failed in the last STAIR_RELEASE_MS opens the gate:
+// the reachable cells lay meanwhile (prod 2026-11-14: 0 cells for 30 min).
+const STAIR_RELEASE_MS = 10 * 60 * 1000
 function stairGateY(bot, ctx, st, cells) {
   if (usable(bot, 'stairs', ctx) > 0) return Infinity
+  if (fetchHeld(ctx, 'stairs', Date.now() - (STAIR_RELEASE_MS - CASTLEFETCH_RETRY_MS))) return Infinity
   let y = Infinity
   for (const c of cells) {
     if (c.kind !== 'stairs' || c.y >= y) continue

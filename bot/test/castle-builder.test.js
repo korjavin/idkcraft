@@ -700,6 +700,15 @@ describe('castle flight gate: no stairs, no cells above the unlaid flight', () =
     assert.ok(open.includes(high.idx), 'stairs on hand: the high cell batches')
   })
 
+  it('a stairs fetch failed within 10 min opens the gate (prod 2026-11-14: 0 cells for 30 min)', () => {
+    const world = makeWorld()
+    paintAll(world, { except: (c) => c.idx === low.idx || c.idx === high.idx })
+    const idx = (b) => (b ? b.cells : []).map((c) => c.idx)
+    const failed = (ago) => ({ stepFail: { castlefetch: { kinds: { stairs: { at: Date.now() - ago } } } } })
+    assert.ok(idx(castle.castleBuilderCells(mockBot(world, { items: noStairs }), failed(8 * 60000), st())).includes(high.idx), 'released')
+    assert.ok(!idx(castle.castleBuilderCells(mockBot(world, { items: noStairs }), failed(12 * 60000), st())).includes(high.idx), 'gated again')
+  })
+
   it('the per-cell pick names the short stair once only gated cells are left', async () => {
     const world = makeWorld()
     paintAll(world, { except: (c) => c.idx === high.idx })

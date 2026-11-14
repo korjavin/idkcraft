@@ -837,7 +837,7 @@ describe('rounds, park and backoff (acceptance 4)', () => {
       for (let r = 0; r < 6; r++) t = await fullRound(bot, ctx, t)
       assert.equal(ctx.castle.parked, true, `episode ${ep + 1} parked`)
       if (ep < 2) {
-        t = advance(bot, ctx, t, 61 * 60)
+        t = advance(bot, ctx, t, 11 * 60) // a castlefetch park retries after 10 min
         assert.equal(ctx.castle.parked, false, `episode ${ep + 1} auto-resumed`)
       }
     }

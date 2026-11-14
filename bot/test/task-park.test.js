@@ -57,9 +57,9 @@ function castleCtx(bot, { done = 8, total = 1722, phase = 'body', kind = 'stone'
   ticker.work()
   const ctx = bot._tickerCtx
   ctx.castleWord = { kind, left }
-  ctx.step = 'castlefetch'
+  ctx.step = 'castle'
   ctx.stepStatus = 'running'
-  ctx.stepPick = { step: 'castlefetch', at: Date.now() - 5000, source: 'goal-fsm', why: 'fetch stone' }
+  ctx.stepPick = { step: 'castle', at: Date.now() - 5000, source: 'goal-fsm', why: 'fetch stone' }
   return { ticker, ctx }
 }
 
@@ -133,9 +133,9 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(ctx.castle.taskPark.auto, true, 'first park retries')
     assert.deepEqual(ctx.castle.parkHist, { day: '2001-09-09', n: 1 })
     assert.equal(parkChats(bot).length, 1, 'exactly one park chat')
-    assert.match(parkChats(bot)[0], /^castle parked at 8\/1722 after 45 min without progress — step=castlefetch running.*; say castle go to resume$/)
+    assert.match(parkChats(bot)[0], /^castle parked at 8\/1722 after 45 min without progress — step=castle running.*; say castle go to resume$/)
     assert.ok(parkChats(bot)[0].length <= 200, `park chat caps at 200, got ${parkChats(bot)[0].length}`)
-    assert.match(taskLogs().find((l) => l.includes('parked')) || '', /^task castle 8\/1722 parked #1 why=step=castlefetch running/)
+    assert.match(taskLogs().find((l) => l.includes('parked')) || '', /^task castle 8\/1722 parked #1 why=step=castle running/)
     assert.equal(await stallCounter('castle', 'L2'), l2Before + 1)
     // No re-park while parked: 30 more stalled minutes stay at one line.
     const epAt = ctx.castle.taskPark.at
@@ -506,7 +506,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     const before = bot.chats.length
     ticker.status()
     const after = bot.chats.slice(before)
-    assert.deepEqual(after, ['Fetching castle material: 8/1722 (0%)', 'Castle on hold — no progress lately, I will retry later'])
+    assert.deepEqual(after, ['Building the castle: 8/1722 (0%)', 'Castle on hold — no progress lately, I will retry later'])
   })
 
   it('park episode and day count survive a restart (memory round-trip)', () => {
@@ -586,5 +586,19 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     advance(bot, ctx, t2, 2)
     assert.equal(ctx.castle.parked, false, 'resumed')
     assert.ok(taskLogs().some((l) => /^task castle resumed after 10 min parked \(stall 1\/3\)$/.test(l)))
+  })
+  it('a castlefetch park retries after 10 min even as park #2 (prod 2026-11-14)', () => {
+    const bot = makeBot()
+    const { ctx } = castleCtx(bot)
+    ctx.step = 'castlefetch'
+    ctx.stepStatus = 'failed:castlefetch-no-stone'
+    const t0 = 1000000000000
+    ctx.castle.parkHist = { day: new Date(t0).toISOString().slice(0, 10), n: 1 }
+    taskMod.taskTick(bot, ctx, t0)
+    const t1 = advance(bot, ctx, t0, 45)
+    assert.equal(ctx.castle.taskPark.fetch, true, 'fetch park')
+    assert.equal(ctx.castle.parkHist.n, 2)
+    advance(bot, ctx, t1, 11)
+    assert.equal(ctx.castle.parked, false, 'resumed')
   })
 })
