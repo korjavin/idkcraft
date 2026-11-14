@@ -162,6 +162,8 @@ function capOf(bot, ctx, e) {
   // The alone cap stays (vmzq.59): nobody online, no walk-out.
   let cap = e.maxRadius
   try { if ((taskActive(ctx) && !ownerBring(ctx)) || aloneIdle(bot, ctx)) cap = Math.min(cap, TASK_SEARCH_RADIUS) } catch (_) { /* unbound */ }
+  // Own wool hunts (beds) walk past the task/alone cap: sheep rarely graze inside 64 of a build site
+  try { const o = ctx && ctx.bring; if (o && o.self && o.kind === 'wool') cap = Math.max(cap, Math.min(e.maxRadius, require('./wool').WOOL_SELF_SEARCH_RADIUS)) } catch (_) { /* default cap */ }
   try {
     const { OUTER_DISK } = require('../goal-unlock')
     if (OUTER_DISK > cap && woodStranded(ctx) && taskActive(ctx) && !ownerBring(ctx) && !aloneIdle(bot, ctx)) cap = Math.min(e.maxRadius, OUTER_DISK)
