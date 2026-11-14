@@ -2553,6 +2553,27 @@ function sweepTick(bot, ctx, f) {
   return true
 }
 
+// Nearest MINE_ROCK cell in eye reach, off the site, never in the feet
+// column below (no straight-down dig into lava/void), no liquid beside it.
+function handRock(bot, ctx, bp, forbid) {
+  const rock = new Set(MINE_ROCK)
+  const fx = Math.floor(bp.x), fy = Math.floor(bp.y), fz = Math.floor(bp.z)
+  const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
+  let best = null, bd = Infinity
+  for (let dx = -4; dx <= 4; dx++) for (let dy = -3; dy <= 5; dy++) for (let dz = -4; dz <= 4; dz++) {
+    const x = fx + dx, y = fy + dy, z = fz + dz
+    if (dx === 0 && dz === 0 && dy < 0) continue
+    const dist = Math.hypot(bp.x - (x + 0.5), bp.y + EYE - (y + 0.5), bp.z - (z + 0.5))
+    if (dist > DIG_REACH + 0.5 || dist >= bd) continue
+    const b = at(x, y, z)
+    if (!b || !rock.has(b.name) || forbid({ x, y, z })) continue
+    if ([[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].some(([a, c, e]) => { const n = at(x + a, y + c, z + e); return !n || LIQUID.has(n.name) })) continue
+    if (denyReason(bot, b, ctx)) continue
+    best = b; bd = dist
+  }
+  return best
+}
+
 function digTick(bot, ctx, f, d) {
   const bp = bodyPos(bot)
   if (!bp) { spend(f, 'other'); return }
@@ -2611,6 +2632,23 @@ function digTick(bot, ctx, f, d) {
     const st0 = ctx.castle
     const forbid = (pos) => {
       try { return !!(st0 && st0.site && onSite(st0, pos)) } catch (_) { return false }
+    }
+    // Prod 2026-11-14 (bot3: 'mining in place' then no-stone, starts=0
+    // dug=0 every leg): Baritone finds no rock from a dead quarry, so dig
+    // the nearest rock in reach by hand, a block at a time (staircase).
+    if (f.handDig) {
+      const have = cobble(bot)
+      if (have - (f.handHave0 | 0) >= need) { finish(bot, ctx, 'done'); return }
+      if (f.handLast != null && have <= f.handLast && ++f.handNoGain >= NOGAIN_STRIKES) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-dig-stall'); return }
+      if (f.handLast == null || have > f.handLast) f.handNoGain = 0
+      f.handLast = have
+      const b = handRock(bot, ctx, bp, forbid)
+      if (!b) { spend(f, 'other'); finish(bot, ctx, 'failed:castlefetch-no-stone'); return }
+      spend(f, 'dig')
+      f.starts = (f.starts | 0) + 1
+      ctx.castleFetchFlight = 'dig'
+      flight(ctx, () => bot.dig(b, true), DIG_TIMEOUT_MS, null, () => { f.dug = (f.dug | 0) + 1 })
+      return
     }
     // Cell-level castle guard (round-1 body-3): the body leash cannot stop
     // a break made from reach outside the site, so the mod snapshots the
@@ -2759,6 +2797,12 @@ function digTick(bot, ctx, f, d) {
           f.mineReloc = reloc + 1
           f.guardExit = null
           try { delete f.guardWalk } catch (_) { /* tracker best-effort */ }
+          return
+        }
+        if ((m === 'mine-noPath' || m === 'mine-futile') && !hadTarget && !f.handDig) {
+          f.handDig = true // dead quarry in place: hand-dig the rock in reach next tick
+          f.handHave0 = armHave
+          try { console.log('castlefetch quarry recovery: mine found no rock, hand-digging in reach') } catch (_) { /* log best-effort */ }
           return
         }
         if (m === 'mine-noPath' || m === 'mine-futile') finish(bot, ctx, 'failed:castlefetch-no-stone')
