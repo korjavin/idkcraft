@@ -516,6 +516,25 @@ function fetchHeld(ctx, kind, now) {
   } catch (_) { return false }
 }
 function shortOf(bot, ctx, c) { return !clearing(c) && usable(bot, c.kind, ctx) <= 0 }
+// Flight gate (prod 2026-11-14: y81 slab cells 'unreachable' ~10 s each,
+// Baritone exhausting 6M nodes on a #goto onto storey 2): an unlaid stair
+// with none on hand leaves its flight a 2-high wall, so place cells
+// STAIR_GATE+ above its lowest step are out of reach from the floor below.
+// They wait like an unheld kind, so the short stair surfaces as the
+// castlefetch word instead of the castle burning strikes on every cell.
+const STAIR_GATE = 5
+function stairGateY(bot, ctx, st, cells) {
+  if (usable(bot, 'stairs', ctx) > 0) return Infinity
+  let y = Infinity
+  for (const c of cells) {
+    if (c.kind !== 'stairs' || c.y >= y) continue
+    const b = st.blocked && st.blocked[bkey(st, c.idx)]
+    if (b && b.retired) continue
+    if (!done(bot, c)) y = c.y
+  }
+  return y + STAIR_GATE
+}
+function stairGated(c, gate) { return !clearing(c) && c.kind !== 'stairs' && c.y >= gate }
 function keepShort(ctx, short, c, now) {
   return !short || (fetchHeld(ctx, short.kind, now) && !fetchHeld(ctx, c.kind, now)) ? c : short
 }
@@ -547,6 +566,7 @@ function pick(bot, ctx, st, cells, key, now) {
     let inside = false
     let owed = null
     let short = null
+    const gate = stairGateY(bot, ctx, st, cells)
     for (let i = full ? 0 : (ctx.castleCursor | 0); i < order.length; i++) {
       const c = cells[order[i]]
       // The stairs relay (g0z.48) converts place cells only: a complete
@@ -569,6 +589,7 @@ function pick(bot, ctx, st, cells, key, now) {
       if (interior(c)) inside = true
       if (shortOf(bot, ctx, c)) { short = keepShort(ctx, short, c, now); continue }
       if (short && !clearing(c) && !supported(bot, c)) continue
+      if (stairGated(c, gate)) continue
       ctx.castleCursor = first
       const n = nearest(bot, ctx, st, cells, order, i, now)
       ctx.castleNearIdx = n.idx
@@ -2504,6 +2525,7 @@ function castleBuilderCells(bot, ctx, st) {
     // every pass (build-miss), and the 90 s watchdog stalls the whole
     // batch. Select lowest-first, like the tower's own lay order.
     const order = cells.map((c, i) => i).sort((a, b) => (cells[a].y - cells[b].y) || (a - b))
+    const gate = stairGateY(bot, ctx, st, cells)
     for (const i of order) {
       const c = cells[i]
       if (out.length >= CASTLE_BUILDER_BATCH) break
@@ -2511,6 +2533,7 @@ function castleBuilderCells(bot, ctx, st) {
       if (done(bot, c)) continue
       const b = blocked[bkey(st, c.idx)]
       if (b && (b.retired || b.until > now || b.wide || b.why === 'build-miss-wide')) continue // a wide hole is per-cell only (why survives a restart)
+      if (stairGated(c, gate)) continue // flight unlaid, no stairs: out of reach
       if (lavaNear(bot, c)) continue // the per-cell path holds it (why=lava); the batch never lays it into the fire
       // Stand-floor gate (idkcraft-synq): a cell whose plan cell below is
       // an unlaid place target that is NOT itself in this batch (unheld
