@@ -38,3 +38,11 @@ test('tossJunk: nothing to toss returns false', () => {
   assert.strictEqual(tossJunk(bot, {}), false)
   assert.deepStrictEqual(bot.tossed, [])
 })
+
+test('junkKeep: mining byproducts are junk only while a castle runs', () => {
+  assert.strictEqual(junkKeep('cobbled_deepslate'), null)
+  assert.strictEqual(junkKeep('cobbled_deepslate', { castle: { site: { x: 0, z: 0 } } }), 0)
+  const bot = fakeBot([{ name: 'sand', type: 5, count: 64 }, { name: 'cobblestone', type: 2, count: 64 }])
+  assert.strictEqual(tossJunk(bot, {}), false)
+  assert.strictEqual(tossJunk(bot, { castle: {} }), true)
+})
