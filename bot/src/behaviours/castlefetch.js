@@ -732,6 +732,7 @@ function chestTick(bot, ctx, f, d) {
         walkTo(bot, ctx, `castlefetch-chest-far:${k}`, at, FAR_WALK_NEAR / 2, true)
         if (stalled(f.chestFarWalk || (f.chestFarWalk = {}), dxz, CHEST_WAITS)) {
           dryMarkAllKinds(ctx, k)
+          noteStoneChest(ctx, d.kind, false)
           f.chest = null
         }
         return true
@@ -800,6 +801,7 @@ function chestTick(bot, ctx, f, d) {
     const dd = bp ? Math.hypot(bp.x - at.x, bp.y - at.y, bp.z - at.z) : Infinity
     if (stalled(f.chestWalk || (f.chestWalk = {}), dd, CHEST_WAITS)) { // unreachable: next chest
       if (bank) dryMarkAllKinds(ctx, k)
+      noteStoneChest(ctx, d.kind, false)
       f.chest = null
     }
     return true
@@ -828,6 +830,7 @@ function chestTick(bot, ctx, f, d) {
     // The contents come from the draw's own opens — a fallback peek only
     // runs when the draw never opened the chest (rare list shapes).
     const drew = Math.max(0, Math.round(need0 - left))
+    noteStoneChest(ctx, d.kind, drew > 0)
     let peek = dr.counts || null
     if (!peek) {
       try { peek = await stockpileMod.chestCounts(bot, ctx, null, at) } catch (_) { peek = null }
@@ -974,7 +977,25 @@ function bankCap(bot, kind) {
   return kind in FETCH ? Math.max(0, capOf(kind) + castleMod.reserveOf(kind) - castleMod.held(bot, kind)) : Infinity
 }
 
+// Owner 2026-11-14: site chests held no stone, yet stone legs walked to
+// them first (38 chest noPath, 17 nearChest tries before mining). After
+// STONE_BARREN_N fruitless stone chest tries in a row, stone legs skip
+// chests for STONE_BARREN_MS and go straight to the mine.
+const STONE_BARREN_N = 2
+const STONE_BARREN_MS = 30 * 60 * 1000
+function noteStoneChest(ctx, kind, got) {
+  if (kind !== 'stone') return
+  const b = ctx.castleStoneBarren || (ctx.castleStoneBarren = { n: 0, at: 0 })
+  if (got) { b.n = 0; b.at = 0; return }
+  if (++b.n >= STONE_BARREN_N) b.at = Date.now()
+}
+function stoneChestsBarren(ctx) {
+  const b = ctx.castleStoneBarren
+  return !!(b && b.at && Date.now() - b.at < STONE_BARREN_MS)
+}
+
 function pickChest(bot, ctx, f, kind) {
+  if (kind === 'stone' && stoneChestsBarren(ctx)) return null
   const tried = f.chestTried || (f.chestTried = new Set())
   const banks = !f.bankFull && bankCap(bot, kind) > 0 // the keep packed: no bank walk
   const bp = bodyPos(bot)
@@ -3272,6 +3293,7 @@ module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.MINE_BATCH = MINE_BATCH
 module.exports.pickChest = pickChest
+module.exports.noteStoneChest = noteStoneChest
 module.exports.sweepTick = sweepTick
 module.exports.farLoad = farLoad
 module.exports.CHEST_DRY_MS = CHEST_DRY_MS
