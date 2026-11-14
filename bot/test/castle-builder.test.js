@@ -560,7 +560,7 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     assert.ok(left.every((n) => n <= 1), `strikes reset by growth: ${JSON.stringify(ctx.castle.batchStrikes)}`)
   })
 
-  it('a stall after placement resets stale strikes: no retire on progress', async () => {
+  it('a stall after placement resets stale strikes: no retire, no step fail on progress', async () => {
     const world = makeWorld()
     const plan = blueprint.absPlan(SITE, 0, 3).cells
     const open = plan.filter((c) => c.kind === 'stone').slice(0, 2)
@@ -572,7 +572,8 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     // Two stale strikes behind each cell; the batch lays one, then wedges.
     ctx.castle.batchStrikes = Object.fromEntries(open.map((c) => [`${ver}:${c.idx}`, 2]))
     await run(bot, ctx, 1)
-    assert.equal(ctx.stepStatus, 'failed:build-stall', 'the stall still fails the step')
+    assert.ok(!(ctx.stepStatus || '').startsWith('failed:'), `a growing stall keeps the step, got ${ctx.stepStatus}`)
+    assert.equal(ctx.castleBuildFlight, false)
     for (const c of open) {
       assert.ok(!ctx.castle.blocked[`${ver}:${c.idx}`], `${c.idx} not blocked after a growing batch`)
     }
