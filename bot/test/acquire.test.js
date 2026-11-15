@@ -47,6 +47,19 @@ describe('acquire tick', () => {
     assert.strictEqual(tick.acquire(b, ctx, 'sand', 40), 'running', 'in flight')
     assert.strictEqual(calls.length, 1)
   })
+  it('no source in reach: runs the explore expedition (running), then mines a remembered far find', () => {
+    const calls = []
+    const b = mk([], { mine: (names, n, o) => { calls.push(o.radius); return new Promise(() => {}) }, entity: { position: { x: 0, y: 64, z: 0 } } })
+    const ctx = { acquire: { mineFail: { item: 'sand', at: Date.now() } }, resources: { items: new Map() }, stepStatus: 'running' }
+    assert.strictEqual(tick.acquire(b, ctx, 'sand', 4), 'running')
+    assert.ok(ctx.explore, 'the explore tick ran')
+    assert.strictEqual(ctx.acquire.expedition, 'sand')
+    assert.strictEqual(ctx.stepStatus, 'running', 'explore status stays its own')
+    assert.strictEqual(calls.length, 0)
+    ctx.resources.items.set('k', { x: 300, y: 64, z: 0, name: 'sand' })
+    assert.strictEqual(tick.acquire(b, ctx, 'sand', 4), 'running')
+    assert.deepStrictEqual(calls, [316])
+  })
   it('fails honestly with no mine on the body', () => {
     assert.strictEqual(tick.acquire(mk([]), {}, 'sand', 4), 'failed:no-mine-sand')
   })

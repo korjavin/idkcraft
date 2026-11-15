@@ -362,7 +362,7 @@ function stampFailKindSite(bot, ctx, kind, status) {
 // hold), a live hold window, no same-day park (dlpo owns that), and an
 // UNTRIED chest the hop leg can actually walk to (else the hop leg would end
 // at once, every tick; tried chests are remembered on the entry, R2).
-function hopDue(bot, ctx, kind) {
+function hopDue(bot, ctx, kind, worldOnly = false) {
   try {
     if (!kind || !(kind in FETCH)) return false
     if (owedMoved(bot, ctx)) return false
@@ -386,6 +386,7 @@ function hopDue(bot, ctx, kind) {
     // klh2 R1 F2: no legacy branch — kind-stamped failures always carry a
     // kinds map (revmux 02 core-1); kindless records never hop.
     if (!hasSite) return false
+    if (worldOnly) return true // world site held, chest not asked
     // A chest candidate must exist or the hop leg ends at once (tick churn).
     // Temp leg state: pickChest only reads tried/dry against it, discarded.
     if (!pickChest(bot, ctx, { chestTried: new Set(hopTried || []) }, kind)) return false
@@ -436,6 +437,26 @@ function deadRestart(bot, ctx, d) {
   return true
 }
 
+// The item acquire() hunts for a kind: what the pack/chest names say, else
+// the kind's plain default (frame with no log on hand still wants a log).
+const ACQUIRE_DEFAULT = { frame: 'oak_log', planks: 'oak_planks', stone: 'cobblestone', fence: 'oak_fence', door: 'oak_door', gate: 'oak_fence_gate', chest: 'chest', torch: 'torch', pane: 'glass_pane', bookshelf: 'bookshelf' }
+function acquireItem(bot, kind) {
+  return craftNames(bot, kind)[0] || (chestNames(bot, kind)[0] || [])[0] || ACQUIRE_DEFAULT[kind] || null
+}
+
+// One acquire() tick for the leg's remaining need; true = the tick is owned.
+function acquireTick(bot, ctx, f, d) {
+  const item = acquireItem(bot, d.kind)
+  if (!item) return false
+  if (!f.acquire) f.acquire = { item, n: countItems(bot, (x) => x === item) + d.short }
+  const r = acquireMod.acquire(bot, ctx, f.acquire.item, f.acquire.n)
+  if (r === 'running') return true
+  if (r === 'done' && !f.acquireDone) { f.acquireDone = true; f.craftOut = false; return true } // the craft rung takes it next tick
+  try { console.log(`castlefetch ${d.kind}: acquire ${r}`) } catch (_) { /* log best-effort */ }
+  if (d.acquire && r !== 'done') ctx.acquireHeld = { ...(ctx.acquireHeld || {}), [d.kind]: Date.now() }
+  return false
+}
+
 function demand(bot, ctx) {
   // Bounded fetch hold (g0z.15): a failed leg rests CASTLEFETCH_RETRY_MS no
   // matter how the facts text moves — known=near/none flips released the
@@ -457,21 +478,32 @@ function demand(bot, ctx) {
     kind = m[1]
     word = m[2]
   }
+  // goal.noteLoop: a kind the loop breaker blocked has no fetch for a while.
   const cw = ctx && ctx.castleWord
   const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
   const target = Math.min(capOf(kind), left)
+  // Held (no world source near) or loop-blocked: a chest known to hold the
+  // kind gets the hop below; otherwise acquire() takes the remaining need
+  // (one try per CASTLEFETCH_RETRY_MS, ctx.acquireHeld), never an idle hold.
+  const lb = ctx && ctx.loopBlocked
+  const blocked = !!(lb && lb[kind] && Date.now() < lb[kind])
+  if (blocked || holdFor(bot, ctx, kind)) {
+    const short = Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
+    if (short <= 0) return null
+    if (!blocked && hopDue(bot, ctx, kind)) return { kind, word, short, hop: true }
+    if (!blocked && !hopDue(bot, ctx, kind, true)) return null // a craft/pack hold keeps resting
+    const ah = ctx && ctx.acquireHeld && ctx.acquireHeld[kind]
+    // stone: its world stage already is acquire's block mine (same ground);
+    // banner/stairs keep their own rules (beds first, 8njf).
+    if (kind === 'stone' || kind === 'banner' || kind === 'stairs' || !acquireItem(bot, kind)) return null
+    if (typeof ah === 'number' && Date.now() - ah <= require('../budget').CASTLEFETCH_RETRY_MS) return null
+    return { kind, word, short, acquire: true }
+  }
   // klh2: the window parks the kind (kind-wide, as before klh2) — when the
   // parked kind's next tick would otherwise idle, hop to the chest strategy
   // for the same kind. The hop leg skips the world stage, so the failed
   // site stays parked while the hold stands. No hop when the kind holds
   // siteless, day-parked, chestless, or only at tried chests.
-  if (holdFor(bot, ctx, kind)) {
-    if (hopDue(bot, ctx, kind)) {
-      const short = Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
-      if (short > 0) return { kind, word, short, hop: true }
-    }
-    return null
-  }
   // neuc.58: a v2 stone leg hauls the forecast, not FETCH — the blueprint
   // remainder capped by pack room and what the held picks can still dig
   // (stone by hand drops nothing). Pickless keeps the v1 target: equip
@@ -3145,6 +3177,9 @@ function castlefetch(bot, ctx, target, state) {
     if (d.hop) {
       try { console.log(`castlefetch ${d.kind}: hop to chest strategy (world site parked)`) } catch (_) { /* log best-effort */ }
     }
+    if (d.acquire) {
+      try { console.log(`castlefetch ${d.kind}: acquire strategy (world source held, no known chest)`) } catch (_) { /* log best-effort */ }
+    }
   }
   // qxql.3: the restart gap runs from this leg's last tick, not its start.
   if (ctx.castleFetchRestarts && ctx.castleFetchRestarts.kind === f.kind) ctx.castleFetchRestarts.at = Date.now()
@@ -3180,6 +3215,12 @@ function castlefetch(bot, ctx, target, state) {
   // prod bot3 held 402 cobble, planks and a table, yet walked to far empty
   // chests and failed no-stairs).
   f.nearOnly = !d.hop && OBTAIN.has(d.kind)
+  // Held/loop-blocked kind with no known chest: acquire() owns the leg.
+  if (d.acquire) {
+    if (acquireTick(bot, ctx, f, d)) return
+    finish(bot, ctx, f.acquireDone ? 'done' : `failed:castlefetch-no-${d.kind}`)
+    return
+  }
   if (ladder.climb(f, [
     ['inventory', () => packFunds(bot, ctx, d) && craftTick(bot, ctx, f, d)],
     ['drops', () => d.kind === 'stone' && sweepTick(bot, ctx, f)],
@@ -3347,16 +3388,7 @@ function castlefetch(bot, ctx, target, state) {
   // Generic resolver: whatever the per-kind ticks above could not serve
   // walks the recipe/drop tree (acquire.js). Banner wool waits for beds;
   // stairs keep their one-mine-per-craft rule (8njf).
-  if (d.kind !== 'banner' && d.kind !== 'stairs') {
-    const item = craftNames(bot, d.kind)[0] || (chestNames(bot, d.kind)[0] || [])[0]
-    if (item) {
-      if (!f.acquire) f.acquire = { item, n: countItems(bot, (x) => x === item) + d.short }
-      const r = acquireMod.acquire(bot, ctx, f.acquire.item, f.acquire.n)
-      if (r === 'running') return
-      if (r === 'done' && !f.acquireDone) { f.acquireDone = true; f.craftOut = false; return } // the craft rung takes it next tick
-      try { console.log(`castlefetch ${d.kind}: acquire ${r}`) } catch (_) { /* log best-effort */ }
-    }
-  }
+  if (d.kind !== 'banner' && d.kind !== 'stairs' && acquireTick(bot, ctx, f, d)) return
   if (d.kind === 'enchanting_table') tableStatus(bot, ctx, f, st)
   castleMod.noteDry(ctx, d.kind) // the decor word tries the next open kind (castle menuFact)
   finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, banner without chest stock (beds first)

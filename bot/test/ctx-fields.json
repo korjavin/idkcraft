@@ -1943,6 +1943,7 @@
   },
   "stepStatus": {
     "writers": [
+      "src/behaviours/acquire.js",
       "src/behaviours/beds.js",
       "src/behaviours/bring.js",
       "src/behaviours/build.js",
