@@ -454,6 +454,7 @@
   "castleCursor": {
     "writers": [
       "src/behaviours/castle.js",
+      "src/enclosed.js",
       "src/orders.js"
     ],
     "owner": "src/behaviours/castle.js"
@@ -652,6 +653,7 @@
   "castleScanAt": {
     "writers": [
       "src/behaviours/castle.js",
+      "src/enclosed.js",
       "src/orders.js"
     ],
     "owner": "src/behaviours/castle.js"

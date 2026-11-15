@@ -41,6 +41,7 @@ const memory = require('./memory')
 const taskMod = require('./task')
 const recover = require('./behaviours/recover')
 const unstick = require('./behaviours/unstick')
+const enclosed = require('./enclosed')
 // The table lives in behaviours/index.js (oqul.3); same object re-exported.
 const { BEHAVIOURS } = require('./behaviours/index')
 const skills = require('./skills')
@@ -451,6 +452,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       const guarded = reflexGuards(state, calledBrain)
       if (guarded) return guarded
       let decision = null
+      // Enclosed (prod 2026-11-15): noPath on 3 distinct targets in 60 s -> open one own-build doorway.
+      if (!urgentFight(state) && enclosed.tick(bot, ctx)) {
+        console.log(`decision source=escalation action=enclosed sprint=false dist=none ${pathSuffix()}`)
+        return { decision: { action: 'enclosed', sprint: false, source: 'escalation' }, calledBrain }
+      }
       // u04q: LLM_ESCALATION (v2) gets the stuck/noPath/unreachable step first; off = no-op.
       if (unstick.tick(bot, ctx, urgentFight(state) || !!(state.hostile && state.hostile_distance < 10))) {
         console.log(`decision source=escalation action=unstick sprint=false dist=none ${pathSuffix()}`)
