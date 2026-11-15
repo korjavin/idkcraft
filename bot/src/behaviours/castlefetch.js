@@ -457,6 +457,9 @@ function demand(bot, ctx) {
     kind = m[1]
     word = m[2]
   }
+  // goal.noteLoop: a kind the loop breaker blocked has no fetch for a while.
+  const lb = ctx && ctx.loopBlocked
+  if (lb && lb[kind] && Date.now() < lb[kind]) return null
   const cw = ctx && ctx.castleWord
   const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
   const target = Math.min(capOf(kind), left)

@@ -596,7 +596,41 @@ function castleGo(facts, ctx, bot = null) {
   if (!registered('castle')) return false
   if (lowHpGated(bot, facts, ctx)) return false // vmzq.49: eat first, then climb (.51: bounded)
   if (w === 'clear' || w === 'finish' || w === 'tidy' || w.endsWith('-batch')) return true // g0z.62: 'tidy' = walk back to the complete castle
-  return w.endsWith('-some') && !!ctx && ctx.step === 'castle' && ctx.stepStatus === 'running'
+  if (!w.endsWith('-some')) return false
+  if (ctx && ctx.step === 'castle' && ctx.stepStatus === 'running') return true
+  // Partial batch (prod 2026-11-15 bot3: frame-some with logs on hand, the
+  // fetch held for an hour): a held or loop-blocked fetch lays what the pack has.
+  const kind = w.slice(0, w.lastIndexOf('-'))
+  if (loopBlocked(ctx, kind)) return true
+  try { return !!bot && require('./behaviours/castlefetch').holdFor(bot, ctx, kind) } catch (_) { return false }
+}
+
+// No-progress loop breaker (prod 2026-11-15 bot3: a task-plan pinned
+// gather<->castlefetch 56x each in an hour, castle +15). Pins alternating
+// within two steps LOOP_SWITCHES times with the castle metric flat drop the
+// plan/commit and block the castle's waiting kind for LOOP_BLOCK_MS: its
+// fetch goes off (castlefetch.demand) and a partial on hand lays (castleGo).
+const LOOP_SWITCHES = 4
+const LOOP_BLOCK_MS = 30 * 60 * 1000
+function loopBlocked(ctx, kind) {
+  const b = ctx && ctx.loopBlocked
+  return !!(b && kind && b[kind] && Date.now() < b[kind])
+}
+// true when this pin closes a loop (the kind is then blocked)
+function noteLoop(ctx, step) {
+  if (!ctx) return false
+  const p = ctx.castle && ctx.castle.progress
+  const m = p && typeof p.done === 'number' ? p.done : null
+  const seq = (ctx.loopSeq = (ctx.loopSeq || []).filter((e) => e.m === m)) // metric moved: start over
+  if (seq.length === 0 || seq[seq.length - 1].step !== step) seq.push({ step, m })
+  if (seq.length > LOOP_SWITCHES + 1) seq.shift()
+  const steps = [...new Set(seq.map((e) => e.step))]
+  if (seq.length <= LOOP_SWITCHES || steps.length > 2) return false
+  ctx.loopSeq = []
+  const kind = (ctx.castleWord && ctx.castleWord.kind) || 'none'
+  ctx.loopBlocked = { ...(ctx.loopBlocked || {}), [kind]: Date.now() + LOOP_BLOCK_MS }
+  try { console.log(`loop-break steps=${steps.join('<->')} kind=${kind}`) } catch (_) { /* log best-effort */ }
+  return true
 }
 
 // Health gate (idkcraft-vmzq.49): at low health with nothing edible on
@@ -2950,6 +2984,7 @@ function siteFarFor(bot, ctx, facts, prev, status, finished, commitStep) {
 // re-arm; writes ctx.taskPlanStep (consumed, unless the night defers it).
 // Returns the menu and which pin applied.
 function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
+  const menu = names
   // Stall-point plan (vmzq.5): the one-shot forced re-pick — the planned
   // step as the only menu entry. Consumed on use (one-shot); applied only
   // while still feasible and registered (a stale answer degrades to the
@@ -3009,6 +3044,10 @@ function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
         commitApplied = true
       }
     }
+  }
+  if ((planApplied || commitApplied) && noteLoop(ctx, names[0])) {
+    try { if (ctx.goal) ctx.goal.commit = null } catch (_) { /* drop best-effort */ }
+    return { names: menu, planApplied: false, commitApplied: false }
   }
   return { names, planApplied, commitApplied }
 }
@@ -3249,4 +3288,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome }
+module.exports = { activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome, noteLoop, loopBlocked, castleGo }
