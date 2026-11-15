@@ -196,11 +196,13 @@ function anchorOf(bot, ctx) {
 // First spiral cell whose chunk is still unvisited (rings ascending, north
 // first): the boundary of the visited. Null when explored out to maxRadius.
 // banned(x, z) skips gave-up spots (mnx pit memory).
-function pickTarget(visited, anchor, maxRadius, banned) {
+// ray (0..7): walk that one compass ray outward only (wood expedition).
+function pickTarget(visited, anchor, maxRadius, banned, ray) {
   const cap = typeof maxRadius === 'number' ? maxRadius : MAX_RADIUS
   for (const r of RINGS) {
     if (r > cap) break
     for (let a = 0; a < RAY_COUNT; a++) {
+      if (typeof ray === 'number' && a !== ray) continue
       const x = Math.round(anchor.x + r * Math.sin(a * Math.PI / 4))
       const z = Math.round(anchor.z - r * Math.cos(a * Math.PI / 4))
       if (!visited.has(chunkOf(x, z)) && !(banned && banned(x, z))) return { x: x + 0, z: z + 0 } // +0: no -0 keys/logs
@@ -266,10 +268,18 @@ function castleWoodHunt(ctx) {
   try {
     const cw = ctx && ctx.castleWord
     if (!cw || WOOD_KINDS.indexOf(cw.kind) === -1) return false
-    return typeof require('../goal-unlock').goalUnlock(ctx, 'radius') === 'number'
+    return woodExpedition(ctx) || typeof require('../goal-unlock').goalUnlock(ctx, 'radius') === 'number'
   } catch (_) {
     return false
   }
+}
+// Wood expedition (prod 2026-11-15 bot3): a castle wood word with no log
+// in memory walks out to EXPEDITION_RADIUS, one ray at a time, with no
+// unlock window; the first remembered log ends it and gather-far chops.
+const EXPEDITION_RADIUS = 400
+function woodExpedition(ctx) {
+  const cw = ctx && ctx.castleWord
+  return !!cw && WOOD_KINDS.indexOf(cw.kind) !== -1 && logCount(ctx) === 0
 }
 
 function explore(bot, ctx, target, state) {
@@ -347,8 +357,18 @@ function explore(bot, ctx, target, state) {
     e.issuedKey = null
   }
   if (!e.target) {
-    const cap = capOf(bot, ctx, e)
-    const t = pickTarget(e.visited, anchor, cap, (x, z) => danger.covers(ctx, { x, z }))
+    const banned = (x, z) => danger.covers(ctx, { x, z })
+    let cap = capOf(bot, ctx, e)
+    let t = null
+    if (woodExpedition(ctx) && !aloneIdle(bot, ctx)) {
+      cap = Math.max(cap, EXPEDITION_RADIUS)
+      if (typeof e.huntRay !== 'number') e.huntRay = Math.floor(Math.random() * RAY_COUNT)
+      for (let i = 0; i < RAY_COUNT && !t; i++) {
+        t = pickTarget(e.visited, anchor, cap, banned, e.huntRay)
+        if (!t) e.huntRay = (e.huntRay + 1) % RAY_COUNT // ray walked out: turn to the next
+      }
+    }
+    if (!t) t = pickTarget(e.visited, anchor, cap, banned)
     if (!t) {
       // Spiral exhausted (hlk: persisted visited makes this permanent
       // across restarts, a done-log every tick forever): start over from
@@ -433,6 +453,7 @@ function nextTarget(bot, ctx, cap) {
 
 module.exports = explore
 module.exports.MAX_RADIUS = MAX_RADIUS
+module.exports.pickTarget = pickTarget
 module.exports.TASK_SEARCH_RADIUS = TASK_SEARCH_RADIUS
 module.exports.capOf = capOf // vmzq.65: stranded-lift tests read the cap directly
 module.exports.woodStranded = woodStranded // vmzq.65: gather's taskFar reads the one predicate
