@@ -362,6 +362,11 @@ function stampFailKindSite(bot, ctx, kind, status) {
 // hold), a live hold window, no same-day park (dlpo owns that), and an
 // UNTRIED chest the hop leg can actually walk to (else the hop leg would end
 // at once, every tick; tried chests are remembered on the entry, R2).
+function hopRecent(ctx, kind) {
+  const t = ctx && ctx.supplyHop && ctx.supplyHop[kind]
+  return typeof t === 'number' && Date.now() - t <= require('../budget').CASTLEFETCH_RETRY_MS
+}
+
 function hopDue(bot, ctx, kind) {
   try {
     if (!kind || !(kind in FETCH)) return false
@@ -509,7 +514,10 @@ function demand(bot, ctx) {
   if (blocked || holdFor(bot, ctx, kind)) {
     const short = Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
     if (short <= 0) return null
-    if (!blocked && hopDue(bot, ctx, kind)) return { kind, word, short, hop: true }
+    // Supply ladder: one chest hop per kind per window, then acquire (prod
+    // 2026-11-15 bot3: 12 hops/h, failed or preempted hops lost hopTried and
+    // re-hopped forever, so acquire never ran).
+    if (!blocked && !hopRecent(ctx, kind) && hopDue(bot, ctx, kind)) return { kind, word, short, hop: true }
     const ah = ctx && ctx.acquireHeld && ctx.acquireHeld[kind]
     // Every held kind that is short goes to acquire (owner: never one
     // material at a time); no stone/banner/stairs idle exception.
@@ -3218,6 +3226,7 @@ function castlefetch(bot, ctx, target, state) {
     // klh2: the prod signal — a hop leg names its strategy, so a
     // failed:* line is followed within seconds by the next fetch line.
     if (d.hop) {
+      (ctx.supplyHop || (ctx.supplyHop = {}))[d.kind] = Date.now()
       try { console.log(`castlefetch ${d.kind}: hop to chest strategy (world site parked)`) } catch (_) { /* log best-effort */ }
     }
     if (d.acquire) {
@@ -3474,6 +3483,7 @@ module.exports.digTick = digTick
 module.exports.demand = demand
 module.exports.shortOf = shortOf
 module.exports.acquireItem = acquireItem
+module.exports.hopRecent = hopRecent
 module.exports.holdFor = holdFor
 module.exports.hopDue = hopDue
 module.exports.isParked = isParked
