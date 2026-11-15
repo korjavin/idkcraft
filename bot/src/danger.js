@@ -12,6 +12,7 @@ const AVOID_RADIUS = 6 // pit + body + approach margin
 const WATER_RADIUS = 32 // a water death bans the swim around it, not one cell
 const FALL_RADIUS = 3 // neuc.65.6: a fall death costs the drop cell, not the house beside it
 const MAX_RADIUS = 64 // widest mark: an ocean monument
+const MOB_RADIUS = 16 // prod 2026-11-15 bot3: 3 mob deaths within 35 blocks of one cave on a chest route
 
 function store(ctx) {
   if (!ctx) return null
@@ -164,6 +165,21 @@ function markFallDeath(bot, ctx, hostiles, now) {
   } catch (_) { return false }
 }
 
+// Mob death (prod 2026-11-15 bot3: zombie/creeper deaths at -189 61 162,
+// -182 49 197, -185 56 177 in 80 min, each on the same far-chest route —
+// nothing was marked, so every life re-walked the cave). A hostile death
+// marks a MOB_RADIUS disc: wide enough (>= MOB_RADIUS) to ride the path
+// cost, so v1 A* and the v2 Baritone heuristic route around it, and the
+// explore ring (covers) skips it until the TTL. True when marked.
+function markMobDeath(bot, ctx, hostiles, now) {
+  try {
+    if (!ctx || !(typeof hostiles === 'number' && hostiles > 0)) return false
+    const pos = bot && bot.entity && bot.entity.position
+    if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') return false
+    return mark(ctx, pos, now, MOB_RADIUS) > 0
+  } catch (_) { return false }
+}
+
 function prune(ctx, now) {
   const mem = ctx && ctx.danger
   if (!mem || !Array.isArray(mem.spots)) return 0
@@ -267,7 +283,7 @@ function wideSpots(ctx, t, feet, goal) {
   for (const s of mem.spots) {
     if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
     const r = spotRadius(s)
-    if (r < WATER_RADIUS && !s.fall) continue
+    if (r < MOB_RADIUS && !s.fall) continue // pit marks (6) stay recover/detour's
     // neuc.65.6: fall discs shrink with the goal ring like water discs. A
     // whole disc on the house entrance would make the door the deepest
     // AvoidGoal node (PROTOCOL 'Danger discs on goals') and gohome would fail
@@ -277,4 +293,4 @@ function wideSpots(ctx, t, feet, goal) {
   return out
 }
 
-module.exports = { addPathCost, PATH_COST, WATER_BLOCKS, mark, near, covers, spots, prune, count, clear, markWaterDeath, markFallDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, FALL_RADIUS, MAX_RADIUS }
+module.exports = { addPathCost, PATH_COST, WATER_BLOCKS, mark, near, covers, spots, prune, count, clear, markWaterDeath, markFallDeath, markMobDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, FALL_RADIUS, MOB_RADIUS, MAX_RADIUS }

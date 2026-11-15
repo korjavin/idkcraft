@@ -4,7 +4,7 @@ const mineflayer = require('mineflayer')
 const Vec3 = require('vec3')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { makeBrain, stubBrain, jevBrain, hybridBrain, JEV_ENDPOINT, isHard, brainTimeoutMs, planner, withPlanner } = require('./brain')
-const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHostiles } = require('./perception')
+const { findTarget, resolvePlayer, buildState, stateKey, isFightTarget, snapHostiles, countItems } = require('./perception')
 const { makeScout } = require('./behaviours/scout')
 const stuck = require('./stuck')
 const { limitChat } = require('./chat-limit')
@@ -494,8 +494,13 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // Orders still own their ticks (no starve, no no-dig leak — same
       // gate as the atl.12 shelter hold); shelter never diverts.
       const hurtFresh = typeof ctx.lastHurtAt === 'number' && (Date.now() - ctx.lastHurtAt) < HURT_FRESH_MS
+      // Outmatched (prod 2026-11-15 bot3: 3 work-trip deaths to 2-5 mobs in a
+      // cave, the last swordless): hurt by a crowd, or swordless and below
+      // 12 hp, the work step yields to the same retreat chain as unreachable fire.
+      const outmatched = (state.nearby_hostiles || 0) >= 2 ||
+        (typeof state.bot_health === 'number' && state.bot_health < 12 && countItems(bot, (n) => n.endsWith('_sword')) === 0)
       const underFire = !ctx.inShelter && !ctx.lead && !ctx.bring && !target &&
-        state.hostile_reachable === false &&
+        (state.hostile_reachable === false || outmatched) &&
         typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
       if (!hurtFresh) ctx.underFireLogged = false
       if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
@@ -1838,7 +1843,11 @@ function handleDeath(bot, ticker) {
     if (dangerMod.markWaterDeath(bot, ctx)) exploreMod.dropDeadLeg(ctx)
     // neuc.65.6: a dry, hostile-free death is a fall — the small disc keeps
     // the next life's paths off the drop (prod v2: ten at one doorstep).
-    else if (dangerMod.markFallDeath(bot, ctx, deathHostiles(bot))) console.log('danger: fall death marked')
+    else {
+      const n = deathHostiles(bot)
+      if (dangerMod.markFallDeath(bot, ctx, n)) console.log('danger: fall death marked')
+      else if (dangerMod.markMobDeath(bot, ctx, n)) console.log('danger: mob death marked')
+    }
   } catch (_) { /* memory best-effort */ }
   // ed88: night-step phase records belong to the dead body's position — a
   // gohome 'enter' resumed from world spawn stood 60 s, then cannot-reach.

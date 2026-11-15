@@ -593,7 +593,7 @@ describe('taking-fire retreat (0ay)', () => {
       async ask() { throw new Error('chain must not ask: retreat is the only option') },
     }
   }
-  function fireBot(health) {
+  function fireBot(health, items = []) {
     // Mob at ~4.5 blocks: beyond the latch melee override (a written-off
     // mob in swing reach reports reachable) but inside the retreat menu
     // (<=6) and the under-fire gate (<=8) — the prod 11:50 shape.
@@ -601,7 +601,7 @@ describe('taking-fire retreat (0ay)', () => {
     // air reads airborne and fight writes it off without a pursuit).
     const solids = new Set()
     for (let x = -4; x <= 5; x++) for (let z = -4; z <= 4; z++) solids.add(key(x, 63, z))
-    const bot = fieldBot({ solids, entities: { 1: zombie(1, 5, 64, 0) }, health })
+    const bot = fieldBot({ solids, entities: { 1: zombie(1, 5, 64, 0) }, health, items })
     bot.players = {}
     return bot
   }
@@ -753,7 +753,7 @@ describe('taking-fire retreat (0ay)', () => {
     // Hard route (hp<6 + hostile fact) with an idle model: decision idle
     // reaches the work block, so only the reachable===false conjunct stands
     // between this tick and a retreat — deleting it fails this test.
-    const bot = fireBot(5)
+    const bot = fireBot(5, [{ name: 'stone_sword', count: 1 }]) // armed: the swordless leg stays out
     const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
     ticker.work()
     await ticker.tick()
@@ -761,6 +761,31 @@ describe('taking-fire retreat (0ay)', () => {
     const r = await ticker.tick()
     assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
     assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no log for reachable fire')
+    ticker.destroy()
+  })
+
+  it('hurt + reachable + swordless at low hp: retreats (outmatched, prod bot3 sword=0 death)', async () => {
+    const bot = fireBot(5)
+    const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    bot.health = 4
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'retreat')
+    ticker.destroy()
+  })
+
+  it('hurt + reachable + two mobs, armed and healthy: retreats (outmatched crowd)', async () => {
+    const bot = fireBot(20, [{ name: 'stone_sword', count: 1 }])
+    bot.entities[2] = zombie(2, 5, 64, 1)
+    const remote = idleRemote()
+    remote.decide = async () => ({ action: 'fight', sprint: false, source: 'laya' })
+    const ticker = createTicker({ bot, brain: hybridBrain(remote), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    bot.health = 19
+    const r = await ticker.tick()
+    assert.equal(r.decision.action, 'retreat')
     ticker.destroy()
   })
 

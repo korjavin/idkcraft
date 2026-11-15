@@ -815,7 +815,7 @@ function castleBlocked(facts) {
 // building; a failing equip drops out of names via its hold, so bounded).
 function picklessCastle(facts, names) {
   return !!(facts && (facts.rearm || !((facts.sword || 0) > 0))) && names.includes('equip') &&
-    (names.includes('castle') || names.includes('castlefetch'))
+    (names.includes('castle') || names.includes('castlefetch') || names.includes('gocastle'))
 }
 // Site half of the stockpile feasible (vmzq.39, extracted R3): an active
 // far castle banks at the site instead of home. Shared with the pierce
@@ -1868,7 +1868,7 @@ function goalFsm(facts, feasibleNames) {
     if (name === 'gohome' && t !== 'night' && t !== 'dusk') continue
     if (name === 'shelter' && t === 'day') continue // night-far step; at dusk only the castle night (g0z.21) makes it feasible
     // vmzq.37: a pickless castle rearms first — the legs cannot dig.
-    if ((name === 'castle' || name === 'castlefetch') && picklessCastle(facts, [...ok])) return 'equip'
+    if ((name === 'castle' || name === 'castlefetch' || name === 'gocastle') && picklessCastle(facts, [...ok])) return 'equip'
     return name
   }
   return 'rest'
