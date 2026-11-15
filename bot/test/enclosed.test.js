@@ -48,11 +48,42 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
       assert.equal(blocks.get('4,64,8'), 'bedrock', 'foreign blocks untouched')
       assert.deepStrictEqual(ctx.enclosedEscapes.map((c) => `${c.x},${c.y},${c.z}`).sort(), ['3,64,7', '3,65,7'])
       assert.equal(ctx.castleCursor, 0) // re-lay pass
-      assert.deepStrictEqual({ x: bot.pathfinder.goal.x, z: bot.pathfinder.goal.z }, { x: 3, z: 6 })
-      bot.entity.position = { x: 3.5, y: 64, z: 6.5 }
+      assert.deepStrictEqual({ x: bot.pathfinder.goal.x, z: bot.pathfinder.goal.z }, { x: 3, z: 7 })
+      bot.entity.position = { x: 3.5, y: 64, z: 7.5 }
       assert.equal(enclosed.tick(bot, ctx, 9000), false)
       assert.ok(logs.some((l) => l.startsWith('enclosed escape outcome=out')))
     } finally { console.log = orig }
+  })
+  it('tunnels a 3-layer own wall under a roof until open sky, then walks out (prod 08:57 thick wall)', async () => {
+    const { bot, ctx, blocks } = world()
+    for (const z of [5, 6]) { blocks.set(`3,64,${z}`, 'stone'); blocks.set(`3,65,${z}`, 'stone') }
+    for (const z of [5, 6, 7, 8]) blocks.set(`3,66,${z}`, 'stone') // roof: the tunnel is still inside
+    const goTo = bot.pathfinder.setGoal
+    bot.pathfinder.setGoal = (g) => { goTo(g); if (g && !Number.isFinite(g.x)) return; if (g) bot.entity.position = { x: g.x + 0.5, y: g.y, z: g.z + 0.5 } }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); bot.entity.position = { x: 3.5, y: 64, z: 8.5 }; enclosed.tick(bot, ctx, 1000 + i) }
+      assert.ok(logs.includes('enclosed at 3,64,8'))
+      let t = 2000
+      while (!logs.some((l) => l.startsWith('enclosed escape outcome=')) && t < 2100) { enclosed.tick(bot, ctx, t++); await flush() }
+      for (const z of [5, 6, 7]) assert.ok(!blocks.has(`3,64,${z}`) && !blocks.has(`3,65,${z}`), `layer z=${z} opened`)
+      assert.equal(ctx.enclosedEscapes.length, 6)
+      assert.ok(logs.some((l) => l.startsWith('enclosed escape outcome=out')), logs.join('\n'))
+      assert.equal(Math.floor(bot.entity.position.z), 4)
+      assert.equal(blocks.get('3,66,6'), 'stone', 'roof untouched')
+    } finally { console.log = orig }
+  })
+  it('recover digs share the own-castle allowance only while enclosed', () => {
+    const { bot, ctx } = world()
+    const { denyReason } = require('../src/behaviours/util')
+    const wall = bot.blockAt({ x: 3, y: 65, z: 7 })
+    const rctx = { ...ctx, recovery: {} }
+    assert.equal(denyReason(bot, wall, rctx), 'protected')
+    rctx.enclosedUntil = Date.now() + 60000
+    assert.equal(denyReason(bot, wall, rctx), null)
+    assert.equal(denyReason(bot, wall, { ...rctx, recovery: null }), 'protected')
   })
   it('refuses when only foreign (player) builds surround it', () => {
     const { bot, ctx, blocks } = world('oak_planks') // not a castle plan match: someone else's

@@ -485,7 +485,9 @@ function protectedReason(bot, block, ctx) {
     // ground cell; everything else keeps the castle guard.
     const sill = !!(ctx && ctx.castleSill) && NATURAL_SOLID.has(name)
     const groundEscape = !!(ctx && ctx.recovery && ctx.castle) && !castle.protects(ctx.castle, pos, name, props) && castleGroundEscape(bot, ctx.castle, pos) // recover only
-    if (ctx && ctx.castle && !sill && !groundEscape && castleProtects(ctx.castle, pos, name, props)) return 'protected'
+    // Enclosed (src/enclosed.js): while the escape is live, recover digs may open laid own castle cells too.
+    const enclosedOwn = !!(ctx && ctx.recovery && ctx.castle && ctx.enclosedUntil > Date.now()) && !CASTLE_KEEP.test(name) && castle.protects(ctx.castle, pos, name, props)
+    if (ctx && ctx.castle && !sill && !groundEscape && !enclosedOwn && castleProtects(ctx.castle, pos, name, props)) return 'protected'
     if (castleClears(ctx, pos, name)) return null // vmzq.40: castle step, footprint blocker
     // Castle yard (idkcraft-g0z.44): after the castle step's own clears
     // (prep cuts, litter, foreign-clear keep working), before the own
