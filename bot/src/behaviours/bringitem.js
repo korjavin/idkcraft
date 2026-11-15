@@ -715,13 +715,7 @@ function recipeTick(bot, ctx, o) {
 // block the sub digs (charcoal: any log — raw null means the pack's wood).
 // The rest stay off the ladder with a cheap reason: clay is not bringable
 // (clay drops clay_ball), raw meat needs a named-species hunt.
-const SMELT = {
-  iron_ingot: { raw: 'raw_iron', ore: 'iron_ore' },
-  gold_ingot: { raw: 'raw_gold', ore: 'gold_ore' },
-  copper_ingot: { raw: 'raw_copper', ore: 'copper_ore' },
-  glass: { raw: 'sand', ore: 'sand' },
-  charcoal: { raw: null, ore: 'logs' },
-}
+const SMELT = require('../sources').SMELT
 const SMELT_OFF = {
   brick: 'clay not part of bring',
   cooked_beef: 'cooking not part of bring',

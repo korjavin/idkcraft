@@ -24,6 +24,7 @@ const blueprint = require('../castle')
 const castleMod = require('./castle')
 const toolPrep = require('./toolprep')
 const stockpileMod = require('./stockpile')
+const acquireMod = require('./acquire')
 const ladder = require('../source-ladder')
 const danger = require('../danger')
 const { countItems } = require('../perception')
@@ -3137,6 +3138,7 @@ function castlefetch(bot, ctx, target, state) {
       finish(bot, ctx, `failed:castlefetch-no-${d.kind}`)
       return
     }
+    ctx.castleNeed = { kind: d.kind, item: craftNames(bot, d.kind)[0] || (chestNames(bot, d.kind)[0] || [])[0] || null } // sources.needSources
     try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
     // klh2: the prod signal — a hop leg names its strategy, so a
     // failed:* line is followed within seconds by the next fetch line.
@@ -3342,6 +3344,19 @@ function castlefetch(bot, ctx, target, state) {
   if (d.kind === 'pane') { paneTick(bot, ctx, f, d, target, state); return }
   if (d.kind === 'blast_furnace') { blastTick(bot, ctx, f, d, target, state); return }
   if (d.kind === 'torch' && torchTick(bot, ctx, f, d, target, state)) return
+  // Generic resolver: whatever the per-kind ticks above could not serve
+  // walks the recipe/drop tree (acquire.js). Banner wool waits for beds;
+  // stairs keep their one-mine-per-craft rule (8njf).
+  if (d.kind !== 'banner' && d.kind !== 'stairs') {
+    const item = craftNames(bot, d.kind)[0] || (chestNames(bot, d.kind)[0] || [])[0]
+    if (item) {
+      if (!f.acquire) f.acquire = { item, n: countItems(bot, (x) => x === item) + d.short }
+      const r = acquireMod.acquire(bot, ctx, f.acquire.item, f.acquire.n)
+      if (r === 'running') return
+      if (r === 'done' && !f.acquireDone) { f.acquireDone = true; f.craftOut = false; return } // the craft rung takes it next tick
+      try { console.log(`castlefetch ${d.kind}: acquire ${r}`) } catch (_) { /* log best-effort */ }
+    }
+  }
   if (d.kind === 'enchanting_table') tableStatus(bot, ctx, f, st)
   castleMod.noteDry(ctx, d.kind) // the decor word tries the next open kind (castle menuFact)
   finish(bot, ctx, `failed:castlefetch-no-${d.kind}`) // torch without coal, banner without chest stock (beds first)

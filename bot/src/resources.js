@@ -16,6 +16,7 @@ const blockids = require('./blockids') // oqul.11: was behaviours/scout (the sco
 const castle = require('./castle')
 
 const MAX_ITEMS = 256
+const NEED_MAX = 32 // need-scan finds: their own cap, never evicting ores/logs
 const SCAN_RADIUS = 48 // same reach as gather's FIND_RADIUS
 const SCAN_COUNT = 64
 
@@ -49,10 +50,16 @@ function noteSpots(ctx, spots, now) {
     else added++
     const at = typeof s.at === 'number' && Number.isFinite(s.at) ? s.at : t
     const exposed = typeof s.exposed === 'boolean' ? s.exposed : undefined
-    mem.items.set(k, { x: s.x, y: s.y, z: s.z, name: s.name, at, exposed })
+    const it = { x: s.x, y: s.y, z: s.z, name: s.name, at, exposed }
+    if (s.need === true) it.need = true
+    mem.items.set(k, it)
   }
-  while (mem.items.size > MAX_ITEMS) {
-    mem.items.delete(mem.items.keys().next().value)
+  // Oldest out within each pool: need finds (acquire sources) cannot push out other finds.
+  let needs = 0
+  for (const it of mem.items.values()) if (it.need) needs++
+  for (const [k, it] of mem.items) {
+    if (needs <= NEED_MAX && mem.items.size - needs <= MAX_ITEMS) break
+    if (it.need && needs > NEED_MAX) { mem.items.delete(k); needs-- } else if (!it.need && mem.items.size - needs > MAX_ITEMS) mem.items.delete(k)
   }
   return added
 }
@@ -153,6 +160,23 @@ function scan(bot, ctx, opts) {
   } catch (_) {
     // sand is best-effort
   }
+  const needAt = new Set()
+  // Generic: the world sources of what the bot needs now (the castle
+  // word's kind, the live acquire gap), same small cap.
+  try {
+    const acq = require('./sources')
+    const names = new Set(acq.needSources(ctx))
+    for (const n of (ctx && ctx.acquire && ctx.acquire.blocks) || []) names.add(n)
+    const needIds = [...names].flatMap((n) => blockids.resolveBlockIds(bot, n))
+    if (needIds.length > 0) {
+      const base = new Set(found.map((p) => blockids.keyOf(p)))
+      for (const p of bot.findBlocks({ matching: needIds, maxDistance: radius, count: blockids.COAL_COUNT }) || []) {
+        if (!base.has(blockids.keyOf(p))) { needAt.add(blockids.keyOf(p)); found.push(p) }
+      }
+    }
+  } catch (_) {
+    // needs are best-effort
+  }
   const spots = []
   for (const p of found) {
     let name = null
@@ -171,7 +195,7 @@ function scan(bot, ctx, opts) {
     } catch (_) {
       exposed = false
     }
-    spots.push({ x: p.x, y: p.y, z: p.z, name, exposed })
+    spots.push({ x: p.x, y: p.y, z: p.z, name, exposed, need: needAt.has(blockids.keyOf(p)) })
   }
   const added = noteSpots(ctx, spots, now)
   return { added, total: count(ctx) }
@@ -199,4 +223,4 @@ function exposedOf(bot, item) {
   }
 }
 
-module.exports = { noteSpots, nearest, surfaceFloor, count, clear, forget, scan, exposedOf, MAX_ITEMS, SCAN_RADIUS }
+module.exports = { NEED_MAX, noteSpots, nearest, surfaceFloor, count, clear, forget, scan, exposedOf, MAX_ITEMS, SCAN_RADIUS }
