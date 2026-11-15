@@ -91,7 +91,7 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     console.log = (m) => logs.push(String(m))
     try {
       for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + i) }
-      assert.ok(logs.includes('enclosed escape refused: no breakable doorway, no climb'))
+      assert.ok(logs.some((l) => l.startsWith('enclosed escape refused: no breakable doorway, no climb, no descent')))
       assert.equal(blocks.get('3,64,7'), 'bedrock')
     } finally { console.log = orig }
   })
@@ -230,5 +230,40 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     const { RECOVER_MENU } = require('../src/behaviours/recover')
     assert.equal(RECOVER_MENU.sidestep.feasible({ walls: 2 }, ctx), false, 'no shuffle while enclosed')
     assert.equal(RECOVER_MENU.sidestep.feasible({ walls: 2 }, {}), true)
+  })
+  it('on a tall pillar top (every side a drop): digs down the pillar until it can walk off', async () => {
+    // Pillar column x=3,z=8 from y=64 to y=70 over the stone floor (y=63); the bot stands on it at y=71.
+    const { bot, ctx, blocks } = world()
+    for (const k of ['3,64,7', '3,65,7', '4,64,8', '4,65,8', '2,64,8', '2,65,8', '3,64,9', '3,65,9']) blocks.delete(k)
+    for (let y = 64; y <= 70; y++) blocks.set(`3,${y},8`, 'dirt')
+    for (let x = -10; x < 17; x++) for (let z = -5; z < 22; z++) blocks.set(`${x},63,${z}`, 'stone') // open ground
+    bot.entity.position = { x: 3.5, y: 71, z: 8.5 }
+    bot.health = 20
+    const dig = bot.dig
+    bot.dig = async (b) => { await dig(b); bot.entity.position = { x: 3.5, y: b.position.y, z: 8.5 } } // falls one cell
+    const logs = []
+    const log = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + i) }
+      for (let t = 2000; t < 2100 && !logs.some((l) => l.includes('outcome=')); t++) { enclosed.tick(bot, ctx, t); await flush() }
+    } finally { console.log = log }
+    assert.ok(logs.some((l) => l.startsWith('enclosed escape mode=down') && l.includes('outcome=out')), logs.join('\n'))
+    assert.ok(bot.entity.position.y <= 65, 'within a step of the ground')
+    assert.equal(blocks.get('3,63,8'), 'stone', 'never dug below the ground once out')
+  })
+  it('never descends into lava or a lethal fall; logs the 3x3x3 cage after repeated refusals', () => {
+    const { bot, ctx, blocks } = world('bedrock')
+    blocks.set('3,63,8', 'dirt'); blocks.set('3,62,8', 'lava')
+    for (const [x, z] of [[4, 8], [2, 8], [3, 9]]) blocks.set(`${x},66,${z}`, 'bedrock')
+    const logs = []
+    const log = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      for (let r = 0; r < 3; r++) for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10 + r * 100, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + r * 70000 + i) }
+    } finally { console.log = log }
+    assert.equal(blocks.get('3,63,8'), 'dirt')
+    assert.ok(logs.some((l) => l.includes('no descent (lava)')), logs.join('\n'))
+    assert.equal(logs.filter((l) => l.startsWith('enclosed cage at 3,64,8: y-1=[')).length, 1)
   })
 })
