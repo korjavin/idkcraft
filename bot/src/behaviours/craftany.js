@@ -651,7 +651,13 @@ function craftItem(bot, ctx, name, count) {
   if (!op || op.fail) {
     const missing = gapOf(plan.needs, packCounts(bot), left, poolsPlanks(bot, plan.target))
     clearRun(ctx)
-    if (missing.length > 0) return { done: false, line: missingLine(plan.target, missing) }
+    // A run planned on a wood the pack no longer holds (spruce_planks after
+    // the spruce logs went, birch held) re-plans next tick instead of failing.
+    if (missing.length > 0) {
+      const again = planCraft(bot, ctx, names, count || 1)
+      if (again.ok && again.target !== plan.target) return 'running'
+      return { done: false, line: missingLine(plan.target, missing) }
+    }
     return { done: false, line: `can't make ${plan.target}: crafting failed` }
   }
   gearMod.runOp(bot, ctx, op)
