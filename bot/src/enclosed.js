@@ -15,7 +15,7 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const castle = require('./castle')
-const { denyReason, isOwnPlaced, inHouseFootprint } = require('./behaviours/util')
+const { denyReason, isOwnPlaced, inHouseFootprint, NATURAL_SOLID, CLEAR_FLORA } = require('./behaviours/util')
 const { countItems } = require('./perception')
 
 const WINDOW_MS = 60000
@@ -53,14 +53,22 @@ function ownBuild(ctx, b) {
   return (ctx.castle && castle.protects(ctx.castle, b.position, b.name, props)) || isOwnPlaced(ctx, b) ||
     inHouseFootprint(ctx.home, b.position) === true
 }
-// null = diggable for the escape; 'own' = own-build cell the escape may open; else a refusal.
+// Natural terrain the work rules protect only for location (yard, apron,
+// home zone): an enclosed body may dig it. Never a foreign build.
+function natural(name) {
+  return NATURAL_SOLID.has(name) || CLEAR_FLORA.has(name) || /(_ore|_leaves)$/.test(name)
+}
+// null = diggable for the escape; 'own' = own-build cell (budgeted, re-laid);
+// 'nat' = protected-zone natural terrain; else a refusal.
 function breakable(bot, ctx, b) {
   if (air(b)) return null
   if (!b || KEEP.test(b.name) || /lava|water/.test(b.name)) return 'keep'
   const d = denyReason(bot, b, ctx)
   if (!d) return null
-  return d === 'protected' && ownBuild(ctx, b) ? 'own' : d
+  if (d !== 'protected') return d
+  return ownBuild(ctx, b) ? 'own' : natural(b.name) ? 'nat' : d
 }
+const OK = (r) => !r || r === 'own' || r === 'nat'
 
 // Exit directions, best first: the first layer (both body cells) diggable or
 // own build, solid floor under it (never a drop), no lava; fewest own cells,
@@ -72,11 +80,12 @@ function pickExits(bot, ctx, feet) {
     const x = feet.x + dx, z = feet.z + dz
     const cells = [at(bot, x, feet.y, z), at(bot, x, feet.y + 1, z)]
     const v = cells.map((b) => breakable(bot, ctx, b))
-    if (v.some((r) => r && r !== 'own') || !layerSafe(bot, x, feet.y, z, dx, dz)) continue
+    if (!v.every(OK) || !layerSafe(bot, x, feet.y, z, dx, dz)) continue
     const own = v.filter((r) => r === 'own').length
-    if (!own && cells.every(air)) continue // already open: not the wall that traps us
+    const dig = cells.filter((b) => !air(b)).length
+    if (!dig) continue // already open: not the wall that traps us
     const away = site ? -((site.x - feet.x) * dx + (site.z - feet.z) * dz) : 0
-    out.push({ dx, dz, score: own * 100 - away })
+    out.push({ dx, dz, score: own * 100 + dig * 10 - away })
   }
   return out.sort((a, b) => a.score - b.score)
 }
@@ -94,19 +103,26 @@ function outside(bot, x, y, z) {
 
 function log(m) { console.log(m) }
 
-// Up leg: open sky over the head, scaffold in the pack, and a neighbour
-// column (own wall or not) whose top is within UP_MAX: pillar to its top
-// and step onto it. Lowest top first; null when no column qualifies.
-function planUp(bot, feet) {
+// Up leg: scaffold in the pack and a neighbour column (own wall or not)
+// whose top is within UP_MAX: pillar to its top and step onto it, digging
+// any breakable cell over the head on the way (a roof). Fewest digs, then
+// lowest top; null when no column qualifies.
+function planUp(bot, ctx, feet) {
   if (countItems(bot, (n) => n === 'dirt' || n === 'cobblestone') <= 0) return null
-  if (!outside(bot, feet.x, feet.y, feet.z)) return null
+  const head = []
+  for (let y = feet.y + 2; y <= feet.y + UP_MAX + 1; y++) {
+    const b = at(bot, feet.x, y, feet.z)
+    head.push(air(b) ? 0 : OK(breakable(bot, ctx, b)) ? 1 : Infinity)
+  }
+  const cost = (h) => head.slice(0, h - feet.y).reduce((a, n) => a + n, 0)
   let best = null
   for (const [dx, dz] of DIRS) {
     const x = feet.x + dx, z = feet.z + dz
     for (let h = feet.y + 1; h <= feet.y + UP_MAX; h++) {
       if (air(at(bot, x, h - 1, z))) break // a gap below the top: not a wall to stand on
       if (!air(at(bot, x, h, z)) || !air(at(bot, x, h + 1, z))) continue
-      if (!best || h < best.h) best = { x, z, h }
+      const c = cost(h)
+      if (c < Infinity && (!best || c < best.c || (c === best.c && h < best.h))) best = { x, z, h, c }
       break
     }
   }
@@ -170,18 +186,25 @@ function tick(bot, ctx, now = Date.now()) {
   const p = bot.entity.position
   const feet = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }
   if (s.ep) return run(bot, ctx, s, feet, now)
-  if (s.anchor && Math.hypot(p.x - s.anchor.x, p.z - s.anchor.z) + Math.abs(p.y - s.anchor.y) > MOVED) s.seen.clear()
-  if (ctx.lastPathStatus !== 'noPath') return false
-  if (!s.seen.size) s.anchor = { x: p.x, y: p.y, z: p.z }
-  s.seen.set(targetKey(bot, ctx), now)
-  for (const [k, t] of s.seen) if (now - t > WINDOW_MS) s.seen.delete(k)
-  if (s.seen.size < DISTINCT || now < s.coolUntil) return false
+  const moved = s.anchor && Math.hypot(p.x - s.anchor.x, p.z - s.anchor.z) + Math.abs(p.y - s.anchor.y) > MOVED
+  if (moved) { s.seen.clear(); s.trapped = false }
+  // Once detected here, a still-stuck body re-tries each cooldown instead of
+  // leaving recover to shuffle (prod 2026-11-15: sidestep/wait no-progress for an hour).
+  const again = s.trapped && ctx.stuck && now >= s.coolUntil
+  if (!again) {
+    if (ctx.lastPathStatus !== 'noPath') return false
+    if (!s.seen.size) s.anchor = { x: p.x, y: p.y, z: p.z }
+    s.seen.set(targetKey(bot, ctx), now)
+    for (const [k, t] of s.seen) if (now - t > WINDOW_MS) s.seen.delete(k)
+    if (s.seen.size < DISTINCT || now < s.coolUntil) return false
+  }
   s.seen.clear()
+  s.trapped = true
+  ctx.enclosedUntil = Date.now() + GRACE_MS // recover: own-cell digs allowed, no sidestep shuffle
   log(`enclosed at ${feet.x},${feet.y},${feet.z}`)
   const dirs = pickExits(bot, ctx, feet)
-  const up = planUp(bot, feet)
-  if (!dirs.length && !up) { log('enclosed escape refused: no own-build doorway, no climb'); s.coolUntil = now + WINDOW_MS; return false }
-  ctx.enclosedUntil = Date.now() + GRACE_MS
+  const up = planUp(bot, ctx, feet)
+  if (!dirs.length && !up) { log('enclosed escape refused: no breakable doorway, no climb'); s.coolUntil = now + WINDOW_MS; return false }
   // Cheapest first: climb (0 broken), then the doorway with the fewest own cells.
   s.ep = { dirs, di: 0, k: 1, origin: feet, start: now, digging: false, cells: [], own: 0, up, rec: up ? { action: 'pillar_up', st: null } : null }
   return run(bot, ctx, s, feet, now)
@@ -212,7 +235,7 @@ function run(bot, ctx, s, feet, now) {
   }
   if (now - ep.start > EPISODE_MS) return finish('timeout')
   if (ep.digging) return true
-  if (ep.up) return runUp(bot, ctx, ep, feet, walk, finish)
+  if (ep.up) { if (ep.failed) { ep.failed = false; ep.up = null } else return runUp(bot, ctx, ep, feet, walk, finish) }
   if (ep.failed) { ep.failed = false; return nextDir('dig-error') }
   if (!ep.dirs.length) return finish('refused:no-door')
   const d = ep.dirs[ep.di]
@@ -227,10 +250,14 @@ function run(bot, ctx, s, feet, now) {
     return walk(x, y, z)
   }
   const why = breakable(bot, ctx, block)
-  if (why && why !== 'own') return nextDir('refused:' + why)
+  if (!OK(why)) return nextDir('refused:' + why)
   if (why === 'own' && ep.own >= MAX_OWN) return finish('refused:budget')
   const p = bot.entity.position
   if (Math.hypot(p.x - x - 0.5, p.z - z - 0.5) > REACH) return walk(x - d.dx, y, z - d.dz)
+  return dig(bot, ctx, ep, block, why)
+}
+
+function dig(bot, ctx, ep, block, why) {
   ep.digging = true
   const c = block.position
   void (async () => {
@@ -265,6 +292,13 @@ function runUp(bot, ctx, ep, feet, walk, finish) {
   }
   if (feet.x === u.x && feet.z === u.z && feet.y >= u.h) return finish('out')
   if (feet.y >= u.h) return walk(u.x, u.h, u.z)
+  const head = at(bot, feet.x, feet.y + 2, feet.z)
+  if (!air(head)) {
+    const why = breakable(bot, ctx, head)
+    if (!OK(why)) return drop('head-' + why)
+    if (why === 'own' && ep.own >= MAX_OWN) return drop('budget')
+    return dig(bot, ctx, ep, head, why)
+  }
   ctx.recovery = ep.rec
   const r = module.exports.pillar(bot, ctx)
   if (r === 'done') { ep.rec.st = null; return true }
