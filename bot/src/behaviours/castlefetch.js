@@ -813,7 +813,7 @@ function chestTick(bot, ctx, f, d) {
   // (FETCH + reserve = STONE_KEEP 88; planks 34 < PLANK_KEEP 64): what it
   // hands over is never banked straight back (no deposit<->withdraw
   // ping-pong). The owner's footprint chest draws the whole short, as before.
-  const need0 = bank ? (far ? farLoad(bot, ctx, d.kind, d.short) : (process.env.BOT_BODY === 'baritone' ? Math.min(farLoad(bot, ctx, d.kind, d.short), Math.max(d.short, bankCap(bot, d.kind))) : Math.min(d.short, bankCap(bot, d.kind)))) : d.short
+  const need0 = bank ? (far ? farLoad(bot, ctx, d.kind, d.short, true) : (process.env.BOT_BODY === 'baritone' ? Math.min(farLoad(bot, ctx, d.kind, d.short), Math.max(d.short, bankCap(bot, d.kind))) : Math.min(d.short, bankCap(bot, d.kind)))) : d.short
   flight(ctx, async () => {
     const dr = await drawChest(bot, ctx, d, at, need0)
     const left = dr.left
@@ -822,14 +822,15 @@ function chestTick(bot, ctx, f, d) {
     // (revmux 01 core-3 — the need line below would read 'drew 0 of N'
     // for a chest that just gave the table).
     const fund = dr.fund | 0
+    const drew = Math.max(0, Math.round(need0 - left))
     try { console.log(`castlefetch ${d.kind}: drew ${Math.max(0, Math.round(need0 - left))} of ${need0}${fund ? ` plus table fund x${fund}` : ''} from the bank chest at ${k}`) } catch (_) { /* log best-effort */ }
     if (left > 0 && !fund) markChestDry(ctx, d.kind, k) // drained: no walk back to it within CHEST_DRY_MS
+    if (drew <= 0 && !fund) markChestBarren(ctx, d.kind, k)
     else if (left <= 0) f.bankFull = true // a full bank batch: the leg lays it instead of digging the rest
     // qwyl revmux 01 core-1 + owner TTL directive: one open feeds both
     // caches (positive snapshot + negative dry-marks, both CHEST_DRY_MS).
     // The contents come from the draw's own opens — a fallback peek only
     // runs when the draw never opened the chest (rare list shapes).
-    const drew = Math.max(0, Math.round(need0 - left))
     noteStoneChest(ctx, d.kind, drew > 0)
     let peek = dr.counts || null
     if (!peek) {
@@ -853,6 +854,12 @@ function chestTick(bot, ctx, f, d) {
 const CHEST_DRY_MS = 10 * 60 * 1000
 function markChestDry(ctx, kind, k) {
   (ctx.castleChestDry || (ctx.castleChestDry = {}))[`${kind}@${k}`] = Date.now()
+}
+// prod 2026-11-15: 8 empty site chests re-tried every planks leg (legs outlast
+// CHEST_DRY_MS); a chest that gave 0 of a kind is skipped for it for 30 min.
+const CHEST_BARREN_MS = 30 * 60 * 1000
+function markChestBarren(ctx, kind, k) {
+  (ctx.castleChestBarren || (ctx.castleChestBarren = {}))[`${kind}@${k}`] = Date.now()
 }
 
 // qwyl: names present in a chest snapshot (chestCounts' {name: count}).
@@ -1030,6 +1037,7 @@ function pickChest(bot, ctx, f, kind) {
     const k = `${c.at.x},${c.at.y},${c.at.z}`
     if (tried.has(k)) continue
     if (c.bank && typeof dry[`${kind}@${k}`] === 'number' && now - dry[`${kind}@${k}`] < CHEST_DRY_MS) continue
+    if (c.bank && now - ((ctx.castleChestBarren || {})[`${kind}@${k}`] || -Infinity) < CHEST_BARREN_MS) continue
     // qwyl: a fresh snapshot answers without a walk — a kind the chest does
     // not hold is skipped like a dry mark (no re-walk within the window).
     if (c.bank) {
@@ -1056,9 +1064,11 @@ function pickChest(bot, ctx, f, kind) {
 // remainder of the kind plus its reserve, capped by pack room (ROOM_KEEP
 // slots stay free so the stockpile pierce never fires on the draw).
 const SITE_CHEST_RADIUS = 48
-function farLoad(bot, ctx, kind, short) {
+function farLoad(bot, ctx, kind, short, whole) {
   const cw = ctx && ctx.castleWord
-  const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
+  let left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
+  // prod 2026-11-15: cw.left is the open step only (62 planks per 200-block trip); a far trip hauls the castle's whole remainder (near draws keep the infill-run cap)
+  if (whole) try { const e = castleMod.progressByKind(bot, ctx.castle)[kind]; if (e) left = Math.max(left, e.total - e.done) } catch (_) { /* no plan: step remainder */ }
   let empty = 0
   try { empty = typeof bot.inventory.emptySlotCount === 'function' ? bot.inventory.emptySlotCount() : 36 - (bot.inventory.items() || []).length } catch (_) { empty = 0 }
   const want = Math.min(left + castleMod.reserveOf(kind) - castleMod.held(bot, kind), Math.max(0, empty - ROOM_KEEP) * 64)
@@ -3342,6 +3352,7 @@ module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.MINE_BATCH = MINE_BATCH
 module.exports.pickChest = pickChest
 module.exports.noteStoneChest = noteStoneChest
+module.exports.markChestBarren = markChestBarren
 module.exports.sweepTick = sweepTick
 module.exports.farLoad = farLoad
 module.exports.CHEST_DRY_MS = CHEST_DRY_MS
