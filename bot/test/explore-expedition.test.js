@@ -1,7 +1,7 @@
 'use strict'
 const { describe, it } = require('node:test')
 const assert = require('node:assert')
-const { pickTarget } = require('../src/behaviours/explore')
+const { pickTarget, expedition } = require('../src/behaviours/explore')
 
 const chunkOf = (x, z) => `${Math.floor(x / 16)},${Math.floor(z / 16)}`
 
@@ -15,5 +15,18 @@ describe('wood expedition: one ray outward to 400', () => {
     }
     assert.deepStrictEqual(seen.map((t) => t.x), [16, 32, 64, 128, 192, 256, 320, 384])
     assert.ok(seen.every((t) => t.z === 0), 'ray 2 is due east')
+  })
+})
+
+describe('castle expedition: any kind with a remembered source', () => {
+  it('a pane word hunts until sand is remembered; logs do not end it; stone never hunts', () => {
+    const items = new Map()
+    const ctx = { castleWord: { kind: 'pane' }, resources: { items } }
+    assert.strictEqual(expedition(ctx), true)
+    items.set('1,60,1', { x: 1, y: 60, z: 1, name: 'oak_log' })
+    assert.strictEqual(expedition(ctx), true, 'a log is no pane source')
+    items.set('2,60,2', { x: 2, y: 60, z: 2, name: 'sand' })
+    assert.strictEqual(expedition(ctx), false)
+    assert.strictEqual(expedition({ castleWord: { kind: 'stone' }, resources: { items: new Map() } }), false)
   })
 })

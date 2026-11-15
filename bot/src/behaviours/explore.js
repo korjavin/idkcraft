@@ -239,7 +239,7 @@ function columnTop(bot, t, fallback) {
 // report done with the one wedge line.
 function arrive(bot, ctx, e, t) {
   clearGoal(bot, ctx)
-  const logsBefore = logCount(ctx)
+  const logsBefore = sourceCount(ctx)
   try {
     resources.scan(bot, ctx)
   } catch (_) { /* scan best-effort */ }
@@ -250,24 +250,35 @@ function arrive(bot, ctx, e, t) {
   // Castle wood hunt (prod 2026-11-14 bot3): an explore-far leg for a wood
   // block walks hop after hop while its window lives until a log is seen;
   // one 16-block hop per window never reached a tree.
-  if (castleWoodHunt(ctx) && logCount(ctx) <= logsBefore) {
-    console.log(`explore to ${t.x} ${t.z} (${fresh} chunks new) no logs yet, walking on`)
+  if (castleWoodHunt(ctx) && sourceCount(ctx) <= logsBefore) {
+    const k = ctx.castleWord.kind
+    console.log(`explore to ${t.x} ${t.z} (${fresh} chunks new) no ${WOOD_KINDS.indexOf(k) === -1 ? k + ' source' : 'logs'} yet, walking on`)
     return
   }
   ctx.stepStatus = 'done'
   console.log(`explore to ${t.x} ${t.z} (${fresh} chunks new)`)
 }
 
-function logCount(ctx) {
+const WOOD_KINDS = ['planks', 'door', 'fence', 'chest', 'frame'] // goal-options WOOD_FETCH_KINDS
+const isLog = (n) => n.endsWith('_log')
+// Castle kind -> the remembered world block (resources.scan: ores, logs,
+// coal, sand) that sources it. Stone (live scan, everywhere) and banner
+// wool (sheep, not memory) have no memory source: no expedition.
+const SOURCE_OF = { pane: (n) => n === 'sand', torch: (n) => isLog(n) || n === 'coal_ore' || n === 'deepslate_coal_ore' }
+for (const k of WOOD_KINDS) SOURCE_OF[k] = isLog
+function sourceOf(ctx) {
+  const cw = ctx && ctx.castleWord
+  return (cw && SOURCE_OF[cw.kind]) || null
+}
+function sourceCount(ctx) {
+  const ok = sourceOf(ctx) || isLog
   let n = 0
-  try { for (const it of ctx.resources.items.values()) if (it && typeof it.name === 'string' && it.name.endsWith('_log')) n++ } catch (_) { /* none */ }
+  try { for (const it of ctx.resources.items.values()) if (it && typeof it.name === 'string' && ok(it.name)) n++ } catch (_) { /* none */ }
   return n
 }
-const WOOD_KINDS = ['planks', 'door', 'fence', 'chest', 'frame'] // goal-options WOOD_FETCH_KINDS
 function castleWoodHunt(ctx) {
   try {
-    const cw = ctx && ctx.castleWord
-    if (!cw || WOOD_KINDS.indexOf(cw.kind) === -1) return false
+    if (!sourceOf(ctx)) return false
     return woodExpedition(ctx) || typeof require('../goal-unlock').goalUnlock(ctx, 'radius') === 'number'
   } catch (_) {
     return false
@@ -278,8 +289,7 @@ function castleWoodHunt(ctx) {
 // unlock window; the first remembered log ends it and gather-far chops.
 const EXPEDITION_RADIUS = 400
 function woodExpedition(ctx) {
-  const cw = ctx && ctx.castleWord
-  return !!cw && WOOD_KINDS.indexOf(cw.kind) !== -1 && logCount(ctx) === 0
+  return !!sourceOf(ctx) && sourceCount(ctx) === 0
 }
 
 function explore(bot, ctx, target, state) {
@@ -464,3 +474,4 @@ module.exports.aloneIdle = aloneIdle // vmzq.59: forage reads idle alone as park
 module.exports.nextTarget = nextTarget
 module.exports.anchorOf = anchorOf // atl.8: bring search legs need the anchor check without walking
 module.exports.dropDeadLeg = dropDeadLeg // 9kd: death path consumes the killer leg's target
+module.exports.expedition = woodExpedition // castle-source expedition predicate (any kind with a memory source)
