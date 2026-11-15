@@ -23,6 +23,10 @@ const DISTINCT = 3
 const MOVED = 3
 const EPISODE_MS = 180000
 const LAYERS = 2 // own-build cell pairs tunnelled per direction
+const DOWN_MAX = 48 // floor cells one descent may dig
+const FALL_SCAN = 64 // landing search depth (void/lava = no descent)
+const HP_MARGIN = 4 // health a fall must leave
+const CAGE_LOG_AT = 3 // refusals at one spot before the 3x3x3 dump
 const COLLECT_MS = 8000 // pick up a broken container's drops this long
 const MAX_OWN = 4 // own cells one escape may break, all directions together (prod 12:00: 20 torn up)
 const UP_MAX = 6 // pillar height the up leg may climb
@@ -138,6 +142,39 @@ function planUp(bot, ctx, feet) {
   return best
 }
 
+// Down leg (prod 2026-11-15 bot3: an hour on a 96-high pillar top, every
+// side a drop): dig the floor cell under the feet (same cost rules; the
+// work rules' 'below-feet' veto is what we want here) when the fall below
+// it lands on solid ground with damage inside the health margin, or in
+// water; never into lava or the void. Returns { block, why } or { no }.
+function planDown(bot, ctx, feet) {
+  const floor = at(bot, feet.x, feet.y - 1, feet.z)
+  if (!floor || air(floor)) return { no: 'no-floor' }
+  let why = breakable(bot, ctx, floor)
+  if (why === 'below-feet' || why === 'trap') why = 'nat'
+  if (!OK(why)) return { no: why }
+  for (let y = feet.y - 2; y >= feet.y - 1 - FALL_SCAN; y--) {
+    const b = at(bot, feet.x, y, feet.z)
+    if (!b) return { no: 'void' }
+    if (/lava/.test(b.name)) return { no: 'lava' }
+    if (/water/.test(b.name)) return { block: floor, why }
+    if (air(b)) continue
+    const fall = feet.y - 1 - (y + 1)
+    const hp = typeof bot.health === 'number' ? bot.health : 20
+    return fall <= 3 || fall - 3 < hp - HP_MARGIN ? { block: floor, why } : { no: `fall-${fall}` }
+  }
+  return { no: 'void' }
+}
+function cage(bot, f) {
+  const rows = []
+  for (let dy = -1; dy <= 1; dy++) {
+    const r = []
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) { const b = at(bot, f.x + dx, f.y + dy, f.z + dz); r.push(b ? b.name : '?') }
+    rows.push(`y${dy >= 0 ? '+' : ''}${dy}=[${r.join(',')}]`)
+  }
+  return rows.join(' ')
+}
+
 // Walkable stance with `solidAt` (a planned placement) counted as solid.
 function stanceAt(bot, x, y, z, solidAt) {
   const isS = (yy) => solidAt && solidAt.x === x && solidAt.y === yy && solidAt.z === z
@@ -213,9 +250,19 @@ function tick(bot, ctx, now = Date.now()) {
   log(`enclosed at ${feet.x},${feet.y},${feet.z}`)
   const dirs = pickExits(bot, ctx, feet)
   const up = planUp(bot, ctx, feet)
-  if (!dirs.length && !up) { log('enclosed escape refused: no breakable doorway, no climb'); s.coolUntil = now + WINDOW_MS; return false }
-  // Cheapest first: climb (0 broken), then the doorway with the fewest own cells.
-  s.ep = { dirs, di: 0, k: 1, origin: feet, start: now, digging: false, cells: [], own: 0, up, rec: up ? { action: 'pillar_up', st: null } : null }
+  const down = planDown(bot, ctx, feet)
+  if (!dirs.length && !up && down.no) {
+    log(`enclosed escape refused: no breakable doorway, no climb, no descent (${down.no})`)
+    const k = `${feet.x},${feet.y},${feet.z}`
+    s.refused = s.refusedAt === k ? (s.refused || 0) + 1 : 1
+    s.refusedAt = k
+    if (s.refused === CAGE_LOG_AT) log(`enclosed cage at ${k}: ${cage(bot, feet)}`)
+    s.coolUntil = now + WINDOW_MS
+    return false
+  }
+  // Cheapest first: climb (0 broken), then the doorway with the fewest own cells, then down.
+  s.ep = { dirs, di: 0, k: 1, origin: feet, start: now, digging: false, cells: [], own: 0, up, rec: up ? { action: 'pillar_up', st: null } : null,
+    canDown: !down.no, mode: !dirs.length && !up ? 'down' : null, downDigs: 0 }
   return run(bot, ctx, s, feet, now)
 }
 
@@ -226,8 +273,17 @@ function run(bot, ctx, s, feet, now) {
     s.coolUntil = now + WINDOW_MS
     if (ep.rec && ctx.recovery === ep.rec) ctx.recovery = null
     if (bot.pathfinder && ep.goal && bot.pathfinder.goal === ep.goal) bot.pathfinder.setGoal(null)
-    log(`enclosed escape mode=${ep.up ? 'up' : 'door'} broken=${ep.own} outcome=${outcome} cells=${ep.cells.map((c) => `${c.x},${c.y},${c.z}`).join(' ')}`)
+    log(`enclosed escape mode=${ep.mode || (ep.up ? 'up' : 'door')} broken=${ep.own} outcome=${outcome} cells=${ep.cells.map((c) => `${c.x},${c.y},${c.z}`).join(' ')}`)
     return false
+  }
+  // Door/up exhausted: descend if the floor allows it, else give up.
+  const fail = (outcome) => {
+    if (!ep.canDown || ep.mode === 'down') return finish(outcome)
+    log(`enclosed escape down after=${outcome}`)
+    if (ctx.recovery === ep.rec) ctx.recovery = null
+    ep.up = null
+    ep.mode = 'down'
+    return true
   }
   const walk = (x, y, z) => {
     const g = bot.pathfinder && bot.pathfinder.goal
@@ -240,14 +296,15 @@ function run(bot, ctx, s, feet, now) {
     ep.di++
     ep.k = 1
     ep.origin = feet
-    return ep.di < ep.dirs.length ? true : finish('refused:all-dirs')
+    return ep.di < ep.dirs.length ? true : fail('refused:all-dirs')
   }
   if (now - ep.start > EPISODE_MS) return finish('timeout')
   if (ep.digging) return true
   if (ep.collect && collect(bot, ep, feet, walk)) return true
-  if (ep.up) { if (ep.failed) { ep.failed = false; ep.up = null } else return runUp(bot, ctx, ep, feet, walk, finish) }
+  if (ep.mode === 'down') return runDown(bot, ctx, ep, feet, finish)
+  if (ep.up) { if (ep.failed) { ep.failed = false; ep.up = null } else return runUp(bot, ctx, ep, feet, walk, finish, fail) }
   if (ep.failed) { ep.failed = false; return nextDir('dig-error') }
-  if (!ep.dirs.length) return finish('refused:no-door')
+  if (!ep.dirs.length) return fail('refused:no-door')
   const d = ep.dirs[ep.di]
   if (ep.k > LAYERS) return nextDir('layers')
   const o = ep.origin
@@ -261,7 +318,7 @@ function run(bot, ctx, s, feet, now) {
   }
   const why = breakable(bot, ctx, block)
   if (!OK(why)) return nextDir('refused:' + why)
-  if (why === 'own' && ep.own >= MAX_OWN) return finish('refused:budget')
+  if (why === 'own' && ep.own >= MAX_OWN) return fail('refused:budget')
   const p = bot.entity.position
   if (Math.hypot(p.x - x - 0.5, p.z - z - 0.5) > REACH) return walk(x - d.dx, y, z - d.dz)
   return dig(bot, ctx, ep, block, why)
@@ -277,6 +334,19 @@ function collect(bot, ep, feet, walk) {
   const x = Math.floor(d.x), y = Math.floor(d.y), z = Math.floor(d.z)
   if (feet.x === x && feet.z === z) return true // standing on it: the server hands it over
   return walk(x, y, z)
+}
+
+// Dig the floor cell by cell until a walkable exit opens around the feet.
+function runDown(bot, ctx, ep, feet, finish) {
+  if (ep.failed) { ep.failed = false; return finish('refused:down-dig-error') }
+  if (bot.entity.onGround === false) return true // still falling
+  if (ep.downDigs > 0 && flood(bot, feet, null, TRAP_R).escaped) return finish('out')
+  if (ep.downDigs >= DOWN_MAX) return finish('refused:down-max')
+  const d = planDown(bot, ctx, feet)
+  if (d.no) return ep.downDigs > 0 && d.no === 'no-floor' ? true : finish('refused:down-' + d.no)
+  if (d.why === 'own' && ep.own >= MAX_OWN) return finish('refused:budget')
+  ep.downDigs++
+  return dig(bot, ctx, ep, d.block, d.why)
 }
 
 function dig(bot, ctx, ep, block, why) {
@@ -305,14 +375,14 @@ function dig(bot, ctx, ep, block, why) {
 
 // Pillar to the chosen column top, then step onto it; any failure falls back
 // to the doorway leg (ep.up = null).
-function runUp(bot, ctx, ep, feet, walk, finish) {
+function runUp(bot, ctx, ep, feet, walk, finish, fail) {
   const u = ep.up
   const drop = (why) => {
     log(`enclosed escape up stop=${why}`)
     if (ctx.recovery === ep.rec) ctx.recovery = null
     ep.up = null
     ep.origin = feet
-    return ep.dirs.length ? true : finish('refused:up-' + why)
+    return ep.dirs.length ? true : fail('refused:up-' + why)
   }
   if (feet.x === u.x && feet.z === u.z && feet.y >= u.h) return finish('out')
   if (feet.y >= u.h) return walk(u.x, u.h, u.z)
