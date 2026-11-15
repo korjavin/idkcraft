@@ -755,29 +755,53 @@ function needsDigNoPick(kind, facts, bot) {
 // ponytail: a castle chest full of cobble still waits for the pickaxe;
 // add a chest probe here if a pickless owner-fed castle ever matters.
 function castleFetchGo(facts, bot, ctx) {
+  return castleFetchWhy(facts, bot, ctx) === null
+}
+
+// castleFetchGo's reason: null = go, else the gate that fired. A live
+// acquire unlock for the word's kind (the chosen acquire-<item> option) is
+// gated only by safety and by the kind being short (acquireWhy): "castle
+// can lay now" and the pickless dig gate belong to the chest/dig legs, not
+// to acquire (its recipe tree crafts the pick).
+function castleFetchWhy(facts, bot, ctx) {
   const w = facts && facts.castle
-  if (typeof w !== 'string' || facts.time !== 'day') return false
-  if (lowHpGated(bot, facts, ctx)) return false // vmzq.49: eat first, then climb (.51: bounded)
+  if (typeof w !== 'string') return 'no castle word'
+  if (facts.time !== 'day') return 'night'
+  if (lowHpGated(bot, facts, ctx)) return 'low health' // vmzq.49: eat first, then climb (.51: bounded)
   // Blocked (g0z.23): the gated kind (menuFact keeps it on castleWord)
   // still wants its batch while the build stands.
   let kind = null
   if (w === 'blocked') {
     kind = ctx && ctx.castleWord && ctx.castleWord.kind
-    try { if (!kind || !(kind in require('./behaviours/castlefetch').FETCH)) return false } catch (_) { return false }
+    try { if (!kind || !(kind in require('./behaviours/castlefetch').FETCH)) return 'blocked kind not fetchable' } catch (_) { return 'castlefetch unloadable' }
   } else {
-    if (!/-(none|some|batch)$/.test(w)) return false
+    if (!/-(none|some|batch)$/.test(w)) return `castle word ${w}`
     kind = w.slice(0, w.lastIndexOf('-'))
   }
-  if (!registered('castlefetch') || !registered('castle')) return false
+  if (!registered('castlefetch') || !registered('castle')) return 'castlefetch off'
+  let acq = null
+  try { acq = require('./goal-unlock').goalUnlock(ctx, 'acquire') } catch (_) { /* no window */ }
+  if (acq === kind) return acquireWhy(facts, bot, ctx, kind)
   // V2 prepares its tool as a resumable prerequisite inside the fetch leg.
-  if (needsDigNoPick(kind, facts, bot) && process.env.BOT_BODY !== 'baritone') return false
-  if (castleGo(facts, ctx, bot) && !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running')) return false
+  if (needsDigNoPick(kind, facts, bot) && process.env.BOT_BODY !== 'baritone') return 'no pickaxe'
+  if (castleGo(facts, ctx, bot) && !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running')) return 'castle can lay now'
   try {
     const d = require('./behaviours/castlefetch').demand(bot, ctx)
-    return !!d && d.short > 0
+    return d && d.short > 0 ? null : 'batch on hand'
   } catch (_) {
-    return false
+    return 'demand unreadable'
   }
+}
+
+// The acquire-<item> gate (any castle kind): real safety only (night, low
+// health) and the kind actually short: the pack stock (any variant) below
+// what the next unlaid cells need plus the reserve (castlefetch.shortOf).
+function acquireWhy(facts, bot, ctx, kind) {
+  if (!facts || facts.time !== 'day') return 'night'
+  if (lowHpGated(bot, facts, ctx)) return 'low health'
+  let short = 0
+  try { short = require('./behaviours/castlefetch').shortOf(bot, ctx, kind) } catch (_) { return 'demand unreadable' }
+  return short > 0 ? null : 'enough on hand'
 }
 
 // Blocked castle veto (g0z.23): while the build stands the bot stays on it
@@ -3290,4 +3314,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome, noteLoop, loopBlocked, castleGo }
+module.exports = { activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome, noteLoop, loopBlocked, castleGo, castleFetchWhy, acquireWhy }

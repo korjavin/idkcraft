@@ -99,6 +99,7 @@ describe('klh2 same-kind tick hop', () => {
     const bot = makeBot()
     const ctx = { castle: castleState() }
     failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
+    ctx.acquireHeld = { stone: Date.now() } // acquire just failed: idle while it rests
     assert.equal(fetch.hopDue(bot, ctx, 'stone'), false, 'no chest to hop to')
     assert.equal(fetch.demand(bot, ctx), null, 'demand stays parked')
     assert.equal(goal.failHolds(ctx, 'castlefetch', 'castle=stone-none', bot), true, 'the menu entry stays held')
@@ -190,6 +191,7 @@ describe('klh2 same-kind tick hop', () => {
     const bot = makeBot()
     const ctx = withChest({ castle: castleState() })
     failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
+    ctx.acquireHeld = { stone: Date.now() }
     // Reachable state: the hop leg served partial last tick and is still
     // active, and the only chest just went dry on the drain.
     ctx.castleFetch = { kind: 'stone', chestWaits: 0, skips: 0, noGain: 0, t0: Date.now(), blocks0: 0, haul: 70, hop: true }
@@ -208,6 +210,7 @@ describe('klh2 same-kind tick hop', () => {
     const bot = makeBot()
     const ctx = withChest({ castle: castleState() })
     failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
+    ctx.acquireHeld = { stone: Date.now() }
     assert.equal(fetch.hopDue(bot, ctx, 'stone'), true, 'setup: first hop due')
     // The hop leg tried the only chest and served nothing (chestTried is
     // the per-leg tried set a real leg carries out of chestTick).
@@ -259,6 +262,7 @@ describe('klh2 same-kind tick hop', () => {
     const ctx = withChest({
       castle: castleState(),
       castleWord: { kind: 'stone', left: 75 },
+      acquireHeld: { stone: Date.now() },
       stepFail: { castlefetch: { status: 'failed:castlefetch-unreachable', kind: 'stone', at: Date.now(), text: 'castle=stone-none', pos: { ...SITE } } },
     })
     assert.equal(fetch.hopDue(bot, ctx, 'stone'), false, 'no kinds map: no hop')
