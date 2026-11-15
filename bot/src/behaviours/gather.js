@@ -487,6 +487,19 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
   return busy
 }
 
+// Castle wood expedition (prod 2026-11-15 bot3): a gather past 64 for a
+// castle wood word chops a full haul before the long walk home.
+const FAR_HAUL_LOGS = 64
+const CASTLE_WOOD_KINDS = ['planks', 'door', 'fence', 'chest', 'frame'] // goal-options WOOD_FETCH_KINDS
+function haulNeed(bot, ctx) {
+  try {
+    const cw = ctx && ctx.castleWord
+    const bp = bot.entity && bot.entity.position
+    if (cw && CASTLE_WOOD_KINDS.indexOf(cw.kind) !== -1 && bp && anchorDist(bot, ctx, bp, bp) > FAR_START_BLOCKS) return FAR_HAUL_LOGS
+  } catch (_) { /* default need */ }
+  return NEED_LOGS
+}
+
 function gather(bot, ctx, target, state) {
   const logs = countItems(bot, (n) => n.endsWith('_log'))
   if (!ctx.gather) ctx.gather = { pos: null, name: 'log', phase: 'walk', skip: new Set(), gskip: new Set(), streak: 0, final: null, atLogs: -1, lastProgressAt: Date.now(), felled: 0, replanted: 0 }
@@ -548,11 +561,12 @@ function gather(bot, ctx, target, state) {
   // the stale block, no pickup past it, no terminal summary before its
   // counts settle. Flights always settle (promise-bound, never retried).
   if (g.plantInFlight) return
-  if (logs >= NEED_LOGS) {
+  const need = haulNeed(bot, ctx)
+  if (logs >= need) {
     g.final = 'done'
     g.atLogs = logs
     stepDone(ctx)
-    say(bot, `got ${NEED_LOGS} logs`)
+    say(bot, `got ${need} logs`)
     sayDeficit(bot, g) // qfus: one honest line when stumps outnumber plantings
     clearGoal(bot, ctx)
     return
@@ -686,7 +700,7 @@ function gather(bot, ctx, target, state) {
   if (logs > 0 && logs !== g.progressLogs && Date.now() - (g.lastProgressAt || 0) >= PROGRESS_INTERVAL_MS) {
     g.lastProgressAt = Date.now()
     g.progressLogs = logs
-    say(bot, `chopping ${g.name} ${logs}/${NEED_LOGS}`)
+    say(bot, `chopping ${g.name} ${logs}/${need}`)
   }
   if (g.phase === 'walk') {
     // p9lx: a walk-out caught by dusk/night fails out — body or target over
