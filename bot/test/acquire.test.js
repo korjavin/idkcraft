@@ -53,9 +53,11 @@ describe('acquire tick', () => {
 })
 
 describe('acquire review fixes', () => {
-  it('the concrete castle item narrows the source: birch_door -> birch_log, no iron ore', () => {
+  it('the concrete castle item keeps every variant of the same recipe shape: birch_door -> oak_log too, no iron ore', () => {
     const ctx = { castleWord: { kind: 'door' }, castleNeed: { kind: 'door', item: 'birch_door' } }
-    assert.deepStrictEqual([...acq.needSources(ctx)], ['birch_log'])
+    const b = acq.needSources(ctx)
+    assert.ok(b.has('birch_log') && b.has('oak_log'), 'any wood variant serves a birch door need')
+    assert.ok(!b.has('iron_ore'), 'iron_door is another recipe shape')
     ctx.castleNeed.kind = 'fence' // stale need for another kind: the alias again
     assert.ok(acq.needSources(ctx).has('iron_ore'))
   })

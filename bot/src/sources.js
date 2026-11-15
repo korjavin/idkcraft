@@ -93,7 +93,17 @@ function needSources(ctx) {
   const cw = ctx && ctx.castleWord
   if (!cw) return new Set()
   const n = ctx.castleNeed
-  if (n && n.kind === cw.kind && n.item && cw.kind !== 'stone') return sources(null, n.item).blocks
+  if (n && n.kind === cw.kind && n.item && cw.kind !== 'stone') {
+    // Any variant of the same recipe shape serves (birch_door or oak_door:
+    // *_planks), never another shape (iron_door: iron_ingot).
+    const shape = (i) => inputsOf(DEFAULT_REG, i).map((x) => x.slice(x.indexOf('_') + 1)).sort().join()
+    const want = shape(n.item)
+    const out = new Set()
+    for (const i of Object.keys(DEFAULT_REG.itemsByName)) {
+      if ((i === n.item || (blueprint.matches(cw.kind, i) && shape(i) === want))) for (const b of sources(null, i).blocks) out.add(b)
+    }
+    return out
+  }
   return kindSources(cw.kind)
 }
 
