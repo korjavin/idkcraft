@@ -25,6 +25,20 @@ function room(bot) {
   try { return 64 * bot.inventory.emptySlotCount() } catch (_) { return 64 }
 }
 
+// Distance to the nearest remembered find of these blocks, null when none.
+function nearestFind(bot, ctx, blocks) {
+  const p = bot.entity && bot.entity.position
+  let best = null
+  try {
+    for (const it of ctx.resources.items.values()) {
+      if (!it || !blocks.includes(it.name)) continue
+      const d = p ? Math.hypot(it.x - p.x, it.z - p.z) : 0
+      if (best === null || d < best) best = d
+    }
+  } catch (_) { /* no memory */ }
+  return best
+}
+
 // One tick toward n of item in the pack: 'done' | 'running' | 'failed:<why>'.
 function acquire(bot, ctx, item, n, path = []) {
   const a = ctx.acquire || (ctx.acquire = {})
@@ -54,10 +68,27 @@ function acquire(bot, ctx, item, n, path = []) {
     if (typeof bot.mine !== 'function') return `failed:no-mine-${item}`
     const count = Math.min(short, room(bot))
     if (count <= 0) return 'failed:pack-full'
-    if (a.mineFail && a.mineFail.item === item && Date.now() - a.mineFail.at < 60000) return `failed:no-${item}`
+    let radius = MINE_RADIUS
+    if (a.mineFail && a.mineFail.item === item) {
+      // No source in reach: the explore ray expedition (to 400, driven by the
+      // castle need) walks out until resources.scan remembers one, then the
+      // mine reaches for it. Explore's own done/failed is not this leg's.
+      const d = nearestFind(bot, ctx, blocks)
+      if (d === null) {
+        if (a.expedition !== item) console.log(`acquire ${item}: no source within ${MINE_RADIUS}, expedition`)
+        a.expedition = item
+        const st = ctx.stepStatus
+        try { require('./explore')(bot, ctx) } catch (_) { /* next tick retries */ }
+        ctx.stepStatus = st
+        return 'running'
+      }
+      radius = Math.max(MINE_RADIUS, Math.ceil(d) + 16)
+      a.mineFail = null
+      a.expedition = null
+    }
     a.mining = true
     console.log(`acquire ${item}: mining ${count} from ${blocks.slice(0, 4).join(',')}`)
-    bot.mine(blocks, count, { radius: MINE_RADIUS })
+    bot.mine(blocks, count, { radius })
       .catch((e) => { a.mineFail = { item, at: Date.now() }; console.log(`acquire ${item}: ${e && e.message}`) })
       .finally(() => { a.mining = false })
     return 'running'
