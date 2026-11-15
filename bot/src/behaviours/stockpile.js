@@ -1345,6 +1345,8 @@ function rearmCastleDraw(ctx, names) {
         }
         if (Object.keys(ctx.castleChestDry).length === 0) ctx.castleChestDry = null
       }
+      // A deposit restocks our own chests: their barren marks lapse at once.
+      for (const key of Object.keys(ctx.castleChestBarren || {})) if (own.has(key.slice(key.lastIndexOf('@') + 1))) delete ctx.castleChestBarren[key]
     }
   } catch (_) { /* marks lapse on their own (CHEST_DRY_MS) */ }
 }
