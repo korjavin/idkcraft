@@ -86,3 +86,61 @@ describe('acquire review fixes', () => {
     assert.ok(ctx.resources.items.has('300,60,0'), 'newest need find kept')
   })
 })
+
+describe('every castle kind resolves to an acquire path (owner: the class, not one material)', () => {
+  const castle = require('../src/castle')
+  const cf = require('../src/behaviours/castlefetch')
+  const kinds = new Set()
+  for (const v of [1, 2, 3]) {
+    for (const c of castle.blueprintOf(v).PLAN) kinds.add(c.kind)
+    for (const c of castle.DECOR[v] || []) kinds.add(c.kind)
+  }
+  const empty = { registry: acq.DEFAULT_REG, inventory: { items: () => [] } }
+  for (const kind of [...kinds].filter(castle.isPlaceTarget)) {
+    it(`${kind}: an item the kind lays, with a world source`, () => {
+      const item = cf.acquireItem(empty, kind)
+      assert.ok(item, `no acquire item for ${kind}`)
+      assert.ok(castle.matches(kind, item), `${item} is not ${kind}`)
+      const s = acq.sources(empty, item)
+      assert.ok(s.blocks.size + s.mobs.size > 0, `${item} has no world source`)
+      assert.ok(acq.kindItem(kind), `kindItem derives none for ${kind}`)
+    })
+  }
+})
+
+describe('acquire: variants and smelting', () => {
+  const mk = (items, extra) => ({ registry: acq.DEFAULT_REG, inventory: { items: () => items, emptySlotCount: () => 10 }, recipesAll: () => [], ...extra })
+  it('family keeps the recipe shape: any log-made planks, never iron for oak', () => {
+    assert.ok(acq.family('oak_planks').includes('birch_planks'))
+    assert.ok(acq.family('oak_log').includes('dark_oak_log'))
+    assert.ok(!acq.family('oak_door').includes('iron_door'))
+    assert.deepStrictEqual(acq.family('iron_ingot'), ['iron_ingot'])
+  })
+  it('a variant on hand counts toward the need', () => {
+    assert.strictEqual(tick.acquire(mk([{ name: 'birch_planks', count: 8 }]), {}, 'oak_planks', 8, [], acq.family('oak_planks')), 'done')
+  })
+  it('a crafted need with no wood mines any log variant', () => {
+    const calls = []
+    const b = mk([], { mine: (names) => { calls.push(names); return new Promise(() => {}) } })
+    assert.strictEqual(tick.acquire(b, {}, 'oak_planks', 8, [], acq.family('oak_planks')), 'running')
+    assert.ok(calls[0].includes('oak_log') && calls[0].includes('birch_log') && calls[0].includes('spruce_log'))
+  })
+  it('a smelted gap mines its raw input, then hands the furnace leg the burn', () => {
+    const calls = []
+    const b = mk([], { mine: (names) => { calls.push(names); return new Promise(() => {}) } })
+    assert.strictEqual(tick.acquire(b, {}, 'glass', 6), 'running')
+    assert.deepStrictEqual(calls, [['sand']])
+    assert.strictEqual(tick.acquire(mk([{ name: 'sand', count: 6 }]), {}, 'glass', 6), 'failed:smelt-glass')
+  })
+})
+
+describe('no source in reach: expedition everywhere', () => {
+  const explore = require('../src/behaviours/explore')
+  it('a gather that ended no-trees opens the wood expedition until a log is remembered', () => {
+    const ctx = { gather: { farEmpty: true }, resources: { items: new Map() } }
+    assert.strictEqual(explore.expedition(ctx), true)
+    ctx.resources.items.set('k', { x: 300, y: 64, z: 0, name: 'birch_log' })
+    assert.strictEqual(explore.expedition(ctx), false)
+    assert.strictEqual(explore.expedition({ gather: {}, resources: { items: new Map() } }), false)
+  })
+})

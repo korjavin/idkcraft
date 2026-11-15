@@ -19,9 +19,9 @@
   {"tick":7,"kind":"lastGoalKey","value":""},
   {"tick":8,"kind":"step","value":"explore"},
   {"tick":8,"kind":"stepStatus","value":"running"},
-  {"tick":8,"kind":"setGoal","goal":{"type":"GoalXZ","x":14,"z":-12},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
-  {"tick":8,"kind":"lastGoalKey","value":"explore:14,-12"},
-  {"tick":8,"kind":"chat","text":"exploring north, 16 blocks from home"}
+  {"tick":8,"kind":"setGoal","goal":{"type":"GoalXZ","x":-9,"z":27},"dynamic":false,"moves":{"canDig":true,"allowSprinting":false,"allowParkour":true}},
+  {"tick":8,"kind":"lastGoalKey","value":"explore:-9,27"},
+  {"tick":8,"kind":"chat","text":"exploring southwest, 33 blocks from home"}
  ],
  "3nt.23 hostile dies mid-fight -> follow": [
   {"tick":1,"kind":"owner","owner":"idle"},

@@ -87,6 +87,52 @@ function kindSources(kind) {
   return out
 }
 
+// The plain item a kind is acquired as when the pack/chests name none:
+// among the items the blueprint lays for the kind (undyed, with a world
+// source), the one with the most interchangeable variants (family: any
+// wood serves), then the shortest name (the base variant carries no
+// prefix). Null when none has a source.
+const ITEM_CACHE = new Map()
+function kindItem(kind) {
+  if (!kind) return null
+  if (ITEM_CACHE.has(kind)) return ITEM_CACHE.get(kind)
+  let best = null
+  let key = null
+  for (const i of Object.keys(DEFAULT_REG.itemsByName)) {
+    if (!blueprint.matches(kind, i) || inputsOf(DEFAULT_REG, i).some((n) => n.endsWith('_dye'))) continue
+    const s = sources(null, i)
+    if (!s.blocks.size && !s.mobs.size) continue
+    const k = [-family(i).length, i.length, i]
+    const j = key ? k.findIndex((v, x) => v !== key[x]) : 0
+    if (!key || (j >= 0 && k[j] < key[j])) { best = i; key = k }
+  }
+  ITEM_CACHE.set(kind, best)
+  return best
+}
+
+// Interchangeable variants of an item: same name suffix after the first
+// '_' and the same recipe shape once each item's own prefix is dropped
+// (oak_log -> every *_log, stripped too; oak_planks -> every log-made *_planks; never
+// iron_door for oak_door, never gold for iron). The item first.
+const FAMILY_CACHE = new Map()
+function family(item) {
+  if (FAMILY_CACHE.has(item)) return FAMILY_CACHE.get(item)
+  const cut = item.indexOf('_')
+  let out = [item]
+  if (cut > 0) {
+    const suffix = item.slice(cut + 1)
+    const shape = (i) => { const p = i.slice(0, i.length - suffix.length); return inputsOf(DEFAULT_REG, i).map((x) => x.split(p).join('')).sort().join() }
+    const want = shape(item)
+    if (!want.includes('_dye')) {
+      for (const i of Object.keys(DEFAULT_REG.itemsByName)) {
+        if (i !== item && i.endsWith(`_${suffix}`) && shape(i) === want) out.push(i)
+      }
+    }
+  }
+  FAMILY_CACHE.set(item, out)
+  return out
+}
+
 // The castle's open need: the concrete item castlefetch crafts for the
 // kind (ctx.castleNeed, e.g. birch_door -> birch_log), else the kind alias.
 function needSources(ctx) {
@@ -107,4 +153,4 @@ function needSources(ctx) {
   return kindSources(cw.kind)
 }
 
-module.exports = { sources, kindSources, needSources, blocksOf, inputsOf, mobsOf, smelt, regOf, SMELT, DEPTH, DEFAULT_REG }
+module.exports = { sources, kindSources, kindItem, family, needSources, blocksOf, inputsOf, mobsOf, smelt, regOf, SMELT, DEPTH, DEFAULT_REG }

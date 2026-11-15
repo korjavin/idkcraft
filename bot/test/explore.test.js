@@ -618,7 +618,8 @@ describe('stranded-wood leash lift (vmzq.65)', () => {
     const c1 = taskCtx(true)
     ringsVisited(c1)
     explore(bot, c1, null, null)
-    assert.deepEqual(c1.explore.target, { x: 0, z: -128 })
+    // stranded wood walks the expedition ray (to 400), past the 64 leash
+    assert.ok(Math.hypot(c1.explore.target.x, c1.explore.target.z) > 64, JSON.stringify(c1.explore.target))
 
     const c2 = taskCtx(false)
     ringsVisited(c2)

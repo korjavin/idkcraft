@@ -437,10 +437,11 @@ function deadRestart(bot, ctx, d) {
 }
 
 // The item acquire() hunts for a kind: what the pack/chest names say, else
-// the kind's plain default (frame with no log on hand still wants a log).
+// the kind's plain default (frame with no log on hand still wants a log),
+// else the item sources.kindItem derives from the blueprint (every kind).
 const ACQUIRE_DEFAULT = { frame: 'oak_log', planks: 'oak_planks', stone: 'cobblestone', fence: 'oak_fence', door: 'oak_door', gate: 'oak_fence_gate', chest: 'chest', torch: 'torch', pane: 'glass_pane', bookshelf: 'bookshelf' }
 function acquireItem(bot, kind) {
-  return craftNames(bot, kind)[0] || (chestNames(bot, kind)[0] || [])[0] || ACQUIRE_DEFAULT[kind] || null
+  return craftNames(bot, kind)[0] || (chestNames(bot, kind)[0] || [])[0] || ACQUIRE_DEFAULT[kind] || require('../sources').kindItem(kind)
 }
 
 // One acquire() tick for the leg's remaining need; true = the tick is owned.
@@ -448,7 +449,9 @@ function acquireTick(bot, ctx, f, d) {
   const item = acquireItem(bot, d.kind)
   if (!item) return false
   if (!f.acquire) f.acquire = { item, n: countItems(bot, (x) => x === item) + d.short }
-  const r = acquireMod.acquire(bot, ctx, f.acquire.item, f.acquire.n)
+  // Any variant of the item the kind lays serves (birch planks for oak).
+  const alts = require('../sources').family(f.acquire.item).filter((i) => blueprint.matches(d.kind, i))
+  const r = acquireMod.acquire(bot, ctx, f.acquire.item, f.acquire.n, [], alts)
   if (r === 'running') return true
   if (r === 'done' && !f.acquireDone) { f.acquireDone = true; f.craftOut = false; return true } // the craft rung takes it next tick
   try { console.log(`castlefetch ${d.kind}: acquire ${r}`) } catch (_) { /* log best-effort */ }

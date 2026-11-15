@@ -2171,7 +2171,8 @@ function fallbackRank(kind, offered, history = null, currentStep = null, held = 
     }
     const score = (o) => {
       let s = 0
-      const far = FALLBACK_FAR_ORDER.indexOf(/^acquire-/.test(o.id) ? 'castlefetch-far' : o.id) // acquire-<item> is the targeted unblock of a held kind
+      // acquire-<item> is the targeted unblock of a held kind; a known far candidate goes first
+      const far = /^acquire-/.test(o.id) ? FALLBACK_FAR_ORDER.indexOf('castlefetch-far') + 0.5 : FALLBACK_FAR_ORDER.indexOf(o.id)
       // A far dig that is not wood trails the blind spiral for work kinds
       // (vmzq.65: the fallback dug iron for a wood-short house). Options
       // without the wood flag keep the old rank.
