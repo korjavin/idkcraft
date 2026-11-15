@@ -84,16 +84,39 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     assert.equal(denyReason(bot, wall, rctx), null)
     assert.equal(denyReason(bot, wall, { ...rctx, recovery: null }), 'protected')
   })
-  it('refuses when only foreign (player) builds surround it', () => {
-    const { bot, ctx, blocks } = world('oak_planks') // not a castle plan match: someone else's
+  it('refuses only on physics: unbreakable walls all round', () => {
+    const { bot, ctx, blocks } = world('bedrock')
     const orig = console.log
     const logs = []
     console.log = (m) => logs.push(String(m))
     try {
       for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + i) }
       assert.ok(logs.includes('enclosed escape refused: no breakable doorway, no climb'))
-      assert.equal(blocks.get('3,64,7'), 'oak_planks')
+      assert.equal(blocks.get('3,64,7'), 'bedrock')
     } finally { console.log = orig }
+  })
+  it('foreign builds and containers are candidates, last resort: natural < own < foreign < chest', () => {
+    const { bot, ctx, blocks } = world('oak_planks') // north: someone else's planks
+    blocks.set('2,64,8', 'chest'); blocks.set('2,65,8', 'air') // west: a chest
+    blocks.set('4,64,8', 'stone'); blocks.set('4,65,8', 'stone') // east: own? no, natural stone off plan
+    const order = enclosed.pickExits(bot, ctx, { x: 3, y: 64, z: 8 }).map((d) => `${d.dx},${d.dz}`)
+    assert.deepStrictEqual(order, ['1,0', '0,-1', '-1,0'])
+  })
+  it('a broken chest: walks over its drops before going on', async () => {
+    const { bot, ctx, blocks } = world('bedrock')
+    blocks.set('2,64,8', 'chest'); blocks.delete('2,65,8')
+    bot.entities = {}
+    bot.dig = async (b) => { blocks.delete(`${b.position.x},${b.position.y},${b.position.z}`); bot.entities[1] = { name: 'item', position: { x: 2.5, y: 64, z: 8.5 } } }
+    const log = console.log
+    const logs = []
+    console.log = (m) => logs.push(String(m))
+    try {
+      for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + i) }
+      await flush()
+      enclosed.tick(bot, ctx, 2000)
+    } finally { console.log = log }
+    assert.ok(logs.some((l) => l.startsWith('enclosed escape broke keep chest at 2,64,8')), logs.join('\n'))
+    assert.deepStrictEqual({ x: bot.pathfinder.goal.x, y: bot.pathfinder.goal.y, z: bot.pathfinder.goal.z }, { x: 2, y: 64, z: 8 })
   })
   it('never opens over a drop', () => {
     const { bot, ctx, blocks } = world()
@@ -192,7 +215,7 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     assert.equal(blocks.get('3,64,7'), 'stone', 'own wall kept')
   })
   it('still stuck after a refusal: re-tries at the cooldown without new noPath targets; recover drops sidestep', () => {
-    const { bot, ctx } = world('oak_planks')
+    const { bot, ctx } = world('bedrock')
     const logs = []
     const log = console.log
     console.log = (m) => logs.push(String(m))
