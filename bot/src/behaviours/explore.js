@@ -282,7 +282,8 @@ function castleWoodHunt(ctx) {
     return false
   }
 }
-// Wood expedition (prod 2026-11-15 bot3): a castle wood word with no log
+// Wood expedition (prod 2026-11-15 bot3): a castle wood word, or a gather
+// that ended no-trees (any step: prod failed:no-trees x20), with no log
 // in memory walks out to EXPEDITION_RADIUS, one ray at a time, with no
 // unlock window; the first remembered log ends it and gather-far chops.
 const EXPEDITION_RADIUS = 400
@@ -290,7 +291,11 @@ function castleExpeditionOn(ctx) {
   try { return woodExpedition(ctx) || typeof require('../goal-unlock').goalUnlock(ctx, 'radius') === 'number' } catch (_) { return false }
 }
 function woodExpedition(ctx) {
-  return !!sourceOf(ctx) && sourceCount(ctx) === 0
+  // gather's no-trees record (stranded wood) walks out too, any log its
+  // source — unless a chosen explore-far window already sets the spiral
+  let stranded = false
+  try { stranded = woodStranded(ctx) && require('../goal-unlock').goalUnlock(ctx, 'radius') === null } catch (_) { /* castle source only */ }
+  return (stranded || !!sourceOf(ctx)) && sourceCount(ctx) === 0
 }
 
 function explore(bot, ctx, target, state) {

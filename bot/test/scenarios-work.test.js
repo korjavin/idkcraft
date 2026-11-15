@@ -1045,7 +1045,8 @@ describe('vmzq.65: stranded-wood walk-out for a build order', () => {
       assert.equal(goalUnlock(ctx, 'radius'), null, 'no unlock live for the walk')
       // Home ground already walked: rings 16-64 visited, so the relocation
       // leg leaves at ring 128 — past the 64 leash, only on the lift.
-      ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0 }
+      // huntRay 0: the stranded expedition walks the north ray (deterministic)
+      ctx.explore = { visited: new Set(), target: null, lastPos: null, stalls: 0, markStart: 0, chatAt: 0, huntRay: 0 }
       for (const r of [16, 32, 64]) {
         for (let a = 0; a < 8; a++) {
           const x = Math.round(r * Math.sin(a * Math.PI / 4))

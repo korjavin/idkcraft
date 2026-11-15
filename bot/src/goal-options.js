@@ -438,7 +438,7 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     const cw = ctx && ctx.castleWord
     const k = (d && d.kind) || (cw && cw.kind) || null
     const cf = require('./behaviours/castlefetch')
-    const item = k && k in cf.FETCH && k !== 'stone' && k !== 'banner' && k !== 'stairs' ? cf.acquireItem(bot, k) : null
+    const item = k && k in cf.FETCH ? cf.acquireItem(bot, k) : null
     if (item && registered('castlefetch') && !probeFeasible(bot, ctx, 'castlefetch', { acquire: k })) {
       skip('acquire', `castlefetch not feasible for ${k}`)
     } else if (item && registered('castlefetch')) {

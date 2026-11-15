@@ -290,7 +290,7 @@ describe('run-4 fixture: flat cells, oscillating stone, alternating steps (accep
     assert.equal(wdLogs().length, 1, 'ONE goal watchdog line')
     assert.match(
       wdLogs()[0],
-      /^goal watchdog kind=castle id=castle-1 progress=8\/1722 stall=70s round=1 step=castlefetch options=castlefetch,gather,park choice=castlefetch conf=0\.90 source=jev why=step=castlefetch running/, // woodstarve: the fetch hold no longer bans gather
+      /^goal watchdog kind=castle id=castle-1 progress=8\/1722 stall=70s round=1 step=castlefetch options=castlefetch,gather,acquire-cobblestone,park choice=castlefetch conf=0\.90 source=jev why=step=castlefetch running/, // woodstarve: the fetch hold no longer bans gather
     )
     assert.equal(await watchdogCounter('castle', 'castlefetch', 'jev'), before + 1)
     // The request: goal + history=[] + situation + options, watchdog words.
@@ -301,7 +301,7 @@ describe('run-4 fixture: flat cells, oscillating stone, alternating steps (accep
     assert.match(req.state.facts, /time=day/)
     assert.equal(req.instructions, taskMod.PLAN_INSTRUCTIONS)
     assert.notEqual(req.instructions, goal.ASK_INSTRUCTIONS, 'watchdog words, not the tick words')
-    assert.deepEqual(Object.keys(req.criteria), ['castlefetch', 'gather', 'park']) // woodstarve: no castle-first ban on the chop
+    assert.deepEqual(Object.keys(req.criteria), ['castlefetch', 'gather', 'acquire-cobblestone', 'park']) // woodstarve: no castle-first ban on the chop; stone has an acquire path
     assert.equal(req.criteria.park, taskMod.PLAN_PARK_CRITERION)
     // The same-step answer applies as a commit (no same-step park).
     const commit = ctx.goal && ctx.goal.commit
@@ -1312,11 +1312,12 @@ describe('deterministic fallback (vmzq.28)', () => {
     await fireNext(bot, ctx, first.t, lowConf('gather'))
     assert.equal(wdLogs().length, 2)
     assert.ok(wdLogs()[1].includes('source=fallback'), JSON.stringify(wdLogs()))
-    // castleCtx stalls on castlefetch: fallback takes gather, never re-commits it.
-    assert.ok(wdLogs()[1].includes('choice=gather'), JSON.stringify(wdLogs()))
+    // castleCtx stalls on castlefetch stone: fallback takes the generic
+    // acquire (mine + expedition), never re-commits the stalling step.
+    assert.ok(wdLogs()[1].includes('choice=acquire-cobblestone'), JSON.stringify(wdLogs()))
     const commit = ctx.goal && ctx.goal.commit
     assert.ok(commit, 'fallback applied')
-    assert.equal(commit.optionId, 'gather')
+    assert.equal(commit.optionId, 'acquire-cobblestone')
     assert.equal(ctx.task.castle.wd.lowConf, 0, 'streak cleared on fallback')
     assert.equal(ctx.task.castle.wd.backoffMs, 0, 'no backoff on fallback')
   })
@@ -1391,8 +1392,8 @@ describe('deterministic fallback (vmzq.28)', () => {
     const t0 = 1000000000000
     const first = await firedAnswer(bot, ctx, t0, lowConf('gather'))
     const t2 = await fireNext(bot, ctx, first.t, lowConf('gather'))
-    assert.ok(wdLogs()[1].includes('choice=gather'), JSON.stringify(wdLogs()))
-    // Run the fallback window out flat: history names gather.
+    assert.ok(wdLogs()[1].includes('choice=acquire-cobblestone'), JSON.stringify(wdLogs()))
+    // Run the fallback window out flat: history names the acquire.
     let t = t2
     let guard = 0
     while (ctx.goal && ctx.goal.commit && guard++ < 40) {
@@ -1400,15 +1401,14 @@ describe('deterministic fallback (vmzq.28)', () => {
       taskMod.taskTick(bot, ctx, t)
     }
     assert.equal((ctx.goal && ctx.goal.commit) || null, null, 'fallback window ended')
-    assert.ok(outLogs().some((l) => l.includes('choice=gather') && l.includes('result=flat')), JSON.stringify(outLogs()))
+    assert.ok(outLogs().some((l) => l.includes('choice=acquire-cobblestone') && l.includes('result=flat')), JSON.stringify(outLogs()))
     const t3 = await fireNext(bot, ctx, t, lowConf('gather'))
     assert.ok(wdLogs()[2].includes('choice=none'), JSON.stringify(wdLogs()))
     await fireNext(bot, ctx, t3, lowConf('gather'))
     assert.ok(wdLogs()[3].includes('source=fallback'), JSON.stringify(wdLogs()))
-    // vmzq.35: the flat gather sorts behind fresh options, and the stalling
-    // castlefetch is never re-picked (no-op). On the built home the fresh
-    // explore-far outranks the flat gather.
-    assert.ok(wdLogs()[3].includes('choice=explore-far'), `flat gather skipped for a fresh option: ${JSON.stringify(wdLogs())}`)
+    // vmzq.35: the flat acquire sorts behind fresh options, and the stalling
+    // castlefetch is never re-picked (no-op): the fresh gather comes next.
+    assert.ok(wdLogs()[3].includes('choice=gather'), `flat acquire skipped for a fresh option: ${JSON.stringify(wdLogs())}`)
     assert.ok(!/choice=castlefetch[, ]/.test(wdLogs()[3]), `never the stalling step: ${JSON.stringify(wdLogs())}`)
   })
 })
