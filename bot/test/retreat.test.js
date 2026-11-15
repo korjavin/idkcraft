@@ -789,6 +789,21 @@ describe('taking-fire retreat (0ay)', () => {
     ticker.destroy()
   })
 
+  it('cornered: a reachable mob within 3 fights instead of an outmatched retreat (prod bot3 death zombie 1.9)', async () => {
+    const bot = fireBot(20, [{ name: 'stone_sword', count: 1 }])
+    bot.entities[1] = zombie(1, 2, 64, 0)
+    bot.entities[2] = zombie(2, 5, 64, 1)
+    const remote = idleRemote()
+    remote.decide = async () => ({ action: 'fight', sprint: false, source: 'laya' })
+    const ticker = createTicker({ bot, brain: hybridBrain(remote), tickMs: 10, idleTickMs: 10, autonomous: true })
+    ticker.work()
+    await ticker.tick()
+    bot.health = 19
+    const r = await ticker.tick()
+    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `fought: ${r.decision.action}`)
+    ticker.destroy()
+  })
+
   it('continued fire across ticks logs the engage once (latch resets on stale hurt only)', async () => {
     const bot = fireBot(20)
     const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })

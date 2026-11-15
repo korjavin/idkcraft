@@ -44,6 +44,11 @@ const BACKOFF_MAX_MS = 600000
 // ponytail: the scan resumes from a cursor (the first undone cell); a full
 // rescan from 0 every 30 s repairs cells mobs/players broke below it.
 const FULL_RESCAN_MS = 30000
+// Site danger (prod 2026-11-15 bot3: ~90 cells blown in 3 min, deaths at
+// the site by day): a lost cell or a hostile in the site box stamps
+// ctx.castleDangerAt; while fresh, layable torch cells go first.
+const DANGER_MS = 10 * 60 * 1000
+const DANGER_R = 24
 const CASTLE_AWAY_MS = 5 * 60 * 1000 // idkcraft-akze: no scan for this long = the bot was away (unloaded); the high-water re-baselines on return instead of logging the away knock as regress
 const DIG_APPROACH = 2 // GoalNear range: stops inside REACH_DIG (flat round-2 lesson)
 const SIDESTEPS = [[1, 0], [0, 1], [-1, 0], [0, -1]]
@@ -587,6 +592,15 @@ function pick(bot, ctx, st, cells, key, now) {
     // band and box litter entries and transit fills live until resolved, so
     // refusals escalate to retired instead of re-chasing every 30 s.
     if (Number(v) !== ver(st) || (c ? done(bot, c) : st.blocked[k].until <= now)) { delete st.blocked[k]; continue }
+  }
+  // Light the site first while it is dangerous: dark interior spawns mobs.
+  if (typeof ctx.castleDangerAt === 'number' && now - ctx.castleDangerAt < DANGER_MS && usable(bot, 'torch', ctx) > 0) {
+    for (const c of cells) {
+      if (c.kind !== 'torch' || done(bot, c)) continue
+      const b = st.blocked[bkey(st, c.idx)]
+      if (b && (b.retired || b.until > now)) continue
+      if (supported(bot, c)) return { idx: c.idx }
+    }
   }
   let full = ctx.castleScanKey !== key || now - (ctx.castleScanAt || 0) >= FULL_RESCAN_MS
   for (;;) {
@@ -1753,6 +1767,19 @@ function progress(bot, st, cells, ctx) {
     }
     cd.lastScan = nowMs
   } catch (_) { /* clock best-effort: the gap check stands down */ }
+  if (!gapAway && lost.length) {
+    console.log(`castle damage lost=${lost.length}`)
+    ctx.castleDangerAt = Date.now()
+    ctx.castleCursor = 0 // re-lay: the lost cells may sit below the cursor
+    ctx.castleScanAt = 0
+  }
+  try {
+    const { HOSTILE_NAMES } = require('../perception')
+    for (const e of Object.values(bot.entities || {})) {
+      if (e && e.position && HOSTILE_NAMES.has(e.name || '') &&
+        Math.abs(e.position.x - st.site.x) <= DANGER_R && Math.abs(e.position.z - st.site.z) <= DANGER_R) { ctx.castleDangerAt = Date.now(); break }
+    }
+  } catch (_) { /* entity scan best-effort */ }
   if (n >= cd.high) cd.high = n
   else if (!gapAway && lost.length) console.log(`castle regress ${n} missing=${lost.slice(0, 10).map((c) => `${c.kind}@${c.x},${c.y},${c.z}`).join(' ')}`)
   if (ctx.castleProgressLog !== n) {
@@ -3072,3 +3099,4 @@ module.exports.onDoorPath = onDoorPath
 module.exports.RECOVERY_HOOKS = RECOVERY_HOOKS
 module.exports.peek = peek // test seam: the arbiter's next cell (castle-scale resume)
 module.exports.castleBuilderBatch = castleBuilderBatch
+module.exports.pick = pick

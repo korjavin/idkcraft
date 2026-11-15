@@ -1131,6 +1131,25 @@ function stairsTableBroke(bot, ctx, f) {
   return !stairsTableFunded(bot, ctx)
 }
 
+// Swordless fund (prod 2026-11-15 bot3: died sword=0 on castlefetch legs —
+// equip was never feasible: no rock/stick/table on hand at the far site).
+// Any chest visit draws a ready sword, else what equip's sword craft needs
+// (2 cobble, 1 stick, a table), so the castle-rule rearm can fire.
+const SWORDS = ['netherite_sword', 'diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword']
+async function swordFund(bot, drawFrom, seen) {
+  try {
+    const n = (p) => countItems(bot, p)
+    const draw = (names, want) => names.some((x) => seen[x] > 0) ? drawFrom(names, want) : null
+    if (n((x) => x.endsWith('_sword')) > 0) return
+    const r = await draw(SWORDS, 1)
+    if (r && r.got > 0) return
+    const cobble = 2 - n((x) => x === 'cobblestone')
+    if (cobble > 0) await draw(['cobblestone'], cobble)
+    if (n((x) => x === 'stick' || x.endsWith('_planks') || x.endsWith('_log')) === 0) await draw(['stick'], 1)
+    if (n((x) => x === 'crafting_table') === 0) await draw(['crafting_table'], 1)
+  } catch (_) { /* fund best-effort: the demand draw goes on */ }
+}
+
 // One chest's withdraw for the demand: the kind's lists in order (finished
 // item first, then its raw stock). Returns the need left (> 0: short) plus
 // the last full post-draw window contents (null when never opened).
@@ -1254,6 +1273,7 @@ async function drawChest(bot, ctx, d, at, need) {
       need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
     }
   }
+  if (seen) await swordFund(bot, drawFrom, seen) // zero extra opens unless the chest holds a fund item
   // owner 2026-11-13 forest: a wood-starved castle takes saplings from any chest it opens (reforest plants them by the site)
   if (seen && require('../vetoes').woodStarved(ctx)) {
     const want = stockpileMod.SAPLING_KEEP - countItems(bot, (n) => n.endsWith('_sapling'))
@@ -3462,3 +3482,4 @@ module.exports.STONE_ABOVE = STONE_ABOVE
 module.exports.drawChest = drawChest
 module.exports.MINE_ROCK = MINE_ROCK
 module.exports.awayPoint = awayPoint
+module.exports.swordFund = swordFund

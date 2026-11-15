@@ -499,8 +499,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // 12 hp, the work step yields to the same retreat chain as unreachable fire.
       const outmatched = (state.nearby_hostiles || 0) >= 2 ||
         (typeof state.bot_health === 'number' && state.bot_health < 12 && countItems(bot, (n) => n.endsWith('_sword')) === 0)
+      // Cornered (prod 2026-11-15 bot3: died retreating, zombie 1.9 behind):
+      // a reachable hostile in melee range keeps pace with a run, so the
+      // outmatched retreat yields to fight; unreachable fire still retreats.
+      const cornered = state.hostile_reachable !== false && typeof state.hostile_distance === 'number' && state.hostile_distance <= 3
       const underFire = !ctx.inShelter && !ctx.lead && !ctx.bring && !target &&
-        (state.hostile_reachable === false || outmatched) &&
+        (state.hostile_reachable === false || (outmatched && !cornered)) &&
         typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
       if (!hurtFresh) ctx.underFireLogged = false
       if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
