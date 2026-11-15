@@ -11,9 +11,17 @@
 // 'smelt-<item>' (castlefetch's pane/torch ticks own the furnace). sources() is the same tree as pure data: explore's
 // expedition and resources.scan read it (src/sources.js).
 
+const { Vec3 } = require('vec3')
+const { goals } = require('mineflayer-pathfinder')
 const S = require('../sources')
+const unreachable = require('../unreachable')
 
 const MINE_RADIUS = 64
+const DIG_REACH = 4.5
+const WALK_WAITS = 15 // walk ticks without closing in before the source is unreachable
+const CLUSTER_R = 3 // a blacklisted cell takes its tree/vein with it
+const AREA_FAILS = 3 // unreachable sources in a row before the area is left
+const AREA_R = 48 // the left area: beyond the nearest few sources
 
 function have(bot, item) {
   let n = 0
@@ -25,18 +33,71 @@ function room(bot) {
   try { return 64 * bot.inventory.emptySlotCount() } catch (_) { return 64 }
 }
 
-// Distance to the nearest remembered find of these blocks, null when none.
-function nearestFind(bot, ctx, blocks) {
-  const p = bot.entity && bot.entity.position
-  let best = null
+// Nearest source cell of these blocks not blacklisted: loaded world first
+// pass, remembered finds too. Null when none.
+function nearestSource(bot, ctx, blocks, p) {
+  const cand = []
   try {
-    for (const it of ctx.resources.items.values()) {
-      if (!it || !blocks.includes(it.name)) continue
-      const d = p ? Math.hypot(it.x - p.x, it.z - p.z) : 0
-      if (best === null || d < best) best = d
-    }
-  } catch (_) { /* no memory */ }
+    const ids = blocks.map((n) => bot.registry.blocksByName[n]).filter(Boolean).map((b) => b.id)
+    if (ids.length && typeof bot.findBlocks === 'function') cand.push(...(bot.findBlocks({ matching: ids, maxDistance: MINE_RADIUS, count: 64 }) || []))
+  } catch (_) { /* no world */ }
+  try { for (const it of ctx.resources.items.values()) if (it && blocks.includes(it.name)) cand.push(it) } catch (_) { /* no memory */ }
+  let best = null, bd = Infinity
+  for (const c of cand) {
+    if (unreachable.near(ctx, c)) continue
+    try { if (ctx.castle && require('../castle').protects(ctx.castle, c, c.name || blocks[0])) continue } catch (_) { /* unguarded */ }
+    const d = Math.hypot(c.x - p.x, c.y - p.y, c.z - p.z)
+    if (d < bd) { bd = d; best = { x: c.x, y: c.y, z: c.z } }
+  }
   return best
+}
+
+// Walk-and-dig fallback after a pathless mine. True while it owns the tick.
+function handTick(bot, ctx, a, item, blocks) {
+  const p = bot.entity && bot.entity.position
+  if (!p) return false
+  let h = a.hand
+  if (!h) {
+    const t = nearestSource(bot, ctx, blocks, p)
+    if (!t) return false
+    h = a.hand = { t, best: Infinity, waits: 0 }
+    console.log(`acquire ${item}: walk-and-dig ${t.x},${t.y},${t.z}`)
+  }
+  const { t } = h
+  let b = null
+  try { b = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { b = null }
+  if (b && !blocks.includes(b.name)) { a.hand = null; return true } // gone (dug or stale find): pick the next
+  const d = Math.hypot(t.x + 0.5 - p.x, t.y + 0.5 - (p.y + 1.6), t.z + 0.5 - p.z)
+  if (b && d <= DIG_REACH) {
+    a.mining = true
+    Promise.resolve().then(() => bot.dig(b, true))
+      .then(() => { a.fails = 0; a.mineFail = null; a.expedition = null }) // a source worked: the mine runs from here again
+      .catch(() => { giveUp(bot, ctx, a, item) })
+      .finally(() => { a.mining = false; a.hand = null })
+    return true
+  }
+  if (d < h.best - 1) { h.best = d; h.waits = 0 } else h.waits++
+  if (h.waits > WALK_WAITS || (h.waits > 2 && ctx.lastPathStatus === 'noPath')) { giveUp(bot, ctx, a, item); return true }
+  try {
+    if (h.goal == null || bot.pathfinder.goal !== h.goal) bot.pathfinder.setGoal(h.goal = d > 32 ? new goals.GoalNearXZ(t.x, t.z, 2) : new goals.GoalNear(t.x, t.y, t.z, 2))
+  } catch (_) { /* next tick retries */ }
+  return true
+}
+
+// Blacklist the cell's cluster; K in a row blacklist the whole area so the
+// expedition walks out of it.
+function giveUp(bot, ctx, a, item) {
+  const t = a.hand && a.hand.t
+  a.hand = null
+  if (!t) return
+  unreachable.mark(ctx, t, CLUSTER_R)
+  a.fails = (a.fails | 0) + 1
+  console.log(`acquire ${item}: unreachable ${t.x},${t.y},${t.z} (${a.fails}/${AREA_FAILS})`)
+  if (a.fails < AREA_FAILS) return
+  a.fails = 0
+  const p = bot.entity && bot.entity.position
+  if (p) unreachable.mark(ctx, p, AREA_R)
+  console.log(`acquire ${item}: ${AREA_FAILS} unreachable sources here, leaving the area`)
 }
 
 // One tick toward n of item in the pack: 'done' | 'running' | 'failed:<why>'.
@@ -88,27 +149,25 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
     if (typeof bot.mine !== 'function') return `failed:no-mine-${item}`
     const count = Math.min(short, room(bot))
     if (count <= 0) return 'failed:pack-full'
-    let radius = MINE_RADIUS
     if (a.mineFail && a.mineFail.item === item) {
-      // No source in reach: the explore ray expedition (to 400, driven by the
-      // castle need) walks out until resources.scan remembers one, then the
-      // mine reaches for it. Explore's own done/failed is not this leg's.
-      const d = nearestFind(bot, ctx, blocks)
-      if (d === null) {
-        if (a.expedition !== item) console.log(`acquire ${item}: no source within ${MINE_RADIUS}, expedition`)
-        a.expedition = item
-        const st = ctx.stepStatus
-        try { require('./explore')(bot, ctx) } catch (_) { /* next tick retries */ }
-        ctx.stepStatus = st
-        return 'running'
-      }
-      radius = Math.max(MINE_RADIUS, Math.ceil(d) + 16)
-      a.mineFail = null
-      a.expedition = null
+      // The mine found no path (prod 2026-11-15 bot3: the same pathless
+      // birch x133/h): walk to and hand-dig the nearest source not
+      // blacklisted (loaded or remembered), blacklisting each one the walk
+      // cannot reach; a hand dig re-arms the mine from the new spot.
+      if (handTick(bot, ctx, a, item, blocks)) return 'running'
+      // Nothing left here: the explore ray expedition (to 400, driven by the
+      // castle need) walks out until resources.scan remembers a new one.
+      // Explore's own done/failed is not this leg's.
+      if (a.expedition !== item) console.log(`acquire ${item}: no reachable source, expedition`)
+      a.expedition = item
+      const st = ctx.stepStatus
+      try { require('./explore')(bot, ctx) } catch (_) { /* next tick retries */ }
+      ctx.stepStatus = st
+      return 'running'
     }
     a.mining = true
     console.log(`acquire ${item}: mining ${count} from ${blocks.slice(0, 4).join(',')}`)
-    bot.mine(blocks, count, { radius })
+    bot.mine(blocks, count, { radius: MINE_RADIUS, forbid: (p) => unreachable.near(ctx, p) })
       .catch((e) => { a.mineFail = { item, at: Date.now() }; console.log(`acquire ${item}: ${e && e.message}`) })
       .finally(() => { a.mining = false })
     return 'running'

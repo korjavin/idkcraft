@@ -271,7 +271,7 @@ function sourceOf(ctx) {
 function sourceCount(ctx) {
   const ok = sourceOf(ctx) || isLog
   let n = 0
-  try { for (const it of ctx.resources.items.values()) if (it && typeof it.name === 'string' && ok(it.name)) n++ } catch (_) { /* none */ }
+  try { for (const it of ctx.resources.items.values()) if (it && typeof it.name === 'string' && ok(it.name) && !require('../unreachable').near(ctx, it)) n++ } catch (_) { /* none */ }
   return n
 }
 function castleWoodHunt(ctx) {

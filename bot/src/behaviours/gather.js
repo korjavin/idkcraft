@@ -586,7 +586,7 @@ function gather(bot, ctx, target, state) {
       return blueprint.protects(ctx.castle, p, b && b.name)
     } catch (_) { return false }
   }
-  const banned = (p) => danger.near(ctx, p) || castleBeam(p)
+  const banned = (p) => danger.near(ctx, p) || castleBeam(p) || require('../unreachable').near(ctx, p)
   if (!g.pos) {
     // A running staged search resolves before any new sync scan: the 48
     // below stays empty while the 96/160 shells stream in across ticks.

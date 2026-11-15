@@ -47,18 +47,18 @@ describe('acquire tick', () => {
     assert.strictEqual(tick.acquire(b, ctx, 'sand', 40), 'running', 'in flight')
     assert.strictEqual(calls.length, 1)
   })
-  it('no source in reach: runs the explore expedition (running), then mines a remembered far find', () => {
-    const calls = []
-    const b = mk([], { mine: (names, n, o) => { calls.push(o.radius); return new Promise(() => {}) }, entity: { position: { x: 0, y: 64, z: 0 } } })
+  it('no source in reach: runs the explore expedition (running), then walks to a remembered far find', () => {
+    const goalsSet = []
+    const b = mk([], { mine: () => new Promise(() => {}), entity: { position: { x: 0, y: 64, z: 0 } }, blockAt: () => null, pathfinder: { setGoal: (g) => goalsSet.push(g) } })
     const ctx = { acquire: { mineFail: { item: 'sand', at: Date.now() } }, resources: { items: new Map() }, stepStatus: 'running' }
     assert.strictEqual(tick.acquire(b, ctx, 'sand', 4), 'running')
     assert.ok(ctx.explore, 'the explore tick ran')
     assert.strictEqual(ctx.acquire.expedition, 'sand')
     assert.strictEqual(ctx.stepStatus, 'running', 'explore status stays its own')
-    assert.strictEqual(calls.length, 0)
     ctx.resources.items.set('k', { x: 300, y: 64, z: 0, name: 'sand' })
     assert.strictEqual(tick.acquire(b, ctx, 'sand', 4), 'running')
-    assert.deepStrictEqual(calls, [316])
+    assert.deepStrictEqual(ctx.acquire.hand.t, { x: 300, y: 64, z: 0 })
+    assert.strictEqual(goalsSet.length, 1)
   })
   it('fails honestly with no mine on the body', () => {
     assert.strictEqual(tick.acquire(mk([]), {}, 'sand', 4), 'failed:no-mine-sand')
@@ -142,5 +142,59 @@ describe('no source in reach: expedition everywhere', () => {
     ctx.resources.items.set('k', { x: 300, y: 64, z: 0, name: 'birch_log' })
     assert.strictEqual(explore.expedition(ctx), false)
     assert.strictEqual(explore.expedition({ gather: {}, resources: { items: new Map() } }), false)
+  })
+})
+
+describe('acquire: unreachable sources (prod 2026-11-15 bot3 pathless birch loop)', () => {
+  const unreachable = require('../src/unreachable')
+  const logs = [{ x: 5, y: 64, z: 0 }, { x: 20, y: 64, z: 0 }, { x: 30, y: 64, z: 0 }, { x: 40, y: 64, z: 0 }]
+  const mkb = (dug) => {
+    const pos = { x: 0, y: 64, z: 0 }
+    return {
+      registry: acq.DEFAULT_REG,
+      inventory: { items: () => [], emptySlotCount: () => 10 },
+      recipesAll: () => [],
+      mine: () => Promise.reject(new Error('mine-noPath')),
+      entity: { position: pos },
+      findBlocks: () => logs.map((l) => ({ ...l })),
+      blockAt: (v) => ({ name: 'birch_log', position: v }),
+      dig: async (b) => { dug.push(b.position.x) },
+      pathfinder: { setGoal() {} },
+    }
+  }
+  const settle = () => new Promise((r) => setImmediate(r))
+  it('a pathless nearest log is blacklisted and the next one is dug', async () => {
+    const dug = []
+    const b = mkb(dug)
+    const ctx = { resources: { items: new Map() } }
+    tick.acquire(b, ctx, 'birch_log', 4, [], ['birch_log'])
+    await settle()
+    assert.ok(ctx.acquire.mineFail, 'mine-noPath recorded')
+    tick.acquire(b, ctx, 'birch_log', 4, [], ['birch_log'])
+    assert.strictEqual(ctx.acquire.hand.t.x, 5)
+    for (let i = 0; i < 20; i++) tick.acquire(b, ctx, 'birch_log', 4, [], ['birch_log']) // never closer
+    assert.ok(unreachable.near(ctx, { x: 5, z: 0 }), 'first log blacklisted')
+    assert.strictEqual(ctx.acquire.hand.t.x, 20, 'next candidate')
+    b.entity.position.x = 18 // walked in reach
+    tick.acquire(b, ctx, 'birch_log', 4, [], ['birch_log'])
+    await settle(); await settle()
+    assert.deepStrictEqual(dug, [20])
+    assert.strictEqual(ctx.acquire.mineFail, null, 'the mine re-arms from here')
+  })
+  it('every nearby source unreachable: the area is left on the expedition, and gather skips it', () => {
+    const b = mkb([])
+    const ctx = { acquire: { mineFail: { item: 'birch_log', at: Date.now() } }, resources: { items: new Map() }, stepStatus: 'running' }
+    for (let i = 0; i < 80 && !ctx.acquire.expedition; i++) tick.acquire(b, ctx, 'birch_log', 4, [], ['birch_log'])
+    assert.strictEqual(ctx.acquire.expedition, 'birch_log')
+    assert.ok(ctx.explore, 'explore ran')
+    for (const l of logs) assert.ok(unreachable.near(ctx, l))
+    // gather reads the same list (its banned())
+    assert.match(require('fs').readFileSync(require('path').join(__dirname, '../src/behaviours/gather.js'), 'utf8'), /unreachable'\)\.near\(ctx, p\)/)
+  })
+  it('blacklist entries expire', () => {
+    const ctx = {}
+    unreachable.mark(ctx, { x: 0, z: 0 }, 3, 0)
+    assert.ok(unreachable.near(ctx, { x: 2, z: 0 }, 1))
+    assert.ok(!unreachable.near(ctx, { x: 2, z: 0 }, unreachable.TTL_MS + 1))
   })
 })
