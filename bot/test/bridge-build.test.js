@@ -84,7 +84,7 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
     bot._buildTiming = { stallMs: 30, watchMs: 5 }
     await assert.rejects(
       bot.buildCells('house', { x: 100, y: 64, z: -40 }, CELLS.slice(0, 1)),
-      /^Error: build-stall$/,
+      (e) => e.message === 'build-stall' && e.nopath === false,
     )
   })
 
@@ -98,7 +98,7 @@ describe('bridge buildCells (idkcraft-neuc.54)', () => {
       transport.inject('baritone.event', { kind: 'build', name: wire, active: true, diagnostics: { pathing: false, hasPath: false, calculating: true } })
     }, 5)
     try {
-      await assert.rejects(p, /^Error: build-stall$/)
+      await assert.rejects(p, (e) => e.message === 'build-stall' && e.nopath === true)
     } finally { clearInterval(tick) }
     assert.ok(Date.now() - t0 < 5000, 'early, not the 60 s stall')
   })
