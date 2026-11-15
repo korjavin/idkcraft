@@ -261,14 +261,12 @@ function arrive(bot, ctx, e, t) {
 
 const WOOD_KINDS = ['planks', 'door', 'fence', 'chest', 'frame'] // goal-options WOOD_FETCH_KINDS
 const isLog = (n) => n.endsWith('_log')
-// Castle kind -> the remembered world block (resources.scan: ores, logs,
-// coal, sand) that sources it. Stone (live scan, everywhere) and banner
-// wool (sheep, not memory) have no memory source: no expedition.
-const SOURCE_OF = { pane: (n) => n === 'sand', torch: (n) => isLog(n) || n === 'coal_ore' || n === 'deepslate_coal_ore' }
-for (const k of WOOD_KINDS) SOURCE_OF[k] = isLog
+// Castle kind -> its remembered world source blocks, derived from the
+// recipe/drop tree (sources.kindSources). Stone (live quarry) has none.
 function sourceOf(ctx) {
   const cw = ctx && ctx.castleWord
-  return (cw && SOURCE_OF[cw.kind]) || null
+  const blocks = cw ? require('../sources').kindSources(cw.kind) : null
+  return blocks && blocks.size ? (n) => blocks.has(n) : null
 }
 function sourceCount(ctx) {
   const ok = sourceOf(ctx) || isLog

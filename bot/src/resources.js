@@ -153,6 +153,19 @@ function scan(bot, ctx, opts) {
   } catch (_) {
     // sand is best-effort
   }
+  // Generic: the world sources of what the bot needs now (the castle
+  // word's kind, the live acquire gap), same small cap.
+  try {
+    const acq = require('./sources')
+    const names = new Set(ctx && ctx.castleWord ? acq.kindSources(ctx.castleWord.kind) : [])
+    for (const n of (ctx && ctx.acquire && ctx.acquire.blocks) || []) names.add(n)
+    const needIds = [...names].flatMap((n) => blockids.resolveBlockIds(bot, n))
+    if (needIds.length > 0) {
+      found = found.concat(bot.findBlocks({ matching: needIds, maxDistance: radius, count: blockids.COAL_COUNT }) || [])
+    }
+  } catch (_) {
+    // needs are best-effort
+  }
   const spots = []
   for (const p of found) {
     let name = null
