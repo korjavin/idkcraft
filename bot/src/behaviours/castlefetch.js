@@ -484,6 +484,15 @@ function demand(bot, ctx) {
   // Held (no world source near) or loop-blocked: a chest known to hold the
   // kind gets the hop below; otherwise acquire() takes the remaining need
   // (one try per CASTLEFETCH_RETRY_MS, ctx.acquireHeld), never an idle hold.
+  // A chosen acquire-<item> option (goal unlock) runs acquire for its kind,
+  // whatever chest/source leg or hold the kind has (prod 2026-11-15 bot3:
+  // chosen twice, 0 acquire lines — demand served the failing chest leg).
+  let unlockKind = null
+  try { unlockKind = require('../goal-unlock').goalUnlock(ctx, 'acquire') } catch (_) { /* no window */ }
+  if (unlockKind === kind && acquireItem(bot, kind)) {
+    const short = Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
+    if (short > 0) return { kind, word, short, acquire: true }
+  }
   const lb = ctx && ctx.loopBlocked
   const blocked = !!(lb && lb[kind] && Date.now() < lb[kind])
   if (blocked || holdFor(bot, ctx, kind)) {

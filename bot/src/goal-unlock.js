@@ -45,6 +45,7 @@ function goalUnlock(ctx, key, now = Date.now()) {
     if (key === 'houseStep') {
       return typeof u.houseStep === 'string' && u.houseStep ? u.houseStep : null
     }
+    if (key === 'acquire') return typeof u.acquire === 'string' && u.acquire ? u.acquire : null
     if (key === 'candidate') {
       const cd = u.candidate
       if (!cd || typeof cd.x !== 'number' || typeof cd.z !== 'number') return null
