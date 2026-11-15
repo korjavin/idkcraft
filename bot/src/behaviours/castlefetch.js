@@ -3138,6 +3138,7 @@ function castlefetch(bot, ctx, target, state) {
       finish(bot, ctx, `failed:castlefetch-no-${d.kind}`)
       return
     }
+    ctx.castleNeed = { kind: d.kind, item: craftNames(bot, d.kind)[0] || (chestNames(bot, d.kind)[0] || [])[0] || null } // sources.needSources
     try { console.log(`castlefetch ${d.kind}: need ${d.short} more`) } catch (_) { /* log best-effort */ }
     // klh2: the prod signal — a hop leg names its strategy, so a
     // failed:* line is followed within seconds by the next fetch line.

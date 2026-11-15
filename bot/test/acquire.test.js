@@ -51,3 +51,23 @@ describe('acquire tick', () => {
     assert.strictEqual(tick.acquire(mk([]), {}, 'sand', 4), 'failed:no-mine-sand')
   })
 })
+
+describe('acquire review fixes', () => {
+  it('the concrete castle item narrows the source: birch_door -> birch_log, no iron ore', () => {
+    const ctx = { castleWord: { kind: 'door' }, castleNeed: { kind: 'door', item: 'birch_door' } }
+    assert.deepStrictEqual([...acq.needSources(ctx)], ['birch_log'])
+    ctx.castleNeed.kind = 'fence' // stale need for another kind: the alias again
+    assert.ok(acq.needSources(ctx).has('iron_ore'))
+  })
+  it('need finds have their own cap and never evict other finds', () => {
+    const res = require('../src/resources')
+    const ctx = {}
+    res.noteSpots(ctx, [{ x: 0, y: 10, z: 0, name: 'diamond_ore' }], 1)
+    const many = []
+    for (let i = 1; i <= 300; i++) many.push({ x: i, y: 60, z: 0, name: 'sand', need: true })
+    res.noteSpots(ctx, many, 2)
+    assert.ok(ctx.resources.items.has('0,10,0'), 'the ore survives')
+    assert.strictEqual(ctx.resources.items.size, 1 + res.NEED_MAX)
+    assert.ok(ctx.resources.items.has('300,60,0'), 'newest need find kept')
+  })
+})

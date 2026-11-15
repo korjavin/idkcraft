@@ -265,7 +265,7 @@ const isLog = (n) => n.endsWith('_log')
 // recipe/drop tree (sources.kindSources). Stone (live quarry) has none.
 function sourceOf(ctx) {
   const cw = ctx && ctx.castleWord
-  const blocks = cw ? require('../sources').kindSources(cw.kind) : null
+  const blocks = cw ? require('../sources').needSources(ctx) : null
   return blocks && blocks.size ? (n) => blocks.has(n) : null
 }
 function sourceCount(ctx) {

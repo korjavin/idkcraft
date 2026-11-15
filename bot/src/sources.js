@@ -87,4 +87,14 @@ function kindSources(kind) {
   return out
 }
 
-module.exports = { sources, kindSources, blocksOf, inputsOf, mobsOf, smelt, regOf, SMELT, DEPTH, DEFAULT_REG }
+// The castle's open need: the concrete item castlefetch crafts for the
+// kind (ctx.castleNeed, e.g. birch_door -> birch_log), else the kind alias.
+function needSources(ctx) {
+  const cw = ctx && ctx.castleWord
+  if (!cw) return new Set()
+  const n = ctx.castleNeed
+  if (n && n.kind === cw.kind && n.item && cw.kind !== 'stone') return sources(null, n.item).blocks
+  return kindSources(cw.kind)
+}
+
+module.exports = { sources, kindSources, needSources, blocksOf, inputsOf, mobsOf, smelt, regOf, SMELT, DEPTH, DEFAULT_REG }
