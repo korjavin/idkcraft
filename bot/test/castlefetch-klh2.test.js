@@ -127,7 +127,8 @@ describe('klh2 same-kind tick hop', () => {
     goal.recordOutcome(bot, ctx, {}, 'castlefetch', 'failed:castlefetch-craft-fence', true, 'castle=fence-none')
     assert.equal(fetch.holdFor(bot, ctx, 'fence'), true, 'siteless hold parks kind-wide')
     assert.equal(fetch.hopDue(bot, ctx, 'fence'), false, 'no world site parked: no hop')
-    assert.equal(fetch.demand(bot, ctx), null, 'demand stays parked')
+    const d = fetch.demand(bot, ctx)
+    assert.ok(d && d.acquire && !d.hop, `no hop, the acquire leg: ${JSON.stringify(d)}`)
   })
 
   it('a same-day parked kind never hops', () => {
@@ -141,7 +142,8 @@ describe('klh2 same-kind tick hop', () => {
     }
     assert.equal(fetch.isParked(ctx, 'fence'), true, 'parked for the day')
     assert.equal(fetch.hopDue(bot, ctx, 'fence'), false, 'the day park owns it')
-    assert.equal(fetch.demand(bot, ctx), null, 'demand stays parked')
+    const d = fetch.demand(bot, ctx)
+    assert.ok(d && d.acquire && !d.hop, `no hop, the acquire leg: ${JSON.stringify(d)}`)
   })
 
   it('a gather-ended no-trees leg stamps its chop site', () => {

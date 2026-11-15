@@ -268,7 +268,9 @@ describe('dlpo same-day park', () => {
     parkBanner(bot, ctx)
     expireTimeHold(ctx)
     ctx.castleWord = { kind: 'banner', left: 2 }
+    ctx.acquireHeld = { banner: Date.now() } // acquire rested: the park holds
     assert.equal(goal.failHolds(ctx, 'castlefetch', 'castle=banner-none', bot), true, 'parked word held')
+    castleMod.menuFact = (b, c) => { c.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
     ctx.castleWord = { kind: 'stone', left: 75 }
     assert.equal(goal.failHolds(ctx, 'castlefetch', 'castle=stone-none', bot), false, 'another kind released')
   })
@@ -351,7 +353,10 @@ describe('dlpo same-day park', () => {
     for (const k of kinds) assert.equal(fetch.isParked(ctx, k), true, `${k} parked`)
     const w2 = castleMod.menuFact(bot, ctx)
     assert.equal(wordKind(w2), k0, `all parked: word is kinds[0]: ${w2}`)
-    assert.equal(fetch.demand(bot, ctx), null, 'all parked: null demand')
+    const dp = fetch.demand(bot, ctx)
+    assert.ok(!dp || (dp.acquire && dp.kind === k0), `all parked: only the acquire leg: ${JSON.stringify(dp)}`)
+    ctx.acquireHeld = { [k0]: Date.now() }
+    assert.equal(fetch.demand(bot, ctx), null, 'all parked, acquire rested: null demand')
     const line = goal.stepWhy('castlefetch', { castle: w2, time: 'day', health: 'ok', food: 'ok' }, bot, ctx, `castle=${w2}`)
     assert.match(line, /parked/, `rest line names the park: ${line}`)
   })

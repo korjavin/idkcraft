@@ -427,6 +427,21 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     }
   }
 
+  // acquire-<item>: a castle kind short with every source/chest held runs the
+  // generic resolver (recipe tree, mine, explore to 400) through the
+  // castlefetch acquire leg; no "remembered X" gate applies to it.
+  if (kind === 'castle') {
+    let d = null
+    try { d = require('./behaviours/castlefetch').demand(bot, ctx) } catch (_) { /* no demand */ }
+    if (d && d.acquire && registered('castlefetch')) {
+      const item = require('./behaviours/castlefetch').acquireItem(bot, d.kind)
+      out.push({
+        id: `acquire-${item}`, step: 'castlefetch', unlock: null,
+        criterion: `acquire ${d.short} ${item} from scratch: craft from inputs, mine the source block, explore out to 400 if none is known (+castle material, unblocks laying)`,
+      })
+    } else skip('acquire', d ? 'castle kind has a chest or source leg' : 'no held castle demand')
+  }
+
   // castlefetch-far: ONLY with a demand-matched candidate past DIG_RADIUS
   // (finding 1) — live exposed stone for stone demand, remembered logs
   // for wood demand. Stone needs the pickaxe like the local leg

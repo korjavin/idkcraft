@@ -146,6 +146,7 @@ describe('castle tidy (g0z.62)', () => {
       castle: castleState({ visitedAt: now }),
       castleWord: { kind: 'torch', left: 3, repair: true },
       stepFail: { castlefetch: { status: 'failed:castlefetch-no-torch', at: now, pos: failPos } },
+      acquireHeld: { torch: now }, // acquire rested: only the home rung can lift the hold
     })
     const home = makeBot({ loaded: false, at: FAR() })
     const d = fetch.demand(home, mk())

@@ -286,6 +286,9 @@ function castleWoodHunt(ctx) {
 // in memory walks out to EXPEDITION_RADIUS, one ray at a time, with no
 // unlock window; the first remembered log ends it and gather-far chops.
 const EXPEDITION_RADIUS = 400
+function castleExpeditionOn(ctx) {
+  try { return woodExpedition(ctx) || typeof require('../goal-unlock').goalUnlock(ctx, 'radius') === 'number' } catch (_) { return false }
+}
 function woodExpedition(ctx) {
   return !!sourceOf(ctx) && sourceCount(ctx) === 0
 }
@@ -434,7 +437,12 @@ function explore(bot, ctx, target, state) {
     e.visited.add(chunkOf(t.x, t.z)) // unreachable: never re-pick this point
     e.target = null
     e.issuedKey = null
-    ctx.stepStatus = 'failed:unreachable'
+    // An expedition (castle source hunt or the explore-far unlock) turns to
+    // the next ray instead of ending: one blocked leg is not a dry world.
+    if (castleExpeditionOn(ctx)) {
+      if (typeof e.huntRay === 'number') e.huntRay = (e.huntRay + 1) % RAY_COUNT
+      console.log(`explore leg unreachable at ${t.x},${t.z}: next target`)
+    } else ctx.stepStatus = 'failed:unreachable'
     // The target is the goal: without it dig_through has no direction and
     // goalDy/goalDist describe a bystander player (revmux round 1). One
     // escape per failed leg (core-1: else a pit cycles targets forever).

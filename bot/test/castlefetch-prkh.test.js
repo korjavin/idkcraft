@@ -109,6 +109,7 @@ describe('prkh per-kind fetch hold', () => {
     const legacy = heldCtx('stone')
     delete legacy.stepFail.castlefetch.kind
     castleMod.menuFact = (b, c) => { c.castleWord = { kind: 'fence', left: 6 }; return 'fence-none' }
+    legacy.acquireHeld = { fence: Date.now() } // acquire rested too
     assert.equal(fetch.demand(bot, legacy), null, 'kindless hold parks every kind')
   })
 
@@ -252,6 +253,7 @@ describe('prkh per-kind fetch hold', () => {
   })
 
   it('failHolds releases the menu entry when the word moved to another kind', () => {
+    castleMod.menuFact = (b, c) => { c.castleWord = { kind: 'fence', left: 6 }; return 'fence-none' }
     const text = 'castle=fence-none'
     const mk = (kind) => ({
       castle: castleState(),
@@ -259,7 +261,8 @@ describe('prkh per-kind fetch hold', () => {
       stepFail: { castlefetch: { status: 'failed:castlefetch-unreachable', kind, at: Date.now(), text, pos: null } },
     })
     assert.equal(goal.failHolds(mk('stone'), 'castlefetch', text, makeBot()), false, 'stone hold never holds a fence word')
-    assert.equal(goal.failHolds(mk('fence'), 'castlefetch', text, makeBot()), true, 'fence hold still holds a fence word')
+    assert.equal(goal.failHolds({ ...mk('fence'), acquireHeld: { fence: Date.now() } }, 'castlefetch', text, makeBot()), true, 'fence hold (acquire rested) still holds a fence word')
+    assert.equal(goal.failHolds(mk('fence'), 'castlefetch', text, makeBot()), false, 'the acquire leg releases the fence hold')
   })
 
   it('a fetch-held word no longer bans the chop (woodstarve)', () => {
