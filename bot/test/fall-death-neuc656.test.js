@@ -58,8 +58,10 @@ describe('neuc.65.6 fall death marks a small danger disc', () => {
     assert.equal(danger.count(fall.ctx), 1)
     assert.ok(lines.includes('danger: fall death marked'))
     const mob = deathBot(CELL, { lastHostileSnap: { count: 1, name: 'zombie', dist: 2 } })
-    quiet(() => handleDeath(mob.bot, null))
-    assert.equal(danger.count(mob.ctx), 0)
+    const mobLines = quiet(() => handleDeath(mob.bot, null))
+    assert.equal(danger.count(mob.ctx), 1, 'a mob death marks its own wide disc')
+    assert.equal(mob.ctx.danger.spots[0].fall, undefined)
+    assert.ok(mobLines.includes('danger: mob death marked'))
   })
 
   it('the fall disc reaches the path cost (v2 dangerDiscs); a plain pit mark does not', () => {
@@ -105,5 +107,23 @@ describe('neuc.65.6 fall death marks a small danger disc', () => {
       memory.restore({ username: 'MemBot', spawnPoint: { x: 0, y: 64, z: 0 } }, ctx2, file, now)
       assert.deepEqual(ctx2.danger.spots.map((s) => [s.r, s.fall]), [[danger.FALL_RADIUS, true]])
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('prod 2026-11-15 bot3: a mob death marks a MOB_RADIUS disc on the path cost', () => {
+  const CAVE = { x: -184.5, y: 56, z: 177.5 }
+  it('marks only with a hostile; the disc steers A*/Baritone and bans explore picks', () => {
+    const none = deathBot(CAVE)
+    assert.equal(danger.markMobDeath(none.bot, none.ctx, 0), false)
+    const { bot, ctx } = deathBot(CAVE)
+    assert.equal(danger.markMobDeath(bot, ctx, 2), true)
+    assert.equal(ctx.danger.spots[0].r, danger.MOB_RADIUS)
+    assert.equal(danger.covers(ctx, { x: CAVE.x + 15, z: CAVE.z }), true)
+    const m = { getNeighbors: () => [{ x: -180, y: 56, z: 177, cost: 1 }, { x: -150, y: 56, z: 177, cost: 1 }] }
+    danger.addPathCost(m, ctx, { entity: { position: { x: -120, y: 70, z: 177 } }, pathfinder: { goal: null } })
+    assert.deepEqual(m.dangerDiscs({ x: -120, z: 177 }, null), [{ x: CAVE.x, z: CAVE.z, lim: danger.MOB_RADIUS }])
+    const ns = m.getNeighbors({})
+    assert.equal(ns[0].cost, 1 + danger.PATH_COST)
+    assert.equal(ns[1].cost, 1)
   })
 })
