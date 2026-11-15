@@ -252,7 +252,8 @@ function stall(bot, st, missing, tail) {
     })
     console.log(`build-stall-diagnostic ${st.wire} placed=${st.placed} missing=${st.missing} sampleAgeMs=${age == null ? 'unknown' : age} snapshot=${JSON.stringify(snapshot)} missingSample=${JSON.stringify(samples)}`)
   } catch (_) { /* stall-site line best-effort */ }
-  st.settle(st.reject, new Error('build-stall'))
+  // nopath marks a builder that never found a path (callers place per-cell).
+  st.settle(st.reject, Object.assign(new Error('build-stall'), { nopath: / nopath$/.test(tail) }))
 }
 
 function release(bot) {

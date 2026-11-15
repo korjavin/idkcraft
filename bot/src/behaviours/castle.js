@@ -2010,6 +2010,11 @@ function deferTrap(bot, ctx, c) {
   return true
 }
 
+function reachable(bot, c) {
+  const bp = bodyPos(bot)
+  return !!bp && Math.hypot(bp.x - (c.x + 0.5), (bp.y + 1.6) - (c.y + 0.5), bp.z - (c.z + 0.5)) <= build.PLACE_REACH
+}
+
 function placeCell(bot, ctx, st, c, item, now) {
   const p = new Vec3(c.x, c.y, c.z)
   // The door is placed from the entrance apron, so the bot ends OUTSIDE
@@ -2029,8 +2034,12 @@ function placeCell(bot, ctx, st, c, item, now) {
     // the walkable stances behind a stair step; the server checks the click
     // distance only, so a pane approach drops LOS (far() still gates reach).
     : new goals.GoalPlaceBlock(p, bot.world, { range: build.PLACE_RANGE, LOS: !(c.idx >= blueprint.DECOR_BASE) }))) return
+  // Already in reach with a face to click (prod 2026-11-15: cells 1 block
+  // from the feet, goal 'calculating' forever, isMoving latched): place from
+  // here, never wait on a path to a cell we can touch.
+  const here = !ent && !stand && !c.wall && c.kind !== 'door' && c.kind !== 'stairs' && reachable(bot, c) && !!build.findRef(bot, p)
   let moving = false
-  try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  try { moving = !here && bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
   if (ent) {
     // Door only from the apron itself (revmux 02): reach alone would let a
@@ -2838,6 +2847,16 @@ function castleBuilderBatch(bot, ctx, st, c) {
             ctx.castleBuildFlight = false
             return
           }
+          // Pathless stall (prod 2026-11-15 bot3: 1 plank 1 block from the
+          // feet, builder nopath, failed:build-stall x9/h): the per-cell path
+          // places from where it stands against any solid face (placeCell),
+          // else approaches; its far()/no-ref strikes retire what never lays.
+          if (err.nopath) {
+            ctx.castleBatchOff = Date.now() + BATCH_OFF_MS
+            try { console.log(`castle builder ${name}: nopath, per-cell for ${BATCH_OFF_MS / 60000} min`) } catch (_) { /* log best-effort */ }
+            ctx.castleBuildFlight = false
+            return
+          }
         }
         settleFail(err && err.message === 'build-stall' ? 'build-stall' : 'build-failed')
       },
@@ -3135,3 +3154,4 @@ module.exports.RECOVERY_HOOKS = RECOVERY_HOOKS
 module.exports.peek = peek // test seam: the arbiter's next cell (castle-scale resume)
 module.exports.castleBuilderBatch = castleBuilderBatch
 module.exports.pick = pick
+module.exports.placeCell = placeCell

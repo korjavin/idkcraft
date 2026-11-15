@@ -67,6 +67,7 @@ function mockBot(world, { items = KIT, withBuilder = true, buildScript = 'ok' } 
     bot.buildCells = async (name, origin, cells, opts) => {
       calls.builds.push({ name, origin, cells: cells.map((c) => ({ ...c })), forbid: opts && opts.forbid })
       if (buildScript === 'stall') throw new Error('build-stall')
+      if (buildScript === 'nopath') throw Object.assign(new Error('build-stall'), { nopath: true })
       if (buildScript === 'stall-spent') { // the pack ran dry mid-flight, then the watchdog fired
         for (let i = items.length - 1; i >= 0; i--) if (items[i].name === 'cobblestone') items.splice(i, 1)
         throw new Error('build-stall')
@@ -283,6 +284,41 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     assert.equal(bot.calls.builds.length, 1)
     assert.equal(ctx.stepStatus, 'failed:build-stall')
     assert.equal(ctx.castleBuildFlight, false)
+  })
+
+  it('a pathless stall hands the castle to the per-cell path instead of failing the step (prod 2026-11-15)', async () => {
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    // The highest wall-top cell: a stall there no longer fails the castle.
+    const c = plan.filter((o) => o.kind === 'planks' || o.kind === 'stone').sort((a, b) => b.y - a.y)[0]
+    const world = makeWorld()
+    paintAll(world, { except: (o) => o === c })
+    const bot = mockBot(world, { buildScript: 'nopath' })
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3, blocked: {} } }
+    assert.ok(castle.castleBuilderBatch(bot, ctx, ctx.castle, c), 'batch fired')
+    await settle()
+    await run(bot, ctx, 4)
+    assert.equal(bot.calls.builds.length, 1, 'one batch, then per-cell')
+    assert.ok(ctx.castleBatchOff > Date.now(), 'nopath stall goes per-cell')
+    assert.ok(!(ctx.stepStatus || '').startsWith('failed:'), `step keeps running, got ${ctx.stepStatus}`)
+  })
+
+  it('an in-reach overhang or wall-top cell lays per-cell while the path latch never drops', async () => {
+    const world = makeWorld()
+    const x = SITE.x + 50; const z = SITE.z + 50
+    world.set(x, 70, z, 'cobblestone') // a lone block: the overhang hangs off its side, air under it
+    const bot = mockBot(world)
+    bot.pathfinder.isMoving = () => true
+    bot.pathfinder.setGoal = () => {}
+    bot.entity.position = { x: x - 1.5, y: 69, z: z + 0.5 }
+    const ctx = {}
+    const st = { site: { ...SITE }, rot: 0, blocked: {} }
+    const over = { x: x + 1, y: 70, z, idx: 1, kind: 'stone' }
+    for (let i = 0; i < 2; i++) { castle.placeCell(bot, ctx, st, over, { name: 'cobblestone' }, Date.now()); await settle() } // tick 1 issues the approach
+    assert.deepEqual(bot.calls.places[0], { x: x + 1, y: 70, z }, 'overhang laid against the side face')
+    // the next course up, above the head, on the laid overhang
+    const behind = { x: x + 1, y: 71, z, idx: 2, kind: 'stone' }
+    for (let i = 0; i < 2; i++) { castle.placeCell(bot, ctx, st, behind, { name: 'cobblestone' }, Date.now()); await settle() }
+    assert.deepEqual(bot.calls.places[1], { x: x + 1, y: 71, z }, 'wall-top cell laid on the course below')
   })
 
   it('a starved batch with the kind spent fails the fetch word and releases the flight (core-9)', async () => {
