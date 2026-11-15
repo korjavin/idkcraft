@@ -1803,6 +1803,8 @@ function failHolds(ctx, name, text, bot) {
     // gated kind flips, so the kind — not the text — decides here).
     // revmux 02 core-1: consult the kinds map when present.
     if (name === 'castlefetch' && sf) {
+      // A held kind's acquire leg is the way out of the hold, never held by it.
+      try { const d = require('./behaviours/castlefetch').demand(bot, ctx); if (d && d.acquire) return false } catch (_) { /* hold below */ }
       try {
         const cw = ctx && ctx.castleWord
         const wkind = cw && typeof cw.kind === 'string' && cw.kind ? cw.kind : null

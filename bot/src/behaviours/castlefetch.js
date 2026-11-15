@@ -362,7 +362,7 @@ function stampFailKindSite(bot, ctx, kind, status) {
 // hold), a live hold window, no same-day park (dlpo owns that), and an
 // UNTRIED chest the hop leg can actually walk to (else the hop leg would end
 // at once, every tick; tried chests are remembered on the entry, R2).
-function hopDue(bot, ctx, kind, worldOnly = false) {
+function hopDue(bot, ctx, kind) {
   try {
     if (!kind || !(kind in FETCH)) return false
     if (owedMoved(bot, ctx)) return false
@@ -386,7 +386,6 @@ function hopDue(bot, ctx, kind, worldOnly = false) {
     // klh2 R1 F2: no legacy branch — kind-stamped failures always carry a
     // kinds map (revmux 02 core-1); kindless records never hop.
     if (!hasSite) return false
-    if (worldOnly) return true // world site held, chest not asked
     // A chest candidate must exist or the hop leg ends at once (tick churn).
     // Temp leg state: pickChest only reads tried/dry against it, discarded.
     if (!pickChest(bot, ctx, { chestTried: new Set(hopTried || []) }, kind)) return false
@@ -491,12 +490,14 @@ function demand(bot, ctx) {
     const short = Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
     if (short <= 0) return null
     if (!blocked && hopDue(bot, ctx, kind)) return { kind, word, short, hop: true }
-    if (!blocked && !hopDue(bot, ctx, kind, true)) return null // a craft/pack hold keeps resting
     const ah = ctx && ctx.acquireHeld && ctx.acquireHeld[kind]
     // stone: its world stage already is acquire's block mine (same ground);
     // banner/stairs keep their own rules (beds first, 8njf).
     if (kind === 'stone' || kind === 'banner' || kind === 'stairs' || !acquireItem(bot, kind)) return null
     if (typeof ah === 'number' && Date.now() - ah <= require('../budget').CASTLEFETCH_RETRY_MS) return null
+    // Any hold (world site, unreachable chest, craft/pack, day park) with no
+    // chest hop ends here: acquire is the one generic rung (prod 2026-11-15
+    // bot3: a chest-noPath planks hold rested forever, 0 acquire lines).
     return { kind, word, short, acquire: true }
   }
   // klh2: the window parks the kind (kind-wide, as before klh2) — when the
@@ -3449,6 +3450,7 @@ module.exports.PIT_DEPTH = PIT_DEPTH
 module.exports.PIT_ROOM = PIT_ROOM
 module.exports.digTick = digTick
 module.exports.demand = demand
+module.exports.acquireItem = acquireItem
 module.exports.holdFor = holdFor
 module.exports.hopDue = hopDue
 module.exports.isParked = isParked
