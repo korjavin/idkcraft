@@ -40,6 +40,7 @@ test('held kind with no known chest: castlefetch hands acquire() the item and re
     const d = castlefetch.demand(bot, ctx)
     assert.strictEqual(d.acquire, true)
     castlefetch(bot, ctx, null, {})
-    assert.deepStrictEqual(calls, [['oak_log', 5 + d.short]])
+    assert.strictEqual(calls.length, 1); assert.strictEqual(calls[0][0], 'oak_log')
+    assert.ok(calls[0][1] >= 5 + d.short, 'a bulk trip: at least the short, up to the castle remainder') // acquire-bulk.test.js pins the remainder
   } finally { acq.acquire = orig }
 })

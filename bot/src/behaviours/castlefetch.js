@@ -453,12 +453,14 @@ function acquireItem(bot, kind) {
 function acquireTick(bot, ctx, f, d) {
   const item = acquireItem(bot, d.kind)
   if (!item) return false
-  if (!f.acquire) f.acquire = { item, n: countItems(bot, (x) => x === item) + d.short }
+  // Bulk trip: once at a source, harvest the castle's whole remainder of the kind (pack-room capped), not one batch.
+  if (!f.acquire) f.acquire = { item, n: countItems(bot, (x) => x === item) + farLoad(bot, ctx, d.kind, d.short, true) }
   // Any variant of the item the kind lays serves (birch planks for oak).
   const alts = require('../sources').family(f.acquire.item).filter((i) => blueprint.matches(d.kind, i))
   const r = acquireMod.acquire(bot, ctx, f.acquire.item, f.acquire.n, [], alts)
   if (r === 'running') return true
-  if (r === 'done' && !f.acquireDone) { f.acquireDone = true; f.craftOut = false; return true } // the craft rung takes it next tick
+  // A pack that filled mid-harvest ends the trip with what it holds: the craft/lay rungs take it.
+  if ((r === 'done' || (r === 'failed:pack-full' && countItems(bot, (x) => alts.includes(x)) > 0)) && !f.acquireDone) { f.acquireDone = true; f.craftOut = false; return true } // the craft rung takes it next tick
   try { console.log(`castlefetch ${d.kind}: acquire ${r}`) } catch (_) { /* log best-effort */ }
   if (d.acquire && r !== 'done') ctx.acquireHeld = { ...(ctx.acquireHeld || {}), [d.kind]: Date.now() }
   return false
@@ -3450,6 +3452,7 @@ module.exports = castlefetch
 module.exports.LEG_MAX_MS = LEG_MAX_MS
 module.exports.MINE_BATCH = MINE_BATCH
 module.exports.pickChest = pickChest
+module.exports.acquireTick = acquireTick
 module.exports.noteStoneChest = noteStoneChest
 module.exports.markChestBarren = markChestBarren
 module.exports.sweepTick = sweepTick

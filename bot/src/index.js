@@ -1494,6 +1494,7 @@ async function waitForWorkerLeave(bot, { waitMs = WORKER_LEAVE_WAIT_MS, pollMs =
   } catch (_) { /* tab watch best-effort */ }
 }
 
+const SESSION_BARREN = {} // castlefetch barren-chest marks per bot name, kept for the process
 function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName, idleTickMs = IDLE_TICK_MS, brainEngine = '', autonomous = false, createBot = (opts) => mineflayer.createBot(opts), pingFn = require('minecraft-protocol').ping, bodyTag = '' }) {
   return new Promise((resolve) => {
     const bot = createBot({
@@ -1510,6 +1511,8 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
       bot, brain, tickMs, idleTickMs, followName, leaveAfterMs, brainEngine, autonomous,
       onLeave: () => { void confirmLeave() }
     })
+    // prod 2026-11-15 bot3: a chest found empty stays barren across reconnects (the ticker ctx is per connection).
+    if (bot._tickerCtx) bot._tickerCtx.castleChestBarren = SESSION_BARREN[username] || (SESSION_BARREN[username] = {})
     // The streak only proves nobody is *visible*. Re-check the world-wide
     // player count before quitting: a player online-but-far would otherwise
     // flap join/leave every grace period. Standing down re-arms the streak.

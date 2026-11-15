@@ -435,6 +435,14 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleChestBarren": {
+    "writers": [
+      "src/behaviours/castlefetch.js",
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js",
+    "note": "prod 2026-11-15: { '<kind>@x,y,z': ms } bank chests a draw got 0 of the kind from; pickChest skips them CHEST_BARREN_MS; stockpile drops own-chest keys on a castle-material deposit; index.js keeps the map per bot name across reconnects."
+  },
   "castleChestDry": {
     "writers": [
       "src/behaviours/castlefetch.js",
