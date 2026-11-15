@@ -459,6 +459,13 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "enclosedEscapes": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/enclosed.js"
+    ],
+    "owner": "src/enclosed.js"
+  },
   "castleDug": {
     "writers": [
       "src/behaviours/castle.js"
@@ -1694,6 +1701,7 @@
       "src/behaviours/home.js",
       "src/behaviours/recover.js",
       "src/behaviours/retreat.js",
+      "src/enclosed.js",
       "src/index.js",
       "src/stuck.js"
     ],

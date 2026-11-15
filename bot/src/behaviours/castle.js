@@ -37,6 +37,7 @@ const cellRecovery = require('./castlerecovery')
 const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
 const { stepDone, stepFailed, stepGen, failReason } = require('../step')
 const worker = require('../worker')
+const enclosed = require('../enclosed')
 
 const STRIKES = 3
 const BACKOFF_BASE_MS = 30000
@@ -1767,9 +1768,19 @@ function progress(bot, st, cells, ctx) {
     }
     cd.lastScan = nowMs
   } catch (_) { /* clock best-effort: the gap check stands down */ }
+  // Cells our own enclosed escape opened are re-lays, not damage: no danger flag.
+  const esc = new Set((ctx.enclosedEscapes || []).map((c) => `${c.x},${c.y},${c.z}`))
+  const mine = lost.filter((c) => esc.has(`${c.x},${c.y},${c.z}`))
+  if (mine.length) {
+    const k = new Set(mine.map((c) => `${c.x},${c.y},${c.z}`))
+    ctx.enclosedEscapes = ctx.enclosedEscapes.filter((c) => !k.has(`${c.x},${c.y},${c.z}`))
+    console.log(`castle relay escape=${mine.length}`)
+  }
   if (!gapAway && lost.length) {
-    console.log(`castle damage lost=${lost.length}`)
-    ctx.castleDangerAt = Date.now()
+    if (lost.length > mine.length) {
+      console.log(`castle damage lost=${lost.length - mine.length}`)
+      ctx.castleDangerAt = Date.now()
+    }
     ctx.castleCursor = 0 // re-lay: the lost cells may sit below the cursor
     ctx.castleScanAt = 0
   }
@@ -1988,6 +1999,17 @@ async function placeStairs(bot, ref, c) {
   return bot.placeBlock(ref.ref, ref.face)
 }
 
+// Never seal ourselves in: a placement that would close the bot's walkable
+// pocket waits while the bot walks to the nearest stance outside it.
+function deferTrap(bot, ctx, c) {
+  const exit = c.kind !== 'door' && enclosed.trapsSelf(bot, c)
+  if (!exit) return false
+  console.log(`castle defer cell=${c.x},${c.y},${c.z} traps-self exit=${exit.x != null ? `${exit.x},${exit.y},${exit.z}` : 'none'}`)
+  // Owned as the castle goal so approach() does not read it as borrowed and walk back in.
+  if (exit.x != null && bot.pathfinder) bot.pathfinder.setGoal(ctx.castleGoal = new goals.GoalBlock(exit.x, exit.y, exit.z))
+  return true
+}
+
 function placeCell(bot, ctx, st, c, item, now) {
   const p = new Vec3(c.x, c.y, c.z)
   // The door is placed from the entrance apron, so the bot ends OUTSIDE
@@ -2026,6 +2048,7 @@ function placeCell(bot, ctx, st, c, item, now) {
   if (flat.cellOccupiedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
   if (flat.cellOccupiedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
   if (far(bot, ctx, st, c, build.PLACE_REACH, now)) return
+  if (deferTrap(bot, ctx, c)) return // goal idx kept: no re-approach back into the pocket
   let ref = null
   if (c.kind === 'door') {
     try {
