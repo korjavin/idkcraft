@@ -281,3 +281,45 @@ describe('klh2 same-kind tick hop', () => {
     assert.ok(d && d.kind === 'stone' && !d.hop, `a full leg retries: ${JSON.stringify(d)}`)
   })
 })
+
+// Supply ladder (prod 2026-11-15 bot3: 12 hops/h, 0 acquire lines): one chest
+// hop per kind per window, then acquire — even while the world site stays parked.
+describe('supply ladder: hop once, then acquire', () => {
+  const realFact = castleMod.menuFact
+  afterEach(() => { castleMod.menuFact = realFact })
+
+  it('chest hop tried (dry, failed or preempted) -> the next demand is acquire, site still parked', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'planks', left: 64 }; return 'planks-none' }
+    const bot = makeBot()
+    const ctx = withChest({ castle: castleState() })
+    failWorldAt(bot, ctx, 'planks', 'failed:castlefetch-no-trees')
+    assert.equal(fetch.demand(bot, ctx).hop, true, 'first rung: the chest hop')
+    ctx.supplyHop = { planks: Date.now() } // the hop leg started (tick stamps it)
+    // the hop failed on the path: a fresh record drops hopTried, the chest stays a candidate
+    failWorldAt(bot, ctx, 'planks', 'failed:castlefetch-unreachable')
+    assert.equal(fetch.hopDue(bot, ctx, 'planks'), true, 'the chest is still a hop candidate')
+    assert.equal(fetch.holdFor(bot, ctx, 'planks'), true, 'the world site stays parked')
+    for (let i = 0; i < 5; i++) {
+      const d = fetch.demand(bot, ctx)
+      assert.ok(d && d.acquire === true && !d.hop, `tick ${i}: acquire, not another hop: ${JSON.stringify(d)}`)
+    }
+  })
+
+  it('hop window expired -> chests get one more try', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'planks', left: 64 }; return 'planks-none' }
+    const bot = makeBot()
+    const ctx = withChest({ castle: castleState() })
+    failWorldAt(bot, ctx, 'planks', 'failed:castlefetch-no-trees')
+    ctx.supplyHop = { planks: Date.now() - require('../src/budget').CASTLEFETCH_RETRY_MS - 1 }
+    assert.equal(fetch.demand(bot, ctx).hop, true)
+  })
+
+  it('a running acquire leg off-site keeps the body: gocastle not feasible by day', () => {
+    const bot = makeBot({ at: pos(SITE.x + 300, 64, SITE.z) })
+    const ctx = { castle: castleState(), step: 'castlefetch', stepStatus: 'running', castleFetch: { kind: 'planks', acquire: { item: 'oak_planks', n: 64 } } }
+    assert.equal(goal.displacedFromCastle(bot, ctx), true, 'displaced')
+    assert.equal(goal.MENU.gocastle.feasible({ time: 'day' }, bot, ctx), false, 'no walk back mid-acquire')
+    ctx.castleFetch = { kind: 'planks', hop: true }
+    assert.equal(goal.MENU.gocastle.feasible({ time: 'day' }, bot, ctx), true, 'a non-acquire leg still walks back')
+  })
+})

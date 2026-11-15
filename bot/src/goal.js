@@ -731,6 +731,8 @@ function gocastleGo(facts, bot, ctx) {
     // respawn is full-hp anyway; the gate only bites a walk that has
     // already gone bad).
     if (lowHpGated(bot, facts, ctx, true) && threatNear(bot)) return false
+    // A live acquire leg (pack still short: demand ends the leg once covered) keeps the body by day.
+    if (facts && facts.time === 'day' && ctx.step === 'castlefetch' && ctx.stepStatus === 'running' && ctx.castleFetch && ctx.castleFetch.acquire) return false
     const t = facts && facts.time
     if (t === 'day') return true
     return t === 'dusk' && castleFirst(ctx) && needsClimb(bot) // the tidy trip is day only
@@ -2998,7 +3000,9 @@ function siteFarFor(bot, ctx, facts, prev, status, finished, commitStep) {
       !!f && ((!!f.farCandidate && typeof f.farCandidate.x === 'number') ||
         // A chest trip off the site is the leg's own destination too (owner
         // 2026-11-13: prod bot3 ping-ponged castlefetch<->gocastle every 15 s).
-        (!!f.chest && !!f.chest.at))
+        (!!f.chest && !!f.chest.at) ||
+        // An acquire leg mines/explores wherever the source is; the leg ends once the short is covered.
+        !!f.acquire)
     siteFarWalk = !finished && (prev === 'castle' || prev === 'castlefetch') &&
       !farLeg && commitStep !== prev &&
       !!MENU.gocastle.feasible(facts, bot, ctx)
