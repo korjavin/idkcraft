@@ -2689,6 +2689,7 @@ function castleBuilderBatch(bot, ctx, st, c) {
   // it falls back to the ordinary backoff ladder under a distinct why, so
   // a transient cannot permanently retire a whole course, while a truly
   // dead layer still retires through it.
+  let starvedKind = null // set by strikeMisses: a kind the pack ran out of
   const strikeMisses = (opts = {}) => {
     const starvedToo = opts.starvedToo !== false
     try {
@@ -2700,12 +2701,21 @@ function castleBuilderBatch(bot, ctx, st, c) {
         if (o.y < lowY) lowY = o.y
       }
       const set = []
+      // Material budget per kind (prod 2026-11-15 bot3: planks=few, 4307
+      // build-miss-wide on cells the pack could never fill): only as many
+      // cells as the pack can fill (plus what flight spent, starvedToo) are
+      // refusals; the rest is a material shortfall -> no-<kind>, never a hole.
+      const budget = {}
+      let short = null
       for (const o of flightCells) {
         if (done(bot, o)) continue
         if (o.y !== lowY) continue
-        if (!starvedToo && usable(bot, o.kind, ctx) <= 0) continue
+        if (!(o.kind in budget)) budget[o.kind] = usable(bot, o.kind, ctx) + (starvedToo ? 1 : 0)
+        if (budget[o.kind] <= 0) { short = short || o.kind; continue }
+        budget[o.kind]--
         set.push(o)
       }
+      if (short) starvedKind = short
       if (set.length > STRIKE_WIDE_CAP) {
         // A batch-wide wedge (owner 2026-11-13, prod bot3: 40/44 path calcs
         // failed on grass-topped plank cells) hands the castle to the
@@ -2788,6 +2798,8 @@ function castleBuilderBatch(bot, ctx, st, c) {
           // Wedged -> per-cell spell: keep the castle step running on the
           // dig+place path instead of failing it to explore/fun.
           if (strikeMisses()) { ctx.castleBuildFlight = false; return }
+          // Starved cells are the fetch word (castlefetch -> acquire), not holes.
+          if (starvedKind) { console.log(`castle builder ${name}: short of ${starvedKind}, fetching`); settleFail(`no-${starvedKind}`); return }
           // A batch that laid cells then stalled on its unreachable rest
           // (prod 2026-11-14: 10 build-stalls/30 min on y78-79 wall-top planks
           // after a growing batch, each failing the castle into equip/gather):

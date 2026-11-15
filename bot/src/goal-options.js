@@ -433,13 +433,20 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
   if (kind === 'castle') {
     let d = null
     try { d = require('./behaviours/castlefetch').demand(bot, ctx) } catch (_) { /* no demand */ }
-    if (d && d.acquire && registered('castlefetch')) {
-      const item = require('./behaviours/castlefetch').acquireItem(bot, d.kind)
+    // Offered for any owed fetch kind, not only a held one: a chest/source
+    // leg that keeps failing (noPath, unreachable) must not hide it.
+    const cw = ctx && ctx.castleWord
+    const k = (d && d.kind) || (cw && cw.kind) || null
+    const cf = require('./behaviours/castlefetch')
+    const item = k && k in cf.FETCH && k !== 'stone' && k !== 'banner' && k !== 'stairs' ? cf.acquireItem(bot, k) : null
+    if (item && registered('castlefetch') && !probeFeasible(bot, ctx, 'castlefetch', { acquire: k })) {
+      skip('acquire', `castlefetch not feasible for ${k}`)
+    } else if (item && registered('castlefetch')) {
       out.push({
-        id: `acquire-${item}`, step: 'castlefetch', unlock: null,
-        criterion: `acquire ${d.short} ${item} from scratch: craft from inputs, mine the source block, explore out to 400 if none is known (+castle material, unblocks laying)`,
+        id: `acquire-${item}`, step: 'castlefetch', unlock: { acquire: k },
+        criterion: `acquire ${item} from scratch: craft from inputs, mine the source block, explore out to 400 if none is known (+castle material, unblocks laying)`,
       })
-    } else skip('acquire', d ? 'castle kind has a chest or source leg' : 'no held castle demand')
+    } else skip('acquire', k ? `no acquire path for ${k}` : 'no castle material owed')
   }
 
   // castlefetch-far: ONLY with a demand-matched candidate past DIG_RADIUS

@@ -38,3 +38,21 @@ test('a fresh acquire failure rests the kind (bounded, no tick churn)', () => {
   ctx.acquireHeld = { planks: Date.now() }
   assert.strictEqual(castlefetch.demand(bot, ctx), null)
 })
+
+test('a chosen acquire-<item> runs acquire even when the kind has a live chest/source leg', () => {
+  const acq = require('../src/behaviours/acquire')
+  const orig = acq.acquire
+  const calls = []
+  acq.acquire = (bot, ctx, item) => { calls.push(item); return 'running' }
+  try {
+    const { bot, ctx } = prodState()
+    delete ctx.stepFail // no hold: demand serves the chest/source leg
+    assert.ok(!(castlefetch.demand(bot, ctx) || {}).acquire, 'unchosen: the ordinary leg')
+    const ids = goalOptions(bot, ctx, 'castle', []).map((o) => o.id)
+    assert.ok(ids.includes('acquire-oak_planks'), `offered without a hold: ${ids}`)
+    ctx.goal = { id: 'g', generation: 1, commit: { goalId: 'g', generation: 1, step: 'castlefetch', until: Date.now() + 60000, unlock: { acquire: 'planks' } } }
+    assert.ok(castlefetch.demand(bot, ctx).acquire, 'chosen: the acquire leg')
+    castlefetch(bot, ctx, null, {})
+    assert.deepStrictEqual(calls, ['oak_planks'])
+  } finally { acq.acquire = orig }
+})

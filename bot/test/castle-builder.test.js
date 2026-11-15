@@ -67,6 +67,10 @@ function mockBot(world, { items = KIT, withBuilder = true, buildScript = 'ok' } 
     bot.buildCells = async (name, origin, cells, opts) => {
       calls.builds.push({ name, origin, cells: cells.map((c) => ({ ...c })), forbid: opts && opts.forbid })
       if (buildScript === 'stall') throw new Error('build-stall')
+      if (buildScript === 'stall-spent') { // the pack ran dry mid-flight, then the watchdog fired
+        for (let i = items.length - 1; i >= 0; i--) if (items[i].name === 'cobblestone') items.splice(i, 1)
+        throw new Error('build-stall')
+      }
       if (buildScript === 'preempted') throw new Error('build-preempted')
       if (buildScript === 'starve') return { placed: 0, missing: cells.length }
       if (buildScript === 'starve-spent') { items.length = 0; return { placed: 0, missing: cells.length } }
@@ -579,6 +583,23 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     }
     const left = Object.values(ctx.castle.batchStrikes || {})
     assert.ok(left.length > 0 && left.every((n) => n <= 1), `strikes reset by growth: ${JSON.stringify(ctx.castle.batchStrikes)}`)
+  })
+
+  it('a stall on cells the pack ran out of is a material shortfall (no-<kind>), never build-miss-wide holes', async () => {
+    // prod 2026-11-15 bot3: planks=few, 4307 build-miss-wide, holes 579 -> 725.
+    const world = makeWorld()
+    const plan = blueprint.absPlan(SITE, 0, 3).cells
+    const open = plan.filter((c) => c.kind === 'stone' && c.dy === 0).slice(0, castle.STRIKE_WIDE_CAP + 4)
+    paintAll(world, { except: (c) => open.includes(c) })
+    const bot = mockBot(world, { items: KIT.map((i) => ({ ...i })), buildScript: 'stall-spent' })
+    bot.entity.position = { x: open[0].x + 2.5, y: open[0].y, z: open[0].z + 0.5 }
+    const ver = blueprint.blueprintOf(3).version
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
+    await run(bot, ctx, 1)
+    assert.ok(bot.calls.builds.length > 0, 'a batch flew')
+    const wide = open.filter((c) => { const e = (ctx.castle.blocked || {})[`${ver}:${c.idx}`]; return e && e.why === 'build-miss-wide' })
+    assert.equal(wide.length, 0, 'no starved cell becomes a wide hole')
+    assert.equal(ctx.stepStatus, 'failed:no-stone', 'the shortfall is the fetch word')
   })
 
   it('a batch-wide wedge rides the backoff ladder, never the one-shot', async () => {
