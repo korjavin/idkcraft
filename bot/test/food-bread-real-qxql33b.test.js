@@ -85,13 +85,13 @@ it('prod V2b inventory: 4 logs, no planks/table, 86 wheat -> bread, <=1 log spen
 })
 
 // Codex review #757 (2): the gate must agree with craftany's own planner.
-it('2 oak + 2 birch planks: craftany cannot fund a table, so bread is not offered', () => {
+it('2 oak + 1 birch planks: craftany cannot fund a table, so bread is not offered', () => {
   process.env.BOT_BODY = 'baritone'
   placed = false
   const bot = mkBot()
   bot.registry.itemsByName.birch_planks = { id: 6, name: 'birch_planks' }
   bot._names[6] = 'birch_planks'
-  bot._inv = [{ name: 'oak_planks', count: 2 }, { name: 'birch_planks', count: 2 }, { name: 'wheat', count: 86 }]
+  bot._inv = [{ name: 'oak_planks', count: 2 }, { name: 'birch_planks', count: 1 }, { name: 'wheat', count: 86 }]
   const ctx = { work: true, step: 'foodRecovery' }
   const craftany = require('../src/behaviours/craftany')
   assert.equal(craftany.planCraft(bot, ctx, ['bread'], 1).ok, false, 'craftany refuses')

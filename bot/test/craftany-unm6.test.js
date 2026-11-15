@@ -53,9 +53,10 @@ describe('craftany table tries (unm6)', () => {
   })
 })
 
-describe('table wood is one wood (idkcraft-stairs)', () => {
-  it('2 oak + 2 spruce planks fund no table; 4 of one wood or any log does', () => {
-    assert.equal(craftany.tableWood({ oak_planks: 2, spruce_planks: 2, cobblestone: 64 }), false)
+describe('table wood is any planks mix (#planks tag)', () => {
+  it('2 oak + 2 spruce planks fund a table; 3 planks or a stripped log do not', () => {
+    assert.equal(craftany.tableWood({ oak_planks: 2, spruce_planks: 2, cobblestone: 64 }), true)
+    assert.equal(craftany.tableWood({ oak_planks: 2, spruce_planks: 1, stripped_oak_log: 3 }), false)
     assert.equal(craftany.tableWood({ oak_planks: 4 }), true)
     assert.equal(craftany.tableWood({ birch_log: 1 }), true)
   })

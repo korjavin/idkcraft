@@ -751,8 +751,8 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     fetch.deps.craftItem = () => ({ done: false, line: 'need a crafting table' })
     try {
       const mined = []
-      // Mixed planks (2+2) fund no table: the prod bot3 pack.
-      const bot = makeBot({ items: [...stairsPack(), { name: 'oak_planks', count: 2 }, { name: 'spruce_planks', count: 2 }] })
+      // 3 planks (any mix) fund no table.
+      const bot = makeBot({ items: [...stairsPack(), { name: 'oak_planks', count: 2 }, { name: 'spruce_planks', count: 1 }] })
       bot.equip = async (item) => { bot.heldItem = item }
       bot.mine = (names, count) => { mined.push(count); return new Promise(() => {}) }
       bot.entity.position = pos(500, 64, 500)
