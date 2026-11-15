@@ -91,7 +91,7 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     console.log = (m) => logs.push(String(m))
     try {
       for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + i) }
-      assert.ok(logs.includes('enclosed escape refused: no own-build doorway, no climb'))
+      assert.ok(logs.includes('enclosed escape refused: no breakable doorway, no climb'))
       assert.equal(blocks.get('3,64,7'), 'oak_planks')
     } finally { console.log = orig }
   })
@@ -154,5 +154,58 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     assert.equal(ctx.castleDangerAt, undefined)
     assert.equal(ctx.castleCursor, 0, 'scan re-reads from 0: the cell is queued again')
     assert.deepStrictEqual(ctx.enclosedEscapes, [])
+  })
+  it('yard-protected natural dirt is a cheaper doorway than an own wall (prod 13:00 refused:protected)', async () => {
+    const { bot, ctx, blocks } = world()
+    blocks.set('2,64,8', 'dirt'); blocks.set('2,65,8', 'dirt')
+    const { denyReason } = require('../src/behaviours/util')
+    assert.equal(denyReason(bot, bot.blockAt({ x: 2, y: 64, z: 8 }), ctx), 'protected', 'work rules keep yard dirt')
+    const [first] = enclosed.pickExits(bot, ctx, { x: 3, y: 64, z: 8 })
+    assert.deepStrictEqual({ dx: first.dx, dz: first.dz }, { dx: -1, dz: 0 })
+    const log = console.log
+    console.log = () => {}
+    try {
+      for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + i) }
+      for (let t = 2000; t < 2006; t++) { enclosed.tick(bot, ctx, t); await flush() }
+    } finally { console.log = log }
+    assert.ok(!blocks.has('2,64,8') && !blocks.has('2,65,8'), 'dirt doorway dug')
+    assert.equal(blocks.get('3,64,7'), 'stone', 'own wall kept')
+    assert.equal(ctx.enclosedEscapes, undefined, 'nothing to re-lay')
+  })
+  it('roofed + scaffold: digs the roof cell over the head, then climbs', async () => {
+    const { bot, ctx, blocks } = world()
+    for (const [x, z] of [[4, 8], [2, 8], [3, 9]]) blocks.set(`${x},66,${z}`, 'bedrock')
+    blocks.set('3,66,8', 'dirt') // roof over the head (yard dirt: work-protected)
+    bot.inventory = { items: () => [{ name: 'dirt', count: 8 }] }
+    const goTo = bot.pathfinder.setGoal
+    bot.pathfinder.setGoal = (g) => { goTo(g); if (g && Number.isFinite(g.x) && g.y === 66) bot.entity.position = { x: g.x + 0.5, y: g.y, z: g.z + 0.5 } }
+    const orig = enclosed.pillar
+    enclosed.pillar = (b) => { const y = Math.floor(b.entity.position.y); blocks.set(`3,${y},8`, 'dirt'); b.entity.position = { x: 3.5, y: y + 1, z: 8.5 }; return 'done' }
+    const logs = []
+    const log = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + i) }
+      for (let t = 2000; t < 2020 && !logs.some((l) => l.includes('outcome=')); t++) { enclosed.tick(bot, ctx, t); await flush() }
+    } finally { console.log = log; enclosed.pillar = orig }
+    assert.ok(logs.some((l) => l.startsWith('enclosed escape mode=up broken=0 outcome=out')), logs.join('\n'))
+    assert.equal(blocks.get('3,64,7'), 'stone', 'own wall kept')
+  })
+  it('still stuck after a refusal: re-tries at the cooldown without new noPath targets; recover drops sidestep', () => {
+    const { bot, ctx } = world('oak_planks')
+    const logs = []
+    const log = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + i) }
+      ctx.lastPathStatus = null
+      ctx.stuck = true
+      enclosed.tick(bot, ctx, 2000) // inside the cooldown
+      enclosed.tick(bot, ctx, 1002 + enclosed.WINDOW_MS + 1)
+    } finally { console.log = log }
+    assert.equal(logs.filter((l) => l === 'enclosed at 3,64,8').length, 2)
+    const { RECOVER_MENU } = require('../src/behaviours/recover')
+    assert.equal(RECOVER_MENU.sidestep.feasible({ walls: 2 }, ctx), false, 'no shuffle while enclosed')
+    assert.equal(RECOVER_MENU.sidestep.feasible({ walls: 2 }, {}), true)
   })
 })

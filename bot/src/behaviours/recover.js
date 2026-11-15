@@ -1132,7 +1132,8 @@ function issuePillarPlace(bot, ctx, st) {
   // re-enables the pillar. A moat pit (y < site.y) is below the ring.
   // g0z.63: the apron of every known complete castle refuses alike.
   const cell = { x: fx, y: fy, z: fz }
-  if (ctx && ((ctx.castle && castle.yardRing(ctx.castle, cell)) || castle.inCastleApron(ctx, cell))) return 'place-protected'
+  // Enclosed (src/enclosed.js): getting out beats the yard-ring foothold rule.
+  if (ctx && !(ctx.enclosedUntil > Date.now()) && ((ctx.castle && castle.yardRing(ctx.castle, cell)) || castle.inCastleApron(ctx, cell))) return 'place-protected'
   // Equip first: mineflayer throws 'must be holding an item to place' on
   // an empty hand and the server refuses a held tool (prod 2026-09-27: 67
   // pillar_ups, 0 placed). Prefer the held stack: the fast trigger
@@ -2112,7 +2113,8 @@ const RECOVER_MENU = {
     verb: 'hopping the step',
   },
   sidestep: {
-    feasible: (facts, ctx) => facts.walls < 4 && !recoverBanned(ctx, 'sidestep'),
+    // Enclosed: a shuffle inside a sealed pocket never progresses (prod 2026-11-15).
+    feasible: (facts, ctx) => facts.walls < 4 && !recoverBanned(ctx, 'sidestep') && !(ctx && ctx.enclosedUntil > Date.now()),
     run: sidestepRun,
     verb: 'sidestepping',
   },
