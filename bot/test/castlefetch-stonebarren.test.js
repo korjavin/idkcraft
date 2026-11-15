@@ -34,3 +34,16 @@ describe('stone barren chests: legs go straight to mining', () => {
     assert.equal(ctx.castleStoneBarren.n, 0, 'a draw resets the count')
   })
 })
+
+describe('barren chests per kind (prod 2026-11-15)', () => {
+  it('a chest that gave 0 planks is skipped for planks 30 min, other kinds still draw', () => {
+    const ctx = ctxOf()
+    const c = fetch.pickChest(bot(), ctx, {}, 'planks')
+    assert.ok(c, 'no memory: chest picked')
+    fetch.markChestBarren(ctx, 'planks', c.k)
+    assert.equal(fetch.pickChest(bot(), ctx, {}, 'planks'), null, 'barren for planks')
+    assert.ok(fetch.pickChest(bot(), ctx, {}, 'stone'), 'stone still draws')
+    ctx.castleChestBarren[`planks@${c.k}`] -= 31 * 60 * 1000
+    assert.ok(fetch.pickChest(bot(), ctx, {}, 'planks'), 'expired after 30 min')
+  })
+})
