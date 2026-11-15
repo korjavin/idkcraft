@@ -23,6 +23,7 @@ const DISTINCT = 3
 const MOVED = 3
 const EPISODE_MS = 180000
 const LAYERS = 2 // own-build cell pairs tunnelled per direction
+const COLLECT_MS = 8000 // pick up a broken container's drops this long
 const MAX_OWN = 4 // own cells one escape may break, all directions together (prod 12:00: 20 torn up)
 const UP_MAX = 6 // pillar height the up leg may climb
 const TRAP_R = 8 // trapsSelf flood radius
@@ -58,17 +59,25 @@ function ownBuild(ctx, b) {
 function natural(name) {
   return NATURAL_SOLID.has(name) || CLEAR_FLORA.has(name) || /(_ore|_leaves)$/.test(name)
 }
-// null = diggable for the escape; 'own' = own-build cell (budgeted, re-laid);
-// 'nat' = protected-zone natural terrain; else a refusal.
+// Owner rule (2026-11-15): when enclosed nothing is refused for ownership:
+// null = free; 'nat' = protected-zone natural terrain; 'own' = own build
+// (budgeted, re-laid); 'foreign' = anyone's build; 'keep' = container/bed/
+// door. Only physics refuses: liquids, unbreakable, and the shared denyReason
+// hazards (gravity overhead, submerged, under-feet, trap).
+const UNBREAKABLE = /^(bedrock|barrier|end_portal_frame|end_portal|nether_portal|command_block|structure_block|jigsaw|reinforced_deepslate|light)$/
 function breakable(bot, ctx, b) {
   if (air(b)) return null
-  if (!b || KEEP.test(b.name) || /lava|water/.test(b.name)) return 'keep'
+  if (!b || /lava|water/.test(b.name)) return 'liquid'
+  if (UNBREAKABLE.test(b.name) || (typeof b.hardness === 'number' && b.hardness < 0)) return 'unbreakable'
+  if (KEEP.test(b.name)) return 'keep'
   const d = denyReason(bot, b, ctx)
   if (!d) return null
   if (d !== 'protected') return d
-  return ownBuild(ctx, b) ? 'own' : natural(b.name) ? 'nat' : d
+  return ownBuild(ctx, b) ? 'own' : natural(b.name) ? 'nat' : 'foreign'
 }
-const OK = (r) => !r || r === 'own' || r === 'nat'
+// Cost per cell, cheapest first; foreign builds and containers are the last resort.
+const COST = { null: 1, nat: 10, own: 100, foreign: 1000, keep: 10000 }
+const OK = (r) => String(r) in COST
 
 // Exit directions, best first: the first layer (both body cells) diggable or
 // own build, solid floor under it (never a drop), no lava; fewest own cells,
@@ -81,11 +90,10 @@ function pickExits(bot, ctx, feet) {
     const cells = [at(bot, x, feet.y, z), at(bot, x, feet.y + 1, z)]
     const v = cells.map((b) => breakable(bot, ctx, b))
     if (!v.every(OK) || !layerSafe(bot, x, feet.y, z, dx, dz)) continue
-    const own = v.filter((r) => r === 'own').length
-    const dig = cells.filter((b) => !air(b)).length
-    if (!dig) continue // already open: not the wall that traps us
+    if (cells.every(air)) continue // already open: not the wall that traps us
+    const cost = cells.reduce((a, b, i) => a + (air(b) ? 0 : COST[String(v[i])]), 0)
     const away = site ? -((site.x - feet.x) * dx + (site.z - feet.z) * dz) : 0
-    out.push({ dx, dz, score: own * 100 + dig * 10 - away })
+    out.push({ dx, dz, score: cost * 10 - away })
   }
   return out.sort((a, b) => a.score - b.score)
 }
@@ -112,7 +120,8 @@ function planUp(bot, ctx, feet) {
   const head = []
   for (let y = feet.y + 2; y <= feet.y + UP_MAX + 1; y++) {
     const b = at(bot, feet.x, y, feet.z)
-    head.push(air(b) ? 0 : OK(breakable(bot, ctx, b)) ? 1 : Infinity)
+    const r = air(b) ? 0 : breakable(bot, ctx, b)
+    head.push(r === 0 ? 0 : OK(r) ? COST[String(r)] : Infinity)
   }
   const cost = (h) => head.slice(0, h - feet.y).reduce((a, n) => a + n, 0)
   let best = null
@@ -235,6 +244,7 @@ function run(bot, ctx, s, feet, now) {
   }
   if (now - ep.start > EPISODE_MS) return finish('timeout')
   if (ep.digging) return true
+  if (ep.collect && collect(bot, ep, feet, walk)) return true
   if (ep.up) { if (ep.failed) { ep.failed = false; ep.up = null } else return runUp(bot, ctx, ep, feet, walk, finish) }
   if (ep.failed) { ep.failed = false; return nextDir('dig-error') }
   if (!ep.dirs.length) return finish('refused:no-door')
@@ -257,6 +267,18 @@ function run(bot, ctx, s, feet, now) {
   return dig(bot, ctx, ep, block, why)
 }
 
+// A broken container spills its items: walk over each drop near it first.
+function collect(bot, ep, feet, walk) {
+  const { c, until } = ep.collect
+  const drops = Object.values(bot.entities || {}).filter((e) => e && e.name === 'item' && e.position &&
+    Math.abs(e.position.x - c.x - 0.5) <= 3 && Math.abs(e.position.z - c.z - 0.5) <= 3 && Math.abs(e.position.y - c.y) <= 3)
+  if (!drops.length || Date.now() > until) { ep.collect = null; return false }
+  const d = drops[0].position
+  const x = Math.floor(d.x), y = Math.floor(d.y), z = Math.floor(d.z)
+  if (feet.x === x && feet.z === z) return true // standing on it: the server hands it over
+  return walk(x, y, z)
+}
+
 function dig(bot, ctx, ep, block, why) {
   ep.digging = true
   const c = block.position
@@ -266,6 +288,8 @@ function dig(bot, ctx, ep, block, why) {
       if (tool) await bot.equip(tool, 'hand')
       await bot.dig(block)
       ep.cells.push(c)
+      if (why === 'keep' || why === 'foreign') log(`enclosed escape broke ${why} ${block.name} at ${c.x},${c.y},${c.z}`)
+      if (why === 'keep' && /chest|barrel|shulker_box|furnace|smoker|hopper|dispenser|dropper/.test(block.name)) ep.collect = { c, until: Date.now() + COLLECT_MS }
       if (why === 'own') {
         ep.own++
         ctx.enclosedEscapes = (ctx.enclosedEscapes || []).slice(-63)
