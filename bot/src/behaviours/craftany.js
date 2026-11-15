@@ -126,6 +126,16 @@ function totalPlanks(pack) {
   return n
 }
 
+// Logs gear.opPlanks can turn into planks (<wood>_log with <wood>_planks;
+// stripped logs only go through planCraft's logVariants).
+function plankLogs(pack) {
+  let n = 0
+  for (const [name, c] of Object.entries(pack)) {
+    if (/_log$/.test(name) && !name.startsWith('stripped_')) n += c
+  }
+  return n
+}
+
 function totalLogs(pack) {
   let n = 0
   for (const [name, c] of Object.entries(pack)) {
@@ -138,7 +148,7 @@ function totalLogs(pack) {
 // planks/logs past the direct planks reserve, exact-wood planks from their
 // own logs (opPlanks burns the biggest stack — mixed-wood exact counts may
 // still fail honestly at execution, see nextOp). Raws close exact.
-function gapOf(needs, pack, times) {
+function gapOf(needs, pack, times, pooled) {
   const missing = []
   let sticksNeed = 0
   const planksDirect = new Map()
@@ -148,12 +158,22 @@ function gapOf(needs, pack, times) {
     else if (isPlanks(name)) planksDirect.set(name, (planksDirect.get(name) || 0) + n)
     else if ((pack[name] || 0) < n) missing.push({ name, need: n, have: pack[name] || 0 })
   }
+  // Planks are one #planks tag in the game (chest, table, sticks take any
+  // mix): the direct need pools over every held planks variant and every
+  // log (prod bot3: "need 8 oak_planks (have 2)" with other wood held).
+  // Only for outputs with no wood in their name: oak_door/birch_fence take
+  // their own planks, so those keep the per-variant count.
   let directTotal = 0
   for (const [name, n] of planksDirect) {
     directTotal += n
+    if (pooled) continue
     const wood = name.slice(0, -'_planks'.length)
     const avail = (pack[name] || 0) + 4 * (pack[`${wood}_log`] || 0)
     if (avail < n) missing.push({ name, need: n, have: pack[name] || 0 })
+  }
+  if (pooled && directTotal > totalPlanks(pack) + 4 * plankLogs(pack)) {
+    const [name] = planksDirect.keys()
+    missing.push({ name, need: directTotal, have: totalPlanks(pack) })
   }
   if (sticksNeed > 0) {
     const short = sticksNeed - (pack.stick || 0)
@@ -191,6 +211,17 @@ function gapCmp(a, b) {
   if (matRank(a.target) !== matRank(b.target)) return matRank(a.target) - matRank(b.target)
   if (nether(a) !== nether(b)) return nether(a) - nether(b)
   return 0
+}
+
+// True when the item takes the #planks tag (chest, table, stick, bookshelf):
+// no wood variant in its name. birch_door/oak_fence need their own planks.
+function poolsPlanks(bot, name) {
+  const byName = (bot && bot.registry && bot.registry.itemsByName) || {}
+  const parts = String(name).split('_')
+  for (let i = 1; i < parts.length; i++) {
+    if (byName[`${parts.slice(0, i).join('_')}_planks`]) return false
+  }
+  return true
 }
 
 function missingLine(target, missing) {
@@ -242,8 +273,7 @@ function tablePathOf(bot, ctx, pack) {
 // craft refused 'need a crafting table' forever while castlefetch read the
 // table as funded and never chopped a log.
 function tableWood(pack) {
-  if (totalLogs(pack) >= 1) return true
-  return Object.entries(pack).some(([n, c]) => isPlanks(n) && c >= 4)
+  return plankLogs(pack) >= 1 || totalPlanks(pack) >= 4 // any mix (mixPlanks)
 }
 
 // Registry id -> item name (planCraft builds its own inline; the executor
@@ -295,13 +325,18 @@ function pickTableRecipe(bot, idToName, needs, pack) {
     found = tableRecipes(bot) || []
   } catch (_) { found = [] }
   if (!Array.isArray(found) || found.length === 0) return null
-  const affordable = found.filter((r) => {
+  if (totalPlanks(pack || {}) + 4 * plankLogs(pack || {}) < 4) return null
+  const own = (r) => {
     const w = tableWoodOf(r, idToName)
-    if (!w) return false
-    const base = w.slice(0, -'_planks'.length)
-    const have = ((pack && pack[w]) || 0) + 4 * ((pack && pack[`${base}_log`]) || 0)
-    return have >= 4
-  })
+    return w && ((pack[w] || 0) + 4 * (pack[`${w.slice(0, -'_planks'.length)}_log`] || 0)) >= 4
+  }
+  // One wood funds it alone: that variant. Else any held mix (mixPlanks
+  // re-points the cells), named by the biggest held planks stack.
+  let affordable = found.filter(own)
+  if (affordable.length === 0) {
+    const held = (r) => pack[tableWoodOf(r, idToName)] || 0
+    affordable = found.filter((r) => tableWoodOf(r, idToName)).sort((x, y) => held(y) - held(x)).slice(0, 1)
+  }
   if (affordable.length === 0) return null
   const direct = new Set()
   for (const { name } of needs) {
@@ -324,14 +359,49 @@ function pickTableRecipe(bot, idToName, needs, pack) {
 function packMinusTable(pack, wood) {
   if (!isPlanks(wood)) return { ...pack }
   const sub = { ...pack }
-  const base = wood.slice(0, -'_planks'.length)
-  const lname = `${base}_log`
-  let need = 4
-  const ptake = Math.min(sub[wood] || 0, need)
-  sub[wood] = (sub[wood] || 0) - ptake
-  need -= ptake
-  if (need > 0) sub[lname] = Math.max(0, (sub[lname] || 0) - Math.ceil(need / 4))
+  let need = 4 // the picked wood first, then any planks mix (mixPlanks), then any log
+  for (const n of [wood, ...Object.keys(sub)]) {
+    if (need <= 0 || !isPlanks(n) || !(sub[n] > 0)) continue
+    const take = Math.min(sub[n], need)
+    sub[n] -= take
+    need -= take
+  }
+  for (const n of Object.keys(sub)) {
+    if (need <= 0 || !n.endsWith('_log') || n.startsWith('stripped_') || !(sub[n] > 0)) continue
+    sub[n] -= 1
+    need -= 4
+  }
   return sub
+}
+
+// The recipe with every planks cell re-pointed at the planks actually held,
+// biggest stack first (the game's #planks tag takes any mix; the registry
+// lists one variant per recipe). Delta rebuilt to match. Unchanged when no
+// planks are needed or the pack cannot cover them.
+function mixPlanks(bot, recipe, pack) {
+  const byName = (bot.registry && bot.registry.itemsByName) || {}
+  const idToName = buildIdToName(bot)
+  const isP = (it) => it && it.id >= 0 && isPlanks(idToName[it.id])
+  const left = Object.entries(pack).filter(([n, c]) => isPlanks(n) && c > 0 && byName[n]).sort((a, b) => b[1] - a[1])
+  const need = ((recipe && recipe.delta) || []).filter(isP).reduce((n, d) => n - d.count, 0)
+  if (need <= 0 || left.reduce((n, [, c]) => n + c, 0) < need) return recipe
+  if (!Array.isArray(recipe.inShape) && !Array.isArray(recipe.ingredients)) return recipe // no cells to re-point
+  if (recipe.delta.every((d) => !isP(d) || (pack[idToName[d.id]] || 0) >= -d.count)) return recipe // its own wood covers
+  const swap = (it) => {
+    if (!isP(it)) return it
+    const k = Math.abs(it.count || 1)
+    const e = left.find((x) => x[1] >= k) || left[0]
+    e[1] -= k
+    return { ...it, id: byName[e[0]].id }
+  }
+  const inShape = Array.isArray(recipe.inShape) ? recipe.inShape.map((row) => row.map(swap)) : recipe.inShape
+  const ingredients = !inShape && Array.isArray(recipe.ingredients) ? recipe.ingredients.map(swap) : recipe.ingredients
+  const used = new Map()
+  for (const it of [].concat(...(inShape || [ingredients || []]))) {
+    if (isP(it)) used.set(it.id, (used.get(it.id) || 0) + Math.abs(it.count || 1))
+  }
+  const delta = recipe.delta.filter((d) => !isP(d)).concat([...used].map(([id, c]) => ({ id, metadata: null, count: -c })))
+  return { ...recipe, inShape, ingredients, delta }
 }
 
 // Pure sync plan over the pack: candidates in try order (bring sorts tool
@@ -382,7 +452,7 @@ function planCraft(bot, ctx, names, count) {
           // at all): this recipe cannot run. A mats-covered recipe records
           // the table block — the honest no-table line wins below; a short
           // one competes its mats normally against the unreduced pack.
-          if (gapOf(needs, pack, times).length === 0) {
+          if (gapOf(needs, pack, times, poolsPlanks(bot, target)).length === 0) {
             if (!tableBlocked) tableBlocked = target
             continue
           }
@@ -390,7 +460,7 @@ function planCraft(bot, ctx, names, count) {
           fund = packMinusTable(pack, tableWoodOf(trec, idToName))
         }
       }
-      const missing = gapOf(needs, requiresTable ? fund : pack, times)
+      const missing = gapOf(needs, requiresTable ? fund : pack, times, poolsPlanks(bot, target))
       if (missing.length === 0) {
         if (requiresTable && !reach) {
           return { ok: false, fail: 'no-table', target, line: 'need a crafting table' }
@@ -423,18 +493,22 @@ function nextOp(bot, plan, table) {
     else if (isPlanks(name)) planksDirect.push([name, n])
     else if ((pack[name] || 0) < n) return null
   }
-  for (const [name, n] of planksDirect) {
+  const pooled = poolsPlanks(bot, plan.target)
+  for (const [name, n] of pooled ? [] : planksDirect) {
     if ((pack[name] || 0) >= n) continue
     const wood = name.slice(0, -'_planks'.length)
     if ((pack[`${wood}_log`] || 0) < 1) return null
     return gearMod.opPlanks(bot)
   }
+  // Pooled planks (any variant counts, mixPlanks re-points the recipe).
+  const direct = planksDirect.reduce((n, [, c]) => n + c, 0)
+  if (totalPlanks(pack) < direct) return plankLogs(pack) >= 1 ? gearMod.opPlanks(bot) : null
   if ((pack.stick || 0) < sticksNeed) {
-    if (totalPlanks(pack) >= 2) return gearMod.opSticks(bot)
+    if (totalPlanks(pack) - direct >= 2) return gearMod.opSticks(bot)
     if (totalLogs(pack) >= 1) return gearMod.opPlanks(bot)
     return null
   }
-  return { item: plan.target, recipe: plan.recipe, count: 1, table: table || null }
+  return { item: plan.target, recipe: pooled ? mixPlanks(bot, plan.recipe, pack) : plan.recipe, count: 1, table: table || null }
 }
 
 function clearRun(ctx) {
@@ -551,19 +625,17 @@ function craftItem(bot, ctx, name, count) {
           // wood first (did.4 core-1): the generic biggest-first op could
           // burn a whole other stack while this wood stays short. One op
           // lands 4 planks, so the next tick makes the table.
-          const tweed = trec && tableWoodOf(trec, buildIdToName(bot))
-          const tlog = tweed && `${tweed.slice(0, -'_planks'.length)}_log`
-          if (trec && tweed && (pack[tweed] || 0) < 4 && (tlog && (pack[tlog] || 0) > 0)) {
-            const pf = craftMod.recipes(bot, tweed, null)[0]
-            if (!pf) {
+          if (trec && totalPlanks(pack) < 4 && plankLogs(pack) > 0) {
+            const op = gearMod.opPlanks(bot)
+            if (!op || op.fail) {
               clearRun(ctx)
               return { done: false, line: 'need a crafting table' }
             }
-            gearMod.runOp(bot, ctx, { item: tweed, recipe: pf, count: 1, table: null })
+            gearMod.runOp(bot, ctx, op)
             return 'running'
           }
           if (trec) {
-            gearMod.runOp(bot, ctx, { item: 'crafting_table', recipe: trec, count: 1, table: null })
+            gearMod.runOp(bot, ctx, { item: 'crafting_table', recipe: mixPlanks(bot, trec, pack), count: 1, table: null })
             return 'running'
           }
         }
@@ -577,7 +649,7 @@ function craftItem(bot, ctx, name, count) {
   const left = Math.max(1, Math.ceil((st.finalNeed - (have(bot, plan.target) - st.have0)) / resultCount(plan.recipe)))
   const op = nextOp(bot, { ...plan, times: left }, st.table)
   if (!op || op.fail) {
-    const missing = gapOf(plan.needs, packCounts(bot), left)
+    const missing = gapOf(plan.needs, packCounts(bot), left, poolsPlanks(bot, plan.target))
     clearRun(ctx)
     if (missing.length > 0) return { done: false, line: missingLine(plan.target, missing) }
     return { done: false, line: `can't make ${plan.target}: crafting failed` }
@@ -591,3 +663,5 @@ module.exports.planCraft = planCraft
 module.exports.standingTable = standingTable
 module.exports.tableWood = tableWood
 module.exports.packCounts = packCounts
+module.exports.mixPlanks = mixPlanks
+module.exports.poolsPlanks = poolsPlanks
