@@ -156,6 +156,7 @@ describe('qxql.2 castle order + both holds yields no house step', () => {
         castlefetch: { status: 'failed:castlefetch-unreachable', text, pos: null, at: now, kinds: { stone: now } },
         castle: { status: 'failed:build-stall', text, pos: null, at: now },
       }
+      ctx.acquireHeld = { stone: now } // acquire just failed too: nothing to fetch now
       const d = await goal.decide(bot, ctx)
       // woodstarve: the stone hold no longer bans the chop; craft stays vetoed.
       assert.equal(d.action, 'gather', `both holds: the chop runs, got ${d.action}`)

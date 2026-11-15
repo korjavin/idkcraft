@@ -2177,7 +2177,11 @@ function fallbackRank(kind, offered, history = null, currentStep = null, held = 
       // (vmzq.65: the fallback dug iron for a wood-short house). Options
       // without the wood flag keep the old rank.
       const woodlessForageFar = isWork && o.id === 'forage-far' && o.wood === false
-      if (far !== -1 && !(isWork && o.id === 'explore-far') && !woodlessForageFar) {
+      // gocastle is offered only when displaced: walking back to the site
+      // goes before any fetch (acquire is offered whenever a kind is short).
+      if (o.id === 'gocastle') {
+        s = -1
+      } else if (far !== -1 && !(isWork && o.id === 'explore-far') && !woodlessForageFar) {
         s = far
       } else if (isWork && o.id === 'explore-far') {
         s = 200

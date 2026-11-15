@@ -238,6 +238,9 @@ describe('castlefetch sources (g0z.4)', () => {
     const asks = () => bot.chats.filter((m) => /no stone/.test(m))
     assert.equal(asks().length, 1, 'one line to the owner')
     assert.match(asks()[0], /no stone near the castle at 100 200.*cobblestone into a chest/)
+    // The held kind goes to acquire (owner: any short kind); once that
+    // failed too (acquireTick stamps acquireHeld) the hold idles.
+    ctx.acquireHeld = { stone: Date.now() }
     assert.notEqual((await goal.decide(bot, ctx)).action, 'castlefetch', 'held: no churn')
     ctx.stepStatus = 'done'
     assert.notEqual((await goal.decide(bot, ctx)).action, 'castlefetch', 'still held')
@@ -429,6 +432,7 @@ describe('castlefetch sources (g0z.4)', () => {
     ctx.castleFetchDry = new Set(Object.keys(blueprint.billOfMaterials(blueprint.blueprintOf(1).PLAN)).filter((k) => k !== 'stone'))
     assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch')
     fetch(bot, ctx)
+    ctx.acquireHeld = { stone: Date.now() } // acquire failed too
     await goal.decide(bot, ctx)
     ctx.stepFail.castlefetch.text = 'known=none flipped' // text-keyed hold no longer matches
     ctx.stepStatus = 'done'

@@ -459,6 +459,14 @@ function acquireTick(bot, ctx, f, d) {
   return false
 }
 
+// KIND still short for the next unlaid cells: the batch target (capped by
+// the cells left) plus the reserve, minus the pack stock (any variant).
+function shortOf(bot, ctx, kind) {
+  const cw = ctx && ctx.castleWord
+  const left = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : castleMod.BATCH
+  return Math.max(0, Math.min(capOf(kind), left) + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
+}
+
 function demand(bot, ctx) {
   // Bounded fetch hold (g0z.15): a failed leg rests CASTLEFETCH_RETRY_MS no
   // matter how the facts text moves — known=near/none flips released the
@@ -503,9 +511,11 @@ function demand(bot, ctx) {
     if (short <= 0) return null
     if (!blocked && hopDue(bot, ctx, kind)) return { kind, word, short, hop: true }
     const ah = ctx && ctx.acquireHeld && ctx.acquireHeld[kind]
-    // stone: its world stage already is acquire's block mine (same ground);
-    // banner/stairs keep their own rules (beds first, 8njf).
-    if (kind === 'stone' || kind === 'banner' || kind === 'stairs' || !acquireItem(bot, kind)) return null
+    // Every held kind that is short goes to acquire (owner: never one
+    // material at a time); no stone/banner/stairs idle exception.
+    // A pack-full hold banks first: acquire has nowhere to put the haul.
+    const sf = ctx && ctx.stepFail && ctx.stepFail.castlefetch
+    if ((sf && /pack-full/.test(sf.status || '')) || !acquireItem(bot, kind)) return null
     if (typeof ah === 'number' && Date.now() - ah <= require('../budget').CASTLEFETCH_RETRY_MS) return null
     // Any hold (world site, unreachable chest, craft/pack, day park) with no
     // chest hop ends here: acquire is the one generic rung (prod 2026-11-15
@@ -3462,6 +3472,7 @@ module.exports.PIT_DEPTH = PIT_DEPTH
 module.exports.PIT_ROOM = PIT_ROOM
 module.exports.digTick = digTick
 module.exports.demand = demand
+module.exports.shortOf = shortOf
 module.exports.acquireItem = acquireItem
 module.exports.holdFor = holdFor
 module.exports.hopDue = hopDue

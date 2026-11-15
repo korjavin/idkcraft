@@ -56,3 +56,21 @@ test('a chosen acquire-<item> runs acquire even when the kind has a live chest/s
     assert.deepStrictEqual(calls, ['oak_planks'])
   } finally { acq.acquire = orig }
 })
+
+// Owner (never one material): every fetchable castle kind short with no
+// chest gets acquire-<item>; with the next cells covered it does not.
+test('every castle kind: short -> acquire offered, enough on hand -> not', () => {
+  for (const kind of Object.keys(castlefetch.FETCH)) {
+    const { bot, ctx } = prodState()
+    delete ctx.stepFail
+    ctx.castleWord = { kind, left: 40 }
+    const item = castlefetch.acquireItem(bot, kind)
+    assert.ok(item, `${kind} has an acquire item`)
+    const ids = () => goalOptions(bot, ctx, 'castle', []).map((o) => o.id)
+    assert.ok(ids().includes(`acquire-${item}`), `${kind} short: ${ids()}`)
+    bot.inventory.items = () => [{ name: item, count: 1000 }]
+    const skips = []
+    assert.ok(!goalOptions(bot, ctx, 'castle', skips).some((o) => o.id === `acquire-${item}`), `${kind} covered`)
+    assert.ok(skips.some((s) => s.id === 'acquire' && /enough on hand/.test(JSON.stringify(s))), `${kind} skip: ${JSON.stringify(skips)}`)
+  }
+})

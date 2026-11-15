@@ -177,7 +177,8 @@ describe('dlpo same-day park', () => {
     expireTimeHold(ctx)
     assert.equal(fetch.isParked(ctx, 'banner'), true, 'park survives the expired window')
     assert.equal(fetch.holdFor(bot, ctx, 'banner'), true, 'parked kind held')
-    assert.equal(fetch.demand(bot, ctx), null, 'parked kind fetches nothing')
+    const pd = fetch.demand(bot, ctx)
+    assert.ok(!pd || pd.acquire, `parked kind: no source/chest leg, only acquire: ${JSON.stringify(pd)}`)
     assert.equal(fetch.holdFor(bot, ctx, 'stone'), false, 'another kind runs')
   })
 
@@ -197,6 +198,8 @@ describe('dlpo same-day park', () => {
       bot.time.day = Math.floor((t - start) / (20 * 60 * 1000))
       const d = fetch.demand(bot, ctx)
       if (!d) continue
+      // Acquire legs are bounded by their own retry stamp (acquireTick).
+      if (d.acquire) { ctx.acquireHeld = { ...(ctx.acquireHeld || {}), [d.kind]: t }; continue }
       legs++
       failKind(bot, ctx, d.kind)
       expireTimeHold(ctx)
@@ -204,7 +207,8 @@ describe('dlpo same-day park', () => {
     assert.ok(legs <= N, `at most ${N} legs in 24h, got ${legs}`)
     Date.now = () => T0 + 12 * 60 * 60 * 1000 - 1
     assert.equal(fetch.isParked(ctx, 'banner'), true, 'parked after the replay')
-    assert.equal(fetch.demand(bot, ctx), null, 'no further legs, no kind-switch churn')
+    const after = fetch.demand(bot, ctx)
+    assert.ok(!after || after.acquire, 'no further source legs, no kind-switch churn')
     assert.equal(lines.filter((l) => /parked for the day/.test(l)).length, 1, `one parked line: ${JSON.stringify(lines)}`)
   })
 

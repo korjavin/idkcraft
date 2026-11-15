@@ -79,6 +79,7 @@ function heldCtx(kind, status = 'failed:castlefetch-unreachable') {
     castle: castleState(),
     castleWord: { kind, left: 6 },
     stepFail: { castlefetch: { status, kind, at: Date.now(), text: 'castle=stone-none', pos: null } },
+    acquireHeld: { [kind]: Date.now() }, // acquire just failed: the hold idles only while it rests
   }
 }
 

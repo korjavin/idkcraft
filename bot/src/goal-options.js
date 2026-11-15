@@ -439,8 +439,14 @@ function goalOptions(bot, ctx, kind, logSkip = null) {
     const k = (d && d.kind) || (cw && cw.kind) || null
     const cf = require('./behaviours/castlefetch')
     const item = k && k in cf.FETCH ? cf.acquireItem(bot, k) : null
-    if (item && registered('castlefetch') && !probeFeasible(bot, ctx, 'castlefetch', { acquire: k })) {
-      skip('acquire', `castlefetch not feasible for ${k}`)
+    // Gated only by safety and the kind being short (goal.acquireWhy), not
+    // by the chest-trip feasibility (castle can lay now, batch on hand).
+    let why = null
+    if (item && registered('castlefetch')) {
+      try { const g = require('./goal'); why = g.acquireWhy(g.goalFacts(bot, ctx), bot, ctx, k) } catch (_) { why = 'facts unreadable' }
+    }
+    if (item && registered('castlefetch') && why) {
+      skip('acquire', `castlefetch not feasible for ${k} (${why})`)
     } else if (item && registered('castlefetch')) {
       out.push({
         id: `acquire-${item}`, step: 'castlefetch', unlock: { acquire: k },
