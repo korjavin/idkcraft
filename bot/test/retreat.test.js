@@ -775,6 +775,20 @@ describe('taking-fire retreat (0ay)', () => {
     ticker.destroy()
   })
 
+  it('hurt below 6 hp, zombie cornering at 2.2: swordless retreats, armed fights (prod bot3 mid-pillar death)', async () => {
+    for (const [items, want] of [[[], 'retreat'], [[{ name: 'stone_sword', count: 1 }], 'fight']]) {
+      const bot = fireBot(5, items)
+      bot.entities[1].position = pos(2.2, 64, 0)
+      const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
+      ticker.work()
+      await ticker.tick()
+      bot.health = 4
+      const r = await ticker.tick()
+      assert.equal(r.decision.action, want)
+      ticker.destroy()
+    }
+  })
+
   it('hurt + reachable + two mobs, armed and healthy: retreats (outmatched crowd)', async () => {
     const bot = fireBot(20, [{ name: 'stone_sword', count: 1 }])
     bot.entities[2] = zombie(2, 5, 64, 1)

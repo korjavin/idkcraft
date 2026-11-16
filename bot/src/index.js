@@ -509,9 +509,17 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // a reachable hostile in melee range keeps pace with a run, so the
       // outmatched retreat yields to fight; unreachable fire still retreats.
       const cornered = state.hostile_reachable !== false && typeof state.hostile_distance === 'number' && state.hostile_distance <= 3
+      // Hurt below 6 hp (prod bot3 2026-11-16: zombie 2.2 killed it mid-pillar
+      // in foodRecovery): the stub refuses fight there and any work step kept
+      // working. Armed with the mob in reach: fight it; else retreat.
+      const tooWeak = hurtFresh && typeof state.bot_health === 'number' && state.bot_health < 6
+      const standFight = tooWeak && state.hostile_reachable !== false && countItems(bot, (n) => n.endsWith('_sword')) > 0
       const underFire = !ctx.inShelter && !ctx.lead && !ctx.bring && !target &&
-        (state.hostile_reachable === false || (outmatched && !cornered)) &&
-        typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && hurtFresh
+        typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 &&
+        ((tooWeak && !standFight) || (hurtFresh && (state.hostile_reachable === false || (outmatched && !cornered))))
+      if (ctx.work && standFight && !target && !ctx.inShelter && typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 && decision.action !== 'fight') {
+        decision = { action: 'fight', sprint: false, source: 'guard' }
+      }
       if (!hurtFresh) ctx.underFireLogged = false
       if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
         const held = adoptGate(calledBrain)
@@ -1623,6 +1631,7 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // shape is unaffected (it re-bases coordinates onto the correction).
     try { decontact.installFaceEpsilon(bot) } catch (_) { /* face epsilon best-effort */ }
 
+    try { require('./hurt').install(bot, bot._tickerCtx) } catch (_) { /* hurt taps best-effort */ }
     const life = createLifecycle(ticker)
     bot.on('death', () => life.onDeath(bot))
     bot.on('respawn', () => life.onRespawn(bot))
@@ -1759,7 +1768,9 @@ function deathLine(bot) {
   const at = pos ? `${Math.floor(pos.x)} ${Math.floor(pos.y)} ${Math.floor(pos.z)}` : 'unknown'
   let line = `death health=${health} hostiles=${hostiles} at ${at}`
   if (nearest && nearest.name) line += ` nearest=${nearest.name} ${nearest.dist.toFixed(1)}`
-  return line + deathFacts(bot, pos)
+  let cause = 'unknown'
+  try { cause = require('./hurt').deathCause(bot, bot._tickerCtx) } catch (_) { /* cause best-effort */ }
+  return line + deathFacts(bot, pos) + ` cause=${cause}`
 }
 
 // neuc.65.1: the triage facts, appended after the byte-identical prefix
