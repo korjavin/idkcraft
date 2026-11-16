@@ -1860,10 +1860,11 @@ function progress(bot, st, cells, ctx) {
   } catch (_) { /* clock best-effort: the gap check stands down */ }
   // Cells our own enclosed escape opened are re-lays, not damage: no danger flag.
   const esc = new Set((ctx.enclosedEscapes || []).map((c) => `${c.x},${c.y},${c.z}`))
-  const mine = lost.filter((c) => esc.has(`${c.x},${c.y},${c.z}`))
+  // In the stuck window the pathfinder may break laid cells too (guardCastle): re-lay, not damage.
+  const mine = ctx.ownBreakUntil > Date.now() ? lost : lost.filter((c) => esc.has(`${c.x},${c.y},${c.z}`))
   if (mine.length) {
     const k = new Set(mine.map((c) => `${c.x},${c.y},${c.z}`))
-    ctx.enclosedEscapes = ctx.enclosedEscapes.filter((c) => !k.has(`${c.x},${c.y},${c.z}`))
+    ctx.enclosedEscapes = (ctx.enclosedEscapes || []).filter((c) => !k.has(`${c.x},${c.y},${c.z}`))
     console.log(`castle relay escape=${mine.length}`)
   }
   if (!gapAway && lost.length) {
@@ -2577,6 +2578,7 @@ function pickup(bot, ctx) {
 // re-installed when Movements is replaced. ponytail: the place term is a
 // cost (the lib has no place veto); a site whose stance needs a pillar
 // still pillars, the reach invariant keeps that off the plan.
+const STUCK_BREAK_COST = 40 // per laid cell a stuck path breaks: a long detour still wins
 const SITE_TOP = 16 // crenellation dy 13 + headroom
 // Far walk (vmzq.17): work() failed no-<kind> on the empty kit before
 // approach(), so a step 500 blocks off never walked to the site. Past this
@@ -2620,8 +2622,11 @@ function guardCastle(bot, ctx) {
     const fn = (block) => {
       try {
         if (!block) return 0
-        if (ctx.castle && castleProtects(ctx.castle, block.position, block.name)) return 100
-        if (peerLaid(block)) return 100
+        // Stuck window (enclosed.js stuckDeny, castlefetch noPath): laid cells
+        // break (99 < the lib's 100 veto); guardStep below prices them high.
+        const open = ctx.ownBreakUntil > Date.now()
+        if (ctx.castle && castleProtects(ctx.castle, block.position, block.name)) return open ? 0 : 100
+        if (peerLaid(block)) return open ? 0 : 100
         // The castle step's own walks (g0z.44 revmux 01 body-2, 02 core-1):
         // prep cuts and cell approaches dig as before — but not a borrower
         // (fight, lead, a reflex), whose A* stays out of the yard like
@@ -2654,6 +2659,18 @@ function guardCastle(bot, ctx) {
         const c = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${q.x},${q.y},${q.z}`)
         return c && c.kind === 'dig' ? 100 : 0
       } catch (_) { return 0 }
+    }
+    // Break is a gate only in the lib; the price of a laid cell rides the step term.
+    const stepFn = (block) => {
+      try {
+        if (!(ctx.ownBreakUntil > Date.now()) || !block || block.boundingBox !== 'block') return 0
+        return (ctx.castle && castleProtects(ctx.castle, block.position, block.name)) || peerLaid(block) ? STUCK_BREAK_COST : 0
+      } catch (_) { return 0 }
+    }
+    if (Array.isArray(mov.exclusionAreasStep)) {
+      for (const m of new Set([ctx.castleGuardMov, mov])) if (m && Array.isArray(m.exclusionAreasStep)) m.exclusionAreasStep = m.exclusionAreasStep.filter((f) => f !== ctx.castleStepFn)
+      mov.exclusionAreasStep.push(stepFn)
+      ctx.castleStepFn = stepFn
     }
     mov.exclusionAreasBreak.push(fn)
     mov.exclusionAreasPlace.push(placeFn)

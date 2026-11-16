@@ -281,7 +281,7 @@ const BULK_ROCK = new Set(['stone', 'deepslate'])
 const LAID_ROCK = new Set(['granite', 'diorite', 'andesite', 'tuff', 'calcite', 'smooth_basalt'])
 const CASTLE_ROCK_RANGE = 48 // from the site centre: the castle plus a re-plan's lookahead
 let castleNames = null
-function castleNamesGuard(bot, near) {
+function castleNamesGuard(bot, near, stuck) {
   const byName = bot && bot.registry && bot.registry.blocksByName
   if (!byName) return null
   if (!castleNames || castleNames.byName !== byName) {
@@ -299,13 +299,15 @@ function castleNamesGuard(bot, near) {
       banNames: names.filter((n) => !avoid(n)).concat(soilNames.filter((n) => names.indexOf(n) < 0)),
     })
     // Near the own castle logs are banned too: Baritone paths dug the frame beams (prod frame regress); gather digs via bot.dig.
-    castleNames = { byName, fn: () => 0, near: lists((n) => BULK_ROCK.has(n)), far: lists(far) } // fn: names only, no per-cell cost
+    // stuck (ctx.ownBreakUntil, owner 2026-11-16): every castle/soil name is avoid (a cost), none banned.
+    castleNames = { byName, fn: () => 0, near: lists((n) => BULK_ROCK.has(n)), far: lists(far), stuck: { guardNames: [...new Set(names.concat(soilNames))], banNames: [] } } // fn: names only, no per-cell cost
   }
   // One fn object rides the Movements; the bridge reads its lists per sync.
   // A flip mid-goal re-pushes in movementsFor (one push with the place flip).
-  castleNames.flipped = castleNames.isNear !== undefined && castleNames.isNear !== !!near
-  castleNames.isNear = !!near
-  Object.assign(castleNames.fn, near ? castleNames.near : castleNames.far)
+  const mode = stuck ? 'stuck' : near ? 'near' : 'far'
+  castleNames.flipped = castleNames.mode !== undefined && castleNames.mode !== mode
+  castleNames.mode = mode
+  Object.assign(castleNames.fn, castleNames[mode])
   return castleNames.fn
 }
 
@@ -386,7 +388,7 @@ function movementsFor(owner, bot, ctx, extra) {
   } catch (_) { /* policy best-effort: defaults stand */ }
   const keepStone = castleStone(bot, ctx)
   const v2 = process.env.BOT_BODY === 'baritone'
-  const v2Guard = v2 ? castleNamesGuard(bot, nearCastle(bot, ctx)) : null
+  const v2Guard = v2 ? castleNamesGuard(bot, nearCastle(bot, ctx), !!(ctx && ctx.ownBreakUntil > Date.now())) : null
   const noPlace = v2 && nearAnyCastle(bot, ctx)
   const flip = v2 && ((placeNear !== undefined && placeNear !== noPlace) || !!(v2Guard && castleNames.flipped))
   if (v2) placeNear = noPlace
