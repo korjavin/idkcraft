@@ -1344,6 +1344,8 @@ const DARK_ABOVE = 24
 const DARK_HOT = 8
 const DARK_NEAR = 48 // a mob death this close to the site box lights its zone
 const DARK_RESCAN_MS = 60000
+const DARK_ASK_MS = 3 * 60 * 1000 // torch-fetch share cap: this long asking with no torch...
+const DARK_REST_MS = 15 * 60 * 1000 // ...rests the ask this long
 function darkIdx(st, x, y, z) {
   const dx = x - st.site.x, dy = y - st.site.y, dz = z - st.site.z
   if (dx < -64 || dx >= 192 || dz < -64 || dz >= 192 || dy < -64 || dy >= 64) return null
@@ -1384,6 +1386,16 @@ function darkTargets(bot, ctx, st, now) {
   }
   if (ctx) ctx.castleDark = { key, at: now, list }
   return list
+}
+// Torch ask budget for dark cells: open unless DARK_ASK_MS of asking
+// brought no torch, then shut DARK_REST_MS.
+function darkAskOpen(ctx, held, now) {
+  const ask = ctx.castleDarkAsk || (ctx.castleDarkAsk = { since: now, rest: 0, at: now })
+  if (now - ask.at > 30000) ask.since = now // a fresh asking spell
+  ask.at = now
+  if (held || (ask.rest && now >= ask.rest)) { ask.since = now; ask.rest = 0 }
+  else if (!ask.rest && now - ask.since > DARK_ASK_MS) ask.rest = now + DARK_REST_MS
+  return !ask.rest
 }
 // Next workable dark cell (not backing off, never retired), fill shape.
 function nextDark(st, list, now) { return nextFill(st, list, now) }
@@ -1638,7 +1650,11 @@ function menuFact(bot, ctx, now = Date.now()) {
     if (!fetching && hot) {
       const dark = darkTargets(bot, ctx, st, now).filter((c) => nextDark(st, [c], now))
       const torchOut = dryKinds(ctx).has('torch') || (() => { try { return park.isParked(ctx, 'torch') } catch (_) { return false } })()
-      if (dark.length && (usable(bot, 'torch', ctx) > 0 || !torchOut)) {
+      // Lighting never blocks the build (prod 2026-11-16 bot3: castle +606
+      // -> +221/h on torch-none x13): an ask that brings no torch within
+      // DARK_ASK_MS rests DARK_REST_MS while the build words run.
+      const held = usable(bot, 'torch', ctx) > 0
+      if (dark.length && (held || (!torchOut && darkAskOpen(ctx, held, now)))) {
         ctx.castleWord = { kind: 'torch', left: dark.length }
         return stockWord(bot, 'torch', dark.length)
       }
@@ -3172,6 +3188,7 @@ module.exports.fillTargets = fillTargets
 module.exports.nextFill = nextFill
 module.exports.darkTargets = darkTargets
 module.exports.darkOf = darkOf
+module.exports.darkAskOpen = darkAskOpen
 module.exports.FILL_BASE = FILL_BASE
 module.exports.fillBase = fillBase
 module.exports.fillOf = fillOf

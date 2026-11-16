@@ -87,3 +87,31 @@ describe('torch without coal: charcoal via acquire', () => {
     assert.equal(acquire(bot, {}, 'torch', 4), 'failed:smelt-charcoal')
   })
 })
+
+describe('torch supply never blocks the build', () => {
+  it('the dark torch ask shuts after 3 min without a torch, reopens after the rest or on a torch', () => {
+    const ctx = {}
+    const t0 = 1e9
+    for (let t = t0; t <= t0 + 180000; t += 10000) assert.equal(castle.darkAskOpen(ctx, false, t), true)
+    assert.equal(castle.darkAskOpen(ctx, false, t0 + 190000), false)
+    assert.equal(castle.darkAskOpen(ctx, false, t0 + 200000), false)
+    assert.equal(castle.darkAskOpen(ctx, true, t0 + 210000), true, 'a torch reopens')
+    const c2 = {}
+    for (let t = t0; t <= t0 + 200000; t += 10000) castle.darkAskOpen(c2, false, t)
+    assert.equal(castle.darkAskOpen(c2, false, t0 + 200000 + 15 * 60000), true, 'the rest ends')
+  })
+  it('a failed coal mine yields to the charcoal variant even with ore in range', () => {
+    const reg = S.DEFAULT_REG
+    const id = (n) => reg.itemsByName[n].id
+    const recipe = (fuel) => ({ delta: [{ id: id(fuel), count: -1 }, { id: id('stick'), count: -1 }, { id: id('torch'), count: 4 }], result: { count: 4 } })
+    const bot = {
+      registry: reg,
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      inventory: { items: () => [{ name: 'stick', count: 2 }, { name: 'oak_log', count: 3 }], emptySlotCount: () => 10 },
+      recipesAll: (itemId) => (itemId === id('torch') ? [recipe('coal'), recipe('charcoal')] : []),
+      findBlocks: () => [{ x: 5, y: 20, z: 5 }],
+      mine: () => { throw new Error('no coal expedition') },
+    }
+    assert.equal(acquire(bot, { acquire: { mineFail: { item: 'coal', at: Date.now() } } }, 'torch', 4), 'failed:smelt-charcoal')
+  })
+})
