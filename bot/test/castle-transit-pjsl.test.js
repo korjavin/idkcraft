@@ -256,8 +256,10 @@ describe('pjsl transit backfill', () => {
     assert.equal(castle.menuFact(worldBot(cells, []), ctx2, now), 'stone-none', 'empty pack raises stone demand')
     assert.equal(ctx2.castleWord.kind, 'stone')
   })
-  it('a complete castle with a crater and a waiting plan hole still scans and fills the floor', () => {
+  for (const phase of ['complete', 'body']) it(`a ${phase} castle with a crater and a waiting plan hole still scans and fills the floor`, () => {
     const cells = painted()
+    // mid-build: no decor yet (a pane on a plan air cell is a clear target)
+    if (phase === 'body') for (const c of blueprint.decorPlan(SITE, 0, V).cells) cells.delete(key(c.x, c.y, c.z))
     const at = blueprint.absPlan(SITE, 0, V).at
     const crater = []
     for (let dx = 8; dx < 23 && crater.length < 4; dx++) {
@@ -272,7 +274,7 @@ describe('pjsl transit backfill', () => {
     const wall = blueprint.absPlan(SITE, 0, V).cells.find((c) => c.kind === 'stone')
     cells.set(key(wall.x, wall.y, wall.z), 'air')
     const now = Date.now()
-    const st = own({ visitedAt: now, blocked: { [`2:${wall.idx}`]: { tries: 1, until: now + 600000, why: 'refilled' } } })
+    const st = own({ phase, visitedAt: now, blocked: { [`2:${wall.idx}`]: { tries: 1, until: now + 600000, why: 'refilled' } } })
     const bot = worldBot(cells)
     const logs = []
     const log = console.log
@@ -285,6 +287,20 @@ describe('pjsl transit backfill', () => {
     } finally { console.log = log }
     assert.ok(logs.some((l) => /^castle floor scan holes=[1-9]/.test(l)), 'rescan logs the hole count')
   })
+  it('off-apron remedy: the stand under a holed entrance apron is a bottom-up fill cell', () => {
+    const cells = painted()
+    const st = own()
+    const ent = castle.entrance(st)
+    for (let k = 1; k <= 3; k++) cells.set(key(ent.x, ent.y - k, ent.z), 'air')
+    const sup = castle.standFill(worldBot(cells), st, ent)
+    assert.deepEqual([sup.x, sup.y, sup.z], [ent.x, ent.y - 3, ent.z])
+    assert.equal(sup.prep, 'fill')
+    assert.ok(castle.fillOf(st, sup.idx), 'idx decodes as a fill')
+    cells.set(key(ent.x, ent.y - 3, ent.z), 'dirt')
+    assert.equal(castle.standFill(worldBot(cells), st, ent).y, ent.y - 2)
+    assert.equal(castle.standFill(worldBot(painted()), st, ent), null, 'solid apron: no remedy')
+  })
+
 })
 
 // TRACK 2 (idkcraft-pjsl, this bead): the prod offender is the v2 body —

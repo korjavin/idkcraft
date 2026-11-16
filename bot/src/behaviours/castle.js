@@ -1267,8 +1267,8 @@ function boxOf(st, idx) {
 // never stand in the way (it is at dy >= 0), so any below-grade air cell
 // that is no plan cell is safe to refill with the prep-fill material
 // (castle stone above the reserve, else dirt above the shelter reserve —
-// fillItem). Complete castles only (the build's own below-grade holes are
-// prep's), one cell per castle tick, cached like the box litter. The door
+// fillItem). Any phase past prep (prep fills its own holes) whenever no
+// plan cell is workable, a backing-off one included; one cell per castle tick, cached like the box litter. The door
 // sill cell (sillOf) is excluded: it wants planks, not fill.
 const FILL_BASE = 2600000 // band space ends near 2.35M, decor starts at 3M
 // A scaled castle's band (box + scaled apron, up to (62+64)(54+64)*40 ~
@@ -1304,6 +1304,29 @@ function fillOf(st, idx) {
   if (k === `${sill.x},${sill.y},${sill.z}` || blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.has(k)) return null
   return c
 }
+function fillIdx(st, d, dx, dz, dd) {
+  return fillBase(st) + ((dx + FILL_RING) * (d + 2 * FILL_RING) + (dz + FILL_RING)) * FILL_DEPTH + (dd - 1)
+}
+// The stand a placement needs (off-apron remedy): the lowest open cell of
+// the column under p, FILL_DEPTH deep, as a fill cell; null when p already
+// stands on solid ground, is unreadable or lies outside the fill ring.
+function standFill(bot, st, p) {
+  const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+  const dx = p.x - st.site.x, dz = p.z - st.site.z
+  if (dx < -FILL_RING || dx >= w + FILL_RING || dz < -FILL_RING || dz >= d + FILL_RING) return null
+  let open = 0
+  for (let k = 1; k <= FILL_DEPTH; k++) {
+    const n = nameAt(bot, { x: p.x, y: p.y - k, z: p.z })
+    if (n == null) return null
+    if (!AIR.has(n) && n !== 'water' && n !== 'lava' && !build.isReplaceable(n)) break
+    open = k
+  }
+  if (!open) return null
+  const y = p.y - open
+  const dd = st.site.y - y
+  if (dd < 1 || dd > FILL_DEPTH) return null
+  return { x: p.x, y, z: p.z, kind: 'stone', prep: 'fill', idx: fillIdx(st, d, dx, dz, dd) }
+}
 function fillTargets(bot, ctx, st, now) {
   const site = st && st.site
   const key = site && typeof site.x === 'number' ? `${site.x},${site.y},${site.z},${st.rot | 0},v${ver(st)}` : null
@@ -1327,7 +1350,7 @@ function fillTargets(bot, ctx, st, now) {
           if (n == null) { floored = false; continue } // unloaded reads null: never fill blind
           if (!AIR.has(n)) { floored = n !== 'water' && n !== 'lava' && !build.isReplaceable(n); continue }
           if (!floored || dd > FILL_DEPTH) continue
-          list.push({ x, y, z, kind: 'stone', prep: 'fill', idx: fillBase(st) + ((dx + R) * (d + 2 * R) + (dz + R)) * FILL_DEPTH + (dd - 1) })
+          list.push({ x, y, z, kind: 'stone', prep: 'fill', idx: fillIdx(st, d, dx, dz, dd) })
         }
       }
     }
@@ -1725,7 +1748,7 @@ function menuFact(bot, ctx, now = Date.now()) {
       // Floor upkeep before waiting/decor (owner 2026-11-16: a waiting hole
       // read 'blocked' forever and the fill never ran): a workable fill
       // words 'clear'; no filler on hand asks castlefetch for stone.
-      if (st.phase === 'complete') {
+      if (st.phase !== 'prep') {
         const fills = fillTargets(bot, ctx, st, now).filter((c) => nextFill(st, [c], now))
         if (fills.length && fillItem(bot, ctx)) {
           ctx.castleWord = { word: 'clear' }
@@ -2365,6 +2388,12 @@ function placeCell(bot, ctx, st, c, item, now) {
     const bp = bodyPos(bot)
     if (!bp || Math.floor(bp.x) !== ent.x || Math.floor(bp.z) !== ent.z || Math.round(bp.y) !== ent.y) {
       ctx.castleGoalIdx = -1
+      // Active remedy: a missing stand under the apron is built first (any
+      // fill; none on hand fails no-stone so castlefetch fetches) instead of
+      // looping the door on the backoff ladder.
+      const sup = standFill(bot, st, ent)
+      if (sup && !nextFill(st, [sup], now)) { strike(ctx, st, c, 'off-apron', now); return }
+      if (sup) { work(bot, ctx, st, sup, now, 'building the apron'); return }
       strike(ctx, st, c, 'off-apron', now)
       return
     }
@@ -3365,7 +3394,7 @@ function castle(bot, ctx) {
   // Transit backfill (idkcraft-pjsl): a below-grade hole no plan covers,
   // one cell per tick once no plan cell is workable — before the waiting
   // branch, so a hole in backoff never starves the floor.
-  if (r.idx < 0 && st.phase === 'complete') {
+  if (r.idx < 0 && st.phase !== 'prep') {
     const fill = nextFill(st, fillTargets(bot, ctx, st, now), now)
     if (fill && fillItem(bot, ctx)) { work(bot, ctx, st, fill, now, 'filling a floor hole'); return }
   }
@@ -3426,6 +3455,7 @@ module.exports.siteLoaded = siteLoaded
 module.exports.menuFact = menuFact
 module.exports.litterTargets = litterTargets
 module.exports.fillTargets = fillTargets
+module.exports.standFill = standFill
 module.exports.nextFill = nextFill
 module.exports.darkTargets = darkTargets
 module.exports.darkOf = darkOf
