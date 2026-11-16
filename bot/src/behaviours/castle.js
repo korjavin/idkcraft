@@ -337,7 +337,7 @@ function blockCell(ctx, st, c, why, now) {
   // Lava (owner 2026-11-12) is a world condition, not a failed lay: nothing is
   // placed while it waits, so it never retires — the capped backoff re-checks
   // and the cell lays once the lava is gone.
-  if (n >= limit || e.tries >= MAX_HOLE_TRIES) e.retired = true
+  if ((n >= limit || e.tries >= MAX_HOLE_TRIES) && !e.retired) { e.retired = true; e.retiredAt = now }
   st.blocked[k] = e
   ctx.castleFails = null
   ctx.castleCell = null
@@ -1539,6 +1539,47 @@ function reopenRepairs(bot, ctx, st, transientOnly) {
   } catch (_) { return 0 }
 }
 
+// Bounded retirement: a retired plan cell left the todo (pick/peek skip it)
+// and the demand (the word never names it), so a castle whose missing cells
+// were all retired read clear/done/finish with progress < total and nothing
+// ever worked them (prod 2026-11-16 bot3: 11401/11493 flat 900 s, every
+// supply option "no castle demand"); reopenRepairs only ran on a tidy
+// return, which a bot that never leaves the site never makes. Every
+// retirement now lasts RETIRE_MS (permanent whys RETIRE_PERMANENT_MS), then
+// the cell re-queues for one fresh strike ladder.
+const RETIRE_MS = 10 * 60 * 1000
+const RETIRE_PERMANENT_MS = 60 * 60 * 1000
+const REQUEUE_SCAN_MS = 60 * 1000
+function requeueRetired(bot, ctx, st, now) {
+  if (!st || !st.blocked || now - (ctx.castleRequeueAt || 0) < REQUEUE_SCAN_MS) return 0
+  ctx.castleRequeueAt = now
+  const { cells } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
+  const why = {}
+  let n = 0
+  for (const k of Object.keys(st.blocked)) {
+    const e = st.blocked[k]
+    if (!e || !e.retired) continue
+    const [v, i] = String(k).split(':')
+    const c = cells[Number(i)]
+    if (Number(v) !== ver(st) || !c || done(bot, c)) continue
+    const bound = RETIRED_PERMANENT_RE.test(String(e.why || '')) ? RETIRE_PERMANENT_MS : RETIRE_MS
+    if (typeof e.retiredAt !== 'number') { e.retiredAt = now; continue } // legacy/restored entry: the bound starts now
+    if (now - e.retiredAt < bound) continue
+    e.retired = false
+    e.until = 0
+    e.tries = 0
+    delete e.prot
+    delete e.retiredAt
+    why[e.why] = (why[e.why] || 0) + 1
+    n++
+  }
+  if (n > 0) {
+    try { console.log(`castle requeue: ${n} retired cell(s) back in the todo (${Object.entries(why).map(([w, k]) => `${w}=${k}`).join(' ')})`) } catch (_) { /* log best-effort */ }
+    ctx.castleScanAt = 0
+  }
+  return n
+}
+
 // Dry decor kinds (g0z.49): every castlefetch leg that comes up dry adds
 // its kind (noteDry), so the decor word below skips every dry kind at
 // once — with five decor kinds now, one mark per kind. A leg that got
@@ -1634,6 +1675,9 @@ function menuFact(bot, ctx, now = Date.now()) {
     // never over a running fetch leg (prod: logs drawn for fences funded a
     // retired frame hole, 'clear' cut the leg before its fence craft, and
     // the castle then failed no-fence: a refetch loop).
+    // Nothing workable in sight yet cells are missing: re-queue the stale
+    // retired ones and re-read, so the word names them (todo or demand).
+    if (!r.cell && !r.waiting && st.progress && st.progress.done < st.progress.total && requeueRetired(bot, ctx, st, now) > 0) r = peek(bot, st, now, ctx)
     const fetching = ctx.step === 'castlefetch' && ctx.stepStatus === 'running'
     if (!fetching && cellRecovery.startable(bot, ctx, st, r.cells, now, RECOVERY_HOOKS)) {
       ctx.castleWord = { word: 'clear' }
@@ -3267,6 +3311,7 @@ module.exports.nearestPrep = nearestPrep
 module.exports.stowSpot = stowSpot
 module.exports.onDoorPath = onDoorPath
 module.exports.RECOVERY_HOOKS = RECOVERY_HOOKS
+module.exports.requeueRetired = requeueRetired
 module.exports.peek = peek // test seam: the arbiter's next cell (castle-scale resume)
 module.exports.castleBuilderBatch = castleBuilderBatch
 module.exports.pick = pick
