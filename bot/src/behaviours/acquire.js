@@ -120,6 +120,12 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   for (const i of alts) {
     const want = one ? n : have(bot, i) + n - held
     const p = craftany.planCraft(bot, ctx, [i], want)
+    // No table and none placeable (split woods, mats eaten): the table is
+    // the gap — acquire one into the pack, craftany then places it.
+    if (p.fail === 'no-table' && have(bot, 'crafting_table') === 0 && !path.includes('crafting_table') && item !== 'crafting_table') {
+      const r = acquire(bot, ctx, 'crafting_table', 1, [...path, item])
+      return r === 'done' ? 'running' : r
+    }
     if (p.ok || p.fail === 'no-table') {
       const r = craftany(bot, ctx, i, want)
       return r === 'running' || r.done ? 'running' : `failed:craft-${i}`

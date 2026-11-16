@@ -180,7 +180,18 @@ function gapOf(needs, pack, times, pooled) {
     if (short > 0) {
       const ops = Math.ceil(short / 4) // one sticks op yields 4 for 2 planks
       const avail = totalPlanks(pack) + 4 * totalLogs(pack) - directTotal
-      if (avail < 2 * ops) missing.push({ name: 'stick', need: sticksNeed, have: pack.stick || 0 })
+      if (avail < 2 * ops) {
+        missing.push({ name: 'stick', need: sticksNeed, have: pack.stick || 0 })
+        // The planks gap carries the sticks' wood too (whole ops, the
+        // spare already counted): filling it makes the recipe craftable,
+        // never one short after the sticks op eats it (prod 2026-11-16
+        // bot3: "need 24 any planks (have 23), 12 stick (have 11)" x28/h).
+        const pl = missing.find((e) => isPlanks(e.name))
+        if (pl) {
+          const own = pooled ? totalPlanks(pack) + 4 * plankLogs(pack) : (pack[pl.name] || 0) + 4 * (pack[`${pl.name.slice(0, -'_planks'.length)}_log`] || 0)
+          pl.need += Math.max(0, 2 * ops - Math.max(0, avail + pl.need - own)) // other woods past the gap still pay for sticks
+        }
+      }
     }
   }
   return missing
