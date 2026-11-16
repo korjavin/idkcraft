@@ -1709,6 +1709,7 @@
   },
   "recovery": {
     "writers": [
+      "src/behaviours/castle.js",
       "src/behaviours/home.js",
       "src/behaviours/recover.js",
       "src/behaviours/retreat.js",
