@@ -810,7 +810,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     if (fleeDist !== false) {
       require('./behaviours/food-recovery').invalidate(ctx)
       const fleePlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-      console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()}`)
+      console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()} ${ctx.reflexTrigger || ''}`)
       return { decision: { action: 'flee', sprint: false, source: 'reflex' }, calledBrain }
     }
     // Drowning owns the body over every order (0u9): a dig 3 blocks down
