@@ -113,7 +113,9 @@ describe('castle cell recovery (qxql.19)', () => {
     const stuck = fixture()
     await ticks(stuck, 3)
     assert.equal(stuck.calls.plans.length, 0, 'the normal blocked-cell backoff is respected')
-    stuck.st.blocked[`3:${stuck.target.idx}`].until = Date.now() - 1
+    // A build-miss goes per-cell first (other stand/face); recovery takes it once retired.
+    assert.ok(stuck.st.blocked[`3:${stuck.target.idx}`].wide, 'build-miss handed per-cell')
+    Object.assign(stuck.st.blocked[`3:${stuck.target.idx}`], { until: Date.now() - 1, retired: true })
     await ticks(stuck, 3)
     assert.ok(stuck.calls.plans.length > 0, 'real repeated misses enter recovery')
   })

@@ -34,7 +34,7 @@ const build = require('./build')
 const flat = require('./flat')
 const toolPrep = require('./toolprep')
 const cellRecovery = require('./castlerecovery')
-const { denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
+const { stuckDeny, denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
 const { stepDone, stepFailed, stepGen, failReason } = require('../step')
 const worker = require('../worker')
 const enclosed = require('../enclosed')
@@ -268,7 +268,9 @@ const PROTECTED_MAX_TRIES = 3
 // reported by holesOf/sayHoles; a rebuild (cancel + build) un-retires.
 // 'build-miss-wide' is the batch-wide wedge fallback (revmux 03): not
 // cell-specific, so it rides the ordinary 8-try ladder instead.
-const BUILD_MISS_TRIES = 1
+// Since 2026-11-16 a build-miss hands the cell to the per-cell path (other
+// stand/face) and rides the ordinary ladder too.
+const BUILD_MISS_TRIES = MAX_HOLE_TRIES
 // Litter unreachable limit (idkcraft-qxql.16): scaffold clearing is best-effort.
 // Three unreachable attempts retire the cell so the castle completes instead
 // of looping on unreachable scaffold.
@@ -315,7 +317,9 @@ function blockCell(ctx, st, c, why, now) {
   // batch re-picked it after each backoff and the next wedge struck it
   // again (prod bot3 2026-11-13: 73 holes, 8 wedges -> retired unseen by
   // the per-cell stance logic). castleBuilderCells skips a wide hole.
-  if (why === 'build-miss-wide') e.wide = true
+  // A cell build-miss (place sent, no block) also goes per-cell: placeCell's
+  // GoalPlaceBlock picks its own stand/face, on the ordinary ladder.
+  if (why === 'build-miss-wide' || why === 'build-miss') e.wide = true
   // Bounded retry (revmux 01): the MAX_HOLE_TRIES-th block retires the
   // hole — still reported, never picked or waited on again. Builder
   // refusals retire faster (idkcraft-synq BUILD_MISS_TRIES above) and
@@ -2035,6 +2039,13 @@ function far(bot, ctx, st, c, reach, now) {
   const f = ctx.castleFar && ctx.castleFar.idx === c.idx
     ? ctx.castleFar
     : { idx: c.idx, dist, minDist: dist, n: 0 }
+  if (f.step) {
+    const r = stepMove(bot, ctx, c, f.step)
+    if (r === 'running') { ctx.castleGoalIdx = c.idx; return true } // keep approach() off our leg goal
+    try { console.log(`castle step-approach ${c.x} ${c.y} ${c.z} ${c.kind}: stop=${r} legs=${f.step.legs}`) } catch (_) { /* log best-effort */ }
+    blockCell(ctx, st, c, 'unreachable', now)
+    return true
+  }
   // Monotonic progress check (qxql.17): pacing/oscillating along a ledge or
   // obstacle fluctuates dist without reaching the cell — resetting n on each
   // oscillation trapped the bot in an endless loop. Only beating the minimum
@@ -2064,11 +2075,96 @@ function far(bot, ctx, st, c, reach, now) {
       try { console.log(`castle dig-approach ${c.x} ${c.y} ${c.z} ${c.kind}: path through own cells for ${DIG_WINDOW_MS / 60000} min`) } catch (_) { /* log best-effort */ }
       return true
     }
+    // A* still found nothing: walk the line ourselves (stepMove).
+    if (!f.step && !sweep) {
+      f.step = { legs: 0, wait: 0, w: null, digging: false, err: false }
+      ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+      try { console.log(`castle step-approach ${c.x} ${c.y} ${c.z} ${c.kind}: stepping`) } catch (_) { /* log best-effort */ }
+      return true
+    }
     blockCell(ctx, st, c, 'unreachable', now)
   }
   return true
 }
 const DIG_WINDOW_MS = 5 * 60 * 1000
+
+// Step mover (last resort after the dig-approach ladder): one block per leg
+// along a straight/staircase line toward the cell. Each waypoint's body
+// cells dig through the stuck ladder (stuckDeny: own cells re-lay), then a
+// 1-block GoalBlock leg lets the executor step, drop, pillar or bridge it —
+// a 1-block search never runs out of budget. Refuses lava, fluid and falls.
+const STEP_MAX = 96
+const STEP_LEG_TICKS = 8
+const STEP_FALL = 3
+function stepMove(bot, ctx, c, s) {
+  if (s.digging) return 'running'
+  if (s.err) return 'dig-error'
+  const bp = bodyPos(bot)
+  if (!bp) return 'no-pos'
+  const F = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  if (s.w) {
+    if (s.w.x === F.x && s.w.y === F.y && s.w.z === F.z) s.w = null
+    else if (++s.wait > STEP_LEG_TICKS) return 'stall'
+    else return 'running'
+  }
+  if (s.legs >= STEP_MAX) return 'budget'
+  const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
+  const wet = (b) => !!b && /water|lava|bubble_column/.test(b.name)
+  const dx = c.x - F.x
+  const dz = c.z - F.z
+  const dy = Math.sign(c.y - F.y)
+  const flatStep = Math.abs(dx) + Math.abs(dz) > 1
+  let ax = flatStep && Math.abs(dx) >= Math.abs(dz) ? Math.sign(dx) : 0
+  let az = flatStep && !ax ? Math.sign(dz) : 0
+  // Never dig the floor under the feet: straight down zig-zags a staircase.
+  if (!flatStep && dy < 0) { if (dz) az = Math.sign(dz); else ax = dx >= 0 ? 1 : -1 }
+  if (!ax && !az && !dy) return 'no-line'
+  const W = { x: F.x + ax, y: F.y + dy, z: F.z + az }
+  // Cells the leg's body passes: the waypoint's two, plus headroom for a rise (over the feet) or a drop (over the step).
+  const cells = [[W.x, W.y, W.z], [W.x, W.y + 1, W.z]]
+  if (dy > 0) cells.push([F.x, F.y + 2, F.z])
+  if (dy < 0 && (ax || az)) cells.push([W.x, W.y + 2, W.z])
+  for (const [x, y, z] of cells) {
+    for (const [ox, oy, oz] of [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]]) {
+      if (wet(at(x + ox, y + oy, z + oz))) return 'fluid'
+    }
+  }
+  const block = cells.map(([x, y, z]) => at(x, y, z)).find((b) => b && b.boundingBox !== 'empty')
+  if (block) {
+    const deny = stuckDeny(bot, ctx, block)
+    if (deny) { logDeny(block, deny); return 'refused:' + deny }
+    s.digging = true
+    void (async () => {
+      try {
+        const tool = bot.pathfinder && bot.pathfinder.bestHarvestTool && bot.pathfinder.bestHarvestTool(block)
+        if (tool) await bot.equip(tool, 'hand')
+        await bot.dig(block)
+      } catch (_) { s.err = true } finally { s.digging = false }
+    })()
+    return 'running'
+  }
+  // Floor: a gap within STEP_FALL drops, a deeper one bridges with scaffold; lava or void below refuses.
+  const floor = at(W.x, W.y - 1, W.z)
+  if (!floor || floor.boundingBox === 'empty') {
+    let fall = 0
+    for (let y = W.y - 1; ; y--) {
+      const b = at(W.x, y, W.z)
+      if (!b) return 'void'
+      if (/lava/.test(b.name)) return 'lava'
+      if (b.boundingBox !== 'empty' || wet(b)) break
+      if (++fall > 64) return 'void'
+    }
+    if (fall > STEP_FALL && !(bot.inventory && bot.inventory.items().some((i) => i.name === 'dirt' || i.name === 'cobblestone'))) return 'fall'
+  }
+  s.w = W
+  s.wait = 0
+  s.legs++
+  try {
+    ctx.castleGoal = new goals.GoalBlock(W.x, W.y, W.z)
+    bot.pathfinder.setGoal(ctx.castleGoal)
+  } catch (_) { /* the leg times out as stall */ }
+  return 'running'
+}
 
 // A borrower (fight, lead, a reflex) replaced the castle step's goal while
 // its cell stayed the same. Shared by approach() and the break guard;
@@ -2196,7 +2292,10 @@ function placeCell(bot, ctx, st, c, item, now) {
     // Decor (g0z.31): 10 of 44 v2 windows hide every neighbour face from
     // the walkable stances behind a stair step; the server checks the click
     // distance only, so a pane approach drops LOS (far() still gates reach).
-    : new goals.GoalPlaceBlock(p, bot.world, { range: build.PLACE_RANGE, LOS: !(c.idx >= blueprint.DECOR_BASE) }))) return
+    // Dig-approach (f.dig): LOS raycasts the pre-dig world, so a stand A*
+    // would tunnel to never ends the search (noPath/timeout); the server
+    // checks the click distance only and far() still gates reach.
+    : new goals.GoalPlaceBlock(p, bot.world, { range: build.PLACE_RANGE, LOS: !(c.idx >= blueprint.DECOR_BASE) && !(ctx.castleFar && ctx.castleFar.idx === c.idx && ctx.castleFar.dig) }))) return
   // Already in reach with a face to click (prod 2026-11-15: cells 1 block
   // from the feet, goal 'calculating' forever, isMoving latched): place from
   // here, never wait on a path to a cell we can touch.
@@ -3341,6 +3440,7 @@ module.exports.stowSpot = stowSpot
 module.exports.onDoorPath = onDoorPath
 module.exports.RECOVERY_HOOKS = RECOVERY_HOOKS
 module.exports.requeueRetired = requeueRetired
+module.exports.stepMove = stepMove
 module.exports.peek = peek // test seam: the arbiter's next cell (castle-scale resume)
 module.exports.castleBuilderBatch = castleBuilderBatch
 module.exports.pick = pick

@@ -441,7 +441,7 @@ describe('castle builder branch (idkcraft-neuc.54)', () => {
     await run(bot, ctx, 5)
     assert.ok(bot.calls.builds.length >= 3, `re-batches while unblocked (${bot.calls.builds.length})`)
     const keys = open.map((c) => `${blueprint.blueprintOf(3).version}:${c.idx}`)
-    for (const k of keys) assert.ok(ctx.castle.blocked[k] && ctx.castle.blocked[k].retired, `${k} retired`)
+    for (const k of keys) assert.ok(ctx.castle.blocked[k] && ctx.castle.blocked[k].wide, `${k} per-cell`)
   })
 
   it('a stale preemption neither fails nor strikes (round-2 core-2)', async () => {
@@ -559,7 +559,7 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     assert.ok((ctx.stepStatus || '').startsWith('failed:no-'), `fetch word, got ${ctx.stepStatus}`)
   })
 
-  it('a refused floor-laid cell retires on its first block, still reported', async () => {
+  it('a refused floor-laid cell goes per-cell (other stand/face), not retired', async () => {
     const world = makeWorld()
     const plan = blueprint.absPlan(SITE, 0, 3).cells
     const open = plan.filter((c) => c.kind === 'stone').slice(0, 2)
@@ -575,10 +575,9 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     }
     for (const c of open) {
       const e = ctx.castle.blocked[`${ver}:${c.idx}`]
-      assert.ok(e && e.retired, `${c.idx} retired: ${JSON.stringify(e)}`)
-      assert.equal(e.tries, castle.BUILD_MISS_TRIES)
+      assert.ok(e && e.why === 'build-miss' && e.wide && !e.retired, `${c.idx} per-cell: ${JSON.stringify(e)}`)
     }
-    assert.ok(cap.logged.some((m) => m.includes('build-miss') && m.includes('retired')), 'retire line logged')
+    assert.ok(cap.logged.some((m) => m.includes('build-miss')), 'block line logged')
   })
 
   it('placed growth resets suspicion: stale strikes do not retire', async () => {
@@ -677,7 +676,7 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: 3 } }
     await run(bot, ctx, 5)
     const se = ctx.castle.blocked[`${ver}:${support.idx}`]
-    assert.ok(se && se.retired, `support retired: ${JSON.stringify(se)}`)
+    assert.ok(se && se.wide, `support struck per-cell: ${JSON.stringify(se)}`)
     const te = ctx.castle.blocked[`${ver}:${top.idx}`]
     assert.ok(!te || !te.retired, `top never burns the ladder: ${JSON.stringify(te)}`)
     assert.deepEqual(ctx.castle.batchStrikes || {}, {}, 'no lingering strikes')
@@ -726,7 +725,7 @@ describe('castle builder bottom-up (idkcraft-synq)', () => {
     }
     // Lowest unfinished layer (stoneLow at y=64) was struck and retired despite usable material being 0 at stall time
     const se = ctx.castle.blocked[`${ver}:${stoneLow.idx}`]
-    assert.ok(se && se.retired, `lowest attempted cell struck and retired: ${JSON.stringify(se)}`)
+    assert.ok(se && se.wide, `lowest attempted cell struck per-cell: ${JSON.stringify(se)}`)
     // Higher layer (plankHigh at y=67) was not struck (collateral)
     const pe = ctx.castle.blocked[`${ver}:${plankHigh.idx}`]
     assert.ok(!pe || !pe.retired, 'higher layer was not struck')
