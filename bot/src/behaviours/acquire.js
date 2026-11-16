@@ -132,7 +132,10 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   if (g && !S.smelt(g.name) && Array.isArray(plan.gaps)) {
     const alt = plan.gaps.map((m) => m && m[0]).find((m) => m && m.name !== g.name && S.smelt(m.name))
     const p = bot.entity && bot.entity.position
-    if (alt && p && !nearestSource(bot, ctx, [...S.sources(bot, g.name).blocks], p)) { g = alt; gaps.length = 0; gaps.push(alt.name) }
+    // A failed mine of the gap (ore in range but pathless, prod 2026-11-16
+    // bot3: explore hunted coal for torches) yields the same way.
+    const dead = a.mineFail && a.mineFail.item === g.name
+    if (alt && p && (dead || !nearestSource(bot, ctx, [...S.sources(bot, g.name).blocks], p))) { g = alt; gaps.length = 0; gaps.push(alt.name) }
   }
   // A gap whose recipe eats this item back (coal <- coal_block <- coal) is
   // a storage loop: the item comes from the world instead.
