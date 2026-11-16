@@ -2,13 +2,14 @@
 // multi-stage baritone/Dockerfile (JDK 25 + ./gradlew build --no-daemon).
 //
 // Toolchain (all pinned): Gradle 9.4.1 (wrapper, committed), Unimined
-// 1.4.2-SNAPSHOT timestamp-pinned (the 26.1.2 toolchain both in-image mods
-// use — see settings.gradle for why not Loom), MC 26.1.2 mojmap,
+// 2.0.2 release (the timestamped 1.4.2 snapshot was purged upstream; 1.4.1
+// cannot resolve 26.x — it wants an intermediary; see settings.gradle for
+// why not Loom), MC 26.1.2 (unobfuscated, so no mappings block),
 // fabric-loader 0.19.5, Baritone API 1.18.0 compileOnly (the runtime ships
 // baritone.jar; see the ivy repo + verifyBaritoneApi below).
 plugins {
     id 'java'
-    id 'xyz.wagyourtail.unimined' version '1.4.2-20260917.005300-30'
+    id 'xyz.wagyourtail.unimined' version '2.0.2'
 }
 
 group = 'idkcraft'
@@ -33,16 +34,11 @@ repositories {
     }
 }
 
-unimined.minecraft {
-    version '26.1.2'
-    mappings {
-        mojmap()
-        devFallbackNamespace 'mojmap'
+unimined {
+    minecraft {
+        version.set('26.1.2')
+        loader('fabric', '0.19.5')
     }
-    fabric {
-        loader '0.19.5'
-    }
-    defaultRemapJar = true
 }
 
 dependencies {
