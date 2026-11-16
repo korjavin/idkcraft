@@ -34,6 +34,12 @@ describe('acquire sources: recipe tree, block drops, mobs', () => {
 
 describe('acquire tick', () => {
   const mk = (items, extra) => ({ registry: acq.DEFAULT_REG, inventory: { items: () => items, emptySlotCount: () => 10 }, recipesAll: () => [], ...extra })
+  it('mixed planks under a wood-named parent never pool: 3 oak + 3 birch is short of 4 for oak_fence', () => {
+    const items = [{ name: 'oak_planks', count: 3 }, { name: 'birch_planks', count: 3 }]
+    const alts = ['oak_planks', 'birch_planks']
+    assert.notStrictEqual(tick.acquire(mk(items), {}, 'oak_planks', 4, ['oak_fence'], alts), 'done')
+    assert.strictEqual(tick.acquire(mk(items), {}, 'oak_planks', 6, ['chest'], alts), 'done', 'a #planks parent pools')
+  })
   it('done when the pack holds the need', () => {
     assert.strictEqual(tick.acquire(mk([{ name: 'sand', count: 5 }]), {}, 'sand', 4), 'done')
   })
