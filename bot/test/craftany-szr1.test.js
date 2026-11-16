@@ -77,7 +77,7 @@ describe('craftany refusal names the fetchable gap (szr1)', () => {
     const r = craftany(mockBot([{ name: 'oak_log', count: 1 }, { name: 'oak_planks', count: 1 }]), {}, fenceNames(), 3)
     assert.equal(r.done, false)
     assert.ok(!/(warped|crimson)/.test(r.line), `nether gap unobtainable: ${r.line}`)
-    assert.match(r.line, /_fence: need 4 \w+_planks/, `real gap: ${r.line}`)
+    assert.match(r.line, /_fence: need 6 \w+_planks/, `real gap (4 + 2 for the sticks): ${r.line}`)
   })
 
   it('a genuinely closest variant still wins (tie-break never overrules)', () => {
