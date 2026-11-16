@@ -1369,7 +1369,7 @@ function craftTick(bot, ctx, f, d) {
     // g0z.56: with no wood at all craftany names its last tie-break variant
     // (warped_fence) — name the real gap instead.
     const woodless = WOOD.has(d.kind) && countItems(bot, (n) => n.endsWith('_planks') || n.endsWith('_log')) === 0
-    const line = woodless ? `can't craft ${d.kind}: no planks or logs` : r.line
+    const line = woodless ? `can't craft ${d.kind}: no planks or logs` : WOOD.has(d.kind) ? r.line.replace(/need (\d+) \w+_(log|planks)\b/, 'need $1 any $2') : r.line // any wood serves, never one variant
     f.craftLine = line // szr1 core-3: the bankFull gate reads the latest failure
     try { console.log(`castlefetch ${d.kind}: craft failed: ${line}`) } catch (_) { /* log best-effort */ }
     // idkcraft-8njf: a table failure gets one fresh craft run per leg. The
@@ -3351,7 +3351,19 @@ function castlefetch(bot, ctx, target, state) {
       finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
       return
     }
-    deps.gather(bot, ctx, target, state)
+    // No trees in gather's reach: the acquire expedition (new area, bulk
+    // harvest) owns the leg before any owner ask (prod 2026-11-16 bot3).
+    if (f.woodAcquire) {
+      if (acquireTick(bot, ctx, f, d)) return
+      if (f.acquireDone) { finish(bot, ctx, 'done'); return } // the haul is on hand: the next leg crafts/lays it
+      stepFailed(ctx, 'no-trees')
+    } else deps.gather(bot, ctx, target, state)
+    if (!f.woodAcquire && failReason(ctx.stepStatus) === 'no-trees') {
+      f.woodAcquire = true
+      ctx.stepStatus = null
+      try { console.log(`castlefetch ${d.kind}: no trees near, acquire expedition`) } catch (_) { /* log best-effort */ }
+      return
+    }
     if (isFinished(ctx.stepStatus)) {
       if ((d.kind === 'fence' || d.kind === 'gate') && failReason(ctx.stepStatus) !== null) castleMod.noteDry(ctx, d.kind)
       // g0z.56: the wood shortfall, named once on the castle status (the
@@ -3412,7 +3424,17 @@ function castlefetch(bot, ctx, target, state) {
       finish(bot, ctx, 'failed:castlefetch-no-stairs')
       return
     }
-    deps.gather(bot, ctx, target, state)
+    if (f.woodAcquire) {
+      if (acquireTick(bot, ctx, f, d)) return
+      if (f.acquireDone) { finish(bot, ctx, 'done'); return } // the haul is on hand: the next leg crafts/lays it
+      stepFailed(ctx, 'no-trees')
+    } else deps.gather(bot, ctx, target, state)
+    if (!f.woodAcquire && failReason(ctx.stepStatus) === 'no-trees') {
+      f.woodAcquire = true // the expedition first, then the honest ceiling below
+      ctx.stepStatus = null
+      try { console.log('castlefetch stairs: no trees near, acquire expedition') } catch (_) { /* log best-effort */ }
+      return
+    }
     if (isFinished(ctx.stepStatus)) {
       // Honest ceiling: no trees anywhere near — name it once (a log in
       // the castle chest funds the stairs through the table fund next

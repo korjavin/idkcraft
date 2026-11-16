@@ -156,7 +156,7 @@ describe('klh2 same-kind tick hop', () => {
     try {
       const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
       const ctx = { castle: castleState() } // chestless: the leg reaches the gather chop
-      fetch(bot, ctx)
+      fetch(bot, ctx); fetch(bot, ctx) // gather no-trees, then the acquire expedition fails
       const settle = () => new Promise((r) => setImmediate(r))
       return settle().then(() => settle()).then(() => settle()).then(() => {
         assert.equal(ctx.stepStatus, 'failed:no-trees')

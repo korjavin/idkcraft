@@ -74,12 +74,42 @@ describe('idkcraft-082d dead planks leg', () => {
     const bot = makeBot({ items: [] })
     const ctx = { castle: castleState() }
     fetch(bot, ctx)
+    assert.equal(ctx.stepStatus, null, 'no trees near: the acquire expedition runs before the leg fails')
+    fetch(bot, ctx) // expedition tried (no mine on the fake)
     assert.equal(gathered, 1, 'the woodless leg opens the wood route instead of failing')
     assert.equal(ctx.stepStatus, 'failed:no-trees', 'the gather failure propagates (the prod "fetch held (failed:no-trees)" shape)')
     assert.equal(ctx.castleFetchFailKind, 'planks', 'the kind hold parks planks, not the whole step')
     assert.ok(ctx.castleFetchFailSite && ctx.castleFetchFailSite.kind === 'planks', 'the chop site parks with it')
     assert.equal(ctx.castleFetch, null, 'the leg ends instead of restarting in place')
   })
+})
+
+describe('woodless castle: expedition before the owner ask (prod 2026-11-16 bot3)', () => {
+  const realFact = castleMod.menuFact
+  const realCraft = fetch.deps.craftItem
+  const realGather = fetch.deps.gather
+  afterEach(() => { castleMod.menuFact = realFact; fetch.deps.craftItem = realCraft; fetch.deps.gather = realGather })
+
+  for (const kind of ['planks', 'fence', 'door']) {
+    it(`${kind}: no trees near starts the acquire expedition, no drop-logs ask`, async () => {
+      castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind, left: 20 }; return `${kind}-none` }
+      fetch.deps.craftItem = () => ({ done: false, line: "can't make spruce_planks: need 1 spruce_log (have 0)" })
+      fetch.deps.gather = (b, c) => { c.stepStatus = 'failed:no-trees' }
+      const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
+      bot.mine = () => Promise.reject(new Error('no blocks')) // nothing in the mine radius
+      const ctx = { castle: castleState() }
+      const lines = []
+      const orig = console.log
+      console.log = (m) => { lines.push(String(m)) }
+      try {
+        for (let i = 0; i < 6; i++) { fetch(bot, ctx); await new Promise((r) => setImmediate(r)) }
+      } finally { console.log = orig }
+      assert.ok(lines.some((l) => /no reachable source, expedition/.test(l)), lines.join('\n'))
+      assert.ok(!lines.some((l) => /drop logs/.test(l)), 'never the owner ask while the expedition runs')
+      assert.ok(!lines.some((l) => /need 1 spruce_log/.test(l)), 'the craft line names any log, not one variant')
+      assert.equal(ctx.stepStatus == null, true, 'the leg stays open on the expedition')
+    })
+  }
 })
 
 describe('idkcraft-082d leg-over completeness', () => {

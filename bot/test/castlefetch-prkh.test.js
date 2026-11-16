@@ -127,7 +127,7 @@ describe('prkh per-kind fetch hold', () => {
     fetch.deps.gather = (bot, ctx) => { ctx.stepStatus = 'failed:no-trees' }
     const bot = makeBot({ items: [{ name: 'stone_pickaxe', count: 1 }] })
     const ctx = { castle: castleState() }
-    fetch(bot, ctx)
+    fetch(bot, ctx); fetch(bot, ctx) // gather no-trees, then the acquire expedition fails
     await settle(); await settle(); await settle()
     assert.equal(ctx.stepStatus, 'failed:no-trees')
     assert.equal(ctx.castleFetchFailKind, 'fence', 'the failed kind is stamped for the record')
