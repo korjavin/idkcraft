@@ -159,7 +159,9 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
     a.blocks = blocks // resources.scan remembers these while the need lives
     if (typeof bot.mine !== 'function') return `failed:no-mine-${item}`
     const count = Math.min(short, room(bot))
-    if (count <= 0) return 'failed:pack-full'
+    // A full pack sheds junk first (never the items this chain is after),
+    // then mines; only a pack with no junk fails to the stockpile bank.
+    if (count <= 0) return require('./stockpile').tossJunk(bot, ctx, [...path, ...alts]) ? 'running' : 'failed:pack-full'
     if (a.mineFail && a.mineFail.item === item) {
       // The mine found no path (prod 2026-11-15 bot3: the same pathless
       // birch x133/h): walk to and hand-dig the nearest source not

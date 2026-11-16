@@ -141,7 +141,7 @@ function junkKeep(name, ctx) {
 }
 const TOSS_PITCH = 0.6 // radians up: the throw lands a few blocks out
 const tossing = new WeakSet()
-function tossJunk(bot, ctx) {
+function tossJunk(bot, ctx, keep = []) {
   if (!bot || typeof bot.toss !== 'function') return false
   if (tossing.has(bot)) return true
   const have = {}
@@ -150,7 +150,7 @@ function tossJunk(bot, ctx) {
   for (const [name, n] of Object.entries(have)) {
     let need = false
     try { need = require('./castle').isMaterial(name, ctx && ctx.castle) } catch (_) { need = false }
-    if (need) continue
+    if (need || keep.includes(name)) continue
     const extra = n - junkKeep(name, ctx)
     if (extra > 0) plan.push([name, extra])
   }
