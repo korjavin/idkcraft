@@ -36,8 +36,9 @@ describe('castle dig-approach for unreachable cells', () => {
   })
 
   // World: stone below y=64 except a lava pocket where asked, air above.
-  function stepBot(lava) {
+  function stepBot(lava, solidAt) {
     const goals = []
+    const controls = {}
     const dug = []
     const world = new Map()
     const bot = {
@@ -46,27 +47,53 @@ describe('castle dig-approach for unreachable cells', () => {
       pathfinder: { setGoal(g) { goals.push(g) }, goal: null },
       blockAt(p) {
         const k = `${p.x},${p.y},${p.z}`
-        const name = world.get(k) || (lava && lava(p) ? 'lava' : p.y < SITE.y ? 'stone' : 'air')
+        const name = world.get(k) || (lava && lava(p) ? 'lava' : (solidAt ? solidAt(p) : p.y < SITE.y) ? 'stone' : 'air')
         return { name, position: new Vec3(p.x, p.y, p.z), boundingBox: name === 'stone' ? 'block' : 'empty', hardness: 1.5 }
       },
       async dig(b) { dug.push(b.position); world.set(`${b.position.x},${b.position.y},${b.position.z}`, 'air') },
       async equip() {},
+      setControlState(k, v) { controls[k] = v },
+      lookAt() {},
     }
-    return { bot, goals, dug }
+    return { bot, goals, dug, controls, world }
   }
 
   it('step mover digs a staircase down through the ladder, one leg at a time', async () => {
-    const { bot, goals, dug } = stepBot()
+    // Walled in to the head (prod 28e156b1: stop=refused:below-feet): only the own column is open.
+    const { bot, goals, dug, controls } = stepBot(null, (p) => p.y < SITE.y || (p.y < SITE.y + 2 && !(p.x === SITE.x && p.z === SITE.z)))
     const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, blocked: {} } }
     const target = { x: SITE.x + 10, y: SITE.y - 20, z: SITE.z }
     const s = { legs: 0, wait: 0, w: null, digging: false, err: false }
     let r
-    for (let i = 0; i < 6 && !goals.length; i++) { r = castle.stepMove(bot, ctx, target, s); await new Promise((res) => setImmediate(res)) }
+    for (let i = 0; i < 8 && !s.w; i++) { r = castle.stepMove(bot, ctx, target, s); await new Promise((res) => setImmediate(res)) }
     assert.equal(r, 'running')
-    // Diagonal-down step: the solid waypoint cell was dug, then a 1-block leg.
-    assert.deepEqual(dug.map((p) => [p.x, p.y, p.z]), [[SITE.x + 1, SITE.y - 1, SITE.z]])
-    const g = goals[0]
-    assert.deepEqual([g.x, g.y, g.z], [SITE.x + 1, SITE.y - 1, SITE.z])
+    // Diagonal-down stair: ahead-below and its headroom dug (below-feet passes), never the own column.
+    assert.deepEqual(dug.map((p) => [p.x, p.y, p.z]).sort(), [[SITE.x + 1, SITE.y - 1, SITE.z], [SITE.x + 1, SITE.y, SITE.z], [SITE.x + 1, SITE.y + 1, SITE.z]].sort())
+    assert.deepEqual(s.w, { x: SITE.x + 1, y: SITE.y - 1, z: SITE.z })
+    castle.stepMove(bot, ctx, target, s)
+    assert.equal(goals.length, 0, 'no pathfinder leg')
+    assert.equal(controls.forward, true, 'direct walk into the stair')
+    for (let i = 0; i < 6; i++) castle.stepMove(bot, ctx, target, s)
+    assert.equal(castle.stepMove(bot, ctx, target, s), 'stall', 'a leg that never lands times out in ticks')
+    assert.equal(controls.forward, false)
+  })
+
+  it('step mover refuses a stair over a deep drop', async () => {
+    const { bot } = stepBot(null, (p) => p.y < SITE.y - 10)
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, blocked: {} } }
+    assert.equal(castle.stepMove(bot, ctx, { x: SITE.x + 10, y: SITE.y - 20, z: SITE.z }, { legs: 0, wait: 0, w: null }), 'fall')
+  })
+
+  it('a straight rise pillars through the recover prim', () => {
+    const { bot } = stepBot()
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, blocked: {} } }
+    const s = { legs: 0, wait: 0, w: null }
+    const target = { x: SITE.x, y: SITE.y + 20, z: SITE.z }
+    assert.equal(castle.stepMove(bot, ctx, target, s), 'running')
+    assert.ok(s.rec, 'pillar leg armed')
+    // No scaffold in the pack: the prim fails at once instead of hanging.
+    assert.equal(castle.stepMove(bot, ctx, target, s), 'stall:no-scaffold')
+    assert.equal(ctx.recovery, null)
   })
 
   it('step mover refuses lava next to the line', () => {

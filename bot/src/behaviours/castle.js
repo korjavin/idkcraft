@@ -34,7 +34,7 @@ const build = require('./build')
 const flat = require('./flat')
 const toolPrep = require('./toolprep')
 const cellRecovery = require('./castlerecovery')
-const { stuckDeny, denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
+const { stuckDeny, relay, protectedReason, denyReason, logDeny, NATURAL_SOLID, castleProtects, castleClears, RELOCATE, isInteractRef, yardDigBan, isOwnPlaced } = require('./util')
 const { stepDone, stepFailed, stepGen, failReason } = require('../step')
 const worker = require('../worker')
 const enclosed = require('../enclosed')
@@ -2087,15 +2087,24 @@ function far(bot, ctx, st, c, reach, now) {
   return true
 }
 const DIG_WINDOW_MS = 5 * 60 * 1000
+const UNBREAKABLE_HARD = (b) => typeof b.hardness === 'number' && b.hardness < 0
 
 // Step mover (last resort after the dig-approach ladder): one block per leg
 // along a straight/staircase line toward the cell. Each waypoint's body
 // cells dig through the stuck ladder (stuckDeny: own cells re-lay), then a
-// 1-block GoalBlock leg lets the executor step, drop, pillar or bridge it —
-// a 1-block search never runs out of budget. Refuses lava, fluid and falls.
+// direct leg (prod 28e156b1: a GoalBlock leg hung 5 min, stop=stall legs=1):
+// walk/jump at the waypoint, or recover's pillarUpRun for a straight rise,
+// each with a short tick timeout. Refuses lava, fluid and falls.
 const STEP_MAX = 96
-const STEP_LEG_TICKS = 8
+const STEP_LEG_TICKS = 6
 const STEP_FALL = 3
+function stepDrive(bot, fwd, jump) {
+  try {
+    if (typeof bot.setControlState !== 'function') return
+    bot.setControlState('forward', fwd)
+    bot.setControlState('jump', jump)
+  } catch (_) { /* drive best-effort */ }
+}
 function stepMove(bot, ctx, c, s) {
   if (s.digging) return 'running'
   if (s.err) return 'dig-error'
@@ -2103,9 +2112,19 @@ function stepMove(bot, ctx, c, s) {
   if (!bp) return 'no-pos'
   const F = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
   if (s.w) {
-    if (s.w.x === F.x && s.w.y === F.y && s.w.z === F.z) s.w = null
-    else if (++s.wait > STEP_LEG_TICKS) return 'stall'
-    else return 'running'
+    const endLeg = () => { stepDrive(bot, false, false); if (s.rec && ctx.recovery === s.rec) ctx.recovery = null; s.rec = null }
+    if (s.w.x === F.x && s.w.y === F.y && s.w.z === F.z) { endLeg(); s.w = null }
+    else if (++s.wait > STEP_LEG_TICKS) { endLeg(); return 'stall' }
+    else if (s.rec) {
+      ctx.recovery = s.rec
+      const r = require('./recover').pillarUpRun(bot, ctx) // late: recover pulls in much of the tree
+      if (String(r).startsWith('failed')) { endLeg(); return 'stall:' + r.slice(7) }
+      return 'running'
+    } else {
+      try { if (typeof bot.lookAt === 'function') bot.lookAt(new Vec3(s.w.x + 0.5, s.w.y + 1.6, s.w.z + 0.5), true) } catch (_) { /* drive anyway */ }
+      stepDrive(bot, true, s.w.y > F.y)
+      return 'running'
+    }
   }
   if (s.legs >= STEP_MAX) return 'budget'
   const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
@@ -2125,13 +2144,20 @@ function stepMove(bot, ctx, c, s) {
   if (dy > 0) cells.push([F.x, F.y + 2, F.z])
   if (dy < 0 && (ax || az)) cells.push([W.x, W.y + 2, W.z])
   for (const [x, y, z] of cells) {
-    for (const [ox, oy, oz] of [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]]) {
+    for (const [ox, oy, oz] of [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
       if (wet(at(x + ox, y + oy, z + oz))) return 'fluid'
     }
   }
   const block = cells.map(([x, y, z]) => at(x, y, z)).find((b) => b && b.boundingBox !== 'empty')
   if (block) {
-    const deny = stuckDeny(bot, ctx, block)
+    let deny = stuckDeny(bot, ctx, block)
+    // The stair ahead-below is not a self-trap (the 'below-feet' rule is for
+    // the own column); the floor scan below vets what lies under it.
+    const q = block.position
+    if (deny === 'below-feet' && q && (q.x !== F.x || q.z !== F.z)) {
+      if (ctx.castle && castleProtects(ctx.castle, q, block.name)) { deny = null; relay(ctx, block) } else deny = protectedReason(bot, block, ctx)
+      if (!deny && (UNBREAKABLE_HARD(block))) deny = 'unbreakable'
+    }
     if (deny) { logDeny(block, deny); return 'refused:' + deny }
     s.digging = true
     void (async () => {
@@ -2154,15 +2180,15 @@ function stepMove(bot, ctx, c, s) {
       if (b.boundingBox !== 'empty' || wet(b)) break
       if (++fall > 64) return 'void'
     }
-    if (fall > STEP_FALL && !(bot.inventory && bot.inventory.items().some((i) => i.name === 'dirt' || i.name === 'cobblestone'))) return 'fall'
+    // shortcut: no bridging with direct legs, a deeper gap refuses; add a place-ahead leg if prod shows stop=fall.
+    if (fall > STEP_FALL) return 'fall'
   }
   s.w = W
   s.wait = 0
   s.legs++
-  try {
-    ctx.castleGoal = new goals.GoalBlock(W.x, W.y, W.z)
-    bot.pathfinder.setGoal(ctx.castleGoal)
-  } catch (_) { /* the leg times out as stall */ }
+  try { if (ctx.castleGoal && bot.pathfinder.goal === ctx.castleGoal) bot.pathfinder.setGoal(null) } catch (_) { /* direct drive anyway */ }
+  // A straight rise pillars (shared recover prim, scaffold from the pack).
+  if (!ax && !az) s.rec = { st: null }
   return 'running'
 }
 
