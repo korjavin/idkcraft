@@ -293,7 +293,7 @@ describe('castle scale: review 01 (ids, residence)', () => {
       const bandMax = castleMod.litterCell(st, d, w - 1 + R, 64 + bp.siteTop(v), d - 1 + R).idx
       const fb = castleMod.fillBase(st)
       assert.ok(bandMax < fb, `N=${n}: band ${bandMax} < fill ${fb}`)
-      assert.ok(fb + (w + 2) * (d + 2) * 4 < bp.DECOR_BASE, `N=${n}: fills below decor`)
+      assert.ok(fb + (w + 2 * castleMod.FILL_RING) * (d + 2 * castleMod.FILL_RING) * castleMod.FILL_DEPTH < bp.DECOR_BASE, `N=${n}: fills below decor`)
       assert.equal(castleMod.bandOf(st, fb), null, 'a fill id never decodes as band litter')
       const corner = castleMod.bandOf(st, bandMax)
       assert.deepEqual([corner.x, corner.y, corner.z], [w - 1 + R, 64 + bp.siteTop(v), d - 1 + R])

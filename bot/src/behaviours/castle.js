@@ -1278,18 +1278,26 @@ const FILL_BASE_SCALED = 2850000
 function fillBase(st) {
   return blueprint.scaleOf(st && st.blueprintVersion) === 1 ? FILL_BASE : FILL_BASE_SCALED
 }
-const FILL_DEPTH = 4 // holes dug for transit are shallow
+// Walkable apron (owner 2026-11-16: creeper craters, own tunnels and
+// stair shafts left the castle floor unwalkable): the grade under the
+// footprint plus a FILL_RING ring outside the walls, FILL_DEPTH deep, is
+// kept solid. A column is filled only above a solid bottom inside the
+// window (a crater or shaft), never over open air (a hillside or ravine
+// would grow a wall), bottom-up so every placement has a floor.
+const FILL_RING = 5
+const FILL_DEPTH = 6
 // Invert the scan's ID, but only for cells that scan could actually emit.
 // Prep IDs and invalid offsets must retain their temporary expiry semantics.
 function fillOf(st, idx) {
   if (!Number.isSafeInteger(idx) || !st || !st.site || idx < fillBase(st) || idx >= blueprint.DECOR_BASE) return null
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const t = idx - fillBase(st)
-  if (t >= (w + 2) * (d + 2) * FILL_DEPTH) return null
+  const R = FILL_RING
+  if (t >= (w + 2 * R) * (d + 2 * R) * FILL_DEPTH) return null
   const dd = t % FILL_DEPTH + 1
   const q = Math.floor(t / FILL_DEPTH)
-  const dx = Math.floor(q / (d + 2)) - 1
-  const dz = q % (d + 2) - 1
+  const dx = Math.floor(q / (d + 2 * R)) - R
+  const dz = q % (d + 2 * R) - R
   const c = { x: st.site.x + dx, y: st.site.y - dd, z: st.site.z + dz, kind: 'stone', prep: 'fill', idx }
   const k = `${c.x},${c.y},${c.z}`
   const sill = sillOf(st)
@@ -1307,15 +1315,19 @@ function fillTargets(bot, ctx, st, now) {
     const at = blueprint.absPlan(site, st.rot, st.blueprintVersion).at
     const sill = sillOf(st)
     const sillKey = `${sill.x},${sill.y},${sill.z}`
-    for (let dx = -1; dx <= w; dx++) {
-      for (let dz = -1; dz <= d; dz++) {
-        for (let dd = 1; dd <= FILL_DEPTH; dd++) {
+    const R = FILL_RING
+    for (let dx = -R; dx < w + R; dx++) {
+      for (let dz = -R; dz < d + R; dz++) {
+        let floored = false // a solid (or plan) cell below: this air is a hole, not open sky
+        for (let dd = FILL_DEPTH + 1; dd >= 1; dd--) {
           const x = site.x + dx, y = site.y - dd, z = site.z + dz
           const k = `${x},${y},${z}`
-          if (k === sillKey || at.has(k)) continue
           const n = nameAt(bot, { x, y, z })
-          if (n == null || !AIR.has(n)) continue // unloaded reads null: never fill blind
-          list.push({ x, y, z, kind: 'stone', prep: 'fill', idx: fillBase(st) + ((dx + 1) * (d + 2) + (dz + 1)) * FILL_DEPTH + (dd - 1) })
+          if (k === sillKey || at.has(k)) { floored = true; continue }
+          if (n == null) { floored = false; continue } // unloaded reads null: never fill blind
+          if (!AIR.has(n)) { floored = n !== 'water' && n !== 'lava' && !build.isReplaceable(n); continue }
+          if (!floored || dd > FILL_DEPTH) continue
+          list.push({ x, y, z, kind: 'stone', prep: 'fill', idx: fillBase(st) + ((dx + R) * (d + 2 * R) + (dz + R)) * FILL_DEPTH + (dd - 1) })
         }
       }
     }
@@ -3355,7 +3367,7 @@ function castle(bot, ctx) {
     // retries once fetch refills the kit.
     if (st.phase === 'complete') {
       const fill = nextFill(st, fillTargets(bot, ctx, st, now), now)
-      if (fill && fillItem(bot, ctx)) { work(bot, ctx, st, fill, now, 'backfilling a transit hole'); return }
+      if (fill && fillItem(bot, ctx)) { work(bot, ctx, st, fill, now, 'filling a floor hole'); return }
     }
     // Decor (g0z.31): a complete castle lays its panes (g0z.32: and
     // banners) through the same placeCell; phase stays 'complete'
@@ -3405,6 +3417,8 @@ module.exports.darkTargets = darkTargets
 module.exports.darkOf = darkOf
 module.exports.darkAskOpen = darkAskOpen
 module.exports.FILL_BASE = FILL_BASE
+module.exports.FILL_RING = FILL_RING
+module.exports.FILL_DEPTH = FILL_DEPTH
 module.exports.fillBase = fillBase
 module.exports.fillOf = fillOf
 module.exports.scaffoldShape = scaffoldShape
