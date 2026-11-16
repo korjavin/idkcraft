@@ -1333,6 +1333,7 @@ function fillTargets(bot, ctx, st, now) {
     }
   }
   if (ctx) ctx.castleFill = { key, at: now, list }
+  if (key) console.log(`castle floor scan holes=${list.length}`)
   return list
 }
 // Next workable fill cell (not backing off, never retired): the menu and
@@ -1721,6 +1722,20 @@ function menuFact(bot, ctx, now = Date.now()) {
     }
     let word = null
     if (!r.cell) {
+      // Floor upkeep before waiting/decor (owner 2026-11-16: a waiting hole
+      // read 'blocked' forever and the fill never ran): a workable fill
+      // words 'clear'; no filler on hand asks castlefetch for stone.
+      if (st.phase === 'complete') {
+        const fills = fillTargets(bot, ctx, st, now).filter((c) => nextFill(st, [c], now))
+        if (fills.length && fillItem(bot, ctx)) {
+          ctx.castleWord = { word: 'clear' }
+          return 'clear'
+        }
+        if (fills.length) {
+          ctx.castleWord = { kind: 'stone', left: fills.length }
+          return stockWord(bot, 'stone', fills.length)
+        }
+      }
       // Blocked (g0z.23): the waiting kind and its remainder stay on the
       // word, so a far site reads stock (walk back) and castlefetch
       // quarries the waiting kind while the build stands. On site the word
@@ -3347,6 +3362,13 @@ function castle(bot, ctx) {
   }
   const sill = sillFirst(bot, ctx, st, r.idx < 0 ? null : cells[r.idx], now)
   if (sill) { work(bot, ctx, st, sill, now, 'laying the door sill'); return }
+  // Transit backfill (idkcraft-pjsl): a below-grade hole no plan covers,
+  // one cell per tick once no plan cell is workable — before the waiting
+  // branch, so a hole in backoff never starves the floor.
+  if (r.idx < 0 && st.phase === 'complete') {
+    const fill = nextFill(st, fillTargets(bot, ctx, st, now), now)
+    if (fill && fillItem(bot, ctx)) { work(bot, ctx, st, fill, now, 'filling a floor hole'); return }
+  }
   if (r.idx < 0) {
     if (r.waiting) {
       // Every remaining cell is waiting out a backoff (or owed): the holes
@@ -3361,14 +3383,6 @@ function castle(bot, ctx) {
     // the sweep runs before decor.
     const lit = nextLitter(st, litterTargets(bot, ctx, st, now), now, bot, ctx)
     if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
-    // Transit backfill (idkcraft-pjsl): a below-grade hole no plan covers,
-    // one cell per tick once nothing else is open. No material on hand
-    // stays silent (the word below stays silent too) — the next pass
-    // retries once fetch refills the kit.
-    if (st.phase === 'complete') {
-      const fill = nextFill(st, fillTargets(bot, ctx, st, now), now)
-      if (fill && fillItem(bot, ctx)) { work(bot, ctx, st, fill, now, 'filling a floor hole'); return }
-    }
     // Decor (g0z.31): a complete castle lays its panes (g0z.32: and
     // banners) through the same placeCell; phase stays 'complete'
     // (residence/stockpile read it). First open cell whose kind is held.

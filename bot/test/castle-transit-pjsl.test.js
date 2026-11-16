@@ -246,13 +246,44 @@ describe('pjsl transit backfill', () => {
     const second = castle.nextFill(ctx.castle, list, now)
     assert.ok(!second || second.idx !== first.idx, 'backing-off cell skipped')
   })
-  it("menuFact words 'clear' with fill material, stays silent without", () => {
+  it("menuFact words 'clear' with fill material, asks for stone without", () => {
     const { cells } = holed()
     const now = Date.now()
     const st = own({ visitedAt: now })
     assert.equal(castle.menuFact(worldBot(cells), { castle: st }, now), 'clear', 'worded with dirt on hand')
     const st2 = own({ visitedAt: now })
-    assert.equal(castle.menuFact(worldBot(cells, []), { castle: st2 }, now), 'done', 'silent with an empty pack')
+    const ctx2 = { castle: st2 }
+    assert.equal(castle.menuFact(worldBot(cells, []), ctx2, now), 'stone-none', 'empty pack raises stone demand')
+    assert.equal(ctx2.castleWord.kind, 'stone')
+  })
+  it('a complete castle with a crater and a waiting plan hole still scans and fills the floor', () => {
+    const cells = painted()
+    const at = blueprint.absPlan(SITE, 0, V).at
+    const crater = []
+    for (let dx = 8; dx < 23 && crater.length < 4; dx++) {
+      for (let dz = 8; dz < 19 && crater.length < 4; dz++) {
+        if (!at.has(`${SITE.x + dx},${SITE.y - 1},${SITE.z + dz}`) && !at.has(`${SITE.x + dx},${SITE.y - 2},${SITE.z + dz}`)) {
+          crater.push(key(SITE.x + dx, SITE.y - 2, SITE.z + dz), key(SITE.x + dx, SITE.y - 1, SITE.z + dz))
+        }
+      }
+    }
+    for (const k of crater) cells.set(k, 'air')
+    // a plan cell missing and backing off: the old path stopped at 'blocked'
+    const wall = blueprint.absPlan(SITE, 0, V).cells.find((c) => c.kind === 'stone')
+    cells.set(key(wall.x, wall.y, wall.z), 'air')
+    const now = Date.now()
+    const st = own({ visitedAt: now, blocked: { [`2:${wall.idx}`]: { tries: 1, until: now + 600000, why: 'refilled' } } })
+    const bot = worldBot(cells)
+    const logs = []
+    const log = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      assert.equal(castle.menuFact(bot, { castle: st }, now), 'clear', 'fill words over the waiting hole')
+      const ctx = { castle: st }
+      castle(bot, ctx)
+      assert.equal(st.status, 'filling a floor hole')
+    } finally { console.log = log }
+    assert.ok(logs.some((l) => /^castle floor scan holes=[1-9]/.test(l)), 'rescan logs the hole count')
   })
 })
 
