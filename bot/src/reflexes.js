@@ -574,6 +574,42 @@ function castleGuardCentre(ctx, bp) {
     return { x: site.x + w / 2, z: site.z + d / 2 }
   } catch (_) { return null }
 }
+// Any moving reflex: a reflex goal that answers noPath REFLEX_NOPATH_TICKS
+// ticks in a row, or a threat no closer than its best distance for
+// REFLEX_STALE_MS, gives the body back (prod bot3 2026-11-16: creeper flee
+// noPath every second for 55 min, goal work frozen). The dropped threat is
+// ignored until it comes REFLEX_REARM blocks closer than where it was dropped.
+const REFLEX_NOPATH_TICKS = 5
+const REFLEX_STALE_MS = 15000
+const REFLEX_REARM = 1.5
+// Returns 'go' (keep moving), or 'stuck' / 'stale' once it gives up.
+function reflexGuard(ctx, key, d, now = Date.now()) {
+  const dropped = ctx.reflexDropped && ctx.reflexDropped[key]
+  if (dropped != null) {
+    if (d > dropped - REFLEX_REARM) return 'dropped'
+    delete ctx.reflexDropped[key]
+  }
+  let g = ctx.reflexMove
+  if (!g || g.key !== key) g = ctx.reflexMove = { key, noPath: 0, bestD: d, bestAt: now }
+  if (d < g.bestD - 0.5) { g.bestD = d; g.bestAt = now }
+  g.noPath = key === ctx.lastGoalKey && ctx.lastPathStatus === 'noPath' ? g.noPath + 1 : 0
+  const why = g.noPath >= REFLEX_NOPATH_TICKS ? 'stuck' : now - g.bestAt >= REFLEX_STALE_MS ? 'stale' : null
+  if (!why) return 'go'
+  ;(ctx.reflexDropped = ctx.reflexDropped || {})[key] = d
+  ctx.reflexMove = null
+  return why
+}
+// Line-of-sight from the eyes to the entity (true/false), '?' when unknown.
+function entityVisible(bot, e) {
+  try {
+    const eye = bot.entity.position.offset(0, bot.entity.height || 1.62, 0)
+    const to = e.position.offset(0, (e.height || 1.7) / 2, 0)
+    const dir = to.minus(eye)
+    const len = dir.norm()
+    const hit = bot.world.raycast(eye, dir.scaled(1 / len), len)
+    return !hit
+  } catch (_) { return '?' }
+}
 function fleeReflex(bot, ctx, state) {
   // rqdj: a creeper outside a closed house cannot reach us; running out is the danger.
   // inShelter alone is not enough (home.js sets it on the open-air night pillar
@@ -628,9 +664,23 @@ function fleeReflex(bot, ctx, state) {
     if (Math.hypot(sx, sz) < 0.3) { dx = ox / ol; dz = oz / ol } else { dx = sx; dz = sz }
     len = Math.hypot(dx, dz)
   }
+  const key = `flee:${creeper.id}`
+  const p = creeper.position
+  ctx.reflexTrigger = `threat=creeper tpos=${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)} tdist=${d.toFixed(1)} visible=${entityVisible(bot, creeper)}`
+  const verdict = reflexGuard(ctx, key, d)
+  if (verdict !== 'go') {
+    // Fleeing does not work here: hit it when it is in reach (knockback
+    // resets the fuse), else hold still and let goal work have the body.
+    if (verdict !== 'dropped') console.log(`reflex flee gave-up why=${verdict} ${ctx.reflexTrigger}`)
+    if (d <= fightMod.SWING_RANGE) {
+      try { fightMod.equipGear(bot); fightMod.swing(bot, creeper) } catch (_) { /* mock bots may lack lookAt/attack */ }
+      return d
+    }
+    ctx.fleeTargetId = null
+    return false
+  }
   const nx = bp.x + (dx / len) * CREEPER_FLEE_DIST
   const nz = bp.z + (dz / len) * CREEPER_FLEE_DIST
-  const key = `flee:${creeper.id}`
   let moving = false
   try { moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) } catch (_) { /* stationary default */ }
   // Re-issue on a new creeper or a stalled executor (the creeper chases, so a
@@ -645,4 +695,4 @@ function fleeReflex(bot, ctx, state) {
   return d
 }
 
-module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, LAST_RESORT, starving, lastResortOk, mealFor, setFoodChestProbe, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, installEquipGuard }
+module.exports = { eatReflex, EDIBLE_FOODS, RAW_FALLBACK, LAST_RESORT, starving, lastResortOk, mealFor, setFoodChestProbe, pickEdible, breathReflex, BREATH_OXYGEN_LOW, BREATH_OXYGEN_FULL, meleeReflex, fleeReflex, reflexGuard, installEquipGuard }
