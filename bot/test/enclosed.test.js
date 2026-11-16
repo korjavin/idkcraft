@@ -84,6 +84,23 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     assert.equal(denyReason(bot, wall, rctx), null)
     assert.equal(denyReason(bot, wall, { ...rctx, recovery: null }), 'protected')
   })
+  it('recover stuck digs share the ladder (prod 2026-11-16 bot3 dig_through failed:protected x41): own cell digs + re-lay, danger refuses, cheapest first', () => {
+    const { bot, ctx } = world()
+    ctx.recovery = { action: 'dig_through' }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      const wall = bot.blockAt({ x: 3, y: 65, z: 7 })
+      assert.equal(enclosed.stuckDeny(bot, ctx, wall), null, 'own castle cell no longer refused')
+      assert.deepStrictEqual(ctx.enclosedEscapes.map((c) => `${c.x},${c.y},${c.z}`), ['3,65,7'])
+      assert.equal(ctx.castleCursor, 0)
+      assert.ok(ctx.ownBreakUntil > Date.now(), 'pathfinder own-break window opens')
+      assert.equal(enclosed.stuckDeny(bot, ctx, bot.blockAt({ x: 4, y: 64, z: 8 })), 'unbreakable')
+      assert.equal(enclosed.stuckDeny(bot, ctx, { name: 'lava', position: { x: 0, y: 64, z: 0 }, boundingBox: 'empty' }), 'liquid')
+      assert.ok(enclosed.stuckCost(bot, ctx, wall) > enclosed.stuckCost(bot, ctx, { name: 'dirt', position: { x: 9, y: 64, z: 9 }, boundingBox: 'block' }))
+    } finally { console.log = orig }
+  })
   it('refuses only on physics: unbreakable walls all round', () => {
     const { bot, ctx, blocks } = world('bedrock')
     const orig = console.log

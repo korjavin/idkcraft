@@ -15,7 +15,7 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const castle = require('./castle')
-const { denyReason, isOwnPlaced, inHouseFootprint, NATURAL_SOLID, CLEAR_FLORA } = require('./behaviours/util')
+const { breakable, COST, OK, stuckDeny, stuckCost, relay, KEEP } = require('./behaviours/util')
 const { countItems } = require('./perception')
 
 const WINDOW_MS = 60000
@@ -33,8 +33,7 @@ const UP_MAX = 6 // pillar height the up leg may climb
 const TRAP_R = 8 // trapsSelf flood radius
 const SKY = 24
 const REACH = 4
-const GRACE_MS = 300000 // recover digs share the own-build allowance this long
-const KEEP = /(_bed|_door|chest|barrel|shulker_box|furnace|smoker|hopper|dispenser|dropper|_trapdoor|_gate|crafting_table)$/
+const GRACE_MS = 300000 // recover digs share the own-build allowance this long (util STUCK_GRACE_MS)
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 const sessions = new WeakMap()
 
@@ -50,38 +49,6 @@ function targetKey(bot, ctx) {
   if (g && [g.x, g.y, g.z].every(Number.isFinite)) return `${Math.floor(g.x)},${Math.floor(g.y)},${Math.floor(g.z)}`
   return String((ctx.lastDecision && ctx.lastDecision.action) || ctx.step || 'none')
 }
-
-// Own build: a laid plan cell of our castle, our own placement, or our house box.
-function ownBuild(ctx, b) {
-  let props = null
-  try { props = typeof b.getProperties === 'function' ? b.getProperties() : null } catch (_) { props = null }
-  return (ctx.castle && castle.protects(ctx.castle, b.position, b.name, props)) || isOwnPlaced(ctx, b) ||
-    inHouseFootprint(ctx.home, b.position) === true
-}
-// Natural terrain the work rules protect only for location (yard, apron,
-// home zone): an enclosed body may dig it. Never a foreign build.
-function natural(name) {
-  return NATURAL_SOLID.has(name) || CLEAR_FLORA.has(name) || /(_ore|_leaves)$/.test(name)
-}
-// Owner rule (2026-11-15): when enclosed nothing is refused for ownership:
-// null = free; 'nat' = protected-zone natural terrain; 'own' = own build
-// (budgeted, re-laid); 'foreign' = anyone's build; 'keep' = container/bed/
-// door. Only physics refuses: liquids, unbreakable, and the shared denyReason
-// hazards (gravity overhead, submerged, under-feet, trap).
-const UNBREAKABLE = /^(bedrock|barrier|end_portal_frame|end_portal|nether_portal|command_block|structure_block|jigsaw|reinforced_deepslate|light)$/
-function breakable(bot, ctx, b) {
-  if (air(b)) return null
-  if (!b || /lava|water/.test(b.name)) return 'liquid'
-  if (UNBREAKABLE.test(b.name) || (typeof b.hardness === 'number' && b.hardness < 0)) return 'unbreakable'
-  if (KEEP.test(b.name)) return 'keep'
-  const d = denyReason(bot, b, ctx)
-  if (!d) return null
-  if (d !== 'protected') return d
-  return ownBuild(ctx, b) ? 'own' : natural(b.name) ? 'nat' : 'foreign'
-}
-// Cost per cell, cheapest first; foreign builds and containers are the last resort.
-const COST = { null: 1, nat: 10, own: 100, foreign: 1000, keep: 10000 }
-const OK = (r) => String(r) in COST
 
 // Exit directions, best first: the first layer (both body cells) diggable or
 // own build, solid floor under it (never a drop), no lava; fewest own cells,
@@ -362,11 +329,8 @@ function dig(bot, ctx, ep, block, why) {
       if (why === 'keep' && /chest|barrel|shulker_box|furnace|smoker|hopper|dispenser|dropper/.test(block.name)) ep.collect = { c, until: Date.now() + COLLECT_MS }
       if (why === 'own') {
         ep.own++
-        ctx.enclosedEscapes = (ctx.enclosedEscapes || []).slice(-63)
-        ctx.enclosedEscapes.push({ x: c.x, y: c.y, z: c.z, name: block.name })
+        relay(ctx, block)
         log(`enclosed escape broke own ${block.name} at ${c.x},${c.y},${c.z} (re-lay)`)
-        ctx.castleCursor = 0 // the castle scan re-lays the opened plan cell
-        ctx.castleScanAt = 0
       }
     } catch (_) { ep.failed = true } finally { ep.digging = false }
   })()
@@ -400,6 +364,6 @@ function runUp(bot, ctx, ep, feet, walk, finish, fail) {
   return true
 }
 
-module.exports = { tick, pickExit, pickExits, trapsSelf, WINDOW_MS, DISTINCT, LAYERS, MAX_OWN }
+module.exports = { tick, stuckDeny, stuckCost, pickExit, pickExits, trapsSelf, WINDOW_MS, DISTINCT, LAYERS, MAX_OWN }
 // Late require: recover pulls in much of the behaviour tree.
 module.exports.pillar = (bot, ctx) => require('./behaviours/recover').pillarUpRun(bot, ctx)

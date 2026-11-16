@@ -462,6 +462,7 @@
   "castleCursor": {
     "writers": [
       "src/behaviours/castle.js",
+      "src/behaviours/util.js",
       "src/enclosed.js",
       "src/orders.js"
     ],
@@ -470,6 +471,7 @@
   "enclosedEscapes": {
     "writers": [
       "src/behaviours/castle.js",
+      "src/behaviours/util.js",
       "src/enclosed.js"
     ],
     "owner": "src/enclosed.js"
@@ -668,6 +670,7 @@
   "castleScanAt": {
     "writers": [
       "src/behaviours/castle.js",
+      "src/behaviours/util.js",
       "src/enclosed.js",
       "src/orders.js"
     ],
@@ -2134,5 +2137,12 @@
       "src/llm-orders.js"
     ],
     "owner": "src/llm-orders.js"
+  },
+  "ownBreakUntil": {
+    "writers": [
+      "src/behaviours/castlefetch.js",
+      "src/behaviours/util.js"
+    ],
+    "owner": "src/behaviours/util.js"
   }
 }

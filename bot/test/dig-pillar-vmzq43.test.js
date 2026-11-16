@@ -403,7 +403,7 @@ describe('dig_pillar run (vmzq.43)', () => {
     } finally { cap.release() }
   })
 
-  it('a protected head fails honest without digging', async () => {
+  it('a protected (own house) head is dug when stuck (owner 2026-11-16 ladder)', async () => {
     const bot = pocketBot()
     const ctx = pocketCtx()
     ctx.home = {
@@ -418,8 +418,8 @@ describe('dig_pillar run (vmzq.43)', () => {
       assert.equal(r.action, 'dig_pillar')
       recover.run(bot, ctx)
       await flush()
-      assert.equal(ctx.recovery.status, 'failed:protected')
-      assert.deepEqual(bot.dug, [])
+      assert.notEqual(ctx.recovery.status, 'failed:protected')
+      assert.equal(bot.dug.length, 1)
     } finally { cap.release() }
   })
 

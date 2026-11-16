@@ -770,4 +770,73 @@ function doorLaneDX(block) {
   }
 }
 
-module.exports = { SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
+
+// Stuck dig cost ladder (moved from src/enclosed.js, shared by recover prims).
+const KEEP = /(_bed|_door|chest|barrel|shulker_box|furnace|smoker|hopper|dispenser|dropper|_trapdoor|_gate|crafting_table)$/
+const STUCK_GRACE_MS = 300000
+function air(b) { return !!b && b.boundingBox === 'empty' && !/water|lava/.test(b.name) }
+function log(m) { console.log(m) }
+// Own build: a laid plan cell of our castle, our own placement, or our house box.
+function ownBuild(ctx, b) {
+  let props = null
+  try { props = typeof b.getProperties === 'function' ? b.getProperties() : null } catch (_) { props = null }
+  return (ctx.castle && castle.protects(ctx.castle, b.position, b.name, props)) || isOwnPlaced(ctx, b) ||
+    inHouseFootprint(ctx.home, b.position) === true
+}
+// Natural terrain the work rules protect only for location (yard, apron,
+// home zone): an enclosed body may dig it. Never a foreign build.
+function natural(name) {
+  return NATURAL_SOLID.has(name) || CLEAR_FLORA.has(name) || /(_ore|_leaves)$/.test(name)
+}
+// Owner rule (2026-11-15): when enclosed nothing is refused for ownership:
+// null = free; 'nat' = protected-zone natural terrain; 'own' = own build
+// (budgeted, re-laid); 'foreign' = anyone's build; 'keep' = container/bed/
+// door. Only physics refuses: liquids, unbreakable, and the shared denyReason
+// hazards (gravity overhead, submerged, under-feet, trap).
+const UNBREAKABLE = /^(bedrock|barrier|end_portal_frame|end_portal|nether_portal|command_block|structure_block|jigsaw|reinforced_deepslate|light)$/
+function breakable(bot, ctx, b) {
+  if (air(b)) return null
+  if (!b || /lava|water/.test(b.name)) return 'liquid'
+  if (UNBREAKABLE.test(b.name) || (typeof b.hardness === 'number' && b.hardness < 0)) return 'unbreakable'
+  if (KEEP.test(b.name)) return 'keep'
+  const d = denyReason(bot, b, ctx)
+  if (!d) return null
+  if (d !== 'protected') return d
+  return ownBuild(ctx, b) ? 'own' : natural(b.name) ? 'nat' : 'foreign'
+}
+// Cost per cell, cheapest first; foreign builds and containers are the last resort.
+const COST = { null: 1, nat: 10, own: 100, foreign: 1000, keep: 10000 }
+const OK = (r) => String(r) in COST
+
+// Owner rule (2026-11-16): every stuck dig (recover prims too) rides this
+// ladder. null = dig it, else the physical-danger reason that refuses. An own
+// cell is queued for re-lay; any build cell opens the pathfinder's own-break
+// window (ctx.ownBreakUntil: castle guardCastle / body v2 lists).
+function stuckDeny(bot, ctx, b) {
+  const r = breakable(bot, ctx, b)
+  if (!OK(r)) return r
+  if (r === 'own' || r === 'foreign' || r === 'keep') {
+    ctx.ownBreakUntil = Date.now() + STUCK_GRACE_MS
+    const c = b.position
+    if (r === 'own') relay(ctx, b)
+    log(`recover dig ${r} ${b.name} at ${c.x},${c.y},${c.z}`)
+  }
+  return null
+}
+// Ladder cost of one cell (air 0, refused Infinity): recover picks the cheapest side.
+function stuckCost(bot, ctx, b) {
+  if (air(b)) return 0
+  const r = breakable(bot, ctx, b)
+  return OK(r) ? COST[String(r)] : Infinity
+}
+// An own cell we open is re-laid, not damage (castle progress: `castle relay escape=N`).
+function relay(ctx, b) {
+  const c = b.position
+  ctx.enclosedEscapes = (ctx.enclosedEscapes || []).slice(-63)
+  ctx.enclosedEscapes.push({ x: c.x, y: c.y, z: c.z, name: b.name })
+  ctx.castleCursor = 0 // the castle scan re-lays the opened plan cell
+  ctx.castleScanAt = 0
+}
+
+
+module.exports = { breakable, COST, OK, stuckDeny, stuckCost, relay, KEEP, SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }

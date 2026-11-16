@@ -833,6 +833,7 @@ function chestTick(bot, ctx, f, d) {
     if (v2 && f.chestKey != null && ctx.lastGoalKey === f.chestKey &&
       ctx.lastPathStatus === 'noPath' && (f.chestRetries | 0) < CHEST_RETRIES) {
       const n = (f.chestRetries = (f.chestRetries | 0) + 1)
+      ctx.ownBreakUntil = Date.now() + 300000 // owner 2026-11-16: the stuck walk may break own cells, priced high (guardCastle/body v2)
       if (n > 1) {
         const cell = chestVia(bodyPos(bot), at, n)
         if (cell) {

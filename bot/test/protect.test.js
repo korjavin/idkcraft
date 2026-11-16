@@ -570,20 +570,24 @@ describe('recover dig guards (idkcraft-drq)', () => {
     }
   }
 
-  it('dig_through refuses a plank wall with failed:protected', () => {
+  // Owner rule 2026-11-16 (stuck cost ladder, util.stuckDeny): a stuck body
+  // breaks a build (foreign = cost 1000), only danger refuses.
+  it('dig_through breaks a plank wall when stuck (foreign build, last-resort cost)', async () => {
     const bot = recBot(new Map([['1,64,0', 'oak_planks']]))
     const ctx = recCtx('dig_through')
     recover.run(bot, ctx)
-    assert.equal(ctx.recovery.status, 'failed:protected')
-    assert.deepEqual(bot.digs, [], 'wall never touched')
+    assert.equal(ctx.recovery.status, 'running')
+    await new Promise((r) => setImmediate(r))
+    assert.deepEqual(bot.digs, ['oak_planks'])
   })
 
-  it('dig_up refuses a plank ceiling with failed:protected', () => {
+  it('dig_up breaks a plank ceiling when stuck', async () => {
     const bot = recBot(new Map([['0,65,0', 'oak_planks']]))
     const ctx = recCtx('dig_up')
     recover.run(bot, ctx)
-    assert.equal(ctx.recovery.status, 'failed:protected')
-    assert.deepEqual(bot.digs, [], 'ceiling never touched')
+    assert.equal(ctx.recovery.status, 'running')
+    await new Promise((r) => setImmediate(r))
+    assert.deepEqual(bot.digs, ['oak_planks'])
   })
 
   it('dig_up refuses a stone ceiling under sand with failed:gravity', () => {
@@ -613,18 +617,16 @@ describe('recover dig guards (idkcraft-drq)', () => {
     assert.deepEqual(bot.digs, ['sand'], 'sand itself is dug')
   })
 
-  it('dig_step refuses protected above and cap cells', () => {
+  it('dig_step digs (no longer refuses) protected above and cap cells', () => {
     const st = () => ({ dir: [1, 0], phase: 'dig', waited: 0, digInFlight: false, digError: false, startFloor: 64 })
     const botA = recBot(new Map([['1,65,0', 'suspicious_sand']]))
     const ctxA = recCtx('dig_step', st())
     recover.run(botA, ctxA)
-    assert.equal(ctxA.recovery.status, 'failed:protected')
-    assert.deepEqual(botA.digs, [], 'above never dug')
+    assert.equal(ctxA.recovery.status, 'running')
     const botC = recBot(new Map([['1,66,0', 'suspicious_gravel']]))
     const ctxC = recCtx('dig_step', st())
     recover.run(botC, ctxC)
-    assert.equal(ctxC.recovery.status, 'failed:protected')
-    assert.deepEqual(botC.digs, [], 'cap never dug')
+    assert.equal(ctxC.recovery.status, 'running')
   })
 
   it('dig_through still digs natural dirt (guard passes through)', async () => {

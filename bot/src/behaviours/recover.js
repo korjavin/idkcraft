@@ -21,7 +21,7 @@ const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
 const doors = require('../doors')
-const { botPos, denyReason, logDeny, protectedReason } = require('./util')
+const { botPos, logDeny, protectedReason, stuckDeny, stuckCost } = require('./util')
 const worker = require('../worker')
 const { waterUpRun, countBuckets, wall2At, findCombo, findComboStand, findWaterfall, waterfallUpRun } = require('./waterup')
 const castle = require('../castle') // yardRing only (pure, no requires of its own)
@@ -542,12 +542,13 @@ function farLavaAt(bot, dx, dz) {
 // air or digs the same way (adv: the 1.8 body stands the mount with its
 // head in (dx,2,dz)), no lava in or around the head, none behind the dig,
 // and the head has room to jump. Returns the side [dx, dz] or null.
-function findDigStepDir(bot) {
+function findDigStepDir(bot, ctx) {
   // vmzq.37: a solid jump head digs first (the buried 1x2 pocket), like the
   // side cells — only when it digs and no lava sits on it.
   const own = cellAt(bot, 0, 2, 0)
   if (solid(own) && (!diggable(bot, own) || headLavaAt(bot))) return null
-  let cobbleSide = null
+  let best = null
+  let bestCost = Infinity
   for (const [dx, dz] of SIDES) {
     const step = cellAt(bot, dx, 0, dz)
     if (!solid(step)) continue
@@ -557,17 +558,14 @@ function findDigStepDir(bot) {
     if (cap && solid(cap) && !diggable(bot, cap)) continue
     if (capLavaAt(bot, dx, dz)) continue
     if (farLavaAt(bot, dx, dz)) continue
-    // Cobble last (revmux jsf.4-01 major): foreign cobble is drq-protected
-    // and refuses at denyReason — never let it shadow a natural side that
-    // digs. An only-cobble staircase is still offered (own-session pillars
-    // ladder through placedByBot).
-    if ((above && above.name === 'cobblestone') || (cap && cap.name === 'cobblestone')) {
-      if (!cobbleSide) cobbleSide = [dx, dz]
-      continue
-    }
-    return [dx, dz]
+    // Cheapest side on the stuck ladder (enclosed.js: natural < own < foreign
+    // < keep; danger = Infinity, skipped). No ctx: cobble last (revmux jsf.4-01).
+    const cells = [above, cap].filter(solid)
+    const cost = ctx ? cells.reduce((a, b) => a + stuckCost(bot, ctx, b), 0)
+      : cells.some((b) => b.name === 'cobblestone') ? 1 : 0
+    if (cost < bestCost) { best = [dx, dz]; bestCost = cost }
   }
-  return cobbleSide
+  return best
 }
 
 // The own-head cell a pickless buried body digs before pillaring through
@@ -772,7 +770,7 @@ function recoverFacts(bot, ctx, state, target) {
     headBlocked: headBlockedAt(bot),
     ownHeadBlocked: ownHeadBlockedAt(bot),
     throughBlocked: throughBlockedAt(bot, stuck.goal),
-    digStep: findDigStepDir(bot),
+    digStep: findDigStepDir(bot, ctx),
     hopStep: findHopStepDir(bot, gp),
     digPillar: findDigPillarHead(bot) != null,
     walls: sides.walls,
@@ -1433,7 +1431,7 @@ function digUpRun(bot, ctx) {
   }
   if (typeof bot.dig !== 'function') return 'failed:no-dig'
   const cell = solid(head1) ? head1 : head2
-  const denyUp = denyReason(bot, cell, ctx)
+  const denyUp = stuckDeny(bot, ctx, cell)
   if (denyUp) { logDeny(cell, denyUp); return 'failed:' + denyUp } // idkcraft-drq
   st.digInFlight = true
   void (async () => {
@@ -1529,7 +1527,7 @@ function digStepCell(bot, ctx, st, cell) {
     return 'running'
   }
   if (typeof bot.dig !== 'function') { setJump(bot, false); return 'failed:no-dig' }
-  const deny = denyReason(bot, cell, ctx)
+  const deny = stuckDeny(bot, ctx, cell)
   if (deny) { setJump(bot, false); logDeny(cell, deny); return 'failed:' + deny } // idkcraft-drq
   st.digInFlight = true
   st.waited = 0
@@ -1567,7 +1565,7 @@ function digStepRun(bot, ctx) {
   setForward(bot, false)
   setBack(bot, false)
   if (!st.dir) {
-    st.dir = findDigStepDir(bot)
+    st.dir = findDigStepDir(bot, ctx)
     if (!st.dir) { setJump(bot, false); return 'failed:no-step' }
   }
   if (st.stepPos) {
@@ -1613,7 +1611,7 @@ function digStepRun(bot, ctx) {
       return 'running'
     }
     if (typeof bot.dig !== 'function') { setJump(bot, false); return 'failed:no-dig' }
-    const denyAbove = denyReason(bot, above, ctx)
+    const denyAbove = stuckDeny(bot, ctx, above)
     if (denyAbove) { setJump(bot, false); logDeny(above, denyAbove); return 'failed:' + denyAbove } // idkcraft-drq
     st.digInFlight = true
     void (async () => {
@@ -1638,7 +1636,7 @@ function digStepRun(bot, ctx) {
       return 'running'
     }
     if (typeof bot.dig !== 'function') { setJump(bot, false); return 'failed:no-dig' }
-    const denyCap = denyReason(bot, cap, ctx)
+    const denyCap = stuckDeny(bot, ctx, cap)
     if (denyCap) { setJump(bot, false); logDeny(cap, denyCap); return 'failed:' + denyCap } // idkcraft-drq
     st.digInFlight = true
     void (async () => {
@@ -1975,7 +1973,7 @@ function digThroughRun(bot, ctx) {
   }
   if (typeof bot.dig !== 'function') return 'failed:no-dig'
   const cell = solid(feet) ? feet : head
-  const denyThrough = denyReason(bot, cell, ctx)
+  const denyThrough = stuckDeny(bot, ctx, cell)
   if (denyThrough) { logDeny(cell, denyThrough); return 'failed:' + denyThrough } // idkcraft-drq
   st.digInFlight = true
   void (async () => {
