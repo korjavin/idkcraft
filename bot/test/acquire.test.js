@@ -47,6 +47,21 @@ describe('acquire tick', () => {
     assert.strictEqual(tick.acquire(b, ctx, 'sand', 40), 'running', 'in flight')
     assert.strictEqual(calls.length, 1)
   })
+  it('full pack: tosses junk (not the wanted sand, not tools) then mines; no junk fails pack-full', async () => {
+    const items = [{ name: 'gravel', type: 1, count: 64 }, { name: 'sand', type: 2, count: 1 }, { name: 'iron_pickaxe', type: 3, count: 1 }]
+    const tossed = []
+    let free = 0
+    const b = mk(items, { inventory: { items: () => items, emptySlotCount: () => free }, castle: undefined, toss: (type, m, n) => { tossed.push(type); items.splice(items.findIndex((i) => i.type === type), 1); free = 1; return Promise.resolve() }, mine: () => new Promise(() => {}) })
+    const ctx = { castle: {} }
+    assert.strictEqual(tick.acquire(b, ctx, 'sand', 40), 'running')
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+    assert.deepStrictEqual(tossed, [1])
+    assert.strictEqual(tick.acquire(b, ctx, 'sand', 40), 'running')
+    assert.ok(ctx.acquire.mining)
+    free = 0
+    ctx.acquire = null
+    assert.strictEqual(tick.acquire(b, {}, 'sand', 40), 'failed:pack-full')
+  })
   it('no source in reach: runs the explore expedition (running), then walks to a remembered far find', () => {
     const goalsSet = []
     const b = mk([], { mine: () => new Promise(() => {}), entity: { position: { x: 0, y: 64, z: 0 } }, blockAt: () => null, pathfinder: { setGoal: (g) => goalsSet.push(g) } })
