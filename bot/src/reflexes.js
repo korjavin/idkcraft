@@ -562,6 +562,8 @@ function meleeReflex(bot, ctx, state) {
 const CREEPER_FLEE_RANGE = 6
 const CREEPER_FLEE_DIST = 6
 const CASTLE_GUARD_MARGIN = 8
+// prod bot3 2026-11-16: creeper at 8.4 still cost castle cells.
+const CASTLE_CREEPER_RANGE = 10
 // Own castle site centre when the body stands within the site box + margin, else null.
 function castleGuardCentre(ctx, bp) {
   try {
@@ -631,24 +633,25 @@ function fleeReflex(bot, ctx, state) {
   // idkcraft-e4p4: reuse the buildState snapshot when present (nearest
   // creeper at any distance — the flee band is enforced below) instead of
   // rescanning; states built elsewhere fall back to the ranged scan.
-  let creeper = null
-  try { creeper = (state && state._snap) ? state._creeper : findCreeper(bot, CREEPER_FLEE_RANGE) } catch (_) { return false }
-  if (!creeper) { ctx.fleeTargetId = null; return false }
   const bp = bot.entity && bot.entity.position
   if (!bp) return false
+  // Castle guard (prod bot3: fled creepers blew craters in its own castle):
+  // near the own castle the band widens so the creeper is lured off early,
+  // hit when it closes (knockback resets the fuse), and the retreat leads
+  // away from the castle centre too, so a blast lands outside the walls.
+  const cc = castleGuardCentre(ctx, bp)
+  const range = cc ? CASTLE_CREEPER_RANGE : CREEPER_FLEE_RANGE
+  let creeper = null
+  try { creeper = (state && state._snap) ? state._creeper : findCreeper(bot, range) } catch (_) { return false }
+  if (!creeper) { ctx.fleeTargetId = null; return false }
   let d
   try { d = bp.distanceTo(creeper.position) } catch (_) { return false }
   if (typeof d !== 'number') return false
-  if (d > CREEPER_FLEE_RANGE) { ctx.fleeTargetId = null; return false }
+  if (d > range) { ctx.fleeTargetId = null; return false }
   let dx = bp.x - creeper.position.x
   let dz = bp.z - creeper.position.z
   if (dx === 0 && dz === 0) dx = 1
   let len = Math.hypot(dx, dz)
-  // Castle guard (prod bot3: fled creepers blew craters in its own castle):
-  // near the own castle, hit the creeper when it closes (knockback resets
-  // the fuse) and retreat away from the castle centre too, so a blast
-  // lands outside the walls.
-  const cc = castleGuardCentre(ctx, bp)
   if (cc) {
     if (d <= fightMod.SWING_RANGE) {
       if (ctx.fleeTargetId !== creeper.id) { try { fightMod.equipGear(bot) } catch (_) { /* fists knock back too */ } }

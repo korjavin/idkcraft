@@ -2801,7 +2801,7 @@ describe('paused stop', () => {
 describe('death/respawn log lines', () => {
   const { deathLine, respawnLine, handleDeath, handleRespawn, createLifecycle } = require('../src/index')
   const { buildState } = require('../src/perception')
-  const BARE = ' time=? inside=no step=none owner=none sword=0 pickaxe=none dist_home=none dist_spawn=none'
+  const BARE = ' time=? inside=no step=none owner=none sword=0 pickaxe=none dist_home=none dist_spawn=none cause=mob:zombie'
 
   function deadBot() {
     return {
@@ -2911,7 +2911,7 @@ describe('death/respawn log lines', () => {
   })
 
   // neuc.65.1: the enriched death line parses back field by field.
-  const DEATH_RE = /^death health=(\S+) hostiles=(\d+) at (-?\d+ -?\d+ -?\d+|unknown)(?: nearest=(\S+) (\S+))? time=(day|dusk|night|\?) inside=(yes|no) step=(\S+)(?: via=(\S+))? owner=(\S+) sword=(\d+) pickaxe=(none|wood|stone\+) dist_home=(\d+|none) dist_spawn=(\d+|none)$/
+  const DEATH_RE = /^death health=(\S+) hostiles=(\d+) at (-?\d+ -?\d+ -?\d+|unknown)(?: nearest=(\S+) (\S+))? time=(day|dusk|night|\?) inside=(yes|no) step=(\S+)(?: via=(\S+))? owner=(\S+) sword=(\d+) pickaxe=(none|wood|stone\+) dist_home=(\d+|none) dist_spawn=(\d+|none) cause=(\S+)$/
 
   function ctxBot() {
     const bot = deadBot()
@@ -2927,7 +2927,7 @@ describe('death/respawn log lines', () => {
     const line = deathLine(ctxBot())
     const m = line.match(DEATH_RE)
     assert.ok(m, line)
-    assert.deepEqual(m.slice(6), ['night', 'yes', 'gather', 'retreat', 'roam', '1', 'stone+', '20', '106'])
+    assert.deepEqual(m.slice(6), ['night', 'yes', 'gather', 'retreat', 'roam', '1', 'stone+', '20', '106', 'mob:zombie'])
   })
 
   it('enriched death line: day reads ctx.home, one step when goal and step agree', () => {
@@ -2938,7 +2938,7 @@ describe('death/respawn log lines', () => {
     bot.inventory = { items: () => [] }
     const m = deathLine(bot).match(DEATH_RE)
     assert.ok(m, deathLine(bot))
-    assert.deepEqual(m.slice(6), ['day', 'no', 'gather', undefined, 'roam', '0', 'none', '30', '131'])
+    assert.deepEqual(m.slice(6), ['day', 'no', 'gather', undefined, 'roam', '0', 'none', '30', '131', 'unknown'])
   })
 
   it('enriched death line never throws: a throwing ctx prints the unknowns', () => {
