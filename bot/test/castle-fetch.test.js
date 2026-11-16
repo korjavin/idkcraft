@@ -453,6 +453,41 @@ describe('castlefetch sources (g0z.4)', () => {
     assert.notEqual(ctx.stepStatus, 'failed:castlefetch-no-fence')
   })
 
+  it('woodless fence leg: the expedition walks far, chops past NEED_LOGS and the leg clock, then ends done', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'fence', left: 6 }; return 'fence-batch' }
+    fetch.deps.craftItem = () => ({ done: false, line: "can't make oak_fence: need 4 oak_planks (have 3)" })
+    fetch.deps.gather = (b, c) => { c.stepStatus = 'failed:no-trees' }
+    const acqMod = require('../src/behaviours/acquire')
+    const real = acqMod.acquire
+    const items = [{ name: 'oak_planks', count: 3 }, { name: 'stick', count: 4 }]
+    const bot = makeBot({ items })
+    const start = bot.entity.position
+    let ticks = 0
+    acqMod.acquire = (b, c) => {
+      c.acquire = c.acquire || {}
+      if (++ticks > 8) return 'done'
+      c.acquire.expedition = 'birch_log' // explore rays outward, chopping on the way
+      b.entity.position = pos(start.x + 10 * ticks, 64, start.z)
+      add(items, 'birch_log', 3)
+      return 'running'
+    }
+    try {
+      const ctx = { castle: castleState() }
+      fetch(bot, ctx) // gather: no trees near -> expedition
+      for (let i = 0; i < 8; i++) {
+        fetch(bot, ctx)
+        if (ctx.castleFetch) ctx.castleFetch.t0 -= fetch.LEG_MAX_MS // the batch-yield clock runs out
+        assert.ok(!/^failed/.test(ctx.stepStatus || ''), `tick ${i}: ${ctx.stepStatus}`)
+      }
+      assert.ok(bot.entity.position.x - start.x > 64, 'walked out past 64')
+      assert.ok(count(items, 'birch_log') >= 14, 'past NEED_LOGS, still the expedition')
+      assert.ok(ctx.castleFetch.spend.walk > 0, 'leg-over walk counter sees the expedition')
+      fetch(bot, ctx) // acquire done -> acquireDone
+      fetch(bot, ctx)
+      assert.equal(ctx.stepStatus, 'done')
+    } finally { acqMod.acquire = real }
+  })
+
   it('missing planks with nothing to craft: chops logs through gather', () => {
     castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'planks', left: 20 }; return 'planks-none' }
     fetch.deps.craftItem = () => ({ done: false, line: 'need 1 log' })

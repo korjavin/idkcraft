@@ -107,7 +107,10 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   const a = ctx.acquire || (ctx.acquire = {})
   if (a.mining || (a.hunt && ctx.bring === a.hunt)) return 'running'
   if (!alts.includes(item)) alts = [item, ...alts]
-  const held = alts.reduce((t, i) => t + have(bot, i), 0)
+  // Planks under a wood-named parent (oak_fence, birch_door) never pool:
+  // 3 oak + 3 birch is not 4 of one wood, so count the best single wood.
+  const one = path.length > 0 && alts.every((i) => i.endsWith('_planks')) && !require('./craftany').poolsPlanks(bot, path[path.length - 1])
+  const held = one ? Math.max(0, ...alts.map((i) => have(bot, i))) : alts.reduce((t, i) => t + have(bot, i), 0)
   if (held >= n) return 'done'
   if (path.length > S.DEPTH) return `failed:deep-${item}`
   const reg = S.regOf(bot)
@@ -115,7 +118,7 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   let plan = null
   const gaps = []
   for (const i of alts) {
-    const want = have(bot, i) + n - held
+    const want = one ? n : have(bot, i) + n - held
     const p = craftany.planCraft(bot, ctx, [i], want)
     if (p.ok || p.fail === 'no-table') {
       const r = craftany(bot, ctx, i, want)

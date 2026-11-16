@@ -458,7 +458,7 @@ function acquireTick(bot, ctx, f, d) {
   // Any variant of the item the kind lays serves (birch planks for oak).
   const alts = require('../sources').family(f.acquire.item).filter((i) => blueprint.matches(d.kind, i))
   const r = acquireMod.acquire(bot, ctx, f.acquire.item, f.acquire.n, [], alts)
-  if (r === 'running') return true
+  if (r === 'running') { spend(f, ctx.acquire && ctx.acquire.expedition ? 'walk' : 'other'); return true }
   // A pack that filled mid-harvest ends the trip with what it holds: the craft/lay rungs take it.
   if ((r === 'done' || (r === 'failed:pack-full' && countItems(bot, (x) => alts.includes(x)) > 0)) && !f.acquireDone) { f.acquireDone = true; f.craftOut = false; return true } // the craft rung takes it next tick
   try { console.log(`castlefetch ${d.kind}: acquire ${r}`) } catch (_) { /* log best-effort */ }
@@ -3257,7 +3257,7 @@ function castlefetch(bot, ctx, target, state) {
     }
     if (typeof f.lastGainAt === 'number') since = f.lastGainAt
   }
-  if (d.word === 'batch' && !(f.chest && f.chest.far) && typeof since === 'number' && Date.now() - since > LEG_MAX_MS) {
+  if (d.word === 'batch' && !(f.chest && f.chest.far) && !f.acquire && typeof since === 'number' && Date.now() - since > LEG_MAX_MS) {
     try { console.log(`castlefetch ${d.kind}: batch ready, yielding`) } catch (_) { /* log best-effort */ }
     finish(bot, ctx, 'done')
     return
@@ -3346,6 +3346,14 @@ function castlefetch(bot, ctx, target, state) {
     // A full load already on hand means the craft failed for another
     // reason (table, reach): chopping more would finish 'done' at once
     // and re-pick forever (revmux 01) — fail so the hold parks it.
+    // A running expedition (this leg's, or one an interrupted leg left in
+    // ctx.acquire) owns the leg first: logs it chops on the way must not
+    // trip this guard (prod 2026-11-16 bot3: failed:castlefetch-craft-fence mid-expedition).
+    if (!f.woodAcquire && ctx.acquire && ctx.acquire.expedition && /_log$/.test(ctx.acquire.expedition)) f.woodAcquire = true
+    if (f.woodAcquire) {
+      if (acquireTick(bot, ctx, f, d)) return
+      if (f.acquireDone) { finish(bot, ctx, 'done'); return } // the haul is on hand: the next leg crafts/lays it
+    }
     if (countItems(bot, (n) => n.endsWith('_log')) >= require('../budget').NEED_LOGS) {
       if (d.kind === 'fence' || d.kind === 'gate') castleMod.noteDry(ctx, d.kind) // the decor word skips it (dry() shape)
       finish(bot, ctx, `failed:castlefetch-craft-${d.kind}`)
@@ -3353,11 +3361,8 @@ function castlefetch(bot, ctx, target, state) {
     }
     // No trees in gather's reach: the acquire expedition (new area, bulk
     // harvest) owns the leg before any owner ask (prod 2026-11-16 bot3).
-    if (f.woodAcquire) {
-      if (acquireTick(bot, ctx, f, d)) return
-      if (f.acquireDone) { finish(bot, ctx, 'done'); return } // the haul is on hand: the next leg crafts/lays it
-      stepFailed(ctx, 'no-trees')
-    } else deps.gather(bot, ctx, target, state)
+    if (f.woodAcquire) stepFailed(ctx, 'no-trees') // the expedition above gave up
+    else deps.gather(bot, ctx, target, state)
     if (!f.woodAcquire && failReason(ctx.stepStatus) === 'no-trees') {
       f.woodAcquire = true
       ctx.stepStatus = null
