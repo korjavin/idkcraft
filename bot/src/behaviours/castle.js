@@ -587,7 +587,7 @@ function pick(bot, ctx, st, cells, key, now) {
   // lays while holes wait out their backoff.
   for (const k of Object.keys(st.blocked)) {
     const [v, i] = k.split(':')
-    const c = cells[Number(i)] || decorOf(st, Number(i)) || bandOf(st, Number(i)) || boxOf(st, Number(i)) || fillOf(st, Number(i)) || (Number(i) === SILL_IDX ? sillOf(st) : null)
+    const c = cells[Number(i)] || decorOf(st, Number(i)) || bandOf(st, Number(i)) || boxOf(st, Number(i)) || fillOf(st, Number(i)) || darkOf(st, Number(i)) || (Number(i) === SILL_IDX ? sillOf(st) : null)
     // Off-plan entries (prep) live until they expire (g0z.14);
     // decor entries (g0z.31) live until laid, so a bad pane cell retires;
     // band and box litter entries and transit fills live until resolved, so
@@ -1330,6 +1330,64 @@ function nextFill(st, list, now) {
   }) || null
 }
 
+// Dark cells (prod 2026-11-16 bot3: six hostiles by day at the site, a
+// creeper and zombies killed it on castlefetch/craft): every spawnable dark
+// cell (darkspots.scan) in the footprint + DARK_MARGIN, from DARK_BELOW
+// under the site (caves) to DARK_ABOVE, plus a DARK_HOT box around each
+// mob-death mark near the site, gets a torch. Not plan cells (the castle
+// would clear a torch from them). Off-plan torch cells like the fills,
+// cached DARK_RESCAN_MS (a ~50k blockAt pass).
+const DARK_BASE = 5000000 // past the sill (4M): ((dx+64)*256 + dz+64)*128 + dy+64
+const DARK_MARGIN = 4
+const DARK_BELOW = 16
+const DARK_ABOVE = 24
+const DARK_HOT = 8
+const DARK_NEAR = 48 // a mob death this close to the site box lights its zone
+const DARK_RESCAN_MS = 60000
+function darkIdx(st, x, y, z) {
+  const dx = x - st.site.x, dy = y - st.site.y, dz = z - st.site.z
+  if (dx < -64 || dx >= 192 || dz < -64 || dz >= 192 || dy < -64 || dy >= 64) return null
+  return DARK_BASE + ((dx + 64) * 256 + (dz + 64)) * 128 + (dy + 64)
+}
+function darkOf(st, idx) {
+  if (!Number.isSafeInteger(idx) || !st || !st.site || idx < DARK_BASE || idx >= DARK_BASE + 256 * 256 * 128) return null
+  const t = idx - DARK_BASE
+  return { x: st.site.x + Math.floor(t / (256 * 128)) - 64, y: st.site.y + (t % 128) - 64, z: st.site.z + Math.floor(t / 128) % 256 - 64, kind: 'torch', dark: true, idx }
+}
+function darkTargets(bot, ctx, st, now) {
+  const site = st && st.site
+  const key = site && typeof site.x === 'number' ? `${site.x},${site.y},${site.z},${st.rot | 0},v${ver(st)}` : null
+  const c0 = ctx && ctx.castleDark
+  if (c0 && c0.key === key && now - c0.at < DARK_RESCAN_MS) return c0.list.filter((c) => !done(bot, c))
+  let list = []
+  if (key) {
+    const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
+    const boxes = [{ x0: site.x - DARK_MARGIN, x1: site.x + w - 1 + DARK_MARGIN, z0: site.z - DARK_MARGIN, z1: site.z + d - 1 + DARK_MARGIN, y0: site.y - DARK_BELOW, y1: site.y + DARK_ABOVE }]
+    for (const s of (ctx && ctx.danger && ctx.danger.spots) || []) {
+      // Mob deaths only (danger.markMobDeath's wide mark), near the site box.
+      if (!(s && s.r === require('../danger').MOB_RADIUS)) continue
+      if (s.x < site.x - DARK_NEAR || s.x > site.x + w + DARK_NEAR || s.z < site.z - DARK_NEAR || s.z > site.z + d + DARK_NEAR) continue
+      const x = Math.floor(s.x), y = Math.floor(s.y), z = Math.floor(s.z)
+      boxes.unshift({ x0: x - DARK_HOT, x1: x + DARK_HOT, z0: z - DARK_HOT, z1: z + DARK_HOT, y0: y - 4, y1: y + 4, hot: true })
+    }
+    const { at } = blueprint.absPlan(site, st.rot, st.blueprintVersion)
+    const decor = blueprint.decorPlan(site, st.rot, st.blueprintVersion).at
+    const sill = sillOf(st)
+    const skip = (x, y, z) => {
+      const k = `${x},${y},${z}`
+      return at.has(k) || decor.has(k) || k === `${sill.x},${sill.y},${sill.z}`
+    }
+    list = require('../darkspots').scan(bot, boxes, skip)
+      .map((c) => ({ x: c.x, y: c.y, z: c.z, hot: c.hot, kind: 'torch', dark: true, idx: darkIdx(st, c.x, c.y, c.z) }))
+      .filter((c) => c.idx != null)
+    if (list.length) console.log(`castle dark cells=${list.length}`)
+  }
+  if (ctx) ctx.castleDark = { key, at: now, list }
+  return list
+}
+// Next workable dark cell (not backing off, never retired), fill shape.
+function nextDark(st, list, now) { return nextFill(st, list, now) }
+
 // Batch gate (build precedent): a castle leg starts with BATCH of the next
 // kind on hand, or the whole remainder of that kind when less is left.
 const BATCH = 16
@@ -1568,6 +1626,22 @@ function menuFact(bot, ctx, now = Date.now()) {
     if (!fetching && cellRecovery.startable(bot, ctx, st, r.cells, now, RECOVERY_HOOKS)) {
       ctx.castleWord = { word: 'clear' }
       return 'clear'
+    }
+    // Dark cells (lighting): held torches word torch-batch so the castle
+    // step runs and lays them first; none held asks castlefetch for torches
+    // (coal, else charcoal from logs) unless the torch kind is dry or parked.
+    // Only while the site is dangerous (fresh damage or a hostile in the
+    // site box, a mob-death zone near): otherwise the build/tidy words run
+    // and castle() still lays dark cells whenever a torch is on hand.
+    const hot = (typeof ctx.castleDangerAt === 'number' && now - ctx.castleDangerAt < DANGER_MS) ||
+      ((ctx.castleDark && ctx.castleDark.list) || []).some((c) => c.hot)
+    if (!fetching && hot) {
+      const dark = darkTargets(bot, ctx, st, now).filter((c) => nextDark(st, [c], now))
+      const torchOut = dryKinds(ctx).has('torch') || (() => { try { return park.isParked(ctx, 'torch') } catch (_) { return false } })()
+      if (dark.length && (usable(bot, 'torch', ctx) > 0 || !torchOut)) {
+        ctx.castleWord = { kind: 'torch', left: dark.length }
+        return stockWord(bot, 'torch', dark.length)
+      }
     }
     let word = null
     if (!r.cell) {
@@ -3022,6 +3096,12 @@ function castle(bot, ctx) {
   // read 0/1722 and the walk back counted as fresh progress. Off-site the
   // last value stands (as in menuFact).
   if (ctx.castleScanAt !== fullBefore && siteLoaded(bot, st)) progress(bot, st, cells, ctx)
+  // Dark cells first while a torch is on hand (prod 2026-11-16: mobs spawn
+  // in the dark site by day); none on hand, menuFact words torch-none.
+  if (usable(bot, 'torch', ctx) > 0 && siteLoaded(bot, st)) {
+    const dk = nextDark(st, darkTargets(bot, ctx, st, now), now)
+    if (dk) { work(bot, ctx, st, dk, now, 'lighting a dark spot'); return }
+  }
   const sill = sillFirst(bot, ctx, st, r.idx < 0 ? null : cells[r.idx], now)
   if (sill) { work(bot, ctx, st, sill, now, 'laying the door sill'); return }
   if (r.idx < 0) {
@@ -3090,6 +3170,8 @@ module.exports.menuFact = menuFact
 module.exports.litterTargets = litterTargets
 module.exports.fillTargets = fillTargets
 module.exports.nextFill = nextFill
+module.exports.darkTargets = darkTargets
+module.exports.darkOf = darkOf
 module.exports.FILL_BASE = FILL_BASE
 module.exports.fillBase = fillBase
 module.exports.fillOf = fillOf

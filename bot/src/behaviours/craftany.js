@@ -429,6 +429,7 @@ function planCraft(bot, ctx, names, count) {
   } catch (_) { reach = null }
   let refusal = null
   let tableBlocked = null
+  const gaps = [] // every variant's gap: acquire may take another variant's input (charcoal for coal)
   for (const target of cands) {
     const e = byName[target]
     if (!e || typeof e.id !== 'number') continue
@@ -468,6 +469,7 @@ function planCraft(bot, ctx, names, count) {
         return { ok: true, target, recipe: r, needs, times, requiresTable, tableRecipe: trec }
       }
       const cand = { target, missing }
+      gaps.push(missing)
       if (!refusal || gapCmp(cand, refusal) <= 0) refusal = cand
     }
   }
@@ -475,7 +477,7 @@ function planCraft(bot, ctx, names, count) {
   // The structured gaps ride along for did.4 sub-orders (the winning
   // variant's [{name, need, have}]); existing callers read ok/fail/target/
   // line only and are unaffected.
-  if (refusal) return { ok: false, fail: 'missing', target: refusal.target, line: missingLine(refusal.target, refusal.missing), missing: refusal.missing }
+  if (refusal) return { ok: false, fail: 'missing', target: refusal.target, line: missingLine(refusal.target, refusal.missing), missing: refusal.missing, gaps }
   return { ok: false, fail: 'no-recipe' }
 }
 

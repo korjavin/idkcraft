@@ -125,7 +125,15 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
     const m = p.fail === 'missing' && p.missing && p.missing[0]
     if (m && !gaps.includes(m.name)) gaps.push(m.name)
   }
-  const g = plan && plan.fail === 'missing' && plan.missing && plan.missing[0]
+  let g = plan && plan.fail === 'missing' && plan.missing && plan.missing[0]
+  // A gap with no source near (coal, no ore in range) yields to another
+  // recipe variant's gap a furnace makes (charcoal from any log): torches
+  // without coal go the log -> charcoal way instead of a coal expedition.
+  if (g && !S.smelt(g.name) && Array.isArray(plan.gaps)) {
+    const alt = plan.gaps.map((m) => m && m[0]).find((m) => m && m.name !== g.name && S.smelt(m.name))
+    const p = bot.entity && bot.entity.position
+    if (alt && p && !nearestSource(bot, ctx, [...S.sources(bot, g.name).blocks], p)) { g = alt; gaps.length = 0; gaps.push(alt.name) }
+  }
   // A gap whose recipe eats this item back (coal <- coal_block <- coal) is
   // a storage loop: the item comes from the world instead.
   const up = [...path, item]
