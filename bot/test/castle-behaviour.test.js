@@ -679,6 +679,8 @@ describe('g0z.2 castle executor', () => {
     await run(bot, ctx, 5)
     assert.equal(ctx.castle.blocked[`${1}:0`], undefined, 'approach ticks never strike')
     await run(bot, ctx, 5)
+    assert.ok(ctx.ownBreakUntil > Date.now(), 'first ladder opens the dig-approach window')
+    await run(bot, ctx, 5)
     assert.equal(ctx.castle.blocked[`${1}:0`].why, 'unreachable')
     assert.equal(bot.calls.places.length, 0)
   })

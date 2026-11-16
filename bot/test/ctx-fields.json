@@ -2140,6 +2140,7 @@
   },
   "ownBreakUntil": {
     "writers": [
+      "src/behaviours/castle.js",
       "src/behaviours/castlefetch.js",
       "src/behaviours/util.js"
     ],
