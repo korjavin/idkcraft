@@ -1966,6 +1966,7 @@
       "src/behaviours/bring.js",
       "src/behaviours/build.js",
       "src/behaviours/castle.js",
+      "src/behaviours/castlefetch.js",
       "src/behaviours/craftany.js",
       "src/behaviours/deep.js",
       "src/behaviours/deliver.js",

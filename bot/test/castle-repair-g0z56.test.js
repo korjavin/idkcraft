@@ -145,6 +145,8 @@ describe('castle repair (g0z.56)', () => {
       d.craftItem = () => ({ done: false, line: "can't make warped_fence: need 4 warped_planks (have 0)" })
       d.gather = (b, c) => { c.stepStatus = 'failed:no-trees' }
       castlefetch(bot, ctx, null, {})
+      assert.ok(!logs.some((l) => /drop logs/.test(l)), 'no owner ask before the expedition')
+      castlefetch(bot, ctx, null, {}) // the acquire expedition fails (no mine on the fake)
     } finally {
       Object.assign(d, saved)
       console.log = log

@@ -707,6 +707,8 @@ describe('castlefetch give-ups and guards (g0z.4 revmux 01)', () => {
     const ctx = { castle: castleState() }
     fetch(bot, ctx)
     fetch(bot, ctx)
+    assert.notEqual(ctx.castle.status, 'no wood within 64 — drop logs in the castle chest', 'no owner ask before the expedition')
+    fetch(bot, ctx) // the acquire expedition fails (no mine on the fake)
     assert.equal(ctx.castle.status, 'no wood within 64 — drop logs in the castle chest')
     assert.equal(ctx.stepStatus, 'failed:castlefetch-no-stairs')
   })
