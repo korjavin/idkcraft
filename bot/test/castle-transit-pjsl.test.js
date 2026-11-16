@@ -202,14 +202,15 @@ describe('pjsl transit backfill', () => {
       const st = own({ rot })
       const { w, d } = blueprint.siteDimensions(rot, V)
       const bot = worldBot(painted())
-      const valid = castle.FILL_BASE + ((w + 1) * (d + 2) + (d + 1)) * 4 + 3
-      const outside = castle.FILL_BASE + (w + 2) * (d + 2) * 4
-      const plan = blueprint.absPlan(SITE, rot, V).cells.find((c) => c.y < SITE.y && c.x >= SITE.x - 1 && c.x <= SITE.x + w && c.z >= SITE.z - 1 && c.z <= SITE.z + d && SITE.y - c.y <= 4)
+      const R = castle.FILL_RING, D = castle.FILL_DEPTH
+      const valid = castle.FILL_BASE + ((w + 2 * R - 1) * (d + 2 * R) + (d + 2 * R - 1)) * D + D - 1
+      const outside = castle.FILL_BASE + (w + 2 * R) * (d + 2 * R) * D
+      const plan = blueprint.absPlan(SITE, rot, V).cells.find((c) => c.y < SITE.y && SITE.y - c.y <= D)
       assert.ok(plan)
-      const planId = castle.FILL_BASE + ((plan.x - SITE.x + 1) * (d + 2) + (plan.z - SITE.z + 1)) * 4 + (SITE.y - plan.y - 1)
+      const planId = castle.FILL_BASE + ((plan.x - SITE.x + R) * (d + 2 * R) + (plan.z - SITE.z + R)) * D + (SITE.y - plan.y - 1)
       const entry = { tries: 2, until: 1, why: 'unreachable' }
       st.blocked = Object.fromEntries([valid, outside, planId].map((id) => [`2:${id}`, { ...entry }]))
-      const x = SITE.x + w, y = SITE.y - 4, z = SITE.z + d
+      const x = SITE.x + w + R - 1, y = SITE.y - D, z = SITE.z + d + R - 1
       const read = bot.blockAt
       bot.blockAt = (p) => key(p.x, p.y, p.z) === key(x, y, z) ? null : read(p)
       castle(bot, { castle: st })
