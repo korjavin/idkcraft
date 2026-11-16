@@ -1811,6 +1811,18 @@ function menuFact(bot, ctx, now = Date.now()) {
           return stockWord(bot, kind, left)
         }
       }
+      // Retired-but-open material cells are still owed (prod 2026-11-16 bot3:
+      // torch cells retired unreachable, 'no castle material owed'): latch
+      // their kind like a waiting cell so castlefetch/acquire keep demand.
+      if (st.phase !== 'complete') {
+        const bl = st.blocked || {}
+        const owe = r.cells.find((o) => ITEM[o.kind] && !done(bot, o) && !RETIRED_PERMANENT_RE.test(String((bl[bkey(st, o.idx)] || {}).why || '')))
+        if (owe) {
+          const left = r.cells.filter((o) => o.kind === owe.kind && !done(bot, o)).length
+          ctx.castleWord = { word: 'blocked', kind: owe.kind, left }
+          return 'blocked'
+        }
+      }
       word = st.phase === 'complete' ? 'done' : 'finish'
     }
     // A prep fill takes any filler on hand, no batch (g0z.16): works now.
@@ -2038,9 +2050,25 @@ function far(bot, ctx, st, c, reach, now) {
   f.dist = dist
   ctx.castleFar = f
   ctx.castleGoalIdx = -1
-  if (f.n >= STRIKES) blockCell(ctx, st, c, 'unreachable', now)
+  if (f.n >= STRIKES) {
+    // Unreachable plan cell (prod 2026-11-16 bot3: torches 15-40 below, 82x
+    // 'unreachable'): before striking, one more ladder with the stuck window
+    // open, so A* tunnels/stairs through laid cells (re-laid, #876) and
+    // scaffolds inside the site band; only its own danger checks refuse.
+    const sweep = c.idx >= LITTER_BOX_BASE && c.idx < blueprint.DECOR_BASE // litter/fill stay best-effort
+    if (!f.dig && !sweep) {
+      f.dig = true
+      f.n = 0
+      f.minDist = Infinity
+      ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+      try { console.log(`castle dig-approach ${c.x} ${c.y} ${c.z} ${c.kind}: path through own cells for ${DIG_WINDOW_MS / 60000} min`) } catch (_) { /* log best-effort */ }
+      return true
+    }
+    blockCell(ctx, st, c, 'unreachable', now)
+  }
   return true
 }
+const DIG_WINDOW_MS = 5 * 60 * 1000
 
 // A borrower (fight, lead, a reflex) replaced the castle step's goal while
 // its cell stayed the same. Shared by approach() and the break guard;
@@ -2695,7 +2723,8 @@ function guardCastle(bot, ctx) {
         // just outside it took scaffolding at cost 0 — a foothold over the
         // fence. The yard ring (the box grown by 1) vetoes too.
         if (!(dx >= 0 && dx < w && dz >= 0 && dz < d)) return blueprint.yardRing(st, q) ? 100 : 0
-        if (dy >= 0 && dy <= blueprint.siteTop(st.blueprintVersion)) return 100
+        // Stuck window: scaffold inside the band may pillar/bridge to a cell (litter sweep clears it).
+        if (dy >= 0 && dy <= blueprint.siteTop(st.blueprintVersion)) return ctx.ownBreakUntil > Date.now() ? 0 : 100
         // Moat pits (vmzq.54): dig cells sit below the site level, so the
         // band above missed them and A* towered dirt back into the pit it
         // climbed out of (prod livelock 1613/1722). 100 vetoes the tower
