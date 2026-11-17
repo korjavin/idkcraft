@@ -1688,21 +1688,35 @@ function noteDry(ctx, kind) {
 // requeue's tries reset and expired backoffs that make it workable again);
 // a cell resting on an open plan cell waits on that hole, not on us. A
 // never-struck cell is real work. The moat (dig) is cosmetic, as in the counter.
+// #893 follow-up (bot4 2037/2048, try-1 neighbours of try-8 holes kept it
+// false): a cell struck once is already a remainder the bot reached and
+// failed; only a never-struck, ungated cell is real work. At least one
+// hard hole (HARD_TRIES lifetime strikes) keeps a fresh failure from
+// completing a castle on its own.
 const HARD_TRIES = 3
-function builtOut(bot, st, cells) {
+// Why the castle is not built yet (null = built): the first blocking cell.
+function builtWhy(bot, st, cells) {
   // Only with a hole open: an all-laid castle completes on its own tick (castle()).
   const bl = st.blocked || {}
   const { at } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
-  let holes = 0
+  let hard = 0
   for (const c of cells) {
     if (!blueprint.isPlaceTarget(c.kind) || done(bot, c)) continue
     const e = bl[bkey(st, c.idx)]
-    if (e && Math.max(e.ever | 0, e.tries | 0) >= HARD_TRIES) { holes++; continue }
+    if (e) { if (Math.max(e.ever | 0, e.tries | 0) >= HARD_TRIES) hard++; continue }
     const below = at.get(`${c.x},${c.y - 1},${c.z}`)
     if (below && blueprint.isPlaceTarget(below.kind) && !done(bot, below)) continue
-    return false
+    return `${c.kind}@${c.x},${c.y},${c.z} never struck`
   }
-  return holes > 0
+  return hard > 0 ? null : 'no hard hole'
+}
+function builtOut(bot, st, cells) { return builtWhy(bot, st, cells) === null }
+// The flip, shared by menuFact and castle()'s scans; a miss names its cell.
+function checkBuilt(bot, st, cells) {
+  if (st.phase !== 'body') return
+  const why = builtWhy(bot, st, cells)
+  if (why === null) markComplete(bot, st)
+  else if (why !== 'no hard hole') console.log(`castle built=no ${why}`)
 }
 function markComplete(bot, st) {
   if (st.phase === 'complete') return
@@ -1791,7 +1805,7 @@ function menuFact(bot, ctx, now = Date.now()) {
         ctx.castleMenuProgressAt = now
         progress(bot, st, r.cells, ctx)
         // Whatever the word: a hole off its backoff reads as a workable r.cell.
-        if (st.phase === 'body' && builtOut(bot, st, r.cells)) markComplete(bot, st)
+        checkBuilt(bot, st, r.cells)
       }
     } catch (_) { /* progress best-effort */ }
     // Retired builder misses need an actual menu route back to castle.
@@ -3527,7 +3541,7 @@ function castle(bot, ctx) {
   // Unloaded site (vmzq.29): null blocks read as undone, so a far respawn
   // read 0/1722 and the walk back counted as fresh progress. Off-site the
   // last value stands (as in menuFact).
-  if (ctx.castleScanAt !== fullBefore && siteLoaded(bot, st)) progress(bot, st, cells, ctx)
+  if (ctx.castleScanAt !== fullBefore && siteLoaded(bot, st)) { progress(bot, st, cells, ctx); checkBuilt(bot, st, cells) }
   // Dark cells first while a torch is on hand (prod 2026-11-16: mobs spawn
   // in the dark site by day); none on hand, menuFact words torch-none.
   if (usable(bot, 'torch', ctx) > 0 && siteLoaded(bot, st)) {
