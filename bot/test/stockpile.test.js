@@ -394,6 +394,25 @@ describe('stockpile behaviour', () => {
     assert.equal(ctx.chestFull, false)
   })
 
+  it('a nearer known chest wins over a far home chest; a full one falls back home', async () => {
+    const bot = mockBot({ cells: { '5,64,1': 'chest', '503,64,0': 'chest' }, inv: [{ name: 'dirt', count: 40 }], chest: [] })
+    bot.entity.position = pos(500, 64, 0)
+    const ctx = homeCtx({ home: { chest: { x: 5, y: 64, z: 1 } }, ctx: { chests: [{ x: 503, y: 64, z: 0 }] } })
+    stockpile(bot, ctx)
+    assert.equal(ctx.lastGoalKey, 'stockpile:503,64,0')
+    stockpile(bot, ctx) // arrived (within reach): deposit
+    await flush()
+    assert.equal(ctx.stepStatus, 'done')
+    assert.deepEqual(bot.inv, [{ name: 'dirt', count: 32 }])
+    assert.equal(ctx.chests[0].contents.dirt, 8, 'the read is remembered')
+    ctx.chests[0].fullAt = Date.now()
+    bot.inv[0].count = 40
+    ctx.stepStatus = 'running'
+    ctx.lastGoalKey = null
+    stockpile(bot, ctx)
+    assert.equal(ctx.lastGoalKey, 'stockpile:5,64,1', 'full nearby chest: home again')
+  })
+
   it('parks itself when the chest is full', async () => {
     const bot = mockBot({
       cells: { '5,64,1': 'chest' },

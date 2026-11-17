@@ -330,6 +330,18 @@ describe('9kd sheepless day latch', () => {
     assert.equal(beds.knownWoolChest(bot, ctx), null, 'own empty read shadows the peer snapshot')
   })
 
+  it('wool remembered in the home chest is a stock hit: chest fetch, no sheep hunt', () => {
+    const bot = bedsBot()
+    const ctx = { bot, home: { ...v2home({ x: 10, y: 64, z: 20 }), chest: { x: 12, y: 64, z: 21 } }, beds: { phase: 'wool' } }
+    ctx.chests = [{ x: 12, y: 64, z: 21, contents: { white_wool: 12 }, at: Date.now() }]
+    ctx.peerChests = []
+    ctx.peerChestsAt = Date.now()
+    assert.equal(beds.knownWoolChest(bot, ctx).x, 12, 'the home chest read counts as stock')
+    ctx.bring = null
+    beds(bot, ctx)
+    assert.equal(ctx.bring && ctx.bring.phase, 'chestfetch')
+  })
+
   it('short reopened hunts do not count, latch input never throws', () => {
     const bot = bedsBot()
     const ctx = { bot, home: v2home({ x: 10, y: 64, z: 20 }), beds: { phase: 'wool', hunt: { searchLegs: { legs: 3 } } } }
