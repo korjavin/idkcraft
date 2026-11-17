@@ -491,7 +491,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       const ordered = await ordersDispatch(target, state, decision, calledBrain)
       if (ordered) return ordered
       const { shelterRun, nightGraceHold, intruder, dayDivert, dayNow } = holdFlags(target, state, decision)
-      if (ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) return shelterHold(target, state, decision, calledBrain, dayNow)
+      // Engage: one hostile in reach while armed beats any step and hp gate.
+      const engage = fightMod.engageNow(bot, ctx, state)
+      if (engage && decision.action !== 'fight') decision = { action: 'fight', sprint: false, source: 'engage' }
+      if (!engage && ctx.inShelter && decision.action === 'fight' && !intruder && !dayDivert) return shelterHold(target, state, decision, calledBrain, dayNow)
       // 0ay: taking fire from an unreachable hostile (arrows across a gap
       // drain a bot the FSM idles — prod 11:50: 20 to 6.8 in 18 s standing
       // still). Alone, close (<=8, the perception fight radius), hurt
@@ -521,7 +524,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         decision = { action: 'fight', sprint: false, source: 'guard' }
       }
       if (!hurtFresh) ctx.underFireLogged = false
-      if (ctx.work && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
+      if (ctx.work && !engage && (decision.action !== 'fight' || shelterRun || nightGraceHold || underFire || dayDivert)) {
         const held = adoptGate(calledBrain)
         if (held) return held
         return await workTick(target, state, decision, calledBrain, underFire, nightGraceHold)
@@ -583,6 +586,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // Residence (g0z.29): a completed castle / a forget switches the home
     // here, at the tick top, once no async home op is in flight.
     try { orders.selectResidence() } catch (_) { /* residence best-effort */ }
+    try { fightMod.checkFight(bot, ctx) } catch (_) { /* fight log best-effort */ }
     ctx.reflexSwung = false // fresh each tick: fight skips its swing once the reflex swung
   }
 
@@ -1856,6 +1860,7 @@ function probeRespawned(bot, ms = RESPAWNED_PROBE_MS) {
 function handleDeath(bot, ticker) {
   if (ticker && typeof ticker.clearLead === 'function') ticker.clearLead()
   if (ticker && typeof ticker.cancelGreet === 'function') ticker.cancelGreet()
+  try { fightMod.endFight(bot, bot._tickerCtx || {}, 'died') } catch (_) { /* fight log best-effort */ }
   console.log(deathLine(bot))
   // 9kd: a water death (guardian/drowned) bans the swim, so the sheep
   // search rings never walk the same monument cell twice in a day. The

@@ -30,7 +30,7 @@ function mockBot() {
     _moving: false,
     entity: { position: pos(0, 64, 0) },
     inventory: { items: () => bot._items },
-    equip: (item, dest) => { calls.equip++; calls.equipArgs = [item, dest] },
+    equip (item, dest) { calls.equip++; calls.equipArgs = [item, dest]; if (dest === 'hand') this.heldItem = item },
     lookAt: () => { calls.lookAt++ },
     attack: () => { calls.attack++ },
     pathfinder: {
