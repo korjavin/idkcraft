@@ -46,6 +46,7 @@ function fight(bot, ctx, target, state) {
     return
   }
   ctx.fightId = hostile.id
+  trackFight(bot, ctx, hostile)
   const key = `fight:${hostile.id}`
   const inRange = bot.entity.position.distanceTo(hostile.position) <= SWING_RANGE
   const wet = inWater(bot, hostile)
@@ -196,6 +197,9 @@ function inWater(bot, hostile) {
 }
 
 function swing(bot, hostile) {
+  // Steps leave food/blocks/pickaxe in hand: a swing is only worth it with the sword.
+  const held = bot.heldItem && bot.heldItem.name
+  if (!gearPending && !(typeof held === 'string' && held.endsWith('_sword'))) equipGear(bot)
   bot.lookAt(hostile.position.offset(0, hostile.height * 0.8, 0), true)
   bot.attack(hostile)
 }
@@ -245,13 +249,81 @@ async function gearBatch(bot) {
 // the hotbar instead of wearing them. Callers stay fire-and-forget —
 // the chain never rejects.
 let gearChain = Promise.resolve()
+let gearPending = 0 // queued batches: swing() does not stack another on top
 
 function equipGear(bot) {
-  gearChain = gearChain.then(() => gearBatch(bot)).catch(() => {})
+  gearPending++
+  gearChain = gearChain.then(() => gearBatch(bot)).catch(() => {}).finally(() => { gearPending-- })
   return gearChain
 }
 
+// Engage (prod bot3 2026-11-17: armed, one skeleton 1.6 / zombie 2.0,
+// died in foodRecovery and on a shelter perch): a single hostile within
+// ENGAGE_RANGE while armed is fought at any hp and during any step —
+// running or working with it on our back is how those deaths happened.
+// Sealed shelter (dug-in pit, inside the home box) keeps its hold.
+const ENGAGE_RANGE = SWING_RANGE + 1
+function engageNow(bot, ctx, state) {
+  const h = state && state.hostile
+  const d = state && state.hostile_distance
+  if (!h || h.isValid === false || typeof d !== 'number' || d > ENGAGE_RANGE) return false
+  if ((state.nearby_hostiles || 0) > 1) return false
+  if (d > SWING_RANGE && state.hostile_reachable === false) return false
+  if (wetOrAir(bot, h)) return false
+  const sh = ctx.shelter
+  if (ctx.inShelter && sh && (sh.dugIn || (sh.dig && sh.dig.digs > 0))) return false
+  if (ctx.inShelter) {
+    try {
+      const nh = require('../residence').nightHome(ctx, bot.entity.position)
+      if (nh && require('./util').isInside(bot, nh)) return false
+    } catch (_) { /* no home: engage */ }
+  }
+  try { return bot.inventory.items().some((i) => i && typeof i.name === 'string' && i.name.endsWith('_sword')) } catch (_) { return false }
+}
+function wetOrAir(bot, h) {
+  try { return inWater(bot, h) || airborne(bot, h) } catch (_) { return false }
+}
+
+// Per-fight outcome: one 'fight end mob=… result=won|fled|died hp=…' line
+// per engaged mob. shortcut: a despawned/unloaded mob reads as won; upgrade
+// with entityDead if the split matters.
+const FLED_DIST = 16
+function trackFight(bot, ctx, hostile) {
+  const rec = ctx.fightRec
+  if (rec && rec.id === hostile.id) return
+  if (rec) checkFight(bot, ctx, true)
+  ctx.fightRec = { id: hostile.id, name: hostile.name || 'mob', at: Date.now(), hp0: bot.health }
+}
+function checkFight(bot, ctx, switched = false) {
+  const rec = ctx.fightRec
+  if (!rec) return null
+  const e = bot.entities ? bot.entities[rec.id] : null
+  let result = null
+  if (!e || e.isValid === false) result = 'won'
+  else {
+    let d = Infinity
+    try { d = e.position.distanceTo(bot.entity.position) } catch (_) {}
+    if (switched || d > FLED_DIST) result = 'fled'
+  }
+  return result ? endFight(bot, ctx, result) : null
+}
+function endFight(bot, ctx, result) {
+  const rec = ctx.fightRec
+  if (!rec) return null
+  ctx.fightRec = null
+  const hp = typeof bot.health === 'number' ? bot.health.toFixed(1) : '?'
+  const hp0 = typeof rec.hp0 === 'number' ? rec.hp0.toFixed(1) : '?'
+  const held = (bot.heldItem && bot.heldItem.name) || 'none'
+  console.log(`fight end mob=${rec.name} result=${result} hp=${hp} hp0=${hp0} secs=${Math.round((Date.now() - rec.at) / 1000)} held=${held}`)
+  return result
+}
+
 module.exports = fight
+module.exports.engageNow = engageNow
+module.exports.ENGAGE_RANGE = ENGAGE_RANGE
+module.exports.trackFight = trackFight
+module.exports.checkFight = checkFight
+module.exports.endFight = endFight
 module.exports.SWING_RANGE = SWING_RANGE
 module.exports.swing = swing
 module.exports.airborne = airborne

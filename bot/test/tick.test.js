@@ -3650,7 +3650,7 @@ describe('melee reflex', () => {
     bot.lookAt = () => { bot.lookAtCalls++ }
     bot._items = [{ name: 'iron_sword' }]
     bot.inventory = { items: () => bot._items }
-    bot.equip = () => { bot.equipCalls++ }
+    bot.equip = (item, dest) => { bot.equipCalls++; if (dest === 'hand') bot.heldItem = item }
     return bot
   }
 
@@ -3668,8 +3668,9 @@ describe('melee reflex', () => {
     bot.entities = { 1: zombie(1, 1) }
     const ticker = createTicker({ bot, brain: mockBrain({ action: 'follow', sprint: false, source: 'laya' }), tickMs: 10, idleTickMs: 10 })
     const r = await ticker.tick()
-    assert.equal(r.decision.action, 'follow') // brain still owns the body
-    assert.equal(bot.attackCalls, 1) // ...while the arm swings anyway
+    // engage: one zombie in reach and a sword in the pack beats the brain's follow
+    assert.deepEqual(r.decision, { action: 'fight', sprint: false, source: 'engage' })
+    assert.equal(bot.attackCalls, 1) // one swing per tick (reflex, fight skips its own)
     assert.deepEqual(reflexLines(), ['reflex swing zombie'])
   })
 
@@ -3733,7 +3734,7 @@ describe('creeper flee reflex', () => {
     bot.lookAt = () => { bot.lookAtCalls++ }
     bot._items = [{ name: 'iron_sword' }]
     bot.inventory = { items: () => bot._items }
-    bot.equip = () => { bot.equipCalls++ }
+    bot.equip = (item, dest) => { bot.equipCalls++; if (dest === 'hand') bot.heldItem = item }
     return bot
   }
 

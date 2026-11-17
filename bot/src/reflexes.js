@@ -545,6 +545,7 @@ function meleeReflex(bot, ctx, state) {
     try { fightMod.equipGear(bot) } catch (_) { /* fists are fine */ }
     console.log(`reflex swing ${hostile.name || 'mob'}`)
   }
+  try { fightMod.trackFight(bot, ctx, hostile) } catch (_) { /* log best-effort */ }
   try { fightMod.swing(bot, hostile) } catch (_) { /* mock bots may lack lookAt/attack */ }
   metrics.events.inc({ event: 'reflex_swing' })
   ctx.reflexSwung = true // any target: the arm swung once this tick
