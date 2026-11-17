@@ -1202,6 +1202,79 @@ function nearbyChestsAll(bot, ctx, seen, radius) {
   }
 }
 
+// One log line per distinct decision (a trip re-runs every tick).
+function logOnce(ctx, key, line) {
+  try {
+    if (ctx.storageLogKey === key) return
+    ctx.storageLogKey = key
+    console.log(line)
+  } catch (_) { /* log best-effort */ }
+}
+
+// Deposit target (prod bot3: 20-min water walks to a far home chest with
+// free chests beside the castle): the nearest remembered own chest that is
+// nearer than the adopted home chest, not stamped full/failed lately, and
+// not on an active castle site (castlefetch draws from those). Null = the
+// home chest stays the target.
+function storagePick(bot, ctx) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return null
+    const h = ctx.home && ctx.home.chest
+    const hd = h ? Math.hypot(bp.x - h.x, bp.y - h.y, bp.z - h.z) : Infinity
+    const hk = h ? chestKeyOf(h) : null
+    const now = Date.now()
+    const st = ctx.castle
+    const active = siteCastleActive(ctx)
+    let best = null
+    for (const c of Array.isArray(ctx.chests) ? ctx.chests : []) {
+      const k = chestKeyOf(c)
+      if (k === null || k === hk) continue
+      if (Number.isFinite(c.fullAt) && now - c.fullAt < CHEST_STALE_MS) continue
+      if (Number.isFinite(c.failAt) && now - c.failAt < CHEST_STALE_MS) continue
+      if (active && require('../castle').onSite(st, c, 0, 0)) continue
+      const d = Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z)
+      if (!(d < hd) || (!h && d > SITE_STORE_RADIUS)) continue
+      if (!best || d < best.d) best = { c, d }
+    }
+    if (!best) return null
+    logOnce(ctx, `deposit@${chestKeyOf(best.c)}`, `storage pick kind=deposit chest=${chestKeyOf(best.c)} dist=${Math.round(best.d)} (home dist=${Number.isFinite(hd) ? Math.round(hd) : 'none'})`)
+    return best.c
+  } catch (_) {
+    return null
+  }
+}
+
+// Stock lookup: the nearest known chest (home, own or peer sightings,
+// radius) whose last read holds an item wants(name) accepts. Own reads
+// shadow peer snapshots (nearbyChestsAll order). Logs the hit once.
+function stockHit(bot, ctx, wants, radius = NEARBY_CHEST_RADIUS) {
+  try {
+    const bp = bot && bot.entity && bot.entity.position
+    if (!bp || typeof bp.x !== 'number') return null
+    const h = ctx.home && ctx.home.chest
+    const hk = h ? chestKeyOf(h) : null
+    const he = hk && Array.isArray(ctx.chests) ? ctx.chests.find((c) => chestKeyOf(c) === hk) : null
+    const list = nearbyChestsAll(bot, ctx, [], radius)
+    if (he && Math.hypot(bp.x - he.x, bp.y - he.y, bp.z - he.z) <= radius) list.push(he)
+    let best = null
+    for (const c of list) {
+      if (!c || !c.contents) continue
+      let n = 0
+      let item = null
+      for (const [k, v] of Object.entries(c.contents)) if (typeof v === 'number' && v > 0 && wants(k)) { n += v; item = item || k }
+      if (n <= 0) continue
+      const d = Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z)
+      if (!best || d < best.d) best = { c, d, n, item }
+    }
+    if (!best) return null
+    logOnce(ctx, `stock@${best.item}@${chestKeyOf(best.c)}`, `stock hit item=${best.item} chest=${chestKeyOf(best.c)} n=${best.n}`)
+    return best.c
+  } catch (_) {
+    return null
+  }
+}
+
 // Withdraw up to count of the first edible in the adopted chest (or the
 // explicit chest at `at` — the all-chests lookup).
 // { got, name } — name null when nothing edible came out.
@@ -1864,9 +1937,11 @@ function stockpile(bot, ctx, target, state) {
     return
   }
 
+  // Nearest free known chest beats a farther home chest (storagePick).
+  const alt = storagePick(bot, ctx)
   // Adopt-on-sight: a chest an earlier run left at a candidate spot is
   // claimed, never rebuilt. A ghost claim (mined chest) unadopts.
-  if (!home.chest) {
+  if (!home.chest && !alt) {
     let spot = null
     try {
       spot = chestSpotFor(bot, ctx)
@@ -1909,7 +1984,13 @@ function stockpile(bot, ctx, target, state) {
     }
   }
 
-  const c = home.chest
+  const c = alt || home.chest
+  // A remembered chest that failed: stamp it and re-pick next tick.
+  const altFailed = (stamp) => {
+    try { if (stamp === 'fullAt') alt.fullAt = Date.now(); else markChestFailed(ctx, alt) } catch (_) { /* best-effort */ }
+    ctx.stepStatus = 'running'
+    ctx.lastGoalKey = null
+  }
   let at = null
   try {
     at = blockNameAt(bot, c.x, c.y, c.z)
@@ -1930,12 +2011,14 @@ function stockpile(bot, ctx, target, state) {
     if (moving) return
     if (!nearPos(bot, c, INTERACT_REACH)) {
       if (!farStalled(ctx, key)) return
+      if (alt) { altFailed('failAt'); return }
       fail(ctx, 'far') // issued, standing, still far: no path
       return
     }
     return // arrived but the chunk is still dark: retry next tick
   }
-  if (at !== 'chest') {
+  if (alt && !['chest', 'trapped_chest', 'barrel'].includes(at)) { altFailed('failAt'); return }
+  if (!alt && at !== 'chest') {
     home.chest = null // mined or never there: re-place, same step
     ctx.homeDouble = null // the double's neighbour is gone too
     ctx.stepStatus = 'running'
@@ -1952,7 +2035,7 @@ function stockpile(bot, ctx, target, state) {
   }
   // Pending double first: resume the multi-tick place, never the deposit
   // goal over it (doublePending above).
-  if (ctx.homeDouble && typeof ctx.homeDouble.x === 'number') {
+  if (!alt && ctx.homeDouble && typeof ctx.homeDouble.x === 'number') {
     if (doublePending(bot, ctx.homeDouble) === 'open') {
       placeChest(bot, ctx, ctx.homeDouble, bp, { adopt: 'none', goalPrefix: 'stockpile-double', sayPlaced: 'doubled the home chest', pendingKey: 'homeDouble' })
       return
@@ -1982,6 +2065,7 @@ function stockpile(bot, ctx, target, state) {
     // windowOpen timeout on an out-of-range open (revmux 01-review).
     // Five consecutive far ticks: one is often a recovering pathfinder.
     if (!farStalled(ctx, key)) return
+    if (alt) { altFailed('failAt'); return }
     fail(ctx, 'far')
     return
   }
@@ -2006,8 +2090,9 @@ function stockpile(bot, ctx, target, state) {
           } catch (_) { /* chest full or stack unmovable: stop at the rest */ }
         }
         return true
-      })
+      }, alt ? c : null)
       ctx.stockpileInFlight = false
+      if (alt && (!res || res.status === 'gone' || res.status === 'error')) { altFailed('failAt'); return }
       if (!res || res.status === 'gone') {
         home.chest = null // vanished mid-step: re-place, same step
         ctx.homeDouble = null
@@ -2071,6 +2156,7 @@ function stockpile(bot, ctx, target, state) {
           } catch (_) { /* logging best-effort */ }
         }
       }
+      if (alt && before > 0 && banked === 0) { altFailed('fullAt'); return } // full: next nearest
       if (before > 0 && banked === 0) {
         // Full: double once per fill (vmzq.39), then park. Done, not
         // failed — failing would hold and spam; the stamped flag parks the
@@ -2384,3 +2470,5 @@ module.exports.siteParked = siteParked
 module.exports.SITE_STORE_RADIUS = SITE_STORE_RADIUS
 module.exports.rearmCastleDraw = rearmCastleDraw
 module.exports.SITE_CHEST_RADIUS = SITE_CHEST_RADIUS
+module.exports.storagePick = storagePick
+module.exports.stockHit = stockHit

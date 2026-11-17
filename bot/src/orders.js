@@ -90,7 +90,7 @@ function statusLines(bot, ctx, followName, now = Date.now()) {
   else if (ctx.home && ctx.home.taskPark) need = 'House on hold — no progress lately, I will retry later'
   else if (step === 'castlefetch' && f && f.kind) need = `Short on ${f.kind}${f.haul ? ` (need ${f.haul})` : ''} — fetching it`
   else if (cw && cw.word === 'blocked' && cw.kind) need = `Out of ${cw.kind} — ${cw.left || 'some'} blocks still need it`
-  else if (ctx.beds && ctx.beds.noWool) need = 'No wool for beds — looking for sheep'
+  else if (ctx.beds && ctx.beds.noWool && !require('./behaviours/beds').knownWoolChest(bot, ctx)) need = 'No wool for beds — looking for sheep' // stocked wool: no ask
   if (need) lines.push(need)
   // Body and place, only when notable.
   const notes = []

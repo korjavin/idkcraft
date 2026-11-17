@@ -271,12 +271,7 @@ function sheepLatched(ctx, bot, now) {
 const WOOL_CHEST_RADIUS = 1000
 function isWool(n) { return typeof n === 'string' && n.endsWith('_wool') }
 function knownWoolChest(bot, ctx) {
-  try {
-    for (const c of stockpileMod.nearbyChestsAll(bot, ctx, [], WOOL_CHEST_RADIUS)) {
-      if (c.contents && Object.entries(c.contents).some(([n, v]) => v > 0 && isWool(n))) return c
-    }
-  } catch (_) { /* no known chest */ }
-  return null
+  return stockpileMod.stockHit(bot, ctx, isWool, WOOL_CHEST_RADIUS)
 }
 
 function latchLive(ctx, bot, now) {
