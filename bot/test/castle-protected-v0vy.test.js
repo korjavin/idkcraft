@@ -142,6 +142,7 @@ describe('v0vy protected retirement', () => {
     }
     const ctx2 = { castle: state({ visitedAt: now, blocked: retired(cells, 'protected') }) }
     ctx2.castle.phase = 'body'
+    ctx2.castleLaidSince = 1 // read built past the grace
     // Built (owner 2026-11-17): only holes open flips it complete; the word
     // moves on to the complete castle's upkeep (here: its window panes).
     assert.equal(castle.menuFact(airBot, ctx2, now), 'pane-none', 'a castle with only retired holes is built')

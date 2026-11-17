@@ -1728,41 +1728,51 @@ function noteDry(ctx, kind) {
 // done. Built = no counted plan cell is open except holes (blocked
 // entries). Flipped by menuFact (decide's read, the prod path). From then on
 // the complete-castle maintenance (relay, sweep, fill, tidy) owns the rest.
-// Robust to backoff cycling (#891 follow-up, bot4 2036/2048 never flipped):
-// a hole is a cell struck HARD_TRIES times over its life (e.ever survives
-// requeue's tries reset and expired backoffs that make it workable again);
-// a cell resting on an open plan cell waits on that hole, not on us. A
-// never-struck cell is real work. The moat (dig) is cosmetic, as in the counter.
-// #893 follow-up (bot4 2037/2048, try-1 neighbours of try-8 holes kept it
-// false): a cell struck once is already a remainder the bot reached and
-// failed; only a never-struck, ungated cell is real work. At least one
-// hard hole (HARD_TRIES lifetime strikes) keeps a fresh failure from
-// completing a castle on its own.
-const HARD_TRIES = 3
+// #891-#895 follow-ups (bot4): struck holes cycle through backoff and
+// requeue; any struck one stays a remainder; a cell resting on an open
+// plan cell waits on that hole. The moat (dig) is cosmetic, as in the counter.
+// #896 follow-up (bot3 11493/11493 logged 'no hard hole' 94x/h): with no
+// place cell open the castle is built — castle()'s own completion needs
+// pick() to come up empty, and a waiting dig, a traps-self deferral or a
+// fluid stance keeps it from ever doing so. A cell the executor touched
+// (work(): deferred, fluid, mid-attempt — ctx.castleTouched) is a
+// remainder like a struck one; only an untouched, ungated cell is work.
 // Why the castle is not built yet (null = built): the first blocking cell.
-function builtWhy(bot, st, cells) {
-  // Only with a hole open: an all-laid castle completes on its own tick (castle()).
+// Same cells as the counter (gauged: place + moat, a moat cell dug once
+// via ctx.castleDug counts); keep-clear cells hold decor panes once complete.
+function builtWhy(bot, st, cells, touched, dug) {
   const bl = st.blocked || {}
   const { at } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
-  let hard = 0
+  let rest = 0
   for (const c of cells) {
-    if (!blueprint.isPlaceTarget(c.kind) || done(bot, c)) continue
-    const e = bl[bkey(st, c.idx)]
-    if (e) { if (Math.max(e.ever | 0, e.tries | 0) >= HARD_TRIES) hard++; continue }
+    if (c.prep || !gauged(c) || done(bot, c)) continue
+    if (c.kind === 'dig' && dug && dug.has(c.idx)) continue
+    rest++
+    if (bl[bkey(st, c.idx)] || (touched && touched.has(c.idx))) continue
     const below = at.get(`${c.x},${c.y - 1},${c.z}`)
     if (below && blueprint.isPlaceTarget(below.kind) && !done(bot, below)) continue
     return `${c.kind}@${c.x},${c.y},${c.z} never struck`
   }
-  return hard > 0 ? null : 'no hard hole'
+  return rest ? null : 'laid'
 }
-function builtOut(bot, st, cells) { return builtWhy(bot, st, cells) === null }
+function builtOut(bot, st, cells, touched, dug) { const w = builtWhy(bot, st, cells, touched, dug); return w === null || w === 'laid' }
+// Grace: castle()'s tail still owns an ordinary finish (keep-clear cells,
+// own box litter, the moat past a fresh hole) — the check flips only once
+// the castle has read built this long without finishing (bot3: hours in
+// 'body' at 11493/11493; bot4: hours at 2037/2048).
+const LAID_GRACE_MS = 10 * 60 * 1000
 // The flip, shared by menuFact and castle()'s scans; a miss names its cell.
-// Any building phase ('body', and 'moat' from older memory) flips; 'prep'
-// has not started the plan (#895 follow-up: bot4 never reached the check).
-function checkBuilt(bot, st, cells) {
-  if (st.phase === 'complete' || st.phase === 'prep') return
-  const why = builtWhy(bot, st, cells)
-  if (why === null) markComplete(bot, st)
+// Any non-complete phase flips (#896 follow-up: a v2 site whose prep scan
+// reads an unloaded column stays 'prep' while castle() builds the body —
+// bot4 counted 2037/2048 in 'prep', where the check never ran). A fresh
+// prep castle never gets here: castle() returns on its prep work first.
+function checkBuilt(bot, st, cells, ctx) {
+  if (st.phase === 'complete') return
+  const why = builtWhy(bot, st, cells, ctx && ctx.castleTouched, ctx && ctx.castleDug && ctx.castleDug.idx)
+  const now = Date.now()
+  const built = why === null || why === 'laid'
+  if (!built) { if (ctx) ctx.castleLaidSince = 0 } else if (ctx && !ctx.castleLaidSince) ctx.castleLaidSince = now
+  if (built && (!ctx || now - ctx.castleLaidSince >= LAID_GRACE_MS)) markComplete(bot, st)
   else console.log(`castle built=no phase=${st.phase} ${why}`)
 }
 function markComplete(bot, st) {
@@ -1852,7 +1862,7 @@ function menuFact(bot, ctx, now = Date.now()) {
         ctx.castleMenuProgressAt = now
         progress(bot, st, r.cells, ctx)
         // Whatever the word: a hole off its backoff reads as a workable r.cell.
-        checkBuilt(bot, st, r.cells)
+        checkBuilt(bot, st, r.cells, ctx)
       }
     } catch (_) { /* progress best-effort */ }
     // Retired builder misses need an actual menu route back to castle.
@@ -3435,6 +3445,7 @@ function castleBuilderBatch(bot, ctx, st, c) {
 // One tick on one cell (plan or prep): material check, budget, then place
 // into an open cell or dig a wrong occupant.
 function work(bot, ctx, st, c, now, status) {
+  if (c && !c.prep && Number.isInteger(c.idx) && c.idx < LITTER_BOX_BASE) (ctx.castleTouched || (ctx.castleTouched = new Set())).add(c.idx)
   // Far walk (vmzq.17): material sourcing is g0z.4, but a far step walks
   // to the cell (running) instead of failing at once — prod run2 failed
   // 500 blocks off and never approached. On site a short kit fails and
@@ -3588,7 +3599,7 @@ function castle(bot, ctx) {
   // Unloaded site (vmzq.29): null blocks read as undone, so a far respawn
   // read 0/1722 and the walk back counted as fresh progress. Off-site the
   // last value stands (as in menuFact).
-  if (ctx.castleScanAt !== fullBefore && siteLoaded(bot, st)) { progress(bot, st, cells, ctx); checkBuilt(bot, st, cells) }
+  if (ctx.castleScanAt !== fullBefore && siteLoaded(bot, st)) { progress(bot, st, cells, ctx); checkBuilt(bot, st, cells, ctx) }
   // Dark cells first while a torch is on hand (prod 2026-11-16: mobs spawn
   // in the dark site by day); none on hand, menuFact words torch-none.
   if (usable(bot, 'torch', ctx) > 0 && siteLoaded(bot, st)) {

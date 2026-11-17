@@ -60,7 +60,7 @@ describe('castle maintenance (owner 2026-11-17)', () => {
     const mk = (e) => Object.fromEntries(cells.map((c) => [`2:${c.idx}`, { until: 0, why: 'unreachable', ...e }]))
     const st = state({ phase: 'body', blocked: mk({ tries: 2 }) })
     const plan = blueprint.absPlan(SITE, 0, V).cells
-    assert.equal(castle.builtOut(bot, st, plan), false, 'no hard hole yet')
+    assert.equal(castle.builtOut(bot, st, plan), true, 'struck holes only: built')
     st.blocked = { ...mk({ tries: 1 }), [`2:${cells[0].idx}`]: { tries: 8, until: 0, why: 'unreachable' } }
     assert.equal(castle.builtOut(bot, st, plan), true, 'try-1 neighbours of a hard hole are remainders (bot4)')
     st.blocked = mk({ tries: 8 })
@@ -77,13 +77,15 @@ describe('castle maintenance (owner 2026-11-17)', () => {
     }
     st.blocked = {}
     assert.equal(castle.builtOut(bot, st, plan), false, 'an unblocked open cell is still work')
-    assert.equal(castle.builtOut(worldBot(completeSet()), st, plan), false, 'all laid: castle() completes it itself')
+    assert.equal(castle.builtOut(bot, st, plan, new Set(cells.map((c) => c.idx))), true, 'touched (deferred/fluid) cells are remainders')
+    assert.equal(castle.builtOut(worldBot(completeSet()), st, plan), true, 'all laid: built (bot3 11493/11493 stayed body)')
   })
 
   it('menuFact flips a castle stuck on hard holes even when one is off its backoff (bot4 2036/2048)', () => {
     const { set, cells } = damaged()
     const bot = worldBot(set, [{ name: 'cobblestone', count: 64 }])
     const ctx = { castle: state({ phase: 'body', visitedAt: Date.now(), blocked: Object.fromEntries(cells.map((c) => [`2:${c.idx}`, { tries: 6, ever: 6, until: 0, why: 'unreachable' }])) }) }
+    ctx.castleLaidSince = 1 // read built past the grace
     const log = console.log
     console.log = () => {}
     try { castle.menuFact(bot, ctx, Date.now()) } finally { console.log = log }
@@ -106,6 +108,23 @@ describe('castle maintenance (owner 2026-11-17)', () => {
     } finally { console.log = log }
     assert.ok(logs.some((l) => /^castle built=no phase=body stone@/.test(l)), logs.join('\n'))
     assert.equal(st.phase, 'complete')
+  })
+
+  it("a full counter flips from any phase, 'prep' included (bot4 stayed in prep)", () => {
+    for (const phase of ['body', 'prep', 'moat']) {
+      const bot = worldBot(completeSet())
+      const st = state({ phase })
+      const ctx = {}
+      const log = console.log
+      console.log = () => {}
+      try {
+        castle.checkBuilt(bot, st, blueprint.absPlan(SITE, 0, V).cells, ctx)
+        assert.equal(st.phase, phase, 'the tail gets its grace first')
+        ctx.castleLaidSince -= 11 * 60 * 1000
+        castle.checkBuilt(bot, st, blueprint.absPlan(SITE, 0, V).cells, ctx)
+      } finally { console.log = log }
+      assert.equal(st.phase, 'complete', phase)
+    }
   })
 
   it('a requeued hole keeps its lifetime strikes across a restart', () => {
