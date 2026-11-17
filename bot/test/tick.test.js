@@ -2938,7 +2938,8 @@ describe('death/respawn log lines', () => {
     bot.inventory = { items: () => [] }
     const m = deathLine(bot).match(DEATH_RE)
     assert.ok(m, deathLine(bot))
-    assert.deepEqual(m.slice(6), ['day', 'no', 'gather', undefined, 'roam', '0', 'none', '30', '131', 'unknown'])
+    assert.deepEqual(m.slice(6, 15), ['day', 'no', 'gather', undefined, 'roam', '0', 'none', '30', '131'])
+    assert.match(m[15], /^unknown\//) // the unknown carries its evidence
   })
 
   it('enriched death line never throws: a throwing ctx prints the unknowns', () => {

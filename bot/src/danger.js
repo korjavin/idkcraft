@@ -180,6 +180,71 @@ function markMobDeath(bot, ctx, hostiles, now) {
   } catch (_) { return false }
 }
 
+// Death loop (prod bot3 2026-11-17: six deaths in 4 min at one castle
+// floor cell, cause unknown). The fall disc (r 3) never stopped it: its path
+// cost shrinks to nothing when the goal itself sits in the disc, and the
+// castle step kept handing out that cell. LOOP_DEATHS deaths within
+// LOOP_RADIUS in LOOP_WINDOW_MS, whatever the cause, mark a loop area:
+// a path-cost disc (wideSpots), and setGoal refuses goals inside it until
+// LOOP_MS, so any step's walk there fails and the step backs the cell off.
+const LOOP_DEATHS = 2
+const LOOP_RADIUS = 8
+const LOOP_WINDOW_MS = 10 * 60 * 1000
+const LOOP_MS = 20 * 60 * 1000
+
+function noteDeath(bot, ctx, now) {
+  try {
+    const pos = bot && bot.entity && bot.entity.position
+    if (!ctx || !pos || typeof pos.x !== 'number' || typeof pos.z !== 'number') return null
+    const t = typeof now === 'number' ? now : Date.now()
+    const log = (ctx.deathLog || []).filter((d) => t - d.at <= LOOP_WINDOW_MS)
+    log.push({ x: pos.x, y: pos.y, z: pos.z, at: t })
+    ctx.deathLog = log.slice(-8)
+    const near = log.filter((d) => Math.hypot(d.x - pos.x, d.z - pos.z) <= LOOP_RADIUS)
+    if (near.length < LOOP_DEATHS) return null
+    mark(ctx, pos, t, LOOP_RADIUS)
+    const spot = ctx.danger.spots[ctx.danger.spots.length - 1]
+    spot.loop = true
+    spot.until = t + LOOP_MS
+    guardGoals(bot, ctx)
+    return { x: Math.floor(pos.x), z: Math.floor(pos.z), deaths: near.length, until: spot.until }
+  } catch (_) { return null }
+}
+
+// The live loop area holding (x, z), or null.
+function loopAt(ctx, p, now) {
+  const mem = ctx && ctx.danger
+  if (!mem || !Array.isArray(mem.spots) || !p || typeof p.x !== 'number' || typeof p.z !== 'number') return null
+  const t = typeof now === 'number' ? now : Date.now()
+  for (const s of mem.spots) {
+    if (s && s.loop && s.until > t && Math.hypot(s.x - p.x, s.z - p.z) <= spotRadius(s)) return s
+  }
+  return null
+}
+
+// Wrap pathfinder.setGoal once: a goal inside a live loop area becomes no
+// goal (the walk out of one, feet inside, still plans). 100 setGoal callers
+// across the steps; this is the one place they all pass.
+function guardGoals(bot, ctx) {
+  const pf = bot && bot.pathfinder
+  if (!pf || typeof pf.setGoal !== 'function' || pf._loopGuard) return
+  pf._loopGuard = true
+  const orig = pf.setGoal.bind(pf)
+  let said = 0
+  pf.setGoal = (goal, ...rest) => {
+    const g = goal && typeof goal.x === 'number' && typeof goal.z === 'number' ? goal : null
+    const s = g && loopAt(ctx, g)
+    if (s && !loopAt(ctx, feetOf(bot))) {
+      if (Date.now() - said > 10000) {
+        said = Date.now()
+        console.log(`death loop: goal ${g.x} ${g.z} refused, area ${Math.floor(s.x)} ${Math.floor(s.z)} until ${new Date(s.until).toISOString()}`)
+      }
+      return orig(null)
+    }
+    return orig(goal, ...rest)
+  }
+}
+
 function prune(ctx, now) {
   const mem = ctx && ctx.danger
   if (!mem || !Array.isArray(mem.spots)) return 0
@@ -283,7 +348,7 @@ function wideSpots(ctx, t, feet, goal) {
   for (const s of mem.spots) {
     if (!s || typeof s.x !== 'number' || typeof s.z !== 'number' || t - s.at > TTL_MS) continue
     const r = spotRadius(s)
-    if (r < MOB_RADIUS && !s.fall) continue // pit marks (6) stay recover/detour's
+    if (r < MOB_RADIUS && !s.fall && !s.loop) continue // pit marks (6) stay recover/detour's
     // neuc.65.6: fall discs shrink with the goal ring like water discs. A
     // whole disc on the house entrance would make the door the deepest
     // AvoidGoal node (PROTOCOL 'Danger discs on goals') and gohome would fail
@@ -293,4 +358,4 @@ function wideSpots(ctx, t, feet, goal) {
   return out
 }
 
-module.exports = { addPathCost, PATH_COST, WATER_BLOCKS, mark, near, covers, spots, prune, count, clear, markWaterDeath, markFallDeath, markMobDeath, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, FALL_RADIUS, MOB_RADIUS, MAX_RADIUS }
+module.exports = { addPathCost, PATH_COST, WATER_BLOCKS, mark, near, covers, spots, prune, count, clear, markWaterDeath, markFallDeath, markMobDeath, noteDeath, loopAt, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, FALL_RADIUS, MOB_RADIUS, MAX_RADIUS }
