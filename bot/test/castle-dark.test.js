@@ -53,15 +53,15 @@ describe('darkspots.scan', () => {
 
 describe('castle dark cells', () => {
   it('dark interior cells become torch cells with a round-trip idx; a mob death zone lights first', () => {
-    const bot = world({}, (p) => (p.x === 50 && p.z === 50 ? 0 : (p.y === 64 && p.x === 2 && p.z === 2 ? 0 : 5)))
+    const bot = world({}, (p) => (p.x === 40 && p.z === 40 ? 0 : (p.y === 64 && p.x === 2 && p.z === 2 ? 0 : 5)))
     const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, blocked: {} }
-    const ctx = { danger: { spots: [{ x: 50, y: 64, z: 50, at: Date.now(), r: 16 }] } }
+    const ctx = { danger: { spots: [{ x: 40, y: 64, z: 40, at: Date.now(), r: 16 }] } }
     const orig = console.log
     console.log = () => {}
     let list
     try { list = castle.darkTargets(bot, ctx, st, Date.now()) } finally { console.log = orig }
     assert.ok(list.length >= 2, JSON.stringify(list))
-    assert.deepEqual([list[0].x, list[0].y, list[0].z], [50, 64, 50], 'the death zone first')
+    assert.deepEqual([list[0].x, list[0].y, list[0].z], [40, 64, 40], 'the death zone first')
     for (const c of list) {
       assert.equal(c.kind, 'torch')
       const back = castle.darkOf(st, c.idx)

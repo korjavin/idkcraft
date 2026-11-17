@@ -108,8 +108,12 @@ function carried(ctx, kind) {
   for (const it of (ctx && ctx.castleCarry && ctx.castleCarry.items) || []) if (want(it.name)) n += it.count
   return n
 }
-function usable(bot, kind, ctx) {
-  return Math.max(0, held(bot, kind) - reserveOf(kind) - carried(ctx, kind))
+// need: the kind's remaining open cells. A reserve never blocks the last
+// cells: when the stock covers them, up to need of it is spendable.
+function usable(bot, kind, ctx, need = 0) {
+  const base = held(bot, kind) - carried(ctx, kind)
+  const spare = Math.max(0, base - reserveOf(kind))
+  return need > 0 && base >= need ? Math.max(spare, need) : spare
 }
 
 // Item -> material kind (g0z.45: the stockpile's generic decor keep): the
@@ -125,7 +129,9 @@ function kindOf(name) {
 // Birch first (g0z.4: the Fachwerk infill prefers light wood), else any.
 function findItem(bot, kind, ctx) {
   const want = ITEM[kind]
-  if (!want || usable(bot, kind, ctx) <= 0) return null
+  const cw = ctx && ctx.castleWord
+  const need = cw && cw.kind === kind && typeof cw.left === 'number' ? cw.left : 0
+  if (!want || usable(bot, kind, ctx, need) <= 0) return null
   let any = null
   try {
     for (const it of bot.inventory.items() || []) {
@@ -1385,6 +1391,10 @@ const DARK_ABOVE = 24
 const DARK_HOT = 8
 const DARK_NEAR = 48 // a mob death this close to the site box lights its zone
 const DARK_RESCAN_MS = 60000
+// Leash (prod bot3 76c57f1b: torch-batch x87, castle<->gocastle, torches
+// placed 0): a hot box reaches ~76 off the centre, past goal GOSITE_DIST
+// (64), so the walk to it flipped to gocastle before any torch landed.
+const DARK_LEASH = 56
 const DARK_ASK_MS = 3 * 60 * 1000 // torch-fetch share cap: this long asking with no torch...
 const DARK_REST_MS = 15 * 60 * 1000 // ...rests the ask this long
 function darkIdx(st, x, y, z) {
@@ -1422,7 +1432,7 @@ function darkTargets(bot, ctx, st, now) {
     }
     list = require('../darkspots').scan(bot, boxes, skip)
       .map((c) => ({ x: c.x, y: c.y, z: c.z, hot: c.hot, kind: 'torch', dark: true, idx: darkIdx(st, c.x, c.y, c.z) }))
-      .filter((c) => c.idx != null)
+      .filter((c) => c.idx != null && Math.hypot(c.x + 0.5 - (site.x + w / 2), c.z + 0.5 - (site.z + d / 2)) <= DARK_LEASH)
     if (list.length) console.log(`castle dark cells=${list.length}`)
   }
   if (ctx) ctx.castleDark = { key, at: now, list }
@@ -1464,8 +1474,10 @@ function batchOf(kind) { return BATCH_OF[kind] || BATCH }
 // material) | '<kind>-<none|some|batch>' (the next cell's material on
 // hand, above the reserve). Restock, stop/go, completion and a demand-kind
 // change all move the word, so holds keyed on the text release on them.
-function stockWord(bot, kind, left) {
-  const have = usable(bot, kind)
+// Capped by need: have >= left lays now, reserve included (usable's need),
+// read with ctx so the word sees the same stock the castle step spends.
+function stockWord(bot, kind, left, ctx) {
+  const have = usable(bot, kind, ctx, left)
   if (have <= 0) return `${kind}-none`
   return have >= Math.min(batchOf(kind), left) ? `${kind}-batch` : `${kind}-some`
 }
@@ -1677,14 +1689,14 @@ function menuFact(bot, ctx, now = Date.now()) {
     if (!siteLoaded(bot, st)) {
       if (st.phase === 'complete') {
         const last = ctx.castleWord
-        if (last && last.repair) return stockWord(bot, last.kind, last.left) // owed repair (g0z.62): fetch it here, carry it back
+        if (last && last.repair) return stockWord(bot, last.kind, last.left, ctx) // owed repair (g0z.62): fetch it here, carry it back
         return tidyDue(st, now) ? 'tidy' : 'done'
       }
       const last = ctx.castleWord
-      if (last && last.kind) return stockWord(bot, last.kind, last.left)
+      if (last && last.kind) return stockWord(bot, last.kind, last.left, ctx)
       if (last && last.word) return last.word
       const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
-      return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH)
+      return stockWord(bot, cells[workOrder(cells, key)[0]].kind, BATCH, ctx)
     }
     noteVisit(bot, ctx, st, now)
     let r = peek(bot, st, now, ctx)
@@ -1741,7 +1753,7 @@ function menuFact(bot, ctx, now = Date.now()) {
       const held = usable(bot, 'torch', ctx) > 0
       if (dark.length && (held || (!torchOut && darkAskOpen(ctx, held, now)))) {
         ctx.castleWord = { kind: 'torch', left: dark.length }
-        return stockWord(bot, 'torch', dark.length)
+        return stockWord(bot, 'torch', dark.length, ctx)
       }
     }
     let word = null
@@ -1757,7 +1769,7 @@ function menuFact(bot, ctx, now = Date.now()) {
         }
         if (fills.length) {
           ctx.castleWord = { kind: 'stone', left: fills.length }
-          return stockWord(bot, 'stone', fills.length)
+          return stockWord(bot, 'stone', fills.length, ctx)
         }
       }
       // Blocked (g0z.23): the waiting kind and its remainder stay on the
@@ -1818,7 +1830,7 @@ function menuFact(bot, ctx, now = Date.now()) {
         if (heldCell) {
           const kind = heldCell.kind
           const left = open.filter((c) => c.kind === kind).length
-          heldWord = { kind, left, word: stockWord(bot, kind, left) }
+          heldWord = { kind, left, word: stockWord(bot, kind, left, ctx) }
           if (!heldWord.word.endsWith('-some')) {
             ctx.castleWord = { kind, left }
             return heldWord.word
@@ -1863,7 +1875,7 @@ function menuFact(bot, ctx, now = Date.now()) {
           }
           const left = open.filter((c) => c.kind === kind).length
           ctx.castleWord = { kind, left }
-          return stockWord(bot, kind, left)
+          return stockWord(bot, kind, left, ctx)
         }
       }
       // Retired-but-open material cells are still owed (prod 2026-11-16 bot3:
@@ -1909,7 +1921,7 @@ function menuFact(bot, ctx, now = Date.now()) {
     // (the home furnace, a tidy visit's torches) and the castle step walks
     // it back. Decor and sweep words never latch.
     ctx.castleWord = st.phase === 'complete' ? { kind, left, repair: true } : { kind, left }
-    return stockWord(bot, kind, left)
+    return stockWord(bot, kind, left, ctx)
   } catch (_) {
     return 'none'
   }
@@ -3324,6 +3336,9 @@ function work(bot, ctx, st, c, now, status) {
   if (!clearing(c)) {
     item = c.prep === 'fill' ? fillItem(bot, ctx) : findItem(bot, c.kind, ctx)
     if (!item) {
+      // Nothing to lay here: floor upkeep before handing to the fetch.
+      const fill = c.prep !== 'fill' && st.phase !== 'prep' && fillItem(bot, ctx) ? nextFill(st, fillTargets(bot, ctx, st, now), now) : null
+      if (fill) { work(bot, ctx, st, fill, now, 'filling a floor hole'); return }
       st.status = `need ${c.kind}`
       stepFailed(ctx, `no-${c.kind}`)
       return
