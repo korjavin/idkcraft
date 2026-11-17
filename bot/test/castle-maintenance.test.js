@@ -57,12 +57,33 @@ describe('castle maintenance (owner 2026-11-17)', () => {
   it('built: only holes open flips the phase to complete (the counter and repair agree)', () => {
     const { set, cells } = damaged()
     const bot = worldBot(set)
-    const st = state({ phase: 'body', blocked: Object.fromEntries(cells.map((c) => [`2:${c.idx}`, { tries: 2, until: Date.now() + 60000, why: 'unreachable' }])) })
+    const mk = (e) => Object.fromEntries(cells.map((c) => [`2:${c.idx}`, { until: 0, why: 'unreachable', ...e }]))
+    const st = state({ phase: 'body', blocked: mk({ tries: 2 }) })
     const plan = blueprint.absPlan(SITE, 0, V).cells
+    assert.equal(castle.builtOut(bot, st, plan), false, 'two strikes: still real work')
+    st.blocked = mk({ tries: 0, ever: 6 }) // requeued, backoff expired: workable again, yet hard
     assert.equal(castle.builtOut(bot, st, plan), true)
+    // A never-struck cell resting on a hole waits on it, not on us.
+    const top = cells[0]
+    const above = { x: top.x, y: top.y + 1, z: top.z }
+    if (blueprint.absPlan(SITE, 0, V).at.has(`${above.x},${above.y},${above.z}`)) {
+      set.set(`${above.x},${above.y},${above.z}`, 'air')
+      assert.equal(castle.builtOut(bot, st, plan), true, 'gated on the hole below')
+    }
     st.blocked = {}
     assert.equal(castle.builtOut(bot, st, plan), false, 'an unblocked open cell is still work')
     assert.equal(castle.builtOut(worldBot(completeSet()), st, plan), false, 'all laid: castle() completes it itself')
+  })
+
+  it('menuFact flips a castle stuck on hard holes even when one is off its backoff (bot4 2036/2048)', () => {
+    const { set, cells } = damaged()
+    const bot = worldBot(set, [{ name: 'cobblestone', count: 64 }])
+    const ctx = { castle: state({ phase: 'body', visitedAt: Date.now(), blocked: Object.fromEntries(cells.map((c) => [`2:${c.idx}`, { tries: 6, ever: 6, until: 0, why: 'unreachable' }])) }) }
+    const log = console.log
+    console.log = () => {}
+    try { castle.menuFact(bot, ctx, Date.now()) } finally { console.log = log }
+    assert.equal(ctx.castle.phase, 'complete')
+    assert.ok(bot.chats.some((m) => m.startsWith('castle done at')))
   })
 
   it('interior clutter: dirt on a stairwell/doorway or off-plan inside the footprint is swept; furniture stays', () => {
