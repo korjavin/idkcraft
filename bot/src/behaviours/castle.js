@@ -1379,14 +1379,17 @@ function nextFill(st, list, now) {
 
 // Dark cells (prod 2026-11-16 bot3: six hostiles by day at the site, a
 // creeper and zombies killed it on castlefetch/craft): every spawnable dark
-// cell (darkspots.scan) in the footprint + DARK_MARGIN, from DARK_BELOW
-// under the site (caves) to DARK_ABOVE, plus a DARK_HOT box around each
+// cell (darkspots.scan) in the footprint + FILL_RING inside the band below, plus a DARK_HOT box around each
 // mob-death mark near the site, gets a torch. Not plan cells (the castle
 // would clear a torch from them). Off-plan torch cells like the fills,
 // cached DARK_RESCAN_MS (a ~50k blockAt pass).
 const DARK_BASE = 5000000 // past the sill (4M): ((dx+64)*256 + dz+64)*128 + dy+64
-const DARK_MARGIN = 4
-const DARK_BELOW = 16
+// Band (prod bot3 c0e44f79: a cave 20 under the site, dig-approach for hours,
+// torch4->1 flat): only cells mobs reach the castle from count, the footprint
+// from DARK_BELOW to DARK_ABOVE (storeys) and the FILL_RING ring DARK_BELOW..
+// DARK_RING_UP; a cave mouth in the ring is the floor fill's hole, not a torch.
+const DARK_BELOW = 2
+const DARK_RING_UP = 3
 const DARK_ABOVE = 24
 const DARK_HOT = 8
 const DARK_NEAR = 48 // a mob death this close to the site box lights its zone
@@ -1415,7 +1418,7 @@ function darkTargets(bot, ctx, st, now) {
   let list = []
   if (key) {
     const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
-    const boxes = [{ x0: site.x - DARK_MARGIN, x1: site.x + w - 1 + DARK_MARGIN, z0: site.z - DARK_MARGIN, z1: site.z + d - 1 + DARK_MARGIN, y0: site.y - DARK_BELOW, y1: site.y + DARK_ABOVE }]
+    const boxes = [{ x0: site.x - FILL_RING, x1: site.x + w - 1 + FILL_RING, z0: site.z - FILL_RING, z1: site.z + d - 1 + FILL_RING, y0: site.y - DARK_BELOW, y1: site.y + DARK_ABOVE }]
     for (const s of (ctx && ctx.danger && ctx.danger.spots) || []) {
       // Mob deaths only (danger.markMobDeath's wide mark), near the site box.
       if (!(s && s.r === require('../danger').MOB_RADIUS)) continue
@@ -1430,7 +1433,12 @@ function darkTargets(bot, ctx, st, now) {
       const k = `${x},${y},${z}`
       return at.has(k) || decor.has(k) || k === `${sill.x},${sill.y},${sill.z}`
     }
-    list = require('../darkspots').scan(bot, boxes, skip)
+    const band = (x, y, z) => {
+      const dx = x - site.x, dy = y - site.y, dz = z - site.z
+      if (dx < -FILL_RING || dx >= w + FILL_RING || dz < -FILL_RING || dz >= d + FILL_RING || dy < -DARK_BELOW) return false
+      return dy <= DARK_RING_UP || (dx >= 0 && dx < w && dz >= 0 && dz < d && dy <= DARK_ABOVE)
+    }
+    list = require('../darkspots').scan(bot, boxes, (x, y, z) => skip(x, y, z) || !band(x, y, z))
       .map((c) => ({ x: c.x, y: c.y, z: c.z, hot: c.hot, kind: 'torch', dark: true, idx: darkIdx(st, c.x, c.y, c.z) }))
       .filter((c) => c.idx != null && Math.hypot(c.x + 0.5 - (site.x + w / 2), c.z + 0.5 - (site.z + d / 2)) <= DARK_LEASH)
     if (list.length) console.log(`castle dark cells=${list.length}`)

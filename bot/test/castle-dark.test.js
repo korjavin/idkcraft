@@ -53,21 +53,35 @@ describe('darkspots.scan', () => {
 
 describe('castle dark cells', () => {
   it('dark interior cells become torch cells with a round-trip idx; a mob death zone lights first', () => {
-    const bot = world({}, (p) => (p.x === 40 && p.z === 40 ? 0 : (p.y === 64 && p.x === 2 && p.z === 2 ? 0 : 5)))
+    const bot = world({}, (p) => (p.x === -3 && p.z === -3 ? 0 : (p.y === 64 && p.x === 2 && p.z === 2 ? 0 : 5)))
     const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, blocked: {} }
-    const ctx = { danger: { spots: [{ x: 40, y: 64, z: 40, at: Date.now(), r: 16 }] } }
+    const ctx = { danger: { spots: [{ x: -3, y: 64, z: -3, at: Date.now(), r: 16 }] } }
     const orig = console.log
     console.log = () => {}
     let list
     try { list = castle.darkTargets(bot, ctx, st, Date.now()) } finally { console.log = orig }
     assert.ok(list.length >= 2, JSON.stringify(list))
-    assert.deepEqual([list[0].x, list[0].y, list[0].z], [40, 64, 40], 'the death zone first')
+    assert.deepEqual([list[0].x, list[0].y, list[0].z], [-3, 64, -3], 'the death zone first')
     for (const c of list) {
       assert.equal(c.kind, 'torch')
       const back = castle.darkOf(st, c.idx)
       assert.deepEqual([back.x, back.y, back.z], [c.x, c.y, c.z])
     }
     assert.ok(list.some((c) => c.x === 2 && c.z === 2))
+  })
+})
+
+describe('castle dark band', () => {
+  it('a cave 16 under the site is not a target; a dark surface ring cell is', () => {
+    // Lit everywhere but a ring cell on the surface and a cave floor at y 48.
+    const bot = world({ '10,47,10': 'stone' }, (p) => ((p.x === -2 && p.z === 5 && p.y === 64) || p.y === 48 ? 0 : 5))
+    const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, blocked: {} }
+    const orig = console.log
+    console.log = () => {}
+    let list
+    try { list = castle.darkTargets(bot, {}, st, Date.now()) } finally { console.log = orig }
+    assert.ok(list.some((c) => c.x === -2 && c.y === 64 && c.z === 5), JSON.stringify(list))
+    assert.ok(list.every((c) => c.y >= 62), 'no cave cell')
   })
 })
 
