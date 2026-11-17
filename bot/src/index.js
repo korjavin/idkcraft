@@ -1875,7 +1875,7 @@ function handleDeath(bot, ticker) {
   // stale GoalXZ re-paths the same swim.
   try {
     const ctx = bot && bot._tickerCtx
-    if (dangerMod.markWaterDeath(bot, ctx)) exploreMod.dropDeadLeg(ctx)
+    if (dangerMod.markWaterDeath(bot, ctx)) { console.log('danger: water death marked'); exploreMod.dropDeadLeg(ctx) }
     // neuc.65.6: a dry, hostile-free death is a fall — the small disc keeps
     // the next life's paths off the drop (prod v2: ten at one doorstep).
     else {
@@ -1883,6 +1883,8 @@ function handleDeath(bot, ticker) {
       if (dangerMod.markFallDeath(bot, ctx, n)) console.log('danger: fall death marked')
       else if (dangerMod.markMobDeath(bot, ctx, n)) console.log('danger: mob death marked')
     }
+    const loop = dangerMod.noteDeath(bot, ctx)
+    if (loop) console.log(`death loop area=${loop.x},${loop.z} deaths=${loop.deaths} skip until ${new Date(loop.until).toISOString()}`)
   } catch (_) { /* memory best-effort */ }
   // ed88: night-step phase records belong to the dead body's position — a
   // gohome 'enter' resumed from world spawn stood 60 s, then cannot-reach.

@@ -73,3 +73,52 @@ describe('creeper by own castle: lured off at 10 blocks, plain flee band stays 6
     assert.equal(fleeReflex(bot, { castle: { site: { x: 0, y: 64, z: 0 }, rot: 0, phase: 'body' } }), false)
   })
 })
+
+describe('death cause, no hurt (prod bot3 2026-11-17)', () => {
+  it('reads void, a fast drop, the server death message', () => {
+    const b = mkBot()
+    b.entity.position = pos(0, -70, 0)
+    assert.equal(hurt.classify(b, {}, 20), 'void')
+    const f = mkBot()
+    f.entity.velocity = { y: -1.5 }
+    assert.equal(hurt.classify(f, {}, 20), 'fall')
+    assert.equal(hurt.causeOfMessage('fell from a high place'), 'fall')
+    assert.equal(hurt.causeOfMessage('tried to swim in lava'), 'lava')
+    assert.equal(hurt.causeOfMessage('drowned'), 'drowning')
+    assert.equal(hurt.deathCause(mkBot(), { deathMsg: { cause: 'void', at: Date.now() } }), 'void')
+  })
+  it('an unknown cause carries the evidence', () => {
+    assert.match(hurt.deathCause(mkBot(), {}), /^unknown\/feet=air,head=air,below=air,vy=\?,o2=20/)
+  })
+})
+
+describe('death loop', () => {
+  const danger = require('../src/danger')
+  it('two deaths near one spot refuse goals there until the area expires', () => {
+    const t0 = Date.now()
+    const goals = []
+    const b = mkBot()
+    b.pathfinder = { setGoal: (g) => goals.push(g) }
+    const ctx = {}
+    b.entity.position = pos(-178, 67, 411)
+    assert.equal(danger.noteDeath(b, ctx, t0 - 59000), null)
+    b.entity.position = pos(-178, 67, 416)
+    assert.equal(danger.noteDeath(b, ctx, t0).deaths, 2)
+    b.entity.position = pos(-151, 74, 424) // respawned away
+    b.pathfinder.setGoal({ x: -177, y: 67, z: 413 })
+    b.pathfinder.setGoal({ x: -100, y: 67, z: 413 })
+    assert.equal(goals[0], null)
+    assert.equal(goals[1].x, -100)
+    assert.ok(danger.loopAt(ctx, { x: -178, z: 414 }, t0 + 19 * 60000))
+    assert.equal(danger.loopAt(ctx, { x: -178, z: 414 }, t0 + 21 * 60000), null)
+  })
+  it('deaths far apart or long apart are no loop', () => {
+    const b = mkBot()
+    const ctx = {}
+    danger.noteDeath(b, ctx, 0)
+    b.entity.position = pos(30, 64, 0)
+    assert.equal(danger.noteDeath(b, ctx, 1000), null)
+    b.entity.position = pos(0, 64, 0)
+    assert.equal(danger.noteDeath(b, ctx, 11 * 60000), null)
+  })
+})
