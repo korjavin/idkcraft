@@ -148,10 +148,58 @@ describe('g0z.2 castle executor', () => {
     bot.pathfinder.setGoal = (g) => { bot.calls.goals.push(g) } // the walk never lands
     bot.entity.position = { x: SITE.x + 5.5, y: SITE.y, z: SITE.z + 5.5 } // ground floor, in reach
     const ctx = { castle: { site: SITE, rot: 0 } }
-    await run(bot, ctx, 8)
+    const logs = []
+    const log = console.log
+    console.log = (m) => { logs.push(String(m)); log(m) }
+    try { await run(bot, ctx, 80) } finally { console.log = log }
     assert.equal(world.get(door.x, door.y, door.z), 'air')
     assert.ok(bot.calls.goals.length >= 3, 're-issues the apron walk')
     assert.equal(ctx.castle.blocked[`${1}:${door.idx}`].why, 'off-apron')
+    assert.ok(logs.some((l) => /^castle off-stance .* door stance=step why=\S+ body=105\.5,64\.0,205\.5 at=/.test(l)), 'logs the failed stage, body and stance')
+  })
+
+  // Exact-stance remedy: the walk lands only on a stance with air feet and head.
+  function stanceBot(world, landAfter = 0) {
+    const bot = mockBot(world)
+    let n = 0
+    bot.pathfinder.setGoal = (g) => {
+      bot.calls.goals.push(g)
+      if (!g || g.constructor.name !== 'GoalBlock' || ++n <= landAfter) return
+      if (world.get(g.x, g.y, g.z) !== 'air' || world.get(g.x, g.y + 1, g.z) !== 'air') return
+      bot.entity.position = { x: g.x + 0.5, y: g.y, z: g.z + 0.5 }
+    }
+    bot.entity.position = { x: SITE.x + 5.5, y: SITE.y, z: SITE.z + 5.5 }
+    return bot
+  }
+  function doorSetup() {
+    const world = makeWorld()
+    const plan = cells()
+    const door = plan.find((c) => c.kind === 'door')
+    paint(world, plan.length)
+    world.set(door.x, door.y, door.z, 'air')
+    const e = blueprint.ENTRANCE
+    return { world, door, apron: { x: SITE.x + e.dx, y: SITE.y + e.dy, z: SITE.z + e.dz } }
+  }
+  for (const [name, dy] of [['an apron blocked by a block', 0], ['an apron with an occupied head space', 1]]) {
+    it(`stance remedy: ${name} is dug clear, then the door lays from it`, async () => {
+      const { world, door, apron } = doorSetup()
+      world.set(apron.x, apron.y + dy, apron.z, 'dirt')
+      const bot = stanceBot(world)
+      const ctx = { castle: { site: SITE, rot: 0 } }
+      await run(bot, ctx, 12)
+      assert.ok(bot.calls.digs.some((p) => p.x === apron.x && p.y === apron.y + dy && p.z === apron.z), 'digs the stance')
+      assert.equal(world.get(door.x, door.y, door.z), 'oak_door')
+      assert.equal((ctx.castle.blocked || {})[`${1}:${door.idx}`], undefined)
+    })
+  }
+  it('stance remedy: a supported apron the body is not on gets pathed to', async () => {
+    const { world, door } = doorSetup()
+    const bot = stanceBot(world, 1) // the approach walk falls short
+    const ctx = { castle: { site: SITE, rot: 0 } }
+    await run(bot, ctx, 12)
+    assert.equal(bot.calls.digs.length, 0)
+    assert.equal(world.get(door.x, door.y, door.z), 'oak_door')
+    assert.equal((ctx.castle.blocked || {})[`${1}:${door.idx}`], undefined)
   })
 
   it('a sunken apron floor (soul sand, feet ~0.125 low) still counts as on the apron', async () => {
