@@ -1712,11 +1712,13 @@ function builtWhy(bot, st, cells) {
 }
 function builtOut(bot, st, cells) { return builtWhy(bot, st, cells) === null }
 // The flip, shared by menuFact and castle()'s scans; a miss names its cell.
+// Any building phase ('body', and 'moat' from older memory) flips; 'prep'
+// has not started the plan (#895 follow-up: bot4 never reached the check).
 function checkBuilt(bot, st, cells) {
-  if (st.phase !== 'body') return
+  if (st.phase === 'complete' || st.phase === 'prep') return
   const why = builtWhy(bot, st, cells)
   if (why === null) markComplete(bot, st)
-  else if (why !== 'no hard hole') console.log(`castle built=no ${why}`)
+  else console.log(`castle built=no phase=${st.phase} ${why}`)
 }
 function markComplete(bot, st) {
   if (st.phase === 'complete') return
@@ -3630,6 +3632,7 @@ module.exports.LITTER_MAX_TRIES = LITTER_MAX_TRIES
 module.exports.decorOpen = decorOpen
 module.exports.reopenRepairs = reopenRepairs
 module.exports.builtOut = builtOut
+module.exports.checkBuilt = checkBuilt
 module.exports.upkeep = upkeep
 module.exports.rank = rank
 module.exports.siteCheck = siteCheck
