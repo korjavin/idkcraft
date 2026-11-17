@@ -2001,7 +2001,7 @@ function menuWord(bot, ctx, now = Date.now()) {
       // words 'clear'; no filler on hand asks castlefetch for stone.
       if (st.phase !== 'prep') {
         const fills = fillTargets(bot, ctx, st, now).filter((c) => nextFill(st, [c], now))
-        if (fills.length && fillItem(bot, ctx)) {
+        if ((fills.length && fillItem(bot, ctx)) || (r.waiting && nextLitter(st, litterTargets(bot, ctx, st, now), now, bot))) { // the sweep runs while plan cells back off
           ctx.castleWord = { word: 'clear' }
           return 'clear'
         }
@@ -2367,7 +2367,10 @@ function far(bot, ctx, st, c, reach, now) {
     // 'unreachable'): before striking, one more ladder with the stuck window
     // open, so A* tunnels/stairs through laid cells (re-laid, #876) and
     // scaffolds inside the site band; only its own danger checks refuse.
-    const sweep = c.idx >= LITTER_BOX_BASE && c.idx < blueprint.DECOR_BASE // litter/fill stay best-effort
+    // Upkeep cells above the body take the ladder too (owner 2026-11-17: high
+    // scaffold on a tall castle): the window lets A* scaffold inside the band
+    // and climb the plan, stepMove pillars; litter retires after LITTER_MAX_TRIES.
+    const sweep = c.idx >= LITTER_BOX_BASE && c.idx < blueprint.DECOR_BASE && c.y <= bp.y + 1
     if (!f.dig && !sweep) {
       f.dig = true
       f.n = 0
@@ -2838,7 +2841,8 @@ function digCell(bot, ctx, st, c, now) {
   if (moving) return
   // Self first: bot.players lists the bot too, so the player test alone
   // would strike our own stance on the cell (rig: standing on own scaffold).
-  if (flat.threatenedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
+  const ride = rideDown(bot, st, c)
+  if (!ride && flat.threatenedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
   if (flat.threatenedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
   if (far(bot, ctx, st, c, flat.REACH_DIG, now)) return
   let b = null
@@ -2847,7 +2851,8 @@ function digCell(bot, ctx, st, c, now) {
   // gravity, submerged and castle-block rules still apply.
   const k = `${c.x},${c.y},${c.z}`
   const dctx = ours ? { ...clear, placedByBot: new Set([k]) } : clear
-  const deny = b ? denyReason(bot, b, dctx) : 'unreadable'
+  let deny = b ? denyReason(bot, b, dctx) : 'unreadable'
+  if (ride && deny === 'below-feet') deny = null
   if (deny) {
     if (b) logDeny(b, deny)
     // Stance rules (trap, gravity) change with the stance: step elsewhere,
@@ -3549,14 +3554,38 @@ function upkeepLog(ctx, st, c, result) {
   if (kind) console.log(`castle upkeep kind=${kind} cell=${c.x},${c.y},${c.z} result=${result}`)
   if (ctx.castleUpkeep && ctx.castleUpkeep.idx === c.idx) ctx.castleUpkeep = null
 }
-function upkeepDone(bot, ctx, st) {
+// Upkeep stupor guard (owner 2026-11-17, prod bot3: nothing above y73 ever
+// logged — the walk to a high target never ended, so far() never struck):
+// a target the body got no block closer to in UPKEEP_STALL_MS strikes
+// 'unreachable' (LITTER_MAX_TRIES retires it) and the next one is picked.
+const UPKEEP_STALL_MS = 90000
+function upkeepDone(bot, ctx, st, now = Date.now(), c = null) {
   const u = ctx.castleUpkeep
-  if (!u) return
+  if (!u) return false
   const gone = upkeepKind(st, u) === 'litter' ? AIR.has(nameAt(bot, u) || '') : done(bot, u)
-  if (gone) upkeepLog(ctx, st, u, 'ok')
+  if (gone) { upkeepLog(ctx, st, u, 'ok'); ctx.castleUpkeepWatch = null; return false }
+  const bp = bodyPos(bot)
+  if (!bp || !c || c.idx !== u.idx) return false // only the target being worked
+  const d = Math.hypot(bp.x - (u.x + 0.5), bp.y + 1.6 - (u.y + 0.5), bp.z - (u.z + 0.5))
+  const w = ctx.castleUpkeepWatch
+  if (!w || w.idx !== u.idx || d < w.best - 1 || ctx.castleFlight) { ctx.castleUpkeepWatch = { idx: u.idx, best: Math.min(d, w && w.idx === u.idx ? w.best : Infinity), since: now }; return false }
+  if (now - w.since < UPKEEP_STALL_MS) return false
+  ctx.castleUpkeepWatch = null
+  try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
+  blockCell(ctx, st, u, 'unreachable', now)
+  return true
+}
+// Top-down column (owner 2026-11-17): standing on a litter pillar, dig the
+// block under the feet and drop one block onto the next — never a fall.
+function rideDown(bot, st, c) {
+  if (upkeepKind(st, c) !== 'litter') return false
+  const bp = bodyPos(bot)
+  if (!bp || Math.floor(bp.x) !== c.x || Math.floor(bp.z) !== c.z || Math.floor(bp.y) - 1 !== c.y) return false
+  const b = blockAtXYZ(bot, c.x, c.y - 1, c.z)
+  return !!b && b.boundingBox === 'block' && !flat.isLiquidName(b.name)
 }
 function work(bot, ctx, st, c, now, status) {
-  upkeepDone(bot, ctx, st)
+  if (upkeepDone(bot, ctx, st, now, c)) return
   if (upkeepKind(st, c)) ctx.castleUpkeep = c
   if (c && !c.prep && Number.isInteger(c.idx) && c.idx < LITTER_BOX_BASE) (ctx.castleTouched || (ctx.castleTouched = new Set())).add(c.idx)
   // Far walk (vmzq.17): material sourcing is g0z.4, but a far step walks
@@ -3728,8 +3757,15 @@ function castle(bot, ctx) {
     // Sweep before fill (prod bot4 2026-11-17: 500 holes kept the fill
     // first every tick and clutter never fell); failing litter retires on
     // the strike ladder, so it cannot starve the fill in turn.
-    const lit = !r.waiting && nextLitter(st, litterTargets(bot, ctx, st, now), now, bot, ctx)
+    // Waiting plan cells sit in backoff: the sweep runs meanwhile.
+    const lits = litterTargets(bot, ctx, st, now)
+    const lit = nextLitter(st, lits, now, bot, ctx)
     if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
+    const left = lits.filter((o) => !((st.blocked || {})[bkey(st, o.idx)] || {}).retired).length
+    if (left && !(ctx.castleUpkeepStuckAt > now - 60000)) {
+      ctx.castleUpkeepStuckAt = now
+      console.log(`castle upkeep stuck reachable=0 left=${left}`)
+    }
     const fill = nextFill(st, fillTargets(bot, ctx, st, now), now)
     if (fill && fillItem(bot, ctx)) { work(bot, ctx, st, fill, now, 'filling a floor hole'); return }
   }
@@ -3863,3 +3899,4 @@ module.exports.peek = peek // test seam: the arbiter's next cell (castle-scale r
 module.exports.castleBuilderBatch = castleBuilderBatch
 module.exports.pick = pick
 module.exports.placeCell = placeCell
+module.exports.upkeepDone = upkeepDone
