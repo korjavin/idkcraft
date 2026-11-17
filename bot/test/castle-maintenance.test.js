@@ -60,7 +60,12 @@ describe('castle maintenance (owner 2026-11-17)', () => {
     const mk = (e) => Object.fromEntries(cells.map((c) => [`2:${c.idx}`, { until: 0, why: 'unreachable', ...e }]))
     const st = state({ phase: 'body', blocked: mk({ tries: 2 }) })
     const plan = blueprint.absPlan(SITE, 0, V).cells
-    assert.equal(castle.builtOut(bot, st, plan), false, 'two strikes: still real work')
+    assert.equal(castle.builtOut(bot, st, plan), false, 'no hard hole yet')
+    st.blocked = { ...mk({ tries: 1 }), [`2:${cells[0].idx}`]: { tries: 8, until: 0, why: 'unreachable' } }
+    assert.equal(castle.builtOut(bot, st, plan), true, 'try-1 neighbours of a hard hole are remainders (bot4)')
+    st.blocked = mk({ tries: 8 })
+    delete st.blocked[`2:${cells[1].idx}`]
+    assert.equal(castle.builtOut(bot, st, plan), false, 'a never-struck cell is real work')
     st.blocked = mk({ tries: 0, ever: 6 }) // requeued, backoff expired: workable again, yet hard
     assert.equal(castle.builtOut(bot, st, plan), true)
     // A never-struck cell resting on a hole waits on it, not on us.
