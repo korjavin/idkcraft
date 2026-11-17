@@ -1081,6 +1081,50 @@ function scaffoldShape(bot, ctx, b, st = ctx && ctx.castle) {
     return solid <= 1
   } catch (_) { return false }
 }
+// Leftover build scaffold of any material (owner 2026-11-17: dirt/cobble
+// towers stuck to and around the walls survive repair; in-memory
+// placedByBot dies on restart). Above grade, within the apron, off plan and
+// decor, scaffold or natural non-grass material, in a 1x1 column from grade
+// that touches nothing but the castle (free-standing or stuck to a wall).
+// A hill has neighbours and grass on top, so it stays.
+// shortcut: 2-wide scaffold stacks are not caught; widen if the owner sees them.
+function leftoverScaffold(bot, st, b, x, y, z, w, d) {
+  const n = b && b.name
+  if (!n || n === 'grass_block' || !(SCAFFOLD_MATS.has(n) || NATURAL_SOLID.has(n))) return false
+  const R = blueprint.apronR(st.blueprintVersion)
+  const { x: sx, y: sy, z: sz } = st.site
+  if (y < sy || y > sy + blueprint.siteTop(st.blueprintVersion)) return false
+  if (x < sx - R || x >= sx + w + R || z < sz - R || z >= sz + d + R) return false
+  const at = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at
+  const dt = blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).at
+  const k = `${x},${y},${z}`
+  if (at.has(k) || dt.has(k)) return false
+  // The whole column from grade up to its first air: allowed material,
+  // no solid horizontal neighbour but plan/decor (a player's wall, post
+  // pair or lintel has one, so it stays).
+  const free = (yy) => {
+    const c = yy === y ? b : blockAtXYZ(bot, x, yy, z)
+    if (!c) return null
+    if (!flat.isSolidCell(c)) return 'air'
+    if (c.name === 'grass_block' || !(SCAFFOLD_MATS.has(c.name) || NATURAL_SOLID.has(c.name))) return false
+    const kc = `${x},${yy},${z}`
+    if (at.has(kc) || dt.has(kc)) return false
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const kk = `${x + dx},${yy},${z + dz}`
+      if (at.has(kk) || dt.has(kk)) continue
+      const nb = blockAtXYZ(bot, x + dx, yy, z + dz)
+      if (!nb || flat.isSolidCell(nb)) return false
+    }
+    return true
+  }
+  for (let yy = y; yy >= sy; yy--) if (free(yy) !== true) return false
+  for (let yy = y + 1; yy <= sy + blueprint.siteTop(st.blueprintVersion); yy++) {
+    const f = free(yy)
+    if (f === 'air') return true
+    if (f !== true) return false
+  }
+  return true
+}
 // One cell's verdict on a complete castle. The scan and the read-time
 // re-check share it (g0z.53: a block a player swapped inside the cache
 // window is judged again, never dug on the old verdict).
@@ -1102,6 +1146,7 @@ function isLitter(bot, ctx, st, x, y, z, w, d) {
     return !(dc && blueprint.matches(dc.kind, n))
   }
   if (pc) return pc.kind === 'dig' && (SCAFFOLD_MATS.has(n) || n === 'grass_block')
+  if (leftoverScaffold(bot, st, b, x, y, z, w, d)) return true
   if (!SCAFFOLD_MATS.has(n)) return false
   const ring = y >= st.site.y && x >= st.site.x - 1 && x <= st.site.x + w && z >= st.site.z - 1 && z <= st.site.z + d
   if (ring && isOwnPlaced(ctx, b)) {
@@ -1166,7 +1211,7 @@ function litterTargets(bot, ctx, st, now) {
     while (c.next <= last) {
       for (const o of litterSlice(bot, ctx, st, c.next, w, d)) { o.slice = c.next; c.acc.push(o) }
       c.next++
-      if (c.next > last) { c.list = c.acc; c.acc = [] }
+      if (c.next > last) { c.list = c.acc; c.acc = []; if (c.list.length) console.log(`castle sweep scaffold=${c.list.length}`) }
       pending = pendingOf()
       if (nextLitter(st, pending, now, bot)) break
     }
