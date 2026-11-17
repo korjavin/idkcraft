@@ -1,0 +1,111 @@
+'use strict'
+
+// Castle maintenance (owner 2026-11-17, v2 bot4 'castle 2040/2048' answered
+// 'not complete' to repair): only-holes castles are built, the complete
+// sweep clears interior clutter, a tidy visit logs the upkeep counts.
+
+const { describe, it } = require('node:test')
+const assert = require('node:assert/strict')
+const { Vec3 } = require('vec3')
+const blueprint = require('../src/castle')
+const castle = require('../src/behaviours/castle')
+const { createTicker, handleChat } = require('../src/index')
+
+const SITE = { x: 100, y: 64, z: 200 }
+const V = 2
+const LAID = { stone: 'cobblestone', planks: 'oak_planks', frame: 'oak_log', fence: 'oak_fence', door: 'oak_door', torch: 'torch', chest: 'chest' }
+const key = (x, y, z) => `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`
+function completeSet() {
+  const set = new Map()
+  for (const c of blueprint.absPlan(SITE, 0, V).cells) {
+    set.set(`${c.x},${c.y},${c.z}`, blueprint.isPlaceTarget(c.kind) ? LAID[c.kind] : 'air')
+  }
+  for (const c of blueprint.decorPlan(SITE, 0, V).cells) {
+    set.set(`${c.x},${c.y},${c.z}`, { pane: 'glass_pane', fence: 'oak_fence', gate: 'oak_fence_gate' }[c.kind] || 'air')
+  }
+  return set
+}
+// creeper damage: four wall stones knocked out
+function damaged() {
+  const set = completeSet()
+  const cells = blueprint.absPlan(SITE, 0, V).cells.filter((c) => c.kind === 'stone' && c.y === SITE.y + 1).slice(0, 4)
+  for (const c of cells) set.set(`${c.x},${c.y},${c.z}`, 'air')
+  return { set, cells }
+}
+function worldBot(set, items = []) {
+  return {
+    chats: [],
+    entity: { position: { x: SITE.x + 15.5, y: SITE.y, z: SITE.z + 13.5 } },
+    inventory: { items: () => items },
+    players: {},
+    pathfinder: { goal: null },
+    setControlState() {}, clearControlStates() {},
+    chat(m) { this.chats.push(String(m)) },
+    blockAt(p) {
+      const x = Math.floor(p.x); const y = Math.floor(p.y); const z = Math.floor(p.z)
+      const k = key(x, y, z)
+      const name = set.has(k) ? set.get(k) : (y < SITE.y ? 'dirt' : 'air')
+      return { name, position: new Vec3(x, y, z), boundingBox: name === 'air' ? 'empty' : 'block' }
+    },
+  }
+}
+const retired = (cells, why) => Object.fromEntries(cells.map((c) => [`2:${c.idx}`, { tries: 8, until: 0, why, retired: true }]))
+const state = (extra) => ({ site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: {}, ...extra })
+
+
+describe('castle maintenance (owner 2026-11-17)', () => {
+  it('built: only holes open flips the phase to complete (the counter and repair agree)', () => {
+    const { set, cells } = damaged()
+    const bot = worldBot(set)
+    const st = state({ phase: 'body', blocked: Object.fromEntries(cells.map((c) => [`2:${c.idx}`, { tries: 2, until: Date.now() + 60000, why: 'unreachable' }])) })
+    const plan = blueprint.absPlan(SITE, 0, V).cells
+    assert.equal(castle.builtOut(bot, st, plan), true)
+    st.blocked = {}
+    assert.equal(castle.builtOut(bot, st, plan), false, 'an unblocked open cell is still work')
+    assert.equal(castle.builtOut(worldBot(completeSet()), st, plan), false, 'all laid: castle() completes it itself')
+  })
+
+  it('interior clutter: dirt on a stairwell/doorway or off-plan inside the footprint is swept; furniture stays', () => {
+    const set = completeSet()
+    const plan = blueprint.absPlan(SITE, 0, V)
+    const { w, d } = blueprint.siteDimensions(0, V)
+    const keep = plan.cells.find((c) => c.kind === 'air' && c.y > SITE.y && c.x > SITE.x && c.x < SITE.x + w && c.z > SITE.z && c.z < SITE.z + d &&
+      !blueprint.decorPlan(SITE, 0, V).at.has(`${c.x},${c.y},${c.z}`))
+    set.set(`${keep.x},${keep.y},${keep.z}`, 'dirt')
+    // an off-plan interior cell above grade
+    let off = null
+    for (let dx = 3; dx < 20 && !off; dx++) {
+      for (let dz = 3; dz < 20 && !off; dz++) {
+        const k = `${SITE.x + dx},${SITE.y + 1},${SITE.z + dz}`
+        if (!plan.at.has(k)) off = { x: SITE.x + dx, y: SITE.y + 1, z: SITE.z + dz }
+      }
+    }
+    set.set(`${off.x},${off.y},${off.z}`, 'cobblestone')
+    const chest = { x: off.x, y: off.y + 1, z: off.z }
+    set.set(`${chest.x},${chest.y},${chest.z}`, 'chest')
+    const bot = worldBot(set)
+    const ctx = {}
+    const st = state({ visitedAt: Date.now() })
+    const list = []
+    // The sweep is sliced: read slices until the pass ends.
+    for (let i = 0; i < 400 && !(ctx.castleLitter && ctx.castleLitter.acc.length === 0 && ctx.castleLitter.next > 0 && ctx.castleLitter.list.length); i++) {
+      for (const o of castle.litterTargets(bot, ctx, st, Date.now())) list.push(o)
+      st.blocked = Object.fromEntries(list.map((o) => [`2:${o.idx}`, { until: Date.now() + 60000, tries: 1 }]))
+    }
+    const has = (p) => list.some((o) => o.x === p.x && o.y === p.y && o.z === p.z)
+    assert.ok(has(keep), 'keep-clear plan cell')
+    assert.ok(has(off), 'off-plan interior block')
+    assert.ok(!has(chest), 'owner furniture stays')
+  })
+
+  it('a tidy visit logs holes/clutter/missing', () => {
+    const { set } = damaged()
+    const bot = worldBot(set)
+    const st = state({ visitedAt: 1 })
+    const logs = []
+    const log = console.log
+    console.log = (s) => logs.push(String(s))
+    try { castle.menuFact(bot, {}, Date.now()) ; castle.menuFact(bot, { castle: st }, Date.now()) } finally { console.log = log }
+    assert.ok(logs.some((l) => /^castle tidy holes=\d+ clutter=\d+ missing=4$/.test(l)), logs.join('\n'))
+  })
+})

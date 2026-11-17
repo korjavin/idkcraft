@@ -105,15 +105,22 @@ describe('castle repair (g0z.56)', () => {
     assert.match(bot.chats.pop(), /^castle at 100 64 200: 100% \(stone /)
   })
 
-  it("'castle repair' on an unfinished castle or with no castle changes nothing", () => {
+  it("'castle repair' with no castle changes nothing", () => {
     const bot = makeBot()
     const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     handleChat(bot, ticker, 'Steve', 'castle repair')
     assert.equal(bot.chats.pop(), 'no castle yet — say build castle')
+  })
+
+  it("'repair' works on an unfinished castle too (owner 2026-11-17: no 'not complete' refusal)", () => {
+    const set = completeSet()
+    knockOut(set)
+    const bot = makeBot({ set })
+    const ticker = createTicker({ bot, brain: null, tickMs: 10, idleTickMs: 10 })
     bot._tickerCtx.castle = castleState({ phase: 'body', parked: true })
-    handleChat(bot, ticker, 'Steve', 'castle repair')
-    assert.equal(bot.chats.pop(), 'the castle is not finished yet — say castle go to resume')
-    assert.equal(bot._tickerCtx.castle.parked, true)
+    handleChat(bot, ticker, 'Steve', 'repair')
+    assert.match(bot.chats.pop(), /^castle: .*repairing/)
+    assert.equal(bot._tickerCtx.castle.parked, false)
   })
 
   it('names the wood shortfall when the last fetch found no trees', () => {

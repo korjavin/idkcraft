@@ -142,7 +142,10 @@ describe('v0vy protected retirement', () => {
     }
     const ctx2 = { castle: state({ visitedAt: now, blocked: retired(cells, 'protected') }) }
     ctx2.castle.phase = 'body'
-    assert.equal(castle.menuFact(airBot, ctx2, now), 'finish', 'incomplete castle with only retired holes words finish')
+    // Built (owner 2026-11-17): only holes open flips it complete; the word
+    // moves on to the complete castle's upkeep (here: its window panes).
+    assert.equal(castle.menuFact(airBot, ctx2, now), 'pane-none', 'a castle with only retired holes is built')
+    assert.equal(ctx2.castle.phase, 'complete')
   })
   it('control: one unblocked hole still words the repair', () => {
     const { set, cells } = damaged()

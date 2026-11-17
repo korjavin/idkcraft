@@ -557,9 +557,9 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     if (ticker) ticker.work()
     const st = (site && site.site) || {}
     bot.chat(`building a home at ${st.x} ${st.y} ${st.z}`)
-  } else if (/^build castle(?: \d+)?$/.test(msg) || msg === 'castle' || msg.startsWith('castle ')) {
+  } else if (/^build castle(?: \d+)?$/.test(msg) || msg === 'castle' || msg.startsWith('castle ') || msg === 'repair') {
     if (!ownerOk) return
-    const reply = castleChat(bot, ticker, playerName, msg)
+    const reply = castleChat(bot, ticker, playerName, msg === 'repair' ? 'castle repair' : msg)
     if (reply) bot.chat(reply)
   } else if (msg === 'status') {
     if (ticker && typeof ticker.status === 'function') ticker.status()
@@ -955,10 +955,12 @@ function castleChat(bot, ticker, playerName, cmd) {
     // every complete castle (castle.js pick: place cells read live); this
     // reports the damage and resumes like 'castle go'. Intact or unseen:
     // nothing changes.
-    if (st.phase !== 'complete') return 'the castle is not finished yet — say castle go to resume'
+    // Any castle, complete or not (owner 2026-11-17): repair is maintenance.
     if (!castleMod.siteLoaded(bot, st)) return `castle at ${at(st.site)}: too far to see the damage — bring me near it and say castle repair`
     const dmg = damageOf(castleMod.progressByKind(bot, st))
-    if (!dmg) return `castle at ${at(st.site)} is intact — nothing to repair`
+    const u = castleMod.upkeep(bot, ctx, st)
+    const extra = u.holes || u.clutter ? `; floor holes ${u.holes}, clutter ${u.clutter}` : ''
+    if (!dmg && !extra) return `castle at ${at(st.site)} is intact — nothing to repair`
     const dry = typeof st.status === 'string' && st.status.startsWith('no wood') ? `; ${st.status}` : ''
     // idkcraft-fuja: the owner's explicit repair order reopens every
     // retired-but-open plan cell but a protected one (the automatic path
@@ -973,7 +975,7 @@ function castleChat(bot, ticker, playerName, cmd) {
     st.parked = false
     ticker.saveMemory()
     ticker.work()
-    const wood = dmg.kinds.some((k) => WOOD_KINDS.has(k)) ? ' — drop logs in the castle chest to speed it up' : ''
+    const wood = dmg && dmg.kinds.some((k) => WOOD_KINDS.has(k)) ? ' — drop logs in the castle chest to speed it up' : ''
     // idkcraft-v0vy revmux 01 minor: when the only damage left sits on
     // protected-retired cells (never reopened), 'repairing' is a lie —
     // say so instead of resuming into another silent stall.
@@ -981,9 +983,9 @@ function castleChat(bot, ticker, playerName, cmd) {
       const blocked = st.blocked && typeof st.blocked === 'object' ? Object.values(st.blocked) : []
       const onlyProtected = reopened === 0 && blocked.length > 0 &&
         blocked.every((e) => e && e.retired === true && /^protected/.test(String(e.why || '')))
-      if (onlyProtected) return `castle at ${at(st.site)}: ${dmg.line} — all on protected ground, nothing to repair`
+      if (onlyProtected && !extra) return `castle at ${at(st.site)}: ${dmg.line} — all on protected ground, nothing to repair`
     } catch (_) { /* honest-line best-effort */ }
-    return `castle: ${dmg.line}; repairing${wood}${dry}`
+    return `castle: ${dmg ? dmg.line : 'walls intact'}${extra}; repairing${wood}${dry}`
   }
   if (cmd === 'castle stop') {
     st.parked = true
