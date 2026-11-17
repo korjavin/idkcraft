@@ -313,6 +313,7 @@ function blockCell(ctx, st, c, why, now) {
   const k = bkey(st, c.idx)
   const e = st.blocked[k] || { tries: 0, until: 0 }
   e.tries++
+  e.ever = (e.ever | 0) + 1 // lifetime strikes: requeue resets tries, never this
   e.until = now + backoffMs(e.tries)
   e.why = String(why)
   // Consecutive-protected streak (idkcraft-v0vy): only unbroken protected
@@ -1682,14 +1683,24 @@ function noteDry(ctx, kind) {
 // done. Built = no counted plan cell is open except holes (blocked
 // entries). Flipped by menuFact (decide's read, the prod path). From then on
 // the complete-castle maintenance (relay, sweep, fill, tidy) owns the rest.
+// Robust to backoff cycling (#891 follow-up, bot4 2036/2048 never flipped):
+// a hole is a cell struck HARD_TRIES times over its life (e.ever survives
+// requeue's tries reset and expired backoffs that make it workable again);
+// a cell resting on an open plan cell waits on that hole, not on us. A
+// never-struck cell is real work. The moat (dig) is cosmetic, as in the counter.
+const HARD_TRIES = 3
 function builtOut(bot, st, cells) {
   // Only with a hole open: an all-laid castle completes on its own tick (castle()).
   const bl = st.blocked || {}
+  const { at } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
   let holes = 0
   for (const c of cells) {
-    if (!gauged(c) || done(bot, c)) continue
-    if (!bl[bkey(st, c.idx)]) return false
-    holes++
+    if (!blueprint.isPlaceTarget(c.kind) || done(bot, c)) continue
+    const e = bl[bkey(st, c.idx)]
+    if (e && Math.max(e.ever | 0, e.tries | 0) >= HARD_TRIES) { holes++; continue }
+    const below = at.get(`${c.x},${c.y - 1},${c.z}`)
+    if (below && blueprint.isPlaceTarget(below.kind) && !done(bot, below)) continue
+    return false
   }
   return holes > 0
 }
@@ -1779,6 +1790,8 @@ function menuFact(bot, ctx, now = Date.now()) {
       } else if (now - (ctx.castleMenuProgressAt || 0) >= FULL_RESCAN_MS) {
         ctx.castleMenuProgressAt = now
         progress(bot, st, r.cells, ctx)
+        // Whatever the word: a hole off its backoff reads as a workable r.cell.
+        if (st.phase === 'body' && builtOut(bot, st, r.cells)) markComplete(bot, st)
       }
     } catch (_) { /* progress best-effort */ }
     // Retired builder misses need an actual menu route back to castle.
@@ -1818,7 +1831,6 @@ function menuFact(bot, ctx, now = Date.now()) {
     }
     let word = null
     if (!r.cell) {
-      if (st.phase === 'body' && builtOut(bot, st, r.cells)) markComplete(bot, st)
       // Floor upkeep before waiting/decor (owner 2026-11-16: a waiting hole
       // read 'blocked' forever and the fill never ran): a workable fill
       // words 'clear'; no filler on hand asks castlefetch for stone.
