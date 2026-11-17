@@ -1087,7 +1087,43 @@ function scaffoldShape(bot, ctx, b, st = ctx && ctx.castle) {
 // decor, scaffold or natural non-grass material, in a 1x1 column from grade
 // that touches nothing but the castle (free-standing or stuck to a wall).
 // A hill has neighbours and grass on top, so it stays.
-// shortcut: 2-wide scaffold stacks are not caught; widen if the owner sees them.
+// Widened (owner 2026-11-17: 2-wide towers and block stairs against the
+// walls survived): a side neighbour may itself be bot scaffold
+// (flat.PILLAR_MATS: dirt/cobble) whose own column from grade holds only
+// scaffold/natural non-grass and tops out in air. The joined stack at that
+// height is at most 2 columns, or 4 when it touches the castle (a tower
+// stuck to the wall), so a player's wall or path line never erodes.
+function scaffoldColumn(bot, at, dt, x, y, z, sy, top) {
+  const b0 = blockAtXYZ(bot, x, y, z)
+  if (!b0 || !flat.PILLAR_MATS.has(b0.name)) return false
+  for (let yy = sy; yy <= top; yy++) {
+    const c = yy === y ? b0 : blockAtXYZ(bot, x, yy, z)
+    if (!c) return false
+    if (!flat.isSolidCell(c)) return yy > y
+    if (c.name === 'grass_block' || !(SCAFFOLD_MATS.has(c.name) || NATURAL_SOLID.has(c.name))) return false
+    if (at.has(`${x},${yy},${z}`) || dt.has(`${x},${yy},${z}`)) return false
+  }
+  return true
+}
+function scaffoldCluster(bot, at, dt, x, y, z) {
+  const seen = new Set([`${x},${z}`])
+  const q = [[x, z]]
+  let touches = false
+  while (q.length) {
+    const [cx, cz] = q.pop()
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cx + dx, nz = cz + dz, kk = `${nx},${y},${nz}`
+      if (at.has(kk) || dt.has(kk)) { touches = true; continue }
+      if (seen.has(`${nx},${nz}`)) continue
+      const nb = blockAtXYZ(bot, nx, y, nz)
+      if (!nb || !flat.isSolidCell(nb) || !flat.PILLAR_MATS.has(nb.name)) continue
+      seen.add(`${nx},${nz}`)
+      if (seen.size > 4) return false
+      q.push([nx, nz])
+    }
+  }
+  return seen.size <= (touches ? 4 : 2)
+}
 function leftoverScaffold(bot, st, b, x, y, z, w, d) {
   const n = b && b.name
   if (!n || n === 'grass_block' || !(SCAFFOLD_MATS.has(n) || NATURAL_SOLID.has(n))) return false
@@ -1109,11 +1145,14 @@ function leftoverScaffold(bot, st, b, x, y, z, w, d) {
     if (c.name === 'grass_block' || !(SCAFFOLD_MATS.has(c.name) || NATURAL_SOLID.has(c.name))) return false
     const kc = `${x},${yy},${z}`
     if (at.has(kc) || dt.has(kc)) return false
+    let scaf = 0
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const kk = `${x + dx},${yy},${z + dz}`
       if (at.has(kk) || dt.has(kk)) continue
       const nb = blockAtXYZ(bot, x + dx, yy, z + dz)
-      if (!nb || flat.isSolidCell(nb)) return false
+      if (!nb) return false
+      if (!flat.isSolidCell(nb)) continue
+      if (!flat.PILLAR_MATS.has(c.name) || (!scaf++ && !scaffoldCluster(bot, at, dt, x, yy, z)) || !scaffoldColumn(bot, at, dt, x + dx, yy, z + dz, sy, sy + blueprint.siteTop(st.blueprintVersion))) return false
     }
     return true
   }
@@ -1157,6 +1196,23 @@ function isLitter(bot, ctx, st, x, y, z, w, d) {
   }
   return scaffoldShape(bot, ctx, b, st)
 }
+// Scaffold scan tally (owner 2026-11-17: the rule never logged a hit):
+// every off-plan solid block above grade in the apron, by material and
+// verdict, logged once per complete pass to tune isLitter from prod data.
+function scanNote(bot, ctx, st, x, y, z, hit) {
+  const t = ctx.castleScan
+  if (!t || y < st.site.y) return
+  const k = `${x},${y},${z}`
+  if (blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.has(k) || blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).at.has(k)) return
+  const b = blockAtXYZ(bot, x, y, z)
+  if (!b || !flat.isSolidCell(b)) return
+  t.cand++
+  t.mats[b.name] = (t.mats[b.name] || 0) + 1
+  if (hit) { t.litter++; return }
+  const why = b.name === 'grass_block' ? 'grass' : !SCAFFOLD_MATS.has(b.name) ? (NATURAL_SOLID.has(b.name) ? 'natural' : 'player') : 'side-neighbour'
+  t.rejected[why] = (t.rejected[why] || 0) + 1
+}
+const fmtCounts = (o) => `{${Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(',')}}`
 function litterCell(st, d, x, y, z) {
   const R = blueprint.apronR(st.blueprintVersion)
   const dx = x - st.site.x, dy = y - st.site.y, dz = z - st.site.z
@@ -1169,7 +1225,9 @@ function litterSlice(bot, ctx, st, s, w, d) {
   const out = []
   if (s === 0) {
     for (const c of blueprint.fenceBandCells(st)) {
-      if (isLitter(bot, ctx, st, c.x, c.y, c.z, w, d)) out.push(litterCell(st, d, c.x, c.y, c.z))
+      const hit = isLitter(bot, ctx, st, c.x, c.y, c.z, w, d)
+      scanNote(bot, ctx, st, c.x, c.y, c.z, hit)
+      if (hit) out.push(litterCell(st, d, c.x, c.y, c.z))
     }
     return out
   }
@@ -1183,7 +1241,9 @@ function litterSlice(bot, ctx, st, s, w, d) {
     for (let dy = blueprint.siteTop(st.blueprintVersion); dy >= -LITTER_BELOW; dy--) {
       if (inBand && dy >= 0 && dy <= 3) continue
       const y = st.site.y + dy
-      if (isLitter(bot, ctx, st, x, y, z, w, d)) out.push(litterCell(st, d, x, y, z))
+      const hit = isLitter(bot, ctx, st, x, y, z, w, d)
+      scanNote(bot, ctx, st, x, y, z, hit)
+      if (hit) out.push(litterCell(st, d, x, y, z))
     }
   }
   return out
@@ -1209,9 +1269,14 @@ function litterTargets(bot, ctx, st, now) {
       .filter((o) => isLitter(bot, ctx, st, o.x, o.y, o.z, w, d))
     let pending = pendingOf()
     while (c.next <= last) {
+      if (c.next === 0) ctx.castleScan = { cand: 0, litter: 0, mats: {}, rejected: {} }
       for (const o of litterSlice(bot, ctx, st, c.next, w, d)) { o.slice = c.next; c.acc.push(o) }
       c.next++
-      if (c.next > last) { c.list = c.acc; c.acc = []; if (c.list.length) console.log(`castle sweep scaffold=${c.list.length}`) }
+      if (c.next > last) { c.list = c.acc; c.acc = []; if (c.list.length) console.log(`castle sweep scaffold=${c.list.length}`)
+        const t = ctx.castleScan
+        if (t) console.log(`castle scaffold scan cand=${t.cand} litter=${t.litter} mats=${fmtCounts(t.mats)} rejected=${fmtCounts(t.rejected)}`)
+        ctx.castleScan = null
+      }
       pending = pendingOf()
       if (nextLitter(st, pending, now, bot)) break
     }
@@ -1586,7 +1651,9 @@ function tidyMs() {
 function tidyDue(st, now = Date.now()) {
   const ms = tidyMs()
   if (!st || !st.site || st.phase !== 'complete' || st.parked || !(ms > 0)) return false
-  return now - (typeof st.visitedAt === 'number' ? st.visitedAt : 0) > ms
+  // Upkeep owed (owner 2026-11-17): a loaded read found sweep/fill work, so
+  // the walk back is due now, not at the next hourly window.
+  return !!st.upkeepOwed || now - (typeof st.visitedAt === 'number' ? st.visitedAt : 0) > ms
 }
 function nearSite(bot, st) {
   try {
@@ -1807,6 +1874,14 @@ function upkeep(bot, ctx, st, now = Date.now()) {
 }
 
 function menuFact(bot, ctx, now = Date.now()) {
+  const word = menuWord(bot, ctx, now)
+  const st = ctx && ctx.castle
+  // A complete castle's loaded read is the upkeep verdict: 'clear' (sweep,
+  // fill) keeps the trip owed until a read finds nothing workable.
+  if (st && st.phase === 'complete' && word !== 'tidy' && siteLoaded(bot, st)) st.upkeepOwed = word === 'clear'
+  return word
+}
+function menuWord(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
   if (!ctx.castlePhaseSaid) { // once per process: the restored phase (complete castles skip checkBuilt silently)
@@ -1831,6 +1906,7 @@ function menuFact(bot, ctx, now = Date.now()) {
     if (leg) ctx.tidyLegMs = (ctx.tidyLegMs || 0) + Math.max(0, Math.min(now - (ctx.tidyTickAt || now), 5000))
     if ((leg && failed) || ctx.tidyLegMs > TIDY_TRIP_MS) {
       st.visitedAt = now
+      st.upkeepOwed = false
       ctx.tidyLegMs = 0
       if (owed) ctx.castleWord = null
     } else if (owed && failed && ctx.step === 'castlefetch' && !nearSite(bot, st)) {

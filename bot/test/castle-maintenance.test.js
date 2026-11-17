@@ -198,4 +198,72 @@ describe('castle maintenance (owner 2026-11-17)', () => {
     try { castle.menuFact(bot, {}, Date.now()) ; castle.menuFact(bot, { castle: st }, Date.now()) } finally { console.log = log }
     assert.ok(logs.some((l) => /^castle tidy holes=\d+ clutter=\d+ missing=4$/.test(l)), logs.join('\n'))
   })
+
+  // A 2-wide cobble tower on grade outside the footprint, against the x-min ring (owner 2026-11-17).
+  function towerSet() {
+    const set = completeSet()
+    const plan = blueprint.absPlan(SITE, 0, V).at
+    const dec = blueprint.decorPlan(SITE, 0, V).at
+    const free = (x, z) => [0, 1, 2, 3].every((dy) => !plan.has(`${x},${SITE.y + dy},${z}`) && !dec.has(`${x},${SITE.y + dy},${z}`))
+    const wall = (x, z) => plan.has(`${x},${SITE.y},${z}`) // the fence ring on the footprint edge
+    let at = null
+    for (let x = SITE.x - 6; x < SITE.x && !at; x++) {
+      for (let z = SITE.z + 2; z < SITE.z + 20 && !at; z++) {
+        if (free(x, z) && free(x, z + 1) && wall(x + 1, z) && wall(x + 1, z + 1)) at = { x, z }
+      }
+    }
+    assert.ok(at, 'a tower spot against a wall')
+    const cells = []
+    for (const z of [at.z, at.z + 1]) {
+      for (let dy = 0; dy <= 3; dy++) { set.set(key(at.x, SITE.y + dy, z), 'cobblestone'); cells.push({ x: at.x, y: SITE.y + dy, z }) }
+    }
+    return { set, cells }
+  }
+  function fullPass(bot, ctx, st) {
+    const list = []
+    for (let i = 0; i < 400 && !(ctx.castleLitter && ctx.castleLitter.acc.length === 0 && ctx.castleLitter.next > 0 && ctx.castleLitter.list.length); i++) {
+      for (const o of castle.litterTargets(bot, ctx, st, Date.now())) list.push(o)
+      st.blocked = Object.fromEntries(list.map((o) => [`2:${o.idx}`, { until: Date.now() + 60000, tries: 1 }]))
+    }
+    return list
+  }
+
+  it('a 2-wide scaffold tower against the wall is cleared; the scan logs its tally', () => {
+    const { set, cells } = towerSet()
+    const logs = []
+    const log = console.log
+    console.log = (s) => logs.push(String(s))
+    let list
+    try { list = fullPass(worldBot(set), {}, state({ visitedAt: Date.now() })) } finally { console.log = log }
+    for (const c of cells) assert.ok(list.some((o) => o.x === c.x && o.y === c.y && o.z === c.z), `tower cell ${c.x},${c.y},${c.z}`)
+    const scan = logs.find((l) => l.startsWith('castle scaffold scan '))
+    assert.match(scan || '', /^castle scaffold scan cand=\d+ litter=\d+ mats=\{.*cobblestone:\d+.*\} rejected=\{.*\}$/, logs.join('\n'))
+  })
+
+  it('a grass-topped 2-wide mound against the wall stays', () => {
+    const { set, cells } = towerSet()
+    for (const c of cells) set.set(key(c.x, c.y, c.z), c.y === SITE.y + 3 ? 'grass_block' : 'dirt')
+    const log = console.log
+    console.log = () => {}
+    let list
+    try { list = fullPass(worldBot(set), {}, state({ visitedAt: Date.now() })) } finally { console.log = log }
+    for (const c of cells) assert.ok(!list.some((o) => o.x === c.x && o.y === c.y && o.z === c.z), `mound cell ${c.x},${c.y},${c.z}`)
+  })
+
+  it('the arbiter picks the castle on a complete castle with clutter, and walks back while it is owed', () => {
+    const goal = require('../src/goal')
+    const { set } = towerSet()
+    const bot = worldBot(set)
+    const ctx = { castle: state({ visitedAt: Date.now() }) }
+    const log = console.log
+    console.log = () => {}
+    let w
+    try { for (let i = 0; i < 400 && w !== 'clear'; i++) w = castle.menuFact(bot, ctx, Date.now()) } finally { console.log = log }
+    assert.equal(w, 'clear')
+    assert.equal(ctx.castle.upkeepOwed, true)
+    assert.equal(goal.MENU.castle.feasible({ castle: w, time: 'day', health: 20, food: 20 }, bot, ctx), true)
+    // off the loaded map the owed upkeep words 'tidy' now, not in an hour
+    const far = { ...worldBot(set), blockAt: () => null }
+    assert.equal(castle.menuFact(far, ctx, Date.now()), 'tidy')
+  })
 })
