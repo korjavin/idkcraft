@@ -185,9 +185,14 @@ function castleFloors() {
 const C_FLOORS = castleFloors()
 
 const rot = (home) => (home.rot | 0)
+// The home castle's blueprint version; a scaled castle (build castle N) has
+// no room plan, so its geometry reads from its own blueprint (door, chest,
+// torches, box) and its placed beds are found inside the box (sleep scan).
+const verOf = (home) => (home && home.castle && Number.isInteger(home.castle.blueprintVersion) ? home.castle.blueprintVersion : CV)
+const scaled = (home) => castle.scaleOf(verOf(home)) !== 1
 // rot-0 local [x,y,z] -> site-relative {dx,dy,dz} for the castle's rot.
 function local(home, cells) {
-  return castle.rotatePlan(cells.map(([dx, dy, dz]) => ({ dx, dy, dz, kind: 'air' })), rot(home), CV)
+  return castle.rotatePlan(cells.map(([dx, dy, dz]) => ({ dx, dy, dz, kind: 'air' })), rot(home), scaled(home) ? verOf(home) : CV)
     .map(({ dx, dy, dz }) => ({ dx, dy, dz }))
 }
 function world(home, cells) {
@@ -214,6 +219,11 @@ function floorSet(home) {
 const CASTLE = {
   kind: 'castle',
   entrance: (home) => {
+    if (scaled(home)) {
+      const b = castle.blueprintOf(verOf(home))
+      const [door, outside, inside] = world(home, [[b.DOOR.dx, b.DOOR.dy, b.DOOR.dz], [b.ENTRANCE.dx, b.ENTRANCE.dy, b.ENTRANCE.dz], [b.DOOR.dx, 0, b.DOOR.dz + 1]])
+      return { door, outside, inside, facing: rot(home) % 4 }
+    }
     const [door, outside, inside] = world(home, [
       [BP.DOOR.dx, BP.DOOR.dy, BP.DOOR.dz],
       [BP.ENTRANCE.dx, BP.ENTRANCE.dy, BP.ENTRANCE.dz],
@@ -221,14 +231,14 @@ const CASTLE = {
     ])
     return { door, outside, inside, facing: rot(home) % 4 }
   },
-  beds: (home) => C_BEDS.map((b) => {
+  beds: (home) => scaled(home) ? [] : C_BEDS.map((b) => {
     const [foot, head, stage, sleep] = world(home, [b.foot, b.head, b.stage, b.sleep])
     return { foot, head, stage, facing: dirOf(foot, head), sleep }
   }),
-  lights: (home) => local(home, BP.PLAN.filter((c) => c.kind === 'torch').map((c) => [c.dx, c.dy, c.dz])),
-  chest: (home) => local(home, BP.PLAN.filter((c) => c.kind === 'chest').map((c) => [c.dx, c.dy, c.dz])),
-  furnace: (home) => local(home, C_FURNACE),
-  table: (home) => world(home, [C_TABLE])[0],
+  lights: (home) => local(home, castle.blueprintOf(scaled(home) ? verOf(home) : CV).PLAN.filter((c) => c.kind === 'torch').map((c) => [c.dx, c.dy, c.dz])),
+  chest: (home) => local(home, castle.blueprintOf(scaled(home) ? verOf(home) : CV).PLAN.filter((c) => c.kind === 'chest').map((c) => [c.dx, c.dy, c.dz])),
+  furnace: (home) => scaled(home) ? [] : local(home, C_FURNACE),
+  table: (home) => scaled(home) ? null : world(home, [C_TABLE])[0],
   // The feet cell, or the one below it (g0z.30 02: a step-down edge on the
   // stair floors the feet over the open stairwell for ~70 ms; a jump too).
   interior: (home, pos) => {
@@ -236,13 +246,17 @@ const CASTLE = {
     const x = Math.floor(pos.x)
     const y = Math.floor(pos.y)
     const z = Math.floor(pos.z)
+    if (scaled(home)) { // no room plan: strictly inside the outer box
+      const b = CASTLE.box(home)
+      return x > b.min.x && x < b.max.x && z > b.min.z && z < b.max.z && y >= b.min.y && y <= b.max.y
+    }
     const set = floorSet(home)
     // y + 1: feet inside a v3 stair step (low half stands at dy + 0.5); a
     // floor sits at y + 1 only over a solid cell, so no other column matches.
     return set.has(`${x},${y},${z}`) || set.has(`${x},${y - 1},${z}`) || set.has(`${x},${y + 1},${z}`)
   },
   box: (home) => {
-    const cells = castle.absPlan(home.site, rot(home), CV).cells
+    const cells = castle.absPlan(home.site, rot(home), scaled(home) ? verOf(home) : CV).cells
     const min = { x: Infinity, y: Infinity, z: Infinity }
     const max = { x: -Infinity, y: -Infinity, z: -Infinity }
     for (const c of cells) {
@@ -300,17 +314,15 @@ function sameCastle(home, st) {
 // un-selects it (no flapping) and a new order keeps the old castle until the
 // new one completes. Only a forget (no castle at all) or the flag off falls
 // back to the hut.
-// shortcut: the residence geometry (door, beds, floors) is v2's; a scaled
-// castle (build castle N) is never a residence until it derives them from
-// blueprintOf(version).
-function unscaled(st) { return castle.scaleOf(st.blueprintVersion) === 1 }
+// A scaled castle (build castle N) is a residence too: CASTLE reads its own
+// blueprint (prod bot3: a complete 62x54 castle, nights 600 blocks away).
 function wanted(ctx) {
   if (!ctx) return undefined
   const h = ctx.home
   const st = ctx.castle
   const on = module.exports.RESIDENCE_CASTLE === true
   const isCastle = !!h && h.kind === 'castle'
-  if (on && st && st.site && st.phase === 'complete' && st.blueprintVersion >= 2 && unscaled(st)) {
+  if (on && st && st.site && st.phase === 'complete' && st.blueprintVersion >= 2) {
     // Edge, not level (01-review): adopted once (st.residence, persisted),
     // a later 'build here' stands until a new castle completes.
     return (isCastle && sameCastle(h, st)) || st.residence ? undefined : castleHome(st)
@@ -334,7 +346,7 @@ function nightHome(ctx, pos) {
     if (h && h.built === true) return h
     const own = ctx.castle && ctx.castle.phase === 'complete' ? ctx.castle : null
     const st = own || ctx.peerCastle
-    if (!st || !st.site || st.phase !== 'complete' || !(st.blueprintVersion >= 2) || !unscaled(st)) return h
+    if (!st || !st.site || st.phase !== 'complete' || !(st.blueprintVersion >= 2)) return h
     const a = h && h.site ? h.site : pos
     if (!a || typeof a.x !== 'number' || Math.hypot(a.x - st.site.x, a.z - st.site.z) > NIGHT_CASTLE_RANGE) return h
     if (!sameCastle(ctx.nightCastle, st)) ctx.nightCastle = castleHome(st)

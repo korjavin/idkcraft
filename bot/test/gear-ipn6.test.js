@@ -472,6 +472,15 @@ describe('ipn.6 pantry planning', () => {
     const p = gear.planFor(C(HELMET_COUNTS), HELMET_CTX({ gearPantryBanked: 3 }), {})
     assert.deepEqual([p.state, p.key], ['want', 'want-ore'])
   })
+  it('iron in any own chest (not home) is a withdraw from that chest; a wrong read is distrusted', () => {
+    const ctx = HELMET_CTX({ chests: [{ x: 40, y: 64, z: 9, contents: { iron_ingot: 9 }, at: 5 }] })
+    const p = gear.planFor(C(HELMET_COUNTS), ctx, {})
+    assert.deepEqual([p.state, p.action], ['ready', 'withdraw'])
+    assert.deepEqual(ctx.gear.withdrawAt, { x: 40, y: 64, z: 9, at: 5 })
+    ctx.gear.chestDistrust = { '40,64,9': 5 }
+    assert.equal(gear.planFor(C(HELMET_COUNTS), ctx, {}).key, 'want-ore')
+    assert.equal(ctx.gear.withdrawAt, null)
+  })
   it('a new bank re-arms the drawn latch', () => {
     const ctx = HELMET_CTX({ home: { chest: { x: 1, y: 64, z: 0 } }, gearPantryBanked: 2, gear: { pantrySeen: 1 } })
     const p = gear.planFor(C(HELMET_COUNTS), ctx, {})

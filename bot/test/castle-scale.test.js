@@ -300,12 +300,12 @@ describe('castle scale: review 01 (ids, residence)', () => {
     }
   })
 
-  it('a complete scaled castle is not the residence (own or peer); an unscaled one is', () => {
+  it('a complete scaled castle is the residence (own or peer), like an unscaled one', () => {
     const complete = (v) => ({ site: { x: 0, y: 64, z: 0 }, rot: 0, blueprintVersion: v, phase: 'complete', blocked: {}, parked: false })
     const scaled = complete(bp.scaledVersion(3, 100))
-    assert.equal(residence.wanted({ home: null, castle: scaled }), undefined, 'scaled: home unchanged, not adopted')
-    assert.equal(residence.nightHome({ home: null, castle: scaled }, { x: 5, y: 64, z: 5 }), null)
-    assert.equal(residence.nightHome({ home: null, castle: null, peerCastle: scaled }, { x: 5, y: 64, z: 5 }), null, 'peer scaled castle')
+    assert.equal(residence.wanted({ home: null, castle: scaled }).kind, 'castle', 'scaled: adopted (prod bot3)')
+    assert.equal(residence.nightHome({ home: null, castle: scaled }, { x: 5, y: 64, z: 5 }).kind, 'castle')
+    assert.equal(residence.nightHome({ home: null, castle: null, peerCastle: scaled }, { x: 5, y: 64, z: 5 }).kind, 'castle', 'peer scaled castle')
     const plain = complete(3)
     assert.equal(residence.wanted({ home: null, castle: plain }).kind, 'castle')
     assert.equal(residence.nightHome({ home: null, castle: plain }, { x: 5, y: 64, z: 5 }).kind, 'castle')
