@@ -23,6 +23,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const resources = require('../resources')
+const { needMet } = require('../cheststock')
 const bring = require('./bringbase') // oqul.14: the shared bring helpers live in the leaf now
 const fightMod = require('./fight')
 const detour = require('../detour')
@@ -219,6 +220,7 @@ function bestMemoryCell(bot, ctx, bp) {
     if (rank > 3) continue
     if (rank === 3 && capped) continue
     if (rank <= 2 && !bring.hasPickaxe(bot, item.name)) continue
+    if (needMet(bot, ctx, bring.dropFor(item.name))) continue // stock target met: no mining for the chest
     const d = dist(bp, item)
     if (rank < bestRank || (rank === bestRank && d < bestDist)) {
       bestRank = rank

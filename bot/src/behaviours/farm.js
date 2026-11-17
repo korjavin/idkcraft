@@ -377,6 +377,8 @@ function farmFeasible(facts, bot, ctx) {
     try {
       if (require('./stockpile').packFull(bot, ctx) && !require('../vetoes').orderOwnsStep(ctx, 'farm')) return false
     } catch (_) { /* room unreadable: farm */ }
+    // Need gate (owner 2026-11-18): wheat stock met -> no farm pick.
+    if (require('../cheststock').needMet(bot, ctx, 'wheat') && !require('../vetoes').orderOwnsStep(ctx, 'farm')) return false
     const bp = botPos(bot)
     if (!bp) return false
     const farmland = nearestCell(bot, ctx, ['farmland'], farmRadius(ctx))

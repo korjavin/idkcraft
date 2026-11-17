@@ -157,4 +157,50 @@ function ownChestWith(ctx, names, min, distrust = {}) {
   }
 }
 
-module.exports = { ownChestWith, REMEMBERED_RADIUS, REMEMBERED_DRY_MS, homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }
+// Need targets (owner 2026-11-18: bot3 mined coal into a chest for hours).
+// Every resource-producing pick has a target: stock = pack + every
+// remembered chest (own and peer: all chests are shared). Met -> no pick
+// until the stock drops. Items with no entry have no target (null).
+const NEED = [
+  { key: 'coal', test: (n) => n === 'coal' || n === 'charcoal', want: 32 },
+  { key: 'iron', test: (n) => n === 'raw_iron' || n === 'iron_ingot', want: 32 },
+  { key: 'gold', test: (n) => n === 'raw_gold' || n === 'gold_ingot', want: 16 },
+  { key: 'copper', test: (n) => n === 'raw_copper' || n === 'copper_ingot', want: 16 },
+  { key: 'diamond', test: (n) => n === 'diamond', want: 16 },
+  { key: 'gem', test: (n) => ['emerald', 'lapis_lazuli', 'redstone', 'quartz'].includes(n), want: 32 },
+  { key: 'cobblestone', test: (n) => n === 'cobblestone', want: 128 },
+  { key: 'wood', test: (n) => n.endsWith('_log') || n.endsWith('_stem'), want: 64 },
+  { key: 'sapling', test: (n) => n.endsWith('_sapling'), want: 16 },
+  { key: 'wheat', test: (n) => n === 'wheat' || n === 'bread' || n === 'hay_block', want: 32 },
+]
+function needFor(item) {
+  return typeof item === 'string' ? NEED.find((d) => d.test(item)) || null : null
+}
+// Pack + all remembered chests (ctx.chests: every opened chest, packroom
+// y7lp; ctx.peerChests: peer sightings), deduped by position.
+function stockOf(bot, ctx, test) {
+  let n = 0
+  try {
+    for (const it of (bot && bot.inventory && bot.inventory.items()) || []) if (it && test(it.name)) n += it.count || 0
+  } catch (_) { /* pack unreadable */ }
+  const seen = new Set()
+  for (const list of [ctx && ctx.chests, ctx && ctx.peerChests]) {
+    for (const c of Array.isArray(list) ? list : []) {
+      const k = c && `${c.x},${c.y},${c.z}`
+      if (!c || !c.contents || seen.has(k)) continue
+      seen.add(k)
+      for (const [name, v] of Object.entries(c.contents)) if (test(name) && typeof v === 'number' && v > 0) n += Math.floor(v)
+    }
+  }
+  return n
+}
+// { item, have, want, met } for an item's need, or null (no target).
+function needOf(bot, ctx, item) {
+  const d = needFor(item)
+  if (!d) return null
+  const have = stockOf(bot, ctx, d.test)
+  return { item: d.key, have, want: d.want, met: have >= d.want }
+}
+const needMet = (bot, ctx, item) => { const r = needOf(bot, ctx, item); return !!(r && r.met) }
+
+module.exports = { NEED, needOf, needMet, ownChestWith, REMEMBERED_RADIUS, REMEMBERED_DRY_MS, homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }

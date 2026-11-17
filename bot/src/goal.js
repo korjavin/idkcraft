@@ -617,6 +617,19 @@ function loopBlocked(ctx, kind) {
   return !!(b && kind && b[kind] && Date.now() < b[kind])
 }
 // true when this pin closes a loop (the kind is then blocked)
+// Need log on each resource pick (owner 2026-11-18): what the step serves
+// and how far the stock (pack + all known chests) is from its target.
+const PICK_ITEM = { gather: 'oak_log', reforest: 'oak_log', farm: 'wheat' }
+function logWorkPick(bot, ctx, step) {
+  try {
+    let item = PICK_ITEM[step]
+    if (step === 'forage') { const t = forageMod.planForage(bot, ctx); item = t && t.drop }
+    if (!item) return
+    const n = require('./cheststock').needOf(bot, ctx, item)
+    console.log(`work pick step=${step} item=${n ? n.item : item} have=${n ? n.have : '?'} want=${n ? n.want : '?'}`)
+  } catch (_) { /* log best-effort */ }
+}
+
 function noteLoop(ctx, step) {
   if (!ctx) return false
   const p = ctx.castle && ctx.castle.progress
@@ -3133,6 +3146,7 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
   // A fresh farm pick restarts the field (idkcraft-1z1m): stale caps would
   // finish the new step done on its first tick and starve explore/rest.
   if (choice.step === 'farm' && choice.step !== prev) ctx.farm = null
+  if (choice.step !== prev) logWorkPick(bot, ctx, choice.step)
   // A fresh shelter pick re-pillars (ipn.12): a stale pillared flag from
   // an order-interrupted night would otherwise hold on open ground. The
   // interrupted gohome walk resets too, so the next march starts from the

@@ -516,7 +516,12 @@ function reforestFeasible(facts, bot, ctx) {
     } catch (_) {
       return false
     }
-    if (beatablesNear(bot, REFOREST_RADIUS, null).length > 0) return true
+    // Need gate (owner 2026-11-18): reforest serves wood; with the wood
+    // stock met it waits, and leaves are beaten only while saplings are short.
+    const owned = require('../vetoes').orderOwnsStep(ctx, 'reforest')
+    const { needMet } = require('../cheststock')
+    if (!owned && needMet(bot, ctx, 'oak_log')) return false
+    if (beatablesNear(bot, REFOREST_RADIUS, null).length > 0 && (owned || !needMet(bot, ctx, 'oak_sapling'))) return true
     // Banked saplings plant even where no leaves stand (core-2): the step
     // is picked for the tail when a vetted spot exists.
     try {
