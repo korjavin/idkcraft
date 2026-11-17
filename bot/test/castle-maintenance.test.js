@@ -127,6 +127,27 @@ describe('castle maintenance (owner 2026-11-17)', () => {
     }
   })
 
+  it('a brief non-built read (a refilled moat, a transient cell) does not restart the grace (#898 bot3)', () => {
+    const plan = blueprint.absPlan(SITE, 0, V).cells
+    const st = state({ phase: 'body' })
+    const ctx = {}
+    const log = console.log
+    console.log = () => {}
+    try {
+      const full = completeSet()
+      const moat = plan.find((c) => c.kind === 'dig')
+      full.set(`${moat.x},${moat.y},${moat.z}`, 'dirt') // refilled moat: never holds the flip
+      castle.checkBuilt(worldBot(full), st, plan, ctx)
+      ctx.castleLaidSince -= 9 * 60 * 1000
+      const { set } = damaged() // a brief never-struck read
+      castle.checkBuilt(worldBot(set), st, plan, ctx)
+      assert.equal(st.phase, 'body')
+      ctx.castleLaidSince -= 2 * 60 * 1000
+      castle.checkBuilt(worldBot(full), st, plan, ctx)
+      assert.equal(st.phase, 'complete', 'the grace ran on through the brief read')
+    } finally { console.log = log }
+  })
+
   it('a requeued hole keeps its lifetime strikes across a restart', () => {
     const memory = require('../src/memory')
     const st = state({ phase: 'body', blocked: { '2:5': { tries: 0, ever: 6, until: 0, why: 'unreachable' } } })

@@ -1746,7 +1746,9 @@ function builtWhy(bot, st, cells, touched, dug) {
   let rest = 0
   for (const c of cells) {
     if (c.prep || !gauged(c) || done(bot, c)) continue
-    if (c.kind === 'dig' && dug && dug.has(c.idx)) continue
+    // The moat is cosmetic (refilled by water or walkers, #898 bot3
+    // dig@-175,70,392): it never holds the flip back.
+    if (c.kind === 'dig') continue
     rest++
     if (bl[bkey(st, c.idx)] || (touched && touched.has(c.idx))) continue
     const below = at.get(`${c.x},${c.y - 1},${c.z}`)
@@ -1761,6 +1763,7 @@ function builtOut(bot, st, cells, touched, dug) { const w = builtWhy(bot, st, ce
 // the castle has read built this long without finishing (bot3: hours in
 // 'body' at 11493/11493; bot4: hours at 2037/2048).
 const LAID_GRACE_MS = 10 * 60 * 1000
+const NOT_BUILT_RESET_MS = 5 * 60 * 1000
 // The flip, shared by menuFact and castle()'s scans; a miss names its cell.
 // Any non-complete phase flips (#896 follow-up: a v2 site whose prep scan
 // reads an unloaded column stays 'prep' while castle() builds the body —
@@ -1771,9 +1774,19 @@ function checkBuilt(bot, st, cells, ctx) {
   const why = builtWhy(bot, st, cells, ctx && ctx.castleTouched, ctx && ctx.castleDug && ctx.castleDug.idx)
   const now = Date.now()
   const built = why === null || why === 'laid'
-  if (!built) { if (ctx) ctx.castleLaidSince = 0 } else if (ctx && !ctx.castleLaidSince) ctx.castleLaidSince = now
+  // A brief non-built read (a transient cell) does not restart the grace:
+  // only NOT_BUILT_RESET_MS of continuous non-built reads do.
+  if (ctx) {
+    if (built) {
+      ctx.castleNotBuiltSince = 0
+      if (!ctx.castleLaidSince) ctx.castleLaidSince = now
+    } else {
+      if (!ctx.castleNotBuiltSince) ctx.castleNotBuiltSince = now
+      if (now - ctx.castleNotBuiltSince >= NOT_BUILT_RESET_MS) ctx.castleLaidSince = 0
+    }
+  }
   if (built && (!ctx || now - ctx.castleLaidSince >= LAID_GRACE_MS)) markComplete(bot, st)
-  else console.log(`castle built=no phase=${st.phase} ${why}`)
+  else console.log(`castle built=${built ? `grace ${Math.round((now - ctx.castleLaidSince) / 1000)}s` : 'no'} phase=${st.phase} ${why === null ? 'remainders' : why}`)
 }
 function markComplete(bot, st) {
   if (st.phase === 'complete') return
@@ -1796,6 +1809,10 @@ function upkeep(bot, ctx, st, now = Date.now()) {
 function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
+  if (!ctx.castlePhaseSaid) { // once per process: the restored phase (complete castles skip checkBuilt silently)
+    ctx.castlePhaseSaid = true
+    console.log(`castle phase=${st.phase} at ${st.site.x},${st.site.y},${st.site.z} progress=${st.progress ? `${st.progress.done}/${st.progress.total}` : '?'}`)
+  }
   if (st.parked) { ctx.tidyLegMs = 0; return 'parked' }
   // Tidy bound (g0z.62 revmux 01/02): the watchdog never watches a
   // complete castle, so a failed trip leg — or TIDY_TRIP_MS of leg time
