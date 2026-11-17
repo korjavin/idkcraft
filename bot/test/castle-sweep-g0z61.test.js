@@ -339,3 +339,22 @@ describe('g0z.61 own blocks, players, idx', () => {
     assert.equal(st.blocked[k].retired, true)
   })
 })
+
+// Owner 2026-11-17: leftover scaffold of any material around the walls clears
+// after a restart (no placedByBot); hills and out-of-apron blocks stay.
+describe('leftover scaffold sweep', () => {
+  it('pillar 3 out clears, hill at grade and out-of-apron stay', () => {
+    const cells = painted()
+    const zc = SITE.z + 13
+    for (let y = SITE.y; y < SITE.y + 6; y++) cells.set(key(SITE.x - 4, y, zc), y % 2 ? 'gravel' : 'cobblestone')
+    for (let dx = -12; dx <= -8; dx++) for (let dz = 0; dz < 4; dz++) {
+      cells.set(key(SITE.x + dx, SITE.y, zc + dz), 'dirt')
+      cells.set(key(SITE.x + dx, SITE.y + 1, zc + dz), 'grass_block')
+    }
+    cells.set(key(SITE.x - R - 2, SITE.y + 3, zc), 'cobblestone')
+    const list = pass(worldBot(cells), { castle: st3(), placedByBot: new Set() })
+    for (let y = SITE.y; y < SITE.y + 6; y++) assert.ok(has(list, SITE.x - 4, y, zc), `pillar dy ${y - SITE.y}`)
+    assert.ok(!list.some((c) => c.x >= SITE.x - 12 && c.x <= SITE.x - 8 && c.z >= zc && c.z < zc + 4), 'hill kept')
+    assert.ok(!has(list, SITE.x - R - 2, SITE.y + 3, zc), 'outside apron kept')
+  })
+})
