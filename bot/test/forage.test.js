@@ -1219,6 +1219,18 @@ describe('forage food branches (idkcraft-g9k)', () => {
     assert.equal(ctx.stepStatus, 'failed:no-known')
   })
 
+  it('need met before the next find: no further kill (loot banked the drops)', () => {
+    const bot = mockBot()
+    const ctx = memCtx([])
+    bot.entities = { 7: { id: 7, name: 'cow', position: pos(40, 64, 0), isValid: true } }
+    forage(bot, ctx, null, {}) // plan the far cow
+    ctx.forage.phase = 'find'
+    bot.inv.push({ name: 'beef', count: 8 })
+    forage(bot, ctx, null, {})
+    forage(bot, ctx, null, {})
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
   it('throwing swing still kills', () => {
     // The swing is best-effort inside the kill tick: a driver error must
     // not wedge the hunt.

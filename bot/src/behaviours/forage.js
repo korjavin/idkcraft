@@ -643,6 +643,8 @@ function replan(bot, ctx, f, bp) {
 function huntTick(bot, ctx, f, bp, grounded, { replanTarget, stall, finishTarget }) {
   const t = f.target
   // --- food: find / walk / kill / pickup (bring.js animal phases, step-shaped) ---
+    // Need met (the loot reflex may have banked the drops): no further kill.
+    if (f.phase === 'find' && t.drop && Math.max(0, bring.countDrop(bot, t.drop) - ((f.startInv && f.startInv[t.drop]) || 0)) >= t.want) { finishTarget(); return }
     if (f.phase === 'find' || f.phase === 'walk') {
       const ent = (t.id != null) ? bring.entityById(bot, t.id) : null
       if (!ent) {

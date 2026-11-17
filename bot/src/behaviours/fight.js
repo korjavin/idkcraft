@@ -6,6 +6,7 @@ const { isFightTarget } = require('../perception')
 const { WATER_BLOCKS } = require('../danger')
 const follow = require('./follow')
 const { issueGoal, clearGoal } = require('./util')
+const loot = require('../loot')
 
 const SWING_RANGE = 3
 // ponytail: spaced retries + give-up. Re-issuing setGoal every brain tick
@@ -202,6 +203,7 @@ function swing(bot, hostile) {
   if (!gearPending && !(typeof held === 'string' && held.endsWith('_sword'))) equipGear(bot)
   bot.lookAt(hostile.position.offset(0, hostile.height * 0.8, 0), true)
   bot.attack(hostile)
+  loot.noteSwing(bot, hostile)
 }
 
 // ponytail: first sword in inventory wins (no attackDamage ranking) —
