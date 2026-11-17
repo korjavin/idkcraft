@@ -334,7 +334,9 @@ function castleOf(c) {
         if (!/^\d+:\d+$/.test(k) || !e || typeof e !== 'object') continue
         const tries = num(e.tries)
         const until = num(e.until)
-        if (tries === null || until === null || tries < 1) continue
+        const ever = Number.isInteger(e.ever) && e.ever > 0 ? e.ever : 0
+        // A requeued hole (tries reset to 0) keeps its lifetime strikes (castle built check).
+        if (tries === null || until === null || (tries < 1 && !ever)) continue
         // Clamped to the executor's backoff cap (10 min): a hand-edited
         // far-future stamp must not freeze a cell. The why rides along
         // (g0z.23): the stuck line needs it after a restart; anything but
@@ -344,6 +346,7 @@ function castleOf(c) {
         // Retired holes stay retired (vmzq.27 revmux 02): without the flag
         // a rejoin re-waits retired holes up to the clamped backoff.
         if (e.retired === true) out.blocked[k].retired = true
+        if (ever) out.blocked[k].ever = ever
         // qxql.19: keep the optional lifetime recovery budget across
         // restarts; legacy entries without it still start at zero.
         if (Number.isInteger(e.recoveries) && e.recoveries > 0) out.blocked[k].recoveries = Math.min(e.recoveries, 2)
@@ -837,3 +840,4 @@ function refreshKnownCastles(bot, ctx, now, env) {
 }
 
 module.exports = { save, restore, hasFlat, saveThrottled, refreshKnownCastles, fileFor, worldKey, SAVE_MIN_MS, VISITED_MAX, HOMES_MAX, CHESTS_MAX, chestSpotsOf }
+module.exports.castleOf = castleOf

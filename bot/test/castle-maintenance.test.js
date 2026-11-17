@@ -91,6 +91,30 @@ describe('castle maintenance (owner 2026-11-17)', () => {
     assert.ok(bot.chats.some((m) => m.startsWith('castle done at')))
   })
 
+  it("any building phase flips ('moat' from older memory), and a miss logs phase and cell (bot4)", () => {
+    const { set, cells } = damaged()
+    const bot = worldBot(set)
+    const plan = blueprint.absPlan(SITE, 0, V).cells
+    const st = state({ phase: 'moat', blocked: Object.fromEntries(cells.map((c) => [`2:${c.idx}`, { tries: 0, ever: 4, until: 0, why: 'unreachable' }])) })
+    const logs = []
+    const log = console.log
+    console.log = (s) => logs.push(String(s))
+    try {
+      const miss = state({ phase: 'body', blocked: {} })
+      castle.checkBuilt(bot, miss, plan)
+      castle.checkBuilt(bot, st, plan)
+    } finally { console.log = log }
+    assert.ok(logs.some((l) => /^castle built=no phase=body stone@/.test(l)), logs.join('\n'))
+    assert.equal(st.phase, 'complete')
+  })
+
+  it('a requeued hole keeps its lifetime strikes across a restart', () => {
+    const memory = require('../src/memory')
+    const st = state({ phase: 'body', blocked: { '2:5': { tries: 0, ever: 6, until: 0, why: 'unreachable' } } })
+    const back = memory.castleOf(JSON.parse(JSON.stringify(st)))
+    assert.equal(back.blocked['2:5'].ever, 6)
+  })
+
   it('interior clutter: dirt on a stairwell/doorway or off-plan inside the footprint is swept; furniture stays', () => {
     const set = completeSet()
     const plan = blueprint.absPlan(SITE, 0, V)
