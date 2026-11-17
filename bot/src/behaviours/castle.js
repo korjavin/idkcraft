@@ -346,6 +346,7 @@ function blockCell(ctx, st, c, why, now) {
   ctx.castleFails = null
   ctx.castleCell = null
   ctx.castleFar = null
+  ctx.castleStance = null
   ctx.castleSelfOcc = null // each retry gets fresh stances (vmzq.53 revmux 01)
   ctx.castleGoalIdx = -1
   console.log(`castle blocked ${c.x} ${c.y} ${c.z} ${c.kind} (${why}) try ${e.tries}${e.retired ? ', retired' : `, retry in ${Math.round(backoffMs(e.tries) / 1000)}s`}`)
@@ -2242,6 +2243,69 @@ function stepMove(bot, ctx, c, s) {
   return 'running'
 }
 
+// Exact-stance remedy (door/banner apron, blast stance): the body must end ON
+// the stance block, so get it there in stages instead of striking while it
+// stands elsewhere (prod bot3 daf5ce03: door off-apron try 6, 3 h at
+// 11492/11493). clear: dig junk out of the stance feet/head (stuck ladder,
+// own cells re-lay); support: build the missing stand (standFill); path: an
+// exact GoalBlock with the own-break window open; step: stepMove onto it.
+// Only a failed stage strikes, logged with the body and stance positions.
+const STANCE_PATH_TICKS = 3
+function stanceRemedy(bot, ctx, st, c, s, now) {
+  let r = ctx.castleStance
+  if (!r || r.idx !== c.idx) r = ctx.castleStance = { idx: c.idx, stage: 'clear', n: 0, digging: false, err: false, step: null }
+  ctx.castleGoalIdx = c.idx // the remedy owns the goal; approach() must not re-issue
+  const fail = (why) => {
+    const bp = bodyPos(bot)
+    const body = bp ? `${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)}` : 'none'
+    try { console.log(`castle off-stance ${c.x} ${c.y} ${c.z} ${c.kind} stance=${r.stage} why=${why} body=${body} at=${s.x},${s.y},${s.z}`) } catch (_) { /* log best-effort */ }
+    ctx.castleStance = null
+    ctx.castleGoalIdx = -1
+    strike(ctx, st, c, 'off-apron', now)
+  }
+  if (r.stage === 'clear') {
+    if (r.digging) return
+    if (r.err) return fail('dig-error')
+    for (const y of [s.y, s.y + 1]) {
+      let b = null
+      try { b = bot.blockAt(new Vec3(s.x, y, s.z)) } catch (_) { b = null }
+      if (!b || AIR.has(b.name)) continue
+      if (/water|lava/.test(b.name)) return fail('fluid')
+      const deny = stuckDeny(bot, ctx, b)
+      if (deny) { logDeny(b, deny); return fail('refused:' + deny) }
+      r.digging = true
+      void (async () => {
+        try {
+          const tool = bot.pathfinder && bot.pathfinder.bestHarvestTool && bot.pathfinder.bestHarvestTool(b)
+          if (tool) await bot.equip(tool, 'hand')
+          await bot.dig(b)
+        } catch (_) { r.err = true } finally { r.digging = false }
+      })()
+      return
+    }
+    r.stage = 'support'
+  }
+  if (r.stage === 'support') {
+    // A missing stand is built first (any fill; none on hand fails no-stone so castlefetch fetches).
+    const sup = standFill(bot, st, s)
+    if (sup && !nextFill(st, [sup], now)) return fail('fill-backoff')
+    if (sup) { ctx.castleGoalIdx = -1; work(bot, ctx, st, sup, now, 'building the apron'); return }
+    r.stage = 'path'
+  }
+  if (r.stage === 'path') {
+    if (r.n++ < STANCE_PATH_TICKS) {
+      ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+      try { bot.pathfinder.setGoal(ctx.castleGoal = new goals.GoalBlock(s.x, s.y, s.z)) } catch (_) { /* retry next tick */ }
+      return
+    }
+    r.stage = 'step'
+    r.step = { legs: 0, wait: 0, w: null, digging: false, err: false }
+    ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+  }
+  const res = stepMove(bot, ctx, s, r.step)
+  if (res !== 'running') fail(res)
+}
+
 // A borrower (fight, lead, a reflex) replaced the castle step's goal while
 // its cell stayed the same. Shared by approach() and the break guard;
 // fails closed (borrowed) for the guard, open for the approach latch.
@@ -2387,14 +2451,7 @@ function placeCell(bot, ctx, st, c, item, now) {
     // feet sit ~0.1 low (revmux 03).
     const bp = bodyPos(bot)
     if (!bp || Math.floor(bp.x) !== ent.x || Math.floor(bp.z) !== ent.z || Math.round(bp.y) !== ent.y) {
-      ctx.castleGoalIdx = -1
-      // Active remedy: a missing stand under the apron is built first (any
-      // fill; none on hand fails no-stone so castlefetch fetches) instead of
-      // looping the door on the backoff ladder.
-      const sup = standFill(bot, st, ent)
-      if (sup && !nextFill(st, [sup], now)) { strike(ctx, st, c, 'off-apron', now); return }
-      if (sup) { work(bot, ctx, st, sup, now, 'building the apron'); return }
-      strike(ctx, st, c, 'off-apron', now)
+      stanceRemedy(bot, ctx, st, c, ent, now)
       return
     }
   }
