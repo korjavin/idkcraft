@@ -148,6 +148,20 @@ describe('g0z.29 selection', () => {
     assert.equal(coldStart().t.selectResidence(), false)
   })
 
+  it('a complete scaled castle is the residence; its geometry reads its own blueprint', () => {
+    writeDoc(file, [hutAt(10, 64, 20)], castleSt({ blueprintVersion: 100003, rot: 0 }))
+    const { t, ctx } = coldStart()
+    assert.equal(t.selectResidence(), true)
+    assert.equal(ctx.home.kind, 'castle')
+    const r = residence.of(ctx.home)
+    const bp = require('../src/castle').blueprintOf(100003)
+    assert.deepEqual([r.entrance(ctx.home).door.x, r.entrance(ctx.home).door.z], [CASTLE_SITE.x + bp.DOOR.dx, CASTLE_SITE.z + bp.DOOR.dz])
+    assert.deepEqual(r.beds(ctx.home), [], 'no plan bedrooms: sleep scans placed beds')
+    assert.equal(r.interior(ctx.home, { x: CASTLE_SITE.x + 30, y: 64, z: CASTLE_SITE.z + 30 }), true)
+    assert.equal(r.interior(ctx.home, { x: CASTLE_SITE.x - 5, y: 64, z: CASTLE_SITE.z }), false)
+    assert.equal(residence.nightHome({ home: null, castle: castleSt({ blueprintVersion: 100003 }) }, CASTLE_SITE).kind, 'castle')
+  })
+
   it('castle forget restores the hut as active; with no hut, no home', () => {
     writeDoc(file, [hutAt(10, 64, 20)], castleSt())
     const { t, ctx } = coldStart()

@@ -133,4 +133,28 @@ function homeChestWood(ctx, ms = 30 * 60 * 1000) {
   return n
 }
 
-module.exports = { REMEMBERED_RADIUS, REMEMBERED_DRY_MS, homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }
+// Any own remembered chest (not the home chest, which homeStockOf reads)
+// whose last read holds >= min of names, most stocked first. distrust maps
+// 'x,y,z' -> the snapshot time a draw proved wrong: that read is skipped
+// until a newer one lands. Null when none.
+function ownChestWith(ctx, names, min, distrust = {}) {
+  try {
+    const want = new Set(typeof names === 'string' ? [names] : names)
+    const h = ctx.home && ctx.home.chest
+    let best = null
+    for (const c of Array.isArray(ctx.chests) ? ctx.chests : []) {
+      if (!c || !c.contents || !Number.isFinite(c.at)) continue
+      const k = `${c.x},${c.y},${c.z}`
+      if (h && k === `${h.x},${h.y},${h.z}`) continue
+      if (distrust[k] === c.at) continue
+      let n = 0
+      for (const [name, v] of Object.entries(c.contents)) if (want.has(name) && typeof v === 'number' && v > 0) n += Math.floor(v)
+      if (n >= min && (!best || n > best.n)) best = { c, n }
+    }
+    return best ? best.c : null
+  } catch (_) {
+    return null
+  }
+}
+
+module.exports = { ownChestWith, REMEMBERED_RADIUS, REMEMBERED_DRY_MS, homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }

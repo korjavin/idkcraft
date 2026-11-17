@@ -224,6 +224,16 @@ function stockTrusted(ctx) {
     return at >= 0 && at !== seen
   } catch (_) { return false }
 }
+// Any own chest whose read covers the rung, not only the home chest (prod
+// bot3: castle chests). Picked as the withdraw target; a draw that proves
+// its read wrong distrusts that read (g.chestDistrust).
+function otherChest(ctx, names, short) {
+  const g = gearCtx(ctx)
+  const c = chestStock.ownChestWith(ctx, names, short, g.chestDistrust || {})
+  g.withdrawAt = c ? { x: c.x, y: c.y, z: c.z, at: c.at } : null
+  return !!c
+}
+
 function latchStock(ctx) {
   try { gearCtx(ctx).stockSeenAt = stockSnapshotAt(ctx) } catch (_) { /* latch best-effort */ }
 }
@@ -458,7 +468,8 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
     // no fresh bank (owner restocks, pre-restart strands). Trusted only
     // until a draw proves the snapshot wrong (stockTrusted/latchStock), so
     // a failed open degrades to want/deep instead of re-offering withdraw.
-    if (pantryFresh(ctx) || (stockTrusted(ctx) && chestStock.homeStockOf(ctx, 'diamond') >= short)) return { state: 'ready', key: 'ready', action: 'withdraw' }
+    gearCtx(ctx).withdrawAt = null // home first; otherChest re-picks
+    if (pantryFresh(ctx) || (stockTrusted(ctx) && chestStock.homeStockOf(ctx, 'diamond') >= short) || otherChest(ctx, 'diamond', short)) return { state: 'ready', key: 'ready', action: 'withdraw' }
     // Buried cells are undiggable by forage (ipn.2): without the deep leg
     // the want is unactionable, so it waits instead of announcing a dig.
     if (!im.deep) return { state: 'wait', key: 'wait-deep', line: 'waiting on the deep shaft for diamonds' }
@@ -479,7 +490,8 @@ function planPiece(rung, piece, name, c, im, furnaceBusy, ctx) {
   // Pantry first (ipn.6): a banked batch draws before the fetchers walk.
   // Remembered stock (2ket): seen home-chest ingots+ore cover the rung the
   // same way — no ore-dig leg. Same trust latch as diamonds above.
-  if (pantryFresh(ctx) || (stockTrusted(ctx) && chestStock.homeStockOf(ctx, ['iron_ingot', 'raw_iron']) >= short)) return { state: 'ready', key: 'ready', action: 'withdraw' }
+  gearCtx(ctx).withdrawAt = null // home first; otherChest re-picks
+  if (pantryFresh(ctx) || (stockTrusted(ctx) && chestStock.homeStockOf(ctx, ['iron_ingot', 'raw_iron']) >= short) || otherChest(ctx, ['iron_ingot', 'raw_iron'], short)) return { state: 'ready', key: 'ready', action: 'withdraw' }
   return { state: 'want', key: 'want-ore', line: `need ${short} more raw iron, going to dig` }
 }
 
@@ -1115,6 +1127,7 @@ function runWithdraw(bot, ctx, next) {
     packroomMod = require('./packroom')
   } catch (_) { packroomMod = null }
   const g = gearCtx(ctx)
+  const alt = g.withdrawAt
   if (!packroomMod || typeof packroomMod.withdrawFromChest !== 'function') {
     try {
       g.pantrySeen = ctx.gearPantryBanked || 0
@@ -1128,7 +1141,7 @@ function runWithdraw(bot, ctx, next) {
     try {
       const draw = async (name, want) => {
         if (!(want > 0)) return
-        await packroomMod.withdrawFromChest(bot, ctx, name, want)
+        await packroomMod.withdrawFromChest(bot, ctx, name, want, alt ? new Vec3(alt.x, alt.y, alt.z) : null)
       }
       if (next.tier === 'iron') {
         await draw('iron_ingot', Math.max(0, (next.needMat || 0) - have(bot, 'iron_ingot')))
@@ -1151,6 +1164,7 @@ function runWithdraw(bot, ctx, next) {
         ? have(bot, 'iron_ingot') + have(bot, 'raw_iron')
         : have(bot, 'diamond')
       if (errored || stock < need) {
+        if (alt) { (g.chestDistrust || (g.chestDistrust = {}))[`${alt.x},${alt.y},${alt.z}`] = alt.at; g.withdrawAt = null }
         g.pantrySeen = ctx.gearPantryBanked || 0
         latchStock(ctx) // that snapshot proved wrong: stop re-offering it (minor 01-review)
       }
@@ -1305,7 +1319,8 @@ function gear(bot, ctx, target, state) {
     return
   }
   if (plan.action === 'withdraw') {
-    const cpos = ctx.home && ctx.home.chest
+    const alt = ctx.gear && ctx.gear.withdrawAt
+    const cpos = alt || (ctx.home && ctx.home.chest)
     if (!cpos || typeof cpos.x !== 'number') {
       stepDone(ctx) // raced the adoption: re-plan next tick
       return

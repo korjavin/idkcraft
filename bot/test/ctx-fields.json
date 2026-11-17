@@ -5,6 +5,30 @@
     ],
     "owner": "src/behaviours/craft.js"
   },
+  "acquire": {
+    "writers": [
+      "src/behaviours/acquire.js"
+    ],
+    "owner": "src/behaviours/acquire.js"
+  },
+  "acquireHeld": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "activitySaid": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "activitySaidAt": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
   "adoptDone": {
     "writers": [
       "src/index.js"
@@ -410,6 +434,12 @@
     ],
     "owner": "src/behaviours/stockpile.js"
   },
+  "castleBatchOff": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleBlockedSaid": {
     "writers": [
       "src/behaviours/castle.js"
@@ -463,18 +493,27 @@
     "writers": [
       "src/behaviours/castle.js",
       "src/behaviours/util.js",
-      "src/enclosed.js",
       "src/orders.js"
     ],
     "owner": "src/behaviours/castle.js"
   },
-  "enclosedEscapes": {
+  "castleDangerAt": {
     "writers": [
-      "src/behaviours/castle.js",
-      "src/behaviours/util.js",
-      "src/enclosed.js"
+      "src/behaviours/castle.js"
     ],
-    "owner": "src/enclosed.js"
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleDark": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleDarkAsk": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
   },
   "castleDug": {
     "writers": [
@@ -578,6 +617,12 @@
     ],
     "owner": "src/behaviours/castlefetch.js"
   },
+  "castleFill": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleFlight": {
     "writers": [
       "src/behaviours/castle.js"
@@ -609,6 +654,12 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleLaidSince": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleLitter": {
     "writers": [
       "src/behaviours/castle.js"
@@ -625,6 +676,24 @@
     "writers": [
       "src/behaviours/castle.js",
       "src/orders.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleNeed": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleNotBuiltSince": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castlePhaseSaid": {
+    "writers": [
+      "src/behaviours/castle.js"
     ],
     "owner": "src/behaviours/castle.js"
   },
@@ -660,6 +729,12 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleRate": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleRedig": {
     "writers": [
       "src/behaviours/castle.js",
@@ -667,11 +742,22 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleRequeueAt": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleScan": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleScanAt": {
     "writers": [
       "src/behaviours/castle.js",
       "src/behaviours/util.js",
-      "src/enclosed.js",
       "src/orders.js"
     ],
     "owner": "src/behaviours/castle.js"
@@ -696,11 +782,59 @@
     ],
     "owner": "src/behaviours/castlefetch.js"
   },
+  "castleStance": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleStepFn": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleStoneAsked": {
     "writers": [
       "src/behaviours/castlefetch.js"
     ],
     "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleStoneBarren": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
+  },
+  "castleTenthSaid": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleTouched": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleUpkeep": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleUpkeepStuckAt": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleUpkeepWatch": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
   },
   "castleWord": {
     "writers": [
@@ -759,6 +893,19 @@
     ],
     "owner": "src/behaviours/stockpile.js"
   },
+  "chestSearch": {
+    "writers": [
+      "src/behaviours/chestsearch.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/chestsearch.js"
+  },
+  "chestSearchRetryAt": {
+    "writers": [
+      "src/behaviours/chestsearch.js"
+    ],
+    "owner": "src/behaviours/chestsearch.js"
+  },
   "claimedTable": {
     "writers": [
       "src/behaviours/tablespot.js"
@@ -810,6 +957,30 @@
       "src/memory.js"
     ],
     "owner": "src/danger.js"
+  },
+  "deadlock": {
+    "writers": [
+      "src/task.js"
+    ],
+    "owner": "src/task.js"
+  },
+  "deadlockChoose": {
+    "writers": [
+      "src/task.js"
+    ],
+    "owner": "src/task.js"
+  },
+  "deathLog": {
+    "writers": [
+      "src/danger.js"
+    ],
+    "owner": "src/danger.js"
+  },
+  "deathMsg": {
+    "writers": [
+      "src/hurt.js"
+    ],
+    "owner": "src/hurt.js"
   },
   "deaths": {
     "writers": [
@@ -872,11 +1043,42 @@
     ],
     "owner": "src/doors.js"
   },
+  "eatEquipping": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "eatFailureLoggedAt": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
   "eatInFlight": {
     "writers": [
       "src/reflexes.js"
     ],
     "owner": "src/reflexes.js"
+  },
+  "eatItem": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "enclosedEscapes": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/behaviours/util.js"
+    ],
+    "owner": "src/enclosed.js"
+  },
+  "enclosedUntil": {
+    "writers": [
+      "src/enclosed.js"
+    ],
+    "owner": "src/enclosed.js"
   },
   "equip": {
     "writers": [
@@ -937,18 +1139,36 @@
     ],
     "owner": "src/index.js"
   },
-  "fieldFurAdopt": {
-    "writers": [
-      "src/behaviours/bringitem.js"
-    ],
-    "owner": "src/behaviours/bringitem.js"
-  },
   "farm": {
     "writers": [
       "src/behaviours/farm.js",
       "src/goal.js"
     ],
     "owner": "src/behaviours/farm.js"
+  },
+  "farmFedAt": {
+    "writers": [
+      "src/behaviours/farm.js"
+    ],
+    "owner": "src/behaviours/farm.js"
+  },
+  "farmStruck": {
+    "writers": [
+      "src/behaviours/farm.js"
+    ],
+    "owner": "src/behaviours/farm.js"
+  },
+  "farmStruckAt": {
+    "writers": [
+      "src/behaviours/farm.js"
+    ],
+    "owner": "src/behaviours/farm.js"
+  },
+  "fieldFurAdopt": {
+    "writers": [
+      "src/behaviours/bringitem.js"
+    ],
+    "owner": "src/behaviours/bringitem.js"
   },
   "fightGivenUpId": {
     "writers": [
@@ -964,7 +1184,19 @@
     ],
     "owner": "src/behaviours/fight.js"
   },
+  "fightProgress": {
+    "writers": [
+      "src/behaviours/fight.js"
+    ],
+    "owner": "src/behaviours/fight.js"
+  },
   "fightPursuit": {
+    "writers": [
+      "src/behaviours/fight.js"
+    ],
+    "owner": "src/behaviours/fight.js"
+  },
+  "fightRec": {
     "writers": [
       "src/behaviours/fight.js"
     ],
@@ -1049,6 +1281,49 @@
     ],
     "owner": "src/behaviours/follow.js"
   },
+  "foodBreadLogAt": {
+    "writers": [
+      "src/behaviours/food-recovery.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
+  },
+  "foodBreadRetryAt": {
+    "writers": [
+      "src/behaviours/food-recovery.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
+  },
+  "foodInventoryLogAt": {
+    "writers": [
+      "src/behaviours/food-recovery.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
+  },
+  "foodRecovery": {
+    "writers": [
+      "src/behaviours/food-recovery.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
+  },
+  "foodRecoveryChestSeen": {
+    "writers": [
+      "src/behaviours/food-recovery.js",
+      "src/goal.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
+  },
+  "foodRecoveryFlight": {
+    "writers": [
+      "src/behaviours/food-recovery.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
+  },
+  "foodRecoveryRetryAt": {
+    "writers": [
+      "src/behaviours/food-recovery.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
+  },
   "forage": {
     "writers": [
       "src/behaviours/forage.js",
@@ -1089,6 +1364,12 @@
     ],
     "owner": "src/behaviours/fun.js"
   },
+  "funLast": {
+    "writers": [
+      "src/behaviours/fun.js"
+    ],
+    "owner": "src/behaviours/fun.js"
+  },
   "funNext": {
     "writers": [
       "src/behaviours/fun.js"
@@ -1096,6 +1377,18 @@
     "owner": "src/behaviours/fun.js"
   },
   "funRun": {
+    "writers": [
+      "src/behaviours/fun.js"
+    ],
+    "owner": "src/behaviours/fun.js"
+  },
+  "funWorkAt": {
+    "writers": [
+      "src/behaviours/fun.js"
+    ],
+    "owner": "src/behaviours/fun.js"
+  },
+  "funWorkStep": {
     "writers": [
       "src/behaviours/fun.js"
     ],
@@ -1241,6 +1534,12 @@
     ],
     "owner": "src/index.js"
   },
+  "grove": {
+    "writers": [
+      "src/behaviours/reforest.js"
+    ],
+    "owner": "src/behaviours/reforest.js"
+  },
   "haul": {
     "writers": [
       "src/behaviours/deliver.js",
@@ -1280,6 +1579,18 @@
       "src/behaviours/stockpile.js"
     ],
     "owner": "src/behaviours/stockpile.js"
+  },
+  "hurtLog": {
+    "writers": [
+      "src/hurt.js"
+    ],
+    "owner": "src/hurt.js"
+  },
+  "hurtSource": {
+    "writers": [
+      "src/hurt.js"
+    ],
+    "owner": "src/hurt.js"
   },
   "hutHome": {
     "writers": [
@@ -1324,6 +1635,12 @@
     ],
     "owner": "src/index.js"
   },
+  "lastFall": {
+    "writers": [
+      "src/hurt.js"
+    ],
+    "owner": "src/hurt.js"
+  },
   "lastGoalKey": {
     "writers": [
       "src/behaviours/bank.js",
@@ -1344,6 +1661,7 @@
       "src/behaviours/lead.js",
       "src/behaviours/light.js",
       "src/behaviours/recover.js",
+      "src/behaviours/rest.js",
       "src/behaviours/roam.js",
       "src/behaviours/stockpile.js",
       "src/behaviours/util.js",
@@ -1554,6 +1872,12 @@
     ],
     "owner": "src/llm-orders.js"
   },
+  "llmChooseEp": {
+    "writers": [
+      "src/llm-orders.js"
+    ],
+    "owner": "src/llm-orders.js"
+  },
   "llmChooseWait": {
     "writers": [
       "src/llm-orders.js"
@@ -1566,12 +1890,23 @@
     ],
     "owner": "src/llm-orders.js"
   },
-  "foodRecoveryChestSeen": {
+  "loopBlocked": {
     "writers": [
-      "src/behaviours/food-recovery.js",
       "src/goal.js"
     ],
-    "owner": "src/behaviours/food-recovery.js"
+    "owner": "src/goal.js"
+  },
+  "loopSeq": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "loot": {
+    "writers": [
+      "src/loot.js"
+    ],
+    "owner": "src/loot.js"
   },
   "lowHpGateLast": {
     "writers": [
@@ -1627,11 +1962,25 @@
     ],
     "owner": "src/index.js"
   },
+  "orderAside": {
+    "writers": [
+      "src/llm-orders.js"
+    ],
+    "owner": "src/llm-orders.js"
+  },
   "orderLog": {
     "writers": [
       "src/situation.js"
     ],
     "owner": "src/situation.js"
+  },
+  "ownBreakUntil": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/behaviours/castlefetch.js",
+      "src/behaviours/util.js"
+    ],
+    "owner": "src/behaviours/util.js"
   },
   "paused": {
     "writers": [
@@ -1647,6 +1996,18 @@
       "src/memory.js"
     ],
     "owner": "src/memory.js"
+  },
+  "peerChests": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "peerChestsAt": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
   },
   "pendingSearch": {
     "writers": [
@@ -1686,7 +2047,6 @@
       "src/behaviours/beds.js",
       "src/behaviours/build.js",
       "src/behaviours/flat.js",
-      "src/behaviours/gather.js",
       "src/behaviours/light.js",
       "src/behaviours/reforest.js",
       "src/behaviours/sitebed.js"
@@ -1719,6 +2079,18 @@
     ],
     "owner": "src/behaviours/home.js"
   },
+  "reflexDropped": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "reflexMove": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
   "reflexSwung": {
     "writers": [
       "src/index.js",
@@ -1727,6 +2099,12 @@
     "owner": "src/index.js"
   },
   "reflexTargetId": {
+    "writers": [
+      "src/reflexes.js"
+    ],
+    "owner": "src/reflexes.js"
+  },
+  "reflexTrigger": {
     "writers": [
       "src/reflexes.js"
     ],
@@ -1768,6 +2146,18 @@
       "src/behaviours/recover.js"
     ],
     "owner": "src/behaviours/recover.js"
+  },
+  "restPeekInFlight": {
+    "writers": [
+      "src/behaviours/rest.js"
+    ],
+    "owner": "src/behaviours/rest.js"
+  },
+  "restPeekStalls": {
+    "writers": [
+      "src/behaviours/rest.js"
+    ],
+    "owner": "src/behaviours/rest.js"
   },
   "restWhy": {
     "writers": [
@@ -1882,6 +2272,18 @@
     ],
     "owner": "src/index.js"
   },
+  "sidestepDoneAt": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "sidestepFailedAt": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
   "sitebed": {
     "writers": [
       "src/behaviours/sitebed.js"
@@ -1969,14 +2371,12 @@
       "src/behaviours/beds.js",
       "src/behaviours/bring.js",
       "src/behaviours/build.js",
-      "src/behaviours/castle.js",
       "src/behaviours/castlefetch.js",
       "src/behaviours/craftany.js",
       "src/behaviours/deep.js",
       "src/behaviours/deliver.js",
       "src/behaviours/explore.js",
       "src/behaviours/forage.js",
-      "src/behaviours/gather.js",
       "src/behaviours/gear.js",
       "src/behaviours/gocastle.js",
       "src/behaviours/home.js",
@@ -2022,6 +2422,18 @@
     ],
     "owner": "src/goal.js"
   },
+  "storageLogKey": {
+    "writers": [
+      "src/behaviours/stockpile.js"
+    ],
+    "owner": "src/behaviours/stockpile.js"
+  },
+  "strategicChoose": {
+    "writers": [
+      "src/task.js"
+    ],
+    "owner": "src/task.js"
+  },
   "stuck": {
     "writers": [
       "src/behaviours/recover.js",
@@ -2051,6 +2463,12 @@
       "src/stuck.js"
     ],
     "owner": "src/stuck.js"
+  },
+  "supplyHop": {
+    "writers": [
+      "src/behaviours/castlefetch.js"
+    ],
+    "owner": "src/behaviours/castlefetch.js"
   },
   "task": {
     "writers": [
@@ -2093,6 +2511,12 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "toolPrepActive": {
+    "writers": [
+      "src/behaviours/toolprep.js"
+    ],
+    "owner": "src/behaviours/toolprep.js"
+  },
   "underFireLogged": {
     "writers": [
       "src/index.js"
@@ -2104,6 +2528,12 @@
       "src/unpin.js"
     ],
     "owner": "src/unpin.js"
+  },
+  "unreachable": {
+    "writers": [
+      "src/unreachable.js"
+    ],
+    "owner": "src/unreachable.js"
   },
   "unseenTicks": {
     "writers": [
@@ -2125,26 +2555,5 @@
       "src/behaviours/bring.js"
     ],
     "owner": "src/behaviours/bring.js"
-  },
-  "chestSearch": {
-    "writers": [
-      "src/behaviours/chestsearch.js",
-      "src/goal.js"
-    ],
-    "owner": "src/behaviours/chestsearch.js"
-  },
-  "orderAside": {
-    "writers": [
-      "src/llm-orders.js"
-    ],
-    "owner": "src/llm-orders.js"
-  },
-  "ownBreakUntil": {
-    "writers": [
-      "src/behaviours/castle.js",
-      "src/behaviours/castlefetch.js",
-      "src/behaviours/util.js"
-    ],
-    "owner": "src/behaviours/util.js"
   }
 }
