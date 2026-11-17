@@ -103,7 +103,7 @@ describe('castle dig-approach for unreachable cells', () => {
     assert.equal(r, 'fluid')
   })
 
-  it('retired open cells still word their material in the body phase', () => {
+  it('stale retired open cells requeue and word their material', () => {
     const plan = blueprint.absPlan(SITE, 0, V)
     const torches = plan.cells.filter((c) => c.kind === 'torch')
     assert.ok(torches.length > 0)
@@ -123,7 +123,8 @@ describe('castle dig-approach for unreachable cells', () => {
       },
     }
     const now = Date.now()
-    const blocked = Object.fromEntries(torches.map((c) => [`2:${c.idx}`, { tries: 6, until: 0, why: 'unreachable', retired: true, retiredAt: now }]))
+    // Retired past RETIRE_MS: the built castle's requeue re-arms them.
+    const blocked = Object.fromEntries(torches.map((c) => [`2:${c.idx}`, { tries: 6, until: 0, why: 'unreachable', retired: true, retiredAt: now - 11 * 60 * 1000 }]))
     const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'body', blocked } }
     const orig = console.log
     console.log = () => {}

@@ -1090,6 +1090,16 @@ function isLitter(bot, ctx, st, x, y, z, w, d) {
   // dy -1, in the dug moat) is litter: the complete castle dug it, nothing
   // natural refills it, and the relay skips dig cells after complete.
   const pc = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.get(`${x},${y},${z}`)
+  // Interior clutter (owner 2026-11-17: random blocks inside, stairs not
+  // walkable): inside the footprint above grade, a keep-clear plan cell
+  // (doorway, window, stairwell) or an off-plan cell holding a scaffold or
+  // natural block (dirt, cobble, gravel...) clears. Owner furniture, leaves
+  // and decor are neither, so they stay.
+  const inside = y >= st.site.y && x >= st.site.x && x < st.site.x + w && z >= st.site.z && z < st.site.z + d
+  if (inside && (SCAFFOLD_MATS.has(n) || NATURAL_SOLID.has(n)) && (!pc || pc.kind === 'air')) {
+    const dc = blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).at.get(`${x},${y},${z}`)
+    return !(dc && blueprint.matches(dc.kind, n))
+  }
   if (pc) return pc.kind === 'dig' && (SCAFFOLD_MATS.has(n) || n === 'grass_block')
   if (!SCAFFOLD_MATS.has(n)) return false
   const ring = y >= st.site.y && x >= st.site.x - 1 && x <= st.site.x + w && z >= st.site.z - 1 && z <= st.site.z + d
@@ -1545,7 +1555,13 @@ function noteVisit(bot, ctx, st, now) {
   const wasDue = tidyDue(st, now) // edge: back after a due window
   st.visitedAt = now
   ctx.tidyLegMs = 0
-  if (wasDue) reopenRepairs(bot, ctx, st, true)
+  if (wasDue) {
+    reopenRepairs(bot, ctx, st, true)
+    if (siteLoaded(bot, st)) {
+      const u = upkeep(bot, ctx, st, now)
+      console.log(`castle tidy holes=${u.holes} clutter=${u.clutter} missing=${u.missing}`)
+    }
+  }
 }
 
 // Repair re-try (idkcraft-fuja): a retired-but-open plan cell never reaches
@@ -1659,6 +1675,42 @@ function noteDry(ctx, kind) {
   ctx.castleFetchDry = s
 }
 
+// Built (owner 2026-11-17, bot4 2040/2048 answered 'not complete' to
+// repair): the phase flipped only once every plan cell was laid or retired
+// out of the waiting set, so a castle whose last cells sat in backoff or
+// a requeued retirement stayed 'body' forever while the counter read
+// done. Built = no counted plan cell is open except holes (blocked
+// entries). Flipped by menuFact (decide's read, the prod path). From then on
+// the complete-castle maintenance (relay, sweep, fill, tidy) owns the rest.
+function builtOut(bot, st, cells) {
+  // Only with a hole open: an all-laid castle completes on its own tick (castle()).
+  const bl = st.blocked || {}
+  let holes = 0
+  for (const c of cells) {
+    if (!gauged(c) || done(bot, c)) continue
+    if (!bl[bkey(st, c.idx)]) return false
+    holes++
+  }
+  return holes > 0
+}
+function markComplete(bot, st) {
+  if (st.phase === 'complete') return
+  st.phase = 'complete'
+  delete st.upgrade // the relay (g0z.48) ends where the build does
+  try { bot.chat(`castle done at ${st.site.x} ${st.site.y} ${st.site.z}`) } catch (_) { /* chat best-effort */ }
+}
+// Maintenance counts (tidy log / repair reply): floor holes, interior
+// clutter, missing plan cells.
+function upkeep(bot, ctx, st, now = Date.now()) {
+  const cells = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells
+  const missing = cells.filter((c) => blueprint.isPlaceTarget(c.kind) && !done(bot, c)).length
+  let clutter = 0
+  try { clutter = litterTargets(bot, ctx, st, now).length } catch (_) { /* count best-effort */ }
+  let holes = 0
+  try { holes = fillTargets(bot, ctx, st, now).length } catch (_) { /* count best-effort */ }
+  return { holes, clutter, missing }
+}
+
 function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') return 'none'
@@ -1766,6 +1818,7 @@ function menuFact(bot, ctx, now = Date.now()) {
     }
     let word = null
     if (!r.cell) {
+      if (st.phase === 'body' && builtOut(bot, st, r.cells)) markComplete(bot, st)
       // Floor upkeep before waiting/decor (owner 2026-11-16: a waiting hole
       // read 'blocked' forever and the fill never ran): a workable fill
       // words 'clear'; no filler on hand asks castlefetch for stone.
@@ -3503,11 +3556,7 @@ function castle(bot, ctx) {
     // so 'castle' keeps reporting the gaps, not just 'complete'.
     if (!holes.length) st.status = 'complete'
     stepDone(ctx)
-    if (st.phase !== 'complete') {
-      st.phase = 'complete'
-      delete st.upgrade // the relay (g0z.48) ends where the build does
-      try { bot.chat(`castle done at ${st.site.x} ${st.site.y} ${st.site.z}`) } catch (_) { /* chat best-effort */ }
-    }
+    markComplete(bot, st)
     return
   }
   work(bot, ctx, st, cells[r.idx], now, 'building')
@@ -3554,6 +3603,8 @@ module.exports.boxOf = boxOf
 module.exports.LITTER_MAX_TRIES = LITTER_MAX_TRIES
 module.exports.decorOpen = decorOpen
 module.exports.reopenRepairs = reopenRepairs
+module.exports.builtOut = builtOut
+module.exports.upkeep = upkeep
 module.exports.rank = rank
 module.exports.siteCheck = siteCheck
 module.exports.siteEval = siteEval
