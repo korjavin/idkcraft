@@ -1069,7 +1069,8 @@ describe('g0z.2 castle executor', () => {
       return castle.menuFact(bot, ctx)
     }
     assert.equal(far([]), 'stone-none')
-    assert.equal(far([{ name: 'cobblestone', count: 25 }]), 'stone-some')
+    assert.equal(far([{ name: 'cobblestone', count: 5 }]), 'stone-none') // below the reserve and the need
+    assert.equal(far([{ name: 'cobblestone', count: 25 }]), 'stone-batch') // the reserve never blocks the last 11
     assert.equal(far([{ name: 'cobblestone', count: 35 }]), 'stone-batch')
   })
 
