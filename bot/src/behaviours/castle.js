@@ -349,6 +349,7 @@ function blockCell(ctx, st, c, why, now) {
   // placed while it waits, so it never retires — the capped backoff re-checks
   // and the cell lays once the lava is gone.
   if ((n >= limit || e.tries >= MAX_HOLE_TRIES) && !e.retired) { e.retired = true; e.retiredAt = now }
+  if (upkeepKind(st, c)) upkeepLog(ctx, st, c, `fail:${why}${e.retired ? ',retired' : ''}`)
   st.blocked[k] = e
   ctx.castleFails = null
   ctx.castleCell = null
@@ -3537,7 +3538,26 @@ function castleBuilderBatch(bot, ctx, st, c) {
 
 // One tick on one cell (plan or prep): material check, budget, then place
 // into an open cell or dig a wrong occupant.
+// Upkeep outcome log: litter/fill cells say ok when done, fail on a strike.
+function upkeepKind(st, c) {
+  if (!c || !Number.isInteger(c.idx) || c.idx < LITTER_BOX_BASE) return null
+  if (c.idx < fillBase(st)) return 'litter'
+  return c.idx < blueprint.DECOR_BASE ? 'fill' : null
+}
+function upkeepLog(ctx, st, c, result) {
+  const kind = upkeepKind(st, c)
+  if (kind) console.log(`castle upkeep kind=${kind} cell=${c.x},${c.y},${c.z} result=${result}`)
+  if (ctx.castleUpkeep && ctx.castleUpkeep.idx === c.idx) ctx.castleUpkeep = null
+}
+function upkeepDone(bot, ctx, st) {
+  const u = ctx.castleUpkeep
+  if (!u) return
+  const gone = upkeepKind(st, u) === 'litter' ? AIR.has(nameAt(bot, u) || '') : done(bot, u)
+  if (gone) upkeepLog(ctx, st, u, 'ok')
+}
 function work(bot, ctx, st, c, now, status) {
+  upkeepDone(bot, ctx, st)
+  if (upkeepKind(st, c)) ctx.castleUpkeep = c
   if (c && !c.prep && Number.isInteger(c.idx) && c.idx < LITTER_BOX_BASE) (ctx.castleTouched || (ctx.castleTouched = new Set())).add(c.idx)
   // Far walk (vmzq.17): material sourcing is g0z.4, but a far step walks
   // to the cell (running) instead of failing at once — prod run2 failed
@@ -3705,6 +3725,11 @@ function castle(bot, ctx) {
   // one cell per tick once no plan cell is workable — before the waiting
   // branch, so a hole in backoff never starves the floor.
   if (r.idx < 0 && st.phase !== 'prep') {
+    // Sweep before fill (prod bot4 2026-11-17: 500 holes kept the fill
+    // first every tick and clutter never fell); failing litter retires on
+    // the strike ladder, so it cannot starve the fill in turn.
+    const lit = !r.waiting && nextLitter(st, litterTargets(bot, ctx, st, now), now, bot, ctx)
+    if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
     const fill = nextFill(st, fillTargets(bot, ctx, st, now), now)
     if (fill && fillItem(bot, ctx)) { work(bot, ctx, st, fill, now, 'filling a floor hole'); return }
   }

@@ -287,6 +287,30 @@ describe('pjsl transit backfill', () => {
     } finally { console.log = log }
     assert.ok(logs.some((l) => /^castle floor scan holes=[1-9]/.test(l)), 'rescan logs the hole count')
   })
+  it('sweep before fill: a complete castle with a crater and a scaffold post clears the post first, logs the outcome', () => {
+    const cells = painted()
+    const at = blueprint.absPlan(SITE, 0, V).at
+    const hole = { x: SITE.x + 10, y: SITE.y - 1, z: SITE.z + 10 }
+    assert.equal(at.has(key(hole.x, hole.y, hole.z)), false)
+    cells.set(key(hole.x, hole.y, hole.z), 'air')
+    const post = { x: SITE.x - 8, y: SITE.y, z: SITE.z + 13 }
+    cells.set(key(post.x, post.y, post.z), 'dirt') // lone 1-high scaffold post on the apron
+    const now = Date.now()
+    const st = own({ visitedAt: now })
+    const bot = worldBot(cells)
+    const ctx = { castle: st }
+    const logs = []
+    const log = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      castle(bot, ctx)
+      assert.equal(st.status, 'clearing scaffold')
+      cells.set(key(post.x, post.y, post.z), 'air')
+      castle(bot, ctx)
+      assert.equal(st.status, 'filling a floor hole', 'fill runs once the sweep is clear')
+    } finally { console.log = log }
+    assert.ok(logs.includes(`castle upkeep kind=litter cell=${post.x},${post.y},${post.z} result=ok`), logs.filter((l) => /upkeep/.test(l)).join('|'))
+  })
   it('off-apron remedy: the stand under a holed entrance apron is a bottom-up fill cell', () => {
     const cells = painted()
     const st = own()
