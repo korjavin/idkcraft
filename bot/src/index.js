@@ -42,6 +42,7 @@ const taskMod = require('./task')
 const recover = require('./behaviours/recover')
 const unstick = require('./behaviours/unstick')
 const enclosed = require('./enclosed')
+const loot = require('./loot')
 // The table lives in behaviours/index.js (oqul.3); same object re-exported.
 const { BEHAVIOURS } = require('./behaviours/index')
 const skills = require('./skills')
@@ -461,6 +462,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       if (unstick.tick(bot, ctx, urgentFight(state) || !!(state.hostile && state.hostile_distance < 10))) {
         console.log(`decision source=escalation action=unstick sprint=false dist=none ${pathSuffix()}`)
         return { decision: { action: 'unstick', sprint: false, source: 'escalation' }, calledBrain }
+      }
+      // Post-kill loot: walk over the drops before the step hunts on; a near hostile ends it.
+      if (loot.tick(bot, ctx, urgentFight(state) || !!(state.hostile && state.hostile_distance < 10) || !!ctx.retreat)) {
+        console.log(`decision source=reflex action=loot sprint=false dist=none ${pathSuffix()}`)
+        return { decision: { action: 'loot', sprint: false, source: 'reflex' }, calledBrain }
       }
       if (ctx.stuck && !urgentFight(state)) return await recoverTick(target, state, calledBrain)
       const key = stateKey(state)
