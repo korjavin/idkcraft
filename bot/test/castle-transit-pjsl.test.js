@@ -160,7 +160,7 @@ describe('pjsl transit backfill', () => {
           now = until + 1
         }
       }
-      now = st.blocked[k].until + 1
+      now = st.blocked[k].retiredAt + 1000 // inside the retire bound (RETIRE_MS requeues after)
       for (let tick = 0; tick < 5; tick++) castle(bot, ctx)
       assert.equal(st.blocked[k].tries, 8)
       assert.equal(ctx.stepStatus, 'failed:idle', 'only a retired fill left: the castle yields')

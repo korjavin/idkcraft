@@ -1730,6 +1730,12 @@ function genericLabel(ctx, now) {
   if (st && st.site && st.phase === 'complete' && (ctx.step === 'castle' || st.upkeepOwed)) return 'castle'
   return null
 }
+// Running-but-idle (owner 2026-11-18, prod bot3 explore/castle 'running' while
+// standing): any work step counts once the body stays put with no progress mark.
+function idleLabel(bot, ctx) {
+  if (!ctx.step || ctx.step === 'rest' || !eligible(bot, ctx)) return null
+  return `step:${ctx.step}`
+}
 function genericKind(ctx) { return ctx.castle && ctx.castle.site ? 'castle' : 'house' }
 function genericReset(g, bot, ctx, now) {
   const p = bot && bot.entity && bot.entity.position
@@ -1743,6 +1749,7 @@ function genericReset(g, bot, ctx, now) {
   g.loopAsked = null
   g.last = null
   g.cooldownUntil = 0
+  g.tried = []
 }
 // Returns true while it owns the episode (deadlockTick stands down).
 function genericTick(bot, ctx, now = Date.now()) {
@@ -1765,17 +1772,12 @@ function genericTick(bot, ctx, now = Date.now()) {
     }
     if (g.answer) { genericConsume(bot, ctx, g, now); return true }
     if (g.pending) return true
-    const label = genericLabel(ctx, now)
+    const label = genericLabel(ctx, now) || idleLabel(bot, ctx)
     if (!label) { g.since = now; return false }
     const W = goalWatchdogMs()
     if (now - g.since < W || now < (g.cooldownUntil || 0)) return false
-    if (g.rounds >= goalMaxRounds()) {
-      stallDecideLog(label, g, 'none', 'none', '?', `max-rounds ${diagnose(bot, ctx)}`, '')
-      g.cooldownUntil = now + W * 10
-      g.rounds = 0
-      return false
-    }
-    genericAsk(bot, ctx, g, label, now, false)
+    // Past the round cap: the LLM once if enabled, else keep rotating (genericAsk).
+    genericAsk(bot, ctx, g, label, now, g.rounds >= goalMaxRounds() && stallLlmAvail(ctx, g))
     return true
   } catch (_) {
     return false
@@ -1820,6 +1822,13 @@ function genericAsk(bot, ctx, g, label, now, llm) {
   g.loopAsked = llm ? null : loop
   const opts = genericOptions(bot, ctx, g, llm ? null : loop).filter((o) => !llm || o.id !== pc.ESCALATE_ID)
   if (opts.length === 0) { g.cooldownUntil = now + goalWatchdogMs(); return }
+  if (!llm && !genericFallback(ctx, g, opts)) {
+    // Every option of this episode tried and flat: a brief backoff, then a fresh rotation.
+    stallDecideLog(label, g, 'none', 'none', '?', `all-tried ${diagnose(bot, ctx)}`, opts.map((o) => o.id).join(','))
+    g.tried = []
+    g.cooldownUntil = now + goalWatchdogMs()
+    return
+  }
   const criteria = {}
   for (const o of opts) criteria[o.id] = o.criterion
   const kind = genericKind(ctx)
@@ -1828,6 +1837,14 @@ function genericAsk(bot, ctx, g, label, now, llm) {
   prompt.goal = `unstick ${label}`
   prompt.blocked_on = `${label} flat ${Math.floor(stallMs / 1000)}s | ${diagnose(bot, ctx)}${loop ? ` | loop: ${loop}` : ''}`
   if (loop) prompt.loop = loop
+  try {
+    const st = ctx.castle
+    if (st && st.site && st.phase === 'complete' && require('./behaviours/castle').siteLoaded(bot, st)) {
+      const u = require('./behaviours/castle').upkeepStats(bot, ctx, st, now)
+      prompt.castle = `clutter=${u.clutter} workable=${u.workable} retired=${u.retired} backoff=${u.backoff}`
+      prompt.blocked_on += ` | castle: ${prompt.castle}`
+    }
+  } catch (_) { /* castle context best-effort */ }
   const req = pc.withContext(bot, ctx, kind, undefined, undefined, { stallMs }, { state: prompt, instructions: `${PLAN_INSTRUCTIONS}; ${label} is not progressing, pick the block that changes the situation`, criteria })
   const seq = (g.seq = (g.seq || 0) + 1)
   g.pending = seq
@@ -1843,16 +1860,25 @@ function genericAsk(bot, ctx, g, label, now, llm) {
   } else if (queued.length > 0) {
     const next = queued.shift()
     ask = () => ({ step: next, confidence: null, source: 'llm-plan' })
-  } else if (typeof ctx.brain.plan === 'function') {
+  } else if (typeof ctx.brain.plan === 'function' && g.rounds < goalMaxRounds()) {
     ask = () => ctx.brain.plan(req)
   } else {
-    // Keyless stub: the first runnable step that is not the stalling one.
-    const fb = opts.find((o) => o.id !== pc.ESCALATE_ID && o.id !== ctx.step) || opts[0]
-    ask = () => ({ step: fb.id, confidence: 1, source: 'stub' })
+    // Keyless stub, or past the round cap: rotate to the top untried option.
+    const fb = genericFallback(ctx, g, opts)
+    const source = typeof ctx.brain.plan === 'function' ? 'fallback' : 'stub'
+    ask = () => ({ step: fb.id, confidence: 1, source })
   }
   Promise.resolve()
     .then(() => ask())
     .then((ans) => genericAnswer(ctx, g, seq, ans, null), (err) => genericAnswer(ctx, g, seq, null, err))
+}
+// The deterministic pick: the top-ranked option not yet tried this episode
+// (never the stalling step, never escalate_llm), or null when all were tried.
+function genericFallback(ctx, g, opts) {
+  const pc = require('./plan-context')
+  const tried = new Set(g.tried || [])
+  const untried = opts.filter((o) => o.id !== pc.ESCALATE_ID && !tried.has(o.id) && o.id !== 'park')
+  return fallbackRank(genericKind(ctx), untried, g.history, ctx.step, null) || null
 }
 function genericConsume(bot, ctx, g, now) {
   const ans = g.answer
@@ -1870,18 +1896,30 @@ function genericConsume(bot, ctx, g, now) {
     genericAsk(bot, ctx, g, label, now, true)
     return
   }
-  const opt = ans && !ans.error ? genericOptions(bot, ctx, g, null).find((o) => o.id === ans.step && o.id !== pc.ESCALATE_ID) : null
+  const offered = genericOptions(bot, ctx, g, null)
+  let opt = ans && !ans.error ? offered.find((o) => o.id === ans.step && o.id !== pc.ESCALATE_ID) : null
   const bad = !ans || ans.error ? ((ans && ans.error) || 'invalid')
     : !opt ? `stale:${ans.step}`
       : (typeof ans.conf === 'number' && ans.conf < TASK_PLAN_MIN_CONF) ? `low-confidence conf=${conf}` : null
   if (bad) {
-    log('none', `${bad} ${diagnose(bot, ctx)}`)
-    g.rounds = (g.rounds || 0) + 1
-    g.cooldownUntil = now + goalWatchdogMs()
-    return
-  }
-  log(opt.id, diagnose(bot, ctx))
+    // A decision always acts: the LLM if still unspent, else the top untried option.
+    if (stallLlmAvail(ctx, g)) {
+      log(pc.ESCALATE_ID, `${bad} escalate`)
+      genericAsk(bot, ctx, g, label, now, true)
+      return
+    }
+    opt = genericFallback(ctx, g, offered)
+    if (!opt) {
+      log('none', `${bad} all-tried ${diagnose(bot, ctx)}`)
+      g.rounds = (g.rounds || 0) + 1
+      g.tried = []
+      g.cooldownUntil = now + goalWatchdogMs()
+      return
+    }
+    stallDecideLog(label, g, 'fallback', opt.id, '?', `${bad} ${diagnose(bot, ctx)}`, options)
+  } else log(opt.id, diagnose(bot, ctx))
   g.rounds = (g.rounds || 0) + 1
+  ;(g.tried || (g.tried = [])).push(opt.id)
   g.last = opt.id
   const until = now + Math.min(goalCommitMs(), DEADLOCK_COMMIT_MAX_MS)
   g.cooldownUntil = until

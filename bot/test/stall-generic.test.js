@@ -34,7 +34,7 @@ function workCtx(bot) {
 const flush = () => new Promise((r) => setImmediate(r))
 let lines = []
 let origLog = null
-const ENV = ['STALL_DECIDE', 'GOAL_WATCHDOG_MS', 'GOAL_COMMIT_MS', 'LLM_ESCALATION']
+const ENV = ['STALL_DECIDE', 'GOAL_WATCHDOG_MS', 'GOAL_COMMIT_MS', 'LLM_ESCALATION', 'GOAL_WATCHDOG_MAX_ROUNDS']
 let saved = {}
 beforeEach(() => {
   lines = []
@@ -94,6 +94,58 @@ describe('generic stall clock (8hpy)', () => {
     assert.match(decides()[0] || '', /^stall decide goal=reflex:enclosed round=1 by=jev /, lines.join('\n'))
     assert.ok(ctx.stallPreempt && ctx.stallPreempt.until > t, 'reflex preempted for the window')
     assert.equal(ctx.enclosedUntil, 0, 'enclosed episode ended')
+  })
+
+  it('a running step whose body stands still counts as stalled (step:<name>)', async () => {
+    const bot = makeBot()
+    const ctx = workCtx(bot)
+    ctx.castle = null
+    ctx.step = 'explore'
+    ctx.stepStatus = 'running'
+    ctx.brain = { plan: async (req) => ({ step: Object.keys(req.criteria).find((k) => k !== 'explore'), confidence: 0.9, source: 'jev' }) }
+    let t = 1000000000000
+    taskMod.taskTick(bot, ctx, t)
+    t = await round(bot, ctx, t)
+    assert.match(decides()[0] || '', /^stall decide goal=step:explore round=1 by=jev /, lines.join('\n'))
+  })
+
+  it('JEV none/low-confidence still acts: by=fallback picks an untried option', async () => {
+    const bot = makeBot()
+    const ctx = workCtx(bot)
+    ctx.step = 'castle'
+    ctx.brain = { plan: async () => ({ step: 'nonsense', confidence: 0.1, source: 'jev' }) }
+    let t = 1000000000000
+    taskMod.taskTick(bot, ctx, t)
+    t = await round(bot, ctx, t)
+    const d = decides()
+    assert.match(d[0] || '', /^stall decide goal=castle round=1 by=fallback choice=(\S+) /, lines.join('\n'))
+    const pick = /choice=(\S+)/.exec(d[0])[1]
+    assert.notEqual(pick, 'none')
+    assert.notEqual(pick, 'castle')
+    assert.deepEqual(ctx.stallGen.tried, [pick])
+  })
+
+  it('no long silence after max rounds: rotation over untried, brief backoff only once all were tried', async () => {
+    process.env.GOAL_WATCHDOG_MS = '60000'
+    process.env.GOAL_WATCHDOG_MAX_ROUNDS = '1'
+    const bot = makeBot()
+    const ctx = workCtx(bot)
+    ctx.step = 'castle'
+    ctx.brain = { plan: async () => ({ step: 'nonsense', confidence: 0.1, source: 'jev' }) }
+    let t = 1000000000000
+    taskMod.taskTick(bot, ctx, t)
+    for (let i = 0; i < 40 && !decides().some((l) => /all-tried/.test(l)); i++) {
+      t = await round(bot, ctx, t)
+      t += 200000 // past the commit window
+    }
+    const d = decides()
+    const cut = d.findIndex((l) => /all-tried/.test(l))
+    const picks = d.slice(0, cut).filter((l) => /by=fallback/.test(l)).map((l) => /choice=(\S+)/.exec(l)[1])
+    assert.ok(picks.length >= 3, `rotated past max rounds: ${picks}`)
+    assert.equal(new Set(picks).size, picks.length, 'each pick untried in the episode')
+    const end = decides().find((l) => /all-tried/.test(l))
+    assert.ok(end, lines.join('\n'))
+    assert.equal(picks.length, new Set(d.slice(cut).join(' ').match(/options=\[([^\]]*)\]/)[1].split(',')).size, 'every option tried once before the backoff')
   })
 
   it('STALL_DECIDE=0 keeps the generic clock off', () => {

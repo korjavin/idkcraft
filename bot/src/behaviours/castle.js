@@ -1866,7 +1866,8 @@ function requeueRetired(bot, ctx, st, now) {
     if (!e || !e.retired) continue
     const [v, i] = String(k).split(':')
     const c = cells[Number(i)]
-    if (Number(v) !== ver(st) || !c || done(bot, c)) continue
+    // Off-plan entries (litter, fill, dark) come back on the same bound; pick's prune drops healed ones.
+    if (Number(v) !== ver(st) || (c && done(bot, c))) continue
     const bound = RETIRED_PERMANENT_RE.test(String(e.why || '')) ? RETIRE_PERMANENT_MS : RETIRE_MS
     if (typeof e.retiredAt !== 'number') { e.retiredAt = now; continue } // legacy/restored entry: the bound starts now
     if (now - e.retiredAt < bound) continue
@@ -1988,6 +1989,21 @@ function upkeep(bot, ctx, st, now = Date.now()) {
   let holes = 0
   try { holes = fillTargets(bot, ctx, st, now).filter(live).length } catch (_) { /* count best-effort */ }
   return { holes, clutter, missing }
+}
+
+// Upkeep workability for the stall chooser's context (owner 2026-11-18,
+// bot3 clutter=573 standing): listed vs workable now vs retired vs backing off.
+function upkeepStats(bot, ctx, st, now = Date.now()) {
+  const list = litterTargets(bot, ctx, st, now).concat(fillTargets(bot, ctx, st, now))
+  let retired = 0
+  let backoff = 0
+  for (const o of list) {
+    const b = st.blocked && st.blocked[bkey(st, o.idx)]
+    if (b && b.retired) retired++
+    else if (b && b.until > now) backoff++
+  }
+  const workable = list.filter((o) => nextLitter(st, [o], now, bot) || nextFill(st, [o], now)).length
+  return { clutter: list.length, workable, retired, backoff }
 }
 
 function menuFact(bot, ctx, now = Date.now()) {
@@ -4079,6 +4095,7 @@ function castle(bot, ctx) {
     }
     if (lits.length) upkeepRate(ctx, 'stuck', now)
     owedIdle = lits.length > 0 || fills.length > 0
+    if (owedIdle) requeueRetired(bot, ctx, st, now) // struck upkeep cells return after their bound
     const left = lits.filter((o) => !((st.blocked || {})[bkey(st, o.idx)] || {}).retired).length
     if (left && !(ctx.castleUpkeepStuckAt > now - 60000)) {
       ctx.castleUpkeepStuckAt = now
@@ -4217,6 +4234,7 @@ module.exports.stowSpot = stowSpot
 module.exports.onDoorPath = onDoorPath
 module.exports.RECOVERY_HOOKS = RECOVERY_HOOKS
 module.exports.requeueRetired = requeueRetired
+module.exports.upkeepStats = upkeepStats
 module.exports.stepMove = stepMove
 module.exports.peek = peek // test seam: the arbiter's next cell (castle-scale resume)
 module.exports.castleBuilderBatch = castleBuilderBatch
