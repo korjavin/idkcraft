@@ -287,10 +287,21 @@ describe('pjsl transit backfill', () => {
     } finally { console.log = log }
     assert.ok(logs.some((l) => /^castle floor scan holes=[1-9]/.test(l)), 'rescan logs the hole count')
   })
-  it('sweep before fill: a complete castle with a crater and a scaffold post clears the post first, logs the outcome', () => {
+  it('nearest first across kinds: a nearer crater fills while a far scaffold post stands', () => {
+    const cells = painted()
+    const hole = { x: SITE.x + 10, y: SITE.y - 1, z: SITE.z + 10 }
+    cells.set(key(hole.x, hole.y, hole.z), 'air')
+    cells.set(key(SITE.x - 8, SITE.y, SITE.z + 13), 'dirt')
+    const st = own({ visitedAt: Date.now() })
+    const log = console.log
+    console.log = () => {}
+    try { castle(worldBot(cells), { castle: st }) } finally { console.log = log }
+    assert.equal(st.status, 'filling a floor hole')
+  })
+  it('a far crater waits for a nearer scaffold post, then fills; logs the outcome', () => {
     const cells = painted()
     const at = blueprint.absPlan(SITE, 0, V).at
-    const hole = { x: SITE.x + 10, y: SITE.y - 1, z: SITE.z + 10 }
+    const hole = { x: SITE.x - 4, y: SITE.y - 1, z: SITE.z - 4 }
     assert.equal(at.has(key(hole.x, hole.y, hole.z)), false)
     cells.set(key(hole.x, hole.y, hole.z), 'air')
     const post = { x: SITE.x - 8, y: SITE.y, z: SITE.z + 13 }
