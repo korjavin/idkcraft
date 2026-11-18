@@ -3343,7 +3343,9 @@ function guardCastle(bot, ctx) {
         // (fight, lead, a reflex), whose A* stays out of the yard like
         // every other executor's.
         if (ctx.step === 'castle' && !borrowedGoal(bot, ctx)) return 0
-        if (ctx.castle && yardDigBan(ctx.castle, block.position, block.name)) return 100
+        // Own scaffold/litter in the yard is not the owner's ground: a
+        // pillar the bot climbed (dirt/stone) would otherwise wall its A* in.
+        if (ctx.castle && yardDigBan(ctx.castle, block.position, block.name)) return isOwnPlaced(ctx, block) ? 0 : 100
         return peerYard(block) ? 100 : 0
       } catch (_) { return 0 }
     }
