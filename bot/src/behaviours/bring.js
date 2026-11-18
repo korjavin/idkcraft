@@ -2109,11 +2109,16 @@ async function bring(bot, ctx, target, state) {
       o.phase = 'searchfar'
       return
     }
-    // Stock first (owner 2026-11-18: bot3 chopped trees with chests full of
-    // wood): a need already met by the shared chests draws a chest before
-    // digging even a visible source; one try (chestTried), then dig as before.
+    // Chests first (owner 2026-11-18: chests are shared): any known chest
+    // holding the item draws before digging; one try (chestTried), then dig.
     let stocked = false
-    try { stocked = require('../cheststock').needMet(bot, ctx, o.drop || (o.name === 'logs' ? 'oak_log' : o.name)) } catch (_) { stocked = false }
+    try {
+      const cs = require('../cheststock')
+      const item = o.drop || (o.name === 'logs' ? 'oak_log' : o.name)
+      const names = item.endsWith('_log') ? (n) => n.endsWith('_log') || n.endsWith('_stem') : (n) => n === item
+      stocked = [ctx.home && ctx.home.chest && { contents: cs.slotContents(ctx, 'home') }, ...(ctx.chests || []), ...(ctx.peerChests || [])]
+        .some((c) => c && c.contents && Object.entries(c.contents).some(([n, v]) => names(n) && v > 0))
+    } catch (_) { stocked = false }
     if (stocked && !o.chestTried && o.have < o.want && chestAvailable(bot, ctx, o)) {
       o.phase = 'chestfetch'
       return

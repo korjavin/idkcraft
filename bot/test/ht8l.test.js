@@ -140,13 +140,12 @@ describe('gather draws banked logs first (ht8l)', () => {
     assert.equal(bot.calls.opens.length, 1)
   })
 
-  it('built home, no castle: never draws (stockpile would bank the logs straight back)', async () => {
+  it('built home, no castle: still draws the home chest first (chests are shared)', async () => {
     const bot = makeBot({ chests: { '1,64,1': [{ name: 'oak_log', count: 40 }] } })
     const ctx = castleCtx(pos(1, 64, 1), { castle: null })
     gather(bot, ctx)
     await settle()
-    assert.equal(bot.calls.opens.length, 0)
-    assert.ok(treeGoal(bot))
+    assert.equal(bot.calls.opens.length, 1)
   })
 
   it('the castle site chest counts too (unbuilt home, far castle)', async () => {

@@ -415,15 +415,8 @@ const MENU = {
       try {
         if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
       } catch (_) { /* fall through to facts */ }
-      // Wood stock first (owner 2026-11-18: chests full of logs/planks, bot3
-      // still chopped): the shared stock (pack + every known chest, planks
-      // as 1/4 log) meets the wood target and the pack holds a kit -> no
-      // chop; bigger needs withdraw through castlefetch. An empty pack still
-      // gathers, whose chest draw runs before any chop.
-      // An unbuilt house order is exempt: its need is pack planks, and gather's
-      // own chest draw (chestLogsTick) is the withdraw — gating it left an
-      // empty day menu and rest (bot5: home=site, chests stocked, 2177/3348 ticks).
-      if (!houseOwed(ctx) && (facts.planks || 0) + (facts.logs || 0) * 4 >= WOOD_KIT && require('./cheststock').needMet(bot, ctx, 'oak_log')) return false
+      // Chests are shared (owner 2026-11-18): stocked chests never drop the
+      // step; gather's chestLogsTick withdraws before any chop.
       // Post-build bed top-up (jr2.2) and the castle kit chop (qxql.2) keep
       // their own bounds.
       if (facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one') && (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS) return true
@@ -1760,7 +1753,6 @@ function forageHeld(ctx) {
 const MISSING_ITEM_RE = /^failed:no-(planks|table|door)$/
 // Failed-build hold (idkcraft-67z3): BUILD_RETRY_MS and its why in budget.js.
 const MENU_DROP_LOG_MS = 5 * 60 * 1000
-const houseOwed = (ctx) => !!(ctx && ctx.home && ctx.home.site && !ctx.home.built && !ctx.home.parked)
 
 function buildHeld(ctx) {
   try {
