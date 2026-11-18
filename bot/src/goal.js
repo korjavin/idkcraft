@@ -803,6 +803,8 @@ function castleFetchWhy(facts, bot, ctx) {
   let acq = null
   try { acq = require('./goal-unlock').goalUnlock(ctx, 'acquire') } catch (_) { /* no window */ }
   if (acq === kind) return acquireWhy(facts, bot, ctx, kind)
+  // No workable cell needs it: the castle step's failed:idle hold stands.
+  if (ctx && ctx.stepFail && ctx.stepFail.castle && failHolds(ctx, 'castle', goalText(facts, ctx.home), bot)) return 'castle idle'
   // V2 prepares its tool as a resumable prerequisite inside the fetch leg.
   if (needsDigNoPick(kind, facts, bot) && process.env.BOT_BODY !== 'baritone') return 'no pickaxe'
   if (castleGo(facts, ctx, bot) && !(ctx && ctx.step === 'castlefetch' && ctx.stepStatus === 'running')) return 'castle can lay now'
@@ -1845,7 +1847,9 @@ function failHolds(ctx, name, text, bot) {
     const sf = ctx && ctx.stepFail && ctx.stepFail[name]
     // Nothing workable (failed:idle, any step): yield for IDLE_RETRY_MS
     // whatever else drifts; a change in the step's own word releases it.
-    if (sf && sf.status === 'failed:idle') return Date.now() - (sf.at || 0) < IDLE_RETRY_MS && textWord(sf.text, name) === textWord(text, name)
+    // Only new work releases it: a stock-level flip (castle stone-batch <->
+    // stone-none while castlefetch hauls) names the same cells, so it holds.
+    if (sf && sf.status === 'failed:idle') return Date.now() - (sf.at || 0) < IDLE_RETRY_MS && workWord(sf.text, name) === workWord(text, name)
     // prkh: the fetch hold parks one kind — a hold for another kind never
     // holds this menu entry (the blocked word keeps 'blocked' while its
     // gated kind flips, so the kind — not the text — decides here).
@@ -2387,6 +2391,7 @@ function registered(name) {
 // diffs): the in-flight craft holds, the rw4.5 night/door stickiness, the
 // retreat latch; and the vmzq.5/.21/.50 pins, which name themselves in why=.
 // fires(prev, facts, ctx, status, bot, text).
+const workWord = (text, key) => { const w = textWord(text, key); return w && w.replace(/-(none|some|batch)$/, '') }
 function textWord(text, key) {
   const m = typeof text === 'string' ? text.match(new RegExp(`(?:^| )${key}=(\\S+)`)) : null
   return m ? m[1] : null
