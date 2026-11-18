@@ -323,6 +323,21 @@ function fillGround(bot, home, cell, name) {
   return isSolidGround(name) && hasCollision(bot, cellAbs(home, cell))
 }
 
+// Progress = plan blocks standing in the world; air-by-plan clear cells
+// are no work (prod bot5 read 48/149 over an untouched field).
+function houseProgress(bot, home) {
+  let done = 0
+  let total = 0
+  for (const cell of blueprintFor(home)) {
+    if (cell.kind === 'clear') continue
+    total++
+    try {
+      if (cellDone(bot, home, cell)) done++
+    } catch (_) { /* unreadable reads undone */ }
+  }
+  return { done, total }
+}
+
 function cellDone(bot, home, cell) {
   const name = blockNameAt(bot, cellAbs(home, cell))
   if (name == null) return false
@@ -1172,15 +1187,12 @@ function build(bot, ctx, target, state) {
   } catch (_) { /* budget best-effort: the refusal counters still guard */ }
 
   // Progress line, at most one per 10 s.
-  const total = plan.length
-  let wrong = 0
-  for (let i = 0; i < total; i++) {
-    if (!ctx.buildSkip.includes(i) && !cellDone(bot, ctx.home, plan[i])) wrong++
-  }
   const now = Date.now()
   if (now - (ctx.buildLastProgressLog || 0) >= 10000) {
     ctx.buildLastProgressLog = now
-    try { bot.chat(`building ${total - wrong}/${total}`) } catch (_) { /* chat best-effort */ }
+    // World truth only: skipped cells are not built (task.houseProgress).
+    const prog = houseProgress(bot, ctx.home)
+    try { bot.chat(`building ${prog.done}/${prog.total}`) } catch (_) { /* chat best-effort */ }
   }
 
   // v2 builder (neuc.54): plain-cube cells batch through BuilderProcess;
@@ -1415,3 +1427,4 @@ module.exports.CELL_PROGRESS = CELL_PROGRESS
 module.exports.SKY_WALK_CAP = SKY_WALK_CAP
 module.exports.CELL_HARD_CAP = CELL_HARD_CAP
 module.exports.FLIGHT_TIMEOUT_MS = FLIGHT_TIMEOUT_MS
+module.exports.houseProgress = houseProgress

@@ -265,7 +265,7 @@ describe('rw4.4 (e) step places the next cell, then completes', () => {
     bot.entity.position = pos(11, 64, 2) // next to the table cell (placements are in-reach only)
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: 0 }
     build(bot, ctx, null, null) // tick 1: progress chat + approach goal
-    assert.ok(bot.chats.some((m) => m === 'building 55/149')) // the dirt floor and the air interior read done from the start
+    assert.ok(bot.chats.some((m) => m === 'building 24/118')) // the dirt floor reads done; air-by-plan clear cells are not progress
     assert.equal(bot.calls.goals.length, 1)
     assert.equal(bot.calls.goals[0].constructor.name, 'GoalPlaceBlock')
     assert.equal(bot.calls.places.length, 0)

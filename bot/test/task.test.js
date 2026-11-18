@@ -402,10 +402,10 @@ describe('task stall clock (vmzq.2)', () => {
     taskMod.taskTick(bot, ctx, t0)
     assert.equal(ctx.task.active, 'house')
     // 31 interior clear cells (rw4.19) read done on air.
-    assert.equal(taskMod.taskLine(ctx), 'task house 31/149 stall=0s')
+    assert.equal(taskMod.taskLine(ctx), 'task house 0/118 stall=0s')
     for (let s = 1; s <= 15 * 60; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000)
     assert.equal(taskLogs().length, 1)
-    assert.match(bot.chats[0], /^house: no progress for 15 min at 31\/149/)
+    assert.match(bot.chats[0], /^house: no progress for 15 min at 0\/118/)
   })
 
   it('house wood toward the cells left is progress, high-water and bounded (oqj5)', () => {
@@ -553,7 +553,7 @@ describe('task stall clock (vmzq.2)', () => {
     placed = true // the build run lays its planks
     items[0].count = 0
     for (let i = 0; i < 61; i++) tick() // past the 60 s cells cache
-    assert.equal(ctx.task.house.done, 32)
+    assert.equal(ctx.task.house.done, 1)
     assert.equal(ctx.task.house.wood, 0, 'cells adopt the spent wood')
     tick()
     items[0].count = 4 // the next gather run, far below the old 64 mark
@@ -583,12 +583,12 @@ describe('task stall clock (vmzq.2)', () => {
     const t0 = 1000000000000
     taskMod.taskTick(bot, ctx, t0)
     // Table (plan[0]) and door (plan[27]) are not planks: 28 of 30 read
-    // placed, plus 31 interior clear cells on air (rw4.19).
-    assert.equal(ctx.task.house.done, 59)
+    // placed; air-by-plan clear cells do not count (prod bot5).
+    assert.equal(ctx.task.house.done, 28)
     // Walk out of range: the reading would be 0/99, held instead.
     loaded = false
     for (let s = 1; s <= 61; s++) taskMod.taskTick(bot, ctx, t0 + s * 1000) // past the 60 s cache
-    assert.equal(ctx.task.house.done, 59, 'unloaded read does not sink the baseline')
+    assert.equal(ctx.task.house.done, 28, 'unloaded read does not sink the baseline')
     assert.equal(ctx.task.house.stallMs, 61000)
     // Back on site, same 28: no false progress.
     loaded = true
@@ -654,7 +654,7 @@ describe('task stall clock (vmzq.2)', () => {
     // First loaded reading baselines without resetting the clock.
     bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' })
     taskMod.taskTick(bot, ctx, t0 + (15 * 60 + 1) * 1000)
-    assert.equal(ctx.task.house.done, 31) // rw4.19 clear cells on air
+    assert.equal(ctx.task.house.done, 0) // clear cells on air are no progress
     assert.ok((ctx.task.house.stallMs || 0) >= 900000, 'first reading does not reset')
   })
 

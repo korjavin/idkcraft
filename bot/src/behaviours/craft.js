@@ -784,14 +784,24 @@ async function freeSlot(bot, opts) {
     why = victim ? (cursorOccupied(bot) ? 'cursor' : 'no-toss') : 'no-junk'
     if (victim && typeof bot.tossStack === 'function' && !cursorOccupied(bot)) {
       try {
+        // Throw it up and out: a stack dropped at the feet (looking down at
+        // a table) is picked straight back up and the pack stays full (prod
+        // bot5: 1385 drops of the same leaves, gear-torch inventory-full).
+        try {
+          if (typeof bot.look === 'function' && bot.entity) await bot.look((bot.entity.yaw || 0) + Math.PI, 0.6, true)
+        } catch (_) { /* toss anyway */ }
         await bot.tossStack(victim)
-        try { console.log(`craft dropped ${victim.name}x${stackCount(victim)} (junk policy) to make room for ${item}`) } catch (_) { /* logging best-effort */ }
-        return true
+        try { await syncInventory(bot) } catch (_) { /* the re-read below decides */ }
+        const after = bot.inventory.items()
+        const free = Array.isArray(after) ? 36 - after.length : -1
+        try { console.log(`craft dropped ${victim.name}x${stackCount(victim)} (junk policy) to make room for ${item} free=${free}`) } catch (_) { /* logging best-effort */ }
+        if (!Array.isArray(after) || after.length < items.length) return true
+        why = 'toss-reclaimed'
       } catch (err) { why = `toss: ${err && err.message}` }
     }
   } catch (_) { /* unreadable pack: the shed decides */ }
   if (await bootstrapShed(bot, opts)) return true
-  try { console.log(`craft free-slot failed for ${item} (${why}, no shed): ${slotSummary(bot)}`) } catch (_) { /* logging best-effort */ }
+  try { console.log(`pack full free=0 need=1 action=${why} item=${item}: ${slotSummary(bot)}`) } catch (_) { /* logging best-effort */ }
   return false
 }
 // Quest shed (g0z.26 R4, revmux 03 major): the unfunded quest corner at 34+

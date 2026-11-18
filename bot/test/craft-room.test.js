@@ -233,6 +233,13 @@ describe('safeCraft room guarantee (idkcraft-rwuu)', () => {
     assert.deepEqual(bot.calls.tossStack.map((t) => t.name), ['leaf_litter'])
   })
 
+  it('a toss the bot picks straight back up frees nothing: inventory-full, no phantom craft (prod bot5)', async () => {
+    const bot = roomBot({ stacks: fullPack() })
+    bot.tossStack = async (item) => { bot.calls.tossStack.push({ slot: item.slot, name: item.name }) } // reclaimed at once
+    await assert.rejects(craft.safeCraft(bot, PICK(), 1, null, { item: 'stone_pickaxe' }), /inventory-full/)
+    assert.equal(bot.calls.craft.length, 0)
+  })
+
   it('full pack without junk: fails inventory-full, crafts nothing', async () => {
     const bot = roomBot({ stacks: fullPackNoJunk() })
     await assert.rejects(
