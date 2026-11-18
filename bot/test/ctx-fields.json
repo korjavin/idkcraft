@@ -1122,6 +1122,19 @@
     ],
     "owner": "src/enclosed.js"
   },
+  "episodes": {
+    "writers": [
+      "src/episodes.js",
+      "src/memory.js"
+    ],
+    "owner": "src/episodes.js"
+  },
+  "episodeSig": {
+    "writers": [
+      "src/episodes.js"
+    ],
+    "owner": "src/episodes.js"
+  },
   "equip": {
     "writers": [
       "src/behaviours/equip.js",
@@ -1524,6 +1537,12 @@
       "src/task.js"
     ],
     "owner": "src/task.js"
+  },
+  "goalRate": {
+    "writers": [
+      "src/episodes.js"
+    ],
+    "owner": "src/episodes.js"
   },
   "goalSeq": {
     "writers": [
