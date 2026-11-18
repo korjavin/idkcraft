@@ -1302,7 +1302,13 @@ function ensureTool(bot, ctx, o, toolName) {
     say(bot, `making you a ${plan.target}`)
     return 'craft'
   }
-  if (plan.fail === 'no-table') { refuse(bot, ctx, plan.line); return 'refused' }
+  if (plan.fail === 'no-table') {
+    // Mats cover the tool, not its table: go for the table's wood instead of
+    // refusing (a fetch leg retried no-pickaxe every few minutes on this).
+    const tline = openSubOrder(bot, ctx, o, { name: `${topPlankWood(pack)}_planks`, need: 4 }, plan.target, null)
+    if (tline) { say(bot, tline); return 'gap' }
+    refuse(bot, ctx, plan.line); return 'refused'
+  }
   const g = planGap(bot, ctx, o, plan)
   if (g && g.open) { say(bot, g.line); return 'gap' }
   // Stone-tier cobble (0jvh): the shared ladder stays wool/planks/logs/

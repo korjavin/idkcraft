@@ -517,6 +517,17 @@ describe('ensureTool rung (idkcraft-0jvh)', () => {
     assert.deepEqual(bot.lines, ['making you a stone_hoe: need 3 cobblestone, going for stone'])
   })
 
+  it('covered mats but no table: opens a log sub for the table instead of refusing', () => {
+    const bot = mockBot({ items: [{ name: 'cobblestone', count: 3 }, { name: 'stick', count: 2 }] })
+    const o = {}
+    const ctx = rungCtx(o)
+    assert.equal(bring.ensureTool(bot, ctx, o, 'stone_hoe'), 'gap')
+    assert.equal(o.kind, 'block')
+    assert.equal(o.subFor, 'stone_hoe')
+    assert.ok(o.want >= 1)
+    assert.notEqual(ctx.bring, null)
+  })
+
   it('a cobble gap with no pickaxe refuses honestly', () => {
     const bot = mockBot({ items: [{ name: 'stick', count: 2 }] })
     const o = {}
