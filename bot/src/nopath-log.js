@@ -13,9 +13,11 @@ const seen = new WeakMap()
 const i = (v) => Math.floor(v)
 function goalOf(g) {
   if (!g) return null
-  const xyz = [g.x, g.y, g.z].every(Number.isFinite) ? `${i(g.x)},${i(g.y)},${i(g.z)}`
-    : [g.x, g.z].every(Number.isFinite) ? `${i(g.x)},?,${i(g.z)}` : '?'
-  return { type: (g.constructor && g.constructor.name) || 'goal', xyz, x: g.x, y: g.y, z: g.z }
+  // GoalPlaceBlock/GoalLookAtBlock keep their cell in .pos
+  const q = g.pos && [g.pos.x, g.pos.y, g.pos.z].every(Number.isFinite) ? g.pos : g
+  const xyz = [q.x, q.y, q.z].every(Number.isFinite) ? `${i(q.x)},${i(q.y)},${i(q.z)}`
+    : [q.x, q.z].every(Number.isFinite) ? `${i(q.x)},?,${i(q.z)}` : '?'
+  return { type: (g.constructor && g.constructor.name) || 'goal', xyz, x: q.x, y: q.y, z: q.z }
 }
 
 function line(bot, ctx) {

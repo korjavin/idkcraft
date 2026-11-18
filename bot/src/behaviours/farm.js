@@ -646,7 +646,7 @@ async function run(bot, ctx) {
         const t = f.trench
         // Walk to pit-side (goal range 1) before pouring: from REACH the
         // view ray clears the rim only by luck.
-        if (walkTo(bot, ctx, f, 'farm-water', t, POUR_ARRIVE, 1)) return // f.trench kept: pour on arrival
+        if (walkTo(bot, ctx, f, 'farm-water', t, POUR_ARRIVE, 2)) return // range 1 on a water cell left only its swim cell (prod noPath goalBlock=water) // f.trench kept: pour on arrival
         let cell = null
         try { cell = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { cell = null }
         if (cell && isWaterName(cell.name)) { f.watered = (f.watered | 0) + 1; f.trench = null; f.pourWait = 0; return }

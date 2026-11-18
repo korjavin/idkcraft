@@ -874,6 +874,7 @@ function forage(bot, ctx, target, state) {
       // One failure on this point is one strike: the cell is skipped (not
       // forgotten) and the next point is tried, or the step fails.
       strikeCell(ctx, f, p)
+      try { ctx.lastPathStatus = 'none' } catch (_) { /* handled: unreachable.tick must not fail the step too */ }
       if ((f.streak || 0) >= UNREACHABLE_STRIKES) {
         finish(bot, ctx, f, false, 'unreachable')
         return
@@ -920,6 +921,7 @@ function forage(bot, ctx, target, state) {
         return
       }
       strikeCell(ctx, f, p)
+      try { ctx.lastPathStatus = 'none' } catch (_) { /* handled: unreachable.tick must not fail the step too */ }
       if ((f.streak || 0) >= UNREACHABLE_STRIKES) {
         finish(bot, ctx, f, false, 'unreachable')
         return
