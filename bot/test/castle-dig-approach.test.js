@@ -100,7 +100,42 @@ describe('castle dig-approach for unreachable cells', () => {
     const { bot } = stepBot((p) => p.x === SITE.x + 2 && p.y === SITE.y - 1)
     const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, blocked: {} } }
     const r = castle.stepMove(bot, ctx, { x: SITE.x + 10, y: SITE.y - 20, z: SITE.z }, { legs: 0, wait: 0, w: null })
-    assert.equal(r, 'fluid')
+    assert.equal(r, 'lava')
+  })
+
+  // Moat (prod bot3: stop=fluid 21x): water ahead is bridged with fill, or swum with none.
+  function moatBot(items) {
+    const moat = (p) => p.x === SITE.x + 1 && p.y === SITE.y - 1
+    const h = stepBot(null, (p) => p.y < SITE.y && !moat(p))
+    const base = h.bot.blockAt
+    const placed = []
+    h.bot.blockAt = (p) => moat(p) && !placed.length ? { name: 'water', position: new Vec3(p.x, p.y, p.z), boundingBox: 'empty' } : base(p)
+    h.bot.inventory.items = () => items
+    h.bot.placeBlock = async (ref, face) => { placed.push(ref.position.plus(face)) }
+    return { ...h, placed }
+  }
+  it('step mover bridges a water floor with a fill block', async () => {
+    const { bot, placed } = moatBot([{ name: 'cobblestone', count: 32 }])
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, blocked: {} } }
+    const target = { x: SITE.x + 10, y: SITE.y, z: SITE.z }
+    const s = { legs: 0, wait: 0, w: null }
+    const orig = console.log
+    console.log = () => {}
+    try {
+      assert.equal(castle.stepMove(bot, ctx, target, s), 'running')
+      await new Promise((res) => setImmediate(res))
+      assert.deepEqual(placed.map((p) => [p.x, p.y, p.z]), [[SITE.x + 1, SITE.y - 1, SITE.z]])
+      assert.equal(castle.stepMove(bot, ctx, target, s), 'running')
+      assert.deepEqual(s.w, { x: SITE.x + 1, y: SITE.y, z: SITE.z }, 'walks onto the bridge')
+    } finally { console.log = orig }
+  })
+  it('step mover swims a water floor with nothing to bridge', () => {
+    const { bot, placed } = moatBot([])
+    const ctx = { castle: { site: { ...SITE }, rot: 0, blueprintVersion: V, blocked: {} } }
+    const s = { legs: 0, wait: 0, w: null }
+    assert.equal(castle.stepMove(bot, ctx, { x: SITE.x + 10, y: SITE.y, z: SITE.z }, s), 'running')
+    assert.equal(placed.length, 0)
+    assert.deepEqual(s.w, { x: SITE.x + 1, y: SITE.y, z: SITE.z })
   })
 
   it('stale retired open cells requeue and word their material', () => {

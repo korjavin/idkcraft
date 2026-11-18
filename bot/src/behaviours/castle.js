@@ -2484,7 +2484,8 @@ const UNBREAKABLE_HARD = (b) => typeof b.hardness === 'number' && b.hardness < 0
 // cells dig through the stuck ladder (stuckDeny: own cells re-lay), then a
 // direct leg (prod 28e156b1: a GoalBlock leg hung 5 min, stop=stall legs=1):
 // walk/jump at the waypoint, or recover's pillarUpRun for a straight rise,
-// each with a short tick timeout. Refuses lava, fluid and falls.
+// each with a short tick timeout. Water floors bridge with fill (else swim);
+// refuses lava and falls.
 const STEP_MAX = 96
 const STEP_LEG_TICKS = 6
 const STEP_FALL = 3
@@ -2501,9 +2502,13 @@ function stepMove(bot, ctx, c, s) {
   const bp = bodyPos(bot)
   if (!bp) return 'no-pos'
   const F = { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }
+  const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
+  const wet = (b) => !!b && /water|bubble_column/.test(b.name)
+  const swimming = !!(bot.entity && bot.entity.isInWater) || wet(at(F.x, F.y, F.z))
   if (s.w) {
     const endLeg = () => { stepDrive(bot, false, false); if (s.rec && ctx.recovery === s.rec) ctx.recovery = null; s.rec = null }
-    if (s.w.x === F.x && s.w.y === F.y && s.w.z === F.z) { endLeg(); s.w = null }
+    // Swimming floats the feet a block off the waypoint: x/z is arrival in water.
+    if (s.w.x === F.x && s.w.z === F.z && (s.w.y === F.y || (swimming && Math.abs(s.w.y - F.y) <= 1))) { endLeg(); s.w = null }
     else if (++s.wait > STEP_LEG_TICKS) { endLeg(); return 'stall' }
     else if (s.rec) {
       ctx.recovery = s.rec
@@ -2512,13 +2517,11 @@ function stepMove(bot, ctx, c, s) {
       return 'running'
     } else {
       try { if (typeof bot.lookAt === 'function') bot.lookAt(new Vec3(s.w.x + 0.5, s.w.y + 1.6, s.w.z + 0.5), true) } catch (_) { /* drive anyway */ }
-      stepDrive(bot, true, s.w.y > F.y)
+      stepDrive(bot, true, s.w.y > F.y || swimming)
       return 'running'
     }
   }
   if (s.legs >= STEP_MAX) return 'budget'
-  const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
-  const wet = (b) => !!b && /water|lava|bubble_column/.test(b.name)
   const dx = c.x - F.x
   const dz = c.z - F.z
   const dy = Math.sign(c.y - F.y)
@@ -2535,7 +2538,9 @@ function stepMove(bot, ctx, c, s) {
   if (dy < 0 && (ax || az)) cells.push([W.x, W.y + 2, W.z])
   for (const [x, y, z] of cells) {
     for (const [ox, oy, oz] of [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
-      if (wet(at(x + ox, y + oy, z + oz))) return 'fluid'
+      // Water swims/bridges (moats, prod bot3 stop=fluid); only lava refuses.
+      const b = at(x + ox, y + oy, z + oz)
+      if (b && /lava/.test(b.name)) return 'lava'
     }
   }
   const block = cells.map(([x, y, z]) => at(x, y, z)).find((b) => b && b.boundingBox !== 'empty')
@@ -2561,6 +2566,21 @@ function stepMove(bot, ctx, c, s) {
   }
   // Floor: a gap within STEP_FALL drops, a deeper one bridges with scaffold; lava or void below refuses.
   const floor = at(W.x, W.y - 1, W.z)
+  // Water floor: bridge it with any throwaway fill block; none on hand, swim it.
+  if (wet(floor) && !s.noBridge && !wet(at(W.x, W.y, W.z))) {
+    const item = fillItem(bot, ctx)
+    const ref = item && [[0, -1, 0], [-ax, 0, -az], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+      .map(([ox, oy, oz]) => at(W.x + ox, W.y - 1 + oy, W.z + oz)).find((b) => b && b.boundingBox === 'block')
+    if (ref && typeof bot.placeBlock === 'function') {
+      s.digging = true
+      const face = new Vec3(W.x - ref.position.x, W.y - 1 - ref.position.y, W.z - ref.position.z)
+      void (async () => {
+        try { await bot.equip(item, 'hand'); await bot.placeBlock(ref, face) } catch (_) { s.noBridge = true /* swim the rest */ } finally { s.digging = false }
+      })()
+      try { console.log(`castle step-approach bridge ${W.x} ${W.y - 1} ${W.z} with ${item.name}`) } catch (_) { /* log best-effort */ }
+      return 'running'
+    }
+  }
   if (!floor || floor.boundingBox === 'empty') {
     let fall = 0
     for (let y = W.y - 1; ; y--) {
@@ -3693,9 +3713,12 @@ const UPKEEP_OK_MAX = 3
 // UPKEEP_RATE_MS one line says where the upkeep ticks went — work = ticks on
 // a cell in reach, walk = ticks on one out of reach, stuck = nothing workable.
 const UPKEEP_RATE_MS = 10 * 60 * 1000
+// what=null only flushes (prod bot3: upkeep events came in one burst, then
+// plan-cell ticks never called in again, so the 10-min line never printed).
 function upkeepRate(ctx, what, now = Date.now()) {
+  if (!what && !ctx.castleUpkeepRate) return
   const r = ctx.castleUpkeepRate || (ctx.castleUpkeepRate = { since: now, ok: 0, fail: 0, work: 0, walk: 0, stuck: 0 })
-  r[what]++
+  if (what) r[what]++
   if (now - r.since < UPKEEP_RATE_MS) return
   console.log(`castle upkeep rate ok=${r.ok} fail=${r.fail} ticks=${r.work + r.walk + r.stuck} work=${r.work} walk=${r.walk} stuck=${r.stuck} min=${Math.round((now - r.since) / 60000)}`)
   ctx.castleUpkeepRate = null
@@ -3897,6 +3920,7 @@ function castle(bot, ctx) {
       }
     }
   }
+  upkeepRate(ctx, null, now)
   const { cells, key } = blueprint.absPlan(st.site, st.rot, st.blueprintVersion)
   const fullBefore = ctx.castleScanAt
   const r = pick(bot, ctx, st, cells, key, now)
