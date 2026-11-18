@@ -276,6 +276,12 @@ describe('pathfinder status on the decision line', () => {
     await ticker.tick()
     // reset= logged once: stale reason does not repeat, path= persists
     assert.match(lines[lines.length - 1], /moving=false path=noPath reset=none/)
+    // goal cleared: the stale verdict no longer logs
+    bot.pathfinder.goal = null
+    ticker.setPathStatus('noPath')
+    bot.players = {}
+    await ticker.tick()
+    assert.match(lines[lines.length - 1], /path=none/)
   })
 })
 
