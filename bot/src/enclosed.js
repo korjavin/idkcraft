@@ -374,6 +374,8 @@ function runUp(bot, ctx, ep, feet, walk, finish, fail) {
   return true
 }
 
-module.exports = { tick, stuckDeny, stuckCost, pickExit, pickExits, trapsSelf, WINDOW_MS, DISTINCT, LAYERS, MAX_OWN }
+// A stall-chooser pick (task.js genericTick) ends the episode.
+function reset(ctx) { sessions.delete(ctx); ctx.enclosedUntil = 0 }
+module.exports = { tick, reset, stuckDeny, stuckCost, pickExit, pickExits, trapsSelf, WINDOW_MS, DISTINCT, LAYERS, MAX_OWN }
 // Late require: recover pulls in much of the behaviour tree.
 module.exports.pillar = (bot, ctx) => require('./behaviours/recover').pillarUpRun(bot, ctx)

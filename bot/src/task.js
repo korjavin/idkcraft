@@ -1711,6 +1711,187 @@ function deadlockPoll(bot, ctx, brain, facts, home, names, text, fsm, dl, model,
   return 'fired'
 }
 
+// Generic stall clock (idkcraft-8hpy, owner 2026-11-18): with no goal kind
+// owning a progress metric (complete-castle upkeep, a goalless castlefetch,
+// a reflex/recovery episode) nothing fired the chooser — prod bot3 stood
+// 889/1058 ticks in enclosed/castle/dig_step, bot4 in recover:wait and
+// castlefetch, zero `stall decide` lines. Progress here is generic: a
+// ctx.progressMarks bump (upkeep cell fixed, a step finished done) or the
+// body moving GEN_MOVED blocks. Flat for GOAL_WATCHDOG_MS -> the STALL_DECIDE
+// chooser (plan-context, source options, escalate_llm, loop) over the
+// runnable steps; the pick pins ctx.taskPlanStep and ctx.stallPreempt holds
+// the reflex (enclosed/recover) off for the window.
+const GEN_MOVED = 12
+function genericLabel(ctx, now) {
+  if (ctx.recovery && ctx.recovery.action) return `reflex:${ctx.recovery.action}`
+  if ((ctx.enclosedUntil || 0) > now) return 'reflex:enclosed'
+  if (ctx.step === 'castlefetch') return 'castlefetch'
+  const st = ctx.castle
+  if (st && st.site && st.phase === 'complete' && (ctx.step === 'castle' || st.upkeepOwed)) return 'castle'
+  return null
+}
+function genericKind(ctx) { return ctx.castle && ctx.castle.site ? 'castle' : 'house' }
+function genericReset(g, bot, ctx, now) {
+  const p = bot && bot.entity && bot.entity.position
+  g.since = now
+  g.anchor = p ? { x: p.x, y: p.y, z: p.z } : null
+  g.mark = ctx.progressMarks || 0
+  g.rounds = 0
+  g.history = []
+  g.llmUsed = false
+  g.llmPlan = null
+  g.loopAsked = null
+  g.last = null
+  g.cooldownUntil = 0
+}
+// Returns true while it owns the episode (deadlockTick stands down).
+function genericTick(bot, ctx, now = Date.now()) {
+  try {
+    if (!stallDecideOn() || !watchdogOn() || !ctx || ctx.paused || !ctx.brain) return false
+    const g = ctx.stallGen || (ctx.stallGen = { seq: 0, pending: null, answer: null })
+    if (!g.history) genericReset(g, bot, ctx, now)
+    // Step-done edge: a finished step (a castlefetch delivery included) is progress.
+    const sk = `${ctx.step}|${ctx.stepStatus}`
+    if (sk !== g.lastStepKey) {
+      g.lastStepKey = sk
+      if (typeof ctx.stepStatus === 'string' && isFinished(ctx.stepStatus) && failReason(ctx.stepStatus) === null) ctx.progressMarks = (ctx.progressMarks || 0) + 1
+    }
+    const p = bot.entity && bot.entity.position
+    const moved = !!(p && g.anchor && Math.hypot(p.x - g.anchor.x, p.z - g.anchor.z) + Math.abs(p.y - g.anchor.y) > GEN_MOVED)
+    if ((ctx.progressMarks || 0) > g.mark || moved) {
+      genericReset(g, bot, ctx, now)
+      g.answer = null
+      return false
+    }
+    if (g.answer) { genericConsume(bot, ctx, g, now); return true }
+    if (g.pending) return true
+    const label = genericLabel(ctx, now)
+    if (!label) { g.since = now; return false }
+    const W = goalWatchdogMs()
+    if (now - g.since < W || now < (g.cooldownUntil || 0)) return false
+    if (g.rounds >= goalMaxRounds()) {
+      stallDecideLog(label, g, 'none', 'none', '?', `max-rounds ${diagnose(bot, ctx)}`, '')
+      g.cooldownUntil = now + W * 10
+      g.rounds = 0
+      return false
+    }
+    genericAsk(bot, ctx, g, label, now, false)
+    return true
+  } catch (_) {
+    return false
+  }
+}
+function genericOptions(bot, ctx, g, loop) {
+  const goal = require('./goal')
+  const facts = goal.goalFacts(bot, ctx)
+  const opts = []
+  for (const n of deadlockRunnable(facts, bot, ctx)) {
+    const c = STEP_EFFECT_TEXT[n] || goal.STEP_CRITERIA[n]
+    if (typeof c === 'string' && c) opts.push({ id: n, step: n, criterion: c })
+  }
+  if (opts.length === 0) return opts
+  const extra = stallExtras(bot, ctx, genericKind(ctx), undefined, undefined, g, loop)
+  return loop ? extra.concat(opts) : opts.concat(extra)
+}
+function genericPlanAns(g, p, criteria) {
+  const steps = p && Array.isArray(p.steps) ? p.steps.filter((s) => typeof s === 'string' && criteria[s]) : []
+  g.llmPlan = steps.slice(1)
+  return steps.length > 0 ? { step: steps[0], confidence: null, source: 'llm', reason: p.reason || null } : null
+}
+function genericAnswer(ctx, g, seq, ans, err) {
+  if (!ctx || ctx.stallGen !== g || g.pending !== seq) return
+  g.pending = null
+  g.answer = err || !ans || typeof ans.step !== 'string'
+    ? { error: err ? planErrReason(err) : 'invalid' }
+    : { step: ans.step, conf: typeof ans.confidence === 'number' ? ans.confidence : null, source: ans.source || 'jev' }
+}
+// One call (JEV, the queued LLM plan, the LLM, or the keyless stub).
+function genericAsk(bot, ctx, g, label, now, llm) {
+  const pc = require('./plan-context')
+  if (g.last) g.history.push({ choice: g.last, outcome: 'flat' })
+  while (g.history.length > GOAL_HISTORY_KEPT) g.history.shift()
+  g.last = null
+  const loop = llm ? null : pc.loopOf(g.history)
+  // Loop seen last round and JEV did not escalate: escalate for it.
+  if (loop && g.loopAsked && stallLlmAvail(ctx, g)) {
+    console.log(`stall escalate goal=${label} by=auto loop=${loop}`)
+    llm = true
+  }
+  g.loopAsked = llm ? null : loop
+  const opts = genericOptions(bot, ctx, g, llm ? null : loop).filter((o) => !llm || o.id !== pc.ESCALATE_ID)
+  if (opts.length === 0) { g.cooldownUntil = now + goalWatchdogMs(); return }
+  const criteria = {}
+  for (const o of opts) criteria[o.id] = o.criterion
+  const kind = genericKind(ctx)
+  const stallMs = now - g.since
+  const prompt = goalPromptState(bot, ctx, kind, undefined, undefined, { stallMs, fails: [], wd: g })
+  prompt.goal = `unstick ${label}`
+  prompt.blocked_on = `${label} flat ${Math.floor(stallMs / 1000)}s | ${diagnose(bot, ctx)}${loop ? ` | loop: ${loop}` : ''}`
+  if (loop) prompt.loop = loop
+  const req = pc.withContext(bot, ctx, kind, undefined, undefined, { stallMs }, { state: prompt, instructions: `${PLAN_INSTRUCTIONS}; ${label} is not progressing, pick the block that changes the situation`, criteria })
+  const seq = (g.seq = (g.seq || 0) + 1)
+  g.pending = seq
+  g.label = label
+  g.firedOpts = Object.keys(criteria)
+  g.firedAt = now
+  const queued = Array.isArray(g.llmPlan) ? g.llmPlan : []
+  while (queued.length > 0 && !criteria[queued[0]]) queued.shift()
+  let ask
+  if (llm) {
+    g.llmUsed = true
+    ask = () => Promise.resolve(ctx.brain.stallPlan(req)).then((p) => genericPlanAns(g, p, criteria))
+  } else if (queued.length > 0) {
+    const next = queued.shift()
+    ask = () => ({ step: next, confidence: null, source: 'llm-plan' })
+  } else if (typeof ctx.brain.plan === 'function') {
+    ask = () => ctx.brain.plan(req)
+  } else {
+    // Keyless stub: the first runnable step that is not the stalling one.
+    const fb = opts.find((o) => o.id !== pc.ESCALATE_ID && o.id !== ctx.step) || opts[0]
+    ask = () => ({ step: fb.id, confidence: 1, source: 'stub' })
+  }
+  Promise.resolve()
+    .then(() => ask())
+    .then((ans) => genericAnswer(ctx, g, seq, ans, null), (err) => genericAnswer(ctx, g, seq, null, err))
+}
+function genericConsume(bot, ctx, g, now) {
+  const ans = g.answer
+  g.answer = null
+  const pc = require('./plan-context')
+  const label = g.label || '?'
+  const options = (g.firedOpts || []).join(',')
+  const conf = ans && typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?'
+  const by = ans && (ans.source === 'llm' || ans.source === 'llm-plan') ? 'llm' : ((ans && ans.source) || 'jev')
+  const log = (choice, why) => stallDecideLog(label, g, by, choice, conf, why, options)
+  // The next round needs a fresh flat window either way.
+  g.since = now
+  if (ans && ans.step === pc.ESCALATE_ID && stallLlmAvail(ctx, g)) {
+    log(ans.step, 'escalate')
+    genericAsk(bot, ctx, g, label, now, true)
+    return
+  }
+  const opt = ans && !ans.error ? genericOptions(bot, ctx, g, null).find((o) => o.id === ans.step && o.id !== pc.ESCALATE_ID) : null
+  const bad = !ans || ans.error ? ((ans && ans.error) || 'invalid')
+    : !opt ? `stale:${ans.step}`
+      : (typeof ans.conf === 'number' && ans.conf < TASK_PLAN_MIN_CONF) ? `low-confidence conf=${conf}` : null
+  if (bad) {
+    log('none', `${bad} ${diagnose(bot, ctx)}`)
+    g.rounds = (g.rounds || 0) + 1
+    g.cooldownUntil = now + goalWatchdogMs()
+    return
+  }
+  log(opt.id, diagnose(bot, ctx))
+  g.rounds = (g.rounds || 0) + 1
+  g.last = opt.id
+  const until = now + Math.min(goalCommitMs(), DEADLOCK_COMMIT_MAX_MS)
+  g.cooldownUntil = until
+  // The chosen block preempts the reflex: index.js skips enclosed/recover while this is live.
+  ctx.stallPreempt = { step: opt.id, until }
+  try { require('./enclosed').reset(ctx) } catch (_) { /* reflex reset best-effort */ }
+  if (opt.source) pc.applySource(ctx, opt.source)
+  else ctx.taskPlanStep = opt.step
+}
+
 // Per-tick deadlock clock (core-1): a steady rest never re-decides, so the
 // re-decide-only observer above never runs. taskTick calls this every
 // work-mode tick (the maybeWatchdog precedent): it observes the held pick,
@@ -3908,7 +4089,7 @@ function taskTick(bot, ctx, now = Date.now()) {
       // precedent). A landed answer delivers through ctx.taskPlanStep —
       // the pin decide() treats as a force.
       try {
-        deadlockTick(bot, ctx, now)
+        if (!genericTick(bot, ctx, now)) deadlockTick(bot, ctx, now)
       } catch (_) { /* deadlock best-effort */ }
       return
     }
@@ -4394,4 +4575,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { stallDecideOn, heldSteps, eligible, houseProgress, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick }
+module.exports = { stallDecideOn, heldSteps, eligible, houseProgress, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick, genericTick }
