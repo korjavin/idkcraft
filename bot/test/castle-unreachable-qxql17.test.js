@@ -60,10 +60,10 @@ describe('castle unreachable litter/decor deadlock fixes (idkcraft-qxql.17)', ()
     bot.entity.position.x = SITE.x + 18.2
     moved = castle.far(bot, ctx, st, cell, 4.5, now + 4000)
     assert.equal(moved, true)
-    // Hits STRIKES (3) -> blocked as unreachable!
-    assert.ok(st.blocked[`3:${cell.idx}`])
-    assert.equal(st.blocked[`3:${cell.idx}`].why, 'unreachable')
-    assert.equal(st.blocked[`3:${cell.idx}`].tries, 1)
+    // Hits STRIKES (3) -> the dig-approach ladder arms (upkeep below the
+    // feet too since the upkeep-reach fix), not a reset.
+    assert.equal(st.blocked[`3:${cell.idx}`], undefined)
+    assert.ok(ctx.castleFar.dig, 'dig-approach armed')
   })
 
   it('far() resets minDist baseline when in reach so return walk does not false-strike (revmux minor-1)', () => {

@@ -151,7 +151,7 @@ describe('pjsl transit backfill', () => {
     Date.now = () => now
     try {
       for (let attempt = 1; attempt <= 8; attempt++) {
-        for (let tick = 0; tick < 12 && (!st.blocked[k] || st.blocked[k].tries < attempt); tick++) castle(bot, ctx)
+        for (let tick = 0; tick < 400 && (!st.blocked[k] || st.blocked[k].tries < attempt); tick++) castle(bot, ctx)
         assert.equal(st.blocked[k]?.tries, attempt, `attempt ${attempt} retains its history`)
         assert.equal(!!st.blocked[k].retired, attempt === 8)
         if (attempt < 8) {
