@@ -63,7 +63,7 @@ describe('castle unreachable litter/decor deadlock fixes (idkcraft-qxql.17)', ()
     // Hits STRIKES (3) -> the dig-approach ladder arms (upkeep below the
     // feet too since the upkeep-reach fix), not a reset.
     assert.equal(st.blocked[`3:${cell.idx}`], undefined)
-    assert.ok(ctx.castleFar.dig, 'dig-approach armed')
+    assert.ok(ctx.castleFar.build, 'access build armed first (reach.js)')
   })
 
   it('far() resets minDist baseline when in reach so return walk does not false-strike (revmux minor-1)', () => {

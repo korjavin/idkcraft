@@ -1762,6 +1762,7 @@
   },
   "lastPathStatus": {
     "writers": [
+      "src/behaviours/castle.js",
       "src/behaviours/castlefetch.js",
       "src/behaviours/food-recovery.js",
       "src/behaviours/forage.js",
@@ -2131,6 +2132,12 @@
       "src/task.js"
     ],
     "owner": "src/behaviours/castle.js"
+  },
+  "reachBuild": {
+    "writers": [
+      "src/reach.js"
+    ],
+    "owner": "src/reach.js"
   },
   "reclaimInFlight": {
     "writers": [

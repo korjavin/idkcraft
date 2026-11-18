@@ -526,6 +526,10 @@ describe('castle break guard (g0z.55)', () => {
       const sync = () => { body.movementsFor('work', bot, ctx); return movementsToSettings(bot.pathfinder.movements, registry).allowPlace }
       bot.entity = { position: { x: cx + 48, y: 65, z: cz } }
       assert.equal(sync(), 'false', '48 from a peer castle centre')
+      ctx.reachBuild = { x: cx, y: 80, z: cz, until: Date.now() + 60000, how: 'baritone' }
+      assert.equal(sync(), 'true', 'a live reach window (reach.js) lets Baritone pillar/bridge')
+      ctx.reachBuild.until = 0
+      assert.equal(sync(), 'false', 'expired window: guard back')
       let pushes = 0
       bot.pathfinder.setMovements = () => { pushes++ }
       sync()

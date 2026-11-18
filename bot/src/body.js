@@ -128,6 +128,7 @@ function castleWalk(ctx) {
 // maxD=4 plan would strand the next sprint-off tick.
 const danger = require('./danger')
 const swim = require('./swim')
+const reach = require('./reach')
 const castle = require('./castle') // pure blueprint data
 const SOIL = new Set(['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'mud', 'clay']) // idkcraft-pjsl core-2: dirt-family ground only (bridge/mine.js mirrors the list — bridge/ cannot require outside bridge/)
 const { STONE_ITEMS, isStone } = castle
@@ -342,6 +343,7 @@ function nearCastle(bot, ctx) {
 let placeNear
 function nearAnyCastle(bot, ctx) {
   try {
+    if (reach.live(ctx)) return false // access build to a floating target (reach.js)
     const p = bodyPos(bot)
     // The own castle step always keeps allowPlace: the v2 lay is Baritone's
     // builder ("Starting layer 0"), which places the plan cells itself —

@@ -38,6 +38,12 @@ describe('castle litter last try takes the ladder', () => {
     const a = lit(0), b = lit(1)
     const ctx = { castleLitter: { pend: [a, b] }, castleGoalIdx: a.idx, lastPathStatus: 'noPath' }
     castle.far(bot, ctx, st, a, 4, Date.now())
-    assert.equal(st.blocked[bkey(st, a.idx)].tries, 1, 'struck on the first noPath tick')
+    assert.ok(ctx.castleFar.build && ctx.reachBuild, 'first noPath arms the access build (reach.js)')
+    assert.equal(st.blocked[bkey(st, a.idx)], undefined)
+    assert.equal(ctx.lastPathStatus, null, 'stale no-place verdict dropped')
+    ctx.castleGoalIdx = a.idx
+    ctx.lastPathStatus = 'noPath' // Baritone found no path even with placing on
+    castle.far(bot, ctx, st, a, 4, Date.now())
+    assert.equal(st.blocked[bkey(st, a.idx)].tries, 1, 'struck on the next noPath tick')
   })
 })
