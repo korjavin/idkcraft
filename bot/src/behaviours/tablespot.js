@@ -104,6 +104,10 @@ function tableFor(bot, ctx) {
   if (ctx.claimedTable && ctx.claimedTable !== st.tablePos) tables.push(ctx.claimedTable)
   // A standing house-cell table nobody claimed (goal facts.houseTable makes equip feasible on it).
   try { const h = require('./build').houseTableAt(bot, ctx.home); if (h) tables.push(h) } catch (_) { /* no house table */ }
+  // Any table already standing nearby (owner 2026-11-18: the map was
+  // littered with one table per craft): walk to it before placing ours.
+  const seen = seenTable(bot, bp)
+  if (seen) tables.push(seen)
   let homeTable = null
   let homeBlock = null
   let farTable = null
@@ -150,6 +154,8 @@ function tableFor(bot, ctx) {
     const craftMod = require('./craft')
     if (craftMod.tableUsable(bot, homeBlock, homeTable)) {
       st.walkWaits = 0
+      const r = ctx.roadsideTable
+      if (r && r.x === homeTable.x && r.y === homeTable.y && r.z === homeTable.z) r.used = Date.now()
       return Promise.resolve({ block: homeBlock, pos: homeTable })
     }
     const key = `equip-table:${homeTable.x},${homeTable.y},${homeTable.z}`
@@ -336,6 +342,7 @@ function tableFor(bot, ctx) {
       ctx.claimedTable = new Vec3(at.x, at.y, at.z)
       // The castle residence's own station (no build claims it there).
       if (castleSpot && ref === castleSpot.below) ctx.home.table = new Vec3(at.x, at.y, at.z)
+      else ctx.roadsideTable = { x: at.x, y: at.y, z: at.z, used: Date.now() } // reclaimTable picks it back up
     } catch (_) { /* claim best-effort */ }
     return { block, pos: at }
   }
@@ -346,6 +353,52 @@ function tableFor(bot, ctx) {
     if (t && typeof t.unref === 'function') t.unref()
   })
   return Promise.race([run(), timeout])
+}
+
+// Nearest standing crafting table within FAR_TABLE, or null.
+function seenTable(bot, bp) {
+  try {
+    const id = bot.registry.blocksByName.crafting_table.id
+    const hits = bot.findBlocks({ matching: id, maxDistance: FAR_TABLE, count: 8 })
+    let best = null
+    for (const p of hits || []) if (!best || dist3(bp, p) < dist3(bp, best)) best = p
+    return best ? new Vec3(best.x, best.y, best.z) : null
+  } catch (_) { return null }
+}
+
+// Pick a roadside table back up once no craft has used it for RECLAIM_IDLE_MS
+// (one table rides in the pack instead of one left per craft). A home/castle
+// table is never ctx.roadsideTable. True while it owns the tick.
+const RECLAIM_IDLE_MS = 10000
+function reclaimTable(bot, ctx, now = Date.now()) {
+  const r = ctx && ctx.roadsideTable
+  if (!r) return false
+  try {
+    const bp = bot.entity && bot.entity.position
+    if (!bp || ctx.reclaimInFlight) return !!ctx.reclaimInFlight
+    if (ctx.equipInFlight || ctx.craftInFlight || ctx.craftany) return false
+    const hasTable = itemsOf(bot).some((i) => i && i.name === 'crafting_table')
+    const pos = new Vec3(r.x, r.y, r.z)
+    const d = dist3(bp, { x: r.x + 0.5, y: r.y, z: r.z + 0.5 })
+    if (r.dug) {
+      // Walk onto the drop; give up after 15 s or once it is in the pack.
+      if (hasTable || now - r.dug > 15000) { ctx.roadsideTable = null; return false }
+      // One walk issue only: the tick's behaviour owns the goal after that.
+      if (d > 1.5 && !r.walked) { r.walked = true; issueGoal(bot, ctx, new goals.GoalNear(r.x, r.y, r.z, 0), `reclaim-table:${r.x},${r.y},${r.z}`, false) }
+      return false
+    }
+    const b = bot.blockAt(pos)
+    if (!b || b.name !== 'crafting_table' || d > FAR_TABLE) { ctx.roadsideTable = null; return false }
+    if (now - (r.used || 0) < RECLAIM_IDLE_MS || hasTable || d > 4.5 || typeof bot.dig !== 'function') return false
+    ctx.reclaimInFlight = true
+    try { console.log(`table reclaim at ${r.x},${r.y},${r.z}`) } catch (_) { /* log best-effort */ }
+    for (const k of ['claimedTable']) { const c = ctx[k]; if (c && c.x === r.x && c.y === r.y && c.z === r.z) delete ctx[k] }
+    const st = ctx.equip
+    if (st && st.tablePos && st.tablePos.x === r.x && st.tablePos.y === r.y && st.tablePos.z === r.z) st.tablePos = null
+    void Promise.resolve().then(() => bot.dig(b)).then(() => { r.dug = Date.now() }, () => { ctx.roadsideTable = null })
+      .finally(() => { ctx.reclaimInFlight = false })
+    return true
+  } catch (_) { ctx.reclaimInFlight = false; return false }
 }
 
 const AIRISH = new Set(['air', 'cave_air', 'void_air'])
@@ -368,4 +421,4 @@ function spotBlocked(bot, ctx, x, y, z) {
   return false
 }
 
-module.exports = { FAR_TABLE, PLACE_OVER, itemsOf, dist3, dayOf, tableFar, castleTableSpot, tableFor }
+module.exports = { FAR_TABLE, PLACE_OVER, itemsOf, dist3, dayOf, tableFar, castleTableSpot, tableFor, seenTable, reclaimTable }

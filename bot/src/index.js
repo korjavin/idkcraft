@@ -581,6 +581,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // shut our own openings behind us. Reads only + activateBlock, so it
     // runs ahead of every branch (paused, alone, normal) like unpin.
     try { doors.doorReflex(bot, ctx) } catch (_) { /* doors best-effort */ }
+    // Roadside table pickup (owner 2026-11-18: one table per craft littered the map).
+    try { require('./behaviours/tablespot').reclaimTable(bot, ctx) } catch (_) { /* reclaim best-effort */ }
     // Far-search slices (amb): at most ~120ms CPU here, completion chats.
     try { await advancePendingSearch(bot, { setLead: (order) => { clearStuck(); ctx.lead = order; ctx.leadTargetGone = 0; ctx.paused = false; ctx.gocastle = null; if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) } resetNightStep(); homeMod.releaseMeet(bot, ctx) }, clearStuck: () => { clearStuck() } }, ctx) } catch (_) { /* search never breaks the tick */ }
     // LLM order plan (vf8e.6): ctx reads only, next step's chat line or pin;
