@@ -43,6 +43,22 @@ describe('darkspots.scan', () => {
     assert.ok(dark.scan(world({}, () => 0), [box]).length >= 1)
     assert.equal(dark.scan(world({}, () => 3), [box]).length, 0)
   })
+  it('chunks with light 0 everywhere (bridge body): torches spread by propagated light, every storey gets one', () => {
+    // 21x21 hall, ground floor y64 and an upper floor y70 (stone at 69), roof at 75.
+    const extra = { ...roof(0, 20, 0, 20, 69), ...roof(0, 20, 0, 20, 75), '10,64,10': 'torch' }
+    const hall = { x0: 0, x1: 20, y0: 64, y1: 72, z0: 0, z1: 20 }
+    const out = dark.scan(world(extra, () => 0), [hall])
+    assert.ok(out.length > 0)
+    assert.ok(out.some((c) => c.y === 70), 'the upper storey is lit')
+    for (const c of out.filter((o) => o.y === 64)) {
+      assert.ok(Math.abs(c.x - 10) + Math.abs(c.z - 10) >= 14, `no torch inside the existing glow: ${c.x},${c.z}`)
+    }
+    for (const a of out) for (const b of out) {
+      if (a !== b && a.y === b.y) assert.ok(Math.abs(a.x - b.x) + Math.abs(a.z - b.z) >= 14, 'picks sit past each other\'s glow')
+    }
+    assert.equal(out.dark, out.length, 'every dark cell left is one the picks will light')
+    assert.equal(out.floors, 2)
+  })
   it('skip vetoes cells and hot boxes rank first', () => {
     const bot = world({}, () => 0)
     assert.equal(dark.scan(bot, [box], () => true).length, 0)
@@ -53,7 +69,7 @@ describe('darkspots.scan', () => {
 
 describe('castle dark cells', () => {
   it('dark interior cells become torch cells with a round-trip idx; a mob death zone lights first', () => {
-    const bot = world({}, (p) => (p.x === -3 && p.z === -3 ? 0 : (p.y === 64 && p.x === 2 && p.z === 2 ? 0 : 5)))
+    const bot = world({}, (p) => (p.x === -3 && p.z === -3 ? 0 : (p.y === 64 && p.x === 14 && p.z === 14 ? 0 : 5)))
     const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, blocked: {} }
     const ctx = { danger: { spots: [{ x: -3, y: 64, z: -3, at: Date.now(), r: 16 }] } }
     const orig = console.log
@@ -67,7 +83,7 @@ describe('castle dark cells', () => {
       const back = castle.darkOf(st, c.idx)
       assert.deepEqual([back.x, back.y, back.z], [c.x, c.y, c.z])
     }
-    assert.ok(list.some((c) => c.x === 2 && c.z === 2))
+    assert.ok(list.some((c) => c.x === 14 && c.z === 14))
   })
 })
 
