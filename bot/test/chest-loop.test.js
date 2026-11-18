@@ -77,6 +77,7 @@ it('an empty chest is remembered empty and not re-toured until stale; a refill i
   assert.equal(foodRecovery.needed(bot, ctx, facts), false, 'fresh empty read: no re-tour')
   chest[0].count = 8 // refilled meanwhile
   ctx.chests[0].at -= stockpile.CHEST_STALE_MS
+  ctx.foodChestDryUntil -= stockpile.CHEST_STALE_MS // the all-dry window ages with the read
   assert.equal(foodRecovery.needed(bot, ctx, facts), true, 'stale read: look again')
   await drive(bot, ctx)
   assert.deepEqual(pack.map((i) => [i.name, i.count]), [['bread', foodRecovery.HUNGRY_WANT]])
@@ -137,6 +138,7 @@ it('an unreachable chest is not re-toured when the seen list is wiped; it is ret
   ctx.foodRecoveryChestSeen = null; ctx.foodRecoveryRetryAt = 0 // goal.js lowHpClock wipes it on every healthy tick
   assert.equal(foodRecovery.needed(bot, ctx, facts), false, 'failed chest skipped across episodes')
   ctx.chests[0].failAt -= stockpile.CHEST_STALE_MS
+  ctx.foodChestDryUntil -= stockpile.CHEST_STALE_MS
   assert.equal(foodRecovery.needed(bot, ctx, facts), true, 'stale failure: try again')
 })
 

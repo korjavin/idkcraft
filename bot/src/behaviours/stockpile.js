@@ -1286,9 +1286,11 @@ async function withdrawEdible(bot, ctx, count, at = null, valid = null, wants = 
       const stacks = typeof window.containerItems === 'function' ? window.containerItems() : null
       if (!Array.isArray(stacks)) return { got: 0, name: null, status: valid ? 'unknown' : 'ok' }
       const find = (f) => stacks.find((s) => s && typeof s.name === 'string' && f(s.name))
-      const first = find((n) => edible.has(n)) || (typeof wants === 'function' ? find(wants) : null)
+      const wanted = (n) => typeof wants === 'function' && wants(n)
+      // good food, then wheat (bread), then whatever else wants allows (rotten flesh)
+      const first = find((n) => edible.has(n)) || find((n) => n === 'wheat' && wanted(n)) || find(wanted)
       if (!first) return { got: 0, name: null }
-      let want = count
+      let want = first.name === 'wheat' ? Math.max(3, count * 3) : count // 3 wheat per bread
       let got = 0
       for (const s of stacks) {
         if (valid && !valid()) break
@@ -1296,15 +1298,16 @@ async function withdrawEdible(bot, ctx, count, at = null, valid = null, wants = 
         if (!s || s.name !== first.name) continue
         const take = Math.min(typeof s.count === 'number' ? s.count : 1, want)
         if (take <= 0) continue
-        await window.withdraw(s.type, s.metadata, take)
+        // a failed withdraw (full pack, window desync) keeps what already came out
+        try { await window.withdraw(s.type, s.metadata, take) } catch (e) { return { got, name: first.name, why: (e && e.message) || 'withdraw' } }
         want -= take
         got += take
       }
       return { got, name: first.name }
     }, at, valid)
     if (valid) {
-      if (res && res.status === 'ok') return { ...res.value, outcome: res.value && res.value.status === 'unknown' ? 'unknown' : res.value && res.value.got > 0 ? 'withdrawn' : 'empty' }
-      return { got: 0, name: null, outcome: (res && res.status) || 'error' }
+      if (res && res.status === 'ok') return { ...res.value, outcome: res.value && res.value.status === 'unknown' ? 'unknown' : res.value && res.value.got > 0 ? 'withdrawn' : res.value && res.value.why ? 'error' : 'empty' }
+      return { got: 0, name: null, outcome: (res && res.status) || 'error', why: res && res.why }
     }
     return res && res.status === 'ok' ? res.value : { got: 0, name: null }
   } catch (_) {
