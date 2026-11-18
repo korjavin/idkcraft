@@ -35,7 +35,7 @@ describe('castle dig-approach for unreachable cells', () => {
     } finally { console.log = orig }
   })
 
-  it('prep cut reached but out of reach: logs approach, escalates to access build within STRIKES (bot2 2026-11-18)', () => {
+  it('prep cut reached but out of reach: logs approach, escalates to the dig-approach (never an access build: own scaffold in the site is a new cut) (bot2 2026-11-18)', () => {
     const st = { site: { ...SITE }, rot: 0, blueprintVersion: V, blocked: {}, phase: 'prep' }
     const ctx = { castle: st }
     const cell = { x: SITE.x + 14, y: SITE.y, z: SITE.z, kind: 'air', prep: 'cut', idx: 1000001 }
@@ -52,8 +52,8 @@ describe('castle dig-approach for unreachable cells', () => {
       }
       const ap = lines.filter((l) => l.startsWith('approach '))
       assert.match(ap[0], /^approach target=114,64,200 stand=\S+ reached=true inReach=false dist=\S+ -> action=reapproach#1$/)
-      assert.match(ap[ap.length - 1], /action=access-build$/, ap.join('\n'))
-      assert.ok(ctx.castleFar.build, 'access build armed, not an endless identical re-approach')
+      assert.match(ap[ap.length - 1], /action=dig-approach$/, ap.join('\n'))
+      assert.ok(ctx.castleFar.dig && !ctx.castleFar.build, 'dig ladder armed, no access build in prep')
     } finally { console.log = orig }
   })
 

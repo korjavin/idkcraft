@@ -964,9 +964,11 @@ function prepDone(bot, c) {
 function prepTargets(bot, ctx, st, now) {
   const key = `${st.site.x},${st.site.y},${st.site.z},${st.rot | 0}`
   const c0 = ctx && ctx.castlePrep
+  const seen = ctx && ctx.castlePrepRecur && ctx.castlePrepRecur.key === key ? ctx.castlePrepRecur : { key, done: new Set(), n: {} }
+  if (ctx) ctx.castlePrepRecur = seen
   if (c0 && c0.key === key && now - c0.at < FULL_RESCAN_MS && !c0.unknown) {
-    const live = c0.list.filter((c) => !done(bot, c))
-    if (live.length || c0.list.length === 0) return live // a list that filtered to empty is rescanned once
+    const live = c0.list.filter((c) => !(done(bot, c) && seen.done.add(c.idx)))
+    if (live.length || c0.list.length === 0) return prepNote(bot, ctx, seen, live, now) // a list that filtered to empty is rescanned once
   }
   const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
   const { x: sx, y: sy, z: sz } = st.site
@@ -999,10 +1001,31 @@ function prepTargets(bot, ctx, st, now) {
       }
     }
   }
+  // A cell done once and back again is recreated by something (a cut<->fill
+  // flip, own scaffold): its 2nd return skips it so prep converges.
   const list = logs.sort((a, b) => a.y - b.y)
     .concat(cuts.sort((a, b) => b.y - a.y), fills.sort((a, b) => a.y - b.y))
+    .filter((c) => {
+      if (seen.n[c.idx] >= 2) return false
+      if (!seen.done.has(c.idx)) return true
+      seen.done.delete(c.idx)
+      seen.n[c.idx] = (seen.n[c.idx] || 0) + 1
+      if (seen.n[c.idx] < 2) return true
+      console.log(`castle prep cell=${c.x},${c.y},${c.z} kind=${c.prep} result=skip reason=recur recur=${seen.n[c.idx]}`)
+      return false
+    })
   // unknown (g0z.15): unloaded columns — no cache, and prep stays open.
   if (ctx) ctx.castlePrep = { key, at: now, list, unknown }
+  return prepNote(bot, ctx, seen, list, now)
+}
+// Diagnostic, once per 10 s: the prep cell in front and how often cells came back.
+function prepNote(bot, ctx, seen, list, now) {
+  if (!ctx || !list.length || now - (ctx.castlePrepLogAt || 0) < 10000) return list
+  ctx.castlePrepLogAt = now
+  const c = list[0]
+  const p = bot.entity && bot.entity.position
+  const recur = Object.values(seen.n).reduce((a, b) => a + b, 0)
+  console.log(`castle prep cell=${c.x},${c.y},${c.z} kind=${c.prep} body=${p ? `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` : '?'} goal=${ctx.lastGoalKey || '-'} left=${list.length} recur=${recur}`)
   return list
 }
 
@@ -2511,7 +2534,7 @@ function far(bot, ctx, st, c, reach, now) {
   if (upkeepKind(st, c) && ctx.castleGoalIdx === c.idx && ctx.lastPathStatus === 'noPath') f.n = Math.max(f.n, STRIKES)
   ctx.castleGoalIdx = -1
   try {
-    const act = f.n < STRIKES ? `reapproach#${f.n}` : !f.build && (clearing(c) || upkeepKind(st, c) === 'litter') ? 'access-build' : !f.dig ? 'dig-approach' : !f.step ? 'step-approach' : 'strike'
+    const act = f.n < STRIKES ? `reapproach#${f.n}` : !f.build && !c.prep && (clearing(c) || upkeepKind(st, c) === 'litter') ? 'access-build' : !f.dig ? 'dig-approach' : !f.step ? 'step-approach' : 'strike'
     console.log(`approach target=${c.x},${c.y},${c.z} stand=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} reached=true inReach=false dist=${dist.toFixed(1)} -> action=${act}`)
   } catch (_) { /* log best-effort */ }
   if (f.n >= STRIKES) {
@@ -2531,7 +2554,7 @@ function far(bot, ctx, st, c, reach, now) {
     // high scaffold retired on three fast strikes, no ladder ever ran).
     // Access build (reach.js): a block to break with no stand spot in reach
     // gets the body's own pillar/bridge before any strike.
-    if (!f.build && (clearing(c) || upkeepKind(st, c) === 'litter')) {
+    if (!f.build && !c.prep && (clearing(c) || upkeepKind(st, c) === 'litter')) { // prep: own scaffold in the site is a new cut (ping-pong)
       f.build = true
       f.n = 0
       f.minDist = Infinity

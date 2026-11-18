@@ -543,6 +543,10 @@ describe('castle break guard (g0z.55)', () => {
       ctx.castle = { site: SITE, rot: 0, blueprintVersion: 3, phase: 'build' } // own, in progress
       bot.entity.position = { x: cx, y: 65, z: cz + 40 }
       assert.equal(sync(), 'false', 'own castle in progress')
+      ctx.castle.phase = 'prep'; ctx.step = 'castle' // own castle step levelling the site
+      ctx.reachBuild = { x: cx, y: 80, z: cz, until: Date.now() + 60000, how: 'baritone' }
+      assert.equal(sync(), 'false', 'prep: no Baritone scaffold inside the site, reach window or not (ping-pong)')
+      ctx.reachBuild = null; ctx.castle.phase = 'build'; delete ctx.step
       assert.equal(pushes, 2)
       ctx.step = 'castle' // the own lay keeps its approaches
       ctx.knownCastles = [{ ...ctx.castle }] // memory's refresh-time copy of the own castle, since replaced (rig lay 8.0)
