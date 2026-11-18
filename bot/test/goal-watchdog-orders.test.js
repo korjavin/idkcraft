@@ -1,4 +1,6 @@
 'use strict'
+// Legacy park/L2 contract: the 8hpy.2 chooser (STALL_DECIDE) is covered in stall-decide.test.js.
+process.env.STALL_DECIDE = '0'
 
 // Goal watchdog delivery 2 (idkcraft-vmzq.22) + round-2/3 fixes: owner
 // orders as goals (bring/comehome/gocastle/lead/flat metrics) + option
