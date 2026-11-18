@@ -431,3 +431,24 @@ describe('nearestPrep (prep walks to the nearest column)', () => {
     assert.equal(nearestPrep(bot, []), null)
   })
 })
+
+describe('prep ping-pong (owner 2026-11-18: left/right forever, prepLeft 49->50->49)', () => {
+  it('a cut that comes back after done counts once, the 2nd return is skipped: prep converges', () => {
+    const world = makeWorld()
+    const bot = mockBot(world)
+    const bx = SITE.x + 5, bz = SITE.z + 5
+    world.set(bx, 64, bz, 'cobblestone') // own scaffold inside the site = a cut
+    const ctx = { castle: { site: SITE, rot: 0, phase: 'prep', blocked: {} } }
+    const st = ctx.castle
+    const has = (l) => l.some((c) => c.x === bx && c.y === 64 && c.z === bz)
+    let now = 1e9
+    assert.ok(has(castle.prepTargets(bot, ctx, st, now)))
+    for (let round = 1; round <= 3; round++) {
+      world.set(bx, 64, bz, 'air') // cut
+      assert.ok(!has(castle.prepTargets(bot, ctx, st, now += 1000)), 'done drops it')
+      world.set(bx, 64, bz, 'cobblestone') // placed again to stand on
+      now += 60000 // past the cache: full rescan
+      assert.equal(has(castle.prepTargets(bot, ctx, st, now)), round < 2, `return #${round}`)
+    }
+  })
+})

@@ -343,6 +343,10 @@ function nearCastle(bot, ctx) {
 let placeNear
 function nearAnyCastle(bot, ctx) {
   try {
+    // Site prep levels the site: Baritone scaffold placed inside it is a new
+    // cut, cut and re-placed forever (owner 2026-11-18 left/right loop).
+    // Prep fills are explicit placeBlock, so prep never needs allowPlace.
+    if (ctx && ctx.step === 'castle' && ctx.castle && ctx.castle.site && ctx.castle.phase === 'prep') return true
     if (reach.live(ctx)) return false // access build to a floating target (reach.js)
     const p = bodyPos(bot)
     // The own castle step always keeps allowPlace: the v2 lay is Baritone's

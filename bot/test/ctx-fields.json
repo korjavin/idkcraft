@@ -728,6 +728,18 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castlePrepLogAt": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castlePrepRecur": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castlePrepSaid": {
     "writers": [
       "src/behaviours/castle.js",
