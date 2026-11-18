@@ -2136,7 +2136,11 @@ function menuWord(bot, ctx, now = Date.now()) {
       // stays 'blocked'. Announced here (core-1): decide() drops the
       // castle step on the flip, so castle()'s waiting branch never runs
       // in prod.
-      if (r.waiting) {
+      // A complete castle with decor still to get or lay words the decor
+      // below (glazing a big castle starved on its ever-waiting holes).
+      // shortcut: once every open decor kind is dry/parked 'blocked' wins
+      // until a leg finds stock again; add a dry-cycle timer if that starves.
+      if (r.waiting && !(st.phase === 'complete' && decorDue(bot, ctx, st, now))) {
         // core-3: only a material kind latches — a blocked keep-clear
         // ('air') or moat ('dig') cell keeps { word: 'blocked' }, so a far
         // site reads 'blocked', never a meaningless 'air-none'.
@@ -3922,6 +3926,38 @@ function decorOpen(bot, st, now) {
   })
 }
 
+// Lay the first open decor cell whose kind is held; logs the kind's tally
+// and the deepest rung that supplied it (noteDecorSource) once a minute.
+function decorTick(bot, ctx, st, now) {
+  const open = decorOpen(bot, st, now)
+  const dc = open.find((c) => usable(bot, c.kind, ctx) > 0)
+  if (!dc) return false
+  const at = ctx.castleDecorLogAt || (ctx.castleDecorLogAt = {})
+  if (!(at[dc.kind] > now - 60000)) {
+    at[dc.kind] = now
+    const all = blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).cells.filter((c) => c.kind === dc.kind).length
+    const missing = open.filter((c) => c.kind === dc.kind).length
+    const src = (ctx.castleDecorSource && ctx.castleDecorSource[dc.kind]) || 'chest'
+    try { console.log(`castle decor kind=${dc.kind} placed=${all - missing} missing=${missing} source=${src}`) } catch (_) { /* log best-effort */ }
+  }
+  work(bot, ctx, st, dc, now, 'decorating')
+  return true
+}
+// Open decor that is held, or a kind no leg found dry and not parked.
+function decorDue(bot, ctx, st, now) {
+  const dry = dryKinds(ctx)
+  const parked = (k) => { try { return !!(ctx && park.isParked(ctx, k)) } catch (_) { return false } }
+  return decorOpen(bot, st, now).some((c) => usable(bot, c.kind, ctx) > 0 || (!dry.has(c.kind) && !parked(c.kind)))
+}
+// The deepest rung a decor kind came from this fetch cycle (chest < craft <
+// smelt < gather); a leg that finds stock in a chest starts the cycle over.
+const SOURCE_RANK = { chest: 0, craft: 1, smelt: 2, gather: 3 }
+function noteDecorSource(ctx, kind, src) {
+  if (!ctx || !kind) return
+  const m = ctx.castleDecorSource || (ctx.castleDecorSource = {})
+  if (src === 'chest' || !(SOURCE_RANK[m[kind]] >= SOURCE_RANK[src])) m[kind] = src
+}
+
 // A searched site (g0z.19) is announced again once the body stands on it.
 function arrive(bot, st) {
   const bp = bodyPos(bot)
@@ -4049,6 +4085,9 @@ function castle(bot, ctx) {
     }
   }
   if (r.idx < 0) {
+    // A big castle always has some hole in backoff: held decor is laid
+    // meanwhile, else the waiting branch below starved glazing forever.
+    if (r.waiting && st.phase === 'complete' && decorTick(bot, ctx, st, now)) return
     if (r.waiting) {
       // Every remaining cell is waiting out a backoff (or owed): the holes
       // line above says which; the step fails so the body does side work
@@ -4066,8 +4105,7 @@ function castle(bot, ctx) {
     // banners) through the same placeCell; phase stays 'complete'
     // (residence/stockpile read it). First open cell whose kind is held.
     if (st.phase === 'complete') {
-      const dc = decorOpen(bot, st, now).find((c) => usable(bot, c.kind, ctx) > 0)
-      if (dc) { work(bot, ctx, st, dc, now, 'decorating'); return }
+      if (decorTick(bot, ctx, st, now)) return
     }
     // Holes stay on the status past completion (sayHoles set it above),
     // so 'castle' keeps reporting the gaps, not just 'complete'.
@@ -4143,6 +4181,7 @@ module.exports.castleRate = castleRate
 module.exports.usable = usable
 module.exports.kindOf = kindOf
 module.exports.noteDry = noteDry
+module.exports.noteDecorSource = noteDecorSource
 module.exports.placeFaced = placeFaced // g0z.50: the g0z.47 stairs reuse the faced placement
 module.exports.placeStairs = placeStairs
 module.exports.done = done

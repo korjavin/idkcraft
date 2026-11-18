@@ -237,6 +237,29 @@ describe('castle decor behaviour (g0z.31)', () => {
     assert.equal(castleMod.menuFact(bot, ctx), 'pane-none')
   })
 
+  it('a hole waiting out a backoff never starves glazing (big castles always have one)', async () => {
+    const items = [{ name: 'glass_pane', count: 3 }]
+    const bot = castleBot({ items })
+    const ctx = { castle: completeState() }
+    const cells = blueprint.absPlan(SITE, 0, 2).cells
+    const hole = cells.find((c) => c.kind === 'stone' && c.dy === 2)
+    bot.set.set(k3(hole.x, hole.y, hole.z), 'air')
+    ctx.castle.blocked[`2:${hole.idx}`] = { tries: 1, until: Date.now() + 600000 }
+    assert.equal(castleMod.menuFact(bot, ctx), 'pane-batch')
+    const logs = []
+    const log = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      for (let i = 0; i < 60 && bot.calls.places.length < 3; i++) { castleMod(bot, ctx); await settle(); await settle() }
+    } finally { console.log = log }
+    assert.equal(bot.calls.places.length, 3)
+    assert.ok(logs.some((l) => /^castle decor kind=pane placed=0 missing=44 source=chest$/.test(l)), logs.join('\n'))
+    // No panes left and none to get (pane dry): the hole words 'blocked' again.
+    castleMod.noteDry(ctx, 'pane')
+    for (const k of ['fence', 'gate', 'banner', 'bookshelf', 'blast_furnace']) castleMod.noteDry(ctx, k)
+    assert.equal(castleMod.menuFact(bot, ctx), 'blocked')
+  })
+
   it('off site a complete castle reads done (no yank-back for cosmetics)', () => {
     const bot = castleBot({ items: [{ name: 'glass_pane', count: 16 }], loaded: false })
     // g0z.62: a fresh visit stamp — a stale one words 'tidy' (the repair trip).
