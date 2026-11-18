@@ -199,7 +199,8 @@ describe('klh2 same-kind tick hop', () => {
     assert.equal(fetch.hopDue(bot, ctx, 'stone'), false, 'setup: chest dry, no hop')
     assert.equal(fetch.demand(bot, ctx), null, 'setup: demand null')
     fetch(bot, ctx)
-    assert.equal(ctx.stepStatus, 'done', 'the unserved hop ends quiet, never failed')
+    // 8hpy: stone still owed with no source this window is an honest failure, never 'done'
+    assert.equal(ctx.stepStatus, 'failed:no-effect-stone', 'the unserved hop names the owed kind')
     assert.ok(ctx.castleFetchDoneKind == null, 'no retire stamp on an unserved hop')
     assert.deepEqual(Object.keys(ctx.stepFail.castlefetch.kinds), ['stone'], 'the site hold survives the partial-serve cycle')
     assert.equal(fetch.holdFor(bot, ctx, 'stone'), true, 'no world retry at the parked site')

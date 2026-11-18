@@ -474,6 +474,14 @@ function shortOf(bot, ctx, kind) {
   return Math.max(0, Math.min(capOf(kind), left) + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
 }
 
+// The kind the castle still owes (castleWord left > 0), with its pack
+// shortfall when a bot is given; null when nothing is owed.
+function owedKind(bot, ctx) {
+  const cw = ctx && ctx.castleWord
+  if (!cw || typeof cw.kind !== 'string' || !(cw.kind in FETCH) || !(cw.left > 0)) return null
+  return { kind: cw.kind, word: 'none', short: bot ? shortOf(bot, ctx, cw.kind) : cw.left }
+}
+
 function demand(bot, ctx) {
   // Bounded fetch hold (g0z.15): a failed leg rests CASTLEFETCH_RETRY_MS no
   // matter how the facts text moves — known=near/none flips released the
@@ -3180,7 +3188,25 @@ function castlefetch(bot, ctx, target, state) {
   }
   const st = ctx.castle
   if (!st || !st.site || typeof st.site.x !== 'number') { finish(bot, ctx, 'done'); return }
-  const d = demand(bot, ctx)
+  let d = demand(bot, ctx)
+  // 8hpy: no demand while the castle still owes a kind is not 'done' (prod
+  // bot2: stone owed, castlefetch done on its first tick 79x in 3 min) —
+  // the generic acquire block takes it, or the leg fails naming the kind.
+  if (!d) {
+    const o = owedKind(bot, ctx)
+    if (o && o.short > 0) {
+      const ah = ctx.acquireHeld && ctx.acquireHeld[o.kind]
+      const rested = !(typeof ah === 'number' && Date.now() - ah <= require('../budget').CASTLEFETCH_RETRY_MS)
+      if (rested && acquireItem(bot, o.kind)) d = { ...o, acquire: true }
+      else {
+        try { console.log(`castlefetch ${o.kind}: owed ${o.short}, no source this window (acquire ${rested ? 'has no item' : 'held'})`) } catch (_) { /* log best-effort */ }
+        ctx.castleFetch = null
+        finish(bot, ctx, `failed:no-effect-${o.kind}`)
+        ctx.castleFetchFailKind = o.kind
+        return
+      }
+    }
+  }
   if (!d || d.short <= 0) {
     // idkcraft-akze send-back 1: a torch leg whose own field furnace still
     // stands (or is mid-place) must not finish here — craftTick runs before
@@ -3519,6 +3545,7 @@ module.exports.PIT_DEPTH = PIT_DEPTH
 module.exports.PIT_ROOM = PIT_ROOM
 module.exports.digTick = digTick
 module.exports.demand = demand
+module.exports.owedKind = owedKind
 module.exports.shortOf = shortOf
 module.exports.acquireItem = acquireItem
 module.exports.hopRecent = hopRecent

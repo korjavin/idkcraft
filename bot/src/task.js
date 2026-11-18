@@ -1089,6 +1089,15 @@ function consumeStrategic(bot, ctx, kind, state, wd, facts, goal, text, offered,
   if (opt && (opt.id === 'park' || opt.id === 'ask-owner' || String(opt.id).indexOf('hold-') === 0)) {
     return drop('non-step')
   }
+  // 8hpy: a pick the hold says is a no-op (empty run, stepFail hold) never
+  // runs blindly: the FSM (over the non-held menu) takes it.
+  let held = false
+  try { held = goal.failHolds(ctx, step, text, bot) } catch (_) { held = false }
+  if (held) {
+    try { console.log(`jev pick held step=${step} → fallback=${fsm}`) } catch (_) { /* log best-effort */ }
+    wd.stratStep = null
+    return { step: fsm, source: 'held-fallback', fsm, model }
+  }
   let valid = false
   try {
     valid = typeof step === 'string' && !!goal.MENU[step] && step !== 'rest' &&
@@ -1732,9 +1741,10 @@ function genericLabel(ctx, now) {
 }
 // Running-but-idle (owner 2026-11-18, prod bot3 explore/castle 'running' while
 // standing): any work step counts once the body stays put with no progress mark.
+// No step at all (prod nogoal:none:none, most standing ticks) is a stall too.
 function idleLabel(bot, ctx) {
-  if (!ctx.step || ctx.step === 'rest' || !eligible(bot, ctx)) return null
-  return `step:${ctx.step}`
+  if (ctx.step === 'rest' || !eligible(bot, ctx)) return null
+  return ctx.step ? `step:${ctx.step}` : 'idle:none'
 }
 function genericKind(ctx) { return ctx.castle && ctx.castle.site ? 'castle' : 'house' }
 function genericReset(g, bot, ctx, now) {
@@ -1751,6 +1761,12 @@ function genericReset(g, bot, ctx, now) {
   g.cooldownUntil = 0
   g.tried = []
 }
+function doneFlat(bot, ctx) {
+  try {
+    const goal = require('./goal')
+    return typeof ctx.stepPickText === 'string' && goal.goalText(goal.goalFacts(bot, ctx), ctx.home) === ctx.stepPickText
+  } catch (_) { return false }
+}
 // Returns true while it owns the episode (deadlockTick stands down).
 function genericTick(bot, ctx, now = Date.now()) {
   try {
@@ -1761,7 +1777,8 @@ function genericTick(bot, ctx, now = Date.now()) {
     const sk = `${ctx.step}|${ctx.stepStatus}`
     if (sk !== g.lastStepKey) {
       g.lastStepKey = sk
-      if (typeof ctx.stepStatus === 'string' && isFinished(ctx.stepStatus) && failReason(ctx.stepStatus) === null) ctx.progressMarks = (ctx.progressMarks || 0) + 1
+      // A done that left the facts text as picked (empty run) is no progress.
+      if (typeof ctx.stepStatus === 'string' && isFinished(ctx.stepStatus) && failReason(ctx.stepStatus) === null && !doneFlat(bot, ctx)) ctx.progressMarks = (ctx.progressMarks || 0) + 1
     }
     const p = bot.entity && bot.entity.position
     const moved = !!(p && g.anchor && Math.hypot(p.x - g.anchor.x, p.z - g.anchor.z) + Math.abs(p.y - g.anchor.y) > GEN_MOVED)
@@ -4615,4 +4632,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { stallDecideOn, heldSteps, eligible, houseProgress, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick, genericTick }
+module.exports = { consumeStrategic, stallDecideOn, heldSteps, eligible, houseProgress, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick, genericTick }
