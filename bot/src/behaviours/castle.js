@@ -1247,7 +1247,17 @@ function scanNote(bot, ctx, st, x, y, z, hit) {
   if (!b || !flat.isSolidCell(b)) return
   t.cand++
   t.mats[b.name] = (t.mats[b.name] || 0) + 1
-  if (hit) { t.litter++; (t.hits || (t.hits = {}))[b.name] = (t.hits[b.name] || 0) + 1; return }
+  if (hit) {
+    t.litter++
+    ;(t.hits || (t.hits = {}))[b.name] = (t.hits[b.name] || 0) + 1
+    // A sample of hits with neighbours (E W S N up down) to tell leftover scaffold from terrain.
+    const sm = t.sample || (t.sample = [])
+    if (sm.length < 8 && t.litter % 7 === 1) {
+      const nb = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]].map(([dx, dy, dz]) => { const o = blockAtXYZ(bot, x + dx, y + dy, z + dz); return o ? o.name : '?' })
+      sm.push(`${x},${y},${z}:${b.name}:dy${y - st.site.y}[${nb.join(',')}]`)
+    }
+    return
+  }
   const n = b.name
   const why = n === 'grass_block' ? 'grass' : (flat.isLeavesName(n) || flat.isLogName(n)) ? 'tree' : !SCAFFOLD_MATS.has(n) ? (NATURAL_SOLID.has(n) ? 'natural' : 'other') : 'side-neighbour'
   t.rejected[why] = (t.rejected[why] || 0) + 1
@@ -1319,7 +1329,7 @@ function litterTargets(bot, ctx, st, now) {
       c.next++
       if (c.next > last) { c.list = c.acc; c.acc = []; if (c.list.length) console.log(`castle sweep scaffold=${c.list.length}`)
         const t = ctx.castleScan
-        if (t) console.log(`castle scaffold scan cand=${t.cand} litter=${t.litter} hits=${fmtCounts(t.hits || {})} mats=${fmtCounts(t.mats)} rejected=${fmtCounts(t.rejected)}`)
+        if (t) console.log(`castle scaffold scan cand=${t.cand} litter=${t.litter} hits=${fmtCounts(t.hits || {})} mats=${fmtCounts(t.mats)} rejected=${fmtCounts(t.rejected)} sample=${(t.sample || []).join(' ')}`)
         ctx.castleScan = null
       }
       pending = pendingOf()
@@ -2474,6 +2484,10 @@ function far(bot, ctx, st, c, reach, now) {
   }
   f.dist = dist
   ctx.castleFar = f
+  // The pathfinder's own noPath verdict on this upkeep cell's goal is the
+  // strike (prod bot3: why=nopath 552/1496 ticks, STRIKES re-plans per
+  // stage): fast-yield now, or advance the last cell's ladder one stage.
+  if (upkeepKind(st, c) && ctx.castleGoalIdx === c.idx && ctx.lastPathStatus === 'noPath') f.n = Math.max(f.n, STRIKES)
   ctx.castleGoalIdx = -1
   if (f.n >= STRIKES) {
     // Unreachable plan cell (prod 2026-11-16 bot3: torches 15-40 below, 82x

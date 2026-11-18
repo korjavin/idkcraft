@@ -31,4 +31,13 @@ describe('castle litter last try takes the ladder', () => {
     assert.ok(ctx.castleFar && ctx.castleFar.dig, 'last try runs the dig ladder')
     assert.equal(st.blocked[k].tries, 2)
   })
+  it('a noPath verdict on the cell strikes on the same tick', () => {
+    const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, blueprintVersion: 2, phase: 'complete', blocked: {} }
+    const lit = (n) => ({ x: 100, y: 80, z: 190 + n, kind: 'air', idx: castle.LITTER_BOX_BASE + n })
+    const bot = { entity: { position: new Vec3(100, 64, 180) } }
+    const a = lit(0), b = lit(1)
+    const ctx = { castleLitter: { pend: [a, b] }, castleGoalIdx: a.idx, lastPathStatus: 'noPath' }
+    castle.far(bot, ctx, st, a, 4, Date.now())
+    assert.equal(st.blocked[bkey(st, a.idx)].tries, 1, 'struck on the first noPath tick')
+  })
 })
