@@ -49,16 +49,18 @@ describe('castle upkeep converges', () => {
     assert.equal(castle.upkeep(bot, {}, st).holes, before - 1)
   })
 
-  it('a scaffold column is litter; the same next to a tree, or a table/chest/bed, never (owner 2026-11-18)', () => {
+  it('a scaffold column is litter, beside a tree too; a stray table is litter; chest/bed/door/torch never (owner 2026-11-18)', () => {
     const st = fresh()
     const px = SITE.x - 3, pz = SITE.z + 12
     // A hanging 1-wide bridge cell (air below): litter by shape...
     cells.set(key(px, SITE.y + 2, pz), 'dirt')
     assert.equal(castle.isLitter(bot, {}, st, px, SITE.y + 2, pz, w, d), true)
-    // ...but under a canopy it is the tree's, not ours.
-    cells.set(key(px, SITE.y + 3, pz), 'oak_leaves')
-    assert.equal(castle.isLitter(bot, {}, st, px, SITE.y + 2, pz, w, d), false)
-    for (const n of ['crafting_table', 'chest', 'white_bed', 'oak_door', 'torch']) {
+    // ...beside a tree too (owner: no tree-adjacency protection).
+    cells.set(key(px + 1, SITE.y + 2, pz), 'oak_leaves')
+    assert.equal(castle.isLitter(bot, {}, st, px, SITE.y + 2, pz, w, d), true)
+    cells.set(key(px, SITE.y + 2, pz), 'crafting_table')
+    assert.equal(castle.isLitter(bot, {}, st, px, SITE.y + 2, pz, w, d), true)
+    for (const n of ['chest', 'white_bed', 'oak_door', 'torch']) {
       cells.set(key(px, SITE.y + 2, pz), n)
       assert.equal(castle.isLitter(bot, {}, st, px, SITE.y + 2, pz, w, d), false, n)
     }

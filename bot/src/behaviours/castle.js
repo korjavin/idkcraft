@@ -1188,12 +1188,12 @@ function leftoverScaffold(bot, st, b, x, y, z, w, d) {
   }
   return true
 }
-function touchesTree(bot, x, y, z) {
-  for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
-    const nb = blockAtXYZ(bot, x + dx, y + dy, z + dz)
-    if (nb && (flat.isLeavesName(nb.name) || flat.isLogName(nb.name))) return true
-  }
-  return false
+// The castle's own workbench cell (its descriptor table) or the home's claim.
+function homeTableCell(ctx, st, x, y, z) {
+  try {
+    const same = (t) => !!t && t.x === x && t.y === y && t.z === z
+    return same(ctx && ctx.home && ctx.home.table) || same(require('../residence').CASTLE.table({ ...st, kind: 'castle' }))
+  } catch (_) { return true }
 }
 // One cell's verdict on a complete castle. The scan and the read-time
 // re-check share it (g0z.53: a block a player swapped inside the cache
@@ -1219,10 +1219,11 @@ function isLitter(bot, ctx, st, x, y, z, w, d) {
   // The walkable-floor window is fillTargets' (prod bot4: one cell filled
   // and dug as litter 17x): a block there is never litter.
   if (inFillWindow(st, x, y, z, w, d)) return false
-  // Natural terrain by shape (owner 2026-11-18: bot3 dug around trees): a
-  // block touching a log or leaves is a tree's ground, never our scaffold.
-  if (!(SCAFFOLD_MATS.has(n) || NATURAL_SOLID.has(n))) return false // tables, chests, beds, doors, torches, leaves, logs
-  if (touchesTree(bot, x, y, z) && !isOwnPlaced(ctx, b)) return false
+  // A stray off-plan crafting table (owner 2026-11-18: 24 around one
+  // castle) is litter; the residence's own workbench is not.
+  if (n === 'crafting_table') return !homeTableCell(ctx, st, x, y, z)
+  // Logs/leaves (the tree itself) are never litter; dirt beside a tree may be.
+  if (!(SCAFFOLD_MATS.has(n) || NATURAL_SOLID.has(n))) return false // chests, beds, doors, torches, leaves, logs
   if (leftoverScaffold(bot, st, b, x, y, z, w, d)) return true
   if (!SCAFFOLD_MATS.has(n)) return false
   const ring = y >= st.site.y && x >= st.site.x - 1 && x <= st.site.x + w && z >= st.site.z - 1 && z <= st.site.z + d
@@ -1248,7 +1249,7 @@ function scanNote(bot, ctx, st, x, y, z, hit) {
   t.mats[b.name] = (t.mats[b.name] || 0) + 1
   if (hit) { t.litter++; (t.hits || (t.hits = {}))[b.name] = (t.hits[b.name] || 0) + 1; return }
   const n = b.name
-  const why = n === 'grass_block' ? 'grass' : (flat.isLeavesName(n) || flat.isLogName(n)) ? 'tree' : !SCAFFOLD_MATS.has(n) ? (NATURAL_SOLID.has(n) ? 'natural' : 'other') : touchesTree(bot, x, y, z) ? 'tree-ground' : 'side-neighbour'
+  const why = n === 'grass_block' ? 'grass' : (flat.isLeavesName(n) || flat.isLogName(n)) ? 'tree' : !SCAFFOLD_MATS.has(n) ? (NATURAL_SOLID.has(n) ? 'natural' : 'other') : 'side-neighbour'
   t.rejected[why] = (t.rejected[why] || 0) + 1
 }
 const fmtCounts = (o) => `{${Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(',')}}`
