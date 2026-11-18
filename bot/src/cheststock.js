@@ -171,7 +171,8 @@ const NEED = [
   { key: 'diamond', test: (n) => n === 'diamond', want: 16 },
   { key: 'gem', test: (n) => ['emerald', 'lapis_lazuli', 'redstone', 'quartz'].includes(n), want: 32 },
   { key: 'cobblestone', test: (n) => n === 'cobblestone', want: 128 },
-  { key: 'wood', test: (n) => n.endsWith('_log') || n.endsWith('_stem'), want: 64 },
+  // Logs-equivalent: planks count 1/4 (owner 2026-11-18: chests full of planks still chopped).
+  { key: 'wood', test: (n) => n.endsWith('_log') || n.endsWith('_stem') || n.endsWith('_planks'), per: (n) => n.endsWith('_planks') ? 0.25 : 1, want: 64 },
   { key: 'sapling', test: (n) => n.endsWith('_sapling'), want: 16 },
   { key: 'wheat', test: (n) => n === 'wheat' || n === 'bread' || n === 'hay_block', want: 32 },
 ]
@@ -180,10 +181,10 @@ function needFor(item) {
 }
 // Pack + all remembered chests (ctx.chests: every opened chest, packroom
 // y7lp; ctx.peerChests: peer sightings), deduped by position.
-function stockOf(bot, ctx, test) {
+function stockOf(bot, ctx, test, per = () => 1) {
   let n = 0
   try {
-    for (const it of (bot && bot.inventory && bot.inventory.items()) || []) if (it && test(it.name)) n += it.count || 0
+    for (const it of (bot && bot.inventory && bot.inventory.items()) || []) if (it && test(it.name)) n += (it.count || 0) * per(it.name)
   } catch (_) { /* pack unreadable */ }
   const seen = new Set()
   for (const list of [ctx && ctx.chests, ctx && ctx.peerChests]) {
@@ -191,16 +192,16 @@ function stockOf(bot, ctx, test) {
       const k = c && `${c.x},${c.y},${c.z}`
       if (!c || !c.contents || seen.has(k)) continue
       seen.add(k)
-      for (const [name, v] of Object.entries(c.contents)) if (test(name) && typeof v === 'number' && v > 0) n += Math.floor(v)
+      for (const [name, v] of Object.entries(c.contents)) if (test(name) && typeof v === 'number' && v > 0) n += Math.floor(v) * per(name)
     }
   }
-  return n
+  return Math.floor(n)
 }
 // { item, have, want, met } for an item's need, or null (no target).
 function needOf(bot, ctx, item) {
   const d = needFor(item)
   if (!d) return null
-  const have = stockOf(bot, ctx, d.test)
+  const have = stockOf(bot, ctx, d.test, d.per)
   return { item: d.key, have, want: d.want, met: have >= d.want }
 }
 const needMet = (bot, ctx, item) => { const r = needOf(bot, ctx, item); return !!(r && r.met) }
