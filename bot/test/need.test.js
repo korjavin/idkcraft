@@ -72,4 +72,11 @@ describe('wood stock first (owner 2026-11-18)', () => {
     assert.equal(goal.MENU.gather.feasible(facts, bot, woodCtx(400)), false)
     assert.equal(goal.MENU.gather.feasible(facts, bot, woodCtx(10)), true)
   })
+
+  it('an unbuilt house order still gathers (chest draw) with the wood stock met (bot5 empty menu)', () => {
+    const bot = mockBot([{ name: 'oak_planks', count: 12 }])
+    const facts = { time: 'day', logs: 0, planks: 12, table: 1, door: 0, home: 'site', castle: 'none' }
+    const ctx = { ...woodCtx(400), home: { site: { x: 0, y: 64, z: 0 }, built: false } }
+    assert.equal(goal.MENU.gather.feasible(facts, bot, ctx), true)
+  })
 })

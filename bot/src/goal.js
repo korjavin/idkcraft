@@ -420,7 +420,10 @@ const MENU = {
       // as 1/4 log) meets the wood target and the pack holds a kit -> no
       // chop; bigger needs withdraw through castlefetch. An empty pack still
       // gathers, whose chest draw runs before any chop.
-      if ((facts.planks || 0) + (facts.logs || 0) * 4 >= WOOD_KIT && require('./cheststock').needMet(bot, ctx, 'oak_log')) return false
+      // An unbuilt house order is exempt: its need is pack planks, and gather's
+      // own chest draw (chestLogsTick) is the withdraw — gating it left an
+      // empty day menu and rest (bot5: home=site, chests stocked, 2177/3348 ticks).
+      if (!houseOwed(ctx) && (facts.planks || 0) + (facts.logs || 0) * 4 >= WOOD_KIT && require('./cheststock').needMet(bot, ctx, 'oak_log')) return false
       // Post-build bed top-up (jr2.2) and the castle kit chop (qxql.2) keep
       // their own bounds.
       if (facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one') && (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS) return true
@@ -1756,6 +1759,9 @@ function forageHeld(ctx) {
 // Missing cell item (planks, or the table/door a cell wants): one family.
 const MISSING_ITEM_RE = /^failed:no-(planks|table|door)$/
 // Failed-build hold (idkcraft-67z3): BUILD_RETRY_MS and its why in budget.js.
+const MENU_DROP_LOG_MS = 5 * 60 * 1000
+const houseOwed = (ctx) => !!(ctx && ctx.home && ctx.home.site && !ctx.home.built && !ctx.home.parked)
+
 function buildHeld(ctx) {
   try {
     const sf = ctx && ctx.stepFail && ctx.stepFail.build
@@ -3200,6 +3206,17 @@ function noteChoice(bot, ctx, facts, names, choice, prev, status, why, force, te
       ctx.restWhy = restWhy(facts, bot, ctx, names)
     } catch (_) {
       ctx.restWhy = 'unknown'
+    }
+    // Daytime rest is a bug unless nothing truly fits: name every dropped step (rate-limited).
+    if (facts && facts.time === 'day' && Date.now() - (ctx.menuDropAt || 0) >= MENU_DROP_LOG_MS) {
+      ctx.menuDropAt = Date.now()
+      for (const n of STEP_ORDER) {
+        if (n === 'rest' || names.includes(n)) continue
+        let w = null
+        try { w = registered(n) ? stepWhy(n, facts, bot, ctx, text) : 'off' } catch (_) { w = null }
+        console.log(`menu drop step=${n} why=${String(w || 'not feasible').replace(/\s+/g, '_')}`)
+      }
+      console.log(`goal rest-day WARN menu=${names.join(',')} facts=${text}`)
     }
   } else if (choice.step !== prev) {
     ctx.restWhy = null
