@@ -54,15 +54,18 @@ const blockedCtx = (over = {}) => idleCtx({
   home: { parked: true },
   ...over,
 })
+// A park no longer vetoes craft: the blocked menus hold it on the text.
+const holdCraft = (f, c) => { c.stepFail = { ...(c.stepFail || {}), craft: { text: goal.goalText(f, c.home), status: 'failed:probe' } }; return c }
+const runnable = (f, b, c) => Object.keys(goal.MENU).filter((n) => {
+  try { return goal.MENU[n].feasible(f, b, c) && !goal.failHolds(c, n, goal.goalText(f, c.home), b) } catch (_) { return false }
+})
 
 describe('fun blocked-bypass (u02t)', () => {
   it('rest-only menu with owed beds/gear/table stays feasible', () => {
     const f = owedFacts()
-    const c = blockedCtx()
+    const c = holdCraft(f, blockedCtx())
     const b = botWith(kit)
-    const names = Object.keys(goal.MENU).filter((n) => {
-      try { return goal.MENU[n].feasible(f, b, c) } catch (_) { return false }
-    })
+    const names = runnable(f, b, c)
     assert.deepEqual(names.filter((n) => n !== 'fun'), ['rest'], `menu=${names.join(',')}`)
     assert.equal(fun.menuBlocked(f, b, c), true)
     assert.equal(goal.MENU.fun.feasible(f, b, c), true)
@@ -100,11 +103,9 @@ describe('fun blocked-bypass (u02t)', () => {
     // The bead's motivating case: the castle never completes (bookshelf
     // chain reads 'blocked'), every work step latched — the joke runs.
     const f = owedFacts({ castle: 'blocked' })
-    const c = blockedCtx()
+    const c = holdCraft(f, blockedCtx())
     const b = botWith(kit)
-    const names = Object.keys(goal.MENU).filter((n) => {
-      try { return goal.MENU[n].feasible(f, b, c) } catch (_) { return false }
-    })
+    const names = runnable(f, b, c)
     assert.deepEqual(names.filter((n) => n !== 'fun'), ['rest'], `menu=${names.join(',')}`)
     assert.equal(fun.menuBlocked(f, b, c), true)
     assert.equal(goal.MENU.fun.feasible(f, b, c), true)
@@ -117,7 +118,7 @@ describe('fun blocked-bypass (u02t)', () => {
     const c = blockedCtx()
     const b = botWith(kit)
     const text = goal.goalText(f, c && c.home)
-    c.stepFail = { castle: { text, status: 'failed:probe' }, castlefetch: { text, status: 'failed:probe' } }
+    c.stepFail = { castle: { text, status: 'failed:probe' }, castlefetch: { text, status: 'failed:probe' }, craft: { text, status: 'failed:probe' } }
     const names = Object.keys(goal.MENU).filter((n) => {
       try { return goal.MENU[n].feasible(f, b, c) && !goal.failHolds(c, n, text, b) } catch (_) { return false }
     })
