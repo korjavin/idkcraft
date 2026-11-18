@@ -759,6 +759,18 @@ describe('self acquire: deterministic before LLM (idkcraft-8hpy.1)', () => {
     assert.equal(r.ctx.llmOrder, null)
   })
 
+  it('chest first: bread in a known chest is withdrawn, no craft, 0 LLM calls', async () => {
+    const bot = mockBot({ playerPos: pos(0, 64, 0), items: [{ name: 'wheat', count: 9 }], chest: [{ name: 'bread', count: 5 }], cells: { '0,64,0': 'crafting_table', '5,64,1': 'chest' } })
+    const ticker = tickerFor(bot)
+    chestHome(bot._tickerCtx)
+    bot._tickerCtx.home.table = { x: 0, y: 64, z: 0 }
+    const r = await acquire(bot, ticker, 'bread', 3)
+    assert.equal(r.held, 3)
+    assert.equal(r.fetches, 0)
+    assert.equal(bot.calls.craft.length, 0, r.logs.join('\n'))
+    assert.ok(r.logs.some((l) => l.includes('llm order acquire bread resolver=chest')), r.logs.join('\n'))
+  })
+
   it('no recipe and no ladder: exactly one LLM replan', async () => {
     const bot = mockBot({ items: [] })
     const r = await acquire(bot, tickerFor(bot), 'nether_star', 1)
@@ -769,7 +781,7 @@ describe('self acquire: deterministic before LLM (idkcraft-8hpy.1)', () => {
   it('both resolvers are tried before the single LLM replan (review core-3)', async () => {
     const bot = mockBot({ items: [] })
     const r = await acquire(bot, tickerFor(bot), 'nether_star', 1)
-    const i = r.logs.findIndex((l) => l.includes('llm order acquire nether_star') && l.includes('tried=craft,ladder'))
+    const i = r.logs.findIndex((l) => l.includes('llm order acquire nether_star') && l.includes('tried=chest,craft,ladder'))
     assert.ok(i >= 0, r.logs.join('\n'))
     assert.equal(r.logs[i + 1], 'fetches=0', 'no LLM call before both resolvers ran')
     assert.equal(r.fetches, 1)
@@ -781,7 +793,7 @@ describe('self acquire: deterministic before LLM (idkcraft-8hpy.1)', () => {
     const calls = []
     const ticker = Object.create(real)
     ticker.setBring = (req) => {
-      calls.push(req.craftFirst ? 'craft' : 'ladder')
+      calls.push(req.chestFirst ? 'chest' : req.craftFirst ? 'craft' : 'ladder')
       if (!req.craftFirst) return real.setBring(req)
       const ctx = bot._tickerCtx // the craft rung ends done but crafts nothing
       ctx.bring = { kind: 'item', name: req.name, want: req.want, by: req.by, phase: 'craft' }
@@ -790,8 +802,8 @@ describe('self acquire: deterministic before LLM (idkcraft-8hpy.1)', () => {
     }
     tableHome(bot._tickerCtx, 0, 64, 0)
     const r = await acquire(bot, ticker, 'bread', 3)
-    assert.deepEqual(calls.slice(0, 2), ['craft', 'ladder'])
-    const i = r.logs.findIndex((l) => l.includes('resolver=ladder') && l.includes('tried=craft,ladder'))
+    assert.deepEqual(calls.slice(0, 3), ['chest', 'craft', 'ladder'])
+    const i = r.logs.findIndex((l) => l.includes('resolver=ladder') && l.includes('tried=chest,craft,ladder'))
     assert.ok(i >= 0, r.logs.join('\n'))
     assert.equal(r.logs[i + 1], 'fetches=0')
   })

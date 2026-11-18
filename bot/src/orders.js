@@ -322,7 +322,7 @@ function createOrders(box) {
       ctx.paused = false
       return null
     },
-    setBring: ({ name, want, by, craftFirst }) => {
+    setBring: ({ name, want, by, craftFirst, chestFirst }) => {
       clearPendingSearch(ctx)
       resetNightStep()
       ctx.gocastle = null
@@ -362,6 +362,23 @@ function createOrders(box) {
       const worldFallback = resolved ? bringMod.canBringName(bot, name) : false
       // 8hpy.1: a self acquire tries the craft rung first, for the whole want
       // (craftCount); no plan = refusal, the caller tries its next resolver.
+      // 8hpy.1: a self acquire tries the chests first (any chest, shared
+      // store): the chest rung runs when pickChest names one that may hold it.
+      if (chestFirst) {
+        const o0 = { names: resolved ? resolved.names : [], wants: (n) => !!resolved && resolved.names.includes(n), peerChests: true }
+        if (!resolved || !bringMod.pickChest(bot, ctx, o0)) return `no chest with ${name}`
+        if (ctx.lead) { ctx.lead = null; ctx.leadTargetGone = 0 }
+        ctx.unseenTicks = 0
+        ctx.resumeWork = false
+        clearStuck()
+        ctx.bring = {
+          kind: 'item', name: resolved.family, names: resolved.names, want: need, by,
+          items: [], drop: null, have: 0, packBase: bringMod.packCounts(bot),
+          phase: 'chestfetch', announced: true, wants: o0.wants, peerChests: true,
+        }
+        ctx.paused = false
+        return `checking chests for ${resolved.family}`
+      }
       if (craftFirst) {
         const cPlan = resolved ? craftanyMod.planCraft(bot, ctx, bringMod.orderCraftNames(resolved.names), need) : { ok: false }
         if (!cPlan.ok) return `can't craft ${name} now`

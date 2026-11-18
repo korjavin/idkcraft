@@ -999,7 +999,7 @@ function heldItem(bot, item) {
 
 // a5xy: a self need for food/meat or any edible is met by any edible held
 // (the food ladder hunts any animal, never smelts cooked_*).
-const ACQUIRE_RESOLVERS = ['craft', 'ladder']
+const ACQUIRE_RESOLVERS = ['chest', 'craft', 'ladder']
 function craftanyMod() { return require('./behaviours/craftany') }
 function isSelfFood(item) {
   const { isFoodRequest, FOOD_NAMES } = require('./behaviours/bringitem')
@@ -1062,7 +1062,8 @@ function startStep(bot, ctx, o, s, now) {
         // a5xy: a self food need (cooked_* included) runs the hunt ladder; heldFor counts any edible
         const foodNeed = o.bringGoal.self && isSelfFood(s.item)
         // 8hpy.1: deterministic resolvers first, each once per acquire step
-        // (craft when a recipe plan exists, then the gather/hunt/mine ladder);
+        // (any chest that may hold it, craft when a recipe plan exists, then the
+        // gather/hunt/mine ladder);
         // the LLM replan runs only after all of them failed.
         const tried = s.tried || (s.tried = [])
         let reply = null
@@ -1071,7 +1072,7 @@ function startStep(bot, ctx, o, s, now) {
           tried.push(r)
           const short = Math.max(1, s.count - heldFor(bot, s.item, o.bringGoal.self)) // craft only the missing part
           if (r === 'craft' && !craftanyMod().planCraft(bot, ctx, [s.item], short).ok) continue
-          reply = o.ticker && o.ticker.setBring(r === 'craft' ? { name: s.item, want: short, by: o.by, craftFirst: true } : { name: foodNeed ? 'food' : s.item, want: s.count, by: o.by })
+          reply = o.ticker && o.ticker.setBring(r === 'ladder' ? { name: foodNeed ? 'food' : s.item, want: s.count, by: o.by } : { name: s.item, want: r === 'craft' ? short : s.count, by: o.by, craftFirst: r === 'craft', chestFirst: r === 'chest' })
           if ((ctx.bring && ctx.bring !== before.bring) || (ctx.pendingSearch && ctx.pendingSearch !== before.ps)) break
         }
         if (o.ticker) console.log(`llm order acquire ${s.item} resolver=${tried[tried.length - 1]} tried=${tried.join(',')}`)
