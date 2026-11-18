@@ -42,6 +42,7 @@ const taskMod = require('./task')
 const recover = require('./behaviours/recover')
 const unstick = require('./behaviours/unstick')
 const enclosed = require('./enclosed')
+const { noteNoPath } = require('./nopath-log')
 const loot = require('./loot')
 // The table lives in behaviours/index.js (oqul.3); same object re-exported.
 const { BEHAVIOURS } = require('./behaviours/index')
@@ -1316,7 +1317,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
 
   return {
     tick,
-    setPathStatus: (status) => { ctx.lastPathStatus = status || 'none' },
+    setPathStatus: (status) => { ctx.lastPathStatus = status || 'none'; if (status === 'noPath') noteNoPath(bot, ctx) },
     // Head of the latest plan (b50): the executor works this list from
     // [0] down, so the wedge line can name the terrain it faces.
     setPathNext: (n) => { ctx.lastPathNext = n && typeof n.clone === 'function' ? n.clone() : (n && typeof n.x === 'number' ? { x: n.x, y: n.y, z: n.z } : null) },
