@@ -150,7 +150,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // Suffix for every decision line. Existing fields and order are untouched
   // (prod greps 'decision source='). reset= clears after one log so a stale
   // reason does not repeat; path= persists until the next path_update.
-  function pathSuffix() {
+  function pathSuffix(action) {
     let moving = false
     try {
       if (bot.pathfinder && typeof bot.pathfinder.isMoving === 'function') moving = !!bot.pathfinder.isMoving()
@@ -162,11 +162,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     const path = goalless ? 'none' : (ctx.lastPathStatus || 'none')
     const reset = ctx.lastPathReset || 'none'
     ctx.lastPathReset = null
-    return `moving=${moving} path=${path} reset=${reset}${moving ? '' : ` why=${idleWhy(goalless)}`}`
+    return `moving=${moving} path=${path} reset=${reset}${moving ? '' : ` why=${idleWhy(goalless, action)}`}`
   }
   // What a standing tick waits on (owner 2026-11-18: ~900/1500 ticks moving=false, no reason).
   // Behaviours may set ctx.idleWhy for their own timers; it is read once.
-  function idleWhy(goalless) {
+  function idleWhy(goalless, action) {
     const own = ctx.idleWhy
     ctx.idleWhy = null
     if (own) return own
@@ -174,8 +174,39 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     if (bot.currentWindow) return 'window'
     if (ctx.recovery && ctx.recovery.action) return `recover:${ctx.recovery.action}`
     if (ctx.lastPathStatus === 'noPath' && !goalless) return 'nopath'
-    if (goalless) return `nogoal:${ctx.step || 'none'}:${ctx.stepStatus || 'none'}`
-    return 'goal-idle'
+    // Baritone builder/mine batches walk outside the path latch (isMoving false).
+    if (bot._build) return 'builder'
+    if (bot._mine) return 'mine'
+    if (goalless) {
+      const step = ctx.step || action || 'none'
+      const ph = ctx[step] && typeof ctx[step].phase === 'string' ? `:${ctx[step].phase}` : ''
+      return `nogoal:${step}:${ctx.stepStatus || 'none'}${ph}`
+    }
+    return goalIdle()
+  }
+  // goal-idle sub-reason: reached (standing in the goal, the behaviour owns
+  // the next move), short (a success verdict left the goal unmet) or pending
+  // (no verdict). An unmet goal held GOAL_KICK_MS with no motion is re-issued
+  // once per window: a lost/hung bridge goto otherwise stands until the step times out.
+  const GOAL_KICK_MS = 8000
+  function goalIdle() {
+    const g = bot.pathfinder.goal
+    if (ctx.idleGoal !== g) { ctx.idleGoal = g; ctx.idleGoalAt = Date.now() }
+    let reached = false
+    try {
+      const p = bot.entity.position
+      reached = typeof g.isEnd === 'function' && g.isEnd({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) })
+    } catch (_) { reached = false }
+    if (reached) return 'goal-idle:reached'
+    const age = Date.now() - ctx.idleGoalAt
+    const kind = ctx.lastPathStatus === 'success' ? 'short' : 'pending'
+    if (age >= GOAL_KICK_MS && !g.entity) {
+      ctx.idleGoalAt = Date.now()
+      try { bot.pathfinder.setGoal(g, false) } catch (_) { /* next window retries */ }
+      ctx.idleGoal = bot.pathfinder.goal
+      return `goal-idle:${kind}:${Math.round(age / 1000)}s:reissued`
+    }
+    return `goal-idle:${kind}:${Math.round(age / 1000)}s`
   }
 
   // Nobody-online streak: wall time since the first consecutive no-target
@@ -416,7 +447,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // sprint stays on the decision line as the brain's opinion; the body
     // sprints only on flat follow pursuit (see body.js).
     const dist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
-    console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist} ${pathSuffix()}`)
+    console.log(`decision source=${decision.source} action=${decision.action} sprint=${decision.sprint} dist=${dist} ${pathSuffix(decision.action)}`)
   }
 
   let timer = null

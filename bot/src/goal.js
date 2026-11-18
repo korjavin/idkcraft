@@ -3171,6 +3171,7 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
     ctx.gohome = null
   }
   ctx.stepStatus = 'running'
+  ctx.stepDecides = 0
   // gwvg: status() reads who picked this step and why from the stamp.
   // The step rides along (01 core-2): orders and retreat move ctx.step
   // without re-stamping, and must not inherit the age/source.
@@ -3228,6 +3229,25 @@ function activityChat(bot, ctx, verb, now = Date.now()) {
   return true
 }
 
+// Empty runs (owner 2026-11-18: bot3 castlefetch picked and done on its
+// first tick, 167 standing ticks/h): a step that ends done on the tick it
+// was dispatched did no work. Twice in a row reads failed:idle, so the
+// IDLE_RETRY_MS hold (failHolds) lets the menu pick real work instead.
+// ctx.stepDecides counts decide calls since the last pick (applyChoice zeroes it).
+function emptyRun(ctx, prev, status, finished) {
+  if (!ctx) return status
+  const first = (ctx.stepDecides = (ctx.stepDecides || 0) + 1) === 1
+  if (!finished) return status
+  if (status !== 'done' || !first || !prev || SELF_ADVANCING[prev]) { ctx.emptyDone = null; return status }
+  const n = ctx.emptyDone && ctx.emptyDone.step === prev ? ctx.emptyDone.n + 1 : 1
+  ctx.emptyDone = { step: prev, n }
+  if (n < 2) return status
+  ctx.emptyDone = null
+  ctx.stepStatus = 'failed:idle'
+  console.log(`empty-run step=${prev} n=${n}: done on its first tick twice, holding it`)
+  return 'failed:idle'
+}
+
 // Decision point: re-decide when there is no step, the step finished
 // (done/failed:*), or a force fires (FORCES, textForce). The model picks through chooseStep
 // at those points only (same dedup as lastStateKey); the return shape stays
@@ -3251,6 +3271,7 @@ async function decide(bot, ctx) {
     if (g && typeof g === 'object') return g
     if (g) status = g
   }
+  status = emptyRun(ctx, prev, status, finished)
   recordOutcome(bot, ctx, facts, prev, status, finished, text)
   // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
   // (walk->open->enter->close). A facts-changed re-decision must not preempt
@@ -3346,4 +3367,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome, noteLoop, loopBlocked, castleGo, castleFetchWhy, acquireWhy }
+module.exports = { emptyRun, activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome, noteLoop, loopBlocked, castleGo, castleFetchWhy, acquireWhy }
