@@ -852,6 +852,8 @@ function layNightBed(bot, ctx, home, a, st, item, claimA) {
       // inside spot sleeps without touching the claims.
       if (claimA !== false) {
         try { home.bedA = new Vec3(a.foot.x, a.foot.y, a.foot.z); delete home.sleptA } catch (_) { /* claim best-effort */ }
+      } else if (home) {
+        try { home.bedPlaced = new Vec3(a.foot.x, a.foot.y, a.foot.z) } catch (_) { /* remember best-effort */ } // knownBed reuses it
       }
       try { bot.chat('my bed is in') } catch (_) { /* chat best-effort */ }
     } catch (err) {
@@ -1277,8 +1279,8 @@ function freeBedSpot(bot, home) {
 }
 
 // A bed craftable from the pack right now: 3 wool of one colour + 3 planks
-// (the beds.js recipe). The table must already stand usable in reach —
-// the craft never walks out the shut door at night.
+// (the beds.js recipe). No table needed up front: craftany finds or places
+// one (owner 2026-11-18: any bed anywhere beats a sleepless night).
 function craftableBed(bot, home) {
   try {
     const bedMod = require('./bed') // deferred, as cellsOf above
@@ -1287,7 +1289,6 @@ function craftableBed(bot, home) {
     if (!color) return null
     const short = bedMod.bedShortfall(pack, color, 1)
     if (short.wool > 0 || short.planks > 0) return null
-    if (!tableInReach(bot, home)) return null
     return bedMod.bedTarget(color)
   } catch (_) {
     return null
@@ -1552,7 +1553,7 @@ function sleepTick(bot, ctx, home, st) {
       try { bed = require('./beds').bedroomBed(bot, home, 'a') } catch (_) { bed = null }
       if (bed) {
         try { home.bedA = new Vec3(cells.a.foot.x, cells.a.foot.y, cells.a.foot.z) } catch (_) { /* claim best-effort */ }
-        return sleepInBed(bot, ctx, home, st, bed, cells.a.head, cells.a.sleep, 'sleeping in my bed')
+        return unblockBed(bot, ctx, home, cells.a.foot, cells.a.head) || sleepInBed(bot, ctx, home, st, bed, cells.a.head, cells.a.sleep, 'sleeping in my bed')
       }
       try { if (home.bedA) { delete home.bedA; delete home.sleptA } } catch (_) { /* retract best-effort */ }
       // A carried bed still lands in A first (rw4.20): the claim keeps the
@@ -1562,13 +1563,20 @@ function sleepTick(bot, ctx, home, st) {
     }
     // A placed bed nearby (not the owner's B): walk over and use it.
     const near = nearbyBed(bot, home, cells)
-    if (near) return sleepInBed(bot, ctx, home, st, near.bed, near.head, near.head, 'sleeping in a nearby bed')
+    if (near) return unblockBed(bot, ctx, home, near.foot, near.head) || sleepInBed(bot, ctx, home, st, near.bed, near.head, near.head, 'sleeping in a nearby bed')
+    // Any other placed bed in reach (a remembered lay, a spawn bed outside).
+    const kb = knownBed(bot, ctx)
+    if (kb) {
+      const head = new Vec3(kb.foot.x + BED_DIRS[kb.facing][0], kb.foot.y, kb.foot.z + BED_DIRS[kb.facing][1])
+      const bed = require('./beds').bedAt(bot, kb.foot, kb.facing)
+      if (bed) return unblockBed(bot, ctx, home, kb.foot, head) || sleepInBed(bot, ctx, home, st, bed, head, head, 'sleeping in my bed')
+    }
     // A carried bed laid in a free inside spot.
     if ((st.bedLayFails || 0) < NIGHT_BED_FAILS) {
       let item = null
       try { item = require('./beds').findBedItem(bot, null) } catch (_) { item = null }
       if (item) {
-        const spot = freeBedSpot(bot, home)
+        const spot = freeBedSpot(bot, home) || fieldBedSpot(bot, ctx) // inside first, else beside the body
         if (spot) { layNightBed(bot, ctx, home, spot, st, item, false); return true }
       }
       // Craftable from the pack (planks + wool on hand, table in reach):
@@ -1592,6 +1600,15 @@ function sleepTick(bot, ctx, home, st) {
   } catch (_) {
     return false
   }
+}
+
+// A table/furnace hemming the bed or the door in (prod: a house table
+// walled the bed off) is broken first; the pack copy re-places through
+// the placesafe-checked spot scans. True while the dig owns the tick.
+function unblockBed(bot, ctx, home, foot, head) {
+  let door = null
+  try { door = doorPos(home) } catch (_) { door = null }
+  return require('./placesafe').clearBlockers(bot, ctx, [foot, head, door])
 }
 
 // Off the inside stance's storey or 4+ away (a castle bedroom/kitchen; the
@@ -1957,7 +1974,7 @@ function knownBed(bot, ctx) {
   const near = (p) => Math.hypot(bp.x - p.x, bp.z - p.z) <= KNOWN_BED_R ||
     (!!site && typeof site.x === 'number' && Math.hypot(site.x - p.x, site.z - p.z) <= KNOWN_BED_R)
   const bedsMod = require('./beds')
-  for (const c of [ctx.castle && ctx.castle.siteBed, ctx.home && ctx.home.bedA, ctx.nightCastle && ctx.nightCastle.bedA]) {
+  for (const c of [ctx.castle && ctx.castle.siteBed, ctx.home && ctx.home.bedA, ctx.home && ctx.home.bedPlaced, ctx.nightCastle && ctx.nightCastle.bedA]) {
     if (!c || typeof c.x !== 'number' || !near(c)) continue
     const foot = new Vec3(c.x, c.y, c.z)
     for (let f = 0; f < 4; f++) if (bedsMod.bedAt(bot, foot, f)) return { foot, facing: f }

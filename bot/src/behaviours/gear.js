@@ -224,12 +224,12 @@ function stockTrusted(ctx) {
     return at >= 0 && at !== seen
   } catch (_) { return false }
 }
-// Any own chest whose read covers the rung, not only the home chest (prod
+// Any known chest (own or a peer's) whose read covers the rung, not only the home chest (prod
 // bot3: castle chests). Picked as the withdraw target; a draw that proves
 // its read wrong distrusts that read (g.chestDistrust).
 function otherChest(ctx, names, short) {
   const g = gearCtx(ctx)
-  const c = chestStock.ownChestWith(ctx, names, short, g.chestDistrust || {})
+  const c = chestStock.anyChestWith(ctx, names, short, g.chestDistrust || {})
   g.withdrawAt = c ? { x: c.x, y: c.y, z: c.z, at: c.at } : null
   return !!c
 }

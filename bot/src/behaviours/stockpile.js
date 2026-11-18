@@ -1095,9 +1095,9 @@ function rememberChests(ctx, positions) {
 // Remembered sightings near the bot, nearest first, within radius. The
 // adopted home chest is excluded (the fetch checks it first); tried keys
 // (the order's chestSeen) stay skipped so a leg never re-opens a chest.
+// Every chest is shared (owner 2026-11-18): peer bots' sightings count too.
 function nearbyChests(bot, ctx, seen, radius) {
-  const list = ctx && Array.isArray(ctx.chests) ? ctx.chests : []
-  return filterChests(bot, list, ctx && ctx.home && ctx.home.chest, seen, radius)
+  return nearbyChestsAll(bot, ctx, seen, radius)
 }
 
 // Shared near-first filter over an explicit sighting list (qwyl): the home
@@ -1180,8 +1180,7 @@ function refreshPeerChests(bot, ctx, now) {
 }
 
 // Own sightings plus peer sightings (qwyl), deduped, same near-first
-// filter. bring.js keeps nearbyChests (own only); castlefetch's pickChest
-// takes this one, so a stocked peer chest spares the gather/craft legs.
+// filter; nearbyChests is this one too (all chests are shared).
 function nearbyChestsAll(bot, ctx, seen, radius) {
   try { refreshPeerChests(bot, ctx) } catch (_) { /* peers best-effort */ }
   try {
@@ -1540,6 +1539,7 @@ function doubleSpot(bot, ctx, chestPos) {
       }
       const above = blockNameAt(bot, x, y + 1, z)
       if (above !== 'air' && above !== 'cave_air') continue
+      if (require('./placesafe').blocksAccess(bot, x, y, z)) continue
       let below = null
       try { below = bot.blockAt(new Vec3(x, y - 1, z)) } catch (_) { below = null }
       if (!below || below.boundingBox !== 'block') continue

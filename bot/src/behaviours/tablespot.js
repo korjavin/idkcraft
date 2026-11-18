@@ -240,7 +240,7 @@ function tableFor(bot, ctx) {
     // The feet-level cell above it stays open: the table's top is in sight.
     if (!ledge && below && below.position && AIRISH.has(below.name) &&
         (!cell || AIRISH.has(cell.name) || PLACE_OVER.has(cell.name)) && underSolid() &&
-        !skip.has(`${bx + dx},${by - 1},${bz + dz}`) && !spotBlocked(ctx, bx + dx, by - 1, bz + dz)) {
+        !skip.has(`${bx + dx},${by - 1},${bz + dz}`) && !spotBlocked(bot, ctx, bx + dx, by - 1, bz + dz)) {
       ledge = { at: new Vec3(bx + dx, by - 1, bz + dz), face: new Vec3(dx, 0, dz) }
     }
     // Canopy stance (gfgx, 90-min castle rig, master and branch): the first
@@ -248,7 +248,7 @@ function tableFor(bot, ctx) {
     // and failed no-table-ref. Then the table sits on top of that block, in
     // the open head-level cell (eye-level, in sight).
     if (!head && cell && cell.position && cell.name && !AIRISH.has(cell.name) && cell.boundingBox === 'block' &&
-        !skip.has(`${bx + dx},${by + 1},${bz + dz}`) && !spotBlocked(ctx, bx + dx, by + 1, bz + dz)) {
+        !skip.has(`${bx + dx},${by + 1},${bz + dz}`) && !spotBlocked(bot, ctx, bx + dx, by + 1, bz + dz)) {
       let up = null
       try { up = bot.blockAt(new Vec3(bx + dx, by + 1, bz + dz)) } catch (_) { up = null }
       if (up && up.name && (AIRISH.has(up.name) || PLACE_OVER.has(up.name))) {
@@ -270,7 +270,7 @@ function tableFor(bot, ctx) {
     // Bedroom cells are never table spots (idkcraft-4nx: a roadside table on
     // B-foot blocked the bed, which fails loud by design). Reads the
     // bedfacts leaf (oqul.13); unreadable reads as placeable.
-    if (spotBlocked(ctx, bx + dx, by, bz + dz)) continue
+    if (spotBlocked(bot, ctx, bx + dx, by, bz + dz)) continue
     if (tried) {
       if (!fallback) fallback = below
       continue
@@ -356,8 +356,9 @@ const AIRISH = new Set(['air', 'cave_air', 'void_air'])
 // any castle plan cell of ctx.castle (gfgx: the castle builder runs with
 // home=none, so the home check alone let a table land in an unlaid wall
 // cell). Unreadable reads as placeable.
-function spotBlocked(ctx, x, y, z) {
+function spotBlocked(bot, ctx, x, y, z) {
   try {
+    if (require('./placesafe').blocksAccess(bot, x, y, z)) return true // never hem a bed/door/chest in
     if (require('./bedfacts').isBedroomCell(ctx && ctx.home, x, y, z)) return true
     if (require('./build').isPlanCell(ctx && ctx.home, x, y, z)) return true
     const c = ctx && ctx.castle
