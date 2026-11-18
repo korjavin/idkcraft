@@ -264,6 +264,6 @@ describe('qwyl chest-first: remembered chests spare the gather/craft legs', () =
     const all = stockpile.nearbyChestsAll(bot, ctx, [])
     assert.deepEqual(all.map((c) => c.x), [SITE.x - 6, SITE.x - 20], 'peer-first by distance, home excluded')
     const own = stockpile.nearbyChests(bot, ctx, [])
-    assert.deepEqual(own.map((c) => c.x), [SITE.x - 20], 'bring path (own only) unchanged')
+    assert.deepEqual(own.map((c) => c.x), [SITE.x - 6, SITE.x - 20], 'all chests are shared: bring sees peer chests too')
   })
 })

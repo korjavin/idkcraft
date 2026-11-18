@@ -256,6 +256,8 @@ function homeOf(h) {
     if (bedA) out.bedA = bedA
     const bedB = v3(h.bedB)
     if (bedB) out.bedB = bedB
+    const bedPlaced = v3(h.bedPlaced) // a night lay outside the bedrooms, reused (knownBed)
+    if (bedPlaced) out.bedPlaced = bedPlaced
     if (h.sleptA === true) out.sleptA = true
   } catch (_) { /* claims best-effort */ }
   try {

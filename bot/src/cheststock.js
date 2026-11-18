@@ -97,8 +97,9 @@ function rememberedStockOf(ctx, names, bot, kind) {
     const key = (c) => c ? `${c.x},${c.y},${c.z}` : null
     const skip = new Set([key(ctx.home && ctx.home.chest), key(ctx.castle && ctx.castle.siteChest)])
     let n = 0
-    for (const c of Array.isArray(ctx.chests) ? ctx.chests : []) {
+    for (const c of [ctx.chests, ctx.peerChests].flatMap((l) => Array.isArray(l) ? l : [])) {
       if (!c || !c.contents || skip.has(key(c))) continue
+      skip.add(key(c)) // own read shadows a peer's snapshot of the same chest
       if (!Number.isFinite(c.at) || Date.now() - c.at >= REMEMBERED_DRY_MS) continue // stale snapshot: no claim
       if (Math.hypot(bp.x - c.x, bp.y - c.y, bp.z - c.z) > REMEMBERED_RADIUS) continue
       if (Date.now() - (dry[`${kind}@${key(c)}`] ?? -Infinity) < REMEMBERED_DRY_MS) continue
@@ -133,16 +134,17 @@ function homeChestWood(ctx, ms = 30 * 60 * 1000) {
   return n
 }
 
-// Any own remembered chest (not the home chest, which homeStockOf reads)
+// Any remembered chest, own or a peer bot's (all chests are shared, owner
+// 2026-11-18; not the home chest, which homeStockOf reads)
 // whose last read holds >= min of names, most stocked first. distrust maps
 // 'x,y,z' -> the snapshot time a draw proved wrong: that read is skipped
 // until a newer one lands. Null when none.
-function ownChestWith(ctx, names, min, distrust = {}) {
+function anyChestWith(ctx, names, min, distrust = {}) {
   try {
     const want = new Set(typeof names === 'string' ? [names] : names)
     const h = ctx.home && ctx.home.chest
     let best = null
-    for (const c of Array.isArray(ctx.chests) ? ctx.chests : []) {
+    for (const c of [ctx.chests, ctx.peerChests].flatMap((l) => Array.isArray(l) ? l : [])) {
       if (!c || !c.contents || !Number.isFinite(c.at)) continue
       const k = `${c.x},${c.y},${c.z}`
       if (h && k === `${h.x},${h.y},${h.z}`) continue
@@ -203,4 +205,4 @@ function needOf(bot, ctx, item) {
 }
 const needMet = (bot, ctx, item) => { const r = needOf(bot, ctx, item); return !!(r && r.met) }
 
-module.exports = { NEED, needOf, needMet, ownChestWith, REMEMBERED_RADIUS, REMEMBERED_DRY_MS, homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }
+module.exports = { NEED, needOf, needMet, anyChestWith, REMEMBERED_RADIUS, REMEMBERED_DRY_MS, homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }

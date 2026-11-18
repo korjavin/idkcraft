@@ -159,6 +159,22 @@ describe('a8rb: night stay sleeps in a bed when inside', () => {
     assert.equal(bot.calls.places, 0)
   })
 
+  it('no bed reachable and no table: crafts a bed, places it, sleeps in it (owner 2026-11-18)', async () => {
+    const pack = ['white_wool', 'white_wool', 'white_wool', 'oak_planks', 'oak_planks', 'oak_planks']
+    stubCraftany((b, c, name) => { pack.splice(0, pack.length, name.replace('white', 'red')); return { done: true } })
+    const bot = mockBot({ at: { x: 11.5, y: 64, z: 21.5 }, pack }) // no table anywhere
+    const ctx = hutCtx()
+    home.stay(bot, ctx) // craft
+    assert.deepEqual(pack, ['red_bed'])
+    home.stay(bot, ctx) // lay
+    await sleep(700)
+    assert.equal(bot.calls.places, 1)
+    assert.ok(ctx.home.bedPlaced, 'the laid bed is remembered for reuse')
+    home.stay(bot, ctx) // sleep
+    await settle()
+    assert.equal(bot.calls.sleeps, 1)
+  })
+
   it('honest skip with no bed and no mats, once a night', () => {
     const bot = mockBot({ at: { x: 11.5, y: 64, z: 21.5 } })
     const ctx = hutCtx()
@@ -221,10 +237,10 @@ describe('a8rb: night stay sleeps in a bed when inside', () => {
     assert.equal(home.nearbyBed(bot, ctx.home, cells), null)
   })
 
-  it('craftableBed gates on mats and a table in reach', () => {
+  it('craftableBed gates on mats only (craftany finds or places the table)', () => {
     const mats = ['white_wool', 'white_wool', 'white_wool', 'oak_planks', 'oak_planks', 'oak_planks']
     assert.equal(home.craftableBed(mockBot({ at: { x: 11.5, y: 64, z: 21.5 }, pack: mats, table: true }), hutCtx().home), 'white_bed')
-    assert.equal(home.craftableBed(mockBot({ at: { x: 11.5, y: 64, z: 21.5 }, pack: mats }), hutCtx().home), null) // hut table stands outside
+    assert.equal(home.craftableBed(mockBot({ at: { x: 11.5, y: 64, z: 21.5 }, pack: mats }), hutCtx().home), 'white_bed') // no table in reach: craftany places one
     assert.equal(home.craftableBed(mockBot({ at: { x: 11.5, y: 64, z: 21.5 }, table: true }), hutCtx().home), null) // no mats
   })
 })

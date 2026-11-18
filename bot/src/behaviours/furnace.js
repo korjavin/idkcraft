@@ -329,6 +329,7 @@ function doPlaceRoadside(bot, ctx, f, item) {
     } catch (_) { below = null; cell = null }
     if (!below || !below.position || !below.name || below.name === 'air') continue
     if (cell && cell.name && cell.name !== 'air') continue
+    if (require('./placesafe').blocksAccess(bot, bx + dx, by, bz + dz)) continue
     ref = below
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)
     break
