@@ -360,6 +360,28 @@ function blockCell(ctx, st, c, why, now) {
   console.log(`castle blocked ${c.x} ${c.y} ${c.z} ${c.kind} (${why}) try ${e.tries}${e.retired ? ', retired' : `, retry in ${Math.round(backoffMs(e.tries) / 1000)}s`}`)
 }
 
+// Another player (never the bot itself: bot.players lists it, prod bot3
+// litter fail:occupied riding its own scaffold down) in the cell.
+function othersOnly(bot) {
+  const out = {}
+  for (const [k, p] of Object.entries((bot && bot.players) || {})) if (!(p && bot.entity && p.entity === bot.entity)) out[k] = p
+  return { players: out }
+}
+// Someone stands in the cell: plan cells keep the strike ladder; an upkeep
+// cell is best-effort, so it waits OCC_WAIT_MS without spending a try and
+// the picker moves on to the next cell meanwhile.
+const OCC_WAIT_MS = 15000
+function occupied(ctx, st, c, now) {
+  if (!upkeepKind(st, c)) { strike(ctx, st, c, 'occupied', now); return }
+  const k = bkey(st, c.idx)
+  const e = st.blocked[k] || (st.blocked[k] = { tries: 0, until: 0 })
+  e.until = now + OCC_WAIT_MS
+  e.why = 'occupied'
+  ctx.castleUpkeep = null
+  ctx.castleGoalIdx = -1
+  ctx.castleFails = null
+}
+
 function strike(ctx, st, c, why, now) {
   const f = ctx.castleFails && ctx.castleFails.idx === c.idx ? ctx.castleFails : { idx: c.idx, n: 0 }
   f.n++
@@ -2401,8 +2423,9 @@ function far(bot, ctx, st, c, reach, now) {
     // Upkeep cells above the body take the ladder too (owner 2026-11-17: high
     // scaffold on a tall castle): the window lets A* scaffold inside the band
     // and climb the plan, stepMove pillars; litter retires after LITTER_MAX_TRIES.
-    const sweep = c.idx >= LITTER_BOX_BASE && c.idx < blueprint.DECOR_BASE && c.y <= bp.y + 1
-    if (!f.dig && !sweep) {
+    // Every cell takes it, upkeep at/below the feet too (prod bot4 after #908:
+    // fill fail:unreachable 70x vs 16 ok struck with no dig-through try).
+    if (!f.dig) {
       f.dig = true
       f.n = 0
       f.minDist = Infinity
@@ -2411,7 +2434,7 @@ function far(bot, ctx, st, c, reach, now) {
       return true
     }
     // A* still found nothing: walk the line ourselves (stepMove).
-    if (!f.step && !sweep) {
+    if (!f.step) {
       f.step = { legs: 0, wait: 0, w: null, digging: false, err: false }
       ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
       try { console.log(`castle step-approach ${c.x} ${c.y} ${c.z} ${c.kind}: stepping`) } catch (_) { /* log best-effort */ }
@@ -2739,8 +2762,12 @@ function placeCell(bot, ctx, st, c, item, now) {
       return
     }
   }
-  if (flat.cellOccupiedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
-  if (flat.cellOccupiedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
+  if (flat.cellOccupiedSelf(bot, c.x, c.y, c.z)) {
+    if (c.prep === 'fill' && jumpFill(bot, ctx, st, c, item)) return
+    sidestep(bot, ctx, st, c, now)
+    return
+  }
+  if (flat.cellOccupiedByPlayer(othersOnly(bot), c.x, c.y, c.z)) { occupied(ctx, st, c, now); return }
   if (far(bot, ctx, st, c, build.PLACE_REACH, now)) return
   if (deferTrap(bot, ctx, c)) return // goal idx kept: no re-approach back into the pocket
   let ref = null
@@ -2801,6 +2828,32 @@ function placeCell(bot, ctx, st, c, item, now) {
       strike(ctx, st, c, occ || 'refused', Date.now()) // an occupant clears via digCell next tick
     }
   })
+}
+
+// Standing in a fill hole (a pit has no stance to step aside to): jump and
+// place the filler under the feet, like a player pillaring out; bottom-up
+// fill then climbs the column one cell per jump.
+const JUMP_TICKS = 10
+function jumpFill(bot, ctx, st, c, item) {
+  const bp = bodyPos(bot)
+  if (!bp || Math.floor(bp.x) !== c.x || Math.floor(bp.z) !== c.z || Math.floor(bp.y) !== c.y) return false
+  const below = blockAtXYZ(bot, c.x, c.y - 1, c.z)
+  if (!below || below.boundingBox !== 'block' || flat.isLiquidName(below.name) || typeof bot.placeBlock !== 'function') return false
+  try { bot.pathfinder.setGoal(null) } catch (_) { /* place anyway */ }
+  flight(ctx, 'placeInFlight', c, async (token) => {
+    try {
+      await bot.equip(item, 'hand')
+      bot.setControlState('jump', true)
+      for (let i = 0; i < JUMP_TICKS && bodyPos(bot) && bodyPos(bot).y < c.y + 1; i++) await new Promise((res) => setTimeout(res, 50))
+      await bot.placeBlock(below, new Vec3(0, 1, 0))
+      if (live(ctx, token)) ctx.castleFails = null
+    } catch (_) {
+      if (live(ctx, token) && !done(bot, c)) strike(ctx, st, c, 'refused', Date.now())
+    } finally {
+      try { bot.setControlState('jump', false) } catch (_) { /* best-effort */ }
+    }
+  })
+  return true
 }
 
 // Air/dig cell holding something, or a place cell holding a wrong
@@ -2874,7 +2927,7 @@ function digCell(bot, ctx, st, c, now) {
   // would strike our own stance on the cell (rig: standing on own scaffold).
   const ride = rideDown(bot, st, c)
   if (!ride && flat.threatenedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
-  if (flat.threatenedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
+  if (flat.threatenedByPlayer(othersOnly(bot), c.x, c.y, c.z)) { occupied(ctx, st, c, now); return }
   if (far(bot, ctx, st, c, flat.REACH_DIG, now)) return
   let b = null
   try { b = bot.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
@@ -2949,7 +3002,7 @@ function relocate(bot, ctx, st, c, name, now) {
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
   if (moving) return
   if (flat.threatenedSelf(bot, c.x, c.y, c.z)) { sidestep(bot, ctx, st, c, now); return }
-  if (flat.threatenedByPlayer(bot, c.x, c.y, c.z)) { strike(ctx, st, c, 'occupied', now); return }
+  if (flat.threatenedByPlayer(othersOnly(bot), c.x, c.y, c.z)) { occupied(ctx, st, c, now); return }
   if (far(bot, ctx, st, c, flat.REACH_DIG, now)) return
   let b = null
   try { b = bot.blockAt(new Vec3(c.x, c.y, c.z)) } catch (_) { b = null }
@@ -3628,7 +3681,9 @@ function upkeepDone(bot, ctx, st, now = Date.now(), c = null) {
   const d = Math.hypot(bp.x - (u.x + 0.5), bp.y + 1.6 - (u.y + 0.5), bp.z - (u.z + 0.5))
   const w = ctx.castleUpkeepWatch
   if (!w || w.idx !== u.idx || d < w.best - 1 || ctx.castleFlight) { ctx.castleUpkeepWatch = { idx: u.idx, best: Math.min(d, w && w.idx === u.idx ? w.best : Infinity), since: now }; return false }
-  if (now - w.since < UPKEEP_STALL_MS) return false
+  // The far() dig/step ladder is slow on purpose: give it room before the stall strike.
+  const ladder = ctx.castleFar && ctx.castleFar.idx === u.idx && (ctx.castleFar.dig || ctx.castleFar.step)
+  if (now - w.since < (ladder ? 3 : 1) * UPKEEP_STALL_MS) return false
   ctx.castleUpkeepWatch = null
   try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
   blockCell(ctx, st, u, 'unreachable', now)
@@ -3961,6 +4016,7 @@ module.exports.peek = peek // test seam: the arbiter's next cell (castle-scale r
 module.exports.castleBuilderBatch = castleBuilderBatch
 module.exports.pick = pick
 module.exports.placeCell = placeCell
+module.exports.digCell = digCell
 module.exports.upkeepDone = upkeepDone
 module.exports.isLitter = isLitter
 module.exports.upkeepLog = upkeepLog
