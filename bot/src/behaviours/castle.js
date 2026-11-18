@@ -28,6 +28,7 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const blueprint = require('../castle')
+const access = require('../reach')
 const park = require('../castle-park') // dlpo: same-day park state (a leaf — no cycle)
 const { SCAFFOLD_LOW, CASTLEFETCH_RETRY_MS } = require('../budget') // oqul.11: was a deferred equip.js read
 const build = require('./build')
@@ -2524,6 +2525,17 @@ function far(bot, ctx, st, c, reach, now) {
     // the next one is picked; the slow ladder is for the last cell only.
     // ...but the cell's last try always takes the ladder (prod bot3: 1020 litter,
     // high scaffold retired on three fast strikes, no ladder ever ran).
+    // Access build (reach.js): a block to break with no stand spot in reach
+    // gets the body's own pillar/bridge before any strike.
+    if (!f.build && (clearing(c) || upkeepKind(st, c) === 'litter')) {
+      f.build = true
+      f.n = 0
+      f.minDist = Infinity
+      access.arm(ctx, c, now)
+      ctx.lastPathStatus = null // the old no-place verdict is stale: the next goal plans with placing on
+      ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+      return true
+    }
     if (!f.dig && upkeepKind(st, c) && otherUpkeepOpen(ctx, st, c, now) && !lastTry(st, c)) { strikeNote(c, 'fast', dist); blockCell(ctx, st, c, 'unreachable', now); return true }
     if (!f.dig) {
       f.dig = true
@@ -3432,6 +3444,7 @@ function guardCastle(bot, ctx) {
         const st = ctx.castle
         const q = block && block.position
         if (!q) return 0
+        if (access.nearTarget(ctx, q)) return 0 // access build (reach.js)
         if (blueprint.inCastleApron(ctx, q)) return 100 // g0z.63: any known castle's apron
         if (!st || !st.site) return 0
         const { w, d } = blueprint.siteDimensions(st.rot | 0, st.blueprintVersion)
@@ -3807,6 +3820,7 @@ function upkeepLog(ctx, st, c, result) {
   const kind = upkeepKind(st, c)
   if (kind) console.log(`castle upkeep kind=${kind} cell=${c.x},${c.y},${c.z} result=${result}`)
   if (kind) upkeepRate(ctx, result === 'ok' ? 'ok' : 'fail')
+  if (kind === 'litter') access.done(ctx, c, result)
   if (kind && result === 'ok') ctx.progressMarks = (ctx.progressMarks || 0) + 1 // generic stall clock (task.js)
   // Flip-flop guard: a cell upkeep "fixes" UPKEEP_OK_MAX times is being
   // undone by something (its own other rule, a player, a mob): retire it.
@@ -3852,7 +3866,7 @@ function upkeepDone(bot, ctx, st, now = Date.now(), c = null) {
   const w = ctx.castleUpkeepWatch
   if (!w || w.idx !== u.idx || d < w.best - 1 || ctx.castleFlight) { ctx.castleUpkeepWatch = { idx: u.idx, best: Math.min(d, w && w.idx === u.idx ? w.best : Infinity), since: now }; return false }
   // The far() dig/step ladder is slow on purpose: give it room before the stall strike.
-  const ladder = ctx.castleFar && ctx.castleFar.idx === u.idx && (ctx.castleFar.dig || ctx.castleFar.step)
+  const ladder = ctx.castleFar && ctx.castleFar.idx === u.idx && (ctx.castleFar.dig || ctx.castleFar.step || ctx.castleFar.build)
   // Another workable cell open: a dead target yields in UPKEEP_YIELD_MS, not 45 s+.
   const stall = otherUpkeepOpen(ctx, st, u, now) && !ladder && !lastTry(st, u) ? UPKEEP_YIELD_MS : (ladder ? 3 : 1) * UPKEEP_STALL_MS
   if (now - w.since < stall) return false
