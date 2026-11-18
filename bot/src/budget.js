@@ -42,6 +42,9 @@ const FORAGE_RETRY_MS = 5 * 60 * 1000
 // so only a REPEAT with the same cause holds — structural verdicts pace
 // from the first failure.
 const BUILD_RETRY_MS = 5 * 60 * 1000
+// Idle hold: a step that ran and found nothing workable (failed:idle) yields
+// this long unless its own facts word changes (new work returns at once).
+const IDLE_RETRY_MS = 3 * 60 * 1000
 // Equip's scaffold mark: below this the bot digs more scaffold nearby;
 // digging stops here. The castle's stone reserve reads it too (moved from
 // equip.js, idkcraft-oqul.11 — the castle->equip edge closed
@@ -52,4 +55,4 @@ const SCAFFOLD_LOW = 16
 // many blocks is walked to, not used in place.
 const TABLE_REACH = 4
 
-module.exports = { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, SCAFFOLD_LOW, TABLE_REACH }
+module.exports = { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, IDLE_RETRY_MS, SCAFFOLD_LOW, TABLE_REACH }

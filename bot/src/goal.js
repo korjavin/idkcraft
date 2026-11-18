@@ -27,7 +27,7 @@ const { LOW_HP_GATE_MS, LOW_HP_GAP_MS, lowHpNoFood, lowHpGated } = require('./he
 
 // House budget and bounded-hold windows live in the leaf budget.js
 // (oqul.3) so behaviours read them without loading goal; re-exported here.
-const { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS } = require('./budget')
+const { NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, IDLE_RETRY_MS } = require('./budget')
 // Home/site geometry and the gather retry policy live in the leaves site.js
 // and holds.js (oqul.4); the exported names are re-exported here.
 const { needPlanks, makeHome, siteFor, skySiteNear, isV2House, timeWord } = require('./site')
@@ -1837,6 +1837,9 @@ function failHolds(ctx, name, text, bot) {
   try {
     if (SELF_ADVANCING[name]) return false
     const sf = ctx && ctx.stepFail && ctx.stepFail[name]
+    // Nothing workable (failed:idle, any step): yield for IDLE_RETRY_MS
+    // whatever else drifts; a change in the step's own word releases it.
+    if (sf && sf.status === 'failed:idle') return Date.now() - (sf.at || 0) < IDLE_RETRY_MS && textWord(sf.text, name) === textWord(text, name)
     // prkh: the fetch hold parks one kind — a hold for another kind never
     // holds this menu entry (the blocked word keeps 'blocked' while its
     // gated kind flips, so the kind — not the text — decides here).
