@@ -163,7 +163,7 @@ describe('pjsl transit backfill', () => {
       now = st.blocked[k].until + 1
       for (let tick = 0; tick < 5; tick++) castle(bot, ctx)
       assert.equal(st.blocked[k].tries, 8)
-      assert.equal(ctx.stepStatus, 'done')
+      assert.equal(ctx.stepStatus, 'failed:idle', 'only a retired fill left: the castle yields')
       const decor = blueprint.decorPlan(SITE, 0, V).cells.find((c) => c.kind === 'pane')
       cells.set(key(decor.x, decor.y, decor.z), 'air')
       bot.inventory.items = () => [{ name: 'dirt', count: 64 }, { name: 'glass_pane', count: 64 }]

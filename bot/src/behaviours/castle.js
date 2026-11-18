@@ -1951,8 +1951,8 @@ function upkeep(bot, ctx, st, now = Date.now()) {
   const cells = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells
   const missing = cells.filter((c) => blueprint.isPlaceTarget(c.kind) && !done(bot, c)).length
   let clutter = 0
-  // Only cells upkeep will still work: retired ones never go down.
-  const live = (o) => { const b = st.blocked && st.blocked[bkey(st, o.idx)]; return !(b && b.retired) }
+  // Only cells upkeep can work now: retired or backing-off ones are not owed.
+  const live = (o) => { const b = st.blocked && st.blocked[bkey(st, o.idx)]; return !(b && (b.retired || b.until > now)) }
   try { clutter = litterTargets(bot, ctx, st, now).filter(live).length } catch (_) { /* count best-effort */ }
   let holes = 0
   try { holes = fillTargets(bot, ctx, st, now).filter(live).length } catch (_) { /* count best-effort */ }
@@ -3945,6 +3945,7 @@ function castle(bot, ctx) {
   // Transit backfill (idkcraft-pjsl): a below-grade hole no plan covers,
   // one cell per tick once no plan cell is workable — before the waiting
   // branch, so a hole in backoff never starves the floor.
+  let owedIdle = false // upkeep cells listed, none workable now
   if (r.idx < 0 && st.phase !== 'prep') {
     // Sweep before fill (prod bot4 2026-11-17: 500 holes kept the fill
     // first every tick and clutter never fell); failing litter retires on
@@ -3954,7 +3955,8 @@ function castle(bot, ctx) {
     // never ran): the latched target keeps the tick, else the closer cell.
     const lits = litterTargets(bot, ctx, st, now)
     const lit = nextLitter(st, lits, now, bot, ctx)
-    const fill = fillItem(bot, ctx) ? nextFill(st, fillTargets(bot, ctx, st, now), now, bot, ctx) : null
+    const fills = fillTargets(bot, ctx, st, now)
+    const fill = fillItem(bot, ctx) ? nextFill(st, fills, now, bot, ctx) : null
     const pick = pickUpkeep(bot, ctx, lit, fill)
     if (pick) {
       upkeepRate(ctx, inReach(bot, pick) ? 'work' : 'walk', now)
@@ -3962,6 +3964,7 @@ function castle(bot, ctx) {
       return
     }
     if (lits.length) upkeepRate(ctx, 'stuck', now)
+    owedIdle = lits.length > 0 || fills.length > 0
     const left = lits.filter((o) => !((st.blocked || {})[bkey(st, o.idx)] || {}).retired).length
     if (left && !(ctx.castleUpkeepStuckAt > now - 60000)) {
       ctx.castleUpkeepStuckAt = now
@@ -3992,7 +3995,10 @@ function castle(bot, ctx) {
     // Holes stay on the status past completion (sayHoles set it above),
     // so 'castle' keeps reporting the gaps, not just 'complete'.
     if (!holes.length) st.status = 'complete'
-    stepDone(ctx)
+    // Listed upkeep cells all retired/backing off: 'done' would re-pick the
+    // castle every tick (prod bot4: stuck=397 of 397); idle yields the body.
+    if (owedIdle) stepFailed(ctx, 'idle')
+    else stepDone(ctx)
     markComplete(bot, st)
     return
   }
