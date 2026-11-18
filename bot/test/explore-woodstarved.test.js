@@ -98,8 +98,8 @@ describe('woodstarve: explore once gather is out', () => {
     const ctx = { home: { site, built: true }, castle: { parked: true }, gather: failed }
     assert.equal(await pick(starved({ home: 'built', planks: 3 }), ctx), 'explore')
   })
-  it('(3) logs on hand -> the park still vetoes explore', () => {
-    assert.equal(e(starved({ logs: 2 }), { home: { site, built: false, parked: true }, gather: { ...failed, atLogs: 2 } }), false)
+  it('(3) logs on hand: a house park no longer vetoes the stranded explore; a built-home task park does', () => {
+    assert.equal(e(starved({ logs: 2 }), { home: { site, built: false, parked: true }, gather: { ...failed, atLogs: 2 } }), true)
     assert.equal(e(starved({ home: 'built', logs: 2 }), { home: { site, built: true }, castle: { parked: true } }), false)
   })
   it('(4) night -> not feasible', () => {

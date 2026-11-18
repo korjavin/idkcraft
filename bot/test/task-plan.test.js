@@ -186,9 +186,9 @@ describe('stall-point planner (vmzq.5)', () => {
     ctx.stepFail = { gather: { status: 'failed:no-trees', text, pos: null, at: Date.now() } }
     ctx.brain = null
     const first = await goal.decide(bot, ctx)
-    assert.equal(first.action, 'rest', 'held gather leaves rest')
+    assert.equal(first.action, 'explore', 'held gather leaves explore (daytime rest-only fallback)')
     // Stamp the running key a steady re-decide would leave: without the
-    // force the shortcut below would re-issue rest without choosing.
+    // force the shortcut below would re-issue explore without choosing.
     ctx.askedKey = `${text}\nrunning`
     // The planner forces the held step anyway, one-shot.
     ctx.taskPlanStep = 'gather'
@@ -199,7 +199,7 @@ describe('stall-point planner (vmzq.5)', () => {
     assert.equal(ctx.stepPick.source, 'task-plan')
     assert.ok(ctx.stepFail.gather, 'the hold record survives the bypass')
     // Owner 2026-11-14: the activity chat is throttled to one per 5 min (rest said first).
-    assert.deepEqual(bot.chats, ['now resting'])
+    assert.deepEqual(bot.chats, ['now exploring'])
     assert.match(lines.filter((l) => l.startsWith('goal step=')).pop() || '', /goal step=gather .*source=task-plan/)
   })
 

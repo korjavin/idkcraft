@@ -914,22 +914,22 @@ describe('work mode (epic rw4)', () => {
     ctx.adoptDone = true
     ctx.buildSkip = []
     ctx.home = { site: { x: 8, y: 64, z: 8 }, v: 1, built: false, table: null }
-    const origRest = BEHAVIOURS.rest
+    const origRest = BEHAVIOURS.explore // the daytime rest-only fallback explores the stale site
     const origBuild = BEHAVIOURS.build
     let restRan = 0
     let buildRan = 0
-    BEHAVIOURS.rest = () => { restRan++ }
+    BEHAVIOURS.explore = () => { restRan++ }
     BEHAVIOURS.build = () => { buildRan++ }
     try {
       const r = await ticker.tick()
-      assert.equal(r.decision.action, 'rest', 'build infeasible on the empty remainder')
+      assert.equal(r.decision.action, 'explore', 'build infeasible on the empty remainder')
       assert.equal(restRan, 1)
       assert.equal(buildRan, 0, 'build never runs, yet the flag flips')
       assert.equal(ctx.home.built, true, 'stale flag flips on the recheck')
       assert.deepEqual({ x: ctx.home.table.x, y: ctx.home.table.y, z: ctx.home.table.z }, { x: 12, y: 64, z: 9 }, 'standing table claimed')
       assert.ok(bot.chats.some((m) => m === 'home done at 8 64 8'), 'completion announced')
     } finally {
-      BEHAVIOURS.rest = origRest
+      BEHAVIOURS.explore = origRest
       BEHAVIOURS.build = origBuild
       ticker.destroy()
     }

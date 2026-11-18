@@ -143,7 +143,8 @@ const MENU = {
     // the planks would pile past what the castle needs (prod: 700 in 11
     // slots). Table/door branches are unaffected (they spend planks).
     feasible: (facts, bot, ctx) => {
-      if (ctx && ctx.home && ctx.home.parked) return false
+      // A house park does not veto crafting (owner 2026-11-18): planks/kit
+      // are what unblock the parked house.
       // qxql.2 core-1: reason-scoped — only the kit path (batch converting
       // a chopped load, table branch arming equip) runs on unbuilt homes;
       // the door branch and a finished kit read as home-budget and wait.
@@ -571,7 +572,6 @@ const MENU = {
       // so an owner castle stop — no timer, never auto-resumes — must not
       // veto it (R2). Only the timer-bounded house park does — unless the
       // bot is wood-starved (no logs, planks short; a table alone makes no pickaxe).
-      if (ctx && ctx.home && ctx.home.parked && !woodStarved(facts, ctx)) return false // still needs the failed gather below
       try {
         return gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)
       } catch (_) {
@@ -2122,7 +2122,6 @@ function stepWhy(name, facts, bot, ctx, text) {
       if (lowHpGated(bot, facts, ctx, true) && threatNear(bot)) return 'gocastle: too hurt to travel (low health, no food, hostile near)'
       return 'gocastle: dusk shelters' // dusk on the surface (the climb leg is the only dusk run)
     case 'craft':
-      if (ctx && ctx.home && ctx.home.parked) return 'craft: house parked'
       if (houseChainVetoed(ctx) && !kitCraftGo(facts, bot, ctx)) return 'craft: castle comes first'
       if (facts.table === 0 && facts.tableOwed) return `craft: need 4 planks for the house table, have ${facts.maxPlanks}`
       if ((facts.table > 0 || facts.tablePlaced || facts.houseTable) && facts.door > 0) return 'craft: nothing to craft'
@@ -2313,8 +2312,8 @@ function stepWhy(name, facts, bot, ctx, text) {
       return 'reforest: no leaves nearby'
     }
     case 'explore':
-      if (taskParked(ctx)) return 'explore: parked, staying near home'
-      if (facts.home !== 'built') return 'explore: house not built yet'
+      if (facts.home === 'built' && taskParked(ctx)) return 'explore: parked, staying near home'
+      if (facts.home !== 'built') return 'explore: gather not out yet'
       if (castleBlocked(facts)) return 'explore: castle blocked, waiting at the site'
       return 'explore: nowhere new to go'
     default:
@@ -2558,7 +2557,7 @@ const FORCE = Object.fromEntries(FORCES.map((f) => [f.name, f]))
 
 // The step menu: feasible, registered and not held on this text.
 function menuNames(facts, bot, ctx, text) {
-  return Object.keys(MENU).filter((n) => {
+  const names = Object.keys(MENU).filter((n) => {
     try {
       if (!MENU[n].feasible(facts, bot, ctx) || !registered(n)) return false
     } catch (_) {
@@ -2566,6 +2565,14 @@ function menuNames(facts, bot, ctx, text) {
     }
     return !failHolds(ctx, n, text, bot)
   })
+  // A daytime rest-only menu with the house unbuilt is a dead end (bot5:
+  // parked house, gather held, 1038/3460 ticks resting): explore for new
+  // ground/resources instead, as the stranded branch does.
+  try {
+    if (names.length === 1 && names[0] === 'rest' && facts && facts.time === 'day' && facts.home !== 'built' &&
+      (facts.player === 'none' || houseSiteActive(ctx)) && !nightHurt(facts) && registered('explore') && !failHolds(ctx, 'explore', text, bot)) names.unshift('explore')
+  } catch (_) { /* fallback best-effort */ }
+  return names
 }
 
 // Step commitment (idkcraft-vmzq.4): a running step is re-decided on a
@@ -3376,4 +3383,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { emptyRun, activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome, noteLoop, loopBlocked, castleGo, castleFetchWhy, acquireWhy }
+module.exports = { emptyRun, activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, menuNames, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome, noteLoop, loopBlocked, castleGo, castleFetchWhy, acquireWhy }

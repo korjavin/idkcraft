@@ -732,13 +732,14 @@ describe('decide decision point', () => {
 
   it('failed step moves on (atl.4)', async () => {
     // Re-picking the just-failed step with an unchanged situation was the
-    // gather livelock: the guard routes to rest instead.
+    // gather livelock: the guard routes away — to explore for new ground
+    // (a daytime rest-only menu with the house unbuilt is a dead end).
     const bot = goalBot()
     const ctx = {}
     await decide(bot, ctx)
     ctx.stepStatus = 'failed:no-trees'
     const r = await decide(bot, ctx)
-    assert.equal(r.action, 'rest')
+    assert.equal(r.action, 'explore')
     assert.equal(ctx.stepStatus, 'running')
   })
 
@@ -961,8 +962,9 @@ describe('decide decision point', () => {
 
 describe('decide failed-step dedup (revmux 01 major)', () => {
   it('a step that fails again with unchanged facts asks once', async () => {
-    // atl.4: the failed step leaves the menu, so the repeat re-decides to
-    // rest without asking (only-option); further ticks reuse the choice.
+    // atl.4: the failed step leaves the menu; the repeat re-decides over
+    // [explore, rest] (the daytime rest-only fallback) with one ask;
+    // further ticks reuse the choice.
     // Deleting the (text, status) gate (ask every tick) still fails this
     // test: a fresh multi-option point would ask on every tick. hg8: jev
     // brain — the first menu is a [gather, rest] pair laya answers unasked.
@@ -973,12 +975,13 @@ describe('decide failed-step dedup (revmux 01 major)', () => {
     assert.equal(brain.calls, 1)
     ctx.stepStatus = 'failed:no-trees' // behaviour re-runs, fails identically
     await decide(bot, ctx)
-    assert.equal(brain.calls, 1, 'repeat failure re-decides without asking')
-    assert.equal(ctx.step, 'rest')
+    assert.equal(brain.calls, 2, 'repeat failure re-decides once over the new menu')
+    assert.notEqual(ctx.step, 'gather')
+    const step = ctx.step
     await decide(bot, ctx)
     await decide(bot, ctx)
-    assert.equal(brain.calls, 1, 'further ticks reuse the choice')
-    assert.equal(ctx.step, 'rest')
+    assert.equal(brain.calls, 2, 'further ticks reuse the choice')
+    assert.equal(ctx.step, step)
   })
 })
 describe('atl.6 menu: equip rearms the starter kit before build', () => {
@@ -1130,20 +1133,25 @@ describe('atl.7 rest explains itself', () => {
     'gather: load full',
     'deliver: nothing waiting',
     'forage: nothing known nearby',
-    'explore: house not built yet',
+    'explore: ready', // the fallback offers it; the model declined
   ]
   it('FSM rest chats every infeasible step with its reason', async () => {
     const bot = ladenBot()
-    const ctx = { step: '', stepStatus: null, goalText: null, home: siteHome() }
+    // Model-chosen rest: the FSM explores here (daytime rest-only fallback).
+    const ctx = { step: '', stepStatus: null, goalText: null, home: siteHome(), brain: { source: 'jev', ask: async () => 'rest' } }
     const r = await decide(bot, ctx)
     assert.equal(r.action, 'rest')
     assert.ok(bot.chats.includes('now resting'), `chats: ${bot.chats}`)
     // The reasons stay on ctx.restWhy (status/log), not in chat.
     for (const frag of ALL_OUT) assert.ok(ctx.restWhy.includes(frag), `missing ${frag} in: ${ctx.restWhy}`)
   })
+  it('FSM: the rest-only daytime menu with an unbuilt house explores', async () => {
+    const r = await decide(ladenBot(), { step: '', stepStatus: null, goalText: null, home: siteHome() })
+    assert.equal(r.action, 'explore')
+  })
   it('rest repeats stay silent but refresh the stored reason', async () => {
     const bot = ladenBot()
-    const ctx = { step: '', stepStatus: null, goalText: null, home: siteHome() }
+    const ctx = { step: '', stepStatus: null, goalText: null, home: siteHome(), brain: { source: 'jev', ask: async () => 'rest' } }
     await decide(bot, ctx)
     const n = bot.chats.length
     assert.ok(n > 0)

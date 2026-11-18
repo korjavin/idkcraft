@@ -324,7 +324,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(goal.MENU.build.feasible(day, bot, ctx), false)
     assert.equal(goal.MENU.gather.feasible(day, bot, ctx), false) // woodstarve core-3: a full 14-log load waits for craft
     assert.equal(goal.MENU.gather.feasible({ ...day, logs: 0 }, bot, ctx), true) // woodstarve: the park no longer bans the chop
-    assert.equal(goal.MENU.craft.feasible(day, bot, ctx), false)
+    assert.equal(goal.MENU.craft.feasible(day, bot, ctx), true) // the park no longer vetoes crafting the load
     assert.equal(goal.MENU.explore.feasible({ ...day, home: 'built' }, bot, ctx), false)
     assert.equal(goal.MENU.rest.feasible(day, bot, ctx), true)
     assert.equal(goal.stepWhy('build', day, bot, ctx, ''), 'build: house parked')
@@ -490,7 +490,7 @@ describe('stall ladder L2/L3 (vmzq.3)', () => {
     assert.equal(goal.MENU.explore.feasible(daySite, bot, ownerParked), true, 'owner stop keeps the release')
     // The timer-bounded house park vetoes it (auto-resume retries).
     const houseParked = { home: { site: pos(10, 64, 10), parked: true, taskPark: { at: 1000000000000, auto: true, diag: 'x' } }, gather: { ...stranded } }
-    assert.equal(goal.MENU.explore.feasible({ ...daySite, planks: 20 }, bot, houseParked), false, 'house park vetoes briefly')
+    assert.equal(goal.MENU.explore.feasible({ ...daySite, planks: 20 }, bot, houseParked), true, 'house park no longer vetoes the stranded release')
     // woodstarve: no logs, under a kit's planks -> the starved release passes the house park.
     assert.equal(goal.MENU.explore.feasible(daySite, bot, houseParked), true, 'wood-starved passes the house park')
     // And the built-home search stays vetoed on any park.
