@@ -45,6 +45,7 @@ const BACKOFF_MAX_MS = 600000
 // ponytail: the scan resumes from a cursor (the first undone cell); a full
 // rescan from 0 every 30 s repairs cells mobs/players broke below it.
 const FULL_RESCAN_MS = 30000
+const PEND_MS = 3000
 // Site danger (prod 2026-11-15 bot3: ~90 cells blown in 3 min, deaths at
 // the site by day): a lost cell or a hostile in the site box stamps
 // ctx.castleDangerAt; while fresh, layable torch cells go first.
@@ -1293,7 +1294,12 @@ function litterTargets(bot, ctx, st, now) {
     // once per FULL_RESCAN_MS; a time budget if that ever shows in tick time.
     const pendingOf = () => (c.next > last ? c.list : c.acc.concat(c.list.filter((o) => o.slice >= c.next)))
       .filter((o) => isLitter(bot, ctx, st, o.x, o.y, o.z, w, d))
-    let pending = pendingOf()
+    // Verdict cache (prod bot3: ~1200 isLitter column walks per call, several
+    // calls a tick): the full verdict holds PEND_MS, a cleared cell drops at once.
+    let pending = c.pend && c.pendNext === c.next && now - c.pendAt >= 0 && now - c.pendAt < PEND_MS
+      ? c.pend.filter((o) => { const n = nameAt(bot, o); return n == null || !AIR.has(n) })
+      : null
+    if (!pending) { pending = pendingOf(); c.pendAt = now }
     while (c.next <= last) {
       if (c.next === 0) ctx.castleScan = { cand: 0, litter: 0, mats: {}, rejected: {} }
       for (const o of litterSlice(bot, ctx, st, c.next, w, d)) { o.slice = c.next; c.acc.push(o) }
@@ -1304,8 +1310,11 @@ function litterTargets(bot, ctx, st, now) {
         ctx.castleScan = null
       }
       pending = pendingOf()
+      c.pendAt = now
       if (nextLitter(st, pending, now, bot)) break
     }
+    c.pend = pending
+    c.pendNext = c.next
     return pending
   }
   const c0 = ctx.castleLitter
@@ -1358,6 +1367,8 @@ function nextLitter(st, list, now, bot = null, ctx = null) {
     return !near.some((p) => (p.x - o.x - 0.5) ** 2 + (p.y - o.y - 0.5) ** 2 + (p.z - o.z - 0.5) ** 2 < r2)
   })
   if (!open.length) return null
+  const here = bot && ctx && reachFirst(bot, ctx, open, false)
+  if (here) return here
   // Latch current target if it remains open and workable (revmux 01/02 core-1):
   // avoids ping-ponging between candidates during approach and across far() strikes.
   const latch = (ctx && ctx.castleGoalIdx != null && ctx.castleGoalIdx >= 0)
@@ -1381,6 +1392,25 @@ function nextLitter(st, list, now, bot = null, ctx = null) {
       best = o
       bestD2 = d2
     }
+  }
+  return best
+}
+
+// Spatial batch (prod bot3: 33 upkeep oks in 784 castle ticks): a cell
+// already in reach of the stand goes before the latched far target, so one
+// stand clears everything around it before the next walk. The latched cell
+// first when it is in reach (no ping-pong between two reachable cells).
+// Fill keeps bottom-up (lowest y first), litter top-down (a pillar from its top).
+function reachFirst(bot, ctx, open, fill) {
+  const u = fill ? ctx.castleUpkeep : (ctx.castleUpkeep || ctx.castleFar)
+  const latch = u && open.find((o) => o.idx === u.idx)
+  if (latch && inReach(bot, latch)) return latch
+  // A fill over an open cell waits for it (bottom-up stays a floor under each placement).
+  const keys = fill ? new Set(open.map((o) => `${o.x},${o.y},${o.z}`)) : null
+  let best = null
+  for (const o of open) {
+    if (!inReach(bot, o) || (keys && keys.has(`${o.x},${o.y - 1},${o.z}`))) continue
+    if (!best || (fill ? o.y < best.y : o.y > best.y)) best = o
   }
   return best
 }
@@ -1537,6 +1567,8 @@ function nextFill(st, list, now, bot = null, ctx = null) {
     return !(b && (b.retired || b.until > now))
   })
   if (!open.length) return null
+  const here = bot && ctx && reachFirst(bot, ctx, open, true)
+  if (here) return here
   const u = ctx && ctx.castleUpkeep
   if (u) { const cur = open.find((o) => o.idx === u.idx); if (cur) return cur }
   const bp = bot && bodyPos(bot)
@@ -2734,6 +2766,11 @@ function placeCell(bot, ctx, st, c, item, now) {
   // the body — inside the tower that is the wall, and Baritone's #goto x z
   // ends on its top (y+14): far() struck every stair 'unreachable'.
   const stand = !ent && c.kind === 'stairs' ? stairStance(bot, c) : null
+  // Upkeep fill in reach with a face: place from the stand, no fresh goal.
+  if (upkeepKind(st, c) && ctx.castleGoalIdx !== c.idx && reachable(bot, c) && build.findRef(bot, p)) {
+    ctx.castleGoalIdx = c.idx
+    try { bot.pathfinder.setGoal(null) } catch (_) { /* place anyway */ }
+  }
   if (approach(bot, ctx, c, () => ent || stand
     ? new goals.GoalBlock((ent || stand).x, (ent || stand).y, (ent || stand).z)
     // Decor (g0z.31): 10 of 44 v2 windows hide every neighbour face from
@@ -2913,7 +2950,8 @@ function digCell(bot, ctx, st, c, now) {
   const ent = c.kind === 'door' ? entrance(st) : null
   // Prep in reach (owner 2026-11-13): dig from where we stand, like a player
   // clearing the 3x3 around him, instead of a fresh walk per block.
-  if (c.prep && inReach(bot, c) && ctx.castleGoalIdx !== c.idx) {
+  // Upkeep cells too (prod bot3: a fresh goal per in-reach litter cost a tick each).
+  if ((c.prep || upkeepKind(st, c)) && inReach(bot, c) && ctx.castleGoalIdx !== c.idx) {
     ctx.castleGoalIdx = c.idx
     try { bot.pathfinder.setGoal(null) } catch (_) { /* dig anyway */ }
   }
@@ -3635,6 +3673,8 @@ function castleBuilderBatch(bot, ctx, st, c) {
 function pickUpkeep(bot, ctx, lit, fill) {
   if (!lit || !fill) return lit || fill
   const u = ctx && ctx.castleUpkeep
+  const rl = inReach(bot, lit), rf = inReach(bot, fill)
+  if (rl !== rf) return rl ? lit : fill // the stand's batch before any walk
   if (u && u.idx === fill.idx) return fill
   if (u && u.idx === lit.idx) return lit
   const bp = bodyPos(bot)
@@ -3649,9 +3689,21 @@ function upkeepKind(st, c) {
   return c.idx < blueprint.DECOR_BASE ? 'fill' : null
 }
 const UPKEEP_OK_MAX = 3
+// Throughput (prod bot3: action=castle most of the hour, 33 oks): every
+// UPKEEP_RATE_MS one line says where the upkeep ticks went — work = ticks on
+// a cell in reach, walk = ticks on one out of reach, stuck = nothing workable.
+const UPKEEP_RATE_MS = 10 * 60 * 1000
+function upkeepRate(ctx, what, now = Date.now()) {
+  const r = ctx.castleUpkeepRate || (ctx.castleUpkeepRate = { since: now, ok: 0, fail: 0, work: 0, walk: 0, stuck: 0 })
+  r[what]++
+  if (now - r.since < UPKEEP_RATE_MS) return
+  console.log(`castle upkeep rate ok=${r.ok} fail=${r.fail} ticks=${r.work + r.walk + r.stuck} work=${r.work} walk=${r.walk} stuck=${r.stuck} min=${Math.round((now - r.since) / 60000)}`)
+  ctx.castleUpkeepRate = null
+}
 function upkeepLog(ctx, st, c, result) {
   const kind = upkeepKind(st, c)
   if (kind) console.log(`castle upkeep kind=${kind} cell=${c.x},${c.y},${c.z} result=${result}`)
+  if (kind) upkeepRate(ctx, result === 'ok' ? 'ok' : 'fail')
   // Flip-flop guard: a cell upkeep "fixes" UPKEEP_OK_MAX times is being
   // undone by something (its own other rule, a player, a mob): retire it.
   if (kind && result === 'ok') {
@@ -3670,7 +3722,7 @@ function upkeepLog(ctx, st, c, result) {
 // logged — the walk to a high target never ended, so far() never struck):
 // a target the body got no block closer to in UPKEEP_STALL_MS strikes
 // 'unreachable' (LITTER_MAX_TRIES retires it) and the next one is picked.
-const UPKEEP_STALL_MS = 90000
+const UPKEEP_STALL_MS = 45000 // was 90 s (x3 on the ladder): a dead target held the tick for minutes
 function upkeepDone(bot, ctx, st, now = Date.now(), c = null) {
   const u = ctx.castleUpkeep
   if (!u) return false
@@ -3878,7 +3930,12 @@ function castle(bot, ctx) {
     const lit = nextLitter(st, lits, now, bot, ctx)
     const fill = fillItem(bot, ctx) ? nextFill(st, fillTargets(bot, ctx, st, now), now, bot, ctx) : null
     const pick = pickUpkeep(bot, ctx, lit, fill)
-    if (pick) { work(bot, ctx, st, pick, now, pick === lit ? 'clearing scaffold' : 'filling a floor hole'); return }
+    if (pick) {
+      upkeepRate(ctx, inReach(bot, pick) ? 'work' : 'walk', now)
+      work(bot, ctx, st, pick, now, pick === lit ? 'clearing scaffold' : 'filling a floor hole')
+      return
+    }
+    if (lits.length) upkeepRate(ctx, 'stuck', now)
     const left = lits.filter((o) => !((st.blocked || {})[bkey(st, o.idx)] || {}).retired).length
     if (left && !(ctx.castleUpkeepStuckAt > now - 60000)) {
       ctx.castleUpkeepStuckAt = now

@@ -96,7 +96,7 @@ describe('castle unreachable litter/decor deadlock fixes (idkcraft-qxql.17)', ()
     const c1 = { x: SITE.x + 2, y: SITE.y, z: SITE.z + 2, kind: 'air', idx: castle.LITTER_BOX_BASE + 10 }
     const c2 = { x: SITE.x + 8, y: SITE.y, z: SITE.z + 8, kind: 'air', idx: castle.LITTER_BOX_BASE + 20 }
     const list = [c1, c2]
-    const bot = { entity: { position: new Vec3(SITE.x + 8, SITE.y, SITE.z + 8) } } // much closer to c2
+    const bot = { entity: { position: new Vec3(SITE.x + 12, SITE.y, SITE.z + 12) } } // much closer to c2, neither in reach
 
     // With castleGoalIdx = c1.idx, c1 stays latched even though c2 is closer
     const ctx = { castleGoalIdx: c1.idx }

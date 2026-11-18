@@ -418,7 +418,7 @@ describe('g0z.2 castle executor', () => {
     await run(bot, ctx, 6)
     assert.equal(world.get(m.x, m.y, m.z), 'air')
     assert.deepEqual(ctx.castle.blocked, {})
-    assert.ok(bot.calls.goals.every((g) => g.constructor.name !== 'GoalBlock'), 'no sidestep goal')
+    assert.ok(bot.calls.goals.every((g) => !g || g.constructor.name !== 'GoalBlock'), 'no sidestep goal')
     assert.equal(ctx.castleSelfOcc, undefined)
   })
 
