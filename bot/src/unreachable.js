@@ -32,6 +32,8 @@ function near(ctx, p, now = Date.now()) {
 // goal cell is marked here so gather/explore/acquire pick another target.
 // A marked cell fails on its first noPath. Called once per tick by index.js.
 const GRACE_TICKS = 2
+// Steps with their own per-target unreachable ladder (castle: far, dig-/step-approach, retire).
+const OWN_LADDER = new Set(['castle'])
 function goalCell(g) {
   const p = g && g.pos && Number.isFinite(g.pos.x) ? g.pos : g
   return p && Number.isFinite(p.x) && Number.isFinite(p.z) ? { x: Math.floor(p.x) + 0.5, z: Math.floor(p.z) + 0.5 } : null
@@ -44,6 +46,11 @@ function tick(bot, ctx, now = Date.now()) {
   w.n++
   if (!ctx.work || !ctx.step || isFinished(ctx.stepStatus)) return false
   const cell = goalCell(g)
+  if (OWN_LADDER.has(ctx.step)) {
+    // own per-target ladder keeps the step: mark the cell once per goal only
+    if (w.n === GRACE_TICKS && cell) mark(ctx, cell, 1, now)
+    return false
+  }
   if (w.n < GRACE_TICKS && !(cell && near(ctx, cell, now))) return false
   if (cell) mark(ctx, cell, 1, now)
   w.goal = null
@@ -54,4 +61,4 @@ function tick(bot, ctx, now = Date.now()) {
   return true
 }
 
-module.exports = { mark, near, tick, TTL_MS, GRACE_TICKS }
+module.exports = { mark, near, tick, TTL_MS, GRACE_TICKS, OWN_LADDER }

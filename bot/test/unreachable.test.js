@@ -35,6 +35,16 @@ test('a verdict cleared by the behaviour resets the count', () => {
   assert.strictEqual(ctx.stepStatus, 'running')
 })
 
+test('castle keeps its step and goal; the cell is only marked', () => {
+  const { bot, ctx, goal } = rig()
+  ctx.step = 'castle'
+  for (let t = 0; t < 5; t++) assert.strictEqual(unreachable.tick(bot, ctx, t * 1000), false)
+  assert.strictEqual(ctx.stepStatus, 'running')
+  assert.strictEqual(bot.pathfinder.goal, goal)
+  assert.ok(unreachable.near(ctx, { x: 1.5, z: 2.5 }, 6000))
+  assert.strictEqual(ctx.unreachable.length, 1)
+})
+
 test('no work step: nothing fails', () => {
   const { bot, ctx } = rig()
   ctx.work = false
