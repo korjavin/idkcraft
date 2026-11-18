@@ -2510,6 +2510,10 @@ function far(bot, ctx, st, c, reach, now) {
   // stage): fast-yield now, or advance the last cell's ladder one stage.
   if (upkeepKind(st, c) && ctx.castleGoalIdx === c.idx && ctx.lastPathStatus === 'noPath') f.n = Math.max(f.n, STRIKES)
   ctx.castleGoalIdx = -1
+  try {
+    const act = f.n < STRIKES ? `reapproach#${f.n}` : !f.build && (clearing(c) || upkeepKind(st, c) === 'litter') ? 'access-build' : !f.dig ? 'dig-approach' : !f.step ? 'step-approach' : 'strike'
+    console.log(`approach target=${c.x},${c.y},${c.z} stand=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} reached=true inReach=false dist=${dist.toFixed(1)} -> action=${act}`)
+  } catch (_) { /* log best-effort */ }
   if (f.n >= STRIKES) {
     // Unreachable plan cell (prod 2026-11-16 bot3: torches 15-40 below, 82x
     // 'unreachable'): before striking, one more ladder with the stuck window
