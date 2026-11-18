@@ -440,13 +440,17 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
     // from the home chest — the kit is spent/kept, so nothing ping-pongs.
     // ...and only while the pack has no pickaxe (the kit need): with tools made, a
     // starved pack never re-draws, so the opens stay bounded (y7lp review 02).
-    if (banked && (logs > 0 || countItems(bot, (n) => n.endsWith('_planks')) >= WOOD_KIT || countItems(bot, (n) => n.endsWith('_pickaxe')) > 0)) return false
+    // Owner 2026-11-18: with the shared stock at its wood target a chop is
+    // waste, so the starve-only draw rule yields and any known chest serves.
+    let stocked = false
+    try { stocked = require('../cheststock').needMet(bot, ctx, 'oak_log') } catch (_) { stocked = false }
+    if (banked && !stocked && (logs > 0 || countItems(bot, (n) => n.endsWith('_planks')) >= WOOD_KIT || countItems(bot, (n) => n.endsWith('_pickaxe')) > 0)) return false
     const dry = ctx.chestLogsDry || {}
     const now = Date.now()
     const h = ctx.home && ctx.home.chest
     const isHome = (c) => h && c.x === h.x && c.y === h.y && c.z === h.z
     // y7lp: plus any remembered chest whose last snapshot held logs
-    const logged = (Array.isArray(ctx.chests) ? ctx.chests : []).filter((c) => c && c.contents && Object.entries(c.contents).some(([n, v]) => (n.endsWith('_log') || n.endsWith('_stem')) && v > 0))
+    const logged = [ctx.chests, ctx.peerChests].flatMap((l) => Array.isArray(l) ? l : []).filter((c) => c && c.contents && Object.entries(c.contents).some(([n, v]) => (n.endsWith('_log') || n.endsWith('_stem')) && v > 0))
     const cands = banked ? logged.filter((c) => !isHome(c)) : [h, ctx.castle && ctx.castle.siteChest, ...logged]
     for (const c of cands) {
       if (!c || typeof c.x !== 'number') continue

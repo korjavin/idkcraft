@@ -415,6 +415,12 @@ const MENU = {
       try {
         if (gatherFailedHolds(ctx && ctx.gather, facts.logs, bot)) return false
       } catch (_) { /* fall through to facts */ }
+      // Wood stock first (owner 2026-11-18: chests full of logs/planks, bot3
+      // still chopped): the shared stock (pack + every known chest, planks
+      // as 1/4 log) meets the wood target and the pack holds a kit -> no
+      // chop; bigger needs withdraw through castlefetch. An empty pack still
+      // gathers, whose chest draw runs before any chop.
+      if ((facts.planks || 0) + (facts.logs || 0) * 4 >= WOOD_KIT && require('./cheststock').needMet(bot, ctx, 'oak_log')) return false
       // Post-build bed top-up (jr2.2) and the castle kit chop (qxql.2) keep
       // their own bounds.
       if (facts.home === 'built' && (facts.beds === 'none' || facts.beds === 'one') && (facts.maxPlanks || 0) < 6 && (facts.logs || 0) < NEED_LOGS) return true

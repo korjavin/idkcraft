@@ -2109,6 +2109,15 @@ async function bring(bot, ctx, target, state) {
       o.phase = 'searchfar'
       return
     }
+    // Stock first (owner 2026-11-18: bot3 chopped trees with chests full of
+    // wood): a need already met by the shared chests draws a chest before
+    // digging even a visible source; one try (chestTried), then dig as before.
+    let stocked = false
+    try { stocked = require('../cheststock').needMet(bot, ctx, o.drop || (o.name === 'logs' ? 'oak_log' : o.name)) } catch (_) { stocked = false }
+    if (stocked && !o.chestTried && o.have < o.want && chestAvailable(bot, ctx, o)) {
+      o.phase = 'chestfetch'
+      return
+    }
     if (res.exposed !== false) {
       // Exposed and nearest: commit exactly as before (no rival consulted,
       // the legacy line byte-identical). The walk gate (8w0) never bites

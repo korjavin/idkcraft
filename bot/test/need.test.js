@@ -55,3 +55,21 @@ describe('need targets', () => {
     assert.equal(farm.farmFeasible({ time: 'day' }, bot, {}), false)
   })
 })
+
+describe('wood stock first (owner 2026-11-18)', () => {
+  const goal = require('../src/goal')
+  const woodCtx = (planks, logs = 0) => ({ chests: [{ x: 9, y: 64, z: 9, contents: { oak_planks: planks, spruce_log: logs }, at: Date.now() }] })
+
+  it('planks count as 1/4 log toward the wood target, any wood type', () => {
+    const bot = mockBot([{ name: 'birch_log', count: 4 }])
+    assert.deepEqual(needOf(bot, woodCtx(200, 10), 'oak_log'), { item: 'wood', have: 64, want: 64, met: true })
+    assert.equal(needMet(bot, woodCtx(100), 'oak_planks'), false)
+  })
+
+  it('no castle kit chop while chests hold the wood and the pack a kit', () => {
+    const bot = mockBot([{ name: 'oak_planks', count: 12 }])
+    const facts = { logs: 0, planks: 12, table: 1, door: 1, home: 'none', castle: 'planks-none' }
+    assert.equal(goal.MENU.gather.feasible(facts, bot, woodCtx(400)), false)
+    assert.equal(goal.MENU.gather.feasible(facts, bot, woodCtx(10)), true)
+  })
+})

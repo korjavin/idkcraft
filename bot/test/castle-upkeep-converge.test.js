@@ -23,7 +23,7 @@ describe('castle upkeep converges', () => {
   const bot = { blockAt(p) {
     const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z)
     const n = cells.get(key(x, y, z)) ?? (y < SITE.y ? 'dirt' : 'air')
-    return { name: n, position: new Vec3(x, y, z) }
+    return { name: n, position: new Vec3(x, y, z), boundingBox: n === 'air' || n === 'torch' ? 'empty' : 'block' }
   } }
   const fresh = () => ({ site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: {} })
 
@@ -47,5 +47,20 @@ describe('castle upkeep converges', () => {
     const e = Object.values(st.blocked)[0]
     assert.ok(e && e.retired && e.why === 'flipflop')
     assert.equal(castle.upkeep(bot, {}, st).holes, before - 1)
+  })
+
+  it('a scaffold column is litter; the same next to a tree, or a table/chest/bed, never (owner 2026-11-18)', () => {
+    const st = fresh()
+    const px = SITE.x - 3, pz = SITE.z + 12
+    // A hanging 1-wide bridge cell (air below): litter by shape...
+    cells.set(key(px, SITE.y + 2, pz), 'dirt')
+    assert.equal(castle.isLitter(bot, {}, st, px, SITE.y + 2, pz, w, d), true)
+    // ...but under a canopy it is the tree's, not ours.
+    cells.set(key(px, SITE.y + 3, pz), 'oak_leaves')
+    assert.equal(castle.isLitter(bot, {}, st, px, SITE.y + 2, pz, w, d), false)
+    for (const n of ['crafting_table', 'chest', 'white_bed', 'oak_door', 'torch']) {
+      cells.set(key(px, SITE.y + 2, pz), n)
+      assert.equal(castle.isLitter(bot, {}, st, px, SITE.y + 2, pz, w, d), false, n)
+    }
   })
 })

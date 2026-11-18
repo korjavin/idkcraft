@@ -1188,6 +1188,13 @@ function leftoverScaffold(bot, st, b, x, y, z, w, d) {
   }
   return true
 }
+function touchesTree(bot, x, y, z) {
+  for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+    const nb = blockAtXYZ(bot, x + dx, y + dy, z + dz)
+    if (nb && (flat.isLeavesName(nb.name) || flat.isLogName(nb.name))) return true
+  }
+  return false
+}
 // One cell's verdict on a complete castle. The scan and the read-time
 // re-check share it (g0z.53: a block a player swapped inside the cache
 // window is judged again, never dug on the old verdict).
@@ -1212,6 +1219,10 @@ function isLitter(bot, ctx, st, x, y, z, w, d) {
   // The walkable-floor window is fillTargets' (prod bot4: one cell filled
   // and dug as litter 17x): a block there is never litter.
   if (inFillWindow(st, x, y, z, w, d)) return false
+  // Natural terrain by shape (owner 2026-11-18: bot3 dug around trees): a
+  // block touching a log or leaves is a tree's ground, never our scaffold.
+  if (!(SCAFFOLD_MATS.has(n) || NATURAL_SOLID.has(n))) return false // tables, chests, beds, doors, torches, leaves, logs
+  if (touchesTree(bot, x, y, z) && !isOwnPlaced(ctx, b)) return false
   if (leftoverScaffold(bot, st, b, x, y, z, w, d)) return true
   if (!SCAFFOLD_MATS.has(n)) return false
   const ring = y >= st.site.y && x >= st.site.x - 1 && x <= st.site.x + w && z >= st.site.z - 1 && z <= st.site.z + d
@@ -1235,8 +1246,9 @@ function scanNote(bot, ctx, st, x, y, z, hit) {
   if (!b || !flat.isSolidCell(b)) return
   t.cand++
   t.mats[b.name] = (t.mats[b.name] || 0) + 1
-  if (hit) { t.litter++; return }
-  const why = b.name === 'grass_block' ? 'grass' : !SCAFFOLD_MATS.has(b.name) ? (NATURAL_SOLID.has(b.name) ? 'natural' : 'player') : 'side-neighbour'
+  if (hit) { t.litter++; (t.hits || (t.hits = {}))[b.name] = (t.hits[b.name] || 0) + 1; return }
+  const n = b.name
+  const why = n === 'grass_block' ? 'grass' : (flat.isLeavesName(n) || flat.isLogName(n)) ? 'tree' : !SCAFFOLD_MATS.has(n) ? (NATURAL_SOLID.has(n) ? 'natural' : 'other') : touchesTree(bot, x, y, z) ? 'tree-ground' : 'side-neighbour'
   t.rejected[why] = (t.rejected[why] || 0) + 1
 }
 const fmtCounts = (o) => `{${Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(',')}}`
@@ -1306,7 +1318,7 @@ function litterTargets(bot, ctx, st, now) {
       c.next++
       if (c.next > last) { c.list = c.acc; c.acc = []; if (c.list.length) console.log(`castle sweep scaffold=${c.list.length}`)
         const t = ctx.castleScan
-        if (t) console.log(`castle scaffold scan cand=${t.cand} litter=${t.litter} mats=${fmtCounts(t.mats)} rejected=${fmtCounts(t.rejected)}`)
+        if (t) console.log(`castle scaffold scan cand=${t.cand} litter=${t.litter} hits=${fmtCounts(t.hits || {})} mats=${fmtCounts(t.mats)} rejected=${fmtCounts(t.rejected)}`)
         ctx.castleScan = null
       }
       pending = pendingOf()
@@ -2457,6 +2469,10 @@ function far(bot, ctx, st, c, reach, now) {
     // and climb the plan, stepMove pillars; litter retires after LITTER_MAX_TRIES.
     // Every cell takes it, upkeep at/below the feet too (prod bot4 after #908:
     // fill fail:unreachable 70x vs 16 ok struck with no dig-through try).
+    // Owner 2026-11-18 (bot3 stood a minute per dead target, walk=90%): an
+    // upkeep cell with another workable upkeep cell open strikes now and
+    // the next one is picked; the slow ladder is for the last cell only.
+    if (!f.dig && upkeepKind(st, c) && otherUpkeepOpen(ctx, st, c, now)) { blockCell(ctx, st, c, 'unreachable', now); return true }
     if (!f.dig) {
       f.dig = true
       f.n = 0
@@ -3748,6 +3764,20 @@ function upkeepLog(ctx, st, c, result) {
 // a target the body got no block closer to in UPKEEP_STALL_MS strikes
 // 'unreachable' (LITTER_MAX_TRIES retires it) and the next one is picked.
 const UPKEEP_STALL_MS = 45000 // was 90 s (x3 on the ladder): a dead target held the tick for minutes
+const UPKEEP_YIELD_MS = 15000
+// Any other listed upkeep cell (litter or fill) neither backing off nor retired.
+function otherUpkeepOpen(ctx, st, c, now) {
+  const bl = st.blocked || {}
+  const l = ctx.castleLitter, f = ctx.castleFill
+  for (const list of [l && (l.pend || l.list), f && f.list]) {
+    for (const o of Array.isArray(list) ? list : []) {
+      if (!o || o.idx === c.idx) continue
+      const b = bl[bkey(st, o.idx)]
+      if (!b || (!b.retired && !(b.until > now))) return true
+    }
+  }
+  return false
+}
 function upkeepDone(bot, ctx, st, now = Date.now(), c = null) {
   const u = ctx.castleUpkeep
   if (!u) return false
@@ -3760,7 +3790,9 @@ function upkeepDone(bot, ctx, st, now = Date.now(), c = null) {
   if (!w || w.idx !== u.idx || d < w.best - 1 || ctx.castleFlight) { ctx.castleUpkeepWatch = { idx: u.idx, best: Math.min(d, w && w.idx === u.idx ? w.best : Infinity), since: now }; return false }
   // The far() dig/step ladder is slow on purpose: give it room before the stall strike.
   const ladder = ctx.castleFar && ctx.castleFar.idx === u.idx && (ctx.castleFar.dig || ctx.castleFar.step)
-  if (now - w.since < (ladder ? 3 : 1) * UPKEEP_STALL_MS) return false
+  // Another workable cell open: a dead target yields in UPKEEP_YIELD_MS, not 45 s+.
+  const stall = otherUpkeepOpen(ctx, st, u, now) ? UPKEEP_YIELD_MS : (ladder ? 3 : 1) * UPKEEP_STALL_MS
+  if (now - w.since < stall) return false
   ctx.castleUpkeepWatch = null
   try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
   blockCell(ctx, st, u, 'unreachable', now)
