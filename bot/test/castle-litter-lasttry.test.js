@@ -1,0 +1,34 @@
+'use strict'
+
+// High litter (prod bot3: 1020 litter, high scaffold retired on fast strikes
+// with no ladder ever tried): the strike that would retire a litter cell
+// takes the dig/step ladder instead of the fast yield.
+
+const { describe, it } = require('node:test')
+const assert = require('node:assert/strict')
+const { Vec3 } = require('vec3')
+const castle = require('../src/behaviours/castle')
+
+const { bkey } = castle.RECOVERY_HOOKS
+
+describe('castle litter last try takes the ladder', () => {
+  it('fast strikes until the last try, then dig-approach', () => {
+    const st = { site: { x: 100, y: 64, z: 200 }, rot: 0, blueprintVersion: 2, phase: 'complete', blocked: {} }
+    const lit = (n) => ({ x: 100, y: 80, z: 190 + n, kind: 'air', idx: castle.LITTER_BOX_BASE + n })
+    const bot = { entity: { position: new Vec3(100, 64, 180) } }
+    const a = lit(0), b = lit(1)
+    const k = bkey(st, a.idx)
+    let ctx = null
+    const run = () => {
+      ctx = { castleLitter: { pend: [a, b] } }
+      for (let i = 0; i < 20 && !(ctx.castleFar && ctx.castleFar.dig) && !(st.blocked[k] && st.blocked[k].until); i++) castle.far(bot, ctx, st, a, 4, Date.now())
+    }
+    run()
+    assert.equal(st.blocked[k].tries, 1, 'first strike is fast')
+    st.blocked[k].tries = 2
+    st.blocked[k].until = 0
+    run()
+    assert.ok(ctx.castleFar && ctx.castleFar.dig, 'last try runs the dig ladder')
+    assert.equal(st.blocked[k].tries, 2)
+  })
+})

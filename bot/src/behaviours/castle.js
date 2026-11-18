@@ -1702,6 +1702,14 @@ function batchOf(kind) { return BATCH_OF[kind] || BATCH }
 // change all move the word, so holds keyed on the text release on them.
 // Capped by need: have >= left lays now, reserve included (usable's need),
 // read with ctx so the word sees the same stock the castle step spends.
+// On-site material (owner 2026-11-18, prod bot3: castlefetch stone 730 ticks
+// beside ~950 cobble/dirt litter): an open litter cell whose block can feed
+// `kind` (fill takes stone or dirt) — dig it before any fetch trip.
+function siteSource(bot, ctx, st, kind, now) {
+  if (kind !== 'stone' && kind !== 'fill') return null
+  const ok = (n) => ITEM.stone(n) || (kind === 'fill' && n === 'dirt')
+  try { return nextLitter(st, litterTargets(bot, ctx, st, now).filter((o) => ok(nameAt(bot, o) || '')), now, bot, ctx) } catch (_) { return null }
+}
 function stockWord(bot, kind, left, ctx) {
   const have = usable(bot, kind, ctx, left)
   if (have <= 0) return `${kind}-none`
@@ -2103,6 +2111,10 @@ function menuWord(bot, ctx, now = Date.now()) {
           ctx.castleWord = { word: 'clear' }
           return 'clear'
         }
+        if (fills.length && siteSource(bot, ctx, st, 'fill', now)) {
+          ctx.castleWord = { word: 'clear' }
+          return 'clear'
+        }
         if (fills.length) {
           ctx.castleWord = { kind: 'stone', left: fills.length }
           return stockWord(bot, 'stone', fills.length, ctx)
@@ -2257,7 +2269,9 @@ function menuWord(bot, ctx, now = Date.now()) {
     // (the home furnace, a tidy visit's torches) and the castle step walks
     // it back. Decor and sweep words never latch.
     ctx.castleWord = st.phase === 'complete' ? { kind, left, repair: true } : { kind, left }
-    return stockWord(bot, kind, left, ctx)
+    const sw = stockWord(bot, kind, left, ctx)
+    if (sw.endsWith('-none') && siteSource(bot, ctx, st, kind, now)) { ctx.castleWord = { word: 'clear' }; return 'clear' }
+    return sw
   } catch (_) {
     return 'none'
   }
@@ -2442,6 +2456,7 @@ function far(bot, ctx, st, c, reach, now) {
     const r = stepMove(bot, ctx, c, f.step)
     if (r === 'running') { ctx.castleGoalIdx = c.idx; return true } // keep approach() off our leg goal
     try { console.log(`castle step-approach ${c.x} ${c.y} ${c.z} ${c.kind}: stop=${r} legs=${f.step.legs}`) } catch (_) { /* log best-effort */ }
+    strikeNote(c, `step:${r}`, dist)
     blockCell(ctx, st, c, 'unreachable', now)
     return true
   }
@@ -2473,7 +2488,9 @@ function far(bot, ctx, st, c, reach, now) {
     // Owner 2026-11-18 (bot3 stood a minute per dead target, walk=90%): an
     // upkeep cell with another workable upkeep cell open strikes now and
     // the next one is picked; the slow ladder is for the last cell only.
-    if (!f.dig && upkeepKind(st, c) && otherUpkeepOpen(ctx, st, c, now)) { blockCell(ctx, st, c, 'unreachable', now); return true }
+    // ...but the cell's last try always takes the ladder (prod bot3: 1020 litter,
+    // high scaffold retired on three fast strikes, no ladder ever ran).
+    if (!f.dig && upkeepKind(st, c) && otherUpkeepOpen(ctx, st, c, now) && !lastTry(st, c)) { strikeNote(c, 'fast', dist); blockCell(ctx, st, c, 'unreachable', now); return true }
     if (!f.dig) {
       f.dig = true
       f.n = 0
@@ -2489,9 +2506,19 @@ function far(bot, ctx, st, c, reach, now) {
       try { console.log(`castle step-approach ${c.x} ${c.y} ${c.z} ${c.kind}: stepping`) } catch (_) { /* log best-effort */ }
       return true
     }
+    strikeNote(c, 'ladder-spent', dist)
     blockCell(ctx, st, c, 'unreachable', now)
   }
   return true
+}
+// Why an unreachable strike fired (task: log the reason per failure).
+function strikeNote(c, stage, dist) {
+  try { console.log(`castle unreachable ${c.x} ${c.y} ${c.z} ${c.kind} stage=${stage} dist=${Math.round(dist)}`) } catch (_) { /* log best-effort */ }
+}
+// The strike that would retire the cell: it gets the slow ladder, not a fast strike.
+function lastTry(st, c) {
+  const t = (((st.blocked || {})[bkey(st, c.idx)] || {}).tries | 0) + 1
+  return t >= (upkeepKind(st, c) === 'litter' ? LITTER_MAX_TRIES : MAX_HOLE_TRIES)
 }
 const DIG_WINDOW_MS = 5 * 60 * 1000
 const UNBREAKABLE_HARD = (b) => typeof b.hardness === 'number' && b.hardness < 0
@@ -3792,9 +3819,10 @@ function upkeepDone(bot, ctx, st, now = Date.now(), c = null) {
   // The far() dig/step ladder is slow on purpose: give it room before the stall strike.
   const ladder = ctx.castleFar && ctx.castleFar.idx === u.idx && (ctx.castleFar.dig || ctx.castleFar.step)
   // Another workable cell open: a dead target yields in UPKEEP_YIELD_MS, not 45 s+.
-  const stall = otherUpkeepOpen(ctx, st, u, now) ? UPKEEP_YIELD_MS : (ladder ? 3 : 1) * UPKEEP_STALL_MS
+  const stall = otherUpkeepOpen(ctx, st, u, now) && !ladder && !lastTry(st, u) ? UPKEEP_YIELD_MS : (ladder ? 3 : 1) * UPKEEP_STALL_MS
   if (now - w.since < stall) return false
   ctx.castleUpkeepWatch = null
+  strikeNote(u, ladder ? 'stall-ladder' : 'stall', d)
   try { bot.pathfinder.setGoal(null) } catch (_) { /* goal best-effort */ }
   blockCell(ctx, st, u, 'unreachable', now)
   return true
@@ -3850,6 +3878,8 @@ function work(bot, ctx, st, c, now, status) {
       // Nothing to lay here: floor upkeep before handing to the fetch.
       const fill = c.prep !== 'fill' && st.phase !== 'prep' && fillItem(bot, ctx) ? nextFill(st, fillTargets(bot, ctx, st, now), now) : null
       if (fill) { work(bot, ctx, st, fill, now, 'filling a floor hole'); return }
+      const src = siteSource(bot, ctx, st, c.prep === 'fill' ? 'fill' : c.kind, now)
+      if (src) { work(bot, ctx, st, src, now, `clearing scaffold for ${c.kind}`); return }
       st.status = `need ${c.kind}`
       stepFailed(ctx, `no-${c.kind}`)
       return
