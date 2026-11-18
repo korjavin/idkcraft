@@ -61,4 +61,21 @@ describe('castle bounded retirement', () => {
     assert.equal(castle.requeueRetired(bot, ctx, st, now + 20 * 60 * 1000), 0, 'protected: 10 min is not enough')
     assert.equal(castle.requeueRetired(bot, ctx, st, now + 61 * 60 * 1000), 1)
   })
+  it('off-plan retired entries (litter/fill) come back after the bound; upkeepStats counts them', () => {
+    const { bot } = world()
+    const now = Date.now()
+    const key = `2:${castle.LITTER_BAND_BASE + 5}`
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: { [key]: { tries: 3, why: 'unreachable', retired: true, retiredAt: now } } }
+    const ctx = {}
+    assert.equal(castle.requeueRetired(bot, ctx, st, now + 60 * 1000), 0)
+    assert.equal(castle.requeueRetired(bot, ctx, st, now + 11 * 60 * 1000), 1)
+    assert.equal(st.blocked[key].retired, false)
+    const orig = console.log
+    console.log = () => {}
+    try {
+      const u = castle.upkeepStats(bot, {}, st, now)
+      assert.deepEqual(Object.keys(u), ['clutter', 'workable', 'retired', 'backoff'])
+      assert.ok(u.workable <= u.clutter)
+    } finally { console.log = orig }
+  })
 })
