@@ -109,6 +109,37 @@ describe('generic stall clock (8hpy)', () => {
     assert.match(decides()[0] || '', /^stall decide goal=step:explore round=1 by=jev /, lines.join('\n'))
   })
 
+  it('no step at all (nogoal:none) is a stall: stall decide goal=idle:none acts', async () => {
+    const bot = makeBot()
+    const ctx = workCtx(bot)
+    ctx.castle = null
+    ctx.step = null
+    ctx.stepStatus = null
+    ctx.brain = { plan: async (req) => ({ step: Object.keys(req.criteria)[0], confidence: 0.9, source: 'jev' }) }
+    let t = 1000000000000
+    taskMod.taskTick(bot, ctx, t)
+    t = await round(bot, ctx, t)
+    assert.match(decides()[0] || '', /^stall decide goal=idle:none round=1 by=jev choice=\S+/, lines.join('\n'))
+    assert.ok(ctx.taskPlanStep, 'the pick pins a step')
+  })
+
+  it('an empty done (facts text as picked) does not reset the stall clock', () => {
+    const bot = makeBot()
+    const ctx = workCtx(bot)
+    ctx.castle = null
+    ctx.step = 'castlefetch'
+    ctx.stepStatus = 'running'
+    ctx.brain = { plan: async () => null }
+    const goal = require('../src/goal')
+    ctx.stepPickText = goal.goalText(goal.goalFacts(bot, ctx), ctx.home)
+    const t = 1000000000000
+    taskMod.taskTick(bot, ctx, t)
+    const m0 = ctx.progressMarks || 0
+    ctx.stepStatus = 'done'
+    taskMod.taskTick(bot, ctx, t + 1000)
+    assert.equal(ctx.progressMarks || 0, m0)
+  })
+
   it('a step oscillating in place with moving=true still stalls (net displacement, bot2 2026-11-18)', async () => {
     const bot = makeBot()
     bot.pathfinder.isMoving = () => true

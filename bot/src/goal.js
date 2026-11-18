@@ -1842,6 +1842,7 @@ function siteValidNow(bot, ctx) {
 function failHolds(ctx, name, text, bot) {
   try {
     if (SELF_ADVANCING[name]) return false
+    if (emptyHeld(ctx, name)) return true
     const sf = ctx && ctx.stepFail && ctx.stepFail[name]
     // Nothing workable (failed:idle, any step): yield for IDLE_RETRY_MS
     // whatever else drifts; a change in the step's own word releases it.
@@ -3177,6 +3178,7 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
   }
   ctx.stepStatus = 'running'
   ctx.stepDecides = 0
+  ctx.stepPickText = text
   // gwvg: status() reads who picked this step and why from the stamp.
   // The step rides along (01 core-2): orders and retreat move ctx.step
   // without re-stamping, and must not inherit the age/source.
@@ -3259,9 +3261,30 @@ function emptyRun(ctx, prev, status, finished) {
   ctx.emptyDone = { step: prev, n }
   if (n < 2) return status
   ctx.emptyDone = null
-  ctx.stepStatus = 'failed:idle'
-  console.log(`empty-run step=${prev} n=${n}: done on its first tick twice, holding it`)
-  return 'failed:idle'
+  // 8hpy: the hold is text-independent (a drifting facts text released the
+  // failed:idle hold every tick, prod bot2 castlefetch 79 empty picks/3 min),
+  // and an owed castle kind rides the reason so the next pick targets it.
+  ctx.emptyHeld = { ...(ctx.emptyHeld || {}), [prev]: { n, at: Date.now() } }
+  let owed = null
+  try { const o = require('./behaviours/castlefetch').owedKind(null, ctx); owed = o && o.kind } catch (_) { owed = null }
+  const out = owed ? `failed:no-effect-${owed}` : 'failed:idle'
+  if (owed && prev === 'castlefetch') ctx.castleFetchFailKind = owed
+  ctx.stepStatus = out
+  console.log(`empty-run step=${prev} n=${n}: done on its first tick twice, holding it status=${out}`)
+  return out
+}
+// Held by empty runs: { n, at } while the IDLE_RETRY_MS window stands, else null.
+function emptyHeld(ctx, name) {
+  const h = ctx && ctx.emptyHeld && ctx.emptyHeld[name]
+  return h && Date.now() - h.at < IDLE_RETRY_MS ? h : null
+}
+// Last step outcomes (fed to every plan() request via plan-context).
+const OUTCOMES_KEPT = 8
+function noteOutcome(ctx, step, result) {
+  if (!ctx || !step) return
+  const ring = Array.isArray(ctx.stepOutcomes) ? ctx.stepOutcomes : (ctx.stepOutcomes = [])
+  ring.push({ step, result })
+  while (ring.length > OUTCOMES_KEPT) ring.shift()
 }
 
 // Decision point: re-decide when there is no step, the step finished
@@ -3288,6 +3311,7 @@ async function decide(bot, ctx) {
     if (g) status = g
   }
   status = emptyRun(ctx, prev, status, finished)
+  if (finished) noteOutcome(ctx, prev, status === 'done' && ctx && ctx.stepPickText === text ? 'done-flat' : status)
   recordOutcome(bot, ctx, facts, prev, status, finished, text)
   // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
   // (walk->open->enter->close). A facts-changed re-decision must not preempt
@@ -3383,4 +3407,4 @@ async function decide(bot, ctx) {
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }
 }
 
-module.exports = { emptyRun, activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, menuNames, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome, noteLoop, loopBlocked, castleGo, castleFetchWhy, acquireWhy }
+module.exports = { emptyRun, emptyHeld, noteOutcome, activityChat, ACTIVITY_CHAT_MS, opInFlight, FORCES, MENU, STEP_ORDER, AUTONOMOUS_EXPLORE_RADIUS, NEED_LOGS, NEED_PLANKS, NEED_PLANKS_V1, needPlanks, timeWord, goalFacts, goalText, goalFsm, menuNames, decide, chooseStep, shapeGoalMenu, stepWhy, restWhy, failHolds, registered, STEP_CRITERIA, ASK_INSTRUCTIONS, logBucket, plankBucket, siteFor, adoptHome, chatStep, STEP_CHAT_SAME_MS, gatherFailedHolds, CASTLEFETCH_RETRY_MS, CASTLEFETCH_PARK_FAILS, FORAGE_RETRY_MS, BUILD_RETRY_MS, LOW_HP_GATE_MS, lowHpGated, taskParked, PARK_FORAGE_RADIUS, packFull, homeLegVetoed, stockpileSiteBranch, GOSITE_DIST, displacedFromCastle, castleBandHome, textForce, recordOutcome, noteLoop, loopBlocked, castleGo, castleFetchWhy, acquireWhy }

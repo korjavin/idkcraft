@@ -214,6 +214,14 @@ function planContext(bot, ctx, kind, done, total, goalText, criteria) {
 function withContext(bot, ctx, kind, done, total, state, req) {
   try {
     req.state.context = planContext(bot, ctx, kind, done, total, req.state.goal, req.criteria)
+    // 8hpy: outcome feedback — the last picks with their result, and the
+    // steps held for empty runs, so the chooser never repeats a no-op blindly.
+    req.state.outcomes = Array.isArray(ctx && ctx.stepOutcomes) ? ctx.stepOutcomes.slice() : []
+    const goal = require('./goal')
+    for (const id of Object.keys(req.criteria || {})) {
+      const h = goal.emptyHeld(ctx, id)
+      if (h) req.criteria[id] = `held: done-without-effect x${h.n}; ${req.criteria[id] || ''}`
+    }
     const ms = (state && state.stallMs) || 0
     if (state && (!state.ctxLoggedMs || ms < state.ctxLoggedMs)) {
       state.ctxLoggedMs = ms || 1
