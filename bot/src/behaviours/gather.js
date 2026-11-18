@@ -427,6 +427,12 @@ function carriedWood(bot) {
 const CHEST_DRY_MS = 10 * 60 * 1000
 const WOOD_KIT = 9 // mirrors goal.js WOOD_KIT (table 4 + pickaxe 3 + sticks 2 planks)
 const KIT_LOGS = 3 // 12 planks >= WOOD_KIT
+function woodStocked(bot, ctx, logs) {
+  try {
+    return logs * 4 + countItems(bot, (n) => n.endsWith('_planks')) >= WOOD_KIT && require('../cheststock').needMet(bot, ctx, 'oak_log')
+  } catch (_) { return false }
+}
+const isWood = (n) => n.endsWith('_log') || n.endsWith('_stem') || n.endsWith('_planks')
 function chestLogsTick(bot, ctx, g, logs, bp) {
   let pick = g.chestLogs
   if (!pick) {
@@ -450,7 +456,7 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
     const h = ctx.home && ctx.home.chest
     const isHome = (c) => h && c.x === h.x && c.y === h.y && c.z === h.z
     // y7lp: plus any remembered chest whose last snapshot held logs
-    const logged = [ctx.chests, ctx.peerChests].flatMap((l) => Array.isArray(l) ? l : []).filter((c) => c && c.contents && Object.entries(c.contents).some(([n, v]) => (n.endsWith('_log') || n.endsWith('_stem')) && v > 0))
+    const logged = [ctx.chests, ctx.peerChests].flatMap((l) => Array.isArray(l) ? l : []).filter((c) => c && c.contents && Object.entries(c.contents).some(([n, v]) => isWood(n) && v > 0))
     const cands = banked ? logged.filter((c) => !isHome(c)) : [h, ctx.castle && ctx.castle.siteChest, ...logged]
     for (const c of cands) {
       if (!c || typeof c.x !== 'number') continue
@@ -477,7 +483,7 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
     busy = require('./beds').chestTick(bot, ctx, g, `gather-chest:${pick.k}`, async () => {
       let got = 0
       try {
-        const r = await require('./stockpile').withdrawAnyFromChest(bot, ctx, logNames(bot), want, pick.c)
+        const r = await require('./stockpile').withdrawAnyFromChest(bot, ctx, [...logNames(bot), ...Object.keys((bot.registry && bot.registry.itemsByName) || {}).filter((n) => n.endsWith('_planks'))], want, pick.c)
         got = (r && r.got) || 0
       } catch (_) { got = 0 }
       // a built-home kit draw also dries the chest: stockpile may bank part of
@@ -577,6 +583,16 @@ function gather(bot, ctx, target, state) {
   }
   const bp = bot.entity && bot.entity.position
   if (!bp) return
+  // Shared stock first (task-plan/rule/recover picks alike): wood at its
+  // stock target with a kit packed is no reason to chop.
+  if (woodStocked(bot, ctx, logs)) {
+    g.final = 'done'
+    g.atLogs = logs
+    stepDone(ctx)
+    try { console.log(`gather: wood stock met, kit packed (${logs} logs) - no chop`) } catch (_) { /* log best-effort */ }
+    clearGoal(bot, ctx)
+    return
+  }
   if (!g.pos && homeReadTick(bot, ctx, g)) return
   if (!g.pos && chestLogsTick(bot, ctx, g, logs, bp)) return
   // mnx pit memory: no target within a gave-up spot's radius.

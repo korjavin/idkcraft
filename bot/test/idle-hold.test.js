@@ -17,6 +17,11 @@ it('a new castle word releases the idle hold at once', () => {
   const ctx = { stepFail: rec(Date.now()) }
   assert.equal(failHolds(ctx, 'castle', 'time=day logs=few castle=stone-batch', bot), false)
 })
+it('a stock-level flip of the same kind keeps the idle hold (castle <-> castlefetch ping-pong)', () => {
+  const ctx = { stepFail: { castle: { ...rec(Date.now()).castle, text: 'time=day castle=stone-batch' } } }
+  assert.equal(failHolds(ctx, 'castle', 'time=day castle=stone-none', bot), true)
+  assert.equal(failHolds(ctx, 'castle', 'time=day castle=planks-none', bot), false)
+})
 it('the idle hold expires after IDLE_RETRY_MS', () => {
   const ctx = { stepFail: rec(Date.now() - IDLE_RETRY_MS - 1) }
   assert.equal(failHolds(ctx, 'castle', 'time=day logs=few castle=clear', bot), false)
