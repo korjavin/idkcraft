@@ -1186,6 +1186,9 @@ function isLitter(bot, ctx, st, x, y, z, w, d) {
     return !(dc && blueprint.matches(dc.kind, n))
   }
   if (pc) return pc.kind === 'dig' && (SCAFFOLD_MATS.has(n) || n === 'grass_block')
+  // The walkable-floor window is fillTargets' (prod bot4: one cell filled
+  // and dug as litter 17x): a block there is never litter.
+  if (inFillWindow(st, x, y, z, w, d)) return false
   if (leftoverScaffold(bot, st, b, x, y, z, w, d)) return true
   if (!SCAFFOLD_MATS.has(n)) return false
   const ring = y >= st.site.y && x >= st.site.x - 1 && x <= st.site.x + w && z >= st.site.z - 1 && z <= st.site.z + d
@@ -1432,6 +1435,10 @@ function fillOf(st, idx) {
   const sill = sillOf(st)
   if (k === `${sill.x},${sill.y},${sill.z}` || blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.has(k)) return null
   return c
+}
+function inFillWindow(st, x, y, z, w, d) {
+  const dx = x - st.site.x, dz = z - st.site.z, dd = st.site.y - y
+  return dd >= 1 && dd <= FILL_DEPTH && dx >= -FILL_RING && dx < w + FILL_RING && dz >= -FILL_RING && dz < d + FILL_RING
 }
 function fillIdx(st, d, dx, dz, dd) {
   return fillBase(st) + ((dx + FILL_RING) * (d + 2 * FILL_RING) + (dz + FILL_RING)) * FILL_DEPTH + (dd - 1)
@@ -1868,9 +1875,11 @@ function upkeep(bot, ctx, st, now = Date.now()) {
   const cells = blueprint.absPlan(st.site, st.rot, st.blueprintVersion).cells
   const missing = cells.filter((c) => blueprint.isPlaceTarget(c.kind) && !done(bot, c)).length
   let clutter = 0
-  try { clutter = litterTargets(bot, ctx, st, now).length } catch (_) { /* count best-effort */ }
+  // Only cells upkeep will still work: retired ones never go down.
+  const live = (o) => { const b = st.blocked && st.blocked[bkey(st, o.idx)]; return !(b && b.retired) }
+  try { clutter = litterTargets(bot, ctx, st, now).filter(live).length } catch (_) { /* count best-effort */ }
   let holes = 0
-  try { holes = fillTargets(bot, ctx, st, now).length } catch (_) { /* count best-effort */ }
+  try { holes = fillTargets(bot, ctx, st, now).filter(live).length } catch (_) { /* count best-effort */ }
   return { holes, clutter, missing }
 }
 
@@ -2863,8 +2872,12 @@ function digCell(bot, ctx, st, c, now) {
   }
   // Harvest tool first (flat digFlight): stone by hand drops nothing,
   // and the spoil is kept — cobble counts for the castle (g0z.6).
-  if (!toolPrep.ready(bot, ctx, st, b, () => blockCell(ctx, st, c, `no-tool-${name}`, now))) return
-  const tool = process.env.BOT_BODY === 'baritone' && toolPrep.requirement(b) ? bot.heldItem : harvestTool(bot, b)
+  // Litter needs no drop: with no tool to be had it digs by hand (prod
+  // bot3: fail:no-tool-cobblestone retired scaffold for want of a pick).
+  let bare = false
+  const litter = upkeepKind(st, c) === 'litter'
+  if (!toolPrep.ready(bot, ctx, st, b, () => { if (litter) bare = true; else blockCell(ctx, st, c, `no-tool-${name}`, now) }) && !bare) return
+  const tool = bare ? null : process.env.BOT_BODY === 'baritone' && toolPrep.requirement(b) ? bot.heldItem : harvestTool(bot, b)
   // Someone's block (vmzq.40) is never destroyed by hand: it waits for the tool.
   if (footprintOnly && !canHarvest(b, tool)) { blockCell(ctx, st, c, `no-tool-${name}`, now); return }
   flight(ctx, 'digInFlight', c, async (token) => {
@@ -3549,9 +3562,22 @@ function upkeepKind(st, c) {
   if (c.idx < fillBase(st)) return 'litter'
   return c.idx < blueprint.DECOR_BASE ? 'fill' : null
 }
+const UPKEEP_OK_MAX = 3
 function upkeepLog(ctx, st, c, result) {
   const kind = upkeepKind(st, c)
   if (kind) console.log(`castle upkeep kind=${kind} cell=${c.x},${c.y},${c.z} result=${result}`)
+  // Flip-flop guard: a cell upkeep "fixes" UPKEEP_OK_MAX times is being
+  // undone by something (its own other rule, a player, a mob): retire it.
+  if (kind && result === 'ok') {
+    const oks = ctx.castleUpkeepOks || (ctx.castleUpkeepOks = {})
+    const k = `${c.x},${c.y},${c.z}`
+    if ((oks[k] = (oks[k] || 0) + 1) >= UPKEEP_OK_MAX) {
+      const bk = bkey(st, c.idx)
+      st.blocked = st.blocked || {}
+      st.blocked[bk] = { ...(st.blocked[bk] || { tries: 0, until: 0 }), retired: true, retiredAt: Date.now(), why: 'flipflop' }
+      console.log(`castle upkeep kind=${kind} cell=${k} retired flipflop`)
+    }
+  }
   if (ctx.castleUpkeep && ctx.castleUpkeep.idx === c.idx) ctx.castleUpkeep = null
 }
 // Upkeep stupor guard (owner 2026-11-17, prod bot3: nothing above y73 ever
@@ -3900,3 +3926,5 @@ module.exports.castleBuilderBatch = castleBuilderBatch
 module.exports.pick = pick
 module.exports.placeCell = placeCell
 module.exports.upkeepDone = upkeepDone
+module.exports.isLitter = isLitter
+module.exports.upkeepLog = upkeepLog
