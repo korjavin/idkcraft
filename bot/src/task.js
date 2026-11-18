@@ -95,6 +95,30 @@ function goalMaxRounds() {
 function goalGraceMs() { return envMs('GOAL_TRAVEL_GRACE_MS', GOAL_TRAVEL_GRACE_MS_DEFAULT) }
 function goalPlanbMs() { return envMs('GOAL_PLANB_SWITCH_MS', GOAL_PLANB_SWITCH_MS_DEFAULT) }
 function watchdogOn() { return goalWatchdogMs() > 0 }
+// idkcraft-8hpy.2: STALL_DECIDE (default on, '0' = off) — a stall goes to the
+// chooser (JEV, else the deterministic stub, LLM once per episode) and never
+// to an idle park before the round cap.
+function stallDecideOn() { return String(process.env.STALL_DECIDE || '') !== '0' }
+function stallLlmOn() { return /^(1|true|yes)$/i.test(String(process.env.LLM_ESCALATION || '')) }
+// Steps currently held by a failure (stepFail status failed:*).
+function heldSteps(ctx) {
+  const held = new Set()
+  try {
+    const sf = ctx && ctx.stepFail
+    if (sf && typeof sf === 'object') {
+      for (const k of Object.keys(sf)) {
+        if (sf[k] && typeof sf[k].status === 'string' && sf[k].status.startsWith('failed:')) held.add(k)
+      }
+    }
+  } catch (_) { /* held best-effort */ }
+  return held
+}
+// One `stall decide` line per decision (8hpy.2).
+function stallDecideLog(kind, wd, by, choice, conf, why, options) {
+  try {
+    console.log(`stall decide goal=${kind} round=${((wd && wd.rounds) || 0) + 1} by=${by} choice=${choice} conf=${conf} why=${why} options=[${options}]`)
+  } catch (_) { /* log best-effort */ }
+}
 const { PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, STEP_ORDER, STEP_EFFECT_TEXT } = require('./plan-consts') // oqul.5: leaf
 
 function taskKind(ctx) {
@@ -1948,6 +1972,8 @@ function resetWdProgress(wd) {
       wd.rounds = 0
       wd.lowConf = 0
       wd.lowConfGoal = null
+      wd.llmUsed = false
+      wd.llmPlan = null
       // Strategic-chooser memo (idkcraft-u19u phase 2): progress ends the
       // episode the stored answer was fired for.
       wd.stratKey = null
@@ -2011,6 +2037,7 @@ function fireWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   try {
     const { goalOptions, planInstructions } = require('./goal-options')
     opts = goalOptions(bot, ctx, kind, skips)
+    if (stallDecideOn()) opts = opts.filter((o) => o.id !== 'park')
     if (opts.length === 0) return
     const criteria = {}
     for (const o of opts) criteria[o.id] = o.criterion
@@ -2031,8 +2058,26 @@ function fireWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     wd.firedOpts = opts.map((o) => o.id)
     const req = { state: planState(bot, ctx, kind, done, total, state, true), instructions, criteria }
     const brain = ctx.brain
+    let ask = (q) => brain.plan(q)
+    if (stallDecideOn()) {
+      const queued = Array.isArray(wd.llmPlan) ? wd.llmPlan : []
+      while (queued.length > 0 && !criteria[queued[0]]) queued.shift()
+      if (queued.length > 0) {
+        // The episode's LLM plan replays its next step: no call.
+        const next = queued.shift()
+        ask = () => ({ step: next, confidence: null, source: 'llm-plan' })
+      } else if (typeof brain.plan !== 'function') {
+        // Keyless stub: the top feasible productive option, failed ones last.
+        ask = () => {
+          const hist = state && state.wd && Array.isArray(state.wd.history) ? state.wd.history : null
+          const fb = fallbackRank(kind, opts, hist, (ctx && ctx.step) || null, heldSteps(ctx))
+          if (!fb) throw new Error('stub no candidate')
+          return { step: fb.id, confidence: 1, source: 'stub' }
+        }
+      }
+    }
     Promise.resolve()
-      .then(() => brain.plan(req))
+      .then(() => ask(req))
       .then(
         (ans) => onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, null),
         (err) => onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, null, err),
@@ -2249,21 +2294,19 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
       } catch (_) { /* streak best-effort */ }
       wd.lowConf = (typeof wd.lowConf === 'number' ? wd.lowConf : 0) + 1
     }
+    // 8hpy.2: JEV had no usable pick — the LLM gets ONE call per stall
+    // episode (a multi-step plan the next rounds replay without calls).
+    if (stallDecideOn() && stallLlmOn() && !wd.llmUsed && ctx && ctx.brain && typeof ctx.brain.stallPlan === 'function') {
+      wd.llmUsed = true
+      fireStallLlm(bot, ctx, kind, done, total, state, wd, now)
+      return
+    }
     if (undecided && wd.lowConf >= 2) {
       let fb = null
       try {
         const { goalOptions } = require('./goal-options')
         const hist = state && state.wd && Array.isArray(state.wd.history) ? state.wd.history : null
-        const held = new Set()
-        try {
-          const sf = ctx && ctx.stepFail
-          if (sf && typeof sf === 'object') {
-            for (const k of Object.keys(sf)) {
-              if (sf[k] && typeof sf[k].status === 'string' && sf[k].status.startsWith('failed:')) held.add(k)
-            }
-          }
-        } catch (_) { /* held best-effort */ }
-        fb = fallbackRank(kind, goalOptions(bot, ctx, kind), hist, step, held)
+        fb = fallbackRank(kind, goalOptions(bot, ctx, kind), hist, step, heldSteps(ctx))
       } catch (_) { fb = null }
       if (fb) {
         const diagnosis = diagnose(bot, ctx)
@@ -2274,6 +2317,7 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
         try {
           metrics.goalWatchdogTotal.inc({ kind, choice: fb.id, source: 'fallback' })
         } catch (_) { /* counter best-effort */ }
+        stallDecideLog(kind, wd, 'fallback', fb.id, '?', why, options)
         clearLowConf()
         wd.backoffMs = 0
         wd.backoffUntil = 0
@@ -2397,11 +2441,44 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   try {
     metrics.goalWatchdogTotal.inc({ kind, choice, source: ans.source || 'jev' })
   } catch (_) { /* counter best-effort */ }
+  stallDecideLog(kind, wd, (ans.source === 'llm' || ans.source === 'llm-plan') ? 'llm' : (ans.source || 'jev'), choice, conf, diagnosis, options)
   chatReason()
   wd.backoffMs = 0
   wd.backoffUntil = 0
   clearLowConf()
   applyCommit(bot, ctx, kind, opt.id, opt.step || null, now, opt.unlock || null, opt.criterion)
+}
+
+// The one LLM call of a stall episode (8hpy.2): brain.stallPlan returns
+// { steps: [optionId...], reason }; the first step answers now, the rest
+// queue on wd.llmPlan and replay at the next flat rounds with no call.
+function fireStallLlm(bot, ctx, kind, done, total, state, wd, now) {
+  try {
+    const { goalOptions, planInstructions } = require('./goal-options')
+    const opts = goalOptions(bot, ctx, kind).filter((o) => o.id !== 'park')
+    if (opts.length === 0) return
+    const criteria = {}
+    for (const o of opts) criteria[o.id] = o.criterion
+    const g = ctx && ctx.goal
+    const goalId = g && g.id
+    const generation = g && g.generation
+    const seq = (wd.seq = (wd.seq || 0) + 1)
+    wd.pending = seq
+    wd.firedAt = now
+    wd.firedOpts = opts.map((o) => o.id)
+    const req = { state: planState(bot, ctx, kind, done, total, state, true), instructions: planInstructions(kind, ctx, done, total), criteria }
+    Promise.resolve()
+      .then(() => ctx.brain.stallPlan(req))
+      .then(
+        (p) => {
+          const steps = p && Array.isArray(p.steps) ? p.steps.filter((s) => typeof s === 'string' && criteria[s]) : []
+          wd.llmPlan = steps.slice(1)
+          const ans = steps.length > 0 ? { step: steps[0], confidence: null, source: 'llm', reason: p.reason || null } : null
+          onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, ans, null)
+        },
+        (err) => onWatchAnswer(ctx, kind, state, wd, seq, goalId, generation, null, err),
+      )
+  } catch (_) { /* a failed fire falls back on the next undecided round */ }
 }
 
 // One tick of the fast watchdog: consume-first (the maybeL2 precedent),
@@ -2418,7 +2495,9 @@ function maybeWatchdog(bot, ctx, kind, done, total, state, now) {
       if (!eligibleOrder(ctx, kind)) return
     } else {
       const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
-      if (!rec || rec.taskPark) return
+      // 8hpy.2: past the round cap the park keeps the chooser running, so
+      // the bot keeps doing chosen work instead of resting.
+      if (!rec || (rec.taskPark && !stallDecideOn())) return
     }
     const wd = wdOf(state)
     if (wd.answer) {
@@ -2433,7 +2512,7 @@ function maybeWatchdog(bot, ctx, kind, done, total, state, now) {
     if (now - (wd.firedAt || 0) < W) return
     if ((state.stallMs || 0) < W) return
     const brain = ctx && ctx.brain
-    if (!brain || typeof brain.plan !== 'function') return
+    if (!brain || (typeof brain.plan !== 'function' && !stallDecideOn())) return
     // House: the 60 s cache must not condemn a building house — re-read
     // loaded cells before the verdict (peer Q1).
     if (kind === 'house') {
@@ -2722,6 +2801,7 @@ function endCommit(bot, ctx, kind, state, c, result, now) {
     } catch (_) { /* unlock best-effort */ }
     try {
       console.log(`goal outcome kind=${k} choice=${choice} dur=${Math.floor(durMs / 1000)}s delta=${delta} result=${result} unlock=${unlock}`)
+      console.log(`stall outcome goal=${k} choice=${choice} progress=${String(delta).replace('->', '→')} result=${result}`)
     } catch (_) { /* log best-effort */ }
     const wd = state ? wdOf(state) : null
     if (wd) {
@@ -3108,6 +3188,8 @@ function maybeL2(bot, ctx, kind, done, total, state, now) {
   const rec = kind === 'castle' ? (ctx && ctx.castle) : (ctx && ctx.home)
   if (!rec || rec.taskPark) return
   if (watchdogOn()) {
+    // 8hpy.2: with the chooser on, only the round cap parks.
+    if (stallDecideOn()) return
     // The watchdog owns plan() calls; L2 stays as the time backstop
     // (park only) for episodes that never reach the round cap.
     const diagnosis = parkTask(bot, ctx, kind, done, total, now)
@@ -4267,4 +4349,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { eligible, houseProgress, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick }
+module.exports = { stallDecideOn, heldSteps, eligible, houseProgress, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick }

@@ -500,6 +500,42 @@ function llmAsk(apiKey, fetchFn, timeoutMs = 1000, model = LLM_MODEL) {
   return { ask }
 }
 
+// Stall LLM (idkcraft-8hpy.2): the ONE call of a stall episode, asked only
+// when JEV had no confident pick. Returns { steps: [optionId...<=4], reason };
+// the watchdog replays the steps over the next rounds without more calls.
+// Budgeted by LLM_TOKENS_PER_HOUR inside llmCall.
+const LLM_STALL_SYSTEM = 'You are the stall planner of a Minecraft companion bot. Its goal stopped progressing and ' +
+  'a cheaper classifier could not decide. Read the state (failures, missing materials, pack, chest stock) and give an ' +
+  'ordered plan of up to 4 option ids to run one after another. Answer with JSON only: ' +
+  '{"plan": ["<option id>", ...], "reason": "<one short sentence>"}'
+function llmStallPlanner(apiKey, fetchFn, timeoutMs = PLAN_TIMEOUT_MS, model = LLM_MODEL) {
+  return async function stallPlan({ state, instructions, criteria }) {
+    const keys = Object.keys(criteria || {})
+    if (keys.length === 0) throw new Error('llm missing plan answer')
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(new DOMException('brain timeout', 'TimeoutError')), timeoutMs)
+    let data
+    try {
+      data = await llmCall({
+        use: 'stall', apiKey, signal: ac.signal, fetchFn,
+        body: {
+          model, ...llmModelConfig(model, 400), system: LLM_STALL_SYSTEM,
+          messages: [{ role: 'user', content: `${instructions || ''}\n\nState:\n${JSON.stringify(state)}\n\nOptions (id: criterion):\n` + keys.map((k) => `${k}: ${criteria[k]}`).join('\n') }],
+        },
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+    const block = ((data && Array.isArray(data.content) ? data.content : []).find((b) => b && b.type === 'text'))
+    const text = (block && block.text) || ''
+    let ans = null
+    try { ans = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) } catch (_) { ans = null }
+    const steps = ans && Array.isArray(ans.plan) ? ans.plan.filter((k) => keys.includes(k)).slice(0, 4) : []
+    if (steps.length === 0) throw new Error('llm missing plan answer')
+    return { steps, reason: typeof ans.reason === 'string' ? ans.reason.replace(/\s+/g, ' ').trim().slice(0, 160) : '' }
+  }
+}
+
 // Planner selection (vhlb.2): PLANNER=llm|jev; default llm when
 // ANTHROPIC_API_KEY exists, else jev (which already rides every
 // TYPESAFE-keyed brain). Only the llm choice changes a brain: no
@@ -764,9 +800,15 @@ function makeBrain(env) {
       b = { ...base, source: 'jev', menuAsk: jevBrain(key, undefined, brainTimeoutMs(env), JEV_ENDPOINT).ask }
     }
   }
-  b = withPlanner(b, env)
+  // 8hpy.2: with the stall chooser on (STALL_DECIDE, default on) a JEV key
+  // keeps plan() on JEV; the LLM is the once-per-episode stallPlan only.
+  if (key && String(env.STALL_DECIDE || '') !== '0') {
+    if (env.ANTHROPIC_API_KEY) b = { ...b, stallPlan: llmStallPlanner(env.ANTHROPIC_API_KEY, undefined, PLAN_TIMEOUT_MS, env.LLM_MODEL || LLM_MODEL) }
+  } else {
+    b = withPlanner(b, env)
+  }
   console.log(`brain=stub planner=${plannerName(b)} ask=${(b.ask && b.source) || 'none'} menuAsk=${(b.menuAsk && b.source) || 'none'}`)
   return b
 }
 
-module.exports = { stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, llmAsk, LLM_ASK_SYSTEM, menuAskEnabled, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, llmCall, llmTokensPerHour, resetLlmBudget, thinkingForModel, llmModelConfig }
+module.exports = { llmStallPlanner, stubBrain, jevBrain, makeBrain, hybridBrain, isHard, stateToText, numericStateToText, sourceForUrl, JEV_ENDPOINT, JEV_MODEL, askErrorStreak, LAYA_URL_DEFAULT, brainTimeoutMs, layaUrl, planner, PLAN_TIMEOUT_MS, llmPlanner, llmAsk, LLM_ASK_SYSTEM, menuAskEnabled, withPlanner, plannerChoice, plannerName, LLM_ENDPOINT, LLM_MODEL, llmCall, llmTokensPerHour, resetLlmBudget, thinkingForModel, llmModelConfig }
