@@ -237,7 +237,7 @@ describe('castle maintenance (owner 2026-11-17)', () => {
     try { list = fullPass(worldBot(set), {}, state({ visitedAt: Date.now() })) } finally { console.log = log }
     for (const c of cells) assert.ok(list.some((o) => o.x === c.x && o.y === c.y && o.z === c.z), `tower cell ${c.x},${c.y},${c.z}`)
     const scan = logs.find((l) => l.startsWith('castle scaffold scan '))
-    assert.match(scan || '', /^castle scaffold scan cand=\d+ litter=\d+ hits=\{.*\} mats=\{.*cobblestone:\d+.*\} rejected=\{.*\}$/, logs.join('\n'))
+    assert.match(scan || '', /^castle scaffold scan cand=\d+ litter=\d+ hits=\{.*\} mats=\{.*cobblestone:\d+.*\} rejected=\{.*\}( sample=.*)?$/, logs.join('\n'))
   })
 
   it('a grass-topped 2-wide mound against the wall stays', () => {
