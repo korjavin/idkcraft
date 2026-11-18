@@ -515,6 +515,18 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleDecorLogAt": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleDecorSource": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleDug": {
     "writers": [
       "src/behaviours/castle.js"
@@ -824,6 +836,18 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleUpkeepOks": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "castleUpkeepRate": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleUpkeepStuckAt": {
     "writers": [
       "src/behaviours/castle.js"
@@ -1067,6 +1091,12 @@
     ],
     "owner": "src/reflexes.js"
   },
+  "emptyDone": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
   "enclosedEscapes": {
     "writers": [
       "src/behaviours/castle.js",
@@ -1288,6 +1318,12 @@
     "owner": "src/behaviours/food-recovery.js"
   },
   "foodBreadRetryAt": {
+    "writers": [
+      "src/behaviours/food-recovery.js"
+    ],
+    "owner": "src/behaviours/food-recovery.js"
+  },
+  "foodChestDryUntil": {
     "writers": [
       "src/behaviours/food-recovery.js"
     ],
@@ -1598,6 +1634,24 @@
       "src/orders.js"
     ],
     "owner": "src/memory.js"
+  },
+  "idleGoal": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "idleGoalAt": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
+  },
+  "idleWhy": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
   },
   "inShelter": {
     "writers": [
@@ -1932,6 +1986,12 @@
     ],
     "owner": "src/index.js"
   },
+  "menuDropAt": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
   "movements": {
     "writers": [
       "src/index.js"
@@ -1962,6 +2022,12 @@
     ],
     "owner": "src/index.js"
   },
+  "noPathWatch": {
+    "writers": [
+      "src/unreachable.js"
+    ],
+    "owner": "src/unreachable.js"
+  },
   "orderAside": {
     "writers": [
       "src/llm-orders.js"
@@ -1973,6 +2039,12 @@
       "src/situation.js"
     ],
     "owner": "src/situation.js"
+  },
+  "ordersTicker": {
+    "writers": [
+      "src/index.js"
+    ],
+    "owner": "src/index.js"
   },
   "ownBreakUntil": {
     "writers": [
@@ -2053,6 +2125,19 @@
     ],
     "owner": "src/behaviours/build.js"
   },
+  "progressMarks": {
+    "writers": [
+      "src/behaviours/castle.js",
+      "src/task.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
+  "reclaimInFlight": {
+    "writers": [
+      "src/behaviours/tablespot.js"
+    ],
+    "owner": "src/behaviours/tablespot.js"
+  },
   "recoverLatch": {
     "writers": [
       "src/behaviours/recover.js",
@@ -2116,6 +2201,12 @@
       "src/goal.js"
     ],
     "owner": "src/behaviours/reforest.js"
+  },
+  "relayed": {
+    "writers": [
+      "src/behaviours/util.js"
+    ],
+    "owner": "src/behaviours/util.js"
   },
   "repeatGaveUpPage": {
     "writers": [
@@ -2200,6 +2291,12 @@
       "src/goal.js"
     ],
     "owner": "src/behaviours/retreat.js"
+  },
+  "roadsideTable": {
+    "writers": [
+      "src/behaviours/tablespot.js"
+    ],
+    "owner": "src/behaviours/tablespot.js"
   },
   "roamGoal": {
     "writers": [
@@ -2320,6 +2417,18 @@
     ],
     "owner": "src/behaviours/home.js"
   },
+  "stallGen": {
+    "writers": [
+      "src/task.js"
+    ],
+    "owner": "src/task.js"
+  },
+  "stallPreempt": {
+    "writers": [
+      "src/task.js"
+    ],
+    "owner": "src/task.js"
+  },
   "stay": {
     "writers": [
       "src/behaviours/home.js",
@@ -2341,6 +2450,12 @@
       "src/step.js"
     ],
     "owner": "src/step.js"
+  },
+  "stepDecides": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
   },
   "stepFail": {
     "writers": [
@@ -2516,6 +2631,12 @@
       "src/behaviours/toolprep.js"
     ],
     "owner": "src/behaviours/toolprep.js"
+  },
+  "unblockInFlight": {
+    "writers": [
+      "src/behaviours/placesafe.js"
+    ],
+    "owner": "src/behaviours/placesafe.js"
   },
   "underFireLogged": {
     "writers": [

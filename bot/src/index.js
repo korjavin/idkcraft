@@ -504,7 +504,9 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       if (guarded) return guarded
       let decision = null
       // Enclosed (prod 2026-11-15): noPath on 3 distinct targets in 60 s -> open one own-build doorway.
-      if (!urgentFight(state) && enclosed.tick(bot, ctx)) {
+      // A live stall-chooser pick (task.js genericTick) preempts the enclosed/recover reflexes.
+      const stallPick = !!(ctx.stallPreempt && ctx.stallPreempt.until > Date.now())
+      if (!urgentFight(state) && !stallPick && enclosed.tick(bot, ctx)) {
         console.log(`decision source=escalation action=enclosed sprint=false dist=none ${pathSuffix()}`)
         return { decision: { action: 'enclosed', sprint: false, source: 'escalation' }, calledBrain }
       }
@@ -519,7 +521,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         return { decision: { action: 'loot', sprint: false, source: 'reflex' }, calledBrain }
       }
       unreachable.tick(bot, ctx) // a noPath work goal fails its step now; the arbiter below re-picks
-      if (ctx.stuck && !urgentFight(state)) return await recoverTick(target, state, calledBrain)
+      if (ctx.stuck && !urgentFight(state) && !stallPick) return await recoverTick(target, state, calledBrain)
       const key = stateKey(state)
       if (lastDecision && key === lastStateKey) {
         decision = lastDecision

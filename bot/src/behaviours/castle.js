@@ -3791,6 +3791,7 @@ function upkeepLog(ctx, st, c, result) {
   const kind = upkeepKind(st, c)
   if (kind) console.log(`castle upkeep kind=${kind} cell=${c.x},${c.y},${c.z} result=${result}`)
   if (kind) upkeepRate(ctx, result === 'ok' ? 'ok' : 'fail')
+  if (kind && result === 'ok') ctx.progressMarks = (ctx.progressMarks || 0) + 1 // generic stall clock (task.js)
   // Flip-flop guard: a cell upkeep "fixes" UPKEEP_OK_MAX times is being
   // undone by something (its own other rule, a player, a mob): retire it.
   if (kind && result === 'ok') {
