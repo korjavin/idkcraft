@@ -442,15 +442,7 @@ function houseLoaded(bot, home) {
 }
 
 function houseProgress(bot, home) {
-  const build = require('./behaviours/build')
-  const plan = build.blueprintFor(home)
-  let done = 0
-  for (const cell of plan) {
-    try {
-      if (build.cellDone(bot, home, cell)) done++
-    } catch (_) { /* unreadable reads undone */ }
-  }
-  return { done, total: plan.length }
+  return require('./behaviours/build').houseProgress(bot, home)
 }
 
 // House wood (idkcraft-oqj5): the house's own input, in planks (a log
@@ -4275,4 +4267,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { eligible, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick }
+module.exports = { eligible, houseProgress, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick }

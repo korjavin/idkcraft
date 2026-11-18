@@ -507,7 +507,11 @@ function demand(bot, ctx) {
   // chosen twice, 0 acquire lines — demand served the failing chest leg).
   let unlockKind = null
   try { unlockKind = require('../goal-unlock').goalUnlock(ctx, 'acquire') } catch (_) { /* no window */ }
-  if (unlockKind === kind && acquireItem(bot, kind)) {
+  // A failed acquire rests CASTLEFETCH_RETRY_MS here too (prod bot5: a chosen
+  // acquire-torch re-ran every tick, 1386 failed legs/h on a full pack).
+  const ah0 = ctx && ctx.acquireHeld && ctx.acquireHeld[kind]
+  const rested = !(typeof ah0 === 'number' && Date.now() - ah0 <= require('../budget').CASTLEFETCH_RETRY_MS)
+  if (unlockKind === kind && rested && acquireItem(bot, kind)) {
     const short = Math.max(0, target + castleMod.reserveOf(kind) - castleMod.held(bot, kind))
     if (short > 0) return { kind, word, short, acquire: true }
   }
