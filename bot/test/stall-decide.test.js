@@ -123,6 +123,79 @@ describe('stall chooser (8hpy.2)', () => {
     assert.ok(jev > jevBefore, 'JEV asked again once the plan ran out')
   })
 
+  it('sources are separate options; a picked chest source runs directly as a self bring', async () => {
+    const bot = makeBot([{ name: 'oak_planks', count: 3 }])
+    const ctx = houseCtx(bot)
+    // The real chest rung needs a world (pickChest); record the rung asked for.
+    const asked = []
+    ctx.ordersTicker = { setBring: (a) => { asked.push(a); ctx.bring = { kind: 'item', name: a.name }; return 'checking chests' } }
+    let offered = null
+    ctx.brain = { plan: async (req) => { offered = req; return { step: Object.keys(req.criteria).find((k) => k.startsWith('fetch:')), confidence: 0.9, source: 'jev' } } }
+    let t = 1000000000000
+    taskMod.taskTick(bot, ctx, t)
+    t = await decideRound(bot, ctx, t)
+    const id = Object.keys(offered.criteria).find((k) => k.startsWith('fetch:'))
+    assert.equal(id, 'fetch:oak_planks@chest(6m,128)', Object.keys(offered.criteria).join(' '))
+    assert.match(offered.state.context.res.join('\n'), /res wood pack=0 near=32 far=0/)
+    assert.ok(lines.some((l) => l.startsWith('stall source resolver=chest item=oak_planks')), lines.join('\n'))
+    assert.deepEqual(asked, [{ name: 'oak_planks', want: 115, by: 'self', chestFirst: true, craftFirst: false }], 'the picked rung only, no resolver order')
+    assert.ok(ctx.bring && ctx.bring.self, 'self bring started')
+    assert.equal(ctx.goal.commit.optionId, id)
+  })
+
+  it('JEV may pick escalate_llm: the one stallPlan call answers', async () => {
+    process.env.LLM_ESCALATION = '1'
+    const bot = makeBot([{ name: 'oak_planks', count: 3 }])
+    const ctx = houseCtx(bot)
+    let llm = 0
+    ctx.brain = {
+      plan: async (req) => ({ step: 'escalate_llm', confidence: 0.9, source: 'jev' }),
+      stallPlan: async (req) => { llm++; assert.ok(!('escalate_llm' in req.criteria)); return { steps: [Object.keys(req.criteria)[0]], reason: 'x' } },
+    }
+    let t = 1000000000000
+    taskMod.taskTick(bot, ctx, t)
+    t = await decideRound(bot, ctx, t)
+    t = await decideRound(bot, ctx, t)
+    assert.equal(llm, 1)
+    assert.ok(decides().some((l) => / by=llm /.test(l)), lines.join('\n'))
+  })
+
+  it('a 3-round loop is named and escalate_llm leads; ignored, the next round escalates by itself', async () => {
+    process.env.LLM_ESCALATION = '1'
+    const bot = makeBot([{ name: 'oak_planks', count: 3 }])
+    const ctx = houseCtx(bot)
+    ctx.ordersTicker = null // no source options: the plain table loops
+    let llm = 0
+    const reqs = []
+    ctx.brain = {
+      plan: async (req) => { reqs.push(req); return { step: Object.keys(req.criteria).find((k) => k !== 'escalate_llm'), confidence: 0.9, source: 'jev' } },
+      stallPlan: async () => { llm++; return { steps: [], reason: 'x' } },
+    }
+    let t = 1000000000000
+    taskMod.taskTick(bot, ctx, t)
+    for (let i = 0; i < 3; i++) { t = await decideRound(bot, ctx, t); t = runOut(bot, ctx, t) }
+    assert.equal(llm, 0)
+    t = await decideRound(bot, ctx, t)
+    const last = reqs[reqs.length - 1]
+    assert.match(last.state.loop, / x3$/)
+    assert.equal(Object.keys(last.criteria)[0], 'escalate_llm')
+    assert.match(last.criteria.escalate_llm, /^RECOMMENDED, loop=/)
+    t = runOut(bot, ctx, t)
+    let guard = 0
+    while (llm === 0 && guard++ < 60) { t += 10000; taskMod.taskTick(bot, ctx, t); await flush() }
+    assert.equal(llm, 1, lines.join('\n'))
+    assert.ok(lines.some((l) => /^stall escalate goal=house by=auto loop=/.test(l)))
+  })
+
+  it('loopOf: same x3, A/B x4, progress breaks it', () => {
+    const { loopOf } = require('../src/plan-context')
+    const h = (cs, out = 'flat') => cs.map((choice) => ({ choice, outcome: out }))
+    assert.equal(loopOf(h(['a', 'a', 'a'])), 'a x3')
+    assert.equal(loopOf(h(['a', 'b', 'a', 'b'])), 'a<->b x4')
+    assert.equal(loopOf(h(['a', 'b', 'a'])), null)
+    assert.equal(loopOf([...h(['a', 'a']), { choice: 'a', outcome: 'progress' }]), null)
+  })
+
   it('STALL_DECIDE=0 keeps the old keyless no-op', async () => {
     process.env.STALL_DECIDE = '0'
     const bot = makeBot([{ name: 'oak_planks', count: 3 }])
