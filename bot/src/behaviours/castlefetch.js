@@ -1308,6 +1308,7 @@ async function drawChest(bot, ctx, d, at, need) {
       }
     } else {
       const r = await drawFrom(names, logs ? Math.ceil(need / logs) : glass ? 6 * Math.ceil(need / 16) : wool ? BANNER_WOOL * Math.ceil(need) : book ? bookWant : need)
+      if (r && r.got > 0) castleMod.noteDecorSource(ctx, d.kind, 'chest')
       need -= (r && r.got ? r.got : 0) * (logs || (glass ? 16 / 6 : wool ? 1 / BANNER_WOOL : book ? 1 / BOOKS_PER_SHELF : 1))
     }
   }
@@ -1366,7 +1367,7 @@ function craftTick(bot, ctx, f, d) {
   let r = null
   try { r = deps.craftItem(bot, ctx, names, CRAFT_COUNT[d.kind] || 1) } catch (_) { r = { done: false } }
   if (r === 'running') return true
-  if (r && r.done) { if (d.kind === 'stairs') ctx.castleStairsMines = 0; return true } // re-check the target next tick
+  if (r && r.done) { castleMod.noteDecorSource(ctx, d.kind, 'craft'); if (d.kind === 'stairs') ctx.castleStairsMines = 0; return true } // re-check the target next tick
   // idkcraft-pdjx: the failure line used to die here — a craft leg failed
   // with materials on hand and the reason was invisible in the logs.
   // Classified by kind; once per latch (craftOut), so no spam.
@@ -1558,6 +1559,7 @@ function paneTick(bot, ctx, f, d, target, state) {
     const o = { kind: 'block', name: 'sand', want: n.glassNeed, by: null, drop: 'sand', have: n.sand, phase: bringMod.openPhase(ctx), announced: false }
     try { console.log(`castlefetch pane: digging ${n.glassNeed} sand (${n.sand} held)`) } catch (_) { /* log best-effort */ }
     ctx.castle.status = `fetching pane (sand ${n.sand}/${n.glassNeed})`
+    castleMod.noteDecorSource(ctx, 'pane', 'gather')
     selfOrder(ctx, f, o)
     return
   }
@@ -1566,6 +1568,7 @@ function paneTick(bot, ctx, f, d, target, state) {
   // Cobble rung (g0z.39): the castle furnace said no-cobble this leg.
   if (f.cobble && countItems(bot, (nm) => nm === 'cobblestone') < 8) { cobbleTick(bot, ctx, f, target, state, dry); return }
   f.smelting = true
+  castleMod.noteDecorSource(ctx, 'pane', 'smelt')
   if (fr && fr.settled) fr.result = null // a stale outcome never ends the new run
   smeltTick(bot, ctx, f, dry)
 }
