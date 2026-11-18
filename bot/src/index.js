@@ -162,7 +162,20 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     const path = goalless ? 'none' : (ctx.lastPathStatus || 'none')
     const reset = ctx.lastPathReset || 'none'
     ctx.lastPathReset = null
-    return `moving=${moving} path=${path} reset=${reset}`
+    return `moving=${moving} path=${path} reset=${reset}${moving ? '' : ` why=${idleWhy(goalless)}`}`
+  }
+  // What a standing tick waits on (owner 2026-11-18: ~900/1500 ticks moving=false, no reason).
+  // Behaviours may set ctx.idleWhy for their own timers; it is read once.
+  function idleWhy(goalless) {
+    const own = ctx.idleWhy
+    ctx.idleWhy = null
+    if (own) return own
+    if (bot.targetDigBlock) return `dig:${bot.targetDigBlock.name}`
+    if (bot.currentWindow) return 'window'
+    if (ctx.recovery && ctx.recovery.action) return `recover:${ctx.recovery.action}`
+    if (ctx.lastPathStatus === 'noPath' && !goalless) return 'nopath'
+    if (goalless) return `nogoal:${ctx.step || 'none'}:${ctx.stepStatus || 'none'}`
+    return 'goal-idle'
   }
 
   // Nobody-online streak: wall time since the first consecutive no-target
