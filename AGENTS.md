@@ -146,6 +146,7 @@ Bot architecture follows "one body, many senses": local perception (`bot/src/per
   - `GOAL_WATCHDOG_MS`: Goal-metric flat window in ms before a fast JEV round fires (default `60000`; `0` = watchdog off, the shipped 15/45-min ladder)
   - `GOAL_COMMIT_MS`: Bounded commitment window in ms for a watchdog choice (default `120000`)
   - `GOAL_WATCHDOG_MAX_ROUNDS`: Consecutive flat rounds before park/plan-B (default `6`)
+  - `STALL_DECIDE`: stall chooser (idkcraft-8hpy.2; default on, `0` = old park path). A flat goal round goes to JEV (keyless: the deterministic top productive option) over the option table without `park`; `plan()` stays on JEV when `TYPESAFE_API_KEY` is set. Low-confidence/no JEV answer + `LLM_ESCALATION` on -> ONE LLM call per stall episode (`brain.stallPlan`, <=4 option ids replayed over the next rounds, `use=stall` under `LLM_TOKENS_PER_HOUR`). The L2 time backstop no longer parks; only the round cap does, and the chooser keeps running under the park. Logs `stall decide goal=… round=N by=jev|llm|stub|fallback choice=… conf=… why=… options=[…]` and `stall outcome goal=… choice=… progress=before→after result=…`
   - `GOAL_TRAVEL_GRACE_MS`: Rate-limit floor for the castlefetch travel grace (default `90000`)
   - `GOAL_PLANB_SWITCH_MS`: Plan-B goal-switch duration in ms when nobody is online (default `450000`)
   - `CASTLE_TIDY_MS`: Owner bot walks back to its complete castle to repair/sweep once its last visit is this old (default `3600000`; `0` = off)
