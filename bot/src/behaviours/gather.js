@@ -425,41 +425,18 @@ function carriedWood(bot) {
 }
 
 const CHEST_DRY_MS = 10 * 60 * 1000
-const WOOD_KIT = 9 // mirrors goal.js WOOD_KIT (table 4 + pickaxe 3 + sticks 2 planks)
-const KIT_LOGS = 3 // 12 planks >= WOOD_KIT
-function woodStocked(bot, ctx, logs) {
-  // An unbuilt house order draws (chestLogsTick) instead of stopping (goal.js houseOwed).
-  if (ctx && ctx.home && ctx.home.site && !ctx.home.built && !ctx.home.parked) return false
-  try {
-    return logs * 4 + countItems(bot, (n) => n.endsWith('_planks')) >= WOOD_KIT && require('../cheststock').needMet(bot, ctx, 'oak_log')
-  } catch (_) { return false }
-}
 const isWood = (n) => n.endsWith('_log') || n.endsWith('_stem') || n.endsWith('_planks')
 function chestLogsTick(bot, ctx, g, logs, bp) {
   let pick = g.chestLogs
   if (!pick) {
     if (g.chestTried) return false // one try per attempt, dry window or not
-    let banked = false
-    try {
-      banked = !!(ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx))
-    } catch (_) { return false }
-    // y7lp: a built home (stockpile banks logs home) draws only while wood-starved
-    // (goal.js woodStarved: no logs, < WOOD_KIT planks), only a KIT_LOGS kit, never
-    // from the home chest — the kit is spent/kept, so nothing ping-pongs.
-    // ...and only while the pack has no pickaxe (the kit need): with tools made, a
-    // starved pack never re-draws, so the opens stay bounded (y7lp review 02).
-    // Owner 2026-11-18: with the shared stock at its wood target a chop is
-    // waste, so the starve-only draw rule yields and any known chest serves.
-    let stocked = false
-    try { stocked = require('../cheststock').needMet(bot, ctx, 'oak_log') } catch (_) { stocked = false }
-    if (banked && !stocked && (logs > 0 || countItems(bot, (n) => n.endsWith('_planks')) >= WOOD_KIT || countItems(bot, (n) => n.endsWith('_pickaxe')) > 0)) return false
+    // Chests are shared (owner 2026-11-18): any known chest, home included, any time.
     const dry = ctx.chestLogsDry || {}
     const now = Date.now()
     const h = ctx.home && ctx.home.chest
-    const isHome = (c) => h && c.x === h.x && c.y === h.y && c.z === h.z
     // y7lp: plus any remembered chest whose last snapshot held logs
     const logged = [ctx.chests, ctx.peerChests].flatMap((l) => Array.isArray(l) ? l : []).filter((c) => c && c.contents && Object.entries(c.contents).some(([n, v]) => isWood(n) && v > 0))
-    const cands = banked ? logged.filter((c) => !isHome(c)) : [h, ctx.castle && ctx.castle.siteChest, ...logged]
+    const cands = [h, ctx.castle && ctx.castle.siteChest, ...logged]
     for (const c of cands) {
       if (!c || typeof c.x !== 'number') continue
       const k = `${c.x},${c.y},${c.z}`
@@ -477,9 +454,6 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
     g.chestTried = true
   }
   let want = NEED_LOGS - logs
-  let capped = false
-  try { capped = !!(ctx.home && ctx.home.built && !require('./packroom').castleWoodOpen(ctx)) } catch (_) { capped = true }
-  if (capped) want = Math.min(want, KIT_LOGS)
   let busy = false
   try {
     busy = require('./beds').chestTick(bot, ctx, g, `gather-chest:${pick.k}`, async () => {
@@ -488,9 +462,7 @@ function chestLogsTick(bot, ctx, g, logs, bp) {
         const r = await require('./stockpile').withdrawAnyFromChest(bot, ctx, [...logNames(bot), ...Object.keys((bot.registry && bot.registry.itemsByName) || {}).filter((n) => n.endsWith('_planks'))], want, pick.c)
         got = (r && r.got) || 0
       } catch (_) { got = 0 }
-      // a built-home kit draw also dries the chest: stockpile may bank part of
-      // the kit (depositPlan keeps 1 gear log), so no re-draw inside CHEST_DRY_MS
-      if (got < want || capped) markDry()
+      if (got < want) markDry()
       else g.chestLogs = null
       try { console.log(`gather: ${got} logs from the chest at ${pick.k}`) } catch (_) { /* log best-effort */ }
     }, pick.c)
@@ -585,16 +557,6 @@ function gather(bot, ctx, target, state) {
   }
   const bp = bot.entity && bot.entity.position
   if (!bp) return
-  // Shared stock first (task-plan/rule/recover picks alike): wood at its
-  // stock target with a kit packed is no reason to chop.
-  if (woodStocked(bot, ctx, logs)) {
-    g.final = 'done'
-    g.atLogs = logs
-    stepDone(ctx)
-    try { console.log(`gather: wood stock met, kit packed (${logs} logs) - no chop`) } catch (_) { /* log best-effort */ }
-    clearGoal(bot, ctx)
-    return
-  }
   if (!g.pos && homeReadTick(bot, ctx, g)) return
   if (!g.pos && chestLogsTick(bot, ctx, g, logs, bp)) return
   // mnx pit memory: no target within a gave-up spot's radius.

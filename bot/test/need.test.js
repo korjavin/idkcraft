@@ -66,10 +66,10 @@ describe('wood stock first (owner 2026-11-18)', () => {
     assert.equal(needMet(bot, woodCtx(100), 'oak_planks'), false)
   })
 
-  it('no castle kit chop while chests hold the wood and the pack a kit', () => {
+  it('a castle kit need stays on with stocked chests (gather draws them before any chop)', () => {
     const bot = mockBot([{ name: 'oak_planks', count: 12 }])
     const facts = { logs: 0, planks: 12, table: 1, door: 1, home: 'none', castle: 'planks-none' }
-    assert.equal(goal.MENU.gather.feasible(facts, bot, woodCtx(400)), false)
+    assert.equal(goal.MENU.gather.feasible(facts, bot, woodCtx(400)), true)
     assert.equal(goal.MENU.gather.feasible(facts, bot, woodCtx(10)), true)
   })
 
