@@ -1656,10 +1656,10 @@ function darkTargets(bot, ctx, st, now) {
       if (dx < -FILL_RING || dx >= w + FILL_RING || dz < -FILL_RING || dz >= d + FILL_RING || dy < -DARK_BELOW) return false
       return dy <= DARK_RING_UP || (dx >= 0 && dx < w && dz >= 0 && dz < d && dy <= DARK_ABOVE)
     }
-    list = require('../darkspots').scan(bot, boxes, (x, y, z) => skip(x, y, z) || !band(x, y, z))
-      .map((c) => ({ x: c.x, y: c.y, z: c.z, hot: c.hot, kind: 'torch', dark: true, idx: darkIdx(st, c.x, c.y, c.z) }))
+    const scanned = require('../darkspots').scan(bot, boxes, (x, y, z) => skip(x, y, z) || !band(x, y, z))
+    list = scanned.map((c) => ({ x: c.x, y: c.y, z: c.z, hot: c.hot, kind: 'torch', dark: true, idx: darkIdx(st, c.x, c.y, c.z) }))
       .filter((c) => c.idx != null && Math.hypot(c.x + 0.5 - (site.x + w / 2), c.z + 0.5 - (site.z + d / 2)) <= DARK_LEASH)
-    if (list.length) console.log(`castle dark cells=${list.length}`)
+    if (list.length) console.log(`castle light floors=${scanned.floors} dark=${scanned.dark} placed=${list.length}`)
   }
   if (ctx) ctx.castleDark = { key, at: now, list }
   return list

@@ -4,16 +4,16 @@
 // by day around the castle, deaths at -160 68 402 and in a cave 20 below).
 // 1.18+ hostiles spawn on block light 0, so a dark cell is: air at the feet
 // and head over a solid floor, block light 0 when the chunk carries light
-// data, else (no light data) roofed and no torch within TORCH_R. Greedy
-// spacing: one torch per SPACING (light 14 still reads >= 6 there), so a
+// data, else (no light data) roofed; and no light propagated to it. Greedy
+// picks: each picked torch spreads its light before the next pick, so a
 // scan never queues neighbours one torch will light anyway. Pure leaf.
 
 const { Vec3 } = require('vec3')
 
 const AIR = new Set(['air', 'cave_air', 'void_air'])
 const LIGHTS = new Set(['torch', 'wall_torch', 'lantern', 'soul_torch', 'soul_wall_torch', 'soul_lantern', 'glowstone', 'sea_lantern', 'shroomlight', 'jack_o_lantern', 'campfire', 'lava'])
-const SPACING = 8 // manhattan between picked torches
-const TORCH_R = 7 // heuristic only: a known light this close lights the cell
+const TORCH_LIGHT = 14 // block light at a torch, -1 per step through non-solid cells
+const NB = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
 const ROOF_UP = 6 // heuristic only: a solid block this far above = under a roof
 const MAX = 16 // cells per scan: the next scan sees the new light
 
@@ -55,26 +55,49 @@ function scan(bot, boxes, skip) {
     for (let d = 2; d <= ROOF_UP; d++) if (solid(at(bot, c.x, c.y + d, c.z))) return true
     return false
   }
+  // Block light is propagated here from every light the scan saw (prod
+  // bot3: the bridge body's chunks carry no light, every cell read 0, so
+  // torches piled on the ground floor and the upper storeys stayed dark).
+  // Each picked torch joins the field, so the next pick lands past its glow.
+  const lit = new Map()
+  const spread = (sx, sy, sz) => {
+    const q = [[sx, sy, sz, TORCH_LIGHT]]
+    while (q.length) {
+      const [x, y, z, l] = q.pop()
+      const k = `${x},${y},${z}`
+      if ((lit.get(k) || 0) >= l) continue
+      lit.set(k, l)
+      if (l <= 1) continue
+      for (const [dx, dy, dz] of NB) {
+        const b = at(bot, x + dx, y + dy, z + dz)
+        if (b && !solid(b)) q.push([x + dx, y + dy, z + dz, l - 1])
+      }
+    }
+  }
+  for (const l of lights) spread(l.x, l.y, l.z)
   const dark = []
   for (const c of cand) {
     if (typeof c.light === 'number') {
       if (c.light > 0) continue
       c.roof = roofed(c)
-    } else {
-      // shortcut: no light data (fake worlds, old chunks) reads distance to known lights; prod chunks carry light.
-      if (!(c.roof = roofed(c))) continue
-      if (lights.some((l) => Math.abs(l.x - c.x) + Math.abs(l.y - c.y) + Math.abs(l.z - c.z) <= TORCH_R)) continue
-    }
+    } else if (!(c.roof = roofed(c))) continue // shortcut: no light data + open sky reads lit, as before
     dark.push(c)
   }
   dark.sort((a, b) => (b.hot - a.hot) || (b.roof - a.roof))
   const out = []
+  const floors = new Set()
+  let darkN = 0
   for (const c of dark) {
-    if (out.length >= MAX) break
-    if (out.some((o) => Math.abs(o.x - c.x) + Math.abs(o.y - c.y) + Math.abs(o.z - c.z) < SPACING)) continue
+    if (lit.get(`${c.x},${c.y},${c.z}`)) continue
+    darkN++
+    floors.add(c.y)
+    if (out.length >= MAX) continue
     out.push(c.hot ? { x: c.x, y: c.y, z: c.z, hot: true } : { x: c.x, y: c.y, z: c.z })
+    spread(c.x, c.y, c.z)
   }
+  out.dark = darkN // still-dark cells after the picks' light
+  out.floors = floors.size
   return out
 }
 
-module.exports = { scan, SPACING, MAX, TORCH_R }
+module.exports = { scan, MAX, TORCH_LIGHT }
