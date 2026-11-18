@@ -428,6 +428,8 @@ const CHEST_DRY_MS = 10 * 60 * 1000
 const WOOD_KIT = 9 // mirrors goal.js WOOD_KIT (table 4 + pickaxe 3 + sticks 2 planks)
 const KIT_LOGS = 3 // 12 planks >= WOOD_KIT
 function woodStocked(bot, ctx, logs) {
+  // An unbuilt house order draws (chestLogsTick) instead of stopping (goal.js houseOwed).
+  if (ctx && ctx.home && ctx.home.site && !ctx.home.built && !ctx.home.parked) return false
   try {
     return logs * 4 + countItems(bot, (n) => n.endsWith('_planks')) >= WOOD_KIT && require('../cheststock').needMet(bot, ctx, 'oak_log')
   } catch (_) { return false }
