@@ -848,6 +848,7 @@ function planState(bot, ctx, kind, done, total, state, withHistory) {
     }
     out.history = history
   }
+  try { out.past = require('./episodes').recall(bot, ctx, kind) } catch (_) { /* 8hpy.5 recall best-effort */ }
   return out
 }
 
@@ -2488,6 +2489,7 @@ function fallbackRank(kind, offered, history = null, currentStep = null, held = 
         s = 300 + stepIdx(o)
       }
       if (flat.has(o.id)) s += FALLBACK_FLAT_PENALTY
+      try { s += require('./episodes').bias(o.id) } catch (_) { /* 8hpy.5 bias best-effort */ }
       return s
     }
     progress.sort((a, b) => score(a) - score(b))
@@ -2560,6 +2562,7 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
       try {
         const { goalOptions } = require('./goal-options')
         const hist = state && state.wd && Array.isArray(state.wd.history) ? state.wd.history : null
+        try { require('./episodes').recall(bot, ctx, kind) } catch (_) { /* 8hpy.5 recall best-effort */ }
         fb = fallbackRank(kind, goalOptions(bot, ctx, kind), hist, step, heldSteps(ctx))
       } catch (_) { fb = null }
       if (fb) {
@@ -3090,6 +3093,9 @@ function endCommit(bot, ctx, kind, state, c, result, now) {
         wd.history.push({ choice, outcome: result, dur_s: Math.floor(durMs / 1000), delta })
         while (wd.history.length > GOAL_HISTORY_KEPT) wd.history.shift()
       } catch (_) { /* history best-effort */ }
+    }
+    try { require('./episodes').record(bot, ctx, k, choice, result, durMs, t) } catch (_) { /* 8hpy.5 episode best-effort */ }
+    if (wd) {
       if (result === 'progress') {
         resetWdProgress(wd)
         wd.planb = null
@@ -4123,6 +4129,11 @@ function taskTick(bot, ctx, now = Date.now()) {
         }
       }
     } catch (_) { /* house gauges best-effort */ }
+    try {
+      const cs = ctx.castle
+      const d = kind === 'house' ? (houseCur && houseCur.done) : (cs && cs.site && cs.progress ? cs.progress.done : null)
+      require('./episodes').rateTick(bot, ctx, kind, d, now)
+    } catch (_) { /* 8hpy.5 rate best-effort */ }
 
     if (!kind) {
       t.active = null

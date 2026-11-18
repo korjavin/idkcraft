@@ -537,7 +537,9 @@ function snapshot(bot, ctx, now) {
   try {
     if (Array.isArray(ctx.chests)) chests = chestSpotsOf(ctx.chests)
   } catch (_) { /* chests best-effort */ }
-  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle, sheep, flat, chests }
+  // Episodes (8hpy.5): undefined for a ctx that never recorded — save keeps the file's list.
+  const episodes = Array.isArray(ctx.episodes) ? require('./episodes').of(ctx.episodes) : undefined
+  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle, sheep, flat, chests, episodes }
 }
 
 // Gear ledger maps, sanitized both ways (own write, but a hand-edited
@@ -595,7 +597,7 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle && !doc.sheep && !doc.flat && !(doc.chests && doc.chests.length)
+    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle && !doc.sheep && !doc.flat && !(doc.chests && doc.chests.length) && !(doc.episodes && doc.episodes.length)
     f = file || fileFor(process.env, bot && bot.username)
     let prev = null
     try {
@@ -622,6 +624,7 @@ function save(bot, ctx, file, now) {
     // Chests: an unrestored ctx (undefined) never wipes the file's record.
     const prevChests = prev && prev.v === VERSION && prev.world === doc.world ? chestSpotsOf(prev.chests) : null
     if (doc.chests === undefined && prevChests && prevChests.length) doc.chests = prevChests
+    if (doc.episodes === undefined && prev && prev.v === VERSION && prev.world === doc.world && Array.isArray(prev.episodes)) doc.episodes = prev.episodes
     // Another world's flat would make main() rejoin an empty server forever
     // (hasFlat cannot check the world before login): replace that file.
     const staleFlat = !!(prev && prev.flat && !prevFlat)
@@ -654,6 +657,7 @@ function restore(bot, ctx, file, now) {
     if (!world || doc.world !== world) return null
     const t = typeof now === 'number' ? now : Date.now()
     const out = { homes: 0, resources: 0, visited: 0, danger: 0, follow: 0, gear: 0, castle: 0, sheep: 0, flat: 0, chests: 0 }
+    if (Array.isArray(doc.episodes)) ctx.episodes = require('./episodes').of(doc.episodes)
     const sheep = sheepOf(doc.sheep, t)
     if (sheep) {
       if (!ctx.beds || typeof ctx.beds !== 'object') ctx.beds = {}
