@@ -225,6 +225,34 @@ describe('task stall clock (vmzq.2)', () => {
     }
   })
 
+  it('prep oscillation (a cut dug, comes back, dug again) is not progress', () => {
+    const castle = require('../src/behaviours/castle')
+    const origPrep = castle.prepTargets
+    try {
+      let n = 50
+      castle.prepTargets = (bot, ctx) => {
+        ctx.castlePrep = { unknown: 0 }
+        return new Array(n).fill({ idx: 1 })
+      }
+      const bot = makeBot()
+      bot.blockAt = () => ({ name: 'dirt', boundingBox: 'block' })
+      const { ctx } = castleCtx(bot, { phase: 'prep', done: 0 })
+      const t0 = 1000000000000
+      taskMod.taskTick(bot, ctx, t0)
+      n = 49 // one real cut
+      taskMod.taskTick(bot, ctx, t0 + 1000)
+      assert.equal(ctx.task.castle.stallMs, 0)
+      // bot2 2026-11-18: the same block re-appears and is dug, every ~4 s.
+      for (let s = 2; s <= 60; s++) { n = s % 2 ? 49 : 50; taskMod.taskTick(bot, ctx, t0 + s * 1000) }
+      assert.equal(ctx.task.castle.stallMs, 59 * 1000, 'net-zero prep never resets the clock')
+      n = 48
+      taskMod.taskTick(bot, ctx, t0 + 61 * 1000)
+      assert.equal(ctx.task.castle.stallMs, 0, 'a new low still counts')
+    } finally {
+      castle.prepTargets = origPrep
+    }
+  })
+
   it('unloaded prep scan holds the last value (core-2)', () => {
     const castle = require('../src/behaviours/castle')
     const origPrep = castle.prepTargets

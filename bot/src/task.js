@@ -3952,7 +3952,9 @@ function castleProgressed(state, cur) {
 function castleSinkBaseline(state, cur) {
   if (typeof cur.done === 'number' && (typeof state.done !== 'number' || cur.done < state.done)) state.done = cur.done
   if (typeof cur.total === 'number') state.total = cur.total
-  if (typeof cur.prepLeft === 'number' && (typeof state.prepLeft !== 'number' || cur.prepLeft > state.prepLeft)) state.prepLeft = cur.prepLeft
+  // Low-water mark (owner 2026-11-18, bot2 prep): a cut that comes back (scaffold,
+  // access pillar, refill) and is dug again is net zero, never a fresh reset.
+  if (typeof cur.prepLeft === 'number' && typeof state.prepLeft !== 'number') state.prepLeft = cur.prepLeft
   if (cur.matKind && cur.matKind !== state.matKind) {
     // Demand switch: stash the old kind's marks, restore the new kind's
     // sticky marks when known, else adopt the current count silently —
@@ -3977,7 +3979,7 @@ function castleSinkBaseline(state, cur) {
   // The placed clock (vmzq.20) sinks its regress baseline the same way, so
   // a repair past the hole re-arms it.
   if (typeof cur.done === 'number' && (typeof state.placedDone !== 'number' || cur.done < state.placedDone)) state.placedDone = cur.done
-  if (typeof cur.prepLeft === 'number' && (typeof state.placedPrep !== 'number' || cur.prepLeft > state.placedPrep)) state.placedPrep = cur.prepLeft
+  if (typeof cur.prepLeft === 'number' && typeof state.placedPrep !== 'number') state.placedPrep = cur.prepLeft
   // Enabling (m1yb) is a last-tick delta, not a water mark: the baseline
   // always follows, so consumption never poisons the next gather. The
   // readiness gate follows too: a death-wiped kit re-opens credit until

@@ -109,6 +109,28 @@ describe('generic stall clock (8hpy)', () => {
     assert.match(decides()[0] || '', /^stall decide goal=step:explore round=1 by=jev /, lines.join('\n'))
   })
 
+  it('a step oscillating in place with moving=true still stalls (net displacement, bot2 2026-11-18)', async () => {
+    const bot = makeBot()
+    bot.pathfinder.isMoving = () => true
+    const ctx = workCtx(bot)
+    ctx.castle = null
+    ctx.step = 'explore'
+    ctx.stepStatus = 'running'
+    ctx.brain = { plan: async (req) => ({ step: Object.keys(req.criteria).find((k) => k !== 'explore'), confidence: 0.9, source: 'jev' }) }
+    let t = 1000000000000
+    taskMod.taskTick(bot, ctx, t)
+    let guard = 0
+    while (!(ctx.stallGen && ctx.stallGen.pending) && guard++ < 40) {
+      bot.entity.position = pos(guard % 2 ? 3.5 : 1.5, 64, 2) // back and forth one stride
+      t += 5000
+      taskMod.taskTick(bot, ctx, t)
+    }
+    assert.ok(ctx.stallGen.pending, lines.join('\n'))
+    await flush()
+    taskMod.taskTick(bot, ctx, t + 1000)
+    assert.match(decides()[0] || '', /^stall decide goal=step:explore /, lines.join('\n'))
+  })
+
   it('JEV none/low-confidence still acts: by=fallback picks an untried option', async () => {
     const bot = makeBot()
     const ctx = workCtx(bot)

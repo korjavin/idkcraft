@@ -35,6 +35,28 @@ describe('castle dig-approach for unreachable cells', () => {
     } finally { console.log = orig }
   })
 
+  it('prep cut reached but out of reach: logs approach, escalates to access build within STRIKES (bot2 2026-11-18)', () => {
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: V, blocked: {}, phase: 'prep' }
+    const ctx = { castle: st }
+    const cell = { x: SITE.x + 14, y: SITE.y, z: SITE.z, kind: 'air', prep: 'cut', idx: 1000001 }
+    // The body steps back and forth one block, never closer.
+    const bot = { entity: { position: new Vec3(SITE.x, SITE.y, SITE.z) } }
+    const lines = []
+    const orig = console.log
+    console.log = (m) => lines.push(String(m))
+    try {
+      const now = Date.now()
+      for (let i = 0; i < castle.STRIKES; i++) {
+        bot.entity.position = new Vec3(SITE.x + (i % 2), SITE.y, SITE.z)
+        castle.far(bot, ctx, st, cell, 4.5, now)
+      }
+      const ap = lines.filter((l) => l.startsWith('approach '))
+      assert.match(ap[0], /^approach target=114,64,200 stand=\S+ reached=true inReach=false dist=\S+ -> action=reapproach#1$/)
+      assert.match(ap[ap.length - 1], /action=access-build$/, ap.join('\n'))
+      assert.ok(ctx.castleFar.build, 'access build armed, not an endless identical re-approach')
+    } finally { console.log = orig }
+  })
+
   // World: stone below y=64 except a lava pocket where asked, air above.
   function stepBot(lava, solidAt) {
     const goals = []
