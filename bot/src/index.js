@@ -43,6 +43,7 @@ const recover = require('./behaviours/recover')
 const unstick = require('./behaviours/unstick')
 const enclosed = require('./enclosed')
 const { noteNoPath } = require('./nopath-log')
+const unreachable = require('./unreachable')
 const loot = require('./loot')
 // The table lives in behaviours/index.js (oqul.3); same object re-exported.
 const { BEHAVIOURS } = require('./behaviours/index')
@@ -517,6 +518,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         console.log(`decision source=reflex action=loot sprint=false dist=none ${pathSuffix()}`)
         return { decision: { action: 'loot', sprint: false, source: 'reflex' }, calledBrain }
       }
+      unreachable.tick(bot, ctx) // a noPath work goal fails its step now; the arbiter below re-picks
       if (ctx.stuck && !urgentFight(state)) return await recoverTick(target, state, calledBrain)
       const key = stateKey(state)
       if (lastDecision && key === lastStateKey) {
