@@ -902,7 +902,7 @@ function tryPlan(bot, ctx, kind, done, total, state) {
   const seq = (state.planSeq = (state.planSeq || 0) + 1)
   state.planTried = true
   state.planPending = seq
-  const req = { state: planState(bot, ctx, kind, done, total, state), instructions, criteria }
+  const req = require('./plan-context').withContext(bot, ctx, kind, done, total, state, { state: planState(bot, ctx, kind, done, total, state), instructions, criteria })
   Promise.resolve()
     .then(() => brain.plan(req))
     .then(
@@ -1225,7 +1225,7 @@ function strategicChoose(brain, facts, feasible, home, extra, fsm) {
   try {
     wd.stratPack = stratPackOf(facts)
   } catch (_) { /* baseline best-effort */ }
-  const req = { state: prompt, instructions, criteria }
+  const req = require('./plan-context').withContext(bot, ctx, kind, state.done, state.total, state, { state: prompt, instructions, criteria })
   Promise.resolve()
     .then(() => brain.plan(req))
     .then(
@@ -1430,7 +1430,7 @@ function deadlockFire(bot, ctx, brain, facts, home, names, text, dl, model, now,
   try {
     dl.stratPack = stratPackOf(facts)
   } catch (_) { /* baseline best-effort */ }
-  const req = { state: prompt, instructions, criteria }
+  const req = require('./plan-context').withContext(bot, ctx, 'house', undefined, undefined, dl, { state: prompt, instructions, criteria })
   Promise.resolve()
     .then(() => brain.plan(req))
     .then(
@@ -1974,6 +1974,8 @@ function resetWdProgress(wd) {
       wd.lowConfGoal = null
       wd.llmUsed = false
       wd.llmPlan = null
+      wd.loopAsked = null
+      wd.loopAsked = null
       // Strategic-chooser memo (idkcraft-u19u phase 2): progress ends the
       // episode the stored answer was fired for.
       wd.stratKey = null
@@ -2037,7 +2039,22 @@ function fireWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   try {
     const { goalOptions, planInstructions } = require('./goal-options')
     opts = goalOptions(bot, ctx, kind, skips)
-    if (stallDecideOn()) opts = opts.filter((o) => o.id !== 'park')
+    let loop = null
+    if (stallDecideOn()) {
+      opts = opts.filter((o) => o.id !== 'park')
+      loop = require('./plan-context').loopOf(wd.history)
+      // Loop seen last round and JEV did not escalate: escalate for it.
+      if (loop && wd.loopAsked && stallLlmAvail(ctx, wd)) {
+        wd.llmUsed = true
+        wd.loopAsked = null
+        console.log(`stall escalate goal=${kind} by=auto loop=${loop}`)
+        fireStallLlm(bot, ctx, kind, done, total, state, wd, now)
+        return
+      }
+      wd.loopAsked = loop
+      const extra = stallExtras(bot, ctx, kind, done, total, wd, loop)
+      opts = loop ? extra.concat(opts) : opts.concat(extra)
+    }
     if (opts.length === 0) return
     const criteria = {}
     for (const o of opts) criteria[o.id] = o.criterion
@@ -2056,7 +2073,8 @@ function fireWatchdog(bot, ctx, kind, done, total, state, wd, now) {
     // Stash the fired table for the consume tick (availability re-checked
     // then; the stash is the offered set for the log line).
     wd.firedOpts = opts.map((o) => o.id)
-    const req = { state: planState(bot, ctx, kind, done, total, state, true), instructions, criteria }
+    const req = require('./plan-context').withContext(bot, ctx, kind, done, total, state, { state: planState(bot, ctx, kind, done, total, state, true), instructions, criteria })
+    if (loop) req.state.loop = loop
     const brain = ctx.brain
     let ask = (q) => brain.plan(q)
     if (stallDecideOn()) {
@@ -2104,7 +2122,7 @@ function fireWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   const seq = (wd.seq = (wd.seq || 0) + 1)
   wd.pending = seq
   wd.firedAt = now
-  const req = { state: planState(bot, ctx, kind, done, total, state, true), instructions: PLAN_INSTRUCTIONS, criteria }
+  const req = require('./plan-context').withContext(bot, ctx, kind, done, total, state, { state: planState(bot, ctx, kind, done, total, state, true), instructions: PLAN_INSTRUCTIONS, criteria })
   const brain = ctx.brain
   Promise.resolve()
     .then(() => brain.plan(req))
@@ -2406,10 +2424,18 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   let opt = null
   try {
     const { goalOptions } = require('./goal-options')
-    const offered = goalOptions(bot, ctx, kind)
+    const offered = goalOptions(bot, ctx, kind).concat(stallDecideOn() ? stallExtras(bot, ctx, kind, done, total, wd, null) : [])
     opt = offered.find((o) => o.id === choice) || null
   } catch (_) {
     opt = null
+  }
+  // JEV chose the LLM: the episode's one stallPlan call answers instead.
+  if (opt && opt.id === require('./plan-context').ESCALATE_ID) {
+    wd.llmUsed = true
+    wd.loopAsked = null
+    stallDecideLog(kind, wd, ans.source || 'jev', choice, typeof ans.conf === 'number' ? ans.conf.toFixed(2) : '?', 'escalate', options)
+    fireStallLlm(bot, ctx, kind, done, total, state, wd, now)
+    return
   }
   if (!opt) {
     // Legacy fallback: a plain step answered off-table (old brain, old test)
@@ -2446,7 +2472,26 @@ function consumeWatchdog(bot, ctx, kind, done, total, state, wd, now) {
   wd.backoffMs = 0
   wd.backoffUntil = 0
   clearLowConf()
+  // A chosen source runs as picked (one self-bring rung), no re-ordering.
+  if (opt.source) require('./plan-context').applySource(ctx, opt.source)
   applyCommit(bot, ctx, kind, opt.id, opt.step || null, now, opt.unlock || null, opt.criterion)
+}
+
+function stallLlmAvail(ctx, wd) {
+  return stallLlmOn() && !wd.llmUsed && !!(ctx && ctx.brain && typeof ctx.brain.stallPlan === 'function')
+}
+
+// Stall-chooser extras (owner 2026-11-18): the missing resource's sources as
+// separate options, plus escalate_llm while the episode's LLM call is unspent.
+function stallExtras(bot, ctx, kind, done, total, wd, loop) {
+  try {
+    const pc = require('./plan-context')
+    const out = ctx && ctx.ordersTicker ? pc.sourceOptions(bot, ctx, kind, done, total) : []
+    if (stallLlmAvail(ctx, wd)) out.unshift(pc.escalateOption(loop))
+    return out
+  } catch (_) {
+    return []
+  }
 }
 
 // The one LLM call of a stall episode (8hpy.2): brain.stallPlan returns
@@ -2466,7 +2511,7 @@ function fireStallLlm(bot, ctx, kind, done, total, state, wd, now) {
     wd.pending = seq
     wd.firedAt = now
     wd.firedOpts = opts.map((o) => o.id)
-    const req = { state: planState(bot, ctx, kind, done, total, state, true), instructions: planInstructions(kind, ctx, done, total), criteria }
+    const req = require('./plan-context').withContext(bot, ctx, kind, done, total, state, { state: planState(bot, ctx, kind, done, total, state, true), instructions: planInstructions(kind, ctx, done, total), criteria })
     Promise.resolve()
       .then(() => ctx.brain.stallPlan(req))
       .then(

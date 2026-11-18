@@ -1362,6 +1362,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     clearStuck, resetNightStep, startWork, stopOnce, doSetBrain, swarmHelper,
   }
   const orders = createOrders(ordersBox)
+  ctx.ordersTicker = orders // stall chooser source options run self-bring rungs (plan-context.js)
 
   return {
     tick,
