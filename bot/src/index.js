@@ -154,7 +154,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     try {
       if (bot.pathfinder && typeof bot.pathfinder.isMoving === 'function') moving = !!bot.pathfinder.isMoving()
     } catch (_) { /* stationary default */ }
-    const path = ctx.lastPathStatus || 'none'
+    // No live goal = nothing is being planned: a verdict left from an old
+    // goal must not log on every fallback-mover tick (bot3: 1491 noPath).
+    let goalless = false
+    try { goalless = !!bot.pathfinder && bot.pathfinder.goal == null } catch (_) { /* keep verdict */ }
+    const path = goalless ? 'none' : (ctx.lastPathStatus || 'none')
     const reset = ctx.lastPathReset || 'none'
     ctx.lastPathReset = null
     return `moving=${moving} path=${path} reset=${reset}`
@@ -1629,6 +1633,9 @@ function runOnce({ host, port, username, tickMs, brain, leaveAfterMs, followName
     // mineflayer bot ever reaches this code.
     bot.on('path_update', (r) => { if (r && r.status) ticker.setPathStatus(r.status); if (r && Array.isArray(r.path) && r.path.length > 0) ticker.setPathNext(r.path[0]); if (r && Array.isArray(r.path)) ticker.setPathNodes(r.path) })
     bot.on('path_reset', (reason) => ticker.setPathReset(reason))
+    // A verdict belongs to one goal: a new/cleared/reached goal has none yet,
+    // so readers of lastPathStatus never act on the previous goal's noPath.
+    for (const ev of ['goal_updated', 'goal_reached', 'path_stop']) bot.on(ev, () => ticker.setPathStatus('none'))
     // Fast door shut (idkcraft-6xno revmux 01 major-1): throttled to 250 ms
     // inside doors.js. Same spot as the pathfinder taps: real bot only.
     bot.on('physicsTick', () => ticker.doorShutFast())
