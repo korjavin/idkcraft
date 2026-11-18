@@ -1195,7 +1195,10 @@ function bedInside(home, foot, head) {
 // and claim all banned). Dark chunks read air: a dark B stays banned by
 // the claim, a dark stranger reads as no bed — the walk-in re-checks
 // (bedAt) before the click.
-function nearbyBed(bot, home, cells) {
+const bedKey = (p) => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
+const badBed = (st, p) => !!(st && st.badBeds && p && st.badBeds.has(bedKey(p)))
+
+function nearbyBed(bot, home, cells, st) {
   try {
     const byName = (bot.registry && bot.registry.blocksByName) || {}
     const ids = []
@@ -1221,7 +1224,7 @@ function nearbyBed(bot, home, cells) {
     for (const p of hits) {
       if (!p || typeof p.x !== 'number') continue
       const foot = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
-      if (banned.has(`${foot.x},${foot.y},${foot.z}`)) continue
+      if (banned.has(`${foot.x},${foot.y},${foot.z}`) || badBed(st, foot)) continue
       for (let f = 0; f < 4; f++) {
         let bed = null
         try { bed = bedsMod.bedAt(bot, foot, f) } catch (_) { bed = null }
@@ -1321,8 +1324,12 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
       st.sleepStalls = 0
       st.sleepAnchor = { x: bp.x, z: bp.z }
     } else if (++st.sleepStalls >= SLEEP_STALL_TICKS) {
-      st.sleepGiveUp = true // unreachable tonight: hold, retry tomorrow
-      sleepGiveUpSay(bot, st, "I can't reach my bed")
+      // Unreachable: ban this bed for the night; the next tick picks the next candidate.
+      const bpos = (bed && bed.position) || head
+      ;(st.badBeds = st.badBeds || new Set()).add(bedKey(bpos)).add(bedKey(head))
+      st.sleepStalls = 0
+      st.sleepAnchor = null
+      try { console.log(`sleep bed=${bedKey(bpos)} result=unreachable reason=stalled ${SLEEP_STALL_TICKS} ticks`) } catch (_) { /* logging best-effort */ }
       return false
     }
     return true
@@ -1435,6 +1442,7 @@ function sleepInBed(bot, ctx, home, st, bed, head, open, chatLine) {
     try {
       await bot.sleep(bed)
       try { home.sleptA = true } catch (_) { /* claim best-effort */ } // vanilla sets the spawn on use
+      try { console.log(`sleep bed=${bedKey((bed && bed.position) || head)} result=ok`) } catch (_) { /* logging best-effort */ }
       if (ctx.stay !== st && ctx.shelter !== st) { // p5hk: the shelter's field bed shares this flight
         // An order or the retreat chain took the body mid-flight (revmux
         // 02-review): the spawn is set, but the body must not sleep under
@@ -1551,7 +1559,7 @@ function sleepTick(bot, ctx, home, st) {
     if (cells && cells.a) {
       let bed = null
       try { bed = require('./beds').bedroomBed(bot, home, 'a') } catch (_) { bed = null }
-      if (bed) {
+      if (bed && !badBed(st, cells.a.foot)) {
         try { home.bedA = new Vec3(cells.a.foot.x, cells.a.foot.y, cells.a.foot.z) } catch (_) { /* claim best-effort */ }
         return unblockBed(bot, ctx, home, cells.a.foot, cells.a.head) || sleepInBed(bot, ctx, home, st, bed, cells.a.head, cells.a.sleep, 'sleeping in my bed')
       }
@@ -1562,10 +1570,10 @@ function sleepTick(bot, ctx, home, st) {
       if (carriedA) { layNightBed(bot, ctx, home, cells.a, st, carriedA); return true }
     }
     // A placed bed nearby (not the owner's B): walk over and use it.
-    const near = nearbyBed(bot, home, cells)
+    const near = nearbyBed(bot, home, cells, st)
     if (near) return unblockBed(bot, ctx, home, near.foot, near.head) || sleepInBed(bot, ctx, home, st, near.bed, near.head, near.head, 'sleeping in a nearby bed')
     // Any other placed bed in reach (a remembered lay, a spawn bed outside).
-    const kb = knownBed(bot, ctx)
+    const kb = knownBed(bot, ctx, st)
     if (kb) {
       const head = new Vec3(kb.foot.x + BED_DIRS[kb.facing][0], kb.foot.y, kb.foot.z + BED_DIRS[kb.facing][1])
       const bed = require('./beds').bedAt(bot, kb.foot, kb.facing)
@@ -1589,6 +1597,12 @@ function sleepTick(bot, ctx, home, st) {
         if (res && res.done) return true // recount next tick: the pack now covers it
         // Craft refused (no recipe): honest skip below.
       }
+    }
+    // Every bed tried was out of reach: hold tonight, say so.
+    if (st.badBeds && st.badBeds.size) {
+      st.sleepGiveUp = true
+      sleepGiveUpSay(bot, st, "I can't reach my bed")
+      return false
     }
     // Honest skip, once a night: keep the old hold, say why.
     if (!st.nobedSaid) {
@@ -1967,36 +1981,44 @@ function fieldBedSpot(bot, ctx) {
 // digging in (prod 2026-11-14: a site bed 60 off, six failed shelters a night).
 // shortcut: an unloaded chunk reads as no bed, fine inside view distance.
 const KNOWN_BED_R = 96
-function knownBed(bot, ctx) {
+function knownBed(bot, ctx, st) {
   const bp = botPos(bot)
   if (!bp) return null
   const site = ctx.castle && ctx.castle.site
   const near = (p) => Math.hypot(bp.x - p.x, bp.z - p.z) <= KNOWN_BED_R ||
     (!!site && typeof site.x === 'number' && Math.hypot(site.x - p.x, site.z - p.z) <= KNOWN_BED_R)
   const bedsMod = require('./beds')
-  for (const c of [ctx.castle && ctx.castle.siteBed, ctx.home && ctx.home.bedA, ctx.home && ctx.home.bedPlaced, ctx.nightCastle && ctx.nightCastle.bedA]) {
-    if (!c || typeof c.x !== 'number' || !near(c)) continue
-    const foot = new Vec3(c.x, c.y, c.z)
-    for (let f = 0; f < 4; f++) if (bedsMod.bedAt(bot, foot, f)) return { foot, facing: f }
-  }
-  // Any placed bed within SPAWN_BED_R (prod 2026-11-14: the respawn bed beside
-  // the bot was in none of the slots above); bedroom B stays the owner's.
-  if (typeof bot.findBlocks !== 'function') return null
+  const b = ctx.home && ctx.home.bedB
+  const ownersB = (p) => b && Math.abs(b.x - p.x) + Math.abs(b.y - p.y) + Math.abs(b.z - p.z) <= 1
+  // Every candidate: remembered slots (own, castle, peer castle) plus any
+  // placed bed in sight (prod 2026-11-14 respawn bed); bedroom B stays the
+  // owner's. Nearest wins; beds found unreachable tonight are skipped.
+  const cands = [ctx.castle && ctx.castle.siteBed, ctx.home && ctx.home.bedA, ctx.home && ctx.home.bedPlaced, ctx.nightCastle && ctx.nightCastle.bedA]
+    .filter((c) => c && typeof c.x === 'number' && near(c))
   const byName = (bot.registry && bot.registry.blocksByName) || {}
   const ids = require('./bed').BED_COLORS.map((c) => byName[`${c}_bed`]).filter((e) => e && typeof e.id === 'number').map((e) => e.id)
-  if (!ids.length) return null
-  const b = ctx.home && ctx.home.bedB
-  let hits = []
-  try { hits = bot.findBlocks({ matching: ids, maxDistance: SPAWN_BED_R, count: 8 }) || [] } catch (_) { return null }
-  for (const p of hits) {
-    if (!p || typeof p.x !== 'number') continue
-    const foot = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
-    if (b && Math.abs(b.x - foot.x) + Math.abs(b.y - foot.y) + Math.abs(b.z - foot.z) <= 1) continue
-    for (let f = 0; f < 4; f++) if (bedsMod.bedAt(bot, foot, f)) return { foot, facing: f }
+  if (ids.length && typeof bot.findBlocks === 'function') {
+    let hits = []
+    try { hits = bot.findBlocks({ matching: ids, maxDistance: SPAWN_BED_R, count: 32 }) || [] } catch (_) { hits = [] }
+    for (const p of hits) if (p && typeof p.x === 'number' && !ownersB(p)) cands.push(p)
   }
-  return null
+  let best = null
+  for (const c of cands) {
+    const foot = new Vec3(Math.floor(c.x), Math.floor(c.y), Math.floor(c.z))
+    if (badBed(st, foot)) continue
+    const d = Math.hypot(foot.x + 0.5 - bp.x, foot.y - bp.y, foot.z + 0.5 - bp.z)
+    if (best && d >= best.d) continue
+    for (let f = 0; f < 4; f++) {
+      if (!bedsMod.bedAt(bot, foot, f)) continue
+      const head = new Vec3(foot.x + BED_DIRS[f][0], foot.y, foot.z + BED_DIRS[f][1])
+      if (badBed(st, head)) continue
+      best = { foot, facing: f, d }
+      break
+    }
+  }
+  return best
 }
-const SPAWN_BED_R = 32
+const SPAWN_BED_R = 64 // a large castle's far bedroom sits past 32 (prod bot3)
 // Night: true while the field bed owns the tick (lay, walk, sleep, hold).
 function fieldBedTick(bot, ctx, home, st, time) {
   if (st.fieldOff) return false
@@ -2027,9 +2049,10 @@ function fieldBedTick(bot, ctx, home, st, time) {
       if (time === 'night' && (!bp0 || headGap(bp0, head) <= SLEEP_REACH) && ++st.fieldHolds > FIELD_BED_HOLDS) return off('no sleep yet')
       if ((st.sleepCooldown || 0) > 0) { st.sleepCooldown--; return true }
       sleepInBed(bot, ctx, null, st, bed, head, head, 'sleeping in my field bed') // null home: never claims sleptA
+      if (badBed(st, fb.foot)) { st.fieldBed = null; return true } // unreachable: pick the next bed
       return !st.sleepGiveUp || off('sleep refused')
     }
-    const kb = knownBed(bot, ctx)
+    const kb = knownBed(bot, ctx, st)
     if (kb) {
       st.fieldBed = kb
       st.fieldKnown = true // placed for good: dawn leaves it standing

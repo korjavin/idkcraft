@@ -165,6 +165,20 @@ describe('erig: server-box veto and honest give-up line', () => {
     assert.ok(ctx.stay.sleepGiveUp, 'give-up latches')
     assert.ok(bot.chats.includes("can't sleep tonight (I can't reach my bed), holding till dawn"))
   })
+
+  it('an unreachable bed falls through to the next known bed (prod bot3 castle)', async () => {
+    const bot = mockBot({
+      at: { x: 11.5, y: 64, z: 21.5 },
+      bedCells: ['14,64,23', '14,64,24', '40,64,23', '40,64,24'], // a near one, and one far past the old 32 scan
+    })
+    bot.findBlocks = () => [{ x: 14, y: 64, z: 23 }, { x: 40, y: 64, z: 23 }]
+    const ctx = hutCtx()
+    for (let t = 0; t < 40; t++) await tick(bot, ctx)
+    assert.ok(ctx.stay.badBeds.has('14,64,23'), 'the stalled bed is skipped tonight')
+    assert.ok(!ctx.stay.sleepGiveUp, 'no give-up while another bed is a candidate')
+    const g = bot.calls.goals[bot.calls.goals.length - 1]
+    assert.equal(g.x, 40, 'walks to the next bed')
+  })
 })
 
 // Bead idkcraft-erig follow-up (prod 2026-10-28, fixed build): one attempt,
