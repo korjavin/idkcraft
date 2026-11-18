@@ -815,6 +815,8 @@ const OK = (r) => String(r) in COST
 function stuckDeny(bot, ctx, b) {
   const r = breakable(bot, ctx, b)
   if (!OK(r)) return r
+  // Dig/re-lay loop (prod bot3: one castle stair dug 18x): an own cell re-laid RELAY_MAX times refuses.
+  if (r === 'own' && relayedCount(ctx, b) >= RELAY_MAX) return 'relooped'
   if (r === 'own' || r === 'foreign' || r === 'keep') {
     ctx.ownBreakUntil = Date.now() + STUCK_GRACE_MS
     const c = b.position
@@ -830,8 +832,18 @@ function stuckCost(bot, ctx, b) {
   return OK(r) ? COST[String(r)] : Infinity
 }
 // An own cell we open is re-laid, not damage (castle progress: `castle relay escape=N`).
+const RELAY_MAX = 3
+const RELAY_MS = 1800000
+function relayedCount(ctx, b) {
+  const c = b.position
+  const e = ctx.relayed && ctx.relayed.get(`${c.x},${c.y},${c.z}`)
+  return e && Date.now() - e.t < RELAY_MS ? e.n : 0
+}
 function relay(ctx, b) {
   const c = b.position
+  const k = `${c.x},${c.y},${c.z}`
+  if (!ctx.relayed) ctx.relayed = new Map()
+  ctx.relayed.set(k, { n: relayedCount(ctx, b) + 1, t: Date.now() })
   ctx.enclosedEscapes = (ctx.enclosedEscapes || []).slice(-63)
   ctx.enclosedEscapes.push({ x: c.x, y: c.y, z: c.z, name: b.name })
   ctx.castleCursor = 0 // the castle scan re-lays the opened plan cell

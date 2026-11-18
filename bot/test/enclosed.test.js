@@ -283,4 +283,29 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     assert.ok(logs.some((l) => l.includes('no descent (lava)')), logs.join('\n'))
     assert.equal(logs.filter((l) => l.startsWith('enclosed cage at 3,64,8: y-1=[')).length, 1)
   })
+  it('a room with a wooden door is not enclosed: nothing broken (prod 2026-11-18 bot3 own planks re-laid 10x)', () => {
+    const { bot, ctx, blocks } = world('oak_door')
+    for (let z = 4; z < 40; z++) for (let x = 0; x < 8; x++) blocks.set(`${x},63,${z}`, 'stone')
+    for (let z = 0; z < 4; z++) for (let x = 0; x < 8; x++) blocks.set(`${x},63,${z}`, 'stone')
+    const logs = []
+    const orig = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      for (const [i, g] of [[0, 1], [1, 2], [2, 3]]) { bot.pathfinder.setGoal({ x: g * 10, y: 64, z: 0 }); enclosed.tick(bot, ctx, 1000 + i) }
+      assert.ok(logs.includes('enclosed skip at 3,64,8: walkable exit'), logs.join('\n'))
+      assert.ok(!logs.includes('enclosed at 3,64,8'))
+      assert.equal(blocks.get('3,64,7'), 'oak_door')
+    } finally { console.log = orig }
+  })
+  it('an own cell dug and re-laid 3 times refuses the 4th stuck dig (prod bot3 stair dug 18x)', () => {
+    const { bot, ctx } = world()
+    ctx.recovery = { action: 'dig_through' }
+    const orig = console.log
+    console.log = () => {}
+    try {
+      const wall = bot.blockAt({ x: 3, y: 65, z: 7 })
+      for (let i = 0; i < 3; i++) assert.equal(enclosed.stuckDeny(bot, ctx, wall), null)
+      assert.equal(enclosed.stuckDeny(bot, ctx, wall), 'relooped')
+    } finally { console.log = orig }
+  })
 })

@@ -31,6 +31,7 @@ const COLLECT_MS = 8000 // pick up a broken container's drops this long
 const MAX_OWN = 4 // own cells one escape may break, all directions together (prod 12:00: 20 torn up)
 const UP_MAX = 6 // pillar height the up leg may climb
 const TRAP_R = 8 // trapsSelf flood radius
+const OPEN_R = 16 // walkable this far = not enclosed
 const SKY = 24
 const REACH = 4
 const GRACE_MS = 300000 // recover digs share the own-build allowance this long (util STUCK_GRACE_MS)
@@ -44,6 +45,8 @@ function st(ctx) {
 }
 function at(bot, x, y, z) { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
 function air(b) { return !!b && b.boundingBox === 'empty' && !/water|lava/.test(b.name) }
+// A wooden door/gate opens: a room with one is not a cage (iron needs redstone).
+function pass(b) { return air(b) || (!!b && /(?<!iron)_door$|fence_gate$/.test(b.name)) }
 function targetKey(bot, ctx) {
   const g = bot.pathfinder && bot.pathfinder.goal
   if (g && [g.x, g.y, g.z].every(Number.isFinite)) return `${Math.floor(g.x)},${Math.floor(g.y)},${Math.floor(g.z)}`
@@ -145,7 +148,7 @@ function cage(bot, f) {
 // Walkable stance with `solidAt` (a planned placement) counted as solid.
 function stanceAt(bot, x, y, z, solidAt) {
   const isS = (yy) => solidAt && solidAt.x === x && solidAt.y === yy && solidAt.z === z
-  if (isS(y) || isS(y + 1) || !air(at(bot, x, y, z)) || !air(at(bot, x, y + 1, z))) return false
+  if (isS(y) || isS(y + 1) || !pass(at(bot, x, y, z)) || !pass(at(bot, x, y + 1, z))) return false
   if (isS(y - 1)) return true
   const f = at(bot, x, y - 1, z)
   return !!f && f.boundingBox === 'block' && !/lava/.test(f.name)
@@ -212,6 +215,13 @@ function tick(bot, ctx, now = Date.now()) {
     if (s.seen.size < DISTINCT || now < s.coolUntil) return false
   }
   s.seen.clear()
+  // A walkable way out (doors included) is not enclosed: a castle room is closed by design
+  // (prod bot3: own planks broken and re-laid 10x). noPath there is the planner's, not a cage.
+  if (flood(bot, feet, null, OPEN_R).escaped) {
+    log(`enclosed skip at ${feet.x},${feet.y},${feet.z}: walkable exit`)
+    s.coolUntil = now + WINDOW_MS
+    return false
+  }
   s.trapped = true
   ctx.enclosedUntil = Date.now() + GRACE_MS // recover: own-cell digs allowed, no sidestep shuffle
   log(`enclosed at ${feet.x},${feet.y},${feet.z}`)
