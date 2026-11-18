@@ -166,8 +166,8 @@ async function withChest(bot, ctx, fn, at = null, valid = null) {
     } finally {
       try { await window.close() } catch (_) { /* close best-effort */ }
     }
-  } catch (_) {
-    return { status: 'error' }
+  } catch (e) {
+    return { status: 'error', why: (e && e.message) || 'unknown' }
   }
 }
 

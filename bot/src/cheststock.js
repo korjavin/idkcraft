@@ -174,7 +174,9 @@ const NEED = [
   // Logs-equivalent: planks count 1/4 (owner 2026-11-18: chests full of planks still chopped).
   { key: 'wood', test: (n) => n.endsWith('_log') || n.endsWith('_stem') || n.endsWith('_planks'), per: (n) => n.endsWith('_planks') ? 0.25 : 1, want: 64 },
   { key: 'sapling', test: (n) => n.endsWith('_sapling'), want: 16 },
-  { key: 'wheat', test: (n) => n === 'wheat' || n === 'bread' || n === 'hay_block', want: 32 },
+  { key: 'wheat', test: (n) => n === 'wheat' || n === 'hay_block', want: 32 },
+  // Real food (never rotten flesh): short stock keeps the farm step picked.
+  { key: 'food', test: (n) => require('./reflexes').EDIBLE_FOODS.has(n), want: 32 },
 ]
 function needFor(item) {
   return typeof item === 'string' ? NEED.find((d) => d.test(item)) || null : null

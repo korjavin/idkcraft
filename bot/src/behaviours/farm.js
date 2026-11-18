@@ -378,7 +378,7 @@ function farmFeasible(facts, bot, ctx) {
       if (require('./stockpile').packFull(bot, ctx) && !require('../vetoes').orderOwnsStep(ctx, 'farm')) return false
     } catch (_) { /* room unreadable: farm */ }
     // Need gate (owner 2026-11-18): wheat stock met -> no farm pick.
-    if (require('../cheststock').needMet(bot, ctx, 'wheat') && !require('../vetoes').orderOwnsStep(ctx, 'farm')) return false
+    if (require('../cheststock').needMet(bot, ctx, 'wheat') && require('../cheststock').needMet(bot, ctx, 'bread') && !require('../vetoes').orderOwnsStep(ctx, 'farm')) return false
     const bp = botPos(bot)
     if (!bp) return false
     const farmland = nearestCell(bot, ctx, ['farmland'], farmRadius(ctx))
@@ -823,6 +823,8 @@ function workReady(bot, ctx) {
 module.exports = run
 module.exports.run = run
 module.exports.farmFeasible = farmFeasible
+// Food recovery's harvest rung: the nearest ripe crop that turns into a meal (carrot eaten, wheat -> bread).
+module.exports.ripeCrop = (bot, ctx) => nearestCell(bot, ctx, ['wheat', 'carrots'], farmRadius(ctx), { forDig: true, ripe: true })
 module.exports.workReady = workReady
 module.exports.walkTo = walkTo
 module.exports.feedReady = feedReady
