@@ -1477,17 +1477,22 @@ function fillTargets(bot, ctx, st, now) {
     const R = FILL_RING
     for (let dx = -R; dx < w + R; dx++) {
       for (let dz = -R; dz < d + R; dz++) {
-        let floored = false // a solid (or plan) cell below: this air is a hole, not open sky
-        for (let dd = FILL_DEPTH + 1; dd >= 1; dd--) {
+        // Top-down (prod bot3: 1455 holes flat, bot4 fail:unreachable): only
+        // the air run open from the grade down is a hole; a pocket under a
+        // solid or plan cell is sealed (the floor above it walks) and was
+        // unreachable work. The run counts only over a solid bottom.
+        const run = []
+        let floored = false
+        for (let dd = 1; dd <= FILL_DEPTH + 1; dd++) {
           const x = site.x + dx, y = site.y - dd, z = site.z + dz
           const k = `${x},${y},${z}`
           const n = nameAt(bot, { x, y, z })
-          if (k === sillKey || at.has(k)) { floored = true; continue }
-          if (n == null) { floored = false; continue } // unloaded reads null: never fill blind
-          if (!AIR.has(n)) { floored = n !== 'water' && n !== 'lava' && !build.isReplaceable(n); continue }
-          if (!floored || dd > FILL_DEPTH) continue
-          list.push({ x, y, z, kind: 'stone', prep: 'fill', idx: fillIdx(st, d, dx, dz, dd) })
+          if (k === sillKey || at.has(k)) { floored = true; break }
+          if (n == null) break // unloaded reads null: never fill blind
+          if (!AIR.has(n)) { floored = n !== 'water' && n !== 'lava' && !build.isReplaceable(n); break }
+          if (dd <= FILL_DEPTH) run.push({ x, y, z, kind: 'stone', prep: 'fill', idx: fillIdx(st, d, dx, dz, dd) })
         }
+        if (floored) list.push(...run.reverse()) // bottom-up per column
       }
     }
   }
@@ -1498,12 +1503,29 @@ function fillTargets(bot, ctx, st, now) {
 // Next workable fill cell (not backing off, never retired): the menu and
 // the tail share it. No player guard — refilling ground below grade never
 // buries anyone (placeCell still refuses its own stance cells itself).
-function nextFill(st, list, now) {
+// With a body: the latched upkeep target, else the nearest column
+// (horizontal) and its lowest open cell — bottom-up keeps a floor under
+// each placement; a backing-off bottom lets the cell above go next,
+// hung on a side face (prod bot4: scan-order picks walked to far cells,
+// 81x fail:unreachable).
+function nextFill(st, list, now, bot = null, ctx = null) {
   const bl = (st && st.blocked) || {}
-  return (list || []).find((o) => {
+  const open = (list || []).filter((o) => {
     const b = bl[bkey(st, o.idx)]
     return !(b && (b.retired || b.until > now))
-  }) || null
+  })
+  if (!open.length) return null
+  const u = ctx && ctx.castleUpkeep
+  if (u) { const cur = open.find((o) => o.idx === u.idx); if (cur) return cur }
+  const bp = bot && bodyPos(bot)
+  if (!bp) return open[0]
+  let best = open[0]
+  let bd = Infinity
+  for (const o of open) {
+    const d = (o.x + 0.5 - bp.x) ** 2 + (o.z + 0.5 - bp.z) ** 2
+    if (d < bd || (d === bd && o.y < best.y)) { best = o; bd = d }
+  }
+  return best
 }
 
 // Dark cells (prod 2026-11-16 bot3: six hostiles by day at the site, a
@@ -3556,6 +3578,17 @@ function castleBuilderBatch(bot, ctx, st, c) {
 
 // One tick on one cell (plan or prep): material check, budget, then place
 // into an open cell or dig a wrong occupant.
+// Litter or fill, whichever the latched upkeep target is, else the nearer.
+function pickUpkeep(bot, ctx, lit, fill) {
+  if (!lit || !fill) return lit || fill
+  const u = ctx && ctx.castleUpkeep
+  if (u && u.idx === fill.idx) return fill
+  if (u && u.idx === lit.idx) return lit
+  const bp = bodyPos(bot)
+  if (!bp) return lit
+  const d = (o) => (o.x + 0.5 - bp.x) ** 2 + (o.y + 0.5 - bp.y) ** 2 + (o.z + 0.5 - bp.z) ** 2
+  return d(fill) < d(lit) ? fill : lit
+}
 // Upkeep outcome log: litter/fill cells say ok when done, fail on a strike.
 function upkeepKind(st, c) {
   if (!c || !Number.isInteger(c.idx) || c.idx < LITTER_BOX_BASE) return null
@@ -3784,16 +3817,18 @@ function castle(bot, ctx) {
     // first every tick and clutter never fell); failing litter retires on
     // the strike ladder, so it cannot starve the fill in turn.
     // Waiting plan cells sit in backoff: the sweep runs meanwhile.
+    // Nearest-first across kinds (prod bot3: litter never ran out, fill
+    // never ran): the latched target keeps the tick, else the closer cell.
     const lits = litterTargets(bot, ctx, st, now)
     const lit = nextLitter(st, lits, now, bot, ctx)
-    if (lit) { work(bot, ctx, st, lit, now, 'clearing scaffold'); return }
+    const fill = fillItem(bot, ctx) ? nextFill(st, fillTargets(bot, ctx, st, now), now, bot, ctx) : null
+    const pick = pickUpkeep(bot, ctx, lit, fill)
+    if (pick) { work(bot, ctx, st, pick, now, pick === lit ? 'clearing scaffold' : 'filling a floor hole'); return }
     const left = lits.filter((o) => !((st.blocked || {})[bkey(st, o.idx)] || {}).retired).length
     if (left && !(ctx.castleUpkeepStuckAt > now - 60000)) {
       ctx.castleUpkeepStuckAt = now
       console.log(`castle upkeep stuck reachable=0 left=${left}`)
     }
-    const fill = nextFill(st, fillTargets(bot, ctx, st, now), now)
-    if (fill && fillItem(bot, ctx)) { work(bot, ctx, st, fill, now, 'filling a floor hole'); return }
   }
   if (r.idx < 0) {
     if (r.waiting) {
@@ -3850,6 +3885,7 @@ module.exports.litterTargets = litterTargets
 module.exports.fillTargets = fillTargets
 module.exports.standFill = standFill
 module.exports.nextFill = nextFill
+module.exports.pickUpkeep = pickUpkeep
 module.exports.darkTargets = darkTargets
 module.exports.darkOf = darkOf
 module.exports.darkAskOpen = darkAskOpen

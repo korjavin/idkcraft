@@ -62,6 +62,28 @@ describe('walkable castle floor fill', () => {
     for (const c of list) assert.ok(castle.fillOf(st, c.idx), 'idx decodes back')
   })
 
+  it('a pocket sealed under solid ground is no hole (count = work list)', () => {
+    const cells = new Map()
+    const sx = SITE.x - 4, sz = SITE.z + 10
+    for (let dd = 2; dd <= 4; dd++) cells.set(key(sx, SITE.y - dd, sz), 'air') // grade dd=1 stays solid
+    const list = castle.fillTargets(world(cells), {}, st, Date.now())
+    assert.equal(list.filter((c) => c.x === sx && c.z === sz).length, 0)
+  })
+  it('nextFill: nearest column first, its lowest open cell, the cell above when the bottom backs off', () => {
+    const cells = new Map()
+    const near = { x: SITE.x - 4, z: SITE.z + 10 }, farc = { x: SITE.x - 4, z: SITE.z - 4 }
+    for (const c of [near, farc]) for (let dd = 1; dd <= 3; dd++) cells.set(key(c.x, SITE.y - dd, c.z), 'air')
+    const s2 = { ...st, blocked: {} }
+    const list = castle.fillTargets(world(cells), {}, s2, Date.now())
+    const bot = { entity: { position: { x: near.x + 0.5, y: SITE.y, z: near.z + 3.5 } } }
+    const now = Date.now()
+    const a = castle.nextFill(s2, list, now, bot, {})
+    assert.deepEqual([a.x, a.y, a.z], [near.x, SITE.y - 3, near.z])
+    s2.blocked[`2:${a.idx}`] = { tries: 1, until: now + 60000 }
+    const b = castle.nextFill(s2, list, now, bot, {})
+    assert.deepEqual([b.x, b.y, b.z], [near.x, SITE.y - 2, near.z])
+    assert.equal(castle.nextFill(s2, list, now, bot, { castleUpkeep: list.find((c) => c.z === farc.z) }).z, farc.z, 'latched target kept')
+  })
   it('an open drop past the ring window (a hillside) is not walled up', () => {
     const list = castle.fillTargets(world(new Map(), (x) => (x < SITE.x - 2 ? 'air' : 'dirt')), {}, st, Date.now())
     assert.ok(list.every((c) => c.x >= SITE.x - 2), 'no fill over open air')
