@@ -527,7 +527,7 @@ describe('chooser shared startability contract', () => {
 describe('chooser need step', () => {
   // setBring is faked (no world); clearTaskParks is the real orders seam.
   function fakeTicker(ctx, real) {
-    const t = { calls: 0, setBring({ name, want, by }) { ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() { t.calls++; return real.clearTaskParks() } }
+    const t = { calls: 0, setBring({ name, want, by, chestFirst }) { if (chestFirst) return 'no chest'; ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() { t.calls++; return real.clearTaskParks() } }
     return t
   }
   const needAsk = (bot, ctx, ticker) => llmOrders.ask(bot, ctx, { text: 'choose work: castle-stalled', by: 'self', ticker, explicit: false, choose: { regime: 'castle-stalled', trigger: 'idle' } })
@@ -861,7 +861,7 @@ describe('chooser JEV-first tier', () => {
   it('a failed JEV need makes no LLM replan', async () => {
     const { bot, ctx } = torchCastle()
     bot.health = 4
-    const ticker = { setBring({ name, want, by }) { ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() {} }
+    const ticker = { setBring({ name, want, by, chestFirst }) { if (chestFirst) return 'no chest'; ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() {} }
     jevAns = () => ({ choice: 'need_torch', confidence: 0.9 })
     llmOrders.ask(bot, ctx, { text: 'choose work: castle-stalled', by: 'self', ticker, explicit: false, choose: { regime: 'castle-stalled', trigger: 'idle' } })
     await flush()
@@ -901,7 +901,7 @@ describe('chooser JEV-first tier', () => {
 
   it('an LLM-chosen need that keeps pushing prerequisites stops at 2 LLM calls', async () => {
     const { bot, ctx } = finishedHome()
-    const ticker = { setBring({ name, want, by }) { ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() {} }
+    const ticker = { setBring({ name, want, by, chestFirst }) { if (chestFirst) return 'no chest'; ctx.bring = { kind: 'item', name, want, by } }, clearTaskParks() {} }
     const saved = llmOrders.workSteps().map((id) => [id, goal.MENU[id].feasible])
     for (const [id] of saved) goal.MENU[id].feasible = () => false
     const chain = ['torch', 'coal', 'stick', 'oak_planks', 'oak_log', 'iron_ore']
