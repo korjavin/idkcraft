@@ -41,6 +41,13 @@ describe('hurt cause', () => {
     assert.equal(hurt.classify(mkBot({ entities: { 2: zombie } }), {}, 2), 'mob:zombie')
     assert.equal(hurt.classify(mkBot(), {}, 1), 'unknown')
   })
+  it('exploded creeper already gone from the map: the last tick snapshot names it', () => {
+    const snap = { count: 1, name: 'creeper', dist: 2.4 }
+    assert.equal(hurt.classify(mkBot(), { lastHostileSnap: snap }, 20), 'explosion')
+    assert.equal(hurt.deathCause(mkBot(), { lastHostileSnap: snap }), 'explosion')
+    assert.equal(hurt.classify(mkBot(), { lastHostileSnap: { count: 1, name: 'zombie', dist: 1.5 } }, 2), 'mob:zombie')
+    assert.equal(hurt.classify(mkBot(), { lastHostileSnap: { count: 1, name: 'zombie', dist: 9 } }, 1), 'unknown')
+  })
   it('death cause is the last fresh hurt, then the log clears', () => {
     const ctx = {}
     hurt.noteHurt(mkBot(), Object.assign(ctx, { lastFall: { dist: 20, at: Date.now() } }), 20)

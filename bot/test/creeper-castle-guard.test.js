@@ -42,9 +42,15 @@ describe('creeper near own castle: hit and retreat away from the castle', () => 
     const g = bot.goals[0]
     assert.ok(Math.hypot(g.x - cx, g.z - cz) > Math.hypot(w + 2 - cx, 2))
   })
-  it('far from the castle: plain flee, no hit', () => {
+  it('far from the castle, any work step: a creeper in reach is hit and fled from', () => {
     const bot = creeperBot([w + 100, 64, 0], [w + 102, 64, 0])
-    assert.ok(fleeReflex(bot, castle()))
+    assert.ok(fleeReflex(bot, { ...castle(), work: true, step: 'farmbuild' }))
+    assert.equal(bot.hits.length, 1)
+    assert.ok(bot.goals[0].x < w + 100)
+  })
+  it('far from the castle: a creeper out of reach is only fled from', () => {
+    const bot = creeperBot([w + 100, 64, 0], [w + 105, 64, 0])
+    assert.ok(fleeReflex(bot, { work: true, step: 'castlefetch' }))
     assert.equal(bot.hits.length, 0)
     assert.ok(bot.goals[0].x < w + 100)
   })
