@@ -157,6 +157,7 @@ describe('house builder branch (idkcraft-neuc.54)', () => {
     assert.equal(world.blockAt({ x: 2, y: 63, z: -1 }).name, 'air')
 
     await run(bot, ctx, 40)
+    assert.deepEqual(bot.calls.goals.slice(0, 3).map((g) => g.pos.y), [60, 61, 62])
     assert.ok(bot.calls.builds.some((call) => call.cells.some(isDoorstep)), 'supported fill can batch')
     for (let y = 60; y <= 63; y++) {
       assert.equal(world.blockAt({ x: 2, y, z: -1 }).name, 'oak_planks', `y=${y}`)

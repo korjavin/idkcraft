@@ -143,14 +143,14 @@ function run(bot, ctx) {
   // A self-picked site (not the owner's spot) with no new cell for STALL_MS is
   // dropped and re-picked (owner 2026-11-19: bot2's farm stalled over a lake).
   if (!fb.built && !fb.at) {
-    const done = build.houseProgress(bot, fb).done
+    const done = build.houseProgress(bot, fb, { includeClear: true }).done
     const now = Date.now()
-    // run time on this step only (a night or other steps between ticks do not count)
-    const dt = fb.stallTick ? Math.min(now - fb.stallTick, 5000) : 0
+    // Cap elapsed time so a long interruption contributes at most five seconds.
+    const dt = fb.stallTick ? Math.max(0, Math.min(now - fb.stallTick, 5000)) : 0
     fb.stallTick = now
-    if (done !== fb.stallDone) { fb.stallDone = done; fb.stallRun = 0 }
+    if (fb.stallDone == null || done > fb.stallDone) { fb.stallDone = done; fb.stallRun = 0 }
     else if ((fb.stallRun = (fb.stallRun || 0) + dt) > STALL_MS) {
-      console.log(`farm site stalled built=${done} for=${Math.round(fb.stallRun / 60000)}min -> re-picking`)
+      console.log(`farm site stalled completed=${done} for=${Math.round(fb.stallRun / 60000)}min -> re-picking`)
       // the stalled plot is not picked again (its box joins anchorOf's avoid)
       ctx.farmBuild = { ordered: fb.ordered, avoid: [...(fb.avoid || []), { x0: fb.site.x, z0: fb.site.z, x1: fb.site.x + blueprint.W - 1, z1: fb.site.z + blueprint.D - 1 }] }
       stepFailed(ctx, 'site-stalled')

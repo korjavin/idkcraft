@@ -136,6 +136,33 @@ function seeCellCmd(goal, from, blockAt) {
   return best ? `#goto ${best.x} ${best.y} ${best.z}` : null
 }
 
+// Standing eye height (1.6) minus the target cell center offset (0.5).
+const PLACE_EYE_OFFSET = 1.1
+
+// A below-grade target needs a stand at a known Y. An XZ goal can finish
+// on the rim even when the placement is still out of reach.
+function lowerPlaceStand(p, from, blockAt, range) {
+  const open = (b) => b && b.boundingBox === 'empty' &&
+    !/^(water|lava|bubble_column|fire|soul_fire|powder_snow)$/.test(b.name)
+  let best = null
+  let bestDist = Infinity
+  for (let y = p.y; y <= p.y + 3; y++) {
+    for (let x = p.x - 2; x <= p.x + 2; x++) {
+      for (let z = p.z - 2; z <= p.z + 2; z++) {
+        if (x === p.x && y === p.y && z === p.z) continue
+        if (Math.hypot(x - p.x, y + PLACE_EYE_OFFSET - p.y, z - p.z) > range) continue
+        const dist = (x + 0.5 - from.x) ** 2 + (y - from.y) ** 2 + (z + 0.5 - from.z) ** 2
+        if (dist >= bestDist) continue
+        const floor = blockAt(x, y - 1, z)
+        if (!floor || floor.boundingBox !== 'block' || !open(blockAt(x, y, z)) || !open(blockAt(x, y + 1, z))) continue
+        best = { x, y, z }
+        bestDist = dist
+      }
+    }
+  }
+  return best
+}
+
 function goalToBaritone(goal, from, blockAt) {
   if (!goal) return null
   const name = (goal.constructor && goal.constructor.name) || ''
@@ -206,6 +233,10 @@ function goalToBaritone(goal, from, blockAt) {
     // with silence. Both silence shapes fail visibly instead, never wedge.
     const range = (goal.options && typeof goal.options.range === 'number') ? goal.options.range
       : (typeof goal.reach === 'number' ? goal.reach : 4)
+    if (name === 'GoalPlaceBlock' && from.y + PLACE_EYE_OFFSET - py > range && typeof blockAt === 'function') {
+      const stand = lowerPlaceStand({ x: px, y: py, z: pz }, from, blockAt, range)
+      if (stand) return `#goto ${stand.x} ${stand.y} ${stand.z}`
+    }
     if (py - fy > range - 1) {
       // A wall cell's along-wall neighbour is the laid course: feet in a
       // solid block never path (prod: -166 82 409 'unreachable' x4). Take
