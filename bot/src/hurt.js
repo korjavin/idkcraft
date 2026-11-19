@@ -54,9 +54,13 @@ function classify(bot, ctx, drop, now = Date.now()) {
   if (bot.oxygenLevel === 0) return 'drowning'
   const head = blockAt(bot, pos, 1.6)
   if (head && head.boundingBox === 'block') return 'suffocation'
-  if (drop >= 3 && nearest(bot, 7, (e) => e.name === 'creeper')) return 'explosion'
+  // The exploded creeper is gone from the map at the hurt/death read: the last tick's snapshot still names it.
+  const snap = ctx.lastHostileSnap
+  const snapNear = (r) => snap && snap.name && typeof snap.dist === 'number' && snap.dist <= r
+  if (drop >= 3 && (nearest(bot, 7, (e) => e.name === 'creeper') || (snapNear(7) && snap.name === 'creeper'))) return 'explosion'
   const mob = nearest(bot, 4, (e) => HOSTILE_NAMES.has(e.name || ''))
   if (mob) return `mob:${mob.name}`
+  if (snapNear(4)) return snap.name === 'creeper' ? 'explosion' : `mob:${snap.name}`
   if (bot.food === 0) return 'starvation'
   // Head under water with nothing else to blame: the bridge's oxygen poll lags.
   if (((blockAt(bot, pos, 1.6) || {}).name || '') === 'water') return 'drowning'

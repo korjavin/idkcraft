@@ -557,8 +557,7 @@ function meleeReflex(bot, ctx, state) {
 // Creeper flee reflex (c2u): creepers are the one hostile the brain never
 // sees (isFightTarget excludes them, so no hostile fact and no hard route),
 // yet they kill. Within CREEPER_FLEE_RANGE the body walks away from the
-// nearest creeper — an FSM rule, never an attack (hitting one near the
-// player explodes it next to the player). Returns the creeper distance, or
+// nearest creeper, hitting it once in swing reach (knockback). Returns the creeper distance, or
 // false when none is close.
 // ponytail: no isHard 'creeper-near' case — the reflex already moves the
 // body, so asking the model follow-vs-flee would add a wire case for zero gain.
@@ -655,12 +654,14 @@ function fleeReflex(bot, ctx, state) {
   let dz = bp.z - creeper.position.z
   if (dx === 0 && dz === 0) dx = 1
   let len = Math.hypot(dx, dz)
+  // Any step (prod: creeper 2.4 in farmbuild, 3.1 in castlefetch, both deaths):
+  // a creeper in reach is hit while backing off; knockback buys the fuse time a 1 s tick cannot outrun.
+  if (d <= fightMod.SWING_RANGE) {
+    if (ctx.fleeTargetId !== creeper.id) { try { fightMod.equipGear(bot) } catch (_) { /* fists knock back too */ } }
+    try { fightMod.swing(bot, creeper) } catch (_) { /* mock bots may lack lookAt/attack */ }
+    console.log(`reflex hit creeper dist=${d.toFixed(1)}${cc ? ' castle' : ''}`)
+  }
   if (cc) {
-    if (d <= fightMod.SWING_RANGE) {
-      if (ctx.fleeTargetId !== creeper.id) { try { fightMod.equipGear(bot) } catch (_) { /* fists knock back too */ } }
-      try { fightMod.swing(bot, creeper) } catch (_) { /* mock bots may lack lookAt/attack */ }
-      console.log(`reflex hit creeper dist=${d.toFixed(1)} castle`)
-    }
     const ox = bp.x - cc.x
     const oz = bp.z - cc.z
     const ol = Math.hypot(ox, oz) || 1
@@ -678,10 +679,7 @@ function fleeReflex(bot, ctx, state) {
     // Fleeing does not work here: hit it when it is in reach (knockback
     // resets the fuse), else hold still and let goal work have the body.
     if (verdict !== 'dropped') console.log(`reflex flee gave-up why=${verdict} ${ctx.reflexTrigger}`)
-    if (d <= fightMod.SWING_RANGE) {
-      try { fightMod.equipGear(bot); fightMod.swing(bot, creeper) } catch (_) { /* mock bots may lack lookAt/attack */ }
-      return d
-    }
+    if (d <= fightMod.SWING_RANGE) return d // already hit above
     ctx.fleeTargetId = null
     return false
   }
