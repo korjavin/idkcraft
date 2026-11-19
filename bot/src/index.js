@@ -441,6 +441,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     } else {
       stopOnce()
     }
+    if (decision.source === 'goal-fsm' && decision.action === ctx.step) stepMod.idleRunGuard(bot, ctx)
     // Lease refresh with the dispatch's own target/state and fresh keys —
     // the only sprint application (see body.js). Same owner, no cleanup.
     try { body.claimBody(bot, ctx, (ctx.body && ctx.body.owner) || 'idle', { sprint: true, target, dist: state && state.distance_to_player }) } catch (_) { /* lease best-effort */ }
