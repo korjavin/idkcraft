@@ -45,3 +45,14 @@ it('idle no-target end with no source left still takes the cooldown', async () =
     else process.env.BOT_BODY = prev
   }
 })
+
+// prod 2026-11-19 bot3: a live foodRecovery step under cooldown restarted every tick
+require('node:test').test('a run under cooldown ends the step instead of restarting', () => {
+  const assert = require('node:assert/strict')
+  const fr = require('../src/behaviours/food-recovery')
+  const ctx = { step: 'foodRecovery', foodRecoveryRetryAt: Date.now() + 60000 }
+  const bot = { health: 10, food: 17, inventory: { items: () => [] }, entity: { position: { x: 0, y: 64, z: 0 } } }
+  fr.run(bot, ctx)
+  assert.match(String(ctx.stepStatus), /^failed:cooldown/)
+  assert.equal(ctx.foodRecovery, undefined)
+})
