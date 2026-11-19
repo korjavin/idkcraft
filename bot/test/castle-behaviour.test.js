@@ -728,6 +728,7 @@ describe('g0z.2 castle executor', () => {
     assert.equal(ctx.castle.blocked[`${1}:0`], undefined, 'approach ticks never strike')
     await run(bot, ctx, 5)
     assert.ok(!(ctx.ownBreakUntil > Date.now()), 'access build first: own cells stay closed')
+    ctx.reachBuild.since -= require('../src/reach').REACH_HOLD_MS // the access build's hold is over
     await run(bot, ctx, 5)
     assert.ok(ctx.ownBreakUntil > Date.now(), 'next ladder opens the dig-approach window')
     await run(bot, ctx, 20) // the step mover's never-arriving leg stalls, then strikes
