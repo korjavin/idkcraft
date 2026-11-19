@@ -199,7 +199,7 @@ const PLANK_COUNT_V2 = BLUEPRINT_V2.filter((c) => c.kind === 'planks').length
 const NO_PLAN = Object.freeze([])
 function blueprintFor(home) {
   if (home && home.kind === 'castle') return NO_PLAN
-  if (home && home.kind === 'farm') return require('../farm-blueprint').PLAN // qphv.1
+  if (home && home.kind === 'farm') return require('../farm-blueprint').planFor(home) // qphv.1: prep cells + plan
   return home && home.v === 2 ? BLUEPRINT_V2 : BLUEPRINT
 }
 
@@ -585,8 +585,12 @@ const FARM_KINDS = {
   chest: (n) => n === 'chest',
   water: (n) => n === 'water',
   farmland: (n) => n === 'farmland',
+  // Farm site prep fills (qphv): field soil tills, other fill is any cheap block.
+  soil: (n) => n === 'dirt' || n === 'grass_block' || n === 'farmland',
+  ground: (n) => NATURAL_SOLID.has(n) || FILLERS.has(n),
 }
-const FARM_ITEMS = { water: (n) => n === 'water_bucket', farmland: (n) => n.endsWith('_hoe') }
+const FILLERS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'stone', 'andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'netherrack', 'coarse_dirt'])
+const FARM_ITEMS = { water: (n) => n === 'water_bucket', farmland: (n) => n.endsWith('_hoe'), soil: (n) => n === 'dirt', ground: (n) => FILLERS.has(n) }
 function wantItem(cell) {
   if (cell.kind === 'table') return (n) => n === 'crafting_table'
   if (FARM_ITEMS[cell.kind]) return FARM_ITEMS[cell.kind]
@@ -1451,6 +1455,7 @@ module.exports.BLUEPRINT_V2 = BLUEPRINT_V2
 module.exports.PLANK_COUNT = PLANK_COUNT
 module.exports.PLANK_COUNT_V2 = PLANK_COUNT_V2
 module.exports.blueprintFor = blueprintFor
+module.exports.FILLERS = FILLERS
 module.exports.isDoorwayOrInterior = isDoorwayOrInterior
 module.exports.isPlanCell = isPlanCell
 module.exports.nextCellIdx = nextCellIdx

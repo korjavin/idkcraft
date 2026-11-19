@@ -81,10 +81,81 @@ describe('farm blueprint (qphv.1)', () => {
     assert.ok(s.x + fp.W - 1 < -13 || s.x > 13 || s.z + fp.D - 1 < -13 || s.z > 13)
   })
 
-  it('refuses a field on sand', () => {
+  it('takes a field on sand with dirt soil cells under it', () => {
     const w = world()
-    for (let x = -60; x <= 60; x++) for (let z = -60; z <= 60; z++) w.set(x, 63, z, 'sand')
-    assert.equal(fp.siteFor(mockBot(w), { x: 0, y: 64, z: 0 }), null)
+    for (let x = -80; x <= 80; x++) for (let z = -80; z <= 80; z++) w.set(x, 63, z, 'sand')
+    const s = fp.siteFor(mockBot(w), { x: 0, y: 64, z: 0 })
+    assert.ok(s)
+    assert.equal(s.prep.filter((c) => c.kind === 'soil' && c.dy === -1).length, 80) // the water pit is dug, not soiled
+  })
+
+  // qphv site prep: no flat strip anywhere — the cheapest graded site wins.
+  function bumpy() {
+    const w = world()
+    for (let x = -80; x <= 80; x++) {
+      for (let z = -80; z <= 80; z++) {
+        const h = ((x * 7 + z * 13) % 5 + 5) % 5 // 0..4 relief: never 1-flat over 27x9
+        for (let y = 64; y < 64 + h - 2; y++) w.set(x, y, z, 'stone')
+        if (h < 2) for (let y = 63; y >= 64 + h - 2; y--) w.set(x, y, z, 'air')
+        if (h !== 2) w.set(x, 64 + h - 3, z, 'grass_block')
+      }
+    }
+    return w
+  }
+
+  it('picks the cheapest bumpy site with cut and fill prep cells before the barn', () => {
+    const w = bumpy()
+    const r = fp.pickSite(mockBot(w), { x: 0, y: 64, z: 0 }, [{ x0: -10, z0: -10, x1: 10, z1: 10 }])
+    assert.ok(r.site, r.reason)
+    assert.ok(r.tried > 100)
+    const s = r.site
+    assert.ok(s.cut > 0 && s.fill > 0 && s.cost === s.cut + s.fill)
+    assert.ok(s.x + fp.W - 1 < -13 || s.x > 13 || s.z + fp.D - 1 < -13 || s.z > 13, 'clear of the castle')
+    const plan = fp.planFor({ site: s })
+    assert.equal(plan.length, s.prep.length + fp.PLAN.length)
+    const kinds = new Set(s.prep.map((c) => c.kind))
+    assert.ok(kinds.has('clear') && kinds.has('ground') && kinds.has('soil'))
+    const lastCut = s.prep.map((c) => c.kind).lastIndexOf('clear')
+    assert.ok(s.prep.findIndex((c) => c.kind !== 'clear') > lastCut, 'cuts before fills')
+  })
+
+  it('builds the farm on bumpy ground end to end', async () => {
+    const w = bumpy()
+    const bot = mockBot(w)
+    bot.inventory.items().push({ name: 'dirt', count: 64 * 9 })
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, buildSkip: [], castle: null }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      for (let t = 0; t < 8000 && ctx.stepStatus === 'running'; t++) {
+        farmbuild(bot, ctx)
+        await tick()
+      }
+    } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'done', logs.slice(-5).join('\n'))
+    assert.ok(logs.some((l) => /^farm site=-?\d+,\d+,-?\d+ cost=[1-9]\d* cut=\d+ fill=\d+ tried=\d+$/.test(l)), logs.find((l) => l.startsWith('farm site')))
+    const s = ctx.farmBuild.site
+    const at = (dx, dy, dz) => w.blockAt({ x: s.x + dx, y: s.y + dy, z: s.z + dz }).name
+    for (let dx = fp.FIELD.x0; dx <= fp.FIELD.x1; dx++) {
+      for (let dz = fp.FIELD.z0; dz <= fp.FIELD.z1; dz++) {
+        if (dx !== fp.WATER.dx || dz !== fp.WATER.dz) assert.equal(at(dx, -1, dz), 'farmland', `${dx},${dz}`)
+      }
+    }
+    assert.equal(at(fp.DOOR.dx, 0, fp.DOOR.dz), 'oak_door')
+  })
+
+  it('logs no-site with tried and the reason', () => {
+    const w = world()
+    const bot = mockBot(w)
+    bot.blockAt = () => null // nothing loaded
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, castle: null }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try { farmbuild(bot, ctx) } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'failed:no-site')
+    assert.ok(logs.some((l) => /^farm failed:no-site tried=\d+ best=none reason=unloaded-or-built$/.test(l)), logs.join('\n'))
   })
 })
 
@@ -106,7 +177,7 @@ describe('farmbuild step (qphv.1)', () => {
     assert.equal(ctx.stepStatus, 'done', logs.slice(-5).join('\n'))
     const fb = ctx.farmBuild
     assert.equal(fb.built, true)
-    assert.ok(logs.some((l) => /^farm site=-?\d+,64,-?\d+$/.test(l)))
+    assert.ok(logs.some((l) => /^farm site=-?\d+,64,-?\d+ cost=0 cut=0 fill=0 tried=\d+$/.test(l)))
     assert.ok(logs.some((l) => /^farm progress built=\d+\/199 phase=barn$/.test(l)))
     const s = fb.site
     const at = (dx, dy, dz) => w.blockAt({ x: s.x + dx, y: s.y + dy, z: s.z + dz }).name
