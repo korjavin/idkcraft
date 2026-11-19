@@ -161,4 +161,12 @@ function planFor(fb) {
   return PLANS.get(prep)
 }
 
-module.exports = { protects, inFieldAt, PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, siteFor, pickSite, planFor, footprintCost }
+// Prep cells for a stored site (memory keeps only x,y,z): re-read the footprint at its grade y.
+function prepAt(bot, site) {
+  const cols = new Map()
+  const col = (x, z) => { const k = `${x},${z}`; if (!cols.has(k)) cols.set(k, column(bot, x, z, site.y + 8)); return cols.get(k) }
+  const f = footprintCost(col, site.x, site.z)
+  return f.bad ? null : prepCells(f.cs, site.y)
+}
+
+module.exports = { prepAt, protects, inFieldAt, PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, siteFor, pickSite, planFor, footprintCost }

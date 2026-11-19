@@ -289,6 +289,30 @@ describe('farmbuild step (qphv.1)', () => {
     for (let y = 60; y <= 63; y++) assert.equal(w.blockAt({ x: 202, y, z: 202 }).name, 'dirt', `y=${y}`)
   })
 
+  it('a restored site re-plans its prep; a self-picked site with no progress for 30 min of work is re-picked', () => {
+    const w = world()
+    const bot = mockBot(w)
+    bot.pathfinder.setGoal = () => {}
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, castle: null, farmBuild: { site: { x: 0, y: 64, z: 0 }, ordered: true } }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => now
+    try {
+      farmbuild(bot, ctx)
+      assert.ok(Array.isArray(ctx.farmBuild.site.prep), 'prep restored')
+      assert.ok(logs.some((l) => l.startsWith('farm prep restored')))
+      const fb = ctx.farmBuild
+      fb.stallDone = require('../src/behaviours/build').houseProgress(bot, fb).done
+      for (let i = 0; i < 400 && ctx.farmBuild === fb; i++) { now += 5000; ctx.placeInFlight = true; farmbuild(bot, ctx) }
+      assert.notEqual(ctx.farmBuild, fb)
+      assert.equal(ctx.stepStatus, 'failed:site-stalled')
+      assert.equal(ctx.farmBuild.ordered, true)
+    } finally { console.log = orig; Date.now = realNow }
+  })
+
   it('is feasible by day for an ordered farm or a complete castle, never once built', () => {
     const day = { time: 'day' }
     assert.equal(farmbuild.feasible(day, null, {}), false)
