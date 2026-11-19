@@ -1214,6 +1214,14 @@
     ],
     "owner": "src/behaviours/farm.js"
   },
+  "farmBuild": {
+    "writers": [
+      "src/behaviours/farmbuild.js",
+      "src/chat.js",
+      "src/memory.js"
+    ],
+    "owner": "src/behaviours/farmbuild.js"
+  },
   "farmFedAt": {
     "writers": [
       "src/behaviours/farm.js"
