@@ -25,8 +25,8 @@ const SOIL = new Set(['grass_block', 'dirt'])
 const WET = new Set(['water', 'bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
 
 // Column survey: gy = the first free y over natural ground, reading through
-// flora, leaves, logs (tree) and water (its depth is fill). null = unloaded,
-// lava or a built surface (never founded on, as before).
+// flora, leaves, logs (tree) and water (its depth is fill). { bad } = why it
+// is unusable: unloaded, built (a player block), lava, deep (no ground in 32).
 function column(bot, x, z, topY) {
   const { BUILT_GROUND } = require('./site')
   const { CLEAR_FLORA } = require('./behaviours/util')
@@ -34,28 +34,29 @@ function column(bot, x, z, topY) {
   let water = false
   for (let y = topY; y > topY - 32; y--) {
     let b = null
-    try { b = bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null }
-    if (!b || !b.name) return null
+    try { b = bot.blockAt(new Vec3(x, y, z)) } catch (_) { return { bad: 'unloaded' } }
+    if (!b || !b.name) return { bad: 'unloaded' }
     const n = b.name
     if (n === 'air' || n === 'cave_air' || CLEAR_FLORA.has(n)) continue
     if (/(_leaves|_log|_wood)$/.test(n)) { tree = true; continue }
     if (WET.has(n)) { water = true; continue }
-    if (n === 'lava' || BUILT_GROUND.test(n)) return null
+    if (n === 'lava') return { bad: 'lava' }
+    if (BUILT_GROUND.test(n)) return { bad: 'built' }
     return { gy: y + 1, top: n, tree, water }
   }
-  return null
+  return { bad: 'deep' }
 }
 
 // Prep cost of the footprint at (ox, oz) at its cheapest grade y: blocks to
 // cut above plus blocks to fill below, a field top that is no soil (swapped
-// for dirt: one cut, one fill), tree and water penalties. null = a column
-// unreadable.
+// for dirt: one cut, one fill), tree and water penalties. { bad, x, z } =
+// the first unusable column.
 function footprintCost(col, ox, oz) {
   const cs = []
   for (let dx = 0; dx < W; dx++) {
     for (let dz = 0; dz < D; dz++) {
       const c = col(ox + dx, oz + dz)
-      if (!c) return null
+      if (!c || c.bad) return { bad: (c && c.bad) || 'unloaded', x: ox + dx, z: oz + dz }
       cs.push({ dx, dz, ...c })
     }
   }
@@ -102,10 +103,14 @@ function overlaps(ox, oz, box, pad) {
 }
 
 const RADIUS = 38
+const MAX_RADIUS = RADIUS * 3
 const STEP = 3
 // Cheapest site within RADIUS of `around` (ties: nearer), clear of the
-// `avoid` boxes. Returns { site: {x,y,z,cost,cut,fill,prep} | null, tried,
-// reason } — reason says why nothing fit.
+// `avoid` boxes; nothing on loaded ground fits -> the ring widens by RADIUS
+// up to MAX_RADIUS. Returns { site: {x,y,z,cost,cut,fill,prep} | null, tried,
+// reason, why: {unloaded,built,castle,lava,deep}, walk: {x,z} | null } — walk
+// = the nearest unloaded column (qphv: bot5's bridge body read the radius
+// unloaded); the caller walks there so the chunk loads, then re-picks.
 function pickSite(bot, around, avoid = []) {
   if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return { site: null, tried: 0, reason: 'no-anchor' }
   const cy = typeof around.y === 'number' ? Math.floor(around.y) : 64
@@ -117,20 +122,31 @@ function pickSite(bot, around, avoid = []) {
   }
   const bx = Math.floor(around.x - W / 2)
   const bz = Math.floor(around.z - D / 2)
+  const why = { unloaded: 0, built: 0, castle: 0, lava: 0, deep: 0 }
   let best = null
+  let walk = null
   let tried = 0
-  for (let ox = bx - RADIUS; ox <= bx + RADIUS; ox += STEP) {
-    for (let oz = bz - RADIUS; oz <= bz + RADIUS; oz += STEP) {
-      const d = Math.hypot(ox - bx, oz - bz)
-      if (d > RADIUS || avoid.some((b) => overlaps(ox, oz, b, 3))) continue
-      tried++
-      const f = footprintCost(col, ox, oz)
-      if (f && (!best || f.cost < best.f.cost || (f.cost === best.f.cost && d < best.d))) best = { ox, oz, d, f }
+  for (let r = RADIUS, r0 = -1; r <= MAX_RADIUS && !best && !walk; r0 = r, r += RADIUS) {
+    for (let ox = bx - r; ox <= bx + r; ox += STEP) {
+      for (let oz = bz - r; oz <= bz + r; oz += STEP) {
+        const d = Math.hypot(ox - bx, oz - bz)
+        if (d > r || d <= r0) continue
+        if (avoid.some((b) => overlaps(ox, oz, b, 3))) { why.castle++; continue }
+        tried++
+        const f = footprintCost(col, ox, oz)
+        if (f.bad) {
+          why[f.bad]++
+          if (f.bad === 'unloaded' && (!walk || d < walk.d)) walk = { x: f.x, z: f.z, d }
+        } else if (!best || f.cost < best.f.cost || (f.cost === best.f.cost && d < best.d)) best = { ox, oz, d, f }
+      }
     }
   }
-  if (!best) return { site: null, tried, reason: tried ? 'unloaded-or-built' : 'castle-house' }
+  if (!best) {
+    const reason = tried ? Object.keys(why).filter((k) => why[k] && k !== 'castle').join('-') : 'castle-house'
+    return { site: null, tried, reason, why, walk: walk && { x: walk.x, z: walk.z } }
+  }
   const { f } = best
-  return { site: { x: best.ox, y: f.y, z: best.oz, cost: f.cost, cut: f.cut, fill: f.fill, prep: prepCells(f.cs, f.y) }, tried }
+  return { site: { x: best.ox, y: f.y, z: best.oz, cost: f.cost, cut: f.cut, fill: f.fill, prep: prepCells(f.cs, f.y) }, tried, why }
 }
 
 function siteFor(bot, around, avoid) { return pickSite(bot, around, avoid).site }
