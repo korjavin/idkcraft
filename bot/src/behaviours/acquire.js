@@ -6,9 +6,8 @@
 // input; no recipe -> the world source minecraft-data names (a block that
 // drops it, mined in one batch for the whole remaining need; or a mob from
 // the small MOB table, hunted by a self bring order). Chests stay the
-// caller's first rung (castlefetch chestTick). Smelting is not run here:
-// a smelt gap acquires its raw input (sand, ore, a log), then fails
-// 'smelt-<item>' (castlefetch's pane/torch ticks own the furnace). sources() is the same tree as pure data: explore's
+// caller's first rung (castlefetch chestTick). A smelt gap acquires its raw
+// input (sand, ore, a log), then burns it through furnace.js (smeltTick). sources() is the same tree as pure data: explore's
 // expedition and resources.scan read it (src/sources.js).
 
 const { Vec3 } = require('vec3')
@@ -174,12 +173,12 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   if (FILL[item]) return fillTick(bot, ctx, a, item, up)
   const sm = S.smelt(item)
   if (sm) {
-    // The furnace legs (castlefetch pane/torch, bring smelt) own the burn;
-    // acquire brings the raw input so they have something to smelt.
     const raw = sm.raw || 'oak_log'
     if (up.includes(raw)) return `failed:smelt-${item}`
-    const r = acquire(bot, ctx, raw, n, up, sm.raw ? [raw] : S.family(raw))
-    return r === 'done' ? `failed:smelt-${item}` : r
+    const raws = sm.raw ? [raw] : S.family(raw)
+    // A started burn owns the tick: the raw input sits in the furnace now.
+    const r = a.smelt && a.smelt.item === item && a.smelt.started ? 'done' : acquire(bot, ctx, raw, n - held, up, raws)
+    return r === 'done' ? smeltTick(bot, ctx, a, item, n - held, raws, up) : r
   }
   const blocks = [...new Set(alts.flatMap((i) => [...S.sources(bot, i).blocks]))]
   const short = n - held
@@ -331,4 +330,64 @@ function fromChest(bot, ctx, names, n) {
   return 'running'
 }
 
-module.exports = { acquire, fromChest, FILL }
+// Seam for unit tests: one furnace.js tick through gear's driveLeg wrapper
+// (the building block the castlefetch and bring smelt legs drive).
+const deps = { driveFurnace: (bot, ctx) => require('./gear').driveFurnace(bot, ctx, require('./furnace')) }
+
+// The burn (raw input already in the pack): a furnace (the home's claimed
+// or adopted one, else one crafted here; furnace.js places it), fuel
+// (coal/charcoal, else planks: logs become planks via craftany), then
+// furnace.js loads, waits and takes the output tick by tick. Every tick
+// hands back to the brain, so fight/flee preempt between ticks.
+function smeltTick(bot, ctx, a, item, want, raws, up) {
+  const fur = require('./furnace')
+  const spot = fur.furnaceReady(bot, ctx)
+  const s = a.smelt && a.smelt.item === item ? a.smelt : (a.smelt = { item, started: false })
+  if (!s.started) {
+    const r = smeltPrep(bot, ctx, fur, spot, want, up)
+    if (r) return r
+  }
+  const input = raws.reduce((b, i) => (have(bot, i) > have(bot, b) ? i : b), raws[0])
+  const fr = ctx.furnace
+  let out = null
+  if (s.started && fr && fr.settled && fr.result && fr.job && fr.job.output === item) {
+    out = fr.result // the window cycle settles async, after driveFurnace returned
+    fr.result = null
+  } else {
+    if (!s.started) {
+      if (fr && fr.settled) fr.result = null // a stale outcome never ends the new run
+      const fuel = have(bot, 'coal') ? 'coal' : have(bot, 'charcoal') ? 'charcoal' : 'planks'
+      console.log(`acquire ${item}: smelt n=${want} fuel=${fuel} furnace=${spot ? `${spot.x},${spot.y},${spot.z}` : 'new'}`)
+    }
+    s.started = true
+    ctx.furnaceJob = { input, output: item, count: want }
+    try { out = deps.driveFurnace(bot, ctx) } catch (_) { out = 'failed:leg-threw' }
+  }
+  if (!out) return 'running'
+  ctx.furnaceJob = null
+  a.smelt = null
+  console.log(`acquire ${item}: smelt ${out}`)
+  // done: the next tick counts the pack (a short run smelts again)
+  return out === 'done' ? 'running' : `failed:smelt-${item}-${out.replace(/^failed:/, '')}`
+}
+
+// Before a burn: a furnace and the fuel for want items. A tick result while
+// one is still being acquired, else null.
+function smeltPrep(bot, ctx, fur, spot, want, up) {
+  if (!spot && have(bot, 'furnace') === 0) {
+    const r = acquire(bot, ctx, 'furnace', 1, up)
+    return r === 'done' ? 'running' : r
+  }
+  const coal = have(bot, 'coal') + have(bot, 'charcoal')
+  if (coal * fur.ORE_PER_FUEL < want) {
+    const planks = S.family('oak_planks')
+    const need = Math.ceil((want - coal * fur.ORE_PER_FUEL) / fur.ORE_PER_PLANK)
+    if (Math.max(0, ...planks.map((i) => have(bot, i))) < need) {
+      const r = acquire(bot, ctx, 'oak_planks', need, up, planks)
+      return r === 'done' ? 'running' : r
+    }
+  }
+  return null
+}
+
+module.exports = { acquire, fromChest, FILL, deps }
