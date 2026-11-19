@@ -102,7 +102,7 @@ describe('castle dark band', () => {
 })
 
 describe('torch without coal: charcoal via acquire', () => {
-  it('no coal ore near, logs held: the charcoal variant is taken (smelt leg), not a coal expedition', () => {
+  it('no coal ore near, logs held: the charcoal variant is taken (acquire runs its own furnace), not a coal expedition', () => {
     const reg = S.DEFAULT_REG
     const id = (n) => reg.itemsByName[n].id
     const recipe = (fuel) => ({ delta: [{ id: id(fuel), count: -1 }, { id: id('stick'), count: -1 }, { id: id('torch'), count: 4 }], result: { count: 4 } })
@@ -112,9 +112,9 @@ describe('torch without coal: charcoal via acquire', () => {
       inventory: { items: () => [{ name: 'stick', count: 2 }, { name: 'oak_log', count: 3 }], emptySlotCount: () => 10 },
       recipesAll: (itemId) => (itemId === id('torch') ? [recipe('coal'), recipe('charcoal')] : []),
       findBlocks: () => [],
-      mine: () => { throw new Error('no coal expedition') },
+      mine: (names) => { if (names.some((n) => n.includes('coal'))) throw new Error('no coal expedition'); return new Promise(() => {}) },
     }
-    assert.equal(acquire(bot, {}, 'torch', 4), 'failed:smelt-charcoal')
+    assert.equal(acquire(bot, {}, 'torch', 4), 'running') // acquire burns the charcoal itself: its furnace's cobble is mined first
   })
 })
 
@@ -140,8 +140,8 @@ describe('torch supply never blocks the build', () => {
       inventory: { items: () => [{ name: 'stick', count: 2 }, { name: 'oak_log', count: 3 }], emptySlotCount: () => 10 },
       recipesAll: (itemId) => (itemId === id('torch') ? [recipe('coal'), recipe('charcoal')] : []),
       findBlocks: () => [{ x: 5, y: 20, z: 5 }],
-      mine: () => { throw new Error('no coal expedition') },
+      mine: (names) => { if (names.some((n) => n.includes('coal'))) throw new Error('no coal expedition'); return new Promise(() => {}) },
     }
-    assert.equal(acquire(bot, { acquire: { mineFail: { item: 'coal', at: Date.now() } } }, 'torch', 4), 'failed:smelt-charcoal')
+    assert.equal(acquire(bot, { acquire: { mineFail: { item: 'coal', at: Date.now() } } }, 'torch', 4), 'running') // acquire burns the charcoal itself: its furnace's cobble is mined first
   })
 })

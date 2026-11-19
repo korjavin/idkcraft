@@ -982,3 +982,26 @@ describe('furnace job hygiene (g0z.36 01-review)', () => {
     assert.equal(gear.tableBlock(mockBot({}), { home }), null, 'nothing standing: null')
   })
 })
+
+describe('acquire burns a smelt gap through this station (any smeltable, PR #955 bucket iron)', () => {
+  it('raw iron + coal in the pack, a home furnace: acquire loads, takes the ingots and reports done', async () => {
+    const { acquire } = require('../src/behaviours/acquire')
+    const log = []
+    const win = mockWindow([null, null, null], log)
+    const inv = [{ name: 'raw_iron', count: 3 }, { name: 'coal', count: 1 }]
+    const bot = mockBot({ inv, blocks: { '1,64,0': 'furnace' }, window: win })
+    bot.recipesFor = () => []
+    bot.recipesAll = () => []
+    bot.inventory.emptySlotCount = () => 10
+    const ctx = { home: { furnace: { x: 1, y: 64, z: 0 } } }
+    const step = async () => { const r = acquire(bot, ctx, 'iron_ingot', 3); await settle(); return r }
+    assert.equal(await step(), 'running')
+    assert.deepEqual(log.map((l) => l[0]), ['putInput', 'putFuel'])
+    inv.splice(0, inv.length) // the window took them
+    win.slots = [null, null, { name: 'iron_ingot', count: 3 }] // cooked
+    assert.equal(await step(), 'running')
+    assert.equal(ctx.furnace.result, 'done')
+    inv.push({ name: 'iron_ingot', count: 3 })
+    assert.equal(await step(), 'done')
+  })
+})

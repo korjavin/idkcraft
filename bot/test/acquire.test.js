@@ -146,12 +146,31 @@ describe('acquire: variants and smelting', () => {
     assert.strictEqual(tick.acquire(b, {}, 'oak_planks', 8, [], acq.family('oak_planks')), 'running')
     assert.ok(calls[0].includes('oak_log') && calls[0].includes('birch_log') && calls[0].includes('spruce_log'))
   })
-  it('a smelted gap mines its raw input, then hands the furnace leg the burn', () => {
+  it('a smelted gap mines its raw input, then burns it through furnace.js itself', () => {
     const calls = []
     const b = mk([], { mine: (names) => { calls.push(names); return new Promise(() => {}) } })
     assert.strictEqual(tick.acquire(b, {}, 'glass', 6), 'running')
     assert.deepStrictEqual(calls, [['sand']])
-    assert.strictEqual(tick.acquire(mk([{ name: 'sand', count: 6 }]), {}, 'glass', 6), 'failed:smelt-glass')
+    const orig = tick.deps.driveFurnace
+    const jobs = []
+    let out = null
+    tick.deps.driveFurnace = (_b, c) => { jobs.push(c.furnaceJob); return out }
+    try {
+      const inv = [{ name: 'sand', count: 6 }, { name: 'furnace', count: 1 }, { name: 'coal', count: 1 }]
+      const ctx = {}
+      assert.strictEqual(tick.acquire(mk(inv), ctx, 'glass', 6), 'running')
+      assert.deepStrictEqual(jobs[0], { input: 'sand', output: 'glass', count: 6 })
+      // the sand sits in the furnace now: the started burn keeps the tick, no mine
+      const m = []
+      assert.strictEqual(tick.acquire(mk([], { mine: (x) => { m.push(x); return new Promise(() => {}) } }), ctx, 'glass', 6), 'running')
+      assert.deepStrictEqual(m, [])
+      assert.strictEqual(jobs.length, 2)
+      out = 'done'
+      assert.strictEqual(tick.acquire(mk(inv), ctx, 'glass', 6), 'running')
+      assert.strictEqual(tick.acquire(mk([{ name: 'glass', count: 6 }]), ctx, 'glass', 6), 'done')
+      out = 'failed:no-home'
+      assert.strictEqual(tick.acquire(mk(inv), {}, 'glass', 6), 'failed:smelt-glass-no-home')
+    } finally { tick.deps.driveFurnace = orig }
   })
 })
 
