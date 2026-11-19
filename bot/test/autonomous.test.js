@@ -67,6 +67,23 @@ afterEach(() => {
 })
 
 describe('autonomous mode', () => {
+  it('a follow order left behind by a player who went offline returns to work (prod 2026-11-19)', async () => {
+    const bot = mockBot()
+    bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
+    let t = 0
+    const ticker = createTicker({ bot, brain: mockBrain(), tickMs: 10, idleTickMs: 10, leaveAfterMs: 60, onLeave: () => bot.quit('x'), now: () => t })
+    const origLog = console.log
+    const logs = []
+    console.log = (m) => logs.push(String(m))
+    try {
+      handleChat(bot, ticker, 'Steve', 'autonomous on')
+      handleChat(bot, ticker, 'Steve', 'follow me')
+      bot.players = {}
+      for (let i = 0; i < 5; i++) { await ticker.tick(); t += 10 }
+      assert.ok(logs.some((l) => l.includes('autonomous, back to work')), logs.join('\n'))
+    } finally { console.log = origLog; ticker.destroy && ticker.destroy() }
+  })
+
   it('stays on an empty server past the grace, logging at most every 10 min', async () => {
     const bot = mockBot()
     bot.players = { Steve: { username: 'Steve', entity: { position: pos(1, 64, 0) } } }
