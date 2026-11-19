@@ -41,7 +41,10 @@ function goalCell(g) {
 function tick(bot, ctx, now = Date.now()) {
   const g = bot.pathfinder && bot.pathfinder.goal
   const w = ctx.noPathWatch || (ctx.noPathWatch = { goal: null, n: 0 })
-  if (!g || ctx.lastPathStatus !== 'noPath') { w.goal = null; w.n = 0; return false }
+  // A Baritone mine's marker goal (bridge/mine.js) is not a path: the mine
+  // owns its own noPath/stall/leash ends, and clearing it here cancelled
+  // every mine ~2 s in (prod bot2: mine-stopped -> walk-and-dig per block).
+  if (!g || g.mine === true || ctx.lastPathStatus !== 'noPath') { w.goal = null; w.n = 0; return false }
   if (w.goal !== g) { w.goal = g; w.n = 0 }
   w.n++
   if (!ctx.work || !ctx.step || isFinished(ctx.stepStatus)) return false

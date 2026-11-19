@@ -202,6 +202,18 @@ describe('acquire: unreachable sources (prod 2026-11-15 bot3 pathless birch loop
     assert.deepStrictEqual(dug, [20])
     assert.strictEqual(ctx.acquire.mineFail, null, 'the mine re-arms from here')
   })
+  it('an outside mine-stopped is no source failure: the next tick re-arms the mine, not walk-and-dig', async () => {
+    const b = mkb([])
+    let calls = 0
+    b.mine = () => { calls++; return Promise.reject(new Error('mine-stopped')) }
+    const ctx = { resources: { items: new Map() } }
+    tick.acquire(b, ctx, 'birch_log', 4, [], ['birch_log'])
+    await settle()
+    assert.ok(!ctx.acquire.mineFail, 'no mineFail on a stop')
+    tick.acquire(b, ctx, 'birch_log', 4, [], ['birch_log'])
+    assert.strictEqual(calls, 2)
+    assert.ok(!ctx.acquire.hand, 'no walk-and-dig')
+  })
   it('every nearby source unreachable: the area is left on the expedition, and gather skips it', () => {
     const b = mkb([])
     const ctx = { acquire: { mineFail: { item: 'birch_log', at: Date.now() } }, resources: { items: new Map() }, stepStatus: 'running' }
