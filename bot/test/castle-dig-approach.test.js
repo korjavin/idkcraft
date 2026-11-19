@@ -25,6 +25,8 @@ describe('castle dig-approach for unreachable cells', () => {
     try {
       const now = Date.now()
       for (let i = 0; i <= castle.STRIKES; i++) castle.far(bot, ctx, st, cell, 4.5, now)
+      assert.ok(ctx.castleFar.build && !(ctx.ownBreakUntil > now), 'outside scaffold first, own cells stay closed')
+      for (let i = 0; i <= castle.STRIKES; i++) castle.far(bot, ctx, st, cell, 4.5, now)
       assert.equal(st.blocked['2:5'], undefined, 'no strike yet')
       assert.ok(ctx.ownBreakUntil > now, 'stuck window open')
       for (let i = 0; i < castle.STRIKES; i++) castle.far(bot, ctx, st, cell, 4.5, now)
