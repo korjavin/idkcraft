@@ -2614,22 +2614,25 @@ function far(bot, ctx, st, c, reach, now) {
       f.minDist = Infinity
       access.arm(ctx, c, now)
       ctx.lastPathStatus = null // the old no-place verdict is stale: the next goal plans with placing on
-      if (clearing(c) || upkeepKind(st, c) === 'litter') ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+      if (clearing(c)) ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
       return true
     }
+    // Net progress (prod bot3 2026-11-19: litter removed=61 added=48, 35 plan
+    // cells dug): a litter cell's dig/step ladder never opens laid plan cells.
+    const ownOk = upkeepKind(st, c) !== 'litter'
     if (!f.dig && upkeepKind(st, c) && otherUpkeepOpen(ctx, st, c, now) && !lastTry(st, c)) { strikeNote(c, 'fast', dist); blockCell(ctx, st, c, 'unreachable', now); return true }
     if (!f.dig) {
       f.dig = true
       f.n = 0
       f.minDist = Infinity
-      ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+      if (ownOk) ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
       try { console.log(`castle dig-approach ${c.x} ${c.y} ${c.z} ${c.kind}: path through own cells for ${DIG_WINDOW_MS / 60000} min`) } catch (_) { /* log best-effort */ }
       return true
     }
     // A* still found nothing: walk the line ourselves (stepMove).
     if (!f.step) {
-      f.step = { legs: 0, wait: 0, w: null, digging: false, err: false }
-      ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+      f.step = { legs: 0, wait: 0, w: null, digging: false, err: false, ownOk }
+      if (ownOk) ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
       try { console.log(`castle step-approach ${c.x} ${c.y} ${c.z} ${c.kind}: stepping`) } catch (_) { /* log best-effort */ }
       return true
     }
@@ -2716,12 +2719,12 @@ function stepMove(bot, ctx, c, s) {
   }
   const block = cells.map(([x, y, z]) => at(x, y, z)).find((b) => b && b.boundingBox !== 'empty')
   if (block) {
-    let deny = stuckDeny(bot, ctx, block)
+    let deny = stuckDeny(bot, ctx, block, s.ownOk !== false)
     // The stair ahead-below is not a self-trap (the 'below-feet' rule is for
     // the own column); the floor scan below vets what lies under it.
     const q = block.position
     if (deny === 'below-feet' && q && (q.x !== F.x || q.z !== F.z)) {
-      if (ctx.castle && castleProtects(ctx.castle, q, block.name)) { deny = null; relay(ctx, block) } else deny = protectedReason(bot, block, ctx)
+      if (ctx.castle && castleProtects(ctx.castle, q, block.name)) { deny = s.ownOk === false ? 'own-litter' : null; if (!deny) relay(ctx, block) } else deny = protectedReason(bot, block, ctx)
       if (!deny && (UNBREAKABLE_HARD(block))) deny = 'unbreakable'
     }
     if (deny) { logDeny(block, deny); return 'refused:' + deny }
@@ -2785,6 +2788,7 @@ function stanceRemedy(bot, ctx, st, c, s, now) {
   let r = ctx.castleStance
   if (!r || r.idx !== c.idx) r = ctx.castleStance = { idx: c.idx, stage: 'clear', n: 0, digging: false, err: false, step: null }
   ctx.castleGoalIdx = c.idx // the remedy owns the goal; approach() must not re-issue
+  const litter = upkeepKind(st, c) === 'litter' // a stray block never costs a laid plan cell
   const fail = (why) => {
     const bp = bodyPos(bot)
     const body = bp ? `${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)}` : 'none'
@@ -2801,7 +2805,7 @@ function stanceRemedy(bot, ctx, st, c, s, now) {
       try { b = bot.blockAt(new Vec3(s.x, y, s.z)) } catch (_) { b = null }
       if (!b || AIR.has(b.name)) continue
       if (/water|lava/.test(b.name)) return fail('fluid')
-      const deny = stuckDeny(bot, ctx, b)
+      const deny = stuckDeny(bot, ctx, b, !litter)
       if (deny) { logDeny(b, deny); return fail('refused:' + deny) }
       r.digging = true
       void (async () => {
@@ -2824,13 +2828,13 @@ function stanceRemedy(bot, ctx, st, c, s, now) {
   }
   if (r.stage === 'path') {
     if (r.n++ < STANCE_PATH_TICKS) {
-      ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+      if (!litter) ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
       try { bot.pathfinder.setGoal(ctx.castleGoal = new goals.GoalBlock(s.x, s.y, s.z)) } catch (_) { /* retry next tick */ }
       return
     }
     r.stage = 'step'
-    r.step = { legs: 0, wait: 0, w: null, digging: false, err: false }
-    ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+    r.step = { legs: 0, wait: 0, w: null, digging: false, err: false, ownOk: !litter }
+    if (!litter) ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
   }
   const res = stepMove(bot, ctx, s, r.step)
   if (res !== 'running') fail(res)
