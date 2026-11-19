@@ -75,6 +75,7 @@ function anchorOf(bot, ctx) {
 // then the episode starts fresh (prod bot5: a kept dead target failed at once forever).
 const SITE_WALK_IDLE = 30
 const SITE_WALK_FAILS = 3
+const STALL_MS = 30 * 60 * 1000
 const SITE_COOLDOWN_MS = 5 * 60 * 1000
 const chunkKey = (x, z) => `${x >> 4},${z >> 4}`
 function walkToUnloaded(bot, fb, r) {
@@ -129,6 +130,29 @@ function run(bot, ctx) {
     fb.site = site
     fb.built = false
     console.log(`farm site=${site.x},${site.y},${site.z} cost=${site.cost} cut=${site.cut} fill=${site.fill} tried=${r.tried}`)
+  }
+  // A restart keeps only the site corner: re-plan its prep (cut/fill) before any cell is laid.
+  if (!fb.built && !Array.isArray(fb.site.prep)) {
+    const prep = blueprint.prepAt(bot, fb.site)
+    if (!prep) return // footprint not loaded yet: the next tick re-reads it
+    fb.site.prep = prep
+    console.log(`farm prep restored cells=${prep.length}`)
+  }
+  // A self-picked site (not the owner's spot) with no new cell for STALL_MS is
+  // dropped and re-picked (owner 2026-11-19: bot2's farm stalled over a lake).
+  if (!fb.built && !fb.at) {
+    const done = build.houseProgress(bot, fb).done
+    const now = Date.now()
+    // run time on this step only (a night or other steps between ticks do not count)
+    const dt = fb.stallTick ? Math.min(now - fb.stallTick, 5000) : 0
+    fb.stallTick = now
+    if (done !== fb.stallDone) { fb.stallDone = done; fb.stallRun = 0 }
+    else if ((fb.stallRun = (fb.stallRun || 0) + dt) > STALL_MS) {
+      console.log(`farm site stalled built=${done} for=${Math.round(fb.stallRun / 60000)}min -> re-picking`)
+      ctx.farmBuild = { ordered: fb.ordered }
+      stepFailed(ctx, 'site-stalled')
+      return
+    }
   }
   const view = viewOf(ctx, fb)
   guardField(bot, ctx)

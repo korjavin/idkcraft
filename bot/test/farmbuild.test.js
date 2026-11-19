@@ -215,6 +215,17 @@ describe('farm blueprint (qphv.1)', () => {
     assert.ok(Math.hypot(r.site.x + fp.W / 2 - 100, r.site.z + fp.D / 2 - 40) < 3, JSON.stringify(r.site))
   })
 
+  it('prefers a far dry site over a near pond (owner: farm built over water)', () => {
+    const w = world()
+    const pond = (p) => p.x >= -20 && p.x <= 20 && p.z >= -20 && p.z <= 20
+    w.blockAt = ((orig) => (p) => (p.y === 63 && pond(p) ? { ...orig(p), name: 'water', boundingBox: 'empty' } : orig(p)))(w.blockAt)
+    const r = fp.pickSite(mockBot(w), { x: 0, y: 64, z: 0 })
+    assert.ok(r.site, r.reason)
+    let wet = 0
+    for (let x = r.site.x; x < r.site.x + fp.W; x++) for (let z = r.site.z; z < r.site.z + fp.D; z++) if (pond({ x, z })) wet++
+    assert.equal(wet, 0, JSON.stringify(r.site))
+  })
+
   it('widens the radius when the near ring is all built', () => {
     const w = world()
     const inner = (p) => Math.abs(p.x) < 50 && Math.abs(p.z) < 50
@@ -276,6 +287,30 @@ describe('farmbuild step (qphv.1)', () => {
     assert.equal(ctx.stepStatus, 'done', logs.slice(-5).join('\n'))
     assert.ok(!logs.some((l) => l.startsWith('build skip')), logs.filter((l) => l.startsWith('build skip')).join('\n'))
     for (let y = 60; y <= 63; y++) assert.equal(w.blockAt({ x: 202, y, z: 202 }).name, 'dirt', `y=${y}`)
+  })
+
+  it('a restored site re-plans its prep; a self-picked site with no progress for 30 min of work is re-picked', () => {
+    const w = world()
+    const bot = mockBot(w)
+    bot.pathfinder.setGoal = () => {}
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, castle: null, farmBuild: { site: { x: 0, y: 64, z: 0 }, ordered: true } }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => now
+    try {
+      farmbuild(bot, ctx)
+      assert.ok(Array.isArray(ctx.farmBuild.site.prep), 'prep restored')
+      assert.ok(logs.some((l) => l.startsWith('farm prep restored')))
+      const fb = ctx.farmBuild
+      fb.stallDone = require('../src/behaviours/build').houseProgress(bot, fb).done
+      for (let i = 0; i < 400 && ctx.farmBuild === fb; i++) { now += 5000; ctx.placeInFlight = true; farmbuild(bot, ctx) }
+      assert.notEqual(ctx.farmBuild, fb)
+      assert.equal(ctx.stepStatus, 'failed:site-stalled')
+      assert.equal(ctx.farmBuild.ordered, true)
+    } finally { console.log = orig; Date.now = realNow }
   })
 
   it('is feasible by day for an ordered farm or a complete castle, never once built', () => {
