@@ -104,4 +104,36 @@ function carryOrderStamp(from, to) {
   } catch (_) { /* carry best-effort */ }
 }
 
-module.exports = { stepDone, stepFailed, failReason, isFinished, stepGen, nextStepGen, stale, chatStep, STEP_CHAT_SAME_MS, orderStamp, carryOrderStamp }
+// Idle running step (owner 2026-11-19, prod bot5: 1038 ticks explore
+// 'running' with no goal, no path, no motion; bot2 750 castlefetch): a work
+// step that holds 'running' with no pathfinder goal, no motion and no own
+// wait reason (ctx.idleWhy, dig, window, builder/mine, a reflex) for
+// IDLE_RUN_MS fails 'no-target', so decide re-picks instead of standing.
+// Called once per goal-fsm dispatch, after the behaviour ran.
+const IDLE_RUN_MS = 30000
+const IDLE_RUN_MOVE = 4 // blocks: water drift is not progress
+const IDLE_RUN_EXEMPT = new Set(['rest', 'stay', 'shelter'])
+function idleRunGuard(bot, ctx, now = Date.now()) {
+  try {
+    const p = bot.entity && bot.entity.position
+    const pf = bot.pathfinder
+    const idle = ctx.work && ctx.stepStatus === 'running' && ctx.step && !IDLE_RUN_EXEMPT.has(ctx.step) && p &&
+      pf && pf.goal == null && !(typeof pf.isMoving === 'function' && pf.isMoving()) &&
+      !ctx.idleWhy && !bot.targetDigBlock && !bot.currentWindow && !bot._build && !bot._mine &&
+      !(ctx.recovery && ctx.recovery.action)
+    const r = ctx.idleRun
+    if (!idle) { ctx.idleRun = null; return false }
+    if (!r || r.step !== ctx.step || r.gen !== stepGen(ctx) || Math.hypot(p.x - r.x, p.y - r.y, p.z - r.z) > IDLE_RUN_MOVE) {
+      ctx.idleRun = { step: ctx.step, gen: stepGen(ctx), since: now, x: p.x, y: p.y, z: p.z }
+      return false
+    }
+    if (now - r.since < IDLE_RUN_MS) return false
+    console.log(`idle running step=${ctx.step} for=${Math.round((now - r.since) / 1000)}s -> failed:no-target`)
+    ctx.idleRun = null
+    ctx.lastGoalKey = '' // the next pick re-issues its goal
+    stepFailed(ctx, 'no-target')
+    return true
+  } catch (_) { return false }
+}
+
+module.exports = { idleRunGuard, IDLE_RUN_MS, stepDone, stepFailed, failReason, isFinished, stepGen, nextStepGen, stale, chatStep, STEP_CHAT_SAME_MS, orderStamp, carryOrderStamp }

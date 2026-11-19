@@ -402,7 +402,9 @@ function explore(bot, ctx, target, state) {
   }
   const t = e.target
   const key = `explore:${t.x},${t.z}`
-  if (key !== ctx.lastGoalKey) {
+  // A goal dropped under the latch (path reset, reflex stop) is re-issued:
+  // prod bot5 stood 'running' goalless while water drift fed the stall clock.
+  if (key !== ctx.lastGoalKey || !bot.pathfinder.goal) {
     bot.pathfinder.setGoal(new goals.GoalXZ(t.x, t.z), false)
     const prevKey = ctx.lastGoalKey
     ctx.lastGoalKey = key

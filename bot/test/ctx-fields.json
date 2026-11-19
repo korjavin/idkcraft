@@ -666,6 +666,12 @@
     ],
     "owner": "src/behaviours/castle.js"
   },
+  "castleIntegrity": {
+    "writers": [
+      "src/behaviours/castle.js"
+    ],
+    "owner": "src/behaviours/castle.js"
+  },
   "castleLaidSince": {
     "writers": [
       "src/behaviours/castle.js"
@@ -1109,6 +1115,12 @@
     ],
     "owner": "src/goal.js"
   },
+  "emptyHeld": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
   "enclosedEscapes": {
     "writers": [
       "src/behaviours/castle.js",
@@ -1359,6 +1371,12 @@
       "src/behaviours/food-recovery.js"
     ],
     "owner": "src/behaviours/food-recovery.js"
+  },
+  "foodRate": {
+    "writers": [
+      "src/food-rate.js"
+    ],
+    "owner": "src/food-rate.js"
   },
   "foodRecovery": {
     "writers": [
@@ -1678,6 +1696,12 @@
     ],
     "owner": "src/index.js"
   },
+  "idleRun": {
+    "writers": [
+      "src/step.js"
+    ],
+    "owner": "src/step.js"
+  },
   "idleWhy": {
     "writers": [
       "src/index.js"
@@ -1752,7 +1776,8 @@
       "src/behaviours/util.js",
       "src/index.js",
       "src/orders.js",
-      "src/reflexes.js"
+      "src/reflexes.js",
+      "src/step.js"
     ],
     "owner": "src/behaviours/home.js",
     "note": "setGoal dedup key, protocol field (oqul.8). Issue: util.issueGoal(bot, ctx, goal, key, dynamic) is the literal setGoal(goal, dynamic)+key pair (dynamic per caller, never defaulted). Allowed hand-written paths: clear (util.clearGoal and inline ctx.lastGoalKey = \"\" / null after setGoal(null), the next issue replans); idle-stop (index.js stopOnce and lead.js park: stop-vs-null rule, key = idle); park key (stay / home-door / dig-in-walk / deep-return-up / light:furnace: a sentinel, no fresh goal); invalidate-to-reissue (key = \"\" with the goal still live, forcing the next issue; flat/forage/home/gocastle); try-wrapped issue (key written even when setGoal throws, or with prevKey/side fields between: stockpile, beds, flat, deep, explore, gather, roam, castlefetch, craftany, gear); body.js claimBody drops the executor without touching the key; reflexes.js re-issues on key !== lastGoalKey || !moving. A single writer is a separate bead after the live oracle."
@@ -2170,6 +2195,12 @@
     ],
     "owner": "src/reach.js"
   },
+  "reachSummary": {
+    "writers": [
+      "src/reach.js"
+    ],
+    "owner": "src/reach.js"
+  },
   "reclaimInFlight": {
     "writers": [
       "src/behaviours/tablespot.js"
@@ -2512,7 +2543,19 @@
     ],
     "owner": "src/step.js"
   },
+  "stepOutcomes": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
   "stepPick": {
+    "writers": [
+      "src/goal.js"
+    ],
+    "owner": "src/goal.js"
+  },
+  "stepPickText": {
     "writers": [
       "src/goal.js"
     ],
