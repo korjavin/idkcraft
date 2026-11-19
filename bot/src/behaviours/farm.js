@@ -456,7 +456,7 @@ async function equipHeld(bot, name) {
 }
 
 function feedControl(ctx, f, gen) {
-  return ctx.farm === f && stepGen(ctx) === gen && ctx.step === 'farm' &&
+  return ctx.farm === f && stepGen(ctx) === gen && (ctx.step === 'farm' || ctx.step === 'farmbuild') &&
     !isFinished(ctx.stepStatus) && !ctx.paused && ctx.work !== false &&
     (!ctx.body || ctx.body.owner === 'work') &&
     !(ctx.lastDecision && ['fight', 'follow'].includes(ctx.lastDecision.action))
@@ -550,6 +550,7 @@ async function run(bot, ctx) {
           // wheat cell itself is air after the dig).
           if (!GOURDS.has(b.name)) f.replant = { x: w.x, y: w.y - 1, z: w.z, ticks: 2 }
           f.harvested = (f.harvested | 0) + 1
+          if (ctx.farmBuild && ctx.farmBuild.built) ctx.farmBuild.harvested = (ctx.farmBuild.harvested | 0) + 1 // qphv.2 crop line
           try { console.log(`farm harvest ${b.name} at ${w.x},${w.y},${w.z}`) } catch (_) { /* log best-effort */ }
           return
         }

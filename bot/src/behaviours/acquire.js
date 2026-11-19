@@ -46,6 +46,7 @@ function nearestSource(bot, ctx, blocks, p) {
   for (const c of cand) {
     if (unreachable.near(ctx, c)) continue
     try { if (ctx.castle && require('../castle').protects(ctx.castle, c, c.name || blocks[0])) continue } catch (_) { /* unguarded */ }
+    try { if (ctx.farmBuild && require('../farm-blueprint').protects(ctx.farmBuild, c, c.name || blocks[0])) continue } catch (_) { /* unguarded */ }
     const d = Math.hypot(c.x - p.x, c.y - p.y, c.z - p.z)
     if (d < bd) { bd = d; best = { x: c.x, y: c.y, z: c.z } }
   }
@@ -170,6 +171,7 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
     const r = acquire(bot, ctx, g.name, g.need, up, gaps)
     return r === 'done' ? 'running' : r
   }
+  if (FILL[item]) return fillTick(bot, ctx, a, item, up)
   const sm = S.smelt(item)
   if (sm) {
     // The furnace legs (castlefetch pane/torch, bring smelt) own the burn;
@@ -232,4 +234,101 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   return `failed:no-source-${item}`
 }
 
-module.exports = { acquire }
+// Filled buckets (qphv.2): no recipe, no drop — an empty bucket (acquired
+// like any item: pack, craft from iron, ...) used on the nearest still
+// source (castle/farm water excluded by nearestSource) or a cow.
+const FILL = { water_bucket: { block: 'water' }, lava_bucket: { block: 'lava' }, milk_bucket: { mobs: ['cow', 'mooshroom'] } }
+const FILL_SETTLE_MS = 600
+
+function fillTick(bot, ctx, a, item, up) {
+  if (a.filling) return 'running'
+  if (have(bot, 'bucket') <= 0) {
+    if (up.includes('bucket')) return `failed:no-source-${item}`
+    const r = acquire(bot, ctx, 'bucket', 1, up)
+    return r === 'done' ? 'running' : r
+  }
+  const p = bot.entity && bot.entity.position
+  if (!p) return 'running'
+  const spec = FILL[item]
+  let t = null
+  let ent = null
+  if (spec.block) {
+    t = a.fill && a.fill.item === item ? a.fill.t : nearestSource(bot, ctx, [spec.block], p)
+    if (!t) return `failed:no-source-${item}`
+    let b = null
+    try { b = bot.blockAt(new Vec3(t.x, t.y, t.z)) } catch (_) { b = null }
+    const props = b && typeof b.getProperties === 'function' ? b.getProperties() : {}
+    if (b && (b.name !== spec.block || Number(props.level || 0) !== 0)) { unreachable.mark(ctx, t, 0.5); a.fill = null; return 'running' } // flowing or gone: next source
+  } else {
+    try { ent = bot.nearestEntity((e) => e && spec.mobs.includes(e.name) && !unreachable.near(ctx, e.position)) } catch (_) { ent = null }
+    if (!ent) return `failed:no-source-${item}`
+    t = { x: Math.floor(ent.position.x), y: Math.floor(ent.position.y), z: Math.floor(ent.position.z) }
+  }
+  const f = a.fill && a.fill.item === item ? a.fill : (a.fill = { item, t, best: Infinity, waits: 0 })
+  f.t = t
+  const d = Math.hypot(t.x + 0.5 - p.x, t.y + 0.5 - (p.y + 1.6), t.z + 0.5 - p.z)
+  if (d <= DIG_REACH - 0.5) {
+    const before = have(bot, item)
+    a.filling = true
+    ;(async () => {
+      await bot.equip(bot.inventory.items().find((i) => i.name === 'bucket'), 'hand')
+      if (ent) await bot.activateEntity(ent)
+      else { await bot.lookAt(new Vec3(t.x + 0.5, t.y + 0.5, t.z + 0.5), true); await bot.activateItem() }
+      await new Promise((r) => setTimeout(r, FILL_SETTLE_MS))
+    })().catch(() => {}).finally(() => {
+      a.filling = false
+      a.fill = null
+      if (have(bot, item) > before) console.log(`acquire ${item}: filled at ${t.x},${t.y},${t.z}`)
+      else unreachable.mark(ctx, t, 0.5) // a missed use: the next source
+    })
+    return 'running'
+  }
+  if (d < f.best - 1) { f.best = d; f.waits = 0 } else f.waits++
+  if (f.waits > WALK_WAITS) { unreachable.mark(ctx, t, CLUSTER_R); a.fill = null; return 'running' }
+  try { if (f.goal == null || bot.pathfinder.goal !== f.goal) bot.pathfinder.setGoal(f.goal = new goals.GoalNear(t.x, t.y, t.z, 2)) } catch (_) { /* next tick retries */ }
+  return 'running'
+}
+
+// Chest rung (qphv.2, chests are a shared store): the castle's chest-first
+// order for any caller — up to n of names from the nearest chest that may
+// hold one (bring.pickChest: home, then remembered sightings incl. peers', a fresh read without it skipped).
+// 'done' (pack holds n) | 'running' | 'none' (no chest left to try: the
+// caller goes on to acquire). One open per chest per need.
+const CHEST_REACH = 3.5
+function fromChest(bot, ctx, names, n) {
+  const held = names.reduce((t, i) => t + have(bot, i), 0)
+  if (held >= n) return 'done'
+  const a = ctx.acquire || (ctx.acquire = {})
+  const key = names.join(',')
+  if (!a.chest || a.chest.key !== key) a.chest = { key, seen: [], pos: null, best: Infinity, waits: 0 }
+  const c = a.chest
+  if (c.busy) return 'running'
+  const stock = require('./stockpile')
+  if (!c.pos) {
+    const pick = require('./bring').pickChest(bot, ctx, { wants: (x) => names.includes(x), chestSeen: c.seen })
+    if (!pick) return 'none'
+    c.pos = pick.pos
+    c.best = Infinity
+    c.waits = 0
+  }
+  const p = bot.entity && bot.entity.position
+  if (!p) return 'running'
+  const at = c.pos
+  const k = stock.chestKeyOf(at)
+  const d = Math.hypot(at.x + 0.5 - p.x, at.y + 0.5 - p.y, at.z + 0.5 - p.z)
+  if (d > CHEST_REACH) {
+    if (d < c.best - 0.5) { c.best = d; c.waits = 0 } else c.waits++
+    if (c.waits > WALK_WAITS) { stock.markChestFailed(ctx, at); c.seen.push(k); c.pos = null; return 'running' }
+    try { if (c.goal == null || bot.pathfinder.goal !== c.goal) bot.pathfinder.setGoal(c.goal = new goals.GoalNear(at.x, at.y, at.z, 2)) } catch (_) { /* next tick retries */ }
+    return 'running'
+  }
+  c.busy = true
+  c.goal = null
+  stock.withdrawAnyFromChest(bot, ctx, names, n - held, at)
+    .then((r) => { if (r && r.got) console.log(`acquire ${names[0]}: drew ${r.got} from the chest at ${k}`) })
+    .catch(() => {})
+    .finally(() => { c.busy = false; c.seen.push(k); c.pos = null })
+  return 'running'
+}
+
+module.exports = { acquire, fromChest, FILL }

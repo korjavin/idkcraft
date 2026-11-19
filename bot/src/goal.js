@@ -1962,7 +1962,7 @@ const STEP_CRITERIA = {
   gear: 'gear is ready, want, or wait: forge better tools',
   forage: 'known is near: walk to the remembered find and dig it',
   reforest: 'leaves are near, or banked saplings with a vetted spot, and the pack has room and time is day and no castle order runs: beat nearby leaves, bank the dropped saplings, then plant them',
-  farmbuild: 'time is day and the castle is complete or a farm is ordered, and the farm is not built: lay the barn, the pen fence and the watered field',
+  farmbuild: 'time is day and the castle is complete or a farm is ordered, and the farm is not built, or the farm is built and its field has a missing cell, a ripe crop or empty farmland with seeds (or 10 min passed): lay the barn, the pen fence and the watered field; then re-lay missing cells, harvest, replant, keep bread and store hay in the barn chest',
   farm: 'wheat is ripe, or seeds with tilled soil, or tillable soil near water, or wheat carried to sheep, and time is day and no castle order runs: till soil, water, plant seeds, harvest wheat and feed sheep',
   explore: 'known is none: walk the visited boundary',
   stay: 'inside is yes and time is dusk or night: wait inside',

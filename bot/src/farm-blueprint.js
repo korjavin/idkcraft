@@ -12,50 +12,7 @@ const Vec3 = require('vec3')
 // 'clear' cells dig natural ground (bumps, the water pit) and are no work in
 // the progress count; 'farmland' is tilled with a hoe, 'water' poured from a bucket.
 
-const W = 27
-const D = 9
-const DOOR = { dx: 3, dz: 0 }
-const GATE = { dx: 12, dz: 0 }
-const WATER = { dx: 22, dz: 4 }
-const BARN = { x0: 0, x1: 6, z0: 0, z1: 5 }
-const PEN = { x0: 8, x1: 16, z0: 0, z1: 8 }
-const FIELD = { x0: 18, x1: 26, z0: 0, z1: 8 }
-
-function edge(b, x, z) { return x === b.x0 || x === b.x1 || z === b.z0 || z === b.z1 }
-
-const PLAN = (() => {
-  const plan = []
-  const c = (dx, dy, dz, kind, phase) => plan.push({ dx, dy, dz, kind, phase })
-  for (let x = BARN.x0 + 1; x < BARN.x1; x++) for (let z = BARN.z0 + 1; z < BARN.z1; z++) c(x, 0, z, 'clear', 'barn')
-  c(5, 0, 4, 'chest', 'barn')
-  const ring = (dy) => {
-    for (let x = BARN.x0; x <= BARN.x1; x++) {
-      for (let z = BARN.z0; z <= BARN.z1; z++) {
-        if (edge(BARN, x, z) && !(x === DOOR.dx && z === DOOR.dz)) c(x, dy, z, 'planks', 'barn')
-      }
-    }
-  }
-  ring(0)
-  c(DOOR.dx, 0, DOOR.dz, 'door', 'barn')
-  ring(1)
-  for (let x = BARN.x0; x <= BARN.x1; x++) for (let z = BARN.z0; z <= BARN.z1; z++) c(x, 2, z, 'planks', 'barn')
-  for (let x = PEN.x0; x <= PEN.x1; x++) {
-    for (let z = PEN.z0; z <= PEN.z1; z++) {
-      if (edge(PEN, x, z)) c(x, 0, z, x === GATE.dx && z === GATE.dz ? 'gate' : 'fence', 'pen')
-    }
-  }
-  for (let x = FIELD.x0; x <= FIELD.x1; x++) for (let z = FIELD.z0; z <= FIELD.z1; z++) c(x, 0, z, 'clear', 'field')
-  c(WATER.dx, -1, WATER.dz, 'clear', 'field')
-  c(WATER.dx, -1, WATER.dz, 'water', 'field') // water first: the farmland stays hydrated
-  for (let x = FIELD.x0; x <= FIELD.x1; x++) {
-    for (let z = FIELD.z0; z <= FIELD.z1; z++) {
-      if (!(x === WATER.dx && z === WATER.dz)) c(x, -1, z, 'farmland', 'field')
-    }
-  }
-  return Object.freeze(plan)
-})()
-
-function inField(dx, dz) { return dx >= FIELD.x0 && dx <= FIELD.x1 && dz >= FIELD.z0 && dz <= FIELD.z1 }
+const { PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, inField, protects, inFieldAt } = require('./farm-plan')
 
 // Footprint test at origin (ox, oz): every column resolves to ground within
 // one block (site.groundY: no water, no built surface), the door and gate
@@ -106,4 +63,4 @@ function siteFor(bot, around, avoid = []) {
   return null
 }
 
-module.exports = { PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, siteFor, footprintY }
+module.exports = { protects, inFieldAt, PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, siteFor, footprintY }

@@ -16,13 +16,26 @@
 
 const blueprint = require('../farm-blueprint')
 const build = require('./build')
-const { acquire } = require('./acquire')
+const { acquire, fromChest } = require('./acquire')
 const { stepFailed } = require('../step')
 const { countItems } = require('../perception')
+const { goals } = require('mineflayer-pathfinder')
+const Vec3 = require('vec3')
 
 const PROGRESS_LOG_MS = 30000
 const ITEM = { planks: 'oak_planks', fence: 'oak_fence', gate: 'oak_fence_gate', door: 'oak_door', chest: 'chest', farmland: 'wooden_hoe', water: 'water_bucket' }
 const ONE = new Set(['farmland', 'water']) // a tool, not a stack
+// Crop cycle (qphv.2) on the built field.
+const CROP_EVERY_MS = 10 * 60 * 1000 // a far bot still revisits the field
+const CROP_LOG_MS = 10 * 60 * 1000
+const BREAD_KEEP = 4 // food recovery eats from the pack
+const HAY = 9 // wheat per hay_block
+const FIELD_NEAR = 10
+const CHEST_REACH = 3.5
+const FIELD_STEP_COST = 10 // dearer, never banned: a path over the field stays possible
+const CROP_NAMES = new Set(['wheat', 'carrots', 'potatoes', 'beetroots'])
+const SEED_NAMES = ['wheat_seeds', 'carrot', 'potato', 'beetroot_seeds']
+const guarded = new WeakSet()
 
 function viewOf(ctx, fb) {
   if (!fb.state) fb.state = {}
@@ -77,7 +90,16 @@ function run(bot, ctx) {
     console.log(`farm site=${site.x},${site.y},${site.z}`)
   }
   const view = viewOf(ctx, fb)
+  guardField(bot, ctx)
   const idx = build.nextCellIdx(bot, fb, view.buildSkip, view)
+  if (fb.built) {
+    if (idx < 0) return cropTick(bot, ctx, fb)
+    // Own-dug (castle shape): a laid cell went missing (a trampled field
+    // cell reads dirt) — back to the builder, which lays it again.
+    const c = blueprint.PLAN[idx]
+    console.log(`farm own-dug cell=${fb.site.x + c.dx},${fb.site.y + c.dy},${fb.site.z + c.dz} kind=${c.kind} requeued`)
+    fb.built = false
+  }
   progressLine(bot, ctx, fb, idx, Date.now())
   if (idx >= 0 && !ctx.placeInFlight && !view.buildCellsInFlight) {
     const cell = blueprint.PLAN[idx]
@@ -92,7 +114,10 @@ function run(bot, ctx) {
       }
       let alts = [item]
       try { alts = require('../sources').family(item).filter(want) } catch (_) { /* the item alone */ }
-      const r = acquire(bot, ctx, item, n, [], alts.length ? alts : [item])
+      if (!alts.length) alts = [item]
+      const c = fromChest(bot, ctx, alts, n) // chests first, the castle's order
+      if (c === 'running') return
+      const r = c === 'done' ? 'done' : acquire(bot, ctx, item, n, [], alts)
       if (r === 'running') return
       if (r !== 'done') {
         const why = String(r).replace(/^failed:/, '')
@@ -106,12 +131,110 @@ function run(bot, ctx) {
   if (fb.built && ctx.stepStatus === 'done') console.log(`farm done site=${fb.site.x},${fb.site.y},${fb.site.z}`)
 }
 
+// Pathfinder step cost over the field (qphv.2): walks go round the crops
+// where a path exists. One closure per movements object.
+// shortcut: v1 mineflayer movements only; the bridge maps no step areas, add one if v2 tramples.
+function guardField(bot, ctx) {
+  const mov = bot && bot.pathfinder && bot.pathfinder.movements
+  if (!mov || !Array.isArray(mov.exclusionAreasStep) || guarded.has(mov)) return
+  guarded.add(mov)
+  mov.exclusionAreasStep.push((b) => {
+    try { return b && b.position && blueprint.inFieldAt(ctx.farmBuild, b.position) ? FIELD_STEP_COST : 0 } catch (_) { return 0 }
+  })
+}
+
+const abs = (fb, dx, dy, dz) => new Vec3(fb.site.x + dx, fb.site.y + dy, fb.site.z + dz)
+const blockAt = (bot, p) => { try { return bot.blockAt(p) } catch (_) { return null } }
+
+// The field's crop cells: planted / mature / empty farmland (loaded only).
+function fieldScan(bot, fb) {
+  const farm = require('./farm')
+  const out = { planted: 0, mature: 0, empty: 0, loaded: false }
+  for (const c of blueprint.PLAN) {
+    if (c.kind !== 'farmland') continue
+    const soil = blockAt(bot, abs(fb, c.dx, c.dy, c.dz))
+    const up = blockAt(bot, abs(fb, c.dx, c.dy + 1, c.dz))
+    if (!soil || !up) continue
+    out.loaded = true
+    if (CROP_NAMES.has(up.name)) { out.planted++; if (farm.isMatureCrop(up)) out.mature++ } else if (soil.name === 'farmland' && (up.name === 'air' || up.name === 'cave_air')) out.empty++
+  }
+  return out
+}
+
+function cropLine(bot, fb, now) {
+  if (now - (fb.cropLoggedAt || 0) < CROP_LOG_MS) return
+  fb.cropLoggedAt = now
+  const s = fieldScan(bot, fb)
+  console.log(`farm crop planted=${s.planted} mature=${s.mature} harvested=${fb.harvested | 0} hay=${fb.hay | 0}`)
+}
+
+function walk(bot, fb, key, p, range) {
+  const bp = bot.entity && bot.entity.position
+  if (!bp) return true
+  if (Math.hypot(bp.x - (p.x + 0.5), bp.y - p.y, bp.z - (p.z + 0.5)) <= range) { fb.walkKey = null; return false }
+  if (fb.walkKey !== key) {
+    fb.walkKey = key
+    try { bot.pathfinder.setGoal(new goals.GoalNear(p.x, p.y, p.z, 2)) } catch (_) { /* next tick retries */ }
+  }
+  return true
+}
+
+// One crop tick on the built farm: bread for food recovery, the wheat
+// surplus as hay_block into the barn chest, seeds (chest, else farm's tuft
+// leg), then the wheat 'farm' step on the field — harvest ripe crops,
+// replant, plant empty farmland (trampled cells came back via own-dug).
+function cropTick(bot, ctx, fb) {
+  const now = Date.now()
+  cropLine(bot, fb, now)
+  const n = (i) => countItems(bot, (x) => x === i)
+  const wheat = n('wheat')
+  const bread = n('bread')
+  if (bread < BREAD_KEEP && wheat >= 3) {
+    const r = acquire(bot, ctx, 'bread', bread + Math.min(BREAD_KEEP - bread, Math.floor(wheat / 3)))
+    if (r === 'running') return
+  } else if (wheat >= HAY) {
+    const r = acquire(bot, ctx, 'hay_block', n('hay_block') + Math.floor(wheat / HAY))
+    if (r === 'running') return
+  }
+  if (n('hay_block') > 0 && !fb.storeFull) {
+    const at = abs(fb, 5, 0, 4) // the barn chest cell
+    if (fb.storing) return
+    if (walk(bot, fb, 'farm-barn', at, CHEST_REACH)) return
+    fb.storing = true
+    const stock = require('./stockpile')
+    stock.rememberChests(ctx, [at])
+    stock.depositToChest(bot, ctx, ['hay_block'], at).then(({ put }) => {
+      fb.hay = (fb.hay | 0) + put
+      if (put) console.log(`farm store hay_block=${put} chest=${at.x},${at.y},${at.z}`)
+      else fb.storeFull = true // full or gone: hay stays in the pack until the next build pass
+    }).catch(() => {}).finally(() => { fb.storing = false; fb.walkKey = null })
+    return
+  }
+  if (!SEED_NAMES.some((s) => n(s) > 0) && fromChest(bot, ctx, SEED_NAMES, 16) === 'running') return
+  const center = abs(fb, blueprint.WATER.dx, 0, blueprint.WATER.dz)
+  if (walk(bot, fb, 'farm-field', center, FIELD_NEAR)) return
+  fb.walkKey = null
+  fb.cropAt = now
+  return require('./farm')(bot, ctx)
+}
+
 // Feasible for any bot: an owner 'build farm' order, or a complete castle
-// (the next project); day only, never once built.
+// (the next project); day only. Once built: the crop cycle when the field
+// has work in sight (a missing cell, a ripe crop, empty farmland and
+// seeds) or every CROP_EVERY_MS.
 function feasible(facts, bot, ctx) {
   if (!facts || facts.time !== 'day' || !ctx) return false
   const fb = ctx.farmBuild
-  if (fb && fb.built) return false
+  if (fb && fb.built) {
+    if (!bot || !fb.site) return false
+    guardField(bot, ctx)
+    if (Date.now() - (fb.cropAt || 0) >= CROP_EVERY_MS) return true
+    try {
+      if (build.nextCellIdx(bot, fb, (fb.state && fb.state.buildSkip) || [], viewOf(ctx, fb)) >= 0) return true
+      const s = fieldScan(bot, fb)
+      return s.mature > 0 || (s.empty > 0 && SEED_NAMES.some((i) => countItems(bot, (x) => x === i) > 0))
+    } catch (_) { return false }
+  }
   return !!((fb && fb.ordered) || (ctx.castle && ctx.castle.phase === 'complete'))
 }
 
