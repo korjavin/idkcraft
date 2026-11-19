@@ -20,6 +20,7 @@ const gearMod = require('./gear')
 const { tableFor, dayOf } = require('./tablespot') // oqul.14: the pack-table placement lives in the leaf, not equip
 const { countItems } = require('../perception')
 const { TABLE_REACH } = require('../budget')
+const { clearGoal } = require('./util')
 const WALK_GIVE_UP = 20 // table-walk ticks before the honest no-table line
 const TABLE_TRIES = 3 // place attempts before a crafted table gives up
 
@@ -255,22 +256,27 @@ function deadToday(bot, ctx, p) {
   return !!u && !!p && u.day === dayOf(bot) && u.x === p.x && u.y === p.y && u.z === p.z
 }
 
-function standingTable(bot, ctx) {
-  const tb = gearMod.tableBlock(bot, ctx)
-  if (tb && deadToday(bot, ctx, tb.pos)) return null
+function recoveringTable(bot, ctx, recoverTable) {
+  return recoverTable && ctx?.equipTableUnreachable?.day === dayOf(bot)
+}
+
+function standingTable(bot, ctx, recoverTable = false) {
+  const local = recoveringTable(bot, ctx, recoverTable)
+  const tb = gearMod.tableBlock(bot, ctx, (p, b) => !deadToday(bot, ctx, p) &&
+    (!local || craftMod.tableUsable(bot, b, p)))
   if (!tb || !ctx || !ctx.craftanyLocal) return tb
   const bp = bot.entity && bot.entity.position
   for (const p of [ctx.home && ctx.home.table, ctx.claimedTable]) {
-    if (!bp || !p || typeof p.x !== 'number' || dist3(bp, p) > TABLE_REACH) continue
+    if (!bp || !p || typeof p.x !== 'number' || deadToday(bot, ctx, p) || dist3(bp, p) > TABLE_REACH) continue
     const block = bot.blockAt && bot.blockAt(new Vec3(p.x, p.y, p.z))
     if (block && block.name === 'crafting_table') return { block, pos: p }
   }
   return null
 }
 
-function tablePathOf(bot, ctx, pack) {
+function tablePathOf(bot, ctx, pack, recoverTable) {
   try {
-    if (standingTable(bot, ctx)) return 'placed'
+    if (standingTable(bot, ctx, recoverTable)) return 'placed'
   } catch (_) { /* unreadable claim: fall through */ }
   if ((pack.crafting_table || 0) > 0) return 'pack'
   // Logs fund the table through a planks op first (did.4 core-1): the
@@ -420,7 +426,7 @@ function mixPlanks(bot, recipe, pack) {
 // stone wins over deepslate/blackstone). Third recipesAll arg is truthy on
 // purpose: mineflayer only uses it to filter requiresTable, and planning
 // must SEE table recipes before any table is near.
-function planCraft(bot, ctx, names, count) {
+function planCraft(bot, ctx, names, count, { recoverTable = false } = {}) {
   const cands = Array.isArray(names) ? names : [names]
   if (!bot || typeof bot.recipesAll !== 'function') return { ok: false, fail: 'no-recipe' }
   const byName = (bot.registry && bot.registry.itemsByName) || {}
@@ -434,7 +440,7 @@ function planCraft(bot, ctx, names, count) {
   // wood — the same stack never funds both the table and the recipe
   // (revmux 01), and plan and execution agree on the wood (revmux 02).
   // Uniform per recipe shape, or variants compete on different packs.
-  let reach = tablePathOf(bot, ctx, pack)
+  let reach = tablePathOf(bot, ctx, pack, recoverTable)
   try {
     if (reach === 'make' && tableRecipes(bot).length === 0) reach = null
   } catch (_) { reach = null }
@@ -479,7 +485,7 @@ function planCraft(bot, ctx, names, count) {
         }
         return { ok: true, target, recipe: r, needs, times, requiresTable, tableRecipe: trec }
       }
-      const cand = { target, missing }
+      const cand = { target, missing, makeTable: requiresTable && reach === 'make' && !!trec }
       gaps.push(missing)
       if (!refusal || gapCmp(cand, refusal) <= 0) refusal = cand
     }
@@ -488,7 +494,7 @@ function planCraft(bot, ctx, names, count) {
   // The structured gaps ride along for did.4 sub-orders (the winning
   // variant's [{name, need, have}]); existing callers read ok/fail/target/
   // line only and are unaffected.
-  if (refusal) return { ok: false, fail: 'missing', target: refusal.target, line: missingLine(refusal.target, refusal.missing), missing: refusal.missing, gaps }
+  if (refusal) return { ok: false, fail: 'missing', target: refusal.target, line: missingLine(refusal.target, refusal.missing), missing: refusal.missing, gaps, ...(refusal.makeTable ? { makeTable: true } : {}) }
   return { ok: false, fail: 'no-recipe' }
 }
 
@@ -535,17 +541,17 @@ function clearRun(ctx) {
 // busy; terminal { done } clears the run. gear.runOp reports its loud
 // failure via ctx.stepStatus — the run snapshots (and clears) stale work
 // failures at open, so only its own ops can trip it.
-function craftItem(bot, ctx, name, count) {
+function craftItem(bot, ctx, name, count, { recoverTable = false } = {}) {
   const names = Array.isArray(name) ? name : [name]
   const key = `${names.join(',')}x${count || 1}`
   let st = null
   try {
     st = ctx.craftany
   } catch (_) { st = null }
-  if (!st || st.key !== key) {
-    const plan = planCraft(bot, ctx, names, count || 1)
+  if (!st || st.key !== key || !!st.recoverTable !== recoverTable) {
+    const plan = planCraft(bot, ctx, names, count || 1, { recoverTable })
     if (!plan.ok) return { done: false, line: plan.line || `can't make ${names[0] || 'item'}: no recipe` }
-    st = { key, plan, have0: have(bot, plan.target), finalNeed: plan.times * resultCount(plan.recipe), table: null, tableTries: 0, tableP: false, walkTicks: 0, lastDist: null }
+    st = { key, plan, recoverTable, have0: have(bot, plan.target), finalNeed: plan.times * resultCount(plan.recipe), table: null, tableTries: 0, tableP: false, walkTicks: 0, lastDist: null }
     try {
       if (typeof ctx.stepStatus === 'string' && ctx.stepStatus.startsWith('failed:gear-')) ctx.stepStatus = null
       ctx.craftany = st
@@ -574,7 +580,7 @@ function craftItem(bot, ctx, name, count) {
   if (plan.requiresTable && !st.table) {
     let tb = null
     try {
-      tb = standingTable(bot, ctx)
+      tb = standingTable(bot, ctx, recoverTable)
     } catch (_) { tb = null }
     if (tb) {
       if (!craftMod.tableUsable(bot, tb.block, tb.pos)) { // g0z.40: reach + sight
@@ -594,6 +600,10 @@ function craftItem(bot, ctx, name, count) {
         if (st.walkTicks > WALK_GIVE_UP) {
           try { ctx.equipTableUnreachable = { day: dayOf(bot), x: tb.pos.x, y: tb.pos.y, z: tb.pos.z } } catch (_) { /* latch best-effort */ }
           clearRun(ctx)
+          if (recoverTable) {
+            clearGoal(bot, ctx)
+            return 'running'
+          }
           return { done: false, line: "can't reach the crafting table" }
         }
         return 'running'
@@ -617,7 +627,7 @@ function craftItem(bot, ctx, name, count) {
           if ((pack.crafting_table || 0) > 0) {
             st.tableP = true
             st.tableTries += 1
-            void tableFor(bot, ctx).then(
+            void tableFor(bot, ctx, { local: recoveringTable(bot, ctx, recoverTable) }).then(
               (t) => {
                 st.tableP = false
                 if (t) st.table = t.block
@@ -667,13 +677,17 @@ function craftItem(bot, ctx, name, count) {
     // A run planned on a wood the pack no longer holds (spruce_planks after
     // the spruce logs went, birch held) re-plans next tick instead of failing.
     if (missing.length > 0) {
-      const again = planCraft(bot, ctx, names, count || 1)
+      const again = planCraft(bot, ctx, names, count || 1, { recoverTable })
       if (again.ok && again.target !== plan.target) return 'running'
       return { done: false, line: missingLine(plan.target, missing) }
     }
     return { done: false, line: `can't make ${plan.target}: crafting failed` }
   }
-  gearMod.runOp(bot, ctx, op)
+  // The builder resumes as soon as the first batch lands.
+  const onDone = recoverTable && op.item === plan.target ? () => {
+    if (ctx.craftany === st) clearRun(ctx)
+  } : undefined
+  gearMod.runOp(bot, ctx, op, onDone)
   return 'running'
 }
 

@@ -250,3 +250,107 @@ describe('acquire: unreachable sources (prod 2026-11-15 bot3 pathless birch loop
     assert.ok(!unreachable.near(ctx, { x: 2, z: 0 }, unreachable.TTL_MS + 1))
   })
 })
+
+describe('construction material recovery', () => {
+  const names = ['oak_log', 'oak_planks', 'stick', 'oak_fence', 'crafting_table']
+  const ids = Object.fromEntries(names.map((name, i) => [name, i + 1]))
+  const recipe = (out, ingredients, count, requiresTable = false) => ({
+    delta: Object.entries(ingredients).map(([name, n]) => ({ id: ids[name], count: -n })),
+    result: { id: ids[out], count },
+    requiresTable,
+  })
+  const recipes = {
+    oak_planks: recipe('oak_planks', { oak_log: 1 }, 4),
+    oak_fence: recipe('oak_fence', { oak_planks: 4, stick: 2 }, 3, true),
+    crafting_table: recipe('crafting_table', { oak_planks: 4 }, 1),
+  }
+  const settle = () => new Promise((resolve) => setImmediate(resolve))
+
+  function fixture(t, pack) {
+    const Vec3 = require('vec3')
+    const gear = require('../src/behaviours/gear')
+    const blocks = new Map([['100,64,0', 'crafting_table']])
+    const crafts = []
+    const mines = []
+    const bot = {
+      entity: { position: new Vec3(0.5, 64, 0.5) },
+      registry: { itemsByName: Object.fromEntries(names.map((name) => [name, { id: ids[name] }])) },
+      inventory: { items: () => Object.entries(pack).filter(([, count]) => count > 0).map(([name, count]) => ({ name, count })) },
+      recipesAll(id) { return [recipes[names[id - 1]]].filter(Boolean) },
+      recipesFor(id) { return this.recipesAll(id).filter((r) => r.delta.every((d) => pack[names[d.id - 1]] >= -d.count)) },
+      blockAt(p) {
+        const name = blocks.get(`${p.x},${p.y},${p.z}`) || (p.y < 64 ? 'dirt' : 'air')
+        return { name, position: p, boundingBox: name === 'air' ? 'empty' : 'block' }
+      },
+      pathfinder: { setGoal(goal) { this.goal = goal } },
+      async placeBlock(ref, face) {
+        const p = ref.position.plus(face)
+        blocks.set(`${p.x},${p.y},${p.z}`, 'crafting_table')
+        pack.crafting_table--
+      },
+      async mine(blockNames, n) {
+        mines.push({ blockNames, n })
+        pack.oak_log = (pack.oak_log || 0) + n
+      },
+    }
+    t.mock.method(gear, 'runOp', (_bot, _ctx, op, onDone) => {
+      crafts.push(op)
+      for (const d of op.recipe.delta) pack[names[d.id - 1]] += d.count
+      pack[op.item] = (pack[op.item] || 0) + op.recipe.result.count
+      if (onDone) onDone()
+    })
+    return { bot, blocks, crafts, mines }
+  }
+
+  it('replaces an unreachable table, mines the extra wood, then makes a fence', async (t) => {
+    const pack = { oak_planks: 4, stick: 2 }
+    const { bot, blocks, crafts, mines } = fixture(t, pack)
+    blocks.set('20,64,0', 'crafting_table')
+    const ctx = {
+      stepStatus: 'running',
+      home: { table: { x: 100, y: 64, z: 0 } },
+      claimedTable: { x: 20, y: 64, z: 0 },
+    }
+    for (let i = 0; i < 50 && !pack.oak_fence; i++) {
+      assert.equal(tick.buildMaterial(bot, ctx, 'oak_fence', 1, ['oak_fence']), 'running')
+      await settle()
+    }
+    assert.equal(pack.oak_fence, 3)
+    assert.deepEqual(crafts.map((op) => op.item), ['crafting_table', 'oak_planks', 'oak_fence'])
+    assert.ok(crafts.at(-1).table.position.x < 10)
+    assert.deepEqual(mines, [{ blockNames: ['oak_log'], n: 1 }])
+    assert.equal(ctx.stepStatus, 'running')
+  })
+
+  it('crafts an affordable plank batch without mining the full deficit first', (t) => {
+    const pack = { oak_log: 1 }
+    const { bot, mines } = fixture(t, pack)
+    assert.equal(tick.buildMaterial(bot, {}, 'oak_planks', 64, ['oak_planks']), 'running')
+    assert.equal(pack.oak_planks, 4)
+    assert.deepEqual(mines, [])
+  })
+
+  it('a loaded house sources its next missing item from a newly discovered chest', async (t) => {
+    const build = require('../src/behaviours/build')
+    const { MENU } = require('../src/goal')
+    const Vec3 = require('vec3')
+    const pack = {}
+    const { bot, blocks, crafts } = fixture(t, pack)
+    const chest = new Vec3(-2, 64, 0)
+    blocks.set('-2,64,0', 'chest')
+    bot.registry.blocksByName = { chest: { id: 100 } }
+    bot.findBlocks = ({ matching }) => matching.includes(100) ? [chest] : []
+    bot.openChest = async () => ({
+      containerItems: () => [{ name: 'crafting_table', type: ids.crafting_table, count: 1 }],
+      withdraw: async () => { pack.crafting_table = 1 },
+      close: async () => {},
+    })
+    const ctx = { step: 'build', stepStatus: 'running', home: { site: { x: 0, y: 64, z: 0 } } }
+    assert.equal(MENU.build.feasible({ time: 'day', planks: 0, table: 0, door: 0 }, bot, ctx), true)
+    build(bot, ctx)
+    await settle()
+    assert.equal(pack.crafting_table, 1)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.deepEqual(crafts, [])
+  })
+})

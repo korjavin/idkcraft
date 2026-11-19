@@ -119,9 +119,10 @@ function mineRate(bot, a, end) {
 // One tick toward n of item in the pack: 'done' | 'running' | 'failed:<why>'.
 // alts: interchangeable variants (sources.family) that count and craft as
 // the item — birch planks serve an oak_planks need, any log a log gap.
-function acquire(bot, ctx, item, n, path = [], alts = [item]) {
+function acquire(bot, ctx, item, n, path = [], alts = [item], construction = false) {
   const a = ctx.acquire || (ctx.acquire = {})
   if (a.mining) { mineRate(bot, a, false); return 'running' }
+  if (construction && (ctx.gearInFlight || ctx.craftany?.tableP || a.buildChestBusy)) return 'running'
   if (a.hunt && ctx.bring === a.hunt) return 'running'
   if (!alts.includes(item)) alts = [item, ...alts]
   // Planks under a wood-named parent (oak_fence, birch_door) never pool:
@@ -130,26 +131,49 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   const held = one ? Math.max(0, ...alts.map((i) => have(bot, i))) : alts.reduce((t, i) => t + have(bot, i), 0)
   if (held >= n) return 'done'
   if (path.length > S.DEPTH) return `failed:deep-${item}`
+  if (construction && typeof bot.openChest === 'function') {
+    const chest = fromChest(bot, ctx, alts, n, { construction, singleVariant: one })
+    if (chest !== 'none') return chest
+  }
   const reg = S.regOf(bot)
   const craftany = require('./craftany')
   let plan = null
+  let tableBlocked = false
   const gaps = []
+  const options = { recoverTable: construction }
   for (const i of alts) {
-    const want = one ? n : have(bot, i) + n - held
-    const p = craftany.planCraft(bot, ctx, [i], want)
+    const want = construction ? n - (one ? have(bot, i) : held)
+      : one ? n : have(bot, i) + n - held
+    const p = craftany.planCraft(bot, ctx, [i], want, options)
+    if (construction) {
+      if (p.ok) return craftBuildMaterial(craftany, bot, ctx, i, want)
+      if (p.fail === 'no-table' || p.makeTable) tableBlocked = true
+    }
     // No table and none placeable (split woods, mats eaten): the table is
     // the gap — acquire one into the pack, craftany then places it.
-    if (p.fail === 'no-table' && have(bot, 'crafting_table') === 0 && !path.includes('crafting_table') && item !== 'crafting_table') {
+    if (!construction && p.fail === 'no-table' && have(bot, 'crafting_table') === 0 && !path.includes('crafting_table') && item !== 'crafting_table') {
       const r = acquire(bot, ctx, 'crafting_table', 1, [...path, item])
       return r === 'done' ? 'running' : r
     }
-    if (p.ok || p.fail === 'no-table') {
+    if (!construction && (p.ok || p.fail === 'no-table')) {
       const r = craftany(bot, ctx, i, want)
       return r === 'running' || r.done ? 'running' : `failed:craft-${i}`
     }
     if (i === item) plan = p
     const m = p.fail === 'missing' && p.missing && p.missing[0]
     if (m && !gaps.includes(m.name)) gaps.push(m.name)
+  }
+  if (construction && path.length === 0 && n - held > 1) {
+    // A full batch may need more wood even when the next cell can be built.
+    for (const i of alts) {
+      const p = craftany.planCraft(bot, ctx, [i], 1, options)
+      if (p.ok) return craftBuildMaterial(craftany, bot, ctx, i, 1)
+      if (p.fail === 'no-table' || p.makeTable) tableBlocked = true
+    }
+  }
+  if (tableBlocked && item !== 'crafting_table' && !path.includes('crafting_table') && have(bot, 'crafting_table') === 0) {
+    const r = acquire(bot, ctx, 'crafting_table', 1, [...path, item], ['crafting_table'], construction)
+    return r === 'done' ? 'running' : r
   }
   let g = plan && plan.fail === 'missing' && plan.missing && plan.missing[0]
   // A gap with no source near (coal, no ore in range) yields to another
@@ -167,7 +191,7 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   // a storage loop: the item comes from the world instead.
   const up = [...path, item]
   if (g && !S.inputsOf(reg, g.name).some((i) => up.includes(i))) {
-    const r = acquire(bot, ctx, g.name, g.need, up, gaps)
+    const r = acquire(bot, ctx, g.name, g.need, up, gaps, construction)
     return r === 'done' ? 'running' : r
   }
   if (FILL[item]) return fillTick(bot, ctx, a, item, up)
@@ -233,6 +257,15 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   return `failed:no-source-${item}`
 }
 
+function craftBuildMaterial(craftany, bot, ctx, item, count) {
+  const r = craftany(bot, ctx, item, count, { recoverTable: true })
+  return r === 'running' || r.done ? 'running' : `failed:craft-${item}`
+}
+
+function buildMaterial(bot, ctx, item, n, alts) {
+  return acquire(bot, ctx, item, n, [], alts, true)
+}
+
 // Filled buckets (qphv.2): no recipe, no drop — an empty bucket (acquired
 // like any item: pack, craft from iron, ...) used on the nearest still
 // source (castle/farm water excluded by nearestSource) or a cow.
@@ -294,17 +327,38 @@ function fillTick(bot, ctx, a, item, up) {
 // 'done' (pack holds n) | 'running' | 'none' (no chest left to try: the
 // caller goes on to acquire). One open per chest per need.
 const CHEST_REACH = 3.5
-function fromChest(bot, ctx, names, n) {
-  const held = names.reduce((t, i) => t + have(bot, i), 0)
+const BUILD_CHEST_RADIUS = 64
+const BUILD_CHEST_RETRY_MS = 60000
+function fromChest(bot, ctx, names, n, { construction = false, singleVariant = false } = {}) {
+  const counts = names.map((i) => have(bot, i))
+  const held = singleVariant ? Math.max(0, ...counts) : counts.reduce((t, v) => t + v, 0)
   if (held >= n) return 'done'
   const a = ctx.acquire || (ctx.acquire = {})
   const key = names.join(',')
-  if (!a.chest || a.chest.key !== key) a.chest = { key, seen: [], pos: null, best: Infinity, waits: 0 }
-  const c = a.chest
+  let c
+  if (construction) {
+    // Keep each ingredient's chest search while its parent is replanned.
+    const searches = a.buildChests || (a.buildChests = new Map())
+    c = searches.get(key)
+    if (!c || (!c.pos && Date.now() - c.at >= BUILD_CHEST_RETRY_MS)) {
+      c = { seen: [], pos: null, at: Date.now() }
+      searches.set(key, c)
+      if (!a.buildChestScanAt || c.at - a.buildChestScanAt >= BUILD_CHEST_RETRY_MS) {
+        require('./chestsearch').scanWide(bot, ctx, BUILD_CHEST_RADIUS)
+        a.buildChestScanAt = c.at
+      }
+    }
+  } else {
+    if (!a.chest || a.chest.key !== key) a.chest = { key, seen: [], pos: null }
+    c = a.chest
+  }
   if (c.busy) return 'running'
   const stock = require('./stockpile')
   if (!c.pos) {
-    const pick = require('./bring').pickChest(bot, ctx, { wants: (x) => names.includes(x), chestSeen: c.seen })
+    const pick = require('./bring').pickChest(bot, ctx, {
+      wants: (x) => names.includes(x), chestSeen: c.seen,
+      maxChestDistance: construction ? BUILD_CHEST_RADIUS : undefined,
+    })
     if (!pick) return 'none'
     c.pos = pick.pos
     c.best = Infinity
@@ -322,11 +376,17 @@ function fromChest(bot, ctx, names, n) {
     return 'running'
   }
   c.busy = true
+  if (construction) a.buildChestBusy = true
   c.goal = null
   stock.withdrawAnyFromChest(bot, ctx, names, n - held, at)
     .then((r) => { if (r && r.got) console.log(`acquire ${names[0]}: drew ${r.got} from the chest at ${k}`) })
     .catch(() => {})
-    .finally(() => { c.busy = false; c.seen.push(k); c.pos = null })
+    .finally(() => {
+      c.busy = false
+      if (construction) a.buildChestBusy = false
+      c.seen.push(k)
+      c.pos = null
+    })
   return 'running'
 }
 
@@ -390,4 +450,4 @@ function smeltPrep(bot, ctx, fur, spot, want, up) {
   return null
 }
 
-module.exports = { acquire, fromChest, FILL, deps }
+module.exports = { acquire, buildMaterial, fromChest, FILL, deps }

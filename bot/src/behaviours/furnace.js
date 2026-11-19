@@ -91,7 +91,7 @@ function freshRun(job) {
 
 // Verified crafting table (craft pattern): the claim plus a live block
 // read, else null. Never trust the claim alone (mined table).
-function tableBlock(bot, ctx) {
+function tableBlock(bot, ctx, accept = () => true) {
   try {
     // First verified-standing (h9z): a ghost home claim must not shadow
     // the standing roadside table (craft.js pattern).
@@ -103,7 +103,7 @@ function tableBlock(bot, ctx) {
       if (!tablePos || typeof tablePos.x !== 'number') continue
       // Vec3-normalized: live blockAt calls .floored(), plain claims throw.
       const block = bot.blockAt && bot.blockAt(new Vec3(tablePos.x, tablePos.y, tablePos.z))
-      if (block && block.name === 'crafting_table') {
+      if (block && block.name === 'crafting_table' && accept(tablePos, block)) {
         // mlob: a table inside a holed house is no station unless already in
         // reach (build.entranceHoled: the walk crosses the hole) — gear and
         // craftany fall back to their own (revmux 02: one in reach serves).

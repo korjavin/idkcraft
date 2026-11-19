@@ -35,15 +35,16 @@
 //
 // One behaviour tick advances at most one async place flight (guarded by
 // ctx.placeInFlight, same seam as eatInFlight/doEat). Materials are checked
-// BEFORE walking: a missing item reports failed:no-planks and the arbiter
-// sends the bot back to gather/craft for the next batch.
+// BEFORE walking, so the material leg can finish without spending the
+// placement budget.
 
 const Vec3 = require('vec3')
 const { denyReason, logDeny, isInteractRef, NATURAL_SOLID, isOwnPlaced, inHouseFootprint } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
 const reach = require('../reach')
-const { stepFailed, stepGen } = require('../step')
+const { stepFailed, stepGen, failReason } = require('../step')
+const { countItems } = require('../perception')
 
 const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
 const FAR_PROGRESS = 1 // blocks of approach shortening that forgive a far reset (revmux 01 major)
@@ -625,6 +626,27 @@ function unskipAround(ctx, q) {
   } catch (_) { /* best-effort */ }
 }
 
+const BUILD_ITEM = {
+  soil: 'dirt', ground: 'dirt', fill: 'oak_planks', planks: 'oak_planks',
+  fence: 'oak_fence', gate: 'oak_fence_gate', door: 'oak_door', chest: 'chest',
+  table: 'crafting_table', farmland: 'wooden_hoe', water: 'water_bucket',
+}
+
+function canSourceMaterials(bot) {
+  return !!bot && (typeof bot.mine === 'function' || typeof bot.openChest === 'function')
+}
+
+function acquireCellMaterial(bot, ctx, home, cell) {
+  const item = BUILD_ITEM[cell.kind]
+  const want = wantItem(cell)
+  const alts = cell.kind === 'ground' ? [...FILLERS] : require('../sources').family(item).filter(want)
+  let n = 1
+  if (cell.kind !== 'farmland' && cell.kind !== 'water') {
+    n = Math.max(1, Math.min(64, blueprintFor(home).filter((c) => c.kind === cell.kind && !cellDone(bot, home, c)).length))
+  }
+  return require('./acquire').buildMaterial(bot, ctx, item, n, alts)
+}
+
 // Neighbor scan order: below first — every plan cell sits on the previous
 // layer by construction, so the reference is almost always the ground or
 // our own earlier cell.
@@ -792,7 +814,8 @@ function builderCells(bot, home, skipped) {
     const item = findItem(bot, wantItem({ kind: 'planks' }))
     if (!item || typeof item.name !== 'string') return null // no-planks via the old path
     const cells = []
-    for (let i = 0; i < plan.length && cells.length < BUILDER_BATCH; i++) {
+    const batchSize = Math.min(BUILDER_BATCH, countItems(bot, (n) => n === item.name))
+    for (let i = 0; i < plan.length && cells.length < batchSize; i++) {
       const cell = plan[i]
       if (!BUILDER_KINDS.has(cell.kind) || cell.floor || skip.has(i)) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
@@ -1102,7 +1125,8 @@ function build(bot, ctx, target, state) {
       if (ctx.buildFails >= 3) skipCell(ctx, hIdx, cellAbs(ctx.home, blueprintFor(ctx.home)[hIdx]), 'flight-hang')
     }
   }
-  if (ctx.placeInFlight || ctx.buildCellsInFlight) return
+  if (ctx.placeInFlight || ctx.buildCellsInFlight || ctx.gearInFlight ||
+      ctx.acquire?.buildChestBusy || (ctx.craftany?.recoverTable && ctx.craftany.tableP)) return
   if (!ctx.home) return
   guardOwnWalls(bot, ctx)
   // Claim the table coords the moment the workbench stands (see makeHome):
@@ -1149,6 +1173,13 @@ function build(bot, ctx, target, state) {
     return
   }
   ctx.buildSiteWalk = null
+  const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
+  if (!item && ctx.home.kind !== 'farm' && BUILD_ITEM[cell.kind] && canSourceMaterials(bot)) {
+    ctx.buildGoalIdx = -1
+    const reason = failReason(acquireCellMaterial(bot, ctx, ctx.home, cell))
+    if (reason != null) failBuild(ctx, reason)
+    return
+  }
   // A fill with no floor or side support (a hole deeper than the plan, a
   // cave, a misread column) builds its column bottom-up: the lowest open block first.
   const unsupported = FILL_KINDS.has(cell.kind) && !findRef(bot, p, { excludeTop: true })
@@ -1251,7 +1282,6 @@ function build(bot, ctx, target, state) {
   // planks would wait on the ground and fail no-planks mid-prep.
   if (typeof bot.buildCells === 'function' && cell.phase !== 'prep' && !unsupported && builderBatch(bot, ctx)) return
 
-  const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
   if (!item && cell.kind !== 'clear') {
     // no-planks stays the plank reason; table/door cells name themselves.
     failBuild(ctx, cell.kind === 'table' ? 'no-table' : cell.kind === 'door' ? 'no-door' : 'no-planks')
@@ -1531,3 +1561,5 @@ module.exports.CELL_HARD_CAP = CELL_HARD_CAP
 module.exports.FLIGHT_TIMEOUT_MS = FLIGHT_TIMEOUT_MS
 module.exports.houseProgress = houseProgress
 module.exports.wantItem = wantItem
+module.exports.canSourceMaterials = canSourceMaterials
+module.exports.acquireCellMaterial = acquireCellMaterial
