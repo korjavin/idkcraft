@@ -318,12 +318,42 @@ describe('farmbuild step (qphv.1)', () => {
       assert.ok(Array.isArray(ctx.farmBuild.site.prep), 'prep restored')
       assert.ok(logs.some((l) => l.startsWith('farm prep restored')))
       const fb = ctx.farmBuild
-      fb.stallDone = require('../src/behaviours/build').houseProgress(bot, fb).done
       for (let i = 0; i < 400 && ctx.farmBuild === fb; i++) { now += 5000; ctx.placeInFlight = true; farmbuild(bot, ctx) }
       assert.notEqual(ctx.farmBuild, fb)
       assert.equal(ctx.stepStatus, 'failed:site-stalled')
       assert.equal(ctx.farmBuild.ordered, true)
     } finally { console.log = orig; Date.now = realNow }
+  })
+
+  it('resets the stall timer on a cut and ignores drops and recoveries to the same count', (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: 10000 })
+    const w = world()
+    w.set(2, 67, 2, 'dirt')
+    const bot = mockBot(w)
+    const site = { x: 0, y: 64, z: 0, prep: [{ dx: 2, dy: 3, dz: 2, kind: 'clear', phase: 'prep' }] }
+    const fb = { site, loggedAt: Date.now() }
+    const ctx = { step: 'farmbuild', stepStatus: 'running', farmBuild: fb, placeInFlight: true }
+    const run = () => {
+      t.mock.timers.tick(1000)
+      farmbuild(bot, ctx)
+    }
+
+    run()
+    run()
+    assert.equal(fb.stallRun, 1000)
+    const beforeCut = fb.stallDone
+    w.set(2, 67, 2, 'air')
+    run()
+    assert.equal(fb.stallDone, beforeCut + 1)
+    assert.equal(fb.stallRun, 0)
+
+    const read = bot.blockAt
+    bot.blockAt = (p) => p.x === 2 && p.y === 67 && p.z === 2 ? null : read(p)
+    run()
+    assert.equal(fb.stallRun, 1000)
+    bot.blockAt = read
+    run()
+    assert.equal(fb.stallRun, 2000)
   })
 
   it('prepAt: a partly built farm (own barn planks) still restores, unloaded waits (Codex)', () => {

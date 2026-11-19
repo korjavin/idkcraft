@@ -328,11 +328,11 @@ function fillGround(bot, home, cell, name) {
 
 // Progress = plan blocks standing in the world; air-by-plan clear cells
 // are no work (prod bot5 read 48/149 over an untouched field).
-function houseProgress(bot, home) {
+function houseProgress(bot, home, { includeClear = false } = {}) {
   let done = 0
   let total = 0
   for (const cell of blueprintFor(home)) {
-    if (cell.kind === 'clear') continue
+    if (cell.kind === 'clear' && !includeClear) continue
     total++
     try {
       if (cellDone(bot, home, cell)) done++
@@ -1265,10 +1265,13 @@ function build(bot, ctx, target, state) {
 
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
-  if (ctx.buildGoalIdx !== idx) {
+  // A bottom-up fill changes target Y while its blueprint index stays fixed.
+  const goalY = typeof bot.buildCells === 'function' && FILL_KINDS.has(cell.kind) ? p.y : null
+  if (ctx.buildGoalIdx !== idx || ctx.buildGoalY !== goalY) {
     // (Re)approach: GoalPlaceBlock walks into place range of the cell.
     // When the walk ends (!isMoving) the flight below places.
     ctx.buildGoalIdx = idx
+    ctx.buildGoalY = goalY
     // The v2 door goes in from the doorstep side (d7i): after the partition
     // the body stands inside, and a door set from in there seals it in (the
     // pathfinder never opens doors). The north wall holds the door, so
