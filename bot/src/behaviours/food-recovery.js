@@ -4,7 +4,7 @@
 // cooldown must survive this leg. Window flights also outlive cancellation.
 const bring = require('./bring')
 const forage = require('./forage')
-const { stepDone } = require('../step')
+const { stepDone, stepFailed } = require('../step')
 const { LOW_HP_GATE_MS, lowHpNoFood, needsFood } = require('../health-gate')
 const craftany = require('./craftany')
 const { Vec3 } = require('vec3')
@@ -183,6 +183,9 @@ function cancel(ctx, r) {
 function run(bot, ctx) {
   let r = ctx.foodRecovery
   if (!r || !r.valid) {
+    // prod 2026-11-19 bot3/bot4: the goal fsm keeps a live foodRecovery step while needed(),
+    // so a struck run restarted (and struck) every tick; a cooldown ends the step instead.
+    if (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt) { stepFailed(ctx, 'cooldown'); return }
     // food<6 is an emergency like low hp: chest, then hunt (prod: Easy holds hp at 10)
     const hungryRun = !needsFood({ health: bot.health, food: bot.food })
     r = ctx.foodRecovery = { valid: true, hungry: hungryRun, chest: chestState(ctx, bot.health < 6 ? 1 : HUNGRY_WANT, bot), phase: breadReady(bot, ctx) ? 'bread' : chestsDry(ctx) ? 'hunt' : 'chest', startFood: bot.food }
