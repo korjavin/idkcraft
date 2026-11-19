@@ -528,8 +528,10 @@ describe('castle break guard (g0z.55)', () => {
       assert.equal(sync(), 'false', '48 from a peer castle centre')
       ctx.reachBuild = { x: cx, y: 80, z: cz, until: Date.now() + 60000, how: 'baritone' }
       assert.equal(sync(), 'true', 'a live reach window (reach.js) lets Baritone pillar/bridge')
+      assert.equal(movementsToSettings(bot.pathfinder.movements, registry).allowInventory, 'true', 'window: Baritone swaps pack dirt to the hotbar')
       ctx.reachBuild.until = 0
       assert.equal(sync(), 'false', 'expired window: guard back')
+      assert.equal(movementsToSettings(bot.pathfinder.movements, registry).allowInventory, 'false')
       let pushes = 0
       bot.pathfinder.setMovements = () => { pushes++ }
       sync()

@@ -406,6 +406,10 @@ function movementsFor(owner, bot, ctx, extra) {
       if (typeof mov.allowSprinting === 'boolean') mov.allowSprinting = sprint
       if (typeof mov.allowParkour === 'boolean') mov.allowParkour = parkour
       if (v2) mov.allow1by1towers = !noPlace
+      // Baritone places throwaway from the hotbar only (pwoi): the access build's
+      // dirt in slots 9-35 left allowPlace with nothing to place (prod bot4: same
+      // 1074-node search with allowPlace on). On, Baritone swaps it to the hotbar.
+      if (v2) mov.allowInventory = reach.live(ctx)
       danger.addPathCost(mov, ctx, bot) // zj2p: once per Movements, reads ctx live
       swim.addNightWaterCost(mov, bot, ctx) // vmzq.44: once per Movements, reads the bot clock + live owner
     } catch (_) { /* apply best-effort */ }

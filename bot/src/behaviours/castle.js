@@ -2586,7 +2586,7 @@ function far(bot, ctx, st, c, reach, now) {
   ctx.castleGoalIdx = -1
   try {
     const act = hold ? 'access-build' : f.n < STRIKES ? `reapproach#${f.n}` : !f.build && !c.prep ? 'access-build' : !f.dig ? 'dig-approach' : !f.step ? 'step-approach' : 'strike'
-    console.log(`approach target=${c.x},${c.y},${c.z} stand=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} reached=true inReach=false dist=${dist.toFixed(1)} -> action=${act}`)
+    console.log(`approach target=${c.x},${c.y},${c.z} stand=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} path=${ctx.lastPathStatus || 'none'} inReach=false dist=${dist.toFixed(1)} -> action=${act}`)
   } catch (_) { /* log best-effort */ }
   if (hold) { ctx.lastPathStatus = null; return true }
   if (f.n >= STRIKES) {

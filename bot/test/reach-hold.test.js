@@ -46,8 +46,8 @@ describe('reach access build hold', () => {
       reach.done(ctx, { x: 4, y: 5, z: 6 }, 'ok', 10 * 60 * 1000)
     } finally { console.log = l }
     const how = process.env.BOT_BODY === 'baritone' ? 'baritone' : 'pillar'
-    assert.ok(lines.includes('reach summary ok=2 fail=0 by=walk'), lines.join('\n'))
-    assert.ok(lines.includes(`reach summary ok=0 fail=1 by=${how}`))
+    assert.ok(lines.includes('reach summary ok=2 fail=0 by=walk why=-'), lines.join('\n'))
+    assert.ok(lines.includes(`reach summary ok=0 fail=1 by=${how} why=unreachable:1`))
     assert.equal(ctx.reachSummary, null)
   })
 })
