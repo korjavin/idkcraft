@@ -67,3 +67,12 @@ test('a live Baritone mine marker is never failed as unreachable (mine owns its 
   assert.strictEqual(bot.pathfinder.goal, marker)
   assert.strictEqual(ctx.stepStatus, 'running')
 })
+
+test('build and farmbuild keep their step: build.js skips the cell itself', () => {
+  for (const step of ['build', 'farmbuild']) {
+    const { bot, ctx } = rig()
+    ctx.step = step
+    for (let t = 0; t < 5; t++) assert.strictEqual(unreachable.tick(bot, ctx, t * 1000), false)
+    assert.strictEqual(ctx.stepStatus, 'running')
+  }
+})
