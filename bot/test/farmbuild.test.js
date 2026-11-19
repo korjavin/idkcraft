@@ -256,6 +256,28 @@ describe('farmbuild step (qphv.1)', () => {
     assert.ok(bot.chats.some((m) => m.startsWith('farm done at')))
   })
 
+  it('fills a prep cell over a 3-deep hole bottom-up instead of skipping it (prod (air) refusals)', async () => {
+    const w = world()
+    const bot = mockBot(w)
+    bot.inventory.items().push({ name: 'dirt', count: 64 })
+    // A 3x3 pit: the cell (y=63) has no floor and no side ground, 3 open blocks below it.
+    for (let y = 60; y <= 63; y++) for (let x = 201; x <= 203; x++) for (let z = 201; z <= 203; z++) w.set(x, y, z, 'air')
+    const fb = { site: { x: 200, y: 64, z: 200, prep: [{ dx: 2, dy: -1, dz: 2, kind: 'ground', phase: 'prep' }] } }
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, buildSkip: [], castle: null, farmBuild: fb }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      for (let t = 0; t < 4000 && ctx.stepStatus === 'running'; t++) {
+        farmbuild(bot, ctx)
+        await tick()
+      }
+    } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'done', logs.slice(-5).join('\n'))
+    assert.ok(!logs.some((l) => l.startsWith('build skip')), logs.filter((l) => l.startsWith('build skip')).join('\n'))
+    for (let y = 60; y <= 63; y++) assert.equal(w.blockAt({ x: 202, y, z: 202 }).name, 'dirt', `y=${y}`)
+  })
+
   it('is feasible by day for an ordered farm or a complete castle, never once built', () => {
     const day = { time: 'day' }
     assert.equal(farmbuild.feasible(day, null, {}), false)
