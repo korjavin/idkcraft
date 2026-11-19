@@ -1426,8 +1426,7 @@ function pickChest(bot, ctx, o) {
       const hk = stockpileMod.chestKeyOf(h)
       if (hk !== null && !o.chestSeen.includes(hk)) return { pos: h, home: true }
     }
-    // prod 2026-11-19 bot2: died twice in a row walking back to one cave chest; a live death mark covers it
-    let rest = (o.peerChests ? stockpileMod.nearbyChestsAll : stockpileMod.nearbyChests)(bot, ctx, o.chestSeen, o.maxChestDistance).filter((c) => within(c) && !require('../danger').covers(ctx, c))
+    let rest = (o.peerChests ? stockpileMod.nearbyChestsAll : stockpileMod.nearbyChests)(bot, ctx, o.chestSeen, o.maxChestDistance).filter(within)
     if (o.peerChests && typeof o.wants === 'function') {
       // far/peer sightings (beds wool): only near chests or a snapshot showing the item earn the walk
       const b = bot && bot.entity && bot.entity.position
