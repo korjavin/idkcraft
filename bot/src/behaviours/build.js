@@ -42,6 +42,7 @@ const Vec3 = require('vec3')
 const { denyReason, logDeny, isInteractRef, NATURAL_SOLID, isOwnPlaced, inHouseFootprint } = require('./util')
 const { goals } = require('mineflayer-pathfinder')
 const stuck = require('../stuck')
+const reach = require('../reach')
 const { stepFailed, stepGen } = require('../step')
 
 const PLACE_RANGE = 4 // GoalPlaceBlock range for the approach
@@ -1278,8 +1279,16 @@ function build(bot, ctx, target, state) {
       if (farDist < ctx.buildFarDist - FAR_PROGRESS) ctx.buildFarFails = 0
       else ctx.buildFarFails = (ctx.buildFarFails || 0) + 1
       ctx.buildFarDist = farDist
-      if (ctx.buildFarFails >= 3) skipCell(ctx, idx, p, 'unreachable')
-      else ctx.buildGoalIdx = -1
+      // Castle ladder rung (reach.js): before the skip, one access-build window
+      // (pillar/bridge, Baritone allowPlace) and its hold for this cell.
+      if (ctx.buildFarFails >= 3 && (!ctx.reachBuild || `${ctx.reachBuild.x},${ctx.reachBuild.y},${ctx.reachBuild.z}` !== `${p.x},${p.y},${p.z}`)) {
+        reach.arm(ctx, p)
+        ctx.buildFarFails = 0
+        ctx.buildGoalIdx = -1
+      } else if (ctx.buildFarFails >= 3 && !reach.holding(ctx, p)) {
+        reach.done(ctx, p, 'fail:unreachable')
+        skipCell(ctx, idx, p, 'unreachable')
+      } else ctx.buildGoalIdx = -1
       return
     }
     // Reach proven: a later far episode starts its streak fresh, so

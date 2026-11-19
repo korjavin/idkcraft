@@ -1037,8 +1037,14 @@ describe('idkcraft-jr2.4 build approach livelock on a slope', () => {
     const bot = mockBot(world, { items: [{ name: 'crafting_table', count: 1 }] })
     // entity stays at spawn (0,65,0): ~11 head-to-centre from the table cell
     const ctx = { home: goal.siteFor(bot, pos(0, 64, 0)), step: 'build', stepStatus: 'running', buildSkip: [], buildLastProgressLog: Date.now() }
+    for (let t = 0; t < 7 && !ctx.reachBuild; t++) build(bot, ctx, null, null)
+    assert.ok(ctx.reachBuild, 'access-build rung armed before the skip')
+    assert.equal(ctx.buildSkip.length, 0)
+    ctx.reachBuild.since -= 60000 // the hold ran out
     for (let t = 0; t < 7 && ctx.buildSkip.length === 0; t++) build(bot, ctx, null, null)
     assert.equal(ctx.buildSkip.length, 1)
+    assert.equal(ctx.stepStatus, 'running', 'one unreachable cell never fails the step')
+    assert.notEqual(build.nextCellIdx(bot, ctx.home, ctx.buildSkip, ctx), ctx.buildSkip[0], 'the next reachable cell is worked')
     assert.equal(bot.calls.places.length, 0)
     const skips = lines.filter((l) => l.startsWith('build skip') && l.includes('unreachable'))
     assert.equal(skips.length, 1)

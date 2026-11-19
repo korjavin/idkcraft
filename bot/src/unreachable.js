@@ -32,8 +32,9 @@ function near(ctx, p, now = Date.now()) {
 // goal cell is marked here so gather/explore/acquire pick another target.
 // A marked cell fails on its first noPath. Called once per tick by index.js.
 const GRACE_TICKS = 2
-// Steps with their own per-target unreachable ladder (castle: far, dig-/step-approach, retire).
-const OWN_LADDER = new Set(['castle'])
+// Steps with their own per-target unreachable ladder (castle: far, dig-/step-approach, retire;
+// build/farmbuild: build.js far -> access-build -> skip the cell, retried later).
+const OWN_LADDER = new Set(['castle', 'build', 'farmbuild'])
 function goalCell(g) {
   const p = g && g.pos && Number.isFinite(g.pos.x) ? g.pos : g
   return p && Number.isFinite(p.x) && Number.isFinite(p.z) ? { x: Math.floor(p.x) + 0.5, z: Math.floor(p.z) + 0.5 } : null
