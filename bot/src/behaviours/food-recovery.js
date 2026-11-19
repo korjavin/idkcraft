@@ -14,8 +14,12 @@ const WINDOW_TIMEOUT_MS = 30000
 const BREAD_TIMEOUT_MS = 120000 // walk + table make/place + craft, then the RETRY_MS cooldown
 // Chest loop: a healthy but hungry body with no meal also draws from a chest
 // whose read holds food, or one never/long ago read (stockpile.chestHope).
-const HUNGRY_FOOD = 14
-const HUNGRY_WANT = 4 // bounded draw: a few meals, the rest stays for others
+// prod 2026-11-19: every death in the hour was in foodRecovery — food sat at
+// 9-16 with an empty pack, so health never regenerated (needs food >= 18) and
+// the fetch began only once fights had already worn it down. Fetch at the
+// regen line, while healthy, and carry a reserve.
+const HUNGRY_FOOD = 18
+const HUNGRY_WANT = 8 // bounded draw: a reserve, the rest stays for others
 // Owner 2026-11-12: food anywhere, castle or not. Remembered chests up to the
 // explore spiral cap when critical (food<=2 or health<6), else a shorter walk;
 // failAt TTL (markChestFailed) bounds the retries.
@@ -132,6 +136,7 @@ function run(bot, ctx) {
     const hungryRun = !needsFood({ health: bot.health, food: bot.food })
     r = ctx.foodRecovery = { valid: true, hungry: hungryRun, chest: chestState(ctx, bot.health < 6 ? 1 : HUNGRY_WANT, bot), phase: breadReady(bot, ctx) ? 'bread' : chestsDry(ctx) ? 'hunt' : 'chest', startFood: bot.food }
     ctx.lastPathStatus = 'none'
+    require('../food-rate').note(ctx, 'recoveries')
     console.log(`food recovery start health=${bot.health} food=${bot.food} edible=0${hungryRun ? ' why=hungry' : ''}`)
   }
   const valid = () => r.valid && ctx.foodRecovery === r && ctx.step === 'foodRecovery' &&
