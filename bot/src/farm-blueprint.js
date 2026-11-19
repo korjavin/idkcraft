@@ -111,7 +111,8 @@ const STEP = 3
 // reason, why: {unloaded,built,castle,lava,deep}, walk: {x,z} | null } — walk
 // = the nearest unloaded column (qphv: bot5's bridge body read the radius
 // unloaded); the caller walks there so the chunk loads, then re-picks.
-function pickSite(bot, around, avoid = []) {
+// skipWalk: chunk keys "cx,cz" the caller could not reach — not walk targets.
+function pickSite(bot, around, avoid = [], skipWalk = null) {
   if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return { site: null, tried: 0, reason: 'no-anchor' }
   const cy = typeof around.y === 'number' ? Math.floor(around.y) : 64
   const cols = new Map()
@@ -136,7 +137,7 @@ function pickSite(bot, around, avoid = []) {
         const f = footprintCost(col, ox, oz)
         if (f.bad) {
           why[f.bad]++
-          if (f.bad === 'unloaded' && (!walk || d < walk.d)) walk = { x: f.x, z: f.z, d }
+          if (f.bad === 'unloaded' && (!walk || d < walk.d) && !(skipWalk && skipWalk.has(`${f.x >> 4},${f.z >> 4}`))) walk = { x: f.x, z: f.z, d }
         } else if (!best || f.cost < best.f.cost || (f.cost === best.f.cost && d < best.d)) best = { ox, oz, d, f }
       }
     }
