@@ -23,7 +23,7 @@ const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 
 const PROGRESS_LOG_MS = 30000
-const ITEM = { planks: 'oak_planks', fence: 'oak_fence', gate: 'oak_fence_gate', door: 'oak_door', chest: 'chest', farmland: 'wooden_hoe', water: 'water_bucket' }
+const ITEM = { soil: 'dirt', ground: 'dirt', planks: 'oak_planks', fence: 'oak_fence', gate: 'oak_fence_gate', door: 'oak_door', chest: 'chest', farmland: 'wooden_hoe', water: 'water_bucket' }
 const ONE = new Set(['farmland', 'water']) // a tool, not a stack
 // Crop cycle (qphv.2) on the built field.
 const CROP_EVERY_MS = 10 * 60 * 1000 // a far bot still revisits the field
@@ -70,7 +70,7 @@ function progressLine(bot, ctx, fb, idx, now) {
   if (now - (fb.loggedAt || 0) < PROGRESS_LOG_MS) return
   fb.loggedAt = now
   const p = build.houseProgress(bot, fb)
-  const phase = idx < 0 ? 'complete' : blueprint.PLAN[idx].phase
+  const phase = idx < 0 ? 'complete' : blueprint.planFor(fb)[idx].phase
   console.log(`farm progress built=${p.done}/${p.total} phase=${phase}`)
 }
 
@@ -79,15 +79,16 @@ function run(bot, ctx) {
   fb.kind = 'farm'
   if (!fb.site) {
     const { at, avoid } = anchorOf(bot, ctx)
-    const site = at ? blueprint.siteFor(bot, at, avoid) : null
+    const r = at ? blueprint.pickSite(bot, at, avoid) : { site: null, tried: 0, reason: 'no-anchor' }
+    const site = r.site
     if (!site) {
-      if (ctx.stepStatus !== 'failed:no-site') console.log('farm failed:no-site')
+      if (ctx.stepStatus !== 'failed:no-site') console.log(`farm failed:no-site tried=${r.tried} best=none reason=${r.reason}`)
       stepFailed(ctx, 'no-site')
       return
     }
     fb.site = site
     fb.built = false
-    console.log(`farm site=${site.x},${site.y},${site.z}`)
+    console.log(`farm site=${site.x},${site.y},${site.z} cost=${site.cost} cut=${site.cut} fill=${site.fill} tried=${r.tried}`)
   }
   const view = viewOf(ctx, fb)
   guardField(bot, ctx)
@@ -96,24 +97,26 @@ function run(bot, ctx) {
     if (idx < 0) return cropTick(bot, ctx, fb)
     // Own-dug (castle shape): a laid cell went missing (a trampled field
     // cell reads dirt) — back to the builder, which lays it again.
-    const c = blueprint.PLAN[idx]
+    const c = blueprint.planFor(fb)[idx]
     console.log(`farm own-dug cell=${fb.site.x + c.dx},${fb.site.y + c.dy},${fb.site.z + c.dz} kind=${c.kind} requeued`)
     fb.built = false
   }
   progressLine(bot, ctx, fb, idx, Date.now())
   if (idx >= 0 && !ctx.placeInFlight && !view.buildCellsInFlight) {
-    const cell = blueprint.PLAN[idx]
+    const plan = blueprint.planFor(fb)
+    const cell = plan[idx]
     const want = cell.kind === 'clear' ? null : build.wantItem(cell)
     if (want && build.cellLoaded(bot, fb, cell) && countItems(bot, want) <= 0) {
       const item = ITEM[cell.kind]
       let n = 1
       if (!ONE.has(cell.kind)) {
         n = 0
-        for (const c of blueprint.PLAN) if (c.kind === cell.kind && !build.cellDone(bot, fb, c)) n++
+        for (const c of plan) if (c.kind === cell.kind && !build.cellDone(bot, fb, c)) n++
         n = Math.max(1, Math.min(64, n))
       }
       let alts = [item]
-      try { alts = require('../sources').family(item).filter(want) } catch (_) { /* the item alone */ }
+      if (cell.kind === 'ground') alts = [...build.FILLERS] // any cheap fill, dirt first
+      else try { alts = require('../sources').family(item).filter(want) } catch (_) { /* the item alone */ }
       if (!alts.length) alts = [item]
       const c = fromChest(bot, ctx, alts, n) // chests first, the castle's order
       if (c === 'running') return
