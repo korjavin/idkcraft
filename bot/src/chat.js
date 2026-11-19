@@ -562,6 +562,19 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     // qphv.1: the farm order — site chosen by the step (near the castle or house).
     const ctx = bot && bot._tickerCtx
     if (!ctx) return
+    // Owner 2026-11-19: the farm goes where the speaker stands (like 'build here'), not
+    // at the cheapest spot near the castle. Out of sight: the old castle-anchored order.
+    const se = worker.players(bot)[playerName]
+    const pos = se && se.entity && se.entity.position
+    const bp = bot.entity && bot.entity.position
+    const seen = pos && typeof pos.x === 'number' && (!bp || typeof bp.x !== 'number' || Math.hypot(bp.x - pos.x, bp.y - pos.y, bp.z - pos.z) <= BUILD_HERE_RANGE)
+    if (seen) {
+      const at = { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) }
+      ctx.farmBuild = { ordered: true, at }
+      bot.chat(`building a farm here at ${at.x} ${at.y} ${at.z}`)
+      if (ticker) ticker.work()
+      return
+    }
     const fb = ctx.farmBuild
     if (fb && fb.site) {
       const p = require('./behaviours/build').houseProgress(bot, { ...fb, kind: 'farm' })

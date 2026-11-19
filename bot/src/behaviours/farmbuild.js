@@ -63,6 +63,8 @@ function anchorOf(bot, ctx) {
     if (!at) at = h.site
   }
   if (!at) at = bot.entity && bot.entity.position
+  const fb = ctx.farmBuild
+  if (fb && fb.at) at = { ...fb.at, exact: true } // ordered 'build farm': where the owner stood
   return { at, avoid }
 }
 
