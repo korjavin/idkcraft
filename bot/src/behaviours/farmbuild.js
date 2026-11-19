@@ -67,9 +67,14 @@ function anchorOf(bot, ctx) {
 }
 
 // No-site walk (qphv): candidates read unloaded — walk toward the nearest
-// one so its chunk loads, then re-pick. Gives up (the old no-site fail) once
-// the pathfinder sat idle SITE_WALK_IDLE ticks on the same target.
+// one so its chunk loads, then re-pick. A target the pathfinder sat idle on
+// SITE_WALK_IDLE ticks is skipped (its chunk) and the next one tried; after
+// SITE_WALK_FAILS skips the step fails no-site and holds SITE_COOLDOWN_MS,
+// then the episode starts fresh (prod bot5: a kept dead target failed at once forever).
 const SITE_WALK_IDLE = 30
+const SITE_WALK_FAILS = 3
+const SITE_COOLDOWN_MS = 5 * 60 * 1000
+const chunkKey = (x, z) => `${x >> 4},${z >> 4}`
 function walkToUnloaded(bot, fb, r) {
   const t = r.walk
   const w = fb.siteWalk
@@ -80,7 +85,12 @@ function walkToUnloaded(bot, fb, r) {
     let moving = false
     try { moving = bot.pathfinder.isMoving() } catch (_) { /* idle */ }
     if (moving) return true
-    if (++w.idle > SITE_WALK_IDLE) return false // kept: the same target fails at once next time
+    if (++w.idle > SITE_WALK_IDLE) {
+      fb.siteWalk = null
+      fb.siteSkip.add(chunkKey(t.x, t.z))
+      console.log(`farm no-site: unreachable ${t.x},${t.z} skipped=${fb.siteSkip.size}`)
+      return fb.siteSkip.size < SITE_WALK_FAILS
+    }
   }
   try { bot.pathfinder.setGoal(new goals.GoalNearXZ(t.x, t.z, 4)) } catch (_) { /* retry next tick */ }
   return true
@@ -98,16 +108,22 @@ function run(bot, ctx) {
   const fb = ctx.farmBuild || (ctx.farmBuild = {})
   fb.kind = 'farm'
   if (!fb.site) {
+    if (Date.now() < (fb.noSiteUntil || 0)) { stepFailed(ctx, 'no-site'); return }
+    if (!fb.siteSkip) fb.siteSkip = new Set()
     const { at, avoid } = anchorOf(bot, ctx)
-    const r = at ? blueprint.pickSite(bot, at, avoid) : { site: null, tried: 0, reason: 'no-anchor' }
+    const r = at ? blueprint.pickSite(bot, at, avoid, fb.siteSkip) : { site: null, tried: 0, reason: 'no-anchor' }
     const site = r.site
     if (!site && r.walk && walkToUnloaded(bot, fb, r)) return
     if (!site) {
       const w = r.why || {}
-      if (ctx.stepStatus !== 'failed:no-site') console.log(`farm failed:no-site tried=${r.tried} best=none reason=${r.reason} unloaded=${w.unloaded | 0} built=${w.built | 0} castle=${w.castle | 0} lava=${w.lava | 0} deep=${w.deep | 0}`)
+      console.log(`farm failed:no-site tried=${r.tried} best=none reason=${r.reason} unloaded=${w.unloaded | 0} built=${w.built | 0} castle=${w.castle | 0} lava=${w.lava | 0} deep=${w.deep | 0} skipped=${fb.siteSkip.size}`)
+      fb.noSiteUntil = Date.now() + SITE_COOLDOWN_MS
+      fb.siteSkip = null
+      fb.siteWalk = null
       stepFailed(ctx, 'no-site')
       return
     }
+    fb.siteSkip = null
     fb.site = site
     fb.built = false
     console.log(`farm site=${site.x},${site.y},${site.z} cost=${site.cost} cut=${site.cut} fill=${site.fill} tried=${r.tried}`)

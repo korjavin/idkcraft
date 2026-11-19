@@ -154,10 +154,38 @@ describe('farm blueprint (qphv.1)', () => {
     const logs = []
     const orig = console.log
     console.log = (m) => { logs.push(String(m)) }
-    try { for (let t = 0; t < 40 && ctx.stepStatus === 'running'; t++) farmbuild(bot, ctx) } finally { console.log = orig }
+    try { for (let t = 0; t < 200 && ctx.stepStatus === 'running'; t++) farmbuild(bot, ctx) } finally { console.log = orig }
     assert.ok(/^farm no-site: walking to unloaded -?\d+,-?\d+ /.test(logs[0]), logs[0])
     assert.equal(ctx.stepStatus, 'failed:no-site')
-    assert.ok(logs.some((l) => /^farm failed:no-site tried=\d+ best=none reason=unloaded unloaded=\d+ built=0 castle=0 lava=0 deep=0$/.test(l)), logs.join('\n'))
+    assert.ok(logs.some((l) => /^farm failed:no-site tried=\d+ best=none reason=unloaded unloaded=\d+ built=0 castle=0 lava=0 deep=0 skipped=3$/.test(l)), logs.join('\n'))
+  })
+
+  it('a failed walk tries other unloaded targets each episode, then cools down (prod bot5 stuck loop)', () => {
+    const w = world()
+    const bot = mockBot(w)
+    bot.blockAt = () => null
+    bot.pathfinder.setGoal = () => {}
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, castle: null }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => now
+    const episode = () => {
+      ctx.stepStatus = 'running'
+      for (let t = 0; t < 200 && ctx.stepStatus === 'running'; t++) farmbuild(bot, ctx)
+      return logs.splice(0).filter((l) => l.startsWith('farm no-site: walking'))
+    }
+    try {
+      const a = episode()
+      assert.equal(new Set(a).size, 3, a.join('\n'))
+      assert.equal(ctx.stepStatus, 'failed:no-site')
+      now += 60 * 1000
+      assert.equal(episode().length, 0) // cooldown: fails at once, no walk
+      now += 5 * 60 * 1000
+      assert.equal(episode().length, 3) // after the cooldown it walks again, not once ever
+    } finally { console.log = orig; Date.now = realNow }
   })
 
   it('walks toward the nearest unloaded candidate instead of failing', () => {
