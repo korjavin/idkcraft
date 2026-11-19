@@ -195,6 +195,36 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     assert.equal(ctx.castleCursor, 0, 'scan re-reads from 0: the cell is queued again')
     assert.deepStrictEqual(ctx.enclosedEscapes, [])
   })
+  it('own-dug cell in any phase: retired strike cleared, requeued, integrity counts the restore', () => {
+    const castle = require('../src/behaviours/castle')
+    const cells = [0, 1].map((i) => ({ idx: i, kind: 'stone', x: i, y: 65, z: 7 }))
+    const w = new Map(cells.map((c) => [`${c.x},${c.y},${c.z}`, 'stone']))
+    const bot = { blockAt: (p) => ({ name: w.get(`${p.x},${p.y},${p.z}`) || 'air' }) }
+    const st = { site: { x: 0, y: 64, z: 0 }, rot: 0, phase: 'body', blocked: {} }
+    const ctx = {}
+    const logs = []
+    const log = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      castle.progress(bot, st, cells, ctx)
+      w.delete('1,65,7')
+      const bk = `${require('../src/castle').blueprintOf().version}:1`
+      st.blocked[bk] = { tries: 1, until: Date.now() + 60000 }
+      ctx.ownBreakUntil = Date.now() + 60000
+      castle.progress(bot, st, cells, ctx)
+      assert.ok(logs.includes('castle own-dug cell=1,65,7 by=ownbreak requeued'), logs.join('\n'))
+      assert.equal(st.blocked[bk], undefined, 'stale strike cleared: fresh ladder')
+      // struck out while dug: the integrity tick re-arms it, then counts the re-lay
+      st.blocked[bk] = { tries: 3, until: 0, retired: true }
+      ctx.castleIntegrity.at = 0
+      castle.progress(bot, st, cells, ctx)
+      assert.ok(!Object.values(st.blocked).some((e) => e && e.retired), JSON.stringify(st.blocked))
+      w.set('1,65,7', 'stone')
+      ctx.castleIntegrity.at = 0
+      castle.progress(bot, st, cells, ctx)
+    } finally { console.log = log }
+    assert.ok(logs.includes('castle integrity built=2 dug=1 restored=1'), logs.join('\n'))
+  })
   it('yard-protected natural dirt is a cheaper doorway than an own wall (prod 13:00 refused:protected)', async () => {
     const { bot, ctx, blocks } = world()
     blocks.set('2,64,8', 'dirt'); blocks.set('2,65,8', 'dirt')

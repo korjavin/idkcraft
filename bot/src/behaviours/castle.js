@@ -2367,6 +2367,33 @@ function progressByKind(bot, st) {
   return out
 }
 
+// Own-dug integrity (any phase): a laid plan cell that went missing — recover,
+// the dig-approach window, Baritone's own break, anything — gets a fresh
+// strike ladder now and every INTEGRITY_MS while missing, so a strike-out
+// mid-cascade never leaves a hole in a tower until the castle is complete.
+const INTEGRITY_MS = 10 * 60 * 1000
+function ownDugRequeue(ctx, st, lost, esc, cells) {
+  const ig = ctx.castleIntegrity || (ctx.castleIntegrity = { open: new Set(), dug: 0, restored: 0, at: Date.now() })
+  const by = (c) => esc.has(`${c.x},${c.y},${c.z}`) ? 'recover' : ctx.ownBreakUntil > Date.now() ? 'ownbreak' : 'other'
+  for (const c of lost) {
+    ig.dug++
+    ig.open.add(c.idx)
+    if (st.blocked) delete st.blocked[bkey(st, c.idx)]
+    console.log(`castle own-dug cell=${c.x},${c.y},${c.z} by=${by(c)} requeued`)
+  }
+  const now = Date.now()
+  if (now - ig.at < INTEGRITY_MS) return
+  ig.at = now
+  for (const i of ig.open) {
+    const c = cells[i]
+    if (!c) { ig.open.delete(i); continue }
+    if (ctx.castleDug.was.has(i)) { ig.restored++; ig.open.delete(i); continue } // laid again
+    const e = st.blocked && st.blocked[bkey(st, i)]
+    if (e && e.retired) delete st.blocked[bkey(st, i)] // struck out while dug: one more ladder
+  }
+  console.log(`castle integrity built=${st.progress ? st.progress.done : 0} dug=${ig.dug} restored=${ig.restored}`)
+}
+
 function progress(bot, st, cells, ctx) {
   let n = 0
   let total = 0
@@ -2410,6 +2437,7 @@ function progress(bot, st, cells, ctx) {
   const esc = new Set((ctx.enclosedEscapes || []).map((c) => `${c.x},${c.y},${c.z}`))
   // In the stuck window the pathfinder may break laid cells too (guardCastle): re-lay, not damage.
   const mine = ctx.ownBreakUntil > Date.now() ? lost : lost.filter((c) => esc.has(`${c.x},${c.y},${c.z}`))
+  ownDugRequeue(ctx, st, gapAway ? [] : lost, esc, cells)
   if (mine.length) {
     const k = new Set(mine.map((c) => `${c.x},${c.y},${c.z}`))
     ctx.enclosedEscapes = (ctx.enclosedEscapes || []).filter((c) => !k.has(`${c.x},${c.y},${c.z}`))
@@ -2555,7 +2583,7 @@ function far(bot, ctx, st, c, reach, now) {
   if (upkeepKind(st, c) && ctx.castleGoalIdx === c.idx && ctx.lastPathStatus === 'noPath') f.n = Math.max(f.n, STRIKES)
   ctx.castleGoalIdx = -1
   try {
-    const act = f.n < STRIKES ? `reapproach#${f.n}` : !f.build && !c.prep && (clearing(c) || upkeepKind(st, c) === 'litter') ? 'access-build' : !f.dig ? 'dig-approach' : !f.step ? 'step-approach' : 'strike'
+    const act = f.n < STRIKES ? `reapproach#${f.n}` : !f.build && !c.prep ? 'access-build' : !f.dig ? 'dig-approach' : !f.step ? 'step-approach' : 'strike'
     console.log(`approach target=${c.x},${c.y},${c.z} stand=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} reached=true inReach=false dist=${dist.toFixed(1)} -> action=${act}`)
   } catch (_) { /* log best-effort */ }
   if (f.n >= STRIKES) {
@@ -2575,13 +2603,15 @@ function far(bot, ctx, st, c, reach, now) {
     // high scaffold retired on three fast strikes, no ladder ever ran).
     // Access build (reach.js): a block to break with no stand spot in reach
     // gets the body's own pillar/bridge before any strike.
-    if (!f.build && !c.prep && (clearing(c) || upkeepKind(st, c) === 'litter')) { // prep: own scaffold in the site is a new cut (ping-pong)
+    // Every cell (a high place cell too) tries an outside scaffold before the
+    // dig-approach opens a path through own laid cells; only a break target opens own-break.
+    if (!f.build && !c.prep) { // prep: own scaffold in the site is a new cut (ping-pong)
       f.build = true
       f.n = 0
       f.minDist = Infinity
       access.arm(ctx, c, now)
       ctx.lastPathStatus = null // the old no-place verdict is stale: the next goal plans with placing on
-      ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
+      if (clearing(c) || upkeepKind(st, c) === 'litter') ctx.ownBreakUntil = Math.max(ctx.ownBreakUntil || 0, now + DIG_WINDOW_MS)
       return true
     }
     if (!f.dig && upkeepKind(st, c) && otherUpkeepOpen(ctx, st, c, now) && !lastTry(st, c)) { strikeNote(c, 'fast', dist); blockCell(ctx, st, c, 'unreachable', now); return true }
