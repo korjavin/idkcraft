@@ -74,7 +74,7 @@ function footprintCost(col, ox, oz) {
     }
     if (!best || cut + fill < best.cut + best.fill) best = { y, cut, fill }
   }
-  return { ...best, cost: best.cut + best.fill + pen, cs }
+  return { ...best, cost: best.cut + best.fill + pen, wet: cs.some((c) => c.water), cs }
 }
 
 // Prep cells (plan-relative): cuts top-down (their spoil feeds the fills),
@@ -127,7 +127,13 @@ function pickSite(bot, around, avoid = [], skipWalk = null) {
   let best = null
   let walk = null
   let tried = 0
-  for (let r = RADIUS, r0 = -1; r <= MAX_RADIUS && !best && !walk; r0 = r, r += RADIUS) {
+  // exact (an owner's spot): the footprint centred on it first, off the STEP grid
+  if (around.exact && !avoid.some((b) => overlaps(bx, bz, b, 3))) {
+    tried++
+    const f = footprintCost(col, bx, bz)
+    if (!f.bad) best = { ox: bx, oz: bz, d: 0, f }
+  }
+  for (let r = RADIUS, r0 = -1; r <= MAX_RADIUS && (!best || (best.f.wet && !around.exact)) && !walk; r0 = r, r += RADIUS) {
     for (let ox = bx - r; ox <= bx + r; ox += STEP) {
       for (let oz = bz - r; oz <= bz + r; oz += STEP) {
         const d = Math.hypot(ox - bx, oz - bz)
@@ -166,7 +172,9 @@ function prepAt(bot, site) {
   const cols = new Map()
   const col = (x, z) => { const k = `${x},${z}`; if (!cols.has(k)) cols.set(k, column(bot, x, z, site.y + 8)); return cols.get(k) }
   const f = footprintCost(col, site.x, site.z)
-  return f.bad ? null : prepCells(f.cs, site.y)
+  // unloaded: null (retry when near); built (own barn/fence already up) or other: no prep, build on
+  if (f.bad === 'unloaded') return null
+  return f.bad ? [] : prepCells(f.cs, site.y)
 }
 
 module.exports = { prepAt, protects, inFieldAt, PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, siteFor, pickSite, planFor, footprintCost }

@@ -226,6 +226,19 @@ describe('farm blueprint (qphv.1)', () => {
     assert.equal(wet, 0, JSON.stringify(r.site))
   })
 
+  it('a dry site beats a nearer wet one; an owner spot stays exact (Codex fixture)', () => {
+    const w = world()
+    const inR = (x, z, ox, oz) => x >= ox && x < ox + fp.W && z >= oz && z < oz + fp.D
+    for (let x = -60; x <= 60; x++) for (let z = -60; z <= 60; z++) if (!inR(x, z, -13, -4) && !inR(x, z, 17, -4)) w.set(x, 63, z, 'oak_planks')
+    w.set(-13 + 3, 63, -4 + 3, 'water')
+    for (let z = -4; z < -4 + fp.D; z++) { w.set(17, 64, z, 'dirt'); w.set(17, 65, z, 'dirt') }
+    const r = fp.pickSite(mockBot(w), { x: 0, y: 64, z: 0 })
+    assert.ok(r.site, r.reason)
+    assert.deepEqual([r.site.x, r.site.z], [17, -4])
+    const e = fp.pickSite(mockBot(w), { x: -13 + fp.W / 2, y: 64, z: -4 + fp.D / 2, exact: true })
+    assert.deepEqual([e.site.x, e.site.z], [-13, -4])
+  })
+
   it('widens the radius when the near ring is all built', () => {
     const w = world()
     const inner = (p) => Math.abs(p.x) < 50 && Math.abs(p.z) < 50
@@ -311,6 +324,15 @@ describe('farmbuild step (qphv.1)', () => {
       assert.equal(ctx.stepStatus, 'failed:site-stalled')
       assert.equal(ctx.farmBuild.ordered, true)
     } finally { console.log = orig; Date.now = realNow }
+  })
+
+  it('prepAt: a partly built farm (own barn planks) still restores, unloaded waits (Codex)', () => {
+    const w = world()
+    w.set(2, 64, 2, 'oak_planks')
+    assert.ok(Array.isArray(fp.prepAt(mockBot(w), { x: 0, y: 64, z: 0 })))
+    const b = mockBot(w)
+    b.blockAt = () => null
+    assert.equal(fp.prepAt(b, { x: 0, y: 64, z: 0 }), null)
   })
 
   it('is feasible by day for an ordered farm or a complete castle, never once built', () => {

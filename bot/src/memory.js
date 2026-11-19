@@ -280,7 +280,10 @@ const CASTLE_BLOCKED_MAX = 4096
 function farmOf(f) {
   const s = f && f.site
   if (!s || ![s.x, s.y, s.z].every(Number.isFinite)) return null
-  return { site: { x: s.x | 0, y: s.y | 0, z: s.z | 0 }, built: f.built === true, ordered: f.ordered === true }
+  const out = { site: { x: s.x | 0, y: s.y | 0, z: s.z | 0 }, built: f.built === true, ordered: f.ordered === true }
+  // owner provenance survives a restart (no auto-relocation of an owner's spot)
+  if (f.at && [f.at.x, f.at.y, f.at.z].every(Number.isFinite)) out.at = { x: f.at.x | 0, y: f.at.y | 0, z: f.at.z | 0 }
+  return out
 }
 
 function castleOf(c) {
