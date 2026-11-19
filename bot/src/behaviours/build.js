@@ -797,6 +797,8 @@ function builderCells(bot, home, skipped) {
       if (!BUILDER_KINDS.has(cell.kind) || cell.floor || skip.has(i)) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
       if (!cellLoaded(bot, home, cell) || cellDone(bot, home, cell)) continue
+      // an unsupported fill (hole under it) goes per-cell: supportBelow fills its column bottom-up
+      if (cell.kind === 'fill' && !findRef(bot, cellAbs(home, cell), { excludeTop: true })) continue
       // 8542: BuilderProcess never swapped bed-floor dirt (gallery rig: 3x
       // build-stall on both cells); the per-cell path digs it, the batch fills the hole.
       if (cell.bed && NATURAL_SOLID.has(blockNameAt(bot, cellAbs(home, cell)))) continue
@@ -1149,7 +1151,8 @@ function build(bot, ctx, target, state) {
   ctx.buildSiteWalk = null
   // A fill with no floor or side support (a hole deeper than the plan, a
   // cave, a misread column) builds its column bottom-up: the lowest open block first.
-  if (FILL_KINDS.has(cell.kind) && !findRef(bot, p, { excludeTop: true })) p = supportBelow(bot, p)
+  const unsupported = FILL_KINDS.has(cell.kind) && !findRef(bot, p, { excludeTop: true })
+  if (unsupported) p = supportBelow(bot, p)
   // Per-cell attempt budget (ipn.10): ticks on one cell without progress —
   // no advance past the max cell, no displacement past CELL_PROGRESS —
   // skip it like a refusal. Keyed by site, so a home move re-arms without
@@ -1246,7 +1249,7 @@ function build(bot, ctx, target, state) {
   // door/table/clear fall through to the per-cell path below.
   // A site still in prep (farm cut/fill) is never batched over: the barn
   // planks would wait on the ground and fail no-planks mid-prep.
-  if (typeof bot.buildCells === 'function' && cell.phase !== 'prep' && builderBatch(bot, ctx)) return
+  if (typeof bot.buildCells === 'function' && cell.phase !== 'prep' && !unsupported && builderBatch(bot, ctx)) return
 
   const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
   if (!item && cell.kind !== 'clear') {
