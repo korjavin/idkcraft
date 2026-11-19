@@ -41,6 +41,7 @@ const BEHAVIOURS = {
   chestSearch: require('./chestsearch'),
   reforest: require('./reforest'),
   farm: require('./farm'),
+  farmbuild: require('./farmbuild'),
   deliver: require('./deliver'),
   stockpile: require('./stockpile'),
   gear: require('./gear'),

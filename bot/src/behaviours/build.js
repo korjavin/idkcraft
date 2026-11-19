@@ -199,6 +199,7 @@ const PLANK_COUNT_V2 = BLUEPRINT_V2.filter((c) => c.kind === 'planks').length
 const NO_PLAN = Object.freeze([])
 function blueprintFor(home) {
   if (home && home.kind === 'castle') return NO_PLAN
+  if (home && home.kind === 'farm') return require('../farm-blueprint').PLAN // qphv.1
   return home && home.v === 2 ? BLUEPRINT_V2 : BLUEPRINT
 }
 
@@ -269,6 +270,7 @@ function cellAbs(home, cell) {
 // bedrooms (the partition posts themselves are legit targets).
 function isDoorwayOrInterior(cell, home) {
   if (!cell || typeof cell.dx !== 'number') return false
+  if (home && home.kind === 'farm') return false // the barn has no rooms to keep clear
   if (home && home.v === 2) {
     if (cell.dy > 1) return false // the roof above is always legit
     if (cell.dx === 3 && cell.dz === 0) return true
@@ -343,6 +345,7 @@ function cellDone(bot, home, cell) {
   if (name == null) return false
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
+  if (FARM_KINDS[cell.kind]) return FARM_KINDS[cell.kind](name)
   if (cell.kind === 'fill') {
     if ((cell.sill || cell.bed) && process.env.BOT_BODY === 'baritone' && NATURAL_SOLID.has(name) && !SILL_KEEP.has(name) &&
       !(cell.bed && String(blockNameAt(bot, cellAbs(home, cell).offset(0, 1, 0))).endsWith('_bed'))) return false
@@ -575,8 +578,19 @@ function findItem(bot, pred) {
   return null
 }
 
+// Farm kinds (qphv.1): what stands in a done cell, and the item that makes it.
+const FARM_KINDS = {
+  fence: (n) => n.endsWith('_fence') && n !== 'nether_brick_fence',
+  gate: (n) => n.endsWith('_fence_gate'),
+  chest: (n) => n === 'chest',
+  water: (n) => n === 'water',
+  farmland: (n) => n === 'farmland',
+}
+const FARM_ITEMS = { water: (n) => n === 'water_bucket', farmland: (n) => n.endsWith('_hoe') }
 function wantItem(cell) {
   if (cell.kind === 'table') return (n) => n === 'crafting_table'
+  if (FARM_ITEMS[cell.kind]) return FARM_ITEMS[cell.kind]
+  if (FARM_KINDS[cell.kind]) return FARM_KINDS[cell.kind]
   if (cell.kind === 'door') return (n) => n.endsWith('_door')
   return (n) => n.endsWith('_planks')
 }
@@ -1061,7 +1075,7 @@ function build(bot, ctx, target, state) {
   guardOwnWalls(bot, ctx)
   // Claim the table coords the moment the workbench stands (see makeHome):
   // another table placed here earlier (or by anyone) counts the same.
-  if (!ctx.home.table && cellDone(bot, ctx.home, blueprintFor(ctx.home)[0])) {
+  if (!ctx.home.table && blueprintFor(ctx.home)[0].kind === 'table' && cellDone(bot, ctx.home, blueprintFor(ctx.home)[0])) {
     const t = blueprintFor(ctx.home)[0]
     ctx.home.table = new Vec3(ctx.home.site.x + t.dx, ctx.home.site.y + t.dy, ctx.home.site.z + t.dz)
   }
@@ -1084,7 +1098,7 @@ function build(bot, ctx, target, state) {
     ctx.home.built = true
     ctx.stepStatus = 'done'
     const s = ctx.home.site
-    try { bot.chat(`home done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
+    try { bot.chat(`${ctx.home.kind === 'farm' ? 'farm' : 'home'} done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
     return
   }
   const plan = blueprintFor(ctx.home)
@@ -1188,7 +1202,7 @@ function build(bot, ctx, target, state) {
 
   // Progress line, at most one per 10 s.
   const now = Date.now()
-  if (now - (ctx.buildLastProgressLog || 0) >= 10000) {
+  if (ctx.home.kind !== 'farm' && now - (ctx.buildLastProgressLog || 0) >= 10000) { // the farm logs its own line
     ctx.buildLastProgressLog = now
     // World truth only: skipped cells are not built (task.houseProgress).
     const prog = houseProgress(bot, ctx.home)
@@ -1230,7 +1244,7 @@ function build(bot, ctx, target, state) {
           // cell above it — GoalPlaceBlock's bridge side pick aims at a wall
           // column, and sight is not needed (place.once checks reach only,
           // baritone/bridge/PROTOCOL.md dig/place table).
-          : (cell.floor || cell.bed) ? new goals.GoalNear(p.x, p.y + 1, p.z, 2) // 8542: bed floor under the roof too
+          : (cell.floor || cell.bed || cell.kind === 'farmland' || cell.kind === 'water') ? new goals.GoalNear(p.x, p.y + 1, p.z, 2) // 8542: bed floor under the roof too
           : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
     } catch (_) { /* retry next tick */ }
     return
@@ -1273,6 +1287,10 @@ function build(bot, ctx, target, state) {
   if (cellDone(bot, ctx.home, cell)) return // lagged double-place guard
   if (cell.kind === 'clear') {
     digClear(bot, ctx, idx, p)
+    return
+  }
+  if (cell.kind === 'farmland' || cell.kind === 'water') {
+    useCell(bot, ctx, idx, p, item, cell)
     return
   }
   let ref
@@ -1331,7 +1349,7 @@ function build(bot, ctx, target, state) {
       // rule is checked without the home (digClear precedent).
       // ponytail: natural names only; Baritone scaffolds cobble when it
       // holds no dirt, and foreign cobble here still refuses — widen if seen.
-      const ground = (cell.kind === 'planks' || cell.bed) && NATURAL_SOLID.has(occupier) // 8542: bed floor too
+      const ground = (cell.kind === 'planks' || cell.bed || FARM_KINDS[cell.kind]) && NATURAL_SOLID.has(occupier) // 8542: bed floor too; qphv.1 farm bumps
       if (occupier != null && wantItem(cell)(occupier)) {
         ctx.buildFails = 0 // landed while we walked: someone (us) placed it
       } else if (occupier != null && occupier !== 'air' && (isReplaceable(occupier) || clearableFillGround(bot, p, cell) ||
@@ -1353,6 +1371,39 @@ function build(bot, ctx, target, state) {
         }
       }
       if (fails() >= 3) skipCell(ctx, idx, p, occupier || 'refused')
+    } finally {
+      ctx.placeInFlight = false
+      ctx.buildFlightSince = null
+    }
+  })().catch(() => { ctx.placeInFlight = false; ctx.buildFlightSince = null })
+}
+
+// Use-cell flight (qphv.1): farmland = the hoe used on the soil (flora above
+// dug first, a hoe needs air there); water = the bucket poured into the
+// cleared pit (buckets pour through use, the farm.js lesson). A throw
+// strikes like a refusal; a silent no-op is caught by the cell budget.
+function useCell(bot, ctx, idx, p, item, cell) {
+  ctx.placeInFlight = true
+  ctx.buildFlightSince = Date.now()
+  const flightIdx = idx
+  ;(async () => {
+    try {
+      await bot.equip(item, 'hand')
+      if (cell.kind === 'farmland') {
+        const up = bot.blockAt(p.offset(0, 1, 0))
+        if (up && up.name !== 'air' && isReplaceable(up.name)) await bot.dig(up)
+        const b = bot.blockAt(p)
+        if (!b || (b.name !== 'grass_block' && b.name !== 'dirt')) throw new Error(`untillable-${b ? b.name : 'unloaded'}`)
+        await bot.activateBlock(b)
+      } else {
+        await bot.lookAt(new Vec3(p.x + 0.5, p.y, p.z + 0.5))
+        await bot.activateItem()
+      }
+      if (ctx.buildFailIdx === flightIdx) ctx.buildFails = 0
+    } catch (err) {
+      if (ctx.buildFailIdx !== flightIdx) return // stale verdict (ipn.10)
+      ctx.buildFails = (ctx.buildFails || 0) + 1
+      if (ctx.buildFails >= 3) skipCell(ctx, idx, p, (err && err.message) || 'use-refused')
     } finally {
       ctx.placeInFlight = false
       ctx.buildFlightSince = null
@@ -1428,3 +1479,4 @@ module.exports.SKY_WALK_CAP = SKY_WALK_CAP
 module.exports.CELL_HARD_CAP = CELL_HARD_CAP
 module.exports.FLIGHT_TIMEOUT_MS = FLIGHT_TIMEOUT_MS
 module.exports.houseProgress = houseProgress
+module.exports.wantItem = wantItem

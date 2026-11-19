@@ -4132,7 +4132,9 @@ function taskTick(bot, ctx, now = Date.now()) {
     try {
       const cs = ctx.castle
       const d = kind === 'house' ? (houseCur && houseCur.done) : (cs && cs.site && cs.progress ? cs.progress.done : null)
-      require('./episodes').rateTick(bot, ctx, kind, d, now)
+      // qphv.1: with no castle/house/order goal, an unbuilt farm owns the rate line.
+      const fd = kind ? null : require('./behaviours/farmbuild').progressDone(bot, ctx)
+      require('./episodes').rateTick(bot, ctx, fd != null ? 'farm' : kind, fd != null ? fd : d, now)
     } catch (_) { /* 8hpy.5 rate best-effort */ }
 
     if (!kind) {

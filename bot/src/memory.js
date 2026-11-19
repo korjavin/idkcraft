@@ -276,6 +276,13 @@ function homeOf(h) {
 // a known phase, blocked entries '<v>:<idx>' -> { tries, until, why? }.
 const CASTLE_PHASES = new Set(['prep', 'body', 'moat', 'complete'])
 const CASTLE_BLOCKED_MAX = 4096
+// Farm record (qphv.1): the site and the flags, nothing else.
+function farmOf(f) {
+  const s = f && f.site
+  if (!s || ![s.x, s.y, s.z].every(Number.isFinite)) return null
+  return { site: { x: s.x | 0, y: s.y | 0, z: s.z | 0 }, built: f.built === true, ordered: f.ordered === true }
+}
+
 function castleOf(c) {
   try {
     if (!c || typeof c !== 'object') return null
@@ -539,7 +546,9 @@ function snapshot(bot, ctx, now) {
   } catch (_) { /* chests best-effort */ }
   // Episodes (8hpy.5): undefined for a ctx that never recorded — save keeps the file's list.
   const episodes = Array.isArray(ctx.episodes) ? require('./episodes').of(ctx.episodes) : undefined
-  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle, sheep, flat, chests, episodes }
+  // Farm (qphv.1): undefined for a ctx without one — save keeps the file's record.
+  const farm = farmOf(ctx.farmBuild) || undefined
+  return { v: VERSION, world, savedAt: t, homes, resources: items, visited, danger: spots, follow, gear, castle, sheep, flat, chests, episodes, farm }
 }
 
 // Gear ledger maps, sanitized both ways (own write, but a hand-edited
@@ -597,7 +606,7 @@ function save(bot, ctx, file, now) {
     // An empty snapshot carries no information (revmux 01-review): writing
     // it would clobber a real file with nothing — e.g. an 'end' before the
     // spawn handler ever restored. Skip the write entirely.
-    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle && !doc.sheep && !doc.flat && !(doc.chests && doc.chests.length) && !(doc.episodes && doc.episodes.length)
+    const empty = !doc.homes.length && !doc.resources.length && !doc.visited.length && !doc.danger.length && !doc.follow && !doc.gear && !doc.castle && !doc.sheep && !doc.flat && !(doc.chests && doc.chests.length) && !(doc.episodes && doc.episodes.length) && !doc.farm
     f = file || fileFor(process.env, bot && bot.username)
     let prev = null
     try {
@@ -624,6 +633,7 @@ function save(bot, ctx, file, now) {
     // Chests: an unrestored ctx (undefined) never wipes the file's record.
     const prevChests = prev && prev.v === VERSION && prev.world === doc.world ? chestSpotsOf(prev.chests) : null
     if (doc.chests === undefined && prevChests && prevChests.length) doc.chests = prevChests
+    if (doc.farm === undefined && prev && prev.v === VERSION && prev.world === doc.world && farmOf(prev.farm)) doc.farm = farmOf(prev.farm)
     if (doc.episodes === undefined && prev && prev.v === VERSION && prev.world === doc.world && Array.isArray(prev.episodes)) doc.episodes = prev.episodes
     // Another world's flat would make main() rejoin an empty server forever
     // (hasFlat cannot check the world before login): replace that file.
@@ -666,6 +676,8 @@ function restore(bot, ctx, file, now) {
     }
     // Castle (g0z.3): a restart resumes the project as stored — the
     // order-time site checks never re-run over it.
+    const farm = farmOf(doc.farm)
+    if (farm) ctx.farmBuild = farm
     const castle = castleOf(doc.castle)
     if (castle) {
       ctx.castle = rearmPark(castle)

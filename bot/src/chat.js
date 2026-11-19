@@ -347,7 +347,7 @@ function doPlan(bot, ticker, ctx, playerName, username, senderUuid, msg) {
 // vf8e.6: the owner orders that end a running LLM plan.
 // Fixed argless commands a one-edit typo maps to ('follwo me'), only when
 // exactly one is that close; short words (stop, share) are never guessed.
-const TYPO_COMMANDS = ['follow me', 'go work', 'come home', 'go home', 'go castle', 'build here', 'build castle', 'lead anyway']
+const TYPO_COMMANDS = ['follow me', 'go work', 'come home', 'go home', 'go castle', 'build here', 'build castle', 'build farm', 'lead anyway']
 function editDist1(a, b) {
   if (a === b) return 0
   if (Math.abs(a.length - b.length) > 1) return 2
@@ -370,7 +370,7 @@ function fixTypo(msg) {
   console.log(`chat typo "${msg}" -> "${hits[0]}"`)
   return hits[0]
 }
-const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build castle(?: \d+)?|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|reforest(?: \d+)?|share|bring me(?: .*)?|make(?: .*)?|craft(?: .*)?)$/
+const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build farm|build castle(?: \d+)?|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|reforest(?: \d+)?|share|bring me(?: .*)?|make(?: .*)?|craft(?: .*)?)$/
 // vf8e.17: the `do <step> [count]` grammar. Only grammar-shaped lines take
 // the deterministic verb (a valid one replaces the running plan through
 // installPlan); anything else starting with `do ` (`do you have coal`)
@@ -557,6 +557,19 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     if (ticker) ticker.work()
     const st = (site && site.site) || {}
     bot.chat(`building a home at ${st.x} ${st.y} ${st.z}`)
+  } else if (msg === 'build farm') {
+    if (!ownerOk) return
+    // qphv.1: the farm order — site chosen by the step (near the castle or house).
+    const ctx = bot && bot._tickerCtx
+    if (!ctx) return
+    const fb = ctx.farmBuild
+    if (fb && fb.site) {
+      const p = require('./behaviours/build').houseProgress(bot, { ...fb, kind: 'farm' })
+      bot.chat(`farm at ${fb.site.x} ${fb.site.y} ${fb.site.z}: ${fb.built ? 'built' : `${p.done}/${p.total}`}`)
+      if (fb.built) return
+    } else bot.chat('building a farm')
+    ctx.farmBuild = { ...(fb || {}), ordered: true }
+    if (ticker) ticker.work()
   } else if (/^build castle(?: \d+)?$/.test(msg) || msg === 'castle' || msg.startsWith('castle ') || msg === 'repair') {
     if (!ownerOk) return
     const reply = castleChat(bot, ticker, playerName, msg === 'repair' ? 'castle repair' : msg)

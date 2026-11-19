@@ -19,6 +19,7 @@ const COMMANDS = [
   { names: ['status'], usage: 'status', what: 'reports what the bot does, who chose it and why, what blocks it', example: 'status' },
   { names: ['find me'], usage: 'find me <block>', what: 'finds the nearest block within 48 blocks and leads you there', example: 'find me iron' },
   { names: ['build here'], usage: 'build here', what: 'moves the house site next to you and builds there', example: 'build here' },
+  { names: ['build farm'], usage: 'build farm', what: 'builds a farm near the castle or house: a barn with a chest, a fenced pen with a gate, and a watered field; says progress when one exists', example: 'build farm' },
   { names: ['build castle', 'castle'], usage: 'build castle [N] | castle [stop|go|repair|tidy|forget|upgrade]', what: 'builds a stone castle over hours; castle reports progress, stop/go park and resume, repair fixes damage, tidy revisits, forget drops it, upgrade adds stairs', example: 'build castle' },
   { names: ['repair'], usage: 'repair', what: 'castle repair: restores missing cells, fills floor holes, clears interior clutter (any castle, finished or not)', example: 'repair' },
   { names: ['bring me'], usage: 'bring me <item> [count]', what: 'brings an item from pack or chest, or digs blocks, to your feet', example: 'bring me coal 5' },
