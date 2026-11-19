@@ -1130,6 +1130,7 @@
   },
   "enclosedUntil": {
     "writers": [
+      "src/behaviours/recover.js",
       "src/enclosed.js"
     ],
     "owner": "src/enclosed.js"
@@ -2207,6 +2208,18 @@
     ],
     "owner": "src/behaviours/tablespot.js"
   },
+  "recoverDeadEnd": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
+  "recoverDeadLog": {
+    "writers": [
+      "src/behaviours/recover.js"
+    ],
+    "owner": "src/behaviours/recover.js"
+  },
   "recoverLatch": {
     "writers": [
       "src/behaviours/recover.js",
@@ -2220,6 +2233,12 @@
       "src/behaviours/recover.js"
     ],
     "owner": "src/behaviours/recover.js"
+  },
+  "recoverTally": {
+    "writers": [
+      "src/behaviours/util.js"
+    ],
+    "owner": "src/behaviours/util.js"
   },
   "recovery": {
     "writers": [

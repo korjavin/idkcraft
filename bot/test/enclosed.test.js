@@ -361,4 +361,31 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
       assert.equal(enclosed.stuckDeny(bot, ctx, wall), 'relooped')
     } finally { console.log = orig }
   })
+  it('recover menu asks the deny predicates; K failed escapes in place escalate to enclosed (prod bot3/bot4 2026-11-19)', () => {
+    const recover = require('../src/behaviours/recover')
+    const { bot, ctx } = world()
+    bot.inventory = { items: () => [{ name: 'iron_pickaxe', count: 1 }] }
+    ctx.recovery = {}
+    ctx.stuck = { by: 'nopath', goal: { x: 3.5, y: 64, z: 0.5 } } // north, through the own wall
+    const logs = []
+    const orig = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      let facts = recover.recoverFacts(bot, ctx, null, null)
+      assert.equal(facts.throughBlocked, true)
+      assert.equal(facts.throughDeny, 'own-walkable')
+      assert.equal(recover.RECOVER_MENU.dig_through.feasible(facts, ctx), false, 'a refused dig is never offered')
+      const bp = bot.entity.position
+      for (let i = 1; i < recover.DEAD_END_FAILS; i++) recover.noteDeadEnd(ctx, bp, 'sidestep', 'failed:no-progress')
+      assert.ok(!(ctx.enclosedUntil > Date.now()))
+      recover.noteDeadEnd(ctx, bp, 'sidestep', 'failed:no-progress')
+      assert.ok(ctx.enclosedUntil > Date.now(), 'escalated')
+      assert.ok(logs.some((l) => /^recover dead-end action=sidestep why=no-progress fails=4 /.test(l)), logs.join('\n'))
+      facts = recover.recoverFacts(bot, ctx, null, null)
+      assert.equal(facts.throughDeny, null)
+      assert.equal(facts.pillarDeny, null, 'enclosed lifts the yard pillar guard')
+      assert.equal(recover.RECOVER_MENU.dig_through.feasible(facts, ctx), true, 'enclosed: own wall is the last resort')
+      assert.equal(recover.RECOVER_MENU.sidestep.feasible(facts, ctx), false)
+    } finally { console.log = orig }
+  })
 })
