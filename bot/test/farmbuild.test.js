@@ -208,6 +208,13 @@ describe('farm blueprint (qphv.1)', () => {
     assert.ok(goal && goal.x === r.walk.x && goal.z === r.walk.z)
   })
 
+  it('an ordered spot (exact) sites the farm on the owner, not the cheapest spot (owner 2026-11-19)', () => {
+    const w = world()
+    const r = fp.pickSite(mockBot(w), { x: 100, y: 64, z: 40, exact: true })
+    assert.ok(r.site, r.reason)
+    assert.ok(Math.hypot(r.site.x + fp.W / 2 - 100, r.site.z + fp.D / 2 - 40) < 3, JSON.stringify(r.site))
+  })
+
   it('widens the radius when the near ring is all built', () => {
     const w = world()
     const inner = (p) => Math.abs(p.x) < 50 && Math.abs(p.z) < 50

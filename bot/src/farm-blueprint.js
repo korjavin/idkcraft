@@ -138,7 +138,7 @@ function pickSite(bot, around, avoid = [], skipWalk = null) {
         if (f.bad) {
           why[f.bad]++
           if (f.bad === 'unloaded' && (!walk || d < walk.d) && !(skipWalk && skipWalk.has(`${f.x >> 4},${f.z >> 4}`))) walk = { x: f.x, z: f.z, d }
-        } else if (!best || f.cost < best.f.cost || (f.cost === best.f.cost && d < best.d)) best = { ox, oz, d, f }
+        } else if (!best || (around.exact ? d < best.d : f.cost < best.f.cost || (f.cost === best.f.cost && d < best.d))) best = { ox, oz, d, f } // exact: nearest valid spot to the owner's
       }
     }
   }
