@@ -3337,6 +3337,7 @@ async function decide(bot, ctx) {
   const foodRecovery = require('./behaviours/food-recovery')
   const foodExit = prev === 'foodRecovery' && !foodRecovery.needed(bot, ctx, facts)
   if (foodExit) foodRecovery.invalidate(ctx)
+  if (prev === 'foodRecovery' && finished && status !== 'done') foodRecovery.failed(ctx)
   if (prev === 'foodRecovery' && !finished && !foodExit) return { action: prev, sprint: false, source: 'goal-fsm' }
   if (prev !== 'foodRecovery' && foodRecovery.available(bot, ctx, facts)) {
     const choice = { step: 'foodRecovery', source: 'survival', fsm: 'foodRecovery' }
