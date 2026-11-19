@@ -20,7 +20,7 @@ const { PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, inField, protects, inFi
 // shortcut: logs/leaves are no prep cut (build 'clear' digs natural ground only),
 // so tree columns only cost a penalty; add a log cut if prod picks wooded sites.
 const TREE_COST = 20 // per column
-const WATER_COST = 10 // per column, on top of the fill down to the bed
+const WATER_COST = 500 // per column: any dry site wins (owner 2026-11-19: bot2 built its farm over water and stalled filling it)
 const SOIL = new Set(['grass_block', 'dirt'])
 const WET = new Set(['water', 'bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
 

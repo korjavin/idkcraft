@@ -215,6 +215,17 @@ describe('farm blueprint (qphv.1)', () => {
     assert.ok(Math.hypot(r.site.x + fp.W / 2 - 100, r.site.z + fp.D / 2 - 40) < 3, JSON.stringify(r.site))
   })
 
+  it('prefers a far dry site over a near pond (owner: farm built over water)', () => {
+    const w = world()
+    const pond = (p) => p.x >= -20 && p.x <= 20 && p.z >= -20 && p.z <= 20
+    w.blockAt = ((orig) => (p) => (p.y === 63 && pond(p) ? { ...orig(p), name: 'water', boundingBox: 'empty' } : orig(p)))(w.blockAt)
+    const r = fp.pickSite(mockBot(w), { x: 0, y: 64, z: 0 })
+    assert.ok(r.site, r.reason)
+    let wet = 0
+    for (let x = r.site.x; x < r.site.x + fp.W; x++) for (let z = r.site.z; z < r.site.z + fp.D; z++) if (pond({ x, z })) wet++
+    assert.equal(wet, 0, JSON.stringify(r.site))
+  })
+
   it('widens the radius when the near ring is all built', () => {
     const w = world()
     const inner = (p) => Math.abs(p.x) < 50 && Math.abs(p.z) < 50
