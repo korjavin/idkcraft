@@ -10,6 +10,7 @@ const craftany = require('./craftany')
 const { Vec3 } = require('vec3')
 
 const RETRY_MS = 60000
+const RETRY_MAX_MS = 900000 // repeated empty runs: 1, 2, 4, 8, 15 min
 const WINDOW_TIMEOUT_MS = 30000
 const BREAD_TIMEOUT_MS = 120000 // walk + table make/place + craft, then the RETRY_MS cooldown
 // Chest loop: a healthy but hungry body with no meal also draws from a chest
@@ -48,12 +49,19 @@ function noMeal(bot, ctx) {
   try { const items = bot.inventory.items(); return Array.isArray(items) && !require('../reflexes').mealFor(bot, ctx || {}, items) } catch (_) { return false }
 }
 
+function hasMeal(bot, ctx) {
+  try { const items = bot.inventory.items(); return Array.isArray(items) && !!require('../reflexes').mealFor(bot, ctx || {}, items) } catch (_) { return false }
+}
+
 function hungry(bot, ctx, facts) {
   if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || !foodTime(bot, facts) || !(bot.food < HUNGRY_FOOD) || facts.health < 6) return false
   if (ctx && (ctx.llmOrder || ctx.taskPlanArgs)) return false
   // Source ladder (src/source-ladder.js): pack bread, a near chest, then a
   // hunt; chestSearch (the long-trip rung) only once none of these serves.
-  return noMeal(bot, ctx) && !!(breadReady(bot, ctx) || (!chestsDry(ctx) && bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT, bot))) || forage.foodTarget(bot, ctx, true) || ripeCrop(bot, ctx))
+  if (!noMeal(bot, ctx)) return false
+  const src = !!(breadReady(bot, ctx) || (!chestsDry(ctx) && bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT, bot))) || forage.foodTarget(bot, ctx, true) || ripeCrop(bot, ctx))
+  if (ctx) ctx.foodNoSource = !src // stall/JEV context: hungry with nothing to fetch, hunt or harvest
+  return src
 }
 
 function needed(bot, ctx, facts) {
@@ -105,8 +113,22 @@ function breadReady(bot, ctx) {
   try { return !!craftany.planCraft(bot, ctx, ['bread'], 1).ok } catch (_) { return false }
 }
 
+// What the food sources are now: a cooldown lifts early once this changes
+// (a new chest, animal or crop), not while the same failing source stands.
+function sourceSig(bot, ctx) {
+  const k = (o) => o ? [o.name, o.id, o.x, o.y, o.z, o.position && o.position.x, o.position && o.position.z].join(',') : '-'
+  try { return [k(!chestsDry(ctx) && bring.pickChest(bot, ctx, chestState(ctx, 1, bot))), k(forage.foodTarget(bot, ctx, true)), k(ripeCrop(bot, ctx))].join('|') } catch (_) { return '' }
+}
+
 function available(bot, ctx, facts) {
-  if (!needed(bot, ctx, facts) || (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt)) return false
+  if (!needed(bot, ctx, facts)) return false
+  if (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt) {
+    const sig = sourceSig(bot, ctx)
+    if (ctx.foodRecoverySig == null) ctx.foodRecoverySig = sig
+    if (sig === ctx.foodRecoverySig) return false
+    console.log(`food recovery cooldown lifted: sources changed`)
+    ctx.foodRecoveryRetryAt = 0
+  }
   if (ctx.foodRecoveryFlight) return false
   if (breadReady(bot, ctx)) return true
   // ladder: near chest -> hunt (obtain) -> chestSearch, the far rung, once this holds
@@ -131,14 +153,29 @@ function invalidate(ctx) {
 function failed(ctx) {
   const r = ctx && ctx.foodRecovery
   if (!r || !r.valid) return
-  if (r.phase === 'bread') ctx.foodBreadRetryAt = Date.now() + LOW_HP_GATE_MS
-  else ctx.foodRecoveryRetryAt = Date.now() + RETRY_MS
+  if (r.phase === 'bread') { ctx.foodBreadRetryAt = Date.now() + LOW_HP_GATE_MS; r.noStrike = true }
   console.log(`food recovery result=failed phase=${r.phase} status=${ctx.stepStatus}`)
   cancel(ctx, r)
 }
 
+// Any end of a run that ate nothing (fail, idle no-target, preempt, retry,
+// done with nothing eaten) is a strike: the cooldown doubles on repeats, so a
+// trigger with no workable source cannot restart every tick. Eating resets it.
+function strike(ctx) {
+  const n = ctx.foodRecoveryFails = (ctx.foodRecoveryFails || 0) + 1
+  const ms = Math.min(RETRY_MS * 2 ** (n - 1), RETRY_MAX_MS)
+  ctx.foodRecoveryRetryAt = Date.now() + ms
+  ctx.foodRecoverySig = null
+  console.log(`food recovery cooldown strikes=${n} retry_in=${Math.round(ms / 1000)}s`)
+}
+
 // A cancelled bread run must not leave its craftany run for the next start.
 function cancel(ctx, r) {
+  if (r.valid && !r.noStrike) {
+    const b = r.bot
+    if (b && (b.food > r.startFood || hasMeal(b, ctx))) ctx.foodRecoveryFails = 0
+    else strike(ctx)
+  }
   r.valid = false
   if (r.bread && ctx.craftany && ctx.craftany.key === 'breadx1') ctx.craftany = null
 }
@@ -149,6 +186,7 @@ function run(bot, ctx) {
     // food<6 is an emergency like low hp: chest, then hunt (prod: Easy holds hp at 10)
     const hungryRun = !needsFood({ health: bot.health, food: bot.food })
     r = ctx.foodRecovery = { valid: true, hungry: hungryRun, chest: chestState(ctx, bot.health < 6 ? 1 : HUNGRY_WANT, bot), phase: breadReady(bot, ctx) ? 'bread' : chestsDry(ctx) ? 'hunt' : 'chest', startFood: bot.food }
+    Object.defineProperty(r, 'bot', { value: bot }) // for cancel()'s ate-check; kept out of JSON logs
     ctx.lastPathStatus = 'none'
     require('../food-rate').note(ctx, 'recoveries')
     console.log(`food recovery start health=${bot.health} food=${bot.food} edible=0${hungryRun ? ' why=hungry' : ''}`)
@@ -158,9 +196,8 @@ function run(bot, ctx) {
     bot.food < 18 && (r.hungry || needsFood({ health: bot.health, food: bot.food }))
   const done = (retry) => {
     if (!valid()) return
-    r.valid = false
-    if (retry) ctx.foodRecoveryRetryAt = Date.now() + RETRY_MS
     console.log(`food recovery result=${retry ? 'retry' : 'acquired'} health=${bot.health} food=${bot.food}`)
+    cancel(ctx, r) // strikes unless food rose or a meal is in the pack
     stepDone(ctx)
   }
   if (!valid()) { cancel(ctx, r); return }
@@ -196,8 +233,7 @@ function run(bot, ctx) {
   if (r.phase === 'chest') {
     if (ctx.foodRecoveryFlight) {
       if (ctx.foodRecoveryFlight.owner === r && Date.now() - ctx.foodRecoveryFlight.at >= WINDOW_TIMEOUT_MS) {
-        r.valid = false
-        ctx.foodRecoveryRetryAt = Date.now() + RETRY_MS
+        cancel(ctx, r)
         stepDone(ctx)
       }
       return
