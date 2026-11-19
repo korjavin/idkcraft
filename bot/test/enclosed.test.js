@@ -92,13 +92,35 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
     console.log = (m) => logs.push(String(m))
     try {
       const wall = bot.blockAt({ x: 3, y: 65, z: 7 })
-      assert.equal(enclosed.stuckDeny(bot, ctx, wall), null, 'own castle cell no longer refused')
+      // prod bot3 2026-11-19: own plan cells only once no walkable exit is confirmed
+      assert.equal(enclosed.stuckDeny(bot, ctx, wall), 'own-walkable', 'not enclosed: walk, not dig the castle')
+      assert.equal(enclosed.stuckCost(bot, ctx, wall), Infinity)
+      assert.equal(enclosed.stuckDeny(bot, ctx, wall, true), null, 'plan-cell approach may')
+      ctx.enclosedEscapes = []
+      ctx.enclosedUntil = Date.now() + 60000
+      assert.equal(enclosed.stuckDeny(bot, ctx, wall), null, 'enclosed: own castle cell is the last resort')
       assert.deepStrictEqual(ctx.enclosedEscapes.map((c) => `${c.x},${c.y},${c.z}`), ['3,65,7'])
       assert.equal(ctx.castleCursor, 0)
       assert.ok(ctx.ownBreakUntil > Date.now(), 'pathfinder own-break window opens')
       assert.equal(enclosed.stuckDeny(bot, ctx, bot.blockAt({ x: 4, y: 64, z: 8 })), 'unbreakable')
       assert.equal(enclosed.stuckDeny(bot, ctx, { name: 'lava', position: { x: 0, y: 64, z: 0 }, boundingBox: 'empty' }), 'liquid')
       assert.ok(enclosed.stuckCost(bot, ctx, wall) > enclosed.stuckCost(bot, ctx, { name: 'dirt', position: { x: 9, y: 64, z: 9 }, boundingBox: 'block' }))
+    } finally { console.log = orig }
+  })
+  it('recover summary logs every 10 min (escapes/dugPlan/dugOther/pillar)', () => {
+    const { recoverNote } = require('../src/behaviours/util')
+    const ctx = {}
+    const logs = []
+    const orig = console.log
+    console.log = (m) => logs.push(String(m))
+    try {
+      recoverNote(ctx, 'escapes', 0)
+      recoverNote(ctx, 'dugPlan', 1)
+      recoverNote(ctx, 'pillar', 2)
+      assert.equal(logs.length, 0)
+      recoverNote(ctx, 'dugOther', 600000)
+      assert.deepStrictEqual(logs, ['recover summary escapes=1 dugPlan=1 dugOther=1 pillar=1'])
+      assert.equal(ctx.recoverTally, null)
     } finally { console.log = orig }
   })
   it('refuses only on physics: unbreakable walls all round', () => {
@@ -330,6 +352,7 @@ describe('enclosed escape (prod 2026-11-15 bot3 trapped in its castle)', () => {
   it('an own cell dug and re-laid 3 times refuses the 4th stuck dig (prod bot3 stair dug 18x)', () => {
     const { bot, ctx } = world()
     ctx.recovery = { action: 'dig_through' }
+    ctx.enclosedUntil = Date.now() + 60000
     const orig = console.log
     console.log = () => {}
     try {

@@ -800,7 +800,9 @@ function breakable(bot, ctx, b) {
   if (UNBREAKABLE.test(b.name) || (typeof b.hardness === 'number' && b.hardness < 0)) return 'unbreakable'
   if (KEEP.test(b.name)) return 'keep'
   const d = denyReason(bot, b, ctx)
-  if (!d) return null
+  // The enclosed window lifts the castle guard (denyReason enclosedOwn): a plan
+  // cell still counts as own, so it stays budgeted and re-laid.
+  if (!d) return ctx && ctx.castle && ctx.enclosedUntil > Date.now() && castle.protects(ctx.castle, b.position, b.name) ? 'own' : null
   if (d !== 'protected') return d
   return ownBuild(ctx, b) ? 'own' : natural(b.name) ? 'nat' : 'foreign'
 }
@@ -812,9 +814,15 @@ const OK = (r) => String(r) in COST
 // ladder. null = dig it, else the physical-danger reason that refuses. An own
 // cell is queued for re-lay; any build cell opens the pathfinder's own-break
 // window (ctx.ownBreakUntil: castle guardCastle / body v2 lists).
-function stuckDeny(bot, ctx, b) {
+// Own cells are the last resort (prod bot3 2026-11-19: 35 plan cells dug by
+// recover in an hour, 5 restored): only once enclosed.js found no walkable
+// exit (ctx.enclosedUntil) or when the caller is itself a plan-cell approach
+// (ownOk). Otherwise the body walks, sidesteps or digs non-plan blocks.
+function stuckDeny(bot, ctx, b, ownOk) {
   const r = breakable(bot, ctx, b)
   if (!OK(r)) return r
+  if (r === 'own' && !ownOk && !((ctx.enclosedUntil || 0) > Date.now())) return 'own-walkable'
+  recoverNote(ctx, r === 'own' ? 'dugPlan' : 'dugOther')
   // Dig/re-lay loop (prod bot3: one castle stair dug 18x): an own cell re-laid RELAY_MAX times refuses.
   if (r === 'own' && relayedCount(ctx, b) >= RELAY_MAX) return 'relooped'
   if (r === 'own' || r === 'foreign' || r === 'keep') {
@@ -829,7 +837,20 @@ function stuckDeny(bot, ctx, b) {
 function stuckCost(bot, ctx, b) {
   if (air(b)) return 0
   const r = breakable(bot, ctx, b)
+  if (r === 'own' && !((ctx.enclosedUntil || 0) > Date.now())) return Infinity // stuckDeny refuses it
   return OK(r) ? COST[String(r)] : Infinity
+}
+// 10-min recover tally: escapes (enclosed episodes), dug plan/other cells
+// cleared by the stuck ladder (counted when cleared, not when the dig lands),
+// pillar blocks placed by recover pillar_up.
+const RECOVER_SUMMARY_MS = 10 * 60 * 1000
+function recoverNote(ctx, k, now = Date.now()) {
+  if (!ctx) return
+  const s = ctx.recoverTally || (ctx.recoverTally = { at: now, escapes: 0, dugPlan: 0, dugOther: 0, pillar: 0 })
+  s[k]++
+  if (now - s.at < RECOVER_SUMMARY_MS) return
+  log(`recover summary escapes=${s.escapes} dugPlan=${s.dugPlan} dugOther=${s.dugOther} pillar=${s.pillar}`)
+  ctx.recoverTally = null
 }
 // An own cell we open is re-laid, not damage (castle progress: `castle relay escape=N`).
 const RELAY_MAX = 3
@@ -851,4 +872,4 @@ function relay(ctx, b) {
 }
 
 
-module.exports = { breakable, COST, OK, stuckDeny, stuckCost, relay, KEEP, SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
+module.exports = { breakable, COST, OK, stuckDeny, stuckCost, recoverNote, relay, KEEP, SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }

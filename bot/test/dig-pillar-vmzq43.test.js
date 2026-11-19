@@ -403,7 +403,7 @@ describe('dig_pillar run (vmzq.43)', () => {
     } finally { cap.release() }
   })
 
-  it('a protected (own house) head is dug when stuck (owner 2026-11-16 ladder)', async () => {
+  it('a protected (own house) head is dug when stuck and enclosed (owner 2026-11-16 ladder; own cells last resort 2026-11-19)', async () => {
     const bot = pocketBot()
     const ctx = pocketCtx()
     ctx.home = {
@@ -416,6 +416,13 @@ describe('dig_pillar run (vmzq.43)', () => {
       assert.ok(menuOf(bot, ctx).names.includes('dig_pillar'), 'protection refuses at dig time, like dig_step')
       const r = await recover.decide(bot, ctx, null, null)
       assert.equal(r.action, 'dig_pillar')
+      recover.run(bot, ctx)
+      await flush()
+      assert.equal(ctx.recovery.status, 'failed:own-walkable', 'no confirmed enclosure: own build stays')
+      assert.equal(bot.dug.length, 0)
+      ctx.enclosedUntil = Date.now() + 60000
+      ctx.recovery.status = 'running'
+      ctx.recovery.st = null
       recover.run(bot, ctx)
       await flush()
       assert.notEqual(ctx.recovery.status, 'failed:protected')

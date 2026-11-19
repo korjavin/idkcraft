@@ -21,7 +21,7 @@ const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
 const doors = require('../doors')
-const { botPos, logDeny, protectedReason, stuckDeny, stuckCost } = require('./util')
+const { botPos, logDeny, protectedReason, stuckDeny, stuckCost, recoverNote } = require('./util')
 const worker = require('../worker')
 const { waterUpRun, countBuckets, wall2At, findCombo, findComboStand, findWaterfall, waterfallUpRun } = require('./waterup')
 const castle = require('../castle') // yardRing only (pure, no requires of its own)
@@ -1147,6 +1147,7 @@ function issuePillarPlace(bot, ctx, st) {
       if (typeof bot.equip === 'function') await bot.equip(item, 'hand')
       await bot.placeBlock(ref, face)
       st.placed = true
+      recoverNote(ctx, 'pillar')
     } catch (e) { st.placeError = true; st.placeErr = shortErr(e) } finally { st.placeInFlight = false }
   })()
   return null

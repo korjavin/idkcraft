@@ -15,7 +15,7 @@
 const Vec3 = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const castle = require('./castle')
-const { breakable, COST, OK, stuckDeny, stuckCost, relay, KEEP } = require('./behaviours/util')
+const { breakable, COST, OK, stuckDeny, stuckCost, relay, KEEP, recoverNote } = require('./behaviours/util')
 const { countItems } = require('./perception')
 
 const WINDOW_MS = 60000
@@ -238,6 +238,7 @@ function tick(bot, ctx, now = Date.now()) {
     return false
   }
   // Cheapest first: climb (0 broken), then the doorway with the fewest own cells, then down.
+  recoverNote(ctx, 'escapes')
   s.ep = { dirs, di: 0, k: 1, origin: feet, start: now, digging: false, cells: [], own: 0, up, rec: up ? { action: 'pillar_up', st: null } : null,
     canDown: !down.no, mode: !dirs.length && !up ? 'down' : null, downDigs: 0 }
   return run(bot, ctx, s, feet, now)
@@ -335,6 +336,7 @@ function dig(bot, ctx, ep, block, why) {
       if (tool) await bot.equip(tool, 'hand')
       await bot.dig(block)
       ep.cells.push(c)
+      recoverNote(ctx, why === 'own' ? 'dugPlan' : 'dugOther')
       if (why === 'keep' || why === 'foreign') log(`enclosed escape broke ${why} ${block.name} at ${c.x},${c.y},${c.z}`)
       if (why === 'keep' && /chest|barrel|shulker_box|furnace|smoker|hopper|dispenser|dropper/.test(block.name)) ep.collect = { c, until: Date.now() + COLLECT_MS }
       if (why === 'own') {
