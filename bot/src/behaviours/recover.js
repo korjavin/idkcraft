@@ -21,7 +21,8 @@ const { countItems } = require('../perception')
 const metrics = require('../metrics')
 const danger = require('../danger')
 const doors = require('../doors')
-const { botPos, logDeny, protectedReason, stuckDeny, stuckCost, recoverNote } = require('./util')
+const { botPos, logDeny, protectedReason, stuckDeny, stuckCost, stuckRefusal, recoverNote } = require('./util')
+const reach = require('../reach')
 const worker = require('../worker')
 const { waterUpRun, countBuckets, wall2At, findCombo, findComboStand, findWaterfall, waterfallUpRun } = require('./waterup')
 const castle = require('../castle') // yardRing only (pure, no requires of its own)
@@ -770,6 +771,11 @@ function recoverFacts(bot, ctx, state, target) {
     headBlocked: headBlockedAt(bot),
     ownHeadBlocked: ownHeadBlockedAt(bot),
     throughBlocked: throughBlockedAt(bot, stuck.goal),
+    // The deny predicates the runs apply, asked up front so the menu never
+    // offers an action the run would refuse (prod bot3/bot4 2026-11-19).
+    throughDeny: ctx ? deny(bot, ctx, throughCell(bot, stuck.goal)) : null,
+    headDeny: ctx ? deny(bot, ctx, solid(cellAt(bot, 0, 1, 0)) ? cellAt(bot, 0, 1, 0) : cellAt(bot, 0, 2, 0)) : null,
+    pillarDeny: bp ? pillarProtected(ctx, { x: Math.floor(bp.x), y: Math.floor(bp.y), z: Math.floor(bp.z) }) : null,
     digStep: findDigStepDir(bot, ctx),
     hopStep: findHopStepDir(bot, gp),
     digPillar: findDigPillarHead(bot) != null,
@@ -801,6 +807,10 @@ function recoverFacts(bot, ctx, state, target) {
     placeError: !!(ctx && ctx.recovery && ctx.recovery.placeError),
     last: rec && rec.last ? `${rec.last.action}:${rec.last.outcome}` : 'none',
   }
+}
+
+function deny(bot, ctx, b) {
+  try { return b && solid(b) ? stuckRefusal(bot, ctx, b) : null } catch (_) { return null }
 }
 
 function stuckBucket(n) {
@@ -1093,6 +1103,30 @@ function firePillarTimer(bot, ctx, st) {
   } catch (_) { /* timer best-effort */ }
 }
 
+// Yard-ring/apron pillar guard, shared by the place issue and the menu fact.
+// Lifted where the pillar is a real escape: enclosed (src/enclosed.js or the
+// recover dead-end escalation) or the live reach window's access build; the
+// placement is tracked (trackPlaced) and the castle sweep removes it.
+function pillarProtected(ctx, cell) {
+  if (!ctx || ctx.enclosedUntil > Date.now() || reach.nearTarget(ctx, cell)) return null
+  return ((ctx.castle && castle.yardRing(ctx.castle, cell)) || castle.inCastleApron(ctx, cell)) ? 'place-protected' : null
+}
+
+// Goalward cell dig_through would dig first (null = nothing solid there).
+function throughCell(bot, goal) {
+  try {
+    const bp = botPos(bot)
+    if (!bp || !goal || typeof goal.x !== 'number' || typeof goal.z !== 'number') return null
+    const dx = goal.x - bp.x
+    const dz = goal.z - bp.z
+    if (dx === 0 && dz === 0) return null
+    const step = Math.abs(dx) >= Math.abs(dz) ? [Math.sign(dx), 0] : [0, Math.sign(dz)]
+    const feet = cellAt(bot, step[0], 0, step[1])
+    const head = cellAt(bot, step[0], 1, step[1])
+    return solid(feet) ? feet : solid(head) ? head : null
+  } catch (_) { return null }
+}
+
 // Synchronous half of the place issue, shared by the jump-start timer and
 // the tick path: finds the reference, equips scaffold, starts the async
 // placement. Returns a fail reason, or null once the async issue is in
@@ -1131,7 +1165,8 @@ function issuePillarPlace(bot, ctx, st) {
   // g0z.63: the apron of every known complete castle refuses alike.
   const cell = { x: fx, y: fy, z: fz }
   // Enclosed (src/enclosed.js): getting out beats the yard-ring foothold rule.
-  if (ctx && !(ctx.enclosedUntil > Date.now()) && ((ctx.castle && castle.yardRing(ctx.castle, cell)) || castle.inCastleApron(ctx, cell))) return 'place-protected'
+  const prot = pillarProtected(ctx, cell)
+  if (prot) return prot
   // Equip first: mineflayer throws 'must be holding an item to place' on
   // an empty hand and the server refuses a held tool (prod 2026-09-27: 67
   // pillar_ups, 0 placed). Prefer the held stack: the fast trigger
@@ -2030,7 +2065,7 @@ const RECOVER_MENU = {
     // day) — after a place-error in this episode pillar_up leaves the menu.
     // 5vv: jumping to the apex in water is pointless — swim exits and
     // sidestep own the escape, not the scaffold.
-    feasible: (facts, ctx) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water && !facts.feetSolid && !recoverBanned(ctx, 'pillar_up'),
+    feasible: (facts, ctx) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.scaffold > 0 && !facts.headBlocked && !facts.placeError && !facts.water && !facts.feetSolid && !facts.pillarDeny && !recoverBanned(ctx, 'pillar_up'),
     run: pillarUpRun,
     repeatable: (facts) => (facts.goalDy >= 1 || pitChain(facts)) && facts.scaffold > 0 && !facts.placeError && !facts.water && !facts.feetSolid,
     verb: 'pillaring up',
@@ -2041,7 +2076,7 @@ const RECOVER_MENU = {
     // jsf.3/jsf.6: like pillar_up, a pit with no reachable goal climbs (head still blocked).
     // oz8: the own-column gate — a neighbour lip vetoes the pillar above but
     // leaves nothing to dig; the fallback keeps stand/tests literals working.
-    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && (facts.ownHeadBlocked ?? facts.headBlocked),
+    feasible: (facts) => (facts.goalDy >= 1 || pitClimb(facts)) && facts.pickaxe && !facts.lavaNear && !facts.headDeny && (facts.ownHeadBlocked ?? facts.headBlocked),
     run: digUpRun,
     repeatable: (facts) => (facts.goalDy >= 1 || pitChain(facts)) && facts.pickaxe && (facts.ownHeadBlocked ?? facts.headBlocked),
     verb: 'digging up',
@@ -2119,7 +2154,7 @@ const RECOVER_MENU = {
   },
   dig_through: {
     // 9sq F1: nothing solid toward the goal means nothing to tunnel.
-    feasible: (facts) => facts.pickaxe && !facts.lavaNear && facts.throughBlocked,
+    feasible: (facts) => facts.pickaxe && !facts.lavaNear && facts.throughBlocked && !facts.throughDeny,
     run: digThroughRun,
     verb: 'digging through',
   },
@@ -2292,6 +2327,35 @@ function noteRecoverDone(ctx, bp, action, boxed) {
     for (const k of Object.keys(st.dones)) {
       if (st.dones[k] && typeof st.dones[k] === 'object') st.dones[k].at = Date.now()
     }
+  }
+}
+// Dead-end escalation: DEAD_END_FAILS failed escapes without the body leaving
+// the spot mean enclosed, whatever enclosed.js's walkable-exit flood claimed
+// (prod bot4 2026-11-19: 'walkable exit' while sidestep failed no-progress 24x).
+// Opens the enclosed window: own-cell digs and the yard pillar are allowed,
+// the sidestep shuffle leaves the menu.
+const DEAD_END_FAILS = 4
+const DEAD_END_MS = 300000 // enclosed.js GRACE_MS
+function noteDeadEnd(ctx, bp, action, outcome) {
+  if (!ctx || !bp) return
+  const d = ctx.recoverDeadEnd
+  const same = d && Math.hypot(bp.x - d.x, bp.y - d.y, bp.z - d.z) <= RECOVER_BAN_ANCHOR_DIST
+  const n = same ? d.n + 1 : 1
+  ctx.recoverDeadEnd = same ? { ...d, n } : { x: bp.x, y: bp.y, z: bp.z, n }
+  if (n !== DEAD_END_FAILS || ctx.enclosedUntil > Date.now()) return
+  ctx.enclosedUntil = Date.now() + DEAD_END_MS
+  console.log(`recover dead-end action=${action} why=${String(outcome).replace(/^failed:/, '')} fails=${n} pos=${fmtPos(bp)} -> enclosed`)
+}
+// Menu actions the deny predicates removed.
+const MENU_DENY = [['pillar_up', 'pillarDeny'], ['dig_up', 'headDeny'], ['dig_through', 'throughDeny']]
+function logMenuDeadEnds(ctx, facts) {
+  for (const [n, k] of MENU_DENY) {
+    if (!facts[k] || !RECOVER_MENU[n].feasible({ ...facts, [k]: null }, ctx)) continue
+    const log = ctx.recoverDeadLog || (ctx.recoverDeadLog = {})
+    const key = `${n}:${facts[k]}`
+    if (Date.now() - (log[key] || 0) < 60000) continue // one line a minute per action/reason
+    log[key] = Date.now()
+    console.log(`recover dead-end action=${n} why=${facts[k]}`)
   }
 }
 function recoverBanned(ctx, action) {
@@ -2803,6 +2867,7 @@ async function decide(bot, ctx, state, target) {
     // kind that keeps failing at this spot leaves future menus.
     if (outcome !== 'done') {
       try { noteRecoverFail(ctx, botPos(bot), prev, outcome) } catch (_) { /* bans best-effort */ }
+      try { noteDeadEnd(ctx, botPos(bot), prev, outcome) } catch (_) { /* escalation best-effort */ }
       // vmzq.43 r2: a placement refusal breaks the SPOT, not the kind — a
       // dig_pillar refusal retires pillar_up there too (its head is dug,
       // so pillar_up would otherwise retry the same refused cell next).
@@ -2926,6 +2991,7 @@ async function decide(bot, ctx, state, target) {
   const names = RECOVER_ORDER.filter((n) => {
     try { return RECOVER_MENU[n].feasible(facts, ctx) } catch (_) { return false }
   })
+  try { logMenuDeadEnds(ctx, facts) } catch (_) { /* log best-effort */ }
   let choice
   if (rec.planHold) {
     choice = await consumeRecoverPlan(ctx, rec, facts, names)
@@ -2992,6 +3058,8 @@ module.exports = {
   RECOVER_SHUFFLE,
   RECOVER_BANNABLE, // vf8e.2: skills.js adds recover skills (cross-episode spot bans)
   noteRecoverFail,
+  noteDeadEnd,
+  DEAD_END_FAILS,
   noteRecoverDone,
   recoverBanned,
   recoverShuffleBanned,

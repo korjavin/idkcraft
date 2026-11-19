@@ -818,6 +818,15 @@ const OK = (r) => String(r) in COST
 // recover in an hour, 5 restored): only once enclosed.js found no walkable
 // exit (ctx.enclosedUntil) or when the caller is itself a plan-cell approach
 // (ownOk). Otherwise the body walks, sidesteps or digs non-plan blocks.
+// Side-effect-free refusal (null = diggable): the recover menu asks it before offering a dig.
+function stuckRefusal(bot, ctx, b, ownOk) {
+  if (air(b)) return null
+  const r = breakable(bot, ctx, b)
+  if (!OK(r)) return r
+  if (r === 'own' && !ownOk && !((ctx.enclosedUntil || 0) > Date.now())) return 'own-walkable'
+  if (r === 'own' && relayedCount(ctx, b) >= RELAY_MAX) return 'relooped'
+  return null
+}
 function stuckDeny(bot, ctx, b, ownOk) {
   const r = breakable(bot, ctx, b)
   if (!OK(r)) return r
@@ -872,4 +881,4 @@ function relay(ctx, b) {
 }
 
 
-module.exports = { breakable, COST, OK, stuckDeny, stuckCost, recoverNote, relay, KEEP, SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
+module.exports = { breakable, COST, OK, stuckDeny, stuckRefusal, stuckCost, recoverNote, relay, KEEP, SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
