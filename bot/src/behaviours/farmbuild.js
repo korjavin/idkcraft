@@ -64,6 +64,7 @@ function anchorOf(bot, ctx) {
   }
   if (!at) at = bot.entity && bot.entity.position
   const fb = ctx.farmBuild
+  if (fb && Array.isArray(fb.avoid)) avoid.push(...fb.avoid)
   if (fb && fb.at) at = { ...fb.at, exact: true } // ordered 'build farm': where the owner stood
   return { at, avoid }
 }
@@ -134,9 +135,10 @@ function run(bot, ctx) {
   // A restart keeps only the site corner: re-plan its prep (cut/fill) before any cell is laid.
   if (!fb.built && !Array.isArray(fb.site.prep)) {
     const prep = blueprint.prepAt(bot, fb.site)
-    if (!prep) return // footprint not loaded yet: the next tick re-reads it
-    fb.site.prep = prep
-    console.log(`farm prep restored cells=${prep.length}`)
+    if (prep) {
+      fb.site.prep = prep
+      console.log(`farm prep restored cells=${prep.length}`)
+    } // unloaded: the builder walks to the site; the next tick re-reads it
   }
   // A self-picked site (not the owner's spot) with no new cell for STALL_MS is
   // dropped and re-picked (owner 2026-11-19: bot2's farm stalled over a lake).
@@ -149,7 +151,8 @@ function run(bot, ctx) {
     if (done !== fb.stallDone) { fb.stallDone = done; fb.stallRun = 0 }
     else if ((fb.stallRun = (fb.stallRun || 0) + dt) > STALL_MS) {
       console.log(`farm site stalled built=${done} for=${Math.round(fb.stallRun / 60000)}min -> re-picking`)
-      ctx.farmBuild = { ordered: fb.ordered }
+      // the stalled plot is not picked again (its box joins anchorOf's avoid)
+      ctx.farmBuild = { ordered: fb.ordered, avoid: [...(fb.avoid || []), { x0: fb.site.x, z0: fb.site.z, x1: fb.site.x + blueprint.W - 1, z1: fb.site.z + blueprint.D - 1 }] }
       stepFailed(ctx, 'site-stalled')
       return
     }

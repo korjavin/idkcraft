@@ -172,7 +172,9 @@ function prepAt(bot, site) {
   const cols = new Map()
   const col = (x, z) => { const k = `${x},${z}`; if (!cols.has(k)) cols.set(k, column(bot, x, z, site.y + 8)); return cols.get(k) }
   const f = footprintCost(col, site.x, site.z)
-  return f.bad ? null : prepCells(f.cs, site.y)
+  // unloaded: null (retry when near); built (own barn/fence already up) or other: no prep, build on
+  if (f.bad === 'unloaded') return null
+  return f.bad ? [] : prepCells(f.cs, site.y)
 }
 
 module.exports = { prepAt, protects, inFieldAt, PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, siteFor, pickSite, planFor, footprintCost }

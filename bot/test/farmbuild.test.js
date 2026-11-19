@@ -326,6 +326,15 @@ describe('farmbuild step (qphv.1)', () => {
     } finally { console.log = orig; Date.now = realNow }
   })
 
+  it('prepAt: a partly built farm (own barn planks) still restores, unloaded waits (Codex)', () => {
+    const w = world()
+    w.set(2, 64, 2, 'oak_planks')
+    assert.ok(Array.isArray(fp.prepAt(mockBot(w), { x: 0, y: 64, z: 0 })))
+    const b = mockBot(w)
+    b.blockAt = () => null
+    assert.equal(fp.prepAt(b, { x: 0, y: 64, z: 0 }), null)
+  })
+
   it('is feasible by day for an ordered farm or a complete castle, never once built', () => {
     const day = { time: 'day' }
     assert.equal(farmbuild.feasible(day, null, {}), false)
