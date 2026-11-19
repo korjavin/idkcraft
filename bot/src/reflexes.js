@@ -123,6 +123,7 @@ async function waitMeal(ctx) {
 
 function eatReflex(bot, ctx, state) {
   installEquipGuard(bot, ctx)
+  require('./food-rate').tick(bot, ctx)
   if (ctx.eatInFlight) return false
   if (typeof bot.food !== 'number' || bot.food >= 18) return false
   if (ctx.reflexSwung) return false
@@ -153,6 +154,7 @@ function eatReflex(bot, ctx, state) {
       }
       await bot.consume()
       console.log(`eat ${foodItem.name} food=${prevFood}`)
+      require('./food-rate').note(ctx, 'eaten')
     } catch (_) {
       const now = Date.now()
       if (process.env.BOT_BODY === 'baritone' && (!ctx.eatFailureLoggedAt || now - ctx.eatFailureLoggedAt >= 60000)) {

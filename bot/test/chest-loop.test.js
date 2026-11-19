@@ -61,7 +61,7 @@ it('hungry, no meal, a remembered chest with bread: walks, takes a bounded amoun
 
 it('a healthy body that is not hungry does not tour', () => {
   const { bot } = world([{ name: 'bread', type: 1, count: 5 }])
-  bot.food = 17
+  bot.food = 18 // regen line: below it an empty pack fetches
   assert.equal(foodRecovery.needed(bot, { chests: [{ ...CHEST }] }, facts), false)
 })
 

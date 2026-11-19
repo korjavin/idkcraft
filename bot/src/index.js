@@ -1927,6 +1927,7 @@ function handleDeath(bot, ticker) {
   if (ticker && typeof ticker.cancelGreet === 'function') ticker.cancelGreet()
   try { fightMod.endFight(bot, bot._tickerCtx || {}, 'died') } catch (_) { /* fight log best-effort */ }
   console.log(deathLine(bot))
+  require('./food-rate').note(bot._tickerCtx, 'deaths')
   // 9kd: a water death (guardian/drowned) bans the swim, so the sheep
   // search rings never walk the same monument cell twice in a day. The
   // killer leg drops with it (revmux 01+02): target cleared AND its chunk
