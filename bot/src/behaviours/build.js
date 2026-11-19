@@ -600,6 +600,31 @@ function wantItem(cell) {
   return (n) => n.endsWith('_planks')
 }
 
+// Fill kinds (house fill, farm prep soil/ground) and their support walk:
+// the lowest open block under p (<= 8 down) whose own floor is solid.
+const FILL_KINDS = new Set(['fill', 'soil', 'ground'])
+function supportBelow(bot, p) {
+  let q = p
+  for (let i = 0; i < 8; i++) {
+    let b = null
+    try { b = bot.blockAt(q.offset(0, -1, 0)) } catch (_) { b = null }
+    if (!b || b.boundingBox !== 'empty') return q
+    q = q.offset(0, -1, 0)
+  }
+  return p // bottomless: leave the cell to the refusal/skip path
+}
+// A placed block is new support: skipped fill cells beside or above it are workable again.
+function unskipAround(ctx, q) {
+  try {
+    if (!Array.isArray(ctx.buildSkip) || !ctx.buildSkip.length) return
+    const plan = blueprintFor(ctx.home)
+    ctx.buildSkip = ctx.buildSkip.filter((i) => {
+      const a = plan[i] && cellAbs(ctx.home, plan[i])
+      return !a || !FILL_KINDS.has(plan[i].kind) || Math.abs(a.x - q.x) + Math.abs(a.y - q.y) + Math.abs(a.z - q.z) !== 1
+    })
+  } catch (_) { /* best-effort */ }
+}
+
 // Neighbor scan order: below first — every plan cell sits on the previous
 // layer by construction, so the reference is almost always the ground or
 // our own earlier cell.
@@ -1108,7 +1133,7 @@ function build(bot, ctx, target, state) {
   }
   const plan = blueprintFor(ctx.home)
   const cell = plan[idx]
-  const p = cellAbs(ctx.home, cell)
+  let p = cellAbs(ctx.home, cell)
   if (cell.kind === 'planks' && isDoorwayOrInterior(cell, ctx.home)) {
     skipCell(ctx, idx, p, 'doorway-interior')
     return
@@ -1122,6 +1147,9 @@ function build(bot, ctx, target, state) {
     return
   }
   ctx.buildSiteWalk = null
+  // A fill with no floor or side support (a hole deeper than the plan, a
+  // cave, a misread column) builds its column bottom-up: the lowest open block first.
+  if (FILL_KINDS.has(cell.kind) && !findRef(bot, p, { excludeTop: true })) p = supportBelow(bot, p)
   // Per-cell attempt budget (ipn.10): ticks on one cell without progress —
   // no advance past the max cell, no displacement past CELL_PROGRESS —
   // skip it like a refusal. Keyed by site, so a home move re-arms without
@@ -1216,7 +1244,9 @@ function build(bot, ctx, target, state) {
 
   // v2 builder (neuc.54): plain-cube cells batch through BuilderProcess;
   // door/table/clear fall through to the per-cell path below.
-  if (typeof bot.buildCells === 'function' && builderBatch(bot, ctx)) return
+  // A site still in prep (farm cut/fill) is never batched over: the barn
+  // planks would wait on the ground and fail no-planks mid-prep.
+  if (typeof bot.buildCells === 'function' && cell.phase !== 'prep' && builderBatch(bot, ctx)) return
 
   const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
   if (!item && cell.kind !== 'clear') {
@@ -1340,6 +1370,7 @@ function build(bot, ctx, target, state) {
       await bot.equip(item, 'hand')
       await bot.placeBlock(ref.ref, ref.face)
       if (ctx.buildFailIdx === flightIdx) ctx.buildFails = 0
+      unskipAround(ctx, p)
     } catch (err) {
       // Stale flight (ipn.10): the cell moved on (budget skip) while this
       // verdict was in the air — it must neither strike nor clear for the
