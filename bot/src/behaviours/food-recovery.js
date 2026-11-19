@@ -123,6 +123,20 @@ function invalidate(ctx) {
   if (ctx && ctx.foodRecovery) cancel(ctx, ctx.foodRecovery)
 }
 
+// prod 2026-11-19 bot4: the shared noPath reaction (unreachable.js) failed the
+// step on an unreachable table, done() never ran, and the arbiter restarted the
+// same bread leg every few ticks (55 restarts/10 min). A step failed from outside
+// strikes the source it was on: bread pauses (next run takes chest/hunt at once),
+// any other rung takes the RETRY_MS cooldown.
+function failed(ctx) {
+  const r = ctx && ctx.foodRecovery
+  if (!r || !r.valid) return
+  if (r.phase === 'bread') ctx.foodBreadRetryAt = Date.now() + LOW_HP_GATE_MS
+  else ctx.foodRecoveryRetryAt = Date.now() + RETRY_MS
+  console.log(`food recovery result=failed phase=${r.phase} status=${ctx.stepStatus}`)
+  cancel(ctx, r)
+}
+
 // A cancelled bread run must not leave its craftany run for the next start.
 function cancel(ctx, r) {
   r.valid = false
@@ -264,4 +278,4 @@ function harvestTick(bot, ctx, r, done) {
 
 require('../reflexes').setFoodChestProbe(normalFoodChest)
 
-module.exports = { run, needed, available, invalidate, normalFoodChest, RETRY_MS, HUNGRY_FOOD, HUNGRY_WANT }
+module.exports = { run, needed, available, invalidate, failed, normalFoodChest, RETRY_MS, HUNGRY_FOOD, HUNGRY_WANT }

@@ -179,3 +179,20 @@ it('cancel mid-placement clears the craftany run', () => {
   assert.equal(ctx.craftany, null)
   assert.equal(ctx.foodRecovery.valid, false)
 })
+
+it('a step failed from outside (unreachable table) strikes bread, not a tight restart', () => {
+  const bot = mkBot(); const ctx = mkCtx()
+  assert.equal(fr.available(bot, ctx, facts), true)
+  fr.run(bot, ctx)
+  assert.equal(ctx.foodRecovery.phase, 'bread')
+  ctx.stepStatus = 'failed:unreachable'
+  fr.failed(ctx)
+  assert.equal(ctx.foodRecovery.valid, false)
+  assert.ok(ctx.foodBreadRetryAt > Date.now())
+  assert.equal(fr.available(bot, ctx, facts), false) // no other source here: no restart
+  bring.pickChest = () => ({ pos: { x: 5, y: 64, z: 5 } })
+  try { assert.equal(fr.available(bot, ctx, facts), true) } finally { bring.pickChest = () => null } // next source at once
+  ctx.foodRecovery = { valid: true, phase: 'hunt' }
+  fr.failed(ctx)
+  assert.ok(ctx.foodRecoveryRetryAt > Date.now())
+})
