@@ -58,3 +58,12 @@ test('nopath log names the GoalPlaceBlock cell', () => {
   const out = noteNoPath(bot, {}, 1e9)
   assert.match(out, /goal=GoalPlaceBlock 5,70,-3 dist=6/)
 })
+
+test('a live Baritone mine marker is never failed as unreachable (mine owns its ends)', () => {
+  const { bot, ctx } = rig()
+  const marker = { mine: true }
+  bot.pathfinder.goal = marker
+  for (let t = 0; t < 5000; t += 1000) assert.strictEqual(unreachable.tick(bot, ctx, t), false)
+  assert.strictEqual(bot.pathfinder.goal, marker)
+  assert.strictEqual(ctx.stepStatus, 'running')
+})

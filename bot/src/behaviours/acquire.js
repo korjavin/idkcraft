@@ -100,12 +100,29 @@ function giveUp(bot, ctx, a, item) {
   console.log(`acquire ${item}: ${AREA_FAILS} unreachable sources here, leaving the area`)
 }
 
+// 'mine rate item=X mined=N/min travel=D': once a minute while a mine runs
+// and once at its end, so prod mining efficiency is measurable.
+function mineRate(bot, a, end) {
+  const r = a.rate
+  if (!r) return
+  const now = Date.now()
+  if (!end && now - r.at < 60000) return
+  r.at = now
+  const mined = r.alts.reduce((t, i) => t + have(bot, i), 0) - r.have0
+  const min = Math.max(now - r.t0, 1000) / 60000
+  const p = bot.entity && bot.entity.position
+  const travel = p && r.p0 ? Math.round(Math.hypot(p.x - r.p0.x, p.y - r.p0.y, p.z - r.p0.z)) : 0
+  console.log(`mine rate item=${r.item} mined=${(mined / min).toFixed(1)}/min total=${mined} travel=${travel}${end ? ' end' : ''}`)
+  if (end) a.rate = null
+}
+
 // One tick toward n of item in the pack: 'done' | 'running' | 'failed:<why>'.
 // alts: interchangeable variants (sources.family) that count and craft as
 // the item — birch planks serve an oak_planks need, any log a log gap.
 function acquire(bot, ctx, item, n, path = [], alts = [item]) {
   const a = ctx.acquire || (ctx.acquire = {})
-  if (a.mining || (a.hunt && ctx.bring === a.hunt)) return 'running'
+  if (a.mining) { mineRate(bot, a, false); return 'running' }
+  if (a.hunt && ctx.bring === a.hunt) return 'running'
   if (!alts.includes(item)) alts = [item, ...alts]
   // Planks under a wood-named parent (oak_fence, birch_door) never pool:
   // 3 oak + 3 birch is not 4 of one wood, so count the best single wood.
@@ -188,10 +205,17 @@ function acquire(bot, ctx, item, n, path = [], alts = [item]) {
       return 'running'
     }
     a.mining = true
+    const p0 = bot.entity && bot.entity.position
+    a.rate = { item, alts, t0: Date.now(), at: Date.now(), have0: held, p0: p0 ? { x: p0.x, y: p0.y, z: p0.z } : null }
     console.log(`acquire ${item}: mining ${count} from ${blocks.slice(0, 4).join(',')}`)
     bot.mine(blocks, count, { radius: MINE_RADIUS, forbid: (p) => unreachable.near(ctx, p) })
-      .catch((e) => { a.mineFail = { item, at: Date.now() }; console.log(`acquire ${item}: ${e && e.message}`) })
-      .finally(() => { a.mining = false })
+      .catch((e) => {
+        // An outside stop (fight, owner stop, step change) is no failure of
+        // the source: the next tick re-arms the mine, not a walk-and-dig.
+        if (!(e && e.message === 'mine-stopped')) a.mineFail = { item, at: Date.now() }
+        console.log(`acquire ${item}: ${e && e.message}`)
+      })
+      .finally(() => { mineRate(bot, a, true); a.mining = false })
     return 'running'
   }
   if (S.mobsOf(item).includes('sheep')) { // the hunt bring runs (toWoolHunt)
