@@ -26,13 +26,14 @@ describe('castle dig-approach for unreachable cells', () => {
       const now = Date.now()
       for (let i = 0; i <= castle.STRIKES; i++) castle.far(bot, ctx, st, cell, 4.5, now)
       assert.ok(ctx.castleFar.build && !(ctx.ownBreakUntil > now), 'outside scaffold first, own cells stay closed')
-      for (let i = 0; i <= castle.STRIKES; i++) castle.far(bot, ctx, st, cell, 4.5, now)
+      const later = now + require('../src/reach').REACH_HOLD_MS // the access build holds first
+      for (let i = 0; i <= castle.STRIKES; i++) castle.far(bot, ctx, st, cell, 4.5, later)
       assert.equal(st.blocked['2:5'], undefined, 'no strike yet')
-      assert.ok(ctx.ownBreakUntil > now, 'stuck window open')
-      for (let i = 0; i < castle.STRIKES; i++) castle.far(bot, ctx, st, cell, 4.5, now)
+      assert.ok(ctx.ownBreakUntil > later, 'stuck window open')
+      for (let i = 0; i < castle.STRIKES; i++) castle.far(bot, ctx, st, cell, 4.5, later)
       assert.equal(st.blocked['2:5'], undefined, 'step mover next, no strike')
       assert.ok(ctx.castleFar.step, 'step mover armed')
-      castle.far(bot, ctx, st, cell, 4.5, now) // no blockAt: the mover stops, the cell strikes
+      castle.far(bot, ctx, st, cell, 4.5, later) // no blockAt: the mover stops, the cell strikes
       assert.equal(st.blocked['2:5'].why, 'unreachable')
     } finally { console.log = orig }
   })

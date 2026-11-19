@@ -2580,12 +2580,15 @@ function far(bot, ctx, st, c, reach, now) {
   // The pathfinder's own noPath verdict on this upkeep cell's goal is the
   // strike (prod bot3: why=nopath 552/1496 ticks, STRIKES re-plans per
   // stage): fast-yield now, or advance the last cell's ladder one stage.
-  if (upkeepKind(st, c) && ctx.castleGoalIdx === c.idx && ctx.lastPathStatus === 'noPath') f.n = Math.max(f.n, STRIKES)
+  // A young access window (reach.js) holds: no noPath/strike escalation, the goal re-issues.
+  const hold = !!f.build && access.holding(ctx, c, now)
+  if (!hold && upkeepKind(st, c) && ctx.castleGoalIdx === c.idx && ctx.lastPathStatus === 'noPath') f.n = Math.max(f.n, STRIKES)
   ctx.castleGoalIdx = -1
   try {
-    const act = f.n < STRIKES ? `reapproach#${f.n}` : !f.build && !c.prep ? 'access-build' : !f.dig ? 'dig-approach' : !f.step ? 'step-approach' : 'strike'
+    const act = hold ? 'access-build' : f.n < STRIKES ? `reapproach#${f.n}` : !f.build && !c.prep ? 'access-build' : !f.dig ? 'dig-approach' : !f.step ? 'step-approach' : 'strike'
     console.log(`approach target=${c.x},${c.y},${c.z} stand=${bp.x.toFixed(1)},${bp.y.toFixed(1)},${bp.z.toFixed(1)} reached=true inReach=false dist=${dist.toFixed(1)} -> action=${act}`)
   } catch (_) { /* log best-effort */ }
+  if (hold) { ctx.lastPathStatus = null; return true }
   if (f.n >= STRIKES) {
     // Unreachable plan cell (prod 2026-11-16 bot3: torches 15-40 below, 82x
     // 'unreachable'): before striking, one more ladder with the stuck window

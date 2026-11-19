@@ -10,6 +10,7 @@ const { Vec3 } = require('vec3')
 const castle = require('../src/behaviours/castle')
 
 const { bkey } = castle.RECOVERY_HOOKS
+const { REACH_HOLD_MS } = require('../src/reach')
 
 describe('castle litter last try takes the ladder', () => {
   it('fast strikes until the last try, then dig-approach', () => {
@@ -21,7 +22,8 @@ describe('castle litter last try takes the ladder', () => {
     let ctx = null
     const run = () => {
       ctx = { castleLitter: { pend: [a, b] } }
-      for (let i = 0; i < 20 && !(ctx.castleFar && ctx.castleFar.dig) && !(st.blocked[k] && st.blocked[k].until); i++) castle.far(bot, ctx, st, a, 4, Date.now())
+      let t = Date.now()
+      for (let i = 0; i < 20 && !(ctx.castleFar && ctx.castleFar.dig) && !(st.blocked[k] && st.blocked[k].until); i++) castle.far(bot, ctx, st, a, 4, t += REACH_HOLD_MS / 4)
     }
     run()
     assert.equal(st.blocked[k].tries, 1, 'first strike is fast')
@@ -42,8 +44,12 @@ describe('castle litter last try takes the ladder', () => {
     assert.equal(st.blocked[bkey(st, a.idx)], undefined)
     assert.equal(ctx.lastPathStatus, null, 'stale no-place verdict dropped')
     ctx.castleGoalIdx = a.idx
-    ctx.lastPathStatus = 'noPath' // Baritone found no path even with placing on
+    ctx.lastPathStatus = 'noPath' // a stale/stall noPath right after arming (prod bot3 2026-11-19)
     castle.far(bot, ctx, st, a, 4, Date.now())
-    assert.equal(st.blocked[bkey(st, a.idx)].tries, 1, 'struck on the next noPath tick')
+    assert.equal(st.blocked[bkey(st, a.idx)], undefined, 'the access build holds')
+    ctx.castleGoalIdx = a.idx
+    ctx.lastPathStatus = 'noPath' // Baritone found no path even with placing on
+    castle.far(bot, ctx, st, a, 4, Date.now() + REACH_HOLD_MS)
+    assert.equal(st.blocked[bkey(st, a.idx)].tries, 1, 'struck on the first noPath tick after the hold')
   })
 })
