@@ -135,3 +135,107 @@ describe('farmbuild step (qphv.1)', () => {
     assert.equal(typeof STEP_CRITERIA.farmbuild, 'string')
   })
 })
+
+describe('farm crop cycle and building blocks (qphv.2)', () => {
+  const { acquire, fromChest } = require('../src/behaviours/acquire')
+  const { denyReason } = require('../src/behaviours/util')
+  const quiet = async (fn) => {
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try { await fn() } finally { console.log = orig }
+    return logs
+  }
+
+  it('fills an empty bucket at the nearest still water (acquire resolver)', async () => {
+    const w = world()
+    w.set(3, 63, 0, 'water')
+    const bot = mockBot(w)
+    const items = [{ name: 'bucket', count: 1 }]
+    bot.inventory.items = () => items
+    bot.registry = { blocksByName: { water: { id: 1 } } }
+    bot.findBlocks = () => [new Vec3(3, 63, 0)]
+    bot.activateItem = async () => { items[0] = { name: 'water_bucket', count: 1 } }
+    const ctx = {}
+    let r
+    await quiet(async () => {
+      for (let t = 0; t < 50 && r !== 'done'; t++) { r = acquire(bot, ctx, 'water_bucket', 1); await new Promise((res) => setTimeout(res, 700)) }
+    })
+    assert.equal(r, 'done')
+  })
+
+  it('draws from a known chest before acquire', async () => {
+    const w = world()
+    w.set(2, 64, 0, 'chest')
+    const bot = mockBot(w)
+    const items = []
+    bot.inventory.items = () => items
+    const stock = [{ name: 'oak_fence', count: 40, type: 5 }]
+    bot.openChest = async () => ({
+      containerItems: () => stock,
+      withdraw: async (type, meta, n) => { items.push({ name: 'oak_fence', count: n }); stock[0].count -= n },
+      close: async () => {},
+    })
+    const ctx = { chests: [{ x: 2, y: 64, z: 0 }] }
+    let r
+    await quiet(async () => { for (let t = 0; t < 10 && r !== 'done'; t++) { r = fromChest(bot, ctx, ['oak_fence'], 31); await tick() } })
+    assert.equal(r, 'done')
+    assert.equal(items[0].count, 31)
+    assert.equal(fromChest(bot, ctx, ['oak_door'], 1), 'none')
+  })
+
+  it('guards laid farm cells from other steps, not the empty ones', () => {
+    const fb = { site: { x: 0, y: 64, z: 0 } }
+    const ctx = { farmBuild: fb }
+    const bot = { entity: { position: new Vec3(50, 64, 50) }, blockAt: () => null }
+    const blk = (name, x, y, z) => ({ name, position: new Vec3(x, y, z) })
+    assert.equal(denyReason(bot, blk('farmland', 18, 63, 0), ctx), 'protected')
+    assert.equal(denyReason(bot, blk('oak_fence', 8, 64, 0), ctx), 'protected')
+    assert.equal(denyReason(bot, blk('dirt', 18, 63, 0), ctx), null) // trampled: the builder re-tills it
+    assert.equal(fp.protects(fb, new Vec3(22, 63, 4), 'water'), true)
+    assert.equal(fp.inFieldAt(fb, new Vec3(20, 64, 3)), true)
+    assert.equal(fp.inFieldAt(fb, new Vec3(10, 64, 3)), false)
+  })
+
+  it('requeues a trampled cell, then harvests ripe wheat and stores hay', async () => {
+    const w = world()
+    const bot = mockBot(w)
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, castle: null }
+    await quiet(async () => {
+      for (let t = 0; t < 4000 && ctx.stepStatus === 'running'; t++) { farmbuild(bot, ctx); await tick() }
+    })
+    const fb = ctx.farmBuild
+    assert.equal(fb.built, true)
+    const s = fb.site
+    w.set(s.x + 18, s.y - 1, s.z, 'dirt') // trampled
+    ctx.stepStatus = 'running'
+    let logs = await quiet(async () => { for (let t = 0; t < 200 && ctx.stepStatus === 'running'; t++) { farmbuild(bot, ctx); await tick() } })
+    assert.ok(logs.some((l) => l.startsWith(`farm own-dug cell=${s.x + 18},${s.y - 1},${s.z} kind=farmland requeued`)), logs.slice(-5).join('\n'))
+    assert.equal(w.blockAt({ x: s.x + 18, y: s.y - 1, z: s.z }).name, 'farmland')
+    assert.equal(fb.built, true)
+    // A ripe crop: the built farm is due; the farm step harvests it.
+    const at = { x: s.x + 19, y: s.y, z: s.z + 1 }
+    const isAt = (p) => Math.floor(p.x) === at.x && Math.floor(p.y) === at.y && Math.floor(p.z) === at.z
+    const base = bot.blockAt
+    bot.blockAt = (p) => {
+      const b = base(p)
+      if (isAt(p) && b.name === 'wheat') b.getProperties = () => ({ age: 7 })
+      return b
+    }
+    w.set(at.x, at.y, at.z, 'wheat')
+    bot.registry = { blocksByName: { wheat: { id: 9 } } }
+    bot.findBlocks = () => (w.cells.get(`${at.x},${at.y},${at.z}`) === 'wheat' ? [new Vec3(at.x, at.y, at.z)] : [])
+    fb.cropAt = Date.now()
+    assert.equal(farmbuild.feasible({ time: 'day' }, bot, ctx), true)
+    ctx.stepStatus = 'running'
+    logs = await quiet(async () => { for (let t = 0; t < 60 && !fb.harvested; t++) { farmbuild(bot, ctx); await tick() } })
+    assert.equal(fb.harvested, 1, logs.slice(-8).join('\n'))
+    assert.ok(logs.some((l) => /^farm crop planted=\d+ mature=\d+ harvested=\d+ hay=\d+$/.test(l)))
+    // Hay in the pack goes into the barn chest.
+    bot.inventory.items().push({ name: 'hay_block', count: 2, type: 77 })
+    bot.openChest = async () => ({ containerItems: () => [], deposit: async () => {}, close: async () => {} })
+    fb.walkKey = null
+    await quiet(async () => { for (let t = 0; t < 20 && !fb.hay; t++) { farmbuild(bot, ctx); await tick() } })
+    assert.equal(fb.hay, 2)
+  })
+})

@@ -498,6 +498,7 @@ function protectedReason(bot, block, ctx) {
     // build's own clears (flora, snow) stay legal.
     // The whole column below the roof is covered (equip would otherwise dig
     // under the floor). Bot-placed patches above the floor layer stay diggable.
+    if (ctx && ctx.farmBuild && require('../farm-plan').protects(ctx.farmBuild, pos, name)) return 'protected' // qphv.2: laid farm cells, own or not
     const own = isOwnPlaced(ctx, block)
     let fp = name !== 'snow' && NATURAL_SOLID.has(name) && inHouseFootprint(ctx && ctx.home, pos)
     if (fp === 'apron' && ctx.recovery && apronEscape(bot, ctx.home, pos)) fp = false // recover only (revmux 02 core-1)
@@ -516,7 +517,7 @@ function protectedReason(bot, block, ctx) {
     // may break seed tufts and MATURE wheat — regrowable, never part of a
     // build. Sits after the footprint/castle rules above, so walled fields
     // keep their protection.
-    if (ctx && ctx.step === 'farm' && farmDiggable(block, props)) return null
+    if (ctx && (ctx.step === 'farm' || ctx.step === 'farmbuild') && farmDiggable(block, props)) return null // farmbuild: the built field's crop cycle
     if (name.endsWith('_ore') || name.endsWith('_leaves')) return null
     const woody = (name.endsWith('_log') && !name.startsWith('stripped_')) ||
       name.endsWith('_stem') || name.endsWith('_hyphae')

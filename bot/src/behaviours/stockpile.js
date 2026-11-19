@@ -959,7 +959,7 @@ async function withdrawAnyFromChest(bot, ctx, names, count, at = null) {
 
 // Deposit every pack stack named in names (9qt0: beds banks partial wool
 // before yielding). { put } — 0 when the chest is gone, full or unopenable.
-async function depositToChest(bot, ctx, names) {
+async function depositToChest(bot, ctx, names, at = null) {
   const want = new Set(Array.isArray(names) ? names : [])
   try {
     const res = await withChest(bot, ctx, async (window) => {
@@ -972,7 +972,7 @@ async function depositToChest(bot, ctx, names) {
         } catch (_) { /* full or unmovable: keep the rest */ }
       }
       return put
-    })
+    }, at)
     return { put: res && res.status === 'ok' ? res.value : 0 }
   } catch (_) {
     return { put: 0 }
