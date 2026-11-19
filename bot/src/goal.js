@@ -3347,9 +3347,11 @@ async function decide(bot, ctx) {
   const held = stickyHold(bot, ctx, facts, prev, status, finished, nightFarWalk)
   if (held) return held
   const foodRecovery = require('./behaviours/food-recovery')
+  // failed() before the exit's invalidate: an idle no-target end with no source
+  // left made foodExit true, invalidate ran first and failed() saw r.valid=false.
+  if (prev === 'foodRecovery' && finished && status !== 'done') foodRecovery.failed(ctx)
   const foodExit = prev === 'foodRecovery' && !foodRecovery.needed(bot, ctx, facts)
   if (foodExit) foodRecovery.invalidate(ctx)
-  if (prev === 'foodRecovery' && finished && status !== 'done') foodRecovery.failed(ctx)
   if (prev === 'foodRecovery' && !finished && !foodExit) return { action: prev, sprint: false, source: 'goal-fsm' }
   if (prev !== 'foodRecovery' && foodRecovery.available(bot, ctx, facts)) {
     const choice = { step: 'foodRecovery', source: 'survival', fsm: 'foodRecovery' }

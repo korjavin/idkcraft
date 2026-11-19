@@ -577,6 +577,7 @@ function diagnose(bot, ctx) {
     const fails = t && t[t.active] && Array.isArray(t[t.active].fails) ? t[t.active].fails : []
     if (fails.length > 0) parts.push(`failed: ${fails.join(', ')}`)
   } catch (_) { /* fails best-effort */ }
+  if (ctx && ctx.foodNoSource) parts.push('food=no-source (no meal, chest, animal or crop in range: explore or hunt farther)')
   return parts.length > 0 ? parts.join('; ') : 'unknown'
 }
 
@@ -979,7 +980,7 @@ function goalPromptState(bot, ctx, kind, done, total, state) {
   base.abilities = {
     pickaxe: (facts && facts.pickWord) || 'no',
     table: (facts && (facts.tablePlaced || facts.houseTable)) ? 'yes' : 'no',
-    food: (facts && typeof facts.food === 'number' && facts.food < 6) ? 'hungry' : 'ok',
+    food: ctx && ctx.foodNoSource ? 'no-source' : (facts && typeof facts.food === 'number' && facts.food < 6) ? 'hungry' : 'ok',
     sword: (facts && (facts.sword || 0) > 0) ? 'yes' : 'no',
   }
   base.owed = {
