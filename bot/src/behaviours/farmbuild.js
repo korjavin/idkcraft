@@ -66,6 +66,26 @@ function anchorOf(bot, ctx) {
   return { at, avoid }
 }
 
+// No-site walk (qphv): candidates read unloaded — walk toward the nearest
+// one so its chunk loads, then re-pick. Gives up (the old no-site fail) once
+// the pathfinder sat idle SITE_WALK_IDLE ticks on the same target.
+const SITE_WALK_IDLE = 30
+function walkToUnloaded(bot, fb, r) {
+  const t = r.walk
+  const w = fb.siteWalk
+  if (!w || w.x !== t.x || w.z !== t.z) {
+    fb.siteWalk = { x: t.x, z: t.z, idle: 0 }
+    console.log(`farm no-site: walking to unloaded ${t.x},${t.z} tried=${r.tried} unloaded=${r.why.unloaded} built=${r.why.built}`)
+  } else {
+    let moving = false
+    try { moving = bot.pathfinder.isMoving() } catch (_) { /* idle */ }
+    if (moving) return true
+    if (++w.idle > SITE_WALK_IDLE) return false // kept: the same target fails at once next time
+  }
+  try { bot.pathfinder.setGoal(new goals.GoalNearXZ(t.x, t.z, 4)) } catch (_) { /* retry next tick */ }
+  return true
+}
+
 function progressLine(bot, ctx, fb, idx, now) {
   if (now - (fb.loggedAt || 0) < PROGRESS_LOG_MS) return
   fb.loggedAt = now
@@ -81,8 +101,10 @@ function run(bot, ctx) {
     const { at, avoid } = anchorOf(bot, ctx)
     const r = at ? blueprint.pickSite(bot, at, avoid) : { site: null, tried: 0, reason: 'no-anchor' }
     const site = r.site
+    if (!site && r.walk && walkToUnloaded(bot, fb, r)) return
     if (!site) {
-      if (ctx.stepStatus !== 'failed:no-site') console.log(`farm failed:no-site tried=${r.tried} best=none reason=${r.reason}`)
+      const w = r.why || {}
+      if (ctx.stepStatus !== 'failed:no-site') console.log(`farm failed:no-site tried=${r.tried} best=none reason=${r.reason} unloaded=${w.unloaded | 0} built=${w.built | 0} castle=${w.castle | 0} lava=${w.lava | 0} deep=${w.deep | 0}`)
       stepFailed(ctx, 'no-site')
       return
     }

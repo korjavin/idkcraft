@@ -149,13 +149,44 @@ describe('farm blueprint (qphv.1)', () => {
     const w = world()
     const bot = mockBot(w)
     bot.blockAt = () => null // nothing loaded
+    bot.pathfinder.setGoal = () => {}
     const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, castle: null }
     const logs = []
     const orig = console.log
     console.log = (m) => { logs.push(String(m)) }
-    try { farmbuild(bot, ctx) } finally { console.log = orig }
+    try { for (let t = 0; t < 40 && ctx.stepStatus === 'running'; t++) farmbuild(bot, ctx) } finally { console.log = orig }
+    assert.ok(/^farm no-site: walking to unloaded -?\d+,-?\d+ /.test(logs[0]), logs[0])
     assert.equal(ctx.stepStatus, 'failed:no-site')
-    assert.ok(logs.some((l) => /^farm failed:no-site tried=\d+ best=none reason=unloaded-or-built$/.test(l)), logs.join('\n'))
+    assert.ok(logs.some((l) => /^farm failed:no-site tried=\d+ best=none reason=unloaded unloaded=\d+ built=0 castle=0 lava=0 deep=0$/.test(l)), logs.join('\n'))
+  })
+
+  it('walks toward the nearest unloaded candidate instead of failing', () => {
+    const w = world()
+    const bot = mockBot(w)
+    const read = bot.blockAt
+    bot.blockAt = (p) => (p.x > 20 ? read(p) : null) // only the far east is loaded... and too built to use
+    w.blockAt = ((orig) => (p) => (p.y === 63 ? { ...orig(p), name: 'oak_planks' } : orig(p)))(w.blockAt)
+    let goal = null
+    bot.pathfinder.setGoal = (g) => { goal = g }
+    const r = fp.pickSite(bot, bot.entity.position)
+    assert.equal(r.site, null)
+    assert.ok(r.why.unloaded > 0 && r.why.built > 0, JSON.stringify(r.why))
+    assert.ok(r.walk)
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, castle: null }
+    const orig = console.log
+    console.log = () => {}
+    try { farmbuild(bot, ctx) } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'running')
+    assert.ok(goal && goal.x === r.walk.x && goal.z === r.walk.z)
+  })
+
+  it('widens the radius when the near ring is all built', () => {
+    const w = world()
+    const inner = (p) => Math.abs(p.x) < 50 && Math.abs(p.z) < 50
+    w.blockAt = ((orig) => (p) => (p.y === 63 && inner(p) ? { ...orig(p), name: 'cobblestone_wall' } : orig(p)))(w.blockAt)
+    const r = fp.pickSite(mockBot(w), { x: 0, y: 64, z: 0 })
+    assert.ok(r.site, r.reason)
+    assert.ok(!inner({ x: r.site.x, z: r.site.z }) || !inner({ x: r.site.x + fp.W - 1, z: r.site.z + fp.D - 1 }))
   })
 })
 
