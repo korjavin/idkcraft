@@ -135,6 +135,35 @@ describe('house builder branch (idkcraft-neuc.54)', () => {
     assert.equal(ctx.home.built, true)
   })
 
+  it('places support below an unsupported doorstep before batching the house', async () => {
+    const world = makeWorld()
+    const target = { dx: 2, dy: -1, dz: -1 }
+    // The first doorstep cell has three open layers below and no side support.
+    for (let y = 60; y <= 63; y++) {
+      for (let x = 1; x <= 3; x++) {
+        for (let z = -2; z <= 0; z++) world.set(x, y, z, 'air')
+      }
+    }
+    const bot = mockBot(world)
+    const ctx = freshCtx()
+    const isDoorstep = (c) => c.dx === target.dx && c.dy === target.dy && c.dz === target.dz
+    const batch = build.builderCells(bot, ctx.home, [])
+    assert.ok(batch && batch.cells.length > 0)
+    assert.ok(!batch.cells.some(isDoorstep), 'unsupported fill is excluded from the schematic')
+
+    await run(bot, ctx, 2)
+    assert.equal(bot.calls.builds.length, 0, 'unsupported current fill uses per-cell placement')
+    assert.equal(world.blockAt({ x: 2, y: 60, z: -1 }).name, 'oak_planks')
+    assert.equal(world.blockAt({ x: 2, y: 63, z: -1 }).name, 'air')
+
+    await run(bot, ctx, 40)
+    assert.ok(bot.calls.builds.some((call) => call.cells.some(isDoorstep)), 'supported fill can batch')
+    for (let y = 60; y <= 63; y++) {
+      assert.equal(world.blockAt({ x: 2, y, z: -1 }).name, 'oak_planks', `y=${y}`)
+    }
+    assert.equal(ctx.stepStatus, 'done')
+  })
+
   it('a wedged builder fails build-stall loud', async () => {
     const world = makeWorld()
     const bot = mockBot(world, { buildScript: 'stall' })
