@@ -1098,7 +1098,7 @@ function build(bot, ctx, target, state) {
     ctx.home.built = true
     ctx.stepStatus = 'done'
     const s = ctx.home.site
-    try { bot.chat(`${ctx.home.kind === 'farm' ? 'farm' : 'home'} done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
+    try { bot.chat(ctx.home.kind === 'farm' ? `farm done at ${s.x} ${s.y} ${s.z}` : `home done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
     return
   }
   const plan = blueprintFor(ctx.home)
