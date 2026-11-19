@@ -248,8 +248,11 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   function noteGone() {
     // zchb: a running flat outlives its speaker — no leave streak while it works.
     if (ctx.flat && !ctx.flat.parked) noteSeen()
-    else if (ctx.autonomous) noteStay()
-    else noteEmpty()
+    else if (ctx.autonomous) {
+      noteStay()
+      // prod 2026-11-19: 'follow me'/'flat' outlived the owner and 3 bots idled an hour alone.
+      if (!ctx.work && !swarmHelper && (followName || (ctx.flat && ctx.flat.parked))) { console.log('nobody online: autonomous, back to work'); startWork() }
+    } else noteEmpty()
   }
   // Tear-down for the join loop: after our own quit() the old ticker must
   // not tick on (it would log stale idle lines, retain the dead bot's
