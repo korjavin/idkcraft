@@ -39,10 +39,11 @@ function done(ctx, t, result, now = Date.now()) {
   if (mine) ctx.reachBuild = null
   if (!ctx) return
   const s = ctx.reachSummary || (ctx.reachSummary = { since: now, by: {} })
-  const b = s.by[how] || (s.by[how] = { ok: 0, fail: 0 })
+  const b = s.by[how] || (s.by[how] = { ok: 0, fail: 0, why: {} })
   b[result === 'ok' ? 'ok' : 'fail']++
+  if (result !== 'ok') { const w = String(result).replace(/^fail:/, ''); b.why[w] = (b.why[w] || 0) + 1 }
   if (now - s.since < SUMMARY_MS) return
-  for (const [h, n] of Object.entries(s.by)) console.log(`reach summary ok=${n.ok} fail=${n.fail} by=${h}`)
+  for (const [h, n] of Object.entries(s.by)) console.log(`reach summary ok=${n.ok} fail=${n.fail} by=${h} why=${Object.entries(n.why).map(([w, k]) => `${w}:${k}`).join(',') || '-'}`)
   ctx.reachSummary = null
 }
 

@@ -54,7 +54,7 @@ describe('castle dig-approach for unreachable cells', () => {
         castle.far(bot, ctx, st, cell, 4.5, now)
       }
       const ap = lines.filter((l) => l.startsWith('approach '))
-      assert.match(ap[0], /^approach target=114,64,200 stand=\S+ reached=true inReach=false dist=\S+ -> action=reapproach#1$/)
+      assert.match(ap[0], /^approach target=114,64,200 stand=\S+ path=\S+ inReach=false dist=\S+ -> action=reapproach#1$/)
       assert.match(ap[ap.length - 1], /action=dig-approach$/, ap.join('\n'))
       assert.ok(ctx.castleFar.dig && !ctx.castleFar.build, 'dig ladder armed, no access build in prep')
     } finally { console.log = orig }

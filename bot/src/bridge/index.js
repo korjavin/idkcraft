@@ -277,6 +277,7 @@ function movementsToSettings(m, registry) {
   if (typeof m.allowSprinting === 'boolean') desired.allowSprint = String(m.allowSprinting)
   if (typeof m.allowParkour === 'boolean') desired.allowParkour = String(m.allowParkour)
   if (typeof m.allow1by1towers === 'boolean') desired.allowPlace = String(m.allow1by1towers)
+  if (typeof m.allowInventory === 'boolean') desired.allowInventory = String(m.allowInventory)
   if (m.scafoldingBlocks != null && typeof m.scafoldingBlocks[Symbol.iterator] === 'function') {
     const names = []
     for (const id of m.scafoldingBlocks) {
@@ -1005,6 +1006,8 @@ class BaritoneBot extends EventEmitter {
         const m = this._mine
         if (m && !m.settled) continue
       }
+      // A live build/mine holds allowInventory itself (mod AllowInventory refcount).
+      if (k === 'allowInventory' && (this._build || (this._mine && !this._mine.settled))) continue
       if (this._settings[k] === desired[k]) continue
       this._settings[k] = desired[k]
       this.transport.call('baritone.cmd', { command: `#set ${k} ${desired[k]}` }).catch((e) => {
