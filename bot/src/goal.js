@@ -1992,7 +1992,7 @@ function shapeGoalMenu(names, model) {
 // BOT_MENU_ASK=1) and is read solely here — retreat/recover/bring read
 // brain.ask only, so they keep the FSM in prod. Manual 'brain jev|laya'
 // brains carry ask() and consult as before.
-async function chooseStep(brain, facts, feasible, home, extra) {
+async function chooseStep(brain, facts, feasible, home, extra, ctx = null) {
   const names = STEP_ORDER.filter((n) => feasible.includes(n))
   const text = goalText(facts, home)
   const fsm = goalFsm(facts, names)
@@ -2010,6 +2010,10 @@ async function chooseStep(brain, facts, feasible, home, extra) {
   // xhqv: shelter too — a latched gohome hands the night to shelter, and a
   // model re-pick to a day step would undo the latch.
   if (fsm === 'stay' || fsm === 'gohome' || fsm === 'shelter') return { step: fsm, source: 'night-rule', fsm, model: null }
+  // Owner order rule (prod 2026-11-19 bot2: 'build farm' lost to the castle-rule tidy):
+  // a standing owner order for a step outranks the castle and fun rules while it is feasible.
+  const fbo = ctx && ctx.farmBuild
+  if (fbo && fbo.ordered && !fbo.built && names.includes('farmbuild')) return { step: 'farmbuild', source: 'order-rule', fsm, model: null }
   if (fsm === 'fun') return { step: fsm, source: 'fun-rule', fsm, model: null }
   // Castle rule (vmzq.19 R2, major 2, the night-rule precedent): a runnable
   // castle is a rule, not a preference — run3's laya picked equip then
@@ -3413,7 +3417,7 @@ async function decide(bot, ctx) {
     } catch (_) {
       stratExtra = null
     }
-    const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home, stratExtra)
+    const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home, stratExtra, ctx)
     if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     applyChoice(bot, ctx, facts, choice, prev, finished, why, text)
