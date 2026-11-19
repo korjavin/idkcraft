@@ -1249,14 +1249,17 @@ function isLitter(bot, ctx, st, x, y, z, w, d) {
   // Logs/leaves (the tree itself) are never litter; dirt beside a tree may be.
   if (!(SCAFFOLD_MATS.has(n) || NATURAL_SOLID.has(n))) return false // chests, beds, doors, torches, leaves, logs
   if (leftoverScaffold(bot, st, b, x, y, z, w, d)) return true
-  if (!SCAFFOLD_MATS.has(n)) return false
-  const ring = y >= st.site.y && x >= st.site.x - 1 && x <= st.site.x + w && z >= st.site.z - 1 && z <= st.site.z + d
-  if (ring && isOwnPlaced(ctx, b)) {
+  // Any block the bot itself placed off plan above grade anywhere in the
+  // apron (access pillars/bridges of reach.js, build scaffold) is litter:
+  // only the fence ring counted it, so access blocks stuck to other scaffold
+  // stayed and the sweep ran net-flat (prod bot3: clutter 398 -> 361 / hour).
+  if (y >= st.site.y && isOwnPlaced(ctx, b)) {
     const k = `${x},${y},${z}`
     if (blueprint.absPlan(st.site, st.rot, st.blueprintVersion).at.has(k)) return false
     const dc = blueprint.decorPlan(st.site, st.rot, st.blueprintVersion).at.get(k)
     return !(dc && blueprint.matches(dc.kind, n))
   }
+  if (!SCAFFOLD_MATS.has(n)) return false
   return scaffoldShape(bot, ctx, b, st)
 }
 // Scaffold scan tally (owner 2026-11-17: the rule never logged a hit):
@@ -1351,7 +1354,7 @@ function litterTargets(bot, ctx, st, now) {
       if (c.next === 0) ctx.castleScan = { cand: 0, litter: 0, mats: {}, rejected: {} }
       for (const o of litterSlice(bot, ctx, st, c.next, w, d)) { o.slice = c.next; c.acc.push(o) }
       c.next++
-      if (c.next > last) { c.list = c.acc; c.acc = []; if (c.list.length) console.log(`castle sweep scaffold=${c.list.length}`)
+      if (c.next > last) { litterRate(c, c.acc, now); c.list = c.acc; c.acc = []; if (c.list.length) console.log(`castle sweep scaffold=${c.list.length}`)
         const t = ctx.castleScan
         if (t) console.log(`castle scaffold scan cand=${t.cand} litter=${t.litter} hits=${fmtCounts(t.hits || {})} mats=${fmtCounts(t.mats)} rejected=${fmtCounts(t.rejected)} sample=${(t.sample || []).join(' ')}`)
         ctx.castleScan = null
@@ -1390,6 +1393,24 @@ function litterTargets(bot, ctx, st, now) {
   }
   ctx.castleLitter = { key, at: now, list }
   return list
+}
+
+// Net sweep progress per full pass, logged every LITTER_RATE_MS: removed =
+// last pass's cells gone from this one, added = new ones (re-placed, fallen).
+const LITTER_RATE_MS = 10 * 60 * 1000
+function litterRate(c, list, now) {
+  const k = (o) => `${o.x},${o.y},${o.z}`
+  const cur = new Set(list.map(k))
+  const r = c.rate || (c.rate = { at: now, removed: 0, added: 0, prev: null })
+  if (r.prev) {
+    for (const q of r.prev) if (!cur.has(q)) r.removed++
+    for (const q of cur) if (!r.prev.has(q)) r.added++
+  }
+  r.prev = cur
+  if (now - r.at >= LITTER_RATE_MS) {
+    console.log(`litter rate removed=${r.removed} added=${r.added} left=${cur.size}`)
+    r.at = now; r.removed = 0; r.added = 0
+  }
 }
 
 // Next workable litter cell (not backing off, never retired, no player —
@@ -4284,4 +4305,5 @@ module.exports.placeCell = placeCell
 module.exports.digCell = digCell
 module.exports.upkeepDone = upkeepDone
 module.exports.isLitter = isLitter
+module.exports.litterRate = litterRate
 module.exports.upkeepLog = upkeepLog
