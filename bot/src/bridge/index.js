@@ -799,7 +799,6 @@ class BaritoneBot extends EventEmitter {
       this.emit('path_reset', 'noPath')
       return
     }
-    this._pathStatus = 'none'
     // The lease mutates the Movements object between goals (body.js
     // movementsFor), so flags re-push on every goal; the diff keeps the
     // cmd stream quiet.
@@ -860,6 +859,12 @@ class BaritoneBot extends EventEmitter {
   // _boundSeq, overlapping follow re-issues order by seq). Failures log,
   // never emit 'error' (runOnce fatal()s every 'error'; see chat()).
   _sendGoalCmd(command) {
+    // The ticker sees terminal verdicts through path_update. Clear the old
+    // verdict there too before the watchdog can apply it to this walk.
+    if (this._pathStatus !== 'none') {
+      this._pathStatus = 'none'
+      this.emit('path_update', { status: 'none' })
+    }
     // A new goal preempts a live builder on the Baritone side without any
     // #stop going out (round-3 core-2): mark it, so the idle final rejects
     // 'build-preempted' instead of settling starved.
@@ -930,8 +935,8 @@ class BaritoneBot extends EventEmitter {
   // Dynamic GoalFollow mid-walk refresh (idkcraft-neuc.4): follow.js only
   // re-issues on terminal/timeout, so a walking player outruns the
   // one-shot #near. Re-command when the live target left the commanded
-  // spot by > 1 block, at most one cmd/s. Silent: no ticker events — the
-  // new echo rebinds the latch and the old id's late verdicts drop.
+  // spot by > 1 block, at most one cmd/s. The new echo
+  // rebinds the latch and the old id's late verdicts drop.
   _maybeReissueFollow() {
     const f = this._follow
     if (!f) return
