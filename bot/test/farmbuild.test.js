@@ -325,7 +325,7 @@ describe('farmbuild step (qphv.1)', () => {
     } finally { console.log = orig; Date.now = realNow }
   })
 
-  it('a stalled site that is >=90% raised is kept as built, not re-picked (prod bot2 198/199)', () => {
+  it('a stalled site that is >=50% raised is kept as built, not re-picked (prod bot2 198/199)', () => {
     const w = world()
     const bot = mockBot(w)
     bot.pathfinder.setGoal = () => {}
