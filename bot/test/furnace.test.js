@@ -574,9 +574,19 @@ describe('furnace smelt (load coal or planks, take, settle)', () => {
     assert.equal(ctx.stepStatus, 'failed:table-unreachable')
   })
 
-  it('unreachable furnace fails after 20 walk ticks without progress', async () => {
-    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, blocks: { '50,64,0': 'furnace' } })
+  it('unreachable furnace is skipped for the day and a new one placed beside the body', async () => {
+    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, inv: [{ name: 'furnace', count: 1 }], blocks: { '50,64,0': 'furnace', ...floorBlocks() } })
     const ctx = { home: { furnace: { x: 50, y: 64, z: 0 } } }
+    for (let i = 0; i < 22; i++) await tick(bot, ctx)
+    assert.equal(ctx.stepStatus, undefined)
+    assert.equal(ctx.home.furnace, undefined) // retracted, not failed
+    await tick(bot, ctx) // places the pack furnace next to us
+    assert.deepEqual({ ...ctx.home.furnace }, { x: 1, y: 64, z: 0 })
+  })
+
+  it('a third unreachable furnace the same day fails loud', async () => {
+    const bot = mockBot({ at: { x: 0, y: 64, z: 0 }, blocks: { '50,64,0': 'furnace' } })
+    const ctx = { home: { furnace: { x: 50, y: 64, z: 0 } }, furnaceFar: { day: 0, keys: new Set(['1,1,1', '2,2,2']) } }
     for (let i = 0; i < 22; i++) await tick(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
   })
@@ -602,7 +612,7 @@ describe('furnace smelt (load coal or planks, take, settle)', () => {
     for (let i = 0; i < 40; i++) { await tick(bot, ctx); bot.entity.position.x += 1 }
     assert.equal(ctx.stepStatus, undefined)
     for (let i = 0; i < 22; i++) await tick(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
+    assert.equal(ctx.home.furnace, undefined) // given up: relocated, not walked forever
   })
 
   it('a resumed run walking back from far gets progress credit again', async () => {
@@ -623,7 +633,7 @@ describe('furnace smelt (load coal or planks, take, settle)', () => {
     for (let i = 0; i < 300; i++) { await tick(bot, ctx); bot.entity.position.x += 2 }
     assert.equal(ctx.stepStatus, undefined)
     await tick(bot, ctx)
-    assert.equal(ctx.stepStatus, 'failed:furnace-unreachable')
+    assert.equal(ctx.home.furnace, undefined) // given up: relocated, not walked forever
   })
 
   it('a settled run never resumes spent', async () => {

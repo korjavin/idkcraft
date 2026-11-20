@@ -299,10 +299,16 @@ function tableFor(bot, ctx, { local = false } = {}) {
     ref = fallback
     at = new Vec3(fallback.position.x, fallback.position.y + 1, fallback.position.z)
   }
+  let digCell = null
+  if (!ref) { // pit/tunnel/wall-side stance: widen to any reachable floor, dig one out last
+    const sp = stationSpot(bot, ctx, bp, skip)
+    if (sp) { ref = sp.ref; at = sp.at; digCell = sp.dig || null }
+  }
   if (!ref) return nope('no-table-ref')
   // mineflayer places the HELD item: hold the table or a planks block lands
   // (and reads truthy) where the table should be.
   const run = async () => {
+    if (digCell) await bot.dig(digCell)
     if (typeof bot.equip === 'function') {
       try {
         await bot.equip(tableItem, 'hand')
@@ -425,4 +431,41 @@ function spotBlocked(bot, ctx, x, y, z) {
   return false
 }
 
-module.exports = { FAR_TABLE, PLACE_OVER, itemsOf, dist3, dayOf, tableFar, castleTableSpot, tableFor, seenTable, reclaimTable }
+// Station spot for any placed workstation (table, furnace): solid floor with
+// an open cell above within 2 blocks of the body (diagonals too), not a
+// plan/bedroom/door cell. In a pit or tunnel nothing is open: dig a solid
+// feet-level neighbour (its floor stays) and place there. Null = none.
+function stationSpot(bot, ctx, bp, skip = new Set()) {
+  if (!bp || !bot || typeof bot.blockAt !== 'function') return null
+  const bx = Math.floor(bp.x)
+  const by = Math.floor(bp.y)
+  const bz = Math.floor(bp.z)
+  const read = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
+  let dig = null
+  for (const dy of [0, -1, 1]) {
+    for (let r = 1; r <= 2; r++) {
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dz = -r; dz <= r; dz++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue // ring r: nearest first
+          const x = bx + dx
+          const y = by + dy
+          const z = bz + dz
+          if (skip.has(`${x},${y},${z}`) || spotBlocked(bot, ctx, x, y, z)) continue
+          const below = read(x, y - 1, z)
+          if (!below || !below.position || !below.name || AIRISH.has(below.name)) continue
+          if (below.boundingBox != null && below.boundingBox !== 'block') continue
+          const cell = read(x, y, z)
+          if (!cell || !cell.name) continue // unloaded: never place blind
+          if (AIRISH.has(cell.name) || PLACE_OVER.has(cell.name)) return { ref: below, at: new Vec3(x, y, z) }
+          if (!dig && dy === 0 && r === 1 && Math.abs(dx) + Math.abs(dz) === 1 && typeof bot.dig === 'function' &&
+              cell.boundingBox === 'block' && cell.diggable !== false && require('./util').NATURAL_SOLID.has(cell.name)) { // natural terrain only: never a player build
+            dig = { ref: below, at: new Vec3(x, y, z), dig: cell }
+          }
+        }
+      }
+    }
+  }
+  return dig
+}
+
+module.exports = { stationSpot, FAR_TABLE, PLACE_OVER, itemsOf, dist3, dayOf, tableFar, castleTableSpot, tableFor, seenTable, reclaimTable }
