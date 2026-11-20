@@ -56,10 +56,13 @@ function tick(bot, ctx, now = Date.now()) {
     return false
   }
   if (w.n < GRACE_TICKS && !(cell && near(ctx, cell, now))) return false
-  if (cell) mark(ctx, cell, 1, now)
+  const restWaiting = ctx.step === 'rest' && ctx.stepPick?.step === 'rest' && now < ctx.stepPick.workUntil
+  if (cell && !restWaiting) mark(ctx, cell, 1, now)
   w.goal = null
   w.n = 0
   try { bot.pathfinder.setGoal(null) } catch (_) { /* best-effort */ }
+  // A failed stroll can drop its path, but must not end a work retry wait.
+  if (restWaiting) return false
   stepFailed(ctx, 'unreachable')
   try { console.log(`path unreachable step=${ctx.step} goal=${(g.constructor && g.constructor.name) || 'goal'} ${cell ? `${Math.floor(cell.x)},${Math.floor(cell.z)}` : '?'}`) } catch (_) { /* log best-effort */ }
   return true
