@@ -803,7 +803,7 @@ function builderCells(bot, home, skipped) {
     const batchSize = Math.min(BUILDER_BATCH, countItems(bot, (n) => n === item.name))
     for (let i = 0; i < plan.length && cells.length < batchSize; i++) {
       const cell = plan[i]
-      if (!BUILDER_KINDS.has(cell.kind) || cell.floor || skip.has(i)) continue
+      if (!BUILDER_KINDS.has(cell.kind) || cell.floor || cell.stand || skip.has(i)) continue
       if (cell.kind === 'planks' && isDoorwayOrInterior(cell, home)) continue
       if (!cellLoaded(bot, home, cell) || cellDone(bot, home, cell)) continue
       // an unsupported fill (hole under it) goes per-cell: supportBelow fills its column bottom-up
@@ -1162,6 +1162,7 @@ function build(bot, ctx, target, state, acquireMaterial) {
   const plan = blueprintFor(ctx.home)
   const cell = plan[idx]
   let p = cellAbs(ctx.home, cell)
+  const stand = cell.stand && cellAbs(ctx.home, cell.stand)
   if (cell.kind === 'planks' && isDoorwayOrInterior(cell, ctx.home)) {
     skipCell(ctx, idx, p, 'doorway-interior')
     return
@@ -1309,7 +1310,8 @@ function build(bot, ctx, target, state, acquireMaterial) {
     // pathfinder never opens doors). The north wall holds the door, so
     // outside is -z.
     try {
-      bot.pathfinder.setGoal(cell.kind === 'door' && ctx.home.v === 2
+      const goal = stand ? new goals.GoalBlock(stand.x, stand.y, stand.z)
+        : cell.kind === 'door' && ctx.home.v === 2
         ? new goals.GoalNearXZ(p.x, p.z - 2, 1)
         : cell.kind === 'clear' // a dig, not a place: no face, no LOS (dig 'auto')
           ? new goals.GoalNear(p.x, p.y, p.z, PLACE_RANGE - 1)
@@ -1318,11 +1320,17 @@ function build(bot, ctx, target, state, acquireMaterial) {
           // column, and sight is not needed (place.once checks reach only,
           // baritone/bridge/PROTOCOL.md dig/place table).
           : (cell.floor || cell.bed || cell.kind === 'farmland' || cell.kind === 'water') ? new goals.GoalNear(p.x, p.y + 1, p.z, 2) // 8542: bed floor under the roof too
-          : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE }))
+          : new goals.GoalPlaceBlock(p, bot.world, { range: PLACE_RANGE })
+      bot.pathfinder.setGoal(goal)
     } catch (_) { /* retry next tick */ }
     return
   }
   if (moving) return
+
+  // A closure cell may be in reach from inside. Require its outdoor stand
+  // before placing so the builder cannot close a room around itself.
+  const bodyPos = bot.entity && bot.entity.position
+  if (stand && (!bodyPos || !stand.equals(Vec3(bodyPos.x, bodyPos.y, bodyPos.z).floored()))) return
 
   // At the cell (or the walk never started): place — but only in reach.
   // A preemption that carried the body away (fight, flee, lead, follow me)

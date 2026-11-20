@@ -15,8 +15,12 @@ function savedProject(project) {
   for (const cell of cells) {
     if (!cell || ![cell.dx, cell.dy, cell.dz].every(Number.isInteger) || !KINDS.has(cell.kind) ||
         (cell.kind === 'block' && (typeof cell.block !== 'string' || !NAME.test(cell.block)))) return null
-    const { dx, dy, dz, kind, phase, block } = cell
-    blueprint.push({ dx, dy, dz, kind, ...(phase === 'prep' ? { phase } : {}), ...(kind === 'block' ? { block } : {}) })
+    const { dx, dy, dz, kind, phase, block, stand } = cell
+    if (stand && ![stand.dx, stand.dy, stand.dz].every(Number.isInteger)) return null
+    blueprint.push({
+      dx, dy, dz, kind, ...(phase === 'prep' ? { phase } : {}), ...(kind === 'block' ? { block } : {}),
+      ...(stand ? { stand: { dx: stand.dx, dy: stand.dy, dz: stand.dz } } : {}),
+    })
   }
   const { x, y, z, w, d, cost } = site
   return {
