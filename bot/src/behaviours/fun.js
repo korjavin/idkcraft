@@ -15,6 +15,7 @@ const { stepDone, stepFailed, stepGen, stale, chatStep, isFinished } = require('
 const { HOSTILE_NAMES } = require('../perception')
 const { NEED_LOGS, SCAFFOLD_LOW } = require('../budget')
 const projects = require('./fun-projects')
+require('./fun-nature') // registers the oasis and the flower field
 
 // Long cooldown, randomized (brief: once per 30-60 min max).
 const FUN_MIN_MS = 30 * 60 * 1000

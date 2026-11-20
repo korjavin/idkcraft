@@ -208,4 +208,4 @@ function needOf(bot, ctx, item) {
 }
 const needMet = (bot, ctx, item) => { const r = needOf(bot, ctx, item); return !!(r && r.met) }
 
-module.exports = { NEED, needOf, needMet, anyChestWith, REMEMBERED_RADIUS, REMEMBERED_DRY_MS, homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf }
+module.exports = { NEED, needOf, needMet, anyChestWith, REMEMBERED_RADIUS, REMEMBERED_DRY_MS, homeChestWood, homeChestStale, SLOTS, slotContents, stockInSlots, homeStockOf, fetchStockOf, stockOf }
