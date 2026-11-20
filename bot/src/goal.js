@@ -1853,7 +1853,18 @@ function siteValidNow(bot, ctx) {
   ctx.skySiteProbe = { at: Date.now(), ok }
   return ok
 }
-const WORK_RECOVERY_MS = 90000
+const WORK_DWELL_MS = 90000
+const WORK_DWELL_EXEMPT = new Set(['rest', 'stay', 'gohome', 'shelter'])
+
+function workBlock(step) {
+  return STEP_ORDER.includes(step) && !WORK_DWELL_EXEMPT.has(step)
+}
+
+function workRetryHeld(ctx, step, now = Date.now()) {
+  const failure = ctx?.stepFail?.[step]
+  return now < (failure?.workRetryAt || 0) &&
+    (!failure.ownerOrder || failure.ownerOrder === orderedWork(ctx)?.order)
+}
 
 function orderedWork(ctx) {
   const order = ctx?.farmBuild
@@ -1862,6 +1873,7 @@ function orderedWork(ctx) {
 
 function failHolds(ctx, name, text, bot) {
   try {
+    if (workRetryHeld(ctx, name)) return true
     if (SELF_ADVANCING[name]) return false
     if (emptyHeld(ctx, name)) return true
     const sf = ctx && ctx.stepFail && ctx.stepFail[name]
@@ -1869,7 +1881,7 @@ function failHolds(ctx, name, text, bot) {
     // unrelated facts can change while recovery is making progress.
     if (sf?.ownerOrder) {
       if (orderedWork(ctx)?.order !== sf.ownerOrder) return false
-      if (Date.now() - sf.at < WORK_RECOVERY_MS) return true
+      if (Date.now() - sf.at < WORK_DWELL_MS) return true
       if (!sf.status.startsWith('failed:no-effect-')) return false
     }
     // Nothing workable (failed:idle, any step): yield for IDLE_RETRY_MS
@@ -2894,7 +2906,9 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
       const bp = bot && bot.entity && bot.entity.position
       const rec = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null, at: Date.now() }
       const order = orderedWork(ctx)
-      if (order?.id === prev) rec.ownerOrder = order.order
+      const pick = ctx.stepPick
+      if (order?.id === prev) rec.ownerOrder = pick?.workUntil && pick.ownerOrder ? pick.ownerOrder : order.order
+      if (pick?.step === prev && pick.workUntil > rec.at) rec.workRetryAt = pick.workUntil
       // prkh: the fetch hold parks one kind — carry the failed kind the
       // behaviour stamped (castlefetchFailKind), so other kinds still run.
       // Consumed (revmux 01 core-1): an unstamped later failure must fall
@@ -3233,7 +3247,8 @@ function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
     let ok = false
     try {
       const selfPlan = ctx.llmOrder?.choose && !ctx.llmOrder.explicit
-      ok = (planStep !== heldOwner || explicit) && (!selfPlan || menu.includes(planStep)) &&
+      ok = (planStep !== heldOwner || explicit) && (!workRetryHeld(ctx, planStep) || explicit) &&
+        (!selfPlan || menu.includes(planStep)) &&
         !!(MENU[planStep] && MENU[planStep].feasible(facts, bot, ctx) && registered(planStep))
     } catch (_) {
       ok = false
@@ -3252,7 +3267,7 @@ function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
     if (!nightOwns) {
       let ok = false
       try {
-        ok = commitStep !== heldOwner && !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
+        ok = commitStep !== heldOwner && !workRetryHeld(ctx, commitStep) && !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
       } catch (_) {
         ok = false
       }
@@ -3337,8 +3352,14 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
   // gwvg: status() reads who picked this step and why from the stamp.
   // The step rides along (01 core-2): orders and retreat move ctx.step
   // without re-stamping, and must not inherit the age/source.
+  const oldPick = ctx.stepPick
   ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
   if (choice.recovery) ctx.stepPick.recovery = choice.recovery
+  if (process.env.BOT_BODY === 'baritone' && workBlock(choice.step)) {
+    const sameRun = !finished && oldPick?.step === choice.step && oldPick.workUntil
+    ctx.stepPick.workUntil = sameRun ? oldPick.workUntil : ctx.stepPick.at + WORK_DWELL_MS
+    ctx.stepPick.ownerOrder = orderedWork(ctx)?.order
+  }
   // A banking trip picked under the pierce latches for the trip (R4):
   // set on a pick only, and only stockpile's own finish releases it above. A site
   // pick is not a pierce (the site is near by definition), so only a
@@ -3532,14 +3553,26 @@ async function decide(bot, ctx) {
     return { action: 'chestSearch', sprint: false, source: 'goal-fsm' }
   }
   const order = orderedWork(ctx)
-  const recovery = ctx?.stepPick?.step === prev ? ctx.stepPick.recovery : null
+  const pick = ctx?.stepPick?.step === prev ? ctx.stepPick : null
+  const recovery = pick?.recovery
   const sameOrder = recovery && recovery.order === order?.order
-  const recoveryExpired = sameOrder && Date.now() >= recovery.until
+  const now = Date.now()
+  const recoveryExpired = sameOrder && now >= recovery.until
   const explicitPlan = ctx?.llmOrder?.explicit || (ctx?.taskPlanArgs?.by && ctx.taskPlanArgs.by !== 'self')
-  // Finish useful recovery work before reconsidering a transient owner
-  // retry. Night, threats, explicit plans and a replaced order skip the hold.
-  if (!finished && sameOrder && !recoveryExpired && facts.time === 'day' &&
+  const sharedDwell = pick?.workUntil > now && pick.ownerOrder === order?.order
+  if (!finished && (sharedDwell || (sameOrder && !recoveryExpired)) && facts.time === 'day' &&
       !explicitPlan && !threatNear(bot)) return { action: prev, sprint: false, source: 'goal-fsm' }
+  // A cooled block can become available with unchanged facts (including
+  // while the body is resting). Consume the clock edge once.
+  let retryOpened = false
+  if (facts.time === 'day') {
+    for (const failure of Object.values(ctx?.stepFail || {})) {
+      if (failure?.workRetryAt && now >= failure.workRetryAt) {
+        delete failure.workRetryAt
+        retryOpened = true
+      }
+    }
+  }
   const { chainOwns, fetchRetry, gateOpened, buildRetry, siteRetry } = gateForces(fires)
   const pins = readPins(ctx)
   const planStep = pins.planStep
@@ -3557,7 +3590,8 @@ async function decide(bot, ctx) {
   if (prev && !finished && ctx) {
     try { factsForce = textForce(prev, facts, bot, ctx, status, text) } catch (_) { factsForce = ctx.goalText !== text }
   }
-  if (!prev || finished || (recovery && (!sameOrder || recoveryExpired)) || foodExit || factsForce || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
+  if (!prev || finished || retryOpened || (recovery && (!sameOrder || recoveryExpired)) ||
+      (pick?.workUntil && pick.ownerOrder !== order?.order) || foodExit || factsForce || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
     if (commitEnded) {
       try {
         require('./commitment').commitFinished(bot, ctx, status) // oqul.5: task.js registers it
@@ -3597,7 +3631,7 @@ async function decide(bot, ctx) {
     if (planApplied || commitApplied) choice.source = 'task-plan'
     if (orderRecovery && choice.step !== order.id &&
         (choice.source === 'jev-work' || choice.source === 'fsm-fallback')) {
-      choice.recovery = { order: order.order, until: Date.now() + WORK_RECOVERY_MS }
+      choice.recovery = { order: order.order, until: Date.now() + WORK_DWELL_MS }
     }
     const ms = Date.now() - t0
     applyChoice(bot, ctx, facts, choice, prev, finished, why, text)
