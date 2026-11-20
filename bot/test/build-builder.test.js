@@ -165,6 +165,15 @@ describe('house builder branch (idkcraft-neuc.54)', () => {
     assert.equal(ctx.stepStatus, 'done')
   })
 
+  it('limits a schematic to the selected plank variant in the pack', () => {
+    const bot = mockBot(makeWorld(), {
+      items: [{ name: 'oak_planks', count: 2 }, { name: 'birch_planks', count: 8 }, { name: 'oak_planks', count: 1 }],
+    })
+    const batch = build.builderCells(bot, freshCtx().home, [])
+    assert.equal(batch.cells.length, 3)
+    assert.ok(batch.cells.every((c) => c.block === 'oak_planks'))
+  })
+
   it('a wedged builder fails build-stall loud', async () => {
     const world = makeWorld()
     const bot = mockBot(world, { buildScript: 'stall' })

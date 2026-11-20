@@ -257,6 +257,9 @@ const MENU = {
         // step walks to the site and re-scans there. A built house far
         // away is not unfinished work (revmux 01): no walk home to repair.
         if (!buildMod.cellLoaded(bot, home, cell)) return !home.built && facts.planks >= Math.min(PLANK_COUNT, 16)
+        // A loaded house can source the next cell's materials during
+        // daytime, even before the old gathered-planks batch is full.
+        if (facts.time === 'day' && buildMod.canSourceMaterials(bot)) return true
         const kind = cell.kind
         if (kind === 'table' && !(facts.table > 0)) return false
         if (kind === 'door' && !(facts.door > 0)) return false
@@ -1311,7 +1314,7 @@ function shelterFits(facts, bot, ctx) {
 // An async window op (craft/equip/stockpile click) is running: the FSM
 // holds its step and the residence switch (g0z.29, orders.js) waits.
 function opInFlight(ctx) {
-  return !!ctx && !!(ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight || ctx.lightCraftInFlight || ctx.gearInFlight || ctx.furnaceInFlight)
+  return !!ctx && !!(ctx.acquire?.buildChestBusy || ctx.equipInFlight || ctx.craftInFlight || ctx.stockpileInFlight || ctx.lightCraftInFlight || ctx.gearInFlight || ctx.furnaceInFlight)
 }
 
 const { STEP_ORDER } = require('./plan-consts') // oqul.5: leaf, re-exported below

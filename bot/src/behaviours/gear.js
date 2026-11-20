@@ -645,8 +645,8 @@ function stopSteering(bot, ctx) {
 
 // Verified crafting table: one reader with the furnace step (g0z.36), so
 // a castle home's storeroom table counts for every gear/craftany craft.
-function tableBlock(bot, ctx) {
-  return require('./furnace').tableBlock(bot, ctx)
+function tableBlock(bot, ctx, accept) {
+  return require('./furnace').tableBlock(bot, ctx, accept)
 }
 
 // ---- bucket fill (jsf.5) ----

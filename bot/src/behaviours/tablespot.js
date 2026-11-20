@@ -85,7 +85,7 @@ function castleTableSpot(bot, ctx, bp, skip) {
 // the menu from re-picking us). Name checks are load-bearing: an air or
 // wrong block reads truthy, and activating it waits out the window timeout
 // instead of failing (live 26.1 lesson).
-function tableFor(bot, ctx) {
+function tableFor(bot, ctx, { local = false } = {}) {
   const nope = (why) => Promise.reject(new Error(why))
   const bp = bot.entity && bot.entity.position
   // Named sites (idkcraft-u07s): the log says which leg failed — pos (no
@@ -134,6 +134,7 @@ function tableFor(bot, ctx) {
     if (block && block.name === 'crafting_table' && require('./build').entranceHoled(bot, ctx, t) &&
       !require('./craft').tableUsable(bot, block, t)) continue
     if (block && block.name === 'crafting_table') {
+      if (local && !require('./craft').tableUsable(bot, block, t)) continue
       // ajoe: a far or today-unreachable station only wins when nothing
       // nearer stands and no table is in the pack to place beside us.
       if (!tableFar(bot, ctx, bp, t)) { homeTable = t; homeBlock = block; break }
@@ -205,7 +206,7 @@ function tableFor(bot, ctx) {
   let at = null
   let fallback = null
   const castleSpot = castleTableSpot(bot, ctx, bp, skip)
-  if (castleSpot) {
+  if (castleSpot && (!local || dist3(bp, castleSpot.at) <= TABLE_REACH)) {
     const k = `${castleSpot.at.x},${castleSpot.at.y},${castleSpot.at.z}`
     if (dist3(bp, castleSpot.at) > TABLE_REACH) {
       const key = `equip-castle-table:${k}`
@@ -413,7 +414,9 @@ function spotBlocked(bot, ctx, x, y, z) {
   try {
     if (require('./placesafe').blocksAccess(bot, x, y, z)) return true // never hem a bed/door/chest in
     if (require('./bedfacts').isBedroomCell(ctx && ctx.home, x, y, z)) return true
-    if (require('./build').isPlanCell(ctx && ctx.home, x, y, z)) return true
+    const { isPlanCell } = require('./build')
+    if (isPlanCell(ctx && ctx.home, x, y, z)) return true
+    if (ctx?.farmBuild?.kind === 'farm' && isPlanCell(ctx.farmBuild, x, y, z)) return true
     const c = ctx && ctx.castle
     if (c && c.site && typeof c.site.x === 'number' &&
         require('../castle').absPlan(c.site, c.rot | 0, c.blueprintVersion).at.has(`${x},${y},${z}`)) return true

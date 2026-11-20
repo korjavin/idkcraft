@@ -16,15 +16,13 @@
 
 const blueprint = require('../farm-blueprint')
 const build = require('./build')
-const { acquire, fromChest } = require('./acquire')
-const { stepFailed } = require('../step')
+const { acquire, acquireCellMaterial, fromChest } = require('./acquire')
+const { stepFailed, failReason } = require('../step')
 const { countItems } = require('../perception')
 const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
 
 const PROGRESS_LOG_MS = 30000
-const ITEM = { soil: 'dirt', ground: 'dirt', planks: 'oak_planks', fence: 'oak_fence', gate: 'oak_fence_gate', door: 'oak_door', chest: 'chest', farmland: 'wooden_hoe', water: 'water_bucket' }
-const ONE = new Set(['farmland', 'water']) // a tool, not a stack
 // Crop cycle (qphv.2) on the built field.
 const CROP_EVERY_MS = 10 * 60 * 1000 // a far bot still revisits the field
 const CROP_LOG_MS = 10 * 60 * 1000
@@ -174,23 +172,11 @@ function run(bot, ctx) {
     const cell = plan[idx]
     const want = cell.kind === 'clear' ? null : build.wantItem(cell)
     if (want && build.cellLoaded(bot, fb, cell) && countItems(bot, want) <= 0) {
-      const item = ITEM[cell.kind]
-      let n = 1
-      if (!ONE.has(cell.kind)) {
-        n = 0
-        for (const c of plan) if (c.kind === cell.kind && !build.cellDone(bot, fb, c)) n++
-        n = Math.max(1, Math.min(64, n))
-      }
-      let alts = [item]
-      if (cell.kind === 'ground') alts = [...build.FILLERS] // any cheap fill, dirt first
-      else try { alts = require('../sources').family(item).filter(want) } catch (_) { /* the item alone */ }
-      if (!alts.length) alts = [item]
-      const c = fromChest(bot, ctx, alts, n) // chests first, the castle's order
-      if (c === 'running') return
-      const r = c === 'done' ? 'done' : acquire(bot, ctx, item, n, [], alts)
+      view.buildGoalIdx = -1
+      const r = acquireCellMaterial(bot, ctx, fb, cell)
       if (r === 'running') return
-      if (r !== 'done') {
-        const why = String(r).replace(/^failed:/, '')
+      const why = failReason(r)
+      if (why != null) {
         if (ctx.stepStatus !== r) console.log(`farm failed:${why} cell=${cell.kind}`)
         stepFailed(ctx, why)
         return
