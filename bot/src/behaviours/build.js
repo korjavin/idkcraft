@@ -982,18 +982,34 @@ function wedgeLatched(ctx, p, idx) {
 function walkToSite(bot, ctx, p, goal, reason) {
   const bp = bot.entity && bot.entity.position
   if (!bp || typeof bp.x !== 'number') return
+  // Progress = a new closest approach, not displacement: prod bot5 walked
+  // toward an unloaded farm site for hours (moving=true path=success, 0/199);
+  // every Baritone segment moved the body and reset a displacement budget
+  // forever. A circling or oscillating walk sets no new best and fails.
+  const d = Math.hypot(bp.x - (p.x + 0.5), bp.z - (p.z + 0.5))
   const w = ctx.buildSiteWalk
   if (!w) {
-    ctx.buildSiteWalk = { x: bp.x, z: bp.z, ticks: 0 }
-  } else if (Math.hypot(bp.x - w.x, bp.z - w.z) > CELL_PROGRESS) {
+    ctx.buildSiteWalk = { x: bp.x, z: bp.z, ticks: 0, best: d }
+  } else if (typeof w.best === 'number' && d < w.best - CELL_PROGRESS) {
     w.x = bp.x // re-anchor in place: the sky walk's latch rides along
     w.z = bp.z
+    w.best = d
     w.ticks = 0
-  } else if (++w.ticks >= CELL_TICK_BUDGET) {
-    ctx.buildSiteWalk = null
-    ctx.buildGoalIdx = -1
-    failBuild(ctx, reason || 'cannot-reach-site')
-    return
+  } else {
+    if (typeof w.best !== 'number') w.best = d
+    if (++w.ticks >= CELL_TICK_BUDGET) {
+      console.log(`build site-walk gave up target=${p.x},${p.y},${p.z} dist=${d.toFixed(1)} best=${w.best.toFixed(1)} after ${CELL_TICK_BUDGET} ticks without getting closer`)
+      ctx.buildSiteWalk = null
+      ctx.buildGoalIdx = -1
+      failBuild(ctx, reason || 'cannot-reach-site')
+      return
+    }
+  }
+  const now = Date.now()
+  if (now - (ctx.buildSiteWalkLog || 0) >= 30000) { // why the step walks instead of placing
+    ctx.buildSiteWalkLog = now
+    const ww = ctx.buildSiteWalk
+    console.log(`build site-walk target=${p.x},${p.y},${p.z} why=${reason || 'unloaded'} dist=${d.toFixed(1)} best=${ww.best.toFixed(1)} still=${ww.ticks}/${CELL_TICK_BUDGET}`)
   }
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* re-issue */ }

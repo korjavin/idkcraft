@@ -102,8 +102,9 @@ function progressLine(bot, ctx, fb, idx, now) {
   if (now - (fb.loggedAt || 0) < PROGRESS_LOG_MS) return
   fb.loggedAt = now
   const p = build.houseProgress(bot, fb)
-  const phase = idx < 0 ? 'complete' : blueprint.planFor(fb)[idx].phase
-  console.log(`farm progress built=${p.done}/${p.total} phase=${phase}`)
+  const c = idx < 0 ? null : blueprint.planFor(fb)[idx]
+  const at = c ? ` cell=${fb.site.x + c.dx},${fb.site.y + c.dy},${fb.site.z + c.dz} kind=${c.kind} loaded=${build.cellLoaded(bot, fb, c) ? 1 : 0}` : ''
+  console.log(`farm progress built=${p.done}/${p.total} phase=${c ? c.phase : 'complete'}${at}`)
 }
 
 function run(bot, ctx) {
@@ -184,6 +185,12 @@ function run(bot, ctx) {
     }
   }
   build(bot, view)
+  // An unreachable self-picked site is dropped like a stalled one (the owner's spot is kept).
+  if (!fb.at && ctx.stepStatus === 'failed:cannot-reach-site') {
+    console.log(`farm site unreachable ${fb.site.x},${fb.site.y},${fb.site.z} -> re-picking`)
+    ctx.farmBuild = { ordered: fb.ordered, avoid: [...(fb.avoid || []), { x0: fb.site.x, z0: fb.site.z, x1: fb.site.x + blueprint.W - 1, z1: fb.site.z + blueprint.D - 1 }] }
+    return
+  }
   if (fb.built && ctx.stepStatus === 'done') console.log(`farm done site=${fb.site.x},${fb.site.y},${fb.site.z}`)
 }
 
