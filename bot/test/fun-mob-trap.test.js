@@ -53,6 +53,40 @@ it('builds the roof before the closures and seals it only from the outside apron
 })
 
 
+it('tries a different exterior stand after obstruction or no path', async (t) => {
+  t.mock.method(console, 'log', () => {})
+  const site = { x: 0, y: 64, z: 0, w: 5, d: 6, cost: 0 }
+  const cell = mobTrap().plan().at(-1)
+  const blocks = new Map([['2,64,0', 'stone'], ['2,64,1', 'cobblestone']])
+  const goals = []
+  const bot = {
+    entity: { position: new Vec3(2.5, 64, 2.5) },
+    inventory: { items: () => [{ name: 'cobblestone', count: 1 }] },
+    pathfinder: { isMoving: () => false, setGoal: (goal) => goals.push(goal) },
+    blockAt(p) {
+      const name = blocks.get(p.toArray().join(',')) || (p.y < 64 ? 'stone' : 'air')
+      return { name, position: p, boundingBox: name === 'air' ? 'empty' : 'block' }
+    },
+    async equip() {},
+    async placeBlock(ref, face) { blocks.set(ref.position.plus(face).toArray().join(','), 'cobblestone') },
+  }
+  const ctx = {
+    step: 'fun', stepStatus: 'running',
+    funProject: savedProject({ id: 'mob-trap', site, blueprint: [cell] }),
+  }
+  run(bot, ctx, 'idle')
+  assert.ok(goals.at(-1).isEnd(new Vec3(1, 64, 0)))
+  ctx.lastPathStatus = 'noPath'
+  run(bot, ctx, 'idle')
+  assert.ok(goals.at(-1).isEnd(new Vec3(3, 64, 0)))
+  assert.equal(blocks.has('2,65,1'), false)
+
+  bot.entity.position = new Vec3(3.5, 64, 0.5)
+  run(bot, ctx, 'idle')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(blocks.get('2,65,1'), 'cobblestone')
+})
+
 it('rejects a flooded chamber footprint', () => {
   const project = mobTrap((bot, ctx, opts) => gradedSite(bot, ctx, { ...opts, radius: 6, maxRadius: 6 }))
   const bot = {
