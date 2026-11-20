@@ -80,6 +80,12 @@ function installInteract(bot) {
     if (digTimeOf(bot, block) === Infinity) throw new Error(`dig time for ${block.name ?? block} is Infinity`)
     if (!block.position) throw new Error('dig: block has no position')
     if (bot.targetDigBlock) bot.stopDigging()
+    // The mod's tool pick sees the hotbar only: a best tool in the main pack
+    // (slot < 36) is equipped first, else stone is hit with whatever is held.
+    try {
+      const tool = bot.pathfinder && typeof bot.pathfinder.bestHarvestTool === 'function' && bot.pathfinder.bestHarvestTool(block)
+      if (tool && typeof tool.slot === 'number' && (tool.slot < 36 || tool.slot > 44) && typeof bot.equip === 'function') await bot.equip(tool, 'hand')
+    } catch (_) { /* best-effort: the dig still runs with the hotbar pick */ }
     const pos = cell(block.position)
     const vec = digFace && typeof digFace === 'object' && (digFace.x || digFace.y || digFace.z) ? digFace : null
     const face = vec ? faceName(vec) : 'up' // mineflayer 'auto' digs the top face
