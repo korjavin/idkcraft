@@ -25,6 +25,7 @@ const { botPos, logDeny, protectedReason, stuckDeny, stuckCost, stuckRefusal, re
 const reach = require('../reach')
 const worker = require('../worker')
 const { waterUpRun, countBuckets, wall2At, findCombo, findComboStand, findWaterfall, waterfallUpRun } = require('./waterup')
+const { stepFailed, isFinished } = require('../step')
 const castle = require('../castle') // yardRing only (pure, no requires of its own)
 
 const MAX_FAILS = 3 // failed primitives before call_player + drop goal
@@ -211,9 +212,21 @@ function throughBlockedAt(bot, goal) {
     const dx = goal.x - bp.x
     const dz = goal.z - bp.z
     if (dx === 0 && dz === 0) return false
-    const step = Math.abs(dx) >= Math.abs(dz) ? [Math.sign(dx), 0] : [0, Math.sign(dz)]
-    return solid(cellAt(bot, step[0], 0, step[1])) || solid(cellAt(bot, step[0], 1, step[1]))
+    return throughCells(bot, goal, bp).some(solid)
   } catch (_) { return false }
+}
+
+// Goalward cells dig_through clears, dig order first: feet and head, plus
+// the floor ahead when the goal is >= 2 below (a staircase down — open
+// ground with a low goal otherwise left wait as the only option, prod
+// bot2 2026-11-20: 40 min of wait loops holding a pickaxe).
+function throughCells(bot, goal, bp) {
+  const dx = goal.x - bp.x
+  const dz = goal.z - bp.z
+  const step = Math.abs(dx) >= Math.abs(dz) ? [Math.sign(dx), 0] : [0, Math.sign(dz)]
+  const cells = [cellAt(bot, step[0], 0, step[1]), cellAt(bot, step[0], 1, step[1])]
+  if (typeof goal.y === 'number' && goal.y <= bp.y - 2) cells.push(cellAt(bot, step[0], -1, step[1]))
+  return cells
 }
 
 // Measured displacement since the primitive started (9sq F2): sideways drift
@@ -1990,16 +2003,18 @@ function digThroughRun(bot, ctx) {
     dz = gp.z - bp.z
   }
   if (dx === 0 && dz === 0) return 'failed:no-direction'
-  const step = Math.abs(dx) >= Math.abs(dz) ? [Math.sign(dx), 0] : [0, Math.sign(dz)]
-  const feet = cellAt(bot, step[0], 0, step[1])
-  const head = cellAt(bot, step[0], 1, step[1])
-  if (isLava(feet) || isLava(head)) return 'failed:lava'
+  const cells = throughCells(bot, gp, bp)
+  if (cells.some(isLava)) return 'failed:lava'
   if (lavaNearAt(bot)) return 'failed:lava'
-  if (!solid(feet) && !solid(head)) {
-    const grounded = !bot.entity || !!bot.entity.onGround
-    if (displaced(st, bp, grounded)) return 'done'
+  // Displacement counts sideways moves only, so a stair-down step counts too.
+  if (displaced(st, bp, !bot.entity || !!bot.entity.onGround)) { setForward(bot, false); return 'done' }
+  const cell = cells.find(solid)
+  if (!cell) {
     st.verify = (st.verify || 0) + 1
-    if (st.verify > DISPLACE_TIMEOUT_TICKS) return 'failed:no-progress'
+    if (st.verify > DISPLACE_TIMEOUT_TICKS) { setForward(bot, false); return 'failed:no-progress' }
+    // Walk into the cleared cut: nothing else drives the body here.
+    try { const p = typeof bot.lookAt === 'function' && cells[0] && bot.lookAt(new Vec3(cells[0].position.x + 0.5, bp.y + 1.6, cells[0].position.z + 0.5), true); if (p && typeof p.catch === 'function') p.catch(() => {}) } catch (_) { /* best-effort */ }
+    setForward(bot, true)
     return 'running'
   }
   if (st.digError) return 'failed:dig-error'
@@ -2008,7 +2023,6 @@ function digThroughRun(bot, ctx) {
     return 'running'
   }
   if (typeof bot.dig !== 'function') return 'failed:no-dig'
-  const cell = solid(feet) ? feet : head
   const denyThrough = stuckDeny(bot, ctx, cell)
   if (denyThrough) { logDeny(cell, denyThrough); return 'failed:' + denyThrough } // idkcraft-drq
   st.digInFlight = true
@@ -2576,6 +2590,9 @@ function release(bot, ctx, how) {
   } else {
     ctx.restGaveUps = 0
     if (how === 'done') { ctx.restGaveUpAt = null; ctx.restGaveUpCalled = false }
+    // Budget spent on wait = no real escape was feasible: fail the step so
+    // the goal FSM picks other work instead of re-entering the same wait loop.
+    if (how === 'gave-up' && rec.action === 'wait' && ctx.work && ctx.step && !isFinished(ctx.stepStatus)) stepFailed(ctx, 'stuck')
   }
   try {
     if (bot.pathfinder && bot.pathfinder.goal && typeof bot.pathfinder.setGoal === 'function') {
