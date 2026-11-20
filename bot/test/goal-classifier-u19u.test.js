@@ -175,3 +175,101 @@ describe('goal classifier plug (u19u phase 1)', () => {
     }
   })
 })
+
+describe('JEV choice at normal v2 work boundaries', () => {
+  const flush = () => new Promise((resolve) => setImmediate(resolve))
+
+  it('asks once, carries outcomes, and takes JEV’s executable choice', async () => {
+    const requests = []
+    let resolve
+    const brain = { workChoice: (req) => { requests.push(req); return new Promise((r) => { resolve = r }) } }
+    const ctx = { stepOutcomes: [{ step: 'build', result: 'failed:no-planks' }] }
+    const extra = { workBoundary: '12:build:failed:no-planks', choose: () => { throw new Error('legacy chooser ran') } }
+    const names = ['craft', 'gather', 'rest']
+    const pick = () => goal.chooseStep(brain, facts(), names, null, extra, ctx)
+
+    assert.equal((await pick()).source, 'jev-work-pending')
+    assert.equal((await pick()).source, 'jev-work-pending')
+    assert.equal(requests.length, 1)
+    assert.deepEqual(Object.keys(requests[0].criteria), ['craft', 'gather'])
+    assert.deepEqual(requests[0].state.outcomes, ctx.stepOutcomes)
+    resolve({ step: 'gather', confidence: 0.9 })
+    await flush()
+    assert.deepEqual(await pick(), { step: 'gather', source: 'jev-work', fsm: 'craft', model: 'jev' })
+  })
+
+  it('uses current eligibility and lets an owner order cut in while waiting', async () => {
+    let resolve
+    const brain = { workChoice: () => new Promise((r) => { resolve = r }) }
+    const ctx = {}
+    const extra = { workBoundary: '1:build:done' }
+    const names = ['craft', 'gather', 'explore']
+    assert.equal((await goal.chooseStep(brain, facts(), names, null, extra, ctx)).source, 'jev-work-pending')
+
+    ctx.farmBuild = { ordered: true }
+    const order = await goal.chooseStep(brain, facts(), [...names, 'farmbuild'], null, extra, ctx)
+    assert.equal(order.source, 'order-rule')
+    assert.equal(order.step, 'farmbuild')
+
+    ctx.farmBuild = null
+    resolve({ step: 'gather', confidence: 1 })
+    await flush()
+    const current = await goal.chooseStep(brain, facts(), ['craft', 'explore'], null, extra, ctx)
+    assert.equal(current.source, 'fsm-fallback')
+    assert.equal(current.step, 'craft')
+  })
+
+  it('drops late decisions and leaves night safety in charge', async (t) => {
+    let now = 1000
+    t.mock.method(Date, 'now', () => now)
+    let resolve
+    const ctx = {}
+    const brain = { workChoice: () => new Promise((r) => { resolve = r }) }
+    const extra = { workBoundary: '1:build:done' }
+    const names = ['craft', 'gather']
+    assert.equal((await goal.chooseStep(brain, facts(), names, null, extra, ctx)).source, 'jev-work-pending')
+    const safety = await goal.chooseStep(brain, facts({ time: 'night' }), [...names, 'shelter'], null, extra, ctx)
+    assert.equal(safety.source, 'night-rule')
+    assert.equal(safety.step, 'shelter')
+    now += 3001
+    resolve({ step: 'gather', confidence: 1 })
+    await flush()
+    const fallback = await goal.chooseStep(brain, facts(), names, null, extra, ctx)
+    assert.equal(fallback.source, 'fsm-fallback')
+    assert.equal(fallback.step, 'craft')
+  })
+
+  it('dispatches a real boundary result without repeating the finished action', async (t) => {
+    for (const [name, entry] of Object.entries(goal.MENU)) {
+      t.mock.method(entry, 'feasible', () => ['craft', 'gather', 'rest'].includes(name))
+    }
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      time: { timeOfDay: 6000, day: 1 }, health: 20, food: 20,
+      inventory: { items: () => [] }, entities: {}, players: {},
+      blockAt: () => null,
+    }
+    let resolve
+    const ctx = {
+      step: 'build', stepStatus: 'failed:no-planks', work: true,
+      brain: { workChoice: () => new Promise((r) => { resolve = r }) },
+    }
+    assert.equal((await goal.decide(bot, ctx)).action, 'idle')
+    assert.equal((await goal.decide(bot, ctx)).action, 'idle')
+    assert.equal(ctx.step, 'build')
+    assert.equal(ctx.stepOutcomes.length, 1)
+    resolve({ step: 'gather', confidence: 0.9 })
+    await flush()
+    assert.equal((await goal.decide(bot, ctx)).action, 'gather')
+    assert.equal(ctx.stepOutcomes.length, 1)
+  })
+
+  it('wires work JEV separately from legacy menu ask, on keyed v2 only', () => {
+    const env = { BOT_BODY: 'baritone', TYPESAFE_API_KEY: 'fake-test-key' }
+    assert.equal(typeof makeBrain(env).workChoice, 'function')
+    assert.equal(makeBrain(env).menuAsk, undefined)
+    assert.equal(makeBrain({ ...env, BOT_WORK_JEV: '0' }).workChoice, undefined)
+    assert.equal(makeBrain({ BOT_BODY: 'baritone' }).workChoice, undefined)
+    assert.equal(makeBrain({ ...env, BOT_BODY: 'mineflayer' }).workChoice, undefined)
+  })
+})

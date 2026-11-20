@@ -372,11 +372,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // local laya engine never steps down, as before.
     if (!rosterOnline && (brainEngine === 'jev' || brainEngine === 'llm') && !ctx.brainRestore) {
       const to = 'off'
-      // Alone-exemption for plan() only (idkcraft-vmzq.5): the tick ask
-      // runs off, but the stall-point planner still reaches JEV (only when
-      // the key exists).
+      // Disable tick asks while alone. The keyed stall and work-boundary
+      // classifiers still support unattended work.
       const key = process.env.TYPESAFE_API_KEY
-      const next = key ? { ...stubBrain, ...planner(key) } : stubBrain
+      const next = key ? { ...stubBrain, ...planner(key), ...(brain.workChoice ? { workChoice: brain.workChoice } : {}) } : stubBrain
       ctx.brainRestore = { from: brainEngine, manual: ctx.manualBrain === 'jev', prod: !ctx.manualBrain }
       doSetBrain(next, to)
       console.log(`brain auto to=${to} (nobody online)`)

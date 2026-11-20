@@ -793,6 +793,9 @@ function makeBrain(env) {
   // source names the asker so chooseStep shapes menus like the manual
   // brain (jev asks the full menu; anything else gets the hg8 shaping).
   let b = base
+  if (key && env.BOT_BODY === 'baritone' && String(env.BOT_WORK_JEV || '1') !== '0') {
+    b = { ...b, workChoice: planner(key, undefined, brainTimeoutMs(env)).plan }
+  }
   if (menuAskEnabled(env)) {
     if (plannerChoice(env) === 'llm') {
       b = { ...base, source: 'llm', menuAsk: llmAsk(env.ANTHROPIC_API_KEY, undefined, brainTimeoutMs(env), env.LLM_MODEL || LLM_MODEL).ask }
