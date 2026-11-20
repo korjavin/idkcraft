@@ -2908,7 +2908,7 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
       const order = orderedWork(ctx)
       const pick = ctx.stepPick
       if (order?.id === prev) rec.ownerOrder = pick?.workUntil && pick.ownerOrder ? pick.ownerOrder : order.order
-      if (pick?.step === prev && pick.workUntil > rec.at) rec.workRetryAt = pick.workUntil
+      if (workBlock(prev) && pick?.step === prev && pick.workUntil > rec.at) rec.workRetryAt = pick.workUntil
       // prkh: the fetch hold parks one kind — carry the failed kind the
       // behaviour stamped (castlefetchFailKind), so other kinds still run.
       // Consumed (revmux 01 core-1): an unstamped later failure must fall
@@ -3359,6 +3359,17 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
     const sameRun = !finished && oldPick?.step === choice.step && oldPick.workUntil
     ctx.stepPick.workUntil = sameRun ? oldPick.workUntil : ctx.stepPick.at + WORK_DWELL_MS
     ctx.stepPick.ownerOrder = orderedWork(ctx)?.order
+  } else if (process.env.BOT_BODY === 'baritone' && choice.step === 'rest') {
+    const at = ctx.stepPick.at
+    // Rest is the fallback when work has cooled out of the menu. Wake on
+    // the first retry deadline, even if facts change while strolling.
+    const retries = Object.keys(ctx.stepFail || {})
+      .filter((step) => workRetryHeld(ctx, step, at))
+      .map((step) => ctx.stepFail[step].workRetryAt)
+    if (retries.length > 0) {
+      ctx.stepPick.workUntil = Math.min(...retries)
+      ctx.stepPick.ownerOrder = orderedWork(ctx)?.order
+    }
   }
   // A banking trip picked under the pierce latches for the trip (R4):
   // set on a pick only, and only stockpile's own finish releases it above. A site

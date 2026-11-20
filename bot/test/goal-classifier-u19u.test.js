@@ -433,6 +433,49 @@ describe('JEV choice at normal v2 work boundaries', () => {
     assert.equal(goal.failHolds(ctx, 'explore', 'changed facts', bot), false)
   })
 
+  it('waits in rest after the only work option fails, including if the rest walk has no path', async (t) => {
+    const oldBody = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    t.after(() => {
+      if (oldBody === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = oldBody
+    })
+    let work = 'explore'
+    for (const [name, entry] of Object.entries(goal.MENU)) {
+      t.mock.method(entry, 'feasible', () => name === work)
+    }
+    let now = 1000000
+    t.mock.method(Date, 'now', () => now)
+    const bot = {
+      time: { timeOfDay: 6000, day: 1 }, health: 20, food: 20,
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      inventory: { items: () => [] }, entities: {}, players: {}, blockAt: () => null,
+      pathfinder: { goal: { x: 5, z: 2 }, setGoal(next) { this.goal = next } },
+    }
+    const ctx = { work: true }
+    assert.equal((await goal.decide(bot, ctx)).action, 'explore')
+    assert.equal(ctx.stepPick.source, 'only-option')
+    now += 1000
+    ctx.stepStatus = 'failed:unreachable'
+    work = 'rest'
+    assert.equal((await goal.decide(bot, ctx)).action, 'rest')
+    assert.equal(ctx.stepPick.source, 'only-option')
+
+    const unreachable = require('../src/unreachable')
+    ctx.lastPathStatus = 'noPath'
+    for (let i = 0; i < unreachable.GRACE_TICKS; i++) unreachable.tick(bot, ctx, ++now)
+    assert.equal(bot.pathfinder.goal, null)
+    assert.equal(ctx.stepStatus, 'running')
+
+    work = 'stockpile'
+    ctx.taskPlanStep = 'stockpile'
+    assert.equal((await goal.decide(bot, ctx)).action, 'rest')
+    ctx.taskPlanStep = null
+    now = 1090000
+    assert.equal((await goal.decide(bot, ctx)).action, 'stockpile')
+    assert.equal(ctx.stepPick.source, 'only-option')
+  })
+
   it('keeps both JEV and fallback recovery through facts changes until done or expiry', async (t) => {
     for (const [name, entry] of Object.entries(goal.MENU)) {
       t.mock.method(entry, 'feasible', () => ['farmbuild', 'gather', 'stockpile', 'rest'].includes(name))
