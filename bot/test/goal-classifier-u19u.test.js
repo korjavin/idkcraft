@@ -352,6 +352,50 @@ describe('JEV choice at normal v2 work boundaries', () => {
     assert.equal(ctx.episodes[0].delta, 5)
   })
 
+  it('asks at an autonomous pin and preserves an explicit plan pin', async (t) => {
+    for (const [name, entry] of Object.entries(goal.MENU)) {
+      t.mock.method(entry, 'feasible', () => ['craft', 'gather', 'rest'].includes(name))
+    }
+    const bot = {
+      time: { timeOfDay: 6000, day: 1 }, health: 20, food: 20,
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      inventory: { items: () => [] }, entities: {}, players: {}, blockAt: () => null,
+    }
+    const seen = []
+    const brain = { workChoice: async (request) => {
+      seen.push(request)
+      return { step: 'gather', confidence: 1 }
+    } }
+    const ctx = { work: true, step: 'explore', stepStatus: 'running', taskPlanStep: 'craft', brain }
+    assert.equal((await goal.decide(bot, ctx)).source, 'jev-work-pending')
+    assert.equal(ctx.taskPlanStep, 'craft')
+    await flush()
+    assert.equal((await goal.decide(bot, ctx)).action, 'gather')
+    assert.equal(ctx.taskPlanStep, null)
+    assert.equal(seen[0].state.previousPlan, 'craft')
+    assert.deepEqual(Object.keys(seen[0].criteria), ['craft', 'gather'])
+
+    const explicit = { work: true, step: 'explore', stepStatus: 'done', taskPlanStep: 'craft', taskPlanArgs: { step: 'craft', by: 'owner' }, brain }
+    assert.equal((await goal.decide(bot, explicit)).action, 'craft')
+    assert.equal(seen.length, 1)
+  })
+
+  it('logs ordered farm suppression once and allows a recovery choice when the farm is held', async (t) => {
+    const logs = []
+    t.mock.method(console, 'log', (line) => logs.push(line))
+    const brain = { workChoice: async () => ({ step: 'gather', confidence: 1 }) }
+    const ctx = { farmBuild: { ordered: true } }
+    const extra = { workBoundary: 'farm-failure', orderRecovery: true }
+    for (let i = 0; i < 2; i++) {
+      const ordered = await goal.chooseStep(brain, facts(), ['farmbuild', 'castlefetch', 'gather'], null, extra, ctx)
+      assert.equal(ordered.step, 'farmbuild')
+    }
+    assert.deepEqual(logs, ['brain work skip why=order-rule'])
+    assert.equal((await goal.chooseStep(brain, facts(), ['castlefetch', 'gather'], null, extra, ctx)).source, 'jev-work-pending')
+    await flush()
+    assert.equal((await goal.chooseStep(brain, facts(), ['castlefetch', 'gather'], null, extra, ctx)).step, 'gather')
+  })
+
   it('wires work JEV separately from legacy menu ask, on keyed v2 only', () => {
     const env = { BOT_BODY: 'baritone', TYPESAFE_API_KEY: 'fake-test-key' }
     assert.equal(typeof makeBrain(env).workChoice, 'function')
