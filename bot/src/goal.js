@@ -22,7 +22,7 @@ const PLANK_COUNT = buildMod.PLANK_COUNT
 const metrics = require('./metrics')
 const residence = require('./residence')
 const { recordAttempt, markAttemptStart } = require('./stall-state')
-const { failReason, isFinished, nextStepGen, chatStep, STEP_CHAT_SAME_MS, stepDone, stepFailed } = require('./step')
+const { failReason, isFinished, stepGen, nextStepGen, chatStep, STEP_CHAT_SAME_MS, stepDone, stepFailed } = require('./step')
 const { LOW_HP_GATE_MS, LOW_HP_GAP_MS, lowHpNoFood, lowHpGated } = require('./health-gate')
 
 // House budget and bounded-hold windows live in the leaf budget.js
@@ -2002,6 +2002,47 @@ function shapeGoalMenu(names, model) {
 // BOT_MENU_ASK=1) and is read solely here — retreat/recover/bring read
 // brain.ask only, so they keep the FSM in prod. Manual 'brain jev|laya'
 // brains carry ask() and consult as before.
+// One asynchronous request per step boundary. The ticker continues to
+// arbitrate survival and orders while the request is in flight.
+function workChoice(brain, ctx, bot, boundary, names, text, fsm) {
+  const options = names.filter((name) => name !== 'rest' && STEP_CRITERIA[name])
+  if (options.length < 2) return null
+  const now = Date.now()
+  const fallback = { step: fsm, source: 'fsm-fallback', fsm, model: 'jev' }
+  let request = ctx.workChoice
+  if (!request || request.boundary !== boundary || request.brain !== brain) {
+    if (now < (ctx.workChoiceRetryAt || 0) || (request?.pending && now < request.until)) return fallback
+    request = ctx.workChoice = { boundary, brain, options, until: now + 3000, pending: true }
+    const criteria = Object.fromEntries(options.map((name) => [name, STEP_CRITERIA[name]]))
+    const inventory = {}
+    try {
+      for (const item of bot.inventory.items()) {
+        if (typeof item?.name === 'string' && Number.isFinite(item.count)) {
+          inventory[item.name] = (inventory[item.name] || 0) + item.count
+        }
+      }
+    } catch (_) { /* use the facts if inventory is unreadable */ }
+    const state = { facts: text, inventory, outcomes: (ctx.stepOutcomes || []).slice() }
+    Promise.resolve().then(() => brain.workChoice({
+      state, criteria,
+      instructions: 'Select the next executable action that advances the current work. Use recent outcomes to avoid repeating an approach that just failed.',
+    })).then(
+      (answer) => {
+        request.pending = false
+        if (Date.now() <= request.until) request.answer = answer
+      },
+      () => { request.pending = false },
+    )
+  }
+  if (request.pending && now < request.until) return { step: null, source: 'jev-work-pending', fsm, model: 'jev' }
+  const answer = request.answer
+  if (request.options.includes(answer?.step) && options.includes(answer.step) && (answer.confidence == null || answer.confidence >= 0.5)) {
+    return { step: answer.step, source: 'jev-work', fsm, model: 'jev' }
+  }
+  ctx.workChoiceRetryAt = now + 15000
+  return fallback
+}
+
 async function chooseStep(brain, facts, feasible, home, extra, ctx = null) {
   const names = STEP_ORDER.filter((n) => feasible.includes(n))
   const text = goalText(facts, home)
@@ -2024,7 +2065,6 @@ async function chooseStep(brain, facts, feasible, home, extra, ctx = null) {
   // a standing owner order for a step outranks the castle and fun rules while it is feasible.
   const fbo = ctx && ctx.farmBuild
   if (fbo && fbo.ordered && !fbo.built && names.includes('farmbuild')) return { step: 'farmbuild', source: 'order-rule', fsm, model: null }
-  if (fsm === 'fun') return { step: fsm, source: 'fun-rule', fsm, model: null }
   // Castle rule (vmzq.19 R2, major 2, the night-rule precedent): a runnable
   // castle is a rule, not a preference — run3's laya picked equip then
   // beds over a feasible castle and walked 500 blocks home. The model is
@@ -2033,6 +2073,11 @@ async function chooseStep(brain, facts, feasible, home, extra, ctx = null) {
   // vmzq.50: the return-to-site walk rides it too — displaced, the model
   // must not wander to forage/explore instead of walking back.
   if (fsm === 'castle' || fsm === 'castlefetch' || fsm === 'gocastle' || fsm === 'sitebed' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
+  if (ctx && facts.time === 'day' && extra?.workBoundary && typeof brain?.workChoice === 'function') {
+    const choice = workChoice(brain, ctx, extra.bot, extra.workBoundary, names, text, fsm)
+    if (choice) return choice
+  }
+  if (fsm === 'fun') return { step: fsm, source: 'fun-rule', fsm, model: null }
   // Strategic choice (idkcraft-u19u phase 2): the multi-option day
   // work-menu branch goes through the task-owned strategic chooser (wired
   // via ctx by taskTick — goal.js never requires the task layer, oqul.1).
@@ -3337,9 +3382,12 @@ async function decide(bot, ctx) {
     if (g && typeof g === 'object') return g
     if (g) status = g
   }
-  status = emptyRun(ctx, prev, status, finished)
-  if (finished) noteOutcome(ctx, prev, status === 'done' && ctx && ctx.stepPickText === text ? 'done-flat' : status)
-  recordOutcome(bot, ctx, facts, prev, status, finished, text)
+  const boundary = `${stepGen(ctx)}:${prev}:${status}`
+  if (ctx?.workChoice?.boundary !== boundary) {
+    status = emptyRun(ctx, prev, status, finished)
+    if (finished) noteOutcome(ctx, prev, status === 'done' && ctx && ctx.stepPickText === text ? 'done-flat' : status)
+    recordOutcome(bot, ctx, facts, prev, status, finished, text)
+  }
   // Night-step stickiness (rw4.5): gohome/stay own multi-tick door phases
   // (walk->open->enter->close). A facts-changed re-decision must not preempt
   // them mid-phase: stepping inside flips inside, which would hand stay the
@@ -3428,7 +3476,11 @@ async function decide(bot, ctx) {
     } catch (_) {
       stratExtra = null
     }
+    if ((!prev || finished) && typeof ctx?.brain?.workChoice === 'function') {
+      stratExtra = { ...stratExtra, bot, workBoundary: `${stepGen(ctx)}:${prev}:${status}` }
+    }
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home, stratExtra, ctx)
+    if (choice.source === 'jev-work-pending') return { action: 'idle', sprint: false, source: 'jev-work-pending' }
     if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     applyChoice(bot, ctx, facts, choice, prev, finished, why, text)
