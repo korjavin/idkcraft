@@ -21,6 +21,8 @@ const WALK_WAITS = 15 // walk ticks without closing in before the source is unre
 const CLUSTER_R = 3 // a blacklisted cell takes its tree/vein with it
 const AREA_FAILS = 3 // unreachable sources in a row before the area is left
 const AREA_R = 48 // the left area: beyond the nearest few sources
+const NOMINE_MS = 10 * 60 * 1000 // a failed mine is not retried (unreachable TTL)
+const EXPEDITION_MS = 5 * 60 * 1000 // an expedition finding nothing ends the leg
 
 function have(bot, item) {
   let n = 0
@@ -71,7 +73,7 @@ function handTick(bot, ctx, a, item, blocks) {
   if (b && d <= DIG_REACH) {
     a.mining = true
     Promise.resolve().then(() => bot.dig(b, true))
-      .then(() => { a.fails = 0; a.mineFail = null; a.expedition = null }) // a source worked: the mine runs from here again
+      .then(() => { a.fails = 0; a.mineFail = null; a.expedition = null; if (a.noMine) delete a.noMine[item] }) // a source worked: the mine runs from here again
       .catch(() => { giveUp(bot, ctx, a, item) })
       .finally(() => { a.mining = false; a.hand = null })
     return true
@@ -213,7 +215,13 @@ function acquire(bot, ctx, item, n, path = [], alts = [item], construction = fal
     // A full pack sheds junk first (never the items this chain is after),
     // then mines; only a pack with no junk fails to the stockpile bank.
     if (count <= 0) return require('./stockpile').tossJunk(bot, ctx, [...path, ...alts]) ? 'running' : 'failed:pack-full'
-    if (a.mineFail && a.mineFail.item === item) {
+    // A failed mine is remembered per item (mineFail holds only the last):
+    // another episode goes to the hand dig / expedition, not the same mine.
+    const nm = a.noMine && a.noMine[item]
+    const fresh = !!nm && Date.now() - nm.at <= NOMINE_MS
+    if (nm && !fresh) delete a.noMine[item]
+    if (fresh && nm.gaveUp) return `failed:unreachable-${item}`
+    if ((a.mineFail && a.mineFail.item === item) || fresh) {
       // The mine found no path (prod 2026-11-15 bot3: the same pathless
       // birch x133/h): walk to and hand-dig the nearest source not
       // blacklisted (loaded or remembered), blacklisting each one the walk
@@ -222,6 +230,18 @@ function acquire(bot, ctx, item, n, path = [], alts = [item], construction = fal
       // Nothing left here: the explore ray expedition (to 400, driven by the
       // castle need) walks out until resources.scan remembers a new one.
       // Explore's own done/failed is not this leg's.
+      const e = (a.noMine || (a.noMine = {}))[item] || (a.noMine[item] = { at: Date.now() })
+      if (!e.exp) e.exp = Date.now()
+      if (Date.now() - e.exp > EXPEDITION_MS) {
+        // Bounded: the leg fails (the caller picks other work) and the item
+        // fails fast until NOMINE_MS passes.
+        e.gaveUp = true
+        e.at = Date.now()
+        a.expedition = null
+        if (a.mineFail && a.mineFail.item === item) a.mineFail = null
+        console.log(`acquire ${item}: expedition found no source in ${EXPEDITION_MS / 60000}min, giving up`)
+        return `failed:unreachable-${item}`
+      }
       if (a.expedition !== item) console.log(`acquire ${item}: no reachable source, expedition`)
       a.expedition = item
       const st = ctx.stepStatus
@@ -237,7 +257,7 @@ function acquire(bot, ctx, item, n, path = [], alts = [item], construction = fal
       .catch((e) => {
         // An outside stop (fight, owner stop, step change) is no failure of
         // the source: the next tick re-arms the mine, not a walk-and-dig.
-        if (!(e && e.message === 'mine-stopped')) a.mineFail = { item, at: Date.now() }
+        if (!(e && e.message === 'mine-stopped')) { a.mineFail = { item, at: Date.now() }; (a.noMine || (a.noMine = {}))[item] = { at: Date.now() } }
         console.log(`acquire ${item}: ${e && e.message}`)
       })
       .finally(() => { mineRate(bot, a, true); a.mining = false })

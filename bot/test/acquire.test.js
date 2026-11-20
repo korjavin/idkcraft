@@ -354,3 +354,39 @@ describe('construction material recovery', () => {
     assert.deepEqual(crafts, [])
   })
 })
+
+describe('acquire: mining a poor route falls back and ends bounded', () => {
+  const mk = (items, extra) => ({ registry: acq.DEFAULT_REG, inventory: { items: () => items, emptySlotCount: () => 10 }, recipesAll: () => [], ...extra })
+  it('smooth_stone is smelted from stone, stone from cobblestone (never a found block)', () => {
+    const calls = []
+    const b = mk([], { mine: (names) => { calls.push(names); return new Promise(() => {}) } })
+    assert.strictEqual(tick.acquire(b, {}, 'smooth_stone', 3), 'running')
+    assert.ok(calls[0].includes('stone') && !calls[0].includes('smooth_stone'), 'mines stone for cobblestone')
+    const orig = tick.deps.driveFurnace
+    const jobs = []
+    tick.deps.driveFurnace = (_b, c) => { jobs.push(c.furnaceJob); return null }
+    try {
+      const inv = [{ name: 'stone', count: 3 }, { name: 'furnace', count: 1 }, { name: 'coal', count: 1 }]
+      assert.strictEqual(tick.acquire(mk(inv), {}, 'smooth_stone', 3), 'running')
+      assert.deepStrictEqual(jobs[0], { input: 'stone', output: 'smooth_stone', count: 3 })
+      const inv2 = [{ name: 'cobblestone', count: 3 }, { name: 'furnace', count: 1 }, { name: 'coal', count: 1 }]
+      assert.strictEqual(tick.acquire(mk(inv2), {}, 'smooth_stone', 3), 'running')
+      assert.deepStrictEqual(jobs[1], { input: 'cobblestone', output: 'stone', count: 3 })
+    } finally { tick.deps.driveFurnace = orig }
+  })
+  it('an unreachable plant: no re-mine after mine-noPath, the expedition ends failed, then fails fast', async () => {
+    const calls = []
+    const b = mk([], { mine: (n) => { calls.push(n); return Promise.reject(new Error('mine-noPath')) }, entity: { position: { x: 0, y: 64, z: 0 } }, blockAt: () => null, pathfinder: { setGoal: () => {} } })
+    const ctx = { resources: { items: new Map() }, stepStatus: 'running' }
+    assert.strictEqual(tick.acquire(b, ctx, 'sugar_cane', 45), 'running')
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+    ctx.acquire.mineFail = { item: 'coal', at: Date.now() } // another item's failure overwrites the last one
+    assert.strictEqual(tick.acquire(b, ctx, 'sugar_cane', 45), 'running')
+    assert.strictEqual(ctx.acquire.expedition, 'sugar_cane')
+    assert.strictEqual(calls.length, 1, 'the failed mine is not retried')
+    ctx.acquire.noMine.sugar_cane.exp -= 6 * 60 * 1000
+    assert.strictEqual(tick.acquire(b, ctx, 'sugar_cane', 45), 'failed:unreachable-sugar_cane')
+    assert.strictEqual(tick.acquire(b, ctx, 'sugar_cane', 45), 'failed:unreachable-sugar_cane')
+    assert.strictEqual(calls.length, 1)
+  })
+})
