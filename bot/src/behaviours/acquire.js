@@ -294,12 +294,12 @@ const BUILD_ITEM = {
 
 function acquireCellMaterial(bot, ctx, home, cell) {
   const { wantItem, FILLERS, blueprintFor, cellDone } = require('./build')
-  const item = BUILD_ITEM[cell.kind]
+  const item = cell.kind === 'block' ? cell.block : BUILD_ITEM[cell.kind]
   const want = wantItem(cell)
   const alts = cell.kind === 'ground' ? [...FILLERS] : S.family(item).filter(want)
   let n = 1
   if (cell.kind !== 'farmland' && cell.kind !== 'water') {
-    n = Math.max(1, Math.min(64, blueprintFor(home).filter((c) => c.kind === cell.kind && !cellDone(bot, home, c)).length))
+    n = Math.max(1, Math.min(64, blueprintFor(home).filter((c) => c.kind === cell.kind && c.block === cell.block && !cellDone(bot, home, c)).length))
   }
   return buildMaterial(bot, ctx, item, n, alts)
 }

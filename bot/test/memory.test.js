@@ -628,3 +628,22 @@ describe('flat job survives a restart (idkcraft-vewo.8)', () => {
     }
   })
 })
+
+it('restores the fun project footprint and cells without transient build state', () => {
+  const bot = botAt(SPAWN_A)
+  const ctx = {
+    funProject: {
+      kind: 'project', id: 'test-project', why: 'stall',
+      site: { x: 2, y: 64, z: 4, w: 2, d: 3, cost: 1 },
+      blueprint: [{ dx: 0, dy: 0, dz: 0, kind: 'block', block: 'oak_sapling' }],
+      state: { buildSkip: [0] },
+    },
+  }
+  assert.equal(memory.save(bot, ctx, file), true)
+  const restored = {}
+  memory.restore(bot, restored, file)
+  assert.deepEqual(restored.funProject.site, ctx.funProject.site)
+  assert.deepEqual(restored.funProject.blueprint, ctx.funProject.blueprint)
+  assert.equal(restored.funProject.why, 'stall')
+  assert.equal(restored.funProject.state, undefined)
+})
