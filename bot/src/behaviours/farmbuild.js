@@ -151,8 +151,10 @@ function run(bot, ctx) {
     // Cap elapsed time so a long interruption contributes at most five seconds.
     const dt = fb.stallTick ? Math.max(0, Math.min(now - fb.stallTick, 5000)) : 0
     fb.stallTick = now
+    // a far bot reads an unloaded site as 0 done: only time spent with the site loaded counts
+    const loaded = !!bot.blockAt(new Vec3(fb.site.x, fb.site.y, fb.site.z))
     if (fb.stallDone == null || done > fb.stallDone) { fb.stallDone = done; fb.stallRun = 0 }
-    else if ((fb.stallRun = (fb.stallRun || 0) + dt) > STALL_MS) {
+    else if (loaded && (fb.stallRun = (fb.stallRun || 0) + dt) > STALL_MS) {
       // a mostly raised farm is kept (its last stuck cells are left), never
       // relocated (prod bot2 2026-11-20: 198/199 dropped for a new 0/279 plot)
       const own = build.houseProgress(bot, fb)
@@ -199,6 +201,12 @@ function run(bot, ctx) {
   }
   build(bot, view)
   // An unreachable self-picked site is dropped like a stalled one (the owner's spot is kept).
+  // A started site (any cell ever done) is kept: the step fails, the farm is not dropped
+  // (prod bot4 2026-11-20: 125/199 dropped from 423 blocks away after exploring).
+  if (!fb.at && ctx.stepStatus === 'failed:cannot-reach-site' && fb.stallDone > 0) {
+    console.log(`farm site unreachable ${fb.site.x},${fb.site.y},${fb.site.z} started=${fb.stallDone} -> keeping it for the next try`)
+    return
+  }
   if (!fb.at && ctx.stepStatus === 'failed:cannot-reach-site') {
     console.log(`farm site unreachable ${fb.site.x},${fb.site.y},${fb.site.z} -> re-picking`)
     ctx.farmBuild = { ordered: fb.ordered, avoid: [...(fb.avoid || []), { x0: fb.site.x, z0: fb.site.z, x1: fb.site.x + blueprint.W - 1, z1: fb.site.z + blueprint.D - 1 }] }

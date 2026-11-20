@@ -552,6 +552,26 @@ describe('farm site walk that never gets closer (bot5)', () => {
     assert.ok(logs.some((l) => /^farm progress built=0\/\d+ phase=\w+ cell=\S+ kind=\w+ loaded=0$/.test(l)), logs.join('\n'))
   })
 
+  it('a started site (cells done before) is kept when the walk gives up (prod bot4 125/199)', () => {
+    const bot = mockBot(world())
+    bot.blockAt = () => null
+    bot.pathfinder.isMoving = () => true
+    bot.pathfinder.setGoal = () => {}
+    const site = { x: 200, y: 64, z: 200, prep: [] }
+    const ctx = { step: 'farmbuild', stepStatus: 'running', farmBuild: { site, built: false, stallDone: 125 } }
+    const orig = console.log
+    console.log = () => {}
+    try {
+      for (let t = 0; t < 200 && ctx.stepStatus === 'running'; t++) {
+        bot.entity.position = new Vec3(t % 2 ? 5 : 0, 64, 0)
+        farmbuild(bot, ctx)
+      }
+    } finally { console.log = orig }
+    assert.equal(ctx.stepStatus, 'failed:cannot-reach-site')
+    assert.equal(ctx.farmBuild.site, site, 'site kept')
+    assert.equal(ctx.farmBuild.avoid, undefined)
+  })
+
   it('a steady approach keeps walking', () => {
     const { ctx } = run((t) => new Vec3(t, 64, t))
     assert.equal(ctx.stepStatus, 'running')
