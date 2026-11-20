@@ -2733,7 +2733,9 @@ function textForce(prev, facts, bot, ctx, status, text) {
     if (k) seen = goalText({ ...facts, known: k }, ctx.home)
   }
   if (seen === (typeof ctx.heldText === 'string' ? ctx.heldText : ctx.goalText)) return false
-  if (FORCES.some((f) => f.kind === 'word' && f.fires(prev, facts, ctx, status, bot, text))) return true
+  const ownsPlan = ctx.stepPick?.step === prev && ctx.stepPick.source === 'task-plan' && facts.pinned === prev
+  if (FORCES.some((f) => f.kind === 'word' && !(ownsPlan && ctx.llmOrder?.choose && f.name === 'castle-word') &&
+      f.fires(prev, facts, ctx, status, bot, text))) return true
   // qxql.1: the FSM answer moving to castle mid-leg is the same cut.
   if (fetchLegCommitted(prev, ctx, status)) {
     ctx.heldText = seen
@@ -2741,7 +2743,7 @@ function textForce(prev, facts, bot, ctx, status, text) {
   }
   const pick = ctx.stepPick
   if (!pick || pick.step !== prev || typeof pick.fsm !== 'string') return true
-  if (pick.source === 'task-plan' && facts.pinned === prev) {
+  if (ownsPlan) {
     ctx.heldText = seen
     return false
   }
@@ -3211,7 +3213,9 @@ function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
   if (planStep && !nightOwns && !rearm) {
     let ok = false
     try {
-      ok = !!(MENU[planStep] && MENU[planStep].feasible(facts, bot, ctx) && registered(planStep))
+      const selfPlan = ctx.llmOrder?.choose && !ctx.llmOrder.explicit
+      ok = (!selfPlan || menu.includes(planStep)) &&
+        !!(MENU[planStep] && MENU[planStep].feasible(facts, bot, ctx) && registered(planStep))
     } catch (_) {
       ok = false
     }
@@ -3451,6 +3455,7 @@ async function decide(bot, ctx) {
       require('./episodes').sampleWork(ctx, stepGen(ctx), progress, text)
     }
   }
+  if (finished && prev) ctx.observePlanTerminal?.(ctx, prev, status)
   const boundary = `${stepGen(ctx)}:${prev}:${status}`
   if (ctx?.workChoice?.boundary !== boundary && !ctx?.workChoice?.boundary?.startsWith(`${boundary}:`)) {
     status = emptyRun(ctx, prev, status, finished)

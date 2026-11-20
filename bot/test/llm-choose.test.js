@@ -170,6 +170,27 @@ describe('chooser trigger', () => {
     assert.equal(ctx.llmOrder.explicit, true)
   })
 
+  it('delivers a terminal plan result when the arbiter switches first', async (t) => {
+    for (const [name, entry] of Object.entries(goal.MENU)) {
+      t.mock.method(entry, 'feasible', () => ['stockpile', 'explore', 'rest'].includes(name))
+    }
+    for (const seenRunning of [false, true]) {
+      const { bot, ctx } = ctxWith(true)
+      bot.time = { timeOfDay: 6000, day: 1 }
+      llmOrders.installPlan(bot, ctx, { text: 'choose work: no-order', by: 'self', choose: true }, [{ step: 'explore', count: 1 }])
+      llmOrders.tick(bot, ctx)
+      assert.equal((await goal.decide(bot, ctx)).action, 'explore')
+      if (seenRunning) llmOrders.tick(bot, ctx)
+
+      // Recovery can fail the step after the plan observer for this tick.
+      ctx.stepStatus = 'failed:unreachable'
+      assert.equal((await goal.decide(bot, ctx)).action, 'stockpile')
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.llmOrder, null)
+      assert.equal(ctx.taskPlanStep, null)
+    }
+  })
+
   it('never fires paused or out of work mode', () => {
     const { ctx } = ctxWith(true)
     const facts = { time: 'day', castle: 'none' }

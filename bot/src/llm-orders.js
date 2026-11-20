@@ -1107,6 +1107,18 @@ function startStep(bot, ctx, o, s, now) {
   pinArgs(ctx, o, s) // rewritten on every work step, so a later step never reads an earlier step's args
 }
 
+// The arbiter may replace a finished action after this tick's plan
+// observer ran. Preserve its terminal result before the generation moves.
+function observeTerminal(ctx, step, status) {
+  const order = ctx.llmOrder
+  const current = order?.cur
+  if (!current || order.steps[order.i]?.step !== step || !isFinished(status) ||
+      ctx.stepPick?.step !== step || ctx.stepPick.source !== 'task-plan' ||
+      ctx.taskPlanArgs?.step !== step || (!current.seen && current.gen === stepGen(ctx))) return
+  current.seen = true
+  current.status = status
+}
+
 // Every tick (index.js), cheap: no plan, no work.
 function tick(bot, ctx, now = Date.now()) {
   const o = ctx && ctx.llmOrder
@@ -1460,4 +1472,4 @@ function statusLine(ctx) {
   return `plan ${o.i + 1}/${o.steps.length}: ${label(s)}${s.done ? ` (done when ${s.done})` : ''} — for "${o.text}"`
 }
 
-module.exports = { enabled, ask, cancel, feeding, tick, statusLine, validatePlan, validateBringPlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH, RECIPE_MAX_DEPTH, RECIPE_MAX_STEPS, RECIPE_TIMEOUT_MS, RECIPE_VERBS, checkRecipeShape, requestRecipe, planRecipe, chooseCandidates, chooseEpisode }
+module.exports = { observeTerminal, enabled, ask, cancel, feeding, tick, statusLine, validatePlan, validateBringPlan, stepList, workSteps, skillSteps, installPlan, orderStep, planOrder, ORDER_STEPS, WORK_STEPS, STEP_MS, chooseEnabled, chooseMinMs, planChoose, chooseStepList, shouldChoose, castleActive, rosterOnline, CHOOSE_MAX_STEPS, CHOOSE_MIN_MS_DEFAULT, CHOOSE_WAIT_MAX_MS, HOUSE_CHAIN, expandBuildPlan, siteBuildHere, packPlanks, packCounts, KIT_STEPS, BUILD_BATCH, RECIPE_MAX_DEPTH, RECIPE_MAX_STEPS, RECIPE_TIMEOUT_MS, RECIPE_VERBS, checkRecipeShape, requestRecipe, planRecipe, chooseCandidates, chooseEpisode }

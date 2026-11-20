@@ -119,6 +119,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // decide closure below, so 'brain jev' steers step choice too.
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, jumpCooldown: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, stuckState: 'MOVING', lastPos: null }
   ctx.brainOptions = taskMod.brainOptions
+  ctx.observePlanTerminal = llmOrders.observeTerminal
   ctx.greeter = greet // deliver greets arrivals through the same latch
   // tpd1: env read once — a swarm helper never follows or works.
   const swarmHelper = flatMod.swarmHelper()
