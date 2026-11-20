@@ -118,6 +118,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // ctx.brain feeds goal chooseStep; setBrain refreshes both this and the
   // decide closure below, so 'brain jev' steers step choice too.
   const ctx = { lastGoalKey: '', movements: null, paused: false, lead: null, reflexTargetId: null, reflexSwung: false, stuckResets: 0, placeErrors: 0, jumpCooldown: 0, eatInFlight: false, fleeTargetId: null, lastHostileSnap: null, work: false, step: '', stepStatus: null, goalText: null, brain, stuck: null, recovery: null, stuckTicks: 0, stuckState: 'MOVING', lastPos: null }
+  ctx.brainOptions = taskMod.brainOptions
   ctx.greeter = greet // deliver greets arrivals through the same latch
   // tpd1: env read once — a swarm helper never follows or works.
   const swarmHelper = flatMod.swarmHelper()
@@ -375,7 +376,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // Disable tick asks while alone. The keyed stall and work-boundary
       // classifiers still support unattended work.
       const key = process.env.TYPESAFE_API_KEY
-      const next = key ? { ...stubBrain, ...planner(key), ...(brain.workChoice ? { workChoice: brain.workChoice } : {}) } : stubBrain
+      const next = key ? { ...stubBrain, ...planner(key), ...(brain.workChoice ? { workChoice: brain.workChoice, workFeedback: brain.workFeedback } : {}) } : stubBrain
       ctx.brainRestore = { from: brainEngine, manual: ctx.manualBrain === 'jev', prod: !ctx.manualBrain }
       doSetBrain(next, to)
       console.log(`brain auto to=${to} (nobody online)`)

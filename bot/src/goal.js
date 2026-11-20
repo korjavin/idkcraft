@@ -2004,8 +2004,27 @@ function shapeGoalMenu(names, model) {
 // brains carry ask() and consult as before.
 // One asynchronous request per step boundary. The ticker continues to
 // arbitrate survival and orders while the request is in flight.
+function brainCatalogue(bot, ctx) {
+  if (typeof ctx.brainOptions !== 'function') return null
+  try {
+    return new Map(ctx.brainOptions(bot, ctx).map((option) => [option.id, option]))
+  } catch (_) { return null }
+}
+
+function finishWorkEpisode(bot, ctx, status, text) {
+  const run = ctx.workEpisode
+  if (!run) return
+  const progress = brainCatalogue(bot, ctx)?.get(run.choice)?.progress
+  require('./episodes').finishWork(ctx, stepGen(ctx), progress, status, text)
+}
+
 function workChoice(brain, ctx, bot, boundary, names, text, fsm) {
-  const options = names.filter((name) => name !== 'rest' && STEP_CRITERIA[name])
+  const catalogue = brainCatalogue(bot, ctx)
+  const options = names.filter((name) => {
+    if (name === 'rest') return false
+    const option = catalogue?.get(name)
+    return catalogue ? option?.feasible && !option.held : !!STEP_CRITERIA[name]
+  })
   if (options.length < 2) return null
   const now = Date.now()
   const fallback = { step: fsm, source: 'fsm-fallback', fsm, model: 'jev' }
@@ -2013,7 +2032,9 @@ function workChoice(brain, ctx, bot, boundary, names, text, fsm) {
   if (!request || request.boundary !== boundary || request.brain !== brain) {
     if (now < (ctx.workChoiceRetryAt || 0) || (request?.pending && now < request.until)) return fallback
     request = ctx.workChoice = { boundary, brain, options, until: now + 3000, pending: true }
-    const criteria = Object.fromEntries(options.map((name) => [name, STEP_CRITERIA[name]]))
+    const history = brain.workFeedback ? require('./episodes').workRates(ctx, options) : null
+    const ranked = history ? options.slice().sort((a, b) => history[b].successRate - history[a].successRate) : options
+    const criteria = Object.fromEntries(ranked.map((name) => [name, catalogue?.get(name)?.why || STEP_CRITERIA[name] || name]))
     const inventory = {}
     try {
       for (const item of bot.inventory.items()) {
@@ -2023,9 +2044,14 @@ function workChoice(brain, ctx, bot, boundary, names, text, fsm) {
       }
     } catch (_) { /* use the facts if inventory is unreadable */ }
     const state = { facts: text, inventory, outcomes: (ctx.stepOutcomes || []).slice() }
+    if (catalogue) state.blocks = ranked.map((id) => {
+      const option = catalogue.get(id)
+      return { id, cost: option.cost ?? null, progress: option.progress ?? null }
+    })
+    if (history) state.history = history
     Promise.resolve().then(() => brain.workChoice({
       state, criteria,
-      instructions: 'Select the next executable action that advances the current work. Use recent outcomes to avoid repeating an approach that just failed.',
+      instructions: 'Select the next executable action that advances the current work. Prefer measured progress and use block success estimates and recent outcomes to avoid repeating an approach that just failed in similar circumstances.',
     })).then(
       (answer) => {
         request.pending = false
@@ -3206,6 +3232,7 @@ function forceName(bot, ctx, facts, prev, status, text, gateFired) {
 // gohome), ctx.stepStatus, ctx.stepPick, ctx.stockpilePierced,
 // ctx.goalText, ctx.heldText.
 function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
+  if (ctx.workEpisode && (finished || choice.step !== prev)) finishWorkEpisode(bot, ctx, null, text)
   // vhlb.3: the step that just ended joins the attempts ring (plan() state).
   if (prev && (choice.step !== prev || finished)) recordAttempt(ctx, prev, bot)
   if (choice.step !== prev || finished) markAttemptStart(ctx, bot)
@@ -3382,6 +3409,9 @@ async function decide(bot, ctx) {
     if (g && typeof g === 'object') return g
     if (g) status = g
   }
+  if (ctx?.workEpisode && (finished || ctx.workEpisode.generation !== stepGen(ctx) || ctx.workEpisode.choice !== prev)) {
+    finishWorkEpisode(bot, ctx, finished && ctx.workEpisode.choice === prev ? status : null, text)
+  }
   const boundary = `${stepGen(ctx)}:${prev}:${status}`
   if (ctx?.workChoice?.boundary !== boundary) {
     status = emptyRun(ctx, prev, status, finished)
@@ -3484,6 +3514,10 @@ async function decide(bot, ctx) {
     if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     applyChoice(bot, ctx, facts, choice, prev, finished, why, text)
+    if (ctx.brain?.workFeedback && (choice.source === 'jev-work' || (choice.model && choice.source === choice.model))) {
+      const progress = brainCatalogue(bot, ctx)?.get(choice.step)?.progress
+      require('./episodes').beginWork(bot, ctx, choice.step, stepGen(ctx), progress, text)
+    }
     noteChoice(bot, ctx, facts, names, choice, prev, status, why, force, text, ms)
   }
   return { action: ctx.step, sprint: false, source: 'goal-fsm' }

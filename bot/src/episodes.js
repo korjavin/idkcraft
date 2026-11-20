@@ -147,6 +147,55 @@ function record(bot, ctx, kind, choice, outcome, ms, now) {
   else if (outcome === 'flat' || String(outcome).startsWith('failed:')) r.flat++
 }
 
+function beginWork(bot, ctx, choice, generation, progress, facts, now = Date.now()) {
+  ctx.workEpisode = {
+    choice, generation, before: Number.isFinite(progress?.done) ? progress.done : null,
+    total: Number.isFinite(progress?.total) ? progress.total : null,
+    facts, at: now, sig: sig(bot, ctx, 'work'),
+  }
+}
+
+function finishWork(ctx, generation, progress, status, facts, now = Date.now()) {
+  const run = ctx.workEpisode
+  if (!run) return null
+  ctx.workEpisode = null
+  const after = Number.isFinite(progress?.done) ? progress.done : null
+  const delta = run.generation === generation && run.before != null && after != null && run.total === progress?.total
+    ? after - run.before : null
+  // A generation change without an observed result is a cancellation.
+  // Count positive movement on an interrupted run only when it was measured.
+  const fail = run.generation === generation && status?.startsWith('failed:') ? status.slice(7) : null
+  const done = run.generation === generation && status === 'done'
+  const outcome = fail != null ? `failed:${fail}`
+    : delta > 0 || (delta == null && done && facts !== run.facts) ? 'progress'
+      : done ? 'flat' : 'interrupted'
+  const episode = {
+    sig: run.sig, choice: run.choice, outcome, before: run.before, after, delta, fail,
+    ms: Math.max(0, now - run.at), at: now,
+  }
+  const list = listOf(ctx)
+  list.push(episode)
+  if (list.length > EPISODES_MAX) list.splice(0, list.length - EPISODES_MAX)
+  console.log(`work outcome choice=${run.choice} result=${outcome} progress=${run.before ?? '?'}->${after ?? '?'} delta=${delta ?? '?'}`)
+  return episode
+}
+
+// One neutral prior on each side keeps an untried block available and
+// prevents one lucky result from dominating a block with a longer history.
+function workRates(ctx, ids) {
+  const stats = new Map(ids.map((id) => [id, { n: 0, ok: 0, last: null }]))
+  for (const e of ctx.episodes || []) {
+    const stat = stats.get(e.choice)
+    if (!stat || e.sig?.kind !== 'work' || e.outcome === 'interrupted') continue
+    stat.n++
+    if (success(e.outcome)) stat.ok++
+    stat.last = e.outcome
+  }
+  return Object.fromEntries([...stats].map(([id, { n, ok, last: outcome }]) => [id, {
+    attempts: n, successRate: Math.round(100 * (ok + 1) / (n + 2)) / 100, outcome,
+  }]))
+}
+
 // Sanitize a stored list (hand-edited files must not inject shapes).
 function of(v) {
   if (!Array.isArray(v)) return []
@@ -184,4 +233,4 @@ function rateTick(bot, ctx, kind, done, now) {
   } catch (_) { /* monitor best-effort */ }
 }
 
-module.exports = { sig, sigText, recall, record, bias, of, rateTick, EPISODES_MAX }
+module.exports = { sig, sigText, recall, record, bias, beginWork, finishWork, workRates, of, rateTick, EPISODES_MAX }

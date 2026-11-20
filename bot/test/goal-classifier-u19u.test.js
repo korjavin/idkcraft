@@ -264,6 +264,66 @@ describe('JEV choice at normal v2 work boundaries', () => {
     assert.equal(ctx.stepOutcomes.length, 1)
   })
 
+  it('feeds a failed dispatch and measured progress into the next ranked menu', async (t) => {
+    for (const [name, entry] of Object.entries(goal.MENU)) {
+      t.mock.method(entry, 'feasible', () => ['craft', 'gather', 'rest'].includes(name))
+    }
+    const bot = {
+      time: { timeOfDay: 6000, day: 1 }, health: 20, food: 20,
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      inventory: { items: () => [] }, entities: {}, players: {},
+      blockAt: () => null,
+    }
+    const requests = []
+    let gathered = 0
+    const ctx = {
+      work: true,
+      brainOptions: () => [
+        { id: 'craft', feasible: true, why: 'make planks' },
+        { id: 'gather', feasible: true, why: 'chop logs', cost: 2, progress: { done: gathered, total: 8 } },
+      ],
+      brain: {
+        workFeedback: true,
+        workChoice: async (req) => {
+          requests.push(req)
+          return { step: requests.length === 1 ? 'craft' : 'gather', confidence: 1 }
+        },
+      },
+    }
+    await goal.decide(bot, ctx)
+    await flush()
+    assert.equal((await goal.decide(bot, ctx)).action, 'craft')
+    ctx.stepStatus = 'failed:no-wood'
+    assert.equal((await goal.decide(bot, ctx)).action, 'gather')
+    assert.equal(ctx.episodes[0].fail, 'no-wood')
+
+    // When the failed block becomes feasible again, prior evidence still
+    // downgrades it in the next model prompt.
+    const retry = { ...ctx, workChoice: null }
+    const extra = { workBoundary: 'retry', bot }
+    await goal.chooseStep(ctx.brain, facts(), ['craft', 'gather'], null, extra, retry)
+    await flush()
+    assert.equal(requests[1].state.history.craft.successRate, 0.33)
+    assert.equal(requests[1].state.history.craft.outcome, 'failed:no-wood')
+    assert.deepEqual(Object.keys(requests[1].criteria), ['gather', 'craft'])
+    assert.deepEqual(requests[1].state.blocks[0], { id: 'gather', cost: 2, progress: { done: 0, total: 8 } })
+    // Now exercise the measured result of the model-driven gather.
+    ctx.workEpisode = null
+    ctx.step = 'build'
+    ctx.stepStatus = 'done'
+    ctx.stepFail = {}
+    await goal.decide(bot, ctx)
+    await flush()
+    assert.equal((await goal.decide(bot, ctx)).action, 'gather')
+    gathered = 4
+    ctx.stepStatus = 'done'
+    await goal.decide(bot, ctx)
+    await goal.decide(bot, ctx)
+    assert.equal(ctx.episodes.length, 2)
+    assert.equal(ctx.episodes[1].outcome, 'progress')
+    assert.equal(ctx.episodes[1].delta, 4)
+  })
+
   it('wires work JEV separately from legacy menu ask, on keyed v2 only', () => {
     const env = { BOT_BODY: 'baritone', TYPESAFE_API_KEY: 'fake-test-key' }
     assert.equal(typeof makeBrain(env).workChoice, 'function')

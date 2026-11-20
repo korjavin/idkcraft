@@ -794,7 +794,10 @@ function makeBrain(env) {
   // brain (jev asks the full menu; anything else gets the hg8 shaping).
   let b = base
   if (key && env.BOT_BODY === 'baritone' && String(env.BOT_WORK_JEV || '1') !== '0') {
-    b = { ...b, workChoice: planner(key, undefined, brainTimeoutMs(env)).plan }
+    b = {
+      ...b, workChoice: planner(key, undefined, brainTimeoutMs(env)).plan,
+      workFeedback: env.BOT_WORK_FEEDBACK !== '0',
+    }
   }
   if (menuAskEnabled(env)) {
     if (plannerChoice(env) === 'llm') {
