@@ -3,7 +3,7 @@
 const { describe, it, beforeEach, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { createTicker, handleChat, parseAutonomous, autonomousEffective } = require('../src/index')
-const { hybridBrain } = require('../src/brain')
+const { hybridBrain, makeBrain } = require('../src/brain')
 const { AUTONOMOUS_EXPLORE_RADIUS } = require('../src/goal')
 const metrics = require('../src/metrics')
 
@@ -199,6 +199,23 @@ describe('autonomous mode', () => {
     await ticker.tick()
     assert.equal(ticker.getBrainEngine(), 'llm', 'llm prod brain returns on join')
     assert.equal(typeof bot._tickerCtx.brain.menuAsk, 'function', 'menu ask restored')
+  })
+
+  it('keeps keyed v2 work selection when the legacy menu steps down on an empty server', async () => {
+    Object.assign(process.env, {
+      BOT_BODY: 'baritone', TYPESAFE_API_KEY: 'k', BOT_WORK_JEV: '1',
+      BOT_WORK_FEEDBACK: '1', BOT_MENU_ASK: '1', BOT_AUTONOMOUS: '1',
+    })
+    const brain = makeBrain(process.env)
+    assert.equal(typeof brain.menuAsk, 'function')
+    assert.equal(typeof brain.workChoice, 'function')
+    const bot = mockBot()
+    const ticker = createTicker({ bot, brain, tickMs: 10, idleTickMs: 10, leaveAfterMs: 0, brainEngine: 'jev', autonomous: true })
+    await ticker.tick()
+    assert.equal(ticker.getBrainEngine(), 'off')
+    assert.equal(bot._tickerCtx.brain.menuAsk, undefined)
+    assert.equal(bot._tickerCtx.brain.workChoice, brain.workChoice)
+    assert.equal(bot._tickerCtx.brain.workFeedback, true)
   })
 
   it('metric tracks the toggle', () => {

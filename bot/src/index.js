@@ -1289,7 +1289,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // the require graph must stay acyclic (structure-deps).
     try {
       const pick = decision && decision.action
-      if (pick) {
+      if (pick && decision.source !== 'jev-work-pending') {
         let facts = null
         try { facts = goal.goalFacts(bot, ctx) } catch (_) { facts = null }
         if (facts && llmOrders.shouldChoose(pick, ctx, facts)) {

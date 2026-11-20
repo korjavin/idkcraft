@@ -390,11 +390,15 @@ function rosterOnline(bot) {
 // Trigger predicate (qxql.10): the FSM's pick is nothing-useful, the bot is
 // in work mode with no plan running or asking, and the rate limit allows it.
 // Pure except for the flag/env read; never throws.
+function orderedFarmPending(ctx) {
+  return !!ctx?.farmBuild?.ordered && !ctx.farmBuild.built
+}
+
 function shouldChoose(pick, ctx, facts, now = Date.now()) {
   try {
     if (!chooseEnabled()) return false
     if (!ctx || !ctx.work || ctx.paused) return false
-    if (ctx.llmOrder || ctx.llmAsk) return false
+    if (ctx.llmOrder || ctx.llmAsk || orderedFarmPending(ctx)) return false
     if (typeof pick !== 'string' || !pick) return false
     const t = now == null ? Date.now() : now
     const min = chooseMinMs()
@@ -495,6 +499,7 @@ async function jevChoose(bot, ctx, regime, cands, fetchFn) {
 function ask(bot, ctx, req, fetchFn) {
   if (!ctx || ctx.llmAsk) return false
   const isChoose = !!(req && req.choose)
+  if (isChoose && orderedFarmPending(ctx)) return false
   const a = { text: String(req.text).slice(0, 200), at: Date.now() }
   ctx.llmAsk = a
   if (isChoose) {
@@ -526,6 +531,7 @@ function ask(bot, ctx, req, fetchFn) {
       // No JEV key: no await, the LLM ask starts in the same turn as before.
       if (process.env.TYPESAFE_API_KEY) try { jp = await jevChoose(bot, ctx, regime, open, fetchFn) } catch (err) { console.log(`choose jev error="${String(err && err.message ? err.message : err).slice(0, 60).replace(/"/g, "'")}"`) }
       if (ctx.llmAsk !== a) return
+      if (orderedFarmPending(ctx)) { ctx.llmAsk = null; return }
       const sayC = rosterOnline(bot) ? say : () => {}
       // Re-check against a fresh list (work steps: candidateFeasible inside):
       // a pick gone stale during the await counts as no pick.
@@ -562,6 +568,7 @@ function ask(bot, ctx, req, fetchFn) {
       }
       if (ctx.llmAsk !== a) return // cancelled mid-ask (stop / follow me / go work)
       ctx.llmAsk = null
+      if (orderedFarmPending(ctx)) return
       if (r.outcome !== 'error' && r.outcome !== 'budget') ep.llm++ // a transient failure keeps the episode's call
       // a5xy: a need step drives the bring goal stack for the bot itself;
       // the rest of the plan is dropped (the FSM resumes work afterwards).
@@ -1104,6 +1111,10 @@ function startStep(bot, ctx, o, s, now) {
 function tick(bot, ctx, now = Date.now()) {
   const o = ctx && ctx.llmOrder
   if (!o) return
+  if (o.choose && !o.explicit && orderedFarmPending(ctx)) {
+    if (o.aside && ctx.taskPlanStep === 'rest') ctx.taskPlanStep = null
+    return end(bot, ctx, o, 'owner-farm')
+  }
   if (o.replanning) return
   const s = o.steps[o.i]
   if (!s) return o.bringGoal ? replanBring(bot, ctx, o, 'steps ended without a confirmed toss') : end(bot, ctx, o, 'done')
