@@ -98,4 +98,6 @@ function run(bot, ctx, why, rand = Math.random) {
   return true
 }
 
+register(require('../fun-mob-trap')(gradedSite))
+
 module.exports = { register, active, available, gradedSite, run }

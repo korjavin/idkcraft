@@ -97,7 +97,7 @@ const STEP = 3
 const noSoil = () => false
 function pickSite(bot, around, {
   w, d, needsSoil = noSoil, omitSoil = noSoil, radius = RADIUS, maxRadius = radius * 3,
-  step = STEP, avoid = [], skipWalk = null,
+  step = STEP, avoid = [], skipWalk = null, accept = null,
 }) {
   if (![w, d, radius, maxRadius, step].every((n) => Number.isInteger(n) && n > 0)) {
     throw new TypeError('invalid footprint or search dimensions')
@@ -117,10 +117,14 @@ function pickSite(bot, around, {
   let best = null
   let walk = null
   let tried = 0
+  const costAt = (x, z) => {
+    const f = footprintCost(col, x, z, footprint)
+    return f.bad || !accept || accept(f) ? f : { bad: 'terrain' }
+  }
   // exact (an owner's spot): the footprint centred on it first, off the STEP grid
   if (around.exact && !avoid.some((b) => overlaps(bx, bz, b, 3, w, d))) {
     tried++
-    const f = footprintCost(col, bx, bz, footprint)
+    const f = costAt(bx, bz)
     if (!f.bad) best = { ox: bx, oz: bz, d: 0, f }
   }
   for (let r = radius, r0 = -1; r <= maxRadius && (!best || (best.f.wet && !around.exact)) && !walk; r0 = r, r += radius) {
@@ -130,9 +134,9 @@ function pickSite(bot, around, {
         if (distance > r || distance <= r0) continue
         if (avoid.some((b) => overlaps(ox, oz, b, 3, w, d))) { why.castle++; continue }
         tried++
-        const f = footprintCost(col, ox, oz, footprint)
+        const f = costAt(ox, oz)
         if (f.bad) {
-          why[f.bad]++
+          why[f.bad] = (why[f.bad] || 0) + 1
           if (f.bad === 'unloaded' && (!walk || distance < walk.d) && !(skipWalk && skipWalk.has(`${f.x >> 4},${f.z >> 4}`))) walk = { x: f.x, z: f.z, d: distance }
         } else if (!best || (around.exact ? distance < best.d : f.cost < best.f.cost || (f.cost === best.f.cost && distance < best.d))) best = { ox, oz, d: distance, f } // exact: nearest valid spot to the owner's
       }
