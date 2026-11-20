@@ -1,6 +1,7 @@
 'use strict'
 
 const Vec3 = require('vec3')
+const danger = require('./danger')
 
 // shortcut: logs/leaves are no prep cut (build 'clear' digs natural ground only),
 // so tree columns only cost a penalty; add a log cut if prod picks wooded sites.
@@ -103,6 +104,9 @@ function pickSite(bot, around, {
     throw new TypeError('invalid footprint or search dimensions')
   }
   const footprint = { w, d, needsSoil, omitSoil }
+  // Death zones (danger.deathZone): self-chosen sites skip them; an owner's exact spot is kept, logged.
+  const ctx = bot && bot._tickerCtx
+  const zoneAt = (x, z) => danger.deathZone(ctx, { x: x + w / 2, z: z + d / 2 })
   if (!around || typeof around.x !== 'number' || typeof around.z !== 'number') return { site: null, tried: 0, reason: 'no-anchor' }
   const cy = typeof around.y === 'number' ? Math.floor(around.y) : 64
   const cols = new Map()
@@ -124,6 +128,8 @@ function pickSite(bot, around, {
   // exact (an owner's spot): the footprint centred on it first, off the STEP grid
   if (around.exact && !avoid.some((b) => overlaps(bx, bz, b, 3, w, d))) {
     tried++
+    const z = zoneAt(bx, bz)
+    if (z) console.log(`site in death zone kept (owner order) at=${bx},${bz} deaths=${z.deaths}`)
     const f = costAt(bx, bz)
     if (!f.bad) best = { ox: bx, oz: bz, d: 0, f }
   }
@@ -133,6 +139,7 @@ function pickSite(bot, around, {
         const distance = Math.hypot(ox - bx, oz - bz)
         if (distance > r || distance <= r0) continue
         if (avoid.some((b) => overlaps(ox, oz, b, 3, w, d))) { why.castle++; continue }
+        if (!around.exact && zoneAt(ox, oz)) { why.danger = (why.danger || 0) + 1; continue }
         tried++
         const f = costAt(ox, oz)
         if (f.bad) {
