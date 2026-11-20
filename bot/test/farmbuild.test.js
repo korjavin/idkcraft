@@ -325,6 +325,30 @@ describe('farmbuild step (qphv.1)', () => {
     } finally { console.log = orig; Date.now = realNow }
   })
 
+  it('a stalled site that is >=90% raised is kept as built, not re-picked (prod bot2 198/199)', () => {
+    const w = world()
+    const bot = mockBot(w)
+    bot.pathfinder.setGoal = () => {}
+    const fb = { site: { x: 0, y: 64, z: 0, prep: [] }, ordered: true }
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, castle: null, farmBuild: fb }
+    const build = require('../src/behaviours/build')
+    const orig = build.houseProgress
+    build.houseProgress = (b, h, o) => (o && o.includeClear ? { done: 300, total: 360 } : { done: 198, total: 199 })
+    const logs = []
+    const log = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => now
+    try {
+      for (let i = 0; i < 400 && !fb.built; i++) { now += 5000; ctx.placeInFlight = true; farmbuild(bot, ctx) }
+      assert.equal(ctx.farmBuild, fb)
+      assert.equal(fb.built, true)
+      assert.notEqual(ctx.stepStatus, 'failed:site-stalled')
+      assert.ok(logs.some((l) => l.includes('-> keeping it as built')))
+    } finally { console.log = log; Date.now = realNow; build.houseProgress = orig }
+  })
+
   it('resets the stall timer on a cut and ignores drops and recoveries to the same count', (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: 10000 })
     const w = world()
