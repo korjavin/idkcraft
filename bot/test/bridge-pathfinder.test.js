@@ -170,6 +170,32 @@ describe('goal-id attribution (FakeTransport = the mod)', () => {
     assert.equal(bot.pathfinder.isMoving(), false)
   })
 
+  it('clears an old noPath before the watchdog sees a fresh walk', async () => {
+    const unreachable = require('../src/unreachable')
+    const ctx = { work: true, step: 'explore', stepStatus: 'running' }
+    bot.on('path_update', ({ status }) => { ctx.lastPathStatus = status })
+    bot.pathfinder.setGoal(new goals.GoalXZ(9, 9))
+    await sleep(10)
+    const firstId = bot._goalId
+    transport.inject('baritone.event', { id: firstId, status: 'noPath' })
+    assert.equal(ctx.lastPathStatus, 'noPath')
+
+    const next = new goals.GoalXZ(20, 20)
+    bot.pathfinder.setGoal(next)
+    for (let i = 0; i < unreachable.GRACE_TICKS; i++) unreachable.tick(bot, ctx, i * 1000)
+    assert.equal(ctx.stepStatus, 'running')
+    assert.equal(bot.pathfinder.goal, next)
+    assert.equal(ctx.lastPathStatus, 'none')
+
+    await sleep(10)
+    transport.inject('baritone.event', { id: firstId, status: 'noPath' })
+    assert.equal(ctx.lastPathStatus, 'none')
+    transport.inject('baritone.event', { id: bot._goalId, status: 'noPath' })
+    assert.equal(unreachable.tick(bot, ctx, 2000), false)
+    assert.equal(unreachable.tick(bot, ctx, 3000), true)
+    assert.equal(ctx.stepStatus, 'failed:unreachable')
+  })
+
   it('stop sends #stop + path_reset, keeps the status sticky, drops late verdicts', async () => {
     bot.pathfinder.setGoal(new goals.GoalNear(9, 64, 9, 2))
     await sleep(10)
