@@ -458,7 +458,7 @@ function stationSpot(bot, ctx, bp, skip = new Set()) {
           if (!cell || !cell.name) continue // unloaded: never place blind
           if (AIRISH.has(cell.name) || PLACE_OVER.has(cell.name)) return { ref: below, at: new Vec3(x, y, z) }
           if (!dig && dy === 0 && r === 1 && Math.abs(dx) + Math.abs(dz) === 1 && typeof bot.dig === 'function' &&
-              cell.boundingBox === 'block' && cell.diggable !== false && cell.name !== 'bedrock' && !STATIONS.has(cell.name)) {
+              cell.boundingBox === 'block' && cell.diggable !== false && require('./util').NATURAL_SOLID.has(cell.name)) { // natural terrain only: never a player build
             dig = { ref: below, at: new Vec3(x, y, z), dig: cell }
           }
         }
@@ -467,6 +467,5 @@ function stationSpot(bot, ctx, bp, skip = new Set()) {
   }
   return dig
 }
-const STATIONS = new Set(['crafting_table', 'furnace', 'chest', 'trapped_chest', 'barrel'])
 
 module.exports = { stationSpot, FAR_TABLE, PLACE_OVER, itemsOf, dist3, dayOf, tableFar, castleTableSpot, tableFor, seenTable, reclaimTable }
