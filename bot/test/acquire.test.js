@@ -331,7 +331,7 @@ describe('construction material recovery', () => {
   })
 
   it('a loaded house sources its next missing item from a newly discovered chest', async (t) => {
-    const build = require('../src/behaviours/build')
+    const { BEHAVIOURS: { build } } = require('../src/behaviours')
     const { MENU } = require('../src/goal')
     const Vec3 = require('vec3')
     const pack = {}

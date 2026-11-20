@@ -266,6 +266,24 @@ function buildMaterial(bot, ctx, item, n, alts) {
   return acquire(bot, ctx, item, n, [], alts, true)
 }
 
+const BUILD_ITEM = {
+  soil: 'dirt', ground: 'dirt', fill: 'oak_planks', planks: 'oak_planks',
+  fence: 'oak_fence', gate: 'oak_fence_gate', door: 'oak_door', chest: 'chest',
+  table: 'crafting_table', farmland: 'wooden_hoe', water: 'water_bucket',
+}
+
+function acquireCellMaterial(bot, ctx, home, cell) {
+  const { wantItem, FILLERS, blueprintFor, cellDone } = require('./build')
+  const item = BUILD_ITEM[cell.kind]
+  const want = wantItem(cell)
+  const alts = cell.kind === 'ground' ? [...FILLERS] : S.family(item).filter(want)
+  let n = 1
+  if (cell.kind !== 'farmland' && cell.kind !== 'water') {
+    n = Math.max(1, Math.min(64, blueprintFor(home).filter((c) => c.kind === cell.kind && !cellDone(bot, home, c)).length))
+  }
+  return buildMaterial(bot, ctx, item, n, alts)
+}
+
 // Filled buckets (qphv.2): no recipe, no drop — an empty bucket (acquired
 // like any item: pack, craft from iron, ...) used on the nearest still
 // source (castle/farm water excluded by nearestSource) or a cow.
@@ -450,4 +468,4 @@ function smeltPrep(bot, ctx, fur, spot, want, up) {
   return null
 }
 
-module.exports = { acquire, buildMaterial, fromChest, FILL, deps }
+module.exports = { acquire, buildMaterial, acquireCellMaterial, fromChest, FILL, deps }

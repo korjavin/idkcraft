@@ -16,7 +16,7 @@
 
 const blueprint = require('../farm-blueprint')
 const build = require('./build')
-const { acquire, fromChest } = require('./acquire')
+const { acquire, acquireCellMaterial, fromChest } = require('./acquire')
 const { stepFailed, failReason } = require('../step')
 const { countItems } = require('../perception')
 const { goals } = require('mineflayer-pathfinder')
@@ -173,7 +173,7 @@ function run(bot, ctx) {
     const want = cell.kind === 'clear' ? null : build.wantItem(cell)
     if (want && build.cellLoaded(bot, fb, cell) && countItems(bot, want) <= 0) {
       view.buildGoalIdx = -1
-      const r = build.acquireCellMaterial(bot, ctx, fb, cell)
+      const r = acquireCellMaterial(bot, ctx, fb, cell)
       if (r === 'running') return
       const why = failReason(r)
       if (why != null) {

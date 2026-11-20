@@ -626,25 +626,8 @@ function unskipAround(ctx, q) {
   } catch (_) { /* best-effort */ }
 }
 
-const BUILD_ITEM = {
-  soil: 'dirt', ground: 'dirt', fill: 'oak_planks', planks: 'oak_planks',
-  fence: 'oak_fence', gate: 'oak_fence_gate', door: 'oak_door', chest: 'chest',
-  table: 'crafting_table', farmland: 'wooden_hoe', water: 'water_bucket',
-}
-
 function canSourceMaterials(bot) {
   return !!bot && (typeof bot.mine === 'function' || typeof bot.openChest === 'function')
-}
-
-function acquireCellMaterial(bot, ctx, home, cell) {
-  const item = BUILD_ITEM[cell.kind]
-  const want = wantItem(cell)
-  const alts = cell.kind === 'ground' ? [...FILLERS] : require('../sources').family(item).filter(want)
-  let n = 1
-  if (cell.kind !== 'farmland' && cell.kind !== 'water') {
-    n = Math.max(1, Math.min(64, blueprintFor(home).filter((c) => c.kind === cell.kind && !cellDone(bot, home, c)).length))
-  }
-  return require('./acquire').buildMaterial(bot, ctx, item, n, alts)
 }
 
 // Neighbor scan order: below first — every plan cell sits on the previous
@@ -1061,7 +1044,7 @@ function skyWalk(bot, ctx) {
   return true
 }
 
-function build(bot, ctx, target, state) {
+function build(bot, ctx, target, state, acquireMaterial) {
   if (!ctx.buildSkip) ctx.buildSkip = []
   // g0z.30: a castle residence has no house plan (blueprintFor) — never
   // lay hut cells at castle coords.
@@ -1174,9 +1157,9 @@ function build(bot, ctx, target, state) {
   }
   ctx.buildSiteWalk = null
   const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
-  if (!item && ctx.home.kind !== 'farm' && BUILD_ITEM[cell.kind] && canSourceMaterials(bot)) {
+  if (!item && cell.kind !== 'clear' && acquireMaterial && canSourceMaterials(bot)) {
     ctx.buildGoalIdx = -1
-    const reason = failReason(acquireCellMaterial(bot, ctx, ctx.home, cell))
+    const reason = failReason(acquireMaterial(bot, ctx, ctx.home, cell))
     if (reason != null) failBuild(ctx, reason)
     return
   }
@@ -1562,4 +1545,3 @@ module.exports.FLIGHT_TIMEOUT_MS = FLIGHT_TIMEOUT_MS
 module.exports.houseProgress = houseProgress
 module.exports.wantItem = wantItem
 module.exports.canSourceMaterials = canSourceMaterials
-module.exports.acquireCellMaterial = acquireCellMaterial

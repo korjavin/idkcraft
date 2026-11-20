@@ -11,6 +11,8 @@ const flatMod = require('./flat')
 const homeMod = require('./home')
 const castleMod = require('./castle')
 const recover = require('./recover')
+const build = require('./build')
+const { acquireCellMaterial } = require('./acquire')
 const BEHAVIOURS = {
   fight: fightMod,
   follow: require('./follow'),
@@ -27,7 +29,8 @@ const BEHAVIOURS = {
   shelter: homeMod.shelter,
   comehome: homeMod.comehome,
   gocastle: require('./gocastle'),
-  build: require('./build'),
+  // Acquire depends on build helpers, so wire acquisition at dispatch.
+  build: (bot, ctx, target, state) => build(bot, ctx, target, state, acquireCellMaterial),
   castle: castleMod,
   castlefetch: require('./castlefetch'),
   bank: require('./bank'),
