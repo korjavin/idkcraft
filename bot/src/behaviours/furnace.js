@@ -136,13 +136,17 @@ function furnaceSpot(bot, ctx) {
         try {
           b = bot.blockAt && bot.blockAt(new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz))
         } catch (_) { b = null }
-        if (b && b.name === 'furnace') {
+        if (b && b.name === 'furnace' && !isFar(bot, ctx, b.position || { x: home.site.x + sp.dx, y: home.site.y + sp.dy, z: home.site.z + sp.dz })) {
           home.furnace = new Vec3(home.site.x + sp.dx, home.site.y + sp.dy, home.site.z + sp.dz)
           return home.furnace
         }
       }
-      return null
+      // Any furnace already standing nearby is a station (one per smelt littered the map).
+      const seen = home ? seenFurnace(bot, ctx) : null
+      if (seen) home.furnace = seen
+      return seen
     }
+    if (isFar(bot, ctx, spot)) return null
     let block = null
     try { block = bot.blockAt && bot.blockAt(new Vec3(spot.x, spot.y, spot.z)) } catch (_) { block = null }
     if (block && block.name !== 'furnace') {
@@ -150,6 +154,21 @@ function furnaceSpot(bot, ctx) {
       return null
     }
     return spot
+  } catch (_) { return null }
+}
+
+// Nearest standing furnace within FAR_TABLE not skipped today, or null.
+function seenFurnace(bot, ctx) {
+  try {
+    const bp = botPos(bot)
+    const id = bot.registry.blocksByName.furnace.id
+    const { FAR_TABLE } = require('./tablespot')
+    let best = null
+    for (const p of bot.findBlocks({ matching: id, maxDistance: FAR_TABLE, count: 8 }) || []) {
+      if (isFar(bot, ctx, p)) continue
+      if (!best || dist3(bp, p) < dist3(bp, best)) best = p
+    }
+    return best ? new Vec3(best.x, best.y, best.z) : null
   } catch (_) { return null }
 }
 
@@ -186,7 +205,29 @@ function walkTo(bot, ctx, f, key, p, reason, goal = null) {
   const d = bp ? dist3(bp, p) : Infinity
   if (d <= f.walkBest - WALK_GAIN) { f.walkBest = d; f.walkTicks = 0 } else f.walkTicks = (f.walkTicks || 0) + 1
   f.walkTotal += 1
-  if (f.walkTicks > WALK_STALL_TICKS || f.walkTotal > WALK_CAP_TICKS) fail(ctx, reason)
+  if (f.walkTicks > WALK_STALL_TICKS || f.walkTotal > WALK_CAP_TICKS) {
+    // An unreachable furnace (cell) is skipped for the day: the next tick
+    // re-places one beside the body instead of failing the acquire. A third
+    // dead cell the same day fails loud (no endless relocation).
+    if (reason === 'furnace-unreachable' && markFar(bot, ctx, p) < 3) { f.walkKey = null; return }
+    fail(ctx, reason)
+  }
+}
+
+function farSet(bot, ctx) {
+  const day = require('./tablespot').dayOf(bot)
+  if (!ctx.furnaceFar || ctx.furnaceFar.day !== day) ctx.furnaceFar = { day, keys: new Set() }
+  return ctx.furnaceFar.keys
+}
+const cellKey = (p) => `${p.x},${p.y},${p.z}`
+function isFar(bot, ctx, p) { try { return farSet(bot, ctx).has(cellKey(p)) } catch (_) { return false } }
+function markFar(bot, ctx, p) {
+  const keys = farSet(bot, ctx)
+  keys.add(cellKey(p))
+  try { console.log(`furnace at ${cellKey(p)} unreachable, placing elsewhere`) } catch (_) { /* log best-effort */ }
+  const h = ctx.home && ctx.home.furnace
+  if (h && cellKey(h) === cellKey(p)) { try { delete ctx.home.furnace } catch (_) { /* retract best-effort */ } }
+  return keys.size
 }
 
 // Craft one furnace at the verified table (table block always passed:
@@ -246,7 +287,7 @@ function doPlaceV2(bot, ctx, f) {
     const x = site.x + sp.dx
     const y = site.y + sp.dy
     const z = site.z + sp.dz
-    if (nameAt(x, y, z) !== 'air') continue
+    if (nameAt(x, y, z) !== 'air' || isFar(bot, ctx, { x, y, z })) continue
     const below = nameAt(x, y - 1, z)
     if (!below || below === 'air') continue
     spot = { x, y, z }
@@ -274,10 +315,11 @@ function doPlaceV2(bot, ctx, f) {
 
 // The shared place flight: hold the furnace item (never a tool), place,
 // claim only a verified block.
-function placeAt(bot, ctx, item, ref, at) {
+function placeAt(bot, ctx, item, ref, at, dig = null) {
   ctx.furnaceInFlight = true
   void (async () => {
     try {
+      if (dig) await bot.dig(dig)
       // mineflayer places the HELD item: hold the furnace (never a tool).
       if (typeof bot.equip === 'function') {
         try { await bot.equip(item, 'hand') } catch (_) { /* held already or bust: placement decides */ }
@@ -334,8 +376,13 @@ function doPlaceRoadside(bot, ctx, f, item) {
     at = new Vec3(below.position.x, below.position.y + 1, below.position.z)
     break
   }
+  let dig = null
+  if (!ref) { // shared station spot finder: wider ring, dig one out in a pit
+    const sp = require('./tablespot').stationSpot(bot, ctx, bp)
+    if (sp) { ref = sp.ref; at = sp.at; dig = sp.dig || null }
+  }
   if (!ref) { fail(ctx, 'no-spot'); return }
-  placeAt(bot, ctx, item, ref, at)
+  placeAt(bot, ctx, item, ref, at, dig)
 }
 
 function slotCount(slot) {

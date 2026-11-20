@@ -89,9 +89,14 @@ describe('idkcraft-4nx: furniture avoids bedroom cells', () => {
     // The other two, (9,64,5) back wall and (9,64,3) partition post, are
     // plan cells (idkcraft-d7i): no spot here at all, never a bed cell.
     const ctx = { home: v2home() }
-    const t = await equip.tableFor(bot, ctx).catch(() => null)
-    assert.ok(!t, 'no table spot beside the body')
-    assert.deepEqual(placed, [])
+    // The wider station ring (no-table-ref class fix) may land a cell
+    // further out — never a bedroom or plan cell.
+    await equip.tableFor(bot, ctx).catch(() => null)
+    const { isPlanCell } = require('../src/behaviours/build')
+    for (const p of placed) {
+      assert.equal(beds.isBedroomCell(ctx.home, p.x, p.y, p.z), false, `bedroom ${p.x},${p.y},${p.z}`)
+      assert.equal(isPlanCell(ctx.home, p.x, p.y, p.z), false, `plan ${p.x},${p.y},${p.z}`)
+    }
   })
 
   it('roadside table skips the plan cells too (idkcraft-d7i)', async () => {
