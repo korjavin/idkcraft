@@ -58,7 +58,10 @@ function anchorOf(bot, ctx) {
   const h = ctx.home
   if (h && h.site && h.kind !== 'castle') {
     avoid.push({ x0: h.site.x, z0: h.site.z, x1: h.site.x + 6, z1: h.site.z + 5 })
-    if (!at) at = h.site
+    // a castle far from where the bot lives (left behind) does not anchor the
+    // farm: it lands next to the home instead (prod bot5: farm sites ~450 blocks
+    // away, unloaded, walked toward and dropped for hours)
+    if (!at || Math.hypot(at.x - h.site.x, at.z - h.site.z) > FAR_CASTLE) at = h.site
   }
   if (!at) at = bot.entity && bot.entity.position
   const fb = ctx.farmBuild
@@ -72,6 +75,7 @@ function anchorOf(bot, ctx) {
 // SITE_WALK_IDLE ticks is skipped (its chunk) and the next one tried; after
 // SITE_WALK_FAILS skips the step fails no-site and holds SITE_COOLDOWN_MS,
 // then the episode starts fresh (prod bot5: a kept dead target failed at once forever).
+const FAR_CASTLE = 128
 const SITE_WALK_IDLE = 30
 const SITE_WALK_FAILS = 3
 const STALL_MS = 30 * 60 * 1000
@@ -322,3 +326,4 @@ module.exports.run = run
 module.exports.feasible = feasible
 module.exports.progressDone = progressDone
 module.exports.viewOf = viewOf
+module.exports.anchorOf = anchorOf

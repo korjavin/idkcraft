@@ -349,6 +349,14 @@ describe('farmbuild step (qphv.1)', () => {
     } finally { console.log = log; Date.now = realNow; build.houseProgress = orig }
   })
 
+  it('anchors next to the home when the castle is far from it (left-behind castle)', () => {
+    const bot = mockBot(world())
+    const ctx = { home: { site: { x: -63, y: 70, z: 397 } }, castle: { site: { x: 300, y: 80, z: -60 }, rot: 0 } }
+    assert.deepEqual(farmbuild.anchorOf(bot, ctx).at, { x: -63, y: 70, z: 397 })
+    ctx.castle.site = { x: -40, y: 70, z: 380 }
+    assert.notDeepEqual(farmbuild.anchorOf(bot, ctx).at, { x: -63, y: 70, z: 397 })
+  })
+
   it('resets the stall timer on a cut and ignores drops and recoveries to the same count', (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: 10000 })
     const w = world()
