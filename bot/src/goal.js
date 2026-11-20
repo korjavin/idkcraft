@@ -2020,19 +2020,23 @@ function finishWorkEpisode(bot, ctx, status, text) {
 
 function workChoice(brain, ctx, bot, boundary, names, text, fsm) {
   const catalogue = brainCatalogue(bot, ctx)
-  const options = names.filter((name) => {
+  let options = names.filter((name) => {
     if (name === 'rest') return false
     const option = catalogue?.get(name)
     return catalogue ? option?.feasible && !option.held : !!STEP_CRITERIA[name]
   })
   if (options.length < 2) return null
   const now = Date.now()
-  const fallback = { step: fsm, source: 'fsm-fallback', fsm, model: 'jev' }
+  const history = brain.workFeedback ? require('./episodes').workRates(ctx, options, now) : null
+  if (history) options = options.filter((id) => !history[id].coolingDown)
+  const fallback = { step: options.includes(fsm) ? fsm : (options[0] || fsm), source: 'fsm-fallback', fsm, model: 'jev' }
+  if (brain.workFeedback) fallback.workBy = 'fallback'
+  if (options.length === 0) return fallback
+  if (options.length === 1) return { ...fallback, step: options[0] }
   let request = ctx.workChoice
   if (!request || request.boundary !== boundary || request.brain !== brain) {
     if (now < (ctx.workChoiceRetryAt || 0) || (request?.pending && now < request.until)) return fallback
     request = ctx.workChoice = { boundary, brain, options, until: now + 3000, pending: true }
-    const history = brain.workFeedback ? require('./episodes').workRates(ctx, options) : null
     const ranked = history ? options.slice().sort((a, b) => history[b].successRate - history[a].successRate) : options
     const criteria = Object.fromEntries(ranked.map((name) => [name, catalogue?.get(name)?.why || STEP_CRITERIA[name] || name]))
     const inventory = {}
@@ -2063,7 +2067,12 @@ function workChoice(brain, ctx, bot, boundary, names, text, fsm) {
   if (request.pending && now < request.until) return { step: null, source: 'jev-work-pending', fsm, model: 'jev' }
   const answer = request.answer
   if (request.options.includes(answer?.step) && options.includes(answer.step) && (answer.confidence == null || answer.confidence >= 0.5)) {
-    return { step: answer.step, source: 'jev-work', fsm, model: 'jev' }
+    const choice = { step: answer.step, source: 'jev-work', fsm, model: 'jev' }
+    if (brain.workFeedback) {
+      choice.workBy = 'jev'
+      choice.confidence = answer.confidence
+    }
+    return choice
   }
   ctx.workChoiceRetryAt = now + 15000
   return fallback
@@ -3409,8 +3418,14 @@ async function decide(bot, ctx) {
     if (g && typeof g === 'object') return g
     if (g) status = g
   }
-  if (ctx?.workEpisode && (finished || ctx.workEpisode.generation !== stepGen(ctx) || ctx.workEpisode.choice !== prev)) {
-    finishWorkEpisode(bot, ctx, finished && ctx.workEpisode.choice === prev ? status : null, text)
+  const workRun = ctx?.workEpisode
+  if (workRun) {
+    if (finished || workRun.generation !== stepGen(ctx) || workRun.choice !== prev) {
+      finishWorkEpisode(bot, ctx, finished && workRun.choice === prev ? status : null, text)
+    } else if (!workRun.reported && Date.now() - workRun.at >= require('./episodes').WORK_WINDOW_MS) {
+      const progress = brainCatalogue(bot, ctx)?.get(workRun.choice)?.progress
+      require('./episodes').sampleWork(ctx, stepGen(ctx), progress, text)
+    }
   }
   const boundary = `${stepGen(ctx)}:${prev}:${status}`
   if (ctx?.workChoice?.boundary !== boundary) {
@@ -3514,9 +3529,11 @@ async function decide(bot, ctx) {
     if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     applyChoice(bot, ctx, facts, choice, prev, finished, why, text)
-    if (ctx.brain?.workFeedback && (choice.source === 'jev-work' || (choice.model && choice.source === choice.model))) {
+    if (ctx.brain?.workFeedback && (choice.workBy || (choice.model && choice.source === choice.model))) {
       const progress = brainCatalogue(bot, ctx)?.get(choice.step)?.progress
-      require('./episodes').beginWork(bot, ctx, choice.step, stepGen(ctx), progress, text)
+      require('./episodes').beginWork(bot, ctx, choice.step, stepGen(ctx), progress, text, {
+        by: choice.workBy || choice.model, conf: choice.confidence,
+      })
     }
     noteChoice(bot, ctx, facts, names, choice, prev, status, why, force, text, ms)
   }

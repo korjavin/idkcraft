@@ -324,6 +324,34 @@ describe('JEV choice at normal v2 work boundaries', () => {
     assert.equal(ctx.episodes[1].delta, 4)
   })
 
+  it('temporarily removes blocks after three recent failures', async (t) => {
+    const now = 1000000
+    t.mock.method(Date, 'now', () => now)
+    const episodes = [1, 2, 3].map((offset) => ({ sig: { kind: 'work' }, choice: 'craft', outcome: 'failed:no-wood', at: now - 1000 * offset })).reverse()
+    const ctx = { episodes }
+    const brain = { workFeedback: true, workChoice: () => { throw new Error('only one block remains') } }
+    const choice = await goal.chooseStep(brain, facts(), ['craft', 'gather'], null, { workBoundary: 'retry' }, ctx)
+    assert.equal(choice.step, 'gather')
+    assert.equal(choice.workBy, 'fallback')
+    assert.equal(require('../src/episodes').workRates(ctx, ['craft'], now + 300000).craft.coolingDown, false)
+  })
+
+  it('logs a five-minute sample once and retains the terminal outcome for learning', (t) => {
+    const logs = []
+    t.mock.method(console, 'log', (line) => logs.push(line))
+    const episodes = require('../src/episodes')
+    const ctx = {}
+    episodes.beginWork(null, ctx, 'build', 7, { done: 1, total: 10 }, 'snapshot', { by: 'jev', conf: 0.9 }, 1000)
+    episodes.sampleWork(ctx, 7, { done: 2, total: 10 }, 'snapshot', 300999)
+    assert.equal(logs.length, 1)
+    episodes.sampleWork(ctx, 7, { done: 3, total: 10 }, 'snapshot', 301000)
+    episodes.finishWork(ctx, 7, { done: 6, total: 10 }, 'done', 'snapshot', 302000)
+    assert.match(logs[0], /choice=build by=jev conf=0.9 id=1000-7/)
+    assert.match(logs[1], /outcome choice=build by=jev id=1000-7 result=progress delta=2 fail=- ms=300000/)
+    assert.equal(logs.length, 2)
+    assert.equal(ctx.episodes[0].delta, 5)
+  })
+
   it('wires work JEV separately from legacy menu ask, on keyed v2 only', () => {
     const env = { BOT_BODY: 'baritone', TYPESAFE_API_KEY: 'fake-test-key' }
     assert.equal(typeof makeBrain(env).workChoice, 'function')
