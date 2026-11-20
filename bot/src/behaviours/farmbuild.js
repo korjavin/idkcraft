@@ -155,10 +155,10 @@ function run(bot, ctx) {
     const loaded = !!bot.blockAt(new Vec3(fb.site.x, fb.site.y, fb.site.z))
     if (fb.stallDone == null || done > fb.stallDone) { fb.stallDone = done; fb.stallRun = 0 }
     else if (loaded && (fb.stallRun = (fb.stallRun || 0) + dt) > STALL_MS) {
-      // a mostly raised farm is kept (its last stuck cells are left), never
+      // a farm at least half raised is kept (its last stuck cells are left), never
       // relocated (prod bot2 2026-11-20: 198/199 dropped for a new 0/279 plot)
       const own = build.houseProgress(bot, fb)
-      if (own.total > 0 && own.done >= own.total * 0.9) {
+      if (own.total > 0 && own.done >= own.total * 0.5) {
         console.log(`farm site stalled built=${own.done}/${own.total} for=${Math.round(fb.stallRun / 60000)}min -> keeping it as built`)
         fb.built = true
         fb.stallRun = 0
