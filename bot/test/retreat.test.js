@@ -87,6 +87,16 @@ describe('retreat gates', () => {
     bot.entity.position = pos(0.5, 64, 0.5)
     assert.deepEqual(feasibleRetreat(bot, freshCtx(), STATE), ['pillar'])
   })
+  it('cave ceiling: pillar stays offered and digs into the ceiling (prod 2026-11-20 cave deaths)', async () => {
+    const solids = pitSolids()
+    for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) solids.add(key(x, 66, z))
+    const bot = fieldBot({ items: [{ name: 'dirt', count: 5 }], solids, entities: { 1: zombie(1, 1.5, 64, 0) } })
+    assert.deepEqual(feasibleRetreat(bot, freshCtx(), STATE), ['pillar'])
+    const ctx = freshCtx()
+    const r = await chooseRetreat(null, bot, ctx, STATE)
+    assert.equal(r.action, 'pillar')
+    assert.equal(ctx.recovery.action, 'dig_pillar')
+  })
   it('no scaffold shuts pillar; built close home opens gohome', () => {
     const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } })
     assert.deepEqual(feasibleRetreat(bot, freshCtx(), STATE), ['retreat'])
@@ -264,11 +274,20 @@ describe('retreat behaviours', () => {
     assert.equal(ctx2.stepStatus, 'failed:retreat-no-pos')
     assert.equal(ctx2.retreatFailed, 'retreat')
   })
-  it('flee: own no-path fails loudly; foreign no-path is ignored', () => {
+  it('flee: own no-path turns sideways, then fails loudly; foreign no-path is ignored', () => {
     const bot = fieldBot({ entities: { 1: zombie(1, 2, 64, 0) } })
     const ctx = freshCtx()
     ctx.lastGoalKey = 'retreat:1'
     ctx.lastPathStatus = 'noPath'
+    // prod 2026-11-20: the away goal noPathed in a cave and the bot turned back to fight.
+    for (const k of ['retreat:1:1', 'retreat:1:2']) {
+      retreat(bot, ctx)
+      assert.equal(ctx.stepStatus, 'running')
+      assert.equal(ctx.lastGoalKey, k)
+      const g = bot.calls.goals[bot.calls.goals.length - 1]
+      assert.ok(Math.abs(g.z) >= 5 && Math.hypot(g.x - 2, g.z) > 4, `sideways, never toward the mob: ${g.x},${g.z}`)
+      ctx.lastPathStatus = 'noPath'
+    }
     retreat(bot, ctx)
     assert.equal(ctx.stepStatus, 'failed:retreat-no-path')
     assert.equal(ctx.retreatFailed, 'retreat')
@@ -391,8 +410,11 @@ describe('goal shortcut (live 1tj follow-up)', () => {
     // Tick 0: model idle (no veto) -> goal arbiter sets its text and step.
     // HP drifts 3->4->5 across ticks (same veto window, same key bucket):
     // the ticker caches identical states, so each tick needs fresh facts.
+    // The zombie starts out of the 8-block gate: low hp alone never retreats.
+    bot.entities[1].position = pos(9.5, 64, 0)
     const r0 = await ticker.tick()
     assert.ok(r0.decision.action !== 'retreat')
+    bot.entities[1].position = pos(2, 64, 0)
     // Tick 1: model follow -> veto -> only-option retreat pick, owns the step.
     bot.health = 4
     const r1 = await ticker.tick()
@@ -406,6 +428,7 @@ describe('goal shortcut (live 1tj follow-up)', () => {
     // Tick 3: past latch expiry the arbiter re-decides (the 1tj release
     // property), never re-issues the stale leg.
     bot._tickerCtx.retreatLatch.until = Date.now() - 1
+    bot.entities[1].position = pos(9.5, 64, 0) // low hp retreats from any near mob: re-decide needs it gone
     const r3 = await ticker.tick()
     assert.ok(r3.decision.action !== 'retreat', `expired latch re-issued retreat: ${r3.decision.action}`)
   })
@@ -699,14 +722,14 @@ describe('taking-fire retreat (0ay)', () => {
     let fightRan = 0
     BEHAVIOURS.fight = () => { fightRan++ }
     try {
-      await ticker.tick() // hp 5, no stamp yet: fight dispatches (today)
-      assert.equal(fightRan, 1)
+      await ticker.tick() // hp 5, mob not adjacent: low hp retreats even before a fresh hit
+      assert.equal(fightRan, 0)
       const ctx = bot._tickerCtx
       ctx.fightGivenUpId = 1
       bot.health = 4 // hurt lands: stamp arms the divert
       const r = await ticker.tick()
       assert.equal(r.decision.action, 'retreat')
-      assert.equal(fightRan, 1, 'diverted tick never reaches fight')
+      assert.equal(fightRan, 0, 'diverted tick never reaches fight')
       assert.ok(logs.some((l) => l.includes('taking-fire:')), 'diverted pick logged')
     } finally {
       BEHAVIOURS.fight = origFight
@@ -749,18 +772,14 @@ describe('taking-fire retreat (0ay)', () => {
     ticker.destroy()
   })
 
-  it('hurt + reachable + idle at low hp: no retreat (reachability gates)', async () => {
-    // Hard route (hp<6 + hostile fact) with an idle model: decision idle
-    // reaches the work block, so only the reachable===false conjunct stands
-    // between this tick and a retreat — deleting it fails this test.
-    const bot = fireBot(5, [{ name: 'stone_sword', count: 1 }]) // armed: the swordless leg stays out
+  it('hurt + reachable + armed at low hp, mob not adjacent: retreats, never re-engages (prod 2026-11-20)', async () => {
+    const bot = fireBot(5, [{ name: 'stone_sword', count: 1 }])
     const ticker = createTicker({ bot, brain: hybridBrain(idleRemote()), tickMs: 10, idleTickMs: 10, autonomous: true })
     ticker.work()
     await ticker.tick()
-    bot.health = 4 // drop stamps, but the mob was never written off
+    bot.health = 4
     const r = await ticker.tick()
-    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `stood down: ${r.decision.action}`)
-    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no log for reachable fire')
+    assert.equal(r.decision.action, 'retreat')
     ticker.destroy()
   })
 

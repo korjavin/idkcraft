@@ -267,7 +267,7 @@ function run(bot, ctx) {
   if (r.phase === 'harvest') { harvestTick(bot, ctx, r, done); return }
   const toHarvest = () => { source('hunt', 'none'); r.phase = 'harvest'; ctx.lastGoalKey = ''; return false }
   if (!r.hunt) {
-    const target = forage.foodTarget(bot, ctx, true)
+    const target = safeHunt(bot, forage.foodTarget(bot, ctx, true))
     if (!target) { toHarvest(); return }
     console.log(`food recovery hunt=${target.name}`)
     target.want = 1
@@ -275,7 +275,7 @@ function run(bot, ctx) {
   }
   const h = r.hunt
   const replanTarget = () => {
-    const target = forage.foodTarget(bot, ctx, true)
+    const target = safeHunt(bot, forage.foodTarget(bot, ctx, true))
     if (!target) return toHarvest()
     target.want = 1
     h.target = target; h.phase = 'find'; h.stalls = 0
@@ -289,6 +289,22 @@ function run(bot, ctx) {
   forage.huntTick(bot, ctx, h, bp, !bot.entity || bot.entity.onGround !== false, {
     replanTarget, stall, finishTarget: () => { source('hunt', 'acquired'); done(false) },
   })
+}
+
+// Low hp (prod 2026-11-20 bot4: foodRecovery at 0.15 hp, killed by a
+// skeleton at y=-30): the hunt never follows prey down or into the dark,
+// where the mobs spawn; the run falls through to harvest, then its cooldown.
+function safeHunt(bot, target) {
+  if (!target || !(bot.health < 6)) return target
+  try {
+    const e = bot.entities && bot.entities[target.id]
+    const bp = bot.entity.position
+    if (!e || !e.position) return target
+    if (e.position.y < bp.y - 2) return null
+    const b = bot.blockAt(e.position.offset(0, 1, 0))
+    if (b && b.skyLight === 0) return null
+  } catch (_) { /* unreadable: keep the target */ }
+  return target
 }
 
 // Harvest rung: dig ripe wheat/carrots nearby (the farm step replants the
@@ -317,4 +333,4 @@ function harvestTick(bot, ctx, r, done) {
 
 require('../reflexes').setFoodChestProbe(normalFoodChest)
 
-module.exports = { run, needed, available, invalidate, failed, normalFoodChest, RETRY_MS, HUNGRY_FOOD, HUNGRY_WANT }
+module.exports = { run, needed, available, invalidate, failed, normalFoodChest, safeHunt, RETRY_MS, HUNGRY_FOOD, HUNGRY_WANT }
