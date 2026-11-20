@@ -1835,8 +1835,7 @@ function brainOptions(bot, ctx) {
   let facts
   try { goal = require('./goal'); facts = goal.goalFacts(bot, ctx) } catch (_) { return out }
   const text = (() => { try { return goal.goalText(facts, ctx.home) } catch (_) { return '' } })()
-  for (const n of STEP_ORDER) {
-    if (n === 'rest') continue
+  for (const n of [...STEP_ORDER.filter((x) => x !== 'rest' && x !== 'fun'), 'fun']) {
     const o = { id: n, feasible: false, held: false, why: STEP_EFFECT_TEXT[n] || goal.STEP_CRITERIA[n] || n, progress: null }
     try {
       o.feasible = n === 'fun'
