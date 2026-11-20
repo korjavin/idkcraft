@@ -118,13 +118,14 @@ describe('bridge dig/place (idkcraft-neuc.7)', () => {
   })
 
   it('a best tool in the main pack (not hotbar) is equipped before the dig (prod bot2 hit stone with bread)', async () => {
-    transport.state.inventory.push({ slot: 12, name: 'iron_pickaxe', count: 1 })
+    // no tool name is hardcoded: the fastest harvest tool in the pack wins
+    transport.state.inventory.push({ slot: 12, name: 'wooden_pickaxe', count: 1 }, { slot: 20, name: 'diamond_pickaxe', count: 1 })
     await bot.refresh()
     const equipped = []
     const orig = bot.equip
     bot.equip = async (item, dest) => { equipped.push([item.name, dest]) }
     try { await bot.dig(bot.blockAt(new Vec3(6, 64, 5))) } finally { bot.equip = orig }
-    assert.deepEqual(equipped, [['iron_pickaxe', 'hand']])
+    assert.deepEqual(equipped, [['diamond_pickaxe', 'hand']])
   })
 
   it('the mod tool pick (selection-only) lands in quickBarSlot/heldItem', async () => {
