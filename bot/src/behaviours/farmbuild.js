@@ -149,6 +149,15 @@ function run(bot, ctx) {
     fb.stallTick = now
     if (fb.stallDone == null || done > fb.stallDone) { fb.stallDone = done; fb.stallRun = 0 }
     else if ((fb.stallRun = (fb.stallRun || 0) + dt) > STALL_MS) {
+      // a mostly raised farm is kept (its last stuck cells are left), never
+      // relocated (prod bot2 2026-11-20: 198/199 dropped for a new 0/279 plot)
+      const own = build.houseProgress(bot, fb)
+      if (own.total > 0 && own.done >= own.total * 0.9) {
+        console.log(`farm site stalled built=${own.done}/${own.total} for=${Math.round(fb.stallRun / 60000)}min -> keeping it as built`)
+        fb.built = true
+        fb.stallRun = 0
+        return
+      }
       console.log(`farm site stalled completed=${done} for=${Math.round(fb.stallRun / 60000)}min -> re-picking`)
       // the stalled plot is not picked again (its box joins anchorOf's avoid)
       ctx.farmBuild = { ordered: fb.ordered, avoid: [...(fb.avoid || []), { x0: fb.site.x, z0: fb.site.z, x1: fb.site.x + blueprint.W - 1, z1: fb.site.z + blueprint.D - 1 }] }
