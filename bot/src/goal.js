@@ -2018,18 +2018,31 @@ function finishWorkEpisode(bot, ctx, status, text) {
   require('./episodes').finishWork(ctx, stepGen(ctx), progress, status, text)
 }
 
-function workChoice(brain, ctx, bot, boundary, names, text, fsm) {
+function noteWorkSkip(brain, ctx, why) {
+  if (!ctx || typeof brain?.workChoice !== 'function') return
+  const times = ctx.workSkipAt || (ctx.workSkipAt = {})
+  const now = Date.now()
+  if (times[why] != null && now - times[why] < 60000) return
+  times[why] = now
+  console.log(`brain work skip why=${why}`)
+}
+
+function workChoice(brain, ctx, bot, boundary, names, text, fsm, preferred) {
   const catalogue = brainCatalogue(bot, ctx)
   let options = names.filter((name) => {
     if (name === 'rest') return false
     const option = catalogue?.get(name)
     return catalogue ? option?.feasible && !option.held : !!STEP_CRITERIA[name]
   })
-  if (options.length < 2) return null
+  if (options.length < 2) {
+    noteWorkSkip(brain, ctx, 'no-alternatives')
+    return null
+  }
   const now = Date.now()
   const history = brain.workFeedback ? require('./episodes').workRates(ctx, options, now) : null
   if (history) options = options.filter((id) => !history[id].coolingDown)
-  const fallback = { step: options.includes(fsm) ? fsm : (options[0] || fsm), source: 'fsm-fallback', fsm, model: 'jev' }
+  const first = options.includes(preferred) ? preferred : fsm
+  const fallback = { step: options.includes(first) ? first : (options[0] || fsm), source: 'fsm-fallback', fsm, model: 'jev' }
   if (brain.workFeedback) fallback.workBy = 'fallback'
   if (options.length === 0) return fallback
   if (options.length === 1) return { ...fallback, step: options[0] }
@@ -2053,6 +2066,7 @@ function workChoice(brain, ctx, bot, boundary, names, text, fsm) {
       return { id, cost: option.cost ?? null, progress: option.progress ?? null }
     })
     if (history) state.history = history
+    if (options.includes(preferred)) state.previousPlan = preferred
     Promise.resolve().then(() => brain.workChoice({
       state, criteria,
       instructions: 'Select the next executable action that advances the current work. Prefer measured progress and use block success estimates and recent outcomes to avoid repeating an approach that just failed in similar circumstances.',
@@ -2082,6 +2096,10 @@ async function chooseStep(brain, facts, feasible, home, extra, ctx = null) {
   const names = STEP_ORDER.filter((n) => feasible.includes(n))
   const text = goalText(facts, home)
   const fsm = goalFsm(facts, names)
+  const skip = (step, why) => {
+    noteWorkSkip(brain, ctx, why === 'only-option' ? extra?.hardPin || why : why)
+    return { step, source: why, fsm, model: null }
+  }
   // Deadlock escalation (idkcraft-u19u phase C): the work-mode twin of the
   // task-executive watchdog, owned by task.js (goal.js never requires the
   // task layer, oqul.1). Observes every re-decide — rest-only menus
@@ -2089,30 +2107,36 @@ async function chooseStep(brain, facts, feasible, home, extra, ctx = null) {
   // back. Null runs the existing path byte-identical.
   if (extra && typeof extra.deadlock === 'function') {
     const deadlock = extra.deadlock(brain, facts, feasible, home, extra, fsm)
-    if (deadlock) return deadlock
+    if (deadlock) {
+      noteWorkSkip(brain, ctx, 'deadlock-rule')
+      return deadlock
+    }
   }
-  if (names.length <= 1) return { step: names[0] || 'rest', source: 'only-option', fsm, model: null }
+  if (names.length <= 1) return skip(names[0] || 'rest', 'only-option')
   // bhz2: the night safety steps are a rule, not a preference — the model never overrides them.
   // xhqv: shelter too — a latched gohome hands the night to shelter, and a
   // model re-pick to a day step would undo the latch.
-  if (fsm === 'stay' || fsm === 'gohome' || fsm === 'shelter') return { step: fsm, source: 'night-rule', fsm, model: null }
+  if (fsm === 'stay' || fsm === 'gohome' || fsm === 'shelter') return skip(fsm, 'night-rule')
   // Owner order rule (prod 2026-11-19 bot2: 'build farm' lost to the castle-rule tidy):
   // a standing owner order for a step outranks the castle and fun rules while it is feasible.
   const fbo = ctx && ctx.farmBuild
-  if (fbo && fbo.ordered && !fbo.built && names.includes('farmbuild')) return { step: 'farmbuild', source: 'order-rule', fsm, model: null }
-  if (fsm === 'fun') return { step: fsm, source: 'fun-rule', fsm, model: null }
+  if (fbo && fbo.ordered && !fbo.built && names.includes('farmbuild')) return skip('farmbuild', 'order-rule')
+  if (fsm === 'fun') return skip(fsm, 'fun-rule')
   // Castle rule (vmzq.19 R2, major 2, the night-rule precedent): a runnable
-  // castle is a rule, not a preference — run3's laya picked equip then
+  // castle normally leads — run3's laya picked equip then
   // beds over a feasible castle and walked 500 blocks home. The model is
-  // consulted only when the castle cannot run now.
+  // consulted for a soft plan or recovery from a held owner farm as well.
   // vmzq.37: the pickless rearm (goalFsm) rides the same rule.
   // vmzq.50: the return-to-site walk rides it too — displaced, the model
   // must not wander to forage/explore instead of walking back.
-  if (fsm === 'castle' || fsm === 'castlefetch' || fsm === 'gocastle' || fsm === 'sitebed' || (fsm === 'equip' && picklessCastle(facts, names))) return { step: fsm, source: 'castle-rule', fsm, model: null }
+  const recoveryChoice = extra?.workBoundary && (extra.preferred || extra.orderRecovery)
+  if ((!recoveryChoice && (fsm === 'castle' || fsm === 'castlefetch')) || fsm === 'gocastle' || fsm === 'sitebed' || (fsm === 'equip' && picklessCastle(facts, names))) return skip(fsm, 'castle-rule')
   if (ctx && facts.time === 'day' && extra?.workBoundary && typeof brain?.workChoice === 'function') {
-    const choice = workChoice(brain, ctx, extra.bot, extra.workBoundary, names, text, fsm)
+    const choice = workChoice(brain, ctx, extra.bot, extra.workBoundary, names, text, fsm, extra.preferred)
     if (choice) return choice
   }
+  if (extra?.preferred && names.includes(extra.preferred)) return skip(extra.preferred, 'task-plan')
+  if (!extra?.workBoundary) noteWorkSkip(brain, ctx, facts.time === 'day' ? 'running-step' : 'night-rule')
   // Strategic choice (idkcraft-u19u phase 2): the multi-option day
   // work-menu branch goes through the task-owned strategic chooser (wired
   // via ctx by taskTick — goal.js never requires the task layer, oqul.1).
@@ -3241,7 +3265,7 @@ function forceName(bot, ctx, facts, prev, status, text, gateFired) {
 // gohome), ctx.stepStatus, ctx.stepPick, ctx.stockpilePierced,
 // ctx.goalText, ctx.heldText.
 function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
-  if (ctx.workEpisode && (finished || choice.step !== prev)) finishWorkEpisode(bot, ctx, null, text)
+  if (ctx.workEpisode && (finished || choice.step !== prev || choice.workBy)) finishWorkEpisode(bot, ctx, null, text)
   // vhlb.3: the step that just ended joins the attempts ring (plan() state).
   if (prev && (choice.step !== prev || finished)) recordAttempt(ctx, prev, bot)
   if (choice.step !== prev || finished) markAttemptStart(ctx, bot)
@@ -3428,7 +3452,7 @@ async function decide(bot, ctx) {
     }
   }
   const boundary = `${stepGen(ctx)}:${prev}:${status}`
-  if (ctx?.workChoice?.boundary !== boundary) {
+  if (ctx?.workChoice?.boundary !== boundary && !ctx?.workChoice?.boundary?.startsWith(`${boundary}:`)) {
     status = emptyRun(ctx, prev, status, finished)
     if (finished) noteOutcome(ctx, prev, status === 'done' && ctx && ctx.stepPickText === text ? 'done-flat' : status)
     recordOutcome(bot, ctx, facts, prev, status, finished, text)
@@ -3507,7 +3531,13 @@ async function decide(bot, ctx) {
       commitActive = false
       commitStep = null
     }
-    const { names, planApplied, commitApplied } = pinMenu(bot, ctx, facts, menuNames(facts, bot, ctx, text), planStep, commitActive, commitStep)
+    const ordinary = menuNames(facts, bot, ctx, text)
+    const workBrain = typeof ctx?.brain?.workChoice === 'function'
+    // An autonomous one-shot plan is a preference at its work boundary.
+    // Explicit order arguments and active commitments keep their pins.
+    const preferred = workBrain && facts.time === 'day' && !commitActive && !ctx.taskPlanArgs && !ctx.llmOrder &&
+      planStep && ordinary.includes(planStep) && !picklessCastle(facts, ordinary) ? planStep : null
+    const { names, planApplied, commitApplied } = pinMenu(bot, ctx, facts, ordinary, preferred ? null : planStep, commitActive, commitStep)
     const why = planApplied || commitApplied ? 'task-plan' : !prev ? 'start' : finished ? (status === 'done' ? 'step-done' : 'step-failed') : nightFarWalk ? 'night-far' : nightNearShelter ? 'night-near' : siteFarWalk ? 'site-far' : 'facts-changed'
     const gateFired = { chain: chainOwns, 'fetch-retry': fetchRetry, 'gate-opened': gateOpened, 'build-retry': buildRetry, 'site-retry': siteRetry, 'night-far': nightFarWalk, 'night-near': nightNearShelter }
     const force = forceName(bot, ctx, facts, prev, status, text, gateFired)
@@ -3521,11 +3551,15 @@ async function decide(bot, ctx) {
     } catch (_) {
       stratExtra = null
     }
-    if ((!prev || finished) && typeof ctx?.brain?.workChoice === 'function') {
-      stratExtra = { ...stratExtra, bot, workBoundary: `${stepGen(ctx)}:${prev}:${status}` }
+    if (workBrain && (preferred || !prev || finished)) {
+      const orderRecovery = prev === 'farmbuild' && failReason(status) !== null && ctx.farmBuild?.ordered
+      stratExtra = { ...stratExtra, bot, preferred, orderRecovery,
+        workBoundary: `${stepGen(ctx)}:${prev}:${status}${preferred ? `:${preferred}` : ''}` }
     }
+    if (workBrain && (planApplied || commitApplied)) stratExtra = { ...stratExtra, hardPin: 'task-plan' }
     const choice = await chooseStep(ctx && ctx.brain, facts, names, ctx && ctx.home, stratExtra, ctx)
     if (choice.source === 'jev-work-pending') return { action: 'idle', sprint: false, source: 'jev-work-pending' }
+    if (preferred && ctx.taskPlanStep === preferred && choice.source !== 'night-rule') ctx.taskPlanStep = null
     if (planApplied || commitApplied) choice.source = 'task-plan'
     const ms = Date.now() - t0
     applyChoice(bot, ctx, facts, choice, prev, finished, why, text)
