@@ -2065,6 +2065,7 @@ async function chooseStep(brain, facts, feasible, home, extra, ctx = null) {
   // a standing owner order for a step outranks the castle and fun rules while it is feasible.
   const fbo = ctx && ctx.farmBuild
   if (fbo && fbo.ordered && !fbo.built && names.includes('farmbuild')) return { step: 'farmbuild', source: 'order-rule', fsm, model: null }
+  if (fsm === 'fun') return { step: fsm, source: 'fun-rule', fsm, model: null }
   // Castle rule (vmzq.19 R2, major 2, the night-rule precedent): a runnable
   // castle is a rule, not a preference — run3's laya picked equip then
   // beds over a feasible castle and walked 500 blocks home. The model is
@@ -2077,7 +2078,6 @@ async function chooseStep(brain, facts, feasible, home, extra, ctx = null) {
     const choice = workChoice(brain, ctx, extra.bot, extra.workBoundary, names, text, fsm)
     if (choice) return choice
   }
-  if (fsm === 'fun') return { step: fsm, source: 'fun-rule', fsm, model: null }
   // Strategic choice (idkcraft-u19u phase 2): the multi-option day
   // work-menu branch goes through the task-owned strategic chooser (wired
   // via ctx by taskTick — goal.js never requires the task layer, oqul.1).
