@@ -1464,6 +1464,14 @@
     ],
     "owner": "src/behaviours/fun.js"
   },
+  "funProject": {
+    "writers": [
+      "src/behaviours/fun-projects.js",
+      "src/memory.js"
+    ],
+    "owner": "src/behaviours/fun-projects.js",
+    "note": "Active project plan and site. Memory restores data; the runner owns transient builder state."
+  },
   "funRun": {
     "writers": [
       "src/behaviours/fun.js"

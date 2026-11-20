@@ -417,6 +417,7 @@ function spotBlocked(bot, ctx, x, y, z) {
     const { isPlanCell } = require('./build')
     if (isPlanCell(ctx && ctx.home, x, y, z)) return true
     if (ctx?.farmBuild?.kind === 'farm' && isPlanCell(ctx.farmBuild, x, y, z)) return true
+    if (isPlanCell(ctx?.funProject, x, y, z)) return true
     const c = ctx && ctx.castle
     if (c && c.site && typeof c.site.x === 'number' &&
         require('../castle').absPlan(c.site, c.rot | 0, c.blueprintVersion).at.has(`${x},${y},${z}`)) return true

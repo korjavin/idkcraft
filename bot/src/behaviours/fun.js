@@ -14,6 +14,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { stepDone, stepFailed, stepGen, stale, chatStep, isFinished } = require('../step')
 const { HOSTILE_NAMES } = require('../perception')
 const { NEED_LOGS, SCAFFOLD_LOW } = require('../budget')
+const projects = require('./fun-projects')
 
 // Long cooldown, randomized (brief: once per 30-60 min max).
 const FUN_MIN_MS = 30 * 60 * 1000
@@ -253,6 +254,25 @@ function lightDue(bot, ctx, facts) {
   }
 }
 
+function canAct(facts, bot, ctx, now = Date.now()) {
+  if (facts?.time !== 'day' || !ctx || ctx.paused || threatNear(bot)) return false
+  const ownPin = stallProjectPicked(ctx, now)
+  if (facts.pinned && facts.pinned !== 'none' && !(ownPin && facts.pinned === 'fun')) return false
+  if (ctx.bring || ctx.lead || ctx.comehome || ctx.gocastle || (ctx.flat && !ctx.flat.parked)) return false
+  return !((ctx.taskPlanStep && !(ownPin && ctx.taskPlanStep === 'fun')) || ctx.llmOrder || ctx.llmAsk)
+}
+
+function stallProjectFeasible(facts, bot, ctx, now) {
+  if (!canAct(facts, bot, ctx, now)) return false
+  if (ctx.step === 'fun' && !isFinished(ctx.stepStatus)) return false
+  if ((ctx.farmBuild?.ordered && !ctx.farmBuild.built) || (ctx.castle?.ordered && ctx.castle.phase !== 'complete')) return false
+  return projects.available(bot, ctx)
+}
+
+function stallProjectPicked(ctx, now) {
+  return ctx.stallPreempt?.step === 'fun' && now < ctx.stallPreempt.until && ctx.stallPreempt !== ctx.funProjectStall
+}
+
 function funFeasible(facts, bot, ctx, now = Date.now()) {
   try {
     if (!facts) return false
@@ -272,13 +292,16 @@ function funFeasible(facts, bot, ctx, now = Date.now()) {
         if (!last || typeof ctx.funIdleSince !== 'number') ctx.funIdleSince = now
       } catch (_) { /* stamp best-effort */ }
     }
-    if (facts.time !== 'day') return false
-    if (!ctx || ctx.paused) return false
-    if (facts.pinned && facts.pinned !== 'none') return false
-    if (ctx.bring || ctx.lead || ctx.comehome || ctx.gocastle) return false
-    if (ctx.flat && !ctx.flat.parked) return false
-    if (ctx.taskPlanStep || ctx.llmOrder || ctx.llmAsk) return false
-    if (threatNear(bot)) return false
+    if (ctx) ctx.funProjectIdle = false
+    if (!canAct(facts, bot, ctx, now)) return false
+    if (projects.available(bot, ctx)) {
+      if ((ctx.step === 'fun' && !isFinished(ctx.stepStatus) && projects.active(ctx.funProject)) ||
+          (stallProjectPicked(ctx, now) && stallProjectFeasible(facts, bot, ctx, now))) return true
+      if (menuBlocked(facts, bot, ctx)) {
+        ctx.funProjectIdle = true
+        return true
+      }
+    }
     // Owner 2026-11-12: a joke whenever there is nothing to do, and a break
     // every FUN_BUSY_MS while busy. A running joke stays feasible.
     if (ctx.step !== 'fun' || isFinished(ctx.stepStatus)) {
@@ -754,6 +777,12 @@ async function doImprov(bot, ctx, gen, fetchFn) {
 // at pick time, and stepStatus ends the step.
 async function run(bot, ctx) {
   if (!ctx || ctx.funBusy) return
+  const why = stallProjectPicked(ctx, Date.now()) ? 'stall' : 'idle'
+  if (projects.active(ctx.funProject) || ctx.funProjectIdle || why === 'stall') {
+    if (why === 'stall') ctx.funProjectStall = ctx.stallPreempt
+    if (!projects.run(bot, ctx, why)) stepFailed(ctx, 'fun-no-ground')
+    return
+  }
   const gen = stepGen(ctx)
   ctx.funBusy = true
   ctx.funRun = gen
@@ -781,6 +810,7 @@ async function run(bot, ctx) {
 module.exports = run
 module.exports.run = run
 module.exports.funFeasible = funFeasible
+module.exports.stallProjectFeasible = stallProjectFeasible
 module.exports.menuBlocked = menuBlocked
 module.exports.pickAct = pickAct
 module.exports.availActs = availActs

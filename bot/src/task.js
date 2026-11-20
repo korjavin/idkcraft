@@ -1784,7 +1784,15 @@ function genericTick(bot, ctx, now = Date.now()) {
     }
     const p = bot.entity && bot.entity.position
     const moved = !!(p && g.anchor && Math.hypot(p.x - g.anchor.x, p.z - g.anchor.z) + Math.abs(p.y - g.anchor.y) > GEN_MOVED)
-    if ((ctx.progressMarks || 0) > g.mark || moved) {
+    const project = ctx.funProject
+    if (g.project !== project) {
+      g.project = project
+      g.projectPlaced = 0
+    }
+    const placed = project?.placed || 0
+    const projectAdvanced = placed > g.projectPlaced
+    if (projectAdvanced) g.projectPlaced = placed
+    if ((ctx.progressMarks || 0) > g.mark || moved || projectAdvanced) {
       genericReset(g, bot, ctx, now)
       g.answer = null
       return false
@@ -1809,6 +1817,9 @@ function genericOptions(bot, ctx, g, loop) {
   for (const n of deadlockRunnable(facts, bot, ctx)) {
     const c = STEP_EFFECT_TEXT[n] || goal.STEP_CRITERIA[n]
     if (typeof c === 'string' && c) opts.push({ id: n, step: n, criterion: c })
+  }
+  if (require('./behaviours/fun').stallProjectFeasible(facts, bot, ctx)) {
+    opts.push({ id: 'fun', step: 'fun', criterion: 'start or resume a local building or planting project' })
   }
   if (opts.length === 0) return opts
   const extra = stallExtras(bot, ctx, genericKind(ctx), undefined, undefined, g, loop)

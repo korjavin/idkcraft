@@ -201,6 +201,7 @@ const PLANK_COUNT_V2 = BLUEPRINT_V2.filter((c) => c.kind === 'planks').length
 const NO_PLAN = Object.freeze([])
 function blueprintFor(home) {
   if (home && home.kind === 'castle') return NO_PLAN
+  if (home && home.kind === 'project') return home.blueprint || NO_PLAN
   if (home && home.kind === 'farm') return require('../farm-blueprint').planFor(home) // qphv.1: prep cells + plan
   return home && home.v === 2 ? BLUEPRINT_V2 : BLUEPRINT
 }
@@ -272,7 +273,7 @@ function cellAbs(home, cell) {
 // bedrooms (the partition posts themselves are legit targets).
 function isDoorwayOrInterior(cell, home) {
   if (!cell || typeof cell.dx !== 'number') return false
-  if (home && home.kind === 'farm') return false // the barn has no rooms to keep clear
+  if (home && (home.kind === 'farm' || home.kind === 'project')) return false
   if (home && home.v === 2) {
     if (cell.dy > 1) return false // the roof above is always legit
     if (cell.dx === 3 && cell.dz === 0) return true
@@ -345,6 +346,7 @@ function houseProgress(bot, home, { includeClear = false } = {}) {
 function cellDone(bot, home, cell) {
   const name = blockNameAt(bot, cellAbs(home, cell))
   if (name == null) return false
+  if (cell.kind === 'block') return name === cell.block
   if (cell.kind === 'table') return name === 'crafting_table'
   if (cell.kind === 'door') return name.endsWith('_door')
   if (FARM_KINDS[cell.kind]) return FARM_KINDS[cell.kind](name)
@@ -594,6 +596,7 @@ const FARM_KINDS = {
 const FILLERS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'stone', 'andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'netherrack', 'coarse_dirt'])
 const FARM_ITEMS = { water: (n) => n === 'water_bucket', farmland: (n) => n.endsWith('_hoe'), soil: (n) => n === 'dirt', ground: (n) => FILLERS.has(n) }
 function wantItem(cell) {
+  if (cell.kind === 'block') return (n) => n === cell.block
   if (cell.kind === 'table') return (n) => n === 'crafting_table'
   if (FARM_ITEMS[cell.kind]) return FARM_ITEMS[cell.kind]
   if (FARM_KINDS[cell.kind]) return FARM_KINDS[cell.kind]
@@ -1127,10 +1130,10 @@ function build(bot, ctx, target, state, acquireMaterial) {
   if (ctx.placeInFlight || ctx.buildCellsInFlight || ctx.gearInFlight ||
       ctx.acquire?.buildChestBusy || (ctx.craftany?.recoverTable && ctx.craftany.tableP)) return
   if (!ctx.home) return
-  guardOwnWalls(bot, ctx)
+  if (ctx.home.kind !== 'project') guardOwnWalls(bot, ctx)
   // Claim the table coords the moment the workbench stands (see makeHome):
   // another table placed here earlier (or by anyone) counts the same.
-  if (!ctx.home.table && blueprintFor(ctx.home)[0].kind === 'table' && cellDone(bot, ctx.home, blueprintFor(ctx.home)[0])) {
+  if (!ctx.home.table && blueprintFor(ctx.home)[0]?.kind === 'table' && cellDone(bot, ctx.home, blueprintFor(ctx.home)[0])) {
     const t = blueprintFor(ctx.home)[0]
     ctx.home.table = new Vec3(ctx.home.site.x + t.dx, ctx.home.site.y + t.dy, ctx.home.site.z + t.dz)
   }
@@ -1153,7 +1156,7 @@ function build(bot, ctx, target, state, acquireMaterial) {
     ctx.home.built = true
     ctx.stepStatus = 'done'
     const s = ctx.home.site
-    try { bot.chat(ctx.home.kind === 'farm' ? `farm done at ${s.x} ${s.y} ${s.z}` : `home done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
+    try { if (ctx.home.kind !== 'project') bot.chat(ctx.home.kind === 'farm' ? `farm done at ${s.x} ${s.y} ${s.z}` : `home done at ${s.x} ${s.y} ${s.z}`) } catch (_) { /* chat best-effort */ }
     return
   }
   const plan = blueprintFor(ctx.home)
@@ -1268,7 +1271,7 @@ function build(bot, ctx, target, state, acquireMaterial) {
 
   // Progress line, at most one per 10 s.
   const now = Date.now()
-  if (ctx.home.kind !== 'farm' && now - (ctx.buildLastProgressLog || 0) >= 10000) { // the farm logs its own line
+  if (ctx.home.kind !== 'farm' && ctx.home.kind !== 'project' && now - (ctx.buildLastProgressLog || 0) >= 10000) { // the farm logs its own line
     ctx.buildLastProgressLog = now
     // World truth only: skipped cells are not built (task.houseProgress).
     const prog = houseProgress(bot, ctx.home)
