@@ -5,7 +5,7 @@
 const bring = require('./bring')
 const forage = require('./forage')
 const { stepDone, stepFailed } = require('../step')
-const { LOW_HP_GATE_MS, lowHpNoFood, needsFood } = require('../health-gate')
+const { LOW_HP_FOOD, LOW_HP_GATE_MS, lowHpNoFood, needsFood } = require('../health-gate')
 const craftany = require('./craftany')
 const { Vec3 } = require('vec3')
 
@@ -27,8 +27,8 @@ const HUNGRY_WANT = 8 // bounded draw: a reserve, the rest stays for others
 const FOOD_CHEST_RADIUS = 256 // = explore MAX_RADIUS
 const HUNGRY_CHEST_RADIUS = 64
 
-// Night is shelter time, except a starving body (health<6 or food 0) eats first.
-const foodTime = (bot, facts) => facts.time === 'day' || facts.health < 6 || bot.food === 0
+// Night is shelter time, except a starving body (health<LOW_HP_FOOD or food 0) eats first.
+const foodTime = (bot, facts) => facts.time === 'day' || facts.health < LOW_HP_FOOD || bot.food === 0
 
 const isEdible = (n) => require('../reflexes').EDIBLE_FOODS.has(n)
 // Rotten flesh: a chest target only when starving and no chest hopes for real food;
@@ -54,7 +54,7 @@ function hasMeal(bot, ctx) {
 }
 
 function hungry(bot, ctx, facts) {
-  if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || !foodTime(bot, facts) || !(bot.food < HUNGRY_FOOD) || facts.health < 6) return false
+  if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || !foodTime(bot, facts) || !(bot.food < HUNGRY_FOOD) || facts.health < LOW_HP_FOOD) return false
   if (ctx && (ctx.llmOrder || ctx.taskPlanArgs)) return false
   // Source ladder (src/source-ladder.js): pack bread, a near chest, then a
   // hunt; chestSearch (the long-trip rung) only once none of these serves.
@@ -141,8 +141,13 @@ function available(bot, ctx, facts) {
   return other
 }
 
-function invalidate(ctx) {
-  if (ctx && ctx.foodRecovery) cancel(ctx, ctx.foodRecovery)
+// safety = preempted by a fight/retreat/flee: not the source's fault, no strike
+// (prod 2026-11-20: every retreat tick struck a bread run, strikes=11, 15 min idle).
+function invalidate(ctx, safety = false) {
+  if (ctx && ctx.foodRecovery) {
+    if (safety) ctx.foodRecovery.noStrike = true
+    cancel(ctx, ctx.foodRecovery)
+  }
 }
 
 // prod 2026-11-19 bot4: the shared noPath reaction (unreachable.js) failed the

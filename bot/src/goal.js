@@ -3051,7 +3051,7 @@ function stickyHold(bot, ctx, facts, prev, status, finished, nightFarWalk) {
   // zombie the tick the veto dropped and died there. While the latch
   // stands the leg re-issues instead of re-deciding; a failed leg or a
   // truly clear tick (bands) clears the latch and falls through.
-  if (prev === 'retreat' || prev === 'pillar') {
+  if (prev === 'retreat' || prev === 'pillar' || prev === 'digin') {
     try {
       const failed = failReason(status) !== null
       const rm = require('./behaviours/retreat')

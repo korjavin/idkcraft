@@ -28,6 +28,8 @@ const PROGRESS_BLOCKS = 0.5
 // ponytail: hysteresis margin (blocks). A newcomer this much nearer than
 // the incumbent wins immediately.
 const STICKY_MARGIN_BLOCKS = 2
+const RANGED_CAP_MS = 5000
+const RANGED_HURT_MS = 3000
 
 // ponytail: one function, no base class or activate/deactivate hooks —
 // same shape as follow.js. One swing per tick (1/s); a 600 ms swing timer
@@ -71,6 +73,23 @@ function fight(bot, ctx, target, state) {
     if (wet || FLYERS.has(hostile.name)) giveUp(bot, ctx, hostile, wet ? 'wet' : 'airborne')
     follow(bot, ctx, target, state)
     return
+  }
+  // Engagement cap (prod 2026-11-20: 22 s chasing a skeleton, 20 -> 3 hp):
+  // hurt while the mob stayed out of swing reach this long = it is shooting
+  // from where we cannot hit it. Write it off; the taking-fire leg takes cover.
+  const rec = ctx.fightRec
+  if (rec && rec.id === hostile.id) {
+    const now = Date.now()
+    if (inRange) rec.reachAt = now
+    const since = rec.reachAt || rec.at
+    if (!inRange && ctx.fightGivenUpId !== hostile.id && typeof ctx.lastHurtAt === 'number' &&
+        ctx.lastHurtAt > since && now - ctx.lastHurtAt < RANGED_HURT_MS && now - since >= RANGED_CAP_MS) {
+      console.log(`fight pursuit=give-up branch=ranged target=${hostile.id}:${hostile.name} secs=${Math.round((now - since) / 1000)} hp=${bot.health}`)
+      giveUp(bot, ctx, hostile, 'ranged')
+      if (ctx.lastGoalKey === key) clearGoal(bot, ctx)
+      follow(bot, ctx, target, state)
+      return
+    }
   }
   if (ctx.fightGivenUpId === hostile.id) {
     // Pursuit abandoned (the brain sees hostile_reachable=false and yields

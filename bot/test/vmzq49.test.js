@@ -57,12 +57,12 @@ describe('vmzq.49 health gate: castle legs stand down at low hp with no food', (
   const foodless = () => goalBot({ items: [...TOOLS], health: 5, food: 10 })
   const fed = () => goalBot({ items: [...TOOLS, { name: 'bread', count: 2 }], health: 5, food: 10 })
 
-  it('castle: low + foodless infeasible, food or hp 6 re-opens', () => {
+  it('castle: low + foodless infeasible, food or hp 8 re-opens', () => {
     const F = goal.MENU.castle.feasible
     const facts = { time: 'day', castle: 'stone-batch', health: 5, food: 10 }
     assert.equal(F(facts, foodless(), {}), false)
     assert.equal(F(facts, fed(), {}), true)
-    assert.equal(F({ ...facts, health: 6 }, foodless(), {}), true)
+    assert.equal(F({ ...facts, health: 8 }, foodless(), {}), true) // LOW_HP_FOOD
     assert.equal(goal.stepWhy('castle', facts, foodless(), {}, ''), 'castle: eating first (low health, no food)')
   })
 
