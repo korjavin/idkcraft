@@ -239,11 +239,54 @@ async function gearBatch(bot) {
   if (!Array.isArray(items)) return
   const sword = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith('_sword'))
   if (sword) await equipOne(bot, sword, 'hand')
-  for (const { suffix, dest, slot } of ARMOR_SLOTS) {
-    if (bot.inventory.slots && bot.inventory.slots[slot]) continue // already geared
-    const piece = items.find((i) => i && typeof i.name === 'string' && i.name.endsWith(suffix))
+  for (const { dest, slot, piece } of armorUpgrades(bot, items)) {
     if (piece) await equipOne(bot, piece, dest)
   }
+}
+
+// Armor rank = the item's max durability from the registry (leather < gold <
+// iron < diamond < netherite), so no tier list lives here.
+function armorRank(bot, name) {
+  try { return (bot.registry.itemsByName[name].maxDurability) || 1 } catch (_) { return 1 }
+}
+// Per slot: the best pack piece when it beats what is worn (or the slot is empty).
+function armorUpgrades(bot, items) {
+  const out = []
+  for (const { suffix, dest, slot } of ARMOR_SLOTS) {
+    let best = null
+    for (const i of items) {
+      if (i && typeof i.name === 'string' && i.name.endsWith(suffix) && (!best || armorRank(bot, i.name) > armorRank(bot, best.name))) best = i
+    }
+    const worn = bot.inventory.slots && bot.inventory.slots[slot]
+    if (best && (!worn || armorRank(bot, best.name) > armorRank(bot, worn.name))) out.push({ dest, slot, piece: best })
+  }
+  return out
+}
+// Every-tick check (reflexGuards): a better piece in the pack goes on now.
+function wearArmor(bot) {
+  if (gearPending) return false
+  let items
+  try { items = bot.inventory.items() } catch (_) { return false }
+  if (!Array.isArray(items) || armorUpgrades(bot, items).length === 0) return false
+  equipGear(bot)
+  return true
+}
+// The best armor piece craftable from the pack (recipe tables via
+// bot.recipesFor, assuming a table) for a slot with nothing worn or packed.
+function armorCraftable(bot) {
+  try {
+    const items = bot.inventory.items()
+    let best = null
+    for (const { suffix, slot } of ARMOR_SLOTS) {
+      if (bot.inventory.slots && bot.inventory.slots[slot]) continue
+      if (items.some((i) => i && typeof i.name === 'string' && i.name.endsWith(suffix))) continue
+      for (const it of bot.registry.itemsArray) {
+        if (!it.name.endsWith(suffix) || (best && armorRank(bot, it.name) <= armorRank(bot, best))) continue
+        if ((bot.recipesFor(it.id, null, 1, true) || []).length > 0) best = it.name
+      }
+    }
+    return best
+  } catch (_) { return null }
 }
 
 // Serialised across calls: one mineflayer equip is two window clicks
@@ -265,11 +308,16 @@ function equipGear(bot) {
 // running or working with it on our back is how those deaths happened.
 // Sealed shelter (dug-in pit, inside the home box) keeps its hold.
 const ENGAGE_RANGE = SWING_RANGE + 1
+const LOW_HP = 6 // = the brain's low-health-hostile line
+const ADJACENT = 2
 function engageNow(bot, ctx, state) {
   const h = state && state.hostile
   const d = state && state.hostile_distance
   if (!h || h.isValid === false || typeof d !== 'number' || d > ENGAGE_RANGE) return false
   if ((state.nearby_hostiles || 0) > 1) return false
+  // Low health disengages (prod 2026-11-20: won at 5.8, re-engaged at 3.3, died):
+  // only a mob already adjacent is fought; anything further is retreated from.
+  if (typeof bot.health === 'number' && bot.health < LOW_HP && d > ADJACENT) return false
   if (d > SWING_RANGE && state.hostile_reachable === false) return false
   if (wetOrAir(bot, h)) return false
   const sh = ctx.shelter
@@ -331,3 +379,5 @@ module.exports.swing = swing
 module.exports.airborne = airborne
 module.exports.inWater = inWater
 module.exports.equipGear = equipGear
+module.exports.wearArmor = wearArmor
+module.exports.armorCraftable = armorCraftable

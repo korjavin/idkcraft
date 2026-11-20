@@ -56,3 +56,18 @@ require('node:test').test('a run under cooldown ends the step instead of restart
   assert.match(String(ctx.stepStatus), /^failed:cooldown/)
   assert.equal(ctx.foodRecovery, undefined)
 })
+
+// prod 2026-11-20 bot4: foodRecovery at 0.15 hp hunted into a cave (y=-30) and died to a skeleton.
+it('low hp hunt never follows prey down or into the dark', () => {
+  const v = (x, y, z) => ({ x, y, z, offset: (a, b, c) => v(x + a, y + b, z + c) })
+  let sky = 15
+  const bot = { health: 4, entity: { position: v(0, 64, 0) }, entities: { 3: { position: v(5, 64, 0) } }, blockAt: () => ({ skyLight: sky }) }
+  const t = { id: 3, name: 'cow' }
+  assert.equal(fr.safeHunt(bot, t), t, 'lit, level prey: hunt')
+  sky = 0
+  assert.equal(fr.safeHunt(bot, t), null, 'dark: no hunt')
+  sky = 15; bot.entities[3].position = v(5, 50, 0)
+  assert.equal(fr.safeHunt(bot, t), null, 'below: no hunt')
+  bot.health = 15
+  assert.equal(fr.safeHunt(bot, t), t, 'healthy: unchanged')
+})

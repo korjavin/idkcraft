@@ -2,7 +2,8 @@
 
 const { goals } = require('mineflayer-pathfinder')
 const Vec3 = require('vec3')
-const { countItems } = require('../perception')
+const { countItems, wornItems } = require('../perception')
+const ARMOR_RE = /_(helmet|chestplate|leggings|boots)$/
 const craftMod = require('./craft')
 const { isStone, onSite } = require('../castle')
 const { stepDone, stepFailed, stepGen, stale } = require('../step')
@@ -512,6 +513,13 @@ function equip(bot, ctx) {
   const budgetPick = isV2(bot) && hasPickaxe(bot) && hasSword(bot) && !upgradePick && pickBudgetDue(bot, ctx)
   const kind = !hasPickaxe(bot) || upgradePick || budgetPick ? 'pickaxe' : !hasSword(bot) ? 'sword' : null
   if (!kind) {
+    // Armor (prod 2026-11-20: unarmored deaths to day mobs): any piece the
+    // pack's materials make goes through the same table craft path.
+    const armor = isV2(bot) && fightMod.armorCraftable(bot) // v2 only: v1 tests pin the inventory reads
+    if (armor) {
+      issueToolOp(bot, ctx, { item: armor, tabled: true })
+      return
+    }
     if (scaffoldCount(bot) >= SCAFFOLD_FULL) {
       stepDone(ctx)
       resetRunCounters(ctx)
@@ -712,7 +720,9 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
     // pick — rank alone reads a held stone as landed and would chat fakes
     // on a ghost (rwuu). The rank half still refuses a ground pickup of a
     // lesser pick as a landing.
-    : op.item.endsWith('_pickaxe') ? pickCount(bot) > pickBase && bestPickRank(bot) >= pickRank(op.item) : hasSword(bot)
+    : op.item.endsWith('_pickaxe') ? pickCount(bot) > pickBase && bestPickRank(bot) >= pickRank(op.item)
+    : ARMOR_RE.test(op.item) ? countItems(bot, (n) => n === op.item) > 0 || wornItems(bot, op.item) > 0
+    : hasSword(bot)
   const run = async () => {
     try {
       await craftMod.safeCraft(bot, op.recipe, op.count, op.table, { ctx, item: op.item })
@@ -759,7 +769,7 @@ function craftOne(bot, ctx, op, gen = stepGen(ctx)) {
       if (landed) ctx.equipTableDay = dayOf(bot)
       return
     }
-    if (op.item.endsWith('_sword')) {
+    if (op.item.endsWith('_sword') || ARMOR_RE.test(op.item)) {
       try { fightMod.equipGear(bot) } catch (_) { /* best-effort: fight equips anyway */ }
     }
     try { bot.chat(`equipped ${op.item}`) } catch (_) { /* chat best-effort */ }

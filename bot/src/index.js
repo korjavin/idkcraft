@@ -579,8 +579,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // Hurt below 6 hp (prod bot3 2026-11-16: zombie 2.2 killed it mid-pillar
       // in foodRecovery): the stub refuses fight there and any work step kept
       // working. Armed with the mob in reach: fight it; else retreat.
-      const tooWeak = hurtFresh && typeof state.bot_health === 'number' && state.bot_health < 6
-      const standFight = tooWeak && state.hostile_reachable !== false && countItems(bot, (n) => n.endsWith('_sword')) > 0
+      // Low hp retreats with or without a fresh hit (prod 2026-11-20: won at
+      // 5.8 hp, kept working, re-engaged at 3.3); only an adjacent mob is fought.
+      const tooWeak = typeof state.bot_health === 'number' && state.bot_health < 6
+      const standFight = tooWeak && state.hostile_reachable !== false && state.hostile_distance <= 2 && countItems(bot, (n) => n.endsWith('_sword')) > 0
       const underFire = !ctx.inShelter && !ctx.lead && !ctx.bring && !target &&
         typeof state.hostile_distance === 'number' && state.hostile_distance <= 8 &&
         ((tooWeak && !standFight) || (hurtFresh && (state.hostile_reachable === false || (outmatched && !cornered))))
@@ -882,6 +884,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     if (ctx.scout) ctx.scout.tick()
     meleeReflex(bot, ctx, state)
     eatReflex(bot, ctx, state)
+    try { fightMod.wearArmor(bot) } catch (_) { /* armor best-effort */ }
     // Safety preempts arbitration (and the lead order below): the brain
     // never sees creepers, so nothing else would move the body.
     const fleeDist = fleeReflex(bot, ctx, state)

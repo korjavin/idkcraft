@@ -22,6 +22,7 @@ const { goals } = require('mineflayer-pathfinder')
 const { isFightTarget, HOSTILE_NAMES } = require('../perception')
 const { botPos, issueGoal } = require('./util')
 const recover = require('./recover')
+const { stepDone, stepFailed, failReason } = require('../step')
 
 // Question order = owner list (1tj notes). Feasibility, not priority:
 // the model answers each question, the code never skips one for it.
@@ -45,6 +46,8 @@ const RETREAT_VERBS = {
 const FLEE_RANGE = 6
 const FLEE_DIST = 6
 const FLEE_DONE_DIST = 8
+// Away, then the two sides ([cos, sin] of 0, +90, -90 degrees).
+const RETREAT_TURNS = [[1, 0], [0, 1], [0, -1]]
 // Hysteresis (idkcraft-vmzq.49): the veto flickers — a hostile at the
 // 8-block edge, hp at 6 — and every off tick re-picked castle into the
 // same zombie (run8 15:52, died with one 1.1 blocks away). Each retreat
@@ -121,7 +124,9 @@ function feasibleRetreat(bot, ctx, state) {
   const out = []
   const hd = hostileDist(state)
   if (hd !== null && hd <= FLEE_RANGE && (f.walls || 0) < 4) out.push('retreat')
-  if ((f.scaffold || 0) > 0 && !f.headBlocked) out.push('pillar')
+  // Cave ceiling (prod 2026-11-20: bots died retreating underground): dig
+  // the head and pillar into it — the shaft walls seal the sides.
+  if ((f.scaffold || 0) > 0 && (!f.headBlocked || (f.digPillar && !f.headDeny && !f.lavaNear && !f.water))) out.push('pillar')
   const home = ctx && ctx.home
   if (home && home.built && home.site && typeof home.site.x === 'number') {
     let d = null
@@ -156,9 +161,9 @@ function nearestHostile(bot, bp) {
 // below and the goal shelter step (ipn.12): the driver (pillar wrapper /
 // shelter) owns rec.status, and a later stuck flow adopts the episode
 // coherently instead of meeting foreign state.
-function beginPillar(ctx, source, model) {
+function beginPillar(ctx, source, model, action = 'pillar_up') {
   ctx.recovery = {
-    action: 'pillar_up', source, model, status: 'running', st: null,
+    action, source, model, status: 'running', st: null,
     attempts: 1, fails: 0, repeats: 0, last: null, calledPlayer: false,
     endEpisode: true, lastDy: null, placeError: (ctx.placeErrors || 0) > 0,
   }
@@ -175,7 +180,11 @@ function pick(bot, ctx, action, source, model) {
     if (Number.isNaN(hp) || hp < 6) latchRetreat(ctx, action)
   } catch (_) { /* unlatchable */ }
   ctx.stepStatus = 'running'
-  if (action === 'pillar') beginPillar(ctx, source, model)
+  if (action === 'pillar') {
+    let head = false
+    try { head = !!facts(bot, ctx).headBlocked } catch (_) { head = false }
+    beginPillar(ctx, source, model, head ? 'dig_pillar' : 'pillar_up')
+  }
   try { bot.chat(`retreating: ${RETREAT_VERBS[action]} (${source})`) } catch (_) { /* chat best-effort */ }
   return { action, source, model }
 }
@@ -190,7 +199,7 @@ async function chooseRetreat(brain, bot, ctx, state, now = Date.now()) {
   // verdict is already on stepStatus (set by the behaviour), so stamp it
   // before the hold check (which needs 'running', never reached here).
   const prev = ctx && ctx.retreat
-  if (prev && prev.action && ctx && typeof ctx.stepStatus === 'string' && ctx.stepStatus.indexOf('failed') === 0) {
+  if (prev && prev.action && ctx && failReason(ctx.stepStatus) !== null) {
     ctx.retreatFailed = prev.action
     ctx.retreat = null
     ctx.retreatLatch = null // vmzq.49: a failed leg re-asks, never holds
@@ -279,7 +288,7 @@ async function chooseRetreat(brain, bot, ctx, state, now = Date.now()) {
 function retreat(bot, ctx) {
   const bp = bot.entity && bot.entity.position
   if (!bp) {
-    ctx.stepStatus = 'failed:retreat-no-pos'
+    stepFailed(ctx, 'retreat-no-pos')
     ctx.retreatFailed = 'retreat'
     return
   }
@@ -287,24 +296,36 @@ function retreat(bot, ctx) {
   let d = null
   try { d = hostile ? bp.distanceTo(hostile.position) : null } catch (_) { d = null }
   if (!hostile || d === null || d > FLEE_DONE_DIST) {
-    ctx.stepStatus = 'done'
+    ctx.retreatTurn = null
+    stepDone(ctx)
     return
   }
   let dx = bp.x - hostile.position.x
   let dz = bp.z - hostile.position.z
   if (dx === 0 && dz === 0) dx = 1
   const len = Math.hypot(dx, dz) || 1
-  const nx = bp.x + (dx / len) * FLEE_DIST
-  const nz = bp.z + (dz / len) * FLEE_DIST
-  const key = `retreat:${hostile.id}`
-  // No path for our own away goal: fail loudly so the chain offers pillar /
-  // gohome instead of holding a run that stands still. Scoped to our key:
-  // lastPathStatus is shared with every other behaviour's goals.
+  // A noPath away goal (a cave dead end) turns the run sideways before it
+  // gives up; turning back toward the mob is never an escape.
+  const t = ctx.retreatTurn && ctx.retreatTurn.id === hostile.id ? ctx.retreatTurn : (ctx.retreatTurn = { id: hostile.id, i: 0 })
+  const keyOf = (i) => i ? `retreat:${hostile.id}:${i}` : `retreat:${hostile.id}`
+  let key = keyOf(t.i)
+  // No path for our own away goal: next direction, then fail loudly so the
+  // chain offers pillar / gohome instead of holding a run that stands still.
+  // Scoped to our key: lastPathStatus is shared with every other behaviour's goals.
   if (key === ctx.lastGoalKey && ctx.lastPathStatus === 'noPath') {
-    ctx.stepStatus = 'failed:retreat-no-path'
-    ctx.retreatFailed = 'retreat'
-    return
+    if (++t.i >= RETREAT_TURNS.length) {
+      ctx.retreatTurn = null
+      stepFailed(ctx, 'retreat-no-path')
+      ctx.retreatFailed = 'retreat'
+      return
+    }
+    key = keyOf(t.i)
   }
+  const [c, s] = RETREAT_TURNS[t.i]
+  const ux = (dx * c - dz * s) / len
+  const uz = (dx * s + dz * c) / len
+  const nx = bp.x + ux * FLEE_DIST
+  const nz = bp.z + uz * FLEE_DIST
   let moving = false
   try { moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) } catch (_) { /* stationary default */ }
   if (key !== ctx.lastGoalKey || !moving) {
@@ -327,11 +348,11 @@ function pillar(bot, ctx) {
   }
   const st = ctx.recovery && ctx.recovery.status
   if (st === 'done') {
-    ctx.stepStatus = 'done'
+    stepDone(ctx)
     // Placement works again: clear the pillar streak (vmzq.47).
     try { recover.noteRecoverDone(ctx, botPos(bot), 'pillar_up') } catch (_) { /* bans best-effort */ }
   } else if (typeof st === 'string' && st !== 'running' && st !== 'starting') {
-    ctx.stepStatus = `failed:pillar-${st.replace(/^failed:/, '')}`
+    stepFailed(ctx, `pillar-${st.replace(/^failed:/, '')}`)
     ctx.retreatFailed = 'pillar'
     // A refused retreat pillar bans the recover pillar here too (vmzq.47):
     // the same server says no to the same feet cell one tick later.

@@ -71,3 +71,31 @@ describe('fight end line', () => {
     assert.match(lines[2], /result=died/)
   })
 })
+
+// prod 2026-11-20: won at 5.8 hp, re-engaged at 3.3, died; bots worked unarmored.
+describe('low hp disengage + armor', () => {
+  it('below 6 hp only an adjacent mob is engaged', () => {
+    const bot = mkBot()
+    assert.equal(fight.engageNow(bot, {}, st(bot, { hostile_distance: 3.5 })), false)
+    bot.health = 12
+    assert.equal(fight.engageNow(bot, {}, st(bot, { hostile_distance: 3.5 })), true)
+  })
+  it('wears the best pack piece per slot and upgrades a worse worn one', async () => {
+    const bot = mkBot({ items: [{ name: 'leather_helmet' }, { name: 'iron_helmet' }, { name: 'iron_boots' }] })
+    bot.registry = { itemsByName: { leather_helmet: { maxDurability: 55 }, iron_helmet: { maxDurability: 165 }, golden_boots: { maxDurability: 91 }, iron_boots: { maxDurability: 195 } } }
+    bot.inventory.slots[8] = { name: 'golden_boots' }
+    assert.equal(fight.wearArmor(bot), true)
+    await fight.equipGear(bot)
+    assert.ok(bot.equips.includes('iron_helmet:head'))
+    assert.ok(bot.equips.includes('iron_boots:feet'))
+    assert.ok(!bot.equips.includes('leather_helmet:head'))
+  })
+  it('armorCraftable names the best piece the pack makes for an empty slot', () => {
+    const bot = mkBot({ items: [{ name: 'iron_ingot', count: 5 }] })
+    bot.registry = { itemsByName: { leather_helmet: { maxDurability: 55 }, iron_helmet: { maxDurability: 165 } }, itemsArray: [{ id: 1, name: 'leather_helmet' }, { id: 2, name: 'iron_helmet' }, { id: 3, name: 'iron_chestplate' }] }
+    bot.recipesFor = (id) => id === 2 ? [{}] : []
+    assert.equal(fight.armorCraftable(bot), 'iron_helmet')
+    bot.inventory.slots[5] = { name: 'iron_helmet' }
+    assert.equal(fight.armorCraftable(bot), null)
+  })
+})

@@ -189,7 +189,9 @@ const MENU = {
       // Deferred require (same cycle as registered() below): goal.js loads
       // inside the equip->craft->goal chain, so the mark is read at decide()
       // time, never at load time.
-      return (facts.scaffold || 0) < require('./behaviours/equip').SCAFFOLD_LOW
+      if ((facts.scaffold || 0) < require('./behaviours/equip').SCAFFOLD_LOW) return true
+      // Craftable armor (any tier the pack's materials make) with a table to hand.
+      return ((facts.table || 0) > 0 || !!facts.tablePlaced || !!facts.houseTable) && !!require('./behaviours/fight').armorCraftable(bot)
     },
     chat: () => 'on my own: rearming tools and blocks',
     verb: 'rearming',
