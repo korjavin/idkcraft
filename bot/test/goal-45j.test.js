@@ -106,8 +106,9 @@ describe('45j build stays on the menu while the site is unloaded', () => {
     assert.deepEqual(ctx.buildSkip, [], 'a dead walk skips no cell')
   })
 
-  it('a walk that keeps moving never fails', () => {
-    const at = pos(-48, 65, -208)
+  // Progress is getting closer (bot5): this walk closes 2 blocks a tick.
+  it('a walk that keeps getting closer never fails', () => {
+    const at = pos(SITE.x - 600, 65, SITE.z)
     const bot = workBot({ at, moving: true })
     const ctx = { home: siteHome(), step: 'build', stepStatus: 'running', buildSkip: [] }
     for (let i = 0; i < build.CELL_TICK_BUDGET * 2; i++) {

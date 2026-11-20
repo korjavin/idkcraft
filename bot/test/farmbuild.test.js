@@ -268,7 +268,7 @@ describe('farmbuild step (qphv.1)', () => {
     const fb = ctx.farmBuild
     assert.equal(fb.built, true)
     assert.ok(logs.some((l) => /^farm site=-?\d+,64,-?\d+ cost=0 cut=0 fill=0 tried=\d+$/.test(l)))
-    assert.ok(logs.some((l) => /^farm progress built=\d+\/199 phase=barn$/.test(l)))
+    assert.ok(logs.some((l) => /^farm progress built=\d+\/199 phase=barn cell=-?\d+,\d+,-?\d+ kind=\w+ loaded=[01]$/.test(l)))
     const s = fb.site
     const at = (dx, dy, dz) => w.blockAt({ x: s.x + dx, y: s.y + dy, z: s.z + dz }).name
     assert.equal(at(fp.WATER.dx, -1, fp.WATER.dz), 'water')
@@ -483,5 +483,46 @@ describe('farm crop cycle and building blocks (qphv.2)', () => {
     fb.walkKey = null
     await quiet(async () => { for (let t = 0; t < 20 && !fb.hay; t++) { farmbuild(bot, ctx); await tick() } })
     assert.equal(fb.hay, 2)
+  })
+})
+
+// Prod bot5: v2 walked toward an unloaded farm site for hours (moving=true
+// path=success, built=0/199): every segment moved the body, and the old
+// displacement budget reset each time. Progress is now a new closest
+// approach; a walk that never gets closer drops the site and re-picks.
+describe('farm site walk that never gets closer (bot5)', () => {
+  const run = (step) => {
+    const bot = mockBot(world())
+    bot.blockAt = () => null // the site never loads
+    bot.pathfinder.isMoving = () => true
+    bot.pathfinder.setGoal = () => {}
+    const site = { x: 200, y: 64, z: 200, prep: [] }
+    const ctx = { step: 'farmbuild', stepStatus: 'running', farmBuild: { site, built: false } }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    try {
+      for (let t = 0; t < 200 && ctx.farmBuild.site; t++) {
+        bot.entity.position = step(t)
+        farmbuild(bot, ctx)
+      }
+    } finally { console.log = orig }
+    return { ctx, logs }
+  }
+
+  it('a walk that moves every tick but never gets closer drops the site', () => {
+    const { ctx, logs } = run((t) => new Vec3(t % 2 ? 5 : 0, 64, 0))
+    assert.equal(ctx.stepStatus, 'failed:cannot-reach-site')
+    assert.equal(ctx.farmBuild.site, undefined, 'site dropped')
+    assert.deepEqual(ctx.farmBuild.avoid, [{ x0: 200, z0: 200, x1: 200 + fp.W - 1, z1: 200 + fp.D - 1 }])
+    assert.ok(logs.some((l) => /^build site-walk gave up target=/.test(l)), logs.join('\n'))
+    assert.ok(logs.some((l) => /^build site-walk target=\S+ why=unloaded dist=/.test(l)), 'waiting reason logged')
+    assert.ok(logs.some((l) => /^farm progress built=0\/\d+ phase=\w+ cell=\S+ kind=\w+ loaded=0$/.test(l)), logs.join('\n'))
+  })
+
+  it('a steady approach keeps walking', () => {
+    const { ctx } = run((t) => new Vec3(t, 64, t))
+    assert.equal(ctx.stepStatus, 'running')
+    assert.ok(ctx.farmBuild.site)
   })
 })
