@@ -62,6 +62,8 @@ const IDLE_LOG_MS = 60000
 // long. Arrows land ~1/s and poison ticks every 1.25 s, so 5 s bridges a
 // few quiet ticks without fleeing stale shadows.
 const HURT_FRESH_MS = 5000
+// Body-for-survival actions: preempting food recovery with one is no strike.
+const SAFETY_ACTIONS = new Set(['fight', 'retreat', 'pillar', 'digin', 'gohome', 'shelter'])
 const SHELTER_RELEASE_R = 3 // vmzq.58: melee range that releases an open shelter hold to fight
 const SHELTER_HURT_MS = 2000 // vmzq.58: ... or a hit this fresh with a hostile in the fight radius
 // Server-ping cadence while off the server (owner: rejoin ~5 s after the
@@ -438,7 +440,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   }
 
   function applyDecision(decision, target, state) {
-    if (decision.action !== 'foodRecovery') require('./behaviours/food-recovery').invalidate(ctx)
+    if (decision.action !== 'foodRecovery') require('./behaviours/food-recovery').invalidate(ctx, SAFETY_ACTIONS.has(decision.action))
     const handler = BEHAVIOURS[decision.action]
     if (typeof handler === 'function') {
       handler(bot, ctx, target, state)
@@ -889,7 +891,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // never sees creepers, so nothing else would move the body.
     const fleeDist = fleeReflex(bot, ctx, state)
     if (fleeDist !== false) {
-      require('./behaviours/food-recovery').invalidate(ctx)
+      require('./behaviours/food-recovery').invalidate(ctx, true)
       const fleePlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
       console.log(`decision source=reflex action=flee dist=${fleePlayerDist} ${pathSuffix()} ${ctx.reflexTrigger || ''}`)
       return { decision: { action: 'flee', sprint: false, source: 'reflex' }, calledBrain }
@@ -897,7 +899,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // Drowning owns the body over every order (0u9): a dig 3 blocks down
     // still kills when the vein sits under a lake.
     if (breathReflex(bot, ctx)) {
-      require('./behaviours/food-recovery').invalidate(ctx)
+      require('./behaviours/food-recovery').invalidate(ctx, true)
       const breathPlayerDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
       console.log(`decision source=reflex action=breath dist=${breathPlayerDist} ${pathSuffix()}`)
       return { decision: { action: 'breath', sprint: false, source: 'reflex' }, calledBrain }

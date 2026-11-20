@@ -285,7 +285,7 @@ describe('retreat behaviours', () => {
       assert.equal(ctx.stepStatus, 'running')
       assert.equal(ctx.lastGoalKey, k)
       const g = bot.calls.goals[bot.calls.goals.length - 1]
-      assert.ok(Math.abs(g.z) >= 5 && Math.hypot(g.x - 2, g.z) > 4, `sideways, never toward the mob: ${g.x},${g.z}`)
+      assert.ok(Math.abs(g.z) >= 3 && Math.hypot(g.x - 2, g.z) > 4, `sideways (standable cell inside the field), never toward the mob: ${g.x},${g.z}`)
       ctx.lastPathStatus = 'noPath'
     }
     retreat(bot, ctx)
@@ -639,8 +639,8 @@ describe('taking-fire retreat (0ay)', () => {
     bot.health = 19 // hurt lands between ticks
     const r = await ticker.tick()
     assert.equal(typeof ctx.lastHurtAt, 'number', 'hp drop stamps taking-fire')
-    assert.equal(r.decision.action, 'retreat')
-    assert.equal(r.decision.source, 'only-option')
+    // Unreachable shooter: cover (digin) leads the menu (prod 2026-11-20).
+    assert.equal(r.decision.action, 'digin')
     assert.ok(logs.some((l) => l.includes('taking-fire:')), `engage logged, got: ${logs.join(' | ')}`)
     ticker.destroy()
   })
@@ -737,7 +737,7 @@ describe('taking-fire retreat (0ay)', () => {
     }
   })
 
-  it('6-8m band: empty menu falls through to goal, claims no retreat', async () => {
+  it('6-8m band: out of flee range, the unreachable shooter still gets cover (digin)', async () => {
     // Revmux 0ay round 1 (minor): the gate admits to 8m but retreat needs
     // hd<=6 — with no scaffold/home the chain nulls and the log must not
     // fire (it sits strictly after a dispatched pick).
@@ -752,8 +752,7 @@ describe('taking-fire retreat (0ay)', () => {
     assert.equal(ctx.fightGivenUpId, 1, 'latch holds at 6.5m (candidate within 8)')
     bot.health = 19
     const r = await ticker.tick()
-    assert.ok(r.decision.action !== 'retreat' && r.decision.action !== 'pillar', `fell through: ${r.decision.action}`)
-    assert.ok(!logs.some((l) => l.includes('taking-fire:')), 'no log on a nulled chain')
+    assert.equal(r.decision.action, 'digin')
     ticker.destroy()
   })
 
@@ -846,20 +845,21 @@ describe('taking-fire retreat (0ay)', () => {
     ctx.fightGivenUpId = 1
     bot.health = 19
     const r2 = await ticker.tick()
-    assert.equal(r2.decision.action, 'retreat')
+    assert.equal(r2.decision.action, 'digin')
     bot.health = 18 // still taking fire: the hold re-issues without re-asking
     const r3 = await ticker.tick()
-    assert.equal(r3.decision.action, 'retreat')
+    // The fake body cannot dig: the failed cover falls through to the run at once.
+    assert.ok(['digin', 'retreat'].includes(r3.decision.action), r3.decision.action)
     assert.equal(logs.filter((l) => l.includes('taking-fire:')).length, 1, 'one engage log per fire episode')
     // Round 2: quiet ticks let the hurt go stale (latch resets), and the
     // next fire episode logs again — every episode stays visible in prod.
     ctx.lastHurtAt = Date.now() - 60000
     bot.food = 19 // bust the decision cache without re-stamping hurt
     const r4 = await ticker.tick() // hp flat 18: no re-stamp, goal releases the episode
-    assert.ok(r4.decision.action !== 'retreat', 'stale hurt releases to goal')
+    assert.ok(r4.decision.action !== 'digin', 'stale hurt releases to goal')
     bot.health = 17 // fresh hurt opens episode two
     const r5 = await ticker.tick()
-    assert.equal(r5.decision.action, 'retreat')
+    assert.equal(r5.decision.action, 'digin')
     assert.equal(logs.filter((l) => l.includes('taking-fire:')).length, 2, 'second episode re-logs')
     ticker.destroy()
   })

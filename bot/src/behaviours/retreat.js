@@ -19,6 +19,7 @@
 // implied by the veto, and the under-fire leg gates it explicitly.
 
 const { goals } = require('mineflayer-pathfinder')
+const { Vec3 } = require('vec3')
 const { isFightTarget, HOSTILE_NAMES } = require('../perception')
 const { botPos, issueGoal } = require('./util')
 const recover = require('./recover')
@@ -36,12 +37,14 @@ const RETREAT_CRITERIA = {
   retreat: 'run: a hostile is close and a side is open — run away from the hostile',
   pillar: 'climb: scaffold blocks on hand and headroom free — pillar 2-3 blocks up, out of reach',
   gohome: 'hide: the home is built and close enough to walk to — go home and inside',
+  digin: 'cover: shot by a hostile you cannot reach — dig into the ground and cap the hole, out of its line of fire',
   no: 'skip this option and consider the next one',
 }
 const RETREAT_VERBS = {
   retreat: 'running from the hostile',
   pillar: 'pillaring up',
   gohome: 'heading home',
+  digin: 'digging in',
 }
 const FLEE_RANGE = 6
 const FLEE_DIST = 6
@@ -136,7 +139,11 @@ function feasibleRetreat(bot, ctx, state) {
     } catch (_) { d = null }
     if (d !== null && d <= HOME_WALK_RANGE) out.push('gohome')
   }
-  return RETREAT_ORDER.filter((n) => out.includes(n))
+  const menu = RETREAT_ORDER.filter((n) => out.includes(n))
+  // Unreachable attacker (archer, across a gap): running and pillaring stay
+  // in its line of fire; a capped pit breaks it, so cover comes first.
+  if (state && state.hostile_reachable === false && !f.water && !f.lavaNear) menu.unshift('digin')
+  return menu
 }
 
 function nearestHostile(bot, bp) {
@@ -180,6 +187,7 @@ function pick(bot, ctx, action, source, model) {
     if (Number.isNaN(hp) || hp < 6) latchRetreat(ctx, action)
   } catch (_) { /* unlatchable */ }
   ctx.stepStatus = 'running'
+  if (action === 'digin') ctx.retreatDig = {}
   if (action === 'pillar') {
     let head = false
     try { head = !!facts(bot, ctx).headBlocked } catch (_) { head = false }
@@ -321,19 +329,74 @@ function retreat(bot, ctx) {
     }
     key = keyOf(t.i)
   }
-  const [c, s] = RETREAT_TURNS[t.i]
-  const ux = (dx * c - dz * s) / len
-  const uz = (dx * s + dz * c) / len
-  const nx = bp.x + ux * FLEE_DIST
-  const nz = bp.z + uz * FLEE_DIST
+  // A direction with no standable cell is skipped at once (prod 2026-11-20:
+  // GoalNear on solid stone, noPath twice, died standing).
+  let cell = fleeCell(bot, bp, dx / len, dz / len, t.i)
+  while (!cell && t.i + 1 < RETREAT_TURNS.length) {
+    t.i++
+    key = keyOf(t.i)
+    cell = fleeCell(bot, bp, dx / len, dz / len, t.i)
+  }
+  if (!cell) {
+    ctx.retreatTurn = null
+    stepFailed(ctx, 'retreat-no-cell')
+    ctx.retreatFailed = 'retreat'
+    return
+  }
   let moving = false
   try { moving = !!(bot.pathfinder && typeof bot.pathfinder.isMoving === 'function' && bot.pathfinder.isMoving()) } catch (_) { /* stationary default */ }
   if (key !== ctx.lastGoalKey || !moving) {
     try {
-      issueGoal(bot, ctx, new goals.GoalNear(nx, bp.y, nz, 1), key, false)
+      issueGoal(bot, ctx, new goals.GoalBlock(cell.x, cell.y, cell.z), key, false)
     } catch (_) { /* goal best-effort */ }
   }
   ctx.stepStatus = 'running'
+}
+
+// Standable flee cell along turn i: solid floor, free feet and head (no
+// fluid), searched FLEE_DIST..3 blocks out and +-2 in height. null = none.
+const FLEE_DYS = [0, 1, -1, 2, -2]
+function fleeCell(bot, bp, ux0, uz0, i) {
+  const [c, s] = RETREAT_TURNS[i]
+  const ux = ux0 * c - uz0 * s
+  const uz = ux0 * s + uz0 * c
+  const at = (x, y, z) => { try { return bot.blockAt(new Vec3(x, y, z)) } catch (_) { return null } }
+  const open = (b) => !!b && b.boundingBox === 'empty' && !/water|lava/.test(b.name || '')
+  for (let d = FLEE_DIST; d >= 3; d--) {
+    const x = Math.floor(bp.x + ux * d)
+    const z = Math.floor(bp.z + uz * d)
+    for (const dy of FLEE_DYS) {
+      const y = Math.floor(bp.y) + dy
+      const floor = at(x, y - 1, z)
+      if (floor && floor.boundingBox === 'block' && open(at(x, y, z)) && open(at(x, y + 1, z))) return { x, y, z }
+    }
+  }
+  return null
+}
+
+// BEHAVIOURS entry: dig a capped pit (recover.digInRun, the shelter dig-in)
+// out of an unreachable shooter's line of fire, then hold in it while the
+// hostile stays near (DIGIN_HOLD_MS cap) so the bot is not walked back out.
+const DIGIN_HOLD_MS = 30000
+function digin(bot, ctx) {
+  const st = ctx.retreatDig || (ctx.retreatDig = {})
+  if (st.doneAt) {
+    const bp = bot.entity && bot.entity.position
+    const h = bp && nearestHostile(bot, bp)
+    let d = null
+    try { d = h ? bp.distanceTo(h.position) : null } catch (_) { d = null }
+    if (d !== null && d <= RETREAT_RELEASE_DIST * 1.6 && Date.now() - st.doneAt < DIGIN_HOLD_MS) { ctx.stepStatus = 'running'; return }
+    ctx.retreatDig = null
+    stepDone(ctx)
+    return
+  }
+  let r = 'failed:error'
+  try { r = recover.digInRun(bot, ctx, st, () => ctx.retreatDig === st) } catch (_) { r = 'failed:error' }
+  if (r === 'done') { st.doneAt = Date.now(); ctx.stepStatus = 'running'; return }
+  if (r === 'running') { ctx.stepStatus = 'running'; return }
+  ctx.retreatDig = null
+  stepFailed(ctx, `digin-${String(r).replace(/^failed:/, '')}`)
+  ctx.retreatFailed = 'digin'
 }
 
 // BEHAVIOURS entry: the recover pillar_up prim on a retreat episode (set by
@@ -370,4 +433,4 @@ function pillar(bot, ctx) {
   if (ctx && ctx.retreat) ctx.recovery = null
 }
 
-module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, HOME_WALK_RANGE, RETREAT_HOLD_MS, RETREAT_RELEASE_HP, RETREAT_RELEASE_DIST, feasibleRetreat, chooseRetreat, retreat, pillar, beginPillar, latchRetreat, latchedAction, retreatLatched, retreatClear }
+module.exports = { RETREAT_ORDER, RETREAT_INSTRUCTIONS, RETREAT_CRITERIA, HOME_WALK_RANGE, RETREAT_HOLD_MS, RETREAT_RELEASE_HP, RETREAT_RELEASE_DIST, feasibleRetreat, chooseRetreat, retreat, pillar, digin, beginPillar, latchRetreat, latchedAction, retreatLatched, retreatClear }

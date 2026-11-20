@@ -196,7 +196,7 @@ describe('0ay: taking fire asks under the under-fire premise', () => {
       name: 'laya',
       source: 'laya',
       async decide() { return { action: 'idle', sprint: false, source: 'laya' } },
-      async ask(q) { asks.push(q); return asks.length === 1 ? 'no' : 'pillar' },
+      async ask(q) { asks.push(q); return asks.length <= 2 ? 'no' : 'pillar' },
     }
     const ticker = createTicker({ bot, brain: hybridBrain(remote), tickMs: 10, idleTickMs: 10, autonomous: true })
     ticker.work()
@@ -206,7 +206,7 @@ describe('0ay: taking fire asks under the under-fire premise', () => {
       ctx.fightGivenUpId = 1 // fight wrote the mob off: unreachable
       bot.health = 19 // hurt lands between ticks
       const r = await ticker.tick()
-      assert.equal(asks.length, 2, 'retreat asked, declined, pillar asked')
+      assert.equal(asks.length, 3, 'cover (digin) and retreat asked, declined, pillar asked')
       assert.ok(asks[0].state.startsWith('taking fire (19/20)'), `under-fire state, got: ${asks[0].state}`)
       assert.ok(asks[0].instructions.includes('unreachable hostile'), `under-fire premise, got: ${asks[0].instructions}`)
       assert.equal(r.decision.action, 'pillar')
@@ -236,11 +236,11 @@ describe('0ay: taking fire asks under the under-fire premise', () => {
       ctx.fightGivenUpId = 1
       bot.health = 19
       const r1 = await ticker.tick()
-      assert.equal(askCalls, 2, 'both options asked once')
+      assert.equal(askCalls, 3, 'every option (digin, retreat, pillar) asked once')
       assert.ok(r1.decision.action !== 'retreat' && r1.decision.action !== 'pillar', `fell through: ${r1.decision.action}`)
       assert.ok(typeof ctx.retreatAskedKey === 'string', 'decline stamped the bucket')
       const r2 = await ticker.tick() // hp steady, hurt still fresh, same situation
-      assert.equal(askCalls, 2, 'latched: nothing re-asked')
+      assert.equal(askCalls, 3, 'latched: nothing re-asked')
       assert.ok(r2.decision.action !== 'retreat' && r2.decision.action !== 'pillar', `still through: ${r2.decision.action}`)
     } finally {
       ticker.destroy()

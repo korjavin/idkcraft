@@ -95,7 +95,7 @@ it('critical hunger acquires and eats nearby prey despite remembered iron', asyn
     assert.equal(bot.food, 6)
     // Model subsequent regeneration after more food; the castle gate must
     // eventually give the actual arbiter its work back.
-    transport.state.health = 6
+    transport.state.health = 8 // LOW_HP_FOOD: food recovery acts below 8
     transport.state.food = 18
     await bot.refresh()
     assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch')
@@ -144,7 +144,7 @@ it('critical hunger withdraws edible food from a reachable stocked chest', async
     assert.ok(sawBread, 'autonomous recovery withdraws food')
     assert.equal(bot.food, 8, 'the item-use request feeds the body')
     for (let i = 0; i < 100 && ctx.eatInFlight; i++) await sleep(20)
-    transport.state.health = 6
+    transport.state.health = 8 // LOW_HP_FOOD: food recovery acts below 8
     transport.state.food = 18
     await bot.refresh()
     assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch', 'castle work resumes after feeding and regeneration')
@@ -397,7 +397,7 @@ it('a failed material leg does not strand a later nearby food source', async () 
     assert.equal(bot.food, 6)
     assert.ok(ctx.stepFail.forage, 'the material cooldown remains recorded')
     assert.equal(ctx.forageFinal, materialFinal, 'the executor failure snapshot remains intact')
-    transport.state.health = 6
+    transport.state.health = 8 // LOW_HP_FOOD: food recovery acts below 8
     transport.state.food = 18
     await bot.refresh()
     assert.equal((await goal.decide(bot, ctx)).action, 'castlefetch')

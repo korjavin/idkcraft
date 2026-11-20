@@ -6,8 +6,10 @@ const LOW_HP_GATE_MS = 5 * 60 * 1000
 const LOW_HP_GAP_MS = 60 * 1000
 
 // Hungry or hurt (food recovery uses the same line); hpOnly = threat travel.
+// Act on food at 8 hp, not 6 (prod 2026-11-20: food recovery began at 3 hp mid-fight).
+const LOW_HP_FOOD = 8
 function needsFood(facts, hpOnly) {
-  return !!(facts && (facts.health < 6 || (!hpOnly && facts.food < 6)))
+  return !!(facts && (facts.health < LOW_HP_FOOD || (!hpOnly && facts.food < 6)))
 }
 
 function lowHpNoFood(bot, facts, hpOnly, ctx) {
@@ -31,4 +33,4 @@ function lowHpGated(bot, facts, ctx, hpOnly) {
   } catch (_) { return true }
 }
 
-module.exports = { LOW_HP_GATE_MS, LOW_HP_GAP_MS, needsFood, lowHpNoFood, lowHpGated }
+module.exports = { LOW_HP_FOOD, LOW_HP_GATE_MS, LOW_HP_GAP_MS, needsFood, lowHpNoFood, lowHpGated }
