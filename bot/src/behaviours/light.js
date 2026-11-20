@@ -63,7 +63,46 @@ const SMELT_RESEND_TICKS = 5 // idle-far ticks between furnace goal re-sends
 // Spot plan by home version: v2 homes light the 7x6 ring, anything else
 // (v1, or a home that predates the version mark) the frozen 4x4 ring.
 function spotsFor(home) {
-  return residence.of(home).lights(home)
+  return (home && home.spots) || residence.of(home).lights(home)
+}
+
+// Death-zone lighting (prod 2026-11-20 v2: 7 day deaths around its own farm,
+// danger.deathZone). The bot keeps its farm and lights it instead: a pseudo
+// home {site, spots} (feet level, dy 0) ringing the farm box every 4 cells,
+// plus the dark barn and the pen. light() runs it once the house is lit.
+const ZONE_SPOTS = (() => {
+  const { W, D } = require('../farm-plan')
+  const out = [{ dx: 2, dz: 2 }, { dx: 12, dz: 4 }]
+  for (let x = -1; x <= W; x += 4) out.push({ dx: x, dz: -1 }, { dx: x, dz: D })
+  for (let z = 3; z < D; z += 4) out.push({ dx: -1, dz: z }, { dx: W, dz: z })
+  return Object.freeze(out)
+})()
+const ZONE_STATE = new WeakMap() // farmBuild -> { home, light* step state }
+
+function zoneTarget(ctx) {
+  const fb = ctx && ctx.farmBuild
+  const s = fb && fb.site
+  if (!s || typeof s.x !== 'number') return null
+  const { W, D } = require('../farm-plan')
+  if (!require('../danger').deathZone(ctx, { x: s.x + W / 2, z: s.z + D / 2 })) return null
+  let st = ZONE_STATE.get(fb)
+  if (!st || st.home.site !== s) ZONE_STATE.set(fb, st = { home: { kind: 'zone', site: s, spots: ZONE_SPOTS } })
+  return st
+}
+
+// Unlit zone spots (goal facts add them to the house's unlit).
+function zoneUnlit(bot, ctx) {
+  const st = zoneTarget(ctx)
+  return st ? countUnlit(bot, st.home, st.lightSkip) : 0
+}
+
+// ctx with home = the zone and its own light* state, like fun-projects viewOf.
+function zoneView(ctx, st) {
+  const local = (k) => typeof k === 'string' && k.startsWith('light')
+  return new Proxy(ctx, {
+    get(t, k) { return k === 'home' ? st.home : local(k) ? st[k] : t[k] },
+    set(t, k, v) { if (k !== 'home') (local(k) ? st : t)[k] = v; return true },
+  })
 }
 
 function spotAbs(home, spot) {
@@ -565,7 +604,11 @@ function light(bot, ctx) {
   // The GoalPlaceBlock approach paths with canDig and eats house corners
   // (build.js cww lesson) — and the build guard may never have been
   // installed when the house was adopted, not built. Idempotent.
-  buildMod.guardOwnWalls(bot, ctx)
+  if (!home.spots) {
+    const st = nextSpotIdx(bot, home, ctx.lightSkipKey === `${home.site.x},${home.site.y},${home.site.z}` ? ctx.lightSkip : []) === -1 && zoneTarget(ctx)
+    if (st && countUnlit(bot, st.home, st.lightSkip) > 0) return light(bot, zoneView(ctx, st))
+    buildMod.guardOwnWalls(bot, ctx)
+  }
   // Skip state is site-relative (revmux 01 major/minor): a 'build here'
   // or adopt that moves the home must not inherit the old site's skips.
   // Keyed like buildGuardKey so no index.js hunk is needed.
@@ -609,6 +652,7 @@ module.exports.LIGHT_SPOTS_V2 = LIGHT_SPOTS_V2
 module.exports.spotsFor = spotsFor
 module.exports.spotSkipped = spotSkipped
 module.exports.countUnlit = countUnlit
+module.exports.zoneUnlit = zoneUnlit
 module.exports.nextSpotIdx = nextSpotIdx
 module.exports.spotLit = spotLit
 module.exports.torchOp = torchOp

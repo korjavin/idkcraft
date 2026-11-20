@@ -1528,7 +1528,8 @@ function goalFacts(bot, ctx) {
   let unlit = 0
   try {
     const hh = ctx && ctx.home
-    if (hh && hh.site) unlit = require('./behaviours/light').countUnlit(bot, hh, ctx.lightSkip)
+    const lm = require('./behaviours/light')
+    if (hh && hh.site) unlit = lm.countUnlit(bot, hh, ctx.lightSkip) + lm.zoneUnlit(bot, ctx)
   } catch (_) { /* unscannable reads as lit: light yields, nothing churns */ }
   // Residence floors (g0z.28 residence.interior; hut/house: the floored
   // ctx.home.interior box). One predicate with home.isInside (revmux

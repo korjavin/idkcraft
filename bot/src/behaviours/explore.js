@@ -373,7 +373,7 @@ function explore(bot, ctx, target, state) {
     e.issuedKey = null
   }
   if (!e.target) {
-    const banned = (x, z) => danger.covers(ctx, { x, z })
+    const banned = (x, z) => danger.covers(ctx, { x, z }) || !!danger.deathZone(ctx, { x, z })
     let cap = capOf(bot, ctx, e)
     let t = null
     if (woodExpedition(ctx) && !aloneIdle(bot, ctx)) {
@@ -467,7 +467,7 @@ function nextTarget(bot, ctx, cap) {
     const e = ctx && ctx.explore
     const near = (p) => !!p && Math.hypot(p.x - anchor.x, p.z - anchor.z) <= cap
     if (e && near(e.target)) return e.target
-    const t = pickTarget(e && e.visited instanceof Set ? e.visited : new Set(), anchor, cap, (x, z) => danger.covers(ctx, { x, z }))
+    const t = pickTarget(e && e.visited instanceof Set ? e.visited : new Set(), anchor, cap, (x, z) => danger.covers(ctx, { x, z }) || !!danger.deathZone(ctx, { x, z }))
     return near(t) ? t : null
   } catch (_) {
     return null

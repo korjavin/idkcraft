@@ -200,6 +200,7 @@ function noteDeath(bot, ctx, now) {
     const log = (ctx.deathLog || []).filter((d) => t - d.at <= LOOP_WINDOW_MS)
     log.push({ x: pos.x, y: pos.y, z: pos.z, at: t })
     ctx.deathLog = log.slice(-8)
+    noteZoneDeath(ctx, pos, t)
     const near = log.filter((d) => Math.hypot(d.x - pos.x, d.z - pos.z) <= LOOP_RADIUS)
     if (near.length < LOOP_DEATHS) return null
     mark(ctx, pos, t, LOOP_RADIUS)
@@ -209,6 +210,37 @@ function noteDeath(bot, ctx, now) {
     guardGoals(bot, ctx)
     return { x: Math.floor(pos.x), z: Math.floor(pos.z), deaths: near.length, until: spot.until }
   } catch (_) { return null }
+}
+
+// Death zone (prod 2026-11-20 v2: 7 day deaths in 50 min within 40 blocks
+// of one farm; the 10-min loop window caught one pair, and every site pick,
+// fun project and gather leg went straight back). ZONE_DEATHS deaths within
+// ZONE_RADIUS in ZONE_KEEP_MS make a zone that self-chosen work sites skip
+// (structure-site pickSite, gather, explore) for ZONE_BASE_MS after the last
+// death, doubling per extra death (like failHolds), capped at ZONE_KEEP_MS.
+// shortcut: in memory only, a restart forgets the zone; persist if prod shows it.
+const ZONE_RADIUS = 40
+const ZONE_DEATHS = 3
+const ZONE_KEEP_MS = 6 * 60 * 60 * 1000
+const ZONE_BASE_MS = 20 * 60 * 1000
+
+function noteZoneDeath(ctx, pos, t) {
+  const mem = store(ctx)
+  const ds = (Array.isArray(mem.deaths) ? mem.deaths : []).filter((d) => t - d.at <= ZONE_KEEP_MS)
+  ds.push({ x: pos.x, z: pos.z, at: t })
+  mem.deaths = ds.slice(-32)
+}
+
+// The live death zone holding (x, z): { deaths, until } or null.
+function deathZone(ctx, p, now) {
+  const ds = ctx && ctx.danger && ctx.danger.deaths
+  if (!Array.isArray(ds) || !p || typeof p.x !== 'number' || typeof p.z !== 'number') return null
+  const t = typeof now === 'number' ? now : Date.now()
+  const near = ds.filter((d) => t - d.at <= ZONE_KEEP_MS && Math.hypot(d.x - p.x, d.z - p.z) <= ZONE_RADIUS)
+  if (near.length < ZONE_DEATHS) return null
+  const last = Math.max(...near.map((d) => d.at))
+  const until = last + Math.min(ZONE_BASE_MS * 2 ** (near.length - ZONE_DEATHS), ZONE_KEEP_MS)
+  return until > t ? { deaths: near.length, until } : null
 }
 
 // The live loop area holding (x, z), or null.
@@ -358,4 +390,4 @@ function wideSpots(ctx, t, feet, goal) {
   return out
 }
 
-module.exports = { addPathCost, PATH_COST, WATER_BLOCKS, mark, near, covers, spots, prune, count, clear, markWaterDeath, markFallDeath, markMobDeath, noteDeath, loopAt, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, FALL_RADIUS, MOB_RADIUS, MAX_RADIUS }
+module.exports = { addPathCost, PATH_COST, WATER_BLOCKS, mark, near, covers, spots, prune, count, clear, markWaterDeath, markFallDeath, markMobDeath, noteDeath, loopAt, deathZone, ZONE_RADIUS, spotRadius, MAX_SPOTS, TTL_MS, AVOID_RADIUS, WATER_RADIUS, FALL_RADIUS, MOB_RADIUS, MAX_RADIUS }
