@@ -396,6 +396,49 @@ describe('JEV choice at normal v2 work boundaries', () => {
     assert.equal((await goal.chooseStep(brain, facts(), ['castlefetch', 'gather'], null, extra, ctx)).step, 'gather')
   })
 
+  it('keeps both JEV and fallback recovery through facts changes until done or expiry', async (t) => {
+    for (const [name, entry] of Object.entries(goal.MENU)) {
+      t.mock.method(entry, 'feasible', () => ['farmbuild', 'gather', 'stockpile', 'rest'].includes(name))
+    }
+    let now = 1000000
+    t.mock.method(Date, 'now', () => now)
+    for (const confidence of [1, 0]) {
+      const bot = {
+        time: { timeOfDay: 6000, day: 1 }, health: 20, food: 20,
+        entity: { position: { x: 0, y: 64, z: 0 } }, entities: {}, players: {},
+        inventory: { items: () => [] }, blockAt: () => null,
+      }
+      const ctx = {
+        work: true, step: 'farmbuild', stepStatus: 'failed:no-mats', farmBuild: { ordered: true },
+        brain: { workChoice: async () => ({ step: 'stockpile', confidence }) },
+      }
+      assert.equal((await goal.decide(bot, ctx)).source, 'jev-work-pending')
+      await flush()
+      const recovery = await goal.decide(bot, ctx)
+      assert.ok(['gather', 'stockpile'].includes(recovery.action))
+      assert.equal(ctx.stepPick.source, confidence ? 'jev-work' : 'fsm-fallback')
+      assert.ok(ctx.stepPick.recovery)
+
+      now += 5000
+      bot.entity.position = { x: 40, y: 64, z: 0 }
+      assert.equal(goal.failHolds(ctx, 'farmbuild', 'changed inventory and position', bot), true)
+      ctx.taskPlanStep = 'stockpile'
+      assert.equal((await goal.decide(bot, ctx)).action, recovery.action)
+      ctx.taskPlanStep = null
+
+      if (confidence) {
+        ctx.stepStatus = 'done'
+        ctx.taskPlanStep = 'farmbuild'
+        const next = await goal.decide(bot, ctx)
+        assert.notEqual(next.action, 'farmbuild')
+        assert.ok(next.source === 'jev-work-pending' || ctx.stepPick.why === 'step-done')
+      } else {
+        now += 90000
+        assert.equal((await goal.decide(bot, ctx)).action, 'farmbuild')
+      }
+    }
+  })
+
   it('wires work JEV separately from legacy menu ask, on keyed v2 only', () => {
     const env = { BOT_BODY: 'baritone', TYPESAFE_API_KEY: 'fake-test-key' }
     assert.equal(typeof makeBrain(env).workChoice, 'function')

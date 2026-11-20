@@ -1853,11 +1853,25 @@ function siteValidNow(bot, ctx) {
   ctx.skySiteProbe = { at: Date.now(), ok }
   return ok
 }
+const WORK_RECOVERY_MS = 90000
+
+function orderedWork(ctx) {
+  const order = ctx?.farmBuild
+  return order?.ordered && !order.built ? { id: 'farmbuild', order } : null
+}
+
 function failHolds(ctx, name, text, bot) {
   try {
     if (SELF_ADVANCING[name]) return false
     if (emptyHeld(ctx, name)) return true
     const sf = ctx && ctx.stepFail && ctx.stepFail[name]
+    // A current owner order retries on a clock. Inventory, position and
+    // unrelated facts can change while recovery is making progress.
+    if (sf?.ownerOrder) {
+      if (orderedWork(ctx)?.order !== sf.ownerOrder) return false
+      if (Date.now() - sf.at < WORK_RECOVERY_MS) return true
+      if (!sf.status.startsWith('failed:no-effect-')) return false
+    }
     // Nothing workable (failed:idle, any step): yield for IDLE_RETRY_MS
     // whatever else drifts; a change in the step's own word releases it.
     // Only new work releases it: a stock-level flip (castle stone-batch <->
@@ -2119,8 +2133,8 @@ async function chooseStep(brain, facts, feasible, home, extra, ctx = null) {
   if (fsm === 'stay' || fsm === 'gohome' || fsm === 'shelter') return skip(fsm, 'night-rule')
   // Owner order rule (prod 2026-11-19 bot2: 'build farm' lost to the castle-rule tidy):
   // a standing owner order for a step outranks the castle and fun rules while it is feasible.
-  const fbo = ctx && ctx.farmBuild
-  if (fbo && fbo.ordered && !fbo.built && names.includes('farmbuild')) return skip('farmbuild', 'order-rule')
+  const order = orderedWork(ctx)
+  if (order && names.includes(order.id)) return skip(order.id, 'order-rule')
   if (fsm === 'fun') return skip(fsm, 'fun-rule')
   // Castle rule (vmzq.19 R2, major 2, the night-rule precedent): a runnable
   // castle normally leads — run3's laya picked equip then
@@ -2879,6 +2893,8 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
       const old = ctx.stepFail[prev]
       const bp = bot && bot.entity && bot.entity.position
       const rec = { status, text, pos: bp ? { x: bp.x, y: bp.y, z: bp.z } : null, at: Date.now() }
+      const order = orderedWork(ctx)
+      if (order?.id === prev) rec.ownerOrder = order.order
       // prkh: the fetch hold parks one kind — carry the failed kind the
       // behaviour stamped (castlefetchFailKind), so other kinds still run.
       // Consumed (revmux 01 core-1): an unstamped later failure must fall
@@ -3181,6 +3197,9 @@ function siteFarFor(bot, ctx, facts, prev, status, finished, commitStep) {
 // Returns the menu and which pin applied.
 function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
   const menu = names
+  const order = orderedWork(ctx)
+  const heldOwner = order && !menu.includes(order.id) ? order.id : null
+  const explicit = ctx.llmOrder?.explicit || (ctx.taskPlanArgs?.by && ctx.taskPlanArgs.by !== 'self')
   // Stall-point plan (vmzq.5): the one-shot forced re-pick — the planned
   // step as the only menu entry. Consumed on use (one-shot); applied only
   // while still feasible and registered (a stale answer degrades to the
@@ -3214,7 +3233,7 @@ function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
     let ok = false
     try {
       const selfPlan = ctx.llmOrder?.choose && !ctx.llmOrder.explicit
-      ok = (!selfPlan || menu.includes(planStep)) &&
+      ok = (planStep !== heldOwner || explicit) && (!selfPlan || menu.includes(planStep)) &&
         !!(MENU[planStep] && MENU[planStep].feasible(facts, bot, ctx) && registered(planStep))
     } catch (_) {
       ok = false
@@ -3233,7 +3252,7 @@ function pinMenu(bot, ctx, facts, names, planStep, commitActive, commitStep) {
     if (!nightOwns) {
       let ok = false
       try {
-        ok = !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
+        ok = commitStep !== heldOwner && !!(MENU[commitStep] && MENU[commitStep].feasible(facts, bot, ctx) && registered(commitStep))
       } catch (_) {
         ok = false
       }
@@ -3319,6 +3338,7 @@ function applyChoice(bot, ctx, facts, choice, prev, finished, why, text) {
   // The step rides along (01 core-2): orders and retreat move ctx.step
   // without re-stamping, and must not inherit the age/source.
   ctx.stepPick = { step: choice.step, source: choice.source, fsm: choice.fsm, why, at: Date.now() }
+  if (choice.recovery) ctx.stepPick.recovery = choice.recovery
   // A banking trip picked under the pierce latches for the trip (R4):
   // set on a pick only, and only stockpile's own finish releases it above. A site
   // pick is not a pierce (the site is near by definition), so only a
@@ -3511,6 +3531,15 @@ async function decide(bot, ctx) {
     console.log('goal step=chestSearch source=survival why=hungry-no-chest')
     return { action: 'chestSearch', sprint: false, source: 'goal-fsm' }
   }
+  const order = orderedWork(ctx)
+  const recovery = ctx?.stepPick?.step === prev ? ctx.stepPick.recovery : null
+  const sameOrder = recovery && recovery.order === order?.order
+  const recoveryExpired = sameOrder && Date.now() >= recovery.until
+  const explicitPlan = ctx?.llmOrder?.explicit || (ctx?.taskPlanArgs?.by && ctx.taskPlanArgs.by !== 'self')
+  // Finish useful recovery work before reconsidering a transient owner
+  // retry. Night, threats, explicit plans and a replaced order skip the hold.
+  if (!finished && sameOrder && !recoveryExpired && facts.time === 'day' &&
+      !explicitPlan && !threatNear(bot)) return { action: prev, sprint: false, source: 'goal-fsm' }
   const { chainOwns, fetchRetry, gateOpened, buildRetry, siteRetry } = gateForces(fires)
   const pins = readPins(ctx)
   const planStep = pins.planStep
@@ -3528,7 +3557,7 @@ async function decide(bot, ctx) {
   if (prev && !finished && ctx) {
     try { factsForce = textForce(prev, facts, bot, ctx, status, text) } catch (_) { factsForce = ctx.goalText !== text }
   }
-  if (!prev || finished || foodExit || factsForce || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
+  if (!prev || finished || (recovery && (!sameOrder || recoveryExpired)) || foodExit || factsForce || chainOwns || nightFarWalk || nightNearShelter || siteFarWalk || fetchRetry || siteRetry || gateOpened || buildRetry || planStep || commitForce) {
     if (commitEnded) {
       try {
         require('./commitment').commitFinished(bot, ctx, status) // oqul.5: task.js registers it
@@ -3556,8 +3585,8 @@ async function decide(bot, ctx) {
     } catch (_) {
       stratExtra = null
     }
-    if (workBrain && (preferred || !prev || finished)) {
-      const orderRecovery = prev === 'farmbuild' && failReason(status) !== null && ctx.farmBuild?.ordered
+    const orderRecovery = order && !ordinary.includes(order.id) && failHolds(ctx, order.id, text, bot)
+    if (workBrain && (preferred || !prev || finished || recoveryExpired)) {
       stratExtra = { ...stratExtra, bot, preferred, orderRecovery,
         workBoundary: `${stepGen(ctx)}:${prev}:${status}${preferred ? `:${preferred}` : ''}` }
     }
@@ -3566,6 +3595,10 @@ async function decide(bot, ctx) {
     if (choice.source === 'jev-work-pending') return { action: 'idle', sprint: false, source: 'jev-work-pending' }
     if (preferred && ctx.taskPlanStep === preferred && choice.source !== 'night-rule') ctx.taskPlanStep = null
     if (planApplied || commitApplied) choice.source = 'task-plan'
+    if (orderRecovery && choice.step !== order.id &&
+        (choice.source === 'jev-work' || choice.source === 'fsm-fallback')) {
+      choice.recovery = { order: order.order, until: Date.now() + WORK_RECOVERY_MS }
+    }
     const ms = Date.now() - t0
     applyChoice(bot, ctx, facts, choice, prev, finished, why, text)
     if (ctx.brain?.workFeedback && (choice.workBy || (choice.model && choice.source === choice.model))) {
