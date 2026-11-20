@@ -275,6 +275,7 @@ function run(bot, ctx) {
     const target = safeHunt(bot, forage.foodTarget(bot, ctx, true))
     if (!target) { toHarvest(); return }
     console.log(`food recovery hunt=${target.name}`)
+    require('../loot').makeRoom(bot) // the kill's drop needs a free slot
     target.want = 1
     r.hunt = { target, phase: 'find', startInv: {}, stalls: 0, foodStreak: 0 }
   }

@@ -1438,6 +1438,7 @@ module.exports.tally = tally
 module.exports.sortedWoods = sortedWoods
 module.exports.TABLE_REACH = TABLE_REACH
 module.exports.safeCraft = safeCraft
+module.exports.freeSlot = freeSlot
 module.exports.shedVictim = shedVictim
 module.exports.dropVictim = dropVictim
 module.exports.dropRank = dropRank
