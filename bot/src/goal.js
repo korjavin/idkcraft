@@ -1863,6 +1863,13 @@ function failHolds(ctx, name, text, bot) {
     // Only new work releases it: a stock-level flip (castle stone-batch <->
     // stone-none while castlefetch hauls) names the same cells, so it holds.
     if (sf && sf.status === 'failed:idle') return Date.now() - (sf.at || 0) < IDLE_RETRY_MS && workWord(sf.text, name) === workWord(text, name)
+    // A no-effect failure (missing material, e.g. bookshelf) is not keyed on the
+    // facts text: an unrelated word flip released it and the step preempted a
+    // running farmbuild only to fail the same way (prod bot5 light/craft
+    // flip-flop). Hold it for a backoff that doubles per same-reason repeat.
+    if (sf && name !== 'castlefetch' && typeof sf.status === 'string' && sf.status.startsWith('failed:no-effect-')) {
+      return Date.now() - (sf.at || 0) < IDLE_RETRY_MS * 2 ** Math.min((sf.n || 1) - 1, 3)
+    }
     // prkh: the fetch hold parks one kind — a hold for another kind never
     // holds this menu entry (the blocked word keeps 'blocked' while its
     // gated kind flips, so the kind — not the text — decides here).
@@ -2812,6 +2819,7 @@ function recordOutcome(bot, ctx, facts, prev, status, finished, text) {
           rec.n = (old && old.status === status && old.sig === sig) ? (old.n || 1) + 1 : 1
         }
       }
+      if (rec.n == null && String(status).startsWith('failed:no-effect-')) rec.n = old && old.status === status ? (old.n || 1) + 1 : 1
       ctx.stepFail[prev] = rec
       // dlpo: same-day park — N fails of one kind park it for the day
       // (counts, not time). Unstamped failures stay time-held only. Only
