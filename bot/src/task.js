@@ -1825,6 +1825,38 @@ function genericOptions(bot, ctx, g, loop) {
   const extra = stallExtras(bot, ctx, genericKind(ctx), undefined, undefined, g, loop)
   return loop ? extra.concat(opts) : opts.concat(extra)
 }
+// Behaviour-block catalogue for the external brain (north star, 8hpy):
+// every work step as {id, feasible, held, why, progress}. One source for JEV
+// at work boundaries and stall rounds; a block's own progress {done,total}
+// lets the brain see which choice advances. Never throws.
+function brainOptions(bot, ctx) {
+  const out = []
+  let goal
+  let facts
+  try { goal = require('./goal'); facts = goal.goalFacts(bot, ctx) } catch (_) { return out }
+  const text = (() => { try { return goal.goalText(facts, ctx.home) } catch (_) { return '' } })()
+  for (const n of STEP_ORDER) {
+    if (n === 'rest') continue
+    const o = { id: n, feasible: false, held: false, why: STEP_EFFECT_TEXT[n] || goal.STEP_CRITERIA[n] || n, progress: null }
+    try {
+      o.feasible = n === 'fun'
+        ? require('./behaviours/fun').stallProjectFeasible(facts, bot, ctx)
+        : !!(goal.MENU[n] && goal.MENU[n].feasible(facts, bot, ctx) && goal.registered(n))
+    } catch (_) { o.feasible = false }
+    try { o.held = !!goal.failHolds(ctx, n, text, bot) } catch (_) { /* not held */ }
+    try { o.progress = blockProgress(bot, ctx, n) } catch (_) { /* no metric */ }
+    out.push(o)
+  }
+  return out
+}
+function blockProgress(bot, ctx, n) {
+  const pair = (p) => (p && typeof p.done === 'number' && typeof p.total === 'number' ? { done: p.done, total: p.total } : null)
+  if (n === 'farmbuild' && ctx.farmBuild && ctx.farmBuild.site) return pair(houseProgress(bot, ctx.farmBuild))
+  if (n === 'build' && ctx.home && ctx.home.site && ctx.home.kind !== 'castle') return pair(houseProgress(bot, ctx.home))
+  if (n === 'castle' && ctx.castle && ctx.castle.progress) return pair(ctx.castle.progress)
+  if (n === 'fun' && ctx.funProject && ctx.funProject.blueprint) return { done: ctx.funProject.placed || 0, total: ctx.funProject.blueprint.length }
+  return null
+}
 function genericPlanAns(g, p, criteria) {
   const steps = p && Array.isArray(p.steps) ? p.steps.filter((s) => typeof s === 'string' && criteria[s]) : []
   g.llmPlan = steps.slice(1)
@@ -4657,4 +4689,4 @@ function taskTick(bot, ctx, now = Date.now()) {
 
 require('./commitment').onCommitFinished(commitFinished) // oqul.5: decide() ends windows through this
 
-module.exports = { consumeStrategic, stallDecideOn, heldSteps, eligible, houseProgress, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick, genericTick }
+module.exports = { brainOptions, consumeStrategic, stallDecideOn, heldSteps, eligible, houseProgress, castleCurrent, selfSearching, TASK_STALL_L1_MS, TASK_STALL_L2_MS, TASK_PARK_RETRY_MS, TASK_PARK_CASTLE_FIRST_MS, TASK_PARKS_PER_DAY, TASK_PARK_DIAG_MAX, TASK_HOUSE_CACHE_MS, TASK_PLAN_MIN_CONF, STALL_TICK_CLAMP_MS, GOAL_WATCHDOG_MS_DEFAULT, GOAL_COMMIT_MS_DEFAULT, GOAL_WATCHDOG_MAX_ROUNDS_DEFAULT, GOAL_TRAVEL_GRACE_MS_DEFAULT, GOAL_PLANB_SWITCH_MS_DEFAULT, GOAL_HISTORY_KEPT, ORDER_KINDS, taskKind, goalKind, isOrderKind, goalTextFor, eligibleOrder, orderHolding, orderObj, orderStamp, carryOrderStamp, orderCurrent, orderProgressWhy, applyCommit, diagnose, skippedReason, blockedReason, taskLine, resetTask, taskTick, clearTaskParks, goalWatchdogMs, goalCommitMs, goalMaxRounds, goalGraceMs, goalPlanbMs, watchdogOn, ownerOnline, commitFinished, PLAN_INSTRUCTIONS, PLAN_PARK_CRITERION, fallbackRank, planState, consumePlan, stratBackoff, goalPromptState, strategicChoose, deadlockChoose, deadlockTick, genericTick }
