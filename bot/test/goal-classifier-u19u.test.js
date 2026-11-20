@@ -396,6 +396,43 @@ describe('JEV choice at normal v2 work boundaries', () => {
     assert.equal((await goal.chooseStep(brain, facts(), ['castlefetch', 'gather'], null, extra, ctx)).step, 'gather')
   })
 
+  it('holds dispatched work against soft pins and paces quick failures across fact changes', async (t) => {
+    const oldBody = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    t.after(() => {
+      if (oldBody === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = oldBody
+    })
+    for (const [name, entry] of Object.entries(goal.MENU)) {
+      t.mock.method(entry, 'feasible', () => ['explore', 'stockpile', 'rest'].includes(name))
+    }
+    let now = 1000000
+    t.mock.method(Date, 'now', () => now)
+    const bot = {
+      time: { timeOfDay: 6000, day: 1 }, health: 20, food: 20,
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      inventory: { items: () => [] }, entities: {}, players: {}, blockAt: () => null,
+    }
+    const ctx = { work: true, taskPlanStep: 'explore' }
+    assert.equal((await goal.decide(bot, ctx)).action, 'explore')
+    assert.equal(ctx.stepPick.source, 'task-plan')
+
+    now += 1000
+    ctx.taskPlanStep = 'stockpile'
+    assert.equal((await goal.decide(bot, ctx)).action, 'explore')
+
+    ctx.stepStatus = 'failed:unreachable'
+    assert.equal((await goal.decide(bot, ctx)).action, 'stockpile')
+    bot.entity.position = { x: 40, y: 64, z: 0 }
+    assert.equal(goal.failHolds(ctx, 'explore', 'changed facts', bot), true)
+
+    ctx.taskPlanStep = 'explore'
+    ctx.taskPlanArgs = { step: 'explore', by: 'owner' }
+    assert.equal((await goal.decide(bot, ctx)).action, 'explore')
+    now += 89000
+    assert.equal(goal.failHolds(ctx, 'explore', 'changed facts', bot), false)
+  })
+
   it('keeps both JEV and fallback recovery through facts changes until done or expiry', async (t) => {
     for (const [name, entry] of Object.entries(goal.MENU)) {
       t.mock.method(entry, 'feasible', () => ['farmbuild', 'gather', 'stockpile', 'rest'].includes(name))
