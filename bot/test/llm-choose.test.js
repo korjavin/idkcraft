@@ -152,6 +152,24 @@ describe('chooser trigger', () => {
     assert.equal(llmOrders.shouldChoose('gear', ctx, homeFacts, 2000000), false)
     assert.equal(llmOrders.shouldChoose('forage', ctx, homeFacts, 2000000), false)
   })
+  it('yields autonomous retries to an ordered farm and preserves explicit plans', () => {
+    const { bot, ctx } = ctxWith(true)
+    ctx.farmBuild = { ordered: true, built: false }
+    assert.equal(llmOrders.shouldChoose('idle', ctx, { time: 'day' }, 1000000), false)
+    const order = { choose: true, steps: [{ step: 'farm', count: 3 }], i: 0, cur: {}, aside: { until: 1000001 }, at: 1000000 }
+    ctx.llmOrder = order
+    ctx.orderAside = order.aside
+    ctx.taskPlanStep = 'rest'
+    llmOrders.tick(bot, ctx, 1000000)
+    assert.equal(ctx.llmOrder, null)
+    assert.equal(ctx.orderAside, null)
+    assert.equal(ctx.taskPlanStep, null)
+
+    ctx.llmOrder = { ...order, explicit: true, replanning: true }
+    llmOrders.tick(bot, ctx, 1000000)
+    assert.equal(ctx.llmOrder.explicit, true)
+  })
+
   it('never fires paused or out of work mode', () => {
     const { ctx } = ctxWith(true)
     const facts = { time: 'day', castle: 'none' }

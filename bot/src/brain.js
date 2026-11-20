@@ -801,9 +801,9 @@ function makeBrain(env) {
   }
   if (menuAskEnabled(env)) {
     if (plannerChoice(env) === 'llm') {
-      b = { ...base, source: 'llm', menuAsk: llmAsk(env.ANTHROPIC_API_KEY, undefined, brainTimeoutMs(env), env.LLM_MODEL || LLM_MODEL).ask }
+      b = { ...b, source: 'llm', menuAsk: llmAsk(env.ANTHROPIC_API_KEY, undefined, brainTimeoutMs(env), env.LLM_MODEL || LLM_MODEL).ask }
     } else if (key) {
-      b = { ...base, source: 'jev', menuAsk: jevBrain(key, undefined, brainTimeoutMs(env), JEV_ENDPOINT).ask }
+      b = { ...b, source: 'jev', menuAsk: jevBrain(key, undefined, brainTimeoutMs(env), JEV_ENDPOINT).ask }
     }
   }
   // 8hpy.2: with the stall chooser on (STALL_DECIDE, default on) a JEV key
@@ -813,7 +813,7 @@ function makeBrain(env) {
   } else {
     b = withPlanner(b, env)
   }
-  console.log(`brain=stub planner=${plannerName(b)} ask=${(b.ask && b.source) || 'none'} menuAsk=${(b.menuAsk && b.source) || 'none'}`)
+  console.log(`brain=stub planner=${plannerName(b)} ask=${(b.ask && b.source) || 'none'} menuAsk=${(b.menuAsk && b.source) || 'none'} workChoice=${b.workChoice ? 'jev' : 'none'}`)
   return b
 }
 
