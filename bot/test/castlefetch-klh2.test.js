@@ -172,13 +172,36 @@ describe('klh2 same-kind tick hop', () => {
     }
   })
 
-  it('a hop leg that serves nothing keeps the hold (hopDry done)', () => {
+  it('a hop leg whose chests drew 0 falls through to acquire, never a 0-gain done', () => {
+    castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'pane', left: 100 }; return 'pane-none' }
+    const acquireMod = require('../src/behaviours/acquire')
+    const realAcq = acquireMod.acquire
+    const calls = []
+    let r = 'running'
+    acquireMod.acquire = (bot, ctx, item, n) => { calls.push(item); return r }
+    try {
+      const bot = makeBot()
+      const ctx = withChest({ castle: castleState() })
+      failWorldAt(bot, ctx, 'pane', 'failed:castlefetch-unreachable')
+      ctx.castleFetch = { kind: 'pane', chestDone: true, hop: true } // chests tried, all drew 0
+      ctx.stepStatus = null
+      fetch(bot, ctx)
+      assert.equal(ctx.stepStatus, null, 'the same leg runs acquire')
+      assert.equal(calls[0], 'glass_pane')
+      r = 'failed:no-sand'
+      fetch(bot, ctx)
+      assert.equal(ctx.stepStatus, 'failed:castlefetch-no-pane', 'a 0-gain leg is never done')
+      assert.ok(ctx.acquireHeld && ctx.acquireHeld.pane, 'acquire rests its window')
+    } finally { acquireMod.acquire = realAcq }
+  })
+
+  it('a hop leg that drew some keeps the hold (hopDry done)', () => {
     castleMod.menuFact = (bot, ctx) => { ctx.castleWord = { kind: 'stone', left: 75 }; return 'stone-none' }
     const bot = makeBot()
     const ctx = withChest({ castle: castleState() })
     failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
-    // A running hop leg past chest+craft with no stock: chest already tried.
-    ctx.castleFetch = { kind: 'stone', chestDone: true }
+    // A running hop leg past chest+craft, a partial draw already in.
+    ctx.castleFetch = { kind: 'stone', chestDone: true, drewAny: true }
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'done', 'the hop leg ends quiet, never failed')
     assert.ok(ctx.castleFetchDoneKind == null, 'no retire stamp on an unserved hop')
@@ -215,7 +238,7 @@ describe('klh2 same-kind tick hop', () => {
     assert.equal(fetch.hopDue(bot, ctx, 'stone'), true, 'setup: first hop due')
     // The hop leg tried the only chest and served nothing (chestTried is
     // the per-leg tried set a real leg carries out of chestTick).
-    ctx.castleFetch = { kind: 'stone', chestDone: true, hop: true, chestTried: new Set([`${SITE.x - 2},64,${SITE.z - 2}`]) }
+    ctx.castleFetch = { kind: 'stone', chestDone: true, hop: true, drewAny: true, chestTried: new Set([`${SITE.x - 2},64,${SITE.z - 2}`]) }
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'done')
     assert.deepEqual(ctx.stepFail.castlefetch.kinds.stone.hopTried, [`${SITE.x - 2},64,${SITE.z - 2}`], 'tried chests remembered on the hold entry')
@@ -231,7 +254,7 @@ describe('klh2 same-kind tick hop', () => {
     const ctx = withChest({ castle: castleState(), home: { chest: { x: SITE.x - 10, y: 64, z: SITE.z - 10 } } })
     failWorldAt(bot, ctx, 'stone', 'failed:castlefetch-unreachable')
     // Hop 1 tried the site chest and served nothing.
-    ctx.castleFetch = { kind: 'stone', chestDone: true, hop: true, chestTried: new Set([`${SITE.x - 2},64,${SITE.z - 2}`]) }
+    ctx.castleFetch = { kind: 'stone', chestDone: true, hop: true, drewAny: true, chestTried: new Set([`${SITE.x - 2},64,${SITE.z - 2}`]) }
     fetch(bot, ctx)
     assert.equal(ctx.stepStatus, 'done')
     // The home chest appeared untried: hop 2 is due, and the created leg

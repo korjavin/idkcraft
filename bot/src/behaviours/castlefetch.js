@@ -904,6 +904,7 @@ function chestTick(bot, ctx, f, d) {
     const drew = Math.max(0, Math.round(need0 - left))
     try { console.log(`castlefetch ${d.kind}: drew ${Math.max(0, Math.round(need0 - left))} of ${need0}${fund ? ` plus table fund x${fund}` : ''} from the bank chest at ${k}`) } catch (_) { /* log best-effort */ }
     if (left > 0 && !fund) markChestDry(ctx, d.kind, k) // drained: no walk back to it within CHEST_DRY_MS
+    if (drew > 0) f.drewAny = true // the hop end below reads it
     if (drew <= 0 && !fund) markChestBarren(ctx, d.kind, k)
     else if (left <= 0) f.bankFull = true // a full bank batch: the leg lays it instead of digging the rest
     // qwyl revmux 01 core-1 + owner TTL directive: one open feeds both
@@ -3340,6 +3341,16 @@ function castlefetch(bot, ctx, target, state) {
   // hop cycle, and no new failure extends them. A served need ends through
   // the demand check at the top with its retire stamp, as before.
   if (d.hop) {
+    // Every chest drew 0 (prod bot3: 61 pane hops, 0 gained, each 'done'):
+    // fall through to the generic obtain rung (acquire: craft/smelt/mine)
+    // in the same leg; a 0-gain hop never reads 'done'.
+    if (!f.drewAny) {
+      if (acquireTick(bot, ctx, f, d)) return
+      if (f.acquireDone) { finish(bot, ctx, 'done'); return }
+      ctx.acquireHeld = { ...(ctx.acquireHeld || {}), [d.kind]: Date.now() }
+      finish(bot, ctx, `failed:castlefetch-no-${d.kind}`)
+      return
+    }
     f.hopDry = true
     finish(bot, ctx, 'done')
     return
