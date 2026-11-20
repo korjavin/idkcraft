@@ -578,3 +578,28 @@ describe('farm site walk that never gets closer (bot5)', () => {
     assert.ok(ctx.farmBuild.site)
   })
 })
+
+describe('derived cells with no base (farmland over air)', () => {
+  it('lays dirt into an air farmland cell, then tills it', async () => {
+    const w = world()
+    const bot = mockBot(w)
+    bot.inventory.items().push({ name: 'dirt', count: 64 })
+    const ctx = { step: 'farmbuild', stepStatus: 'running', home: null, buildSkip: [], castle: null }
+    const logs = []
+    const orig = console.log
+    console.log = (m) => { logs.push(String(m)) }
+    let holed = null
+    try {
+      for (let t = 0; t < 4000 && ctx.stepStatus === 'running'; t++) {
+        const s = ctx.farmBuild && ctx.farmBuild.site
+        if (s && !holed) { holed = s; for (let dx = 18; dx <= 20; dx++) w.set(s.x + dx, s.y - 1, s.z, 'air') } // the field cells' dirt is gone
+        farmbuild(bot, ctx)
+        await tick()
+      }
+    } finally { console.log = orig }
+    assert.ok(holed)
+    assert.equal(ctx.stepStatus, 'done', logs.slice(-5).join('\n'))
+    assert.ok(!logs.some((l) => l.includes('untillable')), logs.filter((l) => l.includes('skip')).join('\n'))
+    for (let dx = 18; dx <= 20; dx++) assert.equal(w.blockAt({ x: holed.x + dx, y: holed.y - 1, z: holed.z }).name, 'farmland')
+  })
+})

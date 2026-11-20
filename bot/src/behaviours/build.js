@@ -593,6 +593,8 @@ const FARM_KINDS = {
   soil: (n) => n === 'dirt' || n === 'grass_block' || n === 'farmland',
   ground: (n) => NATURAL_SOLID.has(n) || FILLERS.has(n),
 }
+// Derived kind -> the base kind it is made from in place (till/path/strip).
+const BASE_KINDS = { farmland: 'soil' }
 const FILLERS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'stone', 'andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'netherrack', 'coarse_dirt'])
 const FARM_ITEMS = { water: (n) => n === 'water_bucket', farmland: (n) => n.endsWith('_hoe'), soil: (n) => n === 'dirt', ground: (n) => FILLERS.has(n) }
 function wantItem(cell) {
@@ -1160,7 +1162,7 @@ function build(bot, ctx, target, state, acquireMaterial) {
     return
   }
   const plan = blueprintFor(ctx.home)
-  const cell = plan[idx]
+  let cell = plan[idx]
   let p = cellAbs(ctx.home, cell)
   const stand = cell.stand && cellAbs(ctx.home, cell.stand)
   if (cell.kind === 'planks' && isDoorwayOrInterior(cell, ctx.home)) {
@@ -1176,6 +1178,11 @@ function build(bot, ctx, target, state, acquireMaterial) {
     return
   }
   ctx.buildSiteWalk = null
+  // Derived cell (farmland = tilled soil) with no base in place (air, water,
+  // stone): lay the base kind this tick (acquire/dig/place as that kind); the
+  // transform runs once the base stands.
+  const base = BASE_KINDS[cell.kind]
+  if (base && !FARM_KINDS[base](blockNameAt(bot, p) || '')) cell = { ...cell, kind: base }
   const item = cell.kind === 'clear' ? null : findItem(bot, wantItem(cell))
   if (!item && cell.kind !== 'clear' && acquireMaterial && canSourceMaterials(bot)) {
     ctx.buildGoalIdx = -1
