@@ -8,6 +8,8 @@
 const EPISODES_MAX = 500
 const SIG_FIELDS = ['kind', 'phase', 'blocked', 'owed', 'terrain', 'pack', 'chest', 'fail']
 const RATE_MS = 600000
+const WORK_WINDOW_MS = 300000
+const WORK_FAILURE_LIMIT = 3
 
 // Last recall of this process (one bot per process): fallbackRank reads it.
 let last = { sig: null, past: [] }
@@ -147,6 +149,78 @@ function record(bot, ctx, kind, choice, outcome, ms, now) {
   else if (outcome === 'flat' || String(outcome).startsWith('failed:')) r.flat++
 }
 
+function beginWork(bot, ctx, choice, generation, progress, facts, decision, now = Date.now()) {
+  ctx.workEpisode = {
+    choice, generation, before: Number.isFinite(progress?.done) ? progress.done : null,
+    total: Number.isFinite(progress?.total) ? progress.total : null,
+    id: `${now}-${generation}`, by: decision.by, conf: decision.conf,
+    facts, at: now, sig: sig(bot, ctx, 'work'),
+  }
+  console.log(`brain work choice=${choice} by=${decision.by} conf=${decision.conf ?? '?'} id=${ctx.workEpisode.id}`)
+}
+
+function workResult(run, generation, progress, status, facts, now) {
+  const after = Number.isFinite(progress?.done) ? progress.done : null
+  const delta = run.generation === generation && run.before != null && after != null && run.total === progress?.total
+    ? after - run.before : null
+  // A generation change without an observed result is a cancellation.
+  // Count positive movement on an interrupted run only when it was measured.
+  const fail = run.generation === generation && status?.startsWith('failed:') ? status.slice(7) : null
+  const done = run.generation === generation && status === 'done'
+  const outcome = fail != null ? `failed:${fail}`
+    : delta > 0 || (delta == null && done && facts !== run.facts) ? 'progress'
+      : done || status === 'window' ? 'flat' : 'interrupted'
+  return {
+    sig: run.sig, choice: run.choice, outcome, before: run.before, after, delta, fail,
+    by: run.by, ms: Math.max(0, now - run.at), at: now,
+  }
+}
+
+function logWorkOutcome(run, result) {
+  if (run.reported) return
+  run.reported = true
+  console.log(`brain work outcome choice=${run.choice} by=${run.by} id=${run.id} result=${result.outcome} delta=${result.delta ?? '?'} fail=${result.fail ?? '-'} ms=${result.ms}`)
+}
+
+function sampleWork(ctx, generation, progress, facts, now = Date.now()) {
+  const run = ctx.workEpisode
+  if (run && !run.reported && now - run.at >= WORK_WINDOW_MS) {
+    logWorkOutcome(run, workResult(run, generation, progress, 'window', facts, now))
+  }
+}
+
+function finishWork(ctx, generation, progress, status, facts, now = Date.now()) {
+  const run = ctx.workEpisode
+  if (!run) return null
+  ctx.workEpisode = null
+  const episode = workResult(run, generation, progress, status, facts, now)
+  const list = listOf(ctx)
+  list.push(episode)
+  if (list.length > EPISODES_MAX) list.splice(0, list.length - EPISODES_MAX)
+  logWorkOutcome(run, episode)
+  return episode
+}
+
+// One neutral prior on each side keeps an untried block available and
+// prevents one lucky result from dominating a block with a longer history.
+function workRates(ctx, ids, now = Date.now()) {
+  const stats = new Map(ids.map((id) => [id, { n: 0, ok: 0, last: null, consecutive: 0, lastAt: 0 }]))
+  for (const e of ctx.episodes || []) {
+    const stat = stats.get(e.choice)
+    if (!stat || e.sig?.kind !== 'work' || e.outcome === 'interrupted') continue
+    stat.n++
+    if (e.at - stat.lastAt >= WORK_WINDOW_MS) stat.consecutive = 0
+    if (success(e.outcome)) { stat.ok++; stat.consecutive = 0 }
+    else stat.consecutive++
+    stat.lastAt = e.at
+    stat.last = e.outcome
+  }
+  return Object.fromEntries([...stats].map(([id, { n, ok, last: outcome, consecutive, lastAt }]) => [id, {
+    attempts: n, successRate: Math.round(100 * (ok + 1) / (n + 2)) / 100, outcome,
+    coolingDown: consecutive >= WORK_FAILURE_LIMIT && now - lastAt < WORK_WINDOW_MS,
+  }]))
+}
+
 // Sanitize a stored list (hand-edited files must not inject shapes).
 function of(v) {
   if (!Array.isArray(v)) return []
@@ -184,4 +258,4 @@ function rateTick(bot, ctx, kind, done, now) {
   } catch (_) { /* monitor best-effort */ }
 }
 
-module.exports = { sig, sigText, recall, record, bias, of, rateTick, EPISODES_MAX }
+module.exports = { sig, sigText, recall, record, bias, beginWork, finishWork, sampleWork, workRates, WORK_WINDOW_MS, of, rateTick, EPISODES_MAX }

@@ -45,6 +45,7 @@ match offline-mode logins, so the server rejects chat-sent commands.)
 | `BRAIN_TICK_MS` | `1000` | Reflex tick interval |
 | `TYPESAFE_API_KEY` | `` (stub brain) | JEV key; enables only the stall-point plan() and the manual `brain jev` (a bad key shows `stub-fallback` only after `brain jev`) |
 | `BRAIN_URL` | `` | Retired (vhlb.5): ignored with a `BRAIN_URL ignored` log line; the FSM decides every tick. |
+| `BOT_WORK_FEEDBACK` | `1` | Record v2 JEV work outcomes and include block success estimates in later choices. Set `0` to omit this feedback. |
 | `BOT_WORK_JEV` | `1` | With a JEV key on v2, consult JEV at daytime work boundaries. Set `0` for existing arbitration. |
 | `BRAIN_TIMEOUT_MS` | `BRAIN_TICK_MS` | Per-call deadline for the remote brain |
 | `BOT_LEAVE_AFTER_MS` | `60000` | Nobody-online grace (ms) before the bot quits and re-polls; `0` disables (always on) |

@@ -269,6 +269,7 @@ services:
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_TOKENS_PER_HOUR: ${LLM_TOKENS_PER_HOUR:-}
       BOT_LLM_ORDERS: ${BOT_LLM_ORDERS:-} # each bot asks its own plan; peer bot lines never ask
+      BOT_WORK_FEEDBACK: ${BOT_WORK_FEEDBACK:-1} # v2 JEV work outcome history; 0 = omit feedback
       BOT_WORK_JEV: ${BOT_WORK_JEV:-1} # v2 JEV choice at work boundaries with a key; 0 = existing arbitration
       BOT_MENU_ASK: ${BOT_MENU_ASK:-} # 82zl fix: opt-in prod goal-classifier menu ask (1|true|yes; default off = stub FSM)
       GOAL_WATCHDOG_MS: ${GOAL_WATCHDOG_MS:-60000}
