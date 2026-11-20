@@ -17,7 +17,28 @@ const SMELT = {
   glass: { raw: 'sand', ore: 'sand' },
   charcoal: { raw: null, ore: 'logs' },
 }
-function smelt(item) { return SMELT[item] }
+// Vanilla furnace edges for acquire only (bring keeps SMELT: its rung digs
+// m.ore). A smelted block is rarely found placed (smooth_stone), so the
+// burn is its route: smooth_stone <- stone <- cobblestone.
+const FURNACE = {
+  stone: { raw: 'cobblestone' },
+  smooth_stone: { raw: 'stone' },
+  smooth_sandstone: { raw: 'sandstone' },
+  smooth_red_sandstone: { raw: 'red_sandstone' },
+  smooth_quartz: { raw: 'quartz_block' },
+  cracked_stone_bricks: { raw: 'stone_bricks' },
+  deepslate: { raw: 'cobbled_deepslate' },
+  cracked_deepslate_bricks: { raw: 'deepslate_bricks' },
+  cracked_deepslate_tiles: { raw: 'deepslate_tiles' },
+  cracked_nether_bricks: { raw: 'nether_bricks' },
+  cracked_polished_blackstone_bricks: { raw: 'polished_blackstone_bricks' },
+  terracotta: { raw: 'clay' },
+  brick: { raw: 'clay_ball' },
+  nether_brick: { raw: 'netherrack' },
+  green_dye: { raw: 'cactus' },
+  sponge: { raw: 'wet_sponge' },
+}
+function smelt(item) { return SMELT[item] || FURNACE[item] }
 
 const MOB = [[/_wool$/, 'sheep']] // item -> mob that drops it (the hunts bring can run)
 const DEPTH = 6
