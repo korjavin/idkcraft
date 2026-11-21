@@ -14,6 +14,7 @@ const { Vec3 } = require('vec3')
 const { goals } = require('mineflayer-pathfinder')
 const S = require('../sources')
 const unreachable = require('../unreachable')
+const { BUILT_ONLY } = require('./util')
 
 const MINE_RADIUS = 64
 const DIG_REACH = 4.5
@@ -206,7 +207,7 @@ function acquire(bot, ctx, item, n, path = [], alts = [item], construction = fal
     const r = a.smelt && a.smelt.item === item && a.smelt.started ? 'done' : acquire(bot, ctx, raw, n - held, up, raws)
     return r === 'done' ? smeltTick(bot, ctx, a, item, n - held, raws, up) : r
   }
-  const blocks = [...new Set(alts.flatMap((i) => [...S.sources(bot, i).blocks]))]
+  const blocks = [...new Set(alts.flatMap((i) => [...S.sources(bot, i).blocks]))].filter((b) => !BUILT_ONLY.test(b)) // never mine our builds (cobble walls, farmland)
   const short = n - held
   if (blocks.length) {
     a.blocks = blocks // resources.scan remembers these while the need lives

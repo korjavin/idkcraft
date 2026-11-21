@@ -20,7 +20,7 @@ const doors = require('./doors')
 const { addNoCornerCut } = require('./nocorner')
 const { addSnowGround } = require('./snow')
 const { addJumpUpCost } = require('./jumpcost')
-const { trackPlaced, installPlaceTiming } = require('./behaviours/util')
+const { trackPlaced, installPlaceTiming, installDigGuard } = require('./behaviours/util')
 const unpin = require('./unpin')
 const decontact = require('./decontact')
 const dangerMod = require('./danger')
@@ -137,6 +137,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // Both wrap bot.placeBlock on the first spawn (mineflayer injects it
     // after createTicker); call order is wrap order: timing(track(raw)).
     trackPlaced(bot, ctx) // idkcraft-drq/dahd: record own placements for the dig guard
+    installDigGuard(bot, ctx) // laid castle/farm cells are never dug, whoever calls
     installPlaceTiming(bot) // idkcraft-6x7.11: jump-place waits for the feet to clear
   }
   let inFlight = false

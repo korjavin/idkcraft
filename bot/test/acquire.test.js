@@ -146,6 +146,16 @@ describe('acquire: variants and smelting', () => {
     assert.strictEqual(tick.acquire(b, {}, 'oak_planks', 8, [], acq.family('oak_planks')), 'running')
     assert.ok(calls[0].includes('oak_log') && calls[0].includes('birch_log') && calls[0].includes('spruce_log'))
   })
+  it('never mines built-only blocks: cobblestone from stone, dirt not from farmland', () => {
+    for (const [item, want, never] of [['cobblestone', 'stone', 'cobblestone'], ['dirt', 'dirt', 'farmland']]) {
+      const calls = []
+      const b = mk([], { mine: (names) => { calls.push(names); return new Promise(() => {}) } })
+      const log = console.log
+      console.log = () => {}
+      try { assert.strictEqual(tick.acquire(b, {}, item, 4), 'running') } finally { console.log = log }
+      assert.ok(calls[0].includes(want) && !calls[0].includes(never), `${item}: ${calls[0]}`)
+    }
+  })
   it('a smelted gap mines its raw input, then burns it through furnace.js itself', () => {
     const calls = []
     const b = mk([], { mine: (names) => { calls.push(names); return new Promise(() => {}) } })

@@ -488,6 +488,7 @@ function protectedReason(bot, block, ctx) {
     // Enclosed (src/enclosed.js): while the escape is live, recover digs may open laid own castle cells too.
     const enclosedOwn = !!(ctx && ctx.recovery && ctx.castle && ctx.enclosedUntil > Date.now()) && !CASTLE_KEEP.test(name) && castle.protects(ctx.castle, pos, name, props)
     if (ctx && ctx.castle && !sill && !groundEscape && !enclosedOwn && castleProtects(ctx.castle, pos, name, props)) return 'protected'
+    if (castle.anyCastle(ctx, (c, own) => !own && castle.protects(c, pos, name, props))) return 'protected' // a peer's laid castle cell
     if (castleClears(ctx, pos, name)) return null // vmzq.40: castle step, footprint blocker
     // Castle yard (idkcraft-g0z.44): after the castle step's own clears
     // (prep cuts, litter, foreign-clear keep working), before the own
@@ -525,6 +526,57 @@ function protectedReason(bot, block, ctx) {
     return 'protected'
   } catch (_) { return 'protected' }
 }
+
+// Structure dig guard (shared, every bot.dig caller): a laid cell of the own
+// castle, any peer castle or the own farm is never broken. A build step
+// repairing a WRONG cell is unaffected: protects() matches only the right
+// block (and stair facing). Same escapes as protectedReason: the v2 door
+// sill swap and the live enclosed escape.
+function structureOwner(ctx, pos, name, props) {
+  try {
+    if (!ctx || !pos || typeof name !== 'string') return null
+    const c = castle.anyCastle(ctx, (st) => castle.protects(st, pos, name, props))
+    if (c) {
+      if (c === ctx.castle && (ctx.castleSill || (ctx.recovery && ctx.enclosedUntil > Date.now()))) return null
+      return c === ctx.castle ? 'castle' : 'peer-castle'
+    }
+    if (ctx.farmBuild && require('../farm-plan').protects(ctx.farmBuild, pos, name)) return 'farm'
+  } catch (_) { /* unreadable: no veto */ }
+  return null
+}
+
+// Caller file of a dig, for the protect line (first frame outside util.js).
+function digCaller() {
+  const m = /behaviours\/(?!util\.js)([\w-]+)\.js|src\/(?!behaviours\/)([\w-]+)\.js/.exec(String(new Error().stack).split('\n').slice(2).join('\n'))
+  return m ? m[1] || m[2] : '?'
+}
+
+function installDigGuard(bot, ctx) {
+  if (!bot || bot._digGuardInstalled) return
+  if (typeof bot.dig !== 'function') {
+    if (typeof bot.once === 'function') bot.once('spawn', () => installDigGuard(bot, ctx))
+    return
+  }
+  bot._digGuardInstalled = true
+  const orig = bot.dig.bind(bot)
+  bot.dig = (block, ...rest) => {
+    const pos = block && block.position
+    let props = null
+    try { props = block && typeof block.getProperties === 'function' ? block.getProperties() : null } catch (_) { props = null }
+    const owner = structureOwner(ctx, pos, block && block.name, props)
+    if (owner) {
+      console.log(`protect skip ${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)} ${block.name} owner=${owner} by=${(ctx && ctx.step) || '-'}/${digCaller()}`)
+      return Promise.reject(new Error('protected'))
+    }
+    return orig(block, ...rest)
+  }
+}
+
+// Mine targets that only exist as builds (castle cobble walls, farm
+// farmland, planks, bricks...): Baritone's #mine suspends the break ban for
+// its targets and picks the nearest, so asking for one mines our own walls.
+// shortcut: a name list, not a position box (Baritone takes names only); a mod-side no-break box if a natural name needs it.
+const BUILT_ONLY = /^(cobblestone|mossy_cobblestone|farmland|dirt_path|glass|hay_block|bookshelf|chest|crafting_table|furnace)$|^(polished_|cobbled_|cracked_|chiseled_|stripped_|smooth_)|_(planks|bricks|tiles|fence|fence_gate|door|trapdoor|stairs|slab|wall|wool|glass|pane|carpet|bed|torch)$/
 
 function canBreak(bot, block, ctx) {
   return denyReason(bot, block, ctx) === null
@@ -882,4 +934,4 @@ function relay(ctx, b) {
 }
 
 
-module.exports = { breakable, COST, OK, stuckDeny, stuckRefusal, stuckCost, recoverNote, relay, KEEP, SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
+module.exports = { structureOwner, installDigGuard, BUILT_ONLY, breakable, COST, OK, stuckDeny, stuckRefusal, stuckCost, recoverNote, relay, KEEP, SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
