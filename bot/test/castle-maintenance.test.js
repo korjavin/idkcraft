@@ -196,7 +196,18 @@ describe('castle maintenance (owner 2026-11-17)', () => {
     const log = console.log
     console.log = (s) => logs.push(String(s))
     try { castle.menuFact(bot, {}, Date.now()) ; castle.menuFact(bot, { castle: st }, Date.now()) } finally { console.log = log }
-    assert.ok(logs.some((l) => /^castle tidy holes=\d+ clutter=\d+ missing=4$/.test(l)), logs.join('\n'))
+    assert.ok(logs.some((l) => /^castle tidy (done )?holes=\d+ .*missing=4/.test(l)), logs.join('\n'))
+  })
+
+  it('an owed tidy logs one line per change, not one per tick (prod bot3 2026-11-21)', () => {
+    const { set } = damaged()
+    const bot = worldBot(set)
+    const ctx = { castle: state({ visitedAt: 1, upkeepOwed: true }) }
+    const logs = []
+    const log = console.log
+    console.log = (s) => logs.push(String(s))
+    try { for (let i = 0; i < 20; i++) { ctx.castle.upkeepOwed = true; castle.menuFact(bot, ctx, Date.now()) } } finally { console.log = log }
+    assert.equal(logs.filter((l) => l.startsWith('castle tidy ')).length, 1, logs.join('\n'))
   })
 
   // A 2-wide cobble tower on grade outside the footprint, against the x-min ring (owner 2026-11-17).
