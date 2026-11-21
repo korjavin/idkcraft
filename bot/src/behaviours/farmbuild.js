@@ -173,6 +173,9 @@ function run(bot, ctx) {
   }
   const view = viewOf(ctx, fb)
   guardField(bot, ctx)
+  for (const r of build.revertedCells(bot, fb, fb.derivedSeen || (fb.derivedSeen = new Set()))) {
+    console.log(`farm cell reverted ${r.key} ${r.from}->${r.to} why=${r.why}`)
+  }
   const idx = build.nextCellIdx(bot, fb, view.buildSkip, view)
   if (fb.built) {
     if (idx < 0) return cropTick(bot, ctx, fb)

@@ -8,6 +8,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const Vec3 = require('vec3')
 const fp = require('../src/farm-blueprint')
+const build = require('../src/behaviours/build')
 const farmbuild = require('../src/behaviours/farmbuild')
 const { BEHAVIOURS } = require('../src/behaviours')
 const { MENU, STEP_ORDER, STEP_CRITERIA } = require('../src/goal')
@@ -63,13 +64,40 @@ describe('farm blueprint (qphv.1)', () => {
     const n = (k) => fp.PLAN.filter((c) => c.kind === k).length
     assert.equal(n('door'), 1)
     assert.equal(n('chest'), 1)
-    assert.equal(n('gate'), 1)
-    assert.equal(n('fence'), 31) // 9x9 ring minus the gate
+    assert.equal(n('gate'), 2) // pen + field
+    assert.equal(n('fence'), 62) // two 9x9 rings minus their gates
     assert.equal(n('water'), 1)
-    assert.equal(n('farmland'), 80)
+    assert.equal(n('farmland'), 48)
     assert.equal(n('planks'), 21 * 2 + 42) // two wall rings + the roof
     const w = fp.PLAN.findIndex((c) => c.kind === 'water')
     assert.ok(w < fp.PLAN.findIndex((c) => c.kind === 'farmland'), 'water before farmland (hydration)')
+  })
+
+  it('hydrates every farmland cell and closes the field with a fence ring (prod bot2 183->109/199)', () => {
+    const water = fp.PLAN.find((c) => c.kind === 'water')
+    for (const c of fp.PLAN.filter((k) => k.kind === 'farmland')) {
+      assert.ok(Math.max(Math.abs(c.dx - water.dx), Math.abs(c.dz - water.dz)) <= 4 && c.dy === water.dy, `${c.dx},${c.dz} dry`)
+    }
+    const ring = new Set(fp.PLAN.filter((c) => c.phase === 'field' && (c.kind === 'fence' || c.kind === 'gate') && c.dy === 0).map((c) => `${c.dx},${c.dz}`))
+    for (let x = fp.FIELD.x0; x <= fp.FIELD.x1; x++) {
+      for (let z = fp.FIELD.z0; z <= fp.FIELD.z1; z++) {
+        const edge = x === fp.FIELD.x0 || x === fp.FIELD.x1 || z === fp.FIELD.z0 || z === fp.FIELD.z1
+        assert.equal(ring.has(`${x},${z}`), edge, `${x},${z}`)
+      }
+    }
+  })
+
+  it('reports a reverted derived cell once: dry with no water in reach', () => {
+    const w = world()
+    const bot = mockBot(w)
+    const fb = { kind: 'farm', site: { x: 0, y: 64, z: 0 } }
+    const seen = new Set()
+    w.set(19, 63, 1, 'farmland')
+    assert.deepEqual(build.revertedCells(bot, fb, seen), [])
+    w.set(19, 63, 1, 'dirt')
+    const r = build.revertedCells(bot, fb, seen)
+    assert.deepEqual(r.map((x) => `${x.key} ${x.from}->${x.to} why=${x.why}`), ['19,63,1 farmland->dirt why=dry'])
+    assert.deepEqual(build.revertedCells(bot, fb, seen), [])
   })
 
   it('finds a flat site clear of the castle box', () => {
@@ -137,8 +165,8 @@ describe('farm blueprint (qphv.1)', () => {
     assert.ok(logs.some((l) => /^farm site=-?\d+,\d+,-?\d+ cost=[1-9]\d* cut=\d+ fill=\d+ tried=\d+$/.test(l)), logs.find((l) => l.startsWith('farm site')))
     const s = ctx.farmBuild.site
     const at = (dx, dy, dz) => w.blockAt({ x: s.x + dx, y: s.y + dy, z: s.z + dz }).name
-    for (let dx = fp.FIELD.x0; dx <= fp.FIELD.x1; dx++) {
-      for (let dz = fp.FIELD.z0; dz <= fp.FIELD.z1; dz++) {
+    for (let dx = fp.FIELD.x0 + 1; dx < fp.FIELD.x1; dx++) {
+      for (let dz = fp.FIELD.z0 + 1; dz < fp.FIELD.z1; dz++) {
         if (dx !== fp.WATER.dx || dz !== fp.WATER.dz) assert.equal(at(dx, -1, dz), 'farmland', `${dx},${dz}`)
       }
     }
@@ -274,7 +302,8 @@ describe('farmbuild step (qphv.1)', () => {
     assert.equal(at(fp.WATER.dx, -1, fp.WATER.dz), 'water')
     assert.equal(at(fp.GATE.dx, 0, fp.GATE.dz), 'oak_fence_gate')
     assert.equal(at(fp.DOOR.dx, 0, fp.DOOR.dz), 'oak_door')
-    assert.equal(at(18, -1, 0), 'farmland')
+    assert.equal(at(19, -1, 1), 'farmland')
+    assert.equal(at(fp.FIELD_GATE.dx, 0, fp.FIELD_GATE.dz), 'oak_fence_gate')
     assert.equal(ctx.home, house)
     assert.deepEqual(ctx.buildSkip, [7])
     assert.ok(bot.chats.some((m) => m.startsWith('farm done at')))
@@ -467,9 +496,9 @@ describe('farm crop cycle and building blocks (qphv.2)', () => {
     const ctx = { farmBuild: fb }
     const bot = { entity: { position: new Vec3(50, 64, 50) }, blockAt: () => null }
     const blk = (name, x, y, z) => ({ name, position: new Vec3(x, y, z) })
-    assert.equal(denyReason(bot, blk('farmland', 18, 63, 0), ctx), 'protected')
+    assert.equal(denyReason(bot, blk('farmland', 19, 63, 1), ctx), 'protected')
     assert.equal(denyReason(bot, blk('oak_fence', 8, 64, 0), ctx), 'protected')
-    assert.equal(denyReason(bot, blk('dirt', 18, 63, 0), ctx), null) // trampled: the builder re-tills it
+    assert.equal(denyReason(bot, blk('dirt', 19, 63, 1), ctx), null) // trampled: the builder re-tills it
     assert.equal(fp.protects(fb, new Vec3(22, 63, 4), 'water'), true)
     assert.equal(fp.inFieldAt(fb, new Vec3(20, 64, 3)), true)
     assert.equal(fp.inFieldAt(fb, new Vec3(10, 64, 3)), false)
@@ -485,11 +514,12 @@ describe('farm crop cycle and building blocks (qphv.2)', () => {
     const fb = ctx.farmBuild
     assert.equal(fb.built, true)
     const s = fb.site
-    w.set(s.x + 18, s.y - 1, s.z, 'dirt') // trampled
+    w.set(s.x + 19, s.y - 1, s.z + 1, 'dirt') // trampled
     ctx.stepStatus = 'running'
     let logs = await quiet(async () => { for (let t = 0; t < 200 && ctx.stepStatus === 'running'; t++) { farmbuild(bot, ctx); await tick() } })
-    assert.ok(logs.some((l) => l.startsWith(`farm own-dug cell=${s.x + 18},${s.y - 1},${s.z} kind=farmland requeued`)), logs.slice(-5).join('\n'))
-    assert.equal(w.blockAt({ x: s.x + 18, y: s.y - 1, z: s.z }).name, 'farmland')
+    assert.ok(logs.some((l) => l.startsWith(`farm own-dug cell=${s.x + 19},${s.y - 1},${s.z + 1} kind=farmland requeued`)), logs.slice(-5).join('\n'))
+    assert.equal(logs.filter((l) => l === `farm cell reverted ${s.x + 19},${s.y - 1},${s.z + 1} farmland->dirt why=trample`).length, 1, logs.join('\n'))
+    assert.equal(w.blockAt({ x: s.x + 19, y: s.y - 1, z: s.z + 1 }).name, 'farmland')
     assert.equal(fb.built, true)
     // A ripe crop: the built farm is due; the farm step harvests it.
     const at = { x: s.x + 19, y: s.y, z: s.z + 1 }
@@ -592,7 +622,7 @@ describe('derived cells with no base (farmland over air)', () => {
     try {
       for (let t = 0; t < 4000 && ctx.stepStatus === 'running'; t++) {
         const s = ctx.farmBuild && ctx.farmBuild.site
-        if (s && !holed) { holed = s; for (let dx = 18; dx <= 20; dx++) w.set(s.x + dx, s.y - 1, s.z, 'air') } // the field cells' dirt is gone
+        if (s && !holed) { holed = s; for (let dx = 19; dx <= 21; dx++) w.set(s.x + dx, s.y - 1, s.z + 1, 'air') } // the field cells' dirt is gone
         farmbuild(bot, ctx)
         await tick()
       }
@@ -600,6 +630,6 @@ describe('derived cells with no base (farmland over air)', () => {
     assert.ok(holed)
     assert.equal(ctx.stepStatus, 'done', logs.slice(-5).join('\n'))
     assert.ok(!logs.some((l) => l.includes('untillable')), logs.filter((l) => l.includes('skip')).join('\n'))
-    for (let dx = 18; dx <= 20; dx++) assert.equal(w.blockAt({ x: holed.x + dx, y: holed.y - 1, z: holed.z }).name, 'farmland')
+    for (let dx = 19; dx <= 21; dx++) assert.equal(w.blockAt({ x: holed.x + dx, y: holed.y - 1, z: holed.z + 1 }).name, 'farmland')
   })
 })

@@ -58,7 +58,7 @@ describe('structure dig guard', () => {
     util.installDigGuard(bot, { farmBuild: fb, step: 'acquire' })
     const log = console.log
     console.log = () => {}
-    try { await assert.rejects(bot.dig(block('farmland', [18, 63, 0])), /protected/) } finally { console.log = log }
+    try { await assert.rejects(bot.dig(block('farmland', [19, 63, 1])), /protected/) } finally { console.log = log }
     assert.deepStrictEqual(bot.dug, [])
   })
 
