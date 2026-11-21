@@ -595,6 +595,34 @@ const FARM_KINDS = {
 }
 // Derived kind -> the base kind it is made from in place (till/path/strip).
 const BASE_KINDS = { farmland: 'soil' }
+// Derived cells that fell back to their base on their own (farmland -> dirt:
+// dry or trampled; nothing dug it). seen: Set of cell keys once done, kept by
+// the caller; a key is reported once per revert and re-armed when done again.
+function revertedCells(bot, home, seen) {
+  const out = []
+  for (const cell of blueprintFor(home)) {
+    const base = BASE_KINDS[cell.kind]
+    if (!base) continue
+    const p = cellAbs(home, cell)
+    const key = `${p.x},${p.y},${p.z}`
+    const name = blockNameAt(bot, p)
+    if (name == null) continue
+    if (cellDone(bot, home, cell)) { seen.add(key); continue }
+    if (!seen.has(key) || !FARM_KINDS[base](name)) continue
+    seen.delete(key)
+    out.push({ cell, key, from: cell.kind, to: name, why: cell.kind === 'farmland' ? (waterNear(bot, p) ? 'trample' : 'dry') : 'unknown' })
+  }
+  return out
+}
+// Farmland hydration reach: water within 4 horizontally, same level or one up.
+function waterNear(bot, p) {
+  for (let dy = 0; dy <= 1; dy++) {
+    for (let dx = -4; dx <= 4; dx++) {
+      for (let dz = -4; dz <= 4; dz++) if (blockNameAt(bot, p.offset(dx, dy, dz)) === 'water') return true
+    }
+  }
+  return false
+}
 const FILLERS = new Set(['dirt', 'cobblestone', 'cobbled_deepslate', 'stone', 'andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'netherrack', 'coarse_dirt'])
 const FARM_ITEMS = { water: (n) => n === 'water_bucket', farmland: (n) => n.endsWith('_hoe'), soil: (n) => n === 'dirt', ground: (n) => FILLERS.has(n) }
 function wantItem(cell) {
@@ -1577,5 +1605,6 @@ module.exports.SKY_WALK_CAP = SKY_WALK_CAP
 module.exports.CELL_HARD_CAP = CELL_HARD_CAP
 module.exports.FLIGHT_TIMEOUT_MS = FLIGHT_TIMEOUT_MS
 module.exports.houseProgress = houseProgress
+module.exports.revertedCells = revertedCells
 module.exports.wantItem = wantItem
 module.exports.canSourceMaterials = canSourceMaterials

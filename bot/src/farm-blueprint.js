@@ -6,14 +6,15 @@
 //   x 0..6   barn: 7x6, walls 2 high, flat roof, door (3,0,0), chest inside
 //            at (5,0,4); the free interior holds hay bales later;
 //   x 8..16  pen: 9x9 fence ring at ground level, gate at (12,0,0) (.3 keeps animals);
-//   x 18..26 field: 9x9 farmland at dy -1 around one water cell (22,-1,4).
+//   x 18..26 field: 9x9 fence ring + gate (22,0,0), 7x7 farmland at dy -1 inside
+//            around one water cell (22,-1,4).
 // 'clear' cells dig natural ground (bumps, the water pit) and are no work in
 // the progress count; 'farmland' is tilled with a hoe, 'water' poured from a bucket.
 // Site (qphv: prod bot5 failed no-site 49 times on a flat-only rule): the
 // cheapest footprint within RADIUS, graded by prep cells (castle prep
 // pattern: cut above grade, fill below) laid before the barn.
 
-const { PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, inField, protects, inFieldAt } = require('./farm-plan')
+const { PLAN, W, D, DOOR, GATE, FIELD_GATE, WATER, BARN, PEN, FIELD, inField, protects, inFieldAt } = require('./farm-plan')
 
 const survey = require('./structure-site')
 const footprint = { w: W, d: D, needsSoil: inField, omitSoil: (x, z) => x === WATER.dx && z === WATER.dz }
@@ -47,4 +48,4 @@ function prepAt(bot, site) {
   return f.bad ? [] : survey.prepCells(f.cs, site.y, footprint)
 }
 
-module.exports = { prepAt, protects, inFieldAt, PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, siteFor, pickSite, planFor, footprintCost }
+module.exports = { prepAt, protects, inFieldAt, PLAN, W, D, DOOR, GATE, FIELD_GATE, WATER, BARN, PEN, FIELD, siteFor, pickSite, planFor, footprintCost }

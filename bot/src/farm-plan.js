@@ -8,6 +8,7 @@ const W = 27
 const D = 9
 const DOOR = { dx: 3, dz: 0 }
 const GATE = { dx: 12, dz: 0 }
+const FIELD_GATE = { dx: 22, dz: 0 }
 const WATER = { dx: 22, dz: 4 }
 const BARN = { x0: 0, x1: 6, z0: 0, z1: 5 }
 const PEN = { x0: 8, x1: 16, z0: 0, z1: 8 }
@@ -39,9 +40,16 @@ const PLAN = (() => {
   for (let x = FIELD.x0; x <= FIELD.x1; x++) for (let z = FIELD.z0; z <= FIELD.z1; z++) c(x, 0, z, 'clear', 'field')
   c(WATER.dx, -1, WATER.dz, 'clear', 'field')
   c(WATER.dx, -1, WATER.dz, 'water', 'field') // water first: the farmland stays hydrated
+  // farmland only inside the fence ring: every cell <=3 from the water (hydration reach 4)
+  for (let x = FIELD.x0 + 1; x < FIELD.x1; x++) {
+    for (let z = FIELD.z0 + 1; z < FIELD.z1; z++) {
+      if (!(x === WATER.dx && z === WATER.dz)) c(x, -1, z, 'farmland', 'field')
+    }
+  }
+  // fence + gate ring on the field edge: mobs reverted the open field by trampling (prod bot2 183->109/199)
   for (let x = FIELD.x0; x <= FIELD.x1; x++) {
     for (let z = FIELD.z0; z <= FIELD.z1; z++) {
-      if (!(x === WATER.dx && z === WATER.dz)) c(x, -1, z, 'farmland', 'field')
+      if (edge(FIELD, x, z)) c(x, 0, z, x === FIELD_GATE.dx && z === FIELD_GATE.dz ? 'gate' : 'fence', 'field')
     }
   }
   return Object.freeze(plan)
@@ -72,4 +80,4 @@ function inFieldAt(fb, pos) {
   return inField(dx, dz) && dy >= -1 && dy <= 1
 }
 
-module.exports = { PLAN, W, D, DOOR, GATE, WATER, BARN, PEN, FIELD, inField, protects, inFieldAt }
+module.exports = { PLAN, W, D, DOOR, GATE, FIELD_GATE, WATER, BARN, PEN, FIELD, inField, protects, inFieldAt }
