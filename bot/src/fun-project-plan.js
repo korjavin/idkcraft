@@ -15,11 +15,15 @@ function savedProject(project) {
   for (const cell of cells) {
     if (!cell || ![cell.dx, cell.dy, cell.dz].every(Number.isInteger) || !KINDS.has(cell.kind) ||
         (cell.kind === 'block' && (typeof cell.block !== 'string' || !NAME.test(cell.block)))) return null
-    const { dx, dy, dz, kind, phase, block, stand } = cell
-    if (stand && ![stand.dx, stand.dy, stand.dz].every(Number.isInteger)) return null
+    const { dx, dy, dz, kind, phase, block, stand, alternateStands } = cell
+    const validStand = (p) => p && [p.dx, p.dy, p.dz].every(Number.isInteger)
+    const copyStand = ({ dx, dy, dz }) => ({ dx, dy, dz })
+    if (stand && !validStand(stand)) return null
+    if (alternateStands && (!stand || !Array.isArray(alternateStands) || !alternateStands.every(validStand))) return null
     blueprint.push({
       dx, dy, dz, kind, ...(phase === 'prep' ? { phase } : {}), ...(kind === 'block' ? { block } : {}),
-      ...(stand ? { stand: { dx: stand.dx, dy: stand.dy, dz: stand.dz } } : {}),
+      ...(stand ? { stand: copyStand(stand) } : {}),
+      ...(alternateStands ? { alternateStands: alternateStands.map(copyStand) } : {}),
     })
   }
   const { x, y, z, w, d, cost } = site
