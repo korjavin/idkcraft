@@ -1830,11 +1830,24 @@ function noteVisit(bot, ctx, st, now) {
   ctx.tidyLegMs = 0
   if (wasDue) {
     reopenRepairs(bot, ctx, st, true)
-    if (siteLoaded(bot, st)) {
-      const u = upkeep(bot, ctx, st, now)
-      console.log(`castle tidy holes=${u.holes} clutter=${u.clutter} missing=${u.missing}`)
-    }
+    if (siteLoaded(bot, st)) tidyNote(bot, ctx, st, now)
   }
+}
+// One tidy line per change (prod bot3 2026-11-21: thousands of identical
+// lines while upkeepOwed held wasDue true every tick). skipped = upkeep
+// cells retired with a logged reason (castle blocked ... retired); they no
+// longer count as open, so the loop ends on 'castle tidy done'.
+function tidyNote(bot, ctx, st, now) {
+  const u = upkeep(bot, ctx, st, now)
+  const skipped = Object.keys(st.blocked || {}).filter((k) => {
+    const [v, i] = k.split(':')
+    return Number(v) === ver(st) && st.blocked[k] && st.blocked[k].retired && upkeepKind(st, { idx: Number(i) })
+  }).length
+  const line = u.holes || u.clutter
+    ? `castle tidy holes=${u.holes} clutter=${u.clutter} missing=${u.missing} skipped=${skipped}`
+    : `castle tidy done holes=0 skipped=${skipped} clutter=0 missing=${u.missing}`
+  if (ctx.castleTidyLine !== line) console.log(line)
+  ctx.castleTidyLine = line
 }
 
 // Repair re-try (idkcraft-fuja): a retired-but-open plan cell never reaches
@@ -1869,7 +1882,8 @@ function reopenRepairs(bot, ctx, st, transientOnly) {
       const idx = Number(parts[1])
       // A lava-retired decor cell is re-armed too: the lava may have gone.
       const c = cells[idx] || (e.why === 'lava' ? decorOf(st, idx) : null)
-      if (!c) continue // off-plan entries (prep, litter, fill, decor, sill) are someone else's
+      // Off-plan entries are someone else's; the explicit repair also reopens skipped upkeep (litter/fill).
+      if (!c) { if (!transientOnly && upkeepKind(st, { idx })) { delete st.blocked[k]; n++ } continue }
       if (done(bot, c)) continue // healed: pick's prune drops the entry
       if (e.why === 'lava' && lavaNear(bot, c)) continue // still beside lava: stays a reported gap
       // Automatic tidy must not mint a fresh paid recovery budget every
@@ -1911,8 +1925,10 @@ function requeueRetired(bot, ctx, st, now) {
     if (!e || !e.retired) continue
     const [v, i] = String(k).split(':')
     const c = cells[Number(i)]
-    // Off-plan entries (litter, fill, dark) come back on the same bound; pick's prune drops healed ones.
-    if (Number(v) !== ver(st) || (c && done(bot, c))) continue
+    // Skipped upkeep cells (litter/fill) stay skipped (prod bot3 2026-11-21:
+    // 9 holes and the clutter re-queued every 10 min, the tidy never ended);
+    // only 'castle repair' reopens them. Dark cells keep the bound.
+    if (Number(v) !== ver(st) || (c && done(bot, c)) || (!c && upkeepKind(st, { idx: Number(i) }))) continue
     const bound = RETIRED_PERMANENT_RE.test(String(e.why || '')) ? RETIRE_PERMANENT_MS : RETIRE_MS
     if (typeof e.retiredAt !== 'number') { e.retiredAt = now; continue } // legacy/restored entry: the bound starts now
     if (now - e.retiredAt < bound) continue
@@ -2056,7 +2072,11 @@ function menuFact(bot, ctx, now = Date.now()) {
   const st = ctx && ctx.castle
   // A complete castle's loaded read is the upkeep verdict: 'clear' (sweep,
   // fill) keeps the trip owed until a read finds nothing workable.
-  if (st && st.phase === 'complete' && word !== 'tidy' && siteLoaded(bot, st)) st.upkeepOwed = word === 'clear'
+  if (st && st.phase === 'complete' && word !== 'tidy' && siteLoaded(bot, st)) {
+    const was = st.upkeepOwed
+    st.upkeepOwed = word === 'clear'
+    if (was && !st.upkeepOwed && nearSite(bot, st)) tidyNote(bot, ctx, st, now) // the owed upkeep just ended: say done
+  }
   return word
 }
 function menuWord(bot, ctx, now = Date.now()) {

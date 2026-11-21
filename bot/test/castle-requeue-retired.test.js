@@ -61,21 +61,28 @@ describe('castle bounded retirement', () => {
     assert.equal(castle.requeueRetired(bot, ctx, st, now + 20 * 60 * 1000), 0, 'protected: 10 min is not enough')
     assert.equal(castle.requeueRetired(bot, ctx, st, now + 61 * 60 * 1000), 1)
   })
-  it('off-plan retired entries (litter/fill) come back after the bound; upkeepStats counts them', () => {
+  it('skipped upkeep entries (litter/fill) stay skipped past the bound; only castle repair reopens them', () => {
     const { bot } = world()
     const now = Date.now()
     const key = `2:${castle.LITTER_BAND_BASE + 5}`
-    const st = { site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: { [key]: { tries: 3, why: 'unreachable', retired: true, retiredAt: now } } }
+    const fkey = `2:${castle.FILL_BASE + 7}`
+    const st = { site: { ...SITE }, rot: 0, blueprintVersion: V, phase: 'complete', blocked: { [key]: { tries: 3, why: 'unreachable', retired: true, retiredAt: now }, [fkey]: { tries: 3, why: 'unreachable', retired: true, retiredAt: now } } }
     const ctx = {}
-    assert.equal(castle.requeueRetired(bot, ctx, st, now + 60 * 1000), 0)
-    assert.equal(castle.requeueRetired(bot, ctx, st, now + 11 * 60 * 1000), 1)
-    assert.equal(st.blocked[key].retired, false)
+    assert.equal(castle.requeueRetired(bot, ctx, st, now + 11 * 60 * 1000), 0)
+    assert.equal(castle.requeueRetired(bot, ctx, st, now + 24 * 60 * 60 * 1000), 0)
+    assert.equal(st.blocked[key].retired, true)
+    const orig0 = console.log
+    console.log = () => {}
+    try { assert.equal(castle.reopenRepairs(bot, ctx, st, true), 0, 'the hourly tidy return keeps them skipped') } finally { console.log = orig0 }
+    assert.equal(st.blocked[key].retired, true)
     const orig = console.log
     console.log = () => {}
     try {
       const u = castle.upkeepStats(bot, {}, st, now)
       assert.deepEqual(Object.keys(u), ['clutter', 'workable', 'retired', 'backoff'])
       assert.ok(u.workable <= u.clutter)
+      assert.equal(castle.reopenRepairs(bot, ctx, st, false), 2, 'castle repair reopens them')
+      assert.equal(st.blocked[key], undefined)
     } finally { console.log = orig }
   })
 })
