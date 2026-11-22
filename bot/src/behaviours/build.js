@@ -265,6 +265,17 @@ function cellAbs(home, cell) {
   return new Vec3(home.site.x + cell.dx, home.site.y + cell.dy, home.site.z + cell.dz)
 }
 
+function placementStands(bot, home, cell, target) {
+  return [cell.stand, ...(cell.alternateStands || [])].map((p) => cellAbs(home, p)).filter((p) => {
+    if (Math.hypot(p.x - target.x, p.y + 1.1 - target.y, p.z - target.z) >= PLACE_REACH) return false
+    try {
+      const open = (b) => b?.boundingBox === 'empty' && !/^(water|lava|bubble_column|fire|soul_fire)$/.test(b.name)
+      return bot.blockAt(p.offset(0, -1, 0))?.boundingBox === 'block' &&
+        open(bot.blockAt(p)) && open(bot.blockAt(p.offset(0, 1, 0)))
+    } catch (_) { return false }
+  })
+}
+
 // Blueprint invariant (8si): the doorway column and the living rooms are
 // never plank targets — planks walled in there break adopt and churn the
 // rebuild. Checked for planks cells before every placement, not just at
@@ -1192,7 +1203,6 @@ function build(bot, ctx, target, state, acquireMaterial) {
   const plan = blueprintFor(ctx.home)
   let cell = plan[idx]
   let p = cellAbs(ctx.home, cell)
-  const stand = cell.stand && cellAbs(ctx.home, cell.stand)
   if (cell.kind === 'planks' && isDoorwayOrInterior(cell, ctx.home)) {
     skipCell(ctx, idx, p, 'doorway-interior')
     return
@@ -1333,13 +1343,31 @@ function build(bot, ctx, target, state, acquireMaterial) {
 
   let moving = false
   try { moving = bot.pathfinder.isMoving() } catch (_) { /* treat as arrived */ }
+  let stand = null
+  let atStand = false
+  if (cell.stand) {
+    const candidates = placementStands(bot, ctx.home, cell, p)
+    if (candidates.length === 0) {
+      ctx.buildGoalStand = null
+      return
+    }
+    const bp = bot.entity?.position
+    const feet = bp && new Vec3(bp.x, bp.y, bp.z).floored()
+    const here = feet && candidates.find((point) => point.equals(feet))
+    atStand = !!here
+    const previous = ctx.buildGoalIdx === idx ? candidates.findIndex((point) => point.toString() === ctx.buildGoalStand) : -1
+    const retry = previous >= 0 && !moving && ctx.lastPathStatus === 'noPath'
+    stand = here || candidates[retry ? (previous + 1) % candidates.length : Math.max(0, previous)]
+  }
+  const standKey = stand?.toString() || null
   // A bottom-up fill changes target Y while its blueprint index stays fixed.
   const goalY = typeof bot.buildCells === 'function' && FILL_KINDS.has(cell.kind) ? p.y : null
-  if (ctx.buildGoalIdx !== idx || ctx.buildGoalY !== goalY) {
+  if (ctx.buildGoalIdx !== idx || ctx.buildGoalY !== goalY || ctx.buildGoalStand !== standKey) {
     // (Re)approach: GoalPlaceBlock walks into place range of the cell.
     // When the walk ends (!isMoving) the flight below places.
     ctx.buildGoalIdx = idx
     ctx.buildGoalY = goalY
+    ctx.buildGoalStand = standKey
     // The v2 door goes in from the doorstep side (d7i): after the partition
     // the body stands inside, and a door set from in there seals it in (the
     // pathfinder never opens doors). The north wall holds the door, so
@@ -1364,8 +1392,7 @@ function build(bot, ctx, target, state, acquireMaterial) {
 
   // A closure cell may be in reach from inside. Require its outdoor stand
   // before placing so the builder cannot close a room around itself.
-  const bodyPos = bot.entity && bot.entity.position
-  if (stand && (!bodyPos || !stand.equals(Vec3(bodyPos.x, bodyPos.y, bodyPos.z).floored()))) return
+  if (stand && !atStand) return
 
   // At the cell (or the walk never started): place — but only in reach.
   // A preemption that carried the body away (fight, flee, lead, follow me)

@@ -17,7 +17,11 @@ function plan() {
         if (dx !== 0 && dx !== W - 1 && dz !== 1 && dz !== D - 1) continue
         const cell = block(dx, dy, dz)
         if (dx === DOOR_X && dz === 1) {
-          closures.push({ ...cell, stand: { dx, dy: 0, dz: 0 } })
+          closures.push({
+            ...cell,
+            stand: { dx, dy: 0, dz: 0 },
+            alternateStands: [dx - 1, dx + 1].map((x) => ({ dx: x, dy: 0, dz: 0 })),
+          })
         } else {
           cells.push(cell)
         }
