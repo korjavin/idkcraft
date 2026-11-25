@@ -255,8 +255,14 @@ function lightDue(bot, ctx, facts) {
   }
 }
 
+function castlePreparing(ctx) {
+  return ctx.castle?.phase === 'prep' && !ctx.castle.parked
+}
+
 function canAct(facts, bot, ctx, now = Date.now()) {
   if (facts?.time !== 'day' || !ctx || ctx.paused || threatNear(bot)) return false
+  // Site preparation needs uninterrupted travel to its next clearance cell.
+  if (castlePreparing(ctx)) return false
   const ownPin = stallProjectPicked(ctx, now)
   if (facts.pinned && facts.pinned !== 'none' && !(ownPin && facts.pinned === 'fun')) return false
   if (ctx.bring || ctx.lead || ctx.comehome || ctx.gocastle || (ctx.flat && !ctx.flat.parked)) return false
@@ -778,6 +784,7 @@ async function doImprov(bot, ctx, gen, fetchFn) {
 // at pick time, and stepStatus ends the step.
 async function run(bot, ctx) {
   if (!ctx || ctx.funBusy) return
+  if (castlePreparing(ctx)) { stepFailed(ctx, 'castle-prep'); return }
   const why = stallProjectPicked(ctx, Date.now()) ? 'stall' : 'idle'
   if (projects.active(ctx.funProject) || ctx.funProjectIdle || why === 'stall') {
     if (why === 'stall') ctx.funProjectStall = ctx.stallPreempt

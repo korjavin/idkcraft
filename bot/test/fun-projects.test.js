@@ -43,6 +43,18 @@ function register(id, weight, x) {
 register('small', 1, 1)
 register('large', 3, 2)
 
+it('keeps an active side project from walking away during castle preparation', async () => {
+  const bot = body()
+  const ctx = { step: 'fun', stepStatus: 'running' }
+  projects.run(bot, ctx, 'idle', () => 0)
+  await settle()
+  assert.equal(fun.funFeasible({ time: 'day' }, bot, ctx), true)
+  ctx.castle = { phase: 'prep', parked: false }
+  assert.equal(fun.funFeasible({ time: 'day' }, bot, ctx), false)
+  await fun.run(bot, ctx)
+  assert.equal(ctx.stepStatus, 'failed:castle-prep')
+})
+
 it('weights the roll, resumes the same site, and leaves the residence and its skips alone', async (t) => {
   const messages = []
   t.mock.method(console, 'log', (msg) => messages.push(msg))
