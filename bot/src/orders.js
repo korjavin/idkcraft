@@ -18,6 +18,8 @@ const woolMod = require('./behaviours/wool')
 const bedMod = require('./behaviours/bed')
 const bedsMod = require('./behaviours/beds')
 const craftanyMod = require('./behaviours/craftany')
+const deforest = require('./behaviours/deforest')
+const { clearGoal } = require('./behaviours/util')
 const flatMod = require('./behaviours/flat')
 const reforestMod = require('./behaviours/reforest')
 const buildMod = require('./behaviours/build')
@@ -67,6 +69,7 @@ function statusLines(bot, ctx, followName, now = Date.now()) {
   else if (ctx.gocastle) doing = 'Going to the castle'
   else if (ctx.comehome) doing = 'Coming home'
   else if (ctx.bring) doing = `Bringing ${ctx.bring.want || ''} ${ctx.bring.name || ctx.bring.drop || 'items'}`.replace('  ', ' ')
+  else if (ctx.deforest) doing = `Deforesting — cut ${ctx.deforest.cut}, stored ${ctx.deforest.stored} planks`
   else if (ctx.flat) doing = 'Flattening the ground'
   else if (!ctx.work) doing = `Following ${followName || 'you'}`
   else if (!step || step === 'rest') doing = 'Idle — nothing useful to do right now'
@@ -138,6 +141,7 @@ function createOrders(box) {
       clearStuck()
       resetNightStep()
       if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
+      deforest.cancel(bot, ctx)
       ctx.flat = null
       ctx.inShelter = false
       homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the first follow path (jr2.3)
@@ -234,6 +238,7 @@ function createOrders(box) {
       return line
     },
     stop: () => {
+      deforest.cancel(bot, ctx)
       require('./behaviours/food-recovery').invalidate(ctx)
       clearPendingSearch(ctx)
       clearStuck()
@@ -693,6 +698,23 @@ function createOrders(box) {
       } catch (_) { /* no sightings: open the rung below */ }
       bringMod.ensureTool(bot, ctx, o, tool)
       return null
+    },
+    setDeforest: ({ radius, by }) => {
+      if (box.swarmHelper) return flatMod.SWARM_HELPER_LINE
+      if (!Number.isInteger(radius) || radius < 1 || radius > 16) return 'try: deforest 8 (radius 1–16)'
+      if (!bot.registry?.blocksByName || !bot.inventory || ctx.deforestFlight) return 'deforest: bot is busy, try again in a moment'
+      const pos = worker.players(bot)[by]?.entity?.position
+      if (!pos) return "I can't see you — come closer"
+      const center = new Vec3(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z))
+      if (!flatMod.squareLoaded(bot, center.x, center.z, radius, center.y)) return "I can't see the whole clearing — come closer"
+      const job = deforest.prepare(bot, center, radius)
+      if (typeof job === 'string') return job
+      startWork()
+      ctx.comehome = null
+      ctx.unseenTicks = 0
+      clearGoal(bot, ctx)
+      ctx.deforest = job
+      return `clearing trees in a ${2 * radius + 1}x${2 * radius + 1} square around ${center.x},${center.z}`
     },
     setFlat: ({ radius, by, explicit, cx: atX, cz: atZ, relay, feet: relayFeet, level: relayLevel }) => {
       // tpd1: flat <r> <x> <z> — the given column IS the anchor, so every

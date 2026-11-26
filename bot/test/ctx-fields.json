@@ -1043,6 +1043,19 @@
     ],
     "owner": "src/behaviours/deep.js"
   },
+  "deforest": {
+    "writers": [
+      "src/behaviours/deforest.js",
+      "src/orders.js"
+    ],
+    "owner": "src/behaviours/deforest.js"
+  },
+  "deforestFlight": {
+    "writers": [
+      "src/behaviours/deforest.js"
+    ],
+    "owner": "src/behaviours/deforest.js"
+  },
   "deliver": {
     "writers": [
       "src/behaviours/deliver.js"

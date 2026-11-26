@@ -32,6 +32,7 @@ const worker = require('./worker')
 const fightMod = require('./behaviours/fight')
 const retreatMod = require('./behaviours/retreat')
 const bringMod = require('./behaviours/bring')
+const deforest = require('./behaviours/deforest')
 const flatMod = require('./behaviours/flat') // load order + swarm helper flag (tpd1)
 const homeMod = require('./behaviours/home')
 const buildMod = require('./behaviours/build')
@@ -252,7 +253,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   }
   function noteGone() {
     // zchb: a running flat outlives its speaker — no leave streak while it works.
-    if (ctx.flat && !ctx.flat.parked) noteSeen()
+    if (ctx.deforest || (ctx.flat && !ctx.flat.parked)) noteSeen()
     else if (ctx.autonomous) {
       noteStay()
       // prod 2026-11-19: 'follow me'/'flat' outlived the owner and 3 bots idled an hour alone.
@@ -311,6 +312,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     homeMod.releaseMeet(bot, ctx) // inside: the exit legs run before the first work path (jr2.3)
     ctx.gocastle = null
     if (ctx.bring) { metrics.bring.inc({ outcome: 'cancelled', kind: (ctx.bring && ctx.bring.kind) || 'block' }); ctx.bring = null; bringMod.clearSearchLeg(ctx) }
+    deforest.cancel(bot, ctx)
     ctx.flat = null
     ctx.work = true
     ctx.paused = false
@@ -372,7 +374,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
   // restore clears the latch on every join.
   function autoBrain(rosterOnline) {
     // zchb: a running flat works alone too; a pending restore still needs the join edge.
-    if (!ctx.autonomous && !(ctx.flat && !ctx.flat.parked) && !ctx.brainRestore) return
+    if (!ctx.autonomous && !ctx.deforest && !(ctx.flat && !ctx.flat.parked) && !ctx.brainRestore) return
     // 82zl: any paid asker steps down alone (jev or llm tick menus); the
     // local laya engine never steps down, as before.
     if (!rosterOnline && (brainEngine === 'jev' || brainEngine === 'llm') && !ctx.brainRestore) {
@@ -514,12 +516,12 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       // Enclosed (prod 2026-11-15): noPath on 3 distinct targets in 60 s -> open one own-build doorway.
       // A live stall-chooser pick (task.js genericTick) preempts the enclosed/recover reflexes.
       const stallPick = !!(ctx.stallPreempt && ctx.stallPreempt.until > Date.now())
-      if (!urgentFight(state) && !stallPick && enclosed.tick(bot, ctx)) {
+      if (!ctx.deforest && !urgentFight(state) && !stallPick && enclosed.tick(bot, ctx)) {
         console.log(`decision source=escalation action=enclosed sprint=false dist=none ${pathSuffix()}`)
         return { decision: { action: 'enclosed', sprint: false, source: 'escalation' }, calledBrain }
       }
       // u04q: LLM_ESCALATION (v2) gets the stuck/noPath/unreachable step first; off = no-op.
-      if (unstick.tick(bot, ctx, urgentFight(state) || !!(state.hostile && state.hostile_distance < 10))) {
+      if (!ctx.deforest && unstick.tick(bot, ctx, urgentFight(state) || !!(state.hostile && state.hostile_distance < 10))) {
         console.log(`decision source=escalation action=unstick sprint=false dist=none ${pathSuffix()}`)
         return { decision: { action: 'unstick', sprint: false, source: 'escalation' }, calledBrain }
       }
@@ -528,8 +530,8 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         console.log(`decision source=reflex action=loot sprint=false dist=none ${pathSuffix()}`)
         return { decision: { action: 'loot', sprint: false, source: 'reflex' }, calledBrain }
       }
-      unreachable.tick(bot, ctx) // a noPath work goal fails its step now; the arbiter below re-picks
-      if (ctx.stuck && !urgentFight(state) && !stallPick) return await recoverTick(target, state, calledBrain)
+      if (!ctx.deforest) unreachable.tick(bot, ctx) // noPath fails ordinary work; deforest has per-target timeouts
+      if (!ctx.deforest && ctx.stuck && !urgentFight(state) && !stallPick) return await recoverTick(target, state, calledBrain)
       const key = stateKey(state)
       if (lastDecision && key === lastStateKey) {
         decision = lastDecision
@@ -756,7 +758,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
         if (ctx.resumeWork && !followName) startWork()
         ctx.unseenTicks = 0
       }
-    } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring && !(ctx.flat && !ctx.flat.parked) && !ctx.comehome && !ctx.gocastle) {
+    } else if (!target && (rosterOnline || ctx.autonomous) && (!ctx.work || followWaiting) && !ctx.bring && !ctx.deforest && !(ctx.flat && !ctx.flat.parked) && !ctx.comehome && !ctx.gocastle) {
       ctx.unseenTicks = (ctx.unseenTicks || 0) + 1
     } else ctx.unseenTicks = 0
     const homing = (ctx.unseenTicks || 0) >= UNSEEN_HOME_TICKS
@@ -767,7 +769,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
     // out of tracking range while the bot walks.
     // zchb: flat needs nobody online — the owner may disconnect after the order.
     const flatOn = !!(ctx.flat && !ctx.flat.parked)
-    const workAlone = (ctx.work || ctx.bring || flatOn || ctx.comehome || ctx.gocastle) && !target && (rosterOnline || ctx.autonomous || flatOn) && !homing
+    const workAlone = (ctx.work || ctx.bring || flatOn || ctx.deforest || ctx.comehome || ctx.gocastle) && !target && (rosterOnline || ctx.autonomous || flatOn || ctx.deforest) && !homing
     return { target, workAlone }
   }
 
@@ -906,7 +908,7 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       return { decision: { action: 'breath', sprint: false, source: 'reflex' }, calledBrain }
     }
     // Hard-case stuck (ef3) detection lives in stuck.js; routing stays below.
-    stuck.update(bot, ctx)
+    if (!ctx.deforest) stuck.update(bot, ctx)
     // Task stall clock (idkcraft-vmzq.2): before recover and the
     // inShelter/fight short-circuits so recover, fight and shelter time
     // counts toward the stall at tick cadence (verify 02 body-1).
@@ -974,6 +976,10 @@ function createTicker({ bot, brain, tickMs = 1000, idleTickMs = IDLE_TICK_MS, fo
       const bringDist = typeof state.distance_to_player === 'number' ? state.distance_to_player.toFixed(1) : 'none'
       console.log(`decision source=${decision.source} action=bring sprint=${decision.sprint} dist=${bringDist} ${pathSuffix()}`)
       return { decision: { ...decision, action: 'bring' }, calledBrain }
+    }
+    if (ctx.deforest && decision.action !== 'fight') {
+      deforest.tick(bot, ctx, Date.now())
+      return { decision: { ...decision, action: 'deforest' }, calledBrain }
     }
     // Flat is an explicit player order like lead/bring: it owns the body
     // above work, except fight which still preempts. Placed after
@@ -1965,6 +1971,7 @@ function handleDeath(bot, ticker) {
     const ctx = bot && bot._tickerCtx
     if (ctx) {
       require('./behaviours/food-recovery').invalidate(ctx)
+      deforest.cancel(bot, ctx)
       stepMod.nextStepGen(ctx) // oqul.7: an op cut by the death drops its late completion
       ctx.gohome = null
       ctx.stay = null

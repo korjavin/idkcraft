@@ -9,6 +9,7 @@ const { helpReply, lookupCommand, detailLine } = require('./commands')
 const goal = require('./goal')
 const siteMod = require('./site')
 const bringMod = require('./behaviours/bring')
+const deforest = require('./behaviours/deforest')
 const flatMod = require('./behaviours/flat')
 const homeMod = require('./behaviours/home')
 const { denyReason } = require('./behaviours/util')
@@ -370,7 +371,7 @@ function fixTypo(msg) {
   console.log(`chat typo "${msg}" -> "${hits[0]}"`)
   return hits[0]
 }
-const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build farm|build castle(?: \d+)?|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|reforest(?: \d+)?|share|bring me(?: .*)?|make(?: .*)?|craft(?: .*)?)$/
+const OWNER_ORDER = /^(?:stop|follow me|go work|free|lead anyway|come home|go home|go castle|build here|build farm|build castle(?: \d+)?|castle(?: .*)?|find me(?: .*)?|flat(?: .*)?|make flat(?: .*)?|flatten(?: .*)?|deforest(?: \d+)?|reforest(?: \d+)?|share|bring me(?: .*)?|make(?: .*)?|craft(?: .*)?)$/
 // vf8e.17: the `do <step> [count]` grammar. Only grammar-shaped lines take
 // the deterministic verb (a valid one replaces the running plan through
 // installPlan); anything else starting with `do ` (`do you have coal`)
@@ -453,6 +454,7 @@ function handleChat(bot, ticker, username, message, senderUuid) {
     require('./behaviours/food-recovery').invalidate(lctx)
     try { pushOrderLog(lctx, msg) } catch (_) { /* ring best-effort */ }
     llmOrders.cancel(lctx, msg.split(' ')[0])
+    if (!/^deforest(?: |$)/.test(msg)) deforest.cancel(bot, lctx)
   }
   if (msg === 'follow me') {
     if (!ownerOk) return
@@ -768,6 +770,11 @@ function handleChat(bot, ticker, username, message, senderUuid) {
       // vf8e.6: force the planner on any line (A/B against the FSM parse).
       // (owner gate lives inside llmAsk.)
       llmAsk(null, msg.slice(5).trim(), true)
+    } else if (msg === 'deforest' || msg.startsWith('deforest ')) {
+      if (!ownerOk || peerBot) return
+      const m = /^deforest(?:\s+(\d+))?$/.exec(msg)
+      if (!m) bot.chat('try: deforest 8 (radius 1–16)')
+      else if (ticker?.setDeforest) bot.chat(ticker.setDeforest({ radius: Number(m[1] ?? 8), by: playerName }))
     } else if (msg === 'reforest' || /^reforest \d+$/.test(msg)) {
       // idkcraft-rd6q: explicit reforest order — the setReforest handler
       // (orders.js), never the LLM plan path. Strict digits only: other

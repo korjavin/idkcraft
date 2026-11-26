@@ -49,6 +49,7 @@ function pickOwner(ctx) {
   if (!ctx) return 'idle'
   if (ctx.paused) return 'stop'
   if (ctx.breath) return 'breath' // episode latch: the reflex owns while latched
+  if (ctx.deforest) return 'deforest'
   if (ctx.stuck) return 'recover' // fact from the previous tick's stuck.update
   if (ctx.comehome) return 'comehome'
   if (ctx.gocastle) return 'gocastle'
@@ -376,7 +377,7 @@ function movementsFor(owner, bot, ctx, extra) {
   let sprint = false
   let parkour = true
   try {
-    if ((extra && extra.walk) || ctx.deepRan || ctx.intruderFight || gohomeWalk(ctx) || meetDig(ctx) || castleWalk(ctx)) canDig = false
+    if (owner === 'deforest' || (extra && extra.walk) || ctx.deepRan || ctx.intruderFight || gohomeWalk(ctx) || meetDig(ctx) || castleWalk(ctx)) canDig = false
     if (extra && extra.sprint) {
       const bp = bodyPos(bot)
       const nodes = ctx.lastPathNodes

@@ -27,6 +27,7 @@ const COMMANDS = [
   { names: ['make', 'craft'], usage: 'make me a <tool>', what: 'makes a stone tool from pack or chest (iron only when asked) and equips it', example: 'make me a stone hoe' },
   { names: ['autonomous'], usage: 'autonomous on|off', what: 'stay and work with nobody online (free brain only)', example: 'autonomous on' },
   { names: ['share'], usage: 'share', what: 'hands over everything carried except tools, weapons, armour and 32 support blocks', example: 'share' },
+  { names: ['deforest'], usage: 'deforest [radius]', what: 'cuts nearby trees and stores the crafted planks in chests', example: 'deforest 8' },
   { names: ['flat', 'make flat', 'flatten'], usage: 'flat [radius] [x z]', what: 'fills holes and shaves bumps around you (or around column x z) to level ground', example: 'flat 16' },
   { names: ['reforest'], usage: 'reforest [count]', what: 'beats nearby leaves and plants the saplings, count times (deterministic, no LLM call)', example: 'reforest 3' },
   { names: ['farm'], usage: 'farm [count]', what: 'tills soil, plants seeds, harvests wheat and carries it to sheep, count times (deterministic, no LLM call)', example: 'farm 3' },
