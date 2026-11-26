@@ -934,4 +934,4 @@ function relay(ctx, b) {
 }
 
 
-module.exports = { structureOwner, installDigGuard, BUILT_ONLY, breakable, COST, OK, stuckDeny, stuckRefusal, stuckCost, recoverNote, relay, KEEP, SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
+module.exports = { isTreeLog, structureOwner, installDigGuard, BUILT_ONLY, breakable, COST, OK, stuckDeny, stuckRefusal, stuckCost, recoverNote, relay, KEEP, SAY_SAME_MS, say, clearGoal, issueGoal, botPos, isInside, atPos, canBreak, denyReason, logDeny, trackPlaced, installPlaceTiming, CLEAR_FLORA, NATURAL_SOLID, farmDiggable, submergedAt, solidBelow, protectedReason, castleProtects, castleClears, RELOCATE, doorOpen, doorLaneDX, DOOR_LANE_DX, isOwnPlaced, inHouseFootprint, isInteractRef, yardDigBan, isWetDigName }
