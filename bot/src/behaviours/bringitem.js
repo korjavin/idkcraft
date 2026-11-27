@@ -1929,8 +1929,8 @@ function capByLive(items, live) {
 // what actually left; an empty toss refuses like the single-drop path.
 // Item orders (did.1) toss their own list, capped the same way. A single
 // piece reads singular ('here is 1 white_bed', did.4).
-// vf8e.25.7: a toss flies where the bot looks (vanilla throw), so face the
-// recipient's eyes first; a recipient out of sight leaves the aim unchanged.
+// Existing bodies face the recipient before tossing. An updated bridge also
+// sends the live aim on the same tick as its throw.
 async function faceRecipient(bot, o) {
   try {
     const p = require('../worker').players(bot)[o && o.by]
@@ -1939,6 +1939,16 @@ async function faceRecipient(bot, o) {
     // mineflayer sends the look with the next position packet: let it go out first.
     if (process.env.BOT_BODY !== 'baritone' && typeof bot.waitForTicks === 'function') await bot.waitForTicks(1)
   } catch (_) { /* aim best-effort */ }
+}
+
+function tossToRecipient(bot, ctx, o, id, count) {
+  if (process.env.BOT_BODY !== 'baritone') return bot.toss(id, null, count)
+  return bot.toss(id, null, count, () => {
+    if (ctx.bring !== o) return null
+    const recipient = require('../worker').players(bot)[o.by]?.entity
+    if (!Number.isInteger(recipient?.id)) throw new Error('toss recipient unavailable')
+    return recipient.id
+  })
 }
 
 function shareToss(bot, ctx, o) {
@@ -1972,12 +1982,15 @@ function shareToss(bot, ctx, o) {
         try { have = countItems(bot, (n) => n === item.name) } catch (_) { have = 0 }
         const n = Math.min(have, item.count)
         if (n <= 0) continue
+        let attempted = false
         try {
-          await bot.toss(id, null, n)
-          if (v2 && ctx.bring !== o) break
-          if (v2) tossed += Math.min(n, Math.max(0, have - countItems(bot, (name) => name === item.name)))
-          got.push(`${n} ${item.name}`)
-        } catch (_) { /* next item */ }
+          await tossToRecipient(bot, ctx, o, id, n)
+          attempted = true
+        } catch (_) { /* an earlier stack may have been tossed before this refusal */ }
+        if (v2 && ctx.bring !== o) break
+        const decrease = v2 ? Math.min(n, Math.max(0, have - countItems(bot, (name) => name === item.name))) : 0
+        tossed += decrease
+        if (attempted || decrease > 0) got.push(`${attempted ? n : decrease} ${item.name}`)
       }
     } finally {
       o.tossInFlight = false
@@ -1988,12 +2001,13 @@ function shareToss(bot, ctx, o) {
       return
     }
     const one = got.length === 1 && /^1 \S/.test(got[0])
-    say(bot, `${isItem ? (one ? 'here is' : 'here are') : 'shared:'} ${got.join(', ')}`)
+    say(bot, `${v2 ? 'attempted to toss' : isItem ? (one ? 'here is' : 'here are') : 'shared:'} ${got.join(', ')}`)
     done(bot, ctx, v2 ? { tossed, by: o.by } : null)
   })()
 }
 
 module.exports.faceRecipient = faceRecipient
+module.exports.tossToRecipient = tossToRecipient
 module.exports.parseToolRequest = parseToolRequest
 module.exports.isToolName = isToolName
 module.exports.ensureTool = ensureTool

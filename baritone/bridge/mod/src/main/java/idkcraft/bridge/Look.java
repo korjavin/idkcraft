@@ -279,7 +279,7 @@ public final class Look {
     }
 
     /** Mineflayer radians -> notch degrees, applied to body + head. */
-    private static void applyLook(LocalPlayer player, double yawRad, double pitchRad) {
+    static void applyLook(LocalPlayer player, double yawRad, double pitchRad) {
         float notchYaw = (float) LookMath.notchYawDeg(yawRad);
         float notchPitch = (float) LookMath.notchPitchDeg(pitchRad);
         player.setYRot(notchYaw);

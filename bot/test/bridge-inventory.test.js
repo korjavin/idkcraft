@@ -131,6 +131,37 @@ describe('bridge inventory fold (idkcraft-neuc.8)', () => {
     await assert.rejects(() => bot.toss(id('netherite_sword'), null, 1), /Can't find/)
   })
 
+  it('passes the current recipient to each aimed toss slot and caps the count', async () => {
+    transport.state.inventory.push({ slot: 20, name: 'cobblestone', count: 4 })
+    await bot.refresh()
+    const calls = []
+    const call = transport.call.bind(transport)
+    transport.call = (method, params) => {
+      if (method === 'inventory.toss') calls.push(params)
+      return call(method, params)
+    }
+    await bot.toss(id('cobblestone'), null, 7, () => 42)
+    assert.deepEqual(calls, [{ slot: 10, count: 5, recipientId: 42 }, { slot: 20, count: 2, recipientId: 42 }])
+    await bot.toss(id('cobblestone'), null, 1)
+    assert.deepEqual(calls.at(-1), { slot: 20, count: 1 })
+  })
+
+  it('checks order liveness before each aimed toss slot', async () => {
+    transport.state.inventory.push({ slot: 20, name: 'cobblestone', count: 4 })
+    await bot.refresh()
+    let current = true
+    const call = transport.call.bind(transport)
+    transport.call = async (method, params) => {
+      const snap = await call(method, params)
+      if (method === 'inventory.toss') current = false
+      return snap
+    }
+    await bot.toss(id('cobblestone'), null, 7, () => current ? 42 : null)
+    assert.equal(bot.inventory.count(id('cobblestone')), 4)
+    await bot.toss(id('cobblestone'), null, 4, () => null)
+    assert.equal(bot.inventory.count(id('cobblestone')), 4)
+  })
+
   it('equip errors mirror mineflayer and equip is defined before spawn', async () => {
     assert.equal(typeof bot.equip, 'function')
     await assert.rejects(() => bot.equip(null, 'hand'),

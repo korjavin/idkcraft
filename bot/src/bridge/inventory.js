@@ -379,7 +379,7 @@ function installInventory(bot) {
     if (r) applyInventory(bot, r)
   })
 
-  bot.toss = (itemType, metadata, count) => enqueue(bot, async () => {
+  bot.toss = (itemType, metadata, count, resolveRecipient) => enqueue(bot, async () => {
     let remaining = typeof count === 'number' && count > 0 ? Math.floor(count) : Infinity
     const stacks = bot.inventory.items().filter((it) => it &&
       (typeof itemType === 'string' ? it.name === itemType : it.type === itemType) &&
@@ -391,7 +391,14 @@ function installInventory(bot) {
     for (const stack of stacks) {
       if (remaining <= 0) break
       const n = Math.min(remaining, stack.count)
-      const r = await transport.call('inventory.toss', { slot: stack.slot, count: n })
+      const params = { slot: stack.slot, count: n }
+      if (resolveRecipient) {
+        // The bring order can be cancelled while queued or between stacks.
+        const recipientId = resolveRecipient()
+        if (recipientId === null) return
+        params.recipientId = recipientId
+      }
+      const r = await transport.call('inventory.toss', params)
       if (r) applyInventory(bot, r)
       remaining -= n
     }

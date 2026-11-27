@@ -16,11 +16,15 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Inventory surface (idkcraft-neuc.8).
@@ -31,7 +35,7 @@ import net.minecraft.world.item.enchantment.Enchantment;
  * 36-44 hotbar, 45 offhand);
  * {@code inventory.select {hotbar}}; {@code inventory.equip {slot,dest}}
  * (dest: hand|off-hand|head|torso|legs|feet, or a numeric slot for the
- * adapter's unequip move); {@code inventory.toss {slot,count}}.
+ * adapter's unequip move); {@code inventory.toss {slot,count,recipientId?}}.
  * Notification: {@code inventory.update {slot,item|null,selected}} per
  * changed slot, diffed per client tick.
  *
@@ -47,6 +51,7 @@ import net.minecraft.world.item.enchantment.Enchantment;
 public final class Inventory {
     private static final Gson GSON = new GsonBuilder().serializeNulls().create();
     private static final long OP_WAIT_MS = 3000;
+    private static final double BRING_REACH_SQUARED = 2.5 * 2.5;
 
     private static final Map<String, Integer> DEST_SLOTS = Map.of(
             "head", 5, "torso", 6, "legs", 7, "feet", 8, "off-hand", 45);
@@ -248,6 +253,9 @@ public final class Inventory {
         if (client.gameMode == null) {
             throw new Rpc.RpcException(Rpc.NOT_IN_WORLD, "no game mode");
         }
+        if (params.has("recipientId")) {
+            aimToss(client, player, requiredInt(params, "recipientId"));
+        }
         if (count >= stack.getCount()) {
             // THROW button 1 = drop the whole stack (vanilla Ctrl+Q).
             client.gameMode.handleContainerInput(menu.containerId, slot, 1, ContainerInput.THROW, player);
@@ -258,6 +266,23 @@ public final class Inventory {
         }
         rebuildSnapshot(player);
         return snapshotJson();
+    }
+
+    private static void aimToss(Minecraft client, LocalPlayer player, int recipientId)
+            throws Rpc.RpcException {
+        Entity recipient = client.level.getEntity(recipientId);
+        if (!(recipient instanceof Player) || recipient == player || !recipient.isAlive()) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "toss recipient unavailable");
+        }
+        // Match the bring return gate against the live positions on this tick.
+        if (player.distanceToSqr(recipient) > BRING_REACH_SQUARED) {
+            throw new Rpc.RpcException(Rpc.INVALID_PARAMS, "toss recipient out of reach");
+        }
+        Vec3 delta = recipient.getEyePosition().subtract(player.getEyePosition());
+        Look.applyLook(player, Math.atan2(-delta.x, -delta.z), Math.atan2(delta.y, Math.hypot(delta.x, delta.z)));
+        // As for oriented placement, send rotation before the server judges the click.
+        player.connection.send(new ServerboundMovePlayerPacket.Rot(
+                player.getYRot(), player.getXRot(), player.onGround(), player.horizontalCollision));
     }
 
     private int destSlot(LocalPlayer player, JsonObject params) throws Rpc.RpcException {
