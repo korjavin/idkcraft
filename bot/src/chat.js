@@ -57,7 +57,8 @@ function resSubmerged(bot, ctx, res) {
 // completion build the same order and announce the honest distance.
 function startBlockOrder(bot, ctx, { name, want, by, self }, res) {
   if (!bringMod.isBringable(res.name)) return `can't bring ${res.name} — ores and logs only`
-  if (bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
+  // V2 prepares the required tool in the bring executor before digging.
+  if (process.env.BOT_BODY !== 'baritone' && bringMod.needsPickaxe(res.name) && !bringMod.hasPickaxe(bot, res.name)) {
     return bringMod.tierRefusal(bot, res.name)
   }
   // The chat-time commit bypassed the bring-loop submerged skips — a wet
