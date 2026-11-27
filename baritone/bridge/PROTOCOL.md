@@ -491,7 +491,7 @@ constructor — before `spawn`, so `reflexes.installEquipGuard` can wrap
 | `inventory.get` | — | `{selected, slots:[{slot,name,count,damage,maxDamage,enchantments:[{name,level}],customName}]}` (non-empty slots only) | `bot.inventory` window |
 | `inventory.select` | `{hotbar:0..8}` | snapshot as above | `bot.setQuickBarSlot` / `quickBarSlot` |
 | `inventory.equip` | `{slot,dest:hand\|off-hand\|head\|torso\|legs\|feet}` (dest may be a numeric slot — the adapter's unequip move) | snapshot as above | `bot.equip`/`bot.unequip` |
-| `inventory.toss` | `{slot,count}` | snapshot as above | `bot.toss`/`bot.tossStack` |
+| `inventory.toss` | `{slot,count,recipientId?}` | client inventory snapshot | `bot.toss`/`bot.tossStack`; an optional recipient must be a live player within 2.5 blocks. The bridge sends the live recipient-facing rotation before the throw. |
 
 Event: `inventory.update {slot,item:{...}|null,selected}` per changed slot
 (diffed per client tick; `item` carries the same fields as a `slots` entry).

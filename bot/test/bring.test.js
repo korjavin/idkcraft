@@ -703,13 +703,19 @@ describe('vf8e.25.7 single-drop toss faces the recipient', () => {
     assert.deepEqual(seq[t - 1], ['look', 30, 64 + 1.8 * 0.9, 0])
     assert.deepEqual(bot.tossCalls, [[ITEMS.coal, null, 3]])
   })
-  it('v2: an order replaced while turning tosses nothing', async () => {
+  it('v2: aims the drop at the current recipient and cancels before the queued toss', async () => {
     const prev = process.env.BOT_BODY
     process.env.BOT_BODY = 'baritone'
     const atReturn = (cancel) => {
       const bot = mockBot({ items: [{ name: 'coal', count: 3 }], playerPos: eyePos(30, 64, 0) })
       bot.entity.position = pos(31, 64, 0)
-      bot.lookAt = async () => { if (cancel) bot._tickerCtx.bring = null }
+      bot.players.P.entity.id = 42
+      const toss = bot.toss
+      bot.toss = async (id, metadata, count, recipient) => {
+        if (cancel) bot._tickerCtx.bring = null
+        assert.equal(recipient(), cancel ? null : 42)
+        if (!cancel) return toss(id, metadata, count)
+      }
       bot._tickerCtx = { lastGoalKey: '', bring: { name: 'coal', want: 3, by: 'P', block: 'coal_ore', drop: 'coal', pos: null, phase: 'return', stalls: 0, lastPos: null, have: 3, announced: true } }
       return bot
     }

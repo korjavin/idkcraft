@@ -2532,10 +2532,18 @@ async function bring(bot, ctx, target, state) {
           await itemMod.faceRecipient(bot, o)
           if (v2 && ctx.bring !== o) return
           const before = v2 ? countDrop(bot, o.drop) : 0
-          await bot.toss(id, null, n)
+          let attempted = false
+          try {
+            await itemMod.tossToRecipient(bot, ctx, o, id, n)
+            attempted = true
+          } catch (_) { /* an earlier stack may have been tossed before this refusal */ }
           if (v2 && ctx.bring !== o) return
           const tossed = v2 ? Math.min(n, Math.max(0, before - countDrop(bot, o.drop))) : 0
-          say(bot, `here ${n === 1 ? 'is' : 'are'} ${n} ${o.drop}`)
+          if (!attempted && tossed === 0) {
+            refuse(bot, ctx, `could not toss ${o.drop}`)
+            return
+          }
+          say(bot, `${v2 ? 'attempted to toss' : n === 1 ? 'here is' : 'here are'} ${attempted ? n : tossed} ${o.drop}`)
           done(bot, ctx, v2 ? { tossed, item: o.drop, by: o.by } : null)
         } catch (_) {
           if (!v2 || ctx.bring === o) refuse(bot, ctx, `could not toss ${o.drop}`)

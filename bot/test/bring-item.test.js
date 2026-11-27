@@ -509,25 +509,49 @@ describe('vf8e.25.7 toss faces the recipient', () => {
     assert.deepEqual(seq.slice(0, 2), [['look', 30, 64 + 1.8 * 0.9, 0], ['toss']])
     assert.ok(bot.lines.includes('here are 5 dirt'), `lines: ${bot.lines}`)
   })
-  it('v2: an order replaced while turning tosses nothing', async () => {
+  it('v2: aims each item at the current recipient and cancels before the queued toss', async () => {
     const prev = process.env.BOT_BODY
     process.env.BOT_BODY = 'baritone'
     try {
       const ctl = mockBot({ chest: [{ name: 'dirt', count: 40 }], playerPos: eyePos(30, 64, 0) })
-      ctl.lookAt = async () => {}
+      ctl.players.P.entity.id = 42
+      const toss = ctl.toss
+      ctl.toss = async (id, metadata, count, recipient) => {
+        assert.equal(recipient(), 42)
+        return toss(id, metadata, count)
+      }
       const ctlTicker = tickerFor(ctl)
       chestHome(ctl._tickerCtx)
       handleChat(ctl, ctlTicker, 'P', 'bring me dirt 5')
       await drive(ctl, ctl._tickerCtx)
       assert.deepEqual(ctl.tossCalls, [[ITEMS.dirt, null, 5]], 'v2 control reaches the toss')
       const bot = mockBot({ chest: [{ name: 'dirt', count: 40 }], playerPos: eyePos(30, 64, 0) })
-      bot.lookAt = async () => { bot._tickerCtx.bring = null }
+      bot.players.P.entity.id = 42
+      bot.toss = async (_id, _metadata, _count, recipient) => {
+        bot._tickerCtx.bring = null
+        assert.equal(recipient(), null)
+      }
       const ticker = tickerFor(bot)
       chestHome(bot._tickerCtx)
       handleChat(bot, ticker, 'P', 'bring me dirt 5')
       await drive(bot, bot._tickerCtx)
       assert.deepEqual(bot.tossCalls, [])
-      assert.ok(!bot.lines.includes('here are 5 dirt'), `lines: ${bot.lines}`)
+      assert.ok(!bot.lines.includes('attempted to toss 5 dirt'), `lines: ${bot.lines}`)
+
+      const partial = mockBot({ chest: [{ name: 'dirt', count: 40 }], playerPos: eyePos(30, 64, 0) })
+      partial.players.P.entity.id = 42
+      partial.toss = async (_id, _metadata, _count, recipient) => {
+        assert.equal(recipient(), 42)
+        partial._items[0].count -= 2 // the first slot RPC applied its snapshot
+        partial.players.P.entity = null
+        recipient() // the second slot refuses to throw without the recipient
+      }
+      const partialTicker = tickerFor(partial)
+      chestHome(partial._tickerCtx)
+      handleChat(partial, partialTicker, 'P', 'bring me dirt 5')
+      await drive(partial, partial._tickerCtx)
+      assert.equal(partial._tickerCtx.bringEnd.tossed, 2)
+      assert.ok(partial.lines.includes('attempted to toss 2 dirt'), `lines: ${partial.lines}`)
     } finally {
       if (prev === undefined) delete process.env.BOT_BODY
       else process.env.BOT_BODY = prev
