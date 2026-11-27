@@ -940,7 +940,7 @@ function unparkTask(ctx, o) {
 
 // Called only at a step boundary, never once per tick. A cancelled or
 // replaced order cannot install a late response into the new order.
-function replanBring(bot, ctx, o, observation) {
+function replanBring(bot, ctx, o, observation, { rootSelfNeed = false } = {}) {
   const g = o.bringGoal
   if (!g || o.replanning || ctx.llmOrder !== o) return
   // 8hpy.2: a JEV-picked need never asks the LLM; it fails (tried in the episode).
@@ -964,6 +964,16 @@ function replanBring(bot, ctx, o, observation) {
   g.repeats = g.repeats || {}
   g.repeats[signature] = (g.repeats[signature] || 0) + 1
   if (g.repeats[signature] >= 3) {
+    // A player goal can still have an executable bring after the model
+    // repeatedly asks for the root as its own prerequisite.
+    if (rootSelfNeed && !g.rootAttempted) {
+      o.steps = [{ step: 'bring', item: g.item, count: g.remaining }]
+      o.i = 0
+      o.cur = null
+      o.waitAt = null
+      console.log(`llm order fallback step=${label(o.steps[0])} reason=root self-need`)
+      return
+    }
     o.bringGoal = null
     return end(bot, ctx, o, 'failed:no progress')
   }
@@ -1031,7 +1041,10 @@ function startStep(bot, ctx, o, s, now) {
     const g = o.bringGoal
     // vf8e.25.6: name which rule refused the need (real haiku re-needed the current goal 6x on "cycle or depth limit").
     const top = g.stack[g.stack.length - 1]
-    if (top && top.item === s.item) return replanBring(bot, ctx, o, `cannot add ${s.item}: it is already the current goal; need one missing input of it, or ${g.stack.length > 1 ? 'acquire' : 'bring'} it`)
+    if (top && top.item === s.item) {
+      const playerRoot = g.stack.length === 1 && !g.self
+      return replanBring(bot, ctx, o, `cannot add ${s.item}: it is already the current goal; need one missing input of it, or ${playerRoot ? 'bring' : 'acquire'} it`, { rootSelfNeed: playerRoot })
+    }
     if (g.stack.some((x) => x.item === s.item)) return replanBring(bot, ctx, o, `cannot add ${s.item}: cycle (already on the goal stack)`)
     if (g.stack.length >= BRING_DEPTH) return replanBring(bot, ctx, o, `cannot add ${s.item}: depth limit ${BRING_DEPTH}`)
     if (heldItem(bot, s.item) >= s.count) return replanBring(bot, ctx, o, `already holding ${s.count} ${s.item}`)
@@ -1060,6 +1073,7 @@ function startStep(bot, ctx, o, s, now) {
   if (o.choose && !order && !candidateFeasible(bot, ctx, s)) return end(bot, ctx, o, missWhy(bot, ctx, o, s) || 'failed:not possible now')
   o.cur = { at: now, gen: stepGen(ctx), seen: false, status: null, miss: 0, led: false }
   if (order) {
+    if (o.bringGoal && s.step === 'bring') o.bringGoal.rootAttempted = true
     // Accepted = the line created (or resumed) its own executor; an
     // unrelated order already running is not this step's (codex P2).
     const before = { bring: ctx.bring, lead: ctx.lead, ps: ctx.pendingSearch, flat: ctx.flat, parked: !!(ctx.flat && ctx.flat.parked) }

@@ -447,19 +447,20 @@ describe('llm orders: flag on', () => {
     }
   })
 
-  it('v2 stops a repeated prerequisite cycle without spending calls forever', async () => {
+  it('v2 stops a repeated nested prerequisite cycle without a bring fallback', async () => {
     const prev = process.env.BOT_BODY
     process.env.BOT_BODY = 'baritone'
     try {
       const bot = mockBot([{ name: 'torch', count: 1 }])
       const ticker = tickerFor(bot)
       const ctx = bot._tickerCtx
-      answer = '{"plan":[{"step":"need","item":"torch","count":1}]}'
+      answer = '{"plan":[{"step":"need","item":"stick","count":1}]}'
       handleChat(bot, ticker, 'P', 'bring me torch 1')
       await flush()
-      for (let i = 0; i < 3; i++) { llmOrders.tick(bot, ctx); await flush() }
+      for (let i = 0; i < 4; i++) { llmOrders.tick(bot, ctx); await flush() }
       assert.equal(ctx.llmOrder, null)
-      assert.equal(calls.length, 3)
+      assert.ok(!ctx.bring)
+      assert.equal(calls.length, 4)
       assert.ok(bot.lines.some((line) => line.includes('no progress')))
     } finally {
       if (prev === undefined) delete process.env.BOT_BODY
@@ -1620,6 +1621,75 @@ describe('llm orders: real-model bring reply shapes (vf8e.25.5)', () => {
     try { await fn() } finally { if (prev === undefined) delete process.env.BOT_BODY; else process.env.BOT_BODY = prev }
   }
   const bring = { bring: true }
+
+  const needBucket = '{"plan":[{"step":"need","item":"bucket","count":1}]}'
+
+  it('gives a repeated root self-need one normal bring attempt and feeds back its refusal', async () => v2(async () => {
+    const bot = mockBot([{ name: 'bucket', count: 3 }])
+    bot.registry.itemsByName.bucket = { id: 9 }
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = needBucket
+    handleChat(bot, ticker, 'P', 'bring me bucket 2')
+    await flush()
+    for (let i = 0; i < 3; i++) { llmOrders.tick(bot, ctx); await flush() }
+    assert.equal(calls.length, 3)
+    assert.match(calls[2].messages[0].content, /cannot add bucket: it is already the current goal/)
+    assert.ok(!ctx.bring, 'fallback waits for normal dispatch')
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.bring?.name, 'bucket')
+    assert.equal(ctx.bring.want, 2)
+    assert.equal(ctx.bring.by, 'P')
+    bringbase.refuse(bot, ctx, 'recipient is unreachable')
+    llmOrders.tick(bot, ctx)
+    await flush()
+    assert.equal(calls.length, 4)
+    assert.match(calls[3].messages[0].content, /bring bucket 2: failed:refused \(recipient is unreachable\)/)
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.llmOrder, null)
+    assert.equal(ctx.bring, null)
+    assert.equal(calls.length, 4)
+  }))
+
+  it('does not grant a fallback after a prior root bring attempt', async () => v2(async () => {
+    const bot = mockBot([{ name: 'bucket', count: 1 }])
+    bot.registry.itemsByName.bucket = { id: 9 }
+    const ticker = tickerFor(bot)
+    const ctx = bot._tickerCtx
+    answer = '{"plan":[{"step":"bring","item":"bucket","count":1}]}'
+    handleChat(bot, ticker, 'P', 'bring me bucket 1')
+    await flush()
+    llmOrders.tick(bot, ctx)
+    assert.equal(ctx.bring?.name, 'bucket')
+    bringbase.refuse(bot, ctx, 'recipient is unreachable')
+    answer = needBucket
+    llmOrders.tick(bot, ctx)
+    await flush()
+    for (let i = 0; i < 3; i++) { llmOrders.tick(bot, ctx); await flush() }
+    assert.equal(ctx.llmOrder, null)
+    assert.equal(ctx.bring, null)
+    assert.equal(calls.length, 4)
+  }))
+
+  it('drops a queued root fallback on stop or a replacement order', async () => v2(async () => {
+    for (const command of ['stop', 'bring me coal 1']) {
+      const bot = mockBot([{ name: 'bucket', count: 1 }, { name: 'coal', count: 1 }])
+      bot.registry.itemsByName.bucket = { id: 9 }
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      answer = needBucket
+      handleChat(bot, ticker, 'P', 'bring me a bucket')
+      await flush()
+      for (let i = 0; i < 3; i++) { llmOrders.tick(bot, ctx); await flush() }
+      assert.deepEqual(ctx.llmOrder?.steps, [{ step: 'bring', item: 'bucket', count: 1 }])
+      answer = '{"plan":[]}'
+      handleChat(bot, ticker, 'P', command)
+      await flush()
+      llmOrders.tick(bot, ctx)
+      assert.equal(ctx.llmOrder, null, command)
+      assert.equal(ctx.bring?.name, command === 'stop' ? undefined : 'coal', command)
+    }
+  }))
 
   it('a step written as need(item,count) that agrees with its fields is the bare need step', () => {
     const r = llmOrders.validatePlan({ plan: [{ step: 'need(stick,2)', item: 'stick', count: 2 }] }, [], bring)
