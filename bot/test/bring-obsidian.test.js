@@ -9,7 +9,7 @@ const assert = require('node:assert/strict')
 const bring = require('../src/behaviours/bring')
 const obsidian = require('../src/behaviours/obsidian')
 const { dropFor, needsPickaxe, hasPickaxe, requiredTier } = require('../src/behaviours/bring')
-const { handleChat, createTicker } = require('../src/index')
+const { handleChat, createTicker, advancePendingSearch } = require('../src/index')
 
 function pos(x, y, z) {
   const p = {
@@ -89,6 +89,15 @@ function tickerFor(bot) {
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve))
+
+function setBody(t, body) {
+  const previous = process.env.BOT_BODY
+  process.env.BOT_BODY = body
+  t.after(() => {
+    if (previous === undefined) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = previous
+  })
+}
 
 describe('obsidian data module (idkcraft-6ci5.1)', () => {
   it('matches only the single-name obsidian family', () => {
@@ -300,7 +309,8 @@ describe('bring me obsidian rig (pre-placed obsidian + diamond pick)', () => {
     assert.ok(!bot._tickerCtx.bring, 'no order created')
   })
 
-  it('no pick: bare diamond tier refusal, no order', () => {
+  it('v1 no pick: bare diamond tier refusal, no order', (t) => {
+    setBody(t, 'mineflayer')
     const bot = mockBot({
       spots: [pos(2, 64, 0)],
       names: { '2,64,0': 'obsidian' },
@@ -312,4 +322,37 @@ describe('bring me obsidian rig (pre-placed obsidian + diamond pick)', () => {
     assert.deepEqual(bot.lines, ['need a diamond pickaxe for obsidian'])
     assert.ok(!bot._tickerCtx.bring, 'no order created')
   })
+})
+
+describe('v2 obsidian tool preparation from chat', () => {
+  for (const [source, x] of [['nearby', 2], ['far', 60]]) {
+    it(`prepares the required pick for a ${source} block before digging`, async (t) => {
+      setBody(t, 'baritone')
+      const ore = pos(x, 64, 0)
+      const bot = mockBot({
+        spots: [ore],
+        names: {
+          [`${x},64,0`]: 'obsidian',
+          [`${x},63,0`]: 'stone',
+          '48,64,0': 'stone', '96,64,0': 'stone',
+        },
+        items: [{ name: 'iron_pickaxe', count: 1 }, { name: 'diamond', count: 3 }, { name: 'stick', count: 2 }],
+        playerPos: pos(0, 64, 1),
+      })
+      const ticker = tickerFor(bot)
+      const ctx = bot._tickerCtx
+      handleChat(bot, ticker, 'P', 'bring me obsidian 1')
+      if (source === 'far') {
+        assert.ok(ctx.pendingSearch, 'the order entered far search')
+        for (let i = 0; i < 30 && ctx.pendingSearch; i++) await advancePendingSearch(bot, ticker, ctx)
+      }
+      const order = ctx.bring
+      assert.equal(order?.kind, 'block')
+      assert.equal(order.pos.x, x)
+      bot.entity.position = pos(x - 1, 64, 0)
+      for (let i = 0; i < 4 && !order.toolPrep; i++) await bring(bot, ctx)
+      assert.equal(order.toolPrep?.order.name, 'diamond_pickaxe')
+      assert.equal(bot.digCalls, 0)
+    })
+  }
 })
