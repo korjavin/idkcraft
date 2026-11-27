@@ -738,13 +738,16 @@ function handleChat(bot, ticker, username, message, senderUuid) {
         const name = bringMod.normalizeBringName(m[1])
         const food = bringMod.isFoodRequest(name)
         const sapling = bringMod.isSapling(name)
+        const v2Bring = process.env.BOT_BODY === 'baritone' && /^[a-z0-9_]{1,40}$/.test(name) &&
+          (food || !!bringMod.resolveItem(bot, name) || bringMod.canBringName(bot, name))
+        const singular = v2Bring && /^(?:a|an)\s/.test(m[1])
+        const defaultWant = food ? bringMod.WANT_FOOD : (sapling ? 1 : (/logs?$|_log$/.test(name) ? bringMod.WANT_LOGS : bringMod.WANT_ORE))
         const want = m[2]
           ? Math.min(bringMod.WANT_MAX, Math.max(1, parseInt(m[2], 10)))
-          : (food ? bringMod.WANT_FOOD : (sapling ? 1 : (/logs?$|_log$/.test(name) ? bringMod.WANT_LOGS : bringMod.WANT_ORE)))
+          : (singular ? 1 : defaultWant)
         // On v2 the LLM can guide ordinary bring orders too. Its own
         // re-fed bring line bypasses this branch via feeding().
-        if (process.env.BOT_BODY === 'baritone' && /^[a-z0-9_]{1,40}$/.test(name) &&
-            (food || !!bringMod.resolveItem(bot, name) || bringMod.canBringName(bot, name))) {
+        if (v2Bring) {
           const fallback = () => { const reply = ticker.setBring({ name, want, by: playerName }); if (reply) bot.chat(reply) }
           if (llmAsk(null, msg, true, { item: name, remaining: want, history: [] }, fallback)) {
             if (typeof ticker.prepareBring === 'function') ticker.prepareBring()

@@ -138,6 +138,45 @@ describe('llm orders: plan validation', () => {
 })
 
 describe('llm orders: flag on', () => {
+  it('uses the same V2 bring quantity in the model prompt and deterministic fallback', async () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'baritone'
+    try {
+      for (const [command, item, count] of [
+        ['bring me a bucket', 'bucket', 1],
+        ['bring me an iron ingot', 'iron_ingot', 1],
+        ['bring me a bucket 2', 'bucket', 2],
+        ['bring me bucket', 'bucket', 3],
+      ]) {
+        const bot = mockBot([{ name: item, count: 8 }])
+        bot.registry.itemsByName[item] = { id: 9 }
+        const callIndex = calls.length
+        handleChat(bot, tickerFor(bot), 'P', command)
+        await flush() // the empty model plan falls back to the normal bring order
+        assert.match(calls[callIndex].messages[0].content, new RegExp(`Requested item: ${item}; remaining count: ${count}\\.`), command)
+        assert.equal(bot._tickerCtx.bring.name, item, command)
+        assert.equal(bot._tickerCtx.bring.want, count, command)
+      }
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
+  it('keeps the V1 bring default for an article', () => {
+    const prev = process.env.BOT_BODY
+    process.env.BOT_BODY = 'mineflayer'
+    try {
+      const bot = mockBot([{ name: 'torch', count: 8 }])
+      handleChat(bot, tickerFor(bot), 'P', 'bring me a torch')
+      assert.equal(bot._tickerCtx.bring.want, 3)
+      assert.equal(calls.length, 0)
+    } finally {
+      if (prev === undefined) delete process.env.BOT_BODY
+      else process.env.BOT_BODY = prev
+    }
+  })
+
   it('v2 routes a known bring order through the model and reports only a confirmed inventory toss', async () => {
     const prev = process.env.BOT_BODY
     process.env.BOT_BODY = 'baritone'
