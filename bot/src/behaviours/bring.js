@@ -1415,6 +1415,7 @@ function pickChest(bot, ctx, o) {
     if (!o || typeof o !== 'object') return null
     if (!Array.isArray(o.chestSeen)) o.chestSeen = []
     const within = (p) => {
+      if (o.chestAllowed && !o.chestAllowed(p)) return false
       if (!(typeof o.maxChestDistance === 'number')) return true
       const b = bot && bot.entity && bot.entity.position
       return !!(b && p && Math.hypot(b.x - p.x, b.y - p.y, b.z - p.z) <= o.maxChestDistance)

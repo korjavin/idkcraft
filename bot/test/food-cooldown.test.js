@@ -71,3 +71,125 @@ it('low hp hunt never follows prey down or into the dark', () => {
   bot.health = 15
   assert.equal(fr.safeHunt(bot, t), t, 'healthy: unchanged')
 })
+
+const CRITICAL = { time: 'day', health: 5, food: 0 }
+const CHEST_A = { x: 4, y: 64, z: 0 }
+const CHEST_B = { x: 7, y: 64, z: 0 }
+
+function recoveryWorld(t) {
+  const previousBody = process.env.BOT_BODY
+  process.env.BOT_BODY = 'baritone'
+  t.after(() => {
+    if (previousBody === undefined) delete process.env.BOT_BODY
+    else process.env.BOT_BODY = previousBody
+  })
+  t.mock.method(Date, 'now', () => 1000000)
+  const bot = {
+    ...fakeBot(), health: 5, food: 0, entities: {},
+    entity: { position: new Vec3(0, 64, 0) },
+    pathfinder: { setGoal() {} }, blockAt: () => ({ skyLight: 0 }),
+  }
+  const ctx = { work: true, step: 'foodRecovery', chests: [{ ...CHEST_A }] }
+  return { bot, ctx }
+}
+
+function failPath(bot, ctx) {
+  fr.run(bot, ctx)
+  ctx.stepStatus = 'failed:unreachable'
+  fr.failed(ctx)
+  assert.ok(ctx.foodRecoveryRetryAt > Date.now())
+}
+
+it('losing and regaining the same failed chest does not reopen the cooldown', (t) => {
+  const { bot, ctx } = recoveryWorld(t)
+  failPath(bot, ctx)
+  const retryAt = ctx.foodRecoveryRetryAt
+  assert.equal(fr.available(bot, ctx, CRITICAL), false)
+  bot.entity.position = new Vec3(300, 64, 0)
+  assert.equal(fr.available(bot, ctx, CRITICAL), false)
+  assert.equal(ctx.foodRecoveryRetryAt, retryAt)
+  bot.entity.position = new Vec3(0, 64, 0)
+  assert.equal(fr.available(bot, ctx, CRITICAL), false)
+  t.mock.method(Date, 'now', () => retryAt)
+  assert.equal(fr.available(bot, ctx, CRITICAL), true, 'ordinary cooldown still expires')
+})
+
+it('expiry of an old failed chest does not lift a longer recovery cooldown', (t) => {
+  const { bot, ctx } = recoveryWorld(t)
+  ctx.foodRecoveryFails = 4
+  failPath(bot, ctx)
+  const retryAt = ctx.foodRecoveryRetryAt
+  ctx.chests[0].contents = { bread: 8 }
+  ctx.chests[0].at = Date.now() - 30000
+  ctx.chests[0].failAt = Date.now()
+  ctx.foodChestDryUntil = Date.now() + 600000
+  assert.equal(fr.available(bot, ctx, CRITICAL), false)
+  t.mock.method(Date, 'now', () => 1600000)
+  assert.ok(retryAt > Date.now())
+  assert.equal(fr.available(bot, ctx, CRITICAL), false, 'same failed source is only stale')
+  assert.equal(ctx.foodRecoveryRetryAt, retryAt)
+})
+
+it('a different reachable stocked chest reopens the cooldown', (t) => {
+  const { bot, ctx } = recoveryWorld(t)
+  failPath(bot, ctx)
+  assert.equal(fr.available(bot, ctx, CRITICAL), false)
+  ctx.chests = [{ ...CHEST_A, contents: {}, at: Date.now() }, { ...CHEST_B, contents: { bread: 8 }, at: Date.now() }]
+  assert.equal(fr.available(bot, ctx, CRITICAL), true)
+  fr.run(bot, ctx)
+  assert.equal(ctx.lastGoalKey, 'bring-chest:7,64,0')
+})
+
+it('prey that the survival executor rejects does not lift the cooldown', (t) => {
+  const { bot, ctx } = recoveryWorld(t)
+  failPath(bot, ctx)
+  assert.equal(fr.available(bot, ctx, CRITICAL), false)
+  bot.entities[3] = { name: 'cow', id: 3, position: new Vec3(4, 61, 0) }
+  assert.equal(fr.available(bot, ctx, CRITICAL), false)
+  bot.entities[3].position = new Vec3(4, 64, 0)
+  bot.blockAt = () => ({ skyLight: 15 })
+  assert.equal(fr.available(bot, ctx, CRITICAL), true, 'a safely huntable animal is a new option')
+})
+
+it('a newer verified refill reopens a tried chest during the dry window and provides food', async (t) => {
+  const { bot, ctx } = recoveryWorld(t)
+  bot.health = 10
+  bot.food = 9
+  const pack = []
+  const bread = { name: 'bread', type: 1, count: 12 }
+  bot.inventory.items = () => pack
+  bot.blockAt = () => ({ name: 'chest' })
+  bot.openChest = async () => ({
+    containerItems: () => [bread],
+    withdraw: async (type, meta, count) => {
+      bread.count -= count
+      pack.push({ name: bread.name, type, count })
+    },
+    close() {},
+  })
+  bot.chat = () => {}
+  const hungry = { time: 'day', health: 10, food: 9 }
+  ctx.chests[0].contents = { bread: 8 }
+  ctx.chests[0].at = Date.now() - 30000
+  failPath(bot, ctx)
+  ctx.foodRecoveryChestSeen = ['4,64,0']
+  ctx.foodChestDryUntil = Date.now() + 600000
+  assert.equal(fr.available(bot, ctx, hungry), false, 'old positive contents are not a new sighting')
+  t.mock.method(Date, 'now', () => 1001000)
+  ctx.chests[0].contents.bread = 12
+  ctx.chests[0].at = Date.now()
+  assert.equal(fr.available(bot, ctx, hungry), true)
+  ctx.lastGoalKey = ''
+  fr.run(bot, ctx)
+  assert.deepEqual(ctx.foodRecoveryChestSeen, [])
+  assert.equal(ctx.foodRecovery.phase, 'chest')
+  assert.equal(ctx.lastGoalKey, 'bring-chest:4,64,0')
+  assert.equal(fr.needed(bot, ctx, hungry), true, 'next decision keeps the live reopened chest leg')
+  ctx.stepStatus = 'running'
+  for (let i = 0; i < 4 && ctx.stepStatus === 'running'; i++) {
+    fr.run(bot, ctx)
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.equal(ctx.stepStatus, 'done')
+  assert.deepEqual(pack, [{ name: 'bread', type: 1, count: fr.HUNGRY_WANT }])
+})

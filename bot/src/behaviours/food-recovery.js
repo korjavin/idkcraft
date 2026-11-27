@@ -7,6 +7,7 @@ const forage = require('./forage')
 const { stepDone, stepFailed } = require('../step')
 const { LOW_HP_FOOD, LOW_HP_GATE_MS, lowHpNoFood, needsFood } = require('../health-gate')
 const craftany = require('./craftany')
+const { chestHope, chestKeyOf } = require('./stockpile')
 const { Vec3 } = require('vec3')
 
 const RETRY_MS = 60000
@@ -53,19 +54,19 @@ function hasMeal(bot, ctx) {
   try { const items = bot.inventory.items(); return Array.isArray(items) && !!require('../reflexes').mealFor(bot, ctx || {}, items) } catch (_) { return false }
 }
 
-function hungry(bot, ctx, facts) {
+function hungry(bot, ctx, facts, sources = () => foodSources(bot, ctx)) {
   if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || !foodTime(bot, facts) || !(bot.food < HUNGRY_FOOD) || facts.health < LOW_HP_FOOD) return false
   if (ctx && (ctx.llmOrder || ctx.taskPlanArgs)) return false
   // Source ladder (src/source-ladder.js): pack bread, a near chest, then a
   // hunt; chestSearch (the long-trip rung) only once none of these serves.
   if (!noMeal(bot, ctx)) return false
-  const src = !!(breadReady(bot, ctx) || (!chestsDry(ctx) && bring.pickChest(bot, ctx, chestState(ctx, HUNGRY_WANT, bot))) || forage.foodTarget(bot, ctx, true) || ripeCrop(bot, ctx))
+  const src = sources().length > 0
   if (ctx) ctx.foodNoSource = !src // stall/JEV context: hungry with nothing to fetch, hunt or harvest
   return src
 }
 
-function needed(bot, ctx, facts) {
-  if (hungry(bot, ctx, facts)) return true
+function needed(bot, ctx, facts, sources) {
+  if (hungry(bot, ctx, facts, sources)) return true
   if (!bot || !facts || process.env.BOT_BODY !== 'baritone' || !foodTime(bot, facts) || !(bot.food < 18) || !needsFood(facts)) return false
   let items
   try {
@@ -92,7 +93,23 @@ function chestState(ctx, want = 1, bot = null) {
   if (!Array.isArray(ctx.foodRecoveryChestSeen)) ctx.foodRecoveryChestSeen = []
   const rotten = !!bot && require('../reflexes').lastResortOk(bot, ctx)
   const w = (f) => bot ? withWheat(bot, f) : f
-  return { kind: 'food', phase: 'chestfetch', want, wants: w(rotten ? orRotten : isEdible), drawWants: w(bot && require('../reflexes').starving(bot) ? orRotten : isEdible), have: 0, drop: null, chestSeen: ctx.foodRecoveryChestSeen, maxChestDistance: bot && require('../reflexes').starving(bot) ? FOOD_CHEST_RADIUS : HUNGRY_CHEST_RADIUS }
+  const wants = w(rotten ? orRotten : isEdible)
+  const since = Math.max(ctx.foodRecovery?.endedAt || 0, (ctx.foodChestDryUntil || 0) - DRY_MS)
+  const freshStock = new Map()
+  if (bot && since > 0 && !ctx.foodRecovery?.valid) {
+    for (const c of ctx.chests || []) {
+      if (c && c.at > since && chestHope(ctx, c, wants) === 2) freshStock.set(chestKeyOf(c), c.at)
+    }
+  }
+  // A newer positive chest read can reopen a previously empty/failed chest.
+  // Ageing a read or losing sight of a chest supplies no new evidence.
+  const chestSeen = freshStock.size ? ctx.foodRecoveryChestSeen.filter((k) => !freshStock.has(k)) : ctx.foodRecoveryChestSeen
+  return {
+    kind: 'food', phase: 'chestfetch', want, wants, drawWants: w(bot && require('../reflexes').starving(bot) ? orRotten : isEdible),
+    have: 0, drop: null, chestSeen, freshStock,
+    chestAllowed: bot && chestsDry(ctx) ? (p) => freshStock.has(chestKeyOf(p)) : null,
+    maxChestDistance: bot && require('../reflexes').starving(bot) ? FOOD_CHEST_RADIUS : HUNGRY_CHEST_RADIUS,
+  }
 }
 
 function countOf(bot, name) {
@@ -113,32 +130,46 @@ function breadReady(bot, ctx) {
   try { return !!craftany.planCraft(bot, ctx, ['bread'], 1).ok } catch (_) { return false }
 }
 
-// What the food sources are now: a cooldown lifts early once this changes
-// (a new chest, animal or crop), not while the same failing source stands.
-function sourceSig(bot, ctx) {
-  const k = (o) => o ? [o.name, o.id, o.x, o.y, o.z, o.position && o.position.x, o.position && o.position.z].join(',') : '-'
-  try { return [k(!chestsDry(ctx) && bring.pickChest(bot, ctx, chestState(ctx, 1, bot))), k(forage.foodTarget(bot, ctx, true)), k(ripeCrop(bot, ctx))].join('|') } catch (_) { return '' }
+const huntSource = (bot, ctx) => safeHunt(bot, forage.foodTarget(bot, ctx, true))
+const chestSourceKey = (key) => `chest:${key}`
+
+function foodSources(bot, ctx, order = null) {
+  const active = ctx.foodRecovery?.valid && ctx.foodRecovery.chest
+  const chest = order || active || chestState(ctx, 1, bot)
+  const sources = []
+  if (breadReady(bot, ctx)) sources.push('bread')
+  const key = chestKeyOf(bring.pickChest(bot, ctx, chest)?.pos)
+  if (key !== null) {
+    sources.push(chestSourceKey(key))
+    if (chest.freshStock?.has(key)) sources.push(`stocked:${key}:${chest.freshStock.get(key)}`)
+  }
+  const hunt = huntSource(bot, ctx)
+  if (hunt) sources.push(`hunt:${hunt.id}`)
+  const crop = ripeCrop(bot, ctx)
+  if (crop) sources.push(`crop:${crop.x},${crop.y},${crop.z}`)
+  return sources
 }
 
 function available(bot, ctx, facts) {
-  if (!needed(bot, ctx, facts)) return false
+  if (!ctx || ctx.foodRecoveryFlight) return false
+  let cachedSources
+  const currentSources = () => (cachedSources ??= foodSources(bot, ctx))
+  if (!needed(bot, ctx, facts, currentSources)) return false
+  const sources = currentSources()
   if (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt) {
-    const sig = sourceSig(bot, ctx)
-    if (ctx.foodRecoverySig == null) ctx.foodRecoverySig = sig
-    if (sig === ctx.foodRecoverySig) return false
-    console.log(`food recovery cooldown lifted: sources changed`)
+    if (ctx.foodRecoverySig == null) ctx.foodRecoverySig = sources
+    // Losing a candidate supplies no reason to retry any earlier source.
+    const added = sources.find((key) => !ctx.foodRecoverySig.includes(key))
+    if (!added) return false
+    console.log(`food recovery cooldown lifted: sources changed kind=${added.split(':')[0]}`)
     ctx.foodRecoveryRetryAt = 0
   }
-  if (ctx.foodRecoveryFlight) return false
-  if (breadReady(bot, ctx)) return true
-  // ladder: near chest -> hunt (obtain) -> chestSearch, the far rung, once this holds
-  const other = !!((!chestsDry(ctx) && bring.pickChest(bot, ctx, chestState(ctx, 1, bot))) || forage.foodTarget(bot, ctx, true) || ripeCrop(bot, ctx))
   const wheat = wheatCount(bot)
-  if (!other && wheat >= 3 && !(ctx.foodBreadRetryAt && Date.now() < ctx.foodBreadRetryAt) && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
+  if (sources.length === 0 && wheat >= 3 && !(ctx.foodBreadRetryAt && Date.now() < ctx.foodBreadRetryAt) && (!ctx.foodBreadLogAt || Date.now() - ctx.foodBreadLogAt >= 60000)) {
     ctx.foodBreadLogAt = Date.now()
     console.log(`food recovery source=bread table=none why=no-table-no-wood wheat=${wheat}`)
   }
-  return other
+  return sources.length > 0
 }
 
 // safety = preempted by a fight/retreat/flee: not the source's fault, no strike
@@ -166,20 +197,24 @@ function failed(ctx) {
 // Any end of a run that ate nothing (fail, idle no-target, preempt, retry,
 // done with nothing eaten) is a strike: the cooldown doubles on repeats, so a
 // trigger with no workable source cannot restart every tick. Eating resets it.
-function strike(ctx) {
+function strike(ctx, r) {
   const n = ctx.foodRecoveryFails = (ctx.foodRecoveryFails || 0) + 1
   const ms = Math.min(RETRY_MS * 2 ** (n - 1), RETRY_MAX_MS)
   ctx.foodRecoveryRetryAt = Date.now() + ms
-  ctx.foodRecoverySig = null
+  const current = r.bot ? foodSources(r.bot, ctx) : []
+  const tried = (r.chest?.chestSeen || []).map(chestSourceKey)
+  if (r.hunt?.target) tried.push(`hunt:${r.hunt.target.id}`)
+  ctx.foodRecoverySig = [...(r.sources || []), ...current, ...tried]
   console.log(`food recovery cooldown strikes=${n} retry_in=${Math.round(ms / 1000)}s`)
 }
 
 // A cancelled bread run must not leave its craftany run for the next start.
 function cancel(ctx, r) {
+  if (r.valid) r.endedAt = Date.now()
   if (r.valid && !r.noStrike) {
     const b = r.bot
     if (b && (b.food > r.startFood || hasMeal(b, ctx))) ctx.foodRecoveryFails = 0
-    else strike(ctx)
+    else strike(ctx, r)
   }
   r.valid = false
   if (r.bread && ctx.craftany && ctx.craftany.key === 'breadx1') ctx.craftany = null
@@ -193,7 +228,12 @@ function run(bot, ctx) {
     if (ctx.foodRecoveryRetryAt && Date.now() < ctx.foodRecoveryRetryAt) { stepFailed(ctx, 'cooldown'); return }
     // food<6 is an emergency like low hp: chest, then hunt (prod: Easy holds hp at 10)
     const hungryRun = !needsFood({ health: bot.health, food: bot.food })
-    r = ctx.foodRecovery = { valid: true, hungry: hungryRun, chest: chestState(ctx, bot.health < 6 ? 1 : HUNGRY_WANT, bot), phase: breadReady(bot, ctx) ? 'bread' : chestsDry(ctx) ? 'hunt' : 'chest', startFood: bot.food }
+    const chest = chestState(ctx, bot.health < 6 ? 1 : HUNGRY_WANT, bot)
+    const sources = foodSources(bot, ctx, chest)
+    ctx.foodRecoveryChestSeen = chest.chestSeen
+    const hasChest = sources.some((key) => key.startsWith('chest:'))
+    const phase = sources.includes('bread') ? 'bread' : chestsDry(ctx) && !hasChest ? 'hunt' : 'chest'
+    r = ctx.foodRecovery = { valid: true, hungry: hungryRun, sources, chest, phase, startFood: bot.food }
     Object.defineProperty(r, 'bot', { value: bot }) // for cancel()'s ate-check; kept out of JSON logs
     ctx.lastPathStatus = 'none'
     require('../food-rate').note(ctx, 'recoveries')
@@ -235,7 +275,7 @@ function run(bot, ctx) {
     console.log(`food recovery source=bread table=none why=${JSON.stringify((res && res.line) || 'unknown')} wheat=${wheatCount(bot)}`)
     ctx.foodBreadRetryAt = Date.now() + LOW_HP_GATE_MS // the rest of the low-HP episode
     source('bread', 'failed')
-    r.phase = chestsDry(ctx) ? 'hunt' : 'chest'; ctx.lastGoalKey = '' // same episode: chest, then hunt
+    r.phase = chestsDry(ctx) && !bring.pickChest(bot, ctx, r.chest) ? 'hunt' : 'chest'; ctx.lastGoalKey = '' // same episode: chest, then hunt
     return
   }
   if (r.phase === 'chest') {
@@ -252,7 +292,10 @@ function run(bot, ctx) {
     // (reflexes.lastResortOk): until then the same run tours the next chest.
     if (r.chest.phase === 'return') {
       // An eatable meal in the pack: needed() goes false with it, so no restart.
-      if (!noMeal(bot, ctx)) { source('chest', 'acquired'); done(false) } else if (breadReady(bot, ctx)) { source('chest', 'wheat'); r.phase = 'bread'; r.bread = null; ctx.lastGoalKey = '' } else r.chest = chestState(ctx, r.chest.want, bot)
+      if (!noMeal(bot, ctx)) { source('chest', 'acquired'); done(false) } else if (breadReady(bot, ctx)) { source('chest', 'wheat'); r.phase = 'bread'; r.bread = null; ctx.lastGoalKey = '' } else {
+        const { want, chestAllowed } = r.chest
+        r.chest = { ...chestState(ctx, want, bot), chestAllowed }
+      }
       return
     }
     // near chests out: the obtain rung (hunt) in the same leg, never a fail
@@ -272,7 +315,7 @@ function run(bot, ctx) {
   if (r.phase === 'harvest') { harvestTick(bot, ctx, r, done); return }
   const toHarvest = () => { source('hunt', 'none'); r.phase = 'harvest'; ctx.lastGoalKey = ''; return false }
   if (!r.hunt) {
-    const target = safeHunt(bot, forage.foodTarget(bot, ctx, true))
+    const target = huntSource(bot, ctx)
     if (!target) { toHarvest(); return }
     console.log(`food recovery hunt=${target.name}`)
     require('../loot').makeRoom(bot) // the kill's drop needs a free slot
@@ -281,7 +324,7 @@ function run(bot, ctx) {
   }
   const h = r.hunt
   const replanTarget = () => {
-    const target = safeHunt(bot, forage.foodTarget(bot, ctx, true))
+    const target = huntSource(bot, ctx)
     if (!target) return toHarvest()
     target.want = 1
     h.target = target; h.phase = 'find'; h.stalls = 0
